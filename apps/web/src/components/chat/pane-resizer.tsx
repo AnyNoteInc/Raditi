@@ -18,12 +18,12 @@ import {
   SITE_PANE_WIDTH_VAR,
 } from '@/components/site/site-nav'
 
-import { browserText } from './chat-texts'
+import { toolText } from './chat-texts'
 
 // The edge of the panel beside a dialog, dragged to make it wider or narrower (docs/plan/57-
-// browser-tasks.md, Б29): with a pointer, or with the arrow keys once focused. The width is
-// written to the shell (a CSS variable both the panel and the room left for it read) while it
-// moves, and kept for the viewer in a cookie when it stops.
+// browser-tasks.md, Б29; one panel of the tools since docs/plan/59, И20): with a pointer, or with
+// the arrow keys once focused. The width is written to the shell (a CSS variable both the panel
+// and the room left for it read) while it moves, and kept for the viewer in a cookie when it stops.
 
 /** One press of an arrow key moves the edge this far; with Shift, four times as far. */
 export const PANE_STEP = 24
@@ -38,7 +38,7 @@ function remember(width: number) {
 
 export function PaneResizer({
   pane,
-  label = browserText.separator,
+  label = toolText.separator,
 }: {
   pane: RefObject<HTMLElement | null>
   /** The accessible name: the panel it widens. */

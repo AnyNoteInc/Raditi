@@ -15,12 +15,22 @@ export default defineConfig({
   ...billing,
   testDir: './tests/site',
   outputDir: './test-results/site',
-  // No previews in this run: no core builds them, and the chat specs check what the panel of a
-  // dialog without a preview says. Next loads the repository .env for every variable that is
-  // not exported, and .env.example sets PREVIEW_BASE_DOMAIN: blank counts as unset here.
+  // No previews and no cloud browser in this run: no core builds the one, no worker streams the
+  // other. The menu «+» of a dialog offers no preview then, the browser of a task says it cannot
+  // be shown, and a site that is not connected offers neither mode (chat.spec.ts). Next loads the
+  // repository .env for every variable that is not exported, and .env.example sets
+  // PREVIEW_BASE_DOMAIN: blank counts as unset here.
   webServer: webServers.map((server) =>
     server.name === 'Web'
-      ? { ...server, env: { ...server.env, PREVIEW_BASE_DOMAIN: '', PREVIEW_PUBLIC_PORT: '' } }
+      ? {
+          ...server,
+          env: {
+            ...server.env,
+            PREVIEW_BASE_DOMAIN: '',
+            PREVIEW_PUBLIC_PORT: '',
+            BROWSER_STREAM_PUBLIC_URL: '',
+          },
+        }
       : server,
   ),
 })

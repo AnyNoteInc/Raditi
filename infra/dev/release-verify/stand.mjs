@@ -1216,6 +1216,28 @@ export function versionAbove(version, other) {
   return false
 }
 
+// ─── The cabinet ──────────────────────────────────────────────────────────────
+
+const TRPC_PATH = '/api/trpc/'
+
+/**
+ * The procedures one request of the cabinet's page calls (`task.feed`, `preview.ticket`…): tRPC
+ * sends the calls of a moment in one request whose path names them, separated by commas
+ * (`/api/trpc/task.feed,candidate.get?batch=1`). Any other request calls none.
+ */
+export function trpcProcedures(url) {
+  let path
+  try {
+    path = new URL(url).pathname
+  } catch {
+    return []
+  }
+  if (!path.startsWith(TRPC_PATH)) return []
+  return decodeURIComponent(path.slice(TRPC_PATH.length))
+    .split(',')
+    .filter((name) => name !== '')
+}
+
 // ─── Probes ───────────────────────────────────────────────────────────────────
 
 /**

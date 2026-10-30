@@ -4,7 +4,8 @@ import type { TaskStatus } from '@repo/domain'
 import type { CandidateView, CommandVerdict, DialogFeed, FeedHead, FeedRow } from './chat-types'
 
 // Answers of `task.feed` for the component tests: a dialog of the kofeinya «Крошка» whose agent
-// changes the price of a cappuccino.
+// changes the price of a cappuccino. And the rules of the page as a browser of a given width reads
+// them (`declared`): jsdom applies no media query.
 
 export const TASK_ID = '0199a3f2-5d1c-7b3e-9c41-2f6a8d0e4b17'
 export const SITE_ID = '0199a3f2-0000-7000-8000-000000000001'
@@ -44,6 +45,7 @@ export function taskHead(patch: Partial<FeedHead> = {}): FeedHead {
     runningSince: null,
     requirements: { repository: true, browser: false },
     effort: 'high',
+    databaseChanges: false,
     ...patch,
   }
 }
@@ -354,4 +356,28 @@ export function browserResultRow(id: string, turn: number): FeedRow {
       },
     ],
   }
+}
+
+/**
+ * The value of `property` that the rules of the page give `element` on a screen `width` px wide:
+ * of the rules whose selector matches it — at the top level, or in a media query of a `min-width`
+ * the width reaches —, the last one says it, as the cascade decides between rules of one weight.
+ * MUI lets a menu item shrink to its content from `sm` up by a media query of its own, which a
+ * browser applies and jsdom does not: a test reads the height a browser would give it.
+ */
+export function declared(element: Element, property: string, width: number): string | null {
+  let value: string | null = null
+  const visit = (rules: CSSRuleList) => {
+    for (const rule of Array.from(rules)) {
+      if (rule instanceof CSSMediaRule) {
+        const least = /^\(min-width:\s*(\d+)px\)$/.exec(rule.media.mediaText.trim())
+        if (least !== null && Number(least[1]) <= width) visit(rule.cssRules)
+      } else if (rule instanceof CSSStyleRule) {
+        const own = rule.style.getPropertyValue(property)
+        if (own !== '' && element.matches(rule.selectorText)) value = own
+      }
+    }
+  }
+  for (const sheet of Array.from(document.styleSheets)) visit(sheet.cssRules)
+  return value
 }

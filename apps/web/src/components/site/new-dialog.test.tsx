@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as Upload from '@/components/chat/attachment-upload'
 import { serverRefusal } from '@/components/billing/testing'
 import { taskWayText } from '@/components/chat/chat-texts'
+import { forgetNewDialog, isNewDialog } from '@/components/chat/new-dialog-hint'
 import { SITE_ID } from '@/components/chat/testing'
 
 import { NewDialog, newDialogWays } from './new-dialog'
@@ -166,6 +167,20 @@ describe('new dialog', () => {
       'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат — доступы задаются в разделе «Переменные».',
     )
     expect(push).not.toHaveBeenCalled()
+    // No dialog was started: none is told it was.
+    expect(isNewDialog(create.mock.calls[0]![0].taskId)).toBe(false)
+  })
+
+  it('tells the dialog it opens that the client watched it start (docs/plan/59, И3)', async () => {
+    // Asked as the screen moves: the dialog reads it on its first render.
+    const told: boolean[] = []
+    push.mockImplementationOnce((path) => void told.push(isNewDialog(path.split('/').at(-1)!)))
+    showDialog()
+    write('Поменяйте телефон в шапке сайта')
+    fireEvent.click(send())
+    await waitFor(() => expect(push).toHaveBeenCalledTimes(1))
+    expect(told).toEqual([true])
+    forgetNewDialog(create.mock.calls[0]![0].taskId)
   })
 
   it('has the window of commands of a dialog, which says that they work there', () => {
@@ -247,12 +262,15 @@ describe('new dialog', () => {
 
   it('has the controls of a dialog in their order, with files for the copy of the site too (28.10.2026)', () => {
     showDialog()
-    // «/», «+», the level of thinking and «Отправить» (owner's request of 29.10.2026).
+    // «/», the paperclip, the level of thinking and «Отправить» (owner's request of 29.10.2026;
+    // the paperclip in place of «+», docs/plan/59, И15).
     expect(
       screen.getAllByRole('button').map((button) => button.getAttribute('aria-label')),
-    ).toEqual(['Команды', 'Добавить', 'Размышление: Высокое', 'Отправить'])
+    ).toEqual(['Команды', 'Прикрепить файлы', 'Размышление: Высокое', 'Отправить'])
     // «Работа» gets its own copy of the files too, since 28.10.2026.
-    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Добавить' }).disabled).toBe(false)
+    expect(
+      screen.getByRole<HTMLButtonElement>('button', { name: 'Прикрепить файлы' }).disabled,
+    ).toBe(false)
     // The reminder of a task in the browser is not this mode's: nobody signs in here.
     expect(described(field())).not.toContain(taskWayText.noSecrets)
     expect(screen.queryByRole('radiogroup', { name: 'Как агент будет работать' })).toBeNull()
@@ -274,7 +292,7 @@ describe('the way of a new dialog (docs/plan/57-browser-tasks.md, Б9)', () => {
     // The server's own default: the copy of the site where it is ready.
     expect(work.checked).toBe(true)
     expect(described(modes)).toContain('сами выпускаете новую версию')
-    const add = () => screen.getByRole<HTMLButtonElement>('button', { name: 'Добавить' })
+    const add = () => screen.getByRole<HTMLButtonElement>('button', { name: 'Прикрепить файлы' })
     // «Работа» has its own files since 28.10.2026, same as «Чат».
     expect(add().disabled).toBe(false)
     fireEvent.click(chat)

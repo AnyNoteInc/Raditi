@@ -48,6 +48,7 @@ import {
   standRatesFile,
   summaryTable,
   themeFiles,
+  trpcProcedures,
   versionAbove,
   webEnvironment,
 } from './stand.mjs'
@@ -412,6 +413,25 @@ test('a version is above another by its numbers, not by its text', () => {
   assert.equal(versionAbove('v0.10.0', 'v0.9.9'), true)
   assert.equal(versionAbove('v0.1.1', 'v0.1.1'), false)
   assert.equal(versionAbove('v0.1.0', 'v0.1.1'), false)
+})
+
+test('a request of the cabinet calls the procedures its tRPC path names, a batch all of them', () => {
+  const web = 'http://127.0.0.1:41000'
+  assert.deepEqual(trpcProcedures(`${web}/api/trpc/task.feed?batch=1&input=%7B%7D`), ['task.feed'])
+  assert.deepEqual(trpcProcedures(`${web}/api/trpc/task.feed,candidate.get?batch=1`), [
+    'task.feed',
+    'candidate.get',
+  ])
+  // The comma may come encoded.
+  assert.deepEqual(trpcProcedures(`${web}/api/trpc/attachment.list%2Cpreview.ticket?batch=1`), [
+    'attachment.list',
+    'preview.ticket',
+  ])
+  // A page, its data, the preview — no procedure; nor a URL that is none.
+  assert.deepEqual(trpcProcedures(`${web}/projects/a/chat/b?_rsc=1`), [])
+  assert.deepEqual(trpcProcedures(`${web}/api/trpc`), [])
+  assert.deepEqual(trpcProcedures('http://site-a-chat-b.localhost:41002/'), [])
+  assert.deepEqual(trpcProcedures('not a url'), [])
 })
 
 test('the final table has a row per scenario, with its NOTE lines apart from its checks', () => {

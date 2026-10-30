@@ -9,6 +9,9 @@ const paths = {
   payment: 'M5 5h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2ZM3 10h18M7 15h3',
   usage: 'M4 20h16M7 20v-6M12 20V6M17 20v-9',
   panel: 'M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2ZM9 4v16',
+  /** «Скрыть панель»: the panel on the right steps aside (docs/plan/59-dialog-tools-panel.md). */
+  paneHide:
+    'M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2ZM15 4v16M8.5 9.5 11 12l-2.5 2.5',
   expand: 'm8 9 4-4 4 4M8 15l4 4 4-4',
   logout: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M14 8l4 4-4 4M8 12h13',
   plus: 'M12 5v14M5 12h14',

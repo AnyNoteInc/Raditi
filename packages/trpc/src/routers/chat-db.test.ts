@@ -37,7 +37,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 
 import { createCaller } from '../router.ts'
 import { readCheckScreenshot } from '../services/chat/candidates.ts'
-import { releaseConfirmKey, type ChatContext } from '../services/chat/context.ts'
+import {
+  releaseConfirmKey,
+  type ChatContext,
+  type SiteDatabaseOperations,
+} from '../services/chat/context.ts'
 import { signConfirmToken } from '../services/chat/releases.ts'
 import { signUndoConfirmToken } from '../services/chat/undo.ts'
 
@@ -306,12 +310,15 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       /** The cloud browser of the platform (docs/plan/57); off unless asked for. */
       browser?: boolean
       storage?: ObjectStorage
+      /** What the adapter of a stack says of its database (docs/plan/59, И6); none unless given. */
+      databaseOperations?: SiteDatabaseOperations
     } = {},
   ) {
     const chat: ChatContext = {
       appEnv: 'test',
       preview: options.preview === false ? null : { address: ADDRESS, ttlHours: 72 },
       browser: options.browser === true ? { streamUrl: STREAM_URL } : null,
+      ...(options.databaseOperations ? { databaseOperations: options.databaseOperations } : {}),
       releaseConfirmKey: KEY,
       storage: () => options.storage ?? storage,
       secrets: () => vault.secrets,
@@ -461,12 +468,18 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
 
   /**
    * What core does when a pass leaves a candidate: the row and the move. A theme file is changed
-   * by default; `media` adds files of the media path, counted in the facts as core counts them.
+   * by default; `media` adds files of the media path, counted in the facts as core counts them;
+   * `records` — the objects of its database plan, as its facts count them.
    */
   async function withCandidate(
     taskId: string,
     revision = 1,
-    options: { media?: number; view?: DbPlanView; plan?: { plan: unknown[]; sha256: string } } = {},
+    options: {
+      media?: number
+      records?: number
+      view?: DbPlanView
+      plan?: { plan: unknown[]; sha256: string }
+    } = {},
   ) {
     const media = Array.from({ length: options.media ?? 0 }, (_, index) => ({
       path: `wp-content/uploads/raditi/photo-${index}.webp`,
@@ -509,7 +522,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
           modifiedFiles: 1,
           deletedFiles: 0,
           mediaFiles: media.length,
-          dbObjects: 0,
+          dbObjects: options.records ?? 0,
           newFunctionality: false,
         },
       },
@@ -2595,6 +2608,78 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         taskId,
       ])
     })
+
+    // The tool «База данных» (docs/plan/59-dialog-tools-panel.md, И6): the stack replays
+    // operations of the database, and the agent's writes have a copy to go to, or the candidate
+    // already carries some — read at every head, nothing is stored.
+    it('offers «База данных» while the preview holds a copy of the database', async () => {
+      const { owner, site } = await siteOwner({ database: true })
+      const operations = vi.fn<SiteDatabaseOperations>(() => true)
+      const caller = callerOf(owner, { databaseOperations: operations })
+      const { taskId } = await newDialog(caller, site.id)
+      const changes = async (reader = caller) =>
+        (await reader.task.feed({ taskId })).task.databaseChanges
+
+      // Being made, its copy is on the way: the stack of the site is asked by its own facts.
+      expect(await changes()).toBe(true)
+      expect(operations).toHaveBeenCalledExactlyOnceWith({ stack: 'wordpress', url: site.url })
+      expect((await caller.task.get({ taskId })).databaseChanges).toBe(true)
+      // A stack that replays none, and an app that cannot tell.
+      expect(await changes(callerOf(owner, { databaseOperations: () => false }))).toBe(false)
+      expect(await changes(callerOf(owner))).toBe(false)
+      expect((await callerOf(owner).task.get({ taskId })).databaseChanges).toBe(false)
+      // Served, or stopped by its time to live, it keeps the copy.
+      for (const status of ['ready', 'expired'] as const) {
+        await db.previewEnvironment.update({ where: { taskId }, data: { status } })
+        expect(await changes()).toBe(true)
+      }
+      // A preview that cannot run holds no copy the agent writes to.
+      await db.previewEnvironment.update({
+        where: { taskId },
+        data: { status: 'unavailable', unavailableReason: 'no_core' },
+      })
+      expect(await changes()).toBe(false)
+    })
+
+    it('offers it on the records of the candidate once the copy is gone', async () => {
+      const { owner, site } = await siteOwner({ database: true })
+      const operations = vi.fn<SiteDatabaseOperations>(() => true)
+      const caller = callerOf(owner, { databaseOperations: operations })
+      const { taskId } = await newDialog(caller, site.id)
+      await withCandidate(taskId, 1, { records: 2 })
+      // A rebuild found the database of the site gone, as core leaves it (`failBuild`).
+      await db.previewEnvironment.update({
+        where: { taskId },
+        data: { status: 'unavailable', unavailableReason: 'no_database', dbMode: 'none' },
+      })
+
+      const feed = await caller.task.feed({ taskId })
+
+      expect(feed.preview).toMatchObject({ status: 'unavailable' })
+      expect(feed.candidate).toMatchObject({ revision: 1, counts: { records: 2 } })
+      expect(feed.task.databaseChanges).toBe(true)
+      expect((await caller.task.get({ taskId })).databaseChanges).toBe(true)
+      expect(operations).toHaveBeenCalledWith({ stack: 'wordpress', url: site.url })
+      // Records alone are not enough: the stack must replay them.
+      expect(
+        (await callerOf(owner, { databaseOperations: () => false }).task.feed({ taskId })).task
+          .databaseChanges,
+      ).toBe(false)
+    })
+
+    it('asks the stack nothing in a dialog with neither a copy nor records', async () => {
+      // A site without its database: the preview is `unavailable` with no copy (`db_mode none`).
+      const { owner, site } = await siteOwner()
+      const operations = vi.fn<SiteDatabaseOperations>(() => true)
+      const caller = callerOf(owner, { databaseOperations: operations })
+      const { taskId } = await newDialog(caller, site.id)
+
+      expect((await caller.task.feed({ taskId })).task.databaseChanges).toBe(false)
+      await withCandidate(taskId)
+      expect((await caller.task.feed({ taskId })).task.databaseChanges).toBe(false)
+      expect((await caller.task.get({ taskId })).databaseChanges).toBe(false)
+      expect(operations).not.toHaveBeenCalled()
+    })
   })
 
   describe('the preview of a dialog', () => {
@@ -2994,6 +3079,18 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       expect(await caller.project.get({ id: site.id })).toMatchObject({
         capabilities: { repository: 'absent', browser: 'ready' },
       })
+    })
+
+    it('offers no «База данных» to a task in the browser, whatever rows say (docs/plan/59, И6)', async () => {
+      const { owner, site } = await browserSite()
+      const operations = vi.fn<SiteDatabaseOperations>(() => true)
+      const caller = callerOf(owner, { browser: true, databaseOperations: operations })
+      const { taskId } = await browserDialog(caller, site.id)
+      await withCandidate(taskId, 1, { records: 2 })
+
+      expect((await caller.task.feed({ taskId })).task.databaseChanges).toBe(false)
+      expect((await caller.task.get({ taskId })).databaseChanges).toBe(false)
+      expect(operations).not.toHaveBeenCalled()
     })
 
     it('takes the repository where it is ready, and the browser on the same site when asked', async () => {

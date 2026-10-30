@@ -2,9 +2,17 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
+import { AppIcon, type AppIconName } from '@/components/application/app-icon'
+
 import { Composer, pastedFiles } from './composer'
 import { movedIndex, paletteOptions } from './command-palette'
 import { verdicts } from './testing'
+
+/** The outline of the sign an element draws: two signs are the same when their outlines are. */
+const outline = (element: Element) => element.querySelector('svg path')?.getAttribute('d') ?? null
+/** The outline `AppIcon` draws for `name`, drawn aside from the page. */
+const outlineOf = (name: AppIconName) =>
+  outline(render(<AppIcon name={name} />, { container: document.createElement('div') }).container)
 
 const field = () => screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Сообщение' })
 const list = () => screen.getByRole('listbox', { name: 'Команды' })
@@ -239,7 +247,7 @@ describe('the field', () => {
     )
   })
 
-  it('keeps its controls in one order: «/», «+», «Размышление», then «Отправить»', () => {
+  it('keeps its controls in one order: «/», the paperclip, «Размышление», then «Отправить»', () => {
     render(
       <Composer
         placeholder="Что поправить?"
@@ -252,9 +260,15 @@ describe('the field', () => {
       screen
         .getAllByRole('button')
         .map((button) => button.textContent || button.getAttribute('aria-label')),
-    ).toEqual(['Команды', 'Добавить', 'Размышление: Высокое', 'Отправить'])
-    // A field that takes no files has «+» all the same, closed.
-    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Добавить' }).disabled).toBe(true)
+    ).toEqual(['Команды', 'Прикрепить файлы', 'Размышление: Высокое', 'Отправить'])
+    const attach = screen.getByRole<HTMLButtonElement>('button', { name: 'Прикрепить файлы' })
+    // A paperclip, not «+»: «+» of a dialog is its tools (docs/plan/59, И15).
+    expect(outline(attach)).toBe(outlineOf('attach'))
+    expect(outline(attach)).not.toBe(outlineOf('plus'))
+    expect(attach.getAttribute('aria-haspopup')).toBe('menu')
+    // A field that takes no files has it all the same, closed, and says why.
+    expect(attach.disabled).toBe(true)
+    expect(described(attach)).toBe('К этому сообщению файлы не прикрепить.')
   })
 
   it('stands «Остановить» in place of «Отправить» while the agent works', () => {

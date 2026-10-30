@@ -1,20 +1,19 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider, type QueryKey } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { useEffect } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { plain } from '@/components/billing/testing'
 
 import type { CandidateHead, CandidateView, FileDiffView, PreviewHead } from './chat-types'
-import {
-  paneOpensItself,
-  paneTabsOf,
-  PreviewPane,
-  usePreviewCalls,
-  type PaneTab,
-} from './preview-pane'
+import type { ChangesTool } from './dialog-tools'
+import { CandidateTab, PreviewTab, usePreviewCalls } from './preview-pane'
 import { CANDIDATE_ID, candidateHead, TASK_ID } from './testing'
+
+// What the tabs of the preview and of the changes show beside a dialog (docs/plan/59-dialog-tools-
+// panel.md): a tab is drawn once its tool was chosen, so the preview chosen is the preview asked
+// for (И10), and the changes are read only by the tab that shows them (И11).
 
 const { ticket, candidate, fileDiff } = vi.hoisted(() => ({
   ticket:
@@ -36,6 +35,7 @@ vi.mock('@/trpc/client', () => ({
 }))
 
 const ORIGIN = 'http://site-0a1b2c3d-chat-4e5f6a.localhost:8090'
+const FRAME = 'Предпросмотр сайта с изменениями диалога'
 
 function previewOf(patch: Partial<PreviewHead> = {}): PreviewHead {
   return {
@@ -124,65 +124,72 @@ const view: CandidateView = {
 
 const onReset = vi.fn<() => void>()
 
-type PaneProps = {
-  preview?: PreviewHead | null
-  candidate?: CandidateHead | null
-  tab?: PaneTab | null
-  tabs?: readonly PaneTab[]
-  /** How many times the client has already called for the preview. */
-  previewCalls?: number
-  canReset?: boolean
-  onClose?: () => void
+/** The tab drawn as the dialog draws it: inside its panel, with a cache of its own. */
+function inPanel(children: ReactNode, queryClient: QueryClient) {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <div role="tabpanel" aria-label="Вкладка">
+        {children}
+      </div>
+    </QueryClientProvider>
+  )
 }
 
-/** The panel as the dialog holds it: the client's calls of the preview are counted, as there. */
-function Pane({ props, onTab }: { props: PaneProps; onTab: (tab: PaneTab) => void }) {
+type PreviewProps = {
+  preview?: PreviewHead | null
+  /** The calls the client made once the preview was there: the one its tab opened by among them. */
+  calls?: number
+  canReset?: boolean
+}
+
+/** The tab of the preview as the dialog holds it: the client's calls are counted, as there. */
+function Preview({ props }: { props: PreviewProps }) {
   const preview = props.preview === undefined ? previewOf() : props.preview
   const calls = usePreviewCalls(preview?.status ?? null)
-  // The calls the client made before this panel was drawn.
-  const before = props.previewCalls ?? 0
+  const made = props.calls ?? 1
   const { call } = calls
   useEffect(() => {
-    for (let made = 0; made < before; made++) call()
-  }, [before, call])
+    for (let count = 0; count < made; count++) call()
+  }, [made, call])
   return (
-    <PreviewPane
+    <PreviewTab
       taskId={TASK_ID}
       preview={preview}
-      candidate={props.candidate === undefined ? candidateHead : props.candidate}
-      tab={props.tab === undefined ? 'preview' : props.tab}
-      onTab={onTab}
-      {...(props.tabs ? { tabs: props.tabs } : {})}
-      visible
-      previewCalls={calls}
-      onAskPreview={call}
+      calls={calls}
+      onReopen={call}
       canReset={props.canReset ?? true}
       onReset={onReset}
       resetting={false}
-      {...(props.onClose ? { onClose: props.onClose } : {})}
     />
   )
 }
 
-function showPane(props: PaneProps) {
-  const onTab = vi.fn<(tab: PaneTab) => void>()
+function showPreview(props: PreviewProps = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  const view = render(
-    <QueryClientProvider client={queryClient}>
-      <Pane props={props} onTab={onTab} />
-    </QueryClientProvider>,
-  )
-  /** The head moves on: the same panel, with the calls the client made, gets new props. */
-  const update = (next: PaneProps) =>
-    view.rerender(
-      <QueryClientProvider client={queryClient}>
-        <Pane props={next} onTab={onTab} />
-      </QueryClientProvider>,
-    )
-  return { onTab, update }
+  const shown = render(inPanel(<Preview props={props} />, queryClient))
+  /** The head moves on: the same tab, with the calls the client made, gets new props. */
+  const update = (next: PreviewProps) =>
+    shown.rerender(inPanel(<Preview props={next} />, queryClient))
+  return { update }
 }
 
-const panel = () => screen.getByRole('tabpanel')
+function showChanges(
+  tool: ChangesTool,
+  {
+    candidate: head = candidateHead,
+    ended = false,
+  }: { candidate?: CandidateHead | null; ended?: boolean } = {},
+) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(
+    inPanel(
+      <CandidateTab taskId={TASK_ID} candidate={head} tool={tool} ended={ended} />,
+      queryClient,
+    ),
+  )
+}
+
+const panel = () => screen.getByRole('tabpanel', { name: 'Вкладка' })
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -204,85 +211,13 @@ beforeEach(() => {
   })
 })
 
-describe('the tabs it has something for', () => {
-  it('has the preview while it is made or can be opened, and the tabs of the changes that hold anything', () => {
-    expect(paneTabsOf(previewOf(), candidateHead)).toEqual([
-      'preview',
-      'files',
-      'database',
-      'checks',
-    ])
-    expect(paneTabsOf(null, null)).toEqual([])
-    // The owner, 27.10.2026: the panel can be opened before the changes — the preview's tab is
-    // there, the preview itself is shown only when asked for.
-    expect(paneTabsOf(previewOf(), null)).toEqual(['preview'])
-    expect(paneTabsOf(previewOf({ status: 'building' }), null)).toEqual(['preview'])
-    expect(paneTabsOf(previewOf({ status: 'expired' }), null)).toEqual(['preview'])
-    // A preview that cannot be shown, or is gone, is not in use.
-    expect(paneTabsOf(previewOf({ status: 'unavailable' }), null)).toEqual([])
-    expect(paneTabsOf(previewOf({ status: 'destroyed' }), null)).toEqual([])
-    // Only the files change: no tab of the records, none of the checks yet.
-    expect(
-      paneTabsOf(null, {
-        ...candidateHead,
-        counts: { files: { added: 0, modified: 1, deleted: 0 }, media: 0, records: 0 },
-        checks: { pending: 0, passed: 0, failed: 0, stale: 0 },
-      }),
-    ).toEqual(['files'])
-    expect(paneTabsOf(null, { ...candidateHead, counts: null })).toEqual(['checks'])
-  })
-
-  it("opens by itself for the changes only, never for the preview alone (owner's request of 26.10.2026)", () => {
-    expect(paneOpensItself(['preview'])).toBe(false)
-    expect(paneOpensItself([])).toBe(false)
-    expect(paneOpensItself(['preview', 'checks'])).toBe(true)
-    expect(paneOpensItself(['files'])).toBe(true)
-  })
-
-  it('draws the tabs as icons named by their labels, the changes with their numbers', () => {
-    showPane({ tabs: ['files', 'database'], tab: 'preview' })
-    const tabs = within(screen.getByRole('tablist', { name: 'Разделы панели' })).getAllByRole('tab')
-    expect(tabs.map((tab) => tab.getAttribute('aria-label'))).toEqual(['Файлы', 'База данных'])
-    expect(tabs.map((tab) => tab.getAttribute('title'))).toEqual(['Файлы', 'База данных'])
-    // Two files changed and one added, a medium besides; three records.
-    expect(tabs.map((tab) => plain(tab.textContent))).toEqual(['4', '3'])
-    // The tab asked for has nothing now: the first that has something is shown.
-    expect(screen.getByRole('tab', { name: 'Файлы', selected: true })).toBeTruthy()
-    expect(screen.queryByRole('tab', { name: 'Предпросмотр' })).toBeNull()
-  })
-
-  it('opens on the first tab of the changes, not on the preview, when no tab was chosen', () => {
-    showPane({ tabs: ['preview', 'files'], tab: null })
-    expect(screen.getByRole('tab', { name: 'Файлы', selected: true })).toBeTruthy()
-    expect(ticket).not.toHaveBeenCalled()
-  })
-})
-
-describe('closing the panel', () => {
-  it('steps aside by «Скрыть панель»', () => {
-    const onClose = vi.fn()
-    showPane({ tabs: ['files'], tab: 'files', onClose })
-    fireEvent.click(screen.getByRole('button', { name: 'Скрыть панель' }))
-    expect(onClose).toHaveBeenCalledTimes(1)
-  })
-})
-
-describe("the preview tab (owner's request of 27.10.2026: shown only when asked for)", () => {
-  it('shows a ready preview only after the client asked for it', async () => {
-    showPane({})
-    expect(plain(panel().textContent)).toContain('Покажем его, когда попросите.')
-    expect(screen.queryByTitle('Предпросмотр сайта с изменениями диалога')).toBeNull()
-    expect(screen.queryByRole('link', { name: 'Открыть в новой вкладке' })).toBeNull()
-    expect(ticket).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: 'Показать предпросмотр' }))
-    await screen.findByTitle('Предпросмотр сайта с изменениями диалога')
-    expect(ticket).toHaveBeenCalledTimes(1)
-  })
-
-  it('frames a ready preview by a ticket and opens it in a new tab through the cabinet', async () => {
-    showPane({ previewCalls: 1 })
-    const frame = await screen.findByTitle('Предпросмотр сайта с изменениями диалога')
+describe('the tab of the preview (И10: the preview chosen is asked for)', () => {
+  it('frames a ready preview at once by a ticket, and opens it in a new tab through the cabinet', async () => {
+    showPreview()
+    const frame = await screen.findByTitle(FRAME)
+    expect(screen.queryByRole('button', { name: 'Показать предпросмотр' })).toBeNull()
     expect(frame.getAttribute('src')?.startsWith(`${ORIGIN}/__raditi/enter?t=`)).toBe(true)
+    expect(ticket).toHaveBeenCalledTimes(1)
     const open = screen.getByRole('link', { name: 'Открыть в новой вкладке' })
     expect(open.getAttribute('href')).toBe(
       `${window.location.origin}/preview/open?host=site-0a1b2c3d-chat-4e5f6a.localhost&path=%2F`,
@@ -291,37 +226,36 @@ describe("the preview tab (owner's request of 27.10.2026: shown only when asked 
     expect(open.getAttribute('rel')).toBe('noopener noreferrer')
   })
 
-  it('says the preview asked for is being built, and spends no ticket on it', () => {
-    showPane({ preview: previewOf({ status: 'building' }) })
-    fireEvent.click(screen.getByRole('button', { name: 'Показать предпросмотр' }))
+  it('says the preview is being built, and spends no ticket on it', () => {
+    showPreview({ preview: previewOf({ status: 'building' }) })
     expect(within(panel()).getByRole('status').textContent).toBe('Готовим предпросмотр…')
     expect(ticket).not.toHaveBeenCalled()
   })
 
   it('says plainly that there is no preview without the database, and draws no site', () => {
-    showPane({
+    showPreview({
       preview: previewOf({ status: 'unavailable', unavailableReason: 'no_database', origin: null }),
     })
     expect(plain(panel().textContent)).toBe(
       'Предпросмотр недоступен: у нас нет доступа к базе данных сайта. Изменения в файлах можно посмотреть на вкладке «Файлы».',
     )
-    expect(screen.queryByTitle('Предпросмотр сайта с изменениями диалога')).toBeNull()
+    expect(screen.queryByTitle(FRAME)).toBeNull()
   })
 
   it('offers to reset a preview that failed', () => {
-    showPane({ preview: previewOf({ status: 'failed' }) })
+    showPreview({ preview: previewOf({ status: 'failed' }) })
     expect(plain(panel().textContent)).toContain('Не удалось подготовить предпросмотр.')
     fireEvent.click(screen.getByRole('button', { name: 'Сбросить данные предпросмотра' }))
     expect(onReset).toHaveBeenCalledTimes(1)
   })
 
   it('does not keep the frame of a preview that stopped: it wakes on a call made after', async () => {
-    const { update } = showPane({ previewCalls: 1 })
-    await screen.findByTitle('Предпросмотр сайта с изменениями диалога')
+    const { update } = showPreview()
+    await screen.findByTitle(FRAME)
     expect(ticket).toHaveBeenCalledTimes(1)
-    update({ previewCalls: 1, preview: previewOf({ status: 'expired' }) })
+    update({ preview: previewOf({ status: 'expired' }) })
     expect(plain(panel().textContent)).toContain('Предпросмотр остановлен')
-    expect(screen.queryByTitle('Предпросмотр сайта с изменениями диалога')).toBeNull()
+    expect(screen.queryByTitle(FRAME)).toBeNull()
     // The spent ticket leaves the cache once the frame is gone (`gcTime: 0`), before a person
     // could press anything.
     await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
@@ -329,16 +263,33 @@ describe("the preview tab (owner's request of 27.10.2026: shown only when asked 
     await waitFor(() => expect(ticket).toHaveBeenCalledTimes(2))
   })
 
-  it('opens a stopped preview only when asked', async () => {
-    showPane({ preview: previewOf({ status: 'expired' }) })
+  it('wakes a stopped preview by the call it was opened by', async () => {
+    showPreview({ preview: previewOf({ status: 'expired' }) })
+    expect(await screen.findByTitle(FRAME)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Открыть предпросмотр' })).toBeNull()
+    expect(ticket).toHaveBeenCalledTimes(1)
+  })
+
+  it('opens a preview that stopped after the call only when asked again', async () => {
+    showPreview({ preview: previewOf({ status: 'expired' }), calls: 0 })
     expect(plain(panel().textContent)).toContain('Предпросмотр остановлен')
     expect(ticket).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Открыть предпросмотр' }))
     await waitFor(() => expect(ticket).toHaveBeenCalledTimes(1))
   })
 
+  it('says the preview of a dialog that has ended is gone, and spends no ticket on it', () => {
+    // The menu offers no such preview (И6); a tab open as the dialog ended says what became of it.
+    showPreview({ preview: previewOf({ status: 'destroyed' }) })
+    expect(within(panel()).getByRole('status').textContent).toBe(
+      'Диалог закрыт, и его предпросмотр остановлен.',
+    )
+    expect(screen.queryByTitle(FRAME)).toBeNull()
+    expect(ticket).not.toHaveBeenCalled()
+  })
+
   it('says a dialog without a preview has none', () => {
-    showPane({ preview: null })
+    showPreview({ preview: null })
     expect(plain(panel().textContent)).not.toBe('')
     expect(ticket).not.toHaveBeenCalled()
   })
@@ -346,7 +297,7 @@ describe("the preview tab (owner's request of 27.10.2026: shown only when asked 
 
 describe('the tabs of the changes', () => {
   it('lists the files with their changes and the media with their types', async () => {
-    showPane({ tab: 'files' })
+    showChanges('files')
     const style = await screen.findByRole('button', { name: /style\.css/ })
     expect(plain(style.textContent)).toContain('Изменён')
     expect(plain(style.textContent)).toContain('2 КБ')
@@ -356,7 +307,7 @@ describe('the tabs of the changes', () => {
   })
 
   it('shows the diff of a file as text, every line with its sign', async () => {
-    showPane({ tab: 'files' })
+    showChanges('files')
     fireEvent.click(await screen.findByRole('button', { name: /style\.css/ }))
     const added = await screen.findByText(
       (_, element) =>
@@ -374,12 +325,12 @@ describe('the tabs of the changes', () => {
   })
 
   it('tells the records of the site in the words of the platform', async () => {
-    showPane({ tab: 'database' })
+    showChanges('database')
     expect(await screen.findByText('Страница 42: изменится заголовок')).toBeTruthy()
   })
 
   it('shows each check with its state, a stale one as stale', async () => {
-    showPane({ tab: 'checks' })
+    showChanges('checks')
     await screen.findByText('Файлы без ошибок в коде')
     const text = plain(panel().textContent)
     expect(text).toContain('Файлы без ошибок в кодеПройдена')
@@ -399,7 +350,7 @@ describe('the tabs of the changes', () => {
   })
 
   it('warns that a stale candidate needs the update', async () => {
-    showPane({ tab: 'files', candidate: { ...candidateHead, status: 'stale' } })
+    showChanges('files', { candidate: { ...candidateHead, status: 'stale' } })
     expect(
       await screen.findByText(
         'Сайт изменился после того, как эти изменения были готовы. Обновите рабочую копию.',
@@ -407,11 +358,40 @@ describe('the tabs of the changes', () => {
     ).toBeTruthy()
   })
 
-  it('says there are no changes yet without a candidate', () => {
-    showPane({ tab: 'files', candidate: null })
-    expect(
-      screen.getByText('Изменений пока нет. Они появятся здесь, когда агент закончит работу.'),
-    ).toBeTruthy()
+  it('says the changes are yet to come, in the words of each tab, and reads nothing (И6)', () => {
+    showChanges('files', { candidate: null })
+    expect(plain(panel().textContent)).toBe(
+      'Изменений пока нет.Они появятся здесь, когда агент закончит работу.',
+    )
     expect(candidate).not.toHaveBeenCalled()
+  })
+
+  it('says what the records and the checks say before the changes', () => {
+    showChanges('database', { candidate: null })
+    expect(plain(screen.getAllByRole('tabpanel').at(-1)!.textContent)).toBe(
+      'Изменений в базе данных пока нет.',
+    )
+    showChanges('checks', { candidate: null })
+    expect(plain(screen.getAllByRole('tabpanel').at(-1)!.textContent)).toBe('Проверок пока нет.')
+    expect(candidate).not.toHaveBeenCalled()
+  })
+
+  it('says a dialog that has ended has none, and where the released versions are', () => {
+    showChanges('files', { candidate: null, ended: true })
+    expect(plain(panel().textContent)).toBe(
+      'Диалог закрыт: изменений для показа здесь нет.Выпущенные версии — в разделе «Изменения».',
+    )
+    expect(candidate).not.toHaveBeenCalled()
+  })
+
+  it('says there are none when the server has none to read for the changes the head named', async () => {
+    candidate.mockResolvedValue(null)
+    showChanges('files')
+    await waitFor(() =>
+      expect(plain(panel().textContent)).toBe(
+        'Изменений пока нет.Они появятся здесь, когда агент закончит работу.',
+      ),
+    )
+    expect(candidate).toHaveBeenCalledTimes(1)
   })
 })

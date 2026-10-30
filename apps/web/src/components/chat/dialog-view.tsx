@@ -16,23 +16,16 @@ import { terminalTaskStatuses } from '@repo/domain/tasks/task-status'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Skeleton from '@mui/material/Skeleton'
-import Tab from '@mui/material/Tab'
-import Tabs from '@mui/material/Tabs'
 import Typography from '@mui/material/Typography'
 import { useTheme } from '@mui/material/styles'
 import useMediaQuery from '@mui/material/useMediaQuery'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import Link from 'next/link'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { ConfirmDialog } from '@/components/billing/confirm-dialog'
-import {
-  SITE_PANE_WIDTH,
-  SITE_RAIL_WIDTH,
-  SITE_TOOLBAR_HEIGHT,
-  siteHref,
-} from '@/components/site/site-nav'
+import { siteHref, SITE_TOOLBAR_HEIGHT } from '@/components/site/site-nav'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
 
@@ -42,22 +35,32 @@ import { sessionLive } from './browser-pane-model'
 import { callErrorText } from './call-error'
 import type { SiteCapabilities } from './chat-types'
 import {
-  browserText,
   cancelText,
   composerText,
   dialogText,
   effortText,
   listText,
-  paneText,
   releaseStatusText,
   releaseText,
   taskWayText,
   undoText,
-  viewSwitchText,
 } from './chat-texts'
 import { Composer, offScreen } from './composer'
 import { DialogMenuButton, dialogListKey, RemoveDialogConfirm, RenameField } from './dialog-actions'
 import { DialogNotFound } from './dialog-not-found'
+import {
+  changesMark,
+  changesToolOf,
+  closedTools,
+  isChangesTool,
+  movesFocus,
+  toolsDot,
+  toolsReducer,
+  toolTabId,
+  toolTilesOf,
+  type DialogTool,
+  type ToolOpener,
+} from './dialog-tools'
 import { EffortMenu } from './effort-menu'
 import { FeedList, LiveBlock, type FeedActions } from './feed-list'
 import {
@@ -71,35 +74,59 @@ import {
 } from './feed-model'
 import { showsRefresh, type FeedHeadState } from './feed-state'
 import { ModeLinks, type DialogMode } from './mode-switch'
-import { PaneResizer } from './pane-resizer'
-import {
-  PreviewPane,
-  paneOpensItself,
-  paneTabId,
-  paneTabsOf,
-  shownPaneTab,
-  usePreviewCalls,
-  type PaneTab,
-} from './preview-pane'
+import { CandidateTab, PreviewTab, usePreviewCalls } from './preview-pane'
 import { ReleaseDialog } from './release-dialog'
+import { TOOLS_BUTTON_ID, TOOLS_MENU_MARK, ToolsMenu } from './tools-menu'
+import { ToolsPanel } from './tools-panel'
 import { TurnActivity } from './turn-activity'
 import { UndoDialog } from './undo-dialog'
 import { useAttachments } from './use-attachments'
+import { useBrowserLaunch } from './use-browser-launch'
 import { useBrowserStream } from './use-browser-stream'
 import { useFeedFollow } from './use-feed-follow'
 import { useDialogFeed } from './use-dialog-feed'
 import { uuidv7 } from './uuid'
 
 // One dialog (docs/plan/53-chat-preview-release.md, R9; feed design, «Экраны, которых нет на
-// макетах»): its head, its rows, the live block and the field, with the panel of its changes
-// beside it from `lg` and behind the switch «Диалог | Предпросмотр» below. A task in the browser
-// (docs/plan/57-browser-tasks.md, Б29) has its browser in that place: «Диалог | Браузер».
-
-type View = 'dialog' | 'preview'
-const viewId = (view: View) => `dialog-view-${view}`
+// макетах»): its head, its rows, the live block and the field. Its tools — the browser of a task
+// in the browser (docs/plan/57-browser-tasks.md), the preview, files, records and checks of a task
+// with the repository — open beside it only when the client asks for one (docs/plan/59-dialog-
+// tools-panel.md): by «+» in the corner, «Посмотреть изменения», `/preview` and the buttons of
+// the browser in the feed; by themselves only once, when the browser of the task starts while the
+// client looks at the dialog. From `lg` they stand at the right edge; below, in place of the
+// dialog, «К диалогу» leading back to it.
 
 /** The one command of a task in the browser: stopping it (docs/plan/57-browser-tasks.md, Б24). */
 const BROWSER_COMMANDS: readonly ChatCommandId[] = ['cancel']
+
+/**
+ * What a focused element of the feed keeps clear above it (WCAG 2.4.11): below `lg` the head of
+ * the dialog sticks to the top of the window — 96px on two lines below `md`, from `md` 44px under
+ * the bar of the shell, which sticks too — and a step of 16px, as the landing keeps its anchors
+ * from under its header (DESIGN.md, «Шапка»). The room is a margin of the rows and not a padding
+ * of the scroller: with a padding, the head itself would count as hidden, and Tab onto it would
+ * scroll the page. From `lg` the head stands over the area the feed scrolls in, never over it.
+ */
+const HEAD_ROOM = '--dialog-head-room'
+/** What a focused element of the feed keeps clear below it: the field that sticks to the bottom. */
+const FIELD_ROOM = '--dialog-field-room'
+/** The step between what sticks over the feed and an element in focus. */
+const ROOM_STEP = 16
+
+/**
+ * What the focus stands on that the panel takes away as it opens by itself from `lg` (docs/plan/
+ * 59, И3, И4): «+» of the head, which moves to the end of the tabs, the menu it opened, which goes
+ * with it, or the list of dialogs, which gives the panel its room. null — the focus stands
+ * elsewhere, and the opening leaves it there.
+ */
+function focusTakenByOpening(): Element | null {
+  const active = document.activeElement
+  if (active === null || active === document.body) return null
+  const taken =
+    active.id === TOOLS_BUTTON_ID ||
+    active.closest(`[${TOOLS_MENU_MARK}], [data-site-list]`) !== null
+  return taken ? active : null
+}
 
 /** What a press of the client sends: one id per press, kept for its repeats. */
 type Press = 'message' | 'continue' | 'retry' | 'cancel' | 'reset' | 'update' | 'resume'
@@ -117,16 +144,12 @@ function releaseProgress(head: FeedHeadState): string | null {
   return words ? releaseText.progress(feedVersionText(release.version), words) : null
 }
 
-/** «Открыть панель» of the head: the focus goes there when the panel is closed. */
-const SHOW_PANE_ID = 'dialog-show-pane'
-
 /**
  * The head of a dialog (owner's request of 26.10.2026): one quiet line — its name, a release under
- * way beside it, the way to the panel beside it while the panel is closed (owner's request of
- * 27.10.2026: the preview, files and records can be opened at any time), and its menu
- * («Переименовать», «Удалить»). The name is written in place of itself. In the middle stands
- * «Чат | Работа» with the dialog's own mode, as on «Новый диалог» (owner's request of 29.10.2026);
- * on a phone the switch takes a line of its own under the name.
+ * way beside it, its menu («Переименовать», «Удалить») and, while the panel of its tools is closed,
+ * «+» of the tools in the corner (docs/plan/59, И4). The name is written in place of itself. In
+ * the middle stands «Чат | Работа» with the dialog's own mode, as on «Новый диалог» (owner's
+ * request of 29.10.2026); on a phone the switch takes a line of its own under the name.
  */
 function DialogHead({
   siteId,
@@ -134,7 +157,7 @@ function DialogHead({
   title,
   head,
   onRenamed,
-  pane,
+  tools,
   closedModes,
 }: {
   siteId: string
@@ -142,8 +165,8 @@ function DialogHead({
   title: string
   head: FeedHeadState | null
   onRenamed: () => void
-  /** The panel is closed and can be opened; null — nothing to open, or it is open. */
-  pane: { label: string; hint?: string; onOpen: () => void } | null
+  /** «+» of the tools while their panel is closed; null — it stands at the end of the tabs. */
+  tools: ReactNode
   /** A mode the site does not offer now, and why: the switch does not lead to it. */
   closedModes: Partial<Record<DialogMode, string>>
 }) {
@@ -165,7 +188,8 @@ function DialogHead({
         alignItems: 'center',
         columnGap: 1.5,
         rowGap: 1,
-        minHeight: 44,
+        // From `lg` as high as the strip of the panel's tabs: «+» keeps its corner (И4).
+        minHeight: { xs: 44, lg: 56 },
         minWidth: 0,
       }}
     >
@@ -244,25 +268,6 @@ function DialogHead({
           gap: 0.5,
         }}
       >
-        {pane ? (
-          <Button
-            id={SHOW_PANE_ID}
-            variant="text"
-            size="small"
-            onClick={pane.onOpen}
-            title={pane.hint}
-            startIcon={<AppIcon name="panel" size={18} />}
-            sx={{
-              display: { xs: 'none', lg: 'inline-flex' },
-              flex: 'none',
-              minHeight: 44,
-              color: 'text.secondary',
-              '&:hover': { color: 'text.primary' },
-            }}
-          >
-            {pane.label}
-          </Button>
-        ) : null}
         {head !== null && !renaming ? (
           <DialogMenuButton
             title={title}
@@ -270,6 +275,7 @@ function DialogHead({
             onRemove={() => setRemoving(true)}
           />
         ) : null}
+        {tools}
       </Box>
       {removing ? (
         <RemoveDialogConfirm
@@ -310,24 +316,19 @@ export function DialogView({
 }) {
   const trpc = useTRPC()
   const queryClient = useQueryClient()
-  const theme = useTheme()
-  const wide = useMediaQuery(theme.breakpoints.up('lg'))
   const { state, refresh } = useDialogFeed(taskId)
   const head = state.head
   const rows = state.rows
 
-  const [view, setView] = useState<View>('dialog')
-  // The tab the client chose; none — the panel opens on the first tab of the changes.
-  const [paneTab, setPaneTab] = useState<PaneTab | null>(null)
-  // The panel steps aside when the client closes it, and comes back with the next changes: what
-  // is kept is the changes it was closed on (`id:revision` of the candidate).
-  const [closedOn, setClosedOn] = useState<string | null>(null)
-  // The client opened the panel (the button of the head, `/preview`, «Посмотреть изменения»): it
-  // stays until it is closed, with or without changes.
-  const [paneOpened, setPaneOpened] = useState(false)
-  // The client's calls for the preview (`/preview`, the button of its tab): until the first it is
-  // not shown (owner's request of 27.10.2026); a stopped one wakes only on a call made after it
-  // stopped.
+  // The tools beside the dialog, as the client opened them (docs/plan/59, И1): every showing of a
+  // dialog starts with them closed — with changes ready and with a browser at work too — and
+  // nothing of them is kept for the next one.
+  const [tools, dispatchTools] = useReducer(toolsReducer, closedTools)
+  // From `lg` the tools stand beside the dialog; below, an open one takes its place (И14).
+  const theme = useTheme()
+  const wide = useMediaQuery(theme.breakpoints.up('lg'))
+  // The client's calls for the preview: every choice of it is one (И10); a stopped one wakes only
+  // on a call made after it stopped.
   const previewCalls = usePreviewCalls(head?.preview?.status ?? null)
   // Said to a screen reader once the server took a new level.
   const [effortNote, setEffortNote] = useState('')
@@ -350,6 +351,23 @@ export function DialogView({
   const feedArea = useRef<HTMLDivElement | null>(null)
   const feedContent = useRef<HTMLDivElement | null>(null)
   useFeedFollow(feedArea, feedContent)
+  // The field sticks to the bottom on every width, as high as what it holds now — a draft of many
+  // lines, files, a refusal under it: the rows of the feed keep that much clear below them, so
+  // that Tab down the feed never lands under it (WCAG 2.4.11).
+  const field = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const box = field.current
+    const area = feedArea.current
+    if (box === null || area === null || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() =>
+      area.style.setProperty(
+        FIELD_ROOM,
+        `${Math.ceil(box.getBoundingClientRect().height) + ROOM_STEP}px`,
+      ),
+    )
+    observer.observe(box)
+    return () => observer.disconnect()
+  }, [])
 
   const message = useMutation(trpc.task.message.mutationOptions())
   const proceed = useMutation(trpc.task.continue.mutationOptions())
@@ -367,31 +385,44 @@ export function DialogView({
     update.isPending ||
     resumeAgent.isPending
 
-  // A task in the browser (docs/plan/57-browser-tasks.md): the browser instead of the preview,
-  // the stream while its panel is shown.
+  // A task in the browser (docs/plan/57-browser-tasks.md): the browser instead of the preview.
   const inBrowser = head?.task.requirements.browser === true
   const browserLive = inBrowser && sessionLive(head?.browser ?? null)
-  // The panel beside the dialog: the browser of a task in the browser while the task goes on, or
-  // the tabs that hold anything — the preview, files or records of the site to change, checks.
-  // It opens by itself only when something on the site has changed (owner's requests of
-  // 26.10.2026), and by the button of the head at any time (owner's request of 27.10.2026). From
-  // `lg` the client may close it; it comes back by that button, and by itself with the next changes.
-  const ended = head !== null && terminalTaskStatuses.includes(head.task.status)
-  const panelTabs = inBrowser ? [] : paneTabsOf(head?.preview ?? null, head?.candidate ?? null)
-  const hasPane = (inBrowser && !ended) || panelTabs.length > 0
-  const candidateNow = head?.candidate ?? null
-  const changesMark = candidateNow === null ? '' : `${candidateNow.id}:${candidateNow.revision}`
-  const paneClosed = closedOn !== null && closedOn === changesMark
-  const opensItself = inBrowser || paneOpensItself(panelTabs)
-  const paneShown = hasPane && (!wide || paneOpened || (opensItself && !paneClosed))
-  // Without a panel the switch has nothing to show instead of the dialog.
-  const shownView: View = hasPane ? view : 'dialog'
-  const paneVisible = paneShown && (wide || shownView === 'preview')
+  // The stream goes while the tab of the browser is on the screen, beside the dialog or in its
+  // place; a press of «Взять управление» or «Продолжить работу агента» opens it for that press alone
+  // (docs/plan/59, И11). Nothing of it before the client asked for the browser.
+  const browserShown = tools.active === 'browser'
   const stream = useBrowserStream({
     taskId,
     streamUrl: browserStreamUrl,
     live: browserLive,
-    visible: paneVisible,
+    visible: browserShown,
+  })
+  // The browser of the task started while the client looks at the dialog (И2, И3): from `lg` it
+  // opens beside the dialog once, below only «+» is marked. Never by the words of the agent, and
+  // not where the cabinet cannot show the browser. Nobody pressed anything, so the focus stays
+  // where it is — unless it stood on what this very opening takes away (`focusTakenByOpening`):
+  // then «+» takes it, at the end of the tabs in the same corner (И4), and it is never dropped to
+  // the start of the page. A launch that opens nothing — spent, or below `lg` — moves nothing.
+  const heldAtLaunch = useRef<Element | null>(null)
+  const launched = useCallback(() => {
+    const opens =
+      tools.active === null && toolsReducer(tools, { type: 'launch', wide }).active !== null
+    heldAtLaunch.current = opens ? focusTakenByOpening() : null
+    dispatchTools({ type: 'launch', wide })
+  }, [tools, wide])
+  useEffect(() => {
+    const held = heldAtLaunch.current
+    heldAtLaunch.current = null
+    if (held === null || tools.active === null) return
+    // Gone with «+» of the head and its menu, or hidden with the list of dialogs.
+    if (!held.isConnected || held.getClientRects().length === 0)
+      document.getElementById(TOOLS_BUTTON_ID)?.focus()
+  }, [tools.active])
+  useBrowserLaunch(head, {
+    taskId,
+    enabled: inBrowser && browserStreamUrl !== null,
+    onLaunch: launched,
   })
   const attachments = useAttachments(siteId)
   // The names of the files the messages sent: read once a message has one.
@@ -502,6 +533,13 @@ export function DialogView({
       })
     shownCandidate.current = candidateMark
   }, [candidateMark, candidateRevision, queryClient, taskId, trpc])
+  // A tab of the changes on the screen — beside the dialog or in its place — shows the client this
+  // revision: «+» bears no dot for it (И13). A revision that comes after is new again.
+  const changesShown = isChangesTool(tools.active)
+  const changesNow = changesMark(candidate)
+  useEffect(() => {
+    if (changesShown && changesNow !== null) dispatchTools({ type: 'seen', changes: changesNow })
+  }, [changesShown, changesNow])
   // The live region says the status as it changes: a question, a result, a failure, changes to
   // look at and the end of a release each come with a status of their own. Not every stage and
   // not the timer. A failure after which the dialog kept its changes leaves the status «Ждёт
@@ -528,26 +566,54 @@ export function DialogView({
           ? taskAnsweredLabel
           : taskStatusLabel[status]
 
-  function openPane() {
-    setClosedOn(null)
-    setPaneOpened(true)
+  /**
+   * The focus goes where the tools are drawn next — the tab of a tool, or «+» once none is open:
+   * what moved it is gone or behind. «+» takes it where it stands, the page left where it is: the
+   * head keeps «+» in sight as it sticks, and in a window lower than 420px, where the head goes
+   * with the page, the feed comes back where the client read it rather than at the head (И19).
+   */
+  function focusSoon(id: string) {
+    window.setTimeout(
+      () => document.getElementById(id)?.focus({ preventScroll: id === TOOLS_BUTTON_ID }),
+      0,
+    )
   }
 
-  /** The focus goes to a tab of the panel once it is drawn: what opened it is gone or behind. */
-  function focusTab(tab: PaneTab) {
-    window.setTimeout(() => document.getElementById(paneTabId(tab))?.focus(), 0)
+  /**
+   * The one way a tool opens (docs/plan/59, И9): «+», «Посмотреть изменения», `/preview`, «Открыть
+   * браузер», «Взять управление» and «Смотреть, что делает агент» — never the words of the agent. An
+   * open tool is shown again, never twice. Choosing the preview is the client's call to show it,
+   * every time (И10). An explicit opening puts the focus on the tab of the tool, unless the action
+   * keeps a place of its own and that place stays in sight: below `lg` the first tool takes the
+   * place of the dialog, and the button pressed there goes out of sight with it (И14).
+   */
+  function openTool(tool: DialogTool, { by }: { by: ToolOpener }) {
+    if (tool === 'preview') previewCalls.call()
+    const covers = !wide && tools.active === null
+    dispatchTools({ type: 'open', tool, by })
+    if (movesFocus(by, { covers })) focusSoon(toolTabId(tool))
   }
 
-  function focusPaneTab(tab: PaneTab) {
-    // A tab with nothing in it is not drawn: the first tab of the changes takes its place.
-    if (panelTabs.length === 0) return
-    const target = shownPaneTab(panelTabs, tab)
-    // Only the preview asked for by name is the client's call to show it.
-    if (tab === 'preview' && target === 'preview') previewCalls.call()
-    openPane()
-    setPaneTab(target)
-    if (!wide) setView('preview')
-    focusTab(target)
+  /**
+   * The cross of a tab, or Delete on it. Closing only hides (И8): the task, the session of its
+   * browser and the control stay as they are, nothing is sent. The browser over the content goes
+   * with it (И17); the focus goes to the tab shown instead, or to «+» after the last one.
+   */
+  function closeTool(tool: DialogTool) {
+    const next = toolsReducer(tools, { type: 'close', tool })
+    dispatchTools({ type: 'close', tool })
+    setFullscreen(false)
+    focusSoon(next.active === null ? TOOLS_BUTTON_ID : toolTabId(next.active))
+  }
+
+  /**
+   * «Скрыть панель», or «К диалогу» below `lg`: every tab at once, nothing sent either; the focus
+   * back on «+» in the head, the feed back where the client read it (И14, И19).
+   */
+  function closeTools() {
+    dispatchTools({ type: 'closeAll' })
+    setFullscreen(false)
+    focusSoon(TOOLS_BUTTON_ID)
   }
 
   /** «Размышление» of the dialog: from the agent's next turn (`task.setEffort`). */
@@ -638,10 +704,14 @@ export function DialogView({
     refresh()
   }
 
-  /** «Взять управление»: the browser is shown, and the stream asks for the control. */
+  /**
+   * «Взять управление»: the browser is shown — opened if the client had not — and the stream asks
+   * for the control (docs/plan/59, И12). The focus stays where the browser's panel puts it, or, on
+   * a narrow screen where the browser now covers the card it was pressed on, goes to its tab.
+   */
   function takeControl() {
     setFieldError(null)
-    if (!wide) setView('preview')
+    openTool('browser', { by: 'take' })
     stream.take()
   }
 
@@ -660,12 +730,12 @@ export function DialogView({
   // Esc leaves the browser over the content — unless the page itself is being typed into.
   useEffect(() => {
     if (!fullscreen) return
-    // The bar of the shell and the list of dialogs are under the browser too: out of the tab
-    // order while it covers them (WCAG 2.4.11), as the dialog's own column is.
+    // The bar of the shell, the list of dialogs and the way back to it are under the browser too:
+    // out of the tab order while it covers them (WCAG 2.4.11), as the dialog's own column is.
     const covered = [
       ...(pane.current
         ?.closest('[data-site-shell]')
-        ?.querySelectorAll('header, [data-site-list]') ?? []),
+        ?.querySelectorAll('header, [data-site-list], [data-site-back]') ?? []),
     ].filter((element) => !root.current?.contains(element))
     for (const element of covered) element.setAttribute('inert', '')
     const leave = (event: KeyboardEvent) => {
@@ -688,7 +758,7 @@ export function DialogView({
         setReleaseOpen(true)
         return
       case 'preview':
-        focusPaneTab('preview')
+        openTool('preview', { by: 'command' })
         return
       case 'reset':
         void press('reset', reset.mutateAsync)
@@ -716,10 +786,15 @@ export function DialogView({
     onRelease: () => runCommand('release'),
     onUpdate: () => runCommand('update'),
     onUndo: () => runCommand('undo'),
-    onShowChanges: () => focusPaneTab('files'),
+    // The first tool of the changes that holds anything; never the preview (И10).
+    onShowChanges: () => {
+      if (head !== null) openTool(changesToolOf(head), { by: 'changes' })
+    },
+    onOpenBrowser: () => openTool('browser', { by: 'card' }),
     onTakeControl: takeControl,
     onResumeAgent: resumeWork,
-    controlling: head?.browser?.controller === 'user',
+    // The client holds the control of a browser that is there: a closed session holds nothing.
+    controlling: head?.browser?.controller === 'user' && browserLive,
     browserLive,
     busy,
     stopping,
@@ -847,6 +922,80 @@ export function DialogView({
     )
   }
 
+  // «+» of the tools: in the head while their panel is closed, at the end of its tabs while open.
+  // Its dot says what is new behind it, never while the panel is open (И13); below `lg` its menu
+  // comes up from the bottom of the screen (И14).
+  const menu =
+    head === null ? null : (
+      <ToolsMenu
+        tiles={toolTilesOf(head, tools)}
+        onOpen={(tool) => openTool(tool, { by: 'menu' })}
+        dot={toolsDot(head, tools)}
+        sheet={!wide}
+      />
+    )
+  const toolsOpen = tools.active !== null
+  // Below `lg` an open tool takes the place of the dialog: its head, rows and field are only
+  // hidden, never unmounted — the draft, the files and the place of the reader stay (И14, И19).
+  const covered = toolsOpen && !wide
+
+  /** What the panel of a tool holds. */
+  function toolContent(tool: DialogTool): ReactNode {
+    switch (tool) {
+      case 'browser':
+        return (
+          <BrowserPane
+            taskId={taskId}
+            siteId={siteId}
+            head={head}
+            stream={stream}
+            configured={browserStreamUrl !== null}
+            visible={browserShown}
+            fullscreen={fullscreen}
+            onFullscreen={setFullscreen}
+            onTake={takeControl}
+            onResume={resumeWork}
+            onStop={() => runCommand('cancel')}
+            stopping={stopping}
+            canStop={
+              !terminal &&
+              !stopping &&
+              commands.some((command) => command.id === 'cancel' && command.available)
+            }
+            busy={busy}
+            answered={answered}
+          />
+        )
+      case 'preview':
+        return (
+          <PreviewTab
+            taskId={taskId}
+            preview={head?.preview ?? null}
+            calls={previewCalls}
+            onReopen={() => {
+              previewCalls.call()
+              // «Открыть предпросмотр» goes with the frame it opens: the focus waits on the tab.
+              focusSoon(toolTabId('preview'))
+            }}
+            canReset={resetVerdict?.available === true}
+            onReset={() => runCommand('reset')}
+            resetting={reset.isPending}
+          />
+        )
+      case 'files':
+      case 'database':
+      case 'checks':
+        return (
+          <CandidateTab
+            taskId={taskId}
+            candidate={head?.candidate ?? null}
+            tool={tool}
+            ended={terminal}
+          />
+        )
+    }
+  }
+
   return (
     <Box
       ref={root}
@@ -856,65 +1005,74 @@ export function DialogView({
         display: 'flex',
         flexDirection: 'column',
         minWidth: 0,
+        // What sticks over the top of the window below `lg`, as measured, and a step: the head of
+        // 96px (two lines of 44px and 8px between them), from `md` the bar of the shell and the
+        // head of one line, 44px each (`HEAD_ROOM`). Nothing over the feed from `lg`.
+        [HEAD_ROOM]: {
+          xs: `${96 + ROOM_STEP}px`,
+          md: `${SITE_TOOLBAR_HEIGHT + 44 + ROOM_STEP}px`,
+          lg: '0px',
+        },
+        // A window lower than 420px sticks no head (below): only the bar of the shell from `md`.
+        '@media (max-height: 420px)': {
+          [HEAD_ROOM]: { xs: '0px', md: `${SITE_TOOLBAR_HEIGHT + ROOM_STEP}px`, lg: '0px' },
+        },
       }}
     >
-      {/* The browser over the whole area covers the switch and the dialog: neither takes focus. */}
-      {hasPane ? (
-        <Tabs
-          value={shownView}
-          onChange={(_event, next: View) => setView(next)}
-          aria-label={viewSwitchText.label}
-          variant="fullWidth"
-          inert={fullscreen}
-          sx={{
-            display: { lg: 'none' },
-            mb: 2,
-            borderBottom: 1,
-            borderColor: 'divider',
-            flex: 'none',
-          }}
-        >
-          {(['dialog', 'preview'] as const).map((value) => (
-            <Tab
-              key={value}
-              value={value}
-              label={
-                value === 'preview' && inBrowser ? (
-                  <Box
-                    component="span"
-                    sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.75 }}
-                  >
-                    {browserText.view}
-                    {browserLive ? (
-                      <>
-                        <Box
-                          component="span"
-                          aria-hidden="true"
-                          sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'primary.main' }}
-                        />
-                        <Box component="span" sx={offScreen}>
-                          {`, ${browserText.status.agent.toLocaleLowerCase('ru')}`}
-                        </Box>
-                      </>
-                    ) : null}
-                  </Box>
-                ) : (
-                  viewSwitchText[value]
-                )
-              }
-              aria-controls={viewId(value)}
-              sx={{ minHeight: 48, textTransform: 'none', fontSize: 15 }}
-            />
-          ))}
-        </Tabs>
-      ) : null}
+      {/* The browser over the whole area covers the head and the dialog: neither takes focus. */}
+      <Box
+        inert={fullscreen}
+        sx={{
+          display: covered ? 'none' : 'block',
+          flex: 'none',
+          mb: { xs: 3, md: 4, lg: 0 },
+          // Below `lg` the page scrolls the dialog, and the head keeps to the top of the window —
+          // under the bar of the shell, which keeps there too from `md` — «+» within reach (docs/
+          // plan/59, И4, И14). It runs from edge to edge of the content, so the rows pass under it
+          // unseen; the field and its list of commands stay over it.
+          position: { xs: 'sticky', lg: 'static' },
+          top: { xs: 0, md: SITE_TOOLBAR_HEIGHT },
+          zIndex: { xs: 1, lg: 'auto' },
+          // A window lower than 420px — a phone on its side, a page zoomed to 400% — leaves the head
+          // with the page: stuck over the field, it would leave the feed a line to be read in (WCAG
+          // 1.4.10), as the landing unpins its header there (DESIGN.md, «Шапка»).
+          '@media (max-height: 420px)': { position: 'static' },
+          bgcolor: 'background.paper',
+          // From `lg` the head stands over the area of the feed, which scrolls under it, from edge
+          // to edge of the dialog. While the panel is closed it stands right under the bar, «+» in
+          // the corner the strip of the panel's tabs takes when it opens (docs/plan/59, И4); while
+          // it is open, under «Назад к диалогам» of the list that gave the dialog its room.
+          mt: { lg: toolsOpen ? 0 : -3.5 },
+          mx: { xs: -2, sm: -2.5, md: -4 },
+          pl: { xs: 2, sm: 2.5, md: 4, lg: 3 },
+          pr: { xs: 2, sm: 2.5, md: 4, lg: 0.75 },
+        }}
+      >
+        <DialogHead
+          siteId={siteId}
+          taskId={taskId}
+          title={shownTitle}
+          head={head}
+          closedModes={
+            capabilities === undefined
+              ? {}
+              : {
+                  ...(capabilities.browser === 'ready' ? {} : { chat: composerText.chatOff }),
+                  ...(capabilities.repository === 'ready' ? {} : { work: composerText.workOff }),
+                }
+          }
+          onRenamed={refresh}
+          tools={toolsOpen ? null : menu}
+        />
+      </Box>
 
       <Box
         ref={feedArea}
-        id={viewId('dialog')}
         inert={fullscreen}
         sx={{
-          display: { xs: shownView === 'dialog' ? 'flex' : 'none', lg: 'flex' },
+          // Below `lg` an open tool takes the place of the feed. The feed is only hidden, never
+          // unmounted: the draft, the files and the place of the reader stay (docs/plan/59, И19).
+          display: covered ? 'none' : 'flex',
           flexDirection: 'column',
           flex: { xs: '1 0 auto', lg: '1 1 0' },
           minWidth: 0,
@@ -929,6 +1087,7 @@ export function DialogView({
           position: { lg: 'relative' },
           mx: { lg: -4 },
           px: { lg: 4 },
+          pt: { lg: 1 },
           mb: { lg: -3.5 },
         }}
       >
@@ -944,39 +1103,16 @@ export function DialogView({
             // The feed and the field on one axis, a comfortable measure (owner's brief, 26.10.2026).
             maxWidth: 780,
             mx: 'auto',
+            // Whatever of the feed takes the focus — a link of an answer, a button of a card —, or
+            // is shown by the browser, keeps clear of what sticks over the feed: the head at the
+            // top below `lg`, the field at the bottom (WCAG 2.4.11). The field itself has no room:
+            // it is always in sight, and a room under it would scroll the page as it is focused.
+            '& :not([data-feed-field], [data-feed-field] *)': {
+              scrollMarginTop: `var(${HEAD_ROOM})`,
+              scrollMarginBottom: `var(${FIELD_ROOM}, ${140 + ROOM_STEP}px)`,
+            },
           }}
         >
-          <DialogHead
-            siteId={siteId}
-            taskId={taskId}
-            title={shownTitle}
-            head={head}
-            closedModes={
-              capabilities === undefined
-                ? {}
-                : {
-                    ...(capabilities.browser === 'ready' ? {} : { chat: composerText.chatOff }),
-                    ...(capabilities.repository === 'ready' ? {} : { work: composerText.workOff }),
-                  }
-            }
-            onRenamed={refresh}
-            pane={
-              hasPane && !paneShown
-                ? {
-                    ...(inBrowser
-                      ? { label: browserText.view, onOpen: openPane }
-                      : {
-                          label: paneText.open,
-                          hint: paneText.openHint,
-                          onOpen: () => {
-                            openPane()
-                            focusTab(shownPaneTab(panelTabs, paneTab))
-                          },
-                        }),
-                  }
-                : null
-            }
-          />
           {head === null ? (
             <Box role="status" aria-label={dialogText.loading} sx={{ display: 'grid', gap: 1.5 }}>
               <Skeleton
@@ -1019,7 +1155,8 @@ export function DialogView({
                   ? {
                       controlling: head.browser?.controller === 'user' && browserLive,
                       onResume: resumeWork,
-                      onWatch: wide ? null : () => setView('preview'),
+                      onWatch: () => openTool('browser', { by: 'watch' }),
+                      onOpen: () => openTool('browser', { by: 'card' }),
                       busy,
                     }
                   : undefined
@@ -1043,6 +1180,8 @@ export function DialogView({
           ) : null}
 
           <Box
+            ref={field}
+            data-feed-field=""
             sx={{
               position: 'sticky',
               bottom: 0,
@@ -1066,122 +1205,18 @@ export function DialogView({
         {effortNote}
       </Box>
 
-      {paneShown ? (
-        <Box
-          component="aside"
-          ref={pane}
-          id={viewId('preview')}
-          aria-label={inBrowser ? browserText.label : paneText.label}
-          // The shell leaves this panel its room at the right edge only while it is drawn.
-          data-site-pane=""
-          sx={{
-            display: { xs: shownView === 'preview' ? 'flex' : 'none', lg: 'flex' },
-            flexDirection: 'column',
-            minWidth: 0,
-            height: { xs: 'calc(100dvh - 160px)', lg: 'auto' },
-            minHeight: { xs: 480, lg: 0 },
-            position: { lg: 'fixed' },
-            // Under the bar of breadcrumbs, which runs over the panel to the right edge.
-            top: { lg: SITE_TOOLBAR_HEIGHT },
-            bottom: { lg: 0 },
-            right: { lg: 'env(safe-area-inset-right)' },
-            width: { lg: SITE_PANE_WIDTH },
-            border: { xs: 1, lg: 0 },
-            borderLeft: { lg: 1 },
-            borderColor: { xs: 'divider', lg: 'divider' },
-            borderRadius: { xs: '14px', lg: 0 },
-            // The panel holds its edge outside itself: the edge is not cut off.
-            overflow: { xs: 'hidden', lg: 'visible' },
-            bgcolor: 'background.paper',
-            // Over the whole area of the content, the rail beside it; under the windows of MUI.
-            ...(fullscreen && {
-              position: 'fixed',
-              display: 'flex',
-              top: 0,
-              bottom: 0,
-              right: 0,
-              left: { xs: 0, sm: `calc(${SITE_RAIL_WIDTH}px + env(safe-area-inset-left))` },
-              width: 'auto',
-              height: 'auto',
-              minHeight: 0,
-              border: 0,
-              borderRadius: 0,
-              zIndex: 1200,
-            }),
-          }}
-        >
-          {fullscreen ? null : (
-            <PaneResizer
-              pane={pane}
-              label={inBrowser ? browserText.separator : paneText.separator}
-            />
-          )}
-          <Box
-            sx={{
-              flex: '1 1 auto',
-              minHeight: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              overflow: 'hidden',
-            }}
-          >
-            {inBrowser ? (
-              <BrowserPane
-                taskId={taskId}
-                siteId={siteId}
-                head={head}
-                stream={stream}
-                configured={browserStreamUrl !== null}
-                visible={paneVisible}
-                fullscreen={fullscreen}
-                onFullscreen={setFullscreen}
-                onTake={takeControl}
-                onResume={resumeWork}
-                onStop={() => runCommand('cancel')}
-                stopping={stopping}
-                canStop={
-                  !terminal &&
-                  !stopping &&
-                  commands.some((command) => command.id === 'cancel' && command.available)
-                }
-                busy={busy}
-                answered={answered}
-              />
-            ) : (
-              <PreviewPane
-                taskId={taskId}
-                preview={head?.preview ?? null}
-                candidate={head?.candidate ?? null}
-                tab={paneTab}
-                onTab={setPaneTab}
-                tabs={panelTabs}
-                visible={paneVisible}
-                previewCalls={previewCalls}
-                onAskPreview={() => {
-                  previewCalls.call()
-                  setPaneTab('preview')
-                  focusTab('preview')
-                }}
-                canReset={resetVerdict?.available === true}
-                onReset={() => runCommand('reset')}
-                resetting={reset.isPending}
-                onClose={
-                  wide
-                    ? () => {
-                        setPaneOpened(false)
-                        setClosedOn(changesMark)
-                        // It comes back by itself on the first tab of the changes, not the preview.
-                        setPaneTab(null)
-                        // The button goes with the panel: the focus waits on the way back to it.
-                        window.setTimeout(() => document.getElementById(SHOW_PANE_ID)?.focus(), 0)
-                      }
-                    : () => setView('dialog')
-                }
-              />
-            )}
-          </Box>
-        </Box>
-      ) : null}
+      {/* Drawn only while a tool is open: no empty column, no hidden tool that reads anything. */}
+      <ToolsPanel
+        tools={tools}
+        pane={pane}
+        wide={wide}
+        fullscreen={fullscreen}
+        menu={toolsOpen ? menu : null}
+        onShow={(tool) => dispatchTools({ type: 'show', tool })}
+        onClose={closeTool}
+        onCloseAll={closeTools}
+        content={toolContent}
+      />
 
       <ReleaseDialog
         taskId={taskId}

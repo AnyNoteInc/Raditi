@@ -148,6 +148,80 @@ export async function addBrowserTask(
 }
 
 /**
+ * A long dialog of «Работа» on a connected site of the signed-in user (docs/plan/59-dialog-tools-
+ * panel.md, И19): `pairs` messages of the client, each answered by the agent, the last answer
+ * leaving the dialog open — `awaiting_user`, so the field takes words. Nothing changed on the site:
+ * no candidate, no preview, no core. The feed is long enough to scroll on any screen, and every
+ * answer links to the page it speaks of: the keyboard has stops all along the feed. Everything goes
+ * with the user, as the task in the browser does.
+ */
+export async function addLongDialog(
+  userId: string,
+  pairs = 15,
+): Promise<{ siteId: string; taskId: string; title: string }> {
+  const siteId = await addConnectedSite(userId)
+  const title = 'Правки на странице «Меню»'
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    const site = await prisma.site.findUniqueOrThrow({
+      where: { id: siteId },
+      select: { workspaceId: true, url: true },
+    })
+    const task = await prisma.task.create({
+      data: {
+        workspaceId: site.workspaceId,
+        siteId,
+        createdById: userId,
+        status: 'awaiting_user',
+        title,
+        turnNo: pairs,
+        // «Работа» is the dialog with the copy of the site, as `task.create` writes it.
+        mode: 'work',
+        needsRepository: true,
+        needsBrowser: false,
+      },
+      select: { id: true },
+    })
+    // Each answer leaves the dialog open; the next words answer it (`answersEventId`).
+    let answer: bigint | null = null
+    for (let turn = 1; turn <= pairs; turn += 1) {
+      const text = `${turn}. Поменяйте, пожалуйста, на странице «Меню» описание напитка номер ${turn}: добавьте объём и уберите слово «авторский».`
+      const base = { v: 1, authorId: userId, requestId: randomUUID(), text } as const
+      await insertFeedEvent(prisma, {
+        taskId: task.id,
+        row: {
+          type: 'feed.request',
+          payload:
+            answer === null
+              ? { ...base, kind: 'first' }
+              : { ...base, kind: 'answer', answersEventId: String(answer) },
+        },
+      })
+      answer = await insertFeedEvent(prisma, {
+        taskId: task.id,
+        row: {
+          type: 'feed.result',
+          payload: {
+            v: 1,
+            turn,
+            message: `Ответ ${turn}. Посмотрел [страницу «Меню»](${site.url}/menu/): напиток номер ${turn} описан в блоке «Кофе». Чтобы поменять описание, нужна правка в копии сайта — напишите, если начинать, и я подготовлю изменения для предпросмотра.`,
+            site: 'unchanged',
+            next: 'awaiting_user',
+            filesChanged: null,
+            changeType: 'none',
+            needsApproval: false,
+            risk: 'low',
+          },
+        },
+      })
+    }
+    return { siteId, taskId: task.id, title }
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+/**
  * Takes the indicator of `next dev` off every page the test opens. It stands in the bottom
  * right corner (next.config.ts), over «Ещё» of the bottom bar, and takes the click meant for
  * it; a production build has no indicator.
