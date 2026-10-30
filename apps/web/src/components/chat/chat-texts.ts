@@ -614,7 +614,7 @@ export const toolText = Object.freeze({
     none: 'нет',
     /** The checks of the changes: those passed of all. */
     checks: (passed: number, all: number) => `${passed} из ${all}`,
-    /** The browser holds no session: none yet, or it closed. */
+    /** The session of the browser holds none any more, or the dialog ended without one. */
     browserClosed: 'Закрыт',
   }),
   /** What a tab of the changes says while there are none yet (И6). */

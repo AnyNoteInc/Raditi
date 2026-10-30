@@ -7,7 +7,7 @@ import MenuItem from '@mui/material/MenuItem'
 import MenuList from '@mui/material/MenuList'
 import Popover from '@mui/material/Popover'
 import Typography from '@mui/material/Typography'
-import { useId, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 
@@ -37,7 +37,10 @@ import {
 export const TOOLS_BUTTON_ID = 'dialog-tools'
 
 const tileSx = {
-  minHeight: 52,
+  // MUI lets the height of a menu item go from `sm` up, by a media query of its own that wins over
+  // a plain value: a value given by breakpoint comes after it and keeps the tile 52px high on every
+  // width — never under the 44px of a finger (DESIGN.md).
+  minHeight: { xs: 52 },
   gap: 1.5,
   pl: 1.75,
   pr: 1.5,
@@ -60,7 +63,7 @@ const sheetTileSx = {
   alignContent: 'space-between',
   rowGap: 1.25,
   columnGap: 1,
-  minHeight: 92,
+  minHeight: { xs: 92 },
   p: 1.75,
   borderRadius: '16px',
   lineHeight: 1.3,
@@ -112,9 +115,16 @@ export function ToolsMenu({
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const menuId = useId()
   const titleId = useId()
+  const list = useRef<HTMLUListElement>(null)
   const open = anchor !== null
   const close = () => setAnchor(null)
   const label = toolsLabel(dot)
+  // The first tile takes the focus as the card or the sheet comes in, as the Menu of MUI moves it
+  // there (И5). A list of MUI used on its own leaves that to its user: the focus it gives its first
+  // tile does not outlive a modal mounted again (Strict Mode, `next dev`), which hands it back to
+  // «+» and then to the card, where no arrow reaches a tile.
+  const focusFirstTile = () =>
+    list.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
   const card = (
     <>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minHeight: sheet ? 44 : 0 }}>
@@ -136,6 +146,7 @@ export function ToolsMenu({
         ) : null}
       </Box>
       <MenuList
+        ref={list}
         id={menuId}
         aria-labelledby={titleId}
         autoFocusItem={open}
@@ -255,7 +266,10 @@ export function ToolsMenu({
           anchor="bottom"
           open={open}
           onClose={close}
+          // The focus goes to the first tile, not to the sheet.
+          disableAutoFocus
           slotProps={{
+            transition: { onEntering: focusFirstTile },
             paper: {
               sx: {
                 ...cardSx,
@@ -279,9 +293,12 @@ export function ToolsMenu({
           open={open}
           anchorEl={anchor}
           onClose={close}
+          // The focus goes to the first tile, not to the card.
+          disableAutoFocus
           anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
           transformOrigin={{ vertical: 'top', horizontal: 'right' }}
           slotProps={{
+            transition: { onEntering: focusFirstTile },
             paper: {
               sx: {
                 ...cardSx,

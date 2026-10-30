@@ -49,6 +49,9 @@ const tabSx = {
   fontWeight: 400,
   whiteSpace: 'nowrap',
   color: 'text.secondary',
+  // The sign of the tool 8px before its name, as MUI spaces the icon of a tab by a class that
+  // `AppIcon` does not take.
+  '& > svg': { mr: 1 },
   '&:hover': { color: 'text.primary' },
   '&.Mui-selected': { color: 'text.primary', bgcolor: 'action.selected', fontWeight: 500 },
 } as const
