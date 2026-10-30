@@ -1,6 +1,6 @@
 # browser
 
-Процесс облачного браузера задач без кодовой базы ([план 57](../../docs/plan/57-browser-tasks.md), Б10–Б28): держит браузерные сессии задач — Chromium каждой сессии в своём контейнере (`@repo/sandbox-providers`, `createDockerBrowserSessionRuntime`: своя internal-сеть без адреса хоста, единственный выход — прокси выхода со списком хостов сайта, управляющий порт — через пересыльщик на loopback хоста) — и управляет им через Playwright (`@repo/browser-providers`, `createPlaywrightCloudBrowser`). Жизненным циклом задач не владеет: сессию открывает и закрывает `core`, процесс `browser` записывает, что в ней происходит. Порт 8086 (`BROWSER_WORKER_PORT`), всё — за токеном `BROWSER_WORKER_TOKEN`.
+Процесс облачного браузера задач без кодовой базы ([план 57](../../docs/plan/57-browser-tasks.md), Б10–Б28): держит браузерные сессии задач — Chromium каждой сессии в своём контейнере (`@repo/sandbox-providers`, `createDockerBrowserSessionRuntime`: своя internal-сеть без адреса хоста, единственный выход — прокси выхода со списком хостов сайта и, с 30.10.2026, открытым интернетом для другого сайта, куда отправила страница сайта ([план 60](../../docs/plan/60-browser-foreign-redirects.md)), управляющий порт — через пересыльщик на loopback хоста) — и управляет им через Playwright (`@repo/browser-providers`, `createPlaywrightCloudBrowser`). Жизненным циклом задач не владеет: сессию открывает и закрывает `core`, процесс `browser` записывает, что в ней происходит. Порт 8086 (`BROWSER_WORKER_PORT`), всё — за токеном `BROWSER_WORKER_TOKEN`.
 
 
 ## Устройство

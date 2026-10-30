@@ -267,8 +267,13 @@ describe.skipIf(!enabled)('real Docker browser session runtime', () => {
           await probe.close()
         }
       }
-      // An https host the session does not list: its tunnel is refused.
-      expect(await refused('https://example.org/')).toBe(true)
+      // A public name on a port the proxy does not open: its tunnel is refused…
+      expect(await refused('https://example.org:444/')).toBe(true)
+      // …and on 443 it is another site a page may go on to (plan 60, Ч3): the proxy takes it and
+      // resolves it. This one never resolves, so the page fails with the internet or without; the
+      // log names the host, which it never does for a host it refuses.
+      const elsewhere = `nothing-${randomBytes(4).toString('hex')}.example.com`
+      expect(await refused(`https://${elsewhere}/`)).toBe(true)
       // Another port of the host: plain HTTP of no route…
       expect(await refused(`http://host.docker.internal:${other.port}/`)).toBe(true)
       // …which the default bridge, where the proxy lives, does reach: only the proxy refuses it.
@@ -299,6 +304,11 @@ describe.skipIf(!enabled)('real Docker browser session runtime', () => {
       expect(count('request', 'ok', new URL(origin).host)).toBeGreaterThanOrEqual(2)
       expect(count('connect', 'ok', new URL(origin).host)).toBeGreaterThanOrEqual(1)
       expect(count('connect', 'forbidden_host')).toBeGreaterThanOrEqual(2)
+      expect(
+        log.entries.filter(
+          (entry) => entry.event === 'connect' && entry.host === `${elsewhere}:443`,
+        ),
+      ).not.toEqual([])
       expect(count('request', 'method')).toBeGreaterThanOrEqual(2)
       expect(log.text).not.toMatch(/wp-admin|wp-json|meta-data|example\.org|from=test/)
 

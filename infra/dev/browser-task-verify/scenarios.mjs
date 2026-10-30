@@ -1506,7 +1506,9 @@ async function sessionContainerLogs(rt, sessionId) {
  * From the session's Chromium container: the services of the host (core, web, mcp, llm, the
  * worker, OpenBao, S3, the site's published port) and the metadata address are unreachable, each
  * with a control that reaches it (the egress container, on the default bridge); through the egress
- * proxy, an unlisted host and the metadata address are refused, the site of the task answers.
+ * proxy, the metadata address, a public host on a port it does not open and a service of the host
+ * are refused, the site of the task answers, and so does another public site — one a page of the
+ * site may go on to (docs/plan/60-browser-foreign-redirects.md, Ч3; the stand needs the internet).
  */
 async function networkProbes(stand, sessionId) {
   const { rt } = stand
@@ -1584,18 +1586,20 @@ async function networkProbes(stand, sessionId) {
       .then((answer) => answer.output.trim())
   const site = await viaProxy(`${SITE_ORIGIN}/wp-login.php`)
   const metadataProxy = await viaProxy('http://169.254.169.254/latest/meta-data/')
-  const unlisted = await viaProxy('CONNECT example.com:443')
+  const elsewhere = await viaProxy('CONNECT example.com:443')
+  const otherPort = await viaProxy('CONNECT example.com:444')
   const hostService = await viaProxy(`http://host.docker.internal:${stand.ports.core}/health`)
   rt.check(
     site === '200',
     `control: through the egress proxy the site of the task answers (${site})`,
   )
   rt.check(
-    metadataProxy !== '200' &&
-      unlisted !== '200' &&
-      hostService !== '200' &&
-      [metadataProxy, unlisted, hostService].every((answer) => /^4\d\d$/.test(answer)),
-    `through the egress proxy: the metadata address (${metadataProxy}), an unlisted host (${unlisted}) and a service of the host (${hostService}) are refused`,
+    elsewhere === '200',
+    `through the egress proxy another public site answers, one a page of the site may go on to (${elsewhere})`,
+  )
+  rt.check(
+    [metadataProxy, otherPort, hostService].every((answer) => /^4\d\d$/.test(answer)),
+    `through the egress proxy: the metadata address (${metadataProxy}), a public host on a port it does not open (${otherPort}) and a service of the host (${hostService}) are refused`,
   )
 }
 

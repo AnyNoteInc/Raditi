@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { browserAllowedHosts, browserLocalSiteOrigin, browserNavigationAllowed } from './hosts.ts'
+import {
+  browserAllowedHosts,
+  browserForeignPageAllowed,
+  browserLocalSiteOrigin,
+  browserNavigationAllowed,
+} from './hosts.ts'
 
 describe('browserAllowedHosts', () => {
   it('lets the browser reach the site, its www. twin and the hosts of its stack', () => {
@@ -135,5 +140,63 @@ describe('browserNavigationAllowed', () => {
       '',
     ])
       expect(may(address, local), address).toBe(false)
+  })
+})
+
+describe('browserForeignPageAllowed', () => {
+  const allowed = browserAllowedHosts('https://news.example.ru', ['s.w.org'], [])
+  const local = ['http://wordpress.local:8080']
+  const may = (address: string) => browserForeignPageAllowed(address, allowed, local)
+
+  it('lets a page be on another public https site, on a TLS port the egress proxy opens', () => {
+    for (const address of [
+      'https://pay.example.com/checkout?order=12',
+      'https://yoomoney.ru:443/checkout/payments/v2/contract',
+      'https://oauth.yandex.ru:8443/authorize',
+      'https://ПРИМЕР.рф/',
+    ])
+      expect(may(address), address).toBe(true)
+  })
+
+  it('never takes a host that may share the sign-in cookie of the site for another site', () => {
+    for (const address of [
+      'https://news.example.ru/',
+      'https://news.example.ru:8443/wp-admin/users.php',
+      'https://www.news.example.ru/',
+      'https://shop.news.example.ru/',
+      'https://example.ru/wp-admin/',
+      'https://shop.example.ru/',
+      'https://EXAMPLE.ru/',
+      'https://make.w.org/',
+    ])
+      expect(may(address), address).toBe(false)
+  })
+
+  it('refuses plain http, an address, a local name, another port or scheme, credentials', () => {
+    for (const address of [
+      'http://pay.example.com/',
+      'https://203.0.113.10/',
+      'https://[2001:db8::1]/',
+      'https://169.254.169.254/latest/meta-data/',
+      'https://0x7f.1/',
+      'https://localhost/',
+      'https://wp.localhost/',
+      'https://vault.raditi.internal/',
+      'https://host.docker.internal/',
+      'https://wordpress.local/',
+      'https://wp.raditi.test/',
+      'https://intranet/',
+      'https://pay.example.com.:443/',
+      'https://pay.example.com:444/',
+      'https://pay.example.com:8080/',
+      'https://user:secret@pay.example.com/',
+      'wss://pay.example.com/',
+      'javascript:alert(1)',
+      'data:text/html,<p>x</p>',
+      'about:blank',
+      'pay.example.com',
+      '',
+    ])
+      expect(may(address), address).toBe(false)
   })
 })

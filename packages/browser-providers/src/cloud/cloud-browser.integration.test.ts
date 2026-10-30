@@ -1,6 +1,12 @@
+import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { createServer as createHttpsServer } from 'node:https'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { promisify } from 'node:util'
 
 import {
   isDomainError,
@@ -19,8 +25,10 @@ import { createPlaywrightCloudBrowser } from './cloud-browser.ts'
 // The cloud browser against a real Chromium of this machine: `launchServer` behind a secret path
 // on loopback, as the session's container serves it, and a tiny site of this test on 127.0.0.1 —
 // a local site of the session (`BROWSER_LOCAL_SITES`). A sign-in form, an editable block inside a
-// frame, file inputs, a confirm(), a link to a new tab, a page the policy closes. Needs the
-// Chromium of playwright-core 1.63 (`pnpm --filter e2e exec playwright install chromium`);
+// frame, file inputs, a confirm(), a link to a new tab, a page the policy closes, and another site
+// the site sends the browser to — `pay.example.com`, which Chromium finds on this machine
+// (`--host-resolver-rules`) with a disposable certificate of `openssl`. Needs the Chromium of
+// playwright-core 1.63 (`pnpm --filter e2e exec playwright install chromium`);
 // RADITI_BROWSER_LOCAL_TESTS=1.
 
 const enabled = process.env.RADITI_BROWSER_LOCAL_TESTS === '1'
@@ -96,6 +104,10 @@ const PAGES: Record<string, string> = {
      </script>`,
   ),
   '/tabs': html('Вкладки', '<a href="/popup" target="_blank">Предпросмотр</a>'),
+  '/pay-link': html(
+    'Заказ',
+    '<a href="https://pay.example.com/checkout?order=8">Оплатить заказ</a>',
+  ),
   '/popup': html('Предпросмотр', '<h1>Так увидят посетители</h1>'),
   '/denied/users': html('Пользователи', '<h1>Список пользователей</h1>'),
   '/send': html(
@@ -127,15 +139,63 @@ const PAGES: Record<string, string> = {
   ),
 }
 
+/** Another site the site sends the browser to (docs/plan/60-browser-foreign-redirects.md). */
+const PAY = 'https://pay.example.com'
+
+/** The page of the other site: a button of its own, a path the site's policy closes, a way back. */
+function paySite(hits: string[], back: () => string) {
+  return (req: IncomingMessage, res: ServerResponse) => {
+    const url = new URL(req.url ?? '/', PAY)
+    hits.push(`${req.method} ${req.headers.host} ${url.pathname}`)
+    const page = html(
+      'Оплата',
+      `<h1>Оплата заказа ${url.searchParams.get('order') ?? ''}</h1>
+       <button type="button" id="pay">Оплатить</button><p id="out">ждём</p>
+       <a href="/denied/receipt">Чек</a> <a href="${back()}/send">Вернуться на сайт</a>
+       <script>
+         document.getElementById('pay').addEventListener('click', () => {
+           document.getElementById('out').textContent = 'оплачено'
+         })
+       </script>`,
+    )
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(page)
+  }
+}
+
+/** A disposable self-signed certificate of `pay.example.com`; the browser of the test ignores trust. */
+async function payCertificate(): Promise<{ cert: string; key: string }> {
+  const dir = await mkdtemp(join(tmpdir(), 'raditi-pay-'))
+  try {
+    await promisify(execFile)('openssl', [
+      ...['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1'],
+      ...['-pkeyopt', 'ec_param_enc:named_curve', '-nodes', '-sha256', '-days', '1'],
+      ...['-subj', '/CN=pay.example.com', '-addext', 'subjectAltName=DNS:pay.example.com'],
+      ...['-keyout', join(dir, 'key.pem'), '-out', join(dir, 'cert.pem')],
+    ])
+    return {
+      cert: await readFile(join(dir, 'cert.pem'), 'utf8'),
+      key: await readFile(join(dir, 'key.pem'), 'utf8'),
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}
+
 /** The saved sign-in the site of this test takes (Б36). */
 const SAVED = { login: 'admin-test', password: 'Пароль-верный-1' }
 
 /** A form like WordPress's own: the same ids, the address to go back to in a hidden field. */
-const signInPage = (redirectTo: string, login = '', error = '', submit = true) =>
+const signInPage = (
+  redirectTo: string,
+  login = '',
+  error = '',
+  submit = true,
+  action = '/wp-login.php',
+) =>
   html(
     'Вход',
     `${error ? `<div id="login_error">${error}</div>` : ''}
-     <form id="loginform" method="post" action="/wp-login.php">
+     <form id="loginform" method="post" action="${action}">
        <label>Имя пользователя <input id="user_login" name="log" value="${login}"></label>
        <label>Пароль <input type="password" id="user_pass" name="pwd"></label>
        <input type="hidden" name="redirect_to" value="${redirectTo}">
@@ -171,12 +231,14 @@ function site(hits: string[]) {
     const signedIn = (req.headers.cookie ?? '').includes('raditi_test_session=1')
     if (url.pathname === '/wp-login.php') {
       if (req.method === 'POST') return signInAnswer(req, res)
-      // `nosubmit`: a form whose button is not there — a step of the sign-in fails.
+      // `nosubmit`: a form whose button is not there — a step of the sign-in fails; `away`: a
+      // form that sends what is typed to another site.
       const page = signInPage(
         url.searchParams.get('redirect_to') ?? '',
         '',
         '',
         url.searchParams.get('nosubmit') !== '1',
+        url.searchParams.get('away') === '1' ? `${PAY}/collect` : '/wp-login.php',
       )
       return res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(page)
     }
@@ -189,6 +251,11 @@ function site(hits: string[]) {
     }
     if (url.pathname === '/go-denied')
       return res.writeHead(302, { location: '/denied/users' }).end()
+    // Another site: a payment the site sends the browser to, and a plain-http one it may not.
+    if (url.pathname === '/go-pay')
+      return res.writeHead(302, { location: `${PAY}/checkout?order=7` }).end()
+    if (url.pathname === '/go-plain')
+      return res.writeHead(302, { location: 'http://pay.example.com/checkout' }).end()
     // A redirect to a host nothing answers on: the navigation fails in the network, and
     // Chromium's error page commits a moment later.
     if (url.pathname === '/go-nowhere')
@@ -243,6 +310,10 @@ describe.skipIf(!enabled || !installed)('the cloud browser on a local Chromium',
   const elsewhereHits: string[] = []
   let elsewhereHttp: Server
   let elsewhere = ''
+  /** Another site, https on this machine, and its plain-http twin the browser may not keep. */
+  const payHits: string[] = []
+  let payHttps: Server
+  let payHttp: Server
   let session: CloudBrowserSession | undefined
   let events: CloudBrowserEvent[] = []
 
@@ -280,11 +351,23 @@ describe.skipIf(!enabled || !installed)('the cloud browser on a local Chromium',
     elsewhereHttp = createServer(site(elsewhereHits))
     await new Promise<void>((resolve) => elsewhereHttp.listen(0, '127.0.0.1', resolve))
     elsewhere = `http://127.0.0.1:${(elsewhereHttp.address() as { port: number }).port}`
+    payHttps = createHttpsServer(
+      await payCertificate(),
+      paySite(payHits, () => origin),
+    )
+    payHttp = createServer(paySite(payHits, () => origin))
+    for (const pay of [payHttps, payHttp])
+      await new Promise<void>((resolve) => pay.listen(0, '127.0.0.1', resolve))
+    const portOf = (pay: Server) => (pay.address() as { port: number }).port
     server = await chromium.launchServer({
       host: '127.0.0.1',
       port: 0,
       wsPath: `/${randomBytes(32).toString('base64url')}`,
       headless: true,
+      args: [
+        `--host-resolver-rules=MAP pay.example.com:443 127.0.0.1:${portOf(payHttps)}, MAP pay.example.com:80 127.0.0.1:${portOf(payHttp)}`,
+        '--ignore-certificate-errors',
+      ],
     })
   }, 60_000)
 
@@ -297,6 +380,8 @@ describe.skipIf(!enabled || !installed)('the cloud browser on a local Chromium',
     await server?.close()
     await new Promise<void>((resolve) => http?.close(() => resolve()))
     await new Promise<void>((resolve) => elsewhereHttp?.close(() => resolve()))
+    for (const pay of [payHttps, payHttp])
+      await new Promise<void>((resolve) => (pay ? pay.close(() => resolve()) : resolve()))
   })
 
   it('streams JPEG frames of the shown page, the last one to a new consumer at once', async () => {
@@ -532,6 +617,47 @@ describe.skipIf(!enabled || !installed)('the cloud browser on a local Chromium',
     expect(hits).not.toContain('POST /api/delete')
   }, 30_000)
 
+  it('goes on to another site a page of the site sends it to, and works there (plan 60)', async () => {
+    const browser = await open('/send')
+    // A redirect of the site: the page of the other site stays and is the agent's to act on.
+    const landed = await browser.act({ tool: 'web_open', url: `${origin}/go-pay` })
+    expect(landed.page.url).toBe(`${PAY}/checkout?order=7`)
+    let tree = (await browser.observe({})).tree
+    expect(tree).toContain('Оплата заказа 7')
+    await browser.act({ tool: 'web_click', ref: refOf(tree, 'button', 'Оплатить') })
+    expect(await browser.act({ tool: 'web_wait', ms: 3_000, text: 'оплачено' })).toMatchObject({
+      matched: true,
+    })
+    // Its paths are its own: what the stack's policy closes on the site is no rule there.
+    await browser.act({ tool: 'web_click', ref: refOf(tree, 'link', 'Чек') })
+    await until(() => (browser.tabs()[0]?.url === `${PAY}/denied/receipt` ? true : undefined))
+    // A link of it back to the site, and a link of the site to it.
+    tree = (await browser.observe({})).tree
+    await browser.act({ tool: 'web_click', ref: refOf(tree, 'link', 'Вернуться на сайт') })
+    await until(() => (browser.tabs()[0]?.url === `${origin}/send` ? true : undefined))
+    await browser.act({ tool: 'web_open', url: `${origin}/pay-link` })
+    tree = (await browser.observe({})).tree
+    await browser.act({ tool: 'web_click', ref: refOf(tree, 'link', 'Оплатить заказ') })
+    await until(() => (browser.tabs()[0]?.url === `${PAY}/checkout?order=8` ? true : undefined))
+    expect(payHits.filter((hit) => hit.startsWith('GET pay.example.com /'))).toEqual([
+      'GET pay.example.com /checkout',
+      'GET pay.example.com /denied/receipt',
+      'GET pay.example.com /checkout',
+    ])
+
+    // The agent never opens it by its address (Ч2)…
+    await expect(
+      browser.act({ tool: 'web_open', url: `${PAY}/checkout?order=9` }),
+    ).rejects.toSatisfy((error) => codeOf(error) === 'denied')
+    // …and a plain-http page of another site the site sends it to is dropped before anyone
+    // reads it (Ч4).
+    await expect(browser.act({ tool: 'web_open', url: `${origin}/go-plain` })).rejects.toSatisfy(
+      (error) => codeOf(error) === 'denied',
+    )
+    expect(browser.tabs()[0]?.url).not.toContain('pay.example.com')
+    expect((await browser.observe({})).tree).not.toContain('Оплата заказа')
+  }, 60_000)
+
   // The error page of a navigation the network refused commits after the action has ended: the
   // next navigation of the agent is neither interrupted by it nor by the navigation it
   // interrupted (preview.yml on GitHub's runners, 30.10.2026; the browser of a preview had it too).
@@ -565,6 +691,17 @@ describe.skipIf(!enabled || !installed)('the cloud browser on a local Chromium',
     // The closed page was dropped as it committed (a redirect is not routed): the start page.
     expect(browser.tabs()[0]?.url).toBe(`${origin}/admin`)
     expect((await browser.observe({})).tree).toContain('heading "Записи"')
+  }, 30_000)
+
+  it('sends the saved sign-in nowhere but the site, whatever the form says (plan 60, Ч7)', async () => {
+    const browser = await open('/wp-login.php?away=1')
+    const before = payHits.length
+    expect(await browser.signIn(SAVED)).toBe('refused')
+    expect(payHits.slice(before)).toEqual([])
+    // Nothing of the saved sign-in stays on the page.
+    const tree = (await browser.observe({})).tree
+    expect(tree).not.toContain(SAVED.login)
+    expect(tree).not.toContain(SAVED.password)
   }, 30_000)
 
   it('never fills the form of another host the session reaches', async () => {

@@ -394,12 +394,19 @@ describe('the cloud browser session', () => {
     })
   })
 
-  it('aborts requests to other hosts and what the stack denies, for every page', async () => {
+  it('aborts requests to hosts it may not reach and what the stack denies, for every page', async () => {
     const { context, page } = await opened()
     const ask = (url: string, more = {}) =>
       context.routeRequest({ url, page, navigation: false, ...more })
     expect(await ask(`${ORIGIN}/wp-json/wp/v2/media`, { method: 'POST' })).toBe('continue')
-    expect(await ask('https://elsewhere.example/pixel.gif')).toBe('blockedbyclient')
+    for (const away of [
+      // A page of the site loads nothing of another site (plan 60): no picture, script or call.
+      'https://elsewhere.example/pixel.gif',
+      'http://elsewhere.example/pixel.gif',
+      'https://93.184.216.34/pixel.gif',
+      'https://shop.example.ru/pixel.gif',
+    ])
+      expect(await ask(away), away).toBe('blockedbyclient')
     expect(await ask(`${ORIGIN}/wp-admin/users.php`)).toBe('accessdenied')
     expect(await ask(`${ORIGIN}/wp-admin/plugins.php`, { navigation: true })).toBe('accessdenied')
     // A deletion the page sends as a POST with a method override is a deletion.
@@ -412,7 +419,7 @@ describe('the cloud browser session', () => {
     const popup = context.open()
     expect(
       await context.routeRequest({
-        url: 'https://elsewhere.example/',
+        url: 'http://elsewhere.example/',
         page: popup,
         navigation: true,
       }),
@@ -463,6 +470,20 @@ describe('the cloud browser session', () => {
     expect(page.url()).toBe('about:blank')
     // The address it was dropped from is told to no one.
     expect(JSON.stringify(events)).not.toContain('plugins.php')
+  })
+
+  it('keeps what a redirect committed on another site and lands there (plan 60)', async () => {
+    const { session, page, log } = await opened()
+    page.goto = vi.fn(async (url: string) => {
+      log.push(`p1 goto ${url}`)
+      page.commit('https://pay.elsewhere.example/checkout')
+      return null
+    }) as never
+    expect(await session.act({ tool: 'web_open', url: `${ORIGIN}/wp-admin/edit.php` })).toEqual({
+      page: { pageId: 1, url: 'https://pay.elsewhere.example/checkout', title: '' },
+    })
+    expect(log).not.toContain('p1 goto about:blank')
+    expect(page.url()).toBe('https://pay.elsewhere.example/checkout')
   })
 
   it('acts only on references of the shown page’s latest tree', async () => {
