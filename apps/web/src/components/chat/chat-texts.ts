@@ -9,44 +9,21 @@ import { plural } from '@/lib/plural'
 // (rule 10). The rows of the feed, the statuses and the commands take their words from the
 // catalogue; nothing here restates them.
 
-/** The switch below the wide layout: the dialog, or the panel of its changes. */
-export const viewSwitchText = Object.freeze({
-  label: 'Что показать',
-  dialog: 'Диалог',
-  /** The panel of the changes: their files, records, checks and preview. */
-  preview: 'Изменения',
-})
-
+/**
+ * The tabs of the preview and of the changes beside the dialog (docs/plan/59-dialog-tools-panel.md);
+ * the panel itself and its strip speak with `toolText`.
+ */
 export const paneText = Object.freeze({
-  /** The accessible name of the panel beside the dialog. */
-  label: 'Предпросмотр и изменения диалога',
-  tabs: 'Разделы панели',
   frameTitle: 'Предпросмотр сайта с изменениями диалога',
   /** The dialog has ended and its preview with it. */
   destroyed: 'Диалог закрыт, и его предпросмотр остановлен.',
-  /** The preview is shown only when the client asks for it (owner's request of 27.10.2026). */
-  ask: 'Предпросмотр — рабочая копия сайта с изменениями этого диалога. Покажем его, когда попросите.',
-  /** The client's explicit call of the preview. */
-  show: 'Показать предпросмотр',
-  /** The preview of a stopped dialog is opened again. */
+  /** A preview that stopped while its tab was open is opened again by the client (И10). */
   reopen: 'Открыть предпросмотр',
   reset: 'Сбросить данные предпросмотра',
-  /** No candidate yet: what the tabs of the changes show. */
-  noChanges: 'Изменений пока нет. Они появятся здесь, когда агент закончит работу.',
   loadFailed: 'Не удалось загрузить изменения.',
   retry: 'Повторить',
   /** A candidate that the site moved on under. */
   stale: 'Сайт изменился после того, как эти изменения были готовы. Обновите рабочую копию.',
-  /** The edge of the panel that is dragged (docs/plan/57-browser-tasks.md, Б29). */
-  separator: 'Ширина панели',
-  /**
-   * The button of the head: the panel opens by itself when the changes appear, by this button at
-   * any time (owner's request of 27.10.2026); the client can close it.
-   */
-  open: 'Открыть панель',
-  /** The hint of that button: what the panel holds. */
-  openHint: 'Предпросмотр, файлы, база данных и проверки',
-  hide: 'Скрыть панель',
 })
 
 export const filesText = Object.freeze({
@@ -322,8 +299,11 @@ export const composerText = Object.freeze({
   /** «Работа» works on a copy of the site: a site without its files cannot take one. */
   workOff: 'Режим «Работа» недоступен: у сайта нет копии файлов.',
   modes: 'Режим диалога',
-  /** «+» of the field: what can be added to the message. */
-  add: 'Добавить',
+  /**
+   * The paperclip of the field, and its menu: files for the message. Not «+» — «+» of a dialog is
+   * its tools (docs/plan/59-dialog-tools-panel.md, И15).
+   */
+  attach: 'Прикрепить файлы',
   /** A command typed on «Новый диалог»: there is no dialog to run it in yet. */
   commandsInDialog: 'Команды работают внутри диалога. Сначала опишите, что поменять на сайте.',
   /** A command typed in full that cannot be run now, and the server gave no reason. */
@@ -386,11 +366,11 @@ export const activityText = Object.freeze({
 
 /** Files attached to a message (docs/plan/57-browser-tasks.md, Б26). */
 export const attachmentText = Object.freeze({
-  /** The item of «+» that opens the dialog of the system. */
+  /** The item of «Прикрепить файлы» that opens the dialog of the system. */
   upload: 'Загрузить файл',
   /** Under it: a file can be pasted into the field as well. */
   pasteHint: (keys: string) => `Или вставьте его в поле: ${keys}`,
-  /** «+» of a field that takes no files: in «Работа» for now, in a dialog that has ended. */
+  /** «Прикрепить файлы» of a field that takes no files: in a dialog that has ended. */
   none: 'К этому сообщению файлы не прикрепить.',
   list: 'Файлы к сообщению',
   sent: 'Файлы сообщения',
@@ -466,8 +446,7 @@ export const taskWayText = Object.freeze({
 
 /** The browser of a task beside its dialog (docs/plan/57-browser-tasks.md, Б12–Б17, Б27, Б29). */
 export const browserText = Object.freeze({
-  /** The accessible name of the panel beside the dialog. */
-  label: 'Браузер задачи',
+  /** The name of the browser among the tools of the dialog (docs/plan/59, И7). */
   view: 'Браузер',
   toolbar: 'Управление браузером',
   canvas: 'Страница сайта в браузере задачи',
@@ -568,7 +547,6 @@ export const browserText = Object.freeze({
     loadFailed: 'Не удалось загрузить вложения задачи.',
     meta: (type: string, size: string) => `${type} · ${size}`,
   },
-  separator: 'Ширина панели браузера',
 })
 
 /** The links of an object a task in the browser left on the site (Б23, Б24). */
@@ -607,6 +585,8 @@ export const toolText = Object.freeze({
   hide: 'Скрыть панель',
   /** Back from the area of a tool on a narrow screen: closes every tab (И14). */
   back: 'К диалогу',
+  /** The sheet of the menu below `lg` closes under a finger too (И14). */
+  closeMenu: 'Закрыть меню',
   /** The hint of the cross of a tab; the cross itself is hidden from a screen reader (И7). */
   closeTab: (name: string) => `Закрыть вкладку «${name}»`,
   /** The name of a tool on its tab. */

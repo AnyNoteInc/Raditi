@@ -11,6 +11,7 @@ import {
   dialogEnded,
   dialogTools,
   dialogToolsOf,
+  isChangesTool,
   movesFocus,
   toolIcons,
   toolMark,
@@ -22,6 +23,7 @@ import {
   toolsReducer,
   toolTabId,
   toolTabNames,
+  toolTilesOf,
   type DialogTool,
   type ToolsAction,
   type ToolsState,
@@ -239,8 +241,17 @@ describe('the marks of the tiles (И5)', () => {
     ).toBe('Управляете вы')
   })
 
-  it('says «Закрыт» when the session holds no browser: none yet, closed, failed or lost', () => {
-    expect(toolMark('browser', browserAnswer({ browser: null }), closed)).toBe('Закрыт')
+  it('says «пока нет» while a dialog at work has no session yet', () => {
+    expect(toolMark('browser', browserAnswer({ browser: null }), closed)).toBe('пока нет')
+    expect(
+      toolMark('browser', browserAnswer({ status: 'awaiting_user', browser: null }), closed),
+    ).toBe('пока нет')
+  })
+
+  it('says «Закрыт» when the session holds no browser any more, or the dialog ended without one', () => {
+    expect(toolMark('browser', browserAnswer({ status: 'done', browser: null }), closed)).toBe(
+      'Закрыт',
+    )
     for (const status of ['closed', 'failed', 'lost'] as const)
       expect(toolMark('browser', browserAnswer({ browser: { status } }), closed)).toBe('Закрыт')
     expect(
@@ -253,6 +264,19 @@ describe('the marks of the tiles (И5)', () => {
         closed,
       ),
     ).toBe('Закрыт')
+  })
+
+  it('lays the tiles of the menu in its order, the open tools marked «Открыто»', () => {
+    const tools = after(open('checks'), open('preview'))
+    expect(toolTilesOf(ready, tools)).toEqual([
+      { tool: 'preview', open: true, mark: 'Открыто' },
+      { tool: 'files', open: false, mark: '4' },
+      { tool: 'database', open: false, mark: '3' },
+      { tool: 'checks', open: true, mark: 'Открыто' },
+    ])
+    expect(toolTilesOf(browserAnswer({ browser: null }), closedTools)).toEqual([
+      { tool: 'browser', open: false, mark: 'пока нет' },
+    ])
   })
 
   it('counts what a tool of the changes holds', () => {
@@ -381,7 +405,29 @@ describe('the names, icons and ids of the tools', () => {
   })
 
   it('puts the focus on the tab after an explicit opening, but for «Взять управление» and the launch (И9)', () => {
-    expect(toolOpeners.filter(movesFocus)).toEqual(['menu', 'changes', 'command', 'card', 'watch'])
+    expect(toolOpeners.filter((by) => movesFocus(by))).toEqual([
+      'menu',
+      'changes',
+      'command',
+      'card',
+      'watch',
+    ])
+  })
+
+  it('puts it there for «Взять управление» too where the tool hides the dialog it was pressed in (И14)', () => {
+    expect(toolOpeners.filter((by) => movesFocus(by, { covers: true }))).toEqual([
+      'menu',
+      'changes',
+      'command',
+      'card',
+      'take',
+      'watch',
+    ])
+  })
+
+  it('tells the tools of the changes from the browser and the preview', () => {
+    expect(dialogTools.filter(isChangesTool)).toEqual(['files', 'database', 'checks'])
+    expect(isChangesTool(null)).toBe(false)
   })
 })
 
@@ -423,6 +469,17 @@ describe('the tabs of the open tools', () => {
     const left = toolsReducer(right, close('checks'))
     expect(left.open).toEqual(['preview'])
     expect(left.active).toBe('preview')
+  })
+
+  it('shows a tab chosen on the strip, and opens nothing by it', () => {
+    const state = after(open('preview'), open('files'))
+    const chosen = toolsReducer(state, { type: 'show', tool: 'preview' })
+    expect(chosen.open).toEqual(['preview', 'files'])
+    expect(chosen.active).toBe('preview')
+    expect(toolsReducer(chosen, { type: 'show', tool: 'preview' })).toBe(chosen)
+    // A tab that is not there: nothing opens, whatever the strip was asked.
+    expect(toolsReducer(state, { type: 'show', tool: 'checks' })).toBe(state)
+    expect(toolsReducer(closedTools, { type: 'show', tool: 'browser' })).toBe(closedTools)
   })
 
   it('closes the panel with its last tab', () => {
@@ -534,6 +591,15 @@ describe('the launch of the browser (И2, И3)', () => {
     // Another tool is not the browser: the mark stays.
     expect(toolsReducer(launched, open('files')).launchUnseen).toBe(true)
   })
+
+  it('takes it off when the client chooses the tab of the browser it had in the background', () => {
+    // The browser's tab was open behind another one when the task's browser started.
+    const behind = after(open('browser'), open('files'), launch(false))
+    expect(behind.launchUnseen).toBe(true)
+    const chosen = toolsReducer(behind, { type: 'show', tool: 'browser' })
+    expect(chosen.active).toBe('browser')
+    expect(chosen.launchUnseen).toBe(false)
+  })
 })
 
 describe('the dot on «+» (И13)', () => {
@@ -575,6 +641,16 @@ describe('the dot on «+» (И13)', () => {
     expect(toolsDot(browserAnswer(), after(launch(true), close('browser')))).toBeNull()
   })
 
+  it('takes the mark of the launch off once the browser it marked has closed', () => {
+    const launched = after(launch(false))
+    expect(
+      toolsDot(browserAnswer({ browser: { status: 'closed', closeReason: 'idle' } }), launched),
+    ).toBeNull()
+    expect(toolsDot(browserAnswer({ browser: null }), launched)).toBeNull()
+    // Starting again, it is news again: the client has not seen it since.
+    expect(toolsDot(browserAnswer({ browser: { status: 'starting' } }), launched)).toBe('launch')
+  })
+
   it('says the most pressing first', () => {
     const launched = after(launch(false))
     expect(toolsDot(browserAnswer({ browser: { help }, candidate: candidateHead }), launched)).toBe(
@@ -605,6 +681,7 @@ function generator(seed: number): () => number {
 describe('toolsReducer, whatever the client does', () => {
   const actions: ToolsAction[] = [
     ...dialogTools.map((tool) => open(tool)),
+    ...dialogTools.map((tool): ToolsAction => ({ type: 'show', tool })),
     ...dialogTools.map((tool) => close(tool)),
     closeAll,
     launch(true),
@@ -630,6 +707,10 @@ describe('toolsReducer, whatever the client does', () => {
         if (reduced.active !== null) expect(reduced.open).toContain(reduced.active)
         if (before.launchSpent) expect(reduced.launchSpent).toBe(true)
         if (action.type === 'open') expect(reduced.active).toBe(action.tool)
+        if (action.type === 'show') {
+          expect(reduced.open).toEqual(before.open)
+          if (before.open.includes(action.tool)) expect(reduced.active).toBe(action.tool)
+        }
         if (action.type === 'close') expect(reduced.open).not.toContain(action.tool)
         if (action.type === 'launch' && reduced !== before) launches += 1
         state = reduced

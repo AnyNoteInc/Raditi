@@ -92,15 +92,19 @@ beforeEach(() => {
 })
 
 describe('files of a message', () => {
-  it('opens the files of the system from «+» → «Загрузить файл», with the allowed types', async () => {
+  it('opens the files of the system from «Прикрепить файлы» → «Загрузить файл», with the allowed types', async () => {
     show()
     const input = screen.getByTestId<HTMLInputElement>('composer-files')
     expect(input.multiple).toBe(true)
     expect(input.accept).toContain('.pdf')
     expect(input.accept).toContain('image/jpeg')
     const click = vi.spyOn(input, 'click')
-    fireEvent.click(screen.getByRole('button', { name: 'Добавить' }))
-    const menu = within(await screen.findByRole('menu', { name: 'Добавить' }))
+    const attach = screen.getByRole<HTMLButtonElement>('button', { name: 'Прикрепить файлы' })
+    expect(attach.disabled).toBe(false)
+    fireEvent.click(attach)
+    expect(attach.getAttribute('aria-expanded')).toBe('true')
+    // The menu is named by its button (docs/plan/59, И15: the paperclip, not «+»).
+    const menu = within(await screen.findByRole('menu', { name: 'Прикрепить файлы' }))
     // One item for now (owner's request of 29.10.2026), with the hint that a paste works too.
     expect(menu.getAllByRole('menuitem')).toHaveLength(1)
     const upload = menu.getByRole('menuitem', { name: /Загрузить файл/ })

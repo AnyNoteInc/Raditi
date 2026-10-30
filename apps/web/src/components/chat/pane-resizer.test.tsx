@@ -7,8 +7,9 @@ import { paneWidthCss, SITE_PANE_COOKIE } from '@/components/site/site-nav'
 
 import { PaneResizer, PANE_STEP } from './pane-resizer'
 
-// The edge of the panel beside a dialog (docs/plan/57-browser-tasks.md, Б29): a separator moved
-// with the arrows or dragged, writing the width the shell and the panel share, kept in a cookie.
+// The edge of the panel beside a dialog (docs/plan/57-browser-tasks.md, Б29; the panel of the
+// tools, docs/plan/59, И20): a separator moved with the arrows or dragged, writing the width the
+// shell and the panel share, kept in a cookie.
 
 function Stand() {
   const pane = useRef<HTMLElement | null>(null)
@@ -21,7 +22,7 @@ function Stand() {
   )
 }
 
-const separator = () => screen.getByRole('separator', { name: 'Ширина панели браузера' })
+const separator = () => screen.getByRole('separator', { name: 'Ширина панели' })
 const width = () => screen.getByTestId('shell').style.getPropertyValue('--site-pane-width')
 
 beforeEach(() => {

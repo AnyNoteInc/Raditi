@@ -137,10 +137,12 @@ export interface ComposerCommands {
 /**
  * The field a client writes in, the same on «Новый диалог» and in a dialog that goes on (owner's
  * request of 29.10.2026). Its row holds, in this order, the window of commands — `/` at the start
- * of the empty field or its button opens it —, «+» with «Загрузить файл», «Размышление», and the
- * send button. A file pasted into the field is attached as if it were chosen. Enter in the field
- * is a new line; Ctrl+Enter or ⌘+Enter sends. A text that is a command alone runs the command and
- * is never sent. The text stays in the field until the server has taken it.
+ * of the empty field or its button opens it —, the paperclip «Прикрепить файлы» with «Загрузить
+ * файл» (not «+»: «+» of a dialog is its tools, docs/plan/59-dialog-tools-panel.md, И15),
+ * «Размышление», and the send button. A file pasted into the field is attached as if it were
+ * chosen. Enter in the field is a new line; Ctrl+Enter or ⌘+Enter sends. A text that is a command
+ * alone runs the command and is never sent. The text stays in the field until the server has
+ * taken it.
  */
 export function Composer({
   label = composerText.label,
@@ -174,7 +176,7 @@ export function Composer({
    */
   onSend: (text: string, attachmentIds: readonly string[]) => Promise<boolean>
   commands?: ComposerCommands
-  /** «Размышление»: the menu of how hard the model thinks, after «+». */
+  /** «Размышление»: the menu of how hard the model thinks, after the paperclip. */
   effort?: ReactNode
   /** The files of the message (docs/plan/57-browser-tasks.md, Б26); absent — no files here. */
   attachments?: AttachmentsControl
@@ -210,7 +212,7 @@ export function Composer({
   const listRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
-  // «+»: the menu of what can be added to the message — for now a file from the computer.
+  // «Прикрепить файлы»: the menu of the files of the message — for now a file from the computer.
   const addMenuId = useId()
   const [addAnchor, setAddAnchor] = useState<HTMLElement | null>(null)
   const ownField = useRef<HTMLTextAreaElement>(null)
@@ -484,7 +486,7 @@ export function Composer({
               </IconButton>
             ) : null}
             <IconButton
-              aria-label={composerText.add}
+              aria-label={composerText.attach}
               aria-haspopup="menu"
               aria-expanded={addAnchor !== null}
               aria-controls={addAnchor !== null ? addMenuId : undefined}
@@ -493,7 +495,7 @@ export function Composer({
               onClick={(event) => setAddAnchor(event.currentTarget)}
               sx={toolButton}
             >
-              <AppIcon name="plus" />
+              <AppIcon name="attach" size={18} />
             </IconButton>
             {attachments ? (
               <>
@@ -506,7 +508,7 @@ export function Composer({
                   transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
                   slotProps={{
                     paper: { sx: { borderRadius: '14px', minWidth: 240, mt: -1 } },
-                    list: { 'aria-label': composerText.add },
+                    list: { 'aria-label': composerText.attach },
                   }}
                 >
                   <MenuItem
@@ -617,7 +619,7 @@ export function Composer({
           {attachmentHintText}
         </Box>
       ) : (
-        // «+» is there and closed where the message takes no files: read aloud why.
+        // The paperclip is there and closed where the message takes no files: read aloud why.
         <Box id={noFilesId} sx={offScreen}>
           {attachmentText.none}
         </Box>

@@ -18,6 +18,9 @@ export type DialogTool = (typeof dialogTools)[number]
 /** The tools of the changes: what the candidate of the dialog holds. */
 export type ChangesTool = Extract<DialogTool, 'files' | 'database' | 'checks'>
 const changesTools: readonly ChangesTool[] = ['files', 'database', 'checks']
+/** A tool of the changes: its tab reads the candidate and says it has been seen (И11, И13). */
+export const isChangesTool = (tool: DialogTool | null): tool is ChangesTool =>
+  tool === 'files' || tool === 'database' || tool === 'checks'
 /** Who opened a tool (И9). */
 export const toolOpeners = [
   'menu',
@@ -50,9 +53,14 @@ export const toolPanelId = (tool: DialogTool) => `dialog-pane-panel-${tool}`
 /**
  * An explicit opening puts the focus on the tab of the tool (И9), unless the action keeps a place
  * of its own: «Взять управление» leaves it where the panel of the browser puts it, and the launch
- * of the browser, which nobody pressed, moves nothing.
+ * of the browser, which nobody pressed, moves nothing. An opening that `covers` the dialog — below
+ * `lg` the area of a tool takes its place (И14) — hides the button that was pressed there: the
+ * focus goes to the tab then too, never left behind out of sight.
  */
-export const movesFocus = (by: ToolOpener): boolean => by !== 'take' && by !== 'launch'
+export const movesFocus = (
+  by: ToolOpener,
+  { covers = false }: { covers?: boolean } = {},
+): boolean => by !== 'launch' && (covers || by !== 'take')
 
 /** The dialog has ended: nothing more will come to its tools. */
 export const dialogEnded = (head: FeedHeadState): boolean =>
@@ -107,9 +115,14 @@ export function candidateCount(tool: ChangesTool, candidate: CandidateHead | nul
   return counts.files.added + counts.files.modified + counts.files.deleted + counts.media
 }
 
-/** Who drives the browser of the task, as its tile says it; a session that holds none — closed. */
-function browserMark(session: BrowserHead | null): string {
-  if (session === null || !sessionLive(session)) return toolText.mark.browserClosed
+/**
+ * Who drives the browser of the task, as its tile says it: «пока нет» while a dialog at work has
+ * no session yet — its tab says the browser opens when the agent starts; closed for a session that
+ * holds none any more, or a dialog that ended without one.
+ */
+function browserMark(session: BrowserHead | null, ended: boolean): string {
+  if (session === null) return ended ? toolText.mark.browserClosed : toolText.mark.notYet
+  if (!sessionLive(session)) return toolText.mark.browserClosed
   if (session.controller === 'user') return browserText.status.user
   if (session.help !== null) return browserText.status.waiting
   return browserText.status.agent
@@ -128,7 +141,7 @@ export function toolMark(
 ): string | null {
   if (open) return toolText.mark.open
   if (tool === 'preview') return null
-  if (tool === 'browser') return browserMark(head.browser)
+  if (tool === 'browser') return browserMark(head.browser, dialogEnded(head))
   const candidate = head.candidate
   const count = candidateCount(tool, candidate)
   if (candidate !== null && count > 0)
@@ -207,6 +220,8 @@ export const closedTools: ToolsState = Object.freeze({
 export type ToolsAction =
   /** A tool asked for: it opens as the last tab, or its tab is made active; never a second one. */
   | { type: 'open'; tool: DialogTool; by: ToolOpener }
+  /** A tab chosen on the strip: it is shown. Nobody asked for the tool, so none opens by it. */
+  | { type: 'show'; tool: DialogTool }
   /** The cross of a tab: the tab beside it, on the right, else on the left, is made active. */
   | { type: 'close'; tool: DialogTool }
   /** «Скрыть панель», «К диалогу». */
@@ -219,26 +234,27 @@ export type ToolsAction =
 const withTool = (open: readonly DialogTool[], tool: DialogTool): readonly DialogTool[] =>
   open.includes(tool) ? open : [...open, tool]
 
+/** `tool` on the screen among the tabs `open`; the same state when nothing changes. */
+function shown(state: ToolsState, open: readonly DialogTool[], tool: DialogTool): ToolsState {
+  // The client sees the browser the launch marked.
+  const launchUnseen = tool === 'browser' ? false : state.launchUnseen
+  if (open === state.open && state.active === tool && launchUnseen === state.launchUnseen)
+    return state
+  return { ...state, open, active: tool, launchUnseen }
+}
+
 /**
  * The tools beside a dialog. Knows nothing of the focus, the network or the width of the screen,
  * but for the width at a launch: a launch opens the browser once on a wide screen and only marks
  * «+» on a narrow one (И3, И13), and any closing of the browser or of the panel by the client spends
- * it. Closing what is not open changes nothing.
+ * it. Closing what is not open changes nothing, nor does choosing a tab that is not there.
  */
 export function toolsReducer(state: ToolsState, action: ToolsAction): ToolsState {
   switch (action.type) {
-    case 'open': {
-      const open = withTool(state.open, action.tool)
-      // The client sees the browser the launch marked.
-      const launchUnseen = action.tool === 'browser' ? false : state.launchUnseen
-      if (
-        open === state.open &&
-        state.active === action.tool &&
-        launchUnseen === state.launchUnseen
-      )
-        return state
-      return { ...state, open, active: action.tool, launchUnseen }
-    }
+    case 'open':
+      return shown(state, withTool(state.open, action.tool), action.tool)
+    case 'show':
+      return state.open.includes(action.tool) ? shown(state, state.open, action.tool) : state
     case 'close': {
       const at = state.open.indexOf(action.tool)
       if (at < 0) return state
@@ -273,6 +289,20 @@ export function toolsReducer(state: ToolsState, action: ToolsAction): ToolsState
   }
 }
 
+/** A tile of the menu «Инструменты»: a tool of the dialog, whether its tab is open, its mark. */
+export interface ToolTile {
+  tool: DialogTool
+  open: boolean
+  mark: string | null
+}
+
+/** The tiles of the menu «Инструменты» (И5, И6): the tools of the dialog in their order. */
+export const toolTilesOf = (head: FeedHeadState, tools: ToolsState): ToolTile[] =>
+  dialogToolsOf(head).map((tool) => {
+    const open = tools.open.includes(tool)
+    return { tool, open, mark: toolMark(tool, head, { open }) }
+  })
+
 /** Why «+» bears its dot (И13), the most pressing first. */
 export type ToolsDot = keyof typeof toolText.dot
 
@@ -282,13 +312,15 @@ const browserWaits = (session: BrowserHead | null): boolean =>
 
 /**
  * The dot on «+» while the panel is closed (И13): the browser waits for the client, it was
- * launched on a narrow screen, or the changes are of a revision the client has not had on the
- * screen in this showing — the one there at the start too. The panel never opens for it.
+ * launched on a narrow screen and still holds its session, or the changes are of a revision the
+ * client has not had on the screen in this showing — the one there at the start too. The panel
+ * never opens for it.
  */
 export function toolsDot(head: FeedHeadState, tools: ToolsState): ToolsDot | null {
   if (tools.active !== null) return null
   if (browserWaits(head.browser)) return 'browser'
-  if (tools.launchUnseen) return 'launch'
+  // A browser that closed since its launch is no news: its tile says «Закрыт».
+  if (tools.launchUnseen && sessionLive(head.browser)) return 'launch'
   const changes = changesMark(head.candidate)
   return changes !== null && changes !== tools.seenChanges ? 'changes' : null
 }

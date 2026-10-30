@@ -184,7 +184,11 @@ export function SiteListFrame({
             href={root}
             sx={{
               display: { xs: 'inline-flex', md: 'none' },
-              ...(collapsed && { [PANE_DRAWN]: { display: { lg: 'inline-flex' } } }),
+              // From `lg` the item drawn beside its panel takes the room of the list: the way to it
+              // is shown. Below, a tool drawn in place of a dialog has its own way back to the
+              // dialog, «К диалогу» (docs/plan/59-dialog-tools-panel.md, И14): one way back at a
+              // time.
+              ...(collapsed && { [PANE_DRAWN]: { display: { xs: 'none', lg: 'inline-flex' } } }),
               alignSelf: 'flex-start',
               alignItems: 'center',
               gap: 1,

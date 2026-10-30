@@ -15,6 +15,7 @@ import { riseIn } from '@/components/chat/chat-motion'
 import { EffortMenu } from '@/components/chat/effort-menu'
 import { dialogListKey } from '@/components/chat/dialog-list'
 import { askedMode, ModeChoice, type DialogMode } from '@/components/chat/mode-switch'
+import { markNewDialog } from '@/components/chat/new-dialog-hint'
 import { useAttachments } from '@/components/chat/use-attachments'
 import { uuidv7 } from '@/components/chat/uuid'
 import { useTRPC } from '@/trpc/client'
@@ -125,6 +126,9 @@ export function NewDialog({
       void queryClient.invalidateQueries({ queryKey: dialogListKey(siteId) })
       // The new dialog set credits aside: the ring of the credits reads them again.
       void queryClient.invalidateQueries({ queryKey: trpc.billing.usage.queryKey() })
+      // The client watches the dialog from its start: a browser launched before its first read
+      // opens beside it too (docs/plan/59, И3).
+      markNewDialog(created.taskId)
       router.push(`${siteHref(siteId, 'chat')}/${created.taskId}`)
       return true
     } catch (failure) {
