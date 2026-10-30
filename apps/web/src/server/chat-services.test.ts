@@ -11,6 +11,8 @@ const stand = vi.hoisted(() => ({
   vaultEnv: vi.fn(),
   createS3ObjectStorage: vi.fn(),
   createVaultSecretStore: vi.fn(),
+  getSiteAdapter: vi.fn(),
+  dbOperationKinds: vi.fn(),
   storage: { name: 'artifacts' },
   secrets: {
     kvRead: vi.fn(),
@@ -32,6 +34,7 @@ vi.mock('@repo/vault', async (importOriginal) => ({
   ...(await importOriginal<typeof VaultModule>()),
   createVaultSecretStore: stand.createVaultSecretStore,
 }))
+vi.mock('@repo/site-adapters', () => ({ getSiteAdapter: stand.getSiteAdapter }))
 
 const ADDRESS = { baseDomain: 'localhost', scheme: 'http', publicPort: 8090 } as const
 
@@ -55,6 +58,8 @@ describe('the dialog services of the process', () => {
     stand.vaultEnv.mockReset().mockReturnValue({ name: 'vault settings' })
     stand.createS3ObjectStorage.mockReset().mockReturnValue(stand.storage)
     stand.createVaultSecretStore.mockReset().mockReturnValue(stand.secrets)
+    stand.dbOperationKinds.mockReset().mockReturnValue([])
+    stand.getSiteAdapter.mockReset().mockReturnValue({ dbOperationKinds: stand.dbOperationKinds })
     for (const method of Object.values(stand.secrets)) method.mockReset()
   })
 
@@ -103,6 +108,35 @@ describe('the dialog services of the process', () => {
     expect(fresh.chatServices()?.browser).toEqual({
       streamUrl: 'ws://localhost:8091/v1/browser/stream',
     })
+  })
+
+  it('asks the adapter of the stack whether a release replays operations of its database', async () => {
+    const { chatServices } = await import('./chat-services')
+    const operations = chatServices()!.databaseOperations!
+    const site = { stack: 'wordpress', url: 'https://kofe.example.ru' } as const
+    // Nothing is asked until a dialog is read (docs/plan/59-dialog-tools-panel.md, И6).
+    expect(stand.getSiteAdapter).not.toHaveBeenCalled()
+
+    stand.dbOperationKinds.mockReturnValueOnce(['content_update', 'option_update'])
+    expect(operations(site)).toBe(true)
+    expect(stand.getSiteAdapter).toHaveBeenCalledExactlyOnceWith('wordpress')
+    // The facts core gives the adapter for a release.
+    expect(stand.dbOperationKinds).toHaveBeenCalledExactlyOnceWith({
+      stack: 'wordpress',
+      url: 'https://kofe.example.ru',
+      docroot: '/',
+      extras: {},
+    })
+    expect(operations(site)).toBe(false)
+    // A stack without an adapter yet, and an adapter that throws, have none: nothing is thrown.
+    stand.getSiteAdapter.mockImplementationOnce(() => {
+      throw new Error('SiteAdapter for static (stage 2)')
+    })
+    expect(operations({ ...site, stack: 'static' })).toBe(false)
+    stand.dbOperationKinds.mockImplementationOnce(() => {
+      throw new Error('The adapter failed')
+    })
+    expect(operations(site)).toBe(false)
   })
 
   it('makes the clients of S3 and Vault only when a procedure needs them, once', async () => {

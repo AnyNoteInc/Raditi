@@ -273,6 +273,8 @@ export const taskRouter = router({
         taskId: input.taskId,
         after: input.after ?? '0',
         address: ctx.chat?.preview?.address ?? null,
+        // The tool «База данных» (docs/plan/59, И6): the adapter of the stack, asked by the app.
+        databaseOperations: ctx.chat?.databaseOperations ?? null,
       }),
     ),
 
@@ -344,7 +346,13 @@ export const taskRouter = router({
         updatedAt: z.date(),
       }),
     )
-    .query(({ ctx, input }) => readDialogHead(ctx.prisma, { ...input, userId: ctx.user.id })),
+    .query(({ ctx, input }) =>
+      readDialogHead(ctx.prisma, {
+        ...input,
+        userId: ctx.user.id,
+        databaseOperations: ctx.chat?.databaseOperations ?? null,
+      }),
+    ),
 
   /** The commands of the chat with the server's verdict on each (Р34). */
   commands: consentedProcedure

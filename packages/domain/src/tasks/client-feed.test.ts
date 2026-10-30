@@ -1307,7 +1307,10 @@ describe('task head', () => {
       requirements: { repository: true, browser: false },
       // A head written before the choice of reasoning reads as «Высокое».
       effort: 'high',
+      // A head written before the tools of a dialog offers no «База данных» (docs/plan/59, И6).
+      databaseChanges: false,
     })
+    expect(feedTaskHeadSchema.parse({ ...head, databaseChanges: true }).databaseChanges).toBe(true)
     for (const status of taskStatuses)
       expect(feedTaskHeadSchema.safeParse({ ...head, status }).success).toBe(true)
     expect(
@@ -1345,6 +1348,7 @@ describe('task head', () => {
     refused({ workingSince: 'вчера' })
     refused({ held: 'yes' })
     refused({ canRetry: 'yes' })
+    refused({ databaseChanges: 'yes' })
     refused({ summary: 'Edited front-page.php' })
     refused({ failureReason: 'ENOENT' })
   })

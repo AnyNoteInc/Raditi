@@ -1143,5 +1143,12 @@ export const feedTaskHeadSchema = z.strictObject({
    * built without it thinks at `high`, the default of a new dialog.
    */
   effort: reasoningEffortSchema.default('high'),
+  /**
+   * The dialog can change the records of its site (docs/plan/59-dialog-tools-panel.md, И6): the
+   * stack replays database operations and the preview of the dialog holds a copy of the database
+   * that can be shown, or the candidate already has records. Its tool «База данных» is offered
+   * only then: the plan of the database is made of writes to that copy alone.
+   */
+  databaseChanges: z.boolean().default(false),
 })
 export type FeedTaskHead = z.infer<typeof feedTaskHeadSchema>
