@@ -103,7 +103,7 @@ describe('the Playwright page browser', () => {
     expect(browser.close).not.toHaveBeenCalled()
   })
 
-  it('asks a navigation again once when the error page of a refusal took it over', async () => {
+  it('asks a navigation again once when the error page of a refusal took it over and it never landed', async () => {
     let url = 'about:blank'
     const response = {
       status: () => 200,
@@ -138,6 +138,10 @@ describe('the Playwright page browser', () => {
       isClosed: () => false,
       mainFrame: () => ({}),
       waitForLoadState: vi.fn(async () => undefined),
+      // The interrupted navigation never lands: the browser asks for it again.
+      waitForURL: vi.fn(async () => {
+        throw new Error('page.waitForURL: Timeout 5000ms exceeded.')
+      }),
       goto,
     }
     const context = {
@@ -155,8 +159,63 @@ describe('the Playwright page browser', () => {
 
     expect(await opened.navigate({ path: '/about/' })).toMatchObject({ path: '/about/' })
     expect(goto).toHaveBeenCalledTimes(3)
+    expect(page.waitForURL).toHaveBeenCalledTimes(1)
     await expect(opened.navigate({ path: '/about/' })).rejects.toThrow()
     expect(goto).toHaveBeenCalledTimes(4)
+  })
+
+  // The navigation an error page interrupted goes on and lands a moment later: asked again at once,
+  // it would interrupt the repeat in turn (preview.yml on GitHub's runners, 30.10.2026).
+  it('waits for a navigation the error page of a refusal interrupted instead of asking it again', async () => {
+    let url = 'about:blank'
+    const response = {
+      status: () => 200,
+      request: () => ({ redirectedFrom: () => ({}) }),
+    }
+    const goto = vi
+      .fn<(target: string) => Promise<typeof response>>()
+      // The entry through the gateway.
+      .mockImplementationOnce(async () => {
+        url = `${ORIGIN}/`
+        return response
+      })
+      .mockImplementationOnce(async () => {
+        throw new Error(
+          `page.goto: Navigation to "${ORIGIN}/about/" is interrupted by another navigation to "chrome-error://chromewebdata/"`,
+        )
+      })
+    const page = {
+      on: vi.fn(),
+      url: () => url,
+      title: async () => 'О нас',
+      isClosed: () => false,
+      mainFrame: () => ({}),
+      waitForLoadState: vi.fn(async () => undefined),
+      // The interrupted navigation lands.
+      waitForURL: vi.fn(async (target: string) => {
+        url = target
+      }),
+      goto,
+    }
+    const context = {
+      setDefaultTimeout: vi.fn(),
+      setDefaultNavigationTimeout: vi.fn(),
+      route: vi.fn(async () => undefined),
+      on: vi.fn(),
+      newPage: vi.fn(async () => page),
+      close: vi.fn(async () => undefined),
+    }
+    const browser = { newContext: vi.fn(async () => context), isConnected: () => true }
+    const opened = await createPlaywrightBrowserFactory({
+      connect: vi.fn(async () => browser as never),
+    }).connect(connection)
+
+    expect(await opened.navigate({ path: '/about/' })).toMatchObject({ path: '/about/' })
+    expect(goto).toHaveBeenCalledTimes(2)
+    expect(page.waitForURL).toHaveBeenCalledWith(
+      `${ORIGIN}/about/`,
+      expect.objectContaining({ waitUntil: 'load' }),
+    )
   })
 
   it('does not connect for a call already given up', async () => {
