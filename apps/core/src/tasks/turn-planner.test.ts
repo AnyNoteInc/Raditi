@@ -133,7 +133,6 @@ const env = (
   driver,
   backends: [backend],
   runtime: 'runc',
-  internet: false,
   mainHead: vi.fn(async () => MAIN),
   branchHead: vi.fn(async () => branch),
   ...patch,
@@ -300,36 +299,44 @@ describe('planTurn', () => {
     const egress = ['api.example.ru:443', 'hooks.example.com:8443']
     const plan = await planTurn(facts({ egress, variables: ['HOOK_TOKEN', 'PAYMENT_KEY'] }), env())
     if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
-    // The agent learns the names and the hosts, never a value.
+    // The agent learns the names, never a value.
     expect(plan.request.context.instructions).toContain(
       'environment variables of the client: HOOK_TOKEN, PAYMENT_KEY.',
     )
+    // The proxy ties no value to a host: the instructions name where a value may go.
     expect(plan.request.context.instructions).toContain(
-      'only to api.example.ru:443, hooks.example.com:8443;',
+      'Send their values only to api.example.ru:443, hooks.example.com:8443:',
     )
     expect(plan.request.sandbox.network).toEqual({
       mode: 'gateway',
       routes: ['llm', 'mcp'],
       egress,
+      internet: true,
     })
     expect(plan.request.context.egressProxy).toBe('http://sandbox-gw:3128')
     // The plan keeps the hosts and the proxy, never a value.
     const kept = toTurnPlan(plan.request, sampleDriverId)
     expect(kept.sandbox.network).toEqual(plan.request.sandbox.network)
     expect(kept.context.egressProxy).toBe('http://sandbox-gw:3128')
-    // Without hosts no egress and no proxy: the sandbox reaches the gateway alone.
+    // Without hosts no list of them; the proxy stays for the internet of the turn.
     const bare = await planTurn(facts({ egress: [] }), env())
     if (bare.kind !== 'turn') throw new Error(`expected a turn, got ${bare.kind}`)
-    expect(bare.request.sandbox.network).toEqual({ mode: 'gateway', routes: ['llm', 'mcp'] })
-    expect(bare.request.context).not.toHaveProperty('egressProxy')
+    expect(bare.request.sandbox.network).toEqual({
+      mode: 'gateway',
+      routes: ['llm', 'mcp'],
+      internet: true,
+    })
+    expect(bare.request.context.egressProxy).toBe('http://sandbox-gw:3128')
     expect(bare.request.context.instructions).not.toContain('## Client variables')
-    // Names without hosts: the commands have the values and no way out.
-    const closed = await planTurn(facts({ egress: [], variables: ['LOCAL_KEY'] }), env())
-    if (closed.kind !== 'turn') throw new Error(`expected a turn, got ${closed.kind}`)
-    expect(closed.request.context.instructions).toContain(
-      'Nothing outside the sandbox is reachable from those commands.',
+    // Names without hosts: the commands have the values and the internet of the turn.
+    const named = await planTurn(facts({ egress: [], variables: ['LOCAL_KEY'] }), env())
+    if (named.kind !== 'turn') throw new Error(`expected a turn, got ${named.kind}`)
+    expect(named.request.context.instructions).toContain(
+      'Those commands reach the internet as the section below says.',
     )
-    expect(closed.request.sandbox.network).toEqual({ mode: 'gateway', routes: ['llm', 'mcp'] })
+    expect(named.request.context.instructions).toContain(
+      'send their values nowhere outside the sandbox',
+    )
     // More than one gateway variable holds is no turn.
     const many = Array.from({ length: 257 }, (_, i) => `h${i}.example.ru:443`)
     expect(await planTurn(facts({ egress: many }), env())).toEqual({
@@ -345,7 +352,7 @@ describe('planTurn', () => {
     ]
     const plan = await planTurn(
       facts({ skills, egress: ['api.example.ru:443'], variables: ['API_TOKEN'] }),
-      env({ internet: true }),
+      env(),
     )
     if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
     expect(plan.request.sandbox.network).toEqual({
@@ -364,22 +371,18 @@ describe('planTurn', () => {
     expect(instructions).toContain('context7, playwright')
     expect(instructions).toContain('Never send a secret')
     expect(instructions).toContain('Those commands reach the internet as the section below says.')
-    expect(instructions).not.toContain('only to api.example.ru:443')
+    expect(instructions).toContain('Send their values only to api.example.ru:443:')
+    expect(instructions).toContain('nor a value of a client variable anywhere but its hosts')
     // The plan keeps the policy and the skills: recovery runs the turn as it was planned.
     const kept = toTurnPlan(plan.request, sampleDriverId)
     expect(kept.sandbox.network).toEqual(plan.request.sandbox.network)
     expect(kept.context.skills).toEqual(skills)
-    // Without skills the internet is open all the same; `off` is the turn as before.
-    const bare = await planTurn(facts({ skills: [] }), env({ internet: true }))
+    // Without skills the internet is open all the same: no switch closes it (30.10.2026).
+    const bare = await planTurn(facts({ skills: [] }), env())
     if (bare.kind !== 'turn') throw new Error(`expected a turn, got ${bare.kind}`)
     expect(bare.request.context).not.toHaveProperty('skills')
     expect(bare.request.context.egressProxy).toBe('http://sandbox-gw:3128')
-    const off = await planTurn(facts({ skills }), env())
-    if (off.kind !== 'turn') throw new Error(`expected a turn, got ${off.kind}`)
-    expect(off.request.sandbox.network).toEqual({ mode: 'gateway', routes: ['llm', 'mcp'] })
-    expect(off.request.context).not.toHaveProperty('internet')
-    expect(off.request.context).not.toHaveProperty('skills')
-    expect(off.request.context.instructions).not.toContain('## The internet')
+    expect(bare.request.context.instructions).toContain('## The internet')
   })
 
   it('continues the session of a completed turn with the words written after it started', async () => {
@@ -791,14 +794,13 @@ describe('planTurn of a task in the cloud browser (docs/plan/57-browser-tasks.md
     expect(turn.context.instructions).toContain('- Open the list of posts first.')
     expect(turn.context.instructions).not.toContain('repository working copy')
     // The client's variables reach no command of a turn in the browser.
-    expect(turn.sandbox.network).toEqual({ mode: 'gateway', routes: ['llm', 'mcp'] })
-    expect(turn.context.egressProxy).toBeUndefined()
-    expect(turn.context.instructions).not.toContain('## The internet')
+    expect(turn.sandbox.network).not.toHaveProperty('egress')
+    expect(turn.context.instructions).not.toContain('## Client variables')
     // The internet is open to it too (owner's decision of 26.10.2026), with the skills, while
     // the admin pages stay reachable through the `web` tools alone.
     const open = await planTurn(
       browserFacts({ skills: [{ name: 'playwright', kind: 'local' }] }),
-      env({ internet: true }),
+      env(),
     )
     if (open.kind !== 'turn') throw new Error(`expected a turn, got ${open.kind}`)
     expect(() => toTurnPlan(open.request, sampleDriverId)).not.toThrow()
