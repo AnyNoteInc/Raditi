@@ -28,6 +28,8 @@ import {
   feedResultPayloadSchema,
   feedRowSchema,
   feedRowSchemaWithin,
+  feedEndedSiteOf,
+  feedSiteOf,
   feedSiteStates,
   feedStepPayloadSchema,
   feedSteps,
@@ -44,6 +46,7 @@ import {
   feedFailureCodes,
   feedFailureRetry,
   feedFailureText,
+  feedFailureTextOf,
 } from './client-feed-failures.ts'
 import { feedFixtures } from './client-feed-fixtures.ts'
 import { feedText } from './client-feed-text.ts'
@@ -748,9 +751,9 @@ describe('feed.request', () => {
 })
 
 describe('feed.step', () => {
-  it('takes the four stages and nothing else', () => {
+  it('takes the five stages and nothing else', () => {
     for (const name of feedSteps) expect(accepts('feed.step', { ...step, step: name })).toBe(true)
-    expect(feedSteps).toEqual(['work', 'save', 'site', 'files'])
+    expect(feedSteps).toEqual(['code', 'work', 'save', 'site', 'files'])
     expect(accepts('feed.step', { ...step, step: 'thinking' })).toBe(false)
   })
 
@@ -841,6 +844,10 @@ describe('feed.result', () => {
       expect(accepts('feed.result', { ...result, site })).toBe(true)
     // A result never claims a restore.
     expect(accepts('feed.result', { ...result, site: 'restored' })).toBe(false)
+    // A chat without a site says nothing of one; in a result never of other sites either
+    // (docs/plan/61-chats-first.md, К18).
+    expect(readFeedRow('feed.result', { ...result, site: 'none' })).toMatchObject({ site: 'none' })
+    expect(accepts('feed.result', { ...result, site: 'elsewhere' })).toBe(false)
     expect(accepts('feed.result', { ...result, next: 'awaiting_approval' })).toBe(true)
     // A pass that changed nothing leaves the dialog open (owner's decision of 26.10.2026).
     expect(accepts('feed.result', { ...result, next: 'awaiting_user' })).toBe(true)
@@ -851,6 +858,28 @@ describe('feed.result', () => {
   })
 })
 
+describe('what a row says of the site of its task (docs/plan/61-chats-first.md, К18)', () => {
+  const site = { siteId: '0199a000-0000-7000-8000-0000000000a1' }
+  const chat = { siteId: null }
+
+  it('keeps the state of a task with a site', () => {
+    expect(feedSiteOf(site, 'changed')).toBe('changed')
+    expect(feedSiteOf(site, 'unchanged')).toBe('unchanged')
+    expect(feedEndedSiteOf(site, true)).toBe('check')
+    expect(feedEndedSiteOf(site, false)).toBe('unchanged')
+  })
+
+  it('has nothing to say of a site without one', () => {
+    expect(feedSiteOf(chat, 'changed')).toBe('none')
+    expect(feedSiteOf(chat, 'unchanged')).toBe('none')
+    expect(feedEndedSiteOf(chat, false)).toBe('none')
+  })
+
+  it('names other sites when a chat without a site acted in its browser', () => {
+    expect(feedEndedSiteOf(chat, true)).toBe('elsewhere')
+  })
+})
+
 describe('feed.failure and feed.cancelled', () => {
   it('take every code of the catalogue and a null turn', () => {
     for (const code of feedFailureCodes)
@@ -858,11 +887,18 @@ describe('feed.failure and feed.cancelled', () => {
   })
 
   it('close the trusted facts about the site and the credits', () => {
-    expect(feedSiteStates).toEqual(['unchanged', 'changed', 'restored', 'check'])
+    expect(feedSiteStates).toEqual([
+      'unchanged',
+      'changed',
+      'restored',
+      'check',
+      'none',
+      'elsewhere',
+    ])
     expect(feedCreditsStates).toEqual(['returned', 'expired'])
     for (const type of ['feed.failure', 'feed.cancelled'] as const) {
       const base = type === 'feed.failure' ? failure : cancelled
-      for (const site of ['unchanged', 'restored', 'check'])
+      for (const site of ['unchanged', 'restored', 'check', 'none', 'elsewhere'])
         expect(accepts(type, { ...base, site })).toBe(true)
       // A failed or cancelled task never claims «changed»: it is restored or in doubt.
       expect(accepts(type, { ...base, site: 'changed' })).toBe(false)
@@ -871,6 +907,13 @@ describe('feed.failure and feed.cancelled', () => {
       expect(accepts(type, { ...base, credits: 'charged' })).toBe(false)
       const { credits: _credits, ...noCredits } = base
       expect(accepts(type, noCredits)).toBe(false)
+    }
+  })
+
+  it('read `none` and `elsewhere` as they are written', () => {
+    for (const site of ['none', 'elsewhere']) {
+      expect(readFeedRow('feed.failure', { ...failure, site })).toMatchObject({ site })
+      expect(readFeedRow('feed.cancelled', { ...cancelled, site })).toMatchObject({ site })
     }
   })
 
@@ -1373,6 +1416,14 @@ describe('failure catalogue', () => {
     expect(Object.keys(feedFailureRetry).sort()).toEqual([...feedFailureCodes].sort())
   })
 
+  it('names no site or files in a failure a chat without one can come to (docs/plan/61, К18)', () => {
+    // `site_files` is of a repository, which such a chat has not.
+    for (const code of feedFailureCodes.filter((code) => code !== 'site_files'))
+      expect(feedFailureTextOf(code, false), code).not.toMatch(/сайт|файл/iu)
+    for (const code of feedFailureCodes)
+      expect(feedFailureTextOf(code, true)).toBe(feedFailureText[code])
+  })
+
   it('allows a retry exactly where the design does', () => {
     expect(feedFailureCodes.filter((code) => !feedFailureRetry[code])).toEqual([
       'credits_out',
@@ -1384,13 +1435,13 @@ describe('failure catalogue', () => {
   })
 
   it('speaks Russian, politely, without code names', () => {
-    for (const code of feedFailureCodes) {
-      const text = feedFailureText[code]
-      expect(text).not.toMatch(/[A-Za-z_]/)
-      expect(text).not.toMatch(/(^|[^\p{L}])(ты|тебя|тебе|твой|твоя|твои)([^\p{L}]|$)/iu)
-      expect(text.endsWith('.')).toBe(true)
-      for (const name of feedFailureCodes) expect(text).not.toContain(name)
-    }
+    for (const code of feedFailureCodes)
+      for (const text of [feedFailureTextOf(code, true), feedFailureTextOf(code, false)]) {
+        expect(text).not.toMatch(/[A-Za-z_]/)
+        expect(text).not.toMatch(/(^|[^\p{L}])(ты|тебя|тебе|твой|твоя|твои)([^\p{L}]|$)/iu)
+        expect(text.endsWith('.')).toBe(true)
+        for (const name of feedFailureCodes) expect(text).not.toContain(name)
+      }
   })
 })
 

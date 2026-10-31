@@ -53,8 +53,8 @@ describe('turn journal boundary', () => {
 
 describe('feedStepsOf', () => {
   it('tells the client of the work and of saving it, by the phase alone', () => {
-    expect(feedStepsOf('running')).toEqual(['work'])
-    expect(feedStepsOf('resumed')).toEqual(['work'])
+    expect(feedStepsOf('running')).toEqual(['code', 'work'])
+    expect(feedStepsOf('resumed')).toEqual(['code', 'work'])
     expect(feedStepsOf('quiesced')).toEqual(['save'])
     for (const phase of ['leased', 'output', 'checkpointed', 'completed', 'failed'] as const)
       expect(feedStepsOf(phase)).toEqual([])
@@ -210,7 +210,7 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
     await db.$disconnect()
   })
 
-  async function fixture() {
+  async function fixture(requirements: { needsRepository?: boolean; needsBrowser?: boolean } = {}) {
     const ws = await db.workspace.create({ data: { name: 'Synthetic turn journal verification' } })
     workspaces.push(ws.id)
     const site = await db.site.create({
@@ -221,7 +221,9 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
         stack: 'wordpress',
       },
     })
-    const task = await db.task.create({ data: { workspaceId: ws.id, siteId: site.id } })
+    const task = await db.task.create({
+      data: { workspaceId: ws.id, siteId: site.id, ...requirements },
+    })
     const leases = new PostgresSiteLeaseStore(db)
     const fence = (await leases.acquire({
       siteId: site.id,
@@ -350,6 +352,7 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
       orderBy: { id: 'asc' },
     })
     expect(stages.map((row) => [row.clientVisible, row.turnId, row.payload])).toEqual([
+      [true, turn.id, { v: 1, turn: 1, attempt: 1, step: 'code' }],
       [true, turn.id, { v: 1, turn: 1, attempt: 1, step: 'work' }],
       [true, turn.id, { v: 1, turn: 1, attempt: 1, step: 'save' }],
     ])
@@ -365,6 +368,72 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
     ).rejects.toMatchObject({ code: 'LEASE_LOST' })
     expect(await status()).toBe('preparing')
     await f.leases.free(next)
+  })
+
+  // The feed reads the stages of a turn by id, and StepList takes the last one for the current.
+  // A hash anti join gives its rows in hash order, here random by turn id: a plan a small analyzed
+  // table gets by itself, forced here so as not to depend on what the database holds.
+  it('writes the stages of one entry in their order under any plan (docs/plan/61, §5.8)', async () => {
+    const turns = await Promise.all(
+      Array.from({ length: 13 }, async () => {
+        const f = await fixture()
+        await db.taskTurn.create({
+          data: {
+            taskId: f.task.id,
+            turnNo: 1,
+            status: 'running',
+            driverId: sampleDriverId,
+            image: `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`,
+          },
+        })
+        return f
+      }),
+    )
+    // Many stages of another task: with them the planner hashes the two new stages, not the table.
+    await db.taskEvent.createMany({
+      data: Array.from({ length: 300 }, () => ({
+        taskId: turns[0]!.task.id,
+        type: 'feed.step',
+        payload: {},
+        clientVisible: true,
+      })),
+    })
+    await db.$executeRaw`ANALYZE task_events`
+
+    await db.$transaction(async (tx) => {
+      await tx.$executeRaw`SET LOCAL enable_nestloop = off`
+      await tx.$executeRaw`SET LOCAL enable_mergejoin = off`
+      for (const f of turns.slice(1))
+        await new TaskEventTurnJournal(tx).record({ ...f.evidence, sequence: 2, phase: 'running' })
+    })
+
+    for (const f of turns.slice(1)) {
+      const stages = await db.taskEvent.findMany({
+        where: { taskId: f.task.id, type: 'feed.step' },
+        orderBy: { id: 'asc' },
+      })
+      expect(stages.map((row) => (row.payload as { step: string }).step)).toEqual(['code', 'work'])
+    }
+  })
+
+  it('tells of the code only a task that has a repository (docs/plan/61, §5.8)', async () => {
+    const f = await fixture({ needsRepository: false, needsBrowser: true })
+    await db.taskTurn.create({
+      data: {
+        taskId: f.task.id,
+        turnNo: 1,
+        status: 'running',
+        driverId: sampleDriverId,
+        image: `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`,
+      },
+    })
+
+    await f.journal.record({ ...f.evidence, sequence: 2, phase: 'running' })
+
+    const stages = await db.taskEvent.findMany({
+      where: { taskId: f.task.id, type: 'feed.step' },
+    })
+    expect(stages.map((row) => (row.payload as { step: string }).step)).toEqual(['work'])
   })
 
   it('permits recovery evidence under a held lease but refuses normal progress', async () => {

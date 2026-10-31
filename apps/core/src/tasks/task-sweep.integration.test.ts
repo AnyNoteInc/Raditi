@@ -87,7 +87,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     status: string,
     turnNo: number,
     expiresAt = new Date(Date.now() + 3_600_000),
-    { browser = false }: { browser?: boolean } = {},
+    { browser = false, chat = false }: { browser?: boolean; chat?: boolean } = {},
   ) {
     const { userId } = await fixtures.user()
     const workspace = await db.$transaction((tx) =>
@@ -96,6 +96,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     const { taskId } = await fixtures.task(workspace.id, {
       status: 'queued',
       ...(browser ? { needsRepository: false, needsBrowser: true } : {}),
+      ...(chat ? { siteId: null, needsRepository: false, needsBrowser: false } : {}),
     })
     const placedAt = new Date(expiresAt.getTime() - 3_600_000)
     await fixtures.reserve({
@@ -530,6 +531,50 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
       { taskId, attempt: 1, requestEventId: request.toString() },
       { jobId: expect.stringContaining(':retry:sweep-') },
     )
+  })
+
+  // docs/plan/61-chats-first.md, К18.
+  it('closes a chat without a project with no word of a site', async () => {
+    const past = new Date(Date.now() - 60_000)
+    const { taskId } = await dialog('awaiting_user', 1, past, { chat: true })
+
+    expect(await sweep().expireHolds()).toBe(1)
+
+    expect(
+      (await db.taskEvent.findMany({ where: { taskId, type: 'feed.cancelled' } })).map(
+        (row) => row.payload,
+      ),
+    ).toEqual([{ v: 1, turn: 1, by: 'no_answer', site: 'none', credits: 'returned' }])
+  })
+
+  // What was done in a browser stays, with a site or without one (docs/plan/61, К18, Б28).
+  it.each([
+    ['a chat without a project', { chat: true }, 'elsewhere'],
+    ['a task with a site', { browser: true }, 'check'],
+  ] as const)('tells %s what its browser left', async (_, kind, site) => {
+    const past = new Date(Date.now() - 60_000)
+    const { taskId } = await dialog('awaiting_user', 1, past, kind)
+    const { workspaceId, siteId } = await db.task.findUniqueOrThrow({ where: { id: taskId } })
+    await db.browserSession.create({
+      data: {
+        taskId,
+        workspaceId,
+        siteId,
+        status: 'ready',
+        readyAt: new Date(),
+        expiresAt: new Date(Date.now() + 3_600_000),
+        wroteAt: new Date(),
+        lastWroteAt: new Date(),
+      },
+    })
+
+    expect(await sweep().expireHolds()).toBe(1)
+
+    expect(
+      (await db.taskEvent.findMany({ where: { taskId, type: 'feed.cancelled' } })).map(
+        (row) => row.payload,
+      ),
+    ).toEqual([{ v: 1, turn: 1, by: 'no_answer', site, credits: 'returned' }])
   })
 
   describe('of tasks in the cloud browser (docs/plan/57-browser-tasks.md)', () => {

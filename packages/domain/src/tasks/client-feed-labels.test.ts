@@ -88,7 +88,10 @@ const renewal = { date: '18 октября', credits: 300 }
 
 /** What the functions of the catalogue return, over the inputs that change the wording. */
 const composed: string[] = [
-  ...[null, ...taskWaitingReasons].map(feedQueuedText),
+  ...[null, ...taskWaitingReasons].flatMap((waiting) => [
+    feedQueuedText(waiting),
+    feedQueuedText(waiting, false),
+  ]),
   ...[0, 14, 134, 1200].flatMap((seconds) => [feedDurationText(seconds), feedWorkedText(seconds)]),
   feedFilesChangedText(3),
   ...feedCancelledBys.flatMap((by) => [
@@ -153,9 +156,20 @@ describe('totality of the catalogue', () => {
   })
 
   it('has a phrase about the site for every state an outcome may carry', () => {
-    expect(sorted(Object.keys(feedEndedSiteText))).toEqual(['check', 'restored', 'unchanged'])
-    expect(sorted(Object.keys(feedDoneSiteText))).toEqual(['changed', 'check', 'unchanged'])
-    expect(sorted(Object.keys(feedApprovalSiteText))).toEqual(['changed', 'check', 'unchanged'])
+    expect(sorted(Object.keys(feedEndedSiteText))).toEqual([
+      'check',
+      'elsewhere',
+      'none',
+      'restored',
+      'unchanged',
+    ])
+    expect(sorted(Object.keys(feedDoneSiteText))).toEqual(['changed', 'check', 'none', 'unchanged'])
+    expect(sorted(Object.keys(feedApprovalSiteText))).toEqual([
+      'changed',
+      'check',
+      'none',
+      'unchanged',
+    ])
   })
 
   it('has a question text for every ceiling reason', () => {
@@ -264,6 +278,7 @@ describe('status labels', () => {
 
   it('names the stages with nouns', () => {
     expect(feedStepLabel).toEqual({
+      code: 'Загружаем код проекта',
       work: 'Работа над задачей',
       save: 'Сохранение работы',
       site: 'Работа с содержимым сайта',
@@ -282,6 +297,14 @@ describe('the live block', () => {
     )
     expect(feedQueuedText('site')).toBe(
       'На сайте сейчас идёт другая работа. Начнём, когда она закончится.',
+    )
+  })
+
+  it('tells a chat without a site of no work on one (docs/plan/61, К18)', () => {
+    expect(feedQueuedText('site', false)).toBe(feedQueuedText(null))
+    expect(feedQueuedText('agents', false)).toBe(feedQueuedText('agents'))
+    expect(feedLiveText.heldNoSite).toBe(
+      'Произошёл сбой, мы его разбираем. Страницу можно закрыть — результат появится в этом чате.',
     )
   })
 
@@ -328,6 +351,13 @@ describe('what is known about the site and the credits', () => {
     expect(feedEndedSiteText.check).toBe(
       'Часть правок могла остаться на сайте. Откройте сайт и проверьте; если что-то не так — напишите нам.',
     )
+  })
+
+  it('says nothing of a site to a chat without one, and of others once it acted there', () => {
+    expect(feedEndedSiteText.none).toBeNull()
+    expect(feedDoneSiteText.none).toBeNull()
+    expect(feedApprovalSiteText.none).toBeNull()
+    expect(feedEndedSiteText.elsewhere).toBe('То, что агент сделал на других сайтах, осталось.')
   })
 
   it('says nothing about the site when a finished task left it as it was', () => {

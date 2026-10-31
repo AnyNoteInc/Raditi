@@ -33,6 +33,7 @@ import {
   giftNote,
   heldEarlierNote,
   heldNote,
+  NO_PROJECT,
   ofDailyLimit,
   ofSiteLimit,
   packCredits,
@@ -512,13 +513,16 @@ function Limits({
   )
 }
 
-/** The credits charged in the period, site by site; one line while nothing is charged. */
+/**
+ * The credits charged in the period, project by project, and what chats without one took; one
+ * line while nothing is charged.
+ */
 function BySite({ sites }: { sites: TariffUsage['bySite'] }) {
   const most = Math.max(...sites.map(({ credits }) => credits), 1)
   return (
     <Box component="section" aria-labelledby="sites-title" sx={{ p: sectionPadding }}>
       <Typography component="h2" id="sites-title" sx={sectionHeading}>
-        По сайтам
+        По проектам
       </Typography>
       <Typography variant="body2" color="textSecondary" sx={{ mt: 0.5 }}>
         {nbsp(
@@ -536,7 +540,7 @@ function BySite({ sites }: { sites: TariffUsage['bySite'] }) {
           {sites.map(({ siteId, name, credits }) => (
             <Box
               component="li"
-              key={siteId}
+              key={siteId ?? 'none'}
               sx={{
                 display: 'grid',
                 // A count of four digits keeps its width: the column grows with it.
@@ -548,7 +552,7 @@ function BySite({ sites }: { sites: TariffUsage['bySite'] }) {
               }}
             >
               <Box component="span" sx={{ overflowWrap: 'anywhere' }}>
-                {name}
+                {name ?? NO_PROJECT}
               </Box>
               <Bar share={credits / most} />
               <Box component="span" sx={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>

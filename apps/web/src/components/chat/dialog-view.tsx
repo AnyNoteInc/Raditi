@@ -306,7 +306,8 @@ export function DialogView({
   capabilities,
 }: {
   siteId: string
-  siteUrl: string
+  /** null — a chat without a project. */
+  siteUrl: string | null
   taskId: string
   title: string | null
   /**
@@ -1155,6 +1156,7 @@ export function DialogView({
               head={head}
               steps={liveSteps(rows, head)}
               stopping={stopping}
+              withSite={siteUrl !== null}
               activity={
                 head.task.status === 'running' && head.task.turnNo > 0 ? (
                   <TurnActivity

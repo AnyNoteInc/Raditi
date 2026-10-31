@@ -6,7 +6,7 @@ import {
   chatCommands,
   type ChatCommandRefusal,
 } from '@repo/domain/release/chat-commands'
-import { feedFailureText } from '@repo/domain/tasks/client-feed-failures'
+import { feedFailureTextOf } from '@repo/domain/tasks/client-feed-failures'
 import {
   feedApprovalSiteText,
   feedBrowserButtons,
@@ -802,7 +802,8 @@ function RowView({
 }: {
   row: FeedRow
   now: Date
-  siteUrl: string
+  /** null — a chat without a project: nothing to open and no site to speak of. */
+  siteUrl: string | null
   openQuestionId: string | null
   liveCandidateId: string | null
   /** The failure the server offers «Попробовать ещё» for; null — none. */
@@ -858,11 +859,12 @@ function RowView({
           <Sentences
             parts={[
               site,
-              open || row.filesChanged === null ? null : feedFilesChangedText(row.filesChanged),
+              // No change in git, not a word of files (docs/plan/61-chats-first.md, К19).
+              open || !row.filesChanged ? null : feedFilesChangedText(row.filesChanged),
             ]}
           />
           <SiteObjects objects={row.objects ?? []} heading={feedObjectText.result} />
-          {!approval && row.site !== 'unchanged' ? (
+          {!approval && site !== null && siteUrl !== null ? (
             <MuiLink
               href={siteUrl}
               target="_blank"
@@ -909,7 +911,7 @@ function RowView({
         >
           <Sentences
             parts={[
-              feedFailureText[row.code],
+              feedFailureTextOf(row.code, siteUrl !== null),
               feedEndedSiteText[row.site],
               feedCreditsSentence(row.credits),
               // The dialog kept its candidate: the card of the changes above says what to do.
@@ -1051,7 +1053,8 @@ export function FeedList({
 }: {
   head: FeedHeadState | null
   rows: readonly FeedRow[]
-  siteUrl: string
+  /** null — a chat without a project. */
+  siteUrl: string | null
   openQuestionId: string | null
   liveCandidateId: string | null
   /** The failure row «Попробовать ещё» is offered on (`retryFailure`). */
@@ -1148,12 +1151,15 @@ export function LiveBlock({
   head,
   steps,
   stopping = false,
+  withSite,
   browser,
   activity,
 }: {
   head: FeedHeadState
   steps: readonly StepRow[]
   stopping?: boolean
+  /** false — a chat without a project: the block says nothing of a site. */
+  withSite: boolean
   /** «Ход работы» of the turn at work, as it goes (owner's decision of 26.10.2026). */
   activity?: ReactNode
   /** A task in the browser (docs/plan/57-browser-tasks.md): who drives it. */
@@ -1182,14 +1188,14 @@ export function LiveBlock({
   } else
     switch (task.status) {
       case 'queued':
-        text = stopping ? dialogText.stoppedHint : feedQueuedText(task.waiting)
+        text = stopping ? dialogText.stoppedHint : feedQueuedText(task.waiting, withSite)
         break
       case 'preparing':
         text = stopping ? dialogText.stoppedHint : null
         break
       case 'running':
         if (stopping) text = dialogText.stoppedHint
-        else if (task.held) text = feedLiveText.held
+        else if (task.held) text = withSite ? feedLiveText.held : feedLiveText.heldNoSite
         else if (browser?.controlling) {
           title = browserText.status.user
           text = browserText.controlPlate

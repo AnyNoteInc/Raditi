@@ -155,7 +155,11 @@ const waiting = (patch: Parameters<typeof feedAnswer>[0] = {}) =>
 
 const posted: Posted = { requestEventId: '9', repeated: false }
 
-function showDialog(answer: DialogFeed = waiting(), browserStreamUrl: string | null = null) {
+function showDialog(
+  answer: DialogFeed = waiting(),
+  browserStreamUrl: string | null = null,
+  siteUrl: string | null = 'https://kroshka.example',
+) {
   calls.feed.mockResolvedValue(answer)
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -164,7 +168,7 @@ function showDialog(answer: DialogFeed = waiting(), browserStreamUrl: string | n
     <QueryClientProvider client={queryClient}>
       <DialogView
         siteId={SITE_ID}
-        siteUrl="https://kroshka.example"
+        siteUrl={siteUrl}
         taskId={TASK_ID}
         title="Поменять цену капучино"
         browserStreamUrl={browserStreamUrl}
@@ -424,6 +428,17 @@ const network = () => new TypeError('Failed to fetch')
 const NETWORK_TEXT = 'Не удалось связаться с сервером. Проверьте подключение и попробуйте ещё раз.'
 
 describe('a dialog', () => {
+  // The page passes null from 61.12 on: nothing fails by itself then (docs/plan/61, К18).
+  it.each([
+    ['in the queue', { status: 'queued', task: { waiting: 'site' } }, 'Агент скоро возьмётся'],
+    ['held', { status: 'running', task: { turnNo: 1, held: true } }, 'Произошёл сбой, мы'],
+  ] as const)('says nothing of a site without a project, %s', async (_what, state, words) => {
+    showDialog(feedAnswer({ ...state, events: [requestRow('1')], cursor: '1' }), null, null)
+    expect(await screen.findByText(new RegExp(`^${words}`, 'u'))).toBeTruthy()
+    expect(document.body.textContent).not.toContain('На сайте')
+    expect(document.body.textContent).not.toContain('При работе с сайтом')
+  })
+
   it('reads its head and rows: its name, its mode in the middle, its menu', async () => {
     showDialog()
     expect(await screen.findByText('Изменения готовы')).toBeTruthy()

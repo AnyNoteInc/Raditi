@@ -110,8 +110,12 @@ export const feedRequestKinds = [
 ] as const
 export type FeedRequestKind = (typeof feedRequestKinds)[number]
 
-/** A stage of work the customer understands; `site` and `files` wait for trusted sources. */
-export const feedSteps = ['work', 'save', 'site', 'files'] as const
+/**
+ * A stage of work the customer understands; `code` — the code of the project was loaded, for a
+ * task with a repository (docs/plan/61-chats-first.md, §5.8); `site` and `files` wait for trusted
+ * sources.
+ */
+export const feedSteps = ['code', 'work', 'save', 'site', 'files'] as const
 export const feedStepSchema = z.enum(feedSteps)
 export type FeedStep = z.infer<typeof feedStepSchema>
 
@@ -157,11 +161,43 @@ export type FeedObjectStatus = (typeof feedObjectStatuses)[number]
 /**
  * What the platform knows about the site. Trusted: written from the platform's own records,
  * never from the agent's words. A result never says `restored`, a failure never `changed`.
+ *
+ * A chat without a project has no site to speak of (docs/plan/61-chats-first.md, К18): `none`, or
+ * in a failure and a cancellation `elsewhere` once anyone acted in its browser. A result stays
+ * `none` then: any click counts, and the agent tells of its own actions itself.
  */
-export const feedSiteStates = ['unchanged', 'changed', 'restored', 'check'] as const
+export const feedSiteStates = [
+  'unchanged',
+  'changed',
+  'restored',
+  'check',
+  'none',
+  'elsewhere',
+] as const
 export type FeedSiteState = (typeof feedSiteStates)[number]
-const resultSites = ['unchanged', 'changed', 'check'] as const
-const endedSites = ['unchanged', 'restored', 'check'] as const
+const resultSites = ['unchanged', 'changed', 'check', 'none'] as const
+const endedSites = ['unchanged', 'restored', 'check', 'none', 'elsewhere'] as const
+type ResultSiteState = (typeof resultSites)[number]
+type EndedSiteState = (typeof endedSites)[number]
+
+/** What a row of a result says of the site: a task without one says nothing of it. */
+export const feedSiteOf = (
+  task: { siteId: string | null },
+  state: Exclude<ResultSiteState, 'none'>,
+): ResultSiteState => (task.siteId === null ? 'none' : state)
+
+/**
+ * What a failure or a cancellation says of the site, by whether the task left anything on it
+ * that nothing gives back (`taskHasProductionWrites`); without a site that can only be what was
+ * done in its browser, on sites of others.
+ */
+export const feedEndedSiteOf = (
+  task: { siteId: string | null },
+  writes: boolean,
+): EndedSiteState => {
+  if (task.siteId === null) return writes ? 'elsewhere' : 'none'
+  return writes ? 'check' : 'unchanged'
+}
 
 /** What became of the held credits; null — not known or not applicable. Trusted. */
 export const feedCreditsStates = ['returned', 'expired'] as const

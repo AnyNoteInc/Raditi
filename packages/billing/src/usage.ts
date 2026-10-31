@@ -137,8 +137,9 @@ async function tariffMeter(
 }
 
 interface SiteUsageRow {
-  siteId: string
-  name: string
+  /** null with `name` — the chats without a project, one line. */
+  siteId: string | null
+  name: string | null
   credits: number
 }
 
@@ -148,6 +149,8 @@ interface SiteUsageRow {
  * and counted in the period its stamp says. A row a reserve of an ended period paid —
  * `hold:<holdId>:charge` — takes the stamp of that reserve row, every other row its own. So a
  * task continued across a renewal may stand here in two periods, each with what it took of it.
+ * What chats without a project took is one more line, so that no charge drops out of the page
+ * (docs/plan/61-chats-first.md, §5.10); among equal sums it stands last.
  */
 function chargedBySite(
   db: HistoryReader,
@@ -159,7 +162,7 @@ function chargedBySite(
     FROM credit_ledger l
     JOIN billing_accounts a ON a.id = l.account_id
     JOIN tasks t ON t.id = l.task_id
-    JOIN sites s ON s.id = t.site_id
+    LEFT JOIN sites s ON s.id = t.site_id
     LEFT JOIN credit_holds h ON h.task_id = l.task_id
       AND l.idempotency_key = 'hold:' || h.id::text || ':charge'
     WHERE a.workspace_id = ${workspaceId}::uuid
@@ -181,8 +184,9 @@ interface HistoryRow extends ByAccount<'held'>, ByAccount<'paid'> {
   taskId: string
   title: string | null
   status: string
-  siteId: string
-  siteName: string
+  /** Both null — a chat without a project. */
+  siteId: string | null
+  siteName: string | null
 }
 
 const byAccount = (row: HistoryRow, prefix: 'held' | 'paid') => ({
@@ -264,7 +268,7 @@ async function historyPage(
       s.id AS "siteId", s.name AS "siteName"
     FROM entries e
     JOIN tasks t ON t.id = e.task_id
-    JOIN sites s ON s.id = t.site_id
+    LEFT JOIN sites s ON s.id = t.site_id
     CROSS JOIN LATERAL (
       SELECT
         COALESCE(-SUM(l.amount) FILTER (WHERE l.unit = ${tariff}::"BillingUnit"), 0)::int
@@ -290,7 +294,7 @@ async function historyPage(
       outcome: row.outcome,
       ...entryCredits(row),
       task: { id: row.taskId, title: row.title, status: row.status },
-      site: { id: row.siteId, name: row.siteName },
+      site: row.siteId === null ? null : { id: row.siteId, name: row.siteName },
     })),
     nextCursor: rows.length > limit ? (items.at(-1)?.id ?? null) : null,
   })

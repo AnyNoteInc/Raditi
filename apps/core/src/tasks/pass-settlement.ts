@@ -25,7 +25,9 @@ import {
 } from '@repo/db'
 import {
   candidateFactsSchema,
+  feedEndedSiteOf,
   feedLimits,
+  feedSiteOf,
   isDomainError,
   isTooLarge,
   Money,
@@ -282,7 +284,7 @@ export class PassSettlement {
             turn: task.turnNo > 0 ? task.turnNo : null,
             by: 'customer',
             authorId: cancel.authorId,
-            site: context.productionWrites ? 'check' : 'unchanged',
+            site: feedEndedSiteOf(context.task, context.productionWrites),
             credits: creditsOf(returned),
             ...objectsOf(context),
           },
@@ -412,7 +414,7 @@ export class PassSettlement {
               v: 1,
               turn,
               message: message!,
-              site: context.productionWrites ? 'changed' : 'unchanged',
+              site: feedSiteOf(context.task, context.productionWrites ? 'changed' : 'unchanged'),
               next: hasCandidate ? 'awaiting_approval' : 'awaiting_user',
               filesChanged: Math.min(filesChanged, 10_000),
               changeType: result.change_type,
@@ -526,7 +528,10 @@ export class PassSettlement {
             turn,
             message: message!,
             // Changed when the platform found a saved object there or anyone acted in the browser.
-            site: browser?.confirmed || context.productionWrites ? 'changed' : 'unchanged',
+            site: feedSiteOf(
+              context.task,
+              browser?.confirmed || context.productionWrites ? 'changed' : 'unchanged',
+            ),
             next: 'awaiting_user',
             filesChanged: 0,
             changeType: result.change_type,
@@ -598,7 +603,7 @@ export class PassSettlement {
     turn: number | null,
     code: FeedFailureCode,
   ): Promise<SettleAnswer> {
-    const site = context.productionWrites ? 'check' : 'unchanged'
+    const site = feedEndedSiteOf(context.task, context.productionWrites)
     const { standing } = context
     if (standing)
       return this.#transaction(async (tx, now) => {
@@ -698,7 +703,7 @@ export class PassSettlement {
             turn,
             by: 'customer',
             ...(context.cancel ? { authorId: context.cancel.authorId } : {}),
-            site: context.productionWrites ? 'check' : 'unchanged',
+            site: feedEndedSiteOf(context.task, context.productionWrites),
             credits: creditsOf(returned),
             ...objectsOf(context),
           },

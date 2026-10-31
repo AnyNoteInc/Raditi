@@ -95,6 +95,7 @@ export const taskModeLabel: Readonly<Record<TaskMode, string>> = Object.freeze({
 
 /** Nouns: the same words read as «in progress» and as «done». */
 export const feedStepLabel: Readonly<Record<FeedStep, string>> = Object.freeze({
+  code: 'Загружаем код проекта',
   work: 'Работа над задачей',
   save: 'Сохранение работы',
   site: 'Работа с содержимым сайта',
@@ -115,9 +116,14 @@ export const feedWaitingText: Readonly<Record<TaskWaitingReason, string>> = Obje
   site: 'На сайте сейчас идёт другая работа. Начнём, когда она закончится.',
 })
 
-/** The text of the live block of a `queued` task. */
-export const feedQueuedText = (waiting: TaskWaitingReason | null): string =>
-  waiting === null ? FEED_QUEUED_TEXT : feedWaitingText[waiting]
+/**
+ * The text of the live block of a `queued` task. A chat without a site waits for nobody's work
+ * on one: what its lease is held by is its own pass ending.
+ */
+export const feedQueuedText = (waiting: TaskWaitingReason | null, withSite = true): string =>
+  waiting === null || (waiting === 'site' && !withSite)
+    ? FEED_QUEUED_TEXT
+    : feedWaitingText[waiting]
 
 /**
  * The text under the heading of the live block. `deploying`, `verifying` and `rolled_back`
@@ -129,6 +135,9 @@ export const feedLiveText = Object.freeze({
     'Агент работает в своём изолированном облаке. Обычно это занимает до 20 минут. Страницу можно закрыть — результат появится в этом диалоге.',
   /** `held` of the head while the task is `running`: in place of the stages and the timer. */
   held: 'При работе с сайтом произошёл сбой, мы его разбираем. Страницу можно закрыть — результат появится в этом диалоге.',
+  /** The same of a chat without a site (docs/plan/61-chats-first.md, К18). */
+  heldNoSite:
+    'Произошёл сбой, мы его разбираем. Страницу можно закрыть — результат появится в этом чате.',
   /** A task in the browser while the agent works in it (docs/plan/57-browser-tasks.md). */
   browser:
     'Агент работает в браузере задачи — за ним можно наблюдать. Страницу можно закрыть — результат появится в этом диалоге.',
@@ -155,29 +164,39 @@ export const feedWorkedText = (seconds: number): string =>
 type EndedSite = FeedFailurePayload['site']
 type ResultSite = FeedResultPayload['site']
 
-/** The second sentence of a failure and of a cancellation, by the trusted `site`. */
-export const feedEndedSiteText: Readonly<Record<EndedSite, string>> = Object.freeze({
+/**
+ * The second sentence of a failure and of a cancellation, by the trusted `site`; null — a chat
+ * without a site, where nothing was done in its browser, has none.
+ */
+export const feedEndedSiteText: Readonly<Record<EndedSite, string | null>> = Object.freeze({
   unchanged: 'На сайте ничего не изменилось.',
   restored: 'Правки, которые агент успел внести, мы вернули — сайт такой же, как до задачи.',
   check:
     'Часть правок могла остаться на сайте. Откройте сайт и проверьте; если что-то не так — напишите нам.',
+  none: null,
+  elsewhere: 'То, что агент сделал на других сайтах, осталось.',
 })
 
 const SITE_MAY_HAVE_CHANGED =
   'Часть правок могла попасть на сайт. Откройте сайт и проверьте; если что-то не так — напишите нам.'
 
-/** The line about the site under «Готово»; null — the agent answered without changing it. */
+/**
+ * The line about the site under «Готово»; null — the agent answered without changing it, or the
+ * chat has no site.
+ */
 export const feedDoneSiteText: Readonly<Record<ResultSite, string | null>> = Object.freeze({
   unchanged: null,
   changed: 'Правка уже на сайте.',
   check: SITE_MAY_HAVE_CHANGED,
+  none: null,
 })
 
 /** The line about the site on the «Что изменится» card of `awaiting_approval`. */
-export const feedApprovalSiteText: Readonly<Record<ResultSite, string>> = Object.freeze({
+export const feedApprovalSiteText: Readonly<Record<ResultSite, string | null>> = Object.freeze({
   unchanged: 'На сайте пока ничего не изменилось.',
   changed: 'Правки текста уже на сайте. Изменения в файлах ждут вашего решения.',
   check: SITE_MAY_HAVE_CHANGED,
+  none: null,
 })
 
 /** Shown when `filesChanged` of a result is a number. */

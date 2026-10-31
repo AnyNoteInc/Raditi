@@ -1469,6 +1469,30 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
   })
 
   describe('task.cancel', () => {
+    // docs/plan/61-chats-first.md, К18; the row is written here until `task.create` takes one.
+    it('closes a waiting chat without a project with no word of a site', async () => {
+      const { owner, workspaceId } = await siteOwner()
+      const caller = callerOf(owner)
+      const task = await db.task.create({
+        data: {
+          workspaceId,
+          siteId: null,
+          needsRepository: false,
+          needsBrowser: false,
+          status: 'awaiting_user',
+          turnNo: 1,
+        },
+      })
+      taskIds.push(task.id)
+
+      await expect(
+        caller.task.cancel({ taskId: task.id, requestId: randomUUID() }),
+      ).resolves.toMatchObject({ state: 'cancelled', repeated: false })
+
+      const feed = await feedOf(task.id)
+      expect(feed.at(-1)?.payload).toMatchObject({ by: 'customer', site: 'none', credits: null })
+    })
+
     it('closes a dialog that waits: the reserve comes back and the preview is taken down', async () => {
       const { owner, site, workspaceId } = await siteOwner({ database: true })
       const caller = callerOf(owner)

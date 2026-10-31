@@ -190,10 +190,10 @@ test('a customer who paid for a tariff sees its full quota and an empty history'
   })
 
   await test.step('nothing is charged yet: one line by site and an empty history', async () => {
-    await expect(section(page, 'По сайтам')).toContainText(
+    await expect(section(page, 'По проектам')).toContainText(
       /В\sэтом периоде кредиты ещё не\sсписывались\./,
     )
-    await expect(section(page, 'По сайтам').getByRole('list')).toHaveCount(0)
+    await expect(section(page, 'По проектам').getByRole('list')).toHaveCount(0)
     const history = section(page, 'История списаний')
     await expect(history).toContainText(
       /Сколько кредитов ушло на\sкаждую задачу\. Списываем только за\sвыполненные задачи/,

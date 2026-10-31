@@ -1155,4 +1155,131 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       expect((await feed(task.taskId))[0]![1]).toMatchObject({ code: 'technical' })
     })
   })
+
+  describe('of a chat without a project (docs/plan/61-chats-first.md, К18)', () => {
+    /** A chat at work in its first turn, the gift set aside; `browser` — with a browser. */
+    async function chat({ browser = false, wrote = false } = {}) {
+      const { userId } = await fixtures.user()
+      const workspace = await db.$transaction((tx) =>
+        ensurePersonalWorkspaceWithGift(tx, { userId, appEnv: 'test' }),
+      )
+      const { taskId } = await fixtures.task(workspace.id, {
+        status: 'running',
+        turnNo: 1,
+        siteId: null,
+        needsRepository: false,
+        needsBrowser: browser,
+      })
+      await db.taskTurn.create({
+        data: { taskId, turnNo: 1, status: 'completed', driverId: sampleDriverId, image },
+      })
+      await insertFeedEvent(db, {
+        taskId,
+        row: {
+          type: 'feed.request',
+          payload: {
+            v: 1,
+            kind: 'first',
+            authorId: userId,
+            requestId: randomUUID(),
+            text: 'Предложите пять названий для пекарни',
+          },
+        },
+      })
+      await fixtures.reserve({
+        workspaceId: workspace.id,
+        taskId,
+        attempt: 1,
+        now: NOW,
+        expiresAt: new Date(NOW.getTime() + 3_600_000),
+      })
+      if (browser)
+        await db.browserSession.create({
+          data: {
+            taskId,
+            workspaceId: workspace.id,
+            siteId: null,
+            status: 'ready',
+            readyAt: new Date(),
+            // The database's clock checks it, not the clock of this file.
+            expiresAt: new Date(Date.now() + 3_600_000),
+            ...(wrote ? { wroteAt: new Date(), lastWroteAt: new Date() } : {}),
+          },
+        })
+      return { userId, workspaceId: workspace.id, taskId, turnNo: 1 }
+    }
+    const open = () =>
+      new PassSettlement({
+        db,
+        candidates: null,
+        browser: { close: vi.fn(async () => {}) },
+        logger: quiet,
+        now: () => NOW,
+      })
+    const answered = (): PassEnding => ({
+      kind: 'completed',
+      turn: 1,
+      result: result({ client_message: 'Вот пять вариантов.', files_changed: [] }),
+    })
+    const failed: PassEnding = { kind: 'failed', turn: 1, errorCode: 'TURN_EXEC_FAILED' }
+
+    it('answers without a word of a site or of files, and charges the pass', async () => {
+      const task = await chat()
+
+      expect(await open().settle(ref(task), answered())).toBe('moved')
+
+      expect(await status(task.taskId)).toBe('awaiting_user')
+      const [[type, row] = []] = await feed(task.taskId)
+      expect(type).toBe('feed.result')
+      expect(row).toMatchObject({ site: 'none', filesChanged: 0, next: 'awaiting_user' })
+      expect((await holds(task.taskId)).every((hold) => hold.status === 'captured')).toBe(true)
+    })
+
+    it('fails and cancels without a word of a site', async () => {
+      const failing = await chat()
+      const cancelling = await chat()
+      const waiting = await chat()
+      await db.task.update({ where: { id: waiting.taskId }, data: { status: 'awaiting_user' } })
+      await cancelPress(waiting)
+
+      await open().settle(ref(failing), failed)
+      await open().settle(ref(cancelling), { kind: 'cancelled', turn: 1 })
+      expect(await open().cancelWaiting(waiting.taskId)).toBe('moved')
+
+      expect((await feed(failing.taskId))[0]).toEqual([
+        'feed.failure',
+        {
+          v: 1,
+          turn: 1,
+          code: 'technical',
+          site: 'none',
+          credits: 'returned',
+          next: 'awaiting_user',
+        },
+      ])
+      for (const task of [cancelling, waiting])
+        expect((await feed(task.taskId))[0]).toEqual([
+          'feed.cancelled',
+          expect.objectContaining({ site: 'none', credits: 'returned' }),
+        ])
+    })
+
+    // `wrote_at` is set by any click, so only a failure and a cancellation speak of it.
+    it('names other sites once something was done in its browser, never in an answer', async () => {
+      const failing = await chat({ browser: true, wrote: true })
+      const cancelling = await chat({ browser: true, wrote: true })
+      const answering = await chat({ browser: true, wrote: true })
+      const untouched = await chat({ browser: true })
+
+      await open().settle(ref(failing), failed)
+      await open().settle(ref(cancelling), { kind: 'cancelled', turn: 1 })
+      await open().settle(ref(answering), answered())
+      await open().settle(ref(untouched), failed)
+
+      expect((await feed(failing.taskId))[0]![1]).toMatchObject({ site: 'elsewhere' })
+      expect((await feed(cancelling.taskId))[0]![1]).toMatchObject({ site: 'elsewhere' })
+      expect((await feed(answering.taskId))[0]![1]).toMatchObject({ site: 'none' })
+      expect((await feed(untouched.taskId))[0]![1]).toMatchObject({ site: 'none' })
+    })
+  })
 })

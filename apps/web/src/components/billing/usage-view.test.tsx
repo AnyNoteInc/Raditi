@@ -392,7 +392,7 @@ describe('the «Использование» page of a customer without a tariff
     // Still nothing of a tariff: no meter, no limits, no sites.
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Лимиты тарифа' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('region', { name: 'По сайтам' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'По проектам' })).not.toBeInTheDocument()
   })
 
   it('prints the year of every line: the history has no period, and the same day comes round again', async () => {
@@ -1061,9 +1061,9 @@ describe('the credits by site', () => {
   it('draws a bar for each site with its number beside it', async () => {
     showUsage()
 
-    const bySite = await section('По сайтам')
+    const bySite = await section('По проектам')
     expect(plain(bySite.textContent)).toContain('Кредиты, списанные за текущий период.')
-    const rows = within(within(bySite).getByRole('list', { name: 'По сайтам' })).getAllByRole(
+    const rows = within(within(bySite).getByRole('list', { name: 'По проектам' })).getAllByRole(
       'listitem',
     )
     expect(texts(rows)).toEqual(['Пекарня «Добро»21 кредит', 'Кофейня на Лесной13 кредитов'])
@@ -1076,12 +1076,27 @@ describe('the credits by site', () => {
     expect(Number.parseFloat(widths[1] ?? '')).toBeCloseTo((13 / 21) * 100, 5)
   })
 
+  // docs/plan/61-chats-first.md, §5.10: a charge of a chat without a project never drops out.
+  it('names what chats without a project took', async () => {
+    getUsage.mockResolvedValue(
+      usageOf({
+        tariff: tariffOf({
+          bySite: [{ siteId: null, name: null, credits: 9 }],
+        }),
+      }),
+    )
+    showUsage()
+
+    const bySite = await section('По проектам')
+    expect(texts(within(bySite).getAllByRole('listitem'))).toEqual(['Без проекта9 кредитов'])
+  })
+
   it('says in one line that nothing is charged yet', async () => {
     getUsage.mockResolvedValue(usageOf({ tariff: tariffOf({ bySite: [] }) }))
     showUsage()
 
-    const bySite = await section('По сайтам')
-    expect(plain(bySite.textContent)).toBe('По сайтамВ этом периоде кредиты ещё не списывались.')
+    const bySite = await section('По проектам')
+    expect(plain(bySite.textContent)).toBe('По проектамВ этом периоде кредиты ещё не списывались.')
     expect(within(bySite).queryByRole('list')).not.toBeInTheDocument()
   })
 })
@@ -1094,6 +1109,26 @@ describe('the history of charges', () => {
         texts(within(row).getAllByRole(row.querySelector('th') ? 'columnheader' : 'cell')),
       )
 
+  it('names a chat without a project', async () => {
+    getUsage.mockResolvedValue(
+      usageOf({
+        history: {
+          items: [
+            entry({
+              task: { id: ID(2999), title: 'Идеи для названия пекарни', status: 'awaiting_user' },
+              site: null,
+            }),
+          ],
+          nextCursor: null,
+        },
+      }),
+    )
+    showUsage()
+
+    const [, row] = rowsOf(await section('История списаний'))
+    expect(row).toEqual(['3 октября', 'Идеи для названия пекарни', 'Без проекта', '5 кредитов'])
+  })
+
   it('lists the tasks of the period with what each one cost', async () => {
     showUsage()
 
@@ -1102,7 +1137,7 @@ describe('the history of charges', () => {
       'Сколько кредитов ушло на каждую задачу. Списываем только за выполненные задачи; уточнения и «Изменить» считаются вместе с задачей. «Отменить» — бесплатно.',
     )
     expect(rowsOf(history)).toEqual([
-      ['Дата', 'Задача', 'Сайт', 'Списано'],
+      ['Дата', 'Задача', 'Проект', 'Списано'],
       [
         '4 октября',
         'Обновить цены в разделе «Торты на заказ»',

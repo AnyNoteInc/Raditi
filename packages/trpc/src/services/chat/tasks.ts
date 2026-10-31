@@ -19,6 +19,7 @@ import {
 import {
   assertTransition,
   conflict,
+  feedEndedSiteOf,
   isProduction,
   llmBackendIds,
   maxTaskAttempts,
@@ -764,7 +765,7 @@ export async function stopDialog(
         turn: task.turnNo >= 1 ? task.turnNo : null,
         by: 'customer',
         authorId: userId,
-        site: (await taskHasProductionWrites(tx, task.id)) ? 'check' : 'unchanged',
+        site: feedEndedSiteOf(task, await taskHasProductionWrites(tx, task.id)),
         credits: creditsAfterReturn(returned),
       },
     },

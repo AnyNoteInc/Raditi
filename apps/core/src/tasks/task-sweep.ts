@@ -13,6 +13,7 @@ import {
   AGENT_TURN_JOB,
   AGENT_TURN_QUEUE,
   agentTurnRetryJobId,
+  feedEndedSiteOf,
   isDomainError,
   requirementsOf,
   type FeedCreditsState,
@@ -413,7 +414,7 @@ export class TaskSweep {
         const writes = await taskHasProductionWrites(tx, row.id)
         const task = await tx.task.findUniqueOrThrow({
           where: { id: row.id },
-          select: { turnNo: true },
+          select: { turnNo: true, siteId: true },
         })
         // What a task in the browser had saved, as last read there (Б24); its session is
         // closed by the browser pass of this tick.
@@ -427,7 +428,7 @@ export class TaskSweep {
               v: 1,
               turn: task.turnNo > 0 ? task.turnNo : null,
               by: row.status === 'queued' ? 'queue_timeout' : 'no_answer',
-              site: writes ? 'check' : 'unchanged',
+              site: feedEndedSiteOf(task, writes),
               credits,
               ...(objects.length ? { objects } : {}),
             },

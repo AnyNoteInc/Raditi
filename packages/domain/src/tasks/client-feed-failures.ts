@@ -48,6 +48,21 @@ export const feedFailureText: Readonly<Record<FeedFailureCode, string>> = Object
 })
 
 /**
+ * The failures a chat without a project can come to whose words above name a site or files
+ * (docs/plan/61-chats-first.md, К18). `site_files` is of a repository, which such a chat has not.
+ */
+const feedFailureNoSiteText: Partial<Readonly<Record<FeedFailureCode, string>>> = Object.freeze({
+  secret_found:
+    'В работе агента нашлось что-то похожее на пароль или ключ, поэтому мы её не сохранили. Попробуйте описать задачу по-другому.',
+  site_held: 'Произошёл сбой, мы его разбираем. Новые запросы в этом чате пока недоступны.',
+  not_accepted: 'Задачи пока не принимаются. Напишите нам — расскажем, когда это изменится.',
+})
+
+/** The words of a failure, in a chat with a site or without one. */
+export const feedFailureTextOf = (code: FeedFailureCode, withSite: boolean): string =>
+  (withSite ? undefined : feedFailureNoSiteText[code]) ?? feedFailureText[code]
+
+/**
  * Whether the code alone allows «Попробовать ещё», as the feed design has it. Today a retry is
  * offered only to a dialog that kept its candidate, after a narrower set of codes and with the
  * site not left in doubt — the server decides that (`retryVerdict`, `canRetry` of the task head).

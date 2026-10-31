@@ -430,7 +430,7 @@ test('the credits of a tariff run out: «Лимиты закончились», 
       }),
     ).toBeVisible()
     // All 335 credits went to the one site; the last task took them from two accounts.
-    await expect(section(page, 'По сайтам').getByRole('listitem')).toHaveText([
+    await expect(section(page, 'По проектам').getByRole('listitem')).toHaveText([
       said(`Кофейня335 кредитов`),
     ])
     await expect(historyLines(page)).toHaveText([

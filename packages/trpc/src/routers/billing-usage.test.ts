@@ -859,6 +859,42 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
     expect(second.nextCursor).toBeNull()
   })
 
+  // docs/plan/61-chats-first.md, §5.10: a charge of a chat without a project never drops out.
+  it('shows what a chat without a project took', async () => {
+    const paying = await account()
+    await subscribe(paying, 'business')
+    const { caller } = paying
+    const bakery = await createdProject(caller.project.create(site('Пекарня «Добро»')))
+    const { workspaceId } = await db.site.findUniqueOrThrow({ where: { id: bakery.id } })
+    const task = await db.task.create({
+      data: {
+        workspaceId,
+        siteId: null,
+        needsRepository: false,
+        needsBrowser: false,
+        modelClass: 'standard',
+        status: 'awaiting_user',
+        summary: 'Идеи для названия пекарни',
+      },
+    })
+    await placeReserve(db, {
+      workspaceId,
+      taskId: task.id,
+      attempt: 1,
+      now: NOW,
+      expiresAt: new Date(NOW.getTime() + DAY_MS),
+    })
+    await db.$transaction((tx) => settleTaskCharge(tx, { taskId: task.id, credits: 7, now: NOW }))
+
+    const usage = await caller.billing.usage()
+
+    expect(usage.tariff?.bySite).toEqual([{ siteId: null, name: null, credits: 7 }])
+    expect(usage.history.items).toMatchObject([
+      { id: task.id, outcome: 'charged', credits: 7, site: null },
+    ])
+    expect((await caller.billing.usageHistory({})).items).toMatchObject([{ site: null }])
+  })
+
   it('does not show the usage of another user', async () => {
     const paying = await account()
     await subscribe(paying, 'start')
