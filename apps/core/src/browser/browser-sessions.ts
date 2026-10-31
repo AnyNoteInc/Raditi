@@ -15,6 +15,7 @@ import {
   browserTaskError,
   isBrowserSessionLive,
   isDomainError,
+  siteIdOf,
   type BrowserCloseReason,
   type BrowserSessionState,
   type BrowserSignIn,
@@ -121,7 +122,8 @@ export class BrowserSessions {
       // prompt of the turn (turn-planner), never through the worker.
       const task = await db.task.findUnique({ where: { id: taskId }, select: { siteId: true } })
       if (!task) throw browserTaskError('BROWSER_SESSION_UNAVAILABLE')
-      const signIn = await this.#signIn(task.siteId)
+      const siteId = siteIdOf(task)
+      const signIn = await this.#signIn(siteId)
       let retries = 0
       let replaced = false
       for (;;) {
@@ -135,7 +137,7 @@ export class BrowserSessions {
             {
               sessionId: session.id,
               taskId,
-              siteId: task.siteId,
+              siteId,
               takeControl: true,
               ...(signIn ? { signIn } : {}),
             },

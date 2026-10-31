@@ -5,6 +5,7 @@ import {
   isTerminalReleaseStatus,
   releaseOutcomeOf,
   retryCommandRefusal,
+  siteIdOf,
   terminalReleaseStatuses,
   undoDeadline,
   undoExpired,
@@ -113,7 +114,7 @@ const noChecks = (): Record<CandidateCheckStatus, number> => ({
  */
 export async function dialogFacts(
   db: Reader,
-  task: { id: string; workspaceId: string; siteId: string; status: TaskStatus },
+  task: { id: string; workspaceId: string; siteId: string | null; status: TaskStatus },
   userId: string,
   now: Date = new Date(),
 ): Promise<DialogFacts> {
@@ -224,7 +225,7 @@ const dialogRelease = (row: {
  */
 async function undoFacts(
   db: Reader,
-  task: { id: string; siteId: string },
+  task: { id: string; siteId: string | null },
   now: Date,
 ): Promise<{ dialog: DialogUndo; command: ChatCommandFacts['undo'] } | null> {
   const installed = await db.siteRelease.findFirst({
@@ -233,12 +234,14 @@ async function undoFacts(
     select: { id: true, version: true },
   })
   if (installed === null) return null
+  // Read on every read of a feed: only past `installed` is the site proven (a release has one).
+  const siteId = siteIdOf(task)
   const site = await db.site.findUniqueOrThrow({
-    where: { id: task.siteId },
+    where: { id: siteId },
     select: { status: true, installedReleaseId: true, installedAt: true },
   })
   const lease = await db.siteLease.findUnique({
-    where: { siteId: task.siteId },
+    where: { siteId },
     select: { heldForOperator: true },
   })
   const runRow = await db.siteRelease.findFirst({
@@ -252,7 +255,7 @@ async function undoFacts(
     })) > 0
   const releasing =
     (await db.siteRelease.count({
-      where: { siteId: task.siteId, status: { notIn: [...terminalReleaseStatuses] } },
+      where: { siteId, status: { notIn: [...terminalReleaseStatuses] } },
     })) > 0
   const installedNow = site.installedReleaseId === installed.id
   const installedAt = installedNow ? site.installedAt : null

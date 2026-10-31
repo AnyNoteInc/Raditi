@@ -12,7 +12,7 @@ import {
   upsertBrowserCheckpoint,
   type PrismaClient,
 } from '@repo/db'
-import { BROWSER_ONLY, REPOSITORY_ONLY } from '@repo/domain'
+import { BROWSER_ONLY, REPOSITORY_ONLY, siteIdOf } from '@repo/domain'
 import { llmBackends } from '@repo/llm-backends'
 import { getSiteAdapter } from '@repo/site-adapters'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
@@ -86,14 +86,14 @@ describe.skipIf(!databaseUrl)('the egress of a pass with PostgreSQL', () => {
     await db.siteEnvVar.createMany({
       data: [
         {
-          siteId: task.siteId,
+          siteId: siteIdOf(task),
           name: 'PAYMENT_KEY',
           hosts: ['pay.example.ru:443', 'api.example.ru:443'],
           ...consented,
         },
-        { siteId: task.siteId, name: 'HOOK_TOKEN', hosts: ['api.example.ru:443'], ...consented },
+        { siteId: siteIdOf(task), name: 'HOOK_TOKEN', hosts: ['api.example.ru:443'], ...consented },
         // The preview's alone: the agent never reaches its host.
-        { siteId: task.siteId, name: 'PREVIEW_ONLY', hosts: ['preview.example.ru:443'] },
+        { siteId: siteIdOf(task), name: 'PREVIEW_ONLY', hosts: ['preview.example.ru:443'] },
       ],
     })
     const read = await facts()
@@ -134,10 +134,10 @@ describe.skipIf(!databaseUrl)('the egress of a pass with PostgreSQL', () => {
   // docs/plan/57-browser-tasks.md, Б2, Б8, Б20, Б26.
   it('reads of a task in the browser its site, its notes, its files and the stack’s guide', async () => {
     const { task, workspaceId, userId, facts } = await dialog({ browser: true })
-    await db.site.update({ where: { id: task.siteId }, data: { agentNotes: 'Вход по /login' } })
+    await db.site.update({ where: { id: siteIdOf(task) }, data: { agentNotes: 'Вход по /login' } })
     const file = (await createAttachment(db, {
       workspaceId,
-      siteId: task.siteId,
+      siteId: siteIdOf(task),
       uploadedById: userId,
       fileName: 'news.pdf',
       contentType: 'application/pdf',
@@ -147,7 +147,7 @@ describe.skipIf(!databaseUrl)('the egress of a pass with PostgreSQL', () => {
     // A file uploaded and never sent is not the task's.
     await createAttachment(db, {
       workspaceId,
-      siteId: task.siteId,
+      siteId: siteIdOf(task),
       uploadedById: userId,
       fileName: 'unsent.png',
       contentType: 'image/png',
@@ -159,13 +159,13 @@ describe.skipIf(!databaseUrl)('the egress of a pass with PostgreSQL', () => {
         taskId: task.id,
         userId,
         workspaceId,
-        siteId: task.siteId,
+        siteId: siteIdOf(task),
       }),
     ).toBe(true)
 
     // What the task saved in an earlier session (Б22): a later pass tells the agent of it.
     const session = await openBrowserSession(db, { taskId: task.id })
-    const siteUrl = (await db.site.findUniqueOrThrow({ where: { id: task.siteId } })).url
+    const siteUrl = (await db.site.findUniqueOrThrow({ where: { id: siteIdOf(task) } })).url
     const editUrl = (id: string) =>
       new URL(`/wp-admin/post.php?post=${id}&action=edit`, siteUrl).href
     const checkpoint = (objectId: string, state: 'seen' | 'unverified' | 'verified') =>

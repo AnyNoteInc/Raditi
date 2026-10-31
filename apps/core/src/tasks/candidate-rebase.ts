@@ -13,8 +13,8 @@ import {
 } from '@repo/db'
 import {
   AGENT_TURN_QUEUE,
-  candidateFactsSchema,
   CANDIDATE_REBASE_JOB,
+  candidateFactsSchema,
   candidateRebaseDedupeKey,
   DomainError,
   isDomainError,
@@ -22,6 +22,7 @@ import {
   leaseLost,
   taskHoldExpiry,
   terminalTaskStatuses,
+  withSite,
   type CandidateRebaseJob,
   type FeedUpdateOutcome,
   type JobQueue,
@@ -183,8 +184,9 @@ export class CandidateRebase {
           : null,
       )
 
+    const sited = withSite(task)
     const lease = await this.deps.leases.acquire({
-      siteId: task.siteId,
+      siteId: sited.siteId,
       taskId: task.id,
       operation: 'turn',
       ttlMs: REBASE_LEASE_MS,
@@ -194,7 +196,7 @@ export class CandidateRebase {
       return this.#answer(job, 'busy')
     }
     try {
-      return await this.#rebase(job, task, standing, lease, git, candidates)
+      return await this.#rebase(job, sited, standing, lease, git, candidates)
     } finally {
       await this.deps.leases.release(lease).catch(() => {
         this.#logger.warn(`candidate_rebase_release_failed task=${job.taskId}`)

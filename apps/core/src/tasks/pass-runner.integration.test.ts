@@ -17,6 +17,7 @@ import {
   BROWSER_ONLY,
   browserTaskError,
   siteBusy,
+  siteIdOf,
   toTurnPlan,
   type AgentDriver,
   type SnapshotManifest,
@@ -125,13 +126,13 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
     if (browser)
       await db.site.update({
-        where: { id: task.siteId },
+        where: { id: siteIdOf(task) },
         data: { agentNotes: 'Вход по адресу /login' },
       })
     else
       await db.gitRepository.create({
         data: {
-          siteId: task.siteId,
+          siteId: siteIdOf(task),
           provider: 'gitea',
           owner: 'sites-r3-test',
           name: `site-${task.siteId}`,
@@ -827,7 +828,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         // The store that opens the turn under the site lease admits what the planner built:
         // both read where the platform last left the task branch the same way.
         const fence = await new PostgresSiteLeaseStore(db).acquire({
-          siteId: dialog.siteId,
+          siteId: siteIdOf(dialog),
           taskId: dialog.taskId,
           operation: 'turn',
           ttlMs: 60_000,
@@ -846,7 +847,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       try {
         await passes.run(dialog.job)
       } finally {
-        await db.siteLease.deleteMany({ where: { siteId: dialog.siteId } })
+        await db.siteLease.deleteMany({ where: { siteId: siteIdOf(dialog) } })
       }
 
       expect(planned).toMatchObject({
@@ -864,7 +865,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         await db.turnAssignment.create({
           data: {
             taskId: dialog.taskId,
-            siteId: dialog.siteId,
+            siteId: siteIdOf(dialog),
             sessionId: dialog.taskId,
             turnNo: 1,
             executor: 'local',

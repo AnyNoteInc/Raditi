@@ -397,21 +397,22 @@ export const projectRouter = router({
         where: accessibleSite(ctx.user.id, input.id),
         select: {
           ...projectSelect,
-          lease: {
-            select: {
-              operation: true,
-              expiresAt: true,
-              heldForOperator: true,
-              inflightMcpCallId: true,
-            },
-          },
           ...capabilitySelect,
           provisioningStages: { ...codeImportOnly, select: { status: true } },
           initialVersion: { select: { tag: true, commitSha: true, importedAt: true } },
         },
       })
       if (!site) throw siteNotFound()
-      const { lease, provisioningStages, initialVersion, gitRepositories, ...row } = site
+      const lease = await ctx.prisma.siteLease.findUnique({
+        where: { siteId: site.id },
+        select: {
+          operation: true,
+          expiresAt: true,
+          heldForOperator: true,
+          inflightMcpCallId: true,
+        },
+      })
+      const { provisioningStages, initialVersion, gitRepositories, ...row } = site
       const setup = siteSetupState(provisioningStages[0])
       return {
         ...withHost(row),

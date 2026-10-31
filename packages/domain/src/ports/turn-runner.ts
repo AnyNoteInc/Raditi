@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { DomainError, isDomainError, isTooLarge } from '../errors.ts'
+import { conflict, DomainError, isDomainError, isTooLarge } from '../errors.ts'
 import {
   publicationShaSchema,
   type PublicationMetadata,
@@ -16,6 +16,29 @@ import { execCursorSchema } from './sandbox-provider.ts'
 
 export const siteLeaseOperations = ['turn', 'deploy', 'revert'] as const
 export type SiteLeaseOperation = (typeof siteLeaseOperations)[number]
+
+/**
+ * The row of `site_leases` the turns of a task are fenced by: its site, or the task itself. It is
+ * what `site_id` holds in `site_leases`, `turn_assignments`, `SiteLeaseFence` and the labels of a
+ * turn; the SQL form is `COALESCE(t.site_id, t.id)` (docs/plan/61-chats-first.md, К14).
+ */
+export const leaseScopeOf = (task: { id: string; siteId: string | null }): string =>
+  task.siteId ?? task.id
+
+/** The site of a task on a path only a task with a site reaches; CONFLICT otherwise. */
+export function siteIdOf(task: { siteId: string | null }): string {
+  if (task.siteId === null) throw conflict('The task has no site')
+  return task.siteId
+}
+
+/** A task read with its site, on such a path: both are there; CONFLICT otherwise. */
+export function withSite<T extends { siteId: string | null; site: unknown }>(
+  task: T,
+): T & { siteId: string; site: NonNullable<T['site']> } {
+  const { site } = task
+  if (site === null || site === undefined) throw conflict('The task has no site')
+  return { ...task, siteId: siteIdOf(task), site }
+}
 
 /** A fenced publication may spend 60s in a native command after core dies; retain 30s cleanup margin. */
 export const TURN_PUBLICATION_GRACE_MS = 90_000

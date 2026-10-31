@@ -7,6 +7,7 @@ import {
   type PrismaClient,
 } from '@repo/db'
 import type { BrowserSessionState } from '@repo/domain'
+import { siteIdOf } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { BROWSER_ENSURE_GRACE_MS, BrowserSessions } from './browser-sessions.ts'
@@ -45,7 +46,7 @@ describe.skipIf(!enabled)('the browsers of tasks with PostgreSQL', () => {
       needsBrowser: true,
     })
     const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
-    await db.site.update({ where: { id: task.siteId }, data: { agentNotes: 'Вход по /login' } })
+    await db.site.update({ where: { id: siteIdOf(task) }, data: { agentNotes: 'Вход по /login' } })
     return task
   }
 

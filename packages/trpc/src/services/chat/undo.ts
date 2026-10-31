@@ -15,13 +15,14 @@ import {
   formatVersion,
   maxVersion,
   nextVersion,
+  siteIdOf,
+  UNDO_PLAN_TTL_MS,
   undoConfirmTokenClaimsSchema,
   undoConfirmTokenMaterial,
   undoFilesSummarySchema,
   undoKeyMaterial,
   undoPlanItemSchema,
   undoRecordCounts,
-  UNDO_PLAN_TTL_MS,
   ZERO_VERSION,
   type DbContentField,
   type ReleaseStatus,
@@ -150,7 +151,7 @@ export async function prepareUndo(
   const plan = await db.$transaction((tx) =>
     requestUndoPlan(tx, {
       releaseId: release.id,
-      siteId: task.siteId,
+      siteId: siteIdOf(task),
       installedSha: release.approvedSha,
       userId: input.userId,
     }),
@@ -271,7 +272,7 @@ export async function readUndoPlan(
 ): Promise<UndoPlanView> {
   const { task, undo, release } = await undoable(db, input)
   const plan = await db.releaseUndoPlan.findFirst({
-    where: { id: input.planId, releaseId: release.id, siteId: task.siteId },
+    where: { id: input.planId, releaseId: release.id, siteId: siteIdOf(task) },
   })
   if (plan === null) throw taskNotFound()
   if (plan.status === 'pending') return { state: 'pending' }
@@ -288,7 +289,7 @@ export async function readUndoPlan(
     return { state: 'expired' }
   const items = z.array(undoPlanItemSchema).parse(plan.items)
   const files = undoFilesSummarySchema.parse(plan.files)
-  const version = await undoVersionOf(db, task.siteId)
+  const version = await undoVersionOf(db, siteIdOf(task))
   const expiresAt = Math.floor(input.now.getTime() / 1000) + CONFIRM_TOKEN_TTL_SECONDS
   return {
     state: 'ready',
@@ -296,7 +297,7 @@ export async function readUndoPlan(
     releaseId: release.id,
     undoneVersion: release.version,
     returnsTo: await undoReturnsTo(db, {
-      siteId: task.siteId,
+      siteId: siteIdOf(task),
       installedBeforeSha: release.installedBeforeSha,
     }),
     version,

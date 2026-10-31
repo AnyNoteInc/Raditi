@@ -16,6 +16,7 @@ import {
 } from '@repo/db'
 import {
   BROWSER_ONLY,
+  siteIdOf,
   toTurnPlan,
   type AgentDriver,
   type AgentEvent,
@@ -168,7 +169,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     await db.turnAssignment.create({
       data: {
         taskId,
-        siteId: task.siteId,
+        siteId: siteIdOf(task),
         sessionId: taskId,
         turnNo: 1,
         executor: 'local',
@@ -223,7 +224,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
       await db.turnAssignment.create({
         data: {
           taskId,
-          siteId: task.siteId,
+          siteId: siteIdOf(task),
           sessionId: taskId,
           turnNo: 1,
           executor: 'local',
@@ -264,7 +265,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     await db.turnAssignment.create({
       data: {
         taskId,
-        siteId: task.siteId,
+        siteId: siteIdOf(task),
         sessionId: taskId,
         turnNo: 1,
         executor: 'local',
@@ -343,7 +344,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     )
     await db.siteRelease.create({
       data: {
-        siteId: releasing.task.siteId,
+        siteId: siteIdOf(releasing.task),
         taskId: releasing.taskId,
         candidateId: recorded.id,
         candidateRevision: 1,
@@ -433,10 +434,10 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     const lives = new Date(Date.now() + 48 * 3_600_000)
     await db.previewEnvironment.create({
       data: {
-        siteId: task.siteId,
+        siteId: siteIdOf(task),
         taskId,
         status: 'ready',
-        hostname: `site-${task.site.alias}-chat-${task.alias}.localhost`,
+        hostname: `site-${task.site?.alias}-chat-${task.alias}.localhost`,
         expiresAt: lives,
       },
     })
@@ -548,14 +549,14 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     } as unknown as AgentDriver
 
     /** The plan a turn without a repository was assigned with. */
-    const planOf = (task: { id: string; siteId: string; workspaceId: string }) =>
+    const planOf = (task: { id: string; siteId: string | null; workspaceId: string }) =>
       toTurnPlan(
         {
           sandbox: {
             image,
             labels: {
               workspaceId: task.workspaceId,
-              siteId: task.siteId,
+              siteId: siteIdOf(task),
               taskId: task.id,
               sessionId: task.id,
               turn: 1,
@@ -590,7 +591,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
       await db.turnAssignment.create({
         data: {
           taskId,
-          siteId: task.siteId,
+          siteId: siteIdOf(task),
           sessionId: taskId,
           turnNo: 1,
           executor: 'local',
@@ -750,7 +751,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     const file = async (ready: boolean) => {
       const created = (await createAttachment(db, {
         workspaceId: task.workspaceId,
-        siteId: task.siteId,
+        siteId: siteIdOf(task),
         uploadedById: userId,
         fileName: 'news.pdf',
         contentType: 'application/pdf',
@@ -772,7 +773,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
       await file(true),
       await file(true),
     ]
-    const binding = { taskId, userId, workspaceId: task.workspaceId, siteId: task.siteId }
+    const binding = { taskId, userId, workspaceId: task.workspaceId, siteId: siteIdOf(task) }
     expect(await bindAttachments(db, { ...binding, ids: [sent.id] })).toBe(true)
     await db.$executeRaw`UPDATE attachments SET expires_at = clock_timestamp() - interval '2 hours'
       WHERE id = ANY(${[uploading.id, ready.id, sent.id]}::uuid[])`

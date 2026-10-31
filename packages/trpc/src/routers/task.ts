@@ -9,8 +9,8 @@ import {
   reasoningEffortSchema,
   releaseOutcomes,
   releaseStatuses,
+  siteTaskRequirementsSchema,
   taskModes,
-  taskRequirementsSchema,
   taskStatuses,
   type FeedItem,
 } from '@repo/domain'
@@ -148,7 +148,7 @@ export const taskRouter = router({
         siteId: z.uuid(),
         taskId: browserId,
         text: words,
-        requirements: taskRequirementsSchema.optional(),
+        requirements: siteTaskRequirementsSchema.optional(),
         attachments: attachmentIdsSchema.optional(),
         /** How hard the model thinks: `low`, `high` (the default) or `max`. */
         effort: reasoningEffortSchema.optional(),

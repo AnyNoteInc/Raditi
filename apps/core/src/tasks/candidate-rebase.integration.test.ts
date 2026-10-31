@@ -10,7 +10,7 @@ import {
   type CandidateRecordInput,
   type PrismaClient,
 } from '@repo/db'
-import { DomainError, type CandidateFacts } from '@repo/domain'
+import { DomainError, siteIdOf, type CandidateFacts } from '@repo/domain'
 import { getSiteAdapter } from '@repo/site-adapters'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
@@ -115,7 +115,7 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
     })
     await db.gitRepository.create({
       data: {
-        siteId: task.siteId,
+        siteId: siteIdOf(task),
         provider: 'gitea',
         owner: 'sites-r3-rebase',
         name: `site-${task.siteId}`,
@@ -275,7 +275,7 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
     // The new revision is told by its own card.
     expect(await told(dialog.taskId)).toEqual([])
     // The site is free again.
-    expect((await leases.inspect(dialog.siteId))?.taskId).toBeNull()
+    expect((await leases.inspect(siteIdOf(dialog)))?.taskId).toBeNull()
     // A repeat of the command (a pass that waited put it again) finds it done and keeps its answer.
     expect(await setup({ branch: REBASED }).rebase.run(job)).toBe('nothing')
     expect(await outcomes(dialog.taskId)).toEqual(['rebased'])
@@ -334,7 +334,7 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
     expect(await outcomes(dialog.taskId)).toEqual(['conflict'])
     // The client sees it: the update did not carry, and why.
     expect(await told(dialog.taskId)).toEqual([{ v: 1, outcome: 'conflict', conflicts: 1 }])
-    expect((await leases.inspect(dialog.siteId))?.taskId).toBeNull()
+    expect((await leases.inspect(siteIdOf(dialog)))?.taskId).toBeNull()
   })
 
   it('refuses an update that would change a path the rules of the workspace refuse', async () => {
@@ -362,7 +362,7 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
     })
     expect(
       await leases.acquire({
-        siteId: dialog.siteId,
+        siteId: siteIdOf(dialog),
         taskId: other.id,
         operation: 'turn',
         ttlMs: 60_000,

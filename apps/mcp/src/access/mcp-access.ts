@@ -5,7 +5,7 @@ import {
   DomainError,
   previewStatuses,
   siteStacks,
-  taskRequirementsSchema,
+  siteTaskRequirementsSchema,
   terminalTaskStatuses,
 } from '@repo/domain'
 import { z } from 'zod'
@@ -60,7 +60,7 @@ export const mcpAccessSchema = z.strictObject({
    * tasks.md, Б2): the `web` tools go to a task that needs a browser. Absent — a scope made
    * before the field, which is a repository task (`requirementsOf`).
    */
-  requirements: taskRequirementsSchema.optional(),
+  requirements: siteTaskRequirementsSchema.optional(),
 })
 export type McpAccess = z.infer<typeof mcpAccessSchema>
 

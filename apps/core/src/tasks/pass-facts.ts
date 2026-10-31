@@ -17,6 +17,7 @@ import {
   readFeedRow,
   siteWorkspaceRules,
   turnSkillsOf,
+  withSite,
   type LlmBackend,
   type PreviewAddress,
   type SiteAdapter,
@@ -114,7 +115,7 @@ export async function readPassFacts(
   input: PassFactsInput,
 ): Promise<PassFacts | null> {
   const { db } = deps
-  const task = await db.task.findUnique({
+  const found = await db.task.findUnique({
     where: { id: input.taskId },
     select: {
       id: true,
@@ -135,7 +136,8 @@ export async function readPassFacts(
       },
     },
   })
-  if (!task) return null
+  if (!found) return null
+  const task = withSite(found)
   const requirements = { repository: task.needsRepository, browser: task.needsBrowser }
   const rows = await db.taskEvent.findMany({
     where: { taskId: task.id, type: 'feed.request' },

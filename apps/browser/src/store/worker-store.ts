@@ -1,3 +1,4 @@
+import { siteIdOf } from '@repo/domain'
 import {
   browserViewerAllowed,
   clearBrowserHelp,
@@ -130,7 +131,7 @@ export class PostgresBrowserWorkerStore implements BrowserWorkerStore {
         lastActivityAt: true,
       },
     })
-    return row
+    return row && { ...row, siteId: siteIdOf(row) }
   }
 
   site(siteId: string): Promise<StoredSite | null> {
@@ -198,7 +199,7 @@ export class PostgresBrowserWorkerStore implements BrowserWorkerStore {
     return {
       id: row.id,
       workspaceId: row.workspaceId,
-      siteId: row.siteId,
+      siteId: siteIdOf(row),
       s3Key: row.s3Key,
       fileName: row.fileName,
       contentType: row.contentType,

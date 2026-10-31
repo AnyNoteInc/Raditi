@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest'
 
 import { isDomainError } from '../errors.ts'
 import type { PublicationSource } from '../git/publication.ts'
-import { BROWSER_ONLY, REPOSITORY_ONLY, requirementsOf } from '../tasks/task-requirements.ts'
+import {
+  BROWSER_ONLY,
+  PLAIN_CHAT,
+  REPOSITORY_ONLY,
+  requirementsOf,
+} from '../tasks/task-requirements.ts'
 import {
   assertTurnInbox,
   toTurnPlan,
@@ -312,6 +317,17 @@ describe('turn plan', () => {
     ).toEqual(browser)
   })
 
+  it('keeps a turn that needs nothing: a chat without a project, no workspace', () => {
+    const { workspace: _workspace, ...rest } = request()
+    const chat: TurnRequest = { ...rest, requirements: PLAIN_CHAT }
+    const plan = toTurnPlan(withoutTurnCredentials(chat), 'opencode')
+    expect(plan).not.toHaveProperty('workspace')
+    expect(plan.requirements).toEqual(PLAIN_CHAT)
+    expect(requirementsOf(turnPlanSchema.parse(JSON.parse(JSON.stringify(plan))))).toEqual(
+      PLAIN_CHAT,
+    )
+  })
+
   it.each([
     ['a workspace without a repository', { requirements: BROWSER_ONLY }, ['workspace']],
     [
@@ -336,9 +352,9 @@ describe('turn plan', () => {
       ['rebased'],
     ],
     [
-      'no need at all',
-      { requirements: { repository: false, browser: false }, workspace: undefined },
-      ['requirements'],
+      'a workspace in a turn that needs nothing',
+      { requirements: { repository: false, browser: false } },
+      ['workspace'],
     ],
     ['an unknown need', { requirements: { ...REPOSITORY_ONLY, database: true } }, ['requirements']],
   ])('refuses %s', (_label, change, path) => {

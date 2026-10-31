@@ -700,7 +700,8 @@ async function ownedTask(tx: Transaction, ref: TurnCredentialRef): Promise<Owned
 async function agentVariables(tx: Transaction, task: OwnedTask): Promise<SiteEnvVarVersion[]> {
   // A task that works in the browser drives the live site through the `web` tools, and no
   // candidate or release refuses a value written there: its commands get no client variable
-  // (plan 57, Б20; rule 2). A task without a repository is always one (`tasks_requirements_check`).
+  // (plan 57, Б20; rule 2). A task of a site without a repository is always one
+  // (`tasks_requirements_check`).
   if (task.needsBrowser) return []
   const rows = await tx.siteEnvVar.findMany({
     where: { siteId: task.siteId, toAgent: true, agentConsentAt: { not: null } },

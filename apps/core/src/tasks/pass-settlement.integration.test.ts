@@ -15,6 +15,7 @@ import {
   type PrismaClient,
 } from '@repo/db'
 import type { BrowserVerifiedObject, CandidateFacts, TurnResult } from '@repo/domain'
+import { siteIdOf } from '@repo/domain'
 import { getSiteAdapter } from '@repo/site-adapters'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
@@ -618,7 +619,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
       await db.gitRepository.create({
         data: {
-          siteId: task.siteId,
+          siteId: siteIdOf(task),
           provider: 'gitea',
           owner: 'sites-r3-settle',
           name: `site-${task.siteId}`,

@@ -1714,14 +1714,14 @@ describe('the requirements of a task in its head', () => {
     })
   })
 
-  it('carries a browser task, and both together, but never neither', () => {
+  it('carries every requirements, and refuses a head that does not name both', () => {
     const parse = (requirements: unknown) => feedTaskHeadSchema.safeParse({ ...head, requirements })
     expect(parse({ repository: false, browser: true }).data?.requirements).toEqual({
       repository: false,
       browser: true,
     })
     expect(parse({ repository: true, browser: true }).success).toBe(true)
-    expect(parse({ repository: false, browser: false }).success).toBe(false)
+    expect(parse({ repository: false, browser: false }).success).toBe(true)
     expect(parse({ repository: true }).success).toBe(false)
     expect(parse({ repository: true, browser: false, preview: true }).success).toBe(false)
   })

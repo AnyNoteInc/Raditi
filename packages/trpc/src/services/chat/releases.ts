@@ -16,6 +16,7 @@ import {
   parseVersion,
   releaseKeyMaterial,
   releaseOutcomeOf,
+  siteIdOf,
   taskHoldExpiry,
   versionBumps,
   type CandidateRefusal,
@@ -205,12 +206,13 @@ export async function prepareRelease(
   if (refused !== undefined) throw commandUnavailable('release', refusalOfCandidate[refused])
   assertDatabaseReleasable(candidate)
 
+  const siteId = siteIdOf(task)
   const site = await db.site.findUniqueOrThrow({
-    where: { id: task.siteId },
+    where: { id: siteId },
     select: { installedVersion: true },
   })
   const proposal = await versionProposal(db, {
-    siteId: task.siteId,
+    siteId,
     baseVersion: candidate.baseVersion,
     facts: candidate.facts,
   })

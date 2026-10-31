@@ -202,7 +202,11 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
       await db.taskAccountBinding.deleteMany({ where: tasks })
       await db.turnAssignment.deleteMany({ where: { task: { workspaceId: row.workspaceId } } })
       await db.taskEvent.deleteMany({ where: tasks })
-      await db.siteLease.deleteMany({ where: { site: { workspaceId: row.workspaceId } } })
+      const sites = await db.site.findMany({
+        where: { workspaceId: row.workspaceId },
+        select: { id: true },
+      })
+      await db.siteLease.deleteMany({ where: { siteId: { in: sites.map(({ id }) => id) } } })
       await db.task.deleteMany({ where: { workspaceId: row.workspaceId } })
       await db.site.deleteMany({ where: { workspaceId: row.workspaceId } })
       await db.workspace.delete({ where: { id: row.workspaceId } })

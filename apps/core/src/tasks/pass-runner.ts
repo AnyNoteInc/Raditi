@@ -8,6 +8,7 @@ import {
   CANDIDATE_REBASE_JOB,
   candidateRebaseDedupeKey,
   isDomainError,
+  leaseScopeOf,
   readFeedRow,
   turnEvidenceSchema,
   type AgentTurnCancelJob,
@@ -304,7 +305,8 @@ export class PassRunner {
         where: { id: job.taskId },
         select: { siteId: true },
       })
-      if (!task) return
+      // Nobody waits for a task without a site: its lease is its own.
+      if (!task?.siteId) return
       await enqueueSiteWaitingPasses(this.deps.db, {
         siteId: task.siteId,
         tag: `turn-${job.taskId}-${turnNo}`,
@@ -478,7 +480,11 @@ export class PassRunner {
       where: { id: ref.taskId },
       select: { siteId: true },
     })
-    const lease = task ? await this.deps.leases.inspect(task.siteId).catch(() => null) : null
+    const lease = task
+      ? await this.deps.leases
+          .inspect(leaseScopeOf({ id: ref.taskId, siteId: task.siteId }))
+          .catch(() => null)
+      : null
     if (!lease?.expiresAt) return { delayMs: RETRY_DELAY_MS.site }
     const left = lease.expiresAt.getTime() - lease.serverNow.getTime()
     // A release barrier outlives its lease (an attempt whose run still goes, a release held for

@@ -127,7 +127,11 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
     })
     await db.siteRelease.deleteMany({ where: of })
     await db.turnAssignment.deleteMany({ where: of })
-    await db.siteLease.deleteMany({ where: { site: { workspaceId: { in: ids } } } })
+    const sites = await db.site.findMany({
+      where: { workspaceId: { in: ids } },
+      select: { id: true },
+    })
+    await db.siteLease.deleteMany({ where: { siteId: { in: sites.map(({ id }) => id) } } })
     await db.task.deleteMany({ where: { workspaceId: { in: ids } } })
     await db.gitRepository.deleteMany({ where: { site: { workspaceId: { in: ids } } } })
     await db.credentialRef.deleteMany({ where: { site: { workspaceId: { in: ids } } } })

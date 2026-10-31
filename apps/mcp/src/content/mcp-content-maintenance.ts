@@ -2,6 +2,9 @@ import { BROWSER_SCREENSHOT_EVENT, type Prisma, type PrismaClient } from '@repo/
 import {
   badRequest,
   browserScreenshotKey,
+  leaseScopeOf,
+  siteIdOf,
+  withSite,
   type ObjectStorage,
   type SecretStore,
 } from '@repo/domain'
@@ -175,7 +178,7 @@ export class McpContentMaintenance {
               await this.resolve(this.#site(task))
             ).forgetOperation({
               callId: call.id,
-              siteId: task.siteId,
+              siteId: siteIdOf(task),
               epoch: call.leaseEpoch!,
               requestHash: call.requestHash!,
               objectRef: call.objectRef!,
@@ -231,7 +234,9 @@ export class McpContentMaintenance {
         if (!task) continue
         for (const key of await this.#taskArtifacts(task.id))
           await this.storage.delete('artifacts', key)
-        await this.secrets.kvDestroyAll(contentMaskPath({ siteId: task.siteId, taskId: task.id }))
+        await this.secrets.kvDestroyAll(
+          contentMaskPath({ siteId: leaseScopeOf(task), taskId: task.id }),
+        )
         await this.db.$transaction(async (tx) => {
           // The description of a plan holds its values in clear (docs/plan/53, «Операции БД и
           // миграции»): it goes with them.
@@ -263,7 +268,7 @@ export class McpContentMaintenance {
         Array<{ held: boolean; writer: string | null; holder: string | null }>
       >`
         SELECT held_for_operator AS held, inflight_mcp_call_id AS writer, holder_task_id AS holder
-        FROM site_leases WHERE site_id = ${initial.siteId}::uuid FOR UPDATE`
+        FROM site_leases WHERE site_id = ${leaseScopeOf(initial)}::uuid FOR UPDATE`
       // Snapshots outlive the task by the undo window, whatever their capture expiry.
       const clocks = await tx.$queryRaw<Array<{ now: Date }>>`
         SELECT clock_timestamp() AS now FROM snapshots s JOIN tasks t ON t.id = s.task_id
@@ -340,7 +345,7 @@ export class McpContentMaintenance {
         Array<{ held: boolean; writer: string | null; holder: string | null }>
       >`
         SELECT held_for_operator AS held, inflight_mcp_call_id AS writer, holder_task_id AS holder
-        FROM site_leases WHERE site_id = ${initial.siteId}::uuid FOR UPDATE`
+        FROM site_leases WHERE site_id = ${leaseScopeOf(initial)}::uuid FOR UPDATE`
       const clocks = await tx.$queryRaw<Array<{ now: Date }>>`
         SELECT clock_timestamp() AS now FROM tasks WHERE id = ${id}::uuid
           AND content_masks_purged_at IS NULL AND ${contentExpiredSql('tasks')} FOR UPDATE`
@@ -377,11 +382,12 @@ export class McpContentMaintenance {
 
   /** What it takes to reach the site of a task; nothing of a turn or a key. */
   #site(task: TaskSite): McpSiteScope {
+    const { siteId, site } = withSite(task)
     return mcpSiteScopeSchema.parse({
       workspaceId: task.workspaceId,
-      siteId: task.siteId,
-      stack: task.site.stack,
-      url: task.site.url,
+      siteId,
+      stack: site.stack,
+      url: site.url,
     })
   }
 

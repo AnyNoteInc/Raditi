@@ -31,6 +31,7 @@ import {
   Money,
   readFeedRow,
   taskHoldExpiry,
+  withSite,
   type FeedCreditsState,
   type FeedFailureCode,
   type FeedQuestionPayload,
@@ -949,7 +950,7 @@ export class PassSettlement {
       },
     })
     if (!task) return null
-    const { needsRepository, needsBrowser, ...settled } = task
+    const { needsRepository, needsBrowser, ...settled } = withSite(task)
     const [cancel, flagged, writes, standing, browser] = await Promise.all([
       pressedCancel(db, taskId),
       db.taskEvent.count({ where: { taskId, type: 'llm.policy_flagged' } }),

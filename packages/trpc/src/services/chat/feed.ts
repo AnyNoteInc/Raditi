@@ -3,9 +3,11 @@ import {
   effortOfModelClass,
   feedLimits,
   feedTaskHeadSchema,
+  leaseScopeOf,
   modelClassSchema,
   previewOrigin,
   readFeedRow,
+  siteIdOf,
   type ChatCommandAvailability,
   type FeedItem,
   type FeedTaskHead,
@@ -142,7 +144,7 @@ export async function feedHead(
   tx: Tx,
   task: {
     id: string
-    siteId: string
+    siteId: string | null
     title: string | null
     mode: 'work' | 'chat'
     status: TaskStatus
@@ -156,7 +158,7 @@ export async function feedHead(
   },
 ): Promise<FeedTaskHead> {
   const lease = await tx.siteLease.findUnique({
-    where: { siteId: task.siteId },
+    where: { siteId: leaseScopeOf(task) },
     select: { heldForOperator: true, holderTaskId: true },
   })
   // The work of the agent began with the last words or «Продолжить»; a press of a command
@@ -260,7 +262,7 @@ export async function readDialogHead(
       const head = await feedHead(tx, task)
       return {
         ...head,
-        siteId: task.siteId,
+        siteId: siteIdOf(task),
         alias: task.alias,
         createdAt: task.createdAt,
         updatedAt: task.updatedAt,

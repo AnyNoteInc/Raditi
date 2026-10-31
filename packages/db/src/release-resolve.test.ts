@@ -40,7 +40,8 @@ describe.skipIf(!databaseUrl)('the decision of an operator on PostgreSQL', () =>
         },
       })
       await db.auditLog.deleteMany({ where: { workspaceId } })
-      await db.siteLease.deleteMany({ where: { site: { workspaceId } } })
+      const sites = await db.site.findMany({ where: { workspaceId }, select: { id: true } })
+      await db.siteLease.deleteMany({ where: { siteId: { in: sites.map(({ id }) => id) } } })
       await db.siteRelease.deleteMany({ where: { site: { workspaceId } } })
       await db.task.deleteMany({ where: { workspaceId } })
       await db.site.deleteMany({ where: { workspaceId } })

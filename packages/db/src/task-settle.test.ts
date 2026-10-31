@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 
 import {
   canonicalDbPlanJson,
+  siteIdOf,
   type CandidateFacts,
   type DbPlan,
   type DbPlanView,
@@ -251,7 +252,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn settlement', () => {
     const assignment = await db.turnAssignment.create({
       data: {
         taskId: row.id,
-        siteId: row.siteId,
+        siteId: siteIdOf(row),
         sessionId: row.id,
         turnNo: 1,
         executor: 'local',
@@ -414,7 +415,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn settlement', () => {
 
     // A variable set after the builder read the values: the description was not checked for its
     // value, so the revision is recorded without one (Р13); with the versions it read, it is kept.
-    await db.siteEnvVar.create({ data: { siteId: row.siteId, name: 'API_TOKEN', keyVersion: 2 } })
+    await db.siteEnvVar.create({
+      data: { siteId: siteIdOf(row), name: 'API_TOKEN', keyVersion: 2 },
+    })
     const late = await db.$transaction((tx) =>
       recordCandidate(tx, {
         ...input,
@@ -444,7 +447,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn settlement', () => {
     const row = await task({ status: 'running', turnNo: 1 })
     const installed = { sha: 'd'.repeat(40), tree: 'b'.repeat(40) }
     await db.site.update({
-      where: { id: row.siteId },
+      where: { id: siteIdOf(row) },
       data: { installedVersion: 'v1.0.0', installedSha: installed.sha, installedAt: new Date() },
     })
     const recordOf = (revision: number, overrides: Partial<CandidateRecordInput>) =>
@@ -481,7 +484,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn settlement', () => {
     ).toBe(false)
     const preview = await db.previewEnvironment.create({
       data: {
-        siteId: row.siteId,
+        siteId: siteIdOf(row),
         taskId: row.id,
         hostname: `site-${row.siteRow.alias}-chat-${row.alias}.localhost`,
         expiresAt: new Date(Date.now() + 3_600_000),
@@ -511,7 +514,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn settlement', () => {
     const recorded = await db.$transaction((tx) => recordCandidate(tx, candidate(row.id, 1)))
     const release = await db.siteRelease.create({
       data: {
-        siteId: row.siteId,
+        siteId: siteIdOf(row),
         taskId: row.id,
         candidateId: recorded.id,
         candidateRevision: 1,
@@ -553,7 +556,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn settlement', () => {
     const recorded = await db.$transaction((tx) => recordCandidate(tx, candidate(row.id, 1)))
     const release = await db.siteRelease.create({
       data: {
-        siteId: row.siteId,
+        siteId: siteIdOf(row),
         taskId: row.id,
         candidateId: recorded.id,
         candidateRevision: 1,

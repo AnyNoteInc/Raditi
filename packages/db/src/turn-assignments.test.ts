@@ -120,7 +120,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn assignments', () => {
   })
   afterEach(async () => {
     for (const workspaceId of workspaces.splice(0)) {
-      await db.siteLease.deleteMany({ where: { site: { workspaceId } } })
+      const sites = await db.site.findMany({ where: { workspaceId }, select: { id: true } })
+      await db.siteLease.deleteMany({ where: { siteId: { in: sites.map(({ id }) => id) } } })
       await db.task.deleteMany({ where: { workspaceId } })
       await db.site.deleteMany({ where: { workspaceId } })
       await db.workspace.delete({ where: { id: workspaceId } })

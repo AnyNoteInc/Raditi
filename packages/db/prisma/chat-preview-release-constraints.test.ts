@@ -331,6 +331,7 @@ describe.skipIf(!databaseUrl)('chat preview release constraints', () => {
             needs_repository,
             needs_browser,
             deleted_at,
+            web_masks_purged_at,
             ...rest
           }) => ({
             ...rest,
@@ -339,6 +340,7 @@ describe.skipIf(!databaseUrl)('chat preview release constraints', () => {
             waiting,
             needs: [needs_repository, needs_browser],
             deleted: deleted_at,
+            webMasksPurged: web_masks_purged_at,
           }),
         ),
       ).toEqual(
@@ -349,6 +351,7 @@ describe.skipIf(!databaseUrl)('chat preview release constraints', () => {
           waiting: null,
           needs: [true, false],
           deleted: null,
+          webMasksPurged: null,
         })),
       )
       expect(

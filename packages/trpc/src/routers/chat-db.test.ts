@@ -267,7 +267,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
     await db.attachment.deleteMany({ where: owned })
     await db.gitRepository.deleteMany({ where: { site: owned } })
     await db.snapshot.deleteMany({ where: { site: owned } })
-    await db.turnAssignment.deleteMany({ where: { site: owned } })
+    await db.turnAssignment.deleteMany({ where: { task: owned } })
     await db.task.deleteMany({ where: owned })
     await db.siteEnvVar.deleteMany({ where: { site: owned } })
     await db.siteDatabaseDump.deleteMany({ where: { site: owned } })
