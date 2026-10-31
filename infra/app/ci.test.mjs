@@ -52,7 +52,8 @@ const copied = (dockerfile, target) => {
 }
 
 test('the Vitest timeout of CI reaches Vitest in every workspace', () => {
-  const [, passed] = /^ +run: pnpm test -- (--testTimeout=\d+)$/m.exec(ci) ?? []
+  const [, passed] =
+    /^ +run: pnpm test --concurrency=\d+ -- (--testTimeout=\d+) --maxWorkers=\d+$/m.exec(ci) ?? []
   assert.ok(passed, 'ci.yml passes --testTimeout to the test task')
   let checked = 0
   for (const workspace of workspaces) {
@@ -67,6 +68,16 @@ test('the Vitest timeout of CI reaches Vitest in every workspace', () => {
     checked++
   }
   assert.ok(checked > 10)
+})
+
+test('the test step of CI keeps its workers to the cores of the runner', () => {
+  const [, workspaces, workers] =
+    /^ +run: pnpm test --concurrency=(\d+) -- --testTimeout=\d+ --maxWorkers=(\d+)$/m.exec(ci) ?? []
+  assert.ok(workspaces && workers, 'ci.yml bounds the workspaces and the workers of the test step')
+  // ubuntu-latest of a public repository has four cores. Unbounded, turbo runs ten workspaces and
+  // Vitest one worker less than the cores in each: tests that wait for a socket, a lock or a
+  // child process missed their bounds by turns (28.10.2026, release of v1.10.0).
+  assert.ok(Number(workspaces) * Number(workers) <= 4, `${workspaces} × ${workers} workers`)
 })
 
 // schema.prisma against the database the migrations have just built: a model changed without a

@@ -92,8 +92,11 @@ jobs:
 
       - name: Test
         # Shared runners are several times slower than a laptop: jsdom renders and real git
-        # processes need more than Vitest's default 5 s per test.
-        run: pnpm test -- --testTimeout=30000
+        # processes need more than Vitest's default 5 s per test. On its own turbo runs ten
+        # workspaces at once and Vitest three workers in each — some thirty processes on the four
+        # cores of the runner, and tests that wait for a socket, a lock or a child process miss
+        # their bounds by turns. Two workspaces with two workers each keep to the cores.
+        run: pnpm test --concurrency=2 -- --testTimeout=30000 --maxWorkers=2
 
       # Sandbox gateway allowlist, watchdog and network guard (the Docker test skips itself);
       # the app VM compose, edge routes and Dockerfiles (the Docker CLI, no daemon); the egress
