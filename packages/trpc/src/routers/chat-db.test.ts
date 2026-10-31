@@ -1583,6 +1583,31 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       ).rejects.toMatchObject({ code: 'NOT_FOUND' })
     })
 
+    it('finds a chat without a site for a member of its workspace, and for nobody else', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const { id: taskId } = await db.task.create({
+        data: {
+          workspaceId: site.workspaceId,
+          status: 'done',
+          needsRepository: false,
+          needsBrowser: false,
+        },
+      })
+      const stranger = callerOf(await person())
+      await expect(stranger.task.rename({ taskId, title: 'Чужой' })).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+      await expect(stranger.task.remove({ taskId })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+
+      await caller.task.rename({ taskId, title: 'Вопрос' })
+      expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
+        title: 'Вопрос',
+      })
+      expect(await caller.task.remove({ taskId })).toEqual({ removed: true })
+      expect((await db.task.findUniqueOrThrow({ where: { id: taskId } })).deletedAt).not.toBeNull()
+    })
+
     it('deletes a dialog that waits: it is cancelled first, then gone from the cabinet', async () => {
       const { owner, site } = await siteOwner({ database: true })
       const caller = callerOf(owner)

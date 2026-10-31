@@ -10,7 +10,7 @@ import {
 } from '@repo/domain'
 import { z } from 'zod'
 
-import type { McpAccess } from '../access/mcp-access.ts'
+import { siteAccessOf, type McpTurnAccess } from '../access/mcp-access.ts'
 import { MCP_REQUEST_ACCESS, type McpRequest } from '../access/mcp-request.ts'
 import type { McpBrowserTasks } from './browser-tasks.ts'
 import { MCP_BROWSER_TASKS } from './site-info.tokens.ts'
@@ -18,9 +18,12 @@ import { MCP_BROWSER_TASKS } from './site-info.tokens.ts'
 /** Where previews answer (PREVIEW_BASE_DOMAIN and the rest); null — they are not configured. */
 export const MCP_PREVIEW_ADDRESS = Symbol('MCP_PREVIEW_ADDRESS')
 
-/** The browser of a task as the agent is told it: the site, where it starts, who drives it. */
+/**
+ * The browser of a task as the agent is told it: the site, where it starts, who drives it.
+ * Without a site `siteUrl` and `startPath` are null.
+ */
 export interface SiteBrowserInfo {
-  siteUrl: string
+  siteUrl: string | null
   startPath: string | null
   controller: BrowserController | null
 }
@@ -30,13 +33,15 @@ export interface SiteBrowserInfo {
  * release.md, Р3, Р21): `url` is the preview's own address while it serves — where the browser
  * tools go — and null otherwise; `siteUrl` is the site's address, the one links inside content
  * keep (the preview's database is a copy of the site's, Р15), never a place to write. A dialog
- * without one (previews are not configured): the site, as before.
+ * without one (previews are not configured): the site, as before. A chat without a site: nulls,
+ * and the tool stays, so the list of a turn is never empty (docs/plan/61-chats-first.md, §5.5).
  */
 export function siteInfoOf(
-  access: McpAccess,
+  access: McpTurnAccess,
   address: PreviewAddress | null,
   browser: SiteBrowserInfo | null = null,
 ) {
+  if (access.siteId === null) return { stack: null, url: null, siteUrl: null, browser }
   const preview = access.preview
   // A browser task (docs/plan/57-browser-tasks.md, Б20): its browser works on the site itself.
   const session = browser === null ? {} : { browser }
@@ -75,9 +80,10 @@ export class McpToolsController {
     let browser: SiteBrowserInfo | null = null
     if (requirementsOf(access).browser)
       try {
+        const site = siteAccessOf(access)
         browser = {
           siteUrl: access.url,
-          startPath: this.browserTasks.startPath(access),
+          startPath: site && this.browserTasks.startPath(site),
           controller: await this.browserTasks.controller(access.taskId),
         }
       } catch {

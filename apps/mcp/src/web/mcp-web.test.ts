@@ -10,6 +10,7 @@ import {
   browserTaskError,
   conflict,
   DomainError,
+  leaseScopeOf,
   type BrowserActionRequest,
   type BrowserToolResult,
   type KvSecret,
@@ -17,7 +18,7 @@ import {
 import { newTurnKeys } from '@repo/turn-keys'
 import { describe, expect, it, vi } from 'vitest'
 
-import type { McpAccess } from '../access/mcp-access.ts'
+import type { McpAccess, McpTurnAccess } from '../access/mcp-access.ts'
 import { contentMaskPath, ContentPrivacy } from '../privacy/content-privacy.ts'
 import { McpWebService, type McpWebOptions } from './mcp-web.ts'
 import type { McpWebAdmission, McpWebStore } from './mcp-web-store.ts'
@@ -73,8 +74,10 @@ function resultOf(request: BrowserActionRequest): BrowserToolResult {
   }
 }
 
-function fixture(options: { store?: Partial<McpWebStore>; service?: McpWebOptions } = {}) {
-  const scope = scopeOf()
+function fixture<Scope extends McpTurnAccess = McpAccess>(
+  options: { scope?: Scope; store?: Partial<McpWebStore>; service?: McpWebOptions } = {},
+) {
+  const scope = (options.scope ?? scopeOf()) as Scope
   const sessionId = randomUUID()
   const assignmentId = randomUUID()
   const clock = { now: 1_000_000 }
@@ -116,7 +119,10 @@ function fixture(options: { store?: Partial<McpWebStore>; service?: McpWebOption
   /** A contact the task already knows, as the marker the agent saw. */
   const known = (value: string) => {
     const id = randomUUID()
-    const path = contentMaskPath(scope)
+    const path = contentMaskPath({
+      siteId: leaseScopeOf({ id: scope.taskId, siteId: scope.siteId }),
+      taskId: scope.taskId,
+    })
     const entries = JSON.parse(records.get(path)?.data.entries ?? '[]') as unknown[]
     records.set(path, {
       version: (records.get(path)?.version ?? 0) + 1,
@@ -130,6 +136,47 @@ function fixture(options: { store?: Partial<McpWebStore>; service?: McpWebOption
 /** The refusal of a call: its fixed code and fixed text, nothing else. */
 const refused = (code: keyof typeof browserTaskCodes | 'CONTENT_PRIVACY_LIMIT') =>
   expect.objectContaining({ name: 'DomainError', code })
+
+describe('the web tools of a chat without a site (plan 61, §5.3, §5.5)', () => {
+  const chat = (): McpTurnAccess => ({ ...scopeOf(), siteId: null, stack: null, url: null })
+
+  it('keeps the contact map under the id of the task, in the same form of path', async () => {
+    const { scope, service, worker, records, known } = fixture({ scope: chat() })
+    worker.action.mockResolvedValueOnce({
+      tool: 'web_observe',
+      observation: 'o1',
+      page: PAGE,
+      tabs: [PAGE],
+      controller: 'agent',
+      tree: '- text "anna@example.test" [ref=e5]',
+      truncated: false,
+    })
+    const answer = await service.call(scope, 'web_observe', {})
+    expect(JSON.stringify(answer)).not.toContain('anna@example.test')
+    expect(records.has(`kv/content-masks/${scope.taskId}/${scope.taskId}`)).toBe(true)
+    // The agent types a contact back: the same map gives it.
+    const marker = known('boris@example.test')
+    await service.call(scope, 'web_fill', {
+      observation: 'o1',
+      ref: 'e5',
+      text: marker,
+    })
+    expect(worker.action.mock.calls.at(-1)?.[1].action).toMatchObject({
+      text: 'boris@example.test',
+    })
+  })
+
+  it('opens a full address, and no path: there is no site to take it', async () => {
+    const { scope, service, worker } = fixture({ scope: chat() })
+    await service.call(scope, 'web_open', { url: 'https://other.example.test/' })
+    await expect(service.call(scope, 'web_open', { url: '/news/' })).rejects.toEqual(
+      refused('BROWSER_ADDRESS_DENIED'),
+    )
+    expect(worker.action.mock.calls.map((call) => call[1].action)).toEqual([
+      { tool: 'web_open', url: 'https://other.example.test/' },
+    ])
+  })
+})
 
 describe('the web tools of a browser task', () => {
   it('passes an action to the session of the task in the admitted turn', async () => {

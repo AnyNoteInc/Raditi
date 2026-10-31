@@ -2,7 +2,7 @@ import { openBrowserSessionOfTask, taskAttachment, type Prisma, type PrismaClien
 import { browserTaskError, isDomainError, terminalTaskStatuses } from '@repo/domain'
 import { z } from 'zod'
 
-import type { McpAccess } from '../access/mcp-access.ts'
+import type { McpTurnAccess } from '../access/mcp-access.ts'
 
 /**
  * What the `web` tools of a browser task read in PostgreSQL (docs/plan/57-browser-tasks.md,
@@ -24,7 +24,7 @@ export interface McpWebAdmission {
 /** The store of the `web` tools; `PostgresMcpWebStore` is the one implementation. */
 export interface McpWebStore {
   /** Refuses with `BROWSER_SESSION_UNAVAILABLE` when the turn or the session is gone. */
-  admit(scope: McpAccess): Promise<McpWebAdmission>
+  admit(scope: McpTurnAccess): Promise<McpWebAdmission>
   /** Whether every id is a file sent with a message of the task (`attachments.status = 'bound'`). */
   attachmentsOfTask(taskId: string, ids: readonly string[]): Promise<boolean>
 }
@@ -45,22 +45,24 @@ export class PostgresMcpWebStore implements McpWebStore {
   /**
    * The admission of the agent (spec §8) once more, for this call: its key, its assignment and
    * the turn lease are live, the task needs a browser and its site takes it (`PostgresMcpAccess`:
-   * active, or still being connected for a task without a repository), and the task has an open
-   * browser session of its own site. What the page shows is content of the task: its contact map
-   * is kept from now on (`content_accessed_at`).
+   * none, active, or still being connected for a task without a repository), and the task has an
+   * open browser session of its own site, or of none. What the page shows is content of the task:
+   * its contact map is kept from now on (`content_accessed_at`).
    */
-  async admit(scope: McpAccess): Promise<McpWebAdmission> {
+  async admit(scope: McpTurnAccess): Promise<McpWebAdmission> {
     return this.#transaction(async (tx) => {
       const rows = await tx.$queryRaw<unknown[]>`
         SELECT a.id AS "assignmentId", clock_timestamp() AS now,
           LEAST(k.expires_at, k.valid_until, a.deadline_at, l.expires_at) AS "deadlineAt"
         FROM llm_keys k JOIN tasks t ON t.id = k.task_id
-        JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id
-        JOIN turn_assignments a ON a.task_id = t.id AND a.site_id = s.id
+        LEFT JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id
+        JOIN turn_assignments a ON a.task_id = t.id AND a.site_id = COALESCE(t.site_id, t.id)
           AND a.session_id = k.session_id AND a.turn_no = k.turn_no AND a.first_epoch = k.first_epoch
-        JOIN site_leases l ON l.site_id = s.id AND l.holder_task_id = t.id AND l.epoch = a.lease_epoch
+        JOIN site_leases l ON l.site_id = COALESCE(t.site_id, t.id) AND l.holder_task_id = t.id
+          AND l.epoch = a.lease_epoch
         WHERE k.id = ${scope.keyId}::uuid AND t.id = ${scope.taskId}::uuid
-          AND s.id = ${scope.siteId}::uuid AND t.workspace_id = ${scope.workspaceId}::uuid
+          AND t.site_id IS NOT DISTINCT FROM ${scope.siteId}::uuid
+          AND t.workspace_id = ${scope.workspaceId}::uuid
           AND a.session_id = ${scope.sessionId} AND a.turn_no = ${scope.turn}
           AND a.first_epoch = ${scope.firstEpoch} AND a.lease_epoch = ${scope.epoch}
           AND k.mcp_token_hash IS NOT NULL AND k.revoke_requested_at IS NULL AND k.revoked_at IS NULL
@@ -69,8 +71,8 @@ export class PostgresMcpWebStore implements McpWebStore {
           AND a.deadline_at > clock_timestamp() AND a.finished_at IS NULL AND a.outcome IS NULL
           AND l.operation = 'turn' AND NOT l.held_for_operator AND l.expires_at > clock_timestamp()
           AND t.needs_browser
-          AND (s.status = 'active' OR (t.needs_browser AND NOT t.needs_repository
-            AND s.status = 'onboarding'))
+          AND (t.site_id IS NULL OR s.status = 'active' OR (t.needs_browser
+            AND NOT t.needs_repository AND s.status = 'onboarding'))
           AND t.content_retired_at IS NULL
           AND t.status <> ALL(${[...terminalTaskStatuses]}::"TaskStatus"[])`
       if (rows.length !== 1) throw unavailable()

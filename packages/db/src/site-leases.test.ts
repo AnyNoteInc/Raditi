@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { createPrismaClient } from './client.ts'
@@ -29,7 +31,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL site leases', () => {
   afterEach(async () => {
     for (const workspaceId of workspaces.splice(0)) {
       const sites = await db.site.findMany({ where: { workspaceId }, select: { id: true } })
-      await db.siteLease.deleteMany({ where: { siteId: { in: sites.map(({ id }) => id) } } })
+      const chats = await db.task.findMany({
+        where: { workspaceId, siteId: null },
+        select: { id: true },
+      })
+      await db.siteLease.deleteMany({
+        where: { siteId: { in: [...sites, ...chats].map(({ id }) => id) } },
+      })
       await db.siteRelease.deleteMany({ where: { site: { workspaceId } } })
       await db.task.deleteMany({ where: { workspaceId } })
       await db.site.deleteMany({ where: { workspaceId } })
@@ -62,6 +70,82 @@ describe.skipIf(!databaseUrl)('PostgreSQL site leases', () => {
       ttlMs: 60_000,
     }
   }
+
+  /** A chat without a project: its lease is its own id (`leaseScopeOf`). */
+  async function chat(workspaceId?: string) {
+    const workspace =
+      workspaceId ??
+      (await db.workspace.create({ data: { name: 'Synthetic lease verification' } })).id
+    if (workspaceId === undefined) workspaces.push(workspace)
+    const task = await db.task.create({
+      data: { workspaceId: workspace, needsRepository: false, needsBrowser: false },
+    })
+    return { siteId: task.id, taskId: task.id, operation: 'turn' as const, ttlMs: 60_000 }
+  }
+
+  describe('a chat without a site', () => {
+    it('leases by its own id, and two chats go side by side', async () => {
+      const first = await chat()
+      const second = await chat()
+      const [one, other] = await Promise.all([store.acquire(first), store.acquire(second)])
+      expect(one).toMatchObject({ siteId: first.taskId, taskId: first.taskId, epoch: 1 })
+      expect(other).toMatchObject({ siteId: second.taskId, taskId: second.taskId, epoch: 1 })
+      expect(await store.assert(one!)).toBe(true)
+      expect(await store.assert(other!)).toBe(true)
+    })
+
+    it('fences a stale owner of a chat: the epoch only grows and the row stays', async () => {
+      const input = await chat()
+      const first = (await store.acquire(input))!
+      expect(await store.release(first)).toBe(true)
+      const second = (await store.acquire(input))!
+      expect(second.epoch).toBe(first.epoch + 1)
+      expect(await store.renew(first, 60_000)).toBeNull()
+      expect(await store.assert(first)).toBe(false)
+      expect(await store.release(first)).toBe(false)
+      expect(await store.assert(second)).toBe(true)
+    })
+
+    it('takes neither the lease of a site nor of another chat', async () => {
+      const site = await fixture()
+      const input = await chat()
+      const other = await chat()
+      expect(await store.acquire({ ...input, siteId: site.siteId })).toBeNull()
+      expect(await store.acquire({ ...input, siteId: other.taskId })).toBeNull()
+      expect(await store.inspect(site.siteId)).toBeNull()
+      expect(await store.inspect(other.taskId)).toBeNull()
+    })
+
+    it('never lets a task of a site lease by its own id', async () => {
+      const site = await fixture()
+      expect(await store.acquire({ ...site, siteId: site.taskId })).toBeNull()
+    })
+
+    it('is refused by the database with the id of a site', async () => {
+      const site = await fixture()
+      const id = `${randomUUID().slice(0, 14)}8${randomUUID().slice(15)}`
+      const workspace = await db.site.findUniqueOrThrow({ where: { id: site.siteId } })
+      const product = await db.site.create({
+        data: {
+          id,
+          workspaceId: workspace.workspaceId,
+          name: 'Lease test',
+          url: 'https://product.invalid',
+          stack: 'wordpress',
+        },
+      })
+      await expect(
+        db.task.create({
+          data: {
+            id: product.id,
+            workspaceId: workspace.workspaceId,
+            needsRepository: false,
+            needsBrowser: false,
+          },
+        }),
+      ).rejects.toThrow(/tasks_chat_id_check/)
+    })
+  })
 
   it('grants exactly one concurrent owner and uses a server-clock TTL', async () => {
     const input = await fixture()

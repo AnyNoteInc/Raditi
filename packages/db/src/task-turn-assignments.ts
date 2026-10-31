@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from 'node:util'
 import {
   badRequest,
   conflict,
+  leaseScopeOf,
   requirementsOf,
   terminalTaskStatuses,
   turnEvidenceSchema,
@@ -79,7 +80,7 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
       const task = await tx.task.findUniqueOrThrow({ where: { id: fence.taskId } })
       if (task.contentRetiredAt) throw conflict('Task content context has expired')
       if (
-        task.siteId !== fence.siteId ||
+        leaseScopeOf(task) !== fence.siteId ||
         task.workspaceId !== labels.workspaceId ||
         terminalTaskStatuses.includes(task.status)
       )

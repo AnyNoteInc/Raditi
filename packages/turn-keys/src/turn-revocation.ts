@@ -18,7 +18,7 @@ export interface TurnRevocationContext {
 /**
  * Closes the key of one turn: core when the turn ends or its sweeper finds the key, the llm
  * role's operator command when an account is retired in an emergency. The durable marker and
- * `revoke_requested_at` are taken under the lock of the site's lease; the accounting of the
+ * `revoke_requested_at` are taken under the lock of the task's lease; the accounting of the
  * key closes only once no call of it is open. Any failure but a domain refusal is an
  * unavailable gateway.
  */
@@ -30,7 +30,8 @@ export async function revokeTurnCredentials(
   try {
     // This is the admission fence. Vault failure cannot leave the key accepting new calls.
     await gatewayTransaction(context.prisma, async (tx) => {
-      await tx.$queryRaw`SELECT l.site_id FROM site_leases l JOIN tasks t ON t.site_id = l.site_id
+      await tx.$queryRaw`SELECT l.site_id FROM site_leases l
+          JOIN tasks t ON COALESCE(t.site_id, t.id) = l.site_id
           WHERE t.id = ${ref.taskId}::uuid FOR UPDATE OF l`
       await tx.$executeRaw`
         WITH marker AS (

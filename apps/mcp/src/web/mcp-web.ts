@@ -8,6 +8,7 @@ import {
   clipTree,
   DomainError,
   isDomainError,
+  leaseScopeOf,
   redactResultAddresses,
   type BrowserAction,
   type BrowserToolArguments,
@@ -16,7 +17,7 @@ import {
 } from '@repo/domain'
 import { TURN_KEY_IN_TEXT } from '@repo/turn-keys'
 
-import type { McpAccess } from '../access/mcp-access.ts'
+import type { McpTurnAccess } from '../access/mcp-access.ts'
 import type { ContentPrivacy } from '../privacy/content-privacy.ts'
 import type { McpWebAdmission, McpWebStore } from './mcp-web-store.ts'
 
@@ -111,7 +112,7 @@ export class McpWebService {
    * mcp-nest. Raises only `webRefusal` codes.
    */
   async call<T extends BrowserToolName>(
-    scope: McpAccess,
+    scope: McpTurnAccess,
     tool: T,
     args: BrowserToolArguments<T>,
   ): Promise<WebToolResponse> {
@@ -141,7 +142,7 @@ export class McpWebService {
   // Admission and order
   // -------------------------------------------------------------------------------------------
 
-  async #admit(scope: McpAccess): Promise<McpWebAdmission> {
+  async #admit(scope: McpTurnAccess): Promise<McpWebAdmission> {
     try {
       return await this.#deps.store.admit(scope)
     } catch {
@@ -172,7 +173,7 @@ export class McpWebService {
    * pages) opened on the site's own address.
    */
   async #action<T extends BrowserToolName>(
-    scope: McpAccess,
+    scope: McpTurnAccess,
     tool: T,
     args: BrowserToolArguments<T>,
   ): Promise<BrowserAction> {
@@ -197,9 +198,9 @@ export class McpWebService {
     return action as BrowserAction
   }
 
-  async #rehydrate(scope: McpAccess, fields: Record<string, string>) {
+  async #rehydrate(scope: McpTurnAccess, fields: Record<string, string>) {
     try {
-      return await this.#deps.privacy.rehydrate(scope, fields)
+      return await this.#deps.privacy.rehydrate(maskScopeOf(scope), fields)
     } catch (error) {
       // The map cannot be read now; or a marker unknown to the task, or a contact the page would
       // show unmasked where the agent put it.
@@ -215,7 +216,7 @@ export class McpWebService {
 
   async #act(
     admission: McpWebAdmission,
-    scope: McpAccess,
+    scope: McpTurnAccess,
     action: BrowserAction,
     budgetMs: number,
   ): Promise<BrowserToolResult> {
@@ -248,7 +249,7 @@ export class McpWebService {
    * addresses lose their secret parameters first — the worker did so already; this is the second
    * line, and a repeat changes nothing (CLAUDE.md rule 2).
    */
-  async #masked(scope: McpAccess, result: BrowserToolResult): Promise<WebToolResponse> {
+  async #masked(scope: McpTurnAccess, result: BrowserToolResult): Promise<WebToolResponse> {
     const copy = redactResultAddresses(result) as unknown as WebToolResponse
     const places: Array<{ holder: Record<string, unknown>; key: string; text: string }> = []
     const visit = (value: unknown) => {
@@ -265,7 +266,7 @@ export class McpWebService {
     let masked: Record<string, string>
     try {
       masked = await this.#deps.privacy.mask(
-        scope,
+        maskScopeOf(scope),
         Object.fromEntries(places.map((place, index) => [`t${index}`, place.text])),
       )
     } catch (error) {
@@ -312,6 +313,11 @@ export class McpWebService {
   }
 }
 
+/** Where the contact map of the task lives: a chat without a site keeps it under its own id. */
+function maskScopeOf(scope: McpTurnAccess): { siteId: string; taskId: string } {
+  return { siteId: leaseScopeOf({ id: scope.taskId, siteId: scope.siteId }), taskId: scope.taskId }
+}
+
 /** Every string an argument holds, at any depth. */
 function strings(value: unknown): string[] {
   if (typeof value === 'string') return [value]
@@ -323,10 +329,11 @@ function strings(value: unknown): string[] {
 /**
  * A path the agent gives (`/news/`) as an address of the site; a full address as it is — where a
  * page may go is the worker's to decide, with the hosts of the site. A path that resolves off the
- * site's origin (`//host`, `/\host`) is no path of it.
+ * site's origin (`//host`, `/\host`) is no path of it, and without a site no path is one.
  */
-function siteAddress(scope: McpAccess, url: string): string {
+function siteAddress(scope: McpTurnAccess, url: string): string {
   if (!url.startsWith('/')) return url
+  if (scope.url === null) throw webRefusal('BROWSER_ADDRESS_DENIED')
   const site = new URL(scope.url)
   const resolved = URL.parse(url, site)
   if (

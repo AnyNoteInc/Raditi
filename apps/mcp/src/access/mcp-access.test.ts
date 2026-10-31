@@ -5,7 +5,12 @@ import { terminalTaskStatuses } from '@repo/domain'
 import { describe, expect, it, vi } from 'vitest'
 
 import { MCP_TOKEN_PATTERN, newTurnKeys, turnKeyHash } from '@repo/turn-keys'
-import { MCP_ACCESS_PROBE_TOKEN, PostgresMcpAccess } from './mcp-access.ts'
+import {
+  MCP_ACCESS_PROBE_TOKEN,
+  mcpTurnAccessSchema,
+  PostgresMcpAccess,
+  siteAccessOf,
+} from './mcp-access.ts'
 
 const token = `mcp_${'a'.repeat(64)}`
 const scope = () => ({
@@ -99,6 +104,56 @@ describe('MCP token access', () => {
     }
   })
 
+  it('admits a chat without a site: no site, no stack, no address, no preview (plan 61, §5.3)', async () => {
+    const chat = { ...scope(), siteId: null, stack: null, url: null }
+    for (const needs of [
+      { needsRepository: false, needsBrowser: false },
+      { needsRepository: false, needsBrowser: true },
+    ]) {
+      const $queryRaw = vi.fn(async () => [row(chat as never, null, needs)])
+      const store = new PostgresMcpAccess({ $queryRaw } as unknown as PrismaClient)
+      const access = await store.authenticate(token)
+      expect(access).toEqual({
+        ...chat,
+        preview: null,
+        requirements: { repository: needs.needsRepository, browser: needs.needsBrowser },
+      })
+      // No tool of a site takes it.
+      expect(siteAccessOf(access!)).toBeNull()
+    }
+  })
+
+  it('gives the tools of a site the same access a turn on a site was admitted with', async () => {
+    const base = scope()
+    const $queryRaw = vi.fn(async () => [row(base)])
+    const store = new PostgresMcpAccess({ $queryRaw } as unknown as PrismaClient)
+    const access = await store.authenticate(token)
+    expect(siteAccessOf(access!)).toEqual(access)
+  })
+
+  it('closes an admission whose site is half there, or a repository without a site', async () => {
+    const chat = { ...scope(), siteId: null, stack: null, url: null }
+    const needs = { needsRepository: false, needsBrowser: true }
+    for (const broken of [
+      row({ ...chat, stack: 'wordpress' } as never, null, needs),
+      row({ ...chat, url: 'https://site.example.test' } as never, null, needs),
+      row({ ...scope(), stack: null } as never, null, needs),
+      row({ ...scope(), url: null } as never, null, needs),
+      row(chat as never, preview, needs),
+      row(chat as never, null, { needsRepository: true, needsBrowser: false }),
+      row(chat as never, null, { needsRepository: true, needsBrowser: true }),
+    ]) {
+      const $queryRaw = vi.fn(async () => [broken])
+      await expect(
+        new PostgresMcpAccess({ $queryRaw } as unknown as PrismaClient).authenticate(token),
+      ).rejects.toMatchObject({ code: 'MCP_ACCESS_SCOPE_INVALID' })
+    }
+    // A scope without requirements is older than them: a repository task, so it has a site.
+    expect(
+      mcpTurnAccessSchema.safeParse({ ...chat, preview: null, requirements: undefined }).success,
+    ).toBe(false)
+  })
+
   it('looks up the token its issuer generates, by the hash its issuer stores', async () => {
     const issued = newTurnKeys()
     const $queryRaw = vi.fn(async (..._: unknown[]) => [])
@@ -120,9 +175,9 @@ describe('MCP token access', () => {
     const sql = ($queryRaw.mock.calls[0]![0] as string[]).join('$').replace(/\s+/g, ' ')
     for (const condition of [
       'JOIN tasks t ON t.id = k.task_id',
-      'JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id',
-      'JOIN turn_assignments a ON a.task_id = k.task_id AND a.turn_no = k.turn_no AND a.first_epoch = k.first_epoch AND a.session_id = k.session_id AND a.site_id = s.id',
-      'JOIN site_leases l ON l.site_id = s.id AND l.holder_task_id = t.id AND l.epoch = a.lease_epoch',
+      'LEFT JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id',
+      'JOIN turn_assignments a ON a.task_id = k.task_id AND a.turn_no = k.turn_no AND a.first_epoch = k.first_epoch AND a.session_id = k.session_id AND a.site_id = COALESCE(t.site_id, t.id)',
+      'JOIN site_leases l ON l.site_id = COALESCE(t.site_id, t.id) AND l.holder_task_id = t.id AND l.epoch = a.lease_epoch',
       'k.mcp_token_hash = $',
       'k.revoke_requested_at IS NULL',
       'k.revoked_at IS NULL',
@@ -139,10 +194,11 @@ describe('MCP token access', () => {
       't.status <> ALL($::"TaskStatus"[])',
     ])
       expect(sql).toContain(condition)
-    // The one alternative: an active site, or a site being connected for a browser task without
-    // a repository (docs/plan/57-browser-tasks.md, Б9). Paused and archived sites are never in it.
+    // The one alternative: no site at all, an active site, or a site being connected for a
+    // browser task without a repository (docs/plan/57-browser-tasks.md, Б9). Paused and archived
+    // sites are never in it, and `LEFT JOIN` leaves a site of another workspace to this condition.
     const site =
-      "AND (s.status = 'active' OR (t.needs_browser AND NOT t.needs_repository AND s.status = 'onboarding'))"
+      "AND (t.site_id IS NULL OR s.status = 'active' OR (t.needs_browser AND NOT t.needs_repository AND s.status = 'onboarding'))"
     expect(sql).toContain(site)
     expect(sql.replace(site, '')).not.toMatch(/\bOR\b/)
     expect(sql).not.toMatch(/paused|disconnected|archived/)

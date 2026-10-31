@@ -12,7 +12,7 @@ export const accessibleTask = (userId: string, id: string) =>
   ({
     id,
     deletedAt: null,
-    site: { deletedAt: null },
+    OR: [{ siteId: null }, { site: { deletedAt: null } }],
     workspace: { members: { some: { userId } } },
   }) satisfies Prisma.TaskWhereInput
 

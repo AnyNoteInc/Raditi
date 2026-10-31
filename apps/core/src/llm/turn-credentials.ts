@@ -677,17 +677,19 @@ async function clock(tx: Transaction): Promise<Date> {
   return rows[0]!.now
 }
 async function ownedTask(tx: Transaction, ref: TurnCredentialRef): Promise<OwnedTask> {
-  // The turn sends the code and content of the site, so the 152-FZ gate reads the data class of
-  // the site's workspace. A task row that names another workspace owns nothing, as in MCP access.
+  // The turn sends what the client gave, so the 152-FZ gate reads the data class of the task's
+  // workspace, with or without a site. A task row whose site is of another workspace owns
+  // nothing, as in MCP access: `LEFT JOIN` finds no site, and the condition refuses it.
   const rows = await tx.$queryRaw<OwnedTask[]>`
     SELECT t.id, t.attempt, t.site_id AS "siteId", t.model_class::text AS "modelClass",
       t.needs_browser AS "needsBrowser", w.data_class::text AS "dataClass",
       clock_timestamp() AS now
     FROM tasks t
-    JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id
-    JOIN workspaces w ON w.id = s.workspace_id
-    JOIN site_leases l ON l.site_id = t.site_id
-    WHERE t.id = ${ref.taskId}::uuid AND l.holder_task_id = t.id AND l.epoch = ${ref.epoch}
+    JOIN workspaces w ON w.id = t.workspace_id
+    LEFT JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id
+    JOIN site_leases l ON l.site_id = COALESCE(t.site_id, t.id)
+    WHERE t.id = ${ref.taskId}::uuid AND (t.site_id IS NULL OR s.id IS NOT NULL)
+      AND l.holder_task_id = t.id AND l.epoch = ${ref.epoch}
       AND l.operation = 'turn' AND NOT l.held_for_operator AND l.expires_at > clock_timestamp()
     FOR UPDATE OF l`
   if (!rows[0]) throw leaseLost()
@@ -705,8 +707,8 @@ async function agentVariables(tx: Transaction, task: OwnedTask): Promise<SiteEnv
   // A task that works in the browser drives the live site through the `web` tools, and no
   // candidate or release refuses a value written there: its commands get no client variable
   // (plan 57, Б20; rule 2). A task of a site without a repository is always one
-  // (`tasks_requirements_check`).
-  if (task.needsBrowser) return []
+  // (`tasks_requirements_check`). A chat without a site has no variables at all.
+  if (task.needsBrowser || task.siteId === null) return []
   const rows = await tx.siteEnvVar.findMany({
     where: { siteId: siteIdOf(task), toAgent: true, agentConsentAt: { not: null } },
     orderBy: { name: 'asc' },
@@ -721,9 +723,10 @@ async function agentVariables(tx: Transaction, task: OwnedTask): Promise<SiteEnv
 async function assertCurrentFence(tx: Transaction, ref: TurnCredentialRef): Promise<void> {
   const rows = await tx.$queryRaw<{ owned: boolean }[]>`
     SELECT EXISTS (SELECT 1 FROM tasks t
-      JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id
-      JOIN site_leases l ON l.site_id = t.site_id
-      WHERE t.id = ${ref.taskId}::uuid AND l.holder_task_id = t.id AND l.epoch = ${ref.epoch}
+      LEFT JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id
+      JOIN site_leases l ON l.site_id = COALESCE(t.site_id, t.id)
+      WHERE t.id = ${ref.taskId}::uuid AND (t.site_id IS NULL OR s.id IS NOT NULL)
+        AND l.holder_task_id = t.id AND l.epoch = ${ref.epoch}
         AND l.operation = 'turn' AND NOT l.held_for_operator
         AND l.expires_at > clock_timestamp()) AS owned`
   if (!rows[0]?.owned) throw leaseLost()

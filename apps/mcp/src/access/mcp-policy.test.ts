@@ -296,6 +296,13 @@ describe('MCP request policy', () => {
     expect(mcpToolFamiliesOf(access(repositoryOnly), all)).toEqual(['content'])
     // A scope made before requirements is a repository task: no web tools.
     expect(mcpToolFamiliesOf(access(undefined), all)).toEqual(['content'])
+    // A chat without a site: the browser when it needs one, and no family of a site.
+    const chat = { ...access(browserOnly), siteId: null, stack: null, url: null }
+    expect(mcpToolFamiliesOf(chat, all)).toEqual(['web'])
+    expect(mcpToolFamiliesOf(chat, { ...all, webTools: false })).toEqual([])
+    expect(
+      mcpToolFamiliesOf({ ...chat, requirements: { repository: false, browser: false } }, all),
+    ).toEqual([])
     // Both needs, as schemas allow: each family by its own rule.
     expect(
       mcpToolFamiliesOf(

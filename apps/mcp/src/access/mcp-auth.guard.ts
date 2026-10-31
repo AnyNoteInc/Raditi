@@ -6,7 +6,7 @@ import type { Response } from 'express'
 import { MCP_TOKEN_PATTERN } from '@repo/turn-keys'
 import { mcpErrorId } from '../common/json-rpc.ts'
 import { McpHttpError, mcpErrorSummary } from '../common/mcp-http-error.ts'
-import { MCP_ACCESS, type McpAccess, type McpAccessStore } from './mcp-access.ts'
+import { MCP_ACCESS, type McpAccessStore, type McpTurnAccess } from './mcp-access.ts'
 import {
   MCP_SECURITY,
   mcpBodyAllowed,
@@ -59,7 +59,7 @@ export class McpAuthGuard implements CanActivate {
     const authorization = req.headers.authorization ?? ''
     const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : ''
     if (!MCP_TOKEN_PATTERN.test(token)) return fail(401, 'MCP token is invalid or expired')
-    let authorized: McpAccess | null
+    let authorized: McpTurnAccess | null
     try {
       authorized = await this.access.authenticate(token)
     } catch (error) {

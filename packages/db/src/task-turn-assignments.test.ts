@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto'
 
 import {
   BROWSER_ONLY,
+  leaseScopeOf,
+  PLAIN_CHAT,
   REPOSITORY_ONLY,
   type OpenTurnAssignment,
   type TaskRequirements,
@@ -55,7 +57,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
   afterEach(async () => {
     for (const workspaceId of workspaces.splice(0)) {
       const sites = await db.site.findMany({ where: { workspaceId }, select: { id: true } })
-      await db.siteLease.deleteMany({ where: { siteId: { in: sites.map(({ id }) => id) } } })
+      const chats = await db.task.findMany({
+        where: { workspaceId, siteId: null },
+        select: { id: true },
+      })
+      await db.siteLease.deleteMany({
+        where: { siteId: { in: [...sites, ...chats].map(({ id }) => id) } },
+      })
       await db.mcpCall.deleteMany({ where: { turn: { task: { workspaceId } } } })
       await db.task.deleteMany({ where: { workspaceId } })
       await db.site.deleteMany({ where: { workspaceId } })
@@ -67,8 +75,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
     await schema?.drop()
   })
 
-  /** A task and the plan of its first turn; with `requirements` both are made for them. */
-  async function fixture(requirements?: TaskRequirements) {
+  /**
+   * A task and the plan of its first turn; with `requirements` both are made for them. `chat` —
+   * without a site, under the lease of the task's own id.
+   */
+  async function fixture(requirements?: TaskRequirements, options: { chat?: true } = {}) {
     const workspace = await db.workspace.create({ data: { name: 'Synthetic product turn' } })
     workspaces.push(workspace.id)
     const site = await db.site.create({
@@ -82,7 +93,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
     const task = await db.task.create({
       data: {
         workspaceId: workspace.id,
-        siteId: site.id,
+        ...(options.chat ? {} : { siteId: site.id }),
         ...(requirements
           ? { needsRepository: requirements.repository, needsBrowser: requirements.browser }
           : {}),
@@ -90,8 +101,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
     })
     const sessionId = randomUUID()
     const leases = new PostgresSiteLeaseStore(db)
+    const scope = leaseScopeOf(task)
     const fence = (await leases.acquire({
-      siteId: site.id,
+      siteId: scope,
       taskId: task.id,
       operation: 'turn',
       ttlMs: 60_000,
@@ -99,7 +111,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
     const plan: TurnPlan = {
       sandbox: {
         image,
-        labels: { workspaceId: workspace.id, siteId: site.id, taskId: task.id, sessionId, turn: 1 },
+        labels: { workspaceId: workspace.id, siteId: scope, taskId: task.id, sessionId, turn: 1 },
         runtime: 'runc',
         resources: { cpu: 1, memoryMiB: 256, pids: 64 },
         user: { uid: 10001, gid: 10001 },
@@ -368,6 +380,45 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
         }),
       ).toMatchObject({ status: 'running', baseSha: null })
       expect((await db.task.findUniqueOrThrow({ where: { id: f.task.id } })).turnNo).toBe(2)
+    })
+
+    it('opens the turn of a chat without a site and writes its running turn', async () => {
+      const f = await fixture(PLAIN_CHAT, { chat: true })
+      const first = (await store.open(f.input))!
+      expect(first.plan.requirements).toEqual(PLAIN_CHAT)
+      expect(first.fence.siteId).toBe(f.task.id)
+      expect(
+        await db.taskTurn.findUniqueOrThrow({
+          where: { taskId_turnNo: { taskId: f.task.id, turnNo: 1 } },
+        }),
+      ).toMatchObject({ status: 'running', baseSha: null })
+    })
+
+    it('refuses a task of a site under a fence that is not its site', async () => {
+      const f = await fixture(BROWSER_ONLY)
+      const foreign = randomUUID()
+      const lease = await db.siteLease.create({
+        data: {
+          siteId: foreign,
+          holderTaskId: f.task.id,
+          operation: 'turn',
+          epoch: 1,
+          expiresAt: new Date(Date.now() + 60_000),
+        },
+      })
+      const labels = { ...f.plan.sandbox.labels, siteId: foreign }
+      await expect(
+        store.open({
+          ...f.input,
+          fence: { ...f.fence, siteId: foreign },
+          plan: { ...f.plan, sandbox: { ...f.plan.sandbox, labels } },
+        }),
+      ).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: 'Product task is not available for a turn',
+      })
+      expect(await db.taskTurn.count({ where: { taskId: f.task.id } })).toBe(0)
+      await db.siteLease.delete({ where: { siteId: lease.siteId } })
     })
 
     it('starts a new session after an unsuccessful turn without a repository, never a replacement', async () => {
