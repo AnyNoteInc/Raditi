@@ -129,6 +129,18 @@ async function newBrowserTask(
   return taskId
 }
 
+/**
+ * «Остановить» of a dialog that has answered, as the client presses it: its browser closes with it.
+ * A workspace holds two browsers at most (docs/plan/61-chats-first.md, К36).
+ */
+async function closeDialog(stand, taskId) {
+  await stand.state.owner.mutate('task.cancel', { taskId, requestId: randomUUID() })
+  await waitTask(stand, taskId, ['cancelled'], {
+    what: 'the dialog to close',
+    timeoutMs: 120_000,
+  })
+}
+
 /** The Transit key of the owner's workspace as the operator reads it: 404 while there is none. */
 const workspaceKey = (stand) =>
   localVaultRequest(
@@ -460,6 +472,8 @@ async function readObject(storage, bucket, key) {
 async function scenarioD(stand) {
   const { rt, db, state } = stand
   rt.begin('D', 'задача в браузере, первый ход: страница входа и просьба войти')
+  await turnWithoutBrowser(stand)
+  await slowBrowserStart(stand)
   // The task of A's files: created here, so a run of later scenarios alone has no task of A
   // running in the background.
   state.taskF = await newBrowserTask(stand, state.owner, {
@@ -493,6 +507,15 @@ async function scenarioD(stand) {
   rt.check(facts.help === 'requested', 'web_help(login) was taken by the platform', facts)
   const session = await openSession(db, state.taskF)
   state.sessionF = session.id
+  const assignment = await db.turnAssignment.findFirstOrThrow({
+    where: { taskId: state.taskF },
+    orderBy: { createdAt: 'asc' },
+  })
+  rt.check(
+    session.createdAt >= assignment.createdAt && session.readyAt !== null,
+    `the session was opened by the first web_* call of the turn, not before it (К11); a cold start took ${session.readyAt - session.createdAt} ms`,
+    { session: session.createdAt, assignment: assignment.createdAt, ready: session.readyAt },
+  )
   rt.check(
     session.status === 'ready' && session.helpReason === 'login' && session.controller === 'agent',
     'browser_sessions: the session of the task is ready, held by the agent, with the help request `login`',
@@ -526,6 +549,65 @@ async function scenarioD(stand) {
       'the cabinet has no browser pane in this build: the panel opening by itself as the browser of a dialog starts (И2) is not checked in this run',
     )
   rt.end()
+}
+
+/**
+ * A turn that needs no browser starts none (docs/plan/61-chats-first.md, К11): no row, nothing on
+ * the worker, nothing the client waits for in the head of the dialog.
+ */
+async function turnWithoutBrowser(stand) {
+  const { rt, db, state } = stand
+  const taskId = await newBrowserTask(stand, state.owner, {
+    text: 'Что вы умеете делать на сайте?',
+    program: 'answerInWords',
+  })
+  await waitTask(stand, taskId, ['awaiting_user'], { what: 'the answer without a browser' })
+  const feed = await state.owner.query('task.feed', { taskId })
+  const held = await workerSessions(stand)
+  rt.check(
+    (await db.browserSession.count({ where: { taskId } })) === 0 &&
+      held.length === 0 &&
+      feed.browser === null,
+    'a turn without a web_* call started no browser: no row, nothing on the worker, none in the head of the dialog (К11)',
+    { held, browser: feed.browser },
+  )
+  await closeDialog(stand, taskId)
+}
+
+/**
+ * A start longer than a call may wait: with the worker stopped the first `web_*` call answers
+ * `BROWSER_STARTING` after its 35 s, the real CLI gets it as the answer of the tool and the agent
+ * calls again; once the worker is back the same turn goes on in the same session (К11).
+ */
+async function slowBrowserStart(stand) {
+  const { rt, db, state, model, processes } = stand
+  const before = model.moves.length
+  const starting = () =>
+    model.moves.slice(before).filter((move) => move.answered === 'BROWSER_STARTING').length
+  let taskId
+  process.kill(processes.browser.pid, 'SIGSTOP')
+  try {
+    taskId = await newBrowserTask(stand, state.owner, {
+      text: 'Проверьте, открывается ли список записей, пока браузер запускается.',
+    })
+    await rt.until('the first web call to answer BROWSER_STARTING', async () => starting() > 0, {
+      timeoutMs: 180_000,
+      intervalMs: 250,
+    })
+  } finally {
+    process.kill(processes.browser.pid, 'SIGCONT')
+  }
+  const { facts } = await firstTurn(stand, taskId)
+  const sessions = await db.browserSession.findMany({ where: { taskId } })
+  rt.check(
+    facts.starting >= 1 &&
+      facts.help === 'requested' &&
+      sessions.length === 1 &&
+      sessions[0].status === 'ready',
+    `a slow start answered BROWSER_STARTING ${facts.starting} times, the agent called again and the turn went on in one session, up after ${sessions[0]?.readyAt - sessions[0]?.createdAt} ms`,
+    { facts, sessions: sessions.map((session) => session.status) },
+  )
+  await closeDialog(stand, taskId)
 }
 
 /** What the client writes in «Новый диалог» of the cabinet in scenario D. */
@@ -1130,6 +1212,7 @@ async function scenarioF(stand) {
     'the session lives on after the answer for the next words: it closes on its idle time or with the dialog (Б18)',
     { status: session.status, reason: session.closeReason },
   )
+  await closeDialog(stand, state.taskF)
   rt.end()
 }
 
@@ -1176,6 +1259,7 @@ async function scenarioG(stand) {
     'WordPress: one new post, a draft; nothing published',
     objects,
   )
+  await closeDialog(stand, taskId)
   rt.end()
 }
 
@@ -1217,6 +1301,7 @@ async function scenarioH(stand) {
     'WordPress: the post is pending; nothing published',
     objects,
   )
+  await closeDialog(stand, taskId)
   rt.end()
 }
 
@@ -1365,6 +1450,7 @@ async function scenarioJ(stand) {
     'the answer names the published post',
     result,
   )
+  await closeDialog(stand, taskId)
   rt.end()
 }
 

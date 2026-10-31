@@ -240,6 +240,19 @@ describe('the marks of the tiles (И5)', () => {
     expect(toolMark('browser', browserAnswer({ browser: null }), opened)).toBe('Открыто')
   })
 
+  it('says «пока нет» of a browser the agent has not needed yet (plan 61, К11)', () => {
+    const none = browserAnswer({ browser: null })
+    expect(dialogToolsOf(none)).toEqual(['browser'])
+    expect(toolMark('browser', none, closed)).toBe('пока нет')
+    expect(
+      toolMark('browser', browserAnswer({ status: 'awaiting_user', browser: null }), closed),
+    ).toBe('пока нет')
+    // The dialog ended without one: there will be none.
+    expect(toolMark('browser', browserAnswer({ status: 'done', browser: null }), closed)).toBe(
+      'нет',
+    )
+  })
+
   it('says who drives the browser while its session holds one', () => {
     expect(toolMark('browser', browserAnswer(), closed)).toBe('Работает агент')
     expect(toolMark('browser', browserAnswer({ browser: { status: 'starting' } }), closed)).toBe(
@@ -266,10 +279,7 @@ describe('the marks of the tiles (И5)', () => {
     ).toBe('пока нет')
   })
 
-  it('says «Закрыт» when the session holds no browser any more, or the dialog ended without one', () => {
-    expect(toolMark('browser', browserAnswer({ status: 'done', browser: null }), closed)).toBe(
-      'Закрыт',
-    )
+  it('says «Закрыт» when the session holds no browser any more', () => {
     for (const status of ['closed', 'failed', 'lost'] as const)
       expect(toolMark('browser', browserAnswer({ browser: { status } }), closed)).toBe('Закрыт')
     expect(

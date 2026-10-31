@@ -287,6 +287,8 @@ export type BrowserToolResult = z.infer<typeof browserToolResultSchema>
 
 export const browserTaskCodeNames = [
   'BROWSER_SESSION_UNAVAILABLE',
+  'BROWSER_STARTING',
+  'BROWSER_WORKSPACE_BUSY',
   'BROWSER_USER_IN_CONTROL',
   'BROWSER_STALE_OBSERVATION',
   'BROWSER_ACTION_DENIED',
@@ -306,6 +308,14 @@ export const browserTaskCodes: Readonly<
   BROWSER_SESSION_UNAVAILABLE: {
     status: 503,
     message: 'The browser is not available now. End the turn and tell the client.',
+  },
+  BROWSER_STARTING: {
+    status: 503,
+    message: 'The browser is starting: call the tool again. This is no failure.',
+  },
+  BROWSER_WORKSPACE_BUSY: {
+    status: 429,
+    message: 'Too many browsers are open for this client: tell the client and end the turn.',
   },
   BROWSER_USER_IN_CONTROL: {
     status: 409,

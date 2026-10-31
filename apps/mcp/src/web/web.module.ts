@@ -16,8 +16,8 @@ import { MCP_WEB } from './web.tokens.ts'
 /**
  * The cloud browser of a browser task (web_*, docs/plan/57-browser-tasks.md, Б20). No profile:
  * a product path wherever the browser worker is configured (BROWSER_WORKER_URL), production too;
- * AppModule imports it only then. The role passes the agent's actions to the worker; the worker
- * holds the browser. What the page shows is masked with the task's contact map (PrivacyModule).
+ * AppModule imports it only then. The role opens the session of a task with its first call and
+ * passes the agent's actions to the worker; the worker holds the browser. What the page shows is masked with the task's contact map (PrivacyModule).
  */
 @Module({
   imports: [PrivacyModule],
@@ -31,7 +31,7 @@ import { MCP_WEB } from './web.tokens.ts'
         // AppModule imports this module only with the worker; this narrows the type.
         if (!worker) throw new Error('MCP web tools need the browser worker (BROWSER_WORKER_URL)')
         return new McpWebService({
-          store: new PostgresMcpWebStore(prisma),
+          store: new PostgresMcpWebStore(prisma, { maxHours: worker.sessionMaxHours }),
           // The token stays in the client's closure; nothing here logs it.
           worker: createBrowserWorkerClient({ baseUrl: worker.url, token: worker.token }),
           privacy,

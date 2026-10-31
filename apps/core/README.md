@@ -17,7 +17,7 @@
 
 ## Что читает
 
-Окружение читает `loadConfig`; полный перечень — `.env.example`. Группы: `APP_ENV`, `APP_URL`, `METRICS_TOKEN`; `DATABASE_URL`, `REDIS_URL`; `VAULT_*`; `S3_*`; `SANDBOX_*` и `TURN_EXECUTOR`, `RUNNER_TOKENS`; `GITEA_*`, `GIT_CA_FILE`, `GIT_MIRROR_DIR`; `LLM_CONTROL_URL`; `PREVIEW_*`; `RELEASE_API_*`; `BROWSER_WORKER_URL`, `BROWSER_WORKER_TOKEN`, `BROWSER_SESSION_MAX_HOURS`; `BILLING_*`, `YOOKASSA_*`, почта. Вне production загружает корневой `.env` (`@repo/app-bootstrap/load-env`).
+Окружение читает `loadConfig`; полный перечень — `.env.example`. Группы: `APP_ENV`, `APP_URL`, `METRICS_TOKEN`; `DATABASE_URL`, `REDIS_URL`; `VAULT_*`; `S3_*`; `SANDBOX_*` и `TURN_EXECUTOR`, `RUNNER_TOKENS`; `GITEA_*`, `GIT_CA_FILE`, `GIT_MIRROR_DIR`; `LLM_CONTROL_URL`; `PREVIEW_*`; `RELEASE_API_*`; `BROWSER_WORKER_URL`, `BROWSER_WORKER_TOKEN`; `BILLING_*`, `YOOKASSA_*`, почта. Вне production загружает корневой `.env` (`@repo/app-bootstrap/load-env`).
 
 ## Команды
 

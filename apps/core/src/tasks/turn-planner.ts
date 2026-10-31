@@ -237,6 +237,8 @@ export interface PlannerEnvironment {
   driver: AgentDriver
   backends: readonly LlmBackend[]
   runtime: SandboxRuntime
+  /** core is configured for the browser worker (`apps/browser`). */
+  browser: boolean
   /** The head of the default branch, read on the trusted side only for a first turn. */
   mainHead: () => Promise<string | null>
   /** The head of the task branch `agent/<taskId>`, read on the trusted side for a later turn. */
@@ -250,7 +252,7 @@ export type PassPlan =
       policy: TurnCredentialPolicy
       /** The turn the pass opens: `tasks.turn_no + 1`. */
       turn: number
-      /** The task's own: a pass that needs a browser opens it before the turn (Б18). */
+      /** The task's own: its browser comes back with the turn, or starts on `web_*` (К11). */
       requirements: TaskRequirements
     }
   /** The key cannot cover a first call: the platform asks «Продолжить?» (Р8). */
@@ -525,6 +527,9 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
   // A stack whose adapter has no browser support takes no task in the browser.
   const browser = requirements.browser ? facts.browser : undefined
   if (requirements.browser && !browser?.guide) return { kind: 'refused', code: 'not_accepted' }
+  // The browser is all a task on a site without a repository has.
+  if (requirements.browser && !requirements.repository && task.siteId !== null && !env.browser)
+    return { kind: 'refused', code: 'unavailable' }
   if (!facts.profile) return { kind: 'refused', code: 'unavailable' }
   const backend = env.backends.find((candidate) => candidate.id === facts.profile!.backend)
   if (!backend) return { kind: 'refused', code: 'unavailable' }

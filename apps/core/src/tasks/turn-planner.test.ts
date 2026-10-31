@@ -133,6 +133,7 @@ const env = (
   driver,
   backends: [backend],
   runtime: 'runc',
+  browser: true,
   mainHead: vi.fn(async () => MAIN),
   branchHead: vi.fn(async () => branch),
   ...patch,
@@ -996,6 +997,11 @@ describe('planTurn of a task in the cloud browser (docs/plan/57-browser-tasks.md
     expect(await planTurn(browserFacts({ browser: { ...browser, guide: null } }), env())).toEqual({
       kind: 'refused',
       code: 'not_accepted',
+    })
+    // A site without a repository has nothing but the browser, and core has no worker for it.
+    expect(await planTurn(browserFacts(), env({ browser: false }))).toEqual({
+      kind: 'refused',
+      code: 'unavailable',
     })
     // A completed turn whose plan no longer reads cannot be continued.
     expect(

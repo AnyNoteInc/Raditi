@@ -69,7 +69,7 @@ export class McpToolsController {
   @Tool({
     name: 'site_info',
     description:
-      "Read the stack of the site of this turn and its addresses: url — where this dialog's preview answers (null while it is not ready; the site itself where there are no previews), siteUrl — the site's own address, which links inside content keep; database.operations — what of the database a release carries here. For a task in the browser, browser: the site, the path its browser starts at and who controls it now (agent or user; null — not open).",
+      "Read the stack of the site of this turn and its addresses: url — where this dialog's preview answers (null while it is not ready; the site itself where there are no previews), siteUrl — the site's own address, which links inside content keep; database.operations — what of the database a release carries here. For a task in the browser, browser: the site, the path its browser starts at and who controls it now (agent or user; null — not started: it starts with your first web_* call).",
     parameters: z.strictObject({}),
     annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   })

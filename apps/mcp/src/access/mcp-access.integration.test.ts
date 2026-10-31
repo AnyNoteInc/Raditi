@@ -1974,6 +1974,15 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
    * lease and key (docs/plan/57-browser-tasks.md, Б2, Б9): the needs of a task are fixed when it
    * is written. Answers the token, the rows and their cleanup.
    */
+  async function ensureJobs(sessionId: string) {
+    return db.outboxEvent.findMany({
+      where: {
+        topic: 'browser-sessions',
+        dedupeKey: { startsWith: `browser.ensure:${sessionId}:` },
+      },
+    })
+  }
+
   async function turnOf(input: {
     siteStatus: 'onboarding' | 'active' | 'paused' | 'disconnected' | 'archived'
     needsRepository: boolean
@@ -2206,7 +2215,7 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
         },
       })
       const turn = await liveTurn(task.id, site.id, suffix, token)
-      const web = new PostgresMcpWebStore(db)
+      const web = new PostgresMcpWebStore(db, { maxHours: 4 })
       // By hand: `authenticate` gives no scope to such a turn, and `admit` must not rely on that.
       const scope = {
         keyId: turn.key.id,
@@ -2314,7 +2323,7 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
 
     it('admits a web call of its turn with its own session, of no site', async () => {
       const turn = await chatTurnOf(true)
-      const web = new PostgresMcpWebStore(db)
+      const web = new PostgresMcpWebStore(db, { maxHours: 4 })
       const site = await db.site.create({
         data: {
           workspaceId: fixture.workspaceId,
@@ -2341,7 +2350,7 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
         })
         expect(await web.admit(scope)).toMatchObject({
           assignmentId: turn.assignment.id,
-          sessionId: session.id,
+          session: { id: session.id, status: 'ready' },
         })
         // A session of a site is not the session of a chat, whatever holds it.
         await db.browserSession.update({ where: { id: session.id }, data: { siteId: site.id } })
@@ -2372,30 +2381,51 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
       needsRepository: false,
       needsBrowser: true,
     })
-    const web = new PostgresMcpWebStore(db)
+    const web = new PostgresMcpWebStore(db, { maxHours: 4 })
     // What site_info tells of the browser reads the same session.
     const browserTasks = mcpBrowserTasksOf({ db, adapters: getSiteAdapter })
     try {
       const scope = siteAccessOf((await store.authenticate(turn.token))!)!
-      // core opens the session before the turn (Б18): without one there is no browser to reach.
-      await expect(web.admit(scope)).rejects.toMatchObject({ code: 'BROWSER_SESSION_UNAVAILABLE' })
       expect(await browserTasks.controller(turn.task.id)).toBeNull()
-      const session = await db.browserSession.create({
-        data: {
-          taskId: turn.task.id,
-          siteId: turn.site.id,
-          workspaceId: fixture.workspaceId,
-          status: 'ready',
-          readyAt: new Date(),
-          controller: 'user',
-          controlEpoch: 1,
-          expiresAt: new Date(Date.now() + 3_600_000),
-        },
+      // No session yet: the first call opens one and asks core for it, in one transaction (К11).
+      const first = await web.admit(scope)
+      expect(first.session.status).toBe('starting')
+      const session = await db.browserSession.findUniqueOrThrow({
+        where: { id: first.session.id },
       })
+      expect(session).toMatchObject({
+        taskId: turn.task.id,
+        siteId: turn.site.id,
+        workspaceId: fixture.workspaceId,
+        status: 'starting',
+      })
+      expect(session.expiresAt.getTime() - session.createdAt.getTime()).toBeGreaterThan(
+        3 * 3_600_000,
+      )
+      expect(await ensureJobs(session.id)).toEqual([
+        expect.objectContaining({
+          topic: 'browser-sessions',
+          type: 'browser.ensure',
+          payload: { taskId: turn.task.id, sessionId: session.id },
+        }),
+      ])
+      expect(await web.sessionState(session.id)).toBe('starting')
+      // While it starts, a call asks again once a window: its job may have been lost.
+      expect((await web.admit(scope)).session).toEqual({ id: session.id, status: 'starting' })
+      expect((await ensureJobs(session.id)).length).toBeLessThanOrEqual(2)
+      await db.browserSession.update({
+        where: { id: session.id },
+        data: { status: 'ready', readyAt: new Date(), controller: 'user', controlEpoch: 1 },
+      })
+      const asked = (await ensureJobs(session.id)).length
       const admission = await web.admit(scope)
-      expect(admission).toMatchObject({ assignmentId: turn.assignment.id, sessionId: session.id })
+      expect(admission).toMatchObject({
+        assignmentId: turn.assignment.id,
+        session: { id: session.id, status: 'ready' },
+      })
       expect(admission.deadlineAt.getTime()).toBeGreaterThan(admission.now.getTime())
       expect(await browserTasks.controller(turn.task.id)).toBe('user')
+      expect(await ensureJobs(session.id)).toHaveLength(asked)
       // What a page shows is content of the task: its contact map is swept with it.
       expect(
         (await db.task.findUniqueOrThrow({ where: { id: turn.task.id } })).contentAccessedAt,
@@ -2404,7 +2434,7 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
       await db.site.update({ where: { id: turn.site.id }, data: { status: 'paused' } })
       await expect(web.admit(scope)).rejects.toMatchObject({ code: 'BROWSER_SESSION_UNAVAILABLE' })
       await db.site.update({ where: { id: turn.site.id }, data: { status: 'active' } })
-      expect(await web.admit(scope)).toMatchObject({ sessionId: session.id })
+      expect(await web.admit(scope)).toMatchObject({ session: { id: session.id } })
       await db.turnAssignment.update({
         where: { id: turn.assignment.id },
         data: { finishedAt: new Date(), outcome: 'completed' },
@@ -2414,18 +2444,74 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
         where: { id: turn.assignment.id },
         data: { finishedAt: null, outcome: null },
       })
-      await db.browserSession.update({
-        where: { id: session.id },
-        data: { status: 'closed', closedAt: new Date(), closeReason: 'idle' },
-      })
+      const close = (id: string) =>
+        db.browserSession.update({
+          where: { id },
+          data: { status: 'closed', closedAt: new Date(), closeReason: 'crashed' },
+        })
+      await close(session.id)
+      expect(await web.sessionState(session.id)).toBe('closed')
+      // One replacement in an assignment (К41): a third browser is not started for it.
+      const replacement = await web.admit(scope)
+      expect(replacement.session.id).not.toBe(session.id)
+      expect(replacement.session.status).toBe('starting')
+      await close(replacement.session.id)
       await expect(web.admit(scope)).rejects.toMatchObject({ code: 'BROWSER_SESSION_UNAVAILABLE' })
+      expect(await db.browserSession.count({ where: { taskId: turn.task.id } })).toBe(2)
+      // Sessions of an earlier assignment are not this one's to count.
+      await db.browserSession.updateMany({
+        where: { taskId: turn.task.id },
+        data: { createdAt: new Date(Date.now() - 3_600_000) },
+      })
+      expect((await web.admit(scope)).session.status).toBe('starting')
+      await expect(web.sessionState(randomUUID())).resolves.toBeNull()
     } finally {
+      await db.outboxEvent.deleteMany({ where: { topic: 'browser-sessions' } })
+      await turn.cleanup()
+    }
+  })
+
+  it('tells the agent the workspace holds all its browsers', async () => {
+    const turn = await turnOf({
+      siteStatus: 'onboarding',
+      needsRepository: false,
+      needsBrowser: true,
+    })
+    const web = new PostgresMcpWebStore(db, { maxHours: 4 })
+    const others = await Promise.all(
+      [1, 2].map(() =>
+        db.task.create({
+          data: {
+            workspaceId: fixture.workspaceId,
+            siteId: turn.site.id,
+            needsRepository: false,
+            needsBrowser: true,
+          },
+        }),
+      ),
+    )
+    try {
+      for (const other of others)
+        await db.browserSession.create({
+          data: {
+            taskId: other.id,
+            siteId: turn.site.id,
+            workspaceId: fixture.workspaceId,
+            expiresAt: new Date(Date.now() + 3_600_000),
+          },
+        })
+      const scope = siteAccessOf((await store.authenticate(turn.token))!)!
+      await expect(web.admit(scope)).rejects.toMatchObject({ code: 'BROWSER_WORKSPACE_BUSY' })
+      expect(await db.browserSession.count({ where: { taskId: turn.task.id } })).toBe(0)
+    } finally {
+      await db.browserSession.deleteMany({ where: { taskId: { in: others.map(({ id }) => id) } } })
+      await db.task.deleteMany({ where: { id: { in: others.map(({ id }) => id) } } })
       await turn.cleanup()
     }
   })
 
   it('refuses a web call of a task that needs no browser, whatever its scope says', async () => {
-    const web = new PostgresMcpWebStore(db)
+    const web = new PostgresMcpWebStore(db, { maxHours: 4 })
     const scope = siteAccessOf((await store.authenticate(fixture.token))!)!
     await expect(
       web.admit({ ...scope, requirements: { repository: false, browser: true } }),
@@ -2438,7 +2524,7 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
       needsRepository: false,
       needsBrowser: true,
     })
-    const web = new PostgresMcpWebStore(db)
+    const web = new PostgresMcpWebStore(db, { maxHours: 4 })
     try {
       const file = (taskId: string | null) => {
         const id = randomUUID()

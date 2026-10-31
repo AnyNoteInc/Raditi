@@ -43,7 +43,7 @@ const browserTask = scopeOf({ repository: false, browser: true })
 /** The worker beside the role; no profile of its own, no S3. */
 const config = (overrides: Partial<McpConfig> = {}): McpConfig => ({
   ...testMcpConfig(),
-  browserWorker: { url: 'http://127.0.0.1:9', token: 'w'.repeat(48) },
+  browserWorker: { url: 'http://127.0.0.1:9', token: 'w'.repeat(48), sessionMaxHours: 4 },
   ...overrides,
 })
 

@@ -1,3 +1,5 @@
+import { setTimeout as pause } from 'node:timers/promises'
+
 import type { BrowserWorkerClient } from '@repo/browser-link'
 import {
   BROWSER_TOOL_RESPONSE_MAX_BYTES,
@@ -24,8 +26,9 @@ import type { McpWebAdmission, McpWebStore } from './mcp-web-store.ts'
 /**
  * The `web` tools of a browser task (docs/plan/57-browser-tasks.md, Б20, §3.7): the agent works in
  * the task's cloud browser on the site itself, one action at a time, through the browser worker.
- * Every call is admitted again for its turn and needs the task's open browser session; one call
- * per turn runs at a time. The agent never gets Playwright, CDP, cookies or pixels — the worker's
+ * Every call is admitted again for its turn; the first one opens the task's browser session and
+ * waits for it (docs/plan/61-chats-first.md, К11), or answers `BROWSER_STARTING` when the start takes
+ * longer than the call may wait. One call per turn runs at a time. The agent never gets Playwright, CDP, cookies or pixels — the worker's
  * answer is text, its addresses without their secret parameters and fragments, its contacts hidden
  * by the task's contact map, at most 64 KiB; a refusal is a fixed code with a fixed text that names
  * no address and no value of a field.
@@ -65,14 +68,29 @@ export interface McpWebDeps {
 export interface McpWebOptions {
   /** All of one call; OpenCode gives an MCP request 60 s. */
   callBudgetMs?: number
+  /** A call waits for a starting browser only while this much of it is left for the action. */
+  startingActionMs?: number
+  /** How often a call looks at a starting browser. */
+  pollMs?: number
   /** An answer to the agent is at most this large, as JSON in UTF-8. */
   responseBytes?: number
   now?: () => number
+  /** The pause between two looks at a starting browser. */
+  sleep?: (ms: number) => Promise<void>
 }
 
-const defaults: { callBudgetMs: number; responseBytes: number } = {
+const defaults: {
+  callBudgetMs: number
+  startingActionMs: number
+  pollMs: number
+  responseBytes: number
+  sleep: (ms: number) => Promise<void>
+} = {
   callBudgetMs: browserSessionTimings.toolCallBudgetMs,
+  startingActionMs: browserSessionTimings.startingActionMs,
+  pollMs: 250,
   responseBytes: BROWSER_TOOL_RESPONSE_MAX_BYTES,
+  sleep: (ms) => pause(ms),
 }
 
 /** Less than this of the turn left: the turn is ending, the action would not finish in it. */
@@ -124,13 +142,17 @@ export class McpWebService {
     const first = await this.#admit(scope)
     return this.#serial(first.assignmentId, async (waited) => {
       // A call that waited for another one is admitted again: the turn may have ended meanwhile.
-      const admission = waited ? await this.#admit(scope) : first
-      if (admission.assignmentId !== first.assignmentId)
-        throw webRefusal('BROWSER_SESSION_UNAVAILABLE')
-      // Both on the database's clock: the time left of the turn is no comparison of two clocks.
-      const turnLeft = admission.deadlineAt.getTime() - admission.now.getTime()
-      if (turnLeft < MIN_ACTION_MS) throw webRefusal('BROWSER_SESSION_UNAVAILABLE')
-      const left = Math.min(started + this.#options.callBudgetMs - this.#now(), turnLeft)
+      let admission = waited ? await this.#again(scope, first) : first
+      let ends = this.#endOf(admission, started)
+      if (admission.session.status === 'starting') {
+        await this.#untilReady(admission, ends)
+        // So is one that waited for its browser, and it may be left less of the turn.
+        admission = await this.#again(scope, first)
+        // The browser it waited for is gone already and another one starts.
+        if (admission.session.status !== 'ready') throw webRefusal('BROWSER_STARTING')
+        ends = this.#endOf(admission, started)
+      }
+      const left = ends - this.#now()
       if (left < MIN_ACTION_MS) throw webRefusal('BROWSER_TIMEOUT')
       const action = await this.#action(scope, tool, args)
       const result = await this.#act(admission, scope, action, left)
@@ -145,8 +167,42 @@ export class McpWebService {
   async #admit(scope: McpTurnAccess): Promise<McpWebAdmission> {
     try {
       return await this.#deps.store.admit(scope)
-    } catch {
+    } catch (error) {
+      if (isDomainError(error) && error.code === 'BROWSER_WORKSPACE_BUSY')
+        throw webRefusal('BROWSER_WORKSPACE_BUSY')
       throw webRefusal('BROWSER_SESSION_UNAVAILABLE')
+    }
+  }
+
+  /** The admission of a call once more: nothing that happened meanwhile moved it to another turn. */
+  async #again(scope: McpTurnAccess, first: McpWebAdmission): Promise<McpWebAdmission> {
+    const admission = await this.#admit(scope)
+    if (admission.assignmentId !== first.assignmentId)
+      throw webRefusal('BROWSER_SESSION_UNAVAILABLE')
+    return admission
+  }
+
+  /** When the call must be over: its own budget, or the turn. */
+  #endOf(admission: McpWebAdmission, started: number): number {
+    // Both on the database's clock: the time left of the turn is no comparison of two clocks.
+    const turnLeft = admission.deadlineAt.getTime() - admission.now.getTime()
+    if (turnLeft < MIN_ACTION_MS) throw webRefusal('BROWSER_SESSION_UNAVAILABLE')
+    return Math.min(started + this.#options.callBudgetMs, this.#now() + turnLeft)
+  }
+
+  /**
+   * Waits for the browser of the first call while enough of the call is left for its action. A
+   * longer start is no failure: the call answers `BROWSER_STARTING`, the agent calls again and the
+   * start goes on. A session that closed will not come up.
+   */
+  async #untilReady(admission: McpWebAdmission, ends: number): Promise<void> {
+    const { startingActionMs, pollMs, sleep } = this.#options
+    for (;;) {
+      const status = await this.#deps.store.sessionState(admission.session.id).catch(() => null)
+      if (status === 'ready') return
+      if (status !== 'starting') throw webRefusal('BROWSER_SESSION_UNAVAILABLE')
+      if (ends - this.#now() < startingActionMs) throw webRefusal('BROWSER_STARTING')
+      await sleep(pollMs)
     }
   }
 
@@ -222,7 +278,7 @@ export class McpWebService {
   ): Promise<BrowserToolResult> {
     try {
       return await this.#deps.worker.action(
-        admission.sessionId,
+        admission.session.id,
         { taskId: scope.taskId, assignmentId: admission.assignmentId, action },
         { signal: AbortSignal.timeout(budgetMs) },
       )

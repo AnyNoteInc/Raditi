@@ -1,9 +1,13 @@
 import {
   AGENT_TURN_JOB,
   AGENT_TURN_QUEUE,
+  BROWSER_ENSURE_JOB,
+  BROWSER_SESSION_QUEUE,
   agentTurnDedupeKey,
   agentTurnJobSchema,
   agentTurnRetryJobId,
+  browserEnsureDedupeKey,
+  browserEnsureJobSchema,
   PREVIEW_BROWSER_JOB,
   PREVIEW_QUEUE,
   PREVIEW_SYNC_JOB,
@@ -16,6 +20,7 @@ import {
   releaseAdvanceDedupeKey,
   releaseAdvanceJobSchema,
   type AgentTurnJob,
+  type BrowserEnsureJob,
   type PreviewBrowserJob,
   type PreviewSyncJob,
   type ReleaseAdvanceJob,
@@ -131,6 +136,29 @@ export async function enqueuePreviewBrowser(
     type: PREVIEW_BROWSER_JOB,
     payload,
     dedupeKey: previewBrowserDedupeKey(payload),
+  })
+}
+
+/**
+ * The start of a browser session (docs/plan/61-chats-first.md, К11). `window` is
+ * `browserEnsureWindow` of the database's time: one job per session in each of them, so a session
+ * that stays `starting` asks again and a call of the same window adds nothing.
+ */
+export async function enqueueBrowserEnsure(
+  tx: OutboxWriter,
+  job: BrowserEnsureJob,
+  options: { window: number },
+): Promise<boolean> {
+  const parsed = browserEnsureJobSchema.parse(job)
+  const payload: BrowserEnsureJob = {
+    taskId: lower(parsed.taskId),
+    sessionId: lower(parsed.sessionId),
+  }
+  return enqueueOutbox(tx, {
+    topic: BROWSER_SESSION_QUEUE,
+    type: BROWSER_ENSURE_JOB,
+    payload,
+    dedupeKey: browserEnsureDedupeKey(payload, options.window),
   })
 }
 

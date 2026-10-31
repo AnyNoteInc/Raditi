@@ -336,6 +336,29 @@ describe('the browser of a task', () => {
     expect(stream.send).not.toHaveBeenCalled()
   })
 
+  it('says a browser the agent has not needed has not started, and waits (plan 61, К11)', () => {
+    show({
+      head: head({ browser: null }),
+      stream: fakeStream({ connection: 'idle', state: null }),
+    })
+    expect(within(toolbar()).getByRole('status').textContent).toBe('Не запускался')
+    expect(screen.getByText('Браузер откроется, когда понадобится агенту.')).toBeTruthy()
+  })
+
+  it.each(['done', 'failed', 'cancelled', 'rolled_back'] as const)(
+    'tells of no work in a browser that never started, when the task is %s',
+    (status) => {
+      show({
+        head: head({ status, browser: null }),
+        stream: fakeStream({ connection: 'idle', state: null }),
+      })
+      expect(within(toolbar()).getByRole('status').textContent).toBe('Не запускался')
+      expect(screen.getByText('Браузер в этом чате не запускался.')).toBeTruthy()
+      expect(screen.queryByText('Браузер закрыт')).toBeNull()
+      expect(screen.queryByText(/Агент закончил работу/)).toBeNull()
+    },
+  )
+
   it('covers the picture while it connects, reconnects or fails', () => {
     const first = show({ stream: fakeStream({ connection: 'connecting', state: null }) })
     expect(screen.getByText('Подключаемся к браузеру…')).toBeTruthy()

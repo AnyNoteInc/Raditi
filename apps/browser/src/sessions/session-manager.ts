@@ -60,8 +60,9 @@ export interface SessionManagerDeps extends Omit<
 const HOUR_MS = 3_600_000
 
 /**
- * The sessions of this worker (docs/plan/57-browser-tasks.md, §3.5, Б18): the ones core ensures
- * before a pass and closes with the task, idle ones closed after `idleMinutes`, every one at its
+ * The sessions of this worker (docs/plan/57-browser-tasks.md, §3.5, Б18): the ones core starts on
+ * the agent's first `web_*` call (docs/plan/61-chats-first.md, К11), gives back with the next turn
+ * and closes with the task, idle ones closed after `idleMinutes`, every one at its
  * hard deadline. In memory only: a worker that restarts holds none, and the sessions it held
  * are lost (core's collector marks them; an `ensure` of one says so at once).
  */
@@ -121,7 +122,7 @@ export class SessionManager {
     const session = await this.#held(request)
     if (!session.live) {
       // Ending here (idle, expired, crashed): its row is closed only once the containers are
-      // gone. Answered after that, core replaces it with a new session instead of failing.
+      // gone. Answered after that, the next `web_*` call opens a new session (К11).
       await session.ending?.catch(() => undefined)
       throw conflict('The browser session is closed')
     }

@@ -16,6 +16,7 @@ import {
 // the checkpoints again (BrowserSessions.verify).
 
 type Reader = Pick<Prisma.TransactionClient, '$queryRaw' | 'browserSession'>
+type TurnReader = Pick<Prisma.TransactionClient, 'browserSession' | 'turnAssignment'>
 
 export interface BrowserTaskFacts {
   /** What the agent asked the client to do in the browser (`web_help`), not answered yet. */
@@ -35,6 +36,32 @@ const isHelpReason = (reason: string | null): reason is BrowserHelpReason =>
   reason !== null && (browserHelpReasons as readonly string[]).includes(reason)
 
 /**
+ * The browser a turn asked for failed to start and none came up in it: no session open during the
+ * turn was ever `ready`, and one is `failed`, which only a start ends in, whichever side gave up.
+ * A browser still starting is no such case: the agent was told to call again (К11).
+ */
+export async function browserFailedInTurn(
+  db: TurnReader,
+  taskId: string,
+  turn: number,
+): Promise<boolean> {
+  const assignment = await db.turnAssignment.findFirst({
+    where: { taskId, turnNo: turn },
+    orderBy: { createdAt: 'asc' },
+    select: { createdAt: true },
+  })
+  if (!assignment) return false
+  const sessions = await db.browserSession.findMany({
+    where: { taskId, OR: [{ closedAt: null }, { closedAt: { gte: assignment.createdAt } }] },
+    select: { status: true, readyAt: true },
+  })
+  return (
+    sessions.some((session) => session.status === 'failed') &&
+    sessions.every((session) => session.readyAt === null)
+  )
+}
+
+/**
  * The facts of the task's browser: its latest session — the live one when there is one — and
  * every checkpoint of the task. A task that never opened a browser has none of either.
  */
@@ -52,11 +79,16 @@ export async function readBrowserTaskFacts(db: Reader, taskId: string): Promise<
     .filter((object): object is FeedObject => object !== null)
     .slice(0, feedLimits.objects)
   return {
+    // A request of a session that is gone is nobody's now: no pass starts a browser any more, so
+    // it would turn into a question about a browser the client cannot reach.
     help:
-      session && isHelpReason(session.helpReason) && session.helpMessage
+      session &&
+      isBrowserSessionLive(session.status) &&
+      isHelpReason(session.helpReason) &&
+      session.helpMessage
         ? { reason: session.helpReason, message: session.helpMessage }
         : null,
-    // A browser that is gone holds no control: the next pass opens a new one for the agent.
+    // A browser that is gone holds no control: the agent's next `web_*` call starts a new one.
     controller: session && isBrowserSessionLive(session.status) ? session.controller : 'agent',
     objects,
     confirmed: checkpoints.some(

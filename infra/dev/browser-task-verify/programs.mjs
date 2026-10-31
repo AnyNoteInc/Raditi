@@ -533,7 +533,18 @@ export function* publishAfterTimeout(ctx, facts) {
   })
 }
 
+/** A turn that needs no browser: the agent answers in words, no tool called (plan 61, К11). */
+export function* answerInWords() {
+  yield* []
+  return final({
+    summary: 'Answered without opening the browser',
+    changeType: 'none',
+    message: 'Я могу добавлять новости и менять страницы сайта. Напишите, что сделать.',
+  })
+}
+
 export const PROGRAMS = Object.freeze({
+  answerInWords,
   askToSignIn,
   publishNews,
   keepDraft,

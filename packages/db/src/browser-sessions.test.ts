@@ -98,6 +98,68 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the browser session of a task', () =>
     await expect(openBrowserSession(db, { taskId: task.id, maxHours: 0 })).rejects.toThrow()
   })
 
+  describe('the browsers of one workspace (plan 61, К36)', () => {
+    /** A task of a site of its own in a workspace of a task already there. */
+    async function neighbour(taskId: string) {
+      const { workspaceId } = await db.task.findUniqueOrThrow({ where: { id: taskId } })
+      const site = await db.site.create({
+        data: {
+          workspaceId,
+          name: 'Synthetic',
+          url: `https://${randomUUID()}.example.test`,
+          stack: 'wordpress',
+          status: 'onboarding',
+        },
+      })
+      return db.task.create({
+        data: { workspaceId, siteId: site.id, needsRepository: false, needsBrowser: true },
+      })
+    }
+
+    it('refuses a third live browser, and takes it once one has closed', async () => {
+      const first = await browserTask()
+      const second = await neighbour(first.id)
+      const third = await neighbour(first.id)
+      const open = await db.$transaction((tx) => openBrowserSession(tx, { taskId: first.id }))
+      await db.$transaction((tx) => openBrowserSession(tx, { taskId: second.id }))
+
+      await expect(
+        db.$transaction((tx) => openBrowserSession(tx, { taskId: third.id })),
+      ).rejects.toMatchObject({ code: 'BROWSER_WORKSPACE_BUSY' })
+      expect(await openBrowserSessionOfTask(db, third.id)).toBeNull()
+
+      // A task that holds a browser keeps it whatever the count.
+      const again = await db.$transaction((tx) => openBrowserSession(tx, { taskId: first.id }))
+      expect(again.id).toBe(open.id)
+
+      await closeBrowserSession(db, { sessionId: open.id, status: 'closed', reason: 'idle' })
+      const taken = await db.$transaction((tx) => openBrowserSession(tx, { taskId: third.id }))
+      expect(taken.status).toBe('starting')
+    })
+
+    it('counts under a lock: of three tasks at once two get a browser', async () => {
+      const first = await browserTask()
+      const tasks = [first, await neighbour(first.id), await neighbour(first.id)]
+      const outcomes = await Promise.allSettled(
+        tasks.map((task) => db.$transaction((tx) => openBrowserSession(tx, { taskId: task.id }))),
+      )
+      expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(2)
+      expect(
+        await db.browserSession.count({
+          where: { workspaceId: first.workspaceId, status: { in: ['starting', 'ready'] } },
+        }),
+      ).toBe(2)
+    })
+
+    it('holds no other workspace to it', async () => {
+      const first = await browserTask()
+      await db.$transaction((tx) => openBrowserSession(tx, { taskId: first.id }))
+      const elsewhere = await browserTask()
+      const opened = await db.$transaction((tx) => openBrowserSession(tx, { taskId: elsewhere.id }))
+      expect(opened.workspaceId).toBe(elsewhere.workspaceId)
+    })
+  })
+
   it('opens a session for a site being connected or connected, never a closed one', async () => {
     const active = await browserTask({ siteStatus: 'active' })
     expect((await openBrowserSession(db, { taskId: active.id })).status).toBe('starting')
@@ -184,9 +246,39 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the browser session of a task', () =>
     expect(await markBrowserSessionWrote(db, { sessionId })).toBe(true)
     const wrote = (await row()).wroteAt
     expect(wrote).toEqual(expect.any(Date))
+    const latest = (await row()).lastWroteAt
+    expect(latest!.getTime()).toBeGreaterThanOrEqual(wrote!.getTime())
     // The first write is kept: later ones change nothing it says.
     expect(await markBrowserSessionWrote(db, { sessionId })).toBe(true)
     expect((await row()).wroteAt).toEqual(wrote)
+    // The first write of the session stays; the last one is of the latest pass.
+    expect((await row()).lastWroteAt!.getTime()).toBeGreaterThanOrEqual(latest!.getTime())
+  })
+
+  it('closes only a session still starting when asked to: a browser that came up stays', async () => {
+    const task = await browserTask()
+    const { id: sessionId } = await openBrowserSession(db, { taskId: task.id })
+    await markBrowserSessionReady(db, { sessionId })
+    expect(
+      await closeBrowserSession(db, {
+        sessionId,
+        status: 'failed',
+        reason: 'crashed',
+        errorCode: 'BROWSER_START_FAILED',
+        onlyStarting: true,
+      }),
+    ).toMatchObject({ status: 'ready', closedAt: null, errorCode: null })
+
+    const other = await browserTask()
+    const opened = await openBrowserSession(db, { taskId: other.id })
+    expect(
+      await closeBrowserSession(db, {
+        sessionId: opened.id,
+        status: 'failed',
+        reason: 'crashed',
+        onlyStarting: true,
+      }),
+    ).toMatchObject({ status: 'failed', closeReason: 'crashed' })
   })
 
   it('closes a session once, and records nothing in it but its writes after', async () => {

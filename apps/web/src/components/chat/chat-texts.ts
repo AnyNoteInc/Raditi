@@ -451,6 +451,8 @@ export const browserText = Object.freeze({
   toolbar: 'Управление браузером',
   canvas: 'Страница сайта в браузере задачи',
   status: {
+    /** No session: the browser starts only when the agent needs it. */
+    notStarted: 'Не запускался',
     connecting: 'Подключение',
     agent: 'Работает агент',
     waiting: 'Ждём вас',
@@ -484,7 +486,8 @@ export const browserText = Object.freeze({
   keyboard: 'Клавиатура',
   keyboardInput: 'Ввод на страницу',
   connecting: 'Подключаемся к браузеру…',
-  starting: 'Браузер откроется, когда агент начнёт работу.',
+  starting: 'Браузер откроется, когда понадобится агенту.',
+  neverStarted: 'Браузер в этом чате не запускался.',
   reconnecting: 'Связь прервалась. Переподключаемся…',
   reconnectingNote:
     'Агент продолжает работу — прервался только показ страницы. Пока что на экране последний кадр.',
@@ -610,7 +613,7 @@ export const toolText = Object.freeze({
     none: 'нет',
     /** The checks of the changes: those passed of all. */
     checks: (passed: number, all: number) => `${passed} из ${all}`,
-    /** The session of the browser holds none any more, or the dialog ended without one. */
+    /** The session of the browser holds none any more. */
     browserClosed: 'Закрыт',
   }),
   /** What a tab of the changes says while there are none yet (И6). */

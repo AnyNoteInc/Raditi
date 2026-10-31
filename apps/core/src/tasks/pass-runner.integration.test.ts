@@ -4,8 +4,10 @@ import type { AgentDriverRegistry } from '@repo/agent-drivers'
 import { ensurePersonalWorkspaceWithGift } from '@repo/billing'
 import { billingFixtures } from '@repo/billing/testing'
 import {
+  closeBrowserSession,
   createPrismaClient,
   insertFeedEvent,
+  markBrowserSessionReady,
   openBrowserSession,
   PostgresSiteLeaseStore,
   PostgresTaskTurnAssignmentStore,
@@ -15,7 +17,6 @@ import {
 } from '@repo/db'
 import {
   BROWSER_ONLY,
-  browserTaskError,
   siteBusy,
   siteIdOf,
   toTurnPlan,
@@ -173,11 +174,12 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     inspect: () => Promise<unknown> = async () => null,
     options: {
       git?: CandidateGit | null
-      browser?: { ensure: ReturnType<typeof vi.fn>; verify: ReturnType<typeof vi.fn> } | null
+      browser?: { reclaim: ReturnType<typeof vi.fn>; verify: ReturnType<typeof vi.fn> } | null
     } = {},
   ) {
     const queue = { enqueue: vi.fn(async () => {}) }
     const close = vi.fn(async () => {})
+    const live = new LivePasses()
     const settlement = new PassSettlement({
       db,
       candidates,
@@ -198,12 +200,12 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       runtime: 'runc',
       previews: null,
       settlement,
-      live: new LivePasses(),
+      live,
       queue,
       logger: quiet,
       now: () => NOW,
     })
-    return { passes, queue, supervisor, close }
+    return { passes, queue, supervisor, close, live }
   }
 
   const failure = async (taskId: string) =>
@@ -426,17 +428,17 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     describe('a task in the cloud browser (docs/plan/57-browser-tasks.md)', () => {
       const editUrl = 'https://example.ru/wp-admin/post.php?post=12&action=edit'
       const browserSessions = () => ({
-        ensure: vi.fn(async (_taskId: string, _signal: AbortSignal) => {}),
+        reclaim: vi.fn(async (_taskId: string, _signal: AbortSignal) => {}),
         verify: vi.fn(async (_taskId: string) => true),
       })
 
-      it('runs on a core without git: opens the browser, plans no repository, verifies, answers', async () => {
+      it('runs on a core without git: starts no browser, plans no repository, verifies, answers', async () => {
         await rate()
         const dialog = await queued({ reserve: true, browser: true })
         const browser = browserSessions()
         const order: string[] = []
-        browser.ensure.mockImplementation(async () => {
-          order.push('ensure')
+        browser.reclaim.mockImplementation(async () => {
+          order.push('reclaim')
         })
         browser.verify.mockImplementation(async () => {
           order.push('verify')
@@ -498,8 +500,8 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
 
         await passes.run(dialog.job)
 
-        expect(order).toEqual(['ensure', 'run', 'verify'])
-        expect(browser.ensure).toHaveBeenCalledWith(dialog.taskId, expect.any(AbortSignal))
+        expect(order).toEqual(['reclaim', 'run', 'verify'])
+        expect(browser.reclaim).toHaveBeenCalledWith(dialog.taskId, expect.any(AbortSignal))
         const request = planned!
         expect(() => toTurnPlan(request, sampleDriverId)).not.toThrow()
         expect(request.requirements).toEqual(BROWSER_ONLY)
@@ -522,6 +524,124 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         expect(close).not.toHaveBeenCalled()
       })
 
+      describe('a browser that failed to start in the turn', () => {
+        /** A turn that asked for a browser and ended with words; `session` is what became of it. */
+        const turnThatAsked = (
+          dialog: { taskId: string; siteId: string | null },
+          session: (id: string) => Promise<unknown>,
+        ) =>
+          runner(
+            async () => {
+              await db.task.update({
+                where: { id: dialog.taskId },
+                data: { status: 'running', turnNo: 1 },
+              })
+              await db.taskTurn.create({
+                data: {
+                  taskId: dialog.taskId,
+                  turnNo: 1,
+                  status: 'completed',
+                  driverId: sampleDriverId,
+                  image,
+                },
+              })
+              await db.turnAssignment.create({
+                data: {
+                  taskId: dialog.taskId,
+                  siteId: siteIdOf(dialog),
+                  sessionId: dialog.taskId,
+                  turnNo: 1,
+                  executor: 'local',
+                  plan: {},
+                  firstEpoch: 1,
+                  leaseEpoch: 1,
+                  deadlineAt: new Date(Date.now() + 60_000),
+                  outcome: 'completed',
+                  finishedAt: new Date(),
+                },
+              })
+              const { id } = await openBrowserSession(db, { taskId: dialog.taskId })
+              await session(id)
+              return {
+                result: {
+                  summary: 'Браузер недоступен',
+                  change_type: 'content',
+                  client_message: 'Не удалось открыть браузер.',
+                  files_changed: [],
+                  questions: [],
+                  needs_approval: false,
+                  risk: 'low',
+                },
+                manifest: {} as SnapshotManifest,
+              }
+            },
+            undefined,
+            { git: null, browser: browserSessions() },
+          )
+        const charges = (taskId: string) =>
+          db.creditLedger.count({ where: { taskId, idempotencyKey: { contains: ':charge:' } } })
+
+        it.each([
+          ['core gave up', 'BROWSER_START_FAILED'],
+          ['the worker gave up', 'TimeoutError'],
+        ])('is not charged when %s: the failure is the platform’s (rule 7)', async (_who, code) => {
+          await rate()
+          const dialog = await queued({ reserve: true, browser: true })
+          const { passes } = turnThatAsked(dialog, (sessionId) =>
+            closeBrowserSession(db, {
+              sessionId,
+              status: 'failed',
+              reason: 'crashed',
+              errorCode: code,
+            }),
+          )
+
+          await passes.run(dialog.job)
+
+          expect(await failure(dialog.taskId)).toEqual([
+            expect.objectContaining({
+              code: 'unavailable',
+              next: 'awaiting_user',
+              credits: 'returned',
+            }),
+          ])
+          expect(await charges(dialog.taskId)).toBe(0)
+          expect(
+            await db.taskEvent.count({ where: { taskId: dialog.taskId, type: 'feed.result' } }),
+          ).toBe(0)
+          expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
+            status: 'awaiting_user',
+          })
+        })
+
+        it('is charged when a browser came up in the turn and the next one failed', async () => {
+          await rate()
+          const dialog = await queued({ reserve: true, browser: true })
+          const { passes } = turnThatAsked(dialog, async (sessionId) => {
+            await markBrowserSessionReady(db, { sessionId })
+            await closeBrowserSession(db, { sessionId, status: 'lost', reason: 'crashed' })
+            const { id } = await openBrowserSession(db, { taskId: dialog.taskId })
+            await closeBrowserSession(db, { sessionId: id, status: 'failed', reason: 'crashed' })
+          })
+
+          await passes.run(dialog.job)
+
+          expect(await failure(dialog.taskId)).toEqual([])
+          expect(await charges(dialog.taskId)).toBeGreaterThan(0)
+        })
+
+        it('is charged while the browser only starts: the agent was told to call again', async () => {
+          await rate()
+          const dialog = await queued({ reserve: true, browser: true })
+          const { passes } = turnThatAsked(dialog, async () => {})
+
+          await passes.run(dialog.job)
+
+          expect(await failure(dialog.taskId)).toEqual([])
+          expect(await charges(dialog.taskId)).toBeGreaterThan(0)
+        })
+      })
+
       it('refuses the task when no browser worker is configured, before its turn', async () => {
         await rate()
         const dialog = await queued({ reserve: true, browser: true })
@@ -540,21 +660,22 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         ])
       })
 
-      it('refuses the task `unavailable` when its browser could not be opened', async () => {
+      it('ends a pass the client cancelled while its browser came back, before its turn', async () => {
         await rate()
         const dialog = await queued({ reserve: true, browser: true })
         const browser = browserSessions()
-        browser.ensure.mockRejectedValue(browserTaskError('BROWSER_SESSION_UNAVAILABLE'))
         const run = vi.fn<Run>()
-        const { passes } = runner(run, undefined, { git: null, browser })
+        const { passes, live } = runner(run, undefined, { git: null, browser })
+        browser.reclaim.mockImplementation(async (taskId: string) => {
+          live.abort(taskId)
+        })
 
         await passes.run(dialog.job)
 
         expect(run).not.toHaveBeenCalled()
-        expect(browser.verify).not.toHaveBeenCalled()
-        expect(await failure(dialog.taskId)).toEqual([
-          expect.objectContaining({ code: 'unavailable', next: 'awaiting_user' }),
-        ])
+        expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
+          status: 'cancelled',
+        })
       })
     })
 

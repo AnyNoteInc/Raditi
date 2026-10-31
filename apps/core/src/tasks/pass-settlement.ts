@@ -43,7 +43,11 @@ import {
   type TurnResult,
 } from '@repo/domain'
 
-import { readBrowserTaskFacts, type BrowserTaskFacts } from '../browser/browser-facts.ts'
+import {
+  browserFailedInTurn,
+  readBrowserTaskFacts,
+  type BrowserTaskFacts,
+} from '../browser/browser-facts.ts'
 import type { BrowserSessions } from '../browser/browser-sessions.ts'
 import type { CandidateBuild, CandidateBuilder, StandingCandidate } from './candidate-builder.ts'
 import { isComparisonMissing } from './candidate-git.ts'
@@ -469,7 +473,9 @@ export class PassSettlement {
    * else the agent's answer, with what the task saved on the site as the platform found it there
    * (confirmed or not), and the dialog stays open for the client's next words, as a dialog of
    * «Работа» does. Every way the pass is charged (`#chargePass`), and the browser lives on until
-   * its idle time ends.
+   * its idle time ends. The exception: the browser, all such a task has, failed to start in this
+   * turn. That is the platform's failure whatever the agent said of it: `unavailable`, not charged
+   * (rule 7), as when the browser was opened before the turn.
    */
   async #completedWithoutRepository(
     pass: PassRef,
@@ -477,6 +483,11 @@ export class PassSettlement {
     ending: Extract<PassEnding, { kind: 'completed' }>,
   ): Promise<SettleAnswer> {
     const { result, turn } = ending
+    if (
+      context.requirements.browser &&
+      (await browserFailedInTurn(this.deps.db, pass.taskId, turn))
+    )
+      return this.#failure(pass, context, turn, 'unavailable')
     const browser = context.browser
     const message = agentWords(result.client_message, feedLimits.message)
     // Under a question of the client's browser the agent's message still reaches the client:

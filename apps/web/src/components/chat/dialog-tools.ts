@@ -112,11 +112,11 @@ export function candidateCount(tool: ChangesTool, candidate: CandidateHead | nul
 
 /**
  * Who drives the browser of the task, as its tile says it: «пока нет» while a dialog at work has
- * no session yet — its tab says the browser opens when the agent starts; closed for a session that
- * holds none any more, or a dialog that ended without one.
+ * no session yet — its tab says the browser opens when the agent needs it, which may be never;
+ * «нет» for a dialog that ended without one; closed for a session that holds none any more.
  */
 function browserMark(session: BrowserHead | null, ended: boolean): string {
-  if (session === null) return ended ? toolText.mark.browserClosed : toolText.mark.notYet
+  if (session === null) return ended ? toolText.mark.none : toolText.mark.notYet
   if (!sessionLive(session)) return toolText.mark.browserClosed
   if (session.controller === 'user') return browserText.status.user
   if (session.help !== null) return browserText.status.waiting

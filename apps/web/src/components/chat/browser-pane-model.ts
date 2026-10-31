@@ -36,21 +36,23 @@ const TERMINAL: readonly (TaskStatus | undefined)[] = ['done', 'failed', 'cancel
 export function paneStatus(facts: PaneFacts): PaneStatus {
   const { session, taskStatus, connection } = facts
   const finished = taskStatus === 'done' ? 'finished' : 'closed'
-  if (!sessionLive(session))
-    return session === null && !TERMINAL.includes(taskStatus) ? 'connecting' : finished
+  if (session === null) return 'notStarted'
+  if (!sessionLive(session)) return finished
   if (connection === 'ended') return finished
   if (!facts.configured || connection === 'failed') return 'error'
   if (connection === 'reconnecting') return 'reconnecting'
   if (connection !== 'open') return 'connecting'
-  if ((facts.state?.controller ?? session!.controller) === 'user') return 'user'
+  if ((facts.state?.controller ?? session.controller) === 'user') return 'user'
   if (taskStatus === 'awaiting_user') return facts.answered ? 'idle' : 'waiting'
   return 'agent'
 }
 
 export type PaneOverlay =
   | { kind: 'none' }
-  /** No session yet: the browser opens when the agent starts. */
+  /** No session yet: the browser opens when the agent needs it. */
   | { kind: 'starting' }
+  /** The task ended and no turn of it needed a browser. */
+  | { kind: 'neverStarted' }
   | { kind: 'connecting' }
   /** Over the last frame, which stays on the screen. */
   | { kind: 'reconnecting' }
@@ -83,10 +85,7 @@ export function paneOverlay(
   facts: PaneFacts & { painted: boolean; endReason: BrowserStreamEndReason | null },
 ): PaneOverlay {
   const { session, taskStatus, connection, state } = facts
-  if (session === null)
-    return TERMINAL.includes(taskStatus)
-      ? { kind: 'closed', ...closedWords(null, taskStatus) }
-      : { kind: 'starting' }
+  if (session === null) return { kind: TERMINAL.includes(taskStatus) ? 'neverStarted' : 'starting' }
   if (!sessionLive(session))
     return { kind: 'closed', ...closedWords(session.closeReason, taskStatus) }
   if (connection === 'ended') return { kind: 'closed', ...closedWords(facts.endReason, taskStatus) }

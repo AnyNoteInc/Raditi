@@ -58,6 +58,7 @@ import type { BrowserStream } from './use-browser-stream'
 
 /** The colours of the chip by the state, in the theme's own palette. */
 const chipTone: Readonly<Record<PaneStatus, { bg: string; fg: string; dot?: boolean }>> = {
+  notStarted: { bg: 'action.hover', fg: 'text.secondary' },
   connecting: { bg: 'action.hover', fg: 'text.secondary' },
   agent: { bg: 'action.hover', fg: 'text.primary', dot: true },
   waiting: { bg: 'warning.main', fg: 'warning.contrastText' },
@@ -183,6 +184,8 @@ function Overlay({
   switch (overlay.kind) {
     case 'starting':
       return card(<Typography color="text.secondary">{browserText.starting}</Typography>)
+    case 'neverStarted':
+      return card(<Typography color="text.secondary">{browserText.neverStarted}</Typography>)
     case 'connecting':
       return card(
         <>

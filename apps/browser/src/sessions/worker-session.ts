@@ -493,7 +493,10 @@ export class WorkerSession {
     this.#write(() => this.#context.store.touch(this.id), 'browser_activity_not_recorded')
   }
 
-  /** The first click, input or upload (Б28): «проверьте сайт» if the task ends without result. */
+  /**
+   * The first click, input or upload of a pass (Б28): «проверьте сайт» if the task ends without
+   * result. `agentTakesControl` starts the next pass, so `last_wrote_at` tells it from the last one.
+   */
   #markWrote(): void {
     this.#touch()
     if (this.#wrote) return
@@ -938,6 +941,7 @@ export class WorkerSession {
   /** core's turn starts (`ensure` with `takeControl`, Б16): the agent takes the browser back. */
   agentTakesControl(): void {
     if (!this.live) return
+    this.#wrote = false
     this.#apply(agentTakesBrowserControl(this.#control))
     if (this.#help) {
       this.#help = null

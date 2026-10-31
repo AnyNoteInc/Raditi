@@ -60,6 +60,11 @@ export const browserSessionTimings = Object.freeze({
   agentActionTimeoutMs: 10_000,
   /** One `web_*` call end to end: OpenCode gives an MCP request 60 s. */
   toolCallBudgetMs: 50_000,
+  /**
+   * A call waits for a starting browser only while this much of it is left for the action: less,
+   * and it answers `BROWSER_STARTING`. A proposal, not a measure (docs/plan/61, §5.4).
+   */
+  startingActionMs: 15_000,
 })
 
 /** How the worker sends frames (Б13, Б14); the numbers are starting points for measurement. */
@@ -96,6 +101,10 @@ export const browserSessionLimits = Object.freeze({
   helpChars: 500,
   /** Entries of the `accept` of a file chooser. */
   chooserAccept: 32,
+  /** Live sessions of one workspace (К36): the worker's limit is shared by every client. */
+  perWorkspace: 2,
+  /** Sessions one assignment of a turn may start: the first and one replacement (К41). */
+  perAssignment: 2,
 })
 
 // ---------------------------------------------------------------------------------------------

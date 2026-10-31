@@ -1758,11 +1758,9 @@ describe('a task in the browser', () => {
     )
     expect(await screen.findByText('Добавьте новость о веранде')).toBeTruthy()
     expect(toolsPanel()).toBeNull()
-    expect(await menuTiles()).toEqual(['Браузер, Закрыт'])
+    expect(await menuTiles()).toEqual(['Браузер, нет'])
     await choose(/^Браузер/)
-    expect(plain(pane().textContent)).toContain(
-      'Агент закончил работу в браузере. Результат — в диалоге.',
-    )
+    expect(plain(pane().textContent)).toContain('Браузер в этом чате не запускался.')
   })
 
   it.each([

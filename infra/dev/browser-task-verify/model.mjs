@@ -85,7 +85,9 @@ const sameArgs = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 
 /**
  * The next move of a program over the calls already made: `{ call }`, `{ final }` or
- * `{ broken }`. The facts are those of this run of the program.
+ * `{ broken }`. The facts are those of this run of the program. `BROWSER_STARTING` never reaches a
+ * program: the answer tells the agent to call the tool again, so every program does, and
+ * `facts.starting` counts how often (docs/plan/61-chats-first.md, К11).
  */
 export function nextMove(program, ctx, steps) {
   const facts = {}
@@ -101,6 +103,10 @@ export function nextMove(program, ctx, steps) {
           broken: `the CLI made ${done.name} where the program called ${expected.tool}`,
           facts,
         }
+      if (done.answer?.code === 'BROWSER_STARTING') {
+        facts.starting = (facts.starting ?? 0) + 1
+        continue
+      }
       step = iterator.next(done.answer)
     }
   } catch (error) {

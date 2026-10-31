@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   BROWSER_ENSURE_GRACE_MS,
+  BROWSER_START_FAILED,
   BrowserSessions,
   ENSURE_RETRY_PAUSES_MS,
   closeReasonOfTask,
@@ -11,7 +12,6 @@ import {
 // The database helpers are @repo/db's own (their SQL is tested there and on PostgreSQL in
 // pass-settlement.integration.test.ts); here only what core decides with them.
 const db = vi.hoisted(() => ({
-  openBrowserSession: vi.fn(),
   openBrowserSessionOfTask: vi.fn(),
   listOpenBrowserSessions: vi.fn(),
   markBrowserSessionReady: vi.fn(),
@@ -50,7 +50,6 @@ const state = (patch: Partial<BrowserSessionState> = {}): BrowserSessionState =>
 
 function given(
   options: {
-    maxHours?: number
     signIn?: (siteId: string) => Promise<{ login: string; password: string } | null>
   } = {},
 ) {
@@ -58,6 +57,14 @@ function given(
     task: {
       findUnique: vi.fn(async (_query: object) => ({ siteId: SITE })),
       findMany: vi.fn(async () => [] as Array<{ id: string; status: string }>),
+    },
+    browserSession: {
+      findUnique: vi.fn(
+        async (_query: object): Promise<{ taskId: string; status: string } | null> => ({
+          taskId: TASK,
+          status: 'starting',
+        }),
+      ),
     },
   }
   const client = {
@@ -77,8 +84,7 @@ function given(
     logger,
     now: () => NOW,
   })
-  db.openBrowserSession.mockResolvedValue({ id: SESSION, taskId: TASK })
-  db.openBrowserSessionOfTask.mockResolvedValue({ id: SESSION, taskId: TASK })
+  db.openBrowserSessionOfTask.mockResolvedValue({ id: SESSION, taskId: TASK, status: 'starting' })
   db.markBrowserSessionReady.mockResolvedValue(true)
   db.clearBrowserHelp.mockResolvedValue(true)
   db.closeBrowserSession.mockResolvedValue(null)
@@ -95,42 +101,62 @@ const workerFailure = (failure: string, status?: number) =>
     ...(status === undefined ? {} : { status }),
   })
 const pauses = () => timers.setTimeout.mock.calls.map(([ms]) => ms)
+/** core keeps running: nothing stops a start. */
+const running = new AbortController().signal
 
 afterEach(() => {
   vi.resetAllMocks()
 })
 
-describe('BrowserSessions.ensure', () => {
-  it('opens the session of the task, gives the browser back to the agent and clears its help', async () => {
+describe('BrowserSessions.start', () => {
+  const job = { taskId: TASK, sessionId: SESSION }
+
+  it('starts the session of the job for the agent, without taking the browser from anyone', async () => {
     const g = given()
-    const signal = new AbortController().signal
-    await g.sessions.ensure(TASK, signal)
-    expect(db.openBrowserSession).toHaveBeenCalledWith(g.prisma, { taskId: TASK })
+    await g.sessions.start(job, running)
     // Ids alone: the worker reads the site's address from the database, the agent gets the
     // site's notes in the prompt of its turn.
     expect(g.client.ensure).toHaveBeenCalledExactlyOnceWith(
-      { sessionId: SESSION, taskId: TASK, siteId: SITE, takeControl: true },
-      { signal },
+      {
+        sessionId: SESSION,
+        taskId: TASK,
+        siteId: SITE,
+        takeControl: false,
+      },
+      { signal: running },
     )
-    expect(g.prisma.task.findUnique).toHaveBeenCalledWith({
-      where: { id: TASK },
-      select: { siteId: true },
-    })
     expect(db.markBrowserSessionReady).toHaveBeenCalledWith(g.prisma, { sessionId: SESSION })
-    expect(db.clearBrowserHelp).toHaveBeenCalledWith(g.prisma, { sessionId: SESSION })
+    expect(db.clearBrowserHelp).not.toHaveBeenCalled()
+    expect(db.closeBrowserSession).not.toHaveBeenCalled()
   })
 
-  it('gives the worker the site’s saved sign-in with every ensure (Б36)', async () => {
+  it('leaves a late job alone: the client in the middle of signing in stays there', async () => {
+    const g = given()
+    g.prisma.browserSession.findUnique.mockResolvedValue({ taskId: TASK, status: 'ready' })
+    await g.sessions.start(job, running)
+    expect(g.client.ensure).not.toHaveBeenCalled()
+    expect(db.clearBrowserHelp).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['closed', { taskId: TASK, status: 'closed' }],
+    ['of another task', { taskId: SITE, status: 'starting' }],
+    ['gone', null],
+  ])('starts nothing for a session that is %s', async (_case, row) => {
+    const g = given()
+    g.prisma.browserSession.findUnique.mockResolvedValue(row as never)
+    await g.sessions.start(job, running)
+    expect(g.client.ensure).not.toHaveBeenCalled()
+    expect(db.closeBrowserSession).not.toHaveBeenCalled()
+  })
+
+  it('gives the worker the site’s saved sign-in (Б36)', async () => {
     const saved = { login: 'admin', password: 'Пароль-сайта-2026' }
     const signIn = vi.fn(async (_siteId: string) => saved)
     const g = given({ signIn })
-    const signal = new AbortController().signal
-    await g.sessions.ensure(TASK, signal)
+    await g.sessions.start(job, running)
     expect(signIn).toHaveBeenCalledExactlyOnceWith(SITE)
-    expect(g.client.ensure).toHaveBeenCalledExactlyOnceWith(
-      { sessionId: SESSION, taskId: TASK, siteId: SITE, takeControl: true, signIn: saved },
-      { signal },
-    )
+    expect(g.client.ensure.mock.calls[0]?.[0]).toMatchObject({ takeControl: false, signIn: saved })
   })
 
   it('leaves out a saved sign-in it cannot read: the client signs in by hand', async () => {
@@ -139,18 +165,19 @@ describe('BrowserSessions.ensure', () => {
         throw new DomainError('UNAVAILABLE', 'vault sealed: Пароль-сайта-2026', 503)
       },
     })
-    await g.sessions.ensure(TASK, new AbortController().signal)
+    await g.sessions.start(job, running)
     expect(g.client.ensure.mock.calls[0]?.[0]).not.toHaveProperty('signIn')
     expect(g.logger.warn).toHaveBeenCalledExactlyOnceWith(
       `browser_sign_in_unread site=${SITE} cause=UNAVAILABLE`,
     )
   })
 
-  it('marks a starting browser ready only later', async () => {
+  it('leaves a session still starting on the worker for the job that started it', async () => {
     const g = given()
     g.client.ensure.mockResolvedValue(state({ status: 'starting' }))
-    await g.sessions.ensure(TASK, new AbortController().signal)
+    await g.sessions.start(job, running)
     expect(db.markBrowserSessionReady).not.toHaveBeenCalled()
+    expect(db.closeBrowserSession).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -158,7 +185,7 @@ describe('BrowserSessions.ensure', () => {
       'a refusal of the worker',
       (g: ReturnType<typeof given>) =>
         g.client.ensure.mockRejectedValue(
-          new DomainError('BROWSER_SESSION_UNAVAILABLE', 'http://10.0.0.5:8086 refused', 503),
+          new DomainError('CONFLICT', 'http://10.0.0.5:8086 refused', 409),
         ),
     ],
     [
@@ -166,101 +193,106 @@ describe('BrowserSessions.ensure', () => {
       (g: ReturnType<typeof given>) => g.client.ensure.mockResolvedValue(state({ status: 'lost' })),
     ],
     [
-      'a refusal of the database',
-      () =>
-        db.openBrowserSession.mockRejectedValue(new DomainError('CONFLICT', 'site closed', 409)),
-    ],
-    [
       'a task that is gone',
       (g: ReturnType<typeof given>) => g.prisma.task.findUnique.mockResolvedValue(null as never),
     ],
-  ])('refuses %s as unavailable, logging its code only', async (_case, fail) => {
+  ])('closes the session `failed` after %s, logging its code only', async (_case, fail) => {
     const g = given()
     fail(g)
-    await expect(g.sessions.ensure(TASK, new AbortController().signal)).rejects.toMatchObject({
-      code: 'BROWSER_SESSION_UNAVAILABLE',
+    await g.sessions.start(job, running)
+    expect(db.closeBrowserSession).toHaveBeenCalledExactlyOnceWith(g.prisma, {
+      sessionId: SESSION,
+      status: 'failed',
+      reason: 'crashed',
+      errorCode: BROWSER_START_FAILED,
+      onlyStarting: true,
     })
-    expect(db.clearBrowserHelp).not.toHaveBeenCalled()
-    expect(g.logger.warn).toHaveBeenCalledOnce()
-    expect(JSON.stringify(g.logger.warn.mock.calls)).not.toMatch(/10\.0\.0\.5|site closed/)
+    expect(JSON.stringify(g.logger.warn.mock.calls)).not.toMatch(/10\.0\.0\.5/)
   })
 
-  it('opens the session with the deadline of the worker’s setting', async () => {
-    const g = given({ maxHours: 8 })
-    await g.sessions.ensure(TASK, new AbortController().signal)
-    expect(db.openBrowserSession).toHaveBeenCalledWith(g.prisma, { taskId: TASK, maxHours: 8 })
-  })
-
-  it('replaces once a session the worker lost with its restart, and the pass goes on', async () => {
+  it('leaves a browser that came up though the worker’s answer was lost', async () => {
     const g = given()
-    db.openBrowserSession
-      .mockResolvedValueOnce({ id: SESSION, taskId: TASK })
-      .mockResolvedValueOnce({ id: OTHER, taskId: TASK })
-    // The worker closed the first row `lost` (WORKER_RESTARTED) and refused it.
-    db.openBrowserSessionOfTask.mockResolvedValueOnce(null)
-    g.client.ensure
-      .mockRejectedValueOnce(new DomainError('BROWSER_SESSION_UNAVAILABLE', 'restarted', 503))
-      .mockResolvedValueOnce(state({ session: OTHER }))
-    await g.sessions.ensure(TASK, new AbortController().signal)
-    expect(
-      g.client.ensure.mock.calls.map(([request]) => (request as { sessionId: string }).sessionId),
-    ).toEqual([SESSION, OTHER])
-    expect(db.markBrowserSessionReady).toHaveBeenCalledExactlyOnceWith(g.prisma, {
-      sessionId: OTHER,
+    db.openBrowserSessionOfTask.mockResolvedValue({ id: SESSION, taskId: TASK, status: 'ready' })
+    g.client.ensure.mockRejectedValue(workerFailure('timeout'))
+    await g.sessions.start(job, running)
+    expect(g.client.ensure).toHaveBeenCalledOnce()
+    expect(timers.setTimeout).not.toHaveBeenCalled()
+    expect(db.closeBrowserSession).not.toHaveBeenCalled()
+  })
+
+  it('gives the shutdown of core to the worker’s client and to its pauses', async () => {
+    const g = given()
+    const shutdown = new AbortController()
+    g.client.ensure.mockRejectedValueOnce(workerFailure('unreachable'))
+    await g.sessions.start(job, shutdown.signal)
+    expect(g.client.ensure).toHaveBeenLastCalledWith(expect.anything(), {
+      signal: shutdown.signal,
     })
-    expect(db.clearBrowserHelp).toHaveBeenCalledExactlyOnceWith(g.prisma, { sessionId: OTHER })
+    expect(timers.setTimeout).toHaveBeenCalledWith(ENSURE_RETRY_PAUSES_MS[0], undefined, {
+      signal: shutdown.signal,
+    })
   })
 
-  it('replaces a lost session only once: a second refusal fails the pass', async () => {
+  it('leaves the row open when core stops during the worker’s answer', async () => {
     const g = given()
-    db.openBrowserSession
-      .mockResolvedValueOnce({ id: SESSION, taskId: TASK })
-      .mockResolvedValueOnce({ id: OTHER, taskId: TASK })
+    const shutdown = new AbortController()
+    g.client.ensure.mockImplementationOnce(async () => {
+      shutdown.abort()
+      throw new DOMException('stopped', 'AbortError')
+    })
+    await g.sessions.start(job, shutdown.signal)
+    expect(g.client.ensure).toHaveBeenCalledOnce()
+    expect(db.closeBrowserSession).not.toHaveBeenCalled()
+  })
+
+  it('leaves the row open when core stops during a pause', async () => {
+    const g = given()
+    const shutdown = new AbortController()
+    g.client.ensure.mockRejectedValue(workerFailure('unreachable'))
+    timers.setTimeout.mockImplementationOnce(async () => {
+      shutdown.abort()
+      throw new DOMException('stopped', 'AbortError')
+    })
+    await g.sessions.start(job, shutdown.signal)
+    expect(g.client.ensure).toHaveBeenCalledOnce()
+    expect(db.closeBrowserSession).not.toHaveBeenCalled()
+  })
+
+  it('stops when the row closed meanwhile: the worker said so, or the task ended', async () => {
+    const g = given()
     db.openBrowserSessionOfTask.mockResolvedValue(null)
     g.client.ensure.mockRejectedValue(new DomainError('BROWSER_SESSION_UNAVAILABLE', 'down', 503))
-    await expect(g.sessions.ensure(TASK, new AbortController().signal)).rejects.toMatchObject({
-      code: 'BROWSER_SESSION_UNAVAILABLE',
-    })
-    expect(g.client.ensure).toHaveBeenCalledTimes(2)
-    expect(db.clearBrowserHelp).not.toHaveBeenCalled()
+    await g.sessions.start(job, running)
+    expect(g.client.ensure).toHaveBeenCalledOnce()
+    expect(db.closeBrowserSession).not.toHaveBeenCalled()
   })
 
   it.each([
     ['did not answer', 'unreachable', undefined],
     ['answered an error of no code of its own', 'status', 502],
     ['refused while it stops or is full', 'refused', 503],
-  ])(
-    'asks again for the same session when the worker %s, and the pass goes on',
-    async (_case, failure, status) => {
-      // The worker restarts while the client answers: one request finds nobody there.
-      const g = given()
-      g.client.ensure.mockRejectedValueOnce(workerFailure(failure, status))
-      await g.sessions.ensure(TASK, new AbortController().signal)
-      expect(
-        g.client.ensure.mock.calls.map(([request]) => (request as { sessionId: string }).sessionId),
-      ).toEqual([SESSION, SESSION])
-      expect(pauses()).toEqual([ENSURE_RETRY_PAUSES_MS[0]])
-      expect(db.openBrowserSession).toHaveBeenCalledTimes(2)
-      expect(db.markBrowserSessionReady).toHaveBeenCalledExactlyOnceWith(g.prisma, {
-        sessionId: SESSION,
-      })
-      expect(db.clearBrowserHelp).toHaveBeenCalledExactlyOnceWith(g.prisma, { sessionId: SESSION })
-      expect(g.logger.warn).toHaveBeenCalledExactlyOnceWith(
-        `browser_ensure_retried task=${TASK} cause=BROWSER_SESSION_UNAVAILABLE`,
-      )
-    },
-  )
+  ])('asks again for the same session when the worker %s', async (_case, failure, status) => {
+    const g = given()
+    g.client.ensure.mockRejectedValueOnce(workerFailure(failure, status))
+    await g.sessions.start(job, running)
+    expect(g.client.ensure).toHaveBeenCalledTimes(2)
+    expect(pauses()).toEqual([ENSURE_RETRY_PAUSES_MS[0]])
+    expect(db.markBrowserSessionReady).toHaveBeenCalledExactlyOnceWith(g.prisma, {
+      sessionId: SESSION,
+    })
+    expect(g.logger.warn).toHaveBeenCalledExactlyOnceWith(
+      `browser_ensure_retried task=${TASK} cause=BROWSER_SESSION_UNAVAILABLE`,
+    )
+  })
 
-  it('gives a worker that keeps silent about 45 s, then fails the pass', async () => {
+  it('gives a worker that keeps silent about 45 s, then closes the session', async () => {
     const g = given()
     g.client.ensure.mockRejectedValue(workerFailure('unreachable'))
-    await expect(g.sessions.ensure(TASK, new AbortController().signal)).rejects.toMatchObject({
-      code: 'BROWSER_SESSION_UNAVAILABLE',
-    })
+    await g.sessions.start(job, running)
     expect(g.client.ensure).toHaveBeenCalledTimes(4)
     expect(pauses()).toEqual([...ENSURE_RETRY_PAUSES_MS])
     expect(pauses().reduce((sum, ms) => sum + ms, 0)).toBeLessThanOrEqual(45_000)
-    expect(db.clearBrowserHelp).not.toHaveBeenCalled()
+    expect(db.closeBrowserSession).toHaveBeenCalledOnce()
   })
 
   it.each([
@@ -277,36 +309,61 @@ describe('BrowserSessions.ensure', () => {
   ])('never asks again after %s', async (_case, error) => {
     const g = given()
     g.client.ensure.mockRejectedValue(error)
-    await expect(g.sessions.ensure(TASK, new AbortController().signal)).rejects.toMatchObject({
-      code: 'BROWSER_SESSION_UNAVAILABLE',
-    })
+    await g.sessions.start(job, running)
     expect(g.client.ensure).toHaveBeenCalledOnce()
     expect(timers.setTimeout).not.toHaveBeenCalled()
+    expect(db.closeBrowserSession).toHaveBeenCalledOnce()
+  })
+})
+
+describe('BrowserSessions.reclaim', () => {
+  it('gives the live browser back to the agent and answers its request for help', async () => {
+    const g = given()
+    const signal = new AbortController().signal
+    await g.sessions.reclaim(TASK, signal)
+    expect(g.client.ensure).toHaveBeenCalledExactlyOnceWith(
+      { sessionId: SESSION, taskId: TASK, siteId: SITE, takeControl: true },
+      { signal },
+    )
+    expect(db.markBrowserSessionReady).toHaveBeenCalledWith(g.prisma, { sessionId: SESSION })
+    expect(db.clearBrowserHelp).toHaveBeenCalledWith(g.prisma, { sessionId: SESSION })
   })
 
-  it('rejects with the caller’s own reason when the pass is cancelled during a pause', async () => {
+  it('starts nothing for a turn with no live browser: it may need none', async () => {
     const g = given()
-    const cancel = new AbortController()
-    const reason = new Error('cancelled by the client')
-    g.client.ensure.mockRejectedValue(workerFailure('unreachable'))
-    timers.setTimeout.mockImplementation(async (_ms, _value, options) => {
-      cancel.abort(reason)
-      expect(options?.signal).toBe(cancel.signal)
-      throw new DOMException('The operation was aborted', 'AbortError')
-    })
-    await expect(g.sessions.ensure(TASK, cancel.signal)).rejects.toBe(reason)
+    db.openBrowserSessionOfTask.mockResolvedValue(null)
+    await g.sessions.reclaim(TASK, new AbortController().signal)
+    expect(g.client.ensure).not.toHaveBeenCalled()
+    expect(db.clearBrowserHelp).not.toHaveBeenCalled()
+  })
+
+  it('gives the worker the site’s saved sign-in with every turn (Б36)', async () => {
+    const saved = { login: 'admin', password: 'Пароль-сайта-2026' }
+    const g = given({ signIn: async () => saved })
+    await g.sessions.reclaim(TASK, new AbortController().signal)
+    expect(g.client.ensure.mock.calls[0]?.[0]).toMatchObject({ takeControl: true, signIn: saved })
+  })
+
+  it('logs a failure by its code and lets the turn go on', async () => {
+    const g = given()
+    g.client.ensure.mockRejectedValue(new DomainError('CONFLICT', 'http://10.0.0.5:8086', 409))
+    await expect(g.sessions.reclaim(TASK, new AbortController().signal)).resolves.toBeUndefined()
     expect(g.client.ensure).toHaveBeenCalledOnce()
+    expect(db.clearBrowserHelp).not.toHaveBeenCalled()
+    expect(g.logger.warn).toHaveBeenCalledExactlyOnceWith(
+      `browser_reclaim_failed task=${TASK} cause=CONFLICT`,
+    )
   })
 
-  it('rejects with the caller’s own reason when the pass was cancelled', async () => {
+  it('says nothing of a turn the client cancelled meanwhile', async () => {
     const g = given()
     const cancel = new AbortController()
-    const reason = new Error('cancelled by the client')
     g.client.ensure.mockImplementation(async () => {
-      cancel.abort(reason)
-      throw reason
+      cancel.abort(new Error('cancelled by the client'))
+      throw cancel.signal.reason
     })
-    await expect(g.sessions.ensure(TASK, cancel.signal)).rejects.toBe(reason)
+    await g.sessions.reclaim(TASK, cancel.signal)
+    expect(g.logger.warn).not.toHaveBeenCalled()
   })
 })
 

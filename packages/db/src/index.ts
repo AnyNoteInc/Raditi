@@ -12,6 +12,7 @@ export {
 export { enqueueOutbox, type OutboxMessage, type OutboxWriter } from './outbox.ts'
 export {
   enqueueAgentTurn,
+  enqueueBrowserEnsure,
   enqueuePreviewBrowser,
   enqueuePreviewSync,
   enqueueReleaseAdvance,

@@ -551,6 +551,36 @@ describe('the agent’s actions', () => {
     expect([...store.checkpointRows.values()][0]).toMatchObject({ verified: object })
   })
 
+  it('records the first write of each pass: the feed tells this pass from the last (plan 61)', async () => {
+    const { store, manager, ensured, act } = setup()
+    const { row } = await ensured()
+    await act(row, { tool: 'web_type', text: 'Новость дня' })
+    await act(row, { tool: 'web_type', text: 'и ещё' })
+    await settle()
+    expect(store.wrote).toBe(1)
+    // A late start asks nothing of the agent's pass: only a turn that takes control begins one.
+    await manager.ensure({
+      sessionId: row.id,
+      taskId: row.taskId,
+      siteId: row.siteId,
+      takeControl: false,
+    })
+    await act(row, { tool: 'web_type', text: 'и ещё раз' })
+    await settle()
+    expect(store.wrote).toBe(1)
+    await manager.ensure({
+      sessionId: row.id,
+      taskId: row.taskId,
+      siteId: row.siteId,
+      takeControl: true,
+    })
+    await settle()
+    expect(store.wrote).toBe(1)
+    await act(row, { tool: 'web_type', text: 'следующий проход' })
+    await settle()
+    expect(store.wrote).toBe(2)
+  })
+
   it('refuses addresses outside the site and marks the session written by clicks and input', async () => {
     const { store, ensured, act, counts } = setup()
     const { row } = await ensured()

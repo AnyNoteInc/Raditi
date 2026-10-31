@@ -83,12 +83,13 @@ function fixture<Scope extends McpTurnAccess = McpAccess>(
   const clock = { now: 1_000_000 }
   const admission = (): McpWebAdmission => ({
     assignmentId,
-    sessionId,
+    session: { id: sessionId, status: 'ready' },
     now: new Date(clock.now),
     deadlineAt: new Date(clock.now + 600_000),
   })
   const base = {
     admit: vi.fn<McpWebStore['admit']>(async () => admission()),
+    sessionState: vi.fn<McpWebStore['sessionState']>(async () => 'ready'),
     attachmentsOfTask: vi.fn<McpWebStore['attachmentsOfTask']>(async () => true),
   } satisfies McpWebStore
   const store = { ...base, ...options.store } as typeof base
@@ -481,7 +482,7 @@ describe('the web tools of a browser task', () => {
     // The turn ends in half a second: no action starts in it.
     store.admit.mockResolvedValueOnce({
       assignmentId,
-      sessionId,
+      session: { id: sessionId, status: 'ready' },
       now: new Date(clock.now),
       deadlineAt: new Date(clock.now + 500),
     })
@@ -489,6 +490,188 @@ describe('the web tools of a browser task', () => {
       refused('BROWSER_SESSION_UNAVAILABLE'),
     )
     expect(worker.action).toHaveBeenCalledTimes(1)
+  })
+
+  describe('a browser that is still starting (plan 61, К11)', () => {
+    /** A call that finds the session `starting`; each pause moves the clock by `stepMs`. */
+    function starting(options: { stepMs?: number; budgetMs?: number; turnMs?: number } = {}) {
+      const stepMs = options.stepMs ?? 1_000
+      const clock = { now: 1_000_000 }
+      const sleep = vi.fn(async (ms: number) => {
+        clock.now += stepMs
+        expect(ms).toBe(250)
+      })
+      const g = fixture({
+        service: {
+          callBudgetMs: options.budgetMs ?? 50_000,
+          now: () => clock.now,
+          sleep,
+        },
+      })
+      // The first call of the turn opens the session; the wait ends with a browser that is up.
+      let admitted = 0
+      g.store.admit.mockImplementation(async () => ({
+        assignmentId: g.assignmentId,
+        session: { id: g.sessionId, status: admitted++ === 0 ? 'starting' : 'ready' },
+        now: new Date(clock.now),
+        deadlineAt: new Date(clock.now + (options.turnMs ?? 600_000)),
+      }))
+      g.store.sessionState.mockResolvedValue('starting')
+      return { ...g, clock, sleep }
+    }
+
+    it('waits for it and acts, with what is left of the call after the wait', async () => {
+      const g = starting()
+      g.store.sessionState
+        .mockResolvedValueOnce('starting')
+        .mockResolvedValueOnce('starting')
+        .mockResolvedValueOnce('ready')
+      let budget: number | undefined
+      const timeout = vi.spyOn(AbortSignal, 'timeout')
+      g.worker.action.mockImplementationOnce(async (_session, request) => {
+        budget = timeout.mock.calls.at(-1)?.[0]
+        return resultOf(request)
+      })
+      await expect(g.service.call(g.scope, 'web_observe', {})).resolves.toMatchObject({
+        tool: 'web_observe',
+      })
+      expect(g.store.sessionState).toHaveBeenCalledTimes(3)
+      expect(g.store.sessionState).toHaveBeenCalledWith(g.sessionId)
+      // 50 s less the two seconds of the wait: the budget is counted after it, not before.
+      expect(budget).toBe(48_000)
+      timeout.mockRestore()
+    })
+
+    it('admits the call again after the wait: the turn may have ended meanwhile', async () => {
+      const g = starting()
+      g.store.admit
+        .mockResolvedValueOnce({
+          assignmentId: g.assignmentId,
+          session: { id: g.sessionId, status: 'starting' },
+          now: new Date(g.clock.now),
+          deadlineAt: new Date(g.clock.now + 600_000),
+        })
+        .mockRejectedValueOnce(new Error('the key was revoked'))
+      g.store.sessionState.mockResolvedValue('ready')
+      const help = { reason: 'confirm', message: 'Подтвердите публикацию' } as const
+      await expect(g.service.call(g.scope, 'web_help', help)).rejects.toEqual(
+        refused('BROWSER_SESSION_UNAVAILABLE'),
+      )
+      expect(g.store.admit).toHaveBeenCalledTimes(2)
+      expect(g.worker.action).not.toHaveBeenCalled()
+    })
+
+    it('acts for no other turn than the one that waited', async () => {
+      const g = starting()
+      g.store.sessionState.mockResolvedValue('ready')
+      const opened = {
+        session: { id: g.sessionId, status: 'starting' as const },
+        now: new Date(g.clock.now),
+        deadlineAt: new Date(g.clock.now + 600_000),
+      }
+      g.store.admit
+        .mockResolvedValueOnce({ ...opened, assignmentId: g.assignmentId })
+        .mockResolvedValueOnce({
+          ...opened,
+          assignmentId: randomUUID(),
+          session: { id: g.sessionId, status: 'ready' },
+        })
+      await expect(g.service.call(g.scope, 'web_observe', {})).rejects.toEqual(
+        refused('BROWSER_SESSION_UNAVAILABLE'),
+      )
+      expect(g.worker.action).not.toHaveBeenCalled()
+    })
+
+    it('counts the turn again after the wait: the action gets what is left of it', async () => {
+      const g = starting()
+      g.store.sessionState.mockResolvedValue('ready')
+      const timeout = vi.spyOn(AbortSignal, 'timeout')
+      const opened = { assignmentId: g.assignmentId, now: new Date(g.clock.now) }
+      g.store.admit
+        .mockResolvedValueOnce({
+          ...opened,
+          session: { id: g.sessionId, status: 'starting' },
+          deadlineAt: new Date(g.clock.now + 600_000),
+        })
+        .mockResolvedValueOnce({
+          ...opened,
+          session: { id: g.sessionId, status: 'ready' },
+          deadlineAt: new Date(g.clock.now + 7_000),
+        })
+      await g.service.call(g.scope, 'web_observe', {})
+      expect(timeout).toHaveBeenLastCalledWith(7_000)
+      timeout.mockRestore()
+    })
+
+    it('answers BROWSER_STARTING when the browser it waited for gave way to another', async () => {
+      const g = starting()
+      g.store.sessionState.mockResolvedValue('ready')
+      g.store.admit.mockImplementation(async () => ({
+        assignmentId: g.assignmentId,
+        session: { id: randomUUID(), status: 'starting' },
+        now: new Date(g.clock.now),
+        deadlineAt: new Date(g.clock.now + 600_000),
+      }))
+      await expect(g.service.call(g.scope, 'web_observe', {})).rejects.toEqual(
+        refused('BROWSER_STARTING'),
+      )
+      expect(g.worker.action).not.toHaveBeenCalled()
+    })
+
+    it('answers BROWSER_STARTING when the call may not wait any longer: no failure', async () => {
+      const g = starting()
+      await expect(g.service.call(g.scope, 'web_observe', {})).rejects.toEqual(
+        refused('BROWSER_STARTING'),
+      )
+      // 35 s of the 50 s, then at least 15 s stay for an action.
+      expect(g.clock.now - 1_000_000).toBeGreaterThan(35_000)
+      expect(g.clock.now - 1_000_000).toBeLessThanOrEqual(36_000)
+      expect(g.sleep.mock.calls.length).toBe(36)
+      expect(g.worker.action).not.toHaveBeenCalled()
+    })
+
+    it('counts the end of the turn as the end of the wait', async () => {
+      const g = starting({ turnMs: 10_000 })
+      await expect(g.service.call(g.scope, 'web_observe', {})).rejects.toEqual(
+        refused('BROWSER_STARTING'),
+      )
+      expect(g.sleep).not.toHaveBeenCalled()
+    })
+
+    it.each([['failed'], ['closed'], ['lost'], [null]] as const)(
+      'stops waiting for a session that went %s',
+      async (status) => {
+        const g = starting()
+        g.store.sessionState.mockResolvedValueOnce('starting').mockResolvedValueOnce(status)
+        await expect(g.service.call(g.scope, 'web_observe', {})).rejects.toEqual(
+          refused('BROWSER_SESSION_UNAVAILABLE'),
+        )
+        expect(g.worker.action).not.toHaveBeenCalled()
+      },
+    )
+
+    it('takes an outage of the database while it waits as no browser', async () => {
+      const g = starting()
+      g.store.sessionState.mockRejectedValueOnce(new Error('database down'))
+      await expect(g.service.call(g.scope, 'web_observe', {})).rejects.toEqual(
+        refused('BROWSER_SESSION_UNAVAILABLE'),
+      )
+    })
+
+    it('never asks the state of a browser that is up', async () => {
+      const { scope, service, store } = fixture()
+      await service.call(scope, 'web_observe', {})
+      expect(store.sessionState).not.toHaveBeenCalled()
+    })
+
+    it('passes on the refusal of a workspace that holds all its browsers', async () => {
+      const { scope, service, store, worker } = fixture()
+      store.admit.mockRejectedValueOnce(browserTaskError('BROWSER_WORKSPACE_BUSY'))
+      await expect(service.call(scope, 'web_observe', {})).rejects.toEqual(
+        refused('BROWSER_WORKSPACE_BUSY'),
+      )
+      expect(worker.action).not.toHaveBeenCalled()
+    })
   })
 
   it('runs one call of a turn at a time and admits a waiting one again', async () => {
