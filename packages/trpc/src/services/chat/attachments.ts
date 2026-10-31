@@ -13,6 +13,7 @@ import {
   attachmentTypeByName,
   attachmentTypeOf,
   conflict,
+  siteIdOf,
   terminalTaskStatuses,
   type AttachmentRefusal,
 } from '@repo/domain'
@@ -215,7 +216,7 @@ export async function bindChooserAttachments(
       taskId: task.id,
       userId: input.userId,
       workspaceId: task.workspaceId,
-      siteId: task.siteId,
+      siteId: siteIdOf(task),
     })
     return { bound: input.ids.length }
   })

@@ -14,6 +14,7 @@ import {
   llmPriceMissing,
   pickAccount,
   poolPolicy,
+  siteIdOf,
   subscriptionBusy,
   subscriptionWait,
   turnCredentialExpiresAt,
@@ -126,7 +127,8 @@ type KeyRow = Prisma.LlmKeyGetPayload<Record<string, never>>
 interface OwnedTask {
   id: string
   attempt: number
-  siteId: string
+  /** null — a chat without a project: it leases by its own id (`leaseScopeOf`). */
+  siteId: string | null
   dataClass: 'synthetic' | 'client'
   /** `tasks.needs_browser`: the task drives the live site through the `web` tools (plan 57, Б2). */
   needsBrowser: boolean
@@ -276,7 +278,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
           prepared.task.now.getTime() + 25 * 60_000,
         ),
       )
-      const env = await this.#agentValues(prepared.task.siteId, prepared.variables)
+      const env = await this.#agentValues(prepared.task, prepared.variables)
       const data = {
         v: '1',
         ...newTurnKeys(),
@@ -353,10 +355,12 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
    * meanwhile is left out. A JSON object for the turn's record, or null when nothing is left.
    */
   async #agentValues(
-    siteId: string,
+    task: OwnedTask,
     variables: readonly SiteEnvVarVersion[],
   ): Promise<string | null> {
-    const values = await readSiteEnvValues(this.#secrets, siteId, variables)
+    // Variables belong to a site: only with some is there one to read them under.
+    if (variables.length === 0) return null
+    const values = await readSiteEnvValues(this.#secrets, siteIdOf(task), variables)
     if (Object.keys(values).length === 0) return null
     const json = JSON.stringify(values)
     // More than a site may have: only rows two writers added at once give that.
@@ -704,7 +708,7 @@ async function agentVariables(tx: Transaction, task: OwnedTask): Promise<SiteEnv
   // (`tasks_requirements_check`).
   if (task.needsBrowser) return []
   const rows = await tx.siteEnvVar.findMany({
-    where: { siteId: task.siteId, toAgent: true, agentConsentAt: { not: null } },
+    where: { siteId: siteIdOf(task), toAgent: true, agentConsentAt: { not: null } },
     orderBy: { name: 'asc' },
     select: { name: true, keyVersion: true, toAgent: true, toPreview: true, agentConsentAt: true },
   })

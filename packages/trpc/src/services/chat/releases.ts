@@ -360,8 +360,10 @@ export async function confirmRelease(
       if (refused !== undefined) throw commandUnavailable('release', refusalOfCandidate[refused])
       assertDatabaseReleasable(candidate)
 
+      // A candidate has a repository, and that has a site.
+      const siteId = siteIdOf(task)
       const proposal = await versionProposal(tx, {
-        siteId: task.siteId,
+        siteId,
         baseVersion: candidate.baseVersion,
         facts: candidate.facts,
       })
@@ -369,19 +371,19 @@ export async function confirmRelease(
       const bump = base === null ? null : bumpOf(base, claims.version)
       if (bump === null) throw releaseVersionNotOffered()
       const taken = await tx.siteRelease.findFirst({
-        where: { siteId: task.siteId, version: claims.version },
+        where: { siteId, version: claims.version },
         select: { id: true },
       })
       if (taken !== null) throw releaseVersionTaken()
 
       const site = await tx.site.findUniqueOrThrow({
-        where: { id: task.siteId },
+        where: { id: siteId },
         select: { installedSha: true },
       })
       const attempt = (await tx.siteRelease.count({ where: { candidateId: candidate.id } })) + 1
       const release = await tx.siteRelease.create({
         data: {
-          siteId: task.siteId,
+          siteId,
           taskId: task.id,
           candidateId: candidate.id,
           candidateRevision: candidate.revision,

@@ -39,7 +39,8 @@ export async function memberRole(
 export interface LockedTask {
   id: string
   workspaceId: string
-  siteId: string
+  /** null — a chat without a project (docs/plan/61-chats-first.md, К7). */
+  siteId: string | null
   status: TaskStatus
   attempt: number
   turnNo: number
@@ -63,7 +64,7 @@ export async function lockTask(
     Array<{
       id: string
       workspace_id: string
-      site_id: string
+      site_id: string | null
       status: TaskStatus
       attempt: number
       turn_no: number

@@ -1,6 +1,7 @@
 import type { AttemptCreditBudget } from '@repo/billing'
 import {
   attemptBudgetRub,
+  leaseScopeOf,
   MAX_SANDBOX_EGRESS_HOSTS,
   MAX_SANDBOX_TURN_MS,
   Money,
@@ -168,7 +169,8 @@ export interface PassFacts {
   task: {
     id: string
     workspaceId: string
-    siteId: string
+    /** null — a chat without a project (docs/plan/61-chats-first.md, К7). */
+    siteId: string | null
     attempt: number
     /** `tasks.turn_no` when the pass was claimed. */
     turnNo: number
@@ -611,7 +613,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
       image: env.driver.image,
       labels: {
         workspaceId: task.workspaceId,
-        siteId: task.siteId,
+        siteId: leaseScopeOf(task),
         taskId: task.id,
         sessionId,
         turn,

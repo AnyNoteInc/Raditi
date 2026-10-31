@@ -667,7 +667,7 @@ export function chatRequirements(capabilities: SiteCapabilities):
 
 - `startAttachment` при NULL вызывает `ensurePersonalWorkspaceWithGift` в короткой транзакции, роутер передаёт `appEnv`: на `C-first` файл идёт до первого сообщения;
 - `createAttachment` при NULL берёт это пространство с проверкой участника (сегодня `INSERT` выбирает из `sites`, `packages/db/src/attachments.ts:68`);
-- `bindMessageAttachments` — `a.site_id IS NOT DISTINCT FROM`, `t.site_id IS NOT DISTINCT FROM a.site_id`;
+- `bindMessageAttachments` — `a.site_id IS NOT DISTINCT FROM`, `t.site_id IS NOT DISTINCT FROM a.site_id`, поле `siteId: string | null`. `postDialogMessage` (`services/chat/tasks.ts`) и `bindChooserAttachments` передают `task.siteId` вместо `siteIdOf(task)`: `tsc` этого не назовёт, а страж, если останется, ответит `CONFLICT` на каждое сообщение после первого в чате без проекта, даже без файлов (61.7, тест — 61.11);
 - схема `attachmentStartInputSchema.siteId` nullable.
 
 Типы `LockedTask.siteId`, `PassFacts.task.siteId`, `OwnedTask.siteId` — `string | null`. Ошибки `tsc` покажут все места.
@@ -958,7 +958,7 @@ export interface ChatCommand {
 
 **61.7. Ход без сайта: план, инструкции, файлы.**
 - *Цель.* Проход `{false,false}` без сайта по §5.6–§5.7. `{false,true}` без сайта — только с 61.9: `browserEnsureRequestSchema.siteId` не nullable до него.
-- *Файлы.* `pass-facts.ts`, `turn-planner.ts`, `turn-instructions.ts`, `turn-supervisor.ts`, `turn-executor.ts`, `local-turn-executor.ts`, `remote-turn-executor.ts`, `protocol.ts`, `mcp-tools.controller.ts`, `browser-tasks.ts`, `mcp-web.ts`, `attachments.ts` (оба), `apps/browser/src/attachments/attachments.ts`.
+- *Файлы.* `pass-facts.ts`, `turn-planner.ts`, `turn-instructions.ts`, `turn-supervisor.ts`, `turn-executor.ts`, `local-turn-executor.ts`, `remote-turn-executor.ts`, `protocol.ts`, `mcp-tools.controller.ts`, `browser-tasks.ts`, `mcp-web.ts`, `attachments.ts` (оба), `apps/browser/src/attachments/attachments.ts`, `packages/trpc/src/services/chat/tasks.ts` (`postDialogMessage`: `task.siteId` вместо `siteIdOf(task)`, §5.9; так же `bindChooserAttachments` в `attachments.ts`).
 - *Тесты.* `turn-planner.test.ts`, тесты инструкций (текст `browserTaskInstructions` байт в байт), `runner-protocol.cross.test.ts`, файл в ходе `{false,false}`, файл не идёт в песочницу задачи с сайтом без репозитория.
 - *Стенды.* `verify:opencode`, `verify:opencode-supervisor` под `runsc`, семь сценариев `verify-runner.mjs`.
 - *Готово.* Ход с файлом и без браузера завершается ответом.
@@ -996,7 +996,7 @@ export interface ChatCommand {
 **61.11. API чатов.**
 - *Цель.* Новые процедуры §5.9, матрица для запросов без `requirements`, К39, старый интерфейс работает.
 - *Файлы.* `routers/task.ts`, `routers/attachment.ts`, `routers/project.ts`, `services/chat/{tasks,dialog-list,feed,dialog-manage,attachments,access}.ts`, `site-capabilities.ts`, `dto`-типы.
-- *Тесты.* `task.test.ts`, `chat-db.test.ts`, `site-capabilities.test.ts`. Новые: новый пользователь без пространства, подарок один раз и при `attachment.start`, чужой чат без проекта — `NOT_FOUND`, id не версии 7 отклонён, папки считаются на сервере, индекс используется, слова в чат закрытого проекта отклонены.
+- *Тесты.* `task.test.ts`, `chat-db.test.ts`, `site-capabilities.test.ts`. Новые: новый пользователь без пространства, подарок один раз и при `attachment.start`, чужой чат без проекта — `NOT_FOUND`, id не версии 7 отклонён, папки считаются на сервере, индекс используется, слова в чат закрытого проекта отклонены, второе сообщение в чате без проекта, с файлом и без него, принимается.
 - *Стенды.* `verify:db`.
 - *Готово.* `requirements` и `task.list({ siteId })` остаются временно, пока web на них.
 - *Зависит.* 61.8, 61.9, 61.10.
@@ -1371,6 +1371,10 @@ export interface ChatCommand {
 - 61.2: тесты и стенды, которые удаляли аренды по связи `site`, читают id сайтов рабочего пространства; удаление строки `sites` больше не убирает её аренду. `verify:db` хвостов не нашёл.
 - 61.2: стражи `siteIdOf` и `withSite` стоят и на путях, куда чат без сайта придёт позже; сегодня они недостижимы (строк без сайта продукт не создаёт), и каждый снимает срез, который открывает путь. `readDialogHead` (`feed.ts:265`, это `task.get`) — 61.11: отступление от §5.2, сайт здесь не доказан, но тип вывода `task.get` до §5.9 требует string, поэтому строка без сайта получит здесь CONFLICT. `readPassFacts` (`pass-facts.ts:140`) — 61.7. `#context` закрытия прохода (`pass-settlement.ts:953`) — 61.8. `ensure` (`apps/core/src/browser/browser-sessions.ts:125`) и `session`, `attachment` в `apps/browser/src/store/worker-store.ts:134,202` — 61.9. Остальные вызовы (`candidate-rebase.ts`, `mcp-content-maintenance.ts`, `candidates.ts`, `releases.ts`, `undo.ts`, `dialog-facts.ts`) стоят за доказанным сайтом: кандидатом, записью контента, выпуском.
 - 61.2: `agentVariables` (`turn-credentials.ts:700`) не входит в строку §5.3, а без сайта дойдёт до `siteEnvVar.findMany({ where: { siteId: task.siteId } })`: `OwnedTask.siteId` в типах string, на деле NULL, Prisma отклонит null и `issue` упадёт, а готовность 61.4 требует ключ хода строке без сайта. Срез 61.4 возвращает `[]` до чтения `site_env_vars`: `if (task.needsBrowser || task.siteId === null) return []`. 61.10 заменяет первое условие на `task.needsBrowser && !task.needsRepository` (§5.6, К21), проверка `task.siteId === null` остаётся.
+- 61.3: основную работу среза сделал 61.2 (см. выше), здесь — три рукописных типа `LockedTask.siteId`, `OwnedTask.siteId`, `PassFacts.task.siteId` (§5.9) и то, что после них назвал `tsc`. `dialog-facts.ts` и вызов `contentMaskPath` тоже закрыты в 61.2, у `contentMaskPath` здесь только комментарий о `leaseScopeOf`; вызовы `privacy.mask` и `privacy.rehydrate` берут `siteId` из допуска MCP и меняются с `McpTurnAccess` в 61.4. Рукописные строки `openBrowserSession` и `usage.ts` остаются `string`, пока запрос идёт через `JOIN sites`: NULL там нет, их `LEFT JOIN` — 61.9 и 61.8.
+- 61.3: `#agentValues` (`turn-credentials.ts`) принимает задачу и сразу отвечает `null` при пустом списке переменных: результат тот же, что у прежнего цикла по пустому списку, в Vault запросов не было и нет. Иначе `siteIdOf` упал бы на строке без сайта в 61.4, где `agentVariables` возвращает `[]`, а готовность требует ключ хода. `agentVariables` стоит на `siteIdOf`, пока 61.4 не вернёт `[]` раньше (запись 61.2 выше).
+- 61.3: новые стражи `siteIdOf`. За доказанным сайтом — `confirmRelease` после кандидата, `retryDialog` после `liveCandidate`. `confirmUndo` — до чтения выпуска, потому что `lockLiveSite` идёт первым: подлинное подтверждение чужого выпуска, присланное с id чата без сайта, получит `CONFLICT` вместо `commandUnavailable`; отказ остаётся отказом. Недостижимы сегодня и снимаются вместе с `IS NOT DISTINCT FROM` у `bindMessageAttachments` (§5.9): `postDialogMessage` (`tasks.ts`) и `bindChooserAttachments` (`attachments.ts`) — 61.7. Первый вычисляется и при пустом списке файлов, поэтому до этой правки слова в чате без проекта получат `CONFLICT`; `tsc` об этом не напомнит, поэтому снятие записано в §5.9 и строке 61.7, а тест второго сообщения — в строке 61.11.
+- 61.3: `labels.siteId` планировщика — `leaseScopeOf(task)` (§5.2), а не `siteIdOf`: 61.7 снимет только `withSite` в `pass-facts.ts`, и метки уже верны.
 
 ## 11. Отклонённые замечания ревью
 

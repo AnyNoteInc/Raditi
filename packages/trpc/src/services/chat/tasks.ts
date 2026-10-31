@@ -23,6 +23,7 @@ import {
   llmBackendIds,
   maxTaskAttempts,
   modelClassOfEffort,
+  siteIdOf,
   siteSetupState,
   taskHoldExpiry,
   terminalTaskStatuses,
@@ -463,7 +464,7 @@ export async function postDialogMessage(
       taskId: task.id,
       userId,
       workspaceId: task.workspaceId,
-      siteId: task.siteId,
+      siteId: siteIdOf(task),
     })
     const requestEventId = await writeRequest(tx, task.id, payload)
     await enqueueAgentTurn(tx, { taskId: task.id, attempt, requestEventId })
@@ -647,7 +648,7 @@ export async function retryDialog(
     const candidate = await liveCandidate(tx, task.id)
     if (candidate === null) throw conflict('The dialog waits for approval without a candidate')
     const site = await tx.site.findUniqueOrThrow({
-      where: { id: task.siteId },
+      where: { id: siteIdOf(task) },
       select: { status: true, workspace: { select: { dataClass: true } } },
     })
     if (site.status !== 'active') throw taskNotAccepted('site_not_active')
