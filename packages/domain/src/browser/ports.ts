@@ -23,10 +23,11 @@ import type { BrowserSignIn } from './worker-api.ts'
  *   protocol): never logged, labelled, put in an argument, an error or an answer;
  * - nothing of the session's sign-in leaves the browser: no profile, cookie or `storageState` is
  *   saved anywhere (Б19), keys the client presses are never logged or recorded;
- * - the agent and the client open only addresses `browserNavigationAllowed` admits and the
- *   stack's policy does not deny (Б21: it is the platform's browser); a page of the site may take
- *   the browser on to another site `browserForeignPageAllowed` admits, which the policy does not
- *   judge (docs/plan/60-browser-foreign-redirects.md, Ч1, Ч5);
+ * - the agent and the client open only addresses `browserAddressOpens` admits and the stack's
+ *   policy does not deny (Б21: it is the platform's browser); a page of the site may take the
+ *   browser on to another site `browserForeignPageAllowed` admits, which the policy does not
+ *   judge (docs/plan/60-browser-foreign-redirects.md, Ч1, Ч5); a name of the platform never
+ *   (docs/plan/61-chats-first.md, К37);
  * - errors carry no address, selector, value of a field or text of a page.
  */
 
@@ -110,8 +111,12 @@ export interface CloudBrowserConnection {
   allowedHosts: readonly string[]
   /** Exact origins of local sites outside production (`BROWSER_LOCAL_SITES`); empty in it. */
   localSites: readonly string[]
-  /** The first page: the site's origin and the stack's `startPath`. */
-  startUrl: string
+  /** A chat without a site (docs/plan/61-chats-first.md, К12): any public https site opens. */
+  openWeb: boolean
+  /** `BROWSER_PLATFORM_HOSTS`: names no page of any session reaches (К37). */
+  platformHosts: readonly string[]
+  /** The first page: the site's origin and the stack's `startPath`; null — an empty page. */
+  startUrl: string | null
   viewport: BrowserViewport
   /** The stack's policy (`SiteAdapter.browserTaskPolicy`), on every navigation and request. */
   policy: BrowserTaskPolicy
@@ -210,9 +215,12 @@ export interface BrowserLocalSite {
 export interface BrowserSessionRuntimeSpec {
   sessionId: string
   taskId: string
+  /** The key of its labels: the session's site, or its task in a chat without one. */
   siteId: string
-  /** The allowlist of the egress proxy (`browserAllowedHosts`). */
+  /** The allowlist of the egress proxy (`browserAllowedHosts`); empty only with `openWeb`. */
   allowedHosts: readonly string[]
+  /** A chat without a site (docs/plan/61-chats-first.md, К12): a session with no host of its own. */
+  openWeb: boolean
   /** Reached without DNS; never in production. */
   localSites: readonly BrowserLocalSite[]
   /** Milliseconds since the epoch: past it the host's watchdog removes what is left. */

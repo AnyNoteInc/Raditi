@@ -130,6 +130,19 @@ describe('BrowserSessions.start', () => {
     expect(db.closeBrowserSession).not.toHaveBeenCalled()
   })
 
+  it('asks for the browser of a chat without a site, with no site and no sign-in', async () => {
+    const signIn = vi.fn(async () => null)
+    const g = given({ signIn })
+    g.prisma.task.findUnique.mockResolvedValue({ siteId: null } as never)
+    await g.sessions.start(job, running)
+    expect(g.client.ensure).toHaveBeenCalledExactlyOnceWith(
+      { sessionId: SESSION, taskId: TASK, siteId: null, takeControl: false },
+      { signal: running },
+    )
+    expect(signIn).not.toHaveBeenCalled()
+    expect(db.closeBrowserSession).not.toHaveBeenCalled()
+  })
+
   it('leaves a late job alone: the client in the middle of signing in stays there', async () => {
     const g = given()
     g.prisma.browserSession.findUnique.mockResolvedValue({ taskId: TASK, status: 'ready' })
@@ -326,6 +339,20 @@ describe('BrowserSessions.reclaim', () => {
       { signal },
     )
     expect(db.markBrowserSessionReady).toHaveBeenCalledWith(g.prisma, { sessionId: SESSION })
+    expect(db.clearBrowserHelp).toHaveBeenCalledWith(g.prisma, { sessionId: SESSION })
+  })
+
+  it('gives the browser of a chat without a site back with no site and no sign-in', async () => {
+    const signIn = vi.fn(async () => null)
+    const g = given({ signIn })
+    db.openBrowserSessionOfTask.mockResolvedValue({ id: SESSION, status: 'ready' })
+    g.prisma.task.findUnique.mockResolvedValue({ siteId: null } as never)
+    await g.sessions.reclaim(TASK, running)
+    expect(g.client.ensure).toHaveBeenCalledExactlyOnceWith(
+      { sessionId: SESSION, taskId: TASK, siteId: null, takeControl: true },
+      { signal: running },
+    )
+    expect(signIn).not.toHaveBeenCalled()
     expect(db.clearBrowserHelp).toHaveBeenCalledWith(g.prisma, { sessionId: SESSION })
   })
 

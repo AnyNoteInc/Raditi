@@ -135,7 +135,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     const { taskId } = await fixtures.task(workspace.id, {
       status: 'queued',
       ...(browser ? { needsRepository: false, needsBrowser: true } : {}),
-      ...(chat ? { siteId: null, needsRepository: false, needsBrowser: false } : {}),
+      ...(chat ? { siteId: null, needsRepository: false, needsBrowser: browser } : {}),
     })
     const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
     if (chat) {
@@ -563,7 +563,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
               await db.turnAssignment.create({
                 data: {
                   taskId: dialog.taskId,
-                  siteId: siteIdOf(dialog),
+                  siteId: dialog.siteId ?? dialog.taskId,
                   sessionId: dialog.taskId,
                   turnNo: 1,
                   executor: 'local',
@@ -627,6 +627,27 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
           expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
             status: 'awaiting_user',
           })
+        })
+
+        it('is charged in a chat without a site: the browser was not all it had (plan 61, 61.9)', async () => {
+          await rate()
+          const dialog = await queued({ reserve: true, chat: true, browser: true })
+          const { passes } = turnThatAsked(dialog, (sessionId) =>
+            closeBrowserSession(db, {
+              sessionId,
+              status: 'failed',
+              reason: 'crashed',
+              errorCode: 'BROWSER_START_FAILED',
+            }),
+          )
+
+          await passes.run(dialog.job)
+
+          expect(await failure(dialog.taskId)).toEqual([])
+          expect(await charges(dialog.taskId)).toBeGreaterThan(0)
+          expect(
+            await db.taskEvent.count({ where: { taskId: dialog.taskId, type: 'feed.result' } }),
+          ).toBe(1)
         })
 
         it('is charged when a browser came up in the turn and the next one failed', async () => {

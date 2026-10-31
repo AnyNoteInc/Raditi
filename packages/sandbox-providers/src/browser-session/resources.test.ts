@@ -18,6 +18,15 @@ const identity = {
 }
 
 describe('browser session resources', () => {
+  it('reads a session of a chat without a site, labelled by its task (plan 61, К12)', () => {
+    const chat = { ...identity, siteId: identity.taskId }
+    expect(ownedBrowserResource(browserSessionLabels(chat, 'browser', 1_900_000_000_000))).toEqual({
+      ...chat,
+      role: 'browser',
+      deadline: 1_900_000_000_000,
+    })
+  })
+
   it('labels every resource with the session, its task, site, deadline and role', () => {
     const labels = browserSessionLabels(identity, 'egress', 1_900_000_000_000)
     expect(labels).toEqual({

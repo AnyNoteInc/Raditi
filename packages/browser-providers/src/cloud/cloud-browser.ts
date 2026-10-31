@@ -69,7 +69,9 @@ import { runVerification, VERIFICATION_REPLY_BYTES, type VerificationSite } from
  * Every request of every page is checked before it leaves and every committed page after it
  * (page-rules.ts): the agent and the client open pages of the site only, a page of the site may
  * take the browser on to another public https site (docs/plan/60-browser-foreign-redirects.md);
- * the egress proxy of the container is the barrier, this the second line.
+ * in a chat without a site they open any such site themselves, from an empty page
+ * (docs/plan/61-chats-first.md, К12); the egress proxy of the container is the barrier, this the
+ * second line.
  *
  * What it never does: log, label or echo the control endpoint; answer a dialog or a file chooser
  * on its own (they wait for the agent or the client, Б27); put a page's text, an address or a
@@ -241,14 +243,18 @@ function checkedConnection(connection: CloudBrowserConnection): PageRules {
   const rules: PageRules = {
     allowedHosts: connection.allowedHosts,
     localSites: connection.localSites,
+    openWeb: connection.openWeb,
+    platformHosts: connection.platformHosts,
     policy: connection.policy,
   }
+  const { startUrl } = connection
   if (
     !socket ||
     socket.protocol !== 'ws:' ||
     socket.hostname !== '127.0.0.1' ||
     !isBrowserViewport(connection.viewport) ||
-    !openAllowed(rules, connection.startUrl)
+    // Only a chat without a site starts on an empty page; a site's start page is checked.
+    (startUrl === null ? !connection.openWeb : !openAllowed(rules, startUrl))
   )
     throw new Error('Invalid cloud browser connection')
   return rules
@@ -369,10 +375,12 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
     const session = new PlaywrightCloudBrowser(browser, context, connection, rules, settings)
     await session.#watch()
     const entry = await session.#newShownPage()
+    const { startUrl } = connection
     // A site that does not answer yet still gives a session: the client sees the error page.
-    await session
-      .#run(entry, (deadline) => session.#goto(entry, connection.startUrl, deadline))
-      .catch(() => undefined)
+    if (startUrl !== null)
+      await session
+        .#run(entry, (deadline) => session.#goto(entry, startUrl, deadline))
+        .catch(() => undefined)
     if (!session.isConnected()) throw new PageBrowserError('closed')
     return session
   }
@@ -1299,7 +1307,7 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
    */
   #onSignInPage(entry: PageEntry, form: BrowserSignInForm): boolean {
     const url = URL.parse(entry.page.url())
-    const site = URL.parse(this.#connection.startUrl)
+    const site = URL.parse(this.#connection.startUrl ?? '')
     if (!url || !site || url.origin !== site.origin) return false
     if (url.protocol !== 'https:' && url.protocol !== 'http:') return false
     try {
@@ -1354,8 +1362,9 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
         if (moved) return 'absent'
       } catch (error) {
         // Signed in, then sent where the task may not go (the dashboard): the start page instead.
-        if (!isPageBrowserError(error) || error.reason !== 'denied') throw error
-        await this.navigate(this.#connection.startUrl)
+        const start = this.#connection.startUrl
+        if (!isPageBrowserError(error) || error.reason !== 'denied' || start === null) throw error
+        await this.navigate(start)
       }
       signedIn = !this.#onSignInPage(entry, form)
       return signedIn ? 'signed_in' : 'refused'
@@ -1388,7 +1397,9 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
   // -------------------------------------------------------------------------------------------
 
   async verify(plan: BrowserVerificationPlan): Promise<BrowserVerificationReading> {
-    return runVerification(plan, this.#site(), async (url, headers) => {
+    // No site, no object to read: the open internet is never read with the session's cookies.
+    if (this.#connection.startUrl === null) throw new PageBrowserError('denied')
+    return runVerification(plan, this.#site(this.#connection.startUrl), async (url, headers) => {
       const response = await this.#context.request.get(url, {
         headers,
         timeout: browserVerificationLimits.stepTimeoutMs,
@@ -1416,8 +1427,8 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
    * The site a read goes to: its address and its `www.` twin, starting where the shown page is
    * when that is one of them — where the client signed in, the cookies of the read are.
    */
-  #site(): VerificationSite {
-    const start = new URL(this.#connection.startUrl)
+  #site(startUrl: string): VerificationSite {
+    const start = new URL(startUrl)
     const twin = new URL(start.origin)
     twin.hostname = start.hostname.startsWith('www.')
       ? start.hostname.slice('www.'.length)

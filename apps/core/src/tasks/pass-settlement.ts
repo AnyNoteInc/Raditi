@@ -487,8 +487,11 @@ export class PassSettlement {
     ending: Extract<PassEnding, { kind: 'completed' }>,
   ): Promise<SettleAnswer> {
     const { result, turn } = ending
+    // Only where the browser is the whole work. A chat without a site has more than the browser,
+    // and what the agent answered there is a finished pass.
     if (
       context.requirements.browser &&
+      context.task.siteId !== null &&
       (await browserFailedInTurn(this.deps.db, pass.taskId, turn))
     )
       return this.#failure(pass, context, turn, 'unavailable')

@@ -27,6 +27,7 @@ function spec(patch: Partial<BrowserSessionRuntimeSpec> = {}): BrowserSessionRun
     siteId: '0196abcd-0000-7000-8000-0000000000a3',
     allowedHosts: ['news.example.ru:443', 'www.news.example.ru:443'],
     localSites: [],
+    openWeb: false,
     deadline,
     ...patch,
   }
@@ -429,11 +430,33 @@ describe('Docker browser session runtime', () => {
       spec({ allowedHosts: ['10.0.0.1:443'] }),
       spec({ allowedHosts: ['wp.localhost:443'] }),
       spec({ allowedHosts: ['news.example.ru:443', 'news.example.ru:443'] }),
+      // A session goes nowhere without a host, unless it is a chat without a site.
       spec({ allowedHosts: [] }),
       // Local sites are refused where the configuration does not allow them.
       spec({ localSites: [{ origin: 'http://wp.localhost:8080', target: '127.0.0.1:8080' }] }),
     ])
       await expect(runtime.start(bad)).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+  })
+
+  it('starts a chat without a site with no host, its labels keyed by the task (plan 61, К12)', async () => {
+    const fake = daemon()
+    const runtime = createDockerBrowserSessionRuntime(config(), { client: fake.client })
+    const taskId = '0196abcd-0000-7000-8000-0000000000a2'
+    const { endpoint } = await runtime.start(
+      spec({ siteId: taskId, allowedHosts: [], openWeb: true }),
+    )
+    expect(endpoint).toMatch(/^ws:\/\/127\.0\.0\.1:/)
+    const egress = [...fake.containers.values()].find(
+      (container) => role(container.options) === 'egress',
+    )
+    expect(egress?.options.Env).toEqual(
+      expect.arrayContaining(['ALLOWED_HOSTS=[]', 'ALLOW_PUBLIC=1', 'PUBLIC_TLS_ONLY=1']),
+    )
+    expect(egress?.options.Labels?.['io.raditi.browser.site']).toBe(taskId)
+    // A value of another type is no chat: only `true` lets a session go without hosts.
+    await expect(
+      runtime.start({ ...spec({ allowedHosts: [] }), openWeb: 'true' as unknown as boolean }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
   })
 
   it('gives local sites to the egress proxy only where allowed, plain http and by name', async () => {

@@ -35,3 +35,40 @@ describe('a file of a task as the store reads it (docs/plan/61-chats-first.md, Ð
     ).resolves.toMatchObject({ siteId: found.siteId })
   })
 })
+
+describe('a session as the store reads it (docs/plan/61-chats-first.md, Ðš12)', () => {
+  const sessionRow = (siteId: string | null, taskSite: string | null) => ({
+    id: randomUUID(),
+    taskId: randomUUID(),
+    siteId,
+    status: 'starting',
+    expiresAt: new Date(),
+    readyAt: null,
+    lastActivityAt: new Date(),
+    task: { siteId: taskSite },
+  })
+  const read = (found: ReturnType<typeof sessionRow> | null) =>
+    new PostgresBrowserWorkerStore({
+      browserSession: { findUnique: async () => found },
+    } as unknown as PrismaClient).session(randomUUID())
+
+  it('answers a session of a chat without a site, and the site of its task beside its own', async () => {
+    await expect(read(sessionRow(null, null))).resolves.toMatchObject({
+      siteId: null,
+      taskSiteId: null,
+    })
+    const site = randomUUID()
+    const other = randomUUID()
+    const answer = await read(sessionRow(null, other))
+    expect(answer).toMatchObject({ siteId: null, taskSiteId: other })
+    expect(answer).not.toHaveProperty('task')
+    await expect(read(sessionRow(site, site))).resolves.toMatchObject({
+      siteId: site,
+      taskSiteId: site,
+    })
+  })
+
+  it('answers no session for no row', async () => {
+    await expect(read(null)).resolves.toBeNull()
+  })
+})

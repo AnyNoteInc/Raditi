@@ -2372,19 +2372,16 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
       })
       try {
         const scope = (await store.authenticate(turn.token))!
-        await expect(web.admit(scope)).rejects.toMatchObject({
-          code: 'BROWSER_SESSION_UNAVAILABLE',
+        // The first call opens the browser of the chat, of no site (К11, К12).
+        const first = await web.admit(scope)
+        expect(first).toMatchObject({ session: { status: 'starting' } })
+        const opened = await db.browserSession.findUniqueOrThrow({
+          where: { id: first.session.id },
         })
-        const session = await db.browserSession.create({
-          data: {
-            taskId: turn.task.id,
-            workspaceId: fixture.workspaceId,
-            status: 'ready',
-            readyAt: new Date(),
-            controller: 'agent',
-            controlEpoch: 1,
-            expiresAt: new Date(Date.now() + 3_600_000),
-          },
+        expect(opened).toMatchObject({ taskId: turn.task.id, siteId: null })
+        const session = await db.browserSession.update({
+          where: { id: opened.id },
+          data: { status: 'ready', readyAt: new Date() },
         })
         expect(await web.admit(scope)).toMatchObject({
           assignmentId: turn.assignment.id,

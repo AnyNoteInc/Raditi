@@ -46,8 +46,8 @@ const openSchema = z.strictObject({
 })
 
 /**
- * The open session of a task, started (`starting`) when it has none (Б18): its site and
- * workspace are the task's. Refuses a task that does not need a browser, has ended or whose site
+ * The open session of a task, started (`starting`) when it has none (Б18): its site — none in a
+ * chat without one (docs/plan/61-chats-first.md, К12) — and workspace are the task's. Refuses a task that does not need a browser, has ended or whose site
  * is closed, and a new session past the live ones a workspace may hold (К36,
  * `BROWSER_WORKSPACE_BUSY`). Two callers at once get the same session: the unique index of open
  * sessions decides. Call it in a transaction: its lock on the workspace keeps the count true.
@@ -59,22 +59,25 @@ export async function openBrowserSession(
   const { taskId, maxHours = browserSessionTimings.maxHours } = openSchema.parse(input)
   const [task] = await tx.$queryRaw<
     Array<{
-      site_id: string
+      site_id: string | null
       workspace_id: string
       needs_browser: boolean
       status: string
-      site_status: string
+      site_status: string | null
     }>
   >`
     SELECT t.site_id, t.workspace_id, t.needs_browser, t.status::text AS status,
            s.status::text AS site_status
-      FROM tasks t JOIN sites s ON s.id = t.site_id
+      FROM tasks t LEFT JOIN sites s ON s.id = t.site_id
      WHERE t.id = ${taskId}::uuid`
   if (!task) throw notFound('Task not found')
   if (!task.needs_browser) throw conflict('The task does not need a browser')
   if ((terminalTaskStatuses as readonly string[]).includes(task.status))
     throw conflict('The task has ended')
-  if ((browserClosedSiteStatuses as readonly string[]).includes(task.site_status))
+  if (
+    task.site_status &&
+    (browserClosedSiteStatuses as readonly string[]).includes(task.site_status)
+  )
     throw conflict('The site of the task is closed')
   await tx.$queryRaw`SELECT id FROM workspaces WHERE id = ${task.workspace_id}::uuid FOR NO KEY UPDATE`
   const open = await openBrowserSessionOfTask(tx, taskId)

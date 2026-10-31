@@ -1,4 +1,3 @@
-import { siteIdOf } from '@repo/domain'
 import {
   browserViewerAllowed,
   clearBrowserHelp,
@@ -30,7 +29,10 @@ import type {
 export interface StoredBrowserSession {
   id: string
   taskId: string
-  siteId: string
+  /** null — a chat without a site: the only word on whether a session is one (К12). */
+  siteId: string | null
+  /** `tasks.site_id` of its task: a row at odds with it starts no browser. */
+  taskSiteId: string | null
   status: BrowserSessionStatus
   /** The hard deadline core gave it. */
   expiresAt: Date
@@ -130,9 +132,12 @@ export class PostgresBrowserWorkerStore implements BrowserWorkerStore {
         expiresAt: true,
         readyAt: true,
         lastActivityAt: true,
+        task: { select: { siteId: true } },
       },
     })
-    return row && { ...row, siteId: siteIdOf(row) }
+    if (!row) return null
+    const { task, ...session } = row
+    return { ...session, taskSiteId: task.siteId }
   }
 
   site(siteId: string): Promise<StoredSite | null> {

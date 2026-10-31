@@ -148,7 +148,7 @@ export class FakeCloudBrowser implements CloudBrowserSession {
 
   constructor(connection: CloudBrowserConnection) {
     this.connection = connection
-    this.#tabs = [{ pageId: 1, url: connection.startUrl, title: 'Записи' }]
+    this.#tabs = [{ pageId: 1, url: connection.startUrl ?? 'about:blank', title: 'Записи' }]
   }
 
   get streaming(): boolean {
@@ -366,10 +366,12 @@ export class FakeStore implements BrowserWorkerStore {
 
   /** A live session of a new task on a site of the stack and address, as core opens it. */
   open(input: { stack?: SiteStack; siteUrl?: string; expiresInMs?: number; readyAt?: Date } = {}) {
-    const row: StoredBrowserSession = {
+    const siteId = randomUUID()
+    const row: StoredBrowserSession & { siteId: string } = {
       id: randomUUID(),
       taskId: randomUUID(),
-      siteId: randomUUID(),
+      siteId,
+      taskSiteId: siteId,
       status: 'starting',
       expiresAt: new Date(Date.now() + (input.expiresInMs ?? 3_600_000)),
       readyAt: input.readyAt ?? null,
@@ -380,6 +382,22 @@ export class FakeStore implements BrowserWorkerStore {
       stack: input.stack ?? 'wordpress',
       url: input.siteUrl ?? TEST_SITE,
     })
+    return row
+  }
+
+  /** A live session of a new chat without a site (docs/plan/61-chats-first.md, К12). */
+  openWithoutSite(input: { expiresInMs?: number } = {}) {
+    const row: StoredBrowserSession = {
+      id: randomUUID(),
+      taskId: randomUUID(),
+      siteId: null,
+      taskSiteId: null,
+      status: 'starting',
+      expiresAt: new Date(Date.now() + (input.expiresInMs ?? 3_600_000)),
+      readyAt: null,
+      lastActivityAt: new Date(),
+    }
+    this.sessions.set(row.id, row)
     return row
   }
 

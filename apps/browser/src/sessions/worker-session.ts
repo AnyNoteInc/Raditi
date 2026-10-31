@@ -6,6 +6,7 @@ import {
   admitBrowserUserCommand,
   agentTakesBrowserControl,
   browserAgentActionSettled,
+  browserAddressOpens,
   browserAgentActionStarted,
   browserCheckpointAfterRead,
   browserCheckpointLimits,
@@ -44,6 +45,7 @@ import {
   type BrowserFile,
   type BrowserHelp,
   type BrowserInputEvent,
+  type BrowserObjects,
   type BrowserSessionRuntime,
   type BrowserSessionState,
   type BrowserSessionStatus,
@@ -63,7 +65,6 @@ import {
   type CloudBrowserFrame,
   type CloudBrowserSession,
   type FlowFrame,
-  type SiteAdapter,
 } from '@repo/domain'
 import type { BrowserCheckpointRecord } from '@repo/db'
 
@@ -98,7 +99,8 @@ export interface SessionContext {
   files: {
     read(input: {
       taskId: string
-      siteId: string
+      /** null — a file of a chat without a site. */
+      siteId: string | null
       attachmentIds: readonly string[]
     }): Promise<BrowserFile[]>
   }
@@ -139,15 +141,20 @@ export interface SessionSettings {
 export interface SessionSpec {
   id: string
   taskId: string
-  siteId: string
-  siteUrl: string
-  adapter: SiteAdapter
+  /** null — a chat without a site (docs/plan/61-chats-first.md, К12), from the session's row. */
+  siteId: string | null
+  /** A chat without a site: any public https site opens, nothing there is an object of the task. */
+  openWeb: boolean
+  adapter: BrowserObjects
   policy: BrowserTaskPolicy
   allowedHosts: readonly string[]
   /** Exact origins of local sites (`browserNavigationAllowed`); empty in production. */
   localOrigins: readonly string[]
   localSites: readonly { origin: string; target: string }[]
-  startUrl: string
+  /** Names of the platform (`BROWSER_PLATFORM_HOSTS`), closed in every session (К37). */
+  platformHosts: readonly string[]
+  /** The first page; null — an empty one, in a chat without a site. */
+  startUrl: string | null
   /** Milliseconds since the epoch: the session ends there whatever happens in it. */
   deadline: number
   checkpoints: readonly BrowserCheckpointRecord[]
@@ -223,7 +230,7 @@ const toFragment = (from: string, to: string) =>
 export class WorkerSession {
   readonly id: string
   readonly taskId: string
-  readonly siteId: string
+  readonly siteId: string | null
   readonly #spec: SessionSpec
   readonly #context: SessionContext
   #status: BrowserSessionStatus = 'starting'
@@ -318,9 +325,11 @@ export class WorkerSession {
       const { endpoint } = await runtime.start({
         sessionId: spec.id,
         taskId: spec.taskId,
-        siteId: spec.siteId,
+        // What the containers are labelled by: without a site, the task.
+        siteId: spec.siteId ?? spec.taskId,
         allowedHosts: spec.allowedHosts,
         localSites: spec.localSites,
+        openWeb: spec.openWeb,
         deadline: spec.deadline,
       })
       // A close that came meanwhile stopped the containers before they were all there.
@@ -333,6 +342,8 @@ export class WorkerSession {
         endpoint,
         allowedHosts: spec.allowedHosts,
         localSites: spec.localOrigins,
+        openWeb: spec.openWeb,
+        platformHosts: spec.platformHosts,
         startUrl: spec.startUrl,
         viewport: this.#viewport,
         policy: spec.policy,
@@ -566,9 +577,11 @@ export class WorkerSession {
    * Whether an address is of another site a page of the site went on to
    * (docs/plan/60-browser-foreign-redirects.md, Ч6): no object of the task is there, and a press
    * there saves nothing of the site. An address that does not read as a page — none known yet —
-   * is not: a save there is judged as on the site.
+   * is not: a save there is judged as on the site. Without a site every page is one, an empty page
+   * and a local site of a stand too (docs/plan/61-chats-first.md, К12).
    */
   #elsewhere(url: string): boolean {
+    if (this.#spec.openWeb) return true
     const page = URL.parse(url)
     if (!page || (page.protocol !== 'https:' && page.protocol !== 'http:')) return false
     return !browserNavigationAllowed(
@@ -892,9 +905,19 @@ export class WorkerSession {
     this.#record(ref, 'unverified')
   }
 
+  /** Whether an address opens in this session at all (К12, К37). */
+  #opens(url: string): boolean {
+    const { openWeb, allowedHosts, localOrigins, platformHosts } = this.#spec
+    return browserAddressOpens(url, {
+      openWeb,
+      allowedHosts,
+      localSites: localOrigins,
+      platformHosts,
+    })
+  }
+
   #mayOpen(url: string): boolean {
-    if (!browserNavigationAllowed(url, this.#spec.allowedHosts, this.#spec.localOrigins))
-      return false
+    if (!this.#opens(url)) return false
     try {
       const target = new URL(url)
       // The client's own navigation: judged for whoever holds the browser (Б37).
@@ -1057,8 +1080,7 @@ export class WorkerSession {
         })
       }
       case 'web_open': {
-        if (!browserNavigationAllowed(action.url, this.#spec.allowedHosts, this.#spec.localOrigins))
-          throw browserTaskError('BROWSER_ADDRESS_DENIED')
+        if (!this.#opens(action.url)) throw browserTaskError('BROWSER_ADDRESS_DENIED')
         // While a save is unconfirmed the agent opens nothing new: only an object of the task. A
         // save that waits for its object holds here whatever a check found (Б22).
         if (this.#blocked()) {

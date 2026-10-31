@@ -14,7 +14,6 @@ import {
   browserTaskError,
   isBrowserSessionLive,
   isDomainError,
-  siteIdOf,
   type BrowserCloseReason,
   type BrowserEnsureJob,
   type BrowserSignIn,
@@ -201,18 +200,25 @@ export class BrowserSessions {
     }
   }
 
-  /** The site of the task: the worker reads its address itself, by this id. */
-  async #siteOf(taskId: string): Promise<string> {
+  /**
+   * The site of the task, null in a chat without one: the worker reads its address itself, by this
+   * id, and checks it against the session's row.
+   */
+  async #siteOf(taskId: string): Promise<string | null> {
     const task = await this.deps.db.task.findUnique({
       where: { id: taskId },
       select: { siteId: true },
     })
     if (!task) throw browserTaskError('BROWSER_SESSION_UNAVAILABLE')
-    return siteIdOf(task)
+    return task.siteId
   }
 
-  /** The saved sign-in, or none when it is not set or cannot be read now: never thrown. */
-  async #signIn(siteId: string): Promise<BrowserSignIn | null> {
+  /**
+   * The saved sign-in, or none when it is not set or cannot be read now: never thrown. A chat
+   * without a site has none (rule 2).
+   */
+  async #signIn(siteId: string | null): Promise<BrowserSignIn | null> {
+    if (siteId === null) return null
     try {
       return (await this.deps.signIn?.(siteId)) ?? null
     } catch (error) {

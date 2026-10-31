@@ -329,7 +329,10 @@ export const browserTaskCodes: Readonly<
     status: 403,
     message: 'This page or action is not allowed for this task.',
   },
-  BROWSER_ADDRESS_DENIED: { status: 403, message: 'This address is outside the site.' },
+  BROWSER_ADDRESS_DENIED: {
+    status: 403,
+    message: 'This address cannot be opened from this browser.',
+  },
   BROWSER_TIMEOUT: { status: 504, message: 'The page did not respond in time.' },
   BROWSER_ACTION_FAILED: {
     status: 502,

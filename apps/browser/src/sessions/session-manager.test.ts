@@ -107,6 +107,7 @@ describe('SessionManager.ensure', () => {
         siteId: row.siteId,
         allowedHosts: ['news-site.ru:443', 'www.news-site.ru:443'],
         localSites: [],
+        openWeb: false,
       }),
     ])
     // Б31: the list of posts, never the dashboard with its commenters' names.
@@ -244,6 +245,7 @@ describe('SessionManager.ensure', () => {
         maxSessions: 4,
         extraHosts: [],
         localSites: [],
+        platformHosts: [],
         stream: { maxFps: 12, quality: 70 },
       },
     })
@@ -259,6 +261,302 @@ describe('SessionManager.ensure', () => {
         }),
       ),
     ).toBe('BROWSER_SESSION_UNAVAILABLE')
+  })
+})
+
+describe('the browser of a chat without a site (plan 61, К12)', () => {
+  const PLATFORM = { platformHosts: ['raditi.ru'] }
+
+  it('starts on an empty page with no host, sign-in or site of its own', async () => {
+    const { runtime, ensuredWithoutSite } = setup({
+      ...PLATFORM,
+      extraHosts: ['cdn.example.net:443'],
+    })
+    const { row, state, session, browser } = await ensuredWithoutSite()
+    expect(runtime.started).toEqual([
+      expect.objectContaining({
+        sessionId: row.id,
+        taskId: row.taskId,
+        // The key of the containers' labels: a chat has no site to name.
+        siteId: row.taskId,
+        allowedHosts: [],
+        localSites: [],
+        openWeb: true,
+      }),
+    ])
+    expect(browser.connection).toMatchObject({
+      allowedHosts: [],
+      localSites: [],
+      openWeb: true,
+      platformHosts: ['raditi.ru'],
+      startUrl: null,
+    })
+    expect(state).toMatchObject({ status: 'ready', url: 'about:blank', controller: 'agent' })
+    expect(session.siteId).toBeNull()
+    // Nothing to sign in to.
+    await settle()
+    expect(browser.signIns).toEqual([])
+  })
+
+  it('keeps no sign-in a caller names: there is nothing to sign in to', async () => {
+    const { store, manager, browsers } = setup()
+    const row = store.openWithoutSite()
+    const signIn = { login: 'admin', password: 'correct horse battery' }
+    const ensure = () =>
+      manager.ensure({
+        sessionId: row.id,
+        taskId: row.taskId,
+        siteId: null,
+        takeControl: false,
+        signIn,
+      })
+    await ensure()
+    await settle()
+    await ensure()
+    await settle()
+    expect(browsers.last.signIns).toEqual([])
+    await manager.act(row.id, {
+      taskId: row.taskId,
+      assignmentId: randomUUID(),
+      action: { tool: 'web_observe' },
+    })
+    expect(browsers.last.signIns).toEqual([])
+  })
+
+  it('hands the next turn of a chat the browser it has', async () => {
+    const { manager, runtime, ensuredWithoutSite } = setup()
+    const { row, session } = await ensuredWithoutSite()
+    const next = await manager.ensure({
+      sessionId: row.id,
+      taskId: row.taskId,
+      siteId: null,
+      takeControl: true,
+    })
+    expect(next).toMatchObject({ status: 'ready', url: 'about:blank' })
+    expect(manager.session(row.id)).toBe(session)
+    expect(runtime.started).toHaveLength(1)
+  })
+
+  it('never hands a held session to a caller that says otherwise of its site', async () => {
+    const { manager, ensured, ensuredWithoutSite } = setup()
+    const withSite = await ensured()
+    await expect(
+      manager.ensure({
+        sessionId: withSite.row.id,
+        taskId: withSite.row.taskId,
+        siteId: null,
+        takeControl: false,
+      }),
+    ).rejects.toThrow('The browser session belongs to another task')
+    const without = await ensuredWithoutSite()
+    await expect(
+      manager.ensure({
+        sessionId: without.row.id,
+        taskId: without.row.taskId,
+        siteId: randomUUID(),
+        takeControl: false,
+      }),
+    ).rejects.toThrow('The browser session belongs to another task')
+  })
+
+  it('takes whether a session is one from its row alone, never from the caller', async () => {
+    const { store, manager, runtime } = setup()
+    // A caller that says «no site» of a session with a site, and the other way round.
+    const withSite = store.open()
+    await expect(
+      manager.ensure({
+        sessionId: withSite.id,
+        taskId: withSite.taskId,
+        siteId: null,
+        takeControl: false,
+      }),
+    ).rejects.toThrow('Browser session not found')
+    const without = store.openWithoutSite()
+    await expect(
+      manager.ensure({
+        sessionId: without.id,
+        taskId: without.taskId,
+        siteId: randomUUID(),
+        takeControl: false,
+      }),
+    ).rejects.toThrow('Browser session not found')
+    expect(runtime.started).toEqual([])
+  })
+
+  it('starts nothing for a row at odds with its task: a site’s task never gets the open web', async () => {
+    const { store, manager, runtime } = setup()
+    const row = store.openWithoutSite()
+    store.sessions.get(row.id)!.taskSiteId = randomUUID()
+    await expect(
+      manager.ensure({ sessionId: row.id, taskId: row.taskId, siteId: null, takeControl: false }),
+    ).rejects.toThrow('The browser session is not of its task')
+    const site = store.open()
+    store.sessions.get(site.id)!.taskSiteId = null
+    await expect(
+      manager.ensure({
+        sessionId: site.id,
+        taskId: site.taskId,
+        siteId: site.siteId,
+        takeControl: false,
+      }),
+    ).rejects.toThrow('The browser session is not of its task')
+    expect(runtime.started).toEqual([])
+  })
+
+  it('opens any public https address, and refuses the rest for the agent and the client', async () => {
+    const { ensuredWithoutSite, act, manager } = setup(PLATFORM)
+    const { row, session, browser } = await ensuredWithoutSite()
+    await act(row, { tool: 'web_open', url: 'https://example.com/news' })
+    await act(row, { tool: 'web_open', url: 'https://example.com:8443/' })
+    expect(browser.acted).toHaveLength(2)
+    for (const url of [
+      'http://example.com/',
+      'https://93.184.216.34/',
+      'https://example.com:8080/',
+      'https://localhost/',
+      'https://user:secret@example.com/',
+      'https://raditi.ru/',
+      'https://app.raditi.ru/chats',
+    ])
+      expect(await codeOf(act(row, { tool: 'web_open', url })), url).toBe('BROWSER_ADDRESS_DENIED')
+    expect(browser.acted).toHaveLength(2)
+
+    const viewer = new ViewerProbe()
+    session.attach(viewer)
+    session.message(viewer, { t: 'take' })
+    await settle()
+    const go = (url: string) => session.message(viewer, { t: 'navigate', url })
+    go('https://example.org/')
+    go('https://app.raditi.ru/')
+    go('http://example.org/')
+    await settle()
+    expect(browser.navigated).toEqual(['https://example.org/'])
+    expect(viewer.refusals).toEqual(['address_denied', 'address_denied'])
+    expect(manager.size).toBe(1)
+  })
+
+  it('records no object and holds nothing back: a press anywhere is only a press', async () => {
+    const { ensuredWithoutSite, act, store } = setup()
+    const { row, browser } = await ensuredWithoutSite()
+    const observed = async () => {
+      const result = await act(row, { tool: 'web_observe' })
+      return (result as { observation: string }).observation
+    }
+    // On the empty page too: the save shortcut holds nothing back, and the next page opens.
+    await act(row, { tool: 'web_press', key: 'Control+S' })
+    await act(row, { tool: 'web_open', url: 'https://example.com/' })
+    browser.go('https://example.com/wp-admin/post.php?post=12&action=edit')
+    await act(row, {
+      tool: 'web_click',
+      observation: await observed(),
+      ref: 'e5', // «Опубликовать», a commit in a session with a site
+    })
+    await act(row, { tool: 'web_open', url: 'https://example.com/' })
+    expect(store.checkpointRows.size).toBe(0)
+    expect(await act(row, { tool: 'web_verify' })).toMatchObject({ objects: [], matched: false })
+    expect(browser.verified).toEqual([])
+  })
+
+  it('goes past the limit of 20 objects: there are none to count', async () => {
+    const { ensuredWithoutSite, act } = setup()
+    const { row, browser } = await ensuredWithoutSite()
+    for (let index = 0; index < 25; index += 1) {
+      browser.go(`https://example.com/wp-admin/post.php?post=${index + 1}&action=edit`)
+      const { observation } = (await act(row, { tool: 'web_observe' })) as { observation: string }
+      await act(row, { tool: 'web_click', observation, ref: 'e5' })
+    }
+    expect(browser.acted).toHaveLength(25)
+  })
+
+  it('gives a file of the chat to a page, and no file of another task', async () => {
+    const { ensuredWithoutSite, act, store, inbox } = setup()
+    const { row, browser } = await ensuredWithoutSite()
+    const id = randomUUID()
+    const workspaceId = randomUUID()
+    const key = attachmentKey(workspaceId, id)
+    store.attachments.set(id, {
+      id,
+      taskId: row.taskId,
+      workspaceId,
+      siteId: null,
+      s3Key: key,
+      fileName: 'report.pdf',
+      contentType: 'application/pdf',
+      sizeBytes: 2,
+    })
+    inbox.objects.set(key, new Uint8Array([1, 2]))
+    await act(row, { tool: 'web_upload', attachmentIds: [id] })
+    expect(browser.acted.at(-1)).toMatchObject({
+      tool: 'web_upload',
+      files: [{ name: 'report.pdf', mimeType: 'application/pdf' }],
+    })
+    store.attachments.get(id)!.taskId = randomUUID()
+    expect(await codeOf(act(row, { tool: 'web_upload', attachmentIds: [id] }))).toBe(
+      'BROWSER_ATTACHMENT_UNKNOWN',
+    )
+  })
+
+  it('records a write of a pass and the request for help, as any session', async () => {
+    const { ensuredWithoutSite, act, store } = setup()
+    const { row } = await ensuredWithoutSite()
+    await act(row, { tool: 'web_type', text: 'поиск' })
+    await act(row, { tool: 'web_help', reason: 'login', message: 'Войдите, пожалуйста.' })
+    await settle()
+    expect(store.wrote).toBe(1)
+    expect(store.helps).toEqual([{ reason: 'login', message: 'Войдите, пожалуйста.' }])
+  })
+
+  it('shows a stand’s local sites only there', async () => {
+    const local = { origin: 'http://wp.raditi.test', target: 'host.docker.internal:18080' }
+    const { runtime, browsers, ensuredWithoutSite, act } = setup({ localSites: [local] })
+    const { row } = await ensuredWithoutSite()
+    expect(runtime.started.at(-1)).toMatchObject({ localSites: [local], allowedHosts: [] })
+    expect(browsers.last.connection.localSites).toEqual([local.origin])
+    await act(row, { tool: 'web_open', url: 'http://wp.raditi.test/' })
+    expect(await codeOf(act(row, { tool: 'web_open', url: 'http://other.raditi.test/' }))).toBe(
+      'BROWSER_ADDRESS_DENIED',
+    )
+  })
+})
+
+describe('a name of the platform (plan 61, К37)', () => {
+  it('is refused as a site: a project is no way into the cabinet', async () => {
+    const { store, manager, runtime } = setup({ platformHosts: ['raditi.ru'] })
+    for (const siteUrl of [
+      'https://raditi.ru',
+      'https://app.raditi.ru/',
+      'https://www.raditi.ru',
+    ]) {
+      const row = store.open({ siteUrl })
+      expect(
+        await manager
+          .ensure({ sessionId: row.id, taskId: row.taskId, siteId: row.siteId, takeControl: false })
+          .catch((error: { message: string }) => error.message),
+        siteUrl,
+      ).toBe('The site cannot be reached by the browser')
+    }
+    expect(runtime.started).toEqual([])
+  })
+
+  it('is refused by address in a session with a site, for the agent and the client', async () => {
+    // The site's own list names the host: only the rule of the platform's names refuses it.
+    const { ensured, act } = setup({
+      platformHosts: ['raditi.ru'],
+      extraHosts: ['raditi.ru:443', 'app.raditi.ru:443'],
+    })
+    const { row, session, browser } = await ensured()
+    expect(browser.connection.platformHosts).toEqual(['raditi.ru'])
+    for (const url of ['https://raditi.ru/', 'https://app.raditi.ru/'])
+      expect(await codeOf(act(row, { tool: 'web_open', url })), url).toBe('BROWSER_ADDRESS_DENIED')
+    expect(browser.acted).toEqual([])
+    const viewer = new ViewerProbe()
+    session.attach(viewer)
+    session.message(viewer, { t: 'take' })
+    await settle()
+    session.message(viewer, { t: 'navigate', url: 'https://raditi.ru/' })
+    await settle()
+    expect(browser.navigated).toEqual([])
+    expect(viewer.refusals).toEqual(['address_denied'])
   })
 })
 
