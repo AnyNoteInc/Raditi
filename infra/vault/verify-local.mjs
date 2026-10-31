@@ -1478,6 +1478,8 @@ async function verifyKvClient({ address, scopedTokens, rootToken, content }) {
     await mcp.kvDestroyAll(maskPath)
     assert.equal(await mcp.kvRead(maskPath), null)
     assert.equal(await rootStore.kvMetadata(maskPath), null)
+    // The sweep comes to every task with a browser, those that never had a map among them.
+    await mcp.kvDestroyAll(maskPath)
   })
   await checked('mcp role reads the WordPress access of a site with its version', async () => {
     const access = await mcp.kvRead(`kv/sites/${content.siteId}/wp`)

@@ -9,13 +9,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MCP_ACCESS, type McpAccess } from '../access/mcp-access.ts'
 import { AppModule } from '../app.module.ts'
 import type { McpConfig } from '../config/config.ts'
+import { MCP_CONTENT_MAINTENANCE } from '../content/mcp-content-maintenance.ts'
 import { MCP_ENDPOINT } from '../server/mcp-runtime.ts'
 import { mountMcp } from '../server/mount-mcp.ts'
 import type { McpBrowserTasks } from '../site-info/browser-tasks.ts'
 import { MCP_BROWSER_TASKS } from '../site-info/site-info.tokens.ts'
 import { fakeInfra, testMcpConfig } from '../testing/fakes.ts'
 import { McpWebService } from './mcp-web.ts'
-import { MCP_WEB } from './web.tokens.ts'
+import { MCP_WEB, WEB_MASK_SWEEP } from './web.tokens.ts'
+import { WebMaskSweep } from './web-mask-sweep.ts'
 
 // The cloud browser of a task (docs/plan/57-browser-tasks.md, Б20): the `web` tools go to a task
 // that needs a browser, wherever the worker is configured — production too —, and to no other.
@@ -257,5 +259,27 @@ describe('the web tools of the mcp role', () => {
       .compile()
     expect(moduleRef.get(MCP_WEB)).toBeInstanceOf(McpWebService)
     await moduleRef.close()
+  })
+
+  it('sweeps the contact maps in production, where the content profile is off (plan 61, К38)', async () => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [AppModule.forRoot(config({ appEnv: 'production', contentProfile: 'off' }))],
+    })
+      .overrideProvider(PRISMA)
+      .useValue(fakeInfra().prisma)
+      .overrideProvider(SECRET_STORE)
+      .useValue(fakeInfra().secrets)
+      .compile()
+    const sweep = moduleRef.get<WebMaskSweep>(WEB_MASK_SWEEP)
+    expect(sweep).toBeInstanceOf(WebMaskSweep)
+    expect(() => moduleRef.get(MCP_CONTENT_MAINTENANCE)).toThrow()
+    // The timer is started and stopped by the lifecycle of the app.
+    const start = vi.spyOn(sweep, 'onApplicationBootstrap')
+    const stop = vi.spyOn(sweep, 'beforeApplicationShutdown')
+    await moduleRef.init()
+    expect(start).toHaveBeenCalledOnce()
+    expect(stop).not.toHaveBeenCalled()
+    await moduleRef.close()
+    expect(stop).toHaveBeenCalledOnce()
   })
 })

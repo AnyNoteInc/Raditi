@@ -2118,6 +2118,44 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
   )
 
   describe('a chat without a site (docs/plan/61-chats-first.md, К14)', () => {
+    it('has its contact map swept under its own id, past the lease of that id', async () => {
+      const turn = await chatTurnOf(true)
+      const secrets = { kvDestroyAll: vi.fn(async () => undefined) }
+      const maintenance = new McpContentMaintenance(db, { delete: vi.fn() }, secrets, vi.fn())
+      const path = contentMaskPath({ siteId: turn.task.id, taskId: turn.task.id })
+      try {
+        await db.task.update({
+          where: { id: turn.task.id },
+          data: {
+            status: 'done',
+            finishedAt: new Date(Date.now() - CONTENT_SNAPSHOT_TTL_MS - 3_600_000),
+            contentAccessedAt: new Date(),
+          },
+        })
+        await db.turnAssignment.update({
+          where: { id: turn.assignment.id },
+          data: { finishedAt: new Date(), outcome: 'completed' },
+        })
+        await db.llmKey.update({
+          where: { id: turn.key.id },
+          data: { revokeRequestedAt: new Date(), revokedAt: new Date() },
+        })
+        // Its own lease is still held: read by `site_id = NULL`, this claim would see none.
+        await maintenance.sweepMasks()
+        expect(secrets.kvDestroyAll).not.toHaveBeenCalledWith(path)
+        await db.siteLease.update({
+          where: { siteId: turn.task.id },
+          data: { holderTaskId: null, operation: null, expiresAt: null },
+        })
+        await maintenance.sweepMasks()
+        expect(secrets.kvDestroyAll).toHaveBeenCalledWith(path)
+        const task = await db.task.findUniqueOrThrow({ where: { id: turn.task.id } })
+        expect(task.contentMasksPurgedAt).not.toBeNull()
+      } finally {
+        await turn.cleanup()
+      }
+    })
+
     it.each([false, true])('admits its turn, browser %s, by its own lease', async (browser) => {
       const turn = await chatTurnOf(browser)
       try {

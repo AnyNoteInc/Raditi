@@ -16,9 +16,10 @@ import {
   type McpHostScope,
   type McpSiteScope,
 } from '../access/mcp-access.ts'
+import { contentExpiredSql } from '../privacy/content-expiry.ts'
 import { contentMaskPath } from '../privacy/content-privacy.ts'
 import { screenshotIdOf } from '../storage/screenshots.ts'
-import { contentExpiredSql, contentSnapshotKey } from './content-snapshots.ts'
+import { contentSnapshotKey } from './content-snapshots.ts'
 import { recoverContentWrite, type ContentGatewayResolver } from './mcp-content.ts'
 import { PostgresMcpJournal } from './mcp-journal.ts'
 
