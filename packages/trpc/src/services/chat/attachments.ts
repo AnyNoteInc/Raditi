@@ -13,7 +13,6 @@ import {
   attachmentTypeByName,
   attachmentTypeOf,
   conflict,
-  siteIdOf,
   terminalTaskStatuses,
   type AttachmentRefusal,
 } from '@repo/domain'
@@ -66,7 +65,8 @@ export async function bindMessageAttachments(
     taskId: string
     userId: string
     workspaceId: string
-    siteId: string
+    /** null — a chat without a project (docs/plan/61-chats-first.md, §5.9). */
+    siteId: string | null
   },
 ): Promise<void> {
   if (input.ids.length === 0) return
@@ -216,7 +216,7 @@ export async function bindChooserAttachments(
       taskId: task.id,
       userId: input.userId,
       workspaceId: task.workspaceId,
-      siteId: siteIdOf(task),
+      siteId: task.siteId,
     })
     return { bound: input.ids.length }
   })

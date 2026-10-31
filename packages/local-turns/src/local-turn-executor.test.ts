@@ -424,12 +424,29 @@ describe('files of the client on the local executor', () => {
     expect(options).toEqual({ mode: 0o444 })
   })
 
-  it('refuses files for a turn without a repository before any container', async () => {
+  it('refuses files for a turn on a site without a repository before any container', async () => {
     const f = await fixture()
     await expect(
       f.executor.prepare(f.input({ inbox: [file(pathOf('a.pdf'), Buffer.from('abc'))] }), signal),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
     expect(f.sandboxes.create).not.toHaveBeenCalled()
+  })
+
+  it('writes the files of a chat without a site into its empty sandbox (К16)', async () => {
+    const f = await fixture()
+    const plain = f.input({ inbox: [file(pathOf('Смета.pdf'), Buffer.from('%PDF chat'))] })
+    await f.executor.prepare(
+      {
+        ...plain,
+        // Its lease is its own id: that is all that tells this turn from one on a site.
+        fence: { ...plain.fence, siteId: labels.taskId },
+        sandbox: { ...plain.sandbox, labels: { ...labels, siteId: labels.taskId } },
+      },
+      signal,
+    )
+    expect(f.importBundle).not.toHaveBeenCalled()
+    expect(f.writes[0]).toBe(pathOf('Смета.pdf'))
+    expect(vi.mocked(f.sandbox.fs.write).mock.calls[0]![2]).toEqual({ mode: 0o444 })
   })
 
   it.each([

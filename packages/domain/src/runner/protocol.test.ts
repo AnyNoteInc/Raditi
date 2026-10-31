@@ -762,8 +762,32 @@ describe('runner commands with files of the client', () => {
     expect(runnerCommandSchema.parse(withInbox(inbox))).toMatchObject({ inbox })
   })
 
+  /** The labels of a chat without a site: its lease is its own id (К14). */
+  const inChat = (command: Record<string, unknown>) => {
+    const sandbox = command.sandbox as { labels: Record<string, unknown> }
+    const fence = command.fence as { taskId: string }
+    return {
+      ...command,
+      fence: { ...fence, siteId: fence.taskId },
+      sandbox: { ...sandbox, labels: { ...sandbox.labels, siteId: fence.taskId } },
+    }
+  }
+
+  it('carries the files of a chat without a site, which has no bundle (К16)', () => {
+    const inbox = [{ path: path(1), sizeBytes: 1024 }]
+    expect(
+      runnerCommandSchema.parse(
+        inChat(withInbox(inbox, { bundle: undefined, restore: undefined })),
+      ),
+    ).toMatchObject({ inbox })
+  })
+
   it.each([
     ['without a bundle', withInbox([{ path: path(1), sizeBytes: 1 }], { bundle: undefined })],
+    [
+      'of a site without a bundle, the second line of Б26',
+      withInbox([{ path: path(1), sizeBytes: 1 }], { bundle: undefined, restore: undefined }),
+    ],
     ['an empty list', withInbox([])],
     ['a path twice', withInbox([1, 1].map((index) => ({ path: path(index), sizeBytes: 1 })))],
     ['a path outside the inbox', withInbox([{ path: '/workspace/repo/a.pdf', sizeBytes: 1 }])],

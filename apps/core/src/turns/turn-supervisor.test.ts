@@ -2820,9 +2820,34 @@ describe.each(executorKinds)('TurnSupervisor with files of the client (%s execut
     withoutRepository(browser)
     await expect(browser.run()).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message: 'Files of the client go only to a turn with a repository',
+      message: 'Files of the client go only to a turn with a repository or without a site',
     })
     expect(browser.leases.acquire).not.toHaveBeenCalled()
     expect(files).not.toHaveBeenCalled()
+  })
+
+  it('writes the files of a chat without a site, which has no repository (docs/plan/61, К16)', async () => {
+    const f = turnFixture(kind)
+    const files = withFiles(f)
+    withoutRepository(f)
+    const request = f.request as TurnRequest
+    request.requirements = { repository: false, browser: false }
+    // Its lease is its own id (К14): that is what lets the sandbox hold them.
+    request.sandbox = {
+      ...request.sandbox,
+      labels: { ...request.sandbox.labels, siteId: labels.taskId },
+    }
+    const chatLease = async (input: { ttlMs: number }) => ({
+      ...f.lease,
+      siteId: labels.taskId,
+      expiresAt: new Date(Date.now() + input.ttlMs),
+    })
+    f.leases.acquire.mockImplementation(chatLease)
+    f.leases.renew.mockImplementation((_fence, ttlMs) => chatLease({ ttlMs }))
+    await f.run()
+    expect(files).toHaveBeenCalledExactlyOnceWith(labels.taskId, [path])
+    expect(f.order).toContain(`write:${path}`)
+    expect(f.order.indexOf(`write:${path}`)).toBeGreaterThan(f.order.indexOf('workdir:mkdir'))
+    expect([...f.assignments.rows.values()][0]!.outcome).toBe('completed')
   })
 })

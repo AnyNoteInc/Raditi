@@ -464,7 +464,7 @@ export async function postDialogMessage(
       taskId: task.id,
       userId,
       workspaceId: task.workspaceId,
-      siteId: siteIdOf(task),
+      siteId: task.siteId,
     })
     const requestEventId = await writeRequest(tx, task.id, payload)
     await enqueueAgentTurn(tx, { taskId: task.id, attempt, requestEventId })

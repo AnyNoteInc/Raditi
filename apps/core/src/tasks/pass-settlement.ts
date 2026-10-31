@@ -156,9 +156,10 @@ interface SettleContext {
   task: {
     id: string
     workspaceId: string
-    siteId: string
+    /** null — a chat without a project (docs/plan/61-chats-first.md, К7). */
+    siteId: string | null
     billable: boolean
-    site: { stack: SiteStack; url: string; installedVersion: string | null }
+    site: { stack: SiteStack; url: string; installedVersion: string | null } | null
   }
   /** What the task works with (docs/plan/57, Б2): a pass without a repository has no candidate. */
   requirements: TaskRequirements
@@ -339,8 +340,9 @@ export class PassSettlement {
     try {
       if (!this.deps.candidates) throw new Error('git is not configured')
       const revision = await nextCandidateRevision(this.deps.db, pass.taskId)
+      // A repository is of a site: the database holds no task with one and without the other.
       const candidateContext = await this.deps.candidates.context(
-        context.task,
+        withSite(context.task),
         context.standing,
         revision,
       )
@@ -961,7 +963,7 @@ export class PassSettlement {
       },
     })
     if (!task) return null
-    const { needsRepository, needsBrowser, ...settled } = withSite(task)
+    const { needsRepository, needsBrowser, ...settled } = task
     const [cancel, flagged, writes, standing, browser] = await Promise.all([
       pressedCancel(db, taskId),
       db.taskEvent.count({ where: { taskId, type: 'llm.policy_flagged' } }),

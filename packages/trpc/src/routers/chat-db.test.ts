@@ -3469,5 +3469,33 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         caller.attachment.bind({ taskId, attachmentIds: [file.id] }),
       ).rejects.toMatchObject({ cause: { code: 'ATTACHMENT_NOT_READY' } })
     })
+
+    // The site of the binding comes from the task (docs/plan/61-chats-first.md, §5.9): a guard
+    // there would answer CONFLICT to every file of a chat without a project.
+    it('«Загрузить новый» gives a file to a chat in the browser without a project', async () => {
+      const { owner, workspaceId } = await siteOwner()
+      const caller = callerOf(owner)
+      const task = await db.task.create({
+        data: { workspaceId, siteId: null, needsRepository: false, needsBrowser: true },
+      })
+      taskIds.push(task.id)
+      const file = await createAttachment(db, {
+        workspaceId,
+        siteId: null,
+        uploadedById: owner.id,
+        fileName: 'Обложка.jpg',
+        contentType: 'image/jpeg',
+        sizeBytes: 2048,
+      })
+      if (file === null) throw new Error('The file was not announced')
+      await markAttachmentReady(db, { id: file.id, sizeBytes: 2048, contentType: 'image/jpeg' })
+
+      await expect(
+        caller.attachment.bind({ taskId: task.id, attachmentIds: [file.id] }),
+      ).resolves.toEqual({ bound: 1 })
+      expect((await caller.attachment.list({ taskId: task.id })).map((item) => item.id)).toEqual([
+        file.id,
+      ])
+    })
   })
 })

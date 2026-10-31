@@ -18,7 +18,7 @@ export interface TurnInbox {
 const notBound = () => conflict('A file of the turn is not bound to its task')
 
 /**
- * The files of a turn with a repository from raditi-inbox (spec §8, «Подготовка»; §14): every
+ * The files of a turn from raditi-inbox (spec §8, «Подготовка»; §14): every
  * path is checked against the database again before any byte is read — bound to this very task,
  * at the path of its id and name, its key the one of its workspace, its size within the limit
  * of a file. Each is read when the executor takes it, so a turn holds one file at a time.

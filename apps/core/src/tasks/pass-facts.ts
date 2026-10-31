@@ -17,7 +17,6 @@ import {
   readFeedRow,
   siteWorkspaceRules,
   turnSkillsOf,
-  withSite,
   type LlmBackend,
   type PreviewAddress,
   type SiteAdapter,
@@ -115,7 +114,7 @@ export async function readPassFacts(
   input: PassFactsInput,
 ): Promise<PassFacts | null> {
   const { db } = deps
-  const found = await db.task.findUnique({
+  const task = await db.task.findUnique({
     where: { id: input.taskId },
     select: {
       id: true,
@@ -125,19 +124,21 @@ export async function readPassFacts(
       billable: true,
       needsRepository: true,
       needsBrowser: true,
+      workspace: { select: { dataClass: true } },
       site: {
         select: {
           stack: true,
           url: true,
           agentNotes: true,
-          workspace: { select: { dataClass: true } },
           agentSkills: { select: { name: true, url: true, enabled: true } },
         },
       },
     },
   })
-  if (!found) return null
-  const task = withSite(found)
+  if (!task) return null
+  // Null in a chat without a project (docs/plan/61-chats-first.md, §5.6): no repository, no
+  // variables of the client, no rules of a stack and only the skills every turn has.
+  const { siteId, site } = task
   const requirements = { repository: task.needsRepository, browser: task.needsBrowser }
   const rows = await db.taskEvent.findMany({
     where: { taskId: task.id, type: 'feed.request' },
@@ -165,11 +166,13 @@ export async function readPassFacts(
   })
 
   const [repository, turnRows, assignments, candidate, preview, variables] = await Promise.all([
-    db.gitRepository.findFirst({
-      where: { siteId: task.siteId },
-      orderBy: { createdAt: 'asc' },
-      select: { provider: true, owner: true, name: true, defaultBranch: true },
-    }),
+    siteId === null
+      ? null
+      : db.gitRepository.findFirst({
+          where: { siteId },
+          orderBy: { createdAt: 'asc' },
+          select: { provider: true, owner: true, name: true, defaultBranch: true },
+        }),
     db.taskTurn.findMany({
       where: { taskId: task.id },
       select: {
@@ -197,11 +200,13 @@ export async function readPassFacts(
       where: { taskId: task.id },
       select: { status: true, hostname: true, unavailableReason: true },
     }),
-    db.siteEnvVar.findMany({
-      where: { siteId: task.siteId, toAgent: true, agentConsentAt: { not: null } },
-      orderBy: { name: 'asc' },
-      select: { name: true, hosts: true, toAgent: true, toPreview: true, agentConsentAt: true },
-    }),
+    siteId === null
+      ? []
+      : db.siteEnvVar.findMany({
+          where: { siteId, toAgent: true, agentConsentAt: { not: null } },
+          orderBy: { name: 'asc' },
+          select: { name: true, hosts: true, toAgent: true, toPreview: true, agentConsentAt: true },
+        }),
   ])
   const plans = new Map(assignments.map((row) => [row.turnNo, savedPlanOf(row.plan)]))
   const turns = new Map<number, FinishedTurn>(
@@ -261,7 +266,7 @@ export async function readPassFacts(
   // The variables the agent's commands get and the hosts they reach through the egress proxy
   // (plan 53, Р13): none in a workspace of client data.
   const agentVariables = variables.filter((variable) =>
-    envVarReachesAgent(variable, task.site.workspace.dataClass),
+    envVarReachesAgent(variable, task.workspace.dataClass),
   )
   const egress = egressHostsOf(
     agentVariables.map((variable) => {
@@ -270,22 +275,22 @@ export async function readPassFacts(
     }),
   )
 
-  const site = siteFactsOf(task.site)
   // The repository's rules and the database guide are of a repository task; a task in the
   // browser takes the stack's guide to its admin pages instead (docs/plan/57, Б20, Б21).
-  const adapter = requirements.repository ? deps.adapter(task.site.stack) : null
-  const rules: WorkspaceRules = adapter ? workspaceRulesOf(adapter, site) : { protectedPaths: [] }
+  const stack =
+    requirements.repository && site
+      ? { adapter: deps.adapter(site.stack), facts: siteFactsOf(site) }
+      : null
+  const rules: WorkspaceRules = stack
+    ? workspaceRulesOf(stack.adapter, stack.facts)
+    : { protectedPaths: [] }
+  const files = attachmentFactsOf(await taskAttachments(deps.db, task.id))
   const browser = requirements.browser
-    ? await browserFactsOf(deps, task.id, {
-        stack: task.site.stack,
-        url: task.site.url,
-        agentNotes: task.site.agentNotes,
-      })
+    ? await browserFactsOf(deps, task.id, site, files)
     : undefined
-  // The files of a repository task go into the sandbox of its turn (spec §8, «Подготовка»).
-  const attachments = requirements.repository
-    ? attachmentFactsOf(await taskAttachments(deps.db, task.id))
-    : []
+  // The files of a repository task go into the sandbox of its turn (spec §8, «Подготовка»), and
+  // so do those of a chat without a site (docs/plan/61, К16).
+  const attachments = requirements.repository || site === null ? files : []
   return {
     task: {
       id: task.id,
@@ -315,8 +320,8 @@ export async function readPassFacts(
     preview: previewFactsOf(preview, deps.previews),
     egress,
     variables: agentVariables.map((variable) => variable.name),
-    skills: turnSkillsOf(task.site.agentSkills),
-    ...(adapter ? { databaseGuide: adapter.dbPlanGuide(site) } : {}),
+    skills: turnSkillsOf(site?.agentSkills ?? []),
+    ...(stack ? { databaseGuide: stack.adapter.dbPlanGuide(stack.facts) } : {}),
     profile: profile ?? null,
     budget,
     now: input.now,
@@ -367,17 +372,17 @@ const attachmentFactsOf = (
 /**
  * What a pass in the cloud browser needs of its site: the address, the client's notes, the files
  * bound to the task, what the task saved there and the stack's guide to its admin pages — null
- * when the stack has no adapter or no browser support yet (the planner refuses the task then).
+ * when the stack has no adapter or no browser support yet (the planner refuses the task then). A
+ * chat without a site has its files alone: no objects, and no stack to guide it.
  */
 async function browserFactsOf(
   deps: PassFactsDependencies,
   taskId: string,
-  site: { stack: SiteStack; url: string; agentNotes: string | null },
+  site: { stack: SiteStack; url: string; agentNotes: string | null } | null,
+  attachments: readonly TaskAttachmentFacts[],
 ): Promise<BrowserPassFacts> {
-  const [attachments, checkpoints] = await Promise.all([
-    taskAttachments(deps.db, taskId),
-    taskBrowserCheckpoints(deps.db, taskId),
-  ])
+  if (site === null) return { siteUrl: null, agentNotes: null, attachments, saved: [], guide: null }
+  const checkpoints = await taskBrowserCheckpoints(deps.db, taskId)
   let guide: string | null
   try {
     guide = deps.adapter(site.stack).browserGuide()
@@ -388,7 +393,7 @@ async function browserFactsOf(
   return {
     siteUrl: site.url,
     agentNotes: site.agentNotes,
-    attachments: attachmentFactsOf(attachments),
+    attachments,
     saved: checkpoints.flatMap((checkpoint) => savedObjectOf(checkpoint) ?? []),
     guide,
   }

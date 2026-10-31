@@ -54,7 +54,8 @@ export interface StoredSite {
 export interface StoredAttachment {
   id: string
   workspaceId: string
-  siteId: string
+  /** null — a file of a chat without a site. */
+  siteId: string | null
   s3Key: string
   fileName: string
   contentType: string
@@ -199,7 +200,7 @@ export class PostgresBrowserWorkerStore implements BrowserWorkerStore {
     return {
       id: row.id,
       workspaceId: row.workspaceId,
-      siteId: siteIdOf(row),
+      siteId: row.siteId,
       s3Key: row.s3Key,
       fileName: row.fileName,
       contentType: row.contentType,

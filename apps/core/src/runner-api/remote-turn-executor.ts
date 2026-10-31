@@ -15,6 +15,7 @@ import {
   sessionStateSchema,
   snapshotHasRepository,
   snapshotSealBaseSchema,
+  turnMayHoldInbox,
   type CapturedTurn,
   type DestroyReason,
   type PresignedRequest,
@@ -147,7 +148,10 @@ export class RemoteTurnExecutor implements TurnExecutor {
       snapshotHasRepository(input.restore.manifest) !== (input.bundle !== undefined)
     )
       throw badRequest('The snapshot and the bundle disagree on the repository')
-    assertTurnInbox(input.inbox ?? [], input.bundle !== undefined)
+    assertTurnInbox(
+      input.inbox ?? [],
+      turnMayHoldInbox(input.bundle !== undefined, input.sandbox.labels),
+    )
     const restore = input.restore
       ? { manifest: input.restore.manifest, parts: restoreParts(input.restore) }
       : undefined

@@ -144,7 +144,7 @@ export interface TurnPrepareInput {
   /**
    * The files the client sent with the task, as the plan names them (`input.attachments`): the
    * executor writes each at its path, read-only, after the restore. Only a turn with a bundle
-   * has them (assertTurnInbox); absent — none.
+   * or of a chat without a site has them (turnMayHoldInbox, assertTurnInbox); absent — none.
    */
   inbox?: readonly TurnInboxFile[]
   /** Selects the stateless event parser on the executor side. */
@@ -459,16 +459,29 @@ export function turnInboxAttachmentId(path: string): string | null {
 }
 
 /**
- * The files of a prepare, as both executors and the runner protocol take them: only a turn with
- * a repository has them (a task in the browser hands its files to the browser worker, Б26),
- * each at a path of turnInboxPath() once, each of a file's size, all within turnInboxLimits.
+ * Whether the sandbox of a turn may hold the client's files: one with a repository, or the turn
+ * of a chat without a site, whose lease is its own id (`leaseScopeOf`, docs/plan/61-chats-first.md,
+ * К14, К16). A task on a site without a repository hands them to the browser worker alone (Б26):
+ * its turn has the open internet and may have the site's admin pages in its browser, so the
+ * labels of the turn are the second line against a planner that gets this wrong.
+ */
+export const turnMayHoldInbox = (
+  hasRepository: boolean,
+  labels: Pick<SandboxLabels, 'siteId' | 'taskId'>,
+): boolean => hasRepository || labels.siteId === labels.taskId
+
+/**
+ * The files of a prepare, as both executors and the runner protocol take them: only a turn
+ * turnMayHoldInbox() lets hold them, each at a path of turnInboxPath() once, each of a file's
+ * size, all within turnInboxLimits.
  */
 export function assertTurnInbox(
   files: readonly Pick<TurnInboxFile, 'path' | 'sizeBytes'>[],
-  hasRepository: boolean,
+  mayHold: boolean,
 ): void {
   if (files.length === 0) return
-  if (!hasRepository) throw badRequest('Files of the client go only to a turn with a repository')
+  if (!mayHold)
+    throw badRequest('Files of the client go only to a turn with a repository or without a site')
   if (files.length > turnInboxLimits.files) throw badRequest('Too many files for one turn')
   let bytes = 0
   const paths = new Set<string>()

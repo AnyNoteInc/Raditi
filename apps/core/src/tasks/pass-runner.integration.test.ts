@@ -4,9 +4,12 @@ import type { AgentDriverRegistry } from '@repo/agent-drivers'
 import { ensurePersonalWorkspaceWithGift } from '@repo/billing'
 import { billingFixtures } from '@repo/billing/testing'
 import {
+  bindAttachments,
   closeBrowserSession,
+  createAttachment,
   createPrismaClient,
   insertFeedEvent,
+  markAttachmentReady,
   markBrowserSessionReady,
   openBrowserSession,
   PostgresSiteLeaseStore,
@@ -115,7 +118,16 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
    * A queued dialog of a client with the gift of the registration, and its first words; with
    * `browser`, a task in the cloud browser on a site without a repository (plan 57, Б2, Б8).
    */
-  async function queued({ reserve, browser = false }: { reserve: boolean; browser?: boolean }) {
+  async function queued({
+    reserve,
+    browser = false,
+    chat = false,
+  }: {
+    reserve: boolean
+    browser?: boolean
+    /** A chat without a project (docs/plan/61-chats-first.md, §5.6). */
+    chat?: boolean
+  }) {
     const { userId } = await fixtures.user()
     const workspace = await db.$transaction((tx) =>
       ensurePersonalWorkspaceWithGift(tx, { userId, appEnv: 'test' }),
@@ -123,9 +135,12 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     const { taskId } = await fixtures.task(workspace.id, {
       status: 'queued',
       ...(browser ? { needsRepository: false, needsBrowser: true } : {}),
+      ...(chat ? { siteId: null, needsRepository: false, needsBrowser: false } : {}),
     })
     const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
-    if (browser)
+    if (chat) {
+      // Neither a site nor a repository to prepare.
+    } else if (browser)
       await db.site.update({
         where: { id: siteIdOf(task) },
         data: { agentNotes: 'Вход по адресу /login' },
@@ -769,6 +784,171 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         await db.taskEvent.deleteMany({ where: { taskId: other.id } })
         await db.task.delete({ where: { id: other.id } })
       }
+    })
+
+    describe('a chat without a project (docs/plan/61-chats-first.md, §5.3, §5.6)', () => {
+      const answer = {
+        summary: 'Посчитал смету',
+        change_type: 'none',
+        client_message: 'Смета готова: 12 500 ₽.',
+        files_changed: [],
+        questions: [],
+        needs_approval: false,
+        risk: 'low',
+      }
+      const completes = (taskId: string) => async (request: UnkeyedTurnRequest) => {
+        void request
+        await db.task.update({ where: { id: taskId }, data: { status: 'running', turnNo: 1 } })
+        await db.taskTurn.create({
+          data: {
+            taskId,
+            turnNo: 1,
+            status: 'completed',
+            driverId: sampleDriverId,
+            image,
+          },
+        })
+        return { result: answer, manifest: {} as SnapshotManifest }
+      }
+
+      it('runs without git, plans no repository, answers and charges the pass', async () => {
+        await rate()
+        const dialog = await queued({ reserve: true, chat: true })
+        const run = vi.fn<Run>(completes(dialog.taskId))
+        const { passes } = runner(run, async () => null, { git: null, browser: null })
+
+        await passes.run(dialog.job)
+
+        const [request, policy] = run.mock.calls[0]!
+        expect(request.workspace).toBeUndefined()
+        expect(request.requirements).toEqual({ repository: false, browser: false })
+        expect(request.sandbox.labels.siteId).toBe(dialog.taskId)
+        expect(request.context.instructions).toContain('a chat that has no site and no repository')
+        expect(policy).toMatchObject({ backend: sampleBackendId })
+        expect(() => toTurnPlan(request, sampleDriverId)).not.toThrow()
+        expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
+          status: 'awaiting_user',
+          turnNo: 1,
+        })
+        const [row] = await db.taskEvent.findMany({
+          where: { taskId: dialog.taskId, type: 'feed.result' },
+        })
+        expect(row?.payload).toMatchObject({ message: answer.client_message })
+        expect(
+          (await db.creditHold.findMany({ where: { taskId: dialog.taskId } })).every(
+            (hold) => hold.status === 'captured',
+          ),
+        ).toBe(true)
+      })
+
+      it('puts a file of the chat into the plan of its turn', async () => {
+        await rate()
+        const dialog = await queued({ reserve: true, chat: true })
+        const { workspaceId } = await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })
+        const file = (await createAttachment(db, {
+          workspaceId,
+          siteId: null,
+          uploadedById: dialog.userId,
+          fileName: 'смета.pdf',
+          contentType: 'application/pdf',
+          sizeBytes: 2048,
+        }))!
+        try {
+          await markAttachmentReady(db, {
+            id: file.id,
+            sizeBytes: 2048,
+            contentType: 'application/pdf',
+          })
+          await bindAttachments(db, {
+            ids: [file.id],
+            taskId: dialog.taskId,
+            userId: dialog.userId,
+            workspaceId,
+            siteId: null,
+          })
+          const run = vi.fn<Run>(completes(dialog.taskId))
+          await runner(run, async () => null, { git: null, browser: null }).passes.run(dialog.job)
+          const [request] = run.mock.calls[0]!
+          expect(request.input.attachments).toEqual([`/workspace/inbox/${file.id}/смета.pdf`])
+          expect(request.context.instructions).toContain('/workspace/inbox')
+        } finally {
+          await db.attachment.delete({ where: { id: file.id } })
+        }
+      })
+
+      it('looks at the lease of its own id while it is busy (#siteRetry)', async () => {
+        await rate()
+        const dialog = await queued({ reserve: true, chat: true })
+        const inspect = vi.fn(async () => ({
+          expiresAt: new Date(NOW.getTime() + 30_000),
+          serverNow: NOW,
+        }))
+        const { passes, queue } = runner(
+          async () => {
+            throw siteBusy()
+          },
+          inspect,
+          { git: null, browser: null },
+        )
+
+        await passes.run(dialog.job)
+
+        expect(inspect).toHaveBeenCalledExactlyOnceWith(dialog.taskId)
+        expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
+          status: 'queued',
+          waiting: 'site',
+        })
+        expect(queue.enqueue).toHaveBeenCalledWith(
+          'agent-turns',
+          'turn.run',
+          dialog.job,
+          expect.objectContaining({ delayMs: 30_000 }),
+        )
+      })
+
+      it('wakes nobody when its turn ended: a lease of its own has no one waiting (#wakeSite)', async () => {
+        await rate()
+        const dialog = await queued({ reserve: true, chat: true })
+        const row = await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })
+        // Another dialog of the workspace that waits: for a site, not for this chat.
+        const { taskId: other } = await fixtures.task(row.workspaceId, {
+          status: 'queued',
+          waiting: 'site',
+        })
+        const request = await insertFeedEvent(db, {
+          taskId: other,
+          row: {
+            type: 'feed.request',
+            payload: {
+              v: 1,
+              kind: 'first',
+              authorId: dialog.userId,
+              requestId: randomUUID(),
+              text: 'Поменяйте адрес в подвале',
+            },
+          },
+        })
+        const key = `turn.run:${other}:1:${request}:retry:turn-${dialog.taskId}-0`
+        try {
+          const { passes } = runner(
+            async () => {
+              throw new Error('the sandbox did not start')
+            },
+            async () => null,
+            { git: null, browser: null },
+          )
+          await passes.run(dialog.job)
+          expect((await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).status).toBe(
+            'awaiting_user',
+          )
+          expect(await db.outboxEvent.count({ where: { dedupeKey: key } })).toBe(0)
+          // It did not try: a wake without a site is no wake that failed.
+          expect(quiet.warn).not.toHaveBeenCalledWith(expect.stringContaining('pass_wake_failed'))
+        } finally {
+          await db.outboxEvent.deleteMany({ where: { dedupeKey: key } })
+          await db.taskEvent.deleteMany({ where: { taskId: other } })
+        }
+      })
     })
 
     it('looks again when a short lease ends, not before ten seconds', async () => {

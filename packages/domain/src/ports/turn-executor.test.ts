@@ -10,6 +10,7 @@ import {
 } from '../tasks/task-requirements.ts'
 import {
   assertTurnInbox,
+  turnMayHoldInbox,
   toTurnPlan,
   turnInboxAttachmentId,
   turnInboxLimits,
@@ -439,6 +440,14 @@ describe('files of the client in a turn', () => {
     const full = Array.from({ length: 10 }, (_, index) => file(index, 20 * 1024 * 1024))
     expect(refusal(() => assertTurnInbox(full, true))).toBeNull()
     expect(refusal(() => assertTurnInbox([], false))).toBeNull()
+  })
+
+  it('lets a turn hold them with a repository or in a chat without a site, never else (К16)', () => {
+    const site = { siteId: 'site-id', taskId: 'task-id' }
+    const chat = { siteId: 'task-id', taskId: 'task-id' }
+    expect(turnMayHoldInbox(true, site)).toBe(true)
+    expect(turnMayHoldInbox(false, chat)).toBe(true)
+    expect(turnMayHoldInbox(false, site)).toBe(false)
   })
 
   it.each([

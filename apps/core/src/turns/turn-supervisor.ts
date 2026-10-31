@@ -12,6 +12,7 @@ import {
   preparedRunSchema,
   publicationMetadataSchema,
   requirementsOf,
+  turnMayHoldInbox,
   runEnvValues,
   siteBusy,
   siteHeld,
@@ -311,9 +312,10 @@ export class TurnSupervisor {
     // not undone, and «Обновить» moves a branch it does not have.
     if (!workspace && (request.replacesTurn !== undefined || request.rebased !== undefined))
       throw badRequest('A turn without a repository neither replaces nor rebases')
-    // A task in the browser hands its files to the browser worker, never to the sandbox (Б26).
-    if (request.input.attachments.length && !workspace)
-      throw badRequest('Files of the client go only to a turn with a repository')
+    // A task on a site without a repository hands its files to the browser worker, never to the
+    // sandbox (Б26); a chat without a site has no site to hand them to (docs/plan/61, К16).
+    if (request.input.attachments.length && !turnMayHoldInbox(workspace !== undefined, labels))
+      throw badRequest('Files of the client go only to a turn with a repository or without a site')
     if (request.input.attachments.length && !this.deps.inbox)
       throw badRequest('Files of the client need the inbox of core')
     if (request.replacesTurn !== undefined && request.replacesTurn !== labels.turn - 1)
