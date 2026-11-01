@@ -1,0 +1,27 @@
+// The agent's job in MODX: sign in, read the tree, open a resource, change it, save, read it back.
+import { openAgent } from './agent-lib.mjs'
+const [tag, origin, title, bodyMark] = process.argv.slice(2)
+const a = await openAgent({ tag: `${tag}-job`, origin, startPath: '/manager/' })
+try {
+  await a.observe('login')
+  console.log(a.lines(/textbox|button/).map((l) => l.trim().slice(0, 80)).join(' | '))
+  await a.fill(/- textbox "(Username|Имя пользователя|Логин)/i, 'spikeadmin'); await a.fill(/- textbox "(Password|Пароль)/i, '<hidden>')
+  await a.click(/- button "(Log In|Login|Войти)/i); await a.wait(3000, { until: 'load' })
+  await a.observe('dashboard')
+  await a.wait(4000); await a.observe('dashboard2')
+  console.log('tree nodes:', a.lines(/Новости|О компании|Контакты|Первая новость/).slice(0, 10).map((l) => l.trim().slice(0, 110)).join(' || '))
+  const node = a.line(/Первая новость/) ?? a.line(/- (link|generic|treeitem).*"?Новости \(/)
+  console.log('node:', node?.trim().slice(0, 120))
+  await a.open('/manager/?a=resource/update&id=4'); await a.wait(3500, { until: 'load' })
+  await a.observe('resource')
+  console.log('title:', a.lines(/Заголовок|pagetitle/i).slice(0, 4).map((l) => l.trim().slice(0, 100)).join(' | '))
+  console.log('save:', a.lines(/Сохранить|Просмотр|Удалить|Дублировать/).slice(0, 8).map((l) => l.trim().slice(0, 90)).join(' | '))
+  await a.fill(/- textbox "Заголовок\*"/, title)
+  await a.fill(/- textbox( "Содержимое")? \[ref=[a-z0-9]+\]: "?<p>/, `<p>${bodyMark}. Ссылка [[~1]].</p>`)
+  await a.observe('edited')
+  console.log('dirty?', a.lines(/не сохранён|unsaved|Сохранить/).slice(0, 4).map((l) => l.trim().slice(0, 90)).join(' | '))
+  await a.click(/- button "Сохранить"/); await a.wait(2500)
+  await a.observe('saved')
+  console.log('after save:', a.lines(/- button "Сохран|Сохранено|успешн|Ошибка/i).slice(0, 6).map((l) => l.trim().slice(0, 100)).join(' | '))
+  console.log('content:', a.lines(/Содержимое ресурса|Содержимое|textbox/).slice(0, 16).map((l) => l.trim().slice(0, 90)).join(' | '))
+} catch (e) { console.log('FAILED', e?.code ?? '', e?.message?.slice(0, 240)); await a.observe('failed').catch(() => {}) } finally { await a.close() }

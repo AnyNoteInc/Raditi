@@ -1035,3 +1035,112 @@ test('release.yml publishes the images of the release semantic-release made', ()
   assert.match(source, /^ {6}tag: \$\{\{ needs\.release\.outputs\.tag \}\}$/m)
   assert.match(source, /^ {6}packages: write$/m)
 })
+
+// Plan 62 of the site stacks: slices and records in the code cite its decisions, so all of it lives
+// in the repository, and nothing in it may lead to the machine it was written on.
+const stackPlan = 'docs/plan/62-site-stacks.md'
+const stackScreens = 'docs/plan/62-onboarding.md'
+const stackSlices = 'docs/plan/62-slices'
+const stackReports = 'docs/research/2026-11-site-stacks'
+const stackSliceFiles = [
+  'after.md',
+  'e0.md',
+  'e1.md',
+  'e2.md',
+  'e3.md',
+  'e4.md',
+  'e5.md',
+  'e6a.md',
+  'e8.md',
+]
+// The files of the platform the contracts of Э3, Э4 and Э5 take as their sample.
+const stackPlatformFiles = {
+  joomla: ['platform/configuration.php', 'policy.mjs', 'rewrite.conf'],
+  modx3: [
+    'platform/config.core.php',
+    'platform/connectors/config.core.php',
+    'platform/core/config/config.inc.php',
+    'platform/manager/config.core.php',
+    'policy.mjs',
+    'rewrite.conf',
+  ],
+  opencart3: ['platform/admin/config.php', 'platform/config.php', 'policy.mjs', 'rewrite.conf'],
+}
+const filesUnder = (folder) =>
+  readdirSync(join(root, folder), { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => relative(root, join(entry.parentPath, entry.name)))
+const stackPlanFiles = [
+  stackPlan,
+  stackScreens,
+  ...stackSliceFiles.map((file) => `${stackSlices}/${file}`),
+  ...filesUnder(stackReports),
+]
+
+test('the plan of the site stacks is in the repository and CLAUDE.md names all of it', () => {
+  for (const path of [stackPlan, stackScreens, `${stackReports}/README.md`]) {
+    assert.ok(existsSync(join(root, path)), `${path} is not in the repository`)
+  }
+  assert.deepEqual(readdirSync(join(root, stackSlices)).toSorted(), stackSliceFiles)
+  for (const [build, expected] of Object.entries(stackPlatformFiles)) {
+    const folder = `${stackReports}/scripts/boot-spike/cms/${build}`
+    assert.deepEqual(
+      filesUnder(folder)
+        .map((file) => relative(folder, file))
+        .toSorted(),
+      expected,
+      `${build}: files of the platform`,
+    )
+  }
+  const rows = read('CLAUDE.md').split('\n')
+  const row = (path) => rows.find((line) => line.startsWith(`| \`${path}`)) ?? ''
+  for (const path of [stackPlan, stackScreens, `${stackReports}/`]) {
+    assert.ok(row(path), `the table of CLAUDE.md does not name ${path}`)
+  }
+  for (const file of stackSliceFiles) {
+    assert.ok(row(`${stackSlices}/`).includes(`\`${file}\``), `CLAUDE.md does not name ${file}`)
+  }
+})
+
+test('the plan of the site stacks carries no path of the machine it was written on', () => {
+  // Built from parts: this file would otherwise describe itself. The word boundary of the domain
+  // keeps `site.runtimeVersion` of the contracts out.
+  const machinePaths = ['/Us' + 'ers/', '/pri' + 'vate/tmp', '/var/' + 'folders', 'o' + 'c-work']
+  const removedDomain = new RegExp('\\bsite' + '\\.ru\\b')
+  // Where the fix that removed the example speaks of the domain itself.
+  const domainLines = new Map([
+    [stackPlan, 1],
+    [stackScreens, 4],
+    [`${stackReports}/review/plan-decisions.md`, 1],
+  ])
+  for (const file of domainLines.keys()) {
+    assert.ok(stackPlanFiles.includes(file), `${file} is not in the repository`)
+  }
+  for (const file of stackPlanFiles) {
+    const text = read(file)
+    for (const path of machinePaths) {
+      assert.ok(!text.includes(path), `${file} names ${path}`)
+    }
+    assert.equal(
+      text.split('\n').filter((line) => removedDomain.test(line)).length,
+      domainLines.get(file) ?? 0,
+      `${file}: lines with the removed domain`,
+    )
+  }
+})
+
+test('every file the plan of the site stacks names is in the repository', () => {
+  // A path followed by a template part ({a,b}, *, <stage>) names no one file, so it is left out.
+  const named = /docs\/(?:research\/2026-11-site-stacks|plan\/62-)[\w./-]*(?![\w./{*<-])/g
+  for (const file of stackPlanFiles) {
+    for (const [match] of read(file).matchAll(named)) {
+      const path = match.replace(/\.+$/, '')
+      assert.ok(existsSync(join(root, path)), `${file} names ${path}`)
+    }
+  }
+  // The index of the reports links each of them, so a report that is gone is a broken link.
+  const index = `${stackReports}/README.md`
+  for (const [, link] of read(index).matchAll(/\]\((?!https?:)([^)#\s]+)\)/g)) {
+    assert.ok(existsSync(join(root, stackReports, link)), `${index} links ${link}`)
+  }
+})
