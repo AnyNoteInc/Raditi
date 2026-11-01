@@ -10,6 +10,7 @@ import {
   egressHostListSchema,
   egressHostsOf,
   envVarReachesAgent,
+  envVarReachesTask,
   isDomainError,
   modelClassSchema,
   previewOrigin,
@@ -264,9 +265,11 @@ export async function readPassFacts(
     : { kind: 'quota' }
 
   // The variables the agent's commands get and the hosts they reach through the egress proxy
-  // (plan 53, Р13): none in a workspace of client data.
-  const agentVariables = variables.filter((variable) =>
-    envVarReachesAgent(variable, task.workspace.dataClass),
+  // (plan 53, Р13): none in a workspace of client data, and the same ones `issue` gives this task.
+  const agentVariables = variables.filter(
+    (variable) =>
+      envVarReachesAgent(variable, task.workspace.dataClass) &&
+      envVarReachesTask(variable.name, requirements),
   )
   const egress = egressHostsOf(
     agentVariables.map((variable) => {

@@ -1,6 +1,7 @@
 import type { AttemptCreditBudget } from '@repo/billing'
 import {
   BROWSER_ONLY,
+  requirementsOf,
   Money,
   REPOSITORY_ONLY,
   toCredits,
@@ -997,10 +998,6 @@ describe('planTurn of a task in the cloud browser (docs/plan/57-browser-tasks.md
   })
 
   it('refuses a task it cannot run in the browser', async () => {
-    // Both at once are not taken yet (Б3).
-    expect(
-      await planTurn(browserFacts({ requirements: { repository: true, browser: true } }), env()),
-    ).toEqual({ kind: 'refused', code: 'not_accepted' })
     // A stack without browser support.
     expect(await planTurn(browserFacts({ browser: { ...browser, guide: null } }), env())).toEqual({
       kind: 'refused',
@@ -1021,6 +1018,84 @@ describe('planTurn of a task in the cloud browser (docs/plan/57-browser-tasks.md
         env(),
       ),
     ).toEqual({ kind: 'refused', code: 'technical' })
+  })
+})
+
+describe('planTurn of a chat with the code and the browser (docs/plan/61-chats-first.md, §5.6)', () => {
+  const both = { repository: true, browser: true }
+  const FILE = '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a80'
+  const browser = {
+    siteUrl: 'https://example.ru/',
+    agentNotes: null,
+    attachments: [
+      { id: FILE, fileName: 'фото.jpg', contentType: 'image/jpeg', sizeBytes: 250_000 },
+    ],
+    saved: [],
+    guide: '- Open the list of posts first.',
+  }
+  const chat = (patch: Partial<PassFacts> = {}) =>
+    facts({ requirements: both, browser, attachments: browser.attachments, ...patch })
+  const turnOf = async (given: PassFacts, environment = env()) => {
+    const plan = await planTurn(given, environment)
+    if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+    return plan
+  }
+
+  it('plans a turn with the working copy and the requirements, which the plan keeps', async () => {
+    const plan = await turnOf(chat())
+    expect(plan.request.workspace?.branch).toBe(`agent/${TASK}`)
+    expect(plan.request.requirements).toEqual(both)
+    expect(plan.requirements).toEqual(both)
+    expect(() => toTurnPlan(plan.request, sampleDriverId)).not.toThrow()
+    expect(requirementsOf(toTurnPlan(plan.request, sampleDriverId))).toEqual(both)
+  })
+
+  it('keeps the plan of the code alone in the shape it had', async () => {
+    const plan = await turnOf(facts())
+    expect(plan.request.workspace).toBeDefined()
+    expect(plan.request).not.toHaveProperty('requirements')
+  })
+
+  it('gives the instructions of both, with the guide of the stack', async () => {
+    const { instructions } = (await turnOf(chat())).request.context
+    expect(instructions).toContain('## What a release can carry')
+    expect(instructions).toContain('## Other sites')
+    expect(instructions).toContain('- Open the list of posts first.')
+    expect(instructions).not.toContain('Nothing you change reaches the live site')
+  })
+
+  it('goes on with the code alone, without a word of `web_*`, where core has no browser', async () => {
+    const plan = await turnOf(chat(), env({ browser: false }))
+    expect(plan.request.workspace).toBeDefined()
+    const { instructions } = plan.request.context
+    expect(instructions).not.toContain('web_')
+    expect(instructions).toContain('Nothing you change reaches the live site')
+    expect(plan.request.input.prompt).not.toContain('The site of this task')
+    // Its files stay in the sandbox.
+    expect(plan.request.input.attachments).toHaveLength(1)
+  })
+
+  it('lists a file by its path and by the id `web_upload` takes', async () => {
+    const { input } = (await turnOf(chat())).request
+    const [path] = input.attachments
+    expect(path).toContain(FILE)
+    expect(input.prompt).toContain('upload them to a page of the live site with web_upload by id')
+    expect(input.prompt).toContain(`- ${FILE}: фото.jpg, image/jpeg, 244.1 KiB, at ${path}`)
+  })
+
+  it('does not send the agent to `web_verify` before anything else: a question about the code needs no browser', async () => {
+    const saved = [
+      { kind: 'post' as const, objectId: '42', state: 'unverified' as const, editPath: '/p' },
+    ]
+    const { prompt } = (await turnOf(chat({ browser: { ...browser, saved } }))).request.input
+    expect(prompt).toContain('call web_verify before you touch this object')
+    expect(prompt).not.toContain('before anything else')
+  })
+
+  it('reaches the hosts of the variables the commands get', async () => {
+    const plan = await turnOf(chat({ egress: ['api.example.ru:443'], variables: ['MAIL_API_KEY'] }))
+    expect(plan.request.sandbox.network).toMatchObject({ egress: ['api.example.ru:443'] })
+    expect(plan.request.context.instructions).toContain('MAIL_API_KEY')
   })
 })
 

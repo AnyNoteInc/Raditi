@@ -197,6 +197,8 @@ export type UndoPlanView =
       }
       records: UndoRecordView[]
       nothingToUndo: boolean
+      /** Someone acted in the chat's browser: no undo gives that back. */
+      browserWrote: boolean
       /** More objects go back than a change may hold without a look at each (rule 4). */
       review: boolean
       confirmToken: string
@@ -270,7 +272,7 @@ export async function readUndoPlan(
   key: Uint8Array,
   input: { userId: string; taskId: string; releaseId: string; planId: string; now: Date },
 ): Promise<UndoPlanView> {
-  const { task, undo, release } = await undoable(db, input)
+  const { task, facts, undo, release } = await undoable(db, input)
   const plan = await db.releaseUndoPlan.findFirst({
     where: { id: input.planId, releaseId: release.id, siteId: siteIdOf(task) },
   })
@@ -312,6 +314,7 @@ export async function readUndoPlan(
     },
     records: items.map(undoItemText),
     nothingToUndo: plan.nothingToUndo,
+    browserWrote: facts.commands.browserWrote,
     review: undoRecordCounts(items).returned > DB_PLAN_BULK_OBJECTS,
     confirmToken: signUndoConfirmToken(key, {
       userId: input.userId,

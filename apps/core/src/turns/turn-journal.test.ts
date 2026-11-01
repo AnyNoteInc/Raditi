@@ -414,7 +414,8 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
       })
       expect(stages.map((row) => (row.payload as { step: string }).step)).toEqual(['code', 'work'])
     }
-  })
+    // Thirteen fixtures and ANALYZE of a table the suites running beside it fill: seconds under load.
+  }, 30_000)
 
   it('tells of the code only a task that has a repository (docs/plan/61, §5.8)', async () => {
     const f = await fixture({ needsRepository: false, needsBrowser: true })

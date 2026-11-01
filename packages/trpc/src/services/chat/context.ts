@@ -6,6 +6,7 @@ import {
   type ObjectStorage,
   type PreviewAddress,
   type SecretStore,
+  type SiteStack,
 } from '@repo/domain'
 
 /**
@@ -28,6 +29,11 @@ export interface ChatContext {
    * null — the platform has no browser here: no site offers tasks in it, and no ticket is issued.
    */
   browser?: { streamUrl: string } | null
+  /**
+   * Whether the adapter of this stack works in the site's admin pages: `@repo/trpc` knows no
+   * adapter, the app that builds this context does. Absent — every stack is taken for one.
+   */
+  browserSupported?: (stack: SiteStack) => boolean
   /** The HMAC key of release confirmations: `releaseConfirmKey(BETTER_AUTH_SECRET)`. */
   releaseConfirmKey: Uint8Array
   /** `raditi-artifacts`: the diff of a candidate (`candidate.fileDiff`). */
@@ -75,6 +81,12 @@ export const browserUnavailable = () =>
 /** Whether the cabinet of this process can show a browser of the platform (Б9). */
 export const browserConfigured = (context: { chat?: ChatContext | null }): boolean =>
   context.chat?.browser != null
+
+/** `SiteCapabilityFacts.browserStack` of a stack in this process. */
+export const browserStackSupported = (
+  context: { chat?: ChatContext | null },
+  stack: SiteStack,
+): boolean => context.chat?.browserSupported?.(stack) ?? true
 
 /** Where the cabinet opens the stream of a browser, or the refusal that there is none. */
 export function browserStreamUrlOf(chat: ChatContext): string {

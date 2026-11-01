@@ -38,6 +38,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { createCaller } from '../router.ts'
 import { readCheckScreenshot } from '../services/chat/candidates.ts'
 import { releaseConfirmKey, type ChatContext } from '../services/chat/context.ts'
+import { dialogFacts } from '../services/chat/dialog-facts.ts'
 import { signConfirmToken } from '../services/chat/releases.ts'
 import { signUndoConfirmToken } from '../services/chat/undo.ts'
 
@@ -305,6 +306,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       preview?: boolean
       /** The cloud browser of the platform (docs/plan/57); off unless asked for. */
       browser?: boolean
+      /** Whether the stack of the site has what the browser needs; true unless asked for. */
+      browserStack?: boolean
       storage?: ObjectStorage
     } = {},
   ) {
@@ -312,6 +315,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       appEnv: 'test',
       preview: options.preview === false ? null : { address: ADDRESS, ttlHours: 72 },
       browser: options.browser === true ? { streamUrl: STREAM_URL } : null,
+      ...(options.browserStack === undefined
+        ? {}
+        : { browserSupported: () => options.browserStack === true }),
       releaseConfirmKey: KEY,
       storage: () => options.storage ?? storage,
       secrets: () => vault.secrets,
@@ -2114,10 +2120,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
 
   describe('«Отменить выпуск»', () => {
     /** A dialog whose release the site runs, installed `ago` ms ago; the dialog is closed. */
-    async function installedDialog(ago = 60_000) {
+    async function installedDialog(ago = 60_000, options: { browser?: boolean } = {}) {
       const { owner, site, workspaceId } = await siteOwner()
-      const caller = callerOf(owner)
-      const { taskId } = await newDialog(caller, site.id)
+      const caller = callerOf(owner, { browser: options.browser === true })
+      const { taskId } = options.browser
+        ? await chatWithTheBrowser(workspaceId, site.id)
+        : await newDialog(caller, site.id)
       const candidate = await withCandidate(taskId)
       const at = new Date(Date.now() - ago)
       const release = await db.siteRelease.create({
@@ -2151,8 +2159,26 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         },
       })
       await db.taskCandidate.update({ where: { id: candidate.id }, data: { status: 'released' } })
+      const session = options.browser ? await openBrowserSession(db, { taskId }) : null
       await db.task.update({ where: { id: taskId }, data: { status: 'done' } })
-      return { owner, caller, site, workspaceId, taskId, release }
+      return { owner, caller, site, workspaceId, taskId, release, session }
+    }
+
+    /** The chat `task.create` does not make yet: the code and the browser (docs/plan/61, 61.11). */
+    async function chatWithTheBrowser(workspaceId: string, siteId: string) {
+      const task = await db.task.create({
+        data: {
+          workspaceId,
+          siteId,
+          needsRepository: true,
+          needsBrowser: true,
+          status: 'awaiting_approval',
+          turnNo: 1,
+          attempt: 1,
+        },
+      })
+      taskIds.push(task.id)
+      return { taskId: task.id }
     }
 
     /** What core writes when it has made the plan. */
@@ -2206,6 +2232,21 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         verdict: 'stays',
       },
     ]
+
+    it('says in the plan whether the browser of the chat acted on the site (§5.8)', async () => {
+      const dialog = await installedDialog(60_000, { browser: true })
+      const { caller, taskId, release, session } = dialog
+      const { planId } = await caller.release.undoPrepare({ taskId, releaseId: release.id })
+      await planned(planId)
+      const plan = () => caller.release.undoPlan({ taskId, releaseId: release.id, planId })
+
+      expect(await plan()).toMatchObject({ state: 'ready', browserWrote: false })
+      await db.browserSession.update({
+        where: { id: session!.id },
+        data: { wroteAt: new Date() },
+      })
+      expect(await plan()).toMatchObject({ state: 'ready', browserWrote: true })
+    })
 
     it('asks core for the plan once, shows it with its words and confirms exactly it', async () => {
       const { owner, caller, site, taskId, release } = await installedDialog()
@@ -3082,6 +3123,22 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
 
     it('refuses the browser where the platform has none, both ways at once and a closed site', async () => {
       const { owner, site } = await browserSite()
+      const stackless = callerOf(owner, { browser: true, browserStack: false })
+      // A stack without a browser counts as a browser that is not configured (К8).
+      expect((await stackless.project.get({ id: site.id })).capabilities.browser).toBe(
+        'unsupported',
+      )
+      await expect(
+        stackless.task.create({
+          siteId: site.id,
+          taskId: randomUUID(),
+          text: 'Добавьте новость',
+          requirements: { repository: false, browser: true },
+        }),
+      ).rejects.toMatchObject({
+        code: 'CONFLICT',
+        cause: { code: 'TASK_NOT_ACCEPTED', details: { reason: 'browser_unavailable' } },
+      })
       const refusal = (caller: ReturnType<typeof callerOf>, requirements?: TaskRequirements) =>
         caller.task.create({
           siteId: site.id,
@@ -3274,6 +3331,87 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
           dedupeKey: `turn.cancel:${taskId}:${stopping.requestEventId}`,
         },
       ])
+    })
+
+    describe('of a chat with the code and the browser (docs/plan/61-chats-first.md, §5.9)', () => {
+      /** A chat that waits with a candidate: a row, until `task.create` takes it (61.11). */
+      async function waitingChat() {
+        const { owner, site, workspaceId } = await siteOwner()
+        const task = await db.task.create({
+          data: {
+            workspaceId,
+            siteId: site.id,
+            needsRepository: true,
+            needsBrowser: true,
+            status: 'awaiting_approval',
+            turnNo: 1,
+            attempt: 1,
+          },
+        })
+        taskIds.push(task.id)
+        await withCandidate(task.id)
+        return { caller: callerOf(owner, { browser: true }), owner, taskId: task.id, workspaceId }
+      }
+      const finished = { code: 'CONFLICT', cause: { code: 'TASK_FINISHED' } }
+
+      it('takes no release after `/cancel`, even one whose window was already open', async () => {
+        const { caller, taskId } = await waitingChat()
+        const prepared = await caller.release.prepare({ taskId })
+        const [choice] = prepared.choices
+
+        await caller.task.cancel({ taskId, requestId: randomUUID() })
+
+        // core has not closed it yet: the chat still waits with its candidate.
+        expect((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe(
+          'awaiting_approval',
+        )
+        await expect(
+          caller.release.confirm({
+            taskId,
+            confirmToken: choice!.confirmToken,
+            version: choice!.version,
+          }),
+        ).rejects.toMatchObject(finished)
+        await expect(caller.release.prepare({ taskId })).rejects.toMatchObject({ code: 'CONFLICT' })
+        expect(await db.siteRelease.count({ where: { taskId } })).toBe(0)
+        const commands = await caller.task.commands({ taskId })
+        expect(commands.find((item) => item.id === 'release')).toMatchObject({
+          available: false,
+          refusal: 'finished',
+        })
+        expect(commands.find((item) => item.id === 'cancel')?.available).toBe(true)
+      })
+
+      it('takes no «Попробовать ещё» after `/cancel`: its row would hide the press from core', async () => {
+        const { caller, taskId } = await waitingChat()
+        await caller.task.cancel({ taskId, requestId: randomUUID() })
+        await expect(
+          caller.task.retry({ taskId, requestId: randomUUID(), failureEventId: '1' }),
+        ).rejects.toMatchObject(finished)
+      })
+
+      it('lets `/release` through before `/cancel`', async () => {
+        const { caller, taskId } = await waitingChat()
+        const commands = await caller.task.commands({ taskId })
+        expect(commands.find((item) => item.id === 'release')?.refusal).toBeNull()
+      })
+
+      it('knows when anyone acted in the browser of the chat', async () => {
+        const { owner, taskId, workspaceId } = await waitingChat()
+        const task = await db.task.findUniqueOrThrow({
+          where: { id: taskId },
+          select: { id: true, workspaceId: true, siteId: true, status: true },
+        })
+        expect(task.workspaceId).toBe(workspaceId)
+        expect((await dialogFacts(db, task, owner.id)).commands.browserWrote).toBe(false)
+        const session = await openBrowserSession(db, { taskId })
+        expect((await dialogFacts(db, task, owner.id)).commands.browserWrote).toBe(false)
+        await db.browserSession.update({
+          where: { id: session.id },
+          data: { wroteAt: new Date() },
+        })
+        expect((await dialogFacts(db, task, owner.id)).commands.browserWrote).toBe(true)
+      })
     })
 
     it('takes nothing after «Остановить» until core closes the task: no row hides the press', async () => {

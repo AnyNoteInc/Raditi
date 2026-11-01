@@ -7,6 +7,7 @@ import {
   envVarLimits,
   envVarNameProblem,
   envVarReachesAgent,
+  envVarReachesTask,
   envVarValueSchema,
   isDomainError,
   leaseLost,
@@ -130,6 +131,8 @@ interface OwnedTask {
   /** null — a chat without a project: it leases by its own id (`leaseScopeOf`). */
   siteId: string | null
   dataClass: 'synthetic' | 'client'
+  /** `tasks.needs_repository`: the task has a working copy, a candidate and a release. */
+  needsRepository: boolean
   /** `tasks.needs_browser`: the task drives the live site through the `web` tools (plan 57, Б2). */
   needsBrowser: boolean
   now: Date
@@ -682,7 +685,8 @@ async function ownedTask(tx: Transaction, ref: TurnCredentialRef): Promise<Owned
   // nothing, as in MCP access: `LEFT JOIN` finds no site, and the condition refuses it.
   const rows = await tx.$queryRaw<OwnedTask[]>`
     SELECT t.id, t.attempt, t.site_id AS "siteId", t.model_class::text AS "modelClass",
-      t.needs_browser AS "needsBrowser", w.data_class::text AS "dataClass",
+      t.needs_repository AS "needsRepository", t.needs_browser AS "needsBrowser",
+      w.data_class::text AS "dataClass",
       clock_timestamp() AS now
     FROM tasks t
     JOIN workspaces w ON w.id = t.workspace_id
@@ -704,11 +708,12 @@ async function ownedTask(tx: Transaction, ref: TurnCredentialRef): Promise<Owned
  * (`envVarReachesAgent`; until the gate of 152-FZ, rule 1).
  */
 async function agentVariables(tx: Transaction, task: OwnedTask): Promise<SiteEnvVarVersion[]> {
-  // A task that works in the browser drives the live site through the `web` tools, and no
-  // candidate or release refuses a value written there: its commands get no client variable
-  // (plan 57, Б20; rule 2). A task of a site without a repository is always one
-  // (`tasks_requirements_check`). A chat without a site has no variables at all.
-  if (task.needsBrowser || task.siteId === null) return []
+  // A task with the browser alone drives the live site through the `web` tools, and no candidate
+  // or release refuses a value written there: its commands get no client variable (plan 57, Б20;
+  // rule 2). A chat with the code too gets them without the hosting accesses (plan 61, К21;
+  // `envVarReachesTask`). A chat without a site has no variables at all.
+  if (!task.needsRepository || task.siteId === null) return []
+  const requirements = { repository: task.needsRepository, browser: task.needsBrowser }
   const rows = await tx.siteEnvVar.findMany({
     where: { siteId: siteIdOf(task), toAgent: true, agentConsentAt: { not: null } },
     orderBy: { name: 'asc' },
@@ -716,7 +721,10 @@ async function agentVariables(tx: Transaction, task: OwnedTask): Promise<SiteEnv
   })
   return rows
     .filter(
-      (row) => envVarReachesAgent(row, task.dataClass) && envVarNameProblem(row.name) === null,
+      (row) =>
+        envVarReachesAgent(row, task.dataClass) &&
+        envVarReachesTask(row.name, requirements) &&
+        envVarNameProblem(row.name) === null,
     )
     .map((row) => ({ name: row.name, keyVersion: row.keyVersion }))
 }

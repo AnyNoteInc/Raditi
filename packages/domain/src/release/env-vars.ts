@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import { badRequest } from '../errors.ts'
 import { egressHostListSchema } from '../preview/egress-hosts.ts'
+import type { TaskRequirements } from '../tasks/task-requirements.ts'
 
 /**
  * Environment variables of a client's site (docs/plan/53-chat-preview-release.md, Р13): the
@@ -251,6 +252,23 @@ const accessVariableFields: Readonly<Record<string, readonly (readonly [string, 
 /** Every name an access of this kind may become, whichever fields it has. */
 export const siteAccessVariableNames = (accessKind: string): string[] =>
   (accessVariableFields[accessKind] ?? []).map(([, name]) => name)
+
+/** The accesses to the hosting of a site: what writes its files past every release. */
+const HOSTING_ACCESS_KINDS = ['ftp', 'ssh'] as const
+
+/**
+ * Whether a task gets this variable at all, before the client's consent is read. A task on the
+ * live site in the browser gets none (docs/plan/57, Б20): nothing refuses a value written there.
+ * A chat with the code and the browser (docs/plan/61-chats-first.md, К21) gets all of them but the
+ * accesses to the hosting, whole, by the names above: with them its commands could write the
+ * live site past the release. The same answer for the commands of the agent and for the preview,
+ * which runs the agent's code.
+ */
+export function envVarReachesTask(name: string, requirements: TaskRequirements): boolean {
+  if (!requirements.repository) return false
+  if (!requirements.browser) return true
+  return !HOSTING_ACCESS_KINDS.some((kind) => siteAccessVariableNames(kind).includes(name))
+}
 
 /**
  * The variables of one access: its secret as the wizard stored it (`PreparedAccess.secret`), the

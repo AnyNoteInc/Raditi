@@ -531,6 +531,33 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     expect(await f.credentials.recover(browser.ref)).toEqual(issued)
   })
 
+  it('gives a chat with the code and the browser its variables without the hosting accesses (К21)', async () => {
+    const f = await fixture({ slots: 2 })
+    const consented = { toAgent: true, agentConsentAt: new Date() }
+    const chat = await f.taskFixture({ needsRepository: true, needsBrowser: true })
+    for (const site of [f.site, chat.site])
+      for (const name of ['MAIL_API_KEY', 'FTP_PASSWORD', 'SFTP_PASSWORD', 'SFTP_PRIVATE_KEY']) {
+        await db.siteEnvVar.create({ data: { siteId: site.id, name, hosts: [], ...consented } })
+        f.vault.entries.set(siteEnvVarPath(site.id, name), {
+          data: { value: `${name}-value` },
+          custom: {},
+          deleted: false,
+        })
+      }
+    // The code alone keeps them all, as it did.
+    expect(Object.keys((await f.credentials.issue(f.ref, f.grant)).envValues ?? {}).sort()).toEqual(
+      ['FTP_PASSWORD', 'MAIL_API_KEY', 'SFTP_PASSWORD', 'SFTP_PRIVATE_KEY'],
+    )
+    f.vault.kvRead.mockClear()
+    const issued = await f.credentials.issue(chat.ref, f.grant)
+    expect(issued.envValues).toEqual({ MAIL_API_KEY: 'MAIL_API_KEY-value' })
+    // A hosting access is not even read.
+    expect(
+      f.vault.kvRead.mock.calls.filter(([path]) => /PASSWORD|PRIVATE_KEY/.test(String(path))),
+    ).toEqual([])
+    expect(await f.credentials.recover(chat.ref)).toEqual(issued)
+  })
+
   describe('a chat without a site (docs/plan/61-chats-first.md, К14)', () => {
     it('issues, finds again and revokes the key under the lease of its own id', async () => {
       const f = await fixture()

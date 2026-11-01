@@ -49,7 +49,11 @@ import {
 } from '../services/site-basics.ts'
 import { deleteSite } from '../services/site-delete.ts'
 import { siteIdForRequest } from '../services/site-request-id.ts'
-import { browserConfigured, browserUnavailable } from '../services/chat/context.ts'
+import {
+  browserConfigured,
+  browserStackSupported,
+  browserUnavailable,
+} from '../services/chat/context.ts'
 import {
   browserAddressSecure,
   siteCapabilities,
@@ -103,7 +107,7 @@ const capabilitySelect = {
 /** The capabilities of a site read with `capabilitySelect` and its first import. */
 const capabilitiesOf = (
   context: Pick<Context, 'chat'>,
-  site: { status: SiteStatus; url: string; gitRepositories: unknown[] },
+  site: { status: SiteStatus; stack: SiteStack; url: string; gitRepositories: unknown[] },
   setup: ReturnType<typeof siteSetupState>,
 ) =>
   siteCapabilities({
@@ -111,6 +115,7 @@ const capabilitiesOf = (
     setup,
     hasRepository: site.gitRepositories.length > 0,
     browserConfigured: browserConfigured(context),
+    browserStack: browserStackSupported(context, site.stack),
     secureAddress: browserAddressSecure(site.url, context.chat?.appEnv ?? null),
   })
 
@@ -381,7 +386,7 @@ export const projectRouter = router({
         setup,
         capabilities: capabilitiesOf(
           ctx,
-          { status: site.status, url: site.url, gitRepositories },
+          { status: site.status, stack: site.stack, url: site.url, gitRepositories },
           setup,
         ),
       }
@@ -421,7 +426,7 @@ export const projectRouter = router({
         initialVersion: confirmedInitialVersion(initialVersion),
         capabilities: capabilitiesOf(
           ctx,
-          { status: row.status, url: row.url, gitRepositories },
+          { status: row.status, stack: row.stack, url: row.url, gitRepositories },
           setup,
         ),
       }

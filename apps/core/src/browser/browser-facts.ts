@@ -1,4 +1,4 @@
-import { taskBrowserCheckpoints, type Prisma } from '@repo/db'
+import { taskBrowserCheckpoints, type BrowserCheckpointRecord, type Prisma } from '@repo/db'
 import {
   browserFeedObjectOf,
   browserHelpReasons,
@@ -30,6 +30,26 @@ export interface BrowserTaskFacts {
   objects: FeedObject[]
   /** Some object of the task is confirmed on the site: the site changed (Б23). */
   confirmed: boolean
+  /** What the pass of `window` did, in a chat with the code too; null — none was asked of. */
+  pass: BrowserPassWork | null
+}
+
+/** The pass to tell of. `since` — when its work started; null — it never did: it did nothing. */
+export interface BrowserPassWindow {
+  since: Date | null
+}
+
+/**
+ * What one pass of a chat with the code and the browser left on the site
+ * (docs/plan/61-chats-first.md, §5.8): the objects whose state moved in it, and whether anyone
+ * acted in the browser. A chat goes on after a news item is published, and an answer about the code
+ * says nothing of that news. Without an action there is no work: every pass ends with a read of
+ * every object, and what a read finds changed was changed by someone else.
+ */
+export interface BrowserPassWork {
+  objects: FeedObject[]
+  confirmed: boolean
+  wrote: boolean
 }
 
 const isHelpReason = (reason: string | null): reason is BrowserHelpReason =>
@@ -61,23 +81,47 @@ export async function browserFailedInTurn(
   )
 }
 
+const feedObjectsOf = (checkpoints: readonly BrowserCheckpointRecord[]): FeedObject[] =>
+  checkpoints
+    .map((checkpoint) => browserFeedObjectOf(checkpoint))
+    .filter((object): object is FeedObject => object !== null)
+    .slice(0, feedLimits.objects)
+
+const anyConfirmed = (checkpoints: readonly BrowserCheckpointRecord[]): boolean =>
+  checkpoints.some((checkpoint) => checkpoint.state === 'verified' && checkpoint.verified !== null)
+
+const passWorkOf = (
+  checkpoints: readonly BrowserCheckpointRecord[],
+  since: Date | null,
+  wrote: boolean,
+): BrowserPassWork => {
+  if (since === null || !wrote) return { objects: [], confirmed: false, wrote: false }
+  const moved = checkpoints.filter(({ updatedAt }) => updatedAt.getTime() >= since.getTime())
+  return { objects: feedObjectsOf(moved), confirmed: anyConfirmed(moved), wrote }
+}
+
 /**
  * The facts of the task's browser: its latest session — the live one when there is one — and
- * every checkpoint of the task. A task that never opened a browser has none of either.
+ * every checkpoint of the task. A task that never opened a browser has none of either. `window`
+ * adds what the pass being ended did.
  */
-export async function readBrowserTaskFacts(db: Reader, taskId: string): Promise<BrowserTaskFacts> {
-  const [session, checkpoints] = await Promise.all([
+export async function readBrowserTaskFacts(
+  db: Reader,
+  taskId: string,
+  window: BrowserPassWindow | null = null,
+): Promise<BrowserTaskFacts> {
+  const since = window?.since ?? null
+  const [session, checkpoints, wrote] = await Promise.all([
     db.browserSession.findFirst({
       where: { taskId },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       select: { status: true, controller: true, helpReason: true, helpMessage: true },
     }),
     taskBrowserCheckpoints(db, taskId),
+    since === null
+      ? 0
+      : db.browserSession.count({ where: { taskId, lastWroteAt: { gte: since } } }),
   ])
-  const objects = checkpoints
-    .map((checkpoint) => browserFeedObjectOf(checkpoint))
-    .filter((object): object is FeedObject => object !== null)
-    .slice(0, feedLimits.objects)
   return {
     // A request of a session that is gone is nobody's now: no pass starts a browser any more, so
     // it would turn into a question about a browser the client cannot reach.
@@ -90,9 +134,8 @@ export async function readBrowserTaskFacts(db: Reader, taskId: string): Promise<
         : null,
     // A browser that is gone holds no control: the agent's next `web_*` call starts a new one.
     controller: session && isBrowserSessionLive(session.status) ? session.controller : 'agent',
-    objects,
-    confirmed: checkpoints.some(
-      (checkpoint) => checkpoint.state === 'verified' && checkpoint.verified !== null,
-    ),
+    objects: feedObjectsOf(checkpoints),
+    confirmed: anyConfirmed(checkpoints),
+    pass: window && passWorkOf(checkpoints, since, wrote > 0),
   }
 }

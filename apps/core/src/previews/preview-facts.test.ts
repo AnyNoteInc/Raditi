@@ -7,6 +7,11 @@ const now = new Date('2026-10-17T12:00:00Z')
 const later = new Date(now.getTime() + 3_600_000)
 const earlier = new Date(now.getTime() - 1000)
 const head = 'c'.repeat(40)
+const OF_TASK = {
+  workspaceId: 'w',
+  dataClass: 'synthetic',
+  requirements: { repository: true, browser: false },
+} as const
 
 function facts(
   preview: Partial<PreviewFacts['preview']> = {},
@@ -35,7 +40,7 @@ function facts(
       written: false,
       ...preview,
     },
-    task: { status: 'awaiting_approval', workspaceId: 'w', dataClass: 'synthetic' },
+    task: { status: 'awaiting_approval', ...OF_TASK },
     site: { id: 's', stack: 'wordpress', url: 'https://shop.example.ru', installedReleaseId: null },
     repo: null,
     candidate: {
@@ -56,7 +61,7 @@ describe('what a preview needs now', () => {
   it('destroys the preview of a closed dialog, and nothing of a destroyed one', () => {
     for (const status of ['done', 'failed', 'cancelled', 'rolled_back'] as const)
       expect(
-        previewAction(facts({}, { task: { status, workspaceId: 'w', dataClass: 'synthetic' } }), {
+        previewAction(facts({}, { task: { status, ...OF_TASK } }), {
           requested: false,
           now,
         }),
@@ -67,7 +72,7 @@ describe('what a preview needs now', () => {
   })
 
   it('finishes a build that was never done or whose holder died, even during a pass', () => {
-    const busy = { status: 'running' as const, workspaceId: 'w', dataClass: 'synthetic' as const }
+    const busy = { status: 'running' as const, ...OF_TASK }
     expect(
       previewAction(facts({ status: 'pending' }, { task: busy }), { requested: false, now }),
     ).toBe('build')
@@ -75,7 +80,7 @@ describe('what a preview needs now', () => {
   })
 
   it('never rebuilds a served preview under a pass, unless its containers are gone', () => {
-    const task = { status: 'running' as const, workspaceId: 'w', dataClass: 'synthetic' as const }
+    const task = { status: 'running' as const, ...OF_TASK }
     const dirty = facts({ dirty: true }, { task })
     expect(previewAction(dirty, { requested: true, now })).toBe('none')
     expect(previewAction(dirty, { requested: false, now, lost: true })).toBe('build')
@@ -86,7 +91,7 @@ describe('what a preview needs now', () => {
     expect(
       previewAction(facts({ status: 'failed', expiresAt: earlier }), { requested: true, now }),
     ).toBe('expire')
-    const task = { status: 'preparing' as const, workspaceId: 'w', dataClass: 'synthetic' as const }
+    const task = { status: 'preparing' as const, ...OF_TASK }
     expect(
       previewAction(facts({ status: 'failed', expiresAt: earlier }, { task }), {
         requested: true,
@@ -135,10 +140,7 @@ describe('what a preview needs now', () => {
     for (const status of ['queued', 'preparing', 'running'] as const)
       expect(
         previewAction(
-          facts(
-            { status: 'expired', lastUsedAt: new Date(0) },
-            { task: { status, workspaceId: 'w', dataClass: 'synthetic' } },
-          ),
+          facts({ status: 'expired', lastUsedAt: new Date(0) }, { task: { status, ...OF_TASK } }),
           { requested: true, now, idleMs: 60_000 },
         ),
       ).toBe('build')

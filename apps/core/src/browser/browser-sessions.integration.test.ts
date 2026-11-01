@@ -130,6 +130,21 @@ describe.skipIf(!enabled)('the browsers of tasks with PostgreSQL', () => {
     )
   })
 
+  it('answers the request for help of the last pass even when the worker does not answer', async () => {
+    const task = await browserTask()
+    const { client } = worker()
+    const sessions = new BrowserSessions({ db, client: client as never, logger: quiet })
+    const opened = await openBrowserSession(db, { taskId: task.id })
+    await sessions.start({ taskId: task.id, sessionId: opened.id }, running)
+    await recordBrowserHelp(db, { sessionId: opened.id, reason: 'login', message: 'Войдите' })
+    client.ensure.mockRejectedValue(new DomainError('CONFLICT', 'refused', 409))
+
+    await sessions.reclaim(task.id, new AbortController().signal)
+
+    // A pass about the code goes on without the browser, and it ends with its own result.
+    expect((await readBrowserTaskFacts(db, task.id)).help).toBeNull()
+  })
+
   it('never takes the browser from a client mid sign-in when a job comes late', async () => {
     const task = await browserTask()
     const { client } = worker()

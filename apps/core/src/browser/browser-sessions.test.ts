@@ -371,12 +371,13 @@ describe('BrowserSessions.reclaim', () => {
     expect(g.client.ensure.mock.calls[0]?.[0]).toMatchObject({ takeControl: true, signIn: saved })
   })
 
-  it('logs a failure by its code and lets the turn go on', async () => {
+  it('logs a failure by its code and lets the turn go on, the request for help answered', async () => {
     const g = given()
     g.client.ensure.mockRejectedValue(new DomainError('CONFLICT', 'http://10.0.0.5:8086', 409))
     await expect(g.sessions.reclaim(TASK, new AbortController().signal)).resolves.toBeUndefined()
     expect(g.client.ensure).toHaveBeenCalledOnce()
-    expect(db.clearBrowserHelp).not.toHaveBeenCalled()
+    // The client's words answered it: the turn goes on, and its result is not lost to the request.
+    expect(db.clearBrowserHelp).toHaveBeenCalledWith(g.prisma, { sessionId: SESSION })
     expect(g.logger.warn).toHaveBeenCalledExactlyOnceWith(
       `browser_reclaim_failed task=${TASK} cause=CONFLICT`,
     )

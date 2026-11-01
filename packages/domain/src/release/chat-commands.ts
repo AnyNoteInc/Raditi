@@ -178,6 +178,17 @@ export interface ChatCommandFacts {
    * `retryVerdict`); null — it is.
    */
   retry: ChatCommandRefusal | null
+  /**
+   * The client pressed `/cancel` and core has not closed the chat yet: a chat with a browser is
+   * closed by core in any status (docs/plan/57, Б24), so it may still wait with a candidate. No
+   * command but `/cancel` is taken then, `/release` above all.
+   */
+  cancelPending: boolean
+  /**
+   * Anyone acted in the browser of this chat (`browser_sessions.wrote_at`): what was done there
+   * is on the site, and no undo of a release gives it back.
+   */
+  browserWrote: boolean
 }
 
 /**
@@ -232,6 +243,7 @@ function refusalOf(id: ChatCommandId, facts: ChatCommandFacts): ChatCommandRefus
   if (id === 'undo') return undoRefusal(facts)
   if (terminalTaskStatuses.includes(status))
     return id === 'preview' && preview ? previewRefusal(preview.status, 'ended') : 'finished'
+  if (facts.cancelPending && id !== 'cancel') return 'finished'
   switch (id) {
     case 'release':
       if (facts.role === 'member') return 'not_allowed'

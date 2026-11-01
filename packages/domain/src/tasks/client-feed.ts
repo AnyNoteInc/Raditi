@@ -183,7 +183,7 @@ type EndedSiteState = (typeof endedSites)[number]
 /** What a row of a result says of the site: a task without one says nothing of it. */
 export const feedSiteOf = (
   task: { siteId: string | null },
-  state: Exclude<ResultSiteState, 'none'>,
+  state: ResultSiteState,
 ): ResultSiteState => (task.siteId === null ? 'none' : state)
 
 /**

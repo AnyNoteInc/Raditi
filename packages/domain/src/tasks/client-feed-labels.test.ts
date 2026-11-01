@@ -37,6 +37,7 @@ import {
   feedReleaseKeptText,
   feedReleaseReasonText,
   feedReleaseText,
+  feedUndoText,
   feedReleaseTitle,
   feedVersionBumpLabel,
   feedVersionText,
@@ -201,6 +202,23 @@ describe('totality of the catalogue', () => {
     expect(feedReleaseKeptText({ records: 3, tables: 0 })).toEqual([
       'Страницы и записи, которые добавил выпуск, остались на сайте (3): после выпуска их изменили или к ним уже что-то добавили, поэтому мы их не убрали. Если они не нужны, удалите их в админке сайта.',
     ])
+  })
+
+  // What the browser of the chat did may stand on the site (docs/plan/61-chats-first.md, §5.8).
+  it('speaks of what a release or an undo did, never of the site as a whole', () => {
+    expect(feedReleaseText('failed', 'v2.0.0')).toBe(
+      'Версию 2.0.0 установить не удалось. Выпуск ничего не изменил на сайте.',
+    )
+    expect(feedReleaseText('refused', 'v2.0.0')).toBe(
+      'Выпуск версии 2.0.0 не начат. Выпуск ничего не изменил на сайте.',
+    )
+    const versions = { undone: 'v2.0.0', version: 'v2.0.1', returnsTo: 'v1.9.0' }
+    expect(feedUndoText('failed', versions)).toBe(
+      'Отменить выпуск 2.0.0 не удалось. Отмена ничего не изменила на сайте.',
+    )
+    expect(feedUndoText('refused', versions)).toBe(
+      'Отмена выпуска 2.0.0 не начата. Отмена ничего не изменила на сайте.',
+    )
   })
 
   it('shows a version without the letter of the tag', () => {

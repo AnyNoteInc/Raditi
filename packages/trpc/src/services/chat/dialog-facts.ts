@@ -21,7 +21,7 @@ import {
 } from '@repo/domain'
 
 import { memberRole } from './access.ts'
-import { dialogRetry } from './dialog-state.ts'
+import { cancelPending, dialogRetry } from './dialog-state.ts'
 import { commandUnavailable } from './refusals.ts'
 
 type Reader = Pick<
@@ -35,6 +35,7 @@ type Reader = Pick<
   | 'siteRelease'
   | 'site'
   | 'siteLease'
+  | 'browserSession'
 >
 
 /** The preview of a dialog as its facts and its panel read it. */
@@ -151,16 +152,15 @@ export async function dialogFacts(
   })
   const undo = await undoFacts(db, task, now)
   const retry = await dialogRetry(db, task)
+  const needs = await db.task.findUnique({
+    where: { id: task.id },
+    select: { needsRepository: true, needsBrowser: true },
+  })
   // A task without the repository works in the browser of the site (docs/plan/57, Б1): it has no
   // candidate, no preview, no release and no «Попробовать ещё» (Б25), whatever rows say — only
   // `/cancel` is ever offered.
-  const withRepository =
-    (
-      await db.task.findUnique({
-        where: { id: task.id },
-        select: { needsRepository: true },
-      })
-    )?.needsRepository ?? true
+  const withRepository = needs?.needsRepository ?? true
+  const withBrowser = needs?.needsBrowser ?? false
 
   let candidate: DialogCandidate | null = null
   if (candidateRow !== null) {
@@ -200,6 +200,12 @@ export async function dialogFacts(
       releaseInProgress: release !== null && !isTerminalReleaseStatus(release.status),
       undo: withRepository ? (undo?.command ?? null) : null,
       retry: withRepository ? retryCommandRefusal(retry) : 'nothing_to_retry',
+      cancelPending: withBrowser && (await cancelPending(db, task.id)),
+      browserWrote:
+        withBrowser &&
+        (await db.browserSession.count({
+          where: { taskId: task.id, wroteAt: { not: null } },
+        })) > 0,
     },
   }
 }

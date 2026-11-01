@@ -6,6 +6,7 @@ import {
   MAX_SANDBOX_TURN_MS,
   Money,
   SANDBOX_EGRESS_PORT,
+  turnInboxAttachmentId,
   turnInboxLimits,
   turnInboxPath,
   turnPlanLimits,
@@ -424,15 +425,19 @@ function promptTitle(title: string | undefined): string {
   return line ? `title ${JSON.stringify(line)}` : 'no title'
 }
 
-/** One saved object of the list: its state says what the agent does with it first. */
-function savedObjectLine(object: SavedObjectFacts): string {
+/**
+ * One saved object of the list: its state says what the agent does with it first. With a working
+ * copy the agent does not owe `web_verify` before all else: a question about the code would start
+ * a browser no one needs (docs/plan/61-chats-first.md, К11).
+ */
+function savedObjectLine(object: SavedObjectFacts, repository: boolean): string {
   const name = `${object.kind} ${object.objectId}`
   const editor = `editor ${object.editPath}`
   switch (object.state) {
     case 'verified':
       return `${name}: verified, ${promptTitle(object.title)}, status ${object.status ?? 'unknown'}; ${editor}`
     case 'unverified':
-      return `${name}: saved, the site has not confirmed it yet — call web_verify before anything else; ${editor}`
+      return `${name}: saved, the site has not confirmed it yet — call web_verify ${repository ? 'before you touch this object' : 'before anything else'}; ${editor}`
     case 'missing':
       return `${name}: the last check did not find it on the site — do not make it again, ask the client with web_help; ${editor}`
   }
@@ -444,9 +449,13 @@ function savedObjectLine(object: SavedObjectFacts): string {
  * saved there — so that a new session continues those objects and makes no duplicate —, and the
  * files sent with the task — id, name, type and size, never a key or an address of the file:
  * the agent puts them on a page with `web_upload` by id, and only the browser worker reads them.
- * A chat without a site has only the files to add, or nothing: an empty answer.
+ * A chat without a site has only the files to add, or nothing: an empty answer. A chat with the
+ * code too (`workspace`) holds the files in the sandbox as well: each is listed with its path there.
  */
-function browserContextOf(browser: BrowserPassFacts): string {
+function browserContextOf(
+  browser: BrowserPassFacts,
+  workspace: { inbox: readonly string[] } | null,
+): string {
   const lines = ['---']
   if (browser.siteUrl !== null) lines.push(`The site of this task: ${browser.siteUrl}`)
   const notes = browser.agentNotes?.trim()
@@ -459,13 +468,23 @@ function browserContextOf(browser: BrowserPassFacts): string {
     )
     const unlisted = browser.saved.length - saved.length
     if (unlisted > 0) lines.push(`- ${unlisted} earlier objects are not listed`)
-    for (const object of saved) lines.push(`- ${savedObjectLine(object)}`)
+    for (const object of saved) lines.push(`- ${savedObjectLine(object, workspace !== null)}`)
   }
   const files = browser.attachments.slice(-PROMPT_ATTACHMENTS)
   if (files.length > 0) {
-    lines.push('', 'Files the client sent with this task (upload them with web_upload by id):')
-    for (const file of files)
-      lines.push(`- ${file.id}: ${file.fileName}, ${file.contentType}, ${sizeOf(file.sizeBytes)}`)
+    lines.push(
+      '',
+      workspace
+        ? 'Files the client sent with this task (read them at their paths; upload them to a page of the live site with web_upload by id):'
+        : 'Files the client sent with this task (upload them with web_upload by id):',
+    )
+    const pathOf = new Map(workspace?.inbox.map((path) => [turnInboxAttachmentId(path), path]))
+    for (const file of files) {
+      const path = pathOf.get(file.id.toLowerCase())
+      lines.push(
+        `- ${file.id}: ${file.fileName}, ${file.contentType}, ${sizeOf(file.sizeBytes)}${path ? `, at ${path}` : ''}`,
+      )
+    }
   }
   return lines.length > 1 ? lines.join('\n') : ''
 }
@@ -498,8 +517,13 @@ export function turnInboxOf(files: readonly TaskAttachmentFacts[]): TurnInboxPla
 }
 
 /** The prompt of a pass in the cloud browser: the client's words, then what the platform adds. */
-function browserPromptOf(facts: PassFacts, browser: BrowserPassFacts, since: Date | null): string {
-  const context = browserContextOf(browser)
+function browserPromptOf(
+  facts: PassFacts,
+  browser: BrowserPassFacts,
+  since: Date | null,
+  workspace: { inbox: readonly string[] } | null,
+): string {
+  const context = browserContextOf(browser, workspace)
   if (context === '') return promptOf(facts.requests, since)
   const words = promptOf(facts.requests, since, turnPlanLimits.prompt - context.length - 2)
   return `${words}\n\n${context}`
@@ -528,9 +552,6 @@ function startWithoutRepository(
 export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promise<PassPlan> {
   const { task, requirements } = facts
   const sited = task.siteId !== null
-  // The product takes a task with the repository or with the browser, not both yet (Б3).
-  if (requirements.repository && requirements.browser)
-    return { kind: 'refused', code: 'not_accepted' }
   if (requirements.repository && !facts.repo) return { kind: 'refused', code: 'not_accepted' }
   // Only a task on a site without a repository has nothing but the browser. Any other goes on
   // without a word of `web_*` when the browser worker is not there (docs/plan/61, §5.4).
@@ -664,7 +685,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
       // Rule 8: by what the task needs, never by its stack — the adapter's guide says the rest.
       instructions: !sited
         ? openTaskInstructions(internet, { browser: browser !== undefined, inbox: inboxFacts })
-        : browser?.guide
+        : browser?.guide && !workspace
           ? browserTaskInstructions(browser.guide, internet)
           : turnInstructions(
               facts.preview,
@@ -673,6 +694,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
               facts.rules,
               internet,
               inboxFacts,
+              browser?.guide ? { guide: browser.guide } : null,
             ),
       egressProxy: SANDBOX_EGRESS_PROXY_URL,
       internet: true,
@@ -680,14 +702,20 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
     },
     input: {
       prompt: browser
-        ? browserPromptOf(facts, browser, start.since)
+        ? browserPromptOf(
+            facts,
+            browser,
+            start.since,
+            workspace ? { inbox: inbox?.paths ?? [] } : null,
+          )
         : promptOf(facts.requests, start.since),
       // Their paths only: core puts the files there when the sandbox is prepared.
       attachments: inbox?.paths ?? [],
     },
     driverVersion: env.driver.cliVersion,
-    // A plan of a repository task keeps the shape it had before the requirements (Б3).
-    ...(workspace ? { workspace } : { requirements: { ...requirements } }),
+    ...(workspace ? { workspace } : {}),
+    // A plan of the repository alone keeps the shape it had before the requirements (Б3).
+    ...(workspace && !requirements.browser ? {} : { requirements: { ...requirements } }),
     committedAt: facts.committedAt.toISOString(),
     ...(start.previous ? { previous: start.previous } : {}),
     ...('replacesTurn' in start && start.replacesTurn !== undefined

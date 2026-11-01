@@ -48,7 +48,7 @@ import {
 import { codeImportOnly } from '../site-setup.ts'
 import { taskNotFound, type LockedTask } from './access.ts'
 import { bindMessageAttachments, requestAttachments } from './attachments.ts'
-import { browserConfigured, type ChatContext } from './context.ts'
+import { browserConfigured, browserStackSupported, type ChatContext } from './context.ts'
 import { assertCommandAvailable, dialogFacts, type DialogFacts } from './dialog-facts.ts'
 import { moveTo, underDialogLock, WRITE, writeRequest } from './dialog-lock.ts'
 import {
@@ -211,6 +211,7 @@ export async function createDialog(
       id: true,
       workspaceId: true,
       status: true,
+      stack: true,
       url: true,
       alias: true,
       workspace: { select: { dataClass: true } },
@@ -224,6 +225,7 @@ export async function createDialog(
     setup: siteSetupState(site.provisioningStages[0]),
     hasRepository: site.gitRepositories.length > 0,
     browserConfigured: browserConfigured({ chat }),
+    browserStack: browserStackSupported({ chat }, site.stack),
     secureAddress: browserAddressSecure(site.url, chat.appEnv),
   })
   const requirements = input.requirements ?? defaultRequirements(capabilities)
@@ -641,6 +643,8 @@ export async function retryDialog(
   return underDialogLock(db, input, async (tx, task) => {
     const repeated = await requestOf(tx, task.id, requestId)
     if (repeated !== null) return { requestEventId: String(repeated), repeated: true }
+    // «Остановить» of a chat with a browser is final: core is closing it (Б24).
+    if (task.requirements.browser && (await cancelPending(tx, task.id))) throw taskFinished()
 
     const verdict = await dialogRetry(tx, task)
     if (!verdict.allowed) throw retryRefused[verdict.refusal]()

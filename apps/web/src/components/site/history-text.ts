@@ -40,7 +40,7 @@ export const runStateText: Readonly<Record<RunState, string>> = Object.freeze({
   installed: 'Выполнен',
   rolled_back: 'Ошибка · сайт возвращён',
   failed: 'Ошибка',
-  refused: 'Не выполнен · сайт не менялся',
+  refused: 'Не выполнен · выпуск сайт не менял',
   unknown: 'Выясняем, чем закончился',
 })
 
@@ -57,7 +57,7 @@ export function runOutcomeText(run: Pick<RunView, 'kind' | 'state' | 'version'>)
     case 'rolled_back':
       return 'Обновление не прошло проверку, и сайт вернули к прежнему виду из резервной копии. От вас ничего не нужно.'
     case 'refused':
-      return 'Обновление остановилось до того, как сайт изменился: на сайте всё осталось как было.'
+      return 'Обновление остановилось до того, как изменило сайт.'
     case 'failed':
       return 'Обновление не удалось. Подробности — в диалоге, из которого его запустили.'
     case 'unknown':

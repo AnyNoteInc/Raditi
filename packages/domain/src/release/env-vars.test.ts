@@ -5,6 +5,7 @@ import {
   envVarReachesAgent,
   envVarsMayReachAgent,
   envVarReachesPreview,
+  envVarReachesTask,
   envVarValueSchema,
   refusedEnvVarPrefixes,
   isSiteSignInEnvVar,
@@ -157,6 +158,33 @@ describe('who gets the value of a client variable', () => {
     expect(envVarReachesPreview(variable(true, false, null), 'synthetic')).toBe(false)
     expect(envVarReachesPreview(variable(false, true, consented), 'synthetic')).toBe(false)
     expect(envVarReachesPreview(variable(true, true, consented), 'client')).toBe(false)
+  })
+})
+
+describe('the variables of a task, by what it works with', () => {
+  const code = { repository: true, browser: false }
+  const both = { repository: true, browser: true }
+  const live = { repository: false, browser: true }
+  const plain = { repository: false, browser: false }
+  const hosting = [...siteAccessVariableNames('ftp'), ...siteAccessVariableNames('ssh')]
+
+  it('gives the code alone everything, the accesses to the hosting too, as before', () => {
+    for (const name of ['MAIL_API_KEY', ...hosting])
+      expect(envVarReachesTask(name, code)).toBe(true)
+  })
+
+  it('gives a chat with the code and the browser all but the accesses to the hosting (К21)', () => {
+    expect(hosting).toEqual(
+      expect.arrayContaining(['FTP_PASSWORD', 'SFTP_PASSWORD', 'SFTP_PRIVATE_KEY']),
+    )
+    for (const name of hosting) expect(envVarReachesTask(name, both)).toBe(false)
+    for (const name of ['MAIL_API_KEY', 'SITE_DB_PASSWORD', 'SITE_GIT_TOKEN'])
+      expect(envVarReachesTask(name, both)).toBe(true)
+  })
+
+  it('gives a task without the repository nothing', () => {
+    expect(envVarReachesTask('MAIL_API_KEY', live)).toBe(false)
+    expect(envVarReachesTask('MAIL_API_KEY', plain)).toBe(false)
   })
 })
 

@@ -13,17 +13,41 @@ import {
   type PrismaClient,
 } from '@repo/db'
 import { BROWSER_ONLY, REPOSITORY_ONLY, siteIdOf, turnSkillsOf } from '@repo/domain'
+import type { AgentDriver } from '@repo/domain'
 import { llmBackends } from '@repo/llm-backends'
 import { getSiteAdapter } from '@repo/site-adapters'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
-import { sampleDriverId } from '../testing/ids.ts'
+import {
+  sampleBackendId,
+  sampleDriverId,
+  sampleModelSlug,
+  sampleProviderModelId,
+} from '../testing/ids.ts'
 import { readPassFacts } from './pass-facts.ts'
+import { planTurn } from './turn-planner.ts'
 
 // What a pass reads of the client's variables of its site (docs/plan/53-chat-preview-release.md,
 // Р13): the hosts the agent's commands may reach, never a value; and of the turns of its task.
 // Reads only: any database.
 const databaseUrl = process.env.DATABASE_URL
+
+// The plan reads only these of a driver.
+const driver = {
+  id: sampleDriverId,
+  image: `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`,
+  cliVersion: '1.0.0',
+  capabilities: { resume: true, jsonEvents: true, outputSchema: false, mcp: true, images: false },
+  prepare: () => {
+    throw new Error('not called by the plan')
+  },
+  command: () => {
+    throw new Error('not called by the plan')
+  },
+  parseEvent: () => [],
+  sessionState: () => ({ root: `/agent-home/${sampleDriverId}`, include: [], exclude: [] }),
+  extractResult: () => null,
+} as unknown as AgentDriver
 
 describe.skipIf(!databaseUrl)('the egress of a pass with PostgreSQL', () => {
   let db: PrismaClient
@@ -38,6 +62,7 @@ describe.skipIf(!databaseUrl)('the egress of a pass with PostgreSQL', () => {
     await db.attachment.deleteMany({
       where: { OR: [{ site: { name: 'Billing verification' } }, { fileName: 'смета.pdf' }] },
     })
+    await db.gitRepository.deleteMany({ where: { site: { name: 'Billing verification' } } })
     await fixtures.cleanup()
   })
   afterAll(async () => {
@@ -46,8 +71,9 @@ describe.skipIf(!databaseUrl)('the egress of a pass with PostgreSQL', () => {
 
   async function dialog({
     browser = false,
+    both = false,
     chat,
-  }: { browser?: boolean; chat?: { browser: boolean } } = {}) {
+  }: { browser?: boolean; both?: boolean; chat?: { browser: boolean } } = {}) {
     const { userId } = await fixtures.user()
     const workspace = await db.$transaction((tx) =>
       ensurePersonalWorkspaceWithGift(tx, { userId, appEnv: 'test' }),
@@ -55,6 +81,7 @@ describe.skipIf(!databaseUrl)('the egress of a pass with PostgreSQL', () => {
     const { taskId } = await fixtures.task(workspace.id, {
       status: 'queued',
       ...(browser ? { needsRepository: false, needsBrowser: true } : {}),
+      ...(both ? { needsRepository: true, needsBrowser: true } : {}),
       ...(chat ? { siteId: null, needsRepository: false, needsBrowser: chat.browser } : {}),
     })
     // No reserve to read: the class ceiling stands for the budget.
@@ -224,6 +251,74 @@ describe.skipIf(!databaseUrl)('the egress of a pass with PostgreSQL', () => {
     expect(read?.requirements).toEqual(REPOSITORY_ONLY)
     expect(read?.attachments).toEqual([expect.objectContaining({ id: file.id })])
     expect(read).not.toHaveProperty('browser')
+  })
+
+  // docs/plan/61-chats-first.md, §5.6, К21: the row as a test writes it, up to the plan of its turn.
+  it('reads of a chat with the code and the browser what its turn gets, hosting access aside', async () => {
+    const { task, workspaceId, userId, facts } = await dialog({ both: true })
+    const siteId = siteIdOf(task)
+    await db.gitRepository.create({
+      data: {
+        siteId,
+        provider: 'gitea',
+        owner: 'sites',
+        name: `site-${siteId}`,
+        url: `https://git.example.ru/sites/site-${siteId}`,
+      },
+    })
+    const consented = { toAgent: true, agentConsentAt: new Date() }
+    await db.siteEnvVar.createMany({
+      data: [
+        { siteId, name: 'MAIL_API_KEY', hosts: ['mail.example.ru:443'], ...consented },
+        { siteId, name: 'FTP_PASSWORD', hosts: ['ftp.example.ru:443'], ...consented },
+        { siteId, name: 'SFTP_PRIVATE_KEY', hosts: ['sftp.example.ru:443'], ...consented },
+      ],
+    })
+    const file = (await createAttachment(db, {
+      workspaceId,
+      siteId,
+      uploadedById: userId,
+      fileName: 'смета.pdf',
+      contentType: 'application/pdf',
+      sizeBytes: 2048,
+    }))!
+    await markAttachmentReady(db, { id: file.id, sizeBytes: 2048, contentType: 'application/pdf' })
+    await bindAttachments(db, { ids: [file.id], taskId: task.id, userId, workspaceId, siteId })
+
+    const read = await facts()
+
+    expect(read?.requirements).toEqual({ repository: true, browser: true })
+    expect(read?.repo).toMatchObject({ owner: 'sites', name: `site-${siteId}` })
+    expect(read?.variables).toEqual(['MAIL_API_KEY'])
+    expect(read?.egress).toEqual(['mail.example.ru:443'])
+    expect(read?.attachments).toEqual([expect.objectContaining({ id: file.id })])
+    expect(read?.browser?.attachments).toEqual([expect.objectContaining({ id: file.id })])
+    // The repository's rules of the stack, which a task in the browser alone has none of.
+    expect(read?.rules.protectedPaths).not.toEqual([])
+
+    // The enabled model is the whole database's: the test names its own.
+    const profile = {
+      backend: sampleBackendId,
+      modelSlug: sampleModelSlug,
+      providerModelId: sampleProviderModelId,
+    }
+    const plan = await planTurn(
+      { ...read!, profile },
+      {
+        driver,
+        backends: llmBackends,
+        runtime: 'runc',
+        browser: true,
+        mainHead: async () => 'a'.repeat(40),
+        branchHead: async () => null,
+      },
+    )
+    if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+    expect(plan.requirements).toEqual({ repository: true, browser: true })
+    expect(plan.request.workspace).toBeDefined()
+    expect(plan.request.requirements).toEqual({ repository: true, browser: true })
+    expect(plan.request.input.prompt).toContain('https://')
+    expect(plan.request.input.prompt).toContain('смета.pdf')
   })
 
   it('reads of a task in the browser its site, its notes, its files and the stack’s guide', async () => {

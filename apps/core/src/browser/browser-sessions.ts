@@ -179,6 +179,9 @@ export class BrowserSessions {
     try {
       const session = await openBrowserSessionOfTask(db, taskId)
       if (!session) return
+      // Before the worker: a pass about the code goes on without it, and its result is not to be
+      // taken over by a request the client has already answered with their words.
+      await clearBrowserHelp(db, { sessionId: session.id })
       const siteId = await this.#siteOf(taskId)
       const signIn = await this.#signIn(siteId)
       const state = await client.ensure(
@@ -193,7 +196,6 @@ export class BrowserSessions {
       )
       if (!isBrowserSessionLive(state.status)) return
       if (state.status === 'ready') await markBrowserSessionReady(db, { sessionId: session.id })
-      await clearBrowserHelp(db, { sessionId: session.id })
     } catch (error) {
       if (!signal.aborted)
         this.#logger.warn(`browser_reclaim_failed task=${taskId} cause=${codeOf(error)}`)

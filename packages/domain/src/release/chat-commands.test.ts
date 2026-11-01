@@ -20,11 +20,27 @@ const waiting: ChatCommandFacts = {
   releaseInProgress: false,
   undo: null,
   retry: 'nothing_to_retry',
+  cancelPending: false,
+  browserWrote: false,
 }
 const verdict = (facts: ChatCommandFacts) =>
   Object.fromEntries(chatCommandAvailability(facts).map((item) => [item.id, item.refusal]))
 
 describe('the commands of a dialog', () => {
+  it('takes nothing but `/cancel` while core closes a chat with a browser (Б24)', () => {
+    const pressed = { ...waiting, cancelPending: true, retry: null }
+    expect(verdict(pressed)).toMatchObject({
+      release: 'finished',
+      preview: 'finished',
+      reset: 'finished',
+      update: 'finished',
+      retry: 'finished',
+      cancel: null,
+    })
+    // The same chat before the press: `/release` is on offer.
+    expect(verdict({ ...pressed, cancelPending: false }).release).toBeNull()
+  })
+
   it('lists the seven commands with the labels of the plan', () => {
     expect(chatCommandIds).toEqual([
       'release',

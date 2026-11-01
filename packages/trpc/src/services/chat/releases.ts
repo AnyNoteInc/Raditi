@@ -31,6 +31,7 @@ import {
 import { accessibleTask, isManagerRole, memberRole, taskNotFound } from './access.ts'
 import { candidateCountsOf, dialogFacts, assertCommandAvailable } from './dialog-facts.ts'
 import { moveTo, underDialogLock } from './dialog-lock.ts'
+import { cancelPending } from './dialog-state.ts'
 import {
   commandUnavailable,
   releaseCandidateChanged,
@@ -304,6 +305,9 @@ export async function confirmRelease(
 
       if (!isManagerRole(await memberRole(tx, task.workspaceId, userId)))
         throw commandUnavailable('release', 'not_allowed')
+      // `/cancel` came after the window opened: core is closing the chat, and a release begun now
+      // would leave it nothing to close (`cancelWaiting` skips a release in work).
+      if (task.requirements.browser && (await cancelPending(tx, task.id))) throw taskFinished()
       if (task.status !== 'awaiting_approval') {
         if (task.status === 'deploying' || task.status === 'verifying') throw releaseInProgress()
         if (task.status === 'queued' || task.status === 'preparing' || task.status === 'running')
