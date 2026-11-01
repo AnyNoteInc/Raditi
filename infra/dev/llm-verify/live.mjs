@@ -932,6 +932,30 @@ function streamForms(summary, said) {
 }
 
 /**
+ * The bytes of the longest `reasoning` row of what the CLI printed, 0 without one, and whether a
+ * row was cut off. The CLI exits without waiting for its stdout, and above about a mebibyte a row
+ * takes the result with it (docs/plan/61-chats-first.md, §10, 61.20), so this is what a real turn
+ * is compared with. A row lost that way no longer parses: it is the one worth seeing, so its bytes
+ * count too, known by how the CLI starts every row.
+ */
+export function longestReasoningRow(stdout) {
+  const longest = { bytes: 0, cut: false }
+  for (const line of stdout.split('\n')) {
+    let row
+    try {
+      row = JSON.parse(line)
+    } catch {
+      if (!line.startsWith('{"type":"reasoning"')) continue
+      longest.cut = true
+      longest.bytes = Math.max(longest.bytes, Buffer.byteLength(line))
+      continue
+    }
+    if (row?.type === 'reasoning') longest.bytes = Math.max(longest.bytes, Buffer.byteLength(line))
+  }
+  return longest
+}
+
+/**
  * Why the last message of a turn is or is not a result, in words for the report: `valid`, or
  * what kept the drivers' strict reading from taking it — no message, text around the JSON
  * object, or the fields the schema refused. Names of fields only, never the text itself.

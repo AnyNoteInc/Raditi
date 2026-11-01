@@ -4,6 +4,7 @@ import { expect, test } from '../../fixtures/signed-in.ts'
 
 import {
   acceptUploads,
+  addAnsweredChat,
   addBrowserTask,
   addConnectedSite,
   addLongDialog,
@@ -37,6 +38,8 @@ const pill = (page: Page, name: string | RegExp = /.*/) =>
     : page.getByRole('button', { name: /^Проект для этого чата/ })
 const picker = (page: Page) => page.getByRole('menu', { name: 'Проект для этого чата' })
 const files = (page: Page) => page.getByTestId('composer-files')
+const feed = (page: Page) => page.getByRole('list', { name: 'Сообщения чата' })
+const commands = (page: Page) => page.getByRole('listbox', { name: 'Команды' })
 const file = { name: 'Меню.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 меню') }
 
 /** Writes the first words and waits for the chat they started; returns its id. */
@@ -101,6 +104,103 @@ test('the first run: a chat without a project, a file before the first words', a
     await expect(link).not.toContainText('·')
     await page.goto('/chats')
     await expect(chats(page).getByRole('link', { name: /Перескажите файл/ })).toBeVisible()
+  })
+})
+
+// docs/plan/61-chats-first.md, §5.14. No core works here: `/undo` of a chat without the repository
+// is `task.undoTurn` in web, and it took a real browser to see what `/thinking` does to a chat.
+const ANSWERED = {
+  words: 'Сколько записей на сайте?',
+  answer: 'Сейчас на сайте семь записей.',
+  thought: 'Count the posts of the list first.',
+}
+const UNDONE = 'Последний запрос отменён.'
+
+test('`/undo` puts the words back into an empty field and says the request is undone', async ({
+  page,
+  signedInUser,
+}) => {
+  const { taskId } = await addAnsweredChat(signedInUser.id, ANSWERED)
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto(`/chats/${taskId}`)
+  await expect(feed(page)).toContainText(ANSWERED.answer)
+
+  await message(page).fill('/undo')
+  await commands(page).waitFor()
+  await page.keyboard.press('Enter')
+
+  await expect(feed(page).getByText(UNDONE)).toBeVisible()
+  await expect(message(page)).toHaveValue(ANSWERED.words)
+  // The rows of the undone step stay, and the chat keeps waiting for the words.
+  await expect(feed(page)).toContainText(ANSWERED.answer)
+  await expect(send(page)).toBeEnabled()
+
+  await page.getByRole('button', { name: 'Команды' }).click()
+  const again = commands(page).getByRole('option', { name: /Отменить последний запрос/ })
+  await expect(again).toHaveAttribute('aria-disabled', 'true')
+  await expect(again).toContainText('Отменять пока нечего.')
+  await page.keyboard.press('Escape')
+})
+
+test('`/undo` leaves a draft of the client where it is', async ({ page, signedInUser }) => {
+  const { taskId } = await addAnsweredChat(signedInUser.id, ANSWERED)
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto(`/chats/${taskId}`)
+  await expect(feed(page)).toContainText(ANSWERED.answer)
+
+  await message(page).fill('Свой черновик')
+  await page.getByRole('button', { name: 'Команды' }).click()
+  await commands(page)
+    .getByRole('option', { name: /Отменить последний запрос/ })
+    .click()
+
+  await expect(feed(page).getByText(UNDONE)).toBeVisible()
+  await expect(message(page)).toHaveValue('Свой черновик')
+})
+
+test('`/thinking` shows what the model thought, and hides it again', async ({
+  page,
+  signedInUser,
+}) => {
+  const { taskId } = await addAnsweredChat(signedInUser.id, ANSWERED)
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto(`/chats/${taskId}`)
+  await expect(feed(page)).toContainText(ANSWERED.answer)
+  const thought = feed(page).getByText(ANSWERED.thought)
+  const run = async () => {
+    await message(page).fill('/thinking')
+    await commands(page).waitFor()
+    await page.keyboard.press('Enter')
+  }
+
+  await test.step('hidden by default, shown on the command', async () => {
+    await expect(thought).toBeHidden()
+    await run()
+    await expect(thought).toBeVisible()
+    await expect(feed(page).getByText('Размышления агента')).toBeVisible()
+    // The answer stands where it stood, and the field is free.
+    await expect(feed(page)).toContainText(ANSWERED.answer)
+    await expect(message(page)).toHaveValue('')
+  })
+
+  await test.step('the choice is the viewer’s, and stays for the next visit', async () => {
+    await page.reload()
+    await expect(thought).toBeVisible()
+  })
+
+  await test.step('the second time it hides them, and that stays for the next visit too', async () => {
+    await run()
+    await expect(thought).toBeHidden()
+    await page.reload()
+    await expect(feed(page)).toContainText(ANSWERED.answer)
+    await expect(thought).toBeHidden()
+    // The thoughts come after the answer, so hidden above may only mean not here yet. The command
+    // flips what is stored: it shows them only if the page left hidden on the last visit.
+    await run()
+    await expect(thought).toBeVisible()
   })
 })
 

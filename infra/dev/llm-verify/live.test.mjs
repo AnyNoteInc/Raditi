@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { Buffer } from 'node:buffer'
 import { spawn, spawnSync } from 'node:child_process'
 import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { createServer as createHttpServer, request as httpRequest } from 'node:http'
@@ -22,6 +23,7 @@ import {
   LIVE_LIMITS,
   liveServices,
   liveStartRefusal,
+  longestReasoningRow,
   PROVIDER,
   readLedger,
   resultVerdict,
@@ -1632,4 +1634,45 @@ test('no script of the stands and no document of theirs names the flags that nev
     const source = await readFile(join(repository, file), 'utf8')
     assert.equal(/--real\b|--record\b|--key-file\b/.test(source), false, file)
   }
+})
+
+test('longestReasoningRow measures the rows of reasoning in bytes, and only them', () => {
+  const row = (type, text) => JSON.stringify({ type, part: { type, text } })
+  const thought = row('reasoning', 'мысль')
+  const whole = (bytes) => ({ bytes, cut: false })
+  assert.deepEqual(longestReasoningRow(''), whole(0))
+  // A row of another kind is longer, and so is a line that is no row.
+  assert.deepEqual(
+    longestReasoningRow([row('text', 'я'.repeat(99)), 'не строка'].join('\n')),
+    whole(0),
+  )
+  // The longest stands between two shorter rows: neither the first nor the last is the answer.
+  assert.deepEqual(
+    longestReasoningRow(
+      [row('reasoning', 'a'), thought, row('reasoning', 'b'), row('step_finish', '')].join('\n'),
+    ),
+    whole(Buffer.byteLength(thought)),
+  )
+  assert.notEqual(Buffer.byteLength(thought), thought.length)
+})
+
+test('longestReasoningRow counts the row the exit of the CLI cut off, and says so', () => {
+  const row = (type, text) => JSON.stringify({ type, part: { type, text } })
+  const whole = row('reasoning', 'мысль')
+  const cut = row('reasoning', 'м'.repeat(99)).slice(0, -20)
+  assert.deepEqual(longestReasoningRow([whole, cut].join('\n')), {
+    bytes: Buffer.byteLength(cut),
+    cut: true,
+  })
+  // A cut row shorter than a whole one does not hide the longest, and is still reported.
+  const short = row('reasoning', 'м').slice(0, -5)
+  assert.deepEqual(longestReasoningRow([whole, short].join('\n')), {
+    bytes: Buffer.byteLength(whole),
+    cut: true,
+  })
+  // A row of another kind cut off the same way is not a row of reasoning.
+  assert.deepEqual(longestReasoningRow(row('text', 'я'.repeat(99)).slice(0, -5)), {
+    bytes: 0,
+    cut: false,
+  })
 })

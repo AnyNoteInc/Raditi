@@ -359,12 +359,9 @@ export async function addLongChat(
     const workspace = await prisma.$transaction((tx) =>
       ensurePersonalWorkspaceWithGift(tx, { userId, appEnv: authEnv.APP_ENV }),
     )
-    // The lease of a chat without a project takes its id, of version 7 only (`tasks_chat_id_check`).
-    const time = Date.now().toString(16).padStart(12, '0')
-    const random = randomUUID()
     const task = await prisma.task.create({
       data: {
-        id: `${time.slice(0, 8)}-${time.slice(8)}-7${random.slice(15)}`,
+        id: chatId(),
         workspaceId: workspace.id,
         siteId: null,
         createdById: userId,
@@ -384,6 +381,101 @@ export async function addLongChat(
       site: 'none',
     })
     return { taskId: task.id, title }
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+/** The lease of a chat without a project takes its id, of version 7 only (`tasks_chat_id_check`). */
+function chatId(): string {
+  const time = Date.now().toString(16).padStart(12, '0')
+  return `${time.slice(0, 8)}-${time.slice(8)}-7${randomUUID().slice(15)}`
+}
+
+/**
+ * A chat without a project as a finished turn leaves it, for what the page does with that turn
+ * (docs/plan/61-chats-first.md, §5.14): the client's words, the stages of the turn and what the
+ * model thought in its journal, the answer, and the chat open. No core runs here: `/undo` of this
+ * chat is `task.undoTurn` in web, and `/thinking` reads the journal. Everything goes with the user.
+ */
+export async function addAnsweredChat(
+  userId: string,
+  { words, answer, thought }: { words: string; answer: string; thought: string },
+): Promise<{ taskId: string }> {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    const workspace = await prisma.$transaction((tx) =>
+      ensurePersonalWorkspaceWithGift(tx, { userId, appEnv: authEnv.APP_ENV }),
+    )
+    const task = await prisma.task.create({
+      data: {
+        id: chatId(),
+        workspaceId: workspace.id,
+        siteId: null,
+        createdById: userId,
+        status: 'awaiting_user',
+        title: words,
+        turnNo: 1,
+        needsRepository: false,
+        needsBrowser: false,
+      },
+      select: { id: true },
+    })
+    const request = await insertFeedEvent(prisma, {
+      taskId: task.id,
+      row: {
+        type: 'feed.request',
+        payload: { v: 1, kind: 'first', authorId: userId, requestId: randomUUID(), text: words },
+      },
+    })
+    // The turn answers these words: it started after them, by the clock that wrote them.
+    const { createdAt } = await prisma.taskEvent.findUniqueOrThrow({
+      where: { id: request },
+      select: { createdAt: true },
+    })
+    const startedAt = new Date(createdAt.getTime() + 1)
+    const turn = await prisma.taskTurn.create({
+      data: {
+        taskId: task.id,
+        turnNo: 1,
+        status: 'completed',
+        driverId: 'opencode',
+        image: `raditi/sbx@sha256:${'a'.repeat(64)}`,
+        startedAt,
+        finishedAt: startedAt,
+      },
+      select: { id: true },
+    })
+    await prisma.taskEvent.create({
+      data: {
+        taskId: task.id,
+        turnId: turn.id,
+        type: 'turn.output',
+        payload: { turn: 1, events: [{ type: 'reasoning', text: thought }] },
+      },
+    })
+    await insertFeedEvent(prisma, {
+      taskId: task.id,
+      row: { type: 'feed.step', payload: { v: 1, turn: 1, attempt: 1, step: 'work' } },
+    })
+    await insertFeedEvent(prisma, {
+      taskId: task.id,
+      row: {
+        type: 'feed.result',
+        payload: {
+          v: 1,
+          turn: 1,
+          message: answer,
+          site: 'none',
+          next: 'awaiting_user',
+          filesChanged: 0,
+          changeType: 'none',
+          needsApproval: false,
+          risk: 'low',
+        },
+      },
+    })
+    return { taskId: task.id }
   } finally {
     await prisma.$disconnect()
   }

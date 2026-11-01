@@ -437,3 +437,69 @@ test('accepts only the two turns of the stand, with rotated credentials', async 
   await fixture.close()
   assert.throws(() => fixture.addTurn(turn(2)), { message: 'Unexpected fixture turn' })
 })
+
+const WORDS = { first: 'first-words', undone: 'undone-words', next: 'next-words' }
+const ANSWERS = { first: 'first-answer', undone: 'undone-answer', next: 'next-answer' }
+/** The three turns of the stand's chat without a repository, as `verify-runner.mjs` asks them. */
+const rewind = (number) => {
+  const name = ['first', 'undone', 'next'][number - 1]
+  const earlier = number === 1 ? [] : [WORDS.first, ANSWERS.first]
+  return {
+    ...turn(number),
+    turn: number,
+    llmKey: `synthetic-llm-rewind-${number}`,
+    mcpKey: `synthetic-mcp-rewind-${number}`,
+    prompt: WORDS[name],
+    answer: ANSWERS[name],
+    remembered: earlier,
+    forgotten: number === 3 ? [WORDS.undone, ANSWERS.undone] : [],
+  }
+}
+const rewindBody = (number, history) => {
+  const value = bodyFor(number)
+  value.messages = [
+    value.messages[0],
+    ...history,
+    { role: 'user', content: `Client request:\n${rewind(number).prompt}` },
+  ]
+  return value
+}
+const said = (text) => ({ role: 'assistant', content: text })
+const first = [{ role: 'user', content: `Client request:\n${WORDS.first}` }, said(ANSWERS.first)]
+
+test('a turn after an undone one is answered only from the session of the turn before', async (t) => {
+  const fixture = await open(t)
+  for (const number of [1, 2, 3]) fixture.addRewindTurn(rewind(number))
+  const ask = async (number, history) => {
+    const response = await send(fixture, PATH, rewind(number).llmKey, rewindBody(number, history))
+    assert.equal(response.status, 200, response.text)
+    return response.text
+  }
+  assert.match(await ask(1, []), new RegExp(ANSWERS.first))
+  assert.match(await ask(2, first), new RegExp(ANSWERS.undone))
+  assert.match(await ask(3, first), new RegExp(ANSWERS.next))
+  fixture.assertRewindComplete()
+})
+
+test('refuses a session that kept the undone turn or lost the turn before it', async (t) => {
+  const fixture = await open(t)
+  for (const number of [2, 3]) fixture.addRewindTurn(rewind(number))
+  const lost = await send(fixture, PATH, rewind(2).llmKey, rewindBody(2, []))
+  assert.equal(lost.status, 400)
+  const kept = [...first, { role: 'user', content: WORDS.undone }, said(ANSWERS.undone)]
+  const swapped = await send(fixture, PATH, rewind(3).llmKey, rewindBody(3, kept))
+  assert.equal(swapped.status, 400)
+  assert.deepEqual(fixture.observations().problems, [
+    'The restored session lost words of an earlier turn',
+    'The words of an undone turn reached the provider',
+  ])
+  assert.throws(() => fixture.assertRewindComplete(), /failed requests/)
+})
+
+test('a chat without a repository is no turn of the two the stand requires', async (t) => {
+  const fixture = await open(t)
+  fixture.addRewindTurn(rewind(1))
+  assert.throws(() => fixture.addRewindTurn(rewind(1)), /Unexpected rewind turn/)
+  assert.throws(() => fixture.assertComplete(), /two registered turns/)
+  assert.throws(() => fixture.assertRewindComplete(), /three turns/)
+})

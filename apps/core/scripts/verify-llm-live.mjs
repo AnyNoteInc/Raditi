@@ -29,6 +29,7 @@ import {
   failureLine,
   LIVE_LIMITS,
   LiveRefusal,
+  longestReasoningRow,
   STREAM_FORMS,
   streamSummary,
   sumUsage,
@@ -478,6 +479,7 @@ export async function runLiveGateway(mode) {
         ms,
         events,
         lines: result.lines,
+        longestReasoningRow: longestReasoningRow(result.stdout),
         nativeSessionId: events.find((event) => event.type === 'started')?.nativeSessionId,
         result: reading.result,
         reading,
@@ -560,14 +562,23 @@ export async function runLiveGateway(mode) {
       const formsNote = forms.length ? `; forms ${forms.join(' ')}` : ''
       // The text of the reasoning the provider sent, not only the count of its tokens, and what
       // `/thinking` has to show of it, the rows of the CLI: a form the CLI makes no row of shows
-      // here as characters beside no rows.
+      // here as characters beside no rows. The longest row says how near a real turn comes to
+      // the size where the CLI loses its stdout (docs/plan/61-chats-first.md, §10, 61.20).
       const thought = streams.filter((stream) => stream.reasoningChars > 0)
       const reasoningChars = thought.reduce((sum, stream) => sum + stream.reasoningChars, 0)
       const reasoningRows = outcome.events.filter((event) => event.type === 'reasoning').length
-      if (rehearsal)
+      if (rehearsal) {
         assert.equal(reasoningRows, thought.length, `${label}: the rows of reasoning of the CLI`)
+        const { bytes, cut } = outcome.longestReasoningRow
+        assert.equal(
+          bytes > 0,
+          reasoningRows > 0 || cut,
+          `${label}: the length of the longest row of reasoning`,
+        )
+      }
+      const { bytes: longestRow, cut: rowCut } = outcome.longestReasoningRow
       report(
-        `${label}: exit ${outcome.code}, ${Math.round(outcome.ms / 1000)} s, provider requests ${outcome.requests}, calls ${rows.length} (failed ${failed.length}), tokens in ${fromRole.inputUncached} cached ${fromRole.cacheRead} out ${fromRole.output} reasoning ${fromRole.reasoning}; reasoning text ${reasoningChars} chars in ${thought.length} answers, ${reasoningRows} rows of the CLI; answers ${answers}; finish ${streams.map((stream) => stream.finishReasons.at(-1) ?? '-').join(' ')}; usage in the finish chunk ${atFinish} of ${metered.length}${formsNote}`,
+        `${label}: exit ${outcome.code}, ${Math.round(outcome.ms / 1000)} s, provider requests ${outcome.requests}, calls ${rows.length} (failed ${failed.length}), tokens in ${fromRole.inputUncached} cached ${fromRole.cacheRead} out ${fromRole.output} reasoning ${fromRole.reasoning}; reasoning text ${reasoningChars} chars in ${thought.length} answers, ${reasoningRows} rows of the CLI, the longest ${longestRow} bytes${rowCut ? ', a row cut off' : ''}; answers ${answers}; finish ${streams.map((stream) => stream.finishReasons.at(-1) ?? '-').join(' ')}; usage in the finish chunk ${atFinish} of ${metered.length}${formsNote}`,
       )
       return { rows, completed, failed, usage: fromRole }
     }

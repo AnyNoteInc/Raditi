@@ -233,9 +233,12 @@ const credentialPolicy = {
   ttlMs: 20 * 60_000,
   budgetRub: '100.00',
 }
-// Only the turns of this verification's site: never other unfinished rows of the dev database.
+// Only the turns of this verification's workspace: never other unfinished rows of the dev database.
+// Not by the fence: a chat without a project is fenced by its own id, which no site row names.
 const unfinished = async (filter) =>
-  (await assignments.unfinished(filter)).filter((row) => row.fence.siteId === config.siteId)
+  (await assignments.unfinished(filter)).filter(
+    (row) => row.plan.sandbox.labels.workspaceId === config.workspaceId,
+  )
 const recovery = new TurnExecRecovery({
   leases,
   // Every other method runs on the store itself: it keeps private state.
