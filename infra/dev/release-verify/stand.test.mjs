@@ -428,7 +428,7 @@ test('a request of the cabinet calls the procedures its tRPC path names, a batch
     'preview.ticket',
   ])
   // A page, its data, the preview — no procedure; nor a URL that is none.
-  assert.deepEqual(trpcProcedures(`${web}/projects/a/chat/b?_rsc=1`), [])
+  assert.deepEqual(trpcProcedures(`${web}/chats/b?_rsc=1`), [])
   assert.deepEqual(trpcProcedures(`${web}/api/trpc`), [])
   assert.deepEqual(trpcProcedures('http://site-a-chat-b.localhost:41002/'), [])
   assert.deepEqual(trpcProcedures('not a url'), [])

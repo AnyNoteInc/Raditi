@@ -2165,6 +2165,17 @@ export async function runScenarios(stand) {
     'core destroyed the preview of every closed dialog and the sandbox of every turn: Docker holds no container, network or volume with the labels of the site (io.raditi.preview.site, io.raditi.sandbox.siteId, io.raditi.gateway.siteId)',
     leftOfSite,
   )
+  // No BROWSER_WORKER_URL here: the project works with the code alone and the matrix of §1 of
+  // docs/plan/61-chats-first.md gives its chats no browser. `needsBrowser` is what that decided;
+  // no session is what the configuration of the stand makes true, whatever a turn does. That a
+  // turn without `web_*` starts no browser where one is configured is told by `verify:browser-task`.
+  const inBrowser = await db.task.count({ where: { needsBrowser: true } })
+  const sessions = await db.browserSession.count()
+  rt.check(
+    inBrowser === 0 && sessions === 0,
+    'S1–S10 opened no browser: no chat needs one, not one browser session was written',
+    { inBrowser, sessions },
+  )
   rt.end()
 }
 
@@ -2317,7 +2328,7 @@ async function browserOfCabinet(stand, dialog, visit) {
   const { rt } = stand
   const { browser, page, calls } = await cabinetPage(stand)
   try {
-    await page.goto(`${stand.webUrl}/projects/${stand.siteId}/chat/${dialog.taskId}`, {
+    await page.goto(`${stand.webUrl}/chats/${dialog.taskId}`, {
       waitUntil: 'domcontentloaded',
     })
     const plus = page.getByRole('button', { name: TOOLS.plus })
@@ -2398,7 +2409,7 @@ async function retryInCabinet(stand, dialog) {
   const { rt } = stand
   const { browser, page } = await cabinetPage(stand)
   try {
-    await page.goto(`${stand.webUrl}/projects/${stand.siteId}/chat/${dialog.taskId}`, {
+    await page.goto(`${stand.webUrl}/chats/${dialog.taskId}`, {
       waitUntil: 'domcontentloaded',
     })
     const button = page.getByRole('button', { name: 'Попробовать ещё' })
@@ -2446,7 +2457,7 @@ async function retryInCabinet(stand, dialog) {
 async function databasePanelText(stand, dialog) {
   const { browser, page } = await cabinetPage(stand)
   try {
-    await page.goto(`${stand.webUrl}/projects/${stand.siteId}/chat/${dialog.taskId}`, {
+    await page.goto(`${stand.webUrl}/chats/${dialog.taskId}`, {
       waitUntil: 'domcontentloaded',
     })
     // The head of the dialog draws «+» once the first answer of its feed is in.

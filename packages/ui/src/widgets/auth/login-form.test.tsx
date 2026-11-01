@@ -103,7 +103,7 @@ describe('LoginForm', () => {
   })
 
   it('links to registration, password recovery and the home page', () => {
-    renderForm({ notice: 'Адрес подтверждён. Войдите, чтобы открыть проекты' })
+    renderForm({ notice: 'Адрес подтверждён. Войдите, чтобы открыть чаты' })
 
     expect(screen.getByRole('status')).toHaveTextContent('Адрес подтверждён')
     expect(screen.getByRole('link', { name: 'Зарегистрироваться' })).toHaveAttribute(

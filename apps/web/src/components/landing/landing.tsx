@@ -480,8 +480,8 @@ export function Landing({ pricing, viewer }: { pricing: ReactNode; viewer: Landi
             </span>
           </Link>
           <p>Ваш сайт в&nbsp;заботливых руках.</p>
-          <Link href={isGuest ? '/sign-in' : '/projects'}>
-            {isGuest ? 'Войти' : 'Открыть проекты'} <LandingIcon name="arrow-up-right" {...arrow} />
+          <Link href={isGuest ? '/sign-in' : '/chats'}>
+            {isGuest ? 'Войти' : 'Открыть чаты'} <LandingIcon name="arrow-up-right" {...arrow} />
           </Link>
         </div>
         <nav aria-label="Юридические документы" className={styles.legalLinks}>

@@ -82,7 +82,7 @@ export const gatewayPages = {
       frameAncestors: context.appOrigin,
       title: 'Предпросмотр не найден',
       text: 'Такого адреса нет или предпросмотр уже удалён. Откройте предпросмотр из диалога в кабинете.',
-      link: { href: `${context.appOrigin}/projects`, label: 'Перейти в кабинет' },
+      link: { href: `${context.appOrigin}/chats`, label: 'Перейти в кабинет' },
     }),
 
   /** pending or building: the page asks again by itself. */

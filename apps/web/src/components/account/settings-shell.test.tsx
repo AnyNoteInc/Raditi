@@ -56,12 +56,12 @@ afterEach(() => {
 })
 
 describe('settings shell navigation', () => {
-  it('lists the way back to the projects and the sections that are switched on', () => {
+  it('lists the way back to the chats and the sections that are switched on', () => {
     showShell()
 
     const links = within(sections()).getAllByRole('link')
     expect(links.map((link) => [link.textContent, link.getAttribute('href')])).toEqual([
-      ['К проектам', '/projects'],
+      ['К чатам', '/chats'],
       ['Общее', '/settings'],
       ['Тарифы', '/settings/plans'],
     ])
@@ -157,7 +157,7 @@ describe('settings shell sidebar', () => {
       'false',
     )
     expect(screen.getByRole('link', { name: 'Радити — главная страница' })).toBeVisible()
-    expect(screen.getByRole('link', { name: 'К проектам' })).toHaveAttribute('href', '/projects')
+    expect(screen.getByRole('link', { name: 'К чатам' })).toHaveAttribute('href', '/chats')
     expect(screen.getByRole('link', { name: 'Общее' })).toHaveAttribute('aria-current', 'page')
     expect(screen.getByRole('link', { name: 'Тарифы' })).toHaveAttribute('href', '/settings/plans')
 
@@ -245,7 +245,7 @@ describe('settings shell keyboard access', () => {
     ).toEqual([
       'Перейти к содержимому',
       'Радити — главная страница',
-      'К проектам',
+      'К чатам',
       'Общее',
       'Тарифы',
       'Меню пользователя: Анна Иванова, anna@example.ru',

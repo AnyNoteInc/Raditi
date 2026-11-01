@@ -31,7 +31,6 @@ import {
 } from './stand.mjs'
 import { jpegLooksPainted, openViewer, streamOperator, streamTools } from './stream.mjs'
 
-const BROWSER_ONLY = Object.freeze({ repository: false, browser: true })
 const ENDED = new Set(['done', 'failed', 'cancelled', 'rolled_back'])
 
 // ─── Small readers ────────────────────────────────────────────────────────────
@@ -121,7 +120,6 @@ async function newBrowserTask(
     siteId: stand.state.siteId,
     taskId,
     text,
-    requirements: BROWSER_ONLY,
     ...(attachments.length > 0 ? { attachments } : {}),
   })
   if (created.taskId !== taskId || !created.created)
@@ -443,17 +441,24 @@ async function scenarioA(stand) {
   )
 
   // The task: the owner's words, the three files; and the refusal of the other client's file.
+  const refusedTask = stand.modules.ids.uuidv7()
   const withForeign = await state.owner.call('mutation', 'task.create', {
     siteId: state.siteId,
-    taskId: stand.modules.ids.uuidv7(),
+    taskId: refusedTask,
     text: 'Добавьте новость с картинкой.',
-    requirements: BROWSER_ONLY,
     attachments: [state.foreignAttachment],
   })
+  const written = {
+    tasks: await db.task.count({ where: { id: refusedTask } }),
+    holds: await db.creditHold.count({ where: { taskId: refusedTask } }),
+  }
   rt.check(
-    !withForeign.ok,
-    "task.create with another client's file is refused, nothing is written",
-    withForeign,
+    !withForeign.ok &&
+      withForeign.domainCode === 'ATTACHMENT_NOT_READY' &&
+      written.tasks === 0 &&
+      written.holds === 0,
+    "task.create with another client's file is refused (ATTACHMENT_NOT_READY), no task and no hold is written",
+    { withForeign, written },
   )
   rt.end()
 }
@@ -610,11 +615,11 @@ async function slowBrowserStart(stand) {
   await closeDialog(stand, taskId)
 }
 
-/** What the client writes in «Новый диалог» of the cabinet in scenario D. */
+/** What the client writes in «Новый чат» of the cabinet in scenario D. */
 const WATCHED_WORDS = 'Проверьте, открывается ли список записей в админке.'
 
 /**
- * A dialog the client starts in «Новый диалог» of the cabinet and watches from its start
+ * A chat the client starts in «Новый чат» of the cabinet and watches from its start
  * (docs/plan/59-dialog-tools-panel.md, И2, И3): its browser opens beside it by itself once, when
  * it starts — the start of the dialog speaks for its first answers, so it does not matter whether
  * the page read the feed before the session was ready or after —, and the focus stays where it
@@ -632,7 +637,7 @@ async function panelOpensOnLaunch(stand) {
     const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
     rt.check(
       task.siteId === state.siteId && task.needsBrowser === true && task.needsRepository === false,
-      '«Новый диалог» in the cabinet: the page started a dialog in the browser (task.create with the id it invented: needs_browser, no repository) and moved to it',
+      '«Новый чат» of the project in the cabinet: the page started a chat in the browser (task.create with the id it invented, the server read needs_browser and no repository from the project) and moved to it',
       { needsBrowser: task.needsBrowser, needsRepository: task.needsRepository },
     )
     // Nothing is pressed from here on: the panel opens by itself, or not at all.

@@ -123,6 +123,7 @@ describe('/preview/open', () => {
     const text = await notReady.text()
     expect(text).toContain('Предпросмотр готовится')
     expect(text).toContain('http-equiv="refresh"')
+    expect(text).toContain('<a href="/chats">К чатам</a>')
 
     // Pending or building: openPreview refuses `/preview` as not ready — the same page, which
     // keeps asking until the preview serves.

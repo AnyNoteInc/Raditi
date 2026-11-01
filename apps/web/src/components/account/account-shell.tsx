@@ -64,9 +64,9 @@ export function AccountShell({ user, children }: { user: ApplicationUser; childr
           </Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 1, sm: 2 } }}>
             <Button
-              href="/projects"
+              href="/chats"
               color="inherit"
-              aria-label="К проектам"
+              aria-label="К чатам"
               startIcon={<AppIcon name="back" size={18} />}
               sx={{
                 minWidth: { xs: 44, sm: 'auto' },
@@ -76,7 +76,7 @@ export function AccountShell({ user, children }: { user: ApplicationUser; childr
               }}
             >
               <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
-                К проектам
+                К чатам
               </Box>
             </Button>
             <UserMenu user={user} />

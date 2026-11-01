@@ -1,4 +1,4 @@
-// The cabinet in a real Chromium (Playwright of the build copy): «Новый диалог», the dialog page of
+// The cabinet in a real Chromium (Playwright of the build copy): «Новый чат», the dialog page of
 // a task in the browser as the client opens it — the chat alone, its tools behind «+»
 // (docs/plan/59-dialog-tools-panel.md, И1) —, the panel of its browser with the canvas of the
 // stream, «Взять управление», the keyboard of the client going into the page through the pane's
@@ -33,9 +33,12 @@ const TEXT = Object.freeze({
   panel: 'Инструменты диалога',
   browserTab: 'Браузер',
   hide: 'Скрыть панель',
-  /** The field of «Новый диалог» and its button. */
+  /** The field of «Новый чат» and its button. */
   field: 'Сообщение',
   send: 'Отправить',
+  /** The pill at the field: «Проект для этого чата: <name of the project chosen>» (К6). */
+  project: /^Проект для этого чата: /,
+  noProject: 'Без проекта',
   /** The rows of the dialog: the card of the browser's request is one of them. */
   feed: 'Сообщения диалога',
 })
@@ -51,8 +54,8 @@ const PANEL_SELECTOR = `aside[aria-label="${TEXT.panel}"]`
  */
 const VIEWPORT = Object.freeze({ width: 1440, height: 1000 })
 
-/** The address of a dialog: its id, as the page of «Новый диалог» invented it. */
-const DIALOG_PATH = /\/chat\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/
+/** The address of a chat: its id, as the page of «Новый чат» invented it. */
+const DIALOG_PATH = /^\/chats\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/
 
 /** Whether the web of the copy has the browser pane of the dialog page (slice S9b). */
 export async function cabinetAvailable(stand) {
@@ -89,7 +92,7 @@ export async function cabinetBrowser(stand, client) {
       await tab.showBrowser()
       return tab
     },
-    /** «Новый диалог»: the client writes `words` and sends them; the page moves to the dialog. */
+    /** «Новый чат»: the client writes `words` and sends them; the page moves to the chat. */
     start: (words) => startDialog(stand, context, words),
     close: () => browser.close(),
   }
@@ -265,7 +268,7 @@ async function newTab(stand, context) {
 async function loadTab(stand, context, taskId) {
   const tab = await newTab(stand, context)
   tab.taskId = taskId
-  await tab.page.goto(`${stand.webUrl}/projects/${stand.state.siteId}/chat/${taskId}`, {
+  await tab.page.goto(`${stand.webUrl}/chats/${taskId}`, {
     waitUntil: 'domcontentloaded',
     timeout: 180_000,
   })
@@ -275,23 +278,36 @@ async function loadTab(stand, context, taskId) {
 }
 
 /**
- * «Новый диалог» in a new tab: the client writes `words` and sends them; the page starts the
- * dialog itself (`task.create` with the id it invented) and moves to it, watching it from before
- * its browser was there (И3). What the tab counts starts with the screen of «Новый диалог».
+ * «Новый чат» of the stand's project in a new tab, as a link with `?project=` opens it: the client
+ * writes `words` and sends them; the page starts the chat itself (`task.create` with the id it
+ * invented) and moves to it, watching it from before its browser was there (И3). What the tab
+ * counts starts with the screen of «Новый чат».
  */
 async function startDialog(stand, context, words) {
   const tab = await newTab(stand, context)
   const { page } = tab
-  await page.goto(`${stand.webUrl}/projects/${stand.state.siteId}/chat/new`, {
+  await page.goto(`${stand.webUrl}/chats/new?project=${stand.state.siteId}`, {
     waitUntil: 'domcontentloaded',
     timeout: 180_000,
   })
+  // The pill speaks once the list of projects is in; words sent before that start a chat without
+  // a project, and nothing closes sending there (К6).
+  await stand.rt.until(
+    'the pill at the field to name the project of the address',
+    async () => {
+      const name = await page
+        .getByRole('button', { name: TEXT.project })
+        .getAttribute('aria-label', { timeout: 10_000 })
+      return name !== null && !name.endsWith(`: ${TEXT.noProject}`)
+    },
+    { timeoutMs: 120_000, intervalMs: 500 },
+  )
   // The screen comes drawn by the server: words written before React took the field over may be
   // lost, and «Отправить» stays closed until the field holds them — written again until it opens.
   const field = page.getByRole('textbox', { name: TEXT.field, exact: true })
   const send = page.getByRole('button', { name: TEXT.send, exact: true })
   await stand.rt.until(
-    'the field of «Новый диалог» to take the words',
+    'the field of «Новый чат» to take the words',
     async () => {
       await field.fill(words, { timeout: 10_000 })
       return send.isEnabled()

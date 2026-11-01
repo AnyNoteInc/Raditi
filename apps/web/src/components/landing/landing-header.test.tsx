@@ -32,7 +32,7 @@ describe('landing account navigation', () => {
     )
   })
 
-  it('keeps only the account avatar in the authenticated header and puts projects in its menu', () => {
+  it('keeps only the account avatar in the authenticated header and puts chats and projects in its menu', () => {
     render(<LandingHeader viewer={member} />)
 
     const account = screen.getByRole('button', { name: 'Меню пользователя' })
@@ -40,10 +40,10 @@ describe('landing account navigation', () => {
     expect(account.querySelector('svg')).toBeNull()
     expect(screen.queryByText('Анна')).not.toBeInTheDocument()
     expect(screen.queryByText('Анна Иванова')).not.toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: 'Проекты' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Чаты' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Войти' })).not.toBeInTheDocument()
     const mobile = openMenu()
-    expect(within(mobile).queryByRole('link', { name: 'Открыть проекты' })).not.toBeInTheDocument()
+    expect(within(mobile).queryByRole('link', { name: 'Открыть чаты' })).not.toBeInTheDocument()
     expect(within(mobile).getAllByRole('link')).toHaveLength(4)
     // Neither in the open mobile menu nor in the header itself.
     expect(screen.queryByRole('link', { name: 'Зарегистрироваться' })).not.toBeInTheDocument()
@@ -77,14 +77,14 @@ describe('landing account navigation', () => {
 
     expect(screen.queryByRole('link', { name: 'Войти' })).not.toBeInTheDocument()
     // The name is the label on the screen: a voice command says what it sees.
-    const projects = screen.getByRole('link', { name: 'Проекты' })
-    expect(projects).toHaveAttribute('href', '/projects')
-    expect(projects).not.toHaveAttribute('aria-label')
+    const chats = screen.getByRole('link', { name: 'Чаты' })
+    expect(chats).toHaveAttribute('href', '/chats')
+    expect(chats).not.toHaveAttribute('aria-label')
     expect(screen.queryByRole('button', { name: 'Меню пользователя' })).not.toBeInTheDocument()
     const mobile = openMenu()
-    expect(within(mobile).getByRole('link', { name: 'Открыть проекты' })).toHaveAttribute(
+    expect(within(mobile).getByRole('link', { name: 'Открыть чаты' })).toHaveAttribute(
       'href',
-      '/projects',
+      '/chats',
     )
     // Neither in the open mobile menu nor in the header itself.
     expect(screen.queryByRole('link', { name: 'Зарегистрироваться' })).not.toBeInTheDocument()

@@ -54,7 +54,7 @@ ${refresh}<title>${escapeHtml(title)}</title><style>
 body{margin:0;font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#1f2328;background:#fff}
 main{max-width:36rem;margin:0 auto;padding:96px 24px}h1{font-size:28px;margin:0 0 12px}a{color:#0b57d0}
 @media (prefers-color-scheme:dark){body{color:#e6edf3;background:#0d1117}a{color:#79b8ff}}</style></head>
-<body><main><h1>${escapeHtml(title)}</h1><p>${escapeHtml(text)}</p><p><a href="/projects">К проектам</a></p></main></body></html>`
+<body><main><h1>${escapeHtml(title)}</h1><p>${escapeHtml(text)}</p><p><a href="/chats">К чатам</a></p></main></body></html>`
   return new Response(html, {
     status,
     headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
