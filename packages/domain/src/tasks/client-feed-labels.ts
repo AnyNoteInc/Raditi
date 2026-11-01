@@ -772,6 +772,20 @@ export const feedBrowserQuestionText: Readonly<Record<FeedBrowserReason, string>
     'Агент закончил, но мы не нашли на сайте сохранённого результата. Проверьте сайт в браузере задачи и напишите агенту, что сделать дальше.',
 })
 
+/**
+ * A chat without a project has no admin pages of a site to sign in to (docs/plan/61-chats-first.md,
+ * К18). `unconfirmed` is an old row's: nothing writes that reason now, and a chat without a project
+ * has no such rows. The other reasons name no site of the client's.
+ */
+const feedBrowserQuestionNoSiteText: Partial<Readonly<Record<FeedBrowserReason, string>>> =
+  Object.freeze({
+    login: `Агенту нужно, чтобы вы вошли на сайт в браузере задачи. Войдите там и нажмите ${RESUME}. Пароль агент не увидит.`,
+  })
+
+/** The words of a browser question, in a chat with a site or without one. */
+export const feedBrowserQuestionTextOf = (reason: FeedBrowserReason, withSite: boolean): string =>
+  (withSite ? undefined : feedBrowserQuestionNoSiteText[reason]) ?? feedBrowserQuestionText[reason]
+
 /** An object of the site in a result, a failure or a cancellation, by its kind. */
 export const feedObjectKindLabel: Readonly<Record<FeedObjectKind, string>> = Object.freeze({
   post: 'Запись',

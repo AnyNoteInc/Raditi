@@ -24,6 +24,7 @@ import {
   feedApprovalSiteText,
   feedBrowserButtons,
   feedBrowserQuestionText,
+  feedBrowserQuestionTextOf,
   feedBrowserQuestionTitle,
   feedObjectKindLabel,
   feedObjectStatusLabel,
@@ -666,6 +667,16 @@ describe('a task in the browser', () => {
     })
     for (const reason of ['login', 'captcha', 'confirm', 'other', 'control'] as const)
       expect(feedBrowserQuestionText[reason]).toContain('«Продолжить работу агента»')
+  })
+
+  it('asks a chat without a project to sign in to a site, not to the admin pages of one', () => {
+    expect(feedBrowserQuestionTextOf('login', false)).toBe(
+      'Агенту нужно, чтобы вы вошли на сайт в браузере задачи. Войдите там и нажмите «Продолжить работу агента». Пароль агент не увидит.',
+    )
+    for (const reason of feedBrowserReasons)
+      expect(feedBrowserQuestionTextOf(reason, true)).toBe(feedBrowserQuestionText[reason])
+    for (const reason of feedBrowserReasons.filter((reason) => reason !== 'login'))
+      expect(feedBrowserQuestionTextOf(reason, false)).toBe(feedBrowserQuestionText[reason])
   })
 
   it('promises nothing about the site it did not read there', () => {

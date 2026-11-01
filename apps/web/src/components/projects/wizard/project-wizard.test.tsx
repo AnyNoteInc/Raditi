@@ -212,6 +212,8 @@ describe('the access to the files', () => {
     expect(sourceCalls()[1]).toMatchObject({ source: { hostKey: KEY } })
     // The step that adds the project says the accesses become variables of the site.
     expect(screen.getByText(VARIABLES_NOTE)).toBeVisible()
+    // An access stops at a chat that has the browser as well (docs/plan/61-chats-first.md, К21).
+    expect(VARIABLES_NOTE).toContain('только в чате без браузера')
   })
 
   it('takes a changed key only by its own explicit button', async () => {

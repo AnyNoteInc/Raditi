@@ -10,7 +10,7 @@ import { feedFailureTextOf } from '@repo/domain/tasks/client-feed-failures'
 import {
   feedApprovalSiteText,
   feedBrowserButtons,
-  feedBrowserQuestionText,
+  feedBrowserQuestionTextOf,
   feedBrowserQuestionTitle,
   feedCancelledSentence,
   feedCandidateText,
@@ -488,10 +488,12 @@ function ceilingButtons(
 function QuestionCard({
   row,
   open,
+  withSite,
   actions,
 }: {
   row: QuestionRow
   open: boolean
+  withSite: boolean
   actions: FeedActions
 }) {
   if (row.kind === 'ceiling') {
@@ -506,7 +508,8 @@ function QuestionCard({
       </Card>
     )
   }
-  if (row.kind === 'browser') return <BrowserQuestionCard row={row} open={open} actions={actions} />
+  if (row.kind === 'browser')
+    return <BrowserQuestionCard row={row} open={open} withSite={withSite} actions={actions} />
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
       <Card
@@ -545,10 +548,12 @@ function QuestionCard({
 function BrowserQuestionCard({
   row,
   open,
+  withSite,
   actions,
 }: {
   row: Extract<QuestionRow, { kind: 'browser' }>
   open: boolean
+  withSite: boolean
   actions: FeedActions
 }) {
   const help = row.reason !== 'unconfirmed'
@@ -589,7 +594,7 @@ function BrowserQuestionCard({
         tone={open ? 'primary.main' : 'text.primary'}
         actions={button ?? undefined}
       >
-        <Paragraph>{nbsp(feedBrowserQuestionText[row.reason])}</Paragraph>
+        <Paragraph>{nbsp(feedBrowserQuestionTextOf(row.reason, withSite))}</Paragraph>
         {row.message ? <Paragraph>{row.message}</Paragraph> : null}
       </Card>
       {open && row.reason === 'login' ? (
@@ -843,7 +848,14 @@ function RowView({
       }
       return null
     case 'feed.question':
-      return <QuestionCard row={row} open={row.id === openQuestionId} actions={actions} />
+      return (
+        <QuestionCard
+          row={row}
+          open={row.id === openQuestionId}
+          withSite={siteUrl !== null}
+          actions={actions}
+        />
+      )
     case 'feed.result': {
       const approval = row.next === 'awaiting_approval'
       // A pass that changed nothing left the dialog open for the next words (26.10.2026).

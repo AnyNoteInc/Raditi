@@ -66,7 +66,7 @@ const steps: readonly { title: string; note: string }[] = [
  * that adds the project, where the user gives the last of them.
  */
 export const VARIABLES_NOTE =
-  'Доступы к файлам и базе данных мы сохраним и как переменные сайта: их получат команды агента и предпросмотр. Это можно отключить в разделе «Переменные».'
+  'Доступы к файлам и базе данных мы сохраним и как переменные сайта: их получат команды агента и предпросмотр только в чате без браузера. Это можно отключить в разделе «Переменные».'
 
 /** «Доступ к файлам» where the wizard also offers the browser alone (docs/plan/57, Б8). */
 const SOURCE_NOTE_WITH_BROWSER =

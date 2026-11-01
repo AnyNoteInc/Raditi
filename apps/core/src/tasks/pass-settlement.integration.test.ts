@@ -1606,6 +1606,25 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
         ])
     })
 
+    it('leaves a chat held for recovery open, with its credits back', async () => {
+      const task = await chat()
+
+      await open().settle(ref(task), { kind: 'failed', turn: 1, errorCode: 'SITE_HELD' })
+
+      expect(await status(task.taskId)).toBe('awaiting_user')
+      expect((await feed(task.taskId))[0]).toEqual([
+        'feed.failure',
+        {
+          v: 1,
+          turn: 1,
+          code: 'site_held',
+          site: 'none',
+          credits: 'returned',
+          next: 'awaiting_user',
+        },
+      ])
+    })
+
     // `wrote_at` is set by any click, so only a failure and a cancellation speak of it.
     it('names other sites once something was done in its browser, never in an answer', async () => {
       const failing = await chat({ browser: true, wrote: true })

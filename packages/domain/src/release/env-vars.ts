@@ -253,21 +253,28 @@ const accessVariableFields: Readonly<Record<string, readonly (readonly [string, 
 export const siteAccessVariableNames = (accessKind: string): string[] =>
   (accessVariableFields[accessKind] ?? []).map(([, name]) => name)
 
-/** The accesses to the hosting of a site: what writes its files past every release. */
-const HOSTING_ACCESS_KINDS = ['ftp', 'ssh'] as const
+/**
+ * Whether the name is one an access of the wizard becomes, of any kind (files, database, git).
+ * A variable the client named so himself counts too: the value reaches as far as the name says.
+ */
+export const isSiteAccessVariable = (name: string): boolean =>
+  Object.values(accessVariableFields).some((fields) =>
+    fields.some(([, variable]) => variable === name),
+  )
 
 /**
  * Whether a task gets this variable at all, before the client's consent is read. A task on the
  * live site in the browser gets none (docs/plan/57, Б20): nothing refuses a value written there.
- * A chat with the code and the browser (docs/plan/61-chats-first.md, К21) gets all of them but the
- * accesses to the hosting, whole, by the names above: with them its commands could write the
- * live site past the release. The same answer for the commands of the agent and for the preview,
- * which runs the agent's code.
+ * A chat with the code and the browser (docs/plan/61-chats-first.md, К21 and §10, 61.11k) gets all
+ * of them but the accesses of the wizard, whole: with the files or the database its commands
+ * would write the live site past the release — a preview runs the agent's PHP on the open
+ * internet —, and with a git token they could start the client's own deployment. The same answer
+ * for the commands of the agent and for the preview, which runs the agent's code.
  */
 export function envVarReachesTask(name: string, requirements: TaskRequirements): boolean {
   if (!requirements.repository) return false
   if (!requirements.browser) return true
-  return !HOSTING_ACCESS_KINDS.some((kind) => siteAccessVariableNames(kind).includes(name))
+  return !isSiteAccessVariable(name)
 }
 
 /**

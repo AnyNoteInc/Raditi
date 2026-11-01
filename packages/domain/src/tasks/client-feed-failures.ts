@@ -54,7 +54,9 @@ export const feedFailureText: Readonly<Record<FeedFailureCode, string>> = Object
 const feedFailureNoSiteText: Partial<Readonly<Record<FeedFailureCode, string>>> = Object.freeze({
   secret_found:
     'В работе агента нашлось что-то похожее на пароль или ключ, поэтому мы её не сохранили. Попробуйте описать задачу по-другому.',
-  site_held: 'Произошёл сбой, мы его разбираем. Новые запросы в этом чате пока недоступны.',
+  // A lease of its own, and no content write can hold it: the recovery sweep frees it within a
+  // minute, and words written before that end in the same card, free of charge.
+  site_held: 'Произошёл сбой, мы его разбираем. Подождите минуту, прежде чем писать дальше.',
   not_accepted: 'Задачи пока не принимаются. Напишите нам — расскажем, когда это изменится.',
 })
 

@@ -12,7 +12,7 @@ import { plain, serverRefusal } from '@/components/billing/testing'
 import type { SiteEnvVar } from '@/components/chat/chat-types'
 import { SITE_ID } from '@/components/chat/testing'
 
-import { hostsOf, recipientsText, SiteEnvVars } from './site-env-vars'
+import { envText, hostsOf, recipientsText, SiteEnvVars } from './site-env-vars'
 
 type SetInput = {
   siteId: string
@@ -62,13 +62,13 @@ const delivery: SiteEnvVar = {
   updatedAt: new Date('2026-10-17T09:00:00Z'),
 }
 
-function showVariables() {
+function showVariables({ withFiles = true } = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
   render(
     <QueryClientProvider client={queryClient}>
-      <SiteEnvVars siteId={SITE_ID} />
+      <SiteEnvVars siteId={SITE_ID} withFiles={withFiles} />
     </QueryClientProvider>,
   )
 }
@@ -104,6 +104,16 @@ beforeEach(() => {
 })
 
 describe('the variables of a site', () => {
+  it('says on the row that a project without access to its files gives it to no chat', async () => {
+    list.mockResolvedValue({
+      agentAllowed: true,
+      variables: [{ ...delivery, toAgent: true, agentConsentAt: new Date() }],
+    })
+    showVariables({ withFiles: false })
+    expect(await screen.findByText('DELIVERY_KEY')).toBeTruthy()
+    expect(plain(card().textContent)).toContain(envText.noFilesRecipients)
+  })
+
   it('lists the names, the addresses and whom a variable goes to, never a value', async () => {
     showVariables()
     expect(await screen.findByText('DELIVERY_KEY')).toBeTruthy()
@@ -358,6 +368,40 @@ describe('helpers', () => {
       ),
     ).toBe(
       'Не передаётся. Для этого сайта передавать переменные агенту пока нельзя, а без агента их не получает и предпросмотр.',
+    )
+  })
+
+  it('says an access of the site stops at a chat with the browser (К21)', () => {
+    for (const name of ['FTP_PASSWORD', 'SFTP_PRIVATE_KEY', 'SITE_DB_PASSWORD', 'SITE_GIT_TOKEN']) {
+      const consented = { name, toAgent: true, toPreview: true, agentConsentAt: new Date() }
+      expect(recipientsText(consented)).toBe(
+        'Передаётся агенту и предпросмотру только в чате без браузера.',
+      )
+      expect(recipientsText({ ...consented, toPreview: false })).toBe(
+        'Передаётся агенту только в чате без браузера.',
+      )
+      // Turned off, it is told as any other variable.
+      expect(recipientsText({ name, toAgent: false, toPreview: true, agentConsentAt: null })).toBe(
+        'Пока не передаётся: предпросмотр получит её, только когда её начнут передавать агенту.',
+      )
+      expect(recipientsText({ name, toAgent: false, toPreview: false, agentConsentAt: null })).toBe(
+        'Не передаётся ни агенту, ни предпросмотру.',
+      )
+    }
+  })
+
+  it('gives nothing to a chat of a project without access to its files', () => {
+    const consented = { toAgent: true, toPreview: true, agentConsentAt: new Date() }
+    const noFiles =
+      'Не передаётся: в проекте без доступа к файлам агент работает только в браузере.'
+    for (const name of ['MAIL_API_KEY', 'FTP_PASSWORD'])
+      expect(recipientsText({ ...consented, name }, true, false)).toBe(noFiles)
+    // The sign-in is the browser's own, and the gate of 152-FZ is said first as it was.
+    expect(recipientsText({ ...consented, name: 'SITE_ADMIN_LOGIN' }, true, false)).toBe(
+      envText.signInRecipients,
+    )
+    expect(recipientsText({ ...consented, name: 'MAIL_API_KEY' }, false, false)).toBe(
+      recipientsText({ ...consented, name: 'MAIL_API_KEY' }, false),
     )
   })
 

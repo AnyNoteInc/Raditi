@@ -215,6 +215,21 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn assignments', () => {
     await db.siteLease.delete({ where: { siteId: foreign } })
   })
 
+  // What «Подождите минуту» of `site_held` in a chat without a project stands on.
+  it('frees the hold of a chat without a site once its turn is finished', async () => {
+    const { lease, input, taskId } = await chat()
+    const opened = (await store.open(input))!
+    expect(await leases.holdForRecovery(lease)).toBe(true)
+    expect(await store.finish({ id: opened.id, epoch: lease.epoch, outcome: 'failed' })).toBe(true)
+
+    expect(await store.freeOrphanedHolds()).toBeGreaterThanOrEqual(1)
+
+    expect(await leases.inspect(taskId)).toMatchObject({ taskId: null, heldForOperator: false })
+    expect(
+      await leases.acquire({ siteId: taskId, taskId, operation: 'turn', ttlMs: 60_000 }),
+    ).toMatchObject({ siteId: taskId, taskId, epoch: lease.epoch + 1 })
+  })
+
   it('opens only under the owned fence, with a database deadline and the plan kept', async () => {
     const { lease, input } = await fixture()
     expect(await store.open({ ...input, fence: { ...lease, epoch: lease.epoch + 1 } })).toBeNull()

@@ -4,6 +4,7 @@ import {
   feedFailureTextOf,
   type FeedFailureCode,
 } from '@repo/domain/tasks/client-feed-failures'
+import { feedBrowserQuestionText, feedFailureOpenText } from '@repo/domain/tasks/client-feed-labels'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -267,6 +268,32 @@ describe('the rows of a dialog', () => {
         expect(text(feed)).not.toMatch(/сайт|файл/iu)
       },
     )
+
+    it('tells to wait a minute after a failure it cannot retry yet, and to write on after that', () => {
+      const words = text(
+        chatFeed(failure('site_held', 'none'), headOf({ status: 'awaiting_user' })),
+      )
+      expect(words).toContain('Подождите минуту, прежде чем писать дальше.')
+      expect(words).toContain(feedFailureOpenText)
+      expect(words).not.toMatch(/недоступн/iu)
+    })
+
+    it('asks to sign in to a site, with no word of the admin pages of one', () => {
+      const words = text(
+        chatFeed(browserQuestionRow('1', 1, 'login'), headOf({ status: 'awaiting_user' })),
+      )
+      expect(words).toContain('вошли на сайт в браузере задачи')
+      expect(words).not.toMatch(/админк/iu)
+    })
+
+    it('asks to sign in to the admin pages when the chat has a site', () => {
+      const { feed } = showFeed(
+        [browserQuestionRow('1', 1, 'login')],
+        headOf({ status: 'awaiting_user' }),
+      )
+      expect(text(feed)).toContain(feedBrowserQuestionText.login)
+      expect(text(feed)).toContain('вошли в админку сайта')
+    })
 
     it('stops with no word of a site or of files', () => {
       const feed = chatFeed(cancelled('none'), headOf({ status: 'cancelled' }))

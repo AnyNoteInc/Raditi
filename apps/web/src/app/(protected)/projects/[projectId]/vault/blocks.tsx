@@ -17,7 +17,13 @@ export async function variablesBlock(
 ): Promise<ReactNode | typeof UNAVAILABLE> {
   const site = await loadSiteSection(projectId, 'vault')
   if (site === UNAVAILABLE) return UNAVAILABLE
-  return <SiteEnvVars siteId={site.id} nested={nested} />
+  return (
+    <SiteEnvVars
+      siteId={site.id}
+      withFiles={site.capabilities.repository !== 'absent'}
+      nested={nested}
+    />
+  )
 }
 
 /** «Доступы»: the saved accesses, and what a change of one starts from. */

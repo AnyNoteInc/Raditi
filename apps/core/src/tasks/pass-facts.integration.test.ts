@@ -143,6 +143,21 @@ describe.skipIf(!databaseUrl)('the egress of a pass with PostgreSQL', () => {
     expect(closed?.variables).toEqual([])
   })
 
+  it('keeps the accesses of the wizard of a chat with the code alone, as it did (К21)', async () => {
+    const { task, facts } = await dialog()
+    const consented = { toAgent: true, agentConsentAt: new Date() }
+    const siteId = siteIdOf(task)
+    await db.siteEnvVar.createMany({
+      data: [
+        { siteId, name: 'SITE_DB_PASSWORD', hosts: ['db.example.ru:3306'], ...consented },
+        { siteId, name: 'SITE_GIT_TOKEN', hosts: ['git.example.ru:443'], ...consented },
+      ],
+    })
+    const read = await facts()
+    expect(read?.variables).toEqual(['SITE_DB_PASSWORD', 'SITE_GIT_TOKEN'])
+    expect(read?.egress).toEqual(['db.example.ru:3306', 'git.example.ru:443'])
+  })
+
   // docs/plan/53, «Попробовать ещё (18.10)»: a turn whose pass ended in a failure is replaced.
   it('reads which turns the platform refused, and still the head they wrote', async () => {
     const { task, facts } = await dialog()
@@ -254,7 +269,7 @@ describe.skipIf(!databaseUrl)('the egress of a pass with PostgreSQL', () => {
   })
 
   // docs/plan/61-chats-first.md, §5.6, К21: the row as a test writes it, up to the plan of its turn.
-  it('reads of a chat with the code and the browser what its turn gets, hosting access aside', async () => {
+  it('reads of a chat with the code and the browser what its turn gets, the accesses aside', async () => {
     const { task, workspaceId, userId, facts } = await dialog({ both: true })
     const siteId = siteIdOf(task)
     await db.gitRepository.create({
@@ -272,6 +287,8 @@ describe.skipIf(!databaseUrl)('the egress of a pass with PostgreSQL', () => {
         { siteId, name: 'MAIL_API_KEY', hosts: ['mail.example.ru:443'], ...consented },
         { siteId, name: 'FTP_PASSWORD', hosts: ['ftp.example.ru:443'], ...consented },
         { siteId, name: 'SFTP_PRIVATE_KEY', hosts: ['sftp.example.ru:443'], ...consented },
+        { siteId, name: 'SITE_DB_PASSWORD', hosts: ['db.example.ru:3306'], ...consented },
+        { siteId, name: 'SITE_GIT_TOKEN', hosts: ['git.example.ru:443'], ...consented },
       ],
     })
     const file = (await createAttachment(db, {

@@ -370,13 +370,23 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
 
   // The preview runs the agent's code: it gets what the agent's commands get, never more.
   it.each([
-    ['the code alone', false, ['FTP_PASSWORD', 'MAIL_API_KEY', 'SFTP_PRIVATE_KEY']],
+    [
+      'the code alone',
+      false,
+      ['FTP_PASSWORD', 'MAIL_API_KEY', 'SFTP_PRIVATE_KEY', 'SITE_DB_PASSWORD', 'SITE_GIT_TOKEN'],
+    ],
     ['the code and the browser', true, ['MAIL_API_KEY']],
   ])('gives a preview of a chat with %s its variables (К21)', async (_, needsBrowser, names) => {
     const { site, preview } = await dialog('awaiting_approval', { needsBrowser })
     const f = manager()
     await databaseAccess(f, site.id)
-    for (const name of ['MAIL_API_KEY', 'FTP_PASSWORD', 'SFTP_PRIVATE_KEY']) {
+    for (const name of [
+      'MAIL_API_KEY',
+      'FTP_PASSWORD',
+      'SFTP_PRIVATE_KEY',
+      'SITE_DB_PASSWORD',
+      'SITE_GIT_TOKEN',
+    ]) {
       await db.siteEnvVar.create({
         data: {
           siteId: site.id,

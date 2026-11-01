@@ -6,6 +6,7 @@ import {
   envVarsMayReachAgent,
   envVarReachesPreview,
   envVarReachesTask,
+  isSiteAccessVariable,
   envVarValueSchema,
   refusedEnvVarPrefixes,
   isSiteSignInEnvVar,
@@ -166,20 +167,33 @@ describe('the variables of a task, by what it works with', () => {
   const both = { repository: true, browser: true }
   const live = { repository: false, browser: true }
   const plain = { repository: false, browser: false }
-  const hosting = [...siteAccessVariableNames('ftp'), ...siteAccessVariableNames('ssh')]
+  const accesses = ['ftp', 'ssh', 'db', 'git'].flatMap(siteAccessVariableNames)
 
-  it('gives the code alone everything, the accesses to the hosting too, as before', () => {
-    for (const name of ['MAIL_API_KEY', ...hosting])
+  it('gives the code alone everything, the accesses of the wizard too, as before', () => {
+    for (const name of ['MAIL_API_KEY', ...accesses])
+      expect(envVarReachesTask(name, code)).toBe(true)
+    for (const name of ['SITE_DB_PASSWORD', 'SITE_GIT_TOKEN'])
       expect(envVarReachesTask(name, code)).toBe(true)
   })
 
-  it('gives a chat with the code and the browser all but the accesses to the hosting (К21)', () => {
-    expect(hosting).toEqual(
-      expect.arrayContaining(['FTP_PASSWORD', 'SFTP_PASSWORD', 'SFTP_PRIVATE_KEY']),
+  it('gives a chat with the code and the browser all but the accesses of the wizard (К21)', () => {
+    expect(accesses).toEqual(
+      expect.arrayContaining([
+        'FTP_PASSWORD',
+        'SFTP_PASSWORD',
+        'SFTP_PRIVATE_KEY',
+        'SITE_DB_PASSWORD',
+        'SITE_GIT_TOKEN',
+      ]),
     )
-    for (const name of hosting) expect(envVarReachesTask(name, both)).toBe(false)
-    for (const name of ['MAIL_API_KEY', 'SITE_DB_PASSWORD', 'SITE_GIT_TOKEN'])
-      expect(envVarReachesTask(name, both)).toBe(true)
+    for (const name of accesses) expect(envVarReachesTask(name, both)).toBe(false)
+    expect(envVarReachesTask('MAIL_API_KEY', both)).toBe(true)
+  })
+
+  it('knows a variable of an access by its name, of every kind, and no other', () => {
+    for (const name of accesses) expect(isSiteAccessVariable(name)).toBe(true)
+    for (const name of ['MAIL_API_KEY', 'SITE_ADMIN_PASSWORD', 'SITE_DB_PASSWORD_2'])
+      expect(isSiteAccessVariable(name)).toBe(false)
   })
 
   it('gives a task without the repository nothing', () => {

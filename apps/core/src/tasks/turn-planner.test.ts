@@ -921,7 +921,10 @@ describe('planTurn of a task in the cloud browser (docs/plan/57-browser-tasks.md
     const prompt = plan.request.input.prompt
     expect(prompt.startsWith('Добавьте новость\n\n---\n')).toBe(true)
     const block = prompt.slice(prompt.indexOf('Already saved on the site by this task'))
-    expect(block).toContain('never create another one for the same request')
+    // Byte for byte as it was: `browserTaskInstructions` does not hold this line.
+    expect(block.split('\n')[0]).toBe(
+      'Already saved on the site by this task (continue with these objects; never create another one for the same request; call web_verify first when one is not verified):',
+    )
     // One line per object, in the order the task saved them; a title stays on its line.
     expect(block).toContain(
       '- post 41: verified, title "Скидки на «зиму»", status draft; editor /wp-admin/post.php',
@@ -1090,6 +1093,11 @@ describe('planTurn of a chat with the code and the browser (docs/plan/61-chats-f
     const { prompt } = (await turnOf(chat({ browser: { ...browser, saved } }))).request.input
     expect(prompt).toContain('call web_verify before you touch this object')
     expect(prompt).not.toContain('before anything else')
+    expect(prompt).not.toContain('call web_verify first')
+    const block = prompt.slice(prompt.indexOf('Already saved on the site by this task'))
+    expect(block.split('\n')[0]).toBe(
+      'Already saved on the site by this task (continue with these objects; never create another one for the same request):',
+    )
   })
 
   it('reaches the hosts of the variables the commands get', async () => {

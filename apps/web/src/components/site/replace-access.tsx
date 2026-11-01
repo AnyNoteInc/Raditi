@@ -32,7 +32,7 @@ import { useTRPC } from '@/trpc/client'
  * decision of 26.10.2026): the panel says so, as the last step of the wizard does.
  */
 export const ACCESS_VARIABLES_NOTE =
-  'Новый доступ мы сохраним и как переменные сайта, как при добавлении проекта: их получат команды агента и предпросмотр. Это можно отключить в списке переменных.'
+  'Новый доступ мы сохраним и как переменные сайта, как при добавлении проекта: их получат команды агента и предпросмотр только в чате без браузера. Это можно отключить в списке переменных.'
 
 const FIELDS = 'replace-access'
 const PROBLEM = 'replace-access-problem'

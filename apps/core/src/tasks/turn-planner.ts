@@ -462,9 +462,13 @@ function browserContextOf(
   if (notes) lines.push('', PROJECT_NOTES, notes)
   const saved = browser.saved.slice(-PROMPT_SAVED_OBJECTS)
   if (saved.length > 0) {
+    // With a working copy the line of the object says when it needs `web_verify`: a question
+    // about the code starts no browser (docs/plan/61-chats-first.md, К11).
     lines.push(
       '',
-      'Already saved on the site by this task (continue with these objects; never create another one for the same request; call web_verify first when one is not verified):',
+      workspace
+        ? 'Already saved on the site by this task (continue with these objects; never create another one for the same request):'
+        : 'Already saved on the site by this task (continue with these objects; never create another one for the same request; call web_verify first when one is not verified):',
     )
     const unlisted = browser.saved.length - saved.length
     if (unlisted > 0) lines.push(`- ${unlisted} earlier objects are not listed`)

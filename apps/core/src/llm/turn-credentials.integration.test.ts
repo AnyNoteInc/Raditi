@@ -531,12 +531,20 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     expect(await f.credentials.recover(browser.ref)).toEqual(issued)
   })
 
-  it('gives a chat with the code and the browser its variables without the hosting accesses (К21)', async () => {
+  it('gives a chat with the code and the browser its variables without the accesses (К21)', async () => {
     const f = await fixture({ slots: 2 })
     const consented = { toAgent: true, agentConsentAt: new Date() }
     const chat = await f.taskFixture({ needsRepository: true, needsBrowser: true })
+    const names = [
+      'FTP_PASSWORD',
+      'MAIL_API_KEY',
+      'SFTP_PASSWORD',
+      'SFTP_PRIVATE_KEY',
+      'SITE_DB_PASSWORD',
+      'SITE_GIT_TOKEN',
+    ]
     for (const site of [f.site, chat.site])
-      for (const name of ['MAIL_API_KEY', 'FTP_PASSWORD', 'SFTP_PASSWORD', 'SFTP_PRIVATE_KEY']) {
+      for (const name of names) {
         await db.siteEnvVar.create({ data: { siteId: site.id, name, hosts: [], ...consented } })
         f.vault.entries.set(siteEnvVarPath(site.id, name), {
           data: { value: `${name}-value` },
@@ -546,14 +554,14 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
       }
     // The code alone keeps them all, as it did.
     expect(Object.keys((await f.credentials.issue(f.ref, f.grant)).envValues ?? {}).sort()).toEqual(
-      ['FTP_PASSWORD', 'MAIL_API_KEY', 'SFTP_PASSWORD', 'SFTP_PRIVATE_KEY'],
+      names,
     )
     f.vault.kvRead.mockClear()
     const issued = await f.credentials.issue(chat.ref, f.grant)
     expect(issued.envValues).toEqual({ MAIL_API_KEY: 'MAIL_API_KEY-value' })
-    // A hosting access is not even read.
+    // An access is not even read.
     expect(
-      f.vault.kvRead.mock.calls.filter(([path]) => /PASSWORD|PRIVATE_KEY/.test(String(path))),
+      f.vault.kvRead.mock.calls.filter(([path]) => /PASSWORD|PRIVATE_KEY|TOKEN/.test(String(path))),
     ).toEqual([])
     expect(await f.credentials.recover(chat.ref)).toEqual(issued)
   })

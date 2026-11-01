@@ -141,6 +141,8 @@ describe('the accesses of a site', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Изменить: SSH' }))
     const panel = screen.getByRole('dialog', { name: 'Изменить доступ к файлам' })
     expect(within(panel).getByText(/сохраним его, только если подключение пройдёт/)).toBeTruthy()
+    // An access stops at a chat that has the browser as well (docs/plan/61-chats-first.md, К21).
+    expect(within(panel).getByText(/только в чате без браузера/)).toBeTruthy()
     // The public part of the saved source, never a login or a password.
     expect(field('replace-access-host').value).toBe('ssh.example.ru')
     expect(field('replace-access-username').value).toBe('')
@@ -193,6 +195,7 @@ describe('the accesses of a site', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Изменить: База данных' }))
     const panel = screen.getByRole('dialog', { name: 'Изменить доступ к базе данных' })
     expect(within(panel).queryByText('Без базы данных')).toBeNull()
+    expect(within(panel).getByText(/только в чате без браузера/)).toBeTruthy()
     expect(field('change-database-host').value).toBe('db.example.ru')
     expect(field('change-database-database').value).toBe('wordpress')
 

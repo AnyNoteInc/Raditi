@@ -710,7 +710,7 @@ async function ownedTask(tx: Transaction, ref: TurnCredentialRef): Promise<Owned
 async function agentVariables(tx: Transaction, task: OwnedTask): Promise<SiteEnvVarVersion[]> {
   // A task with the browser alone drives the live site through the `web` tools, and no candidate
   // or release refuses a value written there: its commands get no client variable (plan 57, Б20;
-  // rule 2). A chat with the code too gets them without the hosting accesses (plan 61, К21;
+  // rule 2). A chat with the code too gets them without the accesses of the wizard (plan 61, К21;
   // `envVarReachesTask`). A chat without a site has no variables at all.
   if (!task.needsRepository || task.siteId === null) return []
   const requirements = { repository: task.needsRepository, browser: task.needsBrowser }
