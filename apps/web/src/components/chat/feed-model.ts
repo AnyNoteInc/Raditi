@@ -41,9 +41,10 @@ export function requestShown(rows: readonly FeedRow[], requestId: string): boole
  * and core has not ended the dialog yet. A dialog that waits is closed at once, so a press of
  * `/cancel` in a dialog that has not ended is a pass being stopped.
  *
- * A task in the browser (`browser`, docs/plan/57-browser-tasks.md, Б24) is stopped by core in any
- * status — waiting for the client too: until then the newest press, other commands aside, is
- * `/cancel`, as the server reads it (`cancelPending`), and the task takes nothing else.
+ * A chat with a browser (`requirements.browser`, docs/plan/57-browser-tasks.md, Б24) is stopped by
+ * core in any status — waiting for the client, with its changes too: until then the newest press,
+ * other commands aside, is `/cancel`, as the server reads it (`cancelPending`), and the chat takes
+ * nothing else, `/release` above all.
  */
 export function stopRequested(
   rows: readonly FeedRow[],

@@ -271,8 +271,18 @@ export const undoText = Object.freeze({
 })
 
 export const cancelText = Object.freeze({
-  title: 'Отменить диалог?',
-  confirm: 'Отменить диалог',
+  title: 'Отменить чат?',
+  /**
+   * What the cancelling leads to: `changes` — the chat holds changes that go nowhere now; `onSite`
+   * — its agent can have written on the site through the browser of a project.
+   */
+  body: ({ changes, onSite }: { changes: boolean; onSite: boolean }) =>
+    [
+      'Чат завершится, а агент остановится, если ещё работает.',
+      ...(changes ? ['Подготовленные изменения на сайт не попадут.'] : []),
+      ...(onSite ? ['То, что он уже сделал на сайте, останется: проверьте сайт.'] : []),
+    ].join(' '),
+  confirm: 'Отменить чат',
   keep: 'Не отменять',
 })
 
@@ -437,9 +447,12 @@ export const dialogMenuText = Object.freeze({
   rename: 'Переименовать',
   remove: 'Удалить',
   name: 'Название диалога',
-  removeTitle: 'Удалить диалог?',
-  removeBody:
-    'Диалог пропадёт из списка. Если агент ещё работает, он остановится, а отложенные кредиты вернутся. То, что уже выпущено на сайт, останется.',
+  removeTitle: 'Удалить чат?',
+  /** What the deletion leads to; a chat without a project has no site to speak of. */
+  removeBody: (withSite: boolean) =>
+    withSite
+      ? 'Чат пропадёт из списка. Если агент ещё работает, он остановится, а отложенные кредиты вернутся. То, что агент уже сделал на сайте, останется.'
+      : 'Чат пропадёт из списка. Если агент ещё работает, он остановится, а отложенные кредиты вернутся.',
   /** The dialog's release can still be undone: the button goes with the dialog. */
   removeUndo:
     'Кнопка «Отменить выпуск» этого диалога тоже пропадёт: вернуть прежнюю версию можно будет только новым диалогом.',
@@ -467,6 +480,10 @@ export const taskWayText = Object.freeze({
    */
   noSecrets:
     'Не отправляйте в чат пароли и ключи: вход в админку сохраните в разделе «Переменные» или войдите сами в окне браузера',
+  /** The same reminder in a chat without a project: it has no «Переменные» to point to. */
+  noSecretsPlain: 'Не отправляйте в чат пароли и ключи',
+  /** The refusal `TASK_TEXT_HAS_SECRET` in a chat without a project, by the same reasoning. */
+  secretRefusedPlain: 'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат.',
 })
 
 /** The browser of a task beside its dialog (docs/plan/57-browser-tasks.md, Б12–Б17, Б27, Б29). */
@@ -546,6 +563,9 @@ export const browserText = Object.freeze({
       'Браузером управляют в другой вкладке. Нажмите «Взять управление», чтобы управлять здесь.',
     not_ready: 'Агент заканчивает действие на странице. Подождите несколько секунд.',
     address_denied: 'На эту страницу агенту и вам переходить нельзя.',
+    /** The same refusal in a chat without a project: the browser has no site to keep to. */
+    address_denied_public:
+      'Этот адрес не открыть: браузер открывает только публичные сайты по https://.',
     busy: 'Слишком много действий сразу. Подождите немного.',
     other: 'Это действие сейчас не выполнить.',
   },

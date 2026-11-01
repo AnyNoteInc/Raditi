@@ -325,18 +325,29 @@ describe('new chat', () => {
     expect(create.mock.calls[1]![0].taskId).toBe(create.mock.calls[0]![0].taskId)
   })
 
-  it('says a refusal of the server in its words', async () => {
-    create.mockRejectedValueOnce(
-      serverRefusal(
-        'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат — доступы задаются в разделе «Переменные»',
-        'TASK_TEXT_HAS_SECRET',
-      ),
-    )
+  const SECRET_REFUSAL =
+    'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат — доступы задаются в разделе «Переменные»'
+
+  it('says a refusal of the server in its words, the project of the chat being chosen', async () => {
+    search.params = new URLSearchParams(`project=${SITE_ID}`)
+    create.mockRejectedValueOnce(serverRefusal('Не удалось начать чат', 'SOME_REFUSAL'))
+    showChat()
+    await screen.findByRole('button', { name: /Кофейня/ })
+    write('Поменяйте телефон')
+    fireEvent.click(send())
+    expect((await screen.findByRole('alert')).textContent).toBe('Не удалось начать чат.')
+    create.mockRejectedValueOnce(serverRefusal(SECRET_REFUSAL, 'TASK_TEXT_HAS_SECRET'))
+    fireEvent.click(send())
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe(`${SECRET_REFUSAL}.`))
+  })
+
+  it('sends no client without a project to the «Переменные» it does not have for a password', async () => {
+    create.mockRejectedValueOnce(serverRefusal(SECRET_REFUSAL, 'TASK_TEXT_HAS_SECRET'))
     showChat()
     write('пароль: hunter2')
     fireEvent.click(send())
     expect((await screen.findByRole('alert')).textContent).toBe(
-      'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат — доступы задаются в разделе «Переменные».',
+      'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат.',
     )
     expect(push).not.toHaveBeenCalled()
     // No chat was started: none is told it was.
@@ -408,8 +419,12 @@ describe('new chat', () => {
     showChat()
     await waitFor(() => expect(projectList).toHaveBeenCalled())
     expect(described(field())).not.toContain(taskWayText.noSecrets)
+    // A chat without a project has no «Переменные» to point to.
+    expect(described(field())).toContain(taskWayText.noSecretsPlain)
+    expect(described(field())).not.toContain('Переменные')
     await choose('Без проекта', /Гранд/)
     expect(described(field())).not.toContain(taskWayText.noSecrets)
+    expect(described(field())).toContain('доступы задаются в разделе «Переменные»')
     await choose('Автосервис «Гранд»', /Кофейня/)
     expect(described(field())).toContain(taskWayText.noSecrets)
   })

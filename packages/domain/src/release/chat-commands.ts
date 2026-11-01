@@ -55,8 +55,8 @@ export const chatCommands: Readonly<Record<ChatCommandId, ChatCommand>> = Object
   }),
   cancel: Object.freeze({
     slash: '/cancel',
-    label: 'Отменить диалог',
-    description: 'Закрыть диалог без выпуска: изменения на сайт не попадут.',
+    label: 'Отменить чат',
+    description: 'Завершить чат и остановить агента.',
   }),
   undo: Object.freeze({
     slash: '/undo',

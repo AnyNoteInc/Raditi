@@ -11,6 +11,9 @@ import type { BrowserHead } from './chat-types'
 
 export type PaneStatus = keyof typeof browserText.status
 
+/** The address of a browser with no page yet: a chat without a project has no site to start on. */
+export const BLANK_PAGE = 'about:blank'
+
 /** The session still holds a browser: the stream can be opened. */
 export const sessionLive = (session: BrowserHead | null): boolean =>
   session !== null && (session.status === 'starting' || session.status === 'ready')
@@ -32,6 +35,24 @@ export interface PaneFacts {
 
 const TERMINAL: readonly (TaskStatus | undefined)[] = ['done', 'failed', 'cancelled', 'rolled_back']
 
+/**
+ * What a browser the client does not drive is doing, one word for the chip of the panel and for
+ * the tile of «+»: a request for help waits for the client whatever the status of the chat says;
+ * a chat that waits with no such request waits for an answer, or for nothing once the agent has
+ * answered; a chat with changes waits for `/release` or installs them, and the agent is not at
+ * work in its browser then (docs/plan/61-chats-first.md, К10).
+ */
+export function agentBrowserStatus(
+  taskStatus: TaskStatus | undefined,
+  { help, answered }: { help: boolean; answered: boolean },
+): Extract<PaneStatus, 'waiting' | 'idle' | 'agent'> {
+  if (help) return 'waiting'
+  if (taskStatus === 'awaiting_user') return answered ? 'idle' : 'waiting'
+  const offBrowser =
+    taskStatus === 'awaiting_approval' || taskStatus === 'deploying' || taskStatus === 'verifying'
+  return offBrowser ? 'idle' : 'agent'
+}
+
 /** The chip of the toolbar: who drives the browser, or why nothing is shown. */
 export function paneStatus(facts: PaneFacts): PaneStatus {
   const { session, taskStatus, connection } = facts
@@ -43,8 +64,10 @@ export function paneStatus(facts: PaneFacts): PaneStatus {
   if (connection === 'reconnecting') return 'reconnecting'
   if (connection !== 'open') return 'connecting'
   if ((facts.state?.controller ?? session.controller) === 'user') return 'user'
-  if (taskStatus === 'awaiting_user') return facts.answered ? 'idle' : 'waiting'
-  return 'agent'
+  return agentBrowserStatus(taskStatus, {
+    help: Boolean(facts.state?.help ?? session.help),
+    answered: facts.answered === true,
+  })
 }
 
 export type PaneOverlay =

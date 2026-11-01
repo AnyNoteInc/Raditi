@@ -3,6 +3,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { AppIcon, type AppIconName } from '@/components/application/app-icon'
+
 import { BrowserPane, type BrowserPaneProps } from './browser-pane'
 import type { BrowserState } from './browser-stream'
 import type { FeedHeadState } from './feed-state'
@@ -10,6 +12,14 @@ import { browserAnswer, declared, SESSION_ID, SITE_ID, TASK_ID } from './testing
 import type { BrowserStream } from './use-browser-stream'
 
 const VIEWER = '0199a3f2-0000-7000-8000-0000000000aa'
+const NO_SITE = { repository: false, browser: true }
+
+/** The outline of the sign an element draws: two signs are the same when their outlines are. */
+const outline = (element: Element | null) =>
+  element?.querySelector('svg path')?.getAttribute('d') ?? null
+/** The outline `AppIcon` draws for `name`, drawn aside from the page. */
+const outlineOf = (name: AppIconName) =>
+  outline(render(<AppIcon name={name} />, { container: document.createElement('div') }).container)
 
 const calls = vi.hoisted(() => ({
   list: vi.fn(async () => [] as unknown[]),
@@ -198,6 +208,70 @@ describe('the browser of a task', () => {
       t: 'navigate',
       url: 'https://kroshka.example/wp-admin/post-new.php',
     })
+  })
+
+  it.each(['awaiting_approval', 'deploying', 'verifying'] as const)(
+    'never says the agent works in the browser of a chat in %s',
+    (status) => {
+      show({ head: head({ status }) })
+      expect(within(toolbar()).getByRole('status').textContent).toBe('Агент ответил')
+    },
+  )
+
+  it('asks for the client on a request for help, whatever the chat with changes waits for', () => {
+    show({
+      head: head({
+        status: 'awaiting_approval',
+        browser: { help: { reason: 'login', message: null } },
+      }),
+    })
+    expect(within(toolbar()).getByRole('status').textContent).toBe('Ждём вас')
+    cleanup()
+    // The same request on the stream, before the feed is read again.
+    show({
+      head: head({ status: 'awaiting_approval' }),
+      stream: fakeStream({ state: state({ help: { reason: 'login', message: 'Войдите' } }) }),
+    })
+    expect(within(toolbar()).getByRole('status').textContent).toBe('Ждём вас')
+  })
+
+  it('leaves the address empty on a browser with no page yet, with nothing to load again', () => {
+    const stream = holding({ url: 'about:blank', tabs: [] })
+    show({ stream, siteId: null, head: head({ task: { requirements: NO_SITE } }) })
+    const bar = within(toolbar())
+    const address = bar.getByRole<HTMLInputElement>('textbox', { name: 'Адрес страницы' })
+    expect(address.value).toBe('')
+    expect(bar.getByRole<HTMLButtonElement>('button', { name: 'Обновить страницу' }).disabled).toBe(
+      true,
+    )
+    // No lock over no page: the sign says the page is not there, not that it is secure.
+    expect(address.closest('form')?.innerHTML).toContain(outlineOf('globe'))
+    // An empty address goes nowhere; a typed one goes by https.
+    fireEvent.submit(address.closest('form')!)
+    expect(sent(stream)).toEqual([])
+    fireEvent.change(address, { target: { value: 'example.com' } })
+    fireEvent.submit(address.closest('form')!)
+    expect(sent(stream)).toEqual([{ t: 'navigate', url: 'https://example.com' }])
+  })
+
+  it('shows no address under the agent either while there is no page yet', () => {
+    show({ stream: fakeStream({ state: state({ url: 'about:blank', tabs: [] }) }), siteId: null })
+    expect(within(toolbar()).getByLabelText('Адрес страницы').textContent).toBe('')
+    expect(toolbar().innerHTML).toContain(outlineOf('globe'))
+  })
+
+  it('says what the browser opens when an address is refused: a site, or any public one', () => {
+    const refusal = { seq: 1, reason: 'address_denied' } as const
+    show({ stream: { ...holding(), refusal } })
+    expect(screen.getByText('На эту страницу агенту и вам переходить нельзя.')).toBeTruthy()
+    cleanup()
+    show({ stream: { ...holding(), refusal }, siteId: null })
+    expect(
+      screen.getByText(
+        'Этот адрес не открыть: браузер открывает только публичные сайты по https://.',
+      ),
+    ).toBeTruthy()
+    expect(screen.queryByText('На эту страницу агенту и вам переходить нельзя.')).toBeNull()
   })
 
   it('offers to take over when another tab controls the browser', () => {

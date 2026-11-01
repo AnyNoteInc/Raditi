@@ -501,8 +501,8 @@ describe('a dialog', () => {
     await waitFor(() => expect(stop.disabled).toBe(false))
     expect(field().disabled).toBe(true)
     fireEvent.click(stop)
-    const confirm = screen.getByRole('dialog', { name: 'Отменить диалог?' })
-    fireEvent.click(within(confirm).getByRole('button', { name: 'Отменить диалог' }))
+    const confirm = screen.getByRole('dialog', { name: 'Отменить чат?' })
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Отменить чат' }))
     await waitFor(() => expect(calls.cancel).toHaveBeenCalledTimes(1))
     expect(calls.cancel.mock.calls[0]![0]).toMatchObject({ taskId: TASK_ID })
   })
@@ -539,7 +539,8 @@ describe('a dialog', () => {
     )
     fireEvent.click(menu())
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Удалить' }))
-    const ask = await screen.findByRole('dialog', { name: 'Удалить диалог?' })
+    const ask = await screen.findByRole('dialog', { name: 'Удалить чат?' })
+    expect(plain(ask.textContent)).toContain('То, что агент уже сделал на сайте, останется.')
     fireEvent.click(within(ask).getByRole('button', { name: 'Удалить' }))
     await waitFor(() => expect(calls.remove).toHaveBeenCalledTimes(1))
     expect(calls.remove.mock.calls[0]![0]).toEqual({ taskId: TASK_ID })
@@ -611,11 +612,13 @@ describe('a dialog', () => {
 
   it('asks before `/cancel` closes the dialog', async () => {
     showDialog()
-    await run(/Отменить диалог/)
-    const confirm = screen.getByRole('dialog', { name: 'Отменить диалог?' })
-    expect(plain(confirm.textContent)).toContain('Закрыть диалог без выпуска')
+    await run(/Отменить чат/)
+    const confirm = screen.getByRole('dialog', { name: 'Отменить чат?' })
+    expect(plain(confirm.textContent)).toContain(
+      'Чат завершится, а агент остановится, если ещё работает. Подготовленные изменения на сайт не попадут.',
+    )
     expect(calls.cancel).not.toHaveBeenCalled()
-    fireEvent.click(within(confirm).getByRole('button', { name: 'Отменить диалог' }))
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Отменить чат' }))
     await waitFor(() => expect(calls.cancel).toHaveBeenCalledTimes(1))
     expect(calls.cancel.mock.calls[0]![0]).toMatchObject({ taskId: TASK_ID })
   })
@@ -995,13 +998,13 @@ describe('a dialog', () => {
     )
     const commandsButton = await screen.findByRole('button', { name: 'Команды' })
     fireEvent.click(commandsButton)
-    fireEvent.click(option(/Отменить диалог/))
-    const confirm = screen.getByRole('dialog', { name: 'Отменить диалог?' })
-    fireEvent.click(within(confirm).getByRole('button', { name: 'Отменить диалог' }))
+    fireEvent.click(option(/Отменить чат/))
+    const confirm = screen.getByRole('dialog', { name: 'Отменить чат?' })
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Отменить чат' }))
     expect(await screen.findByText('Останавливаем работу агента…')).toBeTruthy()
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
-    const again = option(/Отменить диалог/)
+    const again = option(/Отменить чат/)
     expect(again.getAttribute('aria-disabled')).toBe('true')
     expect(again.textContent).toContain('Подождите: агент ещё работает.')
     fireEvent.click(again)
@@ -1040,7 +1043,7 @@ describe('a dialog', () => {
       feedAnswer({
         status: 'awaiting_user',
         task: { turnNo: 1 },
-        preview: null,
+        preview: readyPreview,
         candidate: null,
         events: [requestRow('1')],
         cursor: '1',
@@ -1161,6 +1164,448 @@ function showAnswers(...answers: (DialogFeed | Promise<DialogFeed>)[]) {
   queueAnswers(...answers)
   mountDialog()
 }
+
+describe('the five kinds of a chat (docs/plan/61-chats-first.md, §5.6)', () => {
+  const BOTH = { repository: true, browser: true }
+  const NEITHER = { repository: false, browser: false }
+  /** The names of the commands the window lists. */
+  const listedCommands = () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+    const names = within(screen.getByRole('listbox', { name: 'Команды' }))
+      .getAllByRole('option')
+      .map((item) => plain(item.textContent))
+    fireEvent.keyDown(field(), { key: 'Escape' })
+    return names
+  }
+  const hint = () =>
+    (field().getAttribute('aria-describedby') ?? '')
+      .split(' ')
+      .map((id) => document.getElementById(id)?.textContent ?? '')
+      .join(' ')
+  const answered = (requirements: { repository: boolean; browser: boolean }) =>
+    feedAnswer({
+      status: 'awaiting_user',
+      task: { turnNo: 1, requirements },
+      commands: verdicts({ retry: 'nothing_to_retry' }),
+      events: [
+        requestRow('1'),
+        {
+          ...resultRow('2', 1, 'Вот пять вариантов.'),
+          next: 'awaiting_user',
+          site: 'none',
+          filesChanged: 0,
+        } as FeedRow,
+      ],
+      cursor: '2',
+    })
+
+  it('a chat with the repository alone: no words of files, «+» or the browser without changes', async () => {
+    showDialog(answered({ repository: true, browser: false }))
+    await screen.findByText('Вот пять вариантов.')
+    expect(toolsPanel()).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Инструменты/ })).toBeNull()
+    expect(document.body.textContent).not.toMatch(/Изменено файлов|Файлы и изменения|Браузер/u)
+    const listed = listedCommands().join(' ')
+    expect(listed).toContain('Выпустить новую версию')
+    expect(listed).toContain('Открыть предпросмотр')
+    expect(listed).toContain('Отменить чат')
+    // The words of the site's variables stand where the project has them.
+    expect(hint()).toContain('доступы задаются в разделе «Переменные»')
+  })
+
+  it('a chat with the code and the browser: every tool, the browser last, the panel closed', async () => {
+    wideLayout()
+    showDialog(
+      browserAnswer({
+        status: 'awaiting_approval',
+        task: { requirements: BOTH },
+        preview: readyPreview,
+        candidate: candidateHead,
+        commands: verdicts(),
+        events: [requestRow('1'), resultRow('2', 1), candidateRow('3', 1)],
+        cursor: '3',
+      }),
+      STREAM_URL,
+    )
+    await screen.findByText('Изменения готовы')
+    // The panel stays closed at the start of a showing (И1), no stream, no frame, no changes read.
+    expect(toolsPanel()).toBeNull()
+    expect(calls.streamTicket).not.toHaveBeenCalled()
+    expect(calls.candidate).not.toHaveBeenCalled()
+    expect(document.querySelector('iframe')).toBeNull()
+    expect(await menuTiles()).toEqual([
+      'Предпросмотр',
+      'Файлы и изменения, 4',
+      'База данных, 3',
+      'Проверки, 2 из 2',
+      'Браузер, Агент ответил',
+    ])
+    // The commands of the site are there: the browser takes nothing from the code.
+    const listed = listedCommands().join(' ')
+    expect(listed).toContain('Выпустить новую версию')
+    expect(listed).toContain('Открыть предпросмотр')
+    expect(listed).toContain('Отменить чат')
+    expect(hint()).toContain('вход в админку сохраните в разделе «Переменные»')
+    // «Посмотреть изменения» goes to the changes, never to the browser.
+    fireEvent.click(screen.getByRole('button', { name: 'Посмотреть изменения' }))
+    await waitFor(() => expect(tabNames()).toEqual(['Файлы']))
+  })
+
+  it('stops a chat with the code and the browser that waits: `/release` waits with it', async () => {
+    const answer = browserAnswer({
+      status: 'awaiting_approval',
+      task: { requirements: BOTH },
+      candidate: candidateHead,
+      // As the server answers while the press stands in the feed (`cancelPending`).
+      commands: verdicts({
+        release: 'finished',
+        preview: 'finished',
+        update: 'finished',
+        reset: 'finished',
+      }),
+      events: [requestRow('1'), resultRow('2', 1), candidateRow('3', 1), commandRow('4', 'cancel')],
+      cursor: '4',
+    })
+    showDialog(answer)
+    await screen.findByText('Изменения готовы')
+    // core has not ended the chat yet, and the press stands in the feed: nothing else is taken.
+    await waitFor(() => expect(field().disabled).toBe(true))
+    expect(field().getAttribute('placeholder')).not.toBe('Что нужно сделать?')
+    expect(screen.queryByRole('button', { name: 'Выпустить новую версию' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+    expect(option(/Отменить чат/).getAttribute('aria-disabled')).toBe('true')
+    expect(option(/Выпустить новую версию/).getAttribute('aria-disabled')).toBe('true')
+  })
+
+  it('closes `/release` on the card from the press of `/cancel`, before the feed is read again', async () => {
+    calls.cancel.mockResolvedValue({ ...posted, state: 'stopping' })
+    showDialog(
+      browserAnswer({
+        status: 'awaiting_approval',
+        task: { requirements: BOTH },
+        candidate: candidateHead,
+        commands: verdicts(),
+        events: [requestRow('1'), resultRow('2', 1), candidateRow('3', 1)],
+        cursor: '3',
+      }),
+    )
+    const release = await screen.findByRole<HTMLButtonElement>('button', {
+      name: 'Выпустить новую версию',
+    })
+    expect(release.disabled).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+    fireEvent.click(option(/Отменить чат/))
+    const confirm = screen.getByRole('dialog', { name: 'Отменить чат?' })
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Отменить чат' }))
+    await waitFor(() => expect(calls.cancel).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(field().disabled).toBe(true))
+    expect(release.disabled).toBe(true)
+  })
+
+  it.each([
+    [
+      'the code alone, with changes',
+      { repository: true, browser: false },
+      candidateHead,
+      'https://kroshka.example',
+      ['Подготовленные изменения на сайт не попадут.'],
+      ['проверьте сайт'],
+    ],
+    [
+      'the code alone, nothing ready yet',
+      { repository: true, browser: false },
+      null,
+      'https://kroshka.example',
+      [],
+      ['проверьте сайт', 'Подготовленные'],
+    ],
+    [
+      'the code and the browser',
+      BOTH,
+      candidateHead,
+      'https://kroshka.example',
+      [
+        'Подготовленные изменения на сайт не попадут.',
+        'То, что он уже сделал на сайте, останется: проверьте сайт.',
+      ],
+      [],
+    ],
+    [
+      'the browser on a project',
+      { repository: false, browser: true },
+      null,
+      'https://kroshka.example',
+      ['То, что он уже сделал на сайте, останется: проверьте сайт.'],
+      ['Подготовленные'],
+    ],
+    [
+      'the browser without a project',
+      { repository: false, browser: true },
+      null,
+      null,
+      [],
+      ['сайт'],
+    ],
+  ] as const)(
+    'says what cancelling leaves of a chat with %s',
+    async (_what, requirements, candidate, url, says, never) => {
+      showDialog(
+        browserAnswer({
+          status: 'awaiting_user',
+          task: { requirements },
+          candidate,
+          commands: verdicts(),
+          events: [
+            requestRow('1'),
+            { ...resultRow('2', 1, 'Готово.'), next: 'awaiting_user' } as FeedRow,
+          ],
+          cursor: '2',
+        }),
+        null,
+        url,
+      )
+      await screen.findByText('Готово.')
+      fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+      fireEvent.click(option(/Отменить чат/))
+      const words = plain(screen.getByRole('dialog', { name: 'Отменить чат?' }).textContent)
+      expect(words).toContain('Чат завершится, а агент остановится, если ещё работает.')
+      for (const line of says) expect(words).toContain(line)
+      for (const line of never) expect(words).not.toContain(line)
+    },
+  )
+
+  it('calls an answer an answer on the tile of a chat with the code and the browser', async () => {
+    showDialog(
+      browserAnswer({
+        status: 'awaiting_user',
+        task: { requirements: BOTH },
+        commands: verdicts(),
+        events: [
+          requestRow('1'),
+          { ...resultRow('2', 1, 'Готово.'), next: 'awaiting_user' } as FeedRow,
+        ],
+        cursor: '2',
+      }),
+      STREAM_URL,
+    )
+    await screen.findByText('Готово.')
+    expect(await menuTiles()).toEqual(['Браузер, Агент ответил'])
+  })
+
+  it('gives the panel of a browser beside the open changes to the client who asks for it', async () => {
+    wideLayout()
+    showDialog(
+      browserAnswer({
+        status: 'awaiting_approval',
+        task: { requirements: BOTH },
+        preview: readyPreview,
+        candidate: candidateHead,
+        commands: verdicts(),
+        events: [requestRow('1'), resultRow('2', 1), candidateRow('3', 1)],
+        cursor: '3',
+      }),
+      STREAM_URL,
+    )
+    await screen.findByText('Изменения готовы')
+    await choose(/^Файлы и изменения/)
+    expect(calls.streamTicket).not.toHaveBeenCalled()
+    await choose(/^Браузер/)
+    expect(tabNames()).toEqual(['Файлы', 'Браузер'])
+    // The real panel of the browser, on the one stream it reads.
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    expect(calls.streamTicket).toHaveBeenCalledTimes(1)
+    connect(sockets[0]!, 'agent')
+    expect(within(pane()).getAllByRole('button', { name: 'Взять управление' })).not.toEqual([])
+    expect(within(pane()).getByLabelText('Адрес страницы').textContent).toContain('kroshka.example')
+    // Back on the changes the browser stays open, its stream asleep behind them.
+    fireEvent.click(screen.getByRole('tab', { name: 'Файлы' }))
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: 'Браузер' }).getAttribute('aria-selected')).toBe(
+        'false',
+      ),
+    )
+    expect(tabNames()).toEqual(['Файлы', 'Браузер'])
+  })
+
+  describe('asked to sign in while the changes wait', () => {
+    const help = { reason: 'login', message: null } as const
+    const asks = (browser: Partial<FeedBrowserHead>) =>
+      browserAnswer({
+        status: 'awaiting_user',
+        task: { requirements: BOTH },
+        candidate: candidateHead,
+        commands: verdicts(),
+        browser: { help, ...browser },
+        events: [requestRow('1'), browserQuestionRow('2', 1, 'login')],
+        cursor: '2',
+      })
+
+    it('takes the control of the browser from the card, opening it', async () => {
+      wideLayout()
+      showDialog(asks({}), STREAM_URL)
+      await screen.findByText('Нужно войти на сайт')
+      expect(plusName()).toBe(DOT.browser)
+      fireEvent.click(screen.getByRole('button', { name: 'Взять управление' }))
+      await screen.findByRole('tab', { name: 'Браузер', selected: true })
+      await waitFor(() => expect(sockets).toHaveLength(1))
+      connect(sockets[0]!, 'agent')
+      expect(sockets[0]!.sent).toContainEqual({ t: 'take' })
+    })
+
+    it('gives the browser back to the agent from the card', async () => {
+      wideLayout()
+      showDialog(asks({ controller: 'user' }), STREAM_URL)
+      await screen.findByText('Нужно войти на сайт')
+      fireEvent.click(screen.getByRole('button', { name: 'Продолжить работу агента' }))
+      await waitFor(() => expect(calls.resumeAgent).toHaveBeenCalledTimes(1))
+    })
+  })
+
+  it.each([
+    ['on a project without its files', 'https://kroshka.example', 'вход в админку'],
+    ['without a project', null, null],
+  ] as const)(
+    'a chat with the browser alone %s: the browser, /cancel',
+    async (_what, url, words) => {
+      showDialog(
+        browserAnswer({ events: [requestRow('1', 'Добавьте новость')], cursor: '1' }),
+        null,
+        url,
+      )
+      await screen.findByText('Добавьте новость')
+      expect(toolsPanel()).toBeNull()
+      expect(await menuTiles()).toEqual(['Браузер, Работает агент'])
+      expect(listedCommands()).toEqual([expect.stringMatching(/^Отменить чат/u)])
+      if (words === null) expect(hint()).not.toContain('Переменные')
+      else expect(hint()).toContain(words)
+    },
+  )
+
+  it('a chat with neither: no tools, /cancel alone, no word of a project', async () => {
+    showDialog(answered(NEITHER), null, null)
+    await screen.findByText('Вот пять вариантов.')
+    expect(screen.queryByRole('button', { name: /^Инструменты/ })).toBeNull()
+    expect(screen.queryByRole('link', { name: /Открыть проект/ })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Открыть сайт' })).toBeNull()
+    expect(screen.getByRole('list', { name: 'Сообщения диалога' }).textContent).not.toMatch(
+      /сайт|файл/iu,
+    )
+    expect(listedCommands()).toEqual([expect.stringMatching(/^Отменить чат/u)])
+    expect(hint()).toContain('Не отправляйте в чат пароли и ключи')
+    expect(hint()).not.toContain('Переменные')
+  })
+
+  it('takes a command of the site in a chat without the repository for none it has', async () => {
+    showDialog(answered(NEITHER), null, null)
+    await screen.findByText('Вот пять вариантов.')
+    type('/release')
+    expect(screen.queryByRole('listbox', { name: 'Команды' })).toBeNull()
+    fireEvent.keyDown(field(), { key: 'Enter', ctrlKey: true })
+    await screen.findByText(composerText.commandUnavailable)
+    expect(calls.message).not.toHaveBeenCalled()
+  })
+
+  it('offers no /retry, /undo or commands of the site on a project without its files', async () => {
+    const failure = {
+      id: '2',
+      at: '2026-10-17T10:00:00.000Z',
+      type: 'feed.failure',
+      turn: 1,
+      code: 'technical',
+      site: 'unchanged',
+      credits: null,
+      next: 'awaiting_user',
+    } as unknown as FeedRow
+    showDialog(
+      browserAnswer({
+        status: 'awaiting_user',
+        task: { canRetry: true },
+        // Each of them available or refused for a reason of its own: only the requirements say no.
+        commands: verdicts({ undo: 'busy', retry: null, release: null, cancel: null }),
+        events: [requestRow('1', 'Добавьте новость'), failure],
+        cursor: '2',
+      }),
+    )
+    await screen.findByText('Добавьте новость')
+    expect(listedCommands()).toEqual([expect.stringMatching(/^Отменить чат/u)])
+  })
+
+  it('reads an ended chat without a project no words of the «Переменные» either', async () => {
+    showDialog(
+      browserAnswer({
+        status: 'cancelled',
+        commands: verdicts({ cancel: 'finished' }),
+        events: [requestRow('1', 'Найдите цены')],
+        cursor: '1',
+      }),
+      null,
+      null,
+    )
+    await screen.findByText('Найдите цены')
+    await waitFor(() => expect(field().disabled).toBe(true))
+    expect(hint()).toContain('Не отправляйте в чат пароли и ключи')
+    expect(hint()).not.toContain('Переменные')
+  })
+
+  it('sends no client without a project to the «Переменные» it does not have for a password', async () => {
+    const refusal =
+      'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат — доступы задаются в разделе «Переменные»'
+    calls.message.mockRejectedValue(serverRefusal(refusal, 'TASK_TEXT_HAS_SECRET'))
+    showDialog(answered(NEITHER), null, null)
+    await screen.findByText('Вот пять вариантов.')
+    type('пароль: hunter2')
+    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }))
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат.',
+    )
+  })
+
+  it('keeps those words for a chat of a project, which has the «Переменные»', async () => {
+    const refusal =
+      'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат — доступы задаются в разделе «Переменные»'
+    calls.message.mockRejectedValue(serverRefusal(refusal, 'TASK_TEXT_HAS_SECRET'))
+    showDialog(answered({ repository: true, browser: false }))
+    await screen.findByText('Вот пять вариантов.')
+    type('пароль: hunter2')
+    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }))
+    expect((await screen.findByRole('alert')).textContent).toBe(`${refusal}.`)
+  })
+
+  it('asks to sign in on a site, not in the admin of one, without a project', async () => {
+    showDialog(
+      browserAnswer({
+        status: 'awaiting_user',
+        browser: { help: { reason: 'login', message: null } },
+        events: [requestRow('1'), browserQuestionRow('2', 1, 'login')],
+        cursor: '2',
+      }),
+      null,
+      null,
+    )
+    await screen.findByText('Нужно войти на сайт')
+    expect(plain(document.body.textContent)).toContain(
+      'Агенту нужно, чтобы вы вошли на сайт в браузере задачи.',
+    )
+    expect(document.body.textContent).not.toContain('админку')
+  })
+
+  it('says nothing of a site asking to cancel or to delete a chat without a project', async () => {
+    showDialog(answered(NEITHER), null, null)
+    await screen.findByText('Вот пять вариантов.')
+    fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+    fireEvent.click(option(/Отменить чат/))
+    const confirm = screen.getByRole('dialog', { name: 'Отменить чат?' })
+    expect(plain(confirm.textContent)).toContain('Чат завершится, а агент остановится')
+    expect(confirm.textContent).not.toContain('сайт')
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Не отменять' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: /^Действия с диалогом/ }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Удалить' }))
+    const ask = await screen.findByRole('dialog', { name: 'Удалить чат?' })
+    expect(plain(ask.textContent)).toContain('Чат пропадёт из списка')
+    expect(ask.textContent).not.toContain('сайт')
+  })
+})
 
 describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
   it.each([
@@ -1620,13 +2065,11 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     expect(plain(files.textContent)).toContain('Фото.jpg')
   })
 
-  it('says «нет» in a closed dialog without changes, and so do their tabs', async () => {
+  it('has no «+» in a closed dialog that left no changes and no preview (К19)', async () => {
     showDialog(
       feedAnswer({
         status: 'done',
-        // A preview with a copy of the database, gone with the dialog: its preview is offered no
-        // more, and without records among changes no «База данных» either (И6, owner's answer of
-        // 30.10.2026).
+        // A preview with a copy of the database, gone with the dialog: nothing is offered any more.
         preview: { ...readyPreview, status: 'destroyed' },
         events: [requestRow('1')],
         cursor: '1',
@@ -1643,34 +2086,79 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     expect(screen.getByRole('textbox', { name: 'Сообщение' }).getAttribute('placeholder')).toBe(
       'Диалог завершён',
     )
-    expect(await menuTiles()).toEqual(['Файлы и изменения, нет', 'Проверки, нет'])
-    await choose(/^Файлы и изменения/)
-    expect(plain(within(pane()).getByRole('tabpanel').textContent)).toBe(
-      'Диалог закрыт: изменений для показа здесь нет.Выпущенные версии — в разделе «Изменения».',
-    )
-    await choose(/^Проверки/)
-    expect(plain(within(pane()).getByRole('tabpanel').textContent)).toBe(
-      'Диалог закрыт: проверок нет.',
-    )
-    // The tiles of the open tools say so; nothing was read for them.
-    expect(await menuTiles()).toEqual(['Файлы и изменения, Открыто', 'Проверки, Открыто'])
+    expect(screen.queryByRole('button', { name: /^Инструменты/ })).toBeNull()
     expect(calls.candidate).not.toHaveBeenCalled()
   })
 
-  it('says the changes are yet to come in a dialog at work', async () => {
+  it('offers the preview alone in a dialog at work, not a word of changes (К19)', async () => {
     showDialog(started())
     await screen.findByText('Поменял цену капучино на 290 ₽.')
-    expect(await menuTiles()).toEqual([
-      'Предпросмотр',
-      'Файлы и изменения, пока нет',
-      'Проверки, пока нет',
-    ])
-    await choose(/^Файлы и изменения/)
-    expect(plain(within(pane()).getByRole('tabpanel').textContent)).toBe(
-      'Изменений пока нет.Они появятся здесь, когда агент закончит работу.',
-    )
+    expect(await menuTiles()).toEqual(['Предпросмотр'])
     expect(calls.candidate).not.toHaveBeenCalled()
   })
+
+  it('keeps an open tab of the changes when they are gone, saying so', async () => {
+    let later!: (answer: DialogFeed) => void
+    const gone = waiting({
+      status: 'awaiting_user',
+      candidate: null,
+      preview: readyPreview,
+      events: [requestRow('1'), resultRow('2', 1), candidateRow('3', 1), requestRow('4', 'Ещё')],
+      cursor: '4',
+    })
+    showAnswers(
+      waiting({ preview: readyPreview, more: true }),
+      new Promise<DialogFeed>((resolve) => (later = resolve)),
+      gone,
+    )
+    await screen.findByText('Изменения готовы')
+    await choose(/^Файлы и изменения/)
+    expect(toolsPanel()).not.toBeNull()
+    later(gone)
+    await waitFor(() =>
+      expect(plain(within(pane()).getByRole('tabpanel').textContent)).toBe(
+        'Изменений пока нет.Они появятся здесь, когда агент закончит работу.',
+      ),
+    )
+  })
+
+  it.each([
+    ['the field, open to words', 'awaiting_user', () => field()],
+    [
+      'what works in the closed field',
+      'done',
+      () => screen.getByRole('button', { name: 'Команды' }),
+    ],
+  ] as const)(
+    'gives the focus to %s when the last tool closes and no «+» is left (К19)',
+    async (_what, status, target) => {
+      wideLayout()
+      let later!: (answer: DialogFeed) => void
+      const gone = waiting({
+        status,
+        candidate: null,
+        preview: null,
+        commands: verdicts({ cancel: status === 'done' ? 'finished' : null }),
+        events: [requestRow('1'), resultRow('2', 1), candidateRow('3', 1), requestRow('4', 'Ещё')],
+        cursor: '4',
+      })
+      showAnswers(
+        waiting({ more: true }),
+        new Promise<DialogFeed>((resolve) => (later = resolve)),
+        gone,
+      )
+      await screen.findByText('Изменения готовы')
+      await choose(/^Файлы и изменения/)
+      later(gone)
+      await waitFor(() =>
+        expect(within(pane()).queryByRole('button', { name: /^Инструменты/ })).toBeNull(),
+      )
+      fireEvent.click(within(pane()).getByRole('button', { name: 'Скрыть панель' }))
+      await waitFor(() => expect(toolsPanel()).toBeNull())
+      expect(screen.queryByRole('button', { name: /^Инструменты/ })).toBeNull()
+      await waitFor(() => expect(document.activeElement).toBe(target()))
+    },
+  )
 
   it("offers «База данных» only once the changes hold records (owner's answer of 30.10.2026)", async () => {
     let later!: (answer: DialogFeed) => void
@@ -1823,13 +2311,13 @@ describe('a task in the browser', () => {
       expect(screen.queryByRole('tablist')).toBeNull()
       expect(calls.streamTicket).not.toHaveBeenCalled()
       expect(sockets).toHaveLength(0)
-      // The agent works: the field waits, and the window of commands has only «Отменить диалог».
+      // The agent works: the field waits, and the window of commands has only «Отменить чат».
       fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
       const options = within(screen.getByRole('listbox', { name: 'Команды' })).getAllByRole(
         'option',
       )
       expect(options.map((option) => plain(option.textContent))).toEqual([
-        expect.stringContaining('Отменить диалог'),
+        expect.stringContaining('Отменить чат'),
       ])
       expect(
         screen.getByText(
@@ -2131,9 +2619,9 @@ describe('a task in the browser', () => {
     expect(field().disabled).toBe(false)
     expect(take().disabled).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
-    fireEvent.click(option(/Отменить диалог/))
-    const confirm = screen.getByRole('dialog', { name: 'Отменить диалог?' })
-    fireEvent.click(within(confirm).getByRole('button', { name: 'Отменить диалог' }))
+    fireEvent.click(option(/Отменить чат/))
+    const confirm = screen.getByRole('dialog', { name: 'Отменить чат?' })
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Отменить чат' }))
     // core closes the task: until then the field and the control wait, and say why.
     await waitFor(() => expect(field().disabled).toBe(true))
     expect(take().disabled).toBe(true)
@@ -2233,6 +2721,37 @@ describe('a task in the browser', () => {
     expect(name.closest('[inert]')).toBeNull()
     expect(list.hasAttribute('inert')).toBe(false)
     expect(back.hasAttribute('inert')).toBe(false)
+  })
+
+  it('leaves the whole area when another tool is chosen: only the browser has the way back', async () => {
+    wideLayout()
+    showDialog(
+      browserAnswer({
+        status: 'awaiting_approval',
+        task: { requirements: { repository: true, browser: true } },
+        candidate: candidateHead,
+        commands: verdicts(),
+        events: [requestRow('1'), resultRow('2', 1), candidateRow('3', 1)],
+        cursor: '3',
+      }),
+      STREAM_URL,
+    )
+    const feed = await screen.findByRole('list', { name: 'Сообщения диалога' })
+    await choose(/^Браузер/)
+    await choose(/^Файлы и изменения/)
+    const browser = await screen.findByRole('tab', { name: 'Браузер' })
+    fireEvent.click(browser)
+    fireEvent.click(await within(pane()).findByRole('button', { name: 'Во весь экран' }))
+    await waitFor(() => expect(feed.closest('[inert]')).not.toBeNull())
+    // A tab of the strip…
+    fireEvent.click(screen.getByRole('tab', { name: 'Файлы' }))
+    await waitFor(() => expect(feed.closest('[inert]')).toBeNull())
+    // …and a tool of «+» at its end, which stands over the browser too.
+    fireEvent.click(browser)
+    fireEvent.click(await within(pane()).findByRole('button', { name: 'Во весь экран' }))
+    await waitFor(() => expect(feed.closest('[inert]')).not.toBeNull())
+    await choose(/^База данных/)
+    await waitFor(() => expect(feed.closest('[inert]')).toBeNull())
   })
 
   it('names the files of a later message too: the list is read again for them', async () => {
@@ -2373,6 +2892,63 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
     expect(toolsPanel()).toBeNull()
     expect(calls.cancel).not.toHaveBeenCalled()
     expect(calls.resumeAgent).not.toHaveBeenCalled()
+  })
+
+  describe('in a chat with the code too (docs/plan/61-chats-first.md, К10, К11)', () => {
+    const BOTH = { repository: true, browser: true }
+    /** The agent works on the changes; the first word to the browser starts it. */
+    const both = (browser: Partial<FeedBrowserHead> | null, rows: number, more = false) => {
+      const { task: _task, ...answer } = atWork(browser, rows, more)
+      return browserAnswer({
+        ...answer,
+        browser,
+        task: { requirements: BOTH },
+        candidate: candidateHead,
+      })
+    }
+
+    it('opens the browser by itself once, on its tab, with its stream', async () => {
+      wideLayout()
+      const second = later()
+      queueAnswers(both(null, 1, true), second.answer, both({ status: 'ready' }, 2))
+      mountDialog({ streamUrl: STREAM_URL })
+      await screen.findByText(WORDS[0]!)
+      expect(toolsPanel()).toBeNull()
+      expect(calls.streamTicket).not.toHaveBeenCalled()
+      second.give(both({ status: 'ready' }, 2, true))
+      expect(await screen.findByRole('tab', { name: 'Браузер', selected: true })).toBeTruthy()
+      await waitFor(() => expect(sockets).toHaveLength(1))
+      expect(calls.streamTicket).toHaveBeenCalledTimes(1)
+      closeBrowser()
+      await waitFor(() => expect(toolsPanel()).toBeNull())
+      expect(sockets).toHaveLength(1)
+    })
+
+    it('leaves the client on the tab read, the focus inside it, the browser a tab beside', async () => {
+      wideLayout()
+      const second = later()
+      queueAnswers(both(null, 1, true), second.answer, both({ status: 'ready' }, 2))
+      calls.candidate.mockResolvedValue(candidateWith('passed'))
+      mountDialog({ streamUrl: STREAM_URL })
+      await screen.findByText(WORDS[0]!)
+      await choose(/^Проверки/)
+      const panel = await screen.findByRole('tabpanel')
+      const held = document.createElement('button')
+      panel.appendChild(held)
+      held.focus()
+      second.give(both({ status: 'ready' }, 2, true))
+      await waitFor(() => expect(tabNames()).toEqual(['Проверки', 'Браузер']))
+      await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+      expect(screen.getByRole('tab', { name: 'Проверки' }).getAttribute('aria-selected')).toBe(
+        'true',
+      )
+      expect(panel.hidden).toBe(false)
+      expect(document.activeElement).toBe(held)
+      // Nothing of the browser before the client asks for it (docs/plan/59, И11).
+      expect(calls.streamTicket).not.toHaveBeenCalled()
+      expect(sockets).toHaveLength(0)
+      panel.removeChild(held)
+    })
   })
 
   /** «+» at the end of the tabs, where it stands while the panel is open (И4). */
@@ -2565,14 +3141,16 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
   })
 
   it.each([
-    ['in «Чат», its browser still being started', () => atWork({ status: 'starting' }, 1)],
+    ['in «Чат», its browser still being started', () => atWork({ status: 'starting' }, 1), true],
     [
       'in «Работа», on the copy of the site',
       () => feedAnswer({ status: 'queued', events: [requestRow('1', WORDS[0])], cursor: '1' }),
+      // No tool yet: «+» has nothing to offer (docs/plan/61-chats-first.md, К19).
+      false,
     ],
   ])(
     'starts a dialog the client has just started with the chat alone, %s (И1)',
-    async (_what, answer) => {
+    async (_what, answer, withPlus) => {
       wideLayout()
       markNewDialog(TASK_ID)
       queueAnswers(answer())
@@ -2584,9 +3162,9 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
       expect(document.querySelector('[data-chat-pane]')).toBeNull()
       expect(calls.streamTicket).not.toHaveBeenCalled()
       expect(calls.candidate).not.toHaveBeenCalled()
-      expect(within(screen.getByRole('banner')).getByRole('button', { name: /^Инструменты/ })).toBe(
-        plus(),
-      )
+      expect(
+        within(screen.getByRole('banner')).queryAllByRole('button', { name: /^Инструменты/ }),
+      ).toHaveLength(withPlus ? 1 : 0)
     },
   )
 

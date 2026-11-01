@@ -30,26 +30,22 @@ export interface PaletteOption {
 
 /**
  * The commands for what is typed: every command when the list was opened by its button,
- * otherwise those whose name starts with the letters after `/`. A command the server gave no
- * verdict on is shown as one that cannot be run.
+ * otherwise those whose name starts with the letters after `/`. A chat lists the commands it has
+ * a verdict on and no others: `DialogView` hands over only those it has (docs/plan/61-chats-first.md,
+ * К27). A place with `closedReason` has no chat yet: it lists the commands with that reason.
  */
 export function paletteOptions(
   typed: string | null,
   verdicts: readonly CommandVerdict[],
-  /** The commands this dialog has at all; absent — every command of the chat. */
-  listed?: readonly ChatCommandId[],
-  /** Why a command without a verdict cannot be run here; absent — its description is shown. */
+  /** Why a command cannot be run here, where no chat has given a verdict on it. */
   closedReason?: string,
 ): PaletteOption[] {
-  const ids = (typed === null ? [...chatCommandIds] : matchChatCommands(typed)).filter(
-    (id) => listed === undefined || listed.includes(id),
-  )
+  const ids = typed === null ? [...chatCommandIds] : matchChatCommands(typed)
   return ids.flatMap((id) => {
-    // «Отменить выпуск» and «Попробовать ещё» are listed only with the server's verdict on them:
-    // a dialog that installed nothing, or has no failure to retry, does not list them
-    // (dialog-view.tsx). Any other command without a verdict is listed as one that cannot be run.
-    if ((id === 'undo' || id === 'retry') && !verdicts.some((item) => item.id === id)) return []
     const verdict = verdicts.find((item) => item.id === id)
+    // «Отменить выпуск» and «Попробовать ещё» take a chat that has something to undo or to retry.
+    if (verdict === undefined && (closedReason === undefined || id === 'undo' || id === 'retry'))
+      return []
     const available = verdict?.available === true
     const refusal = verdict?.refusal ?? null
     return [
@@ -60,9 +56,7 @@ export function paletteOptions(
           ? null
           : refusal !== null
             ? chatCommandRefusalText[refusal]
-            : verdict === undefined
-              ? (closedReason ?? null)
-              : null,
+            : (closedReason ?? null),
       },
     ]
   })

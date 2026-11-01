@@ -126,11 +126,6 @@ export interface ComposerCommands {
   onRun: (id: ChatCommandId) => void
   /** The list was opened: the verdicts are read again. */
   onOpen?: () => void
-  /**
-   * The commands this dialog has at all; absent — every command of the chat. A task in the
-   * browser has only `/cancel` (docs/plan/57-browser-tasks.md): no preview, release or undo.
-   */
-  listed?: readonly ChatCommandId[]
   /** Why a command the server gave no verdict on cannot be run here: on «Новый чат». */
   closedReason?: string
 }
@@ -259,9 +254,9 @@ export function Composer({
     commands === undefined
       ? []
       : forced
-        ? paletteOptions(null, commands.verdicts, commands.listed, commands.closedReason)
+        ? paletteOptions(null, commands.verdicts, commands.closedReason)
         : typed && !disabled
-          ? paletteOptions(text, commands.verdicts, commands.listed, commands.closedReason)
+          ? paletteOptions(text, commands.verdicts, commands.closedReason)
           : []
   const open = options.length > 0
   const activeIndex = Math.min(active, Math.max(0, options.length - 1))
@@ -303,12 +298,7 @@ export function Composer({
     if (!next.startsWith('/')) setDismissed(false)
     setActive(0)
     if (commands && wasClosed && !disabled && next.startsWith('/') && !dismissed) {
-      const count = paletteOptions(
-        next,
-        commands.verdicts,
-        commands.listed,
-        commands.closedReason,
-      ).length
+      const count = paletteOptions(next, commands.verdicts, commands.closedReason).length
       if (count > 0) announceOpened(count)
     }
   }
@@ -322,12 +312,9 @@ export function Composer({
         setNotice(composerText.commandsInDialog)
         return
       }
-      const option = paletteOptions(
-        null,
-        commands.verdicts,
-        commands.listed,
-        commands.closedReason,
-      ).find((item) => item.id === command)
+      const option = paletteOptions(null, commands.verdicts, commands.closedReason).find(
+        (item) => item.id === command,
+      )
       if (option?.available) choose(option)
       else setNotice(option?.reason ?? composerText.commandUnavailable)
       return
@@ -366,9 +353,7 @@ export function Composer({
     }
     setForced(true)
     setActive(0)
-    announceOpened(
-      paletteOptions(null, commands.verdicts, commands.listed, commands.closedReason).length,
-    )
+    announceOpened(paletteOptions(null, commands.verdicts, commands.closedReason).length)
     // The list is in the document after this render: then it takes the focus.
     window.setTimeout(
       () => listRef.current?.querySelector<HTMLElement>('[role="listbox"]')?.focus(),

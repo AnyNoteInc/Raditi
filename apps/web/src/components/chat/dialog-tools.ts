@@ -2,7 +2,7 @@ import { terminalTaskStatuses } from '@repo/domain/tasks/task-status'
 
 import type { AppIconName } from '@/components/application/app-icon'
 
-import { sessionLive } from './browser-pane-model'
+import { agentBrowserStatus, sessionLive } from './browser-pane-model'
 import { browserText, toolText } from './chat-texts'
 import type { BrowserHead, CandidateHead, PreviewHead } from './chat-types'
 import type { FeedHeadState } from './feed-state'
@@ -14,7 +14,7 @@ import type { FeedHeadState } from './feed-state'
 // launch of the browser to `toolsReducer`. Nothing here is kept between two showings of a dialog:
 // each one starts with the panel closed (И1).
 
-export const dialogTools = ['browser', 'preview', 'files', 'database', 'checks'] as const
+export const dialogTools = ['preview', 'files', 'database', 'checks', 'browser'] as const
 export type DialogTool = (typeof dialogTools)[number]
 /** The tools of the changes: what the candidate of the dialog holds. */
 export type ChangesTool = Extract<DialogTool, 'files' | 'database' | 'checks'>
@@ -31,11 +31,11 @@ export type ToolOpener = (typeof toolOpeners)[number]
 
 /** The icon of a tool, in the menu and on its tab. */
 export const toolIcons: Readonly<Record<DialogTool, AppIconName>> = Object.freeze({
-  browser: 'globe',
   preview: 'eye',
   files: 'file',
   database: 'database',
   checks: 'check',
+  browser: 'globe',
 })
 
 /** The name of a tool on its tab, and in the menu «Инструменты» (И7). */
@@ -75,24 +75,23 @@ const offersPreview = (preview: PreviewHead | null): boolean =>
   preview !== null && preview.origin !== null && usedPreviews.has(preview.status)
 
 /**
- * The tools «+» offers the dialog, in the order of the menu (И6): a task in the browser has its
- * browser, whatever its state, ended too; a task with the repository has the preview while one
- * can be shown, its files and checks always, and its records only once its changes hold some
- * (owner's answer of 30.10.2026: «не нужно показывать, если нет изменений в базе данных»).
+ * The tools «+» offers the chat, in the order of the menu (docs/plan/61-chats-first.md, §5.11): a
+ * chat with the repository has the preview while one can be shown and what its changes hold, with
+ * no changes not a word of them (К19); a chat with a browser has it, whatever its state, ended too.
+ * A chat of one kind has none of the other's, whatever its head says: the requirements decide.
  */
 export function dialogToolsOf(head: FeedHeadState): DialogTool[] {
-  if (head.task.requirements.browser) return ['browser']
+  const { repository, browser } = head.task.requirements
   return dialogTools.filter((tool) => {
     switch (tool) {
       case 'browser':
-        return false
+        return browser
       case 'preview':
-        return offersPreview(head.preview)
-      case 'database':
-        return candidateCount('database', head.candidate) > 0
+        return repository && offersPreview(head.preview)
       case 'files':
+      case 'database':
       case 'checks':
-        return true
+        return repository && candidateCount(tool, head.candidate) > 0
     }
   })
 }
@@ -115,33 +114,32 @@ export function candidateCount(tool: ChangesTool, candidate: CandidateHead | nul
  * no session yet — its tab says the browser opens when the agent needs it, which may be never;
  * «нет» for a dialog that ended without one; closed for a session that holds none any more.
  */
-function browserMark(session: BrowserHead | null, ended: boolean): string {
-  if (session === null) return ended ? toolText.mark.none : toolText.mark.notYet
+function browserMark(session: BrowserHead | null, head: FeedHeadState, answered: boolean): string {
+  if (session === null) return dialogEnded(head) ? toolText.mark.none : toolText.mark.notYet
   if (!sessionLive(session)) return toolText.mark.browserClosed
   if (session.controller === 'user') return browserText.status.user
-  if (session.help !== null) return browserText.status.waiting
-  return browserText.status.agent
+  const help = session.help !== null
+  return browserText.status[agentBrowserStatus(head.task.status, { help, answered })]
 }
 
 /**
- * The mark on the right of the tile of a tool (И5): «Открыто» for an open one; the number of
- * the files and media or of the records, the checks passed of all; «пока нет» while the changes
- * have nothing for it, «нет» once the dialog has ended; who drives the browser. The preview has
- * none.
+ * The mark on the right of the tile of a tool (И5): «Открыто» for an open one; the number of the
+ * files and media or of the records, the checks passed of all — a tile of the changes stands only
+ * where they hold something (`dialogToolsOf`); who drives the browser, in the word of its panel
+ * (`answered`: the agent answered and asked nothing). The preview has none.
  */
 export function toolMark(
   tool: DialogTool,
   head: FeedHeadState,
-  { open }: { open: boolean },
+  { open, answered = false }: { open: boolean; answered?: boolean },
 ): string | null {
   if (open) return toolText.mark.open
   if (tool === 'preview') return null
-  if (tool === 'browser') return browserMark(head.browser, dialogEnded(head))
-  const candidate = head.candidate
-  const count = candidateCount(tool, candidate)
-  if (candidate !== null && count > 0)
-    return tool === 'checks' ? toolText.mark.checks(candidate.checks.passed, count) : String(count)
-  return dialogEnded(head) ? toolText.mark.none : toolText.mark.notYet
+  if (tool === 'browser') return browserMark(head.browser, head, answered)
+  const count = candidateCount(tool, head.candidate)
+  return tool === 'checks'
+    ? toolText.mark.checks(head.candidate?.checks.passed ?? 0, count)
+    : String(count)
 }
 
 /**
@@ -230,7 +228,10 @@ export type ToolsAction =
   | { type: 'closeAll' }
   /** «К диалогу» below `lg`: the tab on the screen closes, the others stay behind the dialog. */
   | { type: 'back' }
-  /** The browser of the task has started while the client looks at the dialog (И2, И3). */
+  /**
+   * The browser of the task has started while the client looks at the dialog (И2, И3): it opens by
+   * itself, and with the panel on the screen it only joins the tabs (`toolsReducer`).
+   */
   | { type: 'launch' }
   /** A tab of the changes is on the screen at these changes (`changesMark`). */
   | { type: 'seen'; changes: string }
@@ -283,6 +284,10 @@ export function toolsReducer(state: ToolsState, action: ToolsAction): ToolsState
     }
     case 'launch':
       if (state.launchSpent) return state
+      // The client reads another tool: nobody pressed anything, so it stays on the screen and
+      // keeps the focus, the browser a new tab beside it (docs/plan/61-chats-first.md, К10).
+      if (toolsShown(state))
+        return { ...state, open: withTool(state.open, 'browser'), launchSpent: true }
       return {
         ...state,
         open: withTool(state.open, 'browser'),
@@ -304,10 +309,14 @@ export interface ToolTile {
 }
 
 /** The tiles of the menu «Инструменты» (И5, И6): the tools of the dialog in their order. */
-export const toolTilesOf = (head: FeedHeadState, tools: ToolsState): ToolTile[] =>
+export const toolTilesOf = (
+  head: FeedHeadState,
+  tools: ToolsState,
+  { answered = false }: { answered?: boolean } = {},
+): ToolTile[] =>
   dialogToolsOf(head).map((tool) => {
     const open = tools.open.includes(tool)
-    return { tool, open, mark: toolMark(tool, head, { open }) }
+    return { tool, open, mark: toolMark(tool, head, { open, answered }) }
   })
 
 /** Why «+» bears its dot (И13), the most pressing first. */

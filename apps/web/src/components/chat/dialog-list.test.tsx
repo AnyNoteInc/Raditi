@@ -136,10 +136,35 @@ describe('the list of dialogs', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Действия с диалогом: Цена латте' }))
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Удалить' }))
-    const ask = await screen.findByRole('dialog', { name: 'Удалить диалог?' })
+    const ask = await screen.findByRole('dialog', { name: 'Удалить чат?' })
     fireEvent.click(within(ask).getByRole('button', { name: 'Удалить' }))
     await waitFor(() => expect(remove).toHaveBeenCalledTimes(1))
     expect(remove.mock.calls[0]![0]).toEqual({ taskId: dialog('2').id })
+  })
+
+  it('speaks of the site in the window of deleting only for a chat with a project', async () => {
+    listPage.mockResolvedValue({
+      items: [
+        dialog('1', { title: 'Без проекта' }),
+        dialog('2', {
+          title: 'С проектом',
+          project: { id: PROJECT_ID, name: 'Кофейня «Крошка»' },
+        }),
+      ],
+      nextCursor: null,
+    })
+    showList()
+    const asked = async (title: string) => {
+      fireEvent.click(await screen.findByRole('button', { name: `Действия с диалогом: ${title}` }))
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Удалить' }))
+      return plain((await screen.findByRole('dialog', { name: 'Удалить чат?' })).textContent)
+    }
+    const without = await asked('Без проекта')
+    expect(without).toContain('Чат пропадёт из списка.')
+    expect(without).not.toContain('сайт')
+    fireEvent.click(screen.getByRole('button', { name: 'Оставить' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(await asked('С проектом')).toContain('То, что агент уже сделал на сайте, останется.')
   })
 
   // MUI lets a menu item shrink to its content from `sm` up by a media query of its own, which wins

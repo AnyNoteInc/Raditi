@@ -196,6 +196,56 @@ export async function addLongDialog(
 }
 
 /**
+ * The changes a pass left in a chat, as core records them: one changed file and one passed check,
+ * no records. A chat has the tools of its changes only with something in them (docs/plan/61-chats-
+ * first.md, К19). No core runs here, and no file behind the list is read.
+ */
+export async function addChanges(taskId: string): Promise<void> {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    await prisma.taskCandidate.create({
+      data: {
+        taskId,
+        revision: 1,
+        turnNo: 1,
+        baseSha: 'a'.repeat(40),
+        baseTree: 'b'.repeat(40),
+        headSha: 'c'.repeat(40),
+        files: [
+          {
+            path: CHANGED_FILE,
+            change: 'modified',
+            sizeBytes: 1024,
+            executable: false,
+          },
+        ],
+        dbPlanSha256: 'd'.repeat(64),
+        proposedBump: 'patch',
+        proposedVersion: 'v1.0.1',
+        facts: {
+          changeType: 'code',
+          risk: 'low',
+          addedFiles: 0,
+          modifiedFiles: 1,
+          deletedFiles: 0,
+          mediaFiles: 0,
+          dbObjects: 0,
+          newFunctionality: false,
+        },
+        checks: {
+          create: { revision: 1, kind: 'php_lint', status: 'passed', finishedAt: new Date() },
+        },
+      },
+    })
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+/** The one file of `addChanges`, as the tab «Файлы» lists it. */
+export const CHANGED_FILE = 'wp-content/themes/kroshka/style.css'
+
+/**
  * The same long chat without a project (docs/plan/61-chats-first.md, §5.11): nothing but the
  * words, on a personal workspace, the way `task.create` writes one when the run has no browser.
  */

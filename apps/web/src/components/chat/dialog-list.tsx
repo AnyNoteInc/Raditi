@@ -269,7 +269,12 @@ function DialogRow({
         </>
       )}
       {removing ? (
-        <RemoveDialogConfirm taskId={item.id} open onClose={() => setRemoving(false)} />
+        <RemoveDialogConfirm
+          taskId={item.id}
+          withSite={item.project !== null}
+          open
+          onClose={() => setRemoving(false)}
+        />
       ) : null}
     </Box>
   )

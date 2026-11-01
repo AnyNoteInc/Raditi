@@ -221,7 +221,7 @@ export function RenameField({
 }
 
 /**
- * «Удалить диалог?»: what the deletion leads to and two buttons. The deleted dialog leaves the list;
+ * «Удалить чат?»: what the deletion leads to and two buttons. The deleted dialog leaves the list;
  * the page of it, when it is the one open, goes to the root of «Чаты». A dialog already gone (another
  * tab deleted it) counts as deleted.
  */
@@ -229,11 +229,14 @@ export function RemoveDialogConfirm({
   taskId,
   open,
   onClose,
+  withSite,
   undoable = false,
 }: {
   taskId: string
   open: boolean
   onClose: () => void
+  /** The chat has a project; without one the words say nothing of a site. */
+  withSite: boolean
   /** «Отменить выпуск» of the dialog is offered now: deleting it takes the button away too. */
   undoable?: boolean
 }) {
@@ -276,7 +279,7 @@ export function RemoveDialogConfirm({
       danger
       onConfirm={() => void confirm()}
     >
-      <Typography sx={{ mt: 1.5 }}>{nbsp(dialogMenuText.removeBody)}</Typography>
+      <Typography sx={{ mt: 1.5 }}>{nbsp(dialogMenuText.removeBody(withSite))}</Typography>
       {undoable ? <Typography sx={{ mt: 1 }}>{nbsp(dialogMenuText.removeUndo)}</Typography> : null}
     </ConfirmDialog>
   )

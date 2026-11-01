@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import { useTRPC } from '@/trpc/client'
 
-import { callErrorText } from './call-error'
+import { sendErrorText } from './call-error'
 import { chatHref } from './chat-address'
 import { keepChatDraft, takeChatDraft } from './chat-draft'
 import { riseIn } from './chat-motion'
@@ -98,7 +98,7 @@ export function NewChat({ userId, beside = false }: { userId: string; beside?: b
       router.push(chatHref(created.taskId))
       return true
     } catch (failure) {
-      setError(callErrorText(failure))
+      setError(sendErrorText(failure, { withProject: siteId !== null }))
       return false
     }
   }
@@ -139,7 +139,13 @@ export function NewChat({ userId, beside = false }: { userId: string; beside?: b
         busy={create.isPending}
         onSend={start}
         attachments={attachments}
-        noSecrets={project?.chat.requirements?.browser ? taskWayText.noSecrets : undefined}
+        noSecrets={
+          project === null
+            ? taskWayText.noSecretsPlain
+            : project.chat.requirements?.browser
+              ? taskWayText.noSecrets
+              : undefined
+        }
         // The window of commands is here as in a chat; it says that commands work there.
         commands={{
           verdicts: [],

@@ -61,9 +61,13 @@ describe('the commands of a dialog', () => {
       '/reset': 'Сбросить данные предпросмотра',
       '/update': 'Обновить рабочую копию',
       '/retry': 'Попробовать ещё',
-      '/cancel': 'Отменить диалог',
+      '/cancel': 'Отменить чат',
       '/undo': 'Отменить выпуск',
     })
+  })
+
+  it('promises no more of `/cancel` than it does: what happens to the changes depends on the chat', () => {
+    expect(chatCommands.cancel.description).toBe('Завершить чат и остановить агента.')
   })
 
   it('speaks to the client in Russian, without Latin words', () => {

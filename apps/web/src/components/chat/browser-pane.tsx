@@ -40,6 +40,7 @@ import {
 import { FileChooserDialog, PageDialog } from './browser-page-dialogs'
 import {
   addressParts,
+  BLANK_PAGE,
   paneOverlay,
   paneStatus,
   sessionLive,
@@ -279,10 +280,18 @@ function Address({
   onReload: () => void
 }) {
   const fieldId = useId()
-  const parts = addressParts(url)
+  // The browser of a chat without a project starts with no page: the client types the first one
+  // (docs/plan/61-chats-first.md, К13), and there is nothing to read, to edit or to load again.
+  const blank = url === BLANK_PAGE
+  const page = blank ? '' : url
+  const parts = addressParts(page)
   const [draft, setDraft] = useState<string | null>(null)
   const icon = (
-    <AppIcon name={parts?.secure === false ? 'globe' : 'lock'} size={16} style={{ opacity: 0.7 }} />
+    <AppIcon
+      name={blank || parts?.secure === false ? 'globe' : 'lock'}
+      size={16}
+      style={{ opacity: 0.7 }}
+    />
   )
   if (!editable) {
     return (
@@ -317,7 +326,7 @@ function Address({
               </Box>
             </>
           ) : (
-            url
+            page
           )}
         </Box>
       </Box>
@@ -325,7 +334,7 @@ function Address({
   }
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    const target = (draft ?? url).trim()
+    const target = (draft ?? page).trim()
     if (target !== '')
       onNavigate(/^[a-z][a-z\d+.-]*:\/\//i.test(target) ? target : `https://${target}`)
     setDraft(null)
@@ -336,7 +345,12 @@ function Address({
       onSubmit={submit}
       sx={{ flex: '1 1 auto', minWidth: 0, display: 'flex', alignItems: 'center', gap: 0.5 }}
     >
-      <IconButton aria-label={browserText.reload} onClick={onReload} sx={{ width: 44, height: 44 }}>
+      <IconButton
+        aria-label={browserText.reload}
+        onClick={onReload}
+        disabled={blank}
+        sx={{ width: 44, height: 44 }}
+      >
         <AppIcon name="retry" size={18} />
       </IconButton>
       <Box
@@ -360,7 +374,7 @@ function Address({
         <Box
           component="input"
           id={fieldId}
-          value={draft ?? url}
+          value={draft ?? page}
           onChange={(event: ChangeEvent<HTMLInputElement>) => setDraft(event.target.value)}
           onBlur={() => setDraft(null)}
           inputMode="url"
@@ -762,8 +776,10 @@ export function BrowserPane({
   const refusalText =
     refusal === null || refusal.reason.startsWith('stale_') || refusal.reason === 'outside_viewport'
       ? null
-      : ((browserText.refused as Record<string, string>)[refusal.reason] ??
-        browserText.refused.other)
+      : refusal.reason === 'address_denied' && siteId === null
+        ? browserText.refused.address_denied_public
+        : ((browserText.refused as Record<string, string>)[refusal.reason] ??
+          browserText.refused.other)
   const showTake = live && !holding && status !== 'error'
   const showResume = live && holding
 

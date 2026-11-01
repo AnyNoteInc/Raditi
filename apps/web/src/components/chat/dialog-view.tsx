@@ -1,6 +1,6 @@
 'use client'
 
-import { chatCommands, type ChatCommandId } from '@repo/domain/release/chat-commands'
+import type { ChatCommandId } from '@repo/domain/release/chat-commands'
 import { feedFailureText } from '@repo/domain/tasks/client-feed-failures'
 import type { ReasoningEffort } from '@repo/domain/llm/model-class'
 import {
@@ -32,7 +32,7 @@ import { useTRPC } from '@/trpc/client'
 import type { SentFile } from './attachment-chips'
 import { BrowserPane } from './browser-pane'
 import { sessionLive } from './browser-pane-model'
-import { callErrorText } from './call-error'
+import { callErrorText, sendErrorText } from './call-error'
 import { newChatHref } from './chat-address'
 import type { ChatProject } from './chat-types'
 import {
@@ -91,17 +91,15 @@ import { useFeedFollow } from './use-feed-follow'
 import { useDialogFeed } from './use-dialog-feed'
 import { uuidv7 } from './uuid'
 
-// One dialog (docs/plan/53-chat-preview-release.md, R9; feed design, «Экраны, которых нет на
-// макетах»): its head, its rows, the live block and the field. Its tools — the browser of a task
-// in the browser (docs/plan/57-browser-tasks.md), the preview, files, records and checks of a task
-// with the repository — open beside it only when the client asks for one (docs/plan/59-dialog-
-// tools-panel.md): by «+» in the corner, «Посмотреть изменения», `/preview` and «Взять
-// управление»; by themselves only once, when the browser of the task starts while the client looks
-// at the dialog. From `lg` they stand at the right edge; below, in place of the dialog, «К диалогу»
-// leading back to it.
-
-/** The one command of a task in the browser: stopping it (docs/plan/57-browser-tasks.md, Б24). */
-const BROWSER_COMMANDS: readonly ChatCommandId[] = ['cancel']
+// One chat (docs/plan/53-chat-preview-release.md, R9; feed design, «Экраны, которых нет на
+// макетах»): its head, its rows, the live block and the field. How it works follows from the
+// requirements the server gave it (docs/plan/61-chats-first.md, §5.6), never from a mode: a chat
+// with the repository has the preview, files, records and checks of its changes, a chat with a
+// browser has the browser (docs/plan/57-browser-tasks.md), a chat may have both or neither. Its
+// tools open beside it only when the client asks for one (docs/plan/59-dialog-tools-panel.md): by
+// «+» in the corner, «Посмотреть изменения», `/preview` and «Взять управление»; by themselves only
+// once, when the browser of the chat starts while the client looks at it. From `lg` they stand at
+// the right edge; below, in place of the dialog, «К диалогу» leading back to it.
 
 /**
  * What a focused element of the feed keeps clear above it (WCAG 2.4.11): below `lg` the head of
@@ -296,6 +294,7 @@ function DialogHead({
       {removing ? (
         <RemoveDialogConfirm
           taskId={taskId}
+          withSite={project !== null}
           undoable={undoable}
           open
           onClose={() => setRemoving(false)}
@@ -398,9 +397,10 @@ export function DialogView({
     update.isPending ||
     resumeAgent.isPending
 
-  // A task in the browser (docs/plan/57-browser-tasks.md): the browser instead of the preview.
-  const inBrowser = head?.task.requirements.browser === true
-  const browserLive = inBrowser && sessionLive(head?.browser ?? null)
+  // What the chat works with (docs/plan/61-chats-first.md, §5.6): the two do not exclude each other.
+  const withRepository = head?.task.requirements.repository === true
+  const withBrowser = head?.task.requirements.browser === true
+  const browserLive = withBrowser && sessionLive(head?.browser ?? null)
   // The stream goes while the tab of the browser is on the screen, beside the dialog or in its
   // place; a press of «Взять управление» or «Продолжить работу агента» opens it for that press alone
   // (docs/plan/59, И11). Nothing of it before the client asked for the browser.
@@ -417,7 +417,8 @@ export function DialogView({
   // Never by the words of the agent, and not where the cabinet cannot show the browser. Nobody
   // pressed anything, so the focus stays where it is — unless it stood on what this very opening
   // takes away (`focusTakenByOpening`): then «+» takes it, in the same corner (И4), and it is never
-  // dropped to the start of the page. A launch that opens nothing — spent — moves nothing.
+  // dropped to the start of the page. A launch that opens nothing — spent, or the browser joining
+  // the tabs of a panel on the screen, which stays as it was — moves nothing.
   const heldAtLaunch = useRef<Element | null>(null)
   const launched = useCallback(() => {
     const opens = !toolsShown(tools) && toolsShown(toolsReducer(tools, { type: 'launch' }))
@@ -434,7 +435,7 @@ export function DialogView({
   }, [shown])
   useBrowserLaunch(head, {
     taskId,
-    enabled: inBrowser && browserStreamUrl !== null,
+    enabled: withBrowser && browserStreamUrl !== null,
     onLaunch: launched,
   })
   // The chat counts as watching the browser (И18; owner's answer of 30.10.2026): while the dialog
@@ -489,16 +490,18 @@ export function DialogView({
   const retryRow = retryFailure(rows, head)
   const terminal = status !== undefined && terminalTaskStatuses.includes(status)
   // `/cancel` was taken while the agent works: core stops it, and it is not asked twice — the
-  // agent is still at work until then, as the list says of the command. A task in the browser is
-  // stopped by core while it waits for the client too: it takes no words or presses meanwhile.
+  // agent is still at work until then, as the list says of the command. A chat with a browser is
+  // stopped by core while it waits for the client too, with its changes as well: it takes no words
+  // or presses meanwhile.
   const stopping =
-    !terminal && (stopRequested(rows, status, inBrowser) || cancel.data?.state === 'stopping')
+    !terminal && (stopRequested(rows, status, withBrowser) || cancel.data?.state === 'stopping')
   // «Отменить выпуск» is listed only in a dialog that installed a version, «Попробовать ещё» only
   // while it is offered (critique of the plan: a refusal in every other dialog would be noise).
-  // A task in the browser has one command: stopping it (no preview, release or undo).
+  // Without the repository — no project, or a project without its files — a chat has neither the
+  // commands of the site nor anything to retry (docs/plan/61-chats-first.md, К27).
   const verdicts = (head?.commands ?? []).filter(
     (command) =>
-      (!inBrowser || command.id === 'cancel') &&
+      (withRepository || command.id === 'cancel') &&
       (command.id !== 'undo' || command.refusal !== 'no_release') &&
       (command.id !== 'retry' || (command.available && retryRow !== null)),
   )
@@ -582,17 +585,25 @@ export function DialogView({
           ? taskAnsweredLabel
           : taskStatusLabel[status]
 
-  /**
-   * The focus goes where the tools are drawn next — the tab of a tool, or «+» once none is open:
-   * what moved it is gone or behind. «+» takes it where it stands, the page left where it is: the
-   * head keeps «+» in sight as it sticks, and in a window lower than 420px, where the head goes
-   * with the page, the feed comes back where the client read it rather than at the head (И19).
-   */
+  /** The focus goes to the tab of a tool: what moved it is gone or behind. */
   function focusSoon(id: string) {
-    window.setTimeout(
-      () => document.getElementById(id)?.focus({ preventScroll: id === TOOLS_BUTTON_ID }),
-      0,
-    )
+    window.setTimeout(() => document.getElementById(id)?.focus(), 0)
+  }
+
+  /**
+   * The focus once no tool stands open: on «+» where it stands, the page left where it is — the head
+   * keeps «+» in sight as it sticks, and in a window lower than 420px, where the head goes with the
+   * page, the feed comes back where the client read it rather than at the head (И19). A chat left
+   * with no tool has no «+» (К19): the field takes it then, or what still works there when it is
+   * closed, so that the focus is never dropped to the start of the page.
+   */
+  function focusBackSoon() {
+    window.setTimeout(() => {
+      const target =
+        document.getElementById(TOOLS_BUTTON_ID) ??
+        field.current?.querySelector<HTMLElement>('textarea:enabled, button:enabled')
+      target?.focus({ preventScroll: true })
+    }, 0)
   }
 
   /**
@@ -607,7 +618,19 @@ export function DialogView({
     if (tool === 'preview') previewCalls.call()
     const covers = !wide && !shown
     dispatchTools({ type: 'open', tool, by })
+    leaveFullscreenFor(tool)
     if (movesFocus(by, { covers })) focusSoon(toolTabId(tool))
+  }
+
+  /** Only the browser goes over the content: its button back is not there on any other tab. */
+  function leaveFullscreenFor(tool: DialogTool) {
+    if (tool !== 'browser') setFullscreen(false)
+  }
+
+  /** A tab chosen on the strip of the panel. */
+  function showTool(tool: DialogTool) {
+    dispatchTools({ type: 'show', tool })
+    leaveFullscreenFor(tool)
   }
 
   /**
@@ -619,7 +642,8 @@ export function DialogView({
     const next = toolsReducer(tools, { type: 'close', tool })
     dispatchTools({ type: 'close', tool })
     setFullscreen(false)
-    focusSoon(next.active === null ? TOOLS_BUTTON_ID : toolTabId(next.active))
+    if (next.active === null) focusBackSoon()
+    else focusSoon(toolTabId(next.active))
   }
 
   /**
@@ -629,7 +653,7 @@ export function DialogView({
   function closeTools() {
     dispatchTools({ type: 'closeAll' })
     setFullscreen(false)
-    focusSoon(TOOLS_BUTTON_ID)
+    focusBackSoon()
   }
 
   /**
@@ -640,7 +664,7 @@ export function DialogView({
   function backToDialog() {
     dispatchTools({ type: 'back' })
     setFullscreen(false)
-    focusSoon(TOOLS_BUTTON_ID)
+    focusBackSoon()
   }
 
   /** «Размышление» of the dialog: from the agent's next turn (`task.setEffort`). */
@@ -677,7 +701,7 @@ export function DialogView({
       refresh()
       return true
     } catch (failure) {
-      setFieldError(callErrorText(failure))
+      setFieldError(sendErrorText(failure, { withProject: project !== null }))
       refresh()
       return false
     }
@@ -857,6 +881,10 @@ export function DialogView({
         disabled={!awaitingClient || setEffort.isPending}
       />
     )
+  // The reminder of the field names the «Переменные» of a project, and none without one
+  // (docs/plan/61-chats-first.md, §5.11): an ended chat reads it from its closed field too.
+  const noSecrets =
+    project === null ? taskWayText.noSecretsPlain : withBrowser ? taskWayText.noSecrets : undefined
   let composer
   if (head === null) composer = null
   else if (terminal) {
@@ -877,8 +905,8 @@ export function DialogView({
               verdicts: commands,
               onRun: runCommand,
               onOpen: refresh,
-              listed: inBrowser ? BROWSER_COMMANDS : undefined,
             }}
+            noSecrets={noSecrets}
           />
         </Box>
         <Button
@@ -939,10 +967,9 @@ export function DialogView({
           verdicts: commands,
           onRun: runCommand,
           onOpen: refresh,
-          listed: inBrowser ? BROWSER_COMMANDS : undefined,
         }}
         attachments={attachments}
-        noSecrets={inBrowser ? taskWayText.noSecrets : undefined}
+        noSecrets={noSecrets}
         {...(working
           ? {
               stop: {
@@ -957,11 +984,12 @@ export function DialogView({
 
   // «+» of the tools: in the head while their panel is closed, at the end of its tabs while open.
   // Its dot says what is new behind it, never while the panel is open (И13); below `lg` its menu
-  // comes up from the bottom of the screen (И14).
+  // comes up from the bottom of the screen (И14). A chat with no tool has no «+» at all (К19).
+  const tiles = head === null ? [] : toolTilesOf(head, tools, { answered })
   const menu =
-    head === null ? null : (
+    head === null || tiles.length === 0 ? null : (
       <ToolsMenu
-        tiles={toolTilesOf(head, tools)}
+        tiles={tiles}
         onOpen={(tool) => openTool(tool, { by: 'menu' })}
         dot={toolsDot(head, tools)}
         sheet={!wide}
@@ -1173,7 +1201,7 @@ export function DialogView({
                 ) : undefined
               }
               browser={
-                inBrowser
+                withBrowser
                   ? {
                       controlling: head.browser?.controller === 'user' && browserLive,
                       onResume: resumeWork,
@@ -1232,7 +1260,7 @@ export function DialogView({
         wide={wide}
         fullscreen={fullscreen}
         menu={shown ? menu : null}
-        onShow={(tool) => dispatchTools({ type: 'show', tool })}
+        onShow={showTool}
         onClose={closeTool}
         onCloseAll={closeTools}
         onBack={backToDialog}
@@ -1273,7 +1301,14 @@ export function DialogView({
         danger
         onConfirm={() => void confirmCancel()}
       >
-        <Typography sx={{ mt: 1.5 }}>{nbsp(chatCommands.cancel.description)}</Typography>
+        <Typography sx={{ mt: 1.5 }}>
+          {nbsp(
+            cancelText.body({
+              changes: candidate !== null,
+              onSite: project !== null && withBrowser,
+            }),
+          )}
+        </Typography>
       </ConfirmDialog>
     </Box>
   )

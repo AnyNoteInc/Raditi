@@ -710,12 +710,21 @@ function CandidateCard({
           live ? (
             <>
               {release?.available ? (
-                <Button variant="contained" onClick={actions.onRelease} disabled={actions.busy}>
+                <Button
+                  variant="contained"
+                  onClick={actions.onRelease}
+                  disabled={actions.busy || actions.stopping}
+                >
                   {feedCandidateText.release}
                 </Button>
               ) : null}
               {refusal === 'needs_update' && update?.available ? (
-                <Button variant="contained" onClick={actions.onUpdate} loading={actions.busy}>
+                <Button
+                  variant="contained"
+                  onClick={actions.onUpdate}
+                  loading={actions.busy}
+                  disabled={actions.stopping}
+                >
                   {chatCommands.update.label}
                 </Button>
               ) : null}

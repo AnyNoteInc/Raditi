@@ -122,6 +122,13 @@ describe('requestShown', () => {
 })
 
 describe('stopRequested', () => {
+  it('holds a chat with a browser that waits with its changes: no `/release` after the press', () => {
+    const rows = [requestRow('1'), commandRow('2', 'cancel')]
+    expect(stopRequested(rows, 'awaiting_approval', true)).toBe(true)
+    // The same press in a chat without a browser closes it at once: nothing waits for core.
+    expect(stopRequested(rows, 'awaiting_approval')).toBe(false)
+  })
+
   it('is a `/cancel` taken while the agent works, until the dialog ends', () => {
     const rows = [requestRow('1'), stepRow('2', 1), commandRow('3', 'cancel')]
     expect(stopRequested(rows, 'running')).toBe(true)

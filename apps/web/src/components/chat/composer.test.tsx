@@ -55,7 +55,7 @@ describe('the window of commands', () => {
       expect.stringContaining('Открыть предпросмотр'),
       expect.stringContaining('Сбросить данные предпросмотра'),
       expect.stringContaining('Обновить рабочую копию'),
-      expect.stringContaining('Отменить диалог'),
+      expect.stringContaining('Отменить чат'),
     ])
     expect(field().getAttribute('aria-controls')).toBe(list().id)
     expect(field().getAttribute('aria-activedescendant')).toBe(options[0]!.id)
@@ -294,13 +294,14 @@ describe('palette helpers', () => {
     expect(movedIndex(2, 'Home', 5)).toBe(0)
   })
 
-  it('takes a command without a verdict for one that cannot be run', () => {
-    const [release] = paletteOptions('/release', [])
-    expect(release).toEqual({ id: 'release', available: false, reason: null })
+  it('lists in a chat only the commands it has a verdict on (К27)', () => {
+    expect(paletteOptions('/release', [])).toEqual([])
+    const cancel = { id: 'cancel', available: true, refusal: null } as const
+    expect(paletteOptions(null, [cancel]).map((item) => item.id)).toEqual(['cancel'])
   })
 
   it('gives a command without a verdict the reason of the place, when it has one', () => {
-    const [release] = paletteOptions('/release', [], undefined, 'Команды работают внутри чата.')
+    const [release] = paletteOptions('/release', [], 'Команды работают внутри чата.')
     expect(release).toEqual({
       id: 'release',
       available: false,
