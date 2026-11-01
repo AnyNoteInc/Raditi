@@ -14,7 +14,13 @@ import { plain, serverRefusal } from '@/components/billing/testing'
 
 import type * as Upload from './attachment-upload'
 import { composerText } from './chat-texts'
-import type { CandidateView, DialogFeed, FeedRow, PreparedRelease } from './chat-types'
+import type {
+  CandidateView,
+  DialogFeed,
+  FeedRow,
+  PreparedRelease,
+  TurnActivityPage,
+} from './chat-types'
 import { DialogView } from './dialog-view'
 import { forgetNewDialog, isNewDialog, markNewDialog } from './new-dialog-hint'
 import {
@@ -46,6 +52,7 @@ type Posted = { requestEventId: string; repeated: boolean }
 
 const calls = vi.hoisted(() => ({
   feed: vi.fn<(input: { taskId: string; after: string }) => Promise<DialogFeed>>(),
+  activity: vi.fn<(input: { after: string }) => Promise<TurnActivityPage>>(),
   message: vi.fn<(input: Press & { text: string }) => Promise<Posted>>(),
   proceed: vi.fn<(input: Press) => Promise<Posted>>(),
   retry: vi.fn<(input: Press & { failureEventId: string }) => Promise<Posted>>(),
@@ -108,7 +115,7 @@ vi.mock('./attachment-upload', async (original) => ({
 const client = vi.hoisted(() => ({
   task: {
     feed: { query: calls.feed },
-    activity: { query: async () => ({ events: [], cursor: '0', more: false }) },
+    activity: { query: calls.activity },
   },
   preview: { ticket: { mutate: calls.ticket } },
   release: {
@@ -395,6 +402,7 @@ const streamState = (controller: 'agent' | 'user') => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  calls.activity.mockResolvedValue({ events: [], cursor: '0', more: false })
   calls.message.mockResolvedValue(posted)
   calls.proceed.mockResolvedValue(posted)
   calls.retry.mockResolvedValue(posted)
@@ -1018,6 +1026,80 @@ describe('a dialog', () => {
       await waitFor(() => expect(line().open).toBe(true))
     })
 
+    it('`/thinking` shows what the model thought, in a finished turn too, and hides it again', async () => {
+      calls.activity.mockResolvedValue({
+        events: [
+          { id: '7:0', type: 'reasoning', text: 'Look at the prices first.' },
+          { id: '7:1', type: 'command', command: 'ls', exitCode: 0 },
+        ],
+        cursor: '7',
+        more: false,
+      })
+      window.localStorage.clear()
+      showDialog(
+        waiting({
+          events: [
+            requestRow('1', 'Поменяйте цену'),
+            { ...stepRow('2', 1), at: '2026-10-17T09:00:00.000Z' },
+            { ...resultRow('3', 1), at: '2026-10-17T09:02:14.000Z' },
+          ],
+          cursor: '3',
+        }),
+      )
+      await screen.findByText('Поменяйте цену')
+      const line = () => screen.getByText(/Агент работал/).closest('details')!
+      expect(line().open).toBe(false)
+      await run(/Размышления агента/)
+      await screen.findByText('Размышления агента показаны')
+      await waitFor(() => expect(line().open).toBe(true))
+      await screen.findByText('Look at the prices first.')
+      await run(/Размышления агента/)
+      await screen.findByText('Размышления агента скрыты')
+      await waitFor(() => expect(screen.queryByText('Look at the prices first.')).toBeNull())
+      expect(line().open).toBe(false)
+      window.localStorage.clear()
+    })
+
+    it('`/details` and `/thinking` together: each says what the page shows', async () => {
+      calls.activity.mockResolvedValue({
+        events: [
+          { id: '7:0', type: 'reasoning', text: 'Look at the prices first.' },
+          { id: '7:1', type: 'command', command: 'ls wp-content', exitCode: 0 },
+        ],
+        cursor: '7',
+        more: false,
+      })
+      window.localStorage.clear()
+      showDialog(
+        waiting({
+          events: [
+            requestRow('1', 'Поменяйте цену'),
+            { ...stepRow('2', 1), at: '2026-10-17T09:00:00.000Z' },
+            { ...resultRow('3', 1), at: '2026-10-17T09:02:14.000Z' },
+          ],
+          cursor: '3',
+        }),
+      )
+      await screen.findByText('Поменяйте цену')
+      const line = () => screen.getByText(/Агент работал/).closest('details')!
+      // `/details` alone: the line stands open, and what the model thought stays hidden.
+      await run(/Подробности работы/)
+      await waitFor(() => expect(line().open).toBe(true))
+      await screen.findByText('ls wp-content')
+      expect(screen.queryByText('Look at the prices first.')).toBeNull()
+      // With `/thinking` on, `/details` off leaves the line open, and says so.
+      await run(/Размышления агента/)
+      await screen.findByText('Look at the prices first.')
+      await run(/Подробности работы/)
+      await screen.findByText('Строки работы останутся открытыми, пока показаны размышления агента')
+      expect(screen.queryByText('Подробности работы скрыты')).toBeNull()
+      expect(line().open).toBe(true)
+      // `/thinking` off then closes it: no choice holds it any more.
+      await run(/Размышления агента/)
+      await waitFor(() => expect(line().open).toBe(false))
+      window.localStorage.clear()
+    })
+
     it('`/help` opens the whole list and sends nothing', async () => {
       showDialog()
       await screen.findByText('Изменения готовы')
@@ -1624,6 +1706,7 @@ describe('the five kinds of a chat (docs/plan/61-chats-first.md, §5.6)', () => 
     /^\/exportСкачать переписку/u,
     /^\/modelsМодель и размышление/u,
     /^\/detailsПодробности работы/u,
+    /^\/thinkingРазмышления агента/u,
     /^\/themesОформление/u,
     /^\/helpСправка/u,
   ].map((name) => expect.stringMatching(name))
@@ -2801,6 +2884,7 @@ describe('a task in the browser', () => {
           'Скачать переписку',
           'Модель и размышление',
           'Подробности работы',
+          'Размышления агента',
           'Оформление',
           'Справка',
         ].map((name) => expect.stringContaining(name)),

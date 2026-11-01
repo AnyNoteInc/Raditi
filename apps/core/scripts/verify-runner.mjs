@@ -880,7 +880,15 @@ try {
           assert(phaseNames.includes(phase), `Turn ${turn} has no ${phase} evidence`)
         assert(phaseNames.indexOf('destroyed') < phaseNames.indexOf('publishing'))
         const events = turnEntries.flatMap((entry) => entry.events ?? [])
-        for (const type of ['started', 'command', 'tool_call', 'usage', 'message', 'completed'])
+        for (const type of [
+          'started',
+          'reasoning',
+          'command',
+          'tool_call',
+          'usage',
+          'message',
+          'completed',
+        ])
           assert(
             events.some((event) => event.type === type),
             `${driverName} ${type} was not journaled`,

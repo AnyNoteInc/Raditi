@@ -350,6 +350,7 @@ describe('OpenCode driver: prepared files and argv', () => {
       'run',
       '--format',
       'json',
+      '--thinking',
       '--agent',
       'raditi',
       '--model',
@@ -864,7 +865,14 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
     expect(result.stdout).toBe(`${line}\n`)
     expect(result.records.map((record) => record.command)).toEqual(['run'])
     const [cli] = result.records as [CliRecord]
-    expect(cli.argv.slice(0, 5)).toEqual(['run', '--format', 'json', '--agent', 'raditi'])
+    expect(cli.argv.slice(0, 6)).toEqual([
+      'run',
+      '--format',
+      'json',
+      '--thinking',
+      '--agent',
+      'raditi',
+    ])
     expect(cli.argv).not.toContain('--session')
     expect(cli.stdin).toBe('Client request:\n-')
     // Both files were removed before anything started; the CLI found two pipes in their place.

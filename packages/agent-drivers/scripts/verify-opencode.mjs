@@ -10,6 +10,7 @@ import process from 'node:process'
 import { parseArgs } from 'node:util'
 
 import {
+  agentOutputLimits,
   containsEnvValue,
   preparedRunExposesSecret,
   preparedRunSchema,
@@ -54,6 +55,7 @@ const TOOL_DUMP = '/tmp/raditi-g3-tool.json'
 const TOOLS = ['bash', 'edit', 'glob', 'grep', 'raditi_site_info', 'read', 'todowrite', 'write']
 const platformMarker = (turn) => `RADITI_G3_PLATFORM_TURN_${turn}`
 const LITERAL = 'Literal {env:HOME} and {file:/etc/hostname}.'
+const REASONING = 'Thinking about the next step.'
 /** Texts of the site repository's own OpenCode files: none may reach the provider. */
 const hostile = {
   agentsMd: 'RADITI_G3_HOSTILE_AGENTS_MD',
@@ -378,7 +380,7 @@ async function inside() {
         },
       ],
     })
-    const events = [delta({ reasoning_content: 'Thinking about the next step.' })]
+    const events = [delta({ reasoning_content: step.reasoning ?? settings.reasoning })]
     if (step.text !== undefined && step.text !== '') events.push(delta({ content: step.text }))
     for (const [index, item] of (step.calls ?? []).entries()) {
       call += 1
@@ -942,6 +944,7 @@ async function turn({
         ...keys,
         otherSecrets,
         model: MODEL,
+        reasoning: REASONING,
         steps,
         mcp: { answer: `${MCP_OK}_${turnNo}`, ...mcp },
         markers: {
@@ -1032,11 +1035,17 @@ function expectRequests(run, count) {
  * without the credentials, and in the product without a network. The CLI of the turn itself
  * never reaches for anything.
  */
-function expectSuccess(run, expected, { carryOver = [] } = {}) {
+function expectSuccess(run, expected, { carryOver = [], reasoning = REASONING } = {}) {
   const { output, events, describe } = run
   assert.equal(output.code, 0, describe())
   assert.ok(!events.some((event) => event.type === 'failed'), describe())
   assert.deepEqual(turnResultSchema.parse(driver.extractResult(events, null)), expected)
+  // Each answer of the provider opens with reasoning, and the CLI prints it as a row of its own.
+  assert.equal(
+    events.filter((event) => event.type === 'reasoning' && event.text === reasoning).length,
+    output.llm.length,
+    `The reasoning of each request: ${describe()}`,
+  )
   const sunk = output.sink.slice(output.sinkBeforeTurn)
   const turnStarted = output.mcp[0].at
   assert.deepEqual(
@@ -1207,6 +1216,50 @@ try {
     assert.equal(row?.agent, 'raditi')
     pass(
       `resume in a fresh container — export, filter, import and 3 provider requests in ${seconds(output.ms)}, the first after ${seconds(output.llm[0].at)}; same session, history present, current instructions, new keys, a prompt of ${longPrompt.length} characters that starts with a slash, inbox readable and nothing else outside the working copy`,
+    )
+  }
+
+  // 2a. As long a reasoning as the model can think, right before the answer, and the provider
+  // answers at once: the CLI exits without waiting for its stdout, and the row that fills the
+  // pipe must not cost the result.
+  {
+    const long = 'x'.repeat(200 * 1024)
+    const mark = '\n[Вывод обрезан]'
+    const clipped = long.slice(0, agentOutputLimits.messageText - mark.length) + mark
+    const times = 5
+    for (let attempt = 1; attempt <= times; attempt += 1) {
+      const run = await turn({
+        label: `long reasoning ${attempt}`,
+        steps: [{ reasoning: long, text: JSON.stringify(result(PRIOR)) }],
+      })
+      expectRequests(run, 1)
+      expectSuccess(run, result(PRIOR), { reasoning: clipped })
+    }
+    pass(
+      `long reasoning — ${long.length} characters right before the answer, ${times} turns: each row read and clipped to ${clipped.length}, the result read after it`,
+    )
+  }
+
+  // 2b. The control of 2a, on the same normal exit. Whatever the CLI has not written when it exits
+  // is gone: with more than some 800 KiB waiting, the row of the result goes with it
+  // (docs/plan/61-chats-first.md, §10). The role caps an answer far below that; without the loss
+  // showing here, 2a would say nothing. A CLI that stops losing it fails this: the note is stale.
+  {
+    const huge = 'x'.repeat(4 * 1024 * 1024)
+    const times = 3
+    let lost = 0
+    for (let attempt = 1; attempt <= times; attempt += 1) {
+      const run = await turn({
+        label: `reasoning no model can think ${attempt}`,
+        steps: [{ reasoning: huge, text: JSON.stringify(result(PRIOR)) }],
+      })
+      expectRequests(run, 1)
+      assert.equal(run.output.code, 0, run.describe())
+      if (driver.extractResult(run.events, null) === null) lost += 1
+    }
+    assert.ok(lost > 0, `The CLI left no output behind in ${times} turns of ${huge.length} B`)
+    pass(
+      `control of the long reasoning — ${huge.length} characters right before the answer: exit 0 and the result lost in ${lost} of ${times} turns`,
     )
   }
 

@@ -230,6 +230,7 @@ describe('agent drivers', () => {
       'jsonEvents',
       'mcp',
       'outputSchema',
+      'reasoningEvents',
       'resume',
     ]
     for (const driver of agentDriverSeeds) {
@@ -243,6 +244,7 @@ describe('agent drivers', () => {
       outputSchema: false,
       mcp: true,
       images: false,
+      reasoningEvents: true,
     })
   })
 })

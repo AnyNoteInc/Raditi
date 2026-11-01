@@ -103,7 +103,10 @@ const BODY_REFUSALS_AT_MOST = 12
  * (`uploaded`: the step before it reached the provider and is the one call of the key). Until G8
  * the answer was 413, which the CLI took for an overflow of its context and answered with a
  * request for a compaction (docs/plan/47-common-scenarios-zai.md). The rehearsal holds the CLI
- * to these numbers, so a CLI that reacts otherwise shows here.
+ * to these numbers, so a CLI that reacts otherwise shows here. Since `--thinking` the row of a
+ * reasoning that fills a request may keep the failure out of what the CLI leaves in stdout, so
+ * `uploaded` is read in full from a control turn without the flag, and the turn as the product
+ * runs it holds the rest (docs/plan/61-chats-first.md, §10).
  */
 const BODY_REFUSAL_MEASURED = Object.freeze({
   given: {
@@ -135,6 +138,17 @@ const CLASSES = {
 const streamed = (exchange) =>
   exchange.status === 200 && exchange.contentType === 'text/event-stream'
 const bash = (command) => ({ name: 'bash', arguments: { command, description: 'Synthetic step' } })
+/** The turn as prepared, with the CLI printing no rows of reasoning: the product never runs this. */
+function withoutReasoningRows(prepared) {
+  const isArguments = (file) => file.path.endsWith('/cli-args.json')
+  const args = JSON.parse(prepared.files.find(isArguments).content)
+  assert.ok(args.includes('--thinking'), 'The driver no longer asks for the rows of reasoning')
+  const content = JSON.stringify(args.filter((arg) => arg !== '--thinking'))
+  return {
+    ...prepared,
+    files: prepared.files.map((file) => (isArguments(file) ? { ...file, content } : file)),
+  }
+}
 const resultFor = (summary, files = []) => ({
   summary,
   change_type: files.length ? 'code' : 'none',
@@ -412,8 +426,15 @@ export async function runLiveGateway(mode) {
      * container. While it runs the stand watches the ledger: a connection the guard refused
      * ends the turn at once.
      */
-    async function runTurn({ label, turn, prompt, nativeSessionId, effort = 'high' }) {
-      const { files, argv } = await prepareOpencodeTurn(
+    async function runTurn({
+      label,
+      turn,
+      prompt,
+      nativeSessionId,
+      effort = 'high',
+      printsReasoning = true,
+    }) {
+      const { files: prepared, argv } = await prepareOpencodeTurn(
         { cli, control, driver, tools, instructions },
         {
           turn,
@@ -422,6 +443,7 @@ export async function runLiveGateway(mode) {
           llm: { baseUrl: offer.gatewayBaseUrl, model: ZAI_MODEL, reasoningEffort: effort },
         },
       )
+      const files = printsReasoning ? prepared : withoutReasoningRows(prepared)
       const from = {
         exchanges: observer.exchanges().length,
         mcp: (await control('state')).mcp.requests.length,
@@ -536,8 +558,16 @@ export async function runLiveGateway(mode) {
       const answers = chats.map((exchange) => `${exchange.status}/${exchange.ms}ms`).join(' ')
       const forms = streams.flatMap((stream) => stream.forms)
       const formsNote = forms.length ? `; forms ${forms.join(' ')}` : ''
+      // The text of the reasoning the provider sent, not only the count of its tokens, and what
+      // `/thinking` has to show of it, the rows of the CLI: a form the CLI makes no row of shows
+      // here as characters beside no rows.
+      const thought = streams.filter((stream) => stream.reasoningChars > 0)
+      const reasoningChars = thought.reduce((sum, stream) => sum + stream.reasoningChars, 0)
+      const reasoningRows = outcome.events.filter((event) => event.type === 'reasoning').length
+      if (rehearsal)
+        assert.equal(reasoningRows, thought.length, `${label}: the rows of reasoning of the CLI`)
       report(
-        `${label}: exit ${outcome.code}, ${Math.round(outcome.ms / 1000)} s, provider requests ${outcome.requests}, calls ${rows.length} (failed ${failed.length}), tokens in ${fromRole.inputUncached} cached ${fromRole.cacheRead} out ${fromRole.output} reasoning ${fromRole.reasoning}; answers ${answers}; finish ${streams.map((stream) => stream.finishReasons.at(-1) ?? '-').join(' ')}; usage in the finish chunk ${atFinish} of ${metered.length}${formsNote}`,
+        `${label}: exit ${outcome.code}, ${Math.round(outcome.ms / 1000)} s, provider requests ${outcome.requests}, calls ${rows.length} (failed ${failed.length}), tokens in ${fromRole.inputUncached} cached ${fromRole.cacheRead} out ${fromRole.output} reasoning ${fromRole.reasoning}; reasoning text ${reasoningChars} chars in ${thought.length} answers, ${reasoningRows} rows of the CLI; answers ${answers}; finish ${streams.map((stream) => stream.finishReasons.at(-1) ?? '-').join(' ')}; usage in the finish chunk ${atFinish} of ${metered.length}${formsNote}`,
       )
       return { rows, completed, failed, usage: fromRole }
     }
@@ -1345,7 +1375,14 @@ request.on('error',()=>process.exit(1));request.end(Buffer.alloc(Number(process.
       await startLlm(BODY_TURN_CALLS)
       const measured = []
       /** What the CLI sent, in its order, and what the turn came to. */
-      const measure = async ({ label, outcome, rows, refused, sentBefore }) => {
+      const measure = async ({
+        label,
+        outcome,
+        rows,
+        refused,
+        sentBefore,
+        stdoutIsWhole = true,
+      }) => {
         // A request of the turn or one for a compaction (it declares no tools), the status it
         // got, and its size against the first request.
         const first = outcome.exchanges[0]?.requestBody.length ?? 0
@@ -1370,7 +1407,7 @@ request.on('error',()=>process.exit(1));request.end(Buffer.alloc(Number(process.
           provider: (await fakeChat()) - sentBefore,
           calls: rows.length,
           result: outcome.reading.taken,
-          failures: failures.map((reason) => reason.split(':')[0]),
+          failures: stdoutIsWhole ? failures.map((reason) => reason.split(':')[0]) : null,
         })
         return { requests, failures }
       }
@@ -1408,8 +1445,13 @@ request.on('error',()=>process.exit(1));request.end(Buffer.alloc(Number(process.
         )
       }
 
-      {
-        const label = 'a request above the limit, refused by sandbox-gw itself'
+      /**
+       * A step whose reasoning fills a whole request, and the next request of the CLI, which
+       * sandbox-gw refuses itself. The CLI exits on the refusal without waiting for its stdout,
+       * and after a row of sixteen megabytes that often leaves one row of the turn: only what
+       * does not stand in stdout is read here.
+       */
+      const overLimitTurn = async ({ label, printsReasoning }) => {
         stage = `measurement: ${label}`
         budget.afford(BODY_TURN_CALLS, label)
         const turn = await issued()
@@ -1424,6 +1466,7 @@ request.on('error',()=>process.exit(1));request.end(Buffer.alloc(Number(process.
         const outcome = await runTurn({
           label,
           turn,
+          printsReasoning,
           prompt:
             'Synthetic check. Run the shell command `echo filler` once, then reply with the final result.',
         })
@@ -1442,10 +1485,25 @@ request.on('error',()=>process.exit(1));request.end(Buffer.alloc(Number(process.
           rows,
           refused: 0,
           sentBefore,
+          stdoutIsWhole: !printsReasoning,
         })
-        // The refused request never came to the observer, so not to the role either, and the
-        // text of the refusal is that of sandbox-gw: the role says another sentence.
+        // The refused request never came to the observer, so not to the role either.
         assert.equal(outcome.exchanges.at(0)?.truncated, true, `${label}: the answer was short`)
+        report(
+          `${label}: exit ${outcome.code}, ${Math.round(outcome.ms / 1000)} s; the CLI sent ${requests.length} request(s) that reached the role: ${requests.map((request) => `${request.kind}/${request.status}`).join(', ')}, the answer of ${llmJsonLimits.bytes} bytes of reasoning beside a tool call, and one more that sandbox-gw refused itself; the provider got ${measured.at(-1).provider}; calls of the key ${rows.length} of ${BODY_TURN_CALLS}; result ${outcome.reading.taken ? 'taken' : 'none'}; rows of stdout ${outcome.lines.length}; failures the driver reported: ${failures.join(' | ') || 'none'}`,
+        )
+        return { outcome, failures }
+      }
+
+      await overLimitTurn({
+        label: 'a request above the limit, refused by sandbox-gw itself',
+        printsReasoning: true,
+      })
+      {
+        // The control: with no such row in stdout the CLI's own words of the refusal are read too.
+        const label = 'the same request, the CLI printing no reasoning'
+        const { outcome, failures } = await overLimitTurn({ label, printsReasoning: false })
+        // The text of the refusal is that of sandbox-gw: the role says another sentence.
         assert.deepEqual(
           failures,
           ['APIError 400 raditi_body: Request body is too large'],
@@ -1454,9 +1512,6 @@ request.on('error',()=>process.exit(1));request.end(Buffer.alloc(Number(process.
         assert.ok(
           outcome.events.some((event) => event.type === 'command'),
           `${label}: the CLI did not run the tool of the first step`,
-        )
-        report(
-          `${label}: exit ${outcome.code}, ${Math.round(outcome.ms / 1000)} s; the CLI sent ${requests.length} request(s) that reached the role: ${requests.map((request) => `${request.kind}/${request.status}`).join(', ')}, the answer of ${llmJsonLimits.bytes} bytes of reasoning beside a tool call, and one more that sandbox-gw refused itself; the provider got ${measured.at(-1).provider}; calls of the key ${rows.length} of ${BODY_TURN_CALLS}; result ${outcome.reading.taken ? 'taken' : 'none'}; failures the driver reported: ${failures.join(' | ') || 'none'}`,
         )
       }
       report(`refused bodies, measured: ${JSON.stringify(measured)}`)
@@ -1470,7 +1525,9 @@ request.on('error',()=>process.exit(1));request.end(Buffer.alloc(Number(process.
           {
             label: 'a request above the limit, refused by sandbox-gw itself',
             ...uploaded,
+            failures: null,
           },
+          { label: 'the same request, the CLI printing no reasoning', ...uploaded },
         ],
         'The pinned CLI reacted to HTTP 400 raditi_body otherwise than measured',
       )

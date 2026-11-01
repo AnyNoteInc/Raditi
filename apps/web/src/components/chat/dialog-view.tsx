@@ -39,7 +39,7 @@ import { BrowserPane } from './browser-pane'
 import { sessionLive } from './browser-pane-model'
 import { callErrorText, sendErrorText } from './call-error'
 import { newChatHref } from './chat-address'
-import { useChatDetails } from './chat-details'
+import { useChatDetails, useChatThinking } from './chat-details'
 import type { ChatProject } from './chat-types'
 import {
   agentNotesText,
@@ -360,6 +360,7 @@ export function DialogView({
   const [notesText, setNotesText] = useState<string | null>(null)
   const effortMenu = useRef<EffortMenuHandle>(null)
   const { details } = useChatDetails()
+  const { thinking } = useChatThinking()
   // The level chosen here, shown while the head still says the level it was chosen over.
   const [effortChosen, setEffortChosen] = useState<{
     effort: ReasoningEffort
@@ -896,6 +897,7 @@ export function DialogView({
       case 'new':
       case 'sessions':
       case 'details':
+      case 'thinking':
       case 'themes':
         return clientCommands.run(id)
       // `/help` is the field's. The others reach nobody yet: no row and no word typed gets here
@@ -1268,7 +1270,7 @@ export function DialogView({
               retryId={retryRow?.id ?? null}
               actions={actions}
               filesOf={sentFilesOf}
-              details={details}
+              details={details || thinking}
               activityOf={(turn) => <TurnActivity taskId={taskId} turn={turn} live={false} />}
             />
           )}

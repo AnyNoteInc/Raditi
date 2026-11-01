@@ -12,10 +12,10 @@ import { useState, type ReactNode, type RefObject } from 'react'
 import { AppIcon } from '@/components/application/app-icon'
 
 import { CHATS_HREF, newChatHref } from './chat-address'
-import { useChatDetails } from './chat-details'
+import { useChatDetails, useChatThinking } from './chat-details'
 import { clientCommandText } from './chat-texts'
 
-const PAGE_COMMANDS = ['new', 'sessions', 'details', 'themes'] as const
+const PAGE_COMMANDS = ['new', 'sessions', 'details', 'thinking', 'themes'] as const
 export type PageCommandId = (typeof PAGE_COMMANDS)[number]
 export const isPageCommand = (id: ChatCommandId): id is PageCommandId =>
   (PAGE_COMMANDS as readonly ChatCommandId[]).includes(id)
@@ -69,7 +69,7 @@ function ThemeMenu({ anchor, onClose }: { anchor: HTMLElement; onClose: () => vo
 
 /**
  * The commands of the page that need no chat and work the same on a new chat and in one that goes
- * on: `/new`, `/sessions`, `/details` and `/themes`. `run` returns what a screen reader is told;
+ * on: `/new`, `/sessions`, `/details`, `/thinking` and `/themes`. `run` returns what a screen reader is told;
  * `menu` stands in the screen that uses it. `/models` and `/export` are the screens' own: they
  * reach what the screen holds. `/help` is the field's.
  */
@@ -86,7 +86,8 @@ export function useClientCommands({
   menu: ReactNode
 } {
   const router = useRouter()
-  const { toggle } = useChatDetails()
+  const { toggle: toggleDetails } = useChatDetails()
+  const { thinking, toggle: toggleThinking } = useChatThinking()
   const [themeAnchor, setThemeAnchor] = useState<HTMLElement | null>(null)
 
   function run(id: PageCommandId): string | undefined {
@@ -98,7 +99,10 @@ export function useClientCommands({
         router.push(CHATS_HREF)
         return undefined
       case 'details':
-        return toggle() ? clientCommandText.detailsShown : clientCommandText.detailsHidden
+        if (toggleDetails()) return clientCommandText.detailsShown
+        return thinking ? clientCommandText.detailsHeldOpen : clientCommandText.detailsHidden
+      case 'thinking':
+        return toggleThinking() ? clientCommandText.thinkingShown : clientCommandText.thinkingHidden
       case 'themes':
         setThemeAnchor(anchor.current)
         return undefined

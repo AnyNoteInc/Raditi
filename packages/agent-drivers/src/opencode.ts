@@ -309,7 +309,14 @@ export function createOpencodeDriver(config: AgentDriverConfig): AgentDriver {
     id: 'opencode',
     image,
     cliVersion: OPENCODE_CLI_VERSION,
-    capabilities: { resume: true, jsonEvents: true, outputSchema: false, mcp: true, images: false },
+    capabilities: {
+      resume: true,
+      jsonEvents: true,
+      outputSchema: false,
+      mcp: true,
+      images: false,
+      reasoningEvents: true,
+    },
     async prepare(context) {
       const { llm, mcp, nativeSessionId, envValues, egressProxy, internet, skills } =
         validated(context)
@@ -414,6 +421,8 @@ export function createOpencodeDriver(config: AgentDriverConfig): AgentDriver {
         'run',
         '--format',
         'json',
+        // The model's reasoning, as rows of its own: whether anyone reads it is a viewer's choice.
+        '--thinking',
         '--agent',
         agent,
         // Explicit, so that neither the session row nor a message of the history picks it.

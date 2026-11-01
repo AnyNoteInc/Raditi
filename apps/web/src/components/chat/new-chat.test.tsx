@@ -387,6 +387,7 @@ describe('new chat', () => {
       /Все чаты/,
       /Модель и размышление/,
       /Подробности работы/,
+      /Размышления агента/,
       /Оформление/,
       /Справка/,
     ]
@@ -462,6 +463,19 @@ describe('new chat', () => {
         expect(screen.getByRole('status').textContent).toBe('Подробности работы показаны'),
       )
       expect(window.localStorage.getItem('raditi-chat-details')).toBe('1')
+      expect(create).not.toHaveBeenCalled()
+      window.localStorage.clear()
+    })
+
+    it('`/thinking` is kept for the chats to come, and a screen reader is told', async () => {
+      window.localStorage.clear()
+      showChat()
+      write('/thinking')
+      fireEvent.keyDown(field(), { key: 'Enter' })
+      await waitFor(() =>
+        expect(screen.getByRole('status').textContent).toBe('Размышления агента показаны'),
+      )
+      expect(window.localStorage.getItem('raditi-chat-thinking')).toBe('1')
       expect(create).not.toHaveBeenCalled()
       window.localStorage.clear()
     })

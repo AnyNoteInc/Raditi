@@ -83,6 +83,35 @@ describe('bounded turn output', () => {
 describe('the client variables of a turn in its events (plan 53, Р13)', () => {
   const value = "pay-se'cret-0001"
 
+  it('takes a row of reasoning of the real parser to the journal, with the value masked', async () => {
+    const opencode = createOpencodeDriver({ image })
+    const row = JSON.stringify({
+      type: 'reasoning',
+      sessionID: 'ses_test',
+      part: {
+        type: 'reasoning',
+        text: `The key is ${value}, so the theme comes first.`,
+        time: { start: 1, end: 2 },
+      },
+    })
+    const record = vi.fn(async () => {})
+    const read = await readTurnOutput(
+      handle([{ stream: 'stdout', offset: 0, data: Buffer.from(`${row}\n`) }]),
+      opencode,
+      record,
+      () => {},
+      [],
+      undefined,
+      [value],
+    )
+    const expected = {
+      type: 'reasoning',
+      text: `The key is ${ENV_VALUE_MASK}, so the theme comes first.`,
+    }
+    expect(read.events).toEqual([expected])
+    expect(record).toHaveBeenCalledWith(expect.anything(), [expected])
+  })
+
   it('masks each line before the driver parses it: a long text is clipped after the mask', async () => {
     const opencode = createOpencodeDriver({ image })
     // Fewer letters than the mask, more bytes than the shortest value: «[скрыто]» is longer.

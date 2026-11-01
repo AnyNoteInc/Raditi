@@ -29,6 +29,8 @@ export interface AgentCapabilities {
   mcp: boolean
   /** Accepts images as input. */
   images: boolean
+  /** Prints the model's reasoning as `reasoning` events. */
+  reasoningEvents: boolean
 }
 
 /** Fixed paths: a CLI may bind its session to the path of the working directory. */
@@ -297,6 +299,11 @@ export const agentEventSchema = z.discriminatedUnion('type', [
     nativeSessionId: nativeSessionIdSchema.optional(),
   }),
   z.object({ type: z.literal('message'), text: z.string().max(limits.messageText) }),
+  /**
+   * What the model thought before it acted: raw, often English, and no answer of the agent. It
+   * never reaches a result; a viewer sees it only by choice (docs/plan/61-chats-first.md, К32).
+   */
+  z.object({ type: z.literal('reasoning'), text: z.string().max(limits.messageText) }),
   z.object({
     type: z.literal('command'),
     command: z.string().max(limits.command),

@@ -286,7 +286,7 @@ test('a dialog starts from the first words and waits in the queue, on a desktop'
     await page.getByRole('button', { name: 'Команды' }).click()
     await expect(commands(page)).toBeFocused()
     await expect(commands(page).getByRole('group')).toHaveCount(3)
-    await expect(commands(page).getByRole('option')).toHaveCount(15)
+    await expect(commands(page).getByRole('option')).toHaveCount(16)
     const release = commands(page).getByRole('option', { name: /Выпустить новую версию/ })
     await expect(release).toHaveAttribute('aria-disabled', 'true')
     await expect(release).toContainText('Подождите: агент ещё работает.')
@@ -963,7 +963,7 @@ test('a chat without a project: no tools, no word of a site, no commands of the 
   await page.getByRole('button', { name: 'Команды' }).click()
   // No group «Сайт» and no `/retry` without the repository (К27).
   await expect(commands(page).getByRole('group')).toHaveCount(2)
-  await expect(commands(page).getByRole('option')).toHaveCount(10)
+  await expect(commands(page).getByRole('option')).toHaveCount(11)
   await expect(commands(page).getByText('Сайт', { exact: true })).toHaveCount(0)
   await commands(page)
     .getByRole('option', { name: /Отменить чат/ })
@@ -1308,7 +1308,7 @@ test('a task in the browser: its window on a desktop', async ({ page, context, s
 
   await test.step('the window of commands has no commands of the site', async () => {
     await page.getByRole('button', { name: 'Команды' }).click()
-    await expect(commands(page).getByRole('option')).toHaveCount(10)
+    await expect(commands(page).getByRole('option')).toHaveCount(11)
     await expect(commands(page).getByText('Сайт', { exact: true })).toHaveCount(0)
     await expect(commands(page).getByRole('option', { name: /Отменить чат/ })).toBeVisible()
     await page.keyboard.press('Escape')

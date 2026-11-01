@@ -372,6 +372,8 @@ export const activityText = Object.freeze({
   empty: 'Агент пока ничего не вывел.',
   failed: 'Не удалось загрузить ход работы. Попробуем ещё раз.',
   more: 'Загружаем дальше…',
+  /** The model's own words before it acts (`/thinking`): raw, often English. */
+  reasoning: 'Размышления агента',
   command: 'Команда',
   tool: 'Инструмент',
   question: 'Вопрос',
@@ -437,6 +439,10 @@ export const clientCommandText = Object.freeze({
   system: 'Как в системе',
   detailsShown: 'Подробности работы показаны',
   detailsHidden: 'Подробности работы скрыты',
+  /** `/details` is off, and `/thinking` holds the lines of finished turns open all the same. */
+  detailsHeldOpen: 'Строки работы останутся открытыми, пока показаны размышления агента',
+  thinkingShown: 'Размышления агента показаны',
+  thinkingHidden: 'Размышления агента скрыты',
   exported: 'Переписка сохранена',
 })
 

@@ -223,11 +223,11 @@ export const serverCommandIds = chatCommandIds.filter(
 )
 
 /**
- * Named here and not working yet (docs/plan/61-chats-first.md, §6: `/thinking` — 61.20, `/compact`
- * — 61.24): no row in the list and no verdict, and typed they are refused and
- * never sent. The slice of a command takes it off this list.
+ * Named here and not working yet (docs/plan/61-chats-first.md, §6: `/compact` — 61.24): no row in
+ * the list and no verdict, and typed it is refused and never sent. The slice of a command takes it
+ * off this list.
  */
-export const chatCommandsToCome = ['compact', 'thinking'] as const
+export const chatCommandsToCome = ['compact'] as const
 export type CommandToCome = (typeof chatCommandsToCome)[number]
 
 /** A command the server gives a verdict on today. */

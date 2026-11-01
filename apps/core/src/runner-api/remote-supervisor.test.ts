@@ -239,6 +239,7 @@ describe('TurnSupervisor on a runner', () => {
         outputSchema: true,
         mcp: false,
         images: false,
+        reasoningEvents: false,
       },
       prepare: vi.fn(async (context) => ({
         context: { ...context },

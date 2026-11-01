@@ -38,7 +38,14 @@ const driver = {
   id: sampleDriverId,
   image: `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`,
   cliVersion: '1.0.0',
-  capabilities: { resume: true, jsonEvents: true, outputSchema: false, mcp: true, images: false },
+  capabilities: {
+    resume: true,
+    jsonEvents: true,
+    outputSchema: false,
+    mcp: true,
+    images: false,
+    reasoningEvents: false,
+  },
   prepare: () => {
     throw new Error('not called by the plan')
   },

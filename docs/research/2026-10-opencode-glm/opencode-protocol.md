@@ -65,7 +65,7 @@ opencode run --format json [--session <id>] [--agent <name>] [--title <text>] [-
   `max_tokens` 32000, model = `small_model` (falls back to the main model) — sample 31/02.
 - `--agent` picks an agent from the config; `default_agent` does the same.
 - `--variant` sets the reasoning effort, but only for a model that has variants (section 4).
-- `--thinking` added no event in `--format json` (run 52).
+- `--thinking` added no event in `--format json` (run 52). Corrected 01.11.2026 (plan 61, §10, 61.20): against a provider that sends `reasoning_content` the pinned 1.18.34 prints one `reasoning` row per finished reasoning part. Why run 52 saw none was not looked into.
 - No flag of `run` takes an output schema. `--auto` approves `ask` permissions ("dangerous").
 - Other commands used: `opencode session list --format json`, `opencode export <id>`,
   `opencode import <file>`, `opencode db "<sql>"`, `opencode db path`, `opencode debug config|paths|info`,

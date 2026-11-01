@@ -1,5 +1,11 @@
+import { createOpencodeDriver } from '@repo/agent-drivers'
 import { createPrismaClient, PostgresSiteLeaseStore, type PrismaClient } from '@repo/db'
-import { feedRowSchema, type SiteLeaseGrant, type TurnEvidence } from '@repo/domain'
+import {
+  agentOutputLimits,
+  feedRowSchema,
+  type SiteLeaseGrant,
+  type TurnEvidence,
+} from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { sampleDriverId } from '../testing/ids.ts'
@@ -260,6 +266,34 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
     expect(row.payload).toMatchObject({ phase: 'leased', fence: { epoch: 1 } })
     expect(JSON.stringify(row.payload)).not.toContain('serverNow')
     expect((await db.task.findUniqueOrThrow({ where: { id: f.task.id } })).status).toBe('queued')
+  })
+
+  // The driver reads what the model wrote, and a row jsonb refuses would fail the turn over a
+  // text nobody asked to see (docs/plan/61-chats-first.md, К32).
+  it('stores the reasoning of a real row, whatever the model wrote', async () => {
+    const f = await fixture()
+    const driver = createOpencodeDriver({
+      image: `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`,
+    })
+    const atTheCut = agentOutputLimits.messageText - '\n[Вывод обрезан]'.length - 1
+    const events = [
+      `${'a'.repeat(atTheCut)}😀${'b'.repeat(100)}`,
+      'before\u0000after',
+      'half \ud83d of a pair',
+    ].flatMap((text) =>
+      driver.parseEvent(JSON.stringify({ type: 'reasoning', part: { type: 'reasoning', text } })),
+    )
+    expect(events.map(({ type }) => type)).toEqual(['reasoning', 'reasoning', 'reasoning'])
+    await f.journal.record({
+      ...f.evidence,
+      phase: 'output',
+      cursor: { stdout: 42, stderr: 0 },
+      events,
+    })
+    const row = await db.taskEvent.findFirstOrThrow({
+      where: { taskId: f.task.id, type: 'turn.output' },
+    })
+    expect(row.payload).toMatchObject({ events })
   })
 
   it('projects session and checkpoint metadata together with fenced journal evidence', async () => {

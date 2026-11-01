@@ -64,6 +64,7 @@ describe('the window of commands', () => {
       expect.stringContaining('Скачать переписку'),
       expect.stringContaining('Модель и размышление'),
       expect.stringContaining('Подробности работы'),
+      expect.stringContaining('Размышления агента'),
       expect.stringContaining('Оформление'),
       expect.stringContaining('Справка'),
     ])
@@ -71,7 +72,7 @@ describe('the window of commands', () => {
     expect(field().getAttribute('aria-activedescendant')).toBe(options[0]!.id)
     expect(options[0]!.getAttribute('aria-selected')).toBe('true')
     expect(screen.getByRole('status').textContent).toBe(
-      '15 команд. Стрелки вверх и вниз — выбор, Enter — выполнить, Escape — закрыть.',
+      '16 команд. Стрелки вверх и вниз — выбор, Enter — выполнить, Escape — закрыть.',
     )
     expect(onOpen).toHaveBeenCalledTimes(1)
   })
@@ -144,7 +145,7 @@ describe('the window of commands', () => {
     const button = screen.getByRole('button', { name: 'Команды' })
     fireEvent.click(button)
     expect(button.getAttribute('aria-expanded')).toBe('true')
-    expect(within(list()).getAllByRole('option')).toHaveLength(15)
+    expect(within(list()).getAllByRole('option')).toHaveLength(16)
     expect(list().getAttribute('tabindex')).toBe('0')
     await vi.waitFor(() => expect(document.activeElement).toBe(list()))
     press('End', list())
@@ -289,12 +290,10 @@ describe('the window of commands', () => {
 
   it('says of a command whose slice has not come that it is unavailable, and sends nothing', () => {
     const { onRun, onSend } = showComposer()
-    for (const text of ['/compact', '/thinking']) {
-      type(text)
-      expect(screen.queryByRole('listbox')).toBeNull()
-      press('Enter', field(), { ctrlKey: true })
-      expect(screen.getByRole('alert').textContent).toBe('Эта команда сейчас недоступна.')
-    }
+    type('/compact')
+    expect(screen.queryByRole('listbox')).toBeNull()
+    press('Enter', field(), { ctrlKey: true })
+    expect(screen.getByRole('alert').textContent).toBe('Эта команда сейчас недоступна.')
     expect(onRun).not.toHaveBeenCalled()
     expect(onSend).not.toHaveBeenCalled()
   })
@@ -304,13 +303,13 @@ describe('the window of commands', () => {
     type('/help')
     press('Enter')
     expect(field().value).toBe('')
-    expect(within(list()).getAllByRole('option')).toHaveLength(15)
+    expect(within(list()).getAllByRole('option')).toHaveLength(16)
     await vi.waitFor(() => expect(document.activeElement).toBe(list()))
     expect(onRun).not.toHaveBeenCalled()
     expect(onSend).not.toHaveBeenCalled()
     // Chosen from the list that is open already, it leaves it as it is.
     fireEvent.click(within(list()).getAllByRole('option').at(-1)!)
-    expect(within(list()).getAllByRole('option')).toHaveLength(15)
+    expect(within(list()).getAllByRole('option')).toHaveLength(16)
   })
 
   it('says aloud what a command of the page answers', () => {
@@ -492,6 +491,7 @@ describe('palette helpers', () => {
       'export',
       'models',
       'details',
+      'thinking',
       'themes',
       'help',
     ])
@@ -533,6 +533,7 @@ describe('palette helpers', () => {
       { id: 'export', available: false, reason },
       { id: 'models', available: true, reason: null },
       { id: 'details', available: true, reason: null },
+      { id: 'thinking', available: true, reason: null },
       { id: 'themes', available: true, reason: null },
       { id: 'help', available: true, reason: null },
     ])
@@ -547,8 +548,14 @@ describe('palette helpers', () => {
 
   it('has no row for a command whose slice has not come, with a verdict or without', () => {
     const reason = 'Команды работают внутри чата.'
-    for (const typed of ['/compact', '/summarize', '/thinking'])
+    for (const typed of ['/compact', '/summarize'])
       expect(paletteOptions(typed, [], reason)).toEqual([])
+  })
+
+  it('offers `/thinking` as a command of the page, with no verdict and no reason', () => {
+    expect(paletteOptions('/thinking', [], 'Команды работают внутри чата.')).toEqual([
+      { id: 'thinking', available: true, reason: null },
+    ])
   })
 
   it('lists `/init` where a chat with the code can start, and not where none can', () => {
