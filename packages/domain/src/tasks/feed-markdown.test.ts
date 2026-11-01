@@ -331,6 +331,11 @@ describe('the chat as a Markdown file', () => {
           'Все изменения этого чата уже есть на сайте, выпускать их не нужно.',
         ],
       ],
+      [
+        'the row of `/undo`',
+        row({ type: 'feed.rewind', turn: 2, files: false, site: 'elsewhere' }),
+        ['Последний запрос отменён. То, что агент сделал на других сайтах, осталось.'],
+      ],
     ]
 
     it.each(cases)('%s', (_name, shown, words) => {

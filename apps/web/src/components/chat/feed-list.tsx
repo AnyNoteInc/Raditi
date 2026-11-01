@@ -19,6 +19,7 @@ import {
   feedCeilingButtons,
   feedCeilingText,
   feedCommandText,
+  feedRewindText,
   feedCreditsSentence,
   feedDecisionText,
   feedDoneSiteText,
@@ -1071,6 +1072,8 @@ function RowView({
           height={row.height}
         />
       )
+    case 'feed.rewind':
+      return <Note text={feedRewindText(row)} />
     case 'newer':
       return <Note text={feedRowText.newer} />
     case 'unreadable':

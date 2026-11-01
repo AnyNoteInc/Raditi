@@ -56,6 +56,8 @@ export const feedEventTypes = [
   'feed.undo',
   // A snapshot of the task's browser for the client (`web_screenshot`, docs/plan/57, Б20).
   'feed.screenshot',
+  // `/undo` took the last turn back (docs/plan/61-chats-first.md, §5.14).
+  'feed.rewind',
 ] as const
 export type FeedEventType = (typeof feedEventTypes)[number]
 
@@ -179,6 +181,8 @@ export const feedSiteStates = [
 export type FeedSiteState = (typeof feedSiteStates)[number]
 const resultSites = ['unchanged', 'changed', 'check', 'none'] as const
 const endedSites = ['unchanged', 'restored', 'check', 'none', 'elsewhere'] as const
+/** `/undo` gives back the session and the files, never what the task left on a site. */
+const rewindSites = ['unchanged', 'check', 'none', 'elsewhere'] as const
 type ResultSiteState = (typeof resultSites)[number]
 type EndedSiteState = (typeof endedSites)[number]
 
@@ -196,7 +200,7 @@ export const feedSiteOf = (
 export const feedEndedSiteOf = (
   task: { siteId: string | null },
   writes: boolean,
-): EndedSiteState => {
+): Exclude<EndedSiteState, 'restored'> => {
   if (task.siteId === null) return writes ? 'elsewhere' : 'none'
   return writes ? 'check' : 'unchanged'
 }
@@ -392,7 +396,8 @@ export const feedRequestPayloadSchema = z.discriminatedUnion('kind', [
     attachments,
     /**
      * The `feed.question` row this answers, or the `feed.result` or `feed.failure` that left the
-     * dialog open (`next: 'awaiting_user'`, owner's decisions of 26.10.2026 and 28.10.2026).
+     * dialog open (`next: 'awaiting_user'`, owner's decisions of 26.10.2026 and 28.10.2026), or
+     * the `feed.rewind` it waits after.
      */
     answersEventId: feedEventIdSchema,
   }),
@@ -691,6 +696,19 @@ export const feedScreenshotPayloadSchema = z.strictObject({
 })
 export type FeedScreenshotPayload = z.infer<typeof feedScreenshotPayloadSchema>
 
+/**
+ * `feed.rewind` v1 — `/undo` took the last turn back: the conversation, and with `files` the
+ * changes in the files too. `site` says what stays all the same, by the writes of the whole task:
+ * a browser session belongs to the task, not to a turn. Trusted, no text.
+ */
+export const feedRewindPayloadSchema = z.strictObject({
+  v: version,
+  turn: turnNo,
+  files: z.boolean(),
+  site: z.enum(rewindSites),
+})
+export type FeedRewindPayload = z.infer<typeof feedRewindPayloadSchema>
+
 /** The writing schema of each type. */
 export const feedPayloadSchemas = Object.freeze({
   'feed.request': feedRequestPayloadSchema,
@@ -705,6 +723,7 @@ export const feedPayloadSchemas = Object.freeze({
   'feed.update': feedUpdatePayloadSchema,
   'feed.undo': feedUndoPayloadSchema,
   'feed.screenshot': feedScreenshotPayloadSchema,
+  'feed.rewind': feedRewindPayloadSchema,
 }) satisfies Record<FeedEventType, z.ZodType>
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength
@@ -734,6 +753,7 @@ export const feedRowSchemaWithin = (maxBytes: number) =>
       row('feed.update', feedUpdatePayloadSchema),
       row('feed.undo', feedUndoPayloadSchema),
       row('feed.screenshot', feedScreenshotPayloadSchema),
+      row('feed.rewind', feedRewindPayloadSchema),
     ])
     .superRefine((value, ctx) => {
       if (feedPayloadBytes(value.payload) > maxBytes)
@@ -969,6 +989,13 @@ const readScreenshot = z.object({
   height: z.number().int().min(1),
 })
 
+const readRewind = z.object({
+  turn: turnNo,
+  files: z.boolean(),
+  // A value this code does not know: the client is asked to check the site, as a failure does.
+  site: known(rewindSites, 'check' as const),
+})
+
 const readCancelled = z.object({
   turn: turnNo.nullable(),
   /** null — a way of cancelling added later: the plate is shown without a reason. */
@@ -1015,6 +1042,7 @@ export type FeedEvent =
   | ({ type: 'feed.update' } & z.infer<typeof readUpdate>)
   | ({ type: 'feed.undo' } & (z.infer<typeof readUndoConfirmed> | z.infer<typeof readUndoOutcome>))
   | ({ type: 'feed.screenshot' } & z.infer<typeof readScreenshot>)
+  | ({ type: 'feed.rewind' } & z.infer<typeof readRewind>)
   | { type: 'newer' }
   | { type: 'unreadable' }
   | { type: 'skipped' }
@@ -1131,6 +1159,9 @@ const readers: Record<FeedEventType, Record<number, Reader>> = {
   'feed.screenshot': {
     1: (payload) =>
       readWith(readScreenshot, payload, (data) => ({ type: 'feed.screenshot', ...data })),
+  },
+  'feed.rewind': {
+    1: (payload) => readWith(readRewind, payload, (data) => ({ type: 'feed.rewind', ...data })),
   },
 }
 

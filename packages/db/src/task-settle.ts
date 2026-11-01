@@ -225,6 +225,27 @@ export async function rejectTurn(
   return marked === 1
 }
 
+/**
+ * `/undo` of a chat (docs/plan/61-chats-first.md, §5.14): the client took a completed turn back, so
+ * the planner does not go on from it and its words do not reach the agent again. Not a rejection:
+ * @repo/billing keeps charging the turn, and nothing is given back (К29). Only once, and only a
+ * turn whose result was taken. Its id, or null — no such turn, and nothing is written.
+ */
+export async function undoTurn(
+  tx: Pick<Tx, '$queryRaw'>,
+  input: { taskId: string; turnNo: number },
+): Promise<string | null> {
+  const parsed = rejectSchema.safeParse(input)
+  if (!parsed.success) throw badRequest('Invalid undone turn')
+  const { taskId, turnNo } = parsed.data
+  const undone = await tx.$queryRaw<Array<{ id: string }>>`
+    UPDATE task_turns SET undone_at = now()
+    WHERE task_id = ${taskId}::uuid AND turn_no = ${turnNo} AND status = 'completed'
+      AND rejected_at IS NULL AND undone_at IS NULL
+    RETURNING id`
+  return undone[0]?.id ?? null
+}
+
 /** Where a dialog waits without a turn: what the sweeper of reserves may close. */
 export const waitingTaskStatuses = [
   'queued',

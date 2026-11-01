@@ -1,6 +1,6 @@
 import type { CandidateCheckStatus, ReleaseStatus } from '@repo/domain'
 import { CLOSED_PROJECT_TEXT } from '@repo/domain/release/chat-commands'
-import { previewPanelText } from '@repo/domain/tasks/client-feed-labels'
+import { previewPanelText, taskRewoundLabel } from '@repo/domain/tasks/client-feed-labels'
 
 import { plural } from '@/lib/plural'
 
@@ -512,6 +512,8 @@ export const browserText = Object.freeze({
     waiting: 'Ждём вас',
     /** The agent answered and asked nothing: the browser waits for no one (26.10.2026). */
     idle: 'Агент ответил',
+    /** The same after `/undo`: the answer was taken back. */
+    rewound: taskRewoundLabel,
     user: 'Управляете вы',
     reconnecting: 'Переподключение',
     error: 'Ошибка',

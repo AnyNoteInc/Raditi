@@ -114,28 +114,37 @@ export function candidateCount(tool: ChangesTool, candidate: CandidateHead | nul
  * no session yet — its tab says the browser opens when the agent needs it, which may be never;
  * «нет» for a dialog that ended without one; closed for a session that holds none any more.
  */
-function browserMark(session: BrowserHead | null, head: FeedHeadState, answered: boolean): string {
+function browserMark(
+  session: BrowserHead | null,
+  head: FeedHeadState,
+  rest: { answered: boolean; rewound: boolean },
+): string {
   if (session === null) return dialogEnded(head) ? toolText.mark.none : toolText.mark.notYet
   if (!sessionLive(session)) return toolText.mark.browserClosed
   if (session.controller === 'user') return browserText.status.user
   const help = session.help !== null
-  return browserText.status[agentBrowserStatus(head.task.status, { help, answered })]
+  return browserText.status[agentBrowserStatus(head.task.status, { help, ...rest })]
 }
 
 /**
  * The mark on the right of the tile of a tool (И5): «Открыто» for an open one; the number of the
  * files and media or of the records, the checks passed of all — a tile of the changes stands only
  * where they hold something (`dialogToolsOf`); who drives the browser, in the word of its panel
- * (`answered`: the agent answered and asked nothing). The preview has none.
+ * (`answered`: the agent answered and asked nothing; `rewound`: `/undo` left it so). The preview
+ * has none.
  */
 export function toolMark(
   tool: DialogTool,
   head: FeedHeadState,
-  { open, answered = false }: { open: boolean; answered?: boolean },
+  {
+    open,
+    answered = false,
+    rewound = false,
+  }: { open: boolean; answered?: boolean; rewound?: boolean },
 ): string | null {
   if (open) return toolText.mark.open
   if (tool === 'preview') return null
-  if (tool === 'browser') return browserMark(head.browser, head, answered)
+  if (tool === 'browser') return browserMark(head.browser, head, { answered, rewound })
   const count = candidateCount(tool, head.candidate)
   return tool === 'checks'
     ? toolText.mark.checks(head.candidate?.checks.passed ?? 0, count)
@@ -312,11 +321,11 @@ export interface ToolTile {
 export const toolTilesOf = (
   head: FeedHeadState,
   tools: ToolsState,
-  { answered = false }: { answered?: boolean } = {},
+  { answered = false, rewound = false }: { answered?: boolean; rewound?: boolean } = {},
 ): ToolTile[] =>
   dialogToolsOf(head).map((tool) => {
     const open = tools.open.includes(tool)
-    return { tool, open, mark: toolMark(tool, head, { open, answered }) }
+    return { tool, open, mark: toolMark(tool, head, { open, answered, rewound }) }
   })
 
 /** Why «+» bears its dot (И13), the most pressing first. */

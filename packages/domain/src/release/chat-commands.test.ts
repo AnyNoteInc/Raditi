@@ -29,6 +29,7 @@ const waiting: ChatCommandFacts = {
   cancelPending: false,
   browserWrote: false,
   projectClosed: false,
+  turnUndo: 'nothing_to_undo',
 }
 const verdict = (facts: ChatCommandFacts) =>
   Object.fromEntries(chatCommandAvailability(facts).map((item) => [item.id, item.refusal]))
@@ -278,7 +279,31 @@ describe('the commands of a dialog', () => {
     )
   })
 
-  it('closes `/undo` and `/redo` until their slices, a project that is closed before them', () => {
+  it('takes `/undo` by the facts of its turn, while nothing works or is released', () => {
+    const open: ChatCommandFacts = {
+      ...waiting,
+      taskStatus: 'awaiting_user',
+      repository: false,
+      candidate: null,
+      preview: null,
+      turnUndo: null,
+    }
+    expect(verdict(open).turn_undo).toBeNull()
+    for (const refusal of [
+      'nothing_to_undo',
+      'undo_past_update',
+      'content_written',
+      'awaiting_answer',
+    ] as const)
+      expect(verdict({ ...open, turnUndo: refusal }).turn_undo).toBe(refusal)
+    for (const taskStatus of ['queued', 'preparing', 'running'] as const)
+      expect(verdict({ ...open, taskStatus }).turn_undo).toBe('busy')
+    for (const taskStatus of ['deploying', 'verifying'] as const)
+      expect(verdict({ ...open, taskStatus }).turn_undo).toBe('release_in_progress')
+    expect(verdict({ ...open, releaseInProgress: true }).turn_undo).toBe('release_in_progress')
+  })
+
+  it('closes `/redo` until its slice, a project that is closed before `/undo` and `/redo`', () => {
     expect(verdict(waiting)).toMatchObject({
       turn_undo: 'nothing_to_undo',
       turn_redo: 'nothing_to_redo',

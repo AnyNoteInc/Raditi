@@ -291,6 +291,12 @@ describe('the marks of the tiles (И5)', () => {
     expect(toolTilesOf(waits, closedTools, { answered: true })).toEqual([
       { tool: 'browser', open: false, mark: 'Агент ответил' },
     ])
+    expect(toolMark('browser', waits, { ...closed, answered: true, rewound: true })).toBe(
+      'Запрос отменён',
+    )
+    expect(toolTilesOf(waits, closedTools, { answered: true, rewound: true })).toEqual([
+      { tool: 'browser', open: false, mark: 'Запрос отменён' },
+    ])
     // A request for help outweighs an answer: the panel asks for the same.
     const help = { reason: 'login' as const, message: null }
     const asks = browserAnswer({ status: 'awaiting_user', browser: { help } })

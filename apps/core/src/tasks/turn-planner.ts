@@ -101,6 +101,8 @@ export interface ClientRequest {
   text: string | null
   /** The command of a press (`cancel`, `reset`, `update`), or null. */
   command: string | null
+  /** The ids of the files sent with these words. */
+  attachments?: readonly string[]
   createdAt: Date
 }
 
@@ -113,6 +115,11 @@ export interface FinishedTurn {
    * left, even when the turn itself completed (docs/plan/53, «Попробовать ещё (18.10)»).
    */
   rejected: boolean
+  /**
+   * The client took it back by `/undo` (`task_turns.undone_at`): its words do not go to the agent
+   * and no turn goes on from it (docs/plan/61-chats-first.md, §5.14).
+   */
+  undone: boolean
   headSha: string | null
   startedAt: Date | null
   nativeSessionId: string | null
@@ -318,7 +325,7 @@ interface Start {
 }
 
 /** Where a pass without a repository starts: its checkpoint chain only (startWithoutRepository). */
-type StartWithoutRepository = Pick<Start, 'previous' | 'since'>
+type StartWithoutRepository = Pick<Start, 'previous' | 'since'> & { rewound?: true }
 
 function snapshotOf(
   facts: PassFacts,
@@ -348,10 +355,12 @@ function snapshotOf(
 }
 
 /**
- * A turn the next one may go on from: completed, and its result taken. A turn whose pass ended in
- * a failure is replaced like any unsuccessful one, though it published (`rejected`).
+ * A turn the next one may go on from: completed, its result taken and not taken back. A turn whose
+ * pass ended in a failure is replaced like any unsuccessful one, though it published (`rejected`),
+ * and so is one the client undid (docs/plan/61-chats-first.md, §5.14).
  */
-const succeeded = (turn: FinishedTurn): boolean => turn.status === 'completed' && !turn.rejected
+const succeeded = (turn: FinishedTurn): boolean =>
+  turn.status === 'completed' && !turn.rejected && !turn.undone
 
 async function startOf(facts: PassFacts, env: PlannerEnvironment): Promise<Start | null> {
   const last = facts.turns.get(facts.task.turnNo)
@@ -532,10 +541,45 @@ export function turnInboxOf(files: readonly TaskAttachmentFacts[]): TurnInboxPla
   return { paths: paths.reverse(), omitted: files.length - paths.length }
 }
 
+/** Whether a row of the feed holds words of a turn the client undid. */
+function wordsOfUndone(facts: PassFacts, { createdAt }: ClientRequest): boolean {
+  return [...facts.turns.values()].some((turn) => {
+    if (!turn.undone || turn.startedAt === null) return false
+    const before = facts.turns.get(turn.turnNo - 1)?.startedAt ?? null
+    return (
+      createdAt.getTime() <= turn.startedAt.getTime() &&
+      (before === null || createdAt.getTime() > before.getTime())
+    )
+  })
+}
+
+/**
+ * The rows the agent may be told of: all but the words of a turn the client undid, those written
+ * after the turn before it started and up to its own start. A new session retells the rest, and a
+ * restored one saw none of those (docs/plan/61-chats-first.md, §5.14).
+ */
+function requestsNotUndone(facts: PassFacts): readonly ClientRequest[] {
+  return facts.requests.filter((request) => !wordsOfUndone(facts, request))
+}
+
+/** The files the agent may be told of: those of an undone request go with its words. */
+function filesNotUndone<File extends { id: string }>(
+  facts: PassFacts,
+  files: readonly File[],
+): readonly File[] {
+  const undone = new Set(
+    facts.requests.flatMap((request) =>
+      wordsOfUndone(facts, request) ? (request.attachments ?? []) : [],
+    ),
+  )
+  return files.filter((file) => !undone.has(file.id))
+}
+
 /** A prompt: the client's words, then what the platform adds, which is always kept whole. */
 function promptWith(facts: PassFacts, context: string, since: Date | null): string {
-  if (context === '') return promptOf(facts.requests, since)
-  const words = promptOf(facts.requests, since, turnPlanLimits.prompt - context.length - 2)
+  const requests = requestsNotUndone(facts)
+  if (context === '') return promptOf(requests, since)
+  const words = promptOf(requests, since, turnPlanLimits.prompt - context.length - 2)
   return `${words}\n\n${context}`
 }
 
@@ -546,7 +590,8 @@ function browserPromptOf(
   since: Date | null,
   workspace: { inbox: readonly string[] } | null,
 ): string {
-  return promptWith(facts, browserContextOf(browser, workspace), since)
+  const attachments = filesNotUndone(facts, browser.attachments)
+  return promptWith(facts, browserContextOf({ ...browser, attachments }, workspace), since)
 }
 
 /** The prompt of a pass with the code alone: the notes of the project are data, not rules (§5.7). */
@@ -558,7 +603,9 @@ function codePromptOf(facts: PassFacts, since: Date | null): string {
 /**
  * Where a pass without a repository starts (docs/plan/57, Б3, Б4): there is no branch to read,
  * so turns are chained by their checkpoints — a completed turn is continued from its snapshot,
- * as the product store requires; after an unsuccessful one a new session starts.
+ * as the product store requires; after an unsuccessful one a new session starts. After one the
+ * client undid the pass starts where that turn started, from its checkpoint or as a new session:
+ * nothing else of it is taken back (docs/plan/61-chats-first.md, §5.14).
  */
 function startWithoutRepository(
   facts: PassFacts,
@@ -566,6 +613,12 @@ function startWithoutRepository(
 ): StartWithoutRepository | null {
   const last = facts.turns.get(facts.task.turnNo)
   if (!last) return facts.task.turnNo === 0 ? { since: null } : null
+  if (last.undone) {
+    const previous = last.plan?.previous
+    if (!last.plan) return null
+    if (!previous) return { rewound: true, since: null }
+    return { previous, rewound: true, since: facts.turns.get(previous.turn)?.startedAt ?? null }
+  }
   if (last.status !== 'completed') return { since: null }
   const previous = snapshotOf(facts, driver, last)
   return previous ? { previous, since: last.startedAt } : null
@@ -671,7 +724,8 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
   // The client's files go into the sandbox of a turn with a repository or of a chat without a
   // site (docs/plan/61, К16); a task on a site without a repository hands them to the browser
   // worker alone (Б26).
-  const inbox = workspace || !sited ? turnInboxOf(facts.attachments ?? []) : null
+  const inbox =
+    workspace || !sited ? turnInboxOf(filesNotUndone(facts, facts.attachments ?? [])) : null
   const inboxFacts = inbox?.paths.length
     ? { files: inbox.paths.length, omitted: inbox.omitted }
     : null
@@ -748,6 +802,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
       ? { replacesTurn: start.replacesTurn }
       : {}),
     ...('rebased' in start && start.rebased ? { rebased: true } : {}),
+    ...('rewound' in start && start.rewound ? { rewound: true as const } : {}),
   }
   const policy: TurnCredentialPolicy = {
     driverId: env.driver.id,

@@ -145,6 +145,18 @@ describe('openQuestion', () => {
     expect(openQuestion([question, requestRow('5', 'Ответ')], 'awaiting_user')).toBeNull()
   })
 
+  it('is closed by `/undo` of the turn that asked it', () => {
+    const rewind: FeedRow = {
+      id: '4',
+      at: '2026-10-17T09:50:00.000Z',
+      type: 'feed.rewind',
+      turn: 1,
+      files: false,
+      site: 'none',
+    }
+    expect(openQuestion([agentQuestionRow('3', 1), rewind], 'awaiting_user')).toBeNull()
+  })
+
   it('is closed outside the statuses that wait for the client', () => {
     expect(openQuestion([agentQuestionRow('3', 1)], 'queued')).toBeNull()
   })

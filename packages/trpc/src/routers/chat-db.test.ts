@@ -41,7 +41,7 @@ import { readCheckScreenshot } from '../services/chat/candidates.ts'
 import { releaseConfirmKey, type ChatContext } from '../services/chat/context.ts'
 import { dialogFacts } from '../services/chat/dialog-facts.ts'
 import { dialogPageQuery } from '../services/chat/dialog-list.ts'
-import { lastQuestion } from '../services/chat/dialog-state.ts'
+import { lastQuestion, wordsOfTurn } from '../services/chat/dialog-state.ts'
 import { signConfirmToken } from '../services/chat/releases.ts'
 import { signUndoConfirmToken } from '../services/chat/undo.ts'
 
@@ -4186,6 +4186,446 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       db.$transaction((tx) => settleTaskCharge(tx, { taskId, credits: 5, now: new Date() }), {
         isolationLevel: 'ReadCommitted',
       })
+
+    describe('`/undo` (docs/plan/61-chats-first.md, К29, §5.14)', () => {
+      /** What core leaves of a completed pass that answered: the turn, the row, the charge. */
+      async function answered(taskId: string, turnNo = 1) {
+        await db.$transaction(async (tx) => {
+          // Past the words it answers, whichever clock is ahead: core stamps it by the database.
+          const words = await tx.taskEvent.findFirst({
+            where: { taskId },
+            orderBy: { id: 'desc' },
+            select: { createdAt: true },
+          })
+          const startedAt = new Date(Math.max(Date.now(), (words?.createdAt.getTime() ?? 0) + 1))
+          await tx.taskTurn.create({
+            data: {
+              taskId,
+              turnNo,
+              status: 'completed',
+              driverId: 'opencode',
+              image: 'synthetic/agent:test',
+              startedAt,
+              finishedAt: startedAt,
+            },
+          })
+          await tx.task.update({
+            where: { id: taskId },
+            data: { status: 'awaiting_user', turnNo },
+          })
+          await insertFeedEvent(tx, {
+            taskId,
+            row: {
+              type: 'feed.result',
+              payload: {
+                v: 1,
+                turn: turnNo,
+                message: 'Каноническая ссылка — главный адрес страницы.',
+                site: 'none',
+                next: 'awaiting_user',
+                filesChanged: 0,
+                changeType: 'none',
+                needsApproval: false,
+                risk: 'low',
+              },
+            },
+          })
+        })
+      }
+      /** A completed pass of a chat that was charged, as the next words find it. */
+      async function chargedChat(caller: ReturnType<typeof callerOf>) {
+        const taskId = await newChat(caller)
+        await answered(taskId)
+        await charged(taskId)
+        return taskId
+      }
+      const verdictOf = async (caller: ReturnType<typeof callerOf>, taskId: string) =>
+        (await caller.task.commands({ taskId })).find((item) => item.id === 'turn_undo')?.refusal
+      const moneyOf = async (taskId: string, workspaceId: string) => ({
+        holds: await db.creditHold.findMany({ where: { taskId }, orderBy: { id: 'asc' } }),
+        ledger: await db.creditLedger.findMany({
+          where: { account: { workspaceId } },
+          orderBy: { id: 'asc' },
+        }),
+        accounts: await db.billingAccount.findMany({
+          where: { workspaceId },
+          orderBy: { id: 'asc' },
+        }),
+      })
+
+      it('takes the last turn back, gives the words to the field and moves no money', async () => {
+        const caller = callerOf(await person())
+        const taskId = await chargedChat(caller)
+        const { workspaceId, attempt } = await db.task.findUniqueOrThrow({ where: { id: taskId } })
+        const money = await moneyOf(taskId, workspaceId)
+        expect(await verdictOf(caller, taskId)).toBeNull()
+        const requestId = randomUUID()
+
+        const undone = await caller.task.undoTurn({ taskId, requestId })
+
+        expect(undone).toMatchObject({
+          repeated: false,
+          words: 'Что такое каноническая ссылка?',
+        })
+        const turn = await db.taskTurn.findUniqueOrThrow({
+          where: { taskId_turnNo: { taskId, turnNo: 1 } },
+        })
+        expect(turn.undoneAt).toBeInstanceOf(Date)
+        // Not a rejection: that one takes the money off the turn.
+        expect(turn.rejectedAt).toBeNull()
+        expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
+          status: 'awaiting_user',
+          turnNo: 1,
+          attempt,
+        })
+        expect((await feedOf(taskId)).slice(-2)).toMatchObject([
+          {
+            id: BigInt(undone.requestEventId),
+            type: 'feed.request',
+            payload: { kind: 'command', command: 'turn_undo', requestId },
+          },
+          { type: 'feed.rewind', payload: { turn: 1, files: false, site: 'none' } },
+        ])
+        expect(await moneyOf(taskId, workspaceId)).toEqual(money)
+        // No job: nothing is put for core, and nothing runs the model.
+        expect((await outboxOf(taskId)).map((row) => row.type)).toEqual(['turn.run'])
+
+        // A repeat comes when the first answer was lost: the words must not be lost with it.
+        const rows = (await feedOf(taskId)).length
+        expect(await caller.task.undoTurn({ taskId, requestId })).toEqual({
+          requestEventId: undone.requestEventId,
+          repeated: true,
+          words: 'Что такое каноническая ссылка?',
+        })
+        expect(await feedOf(taskId)).toHaveLength(rows)
+        expect(await verdictOf(caller, taskId)).toBe('nothing_to_undo')
+        await expect(
+          caller.task.undoTurn({ taskId, requestId: randomUUID() }),
+        ).rejects.toMatchObject({ code: 'CONFLICT', message: 'Отменять пока нечего' })
+      })
+
+      it('gives back the words of that turn alone', async () => {
+        const caller = callerOf(await person())
+        const taskId = await chargedChat(caller)
+        await caller.task.message({ taskId, requestId: randomUUID(), text: 'Покажите пример' })
+        await answered(taskId, 2)
+        await charged(taskId)
+        expect(await caller.task.undoTurn({ taskId, requestId: randomUUID() })).toMatchObject({
+          words: 'Покажите пример',
+        })
+      })
+
+      it('gives no words to a repeat once the chat moved on from that `/undo`', async () => {
+        const caller = callerOf(await person())
+        const taskId = await chargedChat(caller)
+        const requestId = randomUUID()
+        await caller.task.undoTurn({ taskId, requestId })
+        await caller.task.message({ taskId, requestId: randomUUID(), text: 'Другой вопрос' })
+        expect(await caller.task.undoTurn({ taskId, requestId })).toMatchObject({
+          repeated: true,
+          words: null,
+        })
+      })
+
+      it('takes the turn that answered, not the one before words whose pass never opened a turn', async () => {
+        const caller = callerOf(await person())
+        const taskId = await chargedChat(caller)
+        await caller.task.message({ taskId, requestId: randomUUID(), text: 'Покажите пример' })
+        // The pass failed before it opened a turn: `turn_no` stays, nothing is rejected.
+        await db.$transaction(async (tx) => {
+          await tx.task.update({ where: { id: taskId }, data: { status: 'awaiting_user' } })
+          await insertFeedEvent(tx, {
+            taskId,
+            row: {
+              type: 'feed.failure',
+              payload: {
+                v: 1,
+                turn: null,
+                code: 'technical',
+                site: 'none',
+                credits: null,
+                next: 'awaiting_user',
+              },
+            },
+          })
+        })
+
+        expect(await verdictOf(caller, taskId)).toBe('nothing_to_undo')
+        await expect(
+          caller.task.undoTurn({ taskId, requestId: randomUUID() }),
+        ).rejects.toMatchObject({ code: 'CONFLICT', message: 'Отменять пока нечего' })
+        const turn = await db.taskTurn.findUniqueOrThrow({
+          where: { taskId_turnNo: { taskId, turnNo: 1 } },
+        })
+        expect(turn.undoneAt).toBeNull()
+      })
+
+      it('gives back the words the turn answered and none written after it started', async () => {
+        const caller = callerOf(await person())
+        const taskId = await chargedChat(caller)
+        await caller.task.message({ taskId, requestId: randomUUID(), text: 'Покажите пример' })
+        await answered(taskId, 2)
+        await caller.task.message({ taskId, requestId: randomUUID(), text: 'Уже другой вопрос' })
+        expect(await wordsOfTurn(db, taskId, 2)).toBe('Покажите пример')
+      })
+
+      it('waits for the client in the browser: the request of the agent stands until a turn takes it', async () => {
+        const { owner, workspaceId, site } = await siteOwner()
+        const caller = callerOf(owner)
+        const task = await db.task.create({
+          data: {
+            workspaceId,
+            siteId: site.id,
+            needsRepository: false,
+            needsBrowser: true,
+            status: 'awaiting_user',
+          },
+        })
+        taskIds.push(task.id)
+        await answered(task.id)
+        const session = await openBrowserSession(db, { taskId: task.id })
+        await recordBrowserHelp(db, {
+          sessionId: session.id,
+          reason: 'login',
+          message: 'Войдите, пожалуйста.',
+        })
+        await db.$transaction((tx) =>
+          insertFeedEvent(tx, {
+            taskId: task.id,
+            row: {
+              type: 'feed.question',
+              payload: {
+                v: 1,
+                kind: 'browser',
+                turn: 1,
+                reason: 'login',
+                message: 'Войдите, пожалуйста.',
+              },
+            },
+          }),
+        )
+
+        expect(await verdictOf(caller, task.id)).toBe('awaiting_answer')
+        await expect(
+          caller.task.undoTurn({ taskId: task.id, requestId: randomUUID() }),
+        ).rejects.toMatchObject({ code: 'CONFLICT' })
+        const turn = await db.taskTurn.findUniqueOrThrow({
+          where: { taskId_turnNo: { taskId: task.id, turnNo: 1 } },
+        })
+        expect(turn.undoneAt).toBeNull()
+        const { browser } = await caller.task.feed({ taskId: task.id })
+        expect(browser?.help?.reason).toBe('login')
+
+        // «Продолжить работу агента» still has its question: `task.resumeAgent` goes by it.
+        expect(await lastQuestion(db, task.id)).toMatchObject({ kind: 'browser', answered: false })
+      })
+
+      it('takes no account of a request left in a browser that is gone: nobody waits there', async () => {
+        const { owner, workspaceId, site } = await siteOwner()
+        const caller = callerOf(owner)
+        const task = await db.task.create({
+          data: {
+            workspaceId,
+            siteId: site.id,
+            needsRepository: false,
+            needsBrowser: true,
+            status: 'awaiting_user',
+          },
+        })
+        taskIds.push(task.id)
+        await answered(task.id)
+        const session = await openBrowserSession(db, { taskId: task.id })
+        await recordBrowserHelp(db, {
+          sessionId: session.id,
+          reason: 'login',
+          message: 'Войдите, пожалуйста.',
+        })
+        await closeBrowserSession(db, { sessionId: session.id, status: 'closed', reason: 'idle' })
+        expect(await verdictOf(caller, task.id)).toBeNull()
+      })
+
+      it('closes a question of the undone turn, and the next words go on from the row', async () => {
+        const caller = callerOf(await person())
+        const taskId = await chargedChat(caller)
+        const question = await db.$transaction((tx) =>
+          insertFeedEvent(tx, {
+            taskId,
+            row: {
+              type: 'feed.question',
+              payload: {
+                v: 1,
+                kind: 'agent',
+                turn: 1,
+                intro: 'Уточните.',
+                questions: [{ text: 'Какой адрес?', options: [] }],
+              },
+            },
+          }),
+        )
+        await caller.task.undoTurn({ taskId, requestId: randomUUID() })
+        const rewind = (await feedOf(taskId)).at(-1)!
+        expect(rewind.id).toBeGreaterThan(question)
+        // The list does not say the chat waits for the client.
+        expect((await caller.task.list({})).items).toMatchObject([
+          { id: taskId, answered: true, rewound: true },
+        ])
+
+        const posted = await caller.task.message({
+          taskId,
+          requestId: randomUUID(),
+          text: 'Другой вопрос',
+        })
+
+        expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
+          status: 'queued',
+          attempt: 2,
+        })
+        expect((await feedOf(taskId)).at(-1)).toMatchObject({
+          id: BigInt(posted.requestEventId),
+          payload: { kind: 'answer', answersEventId: String(rewind.id) },
+        })
+      })
+
+      it('says what stays by the writes of the whole chat, not of the turn', async () => {
+        const { owner, workspaceId } = await siteOwner()
+        const caller = callerOf(owner)
+        const browserChat = async () => {
+          const task = await db.task.create({
+            data: {
+              id: chatId(),
+              workspaceId,
+              siteId: null,
+              needsRepository: false,
+              needsBrowser: true,
+              status: 'awaiting_user',
+            },
+          })
+          await answered(task.id)
+          return task.id
+        }
+        const quiet = await browserChat()
+        await openBrowserSession(db, { taskId: quiet })
+        await caller.task.undoTurn({ taskId: quiet, requestId: randomUUID() })
+        expect((await feedOf(quiet)).at(-1)?.payload).toMatchObject({ site: 'none' })
+
+        const acted = await browserChat()
+        const session = await openBrowserSession(db, { taskId: acted })
+        await db.browserSession.update({
+          where: { id: session.id },
+          data: { wroteAt: new Date() },
+        })
+        await caller.task.undoTurn({ taskId: acted, requestId: randomUUID() })
+        expect((await feedOf(acted)).at(-1)?.payload).toMatchObject({ site: 'elsewhere' })
+      })
+
+      it('tells a chat on a site to check it, and the browser and its sign-in stay', async () => {
+        const { owner, workspaceId, site } = await siteOwner()
+        const caller = callerOf(owner)
+        const task = await db.task.create({
+          data: {
+            workspaceId,
+            siteId: site.id,
+            needsRepository: false,
+            needsBrowser: true,
+            status: 'awaiting_user',
+          },
+        })
+        taskIds.push(task.id)
+        await answered(task.id)
+        const session = await openBrowserSession(db, { taskId: task.id })
+        await db.browserSession.update({
+          where: { id: session.id },
+          data: { wroteAt: new Date() },
+        })
+        const before = await db.browserSession.findUniqueOrThrow({ where: { id: session.id } })
+
+        await caller.task.undoTurn({ taskId: task.id, requestId: randomUUID() })
+
+        expect((await feedOf(task.id)).at(-1)?.payload).toMatchObject({ site: 'check' })
+        expect(await db.browserSession.findUniqueOrThrow({ where: { id: session.id } })).toEqual(
+          before,
+        )
+        expect(await outboxOf(task.id)).toEqual([])
+      })
+
+      it('takes only a turn that completed, with its result taken, while nothing works', async () => {
+        const fresh = callerOf(await person())
+        const queued = await newChat(fresh)
+        expect(await verdictOf(fresh, queued)).toBe('busy')
+        await db.task.update({ where: { id: queued }, data: { status: 'awaiting_user' } })
+        expect(await verdictOf(fresh, queued)).toBe('nothing_to_undo')
+
+        const caller = callerOf(await person())
+        const taskId = await chargedChat(caller)
+        await db.taskTurn.updateMany({ where: { taskId }, data: { status: 'failed' } })
+        expect(await verdictOf(caller, taskId)).toBe('nothing_to_undo')
+        await db.taskTurn.updateMany({
+          where: { taskId },
+          data: { status: 'completed', rejectedAt: new Date() },
+        })
+        expect(await verdictOf(caller, taskId)).toBe('nothing_to_undo')
+        await db.taskTurn.updateMany({ where: { taskId }, data: { rejectedAt: null } })
+        expect(await verdictOf(caller, taskId)).toBeNull()
+        await db.task.update({
+          where: { id: taskId },
+          data: { status: 'cancelled', finishedAt: new Date() },
+        })
+        expect(await verdictOf(caller, taskId)).toBe('finished')
+      })
+
+      it('asks first for the answer to a question about credits: its pass has not run', async () => {
+        const caller = callerOf(await person())
+        const taskId = await chargedChat(caller)
+        await db.$transaction((tx) =>
+          insertFeedEvent(tx, {
+            taskId,
+            row: {
+              type: 'feed.question',
+              payload: {
+                v: 1,
+                kind: 'ceiling',
+                turn: 1,
+                reason: 'credits',
+                spent: 5,
+                held: 5,
+                left: 0,
+              },
+            },
+          }),
+        )
+        expect(await verdictOf(caller, taskId)).toBe('awaiting_answer')
+      })
+
+      it('stays closed in a chat with the repository until its files go back too', async () => {
+        const { owner, site } = await siteOwner()
+        const caller = callerOf(owner)
+        const { taskId } = await newDialog(caller, site.id)
+        await answered(taskId)
+        expect(await verdictOf(caller, taskId)).toBe('nothing_to_undo')
+      })
+
+      it('refuses a turn that wrote to the site itself', async () => {
+        const { owner, workspaceId, site } = await siteOwner()
+        const caller = callerOf(owner)
+        const task = await db.task.create({
+          data: {
+            workspaceId,
+            siteId: site.id,
+            needsRepository: false,
+            needsBrowser: true,
+            status: 'awaiting_user',
+            turnNo: 1,
+          },
+        })
+        taskIds.push(task.id)
+        await productionWrite(task.id, site.id)
+        await db.taskTurn.updateMany({
+          where: { taskId: task.id },
+          data: { status: 'completed' },
+        })
+        expect(await verdictOf(caller, task.id)).toBe('content_written')
+      })
+    })
 
     /** A file of `start` as `PUT /api/attachments/<id>` leaves it. */
     async function storedFile(caller: ReturnType<typeof callerOf>): Promise<string> {

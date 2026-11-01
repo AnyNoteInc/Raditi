@@ -402,7 +402,19 @@ export interface ChatCommandFacts {
    * not closed, and a chat without a project never is.
    */
   projectClosed: boolean
+  /**
+   * Why `/undo` takes no turn now, past the status of the chat; null — it takes the last one: it
+   * completed and is not undone yet, and nothing asks for an answer first
+   * (docs/plan/61-chats-first.md, §5.14).
+   */
+  turnUndo: TurnUndoRefusal | null
 }
+
+/** The refusals of `/undo` the facts of its turn decide. */
+export type TurnUndoRefusal = Extract<
+  ChatCommandRefusal,
+  'nothing_to_undo' | 'undo_past_update' | 'content_written' | 'awaiting_answer'
+>
 
 /**
  * The latest installed release of the dialog (not an undo) and the site around it (docs/plan/53,
@@ -487,9 +499,11 @@ function refusalOf(id: OfferedCommandId, facts: ChatCommandFacts): ChatCommandRe
       if (!facts.repository) return 'no_repository'
       if (facts.releaseInProgress || RELEASING.includes(status)) return 'release_in_progress'
       return BUSY.includes(status) ? 'busy' : null
-    // Closed until their slices: 61.21 and 61.23 give them facts of their own.
+    // No model and no money: only the work of the agent and a release stand in its way.
     case 'turn_undo':
-      return 'nothing_to_undo'
+      if (facts.releaseInProgress || RELEASING.includes(status)) return 'release_in_progress'
+      return BUSY.includes(status) ? 'busy' : facts.turnUndo
+    // Closed until its slice: 61.23 gives it facts of its own.
     case 'turn_redo':
       return 'nothing_to_redo'
     case 'retry':

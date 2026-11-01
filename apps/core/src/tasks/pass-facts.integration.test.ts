@@ -216,6 +216,44 @@ describe.skipIf(!databaseUrl)('the egress of a pass with PostgreSQL', () => {
     expect(read?.writtenHead).toBe('d'.repeat(40))
   })
 
+  it('reads which turn the client took back by `/undo`: a thing apart from a refusal', async () => {
+    const { task, facts } = await dialog()
+    const turn = (turnNo: number, undoneAt: Date | null) => ({
+      taskId: task.id,
+      turnNo,
+      status: 'completed' as const,
+      driverId: sampleDriverId,
+      image: `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`,
+      undoneAt,
+    })
+    await db.taskTurn.createMany({ data: [turn(1, null), turn(2, new Date())] })
+    const read = await facts()
+    expect(read?.turns.get(1)).toMatchObject({ undone: false, rejected: false })
+    expect(read?.turns.get(2)).toMatchObject({ undone: true, rejected: false })
+  })
+
+  it('reads which files came with which words: an undone request takes its files along', async () => {
+    const { task, userId, facts } = await dialog()
+    const file = randomUUID()
+    await insertFeedEvent(db, {
+      taskId: task.id,
+      row: {
+        type: 'feed.request',
+        payload: {
+          v: 1,
+          kind: 'answer',
+          authorId: userId,
+          requestId: randomUUID(),
+          text: 'Вот файл',
+          attachments: [file],
+          answersEventId: '1',
+        },
+      },
+    })
+    const read = await facts()
+    expect(read?.requests.map((request) => request.attachments)).toEqual([[], [file]])
+  })
+
   // docs/plan/57-browser-tasks.md, Б2, Б8, Б20, Б26.
   describe('of a chat without a project (docs/plan/61-chats-first.md, §5.6)', () => {
     async function chat(browser: boolean) {

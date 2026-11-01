@@ -329,7 +329,22 @@ describe('turn plan', () => {
     )
   })
 
+  it('keeps «rewound» of a turn without a repository after `/undo`, absent otherwise', () => {
+    const { workspace: _workspace, ...rest } = request()
+    const chat: TurnRequest = { ...rest, requirements: PLAIN_CHAT, rewound: true }
+    const plan = turnPlanSchema.parse(toTurnPlan(withoutTurnCredentials(chat), 'opencode'))
+    expect(plan.rewound).toBe(true)
+    expect(withTurnCredentials(plan, { llmApiKey: 'k', mcpToken: 't' }).rewound).toBe(true)
+    expect(toTurnPlan(withoutTurnCredentials(request()), 'opencode')).not.toHaveProperty('rewound')
+  })
+
   it.each([
+    ['«rewound» with a repository', { rewound: true }, ['rewound']],
+    [
+      '«rewound» that is not true',
+      { requirements: BROWSER_ONLY, workspace: undefined, rewound: false },
+      ['rewound'],
+    ],
     ['a workspace without a repository', { requirements: BROWSER_ONLY }, ['workspace']],
     [
       'a repository without its workspace',

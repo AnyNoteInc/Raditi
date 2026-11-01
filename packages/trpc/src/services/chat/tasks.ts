@@ -12,6 +12,7 @@ import {
   insertFeedEvent,
   requestPreviewSync,
   taskHasProductionWrites,
+  undoTurn,
   type Prisma,
   type PrismaClient,
 } from '@repo/db'
@@ -61,6 +62,8 @@ import {
   openCeilingQuestion,
   openResult,
   requestOf,
+  wordsOfTurn,
+  wordsOfUndonePress,
   type DialogQuestion,
 } from './dialog-state.ts'
 import { insertDialogPreview, siteHasDatabase } from './previews.ts'
@@ -699,6 +702,59 @@ export async function initDialog(
   })
 }
 
+/**
+ * `/undo` of a chat without the repository (docs/plan/61-chats-first.md, К29, §5.14): the last turn
+ * is taken back, so the next pass starts where it started and its words go to the agent no more;
+ * they come back to the field instead. No model and no job: the chat keeps waiting as it did, its
+ * browser and its sign-in stay, and no money moves — the pass was charged when it ended, and
+ * `undone_at` is no `rejected_at`. The row says what stays on the sites: the browser belongs to
+ * the whole task, not to the turn. A repeat with the same `requestId` returns the row of the first
+ * delivery and the words too: it comes when the page never got the first answer, and the page
+ * puts them only into an empty field.
+ */
+export async function undoDialogTurn(
+  db: PrismaClient,
+  input: { userId: string; taskId: string; requestId: string },
+): Promise<UndoneTurn> {
+  const { userId } = input
+  const requestId = input.requestId.toLowerCase()
+  return underDialogLock(db, input, async (tx, task) => {
+    const repeated = await requestOf(tx, task.id, requestId)
+    if (repeated !== null)
+      return {
+        requestEventId: String(repeated),
+        repeated: true,
+        words: await wordsOfUndonePress(tx, task.id, repeated),
+      }
+    const facts = await dialogFacts(tx, task, userId)
+    assertCommandAvailable(facts.commands, 'turn_undo')
+    const turnId = await undoTurn(tx, { taskId: task.id, turnNo: task.turnNo })
+    if (turnId === null) throw conflict('The last turn of the chat is no longer there to undo')
+    const words = await wordsOfTurn(tx, task.id, task.turnNo)
+    const requestEventId = await writeRequest(tx, task.id, {
+      v: 1,
+      kind: 'command',
+      command: 'turn_undo',
+      authorId: userId,
+      requestId,
+    })
+    await insertFeedEvent(tx, {
+      taskId: task.id,
+      turnId,
+      row: {
+        type: 'feed.rewind',
+        payload: {
+          v: 1,
+          turn: task.turnNo,
+          files: false,
+          site: feedEndedSiteOf(task, await taskHasProductionWrites(tx, task.id)),
+        },
+      },
+    })
+    return { requestEventId, repeated: false, words }
+  })
+}
+
 /** The refusal of a press of «Попробовать ещё» by why it is not offered. */
 const retryRefused: Readonly<Record<RetryRefusal, () => Error>> = {
   nothing: taskNothingToRetry,
@@ -783,6 +839,11 @@ export async function retryDialog(
     await enqueueAgentTurn(tx, { taskId: task.id, attempt, requestEventId })
     return { requestEventId, repeated: false }
   })
+}
+
+export interface UndoneTurn extends PostedRequest {
+  /** What the client wrote for the undone turn, for the field; null — nothing. */
+  words: string | null
 }
 
 export interface CancelledDialog extends PostedRequest {

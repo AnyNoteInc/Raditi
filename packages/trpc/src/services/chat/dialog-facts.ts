@@ -1,4 +1,9 @@
-import type { MemberRole, Prisma } from '@repo/db'
+import {
+  openBrowserSessionOfTask,
+  taskHasProductionWrites,
+  type MemberRole,
+  type Prisma,
+} from '@repo/db'
 import {
   candidateFactsSchema,
   chatCommandAvailability,
@@ -18,11 +23,12 @@ import {
   type ReleaseOutcome,
   type ReleaseStatus,
   type TaskStatus,
+  type TurnUndoRefusal,
 } from '@repo/domain'
 
 import { siteClosed } from '../site-capabilities.ts'
 import { memberRole } from './access.ts'
-import { cancelPending, dialogRetry } from './dialog-state.ts'
+import { cancelPending, dialogRetry, movingRequest, openCeilingQuestion } from './dialog-state.ts'
 import { commandUnavailable } from './refusals.ts'
 
 type Reader = Pick<
@@ -37,6 +43,8 @@ type Reader = Pick<
   | 'site'
   | 'siteLease'
   | 'browserSession'
+  | 'taskTurn'
+  | '$queryRaw'
 >
 
 /** The preview of a dialog as its facts and its panel read it. */
@@ -155,7 +163,7 @@ export async function dialogFacts(
   const retry = await dialogRetry(db, task)
   const needs = await db.task.findUnique({
     where: { id: task.id },
-    select: { needsRepository: true, needsBrowser: true },
+    select: { needsRepository: true, needsBrowser: true, turnNo: true },
   })
   // A task without the repository has no candidate, no preview, no release and no «Попробовать
   // ещё» (docs/plan/57, Б1, Б25), whatever rows say: the page does not list those (К27).
@@ -212,8 +220,49 @@ export async function dialogFacts(
           where: { taskId: task.id, wroteAt: { not: null } },
         })) > 0,
       projectClosed: site !== null && siteClosed(site.status),
+      turnUndo: await turnUndoRefusal(db, {
+        taskId: task.id,
+        status: task.status,
+        turnNo: needs?.turnNo ?? 0,
+        repository: withRepository,
+      }),
     },
   }
+}
+
+/**
+ * Why `/undo` takes no turn of this chat (docs/plan/61-chats-first.md, §5.14): it takes the last
+ * turn, one that completed with its result taken, once, while the chat waits for its next words. A
+ * question of the platform about credits holds a pass that has not run, and a request of the agent
+ * to act in the browser stands in the live session until the next turn takes it (`reclaim`), with
+ * a button that would resume nothing: both are answered first. Words the last turn never saw — their
+ * pass failed before it opened a turn — are the last request, and that has no turn to take back:
+ * the turn before them would go instead. A write of the turn on the site itself cannot go back with
+ * the conversation; the browser belongs to the task, and its row says what stays. The files of a
+ * turn go back with slice 61.22: with the repository nothing is undone yet.
+ */
+async function turnUndoRefusal(
+  db: Reader,
+  chat: { taskId: string; status: TaskStatus; turnNo: number; repository: boolean },
+): Promise<TurnUndoRefusal | null> {
+  if (chat.repository || chat.status !== 'awaiting_user') return 'nothing_to_undo'
+  const turn = await db.taskTurn.findUnique({
+    where: { taskId_turnNo: { taskId: chat.taskId, turnNo: chat.turnNo } },
+    select: { status: true, rejectedAt: true, undoneAt: true, startedAt: true },
+  })
+  if (turn?.status !== 'completed' || turn.rejectedAt !== null || turn.undoneAt !== null)
+    return 'nothing_to_undo'
+  if ((await openCeilingQuestion(db, chat.taskId)) !== null) return 'awaiting_answer'
+  const session = await openBrowserSessionOfTask(db, chat.taskId)
+  if (session?.helpReason) return 'awaiting_answer'
+  if (turn.startedAt !== null) {
+    const later = await db.taskEvent.count({
+      where: { taskId: chat.taskId, ...movingRequest, createdAt: { gt: turn.startedAt } },
+    })
+    if (later > 0) return 'nothing_to_undo'
+  }
+  const wrote = await taskHasProductionWrites(db, chat.taskId, { turnNo: chat.turnNo })
+  return wrote ? 'content_written' : null
 }
 
 const dialogRelease = (row: {

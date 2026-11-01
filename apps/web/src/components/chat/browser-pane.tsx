@@ -64,6 +64,7 @@ const chipTone: Readonly<Record<PaneStatus, { bg: string; fg: string; dot?: bool
   agent: { bg: 'action.hover', fg: 'text.primary', dot: true },
   waiting: { bg: 'warning.main', fg: 'warning.contrastText' },
   idle: { bg: 'action.hover', fg: 'text.primary' },
+  rewound: { bg: 'action.hover', fg: 'text.primary' },
   user: { bg: 'primary.main', fg: 'primary.contrastText' },
   reconnecting: { bg: 'action.hover', fg: 'text.secondary' },
   error: { bg: 'error.main', fg: 'error.contrastText' },
@@ -426,6 +427,8 @@ export interface BrowserPaneProps {
   busy: boolean
   /** The agent answered and asked nothing (26.10.2026): the browser waits for no one. */
   answered?: boolean
+  /** `/undo` left it so: there is no answer to speak of. */
+  rewound?: boolean
 }
 
 /** One input of the client, stamped with what the latest state says. */
@@ -448,6 +451,7 @@ export function BrowserPane({
   stopping = false,
   busy,
   answered = false,
+  rewound = false,
 }: BrowserPaneProps) {
   const chipId = useId()
   const hintId = useId()
@@ -468,7 +472,15 @@ export function BrowserPane({
   const [menu, setMenu] = useState<HTMLElement | null>(null)
   const [tabsMenu, setTabsMenu] = useState<HTMLElement | null>(null)
 
-  const facts = { session, taskStatus, connection: stream.connection, state, configured, answered }
+  const facts = {
+    session,
+    taskStatus,
+    connection: stream.connection,
+    state,
+    configured,
+    answered,
+    rewound,
+  }
   const status = paneStatus(facts)
   const overlay = paneOverlay({ ...facts, painted, endReason: stream.endReason })
 

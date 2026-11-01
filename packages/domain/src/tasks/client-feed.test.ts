@@ -18,6 +18,7 @@ import {
   feedObjectStatuses,
   feedPayloadBytes,
   feedPayloadSchemas,
+  feedRewindPayloadSchema,
   feedQuestionKinds,
   feedQuestionPayloadSchema,
   feedReleaseOutcomes,
@@ -224,6 +225,12 @@ const samples: Record<FeedEventType, Record<string, unknown>[]> = {
     { ...undoInstalled, stage: 'refused', reason: 'undo_outdated' },
   ],
   'feed.screenshot': [screenshot, { ...screenshot, number: 50 }],
+  'feed.rewind': [
+    { v: 1, turn: 2, files: false, site: 'none' },
+    { v: 1, turn: 3, files: true, site: 'check' },
+    { v: 1, turn: 3, files: false, site: 'elsewhere' },
+    { v: 1, turn: 1, files: false, site: 'unchanged' },
+  ],
 }
 
 const accepts = (type: FeedEventType, payload: unknown) =>
@@ -235,7 +242,7 @@ const shown = (type: FeedEventType, { v: _v, ...fields }: Record<string, unknown
 })
 
 describe('feed vocabulary', () => {
-  it('lists the six types of the design, the four of a release and the snapshot, all under the feed prefix', () => {
+  it('lists the six types of the design, the four of a release, the snapshot and `/undo`, all under the feed prefix', () => {
     expect(feedEventTypes).toEqual([
       'feed.request',
       'feed.step',
@@ -249,6 +256,7 @@ describe('feed vocabulary', () => {
       'feed.update',
       'feed.undo',
       'feed.screenshot',
+      'feed.rewind',
     ])
     expect(Object.keys(feedPayloadSchemas)).toEqual([...feedEventTypes])
     expect(isFeedEventType('feed.step')).toBe(true)
@@ -1123,6 +1131,12 @@ describe('reading stored rows', () => {
         { ...screenshot, number: 0 },
         { ...screenshot, width: undefined },
       ],
+      'feed.rewind': [
+        { v: 1, turn: 0, files: false, site: 'none' },
+        { v: 1, turn: 2, files: 'нет', site: 'none' },
+        { v: 1, turn: 2, files: false, site: undefined },
+        { v: 1, turn: 2, files: false, site: 7 },
+      ],
     }
     for (const type of feedEventTypes)
       for (const payload of broken[type])
@@ -1156,6 +1170,16 @@ describe('reading stored rows', () => {
         type: 'feed.result',
         site: 'check',
       })
+      expect(read('feed.rewind', { v: 1, turn: 2, files: false, site: 'partly' })).toMatchObject({
+        type: 'feed.rewind',
+        site: 'check',
+      })
+    })
+
+    it('`/undo` never writes that it restored a site: it takes nothing back there', () => {
+      const rewind = { v: 1, turn: 2, files: false }
+      expect(feedRewindPayloadSchema.safeParse({ ...rewind, site: 'none' }).success).toBe(true)
+      expect(feedRewindPayloadSchema.safeParse({ ...rewind, site: 'restored' }).success).toBe(false)
     })
 
     it('credits → null: no phrase about credits', () => {

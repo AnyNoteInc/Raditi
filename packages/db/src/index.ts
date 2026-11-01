@@ -138,6 +138,7 @@ export {
   settledTaskStatuses,
   settleTurn,
   supersedeStandingCandidate,
+  undoTurn,
   waitingTaskStatuses,
   type CandidateRecordInput,
   type ClaimedTask,

@@ -19,6 +19,7 @@ import {
 } from '../prisma/migrated-schema.ts'
 import type { PrismaClient } from './generated/prisma/client.ts'
 import { PostgresSiteLeaseStore } from './site-leases.ts'
+import { undoTurn } from './task-settle.ts'
 import { PostgresTaskTurnAssignmentStore } from './task-turn-assignments.ts'
 
 const databaseUrl = process.env.DATABASE_URL
@@ -176,7 +177,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
      */
     const step = (
       turn: number,
-      options: { base?: string; previous?: number; rebased?: true; pin?: string | null },
+      options: {
+        base?: string
+        previous?: number
+        rebased?: true
+        pin?: string | null
+        rewound?: true
+      },
     ): OpenTurnAssignment => {
       const opened = options.pin === undefined ? next(turn) : next(turn, turn - 1, options.pin)
       const previous = options.previous
@@ -195,6 +202,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
               },
             }),
         ...(options.rebased ? { rebased: true } : {}),
+        ...(options.rewound ? { rewound: true as const } : {}),
         ...(opened.plan.workspace && options.base
           ? { workspace: { ...opened.plan.workspace, expectedBaseSha: options.base } }
           : {}),
@@ -438,6 +446,81 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
       expect(second.plan.previous).toBeUndefined()
       await f.close(second, 'completed')
       expect(await store.open(f.step(3, { previous: 2 }))).not.toBeNull()
+    })
+
+    it('after `/undo` starts where the undone turn started, and never from it (plan 61, §5.14)', async () => {
+      const f = await fixture(BROWSER_ONLY)
+      await f.close((await store.open(f.input))!, 'completed')
+      await f.close((await store.open(f.step(2, { previous: 1 })))!, 'completed')
+      expect(await undoTurn(db, { taskId: f.task.id, turnNo: 2 })).not.toBeNull()
+
+      await expect(store.open(f.step(3, { previous: 2 }))).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: 'An undone turn is not continued',
+      })
+      await expect(store.open(f.step(3, { previous: 2, rewound: true }))).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: 'A rewound turn does not start where the undone one started',
+      })
+      expect(await db.taskTurn.count({ where: { taskId: f.task.id } })).toBe(2)
+
+      const third = (await store.open(f.step(3, { previous: 1, rewound: true })))!
+      expect(third.plan).toMatchObject({ rewound: true, previous: { turn: 1 } })
+      await f.close(third, 'completed')
+
+      await expect(store.open(f.step(4, { previous: 1, rewound: true }))).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: 'Only a turn after an undone one is rewound',
+      })
+      expect(await store.open(f.step(4, { previous: 3 }))).not.toBeNull()
+    })
+
+    it('after two `/undo` in a row starts where both of them started', async () => {
+      const f = await fixture(BROWSER_ONLY)
+      await f.close((await store.open(f.input))!, 'completed')
+      await f.close((await store.open(f.step(2, { previous: 1 })))!, 'completed')
+      await undoTurn(db, { taskId: f.task.id, turnNo: 2 })
+      await f.close((await store.open(f.step(3, { previous: 1, rewound: true })))!, 'completed')
+      await undoTurn(db, { taskId: f.task.id, turnNo: 3 })
+
+      await expect(store.open(f.step(4, { previous: 3, rewound: true }))).rejects.toMatchObject({
+        message: 'A rewound turn does not start where the undone one started',
+      })
+      const fourth = (await store.open(f.step(4, { previous: 1, rewound: true })))!
+      expect(fourth.plan).toMatchObject({ rewound: true, previous: { turn: 1 } })
+    })
+
+    it('after `/undo` of the first turn starts a new session', async () => {
+      const f = await fixture(PLAIN_CHAT, { chat: true })
+      await f.close((await store.open(f.input))!, 'completed')
+      await undoTurn(db, { taskId: f.task.id, turnNo: 1 })
+
+      await expect(store.open(f.step(2, { previous: 1, rewound: true }))).rejects.toMatchObject({
+        message: 'A rewound turn does not start where the undone one started',
+      })
+      const second = (await store.open(f.step(2, { rewound: true })))!
+      expect(second.plan.previous).toBeUndefined()
+    })
+
+    it('never opens a first turn as rewound', async () => {
+      const f = await fixture(BROWSER_ONLY)
+      await expect(
+        store.open({ ...f.input, plan: { ...f.plan, rewound: true } }),
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'The first product turn has no predecessor',
+      })
+    })
+
+    it('replaces an undone turn with a repository, never continues it', async () => {
+      const f = await fixture()
+      const first = (await store.open(f.input))!
+      await f.close(first, 'completed', headSha)
+      await undoTurn(db, { taskId: f.task.id, turnNo: 1 })
+      await expect(store.open(f.step(2, { base: headSha, previous: 1 }))).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: 'An undone turn must be replaced',
+      })
     })
 
     it('refuses a plan whose requirements differ from its task, without creating a row', async () => {

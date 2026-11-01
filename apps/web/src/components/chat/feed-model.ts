@@ -21,9 +21,12 @@ export type FeedEntry =
 /** The statuses whose stages the live block shows instead of the feed. */
 const LIVE: readonly TaskStatus[] = ['preparing', 'running']
 
-/** A press or words of the client that move the dialog on: an answer closes a question. */
+/**
+ * A press or words of the client that move the dialog on: an answer closes a question. So does
+ * `/undo` of the turn that asked it.
+ */
 function movesOn(row: FeedRow): boolean {
-  return row.type === 'feed.request' && row.kind !== 'command'
+  return row.type === 'feed.rewind' || (row.type === 'feed.request' && row.kind !== 'command')
 }
 
 const isStep = (row: FeedRow): row is StepRow => row.type === 'feed.step'

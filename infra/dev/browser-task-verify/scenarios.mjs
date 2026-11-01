@@ -1459,6 +1459,127 @@ async function scenarioJ(stand) {
   rt.end()
 }
 
+// ─── N: `/undo` of the last request ───────────────────────────────────────────
+
+/** What the chat has of money: nothing of it may move with `/undo`. */
+const moneyOf = async (db, taskId, workspaceId) =>
+  JSON.stringify([
+    await db.creditHold.findMany({ where: { taskId }, orderBy: { id: 'asc' } }),
+    await db.creditLedger.findMany({ where: { account: { workspaceId } }, orderBy: { id: 'asc' } }),
+    await db.billingAccount.findMany({ where: { workspaceId }, orderBy: { id: 'asc' } }),
+  ])
+
+/**
+ * `/undo` in a chat without the repository (docs/plan/61-chats-first.md, §5.14): the agent saved a
+ * draft, answered one more request and that request is taken back. The conversation goes back to
+ * the checkpoint before it and its words reach the model no more, while the browser, its sign-in
+ * and the money stay, and the feed says that the draft stays on the site.
+ */
+async function scenarioN(stand) {
+  const { rt, site, state, db, model } = stand
+  rt.begin('N', '`/undo`: переписка вернулась, браузер и вход на месте, деньги не тронуты')
+  const words = { title: 'Новость перед отменой', text: 'Проверяем отмену последнего запроса.' }
+  const undoneWords = 'Сколько всего записей на сайте сейчас?'
+  const nextWords = 'Лучше откройте список записей.'
+  const { taskId } = await taskWithProgram(stand, state.owner, {
+    text: `Подготовьте новость «${words.title}»: ${words.text} Сохраните черновик.`,
+    account: site.accounts.owner,
+    program: 'keepDraft',
+    ctx: { words, foreignAttachment: state.foreignAttachment },
+    until: ['awaiting_user'],
+  })
+  model.script('answerInWords')
+  await state.owner.mutate('task.message', {
+    taskId,
+    requestId: randomUUID(),
+    text: undoneWords,
+  })
+  const answered = await waitTask(stand, taskId, ['awaiting_user'], {
+    what: 'the answer to the request to undo',
+  })
+  const session = await openSession(db, taskId)
+  const money = await moneyOf(db, taskId, answered.workspaceId)
+  const offered = (await state.owner.query('task.feed', { taskId })).commands.find(
+    (command) => command.id === 'turn_undo',
+  )
+  rt.check(offered?.available === true, 'the chat without the repository offers `/undo`', offered)
+
+  const requestId = randomUUID()
+  const undone = await state.owner.mutate('task.undoTurn', { taskId, requestId })
+  rt.check(
+    undone.words === undoneWords,
+    'the words of the undone request come back for the field',
+    undone,
+  )
+  const turn = await db.taskTurn.findUniqueOrThrow({
+    where: { taskId_turnNo: { taskId, turnNo: answered.turnNo } },
+  })
+  rt.check(
+    turn.undoneAt !== null && turn.rejectedAt === null && turn.status === 'completed',
+    'the turn is undone, not rejected: it stays paid',
+    { undoneAt: turn.undoneAt, rejectedAt: turn.rejectedAt, status: turn.status },
+  )
+  rt.check(
+    (await moneyOf(db, taskId, answered.workspaceId)) === money,
+    'no hold, no ledger row and no balance moved',
+  )
+  const rewind = (await rowsOf(db, taskId, 'feed.rewind')).at(-1)
+  rt.check(
+    rewind?.site === 'check' && rewind.files === false && rewind.turn === answered.turnNo,
+    'the feed says the request is undone and asks to check the site: the draft of the chat stays',
+    rewind,
+  )
+  const after = await openSession(db, taskId)
+  rt.check(
+    after.id === session.id &&
+      after.status === 'ready' &&
+      (await workerSessions(stand)).some((held) => held.sessionId === session.id),
+    'the browser of the chat stays where it was, open on the worker',
+    { status: after.status },
+  )
+  rt.check(
+    (await db.task.findUniqueOrThrow({ where: { id: taskId } })).status === 'awaiting_user',
+    'the chat keeps waiting: `/undo` starts no work',
+  )
+  const listed = (await state.owner.query('task.list', {})).items.find(({ id }) => id === taskId)
+  rt.check(
+    listed?.answered === true && listed.rewound === true,
+    'the list keeps the chat out of those that wait, and does not call it answered',
+    listed,
+  )
+
+  const asked = model.requests.length
+  model.script('readTheList')
+  await state.owner.mutate('task.message', { taskId, requestId: randomUUID(), text: nextWords })
+  const next = await waitTask(stand, taskId, ['awaiting_user'], {
+    what: 'the turn after `/undo`',
+  })
+  const assignment = await db.turnAssignment.findFirstOrThrow({
+    where: { taskId, turnNo: next.turnNo },
+  })
+  rt.check(
+    assignment.plan.rewound === true && assignment.plan.previous?.turn === answered.turnNo - 1,
+    'the next turn restores the checkpoint the undone one started from',
+    { rewound: assignment.plan.rewound, previous: assignment.plan.previous?.turn },
+  )
+  const prompts = model.requests.slice(asked).join('\n')
+  rt.check(
+    prompts.includes(nextWords) && !prompts.includes(undoneWords),
+    'the model reads the next words, and nothing of the undone request',
+  )
+  rt.check(
+    model.current().finished === true && model.current().facts.loginPage === false,
+    'the sign-in in the browser of the chat is still there',
+    model.current().facts,
+  )
+  rt.check(
+    (await openSession(db, taskId)).id === session.id,
+    'the next turn works in the same browser',
+  )
+  await closeDialog(stand, taskId)
+  rt.end()
+}
+
 // ─── K: isolation and access ──────────────────────────────────────────────────
 
 async function scenarioK(stand) {
@@ -1912,6 +2033,7 @@ const SCENARIOS = Object.freeze({
   H: scenarioH,
   I: scenarioI,
   J: scenarioJ,
+  N: scenarioN,
   K: scenarioK,
   L: scenarioL,
   M: scenarioM,

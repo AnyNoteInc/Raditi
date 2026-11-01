@@ -9,6 +9,7 @@ import {
   feedCardTitle,
   feedCeilingText,
   feedCommandText,
+  feedRewindText,
   feedCreditsSentence,
   feedDecisionText,
   feedDoneSiteText,
@@ -229,6 +230,8 @@ function rowBlock(row: FeedItem, withSite: boolean): string | null {
       ])
     case 'feed.screenshot':
       return block([agent(feedExportText.screenshot(row.number))])
+    case 'feed.rewind':
+      return feedRewindText(row)
     case 'newer':
       return feedRowText.newer
     case 'unreadable':

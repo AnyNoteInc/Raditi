@@ -24,9 +24,11 @@ export interface DialogListItem {
    * The dialog waits for nothing: the agent answered and asked no question (`awaiting_user`
    * after a `feed.result`; owner's answer of 26.10.2026 — «ожидает ввода также не нужно», a chat
    * like Claude Code). The client may write on, but is not asked to. A failure after the answer
-   * (28.10.2026: the dialog stays open) asks the client again: «продолжи».
+   * (28.10.2026: the dialog stays open) asks the client again: «продолжи». `/undo` leaves it so too.
    */
   answered: boolean
+  /** It is `/undo` that left it so: there is no answer to speak of (`taskRewoundLabel`). */
+  rewound: boolean
   createdAt: Date
   updatedAt: Date
   /** null — a chat without a project (docs/plan/61-chats-first.md, §5.9). */
@@ -53,11 +55,18 @@ type DialogFolderKey = string
 /** A chat that is shown (К34): not deleted, of a project that is not deleted or of none. */
 const SHOWN = Prisma.sql`t.deleted_at IS NULL AND (t.site_id IS NULL OR s.deleted_at IS NULL)`
 
+/** The newest row of `t` that says what its chat waits for. */
+const ENDING = Prisma.sql`(SELECT e.type FROM task_events e
+  WHERE e.task_id = t.id
+    AND e.type IN ('feed.result', 'feed.question', 'feed.failure', 'feed.rewind')
+  ORDER BY e.id DESC LIMIT 1)`
+
 /** `DialogListItem.answered` of the row `t`. */
-const ANSWERED = Prisma.sql`(t.status = 'awaiting_user' AND COALESCE((
-  SELECT e.type = 'feed.result' FROM task_events e
-  WHERE e.task_id = t.id AND e.type IN ('feed.result', 'feed.question', 'feed.failure')
-  ORDER BY e.id DESC LIMIT 1), false))`
+const ANSWERED = Prisma.sql`(t.status = 'awaiting_user'
+  AND COALESCE(${ENDING} IN ('feed.result', 'feed.rewind'), false))`
+
+/** `DialogListItem.rewound` of the row `t`. */
+const REWOUND = Prisma.sql`(t.status = 'awaiting_user' AND COALESCE(${ENDING} = 'feed.rewind', false))`
 
 /** The chat `t` waits for the client: «Ждёт вашего решения» of the list (`dialogGroups`). */
 const WAITS_FOR_CLIENT = Prisma.sql`(t.status = 'awaiting_approval'
@@ -67,7 +76,7 @@ const WAITS_FOR_CLIENT = Prisma.sql`(t.status = 'awaiting_approval'
  * One page of the chats of the workspaces of `userId`, the latest changed first. A page per
  * workspace, then the page of them all: `tasks_workspace_updated_idx` gives each in its order, and
  * the rest of a workspace is not read — `workspace_id IN (…)` would read every chat it has and sort
- * them for each page. `undo` and `answered` are asked of the rows of the page alone.
+ * them for each page. `undo`, `answered` and `rewound` are asked of the rows of the page alone.
  */
 export function dialogPageQuery(input: {
   userId: string
@@ -92,6 +101,7 @@ export function dialogPageQuery(input: {
           WHEN bool_or(u.status NOT IN ('failed', 'rolled_back')) THEN 'running' END
         FROM site_releases u WHERE u.task_id = t.id AND u.kind = 'undo') AS undo,
       ${ANSWERED} AS answered,
+      ${REWOUND} AS rewound,
       t.project_id, t.project_name
     FROM members m
     CROSS JOIN LATERAL (
@@ -132,6 +142,7 @@ export async function listDialogs(
       status: TaskStatus
       undo: 'running' | 'installed' | null
       answered: boolean
+      rewound: boolean
       created_at: Date
       updated_at: Date
       updated_us: bigint
@@ -148,6 +159,7 @@ export async function listDialogs(
       status: row.status,
       undo: row.undo,
       answered: row.answered,
+      rewound: row.rewound,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       project: projectOf(row),

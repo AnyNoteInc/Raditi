@@ -48,6 +48,7 @@ function dialog(id: string, patch: Partial<DialogListItem> = {}): DialogListItem
     status: 'done',
     undo: null,
     answered: false,
+    rewound: false,
     createdAt: now,
     updatedAt: now,
     project: null,
@@ -111,6 +112,20 @@ describe('the list of dialogs', () => {
     const today = await screen.findByRole('list', { name: 'Сегодня' })
     expect(plain(today.textContent)).toContain('Агент ответил')
     expect(plain(today.textContent)).not.toContain('Ответьте агенту')
+    expect(screen.queryByRole('list', { name: 'Ждёт вашего решения' })).toBeNull()
+  })
+
+  it('says that the request is undone of a chat `/undo` left waiting for nothing', async () => {
+    listPage.mockResolvedValue({
+      items: [
+        dialog('4', { title: 'Про сайт', status: 'awaiting_user', answered: true, rewound: true }),
+      ],
+      nextCursor: null,
+    })
+    showList()
+    const today = await screen.findByRole('list', { name: 'Сегодня' })
+    expect(plain(today.textContent)).toContain('Запрос отменён')
+    expect(plain(today.textContent)).not.toContain('Агент ответил')
     expect(screen.queryByRole('list', { name: 'Ждёт вашего решения' })).toBeNull()
   })
 

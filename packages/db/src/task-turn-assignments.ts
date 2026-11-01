@@ -38,7 +38,8 @@ const closureSchema = z.object({
  * A turn meets the requirements of its task (docs/plan/57-browser-tasks.md, Б2, Б3), fixed when
  * the task was created. A turn without a repository has no branch, base or head: it continues the
  * completed turn before it by its snapshot, and after an unsuccessful one starts a new session —
- * nothing it did on the site is undone, so it is never replaced.
+ * nothing it did on the site is undone, so it is never replaced. After `/undo` of the turn before
+ * it (docs/plan/61-chats-first.md, §5.14) it starts where that turn started, one step back.
  */
 export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore {
   private readonly productDb: Database
@@ -99,7 +100,19 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
         const prior = await tx.taskTurn.findUniqueOrThrow({
           where: { taskId_turnNo: { taskId: task.id, turnNo: turn - 1 } },
         })
-        if (prior.status === 'completed') {
+        if (prior.undoneAt !== null) {
+          if (!plan.rewound) throw conflict('An undone turn is not continued')
+          const undone = await tx.turnAssignment.findMany({
+            where: { taskId: task.id, turnNo: turn - 1 },
+          })
+          const saved = turnPlanSchema.safeParse(undone[0]?.plan)
+          if (undone.length !== 1 || !saved.success)
+            throw conflict('The undone turn can no longer be restored')
+          if (!isDeepStrictEqual(plan.previous, saved.data.previous))
+            throw conflict('A rewound turn does not start where the undone one started')
+        } else if (plan.rewound) {
+          throw conflict('Only a turn after an undone one is rewound')
+        } else if (prior.status === 'completed') {
           if (plan.previous?.turn !== turn - 1)
             throw conflict('Continuation does not restore the completed product turn')
         } else if (plan.previous) {
@@ -112,6 +125,7 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
         const branch = await taskBranch(tx, task.id, prior)
         if (plan.replacesTurn === undefined) {
           if (prior.status !== 'completed') throw conflict('An unsuccessful turn must be replaced')
+          if (prior.undoneAt !== null) throw conflict('An undone turn must be replaced')
           // After «Обновить» (plan 53, Р27) the turn is a new session on the moved candidate;
           // a continuation would restore a session of the old `main` and publish over the move.
           if (plan.rebased) {
@@ -157,7 +171,7 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
           )
             throw conflict('Replacement does not restore the replaced turn input')
         }
-      } else if (plan.previous || plan.replacesTurn !== undefined || plan.rebased) {
+      } else if (plan.previous || plan.replacesTurn !== undefined || plan.rebased || plan.rewound) {
         throw badRequest('The first product turn has no predecessor')
       }
       const assignment = await new PostgresTurnAssignmentStore(tx).open(parsed)

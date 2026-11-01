@@ -14,6 +14,7 @@ import {
   feedStateText,
   feedVersionText,
   taskAnsweredLabel,
+  taskRewoundLabel,
   taskStatusLabel,
 } from '@repo/domain/tasks/client-feed-labels'
 import { terminalTaskStatuses } from '@repo/domain/tasks/task-status'
@@ -144,7 +145,8 @@ function focusTakenByOpening(dialog: Element | null): Element | null {
 }
 
 /** What a press of the client sends: one id per press, kept for its repeats. */
-type Press = 'message' | 'continue' | 'retry' | 'cancel' | 'reset' | 'update' | 'resume' | 'init'
+type Press =
+  'message' | 'continue' | 'retry' | 'cancel' | 'reset' | 'update' | 'resume' | 'init' | 'undoTurn'
 
 /** A release or an undo of it that is under way: its words in the head of the dialog. */
 function releaseProgress(head: FeedHeadState): string | null {
@@ -398,6 +400,14 @@ export function DialogView({
     return () => observer.disconnect()
   }, [])
   const clientCommands = useClientCommands({ projectId: siteId, anchor: field })
+  // The words `/undo` gave back, and what the field holds now: a draft is never written over.
+  const [undoneWords, setUndoneWords] = useState<string | null>(null)
+  const fieldText = useRef('')
+  const fieldTextChanged = useCallback((text: string) => {
+    fieldText.current = text
+    // They left the field: the next `/undo` may bring the same words back.
+    setUndoneWords((words) => (words === text ? words : null))
+  }, [])
 
   const message = useMutation(trpc.task.message.mutationOptions())
   const proceed = useMutation(trpc.task.continue.mutationOptions())
@@ -407,8 +417,10 @@ export function DialogView({
   const retry = useMutation(trpc.task.retry.mutationOptions())
   const resumeAgent = useMutation(trpc.task.resumeAgent.mutationOptions())
   const init = useMutation(trpc.task.init.mutationOptions())
+  const undoTurn = useMutation(trpc.task.undoTurn.mutationOptions())
   const setEffort = useMutation(trpc.task.setEffort.mutationOptions())
   const busy =
+    undoTurn.isPending ||
     proceed.isPending ||
     retry.isPending ||
     cancel.isPending ||
@@ -600,17 +612,24 @@ export function DialogView({
       : null
   // The agent answered and asked nothing: the dialog waits for no one (26.10.2026). A failure
   // that left the dialog open (28.10.2026) asks the client again: «продолжи».
-  const ending = rows.findLast((row) => row.type === 'feed.result' || row.type === 'feed.failure')
+  const ending = rows.findLast(
+    (row) =>
+      row.type === 'feed.result' || row.type === 'feed.failure' || row.type === 'feed.rewind',
+  )
   const answered =
     status === 'awaiting_user' && question === null && ending?.type !== 'feed.failure'
+  // `/undo` leaves the dialog open as an answer does, and takes that answer back.
+  const rewound = answered && ending?.type === 'feed.rewind'
   const announcement =
     status === undefined
       ? ''
       : keptFailure !== null
         ? `${feedFailureText[keptFailure.code]} ${feedFailureKeptText}`
-        : answered
-          ? taskAnsweredLabel
-          : taskStatusLabel[status]
+        : rewound
+          ? taskRewoundLabel
+          : answered
+            ? taskAnsweredLabel
+            : taskStatusLabel[status]
 
   /** The focus goes to the tab of a tool: what moved it is gone or behind. */
   function focusSoon(id: string) {
@@ -752,6 +771,19 @@ export function DialogView({
     refresh()
   }
 
+  /** `/undo`: the agent forgets the last request, and its words come back to the field (§5.14). */
+  async function pressUndoTurn() {
+    setFieldError(null)
+    try {
+      const { words } = await undoTurn.mutateAsync({ taskId, requestId: pressId('undoTurn') })
+      pressed('undoTurn')
+      if (words !== null && fieldText.current.trim() === '') setUndoneWords(words)
+    } catch (failure) {
+      setFieldError(callErrorText(failure))
+    }
+    refresh()
+  }
+
   /** «Попробовать ещё» of a failure: one id per press of that failure, kept for its repeats. */
   async function pressRetry(failureEventId: string) {
     setFieldError(null)
@@ -878,6 +910,9 @@ export function DialogView({
       case 'init':
         void press('init', init.mutateAsync)
         return
+      case 'turn_undo':
+        void pressUndoTurn()
+        return
       case 'retry':
         if (retryRow !== null) void pressRetry(retryRow.id)
         return
@@ -903,7 +938,7 @@ export function DialogView({
       // `/help` is the field's. The others reach nobody yet: no row and no word typed gets here
       // while the server closes them. A slice that opens one takes it off this list.
       default:
-        id satisfies CommandToCome | 'turn_undo' | 'turn_redo' | 'help'
+        id satisfies CommandToCome | 'turn_redo' | 'help'
         return
     }
   }
@@ -1058,6 +1093,8 @@ export function DialogView({
         commands={composerCommands}
         attachments={attachments}
         noSecrets={noSecrets}
+        restored={undoneWords}
+        onTextChange={fieldTextChanged}
         {...(working
           ? {
               stop: {
@@ -1073,7 +1110,7 @@ export function DialogView({
   // «+» of the tools: in the head while their panel is closed, at the end of its tabs while open.
   // Its dot says what is new behind it, never while the panel is open (И13); below `lg` its menu
   // comes up from the bottom of the screen (И14). A chat with no tool has no «+» at all (К19).
-  const tiles = head === null ? [] : toolTilesOf(head, tools, { answered })
+  const tiles = head === null ? [] : toolTilesOf(head, tools, { answered, rewound })
   const menu =
     head === null || tiles.length === 0 ? null : (
       <ToolsMenu
@@ -1113,6 +1150,7 @@ export function DialogView({
             }
             busy={busy}
             answered={answered}
+            rewound={rewound}
           />
         )
       case 'preview':

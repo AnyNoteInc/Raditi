@@ -44,6 +44,7 @@ import {
   feedUndoConfirmedText,
   feedUndoKeptText,
   feedUndoReasonText,
+  feedRewindText,
   feedUndoText,
   feedUpdateText,
   feedReleaseTitle,
@@ -711,6 +712,22 @@ describe('a task in the browser', () => {
 })
 
 // The sources of these catalogues, the bodies of their functions too: chat-texts.test.ts of web.
+describe('the row of `/undo` (docs/plan/61-chats-first.md, §5.13)', () => {
+  it('says what went back, and what stays by what the whole task left', () => {
+    expect(feedRewindText({ files: false, site: 'none' })).toBe('Последний запрос отменён.')
+    expect(feedRewindText({ files: false, site: 'unchanged' })).toBe('Последний запрос отменён.')
+    expect(feedRewindText({ files: false, site: 'check' })).toBe(
+      'Последний запрос отменён. То, что агент сделал на сайте через браузер, осталось: проверьте сайт.',
+    )
+    expect(feedRewindText({ files: false, site: 'elsewhere' })).toBe(
+      'Последний запрос отменён. То, что агент сделал на других сайтах, осталось.',
+    )
+    expect(feedRewindText({ files: true, site: 'check' })).toBe(
+      'Переписка и файлы возвращены. То, что агент сделал на сайте через браузер, осталось: проверьте сайт.',
+    )
+  })
+})
+
 describe('the word of a chat (docs/plan/61-chats-first.md, К26)', () => {
   it('composes «чат» into the texts a client reads', () => {
     const texts = [...allTexts, ...stringsOf(failures), ...stringsOf(commands)]

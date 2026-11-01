@@ -13,6 +13,7 @@ function dialog(id: string, status: DialogListItem['status'], createdAt: string)
     status,
     undo: null,
     answered: false,
+    rewound: false,
     createdAt: new Date(createdAt),
     updatedAt: new Date(createdAt),
     project: null,

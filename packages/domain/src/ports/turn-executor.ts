@@ -368,6 +368,11 @@ export interface TurnRequest {
    * snapshot is restored; the feed keeps its history. Only with a repository.
    */
   rebased?: boolean
+  /**
+   * The turn before it was undone (`/undo`, docs/plan/61-chats-first.md, §5.14): the session goes
+   * back to the checkpoint that turn started from. A turn with a repository replaces it instead.
+   */
+  rewound?: true
 }
 
 /**
@@ -548,6 +553,7 @@ export const turnPlanSchema = z
     previous: snapshotReferenceSchema.optional(),
     replacesTurn: z.number().int().positive().max(999_999).optional(),
     rebased: z.boolean().optional(),
+    rewound: z.literal(true).optional(),
   })
   .strict()
   .superRefine((plan, ctx) => {
@@ -566,6 +572,12 @@ export const turnPlanSchema = z
       for (const key of ['replacesTurn', 'rebased'] as const)
         if (plan[key] !== undefined)
           ctx.addIssue({ code: 'custom', path: [key], message: 'only a turn with a repository' })
+    if (repository && plan.rewound !== undefined)
+      ctx.addIssue({
+        code: 'custom',
+        path: ['rewound'],
+        message: 'a turn with a repository replaces the undone one',
+      })
   })
 export type TurnPlan = z.infer<typeof turnPlanSchema>
 

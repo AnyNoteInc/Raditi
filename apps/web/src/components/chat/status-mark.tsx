@@ -1,5 +1,9 @@
 import type { TaskStatus } from '@repo/domain'
-import { taskAnsweredLabel, taskStatusLabel } from '@repo/domain/tasks/client-feed-labels'
+import {
+  taskAnsweredLabel,
+  taskRewoundLabel,
+  taskStatusLabel,
+} from '@repo/domain/tasks/client-feed-labels'
 import Box from '@mui/material/Box'
 
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
@@ -38,17 +42,19 @@ const statusTone: Readonly<Record<TaskStatus, Tone>> = Object.freeze({
 /**
  * The status of a dialog: a sign and its word. `answered` — the dialog waits for nothing, the
  * agent answered (26.10.2026): it reads «Агент ответил», in the colour of a status that asks
- * nothing.
+ * nothing. `rewound` — the same after `/undo`, which took the answer back.
  */
 export function StatusMark({
   status,
   size = 'small',
   answered = false,
+  rewound = false,
   onFill = false,
 }: {
   status: TaskStatus
   size?: 'small' | 'medium'
   answered?: boolean
+  rewound?: boolean
   /**
    * The mark stands on a fill — the open dialog of the list: the quiet tone takes the colour of
    * the text, which keeps 4.5:1 there in the dark scheme as well.
@@ -72,7 +78,7 @@ export function StatusMark({
       }}
     >
       <AppIcon name={statusIcon[status]} size={size === 'small' ? 15 : 17} />
-      {idle ? taskAnsweredLabel : taskStatusLabel[status]}
+      {idle ? (rewound ? taskRewoundLabel : taskAnsweredLabel) : taskStatusLabel[status]}
     </Box>
   )
 }

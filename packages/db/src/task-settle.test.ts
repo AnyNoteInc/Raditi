@@ -27,6 +27,7 @@ import {
   requestPreviewSync,
   settleTurn,
   supersedeStandingCandidate,
+  undoTurn,
   type CandidateRecordInput,
 } from './task-settle.ts'
 
@@ -225,6 +226,32 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn settlement', () => {
     const again = await db.taskTurn.findFirstOrThrow({ where: { taskId: row.id, turnNo: 1 } })
     expect(again.rejectedAt).toEqual(first.rejectedAt)
     await expect(rejectTurn(db, { taskId: row.id, turnNo: 0 })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    })
+  })
+
+  it('takes a completed turn back once, never one whose result was refused', async () => {
+    const row = await task({ status: 'running', turnNo: 1 })
+    const turn = await db.taskTurn.findFirstOrThrow({ where: { taskId: row.id } })
+    expect(await undoTurn(db, { taskId: row.id, turnNo: 2 })).toBeNull()
+    expect(await undoTurn(db, { taskId: row.id, turnNo: 1 })).toBe(turn.id)
+    const undone = await db.taskTurn.findFirstOrThrow({ where: { taskId: row.id } })
+    expect(undone.undoneAt).toBeInstanceOf(Date)
+    expect(undone.rejectedAt).toBeNull()
+    expect(undone.status).toBe('completed')
+    expect(await undoTurn(db, { taskId: row.id, turnNo: 1 })).toBeNull()
+    expect((await db.taskTurn.findFirstOrThrow({ where: { taskId: row.id } })).undoneAt).toEqual(
+      undone.undoneAt,
+    )
+
+    const refused = await task({ status: 'running', turnNo: 1 })
+    await rejectTurn(db, { taskId: refused.id, turnNo: 1 })
+    expect(await undoTurn(db, { taskId: refused.id, turnNo: 1 })).toBeNull()
+
+    const failed = await task({ status: 'running', turnNo: 1 })
+    await db.taskTurn.updateMany({ where: { taskId: failed.id }, data: { status: 'failed' } })
+    expect(await undoTurn(db, { taskId: failed.id, turnNo: 1 })).toBeNull()
+    await expect(undoTurn(db, { taskId: row.id, turnNo: 0 })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
     })
   })

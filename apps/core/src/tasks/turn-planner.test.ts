@@ -160,6 +160,7 @@ function finished(
     base?: string
     previous?: TurnPlan['previous']
     rejected?: boolean
+    undone?: boolean
   },
 ): FinishedTurn {
   const plan = toTurnPlan(
@@ -210,6 +211,7 @@ function finished(
     turnNo,
     status,
     rejected: patch.rejected ?? false,
+    undone: patch.undone ?? false,
     headSha: patch.headSha === undefined ? HEAD1 : patch.headSha,
     startedAt: at(turnNo * 10),
     nativeSessionId: 'ses_prior',
@@ -682,6 +684,51 @@ describe('planTurn', () => {
   })
 })
 
+describe('planTurn after `/undo` of a turn with a repository (docs/plan/61-chats-first.md, §5.14)', () => {
+  it('replaces the undone turn from its checkpoint, and its words reach the agent no more', async () => {
+    const checkpoint = {
+      workspaceId: WORKSPACE,
+      sessionId: TASK,
+      turn: 1,
+      image,
+      driver: { id: sampleDriverId, version: driver.cliVersion },
+      home,
+    }
+    const undone = finished(2, 'completed', {
+      base: HEAD1,
+      headSha: HEAD2,
+      previous: checkpoint,
+      undone: true,
+    })
+    const plan = await planTurn(
+      facts({
+        task: { ...facts().task, turnNo: 2 },
+        turns: new Map([
+          [1, finished(1, 'completed', {})],
+          [2, undone],
+        ]),
+        requests: [
+          request(10, 'first', 'Сделайте шапку синей', 0),
+          request(11, 'answer', 'Добавьте баннер', 15),
+          request(12, 'command', null, 25, 'turn_undo'),
+          request(13, 'answer', 'Лучше красную', 30),
+        ],
+        writtenHead: HEAD1,
+      }),
+      env({}, HEAD1),
+    )
+    if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+    expect(plan.request.replacesTurn).toBe(2)
+    expect(plan.request.previous).toEqual(checkpoint)
+    expect(plan.request.workspace).toMatchObject({
+      expectedBaseSha: HEAD1,
+      expectedBranchSha: HEAD1,
+    })
+    expect(plan.request).not.toHaveProperty('rewound')
+    expect(plan.request.input.prompt).toBe('Лучше красную')
+  })
+})
+
 describe('planTurn of a repository task with files of the client', () => {
   const MIB = 1024 * 1024
   const fileOf = (index: number, fileName = `photo-${index}.jpg`, sizeBytes = MIB) => ({
@@ -894,6 +941,225 @@ describe('planTurn of a task in the cloud browser (docs/plan/57-browser-tasks.md
     expect(plan.request.previous).toBeUndefined()
     expect(plan.request.replacesTurn).toBeUndefined()
     expect(plan.request.input.prompt.startsWith('Добавьте новость\n\n')).toBe(true)
+  })
+
+  describe('after `/undo` (docs/plan/61-chats-first.md, §5.14)', () => {
+    const checkpointOf = (turn: number) => ({
+      workspaceId: WORKSPACE,
+      sessionId: TASK,
+      turn,
+      image,
+      driver: { id: sampleDriverId, version: driver.cliVersion },
+      home,
+    })
+    const inBrowser = (
+      turnNo: number,
+      patch: { previous?: TurnPlan['previous']; undone?: boolean } = {},
+    ): FinishedTurn => {
+      const turn = finishedInBrowser(turnNo, 'completed')
+      const { previous: _previous, ...plan } = turn.plan!
+      return {
+        ...turn,
+        undone: patch.undone ?? false,
+        plan: patch.previous ? { ...plan, previous: patch.previous } : plan,
+      }
+    }
+
+    it('goes back to the checkpoint the undone turn started from, without its words', async () => {
+      const plan = await planTurn(
+        browserFacts({
+          task: { ...facts().task, turnNo: 2 },
+          turns: new Map([
+            [1, inBrowser(1)],
+            [2, inBrowser(2, { previous: checkpointOf(1), undone: true })],
+          ]),
+          requests: [
+            request(10, 'first', 'Добавьте новость', 0),
+            request(11, 'answer', 'Удалите её', 15),
+            request(12, 'command', null, 25, 'turn_undo'),
+            request(13, 'answer', 'Лучше поправьте заголовок', 30),
+          ],
+        }),
+        env(),
+      )
+      if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+      expect(plan.request.rewound).toBe(true)
+      expect(plan.request.previous).toEqual(checkpointOf(1))
+      expect(plan.request.replacesTurn).toBeUndefined()
+      expect(plan.request.input.prompt.startsWith('Лучше поправьте заголовок\n\n')).toBe(true)
+      expect(plan.request.input.prompt).not.toContain('Удалите её')
+      expect(plan.request.input.prompt).not.toContain('Добавьте новость')
+      expect(() => toTurnPlan(plan.request, sampleDriverId)).not.toThrow()
+    })
+
+    it('starts a new session after the first turn is undone: its words are gone', async () => {
+      const plan = await planTurn(
+        browserFacts({
+          task: { ...facts().task, turnNo: 1 },
+          turns: new Map([[1, inBrowser(1, { undone: true })]]),
+          requests: [
+            request(10, 'first', 'Удалите новость', 0),
+            request(11, 'command', null, 15, 'turn_undo'),
+            request(12, 'answer', 'Добавьте новость', 20),
+          ],
+        }),
+        env(),
+      )
+      if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+      expect(plan.request.rewound).toBe(true)
+      expect(plan.request).not.toHaveProperty('previous')
+      expect(plan.request.input.prompt.startsWith('Добавьте новость\n\n')).toBe(true)
+      expect(plan.request.input.prompt).not.toContain('Удалите новость')
+    })
+
+    it('retells a new session the rest of the words, without those of an undone turn', async () => {
+      // The turn after the undone one failed: the next one is a new session, told all but those.
+      const failed = finishedInBrowser(3, 'failed')
+      const plan = await planTurn(
+        browserFacts({
+          task: { ...facts().task, turnNo: 3 },
+          turns: new Map([
+            [1, inBrowser(1)],
+            [2, inBrowser(2, { previous: checkpointOf(1), undone: true })],
+            [3, failed],
+          ]),
+          requests: [
+            request(10, 'first', 'Добавьте новость', 0),
+            request(11, 'answer', 'Удалите её', 15),
+            request(12, 'answer', 'Поправьте заголовок', 25),
+          ],
+        }),
+        env(),
+      )
+      if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+      expect(plan.request).not.toHaveProperty('rewound')
+      expect(
+        plan.request.input.prompt.startsWith('Добавьте новость\n\nПоправьте заголовок\n\n'),
+      ).toBe(true)
+      expect(plan.request.input.prompt).not.toContain('Удалите её')
+    })
+
+    it('steps back twice in a row: to the same checkpoint, without the words of both', async () => {
+      const plan = await planTurn(
+        browserFacts({
+          task: { ...facts().task, turnNo: 3 },
+          turns: new Map([
+            [1, inBrowser(1)],
+            [2, inBrowser(2, { previous: checkpointOf(1), undone: true })],
+            [3, inBrowser(3, { previous: checkpointOf(1), undone: true })],
+          ]),
+          requests: [
+            request(10, 'first', 'Добавьте новость', 0),
+            request(11, 'answer', 'Удалите её', 15),
+            request(12, 'command', null, 25, 'turn_undo'),
+            request(13, 'answer', 'Переименуйте её', 26),
+            request(14, 'command', null, 35, 'turn_undo'),
+            request(15, 'answer', 'Лучше поправьте заголовок', 36),
+          ],
+        }),
+        env(),
+      )
+      if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+      expect(plan.request.rewound).toBe(true)
+      expect(plan.request.previous).toEqual(checkpointOf(1))
+      expect(plan.request.input.prompt.startsWith('Лучше поправьте заголовок\n\n')).toBe(true)
+      expect(plan.request.input.prompt).not.toContain('Удалите её')
+      expect(plan.request.input.prompt).not.toContain('Переименуйте её')
+      expect(() => toTurnPlan(plan.request, sampleDriverId)).not.toThrow()
+    })
+
+    it('tells the agent of no file of the undone request, on a site', async () => {
+      const kept = '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a60'
+      const undone = '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a61'
+      const file = (id: string, fileName: string) => ({
+        id,
+        fileName,
+        contentType: 'application/pdf',
+        sizeBytes: 2048,
+      })
+      const given = browserFacts()
+      const plan = await planTurn(
+        browserFacts({
+          task: { ...facts().task, turnNo: 2 },
+          turns: new Map([
+            [1, inBrowser(1)],
+            [2, inBrowser(2, { previous: checkpointOf(1), undone: true })],
+          ]),
+          browser: {
+            ...given.browser!,
+            attachments: [file(kept, 'оставить.pdf'), file(undone, 'отменённый.pdf')],
+          },
+          requests: [
+            { ...request(10, 'first', 'Добавьте новость', 0), attachments: [kept] },
+            { ...request(11, 'answer', 'Приложите файл', 15), attachments: [undone] },
+            request(12, 'answer', 'Поправьте заголовок', 30),
+          ],
+        }),
+        env(),
+      )
+      if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+      expect(plan.request.input.prompt).toContain('оставить.pdf')
+      expect(plan.request.input.prompt).not.toContain('отменённый.pdf')
+      expect(plan.request.input.prompt).not.toContain(undone)
+    })
+
+    it('keeps the file of an undone request out of the sandbox of a chat without a site', async () => {
+      const kept = '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a62'
+      const undone = '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a63'
+      const files = [
+        { id: kept, fileName: 'смета.pdf', contentType: 'application/pdf', sizeBytes: 2048 },
+        { id: undone, fileName: 'отменённый.pdf', contentType: 'application/pdf', sizeBytes: 2048 },
+      ]
+      const plan = await planTurn(
+        browserFacts({
+          task: { ...facts().task, siteId: null, turnNo: 2 },
+          attachments: files,
+          browser: { siteUrl: null, agentNotes: null, attachments: files, saved: [], guide: null },
+          turns: new Map([
+            [1, inBrowser(1)],
+            [2, inBrowser(2, { previous: checkpointOf(1), undone: true })],
+          ]),
+          requests: [
+            { ...request(10, 'first', 'Посчитайте смету', 0), attachments: [kept] },
+            { ...request(11, 'answer', 'Сравните с этой', 15), attachments: [undone] },
+            request(12, 'answer', 'Посчитайте без неё', 25),
+          ],
+        }),
+        env(),
+      )
+      if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+      expect(plan.request.input.attachments).toEqual([`/workspace/inbox/${kept}/смета.pdf`])
+      expect(plan.request.input.prompt).not.toContain('отменённый.pdf')
+    })
+
+    it('goes on from the turn after an undone one as from any other', async () => {
+      const plan = await planTurn(
+        browserFacts({
+          task: { ...facts().task, turnNo: 3 },
+          turns: new Map([
+            [1, inBrowser(1)],
+            [2, inBrowser(2, { previous: checkpointOf(1), undone: true })],
+            [3, inBrowser(3, { previous: checkpointOf(1) })],
+          ]),
+          requests: [request(13, 'answer', 'Ещё одна просьба', 35)],
+        }),
+        env(),
+      )
+      if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+      expect(plan.request).not.toHaveProperty('rewound')
+      expect(plan.request.previous?.turn).toBe(3)
+    })
+
+    it('refuses a pass when the saved plan of the undone turn cannot be read', async () => {
+      const plan = await planTurn(
+        browserFacts({
+          task: { ...facts().task, turnNo: 1 },
+          turns: new Map([[1, { ...inBrowser(1, { undone: true }), plan: null }]]),
+        }),
+        env(),
+      )
+      expect(plan).toEqual({ kind: 'refused', code: 'technical' })
+    })
   })
 
   // docs/plan/57, Б22: a new session does not remember what an earlier turn saved on the site.

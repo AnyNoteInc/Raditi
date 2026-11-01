@@ -671,6 +671,7 @@ model TaskTurn {
   /// The pass of this turn ended in a `feed.failure`: the platform refused its result. Replaced,
   /// never continued; its model calls are not charged to the client (docs/plan/53, «Попробовать ещё»).
   rejectedAt      DateTime?  @map("rejected_at") @db.Timestamptz(6)
+  undoneAt        DateTime?  @map("undone_at") @db.Timestamptz(6)
 
   task         Task          @relation(fields: [taskId], references: [id], onDelete: Cascade)
   driver       AgentDriver   @relation(fields: [driverId], references: [id], onDelete: Restrict)

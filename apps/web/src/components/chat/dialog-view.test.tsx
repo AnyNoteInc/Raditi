@@ -66,6 +66,7 @@ const calls = vi.hoisted(() => ({
     vi.fn<(input: { taskId: string; releaseId: string }) => Promise<{ planId: string }>>(),
   resumeAgent: vi.fn<(input: Press) => Promise<Posted>>(),
   init: vi.fn<(input: Press) => Promise<Posted>>(),
+  undoTurn: vi.fn<(input: Press) => Promise<Posted & { words: string | null }>>(),
   agentNotes:
     vi.fn<(input: { id: string }) => Promise<{ notes: string | null; canManage: boolean }>>(),
   setAgentNotes:
@@ -144,6 +145,7 @@ vi.mock('@/trpc/client', () => ({
       cancel: mutation(calls.cancel),
       resumeAgent: mutation(calls.resumeAgent),
       init: mutation(calls.init),
+      undoTurn: mutation(calls.undoTurn),
       setEffort: mutation(calls.setEffort),
       rename: mutation(calls.rename),
       remove: mutation(calls.remove),
@@ -2086,6 +2088,134 @@ describe('the five kinds of a chat (docs/plan/61-chats-first.md, §5.6)', () => 
     expect(option(/Отменить последний запрос/u).textContent).toContain(
       'Агент забудет последний запрос и ответ на него.',
     )
+  })
+
+  describe('`/undo`', () => {
+    const open = () =>
+      browserAnswer({
+        status: 'awaiting_user',
+        commands: verdicts({ turn_undo: null }),
+        events: [requestRow('1', 'Добавьте новость')],
+        cursor: '1',
+      })
+
+    const undo = () => {
+      type('/')
+      fireEvent.click(option(/Отменить последний запрос/))
+    }
+
+    it('asks the server to run it, and the words of the request come back to the field', async () => {
+      calls.undoTurn.mockResolvedValue({ ...posted, words: 'Добавьте новость' })
+      showDialog(open())
+      await screen.findByText('Добавьте новость')
+      undo()
+      await waitFor(() => expect(calls.undoTurn).toHaveBeenCalledTimes(1))
+      expect(calls.undoTurn.mock.calls[0]![0].taskId).toBe(TASK_ID)
+      await waitFor(() => expect(field().value).toBe('Добавьте новость'))
+    })
+
+    it('leaves a draft of the client where it is', async () => {
+      calls.undoTurn.mockResolvedValue({ ...posted, words: 'Добавьте новость' })
+      showDialog(open())
+      await screen.findByText('Добавьте новость')
+      type('Свой черновик')
+      fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+      fireEvent.click(option(/Отменить последний запрос/))
+      await waitFor(() => expect(calls.undoTurn).toHaveBeenCalledTimes(1))
+      await waitFor(() => expect(calls.feed.mock.calls.length).toBeGreaterThan(1))
+      expect(field().value).toBe('Свой черновик')
+    })
+
+    it('brings the same words back after they left the field', async () => {
+      calls.undoTurn.mockResolvedValue({ ...posted, words: 'Добавьте новость' })
+      showDialog(open())
+      await screen.findByText('Добавьте новость')
+      undo()
+      await waitFor(() => expect(field().value).toBe('Добавьте новость'))
+      type('')
+      undo()
+      await waitFor(() => expect(calls.undoTurn).toHaveBeenCalledTimes(2))
+      await waitFor(() => expect(field().value).toBe('Добавьте новость'))
+      // A new press: the same id would be a repeat of the first, and nothing would be undone.
+      const [first, second] = calls.undoTurn.mock.calls.map(([input]) => input.requestId)
+      expect(second).not.toBe(first)
+    })
+
+    it('repeats a press after a lost answer under the same id, and takes the words then', async () => {
+      calls.undoTurn
+        .mockRejectedValueOnce(network())
+        .mockResolvedValueOnce({ ...posted, repeated: true, words: 'Добавьте новость' })
+      showDialog(open())
+      await screen.findByText('Добавьте новость')
+      undo()
+      expect((await screen.findByRole('alert')).textContent).toBe(NETWORK_TEXT)
+      expect(field().value).toBe('')
+      type('')
+      undo()
+      await waitFor(() => expect(calls.undoTurn).toHaveBeenCalledTimes(2))
+      const [first, again] = calls.undoTurn.mock.calls.map(([input]) => input.requestId)
+      expect(again).toBe(first)
+      await waitFor(() => expect(field().value).toBe('Добавьте новость'))
+    })
+
+    it('says a refusal in the field and gives nothing back', async () => {
+      calls.undoTurn.mockRejectedValue(serverRefusal('Отменять пока нечего.'))
+      showDialog(open())
+      await screen.findByText('Добавьте новость')
+      undo()
+      expect((await screen.findByRole('alert')).textContent).toBe('Отменять пока нечего.')
+      expect(field().value).toBe('')
+    })
+
+    // A failure, words, and the question of the turn on them, taken back: without the row of
+    // `/undo` the failure before them would be the last word, and the chat would ask again.
+    it('neither calls a chat answered nor asks for an answer right after `/undo`', async () => {
+      const at = '2026-10-17T10:00:00.000Z'
+      showDialog(
+        browserAnswer({
+          status: 'awaiting_user',
+          commands: verdicts({ turn_undo: 'nothing_to_undo' }),
+          events: [
+            requestRow('1', 'Добавьте новость'),
+            {
+              id: '2',
+              at,
+              type: 'feed.failure',
+              turn: 1,
+              code: 'technical',
+              site: 'none',
+              credits: null,
+              next: 'awaiting_user',
+            } as unknown as FeedRow,
+            requestRow('3', 'Продолжайте'),
+            {
+              id: '4',
+              at,
+              type: 'feed.question',
+              kind: 'agent',
+              turn: 2,
+              intro: 'Уточните.',
+              questions: [{ text: 'Какой адрес?', options: [] }],
+            } as unknown as FeedRow,
+            {
+              id: '5',
+              at,
+              type: 'feed.rewind',
+              turn: 2,
+              files: false,
+              site: 'none',
+            } as unknown as FeedRow,
+          ],
+          cursor: '5',
+        }),
+      )
+      await screen.findByText('Последний запрос отменён.')
+      const said = () => screen.getAllByRole('status').map((region) => region.textContent)
+      await waitFor(() => expect(said()).toContain('Запрос отменён'))
+      expect(said()).not.toContain('Агент ответил')
+      expect(said()).not.toContain('Нужен ваш ответ')
+      expect(field().getAttribute('placeholder')).not.toBe('Ваш ответ')
+    })
   })
 
   it('reads an ended chat without a project no words of the «Переменные» either', async () => {

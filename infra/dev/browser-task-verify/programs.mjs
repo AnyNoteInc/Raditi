@@ -543,8 +543,20 @@ export function* answerInWords() {
   })
 }
 
+/** Scenario N: the next turn after `/undo` finds the browser of the task signed in as it was. */
+export function* readTheList(ctx, facts) {
+  const page = yield* openAndObserve('/wp-admin/edit.php')
+  facts.loginPage = page.url.includes('/wp-login.php')
+  return final({
+    summary: 'Read the list of posts',
+    changeType: 'none',
+    message: 'Открыл список записей: вход на сайт на месте.',
+  })
+}
+
 export const PROGRAMS = Object.freeze({
   answerInWords,
+  readTheList,
   askToSignIn,
   publishNews,
   keepDraft,

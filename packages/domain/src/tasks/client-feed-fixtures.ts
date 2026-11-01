@@ -230,6 +230,11 @@ export const feedFixtures: readonly FeedFixture[] = Object.freeze([
     payload: { v: 1, outcome: 'conflict', conflicts: 2 },
   },
   {
+    name: 'rewind v1',
+    type: 'feed.rewind',
+    payload: { v: 1, turn: 2, files: false, site: 'check' },
+  },
+  {
     name: 'undo v1 confirmed',
     type: 'feed.undo',
     payload: {

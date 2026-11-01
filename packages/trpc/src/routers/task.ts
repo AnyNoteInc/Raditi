@@ -35,6 +35,7 @@ import {
   postDialogMessage,
   resumeDialog,
   retryDialog,
+  undoDialogTurn,
 } from '../services/chat/tasks.ts'
 import { consentedProcedure, router } from '../trpc.ts'
 
@@ -217,6 +218,15 @@ export const taskRouter = router({
       initDialog(ctx.prisma, { ...input, userId: ctx.user.id, now: new Date() }),
     ),
 
+  /**
+   * `/undo`: the last turn of a chat without the repository is taken back, free and without the
+   * model (docs/plan/61-chats-first.md, К29); `words` — what the client wrote for it, for the field.
+   */
+  undoTurn: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid(), requestId: browserId }))
+    .output(postedOutput.extend({ words: z.string().nullable() }))
+    .mutation(({ ctx, input }) => undoDialogTurn(ctx.prisma, { ...input, userId: ctx.user.id })),
+
   /** «Продолжить» after a question of the platform about credits: the next attempt. */
   continue: consentedProcedure
     .input(z.strictObject({ taskId: z.uuid(), requestId: browserId }))
@@ -342,6 +352,8 @@ export const taskRouter = router({
             undo: z.enum(['running', 'installed']).nullable(),
             /** The agent answered and asked nothing: the dialog waits for no one (26.10.2026). */
             answered: z.boolean(),
+            /** `/undo` left it so: the answer it would name was just taken back. */
+            rewound: z.boolean(),
             createdAt: z.date(),
             updatedAt: z.date(),
             project: projectOutput.nullable(),

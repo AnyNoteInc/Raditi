@@ -31,6 +31,8 @@ export interface PaneFacts {
    * browser is the agent's, idle, not waiting for the client.
    */
   answered?: boolean
+  /** It is `/undo` that left the task so: there is no answer to speak of. */
+  rewound?: boolean
 }
 
 const TERMINAL: readonly (TaskStatus | undefined)[] = ['done', 'failed', 'cancelled', 'rolled_back']
@@ -39,15 +41,18 @@ const TERMINAL: readonly (TaskStatus | undefined)[] = ['done', 'failed', 'cancel
  * What a browser the client does not drive is doing, one word for the chip of the panel and for
  * the tile of «+»: a request for help waits for the client whatever the status of the chat says;
  * a chat that waits with no such request waits for an answer, or for nothing once the agent has
- * answered; a chat with changes waits for `/release` or installs them, and the agent is not at
+ * answered, or took its answer back; a chat with changes waits for `/release` or installs them, and the agent is not at
  * work in its browser then (docs/plan/61-chats-first.md, К10).
  */
 export function agentBrowserStatus(
   taskStatus: TaskStatus | undefined,
-  { help, answered }: { help: boolean; answered: boolean },
-): Extract<PaneStatus, 'waiting' | 'idle' | 'agent'> {
+  { help, answered, rewound = false }: { help: boolean; answered: boolean; rewound?: boolean },
+): Extract<PaneStatus, 'waiting' | 'idle' | 'rewound' | 'agent'> {
   if (help) return 'waiting'
-  if (taskStatus === 'awaiting_user') return answered ? 'idle' : 'waiting'
+  if (taskStatus === 'awaiting_user') {
+    if (!answered) return 'waiting'
+    return rewound ? 'rewound' : 'idle'
+  }
   const offBrowser =
     taskStatus === 'awaiting_approval' || taskStatus === 'deploying' || taskStatus === 'verifying'
   return offBrowser ? 'idle' : 'agent'
@@ -67,6 +72,7 @@ export function paneStatus(facts: PaneFacts): PaneStatus {
   return agentBrowserStatus(taskStatus, {
     help: Boolean(facts.state?.help ?? session.help),
     answered: facts.answered === true,
+    rewound: facts.rewound === true,
   })
 }
 

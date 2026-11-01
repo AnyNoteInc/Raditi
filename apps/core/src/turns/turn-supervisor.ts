@@ -312,6 +312,9 @@ export class TurnSupervisor {
     // not undone, and «Обновить» moves a branch it does not have.
     if (!workspace && (request.replacesTurn !== undefined || request.rebased !== undefined))
       throw badRequest('A turn without a repository neither replaces nor rebases')
+    // A turn with one replaces the undone turn (docs/plan/61-chats-first.md, §5.14).
+    if (request.rewound !== undefined && (workspace || labels.turn < 2))
+      throw badRequest('Only a later turn without a repository is rewound')
     // A task on a site without a repository hands its files to the browser worker, never to the
     // sandbox (Б26); a chat without a site has no site to hand them to (docs/plan/61, К16).
     if (request.input.attachments.length && !turnMayHoldInbox(workspace !== undefined, labels))
@@ -395,9 +398,11 @@ export class TurnSupervisor {
         !prior ||
         prior.workspaceId !== labels.workspaceId ||
         prior.sessionId !== labels.sessionId ||
-        (request.replacesTurn === undefined
-          ? prior.turn !== labels.turn - 1
-          : prior.turn >= request.replacesTurn) ||
+        (request.replacesTurn !== undefined
+          ? prior.turn >= request.replacesTurn
+          : request.rewound
+            ? prior.turn >= labels.turn - 1
+            : prior.turn !== labels.turn - 1) ||
         prior.image !== request.sandbox.image ||
         prior.driver.id !== this.deps.driver.id ||
         prior.driver.version !== request.driverVersion

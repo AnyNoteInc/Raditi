@@ -570,6 +570,32 @@ describe('the rows of a dialog', () => {
     expect(text(feed)).toContain('Вы написали в чат, пока мы обновляли рабочую копию')
   })
 
+  it('says what `/undo` took back, and what stayed by what the chat left', () => {
+    const rewind = (id: string, site: 'none' | 'check' | 'elsewhere'): FeedRow => ({
+      id,
+      at: '2026-10-17T09:50:00.000Z',
+      type: 'feed.rewind',
+      turn: 2,
+      files: false,
+      site,
+    })
+    const { feed } = showFeed(
+      [
+        commandRow('13', 'turn_undo'),
+        rewind('14', 'none'),
+        rewind('15', 'check'),
+        rewind('16', 'elsewhere'),
+      ],
+      headOf({ status: 'awaiting_user' }),
+    )
+    expect(text(feed)).toContain('Вы попросили отменить последний запрос')
+    expect(within(feed).getAllByRole('listitem').map(text).slice(1)).toEqual([
+      'Последний запрос отменён.',
+      'Последний запрос отменён. То, что агент сделал на сайте через браузер, осталось: проверьте сайт.',
+      'Последний запрос отменён. То, что агент сделал на других сайтах, осталось.',
+    ])
+  })
+
   it('tells a row newer than the page and a row that cannot be shown', () => {
     const rows: FeedRow[] = [
       { id: '11', at: '2026-10-17T09:40:00.000Z', type: 'newer' },

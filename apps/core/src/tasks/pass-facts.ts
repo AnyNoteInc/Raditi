@@ -167,6 +167,8 @@ export async function readPassFacts(
       kind,
       text: kind === 'command' ? null : (platformWords ?? text),
       command,
+      attachments:
+        event.type === 'feed.request' && 'attachments' in event ? (event.attachments ?? []) : [],
       createdAt: row.createdAt,
     }
   })
@@ -188,6 +190,7 @@ export async function readPassFacts(
         startedAt: true,
         nativeSessionId: true,
         rejectedAt: true,
+        undoneAt: true,
       },
     }),
     db.turnAssignment.findMany({
@@ -222,6 +225,7 @@ export async function readPassFacts(
         turnNo: row.turnNo,
         status: turnStatus(row.status),
         rejected: row.rejectedAt !== null,
+        undone: row.undoneAt !== null,
         headSha: row.headSha,
         startedAt: row.startedAt,
         nativeSessionId: row.nativeSessionId,

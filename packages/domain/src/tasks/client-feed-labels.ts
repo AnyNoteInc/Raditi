@@ -2,6 +2,7 @@ import { pluralRu } from '../plural.ts'
 import type { PreviewUnavailableReason } from '../preview/preview-state.ts'
 import type { VersionBump } from '../release/semver.ts'
 import type {
+  FeedRewindPayload,
   FeedBrowserReason,
   FeedCancelledBy,
   FeedCeilingReason,
@@ -64,6 +65,12 @@ export const taskStatusLabel: Readonly<Record<TaskStatus, string>> = Object.free
  * нужно», a chat like Claude Code) — in place of «Нужен ваш ответ»; the list has no hint for it.
  */
 export const taskAnsweredLabel = 'Агент ответил'
+
+/**
+ * The same dialog right after `/undo`: it waits for nothing either, but the answer it would name
+ * was just taken back (docs/plan/61-chats-first.md, §9, question 18: a text the owner has not seen).
+ */
+export const taskRewoundLabel = 'Запрос отменён'
 
 /** The second line of a dialog in the list; null — the status has none. */
 export const taskStatusListHint: Readonly<Record<TaskStatus, string | null>> = Object.freeze({
@@ -192,6 +199,25 @@ export const feedApprovalSiteText: Readonly<Record<ResultSite, string | null>> =
   check: SITE_MAY_HAVE_CHANGED,
   none: null,
 })
+
+/**
+ * What stays after `/undo`, by what the whole task left (`feed.rewind`): the second sentence of its
+ * row; null — nothing.
+ */
+const feedRewindSiteText: Readonly<Record<FeedRewindPayload['site'], string | null>> =
+  Object.freeze({
+    unchanged: null,
+    check: 'То, что агент сделал на сайте через браузер, осталось: проверьте сайт.',
+    none: null,
+    elsewhere: feedEndedSiteText.elsewhere,
+  })
+
+/** The row of `/undo` in the feed. */
+export function feedRewindText(row: Pick<FeedRewindPayload, 'files' | 'site'>): string {
+  const undone = row.files ? 'Переписка и файлы возвращены.' : 'Последний запрос отменён.'
+  const site = feedRewindSiteText[row.site]
+  return site === null ? undone : `${undone} ${site}`
+}
 
 /** Shown when `filesChanged` of a result is a number. */
 export const feedFilesChangedText = (count: number): string =>

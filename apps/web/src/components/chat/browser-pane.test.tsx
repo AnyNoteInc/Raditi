@@ -184,6 +184,11 @@ describe('the browser of a task', () => {
     expect(within(toolbar()).getByRole('status').textContent).toBe('Агент ответил')
   })
 
+  it('says that the request is undone, not that the agent answered, right after `/undo`', () => {
+    show({ head: head({ status: 'awaiting_user' }), answered: true, rewound: true })
+    expect(within(toolbar()).getByRole('status').textContent).toBe('Запрос отменён')
+  })
+
   it('while this tab controls: «Продолжить работу агента», the hint and the address to go by', () => {
     const stream = holding()
     const { onResume, onStop } = show({ stream })

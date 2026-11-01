@@ -68,10 +68,15 @@ export const movingRequest = {
   NOT: { payload: { path: ['kind'], equals: 'command' } },
 } as const satisfies Prisma.TaskEventWhereInput
 
+/** What closes a question: a row that moves the dialog on, or `/undo` of the turn that asked. */
+const closesQuestion = {
+  OR: [movingRequest, { type: 'feed.rewind' }],
+} as const satisfies Prisma.TaskEventWhereInput
+
 /**
  * The last question of a dialog and whether words, «Продолжить» or «Продолжить работу агента»
- * came after it. `browser` — a task in the browser waits for the client to act there (docs/plan/57,
- * Б23).
+ * came after it, or it was undone. `browser` — a task in the browser waits for the client to act
+ * there (docs/plan/57, Б23).
  */
 export interface DialogQuestion {
   id: bigint
@@ -94,7 +99,7 @@ export async function lastQuestion(
   const question = readFeedRow('feed.question', row.payload)
   if (question.type !== 'feed.question') return null
   const answered = await db.taskEvent.count({
-    where: { taskId, ...movingRequest, id: { gt: row.id } },
+    where: { taskId, ...closesQuestion, id: { gt: row.id } },
   })
   return {
     id: row.id,
@@ -109,28 +114,83 @@ export async function lastQuestion(
  * owner's decision of 26.10.2026) or one that failed (`feed.failure`, owner's decision of
  * 28.10.2026: «никогда не завершай диалог, если произошла ошибка») leaves it open for the
  * client's next words (`next: 'awaiting_user'`) — while nothing the client wrote or pressed,
- * besides a command, came after it. null — none.
+ * besides a command, came after it. `/undo` leaves it open just so (`feed.rewind`). null — none.
  */
 export async function openResult(
   db: Pick<Prisma.TransactionClient, 'taskEvent'>,
   taskId: string,
 ): Promise<bigint | null> {
   const row = await db.taskEvent.findFirst({
-    where: { taskId, type: { in: ['feed.result', 'feed.failure'] } },
+    where: { taskId, type: { in: ['feed.result', 'feed.failure', 'feed.rewind'] } },
     orderBy: { id: 'desc' },
     select: { id: true, type: true, payload: true },
   })
   if (row === null) return null
   const ending = readFeedRow(row.type, row.payload)
-  if (
-    (ending.type !== 'feed.result' && ending.type !== 'feed.failure') ||
-    ending.next !== 'awaiting_user'
-  )
-    return null
+  const open =
+    ending.type === 'feed.rewind' ||
+    ((ending.type === 'feed.result' || ending.type === 'feed.failure') &&
+      ending.next === 'awaiting_user')
+  if (!open) return null
   const answered = await db.taskEvent.count({
     where: { taskId, ...movingRequest, id: { gt: row.id } },
   })
   return answered > 0 ? null : row.id
+}
+
+/**
+ * The words a turn answered, as the client wrote them, for the field after `/undo`: the rows from
+ * the start of the turn before it to its own start, the ones the planner keeps from the agent
+ * (`requestsNotUndone`). null — none: the turn answered a press.
+ */
+export async function wordsOfTurn(
+  db: Pick<Prisma.TransactionClient, 'taskEvent' | 'taskTurn'>,
+  taskId: string,
+  turnNo: number,
+): Promise<string | null> {
+  const turns = await db.taskTurn.findMany({
+    where: { taskId, turnNo: { in: [turnNo - 1, turnNo] } },
+    select: { turnNo: true, startedAt: true },
+  })
+  const until = turns.find((turn) => turn.turnNo === turnNo)?.startedAt ?? null
+  if (until === null) return null
+  const since = turns.find((turn) => turn.turnNo === turnNo - 1)?.startedAt ?? null
+  const rows = await db.taskEvent.findMany({
+    where: {
+      taskId,
+      type: 'feed.request',
+      createdAt: { lte: until, ...(since === null ? {} : { gt: since }) },
+    },
+    orderBy: { id: 'asc' },
+    select: { payload: true },
+  })
+  const words = rows.flatMap((row) => {
+    const event = readFeedRow('feed.request', row.payload)
+    return event.type === 'feed.request' && 'text' in event && typeof event.text === 'string'
+      ? [event.text]
+      : []
+  })
+  return words.length > 0 ? words.join('\n\n') : null
+}
+
+/**
+ * What a repeat of the press `pressId` of `/undo` gives back: its answer may never have reached the
+ * page. The words of the turn it took, while the chat still stands where that press left it; null
+ * — it took none, or the chat moved on and the words went their way.
+ */
+export async function wordsOfUndonePress(
+  db: Pick<Prisma.TransactionClient, 'taskEvent' | 'taskTurn'>,
+  taskId: string,
+  pressId: bigint,
+): Promise<string | null> {
+  const row = await db.taskEvent.findFirst({
+    where: { taskId, type: 'feed.rewind', id: { gt: pressId } },
+    orderBy: { id: 'asc' },
+    select: { id: true, payload: true },
+  })
+  if (row === null || (await openResult(db, taskId)) !== row.id) return null
+  const rewind = readFeedRow('feed.rewind', row.payload)
+  return rewind.type === 'feed.rewind' ? wordsOfTurn(db, taskId, rewind.turn) : null
 }
 
 /** A question of the platform about credits that waits for «Продолжить». */

@@ -2418,6 +2418,90 @@ describe.each(executorKinds)('TurnSupervisor without a repository (%s executor)'
     expect(f.workspace.buildBaseBundle).not.toHaveBeenCalled()
   })
 
+  it('after `/undo` restores the checkpoint the undone turn started from, not turn n−1', async () => {
+    const store = snapshotStore()
+    const first = fixture()
+    withoutRepository(first)
+    realSnapshots(first, store)
+    await capturesHome(first, 'first session')
+    await first.run()
+    const f = fixture()
+    withoutRepository(f)
+    realSnapshots(f, store)
+    await capturesHome(f, 'after the undone turn')
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 3 } }
+    f.request.context = { ...f.request.context, turn: 3 }
+    f.request.rewound = true
+    f.request.previous = {
+      workspaceId: labels.workspaceId,
+      sessionId: labels.sessionId,
+      turn: 1,
+      image,
+      driver: { id: sampleDriverId, version: '1.0.0' },
+      home,
+    }
+    const finished = await f.run()
+    expect(finished.manifest.git).toBeUndefined()
+    expect(f.transport.restore).toHaveBeenCalledOnce()
+  })
+
+  it('after two `/undo` in a row restores the same checkpoint, further back', async () => {
+    const store = snapshotStore()
+    const first = fixture()
+    withoutRepository(first)
+    realSnapshots(first, store)
+    await capturesHome(first, 'first session')
+    await first.run()
+    const f = fixture()
+    withoutRepository(f)
+    realSnapshots(f, store)
+    await capturesHome(f, 'after both undone turns')
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 4 } }
+    f.request.context = { ...f.request.context, turn: 4 }
+    f.request.rewound = true
+    f.request.previous = {
+      workspaceId: labels.workspaceId,
+      sessionId: labels.sessionId,
+      turn: 1,
+      image,
+      driver: { id: sampleDriverId, version: '1.0.0' },
+      home,
+    }
+    await f.run()
+    expect(f.transport.restore).toHaveBeenCalledOnce()
+  })
+
+  it('refuses a rewound turn that restores the undone turn, or is no later turn, or has a repository', async () => {
+    const undone = fixture()
+    withoutRepository(undone)
+    undone.request.sandbox = { ...undone.request.sandbox, labels: { ...labels, turn: 3 } }
+    undone.request.context = { ...undone.request.context, turn: 3 }
+    undone.request.rewound = true
+    undone.request.previous = {
+      workspaceId: labels.workspaceId,
+      sessionId: labels.sessionId,
+      turn: 2,
+      image,
+      driver: { id: sampleDriverId, version: '1.0.0' },
+      home,
+    }
+    await expect(undone.run()).rejects.toThrow('Incompatible previous turn snapshot')
+    expect(undone.leases.acquire).not.toHaveBeenCalled()
+
+    const firstTurn = fixture()
+    withoutRepository(firstTurn)
+    firstTurn.request.rewound = true
+    await expect(firstTurn.run()).rejects.toThrow('Only a later turn without a repository')
+    expect(firstTurn.leases.acquire).not.toHaveBeenCalled()
+
+    const repository = fixture()
+    repository.request.sandbox = { ...repository.request.sandbox, labels: { ...labels, turn: 2 } }
+    repository.request.context = { ...repository.request.context, turn: 2 }
+    repository.request.rewound = true
+    await expect(repository.run()).rejects.toThrow('Only a later turn without a repository')
+    expect(repository.leases.acquire).not.toHaveBeenCalled()
+  })
+
   it('refuses a checkpoint with a repository as turn n−1 before creating a container', async () => {
     const f = fixture()
     // The checkpoint of a turn with a repository, read before the task loses its workspace.

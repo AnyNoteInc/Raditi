@@ -194,7 +194,12 @@ function DialogLink({
           '& svg': { width: 13, height: 13 },
         }}
       >
-        <StatusMark status={item.status} answered={item.answered} onFill={current} />
+        <StatusMark
+          status={item.status}
+          answered={item.answered}
+          rewound={item.rewound}
+          onFill={current}
+        />
         {hint ? (
           <Typography component="span" variant="caption" color={quiet}>
             {hint}
