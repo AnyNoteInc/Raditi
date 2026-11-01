@@ -497,7 +497,10 @@ export class TaskSweep {
     return put
   }
 
-  /** Puts the pass of the attempt again, answering its last request; false — it has none. */
+  /**
+   * Puts the pass of the attempt again, answering its last request; false — it has none. A press
+   * of a command moves nothing; `agent_command` — `/init` — is a pass, and it is put again.
+   */
   async #put(taskId: string, attempt: number, tag: string): Promise<boolean> {
     const [request] = await this.deps.db.$queryRaw<Array<{ id: bigint | null }>>`
       SELECT max(id) AS id FROM task_events

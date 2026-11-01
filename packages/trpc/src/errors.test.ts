@@ -856,6 +856,8 @@ describe('the refusals of a dialog, its preview and its release', () => {
     ['PROJECT_NOTES_TOO_LONG', 400],
     ['PROJECT_NOTES_HAS_SECRET', 400],
     ['PROJECT_NOTES_INVALID', 400],
+    ['PROJECT_NOTES_NOT_ALLOWED', 403],
+    ['PROJECT_NOTES_CHANGED', 409],
   ] as const
 
   it.each(codes)('gives %s its own Russian text on «вы», without English', (domainCode, status) => {

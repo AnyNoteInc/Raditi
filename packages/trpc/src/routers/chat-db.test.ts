@@ -41,6 +41,7 @@ import { readCheckScreenshot } from '../services/chat/candidates.ts'
 import { releaseConfirmKey, type ChatContext } from '../services/chat/context.ts'
 import { dialogFacts } from '../services/chat/dialog-facts.ts'
 import { dialogPageQuery } from '../services/chat/dialog-list.ts'
+import { lastQuestion } from '../services/chat/dialog-state.ts'
 import { signConfirmToken } from '../services/chat/releases.ts'
 import { signUndoConfirmToken } from '../services/chat/undo.ts'
 
@@ -1236,6 +1237,281 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
           cause: { code: 'TASK_NOTHING_TO_CONTINUE' },
         },
       )
+    })
+  })
+
+  // docs/plan/61-chats-first.md, К31, §5.14: a pass of the agent, as the next words would be.
+  describe('task.init', () => {
+    async function answered(taskId: string) {
+      await db.$transaction(async (tx) => {
+        await tx.task.update({
+          where: { id: taskId },
+          data: { status: 'awaiting_user', turnNo: 1 },
+        })
+        await insertFeedEvent(tx, {
+          taskId,
+          row: {
+            type: 'feed.result',
+            payload: {
+              v: 1,
+              turn: 1,
+              message: 'Готово.',
+              site: 'none',
+              next: 'awaiting_user',
+              filesChanged: null,
+              changeType: 'none',
+              needsApproval: false,
+              risk: 'low',
+            },
+          },
+        })
+      })
+      // The pass was charged: the words after it open the next chain.
+      await db.$transaction((tx) => settleTaskCharge(tx, { taskId, credits: 5, now: new Date() }), {
+        isolationLevel: 'ReadCommitted',
+      })
+    }
+
+    it('writes the command, moves the chat on and puts the pass with a reserve of its own', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+      await answered(taskId)
+      const requestId = randomUUID()
+
+      const posted = await caller.task.init({ taskId, requestId })
+
+      expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
+        status: 'queued',
+        attempt: 2,
+      })
+      expect((await activeHolds(taskId)).map((hold) => hold.attempt)).toEqual([2])
+      expect((await feedOf(taskId)).at(-1)).toMatchObject({
+        id: BigInt(posted.requestEventId),
+        payload: { kind: 'agent_command', command: 'init', requestId },
+      })
+      expect((await outboxOf(taskId)).map((row) => row.dedupeKey)).toContain(
+        `turn.run:${taskId}:2:${posted.requestEventId}`,
+      )
+      expect(await caller.task.init({ taskId, requestId })).toEqual({ ...posted, repeated: true })
+      expect((await activeHolds(taskId)).map((hold) => hold.attempt)).toEqual([2])
+    })
+
+    it('answers an open question as words do: the chat does not wait for it any more', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+      const question = await asked(taskId, {
+        kind: 'agent',
+        intro: 'Нужно уточнить.',
+        questions: [{ text: 'Какой номер?', options: [] }],
+      })
+
+      await caller.task.init({ taskId, requestId: randomUUID() })
+
+      expect(await lastQuestion(db, taskId)).toMatchObject({ id: question, answered: true })
+    })
+
+    // The reserve as the next words have it, on the same facts of two chats side by side.
+    it.each([
+      ['step', { kind: 'ceiling', reason: 'step', spent: 30, held: 35, left: 5 }, false],
+      ['attempts', { kind: 'ceiling', reason: 'attempts', spent: 120, held: 0, left: 0 }, true],
+    ] as const)(
+      'goes on after a question about credits (%s) as the next words do',
+      async (_reason, question, charged) => {
+        const { owner, site, workspaceId } = await siteOwner()
+        await paidTariff(workspaceId)
+        const caller = callerOf(owner)
+        async function waiting(words: string) {
+          const { taskId } = await newDialog(caller, site.id, words)
+          if (charged)
+            await db.$transaction(
+              (tx) => settleTaskCharge(tx, { taskId, credits: 5, now: new Date() }),
+              { isolationLevel: 'ReadCommitted' },
+            )
+          await asked(taskId, question)
+          return taskId
+        }
+        const byWords = await waiting('Поменяйте телефон')
+        const byCommand = await waiting('Добавьте адрес')
+
+        await caller.task.message({ taskId: byWords, requestId: randomUUID(), text: 'продолжи' })
+        await caller.task.init({ taskId: byCommand, requestId: randomUUID() })
+
+        const stateOf = async (taskId: string) => ({
+          ...(await db.task.findUniqueOrThrow({
+            where: { id: taskId },
+            select: { status: true, attempt: true },
+          })),
+          attempts: (await activeHolds(taskId)).map((hold) => hold.attempt).sort(),
+        })
+        const state = await stateOf(byCommand)
+        expect(state).toEqual(await stateOf(byWords))
+        expect(state).toMatchObject({ status: 'queued', attempt: 2 })
+        expect(state.attempts).toEqual(charged ? [2] : [1, 2])
+        expect((await lastQuestion(db, byCommand))?.answered).toBe(true)
+      },
+    )
+
+    it('is refused for credits as the next words are, and leaves nothing', async () => {
+      // Tariff credits only: the first chat took 5 of the 48 of the day, the second holds 45.
+      const { owner, site, workspaceId } = await siteOwner({ gift: false })
+      await paidTariff(workspaceId, { creditsPerDay: 48 })
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+      await answered(taskId)
+      await newDialog(caller, site.id, 'Добавьте баннер на главную')
+      const rows = (await feedOf(taskId)).length
+      const jobs = (await outboxOf(taskId)).length
+
+      await expect(caller.task.init({ taskId, requestId: randomUUID() })).rejects.toMatchObject({
+        code: 'CONFLICT',
+        cause: { code: 'BILLING_DAILY_LIMIT_REACHED' },
+      })
+
+      expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
+        status: 'awaiting_user',
+        attempt: 1,
+      })
+      expect(await feedOf(taskId)).toHaveLength(rows)
+      expect(await outboxOf(taskId)).toHaveLength(jobs)
+      expect(await activeHolds(taskId)).toEqual([])
+    })
+
+    it('runs in a chat that waits with a candidate, and keeps the candidate', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+      const candidate = await withCandidate(taskId)
+      await db.$transaction((tx) => settleTaskCharge(tx, { taskId, credits: 5, now: new Date() }), {
+        isolationLevel: 'ReadCommitted',
+      })
+
+      const posted = await caller.task.init({ taskId, requestId: randomUUID() })
+
+      expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
+        status: 'queued',
+        attempt: 2,
+      })
+      expect((await feedOf(taskId)).at(-1)).toMatchObject({
+        id: BigInt(posted.requestEventId),
+        payload: { kind: 'agent_command', command: 'init' },
+      })
+      expect((await outboxOf(taskId)).map((row) => row.dedupeKey)).toContain(
+        `turn.run:${taskId}:2:${posted.requestEventId}`,
+      )
+      expect(
+        await db.taskCandidate.findUniqueOrThrow({ where: { id: candidate.id } }),
+      ).toMatchObject({ revision: candidate.revision, headSha: candidate.headSha })
+    })
+
+    it('refuses a chat at work, in the words of `task.commands`', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+      await expect(caller.task.init({ taskId, requestId: randomUUID() })).rejects.toMatchObject({
+        cause: { code: 'CHAT_COMMAND_UNAVAILABLE', details: { refusal: 'busy' } },
+      })
+    })
+  })
+
+  // docs/plan/61-chats-first.md, К31, §5.9, on the real rows: a mock cannot see `accessibleSite`.
+  describe('the notes of a project', () => {
+    const notes = 'Шапка — `Header.php`, начните с `README.md`.'
+    const audits = (siteId: string) =>
+      db.auditLog.findMany({ where: { targetId: siteId, action: 'site.agent_notes.change' } })
+
+    async function joined(workspaceId: string, role: 'admin' | 'member') {
+      const user = await person()
+      await db.member.create({ data: { workspaceId, userId: user.id, role } })
+      return callerOf(user)
+    }
+
+    it('answers a stranger as about a project that does not exist', async () => {
+      const { site } = await siteOwner()
+      await db.site.update({ where: { id: site.id }, data: { agentNotes: 'Чужие подсказки' } })
+      const stranger = callerOf(await person())
+
+      await expect(stranger.project.agentNotes({ id: site.id })).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+      await expect(
+        stranger.project.setAgentNotes({ id: site.id, notes, seen: 'Чужие подсказки' }),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' })
+
+      expect((await db.site.findUniqueOrThrow({ where: { id: site.id } })).agentNotes).toBe(
+        'Чужие подсказки',
+      )
+      expect(await audits(site.id)).toEqual([])
+    })
+
+    it('answers about a removed project as about one that does not exist', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      await db.site.update({ where: { id: site.id }, data: { deletedAt: new Date() } })
+      await expect(caller.project.agentNotes({ id: site.id })).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+      await expect(
+        caller.project.setAgentNotes({ id: site.id, notes, seen: null }),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    })
+
+    it('lets a member read them and not change them', async () => {
+      const { site, workspaceId } = await siteOwner()
+      await db.site.update({
+        where: { id: site.id },
+        data: { agentNotes: 'Вход по адресу /login' },
+      })
+      const member = await joined(workspaceId, 'member')
+
+      expect(await member.project.agentNotes({ id: site.id })).toEqual({
+        notes: 'Вход по адресу /login',
+        canManage: false,
+      })
+      await expect(
+        member.project.setAgentNotes({ id: site.id, notes, seen: 'Вход по адресу /login' }),
+      ).rejects.toMatchObject({ cause: { code: 'PROJECT_NOTES_NOT_ALLOWED' } })
+      expect((await db.site.findUniqueOrThrow({ where: { id: site.id } })).agentNotes).toBe(
+        'Вход по адресу /login',
+      )
+    })
+
+    it('saves what an owner or an admin left, and audits it without the text', async () => {
+      const { owner, site, workspaceId } = await siteOwner()
+      const admin = await joined(workspaceId, 'admin')
+
+      expect(await callerOf(owner).project.agentNotes({ id: site.id })).toEqual({
+        notes: null,
+        canManage: true,
+      })
+      expect(await admin.project.setAgentNotes({ id: site.id, notes, seen: null })).toEqual({
+        notes,
+      })
+      await callerOf(owner).project.setAgentNotes({ id: site.id, notes: ' ', seen: notes })
+
+      expect((await db.site.findUniqueOrThrow({ where: { id: site.id } })).agentNotes).toBeNull()
+      const rows = await audits(site.id)
+      expect(rows.map((row) => row.meta).sort()).toEqual(
+        expect.arrayContaining([{ cleared: false }, { cleared: true }]),
+      )
+      expect(JSON.stringify(rows)).not.toContain('README')
+    })
+
+    // §5.14: «Прежние подсказки молча не затираются».
+    it('replaces no notes but those the window showed', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      await caller.project.setAgentNotes({ id: site.id, notes: 'Подсказки коллеги', seen: null })
+
+      await expect(
+        caller.project.setAgentNotes({ id: site.id, notes, seen: null }),
+      ).rejects.toMatchObject({ code: 'CONFLICT', cause: { code: 'PROJECT_NOTES_CHANGED' } })
+
+      expect((await db.site.findUniqueOrThrow({ where: { id: site.id } })).agentNotes).toBe(
+        'Подсказки коллеги',
+      )
+      expect(await audits(site.id)).toHaveLength(1)
     })
   })
 
@@ -2736,6 +3012,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         preview: null,
         reset: 'preview_not_ready',
         update: 'up_to_date',
+        init: null,
         retry: 'nothing_to_retry',
         cancel: null,
         undo: 'no_release',
@@ -3867,6 +4144,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
     const startFile = (caller: ReturnType<typeof callerOf>, name = 'Обложка.jpg') =>
       caller.attachment.start({ siteId: null, name, size: 2048, type: 'image/jpeg' })
 
+    it('has no `/init`: there is no code to study (docs/plan/61, К31)', async () => {
+      const caller = callerOf(await person())
+      const taskId = await newChat(caller)
+      const rows = (await feedOf(taskId)).length
+      await expect(caller.task.init({ taskId, requestId: randomUUID() })).rejects.toMatchObject({
+        cause: { code: 'CHAT_COMMAND_UNAVAILABLE', details: { refusal: 'no_repository' } },
+      })
+      expect(await feedOf(taskId)).toHaveLength(rows)
+    })
+
     it('exports a chat of its own, which speaks of no site', async () => {
       const owner = await person()
       const caller = callerOf(owner)
@@ -4470,6 +4757,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         preview: 'project_closed',
         reset: 'project_closed',
         update: 'project_closed',
+        init: 'project_closed',
         retry: 'project_closed',
         cancel: null,
         undo: 'no_release',
@@ -4482,6 +4770,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         caller.candidate.update({ taskId, requestId: randomUUID() }),
       ).rejects.toMatchObject(commandRefused)
       await expect(caller.preview.reset({ taskId, requestId: randomUUID() })).rejects.toMatchObject(
+        commandRefused,
+      )
+      await expect(caller.task.init({ taskId, requestId: randomUUID() })).rejects.toMatchObject(
         commandRefused,
       )
       await expect(caller.preview.ticket({ taskId })).rejects.toMatchObject(commandRefused)

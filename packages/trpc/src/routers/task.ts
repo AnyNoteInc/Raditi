@@ -31,6 +31,7 @@ import {
   cancelDialog,
   continueDialog,
   createDialog,
+  initDialog,
   postDialogMessage,
   resumeDialog,
   retryDialog,
@@ -203,6 +204,17 @@ export const taskRouter = router({
     .output(postedOutput)
     .mutation(({ ctx, input }) =>
       resumeDialog(ctx.prisma, { ...input, userId: ctx.user.id, now: new Date() }),
+    ),
+
+  /**
+   * `/init`: the agent studies the code and answers with hints for it, a paid pass of its own
+   * (docs/plan/61-chats-first.md, К31).
+   */
+  init: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid(), requestId: browserId }))
+    .output(postedOutput)
+    .mutation(({ ctx, input }) =>
+      initDialog(ctx.prisma, { ...input, userId: ctx.user.id, now: new Date() }),
     ),
 
   /** «Продолжить» after a question of the platform about credits: the next attempt. */

@@ -8,6 +8,7 @@ import {
   hiddenContactText,
   isFeedText,
   looksLikeSecret,
+  notesLookLikeSecret,
 } from './client-feed-text.ts'
 
 const id = '3f2b8c1e-5d4a-4b6c-8e7f-9a0b1c2d3e4f'
@@ -282,6 +283,72 @@ describe('hasVisibleText', () => {
       expect(hasVisibleText(blank), JSON.stringify(blank)).toBe(false)
     for (const text of ['я', 'при\u200Bвет', '\u200B.', '\uD83D\uDC68\u200D\uD83D\uDC69'])
       expect(hasVisibleText(text), JSON.stringify(text)).toBe(true)
+  })
+})
+
+// docs/plan/61-chats-first.md, К31: the answer to `/init` is a text about code, already paid for.
+describe('notesLookLikeSecret', () => {
+  it('lets through what a model writes about code, which looksLikeSecret refuses', () => {
+    const names = [
+      '`README.md`',
+      '`ProductCard.tsx`',
+      '`wp-content/themes/Shop/style.css`',
+      'Тема: `Astra-Child`, файл `Header.php`',
+      '`src/Components/Card2.tsx`',
+      '`S3Client`',
+      'useState()',
+      '`getElementById()`.',
+      'ProductCard::render()',
+      'App\\Http\\Kernel',
+      "get_theme_mod('Header')",
+      'WP_Query(args)',
+    ]
+    for (const name of names) {
+      expect(looksLikeSecret(name), name).toBe(true)
+      expect(notesLookLikeSecret(name), name).toBe(false)
+    }
+  })
+
+  it('reads a whole answer as the model gives it', () => {
+    const answer = [
+      'Сайт на WordPress, своя тема `Astra-Child` лежит в `wp-content/themes/Astra-Child`.',
+      "Шапка — `Header.php`, стили собирает Vite, настройки читает `get_theme_mod('Header')`.",
+      'Записи выбирает `WP_Query(args)` в `functions.php`, компонент — `ProductCard::render()`.',
+      'Ключевые шаблоны не меняйте без просьбы. Доступ к админке — только в окне браузера.',
+    ].join('\n')
+    expect(looksLikeSecret(answer)).toBe(true)
+    expect(notesLookLikeSecret(answer)).toBe(false)
+  })
+
+  it('lets addresses through, as the words of a customer', () => {
+    expect(notesLookLikeSecret('Пароль меняют на https://example.ru/Admin1?Key=Abc123')).toBe(false)
+  })
+
+  it.each([
+    ['a value after its word', 'логин admin, пароль: Qwerty123456'],
+    ['a value in backticks', 'пароль: `Qwerty123!`'],
+    ['a value a few words on', 'Пароль от админки: Qwerty123456'],
+    ['a value before its word', 'Qwerty123 — это пароль'],
+    ['a glued value', 'пароль=Qwerty123'],
+    ['a name of an account', 'admin / Qwerty123'],
+    ['a constant of a config', 'DB_PASSWORD=Xk9#mP2$vL'],
+    ['a call of a config', "define('DB_PASSWORD', 'Xk9#mP2$vL');"],
+    ['a variable', "$password = 'Xk9#mP2$vL';"],
+  ])('refuses %s', (_case, text) => {
+    expect(notesLookLikeSecret(text)).toBe(true)
+  })
+
+  it.each([
+    ['a key of a known format', 'Ключ: sk-abcdefghijklmnopqrstuvwxyz'],
+    ['a key with nothing that names it', 'Шапка берёт ghp_abcdefghijklmnopqrstuvwxyz0123'],
+    ['a private key', '-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----'],
+    ['a signed token', 'Вход eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.dozjgNryP4J3jVmNHl0w5N'],
+  ])('refuses %s wherever it stands', (_case, text) => {
+    expect(notesLookLikeSecret(text)).toBe(true)
+  })
+
+  it('does not take a name in code for the value of a word of a secret', () => {
+    expect(notesLookLikeSecret('Токены проверяет `verifyToken()` в `Auth.php`')).toBe(false)
   })
 })
 

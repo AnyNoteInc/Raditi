@@ -25,6 +25,7 @@ import {
   sampleProviderModelId,
 } from '../testing/ids.ts'
 import { readPassFacts } from './pass-facts.ts'
+import { INIT_PROMPT } from './turn-instructions.ts'
 import { planTurn } from './turn-planner.ts'
 
 // What a pass reads of the client's variables of its site (docs/plan/53-chat-preview-release.md,
@@ -159,6 +160,35 @@ describe.skipIf(!databaseUrl)('the egress of a pass with PostgreSQL', () => {
   })
 
   // docs/plan/53, «Попробовать ещё (18.10)»: a turn whose pass ended in a failure is replaced.
+  it('reads `/init` as the words of the platform, and a press as no words (docs/plan/61, §5.2)', async () => {
+    const { task, userId, facts } = await dialog()
+    const base = { v: 1 as const, authorId: userId }
+    for (const payload of [
+      { ...base, kind: 'agent_command' as const, command: 'init' as const },
+      { ...base, kind: 'command' as const, command: 'reset' as const },
+    ])
+      await insertFeedEvent(db, {
+        taskId: task.id,
+        row: { type: 'feed.request', payload: { ...payload, requestId: randomUUID() } },
+      })
+
+    const read = await facts()
+    expect(read?.requests.map(({ kind, text, command }) => ({ kind, text, command }))).toEqual([
+      { kind: 'first', text: 'Подключите оплату', command: null },
+      { kind: 'agent_command', text: INIT_PROMPT, command: null },
+      { kind: 'command', text: null, command: 'reset' },
+    ])
+  })
+
+  it('reads the notes of the site for a turn with the code alone (§5.7)', async () => {
+    const { task, facts } = await dialog()
+    await db.site.update({
+      where: { id: siteIdOf(task) },
+      data: { agentNotes: 'Тема — в wp-content/themes/shop' },
+    })
+    expect((await facts())?.agentNotes).toBe('Тема — в wp-content/themes/shop')
+  })
+
   it('reads which turns the platform refused, and still the head they wrote', async () => {
     const { task, facts } = await dialog()
     const turn = (turnNo: number, headSha: string, rejectedAt: Date | null) => ({

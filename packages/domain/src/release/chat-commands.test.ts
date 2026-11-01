@@ -48,6 +48,31 @@ describe('the commands of a dialog', () => {
     expect(verdict({ ...pressed, cancelPending: false }).release).toBeNull()
   })
 
+  // docs/plan/61-chats-first.md, К31: a pass of the agent, as the next words would be.
+  describe('`/init`', () => {
+    const init = (patch: Partial<ChatCommandFacts>) => verdict({ ...waiting, ...patch }).init
+
+    it('takes a chat with the code that waits, with a candidate or without', () => {
+      expect(init({})).toBeNull()
+      expect(init({ taskStatus: 'awaiting_user', candidate: null })).toBeNull()
+      expect(init({ role: 'member' })).toBeNull()
+    })
+
+    it('has nothing to study in a chat without the code', () => {
+      expect(init({ repository: false })).toBe('no_repository')
+      expect(chatCommandRefusalText.no_repository).toBe('В этом чате нет кода проекта.')
+    })
+
+    it('waits for the agent and for a release, and a chat that ended takes none', () => {
+      for (const taskStatus of ['queued', 'preparing', 'running'] as const)
+        expect(init({ taskStatus })).toBe('busy')
+      expect(init({ taskStatus: 'deploying' })).toBe('release_in_progress')
+      expect(init({ releaseInProgress: true })).toBe('release_in_progress')
+      expect(init({ taskStatus: 'done' })).toBe('finished')
+      expect(init({ cancelPending: true })).toBe('finished')
+    })
+  })
+
   // docs/plan/61-chats-first.md, К39: the chat of a closed project is read, not worked in.
   describe('of a closed project', () => {
     const closed = { ...waiting, projectClosed: true, retry: null }
@@ -66,6 +91,7 @@ describe('the commands of a dialog', () => {
         preview: 'project_closed',
         reset: 'project_closed',
         update: 'project_closed',
+        init: 'project_closed',
         retry: 'project_closed',
         cancel: null,
         undo: 'no_release',
@@ -316,6 +342,7 @@ describe('availability', () => {
       preview: null,
       reset: null,
       update: 'up_to_date',
+      init: null,
       retry: 'nothing_to_retry',
       cancel: null,
       undo: 'no_release',
@@ -417,6 +444,7 @@ describe('availability', () => {
         preview: null,
         reset: 'finished',
         update: 'finished',
+        init: 'finished',
         retry: 'finished',
         cancel: 'finished',
         undo: 'no_release',

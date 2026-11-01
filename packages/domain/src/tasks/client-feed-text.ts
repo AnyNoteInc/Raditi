@@ -282,3 +282,54 @@ export function looksLikeSecret(text: string): boolean {
     })
   )
 }
+
+// How far from the word of a secret its value may stand: «Пароль от админки: Qwerty123».
+const SECRET_VALUE_REACH = 3
+// The name of a secret in code, wherever in the word: `DB_PASSWORD=…`, `define('API_KEY', …)`.
+const secretConstant = /PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY/u
+// A name in code with characters of a password: a call, `useState()`, or a namespace, `App\Http`.
+const codeName = /^[\w$.>-]+\(.*\)$|^\w+(?:\\\w+)+$/u
+const backticks = /`/gu
+
+/** The word says a secret is near. */
+function namesSecret(word: string): boolean {
+  if (secretConstant.test(word)) return true
+  const name = word.replace(backticks, '').replace(around, '').replace(/^\$/u, '')
+  return credentialWord.test(name.toLowerCase())
+}
+
+/** The word has the shape of a password and is not a name in code. */
+function readsAsValue(word: string): boolean {
+  const name = word.replace(backticks, '')
+  return passwordShape(name) !== null && !codeName.test(name.replace(/[.;!?…]+$/u, ''))
+}
+
+/**
+ * looksLikeSecret() for a text about code — the answer to `/init` the client keeps as the hints for
+ * the agent (docs/plan/61-chats-first.md, К31). There a word with both cases and a digit or a mark
+ * is the usual name of a file or a function (`README.md` in backticks, `useState()`, `S3Client`),
+ * not a password, and looksLikeSecret() would refuse a paid answer with no secret in it.
+ *
+ * So it refuses what says it is a secret: a key of a known format and a private key block anywhere,
+ * and a value of the shape of a password within SECRET_VALUE_REACH words of a word of a secret —
+ * `пароль: Qwerty123`, `DB_PASSWORD=Xk9#mP2$vL`, `admin / Qwerty123`. A password nothing names is
+ * let through: the model is told not to write one, and the client reads the text before saving it.
+ * The hints a person types in the wizard are read by looksLikeSecret().
+ */
+export function notesLookLikeSecret(text: string): boolean {
+  const plain = text.replace(invisible, '').normalize('NFC')
+  const words = plain.split(/\s+/u).filter((word) => !address.test(word))
+  if (privateKeyBlock.test(words.join(' '))) return true
+  if (words.some((word) => keyPrefix.test(word) || hasSignedToken(word))) return true
+  // What has no letter or digit, `—` or `=`, stands between a word and its value and is not counted.
+  const parts = words
+    .flatMap((word) => word.split(/[=:,]/u))
+    .filter((part) => /[\p{L}\p{N}]/u.test(part))
+  return parts.some(
+    (part, at) =>
+      namesSecret(part) &&
+      parts
+        .slice(Math.max(0, at - SECRET_VALUE_REACH), at + SECRET_VALUE_REACH + 1)
+        .some(readsAsValue),
+  )
+}

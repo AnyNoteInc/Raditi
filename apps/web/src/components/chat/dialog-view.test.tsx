@@ -18,6 +18,7 @@ import type { CandidateView, DialogFeed, FeedRow, PreparedRelease } from './chat
 import { DialogView } from './dialog-view'
 import { forgetNewDialog, isNewDialog, markNewDialog } from './new-dialog-hint'
 import {
+  agentCommandRow,
   ATTACHMENT_ID,
   AUTHOR_ID,
   browserAnswer,
@@ -57,6 +58,11 @@ const calls = vi.hoisted(() => ({
   undoPrepare:
     vi.fn<(input: { taskId: string; releaseId: string }) => Promise<{ planId: string }>>(),
   resumeAgent: vi.fn<(input: Press) => Promise<Posted>>(),
+  init: vi.fn<(input: Press) => Promise<Posted>>(),
+  agentNotes:
+    vi.fn<(input: { id: string }) => Promise<{ notes: string | null; canManage: boolean }>>(),
+  setAgentNotes:
+    vi.fn<(input: { id: string; notes: string }) => Promise<{ notes: string | null }>>(),
   attachments: vi.fn(async (_input: { taskId: string }) => [] as unknown[]),
   setEffort: vi.fn<(input: { taskId: string; effort: string }) => Promise<{ effort: string }>>(),
   rename: vi.fn<(input: { taskId: string; title: string }) => Promise<{ title: string }>>(),
@@ -130,10 +136,15 @@ vi.mock('@/trpc/client', () => ({
       retry: mutation(calls.retry),
       cancel: mutation(calls.cancel),
       resumeAgent: mutation(calls.resumeAgent),
+      init: mutation(calls.init),
       setEffort: mutation(calls.setEffort),
       rename: mutation(calls.rename),
       remove: mutation(calls.remove),
       export: query('task.export', calls.exported),
+    },
+    project: {
+      agentNotes: query('project.agentNotes', calls.agentNotes),
+      setAgentNotes: mutation(calls.setAgentNotes),
     },
     attachment: { list: query('attachment.list', calls.attachments) },
     preview: { reset: mutation(calls.reset) },
@@ -751,6 +762,174 @@ describe('a dialog', () => {
       expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:chat')
       await screen.findByText('Переписка сохранена')
       click.mockRestore()
+    })
+
+    // docs/plan/61-chats-first.md, К31.
+    describe('`/init`', () => {
+      const answer = 'Тема лежит в wp-content/themes/shop.'
+      const save = 'Сохранить в подсказки агенту'
+      const answered = () =>
+        feedAnswer({
+          status: 'awaiting_user',
+          task: { turnNo: 2 },
+          events: [
+            requestRow('1'),
+            resultRow('2', 1),
+            agentCommandRow('3'),
+            resultRow('4', 2, answer),
+          ],
+          cursor: '4',
+        })
+
+      it('asks the server to run it', async () => {
+        calls.init.mockResolvedValue(posted)
+        showDialog()
+        await run(/Описать проект для агента/)
+        await waitFor(() => expect(calls.init).toHaveBeenCalledTimes(1))
+        expect(calls.init.mock.calls[0]![0].taskId).toBe(TASK_ID)
+      })
+
+      it('reads no notes before there is an answer to keep', async () => {
+        showDialog()
+        await screen.findByRole('heading', { level: 1, name: 'Поменять цену капучино' })
+        expect(calls.agentNotes).not.toHaveBeenCalled()
+      })
+
+      it('opens the answer in a field beside the notes that stand, and saves what is left', async () => {
+        calls.agentNotes.mockResolvedValue({ notes: 'Вход по адресу /login', canManage: true })
+        calls.setAgentNotes.mockResolvedValue({ notes: 'Своими словами' })
+        showDialog(answered())
+        fireEvent.click(await screen.findByRole('button', { name: save }))
+
+        const dialog = within(await screen.findByRole('dialog', { name: 'Подсказки агенту' }))
+        const edited = dialog.getByRole<HTMLTextAreaElement>('textbox', { name: 'Подсказки' })
+        expect(edited.value).toBe(answer)
+        expect(dialog.getByText('Вход по адресу /login')).toBeTruthy()
+        expect(dialog.getByText(/Новый текст заменит их/)).toBeTruthy()
+
+        fireEvent.change(edited, { target: { value: 'Своими словами' } })
+        fireEvent.click(dialog.getByRole('button', { name: 'Сохранить' }))
+        await waitFor(() =>
+          expect(calls.setAgentNotes.mock.calls[0]![0]).toEqual({
+            id: SITE_ID,
+            notes: 'Своими словами',
+            seen: 'Вход по адресу /login',
+          }),
+        )
+        await screen.findByText('Подсказки сохранены')
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+      })
+
+      it('shows the notes saved a moment ago when the window opens again', async () => {
+        calls.agentNotes.mockResolvedValue({ notes: null, canManage: true })
+        calls.setAgentNotes.mockResolvedValue({ notes: 'Первые подсказки' })
+        showDialog(answered())
+        fireEvent.click(await screen.findByRole('button', { name: save }))
+        const first = within(await screen.findByRole('dialog', { name: 'Подсказки агенту' }))
+        expect(first.queryByText('Сейчас в подсказках')).toBeNull()
+
+        calls.agentNotes.mockResolvedValue({ notes: 'Первые подсказки', canManage: true })
+        fireEvent.click(first.getByRole('button', { name: 'Сохранить' }))
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+
+        fireEvent.click(await screen.findByRole('button', { name: save }))
+        const second = within(await screen.findByRole('dialog', { name: 'Подсказки агенту' }))
+        expect(second.getByText('Первые подсказки')).toBeTruthy()
+      })
+
+      // Another admin or another tab, after this tab read them: the cache of the page is old.
+      it('reads the notes again when the window opens: what it shows is what stands now', async () => {
+        calls.agentNotes.mockResolvedValue({ notes: null, canManage: true })
+        showDialog(answered())
+        const button = await screen.findByRole('button', { name: save })
+        calls.agentNotes.mockResolvedValue({ notes: 'Подсказки коллеги', canManage: true })
+
+        fireEvent.click(button)
+        const dialog = within(await screen.findByRole('dialog', { name: 'Подсказки агенту' }))
+        expect(dialog.getByText('Подсказки коллеги')).toBeTruthy()
+        expect(dialog.getByText(/Новый текст заменит их/)).toBeTruthy()
+      })
+
+      it('shows the new notes when they changed while the window was open', async () => {
+        calls.agentNotes.mockResolvedValue({ notes: null, canManage: true })
+        calls.setAgentNotes.mockRejectedValue(
+          serverRefusal('Пока окно было открыто, подсказки изменились', 'CONFLICT'),
+        )
+        showDialog(answered())
+        fireEvent.click(await screen.findByRole('button', { name: save }))
+        const dialog = within(await screen.findByRole('dialog', { name: 'Подсказки агенту' }))
+
+        calls.agentNotes.mockResolvedValue({ notes: 'Подсказки коллеги', canManage: true })
+        fireEvent.click(dialog.getByRole('button', { name: 'Сохранить' }))
+
+        expect((await dialog.findByRole('alert')).textContent).toContain('подсказки изменились')
+        expect(await dialog.findByText('Подсказки коллеги')).toBeTruthy()
+        expect(calls.setAgentNotes.mock.calls[0]![0]).toMatchObject({ seen: null })
+      })
+
+      it('opens no window on notes it could not read, and says why', async () => {
+        calls.agentNotes.mockResolvedValue({ notes: null, canManage: true })
+        showDialog(answered())
+        const button = await screen.findByRole('button', { name: save })
+        calls.agentNotes.mockRejectedValue(serverRefusal('Проект не найден', 'NOT_FOUND'))
+
+        fireEvent.click(button)
+
+        expect((await screen.findByRole('alert')).textContent).toContain('Проект не найден')
+        expect(screen.queryByRole('dialog')).toBeNull()
+      })
+
+      it('keeps the words in the field and says why when the server refuses them', async () => {
+        calls.agentNotes.mockResolvedValue({ notes: null, canManage: true })
+        calls.setAgentNotes.mockRejectedValue(
+          serverRefusal('Похоже, в подсказке для агента есть пароль или ключ', 'BAD_REQUEST'),
+        )
+        showDialog(answered())
+        fireEvent.click(await screen.findByRole('button', { name: save }))
+        const dialog = within(await screen.findByRole('dialog', { name: 'Подсказки агенту' }))
+        expect(dialog.queryByText('Сейчас в подсказках')).toBeNull()
+        const edited = dialog.getByRole<HTMLTextAreaElement>('textbox', { name: 'Подсказки' })
+        fireEvent.change(edited, { target: { value: 'Свои слова' } })
+        fireEvent.click(dialog.getByRole('button', { name: 'Сохранить' }))
+        expect((await dialog.findByRole('alert')).textContent).toContain('пароль или ключ')
+        expect(edited.value).toBe('Свои слова')
+      })
+
+      /** A page whose answer about the notes has come: the button has drawn, or never will. */
+      async function shownWith(project: typeof PROJECT & { closed?: boolean }) {
+        const queries = new QueryClient()
+        calls.feed.mockResolvedValue(answered())
+        render(
+          <QueryClientProvider client={queries}>
+            <DialogView project={project} taskId={TASK_ID} title={null} />
+          </QueryClientProvider>,
+        )
+        await screen.findByText(answer)
+        await waitFor(() =>
+          expect(queries.getQueryData(['project.agentNotes', { id: SITE_ID }])).toBeDefined(),
+        )
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        })
+      }
+
+      it('offers the button to a manager of an open project: the control of the two below', async () => {
+        calls.agentNotes.mockResolvedValue({ notes: null, canManage: true })
+        await shownWith(PROJECT)
+        expect(screen.getByRole('button', { name: save })).toBeTruthy()
+      })
+
+      it('offers nothing to a member, who may not change the notes', async () => {
+        calls.agentNotes.mockResolvedValue({ notes: null, canManage: false })
+        await shownWith(PROJECT)
+        expect(screen.queryByRole('button', { name: save })).toBeNull()
+      })
+
+      it('offers nothing in a closed project: it is read', async () => {
+        calls.agentNotes.mockResolvedValue({ notes: null, canManage: true })
+        await shownWith({ ...PROJECT, closed: true })
+        expect(screen.queryByRole('button', { name: save })).toBeNull()
+      })
     })
 
     it('`/export` that fails says so under the field and saves nothing', async () => {

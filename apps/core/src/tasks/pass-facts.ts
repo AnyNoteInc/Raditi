@@ -25,7 +25,7 @@ import {
   type SiteStack,
 } from '@repo/domain'
 
-import type { PreviewFacts } from './turn-instructions.ts'
+import { AGENT_COMMAND_PROMPTS, type PreviewFacts } from './turn-instructions.ts'
 import {
   savedPlanOf,
   type BrowserPassFacts,
@@ -156,11 +156,16 @@ export async function readPassFacts(
         : null
     const kind = event.type === 'feed.request' ? event.kind : 'unreadable'
     const command = event.type === 'feed.request' && event.kind === 'command' ? event.command : null
-    // A command is a press: its row never reaches the agent (Р34).
+    const platformWords =
+      event.type === 'feed.request' && event.kind === 'agent_command' && event.command !== null
+        ? AGENT_COMMAND_PROMPTS[event.command]
+        : null
+    // A command is a press: its row never reaches the agent (Р34), unless the agent carries it out,
+    // and then it goes in the words of the platform (docs/plan/61-chats-first.md, §5.2).
     return {
       id: row.id,
       kind,
-      text: kind === 'command' ? null : text,
+      text: kind === 'command' ? null : (platformWords ?? text),
       command,
       createdAt: row.createdAt,
     }
@@ -305,6 +310,7 @@ export async function readPassFacts(
     },
     requirements,
     ...(browser ? { browser } : {}),
+    agentNotes: site?.agentNotes ?? null,
     ...(attachments.length ? { attachments } : {}),
     repo: repository
       ? {

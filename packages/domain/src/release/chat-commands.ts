@@ -5,9 +5,10 @@ import type { PreviewStatus } from '../preview/preview-state.ts'
 /**
  * The commands of a chat (docs/plan/53-chat-preview-release.md, Р34; docs/plan/61-chats-first.md,
  * §5.14): `/` at the start of the input opens the list. The server decides which of its commands
- * are available (`task.commands`), a command of the page itself needs no verdict; the text of a
- * command never reaches the agent. Labels are what the client reads (rule 10). The id of
- * «Отменить выпуск» stays `undo` for the rows written with it (К28): only its slash moved.
+ * are available (`task.commands`), a command of the page itself needs no verdict; what is typed
+ * never reaches the agent, a command it carries out sends the words of the platform. Labels are
+ * what the client reads (rule 10). The id of «Отменить выпуск» stays `undo` for the rows written
+ * with it (К28): only its slash moved.
  */
 export const chatCommandIds = [
   'release',
@@ -222,11 +223,11 @@ export const serverCommandIds = chatCommandIds.filter(
 )
 
 /**
- * Named here and not working yet (docs/plan/61-chats-first.md, §6: `/init` — 61.19, `/thinking` —
- * 61.20, `/compact` — 61.24): no row in the list and no verdict, and typed they are refused and
+ * Named here and not working yet (docs/plan/61-chats-first.md, §6: `/thinking` — 61.20, `/compact`
+ * — 61.24): no row in the list and no verdict, and typed they are refused and
  * never sent. The slice of a command takes it off this list.
  */
-export const chatCommandsToCome = ['init', 'compact', 'thinking'] as const
+export const chatCommandsToCome = ['compact', 'thinking'] as const
 export type CommandToCome = (typeof chatCommandsToCome)[number]
 
 /** A command the server gives a verdict on today. */
@@ -313,6 +314,8 @@ export const chatCommandRefusals = [
    * `site_inactive` by itself.
    */
   'project_closed',
+  /** `/init`: the agent studies the code of the project, and this chat has none (К31). */
+  'no_repository',
   // `/undo` and `/redo` (docs/plan/61-chats-first.md, §5.14).
   'nothing_to_undo',
   /** The last turn cannot be undone: the working copy moved on to a new version of the site. */
@@ -352,6 +355,7 @@ export const chatCommandRefusalText: Readonly<Record<ChatCommandRefusal, string>
     'Сайт сейчас не подключён к Радити. Возобновите подключение, чтобы отменить выпуск.',
   nothing_to_retry: 'Повторять нечего: работа агента не обрывалась.',
   project_closed: CLOSED_PROJECT_TEXT,
+  no_repository: 'В этом чате нет кода проекта.',
   nothing_to_undo: 'Отменять пока нечего.',
   undo_past_update:
     'Этот запрос отменить нельзя: после него рабочая копия перешла на новую версию сайта.',
@@ -478,6 +482,11 @@ function refusalOf(id: OfferedCommandId, facts: ChatCommandFacts): ChatCommandRe
       // core carries a candidate over only while the dialog waits with it (`candidate.rebase`).
       if (status !== 'awaiting_approval') return 'awaiting_answer'
       return candidate.status === 'stale' || !candidate.baseIsMain ? null : 'up_to_date'
+    // A pass of the agent on the words of the platform: it goes as the next words would (К31).
+    case 'init':
+      if (!facts.repository) return 'no_repository'
+      if (facts.releaseInProgress || RELEASING.includes(status)) return 'release_in_progress'
+      return BUSY.includes(status) ? 'busy' : null
     // Closed until their slices: 61.21 and 61.23 give them facts of their own.
     case 'turn_undo':
       return 'nothing_to_undo'

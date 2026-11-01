@@ -7,6 +7,7 @@ import {
   bindAttachments,
   createAttachment,
   createPrismaClient,
+  enqueueSiteWaitingPasses,
   insertFeedEvent,
   markAttachmentReady,
   openBrowserSession,
@@ -510,6 +511,72 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
       { taskId, attempt: 1, requestEventId: words.toString() },
       { jobId: expect.stringContaining(':retry:sweep-') },
     )
+  })
+
+  it('puts again the lost job of `/init`: it is a pass, not a press (docs/plan/61, §5.2)', async () => {
+    const { taskId, userId } = await dialog('queued', 0)
+    await firstWords(taskId, userId)
+    const init = await insertFeedEvent(db, {
+      taskId,
+      row: {
+        type: 'feed.request',
+        payload: {
+          v: 1,
+          kind: 'agent_command',
+          command: 'init',
+          authorId: userId,
+          requestId: randomUUID(),
+        },
+      },
+    })
+    await db.$executeRaw`UPDATE tasks SET updated_at = now() - interval '6 minutes'
+      WHERE id = ${taskId}::uuid`
+
+    expect(await sweep().requeueLost()).toBe(1)
+    expect(queue.enqueue).toHaveBeenCalledWith(
+      'agent-turns',
+      'turn.run',
+      { taskId, attempt: 1, requestEventId: init.toString() },
+      { jobId: expect.stringContaining(':retry:sweep-') },
+    )
+  })
+
+  it('wakes the `/init` that waits for its site with its own request (docs/plan/61, §5.2)', async () => {
+    const { taskId, userId } = await dialog('queued', 0)
+    await firstWords(taskId, userId)
+    const init = await insertFeedEvent(db, {
+      taskId,
+      row: {
+        type: 'feed.request',
+        payload: {
+          v: 1,
+          kind: 'agent_command',
+          command: 'init',
+          authorId: userId,
+          requestId: randomUUID(),
+        },
+      },
+    })
+    // A press after it is no request of the pass.
+    await press(taskId, userId, 'update')
+    const { siteId } = await db.task.update({
+      where: { id: taskId },
+      data: { waiting: 'site' },
+      select: { siteId: true },
+    })
+
+    const put = await db.$transaction((tx) =>
+      enqueueSiteWaitingPasses(tx, { siteId: siteId!, tag: `turn-${randomUUID()}` }),
+    )
+
+    expect(put).toBe(1)
+    const jobs = await db.outboxEvent.findMany({
+      where: { topic: 'agent-turns', dedupeKey: { contains: taskId } },
+    })
+    await db.outboxEvent.deleteMany({ where: { id: { in: jobs.map(({ id }) => id) } } })
+    expect(jobs.map(({ payload }) => payload)).toEqual([
+      { taskId, attempt: 1, requestEventId: init.toString() },
+    ])
   })
 
   it('puts again a pass whose retry got lost', async () => {

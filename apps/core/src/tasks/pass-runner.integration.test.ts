@@ -39,6 +39,7 @@ import type { CandidateGit } from './candidate-git.ts'
 import { LivePasses } from './live-passes.ts'
 import { PassRunner } from './pass-runner.ts'
 import { PassSettlement } from './pass-settlement.ts'
+import { INIT_PROMPT } from './turn-instructions.ts'
 
 // The handler of a pass on PostgreSQL. The first suite runs wherever a database is given: a
 // task without a reserve is never run, in every environment (spec §20 «Задачи до биллинга»,
@@ -420,6 +421,104 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
           (hold) => hold.status === 'captured',
         ),
       ).toBe(true)
+    })
+
+    // docs/plan/61-chats-first.md, К31, §5.14: `/init` is a pass, paid as any other.
+    describe('of `/init`', () => {
+      async function init(dialog: Awaited<ReturnType<typeof queued>>) {
+        const requestEventId = await insertFeedEvent(db, {
+          taskId: dialog.taskId,
+          row: {
+            type: 'feed.request',
+            payload: {
+              v: 1,
+              kind: 'agent_command',
+              command: 'init',
+              authorId: dialog.userId,
+              requestId: randomUUID(),
+            },
+          },
+        })
+        return { ...dialog.job, requestEventId: requestEventId.toString() }
+      }
+      const answering = (taskId: string, clientMessage: string) => async () => {
+        await db.task.update({ where: { id: taskId }, data: { status: 'running', turnNo: 1 } })
+        await db.taskTurn.create({
+          data: {
+            taskId,
+            turnNo: 1,
+            status: 'completed',
+            driverId: sampleDriverId,
+            image,
+            headSha: HEAD,
+          },
+        })
+        return {
+          result: {
+            summary: 'Изучил код',
+            change_type: 'none',
+            client_message: clientMessage,
+            files_changed: [],
+            questions: [],
+            needs_approval: false,
+            risk: 'low',
+          },
+          manifest: { git: { headSha: HEAD } } as SnapshotManifest,
+        }
+      }
+
+      it('asks in the words of the platform, answers and charges the pass', async () => {
+        await rate()
+        const dialog = await queued({ reserve: true })
+        const job = await init(dialog)
+        const answer = 'Тема лежит в wp-content/themes/shop, стили собирает Vite.'
+        const run = vi.fn<Run>(answering(dialog.taskId, answer))
+
+        await runner(run).passes.run(job)
+
+        expect(run.mock.calls[0]![0].input.prompt).toContain(INIT_PROMPT)
+        expect(run.mock.calls[0]![0].input.prompt).not.toContain('/init')
+        const [row] = await db.taskEvent.findMany({
+          where: { taskId: dialog.taskId, type: 'feed.result' },
+        })
+        expect(row?.payload).toMatchObject({ message: answer, next: 'awaiting_user' })
+        const holds = await db.creditHold.findMany({ where: { taskId: dialog.taskId } })
+        expect(holds.length).toBeGreaterThan(0)
+        expect(holds.every((hold) => hold.status === 'captured')).toBe(true)
+        expect(
+          holds.reduce((sum, hold) => sum + Number(hold.charged ?? 0), 0),
+        ).toBeGreaterThanOrEqual(5)
+      })
+
+      it('takes an answer of the longest size the result has', async () => {
+        await rate()
+        const dialog = await queued({ reserve: true })
+        const job = await init(dialog)
+
+        await runner(answering(dialog.taskId, 'а'.repeat(2000))).passes.run(job)
+
+        expect(await failure(dialog.taskId)).toEqual([])
+        expect(
+          await db.taskEvent.count({ where: { taskId: dialog.taskId, type: 'feed.result' } }),
+        ).toBe(1)
+      })
+
+      it('ends a longer answer as a failure of the platform, and it is not paid for', async () => {
+        await rate()
+        const dialog = await queued({ reserve: true })
+        const job = await init(dialog)
+
+        await runner(answering(dialog.taskId, 'а'.repeat(2001))).passes.run(job)
+
+        expect(await failure(dialog.taskId)).toEqual([
+          expect.objectContaining({ code: 'technical' }),
+        ])
+        expect(
+          await db.taskEvent.count({ where: { taskId: dialog.taskId, type: 'feed.result' } }),
+        ).toBe(0)
+        const holds = await db.creditHold.findMany({ where: { taskId: dialog.taskId } })
+        expect(holds.some((hold) => hold.status === 'captured')).toBe(false)
+      })
     })
 
     it('refuses a task with a repository while git is not configured, before its turn', async () => {

@@ -71,6 +71,7 @@ import { dayTime, feedTime } from './chat-format'
 import { pulsing, riseIn } from './chat-motion'
 import {
   activityText,
+  agentNotesText,
   browserText,
   dialogText,
   objectLinkText,
@@ -115,6 +116,13 @@ export interface FeedActions {
   onTakeControl?: () => void
   /** «Продолжить работу агента» (Б16); as above. */
   onResumeAgent?: () => void
+  /**
+   * «Сохранить в подсказки агенту» with the answer of the row (docs/plan/61, К31); absent — this
+   * reader does not change the notes of the project, or the project is closed.
+   */
+  onSaveNotes?: (text: string) => void
+  /** The rows that answer `/init` (`initAnswerIds`). */
+  notesRows?: ReadonlySet<string>
   /** The client controls the task's browser now. */
   controlling?: boolean
   /** The task's browser is open: the control can be taken. */
@@ -847,6 +855,7 @@ function RowView({
         case 'resume':
           return <Press text={feedRowText.resume} icon="back" />
         case 'command':
+        case 'agent_command':
           return (
             <Press
               text={row.command === null ? feedRowText.otherRequest : feedCommandText[row.command]}
@@ -874,10 +883,18 @@ function RowView({
       // A pass that changed nothing left the dialog open for the next words (26.10.2026).
       const open = row.next === 'awaiting_user'
       const site = approval ? feedApprovalSiteText[row.site] : feedDoneSiteText[row.site]
+      const { onSaveNotes } = actions
       return (
         <AgentMessage
           title={
             approval ? feedCardTitle.approval : open ? feedCardTitle.answer : feedCardTitle.result
+          }
+          actions={
+            onSaveNotes && actions.notesRows?.has(row.id) ? (
+              <Button variant="outlined" onClick={() => onSaveNotes(row.message)}>
+                {agentNotesText.button}
+              </Button>
+            ) : undefined
           }
         >
           <AgentMarkdown text={row.message} />

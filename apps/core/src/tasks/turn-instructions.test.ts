@@ -3,12 +3,38 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 
 import {
+  AGENT_COMMAND_PROMPTS,
   browserTaskInstructions,
+  INIT_ANSWER_MAX_CHARS,
+  INIT_PROMPT,
   openTaskInstructions,
   turnInstructions,
 } from './turn-instructions.ts'
 
 const digest = (text: string) => createHash('sha256').update(text).digest('hex')
+
+// docs/plan/61-chats-first.md, К31, §5.14.
+describe('the words of `/init`', () => {
+  it('asks to study the code and change nothing, with no secret in the answer', () => {
+    expect(INIT_PROMPT).toContain('Изучите код проекта')
+    expect(INIT_PROMPT).toContain('Ничего не меняйте')
+    expect(INIT_PROMPT).toContain('Не называйте паролей, ключей')
+    expect(AGENT_COMMAND_PROMPTS.init).toBe(INIT_PROMPT)
+  })
+
+  it('makes the answer itself the hints, and bounds it below what the result takes', () => {
+    expect(INIT_PROMPT).toContain('`client_message`')
+    expect(INIT_PROMPT).toContain(`${INIT_ANSWER_MAX_CHARS} знаков`)
+    expect(INIT_ANSWER_MAX_CHARS).toBe(1800)
+  })
+
+  // The rules of a pass ban file paths in `client_message`, the answer is hints for the next turn.
+  it('lifts the ban on file paths for this answer alone, and only that ban', () => {
+    expect(turnInstructions({ state: 'absent' })).toContain('no file paths, code or commands')
+    expect(INIT_PROMPT).toContain('только в этом ответе называйте папки и файлы')
+    expect(INIT_PROMPT).toContain('по-русски, на «вы», простыми словами, без кода и команд')
+  })
+})
 
 describe('turnInstructions', () => {
   it('names the preview the browser tools open, or why there is none', () => {

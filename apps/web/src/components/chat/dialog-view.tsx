@@ -42,6 +42,7 @@ import { newChatHref } from './chat-address'
 import { useChatDetails } from './chat-details'
 import type { ChatProject } from './chat-types'
 import {
+  agentNotesText,
   cancelText,
   chatsText,
   clientCommandText,
@@ -77,6 +78,7 @@ import { ProjectMark } from './project-mark'
 import { FeedList, LiveBlock, type FeedActions } from './feed-list'
 import {
   candidateMessage,
+  initAnswerIds,
   liveCandidateRow,
   liveSteps,
   openQuestion,
@@ -87,6 +89,7 @@ import {
 } from './feed-model'
 import { showsRefresh, type FeedHeadState } from './feed-state'
 import { CandidateTab, PreviewTab, usePreviewCalls } from './preview-pane'
+import { AgentNotesDialog } from './agent-notes-dialog'
 import { ReleaseDialog } from './release-dialog'
 import { TOOLS_BUTTON_ID, TOOLS_MENU_MARK, ToolsMenu } from './tools-menu'
 import { ToolsPanel } from './tools-panel'
@@ -141,7 +144,7 @@ function focusTakenByOpening(dialog: Element | null): Element | null {
 }
 
 /** What a press of the client sends: one id per press, kept for its repeats. */
-type Press = 'message' | 'continue' | 'retry' | 'cancel' | 'reset' | 'update' | 'resume'
+type Press = 'message' | 'continue' | 'retry' | 'cancel' | 'reset' | 'update' | 'resume' | 'init'
 
 /** A release or an undo of it that is under way: its words in the head of the dialog. */
 function releaseProgress(head: FeedHeadState): string | null {
@@ -353,6 +356,8 @@ export function DialogView({
   const previewCalls = usePreviewCalls(head?.preview?.status ?? null)
   // Said to a screen reader: the server took a new level, the file of the chat was saved.
   const [note, setNote] = useState('')
+  /** The answer to `/init` in «Сохранить в подсказки агенту»; null — closed. */
+  const [notesText, setNotesText] = useState<string | null>(null)
   const effortMenu = useRef<EffortMenuHandle>(null)
   const { details } = useChatDetails()
   // The level chosen here, shown while the head still says the level it was chosen over.
@@ -400,6 +405,7 @@ export function DialogView({
   const update = useMutation(trpc.candidate.update.mutationOptions())
   const retry = useMutation(trpc.task.retry.mutationOptions())
   const resumeAgent = useMutation(trpc.task.resumeAgent.mutationOptions())
+  const init = useMutation(trpc.task.init.mutationOptions())
   const setEffort = useMutation(trpc.task.setEffort.mutationOptions())
   const busy =
     proceed.isPending ||
@@ -407,7 +413,8 @@ export function DialogView({
     cancel.isPending ||
     reset.isPending ||
     update.isPending ||
-    resumeAgent.isPending
+    resumeAgent.isPending ||
+    init.isPending
 
   // What the chat works with (docs/plan/61-chats-first.md, §5.6): the two do not exclude each other.
   const withRepository = head?.task.requirements.repository === true
@@ -463,6 +470,12 @@ export function DialogView({
   const sentFiles = useQuery({
     ...trpc.attachment.list.queryOptions({ taskId }),
     enabled: sentIds.length > 0,
+  })
+  // The notes of the project are read once there is an answer to `/init` to keep among them.
+  const notesRows = initAnswerIds(rows)
+  const agentNotes = useQuery({
+    ...trpc.project.agentNotes.queryOptions({ id: siteId ?? '' }),
+    enabled: siteId !== null && notesRows.size > 0,
   })
   // A message sent since the list was read names files it does not have yet — this tab's own or
   // one from another tab: the list is read again. Once for the same missing files: one still
@@ -832,6 +845,20 @@ export function DialogView({
     }
   }
 
+  /** «Сохранить в подсказки агенту»: the notes are read anew, what the window shows is current. */
+  async function openNotes(text: string) {
+    setFieldError(null)
+    try {
+      await queryClient.fetchQuery({
+        ...trpc.project.agentNotes.queryOptions({ id: siteId ?? '' }),
+        staleTime: 0,
+      })
+      setNotesText(text)
+    } catch (failure) {
+      setFieldError(callErrorText(failure))
+    }
+  }
+
   function runCommand(id: ChatCommandId): string | undefined {
     setFieldError(null)
     switch (id) {
@@ -846,6 +873,9 @@ export function DialogView({
         return
       case 'update':
         void press('update', update.mutateAsync)
+        return
+      case 'init':
+        void press('init', init.mutateAsync)
         return
       case 'retry':
         if (retryRow !== null) void pressRetry(retryRow.id)
@@ -894,6 +924,10 @@ export function DialogView({
           onTakeControl: takeControl,
           onResumeAgent: resumeWork,
         }),
+    // A press the server would refuse is not drawn: an owner or an admin, of a project that is open.
+    ...(!closedProject && project?.closed !== true && agentNotes.data?.canManage
+      ? { onSaveNotes: (text: string) => void openNotes(text), notesRows }
+      : {}),
     // The client holds the control of a browser that is there: a closed session holds nothing.
     controlling: head?.browser?.controller === 'user' && browserLive,
     browserLive,
@@ -1342,6 +1376,18 @@ export function DialogView({
           onConfirmed={() => {
             setUndoOpen(false)
             refresh()
+          }}
+        />
+      ) : null}
+      {notesText !== null && siteId !== null ? (
+        <AgentNotesDialog
+          siteId={siteId}
+          text={notesText}
+          current={agentNotes.data?.notes ?? null}
+          onClose={() => setNotesText(null)}
+          onSaved={() => {
+            setNotesText(null)
+            setNote(agentNotesText.saved)
           }}
         />
       ) : null}

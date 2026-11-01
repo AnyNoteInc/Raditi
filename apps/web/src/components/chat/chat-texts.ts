@@ -440,6 +440,20 @@ export const clientCommandText = Object.freeze({
   exported: 'Переписка сохранена',
 })
 
+/** The answer to `/init` kept as the hints for the agent (docs/plan/61-chats-first.md, К31). */
+export const agentNotesText = Object.freeze({
+  button: 'Сохранить в подсказки агенту',
+  title: 'Подсказки агенту',
+  body: 'Агент читает подсказки в каждом запросе этого проекта как сведения о проекте. Поправьте текст, если нужно.',
+  field: 'Подсказки',
+  hint: 'Не пишите сюда пароли и коды.',
+  current: 'Сейчас в подсказках',
+  replaces: 'Новый текст заменит их. Что нужно оставить, перенесите в поле.',
+  keep: 'Не сохранять',
+  confirm: 'Сохранить',
+  saved: 'Подсказки сохранены',
+})
+
 /**
  * What is done with a dialog as a whole (owner's request of 26.10.2026): its menu in the list and
  * in its head, the name written in place, the confirmation of «Удалить».

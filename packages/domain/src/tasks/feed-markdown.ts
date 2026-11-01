@@ -110,6 +110,7 @@ function requestBlock(row: Extract<FeedItem, { type: 'feed.request' }>): string 
     case 'resume':
       return press(row, feedRowText.resume)
     case 'command':
+    case 'agent_command':
       return press(
         row,
         row.command === null ? feedRowText.otherRequest : feedCommandText[row.command],

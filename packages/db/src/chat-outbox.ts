@@ -64,9 +64,10 @@ const wakeTagSchema = z.string().regex(/^[a-z]+-[0-9a-f-]{1,80}$/)
  * The passes of a site that wait for it (`queued`, `waiting = site`) go back on the queue now:
  * the holder of the site let it go — a turn of another dialog ended, a release ended (stand
  * R12). Without it a waiting pass looks again only at its own retry. Each job answers the last
- * request that queued its pass — the words or «Продолжить», never a command, as the sweep puts
- * it — under the key of `tag` (what let the site go), so one end wakes a pass once. In the
- * caller's transaction; returns how many were put.
+ * request that queued its pass — the words, «Продолжить» or a command the agent carries out
+ * (`agent_command`), never a press of a command, as the sweep puts it — under the key of `tag`
+ * (what let the site go), so one end wakes a pass once. In the caller's transaction; returns how
+ * many were put.
  */
 export async function enqueueSiteWaitingPasses(
   tx: OutboxWriter & Pick<Prisma.TransactionClient, '$queryRaw'>,

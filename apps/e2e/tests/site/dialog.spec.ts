@@ -10,8 +10,10 @@ import {
   addBrowserTask,
   addChanges,
   addConnectedSite,
+  addInitAnswer,
   addLongChat,
   addLongDialog,
+  agentNotesOf,
   CHANGED_FILE,
   hideDevIndicator,
   priceDialogClass,
@@ -284,7 +286,7 @@ test('a dialog starts from the first words and waits in the queue, on a desktop'
     await page.getByRole('button', { name: 'Команды' }).click()
     await expect(commands(page)).toBeFocused()
     await expect(commands(page).getByRole('group')).toHaveCount(3)
-    await expect(commands(page).getByRole('option')).toHaveCount(14)
+    await expect(commands(page).getByRole('option')).toHaveCount(15)
     const release = commands(page).getByRole('option', { name: /Выпустить новую версию/ })
     await expect(release).toHaveAttribute('aria-disabled', 'true')
     await expect(release).toContainText('Подождите: агент ещё работает.')
@@ -1424,4 +1426,40 @@ test('a task in the browser in a window lower than 420px: «К чату» keeps 
     .toBeLessThanOrEqual(1)
   await expect(open).toBeInViewport()
   await expect(plus(page)).not.toBeInViewport()
+})
+
+// docs/plan/61-chats-first.md, К31: the answer to `/init` becomes the notes of the project only as
+// the client saw and left it, beside the notes that stand.
+test('the answer to `/init` is kept as the hints for the agent, as the client left it', async ({
+  page,
+  signedInUser,
+}) => {
+  // With names as they stand in the code: the check of a text the client typed would refuse them.
+  const answer =
+    'Тема лежит в `wp-content/themes/Shop`, шапка — `Header.php`, начните с `README.md`.'
+  const { siteId, taskId } = await addInitAnswer(signedInUser.id, {
+    answer,
+    notes: 'Вход по адресу /login',
+  })
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto(`/chats/${taskId}`)
+  await expect(feed(page).getByText('Вы попросили описать проект для агента')).toBeVisible()
+
+  await feed(page).getByRole('button', { name: 'Сохранить в подсказки агенту' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Подсказки агенту' })
+  const field = dialog.getByRole('textbox', { name: 'Подсказки' })
+  await expect(field).toHaveValue(answer)
+  await expect(dialog.getByText('Вход по адресу /login')).toBeVisible()
+  // While the window fades in, axe reads the colours through its opacity.
+  await expect(page.locator('.MuiDialog-container')).toHaveCSS('opacity', '1')
+  expect(await violations(page)).toEqual([])
+  // Nothing is saved until the client says so.
+  expect(await agentNotesOf(siteId)).toBe('Вход по адресу /login')
+
+  await field.fill(`Вход по адресу /login\n${answer}`)
+  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(page.getByText('Подсказки сохранены')).toBeAttached()
+  expect(await agentNotesOf(siteId)).toBe(`Вход по адресу /login\n${answer}`)
 })

@@ -55,6 +55,7 @@ describe('the window of commands', () => {
       expect.stringContaining('Открыть предпросмотр'),
       expect.stringContaining('Обновить рабочую копию'),
       expect.stringContaining('Сбросить данные предпросмотра'),
+      expect.stringContaining('Описать проект для агента'),
       expect.stringContaining('Отменить последний запрос'),
       expect.stringContaining('Вернуть отменённый запрос'),
       expect.stringContaining('Отменить чат'),
@@ -70,7 +71,7 @@ describe('the window of commands', () => {
     expect(field().getAttribute('aria-activedescendant')).toBe(options[0]!.id)
     expect(options[0]!.getAttribute('aria-selected')).toBe('true')
     expect(screen.getByRole('status').textContent).toBe(
-      '14 команд. Стрелки вверх и вниз — выбор, Enter — выполнить, Escape — закрыть.',
+      '15 команд. Стрелки вверх и вниз — выбор, Enter — выполнить, Escape — закрыть.',
     )
     expect(onOpen).toHaveBeenCalledTimes(1)
   })
@@ -143,7 +144,7 @@ describe('the window of commands', () => {
     const button = screen.getByRole('button', { name: 'Команды' })
     fireEvent.click(button)
     expect(button.getAttribute('aria-expanded')).toBe('true')
-    expect(within(list()).getAllByRole('option')).toHaveLength(14)
+    expect(within(list()).getAllByRole('option')).toHaveLength(15)
     expect(list().getAttribute('tabindex')).toBe('0')
     await vi.waitFor(() => expect(document.activeElement).toBe(list()))
     press('End', list())
@@ -240,7 +241,7 @@ describe('the window of commands', () => {
         (group) => document.getElementById(group.getAttribute('aria-labelledby')!)?.textContent,
       ),
     ).toEqual(['Сайт', 'Агент', 'Чат'])
-    expect(within(groups[0]!).getAllByRole('option')).toHaveLength(4)
+    expect(within(groups[0]!).getAllByRole('option')).toHaveLength(5)
     press('End')
     expect(field().getAttribute('aria-activedescendant')).toMatch(/help$/)
     press('ArrowDown')
@@ -255,6 +256,14 @@ describe('the window of commands', () => {
         .getAllByRole('group')
         .map((group) => within(group).getAllByRole('option').length),
     ).toEqual([1])
+  })
+
+  it('runs `/init` by its verdict, and sends none of its words', () => {
+    const { onRun, onSend } = showComposer()
+    type('/init')
+    press('Enter')
+    expect(onRun).toHaveBeenCalledWith('init')
+    expect(onSend).not.toHaveBeenCalled()
   })
 
   it('finds a command by its other word and runs it', () => {
@@ -280,7 +289,7 @@ describe('the window of commands', () => {
 
   it('says of a command whose slice has not come that it is unavailable, and sends nothing', () => {
     const { onRun, onSend } = showComposer()
-    for (const text of ['/init', '/compact', '/thinking']) {
+    for (const text of ['/compact', '/thinking']) {
       type(text)
       expect(screen.queryByRole('listbox')).toBeNull()
       press('Enter', field(), { ctrlKey: true })
@@ -295,13 +304,13 @@ describe('the window of commands', () => {
     type('/help')
     press('Enter')
     expect(field().value).toBe('')
-    expect(within(list()).getAllByRole('option')).toHaveLength(14)
+    expect(within(list()).getAllByRole('option')).toHaveLength(15)
     await vi.waitFor(() => expect(document.activeElement).toBe(list()))
     expect(onRun).not.toHaveBeenCalled()
     expect(onSend).not.toHaveBeenCalled()
     // Chosen from the list that is open already, it leaves it as it is.
     fireEvent.click(within(list()).getAllByRole('option').at(-1)!)
-    expect(within(list()).getAllByRole('option')).toHaveLength(14)
+    expect(within(list()).getAllByRole('option')).toHaveLength(15)
   })
 
   it('says aloud what a command of the page answers', () => {
@@ -538,8 +547,14 @@ describe('palette helpers', () => {
 
   it('has no row for a command whose slice has not come, with a verdict or without', () => {
     const reason = 'Команды работают внутри чата.'
-    for (const typed of ['/init', '/compact', '/summarize', '/thinking'])
+    for (const typed of ['/compact', '/summarize', '/thinking'])
       expect(paletteOptions(typed, [], reason)).toEqual([])
+  })
+
+  it('lists `/init` where a chat with the code can start, and not where none can', () => {
+    const reason = 'Команды работают внутри чата.'
+    expect(paletteOptions('/init', [], reason)).toEqual([{ id: 'init', available: false, reason }])
+    expect(paletteOptions('/init', [], reason, true)).toEqual([])
   })
 
   it('gives a command without a verdict the reason of the place, when it has one', () => {

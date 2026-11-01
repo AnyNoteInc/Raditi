@@ -94,7 +94,10 @@ export const UPDATE_REPAIR_MS = 2 * 60 * 60_000
 export interface ClientRequest {
   id: bigint
   kind: string
-  /** The client's words; absent for a press (`retry`, `command`). */
+  /**
+   * The client's words, or the words of the platform of an `agent_command`; absent for a press
+   * (`retry`, `command`).
+   */
   text: string | null
   /** The command of a press (`cancel`, `reset`, `update`), or null. */
   command: string | null
@@ -186,6 +189,11 @@ export interface PassFacts {
   /** Present for a task that needs the cloud browser. */
   browser?: BrowserPassFacts
   /**
+   * `sites.agent_notes` of the task's site. A turn with the browser reads them from `browser`
+   * (`browserContextOf`), and they are not said twice (docs/plan/61-chats-first.md, §5.7).
+   */
+  agentNotes?: string | null
+  /**
    * The files bound to a task with a repository or to a chat without a site, in the order they
    * were sent: the latest go into the sandbox of its turn (turnInboxOf). Absent or empty — none.
    */
@@ -270,15 +278,19 @@ export type PassPlan =
 
 /**
  * The words the client wrote after `since` (all of them for a new session), oldest first, in at
- * most `limit` characters.
+ * most `limit` characters. The words of the platform of a command are a request of their turn, not
+ * part of the story: a new session retells what the client said, and an `/init` of long ago is not
+ * carried out again; only the newest request goes (docs/plan/61-chats-first.md, §5.14).
  */
 export function promptOf(
   requests: readonly ClientRequest[],
   since: Date | null,
   limit: number = turnPlanLimits.prompt,
 ): string {
-  const words = requests
-    .filter((request) => request.text !== null)
+  const told = requests.filter((request) => request.text !== null)
+  const newest = told.at(-1)
+  const words = told
+    .filter((request) => since !== null || request.kind !== 'agent_command' || request === newest)
     .filter((request) => since === null || request.createdAt.getTime() > since.getTime())
     .map((request) => request.text!.trim())
     .filter((text) => text.length > 0)
@@ -520,17 +532,27 @@ export function turnInboxOf(files: readonly TaskAttachmentFacts[]): TurnInboxPla
   return { paths: paths.reverse(), omitted: files.length - paths.length }
 }
 
-/** The prompt of a pass in the cloud browser: the client's words, then what the platform adds. */
+/** A prompt: the client's words, then what the platform adds, which is always kept whole. */
+function promptWith(facts: PassFacts, context: string, since: Date | null): string {
+  if (context === '') return promptOf(facts.requests, since)
+  const words = promptOf(facts.requests, since, turnPlanLimits.prompt - context.length - 2)
+  return `${words}\n\n${context}`
+}
+
+/** The prompt of a pass in the cloud browser. */
 function browserPromptOf(
   facts: PassFacts,
   browser: BrowserPassFacts,
   since: Date | null,
   workspace: { inbox: readonly string[] } | null,
 ): string {
-  const context = browserContextOf(browser, workspace)
-  if (context === '') return promptOf(facts.requests, since)
-  const words = promptOf(facts.requests, since, turnPlanLimits.prompt - context.length - 2)
-  return `${words}\n\n${context}`
+  return promptWith(facts, browserContextOf(browser, workspace), since)
+}
+
+/** The prompt of a pass with the code alone: the notes of the project are data, not rules (§5.7). */
+function codePromptOf(facts: PassFacts, since: Date | null): string {
+  const notes = facts.agentNotes?.trim()
+  return promptWith(facts, notes ? `---\n${PROJECT_NOTES}\n${notes}` : '', since)
 }
 
 /**
@@ -712,7 +734,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
             start.since,
             workspace ? { inbox: inbox?.paths ?? [] } : null,
           )
-        : promptOf(facts.requests, start.since),
+        : codePromptOf(facts, start.since),
       // Their paths only: core puts the files there when the sandbox is prepared.
       attachments: inbox?.paths ?? [],
     },

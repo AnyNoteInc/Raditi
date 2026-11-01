@@ -28,6 +28,26 @@ function movesOn(row: FeedRow): boolean {
 
 const isStep = (row: FeedRow): row is StepRow => row.type === 'feed.step'
 
+/**
+ * The results that answer `/init` (docs/plan/61-chats-first.md, К31, §5.14): the first result after
+ * the command. A failure or a question ends no work: the words and presses after them go on with
+ * it, and the prompt of that pass carries the command again. The button only opens a field the
+ * client edits, so a result that mixes the command with their words loses nothing.
+ */
+export function initAnswerIds(rows: readonly FeedRow[]): ReadonlySet<string> {
+  const answers = new Set<string>()
+  let asked = false
+  for (const row of rows) {
+    if (row.type === 'feed.result') {
+      if (asked) answers.add(row.id)
+      asked = false
+    } else if (row.type === 'feed.request' && row.kind === 'agent_command') {
+      asked = row.command === 'init'
+    }
+  }
+  return answers
+}
+
 /** The feed shows a press of the browser with this id: the server has taken it. */
 export function requestShown(rows: readonly FeedRow[], requestId: string): boolean {
   const id = requestId.toLowerCase()

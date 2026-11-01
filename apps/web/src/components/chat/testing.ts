@@ -165,6 +165,33 @@ export function commandRow(id: string, command: FeedCommandId): FeedRow {
   }
 }
 
+/** `/init`: a command the agent carries out (docs/plan/61-chats-first.md, §5.2). */
+export function agentCommandRow(id: string): FeedRow {
+  return {
+    id,
+    at: nextAt(),
+    type: 'feed.request',
+    kind: 'agent_command',
+    command: 'init',
+    authorId: AUTHOR_ID,
+    requestId: REQUEST_ID,
+  }
+}
+
+/** A pass that failed and left the chat open: the client writes «продолжи» (28.10.2026). */
+export function failureRow(id: string, turn: number): FeedRow {
+  return {
+    id,
+    at: nextAt(),
+    type: 'feed.failure',
+    turn,
+    code: 'technical',
+    site: 'unchanged',
+    credits: 'returned',
+    next: 'awaiting_user',
+  }
+}
+
 /** The candidate head of a dialog that waits with revision 1. */
 export const candidateHead = {
   id: CANDIDATE_ID,

@@ -5,7 +5,7 @@ import {
   type FeedFailureCode,
 } from '@repo/domain/tasks/client-feed-failures'
 import { feedBrowserQuestionText, feedFailureOpenText } from '@repo/domain/tasks/client-feed-labels'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { FeedRow } from './chat-types'
@@ -13,6 +13,7 @@ import { FeedList, LiveBlock, type FeedActions } from './feed-list'
 import type { ResultRow } from './feed-model'
 import { feedReducer, initialFeedState, type FeedHeadState } from './feed-state'
 import {
+  agentCommandRow,
   agentQuestionRow,
   browserAnswer,
   browserQuestionRow,
@@ -87,6 +88,38 @@ function showFeed(
   )
   return { handlers, feed: screen.getByRole('list', { name: 'Сообщения чата' }) }
 }
+
+describe('the answer to `/init` (docs/plan/61-chats-first.md, К31)', () => {
+  const rows = [agentCommandRow('1'), resultRow('2', 1, 'Тема лежит в wp-content/themes/shop.')]
+  const save = 'Сохранить в подсказки агенту'
+
+  it('offers to keep the words of the answer as they are', () => {
+    const onSaveNotes = vi.fn()
+    const { feed } = showFeed(
+      rows,
+      headOf({ status: 'awaiting_user' }),
+      {},
+      { onSaveNotes, notesRows: new Set(['2']) },
+    )
+    expect(within(feed).getByText('Вы попросили описать проект для агента')).toBeTruthy()
+    fireEvent.click(within(feed).getByRole('button', { name: save }))
+    expect(onSaveNotes).toHaveBeenCalledWith('Тема лежит в wp-content/themes/shop.')
+  })
+
+  it('draws no button under another row, or for who may not save', () => {
+    const notesRows = new Set(['2'])
+    const { feed } = showFeed(
+      [...rows, resultRow('3', 2, 'Другой ответ')],
+      headOf({ status: 'awaiting_user' }),
+      {},
+      { onSaveNotes: vi.fn(), notesRows },
+    )
+    expect(within(feed).getAllByRole('button', { name: save })).toHaveLength(1)
+    cleanup()
+    const closed = showFeed(rows, headOf({ status: 'awaiting_user' }), {}, { notesRows })
+    expect(within(closed.feed).queryByRole('button', { name: save })).toBeNull()
+  })
+})
 
 describe('the rows of a dialog', () => {
   it('shows the client words as written: markup and addresses are only text', () => {

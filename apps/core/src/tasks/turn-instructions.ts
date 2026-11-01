@@ -1,6 +1,7 @@
 import {
   SANDBOX_INBOX,
   type AgentWorkingSet,
+  type FeedAgentCommandId,
   type MediaChecks,
   type PreviewUnavailableReason,
 } from '@repo/domain'
@@ -518,3 +519,24 @@ export function openTaskInstructions(
  * platform's question, or «Попробовать ещё» on a session that remembers the request.
  */
 export const CONTINUE_PROMPT = 'Продолжите работу над задачей с того места, где остановились.'
+
+/**
+ * How long the answer to `/init` may be. The result takes 2 000 characters and a longer answer ends
+ * the pass as a failure of the platform, so the words ask for less (docs/plan/61, К31, §5.14).
+ */
+export const INIT_ANSWER_MAX_CHARS = 1800
+
+/**
+ * The prompt of `/init`: not the command of the CLI, which `opencode run` would pass to the model
+ * as text, but a pass with these words. The answer is the text the client may keep as the hints for
+ * the agent, so it asks for no file: the root of a site is not in its working set, and the CLI does
+ * not read `AGENTS.md` of a project (К31). The rules of answering (ANSWERING) forbid file paths in
+ * `client_message`, and hints without them tell the next turn little, so these words lift that one
+ * ban for this answer; the rest of rule 10 stays (docs/plan/61, §9, вопрос 27).
+ */
+export const INIT_PROMPT = `Изучите код проекта в рабочей копии и подготовьте подсказки агенту, который будет работать с этим проектом: как устроен код, где что лежит, как здесь принято писать и что лучше не трогать. Ничего не меняйте: ни файлы, ни содержимое сайта; браузер для этого не нужен. Не называйте паролей, ключей и значений переменных окружения. Ответ в \`client_message\` — сами подсказки, простым текстом, не длиннее ${INIT_ANSWER_MAX_CHARS} знаков: длиннее платформа не примет. Их читает следующий агент, поэтому только в этом ответе называйте папки и файлы так, как они названы в коде; остальное — по-русски, на «вы», простыми словами, без кода и команд.`
+
+/** The words of the platform a command carried out by the agent sends (§5.2). */
+export const AGENT_COMMAND_PROMPTS: Readonly<Record<FeedAgentCommandId, string>> = Object.freeze({
+  init: INIT_PROMPT,
+})

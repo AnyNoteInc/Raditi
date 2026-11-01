@@ -98,7 +98,8 @@ const limits = feedLimits
 // candidate; `command` — a command of the chat (docs/plan/53-chat-preview-release.md, Р6, Р34);
 // `continue` — «Продолжить» after a question of the platform about credits (Р8), the kind the
 // design reserved for it; `resume` — «Продолжить работу агента» of a task in the browser
-// (docs/plan/57-browser-tasks.md, Б16).
+// (docs/plan/57-browser-tasks.md, Б16); `agent_command` — a command that is a pass of the agent on
+// the platform's words: paid and moving the dialog on, unlike `command` (docs/plan/61, §5.2).
 export const feedRequestKinds = [
   'first',
   'answer',
@@ -107,6 +108,7 @@ export const feedRequestKinds = [
   'command',
   'continue',
   'resume',
+  'agent_command',
 ] as const
 export type FeedRequestKind = (typeof feedRequestKinds)[number]
 
@@ -366,6 +368,10 @@ export const feedCommandIds = serverCommandIds.filter(
 )
 export type FeedCommandId = (typeof feedCommandIds)[number]
 
+/** The commands that are a pass of the agent: `feed.request` of the kind `agent_command`. */
+export const feedAgentCommandIds = ['init'] as const satisfies readonly FeedCommandId[]
+export type FeedAgentCommandId = (typeof feedAgentCommandIds)[number]
+
 const requestBase = {
   v: version,
   /** The name and the address are not stored: the name is looked up when the row is shown. */
@@ -422,6 +428,12 @@ export const feedRequestPayloadSchema = z.discriminatedUnion('kind', [
   // «Продолжить работу агента» (docs/plan/57, Б16): the customer gave the browser back to the
   // agent. A press: no words, nothing else.
   z.strictObject({ ...requestBase, kind: z.literal('resume') }),
+  // A command the agent carries out on the words of the platform (docs/plan/61, §5.2, §5.14).
+  z.strictObject({
+    ...requestBase,
+    kind: z.literal('agent_command'),
+    command: z.enum(feedAgentCommandIds),
+  }),
 ])
 export type FeedRequestPayload = z.infer<typeof feedRequestPayloadSchema>
 
@@ -819,6 +831,13 @@ const readRequest = {
     authorId: z.uuid(),
     requestId: z.uuid(),
   }),
+  // As `command`: a command added later reads as a press without a name.
+  agent_command: z.object({
+    kind: z.literal('agent_command'),
+    authorId: z.uuid(),
+    requestId: z.uuid(),
+    command: known(feedAgentCommandIds, null),
+  }),
 } satisfies Record<FeedRequestKind, z.ZodType>
 // A kind added later: the text is shown when there is one.
 const readOtherRequest = z.object({
@@ -978,6 +997,7 @@ export type FeedEvent =
       | z.infer<typeof readRequest.command>
       | z.infer<typeof readRequest.continue>
       | z.infer<typeof readRequest.resume>
+      | z.infer<typeof readRequest.agent_command>
       | ({ kind: 'other' } & z.infer<typeof readOtherRequest>)
     ))
   | { type: 'feed.step'; turn: number; attempt: number; step: FeedStep }

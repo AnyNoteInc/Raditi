@@ -4,6 +4,7 @@ import { feedReducer, initialFeedState } from './feed-state'
 import {
   candidateMessage,
   feedEntries,
+  initAnswerIds,
   liveCandidateRow,
   liveSteps,
   openQuestion,
@@ -11,11 +12,14 @@ import {
   stopRequested,
 } from './feed-model'
 import {
+  agentCommandRow,
   agentQuestionRow,
+  AUTHOR_ID,
   candidateHead,
   candidateRow,
   ceilingRow,
   commandRow,
+  failureRow,
   feedAnswer,
   REQUEST_ID,
   requestRow,
@@ -26,6 +30,72 @@ import type { FeedRow } from './chat-types'
 
 const headOf = (patch: Parameters<typeof feedAnswer>[0]) =>
   feedReducer(initialFeedState, { type: 'answer', answer: feedAnswer(patch), after: '0' }).head
+
+describe('initAnswerIds (docs/plan/61-chats-first.md, К31)', () => {
+  const ids = (rows: FeedRow[]) => [...initAnswerIds(rows)]
+
+  it('takes the first result after `/init` and no other', () => {
+    expect(
+      ids([
+        requestRow('1'),
+        resultRow('2', 1),
+        agentCommandRow('3'),
+        stepRow('4', 2),
+        resultRow('5', 2),
+        requestRow('6', 'Спасибо'),
+        resultRow('7', 3),
+      ]),
+    ).toEqual(['5'])
+  })
+
+  it('goes on past a press of the same work', () => {
+    const retry: FeedRow = {
+      id: '4',
+      at: '2026-10-17T10:00:00.000Z',
+      type: 'feed.request',
+      kind: 'retry',
+      authorId: AUTHOR_ID,
+      requestId: REQUEST_ID,
+    }
+    expect(ids([agentCommandRow('1'), retry, resultRow('5', 2)])).toEqual(['5'])
+  })
+
+  // «продолжи» is the way on after a failure (28.10.2026), and its prompt carries `/init` again.
+  it('goes on past a failure and the words after it, which go on with the same work', () => {
+    expect(
+      ids([
+        agentCommandRow('1'),
+        failureRow('2', 2),
+        requestRow('3', 'продолжи'),
+        resultRow('4', 3),
+      ]),
+    ).toEqual(['4'])
+  })
+
+  it('goes on past a question of the agent and its answer', () => {
+    expect(
+      ids([
+        agentCommandRow('1'),
+        agentQuestionRow('2', 2),
+        requestRow('3', 'Да'),
+        resultRow('4', 3),
+      ]),
+    ).toEqual(['4'])
+  })
+
+  it('finds no answer in a question or a failure: the result is what is kept', () => {
+    expect(ids([agentCommandRow('1'), agentQuestionRow('2', 2)])).toEqual([])
+    expect(ids([agentCommandRow('1'), failureRow('2', 2)])).toEqual([])
+  })
+
+  it('finds no answer to anything but `/init`', () => {
+    const later: FeedRow = { ...agentCommandRow('1'), command: null } as FeedRow
+    expect(ids([later, resultRow('2', 2)])).toEqual([])
+    expect(ids([agentCommandRow('1'), later, resultRow('3', 2)])).toEqual([])
+    expect(ids([commandRow('1', 'reset'), resultRow('2', 2)])).toEqual([])
+    expect(ids([requestRow('1'), resultRow('2', 1)])).toEqual([])
+  })
+})
 
 describe('feedEntries', () => {
   it('folds the stages of a finished turn into one line with the time it worked', () => {

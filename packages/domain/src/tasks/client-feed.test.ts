@@ -124,6 +124,13 @@ const release = {
 }
 
 const resume = { v: 1, kind: 'resume', authorId: author, requestId: request }
+const agentCommand = {
+  v: 1,
+  kind: 'agent_command',
+  command: 'init',
+  authorId: author,
+  requestId: request,
+}
 const browserQuestion = {
   v: 1,
   kind: 'browser',
@@ -183,6 +190,7 @@ const samples: Record<FeedEventType, Record<string, unknown>[]> = {
     { ...command, command: 'cancel' },
     continued,
     resume,
+    agentCommand,
   ],
   'feed.step': [step],
   'feed.question': [
@@ -706,7 +714,7 @@ describe('feed.request', () => {
     expect(accepts('feed.request', { ...retry, attachments: [] })).toBe(false)
   })
 
-  it('lists the seven kinds written today', () => {
+  it('lists the eight kinds written today', () => {
     expect(feedRequestKinds).toEqual([
       'first',
       'answer',
@@ -715,7 +723,23 @@ describe('feed.request', () => {
       'command',
       'continue',
       'resume',
+      'agent_command',
     ])
+  })
+
+  it('takes a command the agent carries out without words of its own (docs/plan/61, §5.2)', () => {
+    expect(accepts('feed.request', agentCommand)).toBe(true)
+    expect(accepts('feed.request', { ...agentCommand, text: 'Опишите проект' })).toBe(false)
+    expect(accepts('feed.request', { ...agentCommand, command: 'release' })).toBe(false)
+    expect(readFeedRow('feed.request', agentCommand)).toEqual(shown('feed.request', agentCommand))
+  })
+
+  it('reads a command of a later version as a press without a name', () => {
+    expect(readFeedRow('feed.request', { ...agentCommand, command: 'later' })).toMatchObject({
+      type: 'feed.request',
+      kind: 'agent_command',
+      command: null,
+    })
   })
 
   it('refuses a kind it does not know', () => {

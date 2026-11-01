@@ -662,6 +662,43 @@ export async function resumeDialog(
   })
 }
 
+/**
+ * `/init` (docs/plan/61-chats-first.md, К31, §5.14): a pass of the agent on the words of the
+ * platform, in a chat with the code that waits. It goes as the next words of the client would —
+ * paid, its reserve placed as theirs (`follows`), refused for credits as they are — and, as they
+ * do, moves the chat on past a question; it writes no words, only the command. A repeat with the
+ * same `requestId` returns the row of the first delivery.
+ */
+export async function initDialog(
+  db: PrismaClient,
+  input: { userId: string; taskId: string; requestId: string; now: Date },
+): Promise<PostedRequest> {
+  const { userId, now } = input
+  const requestId = input.requestId.toLowerCase()
+  return underDialogLock(db, input, async (tx, task) => {
+    const repeated = await requestOf(tx, task.id, requestId)
+    if (repeated !== null) return { requestEventId: String(repeated), repeated: true }
+    const facts = await dialogFacts(tx, task, userId)
+    assertCommandAvailable(facts.commands, 'init')
+
+    const ceiling = await openCeilingQuestion(tx, task.id)
+    const attempt =
+      ceiling !== null
+        ? await wordsAfterCeiling(tx, task, ceiling, now)
+        : await nextPassAttempt(tx, task, 'message', now)
+    await moveTo(tx, task, 'queued', attempt === task.attempt ? {} : { attempt })
+    const requestEventId = await writeRequest(tx, task.id, {
+      v: 1,
+      kind: 'agent_command',
+      command: 'init',
+      authorId: userId,
+      requestId,
+    })
+    await enqueueAgentTurn(tx, { taskId: task.id, attempt, requestEventId })
+    return { requestEventId, repeated: false }
+  })
+}
+
 /** The refusal of a press of «Попробовать ещё» by why it is not offered. */
 const retryRefused: Readonly<Record<RetryRefusal, () => Error>> = {
   nothing: taskNothingToRetry,

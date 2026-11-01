@@ -174,6 +174,82 @@ export async function addBrowserTask(
 }
 
 /**
+ * A chat with the code as `/init` leaves it (docs/plan/61-chats-first.md, К31): the command, the
+ * answer of the agent, and the chat open for the next words. The project has `notes` for the agent.
+ * No core runs here. Everything goes with the user.
+ */
+export async function addInitAnswer(
+  userId: string,
+  { answer, notes }: { answer: string; notes: string },
+): Promise<{ siteId: string; taskId: string }> {
+  const siteId = await addConnectedSite(userId)
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    const site = await prisma.site.update({
+      where: { id: siteId },
+      data: { agentNotes: notes },
+      select: { workspaceId: true },
+    })
+    const task = await prisma.task.create({
+      data: {
+        workspaceId: site.workspaceId,
+        siteId,
+        createdById: userId,
+        status: 'awaiting_user',
+        title: 'Подсказки агенту',
+        turnNo: 1,
+        needsRepository: true,
+        needsBrowser: false,
+      },
+      select: { id: true },
+    })
+    const person = { v: 1 as const, authorId: userId }
+    for (const row of [
+      {
+        type: 'feed.request',
+        payload: { ...person, kind: 'first', requestId: randomUUID(), text: 'Здравствуйте!' },
+      },
+      {
+        type: 'feed.request',
+        payload: { ...person, kind: 'agent_command', command: 'init', requestId: randomUUID() },
+      },
+      {
+        type: 'feed.result',
+        payload: {
+          v: 1,
+          turn: 1,
+          message: answer,
+          site: 'unchanged',
+          next: 'awaiting_user',
+          filesChanged: 0,
+          changeType: 'none',
+          needsApproval: false,
+          risk: 'low',
+        },
+      },
+    ] as const)
+      await insertFeedEvent(prisma, { taskId: task.id, row })
+    return { siteId, taskId: task.id }
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+/** The notes of a project as the next turn reads them. */
+export async function agentNotesOf(siteId: string): Promise<string | null> {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    const site = await prisma.site.findUniqueOrThrow({
+      where: { id: siteId },
+      select: { agentNotes: true },
+    })
+    return site.agentNotes
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+/**
  * A long dialog with the repository on a connected site of the signed-in user (docs/plan/59-
  * dialog-tools-panel.md, И19): `pairs` messages of the client, each answered by the agent, the last answer
  * leaving the dialog open — `awaiting_user`, so the field takes words. Nothing changed on the site:

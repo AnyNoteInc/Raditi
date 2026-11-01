@@ -131,6 +131,11 @@ describe('the chat as a Markdown file', () => {
         ['_Вы вернули управление агенту_'],
       ],
       [
+        'a command the agent carried out',
+        row({ type: 'feed.request', kind: 'agent_command', command: 'init', ...person }),
+        ['_Вы попросили описать проект для агента_'],
+      ],
+      [
         'a request of a later kind, with its words',
         row({ type: 'feed.request', kind: 'other', text: 'Слова клиента', ...person }),
         ['**Вы**', 'Слова клиента'],

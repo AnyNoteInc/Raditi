@@ -59,9 +59,9 @@ export async function cancelPending(
 }
 
 /**
- * The `feed.request` rows that move a dialog on: the client's words and «Продолжить». A
- * command — `/cancel`, `/reset`, `/update` — is a press: it answers no question and starts no
- * work of the agent.
+ * The `feed.request` rows that move a dialog on: the client's words, «Продолжить» and a command
+ * the agent carries out (`agent_command`, `/init`). Any other command — `/cancel`, `/reset`,
+ * `/update` — is a press: it answers no question and starts no work of the agent.
  */
 export const movingRequest = {
   type: 'feed.request',

@@ -67,7 +67,12 @@ import {
   initialVersionOutput,
   siteSetupStates,
 } from '../services/site-setup.ts'
-import { agentNotesOf, agentNotesInput } from '../services/site-notes.ts'
+import {
+  agentNotesInput,
+  agentNotesOf,
+  readSiteAgentNotes,
+  setSiteAgentNotes,
+} from '../services/site-notes.ts'
 import { consentedProcedure, router, type Context } from '../trpc.ts'
 import { sourceRefusalFields } from './site-connection.ts'
 
@@ -435,6 +440,33 @@ export const projectRouter = router({
         ),
       }
     }),
+
+  /** The hints for the agent as they are now: what «Сохранить в подсказки агенту» shows beside. */
+  agentNotes: consentedProcedure
+    .input(z.strictObject({ id: z.uuid() }))
+    .output(z.strictObject({ notes: z.string().nullable(), canManage: z.boolean() }))
+    .query(({ ctx, input }) =>
+      readSiteAgentNotes(ctx.prisma, { siteId: input.id, userId: ctx.user.id }),
+    ),
+
+  /**
+   * The hints for the agent, replaced with what the client left in the field (docs/plan/61, К31):
+   * data of the project for every next turn. An owner or an admin.
+   */
+  setAgentNotes: consentedProcedure
+    .input(
+      z.strictObject({ id: z.uuid(), notes: agentNotesInput, seen: agentNotesInput.nullable() }),
+    )
+    .output(z.strictObject({ notes: z.string().nullable() }))
+    .mutation(({ ctx, input }) =>
+      setSiteAgentNotes(ctx.prisma, {
+        siteId: input.id,
+        userId: ctx.user.id,
+        ip: clientIp(ctx.headers),
+        notes: input.notes,
+        seen: input.seen,
+      }),
+    ),
 
   /** Which accesses of the site are saved: kind, version and date — the secrets stay in Vault. */
   credentials: consentedProcedure
