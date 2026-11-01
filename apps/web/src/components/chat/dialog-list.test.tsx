@@ -46,7 +46,6 @@ function dialog(id: string, patch: Partial<DialogListItem> = {}): DialogListItem
     id: `0199a3f2-0000-7000-8000-${id.padStart(12, '0')}`,
     title: 'Поменять цену капучино',
     status: 'done',
-    mode: 'work',
     undo: null,
     answered: false,
     createdAt: now,

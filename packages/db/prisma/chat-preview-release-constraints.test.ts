@@ -326,7 +326,6 @@ describe.skipIf(!databaseUrl)('chat preview release constraints', () => {
           ({
             alias: _a,
             title,
-            mode,
             waiting,
             needs_repository,
             needs_browser,
@@ -336,7 +335,6 @@ describe.skipIf(!databaseUrl)('chat preview release constraints', () => {
           }) => ({
             ...rest,
             title,
-            mode,
             waiting,
             needs: [needs_repository, needs_browser],
             deleted: deleted_at,
@@ -347,7 +345,6 @@ describe.skipIf(!databaseUrl)('chat preview release constraints', () => {
         before_.tasks.map((row) => ({
           ...row,
           title: null,
-          mode: 'work',
           waiting: null,
           needs: [true, false],
           deleted: null,

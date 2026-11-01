@@ -1,5 +1,5 @@
 import { Prisma, type PrismaClient } from '@repo/db'
-import type { TaskMode, TaskStatus } from '@repo/domain'
+import type { TaskStatus } from '@repo/domain'
 
 import { accessibleSite, siteNotFound } from '../site-basics.ts'
 
@@ -14,7 +14,6 @@ export interface DialogListItem {
   id: string
   title: string | null
   status: TaskStatus
-  mode: TaskMode
   /**
    * «Отменить выпуск» of the dialog's release (docs/plan/53, «Отмена выпуска»): `running` — an undo
    * goes on, `installed` — the release was undone; null — neither. The status of the dialog stays
@@ -87,7 +86,7 @@ export function dialogPageQuery(input: {
       : Prisma.sql`AND (t.updated_at, t.id) <
           (timestamptz 'epoch' + ${BigInt(after[1]!)}::bigint * interval '1 microsecond', ${after[2]!}::uuid)`
   return Prisma.sql`
-    SELECT t.id, t.title, t.status::text AS status, t.mode::text AS mode, t.created_at, t.updated_at,
+    SELECT t.id, t.title, t.status::text AS status, t.created_at, t.updated_at,
       (extract(epoch FROM t.updated_at) * 1000000)::bigint AS updated_us,
       (SELECT CASE WHEN bool_or(u.status = 'installed') THEN 'installed'
           WHEN bool_or(u.status NOT IN ('failed', 'rolled_back')) THEN 'running' END
@@ -96,7 +95,7 @@ export function dialogPageQuery(input: {
       t.project_id, t.project_name
     FROM members m
     CROSS JOIN LATERAL (
-      SELECT t.id, t.title, t.status, t.mode, t.created_at, t.updated_at,
+      SELECT t.id, t.title, t.status, t.created_at, t.updated_at,
         s.id AS project_id, s.name AS project_name
       FROM tasks t LEFT JOIN sites s ON s.id = t.site_id
       WHERE t.workspace_id = m.workspace_id AND ${SHOWN} ${inFolder} ${afterCursor}
@@ -131,7 +130,6 @@ export async function listDialogs(
       id: string
       title: string | null
       status: TaskStatus
-      mode: TaskMode
       undo: 'running' | 'installed' | null
       answered: boolean
       created_at: Date
@@ -148,7 +146,6 @@ export async function listDialogs(
       id: row.id,
       title: row.title,
       status: row.status,
-      mode: row.mode,
       undo: row.undo,
       answered: row.answered,
       createdAt: row.created_at,

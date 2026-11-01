@@ -34,7 +34,6 @@ export function taskHead(patch: Partial<FeedHead> = {}): FeedHead {
   return {
     id: TASK_ID,
     title: 'Поменять цену капучино',
-    mode: 'work',
     status: 'queued',
     attempt: 1,
     turnNo: 0,
@@ -280,8 +279,6 @@ export function browserAnswer(
     ...rest,
     task: {
       title: 'Новость о летней веранде',
-      // «Чат» is the dialog in the browser, as `task.create` writes it.
-      mode: 'chat',
       turnNo: 1,
       runningSince: '2026-10-17T09:01:00.000Z',
       requirements: { repository: false, browser: true },

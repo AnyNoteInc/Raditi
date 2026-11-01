@@ -300,9 +300,6 @@ export async function createDialog(
           modelClass,
           billable: true,
           title: dialogTitle(text),
-          // «Чат» is a dialog without the files of the site, «Работа» one on their copy (owner's
-          // request of 26.10.2026).
-          mode: requirements.repository ? 'work' : 'chat',
           needsRepository: requirements.repository,
           needsBrowser: requirements.browser,
         },

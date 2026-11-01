@@ -546,7 +546,6 @@ model Task {
   /// Set from the first request (feed design, «Ограничения в базе»); the client may rename the
   /// dialog (`task.rename`, owner's request of 26.10.2026).
   title           String?      @db.VarChar(120)
-  mode            TaskMode     @default(work)
   /// Why a queued task waits; cleared when it leaves `queued` (CHECK tasks_waiting_check).
   waiting         TaskWaiting?
   /// What the task's environment needs (docs/plan/57-browser-tasks.md, Б2): the site's
@@ -1987,12 +1986,6 @@ model SiteDatabaseSchema {
 }
 
 // ─── Previews, candidates and releases (docs/plan/53-chat-preview-release.md) ──────────────────
-
-/// Must equal taskModes in @repo/domain (checked by a test).
-enum TaskMode {
-  work
-  chat
-}
 
 /// Must equal taskWaitingReasons in @repo/domain (checked by a test).
 enum TaskWaiting {

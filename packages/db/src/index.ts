@@ -194,7 +194,6 @@ export {
   SiteStack,
   SiteStatus,
   SubscriptionStatus,
-  TaskMode,
   TaskStatus,
   TaskWaiting,
   TurnAssignmentOutcome,

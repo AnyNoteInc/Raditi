@@ -25,7 +25,6 @@ import {
   siteSourceKinds,
   siteStacks,
   subscriptionStatuses,
-  taskModes,
   taskStatuses,
   taskWaitingReasons,
   turnAssignmentOutcomes,
@@ -60,7 +59,6 @@ import {
   SiteSourceKind,
   SiteStack,
   SubscriptionStatus,
-  TaskMode,
   TaskStatus,
   TaskWaiting,
   TurnAssignmentOutcome,
@@ -138,8 +136,7 @@ describe('database enums match the domain', () => {
     expect(Object.values(ProvisioningStageStatus)).toEqual([...provisioningStageStatuses])
   })
 
-  it('TaskMode and TaskWaiting match the head of a task in the feed', () => {
-    expect(Object.values(TaskMode)).toEqual([...taskModes])
+  it('TaskWaiting matches the head of a task in the feed', () => {
     expect(Object.values(TaskWaiting)).toEqual([...taskWaitingReasons])
   })
 

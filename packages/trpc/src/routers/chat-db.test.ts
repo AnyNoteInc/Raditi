@@ -612,7 +612,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         modelClass: 'standard',
         billable: true,
         attempt: 1,
-        mode: 'work',
         title: 'Поменяйте телефон',
         createdById: owner.id,
         alias: created.alias,

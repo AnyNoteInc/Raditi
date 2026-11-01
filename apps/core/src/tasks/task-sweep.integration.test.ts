@@ -710,7 +710,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
       expect(await browserSweep({ verify }).settleOrphans()).toBe(1)
 
       expect(verify).toHaveBeenCalledExactlyOnceWith(taskId)
-      // The answer leaves the dialog open, as in «Работа» (owner's answer of 26.10.2026).
+      // The answer leaves the dialog open, as with the repository (owner's answer of 26.10.2026).
       expect((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe(
         'awaiting_user',
       )

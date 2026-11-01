@@ -86,8 +86,8 @@ async function waitTask(stand, taskId, statuses, { timeoutMs = 600_000, what } =
 
 /**
  * The task answered: a pass ended with `feed.result` and the dialog stays open for the next
- * words (owner's answer of 26.10.2026: «Чат» like «Работа» — no result needs confirming, no
- * `done`). `results` — how many results the task had before the pass that is waited for.
+ * words (owner's answer of 26.10.2026: a chat with the browser, like one with the repository —
+ * no result needs confirming, no `done`). `results` — how many results the task had before the pass that is waited for.
  */
 async function waitAnswered(stand, taskId, { results = 0, timeoutMs = 600_000, what } = {}) {
   const { rt, db, model } = stand

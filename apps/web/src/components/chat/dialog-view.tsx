@@ -686,8 +686,8 @@ export function DialogView({
   // these very words): they are in the dialog, and the field is cleared like after a first send.
   async function send(text: string, attachmentIds: readonly string[] = []): Promise<boolean> {
     setFieldError(null)
-    // Files go with the messages of either mode: to the browser's pages, or into the copy of
-    // the site the agent works on.
+    // Files go with the messages of any chat: to the browser's pages, or into the copy of the
+    // site the agent works on.
     const files = [...attachmentIds]
     try {
       await message.mutateAsync({

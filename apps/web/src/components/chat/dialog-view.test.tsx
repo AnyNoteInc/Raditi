@@ -3141,9 +3141,9 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
   })
 
   it.each([
-    ['in «Чат», its browser still being started', () => atWork({ status: 'starting' }, 1), true],
+    ['with the browser, still being started', () => atWork({ status: 'starting' }, 1), true],
     [
-      'in «Работа», on the copy of the site',
+      'with the repository, on the copy of the site',
       () => feedAnswer({ status: 'queued', events: [requestRow('1', WORDS[0])], cursor: '1' }),
       // No tool yet: «+» has nothing to offer (docs/plan/61-chats-first.md, К19).
       false,

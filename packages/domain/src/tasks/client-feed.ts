@@ -1143,8 +1143,6 @@ export function readFeedRow(type: string, payload: unknown): FeedEvent {
 
 export const taskWaitingReasons = ['agents', 'site'] as const
 export type TaskWaitingReason = (typeof taskWaitingReasons)[number]
-export const taskModes = ['work', 'chat'] as const
-export type TaskMode = (typeof taskModes)[number]
 
 /**
  * The state of the task read in the same snapshot as its rows. A status change is not a feed
@@ -1154,7 +1152,6 @@ export const feedTaskHeadSchema = z.strictObject({
   id: z.uuid(),
   // Design reading: `tasks.title` is a nullable column, set once from the first request.
   title: z.string().max(limits.title).nullable(),
-  mode: z.enum(taskModes),
   status: z.enum(taskStatuses),
   attempt: z.number().int().min(1),
   turnNo: z.number().int().min(0).max(limits.turn),

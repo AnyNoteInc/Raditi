@@ -87,7 +87,6 @@ export async function readDialogFeed(
           workspaceId: true,
           siteId: true,
           title: true,
-          mode: true,
           status: true,
           attempt: true,
           turnNo: true,
@@ -146,7 +145,6 @@ export async function feedHead(
     id: string
     siteId: string | null
     title: string | null
-    mode: 'work' | 'chat'
     status: TaskStatus
     attempt: number
     turnNo: number
@@ -186,7 +184,6 @@ export async function feedHead(
   return feedTaskHeadSchema.parse({
     id: task.id,
     title: task.title,
-    mode: task.mode,
     status: task.status,
     attempt: task.attempt,
     turnNo: task.turnNo,
@@ -263,7 +260,6 @@ export async function readDialogHead(
           site: { select: { id: true, name: true, url: true, status: true } },
           alias: true,
           title: true,
-          mode: true,
           status: true,
           attempt: true,
           turnNo: true,

@@ -524,7 +524,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         expect(request.input.prompt).toContain('Поменяйте телефон в шапке')
         expect(request.input.prompt).toContain('Вход по адресу /login')
         expect(request.context.instructions).toContain('cloud browser')
-        // Like a dialog of «Работа» (owner's answer of 26.10.2026): the answer leaves the dialog
+        // Like a dialog with the repository (owner's answer of 26.10.2026): the answer leaves it
         // open, the pass is charged, and the browser lives on for the next words.
         const task = await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })
         expect(task.status).toBe('awaiting_user')

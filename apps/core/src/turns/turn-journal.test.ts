@@ -400,12 +400,20 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
     })
     await db.$executeRaw`ANALYZE task_events`
 
-    await db.$transaction(async (tx) => {
-      await tx.$executeRaw`SET LOCAL enable_nestloop = off`
-      await tx.$executeRaw`SET LOCAL enable_mergejoin = off`
-      for (const f of turns.slice(1))
-        await new TaskEventTurnJournal(tx).record({ ...f.evidence, sequence: 2, phase: 'running' })
-    })
+    // Hash plans scan what the suites beside it wrote: Prisma's 5 s are not enough under load.
+    await db.$transaction(
+      async (tx) => {
+        await tx.$executeRaw`SET LOCAL enable_nestloop = off`
+        await tx.$executeRaw`SET LOCAL enable_mergejoin = off`
+        for (const f of turns.slice(1))
+          await new TaskEventTurnJournal(tx).record({
+            ...f.evidence,
+            sequence: 2,
+            phase: 'running',
+          })
+      },
+      { timeout: 20_000 },
+    )
 
     for (const f of turns.slice(1)) {
       const stages = await db.taskEvent.findMany({

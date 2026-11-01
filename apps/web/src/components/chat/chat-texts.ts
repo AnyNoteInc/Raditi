@@ -371,7 +371,6 @@ export const dialogText = Object.freeze({
   stoppedHint: 'Останавливаем работу агента…',
   /** The steps of a finished turn, unfolded. */
   stages: 'Этапы работы',
-  mode: 'Режим',
 })
 
 /**

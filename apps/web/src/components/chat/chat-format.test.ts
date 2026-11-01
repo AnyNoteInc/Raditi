@@ -11,7 +11,6 @@ function dialog(id: string, status: DialogListItem['status'], createdAt: string)
     id,
     title: id,
     status,
-    mode: 'work',
     undo: null,
     answered: false,
     createdAt: new Date(createdAt),

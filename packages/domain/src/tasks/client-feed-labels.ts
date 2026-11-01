@@ -16,7 +16,6 @@ import type {
   FeedUpdateOutcome,
   FeedUndoReason,
   FeedStep,
-  TaskMode,
   TaskWaitingReason,
 } from './client-feed.ts'
 import type { TaskStatus } from './task-status.ts'
@@ -86,11 +85,6 @@ export const taskListGroupLabel = Object.freeze({
   awaiting: 'Ждёт вашего решения',
   today: 'Сегодня',
   earlier: 'Ранее',
-})
-
-export const taskModeLabel: Readonly<Record<TaskMode, string>> = Object.freeze({
-  work: 'Работа',
-  chat: 'Чат',
 })
 
 /** Nouns: the same words read as «in progress» and as «done». */

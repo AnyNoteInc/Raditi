@@ -9,7 +9,6 @@ import {
   reasoningEffortSchema,
   releaseOutcomes,
   releaseStatuses,
-  taskModes,
   taskStatuses,
   type FeedItem,
 } from '@repo/domain'
@@ -327,7 +326,6 @@ export const taskRouter = router({
             id: z.uuid(),
             title: z.string().nullable(),
             status: z.enum(taskStatuses),
-            mode: z.enum(taskModes),
             /** «Отменить выпуск» of the dialog's release: under way, or installed. */
             undo: z.enum(['running', 'installed']).nullable(),
             /** The agent answered and asked nothing: the dialog waits for no one (26.10.2026). */

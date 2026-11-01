@@ -42,7 +42,6 @@ const chat: DialogListPage['items'][number] = {
   id: '0199a3f2-0000-7000-8000-000000000001',
   title: 'Идеи для названия пекарни',
   status: 'done',
-  mode: 'work',
   undo: null,
   answered: false,
   createdAt: NOW,

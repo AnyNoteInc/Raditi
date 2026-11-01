@@ -13,7 +13,6 @@ import {
   feedReleaseOutcomes,
   feedReleaseReasons,
   feedSteps,
-  taskModes,
   taskWaitingReasons,
 } from './client-feed.ts'
 import * as labels from './client-feed-labels.ts'
@@ -68,7 +67,6 @@ import {
   feedWorkedText,
   pluralRu,
   taskListGroupLabel,
-  taskModeLabel,
   taskStatusLabel,
   feedResultOpenText,
   taskStatusListHint,
@@ -139,22 +137,20 @@ describe('totality of the catalogue', () => {
     expect(withHint).toEqual(['awaiting_user', 'awaiting_approval'])
   })
 
-  it('has a text for every stage, waiting reason, mode, credits state and way of cancelling', () => {
+  it('has a text for every stage, waiting reason, credits state and way of cancelling', () => {
     expect(sorted(Object.keys(feedStepLabel))).toEqual(sorted(feedSteps))
     expect(sorted(Object.keys(feedWaitingText))).toEqual(sorted(taskWaitingReasons))
-    expect(sorted(Object.keys(taskModeLabel))).toEqual(sorted(taskModes))
     expect(sorted(Object.keys(feedCreditsText))).toEqual(sorted(feedCreditsStates))
     expect(sorted(Object.keys(feedCancelledText))).toEqual(sorted(feedCancelledBys))
     expect(sorted(Object.keys(feedCeilingButtons))).toEqual(sorted(feedCeilingReasons))
   })
 
-  it('names the groups of the list and the modes of a task', () => {
+  it('names the groups of the list', () => {
     expect(taskListGroupLabel).toEqual({
       awaiting: 'Ждёт вашего решения',
       today: 'Сегодня',
       earlier: 'Ранее',
     })
-    expect(taskModeLabel).toEqual({ work: 'Работа', chat: 'Чат' })
   })
 
   it('has a phrase about the site for every state an outcome may carry', () => {

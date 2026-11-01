@@ -17,8 +17,8 @@ export default defineConfig({
   outputDir: './test-results/site',
   // No previews and no cloud browser in this run: no core builds the one, no worker streams the
   // other. The menu «+» of a dialog offers no preview then, the browser of a task says it cannot
-  // be shown, and a site that is not connected offers neither mode (chat.spec.ts). Next loads the
-  // repository .env for every variable that is not exported, and .env.example sets
+  // be shown, and a site that is not connected offers no way to work. Next loads the repository
+  // .env for every variable that is not exported, and .env.example sets
   // PREVIEW_BASE_DOMAIN: blank counts as unset here.
   webServer: webServers.map((server) =>
     server.name === 'Web'

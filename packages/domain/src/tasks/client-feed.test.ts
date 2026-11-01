@@ -36,7 +36,6 @@ import {
   feedTaskHeadSchema,
   isFeedEventType,
   readFeedRow,
-  taskModes,
   taskWaitingReasons,
   type FeedEvent,
   type FeedEventType,
@@ -1333,7 +1332,6 @@ describe('task head', () => {
   const head = {
     id: author,
     title: 'Добавьте блок отзывов',
-    mode: 'work',
     status: 'running',
     attempt: 1,
     turnNo: 1,
@@ -1365,7 +1363,6 @@ describe('task head', () => {
       }).success,
     ).toBe(true)
     expect(taskWaitingReasons).toEqual(['agents', 'site'])
-    expect(taskModes).toEqual(['work', 'chat'])
   })
 
   it('takes the largest turn number and the longest title', () => {
@@ -1378,7 +1375,6 @@ describe('task head', () => {
       expect(feedTaskHeadSchema.safeParse({ ...head, ...patch }).success).toBe(false)
     refused({ status: 'paused' })
     refused({ waiting: 'credits' })
-    refused({ mode: 'plan' })
     refused({ attempt: 0 })
     refused({ turnNo: -1 })
     refused({ turnNo: 1_000_000 })
@@ -1747,7 +1743,6 @@ describe('the requirements of a task in its head', () => {
   const head = {
     id: author,
     title: null,
-    mode: 'work',
     status: 'awaiting_user',
     attempt: 1,
     turnNo: 2,

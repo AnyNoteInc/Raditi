@@ -103,8 +103,6 @@ export async function addBrowserTask(
         status: 'awaiting_user',
         title,
         turnNo: 1,
-        // «Чат» is the dialog in the browser, as `task.create` writes it.
-        mode: 'chat',
         needsRepository: false,
         needsBrowser: true,
       },
@@ -148,8 +146,8 @@ export async function addBrowserTask(
 }
 
 /**
- * A long dialog of «Работа» on a connected site of the signed-in user (docs/plan/59-dialog-tools-
- * panel.md, И19): `pairs` messages of the client, each answered by the agent, the last answer
+ * A long dialog with the repository on a connected site of the signed-in user (docs/plan/59-
+ * dialog-tools-panel.md, И19): `pairs` messages of the client, each answered by the agent, the last answer
  * leaving the dialog open — `awaiting_user`, so the field takes words. Nothing changed on the site:
  * no candidate, no preview, no core. The feed is long enough to scroll on any screen, and every
  * answer links to the page it speaks of: the keyboard has stops all along the feed. Everything goes
@@ -175,8 +173,6 @@ export async function addLongDialog(
         status: 'awaiting_user',
         title,
         turnNo: pairs,
-        // «Работа» is the dialog with the copy of the site, as `task.create` writes it.
-        mode: 'work',
         needsRepository: true,
         needsBrowser: false,
       },
@@ -271,7 +267,6 @@ export async function addLongChat(
         status: 'awaiting_user',
         title,
         turnNo: pairs,
-        mode: 'chat',
         needsRepository: false,
         needsBrowser: false,
       },

@@ -548,8 +548,8 @@ export class PassSettlement {
    * the result. In this order: the agent asked the client to act in the browser (`web_help`),
    * the client holds the browser, the agent asked a question — each a question for the client;
    * else the agent's answer, with what the task saved on the site as the platform found it there
-   * (confirmed or not), and the dialog stays open for the client's next words, as a dialog of
-   * «Работа» does. Every way the pass is charged (`#chargePass`), and the browser lives on until
+   * (confirmed or not), and the dialog stays open for the client's next words, as a dialog with
+   * the repository does. Every way the pass is charged (`#chargePass`), and the browser lives on until
    * its idle time ends. The exception: the browser, all such a task has, failed to start in this
    * turn. That is the platform's failure whatever the agent said of it: `unavailable`, not charged
    * (rule 7), as when the browser was opened before the turn.
