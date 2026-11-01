@@ -1328,7 +1328,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         }),
       ).rejects.toMatchObject({
         cause: { code: 'TASK_NOTHING_TO_RETRY' },
-        message: 'Повторить уже нельзя: в диалоге что-то изменилось',
+        message: 'Повторить уже нельзя: в чате что-то изменилось',
       })
       // A reset of the preview answers nothing; words do.
       await db.previewEnvironment.update({ where: { taskId }, data: { status: 'ready' } })

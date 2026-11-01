@@ -23,9 +23,9 @@ import { SITE_PANE_WIDTH } from './pane-layout'
 import { PaneResizer } from './pane-resizer'
 
 // The panel of the tools beside a dialog (docs/plan/59-dialog-tools-panel.md, И7, И8, И14, И20):
-// one landmark «Инструменты диалога», drawn only while a tool is on the screen. From `lg` it stands
+// one landmark «Инструменты чата», drawn only while a tool is on the screen. From `lg` it stands
 // at the right edge under the bar of breadcrumbs, its edge dragged to make it wider; below it takes
-// the place of the dialog, «К диалогу» (which closes the tab on the screen and leaves the others
+// the place of the dialog, «К чату» (which closes the tab on the screen and leaves the others
 // behind the dialog) and «+» over its tabs. On its strip the tabs of the open tools —
 // a sign and a name each, closed by the cross at its end or by Delete —, and from `lg` «Скрыть
 // панель» and «+» outside the tabs: a tablist holds its tabs alone (axe), and MUI takes every child
@@ -76,7 +76,7 @@ export function ToolsPanel({
   wide: boolean
   /** The browser over the whole area of the content (Б29): no edge to drag then. */
   fullscreen: boolean
-  /** «+» at the end of the strip, or beside «К диалогу» (`ToolsMenu`). */
+  /** «+» at the end of the strip, or beside «К чату» (`ToolsMenu`). */
   menu: ReactNode
   /** A tab chosen on the strip. */
   onShow: (tool: DialogTool) => void
@@ -84,7 +84,7 @@ export function ToolsPanel({
   onClose: (tool: DialogTool) => void
   /** «Скрыть панель»: every tab at once. */
   onCloseAll: () => void
-  /** «К диалогу» below `lg`: the tab on the screen closes, the others stay behind the dialog. */
+  /** «К чату» below `lg`: the tab on the screen closes, the others stay behind the dialog. */
   onBack: () => void
   /** What the panel of a tool holds. */
   content: (tool: DialogTool) => ReactNode

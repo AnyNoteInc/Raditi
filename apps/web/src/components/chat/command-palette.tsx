@@ -251,6 +251,9 @@ export function CommandList({
                   minHeight: 44,
                   px: 1.25,
                   py: 0.75,
+                  // A row of a fractional height: the scroll stops on a whole pixel, and without
+                  // this margin a part of a pixel of the last row stays outside the list.
+                  scrollMarginBlock: '2px',
                   borderRadius: '10px',
                   cursor: option.available ? 'pointer' : 'not-allowed',
                   bgcolor: selected ? 'action.selected' : 'transparent',

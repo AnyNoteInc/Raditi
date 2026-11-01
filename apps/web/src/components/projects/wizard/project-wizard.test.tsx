@@ -576,7 +576,7 @@ describe('a site without access to its files (docs/plan/57-browser-tasks.md, Б8
     // What the agent can do there, and nothing the browser of a task closes to it (Б21).
     expect(
       screen.getByText(
-        'Агент меняет записи, страницы и медиафайлы в админке сайта — через браузер, и вы видите каждый шаг.',
+        'Агент меняет записи, страницы и медиафайлы через браузер, и вы видите каждый шаг.',
       ),
     ).toBeTruthy()
     expect(
@@ -585,6 +585,14 @@ describe('a site without access to its files (docs/plan/57-browser-tasks.md, Б8
       ),
     ).toBeTruthy()
     expect(screen.queryByText(/меняет[^.]*настройки/)).toBeNull()
+    // Rule 3 and Б1: no promise of an undo there is not; no twin of the phrase the owner removed.
+    expect(
+      screen.getByText(
+        'Предпросмотра и выпуска версий здесь нет, а сделанное агентом на сайте отменить нельзя. Первоначальную версию сайта мы не сохраним.',
+      ),
+    ).toBeTruthy()
+    expect(screen.getByText('Агент работает только в браузере.')).toBeTruthy()
+    expect(screen.queryAllByText(/сразу|без выпуска|в админке сайта/i)).toEqual([])
     // No server, no password: only the hints.
     expect(screen.queryByRole('textbox', { name: /^Сервер/ })).toBeNull()
     type(

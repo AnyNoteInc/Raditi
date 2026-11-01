@@ -555,6 +555,9 @@ test.describe('hover and press', () => {
       const demo = page.locator('#site-demo')
       const apply = demo.getByRole('button', { name: 'Применить правку' })
       await hydrated(apply)
+      // `hover()` scrolls smoothly and points where the button will be: the pointer comes to rest
+      // before it does, `:hover` stays false and the arrow goes back.
+      await bringIntoWindow(page, apply)
       await apply.hover()
       await expect(apply.locator('svg')).toHaveCSS('transform', 'matrix(1, 0, 0, 1, 4, 0)')
       const pressed = [
@@ -4013,17 +4016,22 @@ test.describe('questions in motion', () => {
       const frame = () => new Promise<void>((done) => requestAnimationFrame(() => done()))
       const next = details.nextElementSibling
       const before = next?.getBoundingClientRect().top ?? 0
+      const style = getComputedStyle(details, '::details-content')
       details.querySelector('summary')?.click()
       await frame()
       await frame()
       const paragraph = details.querySelector('p')
+      const opacity = paragraph ? getComputedStyle(paragraph).opacity : ''
+      const answerMoves = paragraph?.getAnimations().length
+      // The transition can take its start time a few frames later, as on the way back below.
+      for (let frames = 0; frames < 10 && parseFloat(style.blockSize) === 0; frames++) await frame()
       return {
         open: details.open,
         moved: (next?.getBoundingClientRect().top ?? 0) - before,
-        opacity: paragraph ? getComputedStyle(paragraph).opacity : '',
-        answerMoves: paragraph?.getAnimations().length,
-        // Of the box that holds the answer, two frames into the opening.
-        height: parseFloat(getComputedStyle(details, '::details-content').blockSize),
+        opacity,
+        answerMoves,
+        // Of the box that holds the answer, on its way open.
+        height: parseFloat(style.blockSize),
       }
     })
     expect(opening.open).toBe(true)

@@ -143,7 +143,7 @@ describe('the window of «Отменить выпуск»', () => {
     expect(shown).toContain('Медиафайлы, которые добавил выпуск, останутся на сайте: 2')
     expect(shown).toContain('wp-content/themes/cafe/promo.css')
     expect(shown).toContain('Настройка сайта: не вернём — её изменили на сайте после выпуска')
-    expect(shown).toContain('Отмена бесплатна. Кредиты, списанные за этот диалог, не возвращаются.')
+    expect(shown).toContain('Отмена бесплатна. Кредиты, списанные за этот чат, не возвращаются.')
     expect(planOf).toHaveBeenCalledTimes(2)
     expect(prepareUndo).toHaveBeenCalledWith({ taskId: TASK_ID, releaseId: RELEASE_ID })
   })

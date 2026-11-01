@@ -7,7 +7,7 @@ import { CHATS_HREF } from './chat-address'
 import { dialogText } from './chat-texts'
 
 /**
- * «Такого диалога нет»: a dialog that was deleted, that is of another site or never was. The page
+ * «Такого чата нет»: a dialog that was deleted, that is of another site or never was. The page
  * of a dialog says it when the server finds none, its view when the feed comes back without it.
  */
 export function DialogNotFound() {

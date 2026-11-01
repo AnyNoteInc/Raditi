@@ -21,7 +21,8 @@ import { addSiteInWizard, type SiteFiles } from '../../fixtures/site-files.ts'
 // real browser: a new user reads the gift as promised, gets it with the first site and spends
 // it on tasks without a tariff; a gift that is used up leaves one way, a tariff; the credits of
 // a tariff run out — «Лимиты закончились» — and «Купить пакет» is the way out; a task takes the
-// gift before the pack, and a pack waits for a tariff that has ended. A tariff gives only so many
+// gift before the pack, and a pack waits for a tariff that has ended; a chat without a project is
+// charged like any task and «Использование» names it «Без проекта». A tariff gives only so many
 // of its credits a Moscow day — «Старт» 50 —, so the tasks that use up a tariff are queued on
 // earlier days of its period (`periodBegan`, `task({ at })` of fixtures/credits.ts); gift and
 // pack credits are outside the day.
@@ -295,6 +296,42 @@ test('a new user gets the gift with the first site and spends it on tasks withou
     await expect(limits).toContainText(/Сегодня\s*0\s+из\s50\sкредитов/)
     await expect(limits).toContainText(
       said(`Сегодня можно потратить ещё 50 кредитов. ${OUTSIDE_THE_DAY}`),
+    )
+  })
+})
+
+test('a chat without a project is charged, and «Использование» names it «Без проекта»', async ({
+  page,
+  credits: queue,
+}) => {
+  const titles = { gift: 'Идеи для названия пекарни', tariff: 'Письмо постоянным гостям' }
+
+  await test.step('no project, no tariff: the gift pays, and the history says whose work it was', async () => {
+    const chat = await queue.task({ title: titles.gift, withProject: false })
+    expect(chat.reserved).toEqual({ tariff: 0, gift: 35, pack: 0 })
+    const { credits: charged } = await chat.done('22.09')
+    expect(charged).toBe(5)
+
+    await page.goto('/settings/usage')
+    await expect(historyLines(page)).toHaveText(
+      [said(`${titles.gift}Без проекта${credits(charged)}`)],
+      SLOW,
+    )
+  })
+
+  await test.step('on a tariff: «По проектам» has a line for it and the history a row', async () => {
+    await payForStart(page, { autoRenew: false })
+    const chat = await queue.task({ title: titles.tariff, withProject: false })
+    const { credits: charged } = await chat.done('60.00')
+    expect(charged).toBe(10)
+
+    await page.goto('/settings/usage')
+    await expect(section(page, 'По проектам').getByRole('listitem')).toHaveText(
+      [said(`Без проекта${credits(charged)}`)],
+      SLOW,
+    )
+    await expect(historyLines(page).first()).toHaveText(
+      said(`${titles.tariff}Без проекта${credits(charged)}`),
     )
   })
 })

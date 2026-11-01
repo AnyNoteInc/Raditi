@@ -74,7 +74,7 @@ ${withBrowser ? '' : WHERE_CHANGES_GO}
   you did instead, if anything.
 - You cannot undo a release, and nothing you do counts as a client's decision. When the client asks
   to put back what an installed version changed, tell them in \`client_message\` about «Отменить
-  выпуск» on the card of that version in the dialog that installed it, for 7 days after its
+  выпуск» on the card of that version in the chat that installed it, for 7 days after its
   installation; past that, make the change they describe like any other.
 `
 

@@ -30,7 +30,7 @@ const TEXT = Object.freeze({
   menu: 'Инструменты',
   browserTile: /^Браузер/,
   /** The panel of the open tools, the tab of the browser on it, and «Скрыть панель» (И7, И20). */
-  panel: 'Инструменты диалога',
+  panel: 'Инструменты чата',
   browserTab: 'Браузер',
   hide: 'Скрыть панель',
   /** The field of «Новый чат» and its button. */
@@ -40,7 +40,7 @@ const TEXT = Object.freeze({
   project: /^Проект для этого чата: /,
   noProject: 'Без проекта',
   /** The rows of the dialog: the card of the browser's request is one of them. */
-  feed: 'Сообщения диалога',
+  feed: 'Сообщения чата',
 })
 
 /** The panel of the tools in the document: drawn only while a tool is open (И20). */
@@ -50,7 +50,7 @@ const PANEL_SELECTOR = `aside[aria-label="${TEXT.panel}"]`
  * The window of the cabinet: wider than `lg` (1200 px), where the tools stand beside the dialog —
  * the browser of a task that starts on the client's eyes opens beside it there, and the panel has
  * «Скрыть панель»; below `lg` the browser opens by itself too, in place of the dialog, and «К
- * диалогу» leads back (И3, И14, owner's answers of 30.10.2026).
+ * чату» leads back (И3, И14, owner's answers of 30.10.2026).
  */
 const VIEWPORT = Object.freeze({ width: 1440, height: 1000 })
 

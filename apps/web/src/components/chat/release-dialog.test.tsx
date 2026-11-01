@@ -224,7 +224,7 @@ describe('the release dialog', () => {
   it('keeps a refusal inside and asks anew what can be released', async () => {
     confirm.mockRejectedValueOnce(
       serverRefusal(
-        'Изменения диалога поменялись, пока вы смотрели на них. Посмотрите их ещё раз',
+        'Изменения чата поменялись, пока вы смотрели на них. Посмотрите их ещё раз',
         'RELEASE_CANDIDATE_CHANGED',
       ),
     )
@@ -232,7 +232,7 @@ describe('the release dialog', () => {
     fireEvent.click(await releaseButton('1.4.0'))
     expect(
       await within(dialog()).findByText(
-        'Изменения диалога поменялись, пока вы смотрели на них. Посмотрите их ещё раз.',
+        'Изменения чата поменялись, пока вы смотрели на них. Посмотрите их ещё раз.',
       ),
     ).toBeTruthy()
     await waitFor(() => expect(prepare).toHaveBeenCalledTimes(2))

@@ -15,7 +15,9 @@ describe('site settings', () => {
     )
     expect(screen.getByText('Копирование файлов по FTP с шифрованием (FTPS)')).toBeTruthy()
     rerender(<SiteSettings site={settingsSite} source={null} />)
-    expect(screen.getByText(/^Без доступа к файлам/)).toBeTruthy()
+    expect(
+      screen.getByText('Проект без доступа к файлам: файлы сайта агенту недоступны'),
+    ).toBeTruthy()
     rerender(<SiteSettings site={settingsSite} />)
     expect(screen.queryByText('Как Радити получает файлы сайта')).toBeNull()
   })

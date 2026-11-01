@@ -668,7 +668,7 @@ async function panelOpensOnLaunch(stand) {
         !opened.focusInPanel &&
         session?.status === 'ready' &&
         ticketsBefore === 0,
-      `the dialog watched from its start opened its panel «Инструменты диалога» by itself on «Браузер» once its browser was ready${way}: once, the focus never in the panel, nothing of the stream read before it (И2, И3, И11)`,
+      `the dialog watched from its start opened its panel «Инструменты чата» by itself on «Браузер» once its browser was ready${way}: once, the focus never in the panel, nothing of the stream read before it (И2, И3, И11)`,
       {
         panels: opened.panels,
         focusIn: opened.focusIn,
@@ -901,7 +901,7 @@ async function canvasInCabinet(stand, taskId) {
     const loaded = await tab.seen()
     rt.check(
       loaded.panels?.length === 0 && tab.sockets === 0 && tab.called('browser.streamTicket') === 0,
-      'the dialog page opens with the chat alone though the browser of the task is ready: no panel «Инструменты диалога», no ticket and no socket of the stream (И1, И11)',
+      'the dialog page opens with the chat alone though the browser of the task is ready: no panel «Инструменты чата», no ticket and no socket of the stream (И1, И11)',
       {
         panels: loaded.panels,
         sockets: tab.sockets,

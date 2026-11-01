@@ -1103,7 +1103,7 @@ export function FeedList({
   return (
     <Box
       component="ol"
-      aria-label="Сообщения диалога"
+      aria-label="Сообщения чата"
       sx={{
         m: 0,
         p: 0,

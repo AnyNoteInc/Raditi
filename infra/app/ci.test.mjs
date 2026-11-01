@@ -809,6 +809,16 @@ test('a cached test run sees a change of a file its tests read outside their pac
       'apps/web/src/lib/legal-content.test.ts',
     ],
     'apps/web/content/legal/public-offer.md': ['packages/db/prisma/seed/data.test.ts'],
+    // The catalogues of the chat keep their words in functions too; a domain test reads no file.
+    'packages/domain/src/tasks/client-feed-labels.ts': [
+      'apps/web/src/components/chat/chat-texts.test.ts',
+    ],
+    'packages/domain/src/tasks/client-feed-failures.ts': [
+      'apps/web/src/components/chat/chat-texts.test.ts',
+    ],
+    'packages/domain/src/release/chat-commands.ts': [
+      'apps/web/src/components/chat/chat-texts.test.ts',
+    ],
     // The LLM paths of sandbox-gw against the routes of the registry and the base URL of each.
     'infra/sandbox/gateway.mjs': [
       'apps/llm/src/gateway/sandbox-routes.contract.test.ts',

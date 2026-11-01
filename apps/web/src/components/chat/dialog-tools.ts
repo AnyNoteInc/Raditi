@@ -188,7 +188,7 @@ export interface ToolsState {
   /** The tab shown with the panel; null exactly when `open` is empty: no tool is open. */
   active: DialogTool | null
   /**
-   * Below `lg` the client went back to the dialog with «К диалогу» while other tabs stayed open
+   * Below `lg` the client went back to the dialog with «К чату» while other tabs stayed open
    * (И14, owner's answer of 30.10.2026): the area of the tools is put away, its tabs kept behind
    * the dialog until a tool is chosen again.
    */
@@ -226,7 +226,7 @@ export type ToolsAction =
   | { type: 'close'; tool: DialogTool }
   /** «Скрыть панель»: every tab at once. */
   | { type: 'closeAll' }
-  /** «К диалогу» below `lg`: the tab on the screen closes, the others stay behind the dialog. */
+  /** «К чату» below `lg`: the tab on the screen closes, the others stay behind the dialog. */
   | { type: 'back' }
   /**
    * The browser of the task has started while the client looks at the dialog (И2, И3): it opens by

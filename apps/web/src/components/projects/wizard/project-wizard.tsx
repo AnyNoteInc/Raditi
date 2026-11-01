@@ -75,12 +75,12 @@ const SOURCE_NOTE_WITH_BROWSER =
 
 /** What a site without access to its files can and cannot get, in the owner's words. */
 const BROWSER_ACCESS_POINTS = [
-  'Агент меняет записи, страницы и медиафайлы в админке сайта — через браузер, и вы видите каждый шаг.',
+  'Агент меняет записи, страницы и медиафайлы через браузер, и вы видите каждый шаг.',
   'В админку входите вы сами, прямо в окне задачи. Пароль от админки нам сообщать не нужно.',
   // The settings stay closed with access to the files too (docs/plan/57-browser-tasks.md, Б21):
   // only the code, the theme and the plugins need it.
   'Настройки сайта и пользователей агент менять не сможет. Код, тему и плагины — тоже: для них нужен доступ по SSH или FTP.',
-  'Изменения появляются на сайте сразу, без предпросмотра и выпуска версии. Первоначальную версию сайта мы не сохраним.',
+  'Предпросмотра и выпуска версий здесь нет, а сделанное агентом на сайте отменить нельзя. Первоначальную версию сайта мы не сохраним.',
 ] as const
 
 const NOTES_FIELD = 'wizard-agent-notes'
@@ -778,7 +778,7 @@ function BrowserAccessPanel({
   return (
     <>
       <Typography variant="body2" color="text.secondary" sx={{ textWrap: 'pretty' }}>
-        Агент работает только через браузер — в админке сайта.
+        Агент работает только в браузере.
       </Typography>
       <Box
         component="section"

@@ -398,15 +398,15 @@ describe('the empty tabs of the changes (И6)', () => {
   it('says a dialog that has ended has none, and where the released versions are', () => {
     const ended = { ended: true, candidate: null }
     expect(changesEmptyText('files', ended)).toEqual({
-      title: 'Диалог закрыт: изменений для показа здесь нет.',
+      title: 'Чат закрыт: изменений для показа здесь нет.',
       note: 'Выпущенные версии — в разделе «Изменения».',
     })
     expect(changesEmptyText('database', ended)).toEqual({
-      title: 'Диалог закрыт: изменений в базе данных нет.',
+      title: 'Чат закрыт: изменений в базе данных нет.',
       note: null,
     })
     expect(changesEmptyText('checks', ended)).toEqual({
-      title: 'Диалог закрыт: проверок нет.',
+      title: 'Чат закрыт: проверок нет.',
       note: null,
     })
   })
@@ -554,7 +554,7 @@ describe('the tabs of the open tools', () => {
   })
 })
 
-describe("«К диалогу» below `lg` (И14, owner's answer of 30.10.2026)", () => {
+describe("«К чату» below `lg` (И14, owner's answer of 30.10.2026)", () => {
   it('closes the tab on the screen and keeps the others behind the dialog', () => {
     const three = after(open('preview'), open('files'), open('checks'))
     expect(toolsShown(three)).toBe(true)
@@ -574,7 +574,7 @@ describe("«К диалогу» below `lg` (И14, owner's answer of 30.10.2026)"
     const preview = toolsReducer(behind, open('preview'))
     expect(preview).toMatchObject({ open: ['preview', 'files'], active: 'preview', away: false })
     expect(toolsShown(preview)).toBe(true)
-    // The tab that was on the screen before «К диалогу», chosen as it is.
+    // The tab that was on the screen before «К чату», chosen as it is.
     const files = toolsReducer(behind, open('files'))
     expect(files).toMatchObject({ open: ['preview', 'files'], active: 'files', away: false })
     // A tool not open: the last tab, beside the ones kept.

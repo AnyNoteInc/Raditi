@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ProjectsView } from './projects-view'
@@ -52,6 +52,7 @@ function showProjects() {
       <ProjectsView />
     </QueryClientProvider>,
   )
+  return queryClient
 }
 
 beforeEach(() => {
@@ -59,17 +60,63 @@ beforeEach(() => {
   listProjects.mockResolvedValue([])
 })
 
+/** More projects: each with a name of its own, none matching a search for the first project. */
+const others = (count: number): Project[] =>
+  Array.from({ length: count }, (_, index) =>
+    project({
+      id: `019f1a21-1800-7f00-8abc-${String(index + 1).padStart(12, '2')}`,
+      name: `Студия ${index + 1}`,
+      url: `https://studio-${index + 1}.example`,
+      host: `studio-${index + 1}.example`,
+    }),
+  )
+
+describe('the search of the list', () => {
+  const field = () => screen.queryByRole('textbox', { name: 'Поиск проектов' })
+  const shown = () => within(screen.getByRole('list', { name: 'Сайты' })).getAllByRole('listitem')
+
+  it('has no field for six projects', async () => {
+    listProjects.mockResolvedValue([project(), ...others(5)])
+    showProjects()
+    await screen.findByRole('list', { name: 'Сайты' })
+    expect(shown()).toHaveLength(6)
+    expect(field()).toBeNull()
+  })
+
+  it('has the field for seven projects, and it filters', async () => {
+    listProjects.mockResolvedValue([project(), ...others(6)])
+    showProjects()
+    await screen.findByRole('list', { name: 'Сайты' })
+    fireEvent.change(field()!, { target: { value: 'кофейня' } })
+    expect(shown()).toHaveLength(1)
+    expect(screen.getByText('1 из 7')).toBeTruthy()
+  })
+
+  it('stops filtering when the list falls to six: no field is left to clear it', async () => {
+    const seven = [project(), ...others(6)]
+    listProjects.mockResolvedValue(seven)
+    const queryClient = showProjects()
+    await screen.findByRole('list', { name: 'Сайты' })
+    fireEvent.change(field()!, { target: { value: 'кофейня' } })
+    expect(shown()).toHaveLength(1)
+
+    queryClient.setQueryData(['project', 'list'], seven.slice(0, 6))
+    await waitFor(() => expect(field()).toBeNull())
+    expect(shown()).toHaveLength(6)
+    expect(screen.queryByText(/ из /)).toBeNull()
+    expect(screen.queryByText('Проекты не найдены')).toBeNull()
+
+    // The seventh project is back: the field returns with its text, and the text filters again.
+    queryClient.setQueryData(['project', 'list'], seven)
+    await waitFor(() => expect(field()).toHaveValue('кофейня'))
+    expect(shown()).toHaveLength(1)
+    expect(screen.getByText('1 из 7')).toBeTruthy()
+  })
+})
+
 describe('project list', () => {
   it('shows a .рф site by the host the server returned and finds it by that host', async () => {
-    listProjects.mockResolvedValue([
-      project(),
-      project({
-        id: '019f1a21-1800-7f00-8abc-222222222222',
-        name: 'Студия',
-        url: 'https://studio.example',
-        host: 'studio.example',
-      }),
-    ])
+    listProjects.mockResolvedValue([project(), ...others(6)])
     showProjects()
 
     const link = await screen.findByRole('link', {
@@ -96,7 +143,7 @@ describe('project list', () => {
 
   it('does not decode an address by itself: the readable host is the one in the answer', async () => {
     // Deliberately not the host of `url`: only the field of the answer can produce this text.
-    listProjects.mockResolvedValue([project({ host: 'магазин.рф:8443' })])
+    listProjects.mockResolvedValue([project({ host: 'магазин.рф:8443' }), ...others(6)])
     showProjects()
 
     const link = await screen.findByRole('link', {

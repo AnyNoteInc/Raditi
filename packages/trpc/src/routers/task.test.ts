@@ -190,7 +190,7 @@ describe('dialogs that are not set up', () => {
       callerOf(prisma, null).task.create({ ...ids, text: 'Поменяйте телефон' }),
     ).rejects.toMatchObject({
       code: 'SERVICE_UNAVAILABLE',
-      message: 'Диалоги сейчас недоступны. Попробуйте ещё раз немного позже',
+      message: 'Чаты сейчас недоступны. Попробуйте ещё раз немного позже',
       cause: { code: 'CHAT_NOT_CONFIGURED' },
     })
   })

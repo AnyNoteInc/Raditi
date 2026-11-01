@@ -86,7 +86,7 @@ export function RunDetail({
         </Typography>
         {run.taskId ? (
           <Box sx={{ pt: 0.5 }}>
-            <SiteLink href={chatHref(run.taskId)}>Открыть диалог</SiteLink>
+            <SiteLink href={chatHref(run.taskId)}>Открыть чат</SiteLink>
           </Box>
         ) : null}
       </Box>

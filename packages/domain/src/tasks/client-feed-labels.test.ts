@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import * as commands from '../release/chat-commands.ts'
 import { previewUnavailableReasons } from '../preview/preview-state.ts'
 import { versionBumps } from '../release/semver.ts'
 import {
@@ -13,8 +14,11 @@ import {
   feedReleaseOutcomes,
   feedReleaseReasons,
   feedSteps,
+  feedUndoReasons,
+  feedUpdateOutcomes,
   taskWaitingReasons,
 } from './client-feed.ts'
+import * as failures from './client-feed-failures.ts'
 import * as labels from './client-feed-labels.ts'
 import {
   creditsCountText,
@@ -37,7 +41,11 @@ import {
   feedReleaseKeptText,
   feedReleaseReasonText,
   feedReleaseText,
+  feedUndoConfirmedText,
+  feedUndoKeptText,
+  feedUndoReasonText,
   feedUndoText,
+  feedUpdateText,
   feedReleaseTitle,
   feedVersionBumpLabel,
   feedVersionText,
@@ -119,6 +127,22 @@ const composed: string[] = [
   ]),
   feedRecordsChangedText(3),
   feedMediaAddedText(2500),
+  ...feedUpdateOutcomes.flatMap((outcome) => [
+    feedUpdateText(outcome, 0),
+    feedUpdateText(outcome, 3),
+  ]),
+  ...feedReleaseKeptText({ records: 1, tables: 1 }),
+  ...feedReleaseKeptText({ records: 4, tables: 0 }),
+  feedUndoConfirmedText('v1.4.0'),
+  ...feedReleaseOutcomes.map((outcome) =>
+    feedUndoText(outcome, { undone: 'v1.4.0', version: 'v1.4.1', returnsTo: 'v1.3.0' }),
+  ),
+  ...feedUndoReasons.map(feedUndoReasonText),
+  feedUndoKeptText(3) ?? '',
+  ...feedBrowserReasons.flatMap((reason) => [
+    feedBrowserQuestionTextOf(reason, true),
+    feedBrowserQuestionTextOf(reason, false),
+  ]),
 ]
 
 const tables = Object.values(labels).filter((value) => typeof value !== 'function')
@@ -194,10 +218,10 @@ describe('totality of the catalogue', () => {
     expect(tables).toMatch(/^Новые таблицы и поля базы данных остались на сайте/)
     // The row keeps a count alone: the words name a page and a post, and both reasons.
     expect(records).toBe(
-      'Страница или запись, которую добавил выпуск, осталась на сайте: после выпуска её изменили или к ней уже что-то добавили, поэтому мы её не убрали. Если она не нужна, удалите её в админке сайта.',
+      'Страница или запись, которую добавил выпуск, осталась на сайте: после выпуска её изменили или к ней уже что-то добавили, поэтому мы её не убрали. Если она не нужна, удалите её в админке.',
     )
     expect(feedReleaseKeptText({ records: 3, tables: 0 })).toEqual([
-      'Страницы и записи, которые добавил выпуск, остались на сайте (3): после выпуска их изменили или к ним уже что-то добавили, поэтому мы их не убрали. Если они не нужны, удалите их в админке сайта.',
+      'Страницы и записи, которые добавил выпуск, остались на сайте (3): после выпуска их изменили или к ним уже что-то добавили, поэтому мы их не убрали. Если они не нужны, удалите их в админке.',
     ])
   })
 
@@ -287,7 +311,7 @@ describe('status labels', () => {
     expect(feedCardTitle.question).toBe('Вопрос агента')
     expect(feedCardTitle.answer).toBe('Ответ агента')
     expect(feedResultOpenText).toBe(
-      'Если нужно что-то ещё, напишите — агент продолжит в этом диалоге.',
+      'Если нужно что-то ещё, напишите — агент продолжит в этом чате.',
     )
   })
 
@@ -305,10 +329,10 @@ describe('status labels', () => {
 describe('the live block', () => {
   it('chooses the queue text by the waiting reason, not by time', () => {
     expect(feedQueuedText(null)).toBe(
-      'Агент скоро возьмётся за работу. Страницу можно закрыть — результат появится в этом диалоге.',
+      'Агент скоро возьмётся за работу. Страницу можно закрыть — результат появится в этом чате.',
     )
     expect(feedQueuedText('agents')).toBe(
-      'Ваша задача в очереди: сейчас все мощности ИИ-агента заняты. Начнём, как только возьмёмся, — результат появится в этом диалоге.',
+      'Ваша задача в очереди: сейчас все мощности ИИ-агента заняты. Начнём, как только возьмёмся, — результат появится в этом чате.',
     )
     expect(feedQueuedText('site')).toBe(
       'На сайте сейчас идёт другая работа. Начнём, когда она закончится.',
@@ -329,13 +353,13 @@ describe('the live block', () => {
 
   it('says «обычно», not «не больше», about the twenty minutes', () => {
     expect(feedLiveText.running).toBe(
-      'Агент работает в своём изолированном облаке. Обычно это занимает до 20 минут. Страницу можно закрыть — результат появится в этом диалоге.',
+      'Агент работает в своём изолированном облаке. Обычно это занимает до 20 минут. Страницу можно закрыть — результат появится в этом чате.',
     )
     expect(feedLiveText.preparing).toBe(
       'Готовим рабочее место для агента. На сайте пока ничего не меняется.',
     )
     expect(feedLiveText.held).toBe(
-      'При работе с сайтом произошёл сбой, мы его разбираем. Страницу можно закрыть — результат появится в этом диалоге.',
+      'При работе с сайтом произошёл сбой, мы его разбираем. Страницу можно закрыть — результат появится в этом чате.',
     )
   })
 
@@ -614,16 +638,15 @@ describe('the neutral lines of the reader and of the input area', () => {
     expect(feedRetryText).toEqual({
       button: 'Попробовать ещё',
       hint: 'Повторная попытка может стоить больше кредитов.',
-      noAttempts: 'Больше попыток для этой задачи нет. Начните новый диалог или напишите нам.',
-      siteNotConnected: 'Сайт ещё не подключён. Задачи можно будет ставить после подключения',
+      noAttempts: 'Больше попыток для этой задачи нет. Начните новый чат или напишите нам.',
     })
   })
 
   it('quotes the input area', () => {
     expect(feedInputText).toEqual({
       disabled: 'Написать можно будет, когда агент закончит или задаст вопрос.',
-      finished: 'Диалог завершён. Чтобы попросить что-то ещё, начните новый.',
-      newDialog: 'Новый диалог',
+      finished: 'Чат завершён. Чтобы попросить что-то ещё, начните новый.',
+      newDialog: 'Новый чат',
       mistakes: 'ИИ может допускать ошибки. Проверяйте важное.',
       noSecrets: 'Не отправляйте в чат пароли и ключи: доступы задаются в разделе «Переменные»',
       secret:
@@ -639,9 +662,9 @@ describe('the neutral lines of the reader and of the input area', () => {
 
   it('quotes the states of the feed and of the list', () => {
     expect(feedStateText).toEqual({
-      pollFailed: 'Не удалось обновить диалог. Пробуем ещё раз…',
+      pollFailed: 'Не удалось обновить чат. Пробуем ещё раз…',
       refresh: 'Обновить',
-      listFailed: 'Не удалось загрузить диалоги.',
+      listFailed: 'Не удалось загрузить чаты.',
       listRetry: 'Повторить',
       toProjects: 'К проектам',
       openSite: 'Открыть сайт',
@@ -684,5 +707,17 @@ describe('a task in the browser', () => {
     expect(sorted(Object.keys(feedObjectKindLabel))).toEqual(sorted(feedObjectKinds))
     expect(sorted(Object.keys(feedObjectStatusLabel))).toEqual(sorted(feedObjectStatuses))
     expect(feedObjectText.untitled).toBe('Без названия')
+  })
+})
+
+// The sources of these catalogues, the bodies of their functions too: chat-texts.test.ts of web.
+describe('the word of a chat (docs/plan/61-chats-first.md, К26)', () => {
+  it('composes «чат» into the texts a client reads', () => {
+    const texts = [...allTexts, ...stringsOf(failures), ...stringsOf(commands)]
+    expect(texts).toContain('Новый чат')
+    expect(feedUpdateText('current', 0)).toBe(
+      'Изменения этого чата уже собраны на последней версии сайта.',
+    )
+    expect(texts.filter((text) => /диалог/i.test(text))).toEqual([])
   })
 })

@@ -223,7 +223,7 @@ describe('the place of the reader while the tools open and close (docs/plan/59, 
     scrollTo(page, 100, window)
     grow()
     expect(page.scrollTop).toBe(100)
-    // «К диалогу»: the feed is drawn again, and the page with it where the client left it.
+    // «К чату»: the feed is drawn again, and the page with it where the client left it.
     view.rerender(<Feed scrolls={false} />)
     sizes.scrollHeight = 3000
     grow()

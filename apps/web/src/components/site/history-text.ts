@@ -59,9 +59,9 @@ export function runOutcomeText(run: Pick<RunView, 'kind' | 'state' | 'version'>)
     case 'refused':
       return 'Обновление остановилось до того, как изменило сайт.'
     case 'failed':
-      return 'Обновление не удалось. Подробности — в диалоге, из которого его запустили.'
+      return 'Обновление не удалось. Подробности — в чате, из которого его запустили.'
     case 'unknown':
-      return 'Мы ещё выясняем, чем закончилось обновление, и напишем в диалоге, как только узнаем.'
+      return 'Мы ещё выясняем, чем закончилось обновление, и напишем в чате, как только узнаем.'
     case 'running':
       return 'Обновление идёт. Страницу можно закрыть — оно продолжится без вас.'
     case 'installed':
@@ -150,7 +150,7 @@ export function runMatches(run: Pick<RunView, 'state'>, filter: RunFilter): bool
 export function sourceText(
   source: { kind: 'sftp' | 'ftp' | 'git'; tls: 'verified' | 'unverified' | 'plain' | null } | null,
 ): string {
-  if (source === null) return 'Без доступа к файлам: агент работает в админке сайта через браузер'
+  if (source === null) return 'Проект без доступа к файлам: файлы сайта агенту недоступны'
   if (source.kind === 'sftp') return 'Копирование файлов по SFTP (SSH)'
   if (source.kind === 'git') return 'Из репозитория Git'
   if (source.tls === 'plain') return 'Копирование файлов по FTP без шифрования'

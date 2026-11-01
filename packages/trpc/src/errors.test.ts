@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+
 import {
   attachmentRefusals,
   attachmentRefusalText,
@@ -45,6 +47,13 @@ import {
   trpcCodeForStatus,
 } from './errors.ts'
 import { createCallerFactory, publicProcedure, router, type Context } from './trpc.ts'
+
+describe('the words of refusals', () => {
+  // docs/plan/61-chats-first.md, К26: the source, for a text is often composed in a function.
+  it('says «чат», never «диалог»', () => {
+    expect(readFileSync(new URL('./errors.ts', import.meta.url), 'utf8')).not.toMatch(/диалог/i)
+  })
+})
 
 describe('toTRPCError', () => {
   it.each([

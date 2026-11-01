@@ -8,6 +8,7 @@ import {
   addConnectedSite,
   addLongDialog,
   addSite,
+  addSites,
   hideDevIndicator,
   priceDialogClass,
 } from './site.ts'
@@ -94,7 +95,7 @@ test('the first run: a chat without a project, a file before the first words', a
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Перескажите файл')
     await expect(page.getByRole('link', { name: /^Открыть проект/ })).toHaveCount(0)
     // The server bound the file to the chat: the first words show it.
-    await expect(page.getByRole('list', { name: 'Сообщения диалога' })).toContainText('Меню.pdf')
+    await expect(page.getByRole('list', { name: 'Сообщения чата' })).toContainText('Меню.pdf')
     const link = chats(page).getByRole('link', { name: /Перескажите файл/ })
     await expect(link).toHaveAttribute('href', `/chats/${taskId}`)
     await expect(link).not.toContainText('·')
@@ -297,8 +298,26 @@ test('an address of no chat of the user is «not found»', async ({ page, signed
   ]) {
     const response = await page.goto(path)
     expect(response?.status()).toBe(404)
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Такого диалога нет')
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Такого чата нет')
   }
+})
+
+test('the list of projects is searched only above six', async ({ page, signedInUser }) => {
+  const search = page.getByRole('textbox', { name: 'Поиск проектов' })
+  const projects = page.getByRole('list', { name: 'Сайты' }).getByRole('listitem')
+
+  await addSites(signedInUser.id, 6)
+  await page.goto('/projects')
+  await expect(projects).toHaveCount(6)
+  await expect(search).toHaveCount(0)
+
+  await addSites(signedInUser.id, 1)
+  await page.reload()
+  await expect(projects).toHaveCount(7)
+  await search.fill('нет такого проекта')
+  await expect(page.getByRole('heading', { name: 'Проекты не найдены' })).toBeVisible()
+  await page.getByRole('button', { name: 'Сбросить поиск' }).click()
+  await expect(projects).toHaveCount(7)
 })
 
 test('a project of the wizard: «Добавить проект» keeps the words of the chat', async ({

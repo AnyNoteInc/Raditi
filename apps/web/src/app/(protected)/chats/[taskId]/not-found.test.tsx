@@ -7,7 +7,7 @@ import NotFound from './not-found'
 describe('the page of a chat the server does not find', () => {
   it('says the chat is gone and leads to the list of chats', () => {
     render(<NotFound />)
-    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Такого диалога нет')
-    expect(screen.getByRole('link', { name: 'К диалогам' }).getAttribute('href')).toBe('/chats')
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Такого чата нет')
+    expect(screen.getByRole('link', { name: 'К чатам' }).getAttribute('href')).toBe('/chats')
   })
 })

@@ -272,7 +272,10 @@ describe('browserTaskInstructions (docs/plan/57-browser-tasks.md, Б20–Б24)',
   })
 
   // The texts of `c811abf1`, byte for byte: a task on a site without a repository goes on as it
-  // did when the rules of the browser were split for the chats (docs/plan/61, §3.11, §5.7).
+  // did when the rules of the browser were split for the chats (docs/plan/61, §3.11, §5.7). The
+  // text of a task with a repository differs by one word, which it dictates to the client (К26).
+  const beforeTheWord = (text: string) =>
+    text.replace('in the chat that installed it', 'in the dialog that installed it')
   it('keeps the words of a task in the browser and of a task with a repository byte for byte', () => {
     const skills = { skills: ['context7', 'playwright', 'other'] }
     expect(digest(browserTaskInstructions('GUIDE\n', skills))).toBe(
@@ -283,37 +286,41 @@ describe('browserTaskInstructions (docs/plan/57-browser-tasks.md, Б20–Б24)',
     )
     expect(
       digest(
-        turnInstructions(
-          { state: 'absent' },
-          { names: ['A'], hosts: ['h:443'] },
-          'DB',
-          {},
-          { skills: ['context7'] },
+        beforeTheWord(
+          turnInstructions(
+            { state: 'absent' },
+            { names: ['A'], hosts: ['h:443'] },
+            'DB',
+            {},
+            { skills: ['context7'] },
+          ),
         ),
       ),
     ).toBe('11bc75532f005d2f9e36e387af9bbd5c7132dbe203132593613eabd2f5e4629e')
     const origin = 'http://site-a-chat-b.localhost:8090'
-    expect(digest(turnInstructions({ state: 'serving', origin }))).toBe(
+    expect(digest(beforeTheWord(turnInstructions({ state: 'serving', origin })))).toBe(
       'dd6c36712f399ea1b079830c8665673e93bbc4d777f67e12a583bcb0e0971dbf',
     )
-    expect(digest(turnInstructions({ state: 'starting', origin }))).toBe(
+    expect(digest(beforeTheWord(turnInstructions({ state: 'starting', origin })))).toBe(
       'fc00fd375f5c9ec7857511e461dd8177ec340e296820f9a816e9ed81f3f2ef39',
     )
     expect(
       digest(
-        turnInstructions(
-          { state: 'absent' },
-          undefined,
-          '',
-          { addOnlyPaths: ['wp-content/uploads/'] },
-          undefined,
-          { files: 1, omitted: 1 },
+        beforeTheWord(
+          turnInstructions(
+            { state: 'absent' },
+            undefined,
+            '',
+            { addOnlyPaths: ['wp-content/uploads/'] },
+            undefined,
+            { files: 1, omitted: 1 },
+          ),
         ),
       ),
     ).toBe('3f786b8be233e3e144ba2976fa5a45c6fd2b44326c91f2b0e59717eb138cc883')
-    expect(digest(turnInstructions({ state: 'unavailable', reason: 'not_supported' }))).toBe(
-      'e278ac3663f329425c90189f63abe4544bb98b9c286e32f2ce63a6ccdbf52a86',
-    )
+    expect(
+      digest(beforeTheWord(turnInstructions({ state: 'unavailable', reason: 'not_supported' }))),
+    ).toBe('e278ac3663f329425c90189f63abe4544bb98b9c286e32f2ce63a6ccdbf52a86')
   })
 })
 

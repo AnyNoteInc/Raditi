@@ -2268,7 +2268,7 @@ const TOOLS = Object.freeze({
   plus: /^Инструменты/,
   menu: 'Инструменты',
   /** The panel of the open tools, drawn only while one is open. */
-  panel: 'Инструменты диалога',
+  panel: 'Инструменты чата',
 })
 
 /**
@@ -2347,7 +2347,7 @@ async function browserOfCabinet(stand, dialog, visit) {
         calledIn(calls, 'preview.ticket') === 0 &&
         calledIn(calls, 'candidate.get') === 0 &&
         calledIn(calls, 'candidate.fileDiff') === 0,
-      'the dialog page opens with the chat alone, though its candidate and preview are ready: no panel «Инструменты диалога», no iframe, no preview.ticket, no candidate.get or candidate.fileDiff (И1, И11)',
+      'the dialog page opens with the chat alone, though its candidate and preview are ready: no panel «Инструменты чата», no iframe, no preview.ticket, no candidate.get or candidate.fileDiff (И1, И11)',
       { ...loaded, calls: calls.filter((call) => call !== 'task.feed') },
     )
     const field = page.getByRole('textbox').first()

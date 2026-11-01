@@ -108,7 +108,7 @@ import { uuidv7 } from './uuid'
 // tools open beside it only when the client asks for one (docs/plan/59-dialog-tools-panel.md): by
 // «+» in the corner, «Посмотреть изменения», `/preview` and «Взять управление»; by themselves only
 // once, when the browser of the chat starts while the client looks at it. From `lg` they stand at
-// the right edge; below, in place of the dialog, «К диалогу» leading back to it.
+// the right edge; below, in place of the dialog, «К чату» leading back to it.
 
 /**
  * What a focused element of the feed keeps clear above it (WCAG 2.4.11): below `lg` the head of
@@ -670,7 +670,7 @@ export function DialogView({
   }
 
   /**
-   * «К диалогу» below `lg` (И14, owner's answer of 30.10.2026): the tab on the screen closes, the
+   * «К чату» below `lg` (И14, owner's answer of 30.10.2026): the tab on the screen closes, the
    * other open ones stay behind the dialog for «+»; the dialog comes back where the client read it,
    * the focus on «+» in its head (И19).
    */

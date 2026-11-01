@@ -85,7 +85,7 @@ function showFeed(
       actions={handlers}
     />,
   )
-  return { handlers, feed: screen.getByRole('list', { name: 'Сообщения диалога' }) }
+  return { handlers, feed: screen.getByRole('list', { name: 'Сообщения чата' }) }
 }
 
 describe('the rows of a dialog', () => {
@@ -422,7 +422,7 @@ describe('the rows of a dialog', () => {
     ]
     const { feed } = showFeed(rows, headOf({ status: 'awaiting_user' }))
     expect(text(feed)).toContain(
-      'Диалог не закрыт: напишите «продолжи», и агент продолжит с того места, где остановился.',
+      'Чат не закрыт: напишите «продолжи», и агент продолжит с того места, где остановился.',
     )
     expect(text(feed)).not.toContain('мы сохранили')
   })
@@ -452,7 +452,7 @@ describe('the rows of a dialog', () => {
     const { feed, handlers } = showFeed([row], head, { candidate: row.id })
     expect(within(feed).queryByRole('button', { name: 'Выпустить новую версию' })).toBeNull()
     expect(text(feed)).toContain(
-      'Сайт изменился после начала диалога. Сначала обновите рабочую копию.',
+      'Сайт изменился после начала чата. Сначала обновите рабочую копию.',
     )
     fireEvent.click(within(feed).getByRole('button', { name: 'Обновить рабочую копию' }))
     expect(handlers.onUpdate).toHaveBeenCalledTimes(1)
@@ -532,9 +532,9 @@ describe('the rows of a dialog', () => {
       within(feed).getAllByRole('heading', { name: 'Рабочую копию не обновили' }),
     ).toHaveLength(2)
     expect(text(feed)).toContain(
-      'На сайте за это время изменились те же места, что и в этом диалоге (файлов: 2), поэтому изменения не переносятся на новую версию сайта сами. Отмените этот диалог и опишите задачу в новом — агент сделает её на новой версии сайта.',
+      'На сайте за это время изменились те же места, что и в этом чате (файлов: 2), поэтому изменения не переносятся на новую версию сайта сами. Отмените этот чат и опишите задачу в новом — агент сделает её на новой версии сайта.',
     )
-    expect(text(feed)).toContain('Вы написали в диалог, пока мы обновляли рабочую копию')
+    expect(text(feed)).toContain('Вы написали в чат, пока мы обновляли рабочую копию')
   })
 
   it('tells a row newer than the page and a row that cannot be shown', () => {

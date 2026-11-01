@@ -123,17 +123,17 @@ describe('the list of dialogs', () => {
     remove.mockResolvedValueOnce({ removed: true })
     showList()
     fireEvent.click(
-      await screen.findByRole('button', { name: 'Действия с диалогом: Поменять цену капучино' }),
+      await screen.findByRole('button', { name: 'Действия с чатом: Поменять цену капучино' }),
     )
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Переименовать' }))
-    const name = screen.getByRole('textbox', { name: 'Название диалога' })
+    const name = screen.getByRole('textbox', { name: 'Название чата' })
     expect((name as HTMLInputElement).value).toBe('Поменять цену капучино')
     fireEvent.change(name, { target: { value: 'Цена капучино' } })
     fireEvent.keyDown(name, { key: 'Enter' })
     await waitFor(() => expect(rename).toHaveBeenCalledTimes(1))
     expect(rename.mock.calls[0]![0]).toEqual({ taskId: dialog('1').id, title: 'Цена капучино' })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Действия с диалогом: Цена латте' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Действия с чатом: Цена латте' }))
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Удалить' }))
     const ask = await screen.findByRole('dialog', { name: 'Удалить чат?' })
     fireEvent.click(within(ask).getByRole('button', { name: 'Удалить' }))
@@ -154,7 +154,7 @@ describe('the list of dialogs', () => {
     })
     showList()
     const asked = async (title: string) => {
-      fireEvent.click(await screen.findByRole('button', { name: `Действия с диалогом: ${title}` }))
+      fireEvent.click(await screen.findByRole('button', { name: `Действия с чатом: ${title}` }))
       fireEvent.click(await screen.findByRole('menuitem', { name: 'Удалить' }))
       return plain((await screen.findByRole('dialog', { name: 'Удалить чат?' })).textContent)
     }
@@ -172,7 +172,7 @@ describe('the list of dialogs', () => {
     listPage.mockResolvedValue({ items: [dialog('1')], nextCursor: null })
     showList()
     fireEvent.click(
-      await screen.findByRole('button', { name: 'Действия с диалогом: Поменять цену капучино' }),
+      await screen.findByRole('button', { name: 'Действия с чатом: Поменять цену капучино' }),
     )
     const items = [
       await screen.findByRole('menuitem', { name: 'Переименовать' }),
@@ -187,13 +187,13 @@ describe('the list of dialogs', () => {
     listPage.mockResolvedValue({ items: [dialog('1')], nextCursor: null })
     showList()
     fireEvent.click(
-      await screen.findByRole('button', { name: 'Действия с диалогом: Поменять цену капучино' }),
+      await screen.findByRole('button', { name: 'Действия с чатом: Поменять цену капучино' }),
     )
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Переименовать' }))
-    const name = screen.getByRole('textbox', { name: 'Название диалога' })
+    const name = screen.getByRole('textbox', { name: 'Название чата' })
     fireEvent.change(name, { target: { value: 'Другое' } })
     fireEvent.keyDown(name, { key: 'Escape' })
-    expect(screen.queryByRole('textbox', { name: 'Название диалога' })).toBeNull()
+    expect(screen.queryByRole('textbox', { name: 'Название чата' })).toBeNull()
     expect(rename).not.toHaveBeenCalled()
   })
 
@@ -219,7 +219,7 @@ describe('the list of dialogs', () => {
   it('names a dialog without a title and says when there are none', async () => {
     listPage.mockResolvedValueOnce({ items: [dialog('1', { title: null })], nextCursor: null })
     showList()
-    expect(await screen.findByText('Диалог без названия')).toBeTruthy()
+    expect(await screen.findByText('Чат без названия')).toBeTruthy()
   })
 
   it('says there are no dialogs yet', async () => {
@@ -234,7 +234,7 @@ describe('the list of dialogs', () => {
     listPage.mockRejectedValueOnce(new Error('offline'))
     listPage.mockResolvedValue({ items: [dialog('1')], nextCursor: null })
     showList()
-    expect(await screen.findByText('Не удалось загрузить диалоги.')).toBeTruthy()
+    expect(await screen.findByText('Не удалось загрузить чаты.')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Повторить' }))
     expect(await screen.findByText('Поменять цену капучино')).toBeTruthy()
   })

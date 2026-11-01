@@ -226,8 +226,8 @@ const readyPreview = {
   revision: 1,
   dirty: false,
 }
-const FRAME = 'Предпросмотр сайта с изменениями диалога'
-const TOOLS = 'Инструменты диалога'
+const FRAME = 'Предпросмотр сайта с изменениями чата'
+const TOOLS = 'Инструменты чата'
 
 /** The panel of the tools beside the dialog, when it is drawn. */
 const toolsPanel = () => screen.queryByRole('complementary', { name: TOOLS })
@@ -472,11 +472,11 @@ describe('a dialog', () => {
     expect(screen.getByRole('heading', { level: 1, name: 'Поменять цену капучино' })).toBeTruthy()
     expect(calls.feed).toHaveBeenCalledWith({ taskId: TASK_ID, after: '0' })
     expect(
-      screen.getByRole('button', { name: 'Действия с диалогом: Поменять цену капучино' }),
+      screen.getByRole('button', { name: 'Действия с чатом: Поменять цену капучино' }),
     ).toBeTruthy()
     const link = screen.getByRole('link', { name: `Открыть проект «${PROJECT.name}»` })
     expect(link.getAttribute('href')).toBe(`/projects/${SITE_ID}`)
-    expect(screen.queryByRole('navigation', { name: 'Режим диалога' })).toBeNull()
+    expect(screen.queryByRole('navigation', { name: /Режим/ })).toBeNull()
     expect(field().getAttribute('placeholder')).toBe('Что поправить?')
     // No standing words under the field (owner, 26.10.2026): the reminder is read aloud only.
     expect(screen.queryByText('ИИ может допускать ошибки. Проверяйте важное.')).toBeNull()
@@ -510,7 +510,7 @@ describe('a dialog', () => {
       </QueryClientProvider>,
     )
     await screen.findByText('Изменения готовы')
-    const feed = screen.getByRole('list', { name: 'Сообщения диалога' })
+    const feed = screen.getByRole('list', { name: 'Сообщения чата' })
     expect(within(feed).getByText('Сайт на паузе или отключён.')).toBeTruthy()
     expect(within(feed).queryByRole('button', { name: 'Выпустить новую версию' })).toBeNull()
     expect(within(feed).queryByRole('button', { name: 'Обновить рабочую копию' })).toBeNull()
@@ -605,19 +605,17 @@ describe('a dialog', () => {
     showDialog()
     await screen.findByText('Изменения готовы')
     const menu = () =>
-      screen.getByRole('button', { name: 'Действия с диалогом: Поменять цену капучино' })
+      screen.getByRole('button', { name: 'Действия с чатом: Поменять цену капучино' })
 
     fireEvent.click(menu())
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Переименовать' }))
-    const name = screen.getByRole('textbox', { name: 'Название диалога' })
+    const name = screen.getByRole('textbox', { name: 'Название чата' })
     fireEvent.change(name, { target: { value: '  Цена   латте ' } })
     fireEvent.keyDown(name, { key: 'Enter' })
     await waitFor(() => expect(calls.rename).toHaveBeenCalledTimes(1))
     expect(calls.rename.mock.calls[0]![0]).toEqual({ taskId: TASK_ID, title: 'Цена латте' })
 
-    await waitFor(() =>
-      expect(screen.queryByRole('textbox', { name: 'Название диалога' })).toBeNull(),
-    )
+    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Название чата' })).toBeNull())
     fireEvent.click(menu())
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Удалить' }))
     const ask = await screen.findByRole('dialog', { name: 'Удалить чат?' })
@@ -677,14 +675,14 @@ describe('a dialog', () => {
 
   it('runs `/update`, and says a refusal of the server in its words', async () => {
     calls.update.mockRejectedValueOnce(
-      serverRefusal('Сначала ответьте на вопрос в диалоге', 'CHAT_COMMAND_UNAVAILABLE'),
+      serverRefusal('Сначала ответьте на вопрос в чате', 'CHAT_COMMAND_UNAVAILABLE'),
     )
     showDialog()
     await run(/Обновить рабочую копию/)
     // Opening the window reads the verdicts again.
     await waitFor(() => expect(calls.feed).toHaveBeenCalledTimes(2))
     expect((await screen.findByRole('alert')).textContent).toBe(
-      'Сначала ответьте на вопрос в диалоге.',
+      'Сначала ответьте на вопрос в чате.',
     )
     expect(calls.update).toHaveBeenCalledTimes(1)
     // The verdicts may have changed with the refusal: the dialog is read once more.
@@ -757,10 +755,10 @@ describe('a dialog', () => {
 
     it('`/export` that fails says so under the field and saves nothing', async () => {
       Object.assign(URL, { createObjectURL: vi.fn(), revokeObjectURL: vi.fn() })
-      calls.exported.mockRejectedValue(serverRefusal('Диалог не найден', 'NOT_FOUND'))
+      calls.exported.mockRejectedValue(serverRefusal('Чат не найден', 'NOT_FOUND'))
       showDialog()
       await run(/Скачать переписку/)
-      expect((await screen.findByRole('alert')).textContent).toBe('Диалог не найден.')
+      expect((await screen.findByRole('alert')).textContent).toBe('Чат не найден.')
       expect(URL.createObjectURL).not.toHaveBeenCalled()
     })
 
@@ -957,7 +955,7 @@ describe('a dialog', () => {
         cursor: '3',
       }),
     )
-    await screen.findByText(/Диалог не закрыт: напишите «продолжи»/)
+    await screen.findByText(/Чат не закрыт: напишите «продолжи»/)
     // The owner: «пользователь всегда должен иметь возможность ввести промпт».
     expect(field().disabled).toBe(false)
     // The dialog asks: the field is that of an answer to the failure.
@@ -1108,7 +1106,7 @@ describe('a dialog', () => {
     )
     const button = await screen.findByRole('button', { name: 'Команды' })
     expect(field().disabled).toBe(true)
-    expect(screen.getByRole('link', { name: 'Новый диалог' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Новый чат' })).toBeTruthy()
     fireEvent.click(button)
     fireEvent.click(option(/Отменить выпуск/))
     expect(
@@ -1140,11 +1138,11 @@ describe('a dialog', () => {
     // The field stays, closed: it says the dialog has ended, read aloud with the reason.
     const closed = await screen.findByRole('textbox', { name: 'Сообщение' })
     expect((closed as HTMLTextAreaElement).disabled).toBe(true)
-    expect(closed.getAttribute('placeholder')).toBe('Диалог завершён')
+    expect(closed.getAttribute('placeholder')).toBe('Чат завершён')
     expect(
-      screen.getByText('Диалог завершён. Чтобы попросить что-то ещё, начните новый.'),
+      screen.getByText('Чат завершён. Чтобы попросить что-то ещё, начните новый.'),
     ).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'Новый диалог' }).getAttribute('href')).toBe(
+    expect(screen.getByRole('link', { name: 'Новый чат' }).getAttribute('href')).toBe(
       `/chats/new?project=${SITE_ID}`,
     )
     // The level of a dialog that has ended is no longer changed.
@@ -1163,8 +1161,8 @@ describe('a dialog', () => {
         <DialogView project={PROJECT} taskId={TASK_ID} title={null} />
       </QueryClientProvider>,
     )
-    expect(await screen.findByRole('heading', { name: 'Такого диалога нет' })).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'К диалогам' }).getAttribute('href')).toBe('/chats')
+    expect(await screen.findByRole('heading', { name: 'Такого чата нет' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'К чатам' }).getAttribute('href')).toBe('/chats')
   })
 
   it('repeats the same words after a lost answer under the same id, and other words under a new one', async () => {
@@ -1340,7 +1338,7 @@ describe('a dialog', () => {
     )
   })
 
-  it('shows the changes in place of the dialog below `lg`, «К диалогу» leading back (И14)', async () => {
+  it('shows the changes in place of the dialog below `lg`, «К чату» leading back (И14)', async () => {
     showDialog()
     await screen.findByText('Изменения готовы')
     const heading = screen.getByRole('heading', { level: 1, name: 'Поменять цену капучино' })
@@ -1351,16 +1349,16 @@ describe('a dialog', () => {
     await waitFor(() => expect(document.activeElement).toBe(tab))
     // The tool takes the place of the dialog: its head, rows and field are hidden, never gone.
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull()
-    expect(screen.queryByRole('list', { name: 'Сообщения диалога' })).toBeNull()
+    expect(screen.queryByRole('list', { name: 'Сообщения чата' })).toBeNull()
     expect(screen.queryByRole('textbox', { name: 'Сообщение' })).toBeNull()
     expect(heading.isConnected).toBe(true)
-    // «К диалогу» and «+» over the one strip of tabs: no «Диалог | Изменения», no edge to drag,
+    // «К чату» and «+» over the one strip of tabs: no «Диалог | Изменения», no edge to drag,
     // no «Скрыть панель».
     expect(screen.getAllByRole('tablist')).toHaveLength(1)
     expect(within(pane()).getByRole('button', { name: /^Инструменты/ })).toBe(plus())
     expect(within(pane()).queryByRole('button', { name: 'Скрыть панель' })).toBeNull()
     expect(screen.queryByRole('separator')).toBeNull()
-    fireEvent.click(within(pane()).getByRole('button', { name: 'К диалогу' }))
+    fireEvent.click(within(pane()).getByRole('button', { name: 'К чату' }))
     await waitFor(() => expect(toolsPanel()).toBeNull())
     // The same dialog again, the focus on «+» of its head.
     expect(screen.getByRole('heading', { level: 1, name: 'Поменять цену капучино' })).toBe(heading)
@@ -1417,7 +1415,7 @@ function mountDialog({
   )
   const dialog = list ? (
     <div data-chat-shell="">
-      <nav data-chat-list="" aria-label="Диалоги">
+      <nav data-chat-list="" aria-label="Чаты">
         <a href={`/chats/${TASK_ID}`}>Поменять цену капучино</a>
       </nav>
       <main>{view}</main>
@@ -1769,7 +1767,7 @@ describe('the five kinds of a chat (docs/plan/61-chats-first.md, §5.6)', () => 
     expect(screen.queryByRole('button', { name: /^Инструменты/ })).toBeNull()
     expect(screen.queryByRole('link', { name: /Открыть проект/ })).toBeNull()
     expect(screen.queryByRole('link', { name: 'Открыть сайт' })).toBeNull()
-    expect(screen.getByRole('list', { name: 'Сообщения диалога' }).textContent).not.toMatch(
+    expect(screen.getByRole('list', { name: 'Сообщения чата' }).textContent).not.toMatch(
       /сайт|файл/iu,
     )
     expect(listedCommands()).toEqual(WITHOUT_REPOSITORY)
@@ -1897,7 +1895,7 @@ describe('the five kinds of a chat (docs/plan/61-chats-first.md, §5.6)', () => 
     expect(confirm.textContent).not.toContain('сайт')
     fireEvent.click(within(confirm).getByRole('button', { name: 'Не отменять' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    fireEvent.click(screen.getByRole('button', { name: /^Действия с диалогом/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Действия с чатом/ }))
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Удалить' }))
     const ask = await screen.findByRole('dialog', { name: 'Удалить чат?' })
     expect(plain(ask.textContent)).toContain('Чат пропадёт из списка')
@@ -1919,7 +1917,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     expect(document.querySelector('[data-chat-pane]')).toBeNull()
     expect(screen.queryByRole('separator')).toBeNull()
     expect(screen.queryByRole('tablist')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'К диалогу' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'К чату' })).toBeNull()
     // «+» in the head says they are there, by its dot and its name (И13).
     expect(within(screen.getByRole('banner')).getByRole('button', { name: DOT.changes })).toBe(
       plus(),
@@ -2136,13 +2134,13 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       expect(screen.getByRole('heading', { level: 1, name: 'Поменять цену капучино' })).toBeTruthy()
       expect(screen.getByRole('separator', { name: 'Ширина панели' })).toBeTruthy()
       expect(within(pane()).getByRole('button', { name: 'Скрыть панель' })).toBeTruthy()
-      expect(screen.queryByRole('button', { name: 'К диалогу' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'К чату' })).toBeNull()
     } else {
       // The tool takes the place of the dialog, the way back in plain sight.
       expect(screen.queryByRole('heading', { level: 1 })).toBeNull()
       expect(screen.queryByRole('separator')).toBeNull()
       expect(within(pane()).queryByRole('button', { name: 'Скрыть панель' })).toBeNull()
-      expect(within(pane()).getByRole('button', { name: 'К диалогу' })).toBeTruthy()
+      expect(within(pane()).getByRole('button', { name: 'К чату' })).toBeTruthy()
     }
   })
 
@@ -2294,7 +2292,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
   })
 
   it.each([
-    ['below `lg`, «К диалогу»', false, 'К диалогу'],
+    ['below `lg`, «К чату»', false, 'К чату'],
     ['from `lg`, «Скрыть панель»', true, 'Скрыть панель'],
   ])(
     'keeps the draft and the files of the field while the tools open, switch and close %s',
@@ -2330,7 +2328,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     showDialog(waiting({ preview: readyPreview }))
     await screen.findByText('Изменения готовы')
     const textarea = field()
-    const feed = screen.getByRole('list', { name: 'Сообщения диалога' })
+    const feed = screen.getByRole('list', { name: 'Сообщения чата' })
     type('А ещё поменяйте цену латте')
     fireEvent.change(screen.getByTestId('composer-files'), {
       target: { files: [new File([new Uint8Array(16)], 'Фото.jpg', { type: 'image/jpeg' })] },
@@ -2341,7 +2339,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     expect(screen.getByRole('separator', { name: 'Ширина панели' })).toBeTruthy()
     // Narrower than `lg`: the open tool takes the place of the dialog, which is only hidden.
     resize(false)
-    expect(within(pane()).getByRole('button', { name: 'К диалогу' })).toBeTruthy()
+    expect(within(pane()).getByRole('button', { name: 'К чату' })).toBeTruthy()
     expect(screen.queryByRole('separator')).toBeNull()
     expect(screen.queryByRole('textbox', { name: 'Сообщение' })).toBeNull()
     expect(screen.getByRole('tab', { name: 'Файлы', selected: true })).toBeTruthy()
@@ -2358,7 +2356,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     resize(true)
     expect(field()).toBe(textarea)
     expect(field().value).toBe('А ещё поменяйте цену латте')
-    expect(screen.getByRole('list', { name: 'Сообщения диалога' })).toBe(feed)
+    expect(screen.getByRole('list', { name: 'Сообщения чата' })).toBe(feed)
     expect(files.isConnected).toBe(true)
     expect(plain(files.textContent)).toContain('Фото.jpg')
   })
@@ -2382,7 +2380,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     )
     await screen.findByRole('textbox', { name: 'Сообщение' })
     expect(screen.getByRole('textbox', { name: 'Сообщение' }).getAttribute('placeholder')).toBe(
-      'Диалог завершён',
+      'Чат завершён',
     )
     expect(screen.queryByRole('button', { name: /^Инструменты/ })).toBeNull()
     expect(calls.candidate).not.toHaveBeenCalled()
@@ -2493,7 +2491,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     ])
   })
 
-  it("closes only the tab on the screen by «К диалогу» below `lg`: the others wait behind the dialog (owner's answer of 30.10.2026)", async () => {
+  it("closes only the tab on the screen by «К чату» below `lg`: the others wait behind the dialog (owner's answer of 30.10.2026)", async () => {
     showDialog(waiting({ preview: readyPreview }))
     await screen.findByText('Изменения готовы')
     const heading = screen.getByRole('heading', { level: 1, name: 'Поменять цену капучино' })
@@ -2501,7 +2499,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     await within(pane()).findByTitle(FRAME)
     await choose(/^Проверки/)
     expect(tabNames()).toEqual(['Предпросмотр', 'Проверки'])
-    fireEvent.click(within(pane()).getByRole('button', { name: 'К диалогу' }))
+    fireEvent.click(within(pane()).getByRole('button', { name: 'К чату' }))
     // The dialog again, the focus on «+» of its head; the area of the tools is put away, and
     // nothing of it reads anything meanwhile.
     await waitFor(() => expect(toolsPanel()).toBeNull())
@@ -2526,8 +2524,8 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     await waitFor(() => expect(document.activeElement).toBe(tab))
     // Choosing the preview is the client's call to show it (И10).
     await waitFor(() => expect(calls.ticket).toHaveBeenCalledTimes(2))
-    // «К диалогу» on the last tab closes the tools: nothing is kept open any more.
-    fireEvent.click(within(pane()).getByRole('button', { name: 'К диалогу' }))
+    // «К чату» on the last tab closes the tools: nothing is kept open any more.
+    fireEvent.click(within(pane()).getByRole('button', { name: 'К чату' }))
     await waitFor(() => expect(toolsPanel()).toBeNull())
     await waitFor(() => expect(document.activeElement).toBe(plus()))
     expect(await menuTiles()).toEqual([
@@ -2559,7 +2557,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     await screen.findByText('Изменения готовы')
     await choose(/^Предпросмотр/)
     await choose(/^Файлы и изменения/)
-    fireEvent.click(within(pane()).getByRole('button', { name: 'К диалогу' }))
+    fireEvent.click(within(pane()).getByRole('button', { name: 'К чату' }))
     await waitFor(() => expect(toolsPanel()).toBeNull())
     // The files were on the screen at these changes: no dot for them.
     expect(plusName()).toBe('Инструменты')
@@ -2663,7 +2661,7 @@ describe('a task in the browser', () => {
       expect(screen.getByRole('separator', { name: 'Ширина панели' })).toBeTruthy()
     } else {
       expect(screen.queryByRole('heading', { level: 1 })).toBeNull()
-      expect(within(pane()).getByRole('button', { name: 'К диалогу' })).toBeTruthy()
+      expect(within(pane()).getByRole('button', { name: 'К чату' })).toBeTruthy()
     }
   })
 
@@ -2845,9 +2843,9 @@ describe('a task in the browser', () => {
       (tab: HTMLElement) => fireEvent.keyDown(tab, { key: 'Delete' }),
     ],
     [
-      'by «К диалогу» below `lg`',
+      'by «К чату» below `lg`',
       false,
-      () => fireEvent.click(within(pane()).getByRole('button', { name: 'К диалогу' })),
+      () => fireEvent.click(within(pane()).getByRole('button', { name: 'К чату' })),
     ],
     [
       'by «Скрыть панель» from `lg`',
@@ -3032,13 +3030,13 @@ describe('a task in the browser', () => {
     })
     render(
       <div data-chat-shell="">
-        <nav data-chat-list="" aria-label="Диалоги">
-          <button type="button">Новый диалог</button>
+        <nav data-chat-list="" aria-label="Чаты">
+          <button type="button">Новый чат</button>
         </nav>
         <main>
           {/* From `lg` the way back to the list stands over a dialog its panel took the room of. */}
           <a data-chat-back="" href="#chats">
-            Назад к диалогам
+            Назад к чатам
           </a>
           <QueryClientProvider client={queryClient}>
             <DialogView project={PROJECT} taskId={TASK_ID} title={null} />
@@ -3050,9 +3048,9 @@ describe('a task in the browser', () => {
       level: 1,
       name: 'Новость о летней веранде',
     })
-    const feed = screen.getByRole('list', { name: 'Сообщения диалога' })
-    const list = screen.getByRole('navigation', { name: 'Диалоги' })
-    const back = screen.getByRole('link', { name: 'Назад к диалогам' })
+    const feed = screen.getByRole('list', { name: 'Сообщения чата' })
+    const list = screen.getByRole('navigation', { name: 'Чаты' })
+    const back = screen.getByRole('link', { name: 'Назад к чатам' })
     await choose(/^Браузер/)
     expect(feed.closest('[inert]')).toBeNull()
     fireEvent.click(within(pane()).getByRole('button', { name: 'Во весь экран' }))
@@ -3080,7 +3078,7 @@ describe('a task in the browser', () => {
     fireEvent.click(within(pane()).getByRole('button', { name: 'Во весь экран' }))
     await waitFor(() => expect(list.hasAttribute('inert')).toBe(true))
     expect(back.hasAttribute('inert')).toBe(true)
-    fireEvent.click(within(pane()).getByRole('button', { name: 'К диалогу' }))
+    fireEvent.click(within(pane()).getByRole('button', { name: 'К чату' }))
     await waitFor(() => expect(toolsPanel()).toBeNull())
     expect(feed.closest('[inert]')).toBeNull()
     expect(name.closest('[inert]')).toBeNull()
@@ -3101,7 +3099,7 @@ describe('a task in the browser', () => {
       }),
       STREAM_URL,
     )
-    const feed = await screen.findByRole('list', { name: 'Сообщения диалога' })
+    const feed = await screen.findByRole('list', { name: 'Сообщения чата' })
     await choose(/^Браузер/)
     await choose(/^Файлы и изменения/)
     const browser = await screen.findByRole('tab', { name: 'Браузер' })
@@ -3364,7 +3362,7 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
     await screen.findByText(WORDS[0]!)
     // The client came from the list: its link keeps the focus. From `lg` the list gives its room
     // to the panel, the link with it.
-    const link = within(screen.getByRole('navigation', { name: 'Диалоги' })).getByRole('link')
+    const link = within(screen.getByRole('navigation', { name: 'Чаты' })).getByRole('link')
     link.focus()
     second.give(atWork({ status: 'ready' }, 2))
     expect(await screen.findByRole('tab', { name: 'Браузер', selected: true })).toBeTruthy()
@@ -3372,7 +3370,7 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
   })
 
   it.each([
-    ['«⋯» of the head', () => screen.getByRole('button', { name: /^Действия с диалогом/ })],
+    ['«⋯» of the head', () => screen.getByRole('button', { name: /^Действия с чатом/ })],
     ['«Команды» of the field', () => screen.getByRole('button', { name: 'Команды' })],
   ])('leaves a focus on %s where it is as the browser opens by itself', async (_what, target) => {
     wideLayout()
@@ -3399,7 +3397,7 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
     await waitFor(() => expect(toolsPanel()).toBeNull())
     await waitFor(() => expect(document.activeElement).toBe(plus()))
     // The client went on to the list of dialogs meanwhile.
-    const link = within(screen.getByRole('navigation', { name: 'Диалоги' })).getByRole('link')
+    const link = within(screen.getByRole('navigation', { name: 'Чаты' })).getByRole('link')
     link.focus()
     second.give(atWork({ status: 'ready' }, 2))
     expect(await screen.findByText(WORDS[1]!)).toBeTruthy()
@@ -3410,7 +3408,7 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
 
   it.each([
     ['«+» of the head', () => plus()],
-    ['«⋯» of the head', () => screen.getByRole('button', { name: /^Действия с диалогом/ })],
+    ['«⋯» of the head', () => screen.getByRole('button', { name: /^Действия с чатом/ })],
     ['«Команды» of the field', () => screen.getByRole('button', { name: 'Команды' })],
   ])(
     'gives a focus on %s below `lg`, which the browser takes the place of, to «+» over the browser',
@@ -3424,7 +3422,7 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
       expect(document.activeElement).toBe(held)
       second.give(atWork({ status: 'ready' }, 2))
       expect(await screen.findByRole('tab', { name: 'Браузер', selected: true })).toBeTruthy()
-      // «+» beside «К диалогу», in the same corner, never the start of the page (И4).
+      // «+» beside «К чату», in the same corner, never the start of the page (И4).
       await waitFor(() => expect(document.activeElement).toBe(plusOfTabs()))
       expect(plusOfTabs().id).toBe('dialog-tools')
     },
@@ -3436,7 +3434,7 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
     mountDialog({ streamUrl: STREAM_URL, list: true })
     await screen.findByText(WORDS[0]!)
     // Below `lg` the shell around the dialog stays: what is in it keeps the focus.
-    const link = within(screen.getByRole('navigation', { name: 'Диалоги' })).getByRole('link')
+    const link = within(screen.getByRole('navigation', { name: 'Чаты' })).getByRole('link')
     link.focus()
     second.give(atWork({ status: 'ready' }, 2))
     expect(await screen.findByRole('tab', { name: 'Браузер', selected: true })).toBeTruthy()
@@ -3551,12 +3549,12 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
     expect(await screen.findByRole('tab', { name: 'Браузер', selected: true })).toBeTruthy()
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull()
     expect(heading.isConnected).toBe(true)
-    expect(within(pane()).getByRole('button', { name: 'К диалогу' })).toBeTruthy()
+    expect(within(pane()).getByRole('button', { name: 'К чату' })).toBeTruthy()
     await waitFor(() => expect(sockets).toHaveLength(1))
     // «+» over the browser has no dot: the client sees what started.
     expect(plusName()).toBe('Инструменты')
     // Back to the dialog: no dot «браузер запущен», and the next answer opens nothing again.
-    fireEvent.click(within(pane()).getByRole('button', { name: 'К диалогу' }))
+    fireEvent.click(within(pane()).getByRole('button', { name: 'К чату' }))
     await waitFor(() => expect(toolsPanel()).toBeNull())
     expect(screen.getByRole('heading', { level: 1, name: 'Новость о летней веранде' })).toBe(
       heading,

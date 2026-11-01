@@ -24,7 +24,7 @@ import {
 // client asks (owner's request of 29.10.2026, docs/plan/59-dialog-tools-panel.md): every dialog
 // starts with the chat alone, «+» in the corner of its head lists what the task has, and a tool
 // chosen there opens as a tab of the panel on the right — below `lg` in place of the dialog, with
-// «К диалогу» leading back. The run blanks PREVIEW_BASE_DOMAIN and BROWSER_STREAM_PUBLIC_URL
+// «К чату» leading back. The run blanks PREVIEW_BASE_DOMAIN and BROWSER_STREAM_PUBLIC_URL
 // (playwright.site.config.ts): «+» offers no preview, and a browser cannot be shown here. What is
 // not read before a tool opens — tickets, frames, the changes — is proven by the tests of
 // `DialogView` and by the stands, which have previews, candidates and a stream.
@@ -44,13 +44,13 @@ test.afterAll(async () => {
 const FIRST_WORDS = 'Поменяйте цену капучино на 290 ₽'
 const QUEUED = 'Приняли, начинаем'
 const QUEUED_TEXT =
-  'Агент скоро возьмётся за работу. Страницу можно закрыть — результат появится в этом диалоге.'
+  'Агент скоро возьмётся за работу. Страницу можно закрыть — результат появится в этом чате.'
 const FIELD_OFF = 'Написать можно будет, когда агент закончит или задаст вопрос.'
 const DRAFT = 'Черновик: проверьте ещё цены в разделе «Десерты»'
 
 const message = (page: Page) => page.getByRole('textbox', { name: 'Сообщение' })
 const send = (page: Page) => page.getByRole('button', { name: 'Отправить' })
-const feed = (page: Page) => page.getByRole('list', { name: 'Сообщения диалога' })
+const feed = (page: Page) => page.getByRole('list', { name: 'Сообщения чата' })
 const dialogs = (page: Page) => page.getByRole('navigation', { name: 'Чаты' })
 const back = (page: Page) => page.getByRole('link', { name: 'К чатам' })
 const commands = (page: Page) => page.getByRole('listbox', { name: 'Команды' })
@@ -59,13 +59,13 @@ const commands = (page: Page) => page.getByRole('listbox', { name: 'Команд
 /** «+»: one on the screen — in the head while the panel is closed, by the tabs while it is open. */
 const plus = (page: Page) => page.getByRole('button', { name: /^Инструменты/ })
 const toolsMenu = (page: Page) => page.getByRole('menu', { name: 'Инструменты' })
-const pane = (page: Page) => page.getByRole('complementary', { name: 'Инструменты диалога' })
+const pane = (page: Page) => page.getByRole('complementary', { name: 'Инструменты чата' })
 const openTabs = (page: Page) => page.getByRole('tablist', { name: 'Открытые инструменты' })
 const tab = (page: Page, name: string) => openTabs(page).getByRole('tab', { name, exact: true })
 const panelOf = (page: Page, tool: string) => page.locator(`#dialog-pane-panel-${tool}`)
 const separator = (page: Page) => page.getByRole('separator', { name: 'Ширина панели' })
 const hide = (page: Page) => page.getByRole('button', { name: 'Скрыть панель' })
-const toDialog = (page: Page) => page.getByRole('button', { name: 'К диалогу' })
+const toDialog = (page: Page) => page.getByRole('button', { name: 'К чату' })
 /** The check of `addChanges`, as the tab «Проверки» names it. */
 const CHECK_NAME = 'Файлы без ошибок в коде'
 /** The cross of a tab: the pointer's way, hidden from a screen reader (Delete is the keyboard's). */
@@ -159,7 +159,7 @@ async function smallTiles(page: Page): Promise<string[]> {
   return smallTargets(await tiles.all())
 }
 
-/** The strip of the panel: the tabs, «Скрыть панель» or «К диалогу», «+»; the crosses at 24px. */
+/** The strip of the panel: the tabs, «Скрыть панель» or «К чату», «+»; the crosses at 24px. */
 async function smallStrip(page: Page): Promise<string[]> {
   const tabs = await openTabs(page).getByRole('tab').all()
   const around = [plus(page), ...(await hide(page).all()), ...(await toDialog(page).all())]
@@ -326,11 +326,14 @@ test('a dialog starts from the first words and waits in the queue, on a desktop'
     await expect(confirm).toBeHidden()
     await expect(feed(page).getByRole('heading', { name: 'Отменено' })).toBeVisible()
     await expect(message(page)).toBeDisabled()
-    await expect(message(page)).toHaveAttribute('placeholder', 'Диалог завершён')
+    await expect(message(page)).toHaveAttribute('placeholder', 'Чат завершён')
     // Under the closed dialog, with its project chosen; the list beside it has its own.
     await expect(
-      page.getByRole('main').getByRole('link', { name: 'Новый диалог' }),
-    ).toHaveAttribute('href', `/chats/new?project=${siteId}`)
+      page
+        .getByRole('main')
+        .getByRole('link', { name: 'Новый чат' })
+        .and(page.locator(`[href="/chats/new?project=${siteId}"]`)),
+    ).toBeVisible()
     await expect(dialogs(page).getByRole('link', { name: 'Новый чат' })).toHaveAttribute(
       'href',
       '/chats/new',
@@ -348,11 +351,11 @@ test('a dialog starts from the first words and waits in the queue, on a desktop'
     // The menu by the title of the dialog; its row in the list beside it has one too.
     const menu = page
       .getByRole('main')
-      .getByRole('button', { name: /^Действия с диалогом/ })
+      .getByRole('button', { name: /^Действия с чатом/ })
       .and(page.locator(':not(nav[aria-label="Чаты"] *)'))
     await menu.click()
     await page.getByRole('menuitem', { name: 'Переименовать' }).click()
-    const name = page.getByRole('textbox', { name: 'Название диалога' })
+    const name = page.getByRole('textbox', { name: 'Название чата' })
     await name.fill('Цена капучино')
     await name.press('Enter')
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Цена капучино')
@@ -365,7 +368,7 @@ test('a dialog starts from the first words and waits in the queue, on a desktop'
     await expect(page).toHaveURL('/chats')
     await expect(dialogs(page).getByRole('link', { name: /Цена капучино/ })).toHaveCount(0)
     await page.goto(`/chats/${taskId}`)
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Такого диалога нет')
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Такого чата нет')
   })
 })
 
@@ -524,7 +527,7 @@ test('a dialog on a phone: the chat alone, its tools in place of it behind «+»
   await addChanges(await startDialog(page, siteId))
   await page.reload()
 
-  await test.step('no switch «Диалог | …»: the dialog is all, «+» in its head', async () => {
+  await test.step('no switch «Чат | …»: the dialog is all, «+» in its head', async () => {
     await expect(feed(page).getByText(FIRST_WORDS)).toBeVisible()
     await expectChatAlone(page)
     await expect(plus(page)).toBeInViewport()
@@ -555,7 +558,7 @@ test('a dialog on a phone: the chat alone, its tools in place of it behind «+»
     await expect(plus(page)).toBeFocused()
   })
 
-  await test.step('a tool takes the place of the dialog; «К диалогу» leads back', async () => {
+  await test.step('a tool takes the place of the dialog; «К чату» leads back', async () => {
     await chooseTool(page, /^Файлы и изменения/)
     await expect(pane(page)).toBeVisible()
     await expect(toDialog(page)).toBeVisible()
@@ -563,7 +566,7 @@ test('a dialog on a phone: the chat alone, its tools in place of it behind «+»
     await expect(panelOf(page, 'files')).toContainText(CHANGED_FILE)
     await expect(feed(page)).toBeHidden()
     await expect(message(page)).toBeHidden()
-    // Below `lg` the area has no edge and no «Скрыть панель»: «К диалогу» is the way back.
+    // Below `lg` the area has no edge and no «Скрыть панель»: «К чату» is the way back.
     await expect(separator(page)).toHaveCount(0)
     await expect(hide(page)).toHaveCount(0)
     await expect(page.locator('#dialog-tools')).toHaveCount(1)
@@ -578,7 +581,7 @@ test('a dialog on a phone: the chat alone, its tools in place of it behind «+»
     await expectNoSidewaysScroll(page)
   })
 
-  await test.step('with two tabs «К диалогу» closes the one on the screen, the other waits behind the dialog', async () => {
+  await test.step('with two tabs «К чату» closes the one on the screen, the other waits behind the dialog', async () => {
     const items = toolsMenu(page).getByRole('menuitem')
     await chooseTool(page, /^Файлы и изменения/)
     await chooseTool(page, /^Проверки/)
@@ -603,7 +606,7 @@ test('a dialog on a phone: the chat alone, its tools in place of it behind «+»
     await expect(tab(page, 'Файлы')).toHaveAttribute('aria-selected', 'true')
     await expect(tab(page, 'Файлы')).toBeFocused()
     await expect(feed(page)).toBeHidden()
-    // «К диалогу» on the last tab: nothing is kept open.
+    // «К чату» on the last tab: nothing is kept open.
     await toDialog(page).click()
     await expectChatAlone(page)
     await expect(plus(page)).toBeFocused()
@@ -618,7 +621,7 @@ test('a dialog on a phone: the chat alone, its tools in place of it behind «+»
 
 // The place in the feed and the draft (docs/plan/59, И19): the feed and the field stay mounted
 // while the tools open, switch and close. From `lg` the feed scrolls in its own area, which the
-// panel narrows; below it the page scrolls, and a tool hides the dialog until «К диалогу».
+// panel narrows; below it the page scrolls, and a tool hides the dialog until «К чату».
 
 /** How far the scrolling area of the feed stands from its end, in px (from `lg`). */
 const gapToEnd = (page: Page) =>
@@ -720,7 +723,7 @@ test('a long dialog keeps its place and the draft as its tools open and close, o
   })
 })
 
-test('a long dialog on a phone: «К диалогу» brings back the place and the draft', async ({
+test('a long dialog on a phone: «К чату» brings back the place and the draft', async ({
   page,
   signedInUser,
 }) => {
@@ -745,7 +748,7 @@ test('a long dialog on a phone: «К диалогу» brings back the place and 
   await expect.poll(offPlace).toBeLessThanOrEqual(1)
 
   for (const tool of [/^Файлы и изменения/, /^Проверки/]) {
-    await test.step(`${tool.source.slice(1)} in place of the dialog, then «К диалогу»`, async () => {
+    await test.step(`${tool.source.slice(1)} in place of the dialog, then «К чату»`, async () => {
       await chooseTool(page, tool)
       await expect(pane(page)).toBeVisible()
       await expect(feed(page)).toBeHidden()
@@ -781,7 +784,7 @@ test('a long dialog on a phone and a tablet: a tool opened at its end fits the w
     [390, 844],
     [768, 1024],
   ] as const) {
-    await test.step(`${width}×${height}: the area of a tool under the bar, then «К диалогу»`, async () => {
+    await test.step(`${width}×${height}: the area of a tool under the bar, then «К чату»`, async () => {
       await page.setViewportSize({ width, height })
       await page.goto(`/chats/${taskId}`)
       await expect(page.getByRole('heading', { level: 1 })).toHaveText(title)
@@ -1049,6 +1052,30 @@ test('the window of commands on a new chat stays inside the window of the browse
   }
 })
 
+test('the last row of the window of commands is seen whole at any height of a row', async ({
+  page,
+  signedInUser,
+}) => {
+  await addLongDialog(signedInUser.id, 2)
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/chats/new')
+  await message(page).fill('/')
+  const rows = commands(page).getByRole('option')
+  await expect(rows.first()).toBeInViewport({ ratio: 1 })
+  // A scroll stops on a whole pixel. The fonts of a run decide where the last row ends, so the
+  // end is put on .3 of a pixel: rounded down, a row with no margin stays that far outside.
+  await commands(page).evaluate((list) => {
+    const options = list.querySelectorAll<HTMLElement>('[role="option"]')
+    const edge =
+      list.getBoundingClientRect().bottom - parseFloat(getComputedStyle(list).borderBottomWidth)
+    const end = options[options.length - 1]!.getBoundingClientRect().bottom - edge
+    options[0]!.style.marginTop = `${(1.3 - (end - Math.floor(end))) % 1}px`
+  })
+  await page.keyboard.press('End')
+  await expect(rows.last()).toBeInViewport({ ratio: 1 })
+})
+
 test('a chat on a project with changes: «+» at once, no word of a browser', async ({
   page,
   signedInUser,
@@ -1286,7 +1313,7 @@ test('a task in the browser: its window on a desktop', async ({ page, context, s
   })
 })
 
-test('a task in the browser on a phone: the browser in place of the dialog, «К диалогу» back', async ({
+test('a task in the browser on a phone: the browser in place of the dialog, «К чату» back', async ({
   page,
   context,
   signedInUser,
@@ -1308,7 +1335,7 @@ test('a task in the browser on a phone: the browser in place of the dialog, «К
     expect(await lowTargets(page.getByRole('main'))).toEqual([])
   })
 
-  await test.step('«+» → «Браузер» takes the place of the dialog; «К диалогу» leads back', async () => {
+  await test.step('«+» → «Браузер» takes the place of the dialog; «К чату» leads back', async () => {
     await plus(page).click()
     // Below `lg` the menu comes up from the bottom as a sheet.
     await expect(page.locator('.MuiDrawer-paper')).toBeVisible()
@@ -1367,10 +1394,10 @@ test('a task in the browser on a phone: the browser in place of the dialog, «К
 })
 
 // In a window lower than 420px the head goes with the page (WCAG 1.4.10): «+» is out of sight
-// while the client reads further down. «К диалогу» brings the feed back where it was read and
+// while the client reads further down. «К чату» brings the feed back where it was read and
 // gives the focus to «+» where it stands — never scrolling the page up to the head (docs/plan/59,
 // И14, И19).
-test('a task in the browser in a window lower than 420px: «К диалогу» keeps the place, not the head', async ({
+test('a task in the browser in a window lower than 420px: «К чату» keeps the place, not the head', async ({
   page,
   signedInUser,
 }) => {

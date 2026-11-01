@@ -1,4 +1,4 @@
-// A dialog the client has just started on «Новый диалог» (docs/plan/59-dialog-tools-panel.md, И3):
+// A dialog the client has just started on «Новый чат» (docs/plan/59-dialog-tools-panel.md, И3):
 // its first showing knows that the client watched it from before its browser was there, so a
 // browser launched before the first read of the dialog opens beside it too. Kept in the memory of
 // this page alone — neither in the address nor in the storage of the browser: a reload of the
@@ -9,7 +9,7 @@ export const NEW_DIALOG_MS = 60_000
 
 let started: { taskId: string; at: number } | null = null
 
-/** «Новый диалог» started this dialog: called before the screen moves to it. */
+/** «Новый чат» started this dialog: called before the screen moves to it. */
 export function markNewDialog(taskId: string, at: number = Date.now()): void {
   started = { taskId, at }
 }

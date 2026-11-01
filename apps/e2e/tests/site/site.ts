@@ -36,6 +36,34 @@ export async function addSite(userId: string, status: SiteStatus = 'onboarding')
   }
 }
 
+/** `count` sites of the user, each with a name and an address of its own. */
+export async function addSites(userId: string, count: number): Promise<void> {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    await prisma.workspace.create({
+      data: {
+        name: 'Мои проекты',
+        createdById: userId,
+        dataClass: 'synthetic',
+        members: { create: { userId, role: 'owner' } },
+        sites: {
+          create: Array.from({ length: count }, () => {
+            const mark = randomUUID().slice(0, 8)
+            return {
+              name: `Сайт ${mark}`,
+              url: `https://site-${mark}.example`,
+              stack: 'wordpress' as const,
+              status: 'onboarding' as const,
+            }
+          }),
+        },
+      },
+    })
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
 /**
  * A connected site of the signed-in user in the personal workspace, as the product makes it:
  * the workspace comes with the gift of the registration, so the first dialog of the site is

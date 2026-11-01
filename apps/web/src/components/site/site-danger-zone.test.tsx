@@ -91,7 +91,7 @@ describe('«Опасная область» of the settings of a site', () => {
   it('keeps the dialog open with the words of a refusal', async () => {
     remove.mockRejectedValueOnce(
       serverRefusal(
-        'Сейчас на сайте идёт работа: диалог, выпуск или настройка. Дождитесь, пока она закончится, или остановите диалоги, затем удалите проект',
+        'Сейчас на сайте идёт работа: чат, выпуск или настройка. Дождитесь, пока она закончится, или остановите чаты, затем удалите проект',
         'SITE_DELETE_BUSY',
       ),
     )
