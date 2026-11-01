@@ -121,6 +121,29 @@ describe('the words of a new dialog', () => {
   })
 })
 
+describe('the project of a new chat', () => {
+  it('is said aloud: a forgotten field gives no chat without a project', async () => {
+    const { db, prisma } = emptyDb()
+    await expect(
+      callerOf(prisma).task.create({ taskId: ids.taskId, text: 'Вопрос' } as never),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(db.task.findUnique).not.toHaveBeenCalled()
+  })
+
+  it('takes only an id of version 7 for a chat without one, before anything is read', async () => {
+    const { db, prisma } = emptyDb()
+    await expect(
+      callerOf(prisma).task.create({ siteId: null, taskId: ids.taskId, text: 'Вопрос' }),
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Не удалось начать чат. Обновите страницу и попробуйте ещё раз',
+      cause: { code: 'TASK_ID_INVALID' },
+    })
+    expect(db.task.findUnique).not.toHaveBeenCalled()
+    expect(db.$transaction).not.toHaveBeenCalled()
+  })
+})
+
 describe('a dialog of someone else', () => {
   it('answers every procedure as a site that does not exist', async () => {
     const { db, prisma } = emptyDb()
@@ -135,6 +158,7 @@ describe('a dialog of someone else', () => {
       caller.task.commands({ taskId: ids.taskId }),
       caller.task.activity({ taskId: ids.taskId, turn: 1 }),
       caller.task.list({ siteId: ids.siteId }),
+      caller.task.list({ folder: ids.siteId }),
       caller.candidate.get({ taskId: ids.taskId }),
       caller.candidate.update({ taskId: ids.taskId, requestId }),
       caller.preview.ticket({ taskId: ids.taskId }),

@@ -7,7 +7,6 @@ import {
   modelClassSchema,
   previewOrigin,
   readFeedRow,
-  siteIdOf,
   type ChatCommandAvailability,
   type FeedItem,
   type FeedTaskHead,
@@ -20,6 +19,7 @@ import { accessibleTask, taskNotFound } from './access.ts'
 import { feedBrowser, type FeedBrowser } from './browser.ts'
 import { candidateCountsOf, dialogCommands, dialogFacts, type DialogFacts } from './dialog-facts.ts'
 import { dialogRetry, movingRequest } from './dialog-state.ts'
+import { siteClosed } from '../site-capabilities.ts'
 
 type Tx = Prisma.TransactionClient
 
@@ -231,11 +231,27 @@ async function feedPage(
   return { events, cursor: page.length > 0 ? String(page.at(-1)!.id) : after, more }
 }
 
-/** The head of one dialog with its site and alias, for `task.get`. */
+/** The project of a chat as its screen shows it; `closed` — it reads, it takes no words (К39). */
+export interface DialogProject {
+  id: string
+  name: string
+  url: string
+  closed: boolean
+}
+
+/** The head of one dialog with its project and alias, for `task.get`. */
 export async function readDialogHead(
   db: PrismaClient,
   input: { userId: string; taskId: string },
-): Promise<FeedTaskHead & { siteId: string; alias: string; createdAt: Date; updatedAt: Date }> {
+): Promise<
+  FeedTaskHead & {
+    siteId: string | null
+    project: DialogProject | null
+    alias: string
+    createdAt: Date
+    updatedAt: Date
+  }
+> {
   return db.$transaction(
     async (tx) => {
       await tx.$executeRaw`SET TRANSACTION READ ONLY`
@@ -244,6 +260,7 @@ export async function readDialogHead(
         select: {
           id: true,
           siteId: true,
+          site: { select: { id: true, name: true, url: true, status: true } },
           alias: true,
           title: true,
           mode: true,
@@ -260,9 +277,14 @@ export async function readDialogHead(
       })
       if (task === null) throw taskNotFound()
       const head = await feedHead(tx, task)
+      const { site } = task
       return {
         ...head,
-        siteId: siteIdOf(task),
+        siteId: task.siteId,
+        project:
+          site === null
+            ? null
+            : { id: site.id, name: site.name, url: site.url, closed: siteClosed(site.status) },
         alias: task.alias,
         createdAt: task.createdAt,
         updatedAt: task.updatedAt,

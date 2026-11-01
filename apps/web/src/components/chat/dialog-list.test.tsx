@@ -46,6 +46,7 @@ function dialog(id: string, patch: Partial<DialogListItem> = {}): DialogListItem
     answered: false,
     createdAt: now,
     updatedAt: now,
+    project: null,
     ...patch,
   }
 }

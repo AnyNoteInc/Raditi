@@ -39,6 +39,7 @@ import { createCaller } from '../router.ts'
 import { readCheckScreenshot } from '../services/chat/candidates.ts'
 import { releaseConfirmKey, type ChatContext } from '../services/chat/context.ts'
 import { dialogFacts } from '../services/chat/dialog-facts.ts'
+import { dialogPageQuery } from '../services/chat/dialog-list.ts'
 import { signConfirmToken } from '../services/chat/releases.ts'
 import { signUndoConfirmToken } from '../services/chat/undo.ts'
 
@@ -309,10 +310,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       /** Whether the stack of the site has what the browser needs; true unless asked for. */
       browserStack?: boolean
       storage?: ObjectStorage
+      /** The environment of the platform; a test one unless asked for. */
+      appEnv?: ChatContext['appEnv']
     } = {},
   ) {
     const chat: ChatContext = {
-      appEnv: 'test',
+      appEnv: options.appEnv ?? 'test',
       preview: options.preview === false ? null : { address: ADDRESS, ttlHours: 72 },
       browser: options.browser === true ? { streamUrl: STREAM_URL } : null,
       ...(options.browserStack === undefined
@@ -341,11 +344,26 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
     })
   }
 
+  /** The repository of a site, as its first import writes it. */
+  const withRepository = (siteId: string) =>
+    db.gitRepository.create({
+      data: {
+        siteId,
+        provider: 'gitea',
+        owner: 'sites',
+        name: `site-${siteId}`,
+        url: `https://git.example.ru/sites/site-${siteId}`,
+      },
+    })
+
   /**
-   * An owner with the gift of the registration and an active site of their workspace; `gift:
-   * false` — the workspace alone, as a test that counts tariff credits only needs it.
+   * An owner with the gift of the registration and an active site of their workspace, with its
+   * repository; `gift: false` — the workspace alone, as a test that counts tariff credits only
+   * needs it; `repository: false` — a site without files.
    */
-  async function siteOwner(options: { database?: boolean; gift?: boolean } = {}) {
+  async function siteOwner(
+    options: { database?: boolean; gift?: boolean; repository?: boolean } = {},
+  ) {
     const owner = await person()
     const workspace = await db.$transaction((tx) =>
       options.gift === false
@@ -361,6 +379,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         workspaceId: workspace.id,
       },
     })
+    if (options.repository !== false) await withRepository(site.id)
     if (options.database) {
       await db.credentialRef.create({
         data: {
@@ -780,6 +799,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       const { owner, site, workspaceId } = await siteOwner()
       await db.site.update({ where: { id: site.id }, data: { status: 'onboarding' } })
       const caller = callerOf(owner)
+      // Neither its repository nor a browser: the state of the matrix names the refusal (К8).
+      await expect(newDialog(caller, site.id)).rejects.toMatchObject({
+        code: 'CONFLICT',
+        cause: { code: 'TASK_NOT_ACCEPTED', details: { reason: 'browser_unavailable' } },
+      })
+      await db.site.update({ where: { id: site.id }, data: { status: 'paused' } })
       await expect(newDialog(caller, site.id)).rejects.toMatchObject({
         code: 'CONFLICT',
         cause: { code: 'TASK_NOT_ACCEPTED', details: { reason: 'site_not_active' } },
@@ -3003,25 +3028,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
   describe('tasks in the browser (docs/plan/57)', () => {
     /** A site added for the browser alone: not connected, no files, no repository. */
     async function browserSite(options: { gift?: boolean } = {}) {
-      const owned = await siteOwner(options)
+      const owned = await siteOwner({ ...options, repository: false })
       const site = await db.site.update({
         where: { id: owned.site.id },
         data: { status: 'onboarding' },
       })
       return { ...owned, site }
     }
-
-    /** The repository of a site, as its first import writes it. */
-    const withRepository = (siteId: string) =>
-      db.gitRepository.create({
-        data: {
-          siteId,
-          provider: 'gitea',
-          owner: 'sites',
-          name: `site-${siteId}`,
-          url: `https://git.example.ru/sites/site-${siteId}`,
-        },
-      })
 
     /** A file announced and stored, as `PUT /api/attachments/<id>` leaves it. */
     async function readyFile(owner: User, site: { id: string; workspaceId: string }, ready = true) {
@@ -3086,17 +3099,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       })
     })
 
-    it('takes the repository where it is ready, and the browser on the same site when asked', async () => {
+    it('takes the code and the browser in one where both are ready, and the browser alone when asked', async () => {
       const { owner, site, workspaceId } = await siteOwner()
       // Two dialogs at once: more than the gift holds.
       await paidTariff(workspaceId)
-      await withRepository(site.id)
       const caller = callerOf(owner, { browser: true })
       expect((await caller.project.list())[0]).toMatchObject({
         capabilities: { repository: 'ready', browser: 'ready' },
       })
 
-      // Without a choice: the repository, with its preview.
+      // Without a choice: what the server reads from the project (К7, К10), with its preview.
       const repository = await newDialog(caller, site.id)
       const asked = randomUUID()
       taskIds.push(asked)
@@ -3114,7 +3126,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
           orderBy: { createdAt: 'asc' },
         }),
       ).toEqual([
-        { id: repository.taskId, needsRepository: true, needsBrowser: false },
+        { id: repository.taskId, needsRepository: true, needsBrowser: true },
         { id: asked, needsRepository: false, needsBrowser: true },
       ])
       expect(await db.previewEnvironment.count({ where: { taskId: asked } })).toBe(0)
@@ -3154,8 +3166,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       await expect(
         refusal(callerOf(owner), { repository: false, browser: true }),
       ).rejects.toMatchObject(reason('browser_unavailable'))
-      // Neither way is offered: the repository is asked for, and refused as it always was.
-      await expect(refusal(callerOf(owner))).rejects.toMatchObject(reason('site_not_active'))
+      // Neither way is offered: the state of the matrix names the refusal (К8).
+      await expect(refusal(callerOf(owner))).rejects.toMatchObject(reason('browser_unavailable'))
       const withBrowser = callerOf(owner, { browser: true })
       await expect(refusal(withBrowser, { repository: true, browser: true })).rejects.toMatchObject(
         reason('environment_unsupported'),
@@ -3658,6 +3670,676 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       expect((await caller.attachment.list({ taskId: task.id })).map((item) => item.id)).toEqual([
         file.id,
       ])
+    })
+  })
+
+  describe('chats without a project (docs/plan/61-chats-first.md, §5.9)', () => {
+    /** An id of version 7, the only one a chat without a project takes (К14). */
+    const chatId = () => {
+      const id = randomUUID().replace(/^(.{14})./u, '$17')
+      taskIds.push(id)
+      return id
+    }
+    const newChat = (caller: ReturnType<typeof callerOf>, attachments?: string[]) =>
+      caller.task
+        .create({
+          siteId: null,
+          taskId: chatId(),
+          text: 'Что такое каноническая ссылка?',
+          ...(attachments === undefined ? {} : { attachments }),
+        })
+        .then((created) => created.taskId)
+    const giftEntries = (userId: string) =>
+      db.creditLedger.count({ where: { idempotencyKey: `user:${userId}:signup-gift` } })
+    const workspacesOf = (userId: string) => db.workspace.count({ where: { createdById: userId } })
+    const startFile = (caller: ReturnType<typeof callerOf>, name = 'Обложка.jpg') =>
+      caller.attachment.start({ siteId: null, name, size: 2048, type: 'image/jpeg' })
+
+    /** What core does at the end of a pass: its chain is charged. */
+    const charged = (taskId: string) =>
+      db.$transaction((tx) => settleTaskCharge(tx, { taskId, credits: 5, now: new Date() }), {
+        isolationLevel: 'ReadCommitted',
+      })
+
+    /** A file of `start` as `PUT /api/attachments/<id>` leaves it. */
+    async function storedFile(caller: ReturnType<typeof callerOf>): Promise<string> {
+      const { attachmentId } = await startFile(caller)
+      await markAttachmentReady(db, {
+        id: attachmentId,
+        sizeBytes: 2048,
+        contentType: 'image/jpeg',
+      })
+      return attachmentId
+    }
+
+    it('takes the first chat of a new user: the workspace, the gift, the reserve, no preview', async () => {
+      const user = await person()
+      expect(await workspacesOf(user.id)).toBe(0)
+      const caller = callerOf(user)
+
+      const taskId = await newChat(caller)
+
+      const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
+      expect(task).toMatchObject({
+        siteId: null,
+        status: 'queued',
+        needsRepository: false,
+        needsBrowser: false,
+        createdById: user.id,
+      })
+      expect(
+        await db.workspace.findUniqueOrThrow({ where: { id: task.workspaceId } }),
+      ).toMatchObject({ createdById: user.id, dataClass: 'synthetic' })
+      expect(await giftEntries(user.id)).toBe(1)
+      expect(await activeHolds(taskId)).toHaveLength(1)
+      expect(await db.previewEnvironment.count({ where: { taskId } })).toBe(0)
+      expect((await outboxOf(taskId)).map((row) => row.type)).toEqual(['turn.run'])
+      expect(vault.workspaceKeys).toContain(`ws-${task.workspaceId}`)
+
+      expect(await caller.task.get({ taskId })).toMatchObject({
+        siteId: null,
+        project: null,
+        requirements: { repository: false, browser: false },
+      })
+      const feed = await caller.task.feed({ taskId })
+      expect(feed.preview).toBeNull()
+      expect(feed.events.map((event) => event.type)).toEqual(['feed.request'])
+    })
+
+    it('gives it the browser where the platform has one', async () => {
+      const taskId = await newChat(callerOf(await person(), { browser: true }))
+      expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
+        needsRepository: false,
+        needsBrowser: true,
+      })
+    })
+
+    it('makes one workspace and one gift, whichever of a chat and a file comes first', async () => {
+      const user = await person()
+      const caller = callerOf(user)
+
+      const fileId = await storedFile(caller)
+      expect(await workspacesOf(user.id)).toBe(1)
+      expect(await giftEntries(user.id)).toBe(1)
+
+      const taskId = await newChat(caller, [fileId])
+      await startFile(caller, 'Второй снимок.jpg')
+      expect(await workspacesOf(user.id)).toBe(1)
+      expect(await giftEntries(user.id)).toBe(1)
+      expect(await db.attachment.findUniqueOrThrow({ where: { id: fileId } })).toMatchObject({
+        taskId,
+        siteId: null,
+        status: 'bound',
+      })
+    })
+
+    it('makes nothing for a file the rules refuse', async () => {
+      const user = await person()
+      await expect(
+        callerOf(user).attachment.start({
+          siteId: null,
+          name: 'скрипт.php',
+          size: 2048,
+          type: 'image/jpeg',
+        }),
+      ).rejects.toMatchObject({ cause: { code: 'ATTACHMENT_REFUSED' } })
+      expect(await workspacesOf(user.id)).toBe(0)
+      expect(await giftEntries(user.id)).toBe(0)
+    })
+
+    it('refuses an id of any other version and writes nothing', async () => {
+      const user = await person()
+      const taskId = randomUUID()
+      await expect(
+        callerOf(user).task.create({ siteId: null, taskId, text: 'Вопрос' }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST', cause: { code: 'TASK_ID_INVALID' } })
+      expect(await db.task.count({ where: { id: taskId } })).toBe(0)
+      expect(await workspacesOf(user.id)).toBe(0)
+    })
+
+    it('never lands in a workspace of client data outside production', async () => {
+      const user = await person()
+      const earlier = await db.$transaction((tx) =>
+        ensurePersonalWorkspace(tx, { userId: user.id, appEnv: 'test' }),
+      )
+      await db.workspace.update({ where: { id: earlier.id }, data: { dataClass: 'client' } })
+
+      const taskId = await newChat(callerOf(user))
+
+      const { workspace } = await db.task.findUniqueOrThrow({
+        where: { id: taskId },
+        select: { workspace: { select: { id: true, dataClass: true } } },
+      })
+      expect(workspace.id).not.toBe(earlier.id)
+      expect(workspace.dataClass).toBe('synthetic')
+    })
+
+    it('returns the same chat to a repeat, and to nobody else', async () => {
+      const user = await person()
+      const caller = callerOf(user)
+      const taskId = chatId()
+      const input = { siteId: null, taskId, text: 'Вопрос' }
+      const first = await caller.task.create(input)
+      expect(first.created).toBe(true)
+      expect(await caller.task.create(input)).toEqual({ ...first, created: false })
+      expect(await db.creditHold.count({ where: { taskId } })).toBe(1)
+
+      const { owner } = await siteOwner()
+      await expect(callerOf(owner).task.create(input)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    })
+
+    it('takes the same id with another place for another request, of its own author too', async () => {
+      // A client that changed the pill got a new id: the old one is not this chat any more.
+      const { owner, site, workspaceId } = await siteOwner()
+      await paidTariff(workspaceId)
+      const caller = callerOf(owner)
+      const withoutProject = chatId()
+      await caller.task.create({ siteId: null, taskId: withoutProject, text: 'Вопрос' })
+      await expect(
+        caller.task.create({ siteId: site.id, taskId: withoutProject, text: 'Вопрос' }),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' })
+
+      const ofProject = chatId()
+      await caller.task.create({ siteId: site.id, taskId: ofProject, text: 'Вопрос' })
+      await expect(
+        caller.task.create({ siteId: null, taskId: ofProject, text: 'Вопрос' }),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    })
+
+    it.each([
+      { repository: true, browser: false },
+      { repository: false, browser: true },
+    ])('reads no requirements for a chat without a project: %j', async (requirements) => {
+      const caller = callerOf(await person())
+      const taskId = chatId()
+      await caller.task.create({ siteId: null, taskId, text: 'Вопрос', requirements })
+      expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
+        needsRepository: false,
+        needsBrowser: false,
+      })
+    })
+
+    it('answers a chat of someone else as one that does not exist', async () => {
+      const caller = callerOf(await person())
+      const taskId = await newChat(caller)
+      const fileId = await storedFile(caller)
+      const stranger = callerOf(await person())
+      const calls = [
+        stranger.task.get({ taskId }),
+        stranger.task.feed({ taskId }),
+        stranger.task.commands({ taskId }),
+        stranger.task.message({ taskId, requestId: randomUUID(), text: 'Да' }),
+        stranger.attachment.list({ taskId }),
+        stranger.attachment.bind({ taskId, attachmentIds: [fileId] }),
+      ]
+      for (const refusal of await Promise.all(
+        calls.map((call) => call.catch((error: unknown) => error)),
+      ))
+        expect(refusal).toMatchObject({ code: 'NOT_FOUND' })
+      expect((await stranger.task.list({})).items).toEqual([])
+      expect((await stranger.task.folders({})).folders).toEqual([])
+    })
+
+    it('takes the second message and the third, with a file and without one', async () => {
+      const user = await person()
+      const caller = callerOf(user)
+      const taskId = await newChat(caller)
+      const question = {
+        kind: 'agent',
+        intro: 'Нужно уточнить.',
+        questions: [{ text: 'Какой сайт вы имеете в виду?', options: [] }],
+      }
+
+      // The reserve of the pass is still there: the words go on under it.
+      await asked(taskId, question)
+      const first = await caller.task.message({ taskId, requestId: randomUUID(), text: 'Этот' })
+      expect(first.repeated).toBe(false)
+      expect((await activeHolds(taskId)).map((hold) => hold.attempt)).toEqual([1])
+
+      // The pass was charged, as every completed one is: the words open a chain of their own.
+      await charged(taskId)
+      await asked(taskId, question)
+      const fileId = await storedFile(caller)
+      await caller.task.message({
+        taskId,
+        requestId: randomUUID(),
+        text: 'Вот снимок',
+        attachments: [fileId],
+      })
+      expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
+        status: 'queued',
+        siteId: null,
+        attempt: 2,
+      })
+      expect((await activeHolds(taskId)).map((hold) => hold.attempt)).toEqual([2])
+      expect(await db.attachment.findUniqueOrThrow({ where: { id: fileId } })).toMatchObject({
+        taskId,
+        status: 'bound',
+      })
+
+      await charged(taskId)
+      await asked(taskId, question)
+      await caller.task.message({ taskId, requestId: randomUUID(), text: 'И ещё' })
+      expect((await activeHolds(taskId)).map((hold) => hold.attempt)).toEqual([3])
+
+      // No site: nothing to claim the gift of.
+      const { workspaceId } = await db.task.findUniqueOrThrow({ where: { id: taskId } })
+      expect(await db.giftSiteClaim.count({ where: { workspaceId } })).toBe(0)
+    })
+
+    it('takes «Продолжить» after a charged pass, in a chain of its own', async () => {
+      const user = await person()
+      const caller = callerOf(user)
+      const taskId = await newChat(caller)
+      await charged(taskId)
+      await asked(taskId, { kind: 'ceiling', reason: 'step', spent: 30, held: 35, left: 5 })
+
+      await caller.task.continue({ taskId, requestId: randomUUID() })
+
+      expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
+        status: 'queued',
+        attempt: 2,
+      })
+      expect((await activeHolds(taskId)).map((hold) => hold.attempt)).toEqual([2])
+    })
+
+    it('takes no file of a project in a chat without one', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const started = await caller.attachment.start({
+        siteId: site.id,
+        name: 'Обложка.jpg',
+        size: 2048,
+        type: 'image/jpeg',
+      })
+      await markAttachmentReady(db, {
+        id: started.attachmentId,
+        sizeBytes: 2048,
+        contentType: 'image/jpeg',
+      })
+      await expect(newChat(caller, [started.attachmentId])).rejects.toMatchObject({
+        cause: { code: 'ATTACHMENT_NOT_READY' },
+      })
+    })
+
+    /** Chats of a workspace as rows: the list and the folders read nothing else of them. */
+    async function chats(
+      workspaceId: string,
+      siteId: string | null,
+      rows: ReadonlyArray<{ status?: 'done' | 'awaiting_user' | 'awaiting_approval' }>,
+    ) {
+      const made = []
+      for (const row of rows) {
+        const id = siteId === null ? chatId() : randomUUID()
+        taskIds.push(id)
+        made.push(
+          await db.task.create({
+            data: {
+              id,
+              workspaceId,
+              siteId,
+              status: row.status ?? 'done',
+              needsRepository: false,
+              needsBrowser: true,
+              title: 'Чат',
+            },
+          }),
+        )
+      }
+      return made
+    }
+
+    /** The order of the list: the latest changed first, the id tells two of one moment apart. */
+    const newestFirst = <Row extends { id: string; updatedAt: Date }>(rows: readonly Row[]) =>
+      rows
+        .toSorted((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime() || (a.id < b.id ? 1 : -1))
+        .map((row) => row.id)
+
+    it('lists every chat of the user, one project or those without one', async () => {
+      const { owner, site, workspaceId } = await siteOwner()
+      const caller = callerOf(owner)
+      const [ofProject] = await chats(workspaceId, site.id, [{}])
+      const [ofNone] = await chats(workspaceId, null, [{}])
+
+      const all = (await caller.task.list({})).items
+      expect(all.map((item) => item.id).sort()).toEqual([ofProject!.id, ofNone!.id].sort())
+      expect(all.find((item) => item.id === ofProject!.id)?.project).toEqual({
+        id: site.id,
+        name: site.name,
+      })
+      expect(all.find((item) => item.id === ofNone!.id)?.project).toBeNull()
+
+      expect((await caller.task.list({ folder: site.id })).items.map((item) => item.id)).toEqual([
+        ofProject!.id,
+      ])
+      expect((await caller.task.list({ folder: 'none' })).items.map((item) => item.id)).toEqual([
+        ofNone!.id,
+      ])
+      // The old name stays until the cabinet moves off it (61.14); of the two, `folder` is read.
+      expect((await caller.task.list({ siteId: site.id })).items).toHaveLength(1)
+      expect(
+        (await caller.task.list({ folder: 'none', siteId: site.id })).items.map((item) => item.id),
+      ).toEqual([ofNone!.id])
+      await expect(callerOf(await person()).task.list({ folder: site.id })).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+    })
+
+    it('hides the chats of a deleted project, its folder and a deleted chat', async () => {
+      const { owner, site, workspaceId } = await siteOwner()
+      const caller = callerOf(owner)
+      await chats(workspaceId, site.id, [{}])
+      const [gone] = await chats(workspaceId, null, [{}])
+      const [kept] = await chats(workspaceId, null, [{}])
+      await db.task.update({ where: { id: gone!.id }, data: { deletedAt: new Date() } })
+      await db.site.update({ where: { id: site.id }, data: { deletedAt: new Date() } })
+
+      expect((await caller.task.list({})).items.map((item) => item.id)).toEqual([kept!.id])
+      expect((await caller.task.folders({})).folders).toEqual([
+        { project: null, count: 1, attention: false },
+      ])
+      await expect(caller.task.list({ folder: site.id })).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+    })
+
+    it('walks the pages of the list by the cursor, in the format it always had', async () => {
+      const { owner, workspaceId } = await siteOwner()
+      const caller = callerOf(owner)
+      const rows = await chats(
+        workspaceId,
+        null,
+        Array.from({ length: 53 }, () => ({})),
+      )
+
+      const first = await caller.task.list({})
+      expect(first.items).toHaveLength(50)
+      expect(first.nextCursor).toMatch(/^\d{1,17}_[0-9a-f-]{36}$/u)
+      const second = await caller.task.list({ cursor: first.nextCursor! })
+      expect(second.items).toHaveLength(3)
+      expect(second.nextCursor).toBeNull()
+      expect([...first.items, ...second.items].map((item) => item.id)).toEqual(newestFirst(rows))
+    })
+
+    it('merges the pages of two workspaces and loses no chat of either', async () => {
+      const { owner, workspaceId } = await siteOwner()
+      const other = await siteOwner()
+      await db.member.create({
+        data: { workspaceId: other.workspaceId, userId: owner.id, role: 'member' },
+      })
+      const count = Array.from({ length: 55 }, () => ({}))
+      const ours = await chats(workspaceId, null, count)
+      const theirs = await chats(other.workspaceId, other.site.id, count)
+      // In turns, each moment twice: a page of one workspace alone would leave out the other's.
+      const start = Date.now()
+      const rows = []
+      for (const [index, chat] of ours.entries()) {
+        const updatedAt = new Date(start - index * 60_000)
+        for (const { id } of [chat, theirs[index]!])
+          rows.push(await db.task.update({ where: { id }, data: { updatedAt } }))
+      }
+      const caller = callerOf(owner)
+
+      const pages = []
+      let cursor: string | undefined
+      do {
+        const page = await caller.task.list(cursor === undefined ? {} : { cursor })
+        pages.push(page.items.map((item) => item.id))
+        cursor = page.nextCursor ?? undefined
+      } while (cursor !== undefined)
+
+      expect(pages.map((page) => page.length)).toEqual([50, 50, 10])
+      expect(pages.flat()).toEqual(newestFirst(rows))
+    })
+
+    it('counts the folders on the server over all the chats, «Без проекта» last', async () => {
+      const { owner, site, workspaceId } = await siteOwner()
+      const second = await db.site.create({
+        data: {
+          name: 'Пекарня',
+          url: `https://${randomUUID()}.example.ru`,
+          stack: 'wordpress',
+          status: 'active',
+          workspaceId,
+        },
+      })
+      await chats(workspaceId, site.id, [{}, { status: 'awaiting_approval' }])
+      const [waits, answered] = await chats(workspaceId, second.id, [
+        { status: 'awaiting_user' },
+        { status: 'awaiting_user' },
+      ])
+      await db.task.update({ where: { id: answered!.id }, data: { turnNo: 1 } })
+      await db.$transaction((tx) =>
+        insertFeedEvent(tx, {
+          taskId: answered!.id,
+          row: {
+            type: 'feed.result',
+            payload: {
+              v: 1,
+              turn: 1,
+              message: 'Готово.',
+              site: 'unchanged',
+              next: 'awaiting_user',
+              filesChanged: 0,
+              changeType: 'none',
+              needsApproval: false,
+              risk: 'low',
+            },
+          },
+        }),
+      )
+      // The latest changed of all, and still the last folder.
+      await chats(
+        workspaceId,
+        null,
+        Array.from({ length: 52 }, () => ({})),
+      )
+      const caller = callerOf(owner)
+      const { folders } = await caller.task.folders({})
+
+      expect(folders).toEqual([
+        { project: { id: second.id, name: 'Пекарня' }, count: 2, attention: true },
+        { project: { id: site.id, name: site.name }, count: 2, attention: true },
+        { project: null, count: 52, attention: false },
+      ])
+
+      // A chat the agent answered waits for no one: the folder says so once nothing else waits.
+      await db.task.update({ where: { id: waits!.id }, data: { status: 'done' } })
+      const after = (await caller.task.folders({})).folders
+      expect(after.find((folder) => folder.project?.id === second.id)?.attention).toBe(false)
+    })
+
+    it('reads a page through the index of the workspace, not all of its chats', async () => {
+      const { owner, workspaceId } = await siteOwner()
+      const rows = await chats(
+        workspaceId,
+        null,
+        Array.from({ length: 60 }, () => ({})),
+      )
+      const [plain, paged] = await db.$transaction(async (tx) => {
+        // A table of a few rows is cheaper read and sorted: these leave the planner what it takes
+        // on a full table, the order of the index under the LIMIT (measured on 20 000 chats).
+        await tx.$executeRaw`SET LOCAL enable_seqscan = off`
+        await tx.$executeRaw`SET LOCAL enable_bitmapscan = off`
+        await tx.$executeRaw`SET LOCAL enable_sort = off`
+        const explain = async (cursor?: string) => {
+          const query = dialogPageQuery({ userId: owner.id, cursor })
+          const lines = await tx.$queryRaw<Array<{ 'QUERY PLAN': string }>>(
+            Prisma.sql`EXPLAIN (ANALYZE, TIMING OFF, SUMMARY OFF) ${query}`,
+          )
+          return lines.map((line) => line['QUERY PLAN']).join('\n')
+        }
+        const middle = rows[0]!.updatedAt.getTime() * 1000 + 1
+        return [await explain(), await explain(`${middle}_${rows[0]!.id}`)]
+      })
+      // 51 of the 60: the rest of the workspace is not read for this page.
+      expect(plain).toMatch(/Index Scan using tasks_workspace_updated_idx .* rows=51 /u)
+      // The cursor is a condition of the index, not a filter of what it has read.
+      expect(paged).toMatch(/tasks_workspace_updated_idx.*\n\s+Index Cond: .*updated_at/u)
+    })
+
+    it('answers what a chat without a site does not have without a failure of the server', async () => {
+      const caller = callerOf(await person())
+      const taskId = await newChat(caller)
+      await expect(caller.preview.ticket({ taskId })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+      await expect(caller.release.prepare({ taskId })).rejects.toMatchObject({
+        code: 'CONFLICT',
+        cause: { code: 'CHAT_COMMAND_UNAVAILABLE' },
+      })
+      expect(await caller.candidate.get({ taskId })).toBeNull()
+    })
+  })
+
+  describe('a chat of a closed project (docs/plan/61-chats-first.md, К39)', () => {
+    const closed = ['paused', 'disconnected', 'archived'] as const
+    const refused = { code: 'CONFLICT', cause: { details: { reason: 'site_not_active' } } }
+
+    it.each(closed)('reads, and takes no words, when the project is %s', async (status) => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+      await asked(taskId, {
+        kind: 'agent',
+        intro: 'Нужно уточнить.',
+        questions: [{ text: 'Какой телефон поставить?', options: [] }],
+      })
+      await db.site.update({ where: { id: site.id }, data: { status } })
+
+      await expect(
+        caller.task.message({ taskId, requestId: randomUUID(), text: 'Этот' }),
+      ).rejects.toMatchObject(refused)
+
+      expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
+        status: 'awaiting_user',
+      })
+      expect((await caller.task.feed({ taskId })).task.status).toBe('awaiting_user')
+      expect(await caller.task.get({ taskId })).toMatchObject({
+        siteId: site.id,
+        project: { id: site.id, name: site.name, url: site.url, closed: true },
+      })
+    })
+
+    it('answers a repeat of the words it took, though the project has closed since', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+      await asked(taskId, {
+        kind: 'agent',
+        intro: 'Нужно уточнить.',
+        questions: [{ text: 'Какой телефон поставить?', options: [] }],
+      })
+      const input = { taskId, requestId: randomUUID(), text: 'Этот' }
+      const posted = await caller.task.message(input)
+      await db.site.update({ where: { id: site.id }, data: { status: 'paused' } })
+
+      expect(await caller.task.message(input)).toEqual({ ...posted, repeated: true })
+    })
+
+    it('says the project is open while it is', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+      expect((await caller.task.get({ taskId })).project?.closed).toBe(false)
+    })
+
+    it('refuses «Продолжить» and «Продолжить работу агента», and answers a repeat as before', async () => {
+      const { owner, site, workspaceId } = await siteOwner()
+      await paidTariff(workspaceId)
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+      await asked(taskId, { kind: 'ceiling', reason: 'step', spent: 30, held: 35, left: 5 })
+      const requestId = randomUUID()
+      const posted = await caller.task.continue({ taskId, requestId })
+      await asked(taskId, { kind: 'ceiling', reason: 'step', spent: 30, held: 35, left: 5 })
+      await db.site.update({ where: { id: site.id }, data: { status: 'paused' } })
+
+      await expect(caller.task.continue({ taskId, requestId: randomUUID() })).rejects.toMatchObject(
+        refused,
+      )
+      expect(await caller.task.continue({ taskId, requestId })).toEqual({
+        ...posted,
+        repeated: true,
+      })
+
+      const browser = await siteOwner()
+      const inBrowser = callerOf(browser.owner, { browser: true })
+      await db.site.update({ where: { id: browser.site.id }, data: { status: 'onboarding' } })
+      const chat = await newDialog(inBrowser, browser.site.id)
+      const resumed = { taskId: chat.taskId, requestId: randomUUID() }
+      await asked(chat.taskId, { kind: 'browser', reason: 'captcha', message: 'Пройдите проверку' })
+      const given = await inBrowser.task.resumeAgent(resumed)
+      await asked(chat.taskId, { kind: 'browser', reason: 'captcha', message: 'Пройдите проверку' })
+      await db.site.update({ where: { id: browser.site.id }, data: { status: 'disconnected' } })
+      await expect(
+        inBrowser.task.resumeAgent({ taskId: chat.taskId, requestId: randomUUID() }),
+      ).rejects.toMatchObject(refused)
+      expect(await inBrowser.task.resumeAgent(resumed)).toEqual({ ...given, repeated: true })
+    })
+  })
+
+  describe('a project a chat cannot work with (docs/plan/61-chats-first.md, §5.9, К8)', () => {
+    /** A site of the wizard on an address the browser of production does not open. */
+    async function plainAddress(status: 'active' | 'onboarding') {
+      const fixture = await siteOwner({ repository: false })
+      await db.site.update({
+        where: { id: fixture.site.id },
+        data: { url: `http://${randomUUID()}.example.ru`, status },
+      })
+      return fixture
+    }
+    const create = (
+      caller: ReturnType<typeof callerOf>,
+      siteId: string,
+      requirements?: { repository: boolean; browser: boolean },
+    ) => {
+      const taskId = randomUUID()
+      taskIds.push(taskId)
+      return caller.task.create({
+        siteId,
+        taskId,
+        text: 'Добавьте новость',
+        ...(requirements === undefined ? {} : { requirements }),
+      })
+    }
+
+    it.each(['active', 'onboarding'] as const)(
+      'names the address of a %s site in production, with the browser ready',
+      async (status) => {
+        const { owner, site } = await plainAddress(status)
+        const caller = callerOf(owner, { appEnv: 'production', browser: true })
+        const insecure = { cause: { details: { reason: 'browser_insecure' } } }
+
+        await expect(create(caller, site.id)).rejects.toMatchObject(insecure)
+        await expect(
+          create(caller, site.id, { repository: false, browser: true }),
+        ).rejects.toMatchObject(insecure)
+      },
+    )
+
+    it('names the browser when the platform has none, whatever the address', async () => {
+      const { owner, site } = await plainAddress('onboarding')
+      await expect(
+        create(callerOf(owner, { appEnv: 'production' }), site.id),
+      ).rejects.toMatchObject({ cause: { details: { reason: 'browser_unavailable' } } })
+    })
+  })
+
+  describe('project.list', () => {
+    it('says of every project what a new chat of it works with', async () => {
+      const { owner, site } = await siteOwner({ repository: false })
+      expect((await callerOf(owner).project.list())[0]?.chat).toEqual({
+        state: 'unavailable',
+        requirements: null,
+      })
+      expect((await callerOf(owner, { browser: true }).project.list())[0]?.chat).toEqual({
+        state: 'ready',
+        requirements: { repository: false, browser: true },
+      })
+      await db.site.update({ where: { id: site.id }, data: { status: 'archived' } })
+      expect((await callerOf(owner, { browser: true }).project.list())[0]?.chat).toEqual({
+        state: 'closed',
+        requirements: null,
+      })
     })
   })
 })

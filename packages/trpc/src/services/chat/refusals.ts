@@ -28,6 +28,10 @@ export type TaskNotAcceptedReason =
 export const taskNotAccepted = (reason: TaskNotAcceptedReason) =>
   new DomainError('TASK_NOT_ACCEPTED', `A dialog is not accepted: ${reason}`, 409, { reason })
 
+/** A chat without a project leases by its own id: only a UUID of version 7 (К14). */
+export const taskIdInvalid = () =>
+  new DomainError('TASK_ID_INVALID', 'A chat without a project takes a UUID of version 7', 400)
+
 export const taskTextEmpty = () =>
   new DomainError('TASK_TEXT_EMPTY', 'The request has no visible characters', 400)
 export const taskTextTooLong = () =>

@@ -1502,6 +1502,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
   const importing = {
     setup: 'pending',
     capabilities: { repository: 'importing', browser: 'not_configured' },
+    chat: { state: 'unavailable', requirements: null },
   } as const
 
   it('isolates other users sites and does not disclose their duplicate URLs', async () => {

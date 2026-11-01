@@ -56,6 +56,8 @@ import {
 } from '../services/chat/context.ts'
 import {
   browserAddressSecure,
+  chatRequirements,
+  projectChatOutput,
   siteCapabilities,
   siteCapabilitiesOutput,
 } from '../services/site-capabilities.ts'
@@ -97,7 +99,12 @@ const setupField = z.enum(siteSetupStates).nullable()
  * What the site can be worked on with now (docs/plan/57-browser-tasks.md, Б9): its repository and
  * the browser of the platform, each decided by the server.
  */
-const listOutput = projectOutput.extend({ setup: setupField, capabilities: siteCapabilitiesOutput })
+const listOutput = projectOutput.extend({
+  setup: setupField,
+  capabilities: siteCapabilitiesOutput,
+  /** What a new chat of it says in the picker and works with (docs/plan/61-chats-first.md, К8). */
+  chat: projectChatOutput,
+})
 
 /** What `siteCapabilities` reads of a site besides its status and its import. */
 const capabilitySelect = {
@@ -381,15 +388,12 @@ export const projectRouter = router({
     })
     return sites.map(({ provisioningStages, gitRepositories, ...site }) => {
       const setup = siteSetupState(provisioningStages[0])
-      return {
-        ...withHost(site),
+      const capabilities = capabilitiesOf(
+        ctx,
+        { status: site.status, stack: site.stack, url: site.url, gitRepositories },
         setup,
-        capabilities: capabilitiesOf(
-          ctx,
-          { status: site.status, stack: site.stack, url: site.url, gitRepositories },
-          setup,
-        ),
-      }
+      )
+      return { ...withHost(site), setup, capabilities, chat: chatRequirements(capabilities) }
     })
   }),
 

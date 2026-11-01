@@ -26,7 +26,7 @@ export const loadDialog = cache(async (projectId: string, taskId: string) => {
   if (!UUID.test(taskId)) notFound()
   try {
     const dialog = await (await getServerCaller()).task.get({ taskId })
-    if (dialog.siteId.toLowerCase() !== site.id.toLowerCase()) notFound()
+    if (dialog.siteId?.toLowerCase() !== site.id.toLowerCase()) notFound()
     return { site, dialog }
   } catch (error) {
     unstable_rethrow(error)

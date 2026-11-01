@@ -20,7 +20,11 @@ import { activityEventSchema, readTurnActivity } from '../services/chat/activity
 import { attachmentIdsSchema } from '../services/chat/attachments.ts'
 import { feedBrowserOutput } from '../services/chat/browser.ts'
 import { chatContextOf } from '../services/chat/context.ts'
-import { DIALOG_CURSOR_PATTERN, listDialogs } from '../services/chat/dialog-list.ts'
+import {
+  DIALOG_CURSOR_PATTERN,
+  listDialogFolders,
+  listDialogs,
+} from '../services/chat/dialog-list.ts'
 import { readDialogFeed, readDialogHead } from '../services/chat/feed.ts'
 import { removeDialog, renameDialog, setDialogEffort } from '../services/chat/dialog-manage.ts'
 import { dialogCommands, dialogFacts } from '../services/chat/dialog-facts.ts'
@@ -135,17 +139,21 @@ const feedOutput = z.strictObject({
   more: z.boolean(),
 })
 
+/** The project of a chat as a row of the list shows it. */
+const projectOutput = z.strictObject({ id: z.uuid(), name: z.string() })
+
 export const taskRouter = router({
   /**
    * A new dialog with the client's first words: the task, its reserve, the files, the row, the
    * pass and the preview in one transaction. `taskId` comes from the browser; a repeat returns the
-   * same task. `requirements` — with the repository or in the browser (docs/plan/57, Б2, Б9);
-   * absent, the server takes what the site offers (`project.get`, `capabilities`).
+   * same task. `siteId` is required and null for a chat without a project: a forgotten field must
+   * not silently give one (docs/plan/61-chats-first.md, К7). `requirements` — the choice of the
+   * old screen (docs/plan/57, Б2, Б9), until 61.14; absent, the server reads them from the project.
    */
   create: consentedProcedure
     .input(
       z.strictObject({
-        siteId: z.uuid(),
+        siteId: z.uuid().nullable(),
         taskId: browserId,
         text: words,
         requirements: siteTaskRequirementsSchema.optional(),
@@ -304,11 +312,16 @@ export const taskRouter = router({
       }),
     ),
 
-  /** The dialogs of a site, the latest changed first; `cursor` is `nextCursor` of the page before. */
+  /**
+   * The chats of the user, the latest changed first; `folder` — of one project, or `none` for those
+   * without one; `cursor` is `nextCursor` of the page before. `siteId` is the old name of `folder`
+   * with a project, until the cabinet moves off it (docs/plan/61-chats-first.md, 61.14).
+   */
   list: consentedProcedure
     .input(
       z.strictObject({
-        siteId: z.uuid(),
+        folder: z.union([z.uuid(), z.literal('none')]).optional(),
+        siteId: z.uuid().optional(),
         cursor: z.string().regex(DIALOG_CURSOR_PATTERN).optional(),
       }),
     )
@@ -326,19 +339,53 @@ export const taskRouter = router({
             answered: z.boolean(),
             createdAt: z.date(),
             updatedAt: z.date(),
+            project: projectOutput.nullable(),
           }),
         ),
         nextCursor: z.string().nullable(),
       }),
     )
-    .query(({ ctx, input }) => listDialogs(ctx.prisma, { ...input, userId: ctx.user.id })),
+    .query(({ ctx, input }) =>
+      listDialogs(ctx.prisma, {
+        userId: ctx.user.id,
+        folder: input.folder ?? input.siteId,
+        cursor: input.cursor,
+      }),
+    ),
 
-  /** The head of one dialog with its site. */
+  /** «По проектам»: the folders of the user's chats, counted on the server over all of them. */
+  folders: consentedProcedure
+    .input(z.strictObject({}))
+    .output(
+      z.strictObject({
+        folders: z.array(
+          z.strictObject({
+            project: projectOutput.nullable(),
+            count: z.number().int(),
+            attention: z.boolean(),
+          }),
+        ),
+      }),
+    )
+    .query(async ({ ctx }) => ({
+      folders: await listDialogFolders(ctx.prisma, { userId: ctx.user.id }),
+    })),
+
+  /** The head of one chat with its project; both null for a chat without one. */
   get: consentedProcedure
     .input(z.strictObject({ taskId: z.uuid() }))
     .output(
       feedTaskHeadSchema.extend({
-        siteId: z.uuid(),
+        siteId: z.uuid().nullable(),
+        project: z
+          .strictObject({
+            id: z.uuid(),
+            name: z.string(),
+            url: z.string(),
+            /** Paused, disconnected or archived: the chat reads and takes no words (К39). */
+            closed: z.boolean(),
+          })
+          .nullable(),
         alias: z.string(),
         createdAt: z.date(),
         updatedAt: z.date(),

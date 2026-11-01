@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest'
 import {
   browserAddressSecure,
   chatRequirements,
-  defaultRequirements,
   siteCapabilities,
+  siteClosed,
   type SiteCapabilityFacts,
 } from './site-capabilities.ts'
 
@@ -100,6 +100,13 @@ describe('the address of a site for the browser', () => {
   })
 })
 
+describe('siteClosed', () => {
+  it('closes a paused, a disconnected and an archived site, and no other', () => {
+    const statuses = ['onboarding', 'active', 'paused', 'disconnected', 'archived'] as const
+    expect(statuses.filter(siteClosed)).toEqual(['paused', 'disconnected', 'archived'])
+  })
+})
+
 describe('chatRequirements', () => {
   const both = { repository: true, browser: true }
   const code = { repository: true, browser: false }
@@ -141,28 +148,5 @@ describe('chatRequirements', () => {
     const { requirements } = chatRequirements({ repository: 'ready', browser: 'ready' })
     requirements!.browser = false
     expect(chatRequirements({ repository: 'ready', browser: 'ready' }).requirements).toEqual(both)
-  })
-})
-
-describe('defaultRequirements', () => {
-  it('takes the repository where it is ready, the browser where only it is, else the repository', () => {
-    expect(defaultRequirements({ repository: 'ready', browser: 'ready' })).toEqual({
-      repository: true,
-      browser: false,
-    })
-    expect(defaultRequirements({ repository: 'absent', browser: 'ready' })).toEqual({
-      repository: false,
-      browser: true,
-    })
-    expect(defaultRequirements({ repository: 'importing', browser: 'not_configured' })).toEqual({
-      repository: true,
-      browser: false,
-    })
-  })
-
-  it('hands out a copy: the frozen constants of the domain stay as they are', () => {
-    const requirements = defaultRequirements({ repository: 'ready', browser: 'ready' })
-    requirements.browser = true
-    expect(defaultRequirements({ repository: 'ready', browser: 'ready' }).browser).toBe(false)
   })
 })

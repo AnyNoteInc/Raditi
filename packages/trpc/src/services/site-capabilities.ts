@@ -4,6 +4,7 @@ import {
   BROWSER_ONLY,
   isProduction,
   REPOSITORY_ONLY,
+  taskRequirementsSchema,
   type TaskRequirements,
 } from '@repo/domain'
 import { z } from 'zod'
@@ -57,6 +58,9 @@ export const siteCapabilitiesOutput = z.strictObject({
 /** A site in one of these takes no task at all (`browserClosedSiteStatuses` of @repo/db). */
 const CLOSED: readonly SiteStatus[] = ['paused', 'disconnected', 'archived']
 
+/** The site is paused, disconnected or archived: its chats are read, not written (К39). */
+export const siteClosed = (status: SiteStatus): boolean => CLOSED.includes(status)
+
 /** What the capabilities of a site are decided by, as the procedures read it. */
 export interface SiteCapabilityFacts {
   status: SiteStatus
@@ -77,7 +81,7 @@ export const browserAddressSecure = (url: string, appEnv: AppEnv | null): boolea
   appEnv === null || !isProduction(appEnv) || url.startsWith('https://')
 
 export function siteCapabilities(site: SiteCapabilityFacts): SiteCapabilities {
-  const closed = CLOSED.includes(site.status)
+  const closed = siteClosed(site.status)
   let repository: RepositoryCapability
   if (closed) repository = 'inactive'
   else if (site.setup === 'pending') repository = 'importing'
@@ -91,17 +95,6 @@ export function siteCapabilities(site: SiteCapabilityFacts): SiteCapabilities {
   else if (!site.secureAddress) browser = 'insecure'
   else browser = 'ready'
   return { repository, browser }
-}
-
-/**
- * The requirements of a task the client did not choose (`task.create` without them): the
- * repository where it is ready, else the browser where it is — and the repository otherwise, so a
- * site that takes neither is refused in the words it always was.
- */
-export function defaultRequirements(capabilities: SiteCapabilities): TaskRequirements {
-  if (capabilities.repository === 'ready') return { ...REPOSITORY_ONLY }
-  if (capabilities.browser === 'ready') return { ...BROWSER_ONLY }
-  return { ...REPOSITORY_ONLY }
 }
 
 /**
@@ -124,6 +117,11 @@ export interface ProjectChat {
   state: ProjectChatState
   requirements: TaskRequirements | null
 }
+
+export const projectChatOutput = z.strictObject({
+  state: z.enum(projectChatStates),
+  requirements: taskRequirementsSchema.nullable(),
+})
 
 /** A chat with the code and the live site in one (К10). */
 const CODE_AND_BROWSER: TaskRequirements = Object.freeze({ repository: true, browser: true })

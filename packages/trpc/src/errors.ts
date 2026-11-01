@@ -177,6 +177,7 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   WORKSPACE_KEY_UNAVAILABLE:
     'Не удалось начать задание из-за технического сбоя. Попробуйте ещё раз немного позже',
   TASK_NOT_ACCEPTED: 'Задания для этого сайта сейчас не принимаются',
+  TASK_ID_INVALID: 'Не удалось начать чат. Обновите страницу и попробуйте ещё раз',
   TASK_TEXT_EMPTY: 'Напишите, что нужно сделать на сайте',
   TASK_TEXT_TOO_LONG: feedTooLongText(FEED_REQUEST_TEXT_LIMIT),
   TASK_TEXT_HAS_SECRET: feedInputText.secret,

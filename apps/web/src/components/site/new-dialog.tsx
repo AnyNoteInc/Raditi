@@ -51,7 +51,7 @@ export function newDialogWays(capabilities: SiteCapabilities): NewDialogWays {
       capabilities.browser === 'insecure' ? taskWayText.insecure : composerText.notConnected
     return { ways, initial: null, blocked }
   }
-  // The server's own default: the copy of the site where it is ready (`defaultRequirements`).
+  // The copy of the site where it is ready; the screen says which way it chose.
   return { ways, initial: repository ? 'repository' : 'browser', blocked: null }
 }
 
