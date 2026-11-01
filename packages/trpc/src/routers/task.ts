@@ -9,7 +9,6 @@ import {
   reasoningEffortSchema,
   releaseOutcomes,
   releaseStatuses,
-  siteTaskRequirementsSchema,
   taskModes,
   taskStatuses,
   type FeedItem,
@@ -147,8 +146,8 @@ export const taskRouter = router({
    * A new dialog with the client's first words: the task, its reserve, the files, the row, the
    * pass and the preview in one transaction. `taskId` comes from the browser; a repeat returns the
    * same task. `siteId` is required and null for a chat without a project: a forgotten field must
-   * not silently give one (docs/plan/61-chats-first.md, К7). `requirements` — the choice of the
-   * old screen (docs/plan/57, Б2, Б9), until 61.14; absent, the server reads them from the project.
+   * not silently give one, and what the chat works with is the server's, read from the project
+   * (docs/plan/61-chats-first.md, К7).
    */
   create: consentedProcedure
     .input(
@@ -156,7 +155,6 @@ export const taskRouter = router({
         siteId: z.uuid().nullable(),
         taskId: browserId,
         text: words,
-        requirements: siteTaskRequirementsSchema.optional(),
         attachments: attachmentIdsSchema.optional(),
         /** How hard the model thinks: `low`, `high` (the default) or `max`. */
         effort: reasoningEffortSchema.optional(),
@@ -169,7 +167,6 @@ export const taskRouter = router({
         siteId: input.siteId,
         taskId: input.taskId,
         text: input.text,
-        ...(input.requirements === undefined ? {} : { requirements: input.requirements }),
         ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
         ...(input.effort === undefined ? {} : { effort: input.effort }),
         now: new Date(),
@@ -314,14 +311,12 @@ export const taskRouter = router({
 
   /**
    * The chats of the user, the latest changed first; `folder` — of one project, or `none` for those
-   * without one; `cursor` is `nextCursor` of the page before. `siteId` is the old name of `folder`
-   * with a project, until the cabinet moves off it (docs/plan/61-chats-first.md, 61.14).
+   * without one; `cursor` is `nextCursor` of the page before.
    */
   list: consentedProcedure
     .input(
       z.strictObject({
         folder: z.union([z.uuid(), z.literal('none')]).optional(),
-        siteId: z.uuid().optional(),
         cursor: z.string().regex(DIALOG_CURSOR_PATTERN).optional(),
       }),
     )
@@ -348,7 +343,7 @@ export const taskRouter = router({
     .query(({ ctx, input }) =>
       listDialogs(ctx.prisma, {
         userId: ctx.user.id,
-        folder: input.folder ?? input.siteId,
+        folder: input.folder,
         cursor: input.cursor,
       }),
     ),

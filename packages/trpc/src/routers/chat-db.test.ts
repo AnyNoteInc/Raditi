@@ -31,7 +31,6 @@ import {
   type ModelClass,
   type ObjectStorage,
   type SecretStore,
-  type TaskRequirements,
 } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
@@ -1028,7 +1027,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         { isolationLevel: 'ReadCommitted' },
       )
       expect(await activeHolds(taskId)).toEqual([])
-      const listed = (await caller.task.list({ siteId: site.id })).items
+      const listed = (await caller.task.list({ folder: site.id })).items
       expect(listed.find((item) => item.id === taskId)).toMatchObject({
         status: 'awaiting_user',
         answered: false,
@@ -1622,7 +1621,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       })
 
       expect((await caller.task.feed({ taskId })).task.title).toBe('Телефон в шапке')
-      const listed = await caller.task.list({ siteId: site.id })
+      const listed = await caller.task.list({ folder: site.id })
       expect(listed.items.find((item) => item.id === taskId)?.title).toBe('Телефон в шапке')
       expect(await updatedAt(taskId)).toBe(before)
       for (const [title, code] of [
@@ -1679,7 +1678,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       const preview = await db.previewEnvironment.findUniqueOrThrow({ where: { taskId } })
       expect(preview.enqueues).toBe(2)
       expect(
-        (await caller.task.list({ siteId: site.id })).items.map((item) => item.id),
+        (await caller.task.list({ folder: site.id })).items.map((item) => item.id),
       ).not.toContain(taskId)
       await expect(caller.task.feed({ taskId })).rejects.toMatchObject({ code: 'NOT_FOUND' })
       await expect(caller.task.rename({ taskId, title: 'Снова' })).rejects.toMatchObject({
@@ -2372,7 +2371,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       expect(feed.commands.find((command) => command.id === 'undo')?.refusal).toBe(
         'release_in_progress',
       )
-      const list = await caller.task.list({ siteId: site.id })
+      const list = await caller.task.list({ folder: site.id })
       expect(list.items.find((item) => item.id === taskId)?.undo).toBe('running')
     })
 
@@ -2706,7 +2705,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         siteId: site.id,
         alias: expect.stringMatching(/^[0-9a-z]{4,12}$/),
       })
-      expect((await caller.task.list({ siteId: site.id })).items.map((item) => item.id)).toEqual([
+      expect((await caller.task.list({ folder: site.id })).items.map((item) => item.id)).toEqual([
         taskId,
       ])
     })
@@ -3099,82 +3098,41 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       })
     })
 
-    it('takes the code and the browser in one where both are ready, and the browser alone when asked', async () => {
-      const { owner, site, workspaceId } = await siteOwner()
-      // Two dialogs at once: more than the gift holds.
-      await paidTariff(workspaceId)
+    it('takes the code and the browser in one where both are ready', async () => {
+      const { owner, site } = await siteOwner()
       const caller = callerOf(owner, { browser: true })
       expect((await caller.project.list())[0]).toMatchObject({
         capabilities: { repository: 'ready', browser: 'ready' },
       })
 
-      // Without a choice: what the server reads from the project (К7, К10), with its preview.
-      const repository = await newDialog(caller, site.id)
-      const asked = randomUUID()
-      taskIds.push(asked)
-      await caller.task.create({
-        siteId: site.id,
-        taskId: asked,
-        text: 'Добавьте новость',
-        requirements: { repository: false, browser: true },
-      })
+      // What the server reads from the project (К7, К10), with its preview.
+      const { taskId } = await newDialog(caller, site.id)
 
-      expect(
-        await db.task.findMany({
-          where: { id: { in: [repository.taskId, asked] } },
-          select: { id: true, needsRepository: true, needsBrowser: true },
-          orderBy: { createdAt: 'asc' },
-        }),
-      ).toEqual([
-        { id: repository.taskId, needsRepository: true, needsBrowser: true },
-        { id: asked, needsRepository: false, needsBrowser: true },
-      ])
-      expect(await db.previewEnvironment.count({ where: { taskId: asked } })).toBe(0)
-      expect(await db.previewEnvironment.count({ where: { taskId: repository.taskId } })).toBe(1)
+      expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
+        needsRepository: true,
+        needsBrowser: true,
+      })
+      expect(await db.previewEnvironment.count({ where: { taskId } })).toBe(1)
     })
 
-    it('refuses the browser where the platform has none, both ways at once and a closed site', async () => {
+    it('refuses a project without files where the platform has no browser, and a closed site', async () => {
       const { owner, site } = await browserSite()
       const stackless = callerOf(owner, { browser: true, browserStack: false })
       // A stack without a browser counts as a browser that is not configured (К8).
       expect((await stackless.project.get({ id: site.id })).capabilities.browser).toBe(
         'unsupported',
       )
-      await expect(
-        stackless.task.create({
-          siteId: site.id,
-          taskId: randomUUID(),
-          text: 'Добавьте новость',
-          requirements: { repository: false, browser: true },
-        }),
-      ).rejects.toMatchObject({
-        code: 'CONFLICT',
-        cause: { code: 'TASK_NOT_ACCEPTED', details: { reason: 'browser_unavailable' } },
-      })
-      const refusal = (caller: ReturnType<typeof callerOf>, requirements?: TaskRequirements) =>
-        caller.task.create({
-          siteId: site.id,
-          taskId: randomUUID(),
-          text: 'Добавьте новость',
-          ...(requirements === undefined ? {} : { requirements }),
-        })
+      const refusal = (caller: ReturnType<typeof callerOf>) =>
+        caller.task.create({ siteId: site.id, taskId: randomUUID(), text: 'Добавьте новость' })
       const reason = (value: string) => ({
         code: 'CONFLICT',
         cause: { code: 'TASK_NOT_ACCEPTED', details: { reason: value } },
       })
 
-      await expect(
-        refusal(callerOf(owner), { repository: false, browser: true }),
-      ).rejects.toMatchObject(reason('browser_unavailable'))
       // Neither way is offered: the state of the matrix names the refusal (К8).
+      await expect(refusal(stackless)).rejects.toMatchObject(reason('browser_unavailable'))
       await expect(refusal(callerOf(owner))).rejects.toMatchObject(reason('browser_unavailable'))
       const withBrowser = callerOf(owner, { browser: true })
-      await expect(refusal(withBrowser, { repository: true, browser: true })).rejects.toMatchObject(
-        reason('environment_unsupported'),
-      )
-      await expect(
-        refusal(withBrowser, { repository: true, browser: false }),
-      ).rejects.toMatchObject(reason('site_not_active'))
       await db.site.update({ where: { id: site.id }, data: { status: 'paused' } })
       await expect(refusal(withBrowser)).rejects.toMatchObject(reason('site_not_active'))
       expect(await withBrowser.project.get({ id: site.id })).toMatchObject({
@@ -3846,19 +3804,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       ).rejects.toMatchObject({ code: 'NOT_FOUND' })
     })
 
-    it.each([
-      { repository: true, browser: false },
-      { repository: false, browser: true },
-    ])('reads no requirements for a chat without a project: %j', async (requirements) => {
-      const caller = callerOf(await person())
-      const taskId = chatId()
-      await caller.task.create({ siteId: null, taskId, text: 'Вопрос', requirements })
-      expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
-        needsRepository: false,
-        needsBrowser: false,
-      })
-    })
-
     it('answers a chat of someone else as one that does not exist', async () => {
       const caller = callerOf(await person())
       const taskId = await newChat(caller)
@@ -4015,11 +3960,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       expect((await caller.task.list({ folder: 'none' })).items.map((item) => item.id)).toEqual([
         ofNone!.id,
       ])
-      // The old name stays until the cabinet moves off it (61.14); of the two, `folder` is read.
-      expect((await caller.task.list({ siteId: site.id })).items).toHaveLength(1)
-      expect(
-        (await caller.task.list({ folder: 'none', siteId: site.id })).items.map((item) => item.id),
-      ).toEqual([ofNone!.id])
       await expect(callerOf(await person()).task.list({ folder: site.id })).rejects.toMatchObject({
         code: 'NOT_FOUND',
       })
@@ -4287,19 +4227,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       })
       return fixture
     }
-    const create = (
-      caller: ReturnType<typeof callerOf>,
-      siteId: string,
-      requirements?: { repository: boolean; browser: boolean },
-    ) => {
+    const create = (caller: ReturnType<typeof callerOf>, siteId: string) => {
       const taskId = randomUUID()
       taskIds.push(taskId)
-      return caller.task.create({
-        siteId,
-        taskId,
-        text: 'Добавьте новость',
-        ...(requirements === undefined ? {} : { requirements }),
-      })
+      return caller.task.create({ siteId, taskId, text: 'Добавьте новость' })
     }
 
     it.each(['active', 'onboarding'] as const)(
@@ -4307,12 +4238,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       async (status) => {
         const { owner, site } = await plainAddress(status)
         const caller = callerOf(owner, { appEnv: 'production', browser: true })
-        const insecure = { cause: { details: { reason: 'browser_insecure' } } }
-
-        await expect(create(caller, site.id)).rejects.toMatchObject(insecure)
-        await expect(
-          create(caller, site.id, { repository: false, browser: true }),
-        ).rejects.toMatchObject(insecure)
+        await expect(create(caller, site.id)).rejects.toMatchObject({
+          cause: { details: { reason: 'browser_insecure' } },
+        })
       },
     )
 

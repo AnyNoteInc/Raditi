@@ -11,18 +11,15 @@ import {
 /**
  * Why a new dialog, or a retry of one, is not taken; the text is chosen by it (errors.ts,
  * MESSAGE_FROM_DETAILS). `class_unavailable` — «Попробовать ещё» runs in the class `heavy`, and no
- * enabled model of it has a price in force. `browser_unavailable` — a task in the browser, and the
- * platform has no browser here (docs/plan/57-browser-tasks.md, Б9); `environment_unsupported` — a
- * task that asks for the repository and the browser at once, which is not taken yet (Б3);
- * `browser_insecure` — a task in the browser for a site that does not open over https in
- * production (Б11).
+ * enabled model of it has a price in force. `browser_unavailable` — a project a chat could work
+ * with only in the browser, and the platform has none for it here (docs/plan/61-chats-first.md,
+ * §5.9); `browser_insecure` — the same, and the site does not open over https in production (Б11).
  */
 export type TaskNotAcceptedReason =
   | 'site_not_active'
   | 'not_synthetic'
   | 'class_unavailable'
   | 'browser_unavailable'
-  | 'environment_unsupported'
   | 'browser_insecure'
 
 export const taskNotAccepted = (reason: TaskNotAcceptedReason) =>

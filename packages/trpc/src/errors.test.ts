@@ -875,9 +875,8 @@ describe('the refusals of a dialog, its preview and its release', () => {
     expect(text('not_synthetic')).toContain('тестовая среда')
     expect(text('class_unavailable')).toContain('на этом уровне размышления недоступен')
     expect(text('browser_unavailable')).toBe(
-      'Задания в браузере сейчас не принимаются. Попробуйте ещё раз немного позже',
+      'Сейчас этот проект недоступен для чата. Попробуйте ещё раз немного позже',
     )
-    expect(text('environment_unsupported')).toContain('в браузере или через копию сайта')
     expect(text('other')).toBe('Задания для этого сайта сейчас не принимаются')
     expect(text()).toBe('Задания для этого сайта сейчас не принимаются')
   })

@@ -443,11 +443,9 @@ const MESSAGE_FROM_DETAILS: Readonly<Record<string, (details: unknown) => string
     if (reason === 'class_unavailable')
       return 'Сейчас агент на этом уровне размышления недоступен. Попробуйте ещё раз немного позже'
     if (reason === 'browser_unavailable')
-      return 'Задания в браузере сейчас не принимаются. Попробуйте ещё раз немного позже'
+      return 'Сейчас этот проект недоступен для чата. Попробуйте ещё раз немного позже'
     if (reason === 'browser_insecure')
       return 'В браузере агент работает только с сайтами, которые открываются по защищённому адресу. Адрес сайта в кабинете поменять нельзя: добавьте сайт заново с адресом, который начинается с https://'
-    if (reason === 'environment_unsupported')
-      return 'Такое задание пока не принимается. Выберите один способ работы: в браузере или через копию сайта'
     return MESSAGE_BY_DOMAIN_CODE.TASK_NOT_ACCEPTED!
   },
   // Why a file is not attached (attachment.start): `details.reason`, in the words of the domain.

@@ -14,7 +14,6 @@ import {
   taskHasProductionWrites,
   type Prisma,
   type PrismaClient,
-  type SiteStatus,
 } from '@repo/db'
 import {
   assertTransition,
@@ -46,7 +45,6 @@ import {
   siteCapabilities,
   siteClosed,
   type ProjectChatState,
-  type SiteCapabilities,
 } from '../site-capabilities.ts'
 import { codeImportOnly } from '../site-setup.ts'
 import { taskNotFound, type LockedTask } from './access.ts'
@@ -118,12 +116,6 @@ export interface CreateDialogInput {
   /** Invented by the browser (UUID v7): a repeated request is recognised by it. */
   taskId: string
   text: string
-  /**
-   * What the task works with, as the cabinet chose it (docs/plan/57-browser-tasks.md, Б2, Б3);
-   * absent — what the server reads from the project (`chatRequirements`). Only until the cabinet
-   * sends the project alone (docs/plan/61, 61.14); a chat without a project takes none.
-   */
-  requirements?: TaskRequirements
   /** Files of the first message, announced and stored (`attachment.start`), lowercase. */
   attachments?: readonly string[]
   /** How hard the model thinks (owner's request of 26.10.2026); absent — `high`, as before. */
@@ -141,27 +133,6 @@ export interface CreatedDialog {
 
 /** A chat without a project takes only these ids (К14, `tasks_chat_id_check`). */
 const UUID_V7 = z.uuid({ version: 'v7' })
-
-/**
- * Whether a site takes a task with these requirements (Б3, Б9), or the refusal: the repository and
- * the browser at once are not taken yet; a task in the browser needs a site that is not closed and
- * a browser of the platform; a task with the repository, a connected site — as it always did.
- */
-function assertEnvironment(
-  requirements: TaskRequirements,
-  site: { status: SiteStatus },
-  capabilities: SiteCapabilities,
-): void {
-  if (requirements.repository && requirements.browser)
-    throw taskNotAccepted('environment_unsupported')
-  if (requirements.repository) {
-    if (site.status !== 'active') throw taskNotAccepted('site_not_active')
-    return
-  }
-  if (capabilities.browser === 'closed') throw taskNotAccepted('site_not_active')
-  if (capabilities.browser === 'insecure') throw taskNotAccepted('browser_insecure')
-  if (capabilities.browser !== 'ready') throw taskNotAccepted('browser_unavailable')
-}
 
 /** Why a project takes no chat now, by the state `chatRequirements` gives it. */
 function chatRefusal(state: ProjectChatState): TaskNotAcceptedReason {
@@ -195,14 +166,13 @@ interface ChatPlace {
 }
 
 /**
- * A chat of a project: what it works with is the server's (`chatRequirements`, К7), or, until the
- * cabinet sends the project alone, the requirements it chose (`assertEnvironment`). A site of
- * someone else answers as one that does not exist.
+ * A chat of a project: what it works with is the server's alone (`chatRequirements`, К7). A site
+ * of someone else answers as one that does not exist.
  */
 async function projectPlace(
   db: PrismaClient,
   chat: ChatContext,
-  input: { userId: string; siteId: string; requirements?: TaskRequirements },
+  input: { userId: string; siteId: string },
 ): Promise<ChatPlace> {
   const site = await db.site.findFirst({
     where: accessibleSite(input.userId, input.siteId),
@@ -227,12 +197,8 @@ async function projectPlace(
     browserStack: browserStackSupported({ chat }, site.stack),
     secureAddress: browserAddressSecure(site.url, chat.appEnv),
   })
-  let requirements = input.requirements
-  if (requirements === undefined) {
-    const offered = chatRequirements(capabilities)
-    if (offered.requirements === null) throw taskNotAccepted(chatRefusal(offered.state))
-    requirements = offered.requirements
-  } else assertEnvironment(requirements, site, capabilities)
+  const { state, requirements } = chatRequirements(capabilities)
+  if (requirements === null) throw taskNotAccepted(chatRefusal(state))
   if (!isProduction(chat.appEnv) && site.workspace.dataClass !== 'synthetic')
     throw taskNotAccepted('not_synthetic')
   const preview = requirements.repository ? chat.preview : null
@@ -275,14 +241,14 @@ async function personalPlace(
  * repeat with the same id returns the task of the first delivery to its author; an id that is
  * someone else's answers NOT_FOUND.
  *
- * A task with the repository needs a connected site (`active`); a task in the browser (docs/plan/57,
- * Б9) a site that is not closed and the browser of the platform, and it gets no preview — it works
- * in the site itself (Б1). A chat without a project (docs/plan/61-chats-first.md, К7) takes only an
- * id of version 7: its id is its lease (К14), and the id of a site is of version 8. Outside
- * production a dialog is taken only in a synthetic workspace (rule 1; spec §20, decision 6 of
- * 11.10.2026). The Transit key of the workspace is made before the transaction, after the refusals
- * that read the database only (Б32): a refused task asks nothing of Vault, and a failure of Vault
- * writes nothing — no task, no reserve.
+ * What a chat works with comes from its project alone (docs/plan/61-chats-first.md, К7): the
+ * matrix of `chatRequirements` names the files, the browser, or the refusal; a chat without the
+ * files of a site gets no preview. A chat without a project takes only an id of version 7: its id
+ * is its lease (К14), and the id of a site is of version 8. Outside production a dialog is taken
+ * only in a synthetic workspace (rule 1; spec §20, decision 6 of 11.10.2026). The Transit key of
+ * the workspace is made before the transaction, after the refusals that read the database only
+ * (Б32): a refused task asks nothing of Vault, and a failure of Vault writes nothing — no task, no
+ * reserve.
  */
 export async function createDialog(
   db: PrismaClient,
@@ -306,15 +272,10 @@ export async function createDialog(
   const earlier = await sameDialog(db, { taskId, siteId, userId })
   if (earlier !== null) return earlier
 
-  const { requirements: asked } = input
   const place =
     siteId === null
       ? await personalPlace(db, chat, userId)
-      : await projectPlace(db, chat, {
-          userId,
-          siteId,
-          ...(asked === undefined ? {} : { requirements: asked }),
-        })
+      : await projectPlace(db, chat, { userId, siteId })
   const { workspaceId, site, requirements, preview, hasDatabase } = place
   await ensureWorkspaceKey(chat, workspaceId)
   const modelClass = modelClassOfEffort(input.effort ?? 'high')

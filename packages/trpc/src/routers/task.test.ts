@@ -157,7 +157,6 @@ describe('a dialog of someone else', () => {
       caller.task.cancel({ taskId: ids.taskId, requestId }),
       caller.task.commands({ taskId: ids.taskId }),
       caller.task.activity({ taskId: ids.taskId, turn: 1 }),
-      caller.task.list({ siteId: ids.siteId }),
       caller.task.list({ folder: ids.siteId }),
       caller.candidate.get({ taskId: ids.taskId }),
       caller.candidate.update({ taskId: ids.taskId, requestId }),
@@ -212,15 +211,27 @@ describe('dialogs that are not set up', () => {
   })
 })
 
+describe('the list of chats', () => {
+  it('reads a project from its folder alone', async () => {
+    const { db, prisma } = emptyDb()
+    await expect(
+      // @ts-expect-error the old name of `folder` is gone (docs/plan/61-chats-first.md, 61.14)
+      callerOf(prisma).task.list({ siteId: ids.siteId }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(db.site.findFirst).not.toHaveBeenCalled()
+  })
+})
+
 describe('the environment of a new dialog', () => {
-  it('refuses requirements that need nothing and files given twice, before anything is read', async () => {
+  it('takes no requirements from the client, and refuses files given twice, before anything is read', async () => {
     const { db, prisma } = emptyDb()
     const attachment = randomUUID()
     const calls = [
       callerOf(prisma).task.create({
         ...ids,
         text: 'Добавьте новость',
-        requirements: { repository: false, browser: false },
+        // @ts-expect-error what a chat works with is the server's (docs/plan/61-chats-first.md, К7)
+        requirements: { repository: false, browser: true },
       }),
       callerOf(prisma).task.create({
         ...ids,
