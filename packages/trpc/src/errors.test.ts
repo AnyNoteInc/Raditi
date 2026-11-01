@@ -930,4 +930,19 @@ describe('the refusals of a dialog, its preview and its release', () => {
     )
     expect(formatted('TASK_NOT_ACCEPTED', { refusal: 'busy' }).data).not.toHaveProperty('refusal')
   })
+
+  it('names why a project cannot be deleted: chats that are not over lead to their folder', () => {
+    const shape = { message: 'Refused', code: -32009, data: { code: 'CONFLICT', httpStatus: 409 } }
+    const formatted = (reason: string) =>
+      formatError(
+        shape,
+        toTRPCError(new DomainError('SITE_DELETE_BUSY', 'Refused', 409, { reason })),
+        false,
+      )
+
+    expect(formatted('tasks').message).toBe('Сначала завершите или отмените чаты этого проекта')
+    expect(formatted('tasks').data).toMatchObject({ refusal: 'tasks' })
+    expect(formatted('release').message).toContain('Сейчас на сайте идёт работа')
+    expect(formatted('release').data).toMatchObject({ refusal: 'release' })
+  })
 })

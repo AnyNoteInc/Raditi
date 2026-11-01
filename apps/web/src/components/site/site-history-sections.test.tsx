@@ -66,7 +66,10 @@ describe('«Изменения»', () => {
       `/projects/${siteId}/runs/${release.id}`,
     )
     expect(screen.getByRole('link', { name: 'Отменить в диалоге' }).getAttribute('href')).toBe(
-      `/projects/${siteId}/chat/${release.taskId}`,
+      `/chats/${release.taskId}`,
+    )
+    expect(screen.getByRole('link', { name: 'Открыть диалог' }).getAttribute('href')).toBe(
+      `/chats/${release.taskId}`,
     )
   })
 
@@ -131,8 +134,15 @@ describe('«Запуски»', () => {
     expect(screen.getByText('№ 3 · Баннер на главной')).toBeTruthy()
   })
 
+  it('leads from a run to its chat', () => {
+    render(<RunDetail run={run} now={at(5)} />)
+    expect(screen.getByRole('link', { name: 'Открыть диалог' }).getAttribute('href')).toBe(
+      `/chats/${run.taskId}`,
+    )
+  })
+
   it("tells how a run ended, its steps and a journal of the platform's own reports", () => {
-    render(<RunDetail siteId={siteId} run={run} now={at(5)} />)
+    render(<RunDetail run={run} now={at(5)} />)
     expect(screen.getByText(/сайт вернули к прежнему виду/)).toBeTruthy()
     expect(screen.getByText('Возврат как было')).toBeTruthy()
     expect(screen.getByText('Проверка сайта: не получилось')).toBeTruthy()

@@ -102,4 +102,37 @@ describe('«Опасная область» of the settings of a site', () => {
     expect(await dialog.findByText(/Сейчас на сайте идёт работа/)).toBeTruthy()
     expect(replace).not.toHaveBeenCalled()
   })
+
+  it('leads to the folder of the project when its chats hold the deletion', async () => {
+    remove.mockRejectedValueOnce(
+      Object.assign(new Error('Сначала завершите или отмените чаты этого проекта'), {
+        data: { code: 'CONFLICT', domainCode: 'SITE_DELETE_BUSY', refusal: 'tasks' },
+      }),
+    )
+    show()
+    const dialog = openDialog()
+    fireEvent.change(dialog.getByLabelText('Название проекта'), { target: { value: site.name } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Удалить проект' }))
+    expect((await dialog.findByRole('alert')).textContent).toContain(
+      'Сначала завершите или отмените чаты этого проекта.',
+    )
+    expect(dialog.getByRole('link', { name: 'Открыть чаты проекта' }).getAttribute('href')).toBe(
+      `/chats?folder=${SITE_ID}`,
+    )
+    expect(replace).not.toHaveBeenCalled()
+  })
+
+  it('has no way to the chats when something else holds the deletion', async () => {
+    remove.mockRejectedValueOnce(
+      Object.assign(new Error('Сейчас на сайте идёт работа'), {
+        data: { code: 'CONFLICT', domainCode: 'SITE_DELETE_BUSY', refusal: 'release' },
+      }),
+    )
+    show()
+    const dialog = openDialog()
+    fireEvent.change(dialog.getByLabelText('Название проекта'), { target: { value: site.name } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Удалить проект' }))
+    await dialog.findByRole('alert')
+    expect(dialog.queryByRole('link', { name: 'Открыть чаты проекта' })).toBeNull()
+  })
 })

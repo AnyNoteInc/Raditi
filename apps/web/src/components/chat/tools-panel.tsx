@@ -8,8 +8,6 @@ import Tabs from '@mui/material/Tabs'
 import type { ReactNode, RefObject } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
-import { SITE_PANE_WIDTH, SITE_RAIL_WIDTH, SITE_TOOLBAR_HEIGHT } from '@/components/site/site-nav'
-
 import { toolText } from './chat-texts'
 import {
   isChangesTool,
@@ -21,6 +19,7 @@ import {
   type DialogTool,
   type ToolsState,
 } from './dialog-tools'
+import { SITE_PANE_WIDTH } from './pane-layout'
 import { PaneResizer } from './pane-resizer'
 
 // The panel of the tools beside a dialog (docs/plan/59-dialog-tools-panel.md, И7, И8, И14, И20):
@@ -97,20 +96,19 @@ export function ToolsPanel({
       ref={pane}
       aria-label={toolText.panel}
       // The shell leaves this panel its room at the right edge only while it is drawn.
-      data-site-pane=""
+      data-chat-pane=""
       sx={{
         display: 'flex',
         flexDirection: 'column',
         minWidth: 0,
-        // Below `lg` the area of a tool takes what the window leaves under the bar of the shell —
-        // however many lines the bar takes — and the paddings of the content: the shell is as high
-        // as the window at least and hands its height down to the dialog, so the page does not
-        // scroll under the area. What it holds scrolls inside it, never sideways.
+        // Below `lg` the area of a tool takes what the window leaves under the paddings of the
+        // content: the shell is as high as the window at least and hands its height down to the
+        // dialog, so the page does not scroll under the area. What it holds scrolls inside it,
+        // never sideways.
         flex: { xs: '1 1 0', lg: 'none' },
         minHeight: { xs: 480, lg: 0 },
         position: { lg: 'fixed' },
-        // Under the bar of breadcrumbs, which runs over the panel to the right edge.
-        top: { lg: SITE_TOOLBAR_HEIGHT },
+        top: { lg: 0 },
         bottom: { lg: 0 },
         right: { lg: 'env(safe-area-inset-right)' },
         width: { lg: SITE_PANE_WIDTH },
@@ -127,7 +125,7 @@ export function ToolsPanel({
           top: 0,
           bottom: 0,
           right: 0,
-          left: { xs: 0, sm: `calc(${SITE_RAIL_WIDTH}px + env(safe-area-inset-left))` },
+          left: 'var(--app-rail-width)',
           width: 'auto',
           height: 'auto',
           minHeight: 0,

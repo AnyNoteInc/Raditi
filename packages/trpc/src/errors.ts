@@ -457,6 +457,11 @@ const MESSAGE_FROM_DETAILS: Readonly<Record<string, (details: unknown) => string
       ? attachmentRefusalText[reason as AttachmentRefusal].replace(/\.$/, '')
       : MESSAGE_BY_DOMAIN_CODE.ATTACHMENT_REFUSED!
   },
+  // A project with chats that are not over: the way out is the client's own (docs/plan/61, К40).
+  SITE_DELETE_BUSY: (details) =>
+    reasonOf(details) === 'tasks'
+      ? 'Сначала завершите или отмените чаты этого проекта'
+      : MESSAGE_BY_DOMAIN_CODE.SITE_DELETE_BUSY!,
   // A command of the chat the server refused: the words `task.commands` shows for it.
   CHAT_COMMAND_UNAVAILABLE: (details) => {
     const refusal = commandRefusalOf(details)
@@ -543,16 +548,20 @@ export interface ErrorDetails {
  * Error shape sent to clients: a Russian message on «вы» (clientMessage) and the DomainError
  * code in `data.domainCode`; a refused command of the chat adds which refusal it was,
  * `data.refusal` — one of `chatCommandRefusals`, the same id `task.commands` gives — so the
- * screen can offer the way out (a reset for a broken preview) without parsing words. Nothing
- * else of the details leaves the server. The original message, zod issues and the stack trace
- * are added only in development.
+ * screen can offer the way out (a reset for a broken preview) without parsing words; so does a
+ * project that cannot be deleted, with the reason of `siteDeleteBusy`, for the link to its chats.
+ * Nothing else of the details leaves the server. The original message, zod issues and the stack
+ * trace are added only in development.
  */
 export function formatError<S extends ErrorShape>(shape: S, error: TRPCError, isDev: boolean) {
   const domainCode = isDomainError(error.cause) ? error.cause.code : null
-  const refusal =
-    isDomainError(error.cause) && error.cause.code === 'CHAT_COMMAND_UNAVAILABLE'
+  const refusal = !isDomainError(error.cause)
+    ? null
+    : error.cause.code === 'CHAT_COMMAND_UNAVAILABLE'
       ? commandRefusalOf(error.cause.details)
-      : null
+      : error.cause.code === 'SITE_DELETE_BUSY'
+        ? reasonOf(error.cause.details)
+        : null
   const { stack, ...data } = shape.data
   let details: ErrorDetails | undefined
   if (isDev) {

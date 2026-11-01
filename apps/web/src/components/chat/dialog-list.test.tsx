@@ -7,10 +7,12 @@ import { plain } from '@/components/billing/testing'
 
 import type { DialogListItem, DialogListPage } from './chat-types'
 import { DialogList } from './dialog-list'
-import { declared, SITE_ID } from './testing'
+import { declared } from './testing'
 
-const { listPage, segment, rename, remove } = vi.hoisted(() => ({
-  listPage: vi.fn<(input: { siteId: string; cursor?: string }) => Promise<DialogListPage>>(),
+const { listPage, folders, chatGet, segment, rename, remove } = vi.hoisted(() => ({
+  listPage: vi.fn<(input: { folder?: string; cursor?: string }) => Promise<DialogListPage>>(),
+  folders: vi.fn<() => Promise<{ folders: unknown[] }>>(),
+  chatGet: vi.fn(),
   segment: { current: null as string | null },
   rename: vi.fn<(input: { taskId: string; title: string }) => Promise<{ title: string }>>(),
   remove: vi.fn<(input: { taskId: string }) => Promise<{ removed: true }>>(),
@@ -26,13 +28,16 @@ vi.mock('next/navigation', () => ({
   usePathname: () => '/projects',
 }))
 vi.mock('@/trpc/client', () => ({
-  useTRPCClient: () => ({ task: { list: { query: listPage } } }),
+  useTRPCClient: () => ({
+    task: { list: { query: listPage }, folders: { query: folders }, get: { query: chatGet } },
+  }),
   useTRPC: () => ({
     task: { rename: mutation(rename), remove: mutation(remove) },
     billing: { usage: { queryKey: () => ['billing.usage'] } },
   }),
 }))
 
+const PROJECT_ID = '0199a3f2-0000-8000-8000-0000000000a1'
 const now = new Date()
 const yesterday = new Date(now.getTime() - 36 * 60 * 60_000)
 
@@ -51,13 +56,19 @@ function dialog(id: string, patch: Partial<DialogListItem> = {}): DialogListItem
   }
 }
 
-function showList() {
+function showList(props: { grouped?: boolean; folder?: string | null } = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  render(
+  const list = () => (
     <QueryClientProvider client={queryClient}>
-      <DialogList siteId={SITE_ID} />
-    </QueryClientProvider>,
+      <DialogList {...props} />
+    </QueryClientProvider>
   )
+  const { rerender } = render(list())
+  /** The column stays mounted: the page beside it moved. */
+  return (next: string | null) => {
+    segment.current = next
+    rerender(list())
+  }
 }
 
 beforeEach(() => {
@@ -86,8 +97,8 @@ describe('the list of dialogs', () => {
       'Телефон в шапке',
     )
     const link = within(waiting).getByRole('link')
-    expect(link.getAttribute('href')).toBe(`/projects/${SITE_ID}/chat/${dialog('2').id}`)
-    expect(listPage).toHaveBeenCalledWith({ siteId: SITE_ID })
+    expect(link.getAttribute('href')).toBe(`/chats/${dialog('2').id}`)
+    expect(listPage).toHaveBeenCalledWith({})
   })
 
   // Like a chat of Claude Code (owner's answer of 26.10.2026): the agent answered and asks
@@ -177,7 +188,7 @@ describe('the list of dialogs', () => {
     showList()
     fireEvent.click(await screen.findByRole('button', { name: 'Показать ещё' }))
     expect(await screen.findByText('Второй')).toBeTruthy()
-    expect(listPage).toHaveBeenLastCalledWith({ siteId: SITE_ID, cursor: 'c1' })
+    expect(listPage).toHaveBeenLastCalledWith({ cursor: 'c1' })
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Показать ещё' })).toBeNull())
   })
 
@@ -191,9 +202,7 @@ describe('the list of dialogs', () => {
     listPage.mockResolvedValue({ items: [], nextCursor: null })
     showList()
     expect(
-      await screen.findByText(
-        'Диалогов пока нет. Опишите, что поменять на сайте, — диалог появится здесь.',
-      ),
+      await screen.findByText('Чатов пока нет. Напишите, что нужно сделать, — чат появится здесь.'),
     ).toBeTruthy()
   })
 
@@ -204,5 +213,163 @@ describe('the list of dialogs', () => {
     expect(await screen.findByText('Не удалось загрузить диалоги.')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Повторить' }))
     expect(await screen.findByText('Поменять цену капучино')).toBeTruthy()
+  })
+})
+
+describe('the row of a chat', () => {
+  it('names the project of a chat in one list, and nothing for a chat without one', async () => {
+    listPage.mockResolvedValue({
+      items: [
+        dialog('1', {
+          title: 'С проектом',
+          project: { id: PROJECT_ID, name: 'Кофейня «Крошка»' },
+        }),
+        dialog('2', { title: 'Без проекта вовсе' }),
+      ],
+      nextCursor: null,
+    })
+    showList()
+    expect(plain((await screen.findByRole('link', { name: /С проектом/ })).textContent)).toContain(
+      '· Кофейня «Крошка»',
+    )
+    expect(screen.getByRole('link', { name: /Без проекта вовсе/ }).textContent).not.toContain('·')
+  })
+})
+
+describe('the chats by projects (docs/plan/61-chats-first.md, К23)', () => {
+  const OTHER_ID = '0199a3f2-0000-8000-8000-0000000000b2'
+  const kroshka = { id: PROJECT_ID, name: 'Кофейня «Крошка»' }
+  const grand = { id: OTHER_ID, name: 'Автосервис «Гранд»' }
+  const folder = (name: RegExp, expanded?: boolean) =>
+    screen.findByRole('button', { name, ...(expanded === undefined ? {} : { expanded }) })
+
+  beforeEach(() => {
+    folders.mockResolvedValue({
+      folders: [
+        { project: kroshka, count: 2, attention: false },
+        { project: grand, count: 1, attention: true },
+        { project: null, count: 3, attention: false },
+      ],
+    })
+    listPage.mockImplementation(async ({ folder: asked }) => ({
+      items:
+        asked === OTHER_ID
+          ? [dialog('7', { title: 'Цены на диагностику', project: grand })]
+          : asked === 'none'
+            ? [dialog('8', { title: 'Идеи для пекарни' })]
+            : [dialog('9', { title: 'Новость о дегустации', project: kroshka })],
+      nextCursor: null,
+    }))
+  })
+
+  it('stands the folders as the server counted them, read only once one is open', async () => {
+    showList({ grouped: true })
+    const names = (await screen.findAllByRole('button')).filter((button) =>
+      button.hasAttribute('aria-expanded'),
+    )
+    expect(names.map((button) => plain(button.textContent))).toEqual([
+      expect.stringContaining('Кофейня «Крошка»'),
+      expect.stringContaining('Автосервис «Гранд»'),
+      expect.stringContaining('Без проекта'),
+    ])
+    expect(names[0]!.textContent).toMatch(/2$/)
+    expect(listPage).not.toHaveBeenCalled()
+  })
+
+  it('reads a folder once it is opened, closes it, and shows no project in its rows', async () => {
+    showList({ grouped: true })
+    fireEvent.click(await folder(/Кофейня/, false))
+    const row = await screen.findByRole('link', { name: /Новость о дегустации/ })
+    expect(listPage).toHaveBeenCalledWith({ folder: PROJECT_ID })
+    expect(row.textContent).not.toContain('·')
+    fireEvent.click(await folder(/Кофейня/, true))
+    expect(screen.queryByRole('link', { name: /Новость о дегустации/ })).toBeNull()
+  })
+
+  it('asks for the chats without a project by the word of the server', async () => {
+    showList({ grouped: true })
+    fireEvent.click(await folder(/Без проекта/, false))
+    expect(await screen.findByRole('link', { name: /Идеи для пекарни/ })).toBeTruthy()
+    expect(listPage).toHaveBeenCalledWith({ folder: 'none' })
+  })
+
+  it('says of a closed folder that a chat in it waits, and stops once it is open', async () => {
+    showList({ grouped: true })
+    const closed = await folder(/Есть чаты, которые ждут вас/, false)
+    expect(closed.textContent).toContain('Автосервис «Гранд»')
+    expect(screen.getAllByText(/Есть чаты, которые ждут вас/)).toHaveLength(1)
+    fireEvent.click(closed)
+    await screen.findByRole('link', { name: /Цены на диагностику/ })
+    expect(screen.queryByText(/Есть чаты, которые ждут вас/)).toBeNull()
+  })
+
+  it('opens the folder of the open chat', async () => {
+    const id = dialog('7').id
+    segment.current = id
+    chatGet.mockResolvedValue({ project: grand })
+    showList({ grouped: true })
+    const row = await screen.findByRole('link', { name: /Цены на диагностику/ })
+    expect(row.getAttribute('aria-current')).toBe('page')
+    expect(chatGet).toHaveBeenCalledWith({ taskId: id })
+    expect(await folder(/Гранд/, true)).toBeTruthy()
+    expect(await folder(/Кофейня/, false)).toBeTruthy()
+  })
+
+  it('lets the client close the folder of the open chat, and it stays closed', async () => {
+    segment.current = dialog('7').id
+    chatGet.mockResolvedValue({ project: grand })
+    showList({ grouped: true })
+    fireEvent.click(await folder(/Гранд/, true))
+    expect(await folder(/Гранд/, false)).toBeTruthy()
+    expect(screen.queryByRole('link', { name: /Цены на диагностику/ })).toBeNull()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(await folder(/Гранд/, false)).toBeTruthy()
+  })
+
+  it('opens again the folder the client closed on a move to a chat in it', async () => {
+    const shown = dialog('7').id
+    segment.current = shown
+    chatGet.mockResolvedValue({ project: grand })
+    const moveTo = showList({ grouped: true })
+    fireEvent.click(await folder(/Гранд/, true))
+    await folder(/Гранд/, false)
+    moveTo('new')
+    moveTo(shown)
+    const row = await screen.findByRole('link', { name: /Цены на диагностику/ })
+    expect(row.getAttribute('aria-current')).toBe('page')
+    expect(await folder(/Гранд/, true)).toBeTruthy()
+  })
+
+  it('opens the folder without a project for a chat without one', async () => {
+    segment.current = dialog('8').id
+    chatGet.mockResolvedValue({ project: null })
+    showList({ grouped: true })
+    expect(await folder(/Без проекта/, true)).toBeTruthy()
+  })
+
+  it('leaves the folders closed on a new chat, and asks nothing about it', async () => {
+    segment.current = 'new'
+    showList({ grouped: true })
+    expect(await folder(/Кофейня/, false)).toBeTruthy()
+    expect(chatGet).not.toHaveBeenCalled()
+  })
+
+  it('opens the folder the address names', async () => {
+    showList({ grouped: true, folder: OTHER_ID.toUpperCase() })
+    expect(await folder(/Гранд/, true)).toBeTruthy()
+  })
+
+  it('opens the only folder there is', async () => {
+    folders.mockResolvedValue({ folders: [{ project: null, count: 1, attention: false }] })
+    showList({ grouped: true })
+    expect(await folder(/Без проекта/, true)).toBeTruthy()
+  })
+
+  it('says there are no chats when there is no folder', async () => {
+    folders.mockResolvedValue({ folders: [] })
+    showList({ grouped: true })
+    expect(
+      await screen.findByText('Чатов пока нет. Напишите, что нужно сделать, — чат появится здесь.'),
+    ).toBeTruthy()
   })
 })

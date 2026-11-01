@@ -56,7 +56,7 @@ describe('landing account navigation', () => {
       within(menu)
         .getAllByRole('menuitem')
         .map((item) => item.textContent),
-    ).toEqual(['Проекты', 'Профиль', 'Настройки', 'Выход'])
+    ).toEqual(['Чаты', 'Проекты', 'Профиль', 'Настройки', 'Выход'])
     expect(within(menu).getByRole('menuitem', { name: 'Проекты' })).toHaveAttribute(
       'href',
       '/projects',

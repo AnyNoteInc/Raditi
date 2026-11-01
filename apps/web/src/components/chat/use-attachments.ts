@@ -78,10 +78,11 @@ let counter = 0
 const nextKey = () => `file-${++counter}`
 
 /**
- * The files of one message for a site. `upload` sends the bytes (an XMLHttpRequest by default).
+ * The files of one message for a site; null — of a chat without a project. `upload` sends the
+ * bytes (an XMLHttpRequest by default).
  */
 export function useAttachments(
-  siteId: string,
+  siteId: string | null,
   upload: UploadBytes = uploadBytes,
 ): AttachmentsControl {
   const client = useTRPCClient()

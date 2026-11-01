@@ -137,6 +137,8 @@ export const test = base.extend<
           await prisma.llmCall.deleteMany({ where: { key: { task: owned } } })
           await prisma.llmKey.deleteMany({ where: { task: owned } })
           await prisma.task.deleteMany({ where: owned })
+          // A file nobody sent stays with its site (tests/site/chats.spec.ts).
+          await prisma.attachment.deleteMany({ where: owned })
           // A site the wizard added (fixtures/site-files.ts): its first import — the stage, its
           // event in the outbox, a version it may have saved — and where its files and its
           // database are, then the references of its accesses.

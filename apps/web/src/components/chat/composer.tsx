@@ -12,6 +12,7 @@ import Menu from '@mui/material/Menu'
 import MenuItem from '@mui/material/MenuItem'
 import Typography from '@mui/material/Typography'
 import {
+  useEffect,
   useId,
   useLayoutEffect,
   useRef,
@@ -130,12 +131,12 @@ export interface ComposerCommands {
    * browser has only `/cancel` (docs/plan/57-browser-tasks.md): no preview, release or undo.
    */
   listed?: readonly ChatCommandId[]
-  /** Why a command the server gave no verdict on cannot be run here: on «Новый диалог». */
+  /** Why a command the server gave no verdict on cannot be run here: on «Новый чат». */
   closedReason?: string
 }
 
 /**
- * The field a client writes in, the same on «Новый диалог» and in a dialog that goes on (owner's
+ * The field a client writes in, the same on «Новый чат» and in a dialog that goes on (owner's
  * request of 29.10.2026). Its row holds, in this order, the window of commands — `/` at the start
  * of the empty field or its button opens it —, the paperclip «Прикрепить файлы» with «Загрузить
  * файл» (not «+»: «+» of a dialog is its tools, docs/plan/59-dialog-tools-panel.md, И15),
@@ -153,11 +154,14 @@ export function Composer({
   busy = false,
   onSend,
   commands,
+  project,
   effort,
   attachments,
   noSecrets = feedInputText.noSecrets,
   fieldRef,
   stop,
+  restored = null,
+  onTextChange,
 }: {
   label?: string
   placeholder: string
@@ -176,6 +180,11 @@ export function Composer({
    */
   onSend: (text: string, attachmentIds: readonly string[]) => Promise<boolean>
   commands?: ComposerCommands
+  /**
+   * The pill of the project of a new chat, before «Размышление»; on a phone a row of its own over
+   * the buttons (docs/plan/61-chats-first.md, К6).
+   */
+  project?: ReactNode
   /** «Размышление»: the menu of how hard the model thinks, after the paperclip. */
   effort?: ReactNode
   /** The files of the message (docs/plan/57-browser-tasks.md, Б26); absent — no files here. */
@@ -188,6 +197,10 @@ export function Composer({
    * `available` false — the dialog cannot be stopped now (a release, a stop on its way).
    */
   stop?: { onStop: () => void; available: boolean }
+  /** Words kept for this field elsewhere: put into it as they arrive. */
+  restored?: string | null
+  /** Every change of the words in the field. */
+  onTextChange?: (text: string) => void
 }) {
   const fieldId = useId()
   const reasonId = useId()
@@ -225,6 +238,13 @@ export function Composer({
     area.style.height = 'auto'
     if (area.scrollHeight > 0) area.style.height = `${area.scrollHeight}px`
   }, [text, field])
+
+  const [lastRestored, setLastRestored] = useState(restored)
+  if (restored !== lastRestored) {
+    setLastRestored(restored)
+    if (restored) setText(restored)
+  }
+  useEffect(() => onTextChange?.(text), [text, onTextChange])
 
   const disabled = disabledReason !== null
   const tooLong = text.trim().length > FEED_REQUEST_TEXT_LIMIT
@@ -547,6 +567,18 @@ export function Composer({
                   }}
                 />
               </>
+            ) : null}
+            {project ? (
+              <Box
+                sx={{
+                  order: { xs: -1, sm: 0 },
+                  flexBasis: { xs: '100%', sm: 'auto' },
+                  display: 'flex',
+                  minWidth: 0,
+                }}
+              >
+                {project}
+              </Box>
             ) : null}
             {effort}
           </Box>

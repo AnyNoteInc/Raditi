@@ -13,6 +13,7 @@ import { useRouter } from 'next/navigation'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
+import { NEW_CHAT_HREF, newChatHref } from '@/components/chat/chat-address'
 import { useTRPC } from '@/trpc/client'
 
 import { stackLabels, type ProjectStack } from '../project-labels'
@@ -140,10 +141,17 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 export function ProjectWizard({
   stacks,
   browserAccess = false,
+  fromChats = false,
 }: {
   stacks: readonly ProjectStack[]
   /** The platform has a browser for tasks: a site may be added without access to its files. */
   browserAccess?: boolean
+  /**
+   * The client came from a new chat (docs/plan/61-chats-first.md, §5.11): «Отмена» leads back to
+   * it, and so does a project added without files, chosen in the chat. A project with files
+   * shows how its import goes first.
+   */
+  fromChats?: boolean
 }) {
   const trpc = useTRPC()
   const router = useRouter()
@@ -425,7 +433,11 @@ export function ProjectWizard({
             busyRef.current = 'created'
             setBusy('created')
             void queryClient.invalidateQueries({ queryKey: trpc.project.list.queryKey() })
-            router.push(`/projects/${outcome.project.id}`)
+            router.push(
+              fromChats && viaBrowser
+                ? newChatHref(outcome.project.id)
+                : `/projects/${outcome.project.id}`,
+            )
           } else if (outcome.outcome === 'source_refused') {
             goTo(1)
             refuseSource(outcome)
@@ -715,7 +727,11 @@ export function ProjectWizard({
             }}
           >
             {step === 0 ? (
-              <Button color="inherit" href="/projects" disabled={disabled}>
+              <Button
+                color="inherit"
+                href={fromChats ? NEW_CHAT_HREF : '/projects'}
+                disabled={disabled}
+              >
                 Отмена
               </Button>
             ) : (

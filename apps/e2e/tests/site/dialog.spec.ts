@@ -7,6 +7,7 @@ import { expect, test } from '../../fixtures/signed-in.ts'
 import {
   addBrowserTask,
   addConnectedSite,
+  addLongChat,
   addLongDialog,
   hideDevIndicator,
   priceDialogClass,
@@ -46,8 +47,8 @@ const DRAFT = 'Черновик: проверьте ещё цены в разд�
 const message = (page: Page) => page.getByRole('textbox', { name: 'Сообщение' })
 const send = (page: Page) => page.getByRole('button', { name: 'Отправить' })
 const feed = (page: Page) => page.getByRole('list', { name: 'Сообщения диалога' })
-const dialogs = (page: Page) => page.getByRole('navigation', { name: 'Диалоги' })
-const back = (page: Page) => page.getByRole('link', { name: 'Назад к диалогам' })
+const dialogs = (page: Page) => page.getByRole('navigation', { name: 'Чаты' })
+const back = (page: Page) => page.getByRole('link', { name: 'К чатам' })
 const commands = (page: Page) => page.getByRole('listbox', { name: 'Команды' })
 
 // The tools of a dialog (docs/plan/59, И4–И8, И14, И20).
@@ -167,7 +168,7 @@ async function smallStrip(page: Page): Promise<string[]> {
  */
 async function expectChatAlone(page: Page) {
   await expect(pane(page)).toHaveCount(0)
-  await expect(page.locator('[data-site-pane]')).toHaveCount(0)
+  await expect(page.locator('[data-chat-pane]')).toHaveCount(0)
   await expect(separator(page)).toHaveCount(0)
   await expect(openTabs(page)).toHaveCount(0)
   await expect(page.getByRole('tablist', { name: 'Что показать' })).toHaveCount(0)
@@ -200,10 +201,14 @@ function recordCalls(page: Page): string[] {
 
 /** Writes the first words of a dialog and sends them; returns the id the browser gave it. */
 async function startDialog(page: Page, siteId: string): Promise<string> {
-  await page.goto(`/projects/${siteId}/chat/new`)
+  await page.goto(`/chats/new?project=${siteId}`)
+  // The list of projects came, and the pill took the project of the address.
+  await expect(
+    page.getByRole('button', { name: 'Проект для этого чата: Кофейня «Крошка»' }),
+  ).toBeVisible()
   await message(page).fill(FIRST_WORDS)
   await send(page).click()
-  await expect(page).toHaveURL(new RegExp(`/projects/${siteId}/chat/[0-9a-f-]{36}$`))
+  await expect(page).toHaveURL(/\/chats\/[0-9a-f-]{36}$/)
   const taskId = new URL(page.url()).pathname.split('/').at(-1) ?? ''
   // The browser invents the id: a version 7 UUID, the idempotency key of `task.create`.
   expect(taskId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
@@ -230,9 +235,7 @@ test('a dialog starts from the first words and waits in the queue, on a desktop'
     // (owner's request of 26.10.2026), shows it on the row of the dialog as well.
     await expect(page.getByRole('heading', { level: 2, name: QUEUED })).toBeVisible()
     await expect(page.getByRole('main').getByText(QUEUED).filter({ visible: true })).toHaveCount(3)
-    await expect(
-      page.getByRole('navigation', { name: 'Диалоги' }).getByText(QUEUED).filter({ visible: true }),
-    ).toHaveCount(1)
+    await expect(dialogs(page).getByText(QUEUED).filter({ visible: true })).toHaveCount(1)
     await expect(page.getByText(QUEUED_TEXT)).toBeVisible()
     // The agent is at work: the field says why it is closed, read with the field, and nothing
     // stands under it; «Остановить» stands in place of «Отправить».
@@ -242,10 +245,10 @@ test('a dialog starts from the first words and waits in the queue, on a desktop'
     await expect(page.getByText('ИИ может допускать ошибки. Проверяйте важное.')).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Остановить' })).toBeEnabled()
     await expect(send(page)).toHaveCount(0)
-    // The mode it started in over the dialog (29.10.2026), the level of thinking by the field.
+    // Its project over the dialog, the level of thinking by the field.
     await expect(
-      page.getByRole('navigation', { name: 'Режим диалога' }).locator('[aria-current="true"]'),
-    ).toHaveText('Работа')
+      page.getByRole('link', { name: 'Открыть проект «Кофейня «Крошка»»' }),
+    ).toHaveAttribute('href', `/projects/${siteId}`)
     // The level is changed while the dialog waits: core plans a running turn with the one it read.
     await expect(page.getByRole('button', { name: 'Размышление: Высокое' })).toBeDisabled()
   })
@@ -287,20 +290,21 @@ test('a dialog starts from the first words and waits in the queue, on a desktop'
   })
 
   await test.step('the dialog stands in the list of the site', async () => {
-    await page.goto(`/projects/${siteId}/chat`)
+    await page.goto('/chats')
     const today = dialogs(page).getByRole('list', { name: 'Сегодня' })
     const link = today.getByRole('link', { name: new RegExp(FIRST_WORDS) })
-    await expect(link).toHaveAttribute('href', `/projects/${siteId}/chat/${taskId}`)
+    await expect(link).toHaveAttribute('href', `/chats/${taskId}`)
     await expect(link).toContainText(QUEUED)
+    await expect(link).toContainText('Кофейня «Крошка»')
     // The credits are no longer under the list: they stand over the account menu (29.10.2026).
     await expect(dialogs(page).getByRole('heading', { name: 'Кредиты' })).toHaveCount(0)
     await expect(
       page
-        .getByRole('complementary', { name: 'Боковая панель сайта' })
+        .getByRole('complementary', { name: 'Боковая панель' })
         .getByRole('button', { name: /^(Кредиты по тарифу|Подарочные кредиты): / }),
     ).toBeVisible()
     await link.click()
-    await expect(page).toHaveURL(`/projects/${siteId}/chat/${taskId}`)
+    await expect(page).toHaveURL(`/chats/${taskId}`)
     await expect(feed(page).getByText(FIRST_WORDS)).toBeVisible()
   })
 
@@ -316,11 +320,14 @@ test('a dialog starts from the first words and waits in the queue, on a desktop'
     await expect(feed(page).getByRole('heading', { name: 'Отменено' })).toBeVisible()
     await expect(message(page)).toBeDisabled()
     await expect(message(page)).toHaveAttribute('placeholder', 'Диалог завершён')
-    // Under the closed dialog, and above the list of dialogs that stays beside it (26.10.2026).
-    const newDialogs = page.getByRole('main').getByRole('link', { name: 'Новый диалог' })
-    await expect(newDialogs).toHaveCount(2)
-    for (const link of await newDialogs.all())
-      await expect(link).toHaveAttribute('href', `/projects/${siteId}/chat/new`)
+    // Under the closed dialog, with its project chosen; the list beside it has its own.
+    await expect(
+      page.getByRole('main').getByRole('link', { name: 'Новый диалог' }),
+    ).toHaveAttribute('href', `/chats/new?project=${siteId}`)
+    await expect(dialogs(page).getByRole('link', { name: 'Новый чат' })).toHaveAttribute(
+      'href',
+      '/chats/new',
+    )
     // The words of a command never become a message of the client.
     await expect(feed(page).getByText('/cancel')).toHaveCount(0)
   })
@@ -348,7 +355,7 @@ test('a dialog starts from the first words and waits in the queue, on a desktop'
     const menu = page
       .getByRole('main')
       .getByRole('button', { name: /^Действия с диалогом/ })
-      .and(page.locator(':not(nav[aria-label="Диалоги"] *)'))
+      .and(page.locator(':not(nav[aria-label="Чаты"] *)'))
     await menu.click()
     await page.getByRole('menuitem', { name: 'Переименовать' }).click()
     const name = page.getByRole('textbox', { name: 'Название диалога' })
@@ -361,9 +368,9 @@ test('a dialog starts from the first words and waits in the queue, on a desktop'
     await page.getByRole('menuitem', { name: 'Удалить' }).click()
     const ask = page.getByRole('dialog', { name: 'Удалить диалог?' })
     await ask.getByRole('button', { name: 'Удалить' }).click()
-    await expect(page).toHaveURL(`/projects/${siteId}/chat`)
+    await expect(page).toHaveURL('/chats')
     await expect(dialogs(page).getByRole('link', { name: /Цена капучино/ })).toHaveCount(0)
-    await page.goto(`/projects/${siteId}/chat/${taskId}`)
+    await page.goto(`/chats/${taskId}`)
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Такого диалога нет')
   })
 })
@@ -658,10 +665,10 @@ test('a long dialog keeps its place and the draft as its tools open and close, o
   page,
   signedInUser,
 }) => {
-  const { siteId, taskId, title } = await addLongDialog(signedInUser.id)
+  const { taskId, title } = await addLongDialog(signedInUser.id)
   await hideDevIndicator(page)
   await page.setViewportSize({ width: 1440, height: 900 })
-  await page.goto(`/projects/${siteId}/chat/${taskId}`)
+  await page.goto(`/chats/${taskId}`)
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(title)
   await expect(feed(page).getByRole('listitem')).toHaveCount(30)
   await expectChatAlone(page)
@@ -722,10 +729,10 @@ test('a long dialog on a phone: «К диалогу» brings back the place and 
   page,
   signedInUser,
 }) => {
-  const { siteId, taskId, title } = await addLongDialog(signedInUser.id)
+  const { taskId, title } = await addLongDialog(signedInUser.id)
   await hideDevIndicator(page)
   await page.setViewportSize({ width: 390, height: 844 })
-  await page.goto(`/projects/${siteId}/chat/${taskId}`)
+  await page.goto(`/chats/${taskId}`)
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(title)
   await expect(feed(page).getByRole('listitem')).toHaveCount(30)
   await expectChatAlone(page)
@@ -765,7 +772,7 @@ test('a long dialog on a phone and a tablet: a tool opened at its end fits the w
   page,
   signedInUser,
 }) => {
-  const { siteId, taskId, title } = await addLongDialog(signedInUser.id)
+  const { taskId, title } = await addLongDialog(signedInUser.id)
   await hideDevIndicator(page)
   /** How far the page stands from its end, in px. */
   const fromEnd = () =>
@@ -779,7 +786,7 @@ test('a long dialog on a phone and a tablet: a tool opened at its end fits the w
   ] as const) {
     await test.step(`${width}×${height}: the area of a tool under the bar, then «К диалогу»`, async () => {
       await page.setViewportSize({ width, height })
-      await page.goto(`/projects/${siteId}/chat/${taskId}`)
+      await page.goto(`/chats/${taskId}`)
       await expect(page.getByRole('heading', { level: 1 })).toHaveText(title)
       await expect(feed(page).getByRole('listitem')).toHaveCount(30)
       await message(page).fill(DRAFT)
@@ -787,17 +794,13 @@ test('a long dialog on a phone and a tablet: a tool opened at its end fits the w
       await expect.poll(fromEnd).toBeLessThanOrEqual(1)
       await chooseTool(page, /^Файлы и изменения/)
       await expect(pane(page)).toBeVisible()
-      // The area fits the window under the bar of the shell, whatever lines the bar takes: the
-      // page does not scroll, the bar and the whole area are in sight.
+      // The area fits the window: the page does not scroll, the whole area is in sight.
       await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0)
       expect(
         await page.evaluate(
           () => document.documentElement.scrollHeight - document.documentElement.clientHeight,
         ),
       ).toBeLessThanOrEqual(0)
-      await expect(page.getByRole('banner', { name: 'Панель сайта' })).toBeInViewport({
-        ratio: 1,
-      })
       const area = await box(pane(page))
       expect(area.y).toBeGreaterThan(0)
       expect(area.y + area.height).toBeLessThanOrEqual(height)
@@ -813,8 +816,7 @@ test('a long dialog on a phone and a tablet: a tool opened at its end fits the w
 })
 
 // What sticks over the feed (docs/plan/59, И4, И14): below `lg` the head of the dialog keeps to
-// the top of the window — from `md` under the bar of the shell — and on every width the field
-// keeps to the bottom. Neither hides the element the keyboard lands on (WCAG 2.4.11): the rows of
+// the top of the window, and on every width the field keeps to the bottom. Neither hides the element the keyboard lands on (WCAG 2.4.11): the rows of
 // the feed keep their room from them, as the landing keeps its anchors from under its header. A
 // window lower than 420px — a phone on its side, a page zoomed to 400% — leaves the head with the
 // page: stuck over the field there, it would leave the feed a line (WCAG 1.4.10).
@@ -822,7 +824,7 @@ test('a long dialog on a phone and a tablet: a tool opened at its end fits the w
 /**
  * Walks the feed by the keyboard — Shift+Tab up, or Tab down — from where the focus is, and names
  * every element of the feed it lands on that is out of sight: entirely under what sticks over the
- * top of the window (the head, the bar of the shell) or entirely under the field at its bottom.
+ * top of the window (the head) or entirely under the field at its bottom.
  * Stops once the focus leaves the feed.
  */
 async function walkFeed(
@@ -842,11 +844,8 @@ async function walkFeed(
           node = node.parentElement
         return node
       }
-      // Over the top: the head of the dialog and the bar of the shell, while they stick.
-      const top = [
-        stuck(document.querySelector('main h1')),
-        stuck(document.querySelector('header[aria-label="Панель сайта"]')),
-      ].reduce((low, band) => Math.max(low, band?.getBoundingClientRect().bottom ?? 0), 0)
+      // Over the top: the head of the dialog, while it sticks.
+      const top = stuck(document.querySelector('main h1'))?.getBoundingClientRect().bottom ?? 0
       const field = stuck(document.querySelector('textarea'))?.getBoundingClientRect().top
       const found = active.getBoundingClientRect()
       return {
@@ -875,12 +874,26 @@ const headSticks = (page: Page) =>
     return node !== null
   })
 
+/** Up the feed from the field and down again: every stop of the keyboard stays in sight. */
+async function expectFocusInSight(page: Page) {
+  // Every answer links to its page: one stop of the keyboard each.
+  await message(page).focus()
+  const up = await walkFeed(page, 'Shift+Tab')
+  expect(up.steps).toBeGreaterThanOrEqual(15)
+  expect(up.hidden).toEqual([])
+  // Up the feed the focus left it for the head; down it goes again, to the field.
+  const down = await walkFeed(page, 'Tab')
+  expect(down.steps).toBeGreaterThanOrEqual(15)
+  expect(down.hidden).toEqual([])
+  await expect(message(page)).toBeFocused()
+}
+
 test('a long dialog: the head and the field never hide the element in focus', async ({
   page,
   signedInUser,
 }) => {
   test.slow()
-  const { siteId, taskId, title } = await addLongDialog(signedInUser.id)
+  const { taskId, title } = await addLongDialog(signedInUser.id)
   await hideDevIndicator(page)
 
   for (const [width, height, sticks] of [
@@ -890,7 +903,7 @@ test('a long dialog: the head and the field never hide the element in focus', as
   ] as const) {
     await test.step(`${width}×${height}: Shift+Tab up the feed from the field, then Tab down`, async () => {
       await page.setViewportSize({ width, height })
-      await page.goto(`/projects/${siteId}/chat/${taskId}`)
+      await page.goto(`/chats/${taskId}`)
       await expect(page.getByRole('heading', { level: 1 })).toHaveText(title)
       await expect(feed(page).getByRole('listitem')).toHaveCount(30)
       // A window lower than 420px leaves the head at the top of the dialog: at its end it is out
@@ -898,16 +911,32 @@ test('a long dialog: the head and the field never hide the element in focus', as
       expect(await headSticks(page)).toBe(sticks)
       if (sticks) await expect(plus(page)).toBeInViewport()
       else await expect(page.getByRole('heading', { level: 1 })).not.toBeInViewport()
-      // Every answer links to its page: one stop of the keyboard each.
-      await message(page).focus()
-      const up = await walkFeed(page, 'Shift+Tab')
-      expect(up.steps).toBeGreaterThanOrEqual(15)
-      expect(up.hidden).toEqual([])
-      // Up the feed the focus left it for the head; down it goes again, to the field.
-      const down = await walkFeed(page, 'Tab')
-      expect(down.steps).toBeGreaterThanOrEqual(15)
-      expect(down.hidden).toEqual([])
-      await expect(message(page)).toBeFocused()
+      await expectFocusInSight(page)
+    })
+  }
+})
+
+// The head of a chat without a project is one line lower on a narrow screen: `HEAD_ROOM` of its
+// own, measured here (docs/plan/61-chats-first.md, §5.11).
+test('a long chat without a project: the head and the field never hide the element in focus', async ({
+  page,
+  signedInUser,
+}) => {
+  test.slow()
+  const { taskId, title } = await addLongChat(signedInUser.id)
+  await hideDevIndicator(page)
+
+  for (const [width, height] of [
+    [390, 844],
+    [768, 1024],
+  ] as const) {
+    await test.step(`${width}×${height}: Shift+Tab up the feed from the field, then Tab down`, async () => {
+      await page.setViewportSize({ width, height })
+      await page.goto(`/chats/${taskId}`)
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText(title)
+      await expect(feed(page).getByRole('listitem')).toHaveCount(30)
+      expect(await headSticks(page)).toBe(true)
+      await expectFocusInSight(page)
     })
   }
 })
@@ -916,12 +945,12 @@ test('the names of the tools in «+» wrap instead of being cut, on a desktop', 
   page,
   signedInUser,
 }) => {
-  const { siteId, taskId, title } = await addLongDialog(signedInUser.id)
+  const { taskId, title } = await addLongDialog(signedInUser.id)
   await hideDevIndicator(page)
   for (const width of [1200, 1440]) {
     await test.step(`${width}px: a name beside «пока нет» on two lines, the tile a finger high`, async () => {
       await page.setViewportSize({ width, height: 900 })
-      await page.goto(`/projects/${siteId}/chat/${taskId}`)
+      await page.goto(`/chats/${taskId}`)
       await expect(page.getByRole('heading', { level: 1 })).toHaveText(title)
       await plus(page).click()
       await menuSettled(page)
@@ -969,18 +998,14 @@ async function expectBrowserShown(page: Page) {
 
 test('a task in the browser: its window on a desktop', async ({ page, context, signedInUser }) => {
   test.slow()
-  const { siteId, taskId, title } = await addBrowserTask(signedInUser.id)
+  const { taskId, title } = await addBrowserTask(signedInUser.id)
   await hideDevIndicator(page)
   await page.setViewportSize({ width: 1280, height: 900 })
   const calls = recordCalls(page)
-  await page.goto(`/projects/${siteId}/chat/${taskId}`)
+  await page.goto(`/chats/${taskId}`)
 
   await test.step('the question to sign in, the chat alone: the browser waits behind «+»', async () => {
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(title)
-    // The mode it started in stands over the dialog: «Чат», the dialog in the browser.
-    await expect(
-      page.getByRole('navigation', { name: 'Режим диалога' }).locator('[aria-current="true"]'),
-    ).toHaveText('Чат')
     await expect(loginCard(page)).toBeVisible()
     await expectChatAlone(page)
     // The browser waits for the client: «+» says so, the panel stays closed (И13).
@@ -1071,10 +1096,13 @@ test('a task in the browser: its window on a desktop', async ({ page, context, s
   await test.step('the whole area for the browser, and Esc gives it back', async () => {
     await browserBar(page).getByRole('button', { name: 'Во весь экран' }).click()
     const full = await box(pane(page))
-    expect(full.x).toBeLessThanOrEqual(89)
+    expect(full.x).toBeLessThanOrEqual(73)
     expect(full.x + full.width).toBeGreaterThanOrEqual(1279)
     // The rail stays beside it.
-    await expect(page.getByRole('navigation', { name: 'Разделы сайта' }).first()).toBeVisible()
+    await expect(page.getByRole('navigation', { name: 'Основная навигация' })).toBeVisible()
+    // What it covers leaves the tab order: the list and the way back to it (И17).
+    await expect(page.locator('[data-chat-list]')).toHaveAttribute('inert', '')
+    await expect(page.locator('[data-chat-back]')).toHaveAttribute('inert', '')
     await page.keyboard.press('Escape')
     await expect(browserBar(page).getByRole('button', { name: 'Во весь экран' })).toBeVisible()
     expect((await box(pane(page))).x).toBeGreaterThan(400)
@@ -1134,10 +1162,10 @@ test('a task in the browser on a phone: the browser in place of the dialog, «К
   signedInUser,
 }) => {
   test.slow()
-  const { siteId, taskId } = await addBrowserTask(signedInUser.id)
+  const { taskId } = await addBrowserTask(signedInUser.id)
   await hideDevIndicator(page)
   await page.setViewportSize({ width: 390, height: 844 })
-  await page.goto(`/projects/${siteId}/chat/${taskId}`)
+  await page.goto(`/chats/${taskId}`)
 
   await test.step('no switch: the question in the chat, «+» marked in the head', async () => {
     await expect(loginCard(page)).toBeVisible()
@@ -1216,10 +1244,10 @@ test('a task in the browser in a window lower than 420px: «К диалогу» 
   page,
   signedInUser,
 }) => {
-  const { siteId, taskId } = await addBrowserTask(signedInUser.id)
+  const { taskId } = await addBrowserTask(signedInUser.id)
   await hideDevIndicator(page)
   await page.setViewportSize({ width: 320, height: 256 })
-  await page.goto(`/projects/${siteId}/chat/${taskId}`)
+  await page.goto(`/chats/${taskId}`)
   await expect(loginCard(page)).toBeVisible()
   // The client reads the question to sign in, the head above it out of sight; «Взять управление»
   // of its card opens the browser (owner's answer of 30.10.2026: no button only shows it).

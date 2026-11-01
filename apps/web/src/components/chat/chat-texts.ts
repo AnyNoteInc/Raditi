@@ -287,7 +287,7 @@ export const paletteText = Object.freeze({
 
 export const composerText = Object.freeze({
   label: 'Сообщение',
-  newPlaceholder: 'Что поменять на сайте?',
+  newPlaceholder: 'Что нужно сделать?',
   revisionPlaceholder: 'Что поправить?',
   send: 'Отправить',
   /** The field of a new dialog while the site is not connected. */
@@ -306,8 +306,8 @@ export const composerText = Object.freeze({
    * its tools (docs/plan/59-dialog-tools-panel.md, И15).
    */
   attach: 'Прикрепить файлы',
-  /** A command typed on «Новый диалог»: there is no dialog to run it in yet. */
-  commandsInDialog: 'Команды работают внутри диалога. Сначала опишите, что поменять на сайте.',
+  /** A command typed on «Новый чат»: there is no chat to run it in yet. */
+  commandsInDialog: 'Команды работают внутри чата. Сначала напишите, что нужно сделать.',
   /** A command typed in full that cannot be run now, and the server gave no reason. */
   commandUnavailable: 'Эта команда сейчас недоступна.',
   /** The button in place of «Отправить» while the agent works: the same as `/cancel`. */
@@ -322,8 +322,31 @@ export const composerText = Object.freeze({
     `Откроет новый диалог в режиме «${label}»: режим начатого диалога не меняется.`,
 })
 
+/** The section «Чаты» and its screens (docs/plan/61-chats-first.md, §5.13). */
+export const chatsText = Object.freeze({
+  title: 'Чаты',
+  newChat: 'Новый чат',
+  back: 'К чатам',
+  groupButton: 'Группировка чатов',
+  groupTitle: 'Показывать чаты',
+  groupList: 'Одним списком',
+  groupProjects: 'По проектам',
+  /** A folder that is closed holds a chat that waits for the client. */
+  attention: 'Есть чаты, которые ждут вас',
+  noProject: 'Без проекта',
+  pickerTitle: 'Проект для этого чата',
+  addProject: 'Добавить проект',
+  /** Where the pill of the project stands locked: a file is bound to its site. */
+  lockedProject: 'Чтобы сменить проект, уберите прикреплённые файлы.',
+  openProject: (name: string) => `Открыть проект «${name}»`,
+  closedProject: 'Сайт на паузе или отключён.',
+  unavailableProject: 'Сейчас этот проект недоступен для чата. Попробуйте ещё раз немного позже.',
+  importingProject: 'Файлы сайта ещё загружаются.',
+  importFailedProject: 'Файлы сайта не загрузились.',
+})
+
 export const listText = Object.freeze({
-  empty: 'Диалогов пока нет. Опишите, что поменять на сайте, — диалог появится здесь.',
+  empty: 'Чатов пока нет. Напишите, что нужно сделать, — чат появится здесь.',
   more: 'Показать ещё',
   untitled: 'Диалог без названия',
   loading: 'Загружаем диалоги',

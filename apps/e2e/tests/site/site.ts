@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import type { Page } from '@playwright/test'
 import { ensurePersonalWorkspaceWithGift } from '@repo/billing'
-import { createPrismaClient, insertFeedEvent, type SiteStatus } from '@repo/db'
+import { createPrismaClient, insertFeedEvent, markAttachmentReady, type SiteStatus } from '@repo/db'
 
 import { authEnv, databaseUrl } from '../../fixtures/billing-stand.ts'
 
@@ -182,43 +182,135 @@ export async function addLongDialog(
       },
       select: { id: true },
     })
-    // Each answer leaves the dialog open; the next words answer it (`answersEventId`).
-    let answer: bigint | null = null
-    for (let turn = 1; turn <= pairs; turn += 1) {
-      const text = `${turn}. Поменяйте, пожалуйста, на странице «Меню» описание напитка номер ${turn}: добавьте объём и уберите слово «авторский».`
-      const base = { v: 1, authorId: userId, requestId: randomUUID(), text } as const
-      await insertFeedEvent(prisma, {
-        taskId: task.id,
-        row: {
-          type: 'feed.request',
-          payload:
-            answer === null
-              ? { ...base, kind: 'first' }
-              : { ...base, kind: 'answer', answersEventId: String(answer) },
-        },
-      })
-      answer = await insertFeedEvent(prisma, {
-        taskId: task.id,
-        row: {
-          type: 'feed.result',
-          payload: {
-            v: 1,
-            turn,
-            message: `Ответ ${turn}. Посмотрел [страницу «Меню»](${site.url}/menu/): напиток номер ${turn} описан в блоке «Кофе». Чтобы поменять описание, нужна правка в копии сайта — напишите, если начинать, и я подготовлю изменения для предпросмотра.`,
-            site: 'unchanged',
-            next: 'awaiting_user',
-            filesChanged: null,
-            changeType: 'none',
-            needsApproval: false,
-            risk: 'low',
-          },
-        },
-      })
-    }
+    await addLongFeed(prisma, {
+      taskId: task.id,
+      userId,
+      pairs,
+      address: site.url,
+      site: 'unchanged',
+    })
     return { siteId, taskId: task.id, title }
   } finally {
     await prisma.$disconnect()
   }
+}
+
+/**
+ * The same long chat without a project (docs/plan/61-chats-first.md, §5.11): nothing but the
+ * words, on a personal workspace, the way `task.create` writes one when the run has no browser.
+ */
+export async function addLongChat(
+  userId: string,
+  pairs = 15,
+): Promise<{ taskId: string; title: string }> {
+  const title = 'Идеи для названия пекарни'
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    const workspace = await prisma.$transaction((tx) =>
+      ensurePersonalWorkspaceWithGift(tx, { userId, appEnv: authEnv.APP_ENV }),
+    )
+    // The lease of a chat without a project takes its id, of version 7 only (`tasks_chat_id_check`).
+    const time = Date.now().toString(16).padStart(12, '0')
+    const random = randomUUID()
+    const task = await prisma.task.create({
+      data: {
+        id: `${time.slice(0, 8)}-${time.slice(8)}-7${random.slice(15)}`,
+        workspaceId: workspace.id,
+        siteId: null,
+        createdById: userId,
+        status: 'awaiting_user',
+        title,
+        turnNo: pairs,
+        mode: 'chat',
+        needsRepository: false,
+        needsBrowser: false,
+      },
+      select: { id: true },
+    })
+    await addLongFeed(prisma, {
+      taskId: task.id,
+      userId,
+      pairs,
+      address: 'https://kroshka.example',
+      site: 'none',
+    })
+    return { taskId: task.id, title }
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+/** `pairs` messages of the client, each answered by the agent; each answer leaves the chat open. */
+async function addLongFeed(
+  prisma: ReturnType<typeof createPrismaClient>,
+  {
+    taskId,
+    userId,
+    pairs,
+    address,
+    site,
+  }: {
+    taskId: string
+    userId: string
+    pairs: number
+    address: string
+    site: 'unchanged' | 'none'
+  },
+): Promise<void> {
+  // Each answer leaves the dialog open; the next words answer it (`answersEventId`).
+  let answer: bigint | null = null
+  for (let turn = 1; turn <= pairs; turn += 1) {
+    const text = `${turn}. Поменяйте, пожалуйста, на странице «Меню» описание напитка номер ${turn}: добавьте объём и уберите слово «авторский».`
+    const base = { v: 1, authorId: userId, requestId: randomUUID(), text } as const
+    await insertFeedEvent(prisma, {
+      taskId,
+      row: {
+        type: 'feed.request',
+        payload:
+          answer === null
+            ? { ...base, kind: 'first' }
+            : { ...base, kind: 'answer', answersEventId: String(answer) },
+      },
+    })
+    answer = await insertFeedEvent(prisma, {
+      taskId,
+      row: {
+        type: 'feed.result',
+        payload: {
+          v: 1,
+          turn,
+          message: `Ответ ${turn}. Посмотрел [страницу «Меню»](${address}/menu/): напиток номер ${turn} описан в блоке «Кофе». Чтобы поменять описание, нужна правка в копии сайта — напишите, если начинать, и я подготовлю изменения для предпросмотра.`,
+          site,
+          next: 'awaiting_user',
+          filesChanged: null,
+          changeType: 'none',
+          needsApproval: false,
+          risk: 'low',
+        },
+      },
+    })
+  }
+}
+
+/**
+ * Takes the place of the store of files (this run has no S3): the bytes of a file chosen on `page`
+ * are answered as stored, and its row of the database says so, as `PUT /api/attachments/<id>` does.
+ */
+export async function acceptUploads(page: Page): Promise<void> {
+  await page.route('**/api/attachments/*', async (route) => {
+    const id = new URL(route.request().url()).pathname.split('/').at(-1) ?? ''
+    const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+    try {
+      const { sizeBytes, contentType } = await prisma.attachment.findUniqueOrThrow({
+        where: { id },
+        select: { sizeBytes: true, contentType: true },
+      })
+      await markAttachmentReady(prisma, { id, sizeBytes, contentType })
+      await route.fulfill({ status: 200, json: { attachmentId: id, size: sizeBytes } })
+    } finally {
+      await prisma.$disconnect()
+    }
+  })
 }
 
 /**

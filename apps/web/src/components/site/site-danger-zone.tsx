@@ -9,11 +9,13 @@ import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 
 import { ConfirmDialog } from '@/components/billing/confirm-dialog'
-import { callErrorText } from '@/components/chat/call-error'
+import { callErrorCode, callErrorText, callRefusalOf } from '@/components/chat/call-error'
+import { chatFolderHref } from '@/components/chat/chat-address'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
 
 import { SiteCard } from './site-cards'
+import { SiteLink } from './site-link'
 
 export const dangerText = Object.freeze({
   title: 'Опасная область',
@@ -28,6 +30,8 @@ export const dangerText = Object.freeze({
   nameHelp: (name: string) => `Чтобы подтвердить, введите «${name}».`,
   nameMismatch: 'Название не совпадает. Введите название проекта точно так, как оно написано.',
   keep: 'Не удалять',
+  /** The refusal of a project with chats that are not over leads to them. */
+  openChats: 'Открыть чаты проекта',
 })
 
 /**
@@ -50,6 +54,8 @@ export function SiteDangerZone({
   const [open, setOpen] = useState(false)
   const [typed, setTyped] = useState('')
   const [error, setError] = useState<string | null>(null)
+  // The server refused because of chats that are not over: the way to them (К40).
+  const [chatsHold, setChatsHold] = useState(false)
 
   async function confirm() {
     if (typed.trim() !== site.name.trim()) {
@@ -57,6 +63,7 @@ export function SiteDangerZone({
       return
     }
     setError(null)
+    setChatsHold(false)
     try {
       await remove.mutateAsync({ id: site.id, confirmName: typed })
       void queryClient.invalidateQueries({ queryKey: trpc.project.list.queryKey() })
@@ -64,6 +71,9 @@ export function SiteDangerZone({
       router.refresh()
     } catch (failure) {
       setError(callErrorText(failure))
+      setChatsHold(
+        callErrorCode(failure) === 'SITE_DELETE_BUSY' && callRefusalOf(failure) === 'tasks',
+      )
     }
   }
 
@@ -93,6 +103,7 @@ export function SiteDangerZone({
           onClick={() => {
             setTyped('')
             setError(null)
+            setChatsHold(false)
             setOpen(true)
           }}
         >
@@ -122,6 +133,11 @@ export function SiteDangerZone({
           sx={{ mt: 2 }}
           slotProps={{ htmlInput: { autoComplete: 'off', spellCheck: false } }}
         />
+        {chatsHold ? (
+          <Box sx={{ mt: 1.5 }}>
+            <SiteLink href={chatFolderHref(site.id)}>{dangerText.openChats}</SiteLink>
+          </Box>
+        ) : null}
       </ConfirmDialog>
     </SiteCard>
   )

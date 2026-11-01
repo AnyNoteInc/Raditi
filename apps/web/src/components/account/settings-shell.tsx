@@ -202,7 +202,7 @@ export function SettingsShell({
         >
           <Box
             component={Link}
-            href="/"
+            href="/chats"
             aria-label="Радити — главная страница"
             sx={{
               display: 'flex',

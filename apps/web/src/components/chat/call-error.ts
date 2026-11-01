@@ -34,6 +34,12 @@ export function callErrorCode(error: unknown): string | null {
   return typeof code === 'string' ? code : null
 }
 
+/** Which of its reasons the server named for a refusal, as it gave it; null — none. */
+export function callRefusalOf(error: unknown): string | null {
+  const refusal = shapeOf(error).data?.refusal
+  return typeof refusal === 'string' ? refusal : null
+}
+
 /** The server answered that there is no such dialog — or that it is someone else's. */
 export function isNotFound(error: unknown): boolean {
   return shapeOf(error).data?.code === 'NOT_FOUND'

@@ -2,6 +2,7 @@ import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import { fontFamilies } from '@repo/ui/theme/tokens'
 
+import { chatHref } from '@/components/chat/chat-address'
 import { formatMoscowDay, formatMoscowMoment } from '@/lib/moscow-date'
 
 import type { HistoryItem } from './history-list'
@@ -155,9 +156,7 @@ export function VersionDetail({
           }}
         >
           {version.taskId ? (
-            <SiteLink href={`${siteHref(siteId, 'chat')}/${version.taskId}`}>
-              Открыть диалог
-            </SiteLink>
+            <SiteLink href={chatHref(version.taskId)}>Открыть диалог</SiteLink>
           ) : null}
           <SiteLink
             href={`${siteHref(siteId, 'runs')}/${version.kind === 'initial' ? 'import' : version.id}`}
@@ -182,9 +181,7 @@ export function VersionDetail({
               Этот выпуск можно отменить до {formatMoscowDay(undoUntil)}: на сайт вернутся прежние
               файлы и записи. Что изменили на сайте после выпуска, останется.
             </Typography>
-            <SiteButtonLink href={`${siteHref(siteId, 'chat')}/${version.taskId}`}>
-              Отменить в диалоге
-            </SiteButtonLink>
+            <SiteButtonLink href={chatHref(version.taskId)}>Отменить в диалоге</SiteButtonLink>
           </Box>
         </SiteCard>
       ) : null}

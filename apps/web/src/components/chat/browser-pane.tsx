@@ -388,7 +388,8 @@ function Address({
 
 export interface BrowserPaneProps {
   taskId: string
-  siteId: string
+  /** null — a chat without a project. */
+  siteId: string | null
   head: FeedHeadState | null
   stream: BrowserStream
   /** The cabinet knows where the stream is. */

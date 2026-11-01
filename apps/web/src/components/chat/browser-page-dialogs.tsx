@@ -147,7 +147,8 @@ export function FileChooserDialog({
 }: {
   chooser: BrowserChooser
   taskId: string
-  siteId: string
+  /** null — a chat without a project. */
+  siteId: string | null
   onAnswer: (attachmentIds: string[]) => void
 }) {
   const trpc = useTRPC()

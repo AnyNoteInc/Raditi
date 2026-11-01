@@ -198,9 +198,9 @@ describe('a field without commands', () => {
     press('Enter', field(), { ctrlKey: true })
     expect(onSend).not.toHaveBeenCalled()
     expect(screen.getByRole('alert').textContent).toBe(
-      'Команды работают внутри диалога. Сначала опишите, что поменять на сайте.',
+      'Команды работают внутри чата. Сначала напишите, что нужно сделать.',
     )
-    expect(described(field())).toContain('Команды работают внутри диалога.')
+    expect(described(field())).toContain('Команды работают внутри чата.')
     type('/release и поменяйте цену')
     press('Enter', field(), { ctrlKey: true })
     expect(onSend).toHaveBeenCalledWith('/release и поменяйте цену', [])
@@ -300,11 +300,11 @@ describe('palette helpers', () => {
   })
 
   it('gives a command without a verdict the reason of the place, when it has one', () => {
-    const [release] = paletteOptions('/release', [], undefined, 'Команды работают внутри диалога.')
+    const [release] = paletteOptions('/release', [], undefined, 'Команды работают внутри чата.')
     expect(release).toEqual({
       id: 'release',
       available: false,
-      reason: 'Команды работают внутри диалога.',
+      reason: 'Команды работают внутри чата.',
     })
   })
 

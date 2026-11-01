@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApplicationShell } from './application-shell'
 
+vi.mock('next/navigation', () => ({ usePathname: () => '/projects' }))
 vi.mock('@/app/(protected)/app/actions', () => ({ signOut: vi.fn() }))
 vi.mock('@/lib/hard-navigate', () => ({ hardNavigate: vi.fn() }))
 // The credits read the server: here the ring is a mark of where it stands.
@@ -27,22 +28,6 @@ function shell() {
 afterEach(() => vi.restoreAllMocks())
 
 describe('application shell', () => {
-  it('marks «Проекты» as the current page of the rail', () => {
-    render(shell())
-
-    const links = within(
-      screen.getByRole('navigation', { name: 'Основная навигация' }),
-    ).getAllByRole('link')
-    expect(links).toHaveLength(1)
-    expect(links[0]).toHaveAccessibleName('Проекты')
-    expect(links[0]).toHaveAttribute('href', '/projects')
-    expect(links[0]).toHaveAttribute('aria-current', 'page')
-    expect(screen.getByRole('link', { name: 'Радити — главная страница' })).toHaveAttribute(
-      'href',
-      '/',
-    )
-  })
-
   it('names the page in the breadcrumbs without a link to itself', () => {
     render(shell())
 
@@ -102,10 +87,9 @@ describe('application shell', () => {
 
     expect(page.querySelector('a')).toHaveAttribute('href', '#application-content')
     expect(page.querySelector('main')).toHaveAttribute('id', 'application-content')
-    expect(page.querySelector('nav[aria-label="Основная навигация"] a')).toHaveAttribute(
-      'aria-current',
-      'page',
-    )
+    expect(
+      page.querySelector('nav[aria-label="Основная навигация"] a[href="/projects"]'),
+    ).toHaveAttribute('aria-current', 'page')
     expect(page.querySelector('header [aria-current="page"]')).toHaveTextContent('Проекты')
   })
 })

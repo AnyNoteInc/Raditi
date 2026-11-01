@@ -25,7 +25,7 @@ import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } 
 
 import { AppIcon } from '@/components/application/app-icon'
 import { ConfirmDialog } from '@/components/billing/confirm-dialog'
-import { siteHref, SITE_TOOLBAR_HEIGHT } from '@/components/site/site-nav'
+import { siteHref } from '@/components/site/site-nav'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
 
@@ -33,9 +33,11 @@ import type { SentFile } from './attachment-chips'
 import { BrowserPane } from './browser-pane'
 import { sessionLive } from './browser-pane-model'
 import { callErrorText } from './call-error'
-import type { SiteCapabilities } from './chat-types'
+import { newChatHref } from './chat-address'
+import type { ChatProject } from './chat-types'
 import {
   cancelText,
+  chatsText,
   composerText,
   dialogText,
   effortText,
@@ -63,6 +65,7 @@ import {
   type ToolOpener,
 } from './dialog-tools'
 import { EffortMenu } from './effort-menu'
+import { ProjectMark } from './project-mark'
 import { FeedList, LiveBlock, type FeedActions } from './feed-list'
 import {
   candidateMessage,
@@ -74,7 +77,6 @@ import {
   stopRequested,
 } from './feed-model'
 import { showsRefresh, type FeedHeadState } from './feed-state'
-import { ModeLinks, type DialogMode } from './mode-switch'
 import { CandidateTab, PreviewTab, usePreviewCalls } from './preview-pane'
 import { ReleaseDialog } from './release-dialog'
 import { TOOLS_BUTTON_ID, TOOLS_MENU_MARK, ToolsMenu } from './tools-menu'
@@ -103,11 +105,11 @@ const BROWSER_COMMANDS: readonly ChatCommandId[] = ['cancel']
 
 /**
  * What a focused element of the feed keeps clear above it (WCAG 2.4.11): below `lg` the head of
- * the dialog sticks to the top of the window — 96px on two lines below `md`, from `md` 44px under
- * the bar of the shell, which sticks too — and a step of 16px, as the landing keeps its anchors
- * from under its header (DESIGN.md, «Шапка»). The room is a margin of the rows and not a padding
- * of the scroller: with a padding, the head itself would count as hidden, and Tab onto it would
- * scroll the page. From `lg` the head stands over the area the feed scrolls in, never over it.
+ * the dialog sticks to the top of the window — a line of 44px, below `md` 96px when the link of
+ * its project takes a second one — and a step of 16px, as the landing keeps its anchors from under
+ * its header (DESIGN.md, «Шапка»). The room is a margin of the rows and not a padding of the
+ * scroller: with a padding, the head itself would count as hidden, and Tab onto it would scroll
+ * the page. From `lg` the head stands over the area the feed scrolls in, never over it.
  */
 const HEAD_ROOM = '--dialog-head-room'
 /** What a focused element of the feed keeps clear below it: the field that sticks to the bottom. */
@@ -127,7 +129,7 @@ function focusTakenByOpening(dialog: Element | null): Element | null {
   const taken =
     active.id === TOOLS_BUTTON_ID ||
     active.closest(`[${TOOLS_MENU_MARK}]`) !== null ||
-    (dialog === null ? active.closest('[data-site-list]') !== null : dialog.contains(active))
+    (dialog === null ? active.closest('[data-chat-list]') !== null : dialog.contains(active))
   return taken ? active : null
 }
 
@@ -151,27 +153,24 @@ function releaseProgress(head: FeedHeadState): string | null {
  * The head of a dialog (owner's request of 26.10.2026): one quiet line — its name, a release under
  * way beside it, its menu («Переименовать», «Удалить») and, while the panel of its tools is closed,
  * «+» of the tools in the corner (docs/plan/59, И4). The name is written in place of itself. In
- * the middle stands «Чат | Работа» with the dialog's own mode, as on «Новый диалог» (owner's
- * request of 29.10.2026); on a phone the switch takes a line of its own under the name.
+ * the middle stands the link to the project of the chat, when it has one; on a phone it takes a
+ * line of its own under the name.
  */
 function DialogHead({
-  siteId,
+  project,
   taskId,
   title,
   head,
   onRenamed,
   tools,
-  closedModes,
 }: {
-  siteId: string
+  project: ChatProject | null
   taskId: string
   title: string
   head: FeedHeadState | null
   onRenamed: () => void
   /** «+» of the tools while their panel is closed; null — it stands at the end of the tabs. */
   tools: ReactNode
-  /** A mode the site does not offer now, and why: the switch does not lead to it. */
-  closedModes: Partial<Record<DialogMode, string>>
 }) {
   // «Отменить выпуск» is offered now: deleting the dialog takes it away too.
   const undoable =
@@ -199,7 +198,6 @@ function DialogHead({
       <Box sx={{ gridColumn: 1, gridRow: 1, minWidth: 0, display: 'flex' }}>
         {renaming ? (
           <RenameField
-            siteId={siteId}
             taskId={taskId}
             initial={head?.task.title ?? ''}
             fontSize={15}
@@ -246,19 +244,34 @@ function DialogHead({
           </Box>
         )}
       </Box>
-      {head !== null ? (
+      {project !== null ? (
         <Box
+          component={Link}
+          href={siteHref(project.id)}
+          aria-label={chatsText.openProject(project.name)}
           sx={{
             gridColumn: { xs: '1 / -1', md: 2 },
             gridRow: { xs: 2, md: 1 },
-            justifySelf: 'center',
+            justifySelf: { xs: 'start', md: 'center' },
+            maxWidth: '100%',
+            minWidth: 0,
+            minHeight: 44,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 1,
+            px: { md: 1.5 },
+            borderRadius: '999px',
+            fontSize: 14,
+            color: 'text.secondary',
+            textDecoration: 'none',
+            whiteSpace: 'nowrap',
+            '&:hover': { color: 'text.primary' },
           }}
         >
-          <ModeLinks
-            value={head.task.mode}
-            newDialogHref={`${siteHref(siteId, 'chat')}/new`}
-            closed={closedModes}
-          />
+          <ProjectMark name={project.name} />
+          <Box component="span" sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {project.name}
+          </Box>
         </Box>
       ) : null}
       <Box
@@ -282,7 +295,6 @@ function DialogHead({
       </Box>
       {removing ? (
         <RemoveDialogConfirm
-          siteId={siteId}
           taskId={taskId}
           undoable={undoable}
           open
@@ -298,16 +310,13 @@ function DialogHead({
  * shown; whatever the client writes or presses is read back at once.
  */
 export function DialogView({
-  siteId,
-  siteUrl,
+  project,
   taskId,
   title,
   browserStreamUrl = null,
-  capabilities,
 }: {
-  siteId: string
-  /** null — a chat without a project. */
-  siteUrl: string | null
+  /** The project of the chat, from `task.get`; null — a chat without one. */
+  project: ChatProject | null
   taskId: string
   title: string | null
   /**
@@ -315,9 +324,9 @@ export function DialogView({
    * docs/plan/57-browser-tasks.md, Б12); null — the platform has no browser here.
    */
   browserStreamUrl?: string | null
-  /** What the site can be worked on with now (`project.get`): the modes a new dialog has. */
-  capabilities?: SiteCapabilities
 }) {
+  const siteId = project?.id ?? null
+  const siteUrl = project?.url ?? null
   const trpc = useTRPC()
   const queryClient = useQueryClient()
   const { state, refresh } = useDialogFeed(taskId)
@@ -509,11 +518,11 @@ export function DialogView({
     if (status === undefined) return
     if (shownStatus.current !== null && shownStatus.current !== status) {
       presses.current.clear()
-      void queryClient.invalidateQueries({ queryKey: dialogListKey(siteId) })
+      void queryClient.invalidateQueries({ queryKey: dialogListKey })
       void queryClient.invalidateQueries({ queryKey: trpc.billing.usage.queryKey() })
     }
     shownStatus.current = status
-  }, [status, queryClient, siteId, trpc])
+  }, [status, queryClient, trpc])
 
   // The changes are read again when their numbers in the head move: a check that ends, a
   // candidate the site moved on under. The panel and the release show what the head says.
@@ -748,12 +757,12 @@ export function DialogView({
   // Esc leaves the browser over the content — unless the page itself is being typed into.
   useEffect(() => {
     if (!fullscreen) return
-    // The bar of the shell, the list of dialogs and the way back to it are under the browser too:
+    // The list of dialogs and the way back to it are under the browser too:
     // out of the tab order while it covers them (WCAG 2.4.11), as the dialog's own column is.
     const covered = [
       ...(pane.current
-        ?.closest('[data-site-shell]')
-        ?.querySelectorAll('header, [data-site-list], [data-site-back]') ?? []),
+        ?.closest('[data-chat-shell]')
+        ?.querySelectorAll('[data-chat-list], [data-chat-back]') ?? []),
     ].filter((element) => !root.current?.contains(element))
     for (const element of covered) element.setAttribute('inert', '')
     const leave = (event: KeyboardEvent) => {
@@ -827,7 +836,7 @@ export function DialogView({
       }
     })
 
-  if (state.missing) return <DialogNotFound listHref={siteHref(siteId, 'chat')} />
+  if (state.missing) return <DialogNotFound />
 
   const shownTitle = head?.task.title ?? title ?? listText.untitled
   const releasing = status === 'deploying' || status === 'verifying'
@@ -838,7 +847,7 @@ export function DialogView({
       ? effortChosen.effort
       : (head?.task.effort ?? 'high')
   // «Размышление» in the row of the field (owner's requests of 26.10.2026): the level holds from
-  // the agent's next turn. The mode the dialog started in is in its head (29.10.2026).
+  // the agent's next turn.
   const settings =
     head === null ? null : (
       <EffortMenu
@@ -874,7 +883,7 @@ export function DialogView({
         </Box>
         <Button
           component={Link}
-          href={`${siteHref(siteId, 'chat')}/new`}
+          href={newChatHref(siteId)}
           variant="outlined"
           startIcon={<AppIcon name="plus" size={18} />}
           sx={{ borderRadius: '999px' }}
@@ -893,24 +902,31 @@ export function DialogView({
       (status === 'awaiting_user' &&
         (question === null || question.kind === 'agent' || question.kind === 'browser'))
     const revising = status === 'awaiting_approval' && question === null
+    // A paused, disconnected or archived project takes no words (docs/plan/61-chats-first.md,
+    // К39). The field stays closed rather than gone: a turn already under way can still be stopped.
+    const closedProject = project?.closed === true
     const disabledReason = stopping
       ? composerText.stopping
-      : answering || revising
-        ? null
-        : releasing
-          ? composerText.releasing
-          : feedInputText.disabled
+      : closedProject
+        ? chatsText.closedProject
+        : answering || revising
+          ? null
+          : releasing
+            ? composerText.releasing
+            : feedInputText.disabled
     // While the agent works «Остановить» stands in place of «Отправить» (`/cancel`).
     const working = status === 'queued' || status === 'preparing' || status === 'running'
     const cancelVerdict = commands.find((command) => command.id === 'cancel')
     composer = (
       <Composer
         placeholder={
-          answering && !answered
-            ? feedQuestionText.placeholder
-            : revising
-              ? composerText.revisionPlaceholder
-              : composerText.newPlaceholder
+          closedProject
+            ? chatsText.closedProject
+            : answering && !answered
+              ? feedQuestionText.placeholder
+              : revising
+                ? composerText.revisionPlaceholder
+                : composerText.newPlaceholder
         }
         // An answer of the agent asks nothing: the field is the field of a new message.
         sendLabel={answering && !answered ? feedQuestionText.send : composerText.send}
@@ -1022,17 +1038,15 @@ export function DialogView({
         flexDirection: 'column',
         minWidth: 0,
         // What sticks over the top of the window below `lg`, as measured, and a step: the head of
-        // 96px (two lines of 44px and 8px between them), from `md` the bar of the shell and the
-        // head of one line, 44px each (`HEAD_ROOM`). Nothing over the feed from `lg`.
+        // one line of 44px, or below `md` with the line of the project under it, 8px between them
+        // (`HEAD_ROOM`). Nothing over the feed from `lg`.
         [HEAD_ROOM]: {
-          xs: `${96 + ROOM_STEP}px`,
-          md: `${SITE_TOOLBAR_HEIGHT + 44 + ROOM_STEP}px`,
+          xs: `${(project === null ? 44 : 96) + ROOM_STEP}px`,
+          md: `${44 + ROOM_STEP}px`,
           lg: '0px',
         },
-        // A window lower than 420px sticks no head (below): only the bar of the shell from `md`.
-        '@media (max-height: 420px)': {
-          [HEAD_ROOM]: { xs: '0px', md: `${SITE_TOOLBAR_HEIGHT + ROOM_STEP}px`, lg: '0px' },
-        },
+        // A window lower than 420px sticks no head (below).
+        '@media (max-height: 420px)': { [HEAD_ROOM]: '0px' },
       }}
     >
       {/* The browser over the whole area covers the head and the dialog: neither takes focus. */}
@@ -1042,12 +1056,11 @@ export function DialogView({
           display: covered ? 'none' : 'block',
           flex: 'none',
           mb: { xs: 3, md: 4, lg: 0 },
-          // Below `lg` the page scrolls the dialog, and the head keeps to the top of the window —
-          // under the bar of the shell, which keeps there too from `md` — «+» within reach (docs/
-          // plan/59, И4, И14). It runs from edge to edge of the content, so the rows pass under it
-          // unseen; the field and its list of commands stay over it.
+          // Below `lg` the page scrolls the dialog, and the head keeps to the top of the window, «+»
+          // within reach (docs/plan/59, И4, И14). It runs from edge to edge of the content, so the
+          // rows pass under it unseen; the field and its list of commands stay over it.
           position: { xs: 'sticky', lg: 'static' },
-          top: { xs: 0, md: SITE_TOOLBAR_HEIGHT },
+          top: 0,
           zIndex: { xs: 1, lg: 'auto' },
           // A window lower than 420px — a phone on its side, a page zoomed to 400% — leaves the head
           // with the page: stuck over the field, it would leave the feed a line to be read in (WCAG
@@ -1055,9 +1068,9 @@ export function DialogView({
           '@media (max-height: 420px)': { position: 'static' },
           bgcolor: 'background.paper',
           // From `lg` the head stands over the area of the feed, which scrolls under it, from edge
-          // to edge of the dialog. While the panel is closed it stands right under the bar, «+» in
-          // the corner the strip of the panel's tabs takes when it opens (docs/plan/59, И4); while
-          // it is open, under «Назад к диалогам» of the list that gave the dialog its room.
+          // to edge of the dialog. While the panel is closed it stands at the top of the window,
+          // «+» in the corner the strip of the panel's tabs takes when it opens (docs/plan/59, И4);
+          // while it is open, under «К чатам» of the list that gave the dialog its room.
           mt: { lg: shown ? 0 : -3.5 },
           mx: { xs: -2, sm: -2.5, md: -4 },
           pl: { xs: 2, sm: 2.5, md: 4, lg: 3 },
@@ -1065,18 +1078,10 @@ export function DialogView({
         }}
       >
         <DialogHead
-          siteId={siteId}
+          project={project}
           taskId={taskId}
           title={shownTitle}
           head={head}
-          closedModes={
-            capabilities === undefined
-              ? {}
-              : {
-                  ...(capabilities.browser === 'ready' ? {} : { chat: composerText.chatOff }),
-                  ...(capabilities.repository === 'ready' ? {} : { work: composerText.workOff }),
-                }
-          }
           onRenamed={refresh}
           tools={shown ? null : menu}
         />

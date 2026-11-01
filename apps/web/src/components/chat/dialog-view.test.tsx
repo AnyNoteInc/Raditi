@@ -72,7 +72,7 @@ const calls = vi.hoisted(() => ({
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace: calls.replace, push: vi.fn() }),
-  usePathname: () => `/projects/${SITE_ID}/chat/${TASK_ID}`,
+  usePathname: () => `/chats/${TASK_ID}`,
 }))
 
 const mutation = <I, O>(fn: (input: I) => Promise<O>) => ({
@@ -155,6 +155,15 @@ const waiting = (patch: Parameters<typeof feedAnswer>[0] = {}) =>
 
 const posted: Posted = { requestEventId: '9', repeated: false }
 
+/** The project of the chat, as `task.get` gives it. */
+const PROJECT = {
+  id: SITE_ID,
+  name: 'Кофейня «Крошка»',
+  url: 'https://kroshka.example',
+  closed: false,
+}
+const projectOf = (url: string | null) => (url === null ? null : { ...PROJECT, url })
+
 function showDialog(
   answer: DialogFeed = waiting(),
   browserStreamUrl: string | null = null,
@@ -167,8 +176,7 @@ function showDialog(
   render(
     <QueryClientProvider client={queryClient}>
       <DialogView
-        siteId={SITE_ID}
-        siteUrl={siteUrl}
+        project={projectOf(siteUrl)}
         taskId={TASK_ID}
         title="Поменять цену капучино"
         browserStreamUrl={browserStreamUrl}
@@ -439,7 +447,7 @@ describe('a dialog', () => {
     expect(document.body.textContent).not.toContain('При работе с сайтом')
   })
 
-  it('reads its head and rows: its name, its mode in the middle, its menu', async () => {
+  it('reads its head and rows: its name, its project in the middle, its menu', async () => {
     showDialog()
     expect(await screen.findByText('Изменения готовы')).toBeTruthy()
     expect(screen.getByRole('heading', { level: 1, name: 'Поменять цену капучино' })).toBeTruthy()
@@ -447,19 +455,56 @@ describe('a dialog', () => {
     expect(
       screen.getByRole('button', { name: 'Действия с диалогом: Поменять цену капучино' }),
     ).toBeTruthy()
-    // «Чат | Работа» over the dialog (owner's request of 29.10.2026): its own mode is marked, the
-    // other one opens «Новый диалог» in that mode — a started dialog keeps its mode.
-    const modes = within(screen.getByRole('navigation', { name: 'Режим диалога' }))
-    expect(modes.getByText('Работа').getAttribute('aria-current')).toBe('true')
-    const chat = modes.getByRole('link', { name: 'Чат' })
-    expect(chat.getAttribute('href')).toBe(`/projects/${SITE_ID}/chat/new?mode=chat`)
-    expect(chat.getAttribute('aria-describedby')).toBeTruthy()
-    expect(document.getElementById(chat.getAttribute('aria-describedby')!)?.textContent).toBe(
-      'Откроет новый диалог в режиме «Чат»: режим начатого диалога не меняется.',
-    )
+    const link = screen.getByRole('link', { name: `Открыть проект «${PROJECT.name}»` })
+    expect(link.getAttribute('href')).toBe(`/projects/${SITE_ID}`)
+    expect(screen.queryByRole('navigation', { name: 'Режим диалога' })).toBeNull()
     expect(field().getAttribute('placeholder')).toBe('Что поправить?')
     // No standing words under the field (owner, 26.10.2026): the reminder is read aloud only.
     expect(screen.queryByText('ИИ может допускать ошибки. Проверяйте важное.')).toBeNull()
+  })
+
+  it('has no way to a project in a chat without one', async () => {
+    showDialog(waiting(), null, null)
+    await screen.findByText('Изменения готовы')
+    expect(screen.queryByRole('link', { name: /^Открыть проект/ })).toBeNull()
+  })
+
+  it('reads a chat of a closed project, its field closed with the reason', async () => {
+    calls.feed.mockResolvedValue(waiting())
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <DialogView project={{ ...PROJECT, closed: true }} taskId={TASK_ID} title={null} />
+      </QueryClientProvider>,
+    )
+    await screen.findByText('Изменения готовы')
+    expect(field().disabled).toBe(true)
+    expect(field().getAttribute('placeholder')).toBe('Сайт на паузе или отключён.')
+    // The head still leads to the project, where the client sees why.
+    expect(screen.getByRole('link', { name: `Открыть проект «${PROJECT.name}»` })).toBeTruthy()
+  })
+
+  it('still stops a turn under way in a chat of a closed project (К39): only words are closed', async () => {
+    calls.feed.mockResolvedValue(
+      feedAnswer({
+        status: 'running',
+        task: { turnNo: 1, runningSince: '2026-10-17T09:01:00.000Z' },
+        events: [requestRow('1')],
+        cursor: '1',
+      }),
+    )
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <DialogView project={{ ...PROJECT, closed: true }} taskId={TASK_ID} title={null} />
+      </QueryClientProvider>,
+    )
+    const stop = await screen.findByRole<HTMLButtonElement>('button', { name: 'Остановить' })
+    await waitFor(() => expect(stop.disabled).toBe(false))
+    expect(field().disabled).toBe(true)
+    fireEvent.click(stop)
+    const confirm = screen.getByRole('dialog', { name: 'Отменить диалог?' })
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Отменить диалог' }))
+    await waitFor(() => expect(calls.cancel).toHaveBeenCalledTimes(1))
+    expect(calls.cancel.mock.calls[0]![0]).toMatchObject({ taskId: TASK_ID })
   })
 
   it('changes how hard the model thinks from the agent’s next turn', async () => {
@@ -498,8 +543,8 @@ describe('a dialog', () => {
     fireEvent.click(within(ask).getByRole('button', { name: 'Удалить' }))
     await waitFor(() => expect(calls.remove).toHaveBeenCalledTimes(1))
     expect(calls.remove.mock.calls[0]![0]).toEqual({ taskId: TASK_ID })
-    // The page of a deleted dialog leaves for the root of «Чат».
-    await waitFor(() => expect(calls.replace).toHaveBeenCalledWith(`/projects/${SITE_ID}/chat`))
+    // The page of a deleted dialog leaves for the root of «Чаты».
+    await waitFor(() => expect(calls.replace).toHaveBeenCalledWith('/chats'))
   })
 
   it('sends words as a new pass on top of the changes and reads the dialog again', async () => {
@@ -828,7 +873,7 @@ describe('a dialog', () => {
       screen.getByText('Диалог завершён. Чтобы попросить что-то ещё, начните новый.'),
     ).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Новый диалог' }).getAttribute('href')).toBe(
-      `/projects/${SITE_ID}/chat/new`,
+      `/chats/new?project=${SITE_ID}`,
     )
     // The level of a dialog that has ended is no longer changed.
     expect(
@@ -843,18 +888,11 @@ describe('a dialog', () => {
     const queryClient = new QueryClient()
     render(
       <QueryClientProvider client={queryClient}>
-        <DialogView
-          siteId={SITE_ID}
-          siteUrl="https://kroshka.example"
-          taskId={TASK_ID}
-          title={null}
-        />
+        <DialogView project={PROJECT} taskId={TASK_ID} title={null} />
       </QueryClientProvider>,
     )
     expect(await screen.findByRole('heading', { name: 'Такого диалога нет' })).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'К диалогам' }).getAttribute('href')).toBe(
-      `/projects/${SITE_ID}/chat`,
-    )
+    expect(screen.getByRole('link', { name: 'К диалогам' }).getAttribute('href')).toBe('/chats')
   })
 
   it('repeats the same words after a lost answer under the same id, and other words under a new one', async () => {
@@ -909,12 +947,7 @@ describe('a dialog', () => {
     })
     render(
       <QueryClientProvider client={queryClient}>
-        <DialogView
-          siteId={SITE_ID}
-          siteUrl="https://kroshka.example"
-          taskId={TASK_ID}
-          title={null}
-        />
+        <DialogView project={PROJECT} taskId={TASK_ID} title={null} />
       </QueryClientProvider>,
     )
     await screen.findByText('Изменения готовы')
@@ -990,12 +1023,7 @@ describe('a dialog', () => {
     })
     render(
       <QueryClientProvider client={queryClient}>
-        <DialogView
-          siteId={SITE_ID}
-          siteUrl="https://kroshka.example"
-          taskId={TASK_ID}
-          title={null}
-        />
+        <DialogView project={PROJECT} taskId={TASK_ID} title={null} />
       </QueryClientProvider>,
     )
     await screen.findByText('Изменения готовы')
@@ -1108,8 +1136,7 @@ function mountDialog({
   const view = (
     <QueryClientProvider client={queryClient}>
       <DialogView
-        siteId={SITE_ID}
-        siteUrl="https://kroshka.example"
+        project={PROJECT}
         taskId={TASK_ID}
         title="Поменять цену капучино"
         browserStreamUrl={streamUrl}
@@ -1117,9 +1144,9 @@ function mountDialog({
     </QueryClientProvider>
   )
   const dialog = list ? (
-    <div data-site-shell="">
-      <nav data-site-list="" aria-label="Диалоги">
-        <a href={`/projects/${SITE_ID}/chat/${TASK_ID}`}>Поменять цену капучино</a>
+    <div data-chat-shell="">
+      <nav data-chat-list="" aria-label="Диалоги">
+        <a href={`/chats/${TASK_ID}`}>Поменять цену капучино</a>
       </nav>
       <main>{view}</main>
     </div>
@@ -1146,7 +1173,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     // The changes open nothing by themselves (И1): no panel, no edge, no switch, nothing read —
     // and no mark the shell would leave an empty column for.
     expect(toolsPanel()).toBeNull()
-    expect(document.querySelector('[data-site-pane]')).toBeNull()
+    expect(document.querySelector('[data-chat-pane]')).toBeNull()
     expect(screen.queryByRole('separator')).toBeNull()
     expect(screen.queryByRole('tablist')).toBeNull()
     expect(screen.queryByRole('button', { name: 'К диалогу' })).toBeNull()
@@ -1205,8 +1232,8 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     const shown = screen.getByRole('tab', { name: 'Проверки', selected: true })
     await waitFor(() => expect(document.activeElement).toBe(shown))
     // The panel is the one the shell leaves its room to.
-    expect(document.querySelectorAll('[data-site-pane]')).toHaveLength(1)
-    expect(pane().hasAttribute('data-site-pane')).toBe(true)
+    expect(document.querySelectorAll('[data-chat-pane]')).toHaveLength(1)
+    expect(pane().hasAttribute('data-chat-pane')).toBe(true)
   })
 
   it('steps aside with the cross of its last tab: no panel, no edge, the focus back on «+»', async () => {
@@ -1223,7 +1250,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     await waitFor(() => expect(toolsPanel()).toBeNull())
     expect(screen.queryByRole('separator')).toBeNull()
     // The shell gives the dialog the room back: nothing of the panel is left to keep it.
-    expect(document.querySelector('[data-site-pane]')).toBeNull()
+    expect(document.querySelector('[data-chat-pane]')).toBeNull()
     await waitFor(() => expect(document.activeElement).toBe(plus()))
     expect(plus().id).toBe('dialog-tools')
   })
@@ -1790,11 +1817,6 @@ describe('a task in the browser', () => {
         STREAM_URL,
       )
       expect(await screen.findByText('Добавьте новость о веранде')).toBeTruthy()
-      expect(
-        within(screen.getByRole('navigation', { name: 'Режим диалога' }))
-          .getByText('Чат')
-          .getAttribute('aria-current'),
-      ).toBe('true')
       // The browser works on the server; the client looks at the dialog alone (И1): no panel, no
       // switch, no stream.
       expect(toolsPanel()).toBeNull()
@@ -2150,31 +2172,23 @@ describe('a task in the browser', () => {
     expect(calls.resumeAgent).not.toHaveBeenCalled()
   })
 
-  it('takes the covered head, dialog, bar, list and way back out of the tab order in full screen, until it closes', async () => {
+  it('takes the covered head, dialog, list and way back out of the tab order in full screen, until it closes', async () => {
     calls.feed.mockResolvedValue(browserAnswer({ events: [requestRow('1')], cursor: '1' }))
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     })
     render(
-      <div data-site-shell="">
-        <header aria-label="Панель сайта">
-          <button type="button">Проекты</button>
-        </header>
-        <nav data-site-list="" aria-label="Диалоги">
+      <div data-chat-shell="">
+        <nav data-chat-list="" aria-label="Диалоги">
           <button type="button">Новый диалог</button>
         </nav>
         <main>
           {/* From `lg` the way back to the list stands over a dialog its panel took the room of. */}
-          <a data-site-back="" href={`/projects/${SITE_ID}/chat`}>
+          <a data-chat-back="" href="#chats">
             Назад к диалогам
           </a>
           <QueryClientProvider client={queryClient}>
-            <DialogView
-              siteId={SITE_ID}
-              siteUrl="https://kroshka.example"
-              taskId={TASK_ID}
-              title={null}
-            />
+            <DialogView project={PROJECT} taskId={TASK_ID} title={null} />
           </QueryClientProvider>
         </main>
       </div>,
@@ -2184,7 +2198,6 @@ describe('a task in the browser', () => {
       name: 'Новость о летней веранде',
     })
     const feed = screen.getByRole('list', { name: 'Сообщения диалога' })
-    const bar = screen.getByRole('banner', { name: 'Панель сайта' })
     const list = screen.getByRole('navigation', { name: 'Диалоги' })
     const back = screen.getByRole('link', { name: 'Назад к диалогам' })
     await choose(/^Браузер/)
@@ -2192,7 +2205,6 @@ describe('a task in the browser', () => {
     fireEvent.click(within(pane()).getByRole('button', { name: 'Во весь экран' }))
     await waitFor(() => expect(feed.closest('[inert]')).not.toBeNull())
     expect(name.closest('[inert]')).not.toBeNull()
-    expect(bar.hasAttribute('inert')).toBe(true)
     expect(list.hasAttribute('inert')).toBe(true)
     // The way back to the list is under the browser too: Shift+Tab from its tabs never lands on it.
     expect(back.hasAttribute('inert')).toBe(true)
@@ -2209,18 +2221,16 @@ describe('a task in the browser', () => {
     expect(live!.closest('[inert]')).toBeNull()
     fireEvent.click(within(pane()).getByRole('button', { name: 'Свернуть' }))
     await waitFor(() => expect(feed.closest('[inert]')).toBeNull())
-    expect(bar.hasAttribute('inert')).toBe(false)
     expect(list.hasAttribute('inert')).toBe(false)
     expect(back.hasAttribute('inert')).toBe(false)
     // The browser closed over the content leaves nothing out of reach (И17).
     fireEvent.click(within(pane()).getByRole('button', { name: 'Во весь экран' }))
-    await waitFor(() => expect(bar.hasAttribute('inert')).toBe(true))
+    await waitFor(() => expect(list.hasAttribute('inert')).toBe(true))
     expect(back.hasAttribute('inert')).toBe(true)
     fireEvent.click(within(pane()).getByRole('button', { name: 'К диалогу' }))
     await waitFor(() => expect(toolsPanel()).toBeNull())
     expect(feed.closest('[inert]')).toBeNull()
     expect(name.closest('[inert]')).toBeNull()
-    expect(bar.hasAttribute('inert')).toBe(false)
     expect(list.hasAttribute('inert')).toBe(false)
     expect(back.hasAttribute('inert')).toBe(false)
   })
@@ -2257,12 +2267,7 @@ describe('a task in the browser', () => {
     })
     render(
       <QueryClientProvider client={queryClient}>
-        <DialogView
-          siteId={SITE_ID}
-          siteUrl="https://kroshka.example"
-          taskId={TASK_ID}
-          title={null}
-        />
+        <DialogView project={PROJECT} taskId={TASK_ID} title={null} />
       </QueryClientProvider>,
     )
     expect(await screen.findByText('menu-leto.pdf')).toBeTruthy()
@@ -2576,7 +2581,7 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
       await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
       // Watched from its start, it opens nothing before its browser starts (И2), and reads nothing.
       expect(toolsPanel()).toBeNull()
-      expect(document.querySelector('[data-site-pane]')).toBeNull()
+      expect(document.querySelector('[data-chat-pane]')).toBeNull()
       expect(calls.streamTicket).not.toHaveBeenCalled()
       expect(calls.candidate).not.toHaveBeenCalled()
       expect(within(screen.getByRole('banner')).getByRole('button', { name: /^Инструменты/ })).toBe(

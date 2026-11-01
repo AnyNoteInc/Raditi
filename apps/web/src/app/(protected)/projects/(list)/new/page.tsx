@@ -12,9 +12,14 @@ export const metadata: Metadata = { title: 'Новый проект' }
 /**
  * The wizard of a new project (spec §12). `/projects/new` is a static segment and wins over the
  * site page `/projects/[projectId]`. The platforms come from the registry of site adapters, so
- * the wizard offers exactly the stacks the server accepts.
+ * the wizard offers exactly the stacks the server accepts. `?from=chats` — the client came from a
+ * new chat and goes back to it (docs/plan/61-chats-first.md, §5.11): one fixed word, not an address.
  */
-export default async function NewProjectPage() {
+export default async function NewProjectPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ from?: string | string[] }>
+}) {
   const session = await requireSession()
   if (session === UNAVAILABLE) return <ServiceUnavailable />
   return (
@@ -26,6 +31,7 @@ export default async function NewProjectPage() {
         stacks={connectableStacks}
         // A site without access to its files works only through the browser (docs/plan/57, Б8).
         browserAccess={(chatServices()?.browser ?? null) !== null}
+        fromChats={(await searchParams).from === 'chats'}
       />
     </ApplicationShell>
   )

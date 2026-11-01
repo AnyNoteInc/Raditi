@@ -50,13 +50,14 @@ let queryClient: QueryClient
 function showWizard(
   stacks: readonly ('wordpress' | 'bitrix')[] = ['wordpress'],
   browserAccess = false,
+  fromChats = false,
 ) {
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
   return render(
     <QueryClientProvider client={queryClient}>
-      <ProjectWizard stacks={stacks} browserAccess={browserAccess} />
+      <ProjectWizard stacks={stacks} browserAccess={browserAccess} fromChats={fromChats} />
     </QueryClientProvider>,
   )
 }
@@ -604,6 +605,14 @@ describe('a site without access to its files (docs/plan/57-browser-tasks.md, Б8
     })
   })
 
+  it('goes back to a new chat with the project chosen when it came from one', async () => {
+    showWizard(['wordpress'], true, true)
+    await passBasics()
+    fireEvent.click(screen.getByRole('tab', { name: 'Без доступа к файлам' }))
+    fireEvent.click(next())
+    await waitFor(() => expect(push).toHaveBeenCalledWith(`/chats/new?project=${SITE_ID}`))
+  })
+
   it('sends no hints when there are none, and says a refused hint on its step', async () => {
     api.create.mockRejectedValueOnce(
       Object.assign(new Error('refused'), {
@@ -690,5 +699,26 @@ describe('the secrets of the wizard', () => {
     })
     // A password field asks the browser not to fill in or keep the cabinet's password.
     expect(password()).toHaveAttribute('autocomplete', 'new-password')
+  })
+})
+
+describe('the wizard opened from a new chat (docs/plan/61-chats-first.md, §5.11)', () => {
+  it('leads a project with an import to its setup: there is no chat to start yet', async () => {
+    showWizard(['wordpress'], true, true)
+    await passBasics()
+    await passSource()
+    fireEvent.click(next())
+    await waitFor(() => expect(push).toHaveBeenCalledWith(`/projects/${SITE_ID}`))
+    expect(push).toHaveBeenCalledTimes(1)
+  })
+
+  it('leads «Отмена» back to the chat', () => {
+    showWizard(['wordpress'], true, true)
+    expect(screen.getByRole('link', { name: 'Отмена' }).getAttribute('href')).toBe('/chats/new')
+  })
+
+  it('leads «Отмена» to the projects otherwise', () => {
+    showWizard()
+    expect(screen.getByRole('link', { name: 'Отмена' }).getAttribute('href')).toBe('/projects')
   })
 })

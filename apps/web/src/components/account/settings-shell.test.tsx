@@ -68,7 +68,7 @@ describe('settings shell navigation', () => {
     expect(screen.queryByRole('link', { name: 'Оплата' })).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Радити — главная страница' })).toHaveAttribute(
       'href',
-      '/',
+      '/chats',
     )
   })
 
@@ -168,7 +168,7 @@ describe('settings shell sidebar', () => {
       within(screen.getByRole('menu'))
         .getAllByRole('menuitem')
         .map((item) => item.textContent),
-    ).toEqual(['Проекты', 'Профиль', 'Настройки', 'Выход'])
+    ).toEqual(['Чаты', 'Проекты', 'Профиль', 'Настройки', 'Выход'])
   })
 
   it('restores the latest choice, not the one the layout was rendered with', () => {
