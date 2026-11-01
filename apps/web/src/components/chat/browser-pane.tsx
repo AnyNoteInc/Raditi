@@ -416,6 +416,8 @@ export interface BrowserPaneProps {
   onTake: () => void
   /** «Продолжить работу агента»: released on the stream or `task.resumeAgent`, by the status. */
   onResume: () => void
+  /** A closed project: the browser is only looked at, its control is neither taken nor given (К39). */
+  readOnly?: boolean
   /** «Остановить»: `/cancel` with its confirmation. */
   onStop: () => void
   canStop: boolean
@@ -440,6 +442,7 @@ export function BrowserPane({
   onFullscreen,
   onTake,
   onResume,
+  readOnly = false,
   onStop,
   canStop,
   stopping = false,
@@ -780,8 +783,8 @@ export function BrowserPane({
         ? browserText.refused.address_denied_public
         : ((browserText.refused as Record<string, string>)[refusal.reason] ??
           browserText.refused.other)
-  const showTake = live && !holding && status !== 'error'
-  const showResume = live && holding
+  const showTake = !readOnly && live && !holding && status !== 'error'
+  const showResume = !readOnly && live && holding
 
   const takeButton = (
     <Button

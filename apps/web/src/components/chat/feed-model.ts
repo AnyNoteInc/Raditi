@@ -157,6 +157,14 @@ export function openQuestion(
 }
 
 /**
+ * The chat of a closed project is read, not worked in (docs/plan/61-chats-first.md, К39). The
+ * server says so with every feed, so a project closed while the page is open counts at once.
+ */
+export function projectClosed(head: FeedHeadState | null): boolean {
+  return head?.commands.some((command) => command.refusal === 'project_closed') === true
+}
+
+/**
  * The failure «Попробовать ещё» answers (docs/plan/53, «Попробовать ещё (18.10)»): the newest
  * failure of the feed, while the server offers the retry — it decides by the same row. null —
  * no retry is offered, or the row is not read yet.
@@ -166,6 +174,8 @@ export function retryFailure(
   head: FeedHeadState | null,
 ): FailureRow | null {
   if (head?.task.canRetry !== true) return null
+  // `canRetry` knows the work, not the project: a closed one takes no retry (К39).
+  if (projectClosed(head)) return null
   return rows.findLast((row): row is FailureRow => row.type === 'feed.failure') ?? null
 }
 

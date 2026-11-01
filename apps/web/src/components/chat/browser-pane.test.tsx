@@ -475,6 +475,21 @@ describe('the browser of a task', () => {
     expect(onTake).toHaveBeenCalledTimes(1)
   })
 
+  it('of a closed project offers no control at all, and «Остановить» stays (К39)', () => {
+    const closed = {
+      readOnly: true,
+      head: head({ status: 'awaiting_user' }),
+      stream: fakeStream({ state: state({ help: { reason: 'login', message: 'Нужен вход.' } }) }),
+    }
+    const { onStop } = show(closed)
+    expect(screen.queryByRole('button', { name: 'Взять управление' })).toBeNull()
+    fireEvent.click(within(toolbar()).getByRole('button', { name: 'Остановить' }))
+    expect(onStop).toHaveBeenCalledTimes(1)
+    cleanup()
+    show({ readOnly: true, stream: holding() })
+    expect(screen.queryByRole('button', { name: 'Продолжить работу агента' })).toBeNull()
+  })
+
   it('offers no control while «Остановить» is under way, and says so', () => {
     const { onTake } = show({
       head: head({ status: 'awaiting_user' }),

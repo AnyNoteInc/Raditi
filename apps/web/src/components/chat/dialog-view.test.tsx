@@ -155,6 +155,16 @@ const waiting = (patch: Parameters<typeof feedAnswer>[0] = {}) =>
 
 const posted: Posted = { requestEventId: '9', repeated: false }
 
+/** What the server says of the commands of a chat of a closed project (К39). */
+const closedVerdicts = () =>
+  verdicts({
+    release: 'project_closed',
+    preview: 'project_closed',
+    reset: 'project_closed',
+    update: 'project_closed',
+    retry: 'project_closed',
+  })
+
 /** The project of the chat, as `task.get` gives it. */
 const PROJECT = {
   id: SITE_ID,
@@ -483,6 +493,68 @@ describe('a dialog', () => {
     expect(screen.getByRole('link', { name: `Открыть проект «${PROJECT.name}»` })).toBeTruthy()
   })
 
+  it('offers nothing on the changes of a closed project and says why, by the server’s verdicts', async () => {
+    calls.feed.mockResolvedValue(waiting({ commands: closedVerdicts() }))
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <DialogView project={{ ...PROJECT, closed: true }} taskId={TASK_ID} title={null} />
+      </QueryClientProvider>,
+    )
+    await screen.findByText('Изменения готовы')
+    const feed = screen.getByRole('list', { name: 'Сообщения диалога' })
+    expect(within(feed).getByText('Сайт на паузе или отключён.')).toBeTruthy()
+    expect(within(feed).queryByRole('button', { name: 'Выпустить новую версию' })).toBeNull()
+    expect(within(feed).queryByRole('button', { name: 'Обновить рабочую копию' })).toBeNull()
+    expect(within(feed).getByRole('button', { name: 'Посмотреть изменения' })).toBeTruthy()
+  })
+
+  it('keeps `/cancel` in the window of commands of a closed project: the one way to stop a chat that waits', async () => {
+    calls.feed.mockResolvedValue(waiting({ commands: closedVerdicts() }))
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <DialogView project={{ ...PROJECT, closed: true }} taskId={TASK_ID} title={null} />
+      </QueryClientProvider>,
+    )
+    await screen.findByText('Изменения готовы')
+    expect(field().disabled).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Остановить' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+    const release = option(/^Выпустить/u)
+    expect(release.getAttribute('aria-disabled')).toBe('true')
+    expect(release.textContent).toContain('Сайт на паузе или отключён.')
+    fireEvent.click(option(/^Отменить чат/u))
+    const confirm = await screen.findByRole('dialog', { name: 'Отменить чат?' })
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Отменить чат' }))
+    await waitFor(() => expect(calls.cancel).toHaveBeenCalledTimes(1))
+  })
+
+  it.each([
+    ['step', 'Остановиться', null],
+    ['credits', 'Остановить задачу', 'Купить пакет'],
+  ] as const)(
+    'offers no «Продолжить» on the question (%s) of a project closed since the page opened (К39)',
+    async (reason, stop, buy) => {
+      showDialog(
+        feedAnswer({
+          status: 'awaiting_user',
+          task: { turnNo: 1 },
+          commands: closedVerdicts(),
+          events: [requestRow('1'), ceilingRow('2', 1, reason)],
+          cursor: '2',
+        }),
+      )
+      const stopButton = await screen.findByRole('button', { name: stop })
+      expect(screen.queryByRole('button', { name: 'Продолжить' })).toBeNull()
+      if (buy !== null) expect(screen.getByRole('link', { name: buy })).toBeTruthy()
+      // The page was loaded with the project open: the feed closes the field all the same.
+      expect(field().disabled).toBe(true)
+      fireEvent.click(stopButton)
+      expect(await screen.findByRole('dialog', { name: 'Отменить чат?' })).toBeTruthy()
+      expect(calls.proceed).not.toHaveBeenCalled()
+    },
+  )
+
   it('still stops a turn under way in a chat of a closed project (К39): only words are closed', async () => {
     calls.feed.mockResolvedValue(
       feedAnswer({
@@ -745,6 +817,15 @@ describe('a dialog', () => {
         cursor: '4',
         commands: verdicts(canRetry ? { retry: null } : { retry: 'nothing_to_retry' }),
       })
+
+    it('offers no «Попробовать ещё» when the project is closed (К39)', async () => {
+      showDialog({
+        ...kept(true),
+        commands: verdicts({ retry: 'project_closed', release: 'project_closed' }),
+      })
+      await screen.findByText('Изменения готовы')
+      expect(screen.queryByRole('button', { name: 'Попробовать ещё' })).toBeNull()
+    })
 
     it('offers «Попробовать ещё» on the failure, keeps the field and the release open', async () => {
       showDialog(kept(true))
@@ -2439,6 +2520,62 @@ describe('a task in the browser', () => {
     await waitFor(() => expect(sockets).toHaveLength(1))
     connect(sockets[0]!, 'agent')
     expect(sockets[0]!.sent).not.toContainEqual({ t: 'take' })
+  })
+
+  describe('of a closed project (К39)', () => {
+    const noControl = () => {
+      expect(screen.queryByRole('button', { name: 'Взять управление' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Продолжить работу агента' })).toBeNull()
+    }
+
+    it('offers no «Взять управление» on the question, on the card or beside the picture', async () => {
+      showDialog(
+        browserAnswer({
+          status: 'awaiting_user',
+          commands: closedVerdicts(),
+          browser: { help: { reason: 'login', message: null } },
+          events: [requestRow('1'), browserQuestionRow('2', 1, 'login')],
+          cursor: '2',
+        }),
+        STREAM_URL,
+      )
+      await screen.findByText('Нужно войти на сайт')
+      noControl()
+      await choose(/^Браузер/)
+      await waitFor(() => expect(sockets).toHaveLength(1))
+      connect(sockets[0]!, 'agent')
+      noControl()
+    })
+
+    it('offers no «Продолжить работу агента» while the client held the control', async () => {
+      showDialog(
+        browserAnswer({
+          status: 'awaiting_user',
+          commands: closedVerdicts(),
+          browser: { controller: 'user' },
+          events: [requestRow('1'), browserQuestionRow('2', 1, 'control')],
+          cursor: '2',
+        }),
+        STREAM_URL,
+      )
+      await waitFor(() => expect(field().disabled).toBe(true))
+      noControl()
+    })
+
+    it('says nothing of a press that goes nowhere while a turn under way holds the client', async () => {
+      showDialog(
+        browserAnswer({
+          commands: closedVerdicts(),
+          browser: { controller: 'user' },
+          events: [requestRow('1', 'Добавьте новость')],
+          cursor: '1',
+        }),
+        STREAM_URL,
+      )
+      await screen.findByText('Добавьте новость')
+      noControl()
+      expect(screen.queryByText(/нажмите «Продолжить работу агента»/u)).toBeNull()
+    })
   })
 
   it('offers «Продолжить работу агента» alone while the client drives; «+» opens the browser to look', async () => {

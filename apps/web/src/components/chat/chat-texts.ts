@@ -1,4 +1,5 @@
 import type { CandidateCheckStatus, ReleaseStatus } from '@repo/domain'
+import { CLOSED_PROJECT_TEXT } from '@repo/domain/release/chat-commands'
 import { feedRetryText, previewPanelText } from '@repo/domain/tasks/client-feed-labels'
 
 import { plural } from '@/lib/plural'
@@ -349,7 +350,7 @@ export const chatsText = Object.freeze({
   /** Where the pill of the project stands locked: a file is bound to its site. */
   lockedProject: 'Чтобы сменить проект, уберите прикреплённые файлы.',
   openProject: (name: string) => `Открыть проект «${name}»`,
-  closedProject: 'Сайт на паузе или отключён.',
+  closedProject: CLOSED_PROJECT_TEXT,
   unavailableProject: 'Сейчас этот проект недоступен для чата. Попробуйте ещё раз немного позже.',
   importingProject: 'Файлы сайта ещё загружаются.',
   importFailedProject: 'Файлы сайта не загрузились.',

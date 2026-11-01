@@ -97,8 +97,8 @@ import type { FeedHeadState } from './feed-state'
 
 /** What the rows can ask the dialog to do. */
 export interface FeedActions {
-  /** «Продолжить» after the platform's question about credits. */
-  onContinue: () => void
+  /** «Продолжить» after the platform's question about credits; absent — a closed project (К39). */
+  onContinue?: () => void
   /** «Попробовать ещё» of the failure with this row id (docs/plan/53, «Попробовать ещё»). */
   onRetry: (failureEventId: string) => void
   /** «Остановить задачу»: `/cancel` with its confirmation. */
@@ -111,9 +111,9 @@ export interface FeedActions {
   onUndo: () => void
   /** «Посмотреть изменения»: the tab of the changes beside the dialog (docs/plan/59, И10). */
   onShowChanges: () => void
-  /** «Взять управление» of the task's browser (docs/plan/57-browser-tasks.md, Б15). */
+  /** «Взять управление» of the task's browser (docs/plan/57-browser-tasks.md, Б15); as above. */
   onTakeControl?: () => void
-  /** «Продолжить работу агента» (Б16). */
+  /** «Продолжить работу агента» (Б16); as above. */
   onResumeAgent?: () => void
   /** The client controls the task's browser now. */
   controlling?: boolean
@@ -456,7 +456,7 @@ function ceilingButtons(
       {words.stop}
     </Button>
   )
-  const next = (
+  const next = actions.onContinue ? (
     <Button
       key="next"
       variant="contained"
@@ -466,7 +466,7 @@ function ceilingButtons(
     >
       {feedCeilingButtons.step.next}
     </Button>
-  )
+  ) : null
   switch (question.reason) {
     case 'step':
       return [next, stop]
@@ -683,6 +683,7 @@ const RELEASE_HINTS: readonly ChatCommandRefusal[] = [
   'needs_update',
   'checks_failed',
   'release_in_progress',
+  'project_closed',
 ]
 
 function CandidateCard({

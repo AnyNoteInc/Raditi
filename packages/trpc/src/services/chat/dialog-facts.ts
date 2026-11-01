@@ -20,6 +20,7 @@ import {
   type TaskStatus,
 } from '@repo/domain'
 
+import { siteClosed } from '../site-capabilities.ts'
 import { memberRole } from './access.ts'
 import { cancelPending, dialogRetry } from './dialog-state.ts'
 import { commandUnavailable } from './refusals.ts'
@@ -161,6 +162,10 @@ export async function dialogFacts(
   // `/cancel` is ever offered.
   const withRepository = needs?.needsRepository ?? true
   const withBrowser = needs?.needsBrowser ?? false
+  const site =
+    task.siteId === null
+      ? null
+      : await db.site.findUnique({ where: { id: task.siteId }, select: { status: true } })
 
   let candidate: DialogCandidate | null = null
   if (candidateRow !== null) {
@@ -206,6 +211,7 @@ export async function dialogFacts(
         (await db.browserSession.count({
           where: { taskId: task.id, wroteAt: { not: null } },
         })) > 0,
+      projectClosed: site !== null && siteClosed(site.status),
     },
   }
 }

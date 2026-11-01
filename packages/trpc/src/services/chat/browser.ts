@@ -19,6 +19,7 @@ import {
 } from '@repo/domain'
 import { z } from 'zod'
 
+import { siteClosed } from '../site-capabilities.ts'
 import { accessibleTask, taskNotFound } from './access.ts'
 import { browserStreamUrlOf, type ChatContext } from './context.ts'
 
@@ -122,8 +123,10 @@ export async function issueStreamTicket(
  * The client looks at the dialog of a task in the browser (owner's answer of 30.10.2026, docs/plan/
  * 59, И18): the chat counts as watching the browser, so its session does not close for idle while
  * the page of the dialog is on the screen. Only its idle time starts again — the hard deadline of
- * the session stays. `watched: false` — no session of the task holds a browser now; a task of
- * someone else, and one without a browser, answer NOT_FOUND.
+ * the session stays. `watched: false` — no session of the task holds a browser now, or its project
+ * is closed: no stream shows that browser to anyone (`viewerAllowed`), so nothing holds it open
+ * (docs/plan/61-chats-first.md, К39); a task of someone else, and one without a browser, answer
+ * NOT_FOUND.
  */
 export async function watchBrowser(
   db: PrismaClient,
@@ -131,9 +134,10 @@ export async function watchBrowser(
 ): Promise<{ watched: boolean }> {
   const task = await db.task.findFirst({
     where: accessibleTask(input.userId, input.taskId),
-    select: { id: true, needsBrowser: true },
+    select: { id: true, needsBrowser: true, site: { select: { status: true } } },
   })
   if (task === null || !task.needsBrowser) throw taskNotFound()
+  if (task.site !== null && siteClosed(task.site.status)) return { watched: false }
   const session = await openBrowserSessionOfTask(db, task.id)
   if (session === null) return { watched: false }
   return { watched: await touchBrowserSession(db, { sessionId: session.id }) }

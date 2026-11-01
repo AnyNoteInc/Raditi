@@ -2409,6 +2409,48 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       ).toBe('no_release')
     })
 
+    // docs/plan/61-chats-first.md, К39: «Отменить выпуск» of a closed project answers for itself.
+    it.each(['paused', 'disconnected', 'archived'] as const)(
+      'takes no undo of a project %s: by its own refusal, and writes nothing',
+      async (status) => {
+        const { caller, site, taskId, release } = await installedDialog()
+        const closeTo = (next: 'active' | typeof status) =>
+          db.site.update({ where: { id: site.id }, data: { status: next } })
+        const inactive = { cause: { details: { refusal: 'site_inactive' } } }
+        const plans = () => db.releaseUndoPlan.count({ where: { releaseId: release.id } })
+
+        await closeTo(status)
+        const { commands } = await caller.task.feed({ taskId })
+        expect(commands.find((command) => command.id === 'undo')?.refusal).toBe('site_inactive')
+        await expect(
+          caller.release.undoPrepare({ taskId, releaseId: release.id }),
+        ).rejects.toMatchObject(inactive)
+        expect(await plans()).toBe(0)
+
+        await closeTo('active')
+        const { planId } = await caller.release.undoPrepare({ taskId, releaseId: release.id })
+        await planned(planId)
+        const shown = await caller.release.undoPlan({ taskId, releaseId: release.id, planId })
+        if (shown.state !== 'ready') throw new Error('expected a ready plan')
+        const confirm = {
+          taskId,
+          releaseId: release.id,
+          confirmToken: shown.confirmToken,
+          version: shown.version,
+        }
+
+        await closeTo(status)
+        await expect(caller.release.undoConfirm(confirm)).rejects.toMatchObject(inactive)
+        expect(await db.siteRelease.count({ where: { siteId: site.id, kind: 'undo' } })).toBe(0)
+        expect(await plans()).toBe(1)
+
+        await closeTo('active')
+        await expect(caller.release.undoConfirm(confirm)).resolves.toMatchObject({
+          repeated: false,
+        })
+      },
+    )
+
     it('takes only a confirmation of an undo, of this plan, its user and its release', async () => {
       const { caller, taskId, release } = await installedDialog()
       const { planId } = await caller.release.undoPrepare({ taskId, releaseId: release.id })
@@ -3542,6 +3584,47 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       await expect(caller.browser.watch({ taskId })).rejects.toMatchObject({ code: 'NOT_FOUND' })
     })
 
+    it('holds the browser of a chat without a project: it has no project to close', async () => {
+      const { owner, workspaceId } = await siteOwner()
+      const caller = callerOf(owner, { browser: true })
+      const task = await db.task.create({
+        data: { workspaceId, siteId: null, needsRepository: false, needsBrowser: true },
+      })
+      taskIds.push(task.id)
+      const session = await openBrowserSession(db, { taskId: task.id })
+      const idle = new Date(Date.now() - 10 * 60_000)
+      await db.browserSession.update({
+        where: { id: session.id },
+        data: { lastActivityAt: idle },
+      })
+
+      expect(await caller.browser.watch({ taskId: task.id })).toEqual({ watched: true })
+      const seen = await db.browserSession.findUniqueOrThrow({ where: { id: session.id } })
+      expect(seen.lastActivityAt.getTime()).toBeGreaterThan(idle.getTime())
+    })
+
+    // docs/plan/61-chats-first.md, К39: the ticket is refused in the statement that writes it.
+    it.each(['paused', 'disconnected', 'archived'] as const)(
+      'opens no stream and holds no browser of a project %s',
+      async (status) => {
+        const { owner, site } = await browserSite()
+        const caller = callerOf(owner, { browser: true })
+        const { taskId } = await browserDialog(caller, site.id)
+        const session = await openBrowserSession(db, { taskId })
+        await db.site.update({ where: { id: site.id }, data: { status } })
+        const seen = await db.browserSession.findUniqueOrThrow({ where: { id: session.id } })
+
+        await expect(caller.browser.streamTicket({ taskId })).rejects.toMatchObject({
+          code: 'NOT_FOUND',
+        })
+        expect(await db.browserStreamTicket.count({ where: { sessionId: session.id } })).toBe(0)
+        expect(await caller.browser.watch({ taskId })).toEqual({ watched: false })
+        expect(
+          (await db.browserSession.findUniqueOrThrow({ where: { id: session.id } })).lastActivityAt,
+        ).toEqual(seen.lastActivityAt)
+      },
+    )
+
     it('announces a file of a site, removes it before it is sent and gives one to the chooser', async () => {
       const { owner, site, workspaceId } = await browserSite()
       const deleted: Array<[string, string]> = []
@@ -4126,6 +4209,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         cause: { code: 'CHAT_COMMAND_UNAVAILABLE' },
       })
       expect(await caller.candidate.get({ taskId })).toBeNull()
+      const { commands } = await caller.task.feed({ taskId })
+      expect(commands.map((item) => item.refusal)).not.toContain('project_closed')
     })
   })
 
@@ -4172,6 +4257,192 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       await db.site.update({ where: { id: site.id }, data: { status: 'paused' } })
 
       expect(await caller.task.message(input)).toEqual({ ...posted, repeated: true })
+    })
+
+    const commandRefused = {
+      code: 'CONFLICT',
+      cause: {
+        code: 'CHAT_COMMAND_UNAVAILABLE',
+        details: { refusal: 'project_closed' },
+      },
+    }
+
+    /** A chat that waits with its changes and a served preview, `/release` opened over them. */
+    async function waitingWithChanges() {
+      const { owner, site } = await siteOwner({ database: true })
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+      await withCandidate(taskId)
+      await db.previewEnvironment.update({ where: { taskId }, data: { status: 'ready' } })
+      const choice = (await caller.release.prepare({ taskId })).choices[0]!
+      return {
+        site,
+        caller,
+        taskId,
+        confirm: { confirmToken: choice.confirmToken, taskId, version: choice.version },
+      }
+    }
+
+    it.each(closed)('takes no command when the project is %s', async (status) => {
+      const { site, caller, taskId, confirm } = await waitingWithChanges()
+      const failureEventId = String(
+        await insertFeedEvent(db, {
+          taskId,
+          row: {
+            type: 'feed.failure',
+            payload: {
+              v: 1,
+              turn: 1,
+              code: 'technical',
+              site: 'unchanged',
+              credits: null,
+              next: 'awaiting_approval',
+            },
+          },
+        }),
+      )
+      await db.site.update({ where: { id: site.id }, data: { status } })
+      const rows = (await feedOf(taskId)).length
+      const jobs = (await outboxOf(taskId)).length
+
+      const feed = await caller.task.feed({ taskId })
+      expect(Object.fromEntries(feed.commands.map((item) => [item.id, item.refusal]))).toEqual({
+        release: 'project_closed',
+        preview: 'project_closed',
+        reset: 'project_closed',
+        update: 'project_closed',
+        retry: 'project_closed',
+        cancel: null,
+        undo: 'no_release',
+      })
+      await expect(caller.release.prepare({ taskId })).rejects.toMatchObject(commandRefused)
+      await expect(caller.release.confirm(confirm)).rejects.toMatchObject(commandRefused)
+      await expect(
+        caller.candidate.update({ taskId, requestId: randomUUID() }),
+      ).rejects.toMatchObject(commandRefused)
+      await expect(caller.preview.reset({ taskId, requestId: randomUUID() })).rejects.toMatchObject(
+        commandRefused,
+      )
+      await expect(caller.preview.ticket({ taskId })).rejects.toMatchObject(commandRefused)
+      await expect(
+        caller.task.retry({ taskId, requestId: randomUUID(), failureEventId }),
+      ).rejects.toMatchObject(refused)
+
+      // Nothing was written, and the number was not spent.
+      expect(await db.siteRelease.count({ where: { siteId: site.id } })).toBe(0)
+      expect((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe(
+        'awaiting_approval',
+      )
+      const preview = await db.previewEnvironment.findUniqueOrThrow({ where: { taskId } })
+      expect(preview.dirty).toBe(false)
+      expect(await db.previewTicket.count({ where: { previewId: preview.id } })).toBe(0)
+      expect((await feedOf(taskId)).length).toBe(rows)
+      expect((await outboxOf(taskId)).length).toBe(jobs)
+
+      await db.site.update({ where: { id: site.id }, data: { status: 'active' } })
+      expect(await caller.release.confirm(confirm)).toMatchObject({
+        version: confirm.version,
+        repeated: false,
+      })
+    })
+
+    it.each(closed)('stops a chat when the project is %s', async (status) => {
+      const { site, caller, taskId } = await waitingWithChanges()
+      await db.site.update({ where: { id: site.id }, data: { status } })
+
+      await expect(caller.task.cancel({ taskId, requestId: randomUUID() })).resolves.toMatchObject({
+        state: 'cancelled',
+        repeated: false,
+      })
+
+      // A chat that has ended is closed with its project, by the same refusal: not `finished`.
+      await expect(caller.preview.ticket({ taskId })).rejects.toMatchObject(commandRefused)
+      await db.site.update({ where: { id: site.id }, data: { status: 'active' } })
+      await expect(caller.preview.ticket({ taskId })).resolves.toMatchObject({
+        url: expect.stringContaining('/__raditi/enter?t='),
+      })
+    })
+
+    // As `refusalOf` says it in the feed: what the window shows is what the press answers.
+    it('refuses a release for its project before anything else that is wrong with the press', async () => {
+      const close = (siteId: string) =>
+        db.site.update({ where: { id: siteId }, data: { status: 'paused' } })
+
+      // A member, who may not release at all.
+      const opened = await waitingWithChanges()
+      const member = await person()
+      await db.member.create({
+        data: { workspaceId: opened.site.workspaceId, userId: member.id, role: 'member' },
+      })
+      const candidate = await db.taskCandidate.findFirstOrThrow({
+        where: { taskId: opened.taskId },
+      })
+      const ofMember = signConfirmToken(KEY, {
+        userId: member.id,
+        candidateId: candidate.id,
+        revision: candidate.revision,
+        version: opened.confirm.version,
+        dbViewSha256: null,
+        expiresAt: Math.floor(Date.now() / 1000) + 600,
+      })
+      await close(opened.site.id)
+      await expect(
+        callerOf(member).release.confirm({ ...opened.confirm, confirmToken: ofMember }),
+      ).rejects.toMatchObject(commandRefused)
+
+      // `/cancel` pressed, the chat not closed yet: a row, until `task.create` makes one (61.11).
+      const { owner, site, workspaceId } = await siteOwner()
+      const task = await db.task.create({
+        data: {
+          workspaceId,
+          siteId: site.id,
+          needsRepository: true,
+          needsBrowser: true,
+          status: 'awaiting_approval',
+          turnNo: 1,
+          attempt: 1,
+        },
+      })
+      taskIds.push(task.id)
+      await withCandidate(task.id)
+      const caller = callerOf(owner, { browser: true })
+      const choice = (await caller.release.prepare({ taskId: task.id })).choices[0]!
+      await caller.task.cancel({ taskId: task.id, requestId: randomUUID() })
+      await close(site.id)
+      await expect(
+        caller.release.confirm({
+          taskId: task.id,
+          confirmToken: choice.confirmToken,
+          version: choice.version,
+        }),
+      ).rejects.toMatchObject(commandRefused)
+
+      // A chat that has ended.
+      const ended = await waitingWithChanges()
+      await db.task.update({ where: { id: ended.taskId }, data: { status: 'cancelled' } })
+      await close(ended.site.id)
+      await expect(ended.caller.release.confirm(ended.confirm)).rejects.toMatchObject(
+        commandRefused,
+      )
+    })
+
+    it('answers a repeat of a release it took, though the project has closed since', async () => {
+      const { site, caller, confirm } = await waitingWithChanges()
+      const confirmed = await caller.release.confirm(confirm)
+      await db.site.update({ where: { id: site.id }, data: { status: 'paused' } })
+
+      expect(await caller.release.confirm(confirm)).toEqual({ ...confirmed, repeated: true })
+      expect(await db.siteRelease.count({ where: { siteId: site.id } })).toBe(1)
+    })
+
+    it('leaves a project still being connected as it was', async () => {
+      const { site, caller, taskId, confirm } = await waitingWithChanges()
+      await db.site.update({ where: { id: site.id }, data: { status: 'onboarding' } })
+
+      const { commands } = await caller.task.feed({ taskId })
+      expect(commands.map((item) => item.refusal)).not.toContain('project_closed')
+      await expect(caller.release.prepare({ taskId })).resolves.toMatchObject({ revision: 1 })
+      await expect(caller.release.confirm(confirm)).resolves.toMatchObject({ repeated: false })
     })
 
     it('says the project is open while it is', async () => {

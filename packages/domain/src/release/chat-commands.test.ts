@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { taskStatuses } from '../tasks/task-status.ts'
 import {
+  CLOSED_PROJECT_TEXT,
   chatCommandAvailability,
   chatCommandIds,
   chatCommandRefusals,
@@ -22,6 +23,7 @@ const waiting: ChatCommandFacts = {
   retry: 'nothing_to_retry',
   cancelPending: false,
   browserWrote: false,
+  projectClosed: false,
 }
 const verdict = (facts: ChatCommandFacts) =>
   Object.fromEntries(chatCommandAvailability(facts).map((item) => [item.id, item.refusal]))
@@ -39,6 +41,57 @@ describe('the commands of a dialog', () => {
     })
     // The same chat before the press: `/release` is on offer.
     expect(verdict({ ...pressed, cancelPending: false }).release).toBeNull()
+  })
+
+  // docs/plan/61-chats-first.md, К39: the chat of a closed project is read, not worked in.
+  describe('of a closed project', () => {
+    const closed = { ...waiting, projectClosed: true, retry: null }
+    const installed = {
+      installedNow: true,
+      undone: false,
+      expired: false,
+      siteReleasing: false,
+      siteHeld: false,
+      siteActive: false,
+    }
+
+    it('refuses every command but «Отменить чат» and «Отменить выпуск»', () => {
+      expect(verdict(closed)).toEqual({
+        release: 'project_closed',
+        preview: 'project_closed',
+        reset: 'project_closed',
+        update: 'project_closed',
+        retry: 'project_closed',
+        cancel: null,
+        undo: 'no_release',
+      })
+    })
+
+    it('stops what works, and the words of «Отменить выпуск» stay its own', () => {
+      const running = { ...closed, taskStatus: 'running' as const }
+      expect(verdict(running)).toMatchObject({ cancel: null, release: 'project_closed' })
+      expect(verdict({ ...closed, releaseInProgress: true }).cancel).toBe('release_in_progress')
+      const done = { ...closed, taskStatus: 'done' as const, undo: installed }
+      expect(verdict(done)).toMatchObject({ undo: 'site_inactive', cancel: 'finished' })
+    })
+
+    it('closes `/preview` of a chat that has ended, and a press of `/cancel` changes nothing', () => {
+      const ended = { ...closed, taskStatus: 'cancelled' as const }
+      expect(verdict({ ...ended, projectClosed: false }).preview).toBeNull()
+      expect(verdict(ended)).toMatchObject({ preview: 'project_closed', release: 'project_closed' })
+      expect(verdict({ ...closed, cancelPending: true })).toMatchObject({
+        release: 'project_closed',
+        cancel: null,
+      })
+    })
+
+    it('says one sentence, and a project that is not closed is not refused by it', () => {
+      expect(chatCommandRefusalText.project_closed).toBe(CLOSED_PROJECT_TEXT)
+      expect(CLOSED_PROJECT_TEXT).toBe('Сайт на паузе или отключён.')
+      expect(Object.values(verdict({ ...closed, projectClosed: false }))).not.toContain(
+        'project_closed',
+      )
+    })
   })
 
   it('lists the seven commands with the labels of the plan', () => {

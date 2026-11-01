@@ -72,6 +72,7 @@ import {
   liveCandidateRow,
   liveSteps,
   openQuestion,
+  projectClosed,
   requestShown,
   retryFailure,
   stopRequested,
@@ -486,6 +487,7 @@ export function DialogView({
   const status = head?.task.status
   const question = openQuestion(rows, status)
   const candidateRow = liveCandidateRow(rows, head)
+  const closedProject = projectClosed(head)
   // The failure «Попробовать ещё» answers: the server offers it (docs/plan/53).
   const retryRow = retryFailure(rows, head)
   const terminal = status !== undefined && terminalTaskStatuses.includes(status)
@@ -831,7 +833,6 @@ export function DialogView({
   }
 
   const actions: FeedActions = {
-    onContinue: () => void press('continue', proceed.mutateAsync),
     onRetry: (failureEventId) => void pressRetry(failureEventId),
     onStop: () => runCommand('cancel'),
     onRelease: () => runCommand('release'),
@@ -841,8 +842,14 @@ export function DialogView({
     onShowChanges: () => {
       if (head !== null) openTool(changesToolOf(head), { by: 'changes' })
     },
-    onTakeControl: takeControl,
-    onResumeAgent: resumeWork,
+    // A closed project is read: nothing that carries the work on is offered (К39), «Остановить» is.
+    ...(closedProject
+      ? {}
+      : {
+          onContinue: () => void press('continue', proceed.mutateAsync),
+          onTakeControl: takeControl,
+          onResumeAgent: resumeWork,
+        }),
     // The client holds the control of a browser that is there: a closed session holds nothing.
     controlling: head?.browser?.controller === 'user' && browserLive,
     browserLive,
@@ -932,10 +939,11 @@ export function DialogView({
     const revising = status === 'awaiting_approval' && question === null
     // A paused, disconnected or archived project takes no words (docs/plan/61-chats-first.md,
     // К39). The field stays closed rather than gone: a turn already under way can still be stopped.
-    const closedProject = project?.closed === true
+    // The feed says it live; the word of the page is as of its load, before the first feed.
+    const closedField = closedProject || project?.closed === true
     const disabledReason = stopping
       ? composerText.stopping
-      : closedProject
+      : closedField
         ? chatsText.closedProject
         : answering || revising
           ? null
@@ -948,7 +956,7 @@ export function DialogView({
     composer = (
       <Composer
         placeholder={
-          closedProject
+          closedField
             ? chatsText.closedProject
             : answering && !answered
               ? feedQuestionText.placeholder
@@ -1015,6 +1023,7 @@ export function DialogView({
             onFullscreen={setFullscreen}
             onTake={takeControl}
             onResume={resumeWork}
+            readOnly={closedProject}
             onStop={() => runCommand('cancel')}
             stopping={stopping}
             canStop={
@@ -1201,7 +1210,7 @@ export function DialogView({
                 ) : undefined
               }
               browser={
-                withBrowser
+                withBrowser && !closedProject
                   ? {
                       controlling: head.browser?.controller === 'user' && browserLive,
                       onResume: resumeWork,

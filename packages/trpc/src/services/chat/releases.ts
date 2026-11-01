@@ -28,6 +28,7 @@ import {
   type VersionBump,
 } from '@repo/domain'
 
+import { siteClosed } from '../site-capabilities.ts'
 import { accessibleTask, isManagerRole, memberRole, taskNotFound } from './access.ts'
 import { candidateCountsOf, dialogFacts, assertCommandAvailable } from './dialog-facts.ts'
 import { moveTo, underDialogLock } from './dialog-lock.ts'
@@ -303,6 +304,15 @@ export async function confirmRelease(
           repeated: true,
         }
 
+      // The project closed after the window opened (К39): `core` would refuse the release only
+      // after its number was taken. As `refusalOf` has it: before every other refusal.
+      if (task.siteId !== null) {
+        const { status } = await tx.site.findUniqueOrThrow({
+          where: { id: task.siteId },
+          select: { status: true },
+        })
+        if (siteClosed(status)) throw commandUnavailable('release', 'project_closed')
+      }
       if (!isManagerRole(await memberRole(tx, task.workspaceId, userId)))
         throw commandUnavailable('release', 'not_allowed')
       // `/cancel` came after the window opened: core is closing the chat, and a release begun now

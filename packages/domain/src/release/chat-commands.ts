@@ -83,6 +83,9 @@ export function matchChatCommands(input: string): ChatCommandId[] {
 // Availability: decided by the server
 // ---------------------------------------------------------------------------------------------
 
+/** The one sentence the product has for a paused, disconnected or archived project (К39). */
+export const CLOSED_PROJECT_TEXT = 'Сайт на паузе или отключён.'
+
 export const chatCommandRefusals = [
   /** Only an owner or an admin of the workspace releases (Р25). */
   'not_allowed',
@@ -126,6 +129,12 @@ export const chatCommandRefusals = [
   'site_inactive',
   /** «Попробовать ещё»: no failure of the agent's work waits for a retry. */
   'nothing_to_retry',
+  /**
+   * The project of the chat is paused, disconnected or archived: the chat is read, not worked in
+   * (docs/plan/61-chats-first.md, К39). «Отменить чат» stops, and «Отменить выпуск» answers
+   * `site_inactive` by itself.
+   */
+  'project_closed',
 ] as const
 export type ChatCommandRefusal = (typeof chatCommandRefusals)[number]
 
@@ -156,6 +165,7 @@ export const chatCommandRefusalText: Readonly<Record<ChatCommandRefusal, string>
   site_inactive:
     'Сайт сейчас не подключён к Радити. Возобновите подключение, чтобы отменить выпуск.',
   nothing_to_retry: 'Повторять нечего: работа агента не обрывалась.',
+  project_closed: CLOSED_PROJECT_TEXT,
 })
 
 export interface ChatCommandFacts {
@@ -189,6 +199,11 @@ export interface ChatCommandFacts {
    * is on the site, and no undo of a release gives it back.
    */
   browserWrote: boolean
+  /**
+   * The project of the chat is paused, disconnected or archived (`siteClosed`); `onboarding` is
+   * not closed, and a chat without a project never is.
+   */
+  projectClosed: boolean
 }
 
 /**
@@ -241,6 +256,8 @@ function undoRefusal(facts: ChatCommandFacts): ChatCommandRefusal | null {
 function refusalOf(id: ChatCommandId, facts: ChatCommandFacts): ChatCommandRefusal | null {
   const { taskStatus: status, candidate, preview } = facts
   if (id === 'undo') return undoRefusal(facts)
+  // Before the ended chat below: `/preview` of a chat that has ended is closed with its project.
+  if (facts.projectClosed && id !== 'cancel') return 'project_closed'
   if (terminalTaskStatuses.includes(status))
     return id === 'preview' && preview ? previewRefusal(preview.status, 'ended') : 'finished'
   if (facts.cancelPending && id !== 'cancel') return 'finished'
