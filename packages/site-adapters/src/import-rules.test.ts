@@ -77,12 +77,6 @@ describe('exclude lines of the adapters', () => {
         for (const line of exclude) expect(() => createImportPathPolicy([line]), line).not.toThrow()
       })
 
-      it('writes snapshot lines of the same syntax', () => {
-        const lines = adapter.snapshotExcludes(facts)
-        expect(lines.length).toBeGreaterThan(0)
-        for (const line of lines) expect(() => createImportPathPolicy([line]), line).not.toThrow()
-      })
-
       it('never imports data files, server logs or the files of client tools', () => {
         expect(adapter.importRules(facts).exclude).toEqual(
           expect.arrayContaining([...dataFiles, ...serverLogs, ...clientToolFiles]),
@@ -100,12 +94,6 @@ describe('exclude lines of the adapters', () => {
           expect(importPolicy(adapter).decide(name, 'file')).toBe('excluded')
           expect(importPolicy(adapter).decide(`some/folder/below/${name}`, 'file')).toBe('take')
         }
-      })
-
-      it('keeps server logs and the files of client tools out of turn snapshots', () => {
-        expect(adapter.snapshotExcludes(facts)).toEqual(
-          expect.arrayContaining([...serverLogs, ...clientToolFiles]),
-        )
       })
 
       it.each([
@@ -161,9 +149,6 @@ describe('import of a WordPress site', () => {
   it('excludes copies of the configuration at any depth and the firewall logs', () => {
     expect(adapter.importRules(facts).exclude).toEqual(
       expect.arrayContaining(['wp-config*', '/wp-content/wflogs/']),
-    )
-    expect(adapter.snapshotExcludes(facts)).toEqual(
-      expect.arrayContaining(['/wp-content/blogs.dir/', '/wp-content/wflogs/']),
     )
   })
 

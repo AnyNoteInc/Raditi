@@ -12,7 +12,7 @@ export const phpServerConfigProtected = phpServerConfigFiles.map((name) => `**/$
 
 /**
  * Database dumps and archives: full copies of the site with personal data and credentials.
- * Never imported into git or packed into a turn snapshot, at any depth (.gitignore lines).
+ * Never imported into git, at any depth (.gitignore lines).
  */
 export const archivesAndDumps = [
   '*.sql',

@@ -1180,7 +1180,7 @@ interface GitProvider {
   closePullRequest(ref: RepoRef, number: number): Promise<void>
   setActionsSecret(ref: RepoRef, name: string, value: string): Promise<void>  // секрет репозитория RADITI_DEPLOY_WRAP на попытку выпуска; токеном владельца организации
   deleteActionsSecret(ref: RepoRef, name: string): Promise<void>
-  setActionsVariable(ref: RepoRef, name: string, value: string): Promise<void> // параметры выкладки (SiteAdapter.deployVars)
+  setActionsVariable(ref: RepoRef, name: string, value: string): Promise<void> // параметры выкладки
   protectTags(ref: RepoRef, pattern: string): Promise<void>                   // защита `v*`: создавать и двигать тег может только учётная запись выпуска
   createTag(ref: RepoRef, name: string, commitSha: string): Promise<GitTag>  // лёгкий тег выпуска через API; на занятое имя — тег как есть, не сдвигая
   getTag(ref: RepoRef, name: string): Promise<GitTag | null>
@@ -1415,14 +1415,9 @@ Ansible запускается через ansible-runner; доступы он п
 ```ts
 interface SiteAdapter {
   id: 'wordpress' | 'bitrix' | 'laravel' | 'static' | 'node' | 'python'
-  detect(probe: ServerProbe): Promise<SiteFacts | null>  // стек, версии, пути
   importRules(site: SiteFacts): ImportRules               // .gitignore, что не импортировать
-  deployVars(site: SiteFacts): DeployVars                 // переменные Actions: метод, пути, команды
-  backup(site: SiteFacts): BackupPlan                     // файлы и БД
   verify(site: SiteFacts): VerifyPlan                     // страницы, логи, скриншоты
-  mcpTools(site: SiteFacts): McpToolSet                   // инструменты контента
   protectedPaths(site: SiteFacts): string[]               // дифф агента сюда не пускаем: ядро CMS, конфиг с секретами
-  snapshotExcludes(site: SiteFacts): string[]             // что не класть в снимок хода: зависимости, кэши
   agentGuide(site: SiteFacts): string                     // заготовка AGENTS.md
   agentWorkingSet(site: SiteFacts): AgentWorkingSet       // что получает песочница (раздел 8, «Рабочий набор»)
   mediaRules(site: SiteFacts): MediaRules                 // медиа кандидата: addOnlyPaths, расширения и сигнатуры

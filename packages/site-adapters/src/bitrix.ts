@@ -22,22 +22,6 @@ const protectedPaths = [...kernelAndMedia, ...phpServerConfigProtected]
 
 const buildOutput = ['node_modules/', '*.log']
 
-const snapshotExcludes = [
-  ...anchored([
-    'bitrix/cache/',
-    'bitrix/managed_cache/',
-    'bitrix/stack_cache/',
-    'bitrix/html_pages/',
-    'bitrix/backup/',
-    'upload/',
-  ]),
-  ...buildOutput,
-  ...serverLogs,
-  'vendor/',
-  ...archivesAndDumps,
-  ...secretFiles,
-]
-
 // Backups live in /bitrix/backup/, already excluded with the core; dumps and archives elsewhere
 // are caught by pattern. gitleaks scans the imported tree as well (P11).
 const importExcludes = [
@@ -69,9 +53,6 @@ const todo = (method: string) => notImplemented(`BitrixAdapter.${method} (stage 
 
 export const bitrixAdapter: SiteAdapter = {
   stack: 'bitrix',
-  async detect() {
-    throw todo('detect')
-  },
   importRules() {
     return {
       gitignore: [
@@ -81,26 +62,14 @@ export const bitrixAdapter: SiteAdapter = {
       exclude: [...importExcludes],
     }
   },
-  deployVars() {
-    throw todo('deployVars')
-  },
-  backup() {
-    throw todo('backup')
-  },
   verify() {
     throw todo('verify')
-  },
-  mcpTools() {
-    return []
   },
   agentGuide() {
     throw todo('agentGuide')
   },
   protectedPaths() {
     return [...protectedPaths]
-  },
-  snapshotExcludes() {
-    return [...snapshotExcludes]
   },
   rootMarkers() {
     return [...rootMarkers]

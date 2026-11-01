@@ -60,23 +60,11 @@ describe('wordpressAdapter', () => {
   it('writes patterns without traversal or leading ./', () => {
     const all = [
       ...wordpressAdapter.protectedPaths(site),
-      ...wordpressAdapter.snapshotExcludes(site),
       ...wordpressAdapter.importRules(site).exclude,
     ]
     for (const pattern of all) {
       expect(pattern).not.toMatch(/(^|\/)\.\.(\/|$)|^\.\/|^$/)
     }
-  })
-
-  it('excludes media, caches and dependencies from turn snapshots', () => {
-    expect(wordpressAdapter.snapshotExcludes(site)).toEqual(
-      expect.arrayContaining([
-        'node_modules/',
-        'vendor/',
-        '/wp-content/cache/',
-        '/wp-content/uploads/',
-      ]),
-    )
   })
 
   it('never imports secrets or caches, anchoring root files, and takes the core and the media', () => {
@@ -97,7 +85,7 @@ describe('wordpressAdapter', () => {
     expect(gitignore.slice(1)).toEqual(exclude)
   })
 
-  it('never imports or snapshots DB dumps, archives, backups or secrets, at any depth', () => {
+  it('never imports DB dumps, archives, backups or secrets, at any depth', () => {
     const patterns = [
       '*.sql',
       '*.sql.gz',
@@ -120,9 +108,6 @@ describe('wordpressAdapter', () => {
     expect(wordpressAdapter.importRules(site).exclude).toEqual(
       expect.arrayContaining([...patterns, ...backups]),
     )
-    expect(wordpressAdapter.snapshotExcludes(site)).toEqual(
-      expect.arrayContaining([...patterns, ...backups]),
-    )
     // Unanchored, so they match in every directory.
     for (const pattern of patterns) expect(pattern.startsWith('/')).toBe(false)
   })
@@ -138,44 +123,10 @@ describe('wordpressAdapter', () => {
     expect(isForbiddenPath('wp-content/themes/shop/style.css', protectedPaths)).toBe(false)
   })
 
-  it('describes the MCP tools of spec §8 with unique names', () => {
-    const tools = wordpressAdapter.mcpTools(site)
-    const names = tools.map((t) => t.name)
-    expect(new Set(names).size).toBe(names.length)
-    expect(names).toEqual(
-      expect.arrayContaining([
-        'site_info',
-        'wp_cli',
-        'wp_rest',
-        'snapshot',
-        'restore',
-        'media_upload',
-        'browser_open',
-        'browser_click',
-        'browser_fill',
-        'browser_screenshot',
-        'request_approval',
-      ]),
-    )
-    for (const tool of tools) expect(tool.description.length).toBeGreaterThan(10)
-  })
-
-  it('flags exactly the CLAUDE.md rule 4 operations as dangerous', () => {
-    const dangerous = wordpressAdapter
-      .mcpTools(site)
-      .filter((t) => t.dangerous)
-      .map((t) => t.name)
-    expect(dangerous.sort()).toEqual(['wp_bulk_edit', 'wp_delete', 'wp_plugin', 'wp_theme'])
-    const approval = wordpressAdapter.mcpTools(site).find((t) => t.name === 'request_approval')
-    expect(approval?.dangerous).toBe(false)
-  })
-
   it('returns copies, so callers cannot change the shared lists', () => {
     wordpressAdapter.protectedPaths(site).length = 0
-    wordpressAdapter.mcpTools(site)[0]!.dangerous = true
     wordpressAdapter.rootMarkers().length = 0
     expect(wordpressAdapter.protectedPaths(site)).toContain('wp-config.php')
-    expect(wordpressAdapter.mcpTools(site)[0]!.dangerous).toBe(false)
     expect(wordpressAdapter.rootMarkers()).toHaveLength(2)
   })
 
@@ -205,24 +156,6 @@ describe('wordpressAdapter', () => {
     )
     // Anchored, a copy in a folder below would be imported.
     expect(exclude).not.toContain('/wp-config*')
-  })
-
-  it('keeps server logs, the files of client tools and legacy uploads out of turn snapshots', () => {
-    expect(wordpressAdapter.snapshotExcludes(site)).toEqual(
-      expect.arrayContaining([
-        '/wp-content/blogs.dir/',
-        '/wp-content/wflogs/',
-        'error_log',
-        'access_log',
-        '.my.cnf',
-        '.pgpass',
-        '.netrc',
-        'sftp-config.json',
-        '.ftpconfig',
-        '.vscode/',
-        '.idea/',
-      ]),
-    )
   })
 
   it('names the entries every root folder of an installation has', () => {
@@ -379,22 +312,7 @@ describe('wordpressAdapter', () => {
     await expect(wordpressAdapter.configSecrets(read)).rejects.toThrow('connection lost')
   })
 
-  it('leaves the server-dependent parts to P10', async () => {
-    const probe = {
-      exec: async () => ({ code: 0, stdout: '', stderr: '' }),
-      readFile: async () => null,
-      httpGet: async () => ({ status: 200, body: '' }),
-    }
-    await expect(wordpressAdapter.detect(probe)).rejects.toMatchObject({
-      code: 'NOT_IMPLEMENTED',
-      message: expect.stringContaining('WordPressAdapter.detect (P10)'),
-    })
-    for (const call of [
-      () => wordpressAdapter.deployVars(site),
-      () => wordpressAdapter.backup(site),
-      () => wordpressAdapter.agentGuide(site),
-    ]) {
-      expect(call).toThrow('(P10)')
-    }
+  it('leaves the server-dependent parts to P10', () => {
+    expect(() => wordpressAdapter.agentGuide(site)).toThrow('(P10)')
   })
 })

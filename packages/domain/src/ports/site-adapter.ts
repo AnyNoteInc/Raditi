@@ -26,13 +26,6 @@ import type { SiteContentGateway } from './site-db.ts'
 export const siteStacks = ['wordpress', 'bitrix', 'laravel', 'static', 'node', 'python'] as const
 export type SiteStack = (typeof siteStacks)[number]
 
-/** Read-only access to a site server during onboarding (SSH, FTP or the Радити plugin). */
-export interface ServerProbe {
-  exec(argv: string[]): Promise<{ code: number; stdout: string; stderr: string }>
-  readFile(path: string): Promise<string | null>
-  httpGet(path: string): Promise<{ status: number; body: string }>
-}
-
 export interface SiteFacts {
   stack: SiteStack
   url: string
@@ -55,14 +48,6 @@ export interface ImportRules {
   exclude: string[]
 }
 
-/** Variables for the shared deploy workflow; adapters never ship their own CI. */
-export type DeployVars = Record<string, string>
-
-export interface BackupPlan {
-  paths: string[]
-  database: boolean
-}
-
 export interface VerifyPlan {
   /** Paths below the site's origin (`/`, `/shop/`) that must answer 2xx or 3xx after a release. */
   pages: string[]
@@ -79,13 +64,6 @@ export interface VerifyPlan {
    * it created there too (docs/plan/53, «Операции БД и миграции», critique S9). Absent — none.
    */
   recordPages?: Readonly<Record<string, string>>
-}
-
-export interface McpToolDescriptor {
-  name: string
-  description: string
-  /** Needs request_approval before running (CLAUDE.md rule 4). */
-  dangerous: boolean
 }
 
 /**
@@ -171,18 +149,12 @@ export interface SiteContentAdapter<Access extends SiteContentAccess = SiteConte
 
 export interface SiteAdapter {
   readonly stack: SiteStack
-  detect(probe: ServerProbe): Promise<SiteFacts | null>
   importRules(site: SiteFacts): ImportRules
-  deployVars(site: SiteFacts): DeployVars
-  backup(site: SiteFacts): BackupPlan
   verify(site: SiteFacts): VerifyPlan
-  mcpTools(site: SiteFacts): McpToolDescriptor[]
   /** Draft of the site AGENTS.md. */
   agentGuide(site: SiteFacts): string
   /** Paths an agent diff may not touch, e.g. wp-config.php or /bitrix/. */
   protectedPaths(site: SiteFacts): string[]
-  /** Heavy or generated paths excluded from turn snapshots. */
-  snapshotExcludes(site: SiteFacts): string[]
   /**
    * Entries that the root folder of a site of this stack always has. The wizard refuses a folder
    * without them and the import does not enter a nested folder that has them all.

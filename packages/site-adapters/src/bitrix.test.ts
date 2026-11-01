@@ -48,29 +48,15 @@ describe('bitrixAdapter', () => {
     expect(isForbiddenPath('local/templates/x/template.php', protectedPaths)).toBe(false)
   })
 
-  it('excludes caches and media from turn snapshots', () => {
-    expect(bitrixAdapter.snapshotExcludes(site)).toEqual(
-      expect.arrayContaining([
-        '/bitrix/cache/',
-        '/bitrix/managed_cache/',
-        '/upload/',
-        'node_modules/',
-      ]),
-    )
-  })
-
   it('never imports the core or the media', () => {
     const { gitignore, exclude } = bitrixAdapter.importRules(site)
     expect(exclude).toEqual(expect.arrayContaining(['/bitrix/', '/upload/']))
     expect(gitignore.slice(1)).toEqual(exclude)
   })
 
-  it('never imports or snapshots DB dumps, archives or secrets, at any depth', () => {
+  it('never imports DB dumps, archives or secrets, at any depth', () => {
     const patterns = ['*.sql', '*.sql.gz', '*.zip', '*.tar.gz', '*.tgz', '*.bak', '.env', '*.pem']
     expect(bitrixAdapter.importRules(site).exclude).toEqual(expect.arrayContaining(patterns))
-    expect(bitrixAdapter.snapshotExcludes(site)).toEqual(
-      expect.arrayContaining([...patterns, '/bitrix/backup/']),
-    )
   })
 
   it('never imports exports, server logs or the files of client tools', () => {
@@ -83,22 +69,6 @@ describe('bitrixAdapter', () => {
         '*.sqlite3',
         '*.db',
         '*.mdb',
-        'error_log',
-        'access_log',
-        '.my.cnf',
-        '.pgpass',
-        '.netrc',
-        'sftp-config.json',
-        '.ftpconfig',
-        '.vscode/',
-        '.idea/',
-      ]),
-    )
-  })
-
-  it('keeps server logs and the files of client tools out of turn snapshots', () => {
-    expect(bitrixAdapter.snapshotExcludes(site)).toEqual(
-      expect.arrayContaining([
         'error_log',
         'access_log',
         '.my.cnf',
@@ -269,17 +239,8 @@ describe('bitrixAdapter', () => {
     expect(await bitrixAdapter.databaseSettings(read)).toBeNull()
   })
 
-  it('has no MCP tools before stage 3', () => {
-    expect(bitrixAdapter.mcpTools(site)).toEqual([])
-  })
-
   it('leaves the server-dependent parts to stage 3', () => {
-    for (const call of [
-      () => bitrixAdapter.deployVars(site),
-      () => bitrixAdapter.backup(site),
-      () => bitrixAdapter.verify(site),
-      () => bitrixAdapter.agentGuide(site),
-    ]) {
+    for (const call of [() => bitrixAdapter.verify(site), () => bitrixAdapter.agentGuide(site)]) {
       expect(call).toThrow('(stage 3)')
     }
   })

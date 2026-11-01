@@ -1,5 +1,5 @@
 import { wordpressPublicOriginals } from './wordpress-public-code.ts'
-import type { McpToolDescriptor, SiteAdapter } from '@repo/domain'
+import type { SiteAdapter } from '@repo/domain'
 import { notImplemented } from '@repo/domain'
 import { phpConfigStrings, secretValues } from './php-config.ts'
 import { wordpressBrowserRequestDenied } from './wordpress-browser.ts'
@@ -37,7 +37,7 @@ import {
 //   a trailing `/` marks a directory, a leading `**/` — at any depth: the syntax of
 //   forbiddenCiPaths (spec §10);
 // - agentWorkingSet: the path patterns of @repo/domain (wordpress-working-set.ts);
-// - importRules and snapshotExcludes: .gitignore lines, usable as rsync and
+// - importRules: .gitignore lines, usable as rsync and
 //   `git ls-files --exclude` patterns. A leading `/` anchors to the root; patterns without a
 //   slash (`*.sql`, `.env`) match at any depth.
 // TODO(P10): WordPress in a subdirectory of the docroot and wp-config.php one level above it.
@@ -72,9 +72,6 @@ const backupDirs = [
 
 /** Build output and logs at any depth; debug.log may hold personal data. */
 const buildOutput = ['node_modules/', '*.log']
-
-/** Uploads of a legacy multisite and the firewall logs of Wordfence: visitors' data, not code. */
-const dataDirs = ['wp-content/blogs.dir/', 'wp-content/wflogs/']
 
 /**
  * Folders inside the media where plugins keep what visitors sent: form attachments, the files of
@@ -130,15 +127,6 @@ const protectedPaths = [
   ...wordpressPlatformFiles,
 ]
 
-const snapshotExcludes = [
-  ...anchored(['wp-content/uploads/', ...dataDirs, ...generatedDirs, ...backupDirs]),
-  ...buildOutput,
-  ...serverLogs,
-  'vendor/',
-  ...archivesAndDumps,
-  ...secretFiles,
-]
-
 // gitleaks scans the imported tree as well (P11): these lines are the first filter, not the only one.
 // The core of WordPress and the media are imported (owner's decision of 17.10.2026): the first
 // version of a site is the site as it runs, so it can be put back. The protected paths keep an
@@ -175,103 +163,10 @@ const defineEnd = /[ \t\r\n]*[),]/
 /** What wp-config-sample.php ships in place of a key: no secret, and present in every copy of it. */
 const samplePhrase = 'put your unique phrase here'
 
-/**
- * MCP tools of the gateway for WordPress (spec §8, §11). Everything that changes the site
- * right away is reversible and snapshotted first. What CLAUDE.md rule 4 calls dangerous has
- * separate tools that the gateway runs only after an approved request_approval. Users,
- * orders and payment settings get no tool at all (spec §11): wordpressMcpPolicy is the
- * denylist the gateway applies to wp_cli, wp_rest and browser_* on every call, and it counts
- * changed objects per turn (above 20 → request_approval). TODO(P10): confirm the split.
- */
-const mcpTools: McpToolDescriptor[] = [
-  {
-    name: 'site_info',
-    description: 'Stack, versions, active theme, plugins and key pages of the site.',
-    dangerous: false,
-  },
-  {
-    name: 'wp_cli',
-    description:
-      'Whitelisted WP-CLI commands: reading and reversible edits of posts, pages, options, menus and media.',
-    dangerous: false,
-  },
-  {
-    name: 'wp_rest',
-    description:
-      'WordPress REST API: reading and reversible edits of pages, posts, media and menus.',
-    dangerous: false,
-  },
-  {
-    name: 'snapshot',
-    description:
-      'Save an object (post, option, media file) before changing it, so it can be undone.',
-    dangerous: false,
-  },
-  {
-    name: 'restore',
-    description: 'Return an object to a snapshot taken in this task.',
-    dangerous: false,
-  },
-  {
-    name: 'media_upload',
-    description: 'Upload a file from the client inbox to the media library.',
-    dangerous: false,
-  },
-  {
-    name: 'browser_open',
-    description: 'Open a page of the client site in the browser; other domains are blocked.',
-    dangerous: false,
-  },
-  {
-    name: 'browser_click',
-    description: 'Click an element on the open page of the client site.',
-    dangerous: false,
-  },
-  {
-    name: 'browser_fill',
-    description: 'Fill a form field on the open page of the client site.',
-    dangerous: false,
-  },
-  {
-    name: 'browser_screenshot',
-    description: 'Take a screenshot of the open page.',
-    dangerous: false,
-  },
-  {
-    name: 'request_approval',
-    description:
-      'Show the client what will change and wait for the decision. Required before every dangerous tool.',
-    dangerous: false,
-  },
-  {
-    name: 'wp_delete',
-    description: 'Delete pages, posts or media files.',
-    dangerous: true,
-  },
-  {
-    name: 'wp_theme',
-    description: 'Switch or update the theme.',
-    dangerous: true,
-  },
-  {
-    name: 'wp_plugin',
-    description: 'Install, activate, deactivate or update plugins.',
-    dangerous: true,
-  },
-  {
-    name: 'wp_bulk_edit',
-    description: 'Change more than 20 objects in one go; the client sees the full list.',
-    dangerous: true,
-  },
-]
-
 const todo = (method: string) => notImplemented(`WordPressAdapter.${method} (P10)`)
 
 export const wordpressAdapter: SiteAdapter = {
   stack: 'wordpress',
-  async detect() {
-    throw todo('detect')
-  },
   importRules() {
     return {
       gitignore: [
@@ -281,24 +176,12 @@ export const wordpressAdapter: SiteAdapter = {
       exclude: [...importExcludes],
     }
   },
-  deployVars() {
-    throw todo('deployVars')
-  },
-  backup() {
-    throw todo('backup')
-  },
   verify: wordpressVerifyPlan,
-  mcpTools() {
-    return mcpTools.map((tool) => ({ ...tool }))
-  },
   agentGuide() {
     throw todo('agentGuide')
   },
   protectedPaths() {
     return [...protectedPaths]
-  },
-  snapshotExcludes() {
-    return [...snapshotExcludes]
   },
   rootMarkers() {
     return [...rootMarkers]
