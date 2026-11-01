@@ -107,6 +107,32 @@ describe('the rows of a dialog', () => {
     expect(text(within(feed).getByText(/Агент работал/))).toBe('Агент работал 2 мин 14 с')
   })
 
+  it('stands «Ход работы» of a finished turn open by `/details`, and folds it back', () => {
+    const rows: FeedRow[] = [
+      requestRow('1'),
+      { ...stepRow('2', 1), at: '2026-10-17T09:00:00.000Z' },
+      { ...resultRow('3', 1), at: '2026-10-17T09:02:14.000Z' },
+    ]
+    const list = (details: boolean) => (
+      <FeedList
+        head={headOf({ status: 'awaiting_approval', task: { turnNo: 1 } })}
+        rows={rows}
+        siteUrl="https://kroshka.example"
+        openQuestionId={null}
+        liveCandidateId={null}
+        actions={actions()}
+        details={details}
+        activityOf={(turn) => <p>Ход хода {turn}</p>}
+      />
+    )
+    const { rerender } = render(list(true))
+    const line = () => screen.getByText(/Агент работал/).closest('details')!
+    expect(line().open).toBe(true)
+    expect(screen.getByText('Ход хода 1')).toBeTruthy()
+    rerender(list(false))
+    expect(line().open).toBe(false)
+  })
+
   it('opens «Ход работы» of a finished turn only when the client unfolds it', () => {
     const rows: FeedRow[] = [
       requestRow('1'),

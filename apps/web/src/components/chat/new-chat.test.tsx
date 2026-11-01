@@ -21,7 +21,8 @@ type CreateInput = {
   attachments?: string[]
 }
 
-const { create, push, search, start, projectList } = vi.hoisted(() => ({
+const { create, push, search, start, projectList, setPreference } = vi.hoisted(() => ({
+  setPreference: vi.fn(),
   create: vi.fn<(input: CreateInput) => Promise<Created>>(),
   push: vi.fn<(path: string) => void>(),
   // The query of the address: `?project=`.
@@ -33,6 +34,10 @@ const { create, push, search, start, projectList } = vi.hoisted(() => ({
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push }),
   useSearchParams: () => search.params,
+}))
+
+vi.mock('@repo/ui/providers', () => ({
+  useThemePreference: () => ({ preference: 'system', setPreference }),
 }))
 
 // The bytes of a chosen file reach the server at once: the upload itself is the composer's test.
@@ -366,22 +371,133 @@ describe('new chat', () => {
     forgetNewDialog(create.mock.calls[0]![0].taskId)
   })
 
-  it('has the window of commands of a chat, which says that they work there', () => {
-    showChat()
-    write('/')
-    const list = screen.getByRole('listbox', { name: 'Команды' })
-    const options = within(list).getAllByRole('option')
-    expect(options.length).toBeGreaterThan(0)
-    for (const option of options) {
-      expect(option.getAttribute('aria-disabled')).toBe('true')
-      expect(option.textContent).toContain(
-        'Команды работают внутри чата. Сначала напишите, что нужно сделать.',
-      )
+  describe('the window of commands', () => {
+    const REASON = 'Команды работают внутри чата. Сначала напишите, что нужно сделать.'
+    const list = () => screen.getByRole('listbox', { name: 'Команды' })
+    const named = (name: RegExp) => within(list()).getByRole('option', { name })
+    const none = (name: RegExp) => within(list()).queryByRole('option', { name })
+    const SITE = [
+      /Выпустить новую версию/,
+      /Открыть предпросмотр/,
+      /Обновить рабочую копию/,
+      /Сбросить данные предпросмотра/,
+    ]
+    const page = [
+      /Новый чат/,
+      /Все чаты/,
+      /Модель и размышление/,
+      /Подробности работы/,
+      /Оформление/,
+      /Справка/,
+    ]
+    const closed = (names: readonly RegExp[]) => {
+      for (const name of names) {
+        expect(named(name).getAttribute('aria-disabled')).toBe('true')
+        expect(named(name).textContent).toContain(REASON)
+      }
     }
+
+    it('has no group «Сайт» without a project: that chat will have none (К27)', () => {
+      showChat()
+      write('/')
+      for (const name of SITE) expect(none(name)).toBeNull()
+      expect(within(list()).queryByText('Сайт', { exact: true })).toBeNull()
+      closed([/Отменить последний запрос/, /Вернуть отменённый запрос/, /Отменить чат/])
+      closed([/Скачать переписку/])
+      for (const name of page) expect(named(name).getAttribute('aria-disabled')).toBeNull()
+      expect(none(/Отменить выпуск/)).toBeNull()
+      expect(none(/Попробовать ещё/)).toBeNull()
+    })
+
+    it('has none on a project without its files either', async () => {
+      search.params = new URLSearchParams(`project=${OTHER_ID}`)
+      projectList.mockResolvedValue([
+        project(OTHER_ID, 'Автосервис «Гранд»', {
+          requirements: { repository: false, browser: true },
+        }),
+      ])
+      showChat()
+      await screen.findByRole('button', { name: /Автосервис «Гранд»/ })
+      write('/')
+      for (const name of SITE) expect(none(name)).toBeNull()
+    })
+
+    it('says of the site commands of a project with files that they work inside a chat', async () => {
+      search.params = new URLSearchParams(`project=${OTHER_ID}`)
+      projectList.mockResolvedValue([GRAND])
+      showChat()
+      await screen.findByRole('button', { name: /Автосервис «Гранд»/ })
+      write('/')
+      closed(SITE)
+      expect(none(/Отменить выпуск/)).toBeNull()
+    })
+
+    it('answers a typed command of the server, and the words stay in the field', async () => {
+      showChat()
+      write('/undo')
+      fireEvent.keyDown(field(), { key: 'Escape' })
+      fireEvent.keyDown(field(), { key: 'Enter', ctrlKey: true })
+      expect((await screen.findByRole('alert')).textContent).toBe(REASON)
+      expect(field().value).toBe('/undo')
+      expect(create).not.toHaveBeenCalled()
+    })
+
+    it('`/themes` opens the menu over the field and starts no chat', async () => {
+      showChat()
+      write('/themes')
+      fireEvent.keyDown(field(), { key: 'Enter' })
+      const menu = within(await screen.findByRole('menu', { name: 'Оформление' }))
+      fireEvent.click(menu.getByRole('menuitemradio', { name: 'Тёмная' }))
+      expect(setPreference).toHaveBeenCalledWith('dark')
+      expect(create).not.toHaveBeenCalled()
+      expect(field().value).toBe('')
+    })
+
+    it('`/details` is kept for the chats to come, and a screen reader is told', async () => {
+      window.localStorage.clear()
+      showChat()
+      write('/details')
+      fireEvent.keyDown(field(), { key: 'Enter' })
+      await waitFor(() =>
+        expect(screen.getByRole('status').textContent).toBe('Подробности работы показаны'),
+      )
+      expect(window.localStorage.getItem('raditi-chat-details')).toBe('1')
+      expect(create).not.toHaveBeenCalled()
+      window.localStorage.clear()
+    })
+  })
+
+  it('runs the commands of the page here too: the list, the level, a new chat of the project', async () => {
+    projectList.mockResolvedValue([KROSHKA])
+    search.params = new URLSearchParams(`project=${SITE_ID}`)
+    showChat()
+    await screen.findByRole('button', { name: /Крошка/ })
+    write('/sessions')
+    fireEvent.keyDown(field(), { key: 'Enter' })
+    expect(push).toHaveBeenLastCalledWith('/chats')
+    write('/new')
+    fireEvent.keyDown(field(), { key: 'Enter' })
+    expect(push).toHaveBeenLastCalledWith(`/chats/new?project=${SITE_ID}`)
+    write('/mo')
+    fireEvent.keyDown(field(), { key: 'Enter' })
+    expect(await screen.findByRole('menu', { name: 'Размышление' })).toBeTruthy()
+    expect(create).not.toHaveBeenCalled()
   })
 
   it('never starts a chat with the words of a command', () => {
     showChat()
+    write('/release')
+    fireEvent.click(send())
+    expect(create).not.toHaveBeenCalled()
+    // A chat without a project will not have it: «внутри чата» would not be true.
+    expect(screen.getByRole('alert').textContent).toBe('Эта команда сейчас недоступна.')
+  })
+
+  it('says of a command of a project with files that it works inside a chat', async () => {
+    search.params = new URLSearchParams(`project=${OTHER_ID}`)
+    projectList.mockResolvedValue([GRAND])
+    showChat()
+    await screen.findByRole('button', { name: /Автосервис «Гранд»/ })
     write('/release')
     fireEvent.click(send())
     expect(create).not.toHaveBeenCalled()

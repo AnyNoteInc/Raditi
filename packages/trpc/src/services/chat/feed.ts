@@ -1,7 +1,9 @@
 import type { Prisma, PrismaClient } from '@repo/db'
 import {
   effortOfModelClass,
+  feedFileName,
   feedLimits,
+  feedMarkdown,
   feedTaskHeadSchema,
   leaseScopeOf,
   modelClassSchema,
@@ -22,6 +24,9 @@ import { dialogRetry, movingRequest } from './dialog-state.ts'
 import { siteClosed } from '../site-capabilities.ts'
 
 type Tx = Prisma.TransactionClient
+
+/** A long chat is many pages of rows: the snapshot stays open while they are read. */
+const EXPORT_TIMEOUT_MS = 30_000
 
 /** The preview of a dialog as its panel shows it. */
 export interface FeedPreview {
@@ -226,6 +231,39 @@ async function feedPage(
     events.push({ ...event, id: String(row.id), at: row.createdAt.toISOString() })
   }
   return { events, cursor: page.length > 0 ? String(page.at(-1)!.id) : after, more }
+}
+
+/**
+ * `task.export`: every row of a chat from one snapshot, as the screen would read them, written out
+ * as a Markdown file. A chat of a closed project is read, so it is exported too.
+ */
+export async function readDialogExport(
+  db: PrismaClient,
+  input: { userId: string; taskId: string },
+): Promise<{ fileName: string; markdown: string }> {
+  return db.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SET TRANSACTION READ ONLY`
+      const task = await tx.task.findFirst({
+        where: accessibleTask(input.userId, input.taskId),
+        select: { id: true, siteId: true, title: true },
+      })
+      if (task === null) throw taskNotFound()
+      const rows: FeedItem[] = []
+      let cursor = '0'
+      for (;;) {
+        const page = await feedPage(tx, task.id, cursor)
+        rows.push(...page.events)
+        if (!page.more) break
+        cursor = page.cursor
+      }
+      return {
+        fileName: feedFileName(task.title),
+        markdown: feedMarkdown({ title: task.title, rows, withSite: task.siteId !== null }),
+      }
+    },
+    { isolationLevel: 'RepeatableRead', timeout: EXPORT_TIMEOUT_MS },
+  )
 }
 
 /** The project of a chat as its screen shows it; `closed` — it reads, it takes no words (К39). */

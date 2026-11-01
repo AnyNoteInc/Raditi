@@ -17,9 +17,10 @@ import { keepChatDraft, takeChatDraft } from './chat-draft'
 import { riseIn } from './chat-motion'
 import { chatsText, composerText, taskWayText } from './chat-texts'
 import type { ProjectListItem } from './chat-types'
+import { isPageCommand, useClientCommands } from './client-commands'
 import { Composer } from './composer'
 import { dialogListKey } from './dialog-list'
-import { EffortMenu } from './effort-menu'
+import { EffortMenu, type EffortMenuHandle } from './effort-menu'
 import { markNewDialog } from './new-dialog-hint'
 import { ProjectPicker, projectChoosable } from './project-picker'
 import { useAttachments } from './use-attachments'
@@ -70,6 +71,9 @@ export function NewChat({ userId, beside = false }: { userId: string; beside?: b
   const [draft, setDraft] = useState<string | null>(null)
   const wide = useMediaQuery(useTheme().breakpoints.up('md'))
   const shown = !beside || wide
+  const field = useRef<HTMLTextAreaElement>(null)
+  const effortMenu = useRef<EffortMenuHandle>(null)
+  const clientCommands = useClientCommands({ projectId: siteId, anchor: field })
   // After the first paint: the server draws the field empty, and Strict Mode mounts this twice.
   useEffect(() => {
     if (!shown) return
@@ -146,12 +150,19 @@ export function NewChat({ userId, beside = false }: { userId: string; beside?: b
               ? taskWayText.noSecrets
               : undefined
         }
-        // The window of commands is here as in a chat; it says that commands work there.
+        // The window of commands is here as in a chat: the page's own commands work, and of the
+        // others it says that they work there.
         commands={{
           verdicts: [],
-          onRun: () => undefined,
+          onRun: (id) => {
+            if (id === 'models') effortMenu.current?.open()
+            else if (isPageCommand(id)) return clientCommands.run(id)
+          },
           closedReason: composerText.commandsInDialog,
+          // Without the files of a project the chat will not have the site's commands (К27).
+          plain: project?.chat.requirements?.repository !== true,
         }}
+        fieldRef={field}
         restored={draft}
         onTextChange={(text) => {
           written.current = text
@@ -165,8 +176,9 @@ export function NewChat({ userId, beside = false }: { userId: string; beside?: b
             onAddProject={() => keepChatDraft(userId, written.current)}
           />
         }
-        effort={<EffortMenu value={effort} onChange={setEffort} />}
+        effort={<EffortMenu value={effort} onChange={setEffort} handle={effortMenu} />}
       />
+      {clientCommands.menu}
     </Box>
   )
 }

@@ -4,17 +4,22 @@ import { taskStatuses } from '../tasks/task-status.ts'
 import {
   CLOSED_PROJECT_TEXT,
   chatCommandAvailability,
+  chatCommandGroupLabel,
   chatCommandIds,
   chatCommandRefusals,
   chatCommandRefusalText,
   chatCommands,
+  isCommandToCome,
   matchChatCommands,
+  offeredCommandIds,
   parseChatCommand,
+  serverCommandIds,
   type ChatCommandFacts,
 } from './chat-commands.ts'
 
 const waiting: ChatCommandFacts = {
   taskStatus: 'awaiting_approval',
+  repository: true,
   role: 'owner',
   candidate: { status: 'current', baseIsMain: true, checksFailed: false },
   preview: { status: 'ready' },
@@ -64,6 +69,8 @@ describe('the commands of a dialog', () => {
         retry: 'project_closed',
         cancel: null,
         undo: 'no_release',
+        turn_undo: 'project_closed',
+        turn_redo: 'project_closed',
       })
     })
 
@@ -94,28 +101,172 @@ describe('the commands of a dialog', () => {
     })
   })
 
-  it('lists the seven commands with the labels of the plan', () => {
-    expect(chatCommandIds).toEqual([
+  it('lists the nineteen commands of the plan, each with its slash, words and group', () => {
+    const release =
+      'Установить проверенные изменения на сайт: с резервной копией и проверкой после.'
+    const compact = 'Агент заменит длинную историю кратким пересказом и продолжит с ним.'
+    const turnUndo =
+      'Изменения файлов вернутся. То, что агент сделал на сайте через браузер, останется.'
+    expect(
+      chatCommandIds.map((id) => {
+        const { slash, label, description, group } = chatCommands[id]
+        return [id, slash, label, description, group]
+      }),
+    ).toEqual([
+      ['release', '/release', 'Выпустить новую версию', release, 'site'],
+      [
+        'preview',
+        '/preview',
+        'Открыть предпросмотр',
+        'Показать рабочую копию сайта с изменениями этого чата.',
+        'site',
+      ],
+      [
+        'update',
+        '/update',
+        'Обновить рабочую копию',
+        'Перенести изменения этого чата на текущую версию сайта.',
+        'site',
+      ],
+      [
+        'reset',
+        '/reset',
+        'Сбросить данные предпросмотра',
+        'Вернуть рабочую копию к последним изменениям агента.',
+        'site',
+      ],
+      [
+        'undo',
+        '/rollback',
+        'Отменить выпуск',
+        'Вернуть файлы и записи к версии до выпуска этого чата.',
+        'site',
+      ],
+      [
+        'init',
+        '/init',
+        'Описать проект для агента',
+        'Агент изучит код и подготовит правила работы с проектом.',
+        'site',
+      ],
+      ['compact', '/compact', 'Сжать переписку', compact, 'agent'],
+      ['turn_undo', '/undo', 'Отменить последний запрос', turnUndo, 'agent'],
+      [
+        'turn_redo',
+        '/redo',
+        'Вернуть отменённый запрос',
+        'Снова применить то, что вы отменили.',
+        'agent',
+      ],
+      [
+        'retry',
+        '/retry',
+        'Попробовать ещё',
+        'Повторить просьбу, на которой работа оборвалась.',
+        'agent',
+      ],
+      ['cancel', '/cancel', 'Отменить чат', 'Завершить чат и остановить агента.', 'agent'],
+      ['new', '/new', 'Новый чат', 'Начать другой разговор.', 'chat'],
+      ['sessions', '/sessions', 'Все чаты', 'Перейти к списку чатов.', 'chat'],
+      // Not «файлом Markdown» of the plan: no Latin in the words of the client (§10).
+      ['export', '/export', 'Скачать переписку', 'Сохранить чат текстовым файлом.', 'chat'],
+      [
+        'models',
+        '/models',
+        'Модель и размышление',
+        'Посмотреть модель и выбрать уровень размышления.',
+        'chat',
+      ],
+      [
+        'details',
+        '/details',
+        'Подробности работы',
+        'Показывать или скрывать команды и инструменты агента.',
+        'chat',
+      ],
+      [
+        'thinking',
+        '/thinking',
+        'Размышления агента',
+        'Показывать или скрывать ход мыслей агента.',
+        'chat',
+      ],
+      ['themes', '/themes', 'Оформление', 'Светлая, тёмная или как в системе.', 'chat'],
+      ['help', '/help', 'Справка', 'Что умеют команды.', 'chat'],
+    ])
+    expect(Object.values(chatCommandGroupLabel)).toEqual(['Сайт', 'Агент', 'Чат'])
+  })
+
+  it('says the refusals of `/undo`, `/redo` and `/compact` in the words of the plan', () => {
+    expect(chatCommandRefusalText.nothing_to_undo).toBe('Отменять пока нечего.')
+    expect(chatCommandRefusalText.undo_past_update).toBe(
+      'Этот запрос отменить нельзя: после него рабочая копия перешла на новую версию сайта.',
+    )
+    expect(chatCommandRefusalText.content_written).toBe(
+      'Этот запрос отменить нельзя: он изменил содержимое сайта.',
+    )
+    expect(chatCommandRefusalText.nothing_to_redo).toBe('Возвращать нечего.')
+    expect(chatCommandRefusalText.nothing_to_compact).toBe('Сжимать пока нечего.')
+  })
+
+  it('keeps the commands of the site and `/retry` to a chat with the repository (К27)', () => {
+    expect(chatCommandIds.filter((id) => chatCommands[id].needs === 'repository')).toEqual([
       'release',
       'preview',
-      'reset',
       'update',
-      'retry',
-      'cancel',
+      'reset',
       'undo',
+      'init',
+      'retry',
     ])
-    expect(
-      Object.fromEntries(
-        chatCommandIds.map((id) => [chatCommands[id].slash, chatCommands[id].label]),
-      ),
-    ).toEqual({
-      '/release': 'Выпустить новую версию',
-      '/preview': 'Открыть предпросмотр',
-      '/reset': 'Сбросить данные предпросмотра',
-      '/update': 'Обновить рабочую копию',
-      '/retry': 'Попробовать ещё',
-      '/cancel': 'Отменить чат',
-      '/undo': 'Отменить выпуск',
+    for (const id of chatCommandIds)
+      if (chatCommands[id].group === 'site') expect(chatCommands[id].needs).toBe('repository')
+  })
+
+  it('leaves what the page runs by itself to the page: no verdict, no row of the feed', () => {
+    expect(serverCommandIds).toEqual(
+      chatCommandIds.filter((id) => chatCommands[id].scope === 'server'),
+    )
+    expect(chatCommandIds.filter((id) => chatCommands[id].scope === 'client')).toEqual([
+      'new',
+      'sessions',
+      'export',
+      'models',
+      'details',
+      'thinking',
+      'themes',
+      'help',
+    ])
+    expect(chatCommandAvailability(waiting).map((item) => item.id)).toEqual(offeredCommandIds)
+    expect(offeredCommandIds).toEqual(serverCommandIds.filter((id) => !isCommandToCome(id)))
+  })
+
+  it('moves «Отменить выпуск» to `/rollback`: `/undo` is the last request now (К28)', () => {
+    expect(parseChatCommand('/rollback')).toBe('undo')
+    expect(parseChatCommand('/undo')).toBe('turn_undo')
+    expect(chatCommands.undo.description).toBe(
+      'Вернуть файлы и записи к версии до выпуска этого чата.',
+    )
+    expect(chatCommands.turn_undo.descriptionPlain).toBe(
+      'Агент забудет последний запрос и ответ на него.',
+    )
+  })
+
+  it('closes `/undo` and `/redo` until their slices, a project that is closed before them', () => {
+    expect(verdict(waiting)).toMatchObject({
+      turn_undo: 'nothing_to_undo',
+      turn_redo: 'nothing_to_redo',
+    })
+    // The exception of К39 is the id `undo` of `/rollback`, not `/undo`.
+    expect(verdict({ ...waiting, projectClosed: true })).toMatchObject({
+      turn_undo: 'project_closed',
+      turn_redo: 'project_closed',
+    })
+    const ended = { ...waiting, taskStatus: 'done' as const }
+    expect(verdict(ended)).toMatchObject({ turn_undo: 'finished', turn_redo: 'finished' })
+    expect(verdict({ ...waiting, cancelPending: true })).toMatchObject({
+      turn_undo: 'finished',
+      turn_redo: 'finished',
     })
   })
 
@@ -127,6 +278,7 @@ describe('the commands of a dialog', () => {
     for (const id of chatCommandIds) {
       expect(chatCommands[id].label).not.toMatch(/[A-Za-z]/)
       expect(chatCommands[id].description).not.toMatch(/[A-Za-z]/)
+      expect(chatCommands[id].descriptionPlain ?? '').not.toMatch(/[A-Za-z]/)
     }
     expect(Object.keys(chatCommandRefusalText).sort()).toEqual([...chatCommandRefusals].sort())
     for (const text of Object.values(chatCommandRefusalText)) expect(text).not.toMatch(/[A-Za-z]/)
@@ -138,8 +290,22 @@ describe('the commands of a dialog', () => {
     for (const text of ['/release сейчас', 'release', '/Release', '/deploy', ''])
       expect(parseChatCommand(text)).toBeNull()
     expect(matchChatCommands('/')).toEqual([...chatCommandIds])
-    expect(matchChatCommands('/re')).toEqual(['release', 'reset', 'retry'])
     expect(matchChatCommands('re')).toEqual([])
+  })
+
+  it('finds a command by its slash and its other words, not by its id', () => {
+    expect(matchChatCommands('/re')).toEqual(['release', 'reset', 'turn_redo', 'retry', 'sessions'])
+    expect(matchChatCommands('/turn')).toEqual([])
+    expect(matchChatCommands('/ro')).toEqual(['undo'])
+    expect(matchChatCommands('/MO')).toEqual(['models'])
+    expect(['/summarize', '/clear', '/resume', '/continue', '/mo'].map(parseChatCommand)).toEqual([
+      'compact',
+      'new',
+      'sessions',
+      'sessions',
+      'models',
+    ])
+    expect(parseChatCommand('/turn_undo')).toBeNull()
   })
 })
 
@@ -153,6 +319,8 @@ describe('availability', () => {
       retry: 'nothing_to_retry',
       cancel: null,
       undo: 'no_release',
+      turn_undo: 'nothing_to_undo',
+      turn_redo: 'nothing_to_redo',
     })
   })
 
@@ -252,6 +420,8 @@ describe('availability', () => {
         retry: 'finished',
         cancel: 'finished',
         undo: 'no_release',
+        turn_undo: 'finished',
+        turn_redo: 'finished',
       })
   })
 
@@ -288,7 +458,7 @@ describe('availability', () => {
   it('answers every status of spec §7', () => {
     for (const taskStatus of taskStatuses)
       expect(chatCommandAvailability({ ...waiting, taskStatus })).toHaveLength(
-        chatCommandIds.length,
+        offeredCommandIds.length,
       )
   })
 })

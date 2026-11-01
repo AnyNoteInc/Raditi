@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises'
+
 import { AxeBuilder } from '@axe-core/playwright'
 import type { Locator, Page } from '@playwright/test'
 
@@ -281,7 +283,8 @@ test('a dialog starts from the first words and waits in the queue, on a desktop'
   await test.step('the window of commands tells what can be done now', async () => {
     await page.getByRole('button', { name: 'Команды' }).click()
     await expect(commands(page)).toBeFocused()
-    await expect(commands(page).getByRole('option')).toHaveCount(5)
+    await expect(commands(page).getByRole('group')).toHaveCount(3)
+    await expect(commands(page).getByRole('option')).toHaveCount(14)
     const release = commands(page).getByRole('option', { name: /Выпустить новую версию/ })
     await expect(release).toHaveAttribute('aria-disabled', 'true')
     await expect(release).toContainText('Подождите: агент ещё работает.')
@@ -936,7 +939,7 @@ test('a long chat without a project: the head and the field never hide the eleme
   }
 })
 
-test('a chat without a project: no tools, no word of a site, `/cancel` alone', async ({
+test('a chat without a project: no tools, no word of a site, no commands of the site', async ({
   page,
   signedInUser,
 }) => {
@@ -953,7 +956,10 @@ test('a chat without a project: no tools, no word of a site, `/cancel` alone', a
   await expect(message(page)).not.toHaveAccessibleDescription(/Переменные/)
 
   await page.getByRole('button', { name: 'Команды' }).click()
-  await expect(commands(page).getByRole('option')).toHaveCount(1)
+  // No group «Сайт» and no `/retry` without the repository (К27).
+  await expect(commands(page).getByRole('group')).toHaveCount(2)
+  await expect(commands(page).getByRole('option')).toHaveCount(10)
+  await expect(commands(page).getByText('Сайт', { exact: true })).toHaveCount(0)
   await commands(page)
     .getByRole('option', { name: /Отменить чат/ })
     .click()
@@ -961,6 +967,86 @@ test('a chat without a project: no tools, no word of a site, `/cancel` alone', a
   await expect(confirm).toContainText('Чат завершится, а агент остановится, если ещё работает.')
   await expect(confirm).not.toContainText('сайт')
   await confirm.getByRole('button', { name: 'Не отменять' }).click()
+})
+
+test('the commands of the page work in a chat: the file, the theme, the level, the list', async ({
+  page,
+  signedInUser,
+}) => {
+  const { taskId, title } = await addLongDialog(signedInUser.id, 2)
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto(`/chats/${taskId}`)
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(title)
+  const run = async (slash: string) => {
+    await message(page).fill(slash)
+    await commands(page).waitFor()
+    await page.keyboard.press('Enter')
+  }
+
+  await test.step('`/export` gives the chat as a file', async () => {
+    const saving = page.waitForEvent('download')
+    await run('/export')
+    const file = await saving
+    expect(file.suggestedFilename()).toMatch(/\.md$/u)
+    const path = await file.path()
+    expect(await readFile(path, 'utf8')).toContain(`# ${title}`)
+  })
+
+  await test.step('`/themes` offers the three and takes the choice', async () => {
+    await run('/themes')
+    const menu = page.getByRole('menu', { name: 'Оформление' })
+    await expect(menu.getByRole('menuitemradio')).toHaveText(['Светлая', 'Тёмная', 'Как в системе'])
+    await menu.getByRole('menuitemradio', { name: 'Тёмная' }).click()
+    await expect(menu).toHaveCount(0)
+    await expect
+      .poll(async () => (await page.context().cookies()).find((one) => one.name === 'theme')?.value)
+      .toBe('dark')
+  })
+
+  await test.step('`/mo` opens the menu of the level', async () => {
+    await run('/mo')
+    const menu = page.getByRole('menu', { name: 'Размышление' })
+    await expect(menu).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(menu).toHaveCount(0)
+  })
+
+  await test.step('`/help` opens the list whole, and `/resume` leads to the chats', async () => {
+    await run('/help')
+    await expect(commands(page)).toBeFocused()
+    await expect(commands(page).getByRole('option', { name: /Справка/ })).toBeVisible()
+    await page.keyboard.press('Escape')
+    await run('/resume')
+    await expect(page).toHaveURL('/chats')
+  })
+})
+
+test('the window of commands on a new chat stays inside the window of the browser', async ({
+  page,
+  signedInUser,
+}) => {
+  const { siteId } = await addLongDialog(signedInUser.id, 2)
+  await hideDevIndicator(page)
+  for (const [width, height] of [
+    [1280, 720],
+    [1440, 900],
+    [1920, 1080],
+  ] as const) {
+    for (const address of ['/chats/new', `/chats/new?project=${siteId}`]) {
+      await test.step(`${address} at ${width}×${height}: each row can be reached`, async () => {
+        await page.setViewportSize({ width, height })
+        await page.goto(address)
+        await message(page).fill('/')
+        const rows = commands(page).getByRole('option')
+        await expect(rows.first()).toBeInViewport({ ratio: 1 })
+        await page.keyboard.press('End')
+        await expect(rows.last()).toBeInViewport({ ratio: 1 })
+        await page.keyboard.press('Home')
+        await expect(rows.first()).toBeInViewport({ ratio: 1 })
+      })
+    }
+  }
 })
 
 test('a chat on a project with changes: «+» at once, no word of a browser', async ({
@@ -1191,9 +1277,10 @@ test('a task in the browser: its window on a desktop', async ({ page, context, s
     })
   }
 
-  await test.step('the window of commands has only «Отменить чат»', async () => {
+  await test.step('the window of commands has no commands of the site', async () => {
     await page.getByRole('button', { name: 'Команды' }).click()
-    await expect(commands(page).getByRole('option')).toHaveCount(1)
+    await expect(commands(page).getByRole('option')).toHaveCount(10)
+    await expect(commands(page).getByText('Сайт', { exact: true })).toHaveCount(0)
     await expect(commands(page).getByRole('option', { name: /Отменить чат/ })).toBeVisible()
     await page.keyboard.press('Escape')
   })

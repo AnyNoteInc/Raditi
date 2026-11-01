@@ -1,11 +1,11 @@
 import { pluralRu } from '../plural.ts'
 import type { PreviewUnavailableReason } from '../preview/preview-state.ts'
-import type { ChatCommandId } from '../release/chat-commands.ts'
 import type { VersionBump } from '../release/semver.ts'
 import type {
   FeedBrowserReason,
   FeedCancelledBy,
   FeedCeilingReason,
+  FeedCommandId,
   FeedCreditsState,
   FeedFailurePayload,
   FeedObjectKind,
@@ -513,15 +513,17 @@ export const feedMediaAddedText = (count: number): string =>
   `Добавится медиафайлов: ${groupDigits(count)}`
 
 /** The customer's own command, as the feed shows it (`feed.request` of the kind `command`). */
-export const feedCommandText: Readonly<Record<ChatCommandId, string>> = Object.freeze({
+export const feedCommandText: Readonly<Record<FeedCommandId, string>> = Object.freeze({
   release: 'Вы попросили выпустить новую версию',
   preview: 'Вы открыли предпросмотр',
   reset: 'Вы сбросили данные предпросмотра',
   update: 'Вы попросили обновить рабочую копию',
-  // Never a row of the kind `command`: the press is written as `retry` (`feedRowText.retry`).
-  retry: 'Вы попросили попробовать ещё раз',
   cancel: 'Вы отменили диалог',
   undo: 'Вы попросили отменить выпуск',
+  init: 'Вы попросили описать проект для агента',
+  compact: 'Вы попросили сжать переписку',
+  turn_undo: 'Вы попросили отменить последний запрос',
+  turn_redo: 'Вы попросили вернуть отменённый запрос',
 })
 
 /** `feed.decision` of the kind `release`. */

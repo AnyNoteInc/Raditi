@@ -9,7 +9,7 @@ import {
 } from '../browser/session.ts'
 import { reasoningEffortSchema } from '../llm/model-class.ts'
 import { agentOutputLimits } from '../ports/agent-driver.ts'
-import { chatCommandIds } from '../release/chat-commands.ts'
+import { serverCommandIds } from '../release/chat-commands.ts'
 import { releaseOutcomes } from '../release/release-state.ts'
 import { versionBumps, versionTagSchema } from '../release/semver.ts'
 import { FEED_FAILURE_FALLBACK, feedFailureCodes } from './client-feed-failures.ts'
@@ -357,12 +357,14 @@ export function feedObjectOf(read: {
 }
 
 /**
- * The commands a `feed.request` of the kind `command` is written with: every command of the chat
- * but «Попробовать ещё», whose press is a row of its own kind (`retry`).
+ * The commands a `feed.request` of the kind `command` is written with: every command of the server
+ * but «Попробовать ещё», whose press is a row of its own kind (`retry`). What the page runs by
+ * itself leaves no row.
  */
-export const feedCommandIds = chatCommandIds.filter(
-  (id): id is Exclude<(typeof chatCommandIds)[number], 'retry'> => id !== 'retry',
+export const feedCommandIds = serverCommandIds.filter(
+  (id): id is Exclude<(typeof serverCommandIds)[number], 'retry'> => id !== 'retry',
 )
+export type FeedCommandId = (typeof feedCommandIds)[number]
 
 const requestBase = {
   v: version,
@@ -804,7 +806,7 @@ const readRequest = {
     kind: z.literal('command'),
     authorId: z.uuid(),
     requestId: z.uuid(),
-    command: known(chatCommandIds, null),
+    command: known(feedCommandIds, null),
   }),
   continue: z.object({
     kind: z.literal('continue'),

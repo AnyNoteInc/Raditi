@@ -436,6 +436,21 @@ export const effortText = Object.freeze({
   maxHint: 'Дольше и дороже — для сложных задач',
   /** The level of a dialog that goes on changes from the agent's next turn. */
   changed: 'Уровень размышления изменится со следующего шага агента',
+  /** `/models` while the level cannot be changed. */
+  locked: 'Уровень можно поменять, пока чат ждёт вас.',
+  /** The same menu of a chat that has ended: it will not wait for anyone again. */
+  ended: 'Чат завершён: уровень уже не поменять.',
+})
+
+/** What the commands of the page say (docs/plan/61-chats-first.md, §5.14). */
+export const clientCommandText = Object.freeze({
+  themes: 'Оформление',
+  light: 'Светлая',
+  dark: 'Тёмная',
+  system: 'Как в системе',
+  detailsShown: 'Подробности работы показаны',
+  detailsHidden: 'Подробности работы скрыты',
+  exported: 'Переписка сохранена',
 })
 
 /**

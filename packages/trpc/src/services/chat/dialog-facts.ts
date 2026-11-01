@@ -12,8 +12,8 @@ import {
   type CandidateCheckStatus,
   type ChatCommandAvailability,
   type ChatCommandFacts,
-  type ChatCommandId,
   type ChatCommandRefusal,
+  type OfferedCommandId,
   type PreviewStatus,
   type ReleaseOutcome,
   type ReleaseStatus,
@@ -157,9 +157,8 @@ export async function dialogFacts(
     where: { id: task.id },
     select: { needsRepository: true, needsBrowser: true },
   })
-  // A task without the repository works in the browser of the site (docs/plan/57, Б1): it has no
-  // candidate, no preview, no release and no «Попробовать ещё» (Б25), whatever rows say — only
-  // `/cancel` is ever offered.
+  // A task without the repository has no candidate, no preview, no release and no «Попробовать
+  // ещё» (docs/plan/57, Б1, Б25), whatever rows say: the page does not list those (К27).
   const withRepository = needs?.needsRepository ?? true
   const withBrowser = needs?.needsBrowser ?? false
   const site =
@@ -192,6 +191,7 @@ export async function dialogFacts(
     undo: undo?.dialog ?? null,
     commands: {
       taskStatus: task.status,
+      repository: withRepository,
       role: role ?? 'member',
       candidate:
         candidate === null || !withRepository
@@ -293,13 +293,13 @@ async function undoFacts(
 /** The verdict of one command. */
 export function commandRefusal(
   facts: ChatCommandFacts,
-  command: ChatCommandId,
+  command: OfferedCommandId,
 ): ChatCommandRefusal | null {
   return chatCommandAvailability(facts).find((item) => item.id === command)?.refusal ?? null
 }
 
 /** Throws the refusal of the command, the text `task.commands` shows for it. */
-export function assertCommandAvailable(facts: ChatCommandFacts, command: ChatCommandId): void {
+export function assertCommandAvailable(facts: ChatCommandFacts, command: OfferedCommandId): void {
   const refusal = commandRefusal(facts, command)
   if (refusal !== null) throw commandUnavailable(command, refusal)
 }

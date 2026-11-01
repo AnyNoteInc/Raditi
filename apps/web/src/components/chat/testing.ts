@@ -1,5 +1,5 @@
-import { chatCommandIds } from '@repo/domain/release/chat-commands'
-import type { TaskStatus } from '@repo/domain'
+import { offeredCommandIds } from '@repo/domain/release/chat-commands'
+import type { FeedCommandId, TaskStatus } from '@repo/domain'
 
 import type { CandidateView, CommandVerdict, DialogFeed, FeedHead, FeedRow } from './chat-types'
 
@@ -22,10 +22,11 @@ export const RELEASE_ID = '0199a3f2-0000-7000-8000-0000000000d1'
 export function verdicts(
   refused: Partial<Record<CommandVerdict['id'], CommandVerdict['refusal']>> = {},
 ): CommandVerdict[] {
-  return chatCommandIds
+  const closed = { turn_undo: 'nothing_to_undo', turn_redo: 'nothing_to_redo', ...refused } as const
+  return offeredCommandIds
     .filter((id) => (id !== 'undo' && id !== 'retry') || id in refused)
     .map((id) => {
-      const refusal = refused[id] ?? null
+      const refusal = closed[id] ?? null
       return { id, available: refusal === null, refusal }
     })
 }
@@ -152,7 +153,7 @@ export function ceilingRow(id: string, turn: number, reason: 'step' | 'credits' 
   }
 }
 
-export function commandRow(id: string, command: CommandVerdict['id']): FeedRow {
+export function commandRow(id: string, command: FeedCommandId): FeedRow {
   return {
     id,
     at: nextAt(),
@@ -271,7 +272,7 @@ export function browserAnswer(
     status: 'running',
     commands: verdicts(
       Object.fromEntries(
-        chatCommandIds
+        offeredCommandIds
           .filter((id) => id !== 'cancel' && id !== 'undo' && id !== 'retry')
           .map((id) => [id, 'not_allowed' as const]),
       ),

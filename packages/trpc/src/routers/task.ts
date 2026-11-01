@@ -1,5 +1,4 @@
 import {
-  chatCommandIds,
   chatCommandRefusals,
   FEED_REQUEST_TEXT_LIMIT,
   feedCursorSchema,
@@ -9,6 +8,7 @@ import {
   reasoningEffortSchema,
   releaseOutcomes,
   releaseStatuses,
+  serverCommandIds,
   taskStatuses,
   type FeedItem,
 } from '@repo/domain'
@@ -23,7 +23,7 @@ import {
   listDialogFolders,
   listDialogs,
 } from '../services/chat/dialog-list.ts'
-import { readDialogFeed, readDialogHead } from '../services/chat/feed.ts'
+import { readDialogExport, readDialogFeed, readDialogHead } from '../services/chat/feed.ts'
 import { removeDialog, renameDialog, setDialogEffort } from '../services/chat/dialog-manage.ts'
 import { dialogCommands, dialogFacts } from '../services/chat/dialog-facts.ts'
 import { accessibleTask, taskNotFound } from '../services/chat/access.ts'
@@ -53,7 +53,7 @@ const postedOutput = z.strictObject({
 
 export const commandsOutput = z.array(
   z.strictObject({
-    id: z.enum(chatCommandIds),
+    id: z.enum(serverCommandIds),
     available: z.boolean(),
     refusal: z.enum(chatCommandRefusals).nullable(),
   }),
@@ -385,6 +385,12 @@ export const taskRouter = router({
       }),
     )
     .query(({ ctx, input }) => readDialogHead(ctx.prisma, { ...input, userId: ctx.user.id })),
+
+  /** `/export`: the whole chat as a Markdown file, in the words of the screen (§5.14). */
+  export: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid() }))
+    .output(z.strictObject({ fileName: z.string(), markdown: z.string() }))
+    .query(({ ctx, input }) => readDialogExport(ctx.prisma, { ...input, userId: ctx.user.id })),
 
   /** The commands of the chat with the server's verdict on each (Р34). */
   commands: consentedProcedure

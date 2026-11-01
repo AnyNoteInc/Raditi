@@ -3,26 +3,66 @@ import type { CandidateStatus } from './candidate.ts'
 import type { PreviewStatus } from '../preview/preview-state.ts'
 
 /**
- * The commands of a dialog (docs/plan/53-chat-preview-release.md, Р34): `/` at the start of the
- * input opens the list. The server decides which are available (`task.commands`); the text of a
- * command never reaches the agent. Labels are what the client reads (rule 10).
+ * The commands of a chat (docs/plan/53-chat-preview-release.md, Р34; docs/plan/61-chats-first.md,
+ * §5.14): `/` at the start of the input opens the list. The server decides which of its commands
+ * are available (`task.commands`), a command of the page itself needs no verdict; the text of a
+ * command never reaches the agent. Labels are what the client reads (rule 10). The id of
+ * «Отменить выпуск» stays `undo` for the rows written with it (К28): only its slash moved.
  */
 export const chatCommandIds = [
   'release',
   'preview',
-  'reset',
   'update',
+  'reset',
+  'undo',
+  'init',
+  'compact',
+  'turn_undo',
+  'turn_redo',
   'retry',
   'cancel',
-  'undo',
+  'new',
+  'sessions',
+  'export',
+  'models',
+  'details',
+  'thinking',
+  'themes',
+  'help',
 ] as const
 export type ChatCommandId = (typeof chatCommandIds)[number]
+
+/** The commands the page runs by itself: no verdict of the server, and no row in the feed. */
+type ClientCommandId =
+  'new' | 'sessions' | 'export' | 'models' | 'details' | 'thinking' | 'themes' | 'help'
+/** The commands the server gives a verdict on. */
+export type ServerCommandId = Exclude<ChatCommandId, ClientCommandId>
+
+/** The groups of the list, in its order (К27). */
+export type ChatCommandGroup = 'site' | 'agent' | 'chat'
+export const chatCommandGroupLabel: Readonly<Record<ChatCommandGroup, string>> = Object.freeze({
+  site: 'Сайт',
+  agent: 'Агент',
+  chat: 'Чат',
+})
 
 export interface ChatCommand {
   /** What is typed: `/release`. */
   readonly slash: string
+  /** Other words for it, as OpenCode has them. */
+  readonly aliases?: readonly string[]
   readonly label: string
   readonly description: string
+  /** Other words without the repository: there are no files there. */
+  readonly descriptionPlain?: string
+  readonly group: ChatCommandGroup
+  /** `client` — no verdict of the server, and it works on a new chat too (but for `session`). */
+  readonly scope: 'server' | 'client'
+  /**
+   * `repository` — not listed in a chat without it (К27), `session` — takes a chat that exists,
+   * `compaction` — takes the compaction of the CLI (docs/plan/61-chats-first.md, §5.14).
+   */
+  readonly needs?: 'repository' | 'session' | 'compaction'
 }
 
 export const chatCommands: Readonly<Record<ChatCommandId, ChatCommand>> = Object.freeze({
@@ -30,53 +70,191 @@ export const chatCommands: Readonly<Record<ChatCommandId, ChatCommand>> = Object
     slash: '/release',
     label: 'Выпустить новую версию',
     description: 'Установить проверенные изменения на сайт: с резервной копией и проверкой после.',
+    group: 'site',
+    scope: 'server',
+    needs: 'repository',
   }),
   preview: Object.freeze({
     slash: '/preview',
     label: 'Открыть предпросмотр',
-    description: 'Показать рабочую копию сайта с изменениями этого диалога.',
-  }),
-  reset: Object.freeze({
-    slash: '/reset',
-    label: 'Сбросить данные предпросмотра',
-    description:
-      'Вернуть рабочую копию к последним изменениям агента: то, что вы меняли в ней сами, пропадёт.',
+    description: 'Показать рабочую копию сайта с изменениями этого чата.',
+    group: 'site',
+    scope: 'server',
+    needs: 'repository',
   }),
   update: Object.freeze({
     slash: '/update',
     label: 'Обновить рабочую копию',
-    description: 'Перенести изменения этого диалога на текущую версию сайта.',
+    description: 'Перенести изменения этого чата на текущую версию сайта.',
+    group: 'site',
+    scope: 'server',
+    needs: 'repository',
+  }),
+  reset: Object.freeze({
+    slash: '/reset',
+    label: 'Сбросить данные предпросмотра',
+    description: 'Вернуть рабочую копию к последним изменениям агента.',
+    group: 'site',
+    scope: 'server',
+    needs: 'repository',
+  }),
+  undo: Object.freeze({
+    slash: '/rollback',
+    label: 'Отменить выпуск',
+    description: 'Вернуть файлы и записи к версии до выпуска этого чата.',
+    group: 'site',
+    scope: 'server',
+    needs: 'repository',
+  }),
+  init: Object.freeze({
+    slash: '/init',
+    label: 'Описать проект для агента',
+    description: 'Агент изучит код и подготовит правила работы с проектом.',
+    group: 'site',
+    scope: 'server',
+    needs: 'repository',
+  }),
+  compact: Object.freeze({
+    slash: '/compact',
+    aliases: ['/summarize'],
+    label: 'Сжать переписку',
+    description: 'Агент заменит длинную историю кратким пересказом и продолжит с ним.',
+    group: 'agent',
+    scope: 'server',
+    needs: 'compaction',
+  }),
+  turn_undo: Object.freeze({
+    slash: '/undo',
+    label: 'Отменить последний запрос',
+    description:
+      'Изменения файлов вернутся. То, что агент сделал на сайте через браузер, останется.',
+    descriptionPlain: 'Агент забудет последний запрос и ответ на него.',
+    group: 'agent',
+    scope: 'server',
+  }),
+  turn_redo: Object.freeze({
+    slash: '/redo',
+    label: 'Вернуть отменённый запрос',
+    description: 'Снова применить то, что вы отменили.',
+    group: 'agent',
+    scope: 'server',
   }),
   retry: Object.freeze({
     slash: '/retry',
     label: 'Попробовать ещё',
-    description:
-      'Повторить просьбу, на которой работа оборвалась. Изменения, готовые до этого, останутся.',
+    description: 'Повторить просьбу, на которой работа оборвалась.',
+    group: 'agent',
+    scope: 'server',
+    needs: 'repository',
   }),
   cancel: Object.freeze({
     slash: '/cancel',
     label: 'Отменить чат',
     description: 'Завершить чат и остановить агента.',
+    group: 'agent',
+    scope: 'server',
   }),
-  undo: Object.freeze({
-    slash: '/undo',
-    label: 'Отменить выпуск',
-    description:
-      'Вернуть сайт к версии до этого выпуска: файлы и записи, которые он изменил. Можно в течение 7 дней после установки.',
+  new: Object.freeze({
+    slash: '/new',
+    aliases: ['/clear'],
+    label: 'Новый чат',
+    description: 'Начать другой разговор.',
+    group: 'chat',
+    scope: 'client',
+  }),
+  sessions: Object.freeze({
+    slash: '/sessions',
+    aliases: ['/resume', '/continue'],
+    label: 'Все чаты',
+    description: 'Перейти к списку чатов.',
+    group: 'chat',
+    scope: 'client',
+  }),
+  export: Object.freeze({
+    slash: '/export',
+    label: 'Скачать переписку',
+    description: 'Сохранить чат текстовым файлом.',
+    group: 'chat',
+    scope: 'client',
+    needs: 'session',
+  }),
+  models: Object.freeze({
+    slash: '/models',
+    aliases: ['/mo'],
+    label: 'Модель и размышление',
+    description: 'Посмотреть модель и выбрать уровень размышления.',
+    group: 'chat',
+    scope: 'client',
+  }),
+  details: Object.freeze({
+    slash: '/details',
+    label: 'Подробности работы',
+    description: 'Показывать или скрывать команды и инструменты агента.',
+    group: 'chat',
+    scope: 'client',
+  }),
+  thinking: Object.freeze({
+    slash: '/thinking',
+    label: 'Размышления агента',
+    description: 'Показывать или скрывать ход мыслей агента.',
+    group: 'chat',
+    scope: 'client',
+  }),
+  themes: Object.freeze({
+    slash: '/themes',
+    label: 'Оформление',
+    description: 'Светлая, тёмная или как в системе.',
+    group: 'chat',
+    scope: 'client',
+  }),
+  help: Object.freeze({
+    slash: '/help',
+    label: 'Справка',
+    description: 'Что умеют команды.',
+    group: 'chat',
+    scope: 'client',
   }),
 })
+
+/** The commands the server gives a verdict on, in the list's order. */
+export const serverCommandIds = chatCommandIds.filter(
+  (id): id is ServerCommandId => chatCommands[id].scope === 'server',
+)
+
+/**
+ * Named here and not working yet (docs/plan/61-chats-first.md, §6: `/init` — 61.19, `/thinking` —
+ * 61.20, `/compact` — 61.24): no row in the list and no verdict, and typed they are refused and
+ * never sent. The slice of a command takes it off this list.
+ */
+export const chatCommandsToCome = ['init', 'compact', 'thinking'] as const
+export type CommandToCome = (typeof chatCommandsToCome)[number]
+
+/** A command the server gives a verdict on today. */
+export type OfferedCommandId = Exclude<ServerCommandId, CommandToCome>
+export const isCommandToCome = (id: ChatCommandId): id is CommandToCome =>
+  (chatCommandsToCome as readonly ChatCommandId[]).includes(id)
+
+export const offeredCommandIds = serverCommandIds.filter(
+  (id): id is OfferedCommandId => !isCommandToCome(id),
+)
+
+/** What may be typed for a command. */
+const slashesOf = (id: ChatCommandId): readonly string[] => [
+  chatCommands[id].slash,
+  ...(chatCommands[id].aliases ?? []),
+]
 
 /** The command a whole input stands for, or null: only a command alone, without words. */
 export function parseChatCommand(text: string): ChatCommandId | null {
   const value = text.trim()
-  return chatCommandIds.find((id) => chatCommands[id].slash === value) ?? null
+  return chatCommandIds.find((id) => slashesOf(id).includes(value)) ?? null
 }
 
 /** Commands of the list for what is typed after `/`, in the list's order. */
 export function matchChatCommands(input: string): ChatCommandId[] {
   if (!input.startsWith('/')) return []
   const typed = input.slice(1).trim().toLowerCase()
-  return chatCommandIds.filter((id) => id.startsWith(typed))
+  return chatCommandIds.filter((id) => slashesOf(id).some((slash) => slash.startsWith(`/${typed}`)))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -135,6 +313,14 @@ export const chatCommandRefusals = [
    * `site_inactive` by itself.
    */
   'project_closed',
+  // `/undo` and `/redo` (docs/plan/61-chats-first.md, §5.14).
+  'nothing_to_undo',
+  /** The last turn cannot be undone: the working copy moved on to a new version of the site. */
+  'undo_past_update',
+  /** The last turn wrote to the site itself. */
+  'content_written',
+  'nothing_to_redo',
+  'nothing_to_compact',
 ] as const
 export type ChatCommandRefusal = (typeof chatCommandRefusals)[number]
 
@@ -166,10 +352,18 @@ export const chatCommandRefusalText: Readonly<Record<ChatCommandRefusal, string>
     'Сайт сейчас не подключён к Радити. Возобновите подключение, чтобы отменить выпуск.',
   nothing_to_retry: 'Повторять нечего: работа агента не обрывалась.',
   project_closed: CLOSED_PROJECT_TEXT,
+  nothing_to_undo: 'Отменять пока нечего.',
+  undo_past_update:
+    'Этот запрос отменить нельзя: после него рабочая копия перешла на новую версию сайта.',
+  content_written: 'Этот запрос отменить нельзя: он изменил содержимое сайта.',
+  nothing_to_redo: 'Возвращать нечего.',
+  nothing_to_compact: 'Сжимать пока нечего.',
 })
 
 export interface ChatCommandFacts {
   taskStatus: TaskStatus
+  /** The chat works with the repository; without it the list leaves out the site's commands (К27). */
+  repository: boolean
   /** The reader's role in the workspace of the site. */
   role: 'owner' | 'admin' | 'member'
   /** The candidate of the dialog that is not superseded or released; null — none. */
@@ -226,7 +420,7 @@ export interface UndoCommandFacts {
 }
 
 export interface ChatCommandAvailability {
-  id: ChatCommandId
+  id: OfferedCommandId
   available: boolean
   /** null when available. */
   refusal: ChatCommandRefusal | null
@@ -253,7 +447,7 @@ function undoRefusal(facts: ChatCommandFacts): ChatCommandRefusal | null {
   return facts.taskStatus === 'done' ? null : 'busy'
 }
 
-function refusalOf(id: ChatCommandId, facts: ChatCommandFacts): ChatCommandRefusal | null {
+function refusalOf(id: OfferedCommandId, facts: ChatCommandFacts): ChatCommandRefusal | null {
   const { taskStatus: status, candidate, preview } = facts
   if (id === 'undo') return undoRefusal(facts)
   // Before the ended chat below: `/preview` of a chat that has ended is closed with its project.
@@ -284,6 +478,11 @@ function refusalOf(id: ChatCommandId, facts: ChatCommandFacts): ChatCommandRefus
       // core carries a candidate over only while the dialog waits with it (`candidate.rebase`).
       if (status !== 'awaiting_approval') return 'awaiting_answer'
       return candidate.status === 'stale' || !candidate.baseIsMain ? null : 'up_to_date'
+    // Closed until their slices: 61.21 and 61.23 give them facts of their own.
+    case 'turn_undo':
+      return 'nothing_to_undo'
+    case 'turn_redo':
+      return 'nothing_to_redo'
     case 'retry':
       return facts.retry
     case 'cancel':
@@ -319,9 +518,9 @@ function previewRefusal(
   }
 }
 
-/** Every command with its verdict, in the list's order. */
+/** Every command of the server with its verdict, in the list's order. */
 export function chatCommandAvailability(facts: ChatCommandFacts): ChatCommandAvailability[] {
-  return chatCommandIds.map((id) => {
+  return offeredCommandIds.map((id) => {
     const refusal = refusalOf(id, facts)
     return { id, available: refusal === null, refusal }
   })

@@ -23,6 +23,8 @@ import {
 import {
   billingDay,
   browserScreenshotKey,
+  feedLimits,
+  feedRowText,
   legalDocuments,
   type DbPlanView,
   releaseKeyMaterial,
@@ -2737,6 +2739,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         retry: 'nothing_to_retry',
         cancel: null,
         undo: 'no_release',
+        turn_undo: 'nothing_to_undo',
+        turn_redo: 'nothing_to_redo',
       })
       expect(feed.undo).toBeNull()
       expect((await caller.task.feed({ taskId, after: feed.cursor })).events).toEqual([])
@@ -2749,6 +2753,134 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       expect((await caller.task.list({ folder: site.id })).items.map((item) => item.id)).toEqual([
         taskId,
       ])
+    })
+  })
+
+  describe('task.export (docs/plan/61-chats-first.md, §5.14)', () => {
+    it('writes the chat out in the words of the feed, under its name', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id, 'Поменяйте телефон в шапке')
+      await asked(taskId, {
+        kind: 'agent',
+        intro: 'Нужно уточнить.',
+        questions: [{ text: 'Какой телефон поставить?', options: [] }],
+      })
+
+      const file = await caller.task.export({ taskId })
+
+      expect(file.fileName).toBe('Поменяйте телефон в шапке.md')
+      expect(file.markdown).toMatch(/^# Поменяйте телефон в шапке\n/u)
+      expect(file.markdown).toContain('Вопрос агента')
+      expect(file.markdown.indexOf('Поменяйте телефон в шапке', 10)).toBeLessThan(
+        file.markdown.indexOf('Какой телефон поставить?'),
+      )
+    })
+
+    it('holds only what the client sees: the journal of the agent stays out', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+      // A row of the feed cannot be hidden (`task_events_feed_visible_check`): a row of the journal
+      // would be read as unreadable, so only `clientVisible` keeps that line out of the file.
+      await db.taskEvent.create({
+        data: {
+          taskId,
+          type: 'turn.output',
+          clientVisible: false,
+          payload: { turn: 1, events: [{ type: 'message', text: 'слова журнала' }] },
+        },
+      })
+
+      const { markdown } = await caller.task.export({ taskId })
+
+      expect(markdown).not.toContain('слова журнала')
+      expect(markdown).not.toContain(feedRowText.unreadable)
+    })
+
+    it('speaks of the site in a chat of a project', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+      await insertFeedEvent(db, {
+        taskId,
+        row: {
+          type: 'feed.failure',
+          payload: {
+            v: 1,
+            turn: null,
+            code: 'site_held',
+            site: 'unchanged',
+            credits: null,
+            next: 'awaiting_user',
+          },
+        } as never,
+      })
+
+      expect((await caller.task.export({ taskId })).markdown).toContain(
+        'При работе с сайтом произошёл сбой',
+      )
+    })
+
+    it('reads a chat longer than a page of the feed, in order, and all of it', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+      const count = feedLimits.page + 5
+      await db.$transaction(
+        async (tx) => {
+          for (let turn = 1; turn <= count; turn += 1)
+            await insertFeedEvent(tx, {
+              taskId,
+              row: {
+                type: 'feed.question',
+                payload: {
+                  v: 1,
+                  turn,
+                  kind: 'agent',
+                  intro: `Вопрос номер ${turn}.`,
+                  questions: [{ text: 'Дальше?', options: [] }],
+                },
+              } as never,
+            })
+        },
+        { timeout: 30_000 },
+      )
+
+      const { markdown } = await caller.task.export({ taskId })
+
+      expect(markdown.match(/Вопрос номер \d+\./gu)).toHaveLength(count)
+      expect(markdown.indexOf('Вопрос номер 200.')).toBeLessThan(
+        markdown.indexOf(`Вопрос номер ${count}.`),
+      )
+    })
+
+    it('answers a chat of someone else as one that does not exist', async () => {
+      const { owner, site } = await siteOwner()
+      const { taskId } = await newDialog(callerOf(owner), site.id)
+      const other = await person()
+
+      await expect(callerOf(other).task.export({ taskId })).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+    })
+
+    it('reads a chat of a closed project: it is read, not worked in (К39)', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id, 'Поменяйте телефон в шапке')
+      await db.site.update({ where: { id: site.id }, data: { status: 'paused' } })
+
+      expect((await caller.task.export({ taskId })).markdown).toContain('Поменяйте телефон')
+    })
+
+    it('stands a chat that was removed with one that does not exist', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+      await caller.task.remove({ taskId })
+
+      await expect(caller.task.export({ taskId })).rejects.toMatchObject({ code: 'NOT_FOUND' })
     })
   })
 
@@ -3735,6 +3867,33 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
     const startFile = (caller: ReturnType<typeof callerOf>, name = 'Обложка.jpg') =>
       caller.attachment.start({ siteId: null, name, size: 2048, type: 'image/jpeg' })
 
+    it('exports a chat of its own, which speaks of no site', async () => {
+      const owner = await person()
+      const caller = callerOf(owner)
+      const taskId = await newChat(caller)
+      await insertFeedEvent(db, {
+        taskId,
+        row: {
+          type: 'feed.failure',
+          payload: {
+            v: 1,
+            turn: null,
+            code: 'site_held',
+            site: 'none',
+            credits: null,
+            next: 'awaiting_user',
+          },
+        } as never,
+      })
+
+      const { fileName, markdown } = await caller.task.export({ taskId })
+
+      expect(fileName).toBe('Что такое каноническая ссылка.md')
+      expect(markdown).toContain('Что такое каноническая ссылка?')
+      expect(markdown).toContain('Подождите минуту, прежде чем писать дальше.')
+      expect(markdown).not.toMatch(/сайт/iu)
+    })
+
     /** What core does at the end of a pass: its chain is charged. */
     const charged = (taskId: string) =>
       db.$transaction((tx) => settleTaskCharge(tx, { taskId, credits: 5, now: new Date() }), {
@@ -4314,6 +4473,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         retry: 'project_closed',
         cancel: null,
         undo: 'no_release',
+        turn_undo: 'project_closed',
+        turn_redo: 'project_closed',
       })
       await expect(caller.release.prepare({ taskId })).rejects.toMatchObject(commandRefused)
       await expect(caller.release.confirm(confirm)).rejects.toMatchObject(commandRefused)

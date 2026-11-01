@@ -33,11 +33,16 @@ import type { CommandVerdict } from './chat-types'
 import {
   CommandList,
   optionId,
+  PALETTE_ROOM,
   paletteKey,
   paletteOptions,
   type PaletteOption,
 } from './command-palette'
 import type { AttachmentsControl } from './use-attachments'
+
+/** The gap the list of commands keeps from the top of the window, and the least it shows. */
+const PALETTE_EDGE = 12
+const PALETTE_LEAST = 120
 
 /** A native control that stays in the accessibility tree and off the screen. */
 export const offScreen = {
@@ -122,12 +127,17 @@ function pasteKeys(): string {
 
 export interface ComposerCommands {
   verdicts: readonly CommandVerdict[]
-  /** A command was chosen: the server has said it can be run. */
-  onRun: (id: ChatCommandId) => void
+  /**
+   * A command was chosen: the server has said it can be run, or it is the page's own. What it
+   * returns is said to a screen reader.
+   */
+  onRun: (id: ChatCommandId) => string | void
   /** The list was opened: the verdicts are read again. */
   onOpen?: () => void
   /** Why a command the server gave no verdict on cannot be run here: on «Новый чат». */
   closedReason?: string
+  /** A chat without the repository, or the start of one: the list goes by what it will have. */
+  plain?: boolean
 }
 
 /**
@@ -250,26 +260,52 @@ export function Composer({
       ? attachmentText.fix
       : null
   const typed = commands !== undefined && !dismissed && !forced && text.startsWith('/')
-  const options: PaletteOption[] =
+  const optionsFor = (words: string | null): PaletteOption[] =>
     commands === undefined
       ? []
-      : forced
-        ? paletteOptions(null, commands.verdicts, commands.closedReason)
-        : typed && !disabled
-          ? paletteOptions(text, commands.verdicts, commands.closedReason)
-          : []
+      : paletteOptions(words, commands.verdicts, commands.closedReason, commands.plain)
+  const options = forced ? optionsFor(null) : typed && !disabled ? optionsFor(text) : []
   const open = options.length > 0
   const activeIndex = Math.min(active, Math.max(0, options.length - 1))
+
+  // The list opens upwards from the field: its height is what stands above the field, measured
+  // once the field has taken its height for this text.
+  useLayoutEffect(() => {
+    if (!open) return
+    function fit() {
+      const holder = listRef.current
+      if (!holder) return
+      const room = holder.getBoundingClientRect().bottom - PALETTE_EDGE
+      holder.style.setProperty(PALETTE_ROOM, `${Math.max(PALETTE_LEAST, room)}px`)
+    }
+    fit()
+    window.addEventListener('resize', fit)
+    return () => window.removeEventListener('resize', fit)
+  }, [open, text])
 
   function announceOpened(count: number) {
     setAnnouncement(paletteText.opened(count, plural(count, 'команда', 'команды', 'команд')))
     commands?.onOpen?.()
   }
 
+  /** The whole list, the focus on it: its button, and «Справка» (`/help`) from wherever it is. */
+  function showAll() {
+    if (!commands) return
+    setForced(true)
+    setActive(0)
+    announceOpened(optionsFor(null).length)
+    // The list is in the document after this render: then it takes the focus.
+    window.setTimeout(
+      () => listRef.current?.querySelector<HTMLElement>('[role="listbox"]')?.focus(),
+      0,
+    )
+  }
+
   function close(returnFocus: boolean) {
     const wasForced = forced
     setForced(false)
-    setDismissed(true)
+    // Closed over an empty field, the list opened by its button leaves `/` to open it again.
+    setDismissed(!wasForced || text.startsWith('/'))
     setActive(0)
     if (returnFocus) (wasForced ? buttonRef.current : field.current)?.focus()
   }
@@ -277,6 +313,14 @@ export function Composer({
   function choose(option: PaletteOption) {
     if (!option.available) {
       setAnnouncement(option.reason ?? paletteText.unavailable)
+      return
+    }
+    // «Справка» is the list itself: it opens whole, and from there it has nothing more to do.
+    if (option.id === 'help') {
+      if (text.startsWith('/')) setText('')
+      setNotice(null)
+      setDismissed(false)
+      if (!forced) showAll()
       return
     }
     // Opened by its button, the list hands the focus back before it goes — to the field, or to
@@ -288,7 +332,8 @@ export function Composer({
     setDismissed(false)
     setForced(false)
     setActive(0)
-    commands?.onRun(option.id)
+    const said = commands?.onRun(option.id)
+    if (said) setAnnouncement(said)
   }
 
   function changeText(next: string) {
@@ -298,7 +343,7 @@ export function Composer({
     if (!next.startsWith('/')) setDismissed(false)
     setActive(0)
     if (commands && wasClosed && !disabled && next.startsWith('/') && !dismissed) {
-      const count = paletteOptions(next, commands.verdicts, commands.closedReason).length
+      const count = optionsFor(next).length
       if (count > 0) announceOpened(count)
     }
   }
@@ -312,9 +357,7 @@ export function Composer({
         setNotice(composerText.commandsInDialog)
         return
       }
-      const option = paletteOptions(null, commands.verdicts, commands.closedReason).find(
-        (item) => item.id === command,
-      )
+      const option = optionsFor(null).find((item) => item.id === command)
       if (option?.available) choose(option)
       else setNotice(option?.reason ?? composerText.commandUnavailable)
       return
@@ -351,14 +394,7 @@ export function Composer({
       close(true)
       return
     }
-    setForced(true)
-    setActive(0)
-    announceOpened(paletteOptions(null, commands.verdicts, commands.closedReason).length)
-    // The list is in the document after this render: then it takes the focus.
-    window.setTimeout(
-      () => listRef.current?.querySelector<HTMLElement>('[role="listbox"]')?.focus(),
-      0,
-    )
+    showAll()
   }
 
   const describedBy = [
@@ -393,6 +429,7 @@ export function Composer({
             options={options}
             active={activeIndex}
             focusable={forced}
+            plain={commands?.plain}
             onChoose={choose}
             onHover={setActive}
             onKeyDown={forced ? keyDown : undefined}

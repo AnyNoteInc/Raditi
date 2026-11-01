@@ -1,6 +1,10 @@
 'use client'
 
-import type { ChatCommandId } from '@repo/domain/release/chat-commands'
+import {
+  chatCommands,
+  type ChatCommandId,
+  type CommandToCome,
+} from '@repo/domain/release/chat-commands'
 import { feedFailureText } from '@repo/domain/tasks/client-feed-failures'
 import type { ReasoningEffort } from '@repo/domain/llm/model-class'
 import {
@@ -26,6 +30,7 @@ import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } 
 import { AppIcon } from '@/components/application/app-icon'
 import { ConfirmDialog } from '@/components/billing/confirm-dialog'
 import { siteHref } from '@/components/site/site-nav'
+import { downloadText } from '@/lib/download-text'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
 
@@ -34,10 +39,12 @@ import { BrowserPane } from './browser-pane'
 import { sessionLive } from './browser-pane-model'
 import { callErrorText, sendErrorText } from './call-error'
 import { newChatHref } from './chat-address'
+import { useChatDetails } from './chat-details'
 import type { ChatProject } from './chat-types'
 import {
   cancelText,
   chatsText,
+  clientCommandText,
   composerText,
   dialogText,
   effortText,
@@ -47,6 +54,7 @@ import {
   taskWayText,
   undoText,
 } from './chat-texts'
+import { useClientCommands } from './client-commands'
 import { Composer, offScreen } from './composer'
 import { DialogMenuButton, dialogListKey, RemoveDialogConfirm, RenameField } from './dialog-actions'
 import { DialogNotFound } from './dialog-not-found'
@@ -64,7 +72,7 @@ import {
   type DialogTool,
   type ToolOpener,
 } from './dialog-tools'
-import { EffortMenu } from './effort-menu'
+import { EffortMenu, type EffortMenuHandle } from './effort-menu'
 import { ProjectMark } from './project-mark'
 import { FeedList, LiveBlock, type FeedActions } from './feed-list'
 import {
@@ -343,8 +351,10 @@ export function DialogView({
   // The client's calls for the preview: every choice of it is one (И10); a stopped one wakes only
   // on a call made after it stopped.
   const previewCalls = usePreviewCalls(head?.preview?.status ?? null)
-  // Said to a screen reader once the server took a new level.
-  const [effortNote, setEffortNote] = useState('')
+  // Said to a screen reader: the server took a new level, the file of the chat was saved.
+  const [note, setNote] = useState('')
+  const effortMenu = useRef<EffortMenuHandle>(null)
+  const { details } = useChatDetails()
   // The level chosen here, shown while the head still says the level it was chosen over.
   const [effortChosen, setEffortChosen] = useState<{
     effort: ReasoningEffort
@@ -381,6 +391,7 @@ export function DialogView({
     observer.observe(box)
     return () => observer.disconnect()
   }, [])
+  const clientCommands = useClientCommands({ projectId: siteId, anchor: field })
 
   const message = useMutation(trpc.task.message.mutationOptions())
   const proceed = useMutation(trpc.task.continue.mutationOptions())
@@ -503,7 +514,7 @@ export function DialogView({
   // commands of the site nor anything to retry (docs/plan/61-chats-first.md, К27).
   const verdicts = (head?.commands ?? []).filter(
     (command) =>
-      (withRepository || command.id === 'cancel') &&
+      (withRepository || chatCommands[command.id].needs !== 'repository') &&
       (command.id !== 'undo' || command.refusal !== 'no_release') &&
       (command.id !== 'retry' || (command.available && retryRow !== null)),
   )
@@ -672,11 +683,11 @@ export function DialogView({
   /** «Размышление» of the dialog: from the agent's next turn (`task.setEffort`). */
   async function changeEffort(effort: ReasoningEffort) {
     setFieldError(null)
-    setEffortNote('')
+    setNote('')
     setEffortChosen({ effort, over: head?.task.effort })
     try {
       await setEffort.mutateAsync({ taskId, effort })
-      setEffortNote(effortText.changed)
+      setNote(effortText.changed)
     } catch (failure) {
       setEffortChosen(null)
       setFieldError(callErrorText(failure))
@@ -804,7 +815,24 @@ export function DialogView({
     }
   }, [fullscreen])
 
-  function runCommand(id: ChatCommandId) {
+  /** `/export`: the server writes the chat out, the browser saves it (§5.14). */
+  async function exportChat() {
+    setNote('')
+    try {
+      const file = await queryClient.fetchQuery({
+        ...trpc.task.export.queryOptions({ taskId }),
+        // Read anew on every press, and not kept on the page afterwards.
+        staleTime: 0,
+        gcTime: 0,
+      })
+      downloadText(file.fileName, file.markdown, 'text/markdown;charset=utf-8')
+      setNote(clientCommandText.exported)
+    } catch (failure) {
+      setFieldError(callErrorText(failure))
+    }
+  }
+
+  function runCommand(id: ChatCommandId): string | undefined {
     setFieldError(null)
     switch (id) {
       case 'release':
@@ -828,6 +856,22 @@ export function DialogView({
         return
       case 'undo':
         setUndoOpen(true)
+        return
+      case 'models':
+        effortMenu.current?.open()
+        return
+      case 'export':
+        void exportChat()
+        return
+      case 'new':
+      case 'sessions':
+      case 'details':
+      case 'themes':
+        return clientCommands.run(id)
+      // `/help` is the field's. The others reach nobody yet: no row and no word typed gets here
+      // while the server closes them. A slice that opens one takes it off this list.
+      default:
+        id satisfies CommandToCome | 'turn_undo' | 'turn_redo' | 'help'
         return
     }
   }
@@ -886,8 +930,16 @@ export function DialogView({
         onChange={(next) => void changeEffort(next)}
         // The level holds from the agent's next turn: it is changed while the dialog waits.
         disabled={!awaitingClient || setEffort.isPending}
+        lockedText={terminal ? effortText.ended : effortText.locked}
+        handle={effortMenu}
       />
     )
+  const composerCommands = {
+    verdicts: commands,
+    onRun: runCommand,
+    onOpen: refresh,
+    plain: !withRepository,
+  }
   // The reminder of the field names the «Переменные» of a project, and none without one
   // (docs/plan/61-chats-first.md, §5.11): an ended chat reads it from its closed field too.
   const noSecrets =
@@ -908,11 +960,7 @@ export function DialogView({
             busy={false}
             onSend={send}
             effort={settings}
-            commands={{
-              verdicts: commands,
-              onRun: runCommand,
-              onOpen: refresh,
-            }}
+            commands={composerCommands}
             noSecrets={noSecrets}
           />
         </Box>
@@ -971,11 +1019,7 @@ export function DialogView({
         busy={message.isPending}
         onSend={send}
         effort={settings}
-        commands={{
-          verdicts: commands,
-          onRun: runCommand,
-          onOpen: refresh,
-        }}
+        commands={composerCommands}
         attachments={attachments}
         noSecrets={noSecrets}
         {...(working
@@ -1190,6 +1234,7 @@ export function DialogView({
               retryId={retryRow?.id ?? null}
               actions={actions}
               filesOf={sentFilesOf}
+              details={details}
               activityOf={(turn) => <TurnActivity taskId={taskId} turn={turn} live={false} />}
             />
           )}
@@ -1259,8 +1304,9 @@ export function DialogView({
         {announcement}
       </Box>
       <Box role="status" aria-live="polite" sx={offScreen}>
-        {effortNote}
+        {note}
       </Box>
+      {clientCommands.menu}
 
       {/* Drawn only while a tool is on the screen: no empty column, no hidden tool that reads. */}
       <ToolsPanel

@@ -5,7 +5,7 @@ import {
   type QueryKey,
   type UseMutationOptions,
 } from '@tanstack/react-query'
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { StrictMode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -35,6 +35,7 @@ import {
   resumeRow,
   SESSION_ID,
   SITE_ID,
+  stepRow,
   TASK_ID,
   verdicts,
 } from './testing'
@@ -61,6 +62,9 @@ const calls = vi.hoisted(() => ({
   rename: vi.fn<(input: { taskId: string; title: string }) => Promise<{ title: string }>>(),
   remove: vi.fn<(input: { taskId: string }) => Promise<{ removed: true }>>(),
   replace: vi.fn<(href: string) => void>(),
+  push: vi.fn<(href: string) => void>(),
+  setPreference: vi.fn<(preference: string) => void>(),
+  exported: vi.fn<(input: { taskId: string }) => Promise<{ fileName: string; markdown: string }>>(),
   ticket:
     vi.fn<(input: { taskId: string; to?: string }) => Promise<{ url: string; expiresAt: Date }>>(),
   streamTicket:
@@ -70,8 +74,12 @@ const calls = vi.hoisted(() => ({
   watch: vi.fn(async (_input: { taskId: string }) => ({ watched: true })),
 }))
 
+vi.mock('@repo/ui/providers', () => ({
+  useThemePreference: () => ({ preference: 'system', setPreference: calls.setPreference }),
+}))
+
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ replace: calls.replace, push: vi.fn() }),
+  useRouter: () => ({ replace: calls.replace, push: calls.push }),
   usePathname: () => `/chats/${TASK_ID}`,
 }))
 
@@ -125,6 +133,7 @@ vi.mock('@/trpc/client', () => ({
       setEffort: mutation(calls.setEffort),
       rename: mutation(calls.rename),
       remove: mutation(calls.remove),
+      export: query('task.export', calls.exported),
     },
     attachment: { list: query('attachment.list', calls.attachments) },
     preview: { reset: mutation(calls.reset) },
@@ -680,6 +689,185 @@ describe('a dialog', () => {
     expect(calls.update).toHaveBeenCalledTimes(1)
     // The verdicts may have changed with the refusal: the dialog is read once more.
     await waitFor(() => expect(calls.feed).toHaveBeenCalledTimes(3))
+  })
+
+  describe('the commands of the page (docs/plan/61-chats-first.md, §5.14)', () => {
+    afterEach(() => {
+      window.localStorage.clear()
+      Reflect.deleteProperty(URL, 'createObjectURL')
+      Reflect.deleteProperty(URL, 'revokeObjectURL')
+    })
+
+    /** `/models` from the button: a closed field takes no words, and it works there too. */
+    const openedEfforts = async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+      await screen.findByRole('listbox', { name: 'Команды' })
+      fireEvent.click(option(/Модель и размышление/))
+      return within(await screen.findByRole('menu', { name: 'Размышление' }))
+    }
+
+    it('`/new` starts a chat of the same project, without one where the chat has none', async () => {
+      showDialog()
+      await run(/Новый чат/)
+      expect(calls.push).toHaveBeenCalledWith(`/chats/new?project=${SITE_ID}`)
+      cleanup()
+      calls.push.mockClear()
+      showDialog(waiting(), null, null)
+      await run(/Новый чат/)
+      expect(calls.push).toHaveBeenCalledWith('/chats/new')
+    })
+
+    it('`/sessions` leads to the list of chats, and its other words do too', async () => {
+      showDialog()
+      await screen.findByText('Изменения готовы')
+      type('/resume')
+      fireEvent.keyDown(field(), { key: 'Enter' })
+      expect(calls.push).toHaveBeenCalledWith('/chats')
+      expect(calls.message).not.toHaveBeenCalled()
+    })
+
+    it('`/export` saves what the server wrote out as a file, and says so', async () => {
+      const blobs: Blob[] = []
+      const clicked: { name: string; href: string }[] = []
+      Object.assign(URL, {
+        createObjectURL: (blob: Blob) => {
+          blobs.push(blob)
+          return 'blob:chat'
+        },
+        revokeObjectURL: vi.fn(),
+      })
+      const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+        this: HTMLAnchorElement,
+      ) {
+        clicked.push({ name: this.download, href: this.href })
+      })
+      calls.exported.mockResolvedValue({ fileName: 'Цена капучино.md', markdown: '# Цена\n' })
+      showDialog()
+      await run(/Скачать переписку/)
+      await waitFor(() =>
+        expect(clicked).toEqual([{ name: 'Цена капучино.md', href: 'blob:chat' }]),
+      )
+      expect(calls.exported).toHaveBeenCalledWith({ taskId: TASK_ID })
+      expect(await blobs[0]!.text()).toBe('# Цена\n')
+      expect(blobs[0]!.type).toBe('text/markdown;charset=utf-8')
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:chat')
+      await screen.findByText('Переписка сохранена')
+      click.mockRestore()
+    })
+
+    it('`/export` that fails says so under the field and saves nothing', async () => {
+      Object.assign(URL, { createObjectURL: vi.fn(), revokeObjectURL: vi.fn() })
+      calls.exported.mockRejectedValue(serverRefusal('Диалог не найден', 'NOT_FOUND'))
+      showDialog()
+      await run(/Скачать переписку/)
+      expect((await screen.findByRole('alert')).textContent).toBe('Диалог не найден.')
+      expect(URL.createObjectURL).not.toHaveBeenCalled()
+    })
+
+    it('`/models` opens the menu of the level, which changes it as its button does', async () => {
+      showDialog()
+      await run(/Модель и размышление/)
+      const efforts = within(await screen.findByRole('menu', { name: 'Размышление' }))
+      fireEvent.click(efforts.getByRole('menuitemradio', { name: /Максимальное/ }))
+      await waitFor(() => expect(calls.setEffort).toHaveBeenCalledTimes(1))
+      expect(calls.setEffort.mock.calls[0]![0]).toEqual({ taskId: TASK_ID, effort: 'max' })
+    })
+
+    it('`/models` shows the level while the agent works, and says when it can be changed', async () => {
+      showDialog(
+        feedAnswer({
+          status: 'running',
+          task: { turnNo: 1 },
+          events: [requestRow('1', 'Поменяйте цену')],
+          cursor: '1',
+        }),
+      )
+      await screen.findByText('Поменяйте цену')
+      const efforts = await openedEfforts()
+      expect(efforts.getByText('Уровень можно поменять, пока чат ждёт вас.')).toBeTruthy()
+      const levels = efforts.getAllByRole('menuitemradio')
+      expect(levels.map((level) => level.getAttribute('aria-disabled'))).toEqual([
+        'true',
+        'true',
+        'true',
+      ])
+      fireEvent.click(efforts.getByRole('menuitemradio', { name: /Максимальное/ }))
+      // The mutation would start on the next tick: nothing is left to run when this is read.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      expect(calls.setEffort).not.toHaveBeenCalled()
+    })
+
+    it('`/models` of a chat that has ended promises no change of the level', async () => {
+      showDialog(
+        waiting({ status: 'done', commands: verdicts({ undo: null, cancel: 'finished' }) }),
+      )
+      await screen.findByText('Изменения готовы')
+      const efforts = await openedEfforts()
+      expect(efforts.getByText('Чат завершён: уровень уже не поменять.')).toBeTruthy()
+      expect(efforts.queryByText('Уровень можно поменять, пока чат ждёт вас.')).toBeNull()
+    })
+
+    it('`/themes` opens its menu over the field, which takes the choice', async () => {
+      showDialog()
+      await run(/Оформление/)
+      const menu = within(await screen.findByRole('menu', { name: 'Оформление' }))
+      fireEvent.click(menu.getByRole('menuitemradio', { name: 'Светлая' }))
+      expect(calls.setPreference).toHaveBeenCalledWith('light')
+      expect(screen.queryByRole('menu')).toBeNull()
+    })
+
+    it('`/details` opens «Ход работы» of finished turns, for the next visit too', async () => {
+      const worked = waiting({
+        events: [
+          requestRow('1', 'Поменяйте цену'),
+          { ...stepRow('2', 1), at: '2026-10-17T09:00:00.000Z' },
+          { ...resultRow('3', 1), at: '2026-10-17T09:02:14.000Z' },
+        ],
+        cursor: '3',
+      })
+      showDialog(worked)
+      await screen.findByText('Поменяйте цену')
+      const line = () => screen.getByText(/Агент работал/).closest('details')!
+      expect(line().open).toBe(false)
+      await run(/Подробности работы/)
+      await waitFor(() => expect(line().open).toBe(true))
+      await screen.findByRole('heading', { name: 'Ход работы' })
+      await screen.findByText('Подробности работы показаны')
+      cleanup()
+      showDialog(worked)
+      await screen.findByText('Поменяйте цену')
+      await waitFor(() => expect(line().open).toBe(true))
+    })
+
+    it('`/help` opens the whole list and sends nothing', async () => {
+      showDialog()
+      await screen.findByText('Изменения готовы')
+      type('/help')
+      fireEvent.keyDown(field(), { key: 'Enter' })
+      expect(
+        within(screen.getByRole('listbox', { name: 'Команды' })).getAllByRole('option').length,
+      ).toBeGreaterThan(10)
+      expect(field().value).toBe('')
+      expect(calls.message).not.toHaveBeenCalled()
+    })
+
+    it('stay with a closed project: it is read, and it refuses only what works on it', async () => {
+      showDialog(waiting({ commands: verdicts({ release: 'project_closed' }) }))
+      await screen.findByText('Изменения готовы')
+      fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+      expect(option(/Скачать переписку/).getAttribute('aria-disabled')).toBeNull()
+      expect(option(/Выпустить новую версию/).getAttribute('aria-disabled')).toBe('true')
+    })
+  })
+
+  it('finds «Отменить выпуск» by `/rollback`, and `/undo` is the last request now', async () => {
+    showDialog(waiting({ status: 'done', commands: verdicts({ undo: null, cancel: 'finished' }) }))
+    await screen.findByText('Изменения готовы')
+    fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+    expect(option(/Отменить выпуск/).textContent).toContain('/rollback')
+    expect(option(/Отменить последний запрос/).textContent).toContain('/undo')
   })
 
   it('asks before `/cancel` closes the dialog', async () => {
@@ -1249,6 +1437,19 @@ function showAnswers(...answers: (DialogFeed | Promise<DialogFeed>)[]) {
 describe('the five kinds of a chat (docs/plan/61-chats-first.md, §5.6)', () => {
   const BOTH = { repository: true, browser: true }
   const NEITHER = { repository: false, browser: false }
+  /** What a chat without the repository lists: no group «Сайт», no `/retry` (К27). */
+  const WITHOUT_REPOSITORY = [
+    /^\/undoОтменить последний запросНедоступна/u,
+    /^\/redoВернуть отменённый запросНедоступна/u,
+    /^\/cancelОтменить чат/u,
+    /^\/newНовый чат/u,
+    /^\/sessionsВсе чаты/u,
+    /^\/exportСкачать переписку/u,
+    /^\/modelsМодель и размышление/u,
+    /^\/detailsПодробности работы/u,
+    /^\/themesОформление/u,
+    /^\/helpСправка/u,
+  ].map((name) => expect.stringMatching(name))
   /** The names of the commands the window lists. */
   const listedCommands = () => {
     fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
@@ -1556,13 +1757,13 @@ describe('the five kinds of a chat (docs/plan/61-chats-first.md, §5.6)', () => 
       await screen.findByText('Добавьте новость')
       expect(toolsPanel()).toBeNull()
       expect(await menuTiles()).toEqual(['Браузер, Работает агент'])
-      expect(listedCommands()).toEqual([expect.stringMatching(/^Отменить чат/u)])
+      expect(listedCommands()).toEqual(WITHOUT_REPOSITORY)
       if (words === null) expect(hint()).not.toContain('Переменные')
       else expect(hint()).toContain(words)
     },
   )
 
-  it('a chat with neither: no tools, /cancel alone, no word of a project', async () => {
+  it('a chat with neither: no tools, no commands of the site, no word of a project', async () => {
     showDialog(answered(NEITHER), null, null)
     await screen.findByText('Вот пять вариантов.')
     expect(screen.queryByRole('button', { name: /^Инструменты/ })).toBeNull()
@@ -1571,7 +1772,7 @@ describe('the five kinds of a chat (docs/plan/61-chats-first.md, §5.6)', () => 
     expect(screen.getByRole('list', { name: 'Сообщения диалога' }).textContent).not.toMatch(
       /сайт|файл/iu,
     )
-    expect(listedCommands()).toEqual([expect.stringMatching(/^Отменить чат/u)])
+    expect(listedCommands()).toEqual(WITHOUT_REPOSITORY)
     expect(hint()).toContain('Не отправляйте в чат пароли и ключи')
     expect(hint()).not.toContain('Переменные')
   })
@@ -1608,7 +1809,23 @@ describe('the five kinds of a chat (docs/plan/61-chats-first.md, §5.6)', () => 
       }),
     )
     await screen.findByText('Добавьте новость')
-    expect(listedCommands()).toEqual([expect.stringMatching(/^Отменить чат/u)])
+    expect(listedCommands()).toEqual(WITHOUT_REPOSITORY)
+  })
+
+  it('says what `/undo` does in a chat without the repository', async () => {
+    showDialog(
+      browserAnswer({
+        status: 'awaiting_user',
+        commands: verdicts({ turn_undo: null }),
+        events: [requestRow('1', 'Добавьте новость')],
+        cursor: '1',
+      }),
+    )
+    await screen.findByText('Добавьте новость')
+    type('/und')
+    expect(option(/Отменить последний запрос/u).textContent).toContain(
+      'Агент забудет последний запрос и ответ на него.',
+    )
   })
 
   it('reads an ended chat without a project no words of the «Переменные» either', async () => {
@@ -2378,7 +2595,7 @@ describe('a task in the browser', () => {
     ['below the wide layout', false],
     ['from `lg`', true],
   ])(
-    'starts with the dialog alone %s while its browser works, and offers only /cancel',
+    'starts with the dialog alone %s while its browser works: of the server, only /cancel',
     async (_width, wide) => {
       if (wide) wideLayout()
       showDialog(
@@ -2392,14 +2609,25 @@ describe('a task in the browser', () => {
       expect(screen.queryByRole('tablist')).toBeNull()
       expect(calls.streamTicket).not.toHaveBeenCalled()
       expect(sockets).toHaveLength(0)
-      // The agent works: the field waits, and the window of commands has only «Отменить чат».
+      // The agent works: the field waits, and of the server's commands the window of commands has
+      // only «Отменить чат» to run; those of the page work all the same.
       fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
       const options = within(screen.getByRole('listbox', { name: 'Команды' })).getAllByRole(
         'option',
       )
-      expect(options.map((option) => plain(option.textContent))).toEqual([
-        expect.stringContaining('Отменить чат'),
-      ])
+      const open = options.filter((option) => option.getAttribute('aria-disabled') === null)
+      expect(open.map((option) => plain(option.textContent))).toEqual(
+        [
+          'Отменить чат',
+          'Новый чат',
+          'Все чаты',
+          'Скачать переписку',
+          'Модель и размышление',
+          'Подробности работы',
+          'Оформление',
+          'Справка',
+        ].map((name) => expect.stringContaining(name)),
+      )
       expect(
         screen.getByText(
           'Не отправляйте в чат пароли и ключи: вход в админку сохраните в разделе «Переменные» или войдите сами в окне браузера.',

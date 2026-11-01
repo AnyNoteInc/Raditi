@@ -403,15 +403,18 @@ function Worked({
   steps,
   seconds,
   activity,
+  details,
 }: {
   steps: readonly StepRow[]
   seconds: number
   /** «Ход работы» of the turn, drawn once the client opens the line. */
   activity?: () => ReactNode
+  /** «Подробности работы» (`/details`): the line stands open. */
+  details: boolean
 }) {
   const [opened, setOpened] = useState(false)
   return (
-    <Disclosure summary={feedWorkedText(seconds)} onOpen={() => setOpened(true)}>
+    <Disclosure summary={feedWorkedText(seconds)} open={details} onOpen={() => setOpened(true)}>
       <Box
         sx={{
           ml: 0.75,
@@ -425,7 +428,7 @@ function Worked({
         aria-label={dialogText.stages}
       >
         <StepList steps={steps} running={false} />
-        {opened && activity ? (
+        {(opened || details) && activity ? (
           <Box sx={{ display: 'grid', gap: 0.75, minWidth: 0 }}>
             <Typography
               component="h3"
@@ -1071,6 +1074,7 @@ export function FeedList({
   retryId = null,
   actions,
   filesOf = noFiles,
+  details = false,
   activityOf,
 }: {
   head: FeedHeadState | null
@@ -1084,6 +1088,8 @@ export function FeedList({
   actions: FeedActions
   /** The files a message sent, by their ids, as their chips name them. */
   filesOf?: (ids: readonly string[]) => SentFile[]
+  /** «Подробности работы» (`/details`): «Ход работы» of finished turns stands open. */
+  details?: boolean
   /** «Ход работы» of a finished turn (owner's decision of 26.10.2026). */
   activityOf?: (turn: number) => ReactNode
 }) {
@@ -1126,6 +1132,7 @@ export function FeedList({
               steps={entry.steps}
               seconds={entry.seconds}
               activity={activityOf ? () => activityOf(entry.turn) : undefined}
+              details={details}
             />
           ) : (
             <RowView

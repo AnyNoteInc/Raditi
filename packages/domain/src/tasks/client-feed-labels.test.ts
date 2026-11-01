@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { previewUnavailableReasons } from '../preview/preview-state.ts'
-import { chatCommandIds } from '../release/chat-commands.ts'
 import { versionBumps } from '../release/semver.ts'
 import {
   feedBrowserReasons,
   feedCancelledBys,
   feedCeilingReasons,
+  feedCommandIds,
   feedCreditsStates,
   feedLimits,
   feedObjectKinds,
@@ -176,7 +176,7 @@ describe('totality of the catalogue', () => {
   })
 
   it('has a text for every command, version kind, release outcome and reason, and preview gap', () => {
-    expect(sorted(Object.keys(feedCommandText))).toEqual(sorted(chatCommandIds))
+    expect(sorted(Object.keys(feedCommandText))).toEqual(sorted(feedCommandIds))
     expect(sorted(Object.keys(feedVersionBumpLabel))).toEqual(sorted(versionBumps))
     expect(sorted(Object.keys(feedReleaseTitle))).toEqual(sorted(feedReleaseOutcomes))
     expect(sorted(Object.keys(feedReleaseReasonText))).toEqual(sorted(feedReleaseReasons))
