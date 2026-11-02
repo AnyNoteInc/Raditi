@@ -24,7 +24,7 @@ import {
   type RunContext,
   type TurnSkill,
 } from '@repo/domain'
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
 import { createOpencodeDriver } from './opencode.ts'
 import { RESULT_CONTRACT } from './output-schema.ts'
@@ -94,6 +94,8 @@ describe('OpenCode driver: prepared files and argv', () => {
       '.config/opencode/AGENTS.md',
       '.config/opencode/opencode.json',
       'cli-args.json',
+      'compaction-config/opencode/opencode.json',
+      'compaction-config/settings.json',
       'io-config/opencode/opencode.json',
       'prompt.txt',
       'run.mjs',
@@ -103,8 +105,15 @@ describe('OpenCode driver: prepared files and argv', () => {
       `{file:${SANDBOX_SECRETS_DIR}/llm}`,
       `{file:${SANDBOX_SECRETS_DIR}/mcp}`,
     ])
+    expect(substitutions(file(run, 'compaction-config/settings.json'))).toEqual([
+      `{file:${SANDBOX_SECRETS_DIR}/llm}`,
+    ])
     for (const entry of run.files)
-      if (!entry.path.endsWith('/opencode/opencode.json') && !entry.path.endsWith('AGENTS.md'))
+      if (
+        !entry.path.endsWith('/opencode/opencode.json') &&
+        !entry.path.endsWith('/settings.json') &&
+        !entry.path.endsWith('AGENTS.md')
+      )
         expect(substitutions(entry.content), entry.path).toEqual([])
   })
 
@@ -319,6 +328,57 @@ describe('OpenCode driver: prepared files and argv', () => {
     expect(text).not.toContain('sandbox-gw')
   })
 
+  it('compacts the session it resumes, through the server of the CLI on loopback', async () => {
+    const run = await driver.prepare({ ...context, nativeSessionId })
+    expect(driver.command(run, { ...input, action: 'compact' })).toEqual([
+      'node',
+      `${home}/run.mjs`,
+    ])
+    expect(args(run)).toEqual([
+      'serve',
+      '--hostname',
+      '127.0.0.1',
+      '--port',
+      '0',
+      '--print-logs',
+      '--log-level',
+      'WARN',
+    ])
+    expect(JSON.parse(file(run, 'compaction.json'))).toEqual({
+      providerID: 'raditi',
+      modelID: 'glm-5.3',
+    })
+    // What the server reads at its start, once more for the working copy: no reference to a key.
+    expect(substitutions(file(run, 'compaction-config/opencode/opencode.json'))).toEqual([])
+    // The model and the key, and neither the MCP server nor a tool: nothing it could start.
+    const settings = file(run, 'compaction-config/settings.json')
+    expect(substitutions(settings)).toEqual([`{file:${SANDBOX_SECRETS_DIR}/llm}`])
+    const parsed = JSON.parse(settings) as Record<string, unknown>
+    expect(parsed).not.toHaveProperty('mcp')
+    expect(parsed.permission).toEqual({ '*': 'deny' })
+    expect(parsed.model).toBe('raditi/glm-5.3')
+  })
+
+  it('takes an action only over a session, and no files with it', async () => {
+    const fresh = await driver.prepare(context)
+    expect(() => driver.command(fresh, { ...input, action: 'compact' })).toThrow(/session/)
+    const resumed = await driver.prepare({ ...context, nativeSessionId })
+    expect(() =>
+      driver.command(resumed, {
+        prompt: input.prompt,
+        attachments: [`${SANDBOX_INBOX}/notes.txt`],
+        action: 'compact',
+      }),
+    ).toThrow(/files/)
+  })
+
+  it('stages no compaction for a turn of words: the wrapper finds no file and runs the CLI', async () => {
+    const run = await driver.prepare({ ...context, nativeSessionId })
+    driver.command(run, input)
+    expect(run.files.some((entry) => entry.path.endsWith('/compaction.json'))).toBe(false)
+    expect(args(run)[0]).toBe('run')
+  })
+
   it('keeps the instructions of the turn in their own file, outside the substituted text', async () => {
     const run = await driver.prepare(context)
     expect(file(run, '.config/opencode/AGENTS.md')).toBe(context.instructions)
@@ -461,6 +521,8 @@ interface CliRecord {
   stdin?: string
   delivered?: Record<string, string>
   again?: Record<string, string>
+  /** What the server of a compaction was asked and sent. */
+  requests?: { line: string; body: string }[]
   /**
    * What a read that does not wait found first in each pipe and the text it got in the end;
    * `offPathHeld`: once the value was there, the path was gone while a writer still held the pipe;
@@ -485,6 +547,24 @@ interface Behaviour {
   /** `plant`: a file this CLI process leaves in the working copy; `plantHome`: in its home. */
   export?: { exit?: number; stdout?: string; plant?: string; plantHome?: string }
   import?: { exit?: number; plant?: string }
+  /** The stand-in of `opencode serve`; `message` — what its last message says. */
+  serve?: {
+    message?: unknown
+    /** What `GET /session/<id>` answers. */
+    status?: number
+    /** Ends before its first line. */
+    exit?: number
+    /** What `POST …/summarize` answers. */
+    summarizeStatus?: number
+    /** The first requests it takes and never answers, as one that comes too early. */
+    hangRequests?: number
+    /** Stays on the first request it gets: nothing is ever answered. */
+    neverAnswers?: boolean
+    /** Takes SIGTERM and goes on. */
+    ignoresTerm?: boolean
+    /** Shorter waits of the wrapper, for those a test cannot sit through. */
+    waits?: { readyMs?: number; pollMs?: number; stopMs?: number }
+  }
   run?: {
     exit?: number
     readSecrets?: boolean
@@ -517,6 +597,20 @@ interface Behaviour {
     sessionTrigger?: boolean
   }
 }
+/** The wrapper with `waits` in place of its limits: each must still be there to replace. */
+function waiting(source: string, waits: NonNullable<Behaviour['serve']>['waits']): string {
+  if (!waits || !source.includes('const SERVER_READY_MS')) return source
+  const limits: Array<[string, number | undefined]> = [
+    ['const SERVER_READY_MS = 60_000;', waits.readyMs],
+    ['const SERVER_POLL_MS = 2_000;', waits.pollMs],
+    ['const SERVER_STOP_MS = 5_000;', waits.stopMs],
+  ]
+  return limits.reduce((text, [line, ms]) => {
+    if (!text.includes(line)) throw new Error(`The wrapper has no ${line}`)
+    return ms === undefined ? text : text.replace(line, line.replace(/= [\d_]+/, `= ${ms}`))
+  }, source)
+}
+
 interface Launch {
   /** Where the working copy of the sandbox is in this run. */
   repo: string
@@ -623,6 +717,7 @@ describe('OpenCode driver: the launch wrapper', { timeout: 30_000 }, () => {
       envValues?: Record<string, string>
       egressProxy?: string
       internet?: true
+      action?: 'compact'
     } = {},
     behaviour: Behaviour = {},
     before?: (paths: { home: string; secrets: string; repo: string }) => Promise<void>,
@@ -637,7 +732,11 @@ describe('OpenCode driver: the launch wrapper', { timeout: 30_000 }, () => {
       ...(turn.egressProxy ? { egressProxy: turn.egressProxy } : {}),
       ...(turn.internet ? { internet: true as const } : {}),
     })
-    driver.command(run, { prompt: turn.prompt ?? input.prompt, attachments: [] })
+    driver.command(run, {
+      prompt: turn.prompt ?? input.prompt,
+      attachments: [],
+      ...(turn.action ? { action: turn.action } : {}),
+    })
     const directory = await mkdtemp(join(tmpdir(), 'raditi-opencode-wrapper-'))
     const paths = {
       home: join(directory, 'home'),
@@ -658,7 +757,9 @@ describe('OpenCode driver: the launch wrapper', { timeout: 30_000 }, () => {
       for (const entry of [...run.files, ...run.secrets]) {
         const path = local(entry.path)
         await mkdir(dirname(path), { recursive: true })
-        await writeFile(path, local(entry.content), { mode: entry.mode })
+        await writeFile(path, waiting(local(entry.content), behaviour.serve?.waits), {
+          mode: entry.mode,
+        })
       }
       await before?.(paths)
       await writeFile(join(directory, 'behaviour.json'), JSON.stringify(behaviour))
@@ -695,6 +796,31 @@ if (command !== 'run' && step.plant) fs.writeFileSync(path.join(process.cwd(), s
 if (step.plantHome) { fs.mkdirSync(path.dirname(path.join(process.env.HOME, step.plantHome)), { recursive: true }); fs.writeFileSync(path.join(process.env.HOME, step.plantHome), 'left by ' + command); }
 if (command === 'export') { save(); process.stdout.write(step.stdout ?? ''); process.exit(step.exit ?? 0); }
 if (command === 'import') { record.imported = fs.readFileSync(rest[0], 'utf8'); fs.mkdirSync(path.join(process.env.HOME, '.local/share/opencode'), { recursive: true }); fs.writeFileSync(path.join(process.env.HOME, '.local/share/opencode/opencode.db'), 'imported'); save(); process.exit(step.exit ?? 0); }
+if (command === 'serve') {
+  if (step.exit !== undefined) { save(); process.exit(step.exit); }
+  const http = require('node:http');
+  // Read when the first request comes, as the server reads the configuration of the working copy.
+  const refs = [...fs.readFileSync(process.env.OPENCODE_CONFIG, 'utf8').matchAll(/\\{file:([^}]+)\\}/g)].map((match) => match[1]);
+  const password = 'Basic ' + Buffer.from('opencode:' + process.env.OPENCODE_SERVER_PASSWORD).toString('base64');
+  record.requests = [];
+  const server = http.createServer((request, response) => {
+    record.delivered ??= Object.fromEntries(refs.map((ref) => [path.basename(ref), fs.readFileSync(ref, 'utf8')]));
+    if (request.headers.authorization !== password) return response.writeHead(401).end();
+    const chunks = [];
+    request.on('data', (chunk) => chunks.push(chunk));
+    request.on('end', () => {
+      record.requests.push({ line: request.method + ' ' + request.url, body: Buffer.concat(chunks).toString() });
+      if (step.neverAnswers) return;
+      if ((step.hangRequests ?? 0) >= record.requests.length) return;
+      if (request.url.endsWith('/summarize')) return response.writeHead(step.summarizeStatus ?? 200).end('true');
+      if (request.url.includes('/message')) return response.writeHead(200).end(JSON.stringify([step.message]));
+      return response.writeHead(step.status ?? 200).end('{}');
+    });
+  });
+  process.on('SIGTERM', () => { save(); if (!step.ignoresTerm) process.exit(143); });
+  server.listen(0, '127.0.0.1', () => process.stdout.write('opencode server listening on http://127.0.0.1:' + server.address().port + '\\n'));
+  return;
+}
 record.stdin = fs.readFileSync(0, 'utf8');
 const refs = [...fs.readFileSync(path.join(configHome, 'opencode/opencode.json'), 'utf8').matchAll(/\\{file:([^}]+)\\}/g)].map((match) => match[1]);
 const read = () => Object.fromEntries(refs.map((ref) => { try { return [path.basename(ref), fs.readFileSync(ref, 'utf8')]; } catch (error) { return [path.basename(ref), 'ERROR ' + error.code]; } }));
@@ -847,6 +973,7 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
       // The wrapper may have left the configuration read-only when it was killed.
       await chmod(join(paths.home, '.config/opencode'), 0o700).catch(() => {})
       await chmod(join(paths.home, 'io-config/opencode'), 0o700).catch(() => {})
+      await chmod(join(paths.home, 'compaction-config/opencode'), 0o700).catch(() => {})
       await rm(directory, { recursive: true, force: true })
     }
   }
@@ -1184,6 +1311,204 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
     expect(result.left.secrets).toEqual([])
   })
 
+  describe('a compaction (docs/plan/61-chats-first.md, §5.14)', () => {
+    const tokens = {
+      total: 7199,
+      input: 7105,
+      output: 94,
+      reasoning: 0,
+      cache: { read: 0, write: 0 },
+    }
+    const answered = (info: object, parts: object[] = [{ type: 'text', text: 'The summary' }]) => ({
+      info: { role: 'assistant', summary: true, finish: 'stop', tokens, ...info },
+      parts,
+    })
+    const compaction = (serve: NonNullable<Behaviour['serve']>) =>
+      launch(
+        { session: nativeSessionId, action: 'compact' },
+        {
+          export: { stdout: JSON.stringify({ info: { id: nativeSessionId }, messages: [] }) },
+          serve,
+        },
+      )
+    beforeEach(() => {
+      mcpAnswer = accept
+    })
+
+    it('asks the server for the summary and prints the rows of a finished step', async () => {
+      const result = await compaction({ message: answered({}) })
+      expect(result.code).toBe(0)
+      expect(result.records.map((record) => record.command)).toEqual(['export', 'import', 'serve'])
+      expect(failure(result.stdout)).toEqual([
+        { type: 'started', nativeSessionId },
+        {
+          type: 'usage',
+          usage: { inputUncached: 7105, cacheRead: 0, cacheWrite: 0, output: 94, reasoning: 0 },
+        },
+        { type: 'completed' },
+      ])
+      const serve = result.records.at(-1)!
+      expect(serve.argv.slice(0, 5)).toEqual(['serve', '--hostname', '127.0.0.1', '--port', '0'])
+      // The session first, without asking for anything, and the outcome from its last message.
+      expect(serve.requests).toEqual([
+        { line: `GET /session/${nativeSessionId}`, body: '' },
+        {
+          line: `POST /session/${nativeSessionId}/summarize`,
+          body: JSON.stringify({ providerID: 'raditi', modelID: 'glm-5.3' }),
+        },
+        { line: `GET /session/${nativeSessionId}/message?limit=1`, body: '' },
+      ])
+      // The key once, through its pipe; the MCP token has no reader and no file.
+      expect(serve.delivered).toEqual({ llm: context.llm.apiKey })
+      expect(serve.secrets).toEqual([{ name: 'llm', fifo: true }])
+      expect(result.left.secrets).toEqual([])
+    })
+
+    it('gives the server a password of its own, and none of what a command of a turn gets', async () => {
+      const result = await launch(
+        {
+          session: nativeSessionId,
+          action: 'compact',
+          // Shorter than what is masked: the stand-in keeps no database to mask it in.
+          envValues: { PAYMENT_KEY: 'pay' },
+          egressProxy: 'http://sandbox-gw:3128',
+          internet: true,
+        },
+        {
+          export: { stdout: JSON.stringify({ info: { id: nativeSessionId }, messages: [] }) },
+          serve: { message: answered({}) },
+        },
+      )
+      expect(result.code).toBe(0)
+      const serve = result.records.at(-1)!
+      expect(serve.env.OPENCODE_SERVER_PASSWORD).toMatch(/^[0-9a-f]{64}$/)
+      expect(serve.env.OPENCODE_CONFIG).toMatch(/compaction-config\/settings\.json$/)
+      expect(serve.env.XDG_CONFIG_HOME).toMatch(/compaction-config$/)
+      for (const name of ['BASH_ENV', 'SHELL', 'HTTPS_PROXY', 'HTTP_PROXY', 'PAYMENT_KEY'])
+        expect(serve.env).not.toHaveProperty(name)
+      expect(result.stdout).not.toContain(serve.env.OPENCODE_SERVER_PASSWORD)
+    })
+
+    it('reads a refusal of the provider as the CLI prints it, and fails the turn', async () => {
+      const error = {
+        name: 'APIError',
+        data: { message: 'Refused', statusCode: 402, responseBody: '{"error":{"code":"budget"}}' },
+      }
+      const result = await compaction({ message: answered({ error, finish: undefined }, []) })
+      expect(result.code).toBe(1)
+      expect(failure(result.stdout)).toEqual([
+        { type: 'failed', reason: 'APIError 402 budget: Refused' },
+        { type: 'failed', reason: 'RaditiWrapperError: The model did not summarize the session' },
+      ])
+    })
+
+    it.each([
+      ['an empty answer', answered({}, [{ type: 'text', text: '  ' }])],
+      ['reasoning alone', answered({}, [{ type: 'reasoning', text: 'Thinking.' }])],
+      ['a cut answer', answered({ finish: 'length' })],
+    ])('takes %s for no summary: the CLI would start the session from it', async (_, message) => {
+      const result = await compaction({ message })
+      expect(result.code).toBe(1)
+      expect(failure(result.stdout)).toEqual([
+        { type: 'failed', reason: 'RaditiWrapperError: The model left no whole summary' },
+      ])
+    })
+
+    it.each([
+      ['a message of the client', { info: { role: 'user' }, parts: [] }],
+      ['an answer of the agent', answered({ summary: undefined })],
+      ['no message', undefined],
+    ])('takes %s for a compaction that wrote nothing', async (_, message) => {
+      const result = await compaction({ message })
+      expect(result.code).toBe(1)
+      expect(failure(result.stdout)).toEqual([
+        { type: 'failed', reason: 'RaditiWrapperError: The server wrote no summary' },
+      ])
+    })
+
+    it('fails the turn when the server cannot read the session', async () => {
+      const result = await compaction({ status: 400 })
+      expect(result.code).toBe(1)
+      expect(failure(result.stdout)).toEqual([
+        { type: 'failed', reason: 'RaditiWrapperError: The server cannot read the session' },
+      ])
+      expect(result.left.secrets).toEqual([])
+    })
+
+    it('fails the turn when the server refuses the compaction', async () => {
+      const result = await compaction({ summarizeStatus: 400 })
+      expect(result.code).toBe(1)
+      expect(failure(result.stdout)).toEqual([
+        { type: 'failed', reason: 'RaditiWrapperError: The server refused the compaction' },
+      ])
+      expect(result.left.secrets).toEqual([])
+    })
+
+    it('asks again after a request that came too early and hangs', async () => {
+      const result = await compaction({
+        message: answered({}),
+        hangRequests: 1,
+        waits: { pollMs: 100 },
+      })
+      expect(result.code).toBe(0)
+      expect(result.records.at(-1)!.requests!.map((request) => request.line)).toEqual([
+        `GET /session/${nativeSessionId}`,
+        `GET /session/${nativeSessionId}`,
+        `POST /session/${nativeSessionId}/summarize`,
+        `GET /session/${nativeSessionId}/message?limit=1`,
+      ])
+    })
+
+    it('stops asking a server that never answers and fails the turn', async () => {
+      const result = await compaction({
+        neverAnswers: true,
+        waits: { readyMs: 300, pollMs: 100 },
+      })
+      expect(result.code).toBe(1)
+      expect(failure(result.stdout)).toEqual([
+        { type: 'failed', reason: 'RaditiWrapperError: The server did not answer' },
+      ])
+      expect(result.ms).toBeLessThan(10_000)
+      expect(result.left.secrets).toEqual([])
+    })
+
+    it('kills a server that stays after the summary: the summary stands', async () => {
+      const result = await compaction({
+        message: answered({}),
+        ignoresTerm: true,
+        waits: { stopMs: 200 },
+      })
+      expect(result.code).toBe(0)
+      expect(result.ms).toBeLessThan(10_000)
+      expect(failure(result.stdout)).toContainEqual({ type: 'completed' })
+    })
+
+    it('fails the turn when the server ends before it listens', async () => {
+      const result = await compaction({ exit: 0 })
+      expect(result.code).toBe(1)
+      expect(failure(result.stdout)).toEqual([
+        { type: 'failed', reason: 'RaditiWrapperError: The session was not compacted' },
+      ])
+      expect(result.left.secrets).toEqual([])
+    })
+
+    it("hides the site's OpenCode files from the server and puts them back", async () => {
+      const result = await launch(
+        { session: nativeSessionId, action: 'compact' },
+        {
+          export: { stdout: JSON.stringify({ info: { id: nativeSessionId }, messages: [] }) },
+          serve: { message: answered({}) },
+        },
+        async ({ repo }) => {
+          await writeFile(join(repo, 'opencode.json'), '{}')
+        },
+      )
+      expect(result.code).toBe(0)
+      expect(result.records.at(-1)!.project).toEqual([])
+      expect(result.left.repo).toEqual(['opencode.json'])
+    })
+  })
+
   it("keeps the site's own OpenCode files away from every CLI process and puts them back", async () => {
     mcpAnswer = accept
     // The CLI imports .opencode/plugin/*.js of the directory it runs in, whatever its switches.
@@ -1330,7 +1655,7 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
     const run = await driver.prepare(context)
     expect(file(run, 'run.mjs')).toContain(`"absent":["${home}/.opencode"]`)
     expect(file(run, 'run.mjs')).toContain(
-      `"only":{"${home}/.config/opencode":["AGENTS.md","opencode.json"],"${home}/io-config/opencode":["opencode.json"]}`,
+      `"only":{"${home}/.config/opencode":["AGENTS.md","opencode.json"],"${home}/io-config/opencode":["opencode.json"],"${home}/compaction-config/opencode":["opencode.json"]}`,
     )
     // The lists are exactly what the driver itself prepares in those directories.
     for (const [directory, names] of [

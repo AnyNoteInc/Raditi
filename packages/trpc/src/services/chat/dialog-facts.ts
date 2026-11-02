@@ -14,11 +14,13 @@ import {
   terminalReleaseStatuses,
   undoDeadline,
   undoExpired,
+  readFeedRow,
   type CandidateCheckStatus,
   type ChatCommandAvailability,
   type ChatCommandFacts,
   type ChatCommandRefusal,
-  type OfferedCommandId,
+  type CompactRefusal,
+  type ServerCommandId,
   type PreviewStatus,
   type ReleaseOutcome,
   type ReleaseStatus,
@@ -26,6 +28,7 @@ import {
   type TurnRedoRefusal,
   type TurnUndoRefusal,
 } from '@repo/domain'
+import { z } from 'zod'
 
 import { siteClosed } from '../site-capabilities.ts'
 import { memberRole } from './access.ts'
@@ -35,6 +38,7 @@ import {
   movingRequest,
   openCeilingQuestion,
   turnRewinding,
+  updatePress,
 } from './dialog-state.ts'
 import { commandUnavailable } from './refusals.ts'
 
@@ -51,6 +55,8 @@ type Reader = Pick<
   | 'siteLease'
   | 'browserSession'
   | 'taskTurn'
+  | 'turnAssignment'
+  | 'agentDriver'
   | '$queryRaw'
 >
 
@@ -240,8 +246,91 @@ export async function dialogFacts(
         turnNo: needs?.turnNo ?? 0,
       }),
       turnRedoing: pending?.redo === true,
+      compaction: await driverCompacts(db),
+      compactRefusal: await compactRefusal(db, { taskId: task.id, turnNo: needs?.turnNo ?? 0 }),
     },
   }
+}
+
+/**
+ * Whether the driver the platform runs can compact a session: what it says of itself
+ * (`AgentCapabilities.compaction`), in its row, for tRPC and web import no driver.
+ */
+async function driverCompacts(db: Reader): Promise<boolean> {
+  const driver = await db.agentDriver.findFirst({
+    where: { enabled: true },
+    select: { capabilities: true },
+  })
+  return z.object({ compaction: z.literal(true) }).safeParse(driver?.capabilities).success
+}
+
+/** The rows that say nothing to the agent: a press, or the `/compact` that never got a turn. */
+function saysNothing(payload: Prisma.JsonValue): boolean {
+  const row = readFeedRow('feed.request', payload)
+  if (row.type !== 'feed.request') return false
+  if (row.kind === 'agent_command') return row.command === 'compact'
+  return row.kind === 'retry' || row.kind === 'continue' || row.kind === 'resume'
+}
+
+/**
+ * Why `/compact` has no session to shorten now (docs/plan/61-chats-first.md, §5.14). The next turn
+ * goes on from the last one only when that completed and stands, so that is the session a
+ * compaction resumes; «Обновить» starts a new one on the moved candidate, so once it is pressed the
+ * session may be gone. A compaction right after a compaction would pay for the summary of a summary.
+ * Words the last turn never saw — their pass ended before it opened a turn — are not in the session,
+ * and the next turn would count them as seen: they go first. A question about credits and a request
+ * of the agent to act in the browser wait for the client: a compaction answers neither, and its turn
+ * would take the browser away from the client. A `/compact` that ended before it opened a turn
+ * shortened nothing, so it may be repeated.
+ */
+async function compactRefusal(
+  db: Reader,
+  chat: { taskId: string; turnNo: number },
+): Promise<CompactRefusal | null> {
+  const turn = await db.taskTurn.findUnique({
+    where: { taskId_turnNo: { taskId: chat.taskId, turnNo: chat.turnNo } },
+    select: {
+      status: true,
+      rejectedAt: true,
+      undoneAt: true,
+      nativeSessionId: true,
+      headSha: true,
+      startedAt: true,
+    },
+  })
+  if (
+    turn?.status !== 'completed' ||
+    turn.rejectedAt !== null ||
+    turn.undoneAt !== null ||
+    turn.nativeSessionId === null ||
+    turn.startedAt === null
+  )
+    return 'nothing_to_compact'
+  if ((await openCeilingQuestion(db, chat.taskId)) !== null) return 'awaiting_answer'
+  const session = await openBrowserSessionOfTask(db, chat.taskId)
+  if (session?.helpReason) return 'awaiting_answer'
+  const compacted = await db.turnAssignment.count({
+    where: {
+      taskId: chat.taskId,
+      turnNo: chat.turnNo,
+      plan: { path: ['input', 'action'], equals: 'compact' },
+    },
+  })
+  if (compacted > 0) return 'nothing_to_compact'
+  const latest = await db.taskCandidate.findFirst({
+    where: { taskId: chat.taskId },
+    orderBy: { revision: 'desc' },
+    select: { turnNo: true, headSha: true },
+  })
+  if (latest?.turnNo === chat.turnNo && latest.headSha !== turn.headSha) return 'nothing_to_compact'
+  const after = { taskId: chat.taskId, createdAt: { gt: turn.startedAt } }
+  if ((await db.taskEvent.count({ where: { ...after, ...updatePress } })) > 0)
+    return 'nothing_to_compact'
+  const later = await db.taskEvent.findMany({
+    where: { ...after, ...movingRequest },
+    select: { payload: true },
+  })
+  return later.every((row) => saysNothing(row.payload)) ? null : 'nothing_to_compact'
 }
 
 /**
@@ -318,13 +407,7 @@ async function turnRedoRefusal(
       id: { gt: rewind.id },
       OR: [
         movingRequest,
-        {
-          type: 'feed.request',
-          AND: [
-            { payload: { path: ['kind'], equals: 'command' } },
-            { payload: { path: ['command'], equals: 'update' } },
-          ],
-        },
+        updatePress,
         { type: { in: ['feed.candidate', 'feed.decision', 'feed.release'] } },
       ],
     },
@@ -409,13 +492,13 @@ async function undoFacts(
 /** The verdict of one command. */
 export function commandRefusal(
   facts: ChatCommandFacts,
-  command: OfferedCommandId,
+  command: ServerCommandId,
 ): ChatCommandRefusal | null {
   return chatCommandAvailability(facts).find((item) => item.id === command)?.refusal ?? null
 }
 
 /** Throws the refusal of the command, the text `task.commands` shows for it. */
-export function assertCommandAvailable(facts: ChatCommandFacts, command: OfferedCommandId): void {
+export function assertCommandAvailable(facts: ChatCommandFacts, command: ServerCommandId): void {
   const refusal = commandRefusal(facts, command)
   if (refusal !== null) throw commandUnavailable(command, refusal)
 }

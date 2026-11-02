@@ -164,6 +164,7 @@ export const agentDriverSeeds: readonly AgentDriverSeed[] = [
       mcp: true,
       images: false,
       reasoningEvents: true,
+      compaction: true,
     },
     enabled: true,
   },

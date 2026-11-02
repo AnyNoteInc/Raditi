@@ -41,6 +41,9 @@ const home = `${SANDBOX_AGENT_HOME}/opencode`
 const configDirectory = `${home}/.config/opencode`
 const instructionsPath = `${configDirectory}/AGENTS.md`
 const ioConfigHome = `${home}/io-config`
+const compactionConfigHome = `${home}/compaction-config`
+const compactionPath = `${home}/compaction.json`
+const compactionSettings = `${compactionConfigHome}/settings.json`
 const wrapper = `${home}/run.mjs`
 const argumentsPath = `${home}/cli-args.json`
 const promptPath = `${home}/prompt.txt`
@@ -233,22 +236,15 @@ const directHosts = (context: Pick<RunContext, 'llm' | 'mcp'>): string[] => [
   ]),
 ]
 
-/**
- * The configuration of the turn's CLI, serialized from fixed keys. The two credentials are
- * named as files; the wrapper puts a named pipe at each path, so the CLI reads each value once.
- * The reasoning level is not here: the gateway sets it from the profile of the turn key.
- */
-function configuration(context: RunContext): string {
-  const { llm, mcp, egressProxy, internet, skills } = validated(context)
+/** The platform's provider and the agent every session names, as each configuration has them. */
+function modelSettings(llm: Pick<RunContext['llm'], 'baseUrl' | 'model'>) {
   const model = `${provider}/${llm.model}`
-  const direct = directHosts(context)
-  return JSON.stringify({
+  return {
     model,
     small_model: model,
     default_agent: agent,
     enabled_providers: [provider],
     ...quiet,
-    permission: permissionOf({ internet, skills }),
     provider: {
       [provider]: {
         // The only provider package built into the binary that needs no download.
@@ -266,6 +262,23 @@ function configuration(context: RunContext): string {
         },
       },
     },
+    agent: {
+      [agent]: { mode: 'primary', description: 'Raditi website changes', prompt: agentPrompt },
+    },
+  }
+}
+
+/**
+ * The configuration of the turn's CLI, serialized from fixed keys. The two credentials are
+ * named as files; the wrapper puts a named pipe at each path, so the CLI reads each value once.
+ * The reasoning level is not here: the gateway sets it from the profile of the turn key.
+ */
+function configuration(context: RunContext): string {
+  const { llm, mcp, egressProxy, internet, skills } = validated(context)
+  const direct = directHosts(context)
+  return JSON.stringify({
+    ...modelSettings(llm),
+    permission: permissionOf({ internet, skills }),
     mcp: {
       [mcpServer]: {
         type: 'remote',
@@ -281,14 +294,33 @@ function configuration(context: RunContext): string {
           )
         : {}),
     },
-    agent: {
-      [agent]: { mode: 'primary', description: 'Raditi website changes', prompt: agentPrompt },
-    },
     // Without it a rejected permission request ends the run; the rule that asks may come from
     // the CLI's own defaults.
     experimental: { continue_loop_on_deny: true },
   })
 }
+
+/**
+ * The server of a compaction: the model and nothing else. It holds its password in its environment
+ * and whatever it started would inherit that, so no MCP server and no skill; no tool is allowed,
+ * and the summary agent of the CLI asks for none.
+ */
+function compactionConfiguration(context: RunContext): string {
+  const { llm } = validated(context)
+  return JSON.stringify({ ...modelSettings(llm), permission: { '*': 'deny' } })
+}
+
+/** How the server of a compaction starts: on loopback, at a port the system picks. */
+const serveArguments = [
+  'serve',
+  '--hostname',
+  '127.0.0.1',
+  '--port',
+  '0',
+  '--print-logs',
+  '--log-level',
+  'WARN',
+]
 
 /**
  * The CLI prints no end-of-turn row: a step that ends with `stop` is followed by more steps when
@@ -316,6 +348,7 @@ export function createOpencodeDriver(config: AgentDriverConfig): AgentDriver {
       mcp: true,
       images: false,
       reasoningEvents: true,
+      compaction: true,
     },
     async prepare(context) {
       const { llm, mcp, nativeSessionId, envValues, egressProxy, internet, skills } =
@@ -343,6 +376,12 @@ export function createOpencodeDriver(config: AgentDriverConfig): AgentDriver {
             mode: 0o600,
           },
           {
+            path: `${compactionConfigHome}/opencode/opencode.json`,
+            content: JSON.stringify(quiet),
+            mode: 0o600,
+          },
+          { path: compactionSettings, content: compactionConfiguration(context), mode: 0o600 },
+          {
             path: wrapper,
             content: opencodeWrapper({
               cli,
@@ -351,16 +390,24 @@ export function createOpencodeDriver(config: AgentDriverConfig): AgentDriver {
               prompt: promptPath,
               secrets: [llmKey, mcpKey],
               env: cliEnvironment,
-              readOnly: [configDirectory, `${ioConfigHome}/opencode`],
+              readOnly: [
+                configDirectory,
+                `${ioConfigHome}/opencode`,
+                `${compactionConfigHome}/opencode`,
+              ],
               projectFiles,
               above: above(SANDBOX_WORKDIR),
               absent: [`${home}/.opencode`],
               only: {
                 [configDirectory]: ['AGENTS.md', 'opencode.json'],
                 [`${ioConfigHome}/opencode`]: ['opencode.json'],
+                [`${compactionConfigHome}/opencode`]: ['opencode.json'],
               },
               session: nativeSessionId ?? null,
               ioConfigHome,
+              compaction: compactionPath,
+              compactionConfigHome,
+              compactionSettings,
               exportPath,
               wipe: [`${home}/.local`, `${home}/.cache`],
               sessionInfoKeys: {
@@ -412,6 +459,19 @@ export function createOpencodeDriver(config: AgentDriverConfig): AgentDriver {
         throw badRequest('OpenCode requires an explicit reasoning profile before launch')
       const { llm, nativeSessionId } = validated(run.context)
       assertAttachments(turn.attachments)
+      if (turn.action === 'compact') {
+        if (!nativeSessionId) throw badRequest('A compaction needs a session to compact')
+        if (turn.attachments.length) throw badRequest('A compaction reads no files of the client')
+        stageFiles(run, [
+          { path: argumentsPath, content: JSON.stringify(serveArguments), mode: 0o600 },
+          {
+            path: compactionPath,
+            content: JSON.stringify({ providerID: provider, modelID: llm.model }),
+            mode: 0o600,
+          },
+        ])
+        return ['node', wrapper]
+      }
       // The label keeps a prompt that is only whitespace from being an empty message; the CLI
       // passes `-`, `/init` and `--help` from stdin to the model as they are.
       let prompt = `Client request:\n${turn.prompt}`

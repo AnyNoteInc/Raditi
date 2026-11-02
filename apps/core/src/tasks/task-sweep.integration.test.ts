@@ -21,6 +21,7 @@ import {
   toTurnPlan,
   type AgentDriver,
   type AgentEvent,
+  type TurnAction,
   type TurnEvidence,
 } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -783,9 +784,13 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
         sampleDriverId,
       )
 
-    async function closedTurn(phases: Array<[TurnEvidence['phase'], object?]>) {
+    async function closedTurn(
+      phases: Array<[TurnEvidence['phase'], object?]>,
+      action?: TurnAction,
+    ) {
       const created = await dialog('running', 1, undefined, { browser: true })
       const { taskId, task } = created
+      const plan = planOf(task)
       await db.turnAssignment.create({
         data: {
           taskId,
@@ -793,7 +798,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
           sessionId: taskId,
           turnNo: 1,
           executor: 'local',
-          plan: planOf(task),
+          plan: action ? { ...plan, input: { ...plan.input, action } } : plan,
           firstEpoch: 1,
           leaseEpoch: 2,
           deadlineAt: new Date(Date.now() + 60_000),
@@ -896,6 +901,30 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
       )
       const [row] = await db.taskEvent.findMany({ where: { taskId, type: 'feed.result' } })
       expect(row!.payload).toMatchObject({ next: 'awaiting_user', site: 'unchanged' })
+    })
+
+    it('ends a compaction that recovery finished by the line of the platform: its text is no result', async () => {
+      const events: AgentEvent[] = [
+        { type: 'started', nativeSessionId: 'native1' },
+        { type: 'message', text: 'Краткий пересказ для следующего хода' },
+        { type: 'completed' },
+      ]
+      const phases: Array<[TurnEvidence['phase'], object?]> = [
+        ['running'],
+        ['output', { cursor: { stdout: 10, stderr: 0 }, events }],
+        ['checkpointing'],
+        ['checkpoint_recovered'],
+      ]
+      const { taskId } = await closedTurn(phases, 'compact')
+
+      expect(await browserSweep({ verify: vi.fn(async () => false) }).settleOrphans()).toBe(1)
+
+      expect(await db.taskEvent.count({ where: { taskId, type: 'feed.failure' } })).toBe(0)
+      const [row] = await db.taskEvent.findMany({ where: { taskId, type: 'feed.result' } })
+      expect(row!.payload).toMatchObject({
+        message: 'Готово: переписка сжата. Агент продолжит с её кратким пересказом.',
+        next: 'awaiting_user',
+      })
     })
 
     it('cancels a waiting task whose reserve ran out, naming what it had saved', async () => {

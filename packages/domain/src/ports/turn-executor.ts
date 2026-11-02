@@ -19,6 +19,7 @@ import {
   agentDriverIds,
   nativeSessionIdSchema,
   SANDBOX_INBOX,
+  turnActions,
   type AgentDriverId,
   type AgentEvent,
   type PreparedFiles,
@@ -428,6 +429,7 @@ export const turnInputSchema = z
   .object({
     prompt: z.string().min(1).max(turnPlanLimits.prompt),
     attachments: z.array(turnInboxPathSchema).max(turnPlanLimits.attachments),
+    action: z.enum(turnActions).optional(),
   })
   .strict() satisfies z.ZodType<TurnInput>
 

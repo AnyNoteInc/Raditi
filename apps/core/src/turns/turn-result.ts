@@ -4,6 +4,7 @@ import {
   turnResultSchema,
   type AgentDriver,
   type AgentEvent,
+  type TurnAction,
   type TurnResult,
 } from '@repo/domain'
 
@@ -33,6 +34,20 @@ export function resultCandidate(message: string): string | undefined {
 }
 
 /**
+ * What a compaction ends with: the model wrote a summary for the next turn, not an answer to the
+ * client, so the platform says what happened. Nothing changed, and no file is named.
+ */
+const COMPACTED: TurnResult = {
+  summary: 'The session was compacted',
+  change_type: 'none',
+  client_message: 'Готово: переписка сжата. Агент продолжит с её кратким пересказом.',
+  files_changed: [],
+  questions: [],
+  needs_approval: false,
+  risk: 'low',
+}
+
+/**
  * The validated result of a turn whose agent finished — spec §8 «Итог хода». The driver reads its
  * final message first. A model whose CLI does not enforce the output schema tends to wrap the
  * object in a sentence or a code fence: that message is read once more through the driver, from
@@ -51,7 +66,12 @@ export function resultCandidate(message: string): string | undefined {
 export function readTurnResult(
   driver: Pick<AgentDriver, 'extractResult'>,
   events: readonly AgentEvent[],
+  action?: TurnAction,
 ): TurnResult {
+  if (action === 'compact') {
+    if (events.at(-1)?.type !== 'completed') throw turnOutputRejected('The compaction did not end')
+    return { ...COMPACTED }
+  }
   let parsed = turnResultSchema.safeParse(driver.extractResult(events, null))
   if (!parsed.success) {
     const last = events.findLast((event) => event.type === 'message')

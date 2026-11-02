@@ -28,6 +28,7 @@ import {
   type SandboxRuntime,
   type SnapshotReference,
   type TaskRequirements,
+  type TurnAction,
   type TurnCredentialPolicy,
   type TurnPlan,
   type TurnSkill,
@@ -99,6 +100,8 @@ export interface ClientRequest {
    * (`retry`, `command`).
    */
   text: string | null
+  /** What an `agent_command` asks of the turn itself instead of words (`/compact`). */
+  action?: TurnAction
   /** The command of a press (`cancel`, `reset`, `update`), or null. */
   command: string | null
   /** The ids of the files sent with these words. */
@@ -312,6 +315,9 @@ export function promptOf(
   }
   return kept.length > 0 ? kept.join('\n\n') : CONTINUE_PROMPT
 }
+
+/** A turn with an action reads no words, and a plan has them: no model is told this. */
+const ACTION_PROMPT = 'An action of the platform.'
 
 /** Where the pass starts: a first turn, a continuation, a replacement or a rebased start. */
 interface Start {
@@ -594,6 +600,24 @@ function browserPromptOf(
   return promptWith(facts, browserContextOf({ ...browser, attachments }, workspace), since)
 }
 
+/**
+ * The action of the pass, among the requests the session it restores has not seen. A retry or
+ * «Продолжить» after a compaction that did not end repeats it, for they say nothing of their own.
+ * Words among them, before or after the command, come first: no compaction would tell them to
+ * anyone, and the next turn would take them for seen. A pass that restores no session has nothing to
+ * shorten, and a new session is told only the client's words: it goes as words would
+ * (docs/plan/61-chats-first.md, §5.14).
+ */
+function actionOf(facts: PassFacts, start: Start | StartWithoutRepository): TurnAction | undefined {
+  if (!start.previous) return undefined
+  const { since } = start
+  const unseen = requestsNotUndone(facts).filter(
+    (request) => since === null || request.createdAt.getTime() > since.getTime(),
+  )
+  if (unseen.some((request) => request.text !== null)) return undefined
+  return unseen.findLast((request) => request.action !== undefined)?.action
+}
+
 /** The prompt of a pass with the code alone: the notes of the project are data, not rules (§5.7). */
 function codePromptOf(facts: PassFacts, since: Date | null): string {
   const notes = facts.agentNotes?.trim()
@@ -718,6 +742,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
     if (!started) return { kind: 'refused', code: 'technical' }
     start = started
   }
+  const action = actionOf(facts, start)
   const turn = task.turnNo + 1
   const sessionId = task.id
   const reasoningEffort = reasoningEffortByClass[task.modelClass]
@@ -725,7 +750,9 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
   // site (docs/plan/61, К16); a task on a site without a repository hands them to the browser
   // worker alone (Б26).
   const inbox =
-    workspace || !sited ? turnInboxOf(filesNotUndone(facts, facts.attachments ?? [])) : null
+    !action && (workspace || !sited)
+      ? turnInboxOf(filesNotUndone(facts, facts.attachments ?? []))
+      : null
   const inboxFacts = inbox?.paths.length
     ? { files: inbox.paths.length, omitted: inbox.omitted }
     : null
@@ -780,18 +807,20 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
       internet: true,
       ...(skills.length ? { skills: [...skills] } : {}),
     },
-    input: {
-      prompt: browser
-        ? browserPromptOf(
-            facts,
-            browser,
-            start.since,
-            workspace ? { inbox: inbox?.paths ?? [] } : null,
-          )
-        : codePromptOf(facts, start.since),
-      // Their paths only: core puts the files there when the sandbox is prepared.
-      attachments: inbox?.paths ?? [],
-    },
+    input: action
+      ? { prompt: ACTION_PROMPT, attachments: [], action }
+      : {
+          prompt: browser
+            ? browserPromptOf(
+                facts,
+                browser,
+                start.since,
+                workspace ? { inbox: inbox?.paths ?? [] } : null,
+              )
+            : codePromptOf(facts, start.since),
+          // Their paths only: core puts the files there when the sandbox is prepared.
+          attachments: inbox?.paths ?? [],
+        },
     driverVersion: env.driver.cliVersion,
     ...(workspace ? { workspace } : {}),
     // A plan of the repository alone keeps the shape it had before the requirements (Б3).

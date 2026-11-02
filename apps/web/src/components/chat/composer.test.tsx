@@ -84,6 +84,7 @@ describe('the window of commands', () => {
       expect.stringContaining('Обновить рабочую копию'),
       expect.stringContaining('Сбросить данные предпросмотра'),
       expect.stringContaining('Описать проект для агента'),
+      expect.stringContaining('Сжать переписку'),
       expect.stringContaining('Отменить последний запрос'),
       expect.stringContaining('Вернуть отменённый запрос'),
       expect.stringContaining('Отменить чат'),
@@ -100,7 +101,7 @@ describe('the window of commands', () => {
     expect(field().getAttribute('aria-activedescendant')).toBe(options[0]!.id)
     expect(options[0]!.getAttribute('aria-selected')).toBe('true')
     expect(screen.getByRole('status').textContent).toBe(
-      '16 команд. Стрелки вверх и вниз — выбор, Enter — выполнить, Escape — закрыть.',
+      '17 команд. Стрелки вверх и вниз — выбор, Enter — выполнить, Escape — закрыть.',
     )
     expect(onOpen).toHaveBeenCalledTimes(1)
   })
@@ -173,7 +174,7 @@ describe('the window of commands', () => {
     const button = screen.getByRole('button', { name: 'Команды' })
     fireEvent.click(button)
     expect(button.getAttribute('aria-expanded')).toBe('true')
-    expect(within(list()).getAllByRole('option')).toHaveLength(16)
+    expect(within(list()).getAllByRole('option')).toHaveLength(17)
     expect(list().getAttribute('tabindex')).toBe('0')
     await vi.waitFor(() => expect(document.activeElement).toBe(list()))
     press('End', list())
@@ -316,8 +317,21 @@ describe('the window of commands', () => {
     expect(screen.getByRole('alert').textContent).toBe('Отменять пока нечего.')
   })
 
-  it('says of a command whose slice has not come that it is unavailable, and sends nothing', () => {
-    const { onRun, onSend } = showComposer()
+  it('says of a command that is not listed that it is unavailable, and sends nothing', () => {
+    const onRun = vi.fn()
+    const onSend = vi.fn(async () => true)
+    render(
+      <Composer
+        placeholder="Что поправить?"
+        onSend={onSend}
+        disabledReason={null}
+        commands={{
+          verdicts: verdicts().filter((command) => command.id !== 'compact'),
+          onRun,
+          onOpen: vi.fn(),
+        }}
+      />,
+    )
     type('/compact')
     expect(screen.queryByRole('listbox')).toBeNull()
     press('Enter', field(), { ctrlKey: true })
@@ -331,13 +345,13 @@ describe('the window of commands', () => {
     type('/help')
     press('Enter')
     expect(field().value).toBe('')
-    expect(within(list()).getAllByRole('option')).toHaveLength(16)
+    expect(within(list()).getAllByRole('option')).toHaveLength(17)
     await vi.waitFor(() => expect(document.activeElement).toBe(list()))
     expect(onRun).not.toHaveBeenCalled()
     expect(onSend).not.toHaveBeenCalled()
     // Chosen from the list that is open already, it leaves it as it is.
     fireEvent.click(within(list()).getAllByRole('option').at(-1)!)
-    expect(within(list()).getAllByRole('option')).toHaveLength(16)
+    expect(within(list()).getAllByRole('option')).toHaveLength(17)
   })
 
   it('says aloud what a command of the page answers', () => {
@@ -553,6 +567,7 @@ describe('palette helpers', () => {
   it('lists on a new chat without the repository only what that chat will have (К27)', () => {
     const reason = 'Команды работают внутри чата.'
     expect(paletteOptions(null, [], reason, true)).toEqual([
+      { id: 'compact', available: false, reason },
       { id: 'turn_undo', available: false, reason },
       { id: 'turn_redo', available: false, reason },
       { id: 'cancel', available: false, reason },
@@ -574,10 +589,12 @@ describe('palette helpers', () => {
     ])
   })
 
-  it('has no row for a command whose slice has not come, with a verdict or without', () => {
+  it('finds `/compact` by its other word as well, as a command of a chat (К30)', () => {
     const reason = 'Команды работают внутри чата.'
     for (const typed of ['/compact', '/summarize'])
-      expect(paletteOptions(typed, [], reason)).toEqual([])
+      expect(paletteOptions(typed, [], reason)).toEqual([
+        { id: 'compact', available: false, reason },
+      ])
   })
 
   it('offers `/thinking` as a command of the page, with no verdict and no reason', () => {

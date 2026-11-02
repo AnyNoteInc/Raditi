@@ -29,6 +29,9 @@ export const LIVE_LIMITS = Object.freeze({
   content: Object.freeze({ requests: 30, minutes: 20 }),
   measure: Object.freeze({ requests: 40, minutes: 20 }),
   results: Object.freeze({ requests: 20, minutes: 10 }),
+  // The import and the probes of the account take four; a turn, the summary of `/compact` and a
+  // turn on it three; one is kept for the last reading of the quota, the rest for repeats.
+  compaction: Object.freeze({ requests: 10, minutes: 5 }),
 })
 /** Above these a run does not start: the checks must not take the plan's last capacity. */
 const WINDOW_START_LIMITS = Object.freeze({ '5h': 50, week: 80 })
@@ -43,8 +46,9 @@ export class LiveRefusal extends Error {
 /**
  * The options of a stand. `--live` is the real provider, `--rehearsal` the same flow on the
  * synthetic one; with either, `--measure` is the measurement of the gateway stand and
- * `--results` its narrow one, of the turn result alone, and `--api` the acceptance of the
- * gateway stand on the pay-per-token API instead of the plan (П15); `--keep=<directory>` writes
+ * `--results` its narrow one, of the turn result alone, `--compact` one session through `/compact`,
+ * and `--api` the acceptance of the gateway stand on the pay-per-token API instead of the plan
+ * (П15); `--keep=<directory>` writes
  * the exchanges the stand observed, for sanitize-samples.mjs.
  */
 export function standMode(argv, { stand }) {
@@ -52,6 +56,7 @@ export function standMode(argv, { stand }) {
     live: false,
     measure: false,
     results: false,
+    compact: false,
     api: false,
     rehearsal: false,
     noBuild: false,
@@ -81,6 +86,7 @@ const SWITCHES_OF_EVERY_STAND = new Map([
 const SWITCHES_OF_THE_GATEWAY = new Map([
   ['--measure', 'measure'],
   ['--results', 'results'],
+  ['--compact', 'compact'],
   ['--api', 'api'],
 ])
 
@@ -101,6 +107,8 @@ function refusedCombination(mode) {
     [mode.measure && !run, '--measure without --live'],
     [mode.results && !run, '--results without --live'],
     [mode.measure && mode.results, '--measure with --results'],
+    [mode.compact && !run, '--compact without --live'],
+    [mode.compact && (mode.measure || mode.results || mode.api), '--compact with another run'],
     [mode.api && !run, '--api without --live'],
     // The measurements count the credits of the plan's windows: the API has none.
     [mode.api && (mode.measure || mode.results), '--api with a measurement'],
@@ -812,6 +820,21 @@ export function chatRequestSummary(requestBody) {
   }
 }
 
+/** Everything the messages of a chat completions request say, as text; '' for a broken body. */
+export function requestMessagesText(requestBody) {
+  let body
+  try {
+    body = JSON.parse(requestBody)
+  } catch {
+    return ''
+  }
+  const parts = Array.isArray(body?.messages) ? body.messages : []
+  return parts
+    .flatMap((message) => (Array.isArray(message?.content) ? message.content : [message?.content]))
+    .map((part) => (typeof part === 'string' ? part : (part?.text ?? '')))
+    .join('\n')
+}
+
 /** The usage of a chat completions answer in the terms of the platform's accounting. */
 function usageOf(raw) {
   if (raw === null || typeof raw !== 'object') return null
@@ -869,6 +892,19 @@ export function streamSummary(responseText) {
   }
   summary.forms.push(...streamForms(summary, said))
   return summary
+}
+
+/** The text a stream said, in the words of the model. */
+export function streamContent(responseText) {
+  const words = []
+  for (const line of String(responseText).split('\n')) {
+    const data = streamData(line)
+    if (!data || data === STREAM_DONE) continue
+    const choices = Array.isArray(data.frame?.choices) ? data.frame.choices : []
+    for (const choice of choices)
+      if (typeof choice?.delta?.content === 'string') words.push(choice.delta.content)
+  }
+  return words.join('')
 }
 
 const STREAM_DONE = Symbol('done')

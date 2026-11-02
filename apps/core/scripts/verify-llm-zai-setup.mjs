@@ -212,7 +212,7 @@ export async function resetOpencodeHome(containerName, { keepSession = false } =
  */
 export async function prepareOpencodeTurn(
   { cli, control, driver, tools, instructions },
-  { turn, prompt, nativeSessionId, llm },
+  { turn, prompt, nativeSessionId, llm, action },
 ) {
   await resetOpencodeHome(cli.containerName, { keepSession: Boolean(nativeSessionId) })
   await control('mcp', { token: turn.values.mcpToken, tools })
@@ -226,7 +226,11 @@ export async function prepareOpencodeTurn(
     ...(nativeSessionId ? { nativeSessionId } : {}),
   }
   const prepared = await driver.prepare(context)
-  const argv = driver.command(prepared, { prompt, attachments: [] })
+  const argv = driver.command(prepared, {
+    prompt,
+    attachments: [],
+    ...(action ? { action } : {}),
+  })
   const files = preparedFilesSchema.parse({
     files: prepared.files,
     env: prepared.env,

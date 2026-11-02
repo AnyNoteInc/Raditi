@@ -995,7 +995,7 @@ model AgentDriver {
   /// Unread: every driver runs the shared SANDBOX_IMAGE pinned by digest (spec §8). The seed
   /// writes a placeholder until the B16 contract migration drops the column.
   image        String   @db.VarChar(512)
-  /// AgentCapabilities: resume, jsonEvents, outputSchema, mcp, images, reasoningEvents.
+  /// AgentCapabilities: resume, jsonEvents, outputSchema, mcp, images, reasoningEvents, compaction.
   capabilities Json
   enabled      Boolean  @default(false)
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)

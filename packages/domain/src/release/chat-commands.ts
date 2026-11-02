@@ -222,23 +222,6 @@ export const serverCommandIds = chatCommandIds.filter(
   (id): id is ServerCommandId => chatCommands[id].scope === 'server',
 )
 
-/**
- * Named here and not working yet (docs/plan/61-chats-first.md, §6: `/compact` — 61.24): no row in
- * the list and no verdict, and typed it is refused and never sent. The slice of a command takes it
- * off this list.
- */
-export const chatCommandsToCome = ['compact'] as const
-export type CommandToCome = (typeof chatCommandsToCome)[number]
-
-/** A command the server gives a verdict on today. */
-export type OfferedCommandId = Exclude<ServerCommandId, CommandToCome>
-export const isCommandToCome = (id: ChatCommandId): id is CommandToCome =>
-  (chatCommandsToCome as readonly ChatCommandId[]).includes(id)
-
-export const offeredCommandIds = serverCommandIds.filter(
-  (id): id is OfferedCommandId => !isCommandToCome(id),
-)
-
 /** What may be typed for a command. */
 const slashesOf = (id: ChatCommandId): readonly string[] => [
   chatCommands[id].slash,
@@ -328,6 +311,8 @@ export const chatCommandRefusals = [
   /** core is bringing a turn of this chat back (`candidate.rewind`). */
   'turn_redoing',
   'nothing_to_compact',
+  /** The driver has no compaction: the command is not listed, and typed it runs nothing. */
+  'no_compaction',
 ] as const
 export type ChatCommandRefusal = (typeof chatCommandRefusals)[number]
 
@@ -368,6 +353,7 @@ export const chatCommandRefusalText: Readonly<Record<ChatCommandRefusal, string>
   nothing_to_redo: 'Возвращать нечего.',
   turn_redoing: 'Подождите: отменённый запрос ещё возвращается.',
   nothing_to_compact: 'Сжимать пока нечего.',
+  no_compaction: 'Эта команда сейчас недоступна.',
 })
 
 export interface ChatCommandFacts {
@@ -426,6 +412,14 @@ export interface ChatCommandFacts {
   turnRedo: TurnRedoRefusal | null
   /** The same as `turnRewinding`, on the way back: core is bringing a turn of this chat back. */
   turnRedoing: boolean
+  /** The driver of the platform can compact a session (`AgentCapabilities.compaction`). */
+  compaction: boolean
+  /**
+   * Why `/compact` shortens nothing now, past the status of the chat; null — the session holds a
+   * turn that completed and stands, that turn was no compaction, and everything the client said
+   * reached it (docs/plan/61-chats-first.md, §5.14).
+   */
+  compactRefusal: CompactRefusal | null
 }
 
 /** The refusals of `/undo` the facts of its turn decide. */
@@ -436,6 +430,9 @@ export type TurnUndoRefusal = Extract<
 
 /** The refusal of `/redo` the facts of its turn decide. */
 export type TurnRedoRefusal = Extract<ChatCommandRefusal, 'nothing_to_redo'>
+
+/** The refusals of `/compact` the facts of its session decide. */
+export type CompactRefusal = Extract<ChatCommandRefusal, 'nothing_to_compact' | 'awaiting_answer'>
 
 /**
  * The latest installed release of the dialog (not an undo) and the site around it (docs/plan/53,
@@ -457,7 +454,7 @@ export interface UndoCommandFacts {
 }
 
 export interface ChatCommandAvailability {
-  id: OfferedCommandId
+  id: ServerCommandId
   available: boolean
   /** null when available. */
   refusal: ChatCommandRefusal | null
@@ -484,8 +481,10 @@ function undoRefusal(facts: ChatCommandFacts): ChatCommandRefusal | null {
   return facts.taskStatus === 'done' ? null : 'busy'
 }
 
-function refusalOf(id: OfferedCommandId, facts: ChatCommandFacts): ChatCommandRefusal | null {
+function refusalOf(id: ServerCommandId, facts: ChatCommandFacts): ChatCommandRefusal | null {
   const { taskStatus: status, candidate, preview } = facts
+  // Before everything else: the page drops this refusal alone, so no other may hang in the list.
+  if (id === 'compact' && !facts.compaction) return 'no_compaction'
   if (id === 'undo') return undoRefusal(facts)
   // Before the ended chat below: `/preview` of a chat that has ended is closed with its project.
   if (facts.projectClosed && id !== 'cancel') return 'project_closed'
@@ -524,6 +523,10 @@ function refusalOf(id: OfferedCommandId, facts: ChatCommandFacts): ChatCommandRe
       if (!facts.repository) return 'no_repository'
       if (facts.releaseInProgress || RELEASING.includes(status)) return 'release_in_progress'
       return BUSY.includes(status) ? 'busy' : null
+    // A pass as well, with the reserve of the next words; a failure of it costs nothing (К30).
+    case 'compact':
+      if (facts.releaseInProgress || RELEASING.includes(status)) return 'release_in_progress'
+      return BUSY.includes(status) ? 'busy' : facts.compactRefusal
     // No model and no money: only the work of the agent and a release stand in its way.
     case 'turn_undo':
       if (facts.releaseInProgress || RELEASING.includes(status)) return 'release_in_progress'
@@ -569,7 +572,7 @@ function previewRefusal(
 
 /** Every command of the server with its verdict, in the list's order. */
 export function chatCommandAvailability(facts: ChatCommandFacts): ChatCommandAvailability[] {
-  return offeredCommandIds.map((id) => {
+  return serverCommandIds.map((id) => {
     const refusal = refusalOf(id, facts)
     return { id, available: refusal === null, refusal }
   })

@@ -375,7 +375,7 @@ export const feedCommandIds = serverCommandIds.filter(
 export type FeedCommandId = (typeof feedCommandIds)[number]
 
 /** The commands that are a pass of the agent: `feed.request` of the kind `agent_command`. */
-export const feedAgentCommandIds = ['init'] as const satisfies readonly FeedCommandId[]
+export const feedAgentCommandIds = ['init', 'compact'] as const satisfies readonly FeedCommandId[]
 export type FeedAgentCommandId = (typeof feedAgentCommandIds)[number]
 
 const requestBase = {

@@ -40,9 +40,9 @@ import { verifyZaiApi } from './verify-llm-zai-api.mjs'
 if (process.argv.includes('--help')) {
   console.log(
     'verify:llm-gateway [--no-build]: disposable PostgreSQL/OpenBao, synthetic TLS providers and real pinned CLI containers. No real subscriptions or .env files.\n' +
-      'verify:llm-gateway --live [--measure | --results] [--no-build] [--keep=<directory>]: the same path to the real provider, with ZAI_API_KEY in the environment; never in CI.\n' +
+      'verify:llm-gateway --live [--measure | --results | --compact] [--no-build] [--keep=<directory>]: the same path to the real provider, with ZAI_API_KEY in the environment; never in CI.\n' +
       'verify:llm-gateway --live --api [--no-build] [--keep=<directory>]: the same on the pay-per-token API, with the same ZAI_API_KEY in the environment; never in CI.\n' +
-      'verify:llm-gateway --rehearsal [--api | --measure | --results] [--no-build]: the live flow on the synthetic provider.\n' +
+      'verify:llm-gateway --rehearsal [--api | --measure | --results | --compact] [--no-build]: the live flow on the synthetic provider.\n' +
       'infra/dev/llm-verify/README.md',
   )
   process.exit(0)

@@ -31,6 +31,8 @@ export interface AgentCapabilities {
   images: boolean
   /** Prints the model's reasoning as `reasoning` events. */
   reasoningEvents: boolean
+  /** Can replace the history of a native session with a summary: `TurnInput.action`. */
+  compaction: boolean
 }
 
 /** Fixed paths: a CLI may bind its session to the path of the working directory. */
@@ -236,7 +238,15 @@ export interface TurnInput {
   prompt: string
   /** Client files already placed under SANDBOX_INBOX. */
   attachments: string[]
+  /**
+   * What the turn does instead of answering `prompt`: `compact` replaces the history of the
+   * session it resumes with a summary. No tool runs and no result of the model is read.
+   */
+  action?: TurnAction
 }
+
+export const turnActions = ['compact'] as const
+export type TurnAction = (typeof turnActions)[number]
 
 /**
  * Where the driver keeps its native session; packed into home.tar.zst after each turn.

@@ -66,6 +66,7 @@ const calls = vi.hoisted(() => ({
     vi.fn<(input: { taskId: string; releaseId: string }) => Promise<{ planId: string }>>(),
   resumeAgent: vi.fn<(input: Press) => Promise<Posted>>(),
   init: vi.fn<(input: Press) => Promise<Posted>>(),
+  compact: vi.fn<(input: Press) => Promise<Posted>>(),
   undoTurn: vi.fn<(input: Press) => Promise<Posted & { words: string | null }>>(),
   redoTurn: vi.fn<(input: Press) => Promise<Posted & { words: string | null }>>(),
   agentNotes:
@@ -146,6 +147,7 @@ vi.mock('@/trpc/client', () => ({
       cancel: mutation(calls.cancel),
       resumeAgent: mutation(calls.resumeAgent),
       init: mutation(calls.init),
+      compact: mutation(calls.compact),
       undoTurn: mutation(calls.undoTurn),
       redoTurn: mutation(calls.redoTurn),
       setEffort: mutation(calls.setEffort),
@@ -774,6 +776,25 @@ describe('a dialog', () => {
       expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:chat')
       await screen.findByText('Переписка сохранена')
       click.mockRestore()
+    })
+
+    // docs/plan/61-chats-first.md, К30, §5.14.
+    describe('`/compact`', () => {
+      it('asks the server to run it', async () => {
+        calls.compact.mockResolvedValue(posted)
+        showDialog()
+        await run(/Сжать переписку/)
+        await waitFor(() => expect(calls.compact).toHaveBeenCalledTimes(1))
+        expect(calls.compact.mock.calls[0]![0].taskId).toBe(TASK_ID)
+      })
+
+      it('lists no such command when the driver has none: closed, it would only hang there', async () => {
+        showDialog(waiting({ commands: verdicts({ compact: 'no_compaction' }) }))
+        await screen.findByText('Изменения готовы')
+        fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+        const list = within(screen.getByRole('listbox', { name: 'Команды' }))
+        expect(list.queryByRole('option', { name: /Сжать переписку/ })).toBeNull()
+      })
     })
 
     // docs/plan/61-chats-first.md, К31.
@@ -1702,6 +1723,7 @@ describe('the five kinds of a chat (docs/plan/61-chats-first.md, §5.6)', () => 
   const NEITHER = { repository: false, browser: false }
   /** What a chat without the repository lists: no group «Сайт», no `/retry` (К27). */
   const WITHOUT_REPOSITORY = [
+    /^\/compactСжать переписку/u,
     /^\/undoОтменить последний запросНедоступна/u,
     /^\/redoВернуть отменённый запросНедоступна/u,
     /^\/cancelОтменить чат/u,

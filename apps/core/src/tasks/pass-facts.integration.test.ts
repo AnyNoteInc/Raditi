@@ -45,6 +45,7 @@ const driver = {
     mcp: true,
     images: false,
     reasoningEvents: false,
+    compaction: false,
   },
   prepare: () => {
     throw new Error('not called by the plan')
@@ -167,11 +168,12 @@ describe.skipIf(!databaseUrl)('the egress of a pass with PostgreSQL', () => {
   })
 
   // docs/plan/53, «Попробовать ещё (18.10)»: a turn whose pass ended in a failure is replaced.
-  it('reads `/init` as the words of the platform, and a press as no words (docs/plan/61, §5.2)', async () => {
+  it('reads `/init` as the words of the platform, `/compact` as an action, a press as no words (§5.2)', async () => {
     const { task, userId, facts } = await dialog()
     const base = { v: 1 as const, authorId: userId }
     for (const payload of [
       { ...base, kind: 'agent_command' as const, command: 'init' as const },
+      { ...base, kind: 'agent_command' as const, command: 'compact' as const },
       { ...base, kind: 'command' as const, command: 'reset' as const },
     ])
       await insertFeedEvent(db, {
@@ -180,10 +182,13 @@ describe.skipIf(!databaseUrl)('the egress of a pass with PostgreSQL', () => {
       })
 
     const read = await facts()
-    expect(read?.requests.map(({ kind, text, command }) => ({ kind, text, command }))).toEqual([
-      { kind: 'first', text: 'Подключите оплату', command: null },
-      { kind: 'agent_command', text: INIT_PROMPT, command: null },
-      { kind: 'command', text: null, command: 'reset' },
+    expect(
+      read?.requests.map(({ kind, text, action, command }) => ({ kind, text, action, command })),
+    ).toEqual([
+      { kind: 'first', text: 'Подключите оплату', action: undefined, command: null },
+      { kind: 'agent_command', text: INIT_PROMPT, action: undefined, command: null },
+      { kind: 'agent_command', text: null, action: 'compact', command: null },
+      { kind: 'command', text: null, action: undefined, command: 'reset' },
     ])
   })
 

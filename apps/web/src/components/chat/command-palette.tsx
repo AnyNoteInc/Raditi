@@ -5,7 +5,6 @@ import {
   chatCommandIds,
   chatCommandRefusalText,
   chatCommands,
-  isCommandToCome,
   matchChatCommands,
   type ChatCommandGroup,
   type ChatCommandId,
@@ -53,7 +52,6 @@ export function paletteOptions(
 ): PaletteOption[] {
   const ids = typed === null ? [...chatCommandIds] : matchChatCommands(typed)
   return ids.flatMap((id) => {
-    if (isCommandToCome(id)) return []
     const command = chatCommands[id]
     if (command.scope === 'client') {
       const closed = closedReason !== undefined && command.needs === 'session'

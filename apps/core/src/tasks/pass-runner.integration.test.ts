@@ -66,6 +66,7 @@ const driver = {
     mcp: true,
     images: false,
     reasoningEvents: false,
+    compaction: false,
   },
   prepare: vi.fn(),
   command: vi.fn(),
@@ -525,6 +526,277 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         ).toBe(0)
         const holds = await db.creditHold.findMany({ where: { taskId: dialog.taskId } })
         expect(holds.some((hold) => hold.status === 'captured')).toBe(false)
+      })
+    })
+
+    // docs/plan/61-chats-first.md, К30, §5.14: a pass of its own over the session of the last turn.
+    describe('of `/compact`', () => {
+      const answer = {
+        summary: 'Ответил',
+        change_type: 'none',
+        client_message: 'Готово.',
+        files_changed: [],
+        questions: [],
+        needs_approval: false,
+        risk: 'low',
+      }
+      /** A chat whose first pass completed, with the plan a compaction restores its session by. */
+      async function answered(status: 'awaiting_user' | 'awaiting_approval' = 'awaiting_user') {
+        await rate()
+        const dialog = await queued({ reserve: true })
+        await runner(async (request) => {
+          await db.task.update({
+            where: { id: dialog.taskId },
+            data: { status: 'running', turnNo: 1 },
+          })
+          const row = await db.taskEvent.findFirstOrThrow({
+            where: { taskId: dialog.taskId },
+            orderBy: { id: 'desc' },
+            select: { createdAt: true },
+          })
+          const startedAt = new Date(row.createdAt.getTime() + 1)
+          await db.taskTurn.create({
+            data: {
+              taskId: dialog.taskId,
+              turnNo: 1,
+              status: 'completed',
+              driverId: sampleDriverId,
+              image,
+              headSha: HEAD,
+              nativeSessionId: 'ses_0001',
+              startedAt,
+              finishedAt: startedAt,
+            },
+          })
+          await db.turnAssignment.create({
+            data: {
+              taskId: dialog.taskId,
+              siteId: siteIdOf(dialog),
+              sessionId: dialog.taskId,
+              turnNo: 1,
+              executor: 'local',
+              plan: toTurnPlan(request, sampleDriverId) as never,
+              firstEpoch: 1,
+              leaseEpoch: 1,
+              deadlineAt: new Date(startedAt.getTime() + 60_000),
+              outcome: 'completed',
+              finishedAt: startedAt,
+            },
+          })
+          return { result: answer, manifest: { git: { headSha: HEAD } } as SnapshotManifest }
+        }).passes.run(dialog.job)
+        const { workspaceId } = await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })
+        await db.task.update({ where: { id: dialog.taskId }, data: { status, attempt: 2 } })
+        await fixtures.reserve({
+          workspaceId,
+          taskId: dialog.taskId,
+          attempt: 2,
+          follows: 'message',
+          now: NOW,
+          expiresAt: new Date(NOW.getTime() + 3_600_000),
+        })
+        vi.mocked(git.readBranchHead).mockImplementation(async () => HEAD)
+        return dialog
+      }
+      /** `/compact` as `task.compact` writes it, and the job of its pass. */
+      async function compact(dialog: Awaited<ReturnType<typeof queued>>) {
+        await db.task.update({ where: { id: dialog.taskId }, data: { status: 'queued' } })
+        const requestEventId = await insertFeedEvent(db, {
+          taskId: dialog.taskId,
+          row: {
+            type: 'feed.request',
+            payload: {
+              v: 1,
+              kind: 'agent_command',
+              command: 'compact',
+              authorId: dialog.userId,
+              requestId: randomUUID(),
+            },
+          },
+        })
+        return { taskId: dialog.taskId, attempt: 2, requestEventId: requestEventId.toString() }
+      }
+      /** What the supervisor leaves of a compaction: its turn and the fixed line of the platform. */
+      const compacts =
+        (taskId: string, headSha = HEAD) =>
+        async () => {
+          await db.task.update({ where: { id: taskId }, data: { status: 'running', turnNo: 2 } })
+          await db.taskTurn.create({
+            data: {
+              taskId,
+              turnNo: 2,
+              status: 'completed',
+              driverId: sampleDriverId,
+              image,
+              headSha,
+              nativeSessionId: 'ses_0001',
+            },
+          })
+          return {
+            result: { ...answer, client_message: 'Готово: переписка сжата.' },
+            manifest: { git: { headSha } } as SnapshotManifest,
+          }
+        }
+      const holdsOf = (taskId: string, attempt: number) =>
+        db.creditHold.findMany({ where: { taskId, attempt } })
+
+      it('runs the action over the session of the last turn and charges it like any pass', async () => {
+        const dialog = await answered()
+        const job = await compact(dialog)
+        const pool = await fixtures.modelPool()
+        const price = await fixtures.modelPrice(pool, {
+          effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+        })
+        const finished = compacts(dialog.taskId)
+        const run = vi.fn<Run>(async () => {
+          const completed = await finished()
+          // The summary went through the gateway like any call: its tokens are what is charged.
+          await fixtures.modelCall({
+            taskId: dialog.taskId,
+            pool,
+            priceId: price.id,
+            costRub: '12.00',
+            occurredAt: NOW,
+            attempt: 2,
+            turnNo: 2,
+          })
+          return completed
+        })
+
+        await runner(run).passes.run(job)
+
+        const [request] = run.mock.calls[0]!
+        expect(request.input.action).toBe('compact')
+        expect(request.input.attachments).toEqual([])
+        expect(request.input.prompt).not.toContain('Поменяйте телефон')
+        expect(request.previous?.turn).toBe(1)
+        const [row] = await db.taskEvent.findMany({
+          where: { taskId: dialog.taskId, type: 'feed.result' },
+          orderBy: { id: 'desc' },
+          take: 1,
+        })
+        expect(row?.payload).toMatchObject({
+          turn: 2,
+          message: 'Готово: переписка сжата.',
+          next: 'awaiting_user',
+        })
+        const holds = await holdsOf(dialog.taskId, 2)
+        expect(holds.reduce((sum, hold) => sum + Number(hold.charged ?? 0), 0)).toBeGreaterThan(0)
+        expect(holds.some((hold) => hold.status === 'active')).toBe(false)
+      })
+
+      it('costs nothing when it fails: the reserve goes back and the chat stays open', async () => {
+        const dialog = await answered()
+        const job = await compact(dialog)
+        const charges = () =>
+          db.creditLedger.count({
+            where: { taskId: dialog.taskId, idempotencyKey: { contains: ':charge:' } },
+          })
+        const charged = await charges()
+
+        await runner(async () => {
+          await db.task.update({
+            where: { id: dialog.taskId },
+            data: { status: 'running', turnNo: 2 },
+          })
+          await db.taskTurn.create({
+            data: {
+              taskId: dialog.taskId,
+              turnNo: 2,
+              status: 'failed',
+              driverId: sampleDriverId,
+              image,
+            },
+          })
+          throw new Error('the provider refused')
+        }).passes.run(job)
+
+        expect(await failure(dialog.taskId)).toEqual([
+          expect.objectContaining({
+            turn: 2,
+            code: 'technical',
+            credits: 'returned',
+            next: 'awaiting_user',
+          }),
+        ])
+        expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
+          status: 'awaiting_user',
+        })
+        const holds = await holdsOf(dialog.taskId, 2)
+        expect(holds.length).toBeGreaterThan(0)
+        expect(holds.every((hold) => hold.status === 'released')).toBe(true)
+        expect(await charges()).toBe(charged)
+      })
+
+      it('leaves the candidate where it stands: the chat waits for the release with the same one', async () => {
+        const dialog = await answered('awaiting_approval')
+        const candidate = await db.taskCandidate.create({
+          data: {
+            taskId: dialog.taskId,
+            revision: 1,
+            turnNo: 1,
+            baseSha: MAIN,
+            baseTree: 'd'.repeat(40),
+            headSha: HEAD,
+            dbPlanSha256: '0'.repeat(64),
+            proposedBump: 'minor',
+            proposedVersion: 'v0.1.0',
+            facts: {
+              changeType: 'code',
+              risk: 'low',
+              addedFiles: 0,
+              modifiedFiles: 1,
+              deletedFiles: 0,
+              mediaFiles: 0,
+              dbObjects: 0,
+              newFunctionality: false,
+            },
+          },
+        })
+        const job = await compact(dialog)
+        vi.mocked(candidates.build).mockImplementationOnce(
+          async () => ({ kind: 'unchanged' }) as never,
+        )
+        const run = vi.fn<Run>(compacts(dialog.taskId))
+
+        await runner(run).passes.run(job)
+
+        expect(run.mock.calls[0]![0].input.action).toBe('compact')
+        expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
+          status: 'awaiting_approval',
+        })
+        expect(
+          await db.taskCandidate.findMany({
+            where: { taskId: dialog.taskId },
+            select: { id: true, revision: true, status: true },
+          }),
+        ).toEqual([{ id: candidate.id, revision: 1, status: 'current' }])
+      })
+
+      it('answers words that never reached the session instead: no summary would tell them', async () => {
+        const dialog = await answered()
+        await insertFeedEvent(db, {
+          taskId: dialog.taskId,
+          row: {
+            type: 'feed.request',
+            payload: {
+              v: 1,
+              kind: 'revision',
+              text: 'И логотип',
+              candidateRevision: 1,
+              authorId: dialog.userId,
+              requestId: randomUUID(),
+            },
+          },
+        })
+        const job = await compact(dialog)
+        const run = vi.fn<Run>(compacts(dialog.taskId))
+
+        await runner(run).passes.run(job)
+
+        const [request] = run.mock.calls[0]!
+        expect(request.input).not.toHaveProperty('action')
+        expect(request.input.prompt).toContain('И логотип')
       })
     })
 

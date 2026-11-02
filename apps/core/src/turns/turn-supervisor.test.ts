@@ -290,6 +290,7 @@ function turnFixture(kind: string) {
       mcp: false,
       images: false,
       reasoningEvents: false,
+      compaction: false,
     },
     prepare: vi.fn(async (context) => {
       order.push('prepare')
@@ -646,6 +647,16 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     })
     expect(f.leases.acquire).not.toHaveBeenCalled()
     expect(rollback).not.toHaveBeenCalled()
+  })
+
+  it('refuses an action of a turn without a checkpoint before taking a lease', async () => {
+    const f = fixture()
+    f.request.input = { ...f.request.input, attachments: [], action: 'compact' }
+    await expect(f.run()).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'An action of a turn needs the checkpoint of an earlier turn',
+    })
+    expect(f.leases.acquire).not.toHaveBeenCalled()
   })
 
   it('rejects replacement without an undo dependency before taking a lease', async () => {
@@ -1239,6 +1250,32 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     }
     return { prior, transit, reference }
   }
+
+  it('carries out an action over the restored session: no words of the model are its result', async () => {
+    const f = fixture()
+    const { reference } = await checkpointOfTurnOne(f)
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+    f.request.context = { ...f.request.context, turn: 2 }
+    f.request.previous = reference
+    f.request.input = { ...f.request.input, attachments: [], action: 'compact' }
+    // As the driver does: an action has no meaning without the session it acts on.
+    vi.mocked(f.driver.command).mockImplementation((run) => {
+      if (!run.context.nativeSessionId) throw new Error('An action needs a session')
+      return ['synthetic-agent']
+    })
+    vi.mocked(f.driver.extractResult).mockReturnValue(null)
+
+    const { result: ended } = await f.run()
+
+    expect(ended).toMatchObject({ change_type: 'none', files_changed: [], questions: [] })
+    expect(ended.client_message).toBe(
+      'Готово: переписка сжата. Агент продолжит с её кратким пересказом.',
+    )
+    expect(f.driver.prepare).toHaveBeenLastCalledWith(
+      expect.objectContaining({ nativeSessionId: 'prior-native' }),
+    )
+    expect(vi.mocked(f.driver.command).mock.calls.at(-1)![1].action).toBe('compact')
+  })
 
   it('restores turn n−1 through presigned GETs before installing the new turn secrets', async () => {
     const f = fixture()

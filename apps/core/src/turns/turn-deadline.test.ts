@@ -97,6 +97,7 @@ const driver: AgentDriver = {
     mcp: false,
     images: false,
     reasoningEvents: false,
+    compaction: false,
   },
   prepare: async (context) => ({
     context: { ...context },

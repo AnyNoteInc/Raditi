@@ -8,6 +8,7 @@ import {
 } from '@repo/billing'
 import { settleTaskCharge, underPrivateCreditRate } from '@repo/billing/testing'
 import {
+  clearBrowserHelp,
   closeBrowserSession,
   createAttachment,
   createPrismaClient,
@@ -33,13 +34,14 @@ import {
   type ModelClass,
   type ObjectStorage,
   type SecretStore,
+  type ChatCommandFacts,
 } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { createCaller } from '../router.ts'
 import { readCheckScreenshot } from '../services/chat/candidates.ts'
 import { releaseConfirmKey, type ChatContext } from '../services/chat/context.ts'
-import { dialogFacts } from '../services/chat/dialog-facts.ts'
+import { commandRefusal, dialogFacts } from '../services/chat/dialog-facts.ts'
 import { dialogPageQuery } from '../services/chat/dialog-list.ts'
 import { lastQuestion, wordsOfTurn } from '../services/chat/dialog-state.ts'
 import { signConfirmToken } from '../services/chat/releases.ts'
@@ -3131,6 +3133,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         reset: 'preview_not_ready',
         update: 'up_to_date',
         init: null,
+        compact: 'nothing_to_compact',
         retry: 'nothing_to_retry',
         cancel: null,
         undo: 'no_release',
@@ -4338,6 +4341,350 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       db.$transaction((tx) => settleTaskCharge(tx, { taskId, credits: 5, now: new Date() }), {
         isolationLevel: 'ReadCommitted',
       })
+
+    describe('`/compact` (docs/plan/61-chats-first.md, К30, §5.14)', () => {
+      /** What core leaves of a completed pass: a turn with a session, its row and its charge. */
+      async function finishedChat(caller: ReturnType<typeof callerOf>) {
+        const taskId = await newChat(caller)
+        await db.$transaction(async (tx) => {
+          const words = await tx.taskEvent.findFirst({
+            where: { taskId },
+            orderBy: { id: 'desc' },
+            select: { createdAt: true },
+          })
+          const startedAt = new Date(Math.max(Date.now(), (words?.createdAt.getTime() ?? 0) + 1))
+          await tx.taskTurn.create({
+            data: {
+              taskId,
+              turnNo: 1,
+              status: 'completed',
+              driverId: 'opencode',
+              image: 'synthetic/agent:test',
+              nativeSessionId: 'ses_0001',
+              startedAt,
+              finishedAt: startedAt,
+            },
+          })
+          await tx.task.update({
+            where: { id: taskId },
+            data: { status: 'awaiting_user', turnNo: 1 },
+          })
+          await insertFeedEvent(tx, {
+            taskId,
+            row: {
+              type: 'feed.result',
+              payload: {
+                v: 1,
+                turn: 1,
+                message: 'Готово.',
+                site: 'none',
+                next: 'awaiting_user',
+                filesChanged: 0,
+                changeType: 'none',
+                needsApproval: false,
+                risk: 'low',
+              },
+            },
+          })
+        })
+        await db.$transaction(
+          (tx) => settleTaskCharge(tx, { taskId, credits: 5, now: new Date() }),
+          { isolationLevel: 'ReadCommitted' },
+        )
+        return taskId
+      }
+      const verdictOf = async (caller: ReturnType<typeof callerOf>, taskId: string) =>
+        (await caller.task.commands({ taskId })).find((item) => item.id === 'compact')?.refusal
+
+      it('writes the command and puts a paid pass, like the next words', async () => {
+        const caller = callerOf(await person())
+        const taskId = await finishedChat(caller)
+        expect(await verdictOf(caller, taskId)).toBeNull()
+        const requestId = randomUUID()
+
+        const posted = await caller.task.compact({ taskId, requestId })
+
+        expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
+          status: 'queued',
+          attempt: 2,
+        })
+        expect((await activeHolds(taskId)).map((hold) => hold.attempt)).toContain(2)
+        expect((await feedOf(taskId)).at(-1)).toMatchObject({
+          id: BigInt(posted.requestEventId),
+          payload: { kind: 'agent_command', command: 'compact', requestId },
+        })
+        expect((await outboxOf(taskId)).map((row) => row.dedupeKey)).toContain(
+          `turn.run:${taskId}:2:${posted.requestEventId}`,
+        )
+        expect(await caller.task.compact({ taskId, requestId })).toEqual({
+          ...posted,
+          repeated: true,
+        })
+      })
+
+      it('has nothing to compact before a turn ended, or in a session that does not stand', async () => {
+        const caller = callerOf(await person())
+        const fresh = await newChat(caller)
+        const rows = (await feedOf(fresh)).length
+        await expect(
+          caller.task.compact({ taskId: fresh, requestId: randomUUID() }),
+        ).rejects.toMatchObject({
+          cause: { code: 'CHAT_COMMAND_UNAVAILABLE', details: { refusal: 'busy' } },
+        })
+        expect(await feedOf(fresh)).toHaveLength(rows)
+
+        const other = callerOf(await person())
+        const taskId = await finishedChat(other)
+        const change = (data: object) => db.taskTurn.updateMany({ where: { taskId }, data })
+        await change({ status: 'failed' })
+        expect(await verdictOf(other, taskId)).toBe('nothing_to_compact')
+        await change({ status: 'completed', rejectedAt: new Date() })
+        expect(await verdictOf(other, taskId)).toBe('nothing_to_compact')
+        await change({ rejectedAt: null, undoneAt: new Date() })
+        expect(await verdictOf(other, taskId)).toBe('nothing_to_compact')
+        await change({ undoneAt: null, nativeSessionId: null })
+        expect(await verdictOf(other, taskId)).toBe('nothing_to_compact')
+        await change({ nativeSessionId: 'ses_0001' })
+        expect(await verdictOf(other, taskId)).toBeNull()
+      })
+
+      /** The turn `turnNo` as core leaves it, finished after every row of the feed so far. */
+      async function turnEnded(
+        taskId: string,
+        turnNo: number,
+        options: { compaction?: boolean } = {},
+      ) {
+        const newest = await db.taskEvent.findFirst({
+          where: { taskId },
+          orderBy: { id: 'desc' },
+          select: { createdAt: true },
+        })
+        const startedAt = new Date(Math.max(Date.now(), newest!.createdAt.getTime() + 1))
+        const { siteId } = await db.task.findUniqueOrThrow({ where: { id: taskId } })
+        await db.taskTurn.create({
+          data: {
+            taskId,
+            turnNo,
+            status: 'completed',
+            driverId: 'opencode',
+            image: 'synthetic/agent:test',
+            nativeSessionId: 'ses_0001',
+            startedAt,
+            finishedAt: startedAt,
+          },
+        })
+        await db.turnAssignment.create({
+          data: {
+            taskId,
+            siteId: siteId ?? taskId,
+            sessionId: 'synthetic-session',
+            turnNo,
+            executor: 'local',
+            plan: { input: options.compaction ? { action: 'compact' } : {} },
+            firstEpoch: 1,
+            leaseEpoch: 1,
+            deadlineAt: new Date(startedAt.getTime() + 60_000),
+            outcome: 'completed',
+            finishedAt: startedAt,
+          },
+        })
+        await db.task.update({ where: { id: taskId }, data: { status: 'awaiting_user', turnNo } })
+        await db.$transaction((tx) =>
+          insertFeedEvent(tx, {
+            taskId,
+            row: {
+              type: 'feed.result',
+              payload: {
+                v: 1,
+                turn: turnNo,
+                message: 'Готово.',
+                site: 'none',
+                next: 'awaiting_user',
+                filesChanged: 0,
+                changeType: 'none',
+                needsApproval: false,
+                risk: 'low',
+              },
+            },
+          }),
+        )
+      }
+      /** A row of the client whose pass ended before it opened a turn. */
+      async function unanswered(taskId: string, payload: Record<string, unknown>) {
+        await db.$transaction((tx) =>
+          insertFeedEvent(tx, {
+            taskId,
+            row: {
+              type: 'feed.request',
+              payload: {
+                v: 1,
+                authorId: randomUUID(),
+                requestId: randomUUID(),
+                ...payload,
+              } as never,
+            },
+          }),
+        )
+        await db.task.update({ where: { id: taskId }, data: { status: 'awaiting_user' } })
+      }
+
+      it('does not pay for the summary of a summary: words must come between', async () => {
+        const caller = callerOf(await person())
+        const taskId = await finishedChat(caller)
+        await caller.task.compact({ taskId, requestId: randomUUID() })
+        await db.task.update({ where: { id: taskId }, data: { status: 'running' } })
+        expect(await verdictOf(caller, taskId)).toBe('busy')
+        await turnEnded(taskId, 2, { compaction: true })
+        expect(await verdictOf(caller, taskId)).toBe('nothing_to_compact')
+
+        await caller.task.message({ taskId, requestId: randomUUID(), text: 'И логотип' })
+        await db.task.update({ where: { id: taskId }, data: { status: 'running' } })
+        await turnEnded(taskId, 3)
+        expect(await verdictOf(caller, taskId)).toBeNull()
+      })
+
+      it('does not pay for it after a compaction that a retry or «Продолжить» carried out', async () => {
+        for (const press of [{ kind: 'retry' }, { kind: 'continue', questionEventId: '1' }]) {
+          const caller = callerOf(await person())
+          const taskId = await finishedChat(caller)
+          await caller.task.compact({ taskId, requestId: randomUUID() })
+          await unanswered(taskId, press)
+          await turnEnded(taskId, 2, { compaction: true })
+          expect(await verdictOf(caller, taskId)).toBe('nothing_to_compact')
+        }
+      })
+
+      it('takes it again when a compaction ended before it opened a turn: nothing was shortened', async () => {
+        const caller = callerOf(await person())
+        const taskId = await finishedChat(caller)
+        await caller.task.compact({ taskId, requestId: randomUUID() })
+        await db.task.update({ where: { id: taskId }, data: { status: 'awaiting_user' } })
+        expect(await verdictOf(caller, taskId)).toBeNull()
+        await unanswered(taskId, { kind: 'retry' })
+        expect(await verdictOf(caller, taskId)).toBeNull()
+      })
+
+      it('refuses it while words the session never saw lie in the chat: they would be lost', async () => {
+        const caller = callerOf(await person())
+        const taskId = await finishedChat(caller)
+        await caller.task.message({ taskId, requestId: randomUUID(), text: 'И логотип' })
+        await db.task.update({ where: { id: taskId }, data: { status: 'awaiting_user' } })
+        expect(await verdictOf(caller, taskId)).toBe('nothing_to_compact')
+        const rows = (await feedOf(taskId)).length
+        await expect(
+          caller.task.compact({ taskId, requestId: randomUUID() }),
+        ).rejects.toMatchObject({
+          cause: { code: 'CHAT_COMMAND_UNAVAILABLE', details: { refusal: 'nothing_to_compact' } },
+        })
+        expect(await feedOf(taskId)).toHaveLength(rows)
+      })
+
+      it('counts an `/init` that opened no turn as words: it has not reached the session', async () => {
+        const caller = callerOf(await person())
+        const taskId = await finishedChat(caller)
+        await unanswered(taskId, { kind: 'agent_command', command: 'init' })
+        expect(await verdictOf(caller, taskId)).toBe('nothing_to_compact')
+      })
+
+      it('asks first for the answer to a question about credits, as `/undo` does', async () => {
+        const caller = callerOf(await person())
+        const taskId = await finishedChat(caller)
+        await asked(taskId, { kind: 'ceiling', reason: 'credits', spent: 5, held: 5, left: 0 })
+        expect(await verdictOf(caller, taskId)).toBe('awaiting_answer')
+        await expect(
+          caller.task.compact({ taskId, requestId: randomUUID() }),
+        ).rejects.toMatchObject({
+          cause: { code: 'CHAT_COMMAND_UNAVAILABLE', details: { refusal: 'awaiting_answer' } },
+        })
+      })
+
+      it('leaves the browser with the client while the agent waits for them in it', async () => {
+        const { owner, workspaceId, site } = await siteOwner()
+        const caller = callerOf(owner)
+        const { id: taskId } = await db.task.create({
+          data: {
+            workspaceId,
+            siteId: site.id,
+            needsRepository: false,
+            needsBrowser: true,
+            status: 'awaiting_user',
+          },
+        })
+        taskIds.push(taskId)
+        await unanswered(taskId, { kind: 'first', text: 'Добавьте новость' })
+        await turnEnded(taskId, 1)
+        const session = await openBrowserSession(db, { taskId })
+        await recordBrowserHelp(db, {
+          sessionId: session.id,
+          reason: 'login',
+          message: 'Войдите в админку сайта',
+        })
+        expect(await verdictOf(caller, taskId)).toBe('awaiting_answer')
+        await clearBrowserHelp(db, { sessionId: session.id })
+        expect(await verdictOf(caller, taskId)).toBeNull()
+      })
+
+      describe('in a chat with the repository', () => {
+        /** A chat of a site whose last turn stands on `head`, with a candidate on `candidate`. */
+        async function siteChat(head: string, candidate: string) {
+          const { owner, site } = await siteOwner()
+          const caller = callerOf(owner)
+          const { taskId } = await newDialog(caller, site.id)
+          await turnEnded(taskId, 1)
+          await db.taskTurn.updateMany({ where: { taskId }, data: { headSha: head } })
+          await db.taskCandidate.create({
+            data: {
+              taskId,
+              revision: 1,
+              turnNo: 1,
+              baseSha: 'a'.repeat(40),
+              baseTree: 'd'.repeat(40),
+              headSha: candidate,
+              dbPlanSha256: '0'.repeat(64),
+              proposedBump: 'minor',
+              proposedVersion: 'v0.1.0',
+              facts: {},
+            },
+          })
+          await db.task.update({ where: { id: taskId }, data: { status: 'awaiting_approval' } })
+          return { caller, taskId }
+        }
+
+        it('takes it while the candidate stands on the last turn', async () => {
+          const { caller, taskId } = await siteChat('b'.repeat(40), 'b'.repeat(40))
+          expect(await verdictOf(caller, taskId)).toBeNull()
+        })
+
+        it('has nothing to compact once «Обновить» moved the candidate: a new session is next', async () => {
+          const { caller, taskId } = await siteChat('b'.repeat(40), 'c'.repeat(40))
+          expect(await verdictOf(caller, taskId)).toBe('nothing_to_compact')
+        })
+
+        it('has nothing to compact from the press of «Обновить»: the session may be going', async () => {
+          const { caller, taskId } = await siteChat('b'.repeat(40), 'b'.repeat(40))
+          await unanswered(taskId, { kind: 'command', command: 'update' })
+          await db.task.update({ where: { id: taskId }, data: { status: 'awaiting_approval' } })
+          expect(await verdictOf(caller, taskId)).toBe('nothing_to_compact')
+        })
+      })
+
+      it('says when the driver has no compaction, and the command goes nowhere', async () => {
+        const owner = await person()
+        const caller = callerOf(owner)
+        const taskId = await finishedChat(caller)
+        const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
+        const seen = await db
+          .$transaction(async (tx) => {
+            await tx.agentDriver.updateMany({ data: { capabilities: { resume: true } } })
+            const { commands } = await dialogFacts(tx, task, owner.id)
+            throw Object.assign(new Error('rolled back'), { commands })
+          })
+          .catch((error: { commands: ChatCommandFacts }) => error.commands)
+        expect(seen.compaction).toBe(false)
+        expect(commandRefusal(seen, 'compact')).toBe('no_compaction')
+        expect(await verdictOf(caller, taskId)).toBeNull()
+      })
+    })
 
     describe('`/undo` (docs/plan/61-chats-first.md, К29, §5.14)', () => {
       /** What core leaves of a completed pass that answered: the turn, the row, the charge. */
@@ -5842,6 +6189,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         reset: 'project_closed',
         update: 'project_closed',
         init: 'project_closed',
+        compact: 'project_closed',
         retry: 'project_closed',
         cancel: null,
         undo: 'no_release',

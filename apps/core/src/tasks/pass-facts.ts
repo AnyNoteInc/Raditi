@@ -26,7 +26,7 @@ import {
   type SiteStack,
 } from '@repo/domain'
 
-import { AGENT_COMMAND_PROMPTS, type PreviewFacts } from './turn-instructions.ts'
+import { AGENT_COMMANDS, type PreviewFacts } from './turn-instructions.ts'
 import {
   savedPlanOf,
   type BrowserPassFacts,
@@ -157,16 +157,18 @@ export async function readPassFacts(
         : null
     const kind = event.type === 'feed.request' ? event.kind : 'unreadable'
     const command = event.type === 'feed.request' && event.kind === 'command' ? event.command : null
-    const platformWords =
+    const carried =
       event.type === 'feed.request' && event.kind === 'agent_command' && event.command !== null
-        ? AGENT_COMMAND_PROMPTS[event.command]
+        ? AGENT_COMMANDS[event.command]
         : null
     // A command is a press: its row never reaches the agent (Р34), unless the agent carries it out,
-    // and then it goes in the words of the platform (docs/plan/61-chats-first.md, §5.2).
+    // and then it goes in the words of the platform or as an action of the turn
+    // (docs/plan/61-chats-first.md, §5.2).
     return {
       id: row.id,
       kind,
-      text: kind === 'command' ? null : (platformWords ?? text),
+      text: kind === 'command' ? null : (carried?.prompt ?? text),
+      ...(carried?.action ? { action: carried.action } : {}),
       command,
       attachments:
         event.type === 'feed.request' && 'attachments' in event ? (event.attachments ?? []) : [],

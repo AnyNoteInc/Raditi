@@ -81,6 +81,15 @@ export async function turnRewinding(
   }
 }
 
+/** The press of «Обновить»: a plain command, `movingRequest` does not count it. */
+export const updatePress = {
+  type: 'feed.request',
+  AND: [
+    { payload: { path: ['kind'], equals: 'command' } },
+    { payload: { path: ['command'], equals: 'update' } },
+  ],
+} as const satisfies Prisma.TaskEventWhereInput
+
 /** How far back a pending `/cancel` is looked for: as far as core's `pressedCancel` looks. */
 const PRESSES_READ = 50
 

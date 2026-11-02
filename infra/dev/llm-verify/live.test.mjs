@@ -26,11 +26,13 @@ import {
   longestReasoningRow,
   PROVIDER,
   readLedger,
+  requestMessagesText,
   resultVerdict,
   roleProfileProblems,
   searchPlaces,
   standMode,
   startLlmObserver,
+  streamContent,
   streamSummary,
   sumUsage,
   takePlanKey,
@@ -54,15 +56,17 @@ test('the limits of a live run are the numbers of the plan', () => {
     measure: { requests: 40, minutes: 20 },
     // The default of the owner's question П30: a live check of the result within 20 requests.
     results: { requests: 20, minutes: 10 },
+    compaction: { requests: 10, minutes: 5 },
   })
   assert.deepEqual(PROVIDER, { host: 'api.z.ai', port: 443 })
 })
 
-test('a stand takes --live, --measure, --results, --rehearsal, --no-build and --keep, and nothing else', () => {
+test('a stand takes --live, --measure, --results, --compact, --rehearsal, --no-build and --keep, and nothing else', () => {
   const plain = {
     live: false,
     measure: false,
     results: false,
+    compact: false,
     api: false,
     rehearsal: false,
     noBuild: false,
@@ -101,6 +105,18 @@ test('a stand takes --live, --measure, --results, --rehearsal, --no-build and --
     }),
     { ...plain, rehearsal: true, results: true, noBuild: true, keep: '/private/x' },
   )
+  // One session through `/compact`, live and rehearsed (docs/plan/61-chats-first.md, §5.14).
+  assert.deepEqual(standMode(['--live', '--compact'], { stand: 'gateway' }), {
+    ...plain,
+    live: true,
+    compact: true,
+  })
+  assert.deepEqual(standMode(['--rehearsal', '--compact', '--no-build'], { stand: 'gateway' }), {
+    ...plain,
+    rehearsal: true,
+    compact: true,
+    noBuild: true,
+  })
   // The acceptance on the pay-per-token API, live and rehearsed (П15).
   assert.deepEqual(standMode(['--live', '--api', '--keep=/private/x'], { stand: 'gateway' }), {
     ...plain,
@@ -140,6 +156,13 @@ test('a stand takes --live, --measure, --results, --rehearsal, --no-build and --
     [['--live', '--api', '--api'], 'gateway'],
     [['--live', '--api', '--measure'], 'gateway'],
     [['--rehearsal', '--api', '--results'], 'gateway'],
+    // A compaction is a run of its own, under its own cap.
+    [['--compact'], 'gateway'],
+    [['--compact', '--no-build'], 'gateway'],
+    [['--live', '--compact', '--measure'], 'gateway'],
+    [['--rehearsal', '--compact', '--results'], 'gateway'],
+    [['--live', '--compact', '--api'], 'gateway'],
+    [['--live', '--compact'], 'content'],
     [['--live', '--api'], 'content'],
     [['--rehearsal', '--api'], 'content'],
     [['--keep=/private/x'], 'gateway'],
@@ -883,6 +906,32 @@ test('the observer in front of the role llm passes the stream on as it comes and
     compaction: true,
   })
   assert.equal(chatRequestSummary('not json'), null)
+  assert.equal(
+    requestMessagesText(
+      JSON.stringify({
+        messages: [
+          { role: 'system', content: 'rules' },
+          { role: 'user', content: [{ type: 'text', text: 'the summary' }, { type: 'image_url' }] },
+          { role: 'assistant', content: null },
+        ],
+      }),
+    ),
+    'rules\nthe summary\n\n',
+  )
+  assert.equal(requestMessagesText('not json'), '')
+  assert.equal(
+    streamContent(
+      [
+        'data: {"choices":[{"delta":{"reasoning_content":"thinking"}}]}',
+        'data: {"choices":[{"delta":{"content":"The "}}]}',
+        'data: {"choices":[{"delta":{"content":"summary"},"finish_reason":"stop"}]}',
+        'data: {"usage":{"prompt_tokens":1}}',
+        'data: broken',
+        'data: [DONE]',
+      ].join('\n\n'),
+    ),
+    'The summary',
+  )
   // An upstream that is gone is an answer of the hop, not a hang; the next request still passes.
   await new Promise((resolve) => upstream.close(resolve))
   upstream.closeAllConnections()

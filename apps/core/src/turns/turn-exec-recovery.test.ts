@@ -227,6 +227,7 @@ function world(kind: string, { repository = true } = {}) {
       mcp: false,
       images: false,
       reasoningEvents: false,
+      compaction: false,
     },
     prepare: vi.fn(async (context) => ({
       context: { ...context },

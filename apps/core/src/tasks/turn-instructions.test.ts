@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 
 import {
-  AGENT_COMMAND_PROMPTS,
+  AGENT_COMMANDS,
   browserTaskInstructions,
   INIT_ANSWER_MAX_CHARS,
   INIT_PROMPT,
@@ -19,7 +19,7 @@ describe('the words of `/init`', () => {
     expect(INIT_PROMPT).toContain('Изучите код проекта')
     expect(INIT_PROMPT).toContain('Ничего не меняйте')
     expect(INIT_PROMPT).toContain('Не называйте паролей, ключей')
-    expect(AGENT_COMMAND_PROMPTS.init).toBe(INIT_PROMPT)
+    expect(AGENT_COMMANDS.init.prompt).toBe(INIT_PROMPT)
   })
 
   it('makes the answer itself the hints, and bounds it below what the result takes', () => {

@@ -569,7 +569,11 @@ async function createChat() {
   return { taskId: task.id, sessionId: `verify-${randomBytes(6).toString('hex')}` }
 }
 
-function turnRequest({ taskId, sessionId }, { turn, baseSha, previous, gated, withoutRepository }) {
+function turnRequest(
+  { taskId, sessionId },
+  { turn, baseSha, previous, gated, withoutRepository, compaction },
+) {
+  const action = compaction ? 'compact' : withoutRepository?.action
   const context = {
     taskId,
     sessionId,
@@ -588,6 +592,7 @@ function turnRequest({ taskId, sessionId }, { turn, baseSha, previous, gated, wi
   }
   // A lone dash, then nearly the longest prompt the turn plan accepts, starting with a slash.
   const prompt =
+    compaction?.prompt ??
     withoutRepository?.prompt ??
     (realCli ? (turn === 1 ? '-' : `/init ${'я'.repeat(99_900)}`) : JSON.stringify({ gated }))
   if (realCli) {
@@ -600,7 +605,12 @@ function turnRequest({ taskId, sessionId }, { turn, baseSha, previous, gated, wi
       prompt,
       effort: context.llm.reasoningEffort,
     }
-    if (withoutRepository) fixture.addRewindTurn({ ...identity, ...withoutRepository.fixture })
+    if (action)
+      fixture.addCompactionTurn({
+        ...identity,
+        ...(compaction?.fixture ?? withoutRepository.fixture),
+      })
+    else if (withoutRepository) fixture.addRewindTurn({ ...identity, ...withoutRepository.fixture })
     else fixture.addTurn({ ...identity, model: context.llm.model })
   }
   turnCredentials.set(`${taskId}:${sessionId}:${turn}`, {
@@ -626,7 +636,11 @@ function turnRequest({ taskId, sessionId }, { turn, baseSha, previous, gated, wi
       hardTimeoutMs: 10 * 60_000,
     },
     context,
-    input: { prompt, attachments: [] },
+    input: {
+      prompt,
+      attachments: [],
+      ...(action ? { action } : {}),
+    },
     driverVersion,
     ...(withoutRepository
       ? { requirements: { repository: false, browser: false } }
@@ -933,6 +947,40 @@ try {
         for (const secret of Object.values(values))
           assert(!persisted.includes(secret), 'Journal or assignment contains a turn credential')
       await homeFiles(reference(task, 1, first.manifest))
+
+      // `/compact` in a chat with the repository (docs/plan/61-chats-first.md, §5.14): the working
+      // copy comes up, the session goes into a summary, and the tree it published is the one it found.
+      const compacted = await core.request('run', {
+        request: turnRequest(task, {
+          turn: 3,
+          baseSha: second.manifest.git.headSha,
+          previous: reference(task, 2, second.manifest),
+          compaction: {
+            prompt: 'An action of the platform.',
+            fixture: { summary: 'raditi-repository-summary', remembered: ['/init '] },
+          },
+        }),
+      })
+      assert.deepEqual(
+        [compacted.result.change_type, compacted.result.files_changed],
+        ['none', []],
+        'A compaction changes nothing',
+      )
+      assert.match(compacted.result.client_message, /сжата/)
+      assert.equal(compacted.manifest.driver.nativeSessionId, nativeId)
+      const compactedAssignment = await assignmentOf(task.taskId, 3)
+      assert.deepEqual(
+        [compactedAssignment.outcome, compactedAssignment.executor],
+        ['completed', 'runner'],
+      )
+      const head = await branchHead(task.taskId)
+      assert.equal(head, compacted.manifest.git.headSha)
+      assert.equal((await taskTurnOf(task.taskId, 3)).headSha, head)
+      // Every turn publishes a commit of its own; this one holds the tree it found.
+      const treeOf = (sha) => git('--git-dir', remote, 'rev-parse', `${sha}^{tree}`)
+      assert.equal(await treeOf(head), await treeOf(second.manifest.git.headSha))
+      assert.deepEqual(fixture.observations().problems, [], 'Fixture rejected a request')
+      fixture.assertCompacted()
     } else {
       // The home of a turn is the session state the driver names and nothing the agent wrote
       // beside it: neither its log nor the configuration of the turn.
@@ -996,8 +1044,20 @@ try {
     const started = Date.now()
     const task = await createChat()
     sessions.push(task.sessionId)
-    const words = ['raditi-rewind-kept-words', 'raditi-rewind-undone-words', 'raditi-rewind-next']
-    const answers = ['Ответ raditi-rewind-kept', 'Ответ raditi-rewind-undone', 'Ответ next']
+    const words = [
+      'raditi-rewind-kept-words',
+      'raditi-rewind-undone-words',
+      'raditi-rewind-next',
+      'An action of the platform.',
+      'raditi-after-compaction',
+    ]
+    const answers = [
+      'Ответ raditi-rewind-kept',
+      'Ответ raditi-rewind-undone',
+      'Ответ next',
+      undefined,
+      'Ответ после сжатия',
+    ]
     const chatTurn = (turn, { previous, rewound, remembered = [], forgotten = [] }) =>
       core.request('run', {
         request: turnRequest(task, {
@@ -1029,8 +1089,39 @@ try {
     assert.equal(third.result.client_message, answers[2])
     fixture.assertRewindComplete()
 
+    // `/compact` on the runner (docs/plan/61-chats-first.md, §5.14): the session of the first three
+    // turns goes into one summary, and the next turn goes on from it. The words of the first
+    // turn reach the provider in the request of the summary and in none after it; the CLI keeps
+    // the last turn as it is.
+    const summary = 'raditi-compacted-summary'
+    const compacted = await core.request('run', {
+      request: turnRequest(task, {
+        turn: 4,
+        previous: reference(task, 3, third.manifest),
+        withoutRepository: {
+          prompt: words[3],
+          action: 'compact',
+          fixture: { summary, remembered: kept },
+        },
+      }),
+    })
+    assert.deepEqual(
+      [compacted.result.change_type, compacted.result.files_changed],
+      ['none', []],
+      'A compaction changes nothing',
+    )
+    assert.match(compacted.result.client_message, /сжата/)
+    assert.equal(compacted.manifest.driver.nativeSessionId, third.manifest.driver.nativeSessionId)
+    const fifth = await chatTurn(5, {
+      previous: reference(task, 4, compacted.manifest),
+      remembered: [summary],
+      forgotten: kept,
+    })
+    assert.equal(fifth.result.client_message, answers[4])
+    fixture.assertRewindComplete(4)
+
     const entries = await journal(task.taskId)
-    for (const turn of [1, 2, 3]) {
+    for (const turn of [1, 2, 3, 4, 5]) {
       const assignment = await assignmentOf(task.taskId, turn)
       assert.deepEqual(
         [assignment.outcome, assignment.executor, assignment.runnerId],
@@ -1042,18 +1133,19 @@ try {
       entries
         .filter((entry) => entry.phase === 'restored' && entry.nativeSessionId)
         .map((entry) => entry.turn),
-      [2, 3],
-      'Both later turns restored a checkpoint on the runner',
+      [2, 3, 4, 5],
+      'Every later turn restored a checkpoint on the runner',
     )
     const rewoundPlan = (await assignmentOf(task.taskId, 3)).plan
     assert.deepEqual([rewoundPlan.rewound, rewoundPlan.previous.turn], [true, 1])
     assert(entries.length > 0)
     for (const entry of entries)
       assert.equal(entry.fence.siteId, task.taskId, 'A chat without a project leases by its own id')
-    for (const turn of [1, 2, 3]) {
+    for (const turn of [1, 2, 3, 4, 5]) {
       const { plan } = await assignmentOf(task.taskId, turn)
       assert.equal(plan.sandbox.labels.siteId, task.taskId)
     }
+    assert.equal((await assignmentOf(task.taskId, 4)).plan.input.action, 'compact')
     const nativeId = first.manifest.driver.nativeSessionId
     assert.match(nativeId, /^ses_[A-Za-z0-9]{20,40}$/)
     assert.equal(second.manifest.driver.nativeSessionId, nativeId)
@@ -1080,7 +1172,7 @@ try {
     assert.equal((await leaseOf())?.epoch, siteLease?.epoch, 'The chat took no lease of the site')
     assert.deepEqual(await turnContainers('io.raditi.sandbox.taskId', task.taskId), [])
     verified.push(
-      `real ${driverName} chat without a project: under the lease of its own id, turn 3 after an undone turn 2 restored the snapshot of turn 1 through the runner's links, the session and the provider know nothing of turn 2 (${Math.round((Date.now() - started) / 1000)} s)`,
+      `real ${driverName} chat without a project: under the lease of its own id, turn 3 after an undone turn 2 restored the snapshot of turn 1 through the runner's links, the session and the provider know nothing of turn 2; turn 4 compacted the session on the runner and turn 5 went on from its summary (${Math.round((Date.now() - started) / 1000)} s)`,
     )
   }
 

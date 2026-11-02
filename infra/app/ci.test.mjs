@@ -383,6 +383,7 @@ test('the rehearsals of the live mode run in CI, each after the deterministic pa
     'pnpm verify:llm-gateway --rehearsal --no-build',
     'pnpm verify:llm-gateway --rehearsal --measure --no-build',
     'pnpm verify:llm-gateway --rehearsal --results --no-build',
+    'pnpm verify:llm-gateway --rehearsal --compact --no-build',
     'pnpm verify:llm-gateway --rehearsal --api --no-build',
   ])
   assert.deepEqual(stands('agent-content'), [
@@ -391,7 +392,14 @@ test('the rehearsals of the live mode run in CI, each after the deterministic pa
   ])
   // The options exist and mean what the steps take them for.
   const live = read('infra/dev/llm-verify/live.mjs')
-  for (const option of ['--rehearsal', '--measure', '--results', '--api', '--no-build'])
+  for (const option of [
+    '--rehearsal',
+    '--measure',
+    '--results',
+    '--compact',
+    '--api',
+    '--no-build',
+  ])
     assert.ok(live.includes(`['${option}', '`), `${option} is an option of the stands`)
   // GitHub sets CI in every job: that refuses a live run and must not refuse its rehearsal.
   assert.match(

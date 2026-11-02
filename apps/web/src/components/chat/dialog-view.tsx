@@ -1,10 +1,6 @@
 'use client'
 
-import {
-  chatCommands,
-  type ChatCommandId,
-  type CommandToCome,
-} from '@repo/domain/release/chat-commands'
+import { chatCommands, type ChatCommandId } from '@repo/domain/release/chat-commands'
 import { feedFailureText } from '@repo/domain/tasks/client-feed-failures'
 import type { ReasoningEffort } from '@repo/domain/llm/model-class'
 import {
@@ -157,6 +153,7 @@ type Press =
   | 'update'
   | 'resume'
   | 'init'
+  | 'compact'
   | 'undoTurn'
   | 'redoTurn'
 
@@ -435,6 +432,7 @@ export function DialogView({
   const retry = useMutation(trpc.task.retry.mutationOptions())
   const resumeAgent = useMutation(trpc.task.resumeAgent.mutationOptions())
   const init = useMutation(trpc.task.init.mutationOptions())
+  const compact = useMutation(trpc.task.compact.mutationOptions())
   const undoTurn = useMutation(trpc.task.undoTurn.mutationOptions())
   const redoTurn = useMutation(trpc.task.redoTurn.mutationOptions())
   if (
@@ -572,6 +570,8 @@ export function DialogView({
     (command) =>
       (withRepository || chatCommands[command.id].needs !== 'repository') &&
       (command.id !== 'undo' || command.refusal !== 'no_release') &&
+      // A driver without the compaction: the command is not there, closed or not (§5.14).
+      command.refusal !== 'no_compaction' &&
       (command.id !== 'retry' || (command.available && retryRow !== null)),
   )
   const commands = stopping
@@ -965,6 +965,9 @@ export function DialogView({
       case 'init':
         void press('init', init.mutateAsync)
         return
+      case 'compact':
+        void press('compact', compact.mutateAsync)
+        return
       case 'turn_undo':
         void pressUndoTurn()
         return
@@ -993,10 +996,9 @@ export function DialogView({
       case 'thinking':
       case 'themes':
         return clientCommands.run(id)
-      // `/help` is the field's. The others reach nobody yet: no row and no word typed gets here
-      // while the server closes them. A slice that opens one takes it off this list.
+      // `/help` is the field's.
       default:
-        id satisfies CommandToCome | 'help'
+        id satisfies 'help'
         return
     }
   }

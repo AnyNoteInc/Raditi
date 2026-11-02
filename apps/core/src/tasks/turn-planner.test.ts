@@ -58,6 +58,7 @@ const driver = {
     mcp: true,
     images: false,
     reasoningEvents: false,
+    compaction: false,
   },
   prepare: vi.fn(),
   command: vi.fn(),
@@ -729,6 +730,142 @@ describe('planTurn after `/undo` of a turn with a repository (docs/plan/61-chats
   })
 })
 
+describe('planTurn of `/compact` (docs/plan/61-chats-first.md, К30, §5.14)', () => {
+  const compact = (id: number, minute: number): ClientRequest => ({
+    ...request(id, 'agent_command', null, minute),
+    action: 'compact',
+  })
+  const chat = (requests: ClientRequest[], patch: Partial<PassFacts> = {}) =>
+    facts({
+      task: { ...facts().task, turnNo: 1 },
+      turns: new Map([[1, finished(1, 'completed', {})]]),
+      requests,
+      ...patch,
+    })
+  const planned = async (value: PassFacts) => {
+    const plan = await planTurn(value, env({}, HEAD1))
+    if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+    return plan.request
+  }
+  const first = request(10, 'first', 'Сделайте шапку синей', 0)
+  const started = finished(1, 'completed', {}).startedAt!
+  /** Minutes after the turn the chat goes on from started. */
+  const after = started.getUTCMinutes() + 1
+
+  it('asks the turn for the action, over the session of the last turn, and tells it no words', async () => {
+    const { input, previous } = await planned(chat([first, compact(11, after)]))
+    expect(input.action).toBe('compact')
+    expect(input.attachments).toEqual([])
+    expect(input.prompt).not.toContain('шапку')
+    expect(previous?.turn).toBe(1)
+  })
+
+  it('repeats the action for a retry and «Продолжить» after a press that opened no turn', async () => {
+    for (const kind of ['retry', 'continue']) {
+      const { input } = await planned(
+        chat([first, compact(11, after), request(12, kind, null, after + 1)]),
+      )
+      expect(input.action).toBe('compact')
+    }
+  })
+
+  it('repeats a compaction that failed in its turn: it replaces it, from the same checkpoint', async () => {
+    const checkpoint = {
+      workspaceId: WORKSPACE,
+      sessionId: TASK,
+      turn: 1,
+      image,
+      driver: { id: sampleDriverId, version: driver.cliVersion },
+      home,
+    }
+    const turns = new Map([
+      [1, finished(1, 'completed', { headSha: HEAD1 })],
+      [2, finished(2, 'failed', { headSha: null, base: HEAD1, previous: checkpoint })],
+    ])
+    for (const kind of ['retry', 'continue']) {
+      const { input, previous, replacesTurn, workspace } = await planned(
+        chat([first, compact(11, after), request(12, kind, null, after + 1)], {
+          task: { ...facts().task, turnNo: 2 },
+          turns,
+          writtenHead: HEAD1,
+        }),
+      )
+      expect(input.action).toBe('compact')
+      expect(input.attachments).toEqual([])
+      expect(previous).toEqual(checkpoint)
+      expect(replacesTurn).toBe(2)
+      expect(workspace).toMatchObject({ expectedBaseSha: HEAD1, expectedBranchSha: HEAD1 })
+    }
+  })
+
+  it('puts the words written after the command first: a summary would lose them', async () => {
+    const { input } = await planned(
+      chat([first, compact(11, after), request(12, 'answer', 'И логотип', after + 1)]),
+    )
+    expect(input).not.toHaveProperty('action')
+    expect(input.prompt).toBe('И логотип')
+  })
+
+  it('puts the words written before the command first: they never reached the session', async () => {
+    const { input } = await planned(
+      chat([first, request(11, 'answer', 'И логотип', after), compact(12, after + 1)]),
+    )
+    expect(input).not.toHaveProperty('action')
+    expect(input.prompt).toBe('И логотип')
+  })
+
+  it('puts an unseen `/init` first too: it is a request with words of the platform', async () => {
+    const init = request(11, 'agent_command', 'Изучите код', after)
+    const { input } = await planned(chat([first, init, compact(12, after + 1)]))
+    expect(input).not.toHaveProperty('action')
+    expect(input.prompt).toBe('Изучите код')
+  })
+
+  it('does not carry out a compaction the session has seen', async () => {
+    const { input } = await planned(chat([first, compact(11, 0)]))
+    expect(input).not.toHaveProperty('action')
+  })
+
+  it('keeps it out of the words of a turn', () => {
+    expect(promptOf([first, compact(11, 1)], null)).toBe('Сделайте шапку синей')
+  })
+
+  it('takes no files of the client: nothing reads them', async () => {
+    const { input } = await planned(
+      chat([first, compact(11, after)], {
+        attachments: [
+          {
+            id: '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a70',
+            fileName: 'a.pdf',
+            contentType: 'application/pdf',
+            sizeBytes: 9,
+          },
+        ],
+      }),
+    )
+    expect(input.attachments).toEqual([])
+  })
+
+  it('asks no action of a new session: it is told the words of the client instead', async () => {
+    const { input, previous } = await planned(facts({ requests: [first, compact(11, 1)] }))
+    expect(input).not.toHaveProperty('action')
+    expect(input.prompt).toBe('Сделайте шапку синей')
+    expect(previous).toBeUndefined()
+  })
+
+  it('goes as words would on a candidate «Обновить» moved: that is a new session', async () => {
+    const plan = await planTurn(
+      chat([first, compact(11, after)], { candidate: { turnNo: 1, headSha: HEAD2 } }),
+      env({}, HEAD2),
+    )
+    if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+    expect(plan.request.input).not.toHaveProperty('action')
+    expect(plan.request.input.prompt).toBe('Сделайте шапку синей')
+    expect(plan.request.previous).toBeUndefined()
+    expect(plan.request.rebased).toBe(true)
+  })
+})
+
 describe('planTurn of a repository task with files of the client', () => {
   const MIB = 1024 * 1024
   const fileOf = (index: number, fileName = `photo-${index}.jpg`, sizeBytes = MIB) => ({
@@ -834,6 +971,31 @@ describe('planTurn of a task in the cloud browser (docs/plan/57-browser-tasks.md
       plan: { ...rest, requirements: { ...BROWSER_ONLY } },
     }
   }
+
+  it('tells a new session the words after a compaction failed: «Продолжить» is not a failure', async () => {
+    const compact = { ...request(11, 'agent_command', null, 20), action: 'compact' as const }
+    for (const kind of ['continue', 'resume']) {
+      const plan = await planTurn(
+        browserFacts({
+          task: { ...facts().task, turnNo: 2 },
+          turns: new Map([
+            [1, finishedInBrowser(1, 'completed')],
+            [2, finishedInBrowser(2, 'failed')],
+          ]),
+          requests: [
+            request(10, 'first', 'Добавьте новость о скидках', 0),
+            compact,
+            request(12, kind, null, 25),
+          ],
+        }),
+        env(),
+      )
+      if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+      expect(plan.request.input).not.toHaveProperty('action')
+      expect(plan.request.input.prompt).toContain('Добавьте новость о скидках')
+      expect(plan.request.previous).toBeUndefined()
+    }
+  })
 
   it('plans a first turn without a repository: no git, the browser rules and the site', async () => {
     const e = env()

@@ -296,7 +296,10 @@ export class TurnSupervisor {
    * costs neither a turn number nor an undo. Nothing of the run is kept.
    */
   private async assertLaunchable(plan: TurnPlan): Promise<void> {
-    const { context, input } = withTurnCredentials(plan, newTurnKeys())
+    const keyed = withTurnCredentials(plan, newTurnKeys())
+    const { input } = keyed
+    // The session of an action comes out of its checkpoint, under the lease: a stand-in here.
+    const context = input.action ? { ...keyed.context, nativeSessionId: 'dry-run' } : keyed.context
     const prepared = await this.deps.driver.prepare(context)
     checkPreparedRun(context, prepared, this.deps.driver.command(prepared, input))
   }
@@ -321,6 +324,9 @@ export class TurnSupervisor {
       throw badRequest('Files of the client go only to a turn with a repository or without a site')
     if (request.input.attachments.length && !this.deps.inbox)
       throw badRequest('Files of the client need the inbox of core')
+    // A compaction shortens a session: only a checkpoint brings one (docs/plan/61, §5.14).
+    if (request.input.action !== undefined && !request.previous)
+      throw badRequest('An action of a turn needs the checkpoint of an earlier turn')
     if (request.replacesTurn !== undefined && request.replacesTurn !== labels.turn - 1)
       throw badRequest('Replacement must name the latest turn')
     if (request.replacesTurn !== undefined && workspace?.expectedBranchSha === undefined)

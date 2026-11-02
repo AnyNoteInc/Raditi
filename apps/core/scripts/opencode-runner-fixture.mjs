@@ -257,6 +257,21 @@ export async function startOpencodeRunnerFixture() {
       }
       state.llmRequests++
       check(body.model === state.model, 'Wrong model profile')
+      if (state.compaction) {
+        // The summary of a session (docs/plan/61-chats-first.md, §5.14): no tool, no instructions
+        // of the platform, and the history it is there to replace.
+        check(state.phase === 'initial', 'Unexpected request after turn completion')
+        check(body.tools === undefined, 'A compaction was offered tools')
+        check(
+          state.compaction.remembered.every((text) => serialized.includes(text)),
+          'The compaction lost words of the session',
+        )
+        state.phase = 'completed'
+        response
+          .writeHead(200, { 'content-type': 'text/event-stream;charset=UTF-8' })
+          .end(frames(body.model, { content: state.compaction.summary }))
+        return
+      }
       // With the platform's own provider id the CLI adds no reasoning field: the profile of the
       // turn key belongs to the gateway.
       check(
@@ -429,6 +444,17 @@ export async function startOpencodeRunnerFixture() {
       })
       return rewindResult(answer)
     },
+    /** The turn that compacts that chat's session: its one request is answered with `summary`. */
+    addCompactionTurn({ turn, llmKey, mcpKey, prompt, effort, summary, remembered }) {
+      const key = `compaction-${turn}`
+      check(!closed && Number.isInteger(turn) && !turns.has(key), 'Unexpected compaction turn')
+      check(effort === 'high', 'Invalid fixture effort')
+      assertRotated(llmKey, mcpKey)
+      turns.set(key, {
+        ...freshTurn({ turn, llmKey, mcpKey, prompt, effort, model: MODEL }),
+        compaction: { summary, remembered },
+      })
+    },
     addTurn({ turn, llmKey, mcpKey, prompt, effort, model = MODEL }) {
       check(!closed && (turn === 1 || turn === 2) && !turns.has(turn), 'Unexpected fixture turn')
       check(
@@ -483,7 +509,7 @@ export async function startOpencodeRunnerFixture() {
     },
     assertComplete() {
       check(!problems.length, `Fixture recorded ${problems.length} failed requests`)
-      const planned = [...turns.values()].filter((state) => !state.rewind)
+      const planned = [...turns.values()].filter((state) => !state.rewind && !state.compaction)
       check(planned.length === 2, 'Fixture requires two registered turns')
       for (const state of planned) {
         check(
@@ -496,11 +522,20 @@ export async function startOpencodeRunnerFixture() {
         check(state.turn === 1 || state.continuationSeen, 'Prior session was not observed')
       }
     },
+    /** Every compaction so far: its one request, and no tool. */
+    assertCompacted() {
+      for (const state of [...turns.values()].filter((item) => item.compaction))
+        check(
+          state.phase === 'completed' && state.llmRequests === 1 && state.mcpList === 0,
+          'A compaction did not answer its one request, or reached for the tools',
+        )
+    },
     /** The turns of the chat without a repository, each answered once by a checked request. */
-    assertRewindComplete() {
+    assertRewindComplete(count = 3) {
       check(!problems.length, `Fixture recorded ${problems.length} failed requests`)
       const rewound = [...turns.values()].filter((state) => state.rewind)
-      check(rewound.length === 3, 'Fixture requires three turns without a repository')
+      check(rewound.length === count, 'Fixture requires three turns without a repository')
+      this.assertCompacted()
       for (const state of rewound)
         check(
           state.phase === 'completed' && state.llmRequests === 1,

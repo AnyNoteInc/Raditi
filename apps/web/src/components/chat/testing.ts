@@ -1,5 +1,5 @@
-import { offeredCommandIds } from '@repo/domain/release/chat-commands'
-import type { FeedCommandId, TaskStatus } from '@repo/domain'
+import { serverCommandIds } from '@repo/domain/release/chat-commands'
+import type { FeedAgentCommandId, FeedCommandId, TaskStatus } from '@repo/domain'
 
 import type { CandidateView, CommandVerdict, DialogFeed, FeedHead, FeedRow } from './chat-types'
 
@@ -23,7 +23,7 @@ export function verdicts(
   refused: Partial<Record<CommandVerdict['id'], CommandVerdict['refusal']>> = {},
 ): CommandVerdict[] {
   const closed = { turn_undo: 'nothing_to_undo', turn_redo: 'nothing_to_redo', ...refused } as const
-  return offeredCommandIds
+  return serverCommandIds
     .filter((id) => (id !== 'undo' && id !== 'retry') || id in refused)
     .map((id) => {
       const refusal = closed[id] ?? null
@@ -165,14 +165,14 @@ export function commandRow(id: string, command: FeedCommandId): FeedRow {
   }
 }
 
-/** `/init`: a command the agent carries out (docs/plan/61-chats-first.md, §5.2). */
-export function agentCommandRow(id: string): FeedRow {
+/** A command the agent carries out (docs/plan/61-chats-first.md, §5.2). */
+export function agentCommandRow(id: string, command: FeedAgentCommandId = 'init'): FeedRow {
   return {
     id,
     at: nextAt(),
     type: 'feed.request',
     kind: 'agent_command',
-    command: 'init',
+    command,
     authorId: AUTHOR_ID,
     requestId: REQUEST_ID,
   }
@@ -299,7 +299,7 @@ export function browserAnswer(
     status: 'running',
     commands: verdicts(
       Object.fromEntries(
-        offeredCommandIds
+        serverCommandIds
           .filter((id) => id !== 'cancel' && id !== 'undo' && id !== 'retry')
           .map((id) => [id, 'not_allowed' as const]),
       ),

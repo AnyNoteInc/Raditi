@@ -56,6 +56,8 @@ const TOOLS = ['bash', 'edit', 'glob', 'grep', 'raditi_site_info', 'read', 'todo
 const platformMarker = (turn) => `RADITI_G3_PLATFORM_TURN_${turn}`
 const LITERAL = 'Literal {env:HOME} and {file:/etc/hostname}.'
 const REASONING = 'Thinking about the next step.'
+/** What the scripted model answers a compaction with, and the one thing the next turn knows of it. */
+const SUMMARY = 'RADITI_G3_COMPACTED_SUMMARY'
 /** Texts of the site repository's own OpenCode files: none may reach the provider. */
 const hostile = {
   agentsMd: 'RADITI_G3_HOSTILE_AGENTS_MD',
@@ -243,6 +245,7 @@ async function inside() {
   })
   const find = (bytes) =>
     needles.filter(([, needle]) => bytes.includes(needle)).map(([label]) => label)
+  const PASSWORD = 'OPENCODE_SERVER_PASSWORD='
   const scan = (roots) => {
     const hits = []
     const files = []
@@ -274,18 +277,33 @@ async function inside() {
   const processes = () => {
     const hits = []
     const seen = []
+    // The server of a compaction: its password joins what must be found nowhere else.
+    const holders = []
     for (const pid of fs.readdirSync('/proc').filter((name) => /^\d+$/.test(name))) {
       for (const file of ['environ', 'cmdline']) {
         try {
           const bytes = fs.readFileSync(`/proc/${pid}/${file}`)
           if (file === 'cmdline') seen.push(bytes.toString().replaceAll('\0', ' ').slice(0, 80))
           for (const label of find(bytes)) hits.push(`${label} in /proc/${pid}/${file}`)
+          if (file === 'environ') {
+            const entry = bytes
+              .toString()
+              .split('\0')
+              .find((item) => item.startsWith(PASSWORD))
+            if (entry !== undefined) {
+              const command = fs.readFileSync(`/proc/${pid}/cmdline`).toString()
+              holders.push(command.replaceAll('\0', ' ').trim().slice(0, 80))
+              const value = Buffer.from(entry.slice(PASSWORD.length))
+              if (!needles.some(([, needle]) => needle.equals(value)))
+                needles.push(['server password', value])
+            }
+          }
         } catch {
           /* The process ended meanwhile. */
         }
       }
     }
-    return { hits, seen }
+    return { hits, seen, holders }
   }
 
   // --- The sink: a resolver that answers every name with loopback, and listeners on 80 and 443.
@@ -398,7 +416,7 @@ async function inside() {
       )
     }
     events.push({
-      ...delta({ content: '' }, step.calls?.length ? 'tool_calls' : 'stop'),
+      ...delta({ content: '' }, step.finish ?? (step.calls?.length ? 'tool_calls' : 'stop')),
       usage: {
         prompt_tokens: 7105,
         completion_tokens: 94,
@@ -532,6 +550,8 @@ async function inside() {
       if (out.llm.length > settings.steps.length + 4)
         return json(401, { error: { code: '401', message: 'stand cap reached' } })
       const step = settings.steps[Math.min(out.llm.length, settings.steps.length) - 1]
+      if (step.refuse) return json(step.refuse.status, { error: step.refuse.error })
+      if (step.delayMs) await new Promise((resolve) => setTimeout(resolve, step.delayMs))
       response
         .writeHead(200, { 'content-type': 'text/event-stream;charset=UTF-8' })
         .end(frames(step))
@@ -855,6 +875,7 @@ async function turn({
   timeoutMs = 150_000,
   envValues,
   egressProxy,
+  action,
 }) {
   const keys = newKeys()
   const context = {
@@ -876,7 +897,7 @@ async function turn({
     ...(egressProxy ? { egressProxy } : {}),
   }
   const prepared = preparedRunSchema.parse(await driver.prepare(context))
-  const argv = driver.command(prepared, { prompt, attachments })
+  const argv = driver.command(prepared, { prompt, attachments, ...(action ? { action } : {}) })
   assert.equal(preparedRunExposesSecret(prepared, credentials, argv), false)
   assert.deepEqual(argv, ['node', `${HOME}/run.mjs`])
   const configFile = prepared.files.find((file) =>
@@ -952,12 +973,13 @@ async function turn({
           literal: LITERAL,
           previousPlatform: platformMarker(turnNo - 1),
           contract: 'End the turn with one JSON object',
+          summary: SUMMARY,
           platformAgent: 'You are the Raditi website agent.',
           workdir: 'Working directory: /workspace/repo',
           prior: PRIOR,
           ...hostile,
         },
-        prompt: promptFile.content,
+        prompt: promptFile?.content,
         pluginMarker: PLUGIN_RAN,
         holding: HOLDING,
         inspect,
@@ -972,7 +994,7 @@ async function turn({
   containers.delete(name)
   const events = output.stdout.split('\n').flatMap((line) => driver.parseEvent(line))
   const describe = () =>
-    `${label}: exit ${output.code}${output.signal ? ` (${output.signal})` : ''}${output.timedOut ? ', timed out' : ''}; provider requests ${output.llm.length}; events ${events.map((event) => event.type).join(' ')}; problems ${JSON.stringify(output.problems)}; stderr ${credentials.reduce((text, key) => text.replaceAll(key, '[redacted]'), output.stderr).slice(-600)}`
+    `${label}: exit ${output.code}${output.signal ? ` (${output.signal})` : ''}${output.timedOut ? ', timed out' : ''}; provider requests ${output.llm.length}; events ${events.map((event) => (event.type === 'failed' ? `failed (${event.reason})` : event.type)).join(' ')}; problems ${JSON.stringify(output.problems)}; stderr ${credentials.reduce((text, key) => text.replaceAll(key, '[redacted]'), output.stderr).slice(-600)}`
   // In every scenario, whatever its purpose: the two values exist nowhere but in the CLI.
   assert.deepEqual(output.problems, [], describe())
   assert.equal(output.version, CLI_VERSION, 'The image holds another CLI version')
@@ -990,7 +1012,7 @@ async function turn({
     // With the client's variables the script of the shell tool stays for the CLI's life (Р13).
     assert.deepEqual(
       output.during.secretFiles,
-      envValues || egressProxy ? ['shell-env.sh'] : [],
+      (envValues || egressProxy) && !action ? ['shell-env.sh'] : [],
       `${label}: the secrets directory during the turn`,
     )
   }
@@ -1080,6 +1102,77 @@ function expectSuccess(run, expected, { carryOver = [], reasoning = REASONING } 
   assert.ok(output.snapshot.length > 0, 'No session state was persisted')
   for (const file of output.snapshot) assert.ok(file.path.startsWith(`${DATA}/opencode.db`))
   return sessionId
+}
+
+/** What a compaction may do and leave, whether it ended well or not. */
+function expectCleanCompaction(run, expectedRequests, { history = true } = {}) {
+  const { output, describe } = run
+  assert.equal(output.llm.length, expectedRequests, describe())
+  // The wrapper's own check of the token, and nothing the CLI connected to: no MCP in its server.
+  assert.deepEqual(
+    output.mcp.filter((record) => record.method === 'POST').map((record) => record.rpc),
+    ['initialize'],
+    `The server of a compaction used MCP: ${describe()}`,
+  )
+  const sunk = output.sink.slice(output.sinkBeforeTurn)
+  assert.deepEqual(sunk, [], `The server reached for the network: ${describe()}`)
+  assert.deepEqual(output.after.pluginRan, [], `Code of the repository ran: ${describe()}`)
+  assert.equal(output.after.preloadRan, false, `A preload of the repository ran: ${describe()}`)
+  assert.deepEqual(output.after.aboveRepo, ['inbox', 'repo'], describe())
+  assert.deepEqual(output.after.processes, [], `Processes left: ${describe()}`)
+  assert.equal(output.after.tool, null, `A command ran in a compaction: ${describe()}`)
+  assert.deepEqual(output.after.workingTree, [], describe())
+  for (const record of output.llm) {
+    const at = `the request of a compaction (${record.roles}; «${record.systemHead}») of ${describe()}`
+    assert.equal(record.authorized, true, `Not the turn key: ${at}`)
+    assert.equal(record.model, MODEL, `Another model: ${at}`)
+    assert.deepEqual(
+      record.fields,
+      ['max_tokens', 'messages', 'model', 'stream', 'stream_options'],
+      at,
+    )
+    assert.deepEqual(record.tools, [], `Declared tools: ${at}`)
+    assert.equal(record.body.prior, history, `The history in the summary request: ${at}`)
+    for (const name of Object.keys(hostile))
+      assert.equal(record.body[name], false, `Repository text ${name} reached the provider: ${at}`)
+  }
+  if (output.during) {
+    // One process holds the password, the server itself, for the whole compaction.
+    assert.equal(output.during.processes.holders.length, 1, describe())
+    assert.match(
+      output.during.processes.holders[0],
+      /^\/usr\/local\/bin\/opencode serve /,
+      describe(),
+    )
+  }
+}
+
+function expectCompacted(run, expected) {
+  const { output, events, describe } = run
+  assert.equal(output.code, 0, describe())
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ['started', 'usage', 'completed'],
+    describe(),
+  )
+  expectCleanCompaction(run, 1, expected)
+  assert.equal(events[1].usage.inputUncached + events[1].usage.cacheRead, 7105, describe())
+  assert.ok(output.snapshot.length > 0, 'No session state was persisted')
+  assert.equal(output.database.triggers, 0)
+  return events[0].nativeSessionId
+}
+
+function expectCompactionFailed(run, expectedRequests, reason) {
+  const { output, events, describe } = run
+  assert.equal(output.code, 1, describe())
+  assert.ok(!events.some((event) => event.type === 'completed'), describe())
+  assert.ok(!events.some((event) => event.type === 'started'), describe())
+  assert.deepEqual(
+    events.filter((event) => event.type === 'failed').map((event) => event.reason),
+    reason,
+    describe(),
+  )
+  expectCleanCompaction(run, expectedRequests)
 }
 
 const seconds = (ms) => `${(ms / 1000).toFixed(1)} s`
@@ -1182,6 +1275,7 @@ try {
     turnNo: 2,
     nativeSessionId: sessionId,
     restored: sessionFiles,
+    returnSnapshot: true,
     prompt: longPrompt,
     attachments,
     effort: 'high',
@@ -1784,7 +1878,7 @@ try {
       refused.describe(),
     )
     assert.deepEqual(refused.output.after.pluginRan, [], refused.describe())
-    const readOnly = [config, `${HOME}/io-config/opencode`]
+    const readOnly = [config, `${HOME}/io-config/opencode`, `${HOME}/compaction-config/opencode`]
     const control = await turn({
       label: "code in the CLI's own home, not checked",
       fixtures: site,
@@ -1794,6 +1888,7 @@ try {
         without('only', {
           [config]: ['AGENTS.md', 'opencode.json'],
           [`${HOME}/io-config/opencode`]: ['opencode.json'],
+          [`${HOME}/compaction-config/opencode`]: ['opencode.json'],
         })(prepared)
         // Read-only like the configuration: the CLI tries to install a package into a directory
         // it can write to, and waits a minute for a registry it does not have.
@@ -1864,6 +1959,253 @@ try {
       )
     pass(
       `client variables — the shell tool's command got ${Object.keys(envValues).length} values and HTTPS_PROXY ${egressProxy} through BASH_ENV, the CLI neither; the session the snapshot takes (${output.snapshot.map((file) => `${file.path.split('/').at(-1)} ${file.bytes} B`).join(', ')}) holds no value the command printed`,
+    )
+  }
+
+  // 14. `/compact` (docs/plan/61-chats-first.md, §5.14 and the gate of 61.24): the server of the
+  // CLI on loopback, its password, the summary of the session and the next turn on it.
+  {
+    const snapshotOf = (run) =>
+      run.output.snapshot.map(({ path, mode, base64 }) => ({ path, mode, base64 }))
+    const history = snapshotOf(second)
+    const common = {
+      nativeSessionId: sessionId,
+      restored: history,
+      action: 'compact',
+      prompt: 'Unused: a compaction reads no words.',
+    }
+    const summary = { text: `## Objective\n- ${SUMMARY}` }
+
+    const compacted = await turn({
+      ...common,
+      label: 'compaction',
+      turnNo: 3,
+      returnSnapshot: true,
+      steps: [{ ...summary, delayMs: 20_000 }],
+    })
+    assert.equal(expectCompacted(compacted), sessionId)
+    assert.ok(compacted.output.ms >= 20_000, compacted.describe())
+    assert.equal(compacted.output.llm[0].roles, 'system user', compacted.describe())
+    pass(
+      `compaction — ${compacted.output.llm[0].bytes} B of history into one request without tools through the server of the CLI, under the turn key the pipe gave once; summarize waited for the model (${seconds(compacted.output.ms)} with an answer of 20 s); the password in the one process of the server, in no file, output or snapshot; no MCP, no network, no process left`,
+    )
+
+    // The next turn: new container, export, filter, import, and the summary instead of the history.
+    const next = await turn({
+      label: 'turn after a compaction',
+      turnNo: 4,
+      nativeSessionId: sessionId,
+      restored: snapshotOf(compacted),
+      returnSnapshot: true,
+      steps: [{ text: JSON.stringify(result('Ход после сжатия')) }],
+    })
+    expectRequests(next, 1)
+    assert.equal(expectSuccess(next, result('Ход после сжатия')), sessionId)
+    assert.equal(next.output.llm[0].body.summary, true, `No summary: ${next.describe()}`)
+    assert.equal(next.output.llm[0].body.prior, false, `The history is back: ${next.describe()}`)
+    // The summary stands where the first turn was; the CLI keeps the last turn as it is.
+    assert.match(next.output.llm[0].roles, /^system user assistant /, next.describe())
+
+    // The second compaction takes the first summary along, and the chain goes on.
+    const again = await turn({
+      ...common,
+      label: 'second compaction',
+      turnNo: 5,
+      restored: snapshotOf(next),
+      returnSnapshot: true,
+      steps: [{ text: `## Objective\n- second ${SUMMARY}` }],
+    })
+    assert.equal(again.output.llm[0].body.summary, true, again.describe())
+    assert.equal(expectCompacted(again, { history: false }), sessionId)
+    const after = await turn({
+      label: 'turn after the second compaction',
+      turnNo: 6,
+      nativeSessionId: sessionId,
+      restored: snapshotOf(again),
+      steps: [{ text: JSON.stringify(result('Ход после второго сжатия')) }],
+    })
+    expectRequests(after, 1)
+    expectSuccess(after, result('Ход после второго сжатия'))
+    assert.equal(after.output.llm[0].body.summary, true, after.describe())
+    pass(
+      `session after a compaction — through export, filter and import in a new container: the next turn gets the summary instead of the first turn and the last turn as it is (${next.output.llm[0].roles}), the same session goes on, and a second compaction takes the first summary along`,
+    )
+
+    // Whatever the summary came to, `summarize` answers true: the message says.
+    const hostileEnv = { PAYMENT_KEY: 'pay-secret-g3-0001' }
+    const toolCall = bash(
+      `node -e 'require("node:fs").writeFileSync(${JSON.stringify(TOOL_DUMP)},JSON.stringify(process.env))'`,
+    )
+    const failures = [
+      {
+        label: 'the provider refuses',
+        steps: [{ refuse: { status: 402, error: { code: 'budget', message: 'Refused' } } }],
+        reasons: [
+          'APIError 402 budget: Refused',
+          'RaditiWrapperError: The model did not summarize the session',
+        ],
+      },
+      {
+        label: 'the model calls a tool',
+        steps: [{ calls: [toolCall] }],
+        reasons: [
+          'UnknownError: Tool call not allowed while generating summary: bash',
+          'RaditiWrapperError: The model did not summarize the session',
+        ],
+      },
+      {
+        label: 'the model says nothing',
+        steps: [{ text: '' }],
+        reasons: ['RaditiWrapperError: The model left no whole summary'],
+      },
+      {
+        label: 'the answer is cut',
+        steps: [{ text: 'A part of it', finish: 'length' }],
+        reasons: ['RaditiWrapperError: The model left no whole summary'],
+      },
+    ]
+    for (const failure of failures) {
+      const run = await turn({
+        ...common,
+        label: `compaction: ${failure.label}`,
+        turnNo: 3,
+        steps: failure.steps,
+      })
+      expectCompactionFailed(run, 1, failure.reasons)
+    }
+    pass(
+      `compaction that fails — ${failures.map((failure) => failure.label).join(', ')}: summarize answers true each time, the wrapper reads the message it wrote and the turn fails, with one provider request, no command and no process left`,
+    )
+
+    // The client's variables: no shell in a compaction, and a value the model repeats is masked.
+    const value = hostileEnv.PAYMENT_KEY
+    const masked = await turn({
+      ...common,
+      label: 'compaction with client variables',
+      turnNo: 3,
+      returnSnapshot: true,
+      envValues: hostileEnv,
+      egressProxy: 'http://sandbox-gw:3128',
+      steps: [{ text: `## Objective\n- ${SUMMARY} ${value}` }],
+    })
+    expectCompacted(masked)
+    for (const file of masked.output.snapshot)
+      assert.equal(
+        containsEnvValue(Buffer.from(file.base64, 'base64').toString('latin1'), [value]),
+        false,
+        `${file.path} holds a value: ${masked.describe()}`,
+      )
+
+    // Hostile files, on the path of the server. Without the hiding `serve` imports them as well.
+    const unhidden = await turn({
+      ...common,
+      label: 'compaction, repository code not hidden',
+      turnNo: 3,
+      patch: notHidden,
+      steps: [summary],
+    })
+    assert.equal(unhidden.output.code, 0, unhidden.describe())
+    // On this path the pinned CLI imports nothing of them: the imports of a turn come with its
+    // tools (scenario 9). The hiding stays, as for every CLI process: a CLI that starts importing
+    // fails this.
+    assert.deepEqual(unhidden.output.after.pluginRan, [], unhidden.describe())
+    const aboveFixtures = [
+      ...projectFixtures,
+      { path: '/workspace/.opencode/plugin/above.js', content: hostileCode('.opencode above') },
+    ]
+    const above = await turn({
+      ...common,
+      label: 'compaction, OpenCode files above the working copy',
+      turnNo: 3,
+      fixtures: aboveFixtures,
+      steps: [summary],
+    })
+    const homePlaces = {
+      [`${HOME}/compaction-config/opencode/plugin/a.js`]: "a file of the server's plugin",
+      [`${HOME}/compaction-config/opencode/tool/b.js`]: "a file of the server's tool",
+      [`${HOME}/.opencode/tool/c.js`]: 'a file of ~/.opencode/tool',
+    }
+    const plantHome = (prepared) => {
+      for (const [path, who] of Object.entries(homePlaces))
+        prepared.files.push({ path, content: hostileCode(who), mode: 0o600 })
+    }
+    const home = await turn({
+      ...common,
+      label: "compaction, code in the CLI's own home",
+      turnNo: 3,
+      patch: plantHome,
+      steps: [summary],
+    })
+    for (const refused of [above, home]) {
+      assert.equal(refused.output.code, 1, refused.describe())
+      assert.equal(refused.output.llm.length, 0, refused.describe())
+      assert.deepEqual(refused.output.mcp, [], refused.describe())
+      assert.deepEqual(refused.output.after.pluginRan, [], refused.describe())
+      assert.deepEqual(
+        refused.events,
+        [
+          {
+            type: 'failed',
+            reason: 'RaditiWrapperError: An OpenCode file is where the CLI would load it',
+          },
+        ],
+        refused.describe(),
+      )
+    }
+    const homeControl = await turn({
+      ...common,
+      label: "compaction, code in the CLI's own home, not checked",
+      turnNo: 3,
+      patch(prepared) {
+        plantHome(prepared)
+        without('absent', [`${HOME}/.opencode`])(prepared)
+        without('only', {
+          [`${HOME}/.config/opencode`]: ['AGENTS.md', 'opencode.json'],
+          [`${HOME}/io-config/opencode`]: ['opencode.json'],
+          [`${HOME}/compaction-config/opencode`]: ['opencode.json'],
+        })(prepared)
+        const file = prepared.files.find((entry) => entry.path.endsWith('/run.mjs'))
+        const readOnly = [
+          `${HOME}/.config/opencode`,
+          `${HOME}/io-config/opencode`,
+          `${HOME}/compaction-config/opencode`,
+        ]
+        const changed = file.content.replace(
+          `"readOnly":${JSON.stringify(readOnly)}`,
+          `"readOnly":${JSON.stringify([...readOnly, `${HOME}/.opencode`])}`,
+        )
+        assert.notEqual(changed, file.content, 'The wrapper no longer names readOnly')
+        file.content = changed
+      },
+      steps: [summary],
+    })
+    assert.equal(homeControl.output.code, 0, homeControl.describe())
+    assert.deepEqual(homeControl.output.after.pluginRan, [], homeControl.describe())
+
+    // Why the reference to the key stands in a file of its own: at its start the server reads its
+    // global configuration, and the one read a pipe gives would go there.
+    const global = await turn({
+      ...common,
+      label: 'compaction with the key in the global configuration',
+      turnNo: 3,
+      patch(prepared) {
+        const settings = prepared.files.find((entry) => entry.path.endsWith('/settings.json'))
+        const file = prepared.files.find((entry) =>
+          entry.path.endsWith('/compaction-config/opencode/opencode.json'),
+        )
+        file.content = settings.content
+      },
+      steps: [summary],
+    })
+    assert.equal(global.output.code, 1, global.describe())
+    assert.equal(global.output.llm.length, 0, global.describe())
+    assert.deepEqual(
+      global.events,
+      [{ type: 'failed', reason: 'RaditiWrapperError: The server cannot read the session' }],
+      global.describe(),
+    )
+    pass(
+      `compaction over hostile files — the repository's OpenCode files are hidden from the server, and over a file above the working copy or in the CLI's home no CLI process starts (left alone, the pinned server imports none of them on this path); the key's reference stands where the server reads it once (in its global configuration the second read fails); the client's variables reach no shell and a value in the summary is masked`,
     )
   }
   process.stdout.write(

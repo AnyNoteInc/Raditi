@@ -270,7 +270,11 @@ export class TaskSweep {
     if (replayed.lastPhase === recovered) {
       if (!plan || !published || !this.deps.drivers.has(plan.driverId)) return technical
       try {
-        const result = readTurnResult(this.deps.drivers.get(plan.driverId), replayed.events)
+        const result = readTurnResult(
+          this.deps.drivers.get(plan.driverId),
+          replayed.events,
+          plan.input.action,
+        )
         return { kind: 'completed', turn, result, ...published }
       } catch {
         return { kind: 'failed', turn, errorCode: 'TURN_OUTPUT_REJECTED' }

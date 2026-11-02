@@ -51,6 +51,16 @@ describe('initAnswerIds (docs/plan/61-chats-first.md, К31)', () => {
     ).toEqual(['5'])
   })
 
+  it('takes nothing after `/compact`: its result is a line of the platform', () => {
+    expect(ids([agentCommandRow('1', 'compact'), resultRow('2', 2)])).toEqual([])
+  })
+
+  it('takes nothing when `/compact` came after `/init`: that command is what the result answers', () => {
+    expect(ids([agentCommandRow('1'), agentCommandRow('2', 'compact'), resultRow('3', 2)])).toEqual(
+      [],
+    )
+  })
+
   it('goes on past a press of the same work', () => {
     const retry: FeedRow = {
       id: '4',

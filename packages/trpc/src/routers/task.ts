@@ -31,7 +31,7 @@ import {
   cancelDialog,
   continueDialog,
   createDialog,
-  initDialog,
+  agentCommandDialog,
   postDialogMessage,
   resumeDialog,
   retryDialog,
@@ -216,7 +216,28 @@ export const taskRouter = router({
     .input(z.strictObject({ taskId: z.uuid(), requestId: browserId }))
     .output(postedOutput)
     .mutation(({ ctx, input }) =>
-      initDialog(ctx.prisma, { ...input, userId: ctx.user.id, now: new Date() }),
+      agentCommandDialog(ctx.prisma, {
+        ...input,
+        command: 'init',
+        userId: ctx.user.id,
+        now: new Date(),
+      }),
+    ),
+
+  /**
+   * `/compact`: the session of the chat is replaced by a summary, a paid pass of its own, free when
+   * it fails (docs/plan/61-chats-first.md, К30).
+   */
+  compact: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid(), requestId: browserId }))
+    .output(postedOutput)
+    .mutation(({ ctx, input }) =>
+      agentCommandDialog(ctx.prisma, {
+        ...input,
+        command: 'compact',
+        userId: ctx.user.id,
+        now: new Date(),
+      }),
     ),
 
   /**

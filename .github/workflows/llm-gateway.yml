@@ -57,7 +57,7 @@ jobs:
     runs-on: ubuntu-latest
     # Two groups, the plan and the API: real OpenCode through its driver, a little over four
     # minutes for the plan on a desktop and a third of that for the API, a third of either the
-    # pauses of short-lived refusals; the four rehearsals after it take about a minute each there.
+    # pauses of short-lived refusals; the five rehearsals after it take about a minute each there.
     # The limit was set for the three groups of the earlier shells and stays until the job with
     # these groups has run on a hosted runner.
     timeout-minutes: 60
@@ -95,6 +95,9 @@ jobs:
 
       - name: Rehearse the live measurement of turn results on the synthetic provider
         run: pnpm verify:llm-gateway --rehearsal --results --no-build
+
+      - name: Rehearse the live compaction of a session on the synthetic provider
+        run: pnpm verify:llm-gateway --rehearsal --compact --no-build
 
       # The acceptance on the pay-per-token API (П15): its live run needs a key of its own and a
       # topped-up account, and is started by a person; the rehearsal runs its code here.

@@ -25,12 +25,14 @@ import { SYNTHETIC_MCP_MARKER } from '../../../infra/dev/llm-verify/fake-subscri
 import { ZAI_PATHS } from '../../../infra/dev/llm-verify/fake-zai.mjs'
 import {
   chatRequestSummary,
+  requestMessagesText,
   createOutcome,
   failureLine,
   LIVE_LIMITS,
   LiveRefusal,
   longestReasoningRow,
   STREAM_FORMS,
+  streamContent,
   streamSummary,
   sumUsage,
 } from '../../../infra/dev/llm-verify/live.mjs'
@@ -434,6 +436,7 @@ export async function runLiveGateway(mode) {
       nativeSessionId,
       effort = 'high',
       printsReasoning = true,
+      action,
     }) {
       const { files: prepared, argv } = await prepareOpencodeTurn(
         { cli, control, driver, tools, instructions },
@@ -441,6 +444,7 @@ export async function runLiveGateway(mode) {
           turn,
           prompt,
           nativeSessionId,
+          action,
           llm: { baseUrl: offer.gatewayBaseUrl, model: ZAI_MODEL, reasoningEffort: effort },
         },
       )
@@ -497,7 +501,7 @@ export async function runLiveGateway(mode) {
      * CLI sent declared the platform's tools, and the role spoke to the provider only as often
      * as its ceiling allows.
      */
-    async function invariants(turn, outcome, { ceiling = TURN_CALLS } = {}) {
+    async function invariants(turn, outcome, { ceiling = TURN_CALLS, compaction = false } = {}) {
       const { label } = outcome
       const rows = await settled(turn)
       assert.ok(rows.length <= ceiling, `${label}: ${rows.length} calls of one key`)
@@ -542,7 +546,8 @@ export async function runLiveGateway(mode) {
         completed.length,
         `${label}: the completed calls of the role and the answers the sandbox got differ`,
       )
-      for (const rpc of ['initialize', 'tools/list'])
+      // The token of a compaction is asked once and its server has no MCP (61-chats-first, §5.14).
+      for (const rpc of compaction ? ['initialize'] : ['initialize', 'tools/list'])
         assert.ok(
           outcome.mcp.some((request) => request.rpc === rpc),
           `${label}: MCP ${rpc} missing`,
@@ -567,7 +572,7 @@ export async function runLiveGateway(mode) {
       const thought = streams.filter((stream) => stream.reasoningChars > 0)
       const reasoningChars = thought.reduce((sum, stream) => sum + stream.reasoningChars, 0)
       const reasoningRows = outcome.events.filter((event) => event.type === 'reasoning').length
-      if (rehearsal) {
+      if (rehearsal && !compaction) {
         assert.equal(reasoningRows, thought.length, `${label}: the rows of reasoning of the CLI`)
         const { bytes, cut } = outcome.longestReasoningRow
         assert.equal(
@@ -610,7 +615,7 @@ export async function runLiveGateway(mode) {
     // «The result is valid» is what the product would do with it (spec §20, П38).
     const valid = (outcome) => outcome.reading.taken
 
-    await { measure, results, gateway: acceptance }[kind]()
+    await { measure, results, compaction, gateway: acceptance }[kind]()
 
     /**
      * The acceptance: a turn of each kind — tool, MCP, text and the continuation of the text
@@ -847,6 +852,91 @@ export async function runLiveGateway(mode) {
         })
         await ceilingAndCap()
       }
+    }
+
+    /**
+     * `/compact` (--compact, docs/plan/61-chats-first.md, §5.14): a turn, the summary through the
+     * server of the CLI and the role llm, and a turn on it. What the platform owes is held;
+     * whether the model kept the code word is a share for the report, as every outcome.
+     */
+    async function compaction() {
+      assert.equal(live.kind, 'compaction')
+      stage = 'compaction'
+      budget.afford(3, 'the compaction')
+      // The key issued for the windows of the account is of no turn of this run.
+      await revoke(first)
+      const word = `violet-${randomBytes(3).toString('hex')}`
+      const said = await issued()
+      await script({ scenario: 'text', text: JSON.stringify(resultFor(`Before, ${word}`)) })
+      const told = `Synthetic check. Do not call any tool. The code word of this session is ${word}: remember it. Reply with the final result only.`
+      const before = await runTurn({
+        label: 'turn before the compaction',
+        turn: said,
+        prompt: told,
+      })
+      await invariants(said, before)
+      await revoke(said)
+      assert.equal(before.code, 0, 'The turn before the compaction failed')
+      assert.ok(before.nativeSessionId, 'OpenCode named no session')
+
+      const summarized = await issued(undefined, said)
+      await script({
+        scenario: 'text',
+        text: `## Objective
+- The code word is ${word}.`,
+      })
+      const compacted = await runTurn({
+        label: 'compaction',
+        turn: summarized,
+        prompt: 'Unused: a compaction reads no words.',
+        nativeSessionId: before.nativeSessionId,
+        action: 'compact',
+      })
+      await invariants(summarized, compacted, { compaction: true })
+      await revoke(summarized)
+      assert.equal(compacted.code, 0, `The compaction failed: ${compacted.lines} lines`)
+      assert.deepEqual(
+        compacted.events.map((event) => event.type),
+        ['started', 'usage', 'completed'],
+        'The rows of a compaction',
+      )
+      assert.equal(
+        compacted.nativeSessionId,
+        before.nativeSessionId,
+        'The compaction changed session',
+      )
+      const [request, ...others] = compacted.exchanges.filter((item) => item.method === 'POST')
+      assert.equal(others.length, 0, 'A compaction sends one request')
+      assert.equal(chatRequestSummary(request.requestBody)?.compaction, true, 'It declared tools')
+      const summary = streamContent(request.responseText).trim()
+      assert.notEqual(summary, '', 'The compaction wrote no summary')
+
+      const next = await issued(undefined, summarized)
+      await script({ scenario: 'text', text: JSON.stringify(resultFor(`After, ${word}`)) })
+      const after = await runTurn({
+        label: 'turn after the compaction',
+        turn: next,
+        prompt:
+          'Synthetic check, continued. Do not call any tool. Reply with the final result only; its summary must contain the code word you were given earlier in this session.',
+        nativeSessionId: before.nativeSessionId,
+      })
+      await invariants(next, after)
+      await revoke(next)
+      assert.equal(after.code, 0, 'The turn after the compaction failed')
+      assert.equal(after.nativeSessionId, before.nativeSessionId, 'The next turn left the session')
+      // The only turn of the session: the summary takes its place whole (§10, 61.24).
+      const asked = requestMessagesText(
+        after.exchanges.find((item) => item.method === 'POST')?.requestBody ?? '',
+      )
+      assert.ok(asked.includes(summary), 'The next turn was not told the summary')
+      assert.ok(!asked.includes(told), 'The next turn was told the words of the summarized turn')
+      const kept = after.result?.summary.includes(word) === true
+      report(
+        `compaction: ${compacted.requests} provider request(s), ${Math.round(compacted.ms / 1000)} s; the next turn knew the code word: ${kept ? 'yes' : 'no'}`,
+      )
+      passed(
+        'compaction: one request without tools through the role llm, its usage equals the rows of the wrapper, and the session went on from the summary in the next turn',
+      )
     }
 
     /**
@@ -1664,19 +1754,21 @@ request.on('error',()=>process.exit(1));request.end(Buffer.alloc(Number(process.
 /** What a run of the gateway stand is: a measurement, a measurement of results, or a verification. */
 function runKind(mode) {
   if (mode.measure) return 'measure'
+  if (mode.compact) return 'compaction'
   return mode.results ? 'results' : 'gateway'
 }
 
 const RUN_WORDS = {
   measure: 'measurement',
   results: 'measurement of results',
+  compaction: 'verification of a compaction',
   gateway: 'verification',
 }
 
 /** The last line of a run that passed, after the count of its provider requests is settled. */
 function announcePassed({ live, mode, rehearsal }) {
   const what = RUN_WORDS[runKind(mode)]
-  if (rehearsal && !mode.measure) {
+  if (rehearsal && !mode.measure && !mode.compact) {
     // The cap was reached on purpose: the count of the run says so itself.
     assert.throws(() => live.settle(), /reached its cap of \d+ provider requests/)
     assert.equal(live.tripped(), true)

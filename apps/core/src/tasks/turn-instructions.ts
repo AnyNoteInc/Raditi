@@ -2,6 +2,7 @@ import {
   SANDBOX_INBOX,
   type AgentWorkingSet,
   type FeedAgentCommandId,
+  type TurnAction,
   type MediaChecks,
   type PreviewUnavailableReason,
 } from '@repo/domain'
@@ -536,7 +537,13 @@ export const INIT_ANSWER_MAX_CHARS = 1800
  */
 export const INIT_PROMPT = `Изучите код проекта в рабочей копии и подготовьте подсказки агенту, который будет работать с этим проектом: как устроен код, где что лежит, как здесь принято писать и что лучше не трогать. Ничего не меняйте: ни файлы, ни содержимое сайта; браузер для этого не нужен. Не называйте паролей, ключей и значений переменных окружения. Ответ в \`client_message\` — сами подсказки, простым текстом, не длиннее ${INIT_ANSWER_MAX_CHARS} знаков: длиннее платформа не примет. Их читает следующий агент, поэтому только в этом ответе называйте папки и файлы так, как они названы в коде; остальное — по-русски, на «вы», простыми словами, без кода и команд.`
 
-/** The words of the platform a command carried out by the agent sends (§5.2). */
-export const AGENT_COMMAND_PROMPTS: Readonly<Record<FeedAgentCommandId, string>> = Object.freeze({
-  init: INIT_PROMPT,
+/** What a command carried out by the agent asks: words of the platform, or an action of the turn. */
+export const AGENT_COMMANDS: Readonly<
+  Record<
+    FeedAgentCommandId,
+    { prompt: string; action?: never } | { prompt?: never; action: TurnAction }
+  >
+> = Object.freeze({
+  init: { prompt: INIT_PROMPT },
+  compact: { action: 'compact' },
 })

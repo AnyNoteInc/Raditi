@@ -496,6 +496,43 @@ test('refuses a session that kept the undone turn or lost the turn before it', a
   assert.throws(() => fixture.assertRewindComplete(), /failed requests/)
 })
 
+test('wants the history of the session in the request of a compaction', async (t) => {
+  const fixture = await open(t)
+  const compaction = {
+    ...rewind(3),
+    turn: 4,
+    llmKey: 'synthetic-llm-compaction',
+    mcpKey: 'synthetic-mcp-compaction',
+    effort: 'high',
+    summary: 'the-summary',
+    remembered: [WORDS.first],
+  }
+  fixture.addCompactionTurn(compaction)
+  const body = { ...bodyFor(2), messages: [...first] }
+  delete body.tools
+  delete body.tool_choice
+  const lost = await send(fixture, PATH, compaction.llmKey, { ...body, messages: [] })
+  assert.equal(lost.status, 400)
+  assert.deepEqual(fixture.observations().problems, ['The compaction lost words of the session'])
+})
+
+test('refuses tools in a compaction', async (t) => {
+  const fixture = await open(t)
+  const compaction = {
+    ...rewind(3),
+    turn: 4,
+    llmKey: 'synthetic-llm-compaction',
+    mcpKey: 'synthetic-mcp-compaction',
+    effort: 'high',
+    summary: 'the-summary',
+    remembered: [],
+  }
+  fixture.addCompactionTurn(compaction)
+  const answered = await send(fixture, PATH, compaction.llmKey, bodyFor(2))
+  assert.equal(answered.status, 400)
+  assert.deepEqual(fixture.observations().problems, ['A compaction was offered tools'])
+})
+
 test('a chat without a repository is no turn of the two the stand requires', async (t) => {
   const fixture = await open(t)
   fixture.addRewindTurn(rewind(1))

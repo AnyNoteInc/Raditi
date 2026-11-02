@@ -9,9 +9,7 @@ import {
   chatCommandRefusals,
   chatCommandRefusalText,
   chatCommands,
-  isCommandToCome,
   matchChatCommands,
-  offeredCommandIds,
   parseChatCommand,
   serverCommandIds,
   type ChatCommandFacts,
@@ -33,6 +31,8 @@ const waiting: ChatCommandFacts = {
   turnRewinding: false,
   turnRedo: 'nothing_to_redo',
   turnRedoing: false,
+  compaction: true,
+  compactRefusal: null,
 }
 const verdict = (facts: ChatCommandFacts) =>
   Object.fromEntries(chatCommandAvailability(facts).map((item) => [item.id, item.refusal]))
@@ -96,6 +96,7 @@ describe('the commands of a dialog', () => {
         reset: 'project_closed',
         update: 'project_closed',
         init: 'project_closed',
+        compact: 'project_closed',
         retry: 'project_closed',
         cancel: null,
         undo: 'no_release',
@@ -267,8 +268,7 @@ describe('the commands of a dialog', () => {
       'themes',
       'help',
     ])
-    expect(chatCommandAvailability(waiting).map((item) => item.id)).toEqual(offeredCommandIds)
-    expect(offeredCommandIds).toEqual(serverCommandIds.filter((id) => !isCommandToCome(id)))
+    expect(chatCommandAvailability(waiting).map((item) => item.id)).toEqual(serverCommandIds)
   })
 
   it('moves «Отменить выпуск» to `/rollback`: `/undo` is the last request now (К28)', () => {
@@ -280,6 +280,39 @@ describe('the commands of a dialog', () => {
     expect(chatCommands.turn_undo.descriptionPlain).toBe(
       'Агент забудет последний запрос и ответ на него.',
     )
+  })
+
+  it('takes `/compact` while the chat waits and its session holds a finished turn (К30)', () => {
+    const compact = (facts: Partial<ChatCommandFacts>) => verdict({ ...waiting, ...facts }).compact
+    expect(compact({})).toBeNull()
+    expect(compact({ taskStatus: 'awaiting_user', candidate: null, repository: false })).toBeNull()
+    expect(compact({ compactRefusal: 'nothing_to_compact' })).toBe('nothing_to_compact')
+    expect(compact({ compactRefusal: 'awaiting_answer' })).toBe('awaiting_answer')
+    expect(chatCommandRefusalText.nothing_to_compact).toBe('Сжимать пока нечего.')
+    expect(compact({ taskStatus: 'running' })).toBe('busy')
+    expect(compact({ taskStatus: 'queued' })).toBe('busy')
+    expect(compact({ taskStatus: 'deploying' })).toBe('release_in_progress')
+    expect(compact({ releaseInProgress: true })).toBe('release_in_progress')
+    expect(compact({ taskStatus: 'done' })).toBe('finished')
+    expect(compact({ projectClosed: true })).toBe('project_closed')
+    expect(compact({ turnRewinding: true })).toBe('turn_rewinding')
+    expect(compact({ cancelPending: true })).toBe('finished')
+  })
+
+  it('names a driver without the compaction: the page lists no such command (§5.14)', () => {
+    expect(verdict({ ...waiting, compaction: false }).compact).toBe('no_compaction')
+    expect(chatCommandRefusalText.no_compaction).toBe('Эта команда сейчас недоступна.')
+  })
+
+  it('gives no other refusal without the compaction: only this one takes the row off (§5.14)', () => {
+    const off = (facts: Partial<ChatCommandFacts>) =>
+      verdict({ ...waiting, compaction: false, ...facts }).compact
+    expect(off({ taskStatus: 'done' })).toBe('no_compaction')
+    expect(off({ projectClosed: true })).toBe('no_compaction')
+    expect(off({ cancelPending: true })).toBe('no_compaction')
+    expect(off({ turnRewinding: true })).toBe('no_compaction')
+    expect(off({ turnRedoing: true })).toBe('no_compaction')
+    expect(off({ releaseInProgress: true })).toBe('no_compaction')
   })
 
   it('takes `/undo` by the facts of its turn, while nothing works or is released', () => {
@@ -412,6 +445,7 @@ describe('availability', () => {
       reset: null,
       update: 'up_to_date',
       init: null,
+      compact: null,
       retry: 'nothing_to_retry',
       cancel: null,
       undo: 'no_release',
@@ -514,6 +548,7 @@ describe('availability', () => {
         reset: 'finished',
         update: 'finished',
         init: 'finished',
+        compact: 'finished',
         retry: 'finished',
         cancel: 'finished',
         undo: 'no_release',
@@ -555,7 +590,7 @@ describe('availability', () => {
   it('answers every status of spec §7', () => {
     for (const taskStatus of taskStatuses)
       expect(chatCommandAvailability({ ...waiting, taskStatus })).toHaveLength(
-        offeredCommandIds.length,
+        serverCommandIds.length,
       )
   })
 })
