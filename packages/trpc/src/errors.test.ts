@@ -821,6 +821,7 @@ describe('the refusals of a dialog, its preview and its release', () => {
     ['TASK_TEXT_INVALID', 400],
     ['TASK_BUSY', 409],
     ['TASK_REWINDING', 409],
+    ['TASK_REDOING', 409],
     ['TASK_FINISHED', 409],
     ['TASK_CONTINUE_REQUIRED', 409],
     ['TASK_NOTHING_TO_CONTINUE', 409],

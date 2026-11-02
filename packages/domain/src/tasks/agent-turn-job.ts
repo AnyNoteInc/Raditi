@@ -72,10 +72,11 @@ export const candidateRebaseDedupeKey = (job: CandidateRebaseJob): string =>
 /**
  * `/undo` of a turn in a chat with the repository (docs/plan/61-chats-first.md, §5.14): core takes
  * `agent/<taskId>`, the candidate and the preview back to where the turn found them, without the
- * model. Put by web (`task.undoTurn`) with the `feed.request` of the command. Ids only.
+ * model; `/redo` brings them forward again, and the row of the press says which of the two it is.
+ * Put by web (`task.undoTurn`, `task.redoTurn`) with the `feed.request` of the command. Ids only.
  */
 export const CANDIDATE_REWIND_JOB = 'candidate.rewind'
-/** The internal row of `task_events` that answers an `/undo` (never shown to the client). */
+/** The internal row of `task_events` that answers an `/undo` or a `/redo` (never shown to the client). */
 export const CANDIDATE_REWIND_EVENT = 'candidate.rewind'
 /**
  * The internal row a job writes right before it pushes (never shown to the client): the push may
@@ -86,7 +87,7 @@ export const CANDIDATE_REWIND_PUSH_EVENT = 'candidate.rewind.push'
 
 export const candidateRewindJobSchema = z.strictObject({
   taskId: z.uuid(),
-  /** `task_events.id` of the `feed.request` of the command `turn_undo`. */
+  /** `task_events.id` of the `feed.request` of the command `turn_undo` or `turn_redo`. */
   requestEventId: feedEventIdSchema,
 })
 export type CandidateRewindJob = z.infer<typeof candidateRewindJobSchema>

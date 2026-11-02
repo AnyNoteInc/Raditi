@@ -67,6 +67,7 @@ const calls = vi.hoisted(() => ({
   resumeAgent: vi.fn<(input: Press) => Promise<Posted>>(),
   init: vi.fn<(input: Press) => Promise<Posted>>(),
   undoTurn: vi.fn<(input: Press) => Promise<Posted & { words: string | null }>>(),
+  redoTurn: vi.fn<(input: Press) => Promise<Posted & { words: string | null }>>(),
   agentNotes:
     vi.fn<(input: { id: string }) => Promise<{ notes: string | null; canManage: boolean }>>(),
   setAgentNotes:
@@ -146,6 +147,7 @@ vi.mock('@/trpc/client', () => ({
       resumeAgent: mutation(calls.resumeAgent),
       init: mutation(calls.init),
       undoTurn: mutation(calls.undoTurn),
+      redoTurn: mutation(calls.redoTurn),
       setEffort: mutation(calls.setEffort),
       rename: mutation(calls.rename),
       remove: mutation(calls.remove),
@@ -2261,6 +2263,121 @@ describe('the five kinds of a chat (docs/plan/61-chats-first.md, §5.6)', () => 
       expect(said()).not.toContain('Агент ответил')
       expect(said()).not.toContain('Нужен ваш ответ')
       expect(field().getAttribute('placeholder')).not.toBe('Ваш ответ')
+    })
+  })
+
+  describe('`/redo`', () => {
+    const at = '2026-10-17T10:00:00.000Z'
+    const row = (fields: Record<string, unknown>) => ({ at, ...fields }) as unknown as FeedRow
+    const asked = requestRow('1', 'Добавьте новость')
+    const result = row({
+      id: '2',
+      type: 'feed.result',
+      turn: 1,
+      message: 'Новость добавлена.',
+      site: 'none',
+      next: 'awaiting_user',
+      filesChanged: null,
+      changeType: 'none',
+      needsApproval: false,
+      risk: 'low',
+    })
+    const rewind = row({ id: '3', type: 'feed.rewind', turn: 1, files: false, site: 'none' })
+    const redone = row({ id: '5', type: 'feed.redo', turn: 1, files: false, open: false })
+    const chat = (events: FeedRow[], commands = verdicts({ turn_undo: null, turn_redo: null })) =>
+      browserAnswer({
+        status: 'awaiting_user',
+        commands,
+        events,
+        cursor: events.at(-1)!.id,
+      })
+    const undo = () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+      fireEvent.click(option(/Отменить последний запрос/))
+    }
+    const redo = () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+      fireEvent.click(option(/Вернуть отменённый запрос/))
+    }
+    /** `/undo` gave the words to the field, and the next read of the feed shows its row. */
+    async function undoneChat() {
+      calls.undoTurn.mockResolvedValue({ ...posted, words: 'Добавьте новость' })
+      calls.redoTurn.mockResolvedValue({
+        ...posted,
+        requestEventId: '4',
+        words: 'Добавьте новость',
+      })
+      showDialog(chat([asked, result]))
+      await screen.findByText('Новость добавлена.')
+      calls.feed.mockResolvedValue(chat([asked, result, rewind]))
+      undo()
+      await waitFor(() => expect(field().value).toBe('Добавьте новость'))
+      await screen.findByText('Последний запрос отменён.')
+    }
+
+    it('takes the words out of the field once the turn is back: sent, they would ask twice', async () => {
+      await undoneChat()
+      calls.feed.mockResolvedValue(chat([asked, result, rewind, redone]))
+      redo()
+      await waitFor(() => expect(calls.redoTurn).toHaveBeenCalledTimes(1))
+      await screen.findByText('Отменённый запрос возвращён.')
+      await waitFor(() => expect(field().value).toBe(''))
+    })
+
+    it('leaves words the client changed, or wrote in their place', async () => {
+      await undoneChat()
+      type('Добавьте новость о скидках')
+      calls.feed.mockResolvedValue(chat([asked, result, rewind, redone]))
+      redo()
+      await screen.findByText('Отменённый запрос возвращён.')
+      expect(field().value).toBe('Добавьте новость о скидках')
+    })
+
+    it('keeps the words until core brought the turn back, and keeps them when it could not', async () => {
+      await undoneChat()
+      redo()
+      await waitFor(() => expect(calls.redoTurn).toHaveBeenCalledTimes(1))
+      expect(field().value).toBe('Добавьте новость')
+      calls.feed.mockResolvedValue(
+        chat([
+          asked,
+          result,
+          rewind,
+          row({ id: '5', type: 'feed.update', outcome: 'redo_failed', conflicts: 0 }),
+        ]),
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+      await screen.findByRole('heading', { name: 'Запрос не возвращён' })
+      expect(field().value).toBe('Добавьте новость')
+    })
+
+    it('says the chat answered again: `/redo` took the `/undo` back', async () => {
+      showDialog(chat([asked, result, rewind, redone]))
+      await screen.findByText('Отменённый запрос возвращён.')
+      const said = () => screen.getAllByRole('status').map((region) => region.textContent)
+      await waitFor(() => expect(said()).toContain('Агент ответил'))
+      expect(said()).not.toContain('Запрос отменён')
+    })
+
+    it('opens the question of the turn again', async () => {
+      const question = row({
+        id: '2',
+        type: 'feed.question',
+        kind: 'agent',
+        turn: 1,
+        intro: 'Уточните.',
+        questions: [{ text: 'Какой адрес?', options: [] }],
+      })
+      showDialog(chat([asked, question, rewind, redone]))
+      await screen.findByText('Отменённый запрос возвращён.')
+      await waitFor(() => expect(field().getAttribute('placeholder')).toBe('Ваш ответ'))
+    })
+
+    it('shows the refusal of the server', async () => {
+      await undoneChat()
+      calls.redoTurn.mockRejectedValue(serverRefusal('Возвращать нечего.'))
+      redo()
+      expect((await screen.findByRole('alert')).textContent).toBe('Возвращать нечего.')
     })
   })
 

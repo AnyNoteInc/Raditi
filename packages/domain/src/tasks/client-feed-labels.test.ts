@@ -44,9 +44,11 @@ import {
   feedUndoConfirmedText,
   feedUndoKeptText,
   feedUndoReasonText,
+  feedRedoText,
   feedRewindText,
   feedUndoText,
   feedUpdateText,
+  feedUpdateTitle,
   feedReleaseTitle,
   feedVersionBumpLabel,
   feedVersionText,
@@ -724,6 +726,20 @@ describe('the row of `/undo` (docs/plan/61-chats-first.md, §5.13)', () => {
     )
     expect(feedRewindText({ files: true, site: 'check' })).toBe(
       'Переписка и файлы возвращены. То, что агент сделал на сайте через браузер, осталось: проверьте сайт.',
+    )
+  })
+})
+
+describe('the row of `/redo` and a press that failed (docs/plan/61-chats-first.md, §5.13)', () => {
+  it('names the files only when the turn changed some (К19)', () => {
+    expect(feedRedoText({ files: false })).toBe('Отменённый запрос возвращён.')
+    expect(feedRedoText({ files: true })).toBe('Отменённый запрос и его файлы возвращены.')
+  })
+
+  it('says the request stays undone', () => {
+    expect(feedUpdateTitle.redo_failed).toBe('Запрос не возвращён')
+    expect(feedUpdateText('redo_failed', 0)).toBe(
+      'Не получилось вернуть отменённый запрос: он остался отменённым.',
     )
   })
 })

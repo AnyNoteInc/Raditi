@@ -58,6 +58,8 @@ export const feedEventTypes = [
   'feed.screenshot',
   // `/undo` took the last turn back (docs/plan/61-chats-first.md, §5.14).
   'feed.rewind',
+  // `/redo` brought it back: the two rows are read as if neither were there.
+  'feed.redo',
 ] as const
 export type FeedEventType = (typeof feedEventTypes)[number]
 
@@ -631,7 +633,9 @@ export type FeedReleasePayload = z.infer<typeof feedReleasePayloadSchema>
  * - `withdrawn` — the client wrote to the dialog before the update was made: it was not made;
  * - `failed` — the update could not be made;
  * - `rewind_failed` — `/undo` could not take the turn back: the chat stands as it did
- *   (docs/plan/61-chats-first.md, §5.14). A taken-back turn is a `feed.rewind`.
+ *   (docs/plan/61-chats-first.md, §5.14). A taken-back turn is a `feed.rewind`;
+ * - `redo_failed` — `/redo` could not bring it back: the chat stands as it did. A turn brought
+ *   back is a `feed.redo`.
  */
 export const feedUpdateOutcomes = [
   'emptied',
@@ -640,10 +644,11 @@ export const feedUpdateOutcomes = [
   'withdrawn',
   'failed',
   'rewind_failed',
+  'redo_failed',
 ] as const
 export type FeedUpdateOutcome = (typeof feedUpdateOutcomes)[number]
 
-/** `feed.update` v1 — an «Обновить» that did not record a new revision, or an `/undo` that failed. */
+/** `feed.update` v1 — an «Обновить» that recorded no revision, or an `/undo` or `/redo` that failed. */
 export const feedUpdatePayloadSchema = z.strictObject({
   v: version,
   outcome: z.enum(feedUpdateOutcomes),
@@ -718,6 +723,21 @@ export const feedRewindPayloadSchema = z.strictObject({
 })
 export type FeedRewindPayload = z.infer<typeof feedRewindPayloadSchema>
 
+/**
+ * `feed.redo` v1 — `/redo` brought back the turn `/undo` took: `files` as the `feed.rewind` of that
+ * turn said it. Rows are not rewritten, so this one cancels that one for whoever reads what the
+ * chat waits for: the two together are as if neither were there. `open` — the turn came back with
+ * nothing to release, where the chat had waited with a candidate: what it waited after can take no
+ * words any more, so this row does (§5.14). Trusted, no text.
+ */
+export const feedRedoPayloadSchema = z.strictObject({
+  v: version,
+  turn: turnNo,
+  files: z.boolean(),
+  open: z.boolean(),
+})
+export type FeedRedoPayload = z.infer<typeof feedRedoPayloadSchema>
+
 /** The writing schema of each type. */
 export const feedPayloadSchemas = Object.freeze({
   'feed.request': feedRequestPayloadSchema,
@@ -733,6 +753,7 @@ export const feedPayloadSchemas = Object.freeze({
   'feed.undo': feedUndoPayloadSchema,
   'feed.screenshot': feedScreenshotPayloadSchema,
   'feed.rewind': feedRewindPayloadSchema,
+  'feed.redo': feedRedoPayloadSchema,
 }) satisfies Record<FeedEventType, z.ZodType>
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength
@@ -763,6 +784,7 @@ export const feedRowSchemaWithin = (maxBytes: number) =>
       row('feed.undo', feedUndoPayloadSchema),
       row('feed.screenshot', feedScreenshotPayloadSchema),
       row('feed.rewind', feedRewindPayloadSchema),
+      row('feed.redo', feedRedoPayloadSchema),
     ])
     .superRefine((value, ctx) => {
       if (feedPayloadBytes(value.payload) > maxBytes)
@@ -1005,6 +1027,8 @@ const readRewind = z.object({
   site: known(rewindSites, 'check' as const),
 })
 
+const readRedo = z.object({ turn: turnNo, files: z.boolean(), open: z.boolean() })
+
 const readCancelled = z.object({
   turn: turnNo.nullable(),
   /** null — a way of cancelling added later: the plate is shown without a reason. */
@@ -1052,6 +1076,7 @@ export type FeedEvent =
   | ({ type: 'feed.undo' } & (z.infer<typeof readUndoConfirmed> | z.infer<typeof readUndoOutcome>))
   | ({ type: 'feed.screenshot' } & z.infer<typeof readScreenshot>)
   | ({ type: 'feed.rewind' } & z.infer<typeof readRewind>)
+  | ({ type: 'feed.redo' } & z.infer<typeof readRedo>)
   | { type: 'newer' }
   | { type: 'unreadable' }
   | { type: 'skipped' }
@@ -1171,6 +1196,9 @@ const readers: Record<FeedEventType, Record<number, Reader>> = {
   },
   'feed.rewind': {
     1: (payload) => readWith(readRewind, payload, (data) => ({ type: 'feed.rewind', ...data })),
+  },
+  'feed.redo': {
+    1: (payload) => readWith(readRedo, payload, (data) => ({ type: 'feed.redo', ...data })),
   },
 }
 

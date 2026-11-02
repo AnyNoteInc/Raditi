@@ -2081,6 +2081,20 @@ export async function runScenarios(stand) {
     return [answer.json].flat().find((ref) => ref.ref === name)?.object.sha ?? null
   }
   const undoLast = (taskId) => owner.mutate('task.undoTurn', { taskId, requestId: uuid7() })
+  const redoLast = (taskId) => owner.mutate('task.redoTurn', { taskId, requestId: uuid7() })
+  /** The row of the `count`-th `/redo` of the chat: core wrote it with the turn back. */
+  const redoneRow = (taskId, count = 1) =>
+    rt.until(
+      `redo ${count} of ${taskId} written by core`,
+      async () => {
+        const rows = await db.taskEvent.findMany({
+          where: { taskId, type: 'feed.redo' },
+          orderBy: { id: 'asc' },
+        })
+        return rows.length >= count ? rows[count - 1] : null
+      },
+      { timeoutMs: 3 * MINUTE, intervalMs: 500, service: stand.processes.core },
+    )
   /** The row of the `count`-th undo of the chat: core wrote it with the turn undone. */
   const rewoundRow = (taskId, count = 1) =>
     rt.until(
@@ -2259,6 +2273,29 @@ export async function runScenarios(stand) {
     !visitL.pages[styleUrl].text.includes(TEXT.undoMark(1)),
     'the preview shows the site as it is',
   )
+  // The branch is gone, and `/redo` brings it back from the commit held on the remote.
+  const redoneL = await redoLast(dialogL.taskId)
+  const redoRowL = await redoneRow(dialogL.taskId)
+  const taskL2 = await db.task.findUniqueOrThrow({ where: { id: dialogL.taskId } })
+  const candidateL2 = await currentCandidate(dialogL.taskId)
+  rt.check(
+    redoneL.words === 'Добавьте отметку отмены в стили темы.' &&
+      redoRowL.payload.files === true &&
+      taskL2.status === 'awaiting_approval' &&
+      candidateL2?.turnNo === 1 &&
+      (await agentHead(dialogL.taskId)) === candidateL2.headSha,
+    '/redo of the first turn brings its branch and its candidate back',
+    { status: taskL2.status, row: redoRowL.payload, revision: candidateL2?.revision },
+  )
+  await previewReady(dialogL.taskId, candidateL2.revision)
+  const visitL2 = await previewVisit(dialogL.taskId, [styleUrl])
+  rt.check(
+    visitL2.pages[styleUrl].text.includes(TEXT.undoMark(1)),
+    'the preview shows the change of the turn that came back',
+  )
+  await undoLast(dialogL.taskId)
+  await rewoundRow(dialogL.taskId, 2)
+  await previewReady(dialogL.taskId, 0)
   // A turn that changes nothing still publishes a commit: its undo says no word of files (К19).
   model.script(MODEL_TURNS.undoNothing())
   await owner.mutate('task.message', {
@@ -2276,7 +2313,7 @@ export async function runScenarios(stand) {
     { replaces: planL2.replacesTurn, pin: planL2.workspace?.expectedBranchSha },
   )
   await undoLast(dialogL.taskId)
-  const rowL2 = await rewoundRow(dialogL.taskId, 2)
+  const rowL2 = await rewoundRow(dialogL.taskId, 3)
   rt.check(
     rowL2.payload.files === false && (await agentHead(dialogL.taskId)) === null,
     'the undo of a turn that changed no file says nothing of files',
@@ -2353,6 +2390,46 @@ export async function runScenarios(stand) {
       visitM3.pages[styleUrl].text.includes(TEXT.undoMark(1)),
     'the preview is back on the title of turn 1 and without the title of turn 2, its file too',
   )
+
+  // `/redo` brings the records of the turn back with its files, and takes no money.
+  const heldM = await holdsOf(dialogM.taskId)
+  const redoneM = await redoLast(dialogM.taskId)
+  const redoRowM = await redoneRow(dialogM.taskId)
+  const candidateM3r = await currentCandidate(dialogM.taskId)
+  const operationsM2 = await db.previewDbOperation.findMany({
+    where: { taskId: dialogM.taskId },
+    orderBy: { turnNo: 'asc' },
+  })
+  rt.check(
+    redoneM.words === 'Поменяйте отметку на версию 2 и заголовок новости.' &&
+      redoRowM.payload.files === true &&
+      candidateM3r?.revision === 4 &&
+      candidateM3r.turnNo === 2 &&
+      candidateM3r.headSha === candidateM2.headSha &&
+      candidateM3r.dbPlan.length === 2 &&
+      operationsM2.every((row) => !row.excluded) &&
+      (await agentHead(dialogM.taskId)) === candidateM2.headSha,
+    '/redo brings the branch, the candidate and the record of turn 2 back',
+    { row: redoRowM.payload, revision: candidateM3r?.revision },
+  )
+  rt.check(
+    JSON.stringify(await holdsOf(dialogM.taskId)) === JSON.stringify(heldM),
+    '/redo moves no money',
+  )
+  await previewReady(dialogM.taskId, 4)
+  const visitM3r = await previewVisit(dialogM.taskId, [contactsPath, postPath])
+  rt.check(
+    visitM3r.pages[contactsPath].text.includes(TEXT.undoTitle(1)) &&
+      visitM3r.pages[postPath].text.includes(TEXT.undoTitle(2)),
+    'the preview holds the records of both turns again',
+  )
+  rt.check(
+    (await refusalOf(dialogM.taskId, 'turn_redo')) === 'nothing_to_redo',
+    '/redo brings a turn back once',
+  )
+  await undoLast(dialogM.taskId)
+  await rewoundRow(dialogM.taskId, 2)
+  await previewReady(dialogM.taskId, 5)
 
   // A branch nobody may move has moved: `/undo` says so, and the chat stands as it did.
   model.script(MODEL_TURNS.undoMark(3))

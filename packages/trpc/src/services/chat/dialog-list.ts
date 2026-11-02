@@ -55,10 +55,15 @@ type DialogFolderKey = string
 /** A chat that is shown (К34): not deleted, of a project that is not deleted or of none. */
 const SHOWN = Prisma.sql`t.deleted_at IS NULL AND (t.site_id IS NULL OR s.deleted_at IS NULL)`
 
-/** The newest row of `t` that says what its chat waits for. */
+/**
+ * The newest row of `t` that says what its chat waits for. A `feed.rewind` before a `feed.redo` is
+ * as if it were not there: `/redo` took it back, and an older one stands before a later turn.
+ */
 const ENDING = Prisma.sql`(SELECT e.type FROM task_events e
   WHERE e.task_id = t.id
     AND e.type IN ('feed.result', 'feed.question', 'feed.failure', 'feed.rewind')
+    AND NOT (e.type = 'feed.rewind' AND EXISTS (SELECT 1 FROM task_events r
+      WHERE r.task_id = t.id AND r.type = 'feed.redo' AND r.id > e.id))
   ORDER BY e.id DESC LIMIT 1)`
 
 /** `DialogListItem.answered` of the row `t`. */

@@ -35,6 +35,7 @@ import {
   postDialogMessage,
   resumeDialog,
   retryDialog,
+  redoDialogTurn,
   undoDialogTurn,
 } from '../services/chat/tasks.ts'
 import { consentedProcedure, router } from '../trpc.ts'
@@ -226,6 +227,15 @@ export const taskRouter = router({
     .input(z.strictObject({ taskId: z.uuid(), requestId: browserId }))
     .output(postedOutput.extend({ words: z.string().nullable() }))
     .mutation(({ ctx, input }) => undoDialogTurn(ctx.prisma, { ...input, userId: ctx.user.id })),
+
+  /**
+   * `/redo`: the turn `/undo` took comes back, free and without the model (§5.14); `words` — what
+   * the client wrote for it, for the page to take out of the field.
+   */
+  redoTurn: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid(), requestId: browserId }))
+    .output(postedOutput.extend({ words: z.string().nullable() }))
+    .mutation(({ ctx, input }) => redoDialogTurn(ctx.prisma, { ...input, userId: ctx.user.id })),
 
   /** «Продолжить» after a question of the platform about credits: the next attempt. */
   continue: consentedProcedure

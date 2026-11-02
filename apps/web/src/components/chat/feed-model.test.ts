@@ -8,9 +8,11 @@ import {
   liveCandidateRow,
   liveSteps,
   openQuestion,
+  redoneAfter,
   requestShown,
   stopRequested,
   undoFailedAfter,
+  withoutRedoneRewinds,
 } from './feed-model'
 import {
   agentCommandRow,
@@ -156,6 +158,40 @@ describe('openQuestion', () => {
       site: 'none',
     }
     expect(openQuestion([agentQuestionRow('3', 1), rewind], 'awaiting_user')).toBeNull()
+  })
+
+  it('opens again when `/redo` took that `/undo` back, and only then', () => {
+    const rewind = (id: string): FeedRow => ({
+      id,
+      at: '2026-10-17T09:50:00.000Z',
+      type: 'feed.rewind',
+      turn: 1,
+      files: false,
+      site: 'none',
+    })
+    const redo = (id: string): FeedRow => ({
+      id,
+      at: '2026-10-17T09:51:00.000Z',
+      type: 'feed.redo',
+      turn: 1,
+      files: false,
+      open: false,
+    })
+    const question = agentQuestionRow('3', 1)
+    expect(openQuestion([question, rewind('4'), redo('5')], 'awaiting_user')).toBe(question)
+    expect(
+      openQuestion([question, rewind('4'), redo('5'), rewind('6')], 'awaiting_user'),
+    ).toBeNull()
+    expect(
+      openQuestion([question, rewind('4'), redo('5'), rewind('6'), redo('7')], 'awaiting_user'),
+    ).toBe(question)
+    expect(withoutRedoneRewinds([question, rewind('4')]).map((row) => row.id)).toEqual(['3', '4'])
+    expect(withoutRedoneRewinds([question, rewind('4'), redo('5')]).map((row) => row.id)).toEqual([
+      '3',
+      '5',
+    ])
+    expect(redoneAfter([question, rewind('4'), redo('5')], '4')).toBe(true)
+    expect(redoneAfter([question, redo('5'), rewind('6')], '5')).toBe(false)
   })
 
   it('is closed outside the statuses that wait for the client', () => {

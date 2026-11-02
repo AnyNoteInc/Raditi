@@ -13,6 +13,7 @@ import type {
   CandidateRebase,
   CandidateRebaseInput,
   GitWorkspaceService,
+  UndoneCommitInput,
 } from '../git-workspace/git-workspace.service.ts'
 
 /**
@@ -45,8 +46,10 @@ export interface CandidateGit {
     input: CandidateRebaseInput,
     assertFence?: () => Promise<void>,
   ): Promise<CandidateRebase>
-  /** `/undo`: `GitWorkspaceService.rewindBranch`. */
+  /** `/undo` and `/redo`: `GitWorkspaceService.rewindBranch`. */
   rewindBranch(input: BranchRewindInput, assertFence?: () => Promise<void>): Promise<void>
+  /** `/undo`, before the branch moves: `GitWorkspaceService.holdUndoneCommit`. */
+  holdUndoneCommit(input: UndoneCommitInput, assertFence?: () => Promise<void>): Promise<void>
 }
 
 export interface CommitComparisonInput {
@@ -116,7 +119,7 @@ const refOf = (repo: RepoRef): RepoRef => ({
 export function candidateGitOf(
   service: Pick<
     GitWorkspaceService,
-    'readBranchHead' | 'rebaseCandidate' | 'rewindBranch' | 'treeOf'
+    'readBranchHead' | 'rebaseCandidate' | 'rewindBranch' | 'holdUndoneCommit' | 'treeOf'
   > & {
     compareCommits?: unknown
   },
@@ -129,6 +132,8 @@ export function candidateGitOf(
       service.rebaseCandidate({ ...input, repo: refOf(input.repo) }, assertFence),
     rewindBranch: (input, assertFence) =>
       service.rewindBranch({ ...input, repo: refOf(input.repo) }, assertFence),
+    holdUndoneCommit: (input, assertFence) =>
+      service.holdUndoneCommit({ ...input, repo: refOf(input.repo) }, assertFence),
     comparesCommits: typeof compare === 'function',
     async compareCommits(input) {
       if (typeof compare !== 'function') throw notImplemented('Comparison of candidate commits')

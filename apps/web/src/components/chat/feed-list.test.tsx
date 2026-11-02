@@ -571,7 +571,10 @@ describe('the rows of a dialog', () => {
   })
 
   it('says of an `/undo` that failed that nothing moved, as a card of a failure', () => {
-    const update = (id: string, outcome: 'rewind_failed' | 'failed' | 'current'): FeedRow => ({
+    const update = (
+      id: string,
+      outcome: 'rewind_failed' | 'redo_failed' | 'failed' | 'current',
+    ): FeedRow => ({
       id,
       at: '2026-10-17T09:50:00.000Z',
       type: 'feed.update',
@@ -584,6 +587,7 @@ describe('the rows of a dialog', () => {
         update('14', 'rewind_failed'),
         update('15', 'failed'),
         update('16', 'current'),
+        update('17', 'redo_failed'),
       ],
       headOf({ status: 'awaiting_approval' }),
     )
@@ -594,6 +598,28 @@ describe('the rows of a dialog', () => {
     )
     expect(color('Запрос не отменён')).toBe(color('Рабочую копию не обновили'))
     expect(color('Запрос не отменён')).not.toBe(color('Рабочая копия уже обновлена'))
+    expect(color('Запрос не возвращён')).toBe(color('Рабочую копию не обновили'))
+    expect(color('Запрос не возвращён')).not.toBe(color('Рабочая копия уже обновлена'))
+  })
+
+  it('says what `/redo` brought back, of the files only when the turn changed some (К19)', () => {
+    const redo = (id: string, files: boolean): FeedRow => ({
+      id,
+      at: '2026-10-17T09:50:00.000Z',
+      type: 'feed.redo',
+      turn: 2,
+      files,
+      open: false,
+    })
+    const { feed } = showFeed(
+      [commandRow('13', 'turn_redo'), redo('14', false), redo('15', true)],
+      headOf({ status: 'awaiting_user' }),
+    )
+    expect(text(feed)).toContain('Вы попросили вернуть отменённый запрос')
+    expect(within(feed).getAllByRole('listitem').map(text).slice(1)).toEqual([
+      'Отменённый запрос возвращён.',
+      'Отменённый запрос и его файлы возвращены.',
+    ])
   })
 
   it('says what `/undo` took back, and what stayed by what the chat left', () => {

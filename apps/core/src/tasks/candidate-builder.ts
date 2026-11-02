@@ -115,6 +115,11 @@ export interface CandidatePass {
    * leave it for good when the undo is recorded (docs/plan/61-chats-first.md, §5.14).
    */
   withoutTurn?: number
+  /**
+   * The turn `/redo` is bringing back: its database writes are in the plan of this build, and come
+   * back for good when the redo is recorded (§5.14).
+   */
+  withTurn?: number
 }
 
 export type CandidateBuild =
@@ -371,16 +376,30 @@ export class CandidateBuilder {
   }
 
   /** The compacted plan of the dialog's database writes that were not excluded (Р3, Р22). */
-  async dbPlan(taskId: string, withoutTurn?: number): Promise<{ plan: DbPlan; sha256: string }> {
+  async dbPlan(
+    taskId: string,
+    withoutTurn?: number,
+    withTurn?: number,
+  ): Promise<{ plan: DbPlan; sha256: string }> {
     const rows = await this.db.previewDbOperation.findMany({
       where: {
         taskId,
-        excluded: false,
+        ...(withTurn === undefined
+          ? { excluded: false }
+          : { OR: [{ excluded: false }, { turnNo: withTurn }] }),
         ...(withoutTurn === undefined ? {} : { turnNo: { not: withoutTurn } }),
       },
       orderBy: { id: 'asc' },
     })
-    const plan = compactDbPlan(rows.map((row) => dbPlanEntryFromJournal(row)))
+    const plan = compactDbPlan(
+      rows.map((row) => {
+        const entry = dbPlanEntryFromJournal(row)
+        return {
+          ...entry,
+          excluded: entry.excluded && (withTurn === undefined || row.turnNo !== withTurn),
+        }
+      }),
+    )
     return { plan, sha256: sha256(canonicalDbPlanJson(plan)) }
   }
 
@@ -393,7 +412,11 @@ export class CandidateBuilder {
    * number overwrites.
    */
   async build(context: CandidateContext, pass: CandidatePass): Promise<CandidateBuild> {
-    const { plan, sha256: planSha } = await this.dbPlan(context.taskId, pass.withoutTurn)
+    const { plan, sha256: planSha } = await this.dbPlan(
+      context.taskId,
+      pass.withoutTurn,
+      pass.withTurn,
+    )
     const standing = context.standing
     const base = pass.baseSha ?? standing?.baseSha ?? context.base
     const { repo } = context

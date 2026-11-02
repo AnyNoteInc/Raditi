@@ -325,6 +325,8 @@ export const chatCommandRefusals = [
   /** The last turn wrote to the site itself. */
   'content_written',
   'nothing_to_redo',
+  /** core is bringing a turn of this chat back (`candidate.rewind`). */
+  'turn_redoing',
   'nothing_to_compact',
 ] as const
 export type ChatCommandRefusal = (typeof chatCommandRefusals)[number]
@@ -364,6 +366,7 @@ export const chatCommandRefusalText: Readonly<Record<ChatCommandRefusal, string>
     'Этот запрос отменить нельзя: после него рабочая копия перешла на новую версию сайта.',
   content_written: 'Этот запрос отменить нельзя: он изменил содержимое сайта.',
   nothing_to_redo: 'Возвращать нечего.',
+  turn_redoing: 'Подождите: отменённый запрос ещё возвращается.',
   nothing_to_compact: 'Сжимать пока нечего.',
 })
 
@@ -416,6 +419,13 @@ export interface ChatCommandFacts {
    * branch, the candidate and the preview are moving, and nothing else starts until they stand.
    */
   turnRewinding: boolean
+  /**
+   * Why `/redo` brings nothing back, past a release; null — it brings back the turn `/undo` took:
+   * nothing moved the chat since (docs/plan/61-chats-first.md, §5.14).
+   */
+  turnRedo: TurnRedoRefusal | null
+  /** The same as `turnRewinding`, on the way back: core is bringing a turn of this chat back. */
+  turnRedoing: boolean
 }
 
 /** The refusals of `/undo` the facts of its turn decide. */
@@ -423,6 +433,9 @@ export type TurnUndoRefusal = Extract<
   ChatCommandRefusal,
   'nothing_to_undo' | 'undo_past_update' | 'content_written' | 'awaiting_answer'
 >
+
+/** The refusal of `/redo` the facts of its turn decide. */
+export type TurnRedoRefusal = Extract<ChatCommandRefusal, 'nothing_to_redo'>
 
 /**
  * The latest installed release of the dialog (not an undo) and the site around it (docs/plan/53,
@@ -479,7 +492,10 @@ function refusalOf(id: OfferedCommandId, facts: ChatCommandFacts): ChatCommandRe
   if (terminalTaskStatuses.includes(status))
     return id === 'preview' && preview ? previewRefusal(preview.status, 'ended') : 'finished'
   if (facts.cancelPending && id !== 'cancel') return 'finished'
-  if (facts.turnRewinding && id !== 'cancel' && id !== 'preview') return 'turn_rewinding'
+  if (id !== 'cancel' && id !== 'preview') {
+    if (facts.turnRewinding) return 'turn_rewinding'
+    if (facts.turnRedoing) return 'turn_redoing'
+  }
   switch (id) {
     case 'release':
       if (facts.role === 'member') return 'not_allowed'
@@ -512,9 +528,10 @@ function refusalOf(id: OfferedCommandId, facts: ChatCommandFacts): ChatCommandRe
     case 'turn_undo':
       if (facts.releaseInProgress || RELEASING.includes(status)) return 'release_in_progress'
       return BUSY.includes(status) ? 'busy' : facts.turnUndo
-    // Closed until its slice: 61.23 gives it facts of its own.
+    // A chat at work has moved on from what `/undo` took: there is nothing to wait for.
     case 'turn_redo':
-      return 'nothing_to_redo'
+      if (facts.releaseInProgress || RELEASING.includes(status)) return 'release_in_progress'
+      return facts.turnRedo
     case 'retry':
       return facts.retry
     case 'cancel':

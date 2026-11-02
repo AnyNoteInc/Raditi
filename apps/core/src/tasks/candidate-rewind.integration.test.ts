@@ -4,6 +4,8 @@ import { ensurePersonalWorkspaceWithGift } from '@repo/billing'
 import { billingFixtures } from '@repo/billing/testing'
 import {
   createPrismaClient,
+  excludeTurnDbOperations,
+  includeTurnDbOperations,
   insertFeedEvent,
   PostgresSiteLeaseStore,
   PostgresTaskTurnAssignmentStore,
@@ -265,8 +267,11 @@ describe.skipIf(!databaseUrl)('`/undo` of a turn with the repository on PostgreS
     return { taskId, userId, workspaceId: workspace.id, siteId: siteIdOf(task) }
   }
 
-  /** The `/undo` press of the chat, as web writes it. */
-  async function press(dialog: { taskId: string; userId: string }) {
+  /** The `/undo` press of the chat, as web writes it; `/redo` by `command`. */
+  async function press(
+    dialog: { taskId: string; userId: string },
+    command: 'turn_undo' | 'turn_redo' = 'turn_undo',
+  ) {
     const id = await insertFeedEvent(db, {
       taskId: dialog.taskId,
       row: {
@@ -274,7 +279,7 @@ describe.skipIf(!databaseUrl)('`/undo` of a turn with the repository on PostgreS
         payload: {
           v: 1,
           kind: 'command',
-          command: 'turn_undo',
+          command,
           authorId: dialog.userId,
           requestId: randomUUID(),
         },
@@ -294,8 +299,10 @@ describe.skipIf(!databaseUrl)('`/undo` of a turn with the repository on PostgreS
     ) => CandidateBuild | Promise<CandidateBuild>
     /** Runs right before the push, under the fence. */
     beforePush?: () => Promise<void>
+    /** Runs before the hold of the undone commit, ahead of its fence. */
+    onHold?: () => Promise<void>
     /** Runs right after the push: where a core dies, or its database goes away. */
-    afterPush?: () => void
+    afterPush?: () => void | Promise<void>
     /** Commits no mirror holds any more: the branch left them, and core was started anew. */
     gone?: readonly string[]
     now?: () => Date
@@ -303,7 +310,10 @@ describe.skipIf(!databaseUrl)('`/undo` of a turn with the repository on PostgreS
   }
 
   function setup(options: Setup) {
-    const state = { branch: options.branch }
+    const state: { branch: string | null; held: string | null } = {
+      branch: options.branch,
+      held: null,
+    }
     const git = {
       readBranchHead: vi.fn(async () => state.branch),
       treeOf: vi.fn(async ({ sha }: { sha: string }) => {
@@ -314,16 +324,26 @@ describe.skipIf(!databaseUrl)('`/undo` of a turn with the repository on PostgreS
       comparesCommits: true,
       compareCommits: vi.fn(),
       rebaseCandidate: vi.fn(),
+      holdUndoneCommit: vi.fn(
+        async (
+          input: { branch: string; sha: string },
+          assertFence: () => Promise<void> = async () => {},
+        ) => {
+          await options.onHold?.()
+          await assertFence()
+          state.held = input.sha
+        },
+      ),
       rewindBranch: vi.fn(
         async (
-          input: { from: string; to: string | null },
+          input: { from: string | null; to: string | null },
           assertFence: () => Promise<void> = async () => {},
         ) => {
           if (state.branch === input.to) return
           await options.beforePush?.()
           await assertFence()
           state.branch = input.to
-          options.afterPush?.()
+          await options.afterPush?.()
         },
       ),
     }
@@ -395,6 +415,15 @@ describe.skipIf(!databaseUrl)('`/undo` of a turn with the repository on PostgreS
         taskId: job.taskId,
         type: CANDIDATE_REWIND_PUSH_EVENT,
         payload: { v: 1, requestEventId: job.requestEventId, files },
+      },
+    })
+  /** How many rows say a job of the press reached the push. */
+  const pushRows = (job: CandidateRewindJob) =>
+    db.taskEvent.count({
+      where: {
+        taskId: job.taskId,
+        type: CANDIDATE_REWIND_PUSH_EVENT,
+        payload: { path: ['requestEventId'], equals: job.requestEventId },
       },
     })
 
@@ -484,7 +513,10 @@ describe.skipIf(!databaseUrl)('`/undo` of a turn with the repository on PostgreS
   const feedOf = async (taskId: string) =>
     (
       await db.taskEvent.findMany({
-        where: { taskId, type: { in: ['feed.rewind', 'feed.update', 'feed.candidate'] } },
+        where: {
+          taskId,
+          type: { in: ['feed.rewind', 'feed.redo', 'feed.update', 'feed.candidate'] },
+        },
         orderBy: { id: 'asc' },
       })
     ).map((row) => ({ type: row.type, payload: row.payload }))
@@ -496,6 +528,33 @@ describe.skipIf(!databaseUrl)('`/undo` of a turn with the repository on PostgreS
     (await db.taskCandidate.findMany({ where: { taskId }, orderBy: { revision: 'asc' } })).map(
       (c) => [c.revision, c.status, c.turnNo, c.headSha],
     )
+  /** Every number of money the chat touches, but the term of its reserve. */
+  async function moneyOf(dialog: { taskId: string; workspaceId: string }) {
+    const holds = await db.creditHold.findMany({
+      where: { taskId: dialog.taskId },
+      orderBy: { id: 'asc' },
+    })
+    return {
+      ledger: await db.creditLedger.findMany({
+        where: { account: { workspaceId: dialog.workspaceId } },
+        orderBy: { id: 'asc' },
+      }),
+      accounts: await db.billingAccount.findMany({
+        where: { workspaceId: dialog.workspaceId },
+        orderBy: { id: 'asc' },
+      }),
+      holds: holds.map(({ expiresAt: _expiry, ...hold }) => hold),
+    }
+  }
+  /** The `preview.sync` jobs of the chat's preview: the revisions it was asked for. */
+  async function syncsOf(taskId: string) {
+    const preview = await db.previewEnvironment.findFirstOrThrow({ where: { taskId } })
+    const rows = await db.outboxEvent.findMany({
+      where: { type: 'preview.sync', payload: { path: ['previewId'], equals: preview.id } },
+      orderBy: { id: 'asc' },
+    })
+    return rows.map((row) => (row.payload as { revision: number }).revision)
+  }
 
   it('takes the branch and the candidate back to the turn before, under the lease of the site', async () => {
     const dialog = await chat({ heads: [HEAD1, HEAD2] })
@@ -606,13 +665,7 @@ describe.skipIf(!databaseUrl)('`/undo` of a turn with the repository on PostgreS
     ])
     // What the next build reads with nothing to leave out, and `/release` after it.
     expect(await planOfTask(dialog.taskId)).toEqual(['post:1'])
-    const preview = await db.previewEnvironment.findFirstOrThrow({
-      where: { taskId: dialog.taskId },
-    })
-    const syncs = await db.outboxEvent.findMany({
-      where: { type: 'preview.sync', payload: { path: ['previewId'], equals: preview.id } },
-    })
-    expect(syncs.map((row) => (row.payload as { revision: number }).revision)).toEqual([3])
+    expect(await syncsOf(dialog.taskId)).toEqual([3])
   })
 
   it('keeps the money of the pass: nothing is held anew, charged or given back', async () => {
@@ -626,31 +679,14 @@ describe.skipIf(!databaseUrl)('`/undo` of a turn with the repository on PostgreS
       now: placedAt,
       expiresAt: new Date(placedAt.getTime() + 3_600_000),
     })
-    const money = async () => {
-      const holds = await db.creditHold.findMany({
-        where: { taskId: dialog.taskId },
-        orderBy: { id: 'asc' },
-      })
-      return {
-        ledger: await db.creditLedger.findMany({
-          where: { account: { workspaceId: dialog.workspaceId } },
-          orderBy: { id: 'asc' },
-        }),
-        accounts: await db.billingAccount.findMany({
-          where: { workspaceId: dialog.workspaceId },
-          orderBy: { id: 'asc' },
-        }),
-        holds: holds.map(({ expiresAt: _expiry, ...hold }) => hold),
-      }
-    }
-    const before = await money()
+    const before = await moneyOf(dialog)
     expect(before.holds.length).toBeGreaterThan(0)
     const at = new Date()
     const { rewind } = setup({ branch: HEAD2, now: () => at })
 
     expect(await rewind.run(await press(dialog))).toBe('rewound')
 
-    expect(await money()).toEqual(before)
+    expect(await moneyOf(dialog)).toEqual(before)
     // The chat waits on, and so does its reserve.
     const holds = await db.creditHold.findMany({ where: { taskId: dialog.taskId } })
     for (const hold of holds) expect(hold.expiresAt).toEqual(taskHoldExpiry(at, 'waiting'))
@@ -1161,6 +1197,767 @@ describe.skipIf(!databaseUrl)('`/undo` of a turn with the repository on PostgreS
       expect(await undoneOf(dialog.taskId, 2)).toBeInstanceOf(Date)
       expect((await feedOf(dialog.taskId)).at(-1)?.payload).toMatchObject({ files: true })
       expect(await sweep.rewinds()).toBe(0)
+    })
+  })
+
+  describe('`/redo` of what `/undo` took', () => {
+    const redo = (dialog: { taskId: string; userId: string }) => press(dialog, 'turn_redo')
+    /** A chat with two turns and a candidate of each, its last turn taken back. */
+    async function undone(options: Parameters<typeof chat>[0] = { heads: [HEAD1, HEAD2] }) {
+      const dialog = await chat(options)
+      await db.$transaction(async (tx) => {
+        await recordCandidate(tx, record(dialog.taskId, 1, 1, HEAD1))
+        await recordCandidate(tx, record(dialog.taskId, 2, 2, HEAD2, { changeType: 'content' }))
+      })
+      expect(await setup({ branch: HEAD2 }).rewind.run(await press(dialog))).toBe('rewound')
+      return dialog
+    }
+
+    it('holds the undone commit on the remote before the branch leaves it', async () => {
+      const dialog = await chat({ heads: [HEAD1, HEAD2] })
+      await db.$transaction((tx) => recordCandidate(tx, record(dialog.taskId, 1, 2, HEAD2)))
+      const { rewind, git } = setup({ branch: HEAD2 })
+
+      expect(await rewind.run(await press(dialog))).toBe('rewound')
+
+      expect(git.holdUndoneCommit).toHaveBeenCalledWith(
+        expect.objectContaining({ branch: `agent/${dialog.taskId}`, sha: HEAD2 }),
+        expect.any(Function),
+      )
+      expect(git.holdUndoneCommit.mock.invocationCallOrder[0]).toBeLessThan(
+        git.rewindBranch.mock.invocationCallOrder[0]!,
+      )
+    })
+
+    it.each([
+      [
+        'the chat closed',
+        (dialog: { taskId: string }) =>
+          db.task.update({ where: { id: dialog.taskId }, data: { status: 'cancelled' } }),
+        'nothing',
+      ],
+      [
+        'another turn started',
+        (dialog: { taskId: string }) =>
+          db.task.update({ where: { id: dialog.taskId }, data: { turnNo: 3 } }),
+        'refused',
+      ],
+    ])('holds nothing and moves nothing when %s before the hold', async (_case, close, answer) => {
+      const dialog = await chat({ heads: [HEAD1, HEAD2] })
+      await db.$transaction((tx) => recordCandidate(tx, record(dialog.taskId, 1, 2, HEAD2)))
+      const { rewind, git, state, queue } = setup({
+        branch: HEAD2,
+        onHold: async () => {
+          await close(dialog)
+        },
+      })
+      const job = await press(dialog)
+
+      // The hold is no push: its refusal goes the way of any failure, and the next job answers.
+      expect(await rewind.run(job)).toBe('later')
+
+      expect(state.held).toBeNull()
+      expect(git.rewindBranch).not.toHaveBeenCalled()
+      expect(state.branch).toBe(HEAD2)
+      expect(queue.enqueue).toHaveBeenCalledTimes(1)
+      expect(await db.taskEvent.count({ where: { type: CANDIDATE_REWIND_PUSH_EVENT } })).toBe(0)
+      expect(await setup({ branch: HEAD2 }).rewind.run(job)).toBe(answer)
+    })
+
+    it('holds nothing when the lease of the site is lost before the hold', async () => {
+      const dialog = await chat({ heads: [HEAD1, HEAD2] })
+      await db.$transaction((tx) => recordCandidate(tx, record(dialog.taskId, 1, 2, HEAD2)))
+      const { rewind, git, state } = setup({ branch: HEAD2 })
+      const lost = vi.spyOn(leases, 'assert').mockResolvedValueOnce(false)
+
+      expect(await rewind.run(await press(dialog))).toBe('later')
+
+      lost.mockRestore()
+      expect(state.held).toBeNull()
+      expect(git.rewindBranch).not.toHaveBeenCalled()
+      expect(await db.taskEvent.count({ where: { type: CANDIDATE_REWIND_PUSH_EVENT } })).toBe(0)
+    })
+
+    it('moves no branch when the commit cannot be held, and may still give the press up', async () => {
+      const dialog = await chat({ heads: [HEAD1, HEAD2] })
+      await db.$transaction((tx) => recordCandidate(tx, record(dialog.taskId, 1, 2, HEAD2)))
+      const { rewind, git, state, queue } = setup({
+        branch: HEAD2,
+        onHold: () => Promise.reject(gitDown()),
+      })
+      const job = await press(dialog)
+
+      expect(await rewind.run(job)).toBe('later')
+
+      expect(git.rewindBranch).not.toHaveBeenCalled()
+      expect(state.branch).toBe(HEAD2)
+      expect(queue.enqueue).toHaveBeenCalled()
+      // No row of the push: nothing says the branch may have moved.
+      expect(await db.taskEvent.count({ where: { type: CANDIDATE_REWIND_PUSH_EVENT } })).toBe(0)
+    })
+
+    it('brings the branch, the candidate and the claims of the turn back', async () => {
+      const dialog = await undone()
+      const { rewind, git, candidates } = setup({ branch: HEAD1 })
+      const job = await redo(dialog)
+
+      expect(await rewind.run(job)).toBe('redone')
+
+      expect(git.rewindBranch).toHaveBeenCalledWith(
+        expect.objectContaining({ branch: `agent/${dialog.taskId}`, from: HEAD1, to: HEAD2 }),
+        expect.any(Function),
+      )
+      expect(git.holdUndoneCommit).not.toHaveBeenCalled()
+      expect(candidates.build).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          turnNo: 2,
+          headSha: HEAD2,
+          withTurn: 2,
+          claims: expect.objectContaining({ change_type: 'content' }),
+        }),
+      )
+      expect((await revisions(dialog.taskId)).at(-1)).toEqual([4, 'current', 2, HEAD2])
+      expect(await statusOf(dialog.taskId)).toBe('awaiting_approval')
+      expect(await undoneOf(dialog.taskId, 2)).toBeNull()
+      expect(await answers(dialog.taskId)).toEqual(['rewound', 'redone'])
+      const rows = await feedOf(dialog.taskId)
+      expect(rows.at(-1)).toEqual({
+        type: 'feed.redo',
+        payload: { v: 1, turn: 2, files: true, open: false },
+      })
+      expect(rows.at(-2)).toMatchObject({
+        type: 'feed.candidate',
+        payload: { turn: 2, revision: 4 },
+      })
+    })
+
+    it('brings back the branch `/undo` of the first turn deleted', async () => {
+      const dialog = await chat({ heads: [HEAD1] })
+      await db.$transaction((tx) => recordCandidate(tx, record(dialog.taskId, 1, 1, HEAD1)))
+      const first = setup({ branch: HEAD1, build: () => EMPTY })
+      expect(await first.rewind.run(await press(dialog))).toBe('rewound')
+      expect(first.state.branch).toBeNull()
+      expect(await statusOf(dialog.taskId)).toBe('awaiting_user')
+
+      const { rewind, git, state } = setup({ branch: null })
+      expect(await rewind.run(await redo(dialog))).toBe('redone')
+
+      expect(git.rewindBranch).toHaveBeenCalledWith(
+        expect.objectContaining({ from: null, to: HEAD1 }),
+        expect.any(Function),
+      )
+      expect(state.branch).toBe(HEAD1)
+      expect(await statusOf(dialog.taskId)).toBe('awaiting_approval')
+      expect((await revisions(dialog.taskId)).at(-1)).toEqual([2, 'current', 1, HEAD1])
+    })
+
+    it('says nothing of files after a turn that changed none (К19)', async () => {
+      const dialog = await chat({ heads: [HEAD1, HEAD2] })
+      await db.$transaction((tx) => recordCandidate(tx, record(dialog.taskId, 1, 1, HEAD1)))
+      const unchanged = {
+        sameTree: [HEAD1, HEAD2],
+        build: () => ({ kind: 'unchanged' }) as const,
+      }
+      expect(await setup({ branch: HEAD2, ...unchanged }).rewind.run(await press(dialog))).toBe(
+        'rewound',
+      )
+
+      expect(await setup({ branch: HEAD1, ...unchanged }).rewind.run(await redo(dialog))).toBe(
+        'redone',
+      )
+
+      expect((await feedOf(dialog.taskId)).at(-1)).toEqual({
+        type: 'feed.redo',
+        payload: { v: 1, turn: 2, files: false, open: false },
+      })
+      expect(await revisions(dialog.taskId)).toEqual([[1, 'current', 1, HEAD1]])
+    })
+
+    it('leaves an open question open: the chat waits as it did before `/undo`', async () => {
+      const dialog = await chat({ heads: [HEAD1, HEAD2], status: 'awaiting_user' })
+      await db.$transaction((tx) => recordCandidate(tx, record(dialog.taskId, 1, 1, HEAD1)))
+      const unchanged = { build: () => ({ kind: 'unchanged' }) as const }
+      await setup({ branch: HEAD2, ...unchanged }).rewind.run(await press(dialog))
+      expect(await statusOf(dialog.taskId)).toBe('awaiting_approval')
+
+      expect(await setup({ branch: HEAD1, ...unchanged }).rewind.run(await redo(dialog))).toBe(
+        'redone',
+      )
+
+      expect(await statusOf(dialog.taskId)).toBe('awaiting_user')
+    })
+
+    it('leaves a chat without a candidate open when the turn undid every change', async () => {
+      const dialog = await undone()
+      await previewWrite(dialog, 2)
+      const { rewind, state } = setup({ branch: HEAD1, build: () => EMPTY })
+
+      expect(await rewind.run(await redo(dialog))).toBe('redone')
+
+      expect(state.branch).toBe(HEAD2)
+      expect(await statusOf(dialog.taskId)).toBe('awaiting_user')
+      expect((await revisions(dialog.taskId)).at(-1)?.[1]).toBe('superseded')
+      // The result it waited after expects a release: this row takes the next words instead.
+      expect((await feedOf(dialog.taskId)).at(-1)).toEqual({
+        type: 'feed.redo',
+        payload: { v: 1, turn: 2, files: true, open: true },
+      })
+      expect(await syncsOf(dialog.taskId)).toEqual([0])
+    })
+
+    it('reopens no chat that waited for words: its question or result takes them', async () => {
+      const dialog = await chat({ heads: [HEAD1, HEAD2], status: 'awaiting_user' })
+      await setup({ branch: HEAD2, build: () => EMPTY }).rewind.run(await press(dialog))
+      expect(await statusOf(dialog.taskId)).toBe('awaiting_user')
+
+      const { rewind } = setup({ branch: HEAD1, build: () => EMPTY })
+      expect(await rewind.run(await redo(dialog))).toBe('redone')
+
+      expect(await statusOf(dialog.taskId)).toBe('awaiting_user')
+      expect((await feedOf(dialog.taskId)).at(-1)?.payload).toMatchObject({ open: false })
+    })
+
+    it('puts the records of the turn back into the plan', async () => {
+      const dialog = await chat({ heads: [HEAD1, HEAD2] })
+      await db.$transaction((tx) => recordCandidate(tx, record(dialog.taskId, 1, 2, HEAD2)))
+      await previewWrite(dialog, 1)
+      await previewWrite(dialog, 2)
+      await setup({ branch: HEAD2 }).rewind.run(await press(dialog))
+      expect(await planOfTask(dialog.taskId)).toEqual(['post:1'])
+      const seen: string[][] = []
+      const builder = planBuilder()
+      const { rewind } = setup({
+        branch: HEAD1,
+        build: async (context, pass) => {
+          const { withoutTurn, withTurn } = pass as { withoutTurn?: number; withTurn?: number }
+          seen.push(
+            (await builder.dbPlan(context.taskId, withoutTurn, withTurn)).plan.map(
+              (entry) => entry.objectRef,
+            ),
+          )
+          return {
+            kind: 'candidate',
+            record: record(context.taskId, context.revision, pass.turnNo, pass.headSha),
+          }
+        },
+      })
+
+      expect(await rewind.run(await redo(dialog))).toBe('redone')
+
+      expect(seen).toEqual([['post:1', 'post:2']])
+      expect(await planOfTask(dialog.taskId)).toEqual(['post:1', 'post:2'])
+    })
+
+    it('puts back the records of its own turn only, and says how many', async () => {
+      const dialog = await chat({ heads: [HEAD1, HEAD2] })
+      await db.$transaction((tx) => recordCandidate(tx, record(dialog.taskId, 1, 2, HEAD2)))
+      await previewWrite(dialog, 1)
+      await previewWrite(dialog, 2)
+      const turn2 = { taskId: dialog.taskId, turnNo: 2 }
+      await excludeTurnDbOperations(db, { taskId: dialog.taskId, turnNo: 1 })
+      await excludeTurnDbOperations(db, turn2)
+
+      expect(await includeTurnDbOperations(db, turn2)).toBe(1)
+      expect(await includeTurnDbOperations(db, turn2)).toBe(0)
+
+      const operations = await db.previewDbOperation.findMany({
+        where: { taskId: dialog.taskId },
+        orderBy: { turnNo: 'asc' },
+      })
+      expect(operations.map((row) => [row.turnNo, row.excluded])).toEqual([
+        [1, true],
+        [2, false],
+      ])
+    })
+
+    it('keeps the money of the pass: nothing is held anew, charged or given back', async () => {
+      const dialog = await undone()
+      const placedAt = new Date(Date.now() - 60_000)
+      await fixtures.reserve({
+        workspaceId: dialog.workspaceId,
+        taskId: dialog.taskId,
+        attempt: 1,
+        now: placedAt,
+        expiresAt: new Date(placedAt.getTime() + 3_600_000),
+      })
+      const before = await moneyOf(dialog)
+      expect(before.holds.length).toBeGreaterThan(0)
+      const at = new Date()
+
+      const { rewind } = setup({ branch: HEAD1, now: () => at })
+      expect(await rewind.run(await redo(dialog))).toBe('redone')
+
+      expect(await moneyOf(dialog)).toEqual(before)
+      // The chat waits on, and so does its reserve.
+      const holds = await db.creditHold.findMany({ where: { taskId: dialog.taskId } })
+      for (const hold of holds) expect(hold.expiresAt).toEqual(taskHoldExpiry(at, 'waiting'))
+    })
+
+    it('asks the preview for the revision of the turn that came back', async () => {
+      const dialog = await undone()
+      await previewWrite(dialog, 2)
+
+      expect(await setup({ branch: HEAD1 }).rewind.run(await redo(dialog))).toBe('redone')
+
+      expect(await syncsOf(dialog.taskId)).toEqual([4])
+    })
+
+    it('finishes from a branch that moved already, when the record failed the first time', async () => {
+      const dialog = await undone()
+      const job = await redo(dialog)
+      const broken = { on: false, calls: new Set(['$transaction']) }
+      const dying = setup({
+        branch: HEAD1,
+        db: failing(broken),
+        afterPush: () => {
+          broken.on = true
+        },
+      })
+      expect(await dying.rewind.run(job)).toBe('later')
+      expect(dying.state.branch).toBe(HEAD2)
+      expect(await undoneOf(dialog.taskId, 2)).toBeInstanceOf(Date)
+
+      const { rewind, git } = setup({ branch: HEAD2 })
+      expect(await rewind.run(job)).toBe('redone')
+
+      expect(git.rewindBranch).not.toHaveBeenCalled()
+      expect(await undoneOf(dialog.taskId, 2)).toBeNull()
+      expect(await answers(dialog.taskId)).toEqual(['rewound', 'redone'])
+    })
+
+    it('moves nothing when the branch is not where `/undo` left it, and says so', async () => {
+      const dialog = await undone()
+      const { rewind, git } = setup({ branch: OTHER })
+
+      expect(await rewind.run(await redo(dialog))).toBe('refused')
+
+      expect(git.rewindBranch).not.toHaveBeenCalled()
+      expect(await undoneOf(dialog.taskId, 2)).toBeInstanceOf(Date)
+      expect((await feedOf(dialog.taskId)).at(-1)).toEqual({
+        type: 'feed.update',
+        payload: { v: 1, outcome: 'redo_failed', conflicts: 0 },
+      })
+    })
+
+    it('moves nothing when the chat closed before the push, and tells no one', async () => {
+      const dialog = await undone()
+      const { rewind, state } = setup({
+        branch: HEAD1,
+        beforePush: async () => {
+          await db.task.update({ where: { id: dialog.taskId }, data: { status: 'cancelled' } })
+        },
+      })
+
+      expect(await rewind.run(await redo(dialog))).toBe('nothing')
+
+      expect(state.branch).toBe(HEAD1)
+      expect(await undoneOf(dialog.taskId, 2)).toBeInstanceOf(Date)
+      expect(await answers(dialog.taskId)).toEqual(['rewound', 'nothing'])
+      expect((await feedOf(dialog.taskId)).at(-1)?.type).toBe('feed.rewind')
+    })
+
+    it('moves nothing when another turn started before the push', async () => {
+      const dialog = await undone()
+      const { rewind, state } = setup({
+        branch: HEAD1,
+        beforePush: async () => {
+          await db.task.update({ where: { id: dialog.taskId }, data: { turnNo: 3 } })
+        },
+      })
+
+      expect(await rewind.run(await redo(dialog))).toBe('nothing')
+
+      expect(state.branch).toBe(HEAD1)
+      expect(await undoneOf(dialog.taskId, 2)).toBeInstanceOf(Date)
+      expect((await feedOf(dialog.taskId)).at(-1)?.type).toBe('feed.rewind')
+    })
+
+    it('leaves the branch where it is when the lease of the site is lost before the push', async () => {
+      const dialog = await undone()
+      const { rewind, queue, state } = setup({ branch: HEAD1 })
+      const lost = vi.spyOn(leases, 'assert').mockResolvedValueOnce(false)
+
+      expect(await rewind.run(await redo(dialog))).toBe('later')
+
+      lost.mockRestore()
+      expect(state.branch).toBe(HEAD1)
+      expect(queue.enqueue).toHaveBeenCalledTimes(1)
+      expect(await undoneOf(dialog.taskId, 2)).toBeInstanceOf(Date)
+      expect(await answers(dialog.taskId)).toEqual(['rewound'])
+      expect((await feedOf(dialog.taskId)).at(-1)?.type).toBe('feed.rewind')
+    })
+
+    it('says so when a push loses the race for the branch', async () => {
+      const dialog = await undone()
+      const { rewind, git } = setup({ branch: HEAD1 })
+      git.rewindBranch.mockRejectedValueOnce(new DomainError('CONFLICT', 'The branch moved', 409))
+
+      expect(await rewind.run(await redo(dialog))).toBe('refused')
+
+      expect(await undoneOf(dialog.taskId, 2)).toBeInstanceOf(Date)
+      expect(await answers(dialog.taskId)).toEqual(['rewound', 'refused'])
+      expect((await feedOf(dialog.taskId)).at(-1)).toEqual({
+        type: 'feed.update',
+        payload: { v: 1, outcome: 'redo_failed', conflicts: 0 },
+      })
+    })
+
+    it('writes nothing when the chat closed between the push and the record', async () => {
+      const dialog = await undone()
+      const { rewind, state } = setup({
+        branch: HEAD1,
+        afterPush: async () => {
+          await db.task.update({ where: { id: dialog.taskId }, data: { status: 'cancelled' } })
+        },
+      })
+
+      expect(await rewind.run(await redo(dialog))).toBe('nothing')
+
+      expect(state.branch).toBe(HEAD2)
+      expect(await undoneOf(dialog.taskId, 2)).toBeInstanceOf(Date)
+      expect(await answers(dialog.taskId)).toEqual(['rewound', 'nothing'])
+      expect((await feedOf(dialog.taskId)).at(-1)?.type).toBe('feed.rewind')
+    })
+
+    it('writes nothing for a job that outlived its lease: others moved the turn since', async () => {
+      const dialog = await undone()
+      const job = await redo(dialog)
+      const unchanged = { build: () => ({ kind: 'unchanged' }) as const }
+      const stale = setup({
+        branch: HEAD1,
+        ...unchanged,
+        afterPush: async () => {
+          // It froze past its lease: the sweep put the press again, and the client pressed `/undo`.
+          await db.siteLease.update({
+            where: { siteId: dialog.siteId },
+            data: { expiresAt: new Date(0) },
+          })
+          expect(await setup({ branch: HEAD2, ...unchanged }).rewind.run(job)).toBe('redone')
+          const undo = await press(dialog)
+          expect(await setup({ branch: HEAD2, ...unchanged }).rewind.run(undo)).toBe('rewound')
+        },
+      })
+
+      expect(await stale.rewind.run(job)).toBe('nothing')
+
+      // The branch stands where the last `/undo` left it, and the base says the same.
+      expect(await undoneOf(dialog.taskId, 2)).toBeInstanceOf(Date)
+      expect(await answers(dialog.taskId)).toEqual(['rewound', 'redone', 'rewound'])
+      expect((await feedOf(dialog.taskId)).map((row) => row.type).slice(-2)).toEqual([
+        'feed.redo',
+        'feed.rewind',
+      ])
+    })
+
+    it('writes the row of the push before the branch moves', async () => {
+      const dialog = await undone()
+      const job = await redo(dialog)
+      let written = 0
+      const { rewind } = setup({
+        branch: HEAD1,
+        beforePush: async () => {
+          written = await pushRows(job)
+        },
+      })
+
+      expect(await rewind.run(job)).toBe('redone')
+
+      expect(written).toBe(1)
+    })
+
+    it('holds no commit of its own: `/undo` held it', async () => {
+      const dialog = await undone()
+      const { rewind, git } = setup({ branch: HEAD1 })
+      expect(await rewind.run(await redo(dialog))).toBe('redone')
+      expect(git.holdUndoneCommit).not.toHaveBeenCalled()
+    })
+
+    it('never says it stayed undone after a job reached the push', async () => {
+      const dialog = await undone()
+      const job = await redo(dialog)
+      await markedPush(job)
+      const { rewind, git, queue } = setup({
+        branch: HEAD1,
+        now: after(REWIND_GIVE_UP_MS + 60_000),
+      })
+      git.readBranchHead.mockRejectedValueOnce(gitDown())
+
+      expect(await rewind.run(job)).toBe('later')
+
+      expect(queue.enqueue).toHaveBeenCalledTimes(1)
+      expect(await answers(dialog.taskId)).toEqual(['rewound'])
+      expect((await feedOf(dialog.taskId)).at(-1)?.type).toBe('feed.rewind')
+    })
+
+    it('goes on, and ends, when a push left the branch neither here nor there', async () => {
+      const dialog = await undone()
+      const job = await redo(dialog)
+      await markedPush(job)
+      const young = setup({ branch: OTHER })
+      expect(await young.rewind.run(job)).toBe('later')
+      expect(young.queue.enqueue).toHaveBeenCalledTimes(1)
+      expect(await answers(dialog.taskId)).toEqual(['rewound'])
+
+      const old = setup({ branch: OTHER, now: after(UPDATE_REPAIR_MS + 60_000) })
+      expect(await old.rewind.run(job)).toBe('refused')
+      expect(await answers(dialog.taskId)).toEqual(['rewound', 'refused'])
+      expect((await feedOf(dialog.taskId)).at(-1)?.payload).toMatchObject({
+        outcome: 'redo_failed',
+      })
+    })
+
+    it('records a push it can no longer build for: the chat is open for the next words', async () => {
+      const dialog = await chat({ heads: [HEAD1, HEAD2] })
+      await db.$transaction((tx) => recordCandidate(tx, record(dialog.taskId, 1, 2, HEAD2)))
+      // `/undo` read no change of files: nothing but its row knows that now.
+      await setup({ branch: HEAD2, sameTree: [HEAD1, HEAD2] }).rewind.run(await press(dialog))
+      await previewWrite(dialog, 2)
+      const job = await redo(dialog)
+      const { rewind, candidates, git } = setup({
+        branch: HEAD2,
+        now: after(UPDATE_REPAIR_MS + 60_000),
+      })
+
+      expect(await rewind.run(job)).toBe('redone')
+
+      expect(candidates.build).not.toHaveBeenCalled()
+      expect(git.rewindBranch).not.toHaveBeenCalled()
+      expect(await undoneOf(dialog.taskId, 2)).toBeNull()
+      expect(await statusOf(dialog.taskId)).toBe('awaiting_user')
+      expect((await revisions(dialog.taskId)).at(-1)?.[1]).toBe('superseded')
+      expect((await feedOf(dialog.taskId)).at(-1)).toEqual({
+        type: 'feed.redo',
+        payload: { v: 1, turn: 2, files: false, open: true },
+      })
+      expect(await syncsOf(dialog.taskId)).toEqual([0])
+    })
+
+    it.each([
+      [
+        'no context',
+        (candidates: ReturnType<typeof setup>['candidates']) =>
+          candidates.context.mockResolvedValueOnce(null as never),
+      ],
+      [
+        'a candidate too large',
+        (candidates: ReturnType<typeof setup>['candidates']) =>
+          candidates.build.mockRejectedValueOnce(
+            new DomainError('REPOSITORY_TOO_LARGE', 'Too large', 413),
+          ),
+      ],
+    ])('refuses before the push with %s, and says so', async (_case, refuse) => {
+      const dialog = await undone()
+      const { rewind, candidates, git } = setup({ branch: HEAD1 })
+      refuse(candidates)
+
+      expect(await rewind.run(await redo(dialog))).toBe('refused')
+
+      expect(git.rewindBranch).not.toHaveBeenCalled()
+      expect(await undoneOf(dialog.taskId, 2)).toBeInstanceOf(Date)
+      expect((await feedOf(dialog.taskId)).at(-1)?.payload).toMatchObject({
+        outcome: 'redo_failed',
+      })
+    })
+
+    it.each([
+      [
+        'no context',
+        (candidates: ReturnType<typeof setup>['candidates']) =>
+          candidates.context.mockResolvedValueOnce(null as never),
+      ],
+      [
+        'a candidate too large',
+        (candidates: ReturnType<typeof setup>['candidates']) =>
+          candidates.build.mockRejectedValueOnce(
+            new DomainError('REPOSITORY_TOO_LARGE', 'Too large', 413),
+          ),
+      ],
+    ])('never refuses a branch that moved already, with %s', async (_case, refuse) => {
+      const dialog = await undone()
+      const job = await redo(dialog)
+      const { rewind, candidates, queue } = setup({ branch: HEAD2 })
+      refuse(candidates)
+
+      expect(await rewind.run(job)).toBe('later')
+
+      expect(queue.enqueue).toHaveBeenCalledTimes(1)
+      expect(await answers(dialog.taskId)).toEqual(['rewound'])
+      expect((await feedOf(dialog.taskId)).at(-1)?.type).toBe('feed.rewind')
+    })
+
+    it('tells of a press given up in its own words, and `/undo` still stands', async () => {
+      const dialog = await undone()
+      const job = await redo(dialog)
+      const { rewind } = setup({ branch: HEAD1, now: after(REWIND_GIVE_UP_MS + 60_000) })
+
+      expect(await rewind.run(job)).toBe('later')
+
+      expect((await feedOf(dialog.taskId)).at(-1)?.payload).toMatchObject({
+        outcome: 'redo_failed',
+      })
+      expect(await undoneOf(dialog.taskId, 2)).toBeInstanceOf(Date)
+    })
+
+    it('leaves a press to the sweep when nothing answered it', async () => {
+      const dialog = await undone()
+      const job = await redo(dialog)
+      await db.$executeRaw`UPDATE task_events SET created_at = now() - interval '3 minutes'
+        WHERE id = ${BigInt(job.requestEventId)}`
+      const queue = { enqueue: vi.fn(async (..._put: unknown[]) => {}) }
+      const sweep = new TaskSweep({
+        db,
+        settlement: {} as never,
+        live: {} as never,
+        journal: {} as never,
+        drivers: {} as never,
+        queue,
+        logger: quiet,
+      })
+
+      expect(await sweep.rewinds()).toBe(1)
+
+      expect(queue.enqueue.mock.calls[0]?.slice(0, 3)).toEqual([
+        'agent-turns',
+        CANDIDATE_REWIND_JOB,
+        job,
+      ])
+      expect(await setup({ branch: HEAD1 }).rewind.run(job)).toBe('redone')
+      expect(await sweep.rewinds()).toBe(0)
+    })
+
+    it('takes the turn back again after it came back', async () => {
+      const dialog = await undone()
+      await setup({ branch: HEAD1 }).rewind.run(await redo(dialog))
+
+      const { rewind, git } = setup({ branch: HEAD2 })
+      expect(await rewind.run(await press(dialog))).toBe('rewound')
+
+      expect(git.holdUndoneCommit).toHaveBeenCalled()
+      expect(await undoneOf(dialog.taskId, 2)).toBeInstanceOf(Date)
+      expect((await revisions(dialog.taskId)).at(-1)).toEqual([5, 'current', 1, HEAD1])
+    })
+
+    it('takes the status and the files of each `/redo` from the `/undo` before it', async () => {
+      const dialog = await chat({ heads: [HEAD1, HEAD2], status: 'awaiting_user' })
+      await db.$transaction((tx) => recordCandidate(tx, record(dialog.taskId, 1, 1, HEAD1)))
+      const unchanged = { build: () => ({ kind: 'unchanged' }) as const }
+      const noChange = { ...unchanged, sameTree: [HEAD1, HEAD2] }
+
+      // The turn asked a question and changed no file.
+      await setup({ branch: HEAD2, ...noChange }).rewind.run(await press(dialog))
+      await setup({ branch: HEAD1, ...noChange }).rewind.run(await redo(dialog))
+      expect(await statusOf(dialog.taskId)).toBe('awaiting_user')
+      expect((await feedOf(dialog.taskId)).at(-1)?.payload).toMatchObject({ files: false })
+
+      // Then the chat waits with the candidate, and the turn is read as having changed files.
+      await db.task.update({ where: { id: dialog.taskId }, data: { status: 'awaiting_approval' } })
+      await setup({ branch: HEAD2, ...unchanged }).rewind.run(await press(dialog))
+      expect(await setup({ branch: HEAD1, ...unchanged }).rewind.run(await redo(dialog))).toBe(
+        'redone',
+      )
+      expect(await statusOf(dialog.taskId)).toBe('awaiting_approval')
+      expect((await feedOf(dialog.taskId)).at(-1)?.payload).toMatchObject({ files: true })
+    })
+
+    it('holds the candidate when the row of `/undo` does not say what stood before it', async () => {
+      const unknown = async () => {
+        const dialog = await undone()
+        await db.$executeRaw`UPDATE task_events SET payload = payload - 'before'
+          WHERE task_id = ${dialog.taskId}::uuid AND type = ${CANDIDATE_REWIND_EVENT}`
+        return dialog
+      }
+      const held = await unknown()
+      expect(await setup({ branch: HEAD1 }).rewind.run(await redo(held))).toBe('redone')
+      expect(await statusOf(held.taskId)).toBe('awaiting_approval')
+      expect((await feedOf(held.taskId)).at(-1)?.payload).toMatchObject({ open: false })
+
+      const emptied = await unknown()
+      expect(
+        await setup({ branch: HEAD1, build: () => EMPTY }).rewind.run(await redo(emptied)),
+      ).toBe('redone')
+      expect(await statusOf(emptied.taskId)).toBe('awaiting_user')
+      expect((await feedOf(emptied.taskId)).at(-1)?.payload).toMatchObject({ open: true })
+    })
+
+    it('hands the next turn a continuation from the turn that came back, and the store takes it', async () => {
+      const dialog = await undone()
+      await db.task.update({ where: { id: dialog.taskId }, data: { billable: false } })
+      const { rewind, state } = setup({ branch: HEAD1 })
+      expect(await rewind.run(await redo(dialog))).toBe('redone')
+      const words = await insertFeedEvent(db, {
+        taskId: dialog.taskId,
+        row: {
+          type: 'feed.request',
+          payload: {
+            v: 1,
+            kind: 'revision',
+            authorId: dialog.userId,
+            requestId: randomUUID(),
+            text: 'Ещё слова',
+            candidateRevision: 4,
+          },
+        },
+      })
+
+      const facts = await readPassFacts(
+        { db, adapter: getSiteAdapter, backends: llmBackends, previews: null },
+        {
+          taskId: dialog.taskId,
+          attempt: 1,
+          turnNo: 2,
+          requestEventId: String(words),
+          now: new Date(),
+        },
+      )
+      expect(facts?.writtenHead).toBe(HEAD2)
+      const planned = await planTurn(
+        {
+          ...facts!,
+          profile: {
+            backend: sampleBackendId,
+            modelSlug: sampleModelSlug,
+            providerModelId: sampleProviderModelId,
+          },
+        },
+        {
+          driver: {
+            ...driver,
+            sessionState: () => ({
+              root: `/agent-home/${sampleDriverId}`,
+              include: ['session'],
+              exclude: [],
+            }),
+          },
+          backends: [backend],
+          runtime: 'runc',
+          browser: false,
+          mainHead: async () => MAIN,
+          branchHead: async () => state.branch,
+        },
+      )
+      if (planned.kind !== 'turn') throw new Error(`The next turn was not planned: ${planned.kind}`)
+      const plan = toTurnPlan(planned.request, sampleDriverId)
+      expect(plan.replacesTurn).toBeUndefined()
+      expect(plan.previous).toMatchObject({ turn: 2 })
+      expect(plan.workspace).toMatchObject({ expectedBaseSha: HEAD2 })
+
+      const fence = (await leases.acquire({
+        siteId: dialog.siteId,
+        taskId: dialog.taskId,
+        operation: 'turn',
+        ttlMs: 60_000,
+      }))!
+      await expect(
+        new PostgresTaskTurnAssignmentStore(db).open({
+          fence,
+          sessionId: dialog.taskId,
+          turn: 3,
+          executor: 'local',
+          plan,
+          remainingMs: 30_000,
+        }),
+      ).resolves.not.toBeNull()
     })
   })
 

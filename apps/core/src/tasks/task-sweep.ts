@@ -507,8 +507,8 @@ export class TaskSweep {
   }
 
   /**
-   * An `/undo` of a chat with the repository nobody answered (docs/plan/61-chats-first.md, §5.14) is
-   * put again: `agent-turns` runs a job once, and until a `candidate.rewind` row answers the press
+   * An `/undo` or a `/redo` of a chat with the repository nobody answered (docs/plan/61-chats-first.md,
+   * §5.14) is put again: `agent-turns` runs a job once, and until a `candidate.rewind` row answers the press
    * the chat takes nothing but `/cancel`. The job decides what is left of it — it finds an answer,
    * goes on from a branch that moved, or gives the press up.
    */
@@ -518,7 +518,7 @@ export class TaskSweep {
       CROSS JOIN LATERAL (
         SELECT e.id, e.created_at FROM task_events e
         WHERE e.task_id = t.id AND e.type = 'feed.request'
-          AND e.payload->>'kind' = 'command' AND e.payload->>'command' = 'turn_undo'
+          AND e.payload->>'kind' = 'command' AND e.payload->>'command' IN ('turn_undo', 'turn_redo')
         ORDER BY e.id DESC LIMIT 1) p
       WHERE t.status IN ('awaiting_user', 'awaiting_approval') AND t.needs_repository
         AND p.created_at < now() - make_interval(secs => ${LOST_REWIND_MS / 1000})

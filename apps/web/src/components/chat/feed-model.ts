@@ -29,6 +29,17 @@ function movesOn(row: FeedRow): boolean {
   return row.type === 'feed.rewind' || (row.type === 'feed.request' && row.kind !== 'command')
 }
 
+/**
+ * The rows without what `/redo` cancelled (docs/plan/61-chats-first.md, §5.14): every `feed.rewind`
+ * before its last `feed.redo` is as if it were not there. `/redo` follows its `/undo` with nothing
+ * moving in between, so an older one stands before a later turn and decides nothing. The feed still
+ * shows both rows.
+ */
+export function withoutRedoneRewinds(rows: readonly FeedRow[]): readonly FeedRow[] {
+  const redo = rows.findLastIndex((row) => row.type === 'feed.redo')
+  return redo < 0 ? rows : rows.filter((row, at) => at > redo || row.type !== 'feed.rewind')
+}
+
 const isStep = (row: FeedRow): row is StepRow => row.type === 'feed.step'
 
 /**
@@ -168,8 +179,9 @@ export function openQuestion(
   status: TaskStatus | undefined,
 ): QuestionRow | null {
   if (status !== 'awaiting_user' && status !== 'awaiting_approval') return null
-  for (let index = rows.length - 1; index >= 0; index -= 1) {
-    const row = rows[index]!
+  const standing = withoutRedoneRewinds(rows)
+  for (let index = standing.length - 1; index >= 0; index -= 1) {
+    const row = standing[index]!
     if (movesOn(row)) return null
     if (row.type === 'feed.question') {
       if (row.kind === 'agent' && status !== 'awaiting_user') return null
@@ -235,6 +247,12 @@ export function candidateMessage(
     (row): row is ResultRow => row.type === 'feed.result' && row.turn === candidate.turn,
   )
   return (sameTurn ?? found)?.message ?? null
+}
+
+/** `/redo` of the press `pressId` was recorded: the turn is back (§5.14). */
+export function redoneAfter(rows: readonly FeedRow[], pressId: string): boolean {
+  const press = BigInt(pressId)
+  return rows.some((row) => row.type === 'feed.redo' && BigInt(row.id) > press)
 }
 
 /** `/undo` of the press `pressId` failed: core wrote that the chat stands as it did (§5.14). */

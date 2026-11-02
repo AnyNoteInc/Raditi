@@ -32,27 +32,38 @@ export async function requestOf(
   return row?.id ?? null
 }
 
+/** A press of `/undo` or `/redo` core has not answered yet. */
+export interface PendingTurnPress {
+  id: bigint
+  redo: boolean
+}
+
 /**
- * The `/undo` press of a chat with the repository that core has not answered yet
+ * The `/undo` or `/redo` press of a chat with the repository that core has not answered yet
  * (docs/plan/61-chats-first.md, §5.14): its branch and its candidate are moving, and nothing else
- * starts until they stand. Its id, or null. The press of a chat without the repository gets no
- * answer row — it is done with its own transaction —, so its caller does not ask.
+ * starts until they stand. null — none. The press of a chat without the repository gets no answer
+ * row — it is done with its own transaction —, so its caller does not ask.
  */
 export async function turnRewinding(
   db: Pick<Prisma.TransactionClient, 'taskEvent'>,
   taskId: string,
-): Promise<bigint | null> {
+): Promise<PendingTurnPress | null> {
   const press = await db.taskEvent.findFirst({
     where: {
       taskId,
       type: 'feed.request',
       AND: [
         { payload: { path: ['kind'], equals: 'command' } },
-        { payload: { path: ['command'], equals: 'turn_undo' } },
+        {
+          OR: [
+            { payload: { path: ['command'], equals: 'turn_undo' } },
+            { payload: { path: ['command'], equals: 'turn_redo' } },
+          ],
+        },
       ],
     },
     orderBy: { id: 'desc' },
-    select: { id: true },
+    select: { id: true, payload: true },
   })
   if (press === null) return null
   const answered = await db.taskEvent.count({
@@ -62,7 +73,12 @@ export async function turnRewinding(
       payload: { path: ['requestEventId'], equals: String(press.id) },
     },
   })
-  return answered > 0 ? null : press.id
+  if (answered > 0) return null
+  const row = readFeedRow('feed.request', press.payload)
+  return {
+    id: press.id,
+    redo: row.type === 'feed.request' && row.kind === 'command' && row.command === 'turn_redo',
+  }
 }
 
 /** How far back a pending `/cancel` is looked for: as far as core's `pressedCancel` looks. */
@@ -102,15 +118,27 @@ export const movingRequest = {
   NOT: { payload: { path: ['kind'], equals: 'command' } },
 } as const satisfies Prisma.TaskEventWhereInput
 
-/** What closes a question: a row that moves the dialog on, or `/undo` of the turn that asked. */
-const closesQuestion = {
-  OR: [movingRequest, { type: 'feed.rewind' }],
-} as const satisfies Prisma.TaskEventWhereInput
+/**
+ * The `feed.rewind` rows `/redo` has not cancelled: every one before its last `feed.redo`. `/redo`
+ * follows its `/undo` with nothing moving in between, so an older row stands before a turn that
+ * came later, and says nothing of what the chat waits for now (docs/plan/61-chats-first.md, §5.14).
+ */
+async function standingRewinds(
+  db: Pick<Prisma.TransactionClient, 'taskEvent'>,
+  taskId: string,
+): Promise<Prisma.TaskEventWhereInput> {
+  const redo = await db.taskEvent.findFirst({
+    where: { taskId, type: 'feed.redo' },
+    orderBy: { id: 'desc' },
+    select: { id: true },
+  })
+  return { type: 'feed.rewind', ...(redo === null ? {} : { id: { gt: redo.id } }) }
+}
 
 /**
  * The last question of a dialog and whether words, «Продолжить» or «Продолжить работу агента»
- * came after it, or it was undone. `browser` — a task in the browser waits for the client to act
- * there (docs/plan/57, Б23).
+ * came after it, or it was undone and not brought back. `browser` — a task in the browser waits
+ * for the client to act there (docs/plan/57, Б23).
  */
 export interface DialogQuestion {
   id: bigint
@@ -132,8 +160,10 @@ export async function lastQuestion(
   if (row === null) return null
   const question = readFeedRow('feed.question', row.payload)
   if (question.type !== 'feed.question') return null
+  // What closes a question: a row that moves the dialog on, or `/undo` of the turn that asked.
+  const closes = { OR: [movingRequest, await standingRewinds(db, taskId)] }
   const answered = await db.taskEvent.count({
-    where: { taskId, ...closesQuestion, id: { gt: row.id } },
+    where: { taskId, AND: [closes, { id: { gt: row.id } }] },
   })
   return {
     id: row.id,
@@ -148,14 +178,23 @@ export async function lastQuestion(
  * owner's decision of 26.10.2026) or one that failed (`feed.failure`, owner's decision of
  * 28.10.2026: «никогда не завершай диалог, если произошла ошибка») leaves it open for the
  * client's next words (`next: 'awaiting_user'`) — while nothing the client wrote or pressed,
- * besides a command, came after it. `/undo` leaves it open just so (`feed.rewind`). null — none.
+ * besides a command, came after it. `/undo` leaves it open just so (`feed.rewind`), and `/redo`
+ * gives it back what it waited after, or stands for it when that can take no words: the candidate
+ * it waited with did not come back (`feed.redo` with `open`). null — none.
  */
 export async function openResult(
   db: Pick<Prisma.TransactionClient, 'taskEvent'>,
   taskId: string,
 ): Promise<bigint | null> {
   const row = await db.taskEvent.findFirst({
-    where: { taskId, type: { in: ['feed.result', 'feed.failure', 'feed.rewind'] } },
+    where: {
+      taskId,
+      OR: [
+        { type: { in: ['feed.result', 'feed.failure'] } },
+        await standingRewinds(db, taskId),
+        { type: 'feed.redo', payload: { path: ['open'], equals: true } },
+      ],
+    },
     orderBy: { id: 'desc' },
     select: { id: true, type: true, payload: true },
   })
@@ -163,6 +202,7 @@ export async function openResult(
   const ending = readFeedRow(row.type, row.payload)
   const open =
     ending.type === 'feed.rewind' ||
+    ending.type === 'feed.redo' ||
     ((ending.type === 'feed.result' || ending.type === 'feed.failure') &&
       ending.next === 'awaiting_user')
   if (!open) return null
@@ -225,7 +265,7 @@ export async function wordsOfUndonePress(
     select: { id: true, payload: true },
   })
   if (row === null)
-    return (await turnRewinding(db, taskId)) === pressId
+    return (await turnRewinding(db, taskId))?.id === pressId
       ? wordsOfTurn(db, taskId, task.turnNo)
       : null
   if ((await openResult(db, taskId)) !== row.id) return null

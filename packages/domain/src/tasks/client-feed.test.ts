@@ -231,6 +231,10 @@ const samples: Record<FeedEventType, Record<string, unknown>[]> = {
     { v: 1, turn: 3, files: false, site: 'elsewhere' },
     { v: 1, turn: 1, files: false, site: 'unchanged' },
   ],
+  'feed.redo': [
+    { v: 1, turn: 2, files: false, open: false },
+    { v: 1, turn: 3, files: true, open: true },
+  ],
 }
 
 const accepts = (type: FeedEventType, payload: unknown) =>
@@ -242,7 +246,7 @@ const shown = (type: FeedEventType, { v: _v, ...fields }: Record<string, unknown
 })
 
 describe('feed vocabulary', () => {
-  it('lists the six types of the design, the four of a release, the snapshot and `/undo`, all under the feed prefix', () => {
+  it('lists the six types of the design, the four of a release, the snapshot, `/undo` and `/redo`, all under the feed prefix', () => {
     expect(feedEventTypes).toEqual([
       'feed.request',
       'feed.step',
@@ -257,6 +261,7 @@ describe('feed vocabulary', () => {
       'feed.undo',
       'feed.screenshot',
       'feed.rewind',
+      'feed.redo',
     ])
     expect(Object.keys(feedPayloadSchemas)).toEqual([...feedEventTypes])
     expect(isFeedEventType('feed.step')).toBe(true)
@@ -1136,6 +1141,13 @@ describe('reading stored rows', () => {
         { v: 1, turn: 2, files: 'нет', site: 'none' },
         { v: 1, turn: 2, files: false, site: undefined },
         { v: 1, turn: 2, files: false, site: 7 },
+      ],
+      'feed.redo': [
+        { v: 1, turn: 0, files: false, open: false },
+        { v: 1, turn: 2, files: 'нет', open: false },
+        { v: 1, turn: 2, files: undefined, open: false },
+        { v: 1, turn: 2, files: false, open: 'да' },
+        { v: 1, turn: 2, files: false },
       ],
     }
     for (const type of feedEventTypes)

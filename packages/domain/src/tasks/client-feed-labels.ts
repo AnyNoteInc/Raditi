@@ -2,6 +2,7 @@ import { pluralRu } from '../plural.ts'
 import type { PreviewUnavailableReason } from '../preview/preview-state.ts'
 import type { VersionBump } from '../release/semver.ts'
 import type {
+  FeedRedoPayload,
   FeedRewindPayload,
   FeedBrowserReason,
   FeedCancelledBy,
@@ -218,6 +219,10 @@ export function feedRewindText(row: Pick<FeedRewindPayload, 'files' | 'site'>): 
   const site = feedRewindSiteText[row.site]
   return site === null ? undone : `${undone} ${site}`
 }
+
+/** The row of `/redo` in the feed. */
+export const feedRedoText = (row: Pick<FeedRedoPayload, 'files'>): string =>
+  row.files ? 'Отменённый запрос и его файлы возвращены.' : 'Отменённый запрос возвращён.'
 
 /** Shown when `filesChanged` of a result is a number. */
 export const feedFilesChangedText = (count: number): string =>
@@ -705,7 +710,7 @@ export function feedUndoKeptText(kept: number): string | null {
     : null
 }
 
-/** The title of the plate of `feed.update`: an «Обновить» with no new revision, a failed `/undo`. */
+/** The title of the plate of `feed.update`: an «Обновить» with no revision, a failed `/undo`, `/redo`. */
 export const feedUpdateTitle: Readonly<Record<FeedUpdateOutcome, string>> = Object.freeze({
   emptied: 'Изменения уже на сайте',
   conflict: 'Рабочую копию не обновили',
@@ -713,6 +718,7 @@ export const feedUpdateTitle: Readonly<Record<FeedUpdateOutcome, string>> = Obje
   withdrawn: 'Рабочую копию не обновили',
   failed: 'Рабочую копию не обновили',
   rewind_failed: 'Запрос не отменён',
+  redo_failed: 'Запрос не возвращён',
 })
 
 /** What came of the command; `conflicts` — files of the dialog the site changed too. */
@@ -730,6 +736,8 @@ export function feedUpdateText(outcome: FeedUpdateOutcome, conflicts: number): s
       return 'Произошёл технический сбой. Попробуйте обновить рабочую копию ещё раз позже.'
     case 'rewind_failed':
       return 'Не получилось отменить последний запрос: переписка и файлы остались как были.'
+    case 'redo_failed':
+      return 'Не получилось вернуть отменённый запрос: он остался отменённым.'
   }
 }
 

@@ -235,6 +235,11 @@ export const feedFixtures: readonly FeedFixture[] = Object.freeze([
     payload: { v: 1, turn: 2, files: false, site: 'check' },
   },
   {
+    name: 'redo v1',
+    type: 'feed.redo',
+    payload: { v: 1, turn: 2, files: false, open: false },
+  },
+  {
     name: 'undo v1 confirmed',
     type: 'feed.undo',
     payload: {

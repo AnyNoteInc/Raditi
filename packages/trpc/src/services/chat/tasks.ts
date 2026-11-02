@@ -13,6 +13,7 @@ import {
   insertFeedEvent,
   requestPreviewSync,
   taskHasProductionWrites,
+  redoTurn,
   undoTurn,
   type Prisma,
   type PrismaClient,
@@ -80,6 +81,7 @@ import {
   taskNothingToContinue,
   taskNothingToResume,
   taskNothingToRetry,
+  taskRedoing,
   taskRewinding,
   workspaceKeyUnavailable,
   type TaskNotAcceptedReason,
@@ -439,10 +441,11 @@ async function assertProjectOpen(tx: Tx, task: LockedTask): Promise<void> {
   if (siteClosed(site.status)) throw taskNotAccepted('site_not_active')
 }
 
-/** core is taking a turn of the chat back (`candidate.rewind`): what would start waits for it. */
+/** core is moving the chat a turn (`candidate.rewind`): what would start waits for it. */
 async function assertNotRewinding(tx: Tx, task: LockedTask): Promise<void> {
-  if (task.requirements.repository && (await turnRewinding(tx, task.id)) !== null)
-    throw taskRewinding()
+  if (!task.requirements.repository) return
+  const pending = await turnRewinding(tx, task.id)
+  if (pending !== null) throw pending.redo ? taskRedoing() : taskRewinding()
 }
 
 /**
@@ -775,6 +778,57 @@ export async function undoDialogTurn(
           site: feedEndedSiteOf(task, await taskHasProductionWrites(tx, task.id)),
         },
       },
+    })
+    return { requestEventId, repeated: false, words }
+  })
+}
+
+/**
+ * `/redo` (docs/plan/61-chats-first.md, §5.14): the turn `/undo` took comes back, while nothing
+ * moved the chat since. The next pass goes on from it, its words stand as read, and the page takes
+ * them out of the field, or they would be sent a second time: they are given back as `/undo` gives
+ * them. No model and no money. In a chat without the repository it is done here, and the chat, which
+ * `/undo` did not move either, waits as it did. In a chat with the repository the press and the job
+ * `candidate.rewind` are written here, and core moves the branch, the candidate and the preview
+ * forward under the site's lease; the chat takes nothing else until then. A repeat with the same
+ * `requestId` returns the row of the first delivery.
+ */
+export async function redoDialogTurn(
+  db: PrismaClient,
+  input: { userId: string; taskId: string; requestId: string },
+): Promise<UndoneTurn> {
+  const { userId } = input
+  const requestId = input.requestId.toLowerCase()
+  return underDialogLock(db, input, async (tx, task) => {
+    const repeated = await requestOf(tx, task.id, requestId)
+    if (repeated !== null)
+      return {
+        requestEventId: String(repeated),
+        repeated: true,
+        words: await wordsOfTurn(tx, task.id, task.turnNo),
+      }
+    const facts = await dialogFacts(tx, task, userId)
+    assertCommandAvailable(facts.commands, 'turn_redo')
+    const words = await wordsOfTurn(tx, task.id, task.turnNo)
+    const press = {
+      v: 1,
+      kind: 'command',
+      command: 'turn_redo',
+      authorId: userId,
+      requestId,
+    } as const
+    if (task.requirements.repository) {
+      const requestEventId = await writeRequest(tx, task.id, press)
+      await enqueueCandidateRewind(tx, { taskId: task.id, requestEventId })
+      return { requestEventId, repeated: false, words }
+    }
+    const turnId = await redoTurn(tx, { taskId: task.id, turnNo: task.turnNo })
+    if (turnId === null) throw conflict('The undone turn of the chat is no longer there to redo')
+    const requestEventId = await writeRequest(tx, task.id, press)
+    await insertFeedEvent(tx, {
+      taskId: task.id,
+      turnId,
+      row: { type: 'feed.redo', payload: { v: 1, turn: task.turnNo, files: false, open: false } },
     })
     return { requestEventId, repeated: false, words }
   })

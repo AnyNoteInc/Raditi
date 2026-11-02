@@ -1580,6 +1580,104 @@ async function scenarioN(stand) {
   rt.end()
 }
 
+/**
+ * `/redo` in a chat without the repository (docs/plan/61-chats-first.md, §5.14): the request `/undo`
+ * took comes back while nothing moved the chat. The chat waits as it did, the next turn goes on from
+ * the snapshot of the turn that came back, not from the one before it, and no money moves.
+ */
+async function scenarioO(stand) {
+  const { rt, site, state, db, model } = stand
+  rt.begin('O', '`/redo`: запрос вернулся, следующий ход продолжает его снимок, деньги не тронуты')
+  const words = { title: 'Новость перед возвратом', text: 'Проверяем возврат запроса.' }
+  const redoneWords = 'Сколько всего записей на сайте сейчас?'
+  const nextWords = 'Теперь откройте список записей.'
+  const { taskId } = await taskWithProgram(stand, state.owner, {
+    text: `Подготовьте новость «${words.title}»: ${words.text} Сохраните черновик.`,
+    account: site.accounts.owner,
+    program: 'keepDraft',
+    ctx: { words, foreignAttachment: state.foreignAttachment },
+    until: ['awaiting_user'],
+  })
+  model.script('answerInWords')
+  await state.owner.mutate('task.message', { taskId, requestId: randomUUID(), text: redoneWords })
+  const answered = await waitTask(stand, taskId, ['awaiting_user'], {
+    what: 'the answer to the request to take back and bring back',
+  })
+  const session = await openSession(db, taskId)
+  const money = await moneyOf(db, taskId, answered.workspaceId)
+  const commands = async () => (await state.owner.query('task.feed', { taskId })).commands
+  const redoRefusal = async () =>
+    (await commands()).find((command) => command.id === 'turn_redo')?.refusal
+
+  rt.check(
+    (await redoRefusal()) === 'nothing_to_redo',
+    'nothing to bring back before `/undo`',
+    await redoRefusal(),
+  )
+  await state.owner.mutate('task.undoTurn', { taskId, requestId: randomUUID() })
+  rt.check((await redoRefusal()) === null, 'the chat offers `/redo` after `/undo`')
+
+  const redone = await state.owner.mutate('task.redoTurn', { taskId, requestId: randomUUID() })
+  rt.check(
+    redone.words === redoneWords,
+    'the words of the request come with the answer: the page takes them out of the field',
+    redone,
+  )
+  const turn = await db.taskTurn.findUniqueOrThrow({
+    where: { taskId_turnNo: { taskId, turnNo: answered.turnNo } },
+  })
+  rt.check(turn.undoneAt === null, 'the turn counts again', { undoneAt: turn.undoneAt })
+  const redo = (await rowsOf(db, taskId, 'feed.redo')).at(-1)
+  rt.check(
+    redo?.files === false && redo.open === false && redo.turn === answered.turnNo,
+    'the feed says the request is back, and no word of files',
+    redo,
+  )
+  rt.check(
+    (await moneyOf(db, taskId, answered.workspaceId)) === money,
+    'no hold, no ledger row and no balance moved',
+  )
+  const listed = (await state.owner.query('task.list', {})).items.find(({ id }) => id === taskId)
+  rt.check(
+    listed?.answered === true && listed.rewound === false,
+    'the list calls the chat answered again, as it was before `/undo`',
+    listed,
+  )
+  const open = await openSession(db, taskId)
+  rt.check(
+    open.id === session.id && open.status === 'ready',
+    'the browser of the chat stays where it was',
+    { status: open.status },
+  )
+  rt.check((await redoRefusal()) === 'nothing_to_redo', 'a turn comes back once')
+  rt.check(
+    (await commands()).find((command) => command.id === 'turn_undo')?.refusal === null,
+    'the turn may be taken back again',
+  )
+
+  const asked = model.requests.length
+  model.script('readTheList')
+  await state.owner.mutate('task.message', { taskId, requestId: randomUUID(), text: nextWords })
+  const next = await waitTask(stand, taskId, ['awaiting_user'], {
+    what: 'the turn after `/redo`',
+  })
+  const assignment = await db.turnAssignment.findFirstOrThrow({
+    where: { taskId, turnNo: next.turnNo },
+  })
+  rt.check(
+    assignment.plan.rewound === undefined && assignment.plan.previous?.turn === answered.turnNo,
+    'the next turn goes on from the snapshot of the turn that came back',
+    { rewound: assignment.plan.rewound, previous: assignment.plan.previous?.turn },
+  )
+  const prompts = model.requests.slice(asked).join('\n')
+  rt.check(
+    prompts.includes(nextWords) && prompts.includes(redoneWords),
+    'the model reads the next words after the request that came back',
+  )
+  await closeDialog(stand, taskId)
+  rt.end()
+}
+
 // ─── K: isolation and access ──────────────────────────────────────────────────
 
 async function scenarioK(stand) {
@@ -2034,6 +2132,7 @@ const SCENARIOS = Object.freeze({
   I: scenarioI,
   J: scenarioJ,
   N: scenarioN,
+  O: scenarioO,
   K: scenarioK,
   L: scenarioL,
   M: scenarioM,

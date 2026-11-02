@@ -634,6 +634,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
         readBranchHead: vi.fn(),
         rebaseCandidate: vi.fn(),
         rewindBranch: vi.fn(),
+        holdUndoneCommit: vi.fn(),
         treeOf: vi.fn(async ({ sha }: { sha: string }) => trees[sha]!),
       })
       const put = vi.fn(async () => {})

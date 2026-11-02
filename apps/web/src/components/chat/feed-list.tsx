@@ -19,6 +19,7 @@ import {
   feedCeilingButtons,
   feedCeilingText,
   feedCommandText,
+  feedRedoText,
   feedRewindText,
   feedCreditsSentence,
   feedDecisionText,
@@ -785,6 +786,7 @@ const updateIcon: Readonly<Record<FeedUpdateOutcome, AppIconName>> = {
   withdrawn: 'clock',
   failed: 'warning',
   rewind_failed: 'warning',
+  redo_failed: 'warning',
 }
 
 /**
@@ -1060,7 +1062,8 @@ function RowView({
           tone={
             row.outcome === 'conflict' ||
             row.outcome === 'failed' ||
-            row.outcome === 'rewind_failed'
+            row.outcome === 'rewind_failed' ||
+            row.outcome === 'redo_failed'
               ? 'error.main'
               : 'text.primary'
           }
@@ -1079,6 +1082,8 @@ function RowView({
       )
     case 'feed.rewind':
       return <Note text={feedRewindText(row)} />
+    case 'feed.redo':
+      return <Note text={feedRedoText(row)} />
     case 'newer':
       return <Note text={feedRowText.newer} />
     case 'unreadable':

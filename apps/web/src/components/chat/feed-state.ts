@@ -91,9 +91,16 @@ export const undoing = (head: FeedHeadState): boolean =>
   head.undo?.run !== undefined && head.undo.run !== null && head.undo.run.outcome === null
 
 /**
+ * core has not answered a press of `/undo` or `/redo` yet. What it moves comes with its job, and
+ * until it comes the words of the field are the ones `/redo` is bringing back (§5.14).
+ */
+const turnMoving = (head: FeedHeadState): boolean =>
+  head.commands.some(({ refusal }) => refusal === 'turn_rewinding' || refusal === 'turn_redoing')
+
+/**
  * Milliseconds until the next read; null — no more reads: the dialog has ended (and no undo of its
- * release goes on), or there is no such dialog. 2 s while the agent, a release, an undo or the
- * preview is at work or the task's browser is open, 15 s while the dialog waits for the client; after a failed read the pause
+ * release goes on), or there is no such dialog. 2 s while the agent, a release, an undo, a press of
+ * `/undo` or `/redo` or the preview is at work or the task's browser is open, 15 s while the dialog waits for the client; after a failed read the pause
  * doubles, up to 30 s. A hidden page is not read at all — the hook waits for it to be shown again.
  */
 export function pollDelay(state: FeedState): number | null {
@@ -106,6 +113,7 @@ export function pollDelay(state: FeedState): number | null {
     head === null ||
     WORKING.has(head.task.status) ||
     undoing(head) ||
+    turnMoving(head) ||
     (head.preview !== null && BUILDING.has(head.preview.status)) ||
     // An open browser (docs/plan/57-browser-tasks.md): who drives it and what the agent asks
     // there change while the dialog waits.

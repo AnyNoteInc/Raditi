@@ -160,6 +160,35 @@ test('`/undo` leaves a draft of the client where it is', async ({ page, signedIn
   await expect(message(page)).toHaveValue('Свой черновик')
 })
 
+test('`/redo` brings the request back and takes its words out of the field', async ({
+  page,
+  signedInUser,
+}) => {
+  const { taskId } = await addAnsweredChat(signedInUser.id, ANSWERED)
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto(`/chats/${taskId}`)
+  await expect(feed(page)).toContainText(ANSWERED.answer)
+  await message(page).fill('/undo')
+  await commands(page).waitFor()
+  await page.keyboard.press('Enter')
+  await expect(message(page)).toHaveValue(ANSWERED.words)
+  await expect(feed(page).getByText(UNDONE)).toBeVisible()
+
+  await page.getByRole('button', { name: 'Команды' }).click()
+  await commands(page)
+    .getByRole('option', { name: /Вернуть отменённый запрос/ })
+    .click()
+
+  await expect(feed(page).getByText('Отменённый запрос возвращён.')).toBeVisible()
+  await expect(message(page)).toHaveValue('')
+  await page.getByRole('button', { name: 'Команды' }).click()
+  const again = commands(page).getByRole('option', { name: /Вернуть отменённый запрос/ })
+  await expect(again).toHaveAttribute('aria-disabled', 'true')
+  await expect(again).toContainText('Возвращать нечего.')
+  await page.keyboard.press('Escape')
+})
+
 test('`/thinking` shows what the model thought, and hides it again', async ({
   page,
   signedInUser,

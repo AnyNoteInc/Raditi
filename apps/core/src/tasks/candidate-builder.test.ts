@@ -67,6 +67,7 @@ function setup(
     readBranchHead: vi.fn(),
     rebaseCandidate: vi.fn(),
     rewindBranch: vi.fn(),
+    holdUndoneCommit: vi.fn(),
     treeOf,
     comparesCommits: true,
     compareCommits,
@@ -401,6 +402,7 @@ describe('candidateGitOf', () => {
       readBranchHead: vi.fn(),
       rebaseCandidate: vi.fn(),
       rewindBranch: vi.fn(),
+      holdUndoneCommit: vi.fn(),
       treeOf,
     })
     expect(git.comparesCommits).toBe(false)
@@ -418,6 +420,7 @@ describe('candidateGitOf', () => {
       readBranchHead: vi.fn(),
       rebaseCandidate: vi.fn(),
       rewindBranch: vi.fn(),
+      holdUndoneCommit: vi.fn(),
       treeOf: vi.fn(),
       compareCommits,
     })
@@ -445,12 +448,14 @@ describe('candidateGitOf and the row of a repository', () => {
       paths: [],
     }))
     const rewindBranch = vi.fn(async (_input: { repo: object }) => {})
+    const holdUndoneCommit = vi.fn(async (_input: { repo: object }) => {})
     const compareCommits = vi.fn(async (_input: { repo: object }) => comparison())
     const git = candidateGitOf({
       readBranchHead,
       treeOf,
       rebaseCandidate,
       rewindBranch,
+      holdUndoneCommit,
       compareCommits,
     })
     await git.readBranchHead({ repo: row, branch: 'main' })
@@ -471,7 +476,15 @@ describe('candidateGitOf and the row of a repository', () => {
       { repo: row, branch: `agent/${TASK}`, from: HEAD, to: BASE },
       async () => {},
     )
-    for (const call of [readBranchHead, treeOf, compareCommits, rebaseCandidate, rewindBranch])
+    await git.holdUndoneCommit({ repo: row, branch: `agent/${TASK}`, sha: HEAD }, async () => {})
+    for (const call of [
+      readBranchHead,
+      treeOf,
+      compareCommits,
+      rebaseCandidate,
+      rewindBranch,
+      holdUndoneCommit,
+    ])
       expect(call.mock.calls[0]?.[0].repo).toStrictEqual(repo)
   })
 })

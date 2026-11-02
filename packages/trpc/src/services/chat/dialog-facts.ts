@@ -23,6 +23,7 @@ import {
   type ReleaseOutcome,
   type ReleaseStatus,
   type TaskStatus,
+  type TurnRedoRefusal,
   type TurnUndoRefusal,
 } from '@repo/domain'
 
@@ -175,6 +176,7 @@ export async function dialogFacts(
   // ещё» (docs/plan/57, Б1, Б25), whatever rows say: the page does not list those (К27).
   const withRepository = needs?.needsRepository ?? true
   const withBrowser = needs?.needsBrowser ?? false
+  const pending = withRepository ? await turnRewinding(db, task.id) : null
   const site =
     task.siteId === null
       ? null
@@ -231,7 +233,13 @@ export async function dialogFacts(
         status: task.status,
         turnNo: needs?.turnNo ?? 0,
       }),
-      turnRewinding: withRepository && (await turnRewinding(db, task.id)) !== null,
+      turnRewinding: pending !== null && !pending.redo,
+      turnRedo: await turnRedoRefusal(db, {
+        taskId: task.id,
+        status: task.status,
+        turnNo: needs?.turnNo ?? 0,
+      }),
+      turnRedoing: pending?.redo === true,
     },
   }
 }
@@ -277,6 +285,51 @@ async function turnUndoRefusal(
   if (latest?.turnNo === chat.turnNo && latest.headSha !== turn.headSha) return 'undo_past_update'
   const wrote = await taskHasProductionWrites(db, chat.taskId, { turnNo: chat.turnNo })
   return wrote ? 'content_written' : null
+}
+
+/**
+ * Why `/redo` brings nothing back (docs/plan/61-chats-first.md, §5.14): it brings back the turn the
+ * last `/undo` took, while the chat still stands where that left it. Words, a pass, a command that
+ * moves the chat, a new revision or a confirmed release after the `feed.rewind` — each put something
+ * on top of the turn before, and «Обновить» is pressed as a plain command (`movingRequest` does not
+ * count it) while it writes the candidate onto a new `main`, under the same turn number: the branch
+ * cannot go back past it. The revision of the undo itself is written before the `feed.rewind`.
+ */
+async function turnRedoRefusal(
+  db: Reader,
+  chat: { taskId: string; status: TaskStatus; turnNo: number },
+): Promise<TurnRedoRefusal | null> {
+  if (chat.status !== 'awaiting_user' && chat.status !== 'awaiting_approval')
+    return 'nothing_to_redo'
+  const turn = await db.taskTurn.findUnique({
+    where: { taskId_turnNo: { taskId: chat.taskId, turnNo: chat.turnNo } },
+    select: { undoneAt: true },
+  })
+  if (!turn?.undoneAt) return 'nothing_to_redo'
+  const rewind = await db.taskEvent.findFirst({
+    where: { taskId: chat.taskId, type: 'feed.rewind' },
+    orderBy: { id: 'desc' },
+    select: { id: true },
+  })
+  if (rewind === null) return 'nothing_to_redo'
+  const after = await db.taskEvent.count({
+    where: {
+      taskId: chat.taskId,
+      id: { gt: rewind.id },
+      OR: [
+        movingRequest,
+        {
+          type: 'feed.request',
+          AND: [
+            { payload: { path: ['kind'], equals: 'command' } },
+            { payload: { path: ['command'], equals: 'update' } },
+          ],
+        },
+        { type: { in: ['feed.candidate', 'feed.decision', 'feed.release'] } },
+      ],
+    },
+  })
+  return after > 0 ? 'nothing_to_redo' : null
 }
 
 const dialogRelease = (row: {

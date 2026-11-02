@@ -51,6 +51,9 @@ export const taskBusy = () => new DomainError('TASK_BUSY', 'The agent is at work
 /** `/undo` is moving the chat a turn back: words wait until it stands. */
 export const taskRewinding = () =>
   new DomainError('TASK_REWINDING', 'The last turn of the chat is being taken back', 409)
+/** `/redo` is bringing the chat a turn forward: words wait until it stands. */
+export const taskRedoing = () =>
+  new DomainError('TASK_REDOING', 'The undone turn of the chat is being brought back', 409)
 export const taskFinished = () => new DomainError('TASK_FINISHED', 'The dialog has ended', 409)
 export const releaseInProgress = () =>
   new DomainError('RELEASE_IN_PROGRESS', 'A release of the dialog is in work', 409)

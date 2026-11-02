@@ -31,6 +31,8 @@ const waiting: ChatCommandFacts = {
   projectClosed: false,
   turnUndo: 'nothing_to_undo',
   turnRewinding: false,
+  turnRedo: 'nothing_to_redo',
+  turnRedoing: false,
 }
 const verdict = (facts: ChatCommandFacts) =>
   Object.fromEntries(chatCommandAvailability(facts).map((item) => [item.id, item.refusal]))
@@ -319,7 +321,33 @@ describe('the commands of a dialog', () => {
     )
   })
 
-  it('closes `/redo` until its slice, a project that is closed before `/undo` and `/redo`', () => {
+  it('takes `/redo` while what `/undo` took may come back, and says what stands in its way', () => {
+    const open = { ...waiting, turnRedo: null, preview: { status: 'ready' as const } }
+    expect(verdict(open).turn_redo).toBeNull()
+    expect(verdict({ ...open, taskStatus: 'awaiting_user' }).turn_redo).toBeNull()
+    // A chat at work moved on from what `/undo` took: there is nothing to wait for.
+    for (const taskStatus of ['queued', 'preparing', 'running'] as const)
+      expect(verdict({ ...waiting, taskStatus }).turn_redo).toBe('nothing_to_redo')
+    for (const taskStatus of ['deploying', 'verifying'] as const)
+      expect(verdict({ ...open, taskStatus }).turn_redo).toBe('release_in_progress')
+    expect(verdict({ ...open, releaseInProgress: true }).turn_redo).toBe('release_in_progress')
+    // core is bringing a turn back: only the preview and «Отменить чат» stay.
+    expect(verdict({ ...open, turnRedoing: true })).toMatchObject({
+      release: 'turn_redoing',
+      update: 'turn_redoing',
+      reset: 'turn_redoing',
+      init: 'turn_redoing',
+      turn_undo: 'turn_redoing',
+      turn_redo: 'turn_redoing',
+      preview: null,
+      cancel: null,
+    })
+    expect(chatCommandRefusalText.turn_redoing).toBe(
+      'Подождите: отменённый запрос ещё возвращается.',
+    )
+  })
+
+  it('closes `/redo` without a turn to bring back, a project that is closed before `/undo` and `/redo`', () => {
     expect(verdict(waiting)).toMatchObject({
       turn_undo: 'nothing_to_undo',
       turn_redo: 'nothing_to_redo',

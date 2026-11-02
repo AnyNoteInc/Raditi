@@ -10,7 +10,7 @@ import {
   showsRefresh,
   type FeedState,
 } from './feed-state'
-import { candidateHead, feedAnswer, requestRow, resultRow, stepRow } from './testing'
+import { candidateHead, feedAnswer, requestRow, resultRow, stepRow, verdicts } from './testing'
 
 const answered = (state: FeedState, answer = feedAnswer(), after = state.cursor) =>
   feedReducer(state, { type: 'answer', answer, after })
@@ -165,6 +165,16 @@ describe('pollDelay', () => {
     expect(
       pollDelay(at({ status: 'awaiting_user', browser: { ...browser, status: 'closed' } })),
     ).toBe(feedPolling.waiting)
+  })
+
+  it('counts a press of `/undo` or `/redo` core has not answered as work: it comes with its job', () => {
+    for (const refusal of ['turn_rewinding', 'turn_redoing'] as const) {
+      const commands = verdicts({ turn_undo: refusal, turn_redo: refusal })
+      expect(pollDelay(at({ status: 'awaiting_user', commands }))).toBe(feedPolling.working)
+    }
+    expect(pollDelay(at({ status: 'awaiting_user', commands: verdicts() }))).toBe(
+      feedPolling.waiting,
+    )
   })
 
   it('stops at the end of a dialog', () => {

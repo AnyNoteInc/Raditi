@@ -336,6 +336,11 @@ describe('the chat as a Markdown file', () => {
         row({ type: 'feed.rewind', turn: 2, files: false, site: 'elsewhere' }),
         ['Последний запрос отменён. То, что агент сделал на других сайтах, осталось.'],
       ],
+      [
+        'the row of `/redo`',
+        row({ type: 'feed.redo', turn: 2, files: true, open: false }),
+        ['Отменённый запрос и его файлы возвращены.'],
+      ],
     ]
 
     it.each(cases)('%s', (_name, shown, words) => {

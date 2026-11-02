@@ -2,9 +2,11 @@ import { Logger } from '@nestjs/common'
 import { extendTaskHolds } from '@repo/billing'
 import {
   excludeTurnDbOperations,
+  includeTurnDbOperations,
   insertFeedEvent,
   nextCandidateRevision,
   recordCandidate,
+  redoDialog,
   requestPreviewSync,
   rewindDialog,
   supersedeStandingCandidate,
@@ -25,6 +27,7 @@ import {
   isDomainError,
   isTooLarge,
   leaseLost,
+  readFeedRow,
   taskHoldExpiry,
   terminalTaskStatuses,
   withSite,
@@ -47,7 +50,7 @@ import {
 import type { CandidateGit } from './candidate-git.ts'
 import { savedPlanOf, UPDATE_REPAIR_MS } from './turn-planner.ts'
 
-/** `/undo` holds the site this long at most: a build of the candidate and one push. */
+/** `/undo` and `/redo` hold the site this long at most: a build of the candidate and one push. */
 const REWIND_LEASE_MS = 10 * 60_000
 /** A busy site, or an undo that could not be recorded yet, is asked again after this. */
 const RETRY_MS = 30_000
@@ -74,9 +77,11 @@ export interface CandidateRewindDependencies {
 export type RewindAnswer =
   /** The branch, the candidate and the preview stand where the turn found them. */
   | 'rewound'
+  /** `/redo`: they stand where the turn left them, and the chat waits as it did before `/undo`. */
+  | 'redone'
   /** The chat closed meanwhile, or the press was answered already. */
   | 'nothing'
-  /** The turn cannot be taken back: nothing moved. */
+  /** The turn cannot be taken back, or brought back: nothing moved. */
   | 'refused'
   /** The site is busy: the job is put again. */
   | 'busy'
@@ -94,18 +99,21 @@ interface RewoundTask {
   site: { stack: SiteStack; url: string; installedVersion: string | null }
 }
 
-/** What is taken back and where to: read under the lease. */
+/** What is taken back, or brought back, and where to: read under the lease. */
 interface RewindTarget {
-  /** The head of the turn: where the branch stands. */
+  /** The head of the turn: where the branch stands before `/undo` and after `/redo`. */
   head: string
-  /** Where the branch goes: where the turn found it; null — it found none. */
+  /** Where the turn found the branch; null — it found none. */
   branch: string | null
   /** What the turn worked from: the commit the candidate stands on again. */
   content: string
 }
 
-/** What is written of the undo: `empty` without a build — the candidate gave way to the record. */
+/** What is written of the press: `empty` without a build — the candidate gave way to the record. */
 type RewindRecord = CandidateBuild | { kind: 'empty' }
+
+/** Which way a press moves the chat: `/undo`, or `/redo` with what stood before that `/undo`. */
+type RewindWay = { redo: false } | { redo: true; before: TaskStatus | null }
 
 /** The chat stopped waiting before the branch moved: nothing is written. */
 const withdrawn = () =>
@@ -133,6 +141,13 @@ const isWithdrawn = (error: unknown) =>
  * once —, so the answer rests on `TaskSweep.rewinds`, which puts a press left unanswered again. A
  * press given up says the chat stands as it did, so a branch that moved is never given up: it is
  * recorded, in the end without a candidate (`UPDATE_REPAIR_MS`), and the next pass builds one.
+ *
+ * `/redo` goes the same way with the same rules, forward: the row of the press says which it is.
+ * The undone commit left the remote's branch, so `/undo` holds it under a ref of its own before the
+ * push (`holdUndoneCommit`): the mirror that also has it lives and dies with its container. What the
+ * chat waited with before `/undo` stands in the row that answered that press, and with it the chat
+ * is as it was: an answer, or a question still open. Only a candidate that does not come back makes
+ * it otherwise: the chat that waited with one is open then, and `feed.redo` says so (`open`).
  */
 export class CandidateRewind {
   readonly #logger: {
@@ -172,6 +187,7 @@ export class CandidateRewind {
         )
 
       const sited = withSite(task)
+      const redo = await this.#isRedo(job)
       lease = await this.deps.leases.acquire({
         siteId: sited.siteId,
         taskId: task.id,
@@ -179,7 +195,9 @@ export class CandidateRewind {
         ttlMs: REWIND_LEASE_MS,
       })
       if (!lease) return await this.#busy(job)
-      return await this.#rewind(job, sited, lease, git, candidates)
+      return await (redo
+        ? this.#redo(job, sited, lease, git, candidates)
+        : this.#rewind(job, sited, lease, git, candidates))
     } catch (error) {
       return this.#later(job, error)
     } finally {
@@ -200,12 +218,7 @@ export class CandidateRewind {
     // Under the lease: two jobs of a press end up here one after the other.
     if (await this.#answered(this.deps.db, job)) return this.#answer(job, 'nothing')
     const pushed = await this.#pushed(job)
-    // After a push nothing may say the chat stands as it did: the job goes on until it is recorded.
-    // A branch that stands neither here nor there for that long is no longer this press's to move.
-    const refuse = async (moved: boolean) =>
-      (pushed === null || !(await this.#young(job, UPDATE_REPAIR_MS))) && !moved
-        ? this.#final(job, 'refused', true)
-        : this.#later(job, new Error('A press that pushed was refused'))
+    const refuse = (moved: boolean) => this.#refused(job, pushed, moved)
 
     const repository = await this.deps.db.gitRepository.findFirst({
       where: { siteId: task.siteId },
@@ -226,7 +239,7 @@ export class CandidateRewind {
     const standing = await standingCandidateOf(this.deps.db, task.id)
     if (moved && !(await this.#young(job, UPDATE_REPAIR_MS))) {
       this.#logger.error(`candidate_rewind_without_candidate task=${job.taskId}`)
-      return this.#settle(job, task, standing, { kind: 'empty' }, pushed ?? true)
+      return this.#settle(job, task, standing, { kind: 'empty' }, pushed ?? true, { redo: false })
     }
 
     const revision = await nextCandidateRevision(this.deps.db, task.id)
@@ -252,32 +265,141 @@ export class CandidateRewind {
     const files = pushed ?? (await this.#filesChanged(git, repo, target))
 
     if (!moved) {
+      // Before the row of the push: a job that cannot hold the commit may still give the press up.
+      const fence = this.#fence(task, lease)
+      await git.holdUndoneCommit({ repo, branch, sha: target.head }, fence)
       if (pushed === null) await this.#markPush(job, files)
-      try {
-        await git.rewindBranch({ repo, branch, from: target.head, to: target.branch }, async () => {
-          if (!(await this.deps.leases.assert(lease))) throw leaseLost()
-          if (!(await this.#waits(task))) throw withdrawn()
-        })
-      } catch (error) {
-        if (isWithdrawn(error)) return this.#final(job, 'nothing', false)
-        if (isDomainError(error) && error.code === 'CONFLICT')
-          return this.#final(job, 'refused', true)
-        throw error
-      }
+      const stopped = await this.#moveBranch(job, git, { repo, branch, target, to: 'back' }, fence)
+      if (stopped) return stopped
     }
-    return this.#settle(job, task, standing, build, files)
+    return this.#settle(job, task, standing, build, files, { redo: false })
   }
 
-  /** The record of the undo: false from it — the chat stopped waiting, and nothing was written. */
+  /**
+   * `/redo` of a turn: as `#rewind`, forward. The turn is back at its head, its database writes in
+   * the plan and its claims on the revision, which `/undo` set aside. `files` — what the row of that
+   * `/undo` said, from trees read before its push.
+   */
+  async #redo(
+    job: CandidateRewindJob,
+    task: RewoundTask,
+    lease: SiteLeaseFence,
+    git: CandidateGit,
+    candidates: CandidateBuilder,
+  ): Promise<RewindAnswer> {
+    if (await this.#answered(this.deps.db, job)) return this.#answer(job, 'nothing')
+    const pushed = await this.#pushed(job)
+    const refuse = (moved: boolean) => this.#refused(job, pushed, moved)
+
+    const repository = await this.deps.db.gitRepository.findFirst({
+      where: { siteId: task.siteId },
+      orderBy: { createdAt: 'asc' },
+      select: { provider: true, owner: true, name: true },
+    })
+    const target = await this.#undoneTarget(task)
+    if (!repository || !target) return refuse(false)
+    const repo: RepoRef = repository
+    const branch = `agent/${task.id}`
+    const head = await git.readBranchHead({ repo, branch })
+    const moved = head === target.head
+    if (head !== target.branch && !moved) return refuse(false)
+    if (!moved && !(await this.#young(job, REWIND_GIVE_UP_MS)))
+      return this.#final(job, 'later', true)
+
+    const way = { redo: true, before: await this.#beforeUndo(task) } as const
+    const standing = await standingCandidateOf(this.deps.db, task.id)
+    if (moved && !(await this.#young(job, UPDATE_REPAIR_MS))) {
+      this.#logger.error(`candidate_rewind_without_candidate task=${job.taskId}`)
+      return this.#settle(job, task, standing, { kind: 'empty' }, await this.#undoFiles(task), way)
+    }
+
+    const revision = await nextCandidateRevision(this.deps.db, task.id)
+    const context = await candidates.context(task, standing, revision)
+    if (!context) return refuse(moved)
+    let build: CandidateBuild
+    try {
+      build = await candidates.build(context, {
+        turnNo: task.turnNo,
+        headSha: target.head,
+        claims: await this.#claimsOfTurn(task, target.head),
+        withTurn: task.turnNo,
+      })
+    } catch (error) {
+      if (!isTooLarge(error)) throw error
+      this.#logger.error(`candidate_rewind_too_large task=${job.taskId}`)
+      return refuse(moved)
+    }
+    const files = pushed ?? (await this.#undoFiles(task))
+
+    if (!moved) {
+      if (pushed === null) await this.#markPush(job, files)
+      const fence = this.#fence(task, lease)
+      const stopped = await this.#moveBranch(
+        job,
+        git,
+        { repo, branch, target, to: 'forward' },
+        fence,
+      )
+      if (stopped) return stopped
+    }
+    return this.#settle(job, task, standing, build, files, way)
+  }
+
+  /**
+   * A press that cannot go on. After a push nothing may say the chat stands as it did: the job goes
+   * on until it is recorded. A branch that stands neither here nor there for that long is no longer
+   * this press's to move.
+   */
+  async #refused(
+    job: CandidateRewindJob,
+    pushed: boolean | null,
+    moved: boolean,
+  ): Promise<RewindAnswer> {
+    return (pushed === null || !(await this.#young(job, UPDATE_REPAIR_MS))) && !moved
+      ? this.#final(job, 'refused', true)
+      : this.#later(job, new Error('A press that pushed was refused'))
+  }
+
+  /** The check right before a push: the lease is held and the chat waits at this turn. */
+  #fence(task: RewoundTask, lease: SiteLeaseFence): () => Promise<void> {
+    return async () => {
+      if (!(await this.deps.leases.assert(lease))) throw leaseLost()
+      if (!(await this.#waits(task))) throw withdrawn()
+    }
+  }
+
+  /** The push of a press: null — the branch moved; else what the job answers without it. */
+  async #moveBranch(
+    job: CandidateRewindJob,
+    git: CandidateGit,
+    move: { repo: RepoRef; branch: string; target: RewindTarget; to: 'back' | 'forward' },
+    fence: () => Promise<void>,
+  ): Promise<RewindAnswer | null> {
+    const { repo, branch, target, to } = move
+    const [from, onto] = to === 'back' ? [target.head, target.branch] : [target.branch, target.head]
+    try {
+      await git.rewindBranch({ repo, branch, from, to: onto }, fence)
+      return null
+    } catch (error) {
+      if (isWithdrawn(error)) return this.#final(job, 'nothing', false)
+      if (isDomainError(error) && error.code === 'CONFLICT')
+        return this.#final(job, 'refused', true)
+      throw error
+    }
+  }
+
+  /** The record of a press: false from it — the chat stopped waiting, and nothing was written. */
   async #settle(
     job: CandidateRewindJob,
     task: RewoundTask,
     standing: StandingCandidate | null,
     build: RewindRecord,
     files: boolean,
+    way: RewindWay,
   ): Promise<RewindAnswer> {
-    const recorded = await this.#record(job, task, standing, build, files)
-    return recorded ? this.#answer(job, 'rewound') : this.#final(job, 'nothing', false)
+    const recorded = await this.#record(job, task, standing, build, files, way)
+    if (!recorded) return this.#final(job, 'nothing', false)
+    return this.#answer(job, way.redo ? 'redone' : 'rewound')
   }
 
   async #filesChanged(git: CandidateGit, repo: RepoRef, target: RewindTarget): Promise<boolean> {
@@ -313,17 +435,85 @@ export class CandidateRewind {
     })
     if (latest?.turnNo === task.turnNo && latest.headSha !== turn.headSha) return null
     if (await taskHasProductionWrites(db, task.id, { turnNo: task.turnNo })) return null
-    const assignments = await db.turnAssignment.findMany({
+    return this.#plannedTarget(task, turn.headSha)
+  }
+
+  /** The turn `/redo` brings back: the last one, undone. web refused the rest at the press. */
+  async #undoneTarget(task: RewoundTask): Promise<RewindTarget | null> {
+    const turn = await this.deps.db.taskTurn.findUnique({
+      where: { taskId_turnNo: { taskId: task.id, turnNo: task.turnNo } },
+      select: { status: true, rejectedAt: true, undoneAt: true, headSha: true },
+    })
+    if (
+      turn?.status !== 'completed' ||
+      turn.rejectedAt !== null ||
+      turn.undoneAt === null ||
+      turn.headSha === null
+    )
+      return null
+    return this.#plannedTarget(task, turn.headSha)
+  }
+
+  /** Where the turn found the branch and what it worked from, by the plan it ran on. */
+  async #plannedTarget(task: RewoundTask, head: string): Promise<RewindTarget | null> {
+    const assignments = await this.deps.db.turnAssignment.findMany({
       where: { taskId: task.id, turnNo: task.turnNo },
       select: { plan: true },
     })
     const plan = assignments.length === 1 ? savedPlanOf(assignments[0]!.plan) : null
     if (!plan?.workspace) return null
-    return {
-      head: turn.headSha,
-      branch: branchBeforeTurn(plan),
-      content: plan.workspace.expectedBaseSha,
-    }
+    return { head, branch: branchBeforeTurn(plan), content: plan.workspace.expectedBaseSha }
+  }
+
+  /** The agent's claims of the turn `/redo` brings back; null — no revision of its head was made. */
+  async #claimsOfTurn(
+    task: RewoundTask,
+    head: string,
+  ): Promise<Pick<TurnResult, 'change_type' | 'risk'> | null> {
+    const row = await this.deps.db.taskCandidate.findFirst({
+      where: { taskId: task.id, turnNo: task.turnNo, headSha: head },
+      orderBy: { revision: 'desc' },
+      select: { facts: true },
+    })
+    const facts = candidateFactsSchema.safeParse(row?.facts)
+    return facts.success ? { change_type: facts.data.changeType, risk: facts.data.risk } : null
+  }
+
+  /** What the last `/undo` said of the files: its row of the feed, written after its push. */
+  async #undoFiles(task: RewoundTask): Promise<boolean> {
+    const row = await this.deps.db.taskEvent.findFirst({
+      where: { taskId: task.id, type: 'feed.rewind' },
+      orderBy: { id: 'desc' },
+      select: { payload: true },
+    })
+    const rewind = row === null ? null : readFeedRow('feed.rewind', row.payload)
+    return rewind?.type === 'feed.rewind' && rewind.files
+  }
+
+  /** The status the chat stood in when the last `/undo` took the turn; null — it is not known. */
+  async #beforeUndo(task: RewoundTask): Promise<TaskStatus | null> {
+    const row = await this.deps.db.taskEvent.findFirst({
+      where: {
+        taskId: task.id,
+        type: CANDIDATE_REWIND_EVENT,
+        payload: { path: ['outcome'], equals: 'rewound' },
+      },
+      orderBy: { id: 'desc' },
+      select: { payload: true },
+    })
+    return (row?.payload as { before?: TaskStatus } | undefined)?.before ?? null
+  }
+
+  /** Whether the press of the job is `/redo`: the row of the feed says what was pressed. */
+  async #isRedo(job: CandidateRewindJob): Promise<boolean> {
+    const row = await this.deps.db.taskEvent.findFirst({
+      where: { id: BigInt(job.requestEventId), taskId: job.taskId },
+      select: { payload: true },
+    })
+    const press = row === null ? null : readFeedRow('feed.request', row.payload)
+    return press?.type === 'feed.request' && press.kind === 'command'
+      ? press.command === 'turn_redo'
+      : false
   }
 
   /**
@@ -355,24 +545,33 @@ export class CandidateRewind {
     }
   }
 
-  /** The undo in one transaction: false — the chat stopped waiting, and nothing is written. */
+  /**
+   * The press in one transaction: false — the chat stopped waiting or the press was answered, and
+   * nothing is written. `/redo` puts the turn back in the state `/undo` found it in, so a job that
+   * outlived its lease is no longer stopped by the turn: only by the answer of the job after it.
+   */
   async #record(
     job: CandidateRewindJob,
     task: RewoundTask,
     standing: StandingCandidate | null,
     build: RewindRecord,
     files: boolean,
+    way: RewindWay,
   ): Promise<boolean> {
     const stands = build.kind === 'candidate' ? build.record.revision : (standing?.revision ?? null)
     const emptied = build.kind === 'empty'
+    const held = stands !== null && !emptied
+    // As it was before `/undo`: an open question waits for words, whatever stands.
+    const answering = way.redo && way.before === 'awaiting_user'
+    const to = held && !answering ? 'awaiting_approval' : 'awaiting_user'
+    const turn = { taskId: task.id, turnNo: task.turnNo }
     return this.#transaction(async (tx, now) => {
-      const turnId = await rewindDialog(tx, {
-        taskId: task.id,
-        turnNo: task.turnNo,
-        to: stands !== null && !emptied ? 'awaiting_approval' : 'awaiting_user',
-      })
+      // The row first: two jobs of a press read each other's answer here, or not at all.
+      if (!(await this.#locked(tx, task)) || (await this.#answered(tx, job))) return false
+      const turnId = await (way.redo ? redoDialog : rewindDialog)(tx, { ...turn, to })
       if (turnId === null) return false
-      await excludeTurnDbOperations(tx, { taskId: task.id, turnNo: task.turnNo })
+      if (way.redo) await includeTurnDbOperations(tx, turn)
+      else await excludeTurnDbOperations(tx, turn)
       if (build.kind === 'candidate') {
         const { record } = build
         await recordCandidate(tx, record)
@@ -408,35 +607,53 @@ export class CandidateRewind {
       await insertFeedEvent(tx, {
         taskId: task.id,
         turnId,
-        row: {
-          type: 'feed.rewind',
-          payload: {
-            v: 1,
-            turn: task.turnNo,
-            files,
-            // The browser belongs to the whole task: what it did stays, whatever this turn did.
-            site: feedEndedSiteOf(task, await taskHasProductionWrites(tx, task.id)),
-          },
-        },
+        row: way.redo
+          ? {
+              type: 'feed.redo',
+              payload: {
+                v: 1,
+                turn: task.turnNo,
+                files,
+                // It waited with a candidate that did not come back: nothing else takes words.
+                open: to === 'awaiting_user' && !answering,
+              },
+            }
+          : {
+              type: 'feed.rewind',
+              payload: {
+                v: 1,
+                turn: task.turnNo,
+                files,
+                // The browser belongs to the whole task: what it did stays, whatever this turn did.
+                site: feedEndedSiteOf(task, await taskHasProductionWrites(tx, task.id)),
+              },
+            },
       })
-      await this.#event(tx, job, 'rewound')
+      if (way.redo) await this.#event(tx, job, 'redone')
+      else await this.#event(tx, job, 'rewound', { before: task.status })
       return true
     })
   }
 
   /**
-   * The chat still waits at the turn being undone: the check right before the push, read after
+   * The chat still waits at the turn of the press: the check right before the push, read after
    * every writer of the task row before it has committed.
    */
   async #waits(task: RewoundTask): Promise<boolean> {
-    return this.#transaction(async (tx) => {
-      const rows = await tx.$queryRaw<Array<{ id: string }>>`
-        SELECT id FROM tasks
-        WHERE id = ${task.id}::uuid AND status::text = ANY(${[...waiting]}::text[])
-          AND turn_no = ${task.turnNo}
-        FOR UPDATE`
-      return rows.length === 1
-    })
+    return this.#transaction((tx) => this.#locked(tx, task))
+  }
+
+  /** Whether the chat waits at the turn of the press, with its row locked for the transaction. */
+  async #locked(
+    tx: Pick<Prisma.TransactionClient, '$queryRaw'>,
+    task: RewoundTask,
+  ): Promise<boolean> {
+    const rows = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM tasks
+      WHERE id = ${task.id}::uuid AND status::text = ANY(${[...waiting]}::text[])
+        AND turn_no = ${task.turnNo}
+      FOR UPDATE`
+    return rows.length === 1
   }
 
   async #transaction<T>(work: (tx: Prisma.TransactionClient, now: Date) => Promise<T>) {
@@ -548,12 +765,13 @@ export class CandidateRewind {
     db: Pick<Prisma.TransactionClient, 'taskEvent'>,
     job: CandidateRewindJob,
     outcome: RewindAnswer,
+    facts: { before?: TaskStatus } = {},
   ): Promise<void> {
     await db.taskEvent.create({
       data: {
         taskId: job.taskId,
         type: CANDIDATE_REWIND_EVENT,
-        payload: { v: 1, requestEventId: job.requestEventId, outcome },
+        payload: { v: 1, requestEventId: job.requestEventId, outcome, ...facts },
       },
     })
   }
@@ -569,13 +787,17 @@ export class CandidateRewind {
     told: boolean,
   ): Promise<RewindAnswer> {
     try {
+      const redo = told && (await this.#isRedo(job))
       await this.#transaction(async (tx) => {
         if (await this.#answered(tx, job)) return
         await this.#event(tx, job, answer)
         if (told)
           await insertFeedEvent(tx, {
             taskId: job.taskId,
-            row: { type: 'feed.update', payload: { v: 1, outcome: 'rewind_failed', conflicts: 0 } },
+            row: {
+              type: 'feed.update',
+              payload: { v: 1, outcome: redo ? 'redo_failed' : 'rewind_failed', conflicts: 0 },
+            },
           })
       })
     } catch {

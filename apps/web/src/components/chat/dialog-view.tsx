@@ -84,10 +84,12 @@ import {
   liveSteps,
   openQuestion,
   projectClosed,
+  redoneAfter,
   requestShown,
   retryFailure,
   stopRequested,
   undoFailedAfter,
+  withoutRedoneRewinds,
 } from './feed-model'
 import { showsRefresh, type FeedHeadState } from './feed-state'
 import { CandidateTab, PreviewTab, usePreviewCalls } from './preview-pane'
@@ -147,7 +149,16 @@ function focusTakenByOpening(dialog: Element | null): Element | null {
 
 /** What a press of the client sends: one id per press, kept for its repeats. */
 type Press =
-  'message' | 'continue' | 'retry' | 'cancel' | 'reset' | 'update' | 'resume' | 'init' | 'undoTurn'
+  | 'message'
+  | 'continue'
+  | 'retry'
+  | 'cancel'
+  | 'reset'
+  | 'update'
+  | 'resume'
+  | 'init'
+  | 'undoTurn'
+  | 'redoTurn'
 
 /** A release or an undo of it that is under way: its words in the head of the dialog. */
 function releaseProgress(head: FeedHeadState): string | null {
@@ -407,6 +418,8 @@ export function DialogView({
   // leave the field then, or sending them would ask again over the turn that stayed (§5.14).
   const [undonePress, setUndonePress] = useState<string | null>(null)
   const [wordsTaken, setWordsTaken] = useState(0)
+  // The press of `/redo` whose turn takes those words back: they leave the field once it is.
+  const [redoPress, setRedoPress] = useState<string | null>(null)
   const fieldText = useRef('')
   const fieldTextChanged = useCallback((text: string) => {
     fieldText.current = text
@@ -423,14 +436,21 @@ export function DialogView({
   const resumeAgent = useMutation(trpc.task.resumeAgent.mutationOptions())
   const init = useMutation(trpc.task.init.mutationOptions())
   const undoTurn = useMutation(trpc.task.undoTurn.mutationOptions())
-  if (undoneWords !== null && undonePress !== null && undoFailedAfter(rows, undonePress)) {
+  const redoTurn = useMutation(trpc.task.redoTurn.mutationOptions())
+  if (
+    undoneWords !== null &&
+    ((undonePress !== null && undoFailedAfter(rows, undonePress)) ||
+      (redoPress !== null && redoneAfter(rows, redoPress)))
+  ) {
     setUndoneWords(null)
     setUndonePress(null)
+    setRedoPress(null)
     setWordsTaken((times) => times + 1)
   }
   const setEffort = useMutation(trpc.task.setEffort.mutationOptions())
   const busy =
     undoTurn.isPending ||
+    redoTurn.isPending ||
     proceed.isPending ||
     retry.isPending ||
     cancel.isPending ||
@@ -622,7 +642,7 @@ export function DialogView({
       : null
   // The agent answered and asked nothing: the dialog waits for no one (26.10.2026). A failure
   // that left the dialog open (28.10.2026) asks the client again: «продолжи».
-  const ending = rows.findLast(
+  const ending = withoutRedoneRewinds(rows).findLast(
     (row) =>
       row.type === 'feed.result' || row.type === 'feed.failure' || row.type === 'feed.rewind',
   )
@@ -800,6 +820,25 @@ export function DialogView({
     refresh()
   }
 
+  /**
+   * `/redo`: the turn comes back, and with it the words `/undo` put into the field: sent, they would
+   * ask a second time. Words the client changed are theirs by now, and they stay.
+   */
+  async function pressRedoTurn() {
+    setFieldError(null)
+    try {
+      const { words, requestEventId } = await redoTurn.mutateAsync({
+        taskId,
+        requestId: pressId('redoTurn'),
+      })
+      pressed('redoTurn')
+      if (words !== null && words === undoneWords) setRedoPress(requestEventId)
+    } catch (failure) {
+      setFieldError(callErrorText(failure))
+    }
+    refresh()
+  }
+
   /** «Попробовать ещё» of a failure: one id per press of that failure, kept for its repeats. */
   async function pressRetry(failureEventId: string) {
     setFieldError(null)
@@ -929,6 +968,9 @@ export function DialogView({
       case 'turn_undo':
         void pressUndoTurn()
         return
+      case 'turn_redo':
+        void pressRedoTurn()
+        return
       case 'retry':
         if (retryRow !== null) void pressRetry(retryRow.id)
         return
@@ -954,7 +996,7 @@ export function DialogView({
       // `/help` is the field's. The others reach nobody yet: no row and no word typed gets here
       // while the server closes them. A slice that opens one takes it off this list.
       default:
-        id satisfies CommandToCome | 'turn_redo' | 'help'
+        id satisfies CommandToCome | 'help'
         return
     }
   }

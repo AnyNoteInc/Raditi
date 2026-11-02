@@ -54,7 +54,7 @@ export async function enqueueCandidateRebase(
   })
 }
 
-/** `/undo` in a chat with the repository: core takes the branch and the candidate a turn back. */
+/** `/undo` and `/redo` in a chat with the repository: core moves the branch and the candidate. */
 export async function enqueueCandidateRewind(
   tx: OutboxWriter,
   job: CandidateRewindJob,

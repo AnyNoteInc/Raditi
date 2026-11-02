@@ -21,8 +21,11 @@ import {
   claimQueuedTask,
   excludeTurnDbOperations,
   finishEmptiedDialog,
+  includeTurnDbOperations,
   nextCandidateRevision,
   recordCandidate,
+  redoDialog,
+  redoTurn,
   rejectTurn,
   rewindDialog,
   requestPreviewSync,
@@ -251,6 +254,43 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn settlement', () => {
     }
   })
 
+  it('moves a chat with the repository to what stands after `/redo`, with the turn counted', async () => {
+    for (const [from, to] of [
+      ['awaiting_approval', 'awaiting_user'],
+      ['awaiting_user', 'awaiting_approval'],
+      ['awaiting_approval', 'awaiting_approval'],
+    ] as const) {
+      const row = await task({ status: 'running', turnNo: 1 })
+      const turn = await db.taskTurn.findFirstOrThrow({ where: { taskId: row.id } })
+      await undoTurn(db, { taskId: row.id, turnNo: 1 })
+      await db.task.update({ where: { id: row.id }, data: { status: from } })
+      expect(await redoDialog(db, { taskId: row.id, turnNo: 2, to })).toBeNull()
+      expect(await redoDialog(db, { taskId: row.id, turnNo: 1, to })).toBe(turn.id)
+      const after = await db.task.findUniqueOrThrow({ where: { id: row.id } })
+      expect(after.status).toBe(to)
+      expect(after.waiting).toBeNull()
+      expect(
+        (await db.taskTurn.findFirstOrThrow({ where: { taskId: row.id } })).undoneAt,
+      ).toBeNull()
+    }
+  })
+
+  it('moves no chat that went elsewhere for `/redo`, and none whose turn is not undone', async () => {
+    const running = await task({ status: 'running', turnNo: 1 })
+    await undoTurn(db, { taskId: running.id, turnNo: 1 })
+    expect(await redoDialog(db, { taskId: running.id, turnNo: 1, to: 'awaiting_user' })).toBeNull()
+    expect((await db.task.findUniqueOrThrow({ where: { id: running.id } })).status).toBe('running')
+    expect(
+      (await db.taskTurn.findFirstOrThrow({ where: { taskId: running.id } })).undoneAt,
+    ).toBeInstanceOf(Date)
+
+    const standing = await task({ status: 'running', turnNo: 1 })
+    await db.task.update({ where: { id: standing.id }, data: { status: 'awaiting_approval' } })
+    await expect(
+      redoDialog(db, { taskId: standing.id, turnNo: 1, to: 'awaiting_user' }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' })
+  })
+
   it('moves no chat that does not wait, and none whose turn is refused', async () => {
     const running = await task({ status: 'running', turnNo: 1 })
     expect(
@@ -353,6 +393,35 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn settlement', () => {
     await db.taskTurn.updateMany({ where: { taskId: failed.id }, data: { status: 'failed' } })
     expect(await undoTurn(db, { taskId: failed.id, turnNo: 1 })).toBeNull()
     await expect(undoTurn(db, { taskId: row.id, turnNo: 0 })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    })
+  })
+
+  it('brings back only a turn `/undo` took, and only once', async () => {
+    const row = await task({ status: 'running', turnNo: 1 })
+    const turn = await db.taskTurn.findFirstOrThrow({ where: { taskId: row.id } })
+    expect(await redoTurn(db, { taskId: row.id, turnNo: 1 })).toBeNull()
+    await undoTurn(db, { taskId: row.id, turnNo: 1 })
+    expect(await redoTurn(db, { taskId: row.id, turnNo: 2 })).toBeNull()
+    expect(await redoTurn(db, { taskId: row.id, turnNo: 1 })).toBe(turn.id)
+    const back = await db.taskTurn.findFirstOrThrow({ where: { taskId: row.id } })
+    expect(back.undoneAt).toBeNull()
+    expect(back.status).toBe('completed')
+    expect(await redoTurn(db, { taskId: row.id, turnNo: 1 })).toBeNull()
+
+    const refused = await task({ status: 'running', turnNo: 1 })
+    await undoTurn(db, { taskId: refused.id, turnNo: 1 })
+    await rejectTurn(db, { taskId: refused.id, turnNo: 1 })
+    expect(await redoTurn(db, { taskId: refused.id, turnNo: 1 })).toBeNull()
+    expect(
+      (await db.taskTurn.findFirstOrThrow({ where: { taskId: refused.id } })).undoneAt,
+    ).toBeInstanceOf(Date)
+
+    const failed = await task({ status: 'running', turnNo: 1 })
+    await undoTurn(db, { taskId: failed.id, turnNo: 1 })
+    await db.taskTurn.updateMany({ where: { taskId: failed.id }, data: { status: 'failed' } })
+    expect(await redoTurn(db, { taskId: failed.id, turnNo: 1 })).toBeNull()
+    await expect(redoTurn(db, { taskId: row.id, turnNo: 0 })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
     })
   })
@@ -634,6 +703,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn settlement', () => {
       `preview.sync:${preview.id}:1:3`,
     ])
     expect(await excludeTurnDbOperations(db, { taskId: row.id, turnNo: 1 })).toBe(0)
+    expect(await includeTurnDbOperations(db, { taskId: row.id, turnNo: 1 })).toBe(0)
+    await expect(includeTurnDbOperations(db, { taskId: row.id, turnNo: 0 })).rejects.toThrow()
   })
 
   it('cancels a waiting dialog only while no release of it is in work', async () => {
