@@ -52,12 +52,12 @@ import { createPreviewSiteSources } from './site-sources.ts'
 
 // A preview end to end on this machine's Docker (docs/plan/53-chat-preview-release.md, R5c): a
 // synthetic «production» — MariaDB 11.4.13 with a WordPress 7.1.2 database — a git repository
-// with the full tree of the site, the real Docker runtime of previews (runc), the real copier,
-// PostgreSQL. The preview is built, opened through its entry forwarder, rebuilt to a candidate
-// with a database operation, synced from a turn, given a browser — which opens the preview through
-// the gateway of the `preview` app (R6), its build started as a process of its own on
-// PREVIEW_GATEWAY_PORT 18090 — and destroyed. Only synthetic data. Needs the images below, the
-// site, tools and browser images of infra/preview (README), the image of the host rules
+// with the full tree of the site, the real Docker runtime of previews (PREVIEW_RUNTIME, runc by
+// default), the real copier, PostgreSQL. The preview is built, opened through its entry forwarder,
+// rebuilt to a candidate with a database operation, synced from a turn, given a browser — which
+// opens the preview through the gateway of the `preview` app (R6), its build started as a process
+// of its own on PREVIEW_GATEWAY_PORT 18090 — and destroyed. Only synthetic data. Needs the images
+// below, the site, tools and browser images of infra/preview (README), the image of the host rules
 // (infra/sandbox/Dockerfile, `network-guard`, or SANDBOX_NETWORK_GUARD_IMAGE) and
 // `pnpm --filter preview build`; runs with
 // RADITI_PREVIEW_DOCKER_TESTS=1, RADITI_GATEWAY_DB_TESTS=1 and a disposable DATABASE_URL, with
@@ -74,6 +74,9 @@ const enabled =
   process.env.RADITI_PREVIEW_DOCKER_TESTS === '1' &&
   process.env.RADITI_GATEWAY_DB_TESTS === '1' &&
   Boolean(databaseUrl)
+/** As the suite of the runtime reads it: stands under gVisor set PREVIEW_RUNTIME=runsc. */
+const runtimeKind = process.env.PREVIEW_RUNTIME === 'runsc' ? 'runsc' : 'runc'
+const dockerSocket = process.env.SANDBOX_DOCKER_SOCKET ?? '/var/run/docker.sock'
 const run = promisify(execFile)
 const docker = async (...args: string[]) =>
   (await run('docker', args, { maxBuffer: 64 * 1024 * 1024 })).stdout.trim()
@@ -206,7 +209,7 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
       ttlHours: 72,
       idleMinutes: 30,
       executor: 'local',
-      runtime: 'runc',
+      runtime: runtimeKind,
       siteImages: { '8.3': await digest(SITE) },
       images: {
         db: await digest(DB),
@@ -217,11 +220,12 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
       dnsServers: ['77.88.8.8', '77.88.8.1'],
       gatewayPort: 18090,
       refusedSubnets: [],
-      docker: { socketPath: '/var/run/docker.sock', firewallImage },
+      docker: { socketPath: dockerSocket, firewallImage },
     }
     runtime = recording(
       createDockerPreviewRuntime({
-        runtime: 'runc',
+        runtime: runtimeKind,
+        socketPath: dockerSocket,
         gatewayPort: 18090,
         firewallImage,
         dnsServers: [...config.dnsServers],
@@ -649,7 +653,7 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
           sessionId: 'session1',
           turn: 2,
         },
-        runtime: 'runc',
+        runtime: runtimeKind,
         resources: { cpu: 1, memoryMiB: 256, pids: 64 },
         user: { uid: 10001, gid: 10001 },
         env: {},

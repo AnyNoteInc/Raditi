@@ -222,8 +222,9 @@ const testFiles = ['apps', 'packages', 'infra'].flatMap((directory) =>
     .map((name) => `${directory}/${name}`),
 )
 /**
- * The environment variables a test file's skip conditions depend on: `skipIf(...)` of Vitest and
- * `skip:` of node:test, through the `const` names they mention (to their initialisers).
+ * The environment variables a test file's skip conditions depend on: `skipIf(...)` and `runIf(...)`
+ * of Vitest and `skip:` of node:test, through the `const` names they mention (to their
+ * initialisers).
  */
 function gates(source) {
   const found = new Set()
@@ -240,7 +241,7 @@ function gates(source) {
       if (declared) scan(declared[1])
     }
   }
-  for (const [, condition] of source.matchAll(/\bskipIf\(([^\n]*)\)\(/g)) scan(condition)
+  for (const [, condition] of source.matchAll(/\b(?:skipIf|runIf)\(([^\n]*)\)\(/g)) scan(condition)
   for (const [, condition] of source.matchAll(/\bskip: ([^\n]*)/g)) scan(condition)
   return [...found]
 }
@@ -250,6 +251,34 @@ const workflows = readdirSync(join(root, '.github/workflows'))
 // As an `env:` entry, or exported by a step (inline, or through $GITHUB_ENV).
 const sets = (source, variable) =>
   new RegExp(`^ +${variable}: \\S|\\b${variable}=`, 'm').test(source)
+/**
+ * Whether one step of a workflow runs a test file with its variables set, by the step itself or by
+ * the job or the workflow around it. Comment lines run nothing, and neither does the step's name.
+ */
+function runsSuite(source, path, variables) {
+  const live = source
+    .split('\n')
+    .filter((line) => !/^\s*#/.test(line))
+    .join('\n')
+  const start = live.indexOf('\njobs:')
+  const head = live.slice(0, start)
+  return live
+    .slice(start)
+    .split(/^ {2}(?=[\w-]+:$)/m)
+    .slice(1)
+    .some((job) => {
+      const around = job.slice(0, job.indexOf('\n    steps:'))
+      return job
+        .slice(job.indexOf('\n    steps:'))
+        .split(/^ {6}- /m)
+        .slice(1)
+        .some((step) => {
+          const run = /^(?: {8})?run: (.*(?:\n(?: {9,}.*)?)*)/m.exec(step)?.[1] ?? ''
+          const inherited = `${head}\n${around}\n${step}`
+          return run.includes(path) && variables.every((name) => sets(inherited, name))
+        })
+    })
+}
 
 test('every path filter of a workflow names files the repository has', () => {
   // A filter left behind by a removed stand starts nothing and hides that a moved file no
@@ -443,6 +472,105 @@ test('every test suite enabled by an environment variable is enabled by a workfl
   }
   for (const variable of Object.keys(elsewhere))
     assert.ok(gated.has(variable), `${variable} no longer gates a suite: drop the exception`)
+})
+
+test('every suite switched on one by one is named in a step of a workflow', () => {
+  // `test:db` takes its suites by a pattern. These variables switch on a suite only where a step
+  // names its file: a variable set elsewhere leaves a suite no job ever runs.
+  const oneByOne = [
+    'RADITI_BROWSER_DOCKER_TESTS',
+    'RADITI_BROWSER_LOCAL_TESTS',
+    'RADITI_HOSTING_DOCKER_TESTS',
+    'RADITI_PREVIEW_DOCKER_TESTS',
+  ]
+  let checked = 0
+  const missing = []
+  for (const file of testFiles) {
+    if (file === 'infra/app/ci.test.mjs') continue
+    // By the text, not by `gates()`: a condition over two lines or an exported const stays a suite.
+    const source = read(file)
+    const variables = oneByOne.filter((variable) => source.includes(variable))
+    if (variables.length === 0) continue
+    checked += 1
+    const inWorkspace = file.replace(/^(?:apps|packages)\/[^/]+\//, '')
+    if (!workflows.some((entry) => runsSuite(entry.source, inWorkspace, variables)))
+      missing.push(file)
+  }
+  assert.deepEqual(missing, [], 'no step of a workflow runs these suites with their variable')
+  assert.ok(checked >= 14, 'the suites are found')
+  // `describe.runIf` is a skip condition too: the file that enables its suite that way.
+  assert.ok(
+    gates(read('packages/sandbox-providers/src/preview/staging.integration.test.ts')).includes(
+      'RADITI_PREVIEW_DOCKER_TESTS',
+    ),
+  )
+})
+
+test('a suite counts as run only by a step that names it and sets its variable', () => {
+  const file = 'src/sample.integration.test.ts'
+  const variable = 'RADITI_SAMPLE_TESTS'
+  const command = `pnpm --filter sample exec vitest run ${file}`
+  const on = `        env:\n          ${variable}: '1'\n`
+  const sample = ({ head = '', around = '', steps }) =>
+    `name: Sample\n${head}jobs:\n  sample:\n    runs-on: ubuntu-latest\n${around}    steps:\n${steps}`
+  const runs = (parts) => runsSuite(sample(parts), file, [variable])
+  // The workflow as CI has it.
+  assert.equal(
+    runs({ steps: `      - name: Suite\n${on}        run: |\n          ${command}\n` }),
+    true,
+  )
+  assert.equal(runs({ steps: `      - run: ${variable}=1 ${command}\n` }), true)
+  assert.equal(
+    runs({
+      around: `    env:\n      ${variable}: '1'\n`,
+      steps: `      - name: Suite\n        run: ${command}\n`,
+    }),
+    true,
+  )
+  assert.equal(
+    runs({ head: `env:\n  ${variable}: '1'\n`, steps: `      - run: ${command}\n` }),
+    true,
+  )
+  // A line commented out runs nothing.
+  assert.equal(
+    runs({ steps: `      - name: Suite\n${on}        run: |\n          # ${command}\n` }),
+    false,
+  )
+  // The variable of another step leaves every case of the file skipped, and the step green.
+  assert.equal(
+    runs({
+      steps: `      - name: Suite\n        run: ${command}\n      - name: Other\n${on}        run: pnpm other\n`,
+    }),
+    false,
+  )
+  // A name or a variable alone runs nothing.
+  assert.equal(runs({ steps: `      - name: ${file}\n${on}        run: pnpm other\n` }), false)
+  assert.equal(runs({ steps: `      - name: Suite\n        run: ${command}\n` }), false)
+})
+
+test('the images the suites of previews run by tag are pulled at a pinned digest', () => {
+  const pulled = new Map(
+    [...workflow('preview').matchAll(/^ +(\S+:\S+) (sha256:[0-9a-f]{64})$/gm)].map(
+      ([, tag, digest]) => [tag, digest],
+    ),
+  )
+  // A suite runs a tag with no pull of its own: Docker would fetch whatever the tag is today.
+  const suites = testFiles.filter(
+    (file) =>
+      file !== 'infra/app/ci.test.mjs' && read(file).includes('RADITI_PREVIEW_DOCKER_TESTS'),
+  )
+  const tags = new Set(
+    suites.flatMap((file) =>
+      [...read(file).matchAll(/\b(?:mariadb|mysql|wordpress):[\w.-]*\w/g)].map(([tag]) => tag),
+    ),
+  )
+  assert.ok(tags.has('mysql:8.4'), 'the second server of the plugin’s suite is found')
+  for (const tag of tags) assert.ok(pulled.has(tag), `preview.yml does not pull ${tag}`)
+  // One digest of the server across the stands.
+  const stand = /'mysql:8\.4@(sha256:[0-9a-f]{64})'/.exec(
+    read('infra/dev/site-import-verify/stand.mjs'),
+  )
+  assert.equal(pulled.get('mysql:8.4'), stand?.[1])
 })
 
 test('CI runs the Docker isolation suites of the sandbox provider on a real daemon', () => {
