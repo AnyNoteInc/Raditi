@@ -1,4 +1,4 @@
-import type { TaskStatus } from '@repo/domain'
+import type { FeedAgentCommandId, TaskStatus } from '@repo/domain'
 import { terminalTaskStatuses } from '@repo/domain/tasks/task-status'
 
 import type { FeedHeadState } from './feed-state'
@@ -43,12 +43,14 @@ export function withoutRedoneRewinds(rows: readonly FeedRow[]): readonly FeedRow
 const isStep = (row: FeedRow): row is StepRow => row.type === 'feed.step'
 
 /**
- * The results that answer `/init` (docs/plan/61-chats-first.md, К31, §5.14): the first result after
- * the command. A failure or a question ends no work: the words and presses after them go on with
- * it, and the prompt of that pass carries the command again. The button only opens a field the
- * client edits, so a result that mixes the command with their words loses nothing.
+ * The results that answer a command of the agent (docs/plan/61-chats-first.md, §5.14): the first
+ * result after it. A failure or a question ends no work: the words and presses after them go on with
+ * it, and the prompt of that pass carries the command again.
  */
-export function initAnswerIds(rows: readonly FeedRow[]): ReadonlySet<string> {
+function commandAnswerIds(
+  rows: readonly FeedRow[],
+  command: FeedAgentCommandId,
+): ReadonlySet<string> {
   const answers = new Set<string>()
   let asked = false
   for (const row of rows) {
@@ -56,10 +58,18 @@ export function initAnswerIds(rows: readonly FeedRow[]): ReadonlySet<string> {
       if (asked) answers.add(row.id)
       asked = false
     } else if (row.type === 'feed.request' && row.kind === 'agent_command') {
-      asked = row.command === 'init'
+      asked = row.command === command
     }
   }
   return answers
+}
+
+/**
+ * The results that answer `/init` (К31). The button only opens a field the client edits, so a
+ * result that mixes the command with their words loses nothing.
+ */
+export function initAnswerIds(rows: readonly FeedRow[]): ReadonlySet<string> {
+  return commandAnswerIds(rows, 'init')
 }
 
 /** The feed shows a press of the browser with this id: the server has taken it. */
@@ -231,21 +241,29 @@ export function liveCandidateRow(
 /**
  * What the agent said about the changes of a candidate: the message of the result of the same
  * turn, else of the last result before it. The agent's own words — shown as its words, never as
- * a fact about the site.
+ * a fact about the site. The feed keeps the result of an undone turn, and the changes it told of
+ * are in no candidate (docs/plan/61-chats-first.md, §5.14): only `/redo` of that turn counts it.
+ * What a compaction answered is the platform's line: it says nothing of the changes.
  */
 export function candidateMessage(
   rows: readonly FeedRow[],
   candidate: CandidateRow | null,
 ): string | null {
   if (candidate === null) return null
+  const undone = new Set<number>()
+  for (const row of rows) {
+    if (row.type === 'feed.rewind') undone.add(row.turn)
+    if (row.type === 'feed.redo') undone.delete(row.turn)
+  }
+  const compactions = commandAnswerIds(rows, 'compact')
+  const stands = (row: FeedRow): row is ResultRow =>
+    row.type === 'feed.result' && !undone.has(row.turn) && !compactions.has(row.id)
   let found: ResultRow | null = null
   for (const row of rows) {
     if (row.id === candidate.id) break
-    if (row.type === 'feed.result') found = row
+    if (stands(row)) found = row
   }
-  const sameTurn = rows.find(
-    (row): row is ResultRow => row.type === 'feed.result' && row.turn === candidate.turn,
-  )
+  const sameTurn = rows.find((row): row is ResultRow => stands(row) && row.turn === candidate.turn)
   return (sameTurn ?? found)?.message ?? null
 }
 

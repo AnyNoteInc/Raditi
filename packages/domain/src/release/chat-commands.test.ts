@@ -287,6 +287,10 @@ describe('the commands of a dialog', () => {
     expect(compact({})).toBeNull()
     expect(compact({ taskStatus: 'awaiting_user', candidate: null, repository: false })).toBeNull()
     expect(compact({ compactRefusal: 'nothing_to_compact' })).toBe('nothing_to_compact')
+    expect(compact({ compactRefusal: 'browser_with_client' })).toBe('browser_with_client')
+    expect(chatCommandRefusalText.browser_with_client).toBe(
+      'Сначала закончите в браузере и нажмите «Продолжить работу агента».',
+    )
     expect(compact({ compactRefusal: 'awaiting_answer' })).toBe('awaiting_answer')
     expect(chatCommandRefusalText.nothing_to_compact).toBe('Сжимать пока нечего.')
     expect(compact({ taskStatus: 'running' })).toBe('busy')

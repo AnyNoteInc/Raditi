@@ -455,7 +455,8 @@ export function DialogView({
     reset.isPending ||
     update.isPending ||
     resumeAgent.isPending ||
-    init.isPending
+    init.isPending ||
+    compact.isPending
 
   // What the chat works with (docs/plan/61-chats-first.md, §5.6): the two do not exclude each other.
   const withRepository = head?.task.requirements.repository === true

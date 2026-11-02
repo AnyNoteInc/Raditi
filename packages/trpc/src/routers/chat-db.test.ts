@@ -17,6 +17,7 @@ import {
   markAttachmentReady,
   openBrowserSession,
   Prisma,
+  recordBrowserControl,
   recordBrowserHelp,
   type PrismaClient,
   type User,
@@ -4621,6 +4622,44 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         })
         expect(await verdictOf(caller, taskId)).toBe('awaiting_answer')
         await clearBrowserHelp(db, { sessionId: session.id })
+        expect(await verdictOf(caller, taskId)).toBeNull()
+      })
+
+      it('leaves the browser with a client who took it over: no request of the agent stands', async () => {
+        const { owner, workspaceId, site } = await siteOwner()
+        const caller = callerOf(owner)
+        const { id: taskId } = await db.task.create({
+          data: {
+            workspaceId,
+            siteId: site.id,
+            needsRepository: false,
+            needsBrowser: true,
+            status: 'awaiting_user',
+          },
+        })
+        taskIds.push(taskId)
+        await unanswered(taskId, { kind: 'first', text: 'Добавьте новость' })
+        await turnEnded(taskId, 1)
+        const session = await openBrowserSession(db, { taskId })
+        expect(await verdictOf(caller, taskId)).toBeNull()
+
+        await recordBrowserControl(db, {
+          sessionId: session.id,
+          controller: 'user',
+          controlEpoch: 1,
+        })
+        expect(await verdictOf(caller, taskId)).toBe('browser_with_client')
+        await expect(
+          caller.task.compact({ taskId, requestId: randomUUID() }),
+        ).rejects.toMatchObject({
+          cause: { code: 'CHAT_COMMAND_UNAVAILABLE', details: { refusal: 'browser_with_client' } },
+        })
+
+        await recordBrowserControl(db, {
+          sessionId: session.id,
+          controller: 'agent',
+          controlEpoch: 2,
+        })
         expect(await verdictOf(caller, taskId)).toBeNull()
       })
 

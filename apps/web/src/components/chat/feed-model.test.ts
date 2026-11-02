@@ -261,6 +261,68 @@ describe('the candidate of the dialog', () => {
       'Поменял цвет шапки.',
     )
   })
+
+  describe('after `/undo`', () => {
+    const rewindRow = (id: string, turn: number): FeedRow => ({
+      id,
+      at: '2026-10-17T09:50:00.000Z',
+      type: 'feed.rewind',
+      turn,
+      files: true,
+      site: 'unchanged',
+    })
+    const redoRow = (id: string, turn: number): FeedRow => ({
+      id,
+      at: '2026-10-17T09:51:00.000Z',
+      type: 'feed.redo',
+      turn,
+      files: true,
+      open: false,
+    })
+    const undoneChat = [
+      resultRow('2', 1, 'Поменял цвет шапки.'),
+      candidateRow('3', 1),
+      resultRow('5', 2, 'Добавил баннер.'),
+      candidateRow('6', 2, 2),
+      rewindRow('7', 2),
+      candidateRow('8', 1, 3),
+    ]
+    const messageOf = (rows: readonly FeedRow[]) =>
+      candidateMessage(rows, rows.at(-1) as Parameters<typeof candidateMessage>[1])
+
+    // A turn after `/undo` failed and said nothing, then «Обновить» named it.
+    it('never takes the words of an undone turn for those of a turn that said none', () => {
+      expect(messageOf([...undoneChat, candidateRow('10', 3, 4)])).toBe('Поменял цвет шапки.')
+    })
+
+    // A row written before the platform kept the turn of the words names the undone turn itself.
+    it('skips a row that names the undone turn', () => {
+      expect(messageOf([...undoneChat, candidateRow('10', 2, 4)])).toBe('Поменял цвет шапки.')
+    })
+
+    it('counts the words again once `/redo` brought the turn back', () => {
+      expect(messageOf([...undoneChat, redoRow('9', 2), candidateRow('10', 2, 4)])).toBe(
+        'Добавил баннер.',
+      )
+    })
+
+    it('never takes the line of a compaction for the words about the changes', () => {
+      const compacted = [
+        resultRow('2', 1, 'Поменял цвет шапки.'),
+        candidateRow('3', 1),
+        agentCommandRow('4', 'compact'),
+        resultRow('5', 2, 'Готово: переписка сжата.'),
+      ]
+      // «Обновить» named the compaction, and a question left the next candidate without words.
+      expect(messageOf([...compacted, candidateRow('6', 2, 2)])).toBe('Поменял цвет шапки.')
+      expect(messageOf([...compacted, candidateRow('6', 3, 2)])).toBe('Поменял цвет шапки.')
+    })
+
+    it('holds a turn undone though a later `/redo` brought another back', () => {
+      const rows = [...undoneChat, rewindRow('12', 3), redoRow('13', 3), candidateRow('14', 4, 5)]
+      expect(messageOf(rows)).toBe('Поменял цвет шапки.')
+    })
+  })
 })
 
 describe('undoFailedAfter', () => {

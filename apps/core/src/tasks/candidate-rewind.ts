@@ -43,6 +43,7 @@ import {
 
 import {
   standingCandidateOf,
+  wordsTurnOf,
   type CandidateBuild,
   type CandidateBuilder,
   type StandingCandidate,
@@ -112,8 +113,11 @@ interface RewindTarget {
 /** What is written of the press: `empty` without a build — the candidate gave way to the record. */
 type RewindRecord = CandidateBuild | { kind: 'empty' }
 
-/** Which way a press moves the chat: `/undo`, or `/redo` with what stood before that `/undo`. */
-type RewindWay = { redo: false } | { redo: true; before: TaskStatus | null }
+/**
+ * Which way a press moves the chat: `/undo` with the turn of the words about the revision it stands
+ * on, or `/redo` with what stood before that `/undo`.
+ */
+type RewindWay = { redo: false; wordsTurn?: number } | { redo: true; before: TaskStatus | null }
 
 /** The chat stopped waiting before the branch moved: nothing is written. */
 const withdrawn = () =>
@@ -272,7 +276,10 @@ export class CandidateRewind {
       const stopped = await this.#moveBranch(job, git, { repo, branch, target, to: 'back' }, fence)
       if (stopped) return stopped
     }
-    return this.#settle(job, task, standing, build, files, { redo: false })
+    return this.#settle(job, task, standing, build, files, {
+      redo: false,
+      wordsTurn: before.wordsTurn,
+    })
   }
 
   /**
@@ -519,12 +526,18 @@ export class CandidateRewind {
   /**
    * What the candidate of the commit the turn worked from says: the turn that wrote that commit —
    * a candidate under another turn would read as moved by «Обновить» — and the agent's claims of
-   * the chat before the undone turn. A head «Обновить» wrote is named by its own revision.
+   * the chat before the undone turn. A head «Обновить» wrote is named by its own revision. The words
+   * about it are those the feed gave that revision: «Обновить» records under the turn it found, which
+   * may be one taken back, and the turn that wrote that commit may have changed nothing.
    */
   async #candidateBefore(
     task: RewoundTask,
     content: string,
-  ): Promise<{ turnNo: number; claims: Pick<TurnResult, 'change_type' | 'risk'> | null }> {
+  ): Promise<{
+    turnNo: number
+    wordsTurn: number
+    claims: Pick<TurnResult, 'change_type' | 'risk'> | null
+  }> {
     const { db } = this.deps
     const [own, earlier] = await Promise.all([
       db.taskTurn.findFirst({
@@ -535,12 +548,14 @@ export class CandidateRewind {
       db.taskCandidate.findFirst({
         where: { taskId: task.id, turnNo: { lt: task.turnNo } },
         orderBy: { revision: 'desc' },
-        select: { turnNo: true, headSha: true, facts: true },
+        select: { revision: true, turnNo: true, headSha: true, facts: true },
       }),
     ])
     const facts = candidateFactsSchema.safeParse(earlier?.facts)
+    const turnNo = own?.turnNo ?? (earlier?.headSha === content ? earlier.turnNo : task.turnNo - 1)
     return {
-      turnNo: own?.turnNo ?? (earlier?.headSha === content ? earlier.turnNo : task.turnNo - 1),
+      turnNo,
+      wordsTurn: (earlier ? await wordsTurnOf(db, task.id, earlier.revision) : null) ?? turnNo,
       claims: facts.success ? { change_type: facts.data.changeType, risk: facts.data.risk } : null,
     }
   }
@@ -583,7 +598,7 @@ export class CandidateRewind {
             payload: {
               v: 1,
               // The turn of the words about this revision: never the one taken back.
-              turn: record.turnNo,
+              turn: way.redo ? record.turnNo : (way.wordsTurn ?? record.turnNo),
               revision: record.revision,
               version: record.proposedVersion,
               bump: record.proposedBump,

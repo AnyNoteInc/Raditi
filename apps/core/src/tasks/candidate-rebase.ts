@@ -34,6 +34,7 @@ import {
 
 import {
   standingCandidateOf,
+  wordsTurnOf,
   type CandidateBuild,
   type CandidateBuilder,
   type StandingCandidate,
@@ -316,7 +317,7 @@ export class CandidateRebase {
         await recordCandidate(tx, record)
         const turn = await tx.taskTurn.findUnique({
           where: { taskId_turnNo: { taskId: task.id, turnNo: task.turnNo } },
-          select: { id: true },
+          select: { id: true, undoneAt: true, rejectedAt: true },
         })
         await insertFeedEvent(tx, {
           taskId: task.id,
@@ -325,7 +326,12 @@ export class CandidateRebase {
             type: 'feed.candidate',
             payload: {
               v: 1,
-              turn: task.turnNo,
+              // The turn of the words about this revision: a turn taken back or refused has none
+              // that stand. The record keeps the task's turn: the planner reads the move from it.
+              turn:
+                (turn?.undoneAt || turn?.rejectedAt
+                  ? await wordsTurnOf(tx, task.id, standing.revision)
+                  : null) ?? task.turnNo,
               revision: record.revision,
               version: record.proposedVersion,
               bump: record.proposedBump,

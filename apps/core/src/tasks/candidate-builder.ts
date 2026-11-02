@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 
-import type { CandidateRecordInput, PrismaClient } from '@repo/db'
+import type { CandidateRecordInput, Prisma, PrismaClient } from '@repo/db'
 import {
   buildDbPlanView,
   candidateCounts,
@@ -16,6 +16,7 @@ import {
   isDomainError,
   isEmptyCandidate,
   proposeVersion,
+  readFeedRow,
   versionTagSchema,
   DomainError,
   candidateFactsSchema,
@@ -190,6 +191,24 @@ export async function standingCandidateOf(
   })
   const facts = row ? candidateFactsSchema.safeParse(row.facts) : null
   return row && facts?.success ? { ...row, facts: facts.data } : null
+}
+
+/**
+ * The turn whose words the feed gave a revision: a later revision of the same work says the same
+ * (docs/plan/61-chats-first.md, §5.14). null — the feed says nothing of it.
+ */
+export async function wordsTurnOf(
+  db: Pick<Prisma.TransactionClient, 'taskEvent'>,
+  taskId: string,
+  revision: number,
+): Promise<number | null> {
+  const row = await db.taskEvent.findFirst({
+    where: { taskId, type: 'feed.candidate', payload: { path: ['revision'], equals: revision } },
+    orderBy: { id: 'desc' },
+    select: { payload: true },
+  })
+  const said = row === null ? null : readFeedRow('feed.candidate', row.payload)
+  return said?.type === 'feed.candidate' ? said.turn : null
 }
 
 type CandidateDatabase = Pick<

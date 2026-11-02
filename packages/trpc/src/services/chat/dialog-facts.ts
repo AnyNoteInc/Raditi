@@ -279,9 +279,9 @@ function saysNothing(payload: Prisma.JsonValue): boolean {
  * session may be gone. A compaction right after a compaction would pay for the summary of a summary.
  * Words the last turn never saw — their pass ended before it opened a turn — are not in the session,
  * and the next turn would count them as seen: they go first. A question about credits and a request
- * of the agent to act in the browser wait for the client: a compaction answers neither, and its turn
- * would take the browser away from the client. A `/compact` that ended before it opened a turn
- * shortened nothing, so it may be repeated.
+ * of the agent to act in the browser wait for the client, and a client who took the browser over is
+ * at work in it: a compaction answers neither, and its turn would take the browser away. A
+ * `/compact` that ended before it opened a turn shortened nothing, so it may be repeated.
  */
 async function compactRefusal(
   db: Reader,
@@ -309,6 +309,7 @@ async function compactRefusal(
   if ((await openCeilingQuestion(db, chat.taskId)) !== null) return 'awaiting_answer'
   const session = await openBrowserSessionOfTask(db, chat.taskId)
   if (session?.helpReason) return 'awaiting_answer'
+  if (session?.controller === 'user') return 'browser_with_client'
   const compacted = await db.turnAssignment.count({
     where: {
       taskId: chat.taskId,

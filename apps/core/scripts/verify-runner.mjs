@@ -26,8 +26,10 @@
 // That mode runs the two-turn scenario with the real CLI and local LLM/MCP fixtures, including
 // encrypted snapshot restore and trusted publication, then a chat without a project whose last
 // request is undone (docs/plan/61-chats-first.md, §5.14): it leases by its own id, two turns, and
-// a third that goes back to the snapshot of the first through the runner's links. Crash scenarios
-// still use the P2 agent.
+// a third that goes back to the snapshot of the first through the runner's links. Then chats with
+// the repository: `/undo` and the turn that replaces the undone one, with the branch pinned where
+// the undone turn found it; `/undo` of a first turn, which found no branch; `/redo`, and the turn
+// that goes on from the turn brought back. Crash scenarios still use the P2 agent.
 //
 // Needs: the local infrastructure from .env; P2_GITLEAKS_BINARY (gitleaks 8.30.1);
 // P2_RUNNER_DOCKER_SOCKET, the VM's Docker socket on this host; images built in that daemon and
@@ -46,7 +48,7 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { zstdDecompressSync } from 'node:zlib'
 
-import { createPrismaClient } from '@repo/db'
+import { createPrismaClient, redoDialog, rewindDialog } from '@repo/db'
 import { snapshotPartFiles, turnSnapshotPrefix } from '@repo/domain'
 import { createDockerSandboxProvider } from '@repo/sandbox-providers'
 import { createS3ObjectStorage, storageConfigFromEnv } from '@repo/storage'
@@ -571,7 +573,7 @@ async function createChat() {
 
 function turnRequest(
   { taskId, sessionId },
-  { turn, baseSha, previous, gated, withoutRepository, compaction },
+  { turn, baseSha, previous, gated, withoutRepository, compaction, chat },
 ) {
   const action = compaction ? 'compact' : withoutRepository?.action
   const context = {
@@ -593,6 +595,7 @@ function turnRequest(
   // A lone dash, then nearly the longest prompt the turn plan accepts, starting with a slash.
   const prompt =
     compaction?.prompt ??
+    chat?.prompt ??
     withoutRepository?.prompt ??
     (realCli ? (turn === 1 ? '-' : `/init ${'я'.repeat(99_900)}`) : JSON.stringify({ gated }))
   if (realCli) {
@@ -610,6 +613,7 @@ function turnRequest(
         ...identity,
         ...(compaction?.fixture ?? withoutRepository.fixture),
       })
+    else if (chat) fixture.addChatTurn({ ...identity, id: taskId, ...chat.fixture })
     else if (withoutRepository) fixture.addRewindTurn({ ...identity, ...withoutRepository.fixture })
     else fixture.addTurn({ ...identity, model: context.llm.model })
   }
@@ -649,11 +653,13 @@ function turnRequest(
             repo: { provider: 'gitea', owner: 'verify', name: 'site' },
             branch: `agent/${taskId}`,
             expectedBaseSha: baseSha,
+            ...(chat?.pin === undefined ? {} : { expectedBranchSha: chat.pin }),
             protectedPaths: [],
           },
         }),
     committedAt: new Date().toISOString(),
     ...(previous ? { previous } : {}),
+    ...(chat?.replaces ? { replacesTurn: chat.replaces } : {}),
     ...(withoutRepository?.rewound ? { rewound: true } : {}),
   }
 }
@@ -1176,6 +1182,191 @@ try {
     )
   }
 
+  // `/undo` and `/redo` in a chat with the repository (docs/plan/61-chats-first.md, §5.14), as
+  // production runs them: the turn that replaces the undone one goes through the pull runner under
+  // gVisor. The branch moves by the real `rewindBranch`, the turn by the real `rewindDialog`; only
+  // the plan is written here, as the planner writes it, and the assignment store checks it.
+  if (realCli) {
+    const started = Date.now()
+    const repo = { provider: 'gitea', owner: 'verify', name: 'site' }
+    const branchOf = (task) => `agent/${task.taskId}`
+    const tasks = []
+    /** A chat that waits with its turns: words and answers of its own, one per turn. */
+    const openChat = async (name) => {
+      const task = await createTask()
+      sessions.push(task.sessionId)
+      tasks.push(task)
+      const wordsOf = (turn) => `raditi-${name}-words-${turn}`
+      const answerOf = (turn) => `Ответ raditi-${name}-${turn}`
+      const said = (turn) => [wordsOf(turn), answerOf(turn)]
+      const ran = async (turn, plan, session = {}) => {
+        const outcome = await core.request('run', {
+          request: turnRequest(task, {
+            ...plan,
+            turn,
+            chat: {
+              prompt: wordsOf(turn),
+              pin: plan.pin,
+              replaces: plan.replaces,
+              fixture: { answer: answerOf(turn), ...session },
+            },
+          }),
+        })
+        assert.equal(outcome.result.client_message, answerOf(turn))
+        await expectCompleted(task.taskId, turn, outcome.manifest.git.headSha)
+        // Waits for its next words, as the settlement of a pass leaves it.
+        await db.task.update({ where: { id: task.taskId }, data: { status: 'awaiting_user' } })
+        return outcome
+      }
+      return { task, said, ran }
+    }
+    const moved = (step, task, turnNo) =>
+      db.$transaction((tx) => step(tx, { taskId: task.taskId, turnNo, to: 'awaiting_user' }))
+    /** `/undo` of the chat's last turn: its commit held, the branch back, the turn undone. */
+    const undo = async (task, turnNo, head, found) => {
+      await core.request('holdUndone', {
+        input: { repo, branch: branchOf(task), sha: head },
+      })
+      await core.request('rewindBranch', {
+        input: { repo, branch: branchOf(task), from: head, to: found },
+      })
+      assert(await moved(rewindDialog, task, turnNo), 'The chat waits at its last turn')
+      assert.equal(await branchHead(task.taskId), found ?? '', 'The branch went back')
+      assert.notEqual((await taskTurnOf(task.taskId, turnNo)).undoneAt, null)
+    }
+    const parentOf = async (sha) => (await git('--git-dir', remote, 'rev-parse', `${sha}^`)).trim()
+    const sessionHolds = async (task, turn, manifest) =>
+      Buffer.concat([...(await homeEntries(reference(task, turn, manifest))).values()])
+    const restoredTurns = async (taskId) =>
+      (await journal(taskId))
+        .filter((entry) => entry.phase === 'restored' && entry.nativeSessionId)
+        .map((entry) => entry.turn)
+
+    // Two turns; the second undone; the turn that replaces it: the branch pinned where the undone
+    // turn found it, the checkpoint that turn started from, not one word of it.
+    {
+      const { task, said, ran } = await openChat('undo')
+      const first = await ran(1, { baseSha: mainSha })
+      const firstHead = first.manifest.git.headSha
+      const firstCheckpoint = reference(task, 1, first.manifest)
+      const second = await ran(
+        2,
+        { baseSha: firstHead, previous: firstCheckpoint },
+        { remembered: said(1), holds: [1] },
+      )
+      await undo(task, 2, second.manifest.git.headSha, firstHead)
+      const third = await ran(
+        3,
+        { baseSha: firstHead, previous: firstCheckpoint, replaces: 2, pin: firstHead },
+        { remembered: said(1), forgotten: said(2), holds: [1], lacks: [2] },
+      )
+      const head = third.manifest.git.headSha
+      assert.equal(await branchHead(task.taskId), head)
+      assert.equal(await parentOf(head), firstHead, 'The replacement stands on the kept turn')
+      const { plan } = await assignmentOf(task.taskId, 3)
+      assert.deepEqual(
+        [plan.replacesTurn, plan.workspace.expectedBranchSha, plan.previous.turn],
+        [2, firstHead, 1],
+      )
+      assert.deepEqual(await restoredTurns(task.taskId), [2, 3])
+      const nativeId = first.manifest.driver.nativeSessionId
+      assert.equal(third.manifest.driver.nativeSessionId, nativeId, 'The kept session goes on')
+      const control = await sessionHolds(task, 2, second.manifest)
+      const session = await sessionHolds(task, 3, third.manifest)
+      for (const text of said(2)) {
+        assert(control.includes(text), 'The search reads a session')
+        assert(!session.includes(text), 'The session holds what the undone turn left')
+      }
+      for (const text of said(1)) assert(session.includes(text), 'The kept turn stays')
+      fixture.assertChatComplete(task.taskId, 3)
+    }
+
+    // The first turn undone: it found no branch, so the branch goes and the pin says so; the
+    // replacement starts a new session from `main`.
+    {
+      const { task, said, ran } = await openChat('first')
+      const first = await ran(1, { baseSha: mainSha })
+      await undo(task, 1, first.manifest.git.headSha, null)
+      const second = await ran(
+        2,
+        { baseSha: mainSha, replaces: 1, pin: null },
+        { forgotten: said(1), lacks: [1] },
+      )
+      const head = second.manifest.git.headSha
+      assert.equal(await branchHead(task.taskId), head)
+      assert.equal(await parentOf(head), mainSha, 'The replacement stands on main')
+      const { plan } = await assignmentOf(task.taskId, 2)
+      assert.deepEqual([plan.replacesTurn, plan.workspace.expectedBranchSha], [1, null])
+      assert.equal(plan.previous, undefined)
+      assert.deepEqual(await restoredTurns(task.taskId), [])
+      assert.notEqual(
+        second.manifest.driver.nativeSessionId,
+        first.manifest.driver.nativeSessionId,
+        'A first turn undone leaves no session to go on from',
+      )
+      const session = await sessionHolds(task, 2, second.manifest)
+      for (const text of said(1))
+        assert(!session.includes(text), 'The session holds what the undone turn left')
+      fixture.assertChatComplete(task.taskId, 2)
+    }
+
+    // `/redo`: the turn counts again, the branch is back at its head, and the next ordinary turn
+    // goes on from its checkpoint, not from the one before.
+    {
+      const { task, said, ran } = await openChat('redo')
+      const first = await ran(1, { baseSha: mainSha })
+      const firstHead = first.manifest.git.headSha
+      const second = await ran(
+        2,
+        { baseSha: firstHead, previous: reference(task, 1, first.manifest) },
+        { remembered: said(1), holds: [1] },
+      )
+      const secondHead = second.manifest.git.headSha
+      await undo(task, 2, secondHead, firstHead)
+      assert(
+        (await git('--git-dir', remote, 'for-each-ref', '--format=%(objectname)')).includes(
+          secondHead,
+        ),
+        'The undone commit stays on the remote',
+      )
+      await core.request('rewindBranch', {
+        input: { repo, branch: branchOf(task), from: firstHead, to: secondHead },
+      })
+      assert(await moved(redoDialog, task, 2), 'The chat waits at the undone turn')
+      assert.equal(await branchHead(task.taskId), secondHead, 'The branch is back at the head')
+      assert.equal((await taskTurnOf(task.taskId, 2)).undoneAt, null, 'The turn counts again')
+      const third = await ran(
+        3,
+        { baseSha: secondHead, previous: reference(task, 2, second.manifest) },
+        { remembered: [...said(1), ...said(2)], holds: [1, 2] },
+      )
+      const head = third.manifest.git.headSha
+      assert.equal(
+        await parentOf(head),
+        secondHead,
+        'The next turn stands on the turn brought back',
+      )
+      assert.deepEqual(await restoredTurns(task.taskId), [2, 3])
+      assert.equal(
+        third.manifest.driver.nativeSessionId,
+        first.manifest.driver.nativeSessionId,
+        'The session of the turn brought back goes on',
+      )
+      fixture.assertChatComplete(task.taskId, 3)
+    }
+
+    assert.deepEqual(fixture.observations().problems, [], 'Fixture rejected a request')
+    for (const task of tasks)
+      for (const assignment of await db.turnAssignment.findMany({ where: { taskId: task.taskId } }))
+        assert.deepEqual(
+          [assignment.outcome, assignment.executor, assignment.runnerId],
+          ['completed', 'runner', runnerId],
+        )
+    verified.push(
+      `real ${driverName} chats with the repository on the runner: a replacement of an undone turn restored the checkpoint that turn started from, with the branch pinned where it found it; a first turn undone left no branch and the replacement a new session; \`/redo\` brought the branch and the turn back and the next turn went on from its checkpoint; no word of an undone turn reached the provider or a later session (${Math.round((Date.now() - started) / 1000)} s)`,
+    )
+  }
+
   if (!realCli) {
     // 2. kill -9 of core during the output: a new core's recovery resumes the agent.
     {
@@ -1571,6 +1762,9 @@ try {
   succeeded = true
 } catch (error) {
   failures.push(error)
+  // Fixed labels only: what the fixture refused is why a turn of the real CLI failed.
+  if (fixture?.observations().problems.length)
+    failures.push(new Error(`The fixture refused: ${fixture.observations().problems.join('; ')}`))
 } finally {
   cleaning = true
   const cleanup = []

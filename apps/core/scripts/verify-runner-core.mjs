@@ -23,6 +23,7 @@ import { RunnerAuthenticator } from '../dist/runner-api/runner-auth.js'
 import { RunnerHub } from '../dist/runner-api/runner-hub.js'
 import { SnapshotService } from '../dist/sessions/snapshot.service.js'
 import { LiveTurns } from '../dist/turns/live-turns.js'
+import { PreviewTurnRollback } from '../dist/turns/preview-turn-rollback.js'
 import { TurnExecRecovery } from '../dist/turns/turn-exec-recovery.js'
 import { TaskEventTurnJournal } from '../dist/turns/turn-journal.js'
 import { TurnSupervisor } from '../dist/turns/turn-supervisor.js'
@@ -222,6 +223,8 @@ const supervisor = new TurnSupervisor({
   driver,
   live,
   credentials,
+  // As TurnsModule: a replacement of a turn takes its writes out of the plan first.
+  contentRollback: new PreviewTurnRollback(db),
 })
 const credentialPolicy = {
   driverId: driver.id,
@@ -290,6 +293,15 @@ const handlers = {
     } finally {
       cancels.delete(request.context.taskId)
     }
+  },
+  // `/undo` and `/redo` of a turn, the git half of CandidateRewind: the stand writes the row itself.
+  async holdUndone({ input }) {
+    await workspace.holdUndoneCommit(input, async () => {})
+    return null
+  },
+  async rewindBranch({ input }) {
+    await workspace.rewindBranch(input, async () => {})
+    return null
   },
   async cancel({ taskId }) {
     cancels.get(taskId)?.abort()

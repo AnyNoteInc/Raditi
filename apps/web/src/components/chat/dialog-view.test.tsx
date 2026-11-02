@@ -788,6 +788,20 @@ describe('a dialog', () => {
         expect(calls.compact.mock.calls[0]![0].taskId).toBe(TASK_ID)
       })
 
+      it('takes no release from the card while the press is unanswered', async () => {
+        calls.compact.mockReturnValue(new Promise(() => {}))
+        showDialog(waiting())
+        const release = await screen.findByRole<HTMLButtonElement>('button', {
+          name: 'Выпустить новую версию',
+        })
+        expect(release.disabled).toBe(false)
+
+        await run(/Сжать переписку/)
+
+        await waitFor(() => expect(calls.compact).toHaveBeenCalledTimes(1))
+        await waitFor(() => expect(release.disabled).toBe(true))
+      })
+
       it('lists no such command when the driver has none: closed, it would only hang there', async () => {
         showDialog(waiting({ commands: verdicts({ compact: 'no_compaction' }) }))
         await screen.findByText('Изменения готовы')

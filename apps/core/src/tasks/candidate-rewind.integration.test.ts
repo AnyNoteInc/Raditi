@@ -59,6 +59,7 @@ const MAIN = 'a'.repeat(40)
 const HEAD1 = 'b'.repeat(40)
 const HEAD2 = 'c'.repeat(40)
 const OTHER = 'd'.repeat(40)
+const HEAD3 = 'f'.repeat(40)
 const TREE = 'e'.repeat(40)
 const image = `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`
 const quiet = { log: vi.fn(), warn: vi.fn(), error: vi.fn() }
@@ -763,6 +764,83 @@ describe.skipIf(!databaseUrl)('`/undo` of a turn with the repository on PostgreS
       expect.anything(),
       expect.objectContaining({ headSha: MAIN }),
     )
+  })
+
+  // docs/plan/61-chats-first.md, §5.14: turn 1, turn 2, `/undo`, «Обновить», turn 3, `/undo`.
+  it('gives the revision the words the feed gave the one it stands on, not those of a turn taken back', async () => {
+    const dialog = await chat({ heads: [HEAD1, HEAD2, HEAD3], bases: [MAIN, HEAD1, OTHER] })
+    const candidateRow = (revision: number, turn: number) =>
+      insertFeedEvent(db, {
+        taskId: dialog.taskId,
+        row: {
+          type: 'feed.candidate',
+          payload: {
+            v: 1,
+            turn,
+            revision,
+            version: 'v0.1.0',
+            bump: 'minor',
+            files: { added: 1, modified: 0, deleted: 0 },
+            media: 0,
+            records: 0,
+          },
+        },
+      })
+    await db.taskTurn.update({
+      where: { taskId_turnNo: { taskId: dialog.taskId, turnNo: 2 } },
+      data: { undoneAt: new Date() },
+    })
+    // «Обновить» after `/undo` records under the undone turn, and says the words of turn 1.
+    await db.$transaction(async (tx) => {
+      await recordCandidate(tx, record(dialog.taskId, 1, 2, OTHER))
+      await recordCandidate(tx, record(dialog.taskId, 2, 3, HEAD3))
+    })
+    await candidateRow(1, 1)
+    await candidateRow(2, 3)
+    const { rewind } = setup({ branch: HEAD3 })
+
+    expect(await rewind.run(await press(dialog))).toBe('rewound')
+
+    // The record keeps the turn that wrote the head: `moved` and `writtenHead` read it.
+    expect((await revisions(dialog.taskId)).at(-1)).toEqual([3, 'current', 2, OTHER])
+    expect((await feedOf(dialog.taskId)).at(-2)).toMatchObject({
+      type: 'feed.candidate',
+      payload: { turn: 1, revision: 3 },
+    })
+  })
+
+  it('gives the revision the words of the turn before a compaction, not those of the platform', async () => {
+    // Turn 2 compacted the session and published the same tree: nothing of it became a revision.
+    const dialog = await chat({ heads: [HEAD1, HEAD2, HEAD3], bases: [MAIN, HEAD1, HEAD2] })
+    await db.$transaction(async (tx) => {
+      await recordCandidate(tx, record(dialog.taskId, 1, 1, HEAD1))
+      await recordCandidate(tx, record(dialog.taskId, 2, 3, HEAD3))
+    })
+    await insertFeedEvent(db, {
+      taskId: dialog.taskId,
+      row: {
+        type: 'feed.candidate',
+        payload: {
+          v: 1,
+          turn: 1,
+          revision: 1,
+          version: 'v0.1.0',
+          bump: 'minor',
+          files: { added: 1, modified: 0, deleted: 0 },
+          media: 0,
+          records: 0,
+        },
+      },
+    })
+    const { rewind } = setup({ branch: HEAD3 })
+
+    expect(await rewind.run(await press(dialog))).toBe('rewound')
+
+    expect((await revisions(dialog.taskId)).at(-1)).toEqual([3, 'current', 2, HEAD2])
+    expect((await feedOf(dialog.taskId)).at(-2)).toMatchObject({
+      type: 'feed.candidate',
+      payload: { turn: 1, revision: 3 },
+    })
   })
 
   it('moves nothing past «Обновить»: the branch stands on the turn, the candidate does not', async () => {

@@ -133,6 +133,8 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
     rebased?: () => Promise<CandidateRebaseAnswer>
     /** The head of `agent/<taskId>`: the standing candidate's unless told. */
     branch?: string
+    /** The head of `main`. */
+    main?: string
     /** What the builder of the new revision answers. */
     build?: (
       context: CandidateContext,
@@ -144,7 +146,7 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
   function setup(options: Setup = {}) {
     const git = {
       readBranchHead: vi.fn(async ({ branch }: { branch: string }) =>
-        branch === 'main' ? MAIN : (options.branch ?? HEAD),
+        branch === 'main' ? (options.main ?? MAIN) : (options.branch ?? HEAD),
       ),
       treeOf: vi.fn(),
       comparesCommits: options.comparesCommits ?? true,
@@ -279,6 +281,120 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
     // A repeat of the command (a pass that waited put it again) finds it done and keeps its answer.
     expect(await setup({ branch: REBASED }).rebase.run(job)).toBe('nothing')
     expect(await outcomes(dialog.taskId)).toEqual(['rebased'])
+  })
+
+  // docs/plan/61-chats-first.md, §5.14: «Обновить» writes the turn of the words about the candidate.
+  describe('the turn of the words the feed gives the revision', () => {
+    const candidateRow = (dialog: { taskId: string }, revision: number, turn: number) =>
+      insertFeedEvent(db, {
+        taskId: dialog.taskId,
+        row: {
+          type: 'feed.candidate',
+          payload: {
+            v: 1,
+            turn,
+            revision,
+            version: 'v0.1.0',
+            bump: 'minor',
+            files: { added: 1, modified: 0, deleted: 0 },
+            media: 0,
+            records: 0,
+          },
+        },
+      })
+    /** The last turn of the chat, after turn 1 whose words stand over the candidate. */
+    async function nextTurn(
+      dialog: { taskId: string },
+      data: { undoneAt?: Date; rejectedAt?: Date } = {},
+    ) {
+      await candidateRow(dialog, 1, 1)
+      await db.taskTurn.create({
+        data: {
+          taskId: dialog.taskId,
+          turnNo: 2,
+          status: 'completed',
+          driverId: sampleDriverId,
+          image,
+          headSha: 'd'.repeat(40),
+          ...data,
+        },
+      })
+      await db.task.update({ where: { id: dialog.taskId }, data: { turnNo: 2 } })
+    }
+    const said = async (taskId: string) =>
+      (
+        await db.taskEvent.findMany({
+          where: { taskId, type: 'feed.candidate' },
+          orderBy: { id: 'asc' },
+        })
+      ).map((row) => {
+        const { turn, revision } = row.payload as { turn: number; revision: number }
+        return [revision, turn]
+      })
+
+    it('says the words of the turn the candidate stands on, not those of a turn taken back', async () => {
+      const dialog = await waiting()
+      await nextTurn(dialog, { undoneAt: new Date() })
+
+      const first = setup()
+      expect(await first.rebase.run(await update(dialog))).toBe('rebased')
+
+      expect(await said(dialog.taskId)).toEqual([
+        [1, 1],
+        [2, 1],
+      ])
+      // The record stays under the task's turn: the planner reads the move from it.
+      expect(first.candidates.build).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ turnNo: 2 }),
+      )
+
+      // The next «Обновить» carries a revision recorded under the undone turn.
+      await db.taskCandidate.updateMany({
+        where: { taskId: dialog.taskId, revision: 2 },
+        data: { turnNo: 2 },
+      })
+      const second = setup({
+        branch: REBASED,
+        main: 'f'.repeat(40),
+        rebased: async () => ({
+          status: 'rebased',
+          headSha: 'd'.repeat(40),
+          treeSha: '1'.repeat(40),
+        }),
+      })
+      expect(await second.rebase.run(await update(dialog))).toBe('rebased')
+      expect(await said(dialog.taskId)).toEqual([
+        [1, 1],
+        [2, 1],
+        [3, 1],
+      ])
+    })
+
+    it('says those of the candidate after a turn the platform refused: it has none', async () => {
+      const dialog = await waiting()
+      await nextTurn(dialog, { rejectedAt: new Date() })
+      const { rebase } = setup({ branch: 'd'.repeat(40) })
+
+      expect(await rebase.run(await update(dialog))).toBe('rebased')
+
+      expect(await said(dialog.taskId)).toEqual([
+        [1, 1],
+        [2, 1],
+      ])
+    })
+
+    it('says the words of the last turn while it stands, though the candidate is older', async () => {
+      const dialog = await waiting()
+      await nextTurn(dialog)
+
+      expect(await setup().rebase.run(await update(dialog))).toBe('rebased')
+
+      expect(await said(dialog.taskId)).toEqual([
+        [1, 1],
+        [2, 2],
+      ])
+    })
   })
 
   // docs/plan/53, «Попробовать ещё (18.10)»: a pass of the dialog failed after its turn

@@ -540,3 +540,114 @@ test('a chat without a repository is no turn of the two the stand requires', asy
   assert.throws(() => fixture.assertComplete(), /two registered turns/)
   assert.throws(() => fixture.assertRewindComplete(), /three turns/)
 })
+
+/** The turn that replaces the undone one in a chat with the repository (`verify-runner.mjs`). */
+const chatTurn = {
+  ...turn(3),
+  id: 'chat',
+  llmKey: 'synthetic-llm-chat',
+  mcpKey: 'synthetic-mcp-chat',
+  prompt: WORDS.next,
+  answer: ANSWERS.next,
+  remembered: [WORDS.first],
+  forgotten: [WORDS.undone],
+  holds: [1],
+  lacks: [2],
+}
+const chatBody = (history) => {
+  const value = bodyFor(3)
+  value.messages = [
+    value.messages[0],
+    ...first,
+    { role: 'user', content: `Client request:\n${WORDS.next}` },
+    ...history,
+  ]
+  return value
+}
+/** The call the turn made in its stream: id and arguments, as the CLI reads them. */
+const callIn = (text) => {
+  const call = text
+    .split('\n')
+    .filter((line) => line.startsWith('data: {'))
+    .map((line) => JSON.parse(line.slice(6)).choices[0].delta.tool_calls?.[0])
+    .find(Boolean)
+  return { id: call.id, command: JSON.parse(call.function.arguments).command }
+}
+const toolAnswer = (id, content) => [{ role: 'tool', tool_call_id: id, content }]
+
+test('a turn of a chat with the repository checks its working copy, changes it and answers', async (t) => {
+  const fixture = await open(t)
+  fixture.addChatTurn(chatTurn)
+  const asked = await send(fixture, PATH, chatTurn.llmKey, chatBody([]))
+  assert.equal(asked.status, 200, asked.text)
+  const { id, command } = callIn(asked.text)
+  for (const part of [
+    "grep -qx 'turn 1' index.php && test -e turn-1.txt",
+    "! grep -qx 'turn 2' index.php && test ! -e turn-2.txt",
+    "printf 'turn 3\\n' >> index.php",
+    "printf 'turn 3\\n' > turn-3.txt",
+  ])
+    assert(command.includes(part), part)
+  const answered = await send(
+    fixture,
+    PATH,
+    chatTurn.llmKey,
+    chatBody(toolAnswer(id, 'raditi-g3-shell-ok-turn-3')),
+  )
+  assert.equal(answered.status, 200, answered.text)
+  assert.match(answered.text, new RegExp(ANSWERS.next))
+  fixture.assertChatComplete('chat', 1)
+})
+
+test('counts the turns of a chat: a stand that names another chat proves nothing', async (t) => {
+  const fixture = await open(t)
+  fixture.addChatTurn(chatTurn)
+  assert.throws(() => fixture.assertChatComplete('another', 1), /turns of this chat/)
+  assert.throws(() => fixture.assertChatComplete('chat', 2), /turns of this chat/)
+})
+
+test('refuses a session of a chat that lost the words of a turn before', async (t) => {
+  const fixture = await open(t)
+  fixture.addChatTurn(chatTurn)
+  const body = bodyFor(3)
+  body.messages = [body.messages[0], { role: 'user', content: `Client request:\n${WORDS.next}` }]
+  const lost = await send(fixture, PATH, chatTurn.llmKey, body)
+  assert.equal(lost.status, 400)
+  assert.deepEqual(fixture.observations().problems, [
+    'The restored session lost words of an earlier turn',
+  ])
+})
+
+test('refuses a chat turn whose working copy is not the one it starts from', async (t) => {
+  const fixture = await open(t)
+  fixture.addChatTurn(chatTurn)
+  const { id } = callIn((await send(fixture, PATH, chatTurn.llmKey, chatBody([]))).text)
+  const refused = await send(
+    fixture,
+    PATH,
+    chatTurn.llmKey,
+    chatBody(toolAnswer(id, 'exit code 1')),
+  )
+  assert.equal(refused.status, 400)
+  assert.deepEqual(fixture.observations().problems, [
+    'The working copy is not the one the turn starts from',
+  ])
+  assert.throws(() => fixture.assertChatComplete('chat', 1), /failed requests/)
+})
+
+test('refuses a chat turn whose session kept the undone turn, and one that made no change', async (t) => {
+  const fixture = await open(t)
+  fixture.addChatTurn(chatTurn)
+  const kept = chatBody([])
+  kept.messages.splice(1, 0, { role: 'user', content: WORDS.undone })
+  assert.equal((await send(fixture, PATH, chatTurn.llmKey, kept)).status, 400)
+  assert.deepEqual(fixture.observations().problems, [
+    'The words of an undone turn reached the provider',
+  ])
+
+  const quiet = await open(t)
+  quiet.addChatTurn(chatTurn)
+  assert.throws(() => quiet.assertChatComplete('chat', 1), /one change and answer/)
+  // The chat turns are no turns of the two scenarios the stand requires of the fixture.
+  assert.throws(() => quiet.assertComplete(), /two registered turns/)
+})

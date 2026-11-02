@@ -60,10 +60,9 @@ export interface ChatCommand {
   /** `client` — no verdict of the server, and it works on a new chat too (but for `session`). */
   readonly scope: 'server' | 'client'
   /**
-   * `repository` — not listed in a chat without it (К27), `session` — takes a chat that exists,
-   * `compaction` — takes the compaction of the CLI (docs/plan/61-chats-first.md, §5.14).
+   * `repository` — not listed in a chat without it (К27), `session` — takes a chat that exists.
    */
-  readonly needs?: 'repository' | 'session' | 'compaction'
+  readonly needs?: 'repository' | 'session'
 }
 
 export const chatCommands: Readonly<Record<ChatCommandId, ChatCommand>> = Object.freeze({
@@ -122,7 +121,6 @@ export const chatCommands: Readonly<Record<ChatCommandId, ChatCommand>> = Object
     description: 'Агент заменит длинную историю кратким пересказом и продолжит с ним.',
     group: 'agent',
     scope: 'server',
-    needs: 'compaction',
   }),
   turn_undo: Object.freeze({
     slash: '/undo',
@@ -311,6 +309,8 @@ export const chatCommandRefusals = [
   /** core is bringing a turn of this chat back (`candidate.rewind`). */
   'turn_redoing',
   'nothing_to_compact',
+  /** The client took the browser of the chat over: the agent waits, and they have to say so. */
+  'browser_with_client',
   /** The driver has no compaction: the command is not listed, and typed it runs nothing. */
   'no_compaction',
 ] as const
@@ -353,6 +353,7 @@ export const chatCommandRefusalText: Readonly<Record<ChatCommandRefusal, string>
   nothing_to_redo: 'Возвращать нечего.',
   turn_redoing: 'Подождите: отменённый запрос ещё возвращается.',
   nothing_to_compact: 'Сжимать пока нечего.',
+  browser_with_client: 'Сначала закончите в браузере и нажмите «Продолжить работу агента».',
   no_compaction: 'Эта команда сейчас недоступна.',
 })
 
@@ -432,7 +433,10 @@ export type TurnUndoRefusal = Extract<
 export type TurnRedoRefusal = Extract<ChatCommandRefusal, 'nothing_to_redo'>
 
 /** The refusals of `/compact` the facts of its session decide. */
-export type CompactRefusal = Extract<ChatCommandRefusal, 'nothing_to_compact' | 'awaiting_answer'>
+export type CompactRefusal = Extract<
+  ChatCommandRefusal,
+  'nothing_to_compact' | 'awaiting_answer' | 'browser_with_client'
+>
 
 /**
  * The latest installed release of the dialog (not an undo) and the site around it (docs/plan/53,
