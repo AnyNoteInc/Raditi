@@ -14,7 +14,6 @@ import {
 import {
   AGENT_TURN_QUEUE,
   CANDIDATE_REBASE_JOB,
-  candidateFactsSchema,
   candidateRebaseDedupeKey,
   DomainError,
   isDomainError,
@@ -33,7 +32,12 @@ import {
   type TaskStatus,
 } from '@repo/domain'
 
-import type { CandidateBuild, CandidateBuilder, StandingCandidate } from './candidate-builder.ts'
+import {
+  standingCandidateOf,
+  type CandidateBuild,
+  type CandidateBuilder,
+  type StandingCandidate,
+} from './candidate-builder.ts'
 import type { CandidateGit } from './candidate-git.ts'
 import { siteFactsOf, workspaceRulesOf } from './pass-facts.ts'
 import { UPDATE_REPAIR_MS } from './turn-planner.ts'
@@ -172,7 +176,7 @@ export class CandidateRebase {
         site: { select: { stack: true, url: true, installedVersion: true } },
       },
     })
-    const standing = task ? await this.#standing(task.id) : null
+    const standing = task ? await standingCandidateOf(this.deps.db, task.id) : null
     if (!task || !standing || task.turnNo < 1 || !carriable.includes(task.status))
       return this.#final(
         job,
@@ -212,6 +216,11 @@ export class CandidateRebase {
     git: CandidateGit,
     candidates: CandidateBuilder,
   ): Promise<RebaseAnswer> {
+    // `/undo` may have finished between the read of the candidate and the lease: read anew.
+    if ((await standingCandidateOf(this.deps.db, task.id))?.id !== standing.id) {
+      await this.#again(job, 'busy')
+      return this.#answer(job, 'busy')
+    }
     const repository = await this.deps.db.gitRepository.findFirst({
       where: { siteId: task.siteId },
       orderBy: { createdAt: 'asc' },
@@ -499,23 +508,6 @@ export class CandidateRebase {
   async #committedAt(job: CandidateRebaseJob): Promise<string> {
     const at = (await this.#commandAt(job)) ?? this.#now()
     return new Date(Math.floor(at.getTime() / 1000) * 1000).toISOString()
-  }
-
-  async #standing(taskId: string): Promise<StandingCandidate | null> {
-    const row = await this.deps.db.taskCandidate.findFirst({
-      where: { taskId, status: { in: ['current', 'stale'] } },
-      orderBy: { revision: 'desc' },
-      select: {
-        id: true,
-        revision: true,
-        baseSha: true,
-        headSha: true,
-        dbPlanSha256: true,
-        facts: true,
-      },
-    })
-    const facts = row ? candidateFactsSchema.safeParse(row.facts) : null
-    return row && facts?.success ? { ...row, facts: facts.data } : null
   }
 
   /** The answer to the command, for operators and the head of the feed: an internal row. */

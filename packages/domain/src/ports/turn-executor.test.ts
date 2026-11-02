@@ -10,6 +10,7 @@ import {
 } from '../tasks/task-requirements.ts'
 import {
   assertTurnInbox,
+  branchBeforeTurn,
   turnMayHoldInbox,
   toTurnPlan,
   turnInboxAttachmentId,
@@ -327,6 +328,26 @@ describe('turn plan', () => {
     expect(requirementsOf(turnPlanSchema.parse(JSON.parse(JSON.stringify(plan))))).toEqual(
       PLAIN_CHAT,
     )
+  })
+
+  it('tells where the task branch stood when a turn started', () => {
+    const plan = toTurnPlan(withoutTurnCredentials(request()), 'opencode')
+    const turn = (number: number, pin?: string | null) => ({
+      context: { ...plan.context, turn: number },
+      workspace: {
+        ...plan.workspace!,
+        ...(pin === undefined ? {} : { expectedBranchSha: pin }),
+      },
+    })
+    const base = plan.workspace!.expectedBaseSha
+    const pinned = 'c'.repeat(40)
+    // The first turn creates the branch.
+    expect(branchBeforeTurn(turn(1))).toBeNull()
+    expect(branchBeforeTurn(turn(2))).toBe(base)
+    // A replacement names it: a refused turn may have published past what it works from.
+    expect(branchBeforeTurn(turn(2, pinned))).toBe(pinned)
+    expect(branchBeforeTurn(turn(2, null))).toBeNull()
+    expect(branchBeforeTurn({ context: plan.context })).toBeNull()
   })
 
   it('keeps «rewound» of a turn without a repository after `/undo`, absent otherwise', () => {

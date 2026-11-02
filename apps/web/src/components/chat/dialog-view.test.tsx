@@ -2158,6 +2158,52 @@ describe('the five kinds of a chat (docs/plan/61-chats-first.md, §5.6)', () => 
       await waitFor(() => expect(field().value).toBe('Добавьте новость'))
     })
 
+    describe('when core could not take the turn back', () => {
+      /** The next read of the feed brings the row core wrote: the press stayed where it was. */
+      const failed = () => {
+        const row = {
+          id: '10',
+          at: '2026-10-17T10:00:00.000Z',
+          type: 'feed.update',
+          outcome: 'rewind_failed',
+          conflicts: 0,
+        } as unknown as FeedRow
+        calls.feed.mockResolvedValue(
+          browserAnswer({
+            status: 'awaiting_user',
+            commands: verdicts({ turn_undo: null }),
+            events: [requestRow('1', 'Добавьте новость'), row],
+            cursor: '10',
+          }),
+        )
+        // Opening the window of commands reads the chat again.
+        fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+      }
+
+      it('takes the words out of the field: sending them would ask again over the same turn', async () => {
+        calls.undoTurn.mockResolvedValue({ ...posted, words: 'Добавьте новость' })
+        showDialog(open())
+        await screen.findByText('Добавьте новость')
+        undo()
+        await waitFor(() => expect(field().value).toBe('Добавьте новость'))
+        failed()
+        await screen.findByRole('heading', { name: 'Запрос не отменён' })
+        await waitFor(() => expect(field().value).toBe(''))
+      })
+
+      it('leaves words the client changed meanwhile', async () => {
+        calls.undoTurn.mockResolvedValue({ ...posted, words: 'Добавьте новость' })
+        showDialog(open())
+        await screen.findByText('Добавьте новость')
+        undo()
+        await waitFor(() => expect(field().value).toBe('Добавьте новость'))
+        type('Добавьте новость о скидках')
+        failed()
+        await screen.findByRole('heading', { name: 'Запрос не отменён' })
+        expect(field().value).toBe('Добавьте новость о скидках')
+      })
+    })
+
     it('says a refusal in the field and gives nothing back', async () => {
       calls.undoTurn.mockRejectedValue(serverRefusal('Отменять пока нечего.'))
       showDialog(open())

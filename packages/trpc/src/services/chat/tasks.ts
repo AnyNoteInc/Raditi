@@ -8,6 +8,7 @@ import {
 import {
   enqueueAgentTurn,
   enqueueCandidateRebase,
+  enqueueCandidateRewind,
   enqueueTurnCancel,
   insertFeedEvent,
   requestPreviewSync,
@@ -62,6 +63,7 @@ import {
   openCeilingQuestion,
   openResult,
   requestOf,
+  turnRewinding,
   wordsOfTurn,
   wordsOfUndonePress,
   type DialogQuestion,
@@ -78,6 +80,7 @@ import {
   taskNothingToContinue,
   taskNothingToResume,
   taskNothingToRetry,
+  taskRewinding,
   workspaceKeyUnavailable,
   type TaskNotAcceptedReason,
 } from './refusals.ts'
@@ -436,6 +439,12 @@ async function assertProjectOpen(tx: Tx, task: LockedTask): Promise<void> {
   if (siteClosed(site.status)) throw taskNotAccepted('site_not_active')
 }
 
+/** core is taking a turn of the chat back (`candidate.rewind`): what would start waits for it. */
+async function assertNotRewinding(tx: Tx, task: LockedTask): Promise<void> {
+  if (task.requirements.repository && (await turnRewinding(tx, task.id)) !== null)
+    throw taskRewinding()
+}
+
 /**
  * Words to a dialog that waits (Р6): the answer to the agent's question or to a result that
  * left the dialog open (`awaiting_user → queued`, `feed.request` `answer`; owner's decision of
@@ -467,6 +476,7 @@ export async function postDialogMessage(
     await assertProjectOpen(tx, task)
     // «Остановить» of a task in the browser is final: core is closing it (Б24).
     if (task.requirements.browser && (await cancelPending(tx, task.id))) throw taskFinished()
+    await assertNotRewinding(tx, task)
 
     let payload: FeedRequestPayload
     const ceiling =
@@ -642,6 +652,7 @@ export async function resumeDialog(
     await assertProjectOpen(tx, task)
     // «Остановить» of a task in the browser is final: core is closing it (Б24).
     if (task.requirements.browser && (await cancelPending(tx, task.id))) throw taskFinished()
+    await assertNotRewinding(tx, task)
 
     if (!task.requirements.browser) throw taskNothingToResume()
     if (task.status !== 'awaiting_user') {
@@ -703,14 +714,17 @@ export async function initDialog(
 }
 
 /**
- * `/undo` of a chat without the repository (docs/plan/61-chats-first.md, К29, §5.14): the last turn
- * is taken back, so the next pass starts where it started and its words go to the agent no more;
- * they come back to the field instead. No model and no job: the chat keeps waiting as it did, its
- * browser and its sign-in stay, and no money moves — the pass was charged when it ended, and
- * `undone_at` is no `rejected_at`. The row says what stays on the sites: the browser belongs to
- * the whole task, not to the turn. A repeat with the same `requestId` returns the row of the first
- * delivery and the words too: it comes when the page never got the first answer, and the page
- * puts them only into an empty field.
+ * `/undo` (docs/plan/61-chats-first.md, К29, §5.14): the last turn is taken back, so the next pass
+ * starts where it started and its words go to the agent no more; they come back to the field
+ * instead. No model: its browser and its sign-in stay, and no money moves — the pass was charged
+ * when it ended, and `undone_at` is no `rejected_at`. In a chat without the repository it is done
+ * here: the chat keeps waiting as it did, and the row says what stays on the sites — the browser
+ * belongs to the whole task, not to the turn. In a chat with the repository the press and the job
+ * `candidate.rewind` are written here, and core moves the branch, the candidate and the preview
+ * under the site's lease and writes the undo with that row; the chat takes nothing else until then
+ * (`turnRewinding`), and the words go back to the field at once. A repeat with the same
+ * `requestId` returns the row of the first delivery and the words too: it comes when the page
+ * never got the first answer, and the page puts them only into an empty field.
  */
 export async function undoDialogTurn(
   db: PrismaClient,
@@ -724,13 +738,24 @@ export async function undoDialogTurn(
       return {
         requestEventId: String(repeated),
         repeated: true,
-        words: await wordsOfUndonePress(tx, task.id, repeated),
+        words: await wordsOfUndonePress(tx, task, repeated),
       }
     const facts = await dialogFacts(tx, task, userId)
     assertCommandAvailable(facts.commands, 'turn_undo')
+    const words = await wordsOfTurn(tx, task.id, task.turnNo)
+    if (task.requirements.repository) {
+      const requestEventId = await writeRequest(tx, task.id, {
+        v: 1,
+        kind: 'command',
+        command: 'turn_undo',
+        authorId: userId,
+        requestId,
+      })
+      await enqueueCandidateRewind(tx, { taskId: task.id, requestEventId })
+      return { requestEventId, repeated: false, words }
+    }
     const turnId = await undoTurn(tx, { taskId: task.id, turnNo: task.turnNo })
     if (turnId === null) throw conflict('The last turn of the chat is no longer there to undo')
-    const words = await wordsOfTurn(tx, task.id, task.turnNo)
     const requestEventId = await writeRequest(tx, task.id, {
       v: 1,
       kind: 'command',
@@ -795,6 +820,7 @@ export async function retryDialog(
     if (repeated !== null) return { requestEventId: String(repeated), repeated: true }
     // «Остановить» of a chat with a browser is final: core is closing it (Б24).
     if (task.requirements.browser && (await cancelPending(tx, task.id))) throw taskFinished()
+    await assertNotRewinding(tx, task)
 
     const verdict = await dialogRetry(tx, task)
     if (!verdict.allowed) throw retryRefused[verdict.refusal]()

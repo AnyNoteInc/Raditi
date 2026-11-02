@@ -8,6 +8,7 @@ import {
   candidateFactsSchema,
   candidateFilesSchema,
   candidateMediaSchema,
+  conflict,
   dbPlanSchema,
   dbPlanViewSchema,
   feedRowSchema,
@@ -244,6 +245,47 @@ export async function undoTurn(
       AND rejected_at IS NULL AND undone_at IS NULL
     RETURNING id`
   return undone[0]?.id ?? null
+}
+
+/** Where a chat with the repository may stand when `/undo` takes its last turn back. */
+const rewindableStatuses = ['awaiting_user', 'awaiting_approval'] as const
+type RewindableStatus = (typeof rewindableStatuses)[number]
+
+const rewindSchema = z.strictObject({
+  taskId: id,
+  turnNo: turnNoSchema,
+  to: z.enum(rewindableStatuses),
+})
+
+/**
+ * The move of `/undo` in a chat with the repository (docs/plan/61-chats-first.md, §5.14), after its
+ * branch went back: the chat waits with the candidate that stands now (`to: awaiting_approval`) or
+ * for the next words (`awaiting_user`, nothing stands), and the turn is undone (`undoTurn`). Under
+ * the turn number the caller saw, while the chat waits, with no turn assigned and no release in
+ * work. Its id, or null — the chat is elsewhere, and nothing is written.
+ */
+export async function rewindDialog(
+  tx: Pick<Tx, '$queryRaw'>,
+  input: { taskId: string; turnNo: number; to: RewindableStatus },
+): Promise<string | null> {
+  const parsed = rewindSchema.safeParse(input)
+  if (!parsed.success) throw badRequest('Invalid rewind of a chat')
+  const { taskId, turnNo, to } = parsed.data
+  for (const from of rewindableStatuses) if (from !== to) assertTransition(from, to)
+  const moved = await tx.$queryRaw<Array<{ id: string }>>`
+    UPDATE tasks t SET status = ${to}::"TaskStatus", waiting = NULL, updated_at = now()
+    WHERE t.id = ${taskId}::uuid AND t.status::text = ANY(${[...rewindableStatuses]}::text[])
+      AND t.turn_no = ${turnNo}
+      AND NOT EXISTS (
+        SELECT 1 FROM turn_assignments a WHERE a.task_id = t.id AND a.finished_at IS NULL)
+      AND NOT EXISTS (
+        SELECT 1 FROM site_releases r
+        WHERE r.task_id = t.id AND r.status NOT IN ('installed', 'rolled_back', 'failed'))
+    RETURNING t.id`
+  if (moved.length !== 1) return null
+  const turnId = await undoTurn(tx, { taskId, turnNo })
+  if (turnId === null) throw conflict('The last turn of the chat is no longer there to undo')
+  return turnId
 }
 
 /** Where a dialog waits without a turn: what the sweeper of reserves may close. */

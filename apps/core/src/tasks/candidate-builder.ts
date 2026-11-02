@@ -18,6 +18,7 @@ import {
   proposeVersion,
   versionTagSchema,
   DomainError,
+  candidateFactsSchema,
   type CandidateFacts,
   type CandidateFiles,
   type CandidateMedia,
@@ -109,6 +110,11 @@ export interface CandidatePass {
   baseSha?: string
   /** The agent's claims of the pass; null — keep those of the standing candidate. */
   claims: Pick<TurnResult, 'change_type' | 'risk'> | null
+  /**
+   * The turn `/undo` is taking back: its database writes are not in the plan of this build, and
+   * leave it for good when the undo is recorded (docs/plan/61-chats-first.md, §5.14).
+   */
+  withoutTurn?: number
 }
 
 export type CandidateBuild =
@@ -158,6 +164,27 @@ export interface CandidateTask {
   id: string
   siteId: string
   site: { stack: SiteStack; url: string; installedVersion: string | null }
+}
+
+/** The standing candidate of a dialog; null — none, or its facts no longer pass their schema. */
+export async function standingCandidateOf(
+  db: Pick<PrismaClient, 'taskCandidate'>,
+  taskId: string,
+): Promise<StandingCandidate | null> {
+  const row = await db.taskCandidate.findFirst({
+    where: { taskId, status: { in: ['current', 'stale'] } },
+    orderBy: { revision: 'desc' },
+    select: {
+      id: true,
+      revision: true,
+      baseSha: true,
+      headSha: true,
+      dbPlanSha256: true,
+      facts: true,
+    },
+  })
+  const facts = row ? candidateFactsSchema.safeParse(row.facts) : null
+  return row && facts?.success ? { ...row, facts: facts.data } : null
 }
 
 type CandidateDatabase = Pick<
@@ -344,9 +371,13 @@ export class CandidateBuilder {
   }
 
   /** The compacted plan of the dialog's database writes that were not excluded (Р3, Р22). */
-  async dbPlan(taskId: string): Promise<{ plan: DbPlan; sha256: string }> {
+  async dbPlan(taskId: string, withoutTurn?: number): Promise<{ plan: DbPlan; sha256: string }> {
     const rows = await this.db.previewDbOperation.findMany({
-      where: { taskId, excluded: false },
+      where: {
+        taskId,
+        excluded: false,
+        ...(withoutTurn === undefined ? {} : { turnNo: { not: withoutTurn } }),
+      },
       orderBy: { id: 'asc' },
     })
     const plan = compactDbPlan(rows.map((row) => dbPlanEntryFromJournal(row)))
@@ -362,7 +393,7 @@ export class CandidateBuilder {
    * number overwrites.
    */
   async build(context: CandidateContext, pass: CandidatePass): Promise<CandidateBuild> {
-    const { plan, sha256: planSha } = await this.dbPlan(context.taskId)
+    const { plan, sha256: planSha } = await this.dbPlan(context.taskId, pass.withoutTurn)
     const standing = context.standing
     const base = pass.baseSha ?? standing?.baseSha ?? context.base
     const { repo } = context

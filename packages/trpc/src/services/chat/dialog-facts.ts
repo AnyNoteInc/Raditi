@@ -28,7 +28,13 @@ import {
 
 import { siteClosed } from '../site-capabilities.ts'
 import { memberRole } from './access.ts'
-import { cancelPending, dialogRetry, movingRequest, openCeilingQuestion } from './dialog-state.ts'
+import {
+  cancelPending,
+  dialogRetry,
+  movingRequest,
+  openCeilingQuestion,
+  turnRewinding,
+} from './dialog-state.ts'
 import { commandUnavailable } from './refusals.ts'
 
 type Reader = Pick<
@@ -224,8 +230,8 @@ export async function dialogFacts(
         taskId: task.id,
         status: task.status,
         turnNo: needs?.turnNo ?? 0,
-        repository: withRepository,
       }),
+      turnRewinding: withRepository && (await turnRewinding(db, task.id)) !== null,
     },
   }
 }
@@ -238,17 +244,19 @@ export async function dialogFacts(
  * a button that would resume nothing: both are answered first. Words the last turn never saw — their
  * pass failed before it opened a turn — are the last request, and that has no turn to take back:
  * the turn before them would go instead. A write of the turn on the site itself cannot go back with
- * the conversation; the browser belongs to the task, and its row says what stays. The files of a
- * turn go back with slice 61.22: with the repository nothing is undone yet.
+ * the conversation; the browser belongs to the task, and its row says what stays. A chat with the
+ * repository may wait with a candidate too, and its turn goes back with its files; once «Обновить»
+ * moved the candidate past the turn, the turn stands on a version of the site that is gone.
  */
 async function turnUndoRefusal(
   db: Reader,
-  chat: { taskId: string; status: TaskStatus; turnNo: number; repository: boolean },
+  chat: { taskId: string; status: TaskStatus; turnNo: number },
 ): Promise<TurnUndoRefusal | null> {
-  if (chat.repository || chat.status !== 'awaiting_user') return 'nothing_to_undo'
+  if (chat.status !== 'awaiting_user' && chat.status !== 'awaiting_approval')
+    return 'nothing_to_undo'
   const turn = await db.taskTurn.findUnique({
     where: { taskId_turnNo: { taskId: chat.taskId, turnNo: chat.turnNo } },
-    select: { status: true, rejectedAt: true, undoneAt: true, startedAt: true },
+    select: { status: true, rejectedAt: true, undoneAt: true, startedAt: true, headSha: true },
   })
   if (turn?.status !== 'completed' || turn.rejectedAt !== null || turn.undoneAt !== null)
     return 'nothing_to_undo'
@@ -261,6 +269,12 @@ async function turnUndoRefusal(
     })
     if (later > 0) return 'nothing_to_undo'
   }
+  const latest = await db.taskCandidate.findFirst({
+    where: { taskId: chat.taskId },
+    orderBy: { revision: 'desc' },
+    select: { turnNo: true, headSha: true },
+  })
+  if (latest?.turnNo === chat.turnNo && latest.headSha !== turn.headSha) return 'undo_past_update'
   const wrote = await taskHasProductionWrites(db, chat.taskId, { turnNo: chat.turnNo })
   return wrote ? 'content_written' : null
 }

@@ -570,6 +570,32 @@ describe('the rows of a dialog', () => {
     expect(text(feed)).toContain('Вы написали в чат, пока мы обновляли рабочую копию')
   })
 
+  it('says of an `/undo` that failed that nothing moved, as a card of a failure', () => {
+    const update = (id: string, outcome: 'rewind_failed' | 'failed' | 'current'): FeedRow => ({
+      id,
+      at: '2026-10-17T09:50:00.000Z',
+      type: 'feed.update',
+      outcome,
+      conflicts: 0,
+    })
+    const { feed } = showFeed(
+      [
+        commandRow('13', 'turn_undo'),
+        update('14', 'rewind_failed'),
+        update('15', 'failed'),
+        update('16', 'current'),
+      ],
+      headOf({ status: 'awaiting_approval' }),
+    )
+    const color = (name: string) =>
+      getComputedStyle(within(feed).getByRole('heading', { name })).color
+    expect(text(feed)).toContain(
+      'Не получилось отменить последний запрос: переписка и файлы остались как были.',
+    )
+    expect(color('Запрос не отменён')).toBe(color('Рабочую копию не обновили'))
+    expect(color('Запрос не отменён')).not.toBe(color('Рабочая копия уже обновлена'))
+  })
+
   it('says what `/undo` took back, and what stayed by what the chat left', () => {
     const rewind = (id: string, site: 'none' | 'check' | 'elsewhere'): FeedRow => ({
       id,

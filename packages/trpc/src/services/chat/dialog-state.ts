@@ -1,6 +1,7 @@
 import type { Prisma } from '@repo/db'
 import {
   answersFailure,
+  CANDIDATE_REWIND_EVENT,
   readFeedRow,
   retryVerdict,
   type CandidateStatus,
@@ -29,6 +30,39 @@ export async function requestOf(
     select: { id: true },
   })
   return row?.id ?? null
+}
+
+/**
+ * The `/undo` press of a chat with the repository that core has not answered yet
+ * (docs/plan/61-chats-first.md, §5.14): its branch and its candidate are moving, and nothing else
+ * starts until they stand. Its id, or null. The press of a chat without the repository gets no
+ * answer row — it is done with its own transaction —, so its caller does not ask.
+ */
+export async function turnRewinding(
+  db: Pick<Prisma.TransactionClient, 'taskEvent'>,
+  taskId: string,
+): Promise<bigint | null> {
+  const press = await db.taskEvent.findFirst({
+    where: {
+      taskId,
+      type: 'feed.request',
+      AND: [
+        { payload: { path: ['kind'], equals: 'command' } },
+        { payload: { path: ['command'], equals: 'turn_undo' } },
+      ],
+    },
+    orderBy: { id: 'desc' },
+    select: { id: true },
+  })
+  if (press === null) return null
+  const answered = await db.taskEvent.count({
+    where: {
+      taskId,
+      type: CANDIDATE_REWIND_EVENT,
+      payload: { path: ['requestEventId'], equals: String(press.id) },
+    },
+  })
+  return answered > 0 ? null : press.id
 }
 
 /** How far back a pending `/cancel` is looked for: as far as core's `pressedCancel` looks. */
@@ -175,20 +209,26 @@ export async function wordsOfTurn(
 
 /**
  * What a repeat of the press `pressId` of `/undo` gives back: its answer may never have reached the
- * page. The words of the turn it took, while the chat still stands where that press left it; null
- * — it took none, or the chat moved on and the words went their way.
+ * page. The words of the turn it took, while the chat still stands where that press left it, or of
+ * the turn core is still taking (`turnNo`, the last one); null — it took none, or the chat moved on
+ * and the words went their way.
  */
 export async function wordsOfUndonePress(
   db: Pick<Prisma.TransactionClient, 'taskEvent' | 'taskTurn'>,
-  taskId: string,
+  task: { id: string; turnNo: number },
   pressId: bigint,
 ): Promise<string | null> {
+  const taskId = task.id
   const row = await db.taskEvent.findFirst({
     where: { taskId, type: 'feed.rewind', id: { gt: pressId } },
     orderBy: { id: 'asc' },
     select: { id: true, payload: true },
   })
-  if (row === null || (await openResult(db, taskId)) !== row.id) return null
+  if (row === null)
+    return (await turnRewinding(db, taskId)) === pressId
+      ? wordsOfTurn(db, taskId, task.turnNo)
+      : null
+  if ((await openResult(db, taskId)) !== row.id) return null
   const rewind = readFeedRow('feed.rewind', row.payload)
   return rewind.type === 'feed.rewind' ? wordsOfTurn(db, taskId, rewind.turn) : null
 }

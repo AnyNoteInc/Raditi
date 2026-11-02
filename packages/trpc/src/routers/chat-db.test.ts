@@ -1545,6 +1545,31 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
     const retryOf = (commands: { id: string; refusal: string | null }[]) =>
       commands.find((command) => command.id === 'retry')?.refusal
 
+    it('starts no repeat while `/undo` takes a turn back', async () => {
+      const { caller, taskId, failureId, owner } = await keptAfterFailure()
+      await db.$transaction((tx) =>
+        insertFeedEvent(tx, {
+          taskId,
+          row: {
+            type: 'feed.request',
+            payload: {
+              v: 1,
+              kind: 'command',
+              command: 'turn_undo',
+              authorId: owner.id,
+              requestId: randomUUID(),
+            },
+          },
+        }),
+      )
+      await expect(
+        caller.task.retry({ taskId, requestId: randomUUID(), failureEventId: failureId }),
+      ).rejects.toMatchObject({ cause: { code: 'TASK_REWINDING' } })
+      expect((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe(
+        'awaiting_approval',
+      )
+    })
+
     it('repeats the pass as the next attempt in heavy, with a reserve of its own', async () => {
       const { caller, taskId, failureId, owner } = await keptAfterFailure()
       const before = await caller.task.feed({ taskId })
@@ -2311,6 +2336,58 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
           details: { refusal: 'database_not_releasable' },
         },
       })
+    })
+
+    it('takes no confirmation while `/undo` takes the turn of its window back', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+      await withCandidate(taskId)
+      const prepared = await caller.release.prepare({ taskId })
+      const choice = prepared.choices[0]!
+      // Another tab of the same window, or another manager: the token outlives the press.
+      const press = await insertFeedEvent(db, {
+        taskId,
+        row: {
+          type: 'feed.request',
+          payload: {
+            v: 1,
+            kind: 'command',
+            command: 'turn_undo',
+            authorId: owner.id,
+            requestId: randomUUID(),
+          },
+        },
+      })
+      const statusBefore = (await db.task.findUniqueOrThrow({ where: { id: taskId } })).status
+
+      await expect(
+        caller.release.confirm({
+          taskId,
+          confirmToken: choice.confirmToken,
+          version: choice.version,
+        }),
+      ).rejects.toMatchObject({
+        cause: { code: 'CHAT_COMMAND_UNAVAILABLE', details: { refusal: 'turn_rewinding' } },
+      })
+      expect(await db.siteRelease.count({ where: { taskId } })).toBe(0)
+      expect((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe(statusBefore)
+
+      // The press answered, the chat is free again.
+      await db.taskEvent.create({
+        data: {
+          taskId,
+          type: 'candidate.rewind',
+          payload: { v: 1, requestEventId: String(press), outcome: 'refused' },
+        },
+      })
+      await expect(
+        caller.release.confirm({
+          taskId,
+          confirmToken: choice.confirmToken,
+          version: choice.version,
+        }),
+      ).resolves.toMatchObject({ status: 'approved' })
     })
 
     it('lets only an owner or an admin release', async () => {
@@ -3648,6 +3725,40 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       })
     })
 
+    it('gives the work back to no agent while `/undo` takes a turn of the code back', async () => {
+      const { owner, site, workspaceId } = await siteOwner()
+      const caller = callerOf(owner, { browser: true })
+      const { id: taskId } = await db.task.create({
+        data: {
+          workspaceId,
+          siteId: site.id,
+          needsRepository: true,
+          needsBrowser: true,
+          status: 'awaiting_user',
+          turnNo: 1,
+        },
+      })
+      await insertFeedEvent(db, {
+        taskId,
+        row: {
+          type: 'feed.request',
+          payload: {
+            v: 1,
+            kind: 'command',
+            command: 'turn_undo',
+            authorId: owner.id,
+            requestId: randomUUID(),
+          },
+        },
+      })
+      await expect(
+        caller.task.resumeAgent({ taskId, requestId: randomUUID() }),
+      ).rejects.toMatchObject({ cause: { code: 'TASK_REWINDING' } })
+      expect((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe(
+        'awaiting_user',
+      )
+    })
+
     it('binds the files of an answer, and goes on by «Продолжить работу агента» once', async () => {
       const { owner, site } = await browserSite()
       const caller = callerOf(owner, { browser: true })
@@ -4596,12 +4707,119 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         expect(await verdictOf(caller, taskId)).toBe('awaiting_answer')
       })
 
-      it('stays closed in a chat with the repository until its files go back too', async () => {
-        const { owner, site } = await siteOwner()
-        const caller = callerOf(owner)
-        const { taskId } = await newDialog(caller, site.id)
-        await answered(taskId)
-        expect(await verdictOf(caller, taskId)).toBe('nothing_to_undo')
+      describe('in a chat with the repository (61.22)', () => {
+        /** A chat of a site whose last turn left `head` (`candidate` — and that candidate). */
+        async function codeChat(options: { candidate?: { turnNo: number; head: string } } = {}) {
+          const { owner, site } = await siteOwner()
+          const caller = callerOf(owner)
+          const { taskId } = await newDialog(caller, site.id)
+          await answered(taskId)
+          await db.taskTurn.updateMany({ where: { taskId }, data: { headSha: 'b'.repeat(40) } })
+          if (options.candidate) {
+            await db.taskCandidate.create({
+              data: {
+                taskId,
+                revision: 1,
+                turnNo: options.candidate.turnNo,
+                baseSha: 'a'.repeat(40),
+                baseTree: 'd'.repeat(40),
+                headSha: options.candidate.head,
+                dbPlanSha256: '0'.repeat(64),
+                proposedBump: 'minor',
+                proposedVersion: 'v0.1.0',
+                facts: {},
+              },
+            })
+            await db.task.update({ where: { id: taskId }, data: { status: 'awaiting_approval' } })
+          }
+          return { caller, taskId }
+        }
+        const rewinds = (taskId: string) =>
+          db.outboxEvent.findMany({
+            where: { type: 'candidate.rewind', dedupeKey: { contains: taskId } },
+          })
+        /** core's answer to the press, as `candidate.rewind` writes it. */
+        const coreAnswers = (taskId: string, requestEventId: string) =>
+          db.taskEvent.create({
+            data: {
+              taskId,
+              type: 'candidate.rewind',
+              payload: { v: 1, requestEventId, outcome: 'refused' },
+            },
+          })
+
+        it('leaves the turn to core: the press and its job, the words at once', async () => {
+          const { caller, taskId } = await codeChat()
+          expect(await verdictOf(caller, taskId)).toBeNull()
+          const requestId = randomUUID()
+          const undone = await caller.task.undoTurn({ taskId, requestId })
+          expect(undone).toMatchObject({
+            repeated: false,
+            words: 'Поменяйте телефон в шапке сайта',
+          })
+
+          const jobs = await rewinds(taskId)
+          expect(jobs).toHaveLength(1)
+          expect(jobs[0]?.payload).toEqual({ taskId, requestEventId: undone.requestEventId })
+          // core writes the undo with the branch: nothing of it yet.
+          expect(await db.taskTurn.count({ where: { taskId, undoneAt: { not: null } } })).toBe(0)
+          expect(await db.taskEvent.count({ where: { taskId, type: 'feed.rewind' } })).toBe(0)
+
+          // A page that never got the answer gets the words again.
+          expect(await caller.task.undoTurn({ taskId, requestId })).toEqual({
+            ...undone,
+            repeated: true,
+          })
+          expect(await rewinds(taskId)).toHaveLength(1)
+        })
+
+        it('starts nothing while core takes the turn back, and goes on once it answered', async () => {
+          const { caller, taskId } = await codeChat()
+          const { requestEventId } = await caller.task.undoTurn({ taskId, requestId: randomUUID() })
+          expect(await verdictOf(caller, taskId)).toBe('turn_rewinding')
+          await expect(
+            caller.task.message({ taskId, requestId: randomUUID(), text: 'Ещё слова' }),
+          ).rejects.toMatchObject({ cause: { code: 'TASK_REWINDING' } })
+          await expect(
+            caller.task.undoTurn({ taskId, requestId: randomUUID() }),
+          ).rejects.toMatchObject({ cause: { details: { refusal: 'turn_rewinding' } } })
+
+          await coreAnswers(taskId, requestEventId)
+          expect(await verdictOf(caller, taskId)).toBeNull()
+          await expect(
+            caller.task.message({ taskId, requestId: randomUUID(), text: 'Ещё слова' }),
+          ).resolves.toMatchObject({ repeated: false })
+        })
+
+        it('takes a chat that waits with its candidate', async () => {
+          const { caller, taskId } = await codeChat({
+            candidate: { turnNo: 1, head: 'b'.repeat(40) },
+          })
+          expect(await verdictOf(caller, taskId)).toBeNull()
+        })
+
+        it('takes a turn that asked while the candidate of the turn before stands', async () => {
+          const { caller, taskId } = await codeChat({
+            candidate: { turnNo: 1, head: 'e'.repeat(40) },
+          })
+          await answered(taskId, 2)
+          await db.taskTurn.updateMany({
+            where: { taskId, turnNo: 2 },
+            data: { headSha: 'c'.repeat(40) },
+          })
+          // The candidate has its own head, and no «Обновить» moved this turn's.
+          expect(await verdictOf(caller, taskId)).toBeNull()
+        })
+
+        it('refuses past «Обновить»: the candidate no longer stands on the head of the turn', async () => {
+          const { caller, taskId } = await codeChat({
+            candidate: { turnNo: 1, head: 'e'.repeat(40) },
+          })
+          expect(await verdictOf(caller, taskId)).toBe('undo_past_update')
+          await expect(
+            caller.task.undoTurn({ taskId, requestId: randomUUID() }),
+          ).rejects.toMatchObject({ cause: { details: { refusal: 'undo_past_update' } } })
+        })
       })
 
       it('refuses a turn that wrote to the site itself', async () => {

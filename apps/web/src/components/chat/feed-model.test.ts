@@ -10,6 +10,7 @@ import {
   openQuestion,
   requestShown,
   stopRequested,
+  undoFailedAfter,
 } from './feed-model'
 import {
   agentCommandRow,
@@ -191,6 +192,51 @@ describe('the candidate of the dialog', () => {
       'Вторая.',
     )
     expect(candidateMessage(rows, null)).toBeNull()
+  })
+
+  it('carries the words of the turn it stands on again after `/undo`', () => {
+    const rewind: FeedRow = {
+      id: '7',
+      at: '2026-10-17T09:50:00.000Z',
+      type: 'feed.rewind',
+      turn: 2,
+      files: true,
+      site: 'unchanged',
+    }
+    const rows = [
+      resultRow('2', 1, 'Поменял цвет шапки.'),
+      candidateRow('3', 1),
+      resultRow('5', 2, 'Добавил баннер.'),
+      candidateRow('6', 2, 2),
+      rewind,
+      candidateRow('8', 1, 3),
+    ]
+    expect(candidateMessage(rows, rows[5] as Parameters<typeof candidateMessage>[1])).toBe(
+      'Поменял цвет шапки.',
+    )
+  })
+})
+
+describe('undoFailedAfter', () => {
+  const failed = (id: string, outcome: 'rewind_failed' | 'failed' = 'rewind_failed'): FeedRow => ({
+    id,
+    at: '2026-10-17T09:50:00.000Z',
+    type: 'feed.update',
+    outcome,
+    conflicts: 0,
+  })
+
+  it('is what core wrote after the press: «Запрос не отменён»', () => {
+    expect(undoFailedAfter([commandRow('9', 'turn_undo'), failed('10')], '9')).toBe(true)
+  })
+
+  it('is not an earlier press that failed, and not a failed «Обновить»', () => {
+    expect(undoFailedAfter([failed('10'), commandRow('11', 'turn_undo')], '11')).toBe(false)
+    expect(undoFailedAfter([commandRow('9', 'turn_undo'), failed('10', 'failed')], '9')).toBe(false)
+  })
+
+  it('compares ids as numbers: `9` comes before `10`', () => {
+    expect(undoFailedAfter([failed('100')], '99')).toBe(true)
   })
 })
 

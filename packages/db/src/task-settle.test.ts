@@ -24,6 +24,7 @@ import {
   nextCandidateRevision,
   recordCandidate,
   rejectTurn,
+  rewindDialog,
   requestPreviewSync,
   settleTurn,
   supersedeStandingCandidate,
@@ -228,6 +229,106 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn settlement', () => {
     await expect(rejectTurn(db, { taskId: row.id, turnNo: 0 })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
     })
+  })
+
+  it('moves a chat with the repository to what stands after `/undo`, with the turn undone', async () => {
+    for (const [from, to] of [
+      ['awaiting_approval', 'awaiting_user'],
+      ['awaiting_user', 'awaiting_approval'],
+      ['awaiting_approval', 'awaiting_approval'],
+    ] as const) {
+      const row = await task({ status: 'running', turnNo: 1 })
+      const turn = await db.taskTurn.findFirstOrThrow({ where: { taskId: row.id } })
+      await db.task.update({ where: { id: row.id }, data: { status: from } })
+      expect(await rewindDialog(db, { taskId: row.id, turnNo: 2, to })).toBeNull()
+      expect(await rewindDialog(db, { taskId: row.id, turnNo: 1, to })).toBe(turn.id)
+      const after = await db.task.findUniqueOrThrow({ where: { id: row.id } })
+      expect(after.status).toBe(to)
+      expect(after.waiting).toBeNull()
+      expect(
+        (await db.taskTurn.findFirstOrThrow({ where: { taskId: row.id } })).undoneAt,
+      ).toBeInstanceOf(Date)
+    }
+  })
+
+  it('moves no chat that does not wait, and none whose turn is refused', async () => {
+    const running = await task({ status: 'running', turnNo: 1 })
+    expect(
+      await rewindDialog(db, { taskId: running.id, turnNo: 1, to: 'awaiting_user' }),
+    ).toBeNull()
+    expect((await db.task.findUniqueOrThrow({ where: { id: running.id } })).status).toBe('running')
+
+    const refused = await task({ status: 'running', turnNo: 1 })
+    await rejectTurn(db, { taskId: refused.id, turnNo: 1 })
+    await db.task.update({ where: { id: refused.id }, data: { status: 'awaiting_approval' } })
+    await expect(
+      rewindDialog(db, { taskId: refused.id, turnNo: 1, to: 'awaiting_user' }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' })
+  })
+
+  it('moves no chat with a turn assigned or a release in work: `/undo` is not theirs to take', async () => {
+    const assigned = await task({ status: 'running', turnNo: 1 })
+    await db.task.update({ where: { id: assigned.id }, data: { status: 'awaiting_approval' } })
+    await db.turnAssignment.create({
+      data: {
+        taskId: assigned.id,
+        siteId: siteIdOf(assigned),
+        sessionId: assigned.id,
+        turnNo: 1,
+        executor: 'local',
+        plan: {},
+        firstEpoch: 1,
+        leaseEpoch: 1,
+        deadlineAt: new Date(Date.now() + 60_000),
+      },
+    })
+    const released = await task({ status: 'running', turnNo: 1 })
+    await db.task.update({ where: { id: released.id }, data: { status: 'awaiting_approval' } })
+    const candidate = await db.taskCandidate.create({
+      data: {
+        taskId: released.id,
+        revision: 1,
+        turnNo: 1,
+        baseSha: 'a'.repeat(40),
+        baseTree: 'b'.repeat(40),
+        headSha: 'c'.repeat(40),
+        dbPlanSha256: '0'.repeat(64),
+        proposedBump: 'minor',
+        proposedVersion: 'v0.1.0',
+        facts: {},
+      },
+    })
+    const at = new Date()
+    await db.siteRelease.create({
+      data: {
+        siteId: siteIdOf(released),
+        taskId: released.id,
+        candidateId: candidate.id,
+        candidateRevision: 1,
+        attempt: 1,
+        releaseKey: 'd'.repeat(64),
+        version: 'v0.1.0',
+        tag: 'v0.1.0',
+        bump: 'minor',
+        mainBeforeSha: 'a'.repeat(40),
+        installedBeforeSha: 'a'.repeat(40),
+        approvedSha: 'd'.repeat(40),
+        status: 'approved',
+        committedAt: at,
+        approvedAt: at,
+      },
+    })
+
+    for (const { id } of [assigned, released]) {
+      expect(await rewindDialog(db, { taskId: id, turnNo: 1, to: 'awaiting_user' })).toBeNull()
+      const after = await db.task.findUniqueOrThrow({ where: { id } })
+      expect(after.status).toBe('awaiting_approval')
+      expect((await db.taskTurn.findFirstOrThrow({ where: { taskId: id } })).undoneAt).toBeNull()
+    }
+    await db.siteRelease.updateMany({ where: { taskId: released.id }, data: { status: 'failed' } })
+    expect(
+      await rewindDialog(db, { taskId: released.id, turnNo: 1, to: 'awaiting_user' }),
+    ).not.toBeNull()
   })
 
   it('takes a completed turn back once, never one whose result was refused', async () => {

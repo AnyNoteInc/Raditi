@@ -32,7 +32,7 @@ import { siteClosed } from '../site-capabilities.ts'
 import { accessibleTask, isManagerRole, memberRole, taskNotFound } from './access.ts'
 import { candidateCountsOf, dialogFacts, assertCommandAvailable } from './dialog-facts.ts'
 import { moveTo, underDialogLock } from './dialog-lock.ts'
-import { cancelPending } from './dialog-state.ts'
+import { cancelPending, turnRewinding } from './dialog-state.ts'
 import {
   commandUnavailable,
   releaseCandidateChanged,
@@ -318,6 +318,10 @@ export async function confirmRelease(
       // `/cancel` came after the window opened: core is closing the chat, and a release begun now
       // would leave it nothing to close (`cancelWaiting` skips a release in work).
       if (task.requirements.browser && (await cancelPending(tx, task.id))) throw taskFinished()
+      // `/undo` came after the window opened: the candidate of this window is going away, and the
+      // job may be past its last look at the chat.
+      if (task.requirements.repository && (await turnRewinding(tx, task.id)) !== null)
+        throw commandUnavailable('release', 'turn_rewinding')
       if (task.status !== 'awaiting_approval') {
         if (task.status === 'deploying' || task.status === 'verifying') throw releaseInProgress()
         if (task.status === 'queued' || task.status === 'preparing' || task.status === 'running')

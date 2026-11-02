@@ -33,12 +33,14 @@ const transitions: Record<TaskStatus, readonly TaskStatus[]> = {
   // a pass that left a candidate waits for `/release` (Р6); one that changed nothing and had no
   // candidate ends the dialog (Р7)
   running: ['awaiting_user', 'awaiting_approval', 'done', 'failed', 'cancelled'],
-  // the client's answer starts the next turn of the same task
-  awaiting_user: ['queued', 'cancelled'],
+  // the client's answer starts the next turn of the same task; `/undo` of a turn that asked brings
+  // the candidate of the turn before back: the dialog waits with it (docs/plan/61, §5.14)
+  awaiting_user: ['queued', 'awaiting_approval', 'cancelled'],
   // `/release` → deploying; the client's words → the next pass over the candidate; `/cancel` →
   // cancelled. «Обновить» that finds the whole change on main already leaves nothing to release:
-  // done, as a pass without changes (docs/plan/53-chat-preview-release.md, Р6, Р7, R3).
-  awaiting_approval: ['deploying', 'queued', 'cancelled', 'done'],
+  // done, as a pass without changes (docs/plan/53-chat-preview-release.md, Р6, Р7, R3). `/undo`
+  // of the turn that made the only candidate leaves the chat open for the next words (§5.14).
+  awaiting_approval: ['deploying', 'queued', 'awaiting_user', 'cancelled', 'done'],
   // A release refused without a write to the hosting (a conflict, an outdated candidate, a job
   // that did not start) returns the dialog to its candidate (docs/plan/53-chat-preview-release.md, Р6).
   deploying: ['verifying', 'awaiting_approval', 'rolled_back', 'failed'],

@@ -13,6 +13,9 @@ import {
   AGENT_TURN_JOB,
   AGENT_TURN_QUEUE,
   agentTurnRetryJobId,
+  CANDIDATE_REWIND_EVENT,
+  CANDIDATE_REWIND_JOB,
+  candidateRewindDedupeKey,
   feedEndedSiteOf,
   isDomainError,
   requirementsOf,
@@ -53,6 +56,11 @@ export const LOST_RETRY_MS = 15 * 60_000
  * still in the queue meanwhile only finds the task taken (claimQueuedTask).
  */
 export const LOST_TURN_JOB_MS = 5 * 60_000
+/**
+ * An `/undo` left unanswered this long lost its job — a core that died at it, Redis, an outbox row
+ * that failed: it is put again, once in such a span. A job still at work only finds the lease taken.
+ */
+export const LOST_REWIND_MS = 2 * 60_000
 /** A pass that could not be ended yet (`later`) is not looked at again before this. */
 export const LATER_PAUSE_MS = 5 * 60_000
 const BATCH = 50
@@ -86,9 +94,9 @@ export interface TaskSweepDependencies {
  * «Сверка»): every minute it ends the passes whose turn recovery closed or whose handler died,
  * keeps the reserves of dialogs that wait with a candidate while their preview lives, cancels
  * those whose reserve ran out — never one with a release in work —, puts again a pass whose
- * retry got lost, compares the browsers of tasks with the worker and removes the files nobody
- * sent. Every write is a conditional move in PostgreSQL, so a pass is idempotent and
- * may race the live handler.
+ * retry got lost or an `/undo` nobody answered, compares the browsers of tasks with the worker
+ * and removes the files nobody sent. Every write is a conditional move in PostgreSQL, so a pass
+ * is idempotent and may race the live handler.
  */
 export class TaskSweep {
   readonly #logger: { log(message: string): void; warn(message: string): void }
@@ -110,6 +118,7 @@ export class TaskSweep {
       ['holds', () => this.extendHolds()],
       ['expiry', () => this.expireHolds()],
       ['retries', () => this.requeueLost()],
+      ['rewinds', () => this.rewinds()],
       ['browsers', () => this.sweepBrowsers()],
       ['attachments', () => this.collectAttachments()],
     ] as const) {
@@ -494,6 +503,42 @@ export class TaskSweep {
         this.#warn(`task sweep requeue task=${row.id}`, logged(error))
       }
     }
+    return put
+  }
+
+  /**
+   * An `/undo` of a chat with the repository nobody answered (docs/plan/61-chats-first.md, §5.14) is
+   * put again: `agent-turns` runs a job once, and until a `candidate.rewind` row answers the press
+   * the chat takes nothing but `/cancel`. The job decides what is left of it — it finds an answer,
+   * goes on from a branch that moved, or gives the press up.
+   */
+  async rewinds(): Promise<number> {
+    const rows = await this.deps.db.$queryRaw<Array<{ id: string; press: bigint }>>`
+      SELECT t.id, p.id AS press FROM tasks t
+      CROSS JOIN LATERAL (
+        SELECT e.id, e.created_at FROM task_events e
+        WHERE e.task_id = t.id AND e.type = 'feed.request'
+          AND e.payload->>'kind' = 'command' AND e.payload->>'command' = 'turn_undo'
+        ORDER BY e.id DESC LIMIT 1) p
+      WHERE t.status IN ('awaiting_user', 'awaiting_approval') AND t.needs_repository
+        AND p.created_at < now() - make_interval(secs => ${LOST_REWIND_MS / 1000})
+        AND NOT EXISTS (SELECT 1 FROM task_events a
+          WHERE a.task_id = t.id AND a.type = ${CANDIDATE_REWIND_EVENT}
+            AND a.payload->>'requestEventId' = p.id::text)
+      ORDER BY p.created_at LIMIT ${BATCH}`
+    const span = Math.floor(this.#now().getTime() / LOST_REWIND_MS)
+    let put = 0
+    for (const row of rows)
+      try {
+        const job = { taskId: row.id, requestEventId: row.press.toString() }
+        await this.deps.queue.enqueue(AGENT_TURN_QUEUE, CANDIDATE_REWIND_JOB, job, {
+          jobId: `${candidateRewindDedupeKey(job)}:sweep:${span}`,
+        })
+        put++
+      } catch (error) {
+        this.#warn(`task sweep rewind task=${row.id}`, logged(error))
+      }
+    if (put > 0) this.#logger.log(`task_sweep_rewinds count=${put}`)
     return put
   }
 

@@ -3,7 +3,7 @@
 // cannot reach, S3 a clarification, S4a a dialog opened before a release, S4 `/release`, S5a/S6a
 // two more dialogs side by side, S5 a release that breaks the site and is rolled back, S6 a
 // release refused by a conflict before `main` moves, S8 a database plan of every kind released,
-// repeated, refused for a taken address and rolled back, S9 «Отменить выпуск», S10 a pass that
+// repeated, refused for a taken address and rolled back, S9 «Отменить выпуск», S11 `/undo`, S10 a pass that
 // fails for a reason of the platform keeps the candidate and «Попробовать ещё» repeats it, S7 the
 // tags that deploy nothing, a turn that waits for a deploy and what core leaves behind. Every
 // PASS line is a fact read from the product's own state, the pages it serves or what Gitea,
@@ -2068,6 +2068,362 @@ export async function runScenarios(stand) {
   )
   rt.end()
 
+  // ── S11 ──────────────────────────────────────────────────────────────────────
+  // `/undo` (docs/plan/61-chats-first.md, К29, §5.14): the last turn goes back without the model
+  // and without money — the branch by CAS, the candidate, the preview —, its words come back to
+  // the page and reach the agent no more. Dialog L: the first turn, which found no branch.
+  rt.begin('S11', '/undo takes the last turn back: branch, candidate, preview; no money')
+  /** The head of `agent/<taskId>` from the refs of the repository; null — no such branch. */
+  const agentHead = async (taskId) => {
+    const name = `refs/heads/agent/${taskId}`
+    const answer = await api('GET', `/git/refs/heads/agent/${taskId}`)
+    if (answer.status !== 200) return null
+    return [answer.json].flat().find((ref) => ref.ref === name)?.object.sha ?? null
+  }
+  const undoLast = (taskId) => owner.mutate('task.undoTurn', { taskId, requestId: uuid7() })
+  /** The row of the `count`-th undo of the chat: core wrote it with the turn undone. */
+  const rewoundRow = (taskId, count = 1) =>
+    rt.until(
+      `undo ${count} of ${taskId} written by core`,
+      async () => {
+        const rows = await db.taskEvent.findMany({
+          where: { taskId, type: 'feed.rewind' },
+          orderBy: { id: 'asc' },
+        })
+        return rows.length >= count ? rows[count - 1] : null
+      },
+      { timeoutMs: 3 * MINUTE, intervalMs: 500, service: stand.processes.core },
+    )
+  const turnReaches = (taskId, turnNo, status) =>
+    rt.until(
+      `turn ${turnNo} of ${taskId} ended ${status}`,
+      async () => {
+        const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
+        if (['failed', 'cancelled', 'done', 'rolled_back'].includes(task.status))
+          throw new CheckFailed(`dialog ${taskId} ended ${task.status}`)
+        return task.status === status && task.turnNo === turnNo ? task : null
+      },
+      { timeoutMs: 12 * MINUTE, intervalMs: 1000, service: stand.processes.core },
+    )
+  const planOfTurn = async (taskId, turnNo) =>
+    (await db.turnAssignment.findFirst({ where: { taskId, turnNo } }))?.plan ?? {}
+  const refusalOf = async (taskId, id) =>
+    (await owner.query('task.feed', { taskId })).commands.find((command) => command.id === id)
+      ?.refusal
+
+  const dialogK = { taskId: uuid7() }
+  model.script(MODEL_TURNS.undoMark(1))
+  await owner.mutate('task.create', {
+    siteId,
+    taskId: dialogK.taskId,
+    text: 'Добавьте отметку отмены в стили темы.',
+  })
+  await taskReaches(dialogK.taskId, 'awaiting_approval')
+  const candidateK1 = await currentCandidate(dialogK.taskId)
+  await previewReady(dialogK.taskId, 1)
+  model.script(MODEL_TURNS.undoMark(2))
+  await owner.mutate('task.message', {
+    taskId: dialogK.taskId,
+    requestId: uuid7(),
+    text: TEXT.undoWords,
+  })
+  await turnReaches(dialogK.taskId, 2, 'awaiting_approval')
+  const candidateK2 = await currentCandidate(dialogK.taskId)
+  await previewReady(dialogK.taskId, 2)
+  const visitK2 = await previewVisit(dialogK.taskId, [styleUrl])
+  rt.check(
+    candidateK2?.revision === 2 &&
+      (await agentHead(dialogK.taskId)) === candidateK2.headSha &&
+      visitK2.pages[styleUrl].text.includes(TEXT.undoMark(2)),
+    'dialog K waits with revision 2 of its second turn, on the task branch and in the preview',
+    { revision: candidateK2?.revision },
+  )
+  const heldK = await rt.until(
+    'the charges of the two passes of dialog K',
+    async () => {
+      const holds = await holdsOf(dialogK.taskId)
+      return holds.length > 0 && holds.every((hold) => hold.status === 'captured') ? holds : null
+    },
+    { timeoutMs: 3 * MINUTE, intervalMs: 1000, service: stand.processes.core },
+  )
+  const chargedK = await chargesOf(dialogK.taskId)
+
+  const chatsBeforeUndo = model.chats().length
+  const undoneK = await undoLast(dialogK.taskId)
+  const rowK = await rewoundRow(dialogK.taskId)
+  const taskK = await db.task.findUniqueOrThrow({ where: { id: dialogK.taskId } })
+  const turnK2 = await db.taskTurn.findUnique({
+    where: { taskId_turnNo: { taskId: dialogK.taskId, turnNo: 2 } },
+  })
+  const candidateK3 = await currentCandidate(dialogK.taskId)
+  rt.check(
+    undoneK.words === TEXT.undoWords &&
+      rowK.payload.turn === 2 &&
+      rowK.payload.files === true &&
+      rowK.payload.site === 'unchanged' &&
+      taskK.status === 'awaiting_approval' &&
+      turnK2?.undoneAt !== null &&
+      model.chats().length === chatsBeforeUndo,
+    '/undo gives the words of the turn back at once; core writes the undo with the files named, and the model is not asked',
+    { words: undoneK.words, row: rowK.payload, status: taskK.status },
+  )
+  rt.check(
+    (await agentHead(dialogK.taskId)) === candidateK1.headSha &&
+      candidateK3?.revision === 3 &&
+      candidateK3.headSha === candidateK1.headSha &&
+      candidateK3.turnNo === 1,
+    'the task branch stands on the head of turn 1 again, and the candidate of that head is revision 3',
+    { branch: await agentHead(dialogK.taskId), revision: candidateK3?.revision },
+  )
+  await previewReady(dialogK.taskId, 3)
+  const visitK3 = await previewVisit(dialogK.taskId, [styleUrl])
+  rt.check(
+    visitK3.pages[styleUrl].text.includes(TEXT.undoMark(1)) &&
+      !visitK3.pages[styleUrl].text.includes(TEXT.undoMark(2)),
+    'the preview is back on the file of turn 1',
+  )
+  const heldK2 = await holdsOf(dialogK.taskId)
+  rt.check(
+    JSON.stringify(heldK2) === JSON.stringify(heldK) &&
+      sum(await chargesOf(dialogK.taskId)) === sum(chargedK),
+    'no money moved: the holds and the charges of the chat are as they were',
+    { holds: heldK2.length },
+  )
+  rt.check(
+    (await refusalOf(dialogK.taskId, 'turn_undo')) === 'nothing_to_undo',
+    '/undo goes one step back: the turn before is not offered',
+  )
+
+  model.script(MODEL_TURNS.undoMark(3))
+  const chatsBeforeNext = model.chats().length
+  await owner.mutate('task.message', {
+    taskId: dialogK.taskId,
+    requestId: uuid7(),
+    text: 'Поменяйте отметку отмены на версию 3.',
+  })
+  await turnReaches(dialogK.taskId, 3, 'awaiting_approval')
+  const planK3 = await planOfTurn(dialogK.taskId, 3)
+  const asked = JSON.stringify(
+    model
+      .chats()
+      .slice(chatsBeforeNext)
+      .map((chat) => chat.body?.messages ?? []),
+  )
+  const candidateK4 = await currentCandidate(dialogK.taskId)
+  rt.check(
+    planK3.replacesTurn === 2 &&
+      planK3.previous?.turn === 1 &&
+      planK3.workspace?.expectedBaseSha === candidateK1.headSha &&
+      planK3.workspace?.expectedBranchSha === candidateK1.headSha &&
+      !asked.includes(TEXT.undoWords) &&
+      asked.includes('версию 3'),
+    'turn 3 replaced the undone turn from the checkpoint of turn 1: the agent never saw the undone words',
+    { replaces: planK3.replacesTurn, previous: planK3.previous?.turn },
+  )
+  rt.check(
+    (await agentHead(dialogK.taskId)) === candidateK4?.headSha,
+    'the next turn published on the branch that went back',
+  )
+  const cancelledK = await owner.mutate('task.cancel', {
+    taskId: dialogK.taskId,
+    requestId: uuid7(),
+  })
+  rt.check(cancelledK.state === 'cancelled', 'dialog K is cancelled by /cancel')
+
+  // The first turn found no branch: nothing is left to release, and the chat stays open.
+  const dialogL = { taskId: uuid7() }
+  model.script(MODEL_TURNS.undoMark(1))
+  await owner.mutate('task.create', {
+    siteId,
+    taskId: dialogL.taskId,
+    text: 'Добавьте отметку отмены в стили темы.',
+  })
+  await taskReaches(dialogL.taskId, 'awaiting_approval')
+  await previewReady(dialogL.taskId, 1)
+  await undoLast(dialogL.taskId)
+  const rowL = await rewoundRow(dialogL.taskId)
+  const taskL = await db.task.findUniqueOrThrow({ where: { id: dialogL.taskId } })
+  rt.check(
+    taskL.status === 'awaiting_user' &&
+      rowL.payload.files === true &&
+      (await agentHead(dialogL.taskId)) === null &&
+      (await db.taskCandidate.count({
+        where: { taskId: dialogL.taskId, status: { in: ['current', 'stale'] } },
+      })) === 0,
+    '/undo of the first turn deletes the task branch and leaves nothing to release; the chat stays open, not done',
+    { status: taskL.status, row: rowL.payload },
+  )
+  await previewReady(dialogL.taskId, 0)
+  const visitL = await previewVisit(dialogL.taskId, [styleUrl])
+  rt.check(
+    !visitL.pages[styleUrl].text.includes(TEXT.undoMark(1)),
+    'the preview shows the site as it is',
+  )
+  // A turn that changes nothing still publishes a commit: its undo says no word of files (К19).
+  model.script(MODEL_TURNS.undoNothing())
+  await owner.mutate('task.message', {
+    taskId: dialogL.taskId,
+    requestId: uuid7(),
+    text: 'Посмотрите, всё ли в порядке.',
+  })
+  await turnReaches(dialogL.taskId, 2, 'awaiting_user')
+  const planL2 = await planOfTurn(dialogL.taskId, 2)
+  rt.check(
+    planL2.replacesTurn === 1 &&
+      planL2.workspace?.expectedBranchSha === null &&
+      planL2.previous === undefined,
+    'the next turn replaces the first one as a new session, leased on no branch',
+    { replaces: planL2.replacesTurn, pin: planL2.workspace?.expectedBranchSha },
+  )
+  await undoLast(dialogL.taskId)
+  const rowL2 = await rewoundRow(dialogL.taskId, 2)
+  rt.check(
+    rowL2.payload.files === false && (await agentHead(dialogL.taskId)) === null,
+    'the undo of a turn that changed no file says nothing of files',
+    rowL2.payload,
+  )
+  const cancelledL = await owner.mutate('task.cancel', {
+    taskId: dialogL.taskId,
+    requestId: uuid7(),
+  })
+  rt.check(cancelledL.state === 'cancelled', 'dialog L is cancelled by /cancel')
+
+  // The records of a turn leave with it, those of the turn before stay. Dialog M.
+  const dialogM = { taskId: uuid7() }
+  const gateM = {}
+  model.script(
+    MODEL_TURNS.undoContent({ version: 1, route: `/wp/v2/pages/${content.contactsId}` }),
+    {
+      gates: {
+        0: async () => {
+          try {
+            await previewReady(dialogM.taskId, 0, 6 * MINUTE)
+          } catch (error) {
+            gateM.error = error
+          }
+        },
+      },
+    },
+  )
+  await owner.mutate('task.create', {
+    siteId,
+    taskId: dialogM.taskId,
+    text: 'Добавьте отметку отмены и поменяйте заголовок страницы.',
+  })
+  await taskReaches(dialogM.taskId, 'awaiting_approval')
+  if (gateM.error) throw gateM.error
+  await previewReady(dialogM.taskId, 1)
+  model.script(MODEL_TURNS.undoContent({ version: 2, route: `/wp/v2/posts/${content.postId}` }))
+  await owner.mutate('task.message', {
+    taskId: dialogM.taskId,
+    requestId: uuid7(),
+    text: 'Поменяйте отметку на версию 2 и заголовок новости.',
+  })
+  await turnReaches(dialogM.taskId, 2, 'awaiting_approval')
+  await previewReady(dialogM.taskId, 2)
+  const candidateM2 = await currentCandidate(dialogM.taskId)
+  const visitM2 = await previewVisit(dialogM.taskId, [contactsPath, postPath])
+  rt.check(
+    candidateM2?.dbPlan.length === 2 &&
+      visitM2.pages[contactsPath].text.includes(TEXT.undoTitle(1)) &&
+      visitM2.pages[postPath].text.includes(TEXT.undoTitle(2)),
+    'dialog M waits with the records of both turns, in its plan and in its preview',
+    candidateM2?.dbPlan.map((operation) => operation.objectRef),
+  )
+  await undoLast(dialogM.taskId)
+  await rewoundRow(dialogM.taskId)
+  const candidateM3 = await currentCandidate(dialogM.taskId)
+  const operationsM = await db.previewDbOperation.findMany({
+    where: { taskId: dialogM.taskId },
+    orderBy: { turnNo: 'asc' },
+  })
+  rt.check(
+    candidateM3?.revision === 3 &&
+      candidateM3.dbPlan.length === 1 &&
+      candidateM3.dbPlan[0].objectRef === `page:${content.contactsId}` &&
+      operationsM.map((row) => [row.turnNo, row.excluded]).join() === '1,false,2,true',
+    '/undo takes the record of turn 2 out of the plan and leaves the record of turn 1 in it',
+    operationsM.map((row) => [row.turnNo, row.objectRef, row.excluded]),
+  )
+  await previewReady(dialogM.taskId, 3)
+  const visitM3 = await previewVisit(dialogM.taskId, [contactsPath, postPath, styleUrl])
+  rt.check(
+    visitM3.pages[contactsPath].text.includes(TEXT.undoTitle(1)) &&
+      !visitM3.pages[postPath].text.includes(TEXT.undoTitle(2)) &&
+      visitM3.pages[styleUrl].text.includes(TEXT.undoMark(1)),
+    'the preview is back on the title of turn 1 and without the title of turn 2, its file too',
+  )
+
+  // A branch nobody may move has moved: `/undo` says so, and the chat stands as it did.
+  model.script(MODEL_TURNS.undoMark(3))
+  await owner.mutate('task.message', {
+    taskId: dialogM.taskId,
+    requestId: uuid7(),
+    text: 'Поменяйте отметку на версию 3.',
+  })
+  await turnReaches(dialogM.taskId, 3, 'awaiting_approval')
+  const candidateM4 = await currentCandidate(dialogM.taskId)
+  const moved = await api('POST', '/contents/raditi-undo-race.txt', {
+    body: {
+      branch: `agent/${dialogM.taskId}`,
+      content: Buffer.from('a commit of somebody else\n').toString('base64'),
+      message: 'fixture: a commit nobody of the platform wrote',
+    },
+  })
+  const movedHead = await agentHead(dialogM.taskId)
+  rt.check(
+    moved.status === 201 && movedHead !== candidateM4.headSha,
+    'somebody else moved the task branch of dialog M',
+    { status: moved.status },
+  )
+  const refusedM = await undoLast(dialogM.taskId)
+  const failedM = await rt.until(
+    `the failed undo of ${dialogM.taskId} written by core`,
+    () =>
+      db.taskEvent.findFirst({
+        where: {
+          taskId: dialogM.taskId,
+          type: 'feed.update',
+          payload: { path: ['outcome'], equals: 'rewind_failed' },
+        },
+      }),
+    { timeoutMs: 3 * MINUTE, intervalMs: 500, service: stand.processes.core },
+  )
+  const turnM3 = await db.taskTurn.findUnique({
+    where: { taskId_turnNo: { taskId: dialogM.taskId, turnNo: 3 } },
+  })
+  const candidateM5 = await currentCandidate(dialogM.taskId)
+  const statusM = (await db.task.findUniqueOrThrow({ where: { id: dialogM.taskId } })).status
+  rt.check(
+    failedM !== null &&
+      refusedM.words === 'Поменяйте отметку на версию 3.' &&
+      turnM3?.undoneAt === null &&
+      candidateM5?.id === candidateM4.id &&
+      statusM === 'awaiting_approval' &&
+      (await agentHead(dialogM.taskId)) === movedHead,
+    '/undo of a branch that moved says «Запрос не отменён»: the turn, the candidate and the branch stand',
+    { status: statusM, row: failedM?.payload },
+  )
+  rt.check(
+    (await refusalOf(dialogM.taskId, 'release')) !== 'turn_rewinding',
+    'the answer lets the chat go: the commands are its own again',
+  )
+  const wordsM = await owner.mutate('task.message', {
+    taskId: dialogM.taskId,
+    requestId: uuid7(),
+    text: 'Тогда посмотрите, что на ветке.',
+  })
+  rt.check(wordsM.repeated === false, 'the chat takes the next words')
+  await taskReaches(dialogM.taskId, ['awaiting_approval', 'awaiting_user'], {
+    what: 'the pass after the failed undo of dialog M',
+  })
+  const cancelledM = await owner.mutate('task.cancel', {
+    taskId: dialogM.taskId,
+    requestId: uuid7(),
+  })
+  rt.check(cancelledM.state === 'cancelled', 'dialog M is cancelled by /cancel')
+  rt.end()
+
   // ── S7 ───────────────────────────────────────────────────────────────────────
   rt.begin('S7', 'tags that deploy nothing; the waiting turn; what core leaves')
   const zero = await runsOf('v0.0.0')
@@ -2173,7 +2529,7 @@ export async function runScenarios(stand) {
   const sessions = await db.browserSession.count()
   rt.check(
     inBrowser === 0 && sessions === 0,
-    'S1–S10 opened no browser: no chat needs one, not one browser session was written',
+    'S1–S11 opened no browser: no chat needs one, not one browser session was written',
     { inBrowser, sessions },
   )
   rt.end()

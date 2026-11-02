@@ -2,6 +2,7 @@ import {
   AGENT_TURN_CANCEL_JOB,
   AGENT_TURN_JOB,
   CANDIDATE_REBASE_JOB,
+  CANDIDATE_REWIND_JOB,
   MAX_SANDBOX_TURN_MS,
   TURN_PUBLICATION_GRACE_MS,
 } from '@repo/domain'
@@ -16,20 +17,23 @@ const job = (name: string, data: unknown) => ({ name, data }) as Job
 function processor() {
   const passes = { run: vi.fn(async () => {}), cancel: vi.fn(async () => {}) }
   const rebase = { run: vi.fn(async () => 'rebased' as const) }
-  return { passes, rebase, processor: new TurnsProcessor(passes, rebase) }
+  const rewind = { run: vi.fn(async () => 'rewound' as const) }
+  return { passes, rebase, rewind, processor: new TurnsProcessor(passes, rebase, rewind) }
 }
 
 describe('TurnsProcessor', () => {
-  it('runs a pass, a cancel and an update by the name of the job', async () => {
-    const { passes, rebase, processor: worker } = processor()
+  it('runs a pass, a cancel, an update and an undo by the name of the job', async () => {
+    const { passes, rebase, rewind, processor: worker } = processor()
 
     await worker.process(job(AGENT_TURN_JOB, { taskId: TASK, attempt: 1, requestEventId: '7' }))
     await worker.process(job(AGENT_TURN_CANCEL_JOB, { taskId: TASK, requestEventId: '8' }))
     await worker.process(job(CANDIDATE_REBASE_JOB, { taskId: TASK, requestEventId: '9' }))
+    await worker.process(job(CANDIDATE_REWIND_JOB, { taskId: TASK, requestEventId: '10' }))
 
     expect(passes.run).toHaveBeenCalledWith({ taskId: TASK, attempt: 1, requestEventId: '7' })
     expect(passes.cancel).toHaveBeenCalledWith({ taskId: TASK, requestEventId: '8' })
     expect(rebase.run).toHaveBeenCalledWith({ taskId: TASK, requestEventId: '9' })
+    expect(rewind.run).toHaveBeenCalledWith({ taskId: TASK, requestEventId: '10' })
   })
 
   it('never retries a payload that fails its schema or a job it does not know', async () => {

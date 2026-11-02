@@ -4,10 +4,14 @@ import {
   agentTurnCancelDedupeKey,
   agentTurnCancelJobSchema,
   CANDIDATE_REBASE_JOB,
+  CANDIDATE_REWIND_JOB,
   candidateRebaseDedupeKey,
   candidateRebaseJobSchema,
+  candidateRewindDedupeKey,
+  candidateRewindJobSchema,
   type AgentTurnCancelJob,
   type CandidateRebaseJob,
+  type CandidateRewindJob,
 } from '@repo/domain'
 
 import { enqueueOutbox, type OutboxWriter } from './outbox.ts'
@@ -47,5 +51,20 @@ export async function enqueueCandidateRebase(
     type: CANDIDATE_REBASE_JOB,
     payload,
     dedupeKey: candidateRebaseDedupeKey(payload),
+  })
+}
+
+/** `/undo` in a chat with the repository: core takes the branch and the candidate a turn back. */
+export async function enqueueCandidateRewind(
+  tx: OutboxWriter,
+  job: CandidateRewindJob,
+): Promise<boolean> {
+  const parsed = candidateRewindJobSchema.parse(job)
+  const payload: CandidateRewindJob = { ...parsed, taskId: lower(parsed.taskId) }
+  return enqueueOutbox(tx, {
+    topic: AGENT_TURN_QUEUE,
+    type: CANDIDATE_REWIND_JOB,
+    payload,
+    dedupeKey: candidateRewindDedupeKey(payload),
   })
 }

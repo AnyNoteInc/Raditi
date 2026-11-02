@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from 'node:util'
 
 import {
   badRequest,
+  branchBeforeTurn,
   conflict,
   leaseScopeOf,
   requirementsOf,
@@ -311,9 +312,10 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
  * Where the platform last left `agent/<taskId>` (docs/plan/53-chat-preview-release.md, R3), the
  * rule the planner's facts follow too. `written` — the head of the last completed turn or, when
  * «Обновить» moved the standing candidate after it, the candidate's head; null before the first
- * publication. `movedAfterLastTurn` — the candidate's head when «Обновить» moved it after the
- * turn before this one (it records the candidate under the task's turn number, with a head that
- * turn did not write); null otherwise.
+ * publication. A turn the client undid no longer counts (docs/plan/61-chats-first.md, §5.14): while
+ * it is the latest one the branch stands where its plan found it. `movedAfterLastTurn` — the
+ * candidate's head when «Обновить» moved it after the turn before this one (it records the
+ * candidate under the task's turn number, with a head that turn did not write); null otherwise.
  */
 async function taskBranch(
   tx: Tx,
@@ -321,12 +323,20 @@ async function taskBranch(
   prior: { turnNo: number; headSha: string | null },
 ): Promise<{ written: string | null; movedAfterLastTurn: string | null }> {
   const published = await tx.taskTurn.findFirst({
-    where: { taskId, status: 'completed' },
+    where: { taskId, status: 'completed', undoneAt: null },
     orderBy: { turnNo: 'desc' },
     select: { turnNo: true, headSha: true },
   })
   if (published && !published.headSha)
     throw conflict('Completed product turn has no publication evidence')
+  const undone = await tx.taskTurn.findFirst({
+    where: { taskId, undoneAt: { not: null }, turnNo: { gt: published?.turnNo ?? 0 } },
+    orderBy: { turnNo: 'desc' },
+    select: { turnNo: true },
+  })
+  const last = undone
+    ? await undoneTurnBranch(tx, taskId, undone.turnNo)
+    : { turnNo: published?.turnNo ?? 0, head: published?.headSha ?? null }
   // The latest revision whatever its status: an «Обновить» that left nothing to release while a
   // pass was queued records the head it pushed as a revision superseded at once (plan 53, R3).
   const standing = await tx.taskCandidate.findFirst({
@@ -345,12 +355,23 @@ async function taskBranch(
         )?.headSha ?? null)
     : null
   const moved = standing && standing.headSha !== own ? standing : null
-  const written =
-    moved && moved.turnNo >= (published?.turnNo ?? 0) ? moved.headSha : (published?.headSha ?? null)
   return {
-    written,
+    written: moved && moved.turnNo >= last.turnNo ? moved.headSha : last.head,
     movedAfterLastTurn: moved && moved.turnNo === prior.turnNo ? moved.headSha : null,
   }
+}
+
+/** Where `/undo` of a turn left the task branch: where the plan of that turn found it. */
+async function undoneTurnBranch(
+  tx: Tx,
+  taskId: string,
+  turnNo: number,
+): Promise<{ turnNo: number; head: string | null }> {
+  const assignments = await tx.turnAssignment.findMany({ where: { taskId, turnNo } })
+  const saved = turnPlanSchema.safeParse(assignments[0]?.plan)
+  if (assignments.length !== 1 || !saved.success)
+    throw conflict('The undone turn can no longer be restored')
+  return { turnNo, head: branchBeforeTurn(saved.data) }
 }
 
 /** A client's cancel and the turn's deadline are their own TaskTurn statuses, not failures. */

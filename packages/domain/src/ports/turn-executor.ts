@@ -581,6 +581,19 @@ export const turnPlanSchema = z
   })
 export type TurnPlan = z.infer<typeof turnPlanSchema>
 
+/**
+ * Where `agent/<taskId>` stood when a turn started, as its plan pinned it: what `/undo` of that turn
+ * takes the branch back to (docs/plan/61-chats-first.md, §5.14). A replacement names it; a later
+ * turn started on it; the first one found no branch: null. Not always the commit the turn worked
+ * from: a turn the platform refused published past that one, and the replacement left it there.
+ */
+export function branchBeforeTurn(plan: Pick<TurnPlan, 'context' | 'workspace'>): string | null {
+  const { workspace, context } = plan
+  if (!workspace) return null
+  if (workspace.expectedBranchSha !== undefined) return workspace.expectedBranchSha
+  return context.turn > 1 ? workspace.expectedBaseSha : null
+}
+
 /** The request without the LLM key and MCP token; refuses anything the plan cannot hold. */
 export function toTurnPlan(
   request: TurnRequest | UnkeyedTurnRequest,

@@ -271,6 +271,8 @@ export const chatCommandRefusals = [
   'no_candidate',
   /** The agent is at work. */
   'busy',
+  /** `/undo` is under way: the branch, the candidate and the preview are moving. */
+  'turn_rewinding',
   'release_in_progress',
   /** The site changed since the dialog started: «Обновить» first. */
   'needs_update',
@@ -331,6 +333,7 @@ export const chatCommandRefusalText: Readonly<Record<ChatCommandRefusal, string>
   not_allowed: 'Выпускать и отменять версии могут владелец и администраторы.',
   no_candidate: 'Пока нечего выпускать: изменений ещё нет.',
   busy: 'Подождите: агент ещё работает.',
+  turn_rewinding: 'Подождите: последний запрос ещё отменяется.',
   release_in_progress: 'Версия уже выпускается.',
   needs_update: 'Сайт изменился после начала чата. Сначала обновите рабочую копию.',
   checks_failed: 'Проверки изменений не прошли.',
@@ -408,6 +411,11 @@ export interface ChatCommandFacts {
    * (docs/plan/61-chats-first.md, §5.14).
    */
   turnUndo: TurnUndoRefusal | null
+  /**
+   * core is taking a turn of this chat back (`candidate.rewind`, a chat with the repository): the
+   * branch, the candidate and the preview are moving, and nothing else starts until they stand.
+   */
+  turnRewinding: boolean
 }
 
 /** The refusals of `/undo` the facts of its turn decide. */
@@ -471,6 +479,7 @@ function refusalOf(id: OfferedCommandId, facts: ChatCommandFacts): ChatCommandRe
   if (terminalTaskStatuses.includes(status))
     return id === 'preview' && preview ? previewRefusal(preview.status, 'ended') : 'finished'
   if (facts.cancelPending && id !== 'cancel') return 'finished'
+  if (facts.turnRewinding && id !== 'cancel' && id !== 'preview') return 'turn_rewinding'
   switch (id) {
     case 'release':
       if (facts.role === 'member') return 'not_allowed'

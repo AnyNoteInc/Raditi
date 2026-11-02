@@ -209,4 +209,56 @@ export async function verifyWorkingSet(context) {
     [['wp-content/uploads/raditi/new.png', true]],
   )
   passed('«Обновить»: the candidate moves onto the new main as one bot commit, by compare-and-swap')
+
+  stage('working set: `/undo` takes the task branch back')
+  // docs/plan/61-chats-first.md, §5.14: where the turn found the branch, by compare-and-swap.
+  const back = { repo, branch, from: rebased.headSha, to: candidate.headSha }
+  await assert.rejects(
+    service.rewindBranch({ ...back, from: candidate.headSha, to: toBase }, async () => {}),
+    (error) => error.code === 'CONFLICT',
+    'A rewind moved a branch that stands elsewhere',
+  )
+  assert.equal(await serverHead(branch), rebased.headSha, 'A refused rewind moved the branch')
+  await assert.rejects(service.rewindBranch(back), (error) => error.code === 'BAD_REQUEST')
+  fenced = 0
+  await service.rewindBranch(back, async () => void fenced++)
+  assert.equal(fenced, 1, 'The fence was not asserted before the rewind')
+  assert.equal(await serverHead(branch), candidate.headSha, 'The task branch did not go back')
+  await service.rewindBranch(back, async () => void fenced++)
+  assert.equal(fenced, 1, 'A repeated rewind pushed again')
+  // The branch moves after the read, under the fence: only the lease of the push can refuse this.
+  const racing = join(directory, 'working-set-rewind-race')
+  await git(directory, ['clone', '--quiet', '--branch', branch, remote, racing], {
+    grant: await real.issueCredentials(repo, 'read', 30),
+  })
+  await git(racing, [
+    'commit',
+    '--quiet',
+    '--allow-empty',
+    '-m',
+    'fixture: a push of somebody else',
+  ])
+  const raced = await head(racing)
+  await assert.rejects(
+    service.rewindBranch({ repo, branch, from: candidate.headSha, to: null }, async () => {
+      await git(racing, ['push', '--quiet', remote, `HEAD:refs/heads/${branch}`], {
+        grant: await real.issueCredentials(repo, 'write', 30),
+      })
+    }),
+    'A rewind pushed over a branch that moved after it was read',
+  )
+  assert.equal(await serverHead(branch), raced, 'A lost lease moved the branch')
+  await service.rewindBranch(
+    { repo, branch, from: raced, to: candidate.headSha },
+    async () => void fenced++,
+  )
+  assert.equal(await serverHead(branch), candidate.headSha)
+  fenced = 1
+  // The first turn of a task found no branch: its undo deletes it.
+  const gone = { repo, branch, from: candidate.headSha, to: null }
+  await service.rewindBranch(gone, async () => void fenced++)
+  assert.equal(await service.readBranchHead({ repo, branch }), null, 'The branch was not deleted')
+  await service.rewindBranch(gone, async () => void fenced++)
+  assert.equal(fenced, 2, 'A repeated delete pushed again')
+  passed('`/undo`: the task branch goes back by compare-and-swap, and away after a first turn')
 }

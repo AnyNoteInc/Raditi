@@ -174,6 +174,16 @@ export type CandidateRebase =
    * change a path the candidate never did. Nothing was written.
    */
   | { status: 'conflict'; paths: string[] }
+/** Who takes a task branch back (docs/plan/61-chats-first.md, §5.14: `/undo`). */
+export interface BranchRewindInput {
+  repo: RepoRef
+  /** `agent/<taskId>`. */
+  branch: string
+  /** Where the branch stands: the head of the turn taken back. */
+  from: string
+  /** Where it goes; null — the turn found no branch, and it is deleted. */
+  to: string | null
+}
 /** What a candidate of a dialog needs to know about its commits (plan 53, R3: CandidateGit). */
 export interface CommitComparisonInput {
   repo: RepoRef
@@ -246,6 +256,15 @@ const botIdentity = (at: string): NodeJS.ProcessEnv => {
   }
 }
 const instantSchema = z.iso.datetime().refine((value) => Number.isFinite(Date.parse(value)))
+const rewindSchema = z
+  .object({
+    repo: publicationSourceSchema.shape.repo,
+    branch: publicationSourceSchema.shape.branch,
+    from: publicationShaSchema,
+    to: publicationShaSchema.nullable(),
+  })
+  .strict()
+
 const rebaseSchema = z
   .object({
     repo: publicationSourceSchema.shape.repo,
@@ -713,6 +732,52 @@ export class GitWorkspaceService implements TurnWorkspace {
           auth,
         )
       return { status: 'rebased', headSha, treeSha: tree }
+    } catch (error) {
+      if (isDomainError(error)) throw error
+      throw failed()
+    } finally {
+      await this.dispose(workspace)
+    }
+  }
+
+  /**
+   * `/undo` of a turn (docs/plan/61-chats-first.md, §5.14): the task branch goes back to where the
+   * turn found it, or is deleted when the turn found none, by CAS — the branch must still be at
+   * `from` (or already at `to`, which makes a retry a no-op). Nothing else is written, and the commit
+   * it leaves stays in the mirror. `assertFence` — the site lease of the undo — runs right before
+   * the push and is required, as for publish().
+   */
+  async rewindBranch(
+    input: BranchRewindInput,
+    // Optional in the type only for the port of the dialogs (CandidateGit); refused when absent.
+    assertFence?: () => Promise<void>,
+  ): Promise<void> {
+    if (typeof assertFence !== 'function') throw badRequest('A rewind fence is required')
+    const parsed = rewindSchema.safeParse(input)
+    if (!parsed.success || parsed.data.repo.provider !== this.provider.kind)
+      throw badRequest('Invalid branch rewind')
+    const { repo, branch, from, to } = parsed.data
+    const workspace = await this.workspace(repo, to === null ? [from] : [from, to])
+    try {
+      const auth = await this.auth(repo, 'write')
+      const ref = `refs/heads/${branch}`
+      const remote = await this.remoteHead(workspace, ref, auth)
+      if (remote === (to ?? '')) return
+      if (remote !== from) throw conflict('Task branch changed before the rewind')
+      await assertFence()
+      await this.git(
+        workspace,
+        [
+          'push',
+          '--porcelain',
+          `--force-with-lease=${ref}:${from}`,
+          workspace.url,
+          `${to ?? ''}:${ref}`,
+        ],
+        undefined,
+        16 * 1024,
+        auth,
+      )
     } catch (error) {
       if (isDomainError(error)) throw error
       throw failed()

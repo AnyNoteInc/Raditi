@@ -30,6 +30,7 @@ const waiting: ChatCommandFacts = {
   browserWrote: false,
   projectClosed: false,
   turnUndo: 'nothing_to_undo',
+  turnRewinding: false,
 }
 const verdict = (facts: ChatCommandFacts) =>
   Object.fromEntries(chatCommandAvailability(facts).map((item) => [item.id, item.refusal]))
@@ -301,6 +302,21 @@ describe('the commands of a dialog', () => {
     for (const taskStatus of ['deploying', 'verifying'] as const)
       expect(verdict({ ...open, taskStatus }).turn_undo).toBe('release_in_progress')
     expect(verdict({ ...open, releaseInProgress: true }).turn_undo).toBe('release_in_progress')
+    // core is taking a turn back: only the preview and «Отменить чат» stay.
+    const rewinding = verdict({ ...open, preview: { status: 'ready' }, turnRewinding: true })
+    expect(rewinding).toMatchObject({
+      release: 'turn_rewinding',
+      update: 'turn_rewinding',
+      reset: 'turn_rewinding',
+      init: 'turn_rewinding',
+      turn_undo: 'turn_rewinding',
+      preview: null,
+      cancel: null,
+    })
+    // The agent is not at work then: the words say what is under way.
+    expect(chatCommandRefusalText.turn_rewinding).toBe(
+      'Подождите: последний запрос ещё отменяется.',
+    )
   })
 
   it('closes `/redo` until its slice, a project that is closed before `/undo` and `/redo`', () => {

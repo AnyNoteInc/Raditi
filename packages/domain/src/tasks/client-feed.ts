@@ -629,12 +629,21 @@ export type FeedReleasePayload = z.infer<typeof feedReleasePayloadSchema>
  * - `conflict` — the change does not carry onto the site as it is now: the same places changed;
  * - `current` — the dialog already stands on the site as it is now;
  * - `withdrawn` — the client wrote to the dialog before the update was made: it was not made;
- * - `failed` — the update could not be made.
+ * - `failed` — the update could not be made;
+ * - `rewind_failed` — `/undo` could not take the turn back: the chat stands as it did
+ *   (docs/plan/61-chats-first.md, §5.14). A taken-back turn is a `feed.rewind`.
  */
-export const feedUpdateOutcomes = ['emptied', 'conflict', 'current', 'withdrawn', 'failed'] as const
+export const feedUpdateOutcomes = [
+  'emptied',
+  'conflict',
+  'current',
+  'withdrawn',
+  'failed',
+  'rewind_failed',
+] as const
 export type FeedUpdateOutcome = (typeof feedUpdateOutcomes)[number]
 
-/** `feed.update` v1 — the answer to an «Обновить» that did not record a new revision. */
+/** `feed.update` v1 — an «Обновить» that did not record a new revision, or an `/undo` that failed. */
 export const feedUpdatePayloadSchema = z.strictObject({
   v: version,
   outcome: z.enum(feedUpdateOutcomes),

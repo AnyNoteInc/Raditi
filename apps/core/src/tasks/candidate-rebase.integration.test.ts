@@ -382,6 +382,27 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
     expect(await rebase.run({ taskId: dialog.taskId, requestEventId: '2' })).toBe('nothing')
   })
 
+  it('reads the candidate anew under the lease: `/undo` may have finished before it', async () => {
+    const dialog = await waiting()
+    const taken = vi.spyOn(leases, 'acquire').mockImplementationOnce(async (input) => {
+      // The candidate the job read goes while it waits for the site.
+      await db.$transaction((tx) => recordCandidate(tx, record(dialog.taskId, 2, BASE, BASE)))
+      taken.mockRestore()
+      return leases.acquire(input)
+    })
+    const { rebase, git, queue } = setup()
+
+    expect(await rebase.run({ taskId: dialog.taskId, requestEventId: '1' })).toBe('busy')
+
+    expect(git.rebaseCandidate).not.toHaveBeenCalled()
+    expect(queue.enqueue).toHaveBeenCalledWith(
+      'agent-turns',
+      'candidate.rebase',
+      { taskId: dialog.taskId, requestEventId: '1' },
+      expect.objectContaining({ delayMs: 30_000 }),
+    )
+  })
+
   it('pushes nothing while this core cannot compare commits', async () => {
     const dialog = await waiting()
     const { rebase, git } = setup({ comparesCommits: false })

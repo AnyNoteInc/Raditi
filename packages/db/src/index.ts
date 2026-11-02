@@ -18,7 +18,11 @@ export {
   enqueueReleaseAdvance,
   enqueueSiteWaitingPasses,
 } from './chat-outbox.ts'
-export { enqueueCandidateRebase, enqueueTurnCancel } from './task-commands-outbox.ts'
+export {
+  enqueueCandidateRebase,
+  enqueueCandidateRewind,
+  enqueueTurnCancel,
+} from './task-commands-outbox.ts'
 export { taskHasProductionWrites } from './task-production-writes.ts'
 export {
   browserClosedSiteStatuses,
@@ -138,6 +142,7 @@ export {
   settledTaskStatuses,
   settleTurn,
   supersedeStandingCandidate,
+  rewindDialog,
   undoTurn,
   waitingTaskStatuses,
   type CandidateRecordInput,

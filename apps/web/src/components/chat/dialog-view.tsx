@@ -87,6 +87,7 @@ import {
   requestShown,
   retryFailure,
   stopRequested,
+  undoFailedAfter,
 } from './feed-model'
 import { showsRefresh, type FeedHeadState } from './feed-state'
 import { CandidateTab, PreviewTab, usePreviewCalls } from './preview-pane'
@@ -402,6 +403,10 @@ export function DialogView({
   const clientCommands = useClientCommands({ projectId: siteId, anchor: field })
   // The words `/undo` gave back, and what the field holds now: a draft is never written over.
   const [undoneWords, setUndoneWords] = useState<string | null>(null)
+  // The press that gave them, and how many times a press that failed took its words away: they
+  // leave the field then, or sending them would ask again over the turn that stayed (§5.14).
+  const [undonePress, setUndonePress] = useState<string | null>(null)
+  const [wordsTaken, setWordsTaken] = useState(0)
   const fieldText = useRef('')
   const fieldTextChanged = useCallback((text: string) => {
     fieldText.current = text
@@ -418,6 +423,11 @@ export function DialogView({
   const resumeAgent = useMutation(trpc.task.resumeAgent.mutationOptions())
   const init = useMutation(trpc.task.init.mutationOptions())
   const undoTurn = useMutation(trpc.task.undoTurn.mutationOptions())
+  if (undoneWords !== null && undonePress !== null && undoFailedAfter(rows, undonePress)) {
+    setUndoneWords(null)
+    setUndonePress(null)
+    setWordsTaken((times) => times + 1)
+  }
   const setEffort = useMutation(trpc.task.setEffort.mutationOptions())
   const busy =
     undoTurn.isPending ||
@@ -775,9 +785,15 @@ export function DialogView({
   async function pressUndoTurn() {
     setFieldError(null)
     try {
-      const { words } = await undoTurn.mutateAsync({ taskId, requestId: pressId('undoTurn') })
+      const { words, requestEventId } = await undoTurn.mutateAsync({
+        taskId,
+        requestId: pressId('undoTurn'),
+      })
       pressed('undoTurn')
-      if (words !== null && fieldText.current.trim() === '') setUndoneWords(words)
+      if (words !== null && fieldText.current.trim() === '') {
+        setUndoneWords(words)
+        setUndonePress(requestEventId)
+      }
     } catch (failure) {
       setFieldError(callErrorText(failure))
     }
@@ -1094,6 +1110,7 @@ export function DialogView({
         attachments={attachments}
         noSecrets={noSecrets}
         restored={undoneWords}
+        restoredTaken={wordsTaken}
         onTextChange={fieldTextChanged}
         {...(working
           ? {

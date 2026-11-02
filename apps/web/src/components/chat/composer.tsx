@@ -166,6 +166,7 @@ export function Composer({
   fieldRef,
   stop,
   restored = null,
+  restoredTaken = 0,
   onTextChange,
 }: {
   label?: string
@@ -204,6 +205,8 @@ export function Composer({
   stop?: { onStop: () => void; available: boolean }
   /** Words kept for this field elsewhere: put into it as they arrive. */
   restored?: string | null
+  /** Grows when the page takes `restored` back: they leave the field while nobody touched them. */
+  restoredTaken?: number
   /** Every change of the words in the field. */
   onTextChange?: (text: string) => void
 }) {
@@ -245,6 +248,12 @@ export function Composer({
   }, [text, field])
 
   const [lastRestored, setLastRestored] = useState(restored)
+  const [lastTaken, setLastTaken] = useState(restoredTaken)
+  if (restoredTaken !== lastTaken) {
+    setLastTaken(restoredTaken)
+    // Words the client changed are the client's own by now, and they stay.
+    if (text === lastRestored) setText('')
+  }
   if (restored !== lastRestored) {
     setLastRestored(restored)
     if (restored) setText(restored)

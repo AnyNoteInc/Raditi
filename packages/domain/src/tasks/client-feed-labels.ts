@@ -705,16 +705,17 @@ export function feedUndoKeptText(kept: number): string | null {
     : null
 }
 
-/** The title of the plate of an «Обновить» that left no new revision (`feed.update`). */
+/** The title of the plate of `feed.update`: an «Обновить» with no new revision, a failed `/undo`. */
 export const feedUpdateTitle: Readonly<Record<FeedUpdateOutcome, string>> = Object.freeze({
   emptied: 'Изменения уже на сайте',
   conflict: 'Рабочую копию не обновили',
   current: 'Рабочая копия уже обновлена',
   withdrawn: 'Рабочую копию не обновили',
   failed: 'Рабочую копию не обновили',
+  rewind_failed: 'Запрос не отменён',
 })
 
-/** What came of the «Обновить»; `conflicts` — files of the dialog the site changed too. */
+/** What came of the command; `conflicts` — files of the dialog the site changed too. */
 export function feedUpdateText(outcome: FeedUpdateOutcome, conflicts: number): string {
   switch (outcome) {
     case 'emptied':
@@ -727,6 +728,8 @@ export function feedUpdateText(outcome: FeedUpdateOutcome, conflicts: number): s
       return 'Вы написали в чат, пока мы обновляли рабочую копию, поэтому её не обновили. Когда агент закончит, попросите обновить её снова.'
     case 'failed':
       return 'Произошёл технический сбой. Попробуйте обновить рабочую копию ещё раз позже.'
+    case 'rewind_failed':
+      return 'Не получилось отменить последний запрос: переписка и файлы остались как были.'
   }
 }
 

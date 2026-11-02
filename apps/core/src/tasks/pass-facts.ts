@@ -7,6 +7,7 @@ import {
   type PrismaClient,
 } from '@repo/db'
 import {
+  branchBeforeTurn,
   egressHostListSchema,
   egressHostsOf,
   envVarReachesAgent,
@@ -234,8 +235,17 @@ export async function readPassFacts(
     ]),
   )
   const published = turnRows
-    .filter((row) => row.status === 'completed' && row.headSha)
+    .filter((row) => row.status === 'completed' && row.headSha && row.undoneAt === null)
     .sort((a, b) => b.turnNo - a.turnNo)[0]
+  // `/undo` left the branch where the turn found it, while no later turn published
+  // (docs/plan/61-chats-first.md, §5.14): the rule of the store of assignments (`taskBranch`).
+  const undone = turnRows
+    .filter((row) => row.undoneAt !== null && row.turnNo > (published?.turnNo ?? 0))
+    .sort((a, b) => b.turnNo - a.turnNo)[0]
+  const undonePlan = undone ? plans.get(undone.turnNo) : undefined
+  const lastWritten = undone
+    ? { turnNo: undone.turnNo, head: undonePlan ? branchBeforeTurn(undonePlan) : null }
+    : { turnNo: published?.turnNo ?? 0, head: published?.headSha ?? null }
   // A candidate whose head is not the head of its turn was moved by «Обновить» (Р27): when
   // no turn completed after it, its head is what the task branch holds.
   const rebased =
@@ -243,9 +253,7 @@ export async function readPassFacts(
       ? candidate
       : null
   const writtenHead =
-    rebased && rebased.turnNo >= (published?.turnNo ?? 0)
-      ? rebased.headSha
-      : (published?.headSha ?? null)
+    rebased && rebased.turnNo >= lastWritten.turnNo ? rebased.headSha : lastWritten.head
 
   const modelClass = modelClassSchema.safeParse(task.modelClass ?? 'standard')
   if (!modelClass.success) return null

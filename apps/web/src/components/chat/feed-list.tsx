@@ -784,6 +784,7 @@ const updateIcon: Readonly<Record<FeedUpdateOutcome, AppIconName>> = {
   current: 'check',
   withdrawn: 'clock',
   failed: 'warning',
+  rewind_failed: 'warning',
 }
 
 /**
@@ -1057,7 +1058,11 @@ function RowView({
           icon={updateIcon[row.outcome]}
           title={feedUpdateTitle[row.outcome]}
           tone={
-            row.outcome === 'conflict' || row.outcome === 'failed' ? 'error.main' : 'text.primary'
+            row.outcome === 'conflict' ||
+            row.outcome === 'failed' ||
+            row.outcome === 'rewind_failed'
+              ? 'error.main'
+              : 'text.primary'
           }
         >
           <Sentences parts={[feedUpdateText(row.outcome, row.conflicts)]} />

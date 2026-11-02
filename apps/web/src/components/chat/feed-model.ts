@@ -236,3 +236,12 @@ export function candidateMessage(
   )
   return (sameTurn ?? found)?.message ?? null
 }
+
+/** `/undo` of the press `pressId` failed: core wrote that the chat stands as it did (§5.14). */
+export function undoFailedAfter(rows: readonly FeedRow[], pressId: string): boolean {
+  const press = BigInt(pressId)
+  return rows.some(
+    (row) =>
+      row.type === 'feed.update' && row.outcome === 'rewind_failed' && BigInt(row.id) > press,
+  )
+}

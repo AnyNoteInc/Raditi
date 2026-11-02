@@ -523,6 +523,97 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
       })
     })
 
+    it('pins the replacement of an undone turn where that turn found the branch', async () => {
+      const f = await fixture()
+      const undoneHead = '9'.repeat(40)
+      await f.close((await store.open(f.input))!, 'completed', headSha)
+      await f.candidate(1, headSha)
+      const second = (await store.open(f.step(2, { base: headSha, previous: 1 })))!
+      await f.close(second, 'completed', undoneHead)
+      await f.candidate(2, undoneHead)
+      await undoTurn(db, { taskId: f.task.id, turnNo: 2 })
+
+      // The undone head is gone from the branch, and a push leased on it would fail.
+      await expect(
+        store.open(f.step(3, { base: headSha, previous: 1, pin: undoneHead })),
+      ).rejects.toMatchObject({ message: 'Replacement does not pin the published task branch' })
+      expect(
+        await store.open(f.step(3, { base: headSha, previous: 1, pin: headSha })),
+      ).not.toBeNull()
+    })
+
+    it('finds no branch after the first turn is undone', async () => {
+      const f = await fixture()
+      await f.close((await store.open(f.input))!, 'completed', headSha)
+      await undoTurn(db, { taskId: f.task.id, turnNo: 1 })
+      await expect(store.open(f.step(2, { base: baseSha, pin: headSha }))).rejects.toMatchObject({
+        message: 'Replacement does not pin the published task branch',
+      })
+      expect(await store.open(f.step(2, { base: baseSha, pin: null }))).not.toBeNull()
+    })
+
+    it('reads the turn after an undone one, not the undone one, once a later turn published', async () => {
+      const f = await fixture()
+      const undoneHead = '9'.repeat(40)
+      const thirdHead = '7'.repeat(40)
+      await f.close((await store.open(f.input))!, 'completed', headSha)
+      await f.close(
+        (await store.open(f.step(2, { base: headSha, previous: 1 })))!,
+        'completed',
+        undoneHead,
+      )
+      await undoTurn(db, { taskId: f.task.id, turnNo: 2 })
+      await f.close(
+        (await store.open(f.step(3, { base: headSha, previous: 1, pin: headSha })))!,
+        'completed',
+        thirdHead,
+      )
+      // Turn 4 failed, and its replacement is pinned where turn 3 left the branch: the undone turn
+      // below the last publication answers no more.
+      await f.close((await store.open(f.step(4, { base: thirdHead, previous: 3 })))!, 'failed')
+      await expect(
+        store.open(f.step(5, { base: thirdHead, previous: 3, pin: headSha })),
+      ).rejects.toMatchObject({ message: 'Replacement does not pin the published task branch' })
+      expect(
+        await store.open(f.step(5, { base: thirdHead, previous: 3, pin: thirdHead })),
+      ).not.toBeNull()
+    })
+
+    it('pins the replacement of a turn that started on «Обновить» on that head', async () => {
+      const f = await fixture()
+      const rebasedHead = 'e'.repeat(40)
+      const undoneHead = '9'.repeat(40)
+      await f.close((await store.open(f.input))!, 'completed', headSha)
+      await f.candidate(1, rebasedHead)
+      await f.close(
+        (await store.open(f.step(2, { base: rebasedHead, rebased: true })))!,
+        'completed',
+        undoneHead,
+      )
+      await f.candidate(2, undoneHead)
+      await undoTurn(db, { taskId: f.task.id, turnNo: 2 })
+      // The revision `/undo` writes: the head of «Обновить», under the turn it stood on.
+      await f.candidate(1, rebasedHead)
+      expect(
+        await store.open(f.step(3, { base: rebasedHead, rebased: true, pin: rebasedHead })),
+      ).not.toBeNull()
+    })
+
+    it('keeps the head an undone turn found: «Обновить» after the undo moves it again', async () => {
+      const f = await fixture()
+      const moved = 'e'.repeat(40)
+      const undoneHead = '9'.repeat(40)
+      await f.close((await store.open(f.input))!, 'completed', headSha)
+      await f.close(
+        (await store.open(f.step(2, { base: headSha, previous: 1 })))!,
+        'completed',
+        undoneHead,
+      )
+      await undoTurn(db, { taskId: f.task.id, turnNo: 2 })
+      await f.candidate(2, moved)
+      expect(await store.open(f.step(3, { base: moved, rebased: true, pin: moved }))).not.toBeNull()
+    })
+
     it('refuses a plan whose requirements differ from its task, without creating a row', async () => {
       const repository = await fixture()
       const withoutRepository: TurnPlan = { ...repository.plan, requirements: BROWSER_ONLY }

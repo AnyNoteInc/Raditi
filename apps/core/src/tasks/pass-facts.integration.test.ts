@@ -13,7 +13,7 @@ import {
   type PrismaClient,
 } from '@repo/db'
 import { BROWSER_ONLY, REPOSITORY_ONLY, siteIdOf, turnSkillsOf } from '@repo/domain'
-import type { AgentDriver } from '@repo/domain'
+import type { AgentDriver, TurnPlan } from '@repo/domain'
 import { llmBackends } from '@repo/llm-backends'
 import { getSiteAdapter } from '@repo/site-adapters'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
@@ -214,6 +214,135 @@ describe.skipIf(!databaseUrl)('the egress of a pass with PostgreSQL', () => {
     expect([read?.turns.get(1)?.rejected, read?.turns.get(2)?.rejected]).toEqual([false, true])
     // The branch holds what the refused turn published: the next push is leased on it.
     expect(read?.writtenHead).toBe('d'.repeat(40))
+  })
+
+  describe('where `/undo` left the branch', () => {
+    const image = `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`
+    const [first, second, third, moved] = ['b', 'd', 'e', 'f'].map((c) => c.repeat(40)) as [
+      string,
+      string,
+      string,
+      string,
+    ]
+
+    /** The saved plan of a turn that found the branch on `base`. */
+    const planOf = (
+      task: { id: string; workspaceId: string; siteId: string | null },
+      turn: number,
+      base: string,
+    ): TurnPlan => ({
+      sandbox: {
+        image,
+        labels: {
+          workspaceId: task.workspaceId,
+          siteId: siteIdOf(task),
+          taskId: task.id,
+          sessionId: task.id,
+          turn,
+        },
+        runtime: 'runc',
+        resources: { cpu: 1, memoryMiB: 256, pids: 64 },
+        user: { uid: 10001, gid: 10001 },
+        env: {},
+        secrets: [],
+        network: { mode: 'none' },
+        hardTimeoutMs: 600_000,
+      },
+      context: {
+        taskId: task.id,
+        sessionId: task.id,
+        turn,
+        llm: { baseUrl: 'http://llm.invalid', model: 'synthetic' },
+        mcp: { url: 'http://mcp.invalid/mcp' },
+        instructions: 'Synthetic',
+      },
+      input: { prompt: 'Synthetic', attachments: [] },
+      driverId: sampleDriverId,
+      driverVersion: '1.0.0',
+      workspace: {
+        repo: { provider: 'gitea', owner: 'sites', name: 'synthetic' },
+        branch: `agent/${task.id}`,
+        expectedBaseSha: base,
+        protectedPaths: [],
+      },
+      committedAt: '2026-10-01T00:00:00.000Z',
+    })
+    const turnOf = async (
+      task: { id: string; workspaceId: string; siteId: string | null },
+      turnNo: number,
+      turn: { headSha?: string; base: string; undone?: boolean; status?: 'completed' | 'failed' },
+    ) => {
+      await db.taskTurn.create({
+        data: {
+          taskId: task.id,
+          turnNo,
+          status: turn.status ?? 'completed',
+          driverId: sampleDriverId,
+          image,
+          headSha: turn.headSha ?? null,
+          undoneAt: turn.undone ? new Date() : null,
+        },
+      })
+      await db.turnAssignment.create({
+        data: {
+          taskId: task.id,
+          siteId: siteIdOf(task),
+          sessionId: task.id,
+          turnNo,
+          executor: 'local',
+          plan: planOf(task, turnNo, turn.base),
+          firstEpoch: 1,
+          leaseEpoch: 1,
+          deadlineAt: new Date(Date.now() + 60_000),
+          outcome: turn.status ?? 'completed',
+          finishedAt: new Date(),
+        },
+      })
+    }
+
+    it('finds it where the undone turn found it, not on the head of that turn', async () => {
+      const { task, facts } = await dialog()
+      await turnOf(task, 1, { headSha: first, base: 'a'.repeat(40) })
+      await turnOf(task, 2, { headSha: second, base: first, undone: true })
+      expect((await facts())?.writtenHead).toBe(first)
+    })
+
+    it('finds none after the first turn: its undo left no branch', async () => {
+      const { task, facts } = await dialog()
+      await turnOf(task, 1, { headSha: first, base: 'a'.repeat(40), undone: true })
+      expect((await facts())?.writtenHead).toBeNull()
+    })
+
+    it('reads a turn that published after the undone one, past a failed turn too', async () => {
+      const { task, facts } = await dialog()
+      await turnOf(task, 1, { headSha: first, base: 'a'.repeat(40) })
+      await turnOf(task, 2, { headSha: second, base: first, undone: true })
+      await turnOf(task, 3, { headSha: third, base: first })
+      await turnOf(task, 4, { base: third, status: 'failed' })
+      expect((await facts())?.writtenHead).toBe(third)
+    })
+
+    it('finds it on the head of an «Обновить» that came after the undo', async () => {
+      const { task, facts } = await dialog()
+      await turnOf(task, 1, { headSha: first, base: 'a'.repeat(40) })
+      await turnOf(task, 2, { headSha: second, base: first, undone: true })
+      await db.task.update({ where: { id: task.id }, data: { turnNo: 2 } })
+      await db.taskCandidate.create({
+        data: {
+          taskId: task.id,
+          revision: 1,
+          turnNo: 2,
+          baseSha: 'a'.repeat(40),
+          baseTree: 'c'.repeat(40),
+          headSha: moved,
+          dbPlanSha256: '0'.repeat(64),
+          proposedBump: 'minor',
+          proposedVersion: 'v0.1.0',
+          facts: {},
+        },
+      })
+      expect((await facts())?.writtenHead).toBe(moved)
+    })
   })
 
   it('reads which turn the client took back by `/undo`: a thing apart from a refusal', async () => {

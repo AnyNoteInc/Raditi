@@ -66,6 +66,7 @@ function setup(
   const git = {
     readBranchHead: vi.fn(),
     rebaseCandidate: vi.fn(),
+    rewindBranch: vi.fn(),
     treeOf,
     comparesCommits: true,
     compareCommits,
@@ -104,7 +105,7 @@ function setup(
     () => ({ dbSettings: () => [] }) as unknown as SiteAdapter,
     values,
   )
-  return { builder, compareCommits, treeOf, put, values }
+  return { builder, db, compareCommits, treeOf, put, values }
 }
 
 const context = (patch: Partial<CandidateContext> = {}): CandidateContext => ({
@@ -377,6 +378,16 @@ describe('CandidateBuilder', () => {
     expect(treeOf).not.toHaveBeenCalledWith(expect.objectContaining({ sha: 'f'.repeat(40) }))
   })
 
+  it('leaves the writes of the turn `/undo` is taking back out of the plan', async () => {
+    const { builder, db } = setup({}, [])
+    await builder.dbPlan(TASK, 2)
+    expect(vi.mocked(db.previewDbOperation.findMany)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { taskId: TASK, excluded: false, turnNo: { not: 2 } },
+      }),
+    )
+  })
+
   it('leaves the excluded writes of failed turns out of the plan', async () => {
     const { builder } = setup({}, [op(1, { excluded: true })])
     expect((await builder.dbPlan(TASK)).plan).toEqual([])
@@ -386,7 +397,12 @@ describe('CandidateBuilder', () => {
 describe('candidateGitOf', () => {
   it('tells trees without the comparison and refuses the comparison it does not have', async () => {
     const treeOf = vi.fn(async () => BASE_TREE)
-    const git = candidateGitOf({ readBranchHead: vi.fn(), rebaseCandidate: vi.fn(), treeOf })
+    const git = candidateGitOf({
+      readBranchHead: vi.fn(),
+      rebaseCandidate: vi.fn(),
+      rewindBranch: vi.fn(),
+      treeOf,
+    })
     expect(git.comparesCommits).toBe(false)
     expect(await git.treeOf({ repo, sha: BASE })).toBe(BASE_TREE)
     const refused = await git
@@ -401,6 +417,7 @@ describe('candidateGitOf', () => {
     const git = candidateGitOf({
       readBranchHead: vi.fn(),
       rebaseCandidate: vi.fn(),
+      rewindBranch: vi.fn(),
       treeOf: vi.fn(),
       compareCommits,
     })
@@ -427,8 +444,15 @@ describe('candidateGitOf and the row of a repository', () => {
       status: 'conflict' as const,
       paths: [],
     }))
+    const rewindBranch = vi.fn(async (_input: { repo: object }) => {})
     const compareCommits = vi.fn(async (_input: { repo: object }) => comparison())
-    const git = candidateGitOf({ readBranchHead, treeOf, rebaseCandidate, compareCommits })
+    const git = candidateGitOf({
+      readBranchHead,
+      treeOf,
+      rebaseCandidate,
+      rewindBranch,
+      compareCommits,
+    })
     await git.readBranchHead({ repo: row, branch: 'main' })
     await git.treeOf({ repo: row, sha: HEAD })
     await git.compareCommits({ repo: row, baseSha: BASE, headSha: HEAD, addOnlyPaths: [] })
@@ -443,7 +467,11 @@ describe('candidateGitOf and the row of a repository', () => {
       },
       async () => {},
     )
-    for (const call of [readBranchHead, treeOf, compareCommits, rebaseCandidate])
+    await git.rewindBranch(
+      { repo: row, branch: `agent/${TASK}`, from: HEAD, to: BASE },
+      async () => {},
+    )
+    for (const call of [readBranchHead, treeOf, compareCommits, rebaseCandidate, rewindBranch])
       expect(call.mock.calls[0]?.[0].repo).toStrictEqual(repo)
   })
 })

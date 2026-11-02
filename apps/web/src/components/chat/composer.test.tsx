@@ -44,6 +44,34 @@ const type = (text: string) => fireEvent.change(field(), { target: { value: text
 const press = (key: string, target: HTMLElement = field(), extra = {}) =>
   fireEvent.keyDown(target, { key, ...extra })
 
+describe('words kept for the field', () => {
+  const view = (restored: string | null, restoredTaken: number) => (
+    <Composer
+      placeholder="Что поправить?"
+      onSend={vi.fn(async () => true)}
+      disabledReason={null}
+      restored={restored}
+      restoredTaken={restoredTaken}
+    />
+  )
+
+  it('leave the field when the page takes them back', () => {
+    const { rerender } = render(view(null, 0))
+    rerender(view('Добавьте новость', 0))
+    expect(field().value).toBe('Добавьте новость')
+    rerender(view(null, 1))
+    expect(field().value).toBe('')
+  })
+
+  it('stay when the client changed them: they are the client’s words by then', () => {
+    const { rerender } = render(view(null, 0))
+    rerender(view('Добавьте новость', 0))
+    type('Добавьте новость о скидках')
+    rerender(view(null, 1))
+    expect(field().value).toBe('Добавьте новость о скидках')
+  })
+})
+
 describe('the window of commands', () => {
   it('opens on «/» at the start of the field, with the Russian names, and says how to use it', () => {
     const { onOpen } = showComposer()

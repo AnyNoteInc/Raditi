@@ -329,6 +329,14 @@ test('the scripted turns call tools the CLI declares and end with a result of th
     MODEL_TURNS.retryDone().rounds[0][0].arguments.command,
     new RegExp(`${TEXT.retryMark(1)}/${TEXT.retryMark(2)}`),
   )
+  // S11: `/undo` takes the second mark back; a pass without a change has no step at all.
+  assert.match(
+    MODEL_TURNS.undoMark(2).rounds[0][0].arguments.command,
+    new RegExp(`${TEXT.undoMark(1)}/${TEXT.undoMark(2)}`),
+  )
+  assert.deepEqual(JSON.parse(MODEL_TURNS.undoNothing().text).files_changed, [])
+  const undoContent = MODEL_TURNS.undoContent({ version: 2, route: '/wp/v2/posts/7' })
+  assert.equal(undoContent.rounds[2][0].arguments.body.title, TEXT.undoTitle(2))
   // The large usage of the first turn stays far from the compaction of the CLI.
   assert.deepEqual(MODEL_TURNS.first({ contactsId: 4 }).usage, LARGE_USAGE)
   assert.ok(LARGE_USAGE.prompt + LARGE_USAGE.completion <= 500_000)

@@ -699,6 +699,9 @@ export const TEXT = Object.freeze({
   teamOwner: 'Команда (страница владельца)',
   // «Попробовать ещё» (S10): a line of the style of the theme, one version per pass.
   retryMark: (version) => `Радити: отметка повтора, версия ${version}`,
+  undoMark: (version) => `Радити: отметка отмены, версия ${version}`,
+  undoWords: 'Поменяйте отметку отмены на версию 2.',
+  undoTitle: (version) => `Заголовок отмены, версия ${version}`,
   retryWords: 'Поменяйте отметку в стилях на версию 2.',
   offers: 'Акции',
   siteNameOffers: 'Цветочная лавка «Ромашка» — акции',
@@ -971,6 +974,65 @@ export const MODEL_TURNS = Object.freeze({
       changeType: 'code',
       message: 'Поменяли отметку в стилях на версию 2.',
       files: [STYLE_PATH],
+    }),
+  }),
+  /** S11: a pass that adds or changes the mark `/undo` takes back. */
+  undoMark: (version) => ({
+    scenario: 'tools',
+    rounds: [
+      [
+        bash(
+          version === 1
+            ? `printf '%s\\n' '/* ${TEXT.undoMark(1)} */' >> ${STYLE_PATH}`
+            : `sed -i 's/${TEXT.undoMark(1)}/${TEXT.undoMark(version)}/' ${STYLE_PATH}`,
+          `Mark version ${version}`,
+        ),
+      ],
+    ],
+    text: turnResult({
+      summary: `The undo mark of version ${version}`,
+      changeType: 'code',
+      message: `Отметка отмены теперь версии ${version}.`,
+      files: [STYLE_PATH],
+    }),
+  }),
+  /** S11: the mark and a title in the preview: `/undo` takes the records of a turn back too. */
+  undoContent: ({ version, route }) => ({
+    scenario: 'tools',
+    rounds: [
+      [
+        bash(
+          version === 1
+            ? `printf '%s\\n' '/* ${TEXT.undoMark(1)} */' >> ${STYLE_PATH}`
+            : `sed -i 's/${TEXT.undoMark(1)}/${TEXT.undoMark(version)}/' ${STYLE_PATH}`,
+          `Mark version ${version}`,
+        ),
+      ],
+      [tool('wp_rest', { method: 'GET', route })],
+      [
+        tool('wp_rest', {
+          method: 'POST',
+          route,
+          body: { title: TEXT.undoTitle(version) },
+          idempotencyKey: `release-verify-undo-title-${version}`,
+        }),
+      ],
+    ],
+    text: turnResult({
+      summary: `The undo mark and a title of version ${version}`,
+      changeType: 'mixed',
+      message: `Отметка и заголовок теперь версии ${version}.`,
+      files: [STYLE_PATH],
+    }),
+  }),
+  /** S11: a pass that changes nothing: `/undo` has no word of files for it (К19). */
+  undoNothing: () => ({
+    scenario: 'text',
+    text: turnResult({
+      summary: 'Nothing was changed',
+      changeType: 'none',
+      message: 'Здесь менять нечего.',
+      files: [],
     }),
   }),
   /** S4: a dialog opened before a release, whose candidate the release makes stale. */

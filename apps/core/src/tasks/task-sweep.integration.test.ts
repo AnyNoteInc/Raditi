@@ -30,7 +30,7 @@ import { TaskEventTurnJournal } from '../turns/turn-journal.ts'
 import type { CandidateBuilder } from './candidate-builder.ts'
 import { LivePasses } from './live-passes.ts'
 import { CHARGE_LATER_EVENT, PassSettlement } from './pass-settlement.ts'
-import { ORPHAN_PREPARING_MS, TaskSweep } from './task-sweep.ts'
+import { LOST_REWIND_MS, ORPHAN_PREPARING_MS, TaskSweep } from './task-sweep.ts'
 
 // The sweep reads every task of the database: only on a disposable one (RADITI_GATEWAY_DB_TESTS).
 const databaseUrl = process.env.DATABASE_URL
@@ -577,6 +577,92 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     expect(jobs.map(({ payload }) => payload)).toEqual([
       { taskId, attempt: 1, requestEventId: init.toString() },
     ])
+  })
+
+  describe('an `/undo` nobody answered (docs/plan/61-chats-first.md, §5.14)', () => {
+    const undo = (taskId: string, userId: string) =>
+      insertFeedEvent(db, {
+        taskId,
+        row: {
+          type: 'feed.request',
+          payload: {
+            v: 1,
+            kind: 'command',
+            command: 'turn_undo',
+            authorId: userId,
+            requestId: randomUUID(),
+          },
+        },
+      })
+    const aged = (id: bigint, minutes: number) =>
+      db.$executeRaw`UPDATE task_events SET created_at = now() - make_interval(mins => ${minutes})
+        WHERE id = ${id}`
+
+    it('puts the press of a chat with the repository again, once in its span', async () => {
+      const { taskId, userId } = await dialog('awaiting_approval', 1)
+      const pressed = await undo(taskId, userId)
+      await aged(pressed, LOST_REWIND_MS / 60_000 + 1)
+      const at = new Date()
+
+      expect(await sweep(at).rewinds()).toBe(1)
+
+      const span = Math.floor(at.getTime() / LOST_REWIND_MS)
+      expect(queue.enqueue).toHaveBeenCalledWith(
+        'agent-turns',
+        'candidate.rewind',
+        { taskId, requestEventId: pressed.toString() },
+        { jobId: `candidate.rewind:${taskId}:${pressed}:sweep:${span}` },
+      )
+    })
+
+    it('leaves a press a job may still be at, and one that was answered', async () => {
+      const fresh = await dialog('awaiting_user', 1)
+      await undo(fresh.taskId, fresh.userId)
+      const answered = await dialog('awaiting_user', 1)
+      const pressed = await undo(answered.taskId, answered.userId)
+      await aged(pressed, 10)
+      await db.taskEvent.create({
+        data: {
+          taskId: answered.taskId,
+          type: 'candidate.rewind',
+          payload: { v: 1, requestEventId: pressed.toString(), outcome: 'refused' },
+        },
+      })
+      expect(await sweep().rewinds()).toBe(0)
+    })
+
+    it('reads the last press only: an answered one after it closes the matter', async () => {
+      const { taskId, userId } = await dialog('awaiting_user', 1)
+      await aged(await undo(taskId, userId), 10)
+      const last = await undo(taskId, userId)
+      await aged(last, 10)
+      await db.taskEvent.create({
+        data: {
+          taskId,
+          type: 'candidate.rewind',
+          payload: { v: 1, requestEventId: last.toString(), outcome: 'rewound' },
+        },
+      })
+      expect(await sweep().rewinds()).toBe(0)
+    })
+
+    it('has no business with a chat that ended, or one that has no branch to move', async () => {
+      const ended = await dialog('cancelled', 1)
+      await aged(await undo(ended.taskId, ended.userId), 10)
+      const plain = await dialog('awaiting_user', 1, undefined, { chat: true })
+      await aged(await undo(plain.taskId, plain.userId), 10)
+      expect(await sweep().rewinds()).toBe(0)
+    })
+
+    it('goes on past a press the queue would not take', async () => {
+      const first = await dialog('awaiting_user', 1)
+      await aged(await undo(first.taskId, first.userId), 10)
+      const second = await dialog('awaiting_user', 1)
+      await aged(await undo(second.taskId, second.userId), 9)
+      queue.enqueue.mockRejectedValueOnce(new Error('Redis does not answer'))
+      expect(await sweep().rewinds()).toBe(1)
+      expect(queue.enqueue).toHaveBeenCalledTimes(2)
+    })
   })
 
   it('puts again a pass whose retry got lost', async () => {

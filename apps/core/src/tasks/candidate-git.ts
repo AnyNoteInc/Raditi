@@ -9,6 +9,7 @@ import {
 import { z } from 'zod'
 
 import type {
+  BranchRewindInput,
   CandidateRebase,
   CandidateRebaseInput,
   GitWorkspaceService,
@@ -44,6 +45,8 @@ export interface CandidateGit {
     input: CandidateRebaseInput,
     assertFence?: () => Promise<void>,
   ): Promise<CandidateRebase>
+  /** `/undo`: `GitWorkspaceService.rewindBranch`. */
+  rewindBranch(input: BranchRewindInput, assertFence?: () => Promise<void>): Promise<void>
 }
 
 export interface CommitComparisonInput {
@@ -111,7 +114,10 @@ const refOf = (repo: RepoRef): RepoRef => ({
  * passes that changed nothing settle by their trees.
  */
 export function candidateGitOf(
-  service: Pick<GitWorkspaceService, 'readBranchHead' | 'rebaseCandidate' | 'treeOf'> & {
+  service: Pick<
+    GitWorkspaceService,
+    'readBranchHead' | 'rebaseCandidate' | 'rewindBranch' | 'treeOf'
+  > & {
     compareCommits?: unknown
   },
 ): CandidateGit {
@@ -121,6 +127,8 @@ export function candidateGitOf(
     treeOf: (input) => service.treeOf({ ...input, repo: refOf(input.repo) }),
     rebaseCandidate: (input, assertFence) =>
       service.rebaseCandidate({ ...input, repo: refOf(input.repo) }, assertFence),
+    rewindBranch: (input, assertFence) =>
+      service.rewindBranch({ ...input, repo: refOf(input.repo) }, assertFence),
     comparesCommits: typeof compare === 'function',
     async compareCommits(input) {
       if (typeof compare !== 'function') throw notImplemented('Comparison of candidate commits')
