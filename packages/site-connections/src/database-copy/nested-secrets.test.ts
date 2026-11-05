@@ -60,6 +60,26 @@ describe('secrets nested in copied values', () => {
     )
   })
 
+  it('blanks the SMTP password of a mailer, spelled as each one stores it (plan 62, Т57)', () => {
+    // `smtp_pass` and `smtppass` of the mail plugins, `mail_smtp_pass` of MODX.
+    for (const key of ['smtppass', 'smtp_pass', 'mail_smtp_pass', 'SMTP-PASS']) {
+      expect(scrub(`a:2:{${s(key)}${s('Pa55-w0rd')}${s('port')}i:587;}`), key).toBe(
+        `a:2:{${s(key)}s:0:"";${s('port')}i:587;}`,
+      )
+      expect(scrub(`{"${key}":"Pa55-w0rd","port":587}`), key).toBe(`{"${key}":"","port":587}`)
+    }
+  })
+
+  it('keeps a value whose key only contains the letters of a password', () => {
+    // A bare `pass` is no secret: `bypass`, `compass` and `passage` are words of settings.
+    for (const key of ['bypass', 'passage', 'smtp_host']) {
+      const serialized = `a:1:{${s(key)}${s('mail.example.test')}}`
+      expect(scrub(serialized), key).toBe(serialized)
+      const json = `{"${key}":"mail.example.test"}`
+      expect(scrub(json), key).toBe(json)
+    }
+  })
+
   it('copies as it is what is neither, or does not parse whole', () => {
     for (const text of [
       'обычный текст с api_key внутри',

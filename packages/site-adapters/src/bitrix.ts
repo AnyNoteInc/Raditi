@@ -60,6 +60,8 @@ export const bitrixAdapter: SiteAdapter = {
         ...importExcludes,
       ],
       exclude: [...importExcludes],
+      // No folder of documents: none of them is imported (plan 62, Т57).
+      documentFolders: [],
     }
   },
   verify() {

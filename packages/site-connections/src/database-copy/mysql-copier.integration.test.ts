@@ -298,7 +298,7 @@ INSERT INTO wp_options (option_name, option_value, autoload) VALUES
   ('wp_user_roles', 'a:1:{s:13:"administrator";}', 'yes'),
   ('theme_mods_twentytwentyfive', 'a:0:{}', 'yes'),
   ('widget_block', 'a:0:{}', 'yes'),
-  ('widget_text', 'a:1:{i:2;a:2:{s:5:"title";s:12:"Привет";s:7:"api_key";s:13:"widget-secret";}}', 'yes'),
+  ('widget_text', 'a:1:{i:2;a:4:{s:5:"title";s:12:"Привет";s:7:"api_key";s:13:"widget-secret";s:8:"smtppass";s:16:"widget-smtp-pass";s:14:"mail_smtp_pass";s:16:"widget-mail-pass";}}', 'yes'),
   ('cron', 'a:1:{s:10:"cron-event";}', 'yes'),
   ('_transient_doing_cron', '1760000000', 'yes'),
   ('wp_mail_smtp', 'a:1:{s:4:"pass";s:11:"smtp-secret";}', 'yes'),
@@ -377,6 +377,9 @@ describe.skipIf(!enabled)('the MySQL copier against MariaDB', () => {
       'cron-event',
       'doing_cron',
       'smtp-secret',
+      // The SMTP passwords of a mailer and of MODX under scrub_secrets (plan 62, Т57).
+      'widget-smtp-pass',
+      'widget-mail-pass',
       'wpforms-secret',
       'salt-of-the-site',
       'prod-site-binding',
@@ -492,7 +495,10 @@ describe.skipIf(!enabled)('the MySQL copier against MariaDB', () => {
           ['siteurl', 'https://shop.example.ru'],
           ['theme_mods_twentytwentyfive', 'a:0:{}'],
           ['widget_block', 'a:0:{}'],
-          ['widget_text', 'a:1:{i:2;a:2:{s:5:"title";s:12:"Привет";s:7:"api_key";s:0:"";}}'],
+          [
+            'widget_text',
+            'a:1:{i:2;a:4:{s:5:"title";s:12:"Привет";s:7:"api_key";s:0:"";s:8:"smtppass";s:0:"";s:14:"mail_smtp_pass";s:0:"";}}',
+          ],
           ['wp_user_roles', 'a:1:{s:13:"administrator";}'],
         ]
           .map(([option_name, option_value]) => ({ option_name, option_value }))

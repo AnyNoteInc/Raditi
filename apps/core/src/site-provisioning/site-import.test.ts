@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { DomainError, INITIAL_SITE_TAG } from '@repo/domain'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { directory, file } from '../testing/file-source.ts'
+import { directory, file, type FakeNode } from '../testing/file-source.ts'
 import {
   DATABASE_PASSWORD,
   FTP_PASSWORD,
@@ -120,6 +120,27 @@ describe('importSite', () => {
         'json',
       ]),
     )
+  })
+
+  it('takes a document only from a folder of the adapter: the media library, not the root', async () => {
+    const tree = sampleSite()
+    const content = tree['wp-content'] as Extract<FakeNode, { type: 'directory' }>
+    const uploads = content.children.uploads as Extract<FakeNode, { type: 'directory' }>
+    uploads.children['price.pdf'] = file('%PDF-1.4 synthetic price list\n')
+    tree.notes = directory({ 'invoice.pdf': file('%PDF-1.4 synthetic invoice\n') })
+    const f = await fixture({ tree })
+    const { commitSha } = await f.run()
+
+    const paths = (await fixtureGit(f.remote, 'ls-tree', '-r', '--name-only', commitSha))
+      .trim()
+      .split('\n')
+    expect(paths).toContain('wp-content/uploads/price.pdf')
+    expect(paths).not.toContain('notes/invoice.pdf')
+    expect(f.store.stage(f.siteId).summary).toEqual({
+      files: 5,
+      bytes: expect.any(Number),
+      skipped: { excluded: 1, document: 1 },
+    })
   })
 
   it('leaves out the files with a secret of the access or a scanner finding', async () => {

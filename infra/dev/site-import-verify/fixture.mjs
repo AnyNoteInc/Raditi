@@ -245,6 +245,8 @@ function siteEntries(values) {
       '<!doctype html>\n<title>Страница</title>\n<p>Страница стенда.</p>\n',
     ),
     file('notes/readme.txt', 'Notes of the stand site. Nothing secret here.\n'),
+    // A document outside the media library: left out (plan 62, Т57).
+    file('notes/price-list.pdf', brochurePdf(), skip('document', 'notes/price-list.pdf', 'file')),
     // The configuration and its copies, server settings, caches, logs, dumps: left out.
     file('wp-config.php', wpConfig(values), skip('excluded', 'wp-config.php', 'file')),
     file(

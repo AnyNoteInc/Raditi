@@ -262,6 +262,7 @@ test('a password access drops the typed passwords; a key access lets them throug
       'backup.sql',
       'wp-content/cache/page.html',
       'wp-content/debug.log',
+      'notes/price-list.pdf',
     ])
       assert.ok(result.absent.includes(path), path)
     assert.equal(result.files.length + result.absent.length, importManifest(values).length)
@@ -272,6 +273,7 @@ test('a password access drops the typed passwords; a key access lets them throug
     ci: 1,
     nested_site: 1,
     link: 1,
+    document: 1,
     secret: 3,
   })
   assert.deepEqual(byKey.skipped, {
@@ -280,6 +282,7 @@ test('a password access drops the typed passwords; a key access lets them throug
     ci: 1,
     nested_site: 1,
     link: 1,
+    document: 1,
     secret: 2,
   })
   const index = byKey.files.find(({ path }) => path === 'index.php')
@@ -289,18 +292,21 @@ test('a password access drops the typed passwords; a key access lets them throug
 })
 
 test('the manifest agrees with the WordPress rules and the path policy of the product', async () => {
-  const { createImportPathPolicy, isNestedSiteRoot } = await import(
+  const { importPolicyOf, isNestedSiteRoot } = await import(
     new URL('packages/domain/src/site-connection/import-policy.ts', root)
   )
   const { wordpressAdapter } = await import(
     new URL('packages/site-adapters/src/wordpress.ts', root)
   )
   const facts = { stack: 'wordpress', url: 'https://stand.example.test', docroot: '/', extras: {} }
-  const policy = createImportPathPolicy(wordpressAdapter.importRules(facts).exclude)
+  const policy = importPolicyOf(wordpressAdapter.importRules(facts))
   const prefixes = (path) =>
     path.split('/').map((_, index, parts) => parts.slice(0, index + 1).join('/'))
   for (const { path, type, outcome } of importManifest(values)) {
-    if (outcome.expect === 'skip' && ['excluded', 'vcs', 'ci'].includes(outcome.reason)) {
+    if (
+      outcome.expect === 'skip' &&
+      ['excluded', 'vcs', 'ci', 'document'].includes(outcome.reason)
+    ) {
       assert.equal(policy.decide(outcome.at, outcome.atType), outcome.reason, path)
       continue
     }

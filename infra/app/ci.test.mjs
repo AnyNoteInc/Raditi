@@ -1272,3 +1272,20 @@ test('every file the plan of the site stacks names is in the repository', () => 
     assert.ok(existsSync(join(root, stackReports, link)), `${index} links ${link}`)
   }
 })
+
+test('the import builds its path policy from every field of the rules of an adapter', () => {
+  // Plan 62, Т57: `importPolicyOf` passes `documentFolders` along with `exclude`; a direct call
+  // of the bare policy would close no folder of documents, or forget a field the next stage adds.
+  const policyFile = 'packages/domain/src/site-connection/import-policy.ts'
+  const sources = workspaces.flatMap((workspace) =>
+    existsSync(join(root, workspace, 'src'))
+      ? readdirSync(join(root, workspace, 'src'), { recursive: true })
+          .filter((name) => /\.(?:ts|tsx|mts|mjs)$/.test(name))
+          .filter((name) => !/\.(?:test|spec)\.(?:ts|tsx|mts|mjs)$/.test(name))
+          .map((name) => `${workspace}/src/${name}`)
+      : [],
+  )
+  assert.ok(sources.includes(policyFile), `${policyFile} is a source file`)
+  const callers = sources.filter((file) => read(file).includes('createImportPathPolicy('))
+  assert.deepEqual(callers, [policyFile])
+})

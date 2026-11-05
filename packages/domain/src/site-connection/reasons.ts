@@ -91,6 +91,8 @@ export const importSkipReasons = [
   'nested_site',
   // A folder or a file the server listed but refused to open or no longer has.
   'unreadable',
+  // A document outside the folders the adapter names (Т57).
+  'document',
 ] as const
 export type ImportSkipReason = (typeof importSkipReasons)[number]
 

@@ -10,9 +10,13 @@
 // byte lengths whatever the encoding of the connection, and nothing outside a blanked string
 // changes.
 
-/** A key whose value is a secret: a key, a token, a password, a secret, a webhook. */
+/**
+ * A key whose value is a secret: a key, a token, a password, a secret, a webhook. `smtp_pass` and
+ * `smtppass` of mailers, `mail_smtp_pass` of MODX (plan 62, Т57); a bare `pass` is none of them:
+ * `bypass`, `compass` and `passage` are no secrets.
+ */
 const SECRET_KEY =
-  /api[_-]?key|apikey|secret|passw(?:or)?d|pwd|token|private[_-]?key|access[_-]?key|license[_-]?key|webhook|auth[_-]?key/i
+  /api[_-]?key|apikey|secret|passw(?:or)?d|pwd|smtp[_-]?pass|token|private[_-]?key|access[_-]?key|license[_-]?key|webhook|auth[_-]?key/i
 /** How deep a value is followed: deeper and it is copied as it is. */
 const MAX_DEPTH = 64
 

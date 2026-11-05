@@ -2,7 +2,7 @@ import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { createImportPathPolicy, SiteConnectionError, siteImportLimits } from '@repo/domain'
+import { importPolicyOf, SiteConnectionError, siteImportLimits } from '@repo/domain'
 import { getSiteAdapter } from '@repo/site-adapters'
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -11,13 +11,13 @@ import { ExactValues } from './exact-values.ts'
 import { readRootFile, walkSiteTree, type WalkInput } from './tree-walk.ts'
 
 const wordpress = getSiteAdapter('wordpress')
-const policy = createImportPathPolicy(
+const policy = importPolicyOf(
   wordpress.importRules({
     stack: 'wordpress',
     url: 'https://site.example.test',
     docroot: '/',
     extras: {},
-  }).exclude,
+  }),
 )
 const markers = wordpress.rootMarkers()
 const roots: string[] = []

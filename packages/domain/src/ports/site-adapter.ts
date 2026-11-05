@@ -46,6 +46,13 @@ export interface ImportRules {
   gitignore: string[]
   /** Never imported into git: uploads, caches, core files. */
   exclude: string[]
+  /**
+   * Folders whose documents are the client's own: `<path>/`, from the root, no `*`. A document
+   * anywhere else stays out: visitors' files and code lie side by side in the trees of many
+   * stacks, and no list of their folders is complete. Empty — no document is imported (plan 62,
+   * Т57).
+   */
+  documentFolders: string[]
 }
 
 export interface VerifyPlan {

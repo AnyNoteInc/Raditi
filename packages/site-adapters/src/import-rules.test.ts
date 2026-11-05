@@ -1,5 +1,5 @@
 import type { SiteAdapter, SiteFacts } from '@repo/domain'
-import { createImportPathPolicy, siteStacks } from '@repo/domain'
+import { createImportPathPolicy, importPolicyOf, siteStacks } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
 import {
   dataFiles,
@@ -30,8 +30,8 @@ const factsOf = (adapter: SiteAdapter): SiteFacts => ({
   docroot: '/',
   extras: {},
 })
-const importPolicy = (adapter: SiteAdapter) =>
-  createImportPathPolicy(adapter.importRules(factsOf(adapter)).exclude)
+// Built the way the import builds it, so every field of `ImportRules` reaches the policy here too.
+const importPolicy = (adapter: SiteAdapter) => importPolicyOf(adapter.importRules(factsOf(adapter)))
 
 const clientToolFiles = [
   '.my.cnf',
@@ -230,6 +230,16 @@ describe('import of a WordPress site', () => {
     expect(policy.decide(path, type)).toBe('take')
   })
 
+  it('takes the documents of the media library and no others (plan 62, Т57)', () => {
+    expect(policy.decide('wp-content/uploads/2026/10/price.pdf', 'file')).toBe('take')
+    expect(policy.decide('wp-content/blogs.dir/2/files/x.pdf', 'file')).toBe('take')
+    expect(policy.decide('wp-content/themes/shop/docs/price.pdf', 'file')).toBe('document')
+    // What visitors sent stays excluded: the exclude lines stand before the folders.
+    expect(policy.decide('wp-content/uploads/gravity_forms/1-abc/passport.pdf', 'file')).toBe(
+      'excluded',
+    )
+  })
+
   it('leaves version control and pipeline paths to the rules that stand before the lines', () => {
     expect(policy.decide('.svn/pristine/ab/abc.svn-base', 'file')).toBe('vcs')
     expect(policy.decide('.git/config', 'file')).toBe('vcs')
@@ -262,5 +272,9 @@ describe('import of a Bitrix site', () => {
     ['local/wp-config.php', 'file'],
   ] as const)('takes %s', (path, type) => {
     expect(policy.decide(path, type)).toBe('take')
+  })
+
+  it('names no folder of documents (plan 62, Т57)', () => {
+    expect(policy.decide('local/price.pdf', 'file')).toBe('document')
   })
 })

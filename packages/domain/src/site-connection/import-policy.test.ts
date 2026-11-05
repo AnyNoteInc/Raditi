@@ -3,7 +3,12 @@ import { describe, expect, it } from 'vitest'
 import { isDomainError } from '../errors.ts'
 import { isPublicationPath } from '../git/publication.ts'
 import { forbiddenCiPaths } from '../policies/diff-paths.ts'
-import { createImportPathPolicy, isImportSegment, isNestedSiteRoot } from './import-policy.ts'
+import {
+  createImportPathPolicy,
+  importPolicyOf,
+  isImportSegment,
+  isNestedSiteRoot,
+} from './import-policy.ts'
 
 const REPLACEMENT = String.fromCharCode(0xfffd)
 const LONE_SURROGATE = String.fromCharCode(0xd800)
@@ -94,7 +99,7 @@ describe('createImportPathPolicy', () => {
       ['.gitx/file', 'file'],
       ['svn/readme.txt', 'file'],
       // Lower case is an ordinary folder name («CVs»); the tool writes `CVS`.
-      ['cvs/ivanov.pdf', 'file'],
+      ['cvs/ivanov.txt', 'file'],
       ['hg/readme.txt', 'file'],
     ] as const)('does not take %s for a version control folder', (path, type) => {
       expect(nothingExcluded.decide(path, type)).toBe('take')
@@ -304,6 +309,70 @@ describe('createImportPathPolicy', () => {
       expect(nothingExcluded.decide('wp-config.php', 'file')).toBe('take')
       expect(nothingExcluded.decide('wp-content/uploads', 'directory')).toBe('take')
     })
+  })
+
+  describe('documents (plan 62, Т57)', () => {
+    it.each([
+      'a/price.pdf',
+      'A/PRICE.PDF',
+      'x.doc',
+      'x.docx',
+      'x.docm',
+      'x.dot',
+      'x.dotx',
+      'x.dotm',
+      'x.odt',
+      'x.rtf',
+    ])('leaves the document %s out without a folder of the adapter', (path) => {
+      expect(nothingExcluded.decide(path, 'file')).toBe('document')
+    })
+
+    it.each([
+      ['x.pdf.txt', 'file'],
+      ['docs.pdf', 'directory'],
+      ['class.document.php', 'file'],
+      ['system/helper/HTMLPurifier/ConfigSchema/schema/HTML.Doctype.txt', 'file'],
+      ['.dockerignore', 'file'],
+    ] as const)('takes %s: no document', (path, type) => {
+      expect(nothingExcluded.decide(path, type)).toBe('take')
+    })
+
+    it('takes a document only below a folder the adapter names, from the root', () => {
+      const media = createImportPathPolicy([], ['media/'])
+      expect(media.decide('media/2026/x.pdf', 'file')).toBe('take')
+      expect(media.decide('Media/2026/X.PDF', 'file')).toBe('take')
+      expect(media.decide('other/media/x.pdf', 'file')).toBe('document')
+      expect(media.decide('media.pdf', 'file')).toBe('document')
+    })
+
+    it('lets an exclude line win over a folder of documents', () => {
+      const media = createImportPathPolicy(['/media/forms/'], ['media/'])
+      expect(media.decide('media/forms/passport.pdf', 'file')).toBe('excluded')
+    })
+
+    it('builds the policy of an adapter from both fields of its rules', () => {
+      const rules = { exclude: ['*.log'], documentFolders: ['media/'] }
+      expect(importPolicyOf(rules).decide('media/x.pdf', 'file')).toBe('take')
+      expect(importPolicyOf(rules).decide('x.pdf', 'file')).toBe('document')
+      expect(importPolicyOf(rules).decide('media/x.log', 'file')).toBe('excluded')
+    })
+
+    it.each(['/media/', 'media', 'me*dia/', 'media/../', '../media/', 'media//', '', '/'])(
+      'refuses the document folder %j at construction',
+      (folder) => {
+        let thrown: unknown
+        try {
+          createImportPathPolicy([], ['media/', folder])
+        } catch (error) {
+          thrown = error
+        }
+        expect(isDomainError(thrown)).toBe(true)
+        expect(thrown).toMatchObject({
+          code: 'BAD_REQUEST',
+          message: `Unsupported import document folder: "${folder}"`,
+        })
+      },
+    )
   })
 
   describe('lines outside the supported subset', () => {

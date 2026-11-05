@@ -174,6 +174,10 @@ export const wordpressAdapter: SiteAdapter = {
         ...importExcludes,
       ],
       exclude: [...importExcludes],
+      // The media library is the client's (owner's decision of 17.10.2026): its price lists and
+      // brochures are imported. What visitors sent inside it stays out by visitorUploadDirs, which
+      // the exclude lines hold before this list is read (plan 62, Т57, question В1).
+      documentFolders: ['wp-content/uploads/', 'wp-content/blogs.dir/'],
     }
   },
   verify: wordpressVerifyPlan,

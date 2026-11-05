@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
-  createImportPathPolicy,
+  importPolicyOf,
   isDomainError,
   resolvePinnedAddress,
   siteAccessPath,
@@ -480,8 +480,8 @@ async function fetchTree(
 ): Promise<{ taken: TakenFile[]; skipped: SkipCounts }> {
   const { stage, root, env, signal, deps } = run
   const rules = deps.stacks(stage.stack)
-  const policy = createImportPathPolicy(
-    rules.importRules({ stack: stage.stack, url: stage.url, docroot: '/', extras: {} }).exclude,
+  const policy = importPolicyOf(
+    rules.importRules({ stack: stage.stack, url: stage.url, docroot: '/', extras: {} }),
   )
   // Only now, and only this way: a run that just finishes the tag never dials the client.
   const address = await pinAddress(checked, signal, deps)

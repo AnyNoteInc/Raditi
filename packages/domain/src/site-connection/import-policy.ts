@@ -1,6 +1,7 @@
 import { badRequest } from '../errors.ts'
 import { isPublicationPath } from '../git/publication.ts'
 import { isForbiddenPath } from '../policies/diff-paths.ts'
+import type { ImportRules } from '../ports/site-adapter.ts'
 import { hasControlCharacter } from './inputs.ts'
 import type { ImportSkipReason } from './reasons.ts'
 
@@ -34,6 +35,31 @@ const segmentSource = (pattern: string) => pattern.split('*').map(escapeRegExp).
 const anySegment = (patterns: readonly string[]) =>
   patterns.length === 0 ? null : new RegExp(`^(?:${patterns.map(segmentSource).join('|')})$`, 'i')
 
+/** Documents: price lists of the client and invoices of its customers look the same. */
+const DOCUMENT = /\.(?:pdf|doc[xm]?|dot[xm]?|odt|rtf)$/i
+
+/** The subset of .gitignore syntax `createImportPathPolicy` reads: see there. */
+function isSupportedLine(line: string): boolean {
+  const segments = line.replace(/^\//, '').replace(/\/$/, '').split('/')
+  return !(
+    line.startsWith('#') ||
+    line.trim() !== line ||
+    /\*\*|[![?\\]/.test(line) ||
+    segments.includes('') ||
+    // No path of a repository has such a segment or character: the line would match nothing.
+    segments.includes('.') ||
+    segments.includes('..') ||
+    hasControlCharacter(line)
+  )
+}
+
+/** A folder of documents is a line of its own kind: `<path>/` from the root, without `*`. */
+const isDocumentFolder = (folder: string): boolean =>
+  !folder.startsWith('/') &&
+  folder.endsWith('/') &&
+  !folder.includes('*') &&
+  isSupportedLine(folder)
+
 interface AnchoredRule {
   segments: RegExp[]
   directoryOnly: boolean
@@ -46,26 +72,26 @@ interface AnchoredRule {
  * anchors the line to the root; a trailing `/` matches directories only; `*` stays inside one
  * segment; a line without a slash matches at any depth. A matched directory excludes everything
  * below it. Matching ignores letter case: it only excludes more.
+ *
+ * A document (`DOCUMENT`) the lines let through is taken only below one of `documentFolders`
+ * (`ImportRules.documentFolders`, plan 62, Т57); without them — the default — none is: a call
+ * that forgets them closes, it does not open. Product code calls `importPolicyOf`.
  */
-export function createImportPathPolicy(excludeLines: readonly string[]): ImportPathPolicy {
+export function createImportPathPolicy(
+  excludeLines: readonly string[],
+  documentFolders: readonly string[] = [],
+): ImportPathPolicy {
+  for (const folder of documentFolders)
+    if (!isDocumentFolder(folder))
+      throw badRequest(`Unsupported import document folder: "${folder}"`)
   const anchored: AnchoredRule[] = []
   const names: string[] = []
   const directoryNames: string[] = []
   for (const line of excludeLines) {
+    if (!isSupportedLine(line)) throw badRequest(`Unsupported import exclude line: "${line}"`)
     const directoryOnly = line.endsWith('/')
     const pattern = line.replace(/^\//, '').replace(/\/$/, '')
     const segments = pattern.split('/')
-    if (
-      line.startsWith('#') ||
-      line.trim() !== line ||
-      /\*\*|[![?\\]/.test(line) ||
-      segments.includes('') ||
-      // No path of a repository has such a segment or character: the line would match nothing.
-      segments.includes('.') ||
-      segments.includes('..') ||
-      hasControlCharacter(line)
-    )
-      throw badRequest(`Unsupported import exclude line: "${line}"`)
     if (line.startsWith('/') || segments.length > 1) {
       anchored.push({
         segments: segments.map((segment) => new RegExp(`^${segmentSource(segment)}$`, 'i')),
@@ -111,10 +137,19 @@ export function createImportPathPolicy(excludeLines: readonly string[]): ImportP
       if (!isPublicationPath(path)) return 'unsupported_path'
       // CLAUDE.md rule 6: the CI paths of every provider and `.gitmodules`.
       if (isForbiddenPath(path, [])) return 'ci'
-      return isExcluded(segments, type) ? 'excluded' : 'take'
+      if (isExcluded(segments, type)) return 'excluded'
+      const inFolder = (folder: string) => path.toLowerCase().startsWith(folder.toLowerCase())
+      return type === 'file' && DOCUMENT.test(path) && !documentFolders.some(inFolder)
+        ? 'document'
+        : 'take'
     },
   }
 }
+
+/** The policy of an adapter's rules: so no call loses a field of them. Э3.3 adds a third one. */
+export const importPolicyOf = (
+  rules: Pick<ImportRules, 'exclude' | 'documentFolders'>,
+): ImportPathPolicy => createImportPathPolicy(rules.exclude, rules.documentFolders)
 
 /** A folder below the root that has every marker is another installation: not entered. */
 export function isNestedSiteRoot(

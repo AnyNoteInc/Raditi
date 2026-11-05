@@ -167,6 +167,7 @@ describe('reasons and error codes', () => {
       'secret',
       'nested_site',
       'unreadable',
+      'document',
     ])
   })
 
