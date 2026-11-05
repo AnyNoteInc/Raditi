@@ -49,7 +49,7 @@ import { parseArgs } from 'node:util'
 import { zstdDecompressSync } from 'node:zlib'
 
 import { createPrismaClient, redoDialog, rewindDialog } from '@repo/db'
-import { snapshotPartFiles, turnSnapshotPrefix } from '@repo/domain'
+import { attachmentKey, snapshotPartFiles, turnInboxPath, turnSnapshotPrefix } from '@repo/domain'
 import { createDockerSandboxProvider } from '@repo/sandbox-providers'
 import { createS3ObjectStorage, storageConfigFromEnv } from '@repo/storage'
 import { createVaultSecretStore, vaultConfigFromEnv } from '@repo/vault'
@@ -614,6 +614,8 @@ function turnRequest(
         ...(compaction?.fixture ?? withoutRepository.fixture),
       })
     else if (chat) fixture.addChatTurn({ ...identity, id: taskId, ...chat.fixture })
+    else if (withoutRepository?.attachments)
+      fixture.addInboxTurn({ ...identity, ...withoutRepository.fixture })
     else if (withoutRepository) fixture.addRewindTurn({ ...identity, ...withoutRepository.fixture })
     else fixture.addTurn({ ...identity, model: context.llm.model })
   }
@@ -642,7 +644,7 @@ function turnRequest(
     context,
     input: {
       prompt,
-      attachments: [],
+      attachments: withoutRepository?.attachments ?? [],
       ...(action ? { action } : {}),
     },
     driverVersion,
@@ -1179,6 +1181,69 @@ try {
     assert.deepEqual(await turnContainers('io.raditi.sandbox.taskId', task.taskId), [])
     verified.push(
       `real ${driverName} chat without a project: under the lease of its own id, turn 3 after an undone turn 2 restored the snapshot of turn 1 through the runner's links, the session and the provider know nothing of turn 2; turn 4 compacted the session on the runner and turn 5 went on from its summary (${Math.round((Date.now() - started) / 1000)} s)`,
+    )
+  }
+
+  // A file of the client in a chat without a project (docs/plan/61-chats-first.md, К16, §8): it
+  // leaves raditi-inbox only for a runner that asks by its place in an open prepare (`inboxFile`
+  // of the API of runners), lands under /workspace/inbox, and the real CLI reads it with its own
+  // tool. The address is outside the working copy: `external_directory` of the driver lets it in.
+  if (realCli) {
+    const started = Date.now()
+    const task = await createChat()
+    sessions.push(task.sessionId)
+    const id = randomUUIDv7()
+    const fileName = 'zametka-klienta.txt'
+    const words = `raditi-inbox-${randomBytes(8).toString('hex')}`
+    const content = Buffer.from(`${words}\nСинтетический файл клиента.\n`)
+    const s3Key = attachmentKey(site.workspaceId, id)
+    await storage.put('inbox', s3Key, content)
+    const now = new Date()
+    await db.attachment.create({
+      data: {
+        id,
+        workspaceId: site.workspaceId,
+        siteId: null,
+        taskId: task.taskId,
+        source: 'web',
+        status: 'bound',
+        s3Key,
+        fileName,
+        contentType: 'text/plain',
+        sizeBytes: content.length,
+        expiresAt: new Date(now.getTime() + 3_600_000),
+        boundAt: now,
+      },
+    })
+    const path = turnInboxPath(id, fileName)
+    const answer = `В файле написано: ${words}`
+    const prompt = 'raditi-inbox-read-the-file'
+    const { result, manifest } = await core.request('run', {
+      request: turnRequest(task, {
+        turn: 1,
+        withoutRepository: {
+          prompt,
+          attachments: [path],
+          fixture: { path, words, answer },
+        },
+      }),
+    })
+    assert.equal(result.client_message, answer, 'The agent did not answer with the file')
+    fixture.assertInboxComplete()
+    const assignment = await assignmentOf(task.taskId, 1)
+    assert.deepEqual(
+      [assignment.outcome, assignment.executor, assignment.runnerId],
+      ['completed', 'runner', runnerId],
+    )
+    // The plan is the stand's own (`turnRequest`): the planner's paths and labels are held by
+    // turn-planner.test.ts; what this proves is the way of the file through the runner.
+    const session = Buffer.concat([...(await homeEntries(reference(task, 1, manifest))).values()])
+    assert(session.includes(answer), 'The search reads the session of the turn')
+    assert.deepEqual(await turnContainers('io.raditi.sandbox.taskId', task.taskId), [])
+    assert.equal((await leaseOf(task.taskId)).holderTaskId, null, 'The chat let its lease go')
+    await storage.delete('inbox', s3Key)
+    verified.push(
+      `real ${driverName} file of a chat without a project: from raditi-inbox through the API of runners to /workspace/inbox, read by the CLI and answered with its content (${Math.round((Date.now() - started) / 1000)} s)`,
     )
   }
 

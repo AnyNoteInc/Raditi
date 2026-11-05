@@ -57,16 +57,19 @@ test('the limits of a live run are the numbers of the plan', () => {
     // The default of the owner's question П30: a live check of the result within 20 requests.
     results: { requests: 20, minutes: 10 },
     compaction: { requests: 10, minutes: 5 },
+    // Six calls of the key of the pass of `/init`, the role holds them (LLM_MAX_CALLS_PER_KEY).
+    init: { requests: 11, minutes: 5 },
   })
   assert.deepEqual(PROVIDER, { host: 'api.z.ai', port: 443 })
 })
 
-test('a stand takes --live, --measure, --results, --compact, --rehearsal, --no-build and --keep, and nothing else', () => {
+test('a stand takes --live, --measure, --results, --compact, --init, --rehearsal, --no-build and --keep, and nothing else', () => {
   const plain = {
     live: false,
     measure: false,
     results: false,
     compact: false,
+    init: false,
     api: false,
     rehearsal: false,
     noBuild: false,
@@ -117,6 +120,18 @@ test('a stand takes --live, --measure, --results, --compact, --rehearsal, --no-b
     compact: true,
     noBuild: true,
   })
+  // One pass on the words of `/init`, live and rehearsed (docs/plan/61-chats-first.md, 61.25).
+  assert.deepEqual(standMode(['--live', '--init'], { stand: 'gateway' }), {
+    ...plain,
+    live: true,
+    init: true,
+  })
+  assert.deepEqual(standMode(['--rehearsal', '--init', '--no-build'], { stand: 'gateway' }), {
+    ...plain,
+    rehearsal: true,
+    init: true,
+    noBuild: true,
+  })
   // The acceptance on the pay-per-token API, live and rehearsed (П15).
   assert.deepEqual(standMode(['--live', '--api', '--keep=/private/x'], { stand: 'gateway' }), {
     ...plain,
@@ -163,6 +178,14 @@ test('a stand takes --live, --measure, --results, --compact, --rehearsal, --no-b
     [['--rehearsal', '--compact', '--results'], 'gateway'],
     [['--live', '--compact', '--api'], 'gateway'],
     [['--live', '--compact'], 'content'],
+    // So is the pass of `/init`.
+    [['--init'], 'gateway'],
+    [['--init', '--no-build'], 'gateway'],
+    [['--live', '--init', '--measure'], 'gateway'],
+    [['--rehearsal', '--init', '--results'], 'gateway'],
+    [['--live', '--init', '--api'], 'gateway'],
+    [['--live', '--init', '--compact'], 'gateway'],
+    [['--live', '--init'], 'content'],
     [['--live', '--api'], 'content'],
     [['--rehearsal', '--api'], 'content'],
     [['--keep=/private/x'], 'gateway'],

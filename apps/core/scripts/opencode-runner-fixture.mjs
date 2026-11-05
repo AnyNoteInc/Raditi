@@ -39,6 +39,15 @@ const rewindResult = (answer) => ({
   needs_approval: false,
   risk: 'low',
 })
+const inboxResult = (answer) => ({
+  summary: 'Синтетический ход с файлом клиента',
+  change_type: 'none',
+  client_message: answer,
+  files_changed: [],
+  questions: [],
+  needs_approval: false,
+  risk: 'low',
+})
 const chatResult = (turn, answer) => ({
   summary: 'Синтетический ход чата с репозиторием',
   change_type: 'code',
@@ -350,7 +359,7 @@ export async function startOpencodeRunnerFixture() {
         ),
         'Turn prompt missing',
       )
-      if (state.turn === 2 && !state.rewind && !state.chat) {
+      if (state.turn === 2 && !state.rewind && !state.chat && !state.inbox) {
         check(
           body.messages.some(
             (message) =>
@@ -364,7 +373,31 @@ export async function startOpencodeRunnerFixture() {
         state.continuationSeen = true
       }
       let item
-      if (state.rewind) {
+      if (state.inbox) {
+        // The CLI is told where the file is, reads it with its own tool, and gets its bytes.
+        if (state.phase === 'initial') {
+          check(serialized.includes(state.inbox.path), 'The turn was not told where the file is')
+          check(!serialized.includes(state.inbox.words), 'The file came with the words of the turn')
+          state.phase = 'shell'
+          state.shellCallId = `call_inbox_${state.turn}`
+          item = {
+            function: {
+              name: 'read',
+              arguments: JSON.stringify({ filePath: state.inbox.path }),
+            },
+            id: state.shellCallId,
+          }
+        } else {
+          check(state.phase === 'shell', 'Unexpected request after turn completion')
+          check(
+            toolOutput(body, state.shellCallId, state.inbox.words),
+            'The file of the client did not reach the agent',
+          )
+          state.toolOutputSeen = true
+          state.phase = 'completed'
+          item = { content: JSON.stringify(inboxResult(state.inbox.answer)) }
+        }
+      } else if (state.rewind) {
         // What the session behind this request holds: the stand asks it of each turn of its chat.
         check(state.phase === 'initial', 'Unexpected request after turn completion')
         check(
@@ -530,6 +563,24 @@ export async function startOpencodeRunnerFixture() {
         chat: { id, answer, remembered, forgotten, holds, lacks },
       })
     },
+    /**
+     * The turn of a chat without a project that holds a file of the client (docs/plan/61-chats-first.md,
+     * К16): its CLI reads `path`, and only its tool answer may bring `words` to the provider.
+     */
+    addInboxTurn({ turn, llmKey, mcpKey, prompt, effort, path, words, answer }) {
+      const key = `inbox-${turn}`
+      check(!closed && Number.isInteger(turn) && !turns.has(key), 'Unexpected inbox turn')
+      check(
+        [prompt, path, words, answer].every((text) => typeof text === 'string' && text.length > 0),
+        'Invalid inbox turn',
+      )
+      check(effort === (turn === 1 ? 'low' : 'high'), 'Invalid fixture effort')
+      assertRotated(llmKey, mcpKey)
+      turns.set(key, {
+        ...freshTurn({ turn, llmKey, mcpKey, prompt, effort, model: MODEL }),
+        inbox: { path, words, answer },
+      })
+    },
     /** The turn that compacts that chat's session: its one request is answered with `summary`. */
     addCompactionTurn({ turn, llmKey, mcpKey, prompt, effort, summary, remembered }) {
       const key = `compaction-${turn}`
@@ -596,7 +647,7 @@ export async function startOpencodeRunnerFixture() {
     assertComplete() {
       check(!problems.length, `Fixture recorded ${problems.length} failed requests`)
       const planned = [...turns.values()].filter(
-        (state) => !state.rewind && !state.compaction && !state.chat,
+        (state) => !state.rewind && !state.compaction && !state.chat && !state.inbox,
       )
       check(planned.length === 2, 'Fixture requires two registered turns')
       for (const state of planned) {
@@ -617,6 +668,16 @@ export async function startOpencodeRunnerFixture() {
           state.phase === 'completed' && state.llmRequests === 1 && state.mcpList === 0,
           'A compaction did not answer its one request, or reached for the tools',
         )
+    },
+    /** The turn with a file of the client: it read the file and answered, nothing else. */
+    assertInboxComplete() {
+      check(!problems.length, `Fixture recorded ${problems.length} failed requests`)
+      const read = [...turns.values()].filter((item) => item.inbox)
+      check(read.length === 1, 'Fixture has not the turn with a file')
+      check(
+        read[0].phase === 'completed' && read[0].toolOutputSeen && read[0].llmRequests === 2,
+        'The turn with a file did not read it and answer',
+      )
     },
     /** The turns of a chat with the repository: their change and their answer, nothing else. */
     assertChatComplete(id, count) {

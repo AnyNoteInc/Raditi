@@ -6,7 +6,10 @@
 // Redis, S3 and WordPress. Disposable services only; never the repository .env, the dev
 // infrastructure, a real model or a real key. The scenarios are in scenarios.mjs.
 //
-//   pnpm verify:release [-- --no-build] [--keep]
+// With `--browser` it is a run of its own: the worker of the browser and the stream gateway too,
+// and S12 alone, a chat that holds a candidate and writes on the live site through `web_*`.
+//
+//   pnpm verify:release [-- --no-build] [--keep] [--browser]
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
 import {
@@ -181,16 +184,20 @@ async function buildCopy(copy, options) {
       })
       console.log(`PASS build: ${step.title} (${Math.round((Date.now() - started) / 1000)} s)`)
     }
-    // The llm, mcp and preview roles are apps of their own (docs/plan/55-split-orchestrator.md).
-    rt.setStage('build: the llm, mcp and preview apps')
+    // The llm, mcp and preview roles are apps of their own (docs/plan/55-split-orchestrator.md);
+    // `browser` serves `--browser`, and one copy serves both runs.
+    rt.setStage('build: the llm, mcp, preview and browser apps')
     const llmStarted = Date.now()
-    await rt.run('pnpm', ['--filter', 'llm', '--filter', 'mcp', '--filter', 'preview', 'build'], {
-      cwd: copy,
-      env,
-      timeoutMs: 20 * 60_000,
-    })
+    await rt.run(
+      'pnpm',
+      [
+        ...['--filter', 'llm', '--filter', 'mcp'],
+        ...['--filter', 'preview', '--filter', 'browser', 'build'],
+      ],
+      { cwd: copy, env, timeoutMs: 20 * 60_000 },
+    )
     console.log(
-      `PASS build: the llm, mcp and preview apps (${Math.round((Date.now() - llmStarted) / 1000)} s)`,
+      `PASS build: the llm, mcp, preview and browser apps (${Math.round((Date.now() - llmStarted) / 1000)} s)`,
     )
     await rm(join(copy, BUILD_OUTPUT.webStaticServed), { recursive: true, force: true })
     await cp(join(copy, BUILD_OUTPUT.webStatic), join(copy, BUILD_OUTPUT.webStaticServed), {
@@ -205,6 +212,7 @@ async function buildCopy(copy, options) {
     'apps/llm/dist/main.js',
     'apps/mcp/dist/main.js',
     'apps/preview/dist/main.js',
+    'apps/browser/dist/main.js',
   ])
     assert.ok(
       await exists(join(copy, path)),
@@ -338,6 +346,7 @@ async function main(options, owned) {
     'preview',
     'releaseApi',
     'zai',
+    ...(options.browser ? ['browser', 'stream'] : []),
   ])
     ports[name] = await freeLoopbackPort()
 
@@ -403,6 +412,9 @@ async function main(options, owned) {
   const siteUrl = `http://localhost:${ports.site}`
   const site = await startSite(rt, names, { directory, sitePort: ports.site, sshPort: ports.ssh })
   const content = await installProductionSite(rt, site, { siteUrl })
+  // The egress proxy of a browser session reaches the site straight on Docker's default bridge:
+  // `http://localhost:<port>` is a local site of the stand, the name is its proxy's alone.
+  const browser = options.browser ? { siteTarget: await siteOnTheBridge(names) } : null
   const hosting = await startHosting(rt, names, { directory, port: ports.ssh })
   console.log(
     'PASS production site: WordPress 7.1.2 with MariaDB, the theme of the stand, «Контакты» and a post, the plugin «Радити», an SFTP hosting over its document root',
@@ -421,9 +433,12 @@ async function main(options, owned) {
     auth: rt.secret(randomBytes(36).toString('base64url')),
     previewSession: rt.secret(randomBytes(36).toString('base64url')),
     botToken: gitea.tokens.bot,
+    ...(options.browser ? { workerToken: rt.secret(randomBytes(32).toString('hex')) } : {}),
   }
   const context = {
     path: callerEnv.PATH,
+    browser,
+    siteUrl,
     directory,
     ports,
     databaseUrl: postgres.url,
@@ -468,6 +483,14 @@ async function main(options, owned) {
     roleEnvironment('llm', context),
     `http://127.0.0.1:${ports.llm}/health`,
   )
+  if (options.browser)
+    processes.browser = await start(
+      'browser',
+      ['dist/main.js'],
+      join(copy, 'apps/browser'),
+      roleEnvironment('browser', context),
+      `http://127.0.0.1:${ports.browser}/health`,
+    )
   processes.mcp = await start(
     'mcp',
     ['dist/main.js'],
@@ -560,11 +583,25 @@ async function main(options, owned) {
     directory,
     s3,
     runnerUuid: runner.uuid,
+    browser: options.browser,
+    workerToken: secrets.workerToken,
+    workerUrl: `http://127.0.0.1:${ports.browser}`,
   })
   if (options.keep) {
     console.log(`KEEP the stand is up: web ${webUrl}; Ctrl-C cleans it up`)
     await keptUntilInterrupted()
   }
+}
+
+/** The address of the web server of the site on Docker's default bridge, `host:port`. */
+async function siteOnTheBridge(names) {
+  const web = names.containers['site-web']
+  await rt.docker(['network', 'connect', 'bridge', web])
+  const address = (
+    await rt.docker(['inspect', '--format', '{{.NetworkSettings.Networks.bridge.IPAddress}}', web])
+  ).output.trim()
+  assert.match(address, /^\d+\.\d+\.\d+\.\d+$/, 'The site has no address on the default bridge')
+  return `${address}:80`
 }
 
 const TEXT_SITE = 'Цветочная лавка'
@@ -701,6 +738,7 @@ async function cleanup(owned) {
       'io.raditi.sandbox.siteId',
       'io.raditi.gateway.siteId',
       'io.raditi.preview.site',
+      'io.raditi.browser.site',
     ])
       filters.push(`label=${prefix}=${owned.siteId}`)
   const volumes = new Set()

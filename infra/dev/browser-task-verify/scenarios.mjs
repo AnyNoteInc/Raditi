@@ -22,6 +22,7 @@ import { signUp, switchOnModel, uploadFile } from './setup.mjs'
 import { rawDocker } from './site.mjs'
 import {
   FAKE_JPEG,
+  PLATFORM_HOST,
   SITE_ORIGIN,
   SWITCH,
   UPLOAD_LIMIT_BYTES,
@@ -166,7 +167,7 @@ async function resumeWith(stand, client, taskId, program, ctx) {
 const ticketOf = (client, taskId) => client.mutate('browser.streamTicket', { taskId })
 
 /** A viewer of the task's browser through the gateway, once it has its id, a state and a frame. */
-async function watch(stand, client, taskId, options = {}) {
+export async function watch(stand, client, taskId, options = {}) {
   const { rt } = stand
   const ticket = await ticketOf(client, taskId)
   const viewer = openViewer(stand.streamTools, {
@@ -217,10 +218,10 @@ async function refusedWith(stand, viewer, send, reason) {
  * its first field), the login and the password typed, Tab and Enter pressed. The browser lands on
  * the list of posts; the operator keeps control.
  */
-async function signIn(stand, operator, account) {
+export async function signIn(stand, operator, account, origin = SITE_ORIGIN) {
   await operator.take()
   await operator.navigate(
-    `${SITE_ORIGIN}/wp-login.php?redirect_to=${encodeURIComponent(`${SITE_ORIGIN}/wp-admin/edit.php`)}`,
+    `${origin}/wp-login.php?redirect_to=${encodeURIComponent(`${origin}/wp-admin/edit.php`)}`,
   )
   await stand.rt.until(
     'the sign-in page',
@@ -241,11 +242,11 @@ async function signIn(stand, operator, account) {
     },
     { timeoutMs: 30_000, intervalMs: 100 },
   )
-  await stand.site.cookies()
+  await stand.site.cookies?.()
 }
 
 /** A raw viewer of the task's stream as the client's operator (stream.mjs). */
-async function streamOperatorOf(stand, client, taskId) {
+export async function streamOperatorOf(stand, client, taskId) {
   return streamOperator(stand, await watch(stand, client, taskId))
 }
 
@@ -2059,6 +2060,380 @@ async function openHome(stand, client, GetObjectCommand, manifest) {
   }
 }
 
+// ─── P: a chat without a project ──────────────────────────────────────────────
+
+/** A chat of `client` without a project, its first turn scripted; a chat goes by its own id. */
+async function newChat(stand, client, { text, attachments = [], program, ctx = {} }) {
+  const taskId = stand.modules.ids.uuidv7()
+  stand.owned.chats.push(taskId)
+  stand.model.script(program, ctx)
+  const created = await client.mutate('task.create', {
+    siteId: null,
+    taskId,
+    text,
+    ...(attachments.length > 0 ? { attachments } : {}),
+  })
+  if (created.taskId !== taskId || !created.created)
+    throw new CheckFailed('task.create made no new chat')
+  return taskId
+}
+
+/** Nothing of a browser for a chat, in the database, at the worker and in Docker. */
+async function browserOf(stand, taskId) {
+  const { rt, db } = stand
+  const label = `label=io.raditi.browser.site=${taskId}`
+  return {
+    rows: await db.browserSession.count({ where: { taskId } }),
+    live: (await workerSessions(stand)).filter((session) => session.taskId === taskId).length,
+    containers: (await rt.docker(['ps', '-aq', '--filter', label])).output.trim(),
+  }
+}
+
+async function scenarioP(stand) {
+  const { rt, db, state } = stand
+  rt.begin('P', 'чат без проекта: подарок, файл клиента, открытый интернет, чужой чат, лимит')
+  const client = await signUp(rt, {
+    webUrl: stand.webUrl,
+    db,
+    address: '198.51.100.23',
+    name: 'Вера',
+    login: 'no-project',
+  })
+  const member = () => db.member.count({ where: { userId: client.id } })
+  rt.check((await member()) === 0, 'a new user has no workspace before the first chat')
+
+  // The first words of a new client: no project, the gift pays, the browser stays closed.
+  const first = await newChat(stand, client, {
+    text: 'Здравствуйте, вы здесь?',
+    program: 'plainAnswer',
+  })
+  await waitAnswered(stand, first, { what: 'the first chat of a new user to answer' })
+  const chat = await db.task.findUniqueOrThrow({ where: { id: first } })
+  rt.check(
+    chat.siteId === null && chat.needsRepository === false && chat.needsBrowser === true,
+    'task.create without a project made the chat: no site, no repository, a browser on demand',
+    { siteId: chat.siteId, repository: chat.needsRepository, browser: chat.needsBrowser },
+  )
+  const gift = await db.creditLedger.findMany({
+    where: { account: { workspaceId: chat.workspaceId, unit: 'credit_gift' } },
+    orderBy: { createdAt: 'asc' },
+  })
+  rt.check(
+    gift.some((row) => row.kind === 'grant' && Number(row.amount) === 35) &&
+      gift.some((row) => row.kind === 'charge' && row.taskId === first),
+    'the chat created the workspace with the gift, and the gift paid for the answer',
+    gift.map((row) => `${row.kind} ${row.amount}`),
+  )
+  const answered = (await rowsOf(db, first, 'feed.result')).at(-1)
+  rt.check(
+    answered?.site === 'none' && !answered.objects?.length && !answered.filesChanged,
+    'the answer says nothing of a site or of files: `site: none`, no object, no file',
+    answered,
+  )
+  const closed = await browserOf(stand, first)
+  rt.check(
+    closed.rows === 0 && closed.live === 0 && closed.containers === '',
+    'a turn without `web_*` started no browser: no row, no session at the worker, no container',
+    closed,
+  )
+  await grantTariff(
+    { db, billing: stand.modules.billing },
+    { workspaceId: chat.workspaceId, userId: client.id },
+  )
+
+  // Another client's chat is not there for them.
+  const foreign = await state.stranger.call('query', 'task.feed', { taskId: first })
+  const foreignTicket = await state.stranger.call('mutation', 'browser.streamTicket', {
+    taskId: first,
+  })
+  rt.check(
+    !foreign.ok &&
+      /NOT_FOUND/.test(JSON.stringify(foreign)) &&
+      !foreignTicket.ok &&
+      /NOT_FOUND/.test(JSON.stringify(foreignTicket)),
+    "another client's chat without a project → NOT_FOUND, its feed and its browser",
+    { feed: foreign, ticket: foreignTicket },
+  )
+
+  // A file before the first words: core, the sandbox of the turn, the CLI's own tool.
+  const word = `raditi-chat-file-${randomUUID().replaceAll('-', '')}`
+  const bytes = Buffer.from(`Записка клиента: ${word}\n`)
+  const file = await uploadFile(client, {
+    siteId: null,
+    name: 'zapiska.txt',
+    type: 'text/plain',
+    bytes,
+  })
+  rt.check(
+    file.upload?.status === 200,
+    'a file of a chat that has no project yet is uploaded before its first words',
+    file.upload,
+  )
+  const withFile = await newChat(stand, client, {
+    text: 'Прочитайте, пожалуйста, файл.',
+    attachments: [file.id],
+    program: 'readClientFile',
+  })
+  await waitAnswered(stand, withFile, { what: 'the chat with a file to answer' })
+  const read = (await rowsOf(db, withFile, 'feed.result')).at(-1)
+  const plan = (
+    await db.turnAssignment.findFirstOrThrow({ where: { taskId: withFile, turnNo: 1 } })
+  ).plan
+  const noSession = await browserOf(stand, withFile)
+  rt.check(
+    JSON.stringify(read).includes(word) &&
+      plan.input.attachments.length === 1 &&
+      plan.input.attachments[0].startsWith('/workspace/inbox/') &&
+      noSession.rows === 0,
+    'the agent on the real OpenCode read the file under /workspace/inbox with its own tool and answered what it holds, with no browser and no `web_upload`',
+    { attachments: plan.input.attachments, sessions: noSession.rows },
+  )
+
+  // The browser of a chat without a project: the open internet, no object of a task.
+  const contact = `stand-contact-${randomUUID().slice(0, 8)}@example.ru`
+  const contactTitle = 'Контакты стенда'
+  const page = (
+    await stand.site.wp([
+      'post',
+      'create',
+      `--post_title=${contactTitle}`,
+      `--post_content=Пишите нам: ${contact}`,
+      '--post_status=publish',
+      '--porcelain',
+    ])
+  ).output
+    .trim()
+    .split('\n')
+    .at(-1)
+  // The file of this chat goes on a page through the worker (К16): raditi-inbox, `site_id` NULL.
+  const uploadWord = `raditi-chat-upload-${randomUUID().replaceAll('-', '')}`
+  const toUpload = await uploadFile(client, {
+    siteId: null,
+    name: 'dlya-stranicy.txt',
+    type: 'text/plain',
+    bytes: Buffer.from(`${uploadWord}\n`),
+  })
+  rt.check(toUpload.upload?.status === 200, 'a second file of a chat without a project is uploaded')
+  const web = await newChat(stand, client, {
+    text: 'Откройте несколько страниц.',
+    attachments: [toUpload.id],
+    program: 'openTheWeb',
+    ctx: {
+      uploadWord,
+      origin: SITE_ORIGIN,
+      contact,
+      contactTitle,
+      contactPage: `${SITE_ORIGIN}/?p=${page}`,
+      refused: {
+        http: 'http://example.com/',
+        address: 'https://93.184.216.34/',
+        port: 'https://example.com:444/',
+        platform: `https://app.${PLATFORM_HOST}/`,
+        path: '/wp-admin/',
+      },
+    },
+  })
+  await waitAnswered(stand, web, { what: 'the chat with the browser to answer' })
+  const seen = stand.model.current().facts
+  rt.check(
+    seen.start === 'about:blank' && seen.startEmpty === true,
+    'the browser of a chat without a project starts on an empty page, not on a page of a site',
+    { start: seen.start, empty: seen.startEmpty },
+  )
+  const attachmentRow = await db.attachment.findUniqueOrThrow({ where: { id: toUpload.id } })
+  rt.check(
+    seen.upload === null && seen.uploaded === true && attachmentRow.siteId === null,
+    '`web_upload` of a file of the chat (`site_id` NULL): the worker read it from raditi-inbox, the page got its name and its words',
+    { refused: seen.upload, uploaded: seen.uploaded, site: attachmentRow.siteId },
+  )
+  rt.check(
+    Object.values(seen.refused).every((code) => code === 'BROWSER_ADDRESS_DENIED'),
+    '`web_open` refuses http://, an address by IP, another port, a name of the platform and a path',
+    seen.refused,
+  )
+  rt.check(
+    seen.example === true,
+    'the agent opened example.com on the open internet and read it',
+    seen,
+  )
+  rt.check(
+    seen.contactRead === true && seen.contact === false,
+    'a page of the local site opened as well, and a contact on it reached the model masked',
+    seen,
+  )
+  rt.check(seen.objects === 0, '`web_verify` of a chat without a project: no object', seen.objects)
+  const openSessionRow = await openSession(db, web)
+  const checkpoints = await db.browserCheckpoint.count({ where: { sessionId: openSessionRow.id } })
+  const webResult = (await rowsOf(db, web, 'feed.result')).at(-1)
+  rt.check(
+    checkpoints === 0 && openSessionRow.siteId === null && openSessionRow.wroteAt !== null,
+    'the session has no site and not one row of `browser_checkpoints`, though the agent wrote',
+    { checkpoints, wrote: openSessionRow.wroteAt !== null },
+  )
+  rt.check(
+    webResult?.site === 'none' && !webResult.objects?.length,
+    'the feed says no word of a site: `site: none`, no object',
+    webResult,
+  )
+  const masks = await localVaultRequest(stand.vault.root, `kv/metadata/content-masks/${web}/${web}`)
+  rt.check(
+    masks.status === 200 && stand.model.requests.every((body) => !body.includes(contact)),
+    'the contact map of the chat lies under its own id, and no request of the model holds the contact',
+    { map: masks.status },
+  )
+
+  // The address from the client, in the panel of the same browser: the address field of the
+  // cabinet in Chromium («+» → «Браузер», «Взять управление»), over the stream when the build has
+  // no pane.
+  if (stand.cabinet) {
+    const cabinet = await cabinetBrowser(stand, client)
+    try {
+      const tab = await cabinet.open(web)
+      const operator = cabinetOperator(stand, tab)
+      await operator.take()
+      await refusedWith(
+        stand,
+        tab,
+        () => operator.navigate('http://example.com/'),
+        'address_denied',
+      )
+      await operator.navigate('https://example.com/?from=client')
+      await stateWhere(
+        stand,
+        tab,
+        (current) => current.url.startsWith('https://example.com/'),
+        'the browser to take the address of the client',
+        60_000,
+      )
+      rt.check(
+        true,
+        'the client opened an https:// address in the address field of the panel in the cabinet; http:// is refused there too',
+      )
+    } finally {
+      await cabinet.close()
+    }
+  } else {
+    rt.note('the cabinet has no browser pane in this build: the address goes over the stream')
+    const operator = await streamOperatorOf(stand, client, web)
+    await operator.take()
+    await refusedWith(
+      stand,
+      operator.viewer,
+      () => operator.viewer.send({ t: 'navigate', url: 'http://example.com/' }),
+      'address_denied',
+    )
+    await operator.navigate('https://example.com/?from=client')
+    await stateWhere(
+      stand,
+      operator.viewer,
+      (current) => current.url.startsWith('https://example.com/'),
+      'the browser to take the address of the client',
+      60_000,
+    )
+    rt.check(
+      true,
+      'the client opened an https:// address over the stream; http:// is refused there too',
+    )
+    operator.close()
+  }
+
+  // The live browsers of a workspace: two; the third chat is told so.
+  stand.model.script('holdTheBrowser')
+  const holds = await newChat(stand, client, {
+    text: 'Откройте ещё одну страницу.',
+    program: 'holdTheBrowser',
+  })
+  await waitAnswered(stand, holds, { what: 'the second browser of the workspace to open' })
+  rt.check(
+    stand.model.current().facts.code === null &&
+      (await db.browserSession.count({ where: { taskId: holds, closedAt: null } })) === 1,
+    'a second chat of the workspace holds a browser of its own',
+    stand.model.current().facts,
+  )
+  const third = await newChat(stand, client, {
+    text: 'И ещё одну.',
+    program: 'holdTheBrowser',
+  })
+  await waitAnswered(stand, third, { what: 'the third chat to be refused a browser' })
+  rt.check(
+    stand.model.current().facts.code === 'BROWSER_WORKSPACE_BUSY' &&
+      (await db.browserSession.count({ where: { taskId: third } })) === 0,
+    'a third browser of the workspace is refused: `BROWSER_WORKSPACE_BUSY`, no session',
+    stand.model.current().facts,
+  )
+
+  // What the chats leave: a failure names the other sites, a closed chat leaves nothing.
+  const cancelled = async (taskId) => {
+    await client.mutate('task.cancel', { taskId, requestId: randomUUID() })
+    await waitTask(stand, taskId, ['cancelled'], { what: 'the chat to close', timeoutMs: 120_000 })
+    return (await rowsOf(db, taskId, 'feed.cancelled')).at(-1)
+  }
+  // The control of the cleanup below: a live session of a chat is found by its own id.
+  const live = (
+    await rt.docker(['ps', '-q', '--filter', `label=io.raditi.browser.site=${web}`])
+  ).output.trim()
+  rt.check(
+    live !== '',
+    'the live browser of the chat is found in Docker by the label of its own id: the check of the cleanup can see one',
+  )
+  const ended = await cancelled(web)
+  rt.check(
+    ended?.site === 'elsewhere',
+    'a chat in whose browser the agent acted ends with `elsewhere`: its words name the other sites, not a site of the client',
+    ended,
+  )
+  for (const taskId of [holds, third, first, withFile]) await cancelled(taskId)
+
+  // A pass that fails after the agent typed in the browser: its failure names the other sites.
+  const broken = await newChat(stand, client, {
+    text: 'Заполните поле входа.',
+    program: 'failAfterWriting',
+    ctx: { origin: SITE_ORIGIN },
+  })
+  const failure = await rt.until(
+    'the pass that wrote in the browser to fail',
+    async () => (await rowsOf(db, broken, 'feed.failure')).at(-1) ?? null,
+    { timeoutMs: 600_000, intervalMs: 1000, service: stand.processes.core },
+  )
+  const brokenSession = await db.browserSession.findFirst({ where: { taskId: broken } })
+  rt.check(
+    stand.model.current().facts.wrote === true &&
+      brokenSession?.wroteAt !== null &&
+      failure.site === 'elsewhere',
+    'a pass that failed after the agent wrote in the browser of a chat without a project: `feed.failure` says `elsewhere`',
+    failure,
+  )
+  await cancelled(broken)
+  const chats = [first, withFile, web, holds, third, broken]
+  const left = await rt.until(
+    'the chats to leave nothing in Docker',
+    async () => {
+      const found = []
+      for (const taskId of chats)
+        for (const label of [
+          'io.raditi.browser.site',
+          'io.raditi.sandbox.siteId',
+          'io.raditi.gateway.siteId',
+        ]) {
+          const filter = `label=${label}=${taskId}`
+          found.push(
+            ...(await rt.docker(['ps', '-aq', '--filter', filter])).output.split('\n'),
+            ...(await rt.docker(['network', 'ls', '-q', '--filter', filter])).output.split('\n'),
+          )
+        }
+      const rest = found.filter(Boolean)
+      return rest.length === 0 ? rest : null
+    },
+    { timeoutMs: 120_000, intervalMs: 1000 },
+  )
+  const sessions = await db.browserSession.findMany({ where: { taskId: { in: chats } } })
+  rt.check(
+    left.length === 0 && sessions.every((session) => session.closedAt !== null),
+    `the chats are cleaned up by their own ids: ${sessions.length} sessions closed, no container, no network`,
+  )
+  rt.end()
+}
+
 // ─── M: cleanup ───────────────────────────────────────────────────────────────
 
 async function scenarioM(stand) {
@@ -2133,6 +2508,7 @@ const SCENARIOS = Object.freeze({
   J: scenarioJ,
   N: scenarioN,
   O: scenarioO,
+  P: scenarioP,
   K: scenarioK,
   L: scenarioL,
   M: scenarioM,

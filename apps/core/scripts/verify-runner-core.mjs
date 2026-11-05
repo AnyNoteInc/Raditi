@@ -25,6 +25,7 @@ import { SnapshotService } from '../dist/sessions/snapshot.service.js'
 import { LiveTurns } from '../dist/turns/live-turns.js'
 import { PreviewTurnRollback } from '../dist/turns/preview-turn-rollback.js'
 import { TurnExecRecovery } from '../dist/turns/turn-exec-recovery.js'
+import { TaskInboxFiles } from '../dist/turns/turn-inbox.js'
 import { TaskEventTurnJournal } from '../dist/turns/turn-journal.js'
 import { TurnSupervisor } from '../dist/turns/turn-supervisor.js'
 
@@ -150,10 +151,8 @@ journal.record = async (input) => {
 // when a poll of the runner takes the prepare.
 const cancelAt = new Map()
 // Presigned URLs are signed for S3 as the VM sees it (S3_RUNNER_ENDPOINT).
-const snapshots = new SnapshotService(
-  createS3ObjectStorage(storageConfigFromEnv(env)),
-  createVaultSecretStore(vaultConfigFromEnv(env)),
-)
+const storage = createS3ObjectStorage(storageConfigFromEnv(env))
+const snapshots = new SnapshotService(storage, createVaultSecretStore(vaultConfigFromEnv(env)))
 const workspace = new GitWorkspaceService(
   {
     kind: 'gitea',
@@ -225,6 +224,8 @@ const supervisor = new TurnSupervisor({
   credentials,
   // As TurnsModule: a replacement of a turn takes its writes out of the plan first.
   contentRollback: new PreviewTurnRollback(db),
+  // As TurnsModule: the files of a chat, read from raditi-inbox when the runner asks for them.
+  inbox: new TaskInboxFiles(db, storage),
 })
 const credentialPolicy = {
   driverId: driver.id,

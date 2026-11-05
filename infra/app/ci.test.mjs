@@ -384,6 +384,7 @@ test('the rehearsals of the live mode run in CI, each after the deterministic pa
     'pnpm verify:llm-gateway --rehearsal --measure --no-build',
     'pnpm verify:llm-gateway --rehearsal --results --no-build',
     'pnpm verify:llm-gateway --rehearsal --compact --no-build',
+    'pnpm verify:llm-gateway --rehearsal --init --no-build',
     'pnpm verify:llm-gateway --rehearsal --api --no-build',
   ])
   assert.deepEqual(stands('agent-content'), [
@@ -397,6 +398,7 @@ test('the rehearsals of the live mode run in CI, each after the deterministic pa
     '--measure',
     '--results',
     '--compact',
+    '--init',
     '--api',
     '--no-build',
   ])

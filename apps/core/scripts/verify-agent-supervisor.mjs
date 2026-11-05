@@ -297,7 +297,7 @@ export async function provisionServices({
   signal,
   stage,
   command,
-  buckets = ['sessions'],
+  buckets = ['sessions', 'inbox'],
 }) {
   stage('PostgreSQL readiness')
   await eventually(
@@ -331,7 +331,7 @@ export async function provisionServices({
       timeoutMs: 180_000,
     },
   )
-  stage('disposable S3 sessions bucket')
+  stage('disposable S3 sessions and inbox buckets')
   const { S3Client, CreateBucketCommand, HeadBucketCommand } = createRequire(
     join(repository, 'packages/storage/package.json'),
   )('@aws-sdk/client-s3')
@@ -398,6 +398,7 @@ export function scenarioEnvironment(environment, settings, fixture) {
     S3_ACCESS_KEY_ID: fixture.accessKey,
     S3_SECRET_ACCESS_KEY: fixture.secretKey,
     S3_BUCKET_SESSIONS: `raditi-p4-${fixture.marker}-sessions`,
+    S3_BUCKET_INBOX: `raditi-p4-${fixture.marker}-inbox`,
     VAULT_ADDR: fixture.vaultAddress,
     VAULT_DEV_ROOT_TOKEN: fixture.vaultToken,
   }
@@ -487,7 +488,7 @@ export async function verifyAgentSupervisor({
       '/bin/sh',
       serviceImages.s3,
       '-c',
-      'while [ ! -f /config/s3.json ]; do sleep 0.1; done; exec weed server -dir=/data -s3 -s3.port=8333 -s3.config=/config/s3.json',
+      'while [ ! -f /config/s3.json ]; do sleep 0.1; done; exec weed server -dir=/data -volume.max=32 -s3 -s3.port=8333 -s3.config=/config/s3.json',
     ])
     await docker(
       [

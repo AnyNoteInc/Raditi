@@ -170,6 +170,7 @@ test('scenario env takes only owned endpoints and explicit runner inputs', () =>
   assert.equal(env.S3_ACCESS_KEY_ID, 'owned-access')
   assert.equal(env.VAULT_DEV_ROOT_TOKEN, 'owned-token')
   assert.equal(env.S3_BUCKET_SESSIONS, `raditi-p4-${'b'.repeat(32)}-sessions`)
+  assert.equal(env.S3_BUCKET_INBOX, `raditi-p4-${'b'.repeat(32)}-inbox`)
   for (const name of [
     'S3_RUNNER_ENDPOINT',
     'VAULT_ROLE_ID',

@@ -4,7 +4,8 @@
 // two more dialogs side by side, S5 a release that breaks the site and is rolled back, S6 a
 // release refused by a conflict before `main` moves, S8 a database plan of every kind released,
 // repeated, refused for a taken address and rolled back, S9 «Отменить выпуск», S11 `/undo`, S10 a pass that
-// fails for a reason of the platform keeps the candidate and «Попробовать ещё» repeats it, S7 the
+// fails for a reason of the platform keeps the candidate and «Попробовать ещё» repeats it, S13
+// `/compact` and S14 `/init`, S7 the
 // tags that deploy nothing, a turn that waits for a deploy and what core leaves behind. Every
 // PASS line is a fact read from the product's own state, the pages it serves or what Gitea,
 // OpenBao, S3, Docker and the hosting hold; a NOTE line is a precondition of the stand or what it
@@ -15,6 +16,7 @@ import { join } from 'node:path'
 import { zstdDecompressSync } from 'node:zlib'
 
 import { localVaultRequest } from '../../vault/bootstrap.mjs'
+import { runBrowserScenario } from './browser-scenario.mjs'
 import { roundOf } from './fake-model.mjs'
 import { isolationOf } from './isolation.mjs'
 import { productionTitle, repositoryReader } from './setup.mjs'
@@ -296,8 +298,102 @@ export async function runScenarios(stand) {
   }
 
   const footer0 = themeFiles()[FOOTER_PATH]
+  /** The plan of the undo of `release` of `dialog`, asked as the window asks and waited for. */
+  const undoPlan = async (dialog, release) => {
+    const prepare = async () =>
+      (
+        await owner.mutate('release.undoPrepare', {
+          taskId: dialog.taskId,
+          releaseId: release.id,
+        })
+      ).planId
+    let planId = await prepare()
+    let renewed = 0
+    return rt.until(
+      `the plan of the undo of ${release.version}`,
+      async () => {
+        const answer = await owner.query('release.undoPlan', {
+          taskId: dialog.taskId,
+          releaseId: release.id,
+          planId,
+        })
+        // A plan made while the end of the release before still held the site: asked again, as
+        // the window does.
+        if (answer.state === 'expired' && renewed < 3) {
+          renewed += 1
+          planId = await prepare()
+          return null
+        }
+        if (answer.state === 'failed' || answer.state === 'expired')
+          throw new CheckFailed(`the plan of the undo is ${answer.state}: ${answer.reason ?? ''}`)
+        return answer.state === 'ready' ? answer : null
+      },
+      { timeoutMs: 3 * MINUTE, intervalMs: 1000, service: stand.processes.core },
+    )
+  }
+  /** The head of `agent/<taskId>` from the refs of the repository; null — no such branch. */
+  const agentHead = async (taskId) => {
+    const name = `refs/heads/agent/${taskId}`
+    const answer = await api('GET', `/git/refs/heads/agent/${taskId}`)
+    if (answer.status !== 200) return null
+    return [answer.json].flat().find((ref) => ref.ref === name)?.object.sha ?? null
+  }
+  const undoLast = (taskId) => owner.mutate('task.undoTurn', { taskId, requestId: uuid7() })
+  const redoLast = (taskId) => owner.mutate('task.redoTurn', { taskId, requestId: uuid7() })
+  /** The row of the `count`-th `/redo` of the chat: core wrote it with the turn back. */
+  const redoneRow = (taskId, count = 1) =>
+    rt.until(
+      `redo ${count} of ${taskId} written by core`,
+      async () => {
+        const rows = await db.taskEvent.findMany({
+          where: { taskId, type: 'feed.redo' },
+          orderBy: { id: 'asc' },
+        })
+        return rows.length >= count ? rows[count - 1] : null
+      },
+      { timeoutMs: 3 * MINUTE, intervalMs: 500, service: stand.processes.core },
+    )
+  /** The row of the `count`-th undo of the chat: core wrote it with the turn undone. */
+  const rewoundRow = (taskId, count = 1) =>
+    rt.until(
+      `undo ${count} of ${taskId} written by core`,
+      async () => {
+        const rows = await db.taskEvent.findMany({
+          where: { taskId, type: 'feed.rewind' },
+          orderBy: { id: 'asc' },
+        })
+        return rows.length >= count ? rows[count - 1] : null
+      },
+      { timeoutMs: 3 * MINUTE, intervalMs: 500, service: stand.processes.core },
+    )
+  const turnReaches = (taskId, turnNo, status) =>
+    rt.until(
+      `turn ${turnNo} of ${taskId} ended ${status}`,
+      async () => {
+        const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
+        if (['failed', 'cancelled', 'done', 'rolled_back'].includes(task.status))
+          throw new CheckFailed(`dialog ${taskId} ended ${task.status}`)
+        return task.status === status && task.turnNo === turnNo ? task : null
+      },
+      { timeoutMs: 12 * MINUTE, intervalMs: 1000, service: stand.processes.core },
+    )
   const contactsPath = `/?page_id=${content.contactsId}`
   const postPath = `/?p=${content.postId}`
+
+  // `--browser` is a run of its own: its web, worker and gateway serve S12 alone.
+  if (stand.browser)
+    return runBrowserScenario(stand, {
+      agentHead,
+      currentCandidate,
+      previewReady,
+      redoneRow,
+      releaseEnds,
+      rewoundRow,
+      taskReaches,
+      turnReaches,
+      undoPlan,
+      uuid7,
+    })
 
   // ── S1 ───────────────────────────────────────────────────────────────────────
   rt.begin('S1', 'chat → turn → candidate')
@@ -1455,39 +1551,6 @@ export async function runScenarios(stand) {
   rt.end()
 
   // ── S9: «Отменить выпуск» (docs/plan/53, «Отмена выпуска») ──────────────────────
-  /** The plan of the undo of `release` of `dialog`, asked as the window asks and waited for. */
-  const undoPlan = async (dialog, release) => {
-    const prepare = async () =>
-      (
-        await owner.mutate('release.undoPrepare', {
-          taskId: dialog.taskId,
-          releaseId: release.id,
-        })
-      ).planId
-    let planId = await prepare()
-    let renewed = 0
-    return rt.until(
-      `the plan of the undo of ${release.version}`,
-      async () => {
-        const answer = await owner.query('release.undoPlan', {
-          taskId: dialog.taskId,
-          releaseId: release.id,
-          planId,
-        })
-        // A plan made while the end of the release before still held the site: asked again, as
-        // the window does.
-        if (answer.state === 'expired' && renewed < 3) {
-          renewed += 1
-          planId = await prepare()
-          return null
-        }
-        if (answer.state === 'failed' || answer.state === 'expired')
-          throw new CheckFailed(`the plan of the undo is ${answer.state}: ${answer.reason ?? ''}`)
-        return answer.state === 'ready' ? answer : null
-      },
-      { timeoutMs: 3 * MINUTE, intervalMs: 1000, service: stand.processes.core },
-    )
-  }
   const undoFeed = async (taskId) =>
     (
       await db.taskEvent.findMany({ where: { taskId, type: 'feed.undo' }, orderBy: { id: 'asc' } })
@@ -2073,52 +2136,6 @@ export async function runScenarios(stand) {
   // and without money — the branch by CAS, the candidate, the preview —, its words come back to
   // the page and reach the agent no more. Dialog L: the first turn, which found no branch.
   rt.begin('S11', '/undo takes the last turn back: branch, candidate, preview; no money')
-  /** The head of `agent/<taskId>` from the refs of the repository; null — no such branch. */
-  const agentHead = async (taskId) => {
-    const name = `refs/heads/agent/${taskId}`
-    const answer = await api('GET', `/git/refs/heads/agent/${taskId}`)
-    if (answer.status !== 200) return null
-    return [answer.json].flat().find((ref) => ref.ref === name)?.object.sha ?? null
-  }
-  const undoLast = (taskId) => owner.mutate('task.undoTurn', { taskId, requestId: uuid7() })
-  const redoLast = (taskId) => owner.mutate('task.redoTurn', { taskId, requestId: uuid7() })
-  /** The row of the `count`-th `/redo` of the chat: core wrote it with the turn back. */
-  const redoneRow = (taskId, count = 1) =>
-    rt.until(
-      `redo ${count} of ${taskId} written by core`,
-      async () => {
-        const rows = await db.taskEvent.findMany({
-          where: { taskId, type: 'feed.redo' },
-          orderBy: { id: 'asc' },
-        })
-        return rows.length >= count ? rows[count - 1] : null
-      },
-      { timeoutMs: 3 * MINUTE, intervalMs: 500, service: stand.processes.core },
-    )
-  /** The row of the `count`-th undo of the chat: core wrote it with the turn undone. */
-  const rewoundRow = (taskId, count = 1) =>
-    rt.until(
-      `undo ${count} of ${taskId} written by core`,
-      async () => {
-        const rows = await db.taskEvent.findMany({
-          where: { taskId, type: 'feed.rewind' },
-          orderBy: { id: 'asc' },
-        })
-        return rows.length >= count ? rows[count - 1] : null
-      },
-      { timeoutMs: 3 * MINUTE, intervalMs: 500, service: stand.processes.core },
-    )
-  const turnReaches = (taskId, turnNo, status) =>
-    rt.until(
-      `turn ${turnNo} of ${taskId} ended ${status}`,
-      async () => {
-        const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
-        if (['failed', 'cancelled', 'done', 'rolled_back'].includes(task.status))
-          throw new CheckFailed(`dialog ${taskId} ended ${task.status}`)
-        return task.status === status && task.turnNo === turnNo ? task : null
-      },
-      { timeoutMs: 12 * MINUTE, intervalMs: 1000, service: stand.processes.core },
-    )
   const planOfTurn = async (taskId, turnNo) =>
     (await db.turnAssignment.findFirst({ where: { taskId, turnNo } }))?.plan ?? {}
   const refusalOf = async (taskId, id) =>
@@ -2501,6 +2518,153 @@ export async function runScenarios(stand) {
   rt.check(cancelledM.state === 'cancelled', 'dialog M is cancelled by /cancel')
   rt.end()
 
+  /** What the agent was asked in these requests of the synthetic Z.ai: their messages, whole. */
+  const askedIn = (chats) => JSON.stringify(chats.map((chat) => chat.body?.messages ?? []))
+  const chargedOnce = (taskId, from) =>
+    rt.until(
+      `the charge of the pass of ${taskId}`,
+      async () => {
+        const charged = await chargesOf(taskId)
+        return charged.length > from ? charged : null
+      },
+      { timeoutMs: 3 * MINUTE, intervalMs: 1000, service: stand.processes.core },
+    )
+
+  // ── S13 ──────────────────────────────────────────────────────────────────────
+  // `/compact` (docs/plan/61-chats-first.md, §5.14, §8) on the real OpenCode: a paid pass of its
+  // own in which the server of the CLI writes the summary; the candidate is not touched, and the
+  // next turn goes on from the summary instead of the words before it.
+  rt.begin('S13', '/compact: a paid pass of its own; the candidate stands; the next turn')
+  const dialogN = { taskId: uuid7() }
+  model.script(MODEL_TURNS.compactMark())
+  await owner.mutate('task.create', { siteId, taskId: dialogN.taskId, text: TEXT.compactWords })
+  await taskReaches(dialogN.taskId, 'awaiting_approval')
+  const candidateN = await currentCandidate(dialogN.taskId)
+  await previewReady(dialogN.taskId, 1)
+  const chargedBeforeN = await chargedOnce(dialogN.taskId, 0)
+  const chatsBeforeCompact = model.chats().length
+  model.script(MODEL_TURNS.compactSummary())
+  const compacted = await owner.mutate('task.compact', {
+    taskId: dialogN.taskId,
+    requestId: uuid7(),
+  })
+  await turnReaches(dialogN.taskId, 2, 'awaiting_approval')
+  const planN2 = await planOfTurn(dialogN.taskId, 2)
+  const summaryChats = model.chats().slice(chatsBeforeCompact)
+  rt.check(
+    compacted.repeated === false &&
+      planN2.input?.action === 'compact' &&
+      summaryChats.length === 1 &&
+      summaryChats[0].body?.tools === undefined,
+    '/compact is a turn of the queue: its plan says `compact`, and the CLI sent one request without tools',
+    { action: planN2.input?.action, requests: summaryChats.length },
+  )
+  const chargedN = await chargedOnce(dialogN.taskId, chargedBeforeN.length)
+  rt.check(
+    sum(chargedN) < sum(chargedBeforeN),
+    `the pass of the summary is charged on its own (${chargedBeforeN.length} → ${chargedN.length} rows of the journal)`,
+    { before: sum(chargedBeforeN), after: sum(chargedN) },
+  )
+  const candidateN2 = await currentCandidate(dialogN.taskId)
+  const previewN = await previewOf(dialogN.taskId)
+  rt.check(
+    candidateN2?.id === candidateN.id &&
+      candidateN2.revision === candidateN.revision &&
+      candidateN2.headSha === candidateN.headSha &&
+      previewN?.revision === 1,
+    'the candidate and its revision are the same, and the preview did not move',
+    { revision: candidateN2?.revision, preview: previewN?.revision },
+  )
+  const chatsBeforeNextN = model.chats().length
+  model.script(MODEL_TURNS.answerOnly())
+  await owner.mutate('task.message', {
+    taskId: dialogN.taskId,
+    requestId: uuid7(),
+    text: 'Отметка на месте?',
+  })
+  await turnReaches(dialogN.taskId, 3, 'awaiting_approval')
+  const askedN = askedIn(model.chats().slice(chatsBeforeNextN))
+  rt.check(
+    askedN.includes(JSON.stringify(TEXT.compactSummary).slice(1, -1)) &&
+      !askedN.includes(TEXT.compactWords) &&
+      (await planOfTurn(dialogN.taskId, 3)).previous?.turn === 2,
+    'the next turn goes on from the checkpoint of the summary: the agent got the summary and not the words before it',
+    { previous: (await planOfTurn(dialogN.taskId, 3)).previous?.turn },
+  )
+  const cancelledN = await owner.mutate('task.cancel', {
+    taskId: dialogN.taskId,
+    requestId: uuid7(),
+  })
+  rt.check(cancelledN.state === 'cancelled', 'dialog N is cancelled by /cancel')
+  rt.end()
+
+  // ── S14 ──────────────────────────────────────────────────────────────────────
+  // `/init` (docs/plan/61-chats-first.md, К31, §8) on the real OpenCode: a paid pass on the words of
+  // the platform; its answer goes to the notes of the project by the button of its row, as the
+  // client presses it, and the next turn of any chat of the project is told them as data.
+  rt.begin('S14', '/init: the answer, «Сохранить в подсказки агенту», the next prompt')
+  const dialogO = { taskId: uuid7() }
+  model.script(MODEL_TURNS.answerOnly())
+  await owner.mutate('task.create', {
+    siteId,
+    taskId: dialogO.taskId,
+    text: 'Посмотрите, всё ли на месте.',
+  })
+  await taskReaches(dialogO.taskId, 'awaiting_user')
+  const chargedBeforeO = await chargedOnce(dialogO.taskId, 0)
+  const chatsBeforeInit = model.chats().length
+  model.script(MODEL_TURNS.initAnswer())
+  const initiated = await owner.mutate('task.init', { taskId: dialogO.taskId, requestId: uuid7() })
+  await turnReaches(dialogO.taskId, 2, 'awaiting_user')
+  const initChats = model.chats().slice(chatsBeforeInit)
+  const resultsO = (
+    await db.taskEvent.findMany({
+      where: { taskId: dialogO.taskId, type: 'feed.result' },
+      orderBy: { id: 'asc' },
+    })
+  ).map((row) => row.payload)
+  rt.check(
+    initiated.repeated === false &&
+      initChats.length === 1 &&
+      lastWords(initChats[0]).includes(TEXT.initWords) &&
+      resultsO.length === 2 &&
+      JSON.stringify(resultsO.at(-1)).includes(TEXT.initHints),
+    '/init is a pass on the words of the platform, and its answer is the row `feed.result` of the chat',
+    { results: resultsO.length, requests: initChats.length },
+  )
+  const chargedO = await chargedOnce(dialogO.taskId, chargedBeforeO.length)
+  rt.check(sum(chargedO) < sum(chargedBeforeO), 'the pass of /init is charged on its own', {
+    before: sum(chargedBeforeO),
+    after: sum(chargedO),
+  })
+  await saveNotesInCabinet(stand, dialogO)
+  const notedSite = await db.site.findUniqueOrThrow({ where: { id: siteId } })
+  rt.check(
+    notedSite.agentNotes === TEXT.initHints,
+    '«Сохранить в подсказки агенту» of the answer, in the cabinet: the notes of the project are its words',
+    { notes: notedSite.agentNotes },
+  )
+  const chatsBeforeNotes = model.chats().length
+  model.script(MODEL_TURNS.answerOnly())
+  await owner.mutate('task.message', {
+    taskId: dialogO.taskId,
+    requestId: uuid7(),
+    text: 'Спасибо, это всё.',
+  })
+  await turnReaches(dialogO.taskId, 3, 'awaiting_user')
+  rt.check(
+    lastWords(model.chats()[chatsBeforeNotes]).includes(
+      JSON.stringify(`${TEXT.notesHeader}\n${TEXT.initHints}`).slice(1, -1),
+    ),
+    'the prompt of the next turn the synthetic Z.ai saw holds the header PROJECT_NOTES with those notes',
+  )
+  const cancelledO = await owner.mutate('task.cancel', {
+    taskId: dialogO.taskId,
+    requestId: uuid7(),
+  })
+  rt.check(cancelledO.state === 'cancelled', 'dialog O is cancelled by /cancel')
+  rt.end()
+
   // ── S7 ───────────────────────────────────────────────────────────────────────
   rt.begin('S7', 'tags that deploy nothing; the waiting turn; what core leaves')
   const zero = await runsOf('v0.0.0')
@@ -2606,7 +2770,7 @@ export async function runScenarios(stand) {
   const sessions = await db.browserSession.count()
   rt.check(
     inBrowser === 0 && sessions === 0,
-    'S1–S11 opened no browser: no chat needs one, not one browser session was written',
+    'S1–S11, S13, S14 opened no browser: no chat needs one, not one browser session was written',
     { inBrowser, sessions },
   )
   rt.end()
@@ -2876,6 +3040,28 @@ async function retryInCabinet(stand, dialog) {
       async () => (await button.count()) === 0,
       { timeoutMs: 30_000 },
     )
+  } finally {
+    await browser.close()
+  }
+}
+
+/**
+ * S14 in the cabinet: the button on the answer to `/init`, the window with the text of the answer
+ * in its field, «Сохранить». The page says it saved them once the mutation answered.
+ */
+async function saveNotesInCabinet(stand, dialog) {
+  const { browser, page } = await cabinetPage(stand)
+  try {
+    await page.goto(`${stand.webUrl}/chats/${dialog.taskId}`, {
+      waitUntil: 'domcontentloaded',
+    })
+    await page.getByRole('button', { name: 'Сохранить в подсказки агенту' }).click({
+      timeout: 60_000,
+    })
+    const window = page.getByRole('dialog', { name: 'Подсказки агенту' })
+    await window.waitFor({ timeout: 30_000 })
+    await window.getByRole('button', { name: 'Сохранить', exact: true }).click()
+    await page.getByText('Подсказки сохранены').waitFor({ timeout: 30_000 })
   } finally {
     await browser.close()
   }

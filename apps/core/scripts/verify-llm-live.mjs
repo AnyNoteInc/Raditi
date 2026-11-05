@@ -152,6 +152,22 @@ function withoutReasoningRows(prepared) {
     files: prepared.files.map((file) => (isArguments(file) ? { ...file, content } : file)),
   }
 }
+/**
+ * The synthetic repository of the pass of `/init` (--init). Names no model could guess: an answer
+ * that holds them read the code.
+ */
+const INIT_REPOSITORY = Object.freeze({
+  'wp-content/themes/orchid-synth/functions.php':
+    "<?php\n// Registers the menus of the theme and loads parts/price-grid.php on the prices page.\nrequire __DIR__ . '/parts/price-grid.php';\n",
+  'wp-content/themes/orchid-synth/parts/price-grid.php':
+    '<?php\n// The table of prices. Rows come from the synthetic option orchid_prices.\n',
+  'wp-content/plugins/orchid-booking-synth/orchid-booking-synth.php':
+    '<?php\n/* Plugin Name: Orchid booking (synthetic) */\n// The booking form: its shortcode is [orchid_booking].\n',
+})
+/** The file names of that repository an answer of `/init` may call them by. */
+const INIT_NAMES = Object.freeze(['price-grid', 'orchid-booking-synth', 'orchid-synth'])
+/** Calls the key of the pass of `/init` may start: the plan's cap on the pass, the role holds it. */
+const INIT_TURN_CALLS = 6
 const resultFor = (summary, files = []) => ({
   summary,
   change_type: files.length ? 'code' : 'none',
@@ -259,7 +275,9 @@ export async function runLiveGateway(mode) {
       roleCalls = callsPerKey
       return llm
     }
-    await startLlm(mode.measure ? 2 : (resultPlan?.[0].ceiling ?? TURN_CALLS))
+    await startLlm(
+      mode.measure ? 2 : mode.init ? INIT_TURN_CALLS : (resultPlan?.[0].ceiling ?? TURN_CALLS),
+    )
     core = await live.startCore({ stack, env: roleEnv(TURN_CALLS), rolePort })
     workers.push(core)
     const workspace = await db.workspace.create({
@@ -419,7 +437,7 @@ export async function runLiveGateway(mode) {
     const version = await dockerCommand(['exec', cli.containerName, 'opencode', '--version'])
     assert.equal(version.stdout.trim(), '1.18.34', 'The CLI image holds another OpenCode')
     if (rehearsal) await live.proveSandboxSearch(cli.containerName)
-    const instructions =
+    const syntheticInstructions =
       '# Raditi platform rules (synthetic check)\nThis is a synthetic check of the platform. Work only inside the repository.\n'
     const turns = []
 
@@ -437,6 +455,7 @@ export async function runLiveGateway(mode) {
       effort = 'high',
       printsReasoning = true,
       action,
+      instructions = syntheticInstructions,
     }) {
       const { files: prepared, argv } = await prepareOpencodeTurn(
         { cli, control, driver, tools, instructions },
@@ -615,7 +634,7 @@ export async function runLiveGateway(mode) {
     // «The result is valid» is what the product would do with it (spec §20, П38).
     const valid = (outcome) => outcome.reading.taken
 
-    await { measure, results, compaction, gateway: acceptance }[kind]()
+    await { measure, results, compaction, init, gateway: acceptance }[kind]()
 
     /**
      * The acceptance: a turn of each kind — tool, MCP, text and the continuation of the text
@@ -936,6 +955,100 @@ export async function runLiveGateway(mode) {
       )
       passed(
         'compaction: one request without tools through the role llm, its usage equals the rows of the wrapper, and the session went on from the summary in the next turn',
+      )
+    }
+
+    /**
+     * `/init` (--init, docs/plan/61-chats-first.md, 61.25): one pass on `INIT_PROMPT` and the base
+     * rules of the platform (`turnInstructions` without the facts of a site: no working set, no
+     * guide of the database, no variables; the planner's framing of the prompt is not here) over a
+     * synthetic repository. The answer is the product of the command:
+     * a result the product takes, within what the result takes, with the names of the code and
+     * nothing changed. An answer longer than the result takes ends the pass as a technical failure,
+     * so what the real model does here decides whether the command works: unlike the shares of the
+     * acceptance, a miss fails the run.
+     */
+    async function init() {
+      assert.equal(live.kind, 'init')
+      stage = '/init'
+      budget.afford(INIT_TURN_CALLS, 'the pass of /init')
+      await revoke(first)
+      for (const [path, text] of Object.entries(INIT_REPOSITORY))
+        await dockerCommand(
+          // NOSONAR: one small file after the other in one container
+          [
+            'exec',
+            '-i',
+            '-w',
+            '/workspace/repo',
+            cli.containerName,
+            'sh',
+            '-ec',
+            'mkdir -p "$(dirname "$1")" && cat > "$1"',
+            'sh',
+            path,
+          ],
+          { input: text },
+        )
+      const tree = async () =>
+        (
+          await dockerCommand([
+            'exec',
+            '-w',
+            '/workspace/repo',
+            cli.containerName,
+            'sh',
+            '-c',
+            "find . -type f -not -path './.git/*' | sort | xargs sha256sum",
+          ])
+        ).stdout
+      const untouched = await tree()
+      assert.equal(untouched.trim().split('\n').length, 3, 'The synthetic repository is not there')
+
+      const { INIT_ANSWER_MAX_CHARS, INIT_PROMPT, turnInstructions } =
+        await import('../dist/tasks/turn-instructions.js')
+      const answer = {
+        ...resultFor('Подсказки агенту готовы'),
+        client_message: `Тема сайта лежит в wp-content/themes/orchid-synth, таблица цен — в parts/price-grid.php, форма записи — в плагине orchid-booking-synth.`,
+      }
+      await script({
+        scenario: 'tools',
+        rounds: [[bash('find . -type f')]],
+        text: JSON.stringify(answer),
+      })
+      const turn = await issued()
+      const outcome = await runTurn({
+        label: 'pass of /init',
+        turn,
+        prompt: INIT_PROMPT,
+        instructions: turnInstructions({ state: 'absent' }),
+      })
+      await invariants(turn, outcome, { ceiling: INIT_TURN_CALLS })
+      await revoke(turn)
+      assert.equal(outcome.code, 0, `The pass of /init failed: ${outcome.lines} lines`)
+      const asked = requestMessagesText(
+        outcome.exchanges.find((item) => item.method === 'POST')?.requestBody ?? '',
+      )
+      assert.ok(asked.includes(INIT_PROMPT), 'The model was not told the words of /init')
+      const { verdict, taken, result } = outcome.reading
+      report(
+        `pass of /init: result ${taken ? 'taken' : 'refused'} by the reading of the product; by the strict reading of the driver: ${verdict}`,
+      )
+      assert.ok(taken, `The answer of /init is no result: ${verdict}`)
+      const message = result.client_message
+      const named = INIT_NAMES.filter((name) => message.includes(name))
+      report(
+        `pass of /init: ${[...message].length} characters of ${INIT_ANSWER_MAX_CHARS}, ${named.length} of ${INIT_NAMES.length} names of the code: ${named.join(', ') || 'none'}; provider requests ${outcome.requests}`,
+      )
+      assert.ok(
+        [...message].length <= INIT_ANSWER_MAX_CHARS,
+        `The answer of /init took ${[...message].length} characters`,
+      )
+      assert.ok(named.length > 0, 'The answer of /init names nothing of the code')
+      assert.equal(await tree(), untouched, 'The pass of /init changed the repository')
+      if (rehearsal) assert.equal(outcome.requests, 2, 'The requests of the rehearsed pass')
+      passed(
+        'pass of /init: INIT_PROMPT and the base rules of the platform over a synthetic repository, a result the product takes, within the length, with the names of the code, the repository untouched',
       )
     }
 
@@ -1755,6 +1868,7 @@ request.on('error',()=>process.exit(1));request.end(Buffer.alloc(Number(process.
 function runKind(mode) {
   if (mode.measure) return 'measure'
   if (mode.compact) return 'compaction'
+  if (mode.init) return 'init'
   return mode.results ? 'results' : 'gateway'
 }
 
@@ -1762,13 +1876,14 @@ const RUN_WORDS = {
   measure: 'measurement',
   results: 'measurement of results',
   compaction: 'verification of a compaction',
+  init: 'verification of /init',
   gateway: 'verification',
 }
 
 /** The last line of a run that passed, after the count of its provider requests is settled. */
 function announcePassed({ live, mode, rehearsal }) {
   const what = RUN_WORDS[runKind(mode)]
-  if (rehearsal && !mode.measure && !mode.compact) {
+  if (rehearsal && !mode.measure && !mode.compact && !mode.init) {
     // The cap was reached on purpose: the count of the run says so itself.
     assert.throws(() => live.settle(), /reached its cap of \d+ provider requests/)
     assert.equal(live.tripped(), true)

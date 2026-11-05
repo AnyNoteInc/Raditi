@@ -32,6 +32,8 @@ export const LIVE_LIMITS = Object.freeze({
   // The import and the probes of the account take four; a turn, the summary of `/compact` and a
   // turn on it three; one is kept for the last reading of the quota, the rest for repeats.
   compaction: Object.freeze({ requests: 10, minutes: 5 }),
+  // The same four and the last reading, and the six the key of the pass of `/init` may start.
+  init: Object.freeze({ requests: 11, minutes: 5 }),
 })
 /** Above these a run does not start: the checks must not take the plan's last capacity. */
 const WINDOW_START_LIMITS = Object.freeze({ '5h': 50, week: 80 })
@@ -47,7 +49,7 @@ export class LiveRefusal extends Error {
  * The options of a stand. `--live` is the real provider, `--rehearsal` the same flow on the
  * synthetic one; with either, `--measure` is the measurement of the gateway stand and
  * `--results` its narrow one, of the turn result alone, `--compact` one session through `/compact`,
- * and `--api` the acceptance of the gateway stand on the pay-per-token API instead of the plan
+ * `--init` one pass on the words of `/init`, and `--api` the acceptance of the gateway stand on the pay-per-token API instead of the plan
  * (П15); `--keep=<directory>` writes
  * the exchanges the stand observed, for sanitize-samples.mjs.
  */
@@ -57,6 +59,7 @@ export function standMode(argv, { stand }) {
     measure: false,
     results: false,
     compact: false,
+    init: false,
     api: false,
     rehearsal: false,
     noBuild: false,
@@ -87,6 +90,7 @@ const SWITCHES_OF_THE_GATEWAY = new Map([
   ['--measure', 'measure'],
   ['--results', 'results'],
   ['--compact', 'compact'],
+  ['--init', 'init'],
   ['--api', 'api'],
 ])
 
@@ -108,7 +112,12 @@ function refusedCombination(mode) {
     [mode.results && !run, '--results without --live'],
     [mode.measure && mode.results, '--measure with --results'],
     [mode.compact && !run, '--compact without --live'],
-    [mode.compact && (mode.measure || mode.results || mode.api), '--compact with another run'],
+    [
+      mode.compact && (mode.measure || mode.results || mode.api || mode.init),
+      '--compact with another run',
+    ],
+    [mode.init && !run, '--init without --live'],
+    [mode.init && (mode.measure || mode.results || mode.api), '--init with another run'],
     [mode.api && !run, '--api without --live'],
     // The measurements count the credits of the plan's windows: the API has none.
     [mode.api && (mode.measure || mode.results), '--api with a measurement'],

@@ -6,12 +6,15 @@ import {
   acceptUploads,
   addAnsweredChat,
   addBrowserTask,
+  addChanges,
   addConnectedSite,
   addLongDialog,
   addSite,
   addSites,
+  closeProject,
   hideDevIndicator,
   priceDialogClass,
+  requirementsOf,
 } from './site.ts'
 
 // The ways through «Чаты» (docs/plan/61-chats-first.md, 61.12): a first run without a project, a
@@ -28,6 +31,8 @@ test.afterAll(async () => {
 })
 
 const KROSHKA = 'Кофейня «Крошка»'
+/** Why a closed project takes no work on (`project_closed`). */
+const CLOSED = 'Сайт на паузе или отключён.'
 
 const chats = (page: Page) => page.getByRole('navigation', { name: 'Чаты' })
 const message = (page: Page) => page.getByRole('textbox', { name: 'Сообщение' })
@@ -104,6 +109,10 @@ test('the first run: a chat without a project, a file before the first words', a
     await expect(link).not.toContainText('·')
     await page.goto('/chats')
     await expect(chats(page).getByRole('link', { name: /Перескажите файл/ })).toBeVisible()
+  })
+
+  await test.step('this run has no browser: the chat needs neither a repository nor one', async () => {
+    expect(await requirementsOf(taskId)).toEqual({ needsRepository: false, needsBrowser: false })
   })
 })
 
@@ -291,6 +300,98 @@ test('a closed project cannot be chosen and says why', async ({ page, signedInUs
   const item = picker(page).getByRole('menuitem', { name: new RegExp(KROSHKA) })
   await expect(item).toHaveAttribute('aria-disabled', 'true')
   await expect(item).toContainText('Сайт на паузе или отключён.')
+})
+
+test('a chat of a closed project is read: its changes stay, nothing carries the work on', async ({
+  page,
+  signedInUser,
+}) => {
+  const { siteId, taskId, title } = await addLongDialog(signedInUser.id, 2)
+  await addChanges(taskId)
+  await closeProject(siteId, taskId, { candidate: true })
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto(`/chats/${taskId}`)
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(title)
+
+  const card = feed(page).getByRole('listitem').filter({ hasText: 'Изменения готовы' })
+  await expect(card.getByRole('button', { name: 'Посмотреть изменения' })).toBeVisible()
+  await expect(card.getByRole('button', { name: 'Выпустить новую версию' })).toHaveCount(0)
+  await expect(card.getByRole('button', { name: 'Обновить рабочую копию' })).toHaveCount(0)
+  await expect(card).toContainText(CLOSED)
+
+  // The field is closed: a slash in it is no command, the list opens by its button.
+  await expect(message(page)).toBeDisabled()
+  await expect(page.getByText(CLOSED).first()).toBeVisible()
+  await page.getByRole('button', { name: 'Команды' }).click()
+  await expect(commands(page)).toBeVisible()
+  const release = commands(page).getByRole('option', { name: /Выпустить новую версию/ })
+  await expect(release).toHaveAttribute('aria-disabled', 'true')
+  await expect(release).toContainText(CLOSED)
+  await expect(commands(page).getByRole('option', { name: /Отменить чат/ })).not.toHaveAttribute(
+    'aria-disabled',
+    'true',
+  )
+  await page.keyboard.press('Escape')
+  await message(page).click({ force: true })
+  await page.keyboard.type('/')
+  await expect(commands(page)).toHaveCount(0)
+})
+
+test('a question of a closed project: no «Продолжить», «Остановиться» stays', async ({
+  page,
+  signedInUser,
+}) => {
+  const { siteId, taskId, title } = await addLongDialog(signedInUser.id, 2)
+  await closeProject(siteId, taskId, { ceiling: true })
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto(`/chats/${taskId}`)
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(title)
+  await expect(feed(page).getByRole('button', { name: 'Остановиться' })).toBeVisible()
+  await expect(feed(page).getByRole('button', { name: 'Продолжить' })).toHaveCount(0)
+})
+
+// The card of the browser's request: on an open project the same fixture shows «Взять
+// управление» (dialog.spec.ts). The panel is not checked here: this run has no stream, so the panel
+// shows its error and no control on any project; `browser-pane.test.tsx` holds it (`readOnly`).
+test('the browser of a closed project: nobody takes it over from the feed', async ({
+  page,
+  signedInUser,
+}) => {
+  const { siteId, taskId, title } = await addBrowserTask(signedInUser.id)
+  await closeProject(siteId, taskId)
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`/chats/${taskId}`)
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(title)
+  const asked = feed(page)
+    .getByRole('listitem')
+    .filter({ has: page.getByRole('heading', { name: 'Нужно войти на сайт' }) })
+  await expect(asked).toBeVisible()
+  await expect(asked.getByRole('button', { name: 'Взять управление' })).toHaveCount(0)
+})
+
+test('the commands of a chat: both groups on a project with files, none of the site without', async ({
+  page,
+  signedInUser,
+}) => {
+  const withFiles = await addLongDialog(signedInUser.id, 2)
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto(`/chats/${withFiles.taskId}`)
+  await page.getByRole('button', { name: 'Команды' }).click()
+  await expect(commands(page).getByRole('group')).toHaveCount(3)
+  await expect(commands(page).getByText('Сайт', { exact: true })).toBeVisible()
+  await page.keyboard.press('Escape')
+
+  // A project without files: its chat has the browser alone, and no command of the code.
+  const noFiles = await addBrowserTask(signedInUser.id)
+  await page.goto(`/chats/${noFiles.taskId}`)
+  await page.getByRole('button', { name: 'Команды' }).click()
+  await expect(commands(page)).toBeVisible()
+  await expect(commands(page).getByRole('group').first()).toBeVisible()
+  await expect(commands(page).getByText('Сайт', { exact: true })).toHaveCount(0)
 })
 
 test('one list and the folders of projects, kept for the next visit', async ({

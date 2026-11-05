@@ -342,6 +342,67 @@ export async function addChanges(taskId: string): Promise<void> {
   }
 }
 
+/**
+ * A chat of a project as it stands when the project closes (docs/plan/61-chats-first.md, К39): its
+ * site paused, and the chat waiting for the client with what it had asked. `candidate` — it holds
+ * the changes of `addChanges` and a card of them in its feed; `ceiling` — the question of the
+ * platform about credits.
+ */
+export async function closeProject(
+  siteId: string,
+  taskId: string,
+  { candidate = false, ceiling = false }: { candidate?: boolean; ceiling?: boolean } = {},
+): Promise<void> {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    await prisma.site.update({ where: { id: siteId }, data: { status: 'paused' } })
+    if (candidate) {
+      await prisma.task.update({ where: { id: taskId }, data: { status: 'awaiting_approval' } })
+      await insertFeedEvent(prisma, {
+        taskId,
+        row: {
+          type: 'feed.candidate',
+          payload: {
+            v: 1,
+            turn: 1,
+            revision: 1,
+            version: 'v1.0.1',
+            bump: 'patch',
+            files: { added: 0, modified: 1, deleted: 0 },
+            media: 0,
+            records: 0,
+          },
+        },
+      })
+    }
+    if (ceiling)
+      await insertFeedEvent(prisma, {
+        taskId,
+        row: {
+          type: 'feed.question',
+          payload: { v: 1, kind: 'ceiling', turn: 1, reason: 'step', spent: 45, held: 45, left: 0 },
+        },
+      })
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+/** What a chat needs, as the server decided it when it was created. */
+export async function requirementsOf(
+  taskId: string,
+): Promise<{ needsRepository: boolean; needsBrowser: boolean }> {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    return await prisma.task.findUniqueOrThrow({
+      where: { id: taskId },
+      select: { needsRepository: true, needsBrowser: true },
+    })
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
 /** The one file of `addChanges`, as the tab «Файлы» lists it. */
 export const CHANGED_FILE = 'wp-content/themes/kroshka/style.css'
 

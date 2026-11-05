@@ -82,6 +82,8 @@ export function turnOf(body) {
 }
 
 const sameArgs = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+/** A tool of the platform goes by `raditi_<tool>`, one of the CLI (`read`, `bash`) by its own. */
+const sameTool = (name, tool) => name === tool || name.endsWith(`_${tool}`)
 
 /**
  * The next move of a program over the calls already made: `{ call }`, `{ final }` or
@@ -98,7 +100,7 @@ export function nextMove(program, ctx, steps) {
     for (const done of steps) {
       if (step.done) return { broken: 'the program ended before the calls the CLI made', facts }
       const expected = step.value
-      if (!done.name.endsWith(`_${expected.tool}`) || !sameArgs(done.args, expected.args))
+      if (!sameTool(done.name, expected.tool) || !sameArgs(done.args, expected.args))
         return {
           broken: `the CLI made ${done.name} where the program called ${expected.tool}`,
           facts,
@@ -121,11 +123,74 @@ export function nextMove(program, ctx, steps) {
 function declaredName(body, tool) {
   const names = (Array.isArray(body?.tools) ? body.tools : [])
     .map((item) => item?.function?.name)
-    .filter((name) => typeof name === 'string' && name.endsWith(`_${tool}`))
+    .filter((name) => typeof name === 'string' && sameTool(name, tool))
   return names.length === 1 ? names[0] : null
 }
 
 const USAGE = Object.freeze({ prompt: 12_000, cached: 6_000, completion: 300, reasoning: 40 })
+
+/** A program by its name, as a turn runs it: what it saw, whether it finished, why it broke. */
+export function usableProgram(name, ctx = {}) {
+  const program = PROGRAMS[name]
+  if (!program) throw new Error(`No program ${name}`)
+  return { name, program, ctx, facts: {}, finished: false, broken: null }
+}
+
+/**
+ * What the synthetic Z.ai answers a request of the turn of `current`, as `zaiFrames` takes it: the
+ * next call of the program or its final answer. `onMove` — one line of names and codes for a log.
+ */
+export function programAnswer(current, body, onMove = () => {}) {
+  const turn = turnOf(body)
+  const ctx = { ...current.ctx, prompt: turn.prompt, attachments: attachmentsOf(turn.prompt) }
+  const move = nextMove(current.program, ctx, turn.steps)
+  current.facts = move.facts
+  const last = turn.steps.at(-1)?.answer
+  onMove({
+    at: new Date().toISOString(),
+    program: current.name,
+    steps: turn.steps.length,
+    answered:
+      typeof last?.code === 'string'
+        ? last.code
+        : (last?.tool ?? (last ? `keys:${Object.keys(last).slice(0, 4).join(',')}` : null)),
+    move: move.call?.tool ?? (move.final !== undefined ? 'final' : `broken: ${move.broken}`),
+  })
+  const config = { usage: USAGE }
+  if (move.broken !== undefined) {
+    current.broken = move.broken
+    return {
+      ...config,
+      scenario: 'text',
+      text: JSON.stringify({
+        summary: 'The script of the stand broke',
+        change_type: 'none',
+        client_message: 'Не получилось выполнить задачу.',
+        files_changed: [],
+        questions: [],
+        needs_approval: false,
+        risk: 'low',
+      }),
+    }
+  }
+  if (move.final !== undefined) {
+    current.finished = true
+    return { ...config, scenario: 'text', text: move.final }
+  }
+  const name = declaredName(body, move.call.tool)
+  if (name === null) {
+    current.broken = `the request declares no ${move.call.tool}`
+    return { ...config, scenario: 'text', text: 'Синтетическая модель: инструмент не объявлен.' }
+  }
+  return {
+    ...config,
+    scenario: 'tools',
+    rounds: [
+      ...Array.from({ length: roundOf(body) }, () => []),
+      [{ name, arguments: move.call.args }],
+    ],
+  }
+}
 
 export async function startModel({ key, cert, port, logFile = null }) {
   const state = createFakeZaiState({})
@@ -136,7 +201,7 @@ export async function startModel({ key, cert, port, logFile = null }) {
 
   const answer = (res, body, config) => {
     sequence += 1
-    const frames = zaiFrames(body, { usage: USAGE, ...config }, sequence)
+    const frames = zaiFrames(body, config, sequence)
     res.writeHead(200, {
       'content-type': 'text/event-stream;charset=UTF-8',
       'x-request-id': `synthetic-browser-${sequence}`,
@@ -149,59 +214,16 @@ export async function startModel({ key, cert, port, logFile = null }) {
     const declared = Array.isArray(body?.tools) && body.tools.length > 0
     // The CLI's own requests without tools (the title of the session, a compaction).
     if (!declared || current === null)
-      return answer(res, body, { scenario: 'text', text: 'Задача в браузере' })
-    const turn = turnOf(body)
-    const ctx = { ...current.ctx, prompt: turn.prompt, attachments: attachmentsOf(turn.prompt) }
-    const move = nextMove(current.program, ctx, turn.steps)
-    current.facts = move.facts
-    const last = turn.steps.at(-1)?.answer
-    const entry = {
-      at: new Date().toISOString(),
-      program: current.name,
-      steps: turn.steps.length,
-      answered:
-        typeof last?.code === 'string'
-          ? last.code
-          : (last?.tool ?? (last ? `keys:${Object.keys(last).slice(0, 4).join(',')}` : null)),
-      move: move.call?.tool ?? (move.final !== undefined ? 'final' : `broken: ${move.broken}`),
-    }
-    moves.push(entry)
-    // Names and codes only: never an argument or an answer of a tool.
-    if (logFile) appendFileSync(logFile, `${JSON.stringify(entry)}\n`, { mode: 0o600 })
-    if (move.broken !== undefined) {
-      current.broken = move.broken
-      return answer(res, body, {
-        scenario: 'text',
-        text: JSON.stringify({
-          summary: 'The script of the stand broke',
-          change_type: 'none',
-          client_message: 'Не получилось выполнить задачу.',
-          files_changed: [],
-          questions: [],
-          needs_approval: false,
-          risk: 'low',
-        }),
-      })
-    }
-    if (move.final !== undefined) {
-      current.finished = true
-      return answer(res, body, { scenario: 'text', text: move.final })
-    }
-    const name = declaredName(body, move.call.tool)
-    if (name === null) {
-      current.broken = `the request declares no ${move.call.tool}`
-      return answer(res, body, {
-        scenario: 'text',
-        text: 'Синтетическая модель: инструмент не объявлен.',
-      })
-    }
-    return answer(res, body, {
-      scenario: 'tools',
-      rounds: [
-        ...Array.from({ length: roundOf(body) }, () => []),
-        [{ name, arguments: move.call.args }],
-      ],
-    })
+      return answer(res, body, { usage: USAGE, scenario: 'text', text: 'Задача в браузере' })
+    return answer(
+      res,
+      body,
+      programAnswer(current, body, (entry) => {
+        moves.push(entry)
+        // Names and codes only: never an argument or an answer of a tool.
+        if (logFile) appendFileSync(logFile, `${JSON.stringify(entry)}\n`, { mode: 0o600 })
+      }),
+    )
   }
 
   const server = createHttpsServer({ key, cert, minVersion: 'TLSv1.2' }, async (req, res) => {
@@ -236,9 +258,7 @@ export async function startModel({ key, cert, port, logFile = null }) {
     moves,
     /** The program of the next turn (programs.mjs, by name) and what it is told besides the prompt. */
     script(name, ctx = {}) {
-      const program = PROGRAMS[name]
-      if (!program) throw new Error(`No program ${name}`)
-      current = { name, program, ctx, facts: {}, finished: false, broken: null }
+      current = usableProgram(name, ctx)
       return current
     },
     current: () => current,

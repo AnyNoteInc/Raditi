@@ -417,13 +417,14 @@ async function cleanup(owned) {
   const quiet = { allowFailure: true, cleanup: true }
   // What core and the worker leave of the run before they stop: they must leave nothing.
   const filters = [`label=${names.label}`]
-  if (owned.siteId)
+  // A chat without a project goes by its own id wherever a task on a site goes by the site's.
+  for (const scope of [owned.siteId, ...owned.chats].filter(Boolean))
     for (const label of [
       'io.raditi.sandbox.siteId',
       'io.raditi.gateway.siteId',
       'io.raditi.browser.site',
     ])
-      filters.push(`label=${label}=${owned.siteId}`)
+      filters.push(`label=${label}=${scope}`)
   const ofPlatform = (filter) => filter !== filters[0]
   const platformLeft = []
   if (owned.checkPlatformLeft)
@@ -494,7 +495,7 @@ async function keepLogs(owned) {
 export async function verifyBrowserTask(argv) {
   const started = Date.now()
   for (const signal of SIGNALS) process.on(signal, interrupt)
-  const owned = {}
+  const owned = { chats: [] }
   let failed = false
   try {
     const options = standOptions(argv)

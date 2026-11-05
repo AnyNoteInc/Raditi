@@ -1,9 +1,10 @@
 // The synthetic WordPress of the browser-task stand: MariaDB and WordPress 7.x (the block editor)
 // on a network of their own, the web server on a published loopback port, installed under the
 // exact name `wp.raditi.test` that only the egress proxy of a browser session maps to it
-// (BROWSER_LOCAL_SITES). An editor and a contributor with passwords of the run, and three must-use
+// (BROWSER_LOCAL_SITES). An editor and a contributor with passwords of the run, and the must-use
 // plugins of the stand (fixture/mu-plugins): the tap of the sign-in cookies, the upload limit of
-// scenario I and the slow publish of scenario J, each behind a switch file. Every container,
+// scenario I and the slow publish of scenario J, each behind a switch file, and the page with a
+// file field of scenario P. Every container,
 // network and volume carries the label of the run; the caller removes them.
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
