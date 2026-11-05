@@ -3,6 +3,7 @@
 export * from './alias.ts'
 export * from './egress-hosts.ts'
 export * from './hostname.ts'
+export * from './passport.ts'
 export * from './ports.ts'
 export * from './preview-config.ts'
 export * from './preview-job.ts'

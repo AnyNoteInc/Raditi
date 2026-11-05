@@ -1,6 +1,7 @@
 import {
   isPublicationPath,
   previewImageSchema,
+  previewPassportSchema,
   previewRuntimeMatchSchema,
   siteDatabaseSettingsSchema,
 } from '@repo/domain'
@@ -52,6 +53,11 @@ export const previewRecordSchema = z.strictObject({
   runtimeMatch: previewRuntimeMatchSchema.nullable().optional(),
   /** Absent — a record of a build before the kinds of a plan: the text of records alone. */
   db: previewDbRuntimeSchema.optional(),
+  /**
+   * How the copy started and how it differs from the site (docs/plan/62-site-stacks.md, Т33,
+   * Т34); absent — a stack that does not say how its live page looks. Not shown yet (Э7).
+   */
+  passport: previewPassportSchema.optional(),
 })
 export type PreviewRecord = z.infer<typeof previewRecordSchema>
 

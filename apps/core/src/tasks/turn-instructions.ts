@@ -76,6 +76,9 @@ const unavailable: Readonly<Record<PreviewUnavailableReason, string>> = Object.f
     "The repository of this site has no core files of the site's engine: no preview can be built. " +
     'Change files only; your changes are checked when the client releases them.',
   not_supported: 'The stack of this site has no preview yet. Change files only.',
+  boot_failed:
+    'The site does not start in the copy of the platform: no preview can be shown. ' +
+    'Change files only; your changes are checked when the client releases them.',
 })
 
 function previewSection(preview: PreviewFacts): string {

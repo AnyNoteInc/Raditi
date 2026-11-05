@@ -22,9 +22,15 @@ export type PreviewDbMode = (typeof previewDbModes)[number]
 
 /**
  * Why a preview cannot be shown; `unavailable_reason`. The screen says it in words and never
- * draws a site without its database (Р4) or without the files it cannot run without (Р16).
+ * draws a site without its database (Р4), without the files it cannot run without (Р16) or one
+ * that did not start in the copy (`boot_failed`, docs/plan/62-site-stacks.md, Т33).
  */
-export const previewUnavailableReasons = ['no_database', 'no_core', 'not_supported'] as const
+export const previewUnavailableReasons = [
+  'no_database',
+  'no_core',
+  'not_supported',
+  'boot_failed',
+] as const
 export type PreviewUnavailableReason = (typeof previewUnavailableReasons)[number]
 
 /** Who a ticket and a session are for: a person, or the browser of the agent (Р21). */

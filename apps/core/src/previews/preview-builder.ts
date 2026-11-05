@@ -44,7 +44,7 @@ import { previewContentGateway, textOnlyDbRuntime, type PreviewDbRuntime } from 
 
 import type { PreviewsConfig } from '../config/config.ts'
 import type { ExportedTree, TreeExportInput } from '../git-workspace/git-workspace.service.ts'
-import { TAR_END } from '../git-workspace/tree-tar.ts'
+import { TAR_END, tarDirectoryHeader } from '../git-workspace/tree-tar.ts'
 import type { DbPlanValueReader } from '../site-content/db-plan-values.ts'
 import { databaseSettingsFromCatalog, type CatalogTable } from './database-settings.ts'
 import {
@@ -54,6 +54,7 @@ import {
   seedMismatches,
 } from './preview-content.ts'
 import type { PreviewFacts } from './preview-facts.ts'
+import { previewBootOf } from './preview-checks.ts'
 import type { PreviewHold } from './preview-lease.ts'
 import { previewRecordSchema, type PreviewRecord } from './preview-record.ts'
 import { openPreviewSeed, storePreviewSeed, type PreviewSeedRef } from './preview-seed.ts'
@@ -799,6 +800,33 @@ async function buildPreviewOn(
       )
   } else if (candidate?.dbPlan.length) throw previewFailure('content_unsupported')
 
+  // A stack that says how its live page looks: a dead site answers 200 too (Т33). A base that does
+  // not start has no preview; a candidate that does not start keeps it, and its `preview_smoke`
+  // fails: what the agent broke must not take the preview away from the client.
+  if (recipe.ready) {
+    const boot = await previewBootOf(
+      target,
+      { healthPath: recipe.healthPath, ready: recipe.ready },
+      signal,
+    )
+    if (boot.state === 'dead' && !candidate) {
+      hold.assert() // a holder that lost the preview stops nothing of the next one's build
+      // As `expirePreview` does: the volumes and the seed stay, the next build copies nothing.
+      await runtime.stop(preview.id)
+      throw new PreviewUnavailable('boot_failed')
+    }
+    const away = boot.state === 'alive' && boot.redirectsAway
+    record = {
+      ...record,
+      passport: {
+        // `proved` needs a comparison with the real site, which comes with Э7 (Т34).
+        boot: boot.state === 'alive' && !away ? 'not_compared' : 'suspect',
+        differences: away ? ['redirects_away'] : [],
+        checkedAt: (deps.now?.() ?? new Date()).toISOString(),
+      },
+    }
+  }
+
   hold.assert()
   await deps.db.$transaction(
     async (tx) => {
@@ -904,11 +932,12 @@ export async function writePreviewTree(
     /** Paths written over `from` since it was written (syncs of a turn). */
     synced: readonly string[]
     to: string
-    recipe: Pick<PreviewRecipe, 'generatedFiles'>
+    recipe: Pick<PreviewRecipe, 'generatedFiles' | 'writableFolders'>
     signal: AbortSignal
   },
 ): Promise<void> {
   const platform = input.recipe.generatedFiles
+  const folders = input.recipe.writableFolders ?? []
   const platformPaths = new Set(platform.map((file) => file.path))
   const own = (path: string) => !platformPaths.has(path)
   let difference: { written: string[]; deleted: string[] } | null = null
@@ -945,7 +974,7 @@ export async function writePreviewTree(
     git.exportTree({ repo: input.repo, sha: input.to, exclude: [...platformPaths] }, async (tree) =>
       runtime.writeFiles(
         input.previewId,
-        { archive: tree.archive, deletes: [], replace: true, platform },
+        { archive: withFolders(folders, tree.archive), deletes: [], replace: true, platform },
         input.signal,
       ),
     )
@@ -956,14 +985,24 @@ export async function writePreviewTree(
     if (!written.length)
       await runtime.writeFiles(
         input.previewId,
-        { archive: emptyArchive(), deletes: deleted, replace: false, platform },
+        {
+          archive: withFolders(folders, emptyArchive()),
+          deletes: deleted,
+          replace: false,
+          platform,
+        },
         input.signal,
       )
     else
       await git.exportTree({ repo: input.repo, sha: input.to, paths: written }, async (tree) =>
         runtime.writeFiles(
           input.previewId,
-          { archive: tree.archive, deletes: deleted, replace: false, platform },
+          {
+            archive: withFolders(folders, tree.archive),
+            deletes: deleted,
+            replace: false,
+            platform,
+          },
           input.signal,
         ),
       )
@@ -978,6 +1017,15 @@ const isRefusedDifference = (error: unknown) => isDomainError(error) && error.co
 
 async function* emptyArchive(): AsyncIterable<Uint8Array> {
   yield TAR_END
+}
+
+/** Folder entries first: what a platform file goes through must not be made by PHP (Т21). */
+async function* withFolders(
+  folders: readonly string[],
+  archive: AsyncIterable<Uint8Array>,
+): AsyncIterable<Uint8Array> {
+  for (const folder of folders) yield tarDirectoryHeader(folder)
+  yield* archive
 }
 
 /** The secrets of the preview in Vault (`kv/previews/<previewId>/*`): all versions removed. */

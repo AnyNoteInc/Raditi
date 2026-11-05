@@ -10,6 +10,10 @@ describe('turnInstructions', () => {
     expect(turnInstructions({ state: 'unavailable', reason: 'no_database' })).toContain(
       'no database',
     )
+    // A copy that did not start has no preview: the agent changes files only (Т33).
+    const dead = turnInstructions({ state: 'unavailable', reason: 'boot_failed' })
+    expect(dead).toContain('The site does not start in the copy of the platform')
+    expect(dead).toContain('Change files only; your changes are checked when the client releases')
     const starting = turnInstructions({
       state: 'starting',
       origin: 'http://site-a-chat-b.localhost:8090',

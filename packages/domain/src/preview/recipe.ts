@@ -165,6 +165,23 @@ export const previewRecipeSchema = z.strictObject({
   web: previewWebServerSchema,
   /** How the platform reaches the preview's content (R5c); absent or null — it does not. */
   content: previewContentRecipeSchema.nullable().optional(),
+  /**
+   * Empty folders the tree needs and the PHP user owns: what the stack writes at runtime and the
+   * import leaves out. Written as folder entries of the archive, before the tree: a folder made
+   * by PHP first is 0700 and no platform file goes through it (infra/preview/init.sh, umask 077).
+   */
+  writableFolders: z.array(relativePath).max(32).optional(),
+  /**
+   * How a live page of the stack differs from a dead one: a dead site answers 200 too. `header` is
+   * set by the generated configuration and only by it; `absent` — texts a site that failed to start
+   * prints at status 200. Absent — the preview is ready when its port opens.
+   */
+  ready: z
+    .strictObject({
+      header: z.string().regex(/^x-raditi-[a-z-]{1,32}$/),
+      absent: z.array(z.string().min(1).max(256)).max(16),
+    })
+    .optional(),
 })
 export type PreviewRecipe = z.infer<typeof previewRecipeSchema>
 

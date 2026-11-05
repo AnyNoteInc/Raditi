@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { Server } from 'node:http'
+import type { RequestListener, Server } from 'node:http'
 
 import { createPrismaClient, markStaleCandidates, type PrismaClient } from '@repo/db'
 import {
@@ -15,15 +15,18 @@ import {
   type DatabaseCopier,
   type DbPlan,
   type PublishedContentGateway,
+  type SiteAdapter,
   type SiteFacts,
   type SiteRuntime,
+  type SiteStack,
   type PreviewUpstream,
   type TurnPlan,
 } from '@repo/domain'
 import { wordpressAdapter } from '@repo/site-adapters'
+import type { previewRequest } from '@repo/site-content'
 import { createHostLookup, siteSource } from '@repo/site-connections'
 import { databaseInspector } from '@repo/site-connections/databases'
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import type { PreviewsConfig } from '../config/config.ts'
 import { sampleDriverId } from '../testing/ids.ts'
@@ -37,6 +40,7 @@ import {
   hash,
   MemoryStorage,
   MemoryVault,
+  previewPage,
   upstreamServer,
   workingTreeArchive,
   recordValues,
@@ -49,6 +53,42 @@ import { createPreviewSiteSources } from './site-sources.ts'
 // The manager of previews over PostgreSQL with its runtime, copier, git, storage and Vault faked
 // (docs/plan/53-chat-preview-release.md, R5c). Runs on a disposable database only:
 // RADITI_GATEWAY_DB_TESTS=1 with DATABASE_URL.
+
+// The real requests of core to a preview; a scenario may shorten their time: a page that never
+// answers is waited for 30 s twice otherwise (docs/plan/62-site-stacks.md, Т33).
+const requests = vi.hoisted(() => ({ timeoutMs: null as number | null }))
+vi.mock('@repo/site-content', async (importOriginal) => {
+  const actual = await importOriginal<{ previewRequest: typeof previewRequest }>()
+  return {
+    ...actual,
+    previewRequest: (...[target, input]: Parameters<typeof actual.previewRequest>) =>
+      actual.previewRequest(
+        target,
+        requests.timeoutMs === null ? input : { ...input, timeoutMs: requests.timeoutMs },
+      ),
+  }
+})
+
+/** WordPress with what a live page of a stack looks like (Т33): a stand of a stack with `ready`. */
+const readyAdapter: SiteAdapter = {
+  ...wordpressAdapter,
+  previewRecipe: (site) => ({
+    ...wordpressAdapter.previewRecipe(site),
+    ready: { header: 'x-raditi-stand', absent: ['No configuration file found'] },
+  }),
+}
+
+/** An answer of the entry forwarder: a status, its headers, a page. */
+const answer =
+  (
+    status: number,
+    headers: Record<string, string> = {},
+    body = '<html>ok</html>',
+  ): RequestListener =>
+  (_request, response) => {
+    response.writeHead(status, headers).end(body)
+  }
+const live = answer(200, { 'x-raditi-stand': '1' })
 
 const siteFacts: SiteFacts = {
   stack: 'wordpress',
@@ -99,12 +139,18 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
   let server: Server
   let upstream: PreviewUpstream
   const workspaces: string[] = []
+  /** What the entry forwarder answers in this test; null — `previewPage`. */
+  let respond: RequestListener | null = null
 
   beforeAll(async () => {
     db = createPrismaClient({ databaseUrl: databaseUrl ?? '', log: [] })
-    ;({ server, upstream } = await upstreamServer())
+    ;({ server, upstream } = await upstreamServer((request, response) =>
+      (respond ?? previewPage)(request, response),
+    ))
   })
   afterEach(async () => {
+    respond = null
+    requests.timeoutMs = null
     const ids = workspaces.splice(0)
     const of = { task: { workspaceId: { in: ids } } }
     const previews = await db.previewEnvironment.findMany({ where: of, select: { id: true } })
@@ -196,6 +242,10 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
       copier?: DatabaseCopier
       /** What the plugins of production and of the preview say their servers run. */
       runtimes?: { production?: SiteRuntime; preview?: SiteRuntime }
+      /** The adapters of the stacks; WordPress by default. */
+      adapters?: (stack: SiteStack) => SiteAdapter
+      /** How often a holder renews its hold; a test that takes the preview over shortens it. */
+      heartbeatMs?: number
     } = {},
   ) {
     const runtime = new FakeRuntime(upstream)
@@ -237,7 +287,7 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
         git,
         storage,
         secrets: vault,
-        adapters: () => wordpressAdapter,
+        adapters: options.adapters ?? (() => wordpressAdapter),
         contentAdapters: () =>
           contentAdapter(
             withRuntime(contentGateway(previewStates, options.writes), options.runtimes?.preview),
@@ -266,7 +316,7 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
         },
         credentials: { recover: async () => turnCredentials },
       },
-      { heartbeatMs: 60_000 },
+      { heartbeatMs: options.heartbeatMs ?? 60_000 },
     )
     return { m, runtime, git, storage, vault, exportCalls, previewStates }
   }
@@ -757,6 +807,192 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
     expect(
       await db.previewEnvironment.findUniqueOrThrow({ where: { id: other.preview.id } }),
     ).toMatchObject({ status: 'failed', errorCode: 'access_missing' })
+  })
+
+  describe('a stack that says how its live page looks (Т33)', () => {
+    const passportOf = async (previewId: string) =>
+      previewRecordOf(
+        (await db.previewEnvironment.findUniqueOrThrow({ where: { id: previewId } })).runtime,
+      ).passport
+
+    it('has no preview of a base that does not start, and stops its containers', async () => {
+      const { site, preview } = await dialog()
+      let copies = 0
+      const copier = fakeCopier()
+      const f = manager({
+        adapters: () => readyAdapter,
+        copier: {
+          copy(input, write) {
+            copies++
+            return copier.copy(input, write)
+          },
+        },
+      })
+      await databaseAccess(f, site.id)
+      // A dead site answers 200 too: without the header of its configuration.
+      respond = answer(200)
+      await f.m.refresh(preview.id, { requested: true })
+      const row = await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } })
+      expect(row).toMatchObject({
+        status: 'unavailable',
+        unavailableReason: 'boot_failed',
+        upstreamHost: null,
+        upstreamPort: null,
+      })
+      expect(f.runtime.calls.at(-1)).toBe('stop')
+      expect(f.runtime.running.has(preview.id)).toBe(false)
+      // As a preview whose time is up: the seed stays, the next build copies nothing again.
+      expect(row.seedObjectKey).not.toBeNull()
+      expect(f.storage.objects.has(row.seedObjectKey!)).toBe(true)
+      respond = live
+      await f.m.refresh(preview.id, { requested: true })
+      expect(
+        await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } }),
+      ).toMatchObject({
+        status: 'ready',
+        seedObjectKey: row.seedObjectKey,
+        unavailableReason: null,
+      })
+      expect(copies).toBe(1)
+      expect(await passportOf(preview.id)).toMatchObject({
+        boot: 'not_compared',
+        differences: [],
+      })
+    })
+
+    it('keeps the preview of a candidate that does not start and fails its smoke check', async () => {
+      const { site, task, preview } = await dialog()
+      const f = manager({ adapters: () => readyAdapter })
+      await databaseAccess(f, site.id)
+      respond = live
+      await f.m.refresh(preview.id, { requested: true })
+      const candidate = await db.taskCandidate.create({
+        data: {
+          taskId: task.id,
+          revision: 1,
+          turnNo: 1,
+          baseSha: main,
+          baseTree: 'b'.repeat(40),
+          headSha: candidateHead,
+          files: [
+            {
+              path: 'wp-content/themes/shop/functions.php',
+              change: 'modified',
+              sizeBytes: 10,
+              executable: false,
+            },
+          ],
+          dbPlan: [],
+          dbPlanSha256: hash('d'),
+          proposedBump: 'patch',
+          proposedVersion: 'v0.0.1',
+          facts: {},
+          previewRevision: 1,
+        },
+      })
+      await db.candidateCheck.createMany({
+        data: [
+          { candidateId: candidate.id, revision: 1, kind: 'php_lint' },
+          { candidateId: candidate.id, revision: 1, kind: 'preview_smoke' },
+        ],
+      })
+      // What the agent broke: the page no longer comes from the configuration.
+      respond = answer(200)
+      await f.m.refresh(preview.id, { requested: true })
+      expect(
+        await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } }),
+      ).toMatchObject({ status: 'ready', revision: 1, candidateId: candidate.id })
+      expect(f.runtime.calls).not.toContain('stop')
+      const checks = await db.candidateCheck.findMany({
+        where: { candidateId: candidate.id },
+        orderBy: { kind: 'asc' },
+      })
+      expect(checks.map((check) => [check.kind, check.status, check.summary])).toEqual([
+        ['php_lint', 'passed', { files: 1, failed: 0 }],
+        ['preview_smoke', 'failed', { pages: 1, failed: 1 }],
+      ])
+      expect(await passportOf(preview.id)).toMatchObject({ boot: 'suspect', differences: [] })
+    })
+
+    it('serves a site that sends its home page to another host, as a suspect', async () => {
+      const { site, preview } = await dialog()
+      const f = manager({ adapters: () => readyAdapter })
+      await databaseAccess(f, site.id)
+      respond = answer(301, { 'x-raditi-stand': '1', location: 'https://example.ru/' }, '')
+      await f.m.refresh(preview.id, { requested: true })
+      expect(
+        await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } }),
+      ).toMatchObject({ status: 'ready', upstreamHost: upstream.host })
+      const passport = await passportOf(preview.id)
+      expect(passport).toMatchObject({ boot: 'suspect', differences: ['redirects_away'] })
+      expect(Number.isNaN(Date.parse(passport!.checkedAt))).toBe(false)
+    })
+
+    it('leaves WordPress as it was: no check before ready and no passport', async () => {
+      const { site, preview } = await dialog()
+      const f = manager()
+      await databaseAccess(f, site.id)
+      respond = answer(200, {}, '')
+      await f.m.refresh(preview.id, { requested: true })
+      expect(
+        await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } }),
+      ).toMatchObject({ status: 'ready' })
+      expect(await passportOf(preview.id)).toBeUndefined()
+    })
+
+    it('serves a closed home page with the header, as a suspect', async () => {
+      const { site, preview } = await dialog()
+      const f = manager({ adapters: () => readyAdapter })
+      await databaseAccess(f, site.id)
+      respond = answer(404, { 'x-raditi-stand': '1' })
+      await f.m.refresh(preview.id, { requested: true })
+      expect(
+        await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } }),
+      ).toMatchObject({ status: 'ready' })
+      expect(await passportOf(preview.id)).toMatchObject({ boot: 'suspect', differences: [] })
+    })
+
+    it('serves a home page that twice gave nothing to read in time, as a suspect', async () => {
+      const { site, preview } = await dialog()
+      const f = manager({ adapters: () => readyAdapter })
+      await databaseAccess(f, site.id)
+      let asked = 0
+      // Never answers: the request runs out of its time, then once more.
+      respond = () => {
+        asked++
+      }
+      requests.timeoutMs = 300
+      await f.m.refresh(preview.id, { requested: true })
+      expect(asked).toBe(2)
+      expect(
+        await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } }),
+      ).toMatchObject({ status: 'ready', upstreamHost: upstream.host })
+      expect(f.runtime.calls).not.toContain('stop')
+      expect(f.runtime.running.has(preview.id)).toBe(true)
+      expect(await passportOf(preview.id)).toMatchObject({ boot: 'suspect', differences: [] })
+    })
+
+    it('stops nothing when the preview was taken over before the check ended', async () => {
+      const { site, preview } = await dialog()
+      const f = manager({ adapters: () => readyAdapter, heartbeatMs: 50 })
+      await databaseAccess(f, site.id)
+      // Another core takes the preview while its home page is asked; then the page is dead.
+      respond = (_request, response) => {
+        void (async () => {
+          await db.$executeRaw`
+            UPDATE preview_environments SET lease_epoch = lease_epoch + 1
+            WHERE id = ${preview.id}::uuid`
+          await new Promise((resolve) => setTimeout(resolve, 400))
+          response.writeHead(200).end('<html>dead</html>')
+        })()
+      }
+      await f.m.refresh(preview.id, { requested: true })
+      expect(f.runtime.calls).not.toContain('stop')
+      expect(f.runtime.running.has(preview.id)).toBe(true)
+      expect(
+        await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } }),
+      ).toMatchObject({ status: 'building', unavailableReason: null })
+    })
   })
 
   it('destroys the preview of a closed dialog with its secrets and its seed', async () => {

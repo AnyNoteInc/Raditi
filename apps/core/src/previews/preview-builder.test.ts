@@ -5,8 +5,13 @@ import {
   SiteConnectionError,
   type PreviewFilesInput,
 } from '@repo/domain'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
+
+import { extract } from 'tar-stream'
 import { describe, expect, it } from 'vitest'
 
+import { TAR_END, tarFileHeader, tarPadding } from '../git-workspace/tree-tar.ts'
 import { MemoryVault } from '../testing/previews.ts'
 import {
   DIFF_REBUILD_FILES,
@@ -175,6 +180,122 @@ describe('the files of a rebuild', () => {
       signal,
     })
     expect(many.writes[0]?.replace).toBe(true)
+  })
+})
+
+/** The entries of an archive in their order, as the docroot's writer reads them. */
+async function entriesOf(archive: AsyncIterable<Uint8Array>) {
+  const found: Array<{ name: string; type: string }> = []
+  const parser = extract()
+  parser.on('entry', (header, stream, next) => {
+    found.push({ name: header.name, type: header.type ?? 'file' })
+    stream.on('end', () => next())
+    stream.resume()
+  })
+  const chunks: Buffer[] = []
+  for await (const chunk of archive) chunks.push(Buffer.from(chunk))
+  await pipeline(Readable.from([Buffer.concat(chunks)]), parser)
+  return found
+}
+
+describe('the folders PHP owns (Т21)', () => {
+  const folders = { ...recipe, writableFolders: ['system/storage/logs'] }
+  /** A git whose export holds one file, and a runtime that keeps what each write got. */
+  function recording(changed: { written: string[]; deleted: string[] } | null) {
+    const f = fakes(changed)
+    const archives: Array<{ replace: boolean; entries: Array<{ name: string; type: string }> }> = []
+    const content = Buffer.from('<?php echo 1;')
+    const git = {
+      ...f.git,
+      async exportTree<T>(
+        _input: unknown,
+        consume: (tree: {
+          archive: AsyncIterable<Uint8Array>
+          files: number
+          bytes: number
+        }) => Promise<T>,
+      ) {
+        const archive = (async function* () {
+          yield tarFileHeader('index.php', content.byteLength, false)
+          yield content
+          yield tarPadding(content.byteLength)
+          yield TAR_END
+        })()
+        return consume({ archive, files: 1, bytes: content.byteLength })
+      },
+    }
+    const runtime = {
+      async writeFiles(_id: string, input: PreviewFilesInput) {
+        archives.push({ replace: input.replace, entries: await entriesOf(input.archive) })
+      },
+    }
+    return { git, runtime, archives }
+  }
+  const folder = { name: 'system/storage/logs/', type: 'directory' }
+
+  it('go first in the archive of the whole tree, of a difference and of an empty one', async () => {
+    const whole = recording({ written: [], deleted: [] })
+    await writePreviewTree(whole.runtime, whole.git, {
+      repo,
+      previewId: 'p',
+      from: null,
+      synced: [],
+      to,
+      recipe: folders,
+      signal,
+    })
+    const empty = recording({ written: [], deleted: [] })
+    await writePreviewTree(empty.runtime, empty.git, {
+      repo,
+      previewId: 'p',
+      from: to,
+      synced: [],
+      to,
+      recipe: folders,
+      signal,
+    })
+    const difference = recording({ written: ['index.php'], deleted: [] })
+    await writePreviewTree(difference.runtime, difference.git, {
+      repo,
+      previewId: 'p',
+      from,
+      synced: [],
+      to,
+      recipe: folders,
+      signal,
+    })
+    expect(whole.archives).toEqual([
+      { replace: true, entries: [folder, { name: 'index.php', type: 'file' }] },
+    ])
+    expect(empty.archives).toEqual([{ replace: false, entries: [folder] }])
+    expect(difference.archives).toEqual([
+      { replace: false, entries: [folder, { name: 'index.php', type: 'file' }] },
+    ])
+  })
+
+  it('leave the bytes of the archive as they were when the recipe names none', async () => {
+    const f = recording(null)
+    await writePreviewTree(f.runtime, f.git, {
+      repo,
+      previewId: 'p',
+      from: null,
+      synced: [],
+      to,
+      recipe,
+      signal,
+    })
+    expect(f.archives).toEqual([{ replace: true, entries: [{ name: 'index.php', type: 'file' }] }])
+    const empty = fakes({ written: [], deleted: [] })
+    await writePreviewTree(empty.runtime, empty.git, {
+      repo,
+      previewId: 'p',
+      from: to,
+      synced: [],
+      to,
+      recipe: { ...recipe, writableFolders: [] },
+      signal,
+    })
+    expect(empty.writes[0]?.bytes).toBe(TAR_END.byteLength)
   })
 })
 

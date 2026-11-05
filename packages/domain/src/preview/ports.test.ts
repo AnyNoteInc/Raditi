@@ -67,6 +67,31 @@ describe('what a stack says about previews', () => {
       expect(previewRecipeSchema.safeParse(broken).success).toBe(false)
   })
 
+  it('takes what a live page looks like and the folders PHP owns (Т33, Т21)', () => {
+    const declared = {
+      ...recipe,
+      ready: { header: 'x-raditi-preview', absent: [] },
+      writableFolders: ['logs'],
+    }
+    expect(previewRecipeSchema.parse(declared)).toEqual(declared)
+    for (const broken of [
+      { ...recipe, ready: { header: 'x-site', absent: [] } },
+      { ...recipe, ready: { header: 'x-raditi-preview' } },
+      { ...recipe, ready: { header: 'x-raditi-preview', absent: [''] } },
+      { ...recipe, ready: { header: 'x-raditi-preview', absent: [], extra: true } },
+      { ...recipe, writableFolders: Array.from({ length: 33 }, (_, index) => `f${index}`) },
+      { ...recipe, writableFolders: ['../x'] },
+      { ...recipe, writableFolders: ['/var/log'] },
+    ])
+      expect(previewRecipeSchema.safeParse(broken).success).toBe(false)
+    expect(
+      previewRecipeSchema.safeParse({
+        ...recipe,
+        writableFolders: Array.from({ length: 32 }, (_, index) => `f${index}`),
+      }).success,
+    ).toBe(true)
+  })
+
   it('takes a copy policy of allowed tables, filters at the source and overrides', () => {
     const policy = {
       engine: 'mysql',

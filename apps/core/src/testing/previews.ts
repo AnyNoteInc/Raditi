@@ -1,7 +1,7 @@
 // Test doubles of the manager of previews: a runtime that keeps what it was told, a database
 // copier and its catalog, git of one repository, in-memory storage and Vault, the content of a
 // preview and of production. Only for *.test.ts files.
-import { createServer, type Server } from 'node:http'
+import { createServer, type RequestListener, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { zstdCompressSync } from 'node:zlib'
 
@@ -31,12 +31,20 @@ import type { DbPlanValueOwner, DbPlanValueReader } from '../site-content/db-pla
 
 export const hash = (c: string) => c.repeat(64)
 
-/** A local HTTP server standing in for the entry forwarder of a preview. */
-export async function upstreamServer(): Promise<{ server: Server; upstream: PreviewUpstream }> {
-  const server = createServer((request, response) => {
-    if (request.url?.startsWith('/broken')) response.end('<b>Fatal error</b>: x')
-    else response.end('<html>ok</html>')
-  })
+/** What the entry forwarder of a preview answers by default: a page, or a fatal error of PHP. */
+export const previewPage: RequestListener = (request, response) => {
+  if (request.url?.startsWith('/broken')) response.end('<b>Fatal error</b>: x')
+  else response.end('<html>ok</html>')
+}
+
+/**
+ * A local HTTP server standing in for the entry forwarder of a preview; `handler` — what it
+ * answers instead of `previewPage` (a dead or a moved site, docs/plan/62-site-stacks.md, Т33).
+ */
+export async function upstreamServer(
+  handler: RequestListener = previewPage,
+): Promise<{ server: Server; upstream: PreviewUpstream }> {
+  const server = createServer(handler)
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   return { server, upstream: { host: '127.0.0.1', port: (server.address() as AddressInfo).port } }
 }

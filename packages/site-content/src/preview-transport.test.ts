@@ -23,7 +23,10 @@ describe('requests of core to a preview', () => {
           body,
         })
         if (request.url === '/large') response.end('x'.repeat(4096))
-        else response.end('{"ok":true}')
+        else if (request.url === '/moved') {
+          response.writeHead(302, { location: '/wp-login.php', 'x-raditi-stand': '1' })
+          response.end()
+        } else response.end('{"ok":true}')
       })
     })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -52,6 +55,17 @@ describe('requests of core to a preview', () => {
       connection: 'close',
       body: '{"a":1}',
     })
+  })
+
+  it('give the headers of the answer and follow no redirect', async () => {
+    const answer = await previewRequest(
+      { upstream: { host: '127.0.0.1', port }, hostname },
+      { method: 'GET', path: '/moved', timeoutMs: 5000, maxResponseBytes: 1024 },
+    )
+    expect(answer.status).toBe(302)
+    expect(answer.headers.location).toBe('/wp-login.php')
+    expect(answer.headers['x-raditi-stand']).toBe('1')
+    expect(seen.at(-1)?.url).toBe('/moved')
   })
 
   it('refuse an address that is not a path and an answer above the limit', async () => {

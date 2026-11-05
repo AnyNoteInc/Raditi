@@ -175,6 +175,12 @@ describe('totality of the catalogue', () => {
     expect(feedCandidateText.release).toBe('Выпустить новую версию')
   })
 
+  it('says a preview did not start in the words of Т33', () => {
+    expect(previewUnavailableText.boot_failed).toBe(
+      'Предпросмотр не запустился: сайт не заработал в нашей копии. На настоящий сайт это не влияет.',
+    )
+  })
+
   it('says what a rollback left on the site', () => {
     expect(feedReleaseKeptText(undefined)).toEqual([])
     expect(feedReleaseKeptText({ records: 0, tables: 0 })).toEqual([])
