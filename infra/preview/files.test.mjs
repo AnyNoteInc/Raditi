@@ -20,6 +20,7 @@ import { test } from 'node:test'
 
 import { ustar } from '../dev/preview-verify/probes.mjs'
 import {
+  adoptPlatformFolder,
   FilesRefused,
   filesLimits,
   Input,
@@ -337,6 +338,44 @@ test('platform: the frame names each file once, within the limits, with nothing 
     readPlatformFiles(new Input(chunks(frame({ files }), Buffer.from('x')))),
     refused('frame'),
   )
+})
+
+test('platform: the modes of its folders and files are 1775 and 0444', () => {
+  // The sticky bit keeps PHP, a member of the folder's group, from renaming over a root file.
+  assert.equal(PLATFORM_FOLDER_MODE, 0o1775)
+  assert.equal(PLATFORM_FILE_MODE, 0o444)
+})
+
+test('platform: a folder is read between its chown and its chmod', async () => {
+  const calls = []
+  const overlaps = []
+  let pending = 0
+  // Each call ends a turn of the event loop later: a call left without await overlaps the next.
+  const later =
+    (name) =>
+    async (...args) => {
+      if (pending > 0) overlaps.push(name)
+      pending += 1
+      await new Promise(setImmediate)
+      pending -= 1
+      calls.push([name, ...args])
+    }
+  const handle = { chown: later('chown'), stat: later('stat'), chmod: later('chmod') }
+  await adoptPlatformFolder(handle, 33)
+  assert.deepEqual(calls, [['chown', 0, 33], ['stat'], ['chmod', PLATFORM_FOLDER_MODE]])
+  assert.deepEqual(overlaps, [])
+})
+
+test('platform: platformFolder goes through adoptPlatformFolder', async () => {
+  const source = await readFile(new URL('./files.mjs', import.meta.url), 'utf8')
+  const start = source.indexOf('async function platformFolder(')
+  assert.notEqual(start, -1)
+  const end = source.indexOf('\n}\n', start)
+  assert.notEqual(end, -1)
+  const body = source.slice(start, end)
+  assert.ok(body.includes('await adoptPlatformFolder(handle, gid)'))
+  assert.ok(!body.includes('handle.chown'))
+  assert.ok(!body.includes('handle.chmod'))
 })
 
 test(

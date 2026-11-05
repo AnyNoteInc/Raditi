@@ -145,6 +145,17 @@ jobs:
           # The working tree of a turn is exported by the commands of the sandbox image itself.
           docker build -q -f infra/sandbox/Dockerfile --target runtime \
             -t raditi-preview-sandbox:local .
+      # The files of the platform on a real file system, as the helper runs them: root with CHOWN
+      # only (packages/sandbox-providers/src/preview/containers.ts). `pnpm test:infra` skips these
+      # tests without root and off Linux, so this step fails when one of them is skipped here.
+      - name: Files of the platform as the helper runs them
+        run: |
+          set -o pipefail
+          docker run --rm --network none --user 0:0 --cap-drop ALL --cap-add CHOWN \
+            --read-only --tmpfs /tmp -v "$PWD/infra:/w/infra:ro" -w /w \
+            --entrypoint node raditi-preview-tools:local \
+            --test --test-reporter=tap infra/preview/files.test.mjs | tee "$RUNNER_TEMP/files.tap"
+          if grep -E '# SKIP needs' "$RUNNER_TEMP/files.tap"; then exit 1; fi
       - name: Preview suites against the real daemon
         env:
           RADITI_PREVIEW_DOCKER_TESTS: '1'
