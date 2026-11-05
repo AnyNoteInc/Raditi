@@ -92,6 +92,31 @@ describe.runIf(enabled)('the staging database on Docker', () => {
     expect(await ids()).not.toContain(stagingId)
   }, 180_000)
 
+  it('loads a table of an extension wider than a strict server creates', async () => {
+    const stagingId = randomUUID()
+    made.push(stagingId)
+    const columns = Array.from({ length: 24 }, (_, index) => `\`c${index}\` varchar(255) NULL`)
+    const staged = await runtime.load({
+      stagingId,
+      image,
+      dump: dumpOf(
+        `SET NAMES utf8mb4;\nCREATE TABLE \`wp_acme_wide\` (\`id\` int NOT NULL, ${columns.join(', ')}, PRIMARY KEY (\`id\`)) ENGINE=InnoDB ROW_FORMAT=COMPACT DEFAULT CHARSET=utf8mb4;\nINSERT INTO \`wp_acme_wide\` (\`id\`, \`c0\`, \`c23\`) VALUES (1,'первая','последняя');\n`,
+      ),
+    })
+    expect(
+      await query(stagingId, staged.access.password, 'SELECT c0, c23 FROM wp_acme_wide'),
+    ).toEqual({ code: 0, out: 'первая\tпоследняя' })
+    // The definition is kept: the table is still the compact one its server made.
+    expect(
+      await query(
+        stagingId,
+        staged.access.password,
+        "SELECT ROW_FORMAT FROM information_schema.TABLES WHERE TABLE_NAME = 'wp_acme_wide'",
+      ),
+    ).toEqual({ code: 0, out: 'Compact' })
+    await runtime.remove(stagingId)
+  }, 180_000)
+
   it('refuses a dump that runs a client command, and leaves nothing behind', async () => {
     const stagingId = randomUUID()
     made.push(stagingId)

@@ -87,19 +87,66 @@ export function rowFilter(
   return clause(rule)
 }
 
-/** Every column a rule of `table` names in that table: its conditions and its treatments. */
-export function ruleColumns(policy: DatabaseCopyPolicy, table: string): string[] {
-  const rule = policy.tables.find((candidate) => candidate.table === table)
+/** The columns the overrides of `table` set or match: the platform's own state in the copy. */
+export function overrideColumns(policy: DatabaseCopyPolicy, table: string): string[] {
   const named = new Set<string>()
-  for (const condition of rule?.where ?? []) named.add(condition.column)
-  for (const column of Object.keys(rule?.columns ?? {})) named.add(column)
-  for (const other of policy.tables)
-    for (const condition of other.where)
-      if (condition.op === 'inCopied' && condition.table === table) named.add(condition.key)
   for (const override of policy.overrides)
     if (override.table === table) {
       named.add(override.match.column)
       for (const column of Object.keys(override.set ?? {})) named.add(column)
     }
   return [...named]
+}
+
+/**
+ * Every column the policy names in `table`: the conditions and treatments of its rule, the keys
+ * other rules follow, its overrides. MySQL finds a column whatever the case of its name, the
+ * copy matches names exactly: one of these present under another case is refused, so a
+ * treatment never misses a column the site still has.
+ */
+export function namedColumns(policy: DatabaseCopyPolicy, table: string): string[] {
+  const rule = policy.tables.find((candidate) => candidate.table === table)
+  const named = new Set<string>(overrideColumns(policy, table))
+  for (const condition of rule?.where ?? []) named.add(condition.column)
+  for (const column of Object.keys(rule?.columns ?? {})) named.add(column)
+  for (const other of policy.tables)
+    for (const condition of other.where)
+      if (condition.op === 'inCopied' && condition.table === table) named.add(condition.key)
+  return [...named]
+}
+
+/**
+ * Tables of the policy the copy writes as structure only: a rule with a condition on a column
+ * its table lacks, and every rule that follows such a table or a key its target lacks. A
+ * condition dropped without its table would copy every row, so the rule goes whole. A column
+ * only a treatment names is not here: that treatment has nothing to apply to. `columnsOf`
+ * answers null for a table the source lacks: `rowFilter` already makes that `FALSE`.
+ */
+export function rulesWithoutRows(
+  policy: DatabaseCopyPolicy,
+  columnsOf: (table: string) => ReadonlySet<string> | null,
+): Set<string> {
+  const emptied = new Set<string>()
+  const lacks = (table: string, column: string) => {
+    const columns = columnsOf(table)
+    return columns !== null && !columns.has(column)
+  }
+  const goes = (rule: Rule) =>
+    rule.where.some((condition) =>
+      condition.op === 'inCopied'
+        ? lacks(rule.table, condition.column) ||
+          emptied.has(condition.table) ||
+          lacks(condition.table, condition.key)
+        : lacks(rule.table, condition.column),
+    )
+  // A fixed point: a rule taken out takes out the rules that follow it.
+  for (let changed = true; changed;) {
+    changed = false
+    for (const rule of policy.tables)
+      if (!emptied.has(rule.table) && goes(rule)) {
+        emptied.add(rule.table)
+        changed = true
+      }
+  }
+  return emptied
 }

@@ -9,6 +9,7 @@ import {
   type ContentWriteOutcome,
   type ContentWriteRequest,
   type DatabaseCopier,
+  type DatabaseCopySummary,
   type KvSecret,
   type PreviewBrowserInput,
   type PreviewDatabasePasswords,
@@ -165,16 +166,21 @@ export class FakeRuntime implements PreviewRuntime {
   }
 }
 
-export const fakeCopier = (sql = 'INSERT INTO `wp_posts` VALUES (1);\n'): DatabaseCopier => ({
+export const fakeCopier = (
+  sql = 'INSERT INTO `wp_posts` VALUES (1);\n',
+  summary: Partial<DatabaseCopySummary> = {},
+): DatabaseCopier => ({
   async copy(_input, write) {
     await write(Buffer.from(sql))
     return {
       tables: 1,
       structureOnly: 0,
+      leftOutTables: 0,
       rows: 1,
       bytes: sql.length,
       sha256: hash('5'),
       serverVersion: '11.4.13-MariaDB',
+      ...summary,
     }
   },
 })

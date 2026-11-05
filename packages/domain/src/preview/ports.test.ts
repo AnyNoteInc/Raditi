@@ -125,6 +125,14 @@ describe('what a stack says about previews', () => {
     ).toBe(false)
   })
 
+  it('holds a policy of up to 128 tables', () => {
+    const rules = (count: number) =>
+      Array.from({ length: count }, (_, index) => ({ table: `t${index}`, where: [] }))
+    const of = (count: number) => ({ engine: 'mysql', tables: rules(count), overrides: [] })
+    expect(databaseCopyPolicySchema.safeParse(of(128)).success).toBe(true)
+    expect(databaseCopyPolicySchema.safeParse(of(129)).success).toBe(false)
+  })
+
   it('takes the database settings of a production configuration', () => {
     const settings = { tablePrefix: 'wp_', charset: 'utf8mb4', collation: null }
     expect(siteDatabaseSettingsSchema.parse(settings)).toEqual(settings)

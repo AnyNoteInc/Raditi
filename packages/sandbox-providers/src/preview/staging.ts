@@ -227,9 +227,17 @@ export function createDockerStagingDatabaseRuntime(
           if (Date.now() > until) throw sandboxCommandFailed('The staging database did not start')
           await delay(300)
         }
-        // Data only: no client command of the dump runs (`\!`, `system`, `source`).
+        // Data only: no client command of the dump runs (`\!`, `system`, `source`). A wide table
+        // of an extension is created as its server keeps it, as in the seed (ERROR 1118
+        // otherwise); its definition is not softened.
         const loaded = await execIn(container, {
-          argv: [...login.argv, '--binary-mode', '--sandbox', '--max-allowed-packet=64M'],
+          argv: [
+            ...login.argv,
+            '--binary-mode',
+            '--sandbox',
+            '--max-allowed-packet=64M',
+            '--init-command=SET SESSION innodb_strict_mode = 0',
+          ],
           user: DATABASE_USER,
           env: login.env,
           stdin: input.dump,

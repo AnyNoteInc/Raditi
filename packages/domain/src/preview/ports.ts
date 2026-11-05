@@ -66,6 +66,11 @@ export interface DatabaseCopySummary {
   tables: number
   /** Tables copied as structure only. */
   structureOnly: number
+  /**
+   * Tables whose rows or whole structure the copy left out: a rule whose condition the source
+   * cannot answer, a table outside the policy whose definition a seed cannot hold.
+   */
+  leftOutTables: number
   rows: number
   bytes: number
   /** SHA-256 of the seed as written, hex. */

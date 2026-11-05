@@ -38,6 +38,11 @@ export const previewRecordSchema = z.strictObject({
    * object of the copy is there, and the next build asks again.
    */
   seedChecked: z.boolean(),
+  /**
+   * Tables the seed left out (`DatabaseCopySummary.leftOutTables`); absent — an older seed. Not
+   * shown yet: the passport of a preview (Т34) reads it as the difference `extension_data_left_out`.
+   */
+  seedTablesLeftOut: z.number().int().min(0).max(1_000).optional(),
   sync: syncSchema.nullable(),
   /**
    * How the preview's runtime stands to the site's (Р2, Р18): the version the site's server

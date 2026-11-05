@@ -614,4 +614,247 @@ describe.skipIf(!enabled)('the MySQL copier against MariaDB', () => {
       await cleanup.end()
     }
   }, 120_000)
+
+  /** Tables of an extension on the source for one test, dropped after it. */
+  async function withTables(tables: string[], sql: string, test: () => Promise<void>) {
+    const connection = await connectTo(source)
+    try {
+      await connection.query(sql)
+      await test()
+    } finally {
+      await connection.query(`DROP TABLE IF EXISTS ${tables.join(', ')}`)
+      await connection.end()
+    }
+  }
+
+  const termsOnly: DatabaseCopyPolicy = {
+    engine: 'mysql',
+    tables: [{ table: 'terms', where: [] }],
+    overrides: [],
+  }
+  /** The copy of the site as it is before a test adds the tables of an extension. */
+  const baselineOf = async () => (await copy(source, termsOnly)).summary
+
+  it('leaves out a table outside the policy whose definition a seed cannot hold', async () => {
+    const baseline = await baselineOf()
+    await withTables(
+      ['wp_acme_federated'],
+      `CREATE TABLE wp_acme_federated (id int NOT NULL, lead text, PRIMARY KEY (id))
+        ENGINE=InnoDB PARTITION BY HASH (id) PARTITIONS 2;
+       INSERT INTO wp_acme_federated VALUES (1, 'lead-of-an-extension');`,
+      async () => {
+        const { summary, seed } = await copy(source, termsOnly)
+        // The site's tables are counted whole, the one left out among them.
+        expect(summary).toMatchObject({ tables: baseline.tables + 1, leftOutTables: 1 })
+        expect(seed.toString('utf8')).not.toContain('wp_acme_federated')
+        expect(seed.toString('utf8')).not.toContain('lead-of-an-extension')
+        await load(target, seed)
+        // A rule wants its rows: without the table the preview does not work.
+        await expect(
+          copy(source, {
+            ...termsOnly,
+            tables: [...termsOnly.tables, { table: 'acme_federated', where: [] }],
+          }),
+        ).rejects.toEqual(new DatabaseCopyError('structure_unsupported'))
+        // An override alone wants it too: the platform's own state would be lost.
+        await expect(
+          copy(source, {
+            ...termsOnly,
+            overrides: [
+              { table: 'acme_federated', match: { column: 'id', value: '1' }, set: { lead: 'x' } },
+            ],
+          }),
+        ).rejects.toEqual(new DatabaseCopyError('structure_unsupported'))
+      },
+    )
+  }, 120_000)
+
+  it('refuses a table outside the policy whose definition is over the limit', async () => {
+    // 800 columns of long names: SHOW CREATE TABLE is over 64 KiB, a limit and no definition.
+    const columns = Array.from(
+      { length: 800 },
+      (_, index) => `c_${'x'.repeat(56)}_${String(index).padStart(3, '0')} int NULL`,
+    )
+    await withTables(
+      ['wp_acme_huge'],
+      `CREATE TABLE wp_acme_huge (id int NOT NULL, ${columns.join(', ')}, PRIMARY KEY (id))
+        DEFAULT CHARSET=utf8mb4;`,
+      async () => {
+        await expect(copy(source, termsOnly)).rejects.toEqual(new DatabaseCopyError('too_large'))
+      },
+    )
+  }, 120_000)
+
+  it('leaves out a system-versioned table outside the policy, and refuses one a rule wants', async () => {
+    const baseline = await baselineOf()
+    await withTables(
+      ['wp_acme_history'],
+      `CREATE TABLE wp_acme_history (id int NOT NULL, v text, PRIMARY KEY (id))
+        DEFAULT CHARSET=utf8mb4 WITH SYSTEM VERSIONING;
+       INSERT INTO wp_acme_history VALUES (1, 'history-of-an-extension');`,
+      async () => {
+        const { summary, seed } = await copy(source, termsOnly)
+        expect(summary).toMatchObject({ tables: baseline.tables + 1, leftOutTables: 1 })
+        expect(seed.toString('utf8')).not.toContain('wp_acme_history')
+        expect(seed.toString('utf8')).not.toContain('history-of-an-extension')
+        await expect(
+          copy(source, {
+            ...termsOnly,
+            tables: [...termsOnly.tables, { table: 'acme_history', where: [] }],
+          }),
+        ).rejects.toEqual(new DatabaseCopyError('structure_unsupported'))
+      },
+    )
+  }, 120_000)
+
+  it('refuses a column the policy names that the site keeps in another case', async () => {
+    await withTables(
+      ['wp_acme_people', 'wp_acme_opts'],
+      `CREATE TABLE wp_acme_people (ID bigint unsigned NOT NULL, User_Email varchar(100),
+         PRIMARY KEY (ID)) DEFAULT CHARSET=utf8mb4;
+       CREATE TABLE wp_acme_opts (option_id bigint unsigned NOT NULL, option_name varchar(64),
+         Option_Value longtext, PRIMARY KEY (option_id)) DEFAULT CHARSET=utf8mb4;
+       INSERT INTO wp_acme_people VALUES (1, 'anna.real@person.example');
+       INSERT INTO wp_acme_opts VALUES (1, 'acme_widget', '{"api_key":"sk-real-secret-value"}');`,
+      async () => {
+        // The server finds each of these columns, the copy would not treat it: no copy.
+        for (const rule of [
+          { table: 'acme_people', where: [], columns: { user_email: 'synthetic_email' } },
+          { table: 'acme_opts', where: [], columns: { option_value: 'scrub_secrets' } },
+          {
+            table: 'acme_opts',
+            where: [{ op: 'in', column: 'OPTION_NAME', values: ['acme_widget'] }],
+          },
+        ] as DatabaseCopyPolicy['tables'])
+          await expect(
+            copy(source, { ...termsOnly, tables: [...termsOnly.tables, rule] }),
+            rule.table,
+          ).rejects.toEqual(new DatabaseCopyError('structure_unsupported'))
+      },
+    )
+  }, 120_000)
+
+  const items = `
+    CREATE TABLE wp_acme_items (id int NOT NULL, kind varchar(16) NOT NULL, PRIMARY KEY (id))
+      DEFAULT CHARSET=utf8mb4;
+    CREATE TABLE wp_acme_meta (id int NOT NULL, item_id int NOT NULL, v text, PRIMARY KEY (id))
+      DEFAULT CHARSET=utf8mb4;
+    INSERT INTO wp_acme_items VALUES (1, 'public'), (2, 'private');
+    INSERT INTO wp_acme_meta VALUES (1, 1, 'meta-of-public'), (2, 2, 'meta-of-private');`
+
+  it('writes a rule whose condition the source cannot answer, and the rule after it, as structure only', async () => {
+    const baseline = await baselineOf()
+    await withTables(['wp_acme_items', 'wp_acme_meta'], items, async () => {
+      const { summary, seed } = await copy(source, {
+        ...termsOnly,
+        tables: [
+          ...termsOnly.tables,
+          {
+            table: 'acme_items',
+            where: [{ op: 'in', column: 'no_such_column', values: ['public'] }],
+          },
+          {
+            table: 'acme_meta',
+            where: [{ op: 'inCopied', column: 'item_id', table: 'acme_items', key: 'id' }],
+          },
+        ],
+      })
+      expect(summary).toMatchObject({
+        structureOnly: baseline.structureOnly + 2,
+        leftOutTables: 2,
+      })
+      const text = seed.toString('utf8')
+      for (const table of ['wp_acme_items', 'wp_acme_meta']) {
+        expect(text).toContain(`CREATE TABLE \`${table}\``)
+        expect(text).not.toContain(`INSERT INTO \`${table}\``)
+      }
+      expect(text).not.toMatch(/meta-of-p|'private'|'public'/)
+      await load(target, seed)
+      const connection = await connectTo(target)
+      try {
+        for (const table of ['wp_acme_items', 'wp_acme_meta']) {
+          const [[count]] = await connection.query<RowDataPacket[]>(
+            `SELECT COUNT(*) AS n FROM ${table}`,
+          )
+          expect(String(count?.n), table).toBe('0')
+        }
+      } finally {
+        await connection.end()
+      }
+    })
+  }, 120_000)
+
+  it('skips a treatment of a column the source lacks, and refuses an override of one', async () => {
+    await withTables(['wp_acme_items', 'wp_acme_meta'], items, async () => {
+      const treated: DatabaseCopyPolicy = {
+        ...termsOnly,
+        tables: [{ table: 'acme_items', where: [], columns: { no_such_column: 'empty' } }],
+      }
+      const { summary, seed } = await copy(source, treated)
+      expect(summary).toMatchObject({ rows: 2, leftOutTables: 0 })
+      expect(seed.toString('utf8')).toContain('INSERT INTO `wp_acme_items`')
+      // An override holds the platform's own state in the copy: without its column, no copy.
+      await expect(
+        copy(source, {
+          ...treated,
+          overrides: [
+            {
+              table: 'acme_items',
+              match: { column: 'no_such_column', value: 'x' },
+              set: { kind: 'preview' },
+            },
+          ],
+        }),
+      ).rejects.toEqual(new DatabaseCopyError('structure_unsupported'))
+      // The same for a table only an override names, whose rows the copy never reads.
+      await expect(
+        copy(source, {
+          ...termsOnly,
+          overrides: [
+            {
+              table: 'acme_meta',
+              match: { column: 'no_such_column', value: 'x' },
+              set: { v: 'p' },
+            },
+          ],
+        }),
+      ).rejects.toEqual(new DatabaseCopyError('structure_unsupported'))
+    })
+  }, 120_000)
+
+  it('loads a table wider than a strict server creates', async () => {
+    const columns = Array.from({ length: 24 }, (_, index) => `c${index} varchar(255) NULL`)
+    await withTables(
+      ['wp_acme_wide'],
+      `SET SESSION innodb_strict_mode = 0;
+       CREATE TABLE wp_acme_wide (id int NOT NULL, ${columns.join(', ')}, PRIMARY KEY (id))
+         ENGINE=InnoDB ROW_FORMAT=COMPACT DEFAULT CHARSET=utf8mb4;
+       INSERT INTO wp_acme_wide (id, c0, c23) VALUES (1, 'первая', 'последняя');`,
+      async () => {
+        const { seed } = await copy(source, {
+          ...termsOnly,
+          tables: [{ table: 'acme_wide', where: [] }],
+        })
+        // The same seed without the line: a strict server refuses the table.
+        const strict = Buffer.from(
+          seed.toString('latin1').replace('SET SESSION innodb_strict_mode = 0;\n', ''),
+          'latin1',
+        )
+        expect(strict.byteLength).toBeLessThan(seed.byteLength)
+        await expect(load(target, strict)).rejects.toThrow(/ERROR 1118/)
+        await load(target, seed)
+        const connection = await connectTo(target)
+        try {
+          const [rows] = await connection.query<RowDataPacket[]>(
+            'SELECT id, c0, c23 FROM wp_acme_wide',
+          )
+          expect(rows.map((row) => ({ ...row }))).toEqual([
+            { id: 1, c0: 'первая', c23: 'последняя' },
+          ])
+        } finally {
+          await connection.end()
+        }
+      },
+    )
+  }, 120_000)
 })

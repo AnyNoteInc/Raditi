@@ -116,6 +116,8 @@ describe('statements of a seed', () => {
     const header = text(seedHeader('utf8mb4', 'utf8mb4_unicode_ci'))
     expect(header).toContain('SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;')
     expect(header).toContain("SET SQL_MODE = 'NO_AUTO_VALUE_ON_ZERO';")
+    // A wide table of an extension loads as its server keeps it (ERROR 1118 otherwise).
+    expect(header).toContain('SET SESSION innodb_strict_mode = 0;')
     expect(text(seedHeader('cp1251', null))).toContain('SET NAMES cp1251;\n')
   })
 

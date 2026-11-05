@@ -243,7 +243,7 @@ export const databaseCopyPolicySchema = z.strictObject({
         columns: z.record(identifier, z.enum(databaseColumnTreatments)).optional(),
       }),
     )
-    .max(64)
+    .max(128)
     .refine(
       (tables) => new Set(tables.map((rule) => rule.table)).size === tables.length,
       'one rule per table',

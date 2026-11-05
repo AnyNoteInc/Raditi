@@ -28,7 +28,13 @@ import {
 import { createConnection, type Connection, type FieldPacket } from 'mysql2'
 
 import { scrubNestedSecrets } from './nested-secrets.ts'
-import { assertCopyPolicy, ruleColumns, rowFilter } from './policy-sql.ts'
+import {
+  assertCopyPolicy,
+  namedColumns,
+  overrideColumns,
+  rowFilter,
+  rulesWithoutRows,
+} from './policy-sql.ts'
 import {
   EMPTY_LITERAL,
   hexLiteral,
@@ -568,10 +574,11 @@ async function copyTables(
       ? version.version.replace(/\p{Cc}/gu, '').slice(0, 64) || null
       : null
 
+  // A table MariaDB keeps with its history is the site's too; its definition holds no seed.
   const listed = await catalog<{ name: unknown }>(
     connection,
     `SELECT TABLE_NAME AS name FROM information_schema.TABLES
-      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'`,
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE IN ('BASE TABLE', 'SYSTEM VERSIONED')`,
   )
   const tables = listed
     .map((row) => String(row.name))
@@ -582,40 +589,72 @@ async function copyTables(
   const nameOf = (table: string) => `${tablePrefix}${table}`
   const exists = (table: string) => present.has(nameOf(table))
 
-  // The columns of every table the policy reads or sets: each column it names must be there.
+  // The columns of every table the policy reads or sets. An override holds the platform's own
+  // state in the copy, the one thing binding it to the preview: each column it names must be
+  // there. A condition on a missing column takes its rule out below; a treatment of one has
+  // nothing to apply to.
   const named = new Set([
     ...policy.tables.map((rule) => rule.table),
     ...policy.overrides.map((override) => override.table),
   ])
   const info = new Map<string, TableInfo>()
+  const columnsOf = new Map<string, ReadonlySet<string>>()
   for (const table of named) {
     if (!exists(table)) continue
     const found = await tableInfo(connection, nameOf(table))
     const columns = new Set(found.columns.map((column) => column.name))
-    if (ruleColumns(policy, table).some((column) => !columns.has(column)))
+    const anyCase = new Set(found.columns.map((column) => column.name.toLowerCase()))
+    if (overrideColumns(policy, table).some((column) => !columns.has(column)))
+      throw new DatabaseCopyError('structure_unsupported')
+    // The server still has a column named in another case: it is not missing.
+    if (
+      namedColumns(policy, table).some(
+        (column) => !columns.has(column) && anyCase.has(column.toLowerCase()),
+      )
+    )
       throw new DatabaseCopyError('structure_unsupported')
     info.set(table, found)
+    columnsOf.set(table, columns)
   }
+  const emptied = rulesWithoutRows(policy, (table) => columnsOf.get(table) ?? null)
+  // A rule that follows a table taken out copies nothing of it, down the whole chain.
+  const copied = (table: string) => exists(table) && !emptied.has(table)
 
   await writer.raw(seedHeader(charset, collation))
   let rows = 0
   let structureOnly = 0
+  let leftOutTables = 0
   for (const name of tables) {
     const table = name.slice(tablePrefix.length)
-    await writer.raw(tableStatement(name, await createTable(connection, name)))
     const rule = policy.tables.find((candidate) => candidate.table === table)
     const overrides = policy.overrides.filter((override) => override.table === table)
+    let statement: Buffer
+    try {
+      statement = tableStatement(name, await createTable(connection, name))
+    } catch (error) {
+      // Outside the policy no row of it is wanted: the preview runs without it, and says so.
+      // Its definition is never softened: this check keeps FEDERATED and CONNECT out of a seed.
+      const unwanted = !rule && overrides.length === 0
+      if (!unwanted || !isDatabaseCopyError(error) || error.reason !== 'structure_unsupported')
+        throw error
+      leftOutTables += 1
+      continue
+    }
+    await writer.raw(statement)
     const seen = new Set<number>()
-    if (rule) {
+    if (rule && !emptied.has(table)) {
       const tableRows = new TableRows(rule, overrides, info.get(table)!, seen)
       rows += await copyRows(connection, guard, writer, {
         name,
         rows: tableRows,
-        where: rowFilter(policy, table, nameOf, exists),
+        where: rowFilter(policy, table, nameOf, copied),
         limit: databaseCopyLimits.rows - rows,
         signal,
       })
-    } else structureOnly += 1
+    } else {
+      structureOnly += 1
+      if (emptied.has(table)) leftOutTables += 1
+    }
     // An override without a copied row adds one.
     for (const [index, override] of overrides.entries()) {
       if (seen.has(index) || override.set === null) continue
@@ -630,6 +669,7 @@ async function copyTables(
   return {
     tables: tables.length,
     structureOnly,
+    leftOutTables,
     rows,
     bytes: writer.bytes,
     sha256: writer.sha256(),

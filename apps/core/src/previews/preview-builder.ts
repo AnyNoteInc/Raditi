@@ -647,7 +647,7 @@ async function buildPreviewOn(
       signal,
     )
     seed = { key: stored.key, sha256: stored.sha256, releaseId: seedRef.releaseId }
-    record = { ...record, seedChecked: false }
+    record = { ...record, seedChecked: false, seedTablesLeftOut: stored.summary.leftOutTables }
     // Kept at once — a build that fails later loads it again instead of copying the site again —
     // with the objects of the old seed forgotten: the rows of this one are written with `ready`,
     // and the mcp role writes into nothing else (R7). A release that took the site during the
