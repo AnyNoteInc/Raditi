@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { PREVIEW_SANDBOX } from '@repo/domain/preview/hostname'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -7,7 +8,6 @@ import { serverRefusal } from '@/components/billing/testing'
 
 import {
   NOT_READY_RETRY_MS,
-  PREVIEW_SANDBOX,
   PreviewFrame,
   TICKET_REQUEST_TYPE,
   ticketRequestAllowed,

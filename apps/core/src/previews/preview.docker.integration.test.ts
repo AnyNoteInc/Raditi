@@ -12,6 +12,7 @@ import {
   previewBrowserSecretPath,
   previewBrowserSecretSchema,
   previewBrowserSocket,
+  previewEnterUrl,
   previewHostname,
   publishedContentHashMaterial,
   siteAccessPath,
@@ -40,6 +41,7 @@ import type { PreviewsConfig } from '../config/config.ts'
 import { GitWorkspaceService } from '../git-workspace/git-workspace.service.ts'
 import { sampleDriverId } from '../testing/ids.ts'
 import { startPreviewApp, type PreviewApp } from '../testing/preview-app.ts'
+import { openCabinetFrame } from '../testing/preview-frame.ts'
 import {
   MemoryStorage,
   MemoryVault,
@@ -56,12 +58,16 @@ import { createPreviewSiteSources } from './site-sources.ts'
 // default), the real copier, PostgreSQL. The preview is built, opened through its entry forwarder,
 // rebuilt to a candidate with a database operation, synced from a turn, given a browser — which
 // opens the preview through the gateway of the `preview` app (R6), its build started as a process
-// of its own on PREVIEW_GATEWAY_PORT 18090 — and destroyed. Only synthetic data. Needs the images
-// below, the site, tools and browser images of infra/preview (README), the image of the host rules
-// (infra/sandbox/Dockerfile, `network-guard`, or SANDBOX_NETWORK_GUARD_IMAGE) and
-// `pnpm --filter preview build`; runs with
+// of its own on PREVIEW_GATEWAY_PORT 18090 — and destroyed. In between, the owner signs in to
+// WordPress inside the cabinet's frame (docs/plan/62-site-stacks.md, Т35, M2k): a Chromium of
+// playwright-core holds the preview in an iframe of a page on the gateway's APP_URL, port 18091.
+// Only synthetic data. Needs the images below, the site, tools and browser images of
+// infra/preview (README), the image of the host rules (infra/sandbox/Dockerfile, `network-guard`,
+// or SANDBOX_NETWORK_GUARD_IMAGE), `pnpm --filter preview build` and the Chromium of
+// playwright-core (`pnpm --filter e2e exec playwright install chromium`); runs with
 // RADITI_PREVIEW_DOCKER_TESTS=1, RADITI_GATEWAY_DB_TESTS=1 and a disposable DATABASE_URL, with
-// port 18090 free on loopback (Docker Desktop) or on the bridge of the host (Linux).
+// port 18090 free on loopback (Docker Desktop) or on the bridge of the host (Linux) and port 18091
+// free on loopback.
 
 const siteFacts: SiteFacts = {
   stack: 'wordpress',
@@ -138,7 +144,15 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
       )
     },
   })
-  const ids = { workspace: '', site: '', task: '', preview: '', hostname: '', pageId: 0 }
+  const ids = {
+    workspace: '',
+    site: '',
+    task: '',
+    preview: '',
+    hostname: '',
+    pageId: 0,
+    user: '',
+  }
   let mainSha = ''
   let candidateSha = ''
   let exported: Uint8Array = workingTreeArchive({})
@@ -499,7 +513,7 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
       address: config.address,
       port: 18090,
       host: local ? '0.0.0.0' : '127.0.0.1',
-      appUrl: 'http://localhost:3000',
+      appUrl: 'http://localhost:18091',
       sessionSecret: randomBytes(32).toString('base64url'),
     })
   }, 600_000)
@@ -533,6 +547,7 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
         await db.gitRepository.deleteMany({ where: { siteId: ids.site } })
         await db.credentialRef.deleteMany({ where: { siteId: ids.site } })
         await db.site.deleteMany({ where: { workspaceId: ids.workspace } })
+        if (ids.user) await db.user.deleteMany({ where: { id: ids.user } })
         await db.workspace.deleteMany({ where: { id: ids.workspace } })
       })
     await step(() => db?.$disconnect())
@@ -574,6 +589,94 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
         (mismatch) => mismatch.objectRef,
       ),
     ).toContain(`page:${ids.pageId}`)
+  }, 600_000)
+
+  it('signs the owner in to WordPress inside the cabinet’s frame', async () => {
+    // The owner: a member of the workspace — the gateway lets only a member's ticket in.
+    const user = await db.user.create({
+      data: { name: 'Fixture', email: `frame-${suffix}@example.test` },
+    })
+    ids.user = user.id
+    await db.member.create({ data: { workspaceId: ids.workspace, userId: user.id } })
+    // A one-time ticket of the cabinet, as preview.ticket writes it; the gateway keeps the hash.
+    const ticketFor = async () => {
+      const ticket = randomBytes(32).toString('base64url')
+      await db.previewTicket.create({
+        data: {
+          previewId: ids.preview,
+          kind: 'user',
+          userId: user.id,
+          tokenHash: createHash('sha256').update(ticket).digest('hex'),
+          expiresAt: new Date(Date.now() + 60_000),
+        },
+      })
+      return ticket
+    }
+    // The account of the platform signs in with a synthetic password of this run: the copy keeps
+    // a random hash of it.
+    const password = randomBytes(18).toString('base64url')
+    const updated = await runtime.exec(ids.preview, {
+      argv: [
+        'wp',
+        '--skip-plugins',
+        '--skip-themes',
+        'user',
+        'update',
+        'raditi-platform',
+        `--user_pass=${password}`,
+        '--skip-email',
+      ],
+      timeoutMs: 60_000,
+    })
+    expect(updated.code, Buffer.from(updated.stderr).toString('utf8')).toBe(0)
+
+    const origin = `http://${ids.hostname}:8090`
+    const cabinet = await openCabinetFrame({
+      appOrigin: 'http://localhost:18091',
+      enterUrl: previewEnterUrl(origin, await ticketFor(), '/wp-login.php'),
+      gatewayPort: 18090,
+    })
+    try {
+      const { frame } = cabinet
+      await frame.locator('#user_login').waitFor({ state: 'visible', timeout: 60_000 })
+      const inFrame = await (await frame.owner().elementHandle())!.contentFrame()
+      // The control that the frame is cross-site: a cookie with no attributes does not live in
+      // it, and lives in a tab of the same preview. A same-site stand fails here, not silently.
+      expect(await cabinet.keepsPlainCookie(inFrame!)).toBe(false)
+      const tab = await cabinet.tab(previewEnterUrl(origin, await ticketFor(), '/'))
+      expect(new URL(tab.url()).origin).toBe(origin)
+      expect(await cabinet.keepsPlainCookie(tab)).toBe(true)
+      await tab.close()
+
+      await frame.locator('#user_login').fill('raditi-platform')
+      await frame.locator('#user_pass').fill(password)
+      await frame.locator('#wp-submit').click()
+      await frame
+        .locator('#wpadminbar, #login_error')
+        .first()
+        .waitFor({ state: 'attached', timeout: 60_000 })
+      // The refusal WordPress writes when its test cookie was lost: the frame dropped it.
+      const refusal = frame.locator('#login_error')
+      if ((await refusal.count()) > 0)
+        expect(await refusal.innerText()).not.toContain('Cookies are blocked')
+      await frame.locator('#wpadminbar').waitFor({ state: 'visible', timeout: 60_000 })
+      expect(new URL(inFrame!.url()).pathname).toBe('/wp-admin/')
+
+      // Names only, never values: which cookies the frame and the tab keep, and under what key.
+      const cookies = await cabinet.page.context().cookies(origin)
+      console.log(
+        `NOTE cookies of the preview: ${cookies
+          .map((cookie) =>
+            cookie.partitionKey === undefined
+              ? cookie.name
+              : `${cookie.name} (partitioned by ${cookie.partitionKey})`,
+          )
+          .sort()
+          .join(', ')}`,
+      )
+    } finally {
+      await cabinet.close()
+    }
   }, 600_000)
 
   it('rebuilds to a candidate: its files, its database operation and its checks', async () => {

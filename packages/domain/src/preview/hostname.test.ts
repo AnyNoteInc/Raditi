@@ -5,6 +5,7 @@ import {
   isPreviewBaseDomain,
   isPreviewPath,
   parsePreviewHostname,
+  PREVIEW_SANDBOX,
   PREVIEW_SESSION_COOKIE,
   previewEnterUrl,
   previewGatewayPaths,
@@ -168,6 +169,13 @@ describe('the way in', () => {
     )
     expect(() => previewEnterUrl('http://x', 'short', '/')).toThrow('Invalid preview entry')
     expect(() => previewEnterUrl('http://x', ticket, '//evil')).toThrow('Invalid preview entry')
+  })
+
+  it('lets the frame run the site and its windows, never a modal of the cabinet', () => {
+    expect(PREVIEW_SANDBOX).toBe(
+      'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox',
+    )
+    expect(PREVIEW_SANDBOX).not.toContain('allow-modals')
   })
 
   it('opens a preview from the cabinet by host and path', () => {

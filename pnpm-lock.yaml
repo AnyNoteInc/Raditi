@@ -765,6 +765,9 @@ importers:
       eslint:
         specifier: 'catalog:'
         version: 10.11.0(jiti@2.7.0)(supports-color@7.2.0)
+      playwright-core:
+        specifier: 'catalog:'
+        version: 1.63.0
       supertest:
         specifier: 'catalog:'
         version: 7.3.0(supports-color@7.2.0)

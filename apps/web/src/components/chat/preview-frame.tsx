@@ -1,6 +1,6 @@
 'use client'
 
-import { isPreviewPath } from '@repo/domain/preview/hostname'
+import { isPreviewPath, PREVIEW_SANDBOX } from '@repo/domain/preview/hostname'
 import { previewPanelText } from '@repo/domain/tasks/client-feed-labels'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
@@ -32,10 +32,6 @@ export const TICKET_REQUEST_INTERVAL_MS = 10_000
  * @repo/trpc), so a request lost on the way is asked again by the next one, and no sooner.
  */
 export const NOT_READY_RETRY_MS = 60_000
-
-/** What the iframe is allowed: the site's own scripts, forms and windows, nothing of the cabinet. */
-export const PREVIEW_SANDBOX =
-  'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox'
 
 interface TicketRequestEvent {
   source: unknown

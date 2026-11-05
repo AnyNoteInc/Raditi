@@ -42,6 +42,8 @@ on:
       # The values of a candidate's database plan a build replays (Р22).
       - apps/core/src/site-content/**
       - apps/core/src/testing/preview-app.ts
+      # The cabinet's frame of a preview (docs/plan/62-site-stacks.md, Т35): sign-in in the frame.
+      - apps/core/src/testing/preview-frame.ts
       - apps/preview/**
       - packages/observability/**
       - packages/service-runtime/**
