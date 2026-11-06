@@ -440,3 +440,52 @@ test('no-sendmail reads the letter and answers 0', () => {
   assert.equal(run.error, undefined, 'the whole letter is read')
   assert.equal(run.status, 0)
 })
+
+// The files of a recipe every stack shares (docs/plan/62, Т21): the configuration of Apache and
+// the prologue of a generated configuration. A stack's recipe writes them next to the settings
+// file; the stand verify:site-images reads them as they are.
+const wordpressApache = readFileSync(
+  new URL('../wordpress/preview-apache.conf', import.meta.url),
+  'utf8',
+)
+const RULES_MARK = '    # RADITI_SITE_RULES\n'
+
+test('site-apache.conf is the configuration of WordPress without its rules', () => {
+  const shared = read('site-apache.conf')
+  assert.equal(shared.split(RULES_MARK).length, 2, 'one mark for the rules of a stack')
+  // Above ServerRoot: comments and blank lines alone, no directive the WordPress file lacks.
+  const head = shared.slice(0, shared.indexOf('ServerRoot')).split('\n')
+  assert.ok(head.length > 1, 'a head of comments')
+  for (const line of head) assert.match(line, /^(?:#.*)?$/, line)
+  const body = shared.slice(shared.indexOf('ServerRoot')).replace(RULES_MARK, '')
+  const wordpress = wordpressApache.slice(wordpressApache.indexOf('ServerRoot'))
+  const rules = wordpress.indexOf('    # The rules WordPress writes')
+  const end = wordpress.indexOf('</Directory>', rules)
+  assert.ok(rules > 0 && end > rules, 'the rules of WordPress')
+  assert.equal(body, wordpress.slice(0, rules) + wordpress.slice(end))
+  // The mark stands where the rules of WordPress stand: inside the docroot.
+  assert.ok(shared.indexOf('<Directory /var/www/html>') < shared.indexOf(RULES_MARK))
+  // Nothing of a stack in the shared file.
+  assert.doesNotMatch(shared, /wordpress|RewriteRule/i)
+})
+
+test('prologue.php answers the version of the settings the platform writes', () => {
+  const prologue = read('prologue.php')
+  const wpConfig = readFileSync(
+    new URL('../wordpress/preview-wp-config.php', import.meta.url),
+    'utf8',
+  )
+  assert.ok(prologue.startsWith('<?php\n'))
+  for (const text of [prologue, wpConfig])
+    assert.ok(text.includes("($settings['v'] ?? null) !== 2"), 'version 2 of the settings')
+  assert.ok(prologue.includes("'/run/raditi/preview/settings.json'"))
+  for (const word of ['DB_', 'wp-', 'WP_']) assert.ok(!prologue.includes(word), word)
+  // Not newer than PHP 7.3: no arrow function, no typed property, no match.
+  assert.doesNotMatch(
+    prologue,
+    /\bfn\s*\(|\bmatch\s*\(|\b(?:public|private|protected)\s+\??[a-z]+\s+\$/,
+  )
+  // Neither file is in an image: a recipe writes them (Т21).
+  for (const name of ['site-apache.conf', 'prologue.php'])
+    assert.doesNotMatch(ignore, new RegExp(`^!${name.replace('.', '\\.')}$`, 'm'), name)
+})

@@ -18,6 +18,57 @@
 
 Службы стенда слушают там, куда контейнеры ходят как на хост (`host-gateway`): на macOS — loopback (Docker Desktop ведёт туда `host.docker.internal`), на Linux — сам адрес `host-gateway`. Если он не принадлежит этой машине (Colima ведёт `host-gateway` на Mac), службы и шлюз слушают адрес моста `docker0`, а пересыльщику браузера среда передаёт этот адрес (`gatewayHost`) — стенд печатает об этом строку.
 
+## Образы `site`
+
+`pnpm verify:site-images [-- --only 7.4,8.3] [--image=<образ>] [--no-build] [--build-only] [--keep] [--runtime=runsc]` ([план 62](../../../docs/plan/62-site-stacks.md), Э1.2, ступень М1) собирает цель `site` на стадии `php-base` для каждой строки `infra/preview/site-bases.json` (`raditi-site-verify:<версия>`, аргументы — `siteImageBuildArgs`, срок сборки 30 минут) и проверяет образ снаружи настоящей средой `createDockerPreviewRuntime`: предпросмотр с базой по рецепту стенда на общих файлах рецепта стека — `infra/preview/site-apache.conf` (на месте `# RADITI_SITE_RULES` — одно правило стенда) и `infra/preview/prologue.php` — и с ini стека `raditi-stack.ini` (`max_input_vars = 4321`) через `PHP_INI_SCAN_DIR=:/run/raditi/preview`. Запросы идут изнутри контейнера к его шлюзу (`php -r`, `http://127.0.0.1:8080/<путь>` с `Host` предпросмотра), поэтому стенд одинаково работает на Docker Desktop, в CI и с Mac на демоне Colima. Образы `tools` и правил хоста собираются, как у стенда сети, но под своими метками — `raditi-site-verify-tools:local` и `raditi-site-verify-guard:local` (`SANDBOX_NETWORK_GUARD_IMAGE` — взять этот образ правил). Digest локальной сборки даёт только хранилище образов containerd: без него стенд отказывает словами о containerd. `--build-only` собирает и выходит, `--image` берёт готовый образ одной версии (`--only`) вместо сборки, `--no-build` — собранные образы, `--keep` оставляет предпросмотры. `.env` стенд не читает, ничего не отправляет; основы `php@sha256:…` таблицы и образ `wordpress@sha256:8ae73d59…` должны быть уже загружены (`docker pull`), сборка `php-base` ходит в интернет (установщик, ionCube, PECL, apt).
+
+Строки итога, по одной на версию; прогон проходит, только если прошла каждая (иначе код 1):
+
+| Строка | Проверка | Контроль |
+| --- | --- | --- |
+| `started` | `ensure` ответил: он ждёт базу, PHP и шлюз входа, значит, `init.sh` отработал целиком | |
+| `base` | `VERSION_CODENAME` — `debian` строки, `php -r` — её версия | |
+| `modules` | `php -m` без имён с `ioncube` равен модулям основы плюс 26 имён без `without` плюс `PULLED_IN` (пуст): лишнее имя — провал | модули основы читаются из самой основы (`image` строки) |
+| `<стек> modules` | на версии старого образа стека — каждый его модуль: у `wordpress` на 8.3 — замер `wordpress:7.1.2-php8.3-apache` | |
+| `database` | `mysqli` и `pdo_mysql` с паролем из настроек: `SELECT VERSION()` — `11.8.9-MariaDB…` | |
+| `page` | `/` — 200, `home`, `x-raditi-preview: 1` (пролог) | |
+| `prologue` | под Apache запрос с `Host: <имя>` без порта страница видит с адресом предпросмотра: `HTTP_HOST` — имя с портом 8090, `SERVER_NAME` — имя, `HTTPS` нет; в CLI тот же файл с путём настроек, заменённым на файл прогона в `/tmp`: без настроек и с `v: 1` — код 1 и фраза «Предпросмотр ещё не готов», `https://…:8443` — `HTTPS=on`, `SERVER_PORT=8443`, `https://…` без порта — 443, `http://…` снимает `HTTPS` | `HTTP_HOST` и `HTTPS` до пролога заданы другими |
+| `rules` | `/stand/rule` — 200, `rule` | `/nothing` — 404 |
+| `no server status` | `/server-status` и `/server-info` не 200 | тот же путь, что у `page` |
+| `stack ini` | `max_input_vars` — 4321 под Apache и в CLI через `run-as.sh` | `php -n` — 1000 |
+| `errors` | `display_errors` пусто; страница с ошибкой чтения файла не называет файл | |
+| `mail` | `mail()` — `true` | в чистой основе — `false` |
+| `opcache` | включён под Apache, `opcache.revalidate_freq` — 0 | |
+| `ioncube` | кроме 8.0: в `php -v` Loader раньше `Zend OPcache`, `LICENSE.txt` читается от 33; на 8.0 `php -v` отвечает (код 0, `PHP 8.0.…`) без слова ionCube, `test -e` папки — код 1 | |
+| `ipc` | `sem_*`, `shm_*`, `shmop_*`, `msg_*`, `flock` на `/tmp` и на `/var/www/html` | |
+| `images` | PNG из GD и Imagick, у GD — FreeType, JPEG, WebP, с 8.1 AVIF; `gs --version` | |
+| `wp-cli` | `wp --version` от 33 — `WP-CLI 2.12.0` | |
+| `uid` | `id -u` в `runtime.exec` и `www-data` — 33 | |
+| `no leftovers` | в образе нет `install-php-extensions`, `/tmp/ioncube.tar.gz`, `packages.sury.org` | |
+| `stand` | только при сбое: шаг вне строки бросил ошибку (сборка, `writeFiles`, разбор ответа) — строка называет шаг, стенд идёт к следующей версии и печатает все строки; строки стека, которой нет на версии его рецепта, — тоже провал | |
+| `<стек>` | строки стеков из файлов `site-<стек>.mjs` рядом со стендом, на версиях их рецептов. `wordpress` — 7.4–8.5: ядро из `/usr/src/wordpress` закреплённого образа `wordpress` (читается на прогоне, в репозиторий не попадает), файлы рецепта шагом `platform`, его `preview-apache.conf`, база через `loadDatabase`, `wp core install`, постоянные ссылки `/%postname%/`, `content.access` рецепта — код 0, `/` и `/wp-login.php` — 200, `/wp-json/raditi/v1/capabilities` — ответ самого маршрута (не 404, не 3xx, ниже 500) | без `wp-config.php` рецепта `/` не 200 |
+
+В конце стенд печатает строку `PREVIEW_SITE_IMAGES=7.3=raditi-site-verify@sha256:…,…` собранных версий, у которых прошли все строки; версии с провалом он называет отдельной строкой `not in PREVIEW_SITE_IMAGES, a row failed: …`. `--build-only` ничего не проверяет и печатает `built, not checked: …` — это не строка для `.env`. Значения другой машины и архитектуры стенд не знает и в файлы не пишет.
+
+Поломки (06.11.2026, 8.3, Docker Desktop, `runc`): без `a2dismod -f status` в `php-base` падает ровно `no server status` (`/server-status` — 200), без `sendmail_path` в `preview-php.ini` — ровно `mail` (`mail()` — `false`); обе правки возвращены. После правок ревью — без `$_SERVER['HTTPS'] = 'on'` в `prologue.php` падает ровно `prologue` (случаи `https`), строки `PREVIEW_SITE_IMAGES` нет; файл возвращён.
+
+### Прогоны 06.11.2026 (план 62, Э1.2)
+
+| Где | Среда | Строк |
+| --- | --- | --- |
+| Docker Desktop 29.8.2 (macOS, arm64) | runc | 152 из 152 (8 версий × 19 общих строк, `wordpress modules` на 8.3, `wordpress` на 7.4–8.5), итоговый код стенда после ревью |
+| Colima `gvisor` | runsc | не запускался: ВМ `gvisor` остановлена весь срез, исполнителю её запускать нельзя |
+
+`without` и `PULLED_IN` пусты на всех восьми версиях; `modules` — 59 модулей на 7.3–8.4, 61 на 8.5; у WordPress без `wp-config.php` рецепта `/` — 302, с ним `/` и `/wp-login.php` — 200, маршрут плагина — 401. Сборка `site` на `php-base` без кэша — 207–273 с на версию. Под gVisor — так, с итоговым образом `tools` из этого дерева в демоне ВМ:
+
+```sh
+DOCKER_HOST=unix://$HOME/.colima/gvisor/docker.sock \
+  SANDBOX_DOCKER_SOCKET=$HOME/.colima/gvisor/docker.sock \
+  pnpm verify:site-images --runtime=runsc
+```
+
+Перед этим в демон ВМ загружают основы таблицы и `wordpress@sha256:8ae73d59…` (хранилище образов там должно быть containerd); если `docker` повисает на связке ключей macOS, команде задают `DOCKER_CONFIG` с пустой конфигурацией.
+
 ## Прогоны 05.11.2026 (план 62, Э0а)
 
 Все строки прошли, стенд — с файлом платформы:

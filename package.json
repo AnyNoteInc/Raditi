@@ -36,6 +36,7 @@
     "verify:gitea": "pnpm --filter core build && exec node infra/dev/gitea-verify/verify-gitea.mjs",
     "verify:pipeline": "exec node infra/dev/pipeline-verify/verify-pipeline.mjs",
     "verify:preview-network": "exec node infra/dev/preview-verify/verify-preview-network.mjs",
+    "verify:site-images": "exec node infra/dev/preview-verify/verify-site-images.mjs",
     "verify:release": "exec node infra/dev/release-verify/verify-release.mjs",
     "verify:browser-task": "exec node infra/dev/browser-task-verify/verify-browser-task.mjs",
     "verify:llm-gateway": "pnpm --filter core verify:llm-gateway",

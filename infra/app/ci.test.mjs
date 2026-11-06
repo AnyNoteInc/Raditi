@@ -909,6 +909,27 @@ test('the required CI job checks the syntax of the WordPress plugin', () => {
   }
 })
 
+test('the required CI job checks the syntax of the shared prologue', () => {
+  // The prologue of a generated configuration every stack but WordPress requires (docs/plan/62,
+  // Т21): a recipe file of infra/preview, checked in the same step and on the same pinned PHP.
+  const gates = job('gates')
+  assert.ok(read('infra/preview/prologue.php').startsWith('<?php'))
+  assert.match(gates, /^ {12}php -l infra\/preview\/prologue\.php$/m)
+  const [, image] =
+    /docker run --rm --network none --entrypoint php \\\n +-v "\$PWD\/infra\/preview:\/plugin:ro" \\\n +(\S+) -l \/plugin\/prologue\.php/.exec(
+      gates,
+    ) ?? []
+  assert.equal(
+    image,
+    siteImages.find((name) => name.startsWith('wordpress:7.')),
+  )
+  // One line in each branch of the same step.
+  const step = gates.slice(gates.indexOf('WordPress plugin syntax'))
+  const branches = step.slice(0, step.indexOf('\n          fi\n')).split('\n          else\n')
+  assert.equal(branches.length, 2)
+  for (const branch of branches) assert.match(branch, /prologue\.php/)
+})
+
 test('a cached gate sees a source change in a package it depends on', () => {
   // Packages export their TypeScript sources, so a dependant's typecheck, lint and tests read
   // them. Turbo hashes a task by the files of its own package and by the tasks it depends on:
