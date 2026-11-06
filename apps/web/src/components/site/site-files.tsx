@@ -1,12 +1,18 @@
 'use client'
 
 import Box from '@mui/material/Box'
+import Button from '@mui/material/Button'
+import MenuItem from '@mui/material/MenuItem'
+import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
-import { useQuery } from '@tanstack/react-query'
+import { terminalTaskStatuses } from '@repo/domain/tasks/task-status'
 import { fontFamilies } from '@repo/ui/theme/tokens'
-import { useMemo, useRef, useState, type RefObject } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import Link from 'next/link'
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
+import { callErrorText } from '@/components/chat/call-error'
 import { fileSizeText } from '@/components/chat/chat-format'
 import { plural } from '@/lib/plural'
 import { useTRPC } from '@/trpc/client'
@@ -19,31 +25,58 @@ import {
   type SiteTreeNode,
 } from './site-files-tree'
 
-// «Терминал» of a project (owner's request of 06.11.2026: «сделай в левом меню терминал и там
-// файловую структуру с возможностью просмотра файлов»): the files of the version the site has, a
-// tree on the left and the file chosen beside it. Read only: files change through a chat.
+// «Терминал» (owner's requests of 06.11.2026): the files of a project, a tree and the file chosen
+// beside it, and an edit of a text file. In a project the files are those of the version on the
+// site, and an edit is saved into an open chat of the project; in a chat with the code they are
+// the working copy of its agent, and an edit is saved into that chat. Core commits it to the
+// chat's branch when its agent waits; the site gets it by `/release` (rule 3).
 
-/** How often a list or a file core is still reading is asked for again. */
+/** How often a list, a file or an edit core is still at is asked for again. */
 const WAIT_MS = 2_000
+
+const fileCount = (count: number) =>
+  `${count.toLocaleString('ru-RU')} ${plural(count, 'файл', 'файла', 'файлов')}`
 
 export const siteFilesText = Object.freeze({
   title: 'Терминал',
   intro: (version: string | null) =>
-    `Файлы ${version ? `версии ${version}, которая` : 'версии, которая'} сейчас на сайте. Здесь их можно только посмотреть, а изменить — в чате с агентом.`,
+    `Файлы ${version ? `версии ${version}, которая` : 'версии, которая'} сейчас на сайте. Правку файла можно сохранить в открытый чат проекта, а на сайт она попадёт командой /release.`,
+  chatIntro: (changed: boolean) =>
+    changed
+      ? 'Рабочая копия агента: файлы с изменениями этого чата. Сохранённая правка попадёт в изменения чата.'
+      : 'Файлы версии, которая сейчас на сайте: изменений в этом чате пока нет. Сохранённая правка станет его изменением.',
   tree: 'Файлы проекта',
   preparing: 'Готовим список файлов…',
   none: 'У этого проекта нет файлов в репозитории: он подключён без доступа к файлам.',
   failed: 'Не удалось загрузить файлы. Обновите страницу немного позже.',
-  truncated: (count: number) =>
-    `Показаны первые ${count.toLocaleString('ru-RU')} ${plural(count, 'файл', 'файла', 'файлов')}.`,
-  count: (count: number) =>
-    `${count.toLocaleString('ru-RU')} ${plural(count, 'файл', 'файла', 'файлов')}`,
+  truncated: (count: number) => `Показаны первые ${fileCount(count)}.`,
+  count: fileCount,
   pick: 'Выберите файл в списке, чтобы посмотреть его.',
   opening: 'Открываем файл…',
   binary: 'Это не текстовый файл — показать его здесь нельзя.',
   tooLarge: 'Файл больше 256 КБ — показать его здесь нельзя.',
   missing: 'Такого файла в этой версии нет.',
   fileFailed: 'Не удалось открыть файл. Попробуйте ещё раз.',
+  edit: 'Изменить',
+  save: 'Сохранить',
+  saveTo: 'Сохранить в чат',
+  cancel: 'Отмена',
+  editor: (path: string) => `Текст файла ${path}`,
+  chooseChat: 'Чат для правки',
+  noChats:
+    'Открытых чатов у проекта нет. Начните чат — после первого ответа агента правку можно будет сохранить в него.',
+  newChat: 'Новый чат',
+  openChat: 'Открыть чат',
+  saving: 'Сохраняем в чат… Если агент сейчас работает, правка ляжет, когда он закончит.',
+  outcome: Object.freeze({
+    saved:
+      'Сохранено в чате: агент продолжит с этим файлом, а на сайт он попадёт командой /release.',
+    conflict:
+      'Не сохранено: агент изменил этот файл, пока вы его правили. Откройте файл заново и повторите правку.',
+    refused:
+      'Не сохранено: этот файл менять нельзя — в нём настройки выкладки, защищённые файлы сайта или медиатека.',
+    failed: 'Не сохранено. Попробуйте ещё раз.',
+  }),
 })
 
 const panelSx = {
@@ -55,19 +88,28 @@ const panelSx = {
   overflow: 'auto',
 } as const
 
-export function SiteFiles({ siteId }: { siteId: string }) {
+export interface SiteFilesProps {
+  siteId: string
+  /** A chat with the code of the project: its working copy, and edits go into it. */
+  taskId?: string
+  /** The chat has ended: its files are shown, no edit is taken. */
+  ended?: boolean
+}
+
+export function SiteFiles({ siteId, taskId, ended = false }: SiteFilesProps) {
   const trpc = useTRPC()
+  const inChat = taskId !== undefined
   const list = useQuery({
-    ...trpc.siteFiles.list.queryOptions({ siteId }),
+    ...trpc.siteFiles.list.queryOptions({ siteId, ...(inChat ? { taskId } : {}) }),
     refetchInterval: (query) => (query.state.data?.state === 'preparing' ? WAIT_MS : false),
   })
   const [chosen, setChosen] = useState<string | null>(null)
   const viewer = useRef<HTMLElement>(null)
-  // On a phone the file stands under the tree: the page goes to it.
+  // On a phone, and in the panel of a chat, the file stands under the tree: the view goes to it.
   const choose = (path: string) => {
     setChosen(path)
-    if (window.matchMedia?.('(max-width: 899.95px)').matches)
-      window.requestAnimationFrame(() => viewer.current?.scrollIntoView({ block: 'start' }))
+    if (inChat || window.matchMedia?.('(max-width: 899.95px)').matches)
+      window.requestAnimationFrame(() => viewer.current?.scrollIntoView?.({ block: 'nearest' }))
   }
   const data = list.data
   const ready = data?.state === 'ready' ? data : null
@@ -76,9 +118,11 @@ export function SiteFiles({ siteId }: { siteId: string }) {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-        <SectionTitle>{siteFilesText.title}</SectionTitle>
+        {inChat ? null : <SectionTitle>{siteFilesText.title}</SectionTitle>}
         {ready ? (
-          <Typography color="text.secondary">{siteFilesText.intro(ready.version)}</Typography>
+          <Typography color="text.secondary" sx={{ fontSize: inChat ? 14 : undefined }}>
+            {inChat ? siteFilesText.chatIntro(ready.changed) : siteFilesText.intro(ready.version)}
+          </Typography>
         ) : null}
       </Box>
       {list.isError ? (
@@ -95,7 +139,9 @@ export function SiteFiles({ siteId }: { siteId: string }) {
         <Box
           sx={{
             display: 'grid',
-            gridTemplateColumns: { xs: 'minmax(0, 1fr)', md: '320px minmax(0, 1fr)' },
+            gridTemplateColumns: inChat
+              ? 'minmax(0, 1fr)'
+              : { xs: 'minmax(0, 1fr)', md: '320px minmax(0, 1fr)' },
             gap: 2,
             alignItems: 'start',
           }}
@@ -103,7 +149,7 @@ export function SiteFiles({ siteId }: { siteId: string }) {
           <Box
             component="nav"
             aria-label={siteFilesText.tree}
-            sx={{ ...panelSx, maxHeight: { md: '72vh' }, py: 1 }}
+            sx={{ ...panelSx, maxHeight: inChat ? '38vh' : { md: '72vh' }, py: 1 }}
           >
             <Typography
               variant="caption"
@@ -115,7 +161,15 @@ export function SiteFiles({ siteId }: { siteId: string }) {
             </Typography>
             {tree ? <Folder folder={tree} depth={0} chosen={chosen} onChoose={choose} /> : null}
           </Box>
-          <FileView siteId={siteId} path={chosen} viewer={viewer} />
+          <FileView
+            key={chosen ?? ''}
+            siteId={siteId}
+            taskId={taskId}
+            ended={ended}
+            sha={ready.sha}
+            path={chosen}
+            viewer={viewer}
+          />
         </Box>
       )}
     </Box>
@@ -257,19 +311,31 @@ function Entry({
 
 function FileView({
   siteId,
+  taskId,
+  ended,
+  sha,
   path,
   viewer,
 }: {
   siteId: string
+  taskId: string | undefined
+  ended: boolean
+  sha: string
   path: string | null
   viewer: RefObject<HTMLElement | null>
 }) {
   const trpc = useTRPC()
   const file = useQuery({
-    ...trpc.siteFiles.read.queryOptions({ siteId, path: path ?? '-' }),
+    ...trpc.siteFiles.read.queryOptions({
+      siteId,
+      ...(taskId === undefined ? {} : { taskId }),
+      sha,
+      path: path ?? '-',
+    }),
     enabled: path !== null,
     refetchInterval: (query) => (query.state.data?.state === 'preparing' ? WAIT_MS : false),
   })
+  const [draft, setDraft] = useState<string | null>(null)
   const data = file.data
   const note =
     path === null
@@ -285,13 +351,19 @@ function FileView({
               : data.state === 'missing' || data.state === 'none'
                 ? siteFilesText.missing
                 : null
-  const lines = data?.state === 'ready' ? viewerLines(data.text) : null
+  const text = data?.state === 'ready' ? data.text : null
+  const lines = text === null ? null : viewerLines(text)
   return (
     <Box
       component="section"
       ref={viewer}
       aria-label={path ?? siteFilesText.pick}
-      sx={{ ...panelSx, maxHeight: { md: '72vh' }, display: 'flex', flexDirection: 'column' }}
+      sx={{
+        ...panelSx,
+        maxHeight: taskId === undefined ? { md: '72vh' } : undefined,
+        display: 'flex',
+        flexDirection: 'column',
+      }}
     >
       {path !== null ? (
         <Box
@@ -300,10 +372,11 @@ function FileView({
             top: 0,
             zIndex: 1,
             display: 'flex',
-            alignItems: 'baseline',
+            alignItems: 'center',
+            flexWrap: 'wrap',
             gap: 1,
             px: 2,
-            py: 1.25,
+            py: 1,
             borderBottom: 1,
             borderColor: 'divider',
             bgcolor: 'background.paper',
@@ -316,14 +389,34 @@ function FileView({
           >
             {path}
           </Typography>
-          {lines ? (
-            <Typography variant="caption" color="text.secondary" sx={{ flex: 'none', ml: 'auto' }}>
-              {`${lines.length.toLocaleString('ru-RU')} ${plural(lines.length, 'строка', 'строки', 'строк')} · ${fileSizeText(new TextEncoder().encode(data?.state === 'ready' ? data.text : '').byteLength)}`}
+          {lines && draft === null ? (
+            <Typography variant="caption" color="text.secondary" sx={{ flex: 'none' }}>
+              {`${lines.length.toLocaleString('ru-RU')} ${plural(lines.length, 'строка', 'строки', 'строк')} · ${fileSizeText(new TextEncoder().encode(text ?? '').byteLength)}`}
             </Typography>
+          ) : null}
+          {text !== null && draft === null && !ended ? (
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => setDraft(text)}
+              sx={{ ml: 'auto', minHeight: 32 }}
+            >
+              {siteFilesText.edit}
+            </Button>
           ) : null}
         </Box>
       ) : null}
-      {lines ? (
+      {path !== null && draft !== null ? (
+        <Editor
+          siteId={siteId}
+          taskId={taskId}
+          sha={sha}
+          path={path}
+          draft={draft}
+          onDraft={setDraft}
+          onClose={() => setDraft(null)}
+        />
+      ) : lines ? (
         <Box
           component="pre"
           sx={{
@@ -361,6 +454,161 @@ function FileView({
           {note}
         </Typography>
       )}
+    </Box>
+  )
+}
+
+/** The open chats of the project an edit can go into, latest changed first. */
+function useOpenChats(siteId: string, enabled: boolean) {
+  const trpc = useTRPC()
+  const chats = useQuery({ ...trpc.task.list.queryOptions({ folder: siteId }), enabled })
+  return (chats.data?.items ?? []).filter((item) => !terminalTaskStatuses.includes(item.status))
+}
+
+/**
+ * The text of a file being changed and its saving: into the chat of the panel, or — in a project —
+ * into the open chat the client chooses. What came of it is asked of the server until core answers.
+ */
+function Editor({
+  siteId,
+  taskId,
+  sha,
+  path,
+  draft,
+  onDraft,
+  onClose,
+}: {
+  siteId: string
+  taskId: string | undefined
+  sha: string
+  path: string
+  draft: string
+  onDraft: (text: string) => void
+  onClose: () => void
+}) {
+  const trpc = useTRPC()
+  const queryClient = useQueryClient()
+  const chats = useOpenChats(siteId, taskId === undefined)
+  const [picked, setPicked] = useState<string | null>(null)
+  const target = taskId ?? picked ?? chats[0]?.id ?? null
+  const save = useMutation(trpc.siteFiles.save.mutationOptions())
+  const editId = save.data?.editId ?? null
+  const savedTo = save.variables?.taskId ?? null
+  const state = useQuery({
+    ...trpc.siteFiles.editState.queryOptions({
+      siteId,
+      taskId: savedTo ?? target ?? '00000000-0000-4000-8000-000000000000',
+      editId: editId ?? '00000000-0000-4000-8000-000000000000',
+    }),
+    enabled: editId !== null && savedTo !== null,
+    refetchInterval: (query) =>
+      query.state.data?.state === 'saved' ||
+      query.state.data?.state === 'conflict' ||
+      query.state.data?.state === 'refused' ||
+      query.state.data?.state === 'failed'
+        ? false
+        : WAIT_MS,
+  })
+  const outcome = state.data && state.data.state !== 'pending' ? state.data.state : null
+  // A saved edit moved the working copy of the chat: its list names the new commit.
+  useEffect(() => {
+    if (outcome === 'saved')
+      void queryClient.invalidateQueries({ queryKey: trpc.siteFiles.list.queryKey() })
+  }, [outcome, queryClient, trpc])
+  const pending = save.isPending || (editId !== null && outcome === null)
+  const status = save.isError
+    ? callErrorText(save.error)
+    : outcome !== null
+      ? siteFilesText.outcome[outcome]
+      : editId !== null
+        ? siteFilesText.saving
+        : null
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, p: 1.5 }}>
+      <TextField
+        multiline
+        minRows={14}
+        maxRows={40}
+        value={draft}
+        onChange={(event) => onDraft(event.target.value)}
+        disabled={pending || outcome === 'saved'}
+        slotProps={{
+          htmlInput: {
+            'aria-label': siteFilesText.editor(path),
+            spellCheck: false,
+            style: {
+              fontFamily: fontFamilies.mono,
+              fontSize: 13,
+              lineHeight: 1.6,
+              whiteSpace: 'pre',
+            },
+            wrap: 'off',
+          },
+        }}
+      />
+      {taskId === undefined ? (
+        chats.length === 0 ? (
+          <Typography color="text.secondary" sx={{ fontSize: 14 }}>
+            {siteFilesText.noChats}{' '}
+            <Link href={`/chats/new?project=${siteId}`}>{siteFilesText.newChat}</Link>
+          </Typography>
+        ) : (
+          <TextField
+            select
+            size="small"
+            label={siteFilesText.chooseChat}
+            value={target ?? ''}
+            onChange={(event) => setPicked(event.target.value)}
+            disabled={pending || outcome === 'saved'}
+          >
+            {chats.map((chat) => (
+              <MenuItem key={chat.id} value={chat.id}>
+                {chat.title ?? 'Чат без названия'}
+              </MenuItem>
+            ))}
+          </TextField>
+        )
+      ) : null}
+      {status ? (
+        <Typography
+          role={outcome === null && !save.isError ? 'status' : 'alert'}
+          color={
+            outcome === 'saved'
+              ? 'success.main'
+              : outcome || save.isError
+                ? 'error.main'
+                : 'text.secondary'
+          }
+          sx={{ fontSize: 14 }}
+        >
+          {status}
+          {outcome === 'saved' && taskId === undefined && savedTo ? (
+            <>
+              {' '}
+              <Link href={`/chats/${savedTo}`}>{siteFilesText.openChat}</Link>
+            </>
+          ) : null}
+        </Typography>
+      ) : null}
+      <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+        <Button onClick={onClose} disabled={save.isPending}>
+          {outcome === 'saved' ? 'Закрыть' : siteFilesText.cancel}
+        </Button>
+        {outcome === 'saved' ? null : (
+          <Button
+            variant="contained"
+            disabled={pending || target === null}
+            onClick={() =>
+              target !== null &&
+              save.mutate({ siteId, taskId: target, path, baseSha: sha, text: draft })
+            }
+            startIcon={<AppIcon name="check" size={16} />}
+          >
+            {taskId === undefined ? siteFilesText.saveTo : siteFilesText.save}
+          </Button>
+        )}
+      </Box>
     </Box>
   )
 }

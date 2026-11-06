@@ -6,8 +6,10 @@ import {
   AGENT_TURN_QUEUE,
   agentTurnCancelJobSchema,
   agentTurnJobSchema,
+  CANDIDATE_EDIT_JOB,
   CANDIDATE_REBASE_JOB,
   CANDIDATE_REWIND_JOB,
+  candidateEditJobSchema,
   candidateRebaseJobSchema,
   candidateRewindJobSchema,
   MAX_SANDBOX_TURN_MS,
@@ -17,14 +19,15 @@ import { throttledLogger } from '@repo/observability'
 import { UnrecoverableError, type Job } from 'bullmq'
 import type { z } from 'zod'
 
+import { CandidateEdit } from './candidate-edit.ts'
 import { CandidateRebase } from './candidate-rebase.ts'
 import { CandidateRewind } from './candidate-rewind.ts'
 import { PassRunner } from './pass-runner.ts'
 
 /**
- * How many jobs of `agent-turns` one core works on at once: passes of different sites run side
- * by side (one site, one turn — the site lease), and a cancel or an update is not kept waiting
- * behind them for long.
+ * How many jobs of `agent-turns` one core works on at once: passes of different chats run side by
+ * side (one chat, one turn — its lease, `turnLeaseOf`), and a cancel, an update or an edit is not
+ * kept waiting behind them for long.
  */
 export const AGENT_TURN_CONCURRENCY = 8
 
@@ -61,6 +64,7 @@ export class TurnsProcessor extends WorkerHost {
     @Inject(PassRunner) private readonly passes: Pick<PassRunner, 'run' | 'cancel'>,
     @Inject(CandidateRebase) private readonly rebase: Pick<CandidateRebase, 'run'>,
     @Inject(CandidateRewind) private readonly rewind: Pick<CandidateRewind, 'run'>,
+    @Inject(CandidateEdit) private readonly edit: Pick<CandidateEdit, 'run'>,
   ) {
     super()
   }
@@ -76,6 +80,9 @@ export class TurnsProcessor extends WorkerHost {
         return
       case CANDIDATE_REWIND_JOB:
         await this.rewind.run(parsed(candidateRewindJobSchema, job))
+        return
+      case CANDIDATE_EDIT_JOB:
+        await this.edit.run(parsed(candidateEditJobSchema, job))
         return
       default:
         // A job this build does not know (left by another version) cannot succeed later.

@@ -6518,4 +6518,61 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       })
     })
   })
+
+  // The owner, 06.11.2026: «при сохранении файл должен сохраняться в агента, а потом по
+  // возможности комититься в гит».
+  describe('the edit of a file of a chat in «Терминал»', () => {
+    it('keeps the text in the inbox and asks core to commit it, once the agent took the chat', async () => {
+      const { owner, site } = await siteOwner()
+      const put = vi.fn(async () => {})
+      const caller = callerOf(owner, {
+        storage: { get: async () => null, put } as unknown as ObjectStorage,
+      })
+      const { taskId } = await newDialog(caller, site.id)
+      const edit = {
+        siteId: site.id,
+        taskId,
+        path: 'wp-content/themes/kadence/style.css',
+        baseSha: 'a'.repeat(40),
+        text: 'body { color: red; }\n',
+      }
+      // No turn yet: no working copy to change.
+      await expect(caller.siteFiles.save(edit)).rejects.toMatchObject({
+        cause: { code: 'SITE_FILE_EDIT_NO_TURN' },
+      })
+      await db.task.update({ where: { id: taskId }, data: { turnNo: 1, status: 'awaiting_user' } })
+      const { editId } = await caller.siteFiles.save(edit)
+      expect(put).toHaveBeenCalledWith(
+        'inbox',
+        `site-edits/${taskId}/${editId}.json`,
+        expect.any(Buffer),
+        expect.objectContaining({ contentType: 'application/json' }),
+      )
+      const body = JSON.parse(
+        (put.mock.calls[0] as unknown as [string, string, Buffer])[2].toString(),
+      )
+      expect(body).toMatchObject({
+        v: 1,
+        taskId,
+        path: edit.path,
+        baseSha: edit.baseSha,
+        text: edit.text,
+      })
+      expect(
+        await db.outboxEvent.findMany({
+          where: { type: 'candidate.edit', payload: { path: ['taskId'], equals: taskId } },
+        }),
+      ).toEqual([expect.objectContaining({ topic: 'agent-turns', payload: { taskId, editId } })])
+      expect(await caller.siteFiles.editState({ siteId: site.id, taskId, editId })).toEqual({
+        state: 'pending',
+      })
+      // A chat that ended takes none, and another user sees no chat at all.
+      await db.task.update({ where: { id: taskId }, data: { status: 'done' } })
+      await expect(caller.siteFiles.save(edit)).rejects.toMatchObject({
+        cause: { code: 'SITE_FILE_EDIT_CLOSED' },
+      })
+      const stranger = callerOf(await person())
+      await expect(stranger.siteFiles.save(edit)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    })
+  })
 })

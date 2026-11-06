@@ -754,6 +754,116 @@ export class GitWorkspaceService implements TurnWorkspace {
   }
 
   /**
+   * The client's edit of one file of a chat's working copy (the section «Терминал», 06.11.2026):
+   * a commit of the bot on `parent` whose tree is the parent's with `path` holding `content` —
+   * its mode kept, 100644 for a new file — pushed to the chat's `agent/<taskId>` by CAS: the
+   * branch must stand at `expected` (null — it does not exist yet) or at the commit already
+   * (`present`); anywhere else nothing is pushed (`moved`). The same input is the same commit.
+   * `assertFence` — the chat's lease — runs right before the push and is required. The caller
+   * holds the path to the rules of the site's workspace before it comes here.
+   */
+  async commitFileEdit(
+    input: {
+      repo: RepoRef
+      branch: string
+      parent: string
+      expected: string | null
+      path: string
+      content: Uint8Array
+      message: string
+      committedAt: string
+    },
+    assertFence: () => Promise<void>,
+  ): Promise<TrustedCommitPush> {
+    if (typeof assertFence !== 'function') throw badRequest('A push fence is required')
+    const parsed = z
+      .object({
+        repo: publicationSourceSchema.shape.repo,
+        branch: branchHeadSchema.shape.branch.refine((value) => value.startsWith('agent/')),
+        parent: publicationShaSchema,
+        expected: publicationShaSchema.nullable(),
+        path: z.string().refine(isPublicationPath),
+        content: z
+          .instanceof(Uint8Array)
+          .refine((bytes) => bytes.byteLength <= publicationLimits.fileBytes),
+        message: z
+          .string()
+          .min(1)
+          .max(4096)
+          .refine((value) => !value.includes('\0')),
+        committedAt: instantSchema,
+      })
+      .strict()
+      .safeParse(input)
+    if (!parsed.success || parsed.data.repo.provider !== this.provider.kind)
+      throw badRequest('Invalid file edit')
+    const edit = parsed.data
+    const workspace = await this.workspace(edit.repo, [edit.parent])
+    try {
+      // The entry at the path alone: `ls-tree` takes it as a pattern, so its name is compared.
+      const listed = (
+        await this.git(workspace, ['ls-tree', '-z', '--full-tree', edit.parent, '--', edit.path])
+      ).stdout
+      let mode = '100644'
+      for (const row of Buffer.from(listed).toString('utf8').split('\0')) {
+        const match = /^([0-7]{6}) (\w+) [a-f0-9]{40}\t(.+)$/s.exec(row)
+        if (!match || match[3] !== edit.path) continue
+        if (match[2] !== 'blob' || (match[1] !== '100644' && match[1] !== '100755'))
+          throw repositoryUnsupported('An edited path is a link, a folder or a submodule')
+        mode = match[1]
+      }
+      const oid = this.sha(
+        (await this.git(workspace, ['hash-object', '-w', '--stdin'], edit.content)).stdout,
+      )
+      await this.git(workspace, ['read-tree', edit.parent])
+      await this.git(
+        workspace,
+        ['update-index', '-z', '--index-info'],
+        Buffer.from(`${mode} ${oid}\t${edit.path}\0`),
+      )
+      const tree = this.sha((await this.git(workspace, ['write-tree'])).stdout)
+      const message = edit.message.endsWith('\n') ? edit.message : `${edit.message}\n`
+      const sha = this.sha(
+        (
+          await this.git(
+            workspace,
+            ['commit-tree', tree, '-p', edit.parent],
+            Buffer.from(message),
+            undefined,
+            botIdentity(edit.committedAt),
+          )
+        ).stdout,
+      )
+      await this.fsck(workspace, sha)
+      const auth = await this.auth(edit.repo, 'write')
+      const ref = `refs/heads/${edit.branch}`
+      const remote = (await this.remoteHead(workspace, ref, auth)) || null
+      if (remote === sha) return { status: 'present', sha }
+      if (remote !== edit.expected) return { status: 'moved', sha, remote }
+      await assertFence()
+      await this.git(
+        workspace,
+        [
+          'push',
+          '--porcelain',
+          `--force-with-lease=${ref}:${edit.expected ?? ''}`,
+          workspace.url,
+          `${sha}:${ref}`,
+        ],
+        undefined,
+        16 * 1024,
+        auth,
+      )
+      return { status: 'pushed', sha }
+    } catch (error) {
+      if (isDomainError(error)) throw error
+      throw failed()
+    } finally {
+      await this.dispose(workspace)
+    }
+  }
+
+  /**
    * «Обновить» (plan 53, Р27): the candidate's changes since `fromBase` carried onto `toBase` by
    * a three-way merge of trees, without a model and without rename detection — a change stays at
    * its own path and never follows a file `main` moved, into a folder the candidate may not

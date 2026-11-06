@@ -235,6 +235,22 @@ const samples: Record<FeedEventType, Record<string, unknown>[]> = {
     { v: 1, turn: 2, files: false, open: false },
     { v: 1, turn: 3, files: true, open: true },
   ],
+  'feed.edit': [
+    {
+      v: 1,
+      editId: '0199a3f2-0000-7000-8000-0000000000e1',
+      path: 'wp-content/themes/kadence/style.css',
+      outcome: 'saved',
+      revision: 2,
+    },
+    {
+      v: 1,
+      editId: '0199a3f2-0000-7000-8000-0000000000e2',
+      path: 'index.php',
+      outcome: 'conflict',
+      revision: null,
+    },
+  ],
 }
 
 const accepts = (type: FeedEventType, payload: unknown) =>
@@ -246,7 +262,7 @@ const shown = (type: FeedEventType, { v: _v, ...fields }: Record<string, unknown
 })
 
 describe('feed vocabulary', () => {
-  it('lists the six types of the design, the four of a release, the snapshot, `/undo` and `/redo`, all under the feed prefix', () => {
+  it('lists the six types of the design, the four of a release, the snapshot, `/undo`, `/redo` and the edit of a file, all under the feed prefix', () => {
     expect(feedEventTypes).toEqual([
       'feed.request',
       'feed.step',
@@ -262,6 +278,7 @@ describe('feed vocabulary', () => {
       'feed.screenshot',
       'feed.rewind',
       'feed.redo',
+      'feed.edit',
     ])
     expect(Object.keys(feedPayloadSchemas)).toEqual([...feedEventTypes])
     expect(isFeedEventType('feed.step')).toBe(true)
@@ -1148,6 +1165,17 @@ describe('reading stored rows', () => {
         { v: 1, turn: 2, files: undefined, open: false },
         { v: 1, turn: 2, files: false, open: 'да' },
         { v: 1, turn: 2, files: false },
+      ],
+      'feed.edit': [
+        { v: 1, editId: 'not-a-uuid', path: 'a.php', outcome: 'saved', revision: 1 },
+        {
+          v: 1,
+          editId: '0199a3f2-0000-7000-8000-0000000000e1',
+          path: '',
+          outcome: 'saved',
+          revision: 1,
+        },
+        { v: 1, editId: '0199a3f2-0000-7000-8000-0000000000e1', path: 'a.php', revision: 1 },
       ],
     }
     for (const type of feedEventTypes)

@@ -9,6 +9,7 @@ import type {
   FeedCeilingReason,
   FeedCommandId,
   FeedCreditsState,
+  FeedEditPayload,
   FeedFailurePayload,
   FeedObjectKind,
   FeedObjectStatus,
@@ -233,6 +234,20 @@ export function feedRewindText(row: Pick<FeedRewindPayload, 'files' | 'site'>): 
 /** The row of `/redo` in the feed. */
 export const feedRedoText = (row: Pick<FeedRedoPayload, 'files'>): string =>
   row.files ? 'Отменённый запрос и его файлы возвращены.' : 'Отменённый запрос возвращён.'
+
+/** The row of the client's edit of a file in «Терминал» (06.11.2026), by its outcome. */
+export function feedEditText(row: Pick<FeedEditPayload, 'path' | 'outcome' | 'revision'>): string {
+  switch (row.outcome) {
+    case 'saved':
+      return `Вы изменили файл ${row.path}. Изменение сохранено в чате: агент продолжит с ним, а на сайт оно попадёт командой /release.`
+    case 'conflict':
+      return `Файл ${row.path} не сохранён: за это время агент изменил его. Откройте файл заново и повторите правку.`
+    case 'refused':
+      return `Файл ${row.path} не сохранён: его менять нельзя — в нём настройки выкладки, защищённые файлы сайта или его медиатека.`
+    case 'failed':
+      return `Файл ${row.path} не сохранён. Попробуйте ещё раз.`
+  }
+}
 
 /** Shown when `filesChanged` of a result is a number. */
 export const feedFilesChangedText = (count: number): string =>

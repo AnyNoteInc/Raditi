@@ -94,3 +94,35 @@ export function siteFileText(bytes: Uint8Array): string | null {
     return null
   }
 }
+
+/**
+ * The client's edit of one file of a chat's working copy, as web puts it into the inbox bucket
+ * for core (`candidate.edit`): the file at `path` as the client saw it in the commit `baseSha`,
+ * and the text it saves. A text file only, at most `siteFilesLimits.viewBytes` bytes of UTF-8.
+ */
+export const siteFileEditSchema = z.strictObject({
+  v: z.literal(1),
+  taskId: z.uuid(),
+  path: siteFilePathSchema,
+  baseSha: commitSha,
+  text: z
+    .string()
+    .refine(
+      (text) =>
+        !text.includes('\0') &&
+        new TextEncoder().encode(text).byteLength <= siteFilesLimits.viewBytes,
+      'Invalid text',
+    ),
+  /** When the client saved it: an edit that waits longer than `siteFileEditLimits.waitMs` is given up. */
+  savedAt: z.iso.datetime({ offset: true }),
+})
+export type SiteFileEdit = z.infer<typeof siteFileEditSchema>
+
+export const siteFileEditLimits = Object.freeze({
+  /** How long an edit waits for the agent of the chat to finish before it is given up. */
+  waitMs: 2 * 60 * 60_000,
+})
+
+/** The object of an edit in the inbox bucket. */
+export const siteFileEditKey = (taskId: string, editId: string): string =>
+  `site-edits/${taskId}/${editId}.json`

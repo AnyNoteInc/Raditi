@@ -60,6 +60,8 @@ export const feedEventTypes = [
   'feed.rewind',
   // `/redo` brought it back: the two rows are read as if neither were there.
   'feed.redo',
+  // The client changed a file in «Терминал» of the chat (06.11.2026): what came of it.
+  'feed.edit',
 ] as const
 export type FeedEventType = (typeof feedEventTypes)[number]
 
@@ -738,6 +740,39 @@ export const feedRedoPayloadSchema = z.strictObject({
 })
 export type FeedRedoPayload = z.infer<typeof feedRedoPayloadSchema>
 
+/** What came of the client's edit of a file: saved, or why not. */
+export const feedEditOutcomes = [
+  /** A commit of the chat's working copy and a revision of its changes. */
+  'saved',
+  /** The file changed in the working copy since the client opened it: nothing was written. */
+  'conflict',
+  /** The rules of the site do not let the file change (CI, a protected path, media). */
+  'refused',
+  /** Not saved: the chat ended, the edit waited too long, or the platform failed. */
+  'failed',
+] as const
+export type FeedEditOutcome = (typeof feedEditOutcomes)[number]
+
+/**
+ * `feed.edit` v1 — the client saved a file of the chat's working copy in «Терминал» (owner's
+ * request of 06.11.2026: «при сохранении файл должен сохраняться в агента, а потом по
+ * возможности комититься в гит»). Written by core when the edit is applied or given up; `path` is
+ * a path of the site's repository, `revision` the revision of the changes it made. Trusted.
+ */
+export const feedEditPayloadSchema = z.strictObject({
+  v: version,
+  editId: z.uuid(),
+  /** A path of the repository: no control character, so it is never a line of its own. */
+  path: z
+    .string()
+    .min(1)
+    .max(1024)
+    .regex(/^\P{Cc}+$/u),
+  outcome: z.enum(feedEditOutcomes),
+  revision: z.number().int().min(1).max(999_999).nullable(),
+})
+export type FeedEditPayload = z.infer<typeof feedEditPayloadSchema>
+
 /** The writing schema of each type. */
 export const feedPayloadSchemas = Object.freeze({
   'feed.request': feedRequestPayloadSchema,
@@ -754,6 +789,7 @@ export const feedPayloadSchemas = Object.freeze({
   'feed.screenshot': feedScreenshotPayloadSchema,
   'feed.rewind': feedRewindPayloadSchema,
   'feed.redo': feedRedoPayloadSchema,
+  'feed.edit': feedEditPayloadSchema,
 }) satisfies Record<FeedEventType, z.ZodType>
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength
@@ -785,6 +821,7 @@ export const feedRowSchemaWithin = (maxBytes: number) =>
       row('feed.screenshot', feedScreenshotPayloadSchema),
       row('feed.rewind', feedRewindPayloadSchema),
       row('feed.redo', feedRedoPayloadSchema),
+      row('feed.edit', feedEditPayloadSchema),
     ])
     .superRefine((value, ctx) => {
       if (feedPayloadBytes(value.payload) > maxBytes)
@@ -1029,6 +1066,14 @@ const readRewind = z.object({
 
 const readRedo = z.object({ turn: turnNo, files: z.boolean(), open: z.boolean() })
 
+const readEdit = z.object({
+  editId: z.uuid(),
+  path: z.string().min(1).max(1024),
+  // An outcome this code does not know reads as not saved.
+  outcome: known(feedEditOutcomes, 'failed' as const),
+  revision: z.number().int().min(1).nullable(),
+})
+
 const readCancelled = z.object({
   turn: turnNo.nullable(),
   /** null — a way of cancelling added later: the plate is shown without a reason. */
@@ -1077,6 +1122,7 @@ export type FeedEvent =
   | ({ type: 'feed.screenshot' } & z.infer<typeof readScreenshot>)
   | ({ type: 'feed.rewind' } & z.infer<typeof readRewind>)
   | ({ type: 'feed.redo' } & z.infer<typeof readRedo>)
+  | ({ type: 'feed.edit' } & z.infer<typeof readEdit>)
   | { type: 'newer' }
   | { type: 'unreadable' }
   | { type: 'skipped' }
@@ -1199,6 +1245,9 @@ const readers: Record<FeedEventType, Record<number, Reader>> = {
   },
   'feed.redo': {
     1: (payload) => readWith(readRedo, payload, (data) => ({ type: 'feed.redo', ...data })),
+  },
+  'feed.edit': {
+    1: (payload) => readWith(readEdit, payload, (data) => ({ type: 'feed.edit', ...data })),
   },
 }
 

@@ -14,7 +14,14 @@ import type { FeedHeadState } from './feed-state'
 // launch of the browser to `toolsReducer`. Nothing here is kept between two showings of a dialog:
 // each one starts with the panel closed (И1).
 
-export const dialogTools = ['preview', 'files', 'database', 'checks', 'browser'] as const
+export const dialogTools = [
+  'preview',
+  'files',
+  'database',
+  'checks',
+  'terminal',
+  'browser',
+] as const
 export type DialogTool = (typeof dialogTools)[number]
 /** The tools of the changes: what the candidate of the dialog holds. */
 export type ChangesTool = Extract<DialogTool, 'files' | 'database' | 'checks'>
@@ -35,6 +42,7 @@ export const toolIcons: Readonly<Record<DialogTool, AppIconName>> = Object.freez
   files: 'file',
   database: 'database',
   checks: 'check',
+  terminal: 'terminal',
   browser: 'globe',
 })
 
@@ -92,6 +100,10 @@ export function dialogToolsOf(head: FeedHeadState): DialogTool[] {
       case 'database':
       case 'checks':
         return repository && candidateCount(tool, head.candidate) > 0
+      // The files of the agent's working copy, to look at and to change (06.11.2026): once the
+      // agent took the chat — a new chat starts with the field alone (И1).
+      case 'terminal':
+        return repository && head.task.turnNo >= 1
     }
   })
 }
@@ -143,7 +155,7 @@ export function toolMark(
   }: { open: boolean; answered?: boolean; rewound?: boolean },
 ): string | null {
   if (open) return toolText.mark.open
-  if (tool === 'preview') return null
+  if (tool === 'preview' || tool === 'terminal') return null
   if (tool === 'browser') return browserMark(head.browser, head, { answered, rewound })
   const count = candidateCount(tool, head.candidate)
   return tool === 'checks'

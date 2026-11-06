@@ -71,7 +71,7 @@ const launch: ToolsAction = { type: 'launch' }
 
 describe('the tools a dialog has (И6)', () => {
   it('lists them in the order of the menu, and names every opener of И9', () => {
-    expect(dialogTools).toEqual(['preview', 'files', 'database', 'checks', 'browser'])
+    expect(dialogTools).toEqual(['preview', 'files', 'database', 'checks', 'terminal', 'browser'])
     // The launch of the browser is an action of its own, and the feed has no buttons of the browser
     // but «Взять управление» (owner's answers of 30.10.2026).
     expect(toolOpeners).toEqual(['menu', 'changes', 'command', 'take'])
@@ -95,6 +95,24 @@ describe('the tools a dialog has (И6)', () => {
     // What a head of the repository would offer is not the browser's: the requirements decide.
     expect(
       dialogToolsOf(browserAnswer({ preview: previewOf(), candidate: candidateHead })),
+    ).toEqual(['browser'])
+  })
+
+  // The owner, 06.11.2026: «если чат привязан к проекту добавь возможность в чате смотреть файлы
+  // как в терминале и редактировать их».
+  it('offers the files of the working copy to a chat with the code once its agent took it', () => {
+    expect(dialogToolsOf(feedAnswer({ task: { turnNo: 1 } }))).toEqual(['terminal'])
+    expect(dialogToolsOf(feedAnswer({ status: 'done', task: { turnNo: 2 } }))).toEqual(['terminal'])
+    expect(dialogToolsOf(feedAnswer({ task: { turnNo: 1 }, candidate: candidateHead }))).toEqual([
+      'files',
+      'database',
+      'checks',
+      'terminal',
+    ])
+    // A new chat starts with the field alone (И1), and a chat without the code has no files.
+    expect(dialogToolsOf(feedAnswer())).toEqual([])
+    expect(
+      dialogToolsOf(browserAnswer({ task: { turnNo: 1 }, preview: previewOf(), browser: null })),
     ).toEqual(['browser'])
   })
 
@@ -176,8 +194,11 @@ describe('the tools a dialog has (И6)', () => {
   const both = { requirements: { repository: true, browser: true } }
 
   it('offers a chat with the code and the browser both, the browser last (plan 61, §5.11)', () => {
-    // No changes yet, no session yet: the browser alone, with no words of files.
-    expect(dialogToolsOf(browserAnswer({ task: both, browser: null }))).toEqual(['browser'])
+    // No changes yet, no session yet: the files of the working copy and the browser.
+    expect(dialogToolsOf(browserAnswer({ task: both, browser: null }))).toEqual([
+      'terminal',
+      'browser',
+    ])
     expect(
       dialogToolsOf(
         browserAnswer({
@@ -187,7 +208,7 @@ describe('the tools a dialog has (И6)', () => {
           candidate: candidateHead,
         }),
       ),
-    ).toEqual(['preview', 'files', 'database', 'checks', 'browser'])
+    ).toEqual(['preview', 'files', 'database', 'checks', 'terminal', 'browser'])
   })
 
   it('offers a chat with neither nothing at all', () => {
@@ -437,6 +458,7 @@ describe('the names, icons and ids of the tools', () => {
       files: 'Файлы и изменения',
       database: 'База данных',
       checks: 'Проверки',
+      terminal: 'Терминал',
     })
     expect(toolTabNames).toEqual({ ...toolMenuNames, files: 'Файлы' })
     expect(Object.keys(toolIcons)).toEqual([...dialogTools])
@@ -448,6 +470,7 @@ describe('the names, icons and ids of the tools', () => {
       'dialog-pane-tab-files',
       'dialog-pane-tab-database',
       'dialog-pane-tab-checks',
+      'dialog-pane-tab-terminal',
       'dialog-pane-tab-browser',
     ])
     expect(toolPanelId('preview')).toBe('dialog-pane-panel-preview')
@@ -769,7 +792,7 @@ describe('toolsReducer, whatever the client does', () => {
   it('keeps one tab per tool, an active tab exactly while one is open, and one launch', () => {
     // Showings in which the browser opened by itself: the runs reach a launch.
     let launched = 0
-    for (const seed of [1, 7, 42, 2026, 31_337, 99_991]) {
+    for (const seed of [1, 7, 42, 2026, 31_337, 99_991, 3, 11, 123, 777, 4242, 65_537]) {
       const next = generator(seed)
       let state: ToolsState = closedTools
       let launches = 0

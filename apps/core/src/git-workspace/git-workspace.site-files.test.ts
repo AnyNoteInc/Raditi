@@ -106,4 +106,45 @@ describe('the files of a commit for «Терминал»', { timeout: 60_000 }, 
     expect((await read('wp-content/link.php'))?.bytes?.toString('utf8')).toBe('../index.php')
     await expect(read('a\nb')).rejects.toThrow('Invalid repository file')
   })
+
+  it('commits the client’s edit of a file to the chat’s branch by CAS, its mode kept', async () => {
+    const f = await fixture()
+    const edit = {
+      repo: f.repo,
+      branch: 'agent/0199a3f2-0000-7000-8000-0000000000a1',
+      parent: f.sha,
+      expected: null,
+      path: 'wp-content/themes/shop/style.css',
+      content: Buffer.from('body { color: red; }\n'),
+      message: 'Client edit: wp-content/themes/shop/style.css',
+      committedAt: '2026-11-06T12:00:00.000Z',
+    }
+    const fence = vi.fn(async () => {})
+    const pushed = await f.service.commitFileEdit(edit, fence)
+    expect(pushed.status).toBe('pushed')
+    expect(fence).toHaveBeenCalledTimes(1)
+    expect(await f.service.readBranchHead({ repo: f.repo, branch: edit.branch })).toBe(pushed.sha)
+    const read = await f.service.readFile({
+      repo: f.repo,
+      sha: pushed.sha,
+      path: edit.path,
+      maxBytes: 1024,
+    })
+    expect(read?.bytes?.toString('utf8')).toBe('body { color: red; }\n')
+    // The rest of the tree stays: the same files, one changed.
+    const listed = await f.service.listFiles({ repo: f.repo, sha: pushed.sha, limit: 100 })
+    expect(listed.files.map((file) => file.path).sort()).toEqual(Object.keys(f.files).sort())
+    // The same edit again is the same commit; a branch that moved takes nothing.
+    expect(await f.service.commitFileEdit(edit, fence)).toEqual({
+      status: 'present',
+      sha: pushed.sha,
+    })
+    expect(
+      await f.service.commitFileEdit({ ...edit, content: Buffer.from('x') }, fence),
+    ).toMatchObject({ status: 'moved', remote: pushed.sha })
+    expect(fence).toHaveBeenCalledTimes(1)
+    await expect(f.service.commitFileEdit({ ...edit, branch: 'main' }, fence)).rejects.toThrow(
+      'Invalid file edit',
+    )
+  })
 })

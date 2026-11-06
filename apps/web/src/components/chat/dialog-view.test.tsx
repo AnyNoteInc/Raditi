@@ -171,6 +171,13 @@ vi.mock('@/trpc/client', () => ({
     },
     browser: { watch: mutation(calls.watch) },
     billing: { usage: query('billing.usage', async () => null) },
+    // «Терминал» of the chat (06.11.2026): its files are read while it is open.
+    siteFiles: {
+      list: query('siteFiles.list', async () => ({ state: 'preparing' as const })),
+      read: query('siteFiles.read', async () => ({ state: 'preparing' as const })),
+      editState: query('siteFiles.editState', async () => ({ state: 'pending' as const })),
+      save: mutation(async () => ({ editId: '0199a3f2-0000-7000-8000-0000000000e1' })),
+    },
   }),
   useTRPCClient: () => client,
 }))
@@ -1783,11 +1790,12 @@ describe('the five kinds of a chat (docs/plan/61-chats-first.md, §5.6)', () => 
       cursor: '2',
     })
 
-  it('a chat with the repository alone: no words of files, «+» or the browser without changes', async () => {
+  it('a chat with the repository alone: its files in «+», no words of changes or the browser', async () => {
     showDialog(answered({ repository: true, browser: false }))
     await screen.findByText('Вот пять вариантов.')
     expect(toolsPanel()).toBeNull()
-    expect(screen.queryByRole('button', { name: /^Инструменты/ })).toBeNull()
+    // The files of the working copy, to look at and to change (06.11.2026).
+    expect(await menuTiles()).toEqual(['Терминал'])
     expect(document.body.textContent).not.toMatch(/Изменено файлов|Файлы и изменения|Браузер/u)
     const listed = listedCommands().join(' ')
     expect(listed).toContain('Выпустить новую версию')
@@ -1822,6 +1830,7 @@ describe('the five kinds of a chat (docs/plan/61-chats-first.md, §5.6)', () => 
       'Файлы и изменения, 4',
       'База данных, 3',
       'Проверки, 2 из 2',
+      'Терминал',
       'Браузер, Агент ответил',
     ])
     // The commands of the site are there: the browser takes nothing from the code.
@@ -1973,7 +1982,7 @@ describe('the five kinds of a chat (docs/plan/61-chats-first.md, §5.6)', () => 
       STREAM_URL,
     )
     await screen.findByText('Готово.')
-    expect(await menuTiles()).toEqual(['Браузер, Агент ответил'])
+    expect(await menuTiles()).toEqual(['Терминал', 'Браузер, Агент ответил'])
   })
 
   it('gives the panel of a browser beside the open changes to the client who asks for it', async () => {
@@ -2530,6 +2539,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       'Файлы и изменения, 4',
       'База данных, 3',
       'Проверки, 2 из 2',
+      'Терминал',
     ])
     await choose(/^Файлы и изменения/)
     expect(tabNames()).toEqual(['Файлы'])
@@ -2544,6 +2554,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       'Файлы и изменения, Открыто',
       'База данных, 3',
       'Проверки, 2 из 2',
+      'Терминал',
     ])
     await choose(/^Файлы и изменения/)
     expect(tabNames()).toEqual(['Файлы'])
@@ -2653,6 +2664,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
         'Файлы и изменения, 4',
         'База данных, 3',
         'Проверки, 2 из 2',
+        'Терминал',
       ])
       // The arrows go through the tiles in the order of reading, two columns or one.
       press('ArrowDown')
@@ -2662,7 +2674,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       press('ArrowUp')
       expect(document.activeElement).toBe(tiles[1])
       press('End')
-      expect(document.activeElement).toBe(tiles[3])
+      expect(document.activeElement).toBe(tiles[4])
       press('Home')
       expect(document.activeElement).toBe(tiles[0])
       // Esc closes the menu, the focus back on «+», nothing opened.
@@ -2688,9 +2700,10 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       const last = document.activeElement!
       fireEvent.keyDown(last, { key: ' ' })
       fireEvent.keyUp(last, { key: ' ' })
-      const checks = await screen.findByRole('tab', { name: 'Проверки', selected: true })
-      await waitFor(() => expect(document.activeElement).toBe(checks))
-      expect(tabNames()).toEqual(['Файлы', 'Проверки'])
+      // The last tile is the files of the working copy now (06.11.2026).
+      const terminal = await screen.findByRole('tab', { name: 'Терминал', selected: true })
+      await waitFor(() => expect(document.activeElement).toBe(terminal))
+      expect(tabNames()).toEqual(['Файлы', 'Терминал'])
     },
   )
 
@@ -2710,7 +2723,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       within(menu)
         .getAllByRole('menuitem')
         .map((item) => plain(item.textContent)),
-    ).toEqual(['Файлы и изменения, 4', 'База данных, 3', 'Проверки, 2 из 2'])
+    ).toEqual(['Файлы и изменения, 4', 'База данных, 3', 'Проверки, 2 из 2', 'Терминал'])
     if (wide) {
       expect(screen.queryByRole('button', { name: 'Закрыть меню' })).toBeNull()
       fireEvent.keyDown(menu, { key: 'Escape' })
@@ -2979,10 +2992,10 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     expect(calls.candidate).not.toHaveBeenCalled()
   })
 
-  it('offers the preview alone in a dialog at work, not a word of changes (К19)', async () => {
+  it('offers the preview and the files in a dialog at work, not a word of changes (К19)', async () => {
     showDialog(started())
     await screen.findByText('Поменял цену капучино на 290 ₽.')
-    expect(await menuTiles()).toEqual(['Предпросмотр'])
+    expect(await menuTiles()).toEqual(['Предпросмотр', 'Терминал'])
     expect(calls.candidate).not.toHaveBeenCalled()
   })
 
@@ -3019,7 +3032,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       () => screen.getByRole('button', { name: 'Команды' }),
     ],
   ] as const)(
-    'gives the focus to %s when the last tool closes and no «+» is left (К19)',
+    'keeps «+» for the files of the working copy when the last tab closes, %s still there (К19)',
     async (_what, status, target) => {
       wideLayout()
       let later!: (answer: DialogFeed) => void
@@ -3039,13 +3052,11 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       await screen.findByText('Изменения готовы')
       await choose(/^Файлы и изменения/)
       later(gone)
-      await waitFor(() =>
-        expect(within(pane()).queryByRole('button', { name: /^Инструменты/ })).toBeNull(),
-      )
       fireEvent.click(within(pane()).getByRole('button', { name: 'Скрыть панель' }))
       await waitFor(() => expect(toolsPanel()).toBeNull())
-      expect(screen.queryByRole('button', { name: /^Инструменты/ })).toBeNull()
-      await waitFor(() => expect(document.activeElement).toBe(target()))
+      // A chat with the code keeps its «Терминал» (06.11.2026): «+» stays, and takes the focus.
+      await waitFor(() => expect(document.activeElement).toBe(plus()))
+      expect(target()).toBeTruthy()
     },
   )
 
@@ -3073,7 +3084,12 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     )
     await screen.findByText('Изменения готовы')
     // The changes touch the files alone: no tile of the records, whatever the stack could do.
-    expect(await menuTiles()).toEqual(['Предпросмотр', 'Файлы и изменения, 4', 'Проверки, 2 из 2'])
+    expect(await menuTiles()).toEqual([
+      'Предпросмотр',
+      'Файлы и изменения, 4',
+      'Проверки, 2 из 2',
+      'Терминал',
+    ])
     later(withRecords)
     expect(await screen.findByText('Поменял ещё и цену в меню на сайте.')).toBeTruthy()
     expect(await menuTiles()).toEqual([
@@ -3081,6 +3097,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       'Файлы и изменения, 4',
       'База данных, 3',
       'Проверки, 2 из 2',
+      'Терминал',
     ])
   })
 
@@ -3108,6 +3125,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       'Файлы и изменения, 4',
       'База данных, 3',
       'Проверки, 2 из 2',
+      'Терминал',
     ])
     // Chosen there, it is on the screen again in place of the dialog, alone on its strip.
     await choose(/^Предпросмотр, Открыто/)
@@ -3126,6 +3144,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       'Файлы и изменения, 4',
       'База данных, 3',
       'Проверки, 2 из 2',
+      'Терминал',
     ])
   })
 

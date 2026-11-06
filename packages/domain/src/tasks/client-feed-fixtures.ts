@@ -240,6 +240,17 @@ export const feedFixtures: readonly FeedFixture[] = Object.freeze([
     payload: { v: 1, turn: 2, files: false, open: false },
   },
   {
+    name: 'edit v1 saved',
+    type: 'feed.edit',
+    payload: {
+      v: 1,
+      editId: '0199a3f2-0000-7000-8000-0000000000e1',
+      path: 'wp-content/themes/kadence/style.css',
+      outcome: 'saved',
+      revision: 2,
+    },
+  },
+  {
     name: 'undo v1 confirmed',
     type: 'feed.undo',
     payload: {

@@ -276,13 +276,15 @@ export class CandidateBuilder {
 
   /**
    * The facts a candidate of the dialog is built from, read in PostgreSQL: its repository, its
-   * media paths, its base — the standing candidate's, the last one's, or its first turn's — and
-   * the versions of the site. null — the dialog has no repository or no base yet.
+   * media paths, its base — the standing candidate's, the last one's, its first turn's, or
+   * `fallbackBase` (the `main` a client's edit of a dialog without changes starts on) — and the
+   * versions of the site. null — the dialog has no repository or no base yet.
    */
   async context(
     task: CandidateTask,
     standing: StandingCandidate | null,
     revision: number,
+    fallbackBase?: string,
   ): Promise<CandidateContext | null> {
     const [repository, latest, first, releases, site] = await Promise.all([
       this.db.gitRepository.findFirst({
@@ -305,7 +307,7 @@ export class CandidateBuilder {
         select: { installedSha: true, workspaceId: true },
       }),
     ])
-    const base = standing?.baseSha ?? latest?.baseSha ?? first?.baseSha ?? null
+    const base = standing?.baseSha ?? latest?.baseSha ?? first?.baseSha ?? fallbackBase ?? null
     if (!repository || !base || !site) return null
     let addOnlyPaths: readonly string[] = []
     try {

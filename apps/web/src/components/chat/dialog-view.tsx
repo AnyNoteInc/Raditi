@@ -28,6 +28,7 @@ import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } 
 import { AppIcon } from '@/components/application/app-icon'
 import { ConfirmDialog } from '@/components/billing/confirm-dialog'
 import { siteHref } from '@/components/site/site-nav'
+import { SiteFiles } from '@/components/site/site-files'
 import { downloadText } from '@/lib/download-text'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
@@ -1236,6 +1237,13 @@ export function DialogView({
             onReset={() => runCommand('reset')}
             resetting={reset.isPending}
           />
+        )
+      case 'terminal':
+        // The files of the agent's working copy, and the client's edit of one (06.11.2026).
+        return siteId === null ? null : (
+          <Box sx={{ p: 2 }}>
+            <SiteFiles siteId={siteId} taskId={taskId} ended={terminal} />
+          </Box>
         )
       case 'files':
       case 'database':
