@@ -101,9 +101,16 @@ export async function verifyZai(ctx) {
     plan: 'lite',
     health: 'ok',
     enabled: false,
-    // The settings of the operator command for this backend; П4 of the pivot plan.
-    maxConcurrentTurns: 1,
-    maxConcurrentRequests: 2,
+    // The settings of the operator command for this backend: eight turns and sixteen requests
+    // since the owner's request of 06.11.2026 (before it one and two, П4 of the pivot plan).
+    maxConcurrentTurns: 8,
+    maxConcurrentRequests: 16,
+  })
+  // The stand's scenarios fence on a capacity of one turn (two requests): the account goes back
+  // to it once the import's own numbers are checked.
+  await db.subscriptionAccount.update({
+    where: { id: accountId },
+    data: { maxConcurrentTurns: 1, maxConcurrentRequests: 2 },
   })
   // The import asked the quota and nothing else, with the key it was given, without a proxy.
   let state = await zai()
