@@ -573,6 +573,130 @@ test('the images the suites of previews run by tag are pulled at a pinned digest
   assert.equal(pulled.get('mysql:8.4'), stand?.[1])
 })
 
+/**
+ * The files of the repository a script loads, through static imports, `export … from` and
+ * `import('…')` of a literal path; packages by name (`@repo/<name>`) are not followed.
+ */
+function loads(entries) {
+  const found = new Set()
+  const queue = [...entries]
+  while (queue.length) {
+    const file = queue.pop()
+    if (found.has(file)) continue
+    found.add(file)
+    for (const [, specifier] of read(file).matchAll(
+      /(?:\bfrom|\bimport\()\s*'(\.{1,2}\/[^']+)'/g,
+    )) {
+      const target = relative(root, join(root, dirname(file), specifier))
+      if (/\.(?:ts|mjs)$/.test(target)) queue.push(target)
+    }
+  }
+  return [...found].sort()
+}
+
+test('site-images.yml builds every PHP version of the table and sends nothing anywhere', async () => {
+  const source = workflow('site-images')
+  // One job per row of the table, in its order; a row added without a job is never built here.
+  const versions = JSON.parse(read('infra/preview/site-bases.json')).versions.map(({ php }) => php)
+  assert.ok(versions.length >= 8, 'the rows of site-bases.json were read')
+  const matrix = /^ {8}php: \[(.+)\]$/m.exec(source)
+  assert.ok(matrix, 'site-images.yml has a matrix of PHP versions')
+  // Quoted: unquoted, 8.0 is a number to GitHub and `matrix.php` gives 8.
+  const quoted = matrix[1].split(',').map((version) => version.trim())
+  for (const version of quoted) assert.match(version, /^'[^']+'$/, `${version} is not quoted`)
+  assert.deepEqual(
+    quoted.map((version) => version.slice(1, -1)),
+    versions,
+  )
+  assert.match(source, /^ {6}fail-fast: false$/m)
+  assert.match(source, /^ {8}run: pnpm verify:site-images --only \$\{\{ matrix\.php \}\}$/m)
+  // Nothing leaves the runner: publishing is M10 (Т23).
+  for (const forbidden of [
+    'docker push',
+    'docker login',
+    'push: true',
+    'packages: write',
+    'secrets.',
+  ])
+    assert.ok(!source.includes(forbidden), `site-images.yml names ${forbidden}`)
+  assert.equal(/^permissions:\n((?: {2}.*\n)+)/m.exec(source)?.[1], '  contents: read\n')
+  assert.doesNotMatch(source, /^ +permissions:/m, 'a job asks for permissions of its own')
+  // Once a month on fresh packages, with a scan that never fails the job.
+  assert.match(source, /^ {2}schedule:\n {4}- cron: '[^']+'$/m)
+  const steps = source.split(/^ {6}- /m)
+  const index = (name) => steps.findIndex((step) => step.startsWith(`name: ${name}\n`))
+  // The stand finds the images it reads already pulled, by the digests its files name.
+  const pull = index('Pull the images the stand reads')
+  assert.ok(pull >= 0, 'site-images.yml pulls the images the stand reads')
+  assert.ok(pull < index('Build and check the image'), 'the images are pulled before the stand')
+  assert.ok(index('Docker with the containerd image store') < pull, 'into the containerd store')
+  const stacks = readdirSync(join(root, 'infra/dev/preview-verify')).filter((name) =>
+    /^site-[a-z0-9]+\.mjs$/.test(name),
+  )
+  assert.ok(stacks.length > 0, 'the files of stacks were found')
+  for (const name of stacks) {
+    const { treeImage } = await import(join(root, 'infra/dev/preview-verify', name))
+    assert.match(treeImage, /@sha256:[0-9a-f]{64}$/, `${name} names its tree by digest`)
+    assert.ok(
+      steps[pull].includes(`docker pull -q ${treeImage}\n`),
+      `site-images.yml does not pull ${treeImage} of ${name}`,
+    )
+  }
+  assert.match(steps[pull], /^ {10}PHP_VERSION: \$\{\{ matrix\.php \}\}$/m)
+  assert.match(steps[pull], /infra\/preview\/site-bases\.json\)\n {10}docker pull -q "\$base"\n/)
+  const scanAt = index('Scan the image')
+  assert.ok(scanAt >= 0, 'site-images.yml has the step of the scanner')
+  const scan = steps[scanAt]
+  // After the stand built the image of this job's version, and with the parameters of В1.
+  assert.ok(index('Build and check the image') < scanAt, 'the scanner runs after the stand')
+  assert.match(scan, /^ {10}PHP_VERSION: \$\{\{ matrix\.php \}\}$/m)
+  assert.match(scan, /^ {8}if: github\.event_name != 'pull_request'$/m)
+  assert.match(scan, /^ {8}continue-on-error: true$/m)
+  assert.match(scan, /--exit-code 0\b/)
+  assert.match(scan, /--scanners vuln\b/)
+  assert.match(scan, /--severity HIGH,CRITICAL\b/)
+  // The scanner sends no usage data and asks for no news of versions.
+  assert.match(scan, /--disable-telemetry\b/)
+  assert.match(scan, /--skip-version-check\b/)
+  assert.match(scan, /^ {10}TRIVY_IMAGE: aquasec\/trivy@sha256:[0-9a-f]{64}$/m)
+  // Every container of the step is the pinned scanner.
+  const runsOf = [...scan.matchAll(/docker run [^\n]*/g)].map(([line]) => line)
+  assert.equal(runsOf.length, 2, 'the scan and its table')
+  for (const line of runsOf) assert.match(line, / "\$TRIVY_IMAGE" /, line)
+  // The scanner reads the image the stand built and left under its tag.
+  assert.match(scan, /"raditi-site-verify:\$PHP_VERSION"/)
+  assert.ok(
+    read('infra/dev/preview-verify/verify-site-images.mjs').includes(
+      'const tag = `raditi-site-verify:${row.php}`',
+    ),
+    'the stand tags the image of a version as the scanner reads it',
+  )
+  const upload = steps.find((step) => step.startsWith('name: Upload the scan\n')) ?? ''
+  assert.match(upload, /^ {10}name: site-image-scan-\$\{\{ matrix\.php \}\}$/m)
+  // The engine of the sandbox VM, the same as preview.yml installs.
+  const engine = (text) => /^ +SANDBOX_DOCKER_VERSION: (\S+)$/m.exec(text)?.[1]
+  assert.ok(engine(workflow('preview')), 'preview.yml names the engine')
+  assert.equal(engine(source), engine(workflow('preview')))
+  // The workflow starts on every file the stand loads and every file its images copy; the
+  // package @repo/domain stays narrow, to its preview folder.
+  const filter = pathFilter(source)
+  assert.ok(filter.includes('infra/preview/**'))
+  assert.ok(filter.includes('packages/domain/src/preview/**'))
+  const stand = loads([
+    'infra/dev/preview-verify/verify-site-images.mjs',
+    ...readdirSync(join(root, 'infra/dev/preview-verify'))
+      .filter((name) => /^site-[a-z0-9]+\.mjs$/.test(name))
+      .map((name) => `infra/dev/preview-verify/${name}`),
+  ])
+  assert.ok(
+    stand.includes('packages/sandbox-providers/src/preview/runtime.ts'),
+    'the stand loads the preview runtime',
+  )
+  for (const file of stand) assert.ok(starts(filter, file), `${file} does not start the workflow`)
+  for (const file of copied('infra/sandbox/Dockerfile', 'network-guard'))
+    assert.ok(starts(filter, file), `${file} (network-guard) does not start the workflow`)
+})
+
 test('CI runs the Docker isolation suites of the sandbox provider on a real daemon', () => {
   const source = workflow('agent-driver')
   const isolation = /^ {2}sandbox-isolation:\n(?:(?: {4}.*)?\n)+/m.exec(`${source}\n`)?.[0] ?? ''

@@ -1,0 +1,160 @@
+name: Site images
+
+# The `site` image of every PHP version (infra/preview/site-bases.json), built on the runner's own
+# architecture and checked from the outside by the real preview runtime, under runc. Nothing is
+# pushed: publishing comes with M10. Once a month the same builds on fresh packages, with a scan
+# whose result is for a person to read: the frozen bases of PHP 7.3–8.1 stay as they are.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/site-images.yml
+      - .github/actions/setup/**
+      - .nvmrc
+      - package.json
+      - pnpm-lock.yaml
+      - infra/preview/**
+      - infra/dev/preview-verify/**
+      - infra/wordpress/**
+      # The recipe of WordPress the stand runs on every version of it, and what it loads.
+      - packages/site-adapters/src/wordpress-preview.ts
+      - packages/site-adapters/src/wordpress-preview-files.ts
+      - packages/site-adapters/src/wordpress-db-copy.ts
+      - packages/site-adapters/src/wordpress-db.ts
+      - packages/site-adapters/src/wordpress-mcp-policy.ts
+      - packages/site-adapters/src/php-config.ts
+      # The image of the rules of the host the runtime puts on a preview's bridge.
+      - infra/sandbox/Dockerfile
+      - infra/sandbox/host-firewall.mjs
+      - infra/sandbox/network-guard.mjs
+      - packages/domain/src/preview/**
+      # The preview runtime and the Docker code of the package it loads.
+      - packages/sandbox-providers/src/preview/**
+      - packages/sandbox-providers/src/config.ts
+      - packages/sandbox-providers/src/docker-api.ts
+      - packages/sandbox-providers/src/docker-sandbox.ts
+      - packages/sandbox-providers/src/docker.ts
+      - packages/sandbox-providers/src/gateway-types.ts
+      - packages/sandbox-providers/src/gateway/**
+  schedule:
+    - cron: '23 4 1 * *'
+  workflow_dispatch:
+
+concurrency:
+  group: site-images-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  site-image:
+    name: PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    # The build of one version (6–9 minutes), the tools and the rules of the host, the setup of
+    # Docker and the probes.
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.3', '7.4', '8.0', '8.1', '8.2', '8.3', '8.4', '8.5']
+    env:
+      # The engine of the sandbox VM (spec §8), as in preview.yml: the runner image ships an older
+      # one.
+      SANDBOX_DOCKER_VERSION: 29.5.2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup toolchain
+        uses: ./.github/actions/setup
+      - name: Docker Engine of the sandbox VM
+        run: |
+          key=$(mktemp)
+          curl -fsSL --retry 3 https://download.docker.com/linux/ubuntu/gpg -o "$key"
+          fingerprint=$(gpg --show-keys --with-colons "$key" | awk -F: '$1 == "fpr" { print $10; exit }')
+          if [ "$fingerprint" != 9DC858229FC7DD38854AE2D88D81803C0EBFCD88 ]; then
+            echo "Unexpected fingerprint of the key of Docker's repository: $fingerprint" >&2
+            exit 1
+          fi
+          sudo install -D -m 0644 "$key" /etc/apt/keyrings/docker.asc
+          codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $codename stable" \
+            | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+          sudo apt-get -q -o Acquire::Retries=3 update
+          package=$(apt-cache madison docker-ce | awk '{ print $3 }' \
+            | grep -F ":$SANDBOX_DOCKER_VERSION-" | head -n 1)
+          if [ -z "$package" ]; then
+            echo "Docker's repository has no docker-ce $SANDBOX_DOCKER_VERSION for $codename" >&2
+            exit 1
+          fi
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get -q -y -o Acquire::Retries=3 install \
+            --no-install-recommends --allow-downgrades --allow-change-held-packages \
+            "docker-ce=$package" "docker-ce-cli=$package"
+      # The runtime takes images pinned by digest only, and a local build has a repository digest
+      # only in the containerd image store.
+      - name: Docker with the containerd image store
+        run: |
+          daemon=/etc/docker/daemon.json
+          current=$(sudo cat "$daemon" 2>/dev/null || echo '{}')
+          printf '%s' "$current" \
+            | jq '.features = ((.features // {}) + {"containerd-snapshotter": true})' \
+            | sudo tee "$daemon" >/dev/null
+          sudo systemctl restart docker
+          docker info --format '{{.DriverStatus}}' | grep -q io.containerd.snapshotter
+          test "$(docker version --format '{{.Server.Version}}')" = "$SANDBOX_DOCKER_VERSION"
+      # The stand pulls nothing itself (infra/dev/preview-verify/README.md): the tree of the core
+      # each row of a stack reads (`treeImage` of infra/dev/preview-verify/site-*.mjs) and the base
+      # of this version, both by digest, into the image store the step above switched to.
+      - name: Pull the images the stand reads
+        env:
+          PHP_VERSION: ${{ matrix.php }}
+        run: |
+          docker pull -q wordpress@sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5
+          base=$(jq -er --arg php "$PHP_VERSION" '.versions[] | select(.php == $php) | .image' \
+            infra/preview/site-bases.json)
+          docker pull -q "$base"
+      # A version that fails only here, on amd64, goes to `without` of its row by the rule of Э1.1,
+      # with the architecture named in the PR (docs/plan/62-slices/e1.md, Э1.3).
+      - name: Build and check the image
+        run: pnpm verify:site-images --only ${{ matrix.php }}
+      # Trivy by digest, reading the image locally (docs/plan/62-slices/e1.md, В1, В2): the summary
+      # of the job and an artifact for a person to read. A finding never fails the job (Т23), and
+      # neither does a scanner that could not run: the image was checked by the step above.
+      - name: Scan the image
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        env:
+          PHP_VERSION: ${{ matrix.php }}
+          # aquasec/trivy:0.76.1, the index of every platform.
+          TRIVY_IMAGE: aquasec/trivy@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
+        run: |
+          scan="$RUNNER_TEMP/site-image-scan"
+          mkdir -p "$scan"
+          docker save -o "$scan/image.tar" "raditi-site-verify:$PHP_VERSION"
+          # The scan downloads its database and sends nothing: no usage data, no check of versions.
+          docker run --rm -v "$scan:/scan" "$TRIVY_IMAGE" image --input /scan/image.tar \
+            --scanners vuln --severity HIGH,CRITICAL --exit-code 0 \
+            --disable-telemetry --skip-version-check \
+            --format json --output /scan/scan.json
+          rm "$scan/image.tar"
+          docker run --rm --network none -v "$scan:/scan" "$TRIVY_IMAGE" convert --format table \
+            --output /scan/scan.txt /scan/scan.json
+          {
+            echo "### PHP $PHP_VERSION: HIGH and CRITICAL"
+            jq -r '[.Results[]?.Vulnerabilities[]?.Severity] | group_by(.)
+              | map("- \(.[0]): \(length)") | if length == 0 then ["- none"] else . end | .[]' \
+              "$scan/scan.json"
+            echo
+            echo "The whole report is the artifact site-image-scan-$PHP_VERSION."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the scan
+        if: github.event_name != 'pull_request' && !cancelled()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: site-image-scan-${{ matrix.php }}
+          path: |
+            ${{ runner.temp }}/site-image-scan/scan.json
+            ${{ runner.temp }}/site-image-scan/scan.txt
+          if-no-files-found: ignore
+          retention-days: 30
