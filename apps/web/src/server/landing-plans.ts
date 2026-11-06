@@ -73,8 +73,9 @@ async function readLandingPlans(): Promise<LandingPricingData> {
       row.kind !== 'quota' ||
       row.creditsPerMonth === null ||
       row.creditsPerMonth <= 0 ||
-      row.creditsPerDay === null ||
-      row.creditsPerDay <= 0 ||
+      // No daily limit is a term of its own (no plan on sale has one since 06.11.2026); a
+      // limit that lets nothing through is not one the landing can sell.
+      (row.creditsPerDay !== null && row.creditsPerDay <= 0) ||
       row.maxSites === null ||
       row.maxSites <= 0 ||
       row.price.isNegative()

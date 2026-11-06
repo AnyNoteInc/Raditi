@@ -60,8 +60,8 @@ scenarios['renewal-success'] = async (t) => {
       amount: PRICE.start,
     },
   )
-  await t.until('the customer gets the letter «Скоро спишем 4 900 ₽ за тариф «Старт»»', async () =>
-    customer.got('Скоро спишем 4 900 ₽ за тариф «Старт»'),
+  await t.until('the customer gets the letter «Скоро спишем 1 990 ₽ за тариф «Старт»»', async () =>
+    customer.got('Скоро спишем 1 990 ₽ за тариф «Старт»'),
   )
   await t.passes(['notices', 'charges'])
   t.equal(
@@ -155,18 +155,25 @@ scenarios['renewal-success'] = async (t) => {
       period: periodAfter(ended),
     },
   )
-  const accounts = await packIntact(t, workspaceId, pack, CREDITS.start)
+  // Nothing was spent: the whole quota of the period that ended is carried into the new one
+  // (decision of 06.11.2026) beside the new quota.
+  const accounts = await packIntact(t, workspaceId, pack, 2 * CREDITS.start)
   t.equal(
-    'the rest of the old quota expired and the new one was granted, each once',
+    'the rest of the old quota expired and came back carried — no more than that quota —, and the new one was granted, each once',
     journal(accounts.credit_tariff),
     [
-      { kind: 'grant', amount: '300.00', key: `order:${first.id}:grant` },
+      { kind: 'grant', amount: '150.00', key: `order:${first.id}:grant` },
       {
         kind: 'expire',
-        amount: '-300.00',
+        amount: '-150.00',
         key: `sub:${subscription.id}:${ended.end.getTime()}:expire`,
       },
-      { kind: 'grant', amount: '300.00', key: `order:${renewal.id}:grant` },
+      {
+        kind: 'grant',
+        amount: '150.00',
+        key: `sub:${subscription.id}:${ended.end.getTime()}:carry`,
+      },
+      { kind: 'grant', amount: '150.00', key: `order:${renewal.id}:grant` },
     ],
   )
   // The rule of a renewal on the three accounts (the expiry rules of the credits design):
@@ -178,6 +185,7 @@ scenarios['renewal-success'] = async (t) => {
       tariff: [
         journalRow.quota(first),
         journalRow.expired(subscription, ended.end),
+        journalRow.carried(subscription, ended.end),
         journalRow.quota(renewal),
       ],
       gift: [giftGrant(customer.id)],
@@ -186,10 +194,10 @@ scenarios['renewal-success'] = async (t) => {
   )
   const renewalLetter = (await customer.mail('billing.payment_succeeded')).at(-1)
   t.check(
-    'the letter of the renewal names the credits of the new period: «Начислили 300 кредитов на этот период.»',
+    'the letter of the renewal names the credits of the new period: «Начислили 150 кредитов на этот период.»',
     renewalLetter.key.endsWith(`:${renewal.id}`) &&
-      renewalLetter.data.credits === 300 &&
-      renewalLetter.text.includes('Начислили 300 кредитов на этот период.'),
+      renewalLetter.data.credits === 150 &&
+      renewalLetter.text.includes('Начислили 150 кредитов на этот период.'),
     renewalLetter,
   )
   const [renewed] = await auditOf(t, workspaceId, 'billing.subscription.renew')
@@ -198,8 +206,9 @@ scenarios['renewal-success'] = async (t) => {
     planSlug: 'start',
     planChanged: false,
     amount: PRICE.start,
-    credits: 300,
-    expiredCredits: 300,
+    credits: 150,
+    expiredCredits: 150,
+    carriedCredits: 150,
     periodStart: periodAfter(ended).start,
     periodEnd: periodAfter(ended).end,
     reanchored: false,
@@ -210,11 +219,11 @@ scenarios['renewal-success'] = async (t) => {
     async () => customer.got('Оплата прошла', 3),
   )
   await t.until('and the notice of the charge made today', async () =>
-    customer.got('Списание 4 900 ₽ за тариф «Старт»'),
+    customer.got('Списание 1 990 ₽ за тариф «Старт»'),
   )
   const overview = await customer.query('billing.overview')
   t.equal(
-    '«Тарифы» shows the new period, the fresh quota, the hundred purchased credits and the same card',
+    '«Тарифы» shows the new period, the fresh quota with the carried one, the hundred purchased credits and the same card',
     [
       overview.subscription.period,
       overview.subscription.paymentMethod,
@@ -262,7 +271,42 @@ scenarios['renewal-success'] = async (t) => {
     [(await t.shop.charges()).length, (await ordersOf(t, workspaceId)).length],
     [1, 3],
   )
-  await packIntact(t, workspaceId, pack, CREDITS.start, 'after further ticks: ')
+  await packIntact(t, workspaceId, pack, 2 * CREDITS.start, 'after further ticks: ')
+
+  // The second boundary: nothing was spent in the renewed period either. Of the 300 available
+  // only the 150 of its quota carry on; the 150 carried into it have lived their one period and
+  // expire — the expiry takes all 300, the carry gives 150 back.
+  const second = await periodEnded(t, subscription.id)
+  const again = await orderBecomes(
+    t,
+    'at the end of the renewed period the next renewal is made and paid',
+    () => orderByKey(t, second.key),
+    'paid',
+  )
+  await packIntact(t, workspaceId, pack, 2 * CREDITS.start, 'after the second renewal: ')
+  t.equal(
+    'the second renewal: the old carry expired, only the quota of the period that ended came back; the gift and the pack are the one grant each',
+    await journalsOf(t, workspaceId),
+    {
+      tariff: [
+        journalRow.quota(first),
+        journalRow.expired(subscription, ended.end),
+        journalRow.carried(subscription, ended.end),
+        journalRow.quota(renewal),
+        journalRow.expired(subscription, second.end, 2 * CREDITS.start),
+        journalRow.carried(subscription, second.end),
+        journalRow.quota(again),
+      ],
+      gift: [giftGrant(customer.id)],
+      pack: [journalRow.pack(pack)],
+    },
+  )
+  const [, carriedAgain] = await auditOf(t, workspaceId, 'billing.subscription.renew')
+  t.equal(
+    'the audit of the second renewal: 300 expired, 150 of them carried',
+    [carriedAgain?.meta.expiredCredits, carriedAgain?.meta.carriedCredits],
+    [2 * CREDITS.start, CREDITS.start],
+  )
 }
 
 scenarios['renewal-declined'] = async (t) => {
@@ -378,9 +422,9 @@ scenarios['renewal-declined'] = async (t) => {
   await packIntact(t, workspaceId, pack, CREDITS.start, 'while overdue nothing expires: ')
   overview = await customer.query('billing.overview')
   t.equal(
-    'while overdue a task could spend the gift alone: 35 credits; the quota and the pack wait for the payment',
+    'while overdue a task could spend the gift alone: 50 credits; the quota and the pack wait for the payment',
     [overview.credits.spendable, overview.credits.tariff.balance, overview.credits.pack.balance],
-    [35, 300, 100],
+    [CREDITS.gift, CREDITS.start, CREDITS.pack],
   )
 
   // «Оплатить сейчас»: the customer pays by hand, with another card.
@@ -430,18 +474,25 @@ scenarios['renewal-declined'] = async (t) => {
     Math.abs(active.period_anchor.getTime() - Date.now()) < MINUTE,
     active,
   )
-  const accounts = await packIntact(t, workspaceId, pack, CREDITS.start, 'paid by hand: ')
+  // As at a renewal: the quota of the overdue period, nothing of which was spent, is carried
+  // into the period the payment opened, beside its own quota.
+  const accounts = await packIntact(t, workspaceId, pack, 2 * CREDITS.start, 'paid by hand: ')
   t.equal(
-    'the rest of the overdue period expired and the quota was granted anew',
+    'the rest of the overdue period expired and came back carried, and the quota was granted anew',
     journal(accounts.credit_tariff),
     [
-      { kind: 'grant', amount: '300.00', key: `order:${first.id}:grant` },
+      { kind: 'grant', amount: '150.00', key: `order:${first.id}:grant` },
       {
         kind: 'expire',
-        amount: '-300.00',
+        amount: '-150.00',
         key: `sub:${subscription.id}:${ended.end.getTime()}:expire`,
       },
-      { kind: 'grant', amount: '300.00', key: `order:${paid.id}:grant` },
+      {
+        kind: 'grant',
+        amount: '150.00',
+        key: `sub:${subscription.id}:${ended.end.getTime()}:carry`,
+      },
+      { kind: 'grant', amount: '150.00', key: `order:${paid.id}:grant` },
     ],
   )
   // The rule of a payment while overdue on the three accounts: as a renewal, only the tariff.
@@ -452,6 +503,7 @@ scenarios['renewal-declined'] = async (t) => {
       tariff: [
         journalRow.quota(first),
         journalRow.expired(subscription, ended.end),
+        journalRow.carried(subscription, ended.end),
         journalRow.quota(paid),
       ],
       gift: [giftGrant(customer.id)],
@@ -598,17 +650,15 @@ scenarios['renewal-http-500'] = async (t) => {
     [moved.status, { start: iso(moved.current_period_start), end: iso(moved.current_period_end) }],
     ['active', periodAfter(ended)],
   )
-  const accounts = await ledgerHolds(t, workspaceId, { tariff: CREDITS.start, pack: 0 })
+  // The quota of the period that ended, nothing of which was spent, is carried: twice the quota.
+  const accounts = await ledgerHolds(t, workspaceId, { tariff: 2 * CREDITS.start, pack: 0 })
   t.equal(
-    'the quota of the new period was granted once',
+    'the old quota was carried and the quota of the new period was granted, each once',
     journal(accounts.credit_tariff).slice(1),
     [
-      {
-        kind: 'expire',
-        amount: '-300.00',
-        key: `sub:${subscription.id}:${ended.end.getTime()}:expire`,
-      },
-      { kind: 'grant', amount: '300.00', key: `order:${renewal.id}:grant` },
+      journalRow.expired(subscription, ended.end),
+      journalRow.carried(subscription, ended.end),
+      journalRow.quota(renewal),
     ],
   )
   // The notification that was held arrives late: it finds everything done.
@@ -618,7 +668,7 @@ scenarios['renewal-http-500'] = async (t) => {
   await ledgerHolds(
     t,
     workspaceId,
-    { tariff: CREDITS.start, pack: 0 },
+    { tariff: 2 * CREDITS.start, pack: 0 },
     'after the late notification ',
   )
 
@@ -656,7 +706,7 @@ scenarios['renewal-http-500'] = async (t) => {
   await ledgerHolds(
     t,
     other.workspaceId,
-    { tariff: CREDITS.start, pack: 0 },
+    { tariff: 2 * CREDITS.start, pack: 0 },
     'with notifications on: ',
   )
   await t.passes(['charges', 'stuck_orders'])
@@ -715,7 +765,7 @@ scenarios['renewal-stuck-pending'] = async (t) => {
     ],
     [periodAfter(ended), 1],
   )
-  await ledgerHolds(t, slow.workspaceId, { tariff: CREDITS.start, pack: 0 }, 'the slow bank: ')
+  await ledgerHolds(t, slow.workspaceId, { tariff: 2 * CREDITS.start, pack: 0 }, 'the slow bank: ')
 
   // The request never reached the shop, and nobody learns that: after twelve hours the key of
   // the charge is no longer safe to repeat.
@@ -872,9 +922,9 @@ scenarios['renewal-waits-for-notice'] = async (t) => {
     [[ended.key, 200, PRICE.start]],
   )
   await t.until('the customer gets the letter of the charge: one', async () =>
-    customer.got('Списание 4 900 ₽ за тариф «Старт»'),
+    customer.got('Списание 1 990 ₽ за тариф «Старт»'),
   )
-  await ledgerHolds(t, workspaceId, { tariff: CREDITS.start, pack: 0 })
+  await ledgerHolds(t, workspaceId, { tariff: 2 * CREDITS.start, pack: 0 })
 }
 
 /**
@@ -902,7 +952,7 @@ scenarios['renewal-in-real-time'] = async (t) => {
   )
   const old = await noticed(
     t,
-    'new price: the notice names 12900.00, the price of «Бизнес» today',
+    'new price: the notice names 6990.00, the price of «Бизнес» today',
     raised.workspaceId,
     dates.end,
     { planSlug: 'business', amount: PRICE.business },
@@ -953,7 +1003,7 @@ scenarios['renewal-in-real-time'] = async (t) => {
     customer.letters(`Списание ${amount} ₽ за тариф «${plan}»`).length
   await t.until(
     'on time: the customer got one letter about the charge',
-    async () => about(kept.customer, '4 900', 'Старт') === 1 || notYet(kept.customer.subjects()),
+    async () => about(kept.customer, '1 990', 'Старт') === 1 || notYet(kept.customer.subjects()),
   )
   const moved = await subscriptionOf(t, kept.workspaceId)
   t.equal(
@@ -961,7 +1011,7 @@ scenarios['renewal-in-real-time'] = async (t) => {
     [moved.status, { start: iso(moved.current_period_start), end: iso(moved.current_period_end) }],
     ['active', periodAfter(dates)],
   )
-  await ledgerHolds(t, kept.workspaceId, { tariff: CREDITS.start, pack: 0 }, 'on time: ')
+  await ledgerHolds(t, kept.workspaceId, { tariff: 2 * CREDITS.start, pack: 0 }, 'on time: ')
 
   const raisedNotices = await noticesOf(t, raised.workspaceId)
   t.equal(
@@ -980,7 +1030,7 @@ scenarios['renewal-in-real-time'] = async (t) => {
     },
   )
   t.equal(
-    'new price: the shop was asked for 13900.00, once; the other charge is 4900.00',
+    'new price: the shop was asked for 13900.00, once; the other charge is 1990.00',
     (await t.shop.charges())
       .map(({ idempotenceKey, status, body }) => [idempotenceKey, status, body.amount.value])
       .sort(),
@@ -994,11 +1044,11 @@ scenarios['renewal-in-real-time'] = async (t) => {
     () => raised.customer.got('Списание 13 900 ₽ за тариф «Бизнес»'),
   )
   t.equal(
-    'new price: the letter about 12 900 ₽ was the only one before it',
-    about(raised.customer, '12 900', 'Бизнес'),
+    'new price: the letter about 6 990 ₽ was the only one before it',
+    about(raised.customer, '6 990', 'Бизнес'),
     1,
   )
-  await ledgerHolds(t, raised.workspaceId, { tariff: CREDITS.business, pack: 0 }, 'new price: ')
+  await ledgerHolds(t, raised.workspaceId, { tariff: 2 * CREDITS.business, pack: 0 }, 'new price: ')
   t.equal(
     'the price list is as it was seeded again',
     (await t.one(`SELECT price::text AS price FROM plans WHERE slug = 'business'`)).price,
@@ -1092,7 +1142,7 @@ scenarios['two-ticks'] = async (t) => {
       const moved = await subscriptionOf(t, workspaceId)
       const accounts = await accountsOf(t, workspaceId)
       t.equal(
-        `tariff ${index + 1}: one renewal order, one payment at the shop, the period moved once, the quota granted once`,
+        `tariff ${index + 1}: one renewal order, one payment at the shop, the period moved once, the old quota carried once, the new one granted once`,
         {
           orders: orders.map(({ idempotence_key: key, status }) => [key === keys[index], status]),
           payments: payments.filter(({ metadata }) => metadata?.order_id === orders[1]?.id).length,
@@ -1107,13 +1157,10 @@ scenarios['two-ticks'] = async (t) => {
           payments: 1,
           period: periodAfter(dates),
           journal: [
-            { kind: 'grant', amount: '300.00', key: `order:${order.id}:grant` },
-            {
-              kind: 'expire',
-              amount: '-300.00',
-              key: `sub:${subscription.id}:${dates.end.getTime()}:expire`,
-            },
-            { kind: 'grant', amount: '300.00', key: `order:${orders[1]?.id}:grant` },
+            journalRow.quota(order),
+            journalRow.expired(subscription, dates.end),
+            journalRow.carried(subscription, dates.end),
+            journalRow.quota({ id: orders[1]?.id }),
           ],
         },
       )
@@ -1154,7 +1201,7 @@ scenarios['plan-change'] = async (t) => {
       (await customer.query('billing.overview')).credits.tariff.balance,
       (await ordersOf(t, workspaceId)).map(({ kind }) => kind),
     ],
-    [paymentsBefore, 300, ['subscription', 'pack']],
+    [paymentsBefore, CREDITS.start, ['subscription', 'pack']],
   )
   t.equal(
     'the same choice twice, or the tariff the customer has, is refused',
@@ -1177,9 +1224,8 @@ scenarios['plan-change'] = async (t) => {
       amount: PRICE.business,
     },
   )
-  await t.until(
-    'the customer gets the letter «Скоро спишем 12 900 ₽ за тариф «Бизнес»»',
-    async () => customer.got('Скоро спишем 12 900 ₽ за тариф «Бизнес»'),
+  await t.until('the customer gets the letter «Скоро спишем 6 990 ₽ за тариф «Бизнес»»', async () =>
+    customer.got('Скоро спишем 6 990 ₽ за тариф «Бизнес»'),
   )
   await t.passes(['charges'])
   t.equal('nothing is charged before the period ends', (await t.shop.charges()).length, 0)
@@ -1215,7 +1261,7 @@ scenarios['plan-change'] = async (t) => {
   t.equal(
     'no notice ever named an amount other than the price of the tariff it named',
     notices.map(({ meta }) => `${meta.planSlug} ${meta.amount}`),
-    ['start 4900.00', 'business 12900.00', 'business 12900.00'],
+    ['start 1990.00', 'business 6990.00', 'business 6990.00'],
   )
   const moved = await subscriptionOf(t, workspaceId)
   t.equal(
@@ -1227,18 +1273,17 @@ scenarios['plan-change'] = async (t) => {
     ],
     ['business', null, periodAfter(ended)],
   )
-  const accounts = await packIntact(t, workspaceId, pack, CREDITS.business)
+  // A change of the tariff carries as a renewal does: up to the quota of «Старт», the period
+  // that ended.
+  const accounts = await packIntact(t, workspaceId, pack, CREDITS.start + CREDITS.business)
   t.equal(
-    'the rest of «Старт» expired and the quota of «Бизнес» was granted',
+    'the rest of «Старт» expired and came back carried — up to the 150 of «Старт» —, and the quota of «Бизнес» was granted',
     journal(accounts.credit_tariff),
     [
-      { kind: 'grant', amount: '300.00', key: `order:${first.id}:grant` },
-      {
-        kind: 'expire',
-        amount: '-300.00',
-        key: `sub:${subscription.id}:${ended.end.getTime()}:expire`,
-      },
-      { kind: 'grant', amount: '800.00', key: `order:${renewal.id}:grant` },
+      journalRow.quota(first),
+      journalRow.expired(subscription, ended.end),
+      journalRow.carried(subscription, ended.end),
+      journalRow.quota(renewal, CREDITS.business),
     ],
   )
   const [renewed] = await auditOf(t, workspaceId, 'billing.subscription.renew')
@@ -1250,11 +1295,11 @@ scenarios['plan-change'] = async (t) => {
       ),
       [renewed.meta.planSlug, renewed.meta.planChanged, renewed.meta.amount, renewed.meta.credits],
     ],
-    [['billing.plan_change.schedule'], ['business', true, PRICE.business, 800]],
+    [['billing.plan_change.schedule'], ['business', true, PRICE.business, CREDITS.business]],
   )
   const usage = await customer.query('billing.usage')
   t.equal(
-    'the customer sees «Бизнес»: its price, quota, daily limit and sites, the gift and the hundred purchased credits',
+    'the customer sees «Бизнес»: its price, its quota with the carried credits of «Старт», no daily limit, its sites, the gift and the hundred purchased credits',
     [
       usage.subscription.plan.slug,
       usage.subscription.plan.price,
@@ -1270,16 +1315,16 @@ scenarios['plan-change'] = async (t) => {
       'business',
       PRICE.business,
       null,
-      800,
-      100,
+      CREDITS.start + CREDITS.business,
+      null,
       3,
-      { left: 35, held: 0, granted: true },
-      { left: 100, held: 0 },
-      935,
+      { left: CREDITS.gift, held: 0, granted: true },
+      { left: CREDITS.pack, held: 0 },
+      CREDITS.start + CREDITS.business + CREDITS.gift + CREDITS.pack,
     ],
   )
   await t.until('the letter of the charge names the amount that was charged', async () =>
-    customer.got('Списание 12 900 ₽ за тариф «Бизнес»'),
+    customer.got('Списание 6 990 ₽ за тариф «Бизнес»'),
   )
   await t.until(
     'and «Оплата прошла» came for it: the third after the tariff and the pack',
@@ -1303,7 +1348,7 @@ scenarios['plan-change'] = async (t) => {
     'paid',
   )
   t.equal(
-    'it is «Старт» at 4900.00, as its notice said',
+    'it is «Старт» at 1990.00, as its notice said',
     [
       otherRenewal.amount,
       otherRenewal.plan,
@@ -1317,7 +1362,7 @@ scenarios['plan-change'] = async (t) => {
       { planSlug: 'start', amount: PRICE.start, chargeAt: iso(otherEnded.end) },
     ],
   )
-  await ledgerHolds(t, other.workspaceId, { tariff: CREDITS.start, pack: 0 }, 'taken back: ')
+  await ledgerHolds(t, other.workspaceId, { tariff: 2 * CREDITS.start, pack: 0 }, 'taken back: ')
   t.equal(
     'the audit holds both the choice and its cancel',
     (await actionsOf(t, other.workspaceId)).filter((action) =>

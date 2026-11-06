@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useEffect, useId, useRef, useState, type CSSProperties } from 'react'
 
 import { formatCount } from '@/lib/count'
+import { CHARGED_FOR_DONE_WORK, smallEditPrice, smallEditSentence } from '@/lib/credit-price'
 import { nbsp } from '@/lib/nbsp'
 import { planDescription } from '@/lib/plan-description'
 import { plural } from '@/lib/plural'
@@ -49,10 +50,31 @@ function packsPhrase(recommendation: PlanRecommendation, pack: LandingPack | nul
     : ''
 }
 
+/** «Небольшая правка — около 71 ₽»: what a small edit costs on what the result pays for. */
+function smallEditOf({ smallEditRounded }: PlanRecommendation): string | null {
+  return smallEditRounded === null ? null : smallEditSentence(smallEditRounded)
+}
+
 /** The result as one sentence for a screen reader, built from the strings of the visible one. */
 function resultInWords(recommendation: PlanRecommendation | null, pack: LandingPack | null) {
   if (!recommendation) return NO_PACK
-  return `Тариф «${recommendation.plan.name}»${packsPhrase(recommendation, pack)}, ${formatRubles(recommendation.total)} ₽ в месяц, в среднем около ${formatRubles(recommendation.perTaskRounded)} ₽ за задачу`
+  const smallEdit = smallEditOf(recommendation)
+  const edit = smallEdit === null ? '' : `. ${smallEdit}`
+  return `Тариф «${recommendation.plan.name}»${packsPhrase(recommendation, pack)}, ${formatRubles(recommendation.total)} ₽ в месяц, в среднем около ${formatRubles(recommendation.perTaskRounded)} ₽ за задачу${edit}`
+}
+
+/**
+ * The note of the pack under the tariffs: what it gives and costs, what a small edit costs out
+ * of it, and that its credits stay. «Дневным лимитом не ограничены» only while a tariff on sale
+ * has a daily limit to be free of.
+ */
+function packNote(pack: LandingPack, plans: LandingPricingData['plans']): string {
+  const smallEdit = smallEditPrice(pack.price, pack.credits, 'из пакета')
+  const edit = smallEdit === null ? '' : ` ${smallEdit}.`
+  const day = plans.some((plan) => plan.creditsPerDay !== null)
+    ? ' и дневным лимитом не ограничены'
+    : ''
+  return `Кредитов не хватит? Можно будет докупить пакет — ${formatCount(pack.credits)} ${pluralCredits(pack.credits)} за ${formatRubles(pack.price)} ₽.${edit} Кредиты из пакета не сгорают${day}.`
 }
 
 export function Pricing({
@@ -69,6 +91,7 @@ export function Pricing({
   const hintId = useId()
   const recommendation = recommendPlan({ plans, pack }, tasks)
   const packsText = recommendation ? packsPhrase(recommendation, pack) : ''
+  const resultSmallEdit = recommendation ? smallEditOf(recommendation) : null
   const announcement =
     announcedTasks === null
       ? ''
@@ -168,6 +191,7 @@ export function Pricing({
                   `В среднем около ${formatRubles(recommendation.perTaskRounded)} ₽ за задачу при ${tasks} ${tasksAt(tasks)} в месяц`,
                 )}
               </p>
+              {resultSmallEdit && <p className={styles.perTask}>{nbsp(resultSmallEdit)}</p>}
             </>
           ) : (
             <p className={styles.resultPlan}>{nbsp(NO_PACK)}</p>
@@ -187,6 +211,7 @@ export function Pricing({
       <div className={styles.plans}>
         {plans.map((plan) => {
           const recommended = recommendation?.plan.slug === plan.slug
+          const smallEdit = smallEditPrice(plan.price, plan.creditsPerMonth)
           return (
             <article
               className={`${styles.plan} ${recommended ? styles.recommended : ''}`}
@@ -209,6 +234,7 @@ export function Pricing({
                   <strong>{nbsp(formatCount(plan.creditsPerMonth))}</strong>
                   {nbsp(`\u00a0${planInWords(plan.creditsPerMonth, plan.creditsPerDay)}`)}
                 </li>
+                {smallEdit && <li>{nbsp(smallEdit)}</li>}
                 <li>
                   {plan.maxSites === 1
                     ? 'Один сайт'
@@ -235,14 +261,10 @@ export function Pricing({
           <p>{nbsp(mainActionNote(isGuest))}</p>
         </div>
       </div>
+      {/* One row under the three plans: the rule of the charge, the pack, the currency. */}
       <div className={styles.notes}>
-        {pack && (
-          <p>
-            {nbsp(
-              `Кредитов не хватит? Можно будет докупить пакет — ${formatCount(pack.credits)} ${pluralCredits(pack.credits)} за ${formatRubles(pack.price)} ₽. Кредиты из пакета не сгорают и дневным лимитом не ограничены.`,
-            )}
-          </p>
-        )}
+        <p>{nbsp(CHARGED_FOR_DONE_WORK)}</p>
+        {pack && <p>{nbsp(packNote(pack, plans))}</p>}
         <p>Цены в&nbsp;рублях.</p>
       </div>
     </div>

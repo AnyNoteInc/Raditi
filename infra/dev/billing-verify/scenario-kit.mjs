@@ -29,29 +29,31 @@ import {
 export const MINUTE = 60_000
 export const HOUR = 60 * MINUTE
 export const DAY = 24 * HOUR
-export const PRICE = { start: '4900.00', business: '12900.00', pack: '1990.00' }
+/** The prices of the pricing of 06.11.2026 (docs/plan/63-new-pricing.md, Ц1–Ц4). */
+export const PRICE = { start: '1990.00', business: '6990.00', pack: '1490.00' }
 /**
  * The credits a month of the two tariffs the scenarios buy, the credits of the pack, and the
  * gift of the registration, which every workspace the product makes is granted once.
  */
-export const CREDITS = { start: 300, business: 800, pack: 100, gift: 35 }
+export const CREDITS = { start: 150, business: 600, pack: 100, gift: 50 }
 /**
  * What «Тарифы» sells, as the stand expects it of the seeds: the credits a month, the tariff
- * credits a day and the sites of each tariff, and the credits of the pack, with their prices.
+ * credits a day — none since 06.11.2026 (Ц6) — and the sites of each tariff, and the credits of
+ * the pack, with their prices.
  */
 export const ON_SALE = Object.freeze({
   plans: [
-    { slug: 'start', price: '4900.00', creditsPerMonth: 300, creditsPerDay: 50, maxSites: 1 },
-    { slug: 'business', price: '12900.00', creditsPerMonth: 800, creditsPerDay: 100, maxSites: 3 },
+    { slug: 'start', price: '1990.00', creditsPerMonth: 150, creditsPerDay: null, maxSites: 1 },
+    { slug: 'business', price: '6990.00', creditsPerMonth: 600, creditsPerDay: null, maxSites: 3 },
     {
       slug: 'agency',
-      price: '39900.00',
-      creditsPerMonth: 2500,
-      creditsPerDay: 300,
+      price: '19990.00',
+      creditsPerMonth: 2000,
+      creditsPerDay: null,
       maxSites: 15,
     },
   ],
-  pack: { slug: 'pack', price: '1990.00', credits: 100 },
+  pack: { slug: 'pack', price: '1490.00', credits: 100 },
 })
 /** What the operator approves in the stand: the provisional credit rate of the credits model. */
 export const CREDIT_RATE = '6.00'
@@ -598,6 +600,15 @@ export const journalRow = {
     amount: `-${credits}.00`,
     key: `sub:${subscription.id}:${end.getTime()}:expire`,
   }),
+  /**
+   * What a renewal carried of the period that ended at `end` into the next one (decision of
+   * 06.11.2026): a grant no order paid for, under the key of the period it comes from.
+   */
+  carried: (subscription, end, credits = CREDITS.start) => ({
+    kind: 'grant',
+    amount: `${credits}.00`,
+    key: `sub:${subscription.id}:${end.getTime()}:carry`,
+  }),
   pack: (order) => ({
     kind: 'grant',
     amount: `${CREDITS.pack}.00`,
@@ -1003,12 +1014,19 @@ const MIN_START_CREDITS = 5
  *
  * And «Тарифы» sells what the table of plans holds, in the credits the stand expects of it.
  */
-/** The meter of a period as the stand checks it: its sum, and the parts no task has touched. */
-const meterAddsUp = ({ granted, charged, held, expired, left, heldEarlier }) => ({
-  addsUp: granted === charged + held + expired + left,
+/**
+ * The meter of a period as the stand checks it: its sum, the parts no task has touched, what was
+ * carried into it and granted for it, and what the next renewal would carry and let expire.
+ */
+const meterAddsUp = ({ carried, granted, charged, held, expired, left, heldEarlier, ...next }) => ({
+  addsUp: carried + granted === charged + held + expired + left,
+  carried,
+  granted,
   left,
   held,
   heldEarlier,
+  carryNext: next.carryNext,
+  burnNext: next.burnNext,
 })
 
 /**
@@ -1070,7 +1088,7 @@ export async function pagesShowWhatIsStored(t) {
     pack: listed.find(({ kind }) => kind === 'pack') ?? null,
   })
   t.equal(
-    'the table of plans holds the terms the stand expects: 300, 800 and 2 500 credits a month, 50, 100 and 300 a day, a pack of 100',
+    'the table of plans holds the terms the stand expects: 150, 600 and 2 000 credits a month, no daily limit, a pack of 100',
     sold,
     ON_SALE,
   )
@@ -1099,6 +1117,20 @@ export async function pagesShowWhatIsStored(t) {
       return { balance, held, available: balance - held }
     }
     const orders = workspace ? await ordersOf(t, workspace.id) : []
+    // The quota of the current period: the grant of the order that paid for it.
+    const quota = live
+      ? Number(
+          (
+            await t.one(
+              `SELECT COALESCE(sum(l.amount), 0)::text AS amount FROM credit_ledger l
+               JOIN orders o ON o.id = l.order_id
+               WHERE o.subscription_id = $1 AND o.period_start = $2 AND l.kind = 'grant'
+                 AND l.unit = 'credit_tariff'`,
+              [live.id, live.current_period_start],
+            )
+          ).amount,
+        )
+      : 0
     const byId = (left, right) => (left.id < right.id ? -1 : 1)
     const { overview, plans, payments, usage } = pages
     const shown = {
@@ -1201,9 +1233,21 @@ export async function pagesShowWhatIsStored(t) {
         task.newTask,
       ],
       meterDay: live && (paid ? today : null),
-      // What the period was granted is what was charged, set aside, expired and left; what the
-      // account has free is what is left, and nothing of an earlier period is set aside.
-      meter: live && { addsUp: true, left: tariff.available, held: 0, heldEarlier: 0 },
+      // What was carried into the period and granted for it is what was charged, set aside,
+      // expired and left; what the account has free is what is left, and nothing of an earlier
+      // period is set aside. No task spends a credit in the stand: whatever the account has
+      // beyond the quota of the period was carried into it by the renewal that opened it, and
+      // the next renewal would carry what is left up to that quota and let the rest expire.
+      meter: live && {
+        addsUp: true,
+        carried: tariff.available - quota,
+        granted: quota,
+        left: tariff.available,
+        held: 0,
+        heldEarlier: 0,
+        carryNext: Math.min(tariff.available, quota),
+        burnNext: tariff.available - Math.min(tariff.available, quota),
+      },
       payments: orders
         .map(({ id, kind, status, amount, refunded_amount: refundedAmount }) => ({
           id,

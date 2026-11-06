@@ -131,7 +131,7 @@ test('a customer sees the payment and the saved card, replaces the card and unli
     const saved = method(page)
     await expect(saved).toContainText('Карта «Мир» •• 4444')
     await expect(saved).toContainText(
-      new RegExp(String.raw`${DAY}\sспишем этим способом\s4\s900\s₽\sза\sтариф «Старт»\.`),
+      new RegExp(String.raw`${DAY}\sспишем этим способом\s1\s990\s₽\sза\sтариф «Старт»\.`),
     )
     await expect(saved).toContainText('Данные карты хранит ЮKassa.')
     await expect(saved.getByRole('button', { name: 'Заменить' })).toBeVisible()
@@ -151,7 +151,7 @@ test('a customer sees the payment and the saved card, replaces the card and unli
     const cells = rows.nth(1).getByRole('cell')
     await expect(cells.nth(0)).toHaveText(new RegExp(`^${DATE}$`))
     await expect(cells.nth(1)).toHaveText(new RegExp(String.raw`^Тариф «Старт»${DAY}\s—\s${DAY}$`))
-    await expect(cells.nth(2)).toHaveText(/^4\s900\s₽$/)
+    await expect(cells.nth(2)).toHaveText(/^1\s990\s₽$/)
     await expect(cells.nth(3)).toHaveText('Оплачено')
     await expect(history.getByRole('button', { name: 'Показать ещё' })).toHaveCount(0)
     // The table is reachable from the keyboard when it scrolls.
@@ -172,7 +172,7 @@ test('a customer sees the payment and the saved card, replaces the card and unli
     await expect(outcome).toContainText('Способ оплаты — Карта Visa •• 1234.')
     // Auto-renewal is as it was: the new card is the one that is charged.
     await expect(outcome).toContainText(
-      new RegExp(String.raw`${DAY}\sспишем этим способом\s4\s900\s₽\sза\sтариф «Старт»\.`),
+      new RegExp(String.raw`${DAY}\sспишем этим способом\s1\s990\s₽\sза\sтариф «Старт»\.`),
     )
   })
 

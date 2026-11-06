@@ -10,7 +10,7 @@ import {
 } from '@repo/billing'
 import { placeReserve, settleTaskCharge } from '@repo/billing/testing'
 import { createPrismaClient, type PrismaClient, type User } from '@repo/db'
-import { legalDocuments, Money } from '@repo/domain'
+import { legalDocuments, Money, signupGiftCredits } from '@repo/domain'
 import { YookassaApiError, type Payment, type YookassaClient } from '@repo/yookassa'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -209,6 +209,8 @@ const entry = (patch: Partial<UsageHistoryPageDto['items'][number]> = {}) => ({
   ...patch,
 })
 const TAKEN = { allowed: true, reason: null } as const
+/** The gift of the registration: 50 credits since 06.11.2026 (docs/plan/63-new-pricing.md, Ц5). */
+const GIFT = signupGiftCredits
 /** What a database without a credit rate answers about every task. */
 const NO_RATE = { allowed: false, reason: 'rate_missing' } as const
 const noTariff: UsageSummaryDto = {
@@ -229,10 +231,10 @@ const noTariff: UsageSummaryDto = {
 /** What a user without a workspace reads: no tariff and the gift they are promised. */
 const promised: UsageSummaryDto = {
   ...noTariff,
-  gift: { left: 35, held: 0, granted: false },
-  totalLeft: 35,
-  spendable: 35,
-  spendableNow: 35,
+  gift: { left: GIFT, held: 0, granted: false },
+  totalLeft: GIFT,
+  spendable: GIFT,
+  spendableNow: GIFT,
   newTask: TAKEN,
 }
 /** «Бизнес» of this file, 20 tariff credits a day: one task charged 5 and one holding 14 today. */
@@ -249,7 +251,20 @@ const onTariff = (): UsageSummaryDto => ({
     pastDueSince: null,
   },
   tariff: {
-    credits: { granted: 80, charged: 17, held: 14, expired: 4, left: 45, heldEarlier: 9 },
+    // 20 carried from the period before and 80 granted; 45 left, all of them within the 80 a
+    // renewal would carry.
+    credits: {
+      carried: 20,
+      granted: 80,
+      charged: 37,
+      held: 14,
+      expired: 4,
+      left: 45,
+      heldEarlier: 9,
+      carryLimit: 80,
+      carryNext: 45,
+      burnNext: 0,
+    },
     today: busyDay,
     sites: { count: 2, max: 3 },
     bySite: [{ siteId: randomUUID(), name: 'Пекарня «Добро»', credits: 21 }],
@@ -339,13 +354,13 @@ describe('billing.usage', () => {
       packOnSale: null,
       subscription: null,
       tariff: null,
-      gift: { left: 35, held: 0, granted: false },
+      gift: { left: GIFT, held: 0, granted: false },
       pack: { left: 0, held: 0 },
-      totalLeft: 35,
+      totalLeft: GIFT,
       history: noPage,
       // The first task would be taken on the gift that is promised.
-      spendable: 35,
-      spendableNow: 35,
+      spendable: GIFT,
+      spendableNow: GIFT,
       setAside: 0,
       minToStart: 5,
       today: null,
@@ -365,8 +380,8 @@ describe('billing.usage', () => {
     db.creditRate.findFirst.mockResolvedValue(null)
 
     expect(await createCaller(context(prisma)).billing.usage()).toMatchObject({
-      gift: { left: 35, held: 0, granted: false },
-      spendable: 35,
+      gift: { left: GIFT, held: 0, granted: false },
+      spendable: GIFT,
       newTask: NO_RATE,
     })
     // The rate is asked about the moment of the request.
@@ -488,6 +503,18 @@ describe('billing.usage', () => {
       'credits of an ended period counted into the period',
       (usage: UsageSummaryDto) => {
         usage.tariff!.credits.held += usage.tariff!.credits.heldEarlier
+      },
+    ],
+    [
+      'a carry the period leaves out',
+      (usage: UsageSummaryDto) => {
+        usage.tariff!.credits.carried = 0
+      },
+    ],
+    [
+      'a renewal that would carry more than the quota of the period',
+      (usage: UsageSummaryDto) => {
+        usage.tariff!.credits.carryLimit = 40
       },
     ],
     [
@@ -648,21 +675,24 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
     return { user: owner, caller, shop }
   }
 
-  /** A tariff of the seeds (`pnpm db:seed`): the tests put no tariff of their own on sale. */
+  /**
+   * A tariff of the seeds (`pnpm db:seed`): the tests put no tariff of their own on sale. No
+   * tariff of the seeds limits the day since 06.11.2026 (plan 63, Ц6); a day it had would be
+   * read here all the same (`dayOf`).
+   */
   async function seeded(slug: 'start' | 'business') {
     const row = await db.plan.findFirst({ where: { slug, kind: 'quota', isActive: true } })
     if (row === null || row.maxSites === null || row.creditsPerMonth === null) {
       throw new Error(`The tariff «${slug}» is not on sale in this database: apply the seeds`)
     }
-    if (row.creditsPerDay === null) {
-      throw new Error(`The tariff «${slug}» has no daily limit in this database: apply the seeds`)
-    }
-    return {
-      ...row,
-      maxSites: row.maxSites,
-      creditsPerMonth: row.creditsPerMonth,
-      creditsPerDay: row.creditsPerDay,
-    }
+    return { ...row, maxSites: row.maxSites, creditsPerMonth: row.creditsPerMonth }
+  }
+
+  /** The tariff credits of the Moscow day as the summary tells them, of `free` tariff credits. */
+  const dayOf = (limit: number | null, charged: number, held: number, free: number) => {
+    const used = charged + held
+    const room = limit === null ? null : Math.max(0, limit - used)
+    return { limit, charged, held, used, room, left: room === null ? free : Math.min(room, free) }
   }
 
   /** Pays for the tariff the way the customer does: checkout, the payment page, the return. */
@@ -735,14 +765,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
     const tariff = await seeded('business')
 
     const subscription = await subscribe(paying, 'business')
-    const freshDay = {
-      limit: tariff.creditsPerDay,
-      charged: 0,
-      held: 0,
-      used: 0,
-      room: tariff.creditsPerDay,
-      left: tariff.creditsPerDay,
-    }
+    const freshDay = dayOf(tariff.creditsPerDay, 0, 0, tariff.creditsPerMonth)
 
     expect(await paying.caller.billing.usage()).toEqual({
       paymentsEnabled: true,
@@ -751,26 +774,31 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
       subscription,
       tariff: {
         // Read from the ledger: the order of the payment carries the start of its period.
+        // Nothing carried into a first period; all of it would carry at the renewal.
         credits: {
+          carried: 0,
           granted: tariff.creditsPerMonth,
           charged: 0,
           held: 0,
           expired: 0,
           left: tariff.creditsPerMonth,
           heldEarlier: 0,
+          carryLimit: tariff.creditsPerMonth,
+          carryNext: tariff.creditsPerMonth,
+          burnNext: 0,
         },
         today: freshDay,
         sites: { count: 0, max: tariff.maxSites },
         bySite: [],
       },
       // The gift the checkout granted with the workspace, beside the quota.
-      gift: { left: 35, held: 0, granted: true },
+      gift: { left: GIFT, held: 0, granted: true },
       pack: { left: 0, held: 0 },
-      totalLeft: tariff.creditsPerMonth + 35,
+      totalLeft: tariff.creditsPerMonth + GIFT,
       history: noPage,
-      spendable: tariff.creditsPerMonth + 35,
-      // Of the tariff no more than the day gives; the gift is outside the day.
-      spendableNow: tariff.creditsPerDay + 35,
+      spendable: tariff.creditsPerMonth + GIFT,
+      // Of the tariff no more than the day gives, if it has a day; the gift is outside the day.
+      spendableNow: freshDay.left + GIFT,
       setAside: 0,
       minToStart: 5,
       today: freshDay,
@@ -815,29 +843,26 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
     const quota = tariff.creditsPerMonth
     expect(usage.tariff).toMatchObject({
       credits: {
+        carried: 0,
         granted: quota,
         charged: 22,
         held: 45,
         expired: 0,
         left: quota - 67,
         heldEarlier: 0,
+        carryLimit: quota,
+        carryNext: quota - 67,
+        burnNext: 0,
       },
       // The day took the 22 charged and the 45 still set aside, all of the tariff.
-      today: {
-        limit: tariff.creditsPerDay,
-        charged: 22,
-        held: 45,
-        used: 67,
-        room: tariff.creditsPerDay - 67,
-        left: tariff.creditsPerDay - 67,
-      },
+      today: dayOf(tariff.creditsPerDay, 22, 45, quota - 67),
       sites: { count: 1, max: tariff.maxSites },
       bySite: [{ siteId: bakery.id, name: 'Пекарня «Добро»', credits: 22 }],
     })
     // The tasks took credits of the tariff; the gift of the registration is untouched.
-    expect(usage.gift).toEqual({ left: 35, held: 0, granted: true })
-    expect(usage.totalLeft).toBe(quota - 67 + 35)
-    expect(usage).toMatchObject({ spendable: quota - 67 + 35, setAside: 45 })
+    expect(usage.gift).toEqual({ left: GIFT, held: 0, granted: true })
+    expect(usage.totalLeft).toBe(quota - 67 + GIFT)
+    expect(usage).toMatchObject({ spendable: quota - 67 + GIFT, setAside: 45 })
     expect(
       usage.history.items.map(({ id, outcome, credits, task }) => [
         id,

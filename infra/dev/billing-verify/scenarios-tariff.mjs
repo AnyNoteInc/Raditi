@@ -114,7 +114,8 @@ scenarios['auto-renewal'] = async (t) => {
     ),
     ['billing.auto_renewal.cancel', 'billing.auto_renewal.consent', 'billing.auto_renewal.resume'],
   )
-  await ledgerHolds(t, on.workspaceId, { tariff: CREDITS.start, pack: 0 }, 'on again: ')
+  // Renewed with nothing spent: the quota of the period that ended is carried beside the new one.
+  await ledgerHolds(t, on.workspaceId, { tariff: 2 * CREDITS.start, pack: 0 }, 'on again: ')
 
   // Paid without the consent, then switched on: a card is bound first, on the page of the shop.
   const bound = await subscribed(t, { autoRenew: false })
@@ -293,7 +294,7 @@ scenarios['auto-renewal-without-consent'] = async (t) => {
     () => orderByKey(t, ended.key),
     'paid',
   )
-  await ledgerHolds(t, workspaceId, { tariff: CREDITS.start, pack: 0 })
+  await ledgerHolds(t, workspaceId, { tariff: 2 * CREDITS.start, pack: 0 })
 
   const stopped = await customer.mutate('billing.cancelAutoRenew', {})
   t.equal(
@@ -396,7 +397,7 @@ scenarios['payment-method'] = async (t) => {
   // The renewal charges the new card.
   const ended = await periodEnded(t, subscription.id)
   await orderBecomes(t, 'the renewal is paid', () => orderByKey(t, ended.key), 'paid')
-  await ledgerHolds(t, workspaceId, { tariff: CREDITS.start, pack: 0 }, 'after the renewal: ')
+  await ledgerHolds(t, workspaceId, { tariff: 2 * CREDITS.start, pack: 0 }, 'after the renewal: ')
   t.equal(
     'the one charge named the new card, never the replaced one',
     (await t.shop.charges()).map(({ body }) => body.payment_method_id),
@@ -497,16 +498,13 @@ scenarios['past-due-expires'] = async (t) => {
     'the rest of the tariff expired; the purchased credits are where they were',
     [journal(accounts.credit_tariff).at(-1), journal(accounts.credit_pack)],
     [
-      {
-        kind: 'expire',
-        amount: '-300.00',
-        key: `sub:${subscription.id}:${ended.end.getTime()}:expire`,
-      },
+      journalRow.expired(subscription, ended.end),
       [{ kind: 'grant', amount: '100.00', key: `order:${pack.orderId}:pack` }],
     ],
   )
   // The rule of a tariff that ends unpaid, on the three accounts: what is available of the
-  // tariff expires; the gift stays and can be spent; the pack stays and waits for a tariff.
+  // tariff expires, and nothing is carried — the tariff ended; the gift stays and can be spent;
+  // the pack stays and waits for a tariff.
   t.equal(
     'a tariff unpaid for seven days: the rest of its quota expired, the gift and the pack are the one grant each',
     await journalsOf(t, workspaceId),
@@ -521,7 +519,7 @@ scenarios['past-due-expires'] = async (t) => {
     status: 'expired',
     reason: 'past_due_grace',
     periodEnd: iso(ended.end),
-    expiredCredits: 300,
+    expiredCredits: CREDITS.start,
     packCreditsLeft: 100,
     notified: true,
   })
@@ -546,7 +544,7 @@ scenarios['past-due-expires'] = async (t) => {
       'not_paid',
       null,
       0,
-      { balance: 35, held: 0, available: 35, granted: true },
+      { balance: CREDITS.gift, held: 0, available: CREDITS.gift, granted: true },
       { balance: 100, held: 0, available: 100 },
     ],
   )
@@ -563,12 +561,17 @@ scenarios['past-due-expires'] = async (t) => {
   t.equal(
     '«Использование» keeps the gift and the hundred purchased credits',
     [usage.subscription, usage.gift, usage.pack, usage.totalLeft],
-    [null, { left: 35, held: 0, granted: true }, { left: 100, held: 0 }, 135],
+    [
+      null,
+      { left: CREDITS.gift, held: 0, granted: true },
+      { left: 100, held: 0 },
+      CREDITS.gift + CREDITS.pack,
+    ],
   )
   t.equal(
-    'of those 135 a task could spend the 35 of the gift: the pack waits for a tariff',
+    'of those 150 a task could spend the 50 of the gift: the pack waits for a tariff',
     [usage.spendable, overview.credits.spendable],
-    [35, 35],
+    [CREDITS.gift, CREDITS.gift],
   )
   t.equal(
     'an expired tariff cannot be paid for by hand any more; the declined charge was the only one',
@@ -631,15 +634,12 @@ scenarios['unlink-at-bank'] = async (t) => {
     ],
     ['active', periodAfter(ended), null, true],
   )
-  const accounts = await ledgerHolds(t, workspaceId, { tariff: CREDITS.start, pack: 0 })
+  // A renewal all the same: the quota of the period that ended is carried beside the new one.
+  const accounts = await ledgerHolds(t, workspaceId, { tariff: 2 * CREDITS.start, pack: 0 })
   t.equal(
-    'the quota of the renewed month is granted once',
-    journal(accounts.credit_tariff).at(-1),
-    {
-      kind: 'grant',
-      amount: '300.00',
-      key: `order:${renewal.id}:grant`,
-    },
+    'the old quota is carried and the quota of the renewed month is granted, once each',
+    journal(accounts.credit_tariff).slice(-2),
+    [journalRow.carried(subscription, ended.end), journalRow.quota(renewal)],
   )
   const overview = await customer.query('billing.overview')
   t.equal(
@@ -725,7 +725,7 @@ scenarios['unanswered-then-unlink'] = async (t) => {
     [renewed.payment_method_id, renewed.cancel_at_period_end],
     [null, true],
   )
-  await ledgerHolds(t, told.workspaceId, { tariff: CREDITS.start, pack: 0 }, 'notified: ')
+  await ledgerHolds(t, told.workspaceId, { tariff: 2 * CREDITS.start, pack: 0 }, 'notified: ')
   await periodEnded(t, told.subscription.id)
   await subscriptionBecomes(
     t,
@@ -785,7 +785,7 @@ scenarios['unanswered-then-unlink'] = async (t) => {
       waiting.stdout.includes(
         `заказ ${givenUp.id} (оплата не прошла) · платёж ${silent.payment.id}`,
       ) &&
-      waiting.stdout.includes('к возврату 4900.00 ₽ из 4900.00 ₽') &&
+      waiting.stdout.includes('к возврату 1990.00 ₽ из 1990.00 ₽') &&
       waiting.stdout.includes('как вернуть: в кабинете ЮKassa') &&
       !waiting.stdout.includes('Списания без ответа'),
     waiting,

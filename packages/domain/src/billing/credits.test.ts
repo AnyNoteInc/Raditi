@@ -12,6 +12,7 @@ import {
   creditsSchema,
   dailyTariffCredits,
   emptyCreditAccount,
+  carriedTariffCredits,
   expiringTariffCredits,
   maxTaskAttempts,
   minContinueCredits,
@@ -25,6 +26,8 @@ import {
   tariffHoldCreatedAt,
   toCredits,
   trialUnpaidWorkCredits,
+  unpaidWorkLimit,
+  unpaidWorkShareOfMonth,
   type CreditAccounts,
   type CreditAccountSnapshot,
   type CreditAmountValue,
@@ -232,10 +235,33 @@ describe('the numbers of the model that no text prints', () => {
     expect(maxTaskAttempts).toBe(3)
   })
 
-  it('bounds the unpaid work of a workspace without a tariff at twice the gift', () => {
-    expect(trialUnpaidWorkCredits).toBe(70)
-    expect(trialUnpaidWorkCredits).toBe(2 * signupGiftCredits)
+  // The pricing of 06.11.2026 (docs/plan/63-new-pricing.md, Ц8, Ц9): both bounds are half of
+  // what they were — the month of a tariff and twice the gift before.
+  it('bounds the unpaid work of a workspace without a tariff at the gift itself', () => {
+    expect(trialUnpaidWorkCredits).toBe(50)
+    expect(trialUnpaidWorkCredits).toBe(signupGiftCredits)
   })
+
+  it('bounds the unpaid work of a paid tariff at half its month, rounded down', () => {
+    expect(unpaidWorkShareOfMonth).toBe(0.5)
+    // «Старт», «Бизнес» and «Агентство» of 06.11.2026.
+    expect([150, 600, 2000].map(unpaidWorkLimit)).toEqual([75, 300, 1000])
+    expect([2, 3, 151, 2501].map(unpaidWorkLimit)).toEqual([1, 1, 75, 1250])
+  })
+
+  it('never bounds the unpaid work of a plan with credits below one', () => {
+    // Half of 1 rounded down is 0, and at 0 not even the first task of the period would start.
+    expect(unpaidWorkLimit(1)).toBe(1)
+  })
+
+  it.each([0, -150, 150.5, Number.NaN, 10 ** 13])(
+    'refuses %s as the monthly credits of a plan',
+    (credits) => {
+      expect(() => unpaidWorkLimit(credits)).toThrow(
+        expect.objectContaining({ name: 'DomainError', code: 'BAD_REQUEST' }),
+      )
+    },
+  )
 
   // 45 + 120 + 120 credits: a new task, and two retries in the stronger mode.
   it('lets one task reserve 285 credits at most over its attempts', () => {
@@ -567,6 +593,53 @@ describe('expiringTariffCredits', () => {
     const tariff = account(30, 4)
     const all = allAccounts(tariff, account(10, 1), account(35, 2))
     expect(expiringTariffCredits(tariff)).toBe(availableCredits(all).tariff)
+  })
+})
+
+describe('carriedTariffCredits', () => {
+  it.each([
+    ['an untouched quota carries whole', account(600), 600, 600],
+    ['a partly spent quota carries what is left', account(120), 600, 120],
+    ['held credits are not carried', account(120, 20), 600, 100],
+    [
+      'no more than the quota of the period: the rest of the old carry expires',
+      account(700),
+      600,
+      600,
+    ],
+    ['a quota smaller than the old one bounds the carry', account(500, 10), 150, 150],
+    ['nothing available carries nothing', account(5, 5), 600, 0],
+    ['a period without a quota carries nothing', account(30), 0, 0],
+  ])('%s', (_name, tariff, granted, expected) => {
+    expect(carriedTariffCredits(tariff, toCredits(granted))).toBe(expected)
+  })
+
+  it('carries no more than what expires, and what burns is the rest of it', () => {
+    for (const [tariff, granted] of [
+      [account(700, 3), 600],
+      [account(40), 600],
+      [account(0), 600],
+      [account(2000), 2000],
+    ] as const) {
+      const carried = carriedTariffCredits(tariff, toCredits(granted))
+      const expiring = expiringTariffCredits(tariff)
+      expect(carried).toBeLessThanOrEqual(expiring)
+      expect(carried).toBeLessThanOrEqual(granted)
+      expect(expiring - carried).toBe(Math.max(0, expiring - granted))
+    }
+  })
+
+  it.each([
+    ['a fraction', 1.5],
+    ['a negative count', -1],
+    ['NaN', Number.NaN],
+    ['a string', '600'],
+  ])('refuses %s as the quota', (_name, granted) => {
+    expect(() => carriedTariffCredits(account(10), granted as Credits)).toThrow(badRequest)
+  })
+
+  it('refuses a broken account', () => {
+    expect(() => carriedTariffCredits(account(1, 2), toCredits(5))).toThrow(badRequest)
   })
 })
 

@@ -2,6 +2,7 @@ import { lockUserRow, type CreditLedger, type LedgerKind } from '@repo/db'
 import {
   billingNoLiveSubscription,
   billingOrderNotFound,
+  carriedTariffCredits,
   conflict,
   creditAccountUnits,
   expiringTariffCredits,
@@ -9,7 +10,9 @@ import {
   Money,
   notFound,
   signupGiftCredits,
+  toCredits,
   type CreditAccountKind,
+  type Credits,
   type OrderKind,
   type SubscriptionStatus,
 } from '@repo/domain'
@@ -33,9 +36,19 @@ export const ledgerKeys = {
   tariffGrant: (orderId: string) => `order:${orderId}:grant`,
   /** The credits of a paid pack order. */
   packGrant: (orderId: string) => `order:${orderId}:pack`,
-  /** What was left of the tariff quota when the period ended. */
+  /**
+   * What was available on the tariff account when the period ended: all of it expires, and at a
+   * renewal the part that is carried comes back under `tariffCarry`.
+   */
   tariffExpiry: (subscriptionId: string, periodEnd: Date) =>
     `sub:${subscriptionId}:${periodEnd.getTime()}:expire`,
+  /**
+   * What a renewal carried from the period that ended into the next one (decision of 06.11.2026,
+   * docs/plan/63-new-pricing.md, §2): a `grant` that no order paid for. The key names the period
+   * the credits come from, as the expiry beside it does.
+   */
+  tariffCarry: (subscriptionId: string, periodEnd: Date) =>
+    `sub:${subscriptionId}:${periodEnd.getTime()}:carry`,
   /**
    * What a chain of attempts of a task is charged on one account, from the credits the account
    * has for it at the moment of the charge: one row per chain — named by its first attempt — and
@@ -51,7 +64,8 @@ export const ledgerKeys = {
   holdCharge: (holdId: string) => `hold:${holdId}:charge`,
   /**
    * The tariff credits of such a reserve that its task did not use, or gave back: they are not
-   * carried over.
+   * carried over — what a period carries is decided when it ends, from the credits available
+   * then, and these were held.
    */
   holdExpiry: (holdId: string) => `hold:${holdId}:expire`,
   /** The credits an operator took off the account when returning the payment of a pack. */
@@ -89,6 +103,17 @@ const expirySchema = z.strictObject({
   periodEnd: z.date(),
 })
 export type TariffExpiry = z.infer<typeof expirySchema>
+
+/** What became of the tariff credits that were available when a period ended. */
+export interface TariffPeriodEnd {
+  /** The `expire` row of all of them; null when none were available. */
+  expired: LedgerPosting | null
+  /**
+   * The `grant` row, without an order, of the part carried into the next period; null when
+   * nothing was carried — the tariff ended, nothing was available, or the period had no quota.
+   */
+  carried: LedgerPosting | null
+}
 
 const signupGiftSchema = z.strictObject({
   /** Whose gift it is: a user gets one, whatever workspaces they have. */
@@ -306,9 +331,15 @@ async function lockSubscriptionPeriod(
   tx: Pick<BillingTx, '$queryRaw'>,
   workspaceId: string,
   subscriptionId: string,
-): Promise<{ status: SubscriptionStatus; currentPeriodEnd: Date } | undefined> {
-  const [row] = await tx.$queryRaw<{ status: SubscriptionStatus; currentPeriodEnd: Date }[]>`
-    SELECT status::text AS status, current_period_end AS "currentPeriodEnd" FROM subscriptions
+): Promise<
+  { status: SubscriptionStatus; currentPeriodStart: Date; currentPeriodEnd: Date } | undefined
+> {
+  const [row] = await tx.$queryRaw<
+    { status: SubscriptionStatus; currentPeriodStart: Date; currentPeriodEnd: Date }[]
+  >`
+    SELECT status::text AS status, current_period_start AS "currentPeriodStart",
+      current_period_end AS "currentPeriodEnd"
+    FROM subscriptions
     WHERE id = ${subscriptionId}::uuid AND workspace_id = ${workspaceId}::uuid
     FOR NO KEY UPDATE
   `
@@ -316,42 +347,130 @@ async function lockSubscriptionPeriod(
 }
 
 /**
- * Expires what is left of the tariff quota when its period ends: the available credits only
- * (`balance − held`). Held credits stay until their hold is captured or released; gift and
- * purchased credits never expire, and their accounts are neither locked nor read here. Returns
- * null when there was nothing to expire — no account, or nothing available — and writes nothing
- * then.
+ * The quota the period that starts at `periodStart` was granted on the tariff account: the
+ * `grant` rows of the orders that paid for it — the order whose `period_start` is the start of
+ * the period, as «Использование» finds it. Zero when no order paid for it: a period whose dates
+ * were changed by hand.
+ */
+async function periodQuota(
+  tx: Pick<BillingTx, '$queryRaw'>,
+  account: LockedCreditAccount,
+  periodStart: Date,
+): Promise<Credits> {
+  const [row] = await tx.$queryRaw<{ granted: string }[]>`
+    SELECT COALESCE(SUM(l.amount), 0)::text AS granted
+    FROM credit_ledger l
+    JOIN orders o ON o.id = l.order_id
+    WHERE l.account_id = ${account.id}::uuid AND l.kind = 'grant'
+      AND o.period_start = ${periodStart}::timestamptz
+  `
+  return toCredits(row?.granted ?? 0)
+}
+
+/**
+ * Closes the tariff credits of a period that ends: every available credit (`balance − held`)
+ * expires; with `carry` — a renewal — the part `carriedTariffCredits` allows comes back as a
+ * `grant` without an order. Held credits stay until their hold is captured or released; gift and
+ * purchased credits never expire, and their accounts are neither locked nor read here.
  *
- * Call it before the subscription is moved to its next period or closed, in the transaction
- * that does so. A period with nothing available leaves no row and so no key, therefore the
- * subscription itself says whether the period is still open: credits expire only while it is
- * live and `periodEnd` is its `current_period_end`. A repeat after the period moved on or the
- * subscription ended returns the row of the first time, or null when there was none, and never
- * touches the quota granted since. A subscription the workspace does not have is refused with
- * BILLING_NO_LIVE_SUBSCRIPTION. Locks the subscription row, then the tariff account: a
+ * A period with nothing available leaves no row and so no key, therefore the subscription
+ * itself says whether the period is still open: credits expire only while it is live and
+ * `periodEnd` is its `current_period_end`. A repeat after the period moved on or the
+ * subscription ended returns the rows of the first time, or nulls when there were none, and
+ * never touches the quota granted since. A subscription the workspace does not have is refused
+ * with BILLING_NO_LIVE_SUBSCRIPTION. Locks the subscription row, then the tariff account: a
  * transaction that locks the subscription as well does it before any account.
+ */
+async function closeTariffPeriod(
+  tx: BillingTx,
+  { workspaceId, subscriptionId, periodEnd }: TariffExpiry,
+  carry: boolean,
+): Promise<TariffPeriodEnd> {
+  const nothing = { expired: null, carried: null }
+  const subscription = await lockSubscriptionPeriod(tx, workspaceId, subscriptionId)
+  if (subscription === undefined) throw billingNoLiveSubscription()
+  const account = await lockCreditAccount(tx, workspaceId, 'tariff')
+  if (account === null) return nothing
+  const expiryKey = ledgerKeys.tariffExpiry(subscriptionId, periodEnd)
+  const carryKey = ledgerKeys.tariffCarry(subscriptionId, periodEnd)
+  const expiry = await posted(tx, expiryKey, { account, kind: 'expire' })
+  if (expiry) {
+    // Both rows are written together, so the first time is told by the expiry alone.
+    const carry = await posted(tx, carryKey, { account, kind: 'grant' })
+    return {
+      expired: { entry: expiry, applied: false },
+      carried: carry === null ? null : { entry: carry, applied: false },
+    }
+  }
+  const periodIsOpen =
+    isLiveSubscription(subscription.status) &&
+    subscription.currentPeriodEnd.getTime() === periodEnd.getTime()
+  if (!periodIsOpen) return nothing
+  const credits = expiringTariffCredits(account.snapshot)
+  if (credits === 0) return nothing
+  const carriedCredits = carry
+    ? carriedTariffCredits(
+        account.snapshot,
+        await periodQuota(tx, account, subscription.currentPeriodStart),
+      )
+    : 0
+  const expired = await post(tx, {
+    account,
+    kind: 'expire',
+    amount: new Money(credits).negated(),
+    orderId: null,
+    idempotencyKey: expiryKey,
+  })
+  if (carriedCredits === 0) return { expired: { entry: expired, applied: true }, carried: null }
+  const carried = await post(tx, {
+    account,
+    kind: 'grant',
+    amount: new Money(carriedCredits),
+    orderId: null,
+    idempotencyKey: carryKey,
+  })
+  return { expired: { entry: expired, applied: true }, carried: { entry: carried, applied: true } }
+}
+
+/**
+ * Expires what is left of the tariff quota when the tariff ends with its period — it is not
+ * renewed, its grace is over, or an operator ends it with a refund: the available credits only
+ * (`balance − held`), and nothing is carried. Held credits stay until their hold is captured or
+ * released; gift and purchased credits never expire, and their accounts are neither locked nor
+ * read here. Returns null when there was nothing to expire — no account, or nothing available —
+ * and writes nothing then.
+ *
+ * Call it before the subscription is closed, in the transaction that does so; a renewal calls
+ * `carryTariffRemainder` instead. The rest is that of `closeTariffPeriod`: a repeat returns the
+ * row of the first time, or null when there was none; a subscription the workspace does not
+ * have is refused with BILLING_NO_LIVE_SUBSCRIPTION; the subscription row is locked before the
+ * tariff account.
  */
 export async function expireTariffRemainder(
   tx: BillingTx,
   input: TariffExpiry,
 ): Promise<LedgerPosting | null> {
-  const { workspaceId, subscriptionId, periodEnd } = expirySchema.parse(input)
-  const subscription = await lockSubscriptionPeriod(tx, workspaceId, subscriptionId)
-  if (subscription === undefined) throw billingNoLiveSubscription()
-  const account = await lockCreditAccount(tx, workspaceId, 'tariff')
-  if (account === null) return null
-  const idempotencyKey = ledgerKeys.tariffExpiry(subscriptionId, periodEnd)
-  const entry = await posted(tx, idempotencyKey, { account, kind: 'expire' })
-  if (entry) return { entry, applied: false }
-  const periodIsOpen =
-    isLiveSubscription(subscription.status) &&
-    subscription.currentPeriodEnd.getTime() === periodEnd.getTime()
-  if (!periodIsOpen) return null
-  const credits = expiringTariffCredits(account.snapshot)
-  if (credits === 0) return null
-  const amount = new Money(credits).negated()
-  return {
-    entry: await post(tx, { account, kind: 'expire', amount, orderId: null, idempotencyKey }),
-    applied: true,
-  }
+  const { expired } = await closeTariffPeriod(tx, expirySchema.parse(input), false)
+  return expired
+}
+
+/**
+ * Ends the period of the tariff credits at a renewal — a paid renewal or a payment of an overdue
+ * tariff: the subscription goes on into a next period. All the available credits expire under
+ * `sub:<subscriptionId>:<periodEndMs>:expire`, and the part that stays (`carriedTariffCredits`:
+ * no more than the quota the period that ended was granted) is granted back under
+ * `sub:<subscriptionId>:<periodEndMs>:carry`, without an order. So each row names the period it
+ * comes from — «Использование» counts the carry in the period after the one in its key, the
+ * period its renewal opened — and what is lost in fact is the difference: what was left of the
+ * carry of the period before, which has lived its one period.
+ *
+ * Call it before the subscription is moved to its next period, in the transaction that does so
+ * and grants the next quota. Once per period, like `expireTariffRemainder`: a repeat returns the
+ * rows of the first time and writes nothing; the locks are the same.
+ */
+export async function carryTariffRemainder(
+  tx: BillingTx,
+  input: TariffExpiry,
+): Promise<TariffPeriodEnd> {
+  return closeTariffPeriod(tx, expirySchema.parse(input), true)
 }

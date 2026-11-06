@@ -42,9 +42,9 @@ export interface LockedCreditAccount {
  * writes on it is serialized with the other writers of the account. null when the workspace has
  * no such account yet. A transaction that needs more than one account locks them in the order
  * of `creditAccountKinds` — the tariff, then the gift, then the pack — and one that locks the
- * subscription row too (`expireTariffRemainder`, `placeCreditHold`, `settleTaskCharge`,
- * `releaseTask`, `expireTaskHolds` and `extendTaskHolds` do) locks it before any of them; the
- * row of the user (`grantSignupGift`) is locked before all of these. One order for everyone, so
+ * subscription row too (`expireTariffRemainder`, `carryTariffRemainder`, `placeCreditHold`,
+ * `settleTaskCharge`, `releaseTask`, `expireTaskHolds` and `extendTaskHolds` do) locks it
+ * before any of them; the row of the user (`grantSignupGift`) is locked before all of these. One order for everyone, so
  * two of them never wait for each other.
  */
 export async function lockCreditAccount(

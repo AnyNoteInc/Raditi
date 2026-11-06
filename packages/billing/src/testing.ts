@@ -7,7 +7,7 @@ import {
   type PrismaClient,
   type TurnStatus,
 } from '@repo/db'
-import { creditAccountUnits, Money, type CreditAccountKind } from '@repo/domain'
+import { creditAccountUnits, Money, signupGiftCredits, type CreditAccountKind } from '@repo/domain'
 import {
   YookassaApiError,
   type CreatePaymentInput,
@@ -669,9 +669,14 @@ export const NO_GIFT = Object.freeze({ balance: 0, held: 0, available: 0, grante
 /**
  * The gift account of a workspace the product made — by a first site or by a checkout, both of
  * which grant the gift of the registration with it —, as `getCreditBalances` reports it while
- * nothing of the gift is spent or set aside.
+ * nothing of the gift is spent or set aside: `signupGiftCredits`, 50 since 06.11.2026.
  */
-export const GIFT_GRANTED = Object.freeze({ balance: 35, held: 0, available: 35, granted: true })
+export const GIFT_GRANTED = Object.freeze({
+  balance: signupGiftCredits,
+  held: 0,
+  available: signupGiftCredits,
+  granted: true,
+})
 
 /**
  * The credits of a workspace the product made, while nothing was paid for or nothing of what
@@ -681,7 +686,7 @@ export const GIFT_ONLY = Object.freeze({
   tariff: Object.freeze({ balance: 0, held: 0, available: 0 }),
   gift: GIFT_GRANTED,
   pack: Object.freeze({ balance: 0, held: 0, available: 0 }),
-  totalAvailable: 35,
+  totalAvailable: signupGiftCredits,
 })
 
 /** A moment the tests of checkout and settlement stand at. */

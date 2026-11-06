@@ -922,10 +922,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
     // The requests that raced for the workspace granted its gift once.
     expect(await giftOf(owner.id)).toEqual({
       workspaceIds: [workspaces[0]!.id],
-      granted: ['35.00'],
-      balance: '35.00',
+      granted: ['50.00'],
+      balance: '50.00',
       accounts: ['credit_gift', 'credit_pack', 'credit_tariff'],
-      audit: [{ userId: owner.id, credits: 35 }],
+      audit: [{ userId: owner.id, credits: 50 }],
     })
   })
 
@@ -937,10 +937,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
     const { workspaceId } = await db.site.findUniqueOrThrow({ where: { id: first.id } })
     const granted = {
       workspaceIds: [workspaceId],
-      granted: ['35.00'],
-      balance: '35.00',
+      granted: ['50.00'],
+      balance: '50.00',
       accounts: ['credit_gift', 'credit_pack', 'credit_tariff'],
-      audit: [{ userId: owner.id, credits: 35 }],
+      audit: [{ userId: owner.id, credits: 50 }],
     }
     expect(await giftOf(owner.id)).toEqual(granted)
 
@@ -964,7 +964,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
     expect(await giftOf(owner.id)).toEqual(noGift)
     // The site that goes through makes the workspace and grants the gift.
     await caller.project.create(input({ url: 'https://own.example.ru' }))
-    expect((await giftOf(owner.id)).granted).toEqual(['35.00'])
+    expect((await giftOf(owner.id)).granted).toEqual(['50.00'])
   })
 
   it('grants the gift to a workspace that was made before it, at its next site', async () => {
@@ -978,8 +978,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
 
     expect(await giftOf(owner.id)).toMatchObject({
       workspaceIds: [legacy.id],
-      granted: ['35.00'],
-      balance: '35.00',
+      granted: ['50.00'],
+      balance: '50.00',
     })
   })
 
@@ -1169,8 +1169,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL project ownership and concurrency', ()
       await caller.project.create(siteAt(2))
       expect(await giftOf(owner.id)).toMatchObject({
         workspaceIds: [workspaceId],
-        granted: ['35.00'],
-        balance: '35.00',
+        granted: ['50.00'],
+        balance: '50.00',
       })
     })
 

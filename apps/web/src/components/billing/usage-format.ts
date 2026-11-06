@@ -20,17 +20,24 @@ import { noticeText, RATE_PAUSE, taskNotice } from './task-notice'
 // they are.
 
 /**
- * What the quota of a period went to, as the billing router sends it: what was granted is what
- * was charged, what is set aside, what expired and what is left. `heldEarlier` stands beside
- * them: credits of the period before, still set aside for a task in work.
+ * What the credits of a period went to, as the billing router sends it: what was carried into it
+ * and granted for it is what was charged, what is set aside, what expired and what is left.
+ * Beside them: `heldEarlier` — credits of the period before, still set aside for a task in
+ * work —, and what the next renewal would do with `left` if nothing more were spent: carry
+ * `carryNext` of it — no more than `carryLimit`, the quota of this period — and let `burnNext`
+ * expire.
  */
 export interface TariffCredits {
+  carried: number
   granted: number
   charged: number
   held: number
   expired: number
   left: number
   heldEarlier: number
+  carryLimit: number
+  carryNext: number
+  burnNext: number
 }
 
 /** What the page needs to know about the tariff to say what comes next. */
@@ -62,21 +69,32 @@ export function creditsLeftWords(count: number): string {
 }
 
 // What the quota still holds is «осталось» while the period runs. The period of a tariff that
-// is not paid for is over (`periodOver`): what it did not use is not carried over, so it is
-// «не использовано», not something the customer has left.
+// is not paid for is over (`periodOver`): what it did not use cannot be spent until the payment,
+// which carries it on up to the quota, so it is «не использовано», not something the customer
+// has left.
+
+/** The credits of the tariff in the period: carried into it and granted for it. */
+export const tariffCreditsOfPeriod = ({ carried, granted }: TariffCredits): number =>
+  carried + granted
 
 /**
- * The accessible name of the tariff meter: every number its legend shows, in one sentence.
- * What expired is said only when something did — credits of this period that are gone without
- * a charge, or that an operator took off the account.
+ * The accessible name of the tariff meter: every number its legend shows, in one sentence, and
+ * what of the whole came from the month before. What expired is said only when something did —
+ * credits of this period that are gone without a charge, or that an operator took off the
+ * account.
  */
-export function tariffMeterLabel(
-  { granted, charged, held, expired, left }: TariffCredits,
-  periodOver: boolean,
-): string {
+export function tariffMeterLabel(credits: TariffCredits, periodOver: boolean): string {
+  const { carried, charged, held, expired, left } = credits
+  const whole = tariffCreditsOfPeriod(credits)
   const rest = periodOver ? 'не использовано' : 'осталось'
   const gone = expired > 0 ? `, ${formatCount(expired)} сгорело` : ''
-  return `Из ${formatCount(granted)} ${creditsOf(granted)} по тарифу: ${formatCount(charged)} списано, ${formatCount(held)} отложено под задачи в работе, ${formatCount(left)} ${rest}${gone}`
+  const before = carried > 0 ? ` (в том числе ${formatCount(carried)} с прошлого месяца)` : ''
+  return `Из ${formatCount(whole)} ${creditsOf(whole)} по тарифу${before}: ${formatCount(charged)} списано, ${formatCount(held)} отложено под задачи в работе, ${formatCount(left)} ${rest}${gone}`
+}
+
+/** «Перенесено с прошлого месяца — 120»: under the heading of the tariff, when anything was. */
+export function carriedEntry(carried: number): string {
+  return `Перенесено с прошлого месяца — ${formatCount(carried)}`
 }
 
 /** «Осталось — 45»: the entry of the tariff legend for what the quota still holds. */
@@ -101,18 +119,58 @@ export function heldEarlierNote(heldEarlier: number): string {
   return `Ещё ${formatCount(heldEarlier)} ${creditsWord(heldEarlier)} прошлого периода ${setAside} под задачу в работе. Что не уйдёт на неё, в новый период не перейдёт.`
 }
 
+/**
+ * What becomes of the tariff credits left when a renewal comes (decision of 06.11.2026): they
+ * pass into the new month, no more than the quota of this one — and what is beyond it expires
+ * unless it is spent first. Empty when the period had no quota to carry up to.
+ *
+ * What is beyond the quota is the rest of the carry of the month before only while nothing but
+ * the carry stands above it: credits are spent from the carried ones first, so with no credits
+ * an operator added (`granted` is the quota, `carryLimit`) what expires is exactly what is left
+ * of the carry. Credits an operator added are beyond the quota as well and were never carried;
+ * then the sentence speaks of the rest beyond the quota, which is always true.
+ */
+function carryOver({ carried, granted, carryLimit, burnNext }: TariffCredits, day: string): string {
+  if (carryLimit === 0) return ''
+  const limit = formatCount(carryLimit)
+  const carry = ` Неистраченные кредиты тарифа перейдут на новый месяц — до ${limit}.`
+  if (burnNext === 0) return carry
+  const burn = `${formatCount(burnNext)} ${creditsWord(burnNext)}`
+  const them = plural(burnNext, 'его', 'их', 'их')
+  const of =
+    carried > 0 && granted === carryLimit
+      ? 'Из перенесённых с прошлого месяца'
+      : `Из остатка сверх ${limit}`
+  return `${carry} ${of} ${plural(burnNext, 'сгорит', 'сгорят', 'сгорят')} ${burn}, если не потратить ${them} до ${day}.`
+}
+
+/**
+ * What the payment of an overdue tariff brings: new credits, and the credits left of the period
+ * that ended pass into the new month up to its quota — the rest expires. While the tariff is not
+ * paid nothing is spent, so the numbers are those of the payment.
+ */
+function afterPayment({ left, carryNext }: TariffCredits): string {
+  if (left === 0) return 'Новые кредиты начислим после оплаты.'
+  const fresh = 'После оплаты начислим новые кредиты'
+  if (carryNext === 0) return `${fresh}, а неиспользованные кредиты тарифа сгорят.`
+  if (carryNext === left) {
+    const unused = `${plural(left, 'неиспользованный', 'неиспользованных', 'неиспользованных')} ${creditsWord(left)}`
+    return `${fresh}, а ${formatCount(left)} ${unused} тарифа ${plural(left, 'перейдёт', 'перейдут', 'перейдут')} на новый месяц.`
+  }
+  // After «из» the count of one takes another form: «из 21 неиспользованного кредита».
+  const ofUnused = `${plural(left, 'неиспользованного', 'неиспользованных', 'неиспользованных')} ${creditsOf(left)}`
+  return `${fresh}, а из ${formatCount(left)} ${ofUnused} тарифа на новый месяц ${plural(carryNext, 'перейдёт', 'перейдут', 'перейдут')} ${formatCount(carryNext)}, остальные сгорят.`
+}
+
 /** What happens to the tariff credits when the period ends. */
-export function tariffNote({
-  status,
-  periodEnd,
-  autoRenewal,
-  nextPlan,
-  changes,
-}: TariffState): string {
+export function tariffNote(
+  { status, periodEnd, autoRenewal, nextPlan, changes }: TariffState,
+  credits: TariffCredits,
+): string {
   const day = formatMoscowDay(periodEnd)
   const quota = nextPlan.creditsPerMonth
   if (status === 'past_due') {
-    return `Период тарифа закончился ${day}. Новые кредиты начислим после оплаты, остаток прошлого периода не переносится.`
+    return `Период тарифа закончился ${day}. ${afterPayment(credits)}`
   }
   if (!autoRenewal) {
     return `Тариф действует до ${day} и не продлится. Остаток по тарифу после этого сгорит.`
@@ -120,7 +178,7 @@ export function tariffNote({
   const grant = changes
     ? `${day} начислим ${formatCount(quota)} ${creditsWord(quota)} по тарифу «${nextPlan.name}».`
     : `${day} начислим новые ${formatCount(quota)}.`
-  return `${grant} Остаток по тарифу на новый период не переносится.`
+  return `${grant}${carryOver(credits, day)}`
 }
 
 /** « Ещё 5 отложено под задачи в работе.»: credits of an account that tasks have set aside. */

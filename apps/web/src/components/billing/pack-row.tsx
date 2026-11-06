@@ -12,9 +12,18 @@ import { packOffer } from './plan-format'
 
 /**
  * The pack of credits on sale, as a row under the tariffs: its name and price, what it gives,
- * and the button that opens its dialog. Drawn only for a customer who may buy it.
+ * and the button that opens its dialog. Drawn only for a customer who may buy it. `dayLimited`:
+ * some tariff on sale has a daily limit, which the pack is of use against.
  */
-export function PackRow({ pack, onBuy }: { pack: PackOffer; onBuy: () => void }) {
+export function PackRow({
+  pack,
+  dayLimited,
+  onBuy,
+}: {
+  pack: PackOffer
+  dayLimited: boolean
+  onBuy: () => void
+}) {
   return (
     <Box
       sx={{
@@ -37,7 +46,7 @@ export function PackRow({ pack, onBuy }: { pack: PackOffer; onBuy: () => void })
           {nbsp(`${pack.name} — ${formatRubles(pack.price)} ₽`)}
         </Typography>
         <Typography variant="body2" color="textSecondary" sx={{ mt: 0.5 }}>
-          {nbsp(packOffer(pack.credits))}
+          {nbsp(packOffer(pack, dayLimited))}
         </Typography>
       </Box>
       <Button variant="outlined" onClick={onBuy}>

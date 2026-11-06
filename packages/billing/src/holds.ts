@@ -285,7 +285,7 @@ interface LiveSubscription {
 /**
  * The live subscription of the workspace, locked until the transaction ends, or null when none
  * is live. Whoever ends or renews its period takes the same lock first
- * (`expireTariffRemainder`), so a reserve is placed or given back either wholly before the
+ * (`expireTariffRemainder`, `carryTariffRemainder`), so a reserve is placed or given back either wholly before the
  * period moves or wholly after it, and never reads one period while it writes into the next.
  * NO KEY: orders that refer to the subscription are not held up.
  */
@@ -690,10 +690,10 @@ async function placementFacts(
  *    owner, 19.10.2026): its tariff part is bounded by the free tariff credits alone, and what it
  *    holds counts on the day it is placed on for the placements after it;
  * 4. unpaid work, for a new task, a retry and the next words: what the workspace got without a
- *    charge since the
- *    start of its paid period against the monthly credits of the plan —
- *    BILLING_UNPAID_WORK_LIMIT —, without a paid tariff since the end of its last tariff
- *    against `trialUnpaidWorkCredits` — BILLING_TASK_NEEDS_SUBSCRIPTION;
+ *    charge since the start of its paid period against `unpaidWorkLimit` of the plan — half its
+ *    monthly credits (docs/plan/63-new-pricing.md, Ц8) — BILLING_UNPAID_WORK_LIMIT —, without a
+ *    paid tariff since the end of its last tariff against `trialUnpaidWorkCredits` —
+ *    BILLING_TASK_NEEDS_SUBSCRIPTION;
  * 5. without a paid tariff, the gift of the site: one site spends gift credits in one workspace
  *    only (`gift_site_claims`) — BILLING_TASK_NEEDS_SUBSCRIPTION.
  *
@@ -844,7 +844,7 @@ export async function placeCreditHold(
     // is active past the end of its period until the renewal is settled, the credits on the
     // account are then still those of the period that ended, and a row placed in that time is
     // stamped with its last millisecond — or its credits would pass for those of the next
-    // period and be carried over. Gift and pack credits belong to no period and keep the moment.
+    // period. Gift and pack credits belong to no period and keep the moment.
     const createdAt =
       part.account === 'tariff' && subscription !== null
         ? tariffHoldCreatedAt(placedAt, subscription)

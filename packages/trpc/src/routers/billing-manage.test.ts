@@ -1216,7 +1216,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL management of a tariff through the rou
     })
     // Nothing changes today: the tariff, the credits and the list of what is on sale.
     expect((await caller.billing.plans()).plans.find((plan) => plan.current)?.slug).toBe('start')
-    expect((await caller.billing.overview()).credits.tariff.available).toBe(300)
+    expect((await caller.billing.overview()).credits.tariff.available).toBe(
+      (await seeded('start')).creditsPerMonth,
+    )
     // The letter before the charge has to be written again, with the new amount.
     expect((await subscriptionOf(paying)).renewalNoticePeriodEnd).toBeNull()
     await expect(caller.billing.schedulePlanChange({ planSlug: 'business' })).rejects.toMatchObject(
@@ -1426,18 +1428,24 @@ describe.skipIf(!databaseUrl)('PostgreSQL management of a tariff through the rou
     const paying = await account()
     const { caller, shop } = paying
     const { subscription } = await subscribe(paying, { autoRenew: true })
-    // The renewal charge of the period was declined a day ago.
+    // The renewal charge of the period was declined a day ago. The period and the order that
+    // paid for it move together, as a stand moves time.
+    const periodStart = new Date('2026-09-03T09:00:00.000Z')
     const periodEnd = new Date('2026-10-03T09:00:00.000Z')
     const since = new Date('2026-10-03T09:05:00.000Z')
     await db.subscription.update({
       where: { id: subscription.id },
       data: {
         status: 'past_due',
-        currentPeriodStart: new Date('2026-09-03T09:00:00.000Z'),
+        currentPeriodStart: periodStart,
         currentPeriodEnd: periodEnd,
-        periodAnchor: new Date('2026-09-03T09:00:00.000Z'),
+        periodAnchor: periodStart,
         pastDueSince: since,
       },
+    })
+    await db.order.updateMany({
+      where: { subscriptionId: subscription.id },
+      data: { periodStart, periodEnd },
     })
 
     const overdue = await caller.billing.overview()
@@ -1471,10 +1479,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL management of a tariff through the rou
         pastDueSince: null,
       },
     })
+    // Nothing of the period that ended was spent: all of it is carried — no more than its quota
+    // — beside the quota of the paid month.
     expect(await caller.billing.overview()).toMatchObject({
       subscription: order.subscription,
       pastDueEndsAt: null,
-      credits: { tariff: { available: 300 } },
+      credits: { tariff: { available: 2 * ((await seeded('start')).creditsPerMonth ?? 0) } },
     })
     expect(await subscriptionOf(paying)).toMatchObject({
       periodAnchor: paidAt,
@@ -1490,7 +1500,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL management of a tariff through the rou
       (await caller.billing.payments({})).items.map(({ status, period }) => [status, period?.end]),
     ).toEqual([
       ['paid', new Date('2026-11-04T11:00:00.000Z')],
-      ['paid', subscription.period.end],
+      ['paid', periodEnd],
     ])
   })
 

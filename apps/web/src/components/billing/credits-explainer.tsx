@@ -80,12 +80,19 @@ function Scrollable({ label, children }: { label: string; children: ReactNode })
 
 /**
  * «Как считаются кредиты», collapsed under the tariffs: what a credit is, what a request
- * usually costs, what the customer is promised, what the daily limit counts and how often the
- * calculation may change — and, one level deeper, «Точный расчёт»: the conversion the charge is
- * counted by. `conversion` is the table the server sends; without one — no credit rate is
- * usable — «Точный расчёт» is not shown at all.
+ * usually costs, what the customer is promised, what the daily limit counts — only while a
+ * tariff on sale has one (`dayLimited`) — and how often the calculation may change — and, one
+ * level deeper, «Точный расчёт»: the conversion the charge is counted by. `conversion` is the
+ * table the server sends; without one — no credit rate is usable — «Точный расчёт» is not shown
+ * at all.
  */
-export function CreditsExplainer({ conversion }: { conversion: CreditConversion | null }) {
+export function CreditsExplainer({
+  conversion,
+  dayLimited,
+}: {
+  conversion: CreditConversion | null
+  dayLimited: boolean
+}) {
   const exact = exactCalculation(conversion)
   return (
     <Box component="details" sx={{ mt: 2 }}>
@@ -141,7 +148,7 @@ export function CreditsExplainer({ conversion }: { conversion: CreditConversion 
           ))}
         </Box>
 
-        <Paragraph>{nbsp(DAY_RULE)}</Paragraph>
+        {dayLimited ? <Paragraph>{nbsp(DAY_RULE)}</Paragraph> : null}
         <Paragraph>{nbsp(REVISION_RULE)}</Paragraph>
 
         {exact ? (

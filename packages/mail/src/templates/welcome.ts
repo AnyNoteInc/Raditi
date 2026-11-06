@@ -5,8 +5,8 @@ import { button, greeting, layout, p, textLayout } from './layout.ts'
 import type { MailData, RenderedEmail } from './schemas.ts'
 
 /**
- * «Мы дарим вам 35 кредитов, чтобы попробовать: их хватит на семь небольших правок или на
- * две-три задачи побольше.» The gift of the registration, by the constant of the domain: it is
+ * «Мы дарим вам 50 кредитов, чтобы попробовать: их хватит на десять небольших правок или на
+ * три-пять задач побольше.» The gift of the registration, by the constant of the domain: it is
  * granted with the personal workspace, which the first site makes.
  */
 export function signupGiftLine(credits: number = signupGiftCredits): string {

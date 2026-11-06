@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 
 import { ensureAccounts, lockCreditAccount, type BillingTx } from './accounts.ts'
 import {
+  carryTariffRemainder,
   expireTariffRemainder,
   giftAuditActions,
   grantPackCredits,
@@ -31,6 +32,10 @@ describe('ledger keys', () => {
     expect(ledgerKeys.tariffExpiry(SUBSCRIPTION, new Date('2026-10-18T09:00:00.000Z'))).toBe(
       `sub:${SUBSCRIPTION}:1792314000000:expire`,
     )
+    // What a renewal carried of it into the next period: named by the period it comes from.
+    expect(ledgerKeys.tariffCarry(SUBSCRIPTION, new Date('2026-10-18T09:00:00.000Z'))).toBe(
+      `sub:${SUBSCRIPTION}:1792314000000:carry`,
+    )
     // One charge per chain and account, whatever attempts of the chain reserved there: the chain
     // is named by its first attempt (a task is charged pass by pass, 26.10.2026).
     expect(ledgerKeys.taskCharge(TASK, 3, ACCOUNT)).toBe(`task:${TASK}:3:charge:${ACCOUNT}`)
@@ -49,6 +54,7 @@ describe('ledger keys', () => {
       ledgerKeys.tariffGrant(ORDER),
       ledgerKeys.packGrant(ORDER),
       ledgerKeys.tariffExpiry(ORDER, new Date(0)),
+      ledgerKeys.tariffCarry(ORDER, new Date(0)),
       ledgerKeys.taskCharge(ORDER, 1, ORDER),
       ledgerKeys.taskCharge(ORDER, 1, ACCOUNT),
       ledgerKeys.taskCharge(ACCOUNT, 1, ORDER),
@@ -108,6 +114,24 @@ describe('ledger input', () => {
     ).rejects.toThrow()
     await expect(
       expireTariffRemainder(tx, { ...input, periodEnd: '2026-10-18' as unknown as Date }),
+    ).rejects.toThrow()
+  })
+
+  it('refuses a carry for a period end that is not a moment, or with an unknown field', async () => {
+    const input = { workspaceId: WORKSPACE, subscriptionId: SUBSCRIPTION }
+    for (const periodEnd of [undefined, new Date(Number.NaN), '2026-10-18']) {
+      await expect(
+        carryTariffRemainder(tx, { ...input, periodEnd } as unknown as Parameters<
+          typeof carryTariffRemainder
+        >[1]),
+      ).rejects.toThrow()
+    }
+    await expect(
+      carryTariffRemainder(tx, {
+        ...input,
+        periodEnd: new Date(),
+        credits: 30,
+      } as unknown as Parameters<typeof carryTariffRemainder>[1]),
     ).rejects.toThrow()
   })
 
@@ -755,6 +779,313 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
     await expectBalancesToMatchLedger(workspaceId)
   })
 
+  describe('the carry of a renewal (decision of 06.11.2026)', () => {
+    /**
+     * A workspace on an active tariff whose current period was paid by an order of that period,
+     * with `credits` granted for it: what a renewal finds the quota of the ending period by.
+     */
+    async function onTariff(credits: number) {
+      const { workspaceId } = await fixtures.workspace()
+      const plan = await fixtures.plan({ creditsPerMonth: credits })
+      const subscription = await fixtures.subscription({ workspaceId, planId: plan.id })
+      const order = await fixtures.order({
+        workspaceId,
+        planId: plan.id,
+        periodStart: subscription.currentPeriodStart,
+        periodEnd: subscription.currentPeriodEnd,
+      })
+      await db.$transaction((tx) =>
+        grantTariffCredits(tx, { workspaceId, orderId: order.id, credits }),
+      )
+      return {
+        workspaceId,
+        plan,
+        subscriptionId: subscription.id,
+        periodEnd: subscription.currentPeriodEnd,
+      }
+    }
+
+    /**
+     * What a renewal does in one transaction: the remainder is carried and expires, the
+     * subscription moves on, the quota of the next period comes with the order that paid for it.
+     */
+    const renewCarrying = async (renewal: {
+      workspaceId: string
+      planId: string
+      subscriptionId: string
+      periodEnd: Date
+      credits: number
+    }) => {
+      const { workspaceId, planId, subscriptionId, periodEnd, credits } = renewal
+      const next = { start: periodEnd, end: new Date(periodEnd.getTime() + PERIOD_MS) }
+      const order = await fixtures.order({
+        workspaceId,
+        planId,
+        periodStart: next.start,
+        periodEnd: next.end,
+      })
+      return db.$transaction(async (tx) => {
+        const ended = await carryTariffRemainder(tx, {
+          workspaceId,
+          subscriptionId,
+          periodEnd,
+        })
+        await tx.subscription.update({
+          where: { id: subscriptionId },
+          data: { currentPeriodStart: next.start, currentPeriodEnd: next.end },
+        })
+        const granted = await grantTariffCredits(tx, { workspaceId, orderId: order.id, credits })
+        return { ...ended, granted, next }
+      })
+    }
+
+    const byKey = async (key: string) =>
+      db.creditLedger.findUnique({ where: { idempotencyKey: key } })
+
+    it('expires what is available and carries it back up to the quota, under the key of the period that ended', async () => {
+      const { workspaceId, subscriptionId, periodEnd } = await onTariff(30)
+      await spend(workspaceId, 10)
+      await fixtures.hold(workspaceId, 'tariff', 2)
+      const ended = await db.$transaction((tx) =>
+        carryTariffRemainder(tx, { workspaceId, subscriptionId, periodEnd }),
+      )
+
+      // 30 − 10 spent − 2 held: 18 are available, all of them within the quota of 30.
+      expect(ended).toMatchObject({
+        expired: {
+          applied: true,
+          entry: {
+            unit: 'credit_tariff',
+            kind: 'expire',
+            orderId: null,
+            idempotencyKey: ledgerKeys.tariffExpiry(subscriptionId, periodEnd),
+          },
+        },
+        carried: {
+          applied: true,
+          entry: {
+            unit: 'credit_tariff',
+            kind: 'grant',
+            orderId: null,
+            idempotencyKey: ledgerKeys.tariffCarry(subscriptionId, periodEnd),
+          },
+        },
+      })
+      expect(ended.expired!.entry.amount.toFixed(2)).toBe('-18.00')
+      expect(ended.expired!.entry.balanceAfter.toFixed(2)).toBe('2.00')
+      expect(ended.carried!.entry.amount.toFixed(2)).toBe('18.00')
+      expect(ended.carried!.entry.balanceAfter.toFixed(2)).toBe('20.00')
+      // The held credits stay for their hold, outside the carry.
+      expect((await accounts(workspaceId)).tariff).toEqual({ balance: '20.00', held: '2.00' })
+      await expectBalancesToMatchLedger(workspaceId)
+
+      // Played again in the same period, and after the period moved on: the rows of the first
+      // time, nothing written.
+      const again = () =>
+        db.$transaction((tx) =>
+          carryTariffRemainder(tx, { workspaceId, subscriptionId, periodEnd }),
+        )
+      const repeated = {
+        expired: { entry: ended.expired!.entry, applied: false },
+        carried: { entry: ended.carried!.entry, applied: false },
+      }
+      expect(await again()).toEqual(repeated)
+      await db.subscription.update({
+        where: { id: subscriptionId },
+        data: {
+          currentPeriodStart: periodEnd,
+          currentPeriodEnd: new Date(periodEnd.getTime() + PERIOD_MS),
+        },
+      })
+      expect(await again()).toEqual(repeated)
+      // The end of the tariff for the same period answers with the same expiry, and carries
+      // nothing more.
+      expect(
+        await db.$transaction((tx) =>
+          expireTariffRemainder(tx, { workspaceId, subscriptionId, periodEnd }),
+        ),
+      ).toEqual(repeated.expired)
+      expect((await accounts(workspaceId)).tariff).toEqual({ balance: '20.00', held: '2.00' })
+      await expectBalancesToMatchLedger(workspaceId)
+    })
+
+    it('lets the rest of the old carry expire at the next boundary: a carry lives one period', async () => {
+      const { workspaceId, plan, subscriptionId, periodEnd } = await onTariff(30)
+
+      // Nothing spent in the first period: all 30 carry, and 30 new come.
+      const first = await renewCarrying({
+        workspaceId,
+        planId: plan.id,
+        subscriptionId,
+        periodEnd,
+        credits: 30,
+      })
+      expect(first.expired!.entry.amount.toNumber()).toBe(-30)
+      expect(first.carried!.entry.amount.toNumber()).toBe(30)
+      expect((await accounts(workspaceId)).tariff).toEqual({ balance: '60.00', held: '0.00' })
+
+      // 10 spent in the second period — of the carried ones, the older —, 50 left: only up to
+      // the 30 of the second period's quota carry, the other 20 are what was left of the first
+      // carry and expire.
+      await spend(workspaceId, 10)
+      const second = await renewCarrying({
+        workspaceId,
+        planId: plan.id,
+        subscriptionId,
+        periodEnd: first.next.end,
+        credits: 30,
+      })
+      expect(second.expired!.entry.amount.toNumber()).toBe(-50)
+      expect(second.carried!.entry.amount.toNumber()).toBe(30)
+      expect(second.carried!.entry.idempotencyKey).toBe(
+        ledgerKeys.tariffCarry(subscriptionId, first.next.end),
+      )
+      expect((await accounts(workspaceId)).tariff).toEqual({ balance: '60.00', held: '0.00' })
+
+      // A third boundary with nothing spent: 60 available, 30 carry, 30 expire.
+      const third = await renewCarrying({
+        workspaceId,
+        planId: plan.id,
+        subscriptionId,
+        periodEnd: second.next.end,
+        credits: 30,
+      })
+      expect(third.expired!.entry.amount.toNumber()).toBe(-60)
+      expect(third.carried!.entry.amount.toNumber()).toBe(30)
+      expect((await accounts(workspaceId)).tariff).toEqual({ balance: '60.00', held: '0.00' })
+      await expectBalancesToMatchLedger(workspaceId)
+    })
+
+    it('carries no more than the quota of the period that ended, whatever the next plan grants', async () => {
+      const { workspaceId, subscriptionId, periodEnd } = await onTariff(30)
+      const bigger = await fixtures.plan({ creditsPerMonth: 100 })
+      const smaller = await fixtures.plan({ creditsPerMonth: 10 })
+
+      // Onto a smaller plan: the 30 of the old quota carry, not 10.
+      const first = await renewCarrying({
+        workspaceId,
+        planId: smaller.id,
+        subscriptionId,
+        periodEnd,
+        credits: 10,
+      })
+      expect(first.carried!.entry.amount.toNumber()).toBe(30)
+      expect((await accounts(workspaceId)).tariff).toEqual({ balance: '40.00', held: '0.00' })
+
+      // Back onto a bigger one: of the 40 left only the 10 of the smaller period carry.
+      const second = await renewCarrying({
+        workspaceId,
+        planId: bigger.id,
+        subscriptionId,
+        periodEnd: first.next.end,
+        credits: 100,
+      })
+      expect(second.expired!.entry.amount.toNumber()).toBe(-40)
+      expect(second.carried!.entry.amount.toNumber()).toBe(10)
+      expect((await accounts(workspaceId)).tariff).toEqual({ balance: '110.00', held: '0.00' })
+      await expectBalancesToMatchLedger(workspaceId)
+    })
+
+    it('carries nothing of a period no order paid for, and expires what is available', async () => {
+      // An order without the period it paid for: the quota of the period cannot be told.
+      const { workspaceId, orderId, subscriptionId, periodEnd } = await paid()
+      await db.$transaction((tx) => grantTariffCredits(tx, { workspaceId, orderId, credits: 30 }))
+
+      const ended = await db.$transaction((tx) =>
+        carryTariffRemainder(tx, {
+          workspaceId,
+          subscriptionId,
+          periodEnd,
+        }),
+      )
+
+      expect(ended.carried).toBeNull()
+      expect(ended.expired?.entry.amount.toNumber()).toBe(-30)
+      expect(await byKey(ledgerKeys.tariffCarry(subscriptionId, periodEnd))).toBeNull()
+      expect((await accounts(workspaceId)).tariff).toEqual({ balance: '0.00', held: '0.00' })
+    })
+
+    it('writes nothing when nothing is available, and carries nothing of a period that is not the current one', async () => {
+      const held = await onTariff(3)
+      await fixtures.hold(held.workspaceId, 'tariff', 3)
+      const carry = (tariff: typeof held, end: Date) =>
+        db.$transaction((tx) =>
+          carryTariffRemainder(tx, {
+            workspaceId: tariff.workspaceId,
+            subscriptionId: tariff.subscriptionId,
+            periodEnd: end,
+          }),
+        )
+      // Everything on the account is held.
+      expect(await carry(held, held.periodEnd)).toEqual({ expired: null, carried: null })
+      expect(await entries(held.workspaceId)).toHaveLength(1)
+
+      // Not the end of the current period: nothing, whatever is available.
+      const free = await onTariff(30)
+      for (const end of [-PERIOD_MS, PERIOD_MS, -1, 1]) {
+        expect(await carry(free, new Date(free.periodEnd.getTime() + end))).toEqual({
+          expired: null,
+          carried: null,
+        })
+      }
+      expect((await accounts(free.workspaceId)).tariff).toEqual({ balance: '30.00', held: '0.00' })
+      expect(await entries(free.workspaceId)).toHaveLength(1)
+    })
+
+    it('carries once when the same renewal runs concurrently', async () => {
+      const { workspaceId, subscriptionId, periodEnd } = await onTariff(30)
+      await spend(workspaceId, 4)
+      const carry = { workspaceId, subscriptionId, periodEnd }
+
+      const results = await Promise.all(
+        Array.from({ length: 6 }, () => db.$transaction((tx) => carryTariffRemainder(tx, carry))),
+      )
+
+      expect(results.filter((result) => result.expired?.applied)).toHaveLength(1)
+      expect(results.filter((result) => result.carried?.applied)).toHaveLength(1)
+      expect(results.every((result) => result.carried?.entry.amount.toNumber() === 26)).toBe(true)
+      expect((await accounts(workspaceId)).tariff).toEqual({ balance: '26.00', held: '0.00' })
+      expect((await entries(workspaceId)).map((row) => row.kind).sort()).toEqual([
+        'charge',
+        'expire',
+        'grant',
+        'grant',
+      ])
+      await expectBalancesToMatchLedger(workspaceId)
+    })
+
+    it('expires the carry with the rest when the tariff ends: nothing is carried then', async () => {
+      const { workspaceId, plan, subscriptionId, periodEnd } = await onTariff(30)
+      const first = await renewCarrying({
+        workspaceId,
+        planId: plan.id,
+        subscriptionId,
+        periodEnd,
+        credits: 30,
+      })
+      await spend(workspaceId, 5)
+
+      // The second period is not renewed: the 55 left, carried ones and the quota alike, expire.
+      const expired = await db.$transaction(async (tx) => {
+        const posting = await expireTariffRemainder(tx, {
+          workspaceId,
+          subscriptionId,
+          periodEnd: first.next.end,
+        })
+        await tx.subscription.update({
+          where: { id: subscriptionId },
+          data: { status: 'cancelled' },
+        })
+        return posting
+      })
+
+      expect(expired?.entry.amount.toNumber()).toBe(-55)
+      expect(await byKey(ledgerKeys.tariffCarry(subscriptionId, first.next.end))).toBeNull()
+      expect((await accounts(workspaceId)).tariff).toEqual({ balance: '0.00', held: '0.00' })
+      await expectBalancesToMatchLedger(workspaceId)
+    })
+  })
+
   it('leaves no trace of a grant whose transaction is rolled back', async () => {
     const { workspaceId, orderId } = await paid()
     await expect(
@@ -821,15 +1152,15 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
         where: { workspaceId: { in: workspaceIds }, action: giftAuditActions.grant },
       })
 
-    it('is the 35 credits of the design, on the gift account, with no order behind it', async () => {
+    it('is the 50 credits of the pricing of 06.11.2026, on the gift account, with no order behind it', async () => {
       const { userId, workspaceId } = await fixtures.workspace()
       const posting = await gift(userId, workspaceId)
 
-      expect(signupGiftCredits).toBe(35)
+      expect(signupGiftCredits).toBe(50)
       expect(posting.applied).toBe(true)
       expect(await accounts(workspaceId)).toEqual({
         tariff: { balance: '0.00', held: '0.00' },
-        gift: { balance: '35.00', held: '0.00' },
+        gift: { balance: '50.00', held: '0.00' },
         pack: { balance: '0.00', held: '0.00' },
         count: 3,
       })
@@ -843,8 +1174,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
         note: null,
         idempotencyKey: `user:${userId}:signup-gift`,
       })
-      expect(rows[0]!.amount.toFixed(2)).toBe('35.00')
-      expect(rows[0]!.balanceAfter.toFixed(2)).toBe('35.00')
+      expect(rows[0]!.amount.toFixed(2)).toBe('50.00')
+      expect(rows[0]!.balanceAfter.toFixed(2)).toBe('50.00')
       await expectBalancesToMatchLedger(workspaceId)
 
       const account = await db.billingAccount.findUniqueOrThrow({
@@ -860,7 +1191,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
         action: 'billing.gift.grant',
         targetType: 'billing_account',
         targetId: account.id,
-        meta: { userId, credits: 35 },
+        meta: { userId, credits: 50 },
         ip: null,
       })
     })
@@ -890,7 +1221,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
 
       expect(postings.filter((posting) => posting.applied)).toHaveLength(1)
       expect(new Set(postings.map((posting) => posting.entry.id)).size).toBe(1)
-      expect((await accounts(workspaceId)).gift).toEqual({ balance: '35.00', held: '0.00' })
+      expect((await accounts(workspaceId)).gift).toEqual({ balance: '50.00', held: '0.00' })
       expect(await entries(workspaceId)).toHaveLength(1)
       expect(await giftAudit([workspaceId])).toHaveLength(1)
       await expectBalancesToMatchLedger(workspaceId)
@@ -903,7 +1234,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
 
       expect(postings.filter((posting) => posting.applied)).toHaveLength(1)
       expect(new Set(postings.map((posting) => posting.entry.id)).size).toBe(1)
-      expect((await accounts(workspaceId)).gift).toEqual({ balance: '35.00', held: '0.00' })
+      expect((await accounts(workspaceId)).gift).toEqual({ balance: '50.00', held: '0.00' })
       expect(await entries(workspaceId)).toHaveLength(1)
       expect(await giftAudit([workspaceId])).toHaveLength(1)
     })
@@ -920,7 +1251,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
       expect(await accounts(second)).toEqual({ tariff: null, gift: null, pack: null, count: 0 })
       expect(await entries(second)).toEqual([])
       expect(await giftAudit([workspaceId, second])).toHaveLength(1)
-      expect((await accounts(workspaceId)).gift).toEqual({ balance: '35.00', held: '0.00' })
+      expect((await accounts(workspaceId)).gift).toEqual({ balance: '50.00', held: '0.00' })
 
       // Nor when the second workspace already has its accounts.
       await db.$transaction((tx) => ensureAccounts(tx, second))
@@ -946,7 +1277,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
       const rows = [...(await entries(workspaceId)), ...(await entries(second))]
       expect(rows.map((row) => row.id)).toEqual([postings[0]!.entry.id])
       const balances = [(await accounts(workspaceId)).gift, (await accounts(second)).gift]
-      expect(balances.filter((account) => account?.balance === '35.00')).toHaveLength(1)
+      expect(balances.filter((account) => account?.balance === '50.00')).toHaveLength(1)
       expect(balances.filter((account) => (account?.balance ?? '0.00') === '0.00')).toHaveLength(1)
       expect(await giftAudit([workspaceId, second])).toHaveLength(1)
     })
@@ -984,7 +1315,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
 
       expect(postings.map((posting) => posting.applied)).toEqual([true, true])
       for (const { workspaceId } of [one, other]) {
-        expect((await accounts(workspaceId)).gift).toEqual({ balance: '35.00', held: '0.00' })
+        expect((await accounts(workspaceId)).gift).toEqual({ balance: '50.00', held: '0.00' })
         await expectBalancesToMatchLedger(workspaceId)
       }
     })
@@ -1008,7 +1339,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
       expect(await others()).toEqual(before)
       expect(await accounts(workspaceId)).toEqual({
         tariff: { balance: '30.00', held: '0.00' },
-        gift: { balance: '35.00', held: '0.00' },
+        gift: { balance: '50.00', held: '0.00' },
         pack: { balance: '10.00', held: '0.00' },
         count: 3,
       })
@@ -1136,7 +1467,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
 
       const { workspaceId, posting } = await create(false)
       expect(posting.applied).toBe(true)
-      expect((await accounts(workspaceId)).gift).toEqual({ balance: '35.00', held: '0.00' })
+      expect((await accounts(workspaceId)).gift).toEqual({ balance: '50.00', held: '0.00' })
       expect(await giftAudit([workspaceId])).toHaveLength(1)
       // Whether or not the workspace is new, the call is safe.
       expect((await create(false)).posting).toEqual({ entry: posting.entry, applied: false })
@@ -1161,7 +1492,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
       )
       expect(await accounts(workspaceId)).toMatchObject({
         tariff: { balance: '0.00', held: '0.00' },
-        gift: { balance: '35.00', held: '0.00' },
+        gift: { balance: '50.00', held: '0.00' },
       })
       await expectBalancesToMatchLedger(workspaceId)
     })

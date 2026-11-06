@@ -47,6 +47,11 @@ describe.skipIf(!enabled)('billing:rates with PostgreSQL', () => {
     expect(await db.llmModel.count({ where: { enabled: true } })).toBe(0)
     expect(await db.creditRate.count()).toBe(0)
   })
+
+  // The tariffs of the seed since 06.11.2026 (docs/plan/63-new-pricing.md, Ц1–Ц3): at 6.00 the
+  // credits of «Бизнес» and «Агентство» cost 51.5 and 60.0% of their price, so every rate of 6.00
+  // and more asks for --confirm-exposure; the cases that are not about it give it.
+  const CONFIRM = '--confirm-exposure'
   afterEach(async () => {
     await db.creditRate.deleteMany({ where: { basis: { startsWith: mark } } })
     await db.auditLog.deleteMany({
@@ -143,7 +148,7 @@ describe.skipIf(!enabled)('billing:rates with PostgreSQL', () => {
     })
     const before = Date.now()
 
-    const result = await script(args(file))
+    const result = await script(args(file, CONFIRM))
 
     expect(result.stderr).toBe('')
     expect(result.code).toBe(0)
@@ -177,7 +182,7 @@ describe.skipIf(!enabled)('billing:rates with PostgreSQL', () => {
           previousRubPerCredit: null,
           effectiveFrom: rate.effectiveFrom.toISOString(),
           prices: 2,
-          confirmExposure: false,
+          confirmExposure: true,
           confirmMixedModels: false,
         },
       },
@@ -205,11 +210,12 @@ describe.skipIf(!enabled)('billing:rates with PostgreSQL', () => {
       'На момент начала действующего курса нет. Новый курс — 6.000000 ₽ учётной стоимости за кредит.',
     ])
     expect(lines[3]).toContain(at)
-    // The plans of the seed at the shares of the plan.
-    expect(lines).toContain('  start (тариф): 300 кредитов — 1800.00 ₽, 36.7 % цены 4900.00 ₽')
-    expect(lines).toContain('  business (тариф): 800 кредитов — 4800.00 ₽, 37.2 % цены 12900.00 ₽')
-    expect(lines).toContain('  agency (тариф): 2500 кредитов — 15000.00 ₽, 37.6 % цены 39900.00 ₽')
-    expect(lines).toContain('  pack (пакет): 100 кредитов — 600.00 ₽, 30.2 % цены 1990.00 ₽')
+    // The plans of the seed at their shares, and the two above half of their price.
+    expect(lines).toContain('  start (тариф): 150 кредитов — 900.00 ₽, 45.2 % цены 1990.00 ₽')
+    expect(lines).toContain('  business (тариф): 600 кредитов — 3600.00 ₽, 51.5 % цены 6990.00 ₽')
+    expect(lines).toContain('  agency (тариф): 2000 кредитов — 12000.00 ₽, 60.0 % цены 19990.00 ₽')
+    expect(lines).toContain('  pack (пакет): 100 кредитов — 600.00 ₽, 40.3 % цены 1490.00 ₽')
+    expect(lines).toContain('Учётная стоимость выше половины цены у тарифов: business, agency.')
     expect(lines).toContain(
       'Шаги попытки при этом курсе (предел одного ключа хода — 750 ₽): light — 20 кредитов, 120.00 ₽; standard — 45 кредитов, 270.00 ₽; heavy — 120 кредитов, 720.00 ₽.',
     )
@@ -231,10 +237,10 @@ describe.skipIf(!enabled)('billing:rates with PostgreSQL', () => {
 
   it('changes the rate alone and tells the move from the rate in force', async () => {
     const sol = await fixtures.modelPool({ enabled: true })
-    const first = await command(args(ratesFile({ prices: [priced(sol)] })))
+    const first = await command(args(ratesFile({ prices: [priced(sol)] }), CONFIRM))
     expect(first.failure).toBeNull()
 
-    const second = await command(args(ratesFile({ rubPerCredit: '6.300000' })))
+    const second = await command(args(ratesFile({ rubPerCredit: '6.300000' }), CONFIRM))
 
     expect(second.failure).toBeNull()
     const { rates, prices, audit } = await stored([sol])
@@ -287,7 +293,7 @@ describe.skipIf(!enabled)('billing:rates with PostgreSQL', () => {
     // The numbers were printed before the refusal: what «строки выше» points at.
     expect(result.stdout).toContain(`Начало действия: ${moscow(new Date(yesterday))} `)
     expect(result.stdout).toContain(
-      '  start (тариф): 300 кредитов — 2700.00 ₽, 55.1 % цены 4900.00 ₽\n',
+      '  start (тариф): 150 кредитов — 1350.00 ₽, 67.8 % цены 1990.00 ₽\n',
     )
     expect(result.stdout).toContain(
       'Разные ставки у включённых моделей одного класса: standard. Одна и та же задача будет стоить разное число кредитов в зависимости от аккаунта пула.\n',
@@ -332,7 +338,7 @@ describe.skipIf(!enabled)('billing:rates with PostgreSQL', () => {
     const ahead = new Date(Date.now() + 86_400_000)
     ahead.setMilliseconds(0)
     const scheduled = await command(
-      args(ratesFile({ prices: [priced(sol)] }), '--effective-from', ahead.toISOString()),
+      args(ratesFile({ prices: [priced(sol)] }), '--effective-from', ahead.toISOString(), CONFIRM),
     )
     expect(scheduled.failure).toBeNull()
     expect((await stored()).rates.map((rate) => rate.effectiveFrom)).toEqual([ahead])
@@ -342,11 +348,16 @@ describe.skipIf(!enabled)('billing:rates with PostgreSQL', () => {
     // At the scheduled instant itself the history would not be one line.
     const notNewest = `- Момент начала не позже самой новой строки курса: она начинается ${moscow(ahead)} (${ahead.toISOString()}). Новая строка должна начинаться позже всех существующих: задайте --effective-from позже этого момента.`
     const same = await command(
-      args(ratesFile({ rubPerCredit: '6.100000' }), '--effective-from', ahead.toISOString()),
+      args(
+        ratesFile({ rubPerCredit: '6.100000' }),
+        '--effective-from',
+        ahead.toISOString(),
+        CONFIRM,
+      ),
     )
     expect(same.failure).toBe(`Курс и ставки не записаны.\n${notNewest}`)
     // And now a rate would be older than the price the model is to get tomorrow.
-    const now = await command(args(ratesFile({ rubPerCredit: '6.100000' })))
+    const now = await command(args(ratesFile({ rubPerCredit: '6.100000' }), CONFIRM))
     expect(now.failure).toBe(
       `Курс и ставки не записаны.\n${notNewest}\n- У включённой модели ${sol.provider}/${sol.model} есть ставка, которая начинается позже — ${moscow(ahead)} (${ahead.toISOString()}). Курс оказался бы старше этой ставки, и резервировать кредиты стало бы нельзя.`,
     )
@@ -354,7 +365,12 @@ describe.skipIf(!enabled)('billing:rates with PostgreSQL', () => {
 
     const later = new Date(ahead.getTime() + 1)
     const next = await command(
-      args(ratesFile({ rubPerCredit: '6.100000' }), '--effective-from', later.toISOString()),
+      args(
+        ratesFile({ rubPerCredit: '6.100000' }),
+        '--effective-from',
+        later.toISOString(),
+        CONFIRM,
+      ),
     )
     expect(next.failure).toBeNull()
     expect((await stored()).rates.map((rate) => rate.effectiveFrom)).toEqual([ahead, later])
@@ -366,14 +382,18 @@ describe.skipIf(!enabled)('billing:rates with PostgreSQL', () => {
 
     // JavaScript reads 31 November as 1 December. Written, the row would start on a day nobody
     // typed, and no later run could put a row before it: the table only grows.
-    const wrong = await script(args(file, '--effective-from', `${year}-11-31T00:00:00+03:00`))
+    const wrong = await script(
+      args(file, '--effective-from', `${year}-11-31T00:00:00+03:00`, CONFIRM),
+    )
 
     expect(wrong.code).toBe(1)
     expect(wrong.stdout).toBe('')
     expect(wrong.stderr).toBe('Неверные параметры команды биллинга. Используйте --help.\n')
     expect(await stored()).toEqual({ rates: [], prices: [], audit: [] })
 
-    const meant = await script(args(file, '--effective-from', `${year}-11-30T00:00:00+03:00`))
+    const meant = await script(
+      args(file, '--effective-from', `${year}-11-30T00:00:00+03:00`, CONFIRM),
+    )
     expect(meant.stderr).toBe('')
     expect(meant.code).toBe(0)
     expect((await stored()).rates.map((rate) => rate.effectiveFrom.toISOString())).toEqual([
@@ -410,7 +430,7 @@ describe.skipIf(!enabled)('billing:rates with PostgreSQL', () => {
   })
 
   it('counts the pack and gift credits of the workspaces and a tariff somebody still has', async () => {
-    const base = await command(args(ratesFile({})))
+    const base = await command(args(ratesFile({}), CONFIRM))
     expect(base.failure).toBeNull()
     const outstanding = (printed: string) => {
       const found =
@@ -447,8 +467,9 @@ describe.skipIf(!enabled)('billing:rates with PostgreSQL', () => {
     expect(next.printed).toContain(
       `  ${plan.slug} (тариф): 100 кредитов — 650.00 ₽, 65.0 % цены 1000.00 ₽\n`,
     )
+    // Beside the tariffs of the seed that are above half at 6.50 as well.
     expect(next.printed).toContain(
-      `Учётная стоимость выше половины цены у тарифов: ${plan.slug}.\n`,
+      `Учётная стоимость выше половины цены у тарифов: ${plan.slug}, business, agency.\n`,
     )
     const after = outstanding(next.printed)
     expect(after.pack - before.pack).toBe(240)

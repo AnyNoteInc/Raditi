@@ -5,6 +5,7 @@ import Button from '@mui/material/Button'
 import Typography from '@mui/material/Typography'
 
 import { formatCount } from '@/lib/count'
+import { smallEditPrice } from '@/lib/credit-price'
 import { nbsp } from '@/lib/nbsp'
 import { planDescription } from '@/lib/plan-description'
 import { formatRubles } from '@/lib/rubles'
@@ -90,6 +91,7 @@ export function PlanGrid({
         const marked = current || plan === suggested
         const averageTasks = planAverageTasks(plan.creditsPerMonth)
         const dailyLimit = planDailyLimit(plan.creditsPerDay)
+        const smallEdit = smallEditPrice(plan.price, plan.creditsPerMonth)
         const note = current
           ? overdue
             ? null
@@ -207,6 +209,7 @@ export function PlanGrid({
               </li>
               {averageTasks ? <li>{nbsp(averageTasks)}</li> : null}
               {dailyLimit ? <li>{nbsp(dailyLimit)}</li> : null}
+              {smallEdit ? <li>{nbsp(smallEdit)}</li> : null}
               <li>{nbsp(planSites(plan.maxSites))}</li>
             </Box>
             {note ? (

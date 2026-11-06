@@ -350,10 +350,10 @@ export async function storeOwnerToken(vault, token) {
  * A paid tariff «Агентство» for the current period, as a settled payment leaves it: the order,
  * the subscription and the credits of the period granted by `grantTariffCredits`. The money path
  * itself is `pnpm verify:billing`'s. The scenarios start ten dialogs (A–J), hold several of
- * them at once and retry one in `heavy` (120): more than the 300 tariff credits «Агентство» gives
- * a Moscow day (decision of 17.10.2026, D2). Two paid packs carry the rest, as a client goes on
- * the same day — pack credits are outside the day —, so every reserve is the full step of its
- * class; the day itself is `verify:billing`'s and the tests of @repo/billing.
+ * them at once and retry one in `heavy` (120); every reserve is the full step of its class. The
+ * two paid packs beside the tariff are left from the daily limit of 17.10.2026: tariffs have no
+ * daily limit since the pricing of 06.11.2026 (docs/plan/63-new-pricing.md, Ц6), and the packs
+ * change nothing.
  */
 export async function grantTariff({ db, billing }, { workspaceId, userId }) {
   const plan = await db.plan.findFirstOrThrow({ where: { slug: 'agency' } })

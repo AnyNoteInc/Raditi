@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import { createPrismaClient, type Prisma, type PrismaClient } from '@repo/db'
-import { creditAccountUnits } from '@repo/domain'
+import { creditAccountUnits, liveSubscriptionStatuses } from '@repo/domain'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { getCreditConversion } from './credit-conversion.ts'
@@ -113,12 +113,12 @@ describe('a file of rates', () => {
 
 describe('creditRatePreview', () => {
   const START = new Date('2026-10-11T09:00:00.000Z')
-  /** The tariffs and the pack of the seed. */
+  /** The tariffs and the pack of the seed: the pricing of 06.11.2026 (plan 63, Ц1–Ц4). */
   const PLANS = [
-    { slug: 'start', kind: 'quota', price: '4900.00', credits: 300 },
-    { slug: 'business', kind: 'quota', price: '12900.00', credits: 800 },
-    { slug: 'agency', kind: 'quota', price: '39900.00', credits: 2500 },
-    { slug: 'pack', kind: 'pack', price: '1990.00', credits: 100 },
+    { slug: 'start', kind: 'quota', price: '1990.00', credits: 150 },
+    { slug: 'business', kind: 'quota', price: '6990.00', credits: 600 },
+    { slug: 'agency', kind: 'quota', price: '19990.00', credits: 2000 },
+    { slug: 'pack', kind: 'pack', price: '1490.00', credits: 100 },
   ] as const
   const state = (patch: Partial<CreditRateState> = {}): CreditRateState => ({
     effectiveFrom: START,
@@ -135,30 +135,32 @@ describe('creditRatePreview', () => {
   it('counts the accounting cost behind every plan and its share of the price', () => {
     const preview = creditRatePreview(state())
 
-    // The figures of the plan: 1 800, 4 800 and 15 000 RUB; 36.7, 37.2 and 37.6%; the pack 30.2%.
+    // At 6.00: 900, 3 600 and 12 000 RUB; 45.2, 51.5 and 60.0%; the pack 40.3%. The credits of
+    // «Бизнес» and «Агентство» of 06.11.2026 cost more than half of their price at this rate.
     expect(shares(preview)).toEqual([
-      ['start', '1800.00', '36.7'],
-      ['business', '4800.00', '37.2'],
-      ['agency', '15000.00', '37.6'],
-      ['pack', '600.00', '30.2'],
+      ['start', '900.00', '45.2'],
+      ['business', '3600.00', '51.5'],
+      ['agency', '12000.00', '60.0'],
+      ['pack', '600.00', '40.3'],
     ])
     expect(preview).toMatchObject({
       effectiveFrom: START,
       rubPerCredit: '6.000000',
       previous: null,
       movePercent: null,
-      exposure: { plans: [], move: false, confirmationNeeded: false },
+      exposure: { plans: ['business', 'agency'], move: false, confirmationNeeded: true },
     })
   })
 
   it.each([
-    // Half of the price is reached at 7.98 for «Агентство», 8.0625 for «Бизнес», 8.1(6) for «Старт».
-    ['7.98', []],
-    ['7.980001', ['agency']],
-    ['8.0625', ['agency']],
-    ['8.062501', ['business', 'agency']],
-    ['8.166666', ['business', 'agency']],
-    ['8.166667', ['start', 'business', 'agency']],
+    // Half of the price is reached at 4.9975 for «Агентство», 5.825 for «Бизнес», 6.6(3) for
+    // «Старт».
+    ['4.9975', []],
+    ['4.997501', ['agency']],
+    ['5.825', ['agency']],
+    ['5.825001', ['business', 'agency']],
+    ['6.633333', ['business', 'agency']],
+    ['6.633334', ['start', 'business', 'agency']],
   ])('asks for a confirmation above half of a tariff price: K = %s', (rubPerCredit, over) => {
     const { exposure } = creditRatePreview(state({ rubPerCredit }))
     expect(exposure).toEqual({ plans: over, move: false, confirmationNeeded: over.length > 0 })
@@ -333,18 +335,41 @@ const disposable = Boolean(databaseUrl && process.env.RADITI_GATEWAY_DB_TESTS ==
 
 describe.skipIf(!disposable)('approving a credit rate with PostgreSQL', () => {
   let db: PrismaClient
+  /** The tariffs the seed puts on sale. */
+  const SEEDED_TARIFFS = ['start', 'business', 'agency']
 
   beforeAll(async () => {
     db = createPrismaClient({ databaseUrl: databaseUrl ?? '', log: [] })
-    // What the cases stand on: a catalogue nobody has switched on and no rate.
+    // What the cases stand on: a catalogue nobody has switched on, no rate, and the tariffs of
+    // the seed held by no subscription — off sale they are outside the exposure.
     expect(await db.llmModel.count({ where: { enabled: true } })).toBe(0)
     expect(await db.creditRate.count()).toBe(0)
+    expect(
+      await db.subscription.count({
+        where: {
+          plan: { slug: { in: SEEDED_TARIFFS } },
+          status: { in: [...liveSubscriptionStatuses] },
+        },
+      }),
+    ).toBe(0)
   })
   afterAll(async () => {
     await db.$disconnect()
   })
 
-  const rolledBack = <T>(work: (tx: Tx) => Promise<T>) => inRolledBackTransaction(db, work)
+  // At 6.00 the credits of «Бизнес» and «Агентство» of 06.11.2026 cost more than half of their
+  // price — 51.5 and 60.0% —, so on sale they ask every approval at that rate for a
+  // confirmation. A case sees them off sale, in its own transaction, unless it is about them
+  // (`asSeeded`).
+  const rolledBack = <T>(work: (tx: Tx) => Promise<T>) =>
+    inRolledBackTransaction(db, async (tx) => {
+      await tx.plan.updateMany({
+        where: { slug: { in: SEEDED_TARIFFS } },
+        data: { isActive: false },
+      })
+      return work(tx)
+    })
+  const asSeeded = <T>(work: (tx: Tx) => Promise<T>) => inRolledBackTransaction(db, work)
   const HOUR = 3_600_000
   const fromNow = (ms: number) => new Date(Date.now() + ms)
 
@@ -644,8 +669,9 @@ describe.skipIf(!disposable)('approving a credit rate with PostgreSQL', () => {
     })
   })
 
+  // The tariffs of the seed stay on sale: at 9.00 their exposure is what asks for a confirmation.
   it('refuses a price of a model the catalogue does not have, before anything is counted', async () => {
-    await rolledBack(async (tx) => {
+    await asSeeded(async (tx) => {
       const sol = await writeModelPool(tx, { enabled: true })
       const seen: CreditRatePreview[] = []
 
@@ -770,18 +796,27 @@ describe.skipIf(!disposable)('approving a credit rate with PostgreSQL', () => {
       })
     })
 
-    it('shows the plans of the seed at their shares and asks nothing for them', async () => {
-      await rolledBack(async (tx) => {
-        const approval = await approveCreditRateIn(tx, request())
+    // The pricing of 06.11.2026 (plan 63): at 6.00 the operator confirms the exposure of
+    // «Бизнес» and «Агентство».
+    it('shows the plans of the seed at their shares and asks a confirmation for those above half', async () => {
+      await asSeeded(async (tx) => {
+        const refused = await approveCreditRateIn(tx, request())
 
-        expect(approval.approved).toBe(true)
-        const seeded = new Map(approval.preview?.plans.map((plan) => [plan.slug, plan]))
-        expect(seeded.get('start')).toMatchObject({ costRub: '1800.00', sharePercent: '36.7' })
-        expect(seeded.get('business')).toMatchObject({ costRub: '4800.00', sharePercent: '37.2' })
-        expect(seeded.get('agency')).toMatchObject({ costRub: '15000.00', sharePercent: '37.6' })
-        expect(seeded.get('pack')).toMatchObject({ kind: 'pack', sharePercent: '30.2' })
+        expect(refused).toMatchObject({
+          approved: false,
+          refusals: [{ reason: 'exposure_unconfirmed' }],
+          preview: { exposure: { plans: ['business', 'agency'], move: false } },
+        })
+        const seeded = new Map(refused.preview?.plans.map((plan) => [plan.slug, plan]))
+        expect(seeded.get('start')).toMatchObject({ costRub: '900.00', sharePercent: '45.2' })
+        expect(seeded.get('business')).toMatchObject({ costRub: '3600.00', sharePercent: '51.5' })
+        expect(seeded.get('agency')).toMatchObject({ costRub: '12000.00', sharePercent: '60.0' })
+        expect(seeded.get('pack')).toMatchObject({ kind: 'pack', sharePercent: '40.3' })
         // «Оплата за действие» has no credits and is not a plan of this table.
         expect(seeded.has('payg')).toBe(false)
+
+        const approved = await approveCreditRateIn(tx, request({}, { confirmExposure: true }))
+        expect(approved.approved).toBe(true)
       })
     })
 
@@ -1074,10 +1109,15 @@ describe.skipIf(!disposable)('approving a credit rate with PostgreSQL', () => {
       const first = await approveCreditRateIn(tx, request())
       expect(first.approved).toBe(true)
 
-      // Another connection, while the first transaction is still open.
+      // Another connection, while the first transaction is still open. It writes no plan
+      // before it approves, so what it waits for is the approval of the first: the tariffs of
+      // the seed stay on sale for it, and it confirms their exposure.
       let done = false
-      second = rolledBack((other) =>
-        approveCreditRateIn(other, request({ rubPerCredit: '6.100000' })),
+      second = asSeeded((other) =>
+        approveCreditRateIn(
+          other,
+          request({ rubPerCredit: '6.100000' }, { confirmExposure: true }),
+        ),
       ).then((approval) => {
         done = true
         return approval

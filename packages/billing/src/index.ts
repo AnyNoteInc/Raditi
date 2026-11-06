@@ -184,6 +184,7 @@ export {
   type TaskHoldsExtension,
 } from './holds.ts'
 export {
+  carryTariffRemainder,
   expireTariffRemainder,
   giftAuditActions,
   grantPackCredits,
@@ -194,6 +195,7 @@ export {
   type LedgerPosting,
   type SignupGift,
   type TariffExpiry,
+  type TariffPeriodEnd,
 } from './ledger.ts'
 export {
   AUTO_RENEWAL_RESUME_ACTION,

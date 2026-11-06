@@ -622,9 +622,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         createdById: owner.id,
         alias: created.alias,
       })
-      // The gift of the registration is all the workspace has: the reserve takes it.
+      // The gift of the registration is all the workspace has: the reserve takes a step of it,
+      // 45 of its 50 credits.
       const holds = await activeHolds(taskId)
-      expect(holds.map((hold) => [hold.attempt, hold.amount.toFixed(0)])).toEqual([[1, '35']])
+      expect(holds.map((hold) => [hold.attempt, hold.amount.toFixed(0)])).toEqual([[1, '45']])
       expect(holds[0]!.expiresAt.getTime() - Date.now()).toBeGreaterThan(71 * 3600 * 1000)
       const feed = await feedOf(taskId)
       expect(feed).toEqual([
@@ -1648,14 +1649,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         modelClass: 'heavy',
       })
       // The reserve of the failed attempt came back; the retry holds what a step of heavy takes
-      // of the gift: all 35 credits again.
+      // of the gift: all 50 credits.
       expect(
         (await db.creditHold.findMany({ where: { taskId }, orderBy: { attempt: 'asc' } })).map(
           (hold) => [hold.attempt, hold.status, hold.amount.toFixed(2)],
         ),
       ).toEqual([
         [1, 'released', held[0]!.amount.toFixed(2)],
-        [2, 'active', '35.00'],
+        [2, 'active', '50.00'],
       ])
       expect((await feedOf(taskId)).at(-1)).toMatchObject({
         type: 'feed.request',
@@ -2068,7 +2069,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         'turn.cancel',
       ])
 
-      // Another owner: the first dialog still holds the whole gift while core stops it.
+      // Another owner: the first dialog still holds its reserve of the gift while core stops it.
       const second = await siteOwner()
       const releasing = await newDialog(callerOf(second.owner), second.site.id)
       await db.task.update({ where: { id: releasing.taskId }, data: { status: 'deploying' } })
