@@ -13,6 +13,9 @@ async function tooltipOf(status: string) {
   return screen.findByRole('tooltip')
 }
 
+/** What the server says of a chat of a project whose files the agent cannot change. */
+const browserChat = { requirements: { repository: false, browser: true } }
+
 describe('site overview', () => {
   it.each([
     ['onboarding', 'Ожидает подключения', /ещё не подключён/],
@@ -127,6 +130,7 @@ describe('site overview', () => {
           status: 'onboarding',
           state: 'free',
           capabilities: { repository: 'absent', browser: 'ready' },
+          chat: browserChat,
         }}
       />,
     )
@@ -145,19 +149,77 @@ describe('site overview', () => {
     expect(tooltip.textContent).not.toMatch(/админк|сразу|без выпуска|разделе «Чат»/)
   })
 
-  it('offers no new chat to a site that the wizard imported', () => {
+  describe('a site that the wizard imported and that is not connected yet', () => {
+    const id = '019f1a21-1800-8f00-8abc-111111111111'
+    const imported = { id, status: 'onboarding', state: 'free', setup: 'done' } as const
+    /** No word of the tooltip says how the agent works on the live site (31.10.2026). */
+    const unsaid = /админк|сразу|без выпуска|разделе «Чат»/
+
+    it('leads it to a new chat in the browser when the server takes one', async () => {
+      const { container } = render(
+        <SiteOverview
+          site={{
+            ...imported,
+            capabilities: { repository: 'inactive', browser: 'ready' },
+            chat: browserChat,
+          }}
+        />,
+      )
+      expect(screen.getByRole('link', { name: 'Новый чат' }).getAttribute('href')).toBe(
+        `/chats/new?project=${id}`,
+      )
+      const tooltip = await tooltipOf('Ожидает подключения')
+      expect(
+        within(tooltip).getByText(
+          'Файлы сайта сохранены, но менять их агент пока не может: остальную часть подключения мы ещё делаем. В браузере, на живом сайте, агент может работать уже сейчас — выберите этот проект в новом чате.',
+        ),
+      ).toBeTruthy()
+      expect(container.textContent).not.toMatch(unsaid)
+      expect(tooltip.textContent).not.toMatch(unsaid)
+    })
+
+    it('offers no new chat and says the agent cannot change the site when the server takes none', async () => {
+      render(
+        <SiteOverview
+          site={{
+            ...imported,
+            capabilities: { repository: 'inactive', browser: 'not_configured' },
+            chat: { requirements: null },
+          }}
+        />,
+      )
+      expect(screen.queryByRole('link', { name: 'Новый чат' })).toBeNull()
+      const tooltip = await tooltipOf('Ожидает подключения')
+      expect(
+        within(tooltip).getByText(
+          'Файлы сайта сохранены, но агент пока не может менять сайт: остальную часть подключения мы ещё делаем.',
+        ),
+      ).toBeTruthy()
+      expect(tooltip.textContent).not.toMatch(unsaid)
+    })
+
+    it('takes the chat from the server, not from what the site can be worked on with', () => {
+      render(
+        <SiteOverview
+          site={{ ...imported, capabilities: { repository: 'inactive', browser: 'ready' } }}
+        />,
+      )
+      expect(screen.queryByRole('link', { name: 'Новый чат' })).toBeNull()
+    })
+  })
+
+  it('leads a connected site to a new chat of this project', () => {
     render(
       <SiteOverview
         site={{
           id: '019f1a21-1800-8f00-8abc-111111111111',
-          status: 'onboarding',
+          status: 'active',
           state: 'free',
-          setup: 'done',
-          capabilities: { repository: 'ready', browser: 'ready' },
+          chat: { requirements: { repository: true, browser: true } },
         }}
       />,
     )
-    expect(screen.queryByRole('link', { name: 'Новый чат' })).toBeNull()
+    expect(screen.getByRole('link', { name: 'Новый чат' })).toBeTruthy()
   })
 
   it.each([

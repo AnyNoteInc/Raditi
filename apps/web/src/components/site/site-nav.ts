@@ -123,3 +123,17 @@ export function isBrowserOnly(site: {
     site.capabilities.repository === 'absent'
   )
 }
+
+/**
+ * What the server says of a new chat of the project (`chat` of `project.get`, `chatRequirements`,
+ * docs/plan/61-chats-first.md, К8): null requirements — it takes none now.
+ */
+export type SiteChat = { requirements: { repository: boolean; browser: boolean } | null }
+
+/** The server takes a new chat of this project now. */
+export const takesNewChat = (site: { chat?: SiteChat }): boolean =>
+  (site.chat?.requirements ?? null) !== null
+
+/** A new chat of this project works on the live site in the browser. */
+export const takesBrowserChat = (site: { chat?: SiteChat }): boolean =>
+  site.chat?.requirements?.browser === true

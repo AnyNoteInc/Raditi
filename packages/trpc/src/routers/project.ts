@@ -167,6 +167,8 @@ const siteOutput = projectOutput.extend({
   setup: setupField,
   initialVersion: initialVersionOutput,
   capabilities: siteCapabilitiesOutput,
+  /** Whether a new chat of it is taken and what it works with, as in `list` (docs/plan/61, К8). */
+  chat: projectChatOutput,
 })
 
 /** A saved access of the site as its owner may see it: never the Vault path, never a value. */
@@ -428,16 +430,18 @@ export const projectRouter = router({
       })
       const { provisioningStages, initialVersion, gitRepositories, ...row } = site
       const setup = siteSetupState(provisioningStages[0])
+      const capabilities = capabilitiesOf(
+        ctx,
+        { status: row.status, stack: row.stack, url: row.url, gitRepositories },
+        setup,
+      )
       return {
         ...withHost(row),
         state: siteState(lease),
         setup,
         initialVersion: confirmedInitialVersion(initialVersion),
-        capabilities: capabilitiesOf(
-          ctx,
-          { status: row.status, stack: row.stack, url: row.url, gitRepositories },
-          setup,
-        ),
+        capabilities,
+        chat: chatRequirements(capabilities),
       }
     }),
 
