@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 
 import type { CandidateRecordInput, Prisma, PrismaClient } from '@repo/db'
 import {
+  agentCommandAnswers,
   buildDbPlanView,
   candidateCounts,
   candidatePatchKey,
@@ -209,6 +210,31 @@ export async function wordsTurnOf(
   })
   const said = row === null ? null : readFeedRow('feed.candidate', row.payload)
   return said?.type === 'feed.candidate' ? said.turn : null
+}
+
+/**
+ * Whether the turn answered a command of the agent (`/init`, `/compact`), by the rule the feed of
+ * the page reads (`agentCommandAnswers`): its result says nothing of the changes of a candidate
+ * (docs/plan/61-chats-first.md, §5.14).
+ */
+export async function answersAgentCommand(
+  db: Pick<Prisma.TransactionClient, 'taskEvent'>,
+  taskId: string,
+  turnNo: number,
+): Promise<boolean> {
+  const rows = await db.taskEvent.findMany({
+    where: {
+      taskId,
+      type: { in: ['feed.request', 'feed.result', 'feed.candidate', 'feed.update'] },
+    },
+    orderBy: { id: 'asc' },
+    select: { id: true, type: true, payload: true },
+  })
+  const feed = rows.map((row) => ({ ...readFeedRow(row.type, row.payload), id: row.id.toString() }))
+  const answers = agentCommandAnswers(feed)
+  return feed.some(
+    (row) => row.type === 'feed.result' && row.turn === turnNo && answers.has(row.id),
+  )
 }
 
 type CandidateDatabase = Pick<

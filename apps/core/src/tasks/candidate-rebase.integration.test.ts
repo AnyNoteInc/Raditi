@@ -384,6 +384,152 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
       ])
     })
 
+    /** A press of a command of the agent, as web writes it. */
+    const agentCommand = (dialog: { taskId: string }, command: 'init' | 'compact') =>
+      insertFeedEvent(db, {
+        taskId: dialog.taskId,
+        row: {
+          type: 'feed.request',
+          payload: {
+            v: 1,
+            kind: 'agent_command',
+            command,
+            authorId: randomUUID(),
+            requestId: randomUUID(),
+          },
+        },
+      })
+    /** The client's words that answer the row `answers`. */
+    const words = (dialog: { taskId: string }, answers: bigint) =>
+      insertFeedEvent(db, {
+        taskId: dialog.taskId,
+        row: {
+          type: 'feed.request',
+          payload: {
+            v: 1,
+            kind: 'answer',
+            text: 'Теперь добавьте баннер.',
+            authorId: randomUUID(),
+            requestId: randomUUID(),
+            answersEventId: answers.toString(),
+          },
+        },
+      })
+    const resultRow = (dialog: { taskId: string }, turn: number) =>
+      insertFeedEvent(db, {
+        taskId: dialog.taskId,
+        row: {
+          type: 'feed.result',
+          payload: {
+            v: 1,
+            turn,
+            message: 'Тема сайта лежит в папке shop.',
+            site: 'none',
+            next: 'awaiting_user',
+            filesChanged: null,
+            changeType: 'none',
+            needsApproval: false,
+            risk: 'low',
+          },
+        },
+      })
+    const failureRow = (dialog: { taskId: string }, turn: number | null) =>
+      insertFeedEvent(db, {
+        taskId: dialog.taskId,
+        row: {
+          type: 'feed.failure',
+          payload: {
+            v: 1,
+            turn,
+            code: 'technical',
+            site: 'unchanged',
+            credits: 'returned',
+            next: 'awaiting_user',
+          },
+        },
+      })
+    /** Turn 3, completed, the task's turn now. */
+    const thirdTurn = async (dialog: { taskId: string }) => {
+      await db.taskTurn.create({
+        data: {
+          taskId: dialog.taskId,
+          turnNo: 3,
+          status: 'completed',
+          driverId: sampleDriverId,
+          image,
+          headSha: 'd'.repeat(40),
+        },
+      })
+      await db.task.update({ where: { id: dialog.taskId }, data: { turnNo: 3 } })
+    }
+
+    // К31: the answer of `/init` describes the code; the candidate's words are those of its turn.
+    it('says the words of the turn the candidate stands on after `/init`', async () => {
+      const dialog = await waiting()
+      await nextTurn(dialog)
+      await agentCommand(dialog, 'init')
+      await resultRow(dialog, 2)
+
+      expect(await setup().rebase.run(await update(dialog))).toBe('rebased')
+
+      expect(await said(dialog.taskId)).toEqual([
+        [1, 1],
+        [2, 1],
+      ])
+    })
+
+    // A compaction answers in the platform's line: it says nothing of the changes either.
+    it('says the words of the turn the candidate stands on after `/compact`', async () => {
+      const dialog = await waiting()
+      await nextTurn(dialog)
+      await agentCommand(dialog, 'compact')
+      await resultRow(dialog, 2)
+
+      expect(await setup().rebase.run(await update(dialog))).toBe('rebased')
+
+      expect(await said(dialog.taskId)).toEqual([
+        [1, 1],
+        [2, 1],
+      ])
+    })
+
+    // Only the answer of the task's own turn counts: an older one says nothing of the last turn.
+    it('says the words of the last turn after an older answer of `/init`', async () => {
+      const dialog = await waiting()
+      await nextTurn(dialog)
+      await agentCommand(dialog, 'init')
+      const answered = await resultRow(dialog, 2)
+      await words(dialog, answered)
+      await resultRow(dialog, 3)
+      await thirdTurn(dialog)
+
+      expect(await setup().rebase.run(await update(dialog))).toBe('rebased')
+
+      expect(await said(dialog.taskId)).toEqual([
+        [1, 1],
+        [2, 3],
+      ])
+    })
+
+    // `actionOf`: words after a failed compaction take its place, and their turn is an ordinary one.
+    it('says the words of the last turn after a failed `/compact` and the words after it', async () => {
+      const dialog = await waiting()
+      await nextTurn(dialog)
+      await agentCommand(dialog, 'compact')
+      // The pass ended before it opened a turn.
+      const failed = await failureRow(dialog, null)
+      await words(dialog, failed)
+      await resultRow(dialog, 3)
+      await thirdTurn(dialog)
+
+      expect(await setup().rebase.run(await update(dialog))).toBe('rebased')
+
+      expect(await said(dialog.taskId)).toEqual([
+        [1, 1],
+        [2, 3],
+      ])
+    })
+
     it('says the words of the last turn while it stands, though the candidate is older', async () => {
       const dialog = await waiting()
       await nextTurn(dialog)

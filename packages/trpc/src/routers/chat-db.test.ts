@@ -1416,6 +1416,56 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         cause: { code: 'CHAT_COMMAND_UNAVAILABLE', details: { refusal: 'busy' } },
       })
     })
+
+    // As `/compact`: a turn of the command would take the browser from the client (§5.14).
+    it('leaves the browser with the client and a request of the agent in it unanswered', async () => {
+      const { owner, workspaceId, site } = await siteOwner()
+      const caller = callerOf(owner)
+      // A chat of the project works with the code and the browser (К11); this suite has no browser
+      // to create one with, and the requirements of a task are fixed when it is created.
+      const { id: taskId } = await db.task.create({
+        data: {
+          workspaceId,
+          siteId: site.id,
+          needsRepository: true,
+          needsBrowser: true,
+          status: 'awaiting_user',
+        },
+      })
+      taskIds.push(taskId)
+      const verdict = async () =>
+        (await caller.task.commands({ taskId })).find((item) => item.id === 'init')?.refusal
+      const session = await openBrowserSession(db, { taskId })
+      expect(await verdict()).toBeNull()
+
+      await recordBrowserHelp(db, {
+        sessionId: session.id,
+        reason: 'login',
+        message: 'Войдите в админку сайта',
+      })
+      expect(await verdict()).toBe('awaiting_answer')
+      await expect(caller.task.init({ taskId, requestId: randomUUID() })).rejects.toMatchObject({
+        cause: { code: 'CHAT_COMMAND_UNAVAILABLE', details: { refusal: 'awaiting_answer' } },
+      })
+      await clearBrowserHelp(db, { sessionId: session.id })
+
+      await recordBrowserControl(db, { sessionId: session.id, controller: 'user', controlEpoch: 1 })
+      expect(await verdict()).toBe('browser_with_client')
+      await expect(caller.task.init({ taskId, requestId: randomUUID() })).rejects.toMatchObject({
+        cause: { code: 'CHAT_COMMAND_UNAVAILABLE', details: { refusal: 'browser_with_client' } },
+      })
+      expect((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe(
+        'awaiting_user',
+      )
+      expect(await outboxOf(taskId)).toEqual([])
+
+      await recordBrowserControl(db, {
+        sessionId: session.id,
+        controller: 'agent',
+        controlEpoch: 2,
+      })
+      expect(await verdict()).toBeNull()
+    })
   })
 
   // docs/plan/61-chats-first.md, К31, §5.9, on the real rows: a mock cannot see `accessibleSite`.

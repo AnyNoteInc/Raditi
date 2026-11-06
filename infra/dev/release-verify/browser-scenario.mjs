@@ -365,10 +365,8 @@ export async function runBrowserScenario(stand, tools) {
     (item) => item.id === 'release',
   )?.refusal
   rt.check(
-    !closed.ok &&
-      closed.domainCode === 'CHAT_COMMAND_UNAVAILABLE' &&
-      typeof releaseRefusal === 'string',
-    `/release after /cancel is refused as an unavailable command (${releaseRefusal})`,
+    !closed.ok && closed.domainCode === 'CHAT_COMMAND_UNAVAILABLE' && releaseRefusal === 'finished',
+    `/release after /cancel is refused as an unavailable command of a chat that ended (${releaseRefusal})`,
     closed,
   )
   const sessionsLeft = await rt.until(

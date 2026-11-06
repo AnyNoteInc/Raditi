@@ -1,3 +1,4 @@
+import { agentCommandAnswerIds } from '@repo/domain/tasks/agent-command-answers'
 import { describe, expect, it } from 'vitest'
 
 import { feedReducer, initialFeedState } from './feed-state'
@@ -83,6 +84,30 @@ describe('initAnswerIds (docs/plan/61-chats-first.md, К31)', () => {
         resultRow('4', 3),
       ]),
     ).toEqual(['4'])
+  })
+
+  it('finds no answer to `/compact` in the turn of the words after its failure', () => {
+    const rows = [
+      agentCommandRow('1', 'compact'),
+      failureRow('2', 2),
+      requestRow('3', 'продолжи'),
+      resultRow('4', 3),
+    ]
+    expect([...agentCommandAnswerIds(rows, 'compact')]).toEqual([])
+    expect(ids(rows.with(0, agentCommandRow('1', 'init')))).toEqual(['4'])
+  })
+
+  it('finds the answer to `/compact` after a press of the same work', () => {
+    const retry: FeedRow = {
+      id: '3',
+      at: '2026-10-17T10:00:00.000Z',
+      type: 'feed.request',
+      kind: 'retry',
+      authorId: AUTHOR_ID,
+      requestId: REQUEST_ID,
+    }
+    const rows = [agentCommandRow('1', 'compact'), failureRow('2', 2), retry, resultRow('4', 3)]
+    expect([...agentCommandAnswerIds(rows, 'compact')]).toEqual(['4'])
   })
 
   it('goes on past a question of the agent and its answer', () => {
@@ -316,6 +341,37 @@ describe('the candidate of the dialog', () => {
       // «Обновить» named the compaction, and a question left the next candidate without words.
       expect(messageOf([...compacted, candidateRow('6', 2, 2)])).toBe('Поменял цвет шапки.')
       expect(messageOf([...compacted, candidateRow('6', 3, 2)])).toBe('Поменял цвет шапки.')
+    })
+
+    // The planner gives a pass no action while words wait (`actionOf`): the words after a failed
+    // compaction get an ordinary turn, and that turn is what the candidate stands on.
+    it('takes the words of the turn after a failed compaction and the words after it', () => {
+      const rows = [
+        resultRow('2', 1, 'Поменял цвет шапки.'),
+        candidateRow('3', 1),
+        agentCommandRow('4', 'compact'),
+        failureRow('5', 2),
+        requestRow('6', 'продолжи и добавьте баннер'),
+        candidateRow('7', 3, 2),
+        resultRow('8', 3, 'Добавил баннер.'),
+      ]
+      // A pass writes its candidate before its result: the candidate is the row before the last.
+      expect(candidateMessage(rows, rows[5] as Parameters<typeof candidateMessage>[1])).toBe(
+        'Добавил баннер.',
+      )
+    })
+
+    // К31: the answer of `/init` describes the code, not the changes; «Обновить» after it names
+    // the turn of the candidate's words, and a row that named `/init` itself says nothing either.
+    it('never takes the answer of `/init` for the words about the changes', () => {
+      const studied = [
+        resultRow('2', 1, 'Поменял цвет шапки.'),
+        candidateRow('3', 1),
+        agentCommandRow('4', 'init'),
+        resultRow('5', 2, 'Тема сайта лежит в папке shop.'),
+      ]
+      expect(messageOf([...studied, candidateRow('6', 1, 2)])).toBe('Поменял цвет шапки.')
+      expect(messageOf([...studied, candidateRow('6', 2, 2)])).toBe('Поменял цвет шапки.')
     })
 
     it('holds a turn undone though a later `/redo` brought another back', () => {

@@ -32,6 +32,7 @@ const waiting: ChatCommandFacts = {
   turnRedo: 'nothing_to_redo',
   turnRedoing: false,
   compaction: true,
+  agentBrowser: null,
   compactRefusal: null,
 }
 const verdict = (facts: ChatCommandFacts) =>
@@ -74,6 +75,14 @@ describe('the commands of a dialog', () => {
       expect(init({ releaseInProgress: true })).toBe('release_in_progress')
       expect(init({ taskStatus: 'done' })).toBe('finished')
       expect(init({ cancelPending: true })).toBe('finished')
+    })
+
+    // A turn of the command would take the browser from the client, as one of `/compact` would.
+    it('leaves the browser with the client and a request of the agent unanswered', () => {
+      expect(init({ agentBrowser: 'browser_with_client' })).toBe('browser_with_client')
+      expect(init({ agentBrowser: 'awaiting_answer' })).toBe('awaiting_answer')
+      expect(init({ agentBrowser: 'awaiting_answer', taskStatus: 'running' })).toBe('busy')
+      expect(init({ agentBrowser: 'browser_with_client', repository: false })).toBe('no_repository')
     })
   })
 

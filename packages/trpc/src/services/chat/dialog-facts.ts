@@ -19,6 +19,7 @@ import {
   type ChatCommandAvailability,
   type ChatCommandFacts,
   type ChatCommandRefusal,
+  type AgentBrowserRefusal,
   type CompactRefusal,
   type ServerCommandId,
   type PreviewStatus,
@@ -204,6 +205,7 @@ export async function dialogFacts(
     }
   }
   const release = releaseRow === null ? null : dialogRelease(releaseRow)
+  const agentBrowser = await agentBrowserRefusal(db, task.id)
 
   return {
     role,
@@ -247,7 +249,12 @@ export async function dialogFacts(
       }),
       turnRedoing: pending?.redo === true,
       compaction: await driverCompacts(db),
-      compactRefusal: await compactRefusal(db, { taskId: task.id, turnNo: needs?.turnNo ?? 0 }),
+      agentBrowser,
+      compactRefusal: await compactRefusal(
+        db,
+        { taskId: task.id, turnNo: needs?.turnNo ?? 0 },
+        agentBrowser,
+      ),
     },
   }
 }
@@ -262,6 +269,19 @@ async function driverCompacts(db: Reader): Promise<boolean> {
     select: { capabilities: true },
   })
   return z.object({ compaction: z.literal(true) }).safeParse(driver?.capabilities).success
+}
+
+/**
+ * Why a command of the agent runs no turn for the browser of the chat (`agentBrowser`): the agent
+ * asked the client to act in it, or the client took it over.
+ */
+async function agentBrowserRefusal(
+  db: Reader,
+  taskId: string,
+): Promise<AgentBrowserRefusal | null> {
+  const session = await openBrowserSessionOfTask(db, taskId)
+  if (session?.helpReason) return 'awaiting_answer'
+  return session?.controller === 'user' ? 'browser_with_client' : null
 }
 
 /** The rows that say nothing to the agent: a press, or the `/compact` that never got a turn. */
@@ -286,6 +306,7 @@ function saysNothing(payload: Prisma.JsonValue): boolean {
 async function compactRefusal(
   db: Reader,
   chat: { taskId: string; turnNo: number },
+  browser: AgentBrowserRefusal | null,
 ): Promise<CompactRefusal | null> {
   const turn = await db.taskTurn.findUnique({
     where: { taskId_turnNo: { taskId: chat.taskId, turnNo: chat.turnNo } },
@@ -307,9 +328,7 @@ async function compactRefusal(
   )
     return 'nothing_to_compact'
   if ((await openCeilingQuestion(db, chat.taskId)) !== null) return 'awaiting_answer'
-  const session = await openBrowserSessionOfTask(db, chat.taskId)
-  if (session?.helpReason) return 'awaiting_answer'
-  if (session?.controller === 'user') return 'browser_with_client'
+  if (browser !== null) return browser
   const compacted = await db.turnAssignment.count({
     where: {
       taskId: chat.taskId,

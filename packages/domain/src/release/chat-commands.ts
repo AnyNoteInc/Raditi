@@ -416,6 +416,13 @@ export interface ChatCommandFacts {
   /** The driver of the platform can compact a session (`AgentCapabilities.compaction`). */
   compaction: boolean
   /**
+   * Why a command of the agent (`/init`, `/compact`) runs no turn now for the browser of the chat;
+   * null — nothing waits in it. A request of the agent to act in the browser waits for the client,
+   * and a client who took the browser over is at work in it: the turn of a command answers neither,
+   * and it would take the browser away (docs/plan/61-chats-first.md, §5.14).
+   */
+  agentBrowser: AgentBrowserRefusal | null
+  /**
    * Why `/compact` shortens nothing now, past the status of the chat; null — the session holds a
    * turn that completed and stands, that turn was no compaction, and everything the client said
    * reached it (docs/plan/61-chats-first.md, §5.14).
@@ -432,7 +439,13 @@ export type TurnUndoRefusal = Extract<
 /** The refusal of `/redo` the facts of its turn decide. */
 export type TurnRedoRefusal = Extract<ChatCommandRefusal, 'nothing_to_redo'>
 
-/** The refusals of `/compact` the facts of its session decide. */
+/** The refusals of a command of the agent the browser of the chat decides. */
+export type AgentBrowserRefusal = Extract<
+  ChatCommandRefusal,
+  'awaiting_answer' | 'browser_with_client'
+>
+
+/** The refusals of `/compact` the facts of its session decide, `agentBrowser` among them. */
 export type CompactRefusal = Extract<
   ChatCommandRefusal,
   'nothing_to_compact' | 'awaiting_answer' | 'browser_with_client'
@@ -526,7 +539,7 @@ function refusalOf(id: ServerCommandId, facts: ChatCommandFacts): ChatCommandRef
     case 'init':
       if (!facts.repository) return 'no_repository'
       if (facts.releaseInProgress || RELEASING.includes(status)) return 'release_in_progress'
-      return BUSY.includes(status) ? 'busy' : null
+      return BUSY.includes(status) ? 'busy' : facts.agentBrowser
     // A pass as well, with the reserve of the next words; a failure of it costs nothing (К30).
     case 'compact':
       if (facts.releaseInProgress || RELEASING.includes(status)) return 'release_in_progress'

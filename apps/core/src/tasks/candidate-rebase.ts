@@ -33,6 +33,7 @@ import {
 } from '@repo/domain'
 
 import {
+  answersAgentCommand,
   standingCandidateOf,
   wordsTurnOf,
   type CandidateBuild,
@@ -327,9 +328,13 @@ export class CandidateRebase {
             payload: {
               v: 1,
               // The turn of the words about this revision: a turn taken back or refused has none
-              // that stand. The record keeps the task's turn: the planner reads the move from it.
+              // that stand, and the answer of a command of the agent says nothing of the changes
+              // (docs/plan/61-chats-first.md, §5.14). The record keeps the task's turn: the
+              // planner reads the move from it.
               turn:
-                (turn?.undoneAt || turn?.rejectedAt
+                (turn?.undoneAt ||
+                turn?.rejectedAt ||
+                (await answersAgentCommand(tx, task.id, task.turnNo))
                   ? await wordsTurnOf(tx, task.id, standing.revision)
                   : null) ?? task.turnNo,
               revision: record.revision,

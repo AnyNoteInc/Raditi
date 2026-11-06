@@ -929,6 +929,7 @@ export async function runScenarios(stand) {
   // ── S5 and S6: two dialogs at once, then their releases ─────────────────────
   rt.begin('S5a', 'a second dialog: a candidate that breaks production only')
   const dialogB = { taskId: uuid7() }
+  const requestsBeforeB = model.state.requests.length
   model.script(MODEL_TURNS.breaking({ postId: content.postId }), {
     waitFor: async () => {
       await previewReady(dialogB.taskId, 0, 6 * MINUTE).catch(() => null)
@@ -940,6 +941,28 @@ export async function runScenarios(stand) {
     text: 'Добавьте вызов в подвал и переименуйте новость.',
   })
   await taskReaches(dialogB.taskId, 'awaiting_approval')
+  // S6a attacks the neighbour from the agent's browser of this dialog, started by the fourth round
+  // of its turn. The tool may refuse it — the browser did not come within the wait of mcp — and
+  // the turn goes on: no secret of the browser is ever written then. Named here by what S6a needs,
+  // the secret of the browser in Vault, with what the agent got from the tool, rather than at S6a
+  // (docs/plan/61-chats-first.md, §9, «Известные ограничения»).
+  const navigated = model.state.requests
+    .slice(requestsBeforeB)
+    .find(
+      (request) => roundOf(request.body) === 4 && request.body?.messages?.at(-1)?.role === 'tool',
+    )
+  const previewRowB = await previewOf(dialogB.taskId)
+  const browserSecretB = previewRowB
+    ? await localVaultRequest(stand.vault.root, `kv/data/previews/${previewRowB.id}/browser`)
+    : null
+  rt.check(
+    browserSecretB?.status === 200,
+    "dialog B: the agent's browser of its preview started in its turn (a precondition of S6a)",
+    {
+      secret: browserSecretB?.status ?? 'no preview',
+      tool: JSON.stringify(navigated?.body?.messages?.at(-1) ?? null).slice(0, 300),
+    },
+  )
   const candidateB = await currentCandidate(dialogB.taskId)
   rt.check(
     candidateB.files.length === 1 &&
