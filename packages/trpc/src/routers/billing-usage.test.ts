@@ -251,7 +251,20 @@ const onTariff = (): UsageSummaryDto => ({
     pastDueSince: null,
   },
   tariff: {
-    credits: { granted: 80, charged: 17, held: 14, expired: 4, left: 45, heldEarlier: 9 },
+    // 20 carried from the period before and 80 granted; 45 left, all of them within the 80 a
+    // renewal would carry.
+    credits: {
+      carried: 20,
+      granted: 80,
+      charged: 37,
+      held: 14,
+      expired: 4,
+      left: 45,
+      heldEarlier: 9,
+      carryLimit: 80,
+      carryNext: 45,
+      burnNext: 0,
+    },
     today: busyDay,
     sites: { count: 2, max: 3 },
     bySite: [{ siteId: randomUUID(), name: 'Пекарня «Добро»', credits: 21 }],
@@ -490,6 +503,18 @@ describe('billing.usage', () => {
       'credits of an ended period counted into the period',
       (usage: UsageSummaryDto) => {
         usage.tariff!.credits.held += usage.tariff!.credits.heldEarlier
+      },
+    ],
+    [
+      'a carry the period leaves out',
+      (usage: UsageSummaryDto) => {
+        usage.tariff!.credits.carried = 0
+      },
+    ],
+    [
+      'a renewal that would carry more than the quota of the period',
+      (usage: UsageSummaryDto) => {
+        usage.tariff!.credits.carryLimit = 40
       },
     ],
     [
@@ -749,13 +774,18 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
       subscription,
       tariff: {
         // Read from the ledger: the order of the payment carries the start of its period.
+        // Nothing carried into a first period; all of it would carry at the renewal.
         credits: {
+          carried: 0,
           granted: tariff.creditsPerMonth,
           charged: 0,
           held: 0,
           expired: 0,
           left: tariff.creditsPerMonth,
           heldEarlier: 0,
+          carryLimit: tariff.creditsPerMonth,
+          carryNext: tariff.creditsPerMonth,
+          burnNext: 0,
         },
         today: freshDay,
         sites: { count: 0, max: tariff.maxSites },
@@ -813,12 +843,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
     const quota = tariff.creditsPerMonth
     expect(usage.tariff).toMatchObject({
       credits: {
+        carried: 0,
         granted: quota,
         charged: 22,
         held: 45,
         expired: 0,
         left: quota - 67,
         heldEarlier: 0,
+        carryLimit: quota,
+        carryNext: quota - 67,
+        burnNext: 0,
       },
       // The day took the 22 charged and the 45 still set aside, all of the tariff.
       today: dayOf(tariff.creditsPerDay, 22, 45, quota - 67),

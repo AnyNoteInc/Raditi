@@ -12,6 +12,7 @@ import {
   creditsSchema,
   dailyTariffCredits,
   emptyCreditAccount,
+  carriedTariffCredits,
   expiringTariffCredits,
   maxTaskAttempts,
   minContinueCredits,
@@ -587,6 +588,53 @@ describe('expiringTariffCredits', () => {
     const tariff = account(30, 4)
     const all = allAccounts(tariff, account(10, 1), account(35, 2))
     expect(expiringTariffCredits(tariff)).toBe(availableCredits(all).tariff)
+  })
+})
+
+describe('carriedTariffCredits', () => {
+  it.each([
+    ['an untouched quota carries whole', account(600), 600, 600],
+    ['a partly spent quota carries what is left', account(120), 600, 120],
+    ['held credits are not carried', account(120, 20), 600, 100],
+    [
+      'no more than the quota of the period: the rest of the old carry expires',
+      account(700),
+      600,
+      600,
+    ],
+    ['a quota smaller than the old one bounds the carry', account(500, 10), 150, 150],
+    ['nothing available carries nothing', account(5, 5), 600, 0],
+    ['a period without a quota carries nothing', account(30), 0, 0],
+  ])('%s', (_name, tariff, granted, expected) => {
+    expect(carriedTariffCredits(tariff, toCredits(granted))).toBe(expected)
+  })
+
+  it('carries no more than what expires, and what burns is the rest of it', () => {
+    for (const [tariff, granted] of [
+      [account(700, 3), 600],
+      [account(40), 600],
+      [account(0), 600],
+      [account(2000), 2000],
+    ] as const) {
+      const carried = carriedTariffCredits(tariff, toCredits(granted))
+      const expiring = expiringTariffCredits(tariff)
+      expect(carried).toBeLessThanOrEqual(expiring)
+      expect(carried).toBeLessThanOrEqual(granted)
+      expect(expiring - carried).toBe(Math.max(0, expiring - granted))
+    }
+  })
+
+  it.each([
+    ['a fraction', 1.5],
+    ['a negative count', -1],
+    ['NaN', Number.NaN],
+    ['a string', '600'],
+  ])('refuses %s as the quota', (_name, granted) => {
+    expect(() => carriedTariffCredits(account(10), granted as Credits)).toThrow(badRequest)
+  })
+
+  it('refuses a broken account', () => {
+    expect(() => carriedTariffCredits(account(1, 2), toCredits(5))).toThrow(badRequest)
   })
 })
 

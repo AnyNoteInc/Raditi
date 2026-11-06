@@ -831,12 +831,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL renewal', () => {
         paymentMethodId: s.paymentMethodId,
       })
 
-      // 30 granted, 2 held: 28 expire, 100 come. The pack is not touched.
+      // 30 granted, 2 held: the 28 available expire and come back carried — no more than the 30
+      // of the old plan, whatever the new one gives —, 100 come. The pack is not touched.
       expect(state.balances).toEqual({
-        tariff: { balance: 102, held: 2, available: 100 },
+        tariff: { balance: 130, held: 2, available: 128 },
         gift: NO_GIFT,
         pack: { balance: 10, held: 0, available: 10 },
-        totalAvailable: 110,
+        totalAvailable: 138,
       })
       // The rows of one transaction carry one moment: compared without their order.
       const ledger = state.ledger.map((entry) => [
@@ -844,15 +845,21 @@ describe.skipIf(!databaseUrl)('PostgreSQL renewal', () => {
         entry.amount.toNumber(),
         entry.idempotencyKey,
       ])
-      expect(ledger).toHaveLength(4)
+      expect(ledger).toHaveLength(5)
       expect(ledger).toEqual(
         expect.arrayContaining([
           ['grant', 30, expect.stringMatching(/^order:.+:grant$/)],
           ['grant', 10, ledgerKeys.packGrant(packOrder.id)],
           ['expire', -28, ledgerKeys.tariffExpiry(s.subscriptionId, periodStart)],
+          ['grant', 28, ledgerKeys.tariffCarry(s.subscriptionId, periodStart)],
           ['grant', 100, ledgerKeys.tariffGrant(order.id)],
         ]),
       )
+      // The carry is no order's: what it was granted from is the period in its key.
+      const carry = state.ledger.find(
+        (entry) => entry.idempotencyKey === ledgerKeys.tariffCarry(s.subscriptionId, periodStart),
+      )
+      expect(carry).toMatchObject({ orderId: null })
 
       const letter = only(state.letters)
       expect(letter).toMatchObject({
@@ -877,6 +884,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL renewal', () => {
         amount: '12900.00',
         credits: 100,
         expiredCredits: 28,
+        carriedCredits: 28,
         periodStart: periodStart.toISOString(),
         periodEnd: periodEnd.toISOString(),
         reanchored: false,
@@ -916,18 +924,19 @@ describe.skipIf(!databaseUrl)('PostgreSQL renewal', () => {
       expect(after.subscription).toEqual(before.subscription)
       expect(after.orders).toEqual(before.orders)
       expect(after.ledger).toEqual(before.ledger)
+      // The 30 of the period that ended were carried once, beside the 30 of the new one.
       expect(after.balances).toEqual({
-        tariff: { balance: 30, held: 0, available: 30 },
+        tariff: { balance: 60, held: 0, available: 60 },
         gift: NO_GIFT,
         pack: { balance: 0, held: 0, available: 0 },
-        totalAvailable: 30,
+        totalAvailable: 60,
       })
       expect(after.letterTypes).toEqual(['billing.payment_succeeded'])
       expect(after.actions).toEqual([renewalAuditActions.renewed])
       expect(shop.charges).toHaveLength(1)
     })
 
-    it('leaves the gift as it was: a renewal expires and grants credits of the tariff only', async () => {
+    it('leaves the gift as it was: a renewal expires, carries and grants credits of the tariff only', async () => {
       const s = await subscribed({ noticed: true })
       const gift = await gifted(s)
       const { deps } = passes('2021-04-10T09:00:00.000Z')
@@ -935,12 +944,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL renewal', () => {
       expect((await chargeRenewals(deps)).counts.renewed).toBe(1)
 
       const state = await written(s)
-      // 30 expire with the period and 30 come. The gift is neither expired nor granted anew.
+      // 30 expire with the period and come back carried, 30 come. The gift is neither expired
+      // nor carried nor granted anew.
       expect(state.balances).toEqual({
-        tariff: { balance: 30, held: 0, available: 30 },
+        tariff: { balance: 60, held: 0, available: 60 },
         gift: { balance: 50, held: 5, available: 45, granted: true },
         pack: { balance: 0, held: 0, available: 0 },
-        totalAvailable: 75,
+        totalAvailable: 105,
       })
       expect(
         state.ledger.map((entry) => [entry.unit, entry.kind, entry.amount.toNumber()]).sort(),
@@ -949,6 +959,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL renewal', () => {
           ['credit_tariff', 'grant', 30],
           ['credit_gift', 'grant', 50],
           ['credit_tariff', 'expire', -30],
+          ['credit_tariff', 'grant', 30],
           ['credit_tariff', 'grant', 30],
         ].sort(),
       )
@@ -977,7 +988,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL renewal', () => {
         const state = await written(s)
         expect(only(state.renewals).status).toBe('paid')
         expect(state.subscription.currentPeriodEnd).toEqual(at(NEXT_END))
-        expect(state.balances.tariff).toEqual({ balance: 30, held: 0, available: 30 })
+        expect(state.balances.tariff).toEqual({ balance: 60, held: 0, available: 60 })
         expect(state.letterTypes).toEqual(['billing.payment_succeeded'])
       }
       expect(errors).toEqual([])
@@ -1502,7 +1513,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL renewal', () => {
         periodAnchor: at('2021-04-12T09:00:00.000Z'),
       })
       expect(state.meta(renewalAuditActions.renewed)).toMatchObject({ reanchored: true })
-      expect(state.balances.tariff.available).toBe(30)
+      // The quota of the period that ended carries: its order is found by the start it paid for.
+      expect(state.balances.tariff.available).toBe(60)
     })
   })
 
@@ -1538,7 +1550,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL renewal', () => {
         currentPeriodStart: at(END),
         currentPeriodEnd: at(NEXT_END),
       })
-      expect(state.balances.tariff).toEqual({ balance: 30, held: 0, available: 30 })
+      expect(state.balances.tariff).toEqual({ balance: 60, held: 0, available: 60 })
       expect(state.letterTypes).toEqual(['billing.payment_succeeded'])
 
       later(MINUTE)

@@ -35,6 +35,7 @@ import {
   CREDITS,
   CREDIT_RATE,
   ON_SALE,
+  PRICE,
   counted,
   creditsCount,
   giftGrant,
@@ -1416,8 +1417,9 @@ test('the pages are compared with the answer about a new task and with the meter
   assert.equal(constant('MIN_START_CREDITS'), minStartCredits)
   assert.ok(pages.includes('minToStart: MIN_START_CREDITS,'))
   // The day counts tariff credits (decision of 17.10.2026): none is spent in the stand, the
-  // limit of the plan is left — or the free tariff credits when fewer —, and without a paid
-  // tariff there is no day. No count of tasks a day is left in the stand.
+  // limit of the plan is left — or the free tariff credits when fewer, or all of them when the
+  // plan sets no limit, as none on sale does since 06.11.2026 —, and without a paid tariff there
+  // is no day. No count of tasks a day is left in the stand.
   assert.doesNotMatch(kit, /TASKS_PER_DAY|tasks_per_day|tasksPerDay/)
   assert.ok(pages.includes('const limit = paid ? live.credits_per_day : null'))
   assert.ok(
@@ -1472,31 +1474,47 @@ test('the pages are compared with the answer about a new task and with the meter
     [
       ['start', CREDITS.start],
       ['business', CREDITS.business],
-      ['agency', 2500],
+      ['agency', 2000],
     ],
   )
   assert.equal(ON_SALE.pack.credits, CREDITS.pack)
-  // The tariff credits of a day: defaults of the decision of 17.10.2026, never above the month.
+  // The prices of the tariffs and the pack the scenarios pay are those on sale.
+  assert.deepEqual(
+    [...ON_SALE.plans.filter(({ slug }) => slug !== 'agency'), ON_SALE.pack].map(
+      ({ slug, price }) => [slug, price],
+    ),
+    Object.entries(PRICE),
+  )
+  // No tariff has a daily limit since 06.11.2026 (docs/plan/63-new-pricing.md, Ц6): the plans
+  // sell none, and the day the stand expects follows the plan.
   assert.deepEqual(
     ON_SALE.plans.map(({ slug, creditsPerDay }) => [slug, creditsPerDay]),
     [
-      ['start', 50],
-      ['business', 100],
-      ['agency', 300],
+      ['start', null],
+      ['business', null],
+      ['agency', null],
     ],
   )
-  for (const plan of ON_SALE.plans) assert.ok(plan.creditsPerDay <= plan.creditsPerMonth)
   // No enabled model has a price in the stand: «Точный расчёт» has no table, with a rate or not.
   assert.ok(pages.includes('conversion: plans.creditConversion,'))
   assert.ok(pages.includes('conversion: null,'))
-  // The meter of the period adds up, and what is left of it is what the account has free.
+  // The meter of the period adds up with what was carried into it, what is left of it is what
+  // the account has free, what was carried is what the account holds beyond the quota of the
+  // period — no task spends a credit in the stand —, and the next renewal would carry what is
+  // left up to that quota (decision of 06.11.2026).
   assert.ok(pages.includes('meter: usage.tariff && meterAddsUp(usage.tariff.credits),'))
-  assert.ok(
-    pages.includes(
-      'meter: live && { addsUp: true, left: tariff.available, held: 0, heldEarlier: 0 },',
-    ),
-  )
-  assert.ok(kit.includes('addsUp: granted === charged + held + expired + left,'))
+  const flatPages = pages.replace(/\s+/g, ' ')
+  for (const part of [
+    'meter: live && { addsUp: true,',
+    'carried: tariff.available - quota,',
+    'granted: quota,',
+    'left: tariff.available,',
+    'held: 0, heldEarlier: 0,',
+    'carryNext: Math.min(tariff.available, quota),',
+    'burnNext: tariff.available - Math.min(tariff.available, quota),',
+  ])
+    assert.ok(flatPages.includes(part), part)
+  assert.ok(kit.includes('addsUp: carried + granted === charged + held + expired + left,'))
   // A scenario that expects balances compares the accounts, not the answer beside them.
   assert.match(
     kit,
@@ -1505,9 +1523,11 @@ test('the pages are compared with the answer about a new task and with the meter
   const payment = read('infra/dev/billing-verify/scenarios-payment.mjs')
   assert.equal(payment.match(/credits: creditAccounts\(overview\.credits\),/g)?.length, 2)
   assert.ok(
-    payment.includes(
-      'credits: { granted: 300, charged: 0, held: 0, expired: 0, left: 300, heldEarlier: 0 },',
-    ),
+    payment
+      .replace(/\s+/g, ' ')
+      .includes(
+        'credits: { carried: 0, granted: CREDITS.start, charged: 0, held: 0, expired: 0, left: CREDITS.start, heldEarlier: 0, carryLimit: CREDITS.start, carryNext: CREDITS.start, burnNext: 0, },',
+      ),
   )
 })
 
@@ -1536,7 +1556,7 @@ test('time passes for a subscription together with the order that paid for its p
 test('the gift of the registration is the product’s, and the stand asks for it everywhere', () => {
   const kit = read('infra/dev/billing-verify/scenario-kit.mjs')
   // The numbers and the key are written in the stand on their own and agree with the product.
-  assert.equal(CREDITS.gift, 35)
+  assert.equal(CREDITS.gift, 50)
   assert.equal(CREDITS.gift, signupGiftCredits)
   assert.ok(signupGiftCredits >= minStartCredits)
   const user = '0199a000-0000-7000-8000-0000000000d4'
@@ -1697,18 +1717,33 @@ test('the operator approves the credit rate in the stand, and only there', () =>
     scenario,
     /'no credit rate is in force yet[^']*',\n\s+\[await rates\(\), await creditRateUsable\(t\)\],\n\s+\[\[\], false\],/,
   )
-  assert.equal(scenario.match(/t\.operator\('billing-rates', /g)?.length, 3)
+  assert.equal(scenario.match(/t\.operator\('billing-rates', /g)?.length, 4)
   assert.match(scenario, /'--effective-from',\n\s+'2026-01-01T00:00:00\.000\+03:00',/)
   assert.match(
     scenario,
-    /\[await rates\(\), await approvals\(\), await told\(paying\.customer\)\],\n\s+\[\[\], \[\], both\(PAUSED, 435\)\],/,
+    /\[await rates\(\), await approvals\(\), await told\(paying\.customer\)\],\n\s+\[\[\], \[\], both\(PAUSED, ALL\)\],/,
   )
-  assert.match(scenario, /\[both\(TAKEN, 35\), both\(TAKEN, 35\), both\(TAKEN, 435\)\],/)
+  assert.match(
+    scenario,
+    /\[both\(TAKEN, CREDITS\.gift\), both\(TAKEN, CREDITS\.gift\), both\(TAKEN, ALL\)\],/,
+  )
+  assert.ok(scenario.includes('const ALL = CREDITS.start + CREDITS.pack + CREDITS.gift'))
+  // At the prices of 06.11.2026 the provisional rate puts more than half of the price of
+  // «Бизнес» and «Агентство» behind their credits: refused without the confirmation, written
+  // with it, and the warning is printed either way.
+  assert.match(
+    scenario,
+    /'--file',\n\s+file,\n\s+'--confirm-exposure',\n\s+\.\.\.signed\('первый курс'\),/,
+  )
+  assert.equal(
+    scenario.match(/'Учётная стоимость выше половины цены у тарифов: business, agency\.'/g)?.length,
+    2,
+  )
   assert.doesNotMatch(
     scenarioSource,
     /INSERT INTO credit_rates|UPDATE credit_rates|DELETE FROM credit_rates/,
   )
-  assert.equal(scenarioSource.match(/t\.operator\('billing-rates', /g)?.length, 3)
+  assert.equal(scenarioSource.match(/t\.operator\('billing-rates', /g)?.length, 4)
 })
 
 test('each rule of expiry of the credits model is a check of a scenario, on the three journals', () => {
@@ -1728,6 +1763,11 @@ test('each rule of expiry of the credits model is a check of a scenario, on the 
       'scenarios-renewal.mjs',
       'renewal-success',
       'a renewal: of the three accounts only the tariff moved',
+    ],
+    [
+      'scenarios-renewal.mjs',
+      'renewal-success',
+      'the second renewal: the old carry expired, only the quota of the period that ended came back',
     ],
     [
       'scenarios-renewal.mjs',
@@ -1778,21 +1818,23 @@ test('each rule of expiry of the credits model is a check of a scenario, on the 
   assert.deepEqual(
     [
       journalRow.quota(order),
-      journalRow.quota(order, 800),
+      journalRow.quota(order, 600),
       journalRow.expired(subscription, end),
+      journalRow.carried(subscription, end),
       journalRow.pack(order),
       journalRow.packTaken(order),
       giftGrant('0199a000-0000-7000-8000-0000000000d4'),
     ],
     [
-      { kind: 'grant', amount: '300.00', key: `order:${order.id}:grant` },
-      { kind: 'grant', amount: '800.00', key: `order:${order.id}:grant` },
-      { kind: 'expire', amount: '-300.00', key: `sub:${subscription.id}:${end.getTime()}:expire` },
+      { kind: 'grant', amount: '150.00', key: `order:${order.id}:grant` },
+      { kind: 'grant', amount: '600.00', key: `order:${order.id}:grant` },
+      { kind: 'expire', amount: '-150.00', key: `sub:${subscription.id}:${end.getTime()}:expire` },
+      { kind: 'grant', amount: '150.00', key: `sub:${subscription.id}:${end.getTime()}:carry` },
       { kind: 'grant', amount: '100.00', key: `order:${order.id}:pack` },
       { kind: 'adjust', amount: '-100.00', key: `order:${order.id}:refund:adjust` },
       {
         kind: 'grant',
-        amount: '35.00',
+        amount: '50.00',
         key: 'user:0199a000-0000-7000-8000-0000000000d4:signup-gift',
       },
     ],
@@ -1802,6 +1844,8 @@ test('each rule of expiry of the credits model is a check of a scenario, on the 
     'tariffGrant: (orderId: string) => `order:${orderId}:grant`,',
     'packGrant: (orderId: string) => `order:${orderId}:pack`,',
     'refundAdjust: (orderId: string) => `order:${orderId}:refund:adjust`,',
+    '`sub:${subscriptionId}:${periodEnd.getTime()}:expire`,',
+    '`sub:${subscriptionId}:${periodEnd.getTime()}:carry`,',
   ])
     assert.ok(ledger.includes(key), key)
   // A whole gift is one row of the journal, wherever a scenario compares balances.

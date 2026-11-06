@@ -2508,8 +2508,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL refund', () => {
         currentPeriodStart: end,
         currentPeriodEnd: new Date('2026-11-04T09:00:00Z'),
       })
-      // The old quota expired with its period and the new one is granted.
-      expect(state.balances.tariff).toEqual({ balance: 30, held: 0, available: 30 })
+      // The old quota is carried into the next period — the refund left the tariff to its
+      // renewal — and the new one is granted.
+      expect(state.balances.tariff).toEqual({ balance: 60, held: 0, available: 60 })
       expect(state.order(t.orderId).status).toBe('refunded')
     })
   })

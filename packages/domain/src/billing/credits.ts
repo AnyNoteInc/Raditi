@@ -268,6 +268,23 @@ export function expiringTariffCredits(tariff: CreditAccountSnapshot): Credits {
   return toCredits(balance - held)
 }
 
+/**
+ * How many of the tariff credits that expire when a period ends are carried into the next one
+ * (decision of 06.11.2026, docs/plan/63-new-pricing.md, §2): what is available, but no more
+ * than `granted` — the quota the period that ends was granted by its order. Credits are spent
+ * from the carried ones first, as the older, so of what is available only up to the quota is of
+ * this period; the rest is the carry of the period before, which has lived its one period and
+ * expires. A carry is never carried again.
+ *
+ * Only at a renewal — the subscription moves on to its next period. When the tariff itself
+ * ends, everything available expires (`expiringTariffCredits`).
+ */
+export function carriedTariffCredits(tariff: CreditAccountSnapshot, granted: Credits): Credits {
+  const quota = creditsSchema.safeParse(granted)
+  if (!quota.success) throw badRequest('Invalid count of granted credits')
+  return toCredits(Math.min(expiringTariffCredits(tariff), quota.data))
+}
+
 const isInstant = (value: Date): boolean =>
   value instanceof Date && Number.isFinite(value.getTime())
 
@@ -299,9 +316,10 @@ export function tariffHoldCreatedAt(
 
 /**
  * Whether a tariff credit that a hold gives back is gone with its period instead of returning
- * to the account. Tariff credits are not carried over, so the credit returns only into the
- * period it was reserved in, while that period is still paid for: the subscription takes tasks
- * and the hold is not older than its current period. It expires when the hold is of an earlier
+ * to the account. What a period carries into the next one is decided when it ends, from the
+ * credits available then (`carriedTariffCredits`); a credit held at that moment is not among
+ * them, so it returns only into the period it was reserved in, while that period is still paid
+ * for: the subscription takes tasks and the hold is not older than its current period. It expires when the hold is of an earlier
  * period, when the subscription is past_due — its period is over and the next one starts with a
  * new quota — and when the workspace has no live subscription any more (`subscription` null).
  * `holdCreatedAt` is the stamp `tariffHoldCreatedAt` gave the hold. Gift and purchased credits

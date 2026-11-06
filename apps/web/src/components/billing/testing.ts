@@ -2,6 +2,7 @@ import { Money, newTaskVerdict, toCredits } from '@repo/domain'
 
 import type {
   BillingOverview,
+  BillingUsage,
   CreditBalances,
   CreditConversion,
   PlanOffer,
@@ -112,6 +113,24 @@ export function offers({
     autoRenewalAvailable: true,
     creditConversion,
   }
+}
+
+/** The meter of the current period of a tariff, as `billing.usage` sends it. */
+export type TariffMeter = NonNullable<BillingUsage['tariff']>['credits']
+
+/**
+ * A meter that adds up, as the server reads it: what was carried into the period and granted for
+ * it is what was charged, set aside, expired and left — `granted` is counted from the parts
+ * unless told —, and the next renewal would carry what is left up to `carryLimit` (the quota of
+ * the period: what was granted, unless told) and let the rest expire. Nothing carried unless told.
+ */
+export function tariffMeter(patch: Partial<TariffMeter> = {}): TariffMeter {
+  const parts = { carried: 0, charged: 0, held: 0, expired: 0, left: 0, heldEarlier: 0, ...patch }
+  const granted =
+    patch.granted ?? parts.charged + parts.held + parts.expired + parts.left - parts.carried
+  const carryLimit = patch.carryLimit ?? granted
+  const carryNext = Math.min(parts.left, carryLimit)
+  return { ...parts, granted, carryLimit, carryNext, burnNext: parts.left - carryNext }
 }
 
 /** What the day and the platform add to the answer about a new task, beside the accounts. */

@@ -714,19 +714,34 @@ describe.skipIf(!databaseUrl)('PostgreSQL payment of an overdue tariff', () => {
         periodEnd,
         subscriptionId: s.subscriptionId,
       })
-      // The seven credits of the period that ended are gone, the quota of the tariff is granted.
+      // The seven credits of the period that ended expire and come back carried into the period
+      // the payment opened — no more than the 7 it was granted —, the quota of the tariff is
+      // granted.
       expect((await getCreditBalances(db, s.workspaceId)).tariff).toEqual({
-        balance: 30,
+        balance: 37,
         held: 0,
-        available: 30,
+        available: 37,
       })
-      expect(
-        state.ledger.map((row) => [row.kind, row.amount.toNumber(), row.idempotencyKey]),
-      ).toEqual([
-        ['grant', 7, expect.stringMatching(/:grant$/)],
-        ['expire', -7, ledgerKeys.tariffExpiry(s.subscriptionId, PERIOD_END)],
-        ['grant', 30, ledgerKeys.tariffGrant(orderId)],
+      // The rows of one transaction carry one moment: compared without their order.
+      const ledger = state.ledger.map((row) => [
+        row.kind,
+        row.amount.toNumber(),
+        row.idempotencyKey,
       ])
+      expect(ledger).toHaveLength(4)
+      expect(ledger).toEqual(
+        expect.arrayContaining([
+          ['grant', 7, expect.stringMatching(/^order:.+:grant$/)],
+          ['expire', -7, ledgerKeys.tariffExpiry(s.subscriptionId, PERIOD_END)],
+          ['grant', 7, ledgerKeys.tariffCarry(s.subscriptionId, PERIOD_END)],
+          ['grant', 30, ledgerKeys.tariffGrant(orderId)],
+        ]),
+      )
+      expect(
+        state.ledger.find(
+          (row) => row.idempotencyKey === ledgerKeys.tariffCarry(s.subscriptionId, PERIOD_END),
+        ),
+      ).toMatchObject({ orderId: null })
       expect(state.actions).toEqual([pastDuePayment])
       expect(state.audit[0]).toMatchObject({
         actorType: 'user',
@@ -741,6 +756,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL payment of an overdue tariff', () => {
           amount: '4900.00',
           credits: 30,
           expiredCredits: 7,
+          carriedCredits: 7,
           periodStart: PAID_AT,
           periodEnd: periodEnd.toISOString(),
           overduePeriodEnd: PERIOD_END.toISOString(),
@@ -842,9 +858,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL payment of an overdue tariff', () => {
       expect(results[0]).toEqual({ state: 'paid', orderId, refundNeeded: false })
       const state = await written(s)
       expect(state.actions).toEqual([pastDuePayment])
-      expect(state.ledger.filter((row) => row.kind === 'grant')).toHaveLength(2)
+      // The quota of the first period, its carry and the new quota.
+      expect(state.ledger.filter((row) => row.kind === 'grant')).toHaveLength(3)
       expect(state.ledger.filter((row) => row.kind === 'expire')).toHaveLength(1)
-      expect((await getCreditBalances(db, s.workspaceId)).tariff.available).toBe(30)
+      expect((await getCreditBalances(db, s.workspaceId)).tariff.available).toBe(37)
       expect(await lettersTo(s.email)).toHaveLength(1)
       expect(state.subscription.currentPeriodStart).toEqual(new Date(PAID_AT))
     })
@@ -916,10 +933,15 @@ describe.skipIf(!databaseUrl)('PostgreSQL payment of an overdue tariff', () => {
         expect(state.ledger.filter((row) => row.kind === 'expire')).toHaveLength(1)
         // One reactivation, and no «return the money» for an order whose payment was applied.
         expect(state.actions).toEqual([pastDuePayment])
+        expect(
+          state.ledger.filter(
+            (row) => row.idempotencyKey === ledgerKeys.tariffCarry(s.subscriptionId, PERIOD_END),
+          ),
+        ).toHaveLength(1)
         expect((await getCreditBalances(db, s.workspaceId)).tariff).toEqual({
-          balance: 30,
+          balance: 37,
           held: 0,
-          available: 30,
+          available: 37,
         })
         expect(await lettersTo(s.email)).toHaveLength(1)
       }
@@ -954,7 +976,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL payment of an overdue tariff', () => {
         renewalNoticePeriodEnd: null,
         currentPeriodStart: new Date(PAID_AT),
       })
-      expect((await getCreditBalances(db, s.workspaceId)).tariff.available).toBe(30)
+      // 30 of the tariff paid for and the 7 carried.
+      expect((await getCreditBalances(db, s.workspaceId)).tariff.available).toBe(37)
       expect(state.entry(pastDuePayment)).toMatchObject([
         {
           meta: {
@@ -997,7 +1020,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL payment of an overdue tariff', () => {
         nextPlanId: null,
         currentPeriodStart: new Date(PAID_AT),
       })
-      expect((await getCreditBalances(db, s.workspaceId)).tariff.available).toBe(80)
+      // 80 of «Больше» and the 7 carried from the old tariff.
+      expect((await getCreditBalances(db, s.workspaceId)).tariff.available).toBe(87)
       expect(state.entry(pastDuePayment)).toMatchObject([
         { meta: { planSlug: next.slug, planChanged: true, amount: '12900.00', credits: 80 } },
       ])
@@ -1024,10 +1048,15 @@ describe.skipIf(!databaseUrl)('PostgreSQL payment of an overdue tariff', () => {
       await settleOrder(s.deps, { orderId })
 
       const balances = await getCreditBalances(db, s.workspaceId)
-      // 7 of the old period: 3 held stay with their tasks, 4 expire; 30 are granted.
-      expect(balances.tariff).toEqual({ balance: 33, held: 3, available: 30 })
+      // 7 of the old period: 3 held stay with their tasks, the 4 available expire and come back
+      // carried; 30 are granted.
+      expect(balances.tariff).toEqual({ balance: 37, held: 3, available: 34 })
       expect(balances.pack.balance).toBe(10)
-      expect((await written(s)).audit[0]?.meta).toMatchObject({ expiredCredits: 4, credits: 30 })
+      expect((await written(s)).audit[0]?.meta).toMatchObject({
+        expiredCredits: 4,
+        carriedCredits: 4,
+        credits: 30,
+      })
       expect(pack.kind).toBe('pack')
     })
 
@@ -1044,7 +1073,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL payment of an overdue tariff', () => {
         planId: next.id,
         nextPlanId: null,
       })
-      expect((await getCreditBalances(db, s.workspaceId)).tariff.available).toBe(80)
+      // A change of the tariff carries the same: up to the 7 the period that ended was granted.
+      expect((await getCreditBalances(db, s.workspaceId)).tariff.available).toBe(87)
       expect(state.audit[0]?.meta).toMatchObject({
         planSlug: next.slug,
         planChanged: true,
@@ -1075,7 +1105,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL payment of an overdue tariff', () => {
         // It waits for the next renewal, which announces and charges its price.
         nextPlanId: next.id,
       })
-      expect((await getCreditBalances(db, s.workspaceId)).tariff.available).toBe(30)
+      expect((await getCreditBalances(db, s.workspaceId)).tariff.available).toBe(37)
       expect(state.audit[0]?.meta).toMatchObject({ planSlug: s.plan.slug, amount: '4900.00' })
     })
 

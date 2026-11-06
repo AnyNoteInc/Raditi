@@ -10,6 +10,7 @@ import { startCheckout, startPastDuePayment } from './checkout.ts'
 import { MAX_USAGE_PAGE, usageEntrySchema, usageSummarySchema } from './dto.ts'
 import { chargeTask, releaseTask, settleTaskCharge } from './holds.ts'
 import {
+  carryTariffRemainder,
   expireTariffRemainder,
   grantPackCredits,
   grantSignupGift,
@@ -86,7 +87,21 @@ describe('usage input', () => {
 })
 
 describe('usage summary DTO', () => {
-  const credits = { granted: 300, charged: 89, held: 45, expired: 0, left: 166, heldEarlier: 0 }
+  /** What the next renewal would carry of what is left, and what would expire then. */
+  const forecast = <T extends { left: number; carryLimit: number }>(meter: T) => {
+    const carryNext = Math.min(meter.left, meter.carryLimit)
+    return { ...meter, carryNext, burnNext: meter.left - carryNext }
+  }
+  const credits = forecast({
+    carried: 0,
+    granted: 300,
+    charged: 89,
+    held: 45,
+    expired: 0,
+    left: 166,
+    heldEarlier: 0,
+    carryLimit: 300,
+  })
   // «Бизнес», 100 a day: 5 charged and 45 set aside today.
   const today = { limit: 100, charged: 5, held: 45, used: 50, room: 50, left: 50 }
   const tariff = {
@@ -174,16 +189,27 @@ describe('usage summary DTO', () => {
     ['credits of the period that expired', { charged: 65, expired: 24 }],
     // Beside the meter: they are of the period that ended and add to nothing here.
     ['credits of an ended period still set aside', { heldEarlier: 45 }],
+    // What an operator added is of the period, not of the quota a renewal carries up to.
     ['a quota an operator added to', { granted: 310, left: 176 }],
+    // Carried by the renewal that started the period: spent first, all of it may carry again
+    // only as part of this period's quota.
+    ['credits carried from the period before', { carried: 120, left: 286 }],
+    [
+      'a carry not spent beyond the quota: the rest of it will expire',
+      { carried: 120, charged: 10, held: 0, left: 410 },
+    ],
   ])('accepts a meter that adds up: %s', (_case, patch) => {
-    const meter = { ...credits, ...patch }
+    const meter = forecast({ ...credits, ...patch })
     const parsed = usageSummarySchema.parse({
       ...summary,
       tariff: { ...tariff, credits: meter },
       totalLeft: meter.left + 10,
     })
     expect(parsed.tariff?.credits).toEqual(meter)
-    expect(meter.charged + meter.held + meter.expired + meter.left).toBe(meter.granted)
+    expect(meter.charged + meter.held + meter.expired + meter.left).toBe(
+      meter.carried + meter.granted,
+    )
+    expect(meter.carryNext + meter.burnNext).toBe(meter.left)
   })
 
   it.each([
@@ -203,6 +229,27 @@ describe('usage summary DTO', () => {
     [
       'a meter without the credits of an ended period',
       { tariff: { ...tariff, credits: { ...credits, heldEarlier: undefined } } },
+    ],
+    ['a carry the sum leaves out', { tariff: { ...tariff, credits: { ...credits, carried: 50 } } }],
+    [
+      'a meter without what was carried into the period',
+      { tariff: { ...tariff, credits: { ...credits, carried: undefined } } },
+    ],
+    [
+      'a forecast that carries more than the quota of the period',
+      { tariff: { ...tariff, credits: { ...credits, carryLimit: 100 } } },
+    ],
+    [
+      'a forecast that carries less than it may',
+      { tariff: { ...tariff, credits: { ...credits, carryNext: 160, burnNext: 6 } } },
+    ],
+    [
+      'a forecast that loses credits',
+      { tariff: { ...tariff, credits: { ...credits, burnNext: 1 } } },
+    ],
+    [
+      'a meter without the forecast of the renewal',
+      { tariff: { ...tariff, credits: { ...credits, carryNext: undefined } } },
     ],
     ['a total that is not the sum of the accounts', { totalLeft: 175 }],
     ['a total that leaves the gift out', { gift: { left: 30, held: 0, granted: true } }],
@@ -514,9 +561,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
   }
 
   /**
-   * What a renewal does in one transaction: the remainder goes, the period moves, the quota
-   * comes — paid by the order of the new period. The remainder is written by the transaction
-   * that starts the new period, so by the clock it is a row of the new period: it is stamped so.
+   * What a renewal does in one transaction: the remainder goes — up to the old quota it is
+   * carried back —, the period moves, the quota comes — paid by the order of the new period. The expiry is written by the transaction that starts
+   * the new period, so by the clock it is a row of the new period: it is stamped so.
    */
   async function renew(workspaceId: string, subscriptionId: string, planId: string, credits = 300) {
     const next = { start: PERIOD_END, end: new Date(PERIOD_END.getTime() + PERIOD_MS) }
@@ -527,7 +574,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       periodEnd: next.end,
     })
     await db.$transaction(async (tx) => {
-      await expireTariffRemainder(tx, { workspaceId, subscriptionId, periodEnd: PERIOD_END })
+      await carryTariffRemainder(tx, {
+        workspaceId,
+        subscriptionId,
+        periodEnd: PERIOD_END,
+      })
       await tx.subscription.update({
         where: { id: subscriptionId },
         data: { currentPeriodStart: next.start, currentPeriodEnd: next.end },
@@ -569,6 +620,33 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
 
   const NOTHING_SPENT = { charged: 0, held: 0, expired: 0, heldEarlier: 0 }
   const FULL = { granted: 300, ...NOTHING_SPENT, left: 300 }
+  interface ScaleParts {
+    carried?: number
+    granted: number
+    charged: number
+    held: number
+    expired: number
+    left: number
+    heldEarlier: number
+    carryLimit?: number
+  }
+  /**
+   * The meter of a period as the summary tells it: its parts — nothing carried into the period
+   * unless told —, and the forecast of the next renewal counted from them: what is left carries
+   * up to `carryLimit`, the quota of the order of the period — what was granted, unless an
+   * operator added to it —, and the rest expires.
+   */
+  const scale = ({ carried = 0, carryLimit, ...parts }: ScaleParts) => {
+    const limit = carryLimit ?? parts.granted
+    const carryNext = Math.min(parts.left, limit)
+    return {
+      carried,
+      ...parts,
+      carryLimit: limit,
+      carryNext,
+      burnNext: parts.left - carryNext,
+    }
+  }
 
   it('shows the full quota of a fresh tariff and nothing spent', async () => {
     const { workspaceId, plan, subscription } = await funded({ plan: startDay })
@@ -593,7 +671,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
         pastDueSince: null,
       },
       tariff: {
-        credits: FULL,
+        credits: scale(FULL),
         today: dayOf(50, 0, 0, 300),
         sites: { count: 0, max: 2 },
         bySite: [],
@@ -619,7 +697,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
 
     expect(summary.newTask).toEqual({ allowed: false, reason: 'rate_missing' })
     expect(summary).toMatchObject({ spendable: 300, setAside: 0, minToStart: 5, totalLeft: 300 })
-    expect(summary.tariff?.credits).toEqual(FULL)
+    expect(summary.tariff?.credits).toEqual(scale(FULL))
   })
 
   it('adds gift credits to what is left and leaves the quota of the period as it is', async () => {
@@ -654,7 +732,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
     expect(summary.gift).toEqual({ left: 45, held: 5, granted: true })
     expect(summary.totalLeft).toBe(345)
     expect(summary).toMatchObject({ spendable: 345, setAside: 5, newTask: TAKEN })
-    expect(summary.tariff?.credits).toEqual(FULL)
+    expect(summary.tariff?.credits).toEqual(scale(FULL))
   })
 
   it('adds purchased credits to what is left and leaves the tariff as it is', async () => {
@@ -705,7 +783,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       expect(summary.tariff).toEqual({
         // Five of the 45 set aside for the done task were charged; the 45 of the running one
         // are held, as a sum of what its reserve holds; the three that came back are left.
-        credits: { granted: 300, charged: 5, held: 45, expired: 0, left: 250, heldEarlier: 0 },
+        credits: scale({
+          granted: 300,
+          charged: 5,
+          held: 45,
+          expired: 0,
+          left: 250,
+          heldEarlier: 0,
+        }),
         // What the day took of the tariff: the 5 charged and the 45 set aside; the reserves that
         // came back took nothing. This plan has no daily limit.
         today: dayOf(null, 5, 45, 250),
@@ -788,14 +873,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
 
       const inWork = await summaryAt(workspaceId)
 
-      expect(inWork.tariff?.credits).toEqual({
-        granted: 5,
-        charged: 0,
-        held: 5,
-        expired: 0,
-        left: 0,
-        heldEarlier: 0,
-      })
+      expect(inWork.tariff?.credits).toEqual(
+        scale({
+          granted: 5,
+          charged: 0,
+          held: 5,
+          expired: 0,
+          left: 0,
+          heldEarlier: 0,
+        }),
+      )
       expect(inWork.pack).toEqual({ left: 60, held: 40 })
       expect(inWork.history.items).toMatchObject([
         { id: block.id, outcome: 'held', credits: 45, from: { tariff: 5, gift: 0, pack: 40 } },
@@ -806,14 +893,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       expect(paid).toMatchObject({ credits: 17, from: { tariff: 5, gift: 0, pack: 12 } })
       const done = await summaryAt(workspaceId)
 
-      expect(done.tariff?.credits).toEqual({
-        granted: 5,
-        charged: 5,
-        held: 0,
-        expired: 0,
-        left: 0,
-        heldEarlier: 0,
-      })
+      expect(done.tariff?.credits).toEqual(
+        scale({
+          granted: 5,
+          charged: 5,
+          held: 0,
+          expired: 0,
+          left: 0,
+          heldEarlier: 0,
+        }),
+      )
       expect(done.pack).toEqual({ left: 88, held: 0 })
       // One line and one sum by site, whatever accounts paid.
       expect(done.tariff?.bySite).toEqual([{ siteId: shop.id, name: 'Магазин', credits: 17 }])
@@ -910,14 +999,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       const summary = await summaryAt(workspaceId)
 
       expect(summary.pack).toEqual({ left: 100, held: 0 })
-      expect(summary.tariff?.credits).toEqual({
-        granted: 40,
-        charged: 22,
-        held: 0,
-        expired: 0,
-        left: 18,
-        heldEarlier: 0,
-      })
+      expect(summary.tariff?.credits).toEqual(
+        scale({
+          granted: 40,
+          charged: 22,
+          held: 0,
+          expired: 0,
+          left: 18,
+          heldEarlier: 0,
+        }),
+      )
       expect(summary.history.items).toMatchObject([
         { id: block.id, outcome: 'charged', credits: 17, from: { tariff: 17, gift: 0, pack: 0 } },
         { id: small.id, outcome: 'charged', credits: 5, from: { tariff: 5, gift: 0, pack: 0 } },
@@ -937,7 +1028,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
 
       expect(summary.tariff).toMatchObject({
         // What the period was granted is what the ledger says, not what the plan promises.
-        credits: { granted: 5, charged: 5, held: 0, expired: 0, left: 0, heldEarlier: 0 },
+        credits: scale({ granted: 5, charged: 5, held: 0, expired: 0, left: 0, heldEarlier: 0 }),
         // Only the tariff counts in the day: the 5 the first task paid.
         today: dayOf(null, 5, 0, 0),
         // Five from the tariff and 17 from the pack.
@@ -989,14 +1080,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
         { siteId: quiet.id, name: 'Аптека', credits: 10 },
         { siteId: equal.id, name: 'Булочная', credits: 10 },
       ])
-      expect(tariff.credits).toEqual({
-        granted: 300,
-        charged: 35,
-        held: 45,
-        expired: 0,
-        left: 220,
-        heldEarlier: 0,
-      })
+      expect(tariff.credits).toEqual(
+        scale({
+          granted: 300,
+          charged: 35,
+          held: 45,
+          expired: 0,
+          left: 220,
+          heldEarlier: 0,
+        }),
+      )
       expect(tariff.sites).toEqual({ count: 4, max: 3 })
     })
 
@@ -1045,16 +1138,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
 
       await adjust(-50, minutesAfter(1))
       // Taken off the account: gone without a charge.
-      expect(await meterAt(workspaceId)).toEqual({ ...FULL, expired: 50, left: 250 })
+      expect(await meterAt(workspaceId)).toEqual(scale({ ...FULL, expired: 50, left: 250 }))
 
       await adjust(80, minutesAfter(2))
-      // Added to the account: the period was granted that much more.
-      expect(await meterAt(workspaceId)).toEqual({
-        ...FULL,
-        granted: 380,
-        expired: 50,
-        left: 330,
-      })
+      // Added to the account: the period was granted that much more — not the quota a renewal
+      // carries up to, which is what its order granted.
+      expect(await meterAt(workspaceId)).toEqual(
+        scale({ ...FULL, granted: 380, expired: 50, left: 330, carryLimit: 300 }),
+      )
     })
   })
 
@@ -1070,40 +1161,46 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       const long = await task(workspaceId, blog.id, { status: 'running' })
       // 45 tariff credits reserved on the 17th.
       const { holds } = await place(workspaceId, long.id, { now: DAY_BEFORE })
-      expect(await meterAt(workspaceId, DAY_BEFORE)).toEqual({ ...FULL, held: 45, left: 255 })
+      expect(await meterAt(workspaceId, DAY_BEFORE)).toEqual(
+        scale({ ...FULL, held: 45, left: 255 }),
+      )
       expect((await historyAt(workspaceId, DAY_BEFORE)).items).toHaveLength(1)
 
-      // The period renews on the 18th with 300 new credits: 255 expired, the 45 stayed.
+      // The period renews on the 18th with 300 new credits: the 255 left are carried, the 45
+      // stay held.
       await renew(workspaceId, subscription!.id, plan.id)
-      expect(await balanceOf(workspaceId)).toEqual({ balance: 345, held: 45 })
+      expect(await balanceOf(workspaceId)).toEqual({ balance: 600, held: 45 })
       const renewed = await summaryAt(workspaceId, minutesAfter(1, PERIOD_END))
       expect(renewed.subscription?.period).toEqual({
         start: PERIOD_END,
         end: new Date(PERIOD_END.getTime() + PERIOD_MS),
       })
-      // 300 = 0 + 0 + 0 + 300: the credits in work are of the period that ended, and stand
-      // beside the meter of the new one.
+      // 255 + 300 = 0 + 0 + 0 + 555: the credits in work are of the period that ended, and
+      // stand beside the meter of the new one; of the 555 left, 300 would carry on.
       expect(renewed.tariff).toEqual({
-        credits: { ...FULL, heldEarlier: 45 },
+        credits: scale({ ...FULL, carried: 255, left: 555, heldEarlier: 45, carryLimit: 300 }),
         // The reserve of the 17th takes nothing of the 18th.
-        today: dayOf(50, 0, 0, 300),
+        today: dayOf(50, 0, 0, 555),
         sites: { count: 1, max: 2 },
         bySite: [],
       })
       expect(renewed.history).toEqual(noHistory)
-      expect(renewed).toMatchObject({ totalLeft: 300, spendable: 300, setAside: 45 })
+      expect(renewed).toMatchObject({ totalLeft: 555, spendable: 555, setAside: 45 })
 
-      // The task is done on the 19th for 17: the old row pays 17 and its other 28 expire.
+      // The task is done on the 19th for 17: the old row pays 17 and its other 28 expire, not
+      // carried — what a period carries was decided when it ended.
       await charge(long.id, 17, { now: DAY_AFTER })
-      expect(await balanceOf(workspaceId)).toEqual({ balance: 300, held: 0 })
+      expect(await balanceOf(workspaceId)).toEqual({ balance: 555, held: 0 })
       const paid = await db.creditLedger.findUniqueOrThrow({
         where: { idempotencyKey: ledgerKeys.holdCharge(holds[0]!.id) },
       })
       // Written — and stamped — in the new period, and still of the period of its reserve.
       expect(paid.createdAt).toEqual(DAY_AFTER)
       const settled = await summaryAt(workspaceId, DAY_AFTER)
-      // 300 = 0 + 0 + 0 + 300 again: the 17 and the 28 are of the period that ended.
-      expect(settled.tariff?.credits).toEqual(FULL)
+      // 255 + 300 = 0 + 0 + 0 + 555 again: the 17 and the 28 are of the period that ended.
+      expect(settled.tariff?.credits).toEqual(
+        scale({ ...FULL, carried: 255, left: 555, carryLimit: 300 }),
+      )
       expect(settled.tariff?.bySite).toEqual([])
       expect(settled.history).toEqual(noHistory)
     })
@@ -1121,9 +1218,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       const continued = await summaryAt(workspaceId, minutesAfter(2, PERIOD_END))
 
       // The row of the new period is held in it; the row of the old one stands beside the meter.
-      expect(continued.tariff?.credits).toEqual({ ...FULL, held: 45, left: 255, heldEarlier: 45 })
+      expect(continued.tariff?.credits).toEqual(
+        scale({ ...FULL, carried: 255, held: 45, left: 510, heldEarlier: 45, carryLimit: 300 }),
+      )
       // «Продолжить» took 45 of the 18th.
-      expect(continued.tariff?.today).toEqual(dayOf(50, 0, 45, 255))
+      expect(continued.tariff?.today).toEqual(dayOf(50, 0, 45, 510))
       // The line of the task is of the period it was first queued in.
       expect(continued.history).toEqual(noHistory)
 
@@ -1132,7 +1231,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       await charge(long.id, 50, { now: DAY_AFTER })
       const settled = await summaryAt(workspaceId, DAY_AFTER)
       // The meter counts each ledger row in its own period.
-      expect(settled.tariff?.credits).toEqual({ ...FULL, charged: 5, left: 295 })
+      expect(settled.tariff?.credits).toEqual(
+        scale({ ...FULL, carried: 255, charged: 5, left: 550, carryLimit: 300 }),
+      )
       expect(settled.tariff?.bySite).toEqual([{ siteId: blog.id, name: 'Блог', credits: 5 }])
       expect(settled.history).toEqual(noHistory)
 
@@ -1172,7 +1273,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
 
       const summary = await summaryAt(workspaceId, PERIOD_START)
 
-      expect(summary.tariff?.credits).toEqual({ ...FULL, charged: 5, held: 45, left: 250 })
+      expect(summary.tariff?.credits).toEqual(scale({ ...FULL, charged: 5, held: 45, left: 250 }))
       expect(summary.tariff?.bySite).toEqual([{ siteId: blog.id, name: 'Блог', credits: 5 }])
       expect(summary.history.items.map(({ id, at }) => [id, at]).sort()).toEqual(
         [
@@ -1190,7 +1291,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       await place(workspaceId, late.id, { now: placedAt })
 
       const before = await summaryAt(workspaceId, minutesAfter(3, PERIOD_END))
-      expect(before.tariff?.credits).toEqual({ ...FULL, held: 45, left: 255 })
+      expect(before.tariff?.credits).toEqual(scale({ ...FULL, held: 45, left: 255 }))
       // The line stands at the moment the task was queued, whatever the stamp of its period.
       expect(before.history.items.map(({ id, at, outcome }) => [id, at, outcome])).toEqual([
         [late.id, placedAt, 'held'],
@@ -1200,10 +1301,56 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
 
       await renew(workspaceId, subscription!.id, plan.id)
       const after = await summaryAt(workspaceId, minutesAfter(4, PERIOD_END))
-      expect(after.tariff?.credits).toEqual({ ...FULL, heldEarlier: 45 })
+      expect(after.tariff?.credits).toEqual(
+        scale({ ...FULL, carried: 255, left: 555, heldEarlier: 45, carryLimit: 300 }),
+      )
       expect(after.history).toEqual(noHistory)
       // The renewal does not give the day back.
-      expect(after.tariff?.today).toEqual(dayOf(50, 0, 45, 300))
+      expect(after.tariff?.today).toEqual(dayOf(50, 0, 45, 555))
+    })
+
+    it('counts the carry of the renewal that opened the period, not one of an earlier period', async () => {
+      const { workspaceId, plan, subscription } = await funded()
+      const blog = await site(workspaceId, 'Блог')
+      await charged(workspaceId, blog.id, DAY_BEFORE, 20)
+      // 280 left of 300 on the 18th: all carried, and 300 new.
+      await renew(workspaceId, subscription!.id, plan.id)
+      const second = { start: PERIOD_END, end: new Date(PERIOD_END.getTime() + PERIOD_MS) }
+      const inSecond = minutesAfter(60 * 24, PERIOD_END)
+      // 40 spent in the new period: of the carried credits first, as the older.
+      await charged(workspaceId, blog.id, inSecond, 40)
+      // 280 + 300 = 40 + 0 + 0 + 540; at the next renewal 300 would carry and 240 — the rest of
+      // the carry — would expire.
+      expect(await meterAt(workspaceId, inSecond)).toEqual(
+        scale({ ...FULL, carried: 280, charged: 40, left: 540, carryLimit: 300 }),
+      )
+
+      // The second renewal: of 540 only the 300 of the second quota carry.
+      const third = { start: second.end, end: new Date(second.end.getTime() + PERIOD_MS) }
+      const order = await fixtures.order({
+        workspaceId,
+        planId: plan.id,
+        periodStart: third.start,
+        periodEnd: third.end,
+      })
+      await db.$transaction(async (tx) => {
+        await carryTariffRemainder(tx, {
+          workspaceId,
+          subscriptionId: subscription!.id,
+          periodEnd: second.end,
+        })
+        await tx.subscription.update({
+          where: { id: subscription!.id },
+          data: { currentPeriodStart: third.start, currentPeriodEnd: third.end },
+        })
+        await grantTariffCredits(tx, { workspaceId, orderId: order.id, credits: 300 })
+      })
+      const inThird = minutesAfter(60, third.start)
+      // The carry of the 18th is of the period before: only the 300 carried now are counted.
+      expect(await meterAt(workspaceId, inThird)).toEqual(
+        scale({ ...FULL, carried: 300, left: 600, carryLimit: 300 }),
+      )
+      expect(await balanceOf(workspaceId)).toEqual({ balance: 600, held: 0 })
     })
 
     it('shows a tariff whose payment failed with its numbers as they are', async () => {
@@ -1228,14 +1375,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
 
       expect(summary.subscription).toMatchObject({ status: 'past_due', pastDueSince: PERIOD_END })
       // 25 charged; 45 that expired with one reserve and 25 with the other; 205 not used.
-      expect(summary.tariff?.credits).toEqual({
-        granted: 300,
-        charged: 25,
-        held: 0,
-        expired: 70,
-        left: 205,
-        heldEarlier: 0,
-      })
+      expect(summary.tariff?.credits).toEqual(
+        scale({
+          granted: 300,
+          charged: 25,
+          held: 0,
+          expired: 70,
+          left: 205,
+          heldEarlier: 0,
+        }),
+      )
       expect(
         summary.history.items.map(({ id, outcome, credits }) => [id, outcome, credits]),
       ).toEqual([
@@ -1319,7 +1468,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
 
       const [order] = await db.order.findMany({ where: { workspaceId: s.workspaceId } })
       expect(order).toMatchObject({ periodStart: FIRST.start, periodEnd: FIRST.end })
-      expect(summary.tariff?.credits).toEqual(FULL)
+      expect(summary.tariff?.credits).toEqual(scale(FULL))
       // The checkout made the workspace, and the gift of the registration with it.
       expect(summary.gift).toEqual({ left: 50, held: 0, granted: true })
       expect(summary.totalLeft).toBe(350)
@@ -1336,7 +1485,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
 
       // Wrong numbers are not shown: 0 granted beside 300 left does not add up.
       await expect(summaryAt(s.workspaceId, inFirst(0))).rejects.toThrow(
-        'The parts of the period do not add up to what it was granted',
+        'The parts of the period do not add up to what it was carried and granted',
       )
 
       // Moved together, as the stand moves time, the period adds up again.
@@ -1344,20 +1493,22 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
         where: { subscriptionId: s.subscriptionId },
         data: { periodStart: new Date(FIRST.start.getTime() - 1) },
       })
-      expect((await summaryAt(s.workspaceId, inFirst(0))).tariff?.credits).toEqual(FULL)
+      expect((await summaryAt(s.workspaceId, inFirst(0))).tariff?.credits).toEqual(scale(FULL))
     })
 
-    it('adds up through a renewal that leaves 187 credits unused: they are not expired credits of the new period', async () => {
+    it('adds up through a renewal that leaves 187 credits unused: carried into the new period, not its expired credits', async () => {
       const s = await subscribed()
       const blog = await site(s.workspaceId, 'Блог')
       for (const [minute, credits] of [45, 45, 23].entries()) {
         await charged(s.workspaceId, blog.id, inFirst(minute), credits)
       }
-      expect(await meterAt(s.workspaceId, inFirst(30))).toEqual({
-        ...FULL,
-        charged: 113,
-        left: 187,
-      })
+      expect(await meterAt(s.workspaceId, inFirst(30))).toEqual(
+        scale({
+          ...FULL,
+          charged: 113,
+          left: 187,
+        }),
+      )
 
       const order = await renewed(s)
 
@@ -1371,11 +1522,23 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       })
       expect(gone.amount.toNumber()).toBe(-187)
       expect(gone.createdAt.getTime()).toBeGreaterThan(FIRST.end.getTime())
-      expect(await balanceOf(s.workspaceId)).toEqual({ balance: 300, held: 0 })
+      // And came back whole — no more than the 300 of the old quota —, without an order and
+      // under the key of the period it comes from; by the clock it is a row of the new period
+      // as well.
+      const carried = await db.creditLedger.findUniqueOrThrow({
+        where: { idempotencyKey: ledgerKeys.tariffCarry(s.subscriptionId, FIRST.end) },
+      })
+      expect(carried).toMatchObject({ kind: 'grant', orderId: null })
+      expect(carried.createdAt.getTime()).toBeGreaterThan(FIRST.end.getTime())
+      expect(carried.amount.toNumber()).toBe(187)
+      expect(await balanceOf(s.workspaceId)).toEqual({ balance: 487, held: 0 })
       const after = await summaryAt(s.workspaceId, new Date('2026-07-02T12:00:00.000Z'))
       expect(after.subscription?.period).toEqual({ start: FIRST.end, end: SECOND_END })
-      // 300 = 0 + 0 + 0 + 300: the 187 are of the period that ended, not «сгорело» of this one.
-      expect(after.tariff?.credits).toEqual(FULL)
+      // 187 + 300 = 0 + 0 + 0 + 487: the 187 carried are of this period, nothing «сгорело» in it;
+      // 300 of the 487 would carry on at the next renewal, 187 would expire.
+      expect(after.tariff?.credits).toEqual(
+        scale({ ...FULL, carried: 187, left: 487, carryLimit: 300 }),
+      )
       expect(after.tariff?.bySite).toEqual([])
       expect(after.history).toEqual(noHistory)
     })
@@ -1395,21 +1558,25 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
         data: { status: 'past_due', pastDueSince: overdueSince },
       })
       const overdue = new Date('2026-07-03T12:00:00.000Z')
-      expect(await meterAt(s.workspaceId, overdue)).toEqual({
-        ...FULL,
-        charged: 17,
-        held: 90,
-        left: 193,
-      })
+      expect(await meterAt(s.workspaceId, overdue)).toEqual(
+        scale({
+          ...FULL,
+          charged: 17,
+          held: 90,
+          left: 193,
+        }),
+      )
       // A task that ends meanwhile is paid by its own reserve; what it did not use expires.
       await charge(done.id, 20, { now: overdue })
-      expect(await meterAt(s.workspaceId, overdue)).toEqual({
-        ...FULL,
-        charged: 37,
-        held: 45,
-        expired: 25,
-        left: 193,
-      })
+      expect(await meterAt(s.workspaceId, overdue)).toEqual(
+        scale({
+          ...FULL,
+          charged: 37,
+          held: 45,
+          expired: 25,
+          left: 193,
+        }),
+      )
 
       // «Оплатить сейчас»: the customer pays on 5 July, and the period starts then.
       const checkout = await startPastDuePayment(s.deps, { userId: s.userId })
@@ -1435,14 +1602,25 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
         periodEnd: subscription.currentPeriodEnd,
       })
       const afterPayment = new Date('2026-07-06T12:00:00.000Z')
-      // 300 = 0 + 0 + 0 + 300, and the reserve of the task that still waits stands beside it.
-      expect(await meterAt(s.workspaceId, afterPayment)).toEqual({ ...FULL, heldEarlier: 45 })
-      expect(await balanceOf(s.workspaceId)).toEqual({ balance: 345, held: 45 })
+      // The 193 left of the period that ended are carried into the one the payment opened, which
+      // starts later than that period ended: 193 + 300 = 0 + 0 + 0 + 493, and the reserve of the
+      // task that still waits stands beside it.
+      const carried = await db.creditLedger.findUniqueOrThrow({
+        where: { idempotencyKey: ledgerKeys.tariffCarry(s.subscriptionId, FIRST.end) },
+      })
+      expect(carried).toMatchObject({ kind: 'grant', orderId: null })
+      expect(carried.amount.toNumber()).toBe(193)
+      const carriedMeter = scale({ ...FULL, carried: 193, left: 493, carryLimit: 300 })
+      expect(await meterAt(s.workspaceId, afterPayment)).toEqual({
+        ...carriedMeter,
+        heldEarlier: 45,
+      })
+      expect(await balanceOf(s.workspaceId)).toEqual({ balance: 538, held: 45 })
 
       await release(waiting.id, { now: afterPayment })
-      // Given back after its period ended, it expires: nothing joins the new quota.
-      expect(await meterAt(s.workspaceId, afterPayment)).toEqual(FULL)
-      expect(await balanceOf(s.workspaceId)).toEqual({ balance: 300, held: 0 })
+      // Given back after its period ended, it expires: nothing joins the new period.
+      expect(await meterAt(s.workspaceId, afterPayment)).toEqual(carriedMeter)
+      expect(await balanceOf(s.workspaceId)).toEqual({ balance: 493, held: 0 })
     })
   })
 
@@ -1584,7 +1762,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
     const midnight = new Date('2026-10-04T21:00:00.000Z')
     const nextDay = await tariffAt(workspaceId, midnight)
     expect(nextDay.today).toEqual(dayOf(50, 0, 0, 295))
-    expect(nextDay.credits).toEqual({ ...FULL, charged: 5, left: 295 })
+    expect(nextDay.credits).toEqual(scale({ ...FULL, charged: 5, left: 295 }))
   })
 
   it('shows only the sites, credits and history of its own workspace', async () => {
@@ -1789,14 +1967,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       expect(firstPage.items.map(({ id }) => id)).toEqual(newestFirst.slice(0, 20))
       expect(firstPage.nextCursor).toBe(newestFirst[19])
       // 22 reserves of 45 credits.
-      expect(tariff?.credits).toEqual({
-        granted: 1000,
-        charged: 0,
-        held: 990,
-        expired: 0,
-        left: 10,
-        heldEarlier: 0,
-      })
+      expect(tariff?.credits).toEqual(
+        scale({
+          granted: 1000,
+          charged: 0,
+          held: 990,
+          expired: 0,
+          left: 10,
+          heldEarlier: 0,
+        }),
+      )
       const rest = await listUsageHistory(db, workspaceId, { cursor: firstPage.nextCursor! })
       expect(rest.items.map(({ id }) => id)).toEqual(newestFirst.slice(20))
       expect(rest.nextCursor).toBeNull()

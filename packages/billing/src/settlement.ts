@@ -28,7 +28,7 @@ import type { BillingTx } from './accounts.ts'
 import { writeBillingAudit, type BillingAuditEntry } from './audit.ts'
 import type { BillingDeps } from './deps.ts'
 import { orderFailureReasons } from './failure-text.ts'
-import { expireTariffRemainder, grantPackCredits, grantTariffCredits } from './ledger.ts'
+import { carryTariffRemainder, grantPackCredits, grantTariffCredits } from './ledger.ts'
 import { getCreditBalances } from './read-models.ts'
 import { isRenewalOrder, renewedPeriodEnd } from './renewal-order.ts'
 
@@ -857,10 +857,11 @@ export function periodAfter(
 }
 
 /**
- * A paid renewal: the order becomes `paid`, what is left of the old quota expires, the
- * subscription moves to the period after the one that ended — counted from its end by the
- * anchor, never from the moment of the charge — on the plan the order paid for, the quota of
- * that plan is granted and the owner is told. One transaction, or nothing; the loser of a
+ * A paid renewal: the order becomes `paid`, what is left of the old quota is carried into the
+ * next period — up to the quota of the period that ended, the rest expires
+ * (`carryTariffRemainder`) —, the subscription moves to the period after the one that ended —
+ * counted from its end by the anchor, never from the moment of the charge — on the plan the
+ * order paid for, the quota of that plan is granted and the owner is told. One transaction, or nothing; the loser of a
  * race for the order does nothing. Locks: the order row, the subscription, the accounts.
  */
 async function applyRenewalPayment(deps: ApplyDeps, order: Order, payment: Payment): Promise<void> {
@@ -891,8 +892,10 @@ async function applyRenewalPayment(deps: ApplyDeps, order: Order, payment: Payme
         throw conflict('The plan of the order has no monthly quota')
       const { period, anchor } = periodAfter(subscription.periodAnchor, renewed)
       // While the subscription still stands in the period that ended: only then, and only
-      // what no task holds, does the old quota expire.
-      const expired = await expireTariffRemainder(tx, {
+      // what no task holds, does the old quota expire — and the part of it that is carried come
+      // back in the next period. A scheduled change of the plan carries the same: the quota
+      // that bounds the carry is the one of the period that ended.
+      const { expired, carried } = await carryTariffRemainder(tx, {
         workspaceId,
         subscriptionId,
         periodEnd: renewed,
@@ -942,7 +945,10 @@ async function applyRenewalPayment(deps: ApplyDeps, order: Order, payment: Payme
           planChanged: subscription.planId !== planId,
           amount,
           credits: plan.creditsPerMonth,
+          // The ledger rows: every available credit expired, and `carriedCredits` of them came
+          // back in the new period.
           expiredCredits: expired === null ? 0 : -expired.entry.amount.toNumber(),
+          carriedCredits: carried === null ? 0 : carried.entry.amount.toNumber(),
           periodStart: period.start.toISOString(),
           periodEnd: period.end.toISOString(),
           reanchored: anchor.getTime() !== subscription.periodAnchor.getTime(),
@@ -965,8 +971,9 @@ async function applyRenewalPayment(deps: ApplyDeps, order: Order, payment: Payme
  * again — with a new run of periods, a month from the moment of the payment, which becomes the
  * anchor (the contract of `nextBillingPeriod`: without it the next renewal is refused). The
  * tariff is the one the order paid for; a scheduled change it names is applied. What was left
- * of the quota of the period that ended expires — the available credits only — and the quota of
- * the paid tariff is granted, once per order. The method of the payment replaces the saved one
+ * of the quota of the period that ended — the available credits only — is carried into the new
+ * period up to that quota, and the rest expires (`carryTariffRemainder`), as at a renewal; the
+ * quota of the paid tariff is granted, once per order. The method of the payment replaces the saved one
  * only under the consent rule (`consentedMethod`) and only while auto-renewal is still on:
  * switched off after the order was made, it keeps what it had. The owner is told. One
  * transaction, or nothing; the loser of a race for the order does nothing.
@@ -1001,7 +1008,7 @@ async function applyPastDuePayment(deps: ApplyDeps, order: Order, payment: Payme
       // The months are counted anew, from this payment.
       const period = billingPeriod(paidAt, 0)
       // While the subscription still stands in the period that ended.
-      const expired = await expireTariffRemainder(tx, {
+      const { expired, carried } = await carryTariffRemainder(tx, {
         workspaceId,
         subscriptionId,
         periodEnd: subscription.currentPeriodEnd,
@@ -1054,7 +1061,10 @@ async function applyPastDuePayment(deps: ApplyDeps, order: Order, payment: Payme
           planChanged: subscription.planId !== planId,
           amount,
           credits: plan.creditsPerMonth,
+          // The ledger rows: every available credit expired, and `carriedCredits` of them came
+          // back in the new period.
           expiredCredits: expired === null ? 0 : -expired.entry.amount.toNumber(),
+          carriedCredits: carried === null ? 0 : carried.entry.amount.toNumber(),
           periodStart: period.start.toISOString(),
           periodEnd: period.end.toISOString(),
           // The period that was not paid for, and since when.

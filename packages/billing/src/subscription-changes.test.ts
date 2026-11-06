@@ -1585,14 +1585,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL changes of a tariff', () => {
         currentPeriodStart: END,
         currentPeriodEnd: NEXT_END,
       })
-      // The credits of the old tariff are not carried over; the new quota is the new tariff's.
-      expect((await getCreditBalances(db, s.workspaceId)).tariff).toMatchObject({ available: 80 })
+      // The 12 left of the old tariff are carried — up to the 12 its period was granted —, and
+      // the new quota is the new tariff's.
+      expect((await getCreditBalances(db, s.workspaceId)).tariff).toMatchObject({ available: 92 })
       expect(state.entry(renewalAuditActions.renewed)[0]?.meta).toMatchObject({
         planSlug: next.slug,
         planChanged: true,
         amount: '12900.00',
         credits: 80,
         expiredCredits: 12,
+        carriedCredits: 12,
       })
     })
 
@@ -1649,7 +1651,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL changes of a tariff', () => {
         nextPlanId: null,
         currentPeriodEnd: NEXT_END,
       })
-      expect((await getCreditBalances(db, s.workspaceId)).tariff).toMatchObject({ available: 30 })
+      // 30 of the tariff and the 12 carried.
+      expect((await getCreditBalances(db, s.workspaceId)).tariff).toMatchObject({ available: 42 })
       // Once the charge has its outcome the change is taken, for the period after.
       await schedulePlanChange(s.deps, { userId: s.userId, planSlug: next.slug })
       expect((await written(s)).subscription).toMatchObject({
@@ -1706,8 +1709,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL changes of a tariff', () => {
         nextPlanId: chargedForScheduled ? null : next.id,
         currentPeriodEnd: NEXT_END,
       })
+      // With the 12 the period that ended carried, whichever tariff comes.
       expect((await getCreditBalances(db, s.workspaceId)).tariff).toMatchObject({
-        available: charged.creditsPerMonth,
+        available: (charged.creditsPerMonth ?? 0) + 12,
       })
       expect(state.entry(renewalAuditActions.renewed)[0]?.meta).toMatchObject({
         planSlug: charged.slug,

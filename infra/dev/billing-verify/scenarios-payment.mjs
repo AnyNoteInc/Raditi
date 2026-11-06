@@ -68,12 +68,12 @@ scenarios['signup-gift'] = async (t) => {
 
   // Registered, no site yet: there is no workspace and so no account to hold the gift.
   t.equal(
-    'a new customer reads the gift of the registration as promised: 35 credits, not granted yet',
+    'a new customer reads the gift of the registration as promised: 50 credits, not granted yet',
     await shown(),
     {
       tariff: null,
-      credits: { tariff: NOTHING, gift: PROMISED, pack: NOTHING, totalAvailable: 35 },
-      usage: [{ left: 35, held: 0, granted: false }, { left: 0, held: 0 }, 35],
+      credits: { tariff: NOTHING, gift: PROMISED, pack: NOTHING, totalAvailable: CREDITS.gift },
+      usage: [{ left: CREDITS.gift, held: 0, granted: false }, { left: 0, held: 0 }, CREDITS.gift],
     },
   )
   t.equal(
@@ -96,8 +96,8 @@ scenarios['signup-gift'] = async (t) => {
   const granted = [
     {
       kind: 'grant',
-      amount: '35.00',
-      balance_after: '35.00',
+      amount: `${CREDITS.gift}.00`,
+      balance_after: `${CREDITS.gift}.00`,
       order_id: null,
       workspace_id: workspaceId,
       unit: 'credit_gift',
@@ -118,7 +118,13 @@ scenarios['signup-gift'] = async (t) => {
   t.equal(
     'the first site: the audit holds the grant — by the platform, for the gift account, with the user and the credits',
     entries.map(({ actor_type: actor, target_type: target, meta }) => ({ actor, target, meta })),
-    [{ actor: 'system', target: 'billing_account', meta: { userId: customer.id, credits: 35 } }],
+    [
+      {
+        actor: 'system',
+        target: 'billing_account',
+        meta: { userId: customer.id, credits: CREDITS.gift },
+      },
+    ],
   )
   // The letter that greeted the customer named the same number, in words the stand writes itself.
   const [welcome, ...otherWelcomes] = await t.until(
@@ -130,20 +136,20 @@ scenarios['signup-gift'] = async (t) => {
     { silent: true },
   )
   t.check(
-    'the first site: the welcome letter promised what was granted — «Мы дарим вам 35 кредитов, чтобы попробовать…»',
+    'the first site: the welcome letter promised what was granted — «Мы дарим вам 50 кредитов, чтобы попробовать…»',
     otherWelcomes.length === 0 &&
       welcome?.text.includes(
-        `Мы дарим вам ${creditsCount(Number(granted[0].amount))}, чтобы попробовать: их хватит на семь небольших правок или на две-три задачи побольше.`,
+        `Мы дарим вам ${creditsCount(Number(granted[0].amount))}, чтобы попробовать: их хватит на десять небольших правок или на три-пять задач побольше.`,
       ),
     welcome,
   )
   t.equal(
-    'the first site: the promise is kept to the credit — the same 35, now granted',
+    'the first site: the promise is kept to the credit — the same 50, now granted',
     await shown(),
     {
       tariff: null,
-      credits: { tariff: NOTHING, gift: GRANTED, pack: NOTHING, totalAvailable: 35 },
-      usage: [{ left: 35, held: 0, granted: true }, { left: 0, held: 0 }, 35],
+      credits: { tariff: NOTHING, gift: GRANTED, pack: NOTHING, totalAvailable: CREDITS.gift },
+      usage: [{ left: CREDITS.gift, held: 0, granted: true }, { left: 0, held: 0 }, CREDITS.gift],
     },
   )
   // What the site was made with: the access is in Vault, the database names where it is, and
@@ -276,7 +282,7 @@ scenarios['signup-gift'] = async (t) => {
   t.equal(
     'with a tariff: the quota is granted beside the gift, and the gift is the one row it was',
     [journal(accounts.credit_tariff), await giftRows()],
-    [[{ kind: 'grant', amount: '300.00', key: `order:${order.id}:grant` }], granted],
+    [[journalRow.quota(order)], granted],
   )
   t.equal(
     'with a tariff: the audit holds one grant of the gift beside the site and the start of the tariff',
@@ -284,17 +290,21 @@ scenarios['signup-gift'] = async (t) => {
     ['billing.gift.grant', 'billing.subscription.start', 'site.create'],
   )
   t.equal(
-    'with a tariff: «Тарифы» and «Использование» count the gift beside the quota — 335 credits',
+    'with a tariff: «Тарифы» and «Использование» count the gift beside the quota — 200 credits',
     await shown(),
     {
       tariff: 'start',
       credits: {
-        tariff: { balance: 300, held: 0, available: 300 },
+        tariff: { balance: CREDITS.start, held: 0, available: CREDITS.start },
         gift: GRANTED,
         pack: NOTHING,
-        totalAvailable: 335,
+        totalAvailable: CREDITS.start + CREDITS.gift,
       },
-      usage: [{ left: 35, held: 0, granted: true }, { left: 0, held: 0 }, 335],
+      usage: [
+        { left: CREDITS.gift, held: 0, granted: true },
+        { left: 0, held: 0 },
+        CREDITS.start + CREDITS.gift,
+      ],
     },
   )
 
@@ -323,12 +333,12 @@ scenarios['signup-gift'] = async (t) => {
     },
   )
   t.equal(
-    'after the tariff: the customer still has the 35 gift credits, and nothing of the tariff',
+    'after the tariff: the customer still has the 50 gift credits, and nothing of the tariff',
     await shown(),
     {
       tariff: null,
-      credits: { tariff: NOTHING, gift: GRANTED, pack: NOTHING, totalAvailable: 35 },
-      usage: [{ left: 35, held: 0, granted: true }, { left: 0, held: 0 }, 35],
+      credits: { tariff: NOTHING, gift: GRANTED, pack: NOTHING, totalAvailable: CREDITS.gift },
+      usage: [{ left: CREDITS.gift, held: 0, granted: true }, { left: 0, held: 0 }, CREDITS.gift],
     },
   )
 
@@ -352,7 +362,7 @@ scenarios['signup-gift'] = async (t) => {
   t.equal(
     'pays first: the gift was granted with the workspace the checkout made, and the failed payment took nothing of it',
     [payerOverview.subscription, payerOverview.credits.gift, payerOverview.credits.totalAvailable],
-    [null, GRANTED, 35],
+    [null, GRANTED, CREDITS.gift],
   )
 
   // And one who only registered: nothing is stored, the gift stays promised. The pages of this
@@ -391,7 +401,7 @@ scenarios.checkout = async (t) => {
       PRICE,
     )
     t.equal(
-      `${who}: and in credits — 300, 800 and 2 500 a month with 50, 100 and 300 a day, a pack of 100`,
+      `${who}: and in credits — 150, 600 and 2 000 a month, no daily limit, a pack of 100`,
       {
         plans: plans.map(({ slug, price, creditsPerMonth, creditsPerDay, maxSites }) => ({
           slug,
@@ -504,7 +514,7 @@ scenarios.checkout = async (t) => {
     t.equal(
       `${who}: the quota is granted once, under the key of the order`,
       journal(accounts.credit_tariff),
-      [{ kind: 'grant', amount: '300.00', key: `order:${order.id}:grant` }],
+      [journalRow.quota(order)],
     )
     t.equal(
       `${who}: the payment method is stored ${autoRenew ? 'with the consent' : 'for nobody: auto-renewal is off'}`,
@@ -546,7 +556,7 @@ scenarios.checkout = async (t) => {
     )
     const [letter, ...otherLetters] = await customer.mail('billing.payment_succeeded')
     t.equal(
-      `${who}: the letter is made of what was paid for: the tariff, the money, the end of the period and the 300 credits granted`,
+      `${who}: the letter is made of what was paid for: the tariff, the money, the end of the period and the 150 credits granted`,
       [letter?.data, otherLetters.length],
       [
         {
@@ -563,10 +573,10 @@ scenarios.checkout = async (t) => {
     )
     const until = moscowDate(subscription.current_period_end)
     t.check(
-      `${who}: and says so to the customer: «Тариф действует до ${until}. Начислили 300 кредитов на этот период.»`,
-      letter.text.includes('Оплата прошла: тариф «Старт» — 4 900 ₽.') &&
+      `${who}: and says so to the customer: «Тариф действует до ${until}. Начислили 150 кредитов на этот период.»`,
+      letter.text.includes('Оплата прошла: тариф «Старт» — 1 990 ₽.') &&
         letter.text.includes(
-          `Тариф действует до ${until}. Начислили 300 кредитов на этот период.`,
+          `Тариф действует до ${until}. Начислили 150 кредитов на этот период.`,
         ) &&
         letter.text.includes(`${t.webUrl}/settings/plans`),
       letter.text,
@@ -611,18 +621,18 @@ scenarios.checkout = async (t) => {
         autoRenewal: autoRenew,
         method: autoRenew ? { label: MIR } : null,
         credits: {
-          tariff: { balance: 300, held: 0, available: 300 },
+          tariff: { balance: CREDITS.start, held: 0, available: CREDITS.start },
           // The gift of the registration: the checkout granted it with the workspace.
-          gift: { balance: 35, held: 0, available: 35, granted: true },
+          gift: { balance: CREDITS.gift, held: 0, available: CREDITS.gift, granted: true },
           pack: { balance: 0, held: 0, available: 0 },
-          totalAvailable: 335,
+          totalAvailable: CREDITS.start + CREDITS.gift,
         },
         waits: [false, 'none'],
       },
     )
     const history = await customer.query('billing.payments', {})
     t.equal(
-      `${who}: «Оплата» lists one paid order of 4900.00`,
+      `${who}: «Оплата» lists one paid order of 1990.00`,
       history.items.map(({ id, kind, planName, amount, status, failureText, refundedAmount }) => ({
         id,
         kind,
@@ -656,14 +666,33 @@ scenarios.checkout = async (t) => {
         total: usage.totalLeft,
       },
       {
-        // Read from the ledger: the order of the payment carries the start of its period.
-        credits: { granted: 300, charged: 0, held: 0, expired: 0, left: 300, heldEarlier: 0 },
-        // «Старт» gives 50 of its tariff credits a day; none is spent yet.
-        today: { limit: 50, charged: 0, held: 0, used: 0, room: 50, left: 50 },
+        // Read from the ledger: the order of the payment carries the start of its period. Nothing
+        // is carried into a first period, and all of it would carry at the renewal.
+        credits: {
+          carried: 0,
+          granted: CREDITS.start,
+          charged: 0,
+          held: 0,
+          expired: 0,
+          left: CREDITS.start,
+          heldEarlier: 0,
+          carryLimit: CREDITS.start,
+          carryNext: CREDITS.start,
+          burnNext: 0,
+        },
+        // No tariff has a daily limit since 06.11.2026: the day counts, and bounds nothing.
+        today: {
+          limit: null,
+          charged: 0,
+          held: 0,
+          used: 0,
+          room: null,
+          left: CREDITS.start,
+        },
         sites: { count: 0, max: 1 },
-        gift: { left: 35, held: 0, granted: true },
+        gift: { left: CREDITS.gift, held: 0, granted: true },
         pack: { left: 0, held: 0 },
-        total: 335,
+        total: CREDITS.start + CREDITS.gift,
       },
     )
 
@@ -741,7 +770,7 @@ scenarios['saved-without-consent'] = async (t) => {
     'no notice of a charge goes out before the end of the period',
     [
       (await subscriptionOf(t, workspaceId)).renewal_notice_period_end,
-      customer.letters('Скоро спишем 4 900 ₽ за тариф «Старт»').length,
+      customer.letters('Скоро спишем 1 990 ₽ за тариф «Старт»').length,
     ],
     [null, 0],
   )
@@ -877,7 +906,7 @@ scenarios['autopayments-not-approved'] = async (t) => {
   t.equal(
     'the quota is granted once, under the key of the paid order',
     journal(accounts.credit_tariff),
-    [{ kind: 'grant', amount: '300.00', key: `order:${paid.id}:grant` }],
+    [journalRow.quota(paid)],
   )
   await t.until('the customer gets one letter «Оплата прошла»', async () =>
     customer.got('Оплата прошла'),
@@ -960,7 +989,7 @@ scenarios['webhook-and-return'] = async (t) => {
   const workspaceId = await customer.workspaceId()
   const accounts = await ledgerHolds(t, workspaceId, { tariff: CREDITS.start, pack: 0 })
   t.equal('the quota was granted once', journal(accounts.credit_tariff), [
-    { kind: 'grant', amount: '300.00', key: `order:${checkout.orderId}:grant` },
+    journalRow.quota({ id: checkout.orderId }),
   ])
   t.equal(
     'one subscription was started, with one entry of its start and one consent',
@@ -1246,9 +1275,14 @@ scenarios['pack-and-period-end'] = async (t) => {
   )
   const withPack = await customer.query('billing.usage')
   t.equal(
-    '«Использование» counts the three accounts: 300 of the tariff, the gift of 35 and 100 purchased',
+    '«Использование» counts the three accounts: 150 of the tariff, the gift of 50 and 100 purchased',
     [withPack.tariff.credits.left, withPack.gift, withPack.pack, withPack.totalLeft],
-    [300, { left: 35, held: 0, granted: true }, { left: 100, held: 0 }, 435],
+    [
+      CREDITS.start,
+      { left: CREDITS.gift, held: 0, granted: true },
+      { left: CREDITS.pack, held: 0 },
+      CREDITS.start + CREDITS.gift + CREDITS.pack,
+    ],
   )
   await t.until('the customer has two letters «Оплата прошла»: the tariff and the pack', async () =>
     customer.got('Оплата прошла', 2),
@@ -1258,14 +1292,14 @@ scenarios['pack-and-period-end'] = async (t) => {
     'the letter of the pack names the hundred credits that are on the account now, and that they do not expire',
     packLetter.data.item === 'pack' &&
       packLetter.data.packCredits === Number(journal(accounts.credit_pack)[0].amount) &&
-      packLetter.text.includes('Оплата прошла: пакет из 100 кредитов — 1 990 ₽.') &&
+      packLetter.text.includes('Оплата прошла: пакет из 100 кредитов — 1 490 ₽.') &&
       packLetter.text.includes('Кредиты из пакета уже добавлены и не сгорают в конце периода.'),
     packLetter,
   )
   t.equal(
-    'a task could spend all three accounts while the tariff is paid: 435 credits',
+    'a task could spend all three accounts while the tariff is paid: 300 credits',
     [withPack.spendable, (await customer.query('billing.overview')).credits.spendable],
-    [435, 435],
+    [CREDITS.start + CREDITS.gift + CREDITS.pack, CREDITS.start + CREDITS.gift + CREDITS.pack],
   )
 
   // The period ends; auto-renewal is off.
@@ -1275,17 +1309,7 @@ scenarios['pack-and-period-end'] = async (t) => {
   t.equal(
     'the available rest of the tariff expired under the key of the period; the pack was not touched',
     [journal(accounts.credit_tariff), journal(accounts.credit_pack).length],
-    [
-      [
-        { kind: 'grant', amount: '300.00', key: `order:${tariffOrder.id}:grant` },
-        {
-          kind: 'expire',
-          amount: '-300.00',
-          key: `sub:${subscription.id}:${dates.end.getTime()}:expire`,
-        },
-      ],
-      1,
-    ],
+    [[journalRow.quota(tariffOrder), journalRow.expired(subscription, dates.end)], 1],
   )
   const [ended] = await auditOf(t, workspaceId, 'billing.subscription.end')
   t.equal(
@@ -1297,7 +1321,7 @@ scenarios['pack-and-period-end'] = async (t) => {
         status: 'cancelled',
         reason: 'auto_renewal_off',
         periodEnd: iso(dates.end),
-        expiredCredits: 300,
+        expiredCredits: CREDITS.start,
         packCreditsLeft: 100,
         notified: true,
       },
@@ -1307,7 +1331,7 @@ scenarios['pack-and-period-end'] = async (t) => {
   // design): what is available of the tariff expires; the gift stays and can be spent; the
   // pack stays and waits for a tariff.
   t.equal(
-    'a tariff that is not renewed: the rest of its quota expired, the gift and the pack are the one grant each',
+    'a tariff that is not renewed: the rest of its quota expired and nothing was carried, the gift and the pack are the one grant each',
     await journalsOf(t, workspaceId),
     {
       tariff: [journalRow.quota(tariffOrder), journalRow.expired(subscription, dates.end)],
@@ -1322,7 +1346,7 @@ scenarios['pack-and-period-end'] = async (t) => {
   t.check(
     'the letter says what is kept, with the pack counted, and that tasks are still taken on gift credits',
     endedLetter.data.packCreditsLeft === 100 &&
-      endedLetter.data.giftCreditsLeft === 35 &&
+      endedLetter.data.giftCreditsLeft === CREDITS.gift &&
       endedLetter.text.includes(
         `Тариф «Старт» закончился ${moscowDate(dates.end)}. Новые задачи принимаются, только пока есть подарочные кредиты.`,
       ) &&
@@ -1333,9 +1357,9 @@ scenarios['pack-and-period-end'] = async (t) => {
   )
   const overview = await customer.query('billing.overview')
   t.equal(
-    'without a tariff a task could spend the gift alone: 35 of the 135 credits, the pack waits for a tariff',
+    'without a tariff a task could spend the gift alone: 50 of the 150 credits, the pack waits for a tariff',
     [overview.credits.spendable, overview.credits.totalAvailable],
-    [35, 135],
+    [CREDITS.gift, CREDITS.gift + CREDITS.pack],
   )
   t.equal(
     '«Тарифы» shows no tariff, when the last one ended, the gift and the purchased credits',
@@ -1350,7 +1374,7 @@ scenarios['pack-and-period-end'] = async (t) => {
       null,
       { planName: 'Старт', endedAt: iso(dates.end), reason: 'not_renewed' },
       0,
-      { balance: 35, held: 0, available: 35, granted: true },
+      { balance: CREDITS.gift, held: 0, available: CREDITS.gift, granted: true },
       { balance: 100, held: 0, available: 100 },
     ],
   )
@@ -1358,7 +1382,13 @@ scenarios['pack-and-period-end'] = async (t) => {
   t.equal(
     '«Использование» keeps the gift and the hundred purchased credits',
     [usage.subscription, usage.tariff, usage.gift, usage.pack, usage.totalLeft],
-    [null, null, { left: 35, held: 0, granted: true }, { left: 100, held: 0 }, 135],
+    [
+      null,
+      null,
+      { left: CREDITS.gift, held: 0, granted: true },
+      { left: 100, held: 0 },
+      CREDITS.gift + CREDITS.pack,
+    ],
   )
   t.equal(
     'another pack is not sold once the tariff is over',

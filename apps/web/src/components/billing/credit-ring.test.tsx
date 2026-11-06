@@ -5,7 +5,13 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { BillingUsage } from '@/components/billing/billing-types'
-import { plain, subscriptionTo, taskCreditsFor, type TaskFacts } from '@/components/billing/testing'
+import {
+  plain,
+  subscriptionTo,
+  tariffMeter,
+  taskCreditsFor,
+  type TaskFacts,
+} from '@/components/billing/testing'
 
 import { CreditRing, creditRing, creditRows, creditWords, usageNotice } from './credit-ring'
 
@@ -77,7 +83,7 @@ function onBusiness(
     ...giftOnly(0),
     subscription,
     tariff: {
-      credits: { granted: 600, charged: 600 - left, held: 0, expired: 0, left, heldEarlier: 0 },
+      credits: tariffMeter({ charged: 600 - left, left }),
       today: credits.today,
       sites: { count: 1, max: 3 },
       bySite: [],
@@ -180,7 +186,7 @@ function unpaid(): BillingUsage {
     ...giftOnly(0),
     subscription,
     tariff: {
-      credits: { granted: 600, charged: 395, held: 0, expired: 0, left: 205, heldEarlier: 0 },
+      credits: tariffMeter({ charged: 395, left: 205 }),
       today: credits.today,
       sites: { count: 1, max: 3 },
       bySite: [],
@@ -197,6 +203,16 @@ describe('creditRing', () => {
       share: 512 / 600,
       closed: false,
     })
+  })
+
+  it('counts what the renewal carried into the period in what the ring is full of', () => {
+    const carried = onBusiness(700)
+    carried.tariff!.credits = tariffMeter({ carried: 120, charged: 20, left: 700 })
+    expect(creditRing(carried)).toMatchObject({
+      label: 'Кредиты по тарифу: осталось 700 из 720',
+      share: 700 / 720,
+    })
+    expect(creditRows(carried)).toContainEqual({ label: 'По тарифу', value: 'осталось 700 из 720' })
   })
 
   it('is full of the gift without a tariff, and closed when a task would not be taken', () => {

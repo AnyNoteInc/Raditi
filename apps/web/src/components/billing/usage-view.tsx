@@ -29,6 +29,7 @@ import {
 } from './task-notice'
 import {
   buyPackLabel,
+  carriedEntry,
   creditsLeftWords,
   giftNote,
   heldEarlierNote,
@@ -40,6 +41,7 @@ import {
   packNote,
   sitesMeterLabel,
   sitesNote,
+  tariffCreditsOfPeriod,
   tariffMeterLabel,
   tariffNote,
   tariffRestEntry,
@@ -204,8 +206,9 @@ function Credits({
   const { credits } = tariff
   const pastDue = subscription.status === 'past_due'
   const state = tariffState(subscription)
-  // The period of a tariff that is not paid for is over: what it did not use is not carried
-  // over, so the customer has the gift and the purchased credits left and nothing of the tariff.
+  // The period of a tariff that is not paid for is over: what it did not use waits for the
+  // payment, which carries it on up to its quota, so the customer has the gift and the purchased
+  // credits to spend and nothing of the tariff.
   const left = pastDue ? usage.gift.left + usage.pack.left : usage.totalLeft
   // A gift that is used up is not shown as an account with nothing on it.
   const hasGift = usage.gift.left + usage.gift.held > 0
@@ -302,10 +305,16 @@ function Credits({
             ) : (
               <>
                 По тарифу&nbsp;— {nbsp(formatCount(credits.left))} из&nbsp;
-                {nbsp(formatCount(credits.granted))}
+                {nbsp(formatCount(tariffCreditsOfPeriod(credits)))}
               </>
             )}
           </Typography>
+          {/* What of the whole came from the month before: said only when anything did. */}
+          {credits.carried > 0 ? (
+            <Typography variant="body2" color="textSecondary" sx={{ mt: 0.5 }}>
+              {nbsp(carriedEntry(credits.carried))}
+            </Typography>
+          ) : null}
           <Box sx={{ mt: 1.5 }}>
             <Meter
               label={tariffMeterLabel(credits, pastDue)}
@@ -340,7 +349,7 @@ function Credits({
             </Typography>
           ) : null}
           <Typography variant="body2" color="textSecondary" sx={{ mt: 1.5 }}>
-            {nbsp(tariffNote(state))}
+            {nbsp(tariffNote(state, credits))}
           </Typography>
         </Box>
         {/* The accounts stand in the order their credits are spent in. */}
