@@ -16,6 +16,16 @@ docker build -f infra/preview/Dockerfile --target site \
   -t "raditi-preview-site:8.3-local" infra/preview
 ```
 
+Стадия `php-base` ([план 62](../../docs/plan/62-site-stacks.md), Т19, Т21) — основа, общая для всех стеков: официальный образ `php:<x.y>-apache` одной версии PHP по digest индекса (amd64 и arm64 — одна строка), восемь версий 7.3–8.5 в `site-bases.json`. В ней 26 расширений через `install-php-extensions` (выпуск и sha256 закреплены, версии PECL — строка `pecl` этой версии), ionCube Loader на всех версиях, кроме 8.0, вместе с его `LICENSE.txt` (архив производителя по sha256 своей архитектуры), `ghostscript`, на trixie — `libheif`, модули Apache `rewrite`, `expires`, `remoteip`, `headers` без `status`, `preview-php.ini` (журнал ошибок и OPcache, как в образе WordPress, `display_errors=Off`) и `no-sendmail`: письмо `mail()` дочитывается и пропадает. Установщик и архив ionCube в образ не попадают — они только смонтированы в шаг сборки. О стеках в образе ничего нет: их различия идут в рецепте. Цель `site` встаёт на эту стадию значением `--build-arg BASE=php-base`; без него сборка идёт прежним путём и стадии `php-base` не трогает. Строка `site-bases.json` даёт остальные аргументы:
+
+```sh
+docker build -f infra/preview/Dockerfile --target site --build-arg BASE=php-base \
+  --build-arg PHP_BASE=php@sha256:… --build-arg PHP_PECL_PINS="<pecl строки через пробел>" \
+  --build-arg PHP_EXTENSIONS_SKIP="<without строки через пробел>" -t "raditi-site-verify:<версия>" infra/preview
+```
+
+Значения по умолчанию `PHP_BASE` и `PHP_PECL_PINS` — строка 8.3. Строка таблицы: `image` — только индекс (`application/vnd.oci.image.index.v1+json` или список манифестов Docker) с `linux/amd64` и `linux/arm64`; `debian` — `VERSION_CODENAME` образа; `without` — расширения, которые на этой версии не собираются (девять — `bcmath`, `exif`, `gd`, `imagick`, `intl`, `mysqli`, `zip`, `pdo_mysql`, `opcache` — обязательны везде, у 8.3 `without` пуст); `pecl` — точные версии `apcu`, `imagick`, `mcrypt`, `memcached`, `redis` и, с 8.0, `xmlrpc`. Таблицу и шаг сверяет `site.test.mjs`.
+
 MariaDB — из архива mariadb.org по точной версии, ключ проверяется отпечатком `177F 4010 FE56 CA33 3630 0305 F165 6F24 C74C D1D8` (`mariadb-release-signing-key.asc`, проверку держит `site.test.mjs`). Версия 11.8, а не 11.4, как у `PREVIEW_DB_IMAGE`: 11.4 для Debian 13 (trixie), на котором стоят образы PHP 8.2 и новее, не собирается, а 11.8.9 есть и для bullseye, и для bookworm, и для trixie. Временная база дампа (`PREVIEW_DB_IMAGE`, `StagingDatabaseRuntime`) остаётся на 11.4: копия переносит данные запросами SQL, версии не обязаны совпадать.
 
 ```sh

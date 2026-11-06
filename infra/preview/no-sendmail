@@ -1,0 +1,5 @@
+#!/bin/sh
+# Nothing leaves a preview by mail(): the letter is read to its end and dropped. mail() answers
+# true, so a form behaves as on the site (docs/plan/62, Т21).
+cat >/dev/null
+exit 0
