@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
+import { browserSessionLimits } from '@repo/domain'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import {
@@ -153,15 +154,17 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the browser session of a task', () =>
           stack: 'wordpress',
         },
       })
-      const task = await db.task.create({
-        data: {
-          workspaceId: first.workspaceId,
-          siteId: site.id,
-          needsRepository: false,
-          needsBrowser: true,
-        },
-      })
-      await openBrowserSession(db, { taskId: task.id })
+      for (let i = 1; i < browserSessionLimits.perWorkspace; i++) {
+        const task = await db.task.create({
+          data: {
+            workspaceId: first.workspaceId,
+            siteId: site.id,
+            needsRepository: false,
+            needsBrowser: true,
+          },
+        })
+        await openBrowserSession(db, { taskId: task.id })
+      }
       const third = await db.task.create({
         data: {
           id: uuidv7(),
@@ -195,12 +198,15 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the browser session of a task', () =>
       })
     }
 
-    it('refuses a third live browser, and takes it once one has closed', async () => {
+    it('refuses a browser past the limit, and takes it once one has closed', async () => {
       const first = await browserTask()
-      const second = await neighbour(first.id)
+      const others = []
+      for (let i = 1; i < browserSessionLimits.perWorkspace; i++)
+        others.push(await neighbour(first.id))
       const third = await neighbour(first.id)
       const open = await db.$transaction((tx) => openBrowserSession(tx, { taskId: first.id }))
-      await db.$transaction((tx) => openBrowserSession(tx, { taskId: second.id }))
+      for (const other of others)
+        await db.$transaction((tx) => openBrowserSession(tx, { taskId: other.id }))
 
       await expect(
         db.$transaction((tx) => openBrowserSession(tx, { taskId: third.id })),
@@ -216,18 +222,22 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the browser session of a task', () =>
       expect(taken.status).toBe('starting')
     })
 
-    it('counts under a lock: of three tasks at once two get a browser', async () => {
+    it('counts under a lock: of one task more than the limit at once, the limit gets a browser', async () => {
+      const { perWorkspace } = browserSessionLimits
       const first = await browserTask()
-      const tasks = [first, await neighbour(first.id), await neighbour(first.id)]
+      const tasks = [first]
+      for (let i = 0; i < perWorkspace; i++) tasks.push(await neighbour(first.id))
       const outcomes = await Promise.allSettled(
         tasks.map((task) => db.$transaction((tx) => openBrowserSession(tx, { taskId: task.id }))),
       )
-      expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(2)
+      expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(
+        perWorkspace,
+      )
       expect(
         await db.browserSession.count({
           where: { workspaceId: first.workspaceId, status: { in: ['starting', 'ready'] } },
         }),
-      ).toBe(2)
+      ).toBe(perWorkspace)
     })
 
     it('holds no other workspace to it', async () => {

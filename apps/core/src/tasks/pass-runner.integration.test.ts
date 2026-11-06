@@ -37,7 +37,7 @@ import type { TurnSupervisor } from '../turns/turn-supervisor.ts'
 import type { CandidateBuilder } from './candidate-builder.ts'
 import type { CandidateGit } from './candidate-git.ts'
 import { LivePasses } from './live-passes.ts'
-import { PassRunner } from './pass-runner.ts'
+import { PassRunner, WORKSPACE_PASS_LIMIT } from './pass-runner.ts'
 import { PassSettlement } from './pass-settlement.ts'
 import { INIT_PROMPT } from './turn-instructions.ts'
 
@@ -280,6 +280,29 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     ])
     const holds = await db.creditHold.findMany({ where: { taskId: dialog.taskId } })
     expect(holds.every((hold) => hold.status === 'released')).toBe(true)
+  })
+
+  // The owner, 06.11.2026: «расширь количество параллельных агентов на одного пользователя до 8».
+  it('lets a pass wait while its workspace runs eight others, as for a busy pool', async () => {
+    const dialog = await queued({ reserve: true, chat: true })
+    const { workspaceId } = await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })
+    for (let i = 0; i < WORKSPACE_PASS_LIMIT; i++)
+      await fixtures.task(workspaceId, { status: i % 2 === 0 ? 'running' : 'preparing' })
+    const run = vi.fn<Run>()
+    const { passes, queue } = runner(run)
+
+    await passes.run(dialog.job)
+
+    expect(run).not.toHaveBeenCalled()
+    expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
+      status: 'queued',
+      waiting: 'agents',
+    })
+    expect(queue.enqueue).toHaveBeenCalledTimes(1)
+    // Its reserve stays: the pass goes as soon as one of the eight ends.
+    expect(
+      (await db.creditHold.findMany({ where: { taskId: dialog.taskId } })).map((h) => h.status),
+    ).toEqual(['active'])
   })
 
   it('takes no pass of another attempt', async () => {

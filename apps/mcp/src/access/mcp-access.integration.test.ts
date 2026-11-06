@@ -11,6 +11,7 @@ import {
 import request from 'supertest'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  browserSessionLimits,
   conflict,
   DomainError,
   publishedContentHashMaterial,
@@ -2514,7 +2515,7 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
     })
     const web = new PostgresMcpWebStore(db, { maxHours: 4 })
     const others = await Promise.all(
-      [1, 2].map(() =>
+      Array.from({ length: browserSessionLimits.perWorkspace }, () =>
         db.task.create({
           data: {
             workspaceId: fixture.workspaceId,

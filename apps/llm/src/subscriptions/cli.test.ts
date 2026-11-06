@@ -163,7 +163,7 @@ describe('operator subscription commands', { timeout: 90_000 }, () => {
       ).toMatchObject({ command: 'login', value: { backend, plan } })
       const entry = subscriptionImports.get(backend)!
       expect(entry.backend.id).toBe(backend)
-      expect(entry).toMatchObject({ driverId: 'opencode', turns: 1, requests: 2 })
+      expect(entry).toMatchObject({ driverId: 'opencode', turns: 8, requests: 16 })
       // A key from stdin.
       expect(entry.backend.importCredential).toBeTypeOf('function')
     },
