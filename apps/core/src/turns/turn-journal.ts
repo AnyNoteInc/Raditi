@@ -25,10 +25,11 @@ const workPhases: readonly TurnPhase[] = ['running', 'resumed']
 /**
  * The stages of work a journal entry tells the client about (docs/research/2026-10-client-feed/
  * feed-design.md, «Что такое „шаг“»): by the phase alone, never by the agent's events, so every
- * driver gives one set of stages. `site` and `files` wait for their trusted sources.
+ * driver gives one set of stages. `code` is told of a task with a repository only: the statement
+ * that writes the rows knows the task. `site` and `files` wait for their trusted sources.
  */
 export function feedStepsOf(phase: TurnPhase): FeedStep[] {
-  if (workPhases.includes(phase)) return ['work']
+  if (workPhases.includes(phase)) return ['code', 'work']
   if (phase === 'quiesced') return ['save']
   return []
 }
@@ -84,7 +85,8 @@ export class TaskEventTurnJournal implements TurnJournal {
     // The fence check and append are one statement, not a check-then-write race; so are the
     // move to `running` and the stage rows, which come only with an appended entry. A recovered
     // owner writes `resumed` again under its new epoch: the status condition and NOT EXISTS
-    // leave the move and the stage as they were.
+    // leave the move and the stage as they were. The feed reads stages by id, and a hash anti
+    // join gives its rows in any order, so the stages of one entry are numbered explicitly.
     const rows = await this.db.$queryRaw<Array<{ id: bigint }>>`
       WITH owned_lease AS MATERIALIZED (
         SELECT site_id, expires_at, held_for_operator FROM site_leases
@@ -96,9 +98,9 @@ export class TaskEventTurnJournal implements TurnJournal {
       SELECT task.id, turn.id, ${evidence.phase === 'output' ? 'turn.output' : 'turn.lifecycle'},
         ${payload}::jsonb, false
       FROM tasks task
-      JOIN owned_lease lease ON lease.site_id = task.site_id
+      JOIN owned_lease lease ON lease.site_id = COALESCE(task.site_id, task.id)
       LEFT JOIN task_turns turn ON turn.task_id = task.id AND turn.turn_no = ${evidence.turn}
-      WHERE task.id = ${fence.taskId}::uuid AND task.site_id = ${fence.siteId}::uuid
+      WHERE task.id = ${fence.taskId}::uuid AND COALESCE(task.site_id, task.id) = ${fence.siteId}::uuid
         AND (${recovery} OR (NOT lease.held_for_operator AND lease.expires_at > clock_timestamp()))
       RETURNING id, turn_id
       ), projected AS (
@@ -127,12 +129,14 @@ export class TaskEventTurnJournal implements TurnJournal {
           true
         FROM inserted
         JOIN tasks task ON task.id = ${fence.taskId}::uuid
-        CROSS JOIN unnest(${steps}::text[]) AS stage(step)
+        CROSS JOIN unnest(${steps}::text[]) WITH ORDINALITY AS stage(step, ordinal)
         WHERE inserted.turn_id IS NOT NULL
+          AND (stage.step <> 'code' OR task.needs_repository)
           AND NOT EXISTS (
             SELECT 1 FROM task_events e
             WHERE e.turn_id = inserted.turn_id AND e.type = 'feed.step'
               AND e.payload->>'step' = stage.step)
+        ORDER BY stage.ordinal
         RETURNING id
       ) SELECT id FROM inserted`
     // Fence lost, not an outage: a failed statement rejects with its own database error.

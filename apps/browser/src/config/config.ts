@@ -72,6 +72,11 @@ export interface BrowserWorkerConfig {
   extraHosts: readonly string[]
   /** BROWSER_LOCAL_SITES (outside production): exact origins reached at fixed targets. */
   localSites: readonly BrowserLocalSite[]
+  /**
+   * BROWSER_PLATFORM_HOSTS: names of the platform (the cabinet, previews, Gitea), each with
+   * everything under it, which no page of any session reaches (docs/plan/61-chats-first.md, К37).
+   */
+  platformHosts: readonly string[]
   session: {
     idleMinutes: number
     maxHours: number
@@ -130,6 +135,7 @@ const ownEnvSchema = z.object({
   SANDBOX_EGRESS_REFUSED_SUBNETS: egressRefusedSubnetsVar,
   BROWSER_EXTRA_HOSTS: envVar(z.string().optional()),
   BROWSER_LOCAL_SITES: envVar(z.string().optional()),
+  BROWSER_PLATFORM_HOSTS: envVar(z.string().optional()),
   BROWSER_SESSION_IDLE_MINUTES: bounded(
     browserSettingBounds.idleMinutes,
     browserSessionTimings.idleMinutes,
@@ -163,6 +169,33 @@ function parseExtraHosts(text: string | undefined, problems: string[]): string[]
     }
     hosts.push(formatEgressHost(parsed))
   }
+  return [...new Set(hosts)]
+}
+
+/**
+ * BROWSER_PLATFORM_HOSTS: comma-separated public DNS names, no port: a name closes its host on
+ * every port and everything under it. Required in production: without it a client signed in to the
+ * cabinet in the cloud browser hands the agent the button of `/release` (К37).
+ */
+function parsePlatformHosts(
+  text: string | undefined,
+  production: boolean,
+  problems: string[],
+): string[] {
+  const hosts: string[] = []
+  for (const part of (text ?? '').split(',').map((item) => item.trim())) {
+    if (part === '') continue
+    const parsed = part.includes(':') ? null : parseEgressHost(part)
+    if (parsed === null) {
+      problems.push('BROWSER_PLATFORM_HOSTS: expected public host names without a port')
+      return []
+    }
+    hosts.push(parsed.host)
+  }
+  if (production && hosts.length === 0)
+    problems.push(
+      'BROWSER_PLATFORM_HOSTS: required in production (the names of the platform no browser opens)',
+    )
   return [...new Set(hosts)]
 }
 
@@ -295,6 +328,7 @@ export function loadBrowserConfig(env: Env): BrowserWorkerConfig {
   }
   const extraHosts = parseExtraHosts(own.BROWSER_EXTRA_HOSTS, problems)
   const localSites = parseLocalSites(own.BROWSER_LOCAL_SITES, production, problems)
+  const platformHosts = parsePlatformHosts(own.BROWSER_PLATFORM_HOSTS, production, problems)
   if (runtime && localSites.length > 0) runtime.localSites = true
 
   if (problems.length > 0 || db === undefined || storage === undefined)
@@ -310,6 +344,7 @@ export function loadBrowserConfig(env: Env): BrowserWorkerConfig {
     runtime,
     extraHosts,
     localSites,
+    platformHosts,
     session: {
       idleMinutes: own.BROWSER_SESSION_IDLE_MINUTES,
       maxHours: own.BROWSER_SESSION_MAX_HOURS,

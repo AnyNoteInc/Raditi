@@ -54,7 +54,7 @@ function showFrame(revision = 1) {
   }
 }
 
-const TITLE = 'Предпросмотр сайта с изменениями диалога'
+const TITLE = 'Предпросмотр сайта с изменениями чата'
 const frame = () => screen.getByTitle<HTMLIFrameElement>(TITLE)
 const shown = () => screen.findByTitle<HTMLIFrameElement>(TITLE)
 
@@ -141,7 +141,7 @@ describe('the frame of a preview', () => {
     })
     showFrame()
     expect(await screen.findByRole('alert')).toBeTruthy()
-    expect(screen.queryByTitle('Предпросмотр сайта с изменениями диалога')).toBeNull()
+    expect(screen.queryByTitle('Предпросмотр сайта с изменениями чата')).toBeNull()
   })
 
   it('says the preview is being built when the server says it is not ready', async () => {

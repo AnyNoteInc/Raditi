@@ -5,7 +5,7 @@ import { contentSecurityPolicy } from './lib/content-security-policy'
 import { REQUEST_PATH_HEADER } from './lib/request-path'
 import { proxy } from './proxy'
 
-const page = (path = '/projects/1/chat/2') => new NextRequest(`http://localhost:3000${path}`)
+const page = (path = '/chats/2') => new NextRequest(`http://localhost:3000${path}`)
 
 afterEach(() => vi.unstubAllEnvs())
 

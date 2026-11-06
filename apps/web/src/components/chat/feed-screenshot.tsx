@@ -19,7 +19,7 @@ export const taskScreenshotHref = (taskId: string, screenshotId: string): string
 /**
  * A snapshot the agent took of the task's browser for the client (`feed.screenshot`, owner's
  * request of 26.10.2026): the image in the dialog, at its own proportions, and a link to it full
- * size. The task is the one of the page (`/projects/{id}/chat/{taskId}`).
+ * size. The task is the one of the page (`/chats/{taskId}`).
  */
 export function FeedScreenshot({
   screenshotId,

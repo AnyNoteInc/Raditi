@@ -2,13 +2,15 @@ import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import { fontFamilies } from '@repo/ui/theme/tokens'
 
+import { newChatHref } from '@/components/chat/chat-address'
+import { chatsText } from '@/components/chat/chat-texts'
 import { formatMoscowMoment } from '@/lib/moscow-date'
 
 import { SectionTitle } from './section-empty'
 import { Fact, Facts, SiteCard } from './site-cards'
 import { SiteLink } from './site-link'
 import { runTitle, type RunView } from './history-text'
-import { SiteConnection, type ConnectionSite } from './site-connection'
+import { isBrowserOnly, SiteConnection, type ConnectionSite } from './site-connection'
 import { siteHref } from './site-nav'
 import { versionTitle, type VersionView } from './site-versions'
 
@@ -120,6 +122,11 @@ export function SiteOverview({
         <SiteConnection site={site} />
         <SectionTitle>Обзор</SectionTitle>
       </Box>
+      {isBrowserOnly(site) && site.id ? (
+        <Typography>
+          <SiteLink href={newChatHref(site.id)}>{chatsText.newChat}</SiteLink>
+        </Typography>
+      ) : null}
       {current && current.kind !== 'initial' && site.id ? (
         <CurrentVersionCard siteId={site.id} version={current} />
       ) : imported ? (

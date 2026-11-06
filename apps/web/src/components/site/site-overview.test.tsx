@@ -103,19 +103,44 @@ describe('site overview', () => {
     expect(tooltip.textContent).not.toMatch(/Настройк/)
   })
 
-  it('says a site added without access to its files works through the browser', async () => {
-    render(
+  it('leads a site added without access to its files to a new chat of this project', async () => {
+    const id = '019f1a21-1800-8f00-8abc-111111111111'
+    const { container } = render(
       <SiteOverview
         site={{
+          id,
           status: 'onboarding',
           state: 'free',
           capabilities: { repository: 'absent', browser: 'ready' },
         }}
       />,
     )
+    expect(screen.getByRole('link', { name: 'Новый чат' }).getAttribute('href')).toBe(
+      `/chats/new?project=${id}`,
+    )
     const tooltip = await tooltipOf('Ожидает подключения')
-    expect(within(tooltip).getByText(/Сайт добавлен без доступа к файлам/)).toBeTruthy()
+    expect(
+      within(tooltip).getByText('Сайт добавлен без доступа к файлам. Выберите этот проект в новом чате.'),
+    ).toBeTruthy()
     expect(within(tooltip).queryByText(/ещё не подключён/)).toBeNull()
+    // The owner's words of 31.10.2026: nothing says how the agent works on such a site.
+    expect(container.textContent).not.toMatch(/админк|сразу|без выпуска|разделе «Чат»/)
+    expect(tooltip.textContent).not.toMatch(/админк|сразу|без выпуска|разделе «Чат»/)
+  })
+
+  it('offers no new chat to a site that the wizard imported', () => {
+    render(
+      <SiteOverview
+        site={{
+          id: '019f1a21-1800-8f00-8abc-111111111111',
+          status: 'onboarding',
+          state: 'free',
+          setup: 'done',
+          capabilities: { repository: 'ready', browser: 'ready' },
+        }}
+      />,
+    )
+    expect(screen.queryByRole('link', { name: 'Новый чат' })).toBeNull()
   })
 
   it.each([

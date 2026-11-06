@@ -38,6 +38,7 @@ describe('pinned upstream JSONL fixture', () => {
   it('adds OpenCode reasoning once and does not complete after a tool-calls step', () => {
     expect(fixture(opencode)).toEqual([
       { type: 'started', nativeSessionId: 'ses_test' },
+      { type: 'reasoning', text: 'Сначала посмотрю, где лежит главная страница.' },
       { type: 'tool_call', tool: 'bash', ok: true },
       { type: 'command', command: 'pwd', exitCode: 0 },
       { type: 'tool_call', tool: 'write', ok: true },
@@ -61,9 +62,102 @@ describe('pinned upstream JSONL fixture', () => {
     const result = fixture(opencode)
     for (const event of result) expect(agentEventSchema.safeParse(event).success).toBe(true)
     expect(JSON.stringify(result)).not.toMatch(
-      /private reasoning|private tool response|private tool input|cost|tool_calls/,
+      /private tool response|private tool input|cost|tool_calls/,
     )
     expect(opencode.extractResult(result, null)).toEqual(expectedResult)
+  })
+})
+
+describe("the model's reasoning (docs/plan/61-chats-first.md, К32)", () => {
+  const row = (text: unknown, type = 'reasoning') => ({
+    type,
+    sessionID: 'ses_test',
+    part: { type, text, time: { start: 1, end: 2 } },
+  })
+
+  it('reads a row of its own, and never takes a result from it', () => {
+    expect(parse(opencode, row('Подумаю.'))).toEqual([{ type: 'reasoning', text: 'Подумаю.' }])
+    const thought = parse(opencode, row(JSON.stringify({ ...expectedResult, summary: 'Мысль' })))
+    expect(thought).toMatchObject([{ type: 'reasoning' }])
+    const started = { type: 'started', nativeSessionId: 'ses_test' } as const
+    const completed = { type: 'completed' } as const
+    expect(opencode.extractResult([started, ...thought, completed], null)).toBeNull()
+    const said = { type: 'message', text: finalText } as const
+    expect(opencode.extractResult([started, said, ...thought, completed], null)).toEqual(
+      expectedResult,
+    )
+  })
+
+  it('clips a long text to the limit of a message, with the mark of a message', () => {
+    const [event] = parse(opencode, row('я'.repeat(agentOutputLimits.messageText + 1)))
+    expect(event?.type).toBe('reasoning')
+    const { text } = event as { text: string }
+    expect(text).toHaveLength(agentOutputLimits.messageText)
+    expect(text.endsWith('\n[Вывод обрезан]')).toBe(true)
+  })
+
+  it('keeps a text of exactly the limit whole', () => {
+    const text = 'я'.repeat(agentOutputLimits.messageText)
+    expect(parse(opencode, row(text))).toEqual([{ type: 'reasoning', text }])
+  })
+
+  describe('text jsonb would refuse: the row must not cost the turn', () => {
+    const limit = agentOutputLimits.messageText - '\n[Вывод обрезан]'.length
+    const textRow = (value: string) => ({ type: 'text', part: { type: 'text', text: value } })
+    const shown = (row: unknown) => (parse(opencode, row)[0] as { text: string }).text
+
+    it.each([
+      ['reasoning', row],
+      ['a message', textRow],
+    ])('keeps %s whole at a pair the limit falls in', (_, rowOf) => {
+      const value = `${'a'.repeat(limit - 1)}😀${'b'.repeat(100)}`
+      const clipped = shown(rowOf(value))
+      expect(clipped.isWellFormed()).toBe(true)
+      expect(clipped).toBe(`${'a'.repeat(limit - 1)}\n[Вывод обрезан]`)
+      // The same text one unit earlier: the pair fits, and stays.
+      const fits = `${'a'.repeat(limit - 2)}😀${'b'.repeat(100)}`
+      expect(shown(rowOf(fits))).toBe(`${'a'.repeat(limit - 2)}😀\n[Вывод обрезан]`)
+    })
+
+    it.each([
+      ['reasoning', row],
+      ['a message', textRow],
+    ])('drops U+0000 and half of a pair from %s, wherever they stand', (_, rowOf) => {
+      expect(shown(rowOf('до\u0000после'))).toBe('допосле')
+      const lone = shown(rowOf('до\ud83dпосле'))
+      expect(lone.isWellFormed()).toBe(true)
+      expect(lone).toBe('до\ufffdпосле')
+    })
+
+    it('counts the limit after U+0000 is gone: a text that comes down to it is not clipped', () => {
+      const value = 'я'.repeat(agentOutputLimits.messageText)
+      expect(shown(row(`${value}\u0000`))).toBe(value)
+    })
+
+    it('reads nothing from reasoning that is U+0000 alone', () => {
+      expect(parse(opencode, row('\u0000\u0000'))).toEqual([])
+    })
+
+    it('holds for the shorter texts of a turn too', () => {
+      const command = `${'a'.repeat(agentOutputLimits.command - 1)}😀`
+      const events = parse(opencode, {
+        type: 'tool_use',
+        part: {
+          type: 'tool',
+          tool: 'bash',
+          state: { status: 'completed', input: { command }, output: '' },
+        },
+      })
+      const ran = events.find((event) => event.type === 'command')
+      expect(ran?.command).toBe('a'.repeat(agentOutputLimits.command - 1))
+    })
+  })
+
+  it('reads nothing from a row that is empty, of another shape or of a mixed type', () => {
+    for (const value of ['', '  \n', 7, null, undefined, ['слова']])
+      expect(parse(opencode, row(value))).toEqual([])
+    expect(parse(opencode, { type: 'reasoning', part: { type: 'text', text: 'нет' } })).toEqual([])
+    expect(parse(opencode, { type: 'reasoning', text: 'нет' })).toEqual([])
   })
 })
 

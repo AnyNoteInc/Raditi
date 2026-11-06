@@ -382,7 +382,7 @@ export class TurnAttempt {
     await guard.assertFence()
     await ready.quiesce()
     await this.record('quiesced')
-    const result = readTurnResult(driver, events)
+    const result = readTurnResult(driver, events, plan.input.action)
     for (const event of events) {
       if (event.type === 'started' && event.nativeSessionId)
         run.context.nativeSessionId = event.nativeSessionId

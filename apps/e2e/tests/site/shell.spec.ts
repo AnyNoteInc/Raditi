@@ -13,7 +13,7 @@ import {
 // only a browser shows which of them the width leaves on the screen.
 
 // «Переменные» is a section of its own since 26.10.2026 (the variables and the accesses).
-const sections = ['Обзор', 'Чат', 'Изменения', 'Запуски', 'База и бэкап', 'Переменные', 'Настройки']
+const sections = ['Обзор', 'Изменения', 'Запуски', 'База и бэкап', 'Переменные', 'Настройки']
 
 for (const [name, width, height] of [
   ['phone', 390, 844],
@@ -43,12 +43,7 @@ for (const [name, width, height] of [
       const navigations = page.getByRole('navigation', { name: 'Разделы сайта' })
       await expect(navigations).toHaveCount(1)
       const labels = await navigations.getByRole('link').allTextContents()
-      expect(labels).toEqual(width < 600 ? sections.slice(0, 4) : sections)
-      // «Чат» starts from a new dialog; the other sections open on themselves.
-      await expect(navigations.getByRole('link', { name: 'Чат', exact: true })).toHaveAttribute(
-        'href',
-        `/projects/${siteId}/chat/new`,
-      )
+      expect(labels).toEqual(width < 600 ? sections.slice(0, 3) : sections)
       await expect(navigations.getByRole('link', { name: 'Обзор' })).toHaveAttribute(
         'href',
         `/projects/${siteId}/overview`,
@@ -100,7 +95,7 @@ for (const [name, width, height] of [
   })
 }
 
-test('the address of a connected site opens a new dialog of its chat', async ({
+test('the address of a connected site opens its overview: a project has no chat', async ({
   page,
   signedInUser,
 }) => {
@@ -109,18 +104,15 @@ test('the address of a connected site opens a new dialog of its chat', async ({
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto(`/projects/${siteId}`)
 
-  await expect(page).toHaveURL(`/projects/${siteId}/chat/new`)
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Новый диалог')
-  await expect(page.getByRole('textbox', { name: 'Сообщение' })).toBeVisible()
-  const current = page
-    .getByRole('navigation', { name: 'Разделы сайта' })
-    .locator('[aria-current="page"]')
-  await expect(current).toHaveText('Чат')
-  await expect(current).toHaveAttribute('href', `/projects/${siteId}/chat/new`)
+  await expect(page).toHaveURL(`/projects/${siteId}/overview`)
+  await expect(page.getByRole('heading', { level: 1, name: 'Обзор' })).toBeVisible()
+  const navigation = page.getByRole('navigation', { name: 'Разделы сайта' })
+  await expect(navigation.locator('[aria-current="page"]')).toHaveText('Обзор')
+  await expect(navigation.getByRole('link', { name: /^Чат/ })).toHaveCount(0)
 })
 
-// Every address under a site besides the overview: «Чат» has two of them.
-const otherAddresses = ['chat', 'chat/new', 'changes', 'runs', 'database', 'vault', 'settings']
+// Every address under a site besides the overview.
+const otherAddresses = ['changes', 'runs', 'database', 'vault', 'settings']
 
 test.describe('on a touch screen', () => {
   test.use({ hasTouch: true, viewport: { width: 390, height: 844 } })
@@ -179,7 +171,7 @@ for (const [status, label, note] of closedSites) {
         await expect(link).toHaveAttribute('aria-current', 'page')
 
         const closed = navigation.locator('[aria-disabled="true"]')
-        const shown = phone ? sections.slice(0, 4) : sections
+        const shown = phone ? sections.slice(0, 3) : sections
         // The state is part of the text of an item: a span without a role announces no other.
         expect(await closed.allTextContents()).toEqual(
           shown.filter((name) => name !== 'Обзор').map((name) => name + CLOSED_SUFFIX),
@@ -225,10 +217,11 @@ for (const [status, label, note] of closedSites) {
       await test.step('«Ещё» still opens: its sections are closed, the way back is not', async () => {
         await page.getByRole('button', { name: 'Ещё' }).click()
         const more = page.getByRole('navigation', { name: 'Ещё разделы' })
-        await expect(more.locator('a')).toHaveCount(1)
+        await expect(more.locator('a')).toHaveCount(2)
+        await expect(more.getByRole('link', { name: 'К чатам' })).toHaveAttribute('href', '/chats')
         const closed = more.locator('[aria-disabled="true"]')
         expect(await closed.allTextContents()).toEqual(
-          sections.slice(4).map((name) => name + CLOSED_SUFFIX),
+          sections.slice(3).map((name) => name + CLOSED_SUFFIX),
         )
         for (const item of await closed.all()) {
           await expect(item).toBeVisible()
@@ -277,7 +270,7 @@ test('a site of someone else and a made-up address answer «not found» alike', 
     for (const path of [
       `/projects/${foreign.siteId}`,
       `/projects/${foreign.siteId}/settings`,
-      '/projects/0199a3f2-5d1c-7b3e-9c41-2f6a8d0e4b17/chat',
+      '/projects/0199a3f2-5d1c-7b3e-9c41-2f6a8d0e4b17/changes',
       '/projects/not-an-id/settings',
     ]) {
       await page.goto(path)

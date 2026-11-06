@@ -198,6 +198,12 @@ export async function verifyZaiApi(ctx) {
     assert.equal(body.stream_options?.include_usage, true)
     assert.ok(body.tools.some((tool) => tool.function?.name === 'raditi_site_info'))
   }
+  // The reasoning of each answer came through the role on the route of the API, as on the plan.
+  assert.deepEqual(
+    turn.events.filter((event) => event.type === 'reasoning').map((event) => event.text),
+    turn.provider.map(() => 'Synthetic reasoning.'),
+    'The reasoning of the provider did not reach the events of the turn',
+  )
   // The usage of each call is the provider's own count, written once, on the API's own profile.
   const rows = await settled(written, 2)
   for (const row of rows) {

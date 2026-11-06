@@ -66,6 +66,8 @@ describe('linkErrorMessage', () => {
   it('explains broken verification links', () => {
     expect(linkErrorMessage(undefined)).toBeNull()
     expect(linkErrorMessage('TOKEN_EXPIRED')).toBe(INVALID_LINK_ERROR)
-    expect(linkErrorMessage('EMAIL_ALREADY_VERIFIED')).toMatch(/уже подтверждён/)
+    expect(linkErrorMessage('EMAIL_ALREADY_VERIFIED')).toBe(
+      'Адрес уже подтверждён. Войдите, чтобы открыть чаты.',
+    )
   })
 })

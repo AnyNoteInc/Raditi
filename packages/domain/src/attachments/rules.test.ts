@@ -291,6 +291,12 @@ describe('attachmentStartInputSchema', () => {
     })
   })
 
+  it('takes a file of a chat without a project, and no absent site', () => {
+    expect(attachmentStartInputSchema.parse({ ...input, siteId: null }).siteId).toBeNull()
+    const { siteId: _siteId, ...withoutSite } = input
+    expect(attachmentStartInputSchema.safeParse(withoutSite).success).toBe(false)
+  })
+
   it('bounds the size', () => {
     const accepts = (size: number) =>
       attachmentStartInputSchema.safeParse({ ...input, size }).success

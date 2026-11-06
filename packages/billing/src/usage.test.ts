@@ -227,6 +227,14 @@ describe('usage summary DTO', () => {
       'a site without a charged credit',
       { tariff: { ...tariff, bySite: [{ siteId: WORKSPACE, name: 'Сайт', credits: 0 }] } },
     ],
+    [
+      'a line without a project that names one',
+      { tariff: { ...tariff, bySite: [{ siteId: null, name: 'Сайт', credits: 5 }] } },
+    ],
+    [
+      'a project without a name',
+      { tariff: { ...tariff, bySite: [{ siteId: WORKSPACE, name: null, credits: 5 }] } },
+    ],
     ['a summary without its history', { history: undefined }],
     ['a summary that does not say whether a task would be taken', { newTask: undefined }],
     ['a task that is taken for a reason', { newTask: { allowed: true, reason: 'empty' } }],
@@ -271,6 +279,7 @@ describe('usage history line DTO', () => {
     ['a task in work', { outcome: 'held', credits: 45, from: { tariff: 45, gift: 0, pack: 0 } }],
     ['a task that ended without a charge', { outcome: 'unpaid', ...nothing }],
     ['an undo', { outcome: 'free', ...nothing }],
+    ['a chat without a project', { site: null }],
   ])('accepts %s', (_case, patch) => {
     expect(usageEntrySchema.safeParse({ ...line, ...patch }).success).toBe(true)
   })
@@ -808,6 +817,42 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
         { id: block.id, outcome: 'charged', credits: 17, from: { tariff: 5, gift: 0, pack: 12 } },
       ])
       expect(done.history.items).toHaveLength(1)
+    })
+
+    // docs/plan/61-chats-first.md, §5.10: a charge of a chat without a project never drops out.
+    it('counts what chats without a project took as one more line, the last of equals', async () => {
+      const { workspaceId } = await funded({ tariff: 300, plan: startDay })
+      const shop = await site(workspaceId, 'Магазин')
+      const onSite = await charged(workspaceId, shop.id, NOW, 9)
+      const chatOf = async (minutes: number, credits: number) => {
+        const { id } = await db.task.create({
+          data: {
+            workspaceId,
+            siteId: null,
+            needsRepository: false,
+            needsBrowser: false,
+            modelClass: 'standard',
+            status: 'done',
+          },
+        })
+        await place(workspaceId, id, { now: minutesAfter(minutes) })
+        await charge(id, credits, { now: minutesAfter(minutes + 20) })
+        return id
+      }
+      const first = await chatOf(1, 5)
+      const second = await chatOf(2, 4)
+
+      const summary = await summaryAt(workspaceId)
+
+      expect(summary.tariff?.bySite).toEqual([
+        { siteId: shop.id, name: 'Магазин', credits: 9 },
+        { siteId: null, name: null, credits: 9 },
+      ])
+      expect(summary.history.items.map(({ id, site, credits }) => [id, site, credits])).toEqual([
+        [second, null, 4],
+        [first, null, 5],
+        [onSite.taskId, { id: shop.id, name: 'Магазин' }, 9],
+      ])
     })
 
     it('shows a task whose reserve stands on three accounts as one line, and sums what they paid', async () => {

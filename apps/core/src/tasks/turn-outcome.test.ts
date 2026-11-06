@@ -50,12 +50,8 @@ describe('feedFailureOf', () => {
     expect(feedFailureOf({ errorCode: 'LLM_GATEWAY_UNAVAILABLE', policyFlagged: false })).toBe(
       'unavailable',
     )
-    // A task with a repository on a core without git, a browser that could not be opened
-    // (docs/plan/57-browser-tasks.md, Б7, Б18).
+    // A task with a repository on a core without git (docs/plan/57-browser-tasks.md, Б7).
     expect(feedFailureOf({ errorCode: 'GIT_NOT_CONFIGURED', policyFlagged: false })).toBe(
-      'unavailable',
-    )
-    expect(feedFailureOf({ errorCode: 'BROWSER_SESSION_UNAVAILABLE', policyFlagged: false })).toBe(
       'unavailable',
     )
     expect(feedFailureOf({ errorCode: 'SOMETHING_NEW', policyFlagged: false })).toBe('technical')

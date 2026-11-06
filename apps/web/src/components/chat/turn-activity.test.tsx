@@ -26,6 +26,39 @@ const read = (patch: Partial<ActivityState> = {}): ActivityState => ({
 })
 
 describe('«Ход работы»', () => {
+  describe('what the model thought', () => {
+    const THOUGHT = 'Maybe <i>the theme</i> first.'
+    const thought: ActivityEvent = { id: '6:0', type: 'reasoning', text: THOUGHT }
+
+    it('stays out of sight until the viewer asks, and nothing says it is there', () => {
+      render(<TurnActivityView state={read({ events: [thought, ...events] })} live={false} />)
+      expect(screen.queryByText(THOUGHT)).toBeNull()
+      expect(screen.queryByText('Размышления агента')).toBeNull()
+    })
+
+    it('stands in its place as text, under a label of its own, for a viewer who asked', () => {
+      render(
+        <TurnActivityView state={read({ events: [thought, ...events] })} live={false} thinking />,
+      )
+      const block = screen.getByRole('region', { name: 'Ход работы' })
+      expect(block.querySelector('i')).toBeNull()
+      expect(within(block).getByText('Размышления агента')).toBeTruthy()
+      expect(block.textContent!.indexOf('Maybe')).toBeLessThan(block.textContent!.indexOf('Смотрю'))
+      expect(within(block).getByText(THOUGHT)).toBeTruthy()
+    })
+
+    it('is something to read for a viewer who asked, when it is all there is', () => {
+      render(<TurnActivityView state={read({ events: [thought] })} live thinking />)
+      expect(screen.getByText(THOUGHT)).toBeTruthy()
+      expect(screen.queryByText('Агент пока ничего не вывел.')).toBeNull()
+    })
+
+    it('counts as nothing yet for a viewer who has not asked', () => {
+      render(<TurnActivityView state={read({ events: [thought] })} live />)
+      expect(screen.getByText('Агент пока ничего не вывел.')).toBeTruthy()
+    })
+  })
+
   it('shows every event of the agent as text, in the order it came', () => {
     render(<TurnActivityView state={read()} live={false} />)
     const block = screen.getByRole('region', { name: 'Ход работы' })

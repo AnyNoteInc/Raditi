@@ -8,6 +8,7 @@ import {
   CANDIDATE_REBASE_JOB,
   candidateRebaseDedupeKey,
   isDomainError,
+  leaseScopeOf,
   readFeedRow,
   turnEvidenceSchema,
   type AgentTurnCancelJob,
@@ -62,9 +63,9 @@ export interface PassRunnerDependencies {
   git: CandidateGit | null
   /**
    * The cloud browser of tasks that need one (docs/plan/57, Б18); null while no worker is
-   * configured: such a task is refused `unavailable`.
+   * configured: the planner refuses such a task `unavailable`.
    */
-  browser?: Pick<BrowserSessions, 'ensure' | 'verify'> | null
+  browser?: Pick<BrowserSessions, 'reclaim' | 'verify'> | null
   drivers: AgentDriverRegistry
   backends: readonly LlmBackend[]
   adapter: (stack: SiteStack) => SiteAdapter
@@ -197,8 +198,15 @@ export class PassRunner {
       await this.#settle(ref, { kind: 'cancelled', turn: null }, browser)
       return
     }
-    // The browser lives with the task, not with the turn: opened or found before it (Б18).
-    if (browser && !(await this.#openBrowser(job, ref, controller))) return
+    // The browser lives with the task, not with the turn (Б18), and starts with the agent's first
+    // `web_*` call (docs/plan/61, К11): a live one only comes back to the agent here.
+    if (browser) {
+      await this.deps.browser?.reclaim(job.taskId, controller.signal)
+      if (controller.signal.aborted) {
+        await this.#settle(ref, { kind: 'cancelled', turn: null }, true)
+        return
+      }
+    }
 
     const watch = this.#watchCancel(job, controller)
     let ending: PassEnding | null
@@ -251,36 +259,6 @@ export class PassRunner {
   }
 
   /**
-   * The cloud browser of the task before its turn (Б16, Б18): opened, or found and given back to
-   * the agent. false — the pass was ended here: no worker, or it did not answer (`unavailable`),
-   * or the client cancelled meanwhile.
-   */
-  async #openBrowser(
-    job: AgentTurnJob,
-    ref: PassRef,
-    controller: AbortController,
-  ): Promise<boolean> {
-    const { browser, settlement } = this.deps
-    if (!browser) {
-      await settlement.settle(ref, { kind: 'refused', code: 'unavailable' })
-      return false
-    }
-    try {
-      await browser.ensure(job.taskId, controller.signal)
-      return true
-    } catch (error) {
-      if (controller.signal.aborted) {
-        await this.#settle(ref, { kind: 'cancelled', turn: null }, true)
-        return false
-      }
-      const code = feedFailureOf({ ...failureFactsOf(error), policyFlagged: false })
-      this.#logger.warn(`pass_browser_unavailable task=${job.taskId} cause=${causeOf(error)}`)
-      await settlement.settle(ref, { kind: 'refused', code })
-      return false
-    }
-  }
-
-  /**
    * The dialog's preview, stopped while no one used it (owner's answer of 26.10.2026), is built
    * again for this pass: asked here, before the turn is planned, so the build runs beside the
    * preparation of the sandbox. A wake that is not written leaves it to the sweep of previews.
@@ -304,7 +282,8 @@ export class PassRunner {
         where: { id: job.taskId },
         select: { siteId: true },
       })
-      if (!task) return
+      // Nobody waits for a task without a site: its lease is its own.
+      if (!task?.siteId) return
       await enqueueSiteWaitingPasses(this.deps.db, {
         siteId: task.siteId,
         tag: `turn-${job.taskId}-${turnNo}`,
@@ -341,6 +320,7 @@ export class PassRunner {
       driver,
       backends: this.deps.backends,
       runtime: this.deps.runtime,
+      browser: Boolean(this.deps.browser),
       mainHead: () =>
         repo && git
           ? git.readBranchHead({ repo, branch: repo.defaultBranch })
@@ -478,7 +458,11 @@ export class PassRunner {
       where: { id: ref.taskId },
       select: { siteId: true },
     })
-    const lease = task ? await this.deps.leases.inspect(task.siteId).catch(() => null) : null
+    const lease = task
+      ? await this.deps.leases
+          .inspect(leaseScopeOf({ id: ref.taskId, siteId: task.siteId }))
+          .catch(() => null)
+      : null
     if (!lease?.expiresAt) return { delayMs: RETRY_DELAY_MS.site }
     const left = lease.expiresAt.getTime() - lease.serverNow.getTime()
     // A release barrier outlives its lease (an attempt whose run still goes, a release held for

@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto'
 
 import {
   BROWSER_ONLY,
+  leaseScopeOf,
+  PLAIN_CHAT,
   REPOSITORY_ONLY,
   type OpenTurnAssignment,
   type TaskRequirements,
@@ -17,6 +19,7 @@ import {
 } from '../prisma/migrated-schema.ts'
 import type { PrismaClient } from './generated/prisma/client.ts'
 import { PostgresSiteLeaseStore } from './site-leases.ts'
+import { undoTurn } from './task-settle.ts'
 import { PostgresTaskTurnAssignmentStore } from './task-turn-assignments.ts'
 
 const databaseUrl = process.env.DATABASE_URL
@@ -54,7 +57,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
   }, 60_000)
   afterEach(async () => {
     for (const workspaceId of workspaces.splice(0)) {
-      await db.siteLease.deleteMany({ where: { site: { workspaceId } } })
+      const sites = await db.site.findMany({ where: { workspaceId }, select: { id: true } })
+      const chats = await db.task.findMany({
+        where: { workspaceId, siteId: null },
+        select: { id: true },
+      })
+      await db.siteLease.deleteMany({
+        where: { siteId: { in: [...sites, ...chats].map(({ id }) => id) } },
+      })
       await db.mcpCall.deleteMany({ where: { turn: { task: { workspaceId } } } })
       await db.task.deleteMany({ where: { workspaceId } })
       await db.site.deleteMany({ where: { workspaceId } })
@@ -66,8 +76,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
     await schema?.drop()
   })
 
-  /** A task and the plan of its first turn; with `requirements` both are made for them. */
-  async function fixture(requirements?: TaskRequirements) {
+  /**
+   * A task and the plan of its first turn; with `requirements` both are made for them. `chat` —
+   * without a site, under the lease of the task's own id.
+   */
+  async function fixture(requirements?: TaskRequirements, options: { chat?: true } = {}) {
     const workspace = await db.workspace.create({ data: { name: 'Synthetic product turn' } })
     workspaces.push(workspace.id)
     const site = await db.site.create({
@@ -81,7 +94,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
     const task = await db.task.create({
       data: {
         workspaceId: workspace.id,
-        siteId: site.id,
+        ...(options.chat ? {} : { siteId: site.id }),
         ...(requirements
           ? { needsRepository: requirements.repository, needsBrowser: requirements.browser }
           : {}),
@@ -89,8 +102,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
     })
     const sessionId = randomUUID()
     const leases = new PostgresSiteLeaseStore(db)
+    const scope = leaseScopeOf(task)
     const fence = (await leases.acquire({
-      siteId: site.id,
+      siteId: scope,
       taskId: task.id,
       operation: 'turn',
       ttlMs: 60_000,
@@ -98,7 +112,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
     const plan: TurnPlan = {
       sandbox: {
         image,
-        labels: { workspaceId: workspace.id, siteId: site.id, taskId: task.id, sessionId, turn: 1 },
+        labels: { workspaceId: workspace.id, siteId: scope, taskId: task.id, sessionId, turn: 1 },
         runtime: 'runc',
         resources: { cpu: 1, memoryMiB: 256, pids: 64 },
         user: { uid: 10001, gid: 10001 },
@@ -163,7 +177,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
      */
     const step = (
       turn: number,
-      options: { base?: string; previous?: number; rebased?: true; pin?: string | null },
+      options: {
+        base?: string
+        previous?: number
+        rebased?: true
+        pin?: string | null
+        rewound?: true
+      },
     ): OpenTurnAssignment => {
       const opened = options.pin === undefined ? next(turn) : next(turn, turn - 1, options.pin)
       const previous = options.previous
@@ -182,6 +202,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
               },
             }),
         ...(options.rebased ? { rebased: true } : {}),
+        ...(options.rewound ? { rewound: true as const } : {}),
         ...(opened.plan.workspace && options.base
           ? { workspace: { ...opened.plan.workspace, expectedBaseSha: options.base } }
           : {}),
@@ -369,6 +390,45 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
       expect((await db.task.findUniqueOrThrow({ where: { id: f.task.id } })).turnNo).toBe(2)
     })
 
+    it('opens the turn of a chat without a site and writes its running turn', async () => {
+      const f = await fixture(PLAIN_CHAT, { chat: true })
+      const first = (await store.open(f.input))!
+      expect(first.plan.requirements).toEqual(PLAIN_CHAT)
+      expect(first.fence.siteId).toBe(f.task.id)
+      expect(
+        await db.taskTurn.findUniqueOrThrow({
+          where: { taskId_turnNo: { taskId: f.task.id, turnNo: 1 } },
+        }),
+      ).toMatchObject({ status: 'running', baseSha: null })
+    })
+
+    it('refuses a task of a site under a fence that is not its site', async () => {
+      const f = await fixture(BROWSER_ONLY)
+      const foreign = randomUUID()
+      const lease = await db.siteLease.create({
+        data: {
+          siteId: foreign,
+          holderTaskId: f.task.id,
+          operation: 'turn',
+          epoch: 1,
+          expiresAt: new Date(Date.now() + 60_000),
+        },
+      })
+      const labels = { ...f.plan.sandbox.labels, siteId: foreign }
+      await expect(
+        store.open({
+          ...f.input,
+          fence: { ...f.fence, siteId: foreign },
+          plan: { ...f.plan, sandbox: { ...f.plan.sandbox, labels } },
+        }),
+      ).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: 'Product task is not available for a turn',
+      })
+      expect(await db.taskTurn.count({ where: { taskId: f.task.id } })).toBe(0)
+      await db.siteLease.delete({ where: { siteId: lease.siteId } })
+    })
+
     it('starts a new session after an unsuccessful turn without a repository, never a replacement', async () => {
       const f = await fixture(BROWSER_ONLY)
       await f.close((await store.open(f.input))!, 'failed')
@@ -386,6 +446,172 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
       expect(second.plan.previous).toBeUndefined()
       await f.close(second, 'completed')
       expect(await store.open(f.step(3, { previous: 2 }))).not.toBeNull()
+    })
+
+    it('after `/undo` starts where the undone turn started, and never from it (plan 61, §5.14)', async () => {
+      const f = await fixture(BROWSER_ONLY)
+      await f.close((await store.open(f.input))!, 'completed')
+      await f.close((await store.open(f.step(2, { previous: 1 })))!, 'completed')
+      expect(await undoTurn(db, { taskId: f.task.id, turnNo: 2 })).not.toBeNull()
+
+      await expect(store.open(f.step(3, { previous: 2 }))).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: 'An undone turn is not continued',
+      })
+      await expect(store.open(f.step(3, { previous: 2, rewound: true }))).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: 'A rewound turn does not start where the undone one started',
+      })
+      expect(await db.taskTurn.count({ where: { taskId: f.task.id } })).toBe(2)
+
+      const third = (await store.open(f.step(3, { previous: 1, rewound: true })))!
+      expect(third.plan).toMatchObject({ rewound: true, previous: { turn: 1 } })
+      await f.close(third, 'completed')
+
+      await expect(store.open(f.step(4, { previous: 1, rewound: true }))).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: 'Only a turn after an undone one is rewound',
+      })
+      expect(await store.open(f.step(4, { previous: 3 }))).not.toBeNull()
+    })
+
+    it('after two `/undo` in a row starts where both of them started', async () => {
+      const f = await fixture(BROWSER_ONLY)
+      await f.close((await store.open(f.input))!, 'completed')
+      await f.close((await store.open(f.step(2, { previous: 1 })))!, 'completed')
+      await undoTurn(db, { taskId: f.task.id, turnNo: 2 })
+      await f.close((await store.open(f.step(3, { previous: 1, rewound: true })))!, 'completed')
+      await undoTurn(db, { taskId: f.task.id, turnNo: 3 })
+
+      await expect(store.open(f.step(4, { previous: 3, rewound: true }))).rejects.toMatchObject({
+        message: 'A rewound turn does not start where the undone one started',
+      })
+      const fourth = (await store.open(f.step(4, { previous: 1, rewound: true })))!
+      expect(fourth.plan).toMatchObject({ rewound: true, previous: { turn: 1 } })
+    })
+
+    it('after `/undo` of the first turn starts a new session', async () => {
+      const f = await fixture(PLAIN_CHAT, { chat: true })
+      await f.close((await store.open(f.input))!, 'completed')
+      await undoTurn(db, { taskId: f.task.id, turnNo: 1 })
+
+      await expect(store.open(f.step(2, { previous: 1, rewound: true }))).rejects.toMatchObject({
+        message: 'A rewound turn does not start where the undone one started',
+      })
+      const second = (await store.open(f.step(2, { rewound: true })))!
+      expect(second.plan.previous).toBeUndefined()
+    })
+
+    it('never opens a first turn as rewound', async () => {
+      const f = await fixture(BROWSER_ONLY)
+      await expect(
+        store.open({ ...f.input, plan: { ...f.plan, rewound: true } }),
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'The first product turn has no predecessor',
+      })
+    })
+
+    it('replaces an undone turn with a repository, never continues it', async () => {
+      const f = await fixture()
+      const first = (await store.open(f.input))!
+      await f.close(first, 'completed', headSha)
+      await undoTurn(db, { taskId: f.task.id, turnNo: 1 })
+      await expect(store.open(f.step(2, { base: headSha, previous: 1 }))).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: 'An undone turn must be replaced',
+      })
+    })
+
+    it('pins the replacement of an undone turn where that turn found the branch', async () => {
+      const f = await fixture()
+      const undoneHead = '9'.repeat(40)
+      await f.close((await store.open(f.input))!, 'completed', headSha)
+      await f.candidate(1, headSha)
+      const second = (await store.open(f.step(2, { base: headSha, previous: 1 })))!
+      await f.close(second, 'completed', undoneHead)
+      await f.candidate(2, undoneHead)
+      await undoTurn(db, { taskId: f.task.id, turnNo: 2 })
+
+      // The undone head is gone from the branch, and a push leased on it would fail.
+      await expect(
+        store.open(f.step(3, { base: headSha, previous: 1, pin: undoneHead })),
+      ).rejects.toMatchObject({ message: 'Replacement does not pin the published task branch' })
+      expect(
+        await store.open(f.step(3, { base: headSha, previous: 1, pin: headSha })),
+      ).not.toBeNull()
+    })
+
+    it('finds no branch after the first turn is undone', async () => {
+      const f = await fixture()
+      await f.close((await store.open(f.input))!, 'completed', headSha)
+      await undoTurn(db, { taskId: f.task.id, turnNo: 1 })
+      await expect(store.open(f.step(2, { base: baseSha, pin: headSha }))).rejects.toMatchObject({
+        message: 'Replacement does not pin the published task branch',
+      })
+      expect(await store.open(f.step(2, { base: baseSha, pin: null }))).not.toBeNull()
+    })
+
+    it('reads the turn after an undone one, not the undone one, once a later turn published', async () => {
+      const f = await fixture()
+      const undoneHead = '9'.repeat(40)
+      const thirdHead = '7'.repeat(40)
+      await f.close((await store.open(f.input))!, 'completed', headSha)
+      await f.close(
+        (await store.open(f.step(2, { base: headSha, previous: 1 })))!,
+        'completed',
+        undoneHead,
+      )
+      await undoTurn(db, { taskId: f.task.id, turnNo: 2 })
+      await f.close(
+        (await store.open(f.step(3, { base: headSha, previous: 1, pin: headSha })))!,
+        'completed',
+        thirdHead,
+      )
+      // Turn 4 failed, and its replacement is pinned where turn 3 left the branch: the undone turn
+      // below the last publication answers no more.
+      await f.close((await store.open(f.step(4, { base: thirdHead, previous: 3 })))!, 'failed')
+      await expect(
+        store.open(f.step(5, { base: thirdHead, previous: 3, pin: headSha })),
+      ).rejects.toMatchObject({ message: 'Replacement does not pin the published task branch' })
+      expect(
+        await store.open(f.step(5, { base: thirdHead, previous: 3, pin: thirdHead })),
+      ).not.toBeNull()
+    })
+
+    it('pins the replacement of a turn that started on «Обновить» on that head', async () => {
+      const f = await fixture()
+      const rebasedHead = 'e'.repeat(40)
+      const undoneHead = '9'.repeat(40)
+      await f.close((await store.open(f.input))!, 'completed', headSha)
+      await f.candidate(1, rebasedHead)
+      await f.close(
+        (await store.open(f.step(2, { base: rebasedHead, rebased: true })))!,
+        'completed',
+        undoneHead,
+      )
+      await f.candidate(2, undoneHead)
+      await undoTurn(db, { taskId: f.task.id, turnNo: 2 })
+      // The revision `/undo` writes: the head of «Обновить», under the turn it stood on.
+      await f.candidate(1, rebasedHead)
+      expect(
+        await store.open(f.step(3, { base: rebasedHead, rebased: true, pin: rebasedHead })),
+      ).not.toBeNull()
+    })
+
+    it('keeps the head an undone turn found: «Обновить» after the undo moves it again', async () => {
+      const f = await fixture()
+      const moved = 'e'.repeat(40)
+      const undoneHead = '9'.repeat(40)
+      await f.close((await store.open(f.input))!, 'completed', headSha)
+      await f.close(
+        (await store.open(f.step(2, { base: headSha, previous: 1 })))!,
+        'completed',
+        undoneHead,
+      )
+      await undoTurn(db, { taskId: f.task.id, turnNo: 2 })
+      await f.candidate(2, moved)
+      expect(await store.open(f.step(3, { base: moved, rebased: true, pin: moved }))).not.toBeNull()
     })
 
     it('refuses a plan whose requirements differ from its task, without creating a row', async () => {

@@ -14,6 +14,7 @@ import {
   attachmentTypeOf,
   conflict,
   terminalTaskStatuses,
+  type AppEnv,
   type AttachmentRefusal,
 } from '@repo/domain'
 import { z } from 'zod'
@@ -21,7 +22,7 @@ import { z } from 'zod'
 import { accessibleSite, siteNotFound } from '../site-basics.ts'
 import { accessibleTask, taskNotFound } from './access.ts'
 import type { ChatContext } from './context.ts'
-import { underDialogLock } from './dialog-lock.ts'
+import { personalWorkspaceOf, underDialogLock } from './dialog-lock.ts'
 import {
   attachmentNotReady,
   attachmentRefused,
@@ -65,7 +66,8 @@ export async function bindMessageAttachments(
     taskId: string
     userId: string
     workspaceId: string
-    siteId: string
+    /** null — a chat without a project (docs/plan/61-chats-first.md, §5.9). */
+    siteId: string | null
   },
 ): Promise<void> {
   if (input.ids.length === 0) return
@@ -78,7 +80,10 @@ export const requestAttachments = (ids: readonly string[]): { attachments?: stri
 
 export interface AttachmentStart {
   userId: string
-  siteId: string
+  /** null — a file of a chat without a project, which goes to the user's personal workspace. */
+  siteId: string | null
+  /** Makes the personal workspace of a new user: the file may come before the first message. */
+  appEnv: AppEnv
   /** As the browser gave it: cleaned here. */
   name: string
   size: number
@@ -101,10 +106,12 @@ function startRefusal(input: AttachmentStart): AttachmentRefusal | null {
 }
 
 /**
- * `attachment.start`: a file of a site the user may open is announced (`uploading`), with a day to
- * be sent (`ATTACHMENT_UNSENT_HOURS`). Answers its id and where the bytes go. A file the rules
- * refuse answers why, in the client's words; a site of someone else answers as one that does not
- * exist.
+ * `attachment.start`: a file of a site the user may open, or of a chat without a project, is
+ * announced (`uploading`), with a day to be sent (`ATTACHMENT_UNSENT_HOURS`). Answers its id and
+ * where the bytes go. A file the rules refuse answers why, in the client's words; a site of someone
+ * else answers as one that does not exist. Without a site the file goes to the personal workspace,
+ * made here for a new user (docs/plan/61-chats-first.md, К15) after every refusal: one that is
+ * refused makes nothing.
  */
 export async function startAttachment(
   db: PrismaClient,
@@ -120,11 +127,14 @@ export async function startAttachment(
     size: input.size,
     type: attachmentTypeOf(input.type)?.mime,
   })
-  const site = await db.site.findFirst({
-    where: accessibleSite(input.userId, file.siteId),
-    select: { id: true, workspaceId: true },
-  })
-  if (site === null) throw siteNotFound()
+  const site =
+    file.siteId === null
+      ? null
+      : await db.site.findFirst({
+          where: accessibleSite(input.userId, file.siteId),
+          select: { id: true, workspaceId: true },
+        })
+  if (file.siteId !== null && site === null) throw siteNotFound()
   const unsent = await db.attachment.count({
     where: {
       uploadedById: input.userId,
@@ -133,9 +143,12 @@ export async function startAttachment(
     },
   })
   if (unsent >= UNSENT_ATTACHMENTS_PER_USER) throw attachmentsLimit()
+  const workspaceId =
+    site?.workspaceId ??
+    (await personalWorkspaceOf(db, { userId: input.userId, appEnv: input.appEnv })).id
   const row = await createAttachment(db, {
-    workspaceId: site.workspaceId,
-    siteId: site.id,
+    workspaceId,
+    siteId: site?.id ?? null,
     uploadedById: input.userId,
     fileName: file.name,
     contentType: file.type,

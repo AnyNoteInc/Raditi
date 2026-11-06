@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+
 import {
   attachmentRefusals,
   attachmentRefusalText,
@@ -45,6 +47,13 @@ import {
   trpcCodeForStatus,
 } from './errors.ts'
 import { createCallerFactory, publicProcedure, router, type Context } from './trpc.ts'
+
+describe('the words of refusals', () => {
+  // docs/plan/61-chats-first.md, К26: the source, for a text is often composed in a function.
+  it('says «чат», never «диалог»', () => {
+    expect(readFileSync(new URL('./errors.ts', import.meta.url), 'utf8')).not.toMatch(/диалог/i)
+  })
+})
 
 describe('toTRPCError', () => {
   it.each([
@@ -811,6 +820,8 @@ describe('the refusals of a dialog, its preview and its release', () => {
     ['TASK_TEXT_HAS_SECRET', 400],
     ['TASK_TEXT_INVALID', 400],
     ['TASK_BUSY', 409],
+    ['TASK_REWINDING', 409],
+    ['TASK_REDOING', 409],
     ['TASK_FINISHED', 409],
     ['TASK_CONTINUE_REQUIRED', 409],
     ['TASK_NOTHING_TO_CONTINUE', 409],
@@ -847,6 +858,8 @@ describe('the refusals of a dialog, its preview and its release', () => {
     ['PROJECT_NOTES_TOO_LONG', 400],
     ['PROJECT_NOTES_HAS_SECRET', 400],
     ['PROJECT_NOTES_INVALID', 400],
+    ['PROJECT_NOTES_NOT_ALLOWED', 403],
+    ['PROJECT_NOTES_CHANGED', 409],
   ] as const
 
   it.each(codes)('gives %s its own Russian text on «вы», without English', (domainCode, status) => {
@@ -875,9 +888,8 @@ describe('the refusals of a dialog, its preview and its release', () => {
     expect(text('not_synthetic')).toContain('тестовая среда')
     expect(text('class_unavailable')).toContain('на этом уровне размышления недоступен')
     expect(text('browser_unavailable')).toBe(
-      'Задания в браузере сейчас не принимаются. Попробуйте ещё раз немного позже',
+      'Сейчас этот проект недоступен для чата. Попробуйте ещё раз немного позже',
     )
-    expect(text('environment_unsupported')).toContain('в браузере или через копию сайта')
     expect(text('other')).toBe('Задания для этого сайта сейчас не принимаются')
     expect(text()).toBe('Задания для этого сайта сейчас не принимаются')
   })
@@ -929,5 +941,20 @@ describe('the refusals of a dialog, its preview and its release', () => {
       'refusal',
     )
     expect(formatted('TASK_NOT_ACCEPTED', { refusal: 'busy' }).data).not.toHaveProperty('refusal')
+  })
+
+  it('names why a project cannot be deleted: chats that are not over lead to their folder', () => {
+    const shape = { message: 'Refused', code: -32009, data: { code: 'CONFLICT', httpStatus: 409 } }
+    const formatted = (reason: string) =>
+      formatError(
+        shape,
+        toTRPCError(new DomainError('SITE_DELETE_BUSY', 'Refused', 409, { reason })),
+        false,
+      )
+
+    expect(formatted('tasks').message).toBe('Сначала завершите или отмените чаты этого проекта')
+    expect(formatted('tasks').data).toMatchObject({ refusal: 'tasks' })
+    expect(formatted('release').message).toContain('Сейчас на сайте идёт работа')
+    expect(formatted('release').data).toMatchObject({ refusal: 'release' })
   })
 })

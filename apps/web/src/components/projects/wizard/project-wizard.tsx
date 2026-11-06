@@ -13,6 +13,7 @@ import { useRouter } from 'next/navigation'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
+import { NEW_CHAT_HREF, newChatHref } from '@/components/chat/chat-address'
 import { useTRPC } from '@/trpc/client'
 
 import { stackLabels, type ProjectStack } from '../project-labels'
@@ -63,10 +64,11 @@ const steps: readonly { title: string; note: string }[] = [
 
 /**
  * The accesses are the site's variables too (owner's decision of 26.10.2026): said on the step
- * that adds the project, where the user gives the last of them.
+ * that adds the project, where the user gives the last of them. The access to the files stops at
+ * a chat that has the browser as well, the database does not (docs/plan/61, К21 and 61.27).
  */
 export const VARIABLES_NOTE =
-  'Доступы к файлам и базе данных мы сохраним и как переменные сайта: их получат команды агента и предпросмотр. Это можно отключить в разделе «Переменные».'
+  'Доступы к файлам и базе данных мы сохраним и как переменные сайта: их получат команды агента и предпросмотр, доступ к файлам — только в чате без браузера. Это можно отключить в разделе «Переменные».'
 
 /** «Доступ к файлам» where the wizard also offers the browser alone (docs/plan/57, Б8). */
 const SOURCE_NOTE_WITH_BROWSER =
@@ -74,12 +76,12 @@ const SOURCE_NOTE_WITH_BROWSER =
 
 /** What a site without access to its files can and cannot get, in the owner's words. */
 const BROWSER_ACCESS_POINTS = [
-  'Агент меняет записи, страницы и медиафайлы в админке сайта — через браузер, и вы видите каждый шаг.',
+  'Агент меняет записи, страницы и медиафайлы через браузер, и вы видите каждый шаг.',
   'В админку входите вы сами, прямо в окне задачи. Пароль от админки нам сообщать не нужно.',
   // The settings stay closed with access to the files too (docs/plan/57-browser-tasks.md, Б21):
   // only the code, the theme and the plugins need it.
   'Настройки сайта и пользователей агент менять не сможет. Код, тему и плагины — тоже: для них нужен доступ по SSH или FTP.',
-  'Изменения появляются на сайте сразу, без предпросмотра и выпуска версии. Первоначальную версию сайта мы не сохраним.',
+  'Предпросмотра и выпуска версий здесь нет, а сделанное агентом на сайте отменить нельзя. Первоначальную версию сайта мы не сохраним.',
 ] as const
 
 const NOTES_FIELD = 'wizard-agent-notes'
@@ -140,10 +142,17 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 export function ProjectWizard({
   stacks,
   browserAccess = false,
+  fromChats = false,
 }: {
   stacks: readonly ProjectStack[]
   /** The platform has a browser for tasks: a site may be added without access to its files. */
   browserAccess?: boolean
+  /**
+   * The client came from a new chat (docs/plan/61-chats-first.md, §5.11): «Отмена» leads back to
+   * it, and so does a project added without files, chosen in the chat. A project with files
+   * shows how its import goes first.
+   */
+  fromChats?: boolean
 }) {
   const trpc = useTRPC()
   const router = useRouter()
@@ -425,7 +434,11 @@ export function ProjectWizard({
             busyRef.current = 'created'
             setBusy('created')
             void queryClient.invalidateQueries({ queryKey: trpc.project.list.queryKey() })
-            router.push(`/projects/${outcome.project.id}`)
+            router.push(
+              fromChats && viaBrowser
+                ? newChatHref(outcome.project.id)
+                : `/projects/${outcome.project.id}`,
+            )
           } else if (outcome.outcome === 'source_refused') {
             goTo(1)
             refuseSource(outcome)
@@ -715,7 +728,11 @@ export function ProjectWizard({
             }}
           >
             {step === 0 ? (
-              <Button color="inherit" href="/projects" disabled={disabled}>
+              <Button
+                color="inherit"
+                href={fromChats ? NEW_CHAT_HREF : '/projects'}
+                disabled={disabled}
+              >
                 Отмена
               </Button>
             ) : (
@@ -762,7 +779,7 @@ function BrowserAccessPanel({
   return (
     <>
       <Typography variant="body2" color="text.secondary" sx={{ textWrap: 'pretty' }}>
-        Агент работает только через браузер — в админке сайта.
+        Агент работает только в браузере.
       </Typography>
       <Box
         component="section"

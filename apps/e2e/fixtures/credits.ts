@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto'
 
-import { chargeTask, placeCreditHold, type ChargedTask } from '@repo/billing'
+import {
+  chargeTask,
+  ensurePersonalWorkspaceWithGift,
+  placeCreditHold,
+  type ChargedTask,
+} from '@repo/billing'
 import {
   writeModelCall,
   writeModelPool,
@@ -9,7 +14,7 @@ import {
 } from '@repo/billing/testing'
 import { createPrismaClient, type ModelClass, type PrismaClient } from '@repo/db'
 
-import { databaseUrl } from './billing-stand.ts'
+import { authEnv, databaseUrl } from './billing-stand.ts'
 import { test as signedIn, type SignedInUser } from './signed-in.ts'
 
 // The credits of a signed-in customer for the browser checks: what the database holds — the
@@ -74,9 +79,16 @@ export interface Credits {
    * reserve is placed by `placeCreditHold`, with every check of a placement. `modelClass` is
    * the mode it runs in: `standard` unless told otherwise, `heavy` for a large one. `at` is
    * the moment it is queued — now unless told: an earlier one queues it on an earlier Moscow
-   * day of the period (`periodBegan`), and it is done a minute after it.
+   * day of the period (`periodBegan`), and it is done a minute after it. `withProject: false`
+   * is a chat without a project: no site, no repository, and the workspace is made for it when
+   * there is none, as `task.create` makes it.
    */
-  task(input: { title: string; modelClass?: ModelClass; at?: Date }): Promise<TaskInWork>
+  task(input: {
+    title: string
+    modelClass?: ModelClass
+    at?: Date
+    withProject?: boolean
+  }): Promise<TaskInWork>
   /**
    * The current period of the customer's tariff began at `start`, before the payment that
    * opened it — so that tasks can be queued on earlier Moscow days of it: a tariff gives only
@@ -211,7 +223,8 @@ function creditsOf({ prisma, pool, priceId }: Queue, user: SignedInUser): Credit
       select: { id: true, name: true },
     })
 
-  const task: Credits['task'] = async ({ title, modelClass = 'standard', at }) => {
+  /** The workspace and the first site of a task on a project. */
+  const projectOfTask = async () => {
     const id = await workspace()
     const on = await prisma.site.findFirst({
       where: { workspaceId: id },
@@ -219,10 +232,28 @@ function creditsOf({ prisma, pool, priceId }: Queue, user: SignedInUser): Credit
       select: { id: true },
     })
     if (on === null) throw new Error('The workspace has no site to work on')
+    return { id, siteId: on.id }
+  }
+
+  /** The workspace of a chat without a project; the id of its task is the uuid(7) of the schema. */
+  const noProject = async () => {
+    const { id } = await prisma.$transaction((tx) =>
+      ensurePersonalWorkspaceWithGift(tx, { userId: user.id, appEnv: authEnv.APP_ENV }),
+    )
+    return { id, siteId: null, needsRepository: false, needsBrowser: false }
+  }
+
+  const task: Credits['task'] = async ({
+    title,
+    modelClass = 'standard',
+    at,
+    withProject = true,
+  }) => {
+    const { id, ...where } = withProject ? await projectOfTask() : await noProject()
     const { id: taskId } = await prisma.task.create({
       data: {
         workspaceId: id,
-        siteId: on.id,
+        ...where,
         createdById: user.id,
         modelClass,
         summary: title,

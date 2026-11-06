@@ -3,8 +3,9 @@
 // cannot reach, S3 a clarification, S4a a dialog opened before a release, S4 `/release`, S5a/S6a
 // two more dialogs side by side, S5 a release that breaks the site and is rolled back, S6 a
 // release refused by a conflict before `main` moves, S8 a database plan of every kind released,
-// repeated, refused for a taken address and rolled back, S9 «Отменить выпуск», S10 a pass that
-// fails for a reason of the platform keeps the candidate and «Попробовать ещё» repeats it, S7 the
+// repeated, refused for a taken address and rolled back, S9 «Отменить выпуск», S11 `/undo`, S10 a pass that
+// fails for a reason of the platform keeps the candidate and «Попробовать ещё» repeats it, S13
+// `/compact` and S14 `/init`, S7 the
 // tags that deploy nothing, a turn that waits for a deploy and what core leaves behind. Every
 // PASS line is a fact read from the product's own state, the pages it serves or what Gitea,
 // OpenBao, S3, Docker and the hosting hold; a NOTE line is a precondition of the stand or what it
@@ -15,6 +16,7 @@ import { join } from 'node:path'
 import { zstdDecompressSync } from 'node:zlib'
 
 import { localVaultRequest } from '../../vault/bootstrap.mjs'
+import { runBrowserScenario } from './browser-scenario.mjs'
 import { roundOf } from './fake-model.mjs'
 import { isolationOf } from './isolation.mjs'
 import { productionTitle, repositoryReader } from './setup.mjs'
@@ -296,8 +298,102 @@ export async function runScenarios(stand) {
   }
 
   const footer0 = themeFiles()[FOOTER_PATH]
+  /** The plan of the undo of `release` of `dialog`, asked as the window asks and waited for. */
+  const undoPlan = async (dialog, release) => {
+    const prepare = async () =>
+      (
+        await owner.mutate('release.undoPrepare', {
+          taskId: dialog.taskId,
+          releaseId: release.id,
+        })
+      ).planId
+    let planId = await prepare()
+    let renewed = 0
+    return rt.until(
+      `the plan of the undo of ${release.version}`,
+      async () => {
+        const answer = await owner.query('release.undoPlan', {
+          taskId: dialog.taskId,
+          releaseId: release.id,
+          planId,
+        })
+        // A plan made while the end of the release before still held the site: asked again, as
+        // the window does.
+        if (answer.state === 'expired' && renewed < 3) {
+          renewed += 1
+          planId = await prepare()
+          return null
+        }
+        if (answer.state === 'failed' || answer.state === 'expired')
+          throw new CheckFailed(`the plan of the undo is ${answer.state}: ${answer.reason ?? ''}`)
+        return answer.state === 'ready' ? answer : null
+      },
+      { timeoutMs: 3 * MINUTE, intervalMs: 1000, service: stand.processes.core },
+    )
+  }
+  /** The head of `agent/<taskId>` from the refs of the repository; null — no such branch. */
+  const agentHead = async (taskId) => {
+    const name = `refs/heads/agent/${taskId}`
+    const answer = await api('GET', `/git/refs/heads/agent/${taskId}`)
+    if (answer.status !== 200) return null
+    return [answer.json].flat().find((ref) => ref.ref === name)?.object.sha ?? null
+  }
+  const undoLast = (taskId) => owner.mutate('task.undoTurn', { taskId, requestId: uuid7() })
+  const redoLast = (taskId) => owner.mutate('task.redoTurn', { taskId, requestId: uuid7() })
+  /** The row of the `count`-th `/redo` of the chat: core wrote it with the turn back. */
+  const redoneRow = (taskId, count = 1) =>
+    rt.until(
+      `redo ${count} of ${taskId} written by core`,
+      async () => {
+        const rows = await db.taskEvent.findMany({
+          where: { taskId, type: 'feed.redo' },
+          orderBy: { id: 'asc' },
+        })
+        return rows.length >= count ? rows[count - 1] : null
+      },
+      { timeoutMs: 3 * MINUTE, intervalMs: 500, service: stand.processes.core },
+    )
+  /** The row of the `count`-th undo of the chat: core wrote it with the turn undone. */
+  const rewoundRow = (taskId, count = 1) =>
+    rt.until(
+      `undo ${count} of ${taskId} written by core`,
+      async () => {
+        const rows = await db.taskEvent.findMany({
+          where: { taskId, type: 'feed.rewind' },
+          orderBy: { id: 'asc' },
+        })
+        return rows.length >= count ? rows[count - 1] : null
+      },
+      { timeoutMs: 3 * MINUTE, intervalMs: 500, service: stand.processes.core },
+    )
+  const turnReaches = (taskId, turnNo, status) =>
+    rt.until(
+      `turn ${turnNo} of ${taskId} ended ${status}`,
+      async () => {
+        const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
+        if (['failed', 'cancelled', 'done', 'rolled_back'].includes(task.status))
+          throw new CheckFailed(`dialog ${taskId} ended ${task.status}`)
+        return task.status === status && task.turnNo === turnNo ? task : null
+      },
+      { timeoutMs: 12 * MINUTE, intervalMs: 1000, service: stand.processes.core },
+    )
   const contactsPath = `/?page_id=${content.contactsId}`
   const postPath = `/?p=${content.postId}`
+
+  // `--browser` is a run of its own: its web, worker and gateway serve S12 alone.
+  if (stand.browser)
+    return runBrowserScenario(stand, {
+      agentHead,
+      currentCandidate,
+      previewReady,
+      redoneRow,
+      releaseEnds,
+      rewoundRow,
+      taskReaches,
+      turnReaches,
+      undoPlan,
+      uuid7,
+    })
 
   // ── S1 ───────────────────────────────────────────────────────────────────────
   rt.begin('S1', 'chat → turn → candidate')
@@ -833,6 +929,7 @@ export async function runScenarios(stand) {
   // ── S5 and S6: two dialogs at once, then their releases ─────────────────────
   rt.begin('S5a', 'a second dialog: a candidate that breaks production only')
   const dialogB = { taskId: uuid7() }
+  const requestsBeforeB = model.state.requests.length
   model.script(MODEL_TURNS.breaking({ postId: content.postId }), {
     waitFor: async () => {
       await previewReady(dialogB.taskId, 0, 6 * MINUTE).catch(() => null)
@@ -844,6 +941,28 @@ export async function runScenarios(stand) {
     text: 'Добавьте вызов в подвал и переименуйте новость.',
   })
   await taskReaches(dialogB.taskId, 'awaiting_approval')
+  // S6a attacks the neighbour from the agent's browser of this dialog, started by the fourth round
+  // of its turn. The tool may refuse it — the browser did not come within the wait of mcp — and
+  // the turn goes on: no secret of the browser is ever written then. Named here by what S6a needs,
+  // the secret of the browser in Vault, with what the agent got from the tool, rather than at S6a
+  // (docs/plan/61-chats-first.md, §9, «Известные ограничения»).
+  const navigated = model.state.requests
+    .slice(requestsBeforeB)
+    .find(
+      (request) => roundOf(request.body) === 4 && request.body?.messages?.at(-1)?.role === 'tool',
+    )
+  const previewRowB = await previewOf(dialogB.taskId)
+  const browserSecretB = previewRowB
+    ? await localVaultRequest(stand.vault.root, `kv/data/previews/${previewRowB.id}/browser`)
+    : null
+  rt.check(
+    browserSecretB?.status === 200,
+    "dialog B: the agent's browser of its preview started in its turn (a precondition of S6a)",
+    {
+      secret: browserSecretB?.status ?? 'no preview',
+      tool: JSON.stringify(navigated?.body?.messages?.at(-1) ?? null).slice(0, 300),
+    },
+  )
   const candidateB = await currentCandidate(dialogB.taskId)
   rt.check(
     candidateB.files.length === 1 &&
@@ -1455,39 +1574,6 @@ export async function runScenarios(stand) {
   rt.end()
 
   // ── S9: «Отменить выпуск» (docs/plan/53, «Отмена выпуска») ──────────────────────
-  /** The plan of the undo of `release` of `dialog`, asked as the window asks and waited for. */
-  const undoPlan = async (dialog, release) => {
-    const prepare = async () =>
-      (
-        await owner.mutate('release.undoPrepare', {
-          taskId: dialog.taskId,
-          releaseId: release.id,
-        })
-      ).planId
-    let planId = await prepare()
-    let renewed = 0
-    return rt.until(
-      `the plan of the undo of ${release.version}`,
-      async () => {
-        const answer = await owner.query('release.undoPlan', {
-          taskId: dialog.taskId,
-          releaseId: release.id,
-          planId,
-        })
-        // A plan made while the end of the release before still held the site: asked again, as
-        // the window does.
-        if (answer.state === 'expired' && renewed < 3) {
-          renewed += 1
-          planId = await prepare()
-          return null
-        }
-        if (answer.state === 'failed' || answer.state === 'expired')
-          throw new CheckFailed(`the plan of the undo is ${answer.state}: ${answer.reason ?? ''}`)
-        return answer.state === 'ready' ? answer : null
-      },
-      { timeoutMs: 3 * MINUTE, intervalMs: 1000, service: stand.processes.core },
-    )
-  }
   const undoFeed = async (taskId) =>
     (
       await db.taskEvent.findMany({ where: { taskId, type: 'feed.undo' }, orderBy: { id: 'asc' } })
@@ -2068,6 +2154,540 @@ export async function runScenarios(stand) {
   )
   rt.end()
 
+  // ── S11 ──────────────────────────────────────────────────────────────────────
+  // `/undo` (docs/plan/61-chats-first.md, К29, §5.14): the last turn goes back without the model
+  // and without money — the branch by CAS, the candidate, the preview —, its words come back to
+  // the page and reach the agent no more. Dialog L: the first turn, which found no branch.
+  rt.begin('S11', '/undo takes the last turn back: branch, candidate, preview; no money')
+  const planOfTurn = async (taskId, turnNo) =>
+    (await db.turnAssignment.findFirst({ where: { taskId, turnNo } }))?.plan ?? {}
+  const refusalOf = async (taskId, id) =>
+    (await owner.query('task.feed', { taskId })).commands.find((command) => command.id === id)
+      ?.refusal
+
+  const dialogK = { taskId: uuid7() }
+  model.script(MODEL_TURNS.undoMark(1))
+  await owner.mutate('task.create', {
+    siteId,
+    taskId: dialogK.taskId,
+    text: 'Добавьте отметку отмены в стили темы.',
+  })
+  await taskReaches(dialogK.taskId, 'awaiting_approval')
+  const candidateK1 = await currentCandidate(dialogK.taskId)
+  await previewReady(dialogK.taskId, 1)
+  model.script(MODEL_TURNS.undoMark(2))
+  await owner.mutate('task.message', {
+    taskId: dialogK.taskId,
+    requestId: uuid7(),
+    text: TEXT.undoWords,
+  })
+  await turnReaches(dialogK.taskId, 2, 'awaiting_approval')
+  const candidateK2 = await currentCandidate(dialogK.taskId)
+  await previewReady(dialogK.taskId, 2)
+  const visitK2 = await previewVisit(dialogK.taskId, [styleUrl])
+  rt.check(
+    candidateK2?.revision === 2 &&
+      (await agentHead(dialogK.taskId)) === candidateK2.headSha &&
+      visitK2.pages[styleUrl].text.includes(TEXT.undoMark(2)),
+    'dialog K waits with revision 2 of its second turn, on the task branch and in the preview',
+    { revision: candidateK2?.revision },
+  )
+  const heldK = await rt.until(
+    'the charges of the two passes of dialog K',
+    async () => {
+      const holds = await holdsOf(dialogK.taskId)
+      return holds.length > 0 && holds.every((hold) => hold.status === 'captured') ? holds : null
+    },
+    { timeoutMs: 3 * MINUTE, intervalMs: 1000, service: stand.processes.core },
+  )
+  const chargedK = await chargesOf(dialogK.taskId)
+
+  const chatsBeforeUndo = model.chats().length
+  const undoneK = await undoLast(dialogK.taskId)
+  const rowK = await rewoundRow(dialogK.taskId)
+  const taskK = await db.task.findUniqueOrThrow({ where: { id: dialogK.taskId } })
+  const turnK2 = await db.taskTurn.findUnique({
+    where: { taskId_turnNo: { taskId: dialogK.taskId, turnNo: 2 } },
+  })
+  const candidateK3 = await currentCandidate(dialogK.taskId)
+  rt.check(
+    undoneK.words === TEXT.undoWords &&
+      rowK.payload.turn === 2 &&
+      rowK.payload.files === true &&
+      rowK.payload.site === 'unchanged' &&
+      taskK.status === 'awaiting_approval' &&
+      turnK2?.undoneAt !== null &&
+      model.chats().length === chatsBeforeUndo,
+    '/undo gives the words of the turn back at once; core writes the undo with the files named, and the model is not asked',
+    { words: undoneK.words, row: rowK.payload, status: taskK.status },
+  )
+  rt.check(
+    (await agentHead(dialogK.taskId)) === candidateK1.headSha &&
+      candidateK3?.revision === 3 &&
+      candidateK3.headSha === candidateK1.headSha &&
+      candidateK3.turnNo === 1,
+    'the task branch stands on the head of turn 1 again, and the candidate of that head is revision 3',
+    { branch: await agentHead(dialogK.taskId), revision: candidateK3?.revision },
+  )
+  await previewReady(dialogK.taskId, 3)
+  const visitK3 = await previewVisit(dialogK.taskId, [styleUrl])
+  rt.check(
+    visitK3.pages[styleUrl].text.includes(TEXT.undoMark(1)) &&
+      !visitK3.pages[styleUrl].text.includes(TEXT.undoMark(2)),
+    'the preview is back on the file of turn 1',
+  )
+  const heldK2 = await holdsOf(dialogK.taskId)
+  rt.check(
+    JSON.stringify(heldK2) === JSON.stringify(heldK) &&
+      sum(await chargesOf(dialogK.taskId)) === sum(chargedK),
+    'no money moved: the holds and the charges of the chat are as they were',
+    { holds: heldK2.length },
+  )
+  rt.check(
+    (await refusalOf(dialogK.taskId, 'turn_undo')) === 'nothing_to_undo',
+    '/undo goes one step back: the turn before is not offered',
+  )
+
+  model.script(MODEL_TURNS.undoMark(3))
+  const chatsBeforeNext = model.chats().length
+  await owner.mutate('task.message', {
+    taskId: dialogK.taskId,
+    requestId: uuid7(),
+    text: 'Поменяйте отметку отмены на версию 3.',
+  })
+  await turnReaches(dialogK.taskId, 3, 'awaiting_approval')
+  const planK3 = await planOfTurn(dialogK.taskId, 3)
+  const asked = JSON.stringify(
+    model
+      .chats()
+      .slice(chatsBeforeNext)
+      .map((chat) => chat.body?.messages ?? []),
+  )
+  const candidateK4 = await currentCandidate(dialogK.taskId)
+  rt.check(
+    planK3.replacesTurn === 2 &&
+      planK3.previous?.turn === 1 &&
+      planK3.workspace?.expectedBaseSha === candidateK1.headSha &&
+      planK3.workspace?.expectedBranchSha === candidateK1.headSha &&
+      !asked.includes(TEXT.undoWords) &&
+      asked.includes('версию 3'),
+    'turn 3 replaced the undone turn from the checkpoint of turn 1: the agent never saw the undone words',
+    { replaces: planK3.replacesTurn, previous: planK3.previous?.turn },
+  )
+  rt.check(
+    (await agentHead(dialogK.taskId)) === candidateK4?.headSha,
+    'the next turn published on the branch that went back',
+  )
+  const cancelledK = await owner.mutate('task.cancel', {
+    taskId: dialogK.taskId,
+    requestId: uuid7(),
+  })
+  rt.check(cancelledK.state === 'cancelled', 'dialog K is cancelled by /cancel')
+
+  // The first turn found no branch: nothing is left to release, and the chat stays open.
+  const dialogL = { taskId: uuid7() }
+  model.script(MODEL_TURNS.undoMark(1))
+  await owner.mutate('task.create', {
+    siteId,
+    taskId: dialogL.taskId,
+    text: 'Добавьте отметку отмены в стили темы.',
+  })
+  await taskReaches(dialogL.taskId, 'awaiting_approval')
+  await previewReady(dialogL.taskId, 1)
+  await undoLast(dialogL.taskId)
+  const rowL = await rewoundRow(dialogL.taskId)
+  const taskL = await db.task.findUniqueOrThrow({ where: { id: dialogL.taskId } })
+  rt.check(
+    taskL.status === 'awaiting_user' &&
+      rowL.payload.files === true &&
+      (await agentHead(dialogL.taskId)) === null &&
+      (await db.taskCandidate.count({
+        where: { taskId: dialogL.taskId, status: { in: ['current', 'stale'] } },
+      })) === 0,
+    '/undo of the first turn deletes the task branch and leaves nothing to release; the chat stays open, not done',
+    { status: taskL.status, row: rowL.payload },
+  )
+  await previewReady(dialogL.taskId, 0)
+  const visitL = await previewVisit(dialogL.taskId, [styleUrl])
+  rt.check(
+    !visitL.pages[styleUrl].text.includes(TEXT.undoMark(1)),
+    'the preview shows the site as it is',
+  )
+  // The branch is gone, and `/redo` brings it back from the commit held on the remote.
+  const redoneL = await redoLast(dialogL.taskId)
+  const redoRowL = await redoneRow(dialogL.taskId)
+  const taskL2 = await db.task.findUniqueOrThrow({ where: { id: dialogL.taskId } })
+  const candidateL2 = await currentCandidate(dialogL.taskId)
+  rt.check(
+    redoneL.words === 'Добавьте отметку отмены в стили темы.' &&
+      redoRowL.payload.files === true &&
+      taskL2.status === 'awaiting_approval' &&
+      candidateL2?.turnNo === 1 &&
+      (await agentHead(dialogL.taskId)) === candidateL2.headSha,
+    '/redo of the first turn brings its branch and its candidate back',
+    { status: taskL2.status, row: redoRowL.payload, revision: candidateL2?.revision },
+  )
+  await previewReady(dialogL.taskId, candidateL2.revision)
+  const visitL2 = await previewVisit(dialogL.taskId, [styleUrl])
+  rt.check(
+    visitL2.pages[styleUrl].text.includes(TEXT.undoMark(1)),
+    'the preview shows the change of the turn that came back',
+  )
+  await undoLast(dialogL.taskId)
+  await rewoundRow(dialogL.taskId, 2)
+  await previewReady(dialogL.taskId, 0)
+  // A turn that changes nothing still publishes a commit: its undo says no word of files (К19).
+  model.script(MODEL_TURNS.undoNothing())
+  await owner.mutate('task.message', {
+    taskId: dialogL.taskId,
+    requestId: uuid7(),
+    text: 'Посмотрите, всё ли в порядке.',
+  })
+  await turnReaches(dialogL.taskId, 2, 'awaiting_user')
+  const planL2 = await planOfTurn(dialogL.taskId, 2)
+  rt.check(
+    planL2.replacesTurn === 1 &&
+      planL2.workspace?.expectedBranchSha === null &&
+      planL2.previous === undefined,
+    'the next turn replaces the first one as a new session, leased on no branch',
+    { replaces: planL2.replacesTurn, pin: planL2.workspace?.expectedBranchSha },
+  )
+  await undoLast(dialogL.taskId)
+  const rowL2 = await rewoundRow(dialogL.taskId, 3)
+  rt.check(
+    rowL2.payload.files === false && (await agentHead(dialogL.taskId)) === null,
+    'the undo of a turn that changed no file says nothing of files',
+    rowL2.payload,
+  )
+  const cancelledL = await owner.mutate('task.cancel', {
+    taskId: dialogL.taskId,
+    requestId: uuid7(),
+  })
+  rt.check(cancelledL.state === 'cancelled', 'dialog L is cancelled by /cancel')
+
+  // The records of a turn leave with it, those of the turn before stay. Dialog M.
+  const dialogM = { taskId: uuid7() }
+  const gateM = {}
+  model.script(
+    MODEL_TURNS.undoContent({ version: 1, route: `/wp/v2/pages/${content.contactsId}` }),
+    {
+      gates: {
+        0: async () => {
+          try {
+            await previewReady(dialogM.taskId, 0, 6 * MINUTE)
+          } catch (error) {
+            gateM.error = error
+          }
+        },
+      },
+    },
+  )
+  await owner.mutate('task.create', {
+    siteId,
+    taskId: dialogM.taskId,
+    text: 'Добавьте отметку отмены и поменяйте заголовок страницы.',
+  })
+  await taskReaches(dialogM.taskId, 'awaiting_approval')
+  if (gateM.error) throw gateM.error
+  await previewReady(dialogM.taskId, 1)
+  model.script(MODEL_TURNS.undoContent({ version: 2, route: `/wp/v2/posts/${content.postId}` }))
+  await owner.mutate('task.message', {
+    taskId: dialogM.taskId,
+    requestId: uuid7(),
+    text: 'Поменяйте отметку на версию 2 и заголовок новости.',
+  })
+  await turnReaches(dialogM.taskId, 2, 'awaiting_approval')
+  await previewReady(dialogM.taskId, 2)
+  const candidateM2 = await currentCandidate(dialogM.taskId)
+  const visitM2 = await previewVisit(dialogM.taskId, [contactsPath, postPath])
+  rt.check(
+    candidateM2?.dbPlan.length === 2 &&
+      visitM2.pages[contactsPath].text.includes(TEXT.undoTitle(1)) &&
+      visitM2.pages[postPath].text.includes(TEXT.undoTitle(2)),
+    'dialog M waits with the records of both turns, in its plan and in its preview',
+    candidateM2?.dbPlan.map((operation) => operation.objectRef),
+  )
+  await undoLast(dialogM.taskId)
+  await rewoundRow(dialogM.taskId)
+  const candidateM3 = await currentCandidate(dialogM.taskId)
+  const operationsM = await db.previewDbOperation.findMany({
+    where: { taskId: dialogM.taskId },
+    orderBy: { turnNo: 'asc' },
+  })
+  rt.check(
+    candidateM3?.revision === 3 &&
+      candidateM3.dbPlan.length === 1 &&
+      candidateM3.dbPlan[0].objectRef === `page:${content.contactsId}` &&
+      operationsM.map((row) => [row.turnNo, row.excluded]).join() === '1,false,2,true',
+    '/undo takes the record of turn 2 out of the plan and leaves the record of turn 1 in it',
+    operationsM.map((row) => [row.turnNo, row.objectRef, row.excluded]),
+  )
+  await previewReady(dialogM.taskId, 3)
+  const visitM3 = await previewVisit(dialogM.taskId, [contactsPath, postPath, styleUrl])
+  rt.check(
+    visitM3.pages[contactsPath].text.includes(TEXT.undoTitle(1)) &&
+      !visitM3.pages[postPath].text.includes(TEXT.undoTitle(2)) &&
+      visitM3.pages[styleUrl].text.includes(TEXT.undoMark(1)),
+    'the preview is back on the title of turn 1 and without the title of turn 2, its file too',
+  )
+
+  // `/redo` brings the records of the turn back with its files, and takes no money.
+  const heldM = await holdsOf(dialogM.taskId)
+  const redoneM = await redoLast(dialogM.taskId)
+  const redoRowM = await redoneRow(dialogM.taskId)
+  const candidateM3r = await currentCandidate(dialogM.taskId)
+  const operationsM2 = await db.previewDbOperation.findMany({
+    where: { taskId: dialogM.taskId },
+    orderBy: { turnNo: 'asc' },
+  })
+  rt.check(
+    redoneM.words === 'Поменяйте отметку на версию 2 и заголовок новости.' &&
+      redoRowM.payload.files === true &&
+      candidateM3r?.revision === 4 &&
+      candidateM3r.turnNo === 2 &&
+      candidateM3r.headSha === candidateM2.headSha &&
+      candidateM3r.dbPlan.length === 2 &&
+      operationsM2.every((row) => !row.excluded) &&
+      (await agentHead(dialogM.taskId)) === candidateM2.headSha,
+    '/redo brings the branch, the candidate and the record of turn 2 back',
+    { row: redoRowM.payload, revision: candidateM3r?.revision },
+  )
+  rt.check(
+    JSON.stringify(await holdsOf(dialogM.taskId)) === JSON.stringify(heldM),
+    '/redo moves no money',
+  )
+  await previewReady(dialogM.taskId, 4)
+  const visitM3r = await previewVisit(dialogM.taskId, [contactsPath, postPath])
+  rt.check(
+    visitM3r.pages[contactsPath].text.includes(TEXT.undoTitle(1)) &&
+      visitM3r.pages[postPath].text.includes(TEXT.undoTitle(2)),
+    'the preview holds the records of both turns again',
+  )
+  rt.check(
+    (await refusalOf(dialogM.taskId, 'turn_redo')) === 'nothing_to_redo',
+    '/redo brings a turn back once',
+  )
+  await undoLast(dialogM.taskId)
+  await rewoundRow(dialogM.taskId, 2)
+  await previewReady(dialogM.taskId, 5)
+
+  // A branch nobody may move has moved: `/undo` says so, and the chat stands as it did.
+  model.script(MODEL_TURNS.undoMark(3))
+  await owner.mutate('task.message', {
+    taskId: dialogM.taskId,
+    requestId: uuid7(),
+    text: 'Поменяйте отметку на версию 3.',
+  })
+  await turnReaches(dialogM.taskId, 3, 'awaiting_approval')
+  const candidateM4 = await currentCandidate(dialogM.taskId)
+  const moved = await api('POST', '/contents/raditi-undo-race.txt', {
+    body: {
+      branch: `agent/${dialogM.taskId}`,
+      content: Buffer.from('a commit of somebody else\n').toString('base64'),
+      message: 'fixture: a commit nobody of the platform wrote',
+    },
+  })
+  const movedHead = await agentHead(dialogM.taskId)
+  rt.check(
+    moved.status === 201 && movedHead !== candidateM4.headSha,
+    'somebody else moved the task branch of dialog M',
+    { status: moved.status },
+  )
+  const refusedM = await undoLast(dialogM.taskId)
+  const failedM = await rt.until(
+    `the failed undo of ${dialogM.taskId} written by core`,
+    () =>
+      db.taskEvent.findFirst({
+        where: {
+          taskId: dialogM.taskId,
+          type: 'feed.update',
+          payload: { path: ['outcome'], equals: 'rewind_failed' },
+        },
+      }),
+    { timeoutMs: 3 * MINUTE, intervalMs: 500, service: stand.processes.core },
+  )
+  const turnM3 = await db.taskTurn.findUnique({
+    where: { taskId_turnNo: { taskId: dialogM.taskId, turnNo: 3 } },
+  })
+  const candidateM5 = await currentCandidate(dialogM.taskId)
+  const statusM = (await db.task.findUniqueOrThrow({ where: { id: dialogM.taskId } })).status
+  rt.check(
+    failedM !== null &&
+      refusedM.words === 'Поменяйте отметку на версию 3.' &&
+      turnM3?.undoneAt === null &&
+      candidateM5?.id === candidateM4.id &&
+      statusM === 'awaiting_approval' &&
+      (await agentHead(dialogM.taskId)) === movedHead,
+    '/undo of a branch that moved says «Запрос не отменён»: the turn, the candidate and the branch stand',
+    { status: statusM, row: failedM?.payload },
+  )
+  rt.check(
+    (await refusalOf(dialogM.taskId, 'release')) !== 'turn_rewinding',
+    'the answer lets the chat go: the commands are its own again',
+  )
+  const wordsM = await owner.mutate('task.message', {
+    taskId: dialogM.taskId,
+    requestId: uuid7(),
+    text: 'Тогда посмотрите, что на ветке.',
+  })
+  rt.check(wordsM.repeated === false, 'the chat takes the next words')
+  await taskReaches(dialogM.taskId, ['awaiting_approval', 'awaiting_user'], {
+    what: 'the pass after the failed undo of dialog M',
+  })
+  const cancelledM = await owner.mutate('task.cancel', {
+    taskId: dialogM.taskId,
+    requestId: uuid7(),
+  })
+  rt.check(cancelledM.state === 'cancelled', 'dialog M is cancelled by /cancel')
+  rt.end()
+
+  /** What the agent was asked in these requests of the synthetic Z.ai: their messages, whole. */
+  const askedIn = (chats) => JSON.stringify(chats.map((chat) => chat.body?.messages ?? []))
+  const chargedOnce = (taskId, from) =>
+    rt.until(
+      `the charge of the pass of ${taskId}`,
+      async () => {
+        const charged = await chargesOf(taskId)
+        return charged.length > from ? charged : null
+      },
+      { timeoutMs: 3 * MINUTE, intervalMs: 1000, service: stand.processes.core },
+    )
+
+  // ── S13 ──────────────────────────────────────────────────────────────────────
+  // `/compact` (docs/plan/61-chats-first.md, §5.14, §8) on the real OpenCode: a paid pass of its
+  // own in which the server of the CLI writes the summary; the candidate is not touched, and the
+  // next turn goes on from the summary instead of the words before it.
+  rt.begin('S13', '/compact: a paid pass of its own; the candidate stands; the next turn')
+  const dialogN = { taskId: uuid7() }
+  model.script(MODEL_TURNS.compactMark())
+  await owner.mutate('task.create', { siteId, taskId: dialogN.taskId, text: TEXT.compactWords })
+  await taskReaches(dialogN.taskId, 'awaiting_approval')
+  const candidateN = await currentCandidate(dialogN.taskId)
+  await previewReady(dialogN.taskId, 1)
+  const chargedBeforeN = await chargedOnce(dialogN.taskId, 0)
+  const chatsBeforeCompact = model.chats().length
+  model.script(MODEL_TURNS.compactSummary())
+  const compacted = await owner.mutate('task.compact', {
+    taskId: dialogN.taskId,
+    requestId: uuid7(),
+  })
+  await turnReaches(dialogN.taskId, 2, 'awaiting_approval')
+  const planN2 = await planOfTurn(dialogN.taskId, 2)
+  const summaryChats = model.chats().slice(chatsBeforeCompact)
+  rt.check(
+    compacted.repeated === false &&
+      planN2.input?.action === 'compact' &&
+      summaryChats.length === 1 &&
+      summaryChats[0].body?.tools === undefined,
+    '/compact is a turn of the queue: its plan says `compact`, and the CLI sent one request without tools',
+    { action: planN2.input?.action, requests: summaryChats.length },
+  )
+  const chargedN = await chargedOnce(dialogN.taskId, chargedBeforeN.length)
+  rt.check(
+    sum(chargedN) < sum(chargedBeforeN),
+    `the pass of the summary is charged on its own (${chargedBeforeN.length} → ${chargedN.length} rows of the journal)`,
+    { before: sum(chargedBeforeN), after: sum(chargedN) },
+  )
+  const candidateN2 = await currentCandidate(dialogN.taskId)
+  const previewN = await previewOf(dialogN.taskId)
+  rt.check(
+    candidateN2?.id === candidateN.id &&
+      candidateN2.revision === candidateN.revision &&
+      candidateN2.headSha === candidateN.headSha &&
+      previewN?.revision === 1,
+    'the candidate and its revision are the same, and the preview did not move',
+    { revision: candidateN2?.revision, preview: previewN?.revision },
+  )
+  const chatsBeforeNextN = model.chats().length
+  model.script(MODEL_TURNS.answerOnly())
+  await owner.mutate('task.message', {
+    taskId: dialogN.taskId,
+    requestId: uuid7(),
+    text: 'Отметка на месте?',
+  })
+  await turnReaches(dialogN.taskId, 3, 'awaiting_approval')
+  const askedN = askedIn(model.chats().slice(chatsBeforeNextN))
+  rt.check(
+    askedN.includes(JSON.stringify(TEXT.compactSummary).slice(1, -1)) &&
+      !askedN.includes(TEXT.compactWords) &&
+      (await planOfTurn(dialogN.taskId, 3)).previous?.turn === 2,
+    'the next turn goes on from the checkpoint of the summary: the agent got the summary and not the words before it',
+    { previous: (await planOfTurn(dialogN.taskId, 3)).previous?.turn },
+  )
+  const cancelledN = await owner.mutate('task.cancel', {
+    taskId: dialogN.taskId,
+    requestId: uuid7(),
+  })
+  rt.check(cancelledN.state === 'cancelled', 'dialog N is cancelled by /cancel')
+  rt.end()
+
+  // ── S14 ──────────────────────────────────────────────────────────────────────
+  // `/init` (docs/plan/61-chats-first.md, К31, §8) on the real OpenCode: a paid pass on the words of
+  // the platform; its answer goes to the notes of the project by the button of its row, as the
+  // client presses it, and the next turn of any chat of the project is told them as data.
+  rt.begin('S14', '/init: the answer, «Сохранить в подсказки агенту», the next prompt')
+  const dialogO = { taskId: uuid7() }
+  model.script(MODEL_TURNS.answerOnly())
+  await owner.mutate('task.create', {
+    siteId,
+    taskId: dialogO.taskId,
+    text: 'Посмотрите, всё ли на месте.',
+  })
+  await taskReaches(dialogO.taskId, 'awaiting_user')
+  const chargedBeforeO = await chargedOnce(dialogO.taskId, 0)
+  const chatsBeforeInit = model.chats().length
+  model.script(MODEL_TURNS.initAnswer())
+  const initiated = await owner.mutate('task.init', { taskId: dialogO.taskId, requestId: uuid7() })
+  await turnReaches(dialogO.taskId, 2, 'awaiting_user')
+  const initChats = model.chats().slice(chatsBeforeInit)
+  const resultsO = (
+    await db.taskEvent.findMany({
+      where: { taskId: dialogO.taskId, type: 'feed.result' },
+      orderBy: { id: 'asc' },
+    })
+  ).map((row) => row.payload)
+  rt.check(
+    initiated.repeated === false &&
+      initChats.length === 1 &&
+      lastWords(initChats[0]).includes(TEXT.initWords) &&
+      resultsO.length === 2 &&
+      JSON.stringify(resultsO.at(-1)).includes(TEXT.initHints),
+    '/init is a pass on the words of the platform, and its answer is the row `feed.result` of the chat',
+    { results: resultsO.length, requests: initChats.length },
+  )
+  const chargedO = await chargedOnce(dialogO.taskId, chargedBeforeO.length)
+  rt.check(sum(chargedO) < sum(chargedBeforeO), 'the pass of /init is charged on its own', {
+    before: sum(chargedBeforeO),
+    after: sum(chargedO),
+  })
+  await saveNotesInCabinet(stand, dialogO)
+  const notedSite = await db.site.findUniqueOrThrow({ where: { id: siteId } })
+  rt.check(
+    notedSite.agentNotes === TEXT.initHints,
+    '«Сохранить в подсказки агенту» of the answer, in the cabinet: the notes of the project are its words',
+    { notes: notedSite.agentNotes },
+  )
+  const chatsBeforeNotes = model.chats().length
+  model.script(MODEL_TURNS.answerOnly())
+  await owner.mutate('task.message', {
+    taskId: dialogO.taskId,
+    requestId: uuid7(),
+    text: 'Спасибо, это всё.',
+  })
+  await turnReaches(dialogO.taskId, 3, 'awaiting_user')
+  rt.check(
+    lastWords(model.chats()[chatsBeforeNotes]).includes(
+      JSON.stringify(`${TEXT.notesHeader}\n${TEXT.initHints}`).slice(1, -1),
+    ),
+    'the prompt of the next turn the synthetic Z.ai saw holds the header PROJECT_NOTES with those notes',
+  )
+  const cancelledO = await owner.mutate('task.cancel', {
+    taskId: dialogO.taskId,
+    requestId: uuid7(),
+  })
+  rt.check(cancelledO.state === 'cancelled', 'dialog O is cancelled by /cancel')
+  rt.end()
+
   // ── S7 ───────────────────────────────────────────────────────────────────────
   rt.begin('S7', 'tags that deploy nothing; the waiting turn; what core leaves')
   const zero = await runsOf('v0.0.0')
@@ -2165,6 +2785,17 @@ export async function runScenarios(stand) {
     'core destroyed the preview of every closed dialog and the sandbox of every turn: Docker holds no container, network or volume with the labels of the site (io.raditi.preview.site, io.raditi.sandbox.siteId, io.raditi.gateway.siteId)',
     leftOfSite,
   )
+  // No BROWSER_WORKER_URL here: the project works with the code alone and the matrix of §1 of
+  // docs/plan/61-chats-first.md gives its chats no browser. `needsBrowser` is what that decided;
+  // no session is what the configuration of the stand makes true, whatever a turn does. That a
+  // turn without `web_*` starts no browser where one is configured is told by `verify:browser-task`.
+  const inBrowser = await db.task.count({ where: { needsBrowser: true } })
+  const sessions = await db.browserSession.count()
+  rt.check(
+    inBrowser === 0 && sessions === 0,
+    'S1–S11, S13, S14 opened no browser: no chat needs one, not one browser session was written',
+    { inBrowser, sessions },
+  )
   rt.end()
 }
 
@@ -2257,7 +2888,7 @@ const TOOLS = Object.freeze({
   plus: /^Инструменты/,
   menu: 'Инструменты',
   /** The panel of the open tools, drawn only while one is open. */
-  panel: 'Инструменты диалога',
+  panel: 'Инструменты чата',
 })
 
 /**
@@ -2317,7 +2948,7 @@ async function browserOfCabinet(stand, dialog, visit) {
   const { rt } = stand
   const { browser, page, calls } = await cabinetPage(stand)
   try {
-    await page.goto(`${stand.webUrl}/projects/${stand.siteId}/chat/${dialog.taskId}`, {
+    await page.goto(`${stand.webUrl}/chats/${dialog.taskId}`, {
       waitUntil: 'domcontentloaded',
     })
     const plus = page.getByRole('button', { name: TOOLS.plus })
@@ -2336,7 +2967,7 @@ async function browserOfCabinet(stand, dialog, visit) {
         calledIn(calls, 'preview.ticket') === 0 &&
         calledIn(calls, 'candidate.get') === 0 &&
         calledIn(calls, 'candidate.fileDiff') === 0,
-      'the dialog page opens with the chat alone, though its candidate and preview are ready: no panel «Инструменты диалога», no iframe, no preview.ticket, no candidate.get or candidate.fileDiff (И1, И11)',
+      'the dialog page opens with the chat alone, though its candidate and preview are ready: no panel «Инструменты чата», no iframe, no preview.ticket, no candidate.get or candidate.fileDiff (И1, И11)',
       { ...loaded, calls: calls.filter((call) => call !== 'task.feed') },
     )
     const field = page.getByRole('textbox').first()
@@ -2398,7 +3029,7 @@ async function retryInCabinet(stand, dialog) {
   const { rt } = stand
   const { browser, page } = await cabinetPage(stand)
   try {
-    await page.goto(`${stand.webUrl}/projects/${stand.siteId}/chat/${dialog.taskId}`, {
+    await page.goto(`${stand.webUrl}/chats/${dialog.taskId}`, {
       waitUntil: 'domcontentloaded',
     })
     const button = page.getByRole('button', { name: 'Попробовать ещё' })
@@ -2438,6 +3069,28 @@ async function retryInCabinet(stand, dialog) {
 }
 
 /**
+ * S14 in the cabinet: the button on the answer to `/init`, the window with the text of the answer
+ * in its field, «Сохранить». The page says it saved them once the mutation answered.
+ */
+async function saveNotesInCabinet(stand, dialog) {
+  const { browser, page } = await cabinetPage(stand)
+  try {
+    await page.goto(`${stand.webUrl}/chats/${dialog.taskId}`, {
+      waitUntil: 'domcontentloaded',
+    })
+    await page.getByRole('button', { name: 'Сохранить в подсказки агенту' }).click({
+      timeout: 60_000,
+    })
+    const window = page.getByRole('dialog', { name: 'Подсказки агенту' })
+    await window.waitFor({ timeout: 30_000 })
+    await window.getByRole('button', { name: 'Сохранить', exact: true }).click()
+    await page.getByText('Подсказки сохранены').waitFor({ timeout: 30_000 })
+  } finally {
+    await browser.close()
+  }
+}
+
+/**
  * The tab «База данных» of the panel beside a dialog, as its owner sees it in the cabinet: the
  * dialog opens with the chat alone, «+» → «База данных» opens the tab
  * (docs/plan/59-dialog-tools-panel.md, И6), and its text is read once the description of the plan
@@ -2446,7 +3099,7 @@ async function retryInCabinet(stand, dialog) {
 async function databasePanelText(stand, dialog) {
   const { browser, page } = await cabinetPage(stand)
   try {
-    await page.goto(`${stand.webUrl}/projects/${stand.siteId}/chat/${dialog.taskId}`, {
+    await page.goto(`${stand.webUrl}/chats/${dialog.taskId}`, {
       waitUntil: 'domcontentloaded',
     })
     // The head of the dialog draws «+» once the first answer of its feed is in.

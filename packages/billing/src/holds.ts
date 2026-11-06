@@ -795,8 +795,8 @@ export async function placeCreditHold(
     continues: continues || placement === 'resume',
   })
   // Without a paid tariff a reserve stands on gift credits alone, and a site spends those in
-  // one workspace only.
-  const hostKey = paid ? null : siteHostKey(task.site.url)
+  // one workspace only; a task without a site claims no site (docs/plan/61, К17).
+  const hostKey = paid || task.site === null ? null : siteHostKey(task.site.url)
   const claim =
     hostKey === null
       ? null

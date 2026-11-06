@@ -122,7 +122,7 @@ export async function removeDialog(
   const task = await db.task.findFirst({
     where: {
       id: input.taskId,
-      site: { deletedAt: null },
+      OR: [{ siteId: null }, { site: { deletedAt: null } }],
       workspace: { members: { some: { userId: input.userId } } },
     },
     select: { id: true, deletedAt: true },

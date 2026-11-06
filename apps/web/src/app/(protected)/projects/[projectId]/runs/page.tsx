@@ -24,7 +24,7 @@ export default async function Page({ params }: { params: Promise<{ projectId: st
   if (run === UNAVAILABLE) return <ServiceUnavailable />
   return (
     <Box sx={{ display: { xs: 'none', md: 'block' } }}>
-      <RunDetail siteId={site.id} run={run} now={new Date()} nested />
+      <RunDetail run={run} now={new Date()} nested />
     </Box>
   )
 }

@@ -1,6 +1,8 @@
 import { dbConfigFromEnv, type DbConfig } from '@repo/db'
 import {
   appEnvSchema,
+  browserSessionTimings,
+  browserSettingBounds,
   browserWorkerTokenSchema,
   envProblems,
   envVar,
@@ -52,6 +54,8 @@ export interface McpBrowserWorkerConfig {
   /** The worker's internal origin, `http://127.0.0.1:8086`. */
   url: string
   token: string
+  /** BROWSER_SESSION_MAX_HOURS, the worker's own setting: the deadline of a session opened here. */
+  sessionMaxHours: number
 }
 
 /** S3 of content snapshots: the connection and the artifacts bucket alone (spec §14). */
@@ -148,6 +152,14 @@ const ownEnvSchema = z.object({
   ),
   // The rule every app reads the worker's token by (32 to 4096 visible ASCII characters).
   BROWSER_WORKER_TOKEN: envVar(browserWorkerTokenSchema.optional()),
+  BROWSER_SESSION_MAX_HOURS: envVar(
+    z.coerce
+      .number()
+      .int()
+      .min(browserSettingBounds.maxHours.min)
+      .max(browserSettingBounds.maxHours.max)
+      .default(browserSessionTimings.maxHours),
+  ),
 })
 
 /** What the mcp role reads of the S3 settings: the connection and its one bucket. */
@@ -265,7 +277,11 @@ export function loadMcpConfig(env: Env): McpConfig {
     storage,
     browserWorker:
       own.BROWSER_WORKER_URL !== undefined && own.BROWSER_WORKER_TOKEN !== undefined
-        ? { url: browserWorkerOrigin(own.BROWSER_WORKER_URL), token: own.BROWSER_WORKER_TOKEN }
+        ? {
+            url: browserWorkerOrigin(own.BROWSER_WORKER_URL),
+            token: own.BROWSER_WORKER_TOKEN,
+            sessionMaxHours: own.BROWSER_SESSION_MAX_HOURS,
+          }
         : null,
     previewUpstreamHost: own.PREVIEW_UPSTREAM_HOST,
     preview,

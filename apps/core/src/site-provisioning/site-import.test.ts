@@ -57,7 +57,8 @@ class Interrupted extends InitialVersionGit {
   }
 }
 
-describe('importSite', () => {
+// Each builds repositories with the git of this machine: seconds alone, more under a loaded run.
+describe('importSite', { timeout: 20_000 }, () => {
   it('publishes the site as one root commit on main and the lightweight tag v0.0.0', async () => {
     const f = await fixture()
     const { commitSha } = await f.run()

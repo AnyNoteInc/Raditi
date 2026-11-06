@@ -15,13 +15,14 @@ import {
   formatVersion,
   maxVersion,
   nextVersion,
+  siteIdOf,
+  UNDO_PLAN_TTL_MS,
   undoConfirmTokenClaimsSchema,
   undoConfirmTokenMaterial,
   undoFilesSummarySchema,
   undoKeyMaterial,
   undoPlanItemSchema,
   undoRecordCounts,
-  UNDO_PLAN_TTL_MS,
   ZERO_VERSION,
   type DbContentField,
   type ReleaseStatus,
@@ -150,7 +151,7 @@ export async function prepareUndo(
   const plan = await db.$transaction((tx) =>
     requestUndoPlan(tx, {
       releaseId: release.id,
-      siteId: task.siteId,
+      siteId: siteIdOf(task),
       installedSha: release.approvedSha,
       userId: input.userId,
     }),
@@ -196,6 +197,8 @@ export type UndoPlanView =
       }
       records: UndoRecordView[]
       nothingToUndo: boolean
+      /** Someone acted in the chat's browser: no undo gives that back. */
+      browserWrote: boolean
       /** More objects go back than a change may hold without a look at each (rule 4). */
       review: boolean
       confirmToken: string
@@ -269,9 +272,9 @@ export async function readUndoPlan(
   key: Uint8Array,
   input: { userId: string; taskId: string; releaseId: string; planId: string; now: Date },
 ): Promise<UndoPlanView> {
-  const { task, undo, release } = await undoable(db, input)
+  const { task, facts, undo, release } = await undoable(db, input)
   const plan = await db.releaseUndoPlan.findFirst({
-    where: { id: input.planId, releaseId: release.id, siteId: task.siteId },
+    where: { id: input.planId, releaseId: release.id, siteId: siteIdOf(task) },
   })
   if (plan === null) throw taskNotFound()
   if (plan.status === 'pending') return { state: 'pending' }
@@ -288,7 +291,7 @@ export async function readUndoPlan(
     return { state: 'expired' }
   const items = z.array(undoPlanItemSchema).parse(plan.items)
   const files = undoFilesSummarySchema.parse(plan.files)
-  const version = await undoVersionOf(db, task.siteId)
+  const version = await undoVersionOf(db, siteIdOf(task))
   const expiresAt = Math.floor(input.now.getTime() / 1000) + CONFIRM_TOKEN_TTL_SECONDS
   return {
     state: 'ready',
@@ -296,7 +299,7 @@ export async function readUndoPlan(
     releaseId: release.id,
     undoneVersion: release.version,
     returnsTo: await undoReturnsTo(db, {
-      siteId: task.siteId,
+      siteId: siteIdOf(task),
       installedBeforeSha: release.installedBeforeSha,
     }),
     version,
@@ -311,6 +314,7 @@ export async function readUndoPlan(
     },
     records: items.map(undoItemText),
     nothingToUndo: plan.nothingToUndo,
+    browserWrote: facts.commands.browserWrote,
     review: undoRecordCounts(items).returned > DB_PLAN_BULK_OBJECTS,
     confirmToken: signUndoConfirmToken(key, {
       userId: input.userId,
@@ -393,12 +397,14 @@ export async function confirmUndo(
           version: earlier.version,
           repeated: true,
         }
+      // A release has a site; a chat without one has no release and no plan to confirm.
+      const siteId = siteIdOf(task)
       // A site being deleted waits here, and a deleted one is not found.
-      await lockLiveSite(tx, task.siteId)
+      await lockLiveSite(tx, siteId)
       if (!isManagerRole(await memberRole(tx, task.workspaceId, userId)))
         throw commandUnavailable('undo', 'not_allowed')
       const release = await tx.siteRelease.findFirst({
-        where: { id: claims.releaseId, taskId: task.id, siteId: task.siteId, kind: 'release' },
+        where: { id: claims.releaseId, taskId: task.id, siteId, kind: 'release' },
         select: { id: true, version: true, approvedSha: true },
       })
       if (release === null || release.approvedSha === null) throw releaseConfirmationInvalid()
@@ -407,7 +413,7 @@ export async function confirmUndo(
       if (refusal !== null) throw commandUnavailable('undo', refusal)
       if (facts.undo?.releaseId !== release.id) throw commandUnavailable('undo', 'not_installed')
       const plan = await tx.releaseUndoPlan.findFirst({
-        where: { id: claims.planId, releaseId: release.id, siteId: task.siteId },
+        where: { id: claims.planId, releaseId: release.id, siteId },
         select: {
           status: true,
           planSha256: true,
@@ -428,17 +434,17 @@ export async function confirmUndo(
       const records = undoRecordCounts(items.data)
       if (records.returned > DB_PLAN_BULK_OBJECTS && input.reviewed !== true)
         throw releaseReviewRequired()
-      if ((await undoVersionOf(tx, task.siteId)) !== claims.version) throw undoVersionTaken()
+      if ((await undoVersionOf(tx, siteId)) !== claims.version) throw undoVersionTaken()
 
       const site = await tx.site.findUniqueOrThrow({
-        where: { id: task.siteId },
+        where: { id: siteId },
         select: { installedSha: true },
       })
       const attempt =
         (await tx.siteRelease.count({ where: { kind: 'undo', undoesReleaseId: release.id } })) + 1
       const undo = await tx.siteRelease.create({
         data: {
-          siteId: task.siteId,
+          siteId,
           taskId: task.id,
           kind: 'undo',
           undoesReleaseId: release.id,

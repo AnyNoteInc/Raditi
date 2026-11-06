@@ -68,3 +68,30 @@ export type CandidateRebaseJob = z.infer<typeof candidateRebaseJobSchema>
 /** The outbox key: `candidate.rebase:<taskId>:<requestEventId>`. */
 export const candidateRebaseDedupeKey = (job: CandidateRebaseJob): string =>
   `${CANDIDATE_REBASE_JOB}:${job.taskId}:${job.requestEventId}`
+
+/**
+ * `/undo` of a turn in a chat with the repository (docs/plan/61-chats-first.md, §5.14): core takes
+ * `agent/<taskId>`, the candidate and the preview back to where the turn found them, without the
+ * model; `/redo` brings them forward again, and the row of the press says which of the two it is.
+ * Put by web (`task.undoTurn`, `task.redoTurn`) with the `feed.request` of the command. Ids only.
+ */
+export const CANDIDATE_REWIND_JOB = 'candidate.rewind'
+/** The internal row of `task_events` that answers an `/undo` or a `/redo` (never shown to the client). */
+export const CANDIDATE_REWIND_EVENT = 'candidate.rewind'
+/**
+ * The internal row a job writes right before it pushes (never shown to the client): the push may
+ * have happened from here on, and `files` — what the feed will say — cannot be read again after it,
+ * since the undone commit leaves the remote with the branch.
+ */
+export const CANDIDATE_REWIND_PUSH_EVENT = 'candidate.rewind.push'
+
+export const candidateRewindJobSchema = z.strictObject({
+  taskId: z.uuid(),
+  /** `task_events.id` of the `feed.request` of the command `turn_undo` or `turn_redo`. */
+  requestEventId: feedEventIdSchema,
+})
+export type CandidateRewindJob = z.infer<typeof candidateRewindJobSchema>
+
+/** The outbox key: `candidate.rewind:<taskId>:<requestEventId>`. */
+export const candidateRewindDedupeKey = (job: CandidateRewindJob): string =>
+  `${CANDIDATE_REWIND_JOB}:${job.taskId}:${job.requestEventId}`

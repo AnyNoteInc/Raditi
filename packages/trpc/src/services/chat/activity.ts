@@ -11,6 +11,8 @@ import { accessibleTask, taskNotFound } from './access.ts'
 // false); this is their only reader for the page. A `failed` event's reason is raw CLI or
 // provider text and never shown (spec §8), and `started`, `usage` and `completed` say nothing to
 // the client. The turn's final message is its result object: the dialog shows it as its answer.
+// A `reasoning` event is the model's raw thought: it is given like the rest, and the page draws it
+// only for a viewer who asked (docs/plan/61-chats-first.md, К32).
 
 /**
  * An answer ends after the row that reaches one of these: rows, events, or UTF-16 units of the
@@ -21,6 +23,10 @@ export const activityLimits = Object.freeze({ rows: 40, events: 400, text: 256 *
 const shownEvent = z.discriminatedUnion('type', [
   z.strictObject({
     type: z.literal('message'),
+    text: z.string().max(agentOutputLimits.messageText),
+  }),
+  z.strictObject({
+    type: z.literal('reasoning'),
     text: z.string().max(agentOutputLimits.messageText),
   }),
   z.strictObject({
@@ -69,6 +75,8 @@ export function shownActivity(event: AgentEvent): z.output<typeof shownEvent> | 
       return event.text.trim() === '' || event.text.includes(RESULT_KEY)
         ? null
         : { type: 'message', text: event.text }
+    case 'reasoning':
+      return { type: 'reasoning', text: event.text }
     case 'command':
       return { type: 'command', command: event.command, exitCode: event.exitCode }
     case 'file_change':
@@ -88,6 +96,7 @@ export function shownActivity(event: AgentEvent): z.output<typeof shownEvent> | 
 const textOf = (event: z.output<typeof shownEvent>): number => {
   switch (event.type) {
     case 'message':
+    case 'reasoning':
       return event.text.length
     case 'command':
       return event.command.length

@@ -26,14 +26,14 @@ const attachmentItem = z.strictObject({
 
 export const attachmentRouter = router({
   /**
-   * Announces a file for a site: its name as the browser gave it, its size in bytes and the type
+   * Announces a file for a site, or with `siteId` null for a chat without a project: its name as the browser gave it, its size in bytes and the type
    * of its extension. Answers its id and the path its bytes are sent to; a file the rules refuse
    * answers why (`ATTACHMENT_REFUSED`).
    */
   start: consentedProcedure
     .input(
       z.strictObject({
-        siteId: z.uuid(),
+        siteId: z.uuid().nullable(),
         name: z.string().max(attachmentLimits.rawNameLength),
         size: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
         type: z.string().max(255),
@@ -42,8 +42,8 @@ export const attachmentRouter = router({
     .output(z.strictObject({ attachmentId: z.uuid(), uploadPath: z.string() }))
     .mutation(({ ctx, input }) => {
       // Files belong to dialogs: where dialogs are not set up, nothing could store them.
-      chatContextOf(ctx)
-      return startAttachment(ctx.prisma, { ...input, userId: ctx.user.id })
+      const { appEnv } = chatContextOf(ctx)
+      return startAttachment(ctx.prisma, { ...input, userId: ctx.user.id, appEnv })
     }),
 
   /** Removes a file of the user that no message sent; a sent one stays with its task. */

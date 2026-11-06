@@ -12,7 +12,7 @@ export function ServiceUnavailable() {
           Технические работы
         </Typography>
         <Typography component="h1" variant="h3">
-          Проекты временно недоступны
+          Кабинет временно недоступен
         </Typography>
         <Typography color="text.secondary">
           Мы уже разбираемся. Ваши данные и сайты в сохранности. Обновите страницу через пару минут.

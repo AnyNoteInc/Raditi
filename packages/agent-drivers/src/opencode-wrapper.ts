@@ -42,6 +42,20 @@ export interface OpencodeWrapperSettings {
   session: string | null
   /** XDG_CONFIG_HOME of export and import: no provider, no MCP server, no secret reference. */
   ioConfigHome: string
+  /**
+   * What `/compact` asks of the server of the CLI, staged by command() for that action alone:
+   * the wrapper finds no file here on any other turn.
+   */
+  compaction: string
+  /** XDG_CONFIG_HOME of the server of a compaction: nothing that holds a reference to a secret. */
+  compactionConfigHome: string
+  /**
+   * OPENCODE_CONFIG of that server: the provider and the agent of the session, and no MCP server
+   * and no skill, so that its process starts nothing and needs no MCP token. A file of its own:
+   * \`serve\` reads its global configuration once at its start and once more for the working copy,
+   * and a named pipe gives its value once; this file is read only the second time.
+   */
+  compactionSettings: string
   exportPath: string
   /** What is removed between export and import: the restored database and every CLI cache. */
   wipe: readonly string[]
@@ -185,13 +199,21 @@ process.exit(accepted ? 0 : 1);
  *    a value still there — a trigger the agent's commands added, a process the CLI left that
  *    holds the database — fails the turn, as does any step of this that does not succeed.
  *
+ * 8. A compaction (docs/plan/61-chats-first.md, §5.14) takes steps 1 to 5 up to the pipes, with a
+ *    configuration of its own: \`opencode serve\` reads the LLM key at its first request, the
+ *    wrapper asks it to summarize the session over loopback, under a password only that process
+ *    holds, reads the outcome from the message it wrote, prints the two rows of a finished step
+ *    and stops it. No tool runs: the CLI ends a summary that calls one, and sends the model none.
+ *
  * A failure of the wrapper is printed as the CLI's own `error` row, so the parser reports it.
  * The CLI stays in the process group of the sandbox runtime: a timeout or a cancellation of the
  * turn ends the wrapper, the CLI and its commands together.
  */
 export function opencodeWrapper(settings: OpencodeWrapperSettings): string {
   return `import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { request } from 'node:http';
 import os from 'node:os';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -204,6 +226,11 @@ const MAX_EXPORT_BYTES = 128 * 1024 * 1024;
 const IO_TIMEOUT_MS = 120_000;
 // From the value to its end: by then the CLI's next read of the pipe waits in the kernel.
 const PIPE_HOLD_MS = 5;
+// The server's line, and how long a compaction waits for it and for the server to answer.
+const LISTENING = /listening on http:\\/\\/127\\.0\\.0\\.1:(\\d+)/;
+const SERVER_READY_MS = 60_000;
+const SERVER_POLL_MS = 2_000;
+const SERVER_STOP_MS = 5_000;
 const MCP_DOWN = new RegExp('level=WARN[^\\\\n]*message="server unavailable"[^\\\\n]*\\\\bkey=' + settings.mcpServer + '\\\\b');
 
 class Refusal extends Error {}
@@ -407,6 +434,7 @@ try {
   }
   variables = readVariables();
   const args = JSON.parse(readFileSync(settings.args, 'utf8'));
+  const compaction = present(settings.compaction) ? JSON.parse(readFileSync(settings.compaction, 'utf8')) : null;
   hide();
   guard();
   // The CLI installs a plugin package into every configuration directory it can write to.
@@ -468,7 +496,9 @@ try {
   });
   if (checked.status !== 0) refuse('The MCP server did not accept the turn');
 
-  for (const secret of secrets) {
+  // The configuration of a compaction names no MCP server: its token has no reader.
+  const piped = compaction === null ? secrets : secrets.slice(0, 1);
+  for (const secret of piped) {
     execFileSync('mkfifo', ['-m', '600', secret.path], { stdio: 'ignore' });
     // The write end, held until the value is handed over: the CLI never finds the pipe without
     // a writer. A pipe opens for writing without blocking only while a reader holds it, and for
@@ -478,21 +508,29 @@ try {
       secret.pipe = openSync(secret.path, constants.O_WRONLY | constants.O_NONBLOCK);
     } finally { closeSync(own); }
   }
+  // Only the server of this turn holds it, for as long as it answers one request: a compaction
+  // runs no tool, no command and no MCP server.
+  const password = compaction === null ? null : randomBytes(32).toString('hex');
+  const env = compaction === null
+    ? { ...settings.env, ...internetEnv() }
+    : { ...settings.env, XDG_CONFIG_HOME: settings.compactionConfigHome, OPENCODE_CONFIG: settings.compactionSettings, OPENCODE_SERVER_PASSWORD: password };
   // Only for the commands of the CLI's shell tool: bash sources it, the CLI itself never reads it.
-  const env = { ...settings.env, ...internetEnv() };
-  if (shellEnvNeeded()) {
+  if (compaction === null && shellEnvNeeded()) {
     writeFileSync(settings.shellEnv, shellScript(), { mode: 0o400, flag: 'wx' });
     // bash whose stdin is a socket pair — what a runtime's pipe often is — takes itself for a
     // remote shell's, reads ~/.bashrc instead of BASH_ENV and stops there, unless it is nested.
     Object.assign(env, { BASH_ENV: settings.shellEnv, SHELL: '/bin/bash', SHLVL: '1' });
   }
-  const input = openSync(settings.prompt, 'r');
   let child;
-  try {
-    // Not detached: the CLI and its commands share the process group the sandbox runtime kills.
-    child = spawn(settings.cli, args, { cwd: settings.workdir, env, stdio: [input, 'inherit', 'pipe'] });
-  } finally {
-    closeSync(input);
+  if (compaction !== null) child = spawn(settings.cli, args, { cwd: settings.workdir, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  else {
+    const input = openSync(settings.prompt, 'r');
+    try {
+      // Not detached: the CLI and its commands share the process group the sandbox runtime kills.
+      child = spawn(settings.cli, args, { cwd: settings.workdir, env, stdio: [input, 'inherit', 'pipe'] });
+    } finally {
+      closeSync(input);
+    }
   }
   let failure;
   const stop = (message) => {
@@ -503,7 +541,7 @@ try {
   // SIGPIPE): the value leaves this process only when the CLI holds the pipe.
   const feeder = setInterval(() => {
     try {
-      for (const secret of secrets) {
+      for (const secret of piped) {
         if (secret.done) continue;
         if (secret.served !== undefined) {
           // The end of the value, which the reader is waiting for by now.
@@ -528,7 +566,7 @@ try {
         rmSync(secret.path, { force: true });
         secret.served = performance.now();
       }
-      if (secrets.every((secret) => secret.done)) clearInterval(feeder);
+      if (piped.every((secret) => secret.done)) clearInterval(feeder);
     } catch {
       clearInterval(feeder);
       stop('Could not hand the turn credentials to the CLI');
@@ -541,20 +579,26 @@ try {
     if (MCP_DOWN.test(log)) stop('The CLI could not connect to the MCP server');
   });
   let ended = false;
+  let compacted = false;
+  let stopping;
   // A CLI that could not start reports \`error\` and then \`close\`: the turn ends once.
   const end = (code, signal) => {
     if (ended) return;
     ended = true;
     clearInterval(feeder);
+    clearTimeout(stopping);
     forget();
     writable(0o700);
     const unrevealed = reveal();
     if (unrevealed !== undefined) failure ??= unrevealed;
     try { scrub(); } catch { failure ??= 'Could not mask the client variables in the session'; }
+    // The server was told to stop: its exit says nothing, the summary already did.
+    if (compaction !== null && !compacted) failure ??= 'The session was not compacted';
     if (failure !== undefined) {
       report(failure);
       process.exitCode = 1;
-    } else process.exitCode = code ?? 128 + (os.constants.signals[signal] ?? 0);
+    } else if (compaction !== null) process.exitCode = 0;
+    else process.exitCode = code ?? 128 + (os.constants.signals[signal] ?? 0);
   };
   child.on('error', () => {
     failure ??= 'Could not launch the CLI';
@@ -567,6 +611,81 @@ try {
     forget();
   });
   child.on('close', end);
+  if (compaction !== null) {
+    const authorization = 'Basic ' + Buffer.from('opencode:' + password).toString('base64');
+    const call = (port, method, path, body, timeout) => new Promise((resolve, reject) => {
+      const sent = request({
+        host: '127.0.0.1',
+        port,
+        method,
+        path,
+        agent: false,
+        headers: { authorization, ...(body === undefined ? {} : { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) }) },
+      }, (response) => {
+        const chunks = [];
+        let bytes = 0;
+        response.on('data', (chunk) => {
+          bytes += chunk.length;
+          if (bytes > MAX_EXPORT_BYTES) response.destroy(new Error('The answer of the server is too large'));
+          else chunks.push(chunk);
+        });
+        response.on('error', reject);
+        response.on('end', () => resolve({ status: response.statusCode, text: Buffer.concat(chunks).toString() }));
+      });
+      sent.on('error', reject);
+      // Only what cannot take long: the summary takes as long as the model does, and the runtime
+      // ends the turn at its limit.
+      if (timeout !== undefined) sent.setTimeout(timeout, () => sent.destroy(new Error('timeout')));
+      sent.end(body);
+    });
+    // A server that ends first ends the turn by itself: \`end\` finds nothing compacted.
+    const listening = new Promise((resolve) => {
+      let printed = '';
+      child.stdout.on('data', (chunk) => {
+        printed = (printed + chunk.toString('latin1')).slice(-8192);
+        const port = LISTENING.exec(printed)?.[1];
+        if (port !== undefined) resolve(Number(port));
+      });
+    });
+    /**
+     * \`summarize\` answers \`true\` whatever became of the summary: a refusal of the provider, a
+     * tool call, an empty or cut answer. Only the message it wrote says, and only a whole answer
+     * of the model is a summary: the CLI takes any finished one for the new start of the session.
+     */
+    const compact = async () => {
+      const port = await listening;
+      const session = '/session/' + settings.session;
+      // The server takes requests a moment after its line, and one that comes too early hangs.
+      const until = performance.now() + SERVER_READY_MS;
+      for (;;) {
+        const answer = await call(port, 'GET', session, undefined, SERVER_POLL_MS).catch(() => null);
+        if (answer?.status === 200) break;
+        if (answer !== null) throw new Error('The server cannot read the session');
+        if (performance.now() > until) throw new Error('The server did not answer');
+      }
+      const done = await call(port, 'POST', session + '/summarize', JSON.stringify(compaction));
+      if (done.status !== 200) throw new Error('The server refused the compaction');
+      const read = await call(port, 'GET', session + '/message?limit=1', undefined, SERVER_READY_MS);
+      const last = read.status === 200 ? JSON.parse(read.text).at(-1) : undefined;
+      const info = last?.info;
+      if (info?.role !== 'assistant' || info.summary !== true) throw new Error('The server wrote no summary');
+      if (info.error !== undefined) {
+        // As the CLI prints it on a turn, so that a refusal is read as one.
+        process.stdout.write('\\n' + JSON.stringify({ type: 'error', error: info.error }) + '\\n');
+        throw new Error('The model did not summarize the session');
+      }
+      const words = last.parts.some((part) => part.type === 'text' && part.text.trim() !== '');
+      if (info.finish !== 'stop' || !words) throw new Error('The model left no whole summary');
+      compacted = true;
+      const row = (value) => process.stdout.write(JSON.stringify({ sessionID: settings.session, ...value }) + '\\n');
+      row({ type: 'step_start', part: { type: 'step-start' } });
+      row({ type: 'step_finish', part: { type: 'step-finish', reason: 'stop', tokens: info.tokens } });
+    };
+    compact().then(() => {
+      child.kill('SIGTERM');
+      stopping = setTimeout(() => child.kill('SIGKILL'), SERVER_STOP_MS);
+    }, (error) => stop(error.message));
+  }
 } catch (error) {
   forget();
   writable(0o700);

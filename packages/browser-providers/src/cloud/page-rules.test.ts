@@ -1,4 +1,4 @@
-import type { BrowserTaskPolicy } from '@repo/domain'
+import { OPEN_WEB_POLICY, type BrowserTaskPolicy } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -22,6 +22,8 @@ const policy: BrowserTaskPolicy = {
 const rules: PageRules = {
   allowedHosts: ['example.ru:443', 'www.example.ru:443', 's.w.org:443'],
   localSites: ['http://wordpress.local:8080'],
+  openWeb: false,
+  platformHosts: [],
   policy,
 }
 const ask = (
@@ -241,5 +243,101 @@ describe('an address the agent or the client opens', () => {
     expect(openAllowed(rules, 'https://elsewhere.example/')).toBe(false)
     expect(openAllowed(rules, `https://example.ru/?q=${'a'.repeat(2048)}`)).toBe(false)
     expect(openAllowed(rules, 'https://example.ru/\nwp-admin/')).toBe(false)
+  })
+})
+
+describe('the browser of a chat without a site (plan 61, К12)', () => {
+  const open: PageRules = {
+    allowedHosts: [],
+    localSites: [],
+    openWeb: true,
+    platformHosts: ['raditi.ru', 'raditi-preview.ru'],
+    policy: OPEN_WEB_POLICY,
+  }
+  const blank: PagePlace = { main: true, document: 'about:blank' }
+  const ask = (url: string, more: { method?: string; navigation?: boolean }, place: PagePlace) =>
+    requestVerdict(
+      open,
+      { url, method: 'GET', postData: null, navigation: false, ...more },
+      'agent',
+      place,
+    )
+
+  it('opens any public https site by address, from an empty page, and nothing else', () => {
+    expect(openAllowed(open, 'https://example.com/')).toBe(true)
+    expect(openAllowed(open, 'https://example.com:8443/a')).toBe(true)
+    expect(ask('https://example.com/', { navigation: true }, blank)).toBe('continue')
+    for (const away of [
+      'http://example.com/',
+      'https://93.184.216.34/',
+      'https://example.com:8080/',
+      'https://localhost/',
+      'https://raditi.ru/',
+      'https://app.raditi.ru/',
+      'https://site-a-chat-b.raditi-preview.ru/',
+    ]) {
+      expect(openAllowed(open, away), away).toBe(false)
+      expect(ask(away, { navigation: true }, blank), away).toBe('blockedbyclient')
+    }
+  })
+
+  it('lets a page work on its own site and call the others, writes included', () => {
+    const page: PagePlace = { main: true, document: 'https://shop.example.com/cart' }
+    expect(ask('https://cdn.example.net/app.js', {}, page)).toBe('continue')
+    expect(ask('https://shop.example.com/order', { method: 'POST' }, page)).toBe('continue')
+    expect(
+      ask('https://pay.example.org/checkout', { navigation: true }, { ...page, main: false }),
+    ).toBe('continue')
+    expect(committedAllowed(open, 'https://pay.example.org/', 'agent', page)).toBe(true)
+  })
+
+  it('keeps a page of no frame and any name of the platform out', () => {
+    // A request of a worker of a page has no page to be judged by.
+    expect(ask('https://example.com/data', {}, { main: false, document: null })).toBe(
+      'blockedbyclient',
+    )
+    const page: PagePlace = { main: true, document: 'https://example.com/' }
+    expect(ask('https://raditi.ru/api/trpc', {}, page)).toBe('blockedbyclient')
+    expect(ask('http://example.com/', {}, page)).toBe('blockedbyclient')
+    // A redirect the route never saw.
+    expect(committedAllowed(open, 'https://app.raditi.ru/chats', 'agent', page)).toBe(false)
+  })
+
+  it('judges nothing by a stack: the policy closes nothing', () => {
+    expect(openAllowed(open, 'https://shop.example.com/wp-admin/users.php')).toBe(true)
+    const page: PagePlace = { main: true, document: 'https://shop.example.com/' }
+    expect(ask('https://shop.example.com/wp-admin/users.php', { navigation: true }, page)).toBe(
+      'continue',
+    )
+  })
+})
+
+describe('a name of the platform in a session with a site (plan 61, К37)', () => {
+  const closed: PageRules = { ...rules, platformHosts: ['raditi.ru'] }
+  const ask = (url: string, place: PagePlace, navigation: boolean) =>
+    requestVerdict(closed, { url, method: 'GET', postData: null, navigation }, 'agent', place)
+
+  it('is another site no page goes on to', () => {
+    expect(ask('https://app.raditi.ru/chats', ON_THE_SITE, true)).toBe('blockedbyclient')
+    expect(ask('https://app.raditi.ru/chats', ELSEWHERE, false)).toBe('blockedbyclient')
+    expect(committedAllowed(closed, 'https://raditi.ru/', 'agent', ON_THE_SITE)).toBe(false)
+    // Any other site still opens: the rule of plan 60 is untouched.
+    expect(ask('https://pay.elsewhere.example/', ON_THE_SITE, true)).toBe('continue')
+  })
+
+  it('stays closed when the session lists it', () => {
+    const listed: PageRules = {
+      ...closed,
+      allowedHosts: [...closed.allowedHosts, 'raditi.ru:443'],
+    }
+    expect(openAllowed(listed, 'https://raditi.ru/')).toBe(false)
+    expect(
+      requestVerdict(
+        listed,
+        { url: 'https://raditi.ru/', method: 'GET', postData: null, navigation: true },
+        'agent',
+        ON_THE_SITE,
+      ),
+    ).toBe('blockedbyclient')
   })
 })

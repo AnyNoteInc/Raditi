@@ -1,26 +1,46 @@
-import type { MemberRole, Prisma } from '@repo/db'
+import {
+  openBrowserSessionOfTask,
+  taskHasProductionWrites,
+  type MemberRole,
+  type Prisma,
+} from '@repo/db'
 import {
   candidateFactsSchema,
   chatCommandAvailability,
   isTerminalReleaseStatus,
   releaseOutcomeOf,
   retryCommandRefusal,
+  siteIdOf,
   terminalReleaseStatuses,
   undoDeadline,
   undoExpired,
+  readFeedRow,
   type CandidateCheckStatus,
   type ChatCommandAvailability,
   type ChatCommandFacts,
-  type ChatCommandId,
   type ChatCommandRefusal,
+  type AgentBrowserRefusal,
+  type CompactRefusal,
+  type ServerCommandId,
   type PreviewStatus,
   type ReleaseOutcome,
   type ReleaseStatus,
   type TaskStatus,
+  type TurnRedoRefusal,
+  type TurnUndoRefusal,
 } from '@repo/domain'
+import { z } from 'zod'
 
+import { siteClosed } from '../site-capabilities.ts'
 import { memberRole } from './access.ts'
-import { dialogRetry } from './dialog-state.ts'
+import {
+  cancelPending,
+  dialogRetry,
+  movingRequest,
+  openCeilingQuestion,
+  turnRewinding,
+  updatePress,
+} from './dialog-state.ts'
 import { commandUnavailable } from './refusals.ts'
 
 type Reader = Pick<
@@ -34,6 +54,11 @@ type Reader = Pick<
   | 'siteRelease'
   | 'site'
   | 'siteLease'
+  | 'browserSession'
+  | 'taskTurn'
+  | 'turnAssignment'
+  | 'agentDriver'
+  | '$queryRaw'
 >
 
 /** The preview of a dialog as its facts and its panel read it. */
@@ -113,7 +138,7 @@ const noChecks = (): Record<CandidateCheckStatus, number> => ({
  */
 export async function dialogFacts(
   db: Reader,
-  task: { id: string; workspaceId: string; siteId: string; status: TaskStatus },
+  task: { id: string; workspaceId: string; siteId: string | null; status: TaskStatus },
   userId: string,
   now: Date = new Date(),
 ): Promise<DialogFacts> {
@@ -150,16 +175,19 @@ export async function dialogFacts(
   })
   const undo = await undoFacts(db, task, now)
   const retry = await dialogRetry(db, task)
-  // A task without the repository works in the browser of the site (docs/plan/57, Б1): it has no
-  // candidate, no preview, no release and no «Попробовать ещё» (Б25), whatever rows say — only
-  // `/cancel` is ever offered.
-  const withRepository =
-    (
-      await db.task.findUnique({
-        where: { id: task.id },
-        select: { needsRepository: true },
-      })
-    )?.needsRepository ?? true
+  const needs = await db.task.findUnique({
+    where: { id: task.id },
+    select: { needsRepository: true, needsBrowser: true, turnNo: true },
+  })
+  // A task without the repository has no candidate, no preview, no release and no «Попробовать
+  // ещё» (docs/plan/57, Б1, Б25), whatever rows say: the page does not list those (К27).
+  const withRepository = needs?.needsRepository ?? true
+  const withBrowser = needs?.needsBrowser ?? false
+  const pending = withRepository ? await turnRewinding(db, task.id) : null
+  const site =
+    task.siteId === null
+      ? null
+      : await db.site.findUnique({ where: { id: task.siteId }, select: { status: true } })
 
   let candidate: DialogCandidate | null = null
   if (candidateRow !== null) {
@@ -177,6 +205,7 @@ export async function dialogFacts(
     }
   }
   const release = releaseRow === null ? null : dialogRelease(releaseRow)
+  const agentBrowser = await agentBrowserRefusal(db, task.id)
 
   return {
     role,
@@ -186,6 +215,7 @@ export async function dialogFacts(
     undo: undo?.dialog ?? null,
     commands: {
       taskStatus: task.status,
+      repository: withRepository,
       role: role ?? 'member',
       candidate:
         candidate === null || !withRepository
@@ -199,8 +229,210 @@ export async function dialogFacts(
       releaseInProgress: release !== null && !isTerminalReleaseStatus(release.status),
       undo: withRepository ? (undo?.command ?? null) : null,
       retry: withRepository ? retryCommandRefusal(retry) : 'nothing_to_retry',
+      cancelPending: withBrowser && (await cancelPending(db, task.id)),
+      browserWrote:
+        withBrowser &&
+        (await db.browserSession.count({
+          where: { taskId: task.id, wroteAt: { not: null } },
+        })) > 0,
+      projectClosed: site !== null && siteClosed(site.status),
+      turnUndo: await turnUndoRefusal(db, {
+        taskId: task.id,
+        status: task.status,
+        turnNo: needs?.turnNo ?? 0,
+      }),
+      turnRewinding: pending !== null && !pending.redo,
+      turnRedo: await turnRedoRefusal(db, {
+        taskId: task.id,
+        status: task.status,
+        turnNo: needs?.turnNo ?? 0,
+      }),
+      turnRedoing: pending?.redo === true,
+      compaction: await driverCompacts(db),
+      agentBrowser,
+      compactRefusal: await compactRefusal(
+        db,
+        { taskId: task.id, turnNo: needs?.turnNo ?? 0 },
+        agentBrowser,
+      ),
     },
   }
+}
+
+/**
+ * Whether the driver the platform runs can compact a session: what it says of itself
+ * (`AgentCapabilities.compaction`), in its row, for tRPC and web import no driver.
+ */
+async function driverCompacts(db: Reader): Promise<boolean> {
+  const driver = await db.agentDriver.findFirst({
+    where: { enabled: true },
+    select: { capabilities: true },
+  })
+  return z.object({ compaction: z.literal(true) }).safeParse(driver?.capabilities).success
+}
+
+/**
+ * Why a command of the agent runs no turn for the browser of the chat (`agentBrowser`): the agent
+ * asked the client to act in it, or the client took it over.
+ */
+async function agentBrowserRefusal(
+  db: Reader,
+  taskId: string,
+): Promise<AgentBrowserRefusal | null> {
+  const session = await openBrowserSessionOfTask(db, taskId)
+  if (session?.helpReason) return 'awaiting_answer'
+  return session?.controller === 'user' ? 'browser_with_client' : null
+}
+
+/** The rows that say nothing to the agent: a press, or the `/compact` that never got a turn. */
+function saysNothing(payload: Prisma.JsonValue): boolean {
+  const row = readFeedRow('feed.request', payload)
+  if (row.type !== 'feed.request') return false
+  if (row.kind === 'agent_command') return row.command === 'compact'
+  return row.kind === 'retry' || row.kind === 'continue' || row.kind === 'resume'
+}
+
+/**
+ * Why `/compact` has no session to shorten now (docs/plan/61-chats-first.md, §5.14). The next turn
+ * goes on from the last one only when that completed and stands, so that is the session a
+ * compaction resumes; «Обновить» starts a new one on the moved candidate, so once it is pressed the
+ * session may be gone. A compaction right after a compaction would pay for the summary of a summary.
+ * Words the last turn never saw — their pass ended before it opened a turn — are not in the session,
+ * and the next turn would count them as seen: they go first. A question about credits and a request
+ * of the agent to act in the browser wait for the client, and a client who took the browser over is
+ * at work in it: a compaction answers neither, and its turn would take the browser away. A
+ * `/compact` that ended before it opened a turn shortened nothing, so it may be repeated.
+ */
+async function compactRefusal(
+  db: Reader,
+  chat: { taskId: string; turnNo: number },
+  browser: AgentBrowserRefusal | null,
+): Promise<CompactRefusal | null> {
+  const turn = await db.taskTurn.findUnique({
+    where: { taskId_turnNo: { taskId: chat.taskId, turnNo: chat.turnNo } },
+    select: {
+      status: true,
+      rejectedAt: true,
+      undoneAt: true,
+      nativeSessionId: true,
+      headSha: true,
+      startedAt: true,
+    },
+  })
+  if (
+    turn?.status !== 'completed' ||
+    turn.rejectedAt !== null ||
+    turn.undoneAt !== null ||
+    turn.nativeSessionId === null ||
+    turn.startedAt === null
+  )
+    return 'nothing_to_compact'
+  if ((await openCeilingQuestion(db, chat.taskId)) !== null) return 'awaiting_answer'
+  if (browser !== null) return browser
+  const compacted = await db.turnAssignment.count({
+    where: {
+      taskId: chat.taskId,
+      turnNo: chat.turnNo,
+      plan: { path: ['input', 'action'], equals: 'compact' },
+    },
+  })
+  if (compacted > 0) return 'nothing_to_compact'
+  const latest = await db.taskCandidate.findFirst({
+    where: { taskId: chat.taskId },
+    orderBy: { revision: 'desc' },
+    select: { turnNo: true, headSha: true },
+  })
+  if (latest?.turnNo === chat.turnNo && latest.headSha !== turn.headSha) return 'nothing_to_compact'
+  const after = { taskId: chat.taskId, createdAt: { gt: turn.startedAt } }
+  if ((await db.taskEvent.count({ where: { ...after, ...updatePress } })) > 0)
+    return 'nothing_to_compact'
+  const later = await db.taskEvent.findMany({
+    where: { ...after, ...movingRequest },
+    select: { payload: true },
+  })
+  return later.every((row) => saysNothing(row.payload)) ? null : 'nothing_to_compact'
+}
+
+/**
+ * Why `/undo` takes no turn of this chat (docs/plan/61-chats-first.md, §5.14): it takes the last
+ * turn, one that completed with its result taken, once, while the chat waits for its next words. A
+ * question of the platform about credits holds a pass that has not run, and a request of the agent
+ * to act in the browser stands in the live session until the next turn takes it (`reclaim`), with
+ * a button that would resume nothing: both are answered first. Words the last turn never saw — their
+ * pass failed before it opened a turn — are the last request, and that has no turn to take back:
+ * the turn before them would go instead. A write of the turn on the site itself cannot go back with
+ * the conversation; the browser belongs to the task, and its row says what stays. A chat with the
+ * repository may wait with a candidate too, and its turn goes back with its files; once «Обновить»
+ * moved the candidate past the turn, the turn stands on a version of the site that is gone.
+ */
+async function turnUndoRefusal(
+  db: Reader,
+  chat: { taskId: string; status: TaskStatus; turnNo: number },
+): Promise<TurnUndoRefusal | null> {
+  if (chat.status !== 'awaiting_user' && chat.status !== 'awaiting_approval')
+    return 'nothing_to_undo'
+  const turn = await db.taskTurn.findUnique({
+    where: { taskId_turnNo: { taskId: chat.taskId, turnNo: chat.turnNo } },
+    select: { status: true, rejectedAt: true, undoneAt: true, startedAt: true, headSha: true },
+  })
+  if (turn?.status !== 'completed' || turn.rejectedAt !== null || turn.undoneAt !== null)
+    return 'nothing_to_undo'
+  if ((await openCeilingQuestion(db, chat.taskId)) !== null) return 'awaiting_answer'
+  const session = await openBrowserSessionOfTask(db, chat.taskId)
+  if (session?.helpReason) return 'awaiting_answer'
+  if (turn.startedAt !== null) {
+    const later = await db.taskEvent.count({
+      where: { taskId: chat.taskId, ...movingRequest, createdAt: { gt: turn.startedAt } },
+    })
+    if (later > 0) return 'nothing_to_undo'
+  }
+  const latest = await db.taskCandidate.findFirst({
+    where: { taskId: chat.taskId },
+    orderBy: { revision: 'desc' },
+    select: { turnNo: true, headSha: true },
+  })
+  if (latest?.turnNo === chat.turnNo && latest.headSha !== turn.headSha) return 'undo_past_update'
+  const wrote = await taskHasProductionWrites(db, chat.taskId, { turnNo: chat.turnNo })
+  return wrote ? 'content_written' : null
+}
+
+/**
+ * Why `/redo` brings nothing back (docs/plan/61-chats-first.md, §5.14): it brings back the turn the
+ * last `/undo` took, while the chat still stands where that left it. Words, a pass, a command that
+ * moves the chat, a new revision or a confirmed release after the `feed.rewind` — each put something
+ * on top of the turn before, and «Обновить» is pressed as a plain command (`movingRequest` does not
+ * count it) while it writes the candidate onto a new `main`, under the same turn number: the branch
+ * cannot go back past it. The revision of the undo itself is written before the `feed.rewind`.
+ */
+async function turnRedoRefusal(
+  db: Reader,
+  chat: { taskId: string; status: TaskStatus; turnNo: number },
+): Promise<TurnRedoRefusal | null> {
+  if (chat.status !== 'awaiting_user' && chat.status !== 'awaiting_approval')
+    return 'nothing_to_redo'
+  const turn = await db.taskTurn.findUnique({
+    where: { taskId_turnNo: { taskId: chat.taskId, turnNo: chat.turnNo } },
+    select: { undoneAt: true },
+  })
+  if (!turn?.undoneAt) return 'nothing_to_redo'
+  const rewind = await db.taskEvent.findFirst({
+    where: { taskId: chat.taskId, type: 'feed.rewind' },
+    orderBy: { id: 'desc' },
+    select: { id: true },
+  })
+  if (rewind === null) return 'nothing_to_redo'
+  const after = await db.taskEvent.count({
+    where: {
+      taskId: chat.taskId,
+      id: { gt: rewind.id },
+      OR: [
+        movingRequest,
+        updatePress,
+        { type: { in: ['feed.candidate', 'feed.decision', 'feed.release'] } },
+      ],
+    },
+  })
+  return after > 0 ? 'nothing_to_redo' : null
 }
 
 const dialogRelease = (row: {
@@ -224,7 +456,7 @@ const dialogRelease = (row: {
  */
 async function undoFacts(
   db: Reader,
-  task: { id: string; siteId: string },
+  task: { id: string; siteId: string | null },
   now: Date,
 ): Promise<{ dialog: DialogUndo; command: ChatCommandFacts['undo'] } | null> {
   const installed = await db.siteRelease.findFirst({
@@ -233,12 +465,14 @@ async function undoFacts(
     select: { id: true, version: true },
   })
   if (installed === null) return null
+  // Read on every read of a feed: only past `installed` is the site proven (a release has one).
+  const siteId = siteIdOf(task)
   const site = await db.site.findUniqueOrThrow({
-    where: { id: task.siteId },
+    where: { id: siteId },
     select: { status: true, installedReleaseId: true, installedAt: true },
   })
   const lease = await db.siteLease.findUnique({
-    where: { siteId: task.siteId },
+    where: { siteId },
     select: { heldForOperator: true },
   })
   const runRow = await db.siteRelease.findFirst({
@@ -252,7 +486,7 @@ async function undoFacts(
     })) > 0
   const releasing =
     (await db.siteRelease.count({
-      where: { siteId: task.siteId, status: { notIn: [...terminalReleaseStatuses] } },
+      where: { siteId, status: { notIn: [...terminalReleaseStatuses] } },
     })) > 0
   const installedNow = site.installedReleaseId === installed.id
   const installedAt = installedNow ? site.installedAt : null
@@ -278,13 +512,13 @@ async function undoFacts(
 /** The verdict of one command. */
 export function commandRefusal(
   facts: ChatCommandFacts,
-  command: ChatCommandId,
+  command: ServerCommandId,
 ): ChatCommandRefusal | null {
   return chatCommandAvailability(facts).find((item) => item.id === command)?.refusal ?? null
 }
 
 /** Throws the refusal of the command, the text `task.commands` shows for it. */
-export function assertCommandAvailable(facts: ChatCommandFacts, command: ChatCommandId): void {
+export function assertCommandAvailable(facts: ChatCommandFacts, command: ServerCommandId): void {
   const refusal = commandRefusal(facts, command)
   if (refusal !== null) throw commandUnavailable(command, refusal)
 }

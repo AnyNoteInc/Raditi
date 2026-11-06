@@ -2,14 +2,12 @@ import type { Locator, Page } from '@playwright/test'
 
 import { expect, test } from '../../fixtures/signed-in.ts'
 
-import { addForeignSite, addSite, hideDevIndicator } from './site.ts'
+import { addForeignSite, hideDevIndicator } from './site.ts'
 
-// «Чат» in a real browser (docs/plan/38-site-page-plan.md, M12.5): the «list — content» frame
-// and the screen a dialog starts from. Which of the list and the content a width leaves on the
-// screen is decided by styles, so only a browser sees it. The site of the run is not connected:
-// the pages are opened by address, as a saved link would open them, or by the link «Чат» of the
-// sections, which leads to a new dialog. A dialog itself — on a connected site — is in
-// dialog.spec.ts.
+// «Чаты» in a real browser (docs/plan/61-chats-first.md, §5.11): the «list — content» frame and the
+// screen a chat starts from. Which of the list and the content a width leaves on the screen is
+// decided by styles, so only a browser sees it. A chat itself is in dialog.spec.ts, the ways through
+// the section — the project, the files, the folders — in chats.spec.ts.
 
 const viewports = [
   ['phone', 390, 844],
@@ -17,26 +15,16 @@ const viewports = [
   ['desktop', 1280, 900],
 ] as const
 
-const EMPTY_LIST = 'Диалогов пока нет. Опишите, что поменять на сайте, — диалог появится здесь.'
-// The site of the run is not connected: a new dialog says so on the field and sends nothing.
-const SEND_OFF = 'Сайт ещё не подключён. Задачи можно будет ставить после подключения.'
-const CHAT_OFF = 'Режим «Чат» для этого сайта сейчас недоступен: облачный браузер не подключён.'
-const WORK_OFF = 'Режим «Работа» недоступен: у сайта нет копии файлов.'
+const EMPTY_LIST = 'Чатов пока нет. Напишите, что нужно сделать, — чат появится здесь.'
 
-const dialogs = (page: Page) => page.getByRole('navigation', { name: 'Диалоги' })
-const sections = (page: Page) => page.getByRole('navigation', { name: 'Разделы сайта' })
-const rail = (page: Page) => page.getByRole('complementary', { name: 'Боковая панель сайта' })
-const back = (page: Page) => page.getByRole('link', { name: 'Назад к диалогам' })
-const newDialog = (page: Page) => dialogs(page).getByRole('link', { name: 'Новый диалог' })
+const chats = (page: Page) => page.getByRole('navigation', { name: 'Чаты' })
+const rail = (page: Page) => page.getByRole('complementary', { name: 'Боковая панель' })
+const back = (page: Page) => page.getByRole('link', { name: 'К чатам' })
+const newChat = (page: Page) => chats(page).getByRole('link', { name: 'Новый чат' })
 const message = (page: Page) => page.getByRole('textbox', { name: 'Сообщение' })
 const send = (page: Page) => page.getByRole('button', { name: 'Отправить' })
-const newDialogHeading = (page: Page) => page.getByRole('heading', { name: 'Новый диалог' })
-
-/** Read aloud, not shown: the box of the words is the 1px of `offScreen`. */
-async function expectOffScreen(target: Locator) {
-  const found = await target.boundingBox()
-  expect(found === null || (found.width <= 1 && found.height <= 1)).toBe(true)
-}
+const newChatHeading = (page: Page) => page.getByRole('heading', { name: 'Новый чат' })
+const pill = (page: Page) => page.getByRole('button', { name: /^Проект для этого чата/ })
 
 async function box(target: Locator) {
   const found = await target.boundingBox()
@@ -51,196 +39,104 @@ async function expectNoSidewaysScroll(page: Page) {
   expect(overflow).toBeLessThanOrEqual(0)
 }
 
-/** One navigation of sections is on the screen, and its «Чат» — the link to a new dialog — is the current page. */
-async function expectChatCurrent(page: Page, siteId: string) {
-  await expect(sections(page)).toHaveCount(1)
-  const current = sections(page).locator('[aria-current="page"]')
+/** «Чаты» is the current page of the rail. */
+async function expectChatsCurrent(page: Page) {
+  const current = page
+    .getByRole('navigation', { name: 'Основная навигация' })
+    .locator('[aria-current="page"]')
   await expect(current).toHaveCount(1)
-  await expect(current).toHaveText('Чат')
-  await expect(current).toHaveAttribute('href', `/projects/${siteId}/chat/new`)
-}
-
-/** Two boxes share no point of the screen. */
-function apart(
-  first: { x: number; y: number; width: number; height: number },
-  second: { x: number; y: number; width: number; height: number },
-) {
-  return (
-    first.x + first.width <= second.x ||
-    second.x + second.width <= first.x ||
-    first.y + first.height <= second.y ||
-    second.y + second.height <= first.y
-  )
-}
-
-/** The phone keeps the bottom bar under a new dialog, and the whole screen of it stands above the bar. */
-async function expectDialogAboveBar(page: Page, siteId: string, height: number) {
-  await expectChatCurrent(page, siteId)
-  await expect(page.getByRole('button', { name: 'Ещё' })).toBeVisible()
-  const barBox = await box(sections(page))
-  expect(barBox.y + barBox.height).toBeLessThanOrEqual(height)
-  for (const part of [
-    newDialogHeading(page),
-    message(page),
-    page.getByRole('radiogroup', { name: 'Режим диалога' }),
-    send(page),
-  ]) {
-    const partBox = await box(part)
-    expect(apart(partBox, barBox)).toBe(true)
-    expect(partBox.y).toBeGreaterThanOrEqual(0)
-    expect(partBox.y + partBox.height).toBeLessThanOrEqual(barBox.y)
-  }
+  await expect(current).toHaveAccessibleName('Чаты')
 }
 
 for (const [name, width, height] of viewports) {
-  test(`the root of «Чат» on a ${name}`, async ({ page, signedInUser }) => {
-    const siteId = await addSite(signedInUser.id)
+  test(`the root of «Чаты» on a ${name}`, async ({ page, signedInUser }) => {
+    void signedInUser
     await hideDevIndicator(page)
     await page.setViewportSize({ width, height })
-    await page.goto(`/projects/${siteId}/chat`)
+    await page.goto('/chats')
 
-    await expect(page).toHaveURL(`/projects/${siteId}/chat`)
-    await expect(page).toHaveTitle(/Чат/)
-    await expect(dialogs(page)).toBeVisible()
+    await expect(page).toHaveTitle(/Чаты/)
+    await expect(chats(page)).toBeVisible()
     await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1)
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Чат')
-    await expect(dialogs(page).getByText(EMPTY_LIST)).toBeVisible()
-    await expect(newDialog(page)).toHaveAttribute('href', `/projects/${siteId}/chat/new`)
-    await expect(newDialog(page)).not.toHaveAttribute('aria-current')
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Чаты')
+    await expect(chats(page).getByText(EMPTY_LIST)).toBeVisible()
+    await expect(newChat(page)).toHaveAttribute('href', '/chats/new')
+    await expect(newChat(page)).not.toHaveAttribute('aria-current')
     await expect(back(page)).toHaveCount(0)
-    await expectChatCurrent(page, siteId)
+    await expect(page.getByRole('navigation', { name: 'Хлебные крошки' })).toHaveCount(0)
     await expectNoSidewaysScroll(page)
 
+    await test.step('the rail stands on every width at the root, «Чаты» first', async () => {
+      await expect(rail(page)).toBeVisible()
+      expect((await box(rail(page))).width).toBe(width < 600 ? 56 : 72)
+      await expectChatsCurrent(page)
+      const links = page.getByRole('navigation', { name: 'Основная навигация' }).getByRole('link')
+      await expect(links.nth(0)).toHaveAccessibleName('Чаты')
+      await expect(links.nth(1)).toHaveAccessibleName('Проекты')
+    })
+
     if (width >= 900) {
-      await test.step('a new dialog is ready beside the list', async () => {
+      await test.step('a new chat is ready beside the list', async () => {
         await expect(message(page)).toBeVisible()
-        await expect(send(page)).toBeVisible()
         await expect(send(page)).toBeDisabled()
-        await expect(page.getByText(SEND_OFF)).toBeVisible()
         // The heading of the page is the list's: the screen beside it takes the level below.
-        await expect(newDialogHeading(page)).toHaveCount(1)
-        await expect(page.getByRole('heading', { level: 2, name: 'Новый диалог' })).toBeVisible()
+        await expect(newChatHeading(page)).toHaveCount(1)
+        await expect(page.getByRole('heading', { level: 2, name: 'Новый чат' })).toBeVisible()
       })
 
-      await test.step('the list stands between the rail and the content', async () => {
+      await test.step('the list runs the height of the window between the rail and the content', async () => {
         const railBox = await box(rail(page))
-        const listBox = await box(dialogs(page))
-        const toolbarBox = await box(page.getByRole('banner', { name: 'Панель сайта' }))
-        const railEnd = railBox.x + railBox.width
+        const listBox = await box(chats(page))
         const listEnd = listBox.x + listBox.width
-        expect(listBox.x).toBeGreaterThanOrEqual(railEnd)
-        // The bar of breadcrumbs runs from the rail to the right edge, over the list column
-        // (owner's request of 26.10.2026); the column stands under it.
-        expect(toolbarBox.x).toBeGreaterThanOrEqual(railEnd)
-        expect(toolbarBox.x).toBeLessThan(listBox.x + 1)
-        expect(toolbarBox.x + toolbarBox.width).toBe(width)
-        for (const part of [newDialogHeading(page), message(page), send(page)]) {
+        expect(listBox.x).toBe(railBox.x + railBox.width)
+        expect(listBox.y).toBe(0)
+        expect(listBox.y + listBox.height).toBe(height)
+        for (const part of [newChatHeading(page), message(page), send(page)]) {
           const partBox = await box(part)
           expect(partBox.x).toBeGreaterThanOrEqual(listEnd)
           expect(partBox.x + partBox.width).toBeLessThanOrEqual(width)
           expect(partBox.y + partBox.height).toBeLessThanOrEqual(height)
         }
-        // The column runs from under the bar to the bottom of the window beside the rail.
-        expect(listBox.y).toBe(toolbarBox.y + toolbarBox.height)
-        expect(listBox.y + listBox.height).toBe(height)
       })
       return
     }
 
     await test.step('below the wide layout the root is the list alone', async () => {
-      // The new dialog is in the markup and off the screen: nothing of it is shown or read out.
       await expect(message(page)).toBeHidden()
       await expect(send(page)).toBeHidden()
-      await expect(newDialogHeading(page)).toHaveCount(0)
-      await expect(page.getByText(SEND_OFF)).toBeHidden()
-      // The list is the page: it starts under the toolbar, not beside it.
-      const toolbarBox = await box(page.getByRole('banner', { name: 'Панель сайта' }))
-      const listBox = await box(dialogs(page))
-      expect(listBox.y).toBeGreaterThanOrEqual(toolbarBox.y + toolbarBox.height)
-    })
-
-    if (width >= 600) {
-      await test.step('the rail is the navigation of sections', async () => {
-        await expect(rail(page)).toBeVisible()
-        await expect(rail(page).getByRole('navigation', { name: 'Разделы сайта' })).toBeVisible()
-      })
-      return
-    }
-
-    await test.step('«Новый диалог» stays above the bottom bar', async () => {
-      await expect(rail(page)).toBeHidden()
-      const actionBox = await box(newDialog(page))
-      const barBox = await box(sections(page))
-      expect(actionBox.y + actionBox.height).toBeLessThanOrEqual(barBox.y)
-      expect(actionBox.y).toBeGreaterThanOrEqual(0)
-      expect(actionBox.height).toBeGreaterThanOrEqual(44)
+      await expect(newChatHeading(page)).toHaveCount(0)
     })
   })
 
-  test(`a new dialog on a ${name}`, async ({ page, signedInUser }) => {
-    const siteId = await addSite(signedInUser.id)
+  test(`a new chat on a ${name}`, async ({ page, signedInUser }) => {
+    void signedInUser
     await hideDevIndicator(page)
     await page.setViewportSize({ width, height })
-    await page.goto(`/projects/${siteId}/chat/new`)
+    await page.goto('/chats/new')
 
-    await expect(page).toHaveURL(`/projects/${siteId}/chat/new`)
-    await expect(page).toHaveTitle(/Новый диалог/)
+    await expect(page).toHaveTitle(/Новый чат/)
     await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1)
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Новый диалог')
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Новый чат')
     await expectNoSidewaysScroll(page)
 
-    if (width < 600) {
-      // Before anything is typed: the screen as the bar opens it.
-      await test.step('the phone keeps the bottom bar under the new dialog', async () => {
-        await expect(rail(page)).toBeHidden()
-        await expectDialogAboveBar(page, siteId, height)
-      })
-    }
-
-    await test.step('the screen of a site that is not connected sends nothing and says why', async () => {
-      await expect(message(page)).toBeVisible()
-      await expect(send(page)).toBeVisible()
-      // Nothing can be sent before the site is connected: the field takes no words at all.
-      await expect(message(page)).toBeDisabled()
+    await test.step('nothing but words is needed: no modes, no project', async () => {
+      await expect(page.getByRole('radiogroup')).toHaveCount(0)
+      await expect(pill(page)).toHaveAccessibleName('Проект для этого чата: Без проекта')
+      await expect(message(page)).toHaveAttribute('placeholder', 'Что нужно сделать?')
       await expect(send(page)).toBeDisabled()
-      await expect(send(page)).toHaveAccessibleDescription(SEND_OFF)
-      // The field says it too: a screen reader lands on it first.
-      await expect(message(page)).toHaveAccessibleDescription(new RegExp(SEND_OFF))
-
-      const modes = page.getByRole('radiogroup', { name: 'Режим диалога' })
-      await expect(modes.getByRole('radio')).toHaveCount(2)
-      // The switch follows what the server says the site can do (26.10.2026): a site that is not
-      // connected has neither the copy of its files nor the cloud browser, so neither mode can be
-      // chosen; «Работа», the default, stays checked and says why it is closed.
-      await expect(modes.getByRole('radio', { name: 'Работа' })).toBeChecked()
-      await expect(modes.getByRole('radio', { name: 'Работа' })).toBeDisabled()
-      await expect(modes.getByRole('radio', { name: 'Работа' })).toHaveAccessibleDescription(
-        WORK_OFF,
-      )
-      await expect(modes.getByRole('radio', { name: 'Чат' })).toBeDisabled()
-      await expect(modes.getByRole('radio', { name: 'Чат' })).not.toBeChecked()
-      await expect(modes.getByRole('radio', { name: 'Чат' })).toHaveAccessibleDescription(CHAT_OFF)
-      // The words of the switch are what a finger presses.
-      for (const word of await modes.locator('label').all())
-        expect((await box(word)).height).toBeGreaterThanOrEqual(44)
-      const sendBox = await box(send(page))
-      expect(Math.min(sendBox.width, sendBox.height)).toBeGreaterThanOrEqual(44)
-
-      // No standing words under the field (owner's request of 26.10.2026): the reasons are read
-      // with the field, the switch and the button, and not shown.
-      await expectOffScreen(page.getByText(SEND_OFF))
-      await expectOffScreen(page.getByText(CHAT_OFF))
-      await expect(page.getByText('ИИ может допускать ошибки. Проверяйте важное.')).toHaveCount(0)
+      await message(page).fill('Предложите пять названий')
+      await expect(send(page)).toBeEnabled()
+      await message(page).fill('')
+      expect(Math.min(...Object.values(await box(send(page))).slice(2))).toBeGreaterThanOrEqual(44)
     })
 
     if (width >= 900) {
-      await test.step('the list stays beside the new dialog', async () => {
-        await expect(dialogs(page)).toBeVisible()
-        await expect(dialogs(page).getByRole('heading', { level: 2, name: 'Чат' })).toBeVisible()
-        await expect(newDialog(page)).toHaveAttribute('aria-current', 'page')
+      await test.step('the list stays beside the new chat', async () => {
+        await expect(chats(page)).toBeVisible()
+        await expect(chats(page).getByRole('heading', { level: 2, name: 'Чаты' })).toBeVisible()
+        await expect(newChat(page)).toHaveAttribute('aria-current', 'page')
         await expect(back(page)).toBeHidden()
-        await expectChatCurrent(page, siteId)
-        const listBox = await box(dialogs(page))
+        const listBox = await box(chats(page))
         const fieldBox = await box(message(page))
         expect(fieldBox.x).toBeGreaterThanOrEqual(listBox.x + listBox.width)
       })
@@ -248,94 +144,57 @@ for (const [name, width, height] of viewports) {
     }
 
     await test.step('the content stands alone with a way back', async () => {
-      await expect(dialogs(page)).toBeHidden()
+      await expect(chats(page)).toBeHidden()
       await expect(back(page)).toBeVisible()
-      await expect(back(page)).toHaveAttribute('href', `/projects/${siteId}/chat`)
+      await expect(back(page)).toHaveAttribute('href', '/chats')
       expect((await box(back(page))).height).toBeGreaterThanOrEqual(44)
     })
 
-    if (width >= 600) {
-      await expect(rail(page)).toBeVisible()
-      await expectChatCurrent(page, siteId)
-    } else {
-      // After the screen was read through: the bar is still there and still under the screen.
-      await test.step('the bottom bar stays under the new dialog', async () => {
-        await expectDialogAboveBar(page, siteId, height)
+    if (width >= 600) await expect(rail(page)).toBeVisible()
+    else {
+      await test.step('a phone gives the rail up, and the field stands by the thumb', async () => {
+        await expect(rail(page)).toBeHidden()
+        const fieldBox = await box(message(page))
+        expect(fieldBox.y).toBeGreaterThan(height / 2)
+        expect((await box(pill(page))).y).toBeGreaterThan(fieldBox.y)
+        // The pill takes a row of its own over the buttons.
+        expect((await box(pill(page))).y).toBeLessThan((await box(send(page))).y)
       })
     }
 
     await test.step('the way back leads to the list', async () => {
       await back(page).click()
-      await expect(page).toHaveURL(`/projects/${siteId}/chat`)
-      await expect(dialogs(page)).toBeVisible()
-      await expect(page.getByRole('heading', { level: 1 })).toHaveText('Чат')
+      await expect(page).toHaveURL('/chats')
+      await expect(chats(page)).toBeVisible()
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText('Чаты')
       await expect(back(page)).toHaveCount(0)
       await expect(message(page)).toBeHidden()
-      await expectChatCurrent(page, siteId)
-      if (width < 600) await expect(page.getByRole('button', { name: 'Ещё' })).toBeVisible()
+      await expect(rail(page)).toBeVisible()
     })
 
-    await test.step('«Новый диалог» of the list opens the screen again', async () => {
-      await newDialog(page).click()
-      await expect(page).toHaveURL(`/projects/${siteId}/chat/new`)
-      await expect(page.getByRole('heading', { level: 1 })).toHaveText('Новый диалог')
-      await expect(dialogs(page)).toBeHidden()
+    await test.step('«Новый чат» of the list opens the screen again', async () => {
+      await newChat(page).click()
+      await expect(page).toHaveURL('/chats/new')
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText('Новый чат')
+      await expect(chats(page)).toBeHidden()
       await expect(message(page)).toBeVisible()
-      await expectChatCurrent(page, siteId)
-    })
-  })
-
-  test(`«Чат» of the sections opens a new dialog on a ${name}`, async ({ page, signedInUser }) => {
-    const siteId = await addSite(signedInUser.id)
-    await hideDevIndicator(page)
-    await page.setViewportSize({ width, height })
-    await page.goto(`/projects/${siteId}/overview`)
-    await expect(page.getByRole('heading', { level: 1, name: 'Обзор' })).toBeVisible()
-
-    // The bottom bar on a phone, the rail from 600px: one of them is on the screen.
-    await expect(sections(page)).toHaveCount(1)
-    const chat = sections(page).getByRole('link', { name: 'Чат', exact: true })
-    await expect(chat).toHaveAttribute('href', `/projects/${siteId}/chat/new`)
-    await expect(chat).not.toHaveAttribute('aria-current')
-    await chat.click()
-
-    await expect(page).toHaveURL(`/projects/${siteId}/chat/new`)
-    await expect(page).toHaveTitle(/Новый диалог/)
-    await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1)
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Новый диалог')
-    await expect(message(page)).toBeVisible()
-    await expect(message(page)).toBeInViewport({ ratio: 1 })
-    await expect(send(page)).toBeVisible()
-    await expect(send(page)).toBeDisabled()
-    await expectChatCurrent(page, siteId)
-    await expectNoSidewaysScroll(page)
-
-    if (width >= 900) await expect(dialogs(page)).toBeVisible()
-    else await expect(back(page)).toBeVisible()
-    if (width < 600) await expectDialogAboveBar(page, siteId, height)
-
-    await test.step('«Чат» pressed again stays on the new dialog', async () => {
-      await sections(page).getByRole('link', { name: 'Чат', exact: true }).click()
-      await expect(page).toHaveURL(`/projects/${siteId}/chat/new`)
-      await expect(message(page)).toBeVisible()
-      await expectChatCurrent(page, siteId)
     })
   })
 }
 
-test('«Новый диалог» stays above the bottom bar under a long list on a phone', async ({
+test('«Новый чат» stays within reach under a long list on a phone', async ({
   page,
   signedInUser,
 }) => {
+  void signedInUser
   const [, width, height] = viewports[0]
-  const siteId = await addSite(signedInUser.id)
   await hideDevIndicator(page)
   await page.setViewportSize({ width, height })
-  await page.goto(`/projects/${siteId}/chat`)
-  await expect(dialogs(page).getByText(EMPTY_LIST)).toBeVisible()
+  await page.goto('/chats')
+  await expect(chats(page).getByText(EMPTY_LIST)).toBeVisible()
 
-  // The run has no dialogs: the list is made long here, inside its own body.
-  await dialogs(page).evaluate((list) => {
+  // The run has no chats: the list is made long here, inside its own body.
+  await chats(page).evaluate((list) => {
     const filler = document.createElement('div')
     filler.style.height = '3000px'
     list.lastElementChild?.append(filler)
@@ -352,32 +211,29 @@ test('«Новый диалог» stays above the bottom bar under a long list o
     await test.step(`with the page scrolled to ${position}`, async () => {
       await page.evaluate((y) => window.scrollTo(0, y), top)
       await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBe(top)
-      await expect(newDialog(page)).toBeInViewport({ ratio: 1 })
-      const actionBox = await box(newDialog(page))
-      const barBox = await box(sections(page))
-      expect(actionBox.y).toBeGreaterThanOrEqual(0)
-      expect(actionBox.y + actionBox.height).toBeLessThanOrEqual(barBox.y)
-      expect(barBox.y + barBox.height).toBeLessThanOrEqual(height)
+      await expect(newChat(page)).toBeInViewport({ ratio: 1 })
+      const actionBox = await box(newChat(page))
+      expect(actionBox.y + actionBox.height).toBeLessThanOrEqual(height)
     })
   }
 })
 
 for (const [name, width, height] of viewports.filter(([, wide]) => wide < 900)) {
-  test(`the focus follows the keyboard between the list and a dialog on a ${name}`, async ({
+  test(`the focus follows the keyboard between the list and a chat on a ${name}`, async ({
     page,
     signedInUser,
   }) => {
-    const siteId = await addSite(signedInUser.id)
+    void signedInUser
     await hideDevIndicator(page)
     await page.setViewportSize({ width, height })
-    await page.goto(`/projects/${siteId}/chat`)
+    await page.goto('/chats')
 
     // The link that had the focus is hidden by the move: the focus goes to the content, never
     // back to the top of the document.
     const focus = () =>
       page.evaluate(() => {
         const active = document.activeElement
-        const content = document.getElementById('site-content')
+        const content = document.getElementById('chats-content')
         return {
           lost: active === null || active === document.body,
           inContent: content !== null && active !== null && content.contains(active),
@@ -386,23 +242,25 @@ for (const [name, width, height] of viewports.filter(([, wide]) => wide < 900)) 
       })
     const kept = { lost: false, inContent: true, shown: true }
 
-    await newDialog(page).focus()
-    await expect(newDialog(page)).toBeFocused()
+    await newChat(page).focus()
+    await expect(newChat(page)).toBeFocused()
     await page.keyboard.press('Enter')
-    await expect(page).toHaveURL(`/projects/${siteId}/chat/new`)
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Новый диалог')
+    await expect(page).toHaveURL('/chats/new')
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Новый чат')
     await expect.poll(focus).toEqual(kept)
 
     await back(page).focus()
     await expect(back(page)).toBeFocused()
     await page.keyboard.press('Enter')
-    await expect(page).toHaveURL(`/projects/${siteId}/chat`)
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Чат')
+    await expect(page).toHaveURL('/chats')
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Чаты')
     await expect.poll(focus).toEqual(kept)
   })
 }
 
-test('«Чат» of someone else’s site answers «not found» like a made-up address', async ({
+// The chat left the projects (К4) and its old addresses are gone (61.27): of someone else's
+// project and of none they answer as an address of the user's own one does (chats.spec.ts).
+test('the old address of the chat of someone else’s project answers «not found»', async ({
   page,
   signedInUser,
 }) => {
@@ -419,15 +277,11 @@ test('«Чат» of someone else’s site answers «not found» like a made-up a
       await test.step(path, async () => {
         const response = await page.goto(path)
         expect(response?.status()).toBe(404)
-        await expect(
-          page.getByRole('heading', { level: 1, name: 'Такого проекта нет' }),
-        ).toBeVisible()
+        await expect(page).toHaveURL(path)
+        await expect(page.getByRole('heading', { level: 1 })).toHaveText('Страница не найдена')
         await expect(page.getByText('Кофейня «Крошка»')).toHaveCount(0)
-        // Nothing of the section is given away: neither the list nor the screen of a dialog.
-        await expect(dialogs(page)).toHaveCount(0)
+        await expect(chats(page)).toHaveCount(0)
         await expect(message(page)).toHaveCount(0)
-        await expect(page.getByText('Новый диалог')).toHaveCount(0)
-        await expect(page.getByText(SEND_OFF)).toHaveCount(0)
       })
     }
   } finally {

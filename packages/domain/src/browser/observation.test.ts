@@ -104,6 +104,10 @@ describe('isSecretFieldName', () => {
       'Секретный ключ',
       'API key',
       'Ключ API',
+      'CVC',
+      'CVV2',
+      'Номер карты',
+      'Card number',
     ])
       expect(isSecretFieldName(name), name).toBe(true)
   })
@@ -118,6 +122,9 @@ describe('isSecretFieldName', () => {
       'Postcode',
       'Почтовый индекс',
       'Pinterest',
+      'Карта сайта',
+      'Карта',
+      'Card title',
       'Ключевые слова',
       'Опции',
       'Tokenizer settings',
@@ -162,6 +169,77 @@ describe('redactSecretValues', () => {
       '- textbox "Пароль" [ref=e1]: ""',
     )
     expect(redactSecretValues(editor)).toBe(editor)
+  })
+
+  it('hides what reads as a payment card number wherever it stands (К33)', () => {
+    const tree = [
+      '- textbox "Поле" [ref=e1]: 4111 1111 1111 1111',
+      '- text: Ваша карта 5555-5555-5555-4444, спасибо',
+      '- textbox "Номер" [ref=e2]: "378282246310005"',
+      '- generic [ref=e3]: 4000000000000002 и 6011111111111117',
+      '- text: 4222222222222 и 4111111111111111110',
+      '- text: Заказ 4111111111111112 от 2026-10-31',
+      '- text: Счёт 12345678901234567894 и 411111111117',
+      '- link "Заказ" [ref=e4111111111111111]',
+    ].join('\n')
+    expect(redactSecretValues(tree).split('\n')).toEqual([
+      `- textbox "Поле" [ref=e1]: ${BROWSER_HIDDEN_VALUE}`,
+      `- text: Ваша карта ${BROWSER_HIDDEN_VALUE}, спасибо`,
+      `- textbox "Номер" [ref=e2]: "${BROWSER_HIDDEN_VALUE}"`,
+      `- generic [ref=e3]: ${BROWSER_HIDDEN_VALUE} и ${BROWSER_HIDDEN_VALUE}`,
+      `- text: ${BROWSER_HIDDEN_VALUE} и ${BROWSER_HIDDEN_VALUE}`,
+      // Not a card's: the check does not pass; 20 digits and 12 that pass it; a reference.
+      '- text: Заказ 4111111111111112 от 2026-10-31',
+      '- text: Счёт 12345678901234567894 и 411111111117',
+      '- link "Заказ" [ref=e4111111111111111]',
+    ])
+  })
+
+  it('finds a card number among the digits beside it, and hides them with it (К33)', () => {
+    for (const [line, left] of [
+      ['- textbox "Комментарий" [ref=e1]: 4111 1111 1111 1111 12/27', BROWSER_HIDDEN_VALUE],
+      ['- textbox "Комментарий" [ref=e1]: 4111 1111 1111 1111 12/27 123', BROWSER_HIDDEN_VALUE],
+      ['- text: Карта 5555 5555 5555 4444 123', `Карта ${BROWSER_HIDDEN_VALUE}`],
+      ['- text: Заказ 2026 4111 1111 1111 1111', `Заказ ${BROWSER_HIDDEN_VALUE}`],
+      ['- text: +7 999 123 45 67 4111 1111 1111 1111', `+${BROWSER_HIDDEN_VALUE}`],
+      ['- text: 4111-1111-1111-1111 12-27', BROWSER_HIDDEN_VALUE],
+      ['- text: 4111111111111111 12 27', BROWSER_HIDDEN_VALUE],
+      ['- text: 12 4111111111111111', BROWSER_HIDDEN_VALUE],
+    ] as const)
+      expect(redactSecretValues(line), line).toBe(`${line.slice(0, line.indexOf(': ') + 2)}${left}`)
+    // Digits with no number among them stand, in any grouping.
+    for (const line of [
+      '- text: +7 999 123 45 67',
+      '- text: 2026-10-31',
+      '- text: 4111 1111 1111 1112 12/27',
+      '- text: 1234 5678 9012',
+    ])
+      expect(redactSecretValues(line), line).toBe(line)
+  })
+
+  it('hides every option of a secret list, and the options of other lists not at all (К33)', () => {
+    const tree = [
+      '- combobox "Месяц" [ref=e1]:',
+      '  - option "06"',
+      '  - option "07" [selected]',
+      '  - option "08"',
+      '- listbox "Год" [ref=e2]:',
+      '  - group "Скоро":',
+      '    - option "2029" [selected] [ref=e3]',
+      '- combobox "Страна" [ref=e4]:',
+      '  - option "Россия" [selected]',
+    ].join('\n')
+    expect(redactSecretValues(tree, ['e1', 'e2']).split('\n')).toEqual([
+      '- combobox "Месяц" [ref=e1]:',
+      `  - option "${BROWSER_HIDDEN_VALUE}"`,
+      `  - option "${BROWSER_HIDDEN_VALUE}"`,
+      `  - option "${BROWSER_HIDDEN_VALUE}"`,
+      '- listbox "Год" [ref=e2]:',
+      '  - group "Скоро":',
+      `    - option "${BROWSER_HIDDEN_VALUE}" [ref=e3]`,
+      '- combobox "Страна" [ref=e4]:',
+      '  - option "Россия" [selected]',
+    ])
   })
 
   it('reads a reference only after the name, never inside it', () => {

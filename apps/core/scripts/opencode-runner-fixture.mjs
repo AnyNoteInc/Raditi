@@ -30,6 +30,33 @@ const check = (condition, message) => {
 const marker = (turn) => `raditi-g3-shell-ok-turn-${turn}`
 const mcpMarker = (turn) => `raditi-g3-mcp-ok-turn-${turn}`
 const sha256 = (value) => createHash('sha256').update(value).digest('hex')
+const rewindResult = (answer) => ({
+  summary: 'Синтетический ход без репозитория',
+  change_type: 'none',
+  client_message: answer,
+  files_changed: [],
+  questions: [],
+  needs_approval: false,
+  risk: 'low',
+})
+const inboxResult = (answer) => ({
+  summary: 'Синтетический ход с файлом клиента',
+  change_type: 'none',
+  client_message: answer,
+  files_changed: [],
+  questions: [],
+  needs_approval: false,
+  risk: 'low',
+})
+const chatResult = (turn, answer) => ({
+  summary: 'Синтетический ход чата с репозиторием',
+  change_type: 'code',
+  client_message: answer,
+  files_changed: ['index.php', `turn-${turn}.txt`],
+  questions: [],
+  needs_approval: false,
+  risk: 'low',
+})
 const resultFor = (turn) => ({
   summary: turn === 1 ? PRIOR : 'Синтетический второй ход после восстановления сессии',
   change_type: 'code',
@@ -77,6 +104,33 @@ function shellCall(body, state) {
       command: `node -e '${source.replaceAll("'", "'\\''")}'`,
       description: 'Synthetic runner file change',
     }),
+  }
+}
+
+/**
+ * The turn of a chat with the repository whose files the stand follows: it fails unless the working
+ * copy holds exactly the turns it should, then adds its own, as the turns of the two-turn scenario do.
+ */
+function chatShellCall(body, state) {
+  const tool = body.tools?.find(
+    (item) => item.type === 'function' && item.function?.name === 'bash',
+  )
+  check(Boolean(tool), 'Shell tool was not advertised')
+  const { turn } = state
+  const { holds, lacks } = state.chat
+  const tests = [
+    ...holds.map((held) => `grep -qx 'turn ${held}' index.php && test -e turn-${held}.txt`),
+    ...lacks.map((lost) => `! grep -qx 'turn ${lost}' index.php && test ! -e turn-${lost}.txt`),
+  ]
+  const command = [
+    ...tests,
+    `printf 'turn ${turn}\\n' >> index.php`,
+    `printf 'turn ${turn}\\n' > turn-${turn}.txt`,
+    `echo ${marker(turn)}`,
+  ].join(' && ')
+  return {
+    name: 'bash',
+    arguments: JSON.stringify({ command, description: 'Synthetic chat file change' }),
   }
 }
 
@@ -248,6 +302,21 @@ export async function startOpencodeRunnerFixture() {
       }
       state.llmRequests++
       check(body.model === state.model, 'Wrong model profile')
+      if (state.compaction) {
+        // The summary of a session (docs/plan/61-chats-first.md, §5.14): no tool, no instructions
+        // of the platform, and the history it is there to replace.
+        check(state.phase === 'initial', 'Unexpected request after turn completion')
+        check(body.tools === undefined, 'A compaction was offered tools')
+        check(
+          state.compaction.remembered.every((text) => serialized.includes(text)),
+          'The compaction lost words of the session',
+        )
+        state.phase = 'completed'
+        response
+          .writeHead(200, { 'content-type': 'text/event-stream;charset=UTF-8' })
+          .end(frames(body.model, { content: state.compaction.summary }))
+        return
+      }
       // With the platform's own provider id the CLI adds no reasoning field: the profile of the
       // turn key belongs to the gateway.
       check(
@@ -290,7 +359,7 @@ export async function startOpencodeRunnerFixture() {
         ),
         'Turn prompt missing',
       )
-      if (state.turn === 2) {
+      if (state.turn === 2 && !state.rewind && !state.chat && !state.inbox) {
         check(
           body.messages.some(
             (message) =>
@@ -304,7 +373,68 @@ export async function startOpencodeRunnerFixture() {
         state.continuationSeen = true
       }
       let item
-      if (state.phase === 'initial') {
+      if (state.inbox) {
+        // The CLI is told where the file is, reads it with its own tool, and gets its bytes.
+        if (state.phase === 'initial') {
+          check(serialized.includes(state.inbox.path), 'The turn was not told where the file is')
+          check(!serialized.includes(state.inbox.words), 'The file came with the words of the turn')
+          state.phase = 'shell'
+          state.shellCallId = `call_inbox_${state.turn}`
+          item = {
+            function: {
+              name: 'read',
+              arguments: JSON.stringify({ filePath: state.inbox.path }),
+            },
+            id: state.shellCallId,
+          }
+        } else {
+          check(state.phase === 'shell', 'Unexpected request after turn completion')
+          check(
+            toolOutput(body, state.shellCallId, state.inbox.words),
+            'The file of the client did not reach the agent',
+          )
+          state.toolOutputSeen = true
+          state.phase = 'completed'
+          item = { content: JSON.stringify(inboxResult(state.inbox.answer)) }
+        }
+      } else if (state.rewind) {
+        // What the session behind this request holds: the stand asks it of each turn of its chat.
+        check(state.phase === 'initial', 'Unexpected request after turn completion')
+        check(
+          state.rewind.remembered.every((text) => serialized.includes(text)),
+          'The restored session lost words of an earlier turn',
+        )
+        check(
+          !state.rewind.forgotten.some((text) => serialized.includes(text)),
+          'The words of an undone turn reached the provider',
+        )
+        state.phase = 'completed'
+        item = { content: JSON.stringify(rewindResult(state.rewind.answer)) }
+      } else if (state.chat) {
+        // The session behind this request, as for a turn without a repository, and its one change.
+        check(
+          state.chat.remembered.every((text) => serialized.includes(text)),
+          'The restored session lost words of an earlier turn',
+        )
+        check(
+          !state.chat.forgotten.some((text) => serialized.includes(text)),
+          'The words of an undone turn reached the provider',
+        )
+        if (state.phase === 'initial') {
+          state.phase = 'shell'
+          state.shellCallId = `call_chat_${state.chat.id}`
+          item = { function: chatShellCall(body, state), id: state.shellCallId }
+        } else {
+          check(state.phase === 'shell', 'Unexpected request after turn completion')
+          check(
+            toolOutput(body, state.shellCallId, marker(state.turn)),
+            'The working copy is not the one the turn starts from',
+          )
+          state.toolOutputSeen = true
+          state.phase = 'completed'
+          item = { content: JSON.stringify(chatResult(state.turn, state.chat.answer)) }
+        }
+      } else if (state.phase === 'initial') {
         item = { function: shellCall(body, state), id: `call_shell_${state.turn}` }
         state.phase = 'shell'
         state.shellCallId = item.id
@@ -355,10 +485,113 @@ export async function startOpencodeRunnerFixture() {
   })
   const port = server.address().port
   let closed = false
+  const assertRotated = (llmKey, mcpKey) => {
+    check(
+      [llmKey, mcpKey].every(
+        (value) => typeof value === 'string' && /^[\x21-\x7e]{8,8192}$/.test(value),
+      ),
+      'Invalid fixture credential',
+    )
+    const previous = [...turns.values()].flatMap((item) => [item.llmKey, item.mcpKey])
+    check(
+      llmKey !== mcpKey && !previous.includes(llmKey) && !previous.includes(mcpKey),
+      'Fixture credentials must rotate between turns',
+    )
+  }
+  const freshTurn = (identity) => ({
+    ...identity,
+    phase: 'initial',
+    totalRequests: 0,
+    llmRequests: 0,
+    mcpInitialize: 0,
+    mcpList: 0,
+    mcpCalls: 0,
+    continuationSeen: false,
+    toolOutputSeen: false,
+    mcpOutputSeen: false,
+  })
   return {
     origin: `http://127.0.0.1:${port}`,
     port,
     resultFor,
+    /**
+     * One turn of the chat without a repository whose last request is undone
+     * (docs/plan/61-chats-first.md, §5.14): no tool, an answer, and the check of what its session
+     * held — `remembered` must stand in the request and `forgotten` must not, or the request is
+     * refused and the turn fails. No turn of the chat with the repository is one of these.
+     */
+    addRewindTurn({ turn, llmKey, mcpKey, prompt, effort, answer, remembered, forgotten }) {
+      const key = `rewind-${turn}`
+      check(!closed && Number.isInteger(turn) && !turns.has(key), 'Unexpected rewind turn')
+      check(
+        [prompt, answer, ...remembered, ...forgotten].every(
+          (text) => typeof text === 'string' && text.length > 0,
+        ),
+        'Invalid rewind turn',
+      )
+      check(effort === (turn === 1 ? 'low' : 'high'), 'Invalid fixture effort')
+      assertRotated(llmKey, mcpKey)
+      turns.set(key, {
+        ...freshTurn({ turn, llmKey, mcpKey, prompt, effort, model: MODEL }),
+        rewind: { answer, remembered, forgotten },
+      })
+      return rewindResult(answer)
+    },
+    /**
+     * One turn of a chat with the repository whose last request is undone or brought back
+     * (docs/plan/61-chats-first.md, §5.14): what its session held, as for `addRewindTurn`, and what
+     * its working copy held — the turns of `holds` and none of `lacks` — before its own change.
+     */
+    addChatTurn({ id, turn, llmKey, mcpKey, prompt, effort, answer, ...held }) {
+      const key = `chat-${id}-${turn}`
+      const { remembered = [], forgotten = [], holds = [], lacks = [] } = held
+      check(!closed && Number.isInteger(turn) && !turns.has(key), 'Unexpected chat turn')
+      check(
+        [id, prompt, answer, ...remembered, ...forgotten].every(
+          (text) => typeof text === 'string' && text.length > 0,
+        ),
+        'Invalid chat turn',
+      )
+      check(
+        [...holds, ...lacks].every((other) => Number.isInteger(other)),
+        'Invalid chat turn',
+      )
+      check(effort === (turn === 1 ? 'low' : 'high'), 'Invalid fixture effort')
+      assertRotated(llmKey, mcpKey)
+      turns.set(key, {
+        ...freshTurn({ turn, llmKey, mcpKey, prompt, effort, model: MODEL }),
+        chat: { id, answer, remembered, forgotten, holds, lacks },
+      })
+    },
+    /**
+     * The turn of a chat without a project that holds a file of the client (docs/plan/61-chats-first.md,
+     * К16): its CLI reads `path`, and only its tool answer may bring `words` to the provider.
+     */
+    addInboxTurn({ turn, llmKey, mcpKey, prompt, effort, path, words, answer }) {
+      const key = `inbox-${turn}`
+      check(!closed && Number.isInteger(turn) && !turns.has(key), 'Unexpected inbox turn')
+      check(
+        [prompt, path, words, answer].every((text) => typeof text === 'string' && text.length > 0),
+        'Invalid inbox turn',
+      )
+      check(effort === (turn === 1 ? 'low' : 'high'), 'Invalid fixture effort')
+      assertRotated(llmKey, mcpKey)
+      turns.set(key, {
+        ...freshTurn({ turn, llmKey, mcpKey, prompt, effort, model: MODEL }),
+        inbox: { path, words, answer },
+      })
+    },
+    /** The turn that compacts that chat's session: its one request is answered with `summary`. */
+    addCompactionTurn({ turn, llmKey, mcpKey, prompt, effort, summary, remembered }) {
+      const key = `compaction-${turn}`
+      check(!closed && Number.isInteger(turn) && !turns.has(key), 'Unexpected compaction turn')
+      check(effort === 'high', 'Invalid fixture effort')
+      assertRotated(llmKey, mcpKey)
+      turns.set(key, {
+        ...freshTurn({ turn, llmKey, mcpKey, prompt, effort, model: MODEL }),
+        compaction: { summary, remembered },
+      })
+    },
     addTurn({ turn, llmKey, mcpKey, prompt, effort, model = MODEL }) {
       check(!closed && (turn === 1 || turn === 2) && !turns.has(turn), 'Unexpected fixture turn')
       check(
@@ -371,34 +604,8 @@ export async function startOpencodeRunnerFixture() {
       check(model === MODEL, 'Invalid fixture model')
       // The profile is what core issues the turn key with; the CLI sends none of it.
       check(effort === (turn === 1 ? 'low' : 'high'), 'Invalid fixture effort')
-      check(
-        [llmKey, mcpKey].every(
-          (value) => typeof value === 'string' && /^[\x21-\x7e]{8,8192}$/.test(value),
-        ),
-        'Invalid fixture credential',
-      )
-      const previous = [...turns.values()].flatMap((item) => [item.llmKey, item.mcpKey])
-      check(
-        llmKey !== mcpKey && !previous.includes(llmKey) && !previous.includes(mcpKey),
-        'Fixture credentials must rotate between turns',
-      )
-      turns.set(turn, {
-        turn,
-        llmKey,
-        mcpKey,
-        prompt,
-        effort,
-        model,
-        phase: 'initial',
-        totalRequests: 0,
-        llmRequests: 0,
-        mcpInitialize: 0,
-        mcpList: 0,
-        mcpCalls: 0,
-        continuationSeen: false,
-        toolOutputSeen: false,
-        mcpOutputSeen: false,
-      })
+      assertRotated(llmKey, mcpKey)
+      turns.set(turn, freshTurn({ turn, llmKey, mcpKey, prompt, effort, model }))
       return resultFor(turn)
     },
     observations() {
@@ -406,6 +613,7 @@ export async function startOpencodeRunnerFixture() {
         problems: [...problems],
         turns: [...turns.values()].map(
           ({
+            rewind,
             turn,
             effort,
             model,
@@ -419,6 +627,7 @@ export async function startOpencodeRunnerFixture() {
             toolOutputSeen,
             mcpOutputSeen,
           }) => ({
+            ...(rewind ? { rewind: true } : {}),
             turn,
             effort,
             model,
@@ -437,8 +646,11 @@ export async function startOpencodeRunnerFixture() {
     },
     assertComplete() {
       check(!problems.length, `Fixture recorded ${problems.length} failed requests`)
-      check(turns.size === 2, 'Fixture requires two registered turns')
-      for (const state of turns.values()) {
+      const planned = [...turns.values()].filter(
+        (state) => !state.rewind && !state.compaction && !state.chat && !state.inbox,
+      )
+      check(planned.length === 2, 'Fixture requires two registered turns')
+      for (const state of planned) {
         check(
           state.phase === 'completed' && state.toolOutputSeen,
           'Turn did not complete its real shell action',
@@ -448,6 +660,47 @@ export async function startOpencodeRunnerFixture() {
         check(state.mcpCalls > 0 && state.mcpOutputSeen, 'Turn MCP call was not observed')
         check(state.turn === 1 || state.continuationSeen, 'Prior session was not observed')
       }
+    },
+    /** Every compaction so far: its one request, and no tool. */
+    assertCompacted() {
+      for (const state of [...turns.values()].filter((item) => item.compaction))
+        check(
+          state.phase === 'completed' && state.llmRequests === 1 && state.mcpList === 0,
+          'A compaction did not answer its one request, or reached for the tools',
+        )
+    },
+    /** The turn with a file of the client: it read the file and answered, nothing else. */
+    assertInboxComplete() {
+      check(!problems.length, `Fixture recorded ${problems.length} failed requests`)
+      const read = [...turns.values()].filter((item) => item.inbox)
+      check(read.length === 1, 'Fixture has not the turn with a file')
+      check(
+        read[0].phase === 'completed' && read[0].toolOutputSeen && read[0].llmRequests === 2,
+        'The turn with a file did not read it and answer',
+      )
+    },
+    /** The turns of a chat with the repository: their change and their answer, nothing else. */
+    assertChatComplete(id, count) {
+      check(!problems.length, `Fixture recorded ${problems.length} failed requests`)
+      const chat = [...turns.values()].filter((item) => item.chat?.id === id)
+      check(chat.length === count, 'Fixture has not the turns of this chat')
+      for (const state of chat)
+        check(
+          state.phase === 'completed' && state.toolOutputSeen && state.llmRequests === 2,
+          'A turn of the chat did not make its one change and answer',
+        )
+    },
+    /** The turns of the chat without a repository, each answered once by a checked request. */
+    assertRewindComplete(count = 3) {
+      check(!problems.length, `Fixture recorded ${problems.length} failed requests`)
+      const rewound = [...turns.values()].filter((state) => state.rewind)
+      check(rewound.length === count, 'Fixture requires three turns without a repository')
+      this.assertCompacted()
+      for (const state of rewound)
+        check(
+          state.phase === 'completed' && state.llmRequests === 1,
+          'A turn without a repository did not answer its one request',
+        )
     },
     async close() {
       if (closed) return

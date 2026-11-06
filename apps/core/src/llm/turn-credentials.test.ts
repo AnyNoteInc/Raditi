@@ -24,6 +24,7 @@ function fixture(
     /** The data class of the site's workspace. */
     dataClass?: 'synthetic' | 'client'
     /** `tasks.needs_browser` of the task: one that works in the browser (plan 57). */
+    needsRepository?: boolean
     needsBrowser?: boolean
     /** Rows of `site_env_vars` of the site, as the query would return them. */
     variables?: SiteVariable[]
@@ -71,6 +72,7 @@ function fixture(
                 attempt: 1,
                 siteId,
                 dataClass: options.dataClass ?? 'synthetic',
+                needsRepository: options.needsRepository ?? true,
                 needsBrowser: options.needsBrowser ?? false,
                 now,
               },
@@ -513,7 +515,7 @@ describe('the client variables of a turn (plan 53, Р13)', () => {
     ).toEqual({ PAYMENT_KEY: 'pay-secret-0001' })
     // A task in the browser would type it onto the site through `web_fill` with no candidate or
     // release to refuse it: its turn gets none, and none is even read.
-    const browser = fixture({ variables, values, needsBrowser: true })
+    const browser = fixture({ variables, values, needsRepository: false, needsBrowser: true })
     const issued = await browser.credentials.issue(browser.ref, browser.grant)
     expect(issued).not.toHaveProperty('envValues')
     expect(browser.vault()).not.toHaveProperty('env')

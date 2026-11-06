@@ -273,6 +273,8 @@ describe('browserTaskCodes', () => {
   it('has every code of §3.7 with a status and a short English text', () => {
     expect(browserTaskCodeNames).toEqual([
       'BROWSER_SESSION_UNAVAILABLE',
+      'BROWSER_STARTING',
+      'BROWSER_WORKSPACE_BUSY',
       'BROWSER_USER_IN_CONTROL',
       'BROWSER_STALE_OBSERVATION',
       'BROWSER_ACTION_DENIED',

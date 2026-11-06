@@ -31,7 +31,7 @@ const contentType = z
 
 const createSchema = z.strictObject({
   workspaceId: id,
-  siteId: id,
+  siteId: id.nullable(),
   uploadedById: id,
   source: z.enum(['web', 'telegram', 'max']).default('web'),
   /** Already cleaned by attachmentFileName(): a name it would change is refused. */
@@ -41,7 +41,8 @@ const createSchema = z.strictObject({
 })
 
 /**
- * Announces a file of `uploadedById` for a site of the workspace: `uploading`, with the key
+ * Announces a file of `uploadedById` for a site of the workspace, or, with `siteId` null, for a
+ * chat without a project (docs/plan/61-chats-first.md, К16): `uploading`, with the key
  * attachmentKey() gives and `ATTACHMENT_UNSENT_HOURS` to be sent. null — the site is not of the
  * workspace, or the uploader is not its member.
  */
@@ -49,7 +50,7 @@ export async function createAttachment(
   db: Db,
   input: {
     workspaceId: string
-    siteId: string
+    siteId: string | null
     uploadedById: string
     source?: 'web' | 'telegram' | 'max'
     fileName: string
@@ -63,14 +64,15 @@ export async function createAttachment(
     INSERT INTO attachments
       (id, workspace_id, site_id, uploaded_by_id, source, s3_key, file_name, content_type,
        size_bytes, expires_at)
-    SELECT ${attachmentId}::uuid, s.workspace_id, s.id, ${file.uploadedById}::uuid,
+    SELECT ${attachmentId}::uuid, m.workspace_id, ${file.siteId}::uuid, ${file.uploadedById}::uuid,
            ${file.source}::"Channel", ${attachmentKey(file.workspaceId, attachmentId)},
            ${file.fileName}, ${file.contentType}, ${file.sizeBytes},
            clock_timestamp() + ${ATTACHMENT_UNSENT_HOURS}::int * interval '1 hour'
-      FROM sites s
-     WHERE s.id = ${file.siteId}::uuid AND s.workspace_id = ${file.workspaceId}::uuid
-       AND EXISTS (SELECT 1 FROM members m
-                    WHERE m.workspace_id = s.workspace_id AND m.user_id = ${file.uploadedById}::uuid)
+      FROM members m
+     WHERE m.workspace_id = ${file.workspaceId}::uuid AND m.user_id = ${file.uploadedById}::uuid
+       AND (${file.siteId}::uuid IS NULL
+            OR EXISTS (SELECT 1 FROM sites s
+                        WHERE s.id = ${file.siteId}::uuid AND s.workspace_id = m.workspace_id))
     RETURNING id`
   if (rows.length !== 1) return null
   return db.attachment.findUniqueOrThrow({ where: { id: attachmentId } })
@@ -103,7 +105,7 @@ const bindSchema = z.strictObject({
   taskId: id,
   userId: id,
   workspaceId: id,
-  siteId: id,
+  siteId: id.nullable(),
 })
 
 /**
@@ -119,7 +121,8 @@ export async function bindAttachments(
     taskId: string
     userId: string
     workspaceId: string
-    siteId: string
+    /** null — a chat without a project: its files and its task have no site either. */
+    siteId: string | null
   },
 ): Promise<boolean> {
   const { ids, taskId, userId, workspaceId, siteId } = bindSchema.parse({
@@ -133,9 +136,11 @@ export async function bindAttachments(
        WHERE a.id = ANY(${ids}::uuid[]) AND a.status = 'ready' AND a.task_id IS NULL
          AND a.expires_at > clock_timestamp()
          AND a.uploaded_by_id = ${userId}::uuid
-         AND a.workspace_id = ${workspaceId}::uuid AND a.site_id = ${siteId}::uuid
+         AND a.workspace_id = ${workspaceId}::uuid
+         AND a.site_id IS NOT DISTINCT FROM ${siteId}::uuid
          AND EXISTS (SELECT 1 FROM tasks t WHERE t.id = ${taskId}::uuid
-                        AND t.workspace_id = a.workspace_id AND t.site_id = a.site_id)
+                        AND t.workspace_id = a.workspace_id
+                        AND t.site_id IS NOT DISTINCT FROM a.site_id)
        FOR UPDATE OF a
     )
     UPDATE attachments a

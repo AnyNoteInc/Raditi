@@ -1,11 +1,19 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import {
+  feedFailureCodes,
+  feedFailureTextOf,
+  type FeedFailureCode,
+} from '@repo/domain/tasks/client-feed-failures'
+import { feedBrowserQuestionText, feedFailureOpenText } from '@repo/domain/tasks/client-feed-labels'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { FeedRow } from './chat-types'
 import { FeedList, LiveBlock, type FeedActions } from './feed-list'
+import type { ResultRow } from './feed-model'
 import { feedReducer, initialFeedState, type FeedHeadState } from './feed-state'
 import {
+  agentCommandRow,
   agentQuestionRow,
   browserAnswer,
   browserQuestionRow,
@@ -64,21 +72,54 @@ function showFeed(
   head: FeedHeadState,
   open: { question?: string; candidate?: string; retry?: string } = {},
   patch: Partial<FeedActions> = {},
+  siteUrl: string | null = 'https://kroshka.example',
 ) {
   const handlers = actions(patch)
   render(
     <FeedList
       head={head}
       rows={rows}
-      siteUrl="https://kroshka.example"
+      siteUrl={siteUrl}
       openQuestionId={open.question ?? null}
       liveCandidateId={open.candidate ?? null}
       retryId={open.retry ?? null}
       actions={handlers}
     />,
   )
-  return { handlers, feed: screen.getByRole('list', { name: 'Сообщения диалога' }) }
+  return { handlers, feed: screen.getByRole('list', { name: 'Сообщения чата' }) }
 }
+
+describe('the answer to `/init` (docs/plan/61-chats-first.md, К31)', () => {
+  const rows = [agentCommandRow('1'), resultRow('2', 1, 'Тема лежит в wp-content/themes/shop.')]
+  const save = 'Сохранить в подсказки агенту'
+
+  it('offers to keep the words of the answer as they are', () => {
+    const onSaveNotes = vi.fn()
+    const { feed } = showFeed(
+      rows,
+      headOf({ status: 'awaiting_user' }),
+      {},
+      { onSaveNotes, notesRows: new Set(['2']) },
+    )
+    expect(within(feed).getByText('Вы попросили описать проект для агента')).toBeTruthy()
+    fireEvent.click(within(feed).getByRole('button', { name: save }))
+    expect(onSaveNotes).toHaveBeenCalledWith('Тема лежит в wp-content/themes/shop.')
+  })
+
+  it('draws no button under another row, or for who may not save', () => {
+    const notesRows = new Set(['2'])
+    const { feed } = showFeed(
+      [...rows, resultRow('3', 2, 'Другой ответ')],
+      headOf({ status: 'awaiting_user' }),
+      {},
+      { onSaveNotes: vi.fn(), notesRows },
+    )
+    expect(within(feed).getAllByRole('button', { name: save })).toHaveLength(1)
+    cleanup()
+    const closed = showFeed(rows, headOf({ status: 'awaiting_user' }), {}, { notesRows })
+    expect(within(closed.feed).queryByRole('button', { name: save })).toBeNull()
+  })
+})
 
 describe('the rows of a dialog', () => {
   it('shows the client words as written: markup and addresses are only text', () => {
@@ -97,6 +138,32 @@ describe('the rows of a dialog', () => {
     ]
     const { feed } = showFeed(rows, headOf({ status: 'awaiting_approval', task: { turnNo: 1 } }))
     expect(text(within(feed).getByText(/Агент работал/))).toBe('Агент работал 2 мин 14 с')
+  })
+
+  it('stands «Ход работы» of a finished turn open by `/details`, and folds it back', () => {
+    const rows: FeedRow[] = [
+      requestRow('1'),
+      { ...stepRow('2', 1), at: '2026-10-17T09:00:00.000Z' },
+      { ...resultRow('3', 1), at: '2026-10-17T09:02:14.000Z' },
+    ]
+    const list = (details: boolean) => (
+      <FeedList
+        head={headOf({ status: 'awaiting_approval', task: { turnNo: 1 } })}
+        rows={rows}
+        siteUrl="https://kroshka.example"
+        openQuestionId={null}
+        liveCandidateId={null}
+        actions={actions()}
+        details={details}
+        activityOf={(turn) => <p>Ход хода {turn}</p>}
+      />
+    )
+    const { rerender } = render(list(true))
+    const line = () => screen.getByText(/Агент работал/).closest('details')!
+    expect(line().open).toBe(true)
+    expect(screen.getByText('Ход хода 1')).toBeTruthy()
+    rerender(list(false))
+    expect(line().open).toBe(false)
   })
 
   it('opens «Ход работы» of a finished turn only when the client unfolds it', () => {
@@ -198,6 +265,111 @@ describe('the rows of a dialog', () => {
     expect(text(feed)).not.toContain('Изменено файлов')
   })
 
+  // No change in git, not a word of files (docs/plan/61-chats-first.md, К19).
+  it('counts files only when some changed', () => {
+    const none = {
+      ...(resultRow('1', 1) as ResultRow),
+      next: 'done',
+      site: 'changed',
+      filesChanged: 0,
+    } satisfies ResultRow
+    const { feed } = showFeed([none], headOf({ status: 'done' }))
+    expect(text(feed)).not.toContain('Изменено файлов')
+    expect(text(feed)).toContain('Правка уже на сайте.')
+    expect(within(feed).getByRole('link', { name: 'Открыть сайт' })).toBeTruthy()
+  })
+
+  describe('of a chat without a project (docs/plan/61-chats-first.md, К18)', () => {
+    const chatFeed = (row: FeedRow, head: FeedHeadState) => showFeed([row], head, {}, {}, null).feed
+
+    it('answers with no word of a site or of files', () => {
+      const answer = {
+        ...(resultRow('1', 1, 'Вот пять вариантов.') as ResultRow),
+        next: 'awaiting_user',
+        site: 'none',
+        filesChanged: 0,
+      } satisfies ResultRow
+      const feed = chatFeed(answer, headOf({ status: 'awaiting_user' }))
+      expect(within(feed).getByRole('heading', { name: 'Ответ агента' })).toBeTruthy()
+      expect(text(feed)).toContain('Вот пять вариантов.')
+      expect(text(feed)).not.toMatch(/сайт|файл/iu)
+      expect(within(feed).queryByRole('link')).toBeNull()
+    })
+
+    const failure = (code: FeedFailureCode, site: 'none' | 'elsewhere'): FeedRow => ({
+      id: '1',
+      at: '2026-10-17T09:00:00.000Z',
+      type: 'feed.failure',
+      turn: 1,
+      code,
+      site,
+      credits: 'returned',
+      next: 'awaiting_user',
+      objects: [],
+    })
+    const cancelled = (site: 'none' | 'elsewhere'): FeedRow => ({
+      id: '1',
+      at: '2026-10-17T09:00:00.000Z',
+      type: 'feed.cancelled',
+      turn: 1,
+      by: 'customer',
+      site,
+      credits: 'returned',
+      objects: [],
+    })
+
+    // `site_files` is of a repository, which such a chat has not.
+    it.each(feedFailureCodes.filter((code) => code !== 'site_files'))(
+      'fails with %s and no word of a site or of files',
+      (code) => {
+        const feed = chatFeed(failure(code, 'none'), headOf({ status: 'awaiting_user' }))
+        expect(text(feed)).toContain(feedFailureTextOf(code, false))
+        expect(text(feed)).not.toMatch(/сайт|файл/iu)
+      },
+    )
+
+    it('tells to wait a minute after a failure it cannot retry yet, and to write on after that', () => {
+      const words = text(
+        chatFeed(failure('site_held', 'none'), headOf({ status: 'awaiting_user' })),
+      )
+      expect(words).toContain('Подождите минуту, прежде чем писать дальше.')
+      expect(words).toContain(feedFailureOpenText)
+      expect(words).not.toMatch(/недоступн/iu)
+    })
+
+    it('asks to sign in to a site, with no word of the admin pages of one', () => {
+      const words = text(
+        chatFeed(browserQuestionRow('1', 1, 'login'), headOf({ status: 'awaiting_user' })),
+      )
+      expect(words).toContain('вошли на сайт в браузере задачи')
+      expect(words).not.toMatch(/админк/iu)
+    })
+
+    it('asks to sign in to the admin pages when the chat has a site', () => {
+      const { feed } = showFeed(
+        [browserQuestionRow('1', 1, 'login')],
+        headOf({ status: 'awaiting_user' }),
+      )
+      expect(text(feed)).toContain(feedBrowserQuestionText.login)
+      expect(text(feed)).toContain('вошли в админку сайта')
+    })
+
+    it('stops with no word of a site or of files', () => {
+      const feed = chatFeed(cancelled('none'), headOf({ status: 'cancelled' }))
+      expect(text(feed)).toContain('Вы остановили задачу.')
+      expect(text(feed)).not.toMatch(/сайт|файл/iu)
+    })
+
+    it.each([
+      ['a failure', failure('technical', 'elsewhere'), 'awaiting_user'],
+      ['a cancellation', cancelled('elsewhere'), 'cancelled'],
+    ] as const)('names other sites in %s after work in its browser', (_, row, status) => {
+      expect(text(chatFeed(row, headOf({ status })))).toContain(
+        'То, что агент сделал на других сайтах, осталось.',
+      )
+    })
+  })
+
   it('explains a failure and a cancellation by their codes', () => {
     const rows: FeedRow[] = [
       {
@@ -283,7 +455,7 @@ describe('the rows of a dialog', () => {
     ]
     const { feed } = showFeed(rows, headOf({ status: 'awaiting_user' }))
     expect(text(feed)).toContain(
-      'Диалог не закрыт: напишите «продолжи», и агент продолжит с того места, где остановился.',
+      'Чат не закрыт: напишите «продолжи», и агент продолжит с того места, где остановился.',
     )
     expect(text(feed)).not.toContain('мы сохранили')
   })
@@ -313,7 +485,7 @@ describe('the rows of a dialog', () => {
     const { feed, handlers } = showFeed([row], head, { candidate: row.id })
     expect(within(feed).queryByRole('button', { name: 'Выпустить новую версию' })).toBeNull()
     expect(text(feed)).toContain(
-      'Сайт изменился после начала диалога. Сначала обновите рабочую копию.',
+      'Сайт изменился после начала чата. Сначала обновите рабочую копию.',
     )
     fireEvent.click(within(feed).getByRole('button', { name: 'Обновить рабочую копию' }))
     expect(handlers.onUpdate).toHaveBeenCalledTimes(1)
@@ -393,9 +565,87 @@ describe('the rows of a dialog', () => {
       within(feed).getAllByRole('heading', { name: 'Рабочую копию не обновили' }),
     ).toHaveLength(2)
     expect(text(feed)).toContain(
-      'На сайте за это время изменились те же места, что и в этом диалоге (файлов: 2), поэтому изменения не переносятся на новую версию сайта сами. Отмените этот диалог и опишите задачу в новом — агент сделает её на новой версии сайта.',
+      'На сайте за это время изменились те же места, что и в этом чате (файлов: 2), поэтому изменения не переносятся на новую версию сайта сами. Отмените этот чат и опишите задачу в новом — агент сделает её на новой версии сайта.',
     )
-    expect(text(feed)).toContain('Вы написали в диалог, пока мы обновляли рабочую копию')
+    expect(text(feed)).toContain('Вы написали в чат, пока мы обновляли рабочую копию')
+  })
+
+  it('says of an `/undo` that failed that nothing moved, as a card of a failure', () => {
+    const update = (
+      id: string,
+      outcome: 'rewind_failed' | 'redo_failed' | 'failed' | 'current',
+    ): FeedRow => ({
+      id,
+      at: '2026-10-17T09:50:00.000Z',
+      type: 'feed.update',
+      outcome,
+      conflicts: 0,
+    })
+    const { feed } = showFeed(
+      [
+        commandRow('13', 'turn_undo'),
+        update('14', 'rewind_failed'),
+        update('15', 'failed'),
+        update('16', 'current'),
+        update('17', 'redo_failed'),
+      ],
+      headOf({ status: 'awaiting_approval' }),
+    )
+    const color = (name: string) =>
+      getComputedStyle(within(feed).getByRole('heading', { name })).color
+    expect(text(feed)).toContain(
+      'Не получилось отменить последний запрос: переписка и файлы остались как были.',
+    )
+    expect(color('Запрос не отменён')).toBe(color('Рабочую копию не обновили'))
+    expect(color('Запрос не отменён')).not.toBe(color('Рабочая копия уже обновлена'))
+    expect(color('Запрос не возвращён')).toBe(color('Рабочую копию не обновили'))
+    expect(color('Запрос не возвращён')).not.toBe(color('Рабочая копия уже обновлена'))
+  })
+
+  it('says what `/redo` brought back, of the files only when the turn changed some (К19)', () => {
+    const redo = (id: string, files: boolean): FeedRow => ({
+      id,
+      at: '2026-10-17T09:50:00.000Z',
+      type: 'feed.redo',
+      turn: 2,
+      files,
+      open: false,
+    })
+    const { feed } = showFeed(
+      [commandRow('13', 'turn_redo'), redo('14', false), redo('15', true)],
+      headOf({ status: 'awaiting_user' }),
+    )
+    expect(text(feed)).toContain('Вы попросили вернуть отменённый запрос')
+    expect(within(feed).getAllByRole('listitem').map(text).slice(1)).toEqual([
+      'Отменённый запрос возвращён.',
+      'Отменённый запрос и его файлы возвращены.',
+    ])
+  })
+
+  it('says what `/undo` took back, and what stayed by what the chat left', () => {
+    const rewind = (id: string, site: 'none' | 'check' | 'elsewhere'): FeedRow => ({
+      id,
+      at: '2026-10-17T09:50:00.000Z',
+      type: 'feed.rewind',
+      turn: 2,
+      files: false,
+      site,
+    })
+    const { feed } = showFeed(
+      [
+        commandRow('13', 'turn_undo'),
+        rewind('14', 'none'),
+        rewind('15', 'check'),
+        rewind('16', 'elsewhere'),
+      ],
+      headOf({ status: 'awaiting_user' }),
+    )
+    expect(text(feed)).toContain('Вы попросили отменить последний запрос')
+    expect(within(feed).getAllByRole('listitem').map(text).slice(1)).toEqual([
+      'Последний запрос отменён.',
+      'Последний запрос отменён. То, что агент сделал на сайте через браузер, осталось: проверьте сайт.',
+      'Последний запрос отменён. То, что агент сделал на других сайтах, осталось.',
+    ])
   })
 
   it('tells a row newer than the page and a row that cannot be shown', () => {
@@ -491,6 +741,7 @@ describe('the browser of a task in the feed', () => {
     const onResume = vi.fn()
     render(
       <LiveBlock
+        withSite
         head={browserHeadOf({ browser: { controller: 'user' } })}
         steps={[]}
         browser={{ controlling: true, onResume, busy: false }}
@@ -512,6 +763,7 @@ describe('the browser of a task in the feed', () => {
   it('offers no button in the live block while the agent drives, on any width', () => {
     render(
       <LiveBlock
+        withSite
         head={browserHeadOf()}
         steps={[]}
         browser={{ controlling: false, onResume: vi.fn(), busy: false }}
@@ -525,11 +777,41 @@ describe('the browser of a task in the feed', () => {
 
 describe('the live block', () => {
   it('says why the dialog waits in the queue', () => {
-    render(<LiveBlock head={headOf({ status: 'queued', task: { waiting: 'site' } })} steps={[]} />)
+    render(
+      <LiveBlock
+        withSite
+        head={headOf({ status: 'queued', task: { waiting: 'site' } })}
+        steps={[]}
+      />,
+    )
     expect(screen.getByRole('heading', { name: 'Приняли, начинаем' })).toBeTruthy()
     expect(text(document.body)).toContain(
       'На сайте сейчас идёт другая работа. Начнём, когда она закончится.',
     )
+  })
+
+  it('tells a chat without a project of no work on a site (docs/plan/61, К18)', () => {
+    render(
+      <LiveBlock
+        head={headOf({ status: 'queued', task: { waiting: 'site' } })}
+        steps={[]}
+        withSite={false}
+      />,
+    )
+    expect(text(document.body)).toContain('Агент скоро возьмётся за работу.')
+    expect(text(document.body)).not.toContain('На сайте')
+  })
+
+  it('tells a chat without a project of a failure, not of a held site (docs/plan/61, К18)', () => {
+    render(
+      <LiveBlock
+        head={headOf({ status: 'running', task: { held: true } })}
+        steps={[]}
+        withSite={false}
+      />,
+    )
+    expect(text(document.body)).toContain('Произошёл сбой, мы его разбираем.')
+    expect(text(document.body)).not.toMatch(/сайт|файл/iu)
   })
 
   it('lists the stages of the turn at work', () => {
@@ -539,6 +821,7 @@ describe('the live block', () => {
     })
     render(
       <LiveBlock
+        withSite
         head={head}
         steps={[stepRow('2', 1) as never, stepRow('3', 1, 'save') as never]}
       />,
@@ -554,7 +837,12 @@ describe('the live block', () => {
       task: { turnNo: 2, runningSince: new Date().toISOString() },
     })
     render(
-      <LiveBlock head={head} steps={[stepRow('2', 2) as never]} activity={<p>Команды агента</p>} />,
+      <LiveBlock
+        withSite
+        head={head}
+        steps={[stepRow('2', 2) as never]}
+        activity={<p>Команды агента</p>}
+      />,
     )
     const details = screen.getByText('Ход работы').closest('details')!
     expect(details.open).toBe(true)
@@ -564,6 +852,7 @@ describe('the live block', () => {
   it('shows no «Ход работы» while the client drives the browser or the site is held', () => {
     render(
       <LiveBlock
+        withSite
         head={headOf({ status: 'running', task: { held: true } })}
         steps={[stepRow('2', 1) as never]}
         activity={<p>Команды агента</p>}
@@ -575,6 +864,7 @@ describe('the live block', () => {
   it('shows the site held instead of the stages', () => {
     render(
       <LiveBlock
+        withSite
         head={headOf({ status: 'running', task: { held: true } })}
         steps={[stepRow('2', 1) as never]}
       />,
@@ -594,14 +884,14 @@ describe('the live block', () => {
         outcome: null,
       },
     })
-    render(<LiveBlock head={head} steps={[]} />)
+    render(<LiveBlock withSite head={head} steps={[]} />)
     expect(screen.getByRole('heading', { name: 'Выкладываем' })).toBeTruthy()
     expect(text(document.body)).toContain('Устанавливаем на сайт. Делаем резервную копию')
   })
 
   it('is not drawn while the dialog waits for the client', () => {
     const { container } = render(
-      <LiveBlock head={headOf({ status: 'awaiting_user' })} steps={[]} />,
+      <LiveBlock withSite head={headOf({ status: 'awaiting_user' })} steps={[]} />,
     )
     expect(container.textContent).toBe('')
   })
@@ -708,6 +998,7 @@ describe('«Отменить выпуск»', () => {
   it('says the undo at work in the live block of a closed dialog', () => {
     render(
       <LiveBlock
+        withSite
         head={headOf({
           status: 'done',
           undo: {

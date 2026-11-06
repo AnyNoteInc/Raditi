@@ -6,6 +6,7 @@ import {
   dbStateHashMaterial,
   DomainError,
   siteAccessPath,
+  siteIdOf,
   type DbAbsentState,
   type DbObjectState,
   type DbOperation,
@@ -787,7 +788,7 @@ export async function releaseFixture(
       data: { role: options.role },
     })
   const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
-  const siteId = task.siteId
+  const siteId = siteIdOf(task)
   await db.site.update({
     where: { id: siteId },
     data: { status: options.siteStatus ?? 'active' },

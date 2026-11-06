@@ -91,7 +91,8 @@ export class AttachmentFiles {
 
   async read(input: {
     taskId: string
-    siteId: string
+    /** null — a chat without a site: its files have none either. */
+    siteId: string | null
     attachmentIds: readonly string[]
   }): Promise<BrowserFile[]> {
     const unknown = () => browserTaskError('BROWSER_ATTACHMENT_UNKNOWN')

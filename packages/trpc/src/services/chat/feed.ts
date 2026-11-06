@@ -1,8 +1,11 @@
 import type { Prisma, PrismaClient } from '@repo/db'
 import {
   effortOfModelClass,
+  feedFileName,
   feedLimits,
+  feedMarkdown,
   feedTaskHeadSchema,
+  leaseScopeOf,
   modelClassSchema,
   previewOrigin,
   readFeedRow,
@@ -18,8 +21,12 @@ import { accessibleTask, taskNotFound } from './access.ts'
 import { feedBrowser, type FeedBrowser } from './browser.ts'
 import { candidateCountsOf, dialogCommands, dialogFacts, type DialogFacts } from './dialog-facts.ts'
 import { dialogRetry, movingRequest } from './dialog-state.ts'
+import { siteClosed } from '../site-capabilities.ts'
 
 type Tx = Prisma.TransactionClient
+
+/** A long chat is many pages of rows: the snapshot stays open while they are read. */
+const EXPORT_TIMEOUT_MS = 30_000
 
 /** The preview of a dialog as its panel shows it. */
 export interface FeedPreview {
@@ -85,7 +92,6 @@ export async function readDialogFeed(
           workspaceId: true,
           siteId: true,
           title: true,
-          mode: true,
           status: true,
           attempt: true,
           turnNo: true,
@@ -142,9 +148,8 @@ export async function feedHead(
   tx: Tx,
   task: {
     id: string
-    siteId: string
+    siteId: string | null
     title: string | null
-    mode: 'work' | 'chat'
     status: TaskStatus
     attempt: number
     turnNo: number
@@ -156,7 +161,7 @@ export async function feedHead(
   },
 ): Promise<FeedTaskHead> {
   const lease = await tx.siteLease.findUnique({
-    where: { siteId: task.siteId },
+    where: { siteId: leaseScopeOf(task) },
     select: { heldForOperator: true, holderTaskId: true },
   })
   // The work of the agent began with the last words or «Продолжить»; a press of a command
@@ -184,7 +189,6 @@ export async function feedHead(
   return feedTaskHeadSchema.parse({
     id: task.id,
     title: task.title,
-    mode: task.mode,
     status: task.status,
     attempt: task.attempt,
     turnNo: task.turnNo,
@@ -229,11 +233,60 @@ async function feedPage(
   return { events, cursor: page.length > 0 ? String(page.at(-1)!.id) : after, more }
 }
 
-/** The head of one dialog with its site and alias, for `task.get`. */
+/**
+ * `task.export`: every row of a chat from one snapshot, as the screen would read them, written out
+ * as a Markdown file. A chat of a closed project is read, so it is exported too.
+ */
+export async function readDialogExport(
+  db: PrismaClient,
+  input: { userId: string; taskId: string },
+): Promise<{ fileName: string; markdown: string }> {
+  return db.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SET TRANSACTION READ ONLY`
+      const task = await tx.task.findFirst({
+        where: accessibleTask(input.userId, input.taskId),
+        select: { id: true, siteId: true, title: true },
+      })
+      if (task === null) throw taskNotFound()
+      const rows: FeedItem[] = []
+      let cursor = '0'
+      for (;;) {
+        const page = await feedPage(tx, task.id, cursor)
+        rows.push(...page.events)
+        if (!page.more) break
+        cursor = page.cursor
+      }
+      return {
+        fileName: feedFileName(task.title),
+        markdown: feedMarkdown({ title: task.title, rows, withSite: task.siteId !== null }),
+      }
+    },
+    { isolationLevel: 'RepeatableRead', timeout: EXPORT_TIMEOUT_MS },
+  )
+}
+
+/** The project of a chat as its screen shows it; `closed` — it reads, it takes no words (К39). */
+export interface DialogProject {
+  id: string
+  name: string
+  url: string
+  closed: boolean
+}
+
+/** The head of one dialog with its project and alias, for `task.get`. */
 export async function readDialogHead(
   db: PrismaClient,
   input: { userId: string; taskId: string },
-): Promise<FeedTaskHead & { siteId: string; alias: string; createdAt: Date; updatedAt: Date }> {
+): Promise<
+  FeedTaskHead & {
+    siteId: string | null
+    project: DialogProject | null
+    alias: string
+    createdAt: Date
+    updatedAt: Date
+  }
+> {
   return db.$transaction(
     async (tx) => {
       await tx.$executeRaw`SET TRANSACTION READ ONLY`
@@ -242,9 +295,9 @@ export async function readDialogHead(
         select: {
           id: true,
           siteId: true,
+          site: { select: { id: true, name: true, url: true, status: true } },
           alias: true,
           title: true,
-          mode: true,
           status: true,
           attempt: true,
           turnNo: true,
@@ -258,9 +311,14 @@ export async function readDialogHead(
       })
       if (task === null) throw taskNotFound()
       const head = await feedHead(tx, task)
+      const { site } = task
       return {
         ...head,
         siteId: task.siteId,
+        project:
+          site === null
+            ? null
+            : { id: site.id, name: site.name, url: site.url, closed: siteClosed(site.status) },
         alias: task.alias,
         createdAt: task.createdAt,
         updatedAt: task.updatedAt,

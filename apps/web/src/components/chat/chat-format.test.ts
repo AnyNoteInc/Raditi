@@ -11,11 +11,12 @@ function dialog(id: string, status: DialogListItem['status'], createdAt: string)
     id,
     title: id,
     status,
-    mode: 'work',
     undo: null,
     answered: false,
+    rewound: false,
     createdAt: new Date(createdAt),
     updatedAt: new Date(createdAt),
+    project: null,
   }
 }
 

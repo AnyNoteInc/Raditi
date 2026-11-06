@@ -1,11 +1,13 @@
 import { pluralRu } from '../plural.ts'
 import type { PreviewUnavailableReason } from '../preview/preview-state.ts'
-import type { ChatCommandId } from '../release/chat-commands.ts'
 import type { VersionBump } from '../release/semver.ts'
 import type {
+  FeedRedoPayload,
+  FeedRewindPayload,
   FeedBrowserReason,
   FeedCancelledBy,
   FeedCeilingReason,
+  FeedCommandId,
   FeedCreditsState,
   FeedFailurePayload,
   FeedObjectKind,
@@ -16,7 +18,6 @@ import type {
   FeedUpdateOutcome,
   FeedUndoReason,
   FeedStep,
-  TaskMode,
   TaskWaitingReason,
 } from './client-feed.ts'
 import type { TaskStatus } from './task-status.ts'
@@ -66,6 +67,12 @@ export const taskStatusLabel: Readonly<Record<TaskStatus, string>> = Object.free
  */
 export const taskAnsweredLabel = 'Агент ответил'
 
+/**
+ * The same dialog right after `/undo`: it waits for nothing either, but the answer it would name
+ * was just taken back (docs/plan/61-chats-first.md, §9, question 18: a text the owner has not seen).
+ */
+export const taskRewoundLabel = 'Запрос отменён'
+
 /** The second line of a dialog in the list; null — the status has none. */
 export const taskStatusListHint: Readonly<Record<TaskStatus, string | null>> = Object.freeze({
   queued: null,
@@ -88,13 +95,9 @@ export const taskListGroupLabel = Object.freeze({
   earlier: 'Ранее',
 })
 
-export const taskModeLabel: Readonly<Record<TaskMode, string>> = Object.freeze({
-  work: 'Работа',
-  chat: 'Чат',
-})
-
 /** Nouns: the same words read as «in progress» and as «done». */
 export const feedStepLabel: Readonly<Record<FeedStep, string>> = Object.freeze({
+  code: 'Загружаем код проекта',
   work: 'Работа над задачей',
   save: 'Сохранение работы',
   site: 'Работа с содержимым сайта',
@@ -106,18 +109,23 @@ export const feedStepLabel: Readonly<Record<FeedStep, string>> = Object.freeze({
 // ---------------------------------------------------------------------------------------------
 
 const FEED_QUEUED_TEXT =
-  'Агент скоро возьмётся за работу. Страницу можно закрыть — результат появится в этом диалоге.'
+  'Агент скоро возьмётся за работу. Страницу можно закрыть — результат появится в этом чате.'
 
 /** Why the task waits in the queue, by `tasks.waiting`. */
 export const feedWaitingText: Readonly<Record<TaskWaitingReason, string>> = Object.freeze({
   agents:
-    'Ваша задача в очереди: сейчас все мощности ИИ-агента заняты. Начнём, как только возьмёмся, — результат появится в этом диалоге.',
+    'Ваша задача в очереди: сейчас все мощности ИИ-агента заняты. Начнём, как только возьмёмся, — результат появится в этом чате.',
   site: 'На сайте сейчас идёт другая работа. Начнём, когда она закончится.',
 })
 
-/** The text of the live block of a `queued` task. */
-export const feedQueuedText = (waiting: TaskWaitingReason | null): string =>
-  waiting === null ? FEED_QUEUED_TEXT : feedWaitingText[waiting]
+/**
+ * The text of the live block of a `queued` task. A chat without a site waits for nobody's work
+ * on one: what its lease is held by is its own pass ending.
+ */
+export const feedQueuedText = (waiting: TaskWaitingReason | null, withSite = true): string =>
+  waiting === null || (waiting === 'site' && !withSite)
+    ? FEED_QUEUED_TEXT
+    : feedWaitingText[waiting]
 
 /**
  * The text under the heading of the live block. `deploying`, `verifying` and `rolled_back`
@@ -126,12 +134,15 @@ export const feedQueuedText = (waiting: TaskWaitingReason | null): string =>
 export const feedLiveText = Object.freeze({
   preparing: 'Готовим рабочее место для агента. На сайте пока ничего не меняется.',
   running:
-    'Агент работает в своём изолированном облаке. Обычно это занимает до 20 минут. Страницу можно закрыть — результат появится в этом диалоге.',
+    'Агент работает в своём изолированном облаке. Обычно это занимает до 20 минут. Страницу можно закрыть — результат появится в этом чате.',
   /** `held` of the head while the task is `running`: in place of the stages and the timer. */
-  held: 'При работе с сайтом произошёл сбой, мы его разбираем. Страницу можно закрыть — результат появится в этом диалоге.',
+  held: 'При работе с сайтом произошёл сбой, мы его разбираем. Страницу можно закрыть — результат появится в этом чате.',
+  /** The same of a chat without a site (docs/plan/61-chats-first.md, К18). */
+  heldNoSite:
+    'Произошёл сбой, мы его разбираем. Страницу можно закрыть — результат появится в этом чате.',
   /** A task in the browser while the agent works in it (docs/plan/57-browser-tasks.md). */
   browser:
-    'Агент работает в браузере задачи — за ним можно наблюдать. Страницу можно закрыть — результат появится в этом диалоге.',
+    'Агент работает в браузере задачи — за ним можно наблюдать. Страницу можно закрыть — результат появится в этом чате.',
   /** A task in the browser while the customer controls it. */
   browserControl: 'Вы управляете браузером, агент ждёт.',
 })
@@ -155,30 +166,63 @@ export const feedWorkedText = (seconds: number): string =>
 type EndedSite = FeedFailurePayload['site']
 type ResultSite = FeedResultPayload['site']
 
-/** The second sentence of a failure and of a cancellation, by the trusted `site`. */
-export const feedEndedSiteText: Readonly<Record<EndedSite, string>> = Object.freeze({
+/**
+ * The second sentence of a failure and of a cancellation, by the trusted `site`; null — a chat
+ * without a site, where nothing was done in its browser, has none.
+ */
+export const feedEndedSiteText: Readonly<Record<EndedSite, string | null>> = Object.freeze({
   unchanged: 'На сайте ничего не изменилось.',
   restored: 'Правки, которые агент успел внести, мы вернули — сайт такой же, как до задачи.',
   check:
     'Часть правок могла остаться на сайте. Откройте сайт и проверьте; если что-то не так — напишите нам.',
+  none: null,
+  elsewhere: 'То, что агент сделал на других сайтах, осталось.',
 })
 
 const SITE_MAY_HAVE_CHANGED =
   'Часть правок могла попасть на сайт. Откройте сайт и проверьте; если что-то не так — напишите нам.'
 
-/** The line about the site under «Готово»; null — the agent answered without changing it. */
+/**
+ * The line about the site under «Готово»; null — the agent answered without changing it, or the
+ * chat has no site.
+ */
 export const feedDoneSiteText: Readonly<Record<ResultSite, string | null>> = Object.freeze({
   unchanged: null,
   changed: 'Правка уже на сайте.',
   check: SITE_MAY_HAVE_CHANGED,
+  none: null,
 })
 
 /** The line about the site on the «Что изменится» card of `awaiting_approval`. */
-export const feedApprovalSiteText: Readonly<Record<ResultSite, string>> = Object.freeze({
+export const feedApprovalSiteText: Readonly<Record<ResultSite, string | null>> = Object.freeze({
   unchanged: 'На сайте пока ничего не изменилось.',
   changed: 'Правки текста уже на сайте. Изменения в файлах ждут вашего решения.',
   check: SITE_MAY_HAVE_CHANGED,
+  none: null,
 })
+
+/**
+ * What stays after `/undo`, by what the whole task left (`feed.rewind`): the second sentence of its
+ * row; null — nothing.
+ */
+const feedRewindSiteText: Readonly<Record<FeedRewindPayload['site'], string | null>> =
+  Object.freeze({
+    unchanged: null,
+    check: 'То, что агент сделал на сайте через браузер, осталось: проверьте сайт.',
+    none: null,
+    elsewhere: feedEndedSiteText.elsewhere,
+  })
+
+/** The row of `/undo` in the feed. */
+export function feedRewindText(row: Pick<FeedRewindPayload, 'files' | 'site'>): string {
+  const undone = row.files ? 'Переписка и файлы возвращены.' : 'Последний запрос отменён.'
+  const site = feedRewindSiteText[row.site]
+  return site === null ? undone : `${undone} ${site}`
+}
+
+/** The row of `/redo` in the feed. */
+export const feedRedoText = (row: Pick<FeedRedoPayload, 'files'>): string =>
+  row.files ? 'Отменённый запрос и его файлы возвращены.' : 'Отменённый запрос возвращён.'
 
 /** Shown when `filesChanged` of a result is a number. */
 export const feedFilesChangedText = (count: number): string =>
@@ -413,23 +457,20 @@ export const feedFailureKeptText = 'Изменения, готовые до эт
  * 'awaiting_user'`, owner's decision of 28.10.2026): the client writes, and the agent goes on.
  */
 export const feedFailureOpenText =
-  'Диалог не закрыт: напишите «продолжи», и агент продолжит с того места, где остановился.'
+  'Чат не закрыт: напишите «продолжи», и агент продолжит с того места, где остановился.'
 
 /**
  * The last sentence of a result that left the dialog open (`feed.result` with `next:
  * 'awaiting_user'`, owner's decision of 26.10.2026): nothing to release, the client writes on.
  */
-export const feedResultOpenText =
-  'Если нужно что-то ещё, напишите — агент продолжит в этом диалоге.'
+export const feedResultOpenText = 'Если нужно что-то ещё, напишите — агент продолжит в этом чате.'
 
 /** The lines next to «Попробовать ещё» on the failure card. */
 export const feedRetryText = Object.freeze({
   button: 'Попробовать ещё',
   hint: 'Повторная попытка может стоить больше кредитов.',
   /** The code allowed a retry, but the counted attempts are spent. */
-  noAttempts: 'Больше попыток для этой задачи нет. Начните новый диалог или напишите нам.',
-  /** The site is not connected. */
-  siteNotConnected: 'Сайт ещё не подключён. Задачи можно будет ставить после подключения',
+  noAttempts: 'Больше попыток для этой задачи нет. Начните новый чат или напишите нам.',
 })
 
 /** The input area of a dialog. */
@@ -437,8 +478,8 @@ export const feedInputText = Object.freeze({
   /** The hint of the field while the agent works; read from the field itself. */
   disabled: 'Написать можно будет, когда агент закончит или задаст вопрос.',
   /** In place of the field when the task has ended. */
-  finished: 'Диалог завершён. Чтобы попросить что-то ещё, начните новый.',
-  newDialog: 'Новый диалог',
+  finished: 'Чат завершён. Чтобы попросить что-то ещё, начните новый.',
+  newDialog: 'Новый чат',
   /** The two standing lines under the field. */
   mistakes: 'ИИ может допускать ошибки. Проверяйте важное.',
   noSecrets: 'Не отправляйте в чат пароли и ключи: доступы задаются в разделе «Переменные»',
@@ -454,10 +495,10 @@ export const feedTooLongText = (limit: number): string =>
 /** States of the feed itself and of the list of dialogs. */
 export const feedStateText = Object.freeze({
   /** A poll failed: what is shown stays. */
-  pollFailed: 'Не удалось обновить диалог. Пробуем ещё раз…',
+  pollFailed: 'Не удалось обновить чат. Пробуем ещё раз…',
   /** The button after three failed polls. */
   refresh: 'Обновить',
-  listFailed: 'Не удалось загрузить диалоги.',
+  listFailed: 'Не удалось загрузить чаты.',
   listRetry: 'Повторить',
   /** The link of the «not found» screen. */
   toProjects: 'К проектам',
@@ -500,15 +541,17 @@ export const feedMediaAddedText = (count: number): string =>
   `Добавится медиафайлов: ${groupDigits(count)}`
 
 /** The customer's own command, as the feed shows it (`feed.request` of the kind `command`). */
-export const feedCommandText: Readonly<Record<ChatCommandId, string>> = Object.freeze({
+export const feedCommandText: Readonly<Record<FeedCommandId, string>> = Object.freeze({
   release: 'Вы попросили выпустить новую версию',
   preview: 'Вы открыли предпросмотр',
   reset: 'Вы сбросили данные предпросмотра',
   update: 'Вы попросили обновить рабочую копию',
-  // Never a row of the kind `command`: the press is written as `retry` (`feedRowText.retry`).
-  retry: 'Вы попросили попробовать ещё раз',
-  cancel: 'Вы отменили диалог',
+  cancel: 'Вы отменили чат',
   undo: 'Вы попросили отменить выпуск',
+  init: 'Вы попросили описать проект для агента',
+  compact: 'Вы попросили сжать переписку',
+  turn_undo: 'Вы попросили отменить последний запрос',
+  turn_redo: 'Вы попросили вернуть отменённый запрос',
 })
 
 /** `feed.decision` of the kind `release`. */
@@ -533,11 +576,11 @@ export function feedReleaseText(outcome: FeedReleaseOutcome, tag: string): strin
     case 'rolled_back':
       return `Версию ${version} установить не удалось, и мы вернули сайт к прежнему состоянию.`
     case 'failed':
-      return `Версию ${version} установить не удалось. На сайте ничего не изменилось.`
+      return `Версию ${version} установить не удалось. Выпуск ничего не изменил на сайте.`
     case 'unknown':
       return `Не удалось подтвердить, что версия ${version} установлена. Мы разбираемся; пока не закончим, новые версии на сайт не выкладываются.`
     case 'refused':
-      return `Выпуск версии ${version} не начат. На сайте ничего не изменилось.`
+      return `Выпуск версии ${version} не начат. Выпуск ничего не изменил на сайте.`
   }
 }
 
@@ -545,7 +588,7 @@ export function feedReleaseText(outcome: FeedReleaseOutcome, tag: string): strin
 export const feedReleaseReasonText: Readonly<Record<FeedReleaseReason, string>> = Object.freeze({
   conflict:
     'На сайте за это время изменились те же файлы или записи. Обновите рабочую копию и проверьте изменения ещё раз.',
-  outdated: 'Сайт изменился после начала диалога. Обновите рабочую копию и выпустите версию снова.',
+  outdated: 'Сайт изменился после начала чата. Обновите рабочую копию и выпустите версию снова.',
   not_started: 'Установка не началась вовремя. Попробуйте выпустить версию ещё раз.',
   site_check: 'После установки сайт не прошёл проверку.',
   technical: 'Произошёл технический сбой.',
@@ -563,7 +606,7 @@ export const feedReleaseReasonText: Readonly<Record<FeedReleaseReason, string>> 
   slug_taken:
     'На сайте уже есть страница с адресом, который выбрал агент. Попросите агента выбрать другой адрес и выпустите версию снова.',
   values_unavailable:
-    'Не удалось показать изменения базы данных перед выпуском. Напишите в диалог, чтобы агент собрал изменения заново, и выпустите версию снова.',
+    'Не удалось показать изменения базы данных перед выпуском. Напишите в чат, чтобы агент собрал изменения заново, и выпустите версию снова.',
   created_id_in_code:
     'В коде изменений указан номер новой страницы из предпросмотра, а на сайте у неё будет другой номер. Попросите агента ссылаться на новую страницу по её адресу и выпустите версию снова.',
   site_unreachable:
@@ -586,9 +629,9 @@ export function feedReleaseKeptText(
       ? 'Новые таблицы и поля базы данных остались на сайте: прежняя версия их не использует, а удаление стёрло бы то, что сайт успел в них записать.'
       : null,
     kept.records === 1
-      ? 'Страница или запись, которую добавил выпуск, осталась на сайте: после выпуска её изменили или к ней уже что-то добавили, поэтому мы её не убрали. Если она не нужна, удалите её в админке сайта.'
+      ? 'Страница или запись, которую добавил выпуск, осталась на сайте: после выпуска её изменили или к ней уже что-то добавили, поэтому мы её не убрали. Если она не нужна, удалите её в админке.'
       : kept.records > 1
-        ? `Страницы и записи, которые добавил выпуск, остались на сайте (${groupDigits(kept.records)}): после выпуска их изменили или к ним уже что-то добавили, поэтому мы их не убрали. Если они не нужны, удалите их в админке сайта.`
+        ? `Страницы и записи, которые добавил выпуск, остались на сайте (${groupDigits(kept.records)}): после выпуска их изменили или к ним уже что-то добавили, поэтому мы их не убрали. Если они не нужны, удалите их в админке.`
         : null,
   ].filter((line): line is string => line !== null)
 }
@@ -622,11 +665,11 @@ export function feedUndoText(
     case 'rolled_back':
       return `Вернуть версию ${feedVersionText(versions.returnsTo)} не удалось, и сайт остался на версии ${undone}.`
     case 'failed':
-      return `Отменить выпуск ${undone} не удалось. На сайте ничего не изменилось.`
+      return `Отменить выпуск ${undone} не удалось. Отмена ничего не изменила на сайте.`
     case 'unknown':
       return `Не удалось подтвердить, что выпуск ${undone} отменён. Мы разбираемся; пока не закончим, новые версии на сайт не выкладываются.`
     case 'refused':
-      return `Отмена выпуска ${undone} не начата. На сайте ничего не изменилось.`
+      return `Отмена выпуска ${undone} не начата. Отмена ничего не изменила на сайте.`
   }
 }
 
@@ -667,28 +710,34 @@ export function feedUndoKeptText(kept: number): string | null {
     : null
 }
 
-/** The title of the plate of an «Обновить» that left no new revision (`feed.update`). */
+/** The title of the plate of `feed.update`: an «Обновить» with no revision, a failed `/undo`, `/redo`. */
 export const feedUpdateTitle: Readonly<Record<FeedUpdateOutcome, string>> = Object.freeze({
   emptied: 'Изменения уже на сайте',
   conflict: 'Рабочую копию не обновили',
   current: 'Рабочая копия уже обновлена',
   withdrawn: 'Рабочую копию не обновили',
   failed: 'Рабочую копию не обновили',
+  rewind_failed: 'Запрос не отменён',
+  redo_failed: 'Запрос не возвращён',
 })
 
-/** What came of the «Обновить»; `conflicts` — files of the dialog the site changed too. */
+/** What came of the command; `conflicts` — files of the dialog the site changed too. */
 export function feedUpdateText(outcome: FeedUpdateOutcome, conflicts: number): string {
   switch (outcome) {
     case 'emptied':
-      return 'Все изменения этого диалога уже есть на сайте, выпускать их не нужно.'
+      return 'Все изменения этого чата уже есть на сайте, выпускать их не нужно.'
     case 'conflict':
-      return `На сайте за это время изменились те же места, что и в этом диалоге${conflicts > 0 ? ` (файлов: ${groupDigits(conflicts)})` : ''}, поэтому изменения не переносятся на новую версию сайта сами. Отмените этот диалог и опишите задачу в новом — агент сделает её на новой версии сайта.`
+      return `На сайте за это время изменились те же места, что и в этом чате${conflicts > 0 ? ` (файлов: ${groupDigits(conflicts)})` : ''}, поэтому изменения не переносятся на новую версию сайта сами. Отмените этот чат и опишите задачу в новом — агент сделает её на новой версии сайта.`
     case 'current':
-      return 'Изменения этого диалога уже собраны на последней версии сайта.'
+      return 'Изменения этого чата уже собраны на последней версии сайта.'
     case 'withdrawn':
-      return 'Вы написали в диалог, пока мы обновляли рабочую копию, поэтому её не обновили. Когда агент закончит, попросите обновить её снова.'
+      return 'Вы написали в чат, пока мы обновляли рабочую копию, поэтому её не обновили. Когда агент закончит, попросите обновить её снова.'
     case 'failed':
       return 'Произошёл технический сбой. Попробуйте обновить рабочую копию ещё раз позже.'
+    case 'rewind_failed':
+      return 'Не получилось отменить последний запрос: переписка и файлы остались как были.'
+    case 'redo_failed':
+      return 'Не получилось вернуть отменённый запрос: он остался отменённым.'
   }
 }
 
@@ -752,6 +801,20 @@ export const feedBrowserQuestionText: Readonly<Record<FeedBrowserReason, string>
   unconfirmed:
     'Агент закончил, но мы не нашли на сайте сохранённого результата. Проверьте сайт в браузере задачи и напишите агенту, что сделать дальше.',
 })
+
+/**
+ * A chat without a project has no admin pages of a site to sign in to (docs/plan/61-chats-first.md,
+ * К18). `unconfirmed` is an old row's: nothing writes that reason now, and a chat without a project
+ * has no such rows. The other reasons name no site of the client's.
+ */
+const feedBrowserQuestionNoSiteText: Partial<Readonly<Record<FeedBrowserReason, string>>> =
+  Object.freeze({
+    login: `Агенту нужно, чтобы вы вошли на сайт в браузере задачи. Войдите там и нажмите ${RESUME}. Пароль агент не увидит.`,
+  })
+
+/** The words of a browser question, in a chat with a site or without one. */
+export const feedBrowserQuestionTextOf = (reason: FeedBrowserReason, withSite: boolean): string =>
+  (withSite ? undefined : feedBrowserQuestionNoSiteText[reason]) ?? feedBrowserQuestionText[reason]
 
 /** An object of the site in a result, a failure or a cancellation, by its kind. */
 export const feedObjectKindLabel: Readonly<Record<FeedObjectKind, string>> = Object.freeze({

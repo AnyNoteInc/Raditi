@@ -245,6 +245,27 @@ describe('MCP tools of a dialog with a preview', () => {
       url: 'https://site.example.test',
       stack: 'wordpress',
     })
+    // A chat without a site: nulls, and what it knows of its browser (plan 61, §5.5).
+    const chat = {
+      ...scopeOf(null),
+      siteId: null,
+      stack: null,
+      url: null,
+      requirements: { repository: false, browser: false },
+    }
+    expect(siteInfoOf(chat, address)).toEqual({
+      stack: null,
+      url: null,
+      siteUrl: null,
+      browser: null,
+    })
+    const browser = { siteUrl: null, startPath: null, controller: 'agent' as const }
+    expect(siteInfoOf(chat, address, browser)).toEqual({
+      stack: null,
+      url: null,
+      siteUrl: null,
+      browser,
+    })
   })
 
   it('refuses a browser profile in production, without previews, without storage or a seam without it', () => {

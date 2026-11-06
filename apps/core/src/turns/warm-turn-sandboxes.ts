@@ -12,7 +12,7 @@ const OPEN_STATUSES = [
   'awaiting_approval',
 ] as const
 
-/** Of these tasks, the ones not ended whose site is not deleted. */
+/** Of these tasks, the ones not ended whose site, if they have one, is not deleted. */
 export async function openTasks(
   prisma: Pick<PrismaClient, 'task'>,
   taskIds: readonly string[],
@@ -21,7 +21,7 @@ export async function openTasks(
     where: {
       id: { in: [...taskIds] },
       status: { in: [...OPEN_STATUSES] },
-      site: { deletedAt: null },
+      OR: [{ siteId: null }, { site: { deletedAt: null } }],
     },
     select: { id: true },
   })
@@ -30,8 +30,8 @@ export async function openTasks(
 
 /**
  * The warm containers of core's own Docker (owner's decision of 26.10.2026; spec §8, «Тёплая
- * песочница»): a container waits while its task is open and its site is not deleted, and every
- * waiting one is removed when core stops; a container a turn took stays with that turn.
+ * песочница»): a container waits while its task is open and its site, if it has one, is not
+ * deleted, and every waiting one is removed when core stops; a container a turn took stays with that turn.
  */
 export class CoreWarmSandboxes extends WarmSandboxes implements OnModuleDestroy {
   constructor(

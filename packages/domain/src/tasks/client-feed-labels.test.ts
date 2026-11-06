@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import * as commands from '../release/chat-commands.ts'
 import { previewUnavailableReasons } from '../preview/preview-state.ts'
-import { chatCommandIds } from '../release/chat-commands.ts'
 import { versionBumps } from '../release/semver.ts'
 import {
   feedBrowserReasons,
   feedCancelledBys,
   feedCeilingReasons,
+  feedCommandIds,
   feedCreditsStates,
   feedLimits,
   feedObjectKinds,
@@ -13,9 +14,11 @@ import {
   feedReleaseOutcomes,
   feedReleaseReasons,
   feedSteps,
-  taskModes,
+  feedUndoReasons,
+  feedUpdateOutcomes,
   taskWaitingReasons,
 } from './client-feed.ts'
+import * as failures from './client-feed-failures.ts'
 import * as labels from './client-feed-labels.ts'
 import {
   creditsCountText,
@@ -24,6 +27,7 @@ import {
   feedApprovalSiteText,
   feedBrowserButtons,
   feedBrowserQuestionText,
+  feedBrowserQuestionTextOf,
   feedBrowserQuestionTitle,
   feedObjectKindLabel,
   feedObjectStatusLabel,
@@ -37,6 +41,14 @@ import {
   feedReleaseKeptText,
   feedReleaseReasonText,
   feedReleaseText,
+  feedUndoConfirmedText,
+  feedUndoKeptText,
+  feedUndoReasonText,
+  feedRedoText,
+  feedRewindText,
+  feedUndoText,
+  feedUpdateText,
+  feedUpdateTitle,
   feedReleaseTitle,
   feedVersionBumpLabel,
   feedVersionText,
@@ -66,7 +78,6 @@ import {
   feedWorkedText,
   pluralRu,
   taskListGroupLabel,
-  taskModeLabel,
   taskStatusLabel,
   feedResultOpenText,
   taskStatusListHint,
@@ -88,7 +99,10 @@ const renewal = { date: '18 октября', credits: 300 }
 
 /** What the functions of the catalogue return, over the inputs that change the wording. */
 const composed: string[] = [
-  ...[null, ...taskWaitingReasons].map(feedQueuedText),
+  ...[null, ...taskWaitingReasons].flatMap((waiting) => [
+    feedQueuedText(waiting),
+    feedQueuedText(waiting, false),
+  ]),
   ...[0, 14, 134, 1200].flatMap((seconds) => [feedDurationText(seconds), feedWorkedText(seconds)]),
   feedFilesChangedText(3),
   ...feedCancelledBys.flatMap((by) => [
@@ -116,6 +130,22 @@ const composed: string[] = [
   ]),
   feedRecordsChangedText(3),
   feedMediaAddedText(2500),
+  ...feedUpdateOutcomes.flatMap((outcome) => [
+    feedUpdateText(outcome, 0),
+    feedUpdateText(outcome, 3),
+  ]),
+  ...feedReleaseKeptText({ records: 1, tables: 1 }),
+  ...feedReleaseKeptText({ records: 4, tables: 0 }),
+  feedUndoConfirmedText('v1.4.0'),
+  ...feedReleaseOutcomes.map((outcome) =>
+    feedUndoText(outcome, { undone: 'v1.4.0', version: 'v1.4.1', returnsTo: 'v1.3.0' }),
+  ),
+  ...feedUndoReasons.map(feedUndoReasonText),
+  feedUndoKeptText(3) ?? '',
+  ...feedBrowserReasons.flatMap((reason) => [
+    feedBrowserQuestionTextOf(reason, true),
+    feedBrowserQuestionTextOf(reason, false),
+  ]),
 ]
 
 const tables = Object.values(labels).filter((value) => typeof value !== 'function')
@@ -134,28 +164,37 @@ describe('totality of the catalogue', () => {
     expect(withHint).toEqual(['awaiting_user', 'awaiting_approval'])
   })
 
-  it('has a text for every stage, waiting reason, mode, credits state and way of cancelling', () => {
+  it('has a text for every stage, waiting reason, credits state and way of cancelling', () => {
     expect(sorted(Object.keys(feedStepLabel))).toEqual(sorted(feedSteps))
     expect(sorted(Object.keys(feedWaitingText))).toEqual(sorted(taskWaitingReasons))
-    expect(sorted(Object.keys(taskModeLabel))).toEqual(sorted(taskModes))
     expect(sorted(Object.keys(feedCreditsText))).toEqual(sorted(feedCreditsStates))
     expect(sorted(Object.keys(feedCancelledText))).toEqual(sorted(feedCancelledBys))
     expect(sorted(Object.keys(feedCeilingButtons))).toEqual(sorted(feedCeilingReasons))
   })
 
-  it('names the groups of the list and the modes of a task', () => {
+  it('names the groups of the list', () => {
     expect(taskListGroupLabel).toEqual({
       awaiting: 'Ждёт вашего решения',
       today: 'Сегодня',
       earlier: 'Ранее',
     })
-    expect(taskModeLabel).toEqual({ work: 'Работа', chat: 'Чат' })
   })
 
   it('has a phrase about the site for every state an outcome may carry', () => {
-    expect(sorted(Object.keys(feedEndedSiteText))).toEqual(['check', 'restored', 'unchanged'])
-    expect(sorted(Object.keys(feedDoneSiteText))).toEqual(['changed', 'check', 'unchanged'])
-    expect(sorted(Object.keys(feedApprovalSiteText))).toEqual(['changed', 'check', 'unchanged'])
+    expect(sorted(Object.keys(feedEndedSiteText))).toEqual([
+      'check',
+      'elsewhere',
+      'none',
+      'restored',
+      'unchanged',
+    ])
+    expect(sorted(Object.keys(feedDoneSiteText))).toEqual(['changed', 'check', 'none', 'unchanged'])
+    expect(sorted(Object.keys(feedApprovalSiteText))).toEqual([
+      'changed',
+      'check',
+      'none',
+      'unchanged',
+    ])
   })
 
   it('has a question text for every ceiling reason', () => {
@@ -164,7 +203,7 @@ describe('totality of the catalogue', () => {
   })
 
   it('has a text for every command, version kind, release outcome and reason, and preview gap', () => {
-    expect(sorted(Object.keys(feedCommandText))).toEqual(sorted(chatCommandIds))
+    expect(sorted(Object.keys(feedCommandText))).toEqual(sorted(feedCommandIds))
     expect(sorted(Object.keys(feedVersionBumpLabel))).toEqual(sorted(versionBumps))
     expect(sorted(Object.keys(feedReleaseTitle))).toEqual(sorted(feedReleaseOutcomes))
     expect(sorted(Object.keys(feedReleaseReasonText))).toEqual(sorted(feedReleaseReasons))
@@ -182,11 +221,28 @@ describe('totality of the catalogue', () => {
     expect(tables).toMatch(/^Новые таблицы и поля базы данных остались на сайте/)
     // The row keeps a count alone: the words name a page and a post, and both reasons.
     expect(records).toBe(
-      'Страница или запись, которую добавил выпуск, осталась на сайте: после выпуска её изменили или к ней уже что-то добавили, поэтому мы её не убрали. Если она не нужна, удалите её в админке сайта.',
+      'Страница или запись, которую добавил выпуск, осталась на сайте: после выпуска её изменили или к ней уже что-то добавили, поэтому мы её не убрали. Если она не нужна, удалите её в админке.',
     )
     expect(feedReleaseKeptText({ records: 3, tables: 0 })).toEqual([
-      'Страницы и записи, которые добавил выпуск, остались на сайте (3): после выпуска их изменили или к ним уже что-то добавили, поэтому мы их не убрали. Если они не нужны, удалите их в админке сайта.',
+      'Страницы и записи, которые добавил выпуск, остались на сайте (3): после выпуска их изменили или к ним уже что-то добавили, поэтому мы их не убрали. Если они не нужны, удалите их в админке.',
     ])
+  })
+
+  // What the browser of the chat did may stand on the site (docs/plan/61-chats-first.md, §5.8).
+  it('speaks of what a release or an undo did, never of the site as a whole', () => {
+    expect(feedReleaseText('failed', 'v2.0.0')).toBe(
+      'Версию 2.0.0 установить не удалось. Выпуск ничего не изменил на сайте.',
+    )
+    expect(feedReleaseText('refused', 'v2.0.0')).toBe(
+      'Выпуск версии 2.0.0 не начат. Выпуск ничего не изменил на сайте.',
+    )
+    const versions = { undone: 'v2.0.0', version: 'v2.0.1', returnsTo: 'v1.9.0' }
+    expect(feedUndoText('failed', versions)).toBe(
+      'Отменить выпуск 2.0.0 не удалось. Отмена ничего не изменила на сайте.',
+    )
+    expect(feedUndoText('refused', versions)).toBe(
+      'Отмена выпуска 2.0.0 не начата. Отмена ничего не изменила на сайте.',
+    )
   })
 
   it('shows a version without the letter of the tag', () => {
@@ -258,12 +314,13 @@ describe('status labels', () => {
     expect(feedCardTitle.question).toBe('Вопрос агента')
     expect(feedCardTitle.answer).toBe('Ответ агента')
     expect(feedResultOpenText).toBe(
-      'Если нужно что-то ещё, напишите — агент продолжит в этом диалоге.',
+      'Если нужно что-то ещё, напишите — агент продолжит в этом чате.',
     )
   })
 
   it('names the stages with nouns', () => {
     expect(feedStepLabel).toEqual({
+      code: 'Загружаем код проекта',
       work: 'Работа над задачей',
       save: 'Сохранение работы',
       site: 'Работа с содержимым сайта',
@@ -275,13 +332,21 @@ describe('status labels', () => {
 describe('the live block', () => {
   it('chooses the queue text by the waiting reason, not by time', () => {
     expect(feedQueuedText(null)).toBe(
-      'Агент скоро возьмётся за работу. Страницу можно закрыть — результат появится в этом диалоге.',
+      'Агент скоро возьмётся за работу. Страницу можно закрыть — результат появится в этом чате.',
     )
     expect(feedQueuedText('agents')).toBe(
-      'Ваша задача в очереди: сейчас все мощности ИИ-агента заняты. Начнём, как только возьмёмся, — результат появится в этом диалоге.',
+      'Ваша задача в очереди: сейчас все мощности ИИ-агента заняты. Начнём, как только возьмёмся, — результат появится в этом чате.',
     )
     expect(feedQueuedText('site')).toBe(
       'На сайте сейчас идёт другая работа. Начнём, когда она закончится.',
+    )
+  })
+
+  it('tells a chat without a site of no work on one (docs/plan/61, К18)', () => {
+    expect(feedQueuedText('site', false)).toBe(feedQueuedText(null))
+    expect(feedQueuedText('agents', false)).toBe(feedQueuedText('agents'))
+    expect(feedLiveText.heldNoSite).toBe(
+      'Произошёл сбой, мы его разбираем. Страницу можно закрыть — результат появится в этом чате.',
     )
   })
 
@@ -291,13 +356,13 @@ describe('the live block', () => {
 
   it('says «обычно», not «не больше», about the twenty minutes', () => {
     expect(feedLiveText.running).toBe(
-      'Агент работает в своём изолированном облаке. Обычно это занимает до 20 минут. Страницу можно закрыть — результат появится в этом диалоге.',
+      'Агент работает в своём изолированном облаке. Обычно это занимает до 20 минут. Страницу можно закрыть — результат появится в этом чате.',
     )
     expect(feedLiveText.preparing).toBe(
       'Готовим рабочее место для агента. На сайте пока ничего не меняется.',
     )
     expect(feedLiveText.held).toBe(
-      'При работе с сайтом произошёл сбой, мы его разбираем. Страницу можно закрыть — результат появится в этом диалоге.',
+      'При работе с сайтом произошёл сбой, мы его разбираем. Страницу можно закрыть — результат появится в этом чате.',
     )
   })
 
@@ -328,6 +393,13 @@ describe('what is known about the site and the credits', () => {
     expect(feedEndedSiteText.check).toBe(
       'Часть правок могла остаться на сайте. Откройте сайт и проверьте; если что-то не так — напишите нам.',
     )
+  })
+
+  it('says nothing of a site to a chat without one, and of others once it acted there', () => {
+    expect(feedEndedSiteText.none).toBeNull()
+    expect(feedDoneSiteText.none).toBeNull()
+    expect(feedApprovalSiteText.none).toBeNull()
+    expect(feedEndedSiteText.elsewhere).toBe('То, что агент сделал на других сайтах, осталось.')
   })
 
   it('says nothing about the site when a finished task left it as it was', () => {
@@ -569,16 +641,15 @@ describe('the neutral lines of the reader and of the input area', () => {
     expect(feedRetryText).toEqual({
       button: 'Попробовать ещё',
       hint: 'Повторная попытка может стоить больше кредитов.',
-      noAttempts: 'Больше попыток для этой задачи нет. Начните новый диалог или напишите нам.',
-      siteNotConnected: 'Сайт ещё не подключён. Задачи можно будет ставить после подключения',
+      noAttempts: 'Больше попыток для этой задачи нет. Начните новый чат или напишите нам.',
     })
   })
 
   it('quotes the input area', () => {
     expect(feedInputText).toEqual({
       disabled: 'Написать можно будет, когда агент закончит или задаст вопрос.',
-      finished: 'Диалог завершён. Чтобы попросить что-то ещё, начните новый.',
-      newDialog: 'Новый диалог',
+      finished: 'Чат завершён. Чтобы попросить что-то ещё, начните новый.',
+      newDialog: 'Новый чат',
       mistakes: 'ИИ может допускать ошибки. Проверяйте важное.',
       noSecrets: 'Не отправляйте в чат пароли и ключи: доступы задаются в разделе «Переменные»',
       secret:
@@ -594,9 +665,9 @@ describe('the neutral lines of the reader and of the input area', () => {
 
   it('quotes the states of the feed and of the list', () => {
     expect(feedStateText).toEqual({
-      pollFailed: 'Не удалось обновить диалог. Пробуем ещё раз…',
+      pollFailed: 'Не удалось обновить чат. Пробуем ещё раз…',
       refresh: 'Обновить',
-      listFailed: 'Не удалось загрузить диалоги.',
+      listFailed: 'Не удалось загрузить чаты.',
       listRetry: 'Повторить',
       toProjects: 'К проектам',
       openSite: 'Открыть сайт',
@@ -620,6 +691,16 @@ describe('a task in the browser', () => {
       expect(feedBrowserQuestionText[reason]).toContain('«Продолжить работу агента»')
   })
 
+  it('asks a chat without a project to sign in to a site, not to the admin pages of one', () => {
+    expect(feedBrowserQuestionTextOf('login', false)).toBe(
+      'Агенту нужно, чтобы вы вошли на сайт в браузере задачи. Войдите там и нажмите «Продолжить работу агента». Пароль агент не увидит.',
+    )
+    for (const reason of feedBrowserReasons)
+      expect(feedBrowserQuestionTextOf(reason, true)).toBe(feedBrowserQuestionText[reason])
+    for (const reason of feedBrowserReasons.filter((reason) => reason !== 'login'))
+      expect(feedBrowserQuestionTextOf(reason, false)).toBe(feedBrowserQuestionText[reason])
+  })
+
   it('promises nothing about the site it did not read there', () => {
     expect(feedBrowserQuestionText.unconfirmed).toMatch(/не нашли на сайте/u)
     expect(feedBrowserQuestionText.unconfirmed).not.toMatch(/вернули|отменили|откат/iu)
@@ -629,5 +710,47 @@ describe('a task in the browser', () => {
     expect(sorted(Object.keys(feedObjectKindLabel))).toEqual(sorted(feedObjectKinds))
     expect(sorted(Object.keys(feedObjectStatusLabel))).toEqual(sorted(feedObjectStatuses))
     expect(feedObjectText.untitled).toBe('Без названия')
+  })
+})
+
+// The sources of these catalogues, the bodies of their functions too: chat-texts.test.ts of web.
+describe('the row of `/undo` (docs/plan/61-chats-first.md, §5.13)', () => {
+  it('says what went back, and what stays by what the whole task left', () => {
+    expect(feedRewindText({ files: false, site: 'none' })).toBe('Последний запрос отменён.')
+    expect(feedRewindText({ files: false, site: 'unchanged' })).toBe('Последний запрос отменён.')
+    expect(feedRewindText({ files: false, site: 'check' })).toBe(
+      'Последний запрос отменён. То, что агент сделал на сайте через браузер, осталось: проверьте сайт.',
+    )
+    expect(feedRewindText({ files: false, site: 'elsewhere' })).toBe(
+      'Последний запрос отменён. То, что агент сделал на других сайтах, осталось.',
+    )
+    expect(feedRewindText({ files: true, site: 'check' })).toBe(
+      'Переписка и файлы возвращены. То, что агент сделал на сайте через браузер, осталось: проверьте сайт.',
+    )
+  })
+})
+
+describe('the row of `/redo` and a press that failed (docs/plan/61-chats-first.md, §5.13)', () => {
+  it('names the files only when the turn changed some (К19)', () => {
+    expect(feedRedoText({ files: false })).toBe('Отменённый запрос возвращён.')
+    expect(feedRedoText({ files: true })).toBe('Отменённый запрос и его файлы возвращены.')
+  })
+
+  it('says the request stays undone', () => {
+    expect(feedUpdateTitle.redo_failed).toBe('Запрос не возвращён')
+    expect(feedUpdateText('redo_failed', 0)).toBe(
+      'Не получилось вернуть отменённый запрос: он остался отменённым.',
+    )
+  })
+})
+
+describe('the word of a chat (docs/plan/61-chats-first.md, К26)', () => {
+  it('composes «чат» into the texts a client reads', () => {
+    const texts = [...allTexts, ...stringsOf(failures), ...stringsOf(commands)]
+    expect(texts).toContain('Новый чат')
+    expect(feedUpdateText('current', 0)).toBe(
+      'Изменения этого чата уже собраны на последней версии сайта.',
+    )
+    expect(texts.filter((text) => /диалог/i.test(text))).toEqual([])
   })
 })

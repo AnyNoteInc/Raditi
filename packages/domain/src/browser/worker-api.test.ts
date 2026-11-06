@@ -36,8 +36,13 @@ describe('API of the browser worker', () => {
   it('reads ensure, its answer and close', () => {
     const ensure = { sessionId, taskId, siteId, takeControl: true }
     expect(browserEnsureRequestSchema.parse(ensure)).toEqual(ensure)
+    // A chat without a site says so: a forgotten field is not one.
+    const open = { ...ensure, siteId: null }
+    expect(browserEnsureRequestSchema.parse(open)).toEqual(open)
     for (const bad of [
       { ...ensure, takeControl: undefined },
+      { ...ensure, siteId: undefined },
+      { ...ensure, siteId: 'site' },
       { ...ensure, taskId: 'task' },
       // Where the browser goes is the site's address in the database, never the caller's word.
       { ...ensure, siteUrl: 'https://news.example.ru' },

@@ -52,6 +52,7 @@ function setup(currentUser: User | null = user) {
   const db = {
     userConsent: { findMany: vi.fn().mockResolvedValue(requiredConsents) },
     site: { findFirst: vi.fn<(args: unknown) => Promise<unknown>>().mockResolvedValue(null) },
+    siteLease: { findUnique: vi.fn<(args: unknown) => Promise<unknown>>().mockResolvedValue(null) },
   }
   const context: Context = {
     prisma: db as unknown as PrismaClient,
@@ -75,7 +76,7 @@ function setup(currentUser: User | null = user) {
 describe('project.get', () => {
   it('returns the site with its readable host and whether an operation holds it', async () => {
     const { db, caller } = setup()
-    db.site.findFirst.mockResolvedValue({ ...row, ...legacy, lease: null })
+    db.site.findFirst.mockResolvedValue({ ...row, ...legacy })
     await expect(caller.project.get({ id: siteId })).resolves.toEqual({
       ...row,
       host: 'кофейня.рф',
@@ -100,7 +101,6 @@ describe('project.get', () => {
       const { db, caller } = setup()
       db.site.findFirst.mockResolvedValue({
         ...row,
-        lease: null,
         provisioningStages: [{ status }],
         initialVersion: stored,
         gitRepositories: [],
@@ -114,7 +114,7 @@ describe('project.get', () => {
 
   it('looks the site up only among the workspaces the user is a member of', async () => {
     const { db, caller } = setup()
-    db.site.findFirst.mockResolvedValue({ ...row, ...legacy, lease: null })
+    db.site.findFirst.mockResolvedValue({ ...row, ...legacy })
     await caller.project.get({ id: siteId })
     expect(db.site.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -155,8 +155,13 @@ describe('project.get', () => {
     ['a free lease row', free, 'free'],
   ] as const)('reports %s', async (_name, lease, state) => {
     const { db, caller } = setup()
-    db.site.findFirst.mockResolvedValue({ ...row, ...legacy, lease })
+    db.site.findFirst.mockResolvedValue({ ...row, ...legacy })
+    db.siteLease.findUnique.mockResolvedValue(lease)
     await expect(caller.project.get({ id: siteId })).resolves.toMatchObject({ state })
+    // The key is written by hand since the relation left: a wrong one would read as `free`.
+    expect(db.siteLease.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { siteId } }),
+    )
   })
 
   it('rejects an id that is not a UUID before reading', async () => {

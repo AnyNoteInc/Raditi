@@ -8,6 +8,7 @@ import {
   candidateFactsSchema,
   candidateFilesSchema,
   candidateMediaSchema,
+  conflict,
   dbPlanSchema,
   dbPlanViewSchema,
   feedRowSchema,
@@ -223,6 +224,114 @@ export async function rejectTurn(
     UPDATE task_turns SET rejected_at = COALESCE(rejected_at, now())
     WHERE task_id = ${taskId}::uuid AND turn_no = ${turnNo}`
   return marked === 1
+}
+
+/**
+ * `/undo` of a chat (docs/plan/61-chats-first.md, §5.14): the client took a completed turn back, so
+ * the planner does not go on from it and its words do not reach the agent again. Not a rejection:
+ * @repo/billing keeps charging the turn, and nothing is given back (К29). Only once, and only a
+ * turn whose result was taken. Its id, or null — no such turn, and nothing is written.
+ */
+export async function undoTurn(
+  tx: Pick<Tx, '$queryRaw'>,
+  input: { taskId: string; turnNo: number },
+): Promise<string | null> {
+  const parsed = rejectSchema.safeParse(input)
+  if (!parsed.success) throw badRequest('Invalid undone turn')
+  const { taskId, turnNo } = parsed.data
+  const undone = await tx.$queryRaw<Array<{ id: string }>>`
+    UPDATE task_turns SET undone_at = now()
+    WHERE task_id = ${taskId}::uuid AND turn_no = ${turnNo} AND status = 'completed'
+      AND rejected_at IS NULL AND undone_at IS NULL
+    RETURNING id`
+  return undone[0]?.id ?? null
+}
+
+/**
+ * `/redo` of a chat (docs/plan/61-chats-first.md, §5.14): the turn `/undo` took counts again, so
+ * the next pass goes on from it and its words stand as read. No money moved either way. Its id, or
+ * null — no such turn, and nothing is written.
+ */
+export async function redoTurn(
+  tx: Pick<Tx, '$queryRaw'>,
+  input: { taskId: string; turnNo: number },
+): Promise<string | null> {
+  const parsed = rejectSchema.safeParse(input)
+  if (!parsed.success) throw badRequest('Invalid redone turn')
+  const { taskId, turnNo } = parsed.data
+  const redone = await tx.$queryRaw<Array<{ id: string }>>`
+    UPDATE task_turns SET undone_at = NULL
+    WHERE task_id = ${taskId}::uuid AND turn_no = ${turnNo} AND status = 'completed'
+      AND rejected_at IS NULL AND undone_at IS NOT NULL
+    RETURNING id`
+  return redone[0]?.id ?? null
+}
+
+/** Where a chat with the repository may stand when `/undo` takes its last turn back. */
+const rewindableStatuses = ['awaiting_user', 'awaiting_approval'] as const
+type RewindableStatus = (typeof rewindableStatuses)[number]
+
+/** Where `/undo` and `/redo` leave a chat with the repository. */
+const rewindSchema = z.strictObject({
+  taskId: id,
+  turnNo: turnNoSchema,
+  to: z.enum(rewindableStatuses),
+})
+
+/**
+ * The status of a chat that waits at `turnNo`, with no turn assigned and no release in work: the
+ * one move of `/undo` and `/redo`. false — the chat is elsewhere, and nothing is written.
+ */
+async function moveWaitingChat(
+  tx: Pick<Tx, '$queryRaw'>,
+  input: { taskId: string; turnNo: number; to: RewindableStatus },
+): Promise<boolean> {
+  const parsed = rewindSchema.safeParse(input)
+  if (!parsed.success) throw badRequest('Invalid rewind of a chat')
+  const { taskId, turnNo, to } = parsed.data
+  for (const from of rewindableStatuses) if (from !== to) assertTransition(from, to)
+  const moved = await tx.$queryRaw<Array<{ id: string }>>`
+    UPDATE tasks t SET status = ${to}::"TaskStatus", waiting = NULL, updated_at = now()
+    WHERE t.id = ${taskId}::uuid AND t.status::text = ANY(${[...rewindableStatuses]}::text[])
+      AND t.turn_no = ${turnNo}
+      AND NOT EXISTS (
+        SELECT 1 FROM turn_assignments a WHERE a.task_id = t.id AND a.finished_at IS NULL)
+      AND NOT EXISTS (
+        SELECT 1 FROM site_releases r
+        WHERE r.task_id = t.id AND r.status NOT IN ('installed', 'rolled_back', 'failed'))
+    RETURNING t.id`
+  return moved.length === 1
+}
+
+/**
+ * The move of `/undo` in a chat with the repository (docs/plan/61-chats-first.md, §5.14), after its
+ * branch went back: the chat waits with the candidate that stands now (`to: awaiting_approval`) or
+ * for the next words (`awaiting_user`, nothing stands), and the turn is undone (`undoTurn`). Under
+ * the turn number the caller saw, while the chat waits, with no turn assigned and no release in
+ * work. Its id, or null — the chat is elsewhere, and nothing is written.
+ */
+export async function rewindDialog(
+  tx: Pick<Tx, '$queryRaw'>,
+  input: { taskId: string; turnNo: number; to: RewindableStatus },
+): Promise<string | null> {
+  if (!(await moveWaitingChat(tx, input))) return null
+  const turnId = await undoTurn(tx, { taskId: input.taskId, turnNo: input.turnNo })
+  if (turnId === null) throw conflict('The last turn of the chat is no longer there to undo')
+  return turnId
+}
+
+/**
+ * The move of `/redo` in a chat with the repository, after its branch came forward: as `rewindDialog`,
+ * the chat waits as it did before `/undo` and the turn counts again (`redoTurn`). Its id, or null.
+ */
+export async function redoDialog(
+  tx: Pick<Tx, '$queryRaw'>,
+  input: { taskId: string; turnNo: number; to: RewindableStatus },
+): Promise<string | null> {
+  if (!(await moveWaitingChat(tx, input))) return null
+  const turnId = await redoTurn(tx, { taskId: input.taskId, turnNo: input.turnNo })
+  if (turnId === null) throw conflict('The undone turn of the chat is no longer there to redo')
+  return turnId
 }
 
 /** Where a dialog waits without a turn: what the sweeper of reserves may close. */
@@ -553,6 +662,22 @@ export async function excludeTurnDbOperations(
   const { count } = await tx.previewDbOperation.updateMany({
     where: { taskId, turnNo, excluded: false },
     data: { excluded: true },
+  })
+  return count
+}
+
+/**
+ * `/redo`: the database writes of the turn `/undo` took come back into the plan. No turn was
+ * written after it, and a turn that completed had none excluded until then. How many rows came back.
+ */
+export async function includeTurnDbOperations(
+  tx: Pick<Tx, 'previewDbOperation'>,
+  input: { taskId: string; turnNo: number },
+): Promise<number> {
+  const { taskId, turnNo } = turnOfTask.parse(input)
+  const { count } = await tx.previewDbOperation.updateMany({
+    where: { taskId, turnNo, excluded: true },
+    data: { excluded: false },
   })
   return count
 }

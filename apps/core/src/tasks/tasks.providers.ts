@@ -23,6 +23,7 @@ import { CandidateBuilder } from './candidate-builder.ts'
 import { candidateClientValues } from './candidate-client-values.ts'
 import { candidateGitOf, type CandidateGit } from './candidate-git.ts'
 import { CandidateRebase } from './candidate-rebase.ts'
+import { CandidateRewind } from './candidate-rewind.ts'
 import { LivePasses } from './live-passes.ts'
 import { PassRunner } from './pass-runner.ts'
 import { PassSettlement } from './pass-settlement.ts'
@@ -129,6 +130,17 @@ export const taskProviders: Provider[] = [
         queue,
         adapter: getSiteAdapter,
       }),
+    inject: [PRISMA, CANDIDATE_GIT, CandidateBuilder, SITE_LEASES, JOB_QUEUE],
+  },
+  {
+    provide: CandidateRewind,
+    useFactory: (
+      prisma: PrismaClient,
+      git: CandidateGit | null,
+      candidates: CandidateBuilder | null,
+      leases: SiteLeaseStore,
+      queue: JobQueue,
+    ) => new CandidateRewind({ db: prisma, git, candidates, leases, queue }),
     inject: [PRISMA, CANDIDATE_GIT, CandidateBuilder, SITE_LEASES, JOB_QUEUE],
   },
   TurnsProcessor,

@@ -11,6 +11,7 @@ import { promisify } from 'node:util'
 import {
   isDomainError,
   isPageBrowserError,
+  OPEN_WEB_POLICY,
   type BrowserTaskPolicy,
   type BrowserVerificationPlan,
   type CloudBrowserEvent,
@@ -51,6 +52,56 @@ const PAGES: Record<string, string> = {
        <input aria-label="Число" autocomplete="one-time-code">
        <button type="button">Войти</button>
      </form>`,
+  ),
+  '/card': html(
+    'Оплата картой',
+    `<form>
+       <label>Компания <input name="company"></label>
+       <input aria-label="Поле один" autocomplete="cc-number">
+       <input aria-label="Поле два" autocomplete="billing cc-csc">
+       <input aria-label="Поле три" autocomplete="cc-exp">
+       <input aria-label="Поле четыре" name="card_holder">
+       <input aria-label="Поле пять" id="pan">
+       <input aria-label="Поле шесть" name="payment[cvv]">
+       <input aria-label="Поле семь">
+       <input aria-label="Поле восемь" name="cvc">
+       <input aria-label="Поле девять" name="pan_number">
+       <input aria-label="Поле десять" id="card-pan">
+       <input aria-label="Поле одиннадцать" name="payment[pan]">
+       <textarea aria-label="Поле двенадцать" name="card_number"></textarea>
+       <textarea aria-label="Поле тринадцать" autocomplete="cc-number"></textarea>
+       <input aria-label="Поле четырнадцать">
+       <input aria-label="Поле пятнадцать" name="pan-number">
+       <input aria-label="Поле шестнадцать" name="bank_pan">
+       <input aria-label="Поле семнадцать" id="bank-pan">
+       <input aria-label="Страна проживания" name="japan">
+       <input id="wildcard-filter" aria-label="Отбор" value="Новости">
+       <h2>Новости</h2>
+       <select aria-label="Месяц" autocomplete="cc-exp-month">
+         <option value="06">06</option>
+         <option value="07" selected>07</option>
+         <option value="08">08</option>
+       </select>
+       <select aria-label="Год" autocomplete="cc-exp-year">
+         <option value="2028">2028</option>
+         <option value="2029" selected>2029</option>
+       </select>
+       <select aria-label="Срок месяц" name="card_exp_month">
+         <option value="ten">Октябрь</option>
+         <option value="eleven" selected>Ноябрь</option>
+       </select>
+       <select aria-label="Вид доставки">
+         <option>Курьер</option>
+         <option selected>Самовывоз</option>
+       </select>
+       <p id="echo"></p>
+       <input type="submit" name="card" value="Оплатить">
+     </form>
+     <script>
+       document.querySelector('[autocomplete="billing cc-csc"]').addEventListener('input', (event) => {
+         document.getElementById('echo').textContent = 'Код ' + event.target.value
+       })
+     </script>`,
   ),
   '/editor': html(
     'Редактор',
@@ -336,9 +387,28 @@ describe.skipIf(!enabled || !installed)('the cloud browser on a local Chromium',
       endpoint: server.wsEndpoint(),
       allowedHosts: [],
       localSites: [origin, elsewhere],
+      openWeb: false,
+      platformHosts: [],
       startUrl: `${origin}${path}`,
       viewport: { width: 1280, height: 800 },
       policy,
+      onEvent: (event) => events.push(event),
+    })
+    return session
+  }
+
+  /** The browser of a chat without a site (docs/plan/61-chats-first.md, К12). */
+  const openWeb = async () => {
+    events = []
+    session = await factory.open({
+      endpoint: server.wsEndpoint(),
+      allowedHosts: [],
+      localSites: [],
+      openWeb: true,
+      platformHosts: ['raditi.ru'],
+      startUrl: null,
+      viewport: { width: 1280, height: 800 },
+      policy: OPEN_WEB_POLICY,
       onEvent: (event) => events.push(event),
     })
     return session
@@ -452,6 +522,104 @@ describe.skipIf(!enabled || !installed)('the cloud browser on a local Chromium',
     // Its references still act on the page after the fields' own reads.
     await browser.act({ tool: 'web_click', ref: refOf(tree, 'button', 'Войти') })
   }, 30_000)
+
+  it('never shows the agent a card: its number, code and expiry, whatever the page calls them', async () => {
+    const browser = await open('/card')
+    let tree = (await browser.observe({})).tree
+    const fill = (name: string, text: string) =>
+      browser.act({ tool: 'web_fill', ref: refOf(tree, 'textbox', name), text })
+    await fill('Компания', 'ООО Ромашка')
+    await fill('Поле один', '4111111111111111')
+    await fill('Поле два', '737')
+    await fill('Поле три', '12/27')
+    await fill('Поле четыре', 'IVAN PETROV')
+    await fill('Поле пять', '5555555555554444')
+    await fill('Поле шесть', '912')
+    // No attribute tells this field is a card's: the number itself does.
+    await fill('Поле семь', '4000 0000 0000 0002')
+    await fill('Поле восемь', '4242')
+    await fill('Поле девять', 'значение девять')
+    await fill('Поле десять', 'значение десять')
+    await fill('Поле одиннадцать', 'значение одиннадцать')
+    await fill('Поле двенадцать', '6011 1111 1111 1117 12/27 123')
+    await fill('Поле тринадцать', '3782 822463 10005')
+    // The number among other digits, in a field nothing marks.
+    await fill('Поле четырнадцать', '5105 1051 0510 5100 12/27 321')
+    await fill('Поле пятнадцать', 'значение пятнадцать')
+    await fill('Поле шестнадцать', 'значение шестнадцать')
+    await fill('Поле семнадцать', 'значение семнадцать')
+    await fill('Страна проживания', 'Япония')
+    tree = (await browser.observe({})).tree
+    for (const secret of [
+      '4111111111111111',
+      '737',
+      '12/27',
+      'IVAN PETROV',
+      '5555555555554444',
+      '912',
+      '4000 0000 0000 0002',
+      '4242',
+      'значение девять',
+      'значение десять',
+      'значение одиннадцать',
+      'значение пятнадцать',
+      'значение шестнадцать',
+      'значение семнадцать',
+      '6011 1111 1111 1117',
+      '3782 822463 10005',
+      '5105 1051 0510 5100',
+      '321',
+      'Октябрь',
+      'Ноябрь',
+    ])
+      expect(tree, secret).not.toContain(secret)
+    // The expiry in lists: which is chosen is not told, by a mark or by the one name that is gone.
+    expect(tree).not.toMatch(/option "(?:06|07|08|2028|2029)"/)
+    expect(tree.match(/option "\[hidden\]" \[selected\]/g)).toBeNull()
+    expect(tree).toContain('option "Самовывоз" [selected]')
+    // The code the page echoes is hidden as well; its other fields and buttons stay as they were.
+    expect(tree).toContain('Код [hidden]')
+    expect(tree).toMatch(/textbox "Компания" \[ref=e\d+\]: ООО Ромашка/)
+    expect(tree).toMatch(/textbox "Страна проживания" .*\[ref=e\d+\]: Япония/)
+    // A word that only holds «card» is no card: neither the field nor the page loses it.
+    expect(tree).toMatch(/textbox "Отбор" \[ref=e\d+\]: Новости/)
+    expect(tree).toMatch(/heading "Новости"/)
+    expect(tree).toContain('button "Оплатить"')
+    await browser.act({ tool: 'web_click', ref: refOf(tree, 'textbox', 'Компания') })
+  }, 30_000)
+
+  it('starts a chat without a site on an empty page, and opens any public site by address (К12)', async () => {
+    const browser = await openWeb()
+    expect(browser.tabs()).toEqual([{ pageId: 1, url: 'about:blank', title: '' }])
+    expect((await browser.observe({})).tree).not.toContain('Оплата')
+    // The agent by its address, from the empty page.
+    const landed = await browser.act({ tool: 'web_open', url: `${PAY}/checkout?order=5` })
+    expect(landed.page.url).toBe(`${PAY}/checkout?order=5`)
+    const tree = (await browser.observe({})).tree
+    expect(tree).toContain('Оплата заказа 5')
+    await browser.act({ tool: 'web_click', ref: refOf(tree, 'button', 'Оплатить') })
+    expect(await browser.act({ tool: 'web_wait', ms: 3_000, text: 'оплачено' })).toMatchObject({
+      matched: true,
+    })
+    // The client from the address line, while they hold the browser.
+    browser.setController('user')
+    expect((await browser.navigate(`${PAY}/checkout?order=6`)).url).toBe(`${PAY}/checkout?order=6`)
+    browser.setController('agent')
+    // Plain http, an address, a port the proxy does not open, a name of the platform: never.
+    for (const url of [
+      'http://pay.example.com/',
+      'https://127.0.0.1/',
+      'https://pay.example.com:8080/',
+      'https://app.raditi.ru/',
+    ])
+      await expect(browser.act({ tool: 'web_open', url }), url).rejects.toSatisfy(
+        (error) => codeOf(error) === 'denied',
+      )
+    expect(browser.tabs()[0]?.url).toBe(`${PAY}/checkout?order=6`)
+    expect(await browser.signIn(SAVED)).toBe('absent')
+    // The next test counts the requests of the other site from none.
+    payHits.length = 0
+  }, 60_000)
 
   it('acts by references inside a frame, and writes Russian text where the focus is', async () => {
     const browser = await open('/editor')

@@ -40,8 +40,13 @@ export type ReleaseChoice = PreparedRelease['choices'][number]
 /** A variable of a site as its settings show it: never the value. */
 export type SiteEnvVar = Outputs['siteEnv']['list']['variables'][number]
 
-/** What a site can be worked on with now, as the server decides it (docs/plan/57, Б9). */
-export type SiteCapabilities = Outputs['project']['get']['capabilities']
+/** One project of the cabinet as the picker of a new chat shows it. */
+export type ProjectListItem = Outputs['project']['list'][number]
+/** The folders of «По проектам», counted by the server (docs/plan/61-chats-first.md, К23). */
+export type ChatFolder = Outputs['task']['folders']['folders'][number]
+/** A chat as its page opens it. */
+export type ChatProject = NonNullable<Outputs['task']['get']['project']>
+
 /** A file sent with the messages of a task, as `attachment.list` names it. */
 export type TaskAttachment = Outputs['attachment']['list'][number]
 /** The cloud browser of a task in the head of its feed (docs/plan/57, Б12–Б18). */

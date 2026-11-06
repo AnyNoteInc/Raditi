@@ -164,6 +164,31 @@ describe.skipIf(!databaseUrl)('PostgreSQL: checkpoints of what a task made in it
     expect(await db.browserCheckpoint.count({ where: { taskId: task.id } })).toBe(0)
   })
 
+  it('moves `updated_at` only when the object changed: a pass that reads it again leaves it', async () => {
+    const { task, session } = await browserTask()
+    const at = { taskId: task.id, sessionId: session.id, ref: post('42') }
+    const read = found('42')
+    const first = await upsertBrowserCheckpoint(db, { ...at, state: 'verified', verified: read })
+
+    const again = await upsertBrowserCheckpoint(db, { ...at, state: 'verified', verified: read })
+    expect(again.updatedAt).toEqual(first.updatedAt)
+    // Opening its editor again changes nothing of it.
+    const seen = await upsertBrowserCheckpoint(db, { ...at, state: 'seen' })
+    expect(seen.updatedAt).toEqual(first.updatedAt)
+
+    const edited = await upsertBrowserCheckpoint(db, {
+      ...at,
+      state: 'verified',
+      verified: found('42', { title: 'Другой заголовок' }),
+    })
+    expect(edited.updatedAt.getTime()).toBeGreaterThan(first.updatedAt.getTime())
+    const saved = await upsertBrowserCheckpoint(db, { ...at, state: 'unverified' })
+    expect(saved.updatedAt.getTime()).toBeGreaterThan(edited.updatedAt.getTime())
+    // A save the read has not confirmed yet is still a save of this pass.
+    const savedAgain = await upsertBrowserCheckpoint(db, { ...at, state: 'unverified' })
+    expect(savedAgain.updatedAt.getTime()).toBeGreaterThan(saved.updatedAt.getTime())
+  })
+
   it('reads back every checkpoint of the task for the feed, leaving out what it cannot read', async () => {
     const { task, session } = await browserTask()
     const at = { taskId: task.id, sessionId: session.id }

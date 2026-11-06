@@ -25,11 +25,14 @@ import { SYNTHETIC_MCP_MARKER } from '../../../infra/dev/llm-verify/fake-subscri
 import { ZAI_PATHS } from '../../../infra/dev/llm-verify/fake-zai.mjs'
 import {
   chatRequestSummary,
+  requestMessagesText,
   createOutcome,
   failureLine,
   LIVE_LIMITS,
   LiveRefusal,
+  longestReasoningRow,
   STREAM_FORMS,
+  streamContent,
   streamSummary,
   sumUsage,
 } from '../../../infra/dev/llm-verify/live.mjs'
@@ -103,7 +106,10 @@ const BODY_REFUSALS_AT_MOST = 12
  * (`uploaded`: the step before it reached the provider and is the one call of the key). Until G8
  * the answer was 413, which the CLI took for an overflow of its context and answered with a
  * request for a compaction (docs/plan/47-common-scenarios-zai.md). The rehearsal holds the CLI
- * to these numbers, so a CLI that reacts otherwise shows here.
+ * to these numbers, so a CLI that reacts otherwise shows here. Since `--thinking` the row of a
+ * reasoning that fills a request may keep the failure out of what the CLI leaves in stdout, so
+ * `uploaded` is read in full from a control turn without the flag, and the turn as the product
+ * runs it holds the rest (docs/plan/61-chats-first.md, §10).
  */
 const BODY_REFUSAL_MEASURED = Object.freeze({
   given: {
@@ -135,6 +141,33 @@ const CLASSES = {
 const streamed = (exchange) =>
   exchange.status === 200 && exchange.contentType === 'text/event-stream'
 const bash = (command) => ({ name: 'bash', arguments: { command, description: 'Synthetic step' } })
+/** The turn as prepared, with the CLI printing no rows of reasoning: the product never runs this. */
+function withoutReasoningRows(prepared) {
+  const isArguments = (file) => file.path.endsWith('/cli-args.json')
+  const args = JSON.parse(prepared.files.find(isArguments).content)
+  assert.ok(args.includes('--thinking'), 'The driver no longer asks for the rows of reasoning')
+  const content = JSON.stringify(args.filter((arg) => arg !== '--thinking'))
+  return {
+    ...prepared,
+    files: prepared.files.map((file) => (isArguments(file) ? { ...file, content } : file)),
+  }
+}
+/**
+ * The synthetic repository of the pass of `/init` (--init). Names no model could guess: an answer
+ * that holds them read the code.
+ */
+const INIT_REPOSITORY = Object.freeze({
+  'wp-content/themes/orchid-synth/functions.php':
+    "<?php\n// Registers the menus of the theme and loads parts/price-grid.php on the prices page.\nrequire __DIR__ . '/parts/price-grid.php';\n",
+  'wp-content/themes/orchid-synth/parts/price-grid.php':
+    '<?php\n// The table of prices. Rows come from the synthetic option orchid_prices.\n',
+  'wp-content/plugins/orchid-booking-synth/orchid-booking-synth.php':
+    '<?php\n/* Plugin Name: Orchid booking (synthetic) */\n// The booking form: its shortcode is [orchid_booking].\n',
+})
+/** The file names of that repository an answer of `/init` may call them by. */
+const INIT_NAMES = Object.freeze(['price-grid', 'orchid-booking-synth', 'orchid-synth'])
+/** Calls the key of the pass of `/init` may start: the plan's cap on the pass, the role holds it. */
+const INIT_TURN_CALLS = 6
 const resultFor = (summary, files = []) => ({
   summary,
   change_type: files.length ? 'code' : 'none',
@@ -242,7 +275,9 @@ export async function runLiveGateway(mode) {
       roleCalls = callsPerKey
       return llm
     }
-    await startLlm(mode.measure ? 2 : (resultPlan?.[0].ceiling ?? TURN_CALLS))
+    await startLlm(
+      mode.measure ? 2 : mode.init ? INIT_TURN_CALLS : (resultPlan?.[0].ceiling ?? TURN_CALLS),
+    )
     core = await live.startCore({ stack, env: roleEnv(TURN_CALLS), rolePort })
     workers.push(core)
     const workspace = await db.workspace.create({
@@ -402,7 +437,7 @@ export async function runLiveGateway(mode) {
     const version = await dockerCommand(['exec', cli.containerName, 'opencode', '--version'])
     assert.equal(version.stdout.trim(), '1.18.34', 'The CLI image holds another OpenCode')
     if (rehearsal) await live.proveSandboxSearch(cli.containerName)
-    const instructions =
+    const syntheticInstructions =
       '# Raditi platform rules (synthetic check)\nThis is a synthetic check of the platform. Work only inside the repository.\n'
     const turns = []
 
@@ -412,16 +447,27 @@ export async function runLiveGateway(mode) {
      * container. While it runs the stand watches the ledger: a connection the guard refused
      * ends the turn at once.
      */
-    async function runTurn({ label, turn, prompt, nativeSessionId, effort = 'high' }) {
-      const { files, argv } = await prepareOpencodeTurn(
+    async function runTurn({
+      label,
+      turn,
+      prompt,
+      nativeSessionId,
+      effort = 'high',
+      printsReasoning = true,
+      action,
+      instructions = syntheticInstructions,
+    }) {
+      const { files: prepared, argv } = await prepareOpencodeTurn(
         { cli, control, driver, tools, instructions },
         {
           turn,
           prompt,
           nativeSessionId,
+          action,
           llm: { baseUrl: offer.gatewayBaseUrl, model: ZAI_MODEL, reasoningEffort: effort },
         },
       )
+      const files = printsReasoning ? prepared : withoutReasoningRows(prepared)
       const from = {
         exchanges: observer.exchanges().length,
         mcp: (await control('state')).mcp.requests.length,
@@ -456,6 +502,7 @@ export async function runLiveGateway(mode) {
         ms,
         events,
         lines: result.lines,
+        longestReasoningRow: longestReasoningRow(result.stdout),
         nativeSessionId: events.find((event) => event.type === 'started')?.nativeSessionId,
         result: reading.result,
         reading,
@@ -473,7 +520,7 @@ export async function runLiveGateway(mode) {
      * CLI sent declared the platform's tools, and the role spoke to the provider only as often
      * as its ceiling allows.
      */
-    async function invariants(turn, outcome, { ceiling = TURN_CALLS } = {}) {
+    async function invariants(turn, outcome, { ceiling = TURN_CALLS, compaction = false } = {}) {
       const { label } = outcome
       const rows = await settled(turn)
       assert.ok(rows.length <= ceiling, `${label}: ${rows.length} calls of one key`)
@@ -518,7 +565,8 @@ export async function runLiveGateway(mode) {
         completed.length,
         `${label}: the completed calls of the role and the answers the sandbox got differ`,
       )
-      for (const rpc of ['initialize', 'tools/list'])
+      // The token of a compaction is asked once and its server has no MCP (61-chats-first, §5.14).
+      for (const rpc of compaction ? ['initialize'] : ['initialize', 'tools/list'])
         assert.ok(
           outcome.mcp.some((request) => request.rpc === rpc),
           `${label}: MCP ${rpc} missing`,
@@ -536,8 +584,25 @@ export async function runLiveGateway(mode) {
       const answers = chats.map((exchange) => `${exchange.status}/${exchange.ms}ms`).join(' ')
       const forms = streams.flatMap((stream) => stream.forms)
       const formsNote = forms.length ? `; forms ${forms.join(' ')}` : ''
+      // The text of the reasoning the provider sent, not only the count of its tokens, and what
+      // `/thinking` has to show of it, the rows of the CLI: a form the CLI makes no row of shows
+      // here as characters beside no rows. The longest row says how near a real turn comes to
+      // the size where the CLI loses its stdout (docs/plan/61-chats-first.md, §10, 61.20).
+      const thought = streams.filter((stream) => stream.reasoningChars > 0)
+      const reasoningChars = thought.reduce((sum, stream) => sum + stream.reasoningChars, 0)
+      const reasoningRows = outcome.events.filter((event) => event.type === 'reasoning').length
+      if (rehearsal && !compaction) {
+        assert.equal(reasoningRows, thought.length, `${label}: the rows of reasoning of the CLI`)
+        const { bytes, cut } = outcome.longestReasoningRow
+        assert.equal(
+          bytes > 0,
+          reasoningRows > 0 || cut,
+          `${label}: the length of the longest row of reasoning`,
+        )
+      }
+      const { bytes: longestRow, cut: rowCut } = outcome.longestReasoningRow
       report(
-        `${label}: exit ${outcome.code}, ${Math.round(outcome.ms / 1000)} s, provider requests ${outcome.requests}, calls ${rows.length} (failed ${failed.length}), tokens in ${fromRole.inputUncached} cached ${fromRole.cacheRead} out ${fromRole.output} reasoning ${fromRole.reasoning}; answers ${answers}; finish ${streams.map((stream) => stream.finishReasons.at(-1) ?? '-').join(' ')}; usage in the finish chunk ${atFinish} of ${metered.length}${formsNote}`,
+        `${label}: exit ${outcome.code}, ${Math.round(outcome.ms / 1000)} s, provider requests ${outcome.requests}, calls ${rows.length} (failed ${failed.length}), tokens in ${fromRole.inputUncached} cached ${fromRole.cacheRead} out ${fromRole.output} reasoning ${fromRole.reasoning}; reasoning text ${reasoningChars} chars in ${thought.length} answers, ${reasoningRows} rows of the CLI, the longest ${longestRow} bytes${rowCut ? ', a row cut off' : ''}; answers ${answers}; finish ${streams.map((stream) => stream.finishReasons.at(-1) ?? '-').join(' ')}; usage in the finish chunk ${atFinish} of ${metered.length}${formsNote}`,
       )
       return { rows, completed, failed, usage: fromRole }
     }
@@ -569,7 +634,7 @@ export async function runLiveGateway(mode) {
     // «The result is valid» is what the product would do with it (spec §20, П38).
     const valid = (outcome) => outcome.reading.taken
 
-    await { measure, results, gateway: acceptance }[kind]()
+    await { measure, results, compaction, init, gateway: acceptance }[kind]()
 
     /**
      * The acceptance: a turn of each kind — tool, MCP, text and the continuation of the text
@@ -806,6 +871,185 @@ export async function runLiveGateway(mode) {
         })
         await ceilingAndCap()
       }
+    }
+
+    /**
+     * `/compact` (--compact, docs/plan/61-chats-first.md, §5.14): a turn, the summary through the
+     * server of the CLI and the role llm, and a turn on it. What the platform owes is held;
+     * whether the model kept the code word is a share for the report, as every outcome.
+     */
+    async function compaction() {
+      assert.equal(live.kind, 'compaction')
+      stage = 'compaction'
+      budget.afford(3, 'the compaction')
+      // The key issued for the windows of the account is of no turn of this run.
+      await revoke(first)
+      const word = `violet-${randomBytes(3).toString('hex')}`
+      const said = await issued()
+      await script({ scenario: 'text', text: JSON.stringify(resultFor(`Before, ${word}`)) })
+      const told = `Synthetic check. Do not call any tool. The code word of this session is ${word}: remember it. Reply with the final result only.`
+      const before = await runTurn({
+        label: 'turn before the compaction',
+        turn: said,
+        prompt: told,
+      })
+      await invariants(said, before)
+      await revoke(said)
+      assert.equal(before.code, 0, 'The turn before the compaction failed')
+      assert.ok(before.nativeSessionId, 'OpenCode named no session')
+
+      const summarized = await issued(undefined, said)
+      await script({
+        scenario: 'text',
+        text: `## Objective
+- The code word is ${word}.`,
+      })
+      const compacted = await runTurn({
+        label: 'compaction',
+        turn: summarized,
+        prompt: 'Unused: a compaction reads no words.',
+        nativeSessionId: before.nativeSessionId,
+        action: 'compact',
+      })
+      await invariants(summarized, compacted, { compaction: true })
+      await revoke(summarized)
+      assert.equal(compacted.code, 0, `The compaction failed: ${compacted.lines} lines`)
+      assert.deepEqual(
+        compacted.events.map((event) => event.type),
+        ['started', 'usage', 'completed'],
+        'The rows of a compaction',
+      )
+      assert.equal(
+        compacted.nativeSessionId,
+        before.nativeSessionId,
+        'The compaction changed session',
+      )
+      const [request, ...others] = compacted.exchanges.filter((item) => item.method === 'POST')
+      assert.equal(others.length, 0, 'A compaction sends one request')
+      assert.equal(chatRequestSummary(request.requestBody)?.compaction, true, 'It declared tools')
+      const summary = streamContent(request.responseText).trim()
+      assert.notEqual(summary, '', 'The compaction wrote no summary')
+
+      const next = await issued(undefined, summarized)
+      await script({ scenario: 'text', text: JSON.stringify(resultFor(`After, ${word}`)) })
+      const after = await runTurn({
+        label: 'turn after the compaction',
+        turn: next,
+        prompt:
+          'Synthetic check, continued. Do not call any tool. Reply with the final result only; its summary must contain the code word you were given earlier in this session.',
+        nativeSessionId: before.nativeSessionId,
+      })
+      await invariants(next, after)
+      await revoke(next)
+      assert.equal(after.code, 0, 'The turn after the compaction failed')
+      assert.equal(after.nativeSessionId, before.nativeSessionId, 'The next turn left the session')
+      // The only turn of the session: the summary takes its place whole (§10, 61.24).
+      const asked = requestMessagesText(
+        after.exchanges.find((item) => item.method === 'POST')?.requestBody ?? '',
+      )
+      assert.ok(asked.includes(summary), 'The next turn was not told the summary')
+      assert.ok(!asked.includes(told), 'The next turn was told the words of the summarized turn')
+      const kept = after.result?.summary.includes(word) === true
+      report(
+        `compaction: ${compacted.requests} provider request(s), ${Math.round(compacted.ms / 1000)} s; the next turn knew the code word: ${kept ? 'yes' : 'no'}`,
+      )
+      passed(
+        'compaction: one request without tools through the role llm, its usage equals the rows of the wrapper, and the session went on from the summary in the next turn',
+      )
+    }
+
+    /**
+     * `/init` (--init, docs/plan/61-chats-first.md, 61.25): one pass on `INIT_PROMPT` and the base
+     * rules of the platform (`turnInstructions` without the facts of a site: no working set, no
+     * guide of the database, no variables; the planner's framing of the prompt is not here) over a
+     * synthetic repository. The answer is the product of the command:
+     * a result the product takes, within what the result takes, with the names of the code and
+     * nothing changed. An answer longer than the result takes ends the pass as a technical failure,
+     * so what the real model does here decides whether the command works: unlike the shares of the
+     * acceptance, a miss fails the run.
+     */
+    async function init() {
+      assert.equal(live.kind, 'init')
+      stage = '/init'
+      budget.afford(INIT_TURN_CALLS, 'the pass of /init')
+      await revoke(first)
+      for (const [path, text] of Object.entries(INIT_REPOSITORY))
+        await dockerCommand(
+          // NOSONAR: one small file after the other in one container
+          [
+            'exec',
+            '-i',
+            '-w',
+            '/workspace/repo',
+            cli.containerName,
+            'sh',
+            '-ec',
+            'mkdir -p "$(dirname "$1")" && cat > "$1"',
+            'sh',
+            path,
+          ],
+          { input: text },
+        )
+      const tree = async () =>
+        (
+          await dockerCommand([
+            'exec',
+            '-w',
+            '/workspace/repo',
+            cli.containerName,
+            'sh',
+            '-c',
+            "find . -type f -not -path './.git/*' | sort | xargs sha256sum",
+          ])
+        ).stdout
+      const untouched = await tree()
+      assert.equal(untouched.trim().split('\n').length, 3, 'The synthetic repository is not there')
+
+      const { INIT_ANSWER_MAX_CHARS, INIT_PROMPT, turnInstructions } =
+        await import('../dist/tasks/turn-instructions.js')
+      const answer = {
+        ...resultFor('Подсказки агенту готовы'),
+        client_message: `Тема сайта лежит в wp-content/themes/orchid-synth, таблица цен — в parts/price-grid.php, форма записи — в плагине orchid-booking-synth.`,
+      }
+      await script({
+        scenario: 'tools',
+        rounds: [[bash('find . -type f')]],
+        text: JSON.stringify(answer),
+      })
+      const turn = await issued()
+      const outcome = await runTurn({
+        label: 'pass of /init',
+        turn,
+        prompt: INIT_PROMPT,
+        instructions: turnInstructions({ state: 'absent' }),
+      })
+      await invariants(turn, outcome, { ceiling: INIT_TURN_CALLS })
+      await revoke(turn)
+      assert.equal(outcome.code, 0, `The pass of /init failed: ${outcome.lines} lines`)
+      const asked = requestMessagesText(
+        outcome.exchanges.find((item) => item.method === 'POST')?.requestBody ?? '',
+      )
+      assert.ok(asked.includes(INIT_PROMPT), 'The model was not told the words of /init')
+      const { verdict, taken, result } = outcome.reading
+      report(
+        `pass of /init: result ${taken ? 'taken' : 'refused'} by the reading of the product; by the strict reading of the driver: ${verdict}`,
+      )
+      assert.ok(taken, `The answer of /init is no result: ${verdict}`)
+      const message = result.client_message
+      const named = INIT_NAMES.filter((name) => message.includes(name))
+      report(
+        `pass of /init: ${[...message].length} characters of ${INIT_ANSWER_MAX_CHARS}, ${named.length} of ${INIT_NAMES.length} names of the code: ${named.join(', ') || 'none'}; provider requests ${outcome.requests}`,
+      )
+      assert.ok(
+        [...message].length <= INIT_ANSWER_MAX_CHARS,
+        `The answer of /init took ${[...message].length} characters`,
+      )
+      assert.ok(named.length > 0, 'The answer of /init names nothing of the code')
+      assert.equal(await tree(), untouched, 'The pass of /init changed the repository')
+      if (rehearsal) assert.equal(outcome.requests, 2, 'The requests of the rehearsed pass')
+      passed(
+        'pass of /init: INIT_PROMPT and the base rules of the platform over a synthetic repository, a result the product takes, within the length, with the names of the code, the repository untouched',
+      )
     }
 
     /**
@@ -1345,7 +1589,14 @@ request.on('error',()=>process.exit(1));request.end(Buffer.alloc(Number(process.
       await startLlm(BODY_TURN_CALLS)
       const measured = []
       /** What the CLI sent, in its order, and what the turn came to. */
-      const measure = async ({ label, outcome, rows, refused, sentBefore }) => {
+      const measure = async ({
+        label,
+        outcome,
+        rows,
+        refused,
+        sentBefore,
+        stdoutIsWhole = true,
+      }) => {
         // A request of the turn or one for a compaction (it declares no tools), the status it
         // got, and its size against the first request.
         const first = outcome.exchanges[0]?.requestBody.length ?? 0
@@ -1370,7 +1621,7 @@ request.on('error',()=>process.exit(1));request.end(Buffer.alloc(Number(process.
           provider: (await fakeChat()) - sentBefore,
           calls: rows.length,
           result: outcome.reading.taken,
-          failures: failures.map((reason) => reason.split(':')[0]),
+          failures: stdoutIsWhole ? failures.map((reason) => reason.split(':')[0]) : null,
         })
         return { requests, failures }
       }
@@ -1408,8 +1659,13 @@ request.on('error',()=>process.exit(1));request.end(Buffer.alloc(Number(process.
         )
       }
 
-      {
-        const label = 'a request above the limit, refused by sandbox-gw itself'
+      /**
+       * A step whose reasoning fills a whole request, and the next request of the CLI, which
+       * sandbox-gw refuses itself. The CLI exits on the refusal without waiting for its stdout,
+       * and after a row of sixteen megabytes that often leaves one row of the turn: only what
+       * does not stand in stdout is read here.
+       */
+      const overLimitTurn = async ({ label, printsReasoning }) => {
         stage = `measurement: ${label}`
         budget.afford(BODY_TURN_CALLS, label)
         const turn = await issued()
@@ -1424,6 +1680,7 @@ request.on('error',()=>process.exit(1));request.end(Buffer.alloc(Number(process.
         const outcome = await runTurn({
           label,
           turn,
+          printsReasoning,
           prompt:
             'Synthetic check. Run the shell command `echo filler` once, then reply with the final result.',
         })
@@ -1442,10 +1699,25 @@ request.on('error',()=>process.exit(1));request.end(Buffer.alloc(Number(process.
           rows,
           refused: 0,
           sentBefore,
+          stdoutIsWhole: !printsReasoning,
         })
-        // The refused request never came to the observer, so not to the role either, and the
-        // text of the refusal is that of sandbox-gw: the role says another sentence.
+        // The refused request never came to the observer, so not to the role either.
         assert.equal(outcome.exchanges.at(0)?.truncated, true, `${label}: the answer was short`)
+        report(
+          `${label}: exit ${outcome.code}, ${Math.round(outcome.ms / 1000)} s; the CLI sent ${requests.length} request(s) that reached the role: ${requests.map((request) => `${request.kind}/${request.status}`).join(', ')}, the answer of ${llmJsonLimits.bytes} bytes of reasoning beside a tool call, and one more that sandbox-gw refused itself; the provider got ${measured.at(-1).provider}; calls of the key ${rows.length} of ${BODY_TURN_CALLS}; result ${outcome.reading.taken ? 'taken' : 'none'}; rows of stdout ${outcome.lines.length}; failures the driver reported: ${failures.join(' | ') || 'none'}`,
+        )
+        return { outcome, failures }
+      }
+
+      await overLimitTurn({
+        label: 'a request above the limit, refused by sandbox-gw itself',
+        printsReasoning: true,
+      })
+      {
+        // The control: with no such row in stdout the CLI's own words of the refusal are read too.
+        const label = 'the same request, the CLI printing no reasoning'
+        const { outcome, failures } = await overLimitTurn({ label, printsReasoning: false })
+        // The text of the refusal is that of sandbox-gw: the role says another sentence.
         assert.deepEqual(
           failures,
           ['APIError 400 raditi_body: Request body is too large'],
@@ -1454,9 +1726,6 @@ request.on('error',()=>process.exit(1));request.end(Buffer.alloc(Number(process.
         assert.ok(
           outcome.events.some((event) => event.type === 'command'),
           `${label}: the CLI did not run the tool of the first step`,
-        )
-        report(
-          `${label}: exit ${outcome.code}, ${Math.round(outcome.ms / 1000)} s; the CLI sent ${requests.length} request(s) that reached the role: ${requests.map((request) => `${request.kind}/${request.status}`).join(', ')}, the answer of ${llmJsonLimits.bytes} bytes of reasoning beside a tool call, and one more that sandbox-gw refused itself; the provider got ${measured.at(-1).provider}; calls of the key ${rows.length} of ${BODY_TURN_CALLS}; result ${outcome.reading.taken ? 'taken' : 'none'}; failures the driver reported: ${failures.join(' | ') || 'none'}`,
         )
       }
       report(`refused bodies, measured: ${JSON.stringify(measured)}`)
@@ -1470,7 +1739,9 @@ request.on('error',()=>process.exit(1));request.end(Buffer.alloc(Number(process.
           {
             label: 'a request above the limit, refused by sandbox-gw itself',
             ...uploaded,
+            failures: null,
           },
+          { label: 'the same request, the CLI printing no reasoning', ...uploaded },
         ],
         'The pinned CLI reacted to HTTP 400 raditi_body otherwise than measured',
       )
@@ -1596,19 +1867,23 @@ request.on('error',()=>process.exit(1));request.end(Buffer.alloc(Number(process.
 /** What a run of the gateway stand is: a measurement, a measurement of results, or a verification. */
 function runKind(mode) {
   if (mode.measure) return 'measure'
+  if (mode.compact) return 'compaction'
+  if (mode.init) return 'init'
   return mode.results ? 'results' : 'gateway'
 }
 
 const RUN_WORDS = {
   measure: 'measurement',
   results: 'measurement of results',
+  compaction: 'verification of a compaction',
+  init: 'verification of /init',
   gateway: 'verification',
 }
 
 /** The last line of a run that passed, after the count of its provider requests is settled. */
 function announcePassed({ live, mode, rehearsal }) {
   const what = RUN_WORDS[runKind(mode)]
-  if (rehearsal && !mode.measure) {
+  if (rehearsal && !mode.measure && !mode.compact && !mode.init) {
     // The cap was reached on purpose: the count of the run says so itself.
     assert.throws(() => live.settle(), /reached its cap of \d+ provider requests/)
     assert.equal(live.tripped(), true)

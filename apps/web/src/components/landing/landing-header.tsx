@@ -99,10 +99,10 @@ export function LandingHeader({ viewer }: { viewer: LandingViewer }) {
             </div>
           ) : (
             <Link
-              href={viewer.status === 'guest' ? '/sign-in' : '/projects'}
+              href={viewer.status === 'guest' ? '/sign-in' : '/chats'}
               className={styles.signIn}
             >
-              {viewer.status === 'guest' ? 'Войти' : 'Проекты'}{' '}
+              {viewer.status === 'guest' ? 'Войти' : 'Чаты'}{' '}
               <LandingIcon name="arrow-up-right" size={17} strokeWidth={1.6} />
             </Link>
           )}

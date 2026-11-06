@@ -12,6 +12,7 @@ import Menu from '@mui/material/Menu'
 import MenuItem from '@mui/material/MenuItem'
 import Typography from '@mui/material/Typography'
 import {
+  useEffect,
   useId,
   useLayoutEffect,
   useRef,
@@ -32,11 +33,16 @@ import type { CommandVerdict } from './chat-types'
 import {
   CommandList,
   optionId,
+  PALETTE_ROOM,
   paletteKey,
   paletteOptions,
   type PaletteOption,
 } from './command-palette'
 import type { AttachmentsControl } from './use-attachments'
+
+/** The gap the list of commands keeps from the top of the window, and the least it shows. */
+const PALETTE_EDGE = 12
+const PALETTE_LEAST = 120
 
 /** A native control that stays in the accessibility tree and off the screen. */
 export const offScreen = {
@@ -121,21 +127,21 @@ function pasteKeys(): string {
 
 export interface ComposerCommands {
   verdicts: readonly CommandVerdict[]
-  /** A command was chosen: the server has said it can be run. */
-  onRun: (id: ChatCommandId) => void
+  /**
+   * A command was chosen: the server has said it can be run, or it is the page's own. What it
+   * returns is said to a screen reader.
+   */
+  onRun: (id: ChatCommandId) => string | void
   /** The list was opened: the verdicts are read again. */
   onOpen?: () => void
-  /**
-   * The commands this dialog has at all; absent — every command of the chat. A task in the
-   * browser has only `/cancel` (docs/plan/57-browser-tasks.md): no preview, release or undo.
-   */
-  listed?: readonly ChatCommandId[]
-  /** Why a command the server gave no verdict on cannot be run here: on «Новый диалог». */
+  /** Why a command the server gave no verdict on cannot be run here: on «Новый чат». */
   closedReason?: string
+  /** A chat without the repository, or the start of one: the list goes by what it will have. */
+  plain?: boolean
 }
 
 /**
- * The field a client writes in, the same on «Новый диалог» and in a dialog that goes on (owner's
+ * The field a client writes in, the same on «Новый чат» and in a dialog that goes on (owner's
  * request of 29.10.2026). Its row holds, in this order, the window of commands — `/` at the start
  * of the empty field or its button opens it —, the paperclip «Прикрепить файлы» with «Загрузить
  * файл» (not «+»: «+» of a dialog is its tools, docs/plan/59-dialog-tools-panel.md, И15),
@@ -153,11 +159,15 @@ export function Composer({
   busy = false,
   onSend,
   commands,
+  project,
   effort,
   attachments,
   noSecrets = feedInputText.noSecrets,
   fieldRef,
   stop,
+  restored = null,
+  restoredTaken = 0,
+  onTextChange,
 }: {
   label?: string
   placeholder: string
@@ -176,6 +186,11 @@ export function Composer({
    */
   onSend: (text: string, attachmentIds: readonly string[]) => Promise<boolean>
   commands?: ComposerCommands
+  /**
+   * The pill of the project of a new chat, before «Размышление»; on a phone a row of its own over
+   * the buttons (docs/plan/61-chats-first.md, К6).
+   */
+  project?: ReactNode
   /** «Размышление»: the menu of how hard the model thinks, after the paperclip. */
   effort?: ReactNode
   /** The files of the message (docs/plan/57-browser-tasks.md, Б26); absent — no files here. */
@@ -188,6 +203,12 @@ export function Composer({
    * `available` false — the dialog cannot be stopped now (a release, a stop on its way).
    */
   stop?: { onStop: () => void; available: boolean }
+  /** Words kept for this field elsewhere: put into it as they arrive. */
+  restored?: string | null
+  /** Grows when the page takes `restored` back: they leave the field while nobody touched them. */
+  restoredTaken?: number
+  /** Every change of the words in the field. */
+  onTextChange?: (text: string) => void
 }) {
   const fieldId = useId()
   const reasonId = useId()
@@ -226,6 +247,19 @@ export function Composer({
     if (area.scrollHeight > 0) area.style.height = `${area.scrollHeight}px`
   }, [text, field])
 
+  const [lastRestored, setLastRestored] = useState(restored)
+  const [lastTaken, setLastTaken] = useState(restoredTaken)
+  if (restoredTaken !== lastTaken) {
+    setLastTaken(restoredTaken)
+    // Words the client changed are the client's own by now, and they stay.
+    if (text === lastRestored) setText('')
+  }
+  if (restored !== lastRestored) {
+    setLastRestored(restored)
+    if (restored) setText(restored)
+  }
+  useEffect(() => onTextChange?.(text), [text, onTextChange])
+
   const disabled = disabledReason !== null
   const tooLong = text.trim().length > FEED_REQUEST_TEXT_LIMIT
   // The message waits for its files: one on its way, or one that failed and is not dealt with.
@@ -235,26 +269,52 @@ export function Composer({
       ? attachmentText.fix
       : null
   const typed = commands !== undefined && !dismissed && !forced && text.startsWith('/')
-  const options: PaletteOption[] =
+  const optionsFor = (words: string | null): PaletteOption[] =>
     commands === undefined
       ? []
-      : forced
-        ? paletteOptions(null, commands.verdicts, commands.listed, commands.closedReason)
-        : typed && !disabled
-          ? paletteOptions(text, commands.verdicts, commands.listed, commands.closedReason)
-          : []
+      : paletteOptions(words, commands.verdicts, commands.closedReason, commands.plain)
+  const options = forced ? optionsFor(null) : typed && !disabled ? optionsFor(text) : []
   const open = options.length > 0
   const activeIndex = Math.min(active, Math.max(0, options.length - 1))
+
+  // The list opens upwards from the field: its height is what stands above the field, measured
+  // once the field has taken its height for this text.
+  useLayoutEffect(() => {
+    if (!open) return
+    function fit() {
+      const holder = listRef.current
+      if (!holder) return
+      const room = holder.getBoundingClientRect().bottom - PALETTE_EDGE
+      holder.style.setProperty(PALETTE_ROOM, `${Math.max(PALETTE_LEAST, room)}px`)
+    }
+    fit()
+    window.addEventListener('resize', fit)
+    return () => window.removeEventListener('resize', fit)
+  }, [open, text])
 
   function announceOpened(count: number) {
     setAnnouncement(paletteText.opened(count, plural(count, 'команда', 'команды', 'команд')))
     commands?.onOpen?.()
   }
 
+  /** The whole list, the focus on it: its button, and «Справка» (`/help`) from wherever it is. */
+  function showAll() {
+    if (!commands) return
+    setForced(true)
+    setActive(0)
+    announceOpened(optionsFor(null).length)
+    // The list is in the document after this render: then it takes the focus.
+    window.setTimeout(
+      () => listRef.current?.querySelector<HTMLElement>('[role="listbox"]')?.focus(),
+      0,
+    )
+  }
+
   function close(returnFocus: boolean) {
     const wasForced = forced
     setForced(false)
-    setDismissed(true)
+    // Closed over an empty field, the list opened by its button leaves `/` to open it again.
+    setDismissed(!wasForced || text.startsWith('/'))
     setActive(0)
     if (returnFocus) (wasForced ? buttonRef.current : field.current)?.focus()
   }
@@ -262,6 +322,14 @@ export function Composer({
   function choose(option: PaletteOption) {
     if (!option.available) {
       setAnnouncement(option.reason ?? paletteText.unavailable)
+      return
+    }
+    // «Справка» is the list itself: it opens whole, and from there it has nothing more to do.
+    if (option.id === 'help') {
+      if (text.startsWith('/')) setText('')
+      setNotice(null)
+      setDismissed(false)
+      if (!forced) showAll()
       return
     }
     // Opened by its button, the list hands the focus back before it goes — to the field, or to
@@ -273,7 +341,8 @@ export function Composer({
     setDismissed(false)
     setForced(false)
     setActive(0)
-    commands?.onRun(option.id)
+    const said = commands?.onRun(option.id)
+    if (said) setAnnouncement(said)
   }
 
   function changeText(next: string) {
@@ -283,12 +352,7 @@ export function Composer({
     if (!next.startsWith('/')) setDismissed(false)
     setActive(0)
     if (commands && wasClosed && !disabled && next.startsWith('/') && !dismissed) {
-      const count = paletteOptions(
-        next,
-        commands.verdicts,
-        commands.listed,
-        commands.closedReason,
-      ).length
+      const count = optionsFor(next).length
       if (count > 0) announceOpened(count)
     }
   }
@@ -302,12 +366,7 @@ export function Composer({
         setNotice(composerText.commandsInDialog)
         return
       }
-      const option = paletteOptions(
-        null,
-        commands.verdicts,
-        commands.listed,
-        commands.closedReason,
-      ).find((item) => item.id === command)
+      const option = optionsFor(null).find((item) => item.id === command)
       if (option?.available) choose(option)
       else setNotice(option?.reason ?? composerText.commandUnavailable)
       return
@@ -344,16 +403,7 @@ export function Composer({
       close(true)
       return
     }
-    setForced(true)
-    setActive(0)
-    announceOpened(
-      paletteOptions(null, commands.verdicts, commands.listed, commands.closedReason).length,
-    )
-    // The list is in the document after this render: then it takes the focus.
-    window.setTimeout(
-      () => listRef.current?.querySelector<HTMLElement>('[role="listbox"]')?.focus(),
-      0,
-    )
+    showAll()
   }
 
   const describedBy = [
@@ -388,6 +438,7 @@ export function Composer({
             options={options}
             active={activeIndex}
             focusable={forced}
+            plain={commands?.plain}
             onChoose={choose}
             onHover={setActive}
             onKeyDown={forced ? keyDown : undefined}
@@ -547,6 +598,18 @@ export function Composer({
                   }}
                 />
               </>
+            ) : null}
+            {project ? (
+              <Box
+                sx={{
+                  order: { xs: -1, sm: 0 },
+                  flexBasis: { xs: '100%', sm: 'auto' },
+                  display: 'flex',
+                  minWidth: 0,
+                }}
+              >
+                {project}
+              </Box>
             ) : null}
             {effort}
           </Box>

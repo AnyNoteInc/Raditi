@@ -19,7 +19,7 @@ const resultJsonSchema = z.toJSONSchema(turnResultSchema, { target: 'draft-7' })
 export const RESULT_EXAMPLE: TurnResult = turnResultSchema.parse({
   summary: 'Изменения не потребовались',
   change_type: 'none',
-  client_message: 'Здравствуйте! Менять на сайте ничего не пришлось.',
+  client_message: 'Здравствуйте! Изменения не потребовались.',
   files_changed: [],
   questions: [],
   needs_approval: false,

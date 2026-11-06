@@ -101,7 +101,11 @@ describe.skipIf(!enabled)('operator retirement with disposable PostgreSQL', () =
       await db.llmKey.deleteMany({ where: { subscriptionAccountId: f.accountId } })
       await db.taskAccountBinding.deleteMany({ where: tasks })
       await db.taskEvent.deleteMany({ where: tasks })
-      await db.siteLease.deleteMany({ where: { site: { workspaceId: f.workspaceId } } })
+      const sites = await db.site.findMany({
+        where: { workspaceId: f.workspaceId },
+        select: { id: true },
+      })
+      await db.siteLease.deleteMany({ where: { siteId: { in: sites.map(({ id }) => id) } } })
       await db.task.deleteMany({ where: { workspaceId: f.workspaceId } })
       await db.site.deleteMany({ where: { workspaceId: f.workspaceId } })
       await db.workspace.delete({ where: { id: f.workspaceId } })

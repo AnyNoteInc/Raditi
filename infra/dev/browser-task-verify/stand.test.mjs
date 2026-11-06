@@ -84,7 +84,8 @@ describe('options and names', () => {
   it('runs a scenario with what it needs, in the order of the stand', () => {
     assert.deepEqual(scenariosToRun(['F']), ['A', 'D', 'E', 'F'])
     assert.deepEqual(scenariosToRun(['K', 'B']), ['A', 'D', 'B', 'K'])
-    assert.equal(scenariosToRun(null).length, 13)
+    assert.deepEqual(scenariosToRun(['P']), ['A', 'P'])
+    assert.equal(scenariosToRun(null).length, 16)
   })
 
   it('names every resource of a run under its label', () => {
@@ -279,6 +280,32 @@ describe('the scripted model', () => {
     )
     assert.equal(last.final, 'done')
     assert.equal(last.facts.login, true)
+  })
+
+  it('calls a tool again after BROWSER_STARTING, as its answer says, and counts it', () => {
+    const starting = { code: 'BROWSER_STARTING', message: 'x' }
+    const again = nextMove(
+      program,
+      {},
+      turnOf(body([['web_open', { url: '/wp-admin/' }, starting]])).steps,
+    )
+    assert.deepEqual(again.call, { tool: 'web_open', args: { url: '/wp-admin/' } })
+    assert.equal(again.facts.starting, 1)
+    // The program reads the answer that came after it, as if the first call had taken it.
+    const next = nextMove(
+      program,
+      {},
+      turnOf(
+        body([
+          ['web_open', { url: '/wp-admin/' }, starting],
+          ['web_open', { url: '/wp-admin/' }, starting],
+          ['web_open', { url: '/wp-admin/' }, { code: 'BROWSER_ACTION_DENIED', message: 'x' }],
+        ]),
+      ).steps,
+    )
+    assert.deepEqual(next.call, { tool: 'web_observe', args: {} })
+    assert.equal(next.facts.starting, 2)
+    assert.equal(next.facts.dashboard, 'BROWSER_ACTION_DENIED')
   })
 
   it('stops when the CLI made a call the program did not', () => {

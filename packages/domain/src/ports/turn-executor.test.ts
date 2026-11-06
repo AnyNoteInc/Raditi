@@ -2,9 +2,16 @@ import { describe, expect, it } from 'vitest'
 
 import { isDomainError } from '../errors.ts'
 import type { PublicationSource } from '../git/publication.ts'
-import { BROWSER_ONLY, REPOSITORY_ONLY, requirementsOf } from '../tasks/task-requirements.ts'
+import {
+  BROWSER_ONLY,
+  PLAIN_CHAT,
+  REPOSITORY_ONLY,
+  requirementsOf,
+} from '../tasks/task-requirements.ts'
 import {
   assertTurnInbox,
+  branchBeforeTurn,
+  turnMayHoldInbox,
   toTurnPlan,
   turnInboxAttachmentId,
   turnInboxLimits,
@@ -312,7 +319,53 @@ describe('turn plan', () => {
     ).toEqual(browser)
   })
 
+  it('keeps a turn that needs nothing: a chat without a project, no workspace', () => {
+    const { workspace: _workspace, ...rest } = request()
+    const chat: TurnRequest = { ...rest, requirements: PLAIN_CHAT }
+    const plan = toTurnPlan(withoutTurnCredentials(chat), 'opencode')
+    expect(plan).not.toHaveProperty('workspace')
+    expect(plan.requirements).toEqual(PLAIN_CHAT)
+    expect(requirementsOf(turnPlanSchema.parse(JSON.parse(JSON.stringify(plan))))).toEqual(
+      PLAIN_CHAT,
+    )
+  })
+
+  it('tells where the task branch stood when a turn started', () => {
+    const plan = toTurnPlan(withoutTurnCredentials(request()), 'opencode')
+    const turn = (number: number, pin?: string | null) => ({
+      context: { ...plan.context, turn: number },
+      workspace: {
+        ...plan.workspace!,
+        ...(pin === undefined ? {} : { expectedBranchSha: pin }),
+      },
+    })
+    const base = plan.workspace!.expectedBaseSha
+    const pinned = 'c'.repeat(40)
+    // The first turn creates the branch.
+    expect(branchBeforeTurn(turn(1))).toBeNull()
+    expect(branchBeforeTurn(turn(2))).toBe(base)
+    // A replacement names it: a refused turn may have published past what it works from.
+    expect(branchBeforeTurn(turn(2, pinned))).toBe(pinned)
+    expect(branchBeforeTurn(turn(2, null))).toBeNull()
+    expect(branchBeforeTurn({ context: plan.context })).toBeNull()
+  })
+
+  it('keeps «rewound» of a turn without a repository after `/undo`, absent otherwise', () => {
+    const { workspace: _workspace, ...rest } = request()
+    const chat: TurnRequest = { ...rest, requirements: PLAIN_CHAT, rewound: true }
+    const plan = turnPlanSchema.parse(toTurnPlan(withoutTurnCredentials(chat), 'opencode'))
+    expect(plan.rewound).toBe(true)
+    expect(withTurnCredentials(plan, { llmApiKey: 'k', mcpToken: 't' }).rewound).toBe(true)
+    expect(toTurnPlan(withoutTurnCredentials(request()), 'opencode')).not.toHaveProperty('rewound')
+  })
+
   it.each([
+    ['«rewound» with a repository', { rewound: true }, ['rewound']],
+    [
+      '«rewound» that is not true',
+      { requirements: BROWSER_ONLY, workspace: undefined, rewound: false },
+      ['rewound'],
+    ],
     ['a workspace without a repository', { requirements: BROWSER_ONLY }, ['workspace']],
     [
       'a repository without its workspace',
@@ -336,9 +389,9 @@ describe('turn plan', () => {
       ['rebased'],
     ],
     [
-      'no need at all',
-      { requirements: { repository: false, browser: false }, workspace: undefined },
-      ['requirements'],
+      'a workspace in a turn that needs nothing',
+      { requirements: { repository: false, browser: false } },
+      ['workspace'],
     ],
     ['an unknown need', { requirements: { ...REPOSITORY_ONLY, database: true } }, ['requirements']],
   ])('refuses %s', (_label, change, path) => {
@@ -423,6 +476,14 @@ describe('files of the client in a turn', () => {
     const full = Array.from({ length: 10 }, (_, index) => file(index, 20 * 1024 * 1024))
     expect(refusal(() => assertTurnInbox(full, true))).toBeNull()
     expect(refusal(() => assertTurnInbox([], false))).toBeNull()
+  })
+
+  it('lets a turn hold them with a repository or in a chat without a site, never else (К16)', () => {
+    const site = { siteId: 'site-id', taskId: 'task-id' }
+    const chat = { siteId: 'task-id', taskId: 'task-id' }
+    expect(turnMayHoldInbox(true, site)).toBe(true)
+    expect(turnMayHoldInbox(false, chat)).toBe(true)
+    expect(turnMayHoldInbox(false, site)).toBe(false)
   })
 
   it.each([

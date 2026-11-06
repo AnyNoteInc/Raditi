@@ -22,6 +22,7 @@ const prodEnv = (overrides: Env = {}): Env => ({
   BROWSER_EGRESS_IMAGE: DIGEST('egress'),
   SANDBOX_NETWORK_GUARD_IMAGE: DIGEST('guard'),
   SANDBOX_EGRESS_REFUSED_SUBNETS: '10.0.0.0/8,84.201.128.0/18',
+  BROWSER_PLATFORM_HOSTS: 'raditi.ru,raditi-preview.ru',
   ...overrides,
 })
 
@@ -35,6 +36,38 @@ function problemsOf(env: Env): readonly string[] {
   throw new Error('expected a ConfigError')
 }
 
+describe('BROWSER_PLATFORM_HOSTS (plan 61, К37)', () => {
+  it('reads public names without a port, each once', () => {
+    expect(
+      loadBrowserConfig(
+        devEnv({ BROWSER_PLATFORM_HOSTS: 'Raditi.ru, raditi-preview.ru,raditi.ru' }),
+      ).platformHosts,
+    ).toEqual(['raditi.ru', 'raditi-preview.ru'])
+  })
+
+  it('refuses a port, an address or a local name, and names no value', () => {
+    for (const bad of [
+      'raditi.ru:443',
+      '10.0.0.5',
+      'localhost',
+      'https://raditi.ru',
+      '*.raditi.ru',
+    ])
+      expect(problemsOf(devEnv({ BROWSER_PLATFORM_HOSTS: bad })), bad).toEqual([
+        'BROWSER_PLATFORM_HOSTS: expected public host names without a port',
+      ])
+  })
+
+  it('is required in production', () => {
+    expect(problemsOf(prodEnv({ BROWSER_PLATFORM_HOSTS: undefined }))).toEqual([
+      'BROWSER_PLATFORM_HOSTS: required in production (the names of the platform no browser opens)',
+    ])
+    expect(problemsOf(prodEnv({ BROWSER_PLATFORM_HOSTS: ' , ' }))).toEqual([
+      'BROWSER_PLATFORM_HOSTS: required in production (the names of the platform no browser opens)',
+    ])
+  })
+})
+
 describe('loadBrowserConfig', () => {
   it('starts on loopback with its token, the inbox bucket alone and the default numbers', () => {
     const config = loadBrowserConfig(devEnv())
@@ -45,6 +78,7 @@ describe('loadBrowserConfig', () => {
       token: TEST_WORKER_TOKEN,
       extraHosts: [],
       localSites: [],
+      platformHosts: [],
       session: { idleMinutes: 30, maxHours: 4, maxSessions: 8 },
       stream: { maxFps: 12, quality: 70, window: 2 },
       runtime: { appEnv: 'development', runtime: 'runc', refusedSubnets: [] },

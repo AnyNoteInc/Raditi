@@ -7,6 +7,7 @@ import {
   DB_CREATED_ID_BASE,
   DomainError,
   envVarReachesPreview,
+  envVarReachesTask,
   isDatabaseCopyError,
   isDomainError,
   isSiteConnectionError,
@@ -39,6 +40,7 @@ import {
   type SiteDbCapabilities,
   type SiteRuntime,
   type SiteStack,
+  type TaskRequirements,
 } from '@repo/domain'
 import { previewContentGateway, textOnlyDbRuntime, type PreviewDbRuntime } from '@repo/site-content'
 
@@ -306,13 +308,14 @@ async function databaseAccess(deps: PreviewBuildDeps, siteId: string): Promise<D
 }
 
 /**
- * The client's variables the preview gets (Р13, `envVarReachesPreview`). Their hosts no longer
- * matter to it: its internet is open (docs/plan/58).
+ * The client's variables the preview gets (Р13, `envVarReachesPreview`): never one the commands
+ * of the agent do not get (`envVarReachesTask`; the owner's answer of 18.10.2026): the preview runs
+ * the agent's code. Their hosts no longer matter to it: its internet is open (docs/plan/58).
  */
 async function previewVariables(
   deps: PreviewBuildDeps,
   siteId: string,
-  dataClass: 'synthetic' | 'client',
+  task: { dataClass: 'synthetic' | 'client'; requirements: TaskRequirements },
 ): Promise<{ env: Record<string, string> }> {
   const rows = await deps.db.siteEnvVar.findMany({
     where: { siteId },
@@ -327,7 +330,8 @@ async function previewVariables(
   })
   const env: Record<string, string> = {}
   for (const row of rows) {
-    if (!envVarReachesPreview(row, dataClass)) continue
+    if (!envVarReachesPreview(row, task.dataClass)) continue
+    if (!envVarReachesTask(row.name, task.requirements)) continue
     const stored = await deps.secrets.kvRead(siteEnvVarPath(siteId, row.name))
     // Written in Vault first, the row second: until both agree the variable waits.
     if (!stored || stored.version !== row.keyVersion) continue
@@ -681,7 +685,7 @@ async function buildPreviewOn(
   if (!seed) throw previewFailure('seed_missing')
 
   // The container (Р18, plan 58) with the variables of the client that reach a preview (Р13).
-  const variables = await previewVariables(deps, site.id, task.dataClass)
+  const variables = await previewVariables(deps, site.id, task)
   const origin = previewOriginOf(deps.config, preview.hostname)
   const spec: PreviewRuntimeSpec = {
     previewId: preview.id,

@@ -13,7 +13,6 @@ import {
 } from '@repo/db'
 import {
   AGENT_TURN_QUEUE,
-  candidateFactsSchema,
   CANDIDATE_REBASE_JOB,
   candidateRebaseDedupeKey,
   DomainError,
@@ -22,6 +21,7 @@ import {
   leaseLost,
   taskHoldExpiry,
   terminalTaskStatuses,
+  withSite,
   type CandidateRebaseJob,
   type FeedUpdateOutcome,
   type JobQueue,
@@ -32,7 +32,14 @@ import {
   type TaskStatus,
 } from '@repo/domain'
 
-import type { CandidateBuild, CandidateBuilder, StandingCandidate } from './candidate-builder.ts'
+import {
+  answersAgentCommand,
+  standingCandidateOf,
+  wordsTurnOf,
+  type CandidateBuild,
+  type CandidateBuilder,
+  type StandingCandidate,
+} from './candidate-builder.ts'
 import type { CandidateGit } from './candidate-git.ts'
 import { siteFactsOf, workspaceRulesOf } from './pass-facts.ts'
 import { UPDATE_REPAIR_MS } from './turn-planner.ts'
@@ -171,7 +178,7 @@ export class CandidateRebase {
         site: { select: { stack: true, url: true, installedVersion: true } },
       },
     })
-    const standing = task ? await this.#standing(task.id) : null
+    const standing = task ? await standingCandidateOf(this.deps.db, task.id) : null
     if (!task || !standing || task.turnNo < 1 || !carriable.includes(task.status))
       return this.#final(
         job,
@@ -183,8 +190,9 @@ export class CandidateRebase {
           : null,
       )
 
+    const sited = withSite(task)
     const lease = await this.deps.leases.acquire({
-      siteId: task.siteId,
+      siteId: sited.siteId,
       taskId: task.id,
       operation: 'turn',
       ttlMs: REBASE_LEASE_MS,
@@ -194,7 +202,7 @@ export class CandidateRebase {
       return this.#answer(job, 'busy')
     }
     try {
-      return await this.#rebase(job, task, standing, lease, git, candidates)
+      return await this.#rebase(job, sited, standing, lease, git, candidates)
     } finally {
       await this.deps.leases.release(lease).catch(() => {
         this.#logger.warn(`candidate_rebase_release_failed task=${job.taskId}`)
@@ -210,6 +218,11 @@ export class CandidateRebase {
     git: CandidateGit,
     candidates: CandidateBuilder,
   ): Promise<RebaseAnswer> {
+    // `/undo` may have finished between the read of the candidate and the lease: read anew.
+    if ((await standingCandidateOf(this.deps.db, task.id))?.id !== standing.id) {
+      await this.#again(job, 'busy')
+      return this.#answer(job, 'busy')
+    }
     const repository = await this.deps.db.gitRepository.findFirst({
       where: { siteId: task.siteId },
       orderBy: { createdAt: 'asc' },
@@ -305,7 +318,7 @@ export class CandidateRebase {
         await recordCandidate(tx, record)
         const turn = await tx.taskTurn.findUnique({
           where: { taskId_turnNo: { taskId: task.id, turnNo: task.turnNo } },
-          select: { id: true },
+          select: { id: true, undoneAt: true, rejectedAt: true },
         })
         await insertFeedEvent(tx, {
           taskId: task.id,
@@ -314,7 +327,16 @@ export class CandidateRebase {
             type: 'feed.candidate',
             payload: {
               v: 1,
-              turn: task.turnNo,
+              // The turn of the words about this revision: a turn taken back or refused has none
+              // that stand, and the answer of a command of the agent says nothing of the changes
+              // (docs/plan/61-chats-first.md, §5.14). The record keeps the task's turn: the
+              // planner reads the move from it.
+              turn:
+                (turn?.undoneAt ||
+                turn?.rejectedAt ||
+                (await answersAgentCommand(tx, task.id, task.turnNo))
+                  ? await wordsTurnOf(tx, task.id, standing.revision)
+                  : null) ?? task.turnNo,
               revision: record.revision,
               version: record.proposedVersion,
               bump: record.proposedBump,
@@ -497,23 +519,6 @@ export class CandidateRebase {
   async #committedAt(job: CandidateRebaseJob): Promise<string> {
     const at = (await this.#commandAt(job)) ?? this.#now()
     return new Date(Math.floor(at.getTime() / 1000) * 1000).toISOString()
-  }
-
-  async #standing(taskId: string): Promise<StandingCandidate | null> {
-    const row = await this.deps.db.taskCandidate.findFirst({
-      where: { taskId, status: { in: ['current', 'stale'] } },
-      orderBy: { revision: 'desc' },
-      select: {
-        id: true,
-        revision: true,
-        baseSha: true,
-        headSha: true,
-        dbPlanSha256: true,
-        facts: true,
-      },
-    })
-    const facts = row ? candidateFactsSchema.safeParse(row.facts) : null
-    return row && facts?.success ? { ...row, facts: facts.data } : null
   }
 
   /** The answer to the command, for operators and the head of the feed: an internal row. */

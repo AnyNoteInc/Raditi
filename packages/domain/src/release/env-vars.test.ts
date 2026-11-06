@@ -5,6 +5,8 @@ import {
   envVarReachesAgent,
   envVarsMayReachAgent,
   envVarReachesPreview,
+  envVarReachesTask,
+  isHostingFileAccessVariable,
   envVarValueSchema,
   refusedEnvVarPrefixes,
   isSiteSignInEnvVar,
@@ -157,6 +159,58 @@ describe('who gets the value of a client variable', () => {
     expect(envVarReachesPreview(variable(true, false, null), 'synthetic')).toBe(false)
     expect(envVarReachesPreview(variable(false, true, consented), 'synthetic')).toBe(false)
     expect(envVarReachesPreview(variable(true, true, consented), 'client')).toBe(false)
+  })
+})
+
+describe('the variables of a task, by what it works with', () => {
+  const code = { repository: true, browser: false }
+  const both = { repository: true, browser: true }
+  const live = { repository: false, browser: true }
+  const plain = { repository: false, browser: false }
+  const accesses = ['ftp', 'ssh', 'db', 'git'].flatMap(siteAccessVariableNames)
+
+  it('gives the code alone everything, the accesses of the wizard too, as before', () => {
+    for (const name of ['MAIL_API_KEY', ...accesses])
+      expect(envVarReachesTask(name, code)).toBe(true)
+    for (const name of ['SITE_DB_PASSWORD', 'SITE_GIT_TOKEN'])
+      expect(envVarReachesTask(name, code)).toBe(true)
+  })
+
+  it('gives a chat with the code and the browser all but the accesses to the files (К21, 61.27)', () => {
+    const files = ['ftp', 'ssh'].flatMap(siteAccessVariableNames)
+    expect(files).toEqual(
+      expect.arrayContaining(['FTP_HOST', 'FTP_PASSWORD', 'SFTP_PASSWORD', 'SFTP_PRIVATE_KEY']),
+    )
+    for (const name of files) expect(envVarReachesTask(name, both)).toBe(false)
+    // The owner's answer of 06.11.2026: the database and git reach the agent like any variable.
+    const opened = ['db', 'git'].flatMap(siteAccessVariableNames)
+    expect(opened).toEqual(
+      expect.arrayContaining([
+        'SITE_DB_HOST',
+        'SITE_DB_PASSWORD',
+        'SITE_GIT_URL',
+        'SITE_GIT_TOKEN',
+      ]),
+    )
+    for (const name of opened) expect(envVarReachesTask(name, both)).toBe(true)
+    expect(envVarReachesTask('MAIL_API_KEY', both)).toBe(true)
+  })
+
+  it('knows a variable of an access to the files by its name, and no other', () => {
+    for (const name of ['ftp', 'ssh'].flatMap(siteAccessVariableNames))
+      expect(isHostingFileAccessVariable(name)).toBe(true)
+    for (const name of [
+      'MAIL_API_KEY',
+      'SITE_ADMIN_PASSWORD',
+      'SFTP_PASSWORD_2',
+      ...['db', 'git'].flatMap(siteAccessVariableNames),
+    ])
+      expect(isHostingFileAccessVariable(name)).toBe(false)
+  })
+
+  it('gives a task without the repository nothing', () => {
+    expect(envVarReachesTask('MAIL_API_KEY', live)).toBe(false)
+    expect(envVarReachesTask('MAIL_API_KEY', plain)).toBe(false)
   })
 })
 

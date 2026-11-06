@@ -1,6 +1,7 @@
 // Invariants of the migrations: hand-written CHECKs and the (account_id, unit) foreign keys of
 // the ledger and holds (spec §16, §17). Needs a migrated PostgreSQL, so it runs when DATABASE_URL is set
 // (CI) and is skipped otherwise. Every write happens in a transaction that is rolled back.
+import { siteIdOf } from '@repo/domain'
 import { randomUUID } from 'node:crypto'
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -695,7 +696,7 @@ describe.skipIf(!databaseUrl)('migration constraints', () => {
       expectRejected('site_leases_state_check', async (tx) => {
         const t = await task(tx)
         await tx.siteLease.create({
-          data: { siteId: t.siteId, operation: 'turn', holderTaskId: t.id },
+          data: { siteId: siteIdOf(t), operation: 'turn', holderTaskId: t.id },
         })
       }))
 

@@ -81,8 +81,8 @@ export const gatewayPages = {
       status: 404,
       frameAncestors: context.appOrigin,
       title: 'Предпросмотр не найден',
-      text: 'Такого адреса нет или предпросмотр уже удалён. Откройте предпросмотр из диалога в кабинете.',
-      link: { href: `${context.appOrigin}/projects`, label: 'Перейти в кабинет' },
+      text: 'Такого адреса нет или предпросмотр уже удалён. Откройте предпросмотр из чата в кабинете.',
+      link: { href: `${context.appOrigin}/chats`, label: 'Перейти в кабинет' },
     }),
 
   /** pending or building: the page asks again by itself. */
@@ -100,7 +100,7 @@ export const gatewayPages = {
       status: 503,
       frameAncestors: context.appOrigin,
       title: 'Предпросмотр сейчас недоступен',
-      text: 'Откройте его заново из диалога в кабинете.',
+      text: 'Откройте его заново из чата в кабинете.',
     }),
 
   upstreamFailed: (context: PagesContext): GatewayPage =>
@@ -134,7 +134,7 @@ export const gatewayPages = {
       status: 400,
       frameAncestors: context.appOrigin,
       title: 'Неверная ссылка на предпросмотр',
-      text: 'Откройте предпросмотр из диалога в кабинете.',
+      text: 'Откройте предпросмотр из чата в кабинете.',
     }),
 
   tooLarge: (context: PagesContext): GatewayPage =>
@@ -171,7 +171,7 @@ function frameTicketScript(appOrigin: string, hostname: string, path: string): s
   return `(function(){
 var parentOrigin=${scriptString(appOrigin)},host=${scriptString(hostname)},path=${scriptString(path)};
 function say(title,text){document.getElementById('title').textContent=title;document.getElementById('text').textContent=text}
-if(window.parent===window){say('Предпросмотр открывается из кабинета','Откройте его из диалога в кабинете.');return}
+if(window.parent===window){say('Предпросмотр открывается из кабинета','Откройте его из чата в кабинете.');return}
 window.parent.postMessage({type:${scriptString(PREVIEW_TICKET_REQUEST)},host:host,path:path},parentOrigin);
 setTimeout(function(){say('Не удалось открыть предпросмотр','Обновите страницу кабинета.')},${FRAME_TICKET_WAIT_SECONDS * 1000});
 })();`

@@ -9,7 +9,7 @@ vi.mock('@/lib/hard-navigate', () => ({ hardNavigate: vi.fn() }))
 
 describe('shared account menu', () => {
   it.each(['toolbar', 'sidebar'] as const)(
-    'offers projects before profile from the %s avatar without extra trigger content',
+    'offers the chats and the projects before profile from the %s avatar without extra trigger content',
     (placement) => {
       render(
         <UserMenu
@@ -32,14 +32,16 @@ describe('shared account menu', () => {
       expect(within(menu).getByText('anna@example.ru')).toBeVisible()
       const items = within(menu).getAllByRole('menuitem')
       expect(items.map((item) => item.textContent)).toEqual([
+        'Чаты',
         'Проекты',
         'Профиль',
         'Настройки',
         'Выход',
       ])
-      expect(items[0]).toHaveAttribute('href', '/projects')
-      expect(items[1]).toHaveAttribute('href', '/profile')
-      expect(items[2]).toHaveAttribute('href', '/settings')
+      expect(items[0]).toHaveAttribute('href', '/chats')
+      expect(items[1]).toHaveAttribute('href', '/projects')
+      expect(items[2]).toHaveAttribute('href', '/profile')
+      expect(items[3]).toHaveAttribute('href', '/settings')
     },
   )
 
@@ -66,12 +68,14 @@ describe('shared account menu', () => {
     expect(trigger).toHaveAttribute('aria-expanded', 'true')
     const items = within(screen.getByRole('menu')).getAllByRole('menuitem')
     expect(items.map((item) => item.textContent)).toEqual([
+      'Чаты',
       'Проекты',
       'Профиль',
       'Настройки',
       'Выход',
     ])
     expect(items.map((item) => item.getAttribute('href'))).toEqual([
+      '/chats',
       '/projects',
       '/profile',
       '/settings',

@@ -12,7 +12,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, isAbsolute, join, relative } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 
 import {
   addOnlyPathOf,
@@ -174,6 +174,23 @@ export type CandidateRebase =
    * change a path the candidate never did. Nothing was written.
    */
   | { status: 'conflict'; paths: string[] }
+/** Who takes a task branch back (docs/plan/61-chats-first.md, §5.14: `/undo`). */
+export interface BranchRewindInput {
+  repo: RepoRef
+  /** `agent/<taskId>`. */
+  branch: string
+  /** Where the branch stands; null — nowhere: `/undo` of the first turn deleted it. */
+  from: string | null
+  /** Where it goes; null — the turn found no branch, and it is deleted. */
+  to: string | null
+}
+/** The commit `/undo` takes off a task branch, held for `/redo`. */
+export interface UndoneCommitInput {
+  repo: RepoRef
+  /** `agent/<taskId>`. */
+  branch: string
+  sha: string
+}
 /** What a candidate of a dialog needs to know about its commits (plan 53, R3: CandidateGit). */
 export interface CommitComparisonInput {
   repo: RepoRef
@@ -222,6 +239,10 @@ export const treeExportLimits = Object.freeze({
 const BOT_NAME = 'Raditi Bot'
 const BOT_EMAIL = 'bot@raditi.ru'
 const GITLEAKS_CONFIG = '[extend]\nuseDefault = true\n'
+/** Where the commits `/undo` takes off task branches are held on the remote, for `/redo`. */
+const UNDONE_COMMIT_REFS = 'refs/raditi/undone/'
+/** One per task: `agent/<taskId>` → `refs/raditi/undone/<taskId>`. */
+const undoneCommitRef = (branch: string) => `${UNDONE_COMMIT_REFS}${basename(branch)}`
 /** Gitleaks exits 1 on its own errors too: `--exit-code` changes only the code of a finding. */
 const GITLEAKS_FINDING_EXIT = 99
 /**
@@ -246,6 +267,24 @@ const botIdentity = (at: string): NodeJS.ProcessEnv => {
   }
 }
 const instantSchema = z.iso.datetime().refine((value) => Number.isFinite(Date.parse(value)))
+const rewindSchema = z
+  .object({
+    repo: publicationSourceSchema.shape.repo,
+    branch: publicationSourceSchema.shape.branch,
+    from: publicationShaSchema.nullable(),
+    to: publicationShaSchema.nullable(),
+  })
+  .strict()
+  .refine((rewind) => rewind.from !== null || rewind.to !== null)
+
+const undoneCommitSchema = z
+  .object({
+    repo: publicationSourceSchema.shape.repo,
+    branch: publicationSourceSchema.shape.branch,
+    sha: publicationShaSchema,
+  })
+  .strict()
+
 const rebaseSchema = z
   .object({
     repo: publicationSourceSchema.shape.repo,
@@ -713,6 +752,92 @@ export class GitWorkspaceService implements TurnWorkspace {
           auth,
         )
       return { status: 'rebased', headSha, treeSha: tree }
+    } catch (error) {
+      if (isDomainError(error)) throw error
+      throw failed()
+    } finally {
+      await this.dispose(workspace)
+    }
+  }
+
+  /**
+   * `/undo` and `/redo` of a turn (docs/plan/61-chats-first.md, §5.14): the task branch goes back to
+   * where the turn found it, or is deleted when the turn found none, and comes forward again, by
+   * CAS — the branch must still be at `from` (or already at `to`, which makes a retry a no-op).
+   * Nothing else is written. `assertFence` — the site lease of the press — runs right before the
+   * push and is required, as for publish().
+   */
+  async rewindBranch(
+    input: BranchRewindInput,
+    // Optional in the type only for the port of the dialogs (CandidateGit); refused when absent.
+    assertFence?: () => Promise<void>,
+  ): Promise<void> {
+    if (typeof assertFence !== 'function') throw badRequest('A rewind fence is required')
+    const parsed = rewindSchema.safeParse(input)
+    if (!parsed.success || parsed.data.repo.provider !== this.provider.kind)
+      throw badRequest('Invalid branch rewind')
+    const { repo, branch, from, to } = parsed.data
+    const workspace = await this.workspace(
+      repo,
+      [from, to].filter((sha) => sha !== null),
+    )
+    try {
+      const auth = await this.auth(repo, 'write')
+      const ref = `refs/heads/${branch}`
+      const remote = await this.remoteHead(workspace, ref, auth)
+      if (remote === (to ?? '')) return
+      if (remote !== (from ?? '')) throw conflict('Task branch changed before the rewind')
+      await assertFence()
+      await this.git(
+        workspace,
+        [
+          'push',
+          '--porcelain',
+          `--force-with-lease=${ref}:${from ?? ''}`,
+          workspace.url,
+          `${to ?? ''}:${ref}`,
+        ],
+        undefined,
+        16 * 1024,
+        auth,
+      )
+    } catch (error) {
+      if (isDomainError(error)) throw error
+      throw failed()
+    } finally {
+      await this.dispose(workspace)
+    }
+  }
+
+  /**
+   * The commit `/undo` takes off a task branch stays on the remote under a ref of its own, for
+   * `/redo`: a push of the branch leaves it only in the mirror, and a mirror lives in its container
+   * (docs/plan/61-chats-first.md, §5.14). No branch and no tag — no clone sees it, no workflow runs
+   * on it —, one per task, written over by the next `/undo`, and it lives as the task branch does.
+   * Called before the branch moves. `assertFence`, as for rewindBranch().
+   */
+  async holdUndoneCommit(
+    input: UndoneCommitInput,
+    assertFence?: () => Promise<void>,
+  ): Promise<void> {
+    if (typeof assertFence !== 'function') throw badRequest('A rewind fence is required')
+    const parsed = undoneCommitSchema.safeParse(input)
+    if (!parsed.success || parsed.data.repo.provider !== this.provider.kind)
+      throw badRequest('Invalid undone commit')
+    const { repo, branch, sha } = parsed.data
+    const workspace = await this.workspace(repo, [sha])
+    try {
+      const auth = await this.auth(repo, 'write')
+      const ref = undoneCommitRef(branch)
+      if ((await this.remoteHead(workspace, ref, auth)) === sha) return
+      await assertFence()
+      await this.git(
+        workspace,
+        ['push', '--porcelain', workspace.url, `+${sha}:${ref}`],
+        undefined,
+        16 * 1024,
+        auth,
+      )
     } catch (error) {
       if (isDomainError(error)) throw error
       throw failed()
@@ -1530,7 +1655,7 @@ export class GitWorkspaceService implements TurnWorkspace {
   /**
    * The bare mirror of the workspace's repository, holding every commit of `shas`. A commit is
    * named by its content, so one the mirror has is the one asked for and costs no network; a
-   * missing one is fetched — all branches and tags, under a short read grant, with every
+   * missing one is fetched — all branches, tags and held commits, under a short read grant, with every
    * received object checked (transfer.fsckObjects). One operation per mirror at a time. A mirror
    * whose configuration is not the one `git init` writes, or which borrows objects elsewhere, is
    * made again: git reads that configuration in fetch and cat-file.
@@ -1556,6 +1681,7 @@ export class GitWorkspaceService implements TurnWorkspace {
           workspace.url,
           '+refs/heads/*:refs/heads/*',
           '+refs/tags/*:refs/tags/*',
+          `+${UNDONE_COMMIT_REFS}*:${UNDONE_COMMIT_REFS}*`,
         ],
         undefined,
         undefined,

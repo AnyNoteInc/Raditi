@@ -132,7 +132,9 @@ function parseSpec(value: BrowserSessionRuntimeSpec, localSitesAllowed: boolean)
     if (!route || route[0] in routes) throw badRequest('Invalid browser local sites')
     routes[route[0]] = route[1]
   }
-  if (hosts.length === 0 && sites.length === 0) throw badRequest('A browser session goes nowhere')
+  // Only a chat without a site has no host of its own: it goes on the open internet (К12).
+  if (hosts.length === 0 && sites.length === 0 && value.openWeb !== true)
+    throw badRequest('A browser session goes nowhere')
   return {
     identity: { sessionId, taskId, siteId } satisfies BrowserSessionIdentity,
     deadline,

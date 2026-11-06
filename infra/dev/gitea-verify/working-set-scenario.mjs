@@ -209,4 +209,107 @@ export async function verifyWorkingSet(context) {
     [['wp-content/uploads/raditi/new.png', true]],
   )
   passed('«Обновить»: the candidate moves onto the new main as one bot commit, by compare-and-swap')
+
+  stage('working set: `/undo` takes the task branch back')
+  // docs/plan/61-chats-first.md, §5.14: where the turn found the branch, by compare-and-swap.
+  const back = { repo, branch, from: rebased.headSha, to: candidate.headSha }
+  await assert.rejects(
+    service.rewindBranch({ ...back, from: candidate.headSha, to: toBase }, async () => {}),
+    (error) => error.code === 'CONFLICT',
+    'A rewind moved a branch that stands elsewhere',
+  )
+  assert.equal(await serverHead(branch), rebased.headSha, 'A refused rewind moved the branch')
+  await assert.rejects(service.rewindBranch(back), (error) => error.code === 'BAD_REQUEST')
+  fenced = 0
+  await service.rewindBranch(back, async () => void fenced++)
+  assert.equal(fenced, 1, 'The fence was not asserted before the rewind')
+  assert.equal(await serverHead(branch), candidate.headSha, 'The task branch did not go back')
+  await service.rewindBranch(back, async () => void fenced++)
+  assert.equal(fenced, 1, 'A repeated rewind pushed again')
+  // The branch moves after the read, under the fence: only the lease of the push can refuse this.
+  const racing = join(directory, 'working-set-rewind-race')
+  await git(directory, ['clone', '--quiet', '--branch', branch, remote, racing], {
+    grant: await real.issueCredentials(repo, 'read', 30),
+  })
+  await git(racing, [
+    'commit',
+    '--quiet',
+    '--allow-empty',
+    '-m',
+    'fixture: a push of somebody else',
+  ])
+  const raced = await head(racing)
+  await assert.rejects(
+    service.rewindBranch({ repo, branch, from: candidate.headSha, to: null }, async () => {
+      await git(racing, ['push', '--quiet', remote, `HEAD:refs/heads/${branch}`], {
+        grant: await real.issueCredentials(repo, 'write', 30),
+      })
+    }),
+    'A rewind pushed over a branch that moved after it was read',
+  )
+  assert.equal(await serverHead(branch), raced, 'A lost lease moved the branch')
+  await service.rewindBranch(
+    { repo, branch, from: raced, to: candidate.headSha },
+    async () => void fenced++,
+  )
+  assert.equal(await serverHead(branch), candidate.headSha)
+  fenced = 1
+  // The first turn of a task found no branch: its undo deletes it.
+  const gone = { repo, branch, from: candidate.headSha, to: null }
+  await service.rewindBranch(gone, async () => void fenced++)
+  assert.equal(await service.readBranchHead({ repo, branch }), null, 'The branch was not deleted')
+  await service.rewindBranch(gone, async () => void fenced++)
+  assert.equal(fenced, 2, 'A repeated delete pushed again')
+  passed('`/undo`: the task branch goes back by compare-and-swap, and away after a first turn')
+
+  stage('working set: `/redo` brings the task branch back from the held commit')
+  // docs/plan/61-chats-first.md, §5.14: the branch is gone, and the commit it held is on the remote
+  // under a ref of its own, which Gitea takes, and which no clone sees.
+  await assert.rejects(service.holdUndoneCommit({ repo, branch, sha: rebased.headSha }))
+  fenced = 0
+  const held = { repo, branch, sha: rebased.headSha }
+  await service.holdUndoneCommit(held, async () => void fenced++)
+  assert.equal(fenced, 1, 'The fence was not asserted before the hold')
+  await service.holdUndoneCommit(held, async () => void fenced++)
+  assert.equal(fenced, 1, 'A repeated hold pushed again')
+  const heldRef = `refs/raditi/undone/${branch.slice('agent/'.length)}`
+  const read = await real.issueCredentials(repo, 'read', 30)
+  const refs = (await git(directory, ['ls-remote', remote, heldRef], { grant: read })).stdout
+    .toString()
+    .trim()
+  assert.match(refs, new RegExp(`^${rebased.headSha}\\s`), 'Gitea did not keep the held commit')
+  const cloned = join(directory, 'working-set-held-clone')
+  await git(directory, ['clone', '--quiet', remote, cloned], { grant: read })
+  const clonedRefs = (await git(cloned, ['for-each-ref', '--format=%(refname)'])).stdout.toString()
+  assert.doesNotMatch(clonedRefs, /raditi/, 'A clone saw the held commit')
+
+  // A new core: its mirror is empty, and the commit no branch holds comes by the held ref alone.
+  const fresh = new GitWorkspaceService(provider, {
+    ...options,
+    mirrorDir: join(directory, 'mirrors-after-restart'),
+  })
+  const forth = { repo, branch, from: null, to: rebased.headSha }
+  await assert.rejects(
+    fresh.rewindBranch({ repo, branch, from: toBase, to: rebased.headSha }, async () => {}),
+    (error) => error.code === 'CONFLICT',
+    'A redo moved a branch that does not stand where it was left',
+  )
+  await fresh.rewindBranch(forth, async () => void fenced++)
+  assert.equal(fenced, 2, 'The fence was not asserted before the redo')
+  assert.equal(await serverHead(branch), rebased.headSha, 'The task branch did not come back')
+  await fresh.rewindBranch(forth, async () => void fenced++)
+  assert.equal(fenced, 2, 'A repeated redo pushed again')
+  // Another push created the branch meanwhile: only the lease of the push can refuse this.
+  await service.rewindBranch({ repo, branch, from: rebased.headSha, to: null }, async () => {})
+  await assert.rejects(
+    fresh.rewindBranch(forth, async () => {
+      await service.rewindBranch(
+        { repo, branch, from: null, to: candidate.headSha },
+        async () => {},
+      )
+    }),
+    'A redo pushed over a branch that came up after it was read',
+  )
+  assert.equal(await serverHead(branch), candidate.headSha, 'A lost lease moved the branch')
+  passed('`/redo`: the held commit is on the remote, unseen by clones, and brings the branch back')
 }

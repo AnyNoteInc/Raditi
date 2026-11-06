@@ -10,6 +10,8 @@ import {
   previewBrowserSecretSchema,
   previewHostname,
   siteAccessPath,
+  siteEnvVarPath,
+  siteEnvVarSecret,
   siteWorkspaceRules,
   type ContentWriteRequest,
   type DatabaseCopier,
@@ -127,7 +129,11 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
     })
     await db.siteRelease.deleteMany({ where: of })
     await db.turnAssignment.deleteMany({ where: of })
-    await db.siteLease.deleteMany({ where: { site: { workspaceId: { in: ids } } } })
+    const sites = await db.site.findMany({
+      where: { workspaceId: { in: ids } },
+      select: { id: true },
+    })
+    await db.siteLease.deleteMany({ where: { siteId: { in: sites.map(({ id }) => id) } } })
     await db.task.deleteMany({ where: { workspaceId: { in: ids } } })
     await db.gitRepository.deleteMany({ where: { site: { workspaceId: { in: ids } } } })
     await db.credentialRef.deleteMany({ where: { site: { workspaceId: { in: ids } } } })
@@ -139,7 +145,10 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
     await new Promise<void>((resolve) => server.close(() => resolve()))
   })
 
-  async function dialog(status: 'awaiting_approval' | 'running' | 'done' = 'awaiting_approval') {
+  async function dialog(
+    status: 'awaiting_approval' | 'running' | 'done' = 'awaiting_approval',
+    needs: { needsBrowser?: boolean } = {},
+  ) {
     const workspace = await db.workspace.create({
       data: { name: 'Synthetic preview verification', dataClass: 'synthetic' },
     })
@@ -171,7 +180,7 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
       },
     })
     const task = await db.task.create({
-      data: { workspaceId: workspace.id, siteId: site.id, status, turnNo: 1 },
+      data: { workspaceId: workspace.id, siteId: site.id, status, turnNo: 1, ...needs },
     })
     const preview = await db.previewEnvironment.create({
       data: {
@@ -358,6 +367,47 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
     expect(f.vault.kv.get(previewDatabaseSecretPath(preview.id))?.version).toBe(1)
     expect(f.runtime.secrets.at(-1)).toEqual({ env: {}, database: passwords })
   })
+
+  // The preview runs the agent's code: it gets what the agent's commands get, never more.
+  it.each([
+    [
+      'the code alone',
+      false,
+      ['FTP_PASSWORD', 'MAIL_API_KEY', 'SFTP_PRIVATE_KEY', 'SITE_DB_PASSWORD', 'SITE_GIT_TOKEN'],
+    ],
+    ['the code and the browser', true, ['MAIL_API_KEY', 'SITE_DB_PASSWORD', 'SITE_GIT_TOKEN']],
+  ])(
+    'gives a preview of a chat with %s its variables (К21, 61.27)',
+    async (_, needsBrowser, names) => {
+      const { site, preview } = await dialog('awaiting_approval', { needsBrowser })
+      const f = manager()
+      await databaseAccess(f, site.id)
+      for (const name of [
+        'MAIL_API_KEY',
+        'FTP_PASSWORD',
+        'SFTP_PRIVATE_KEY',
+        'SITE_DB_PASSWORD',
+        'SITE_GIT_TOKEN',
+      ]) {
+        await db.siteEnvVar.create({
+          data: {
+            siteId: site.id,
+            name,
+            hosts: [],
+            toAgent: true,
+            agentConsentAt: new Date(),
+            toPreview: true,
+            keyVersion: 1,
+          },
+        })
+        await f.vault.kvWrite(siteEnvVarPath(site.id, name), siteEnvVarSecret(`${name}-value`))
+      }
+
+      expect(await f.m.refresh(preview.id, { requested: true })).toBe(true)
+
+      expect(Object.keys(f.runtime.secrets[0]!.env).toSorted()).toEqual(names)
+    },
+  )
 
   it('runs on the closest PHP to the site’s and keeps what the preview lacks (Р2, Р18)', async () => {
     const { site, preview } = await dialog()

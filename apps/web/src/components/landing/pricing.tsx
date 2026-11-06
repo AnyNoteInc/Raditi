@@ -88,7 +88,7 @@ export function Pricing({
           Обновите страницу чуть позже.{' '}
           {isGuest
             ? 'Зарегистрироваться можно уже сейчас.'
-            : nbsp('Перейти к проектам можно по ссылке ниже.')}
+            : nbsp('Перейти к чатам можно по ссылке ниже.')}
         </p>
         <Link className={styles.action} href={action.href}>
           {action.label} <LandingIcon name="arrow-right-pricing" size={20} strokeWidth={1.6} />

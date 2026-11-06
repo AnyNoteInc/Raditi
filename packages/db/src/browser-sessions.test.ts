@@ -20,6 +20,7 @@ import {
   touchBrowserSession,
 } from './browser-sessions.ts'
 import type { PrismaClient, SiteStatus, TaskStatus } from './generated/prisma/client.ts'
+import { uuidv7 } from './uuidv7.ts'
 
 const databaseUrl = process.env.DATABASE_URL
 
@@ -96,6 +97,146 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the browser session of a task', () =>
     const shorter = await openBrowserSession(db, { taskId: (await browserTask()).id, maxHours: 1 })
     expect(seconds(shorter.createdAt, shorter.expiresAt)).toBeLessThan(3600 + 5)
     await expect(openBrowserSession(db, { taskId: task.id, maxHours: 0 })).rejects.toThrow()
+  })
+
+  describe('the browser of a chat without a site (plan 61, К12)', () => {
+    async function chat(options: { needsBrowser?: boolean; status?: TaskStatus } = {}) {
+      const workspace = await db.workspace.create({
+        data: { name: 'Synthetic chat', dataClass: 'synthetic' },
+      })
+      return db.task.create({
+        data: {
+          id: uuidv7(),
+          workspaceId: workspace.id,
+          siteId: null,
+          needsRepository: false,
+          needsBrowser: options.needsBrowser ?? true,
+          status: options.status ?? 'queued',
+        },
+      })
+    }
+
+    it('opens a session with no site, once, in the workspace of the chat', async () => {
+      const task = await chat()
+      const [first, second] = await Promise.all([
+        openBrowserSession(db, { taskId: task.id }),
+        openBrowserSession(db, { taskId: task.id }),
+      ])
+      expect(second.id).toBe(first.id)
+      expect(first).toMatchObject({
+        taskId: task.id,
+        siteId: null,
+        workspaceId: task.workspaceId,
+        status: 'starting',
+      })
+    })
+
+    it('refuses a chat that needs no browser, and one that has ended', async () => {
+      const plain = await chat({ needsBrowser: false })
+      await expect(openBrowserSession(db, { taskId: plain.id })).rejects.toThrow(
+        'The task does not need a browser',
+      )
+      const ended = await chat({ status: 'done' })
+      await expect(openBrowserSession(db, { taskId: ended.id })).rejects.toThrow(
+        'The task has ended',
+      )
+    })
+
+    it('counts in the workspace with the sessions of its sites (К36)', async () => {
+      const first = await chat()
+      await openBrowserSession(db, { taskId: first.id })
+      const site = await db.site.create({
+        data: {
+          workspaceId: first.workspaceId,
+          name: 'Synthetic',
+          url: `https://${randomUUID()}.example.test`,
+          stack: 'wordpress',
+        },
+      })
+      const task = await db.task.create({
+        data: {
+          workspaceId: first.workspaceId,
+          siteId: site.id,
+          needsRepository: false,
+          needsBrowser: true,
+        },
+      })
+      await openBrowserSession(db, { taskId: task.id })
+      const third = await db.task.create({
+        data: {
+          id: uuidv7(),
+          workspaceId: first.workspaceId,
+          siteId: null,
+          needsRepository: false,
+          needsBrowser: true,
+        },
+      })
+      await expect(openBrowserSession(db, { taskId: third.id })).rejects.toMatchObject({
+        code: 'BROWSER_WORKSPACE_BUSY',
+      })
+    })
+  })
+
+  describe('the browsers of one workspace (plan 61, К36)', () => {
+    /** A task of a site of its own in a workspace of a task already there. */
+    async function neighbour(taskId: string) {
+      const { workspaceId } = await db.task.findUniqueOrThrow({ where: { id: taskId } })
+      const site = await db.site.create({
+        data: {
+          workspaceId,
+          name: 'Synthetic',
+          url: `https://${randomUUID()}.example.test`,
+          stack: 'wordpress',
+          status: 'onboarding',
+        },
+      })
+      return db.task.create({
+        data: { workspaceId, siteId: site.id, needsRepository: false, needsBrowser: true },
+      })
+    }
+
+    it('refuses a third live browser, and takes it once one has closed', async () => {
+      const first = await browserTask()
+      const second = await neighbour(first.id)
+      const third = await neighbour(first.id)
+      const open = await db.$transaction((tx) => openBrowserSession(tx, { taskId: first.id }))
+      await db.$transaction((tx) => openBrowserSession(tx, { taskId: second.id }))
+
+      await expect(
+        db.$transaction((tx) => openBrowserSession(tx, { taskId: third.id })),
+      ).rejects.toMatchObject({ code: 'BROWSER_WORKSPACE_BUSY' })
+      expect(await openBrowserSessionOfTask(db, third.id)).toBeNull()
+
+      // A task that holds a browser keeps it whatever the count.
+      const again = await db.$transaction((tx) => openBrowserSession(tx, { taskId: first.id }))
+      expect(again.id).toBe(open.id)
+
+      await closeBrowserSession(db, { sessionId: open.id, status: 'closed', reason: 'idle' })
+      const taken = await db.$transaction((tx) => openBrowserSession(tx, { taskId: third.id }))
+      expect(taken.status).toBe('starting')
+    })
+
+    it('counts under a lock: of three tasks at once two get a browser', async () => {
+      const first = await browserTask()
+      const tasks = [first, await neighbour(first.id), await neighbour(first.id)]
+      const outcomes = await Promise.allSettled(
+        tasks.map((task) => db.$transaction((tx) => openBrowserSession(tx, { taskId: task.id }))),
+      )
+      expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(2)
+      expect(
+        await db.browserSession.count({
+          where: { workspaceId: first.workspaceId, status: { in: ['starting', 'ready'] } },
+        }),
+      ).toBe(2)
+    })
+
+    it('holds no other workspace to it', async () => {
+      const first = await browserTask()
+      await db.$transaction((tx) => openBrowserSession(tx, { taskId: first.id }))
+      const elsewhere = await browserTask()
+      const opened = await db.$transaction((tx) => openBrowserSession(tx, { taskId: elsewhere.id }))
+      expect(opened.workspaceId).toBe(elsewhere.workspaceId)
+    })
   })
 
   it('opens a session for a site being connected or connected, never a closed one', async () => {
@@ -184,9 +325,39 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the browser session of a task', () =>
     expect(await markBrowserSessionWrote(db, { sessionId })).toBe(true)
     const wrote = (await row()).wroteAt
     expect(wrote).toEqual(expect.any(Date))
+    const latest = (await row()).lastWroteAt
+    expect(latest!.getTime()).toBeGreaterThanOrEqual(wrote!.getTime())
     // The first write is kept: later ones change nothing it says.
     expect(await markBrowserSessionWrote(db, { sessionId })).toBe(true)
     expect((await row()).wroteAt).toEqual(wrote)
+    // The first write of the session stays; the last one is of the latest pass.
+    expect((await row()).lastWroteAt!.getTime()).toBeGreaterThanOrEqual(latest!.getTime())
+  })
+
+  it('closes only a session still starting when asked to: a browser that came up stays', async () => {
+    const task = await browserTask()
+    const { id: sessionId } = await openBrowserSession(db, { taskId: task.id })
+    await markBrowserSessionReady(db, { sessionId })
+    expect(
+      await closeBrowserSession(db, {
+        sessionId,
+        status: 'failed',
+        reason: 'crashed',
+        errorCode: 'BROWSER_START_FAILED',
+        onlyStarting: true,
+      }),
+    ).toMatchObject({ status: 'ready', closedAt: null, errorCode: null })
+
+    const other = await browserTask()
+    const opened = await openBrowserSession(db, { taskId: other.id })
+    expect(
+      await closeBrowserSession(db, {
+        sessionId: opened.id,
+        status: 'failed',
+        reason: 'crashed',
+        onlyStarting: true,
+      }),
+    ).toMatchObject({ status: 'failed', closeReason: 'crashed' })
   })
 
   it('closes a session once, and records nothing in it but its writes after', async () => {

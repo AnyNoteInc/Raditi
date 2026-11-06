@@ -1,7 +1,6 @@
 'use client'
 
 import Box from '@mui/material/Box'
-import Button from '@mui/material/Button'
 import Typography from '@mui/material/Typography'
 import Link from 'next/link'
 import { useSelectedLayoutSegment } from 'next/navigation'
@@ -10,11 +9,6 @@ import { useEffect, useRef, type ReactNode } from 'react'
 import { AppIcon } from '@/components/application/app-icon'
 
 import { SITE_LIST_WIDTH, SITE_RAIL_WIDTH, SITE_TOOLBAR_HEIGHT } from './site-nav'
-
-/** The bottom bar of a phone, which the pinned action of the list stays above. */
-const BOTTOM_BAR = 64
-/** The page draws the panel beside a dialog: the list column gives the dialog its room. */
-const PANE_DRAWN = '[data-site-shell]:has([data-site-pane]) &'
 
 /**
  * A section of the site laid out as «list — content». From `md` the list is a column that runs
@@ -27,10 +21,8 @@ export function SiteListFrame({
   label,
   title,
   root,
-  action,
   backLabel,
   list,
-  collapseOnItem = false,
   children,
 }: {
   /** The accessible name of the list column. */
@@ -39,21 +31,12 @@ export function SiteListFrame({
   title: string
   /** The address of the section itself, where the back arrow leads. */
   root: string
-  /** The main action of the list: a link to a segment under the section. */
-  action?: { segment: string; label: string }
   backLabel: string
   list: ReactNode
-  /**
-   * An item other than the action's — a dialog — stands at the height of the window from `lg`,
-   * and gives the list column up while the panel of its changes is drawn beside it
-   * (`data-site-pane`): the item takes the width and the way back is shown.
-   */
-  collapseOnItem?: boolean
   children: ReactNode
 }) {
   const segment = useSelectedLayoutSegment()
   const selected = segment !== null
-  const collapsed = collapseOnItem && selected && segment !== action?.segment
 
   // Below `md` a move between the list and an item hides the link that had the focus. The
   // focus then goes to the content instead of being dropped to the top of the document.
@@ -68,30 +51,16 @@ export function SiteListFrame({
   }, [segment])
 
   return (
-    <Box
-      sx={{
-        flex: '1 0 auto',
-        minWidth: 0,
-        display: 'flex',
-        flexDirection: 'column',
-        // An item that takes the width from `lg` — a dialog — stands at the height of the window
-        // and scrolls inside itself (owner's request of 26.10.2026): the frame passes the height on.
-        ...(collapsed && { flex: { xs: '1 0 auto', lg: '1 1 0' }, minHeight: { lg: 0 } }),
-      }}
-    >
+    <Box sx={{ flex: '1 0 auto', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
       <Box
         component="nav"
         aria-label={label}
-        // The browser of a task over the content covers this column: it leaves the tab order then.
-        data-site-list=""
         sx={{
-          // A column on a phone, so the pinned action has the whole list to stick within.
           display: {
             xs: selected ? 'none' : 'flex',
             sm: selected ? 'none' : 'grid',
             md: 'grid',
           },
-          ...(collapsed && { [PANE_DRAWN]: { display: { lg: 'none' } } }),
           flexDirection: 'column',
           flex: '1 0 auto',
           minWidth: 0,
@@ -128,28 +97,6 @@ export function SiteListFrame({
         >
           {title}
         </Typography>
-        {action && (
-          <Button
-            component={Link}
-            href={`${root}/${action.segment}`}
-            aria-current={segment === action.segment ? 'page' : undefined}
-            variant="contained"
-            startIcon={<AppIcon name="plus" size={18} />}
-            sx={{
-              order: { xs: 1, sm: 0 },
-              gridRow: { sm: 1 },
-              gridColumn: { sm: 2 },
-              minHeight: { xs: 48, sm: 44 },
-              borderRadius: '999px',
-              whiteSpace: 'nowrap',
-              // On a phone the action stays within reach under a long list, above the bar.
-              position: { xs: 'sticky', sm: 'static' },
-              bottom: { xs: `calc(${BOTTOM_BAR + 12}px + env(safe-area-inset-bottom))` },
-            }}
-          >
-            {action.label}
-          </Button>
-        )}
         <Box
           sx={{
             flex: { xs: '1 0 auto' },
@@ -168,13 +115,8 @@ export function SiteListFrame({
       <Box
         sx={{
           display: 'flex',
-          flex: {
-            xs: selected ? '1 0 auto' : 'none',
-            md: '1 0 auto',
-            ...(collapsed && { lg: '1 1 0' }),
-          },
+          flex: { xs: selected ? '1 0 auto' : 'none', md: '1 0 auto' },
           minWidth: 0,
-          ...(collapsed && { minHeight: { lg: 0 } }),
           flexDirection: 'column',
         }}
       >
@@ -182,16 +124,8 @@ export function SiteListFrame({
           <Box
             component={Link}
             href={root}
-            // The browser of a task over the content covers this way back too: it leaves the tab
-            // order then, as the list does.
-            data-site-back=""
             sx={{
               display: { xs: 'inline-flex', md: 'none' },
-              // From `lg` the item drawn beside its panel takes the room of the list: the way to it
-              // is shown. Below, a tool drawn in place of a dialog has its own way back to the
-              // dialog, «К диалогу» (docs/plan/59-dialog-tools-panel.md, И14): one way back at a
-              // time.
-              ...(collapsed && { [PANE_DRAWN]: { display: { xs: 'none', lg: 'inline-flex' } } }),
               alignSelf: 'flex-start',
               alignItems: 'center',
               gap: 1,

@@ -4,6 +4,7 @@ import {
   BROWSER_ONLY,
   isProduction,
   REPOSITORY_ONLY,
+  taskRequirementsSchema,
   type TaskRequirements,
 } from '@repo/domain'
 import { z } from 'zod'
@@ -32,9 +33,16 @@ export type RepositoryCapability = (typeof repositoryCapabilityStates)[number]
  * `ready` — the site takes tasks in the browser; `not_configured` — the platform has no browser in
  * this process; `closed` — the site is paused, disconnected or archived; `insecure` — in
  * production the site's address is not https, and the platform's browser opens https sites only
- * (its egress passes TLS alone, Б11).
+ * (its egress passes TLS alone, Б11); `unsupported` — the adapter of the site's stack has no
+ * browser support (docs/plan/61-chats-first.md, К8).
  */
-export const browserCapabilityStates = ['ready', 'not_configured', 'closed', 'insecure'] as const
+export const browserCapabilityStates = [
+  'ready',
+  'not_configured',
+  'unsupported',
+  'closed',
+  'insecure',
+] as const
 export type BrowserCapability = (typeof browserCapabilityStates)[number]
 
 export interface SiteCapabilities {
@@ -50,6 +58,9 @@ export const siteCapabilitiesOutput = z.strictObject({
 /** A site in one of these takes no task at all (`browserClosedSiteStatuses` of @repo/db). */
 const CLOSED: readonly SiteStatus[] = ['paused', 'disconnected', 'archived']
 
+/** The site is paused, disconnected or archived: its chats are read, not written (К39). */
+export const siteClosed = (status: SiteStatus): boolean => CLOSED.includes(status)
+
 /** What the capabilities of a site are decided by, as the procedures read it. */
 export interface SiteCapabilityFacts {
   status: SiteStatus
@@ -59,6 +70,8 @@ export interface SiteCapabilityFacts {
   hasRepository: boolean
   /** The cabinet can show a browser of the platform: the stream of the browser is set up. */
   browserConfigured: boolean
+  /** The adapter of the site's stack works in its admin pages (`ChatContext.browserSupported`). */
+  browserStack: boolean
   /** The browser can open the site's address: https, or any address outside production. */
   secureAddress: boolean
 }
@@ -68,7 +81,7 @@ export const browserAddressSecure = (url: string, appEnv: AppEnv | null): boolea
   appEnv === null || !isProduction(appEnv) || url.startsWith('https://')
 
 export function siteCapabilities(site: SiteCapabilityFacts): SiteCapabilities {
-  const closed = CLOSED.includes(site.status)
+  const closed = siteClosed(site.status)
   let repository: RepositoryCapability
   if (closed) repository = 'inactive'
   else if (site.setup === 'pending') repository = 'importing'
@@ -78,18 +91,58 @@ export function siteCapabilities(site: SiteCapabilityFacts): SiteCapabilities {
   let browser: BrowserCapability
   if (closed) browser = 'closed'
   else if (!site.browserConfigured) browser = 'not_configured'
+  else if (!site.browserStack) browser = 'unsupported'
   else if (!site.secureAddress) browser = 'insecure'
   else browser = 'ready'
   return { repository, browser }
 }
 
 /**
- * The requirements of a task the client did not choose (`task.create` without them): the
- * repository where it is ready, else the browser where it is — and the repository otherwise, so a
- * site that takes neither is refused in the words it always was.
+ * What the picker of a new chat says of a project: `ready` — it takes a chat; `importing` and
+ * `import_failed` — it takes one in the browser while its files are not there; the other three
+ * name why it takes none (docs/plan/61-chats-first.md, К8).
  */
-export function defaultRequirements(capabilities: SiteCapabilities): TaskRequirements {
-  if (capabilities.repository === 'ready') return { ...REPOSITORY_ONLY }
-  if (capabilities.browser === 'ready') return { ...BROWSER_ONLY }
-  return { ...REPOSITORY_ONLY }
+export const projectChatStates = [
+  'ready',
+  'importing',
+  'import_failed',
+  'closed',
+  'insecure',
+  'unavailable',
+] as const
+export type ProjectChatState = (typeof projectChatStates)[number]
+
+/** The chat of a project: its state and what it works with; null — it takes no chat now. */
+export interface ProjectChat {
+  state: ProjectChatState
+  requirements: TaskRequirements | null
+}
+
+export const projectChatOutput = z.strictObject({
+  state: z.enum(projectChatStates),
+  requirements: taskRequirementsSchema.nullable(),
+})
+
+/** A chat with the code and the live site in one (К10). */
+const CODE_AND_BROWSER: TaskRequirements = Object.freeze({ repository: true, browser: true })
+
+const browserChatStates: Readonly<Record<RepositoryCapability, ProjectChatState>> = Object.freeze({
+  ready: 'ready',
+  absent: 'ready',
+  inactive: 'ready',
+  importing: 'importing',
+  failed: 'import_failed',
+})
+
+/** The requirements of a chat by its project: the server's, the client sends only the project (К7). */
+export function chatRequirements({ repository, browser }: SiteCapabilities): ProjectChat {
+  if (browser === 'closed') return { state: 'closed', requirements: null }
+  if (repository === 'ready')
+    return {
+      state: 'ready',
+      requirements: browser === 'ready' ? { ...CODE_AND_BROWSER } : { ...REPOSITORY_ONLY },
+    }
+  if (browser === 'ready')
+    return { state: browserChatStates[repository], requirements: { ...BROWSER_ONLY } }
+  return { state: browser === 'insecure' ? 'insecure' : 'unavailable', requirements: null }
 }

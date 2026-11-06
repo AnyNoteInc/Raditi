@@ -14,6 +14,8 @@ export const queueNames = [
   'billing',
   // Building, syncing and the browser of a dialog's preview (docs/plan/53-chat-preview-release.md).
   'previews',
+  // Starting the browser of a task the first time its agent needs it (docs/plan/61-chats-first.md, К11).
+  'browser-sessions',
 ] as const
 export type QueueName = (typeof queueNames)[number]
 

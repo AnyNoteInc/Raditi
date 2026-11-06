@@ -93,6 +93,12 @@ async function rejection(promise: Promise<unknown>): Promise<DomainError> {
 }
 
 describe('the HTTP client of the browser worker', () => {
+  it('ensures the browser of a chat without a site: it says so (plan 61, К12)', async () => {
+    const { client, calls } = workerWith(() => json(state))
+    await expect(client.ensure({ ...ensureRequest, siteId: null })).resolves.toEqual(state)
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ ...ensureRequest, siteId: null })
+  })
+
   it('ensures a session with the token and reads its state', async () => {
     const { client, calls } = workerWith(() => json(state))
     await expect(client.ensure(ensureRequest)).resolves.toEqual(state)
@@ -212,7 +218,7 @@ describe('the HTTP client of the browser worker', () => {
     expect([error.code, error.httpStatus, error.message]).toEqual([
       'BROWSER_ADDRESS_DENIED',
       403,
-      'This address is outside the site.',
+      'This address cannot be opened from this browser.',
     ])
   })
 

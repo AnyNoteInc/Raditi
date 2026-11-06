@@ -328,7 +328,8 @@ export const usageEntrySchema = z
       title: z.string().min(1).nullable(),
       status: z.enum(taskStatuses),
     }),
-    site: z.object({ id: z.uuid(), name: z.string() }),
+    /** null — a chat without a project (docs/plan/61-chats-first.md, §5.10). */
+    site: z.object({ id: z.uuid(), name: z.string() }).nullable(),
   })
   .refine(
     ({ outcome, credits }) => (credits !== null) === (outcome === 'charged' || outcome === 'held'),
@@ -395,8 +396,15 @@ export const tariffUsageSchema = z.object({
   today: tariffDaySchema.nullable(),
   /** Sites of the workspace, whatever their status, against the site limit of the plan. */
   sites: z.object({ count: wholeCredits, max: positiveCount }),
-  /** Credits charged in the period per site, the largest first; a site without any is absent. */
-  bySite: z.array(z.object({ siteId: z.uuid(), name: z.string(), credits: positiveCount })),
+  /**
+   * Credits charged in the period per site, the largest first; a site without any is absent. The
+   * chats without a project stand as one line with neither an id nor a name.
+   */
+  bySite: z.array(
+    z
+      .object({ siteId: z.uuid().nullable(), name: z.string().nullable(), credits: positiveCount })
+      .refine(({ siteId, name }) => (siteId === null) === (name === null)),
+  ),
 })
 export type TariffUsageDto = z.infer<typeof tariffUsageSchema>
 

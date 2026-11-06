@@ -9,6 +9,7 @@ import {
   dbPlanViewNeedsReview,
   dbPlanViewSchema,
   previewRuntimeMatchSchema,
+  siteIdOf,
   versionBumps,
   type CandidateCheckStatus,
   type CandidateFiles,
@@ -199,7 +200,7 @@ export async function readCandidate(
     .object({ runtimeMatch: previewRuntimeMatchSchema.nullable().optional() })
     .safeParse(preview?.runtime)
   const proposal = await versionProposal(db, {
-    siteId: task.siteId,
+    siteId: siteIdOf(task),
     baseVersion: candidate.baseVersion,
     facts: candidate.facts,
   })

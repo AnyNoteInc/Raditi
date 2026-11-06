@@ -15,6 +15,7 @@ import {
   type PrismaClient,
 } from '@repo/db'
 import type { BrowserVerifiedObject, CandidateFacts, TurnResult } from '@repo/domain'
+import { failureAllowsRetry, siteIdOf } from '@repo/domain'
 import { getSiteAdapter } from '@repo/site-adapters'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
@@ -618,7 +619,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
       await db.gitRepository.create({
         data: {
-          siteId: task.siteId,
+          siteId: siteIdOf(task),
           provider: 'gitea',
           owner: 'sites-r3-settle',
           name: `site-${task.siteId}`,
@@ -632,6 +633,8 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       const git = candidateGitOf({
         readBranchHead: vi.fn(),
         rebaseCandidate: vi.fn(),
+        rewindBranch: vi.fn(),
+        holdUndoneCommit: vi.fn(),
         treeOf: vi.fn(async ({ sha }: { sha: string }) => trees[sha]!),
       })
       const put = vi.fn(async () => {})
@@ -1152,6 +1155,494 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       // The dialog stays open (28.10.2026).
       expect(await status(task.taskId)).toBe('awaiting_user')
       expect((await feed(task.taskId))[0]![1]).toMatchObject({ code: 'technical' })
+    })
+  })
+
+  describe('of a chat with the code and the browser (docs/plan/61-chats-first.md, §5.8)', () => {
+    const STARTED = new Date('2026-10-17T09:00:00.000Z')
+    const editUrl = 'https://example.ru/wp-admin/post.php?post=12&action=edit'
+    const news = (objectId: string): BrowserVerifiedObject => ({
+      kind: 'post',
+      objectId,
+      title: `Новость ${objectId}`,
+      status: 'publish',
+      url: `https://example.ru/${objectId}/`,
+      editUrl,
+      images: 0,
+      files: 0,
+      featuredImage: false,
+    })
+
+    /**
+     * A chat in its turn 2, which started at STARTED, the feed having told of turn 1; a candidate
+     * stands when `standing`. `asked` — in its turn 3: turn 2 ended with a question, which tells
+     * of nothing.
+     */
+    async function both(options: { standing?: boolean; asked?: boolean } = {}) {
+      const { userId } = await fixtures.user()
+      const workspace = await db.$transaction((tx) =>
+        ensurePersonalWorkspaceWithGift(tx, { userId, appEnv: 'test' }),
+      )
+      const turnNo = options.asked ? 3 : 2
+      const { taskId } = await fixtures.task(workspace.id, {
+        status: 'running',
+        turnNo,
+        needsRepository: true,
+        needsBrowser: true,
+      })
+      for (const no of options.asked ? [1, 2, 3] : [1, 2])
+        await db.taskTurn.create({
+          data: {
+            taskId,
+            turnNo: no,
+            status: 'completed',
+            driverId: sampleDriverId,
+            image,
+            headSha: HEAD,
+            startedAt: new Date(STARTED.getTime() + (no - 2) * 3_600_000),
+          },
+        })
+      await insertFeedEvent(db, {
+        taskId,
+        row: {
+          type: 'feed.request',
+          payload: {
+            v: 1,
+            kind: 'first',
+            authorId: userId,
+            requestId: randomUUID(),
+            text: 'Опубликуйте новость и поправьте шапку',
+          },
+        },
+      })
+      const told = await insertFeedEvent(db, {
+        taskId,
+        row: {
+          type: 'feed.result',
+          payload: {
+            v: 1,
+            turn: 1,
+            message: 'Новость опубликована.',
+            site: 'changed',
+            next: 'awaiting_user',
+            filesChanged: 0,
+            changeType: 'content',
+            needsApproval: false,
+            risk: 'low',
+          },
+        },
+      })
+      await db.taskEvent.update({
+        where: { id: told },
+        data: { createdAt: new Date(STARTED.getTime() - 1_800_000) },
+      })
+      await fixtures.reserve({
+        workspaceId: workspace.id,
+        taskId,
+        attempt: 1,
+        now: NOW,
+        expiresAt: new Date(NOW.getTime() + 3_600_000),
+      })
+      if (options.standing) await db.$transaction((tx) => recordCandidate(tx, record(taskId, 1)))
+      const session = await openBrowserSession(db, { taskId })
+      return { userId, taskId, turnNo, sessionId: session.id }
+    }
+    type Chat = Awaited<ReturnType<typeof both>>
+    /** The object, as a read left it: `ago` hours before the pass, or within it when absent. */
+    async function published(chat: Chat, objectId: string, ago?: number) {
+      await upsertBrowserCheckpoint(db, {
+        taskId: chat.taskId,
+        sessionId: chat.sessionId,
+        ref: { kind: 'post', objectId, editUrl },
+        state: 'verified',
+        verified: news(objectId),
+      })
+      if (ago !== undefined)
+        await db.browserCheckpoint.updateMany({
+          where: { taskId: chat.taskId, objectId },
+          data: { updatedAt: new Date(STARTED.getTime() - ago * 3_600_000) },
+        })
+    }
+    const wrote = (chat: Chat, at: Date) =>
+      db.browserSession.update({
+        where: { id: chat.sessionId },
+        data: { wroteAt: new Date(STARTED.getTime() - 7_200_000), lastWroteAt: at },
+      })
+    const earlier = new Date(STARTED.getTime() - 3_600_000)
+    const inThisPass = new Date(STARTED.getTime() + 60_000)
+    const answer = (patch: Partial<TurnResult> = {}, turn = 2): PassEnding => ({
+      kind: 'completed',
+      turn,
+      result: result({ client_message: 'Готово.', ...patch }),
+      headSha: HEAD,
+    })
+    const row = async (taskId: string, type: string) =>
+      (await feed(taskId)).findLast(([kind]) => kind === type)?.[1] as Record<string, unknown>
+
+    it('asks for the sign-in with a candidate standing: the request is not lost', async () => {
+      const chat = await both({ standing: true })
+      await db.browserSession.update({
+        where: { id: chat.sessionId },
+        data: { helpReason: 'login', helpMessage: 'Войдите в админку' },
+      })
+      const answered = await settlement(() => ({ kind: 'unchanged' })).settle(ref(chat), answer())
+
+      expect(answered).toBe('moved')
+      expect(await status(chat.taskId)).toBe('awaiting_user')
+      expect(await row(chat.taskId, 'feed.question')).toMatchObject({
+        kind: 'browser',
+        reason: 'login',
+        message: 'Войдите в админку',
+      })
+      // Only the result of turn 1.
+      expect((await feed(chat.taskId)).filter(([type]) => type === 'feed.result')).toHaveLength(1)
+      // The candidate stands: the client signs in and it waits for `/release` after that.
+      expect(
+        await db.taskCandidate.count({ where: { taskId: chat.taskId, status: 'current' } }),
+      ).toBe(1)
+      expect(await charged(chat.taskId)).toBeGreaterThan(0)
+    })
+
+    it('waits for the client who holds the browser, with what the agent said', async () => {
+      const chat = await both({ standing: true })
+      await db.browserSession.update({
+        where: { id: chat.sessionId },
+        data: { controller: 'user' },
+      })
+      await settlement(() => ({ kind: 'unchanged' })).settle(
+        ref(chat),
+        answer({ client_message: 'Шапку поправил.' }),
+      )
+
+      expect(await status(chat.taskId)).toBe('awaiting_user')
+      expect(await row(chat.taskId, 'feed.question')).toMatchObject({
+        kind: 'browser',
+        reason: 'control',
+        message: 'Шапку поправил.',
+      })
+    })
+
+    it('tells of the object this pass published, and of none of the earlier ones', async () => {
+      const chat = await both()
+      await published(chat, '11', 1)
+      await published(chat, '12')
+      await wrote(chat, inThisPass)
+      await settlement(() => EMPTY).settle(ref(chat), answer())
+
+      const shown = await row(chat.taskId, 'feed.result')
+      expect(shown).toMatchObject({ site: 'changed', next: 'awaiting_user' })
+      expect((shown.objects as { title: string }[]).map((object) => object.title)).toEqual([
+        'Новость 12',
+      ])
+    })
+
+    it('says nothing of the site to a question about the code after a news item', async () => {
+      const chat = await both()
+      await published(chat, '11', 1)
+      await wrote(chat, earlier)
+      await settlement(() => EMPTY).settle(ref(chat), answer())
+
+      const shown = await row(chat.taskId, 'feed.result')
+      expect(shown).toMatchObject({ site: 'unchanged' })
+      expect(shown).not.toHaveProperty('objects')
+    })
+
+    it('tells of a pass that ended with a question in the next result', async () => {
+      const chat = await both({ asked: true })
+      await published(chat, '11', 1)
+      await published(chat, '12', -0.1)
+      await wrote(chat, inThisPass)
+      await settlement(() => EMPTY).settle(ref(chat), answer({}, 3))
+
+      const shown = await row(chat.taskId, 'feed.result')
+      expect(shown).toMatchObject({ turn: 3, site: 'changed' })
+      expect((shown.objects as { title: string }[]).map((object) => object.title)).toEqual([
+        'Новость 12',
+      ])
+    })
+
+    it('does not take what someone else changed on the site for the work of this pass', async () => {
+      const chat = await both()
+      await published(chat, '11', 1)
+      await wrote(chat, earlier)
+      // The read at the end of a pass that never touched the browser found another title.
+      await upsertBrowserCheckpoint(db, {
+        taskId: chat.taskId,
+        sessionId: chat.sessionId,
+        ref: { kind: 'post', objectId: '11', editUrl },
+        state: 'verified',
+        verified: { ...news('11'), title: 'Заголовок из админки' },
+      })
+      await settlement(() => EMPTY).settle(ref(chat), answer())
+
+      const shown = await row(chat.taskId, 'feed.result')
+      expect(shown).toMatchObject({ site: 'unchanged' })
+      expect(shown).not.toHaveProperty('objects')
+    })
+
+    it('asks the client to check the site when this pass acted and nothing is confirmed', async () => {
+      const chat = await both()
+      await published(chat, '11', 1)
+      await wrote(chat, inThisPass)
+      await settlement(() => EMPTY).settle(ref(chat), answer())
+
+      expect(await row(chat.taskId, 'feed.result')).toMatchObject({ site: 'check' })
+    })
+
+    it('does not write «ничего не изменилось» on the card of a candidate after a news item', async () => {
+      const chat = await both({ standing: true })
+      await published(chat, '11', 1)
+      await wrote(chat, earlier)
+      await settlement(() => ({ kind: 'unchanged' })).settle(ref(chat), answer())
+
+      expect(await row(chat.taskId, 'feed.result')).toMatchObject({
+        site: 'none',
+        next: 'awaiting_approval',
+      })
+      expect(await status(chat.taskId)).toBe('awaiting_approval')
+    })
+
+    it('says «unchanged» on that card while the browser did nothing in the chat', async () => {
+      const chat = await both({ standing: true })
+      await settlement(() => ({ kind: 'unchanged' })).settle(ref(chat), answer())
+
+      expect(await row(chat.taskId, 'feed.result')).toMatchObject({
+        site: 'unchanged',
+        next: 'awaiting_approval',
+      })
+    })
+
+    it('fails a pass with a candidate naming what this pass left on the site', async () => {
+      const chat = await both({ standing: true })
+      await published(chat, '11', 1)
+      await published(chat, '12')
+      await wrote(chat, inThisPass)
+      await settlement().settle(ref(chat), { kind: 'failed', turn: 2, errorCode: 'crash' })
+
+      const failure = await row(chat.taskId, 'feed.failure')
+      expect(failure).toMatchObject({ site: 'check', next: 'awaiting_approval' })
+      expect((failure.objects as { title: string }[]).map((object) => object.title)).toEqual([
+        'Новость 12',
+      ])
+      expect(await status(chat.taskId)).toBe('awaiting_approval')
+    })
+
+    it('fails a pass without a candidate the same way, the chat open', async () => {
+      const chat = await both()
+      await published(chat, '11', 1)
+      await published(chat, '12')
+      await wrote(chat, inThisPass)
+      await settlement().settle(ref(chat), { kind: 'failed', turn: 2, errorCode: 'crash' })
+
+      const failure = await row(chat.taskId, 'feed.failure')
+      expect(failure).toMatchObject({ next: 'awaiting_user' })
+      expect((failure.objects as { title: string }[]).map((object) => object.title)).toEqual([
+        'Новость 12',
+      ])
+    })
+
+    it('keeps «Попробовать ещё» after a news item of an earlier pass', async () => {
+      const chat = await both({ standing: true })
+      await published(chat, '11', 1)
+      await wrote(chat, earlier)
+      await settlement().settle(ref(chat), { kind: 'failed', turn: 2, errorCode: 'crash' })
+
+      const failure = await row(chat.taskId, 'feed.failure')
+      expect(failure).toMatchObject({ code: 'technical', site: 'none' })
+      expect(failure).not.toHaveProperty('objects')
+      expect(failureAllowsRetry(failure as Parameters<typeof failureAllowsRetry>[0])).toBe(true)
+    })
+
+    it('closes «Попробовать ещё» for the pass that acted on the site itself', async () => {
+      const chat = await both({ standing: true })
+      await wrote(chat, inThisPass)
+      await settlement().settle(ref(chat), { kind: 'failed', turn: 2, errorCode: 'crash' })
+
+      const failure = await row(chat.taskId, 'feed.failure')
+      expect(failure).toMatchObject({ code: 'technical', site: 'check' })
+      expect(failureAllowsRetry(failure as Parameters<typeof failureAllowsRetry>[0])).toBe(false)
+    })
+
+    it.each<[string, PassEnding]>([
+      ['the planner refused', { kind: 'refused', code: 'unavailable' }],
+      ['failed before its turn', { kind: 'failed', turn: null, errorCode: 'crash' }],
+    ])('names none of the earlier objects when a pass %s', async (_, ending) => {
+      const chat = await both()
+      await published(chat, '11', 1)
+      await wrote(chat, earlier)
+      await settlement().settle(ref(chat), ending)
+
+      const failure = await row(chat.taskId, 'feed.failure')
+      expect(failure).toMatchObject({ site: 'none', next: 'awaiting_user' })
+      expect(failure).not.toHaveProperty('objects')
+    })
+
+    it('names all the chat left on the site when it is cancelled: it ends there', async () => {
+      const chat = await both()
+      await published(chat, '11', 1)
+      await published(chat, '12')
+      await settlement().settle(ref(chat), { kind: 'cancelled', turn: 2 })
+
+      const cancelled = await row(chat.taskId, 'feed.cancelled')
+      expect((cancelled.objects as { title: string }[]).map((object) => object.title)).toEqual([
+        'Новость 11',
+        'Новость 12',
+      ])
+    })
+
+    it('keeps the words of a chat with the code alone as they were', async () => {
+      const task = await dialog()
+      await settlement().settle(ref(task), completed())
+
+      const shown = await row(task.taskId, 'feed.result')
+      expect(shown).toMatchObject({ site: 'unchanged' })
+      expect(shown).not.toHaveProperty('objects')
+    })
+  })
+
+  describe('of a chat without a project (docs/plan/61-chats-first.md, К18)', () => {
+    /** A chat at work in its first turn, the gift set aside; `browser` — with a browser. */
+    async function chat({ browser = false, wrote = false } = {}) {
+      const { userId } = await fixtures.user()
+      const workspace = await db.$transaction((tx) =>
+        ensurePersonalWorkspaceWithGift(tx, { userId, appEnv: 'test' }),
+      )
+      const { taskId } = await fixtures.task(workspace.id, {
+        status: 'running',
+        turnNo: 1,
+        siteId: null,
+        needsRepository: false,
+        needsBrowser: browser,
+      })
+      await db.taskTurn.create({
+        data: { taskId, turnNo: 1, status: 'completed', driverId: sampleDriverId, image },
+      })
+      await insertFeedEvent(db, {
+        taskId,
+        row: {
+          type: 'feed.request',
+          payload: {
+            v: 1,
+            kind: 'first',
+            authorId: userId,
+            requestId: randomUUID(),
+            text: 'Предложите пять названий для пекарни',
+          },
+        },
+      })
+      await fixtures.reserve({
+        workspaceId: workspace.id,
+        taskId,
+        attempt: 1,
+        now: NOW,
+        expiresAt: new Date(NOW.getTime() + 3_600_000),
+      })
+      if (browser)
+        await db.browserSession.create({
+          data: {
+            taskId,
+            workspaceId: workspace.id,
+            siteId: null,
+            status: 'ready',
+            readyAt: new Date(),
+            // The database's clock checks it, not the clock of this file.
+            expiresAt: new Date(Date.now() + 3_600_000),
+            ...(wrote ? { wroteAt: new Date(), lastWroteAt: new Date() } : {}),
+          },
+        })
+      return { userId, workspaceId: workspace.id, taskId, turnNo: 1 }
+    }
+    const open = () =>
+      new PassSettlement({
+        db,
+        candidates: null,
+        browser: { close: vi.fn(async () => {}) },
+        logger: quiet,
+        now: () => NOW,
+      })
+    const answered = (): PassEnding => ({
+      kind: 'completed',
+      turn: 1,
+      result: result({ client_message: 'Вот пять вариантов.', files_changed: [] }),
+    })
+    const failed: PassEnding = { kind: 'failed', turn: 1, errorCode: 'TURN_EXEC_FAILED' }
+
+    it('answers without a word of a site or of files, and charges the pass', async () => {
+      const task = await chat()
+
+      expect(await open().settle(ref(task), answered())).toBe('moved')
+
+      expect(await status(task.taskId)).toBe('awaiting_user')
+      const [[type, row] = []] = await feed(task.taskId)
+      expect(type).toBe('feed.result')
+      expect(row).toMatchObject({ site: 'none', filesChanged: 0, next: 'awaiting_user' })
+      expect((await holds(task.taskId)).every((hold) => hold.status === 'captured')).toBe(true)
+    })
+
+    it('fails and cancels without a word of a site', async () => {
+      const failing = await chat()
+      const cancelling = await chat()
+      const waiting = await chat()
+      await db.task.update({ where: { id: waiting.taskId }, data: { status: 'awaiting_user' } })
+      await cancelPress(waiting)
+
+      await open().settle(ref(failing), failed)
+      await open().settle(ref(cancelling), { kind: 'cancelled', turn: 1 })
+      expect(await open().cancelWaiting(waiting.taskId)).toBe('moved')
+
+      expect((await feed(failing.taskId))[0]).toEqual([
+        'feed.failure',
+        {
+          v: 1,
+          turn: 1,
+          code: 'technical',
+          site: 'none',
+          credits: 'returned',
+          next: 'awaiting_user',
+        },
+      ])
+      for (const task of [cancelling, waiting])
+        expect((await feed(task.taskId))[0]).toEqual([
+          'feed.cancelled',
+          expect.objectContaining({ site: 'none', credits: 'returned' }),
+        ])
+    })
+
+    it('leaves a chat held for recovery open, with its credits back', async () => {
+      const task = await chat()
+
+      await open().settle(ref(task), { kind: 'failed', turn: 1, errorCode: 'SITE_HELD' })
+
+      expect(await status(task.taskId)).toBe('awaiting_user')
+      expect((await feed(task.taskId))[0]).toEqual([
+        'feed.failure',
+        {
+          v: 1,
+          turn: 1,
+          code: 'site_held',
+          site: 'none',
+          credits: 'returned',
+          next: 'awaiting_user',
+        },
+      ])
+    })
+
+    // `wrote_at` is set by any click, so only a failure and a cancellation speak of it.
+    it('names other sites once something was done in its browser, never in an answer', async () => {
+      const failing = await chat({ browser: true, wrote: true })
+      const cancelling = await chat({ browser: true, wrote: true })
+      const answering = await chat({ browser: true, wrote: true })
+      const untouched = await chat({ browser: true })
+
+      await open().settle(ref(failing), failed)
+      await open().settle(ref(cancelling), { kind: 'cancelled', turn: 1 })
+      await open().settle(ref(answering), answered())
+      await open().settle(ref(untouched), failed)
+
+      expect((await feed(failing.taskId))[0]![1]).toMatchObject({ site: 'elsewhere' })
+      expect((await feed(cancelling.taskId))[0]![1]).toMatchObject({ site: 'elsewhere' })
+      expect((await feed(answering.taskId))[0]![1]).toMatchObject({ site: 'none' })
+      expect((await feed(untouched.taskId))[0]![1]).toMatchObject({ site: 'none' })
     })
   })
 })

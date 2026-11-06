@@ -55,7 +55,7 @@ describe('turnResultSchema', () => {
 })
 
 describe('agentEventSchema', () => {
-  it('covers exactly the nine common event types of CLAUDE.md rule 8', () => {
+  it('covers exactly the ten common event types of CLAUDE.md rule 8, reasoning among them', () => {
     const types = agentEventSchema.options.map((o) => o.shape.type.value)
     expect(types.sort()).toEqual(
       [
@@ -65,6 +65,7 @@ describe('agentEventSchema', () => {
         'file_change',
         'message',
         'question',
+        'reasoning',
         'started',
         'tool_call',
         'usage',
@@ -120,6 +121,7 @@ describe('limits on untrusted agent output', () => {
   it.each([
     { type: 'started', nativeSessionId: long(201) },
     { type: 'message', text: long(20_001) },
+    { type: 'reasoning', text: long(20_001) },
     { type: 'command', command: long(10_001), exitCode: 0 },
     { type: 'file_change', path: long(1025), change: 'update' },
     { type: 'tool_call', tool: long(201), ok: true },
@@ -134,6 +136,7 @@ describe('limits on untrusted agent output', () => {
   it.each([
     { type: 'started', nativeSessionId: long(200) },
     { type: 'message', text: long(20_000) },
+    { type: 'reasoning', text: long(20_000) },
     { type: 'command', command: long(10_000), exitCode: null },
     { type: 'file_change', path: long(1024), change: 'add' },
     { type: 'tool_call', tool: long(200), ok: false },
