@@ -29,7 +29,14 @@ for (const [name, width, height] of [
     await test.step('a site that is not connected opens on the overview', async () => {
       await expect(page).toHaveURL(`/projects/${siteId}/overview`)
       await expect(page.getByRole('heading', { level: 1, name: 'Обзор' })).toBeVisible()
-      await expect(page.getByText('Ожидает подключения')).toBeVisible()
+      const connection = page.getByRole('button', { name: 'Подключение: Ожидает подключения' })
+      await expect(connection).toBeVisible()
+      await expect(page.getByRole('tooltip')).toHaveCount(0)
+      // The keyboard reaches the tooltip as a pointer does.
+      await page.keyboard.press('Tab')
+      await connection.focus()
+      await expect(page.getByRole('tooltip')).toContainText('Ожидает подключения')
+      await connection.blur()
     })
 
     await test.step('exactly one navigation of sections is on the screen', async () => {
@@ -115,6 +122,18 @@ test('the address of a connected site opens a new dialog of its chat', async ({
 // Every address under a site besides the overview: «Чат» has two of them.
 const otherAddresses = ['chat', 'chat/new', 'changes', 'runs', 'database', 'vault', 'settings']
 
+test.describe('on a touch screen', () => {
+  test.use({ hasTouch: true, viewport: { width: 390, height: 844 } })
+
+  test('a tap on the dot of the connection opens its tooltip', async ({ page, signedInUser }) => {
+    const siteId = await addSite(signedInUser.id, 'paused')
+    await hideDevIndicator(page)
+    await page.goto(`/projects/${siteId}/overview`)
+    await page.getByRole('button', { name: 'Подключение: На паузе' }).tap()
+    await expect(page.getByRole('tooltip')).toContainText('остальные разделы сайта недоступны')
+  })
+})
+
 // A paused, a disconnected and an archived site keep «Обзор» alone: the address of the site and
 // every other section lead to it, and the navigation shows the other sections closed.
 for (const [status, label, note] of closedSites) {
@@ -138,8 +157,8 @@ for (const [status, label, note] of closedSites) {
         await expect(page).toHaveURL(overview)
         const main = page.getByRole('main')
         await expect(main.getByRole('heading', { level: 1, name: 'Обзор' })).toBeVisible()
-        await expect(main.getByText(label, { exact: true })).toBeVisible()
-        await expect(main.getByText(note, { exact: true })).toBeVisible()
+        await main.getByRole('button', { name: `Подключение: ${label}` }).hover()
+        await expect(page.getByRole('tooltip').getByText(note, { exact: true })).toBeVisible()
       })
 
       for (const address of otherAddresses) {
