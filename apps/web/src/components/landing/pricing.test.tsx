@@ -301,12 +301,12 @@ describe('landing pricing', () => {
     )
   })
 
-  it('leads a signed-in visitor to the projects with the same single action', () => {
+  it('leads a signed-in visitor to the chats with the same single action', () => {
     render(<Pricing plans={plans} pack={pack} isGuest={false} />)
 
     expect(screen.getAllByRole('link')).toHaveLength(1)
-    const action = screen.getByRole('link', { name: 'Открыть проекты' })
-    expect(action).toHaveAttribute('href', '/projects')
+    const action = screen.getByRole('link', { name: 'Открыть чаты' })
+    expect(action).toHaveAttribute('href', '/chats')
     // They have registered: the line by the action says only when the tariff is chosen, and
     // promises no gift the page cannot know of.
     expect(action.nextElementSibling).toHaveTextContent(/^Тариф выберете позже\.$/)
@@ -326,16 +326,13 @@ describe('landing pricing', () => {
     )
   })
 
-  it('leads a signed-in visitor to the projects when the plans are unavailable', () => {
+  it('leads a signed-in visitor to the chats when the plans are unavailable', () => {
     render(<Pricing plans={[]} pack={null} isGuest={false} />)
 
-    const way = screen.getByText(/Перейти к проектам можно по ссылке ниже\./)
+    const way = screen.getByText(/Перейти к чатам можно по ссылке ниже\./)
     // The prepositions stay with their words.
-    expect(way.textContent).toContain('к\u00a0проектам можно по\u00a0ссылке')
+    expect(way.textContent).toContain('к\u00a0чатам можно по\u00a0ссылке')
     expect(screen.queryByText(/Зарегистрироваться/)).not.toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Открыть проекты' })).toHaveAttribute(
-      'href',
-      '/projects',
-    )
+    expect(screen.getByRole('link', { name: 'Открыть чаты' })).toHaveAttribute('href', '/chats')
   })
 })

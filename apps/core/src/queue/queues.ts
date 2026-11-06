@@ -27,6 +27,8 @@ export const queueJobDefaults: Record<QueueName, DefaultJobOptions> = {
   // Builds, syncs and browsers of previews (docs/plan/53-chat-preview-release.md): a failed job
   // is put again by the rows of its preview, never by BullMQ.
   previews: lifecycleJobs,
+  // The start of a task's browser: a failed job is put again by the call that waits for it.
+  'browser-sessions': lifecycleJobs,
   // SendSay hiccups are retried: 15 s, 30 s, … about half an hour in total.
   // Job data holds one-time links: a delivered letter leaves Redis at once, a failed one
   // after a day.

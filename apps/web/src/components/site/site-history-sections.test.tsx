@@ -65,8 +65,11 @@ describe('«Изменения»', () => {
     expect(screen.getByRole('link', { name: 'Открыть запуск № 2' }).getAttribute('href')).toBe(
       `/projects/${siteId}/runs/${release.id}`,
     )
-    expect(screen.getByRole('link', { name: 'Отменить в диалоге' }).getAttribute('href')).toBe(
-      `/projects/${siteId}/chat/${release.taskId}`,
+    expect(screen.getByRole('link', { name: 'Отменить в чате' }).getAttribute('href')).toBe(
+      `/chats/${release.taskId}`,
+    )
+    expect(screen.getByRole('link', { name: 'Открыть чат' }).getAttribute('href')).toBe(
+      `/chats/${release.taskId}`,
     )
   })
 
@@ -79,7 +82,7 @@ describe('«Изменения»', () => {
         now={new Date(Date.UTC(2026, 10, 2))}
       />,
     )
-    expect(screen.queryByRole('link', { name: 'Отменить в диалоге' })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Отменить в чате' })).toBeNull()
     rerender(<VersionDetail siteId={siteId} version={initial} next={release} now={at(30)} />)
     expect(screen.getByText(/^Была на сайте до 25/)).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Открыть запуск № 1' }).getAttribute('href')).toBe(
@@ -131,8 +134,15 @@ describe('«Запуски»', () => {
     expect(screen.getByText('№ 3 · Баннер на главной')).toBeTruthy()
   })
 
+  it('leads from a run to its chat', () => {
+    render(<RunDetail run={run} now={at(5)} />)
+    expect(screen.getByRole('link', { name: 'Открыть чат' }).getAttribute('href')).toBe(
+      `/chats/${run.taskId}`,
+    )
+  })
+
   it("tells how a run ended, its steps and a journal of the platform's own reports", () => {
-    render(<RunDetail siteId={siteId} run={run} now={at(5)} />)
+    render(<RunDetail run={run} now={at(5)} />)
     expect(screen.getByText(/сайт вернули к прежнему виду/)).toBeTruthy()
     expect(screen.getByText('Возврат как было')).toBeTruthy()
     expect(screen.getByText('Проверка сайта: не получилось')).toBeTruthy()

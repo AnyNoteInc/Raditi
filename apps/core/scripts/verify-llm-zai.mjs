@@ -273,6 +273,12 @@ export async function verifyZai(ctx) {
       .sort(),
     ['bash true', 'bash true', 'site_info true'],
   )
+  // The reasoning of each answer came through the gateway and out of the CLI as a row of its own.
+  assert.deepEqual(
+    exec.events.filter((event) => event.type === 'reasoning').map((event) => event.text),
+    exec.provider.map(() => 'Synthetic reasoning.'),
+    'The reasoning of the provider did not reach the events of the turn',
+  )
   // The tool's answer went back to the model through the body policy of the gateway.
   assert.ok(
     JSON.stringify(exec.provider.at(-1).body).includes(SYNTHETIC_MCP_MARKER),
@@ -290,7 +296,7 @@ export async function verifyZai(ctx) {
   // No tunnel was opened since the role lost its proxy: the fake was reached directly.
   assert.equal(await proxyTunnels(), tunnels)
   passed(
-    'driver-prepared OpenCode exec on the direct path: two tool rounds, an MCP tool, provider usage in llm_calls',
+    'driver-prepared OpenCode exec on the direct path: two tool rounds, an MCP tool, the reasoning of each answer, provider usage in llm_calls',
   )
 
   const secondResult = resultFor('B13 OpenCode resume')

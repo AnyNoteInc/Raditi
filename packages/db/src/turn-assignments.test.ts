@@ -120,7 +120,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn assignments', () => {
   })
   afterEach(async () => {
     for (const workspaceId of workspaces.splice(0)) {
-      await db.siteLease.deleteMany({ where: { site: { workspaceId } } })
+      const sites = await db.site.findMany({ where: { workspaceId }, select: { id: true } })
+      const chats = await db.task.findMany({
+        where: { workspaceId, siteId: null },
+        select: { id: true },
+      })
+      await db.siteLease.deleteMany({
+        where: { siteId: { in: [...sites, ...chats].map(({ id }) => id) } },
+      })
       await db.task.deleteMany({ where: { workspaceId } })
       await db.site.deleteMany({ where: { workspaceId } })
       await db.workspace.delete({ where: { id: workspaceId } })
@@ -158,6 +165,70 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn assignments', () => {
     }
     return { lease, input, siteId: site.id, taskId: task.id }
   }
+
+  /** A chat without a project under the lease of its own id, and what opens its turn. */
+  async function chat() {
+    const workspace = await db.workspace.create({ data: { name: 'Synthetic assignment check' } })
+    workspaces.push(workspace.id)
+    const task = await db.task.create({
+      data: { workspaceId: workspace.id, needsRepository: false, needsBrowser: false },
+    })
+    const lease = (await leases.acquire({
+      siteId: task.id,
+      taskId: task.id,
+      operation: 'turn',
+      ttlMs: 60_000,
+    })) as SiteLeaseGrant
+    const input = {
+      fence: lease,
+      sessionId: 'session1',
+      turn: 1,
+      executor: 'local' as const,
+      plan: plan(task.id, 'session1', task.id),
+      remainingMs: 30_000,
+    }
+    return { lease, input, taskId: task.id }
+  }
+
+  it('opens the turn of a chat without a site under the lease of its own id', async () => {
+    const { lease, input, taskId } = await chat()
+    expect(await store.open({ ...input, fence: { ...lease, epoch: lease.epoch + 1 } })).toBeNull()
+    expect(await store.open(input)).toMatchObject({
+      fence: { siteId: taskId, taskId, operation: 'turn', epoch: 1 },
+      turn: 1,
+    })
+  })
+
+  it('opens no turn of a chat under a lease that is not its own id', async () => {
+    const { input, taskId } = await chat()
+    const foreign = randomUUID()
+    await db.siteLease.create({
+      data: {
+        siteId: foreign,
+        holderTaskId: taskId,
+        operation: 'turn',
+        epoch: 1,
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    })
+    expect(await store.open({ ...input, fence: { ...input.fence, siteId: foreign } })).toBeNull()
+    await db.siteLease.delete({ where: { siteId: foreign } })
+  })
+
+  // What «Подождите минуту» of `site_held` in a chat without a project stands on.
+  it('frees the hold of a chat without a site once its turn is finished', async () => {
+    const { lease, input, taskId } = await chat()
+    const opened = (await store.open(input))!
+    expect(await leases.holdForRecovery(lease)).toBe(true)
+    expect(await store.finish({ id: opened.id, epoch: lease.epoch, outcome: 'failed' })).toBe(true)
+
+    expect(await store.freeOrphanedHolds()).toBeGreaterThanOrEqual(1)
+
+    expect(await leases.inspect(taskId)).toMatchObject({ taskId: null, heldForOperator: false })
+    expect(
+      await leases.acquire({ siteId: taskId, taskId, operation: 'turn', ttlMs: 60_000 }),
+    ).toMatchObject({ siteId: taskId, taskId, epoch: lease.epoch + 1 })
+  })
 
   it('opens only under the owned fence, with a database deadline and the plan kept', async () => {
     const { lease, input } = await fixture()

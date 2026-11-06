@@ -57,6 +57,7 @@ describe('browser session', () => {
       recheckSeconds: 15,
       agentActionTimeoutMs: 10_000,
       toolCallBudgetMs: 50_000,
+      startingActionMs: 15_000,
     })
     expect(browserStreamDefaults).toEqual({
       maxFps: 12,

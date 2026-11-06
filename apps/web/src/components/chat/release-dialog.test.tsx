@@ -224,7 +224,7 @@ describe('the release dialog', () => {
   it('keeps a refusal inside and asks anew what can be released', async () => {
     confirm.mockRejectedValueOnce(
       serverRefusal(
-        'Изменения диалога поменялись, пока вы смотрели на них. Посмотрите их ещё раз',
+        'Изменения чата поменялись, пока вы смотрели на них. Посмотрите их ещё раз',
         'RELEASE_CANDIDATE_CHANGED',
       ),
     )
@@ -232,7 +232,7 @@ describe('the release dialog', () => {
     fireEvent.click(await releaseButton('1.4.0'))
     expect(
       await within(dialog()).findByText(
-        'Изменения диалога поменялись, пока вы смотрели на них. Посмотрите их ещё раз.',
+        'Изменения чата поменялись, пока вы смотрели на них. Посмотрите их ещё раз.',
       ),
     ).toBeTruthy()
     await waitFor(() => expect(prepare).toHaveBeenCalledTimes(2))
@@ -352,6 +352,17 @@ describe('the release dialog', () => {
     expect(plain(dialog().textContent)).toContain('Это первая версия, которую выпустит Радити.')
     expect(plain(dialog().textContent)).toContain('Изменения есть, но подсчитать их не получилось.')
     expect(within(dialog()).queryByRole('blockquote')).toBeNull()
+  })
+
+  // docs/plan/61-chats-first.md, §5.14: without words of the agent the window tells its own facts
+  // and leaves the section of the agent out, with no empty heading.
+  it('tells its own facts without a section of the agent when no words stand', async () => {
+    showDialog(null)
+    await releaseButton('1.4.0')
+    const text = plain(dialog().textContent)
+    expect(text).not.toContain('Что сделал агент')
+    expect(within(dialog()).queryByRole('blockquote')).toBeNull()
+    expect(within(dialog()).getAllByRole('listitem').length).toBeGreaterThan(0)
   })
 })
 

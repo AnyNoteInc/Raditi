@@ -1,5 +1,6 @@
+import { ensurePersonalWorkspaceWithGift } from '@repo/billing'
 import { insertFeedEvent, type Prisma, type PrismaClient } from '@repo/db'
-import { conflict, type FeedRequestPayload, type TaskStatus } from '@repo/domain'
+import { conflict, type AppEnv, type FeedRequestPayload, type TaskStatus } from '@repo/domain'
 
 import { accessibleTask, lockTask, taskNotFound, type LockedTask } from './access.ts'
 
@@ -14,6 +15,17 @@ export const WRITE: {
   maxWait: number
   timeout: number
 } = { isolationLevel: 'ReadCommitted', maxWait: 10_000, timeout: 20_000 }
+
+/**
+ * The personal workspace of a chat without a project (docs/plan/61-chats-first.md, К15), with the gift of the
+ * registration, in a short transaction of its own: a new user has none until this first chat or
+ * its first file. The gift stays even if the chat is refused later: it is the user's, once.
+ */
+export const personalWorkspaceOf = (
+  db: PrismaClient,
+  owner: { userId: string; appEnv: AppEnv },
+): Promise<{ id: string }> =>
+  db.$transaction((tx) => ensurePersonalWorkspaceWithGift(tx, owner), WRITE)
 
 /**
  * Runs `act` under the lock of a dialog the user may open, in one transaction; NOT_FOUND for

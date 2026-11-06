@@ -7,7 +7,6 @@ import {
   closeBrowserSession,
   listOpenBrowserSessions,
   markBrowserSessionReady,
-  openBrowserSession,
   openBrowserSessionOfTask,
   type PrismaClient,
 } from '@repo/db'
@@ -16,13 +15,14 @@ import {
   isBrowserSessionLive,
   isDomainError,
   type BrowserCloseReason,
-  type BrowserSessionState,
+  type BrowserEnsureJob,
   type BrowserSignIn,
   type TaskStatus,
 } from '@repo/domain'
 
-// The cloud browser of a task as core drives it (docs/plan/57-browser-tasks.md, Б10, Б18): it
-// opens the session before a pass, asks the worker to check what the task saved on the site, closes
+// The cloud browser of a task as core drives it (docs/plan/57-browser-tasks.md, Б10, Б18;
+// docs/plan/61-chats-first.md, К11): it starts a session the agent asked for, gives a live one back
+// to the agent when a turn starts, asks the worker to check what the task saved on the site, closes
 // the session with the task and compares the database with the worker. The worker owns Chromium
 // and records what happens in a session; core owns when a session lives. Logs carry ids and codes
 // only: never an address, a token or anything the worker answered.
@@ -33,8 +33,6 @@ export const BROWSER_ENSURE_GRACE_MS = 5 * 60_000
 export interface BrowserSessionsDependencies {
   db: PrismaClient
   client: BrowserWorkerClient
-  /** BROWSER_SESSION_MAX_HOURS: the hard deadline of a session core opens; the db default without. */
-  maxHours?: number
   /** The site's saved sign-in (`readSiteSignIn`, Б36); none — the client signs in by hand. */
   signIn?: (siteId: string) => Promise<BrowserSignIn | null>
   logger?: { log(message: string): void; warn(message: string): void }
@@ -74,9 +72,12 @@ const codeOf = (error: unknown): string =>
 
 /**
  * Pauses before asking a worker that did not answer for the same session again — it restarts,
- * a blip —: about 45 s in all, well inside the pass's own limits (ORPHAN_PREPARING_MS).
+ * a blip —: about 45 s in all, well inside the 5 minutes the collector gives a starting session.
  */
 export const ENSURE_RETRY_PAUSES_MS = [2_000, 8_000, 35_000] as const
+
+/** `browser_sessions.error_code` of a session core could not start. */
+export const BROWSER_START_FAILED = 'BROWSER_START_FAILED'
 
 /**
  * No answer, or a 5xx of a worker that stops or is full: the same session may be asked for again,
@@ -103,77 +104,123 @@ export class BrowserSessions {
   }
 
   /**
-   * The live session of the task before its pass (Б16, Б18): opened in the database when it has
-   * none, then started or found on the worker, which takes control back for the agent. A request
-   * for help the agent made is answered by this pass and is cleared. Any failure is
-   * BROWSER_SESSION_UNAVAILABLE — the pass is refused `unavailable` —, except the caller's own
-   * cancellation, which rejects with its reason. A session a worker lost (it restarted: the worker
-   * closes the row `lost` and refuses) is replaced by a new one once — the client signs in again
-   * there, the task goes on (Б18). A worker that did not answer while the row is still open (it
-   * restarts, a blip) is asked again for the same session after a pause, up to three times.
-   * The site's saved sign-in goes with every `ensure` (Б36): the worker fills the stack's form
-   * with it; one that cannot be read is left out — the client signs in by hand.
+   * The start of a session the first `web_*` call of a turn asked for (docs/plan/61-chats-first.md,
+   * К11, job `browser.ensure`). A row already `ready`, closed or of another task is left alone: a
+   * job that comes late never touches a browser at work. The worker is asked without taking
+   * control and nothing here clears a request for help: a client in the middle of signing in stays
+   * there. A worker that did not answer while the row is still `starting` (it restarts, a blip) is
+   * asked again after a pause, up to three times; a row that became `ready` meanwhile lost only its
+   * answer, and stays. A failure closes a row still `starting` as `failed`, and the call that waits
+   * for it tells the agent. The site's saved sign-in goes with the request (Б36); one that cannot be
+   * read is left out — the client signs in by hand. `signal` is the shutdown of core: the row stays,
+   * and the next `web_*` call puts the job again. Never throws: the row says the end.
    */
-  async ensure(taskId: string, signal: AbortSignal): Promise<void> {
-    const { db, client, maxHours } = this.deps
+  async start(job: BrowserEnsureJob, signal: AbortSignal): Promise<void> {
+    const { db, client } = this.deps
+    const { sessionId, taskId } = job
     try {
-      // The worker reads the site's address and stack itself; its notes reach the agent in the
-      // prompt of the turn (turn-planner), never through the worker.
-      const task = await db.task.findUnique({ where: { id: taskId }, select: { siteId: true } })
-      if (!task) throw browserTaskError('BROWSER_SESSION_UNAVAILABLE')
-      const signIn = await this.#signIn(task.siteId)
-      let retries = 0
-      let replaced = false
-      for (;;) {
-        const session = await openBrowserSession(db, {
-          taskId,
-          ...(maxHours === undefined ? {} : { maxHours }),
-        })
-        let state: BrowserSessionState
+      const session = await db.browserSession.findUnique({
+        where: { id: sessionId },
+        select: { taskId: true, status: true },
+      })
+      if (session?.taskId !== taskId || session.status !== 'starting') return
+      const siteId = await this.#siteOf(taskId)
+      const signIn = await this.#signIn(siteId)
+      for (let retries = 0; ;) {
         try {
-          state = await client.ensure(
+          const state = await client.ensure(
             {
-              sessionId: session.id,
+              sessionId,
               taskId,
-              siteId: task.siteId,
-              takeControl: true,
+              siteId,
+              takeControl: false,
               ...(signIn ? { signIn } : {}),
             },
             { signal },
           )
+          if (!isBrowserSessionLive(state.status))
+            throw browserTaskError('BROWSER_SESSION_UNAVAILABLE')
+          if (state.status === 'ready') await markBrowserSessionReady(db, { sessionId })
+          return
         } catch (error) {
           if (signal.aborted) throw error
           const open = await openBrowserSessionOfTask(db, taskId)
-          if (open?.id === session.id) {
-            // The worker did not answer for a session it may still start: the same one, again.
-            const wait = unanswered(error) ? ENSURE_RETRY_PAUSES_MS[retries++] : undefined
-            if (wait === undefined) throw error
-            this.#logger.warn(`browser_ensure_retried task=${taskId} cause=${codeOf(error)}`)
-            await pause(wait, undefined, { signal }).catch(() => {
-              throw signal.reason
-            })
-            continue
-          }
-          if (replaced) throw error
-          replaced = true
-          this.#logger.warn(`browser_ensure_replaced task=${taskId} cause=${codeOf(error)}`)
-          continue
+          // The row closed meanwhile (the worker said so, the task ended), or the worker's answer
+          // was lost and it started the browser all the same: nothing left to start.
+          if (open?.id !== sessionId || open.status !== 'starting') return
+          const wait = unanswered(error) ? ENSURE_RETRY_PAUSES_MS[retries++] : undefined
+          if (wait === undefined) throw error
+          this.#logger.warn(`browser_ensure_retried task=${taskId} cause=${codeOf(error)}`)
+          await pause(wait, undefined, { signal })
         }
-        if (!isBrowserSessionLive(state.status))
-          throw browserTaskError('BROWSER_SESSION_UNAVAILABLE')
-        if (state.status === 'ready') await markBrowserSessionReady(db, { sessionId: session.id })
-        await clearBrowserHelp(db, { sessionId: session.id })
-        return
       }
     } catch (error) {
-      if (signal.aborted) throw error
+      if (signal.aborted) return
       this.#logger.warn(`browser_ensure_failed task=${taskId} cause=${codeOf(error)}`)
-      throw browserTaskError('BROWSER_SESSION_UNAVAILABLE')
+      await closeBrowserSession(db, {
+        sessionId,
+        status: 'failed',
+        reason: 'crashed',
+        errorCode: BROWSER_START_FAILED,
+        onlyStarting: true,
+      }).catch(() => this.#logger.warn(`browser_ensure_not_closed task=${taskId}`))
     }
   }
 
-  /** The saved sign-in, or none when it is not set or cannot be read now: never thrown. */
-  async #signIn(siteId: string): Promise<BrowserSignIn | null> {
+  /**
+   * A turn starts (Б16): the live session of the task, if it has one, comes back to the agent, and
+   * the request for help the agent made is answered by this pass. The only call that takes control,
+   * and it opens nothing: a turn that needs no browser starts none. The site's saved sign-in goes
+   * with it (Б36). A failure is logged and the turn goes on: a `web_*` call meets the same state and
+   * says what it means.
+   */
+  async reclaim(taskId: string, signal: AbortSignal): Promise<void> {
+    const { db, client } = this.deps
+    try {
+      const session = await openBrowserSessionOfTask(db, taskId)
+      if (!session) return
+      // Before the worker: a pass about the code goes on without it, and its result is not to be
+      // taken over by a request the client has already answered with their words.
+      await clearBrowserHelp(db, { sessionId: session.id })
+      const siteId = await this.#siteOf(taskId)
+      const signIn = await this.#signIn(siteId)
+      const state = await client.ensure(
+        {
+          sessionId: session.id,
+          taskId,
+          siteId,
+          takeControl: true,
+          ...(signIn ? { signIn } : {}),
+        },
+        { signal },
+      )
+      if (!isBrowserSessionLive(state.status)) return
+      if (state.status === 'ready') await markBrowserSessionReady(db, { sessionId: session.id })
+    } catch (error) {
+      if (!signal.aborted)
+        this.#logger.warn(`browser_reclaim_failed task=${taskId} cause=${codeOf(error)}`)
+    }
+  }
+
+  /**
+   * The site of the task, null in a chat without one: the worker reads its address itself, by this
+   * id, and checks it against the session's row.
+   */
+  async #siteOf(taskId: string): Promise<string | null> {
+    const task = await this.deps.db.task.findUnique({
+      where: { id: taskId },
+      select: { siteId: true },
+    })
+    if (!task) throw browserTaskError('BROWSER_SESSION_UNAVAILABLE')
+    return task.siteId
+  }
+
+  /**
+   * The saved sign-in, or none when it is not set or cannot be read now: never thrown. A chat
+   * without a site has none (rule 2).
+   */
+  async #signIn(siteId: string | null): Promise<BrowserSignIn | null> {
+    if (siteId === null) return null
     try {
       return (await this.deps.signIn?.(siteId)) ?? null
     } catch (error) {

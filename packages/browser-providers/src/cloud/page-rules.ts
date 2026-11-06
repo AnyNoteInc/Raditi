@@ -1,6 +1,8 @@
 import {
+  browserAddressOpens,
   browserForeignPageAllowed,
   browserNavigationAllowed,
+  browserPlatformHost,
   type BrowserController,
   type BrowserTaskPolicy,
   type SiteBrowserRequest,
@@ -15,13 +17,19 @@ import {
  * hosts only, never an address of the platform — and this is the second line, which also knows
  * the site's paths: every request of every page is checked before it leaves (`requestVerdict`),
  * and what a frame committed is checked after the fact (`committedAllowed`), because a redirect
- * is not routed. Pure, no I/O.
+ * is not routed. In a chat without a site (docs/plan/61-chats-first.md, К12) the agent and the
+ * client open any public https site by its address, and every page there is another site. A name of
+ * the platform opens in no session, by address or as another site (К37). Pure, no I/O.
  */
 export interface PageRules {
   /** `host:port` of the egress allowlist (`browserAllowedHosts`). */
   allowedHosts: readonly string[]
   /** Exact origins of local sites outside production. */
   localSites: readonly string[]
+  /** A chat without a site: any public https site opens by address too. */
+  openWeb: boolean
+  /** `BROWSER_PLATFORM_HOSTS`: names of the platform, closed in every session. */
+  platformHosts: readonly string[]
   policy: BrowserTaskPolicy
 }
 
@@ -48,11 +56,16 @@ const pathOf = (url: URL) => `${url.pathname}${url.search}`
 export function originAllowed(url: URL, rules: PageRules): boolean {
   if (url.username !== '' || url.password !== '') return false
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return false
+  if (browserPlatformHost(url.hostname, rules.platformHosts)) return false
   return browserNavigationAllowed(`${url.origin}/`, rules.allowedHosts, rules.localSites)
 }
 
-/** Whether a URL is of another site a page may go on to (Ч1, Ч4): public https, unrelated. */
+/**
+ * Whether a URL is of another site a page may go on to (Ч1, Ч4): public https, unrelated, and no
+ * name of the platform (К37).
+ */
 function foreignOrigin(url: URL, rules: PageRules): boolean {
+  if (browserPlatformHost(url.hostname, rules.platformHosts)) return false
   return browserForeignPageAllowed(url.href, rules.allowedHosts, rules.localSites)
 }
 
@@ -167,14 +180,15 @@ export function committedAllowed(
 
 /**
  * Whether the agent's `web_open` or the client's `navigate` may go to an address at all: a page
- * of the site only — another site is reached from a page of the site, never by address (Ч2).
+ * of the site only — another site is reached from a page of the site, never by address (Ч2) —;
+ * without a site, any public https site (К12).
  */
 export function openAllowed(
   rules: PageRules,
   address: string,
   by: BrowserController = 'agent',
 ): boolean {
-  if (!browserNavigationAllowed(address, rules.allowedHosts, rules.localSites)) return false
+  if (!browserAddressOpens(address, rules)) return false
   const url = URL.parse(address)
   return url !== null && !denies(() => rules.policy.pageDenied(pathOf(url), by))
 }

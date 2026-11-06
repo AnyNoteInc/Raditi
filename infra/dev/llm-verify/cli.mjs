@@ -27,7 +27,8 @@ export const CLI_VERSIONS = Object.freeze({ opencode: '1.18.34' })
 const GATEWAY = 'http://sandbox-gw:8080'
 const INSIDE = '/usr/local/lib/raditi/cli.mjs'
 const SECRETS = '/run/raditi/secrets'
-const MAX_OUTPUT = 8 * 1024 * 1024
+// A turn of the measurement prints a row of sixteen megabytes of reasoning.
+const MAX_OUTPUT = 32 * 1024 * 1024
 const tokenPattern = /^[\x21-\x7e]{1,8192}$/
 
 /**

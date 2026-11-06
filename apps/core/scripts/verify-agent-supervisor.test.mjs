@@ -170,6 +170,7 @@ test('scenario env takes only owned endpoints and explicit runner inputs', () =>
   assert.equal(env.S3_ACCESS_KEY_ID, 'owned-access')
   assert.equal(env.VAULT_DEV_ROOT_TOKEN, 'owned-token')
   assert.equal(env.S3_BUCKET_SESSIONS, `raditi-p4-${'b'.repeat(32)}-sessions`)
+  assert.equal(env.S3_BUCKET_INBOX, `raditi-p4-${'b'.repeat(32)}-inbox`)
   for (const name of [
     'S3_RUNNER_ENDPOINT',
     'VAULT_ROLE_ID',
@@ -263,7 +264,9 @@ for (const [driverId, driverName] of Object.entries(launchers))
               verificationOutput: childEnv.VAULT_DEV_ROOT_TOKEN,
             })
           }
-          return ok(`Do not print this credential: ${childEnv.VAULT_DEV_ROOT_TOKEN}`)
+          return ok(
+            `Do not print this credential: ${childEnv.VAULT_DEV_ROOT_TOKEN}\n- what the run verified`,
+          )
         }
         if (args[0] === 'context') return ok(endpoint)
         assert.deepEqual(args.slice(0, 2), ['--host', endpoint])
@@ -347,7 +350,10 @@ for (const [driverId, driverName] of Object.entries(launchers))
             (await readFile(failure.diagnosticPath, 'utf8')).trim(),
             childEnv.VAULT_DEV_ROOT_TOKEN,
           )
-        } else assert(log.some((line) => line.startsWith(`PASS real ${driverName} supervisor`)))
+        } else {
+          assert(log.some((line) => line.startsWith(`PASS real ${driverName} supervisor`)))
+          assert(log.includes('- what the run verified'))
+        }
       } finally {
         if (failure?.diagnosticPath)
           await rm(dirname(failure.diagnosticPath), { recursive: true, force: true })

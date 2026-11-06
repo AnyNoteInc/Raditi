@@ -24,7 +24,12 @@
 //   pnpm --filter core verify:runner
 // G3: the driver supervisor launcher creates disposable platform services and enters --opencode.
 // That mode runs the two-turn scenario with the real CLI and local LLM/MCP fixtures, including
-// encrypted snapshot restore and trusted publication. Crash scenarios still use the P2 agent.
+// encrypted snapshot restore and trusted publication, then a chat without a project whose last
+// request is undone (docs/plan/61-chats-first.md, §5.14): it leases by its own id, two turns, and
+// a third that goes back to the snapshot of the first through the runner's links. Then chats with
+// the repository: `/undo` and the turn that replaces the undone one, with the branch pinned where
+// the undone turn found it; `/undo` of a first turn, which found no branch; `/redo`, and the turn
+// that goes on from the turn brought back. Crash scenarios still use the P2 agent.
 //
 // Needs: the local infrastructure from .env; P2_GITLEAKS_BINARY (gitleaks 8.30.1);
 // P2_RUNNER_DOCKER_SOCKET, the VM's Docker socket on this host; images built in that daemon and
@@ -33,7 +38,7 @@
 // this host's loopback at P2_RUNNER_HOST (192.168.5.2 in Colima and Lima).
 import assert from 'node:assert/strict'
 import { fork, spawn } from 'node:child_process'
-import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID, randomUUIDv7 } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, open, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
@@ -43,8 +48,8 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { zstdDecompressSync } from 'node:zlib'
 
-import { createPrismaClient } from '@repo/db'
-import { snapshotPartFiles, turnSnapshotPrefix } from '@repo/domain'
+import { createPrismaClient, redoDialog, rewindDialog } from '@repo/db'
+import { attachmentKey, snapshotPartFiles, turnInboxPath, turnSnapshotPrefix } from '@repo/domain'
 import { createDockerSandboxProvider } from '@repo/sandbox-providers'
 import { createS3ObjectStorage, storageConfigFromEnv } from '@repo/storage'
 import { createVaultSecretStore, vaultConfigFromEnv } from '@repo/vault'
@@ -229,7 +234,7 @@ async function startCore() {
       root: work,
       remote: join(work, 'remote.git'),
       gitleaks,
-      siteId: site.id,
+      workspaceId: site.workspaceId,
       runnerId,
       runnerTokens,
       runnerAddress,
@@ -418,7 +423,7 @@ const assignmentOf = (taskId, turn) =>
     where: { taskId, ...(turn === undefined ? {} : { turnNo: turn }) },
     orderBy: { firstEpoch: 'desc' },
   })
-const leaseOf = () => db.siteLease.findUnique({ where: { siteId: site.id } })
+const leaseOf = (scope = site.id) => db.siteLease.findUnique({ where: { siteId: scope } })
 /** The product row of a turn: its status follows the assignment's outcome and its reason. */
 const taskTurnOf = (taskId, turn = 1) =>
   db.taskTurn.findUnique({ where: { taskId_turnNo: { taskId, turnNo: turn } } })
@@ -515,10 +520,11 @@ async function homeEntries(reference) {
   const loaded = await snapshots.load(reference)
   if (realCli) {
     // The persisted snapshot and journal may carry neither the old nor the new turn keys.
-    const bytes = [loaded.archives.home, loaded.archives.untracked].map((part) =>
-      zstdDecompressSync(part),
-    )
-    bytes.push(Buffer.from(loaded.archives.patch), Buffer.from(JSON.stringify(loaded.manifest)))
+    // A checkpoint without a repository is its home alone.
+    const { home, untracked, patch } = loaded.archives
+    const bytes = (untracked ? [home, untracked] : [home]).map((part) => zstdDecompressSync(part))
+    if (patch) bytes.push(Buffer.from(patch))
+    bytes.push(Buffer.from(JSON.stringify(loaded.manifest)))
     for (const values of turnCredentials.values())
       for (const secret of Object.values(values))
         assert(
@@ -547,7 +553,29 @@ async function createTask() {
   return { taskId: task.id, sessionId: `verify-${randomBytes(6).toString('hex')}` }
 }
 
-function turnRequest({ taskId, sessionId }, { turn, baseSha, previous, gated }) {
+/**
+ * A chat without a project (docs/plan/61-chats-first.md, §5.3): no site, its id of version 7, and
+ * it leases by that id, which is what its turns carry as their site (`leaseScopeOf`).
+ */
+async function createChat() {
+  const task = await db.task.create({
+    data: {
+      id: randomUUIDv7(),
+      workspaceId: site.workspaceId,
+      siteId: null,
+      needsRepository: false,
+      needsBrowser: false,
+    },
+  })
+  chats.push(task.id)
+  return { taskId: task.id, sessionId: `verify-${randomBytes(6).toString('hex')}` }
+}
+
+function turnRequest(
+  { taskId, sessionId },
+  { turn, baseSha, previous, gated, withoutRepository, compaction, chat },
+) {
+  const action = compaction ? 'compact' : withoutRepository?.action
   const context = {
     taskId,
     sessionId,
@@ -565,22 +593,31 @@ function turnRequest({ taskId, sessionId }, { turn, baseSha, previous, gated }) 
     instructions: `Synthetic runner verification\nRADITI_PLATFORM_TURN_${turn}`,
   }
   // A lone dash, then nearly the longest prompt the turn plan accepts, starting with a slash.
-  const prompt = realCli
-    ? turn === 1
-      ? '-'
-      : `/init ${'я'.repeat(99_900)}`
-    : JSON.stringify({ gated })
+  const prompt =
+    compaction?.prompt ??
+    chat?.prompt ??
+    withoutRepository?.prompt ??
+    (realCli ? (turn === 1 ? '-' : `/init ${'я'.repeat(99_900)}`) : JSON.stringify({ gated }))
   if (realCli) {
     context.llm.baseUrl = 'http://sandbox-gw:8080/zai/v4'
     context.mcp.url = 'http://sandbox-gw:8080/mcp'
-    fixture.addTurn({
+    const identity = {
       turn,
       llmKey: context.llm.apiKey,
       mcpKey: context.mcp.token,
       prompt,
       effort: context.llm.reasoningEffort,
-      model: context.llm.model,
-    })
+    }
+    if (action)
+      fixture.addCompactionTurn({
+        ...identity,
+        ...(compaction?.fixture ?? withoutRepository.fixture),
+      })
+    else if (chat) fixture.addChatTurn({ ...identity, id: taskId, ...chat.fixture })
+    else if (withoutRepository?.attachments)
+      fixture.addInboxTurn({ ...identity, ...withoutRepository.fixture })
+    else if (withoutRepository) fixture.addRewindTurn({ ...identity, ...withoutRepository.fixture })
+    else fixture.addTurn({ ...identity, model: context.llm.model })
   }
   turnCredentials.set(`${taskId}:${sessionId}:${turn}`, {
     llmApiKey: context.llm.apiKey,
@@ -589,7 +626,13 @@ function turnRequest({ taskId, sessionId }, { turn, baseSha, previous, gated }) 
   return {
     sandbox: {
       image: images.sandbox,
-      labels: { workspaceId: site.workspaceId, siteId: site.id, taskId, sessionId, turn },
+      labels: {
+        workspaceId: site.workspaceId,
+        siteId: withoutRepository ? taskId : site.id,
+        taskId,
+        sessionId,
+        turn,
+      },
       runtime: 'runsc',
       resources: { cpu: 1, memoryMiB: realCli ? 1024 : 512, pids: 128 },
       user: { uid: 10001, gid: 10001 },
@@ -599,16 +642,27 @@ function turnRequest({ taskId, sessionId }, { turn, baseSha, previous, gated }) 
       hardTimeoutMs: 10 * 60_000,
     },
     context,
-    input: { prompt, attachments: [] },
-    driverVersion,
-    workspace: {
-      repo: { provider: 'gitea', owner: 'verify', name: 'site' },
-      branch: `agent/${taskId}`,
-      expectedBaseSha: baseSha,
-      protectedPaths: [],
+    input: {
+      prompt,
+      attachments: withoutRepository?.attachments ?? [],
+      ...(action ? { action } : {}),
     },
+    driverVersion,
+    ...(withoutRepository
+      ? { requirements: { repository: false, browser: false } }
+      : {
+          workspace: {
+            repo: { provider: 'gitea', owner: 'verify', name: 'site' },
+            branch: `agent/${taskId}`,
+            expectedBaseSha: baseSha,
+            ...(chat?.pin === undefined ? {} : { expectedBranchSha: chat.pin }),
+            protectedPaths: [],
+          },
+        }),
     committedAt: new Date().toISOString(),
     ...(previous ? { previous } : {}),
+    ...(chat?.replaces ? { replacesTurn: chat.replaces } : {}),
+    ...(withoutRepository?.rewound ? { rewound: true } : {}),
   }
 }
 
@@ -625,6 +679,8 @@ const reference = ({ sessionId }, turn, manifest) => ({
 const verified = []
 const failures = []
 const sessions = []
+/** The chats without a project of this run: each is a lease scope of its own. */
+const chats = []
 const firewall = async () =>
   lines(
     await docker(
@@ -880,7 +936,15 @@ try {
           assert(phaseNames.includes(phase), `Turn ${turn} has no ${phase} evidence`)
         assert(phaseNames.indexOf('destroyed') < phaseNames.indexOf('publishing'))
         const events = turnEntries.flatMap((entry) => entry.events ?? [])
-        for (const type of ['started', 'command', 'tool_call', 'usage', 'message', 'completed'])
+        for (const type of [
+          'started',
+          'reasoning',
+          'command',
+          'tool_call',
+          'usage',
+          'message',
+          'completed',
+        ])
           assert(
             events.some((event) => event.type === type),
             `${driverName} ${type} was not journaled`,
@@ -891,6 +955,40 @@ try {
         for (const secret of Object.values(values))
           assert(!persisted.includes(secret), 'Journal or assignment contains a turn credential')
       await homeFiles(reference(task, 1, first.manifest))
+
+      // `/compact` in a chat with the repository (docs/plan/61-chats-first.md, §5.14): the working
+      // copy comes up, the session goes into a summary, and the tree it published is the one it found.
+      const compacted = await core.request('run', {
+        request: turnRequest(task, {
+          turn: 3,
+          baseSha: second.manifest.git.headSha,
+          previous: reference(task, 2, second.manifest),
+          compaction: {
+            prompt: 'An action of the platform.',
+            fixture: { summary: 'raditi-repository-summary', remembered: ['/init '] },
+          },
+        }),
+      })
+      assert.deepEqual(
+        [compacted.result.change_type, compacted.result.files_changed],
+        ['none', []],
+        'A compaction changes nothing',
+      )
+      assert.match(compacted.result.client_message, /сжата/)
+      assert.equal(compacted.manifest.driver.nativeSessionId, nativeId)
+      const compactedAssignment = await assignmentOf(task.taskId, 3)
+      assert.deepEqual(
+        [compactedAssignment.outcome, compactedAssignment.executor],
+        ['completed', 'runner'],
+      )
+      const head = await branchHead(task.taskId)
+      assert.equal(head, compacted.manifest.git.headSha)
+      assert.equal((await taskTurnOf(task.taskId, 3)).headSha, head)
+      // Every turn publishes a commit of its own; this one holds the tree it found.
+      const treeOf = (sha) => git('--git-dir', remote, 'rev-parse', `${sha}^{tree}`)
+      assert.equal(await treeOf(head), await treeOf(second.manifest.git.headSha))
+      assert.deepEqual(fixture.observations().problems, [], 'Fixture rejected a request')
+      fixture.assertCompacted()
     } else {
       // The home of a turn is the session state the driver names and nothing the agent wrote
       // beside it: neither its log nor the configuration of the turn.
@@ -943,6 +1041,394 @@ try {
     }
     verified.push(
       `${realCli ? `real ${driverName} exec/resume, rotated keys and ${firstEffort} → high; ` : ''}full turns on runsc with restore of the previous snapshot, runner-sealed home through presigned PUT, core publication (${Math.round((Date.now() - started) / 1000)} s)`,
+    )
+  }
+
+  // The last request of a chat without a project undone (docs/plan/61-chats-first.md, §5.14): the
+  // turn after it restores the snapshot the undone turn started from, not the one before it. That
+  // is a snapshot two turns back, reached only by what the runner is given to fetch it, under a
+  // lease of the chat's own id: production has no other executor for the first chat of a client.
+  if (realCli) {
+    const started = Date.now()
+    const task = await createChat()
+    sessions.push(task.sessionId)
+    const words = [
+      'raditi-rewind-kept-words',
+      'raditi-rewind-undone-words',
+      'raditi-rewind-next',
+      'An action of the platform.',
+      'raditi-after-compaction',
+    ]
+    const answers = [
+      'Ответ raditi-rewind-kept',
+      'Ответ raditi-rewind-undone',
+      'Ответ next',
+      undefined,
+      'Ответ после сжатия',
+    ]
+    const chatTurn = (turn, { previous, rewound, remembered = [], forgotten = [] }) =>
+      core.request('run', {
+        request: turnRequest(task, {
+          turn,
+          previous,
+          withoutRepository: {
+            prompt: words[turn - 1],
+            rewound,
+            fixture: { answer: answers[turn - 1], remembered, forgotten },
+          },
+        }),
+      })
+    const kept = [words[0], answers[0]]
+    const undone = [words[1], answers[1]]
+    const siteLease = await leaseOf()
+    const first = await chatTurn(1, {})
+    const firstCheckpoint = reference(task, 1, first.manifest)
+    const second = await chatTurn(2, { previous: firstCheckpoint, remembered: kept })
+    await db.taskTurn.update({
+      where: { taskId_turnNo: { taskId: task.taskId, turnNo: 2 } },
+      data: { undoneAt: new Date() },
+    })
+    const third = await chatTurn(3, {
+      previous: firstCheckpoint,
+      rewound: true,
+      remembered: kept,
+      forgotten: undone,
+    })
+    assert.equal(third.result.client_message, answers[2])
+    fixture.assertRewindComplete()
+
+    // `/compact` on the runner (docs/plan/61-chats-first.md, §5.14): the session of the first three
+    // turns goes into one summary, and the next turn goes on from it. The words of the first
+    // turn reach the provider in the request of the summary and in none after it; the CLI keeps
+    // the last turn as it is.
+    const summary = 'raditi-compacted-summary'
+    const compacted = await core.request('run', {
+      request: turnRequest(task, {
+        turn: 4,
+        previous: reference(task, 3, third.manifest),
+        withoutRepository: {
+          prompt: words[3],
+          action: 'compact',
+          fixture: { summary, remembered: kept },
+        },
+      }),
+    })
+    assert.deepEqual(
+      [compacted.result.change_type, compacted.result.files_changed],
+      ['none', []],
+      'A compaction changes nothing',
+    )
+    assert.match(compacted.result.client_message, /сжата/)
+    assert.equal(compacted.manifest.driver.nativeSessionId, third.manifest.driver.nativeSessionId)
+    const fifth = await chatTurn(5, {
+      previous: reference(task, 4, compacted.manifest),
+      remembered: [summary],
+      forgotten: kept,
+    })
+    assert.equal(fifth.result.client_message, answers[4])
+    fixture.assertRewindComplete(4)
+
+    const entries = await journal(task.taskId)
+    for (const turn of [1, 2, 3, 4, 5]) {
+      const assignment = await assignmentOf(task.taskId, turn)
+      assert.deepEqual(
+        [assignment.outcome, assignment.executor, assignment.runnerId],
+        ['completed', 'runner', runnerId],
+      )
+      assert.equal((await taskTurnOf(task.taskId, turn)).status, 'completed')
+    }
+    assert.deepEqual(
+      entries
+        .filter((entry) => entry.phase === 'restored' && entry.nativeSessionId)
+        .map((entry) => entry.turn),
+      [2, 3, 4, 5],
+      'Every later turn restored a checkpoint on the runner',
+    )
+    const rewoundPlan = (await assignmentOf(task.taskId, 3)).plan
+    assert.deepEqual([rewoundPlan.rewound, rewoundPlan.previous.turn], [true, 1])
+    assert(entries.length > 0)
+    for (const entry of entries)
+      assert.equal(entry.fence.siteId, task.taskId, 'A chat without a project leases by its own id')
+    for (const turn of [1, 2, 3, 4, 5]) {
+      const { plan } = await assignmentOf(task.taskId, turn)
+      assert.equal(plan.sandbox.labels.siteId, task.taskId)
+    }
+    assert.equal((await assignmentOf(task.taskId, 4)).plan.input.action, 'compact')
+    const nativeId = first.manifest.driver.nativeSessionId
+    assert.match(nativeId, /^ses_[A-Za-z0-9]{20,40}$/)
+    assert.equal(second.manifest.driver.nativeSessionId, nativeId)
+    assert.equal(third.manifest.driver.nativeSessionId, nativeId, 'The kept session goes on')
+    for (const manifest of [first.manifest, second.manifest, third.manifest])
+      assert.equal(manifest.git, undefined, 'A checkpoint without a repository holds no git')
+
+    // What the sessions hold, read from the checkpoints core saved. The second is the control of
+    // every search below: it finds the words and the answer of the undone turn where they were,
+    // so that their absence from the third says something.
+    const held = async (turn, manifest) =>
+      Buffer.concat([...(await homeEntries(reference(task, turn, manifest))).values()])
+    const control = await held(2, second.manifest)
+    const session = await held(3, third.manifest)
+    for (const text of [...kept, ...undone])
+      assert(control.includes(text), 'The search reads a session')
+    for (const text of [...kept, words[2], answers[2]])
+      assert(session.includes(text), 'The session goes on from the first turn, with its own')
+    for (const text of undone)
+      assert(!session.includes(text), 'The session holds what the undone turn left')
+
+    assert.equal(await branchHead(task.taskId), '', 'A chat without a project publishes nothing')
+    assert.equal((await leaseOf(task.taskId)).holderTaskId, null, 'The chat let its lease go')
+    assert.equal((await leaseOf())?.epoch, siteLease?.epoch, 'The chat took no lease of the site')
+    assert.deepEqual(await turnContainers('io.raditi.sandbox.taskId', task.taskId), [])
+    verified.push(
+      `real ${driverName} chat without a project: under the lease of its own id, turn 3 after an undone turn 2 restored the snapshot of turn 1 through the runner's links, the session and the provider know nothing of turn 2; turn 4 compacted the session on the runner and turn 5 went on from its summary (${Math.round((Date.now() - started) / 1000)} s)`,
+    )
+  }
+
+  // A file of the client in a chat without a project (docs/plan/61-chats-first.md, К16, §8): it
+  // leaves raditi-inbox only for a runner that asks by its place in an open prepare (`inboxFile`
+  // of the API of runners), lands under /workspace/inbox, and the real CLI reads it with its own
+  // tool. The address is outside the working copy: `external_directory` of the driver lets it in.
+  if (realCli) {
+    const started = Date.now()
+    const task = await createChat()
+    sessions.push(task.sessionId)
+    const id = randomUUIDv7()
+    const fileName = 'zametka-klienta.txt'
+    const words = `raditi-inbox-${randomBytes(8).toString('hex')}`
+    const content = Buffer.from(`${words}\nСинтетический файл клиента.\n`)
+    const s3Key = attachmentKey(site.workspaceId, id)
+    await storage.put('inbox', s3Key, content)
+    const now = new Date()
+    await db.attachment.create({
+      data: {
+        id,
+        workspaceId: site.workspaceId,
+        siteId: null,
+        taskId: task.taskId,
+        source: 'web',
+        status: 'bound',
+        s3Key,
+        fileName,
+        contentType: 'text/plain',
+        sizeBytes: content.length,
+        expiresAt: new Date(now.getTime() + 3_600_000),
+        boundAt: now,
+      },
+    })
+    const path = turnInboxPath(id, fileName)
+    const answer = `В файле написано: ${words}`
+    const prompt = 'raditi-inbox-read-the-file'
+    const { result, manifest } = await core.request('run', {
+      request: turnRequest(task, {
+        turn: 1,
+        withoutRepository: {
+          prompt,
+          attachments: [path],
+          fixture: { path, words, answer },
+        },
+      }),
+    })
+    assert.equal(result.client_message, answer, 'The agent did not answer with the file')
+    fixture.assertInboxComplete()
+    const assignment = await assignmentOf(task.taskId, 1)
+    assert.deepEqual(
+      [assignment.outcome, assignment.executor, assignment.runnerId],
+      ['completed', 'runner', runnerId],
+    )
+    // The plan is the stand's own (`turnRequest`): the planner's paths and labels are held by
+    // turn-planner.test.ts; what this proves is the way of the file through the runner.
+    const session = Buffer.concat([...(await homeEntries(reference(task, 1, manifest))).values()])
+    assert(session.includes(answer), 'The search reads the session of the turn')
+    assert.deepEqual(await turnContainers('io.raditi.sandbox.taskId', task.taskId), [])
+    assert.equal((await leaseOf(task.taskId)).holderTaskId, null, 'The chat let its lease go')
+    await storage.delete('inbox', s3Key)
+    verified.push(
+      `real ${driverName} file of a chat without a project: from raditi-inbox through the API of runners to /workspace/inbox, read by the CLI and answered with its content (${Math.round((Date.now() - started) / 1000)} s)`,
+    )
+  }
+
+  // `/undo` and `/redo` in a chat with the repository (docs/plan/61-chats-first.md, §5.14), as
+  // production runs them: the turn that replaces the undone one goes through the pull runner under
+  // gVisor. The branch moves by the real `rewindBranch`, the turn by the real `rewindDialog`; only
+  // the plan is written here, as the planner writes it, and the assignment store checks it.
+  if (realCli) {
+    const started = Date.now()
+    const repo = { provider: 'gitea', owner: 'verify', name: 'site' }
+    const branchOf = (task) => `agent/${task.taskId}`
+    const tasks = []
+    /** A chat that waits with its turns: words and answers of its own, one per turn. */
+    const openChat = async (name) => {
+      const task = await createTask()
+      sessions.push(task.sessionId)
+      tasks.push(task)
+      const wordsOf = (turn) => `raditi-${name}-words-${turn}`
+      const answerOf = (turn) => `Ответ raditi-${name}-${turn}`
+      const said = (turn) => [wordsOf(turn), answerOf(turn)]
+      const ran = async (turn, plan, session = {}) => {
+        const outcome = await core.request('run', {
+          request: turnRequest(task, {
+            ...plan,
+            turn,
+            chat: {
+              prompt: wordsOf(turn),
+              pin: plan.pin,
+              replaces: plan.replaces,
+              fixture: { answer: answerOf(turn), ...session },
+            },
+          }),
+        })
+        assert.equal(outcome.result.client_message, answerOf(turn))
+        await expectCompleted(task.taskId, turn, outcome.manifest.git.headSha)
+        // Waits for its next words, as the settlement of a pass leaves it.
+        await db.task.update({ where: { id: task.taskId }, data: { status: 'awaiting_user' } })
+        return outcome
+      }
+      return { task, said, ran }
+    }
+    const moved = (step, task, turnNo) =>
+      db.$transaction((tx) => step(tx, { taskId: task.taskId, turnNo, to: 'awaiting_user' }))
+    /** `/undo` of the chat's last turn: its commit held, the branch back, the turn undone. */
+    const undo = async (task, turnNo, head, found) => {
+      await core.request('holdUndone', {
+        input: { repo, branch: branchOf(task), sha: head },
+      })
+      await core.request('rewindBranch', {
+        input: { repo, branch: branchOf(task), from: head, to: found },
+      })
+      assert(await moved(rewindDialog, task, turnNo), 'The chat waits at its last turn')
+      assert.equal(await branchHead(task.taskId), found ?? '', 'The branch went back')
+      assert.notEqual((await taskTurnOf(task.taskId, turnNo)).undoneAt, null)
+    }
+    const parentOf = async (sha) => (await git('--git-dir', remote, 'rev-parse', `${sha}^`)).trim()
+    const sessionHolds = async (task, turn, manifest) =>
+      Buffer.concat([...(await homeEntries(reference(task, turn, manifest))).values()])
+    const restoredTurns = async (taskId) =>
+      (await journal(taskId))
+        .filter((entry) => entry.phase === 'restored' && entry.nativeSessionId)
+        .map((entry) => entry.turn)
+
+    // Two turns; the second undone; the turn that replaces it: the branch pinned where the undone
+    // turn found it, the checkpoint that turn started from, not one word of it.
+    {
+      const { task, said, ran } = await openChat('undo')
+      const first = await ran(1, { baseSha: mainSha })
+      const firstHead = first.manifest.git.headSha
+      const firstCheckpoint = reference(task, 1, first.manifest)
+      const second = await ran(
+        2,
+        { baseSha: firstHead, previous: firstCheckpoint },
+        { remembered: said(1), holds: [1] },
+      )
+      await undo(task, 2, second.manifest.git.headSha, firstHead)
+      const third = await ran(
+        3,
+        { baseSha: firstHead, previous: firstCheckpoint, replaces: 2, pin: firstHead },
+        { remembered: said(1), forgotten: said(2), holds: [1], lacks: [2] },
+      )
+      const head = third.manifest.git.headSha
+      assert.equal(await branchHead(task.taskId), head)
+      assert.equal(await parentOf(head), firstHead, 'The replacement stands on the kept turn')
+      const { plan } = await assignmentOf(task.taskId, 3)
+      assert.deepEqual(
+        [plan.replacesTurn, plan.workspace.expectedBranchSha, plan.previous.turn],
+        [2, firstHead, 1],
+      )
+      assert.deepEqual(await restoredTurns(task.taskId), [2, 3])
+      const nativeId = first.manifest.driver.nativeSessionId
+      assert.equal(third.manifest.driver.nativeSessionId, nativeId, 'The kept session goes on')
+      const control = await sessionHolds(task, 2, second.manifest)
+      const session = await sessionHolds(task, 3, third.manifest)
+      for (const text of said(2)) {
+        assert(control.includes(text), 'The search reads a session')
+        assert(!session.includes(text), 'The session holds what the undone turn left')
+      }
+      for (const text of said(1)) assert(session.includes(text), 'The kept turn stays')
+      fixture.assertChatComplete(task.taskId, 3)
+    }
+
+    // The first turn undone: it found no branch, so the branch goes and the pin says so; the
+    // replacement starts a new session from `main`.
+    {
+      const { task, said, ran } = await openChat('first')
+      const first = await ran(1, { baseSha: mainSha })
+      await undo(task, 1, first.manifest.git.headSha, null)
+      const second = await ran(
+        2,
+        { baseSha: mainSha, replaces: 1, pin: null },
+        { forgotten: said(1), lacks: [1] },
+      )
+      const head = second.manifest.git.headSha
+      assert.equal(await branchHead(task.taskId), head)
+      assert.equal(await parentOf(head), mainSha, 'The replacement stands on main')
+      const { plan } = await assignmentOf(task.taskId, 2)
+      assert.deepEqual([plan.replacesTurn, plan.workspace.expectedBranchSha], [1, null])
+      assert.equal(plan.previous, undefined)
+      assert.deepEqual(await restoredTurns(task.taskId), [])
+      assert.notEqual(
+        second.manifest.driver.nativeSessionId,
+        first.manifest.driver.nativeSessionId,
+        'A first turn undone leaves no session to go on from',
+      )
+      const session = await sessionHolds(task, 2, second.manifest)
+      for (const text of said(1))
+        assert(!session.includes(text), 'The session holds what the undone turn left')
+      fixture.assertChatComplete(task.taskId, 2)
+    }
+
+    // `/redo`: the turn counts again, the branch is back at its head, and the next ordinary turn
+    // goes on from its checkpoint, not from the one before.
+    {
+      const { task, said, ran } = await openChat('redo')
+      const first = await ran(1, { baseSha: mainSha })
+      const firstHead = first.manifest.git.headSha
+      const second = await ran(
+        2,
+        { baseSha: firstHead, previous: reference(task, 1, first.manifest) },
+        { remembered: said(1), holds: [1] },
+      )
+      const secondHead = second.manifest.git.headSha
+      await undo(task, 2, secondHead, firstHead)
+      assert(
+        (await git('--git-dir', remote, 'for-each-ref', '--format=%(objectname)')).includes(
+          secondHead,
+        ),
+        'The undone commit stays on the remote',
+      )
+      await core.request('rewindBranch', {
+        input: { repo, branch: branchOf(task), from: firstHead, to: secondHead },
+      })
+      assert(await moved(redoDialog, task, 2), 'The chat waits at the undone turn')
+      assert.equal(await branchHead(task.taskId), secondHead, 'The branch is back at the head')
+      assert.equal((await taskTurnOf(task.taskId, 2)).undoneAt, null, 'The turn counts again')
+      const third = await ran(
+        3,
+        { baseSha: secondHead, previous: reference(task, 2, second.manifest) },
+        { remembered: [...said(1), ...said(2)], holds: [1, 2] },
+      )
+      const head = third.manifest.git.headSha
+      assert.equal(
+        await parentOf(head),
+        secondHead,
+        'The next turn stands on the turn brought back',
+      )
+      assert.deepEqual(await restoredTurns(task.taskId), [2, 3])
+      assert.equal(
+        third.manifest.driver.nativeSessionId,
+        first.manifest.driver.nativeSessionId,
+        'The session of the turn brought back goes on',
+      )
+      fixture.assertChatComplete(task.taskId, 3)
+    }
+
+    assert.deepEqual(fixture.observations().problems, [], 'Fixture rejected a request')
+    for (const task of tasks)
+      for (const assignment of await db.turnAssignment.findMany({ where: { taskId: task.taskId } }))
+        assert.deepEqual(
+          [assignment.outcome, assignment.executor, assignment.runnerId],
+          ['completed', 'runner', runnerId],
+        )
+    verified.push(
+      `real ${driverName} chats with the repository on the runner: a replacement of an undone turn restored the checkpoint that turn started from, with the branch pinned where it found it; a first turn undone left no branch and the replacement a new session; \`/redo\` brought the branch and the turn back and the next turn went on from its checkpoint; no word of an undone turn reached the provider or a later session (${Math.round((Date.now() - started) / 1000)} s)`,
     )
   }
 
@@ -1317,8 +1803,10 @@ try {
     }
   }
   // Nothing of the turns is left in the VM: containers, gateway networks, host firewall rules.
-  assert.deepEqual(await turnContainers('io.raditi.sandbox.siteId', site.id), [])
-  assert.deepEqual(await turnContainers('io.raditi.gateway.siteId', site.id), [])
+  for (const scope of [site.id, ...chats]) {
+    assert.deepEqual(await turnContainers('io.raditi.sandbox.siteId', scope), [])
+    assert.deepEqual(await turnContainers('io.raditi.gateway.siteId', scope), [])
+  }
   assert.deepEqual(
     lines(
       await docker(
@@ -1339,6 +1827,9 @@ try {
   succeeded = true
 } catch (error) {
   failures.push(error)
+  // Fixed labels only: what the fixture refused is why a turn of the real CLI failed.
+  if (fixture?.observations().problems.length)
+    failures.push(new Error(`The fixture refused: ${fixture.observations().problems.join('; ')}`))
 } finally {
   cleaning = true
   const cleanup = []
@@ -1373,22 +1864,25 @@ try {
   if (site) {
     // Whatever a failed scenario left: removed through the provider, gateway and rule included.
     await settle('sandboxes', async () => {
-      for (const info of await sandboxes.list({ siteId: site.id }))
-        await (await sandboxes.getForRemoval(info.id))?.destroy('failed')
+      for (const scope of [site.id, ...chats])
+        for (const info of await sandboxes.list({ siteId: scope }))
+          await (await sandboxes.getForRemoval(info.id))?.destroy('failed')
     })
     await settle('gateway leftovers', async () => {
-      const left = await turnContainers('io.raditi.gateway.siteId', site.id)
-      if (left.length) await docker('rm', '--force', ...left)
-      const networks = lines(
-        await docker(
-          'network',
-          'ls',
-          '--quiet',
-          '--filter',
-          `label=io.raditi.gateway.siteId=${site.id}`,
-        ),
-      )
-      if (networks.length) await docker('network', 'rm', ...networks)
+      for (const scope of [site.id, ...chats]) {
+        const left = await turnContainers('io.raditi.gateway.siteId', scope)
+        if (left.length) await docker('rm', '--force', ...left)
+        const networks = lines(
+          await docker(
+            'network',
+            'ls',
+            '--quiet',
+            '--filter',
+            `label=io.raditi.gateway.siteId=${scope}`,
+          ),
+        )
+        if (networks.length) await docker('network', 'rm', ...networks)
+      }
     })
     // The rule of a bridge removed just above, when no sandbox was there to be destroyed with it.
     await settle('orphaned firewall rules', () => sweepFirewall())
@@ -1396,7 +1890,7 @@ try {
       // A failed run keeps the turns' journals next to the logs: phases, epochs and reasons.
       if (work && !succeeded) {
         const events = await db.taskEvent.findMany({
-          where: { task: { siteId: site.id } },
+          where: { task: { workspaceId: site.workspaceId } },
           orderBy: { id: 'asc' },
         })
         const rows = events.map((row) => ({
@@ -1406,15 +1900,15 @@ try {
         }))
         await writeFile(join(work, 'journal.json'), JSON.stringify(rows, null, 2))
       }
-      await db.siteLease.deleteMany({ where: { siteId: site.id } })
-      await db.task.deleteMany({ where: { siteId: site.id } })
+      await db.siteLease.deleteMany({ where: { siteId: { in: [site.id, ...chats] } } })
+      await db.task.deleteMany({ where: { workspaceId: site.workspaceId } })
       await db.site.delete({ where: { id: site.id } })
       await db.workspace.delete({ where: { id: site.workspaceId } })
       if (driverCreated) await db.agentDriver.delete({ where: { id: driverId } })
     })
     await settle('snapshot objects', async () => {
       for (const sessionId of sessions)
-        for (const turn of [1, 2])
+        for (const turn of [1, 2, 3])
           for (const name of [
             'reservation.json',
             'manifest.json',

@@ -11,6 +11,8 @@ const capabilities: AgentCapabilities = {
   outputSchema: false,
   mcp: true,
   images: false,
+  reasoningEvents: true,
+  compaction: true,
 }
 /** Credential and config files under the driver home that must never be snapshotted. */
 const secrets = [

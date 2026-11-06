@@ -229,10 +229,23 @@ describe('the browser worker of the mcp role (plan 57, Б20)', () => {
     ).toBeNull()
   })
 
+  it('opens a session with the deadline of the worker’s own setting (plan 61, К11)', () => {
+    expect(
+      loadMcpConfig({ ...devEnv, ...worker, BROWSER_SESSION_MAX_HOURS: '8' }).browserWorker,
+    ).toMatchObject({ sessionMaxHours: 8 })
+    expect(problemsOf({ ...devEnv, ...worker, BROWSER_SESSION_MAX_HOURS: '25' })).toEqual([
+      expect.stringMatching(/^BROWSER_SESSION_MAX_HOURS: /),
+    ])
+    expect(problemsOf({ ...devEnv, ...worker, BROWSER_SESSION_MAX_HOURS: '0' })).toEqual([
+      expect.stringMatching(/^BROWSER_SESSION_MAX_HOURS: /),
+    ])
+  })
+
   it('reads the worker and its token together, outside production and in it', () => {
     expect(loadMcpConfig({ ...devEnv, ...worker }).browserWorker).toEqual({
       url: 'http://127.0.0.1:8086',
       token,
+      sessionMaxHours: 4,
     })
     // A product path, not a profile: production takes it, without any S3 setting.
     expect(
@@ -247,7 +260,7 @@ describe('the browser worker of the mcp role (plan 57, Б20)', () => {
           BROWSER_WORKER_TOKEN: token,
         }),
       ).browserWorker,
-    ).toEqual({ url: 'https://browser.raditi.internal', token })
+    ).toEqual({ url: 'https://browser.raditi.internal', token, sessionMaxHours: 4 })
     expect(problemsOf({ ...devEnv, BROWSER_WORKER_URL: worker.BROWSER_WORKER_URL })).toEqual([
       'BROWSER_WORKER_TOKEN: required with BROWSER_WORKER_URL',
     ])
@@ -268,7 +281,7 @@ describe('the browser worker of the mcp role (plan 57, Б20)', () => {
         BROWSER_WORKER_URL: 'http://browser:8086',
         BROWSER_WORKER_TOKEN: token,
       }).browserWorker,
-    ).toEqual({ url: 'http://browser:8086', token })
+    ).toEqual({ url: 'http://browser:8086', token, sessionMaxHours: 4 })
   })
 
   it('refuses an address that is not an origin and a weak token, never printing either', () => {

@@ -24,7 +24,7 @@ import {
   restoreArgumentsSchema,
   wpRestArgumentsSchema,
 } from '../content/content-arguments.ts'
-import type { McpAccess } from './mcp-access.ts'
+import type { McpTurnAccess } from './mcp-access.ts'
 
 export const MCP_SECURITY = Symbol('MCP_SECURITY')
 export const MCP_BODY_LIMIT = 100 * 1024
@@ -159,7 +159,7 @@ const closedPreview = new Set(['unavailable', 'destroyed'])
  * no content tools, whatever the profile; the `web` tools go to a task that needs a browser
  * where the worker is configured, each call admitted again with its session (Б20).
  */
-export function mcpToolFamiliesOf(access: McpAccess, security: McpSecurity): McpToolFamily[] {
+export function mcpToolFamiliesOf(access: McpTurnAccess, security: McpSecurity): McpToolFamily[] {
   const preview = access.preview
   const open = preview !== null && !closedPreview.has(preview.status)
   const requirements = requirementsOf(access)

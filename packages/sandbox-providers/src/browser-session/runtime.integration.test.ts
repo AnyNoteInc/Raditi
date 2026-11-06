@@ -16,10 +16,17 @@ import { createDockerBrowserSessionRuntime } from './runtime.ts'
 // the network, the egress proxy, the forwarder and Chromium — driven over the endpoint it
 // answers. The images are those of verify:preview-network: the browser and tools images of
 // infra/preview/Dockerfile are built when missing, the client egress image (infra/sandbox/
-// Dockerfile, `client-egress`) every time, since its proxy is what this suite checks. Only what
-// this suite creates is removed.
+// Dockerfile, `client-egress`) every time, since its proxy is what this suite checks; BROWSER_IMAGE,
+// BROWSER_FORWARDER_IMAGE and BROWSER_EGRESS_IMAGE name other builds. Only what this suite creates
+// is removed.
+//
+// RADITI_BROWSER_DOCKER_RUNTIME=runsc, with SANDBOX_DOCKER_SOCKET and DOCKER_HOST of a Linux VM and
+// SANDBOX_NETWORK_GUARD_IMAGE: the same under gVisor, the only runtime of production. The test of a
+// local site needs a host the daemon carries `host-gateway` to, so there it is the open web's alone
+// (`-t 'open web'`): the gate of a chat without a site (docs/plan/61-chats-first.md, 61.9).
 const enabled = process.env.RADITI_BROWSER_DOCKER_TESTS === '1'
 const socketPath = process.env.SANDBOX_DOCKER_SOCKET ?? '/var/run/docker.sock'
+const runsc = process.env.RADITI_BROWSER_DOCKER_RUNTIME === 'runsc'
 const repository = fileURLToPath(new URL('../../../../', import.meta.url))
 const docker = new Docker({ socketPath })
 const run = promisify(execFile)
@@ -164,6 +171,7 @@ describe.skipIf(!enabled)('real Docker browser session runtime', () => {
 
   beforeAll(async () => {
     images.browser =
+      process.env.BROWSER_IMAGE ??
       (await pinned('raditi-preview-browser:local')) ??
       (await build(
         'raditi-preview-browser:local',
@@ -172,6 +180,7 @@ describe.skipIf(!enabled)('real Docker browser session runtime', () => {
         'infra/preview',
       ))
     images.forwarder =
+      process.env.BROWSER_FORWARDER_IMAGE ??
       (await pinned('raditi-preview-tools:local')) ??
       (await build(
         'raditi-preview-tools:local',
@@ -179,18 +188,17 @@ describe.skipIf(!enabled)('real Docker browser session runtime', () => {
         'tools',
         'infra/preview',
       ))
-    images.egress = await build(
-      'raditi-client-egress:local',
-      'infra/sandbox/Dockerfile',
-      'client-egress',
-      '.',
-    )
+    images.egress =
+      process.env.BROWSER_EGRESS_IMAGE ??
+      (await build('raditi-client-egress:local', 'infra/sandbox/Dockerfile', 'client-egress', '.'))
+    const guard = process.env.SANDBOX_NETWORK_GUARD_IMAGE
     runtime = createDockerBrowserSessionRuntime({
       appEnv: 'test',
-      runtime: 'runc',
+      runtime: runsc ? 'runsc' : 'runc',
       socketPath,
       images,
       localSites: true,
+      ...(runsc && guard ? { firewallImage: guard } : {}),
     })
   }, 1_800_000)
 
@@ -212,6 +220,7 @@ describe.skipIf(!enabled)('real Docker browser session runtime', () => {
       siteId: randomUUID(),
       allowedHosts: ['example.com:443'],
       localSites: [{ origin, target: `host.docker.internal:${site.port}` }],
+      openWeb: false,
       deadline: Date.now() + 30 * 60_000,
     }
     const { endpoint } = await runtime.start(spec)
@@ -325,5 +334,77 @@ describe.skipIf(!enabled)('real Docker browser session runtime', () => {
     expect(await docker.listContainers({ all: true, filters: { label: [label] } })).toEqual([])
     expect(await docker.listNetworks({ filters: { label: [label] } })).toEqual([])
     expect(await listens(Number(url.port))).toBe(false)
+  }, 600_000)
+
+  // The internet is needed, as in the scenario K of verify:browser-task.
+  it('gives the open web of a chat without a site: public TLS and nothing else (plan 61, К12)', async () => {
+    const sessionId = randomUUID()
+    const taskId = randomUUID()
+    sessions.push(sessionId)
+    const { endpoint } = await runtime.start({
+      sessionId,
+      taskId,
+      siteId: taskId,
+      allowedHosts: [],
+      localSites: [],
+      openWeb: true,
+      deadline: Date.now() + 30 * 60_000,
+    })
+    const browser = await playwright.chromium.connect(endpoint, { timeout: 60_000 })
+    try {
+      const context = await browser.newContext()
+      const page = await context.newPage()
+      const loaded = await page.goto('https://example.com/', { timeout: 60_000 })
+      expect(loaded?.status()).toBe(200)
+      expect(await loaded?.text()).toContain('Example Domain')
+      const refused = async (address: string) => {
+        const probe = await context.newPage()
+        try {
+          const answer = await probe.goto(address, { timeout: 20_000 }).catch(() => null)
+          return answer === null || answer.headers()['raditi-egress'] !== undefined
+        } finally {
+          await probe.close()
+        }
+      }
+      for (const address of [
+        // Plain http of the open internet, and a port the proxy does not open.
+        'http://example.com/',
+        'https://example.com:4443/',
+        // Addresses and the metadata service, plain and in a tunnel.
+        'https://93.184.216.34/',
+        'http://169.254.169.254/latest/meta-data/',
+        'https://169.254.169.254/',
+        // Names that are not public.
+        'https://localhost/',
+        'https://host.docker.internal/',
+      ])
+        expect(await refused(address), address).toBe(true)
+      // The page still answers: the refusals closed nothing of the session.
+      expect((await page.goto('https://example.com/', { timeout: 60_000 }))?.status()).toBe(200)
+      // The proxy refused them itself, and logged no path. Its tunnels log when they end.
+      const log = await egressLog(sessionId)
+      const count = (event: string, result: string) =>
+        log.entries.filter((entry) => entry.event === event && entry.result === result).length
+      expect(count('connect', 'forbidden_host')).toBeGreaterThanOrEqual(3)
+      expect(count('request', 'method')).toBeGreaterThanOrEqual(2)
+      expect(log.text).not.toMatch(/meta-data/)
+      // Chromium of this session runs where it was asked to: gVisor, in the gate of 61.9.
+      const [row] = await docker.listContainers({
+        filters: {
+          label: [`io.raditi.browser.session=${sessionId}`, 'io.raditi.browser.role=browser'],
+        },
+      })
+      const info = await docker.getContainer(row!.Id).inspect()
+      expect(info.HostConfig.Runtime).toBe(runsc ? 'runsc' : 'runc')
+      if (runsc)
+        expect(
+          await codeIn(sessionId, 'browser', ['/bin/sh', '-c', 'grep -qi gvisor /proc/version']),
+        ).toBe(0)
+      await context.close()
+    } finally {
+      await browser.close().catch(() => {})
+    }
+    await runtime.stop(sessionId)
+    expect(await runtime.list()).not.toContain(sessionId)
   }, 600_000)
 })

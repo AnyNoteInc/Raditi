@@ -31,7 +31,7 @@ import { memoryStorage, memoryTransit } from '@repo/snapshots/testing'
 import { PreviewDbValueStorage, previewDbValueKey } from '@repo/site-content'
 import { ContentPrivacy } from '../privacy/content-privacy.ts'
 import { ContentSnapshotStorage } from './content-snapshots.ts'
-import { PostgresMcpAccess, type McpAccess } from '../access/mcp-access.ts'
+import { PostgresMcpAccess, siteAccessOf, type McpAccess } from '../access/mcp-access.ts'
 import {
   BROWSER_CHECKS_EVENT,
   BROWSER_SCREENSHOT_EVENT,
@@ -254,7 +254,7 @@ describe.skipIf(!enabled)('MCP on the preview of a dialog with PostgreSQL', () =
   async function admitted(): Promise<McpAccess> {
     const scope = await new PostgresMcpAccess(db).authenticate(fixture.token)
     expect(scope).not.toBeNull()
-    return scope!
+    return siteAccessOf(scope!)!
   }
 
   /** The content profile on the preview: a WordPress copy kept in memory, real journal and storage. */

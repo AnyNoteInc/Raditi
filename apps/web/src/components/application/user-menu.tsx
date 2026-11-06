@@ -155,6 +155,12 @@ export function UserMenu({
           </Typography>
         </Box>
         <Divider />
+        <MenuItem component={Link} href="/chats" onClick={close} sx={{ minHeight: 44 }}>
+          <ListItemIcon>
+            <AppIcon name="chat" size={18} />
+          </ListItemIcon>
+          <ListItemText>Чаты</ListItemText>
+        </MenuItem>
         <MenuItem component={Link} href="/projects" onClick={close} sx={{ minHeight: 44 }}>
           <ListItemIcon>
             <AppIcon name="projects" size={18} />

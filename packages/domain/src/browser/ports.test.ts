@@ -85,12 +85,15 @@ describe('ports of the cloud browser', () => {
       siteId: '0196abcd-0000-7000-8000-000000000003',
       allowedHosts: ['news.example.ru:443'],
       localSites: [],
+      openWeb: false,
       deadline: Date.now() + 60_000,
     })
     const session = await factory.open({
       endpoint,
       allowedHosts: ['news.example.ru:443'],
       localSites: [],
+      openWeb: false,
+      platformHosts: [],
       startUrl: 'https://news.example.ru/wp-admin/',
       viewport: BROWSER_DEFAULT_VIEWPORT,
       policy,

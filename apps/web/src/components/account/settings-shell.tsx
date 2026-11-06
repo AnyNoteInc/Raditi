@@ -202,7 +202,7 @@ export function SettingsShell({
         >
           <Box
             component={Link}
-            href="/"
+            href="/chats"
             aria-label="Радити — главная страница"
             sx={{
               display: 'flex',
@@ -222,7 +222,7 @@ export function SettingsShell({
             aria-label="Разделы настроек"
             sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mt: 2 }}
           >
-            <SidebarLink href="/projects" label="К проектам" icon="back" iconOnly={iconOnly} />
+            <SidebarLink href="/chats" label="К чатам" icon="back" iconOnly={iconOnly} />
             <Divider aria-hidden="true" sx={{ my: 1, mx: 'var(--settings-rule-inset)' }} />
             {settingsNav
               .filter((entry) => entry.enabled)

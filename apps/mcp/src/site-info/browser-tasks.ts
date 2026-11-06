@@ -13,8 +13,8 @@ export interface McpBrowserTasks {
 
 /**
  * The browser of a task as PostgreSQL and the stack of its site tell it. Read for every
- * site_info whose task needs a browser, with or without the browser worker: the session is
- * core's (Б18), the start is the stack's policy — this names no CMS (rule 8).
+ * site_info whose task needs a browser, with or without the browser worker: the session
+ * starts with the agent's first `web_*` call (docs/plan/61-chats-first.md, К11), the start is the stack's policy — this names no CMS (rule 8).
  */
 export function mcpBrowserTasksOf(deps: {
   db: Pick<PrismaClient, 'browserSession'>

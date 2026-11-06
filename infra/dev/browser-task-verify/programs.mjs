@@ -533,7 +533,170 @@ export function* publishAfterTimeout(ctx, facts) {
   })
 }
 
+/** A turn that needs no browser: the agent answers in words, no tool called (plan 61, К11). */
+export function* answerInWords() {
+  yield* []
+  return final({
+    summary: 'Answered without opening the browser',
+    changeType: 'none',
+    message: 'Я могу добавлять новости и менять страницы сайта. Напишите, что сделать.',
+  })
+}
+
+/** Scenario N: the next turn after `/undo` finds the browser of the task signed in as it was. */
+export function* readTheList(ctx, facts) {
+  const page = yield* openAndObserve('/wp-admin/edit.php')
+  facts.loginPage = page.url.includes('/wp-login.php')
+  return final({
+    summary: 'Read the list of posts',
+    changeType: 'none',
+    message: 'Открыл список записей: вход на сайт на месте.',
+  })
+}
+
+/** `verify:release --browser`, S12: a news post without files, published on the live site. */
+export function* publishPlainNews(ctx, facts) {
+  yield* newPost({ title: ctx.words.title, text: ctx.words.text })
+  yield* saveDraft(facts)
+  yield* publish(facts)
+  yield call('web_wait', { ms: 8000, text: 'Post published.' })
+  const post = verified(yield* verifyUntil('publish'), 'publish')[0]
+  facts.published = post ?? null
+  return final({
+    summary: post ? 'Published a news post' : 'Publish not confirmed',
+    message: post
+      ? `Опубликовали новость «${post.object.title}».`
+      : 'Мы нажали «Опубликовать», но сайт пока не показывает запись опубликованной.',
+  })
+}
+
+/** S12: the title of a page that exists, changed on the live site in its editor. */
+export function* retitlePage(ctx, facts) {
+  yield* openAndObserve(`/wp-admin/post.php?post=${ctx.pageId}&action=edit`)
+  let page = yield* observeUntil((current) => current.find('textbox', 'Add title') !== null)
+  yield call('web_wait', { ms: 2000 })
+  page = yield* observe()
+  if (page.has('Welcome to the editor') && page.modal()?.find('button', 'Close')) {
+    yield* act('web_click', page.modal().at('button', 'Close'))
+    page = yield* observeUntil((current) => current.modal() === null)
+  }
+  yield* act('web_fill', { ...page.at('textbox', 'Add title'), text: ctx.title })
+  page = yield* observeUntil((current) => current.find('button', 'Save') !== null)
+  const code = yield* commit(page.at('button', 'Save'), facts)
+  if (code) throw new ScriptBroken(`Save was refused ${code}`)
+  yield call('web_wait', { ms: 8000, text: 'updated' })
+  facts.saved = verified(yield* verifyUntil('publish'), 'publish')[0] ?? null
+  return final({
+    summary: 'Changed the title of the page',
+    message: `Поменяли заголовок страницы на «${ctx.title}».`,
+  })
+}
+
+/** Scenario P: a chat without a project: words alone, no tool, no browser. */
+export function* plainAnswer() {
+  yield* []
+  return final({
+    summary: 'Answered in a chat without a project',
+    changeType: 'none',
+    message: 'Здравствуйте! Слушаю вас.',
+  })
+}
+
+/**
+ * Scenario P: the file the client sent before the first words. The driver names its path in the
+ * words of the turn; the CLI's own tool reads it, outside the working copy, and the answer is what
+ * the file holds.
+ */
+export function* readClientFile(ctx, facts) {
+  const path = /"(\/workspace\/inbox\/[^"]+)"/.exec(ctx.prompt ?? '')?.[1]
+  if (!path) throw new ScriptBroken('the turn names no file of the client')
+  const answer = yield call('read', { filePath: path })
+  const word = /raditi-chat-file-[0-9a-f]+/.exec(answer?.text ?? '')?.[0]
+  facts.word = word ?? null
+  if (!word) throw new ScriptBroken('the file of the client was not read')
+  return final({
+    summary: 'Read the file of the client',
+    changeType: 'none',
+    message: `В файле написано: ${word}`,
+  })
+}
+
+/**
+ * Scenario P: the browser of a chat without a project: where it starts, the addresses it refuses,
+ * a public site, a page of the local site with a contact on it, the file of the chat put on a page
+ * that takes a file (`web_upload`: the worker reads it from raditi-inbox), the sign-in form, on
+ * which the agent acts. No object of the task is on any of them.
+ */
+export function* openTheWeb(ctx, facts) {
+  // A chat without a project has no site to start on: the first look is at an empty page.
+  const start = yield call('web_observe', {})
+  facts.start = refusalOf(start) ?? start?.page?.url ?? null
+  facts.startEmpty = !String(start?.tree ?? '').includes(ctx.origin)
+  facts.refused = {}
+  for (const [name, url] of Object.entries(ctx.refused))
+    facts.refused[name] = refusalOf(yield call('web_open', { url })) ?? 'taken'
+  const example = yield* openAndObserve('https://example.com/')
+  // The site answers in the language of the browser: its English line stands on both versions.
+  facts.example = example.url === 'https://example.com/' && example.has('This domain')
+  const contact = yield* openAndObserve(ctx.contactPage)
+  facts.contact = contact.has(ctx.contact)
+  facts.contactRead = contact.has(ctx.contactTitle)
+  const [file] = ctx.attachments ?? []
+  if (!file) throw new ScriptBroken('the chat names no file of the client')
+  const filePage = yield* openAndObserve(`${ctx.origin}/?raditi_stand_file=1`)
+  const field = filePage.lines.find((line) => line.name === 'Файл клиента' && line.ref !== null)
+  if (!field) throw new ScriptBroken('the page has no file field')
+  facts.upload = refusalOf(
+    yield call('web_upload', {
+      observation: filePage.observation,
+      ref: field.ref,
+      attachmentIds: [file.id],
+    }),
+  )
+  const read = yield* observeUntil((current) => current.has(ctx.uploadWord))
+  facts.uploaded = read.has(`Получен ${file.name}`) && read.has(ctx.uploadWord)
+  const signIn = yield* openAndObserve(`${ctx.origin}/wp-login.php`)
+  yield* act('web_fill', { ...signIn.at('textbox', 'Username or Email Address'), text: 'stand' })
+  const verified = yield call('web_verify', {})
+  facts.objects = verified?.objects?.length ?? null
+  return final({
+    summary: 'Opened the pages',
+    changeType: 'none',
+    message: 'Посмотрел страницы.',
+  })
+}
+
+/**
+ * Scenario P: a pass that fails after the agent acted in the browser of a chat without a project:
+ * a field typed into, then an answer that is no result — the product ends the pass as a failure.
+ */
+export function* failAfterWriting(ctx, facts) {
+  const signIn = yield* openAndObserve(`${ctx.origin}/wp-login.php`)
+  yield* act('web_fill', { ...signIn.at('textbox', 'Username or Email Address'), text: 'stand' })
+  facts.wrote = true
+  return { final: 'Синтетическая модель: это не итог хода.' }
+}
+
+/** Scenario P: a chat that holds a browser, or is refused one. */
+export function* holdTheBrowser(ctx, facts) {
+  facts.code = refusalOf(yield call('web_open', { url: 'https://example.com/' }))
+  return final({
+    summary: 'Opened a page',
+    changeType: 'none',
+    message: facts.code ? 'Браузер сейчас занят.' : 'Страница открыта.',
+  })
+}
+
 export const PROGRAMS = Object.freeze({
+  publishPlainNews,
+  retitlePage,
+  plainAnswer,
+  readClientFile,
+  openTheWeb,
+  failAfterWriting,
+  holdTheBrowser,
+  answerInWords,
+  readTheList,
   askToSignIn,
   publishNews,
   keepDraft,

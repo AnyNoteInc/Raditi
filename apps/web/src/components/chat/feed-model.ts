@@ -1,4 +1,8 @@
 import type { TaskStatus } from '@repo/domain'
+import {
+  agentCommandAnswerIds,
+  agentCommandAnswers,
+} from '@repo/domain/tasks/agent-command-answers'
 import { terminalTaskStatuses } from '@repo/domain/tasks/task-status'
 
 import type { FeedHeadState } from './feed-state'
@@ -21,12 +25,34 @@ export type FeedEntry =
 /** The statuses whose stages the live block shows instead of the feed. */
 const LIVE: readonly TaskStatus[] = ['preparing', 'running']
 
-/** A press or words of the client that move the dialog on: an answer closes a question. */
+/**
+ * A press or words of the client that move the dialog on: an answer closes a question. So does
+ * `/undo` of the turn that asked it.
+ */
 function movesOn(row: FeedRow): boolean {
-  return row.type === 'feed.request' && row.kind !== 'command'
+  return row.type === 'feed.rewind' || (row.type === 'feed.request' && row.kind !== 'command')
+}
+
+/**
+ * The rows without what `/redo` cancelled (docs/plan/61-chats-first.md, §5.14): every `feed.rewind`
+ * before its last `feed.redo` is as if it were not there. `/redo` follows its `/undo` with nothing
+ * moving in between, so an older one stands before a later turn and decides nothing. The feed still
+ * shows both rows.
+ */
+export function withoutRedoneRewinds(rows: readonly FeedRow[]): readonly FeedRow[] {
+  const redo = rows.findLastIndex((row) => row.type === 'feed.redo')
+  return redo < 0 ? rows : rows.filter((row, at) => at > redo || row.type !== 'feed.rewind')
 }
 
 const isStep = (row: FeedRow): row is StepRow => row.type === 'feed.step'
+
+/**
+ * The results that answer `/init` (К31). The button only opens a field the client edits, so a
+ * result that mixes the command with their words loses nothing.
+ */
+export function initAnswerIds(rows: readonly FeedRow[]): ReadonlySet<string> {
+  return agentCommandAnswerIds(rows, 'init')
+}
 
 /** The feed shows a press of the browser with this id: the server has taken it. */
 export function requestShown(rows: readonly FeedRow[], requestId: string): boolean {
@@ -41,9 +67,10 @@ export function requestShown(rows: readonly FeedRow[], requestId: string): boole
  * and core has not ended the dialog yet. A dialog that waits is closed at once, so a press of
  * `/cancel` in a dialog that has not ended is a pass being stopped.
  *
- * A task in the browser (`browser`, docs/plan/57-browser-tasks.md, Б24) is stopped by core in any
- * status — waiting for the client too: until then the newest press, other commands aside, is
- * `/cancel`, as the server reads it (`cancelPending`), and the task takes nothing else.
+ * A chat with a browser (`requirements.browser`, docs/plan/57-browser-tasks.md, Б24) is stopped by
+ * core in any status — waiting for the client, with its changes too: until then the newest press,
+ * other commands aside, is `/cancel`, as the server reads it (`cancelPending`), and the chat takes
+ * nothing else, `/release` above all.
  */
 export function stopRequested(
   rows: readonly FeedRow[],
@@ -144,8 +171,9 @@ export function openQuestion(
   status: TaskStatus | undefined,
 ): QuestionRow | null {
   if (status !== 'awaiting_user' && status !== 'awaiting_approval') return null
-  for (let index = rows.length - 1; index >= 0; index -= 1) {
-    const row = rows[index]!
+  const standing = withoutRedoneRewinds(rows)
+  for (let index = standing.length - 1; index >= 0; index -= 1) {
+    const row = standing[index]!
     if (movesOn(row)) return null
     if (row.type === 'feed.question') {
       if (row.kind === 'agent' && status !== 'awaiting_user') return null
@@ -153,6 +181,14 @@ export function openQuestion(
     }
   }
   return null
+}
+
+/**
+ * The chat of a closed project is read, not worked in (docs/plan/61-chats-first.md, К39). The
+ * server says so with every feed, so a project closed while the page is open counts at once.
+ */
+export function projectClosed(head: FeedHeadState | null): boolean {
+  return head?.commands.some((command) => command.refusal === 'project_closed') === true
 }
 
 /**
@@ -165,6 +201,8 @@ export function retryFailure(
   head: FeedHeadState | null,
 ): FailureRow | null {
   if (head?.task.canRetry !== true) return null
+  // `canRetry` knows the work, not the project: a closed one takes no retry (К39).
+  if (projectClosed(head)) return null
   return rows.findLast((row): row is FailureRow => row.type === 'feed.failure') ?? null
 }
 
@@ -185,20 +223,49 @@ export function liveCandidateRow(
 /**
  * What the agent said about the changes of a candidate: the message of the result of the same
  * turn, else of the last result before it. The agent's own words — shown as its words, never as
- * a fact about the site.
+ * a fact about the site. The feed keeps the result of an undone turn, and the changes it told of
+ * are in no candidate (docs/plan/61-chats-first.md, §5.14): only `/redo` of that turn counts it.
+ * What a command of the agent answered says nothing of the changes either: a compaction answers in
+ * the platform's line, `/init` describes the code. When the result of the candidate's own turn is
+ * read as such an answer, no earlier words stand in for it: the feed cannot tell a turn that
+ * answered the command from one that answered the client's words after it — in that doubt there
+ * are none (null). A turn of the candidate without a result of its own (a question of the agent)
+ * still takes the last result before the candidate's row, as before (§9, known limitations).
  */
 export function candidateMessage(
   rows: readonly FeedRow[],
   candidate: CandidateRow | null,
 ): string | null {
   if (candidate === null) return null
+  const undone = new Set<number>()
+  for (const row of rows) {
+    if (row.type === 'feed.rewind') undone.add(row.turn)
+    if (row.type === 'feed.redo') undone.delete(row.turn)
+  }
+  const commands = agentCommandAnswers(rows)
+  const said = (row: FeedRow): row is ResultRow =>
+    row.type === 'feed.result' && !undone.has(row.turn)
+  const ownTurn = rows.filter((row): row is ResultRow => said(row) && row.turn === candidate.turn)
+  if (ownTurn.some((row) => commands.has(row.id))) return null
   let found: ResultRow | null = null
   for (const row of rows) {
     if (row.id === candidate.id) break
-    if (row.type === 'feed.result') found = row
+    if (said(row) && !commands.has(row.id)) found = row
   }
-  const sameTurn = rows.find(
-    (row): row is ResultRow => row.type === 'feed.result' && row.turn === candidate.turn,
+  return (ownTurn[0] ?? found)?.message ?? null
+}
+
+/** `/redo` of the press `pressId` was recorded: the turn is back (§5.14). */
+export function redoneAfter(rows: readonly FeedRow[], pressId: string): boolean {
+  const press = BigInt(pressId)
+  return rows.some((row) => row.type === 'feed.redo' && BigInt(row.id) > press)
+}
+
+/** `/undo` of the press `pressId` failed: core wrote that the chat stands as it did (§5.14). */
+export function undoFailedAfter(rows: readonly FeedRow[], pressId: string): boolean {
+  const press = BigInt(pressId)
+  return rows.some(
+    (row) =>
+      row.type === 'feed.update' && row.outcome === 'rewind_failed' && BigInt(row.id) > press,
   )
-  return (sameTurn ?? found)?.message ?? null
 }

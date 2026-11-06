@@ -342,12 +342,13 @@ export function attachmentKey(workspaceId: string, attachmentId: string): string
 }
 
 /**
- * `attachment.start`: the site the file is for, the name as the browser gave it (cleaned here),
- * the size in bytes and the listed type, which must be the type of the name's extension.
+ * `attachment.start`: the site the file is for (null — a chat without a project), the name as the
+ * browser gave it (cleaned here), the size in bytes and the listed type, which must be the type of
+ * the name's extension.
  */
 export const attachmentStartInputSchema = z
   .strictObject({
-    siteId: z.uuid(),
+    siteId: z.uuid().nullable(),
     name: attachmentNameSchema,
     size: z.number().int().min(1).max(attachmentLimits.fileBytes),
     type: z.enum(attachmentMimeTypes),

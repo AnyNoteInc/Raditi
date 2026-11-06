@@ -59,13 +59,14 @@ describe('readTurnActivity', () => {
     await expect(setup([], { task: false }).read()).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
 
-  it('gives messages, commands, tool calls, files and questions, and nothing else', async () => {
+  it('gives messages, reasoning, commands, tool calls, files and questions, and nothing else', async () => {
     const { read } = setup([
       output(7n, [
         { type: 'started', nativeSessionId: 'ses_1' },
         { type: 'message', text: 'Смотрю тему сайта.' },
         { type: 'command', command: 'ls wp-content/themes', exitCode: 0 },
         { type: 'tool_call', tool: 'raditi_site_info', ok: true },
+        { type: 'reasoning', text: 'Look at the theme first.' },
         { type: 'usage', usage: { inputTokens: 10, outputTokens: 2 } },
       ]),
       output(9n, [
@@ -82,6 +83,7 @@ describe('readTurnActivity', () => {
         { id: '7:1', type: 'message', text: 'Смотрю тему сайта.' },
         { id: '7:2', type: 'command', command: 'ls wp-content/themes', exitCode: 0 },
         { id: '7:3', type: 'tool_call', tool: 'raditi_site_info', ok: true },
+        { id: '7:4', type: 'reasoning', text: 'Look at the theme first.' },
         { id: '9:0', type: 'file_change', path: 'wp-content/themes/a/style.css', change: 'update' },
         { id: '9:1', type: 'command', command: 'php -l x.php', exitCode: 255 },
         { id: '9:2', type: 'tool_call', tool: 'raditi_wp_rest', ok: false },
@@ -139,6 +141,14 @@ describe('readTurnActivity', () => {
     ]).read()
     expect(wordy.more).toBe(true)
     expect(wordy.events.length).toBeLessThan(21)
+
+    const thoughts = await setup(
+      Array.from({ length: 21 }, (_, index) =>
+        output(BigInt(index + 1), [{ type: 'reasoning', text: long.slice(0, 20_000) }]),
+      ),
+    ).read()
+    expect(thoughts.more).toBe(true)
+    expect(thoughts.events.length).toBeLessThan(21)
   })
 })
 

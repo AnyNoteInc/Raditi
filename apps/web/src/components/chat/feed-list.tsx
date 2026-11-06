@@ -6,11 +6,11 @@ import {
   chatCommands,
   type ChatCommandRefusal,
 } from '@repo/domain/release/chat-commands'
-import { feedFailureText } from '@repo/domain/tasks/client-feed-failures'
+import { feedFailureTextOf } from '@repo/domain/tasks/client-feed-failures'
 import {
   feedApprovalSiteText,
   feedBrowserButtons,
-  feedBrowserQuestionText,
+  feedBrowserQuestionTextOf,
   feedBrowserQuestionTitle,
   feedCancelledSentence,
   feedCandidateText,
@@ -19,6 +19,8 @@ import {
   feedCeilingButtons,
   feedCeilingText,
   feedCommandText,
+  feedRedoText,
+  feedRewindText,
   feedCreditsSentence,
   feedDecisionText,
   feedDoneSiteText,
@@ -71,6 +73,7 @@ import { dayTime, feedTime } from './chat-format'
 import { pulsing, riseIn } from './chat-motion'
 import {
   activityText,
+  agentNotesText,
   browserText,
   dialogText,
   objectLinkText,
@@ -97,8 +100,8 @@ import type { FeedHeadState } from './feed-state'
 
 /** What the rows can ask the dialog to do. */
 export interface FeedActions {
-  /** «Продолжить» after the platform's question about credits. */
-  onContinue: () => void
+  /** «Продолжить» after the platform's question about credits; absent — a closed project (К39). */
+  onContinue?: () => void
   /** «Попробовать ещё» of the failure with this row id (docs/plan/53, «Попробовать ещё»). */
   onRetry: (failureEventId: string) => void
   /** «Остановить задачу»: `/cancel` with its confirmation. */
@@ -111,10 +114,17 @@ export interface FeedActions {
   onUndo: () => void
   /** «Посмотреть изменения»: the tab of the changes beside the dialog (docs/plan/59, И10). */
   onShowChanges: () => void
-  /** «Взять управление» of the task's browser (docs/plan/57-browser-tasks.md, Б15). */
+  /** «Взять управление» of the task's browser (docs/plan/57-browser-tasks.md, Б15); as above. */
   onTakeControl?: () => void
-  /** «Продолжить работу агента» (Б16). */
+  /** «Продолжить работу агента» (Б16); as above. */
   onResumeAgent?: () => void
+  /**
+   * «Сохранить в подсказки агенту» with the answer of the row (docs/plan/61, К31); absent — this
+   * reader does not change the notes of the project, or the project is closed.
+   */
+  onSaveNotes?: (text: string) => void
+  /** The rows that answer `/init` (`initAnswerIds`). */
+  notesRows?: ReadonlySet<string>
   /** The client controls the task's browser now. */
   controlling?: boolean
   /** The task's browser is open: the control can be taken. */
@@ -403,15 +413,18 @@ function Worked({
   steps,
   seconds,
   activity,
+  details,
 }: {
   steps: readonly StepRow[]
   seconds: number
   /** «Ход работы» of the turn, drawn once the client opens the line. */
   activity?: () => ReactNode
+  /** «Подробности работы» (`/details`): the line stands open. */
+  details: boolean
 }) {
   const [opened, setOpened] = useState(false)
   return (
-    <Disclosure summary={feedWorkedText(seconds)} onOpen={() => setOpened(true)}>
+    <Disclosure summary={feedWorkedText(seconds)} open={details} onOpen={() => setOpened(true)}>
       <Box
         sx={{
           ml: 0.75,
@@ -425,7 +438,7 @@ function Worked({
         aria-label={dialogText.stages}
       >
         <StepList steps={steps} running={false} />
-        {opened && activity ? (
+        {(opened || details) && activity ? (
           <Box sx={{ display: 'grid', gap: 0.75, minWidth: 0 }}>
             <Typography
               component="h3"
@@ -456,7 +469,7 @@ function ceilingButtons(
       {words.stop}
     </Button>
   )
-  const next = (
+  const next = actions.onContinue ? (
     <Button
       key="next"
       variant="contained"
@@ -466,7 +479,7 @@ function ceilingButtons(
     >
       {feedCeilingButtons.step.next}
     </Button>
-  )
+  ) : null
   switch (question.reason) {
     case 'step':
       return [next, stop]
@@ -488,10 +501,12 @@ function ceilingButtons(
 function QuestionCard({
   row,
   open,
+  withSite,
   actions,
 }: {
   row: QuestionRow
   open: boolean
+  withSite: boolean
   actions: FeedActions
 }) {
   if (row.kind === 'ceiling') {
@@ -506,7 +521,8 @@ function QuestionCard({
       </Card>
     )
   }
-  if (row.kind === 'browser') return <BrowserQuestionCard row={row} open={open} actions={actions} />
+  if (row.kind === 'browser')
+    return <BrowserQuestionCard row={row} open={open} withSite={withSite} actions={actions} />
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
       <Card
@@ -545,10 +561,12 @@ function QuestionCard({
 function BrowserQuestionCard({
   row,
   open,
+  withSite,
   actions,
 }: {
   row: Extract<QuestionRow, { kind: 'browser' }>
   open: boolean
+  withSite: boolean
   actions: FeedActions
 }) {
   const help = row.reason !== 'unconfirmed'
@@ -589,7 +607,7 @@ function BrowserQuestionCard({
         tone={open ? 'primary.main' : 'text.primary'}
         actions={button ?? undefined}
       >
-        <Paragraph>{nbsp(feedBrowserQuestionText[row.reason])}</Paragraph>
+        <Paragraph>{nbsp(feedBrowserQuestionTextOf(row.reason, withSite))}</Paragraph>
         {row.message ? <Paragraph>{row.message}</Paragraph> : null}
       </Card>
       {open && row.reason === 'login' ? (
@@ -678,6 +696,7 @@ const RELEASE_HINTS: readonly ChatCommandRefusal[] = [
   'needs_update',
   'checks_failed',
   'release_in_progress',
+  'project_closed',
 ]
 
 function CandidateCard({
@@ -705,12 +724,21 @@ function CandidateCard({
           live ? (
             <>
               {release?.available ? (
-                <Button variant="contained" onClick={actions.onRelease} disabled={actions.busy}>
+                <Button
+                  variant="contained"
+                  onClick={actions.onRelease}
+                  disabled={actions.busy || actions.stopping}
+                >
                   {feedCandidateText.release}
                 </Button>
               ) : null}
               {refusal === 'needs_update' && update?.available ? (
-                <Button variant="contained" onClick={actions.onUpdate} loading={actions.busy}>
+                <Button
+                  variant="contained"
+                  onClick={actions.onUpdate}
+                  loading={actions.busy}
+                  disabled={actions.stopping}
+                >
                   {chatCommands.update.label}
                 </Button>
               ) : null}
@@ -757,6 +785,8 @@ const updateIcon: Readonly<Record<FeedUpdateOutcome, AppIconName>> = {
   current: 'check',
   withdrawn: 'clock',
   failed: 'warning',
+  rewind_failed: 'warning',
+  redo_failed: 'warning',
 }
 
 /**
@@ -802,7 +832,8 @@ function RowView({
 }: {
   row: FeedRow
   now: Date
-  siteUrl: string
+  /** null — a chat without a project: nothing to open and no site to speak of. */
+  siteUrl: string | null
   openQuestionId: string | null
   liveCandidateId: string | null
   /** The failure the server offers «Попробовать ещё» for; null — none. */
@@ -828,6 +859,7 @@ function RowView({
         case 'resume':
           return <Press text={feedRowText.resume} icon="back" />
         case 'command':
+        case 'agent_command':
           return (
             <Press
               text={row.command === null ? feedRowText.otherRequest : feedCommandText[row.command]}
@@ -842,27 +874,43 @@ function RowView({
       }
       return null
     case 'feed.question':
-      return <QuestionCard row={row} open={row.id === openQuestionId} actions={actions} />
+      return (
+        <QuestionCard
+          row={row}
+          open={row.id === openQuestionId}
+          withSite={siteUrl !== null}
+          actions={actions}
+        />
+      )
     case 'feed.result': {
       const approval = row.next === 'awaiting_approval'
       // A pass that changed nothing left the dialog open for the next words (26.10.2026).
       const open = row.next === 'awaiting_user'
       const site = approval ? feedApprovalSiteText[row.site] : feedDoneSiteText[row.site]
+      const { onSaveNotes } = actions
       return (
         <AgentMessage
           title={
             approval ? feedCardTitle.approval : open ? feedCardTitle.answer : feedCardTitle.result
+          }
+          actions={
+            onSaveNotes && actions.notesRows?.has(row.id) ? (
+              <Button variant="outlined" onClick={() => onSaveNotes(row.message)}>
+                {agentNotesText.button}
+              </Button>
+            ) : undefined
           }
         >
           <AgentMarkdown text={row.message} />
           <Sentences
             parts={[
               site,
-              open || row.filesChanged === null ? null : feedFilesChangedText(row.filesChanged),
+              // No change in git, not a word of files (docs/plan/61-chats-first.md, К19).
+              open || !row.filesChanged ? null : feedFilesChangedText(row.filesChanged),
             ]}
           />
           <SiteObjects objects={row.objects ?? []} heading={feedObjectText.result} />
-          {!approval && row.site !== 'unchanged' ? (
+          {!approval && site !== null && siteUrl !== null ? (
             <MuiLink
               href={siteUrl}
               target="_blank"
@@ -909,7 +957,7 @@ function RowView({
         >
           <Sentences
             parts={[
-              feedFailureText[row.code],
+              feedFailureTextOf(row.code, siteUrl !== null),
               feedEndedSiteText[row.site],
               feedCreditsSentence(row.credits),
               // The dialog kept its candidate: the card of the changes above says what to do.
@@ -1012,7 +1060,12 @@ function RowView({
           icon={updateIcon[row.outcome]}
           title={feedUpdateTitle[row.outcome]}
           tone={
-            row.outcome === 'conflict' || row.outcome === 'failed' ? 'error.main' : 'text.primary'
+            row.outcome === 'conflict' ||
+            row.outcome === 'failed' ||
+            row.outcome === 'rewind_failed' ||
+            row.outcome === 'redo_failed'
+              ? 'error.main'
+              : 'text.primary'
           }
         >
           <Sentences parts={[feedUpdateText(row.outcome, row.conflicts)]} />
@@ -1027,6 +1080,10 @@ function RowView({
           height={row.height}
         />
       )
+    case 'feed.rewind':
+      return <Note text={feedRewindText(row)} />
+    case 'feed.redo':
+      return <Note text={feedRedoText(row)} />
     case 'newer':
       return <Note text={feedRowText.newer} />
     case 'unreadable':
@@ -1047,11 +1104,13 @@ export function FeedList({
   retryId = null,
   actions,
   filesOf = noFiles,
+  details = false,
   activityOf,
 }: {
   head: FeedHeadState | null
   rows: readonly FeedRow[]
-  siteUrl: string
+  /** null — a chat without a project. */
+  siteUrl: string | null
   openQuestionId: string | null
   liveCandidateId: string | null
   /** The failure row «Попробовать ещё» is offered on (`retryFailure`). */
@@ -1059,6 +1118,8 @@ export function FeedList({
   actions: FeedActions
   /** The files a message sent, by their ids, as their chips name them. */
   filesOf?: (ids: readonly string[]) => SentFile[]
+  /** «Подробности работы» (`/details`): «Ход работы» of finished turns stands open. */
+  details?: boolean
   /** «Ход работы» of a finished turn (owner's decision of 26.10.2026). */
   activityOf?: (turn: number) => ReactNode
 }) {
@@ -1072,7 +1133,7 @@ export function FeedList({
   return (
     <Box
       component="ol"
-      aria-label="Сообщения диалога"
+      aria-label="Сообщения чата"
       sx={{
         m: 0,
         p: 0,
@@ -1101,6 +1162,7 @@ export function FeedList({
               steps={entry.steps}
               seconds={entry.seconds}
               activity={activityOf ? () => activityOf(entry.turn) : undefined}
+              details={details}
             />
           ) : (
             <RowView
@@ -1148,12 +1210,15 @@ export function LiveBlock({
   head,
   steps,
   stopping = false,
+  withSite,
   browser,
   activity,
 }: {
   head: FeedHeadState
   steps: readonly StepRow[]
   stopping?: boolean
+  /** false — a chat without a project: the block says nothing of a site. */
+  withSite: boolean
   /** «Ход работы» of the turn at work, as it goes (owner's decision of 26.10.2026). */
   activity?: ReactNode
   /** A task in the browser (docs/plan/57-browser-tasks.md): who drives it. */
@@ -1182,14 +1247,14 @@ export function LiveBlock({
   } else
     switch (task.status) {
       case 'queued':
-        text = stopping ? dialogText.stoppedHint : feedQueuedText(task.waiting)
+        text = stopping ? dialogText.stoppedHint : feedQueuedText(task.waiting, withSite)
         break
       case 'preparing':
         text = stopping ? dialogText.stoppedHint : null
         break
       case 'running':
         if (stopping) text = dialogText.stoppedHint
-        else if (task.held) text = feedLiveText.held
+        else if (task.held) text = withSite ? feedLiveText.held : feedLiveText.heldNoSite
         else if (browser?.controlling) {
           title = browserText.status.user
           text = browserText.controlPlate

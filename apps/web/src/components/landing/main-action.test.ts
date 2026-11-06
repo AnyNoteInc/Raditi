@@ -4,9 +4,9 @@ import { describe, expect, it } from 'vitest'
 import { mainAction, mainActionNote } from './main-action'
 
 describe('main action of the landing', () => {
-  it('leads a guest to the registration and a visitor with an account to the projects', () => {
+  it('leads a guest to the registration and a visitor with an account to the chats', () => {
     expect(mainAction(true)).toEqual({ href: '/sign-up', label: 'Зарегистрироваться' })
-    expect(mainAction(false)).toEqual({ href: '/projects', label: 'Открыть проекты' })
+    expect(mainAction(false)).toEqual({ href: '/chats', label: 'Открыть чаты' })
   })
 
   it('tells a guest of the gift of the registration, and of no day without a tariff', () => {

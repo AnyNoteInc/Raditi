@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen, within } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 
@@ -44,6 +44,34 @@ const type = (text: string) => fireEvent.change(field(), { target: { value: text
 const press = (key: string, target: HTMLElement = field(), extra = {}) =>
   fireEvent.keyDown(target, { key, ...extra })
 
+describe('words kept for the field', () => {
+  const view = (restored: string | null, restoredTaken: number) => (
+    <Composer
+      placeholder="Что поправить?"
+      onSend={vi.fn(async () => true)}
+      disabledReason={null}
+      restored={restored}
+      restoredTaken={restoredTaken}
+    />
+  )
+
+  it('leave the field when the page takes them back', () => {
+    const { rerender } = render(view(null, 0))
+    rerender(view('Добавьте новость', 0))
+    expect(field().value).toBe('Добавьте новость')
+    rerender(view(null, 1))
+    expect(field().value).toBe('')
+  })
+
+  it('stay when the client changed them: they are the client’s words by then', () => {
+    const { rerender } = render(view(null, 0))
+    rerender(view('Добавьте новость', 0))
+    type('Добавьте новость о скидках')
+    rerender(view(null, 1))
+    expect(field().value).toBe('Добавьте новость о скидках')
+  })
+})
+
 describe('the window of commands', () => {
   it('opens on «/» at the start of the field, with the Russian names, and says how to use it', () => {
     const { onOpen } = showComposer()
@@ -53,15 +81,27 @@ describe('the window of commands', () => {
     expect(options.map((option) => option.textContent)).toEqual([
       expect.stringContaining('Выпустить новую версию'),
       expect.stringContaining('Открыть предпросмотр'),
-      expect.stringContaining('Сбросить данные предпросмотра'),
       expect.stringContaining('Обновить рабочую копию'),
-      expect.stringContaining('Отменить диалог'),
+      expect.stringContaining('Сбросить данные предпросмотра'),
+      expect.stringContaining('Описать проект для агента'),
+      expect.stringContaining('Сжать переписку'),
+      expect.stringContaining('Отменить последний запрос'),
+      expect.stringContaining('Вернуть отменённый запрос'),
+      expect.stringContaining('Отменить чат'),
+      expect.stringContaining('Новый чат'),
+      expect.stringContaining('Все чаты'),
+      expect.stringContaining('Скачать переписку'),
+      expect.stringContaining('Модель и размышление'),
+      expect.stringContaining('Подробности работы'),
+      expect.stringContaining('Размышления агента'),
+      expect.stringContaining('Оформление'),
+      expect.stringContaining('Справка'),
     ])
     expect(field().getAttribute('aria-controls')).toBe(list().id)
     expect(field().getAttribute('aria-activedescendant')).toBe(options[0]!.id)
     expect(options[0]!.getAttribute('aria-selected')).toBe('true')
     expect(screen.getByRole('status').textContent).toBe(
-      '5 команд. Стрелки вверх и вниз — выбор, Enter — выполнить, Escape — закрыть.',
+      '17 команд. Стрелки вверх и вниз — выбор, Enter — выполнить, Escape — закрыть.',
     )
     expect(onOpen).toHaveBeenCalledTimes(1)
   })
@@ -73,7 +113,7 @@ describe('the window of commands', () => {
       within(list())
         .getAllByRole('option')
         .map((option) => option.id.split('-').at(-1)),
-    ).toEqual(['release', 'reset'])
+    ).toEqual(['release', 'reset', 'turn_redo', 'sessions'])
     type('/release please')
     expect(screen.queryByRole('listbox')).toBeNull()
   })
@@ -134,16 +174,16 @@ describe('the window of commands', () => {
     const button = screen.getByRole('button', { name: 'Команды' })
     fireEvent.click(button)
     expect(button.getAttribute('aria-expanded')).toBe('true')
-    expect(within(list()).getAllByRole('option')).toHaveLength(5)
+    expect(within(list()).getAllByRole('option')).toHaveLength(17)
     expect(list().getAttribute('tabindex')).toBe('0')
     await vi.waitFor(() => expect(document.activeElement).toBe(list()))
     press('End', list())
-    expect(list().getAttribute('aria-activedescendant')).toMatch(/cancel$/)
+    expect(list().getAttribute('aria-activedescendant')).toMatch(/help$/)
     press('Escape', list())
     expect(screen.queryByRole('listbox')).toBeNull()
     expect(document.activeElement).toBe(button)
     fireEvent.click(button)
-    fireEvent.click(within(list()).getAllByRole('option')[3]!)
+    fireEvent.click(within(list()).getAllByRole('option')[2]!)
     expect(onRun).toHaveBeenCalledWith('update')
   })
 
@@ -168,11 +208,200 @@ describe('the window of commands', () => {
     const button = screen.getByRole('button', { name: 'Команды' })
     fireEvent.click(button)
     await vi.waitFor(() => expect(document.activeElement).toBe(list()))
-    press('End', list())
-    press('Enter', list())
+    const options = within(list()).getAllByRole('option')
+    fireEvent.click(options.find((option) => option.id.endsWith('cancel'))!)
     expect(onRun).toHaveBeenCalledWith('cancel')
     expect(screen.queryByRole('listbox')).toBeNull()
     expect(document.activeElement).toBe(button)
+  })
+
+  it('opens on `/` again after the list of its button was closed over an empty field', async () => {
+    showComposer()
+    fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+    await vi.waitFor(() => expect(document.activeElement).toBe(list()))
+    press('Escape', list())
+    type('/')
+    expect(list()).toBeTruthy()
+  })
+
+  it('stays closed after Escape over a typed `/`, the list opened by its button', async () => {
+    showComposer()
+    type('/up')
+    fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+    await vi.waitFor(() => expect(document.activeElement).toBe(list()))
+    press('Escape', list())
+    expect(screen.queryByRole('listbox')).toBeNull()
+    expect(field().value).toBe('/up')
+  })
+
+  describe('over a field in the middle of the screen', () => {
+    afterEach(() => vi.restoreAllMocks())
+    const roomAt = (bottom: number) => {
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+        bottom,
+      } as DOMRect)
+    }
+    const room = () => list().parentElement!.style.getPropertyValue('--raditi-palette-room')
+
+    it('is as high as what stands above the field, and follows the window', () => {
+      roomAt(300)
+      showComposer()
+      type('/')
+      expect(room()).toBe('288px')
+      roomAt(500)
+      fireEvent(window, new Event('resize'))
+      expect(room()).toBe('488px')
+    })
+
+    it('shows a few rows where the window has almost no room', () => {
+      roomAt(40)
+      showComposer()
+      type('/')
+      expect(room()).toBe('120px')
+    })
+  })
+
+  it('stands the commands under the heads of their groups, the arrows going through them all', () => {
+    showComposer()
+    type('/')
+    const groups = within(list()).getAllByRole('group')
+    expect(groups.map((group) => group.getAttribute('aria-labelledby'))).toHaveLength(3)
+    expect(
+      groups.map(
+        (group) => document.getElementById(group.getAttribute('aria-labelledby')!)?.textContent,
+      ),
+    ).toEqual(['Сайт', 'Агент', 'Чат'])
+    expect(within(groups[0]!).getAllByRole('option')).toHaveLength(5)
+    press('End')
+    expect(field().getAttribute('aria-activedescendant')).toMatch(/help$/)
+    press('ArrowDown')
+    expect(field().getAttribute('aria-activedescendant')).toMatch(/release$/)
+  })
+
+  it('leaves out the head of a group nothing in it fits', () => {
+    showComposer()
+    type('/ex')
+    expect(
+      within(list())
+        .getAllByRole('group')
+        .map((group) => within(group).getAllByRole('option').length),
+    ).toEqual([1])
+  })
+
+  it('runs `/init` by its verdict, and sends none of its words', () => {
+    const { onRun, onSend } = showComposer()
+    type('/init')
+    press('Enter')
+    expect(onRun).toHaveBeenCalledWith('init')
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
+  it('finds a command by its other word and runs it', () => {
+    const { onRun } = showComposer()
+    type('/cl')
+    press('Enter')
+    expect(onRun).toHaveBeenCalledWith('new')
+    type('/resume')
+    press('Escape')
+    press('Enter', field(), { ctrlKey: true })
+    expect(onRun).toHaveBeenLastCalledWith('sessions')
+  })
+
+  it('takes `/undo` for the last request, not for the release, and says it is closed', () => {
+    const { onRun, onSend } = showComposer()
+    type('/undo')
+    press('Escape')
+    press('Enter', field(), { ctrlKey: true })
+    expect(onRun).not.toHaveBeenCalled()
+    expect(onSend).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toBe('Отменять пока нечего.')
+  })
+
+  it('says of a command that is not listed that it is unavailable, and sends nothing', () => {
+    const onRun = vi.fn()
+    const onSend = vi.fn(async () => true)
+    render(
+      <Composer
+        placeholder="Что поправить?"
+        onSend={onSend}
+        disabledReason={null}
+        commands={{
+          verdicts: verdicts().filter((command) => command.id !== 'compact'),
+          onRun,
+          onOpen: vi.fn(),
+        }}
+      />,
+    )
+    type('/compact')
+    expect(screen.queryByRole('listbox')).toBeNull()
+    press('Enter', field(), { ctrlKey: true })
+    expect(screen.getByRole('alert').textContent).toBe('Эта команда сейчас недоступна.')
+    expect(onRun).not.toHaveBeenCalled()
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
+  it('opens the whole list for `/help`, typed or chosen, and leaves the words of it out', async () => {
+    const { onRun, onSend } = showComposer()
+    type('/help')
+    press('Enter')
+    expect(field().value).toBe('')
+    expect(within(list()).getAllByRole('option')).toHaveLength(17)
+    await vi.waitFor(() => expect(document.activeElement).toBe(list()))
+    expect(onRun).not.toHaveBeenCalled()
+    expect(onSend).not.toHaveBeenCalled()
+    // Chosen from the list that is open already, it leaves it as it is.
+    fireEvent.click(within(list()).getAllByRole('option').at(-1)!)
+    expect(within(list()).getAllByRole('option')).toHaveLength(17)
+  })
+
+  it('says aloud what a command of the page answers', () => {
+    const onRun = vi.fn(() => 'Подробности работы показаны')
+    render(
+      <Composer
+        placeholder="Что поправить?"
+        onSend={vi.fn(async () => true)}
+        commands={{ verdicts: verdicts(), onRun }}
+      />,
+    )
+    type('/details')
+    press('Enter')
+    expect(screen.getByRole('status').textContent).toBe('Подробности работы показаны')
+  })
+
+  it('tells a chat without the repository what `/undo` does there', () => {
+    const { rerender } = render(
+      <Composer
+        placeholder="Что поправить?"
+        onSend={vi.fn(async () => true)}
+        commands={{ verdicts: verdicts({ turn_undo: null }), onRun: vi.fn() }}
+      />,
+    )
+    type('/und')
+    const undo = () => within(list()).getByRole('option').textContent
+    expect(undo()).toContain('Изменения файлов вернутся.')
+    rerender(
+      <Composer
+        placeholder="Что поправить?"
+        onSend={vi.fn(async () => true)}
+        commands={{ verdicts: verdicts({ turn_undo: null }), onRun: vi.fn(), plain: true }}
+      />,
+    )
+    expect(undo()).toContain('Агент забудет последний запрос и ответ на него.')
+    expect(undo()).not.toContain('файлов')
+  })
+
+  it('keeps the option the arrows reach in sight', () => {
+    // Chromium answers with a promise: the effect must not return it as its clean-up.
+    const scroll = vi.fn(async () => undefined)
+    Element.prototype.scrollIntoView = scroll
+    showComposer()
+    type('/')
+    scroll.mockClear()
+    press('End')
+    expect(scroll).toHaveBeenCalledWith({ block: 'nearest' })
+    expect(scroll.mock.instances.at(-1)).toBe(
+      document.getElementById(field().getAttribute('aria-activedescendant')!),
+    )
   })
 
   it('says why a command typed in whole cannot be run now, and runs nothing', () => {
@@ -198,9 +427,9 @@ describe('a field without commands', () => {
     press('Enter', field(), { ctrlKey: true })
     expect(onSend).not.toHaveBeenCalled()
     expect(screen.getByRole('alert').textContent).toBe(
-      'Команды работают внутри диалога. Сначала опишите, что поменять на сайте.',
+      'Команды работают внутри чата. Сначала напишите, что нужно сделать.',
     )
-    expect(described(field())).toContain('Команды работают внутри диалога.')
+    expect(described(field())).toContain('Команды работают внутри чата.')
     type('/release и поменяйте цену')
     press('Enter', field(), { ctrlKey: true })
     expect(onSend).toHaveBeenCalledWith('/release и поменяйте цену', [])
@@ -294,30 +523,111 @@ describe('palette helpers', () => {
     expect(movedIndex(2, 'Home', 5)).toBe(0)
   })
 
-  it('takes a command without a verdict for one that cannot be run', () => {
-    const [release] = paletteOptions('/release', [])
-    expect(release).toEqual({ id: 'release', available: false, reason: null })
+  it('lists in a chat only the commands it has a verdict on (К27)', () => {
+    expect(paletteOptions('/release', [])).toEqual([])
+    const cancel = { id: 'cancel', available: true, refusal: null } as const
+    expect(paletteOptions(null, [cancel]).map((item) => item.id)).toEqual([
+      'cancel',
+      'new',
+      'sessions',
+      'export',
+      'models',
+      'details',
+      'thinking',
+      'themes',
+      'help',
+    ])
+  })
+
+  it('needs no verdict for a command of the page, but a chat for `/export`', () => {
+    expect(paletteOptions('/ex', [])).toEqual([{ id: 'export', available: true, reason: null }])
+    expect(paletteOptions('/ex', [], 'Команды работают внутри чата.')).toEqual([
+      { id: 'export', available: false, reason: 'Команды работают внутри чата.' },
+    ])
+    expect(paletteOptions('/mo', [], 'Команды работают внутри чата.')).toEqual([
+      { id: 'models', available: true, reason: null },
+    ])
+  })
+
+  it('has no row for what a chat alone can undo or retry where no chat is yet', () => {
+    expect(paletteOptions('/rollback', [], 'Команды работают внутри чата.')).toEqual([])
+    expect(paletteOptions('/retry', [], 'Команды работают внутри чата.')).toEqual([])
+  })
+
+  it('says of `/undo` and `/redo` on a new chat that they work inside a chat', () => {
+    const reason = 'Команды работают внутри чата.'
+    expect(paletteOptions('/undo', [], reason)).toEqual([
+      { id: 'turn_undo', available: false, reason },
+    ])
+    expect(paletteOptions('/redo', [], reason)).toEqual([
+      { id: 'turn_redo', available: false, reason },
+    ])
+  })
+
+  it('lists on a new chat without the repository only what that chat will have (К27)', () => {
+    const reason = 'Команды работают внутри чата.'
+    expect(paletteOptions(null, [], reason, true)).toEqual([
+      { id: 'compact', available: false, reason },
+      { id: 'turn_undo', available: false, reason },
+      { id: 'turn_redo', available: false, reason },
+      { id: 'cancel', available: false, reason },
+      { id: 'new', available: true, reason: null },
+      { id: 'sessions', available: true, reason: null },
+      { id: 'export', available: false, reason },
+      { id: 'models', available: true, reason: null },
+      { id: 'details', available: true, reason: null },
+      { id: 'thinking', available: true, reason: null },
+      { id: 'themes', available: true, reason: null },
+      { id: 'help', available: true, reason: null },
+    ])
+    for (const typed of ['/release', '/preview', '/update', '/reset'])
+      expect(paletteOptions(typed, [], reason, true)).toEqual([])
+    // A chat keeps the verdicts it was handed: the list is the page's to choose.
+    const release = { id: 'release', available: true, refusal: null } as const
+    expect(paletteOptions('/release', [release], undefined, true)).toEqual([
+      { id: 'release', available: true, reason: null },
+    ])
+  })
+
+  it('finds `/compact` by its other word as well, as a command of a chat (К30)', () => {
+    const reason = 'Команды работают внутри чата.'
+    for (const typed of ['/compact', '/summarize'])
+      expect(paletteOptions(typed, [], reason)).toEqual([
+        { id: 'compact', available: false, reason },
+      ])
+  })
+
+  it('offers `/thinking` as a command of the page, with no verdict and no reason', () => {
+    expect(paletteOptions('/thinking', [], 'Команды работают внутри чата.')).toEqual([
+      { id: 'thinking', available: true, reason: null },
+    ])
+  })
+
+  it('lists `/init` where a chat with the code can start, and not where none can', () => {
+    const reason = 'Команды работают внутри чата.'
+    expect(paletteOptions('/init', [], reason)).toEqual([{ id: 'init', available: false, reason }])
+    expect(paletteOptions('/init', [], reason, true)).toEqual([])
   })
 
   it('gives a command without a verdict the reason of the place, when it has one', () => {
-    const [release] = paletteOptions('/release', [], undefined, 'Команды работают внутри диалога.')
+    const [release] = paletteOptions('/release', [], 'Команды работают внутри чата.')
     expect(release).toEqual({
       id: 'release',
       available: false,
-      reason: 'Команды работают внутри диалога.',
+      reason: 'Команды работают внутри чата.',
     })
   })
 
   it('lists «Отменить выпуск» only with a verdict on it', () => {
-    expect(paletteOptions('/undo', [])).toEqual([])
+    expect(paletteOptions('/rollback', [])).toEqual([])
     expect(
-      paletteOptions('/undo', [{ id: 'undo', available: false, refusal: 'undo_expired' }]),
+      paletteOptions('/rollback', [{ id: 'undo', available: false, refusal: 'undo_expired' }]),
     ).toEqual([
       {
         id: 'undo',
         available: false,
         reason:
-          'Отменить выпуск можно в течение 7 дней после установки. Опишите в новом диалоге, что нужно вернуть.',
+          'Отменить выпуск можно в течение 7 дней после установки. Опишите в новом чате, что нужно вернуть.',
       },
     ])
   })

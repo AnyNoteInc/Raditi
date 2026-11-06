@@ -12,6 +12,7 @@ import {
   preparedRunSchema,
   publicationMetadataSchema,
   requirementsOf,
+  turnMayHoldInbox,
   runEnvValues,
   siteBusy,
   siteHeld,
@@ -295,7 +296,10 @@ export class TurnSupervisor {
    * costs neither a turn number nor an undo. Nothing of the run is kept.
    */
   private async assertLaunchable(plan: TurnPlan): Promise<void> {
-    const { context, input } = withTurnCredentials(plan, newTurnKeys())
+    const keyed = withTurnCredentials(plan, newTurnKeys())
+    const { input } = keyed
+    // The session of an action comes out of its checkpoint, under the lease: a stand-in here.
+    const context = input.action ? { ...keyed.context, nativeSessionId: 'dry-run' } : keyed.context
     const prepared = await this.deps.driver.prepare(context)
     checkPreparedRun(context, prepared, this.deps.driver.command(prepared, input))
   }
@@ -311,11 +315,18 @@ export class TurnSupervisor {
     // not undone, and «Обновить» moves a branch it does not have.
     if (!workspace && (request.replacesTurn !== undefined || request.rebased !== undefined))
       throw badRequest('A turn without a repository neither replaces nor rebases')
-    // A task in the browser hands its files to the browser worker, never to the sandbox (Б26).
-    if (request.input.attachments.length && !workspace)
-      throw badRequest('Files of the client go only to a turn with a repository')
+    // A turn with one replaces the undone turn (docs/plan/61-chats-first.md, §5.14).
+    if (request.rewound !== undefined && (workspace || labels.turn < 2))
+      throw badRequest('Only a later turn without a repository is rewound')
+    // A task on a site without a repository hands its files to the browser worker, never to the
+    // sandbox (Б26); a chat without a site has no site to hand them to (docs/plan/61, К16).
+    if (request.input.attachments.length && !turnMayHoldInbox(workspace !== undefined, labels))
+      throw badRequest('Files of the client go only to a turn with a repository or without a site')
     if (request.input.attachments.length && !this.deps.inbox)
       throw badRequest('Files of the client need the inbox of core')
+    // A compaction shortens a session: only a checkpoint brings one (docs/plan/61, §5.14).
+    if (request.input.action !== undefined && !request.previous)
+      throw badRequest('An action of a turn needs the checkpoint of an earlier turn')
     if (request.replacesTurn !== undefined && request.replacesTurn !== labels.turn - 1)
       throw badRequest('Replacement must name the latest turn')
     if (request.replacesTurn !== undefined && workspace?.expectedBranchSha === undefined)
@@ -393,9 +404,11 @@ export class TurnSupervisor {
         !prior ||
         prior.workspaceId !== labels.workspaceId ||
         prior.sessionId !== labels.sessionId ||
-        (request.replacesTurn === undefined
-          ? prior.turn !== labels.turn - 1
-          : prior.turn >= request.replacesTurn) ||
+        (request.replacesTurn !== undefined
+          ? prior.turn >= request.replacesTurn
+          : request.rewound
+            ? prior.turn >= labels.turn - 1
+            : prior.turn !== labels.turn - 1) ||
         prior.image !== request.sandbox.image ||
         prior.driver.id !== this.deps.driver.id ||
         prior.driver.version !== request.driverVersion

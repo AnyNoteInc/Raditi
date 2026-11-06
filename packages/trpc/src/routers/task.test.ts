@@ -121,6 +121,29 @@ describe('the words of a new dialog', () => {
   })
 })
 
+describe('the project of a new chat', () => {
+  it('is said aloud: a forgotten field gives no chat without a project', async () => {
+    const { db, prisma } = emptyDb()
+    await expect(
+      callerOf(prisma).task.create({ taskId: ids.taskId, text: 'Вопрос' } as never),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(db.task.findUnique).not.toHaveBeenCalled()
+  })
+
+  it('takes only an id of version 7 for a chat without one, before anything is read', async () => {
+    const { db, prisma } = emptyDb()
+    await expect(
+      callerOf(prisma).task.create({ siteId: null, taskId: ids.taskId, text: 'Вопрос' }),
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Не удалось начать чат. Обновите страницу и попробуйте ещё раз',
+      cause: { code: 'TASK_ID_INVALID' },
+    })
+    expect(db.task.findUnique).not.toHaveBeenCalled()
+    expect(db.$transaction).not.toHaveBeenCalled()
+  })
+})
+
 describe('a dialog of someone else', () => {
   it('answers every procedure as a site that does not exist', async () => {
     const { db, prisma } = emptyDb()
@@ -134,7 +157,7 @@ describe('a dialog of someone else', () => {
       caller.task.cancel({ taskId: ids.taskId, requestId }),
       caller.task.commands({ taskId: ids.taskId }),
       caller.task.activity({ taskId: ids.taskId, turn: 1 }),
-      caller.task.list({ siteId: ids.siteId }),
+      caller.task.list({ folder: ids.siteId }),
       caller.candidate.get({ taskId: ids.taskId }),
       caller.candidate.update({ taskId: ids.taskId, requestId }),
       caller.preview.ticket({ taskId: ids.taskId }),
@@ -167,7 +190,7 @@ describe('dialogs that are not set up', () => {
       callerOf(prisma, null).task.create({ ...ids, text: 'Поменяйте телефон' }),
     ).rejects.toMatchObject({
       code: 'SERVICE_UNAVAILABLE',
-      message: 'Диалоги сейчас недоступны. Попробуйте ещё раз немного позже',
+      message: 'Чаты сейчас недоступны. Попробуйте ещё раз немного позже',
       cause: { code: 'CHAT_NOT_CONFIGURED' },
     })
   })
@@ -188,15 +211,27 @@ describe('dialogs that are not set up', () => {
   })
 })
 
+describe('the list of chats', () => {
+  it('reads a project from its folder alone', async () => {
+    const { db, prisma } = emptyDb()
+    await expect(
+      // @ts-expect-error the old name of `folder` is gone (docs/plan/61-chats-first.md, 61.14)
+      callerOf(prisma).task.list({ siteId: ids.siteId }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(db.site.findFirst).not.toHaveBeenCalled()
+  })
+})
+
 describe('the environment of a new dialog', () => {
-  it('refuses requirements that need nothing and files given twice, before anything is read', async () => {
+  it('takes no requirements from the client, and refuses files given twice, before anything is read', async () => {
     const { db, prisma } = emptyDb()
     const attachment = randomUUID()
     const calls = [
       callerOf(prisma).task.create({
         ...ids,
         text: 'Добавьте новость',
-        requirements: { repository: false, browser: false },
+        // @ts-expect-error what a chat works with is the server's (docs/plan/61-chats-first.md, К7)
+        requirements: { repository: false, browser: true },
       }),
       callerOf(prisma).task.create({
         ...ids,

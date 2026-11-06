@@ -125,6 +125,7 @@ export const releaseRouter = router({
             }),
           ),
           nothingToUndo: z.boolean(),
+          browserWrote: z.boolean(),
           review: z.boolean(),
           confirmToken: z.string(),
           expiresAt: z.date(),

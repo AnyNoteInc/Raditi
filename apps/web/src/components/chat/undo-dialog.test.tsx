@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider, type UseMutationOptions } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { serverRefusal } from '@/components/billing/testing'
@@ -86,6 +86,7 @@ function ready(patch: Partial<ReadyUndoPlan> = {}): ReadyUndoPlan {
       },
     ],
     nothingToUndo: false,
+    browserWrote: false,
     review: false,
     confirmToken: 'undo-token',
     expiresAt: new Date('2026-10-18T10:10:00.000Z'),
@@ -142,9 +143,22 @@ describe('the window of «Отменить выпуск»', () => {
     expect(shown).toContain('Медиафайлы, которые добавил выпуск, останутся на сайте: 2')
     expect(shown).toContain('wp-content/themes/cafe/promo.css')
     expect(shown).toContain('Настройка сайта: не вернём — её изменили на сайте после выпуска')
-    expect(shown).toContain('Отмена бесплатна. Кредиты, списанные за этот диалог, не возвращаются.')
+    expect(shown).toContain('Отмена бесплатна. Кредиты, списанные за этот чат, не возвращаются.')
     expect(planOf).toHaveBeenCalledTimes(2)
     expect(prepareUndo).toHaveBeenCalledWith({ taskId: TASK_ID, releaseId: RELEASE_ID })
+  })
+
+  it('says that what was done through the browser stays, only when something was', async () => {
+    planOf.mockResolvedValue(ready())
+    const plain = showDialog()
+    await within(plain).findByText(/Страница 42: вернём заголовок/)
+    expect(text(plain)).not.toContain('через браузер')
+    cleanup()
+
+    planOf.mockResolvedValue(ready({ browserWrote: true }))
+    const dialog = showDialog()
+    await within(dialog).findByText(/Страница 42: вернём заголовок/)
+    expect(text(dialog)).toContain('То, что агент сделал на сайте через браузер, останется.')
   })
 
   it('confirms exactly the plan and the number shown', async () => {

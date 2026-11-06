@@ -10,6 +10,7 @@ import {
   type RepoRef,
   type SiteStack,
   type TaskStatus,
+  type TaskRequirements,
 } from '@repo/domain'
 
 import { previewRecordOf, type PreviewRecord } from './preview-record.ts'
@@ -62,7 +63,13 @@ export interface PreviewFacts {
      */
     written: boolean
   }
-  task: { status: TaskStatus; workspaceId: string; dataClass: 'synthetic' | 'client' }
+  task: {
+    status: TaskStatus
+    workspaceId: string
+    dataClass: 'synthetic' | 'client'
+    /** What the task works with: its preview gets the variables its commands get (К21). */
+    requirements: TaskRequirements
+  }
   site: { id: string; stack: SiteStack; url: string; installedReleaseId: string | null }
   repo: (RepoRef & { defaultBranch: string }) | null
   /** The candidate the preview should show: the dialog's `current` or `stale` one. */
@@ -112,7 +119,13 @@ export async function loadPreviewFacts(
       lastViewedAt: true,
       runtime: true,
       task: {
-        select: { status: true, workspaceId: true, workspace: { select: { dataClass: true } } },
+        select: {
+          status: true,
+          workspaceId: true,
+          needsRepository: true,
+          needsBrowser: true,
+          workspace: { select: { dataClass: true } },
+        },
       },
       site: { select: { id: true, stack: true, url: true, installedReleaseId: true } },
     },
@@ -175,6 +188,7 @@ export async function loadPreviewFacts(
       status: row.task.status,
       workspaceId: row.task.workspaceId,
       dataClass: row.task.workspace.dataClass,
+      requirements: { repository: row.task.needsRepository, browser: row.task.needsBrowser },
     },
     site: {
       id: row.site.id,

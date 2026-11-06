@@ -13,7 +13,7 @@ const accessPurposes: Readonly<Record<string, string>> = {
   ssh: 'Копирование файлов и обновление сайта',
   ftp: 'Копирование файлов и обновление сайта',
   wp: 'Правки текстов, цен и фото',
-  browser: 'Работа агента в админке сайта',
+  browser: 'Вход в админку сайта для браузера',
   db: 'Сведения о базе данных',
 }
 export const accessPurpose = (kind: string) => accessPurposes[kind] ?? 'Работа с сайтом'

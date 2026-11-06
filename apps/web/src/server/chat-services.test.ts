@@ -105,6 +105,14 @@ describe('the dialog services of the process', () => {
     })
   })
 
+  it("says which stacks work in a site's admin pages, by their adapters", async () => {
+    const { browserSupported, chatServices } = await import('./chat-services')
+    expect(browserSupported('wordpress')).toBe(true)
+    // Its adapter is not there yet, or says it has no browser: the site takes a chat with the code.
+    expect(browserSupported('bitrix')).toBe(false)
+    expect(chatServices()?.browserSupported).toBe(browserSupported)
+  })
+
   it('makes the clients of S3 and Vault only when a procedure needs them, once', async () => {
     const { chatServices } = await import('./chat-services')
     const chat = chatServices()!

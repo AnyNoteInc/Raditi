@@ -15,6 +15,7 @@ import {
   issueBrowserStreamTicket,
 } from './browser-stream-tickets.ts'
 import type { PrismaClient } from './generated/prisma/client.ts'
+import { uuidv7 } from './uuidv7.ts'
 
 const databaseUrl = process.env.DATABASE_URL
 
@@ -61,6 +62,30 @@ describe.skipIf(!databaseUrl)('PostgreSQL: tickets of the stream of a task’s b
     const session = await openBrowserSession(db, { taskId: task.id })
     return { member, stranger, workspace, site, task, session }
   }
+
+  it('lets a member watch the browser of a chat without a site, and nobody else (plan 61)', async () => {
+    const [member, stranger] = [await person(), await person()]
+    const workspace = await db.workspace.create({
+      data: { name: 'Synthetic', dataClass: 'synthetic' },
+    })
+    await db.member.create({ data: { workspaceId: workspace.id, userId: member.id } })
+    const task = await db.task.create({
+      data: {
+        id: uuidv7(),
+        workspaceId: workspace.id,
+        siteId: null,
+        needsRepository: false,
+        needsBrowser: true,
+      },
+    })
+    const session = await openBrowserSession(db, { taskId: task.id })
+    const viewer = { sessionId: session.id, userId: member.id }
+    expect(await browserViewerAllowed(db, viewer)).toBe(true)
+    expect(await issueBrowserStreamTicket(db, viewer)).not.toBeNull()
+    expect(await browserViewerAllowed(db, { ...viewer, userId: stranger.id })).toBe(false)
+    await closeBrowserSession(db, { sessionId: session.id, status: 'closed', reason: 'task_done' })
+    expect(await browserViewerAllowed(db, viewer)).toBe(false)
+  })
 
   it('gives a member a ticket the database keeps only as a hash, spent once', async () => {
     const w = await watched()

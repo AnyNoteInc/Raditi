@@ -283,7 +283,6 @@ model Site {
   previews           PreviewEnvironment[]
   envVars            SiteEnvVar[]
   agentSkills        SiteAgentSkill[]
-  lease              SiteLease?
   gitRepositories    GitRepository[]
   environments       Environment[]
   credentialRefs     CredentialRef[]
@@ -291,7 +290,6 @@ model Site {
   tasks              Task[]
   snapshots          Snapshot[]
   deployments        Deployment[]
-  turnAssignments    TurnAssignment[]
   codeSource         SiteCodeSource?
   database           SiteDatabase?
   databaseDump       SiteDatabaseDump?
@@ -333,7 +331,9 @@ enum DriftPolicy {
 /// One row per site for its whole life. Acquire is a conditional UPDATE that sets the holder and
 /// bumps epoch when the lease is free or expired; every write by a holder checks its epoch, which
 /// fences a stale owner. held_for_operator: the deploy outcome is unknown, so an expired lease
-/// is not taken over until an operator decides.
+/// is not taken over until an operator decides. site_id is the scope of the lease, not a key to
+/// `sites` (`leaseScopeOf`, docs/plan/61-chats-first.md, К14): the site of a task, or the task
+/// itself when it has none; such a row stays for good, its epoch only grows.
 model SiteLease {
   siteId            String          @id @map("site_id") @db.Uuid
   operation         LeaseOperation?
@@ -349,7 +349,6 @@ model SiteLease {
   inflightReleaseId String?         @unique @map("inflight_release_id") @db.Uuid
   updatedAt         DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  site            Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
   holderTask      Task?        @relation(fields: [holderTaskId], references: [id], onDelete: Restrict)
   inflightMcpCall McpCall?     @relation("McpWriteLease", fields: [inflightMcpCallId], references: [id], onDelete: Restrict)
   inflightRelease SiteRelease? @relation("ReleaseLeaseBarrier", fields: [inflightReleaseId], references: [id], onDelete: Restrict)
@@ -509,7 +508,10 @@ model ChatSession {
 model Task {
   id              String       @id @default(uuid(7)) @db.Uuid
   workspaceId     String       @map("workspace_id") @db.Uuid
-  siteId          String       @map("site_id") @db.Uuid
+  /// NULL — a chat without a project (docs/plan/61-chats-first.md): never a repository, its id a
+  /// UUID of version 7 (CHECK tasks_chat_id_check). Fixed when the task is created, with the
+  /// requirements (trigger tasks_requirements_fixed).
+  siteId          String?      @map("site_id") @db.Uuid
   chatSessionId   String?      @map("chat_session_id") @db.Uuid
   createdById     String?      @map("created_by_id") @db.Uuid
   /// «Отменить» of a done task: this task reverts that one and is never billed.
@@ -544,12 +546,12 @@ model Task {
   /// Set from the first request (feed design, «Ограничения в базе»); the client may rename the
   /// dialog (`task.rename`, owner's request of 26.10.2026).
   title           String?      @db.VarChar(120)
-  mode            TaskMode     @default(work)
   /// Why a queued task waits; cleared when it leaves `queued` (CHECK tasks_waiting_check).
   waiting         TaskWaiting?
   /// What the task's environment needs (docs/plan/57-browser-tasks.md, Б2): the site's
-  /// repository, the cloud browser or both — at least one (CHECK tasks_requirements_check), fixed
-  /// when the task is created (trigger tasks_requirements_fixed). TaskRequirements in @repo/domain;
+  /// repository, the cloud browser or both. A task with a site needs at least one, a task without
+  /// a site never the repository and possibly nothing (CHECK tasks_requirements_check). Fixed when
+  /// the task is created (trigger tasks_requirements_fixed). TaskRequirements in @repo/domain;
   /// tasks older than the columns need the repository alone.
   needsRepository Boolean      @default(true) @map("needs_repository")
   needsBrowser    Boolean      @default(false) @map("needs_browser")
@@ -565,9 +567,11 @@ model Task {
   /// Irreversible content retention barrier, set before deleting the expired privacy map.
   contentRetiredAt     DateTime? @map("content_retired_at") @db.Timestamptz(6)
   contentMasksPurgedAt DateTime? @map("content_masks_purged_at") @db.Timestamptz(6)
+  /// When the contact map the `web_*` tools wrote for this task was removed (К38).
+  webMasksPurgedAt     DateTime? @map("web_masks_purged_at") @db.Timestamptz(6)
 
   workspace          Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
-  site               Site                 @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  site               Site?                @relation(fields: [siteId], references: [id], onDelete: Restrict)
   chatSession        ChatSession?         @relation(fields: [chatSessionId], references: [id], onDelete: Restrict)
   createdBy          User?                @relation(fields: [createdById], references: [id], onDelete: SetNull)
   revertsTask        Task?                @relation("TaskReverts", fields: [revertsTaskId], references: [id], onDelete: Restrict)
@@ -598,6 +602,7 @@ model Task {
   @@unique([siteId, alias])
   @@index([siteId, updatedAt(sort: Desc)], map: "tasks_site_updated_idx")
   @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([workspaceId, updatedAt(sort: Desc), id(sort: Desc)], map: "tasks_workspace_updated_idx")
   @@index([siteId, status])
   @@index([status, updatedAt])
   @@index([chatSessionId])
@@ -666,6 +671,7 @@ model TaskTurn {
   /// The pass of this turn ended in a `feed.failure`: the platform refused its result. Replaced,
   /// never continued; its model calls are not charged to the client (docs/plan/53, «Попробовать ещё»).
   rejectedAt      DateTime?  @map("rejected_at") @db.Timestamptz(6)
+  undoneAt        DateTime?  @map("undone_at") @db.Timestamptz(6)
 
   task         Task          @relation(fields: [taskId], references: [id], onDelete: Cascade)
   driver       AgentDriver   @relation(fields: [driverId], references: [id], onDelete: Restrict)
@@ -698,6 +704,7 @@ enum TurnStatus {
 model TurnAssignment {
   id               String                 @id @default(uuid(7)) @db.Uuid
   taskId           String                 @map("task_id") @db.Uuid
+  /// The scope of the lease (`leaseScopeOf`): the site of the task, or the task without one.
   siteId           String                 @map("site_id") @db.Uuid
   /// Sandbox label of the session: sessions/<sessionId>/turns/<NNNN>/ in raditi-sessions.
   sessionId        String                 @map("session_id") @db.VarChar(64)
@@ -722,7 +729,6 @@ model TurnAssignment {
   finishedAt       DateTime?              @map("finished_at") @db.Timestamptz(6)
 
   task            Task                    @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  site            Site                    @relation(fields: [siteId], references: [id], onDelete: Restrict)
   mcpCalls        McpCall[]
   previewSyncs    PreviewSyncRequest[]
   previewBrowsers PreviewBrowserRequest[]
@@ -853,7 +859,8 @@ enum McpCallResult {
 model Attachment {
   id           String           @id @default(uuid(7)) @db.Uuid
   workspaceId  String           @map("workspace_id") @db.Uuid
-  siteId       String           @map("site_id") @db.Uuid
+  /// NULL — a file of a chat without a project (docs/plan/61-chats-first.md, К16).
+  siteId       String?          @map("site_id") @db.Uuid
   /// The task that sent it: set exactly while `bound`, together with bound_at.
   taskId       String?          @map("task_id") @db.Uuid
   uploadedById String?          @map("uploaded_by_id") @db.Uuid
@@ -870,7 +877,7 @@ model Attachment {
   createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
 
   workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
-  site       Site      @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  site       Site?     @relation(fields: [siteId], references: [id], onDelete: Restrict)
   task       Task?     @relation(fields: [taskId], references: [id], onDelete: Cascade)
   uploadedBy User?     @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
 
@@ -988,7 +995,7 @@ model AgentDriver {
   /// Unread: every driver runs the shared SANDBOX_IMAGE pinned by digest (spec §8). The seed
   /// writes a placeholder until the B16 contract migration drops the column.
   image        String   @db.VarChar(512)
-  /// AgentCapabilities: resume, jsonEvents, outputSchema, mcp, images.
+  /// AgentCapabilities: resume, jsonEvents, outputSchema, mcp, images, reasoningEvents, compaction.
   capabilities Json
   enabled      Boolean  @default(false)
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -1981,12 +1988,6 @@ model SiteDatabaseSchema {
 
 // ─── Previews, candidates and releases (docs/plan/53-chat-preview-release.md) ──────────────────
 
-/// Must equal taskModes in @repo/domain (checked by a test).
-enum TaskMode {
-  work
-  chat
-}
-
 /// Must equal taskWaitingReasons in @repo/domain (checked by a test).
 enum TaskWaiting {
   agents
@@ -2548,7 +2549,8 @@ enum BrowserCheckpointState {
 model BrowserSession {
   id              String               @id @default(uuid(7)) @db.Uuid
   taskId          String               @map("task_id") @db.Uuid
-  siteId          String               @map("site_id") @db.Uuid
+  /// NULL — the browser of a chat without a project: it opens any public site (К12).
+  siteId          String?              @map("site_id") @db.Uuid
   workspaceId     String               @map("workspace_id") @db.Uuid
   status          BrowserSessionStatus @default(starting)
   /// Who drives it now; every hand-over moves control_epoch on (Б15).
@@ -2562,6 +2564,8 @@ model BrowserSession {
   /// The first click, input or upload in it, the agent's or the client's (Б28): the site may
   /// have changed.
   wroteAt         DateTime?            @map("wrote_at") @db.Timestamptz(6)
+  /// The first of those of the latest pass (docs/plan/61-chats-first.md, §5.5).
+  lastWroteAt     DateTime?            @map("last_wrote_at") @db.Timestamptz(6)
   lastActivityAt  DateTime             @default(now()) @map("last_activity_at") @db.Timestamptz(6)
   /// Its hard deadline, whatever happens in it (BROWSER_SESSION_MAX_HOURS).
   expiresAt       DateTime             @map("expires_at") @db.Timestamptz(6)
@@ -2573,7 +2577,7 @@ model BrowserSession {
   errorCode       String?              @map("error_code") @db.VarChar(48)
 
   task        Task                  @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  site        Site                  @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  site        Site?                 @relation(fields: [siteId], references: [id], onDelete: Restrict)
   workspace   Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
   tickets     BrowserStreamTicket[]
   checkpoints BrowserCheckpoint[]

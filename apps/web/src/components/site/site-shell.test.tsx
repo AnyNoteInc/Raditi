@@ -22,7 +22,7 @@ const user = { name: 'Анна', lastName: 'Петрова', email: 'anna@exampl
 const site = { id, name: 'Кофейня «Крошка»', url: 'https://kroshka.example', status: 'active' }
 
 function showShell(
-  section = 'chat',
+  section = 'overview',
   status = 'active',
   setup?: 'pending' | 'failed' | 'done' | null,
 ) {
@@ -43,12 +43,11 @@ const bar = () => navigation(1)
 afterEach(() => vi.restoreAllMocks())
 
 describe('site shell', () => {
-  it('lists the seven sections in the rail, each leading to its own address', () => {
+  it('lists the six sections in the rail, each leading to its own address, no chat among them', () => {
     showShell()
     const links = within(rail()).getAllByRole('link')
     expect(links.map((link) => link.textContent)).toEqual([
       'Обзор',
-      'Чат',
       'Изменения',
       'Запуски',
       'База и бэкап',
@@ -56,8 +55,7 @@ describe('site shell', () => {
       'Настройки',
     ])
     expect(links.map((link) => link.getAttribute('href'))).toEqual(
-      // «Чат» opens on a new dialog, the rest on themselves.
-      ['overview', 'chat/new', 'changes', 'runs', 'database', 'vault', 'settings'].map(
+      ['overview', 'changes', 'runs', 'database', 'vault', 'settings'].map(
         (s) => `/projects/${id}/${s}`,
       ),
     )
@@ -90,27 +88,28 @@ describe('site shell', () => {
     expect(open.getAttribute('rel')).toContain('noopener')
   })
 
-  it('keeps four sections and «Ещё» on the phone bar and the rest behind «Ещё»', () => {
+  it('keeps three sections and «Ещё» on the phone bar and the rest behind «Ещё»', () => {
     showShell('settings')
     expect(
       within(bar())
         .getAllByRole('link')
         .map((link) => link.textContent),
-    ).toEqual(['Обзор', 'Чат', 'Изменения', 'Запуски'])
+    ).toEqual(['Обзор', 'Изменения', 'Запуски'])
     fireEvent.click(within(bar()).getByRole('button', { name: 'Ещё' }))
     const more = screen.getByRole('navigation', { name: 'Ещё разделы' })
     expect(
       within(more)
         .getAllByRole('link')
         .map((link) => link.textContent),
-    ).toEqual(['База и бэкап', 'Переменные', 'Настройки', 'К проектам'])
+    ).toEqual(['База и бэкап', 'Переменные', 'Настройки', 'К чатам', 'К проектам'])
+    expect(within(more).getByRole('link', { name: 'К чатам' }).getAttribute('href')).toBe('/chats')
     expect(within(more).getByRole('link', { name: 'Настройки' }).getAttribute('aria-current')).toBe(
       'page',
     )
   })
 
   it('takes the first character of the name whole for the mark of the site', () => {
-    mocks.pathname = `/projects/${id}/chat`
+    mocks.pathname = `/projects/${id}/overview`
     render(
       <SiteShell user={user} site={{ ...site, name: '🍰 Крошка' }}>
         <p>Содержимое</p>
@@ -133,8 +132,8 @@ describe('site shell', () => {
     it('keeps «Обзор» the only link of the rail and of the phone bar', () => {
       showShell('overview', status)
       for (const [nav, closed] of [
-        [rail(), ['Чат', 'Изменения', 'Запуски', 'База и бэкап', 'Переменные', 'Настройки']],
-        [bar(), ['Чат', 'Изменения', 'Запуски']],
+        [rail(), ['Изменения', 'Запуски', 'База и бэкап', 'Переменные', 'Настройки']],
+        [bar(), ['Изменения', 'Запуски']],
       ] as const) {
         const links = within(nav).getAllByRole('link')
         expect(links.map((link) => link.textContent)).toEqual(['Обзор'])
@@ -164,8 +163,8 @@ describe('site shell', () => {
       fireEvent.click(more)
       const sheet = screen.getByRole('navigation', { name: 'Ещё разделы' })
       const links = within(sheet).getAllByRole('link')
-      expect(links.map((link) => link.textContent)).toEqual(['К проектам'])
-      expect(links[0]!.getAttribute('href')).toBe('/projects')
+      expect(links.map((link) => link.textContent)).toEqual(['К чатам', 'К проектам'])
+      expect(links[1]!.getAttribute('href')).toBe('/projects')
       expect(closedLabels(sheet)).toEqual(announced(['База и бэкап', 'Переменные', 'Настройки']))
       for (const item of sheet.querySelectorAll('[aria-disabled="true"]')) {
         expect(item.querySelectorAll('svg')).toHaveLength(2)
@@ -188,15 +187,15 @@ describe('site shell', () => {
       expect(links.map((link) => link.textContent)).toEqual(['Обзор'])
       expect(links[0]!.getAttribute('aria-current')).toBe('page')
       const closed = Array.from(railMarkup.querySelectorAll('[aria-disabled="true"]'))
-      expect(closed).toHaveLength(6)
-      expect(closed[0]!.textContent).toBe('Чат, раздел недоступен')
+      expect(closed).toHaveLength(5)
+      expect(closed[0]!.textContent).toBe('Изменения, раздел недоступен')
       expect(page.querySelector('#site-closed-sections')?.textContent).toBe(note)
     })
   })
 
   it.each(['onboarding', 'active', 'something-new'])('closes nothing of a %s site', (status) => {
     showShell('overview', status)
-    expect(within(rail()).getAllByRole('link')).toHaveLength(7)
+    expect(within(rail()).getAllByRole('link')).toHaveLength(6)
     expect(document.body.textContent).not.toContain('недоступ')
     expect(document.querySelector('[aria-disabled="true"]')).toBeNull()
     expect(document.getElementById('site-closed-sections')).toBeNull()
@@ -217,7 +216,7 @@ describe('site shell', () => {
       expect(screen.queryByRole('complementary')).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: 'Ещё' })).not.toBeInTheDocument()
       expect(screen.queryByRole('img', { name: `Сайт ${site.name}` })).not.toBeInTheDocument()
-      for (const label of ['Чат', 'Изменения', 'Запуски', 'Настройки']) {
+      for (const label of ['Изменения', 'Запуски', 'Настройки']) {
         expect(screen.queryByText(label)).not.toBeInTheDocument()
       }
     })
@@ -242,6 +241,6 @@ describe('site shell', () => {
 
   it.each(['done', null] as const)('shows the sections of a site whose setup is %s', (setup) => {
     showShell('overview', 'onboarding', setup)
-    expect(within(rail()).getAllByRole('link')).toHaveLength(7)
+    expect(within(rail()).getAllByRole('link')).toHaveLength(6)
   })
 })

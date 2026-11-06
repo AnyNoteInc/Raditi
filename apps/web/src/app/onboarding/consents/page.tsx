@@ -16,7 +16,7 @@ export default async function OnboardingConsentsPage() {
   if ((await requireSession()) === UNAVAILABLE) return <ServiceUnavailable />
   const accepted = await hasRequiredConsents()
   if (accepted === UNAVAILABLE) return <ServiceUnavailable />
-  if (accepted) redirect('/projects')
+  if (accepted) redirect('/chats')
   return (
     <>
       <ConsentsForm documents={consentDocumentLinks()} />

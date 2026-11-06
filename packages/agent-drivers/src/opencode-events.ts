@@ -8,13 +8,15 @@ import {
   nativeSessionId,
   object,
   parseJsonObject,
+  reasoning as reasoningEvents,
   text,
   type JsonObject,
 } from './jsonl.ts'
 import { platformToolName } from './opencode-mcp.ts'
 
 // `opencode run --format json` of the pinned 1.18.34: one row per finished part.
-//   step_start, text, tool_use (a tool part that is completed or failed), step_finish, error
+//   step_start, reasoning (with `--thinking`), text, tool_use (a tool part that is completed or
+//   failed), step_finish, error
 // The CLI prints no end-of-turn row. A step that ends with `stop` is followed by more steps when
 // the CLI compacts the context, and between them the CLI prints a line of its own as `text`
 // outside any step; a run cut on a rejected permission request exits 0 after a `tool-calls`
@@ -118,6 +120,7 @@ export function parseOpencodeEvent(line: string): AgentEvent[] {
     return id ? events({ type: 'started', nativeSessionId: id }) : []
   }
   if (row.type === 'text' && part?.type === 'text') return message(part.text)
+  if (row.type === 'reasoning' && part?.type === 'reasoning') return reasoningEvents(part.text)
   if (row.type === 'tool_use' && part?.type === 'tool') return toolEvents(part)
   if (row.type !== 'step_finish' || part?.type !== 'step-finish') return []
   const tokens = object(part.tokens)

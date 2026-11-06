@@ -1,6 +1,7 @@
 import {
   isDomainError,
   isPageBrowserError,
+  OPEN_WEB_POLICY,
   type BrowserTaskPolicy,
   type CloudBrowserConnection,
   type CloudBrowserEvent,
@@ -157,6 +158,7 @@ class FakePage extends Emitter {
               return `- textbox "Поле" [ref=${field?.ref}]: ${field?.value}`
             },
             inputValue: async () => field?.value ?? '',
+            getAttribute: async () => null,
           }
         },
       }
@@ -275,6 +277,8 @@ function connectionWith(events: CloudBrowserEvent[] = []): CloudBrowserConnectio
     endpoint: `ws://127.0.0.1:9333${SECRET_PATH}`,
     allowedHosts: ['example.ru:443', 'www.example.ru:443'],
     localSites: [],
+    openWeb: false,
+    platformHosts: [],
     startUrl: `${ORIGIN}/wp-admin/`,
     viewport: { width: 1280, height: 800 },
     policy,
@@ -352,12 +356,50 @@ describe('the cloud browser session', () => {
       { endpoint: 'not a url' },
       { startUrl: 'https://elsewhere.example/' },
       { startUrl: `${ORIGIN}/wp-admin/plugins.php` },
+      // Only a chat without a site starts on an empty page.
+      { startUrl: null },
+      { startUrl: null, openWeb: false },
+      { platformHosts: ['example.ru'] },
       { viewport: { width: 1000, height: 700 } },
     ])
       await expect(factory.open({ ...connectionWith(), ...wrong })).rejects.toThrow(
         'Invalid cloud browser connection',
       )
     expect(connect).not.toHaveBeenCalled()
+  })
+
+  it('starts a chat without a site on an empty page and opens a public site by address', async () => {
+    const fake = fakeBrowser()
+    const session = await createPlaywrightCloudBrowser({ connect: fake.connect }).open({
+      ...connectionWith(),
+      allowedHosts: [],
+      openWeb: true,
+      platformHosts: ['raditi.ru'],
+      startUrl: null,
+      policy: OPEN_WEB_POLICY,
+    })
+    const page = fake.context.pages[0] as FakePage
+    expect(page.url()).toBe('about:blank')
+    expect(session.tabs()).toEqual([{ pageId: 1, url: 'about:blank', title: '' }])
+
+    await session.navigate('https://example.com/')
+    expect(page.url()).toBe('https://example.com/')
+    await session.act({ tool: 'web_open', url: 'https://example.org:8443/news' })
+    expect(page.url()).toBe('https://example.org:8443/news')
+    for (const url of ['http://example.com/', 'https://raditi.ru/', 'https://8.8.8.8/'])
+      expect(codeOf(await session.navigate(url).catch((error: unknown) => error)), url).toBe(
+        'denied',
+      )
+    // Nothing of a site to read, and no form to fill.
+    expect(await session.signIn({ login: 'a', password: 'b' })).toBe('absent')
+    expect(
+      codeOf(
+        await session
+          .verify({ steps: [], read: { path: '/', fields: {} } } as never)
+          .catch((error: unknown) => error),
+      ),
+    ).toBe('denied')
+    await session.close()
   })
 
   it('says a browser it cannot reach is closed, and never names its secret path', async () => {

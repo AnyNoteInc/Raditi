@@ -251,6 +251,9 @@ export function todayNote(input: {
   return day === null ? OUTSIDE_THE_DAY : `${day} ${OUTSIDE_THE_DAY}`
 }
 
+/** What a chat without a project is called where charges are told by project. */
+export const NO_PROJECT = 'Без проекта'
+
 const sitesWord = (count: number) => plural(count, 'сайт', 'сайта', 'сайтов')
 
 /** «из 3 сайтов»: the site limit after the number of sites. */

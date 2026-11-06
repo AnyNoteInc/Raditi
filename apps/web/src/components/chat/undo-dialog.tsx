@@ -145,7 +145,11 @@ function Plan({
       </Section>
 
       <Box sx={{ display: 'grid', gap: 0.5 }}>
-        {[...undoText.notes, undoText.safety(undone)].map((note) => (
+        {[
+          ...undoText.notes,
+          ...(plan.browserWrote ? [undoText.browserStays] : []),
+          undoText.safety(undone),
+        ].map((note) => (
           <Typography key={note} variant="body2" color="text.secondary">
             {nbsp(note)}
           </Typography>

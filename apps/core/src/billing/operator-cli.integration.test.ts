@@ -57,6 +57,8 @@ const SHOP = { shopId: '123456', secretKey: 'test_synthetic-key' }
 const WHO = ['--operator', 'operator-test']
 const START = new Date('2026-10-04T09:00:00.000Z')
 const END = new Date('2026-11-04T09:00:00.000Z')
+/** The end of a period that has not ended at any date this test may run on. */
+const LATER = new Date('2036-11-04T09:00:00.000Z')
 
 describe.skipIf(!enabled)('operator billing commands with PostgreSQL and the fake ЮKassa', () => {
   let db: PrismaClient
@@ -716,6 +718,11 @@ describe.skipIf(!enabled)('operator billing commands with PostgreSQL and the fak
 
   it('switches auto-renewal off by the email, once, under the name of the OS user', async () => {
     const c = await customer()
+    // A period still going on whenever the test runs: past END the command says it has ended.
+    await db.subscription.update({
+      where: { id: c.subscriptionId },
+      data: { currentPeriodEnd: LATER },
+    })
 
     const first = await run('stop-renewal', [c.email, '--reason', 'Письмо клиента'])
 
@@ -727,7 +734,7 @@ describe.skipIf(!enabled)('operator billing commands with PostgreSQL and the fak
       `Автопродление отключено: клиент ${c.email}, подписка ${c.subscriptionId}`,
     )
     expect(first.stdout).toContain(
-      'Тариф действует до 04.11.2026 12:00 МСК и больше не списывается.',
+      'Тариф действует до 04.11.2036 12:00 МСК и больше не списывается.',
     )
     // The command reads no shop setting: it names the condition, true at either value of it.
     expect(first.stdout).toContain(
@@ -740,7 +747,7 @@ describe.skipIf(!enabled)('operator billing commands with PostgreSQL and the fak
       status: 'active',
       cancelAtPeriodEnd: true,
       paymentMethodId: 'pm-saved',
-      currentPeriodEnd: END,
+      currentPeriodEnd: LATER,
     })
     expect(subscription.cancelledAt).toBeInstanceOf(Date)
     expect(await entries(c, autoRenewalAuditActions.operatorStop)).toMatchObject([

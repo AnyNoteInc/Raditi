@@ -1,9 +1,13 @@
 import {
   AGENT_TURN_JOB,
   AGENT_TURN_QUEUE,
+  BROWSER_ENSURE_JOB,
+  BROWSER_SESSION_QUEUE,
   agentTurnDedupeKey,
   agentTurnJobSchema,
   agentTurnRetryJobId,
+  browserEnsureDedupeKey,
+  browserEnsureJobSchema,
   PREVIEW_BROWSER_JOB,
   PREVIEW_QUEUE,
   PREVIEW_SYNC_JOB,
@@ -16,6 +20,7 @@ import {
   releaseAdvanceDedupeKey,
   releaseAdvanceJobSchema,
   type AgentTurnJob,
+  type BrowserEnsureJob,
   type PreviewBrowserJob,
   type PreviewSyncJob,
   type ReleaseAdvanceJob,
@@ -59,9 +64,10 @@ const wakeTagSchema = z.string().regex(/^[a-z]+-[0-9a-f-]{1,80}$/)
  * The passes of a site that wait for it (`queued`, `waiting = site`) go back on the queue now:
  * the holder of the site let it go — a turn of another dialog ended, a release ended (stand
  * R12). Without it a waiting pass looks again only at its own retry. Each job answers the last
- * request that queued its pass — the words or «Продолжить», never a command, as the sweep puts
- * it — under the key of `tag` (what let the site go), so one end wakes a pass once. In the
- * caller's transaction; returns how many were put.
+ * request that queued its pass — the words, «Продолжить» or a command the agent carries out
+ * (`agent_command`), never a press of a command, as the sweep puts it — under the key of `tag`
+ * (what let the site go), so one end wakes a pass once. In the caller's transaction; returns how
+ * many were put.
  */
 export async function enqueueSiteWaitingPasses(
   tx: OutboxWriter & Pick<Prisma.TransactionClient, '$queryRaw'>,
@@ -131,6 +137,29 @@ export async function enqueuePreviewBrowser(
     type: PREVIEW_BROWSER_JOB,
     payload,
     dedupeKey: previewBrowserDedupeKey(payload),
+  })
+}
+
+/**
+ * The start of a browser session (docs/plan/61-chats-first.md, К11). `window` is
+ * `browserEnsureWindow` of the database's time: one job per session in each of them, so a session
+ * that stays `starting` asks again and a call of the same window adds nothing.
+ */
+export async function enqueueBrowserEnsure(
+  tx: OutboxWriter,
+  job: BrowserEnsureJob,
+  options: { window: number },
+): Promise<boolean> {
+  const parsed = browserEnsureJobSchema.parse(job)
+  const payload: BrowserEnsureJob = {
+    taskId: lower(parsed.taskId),
+    sessionId: lower(parsed.sessionId),
+  }
+  return enqueueOutbox(tx, {
+    topic: BROWSER_SESSION_QUEUE,
+    type: BROWSER_ENSURE_JOB,
+    payload,
+    dedupeKey: browserEnsureDedupeKey(payload, options.window),
   })
 }
 

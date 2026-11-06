@@ -75,10 +75,10 @@ function labelled(
  * session's network, takes requests of the browser's address alone, opens TLS tunnels to the
  * site's `host:port` and — the open internet, for another site a page of the site goes on to
  * (docs/plan/60-browser-foreign-redirects.md, Ч3) — to any public DNS name on a TLS port, never
- * plain HTTP of the internet (PUBLIC_TLS_ONLY), with an
- * ECH whose outer name is that host taken as its SNI, and never to an address that is not public
- * or of the platform. Local sites (outside production) are plain-http routes to a fixed target;
- * `host.docker.internal` names this host on Linux as on Docker Desktop.
+ * plain HTTP of the internet (PUBLIC_TLS_ONLY), with an ECH whose outer name is that host taken as its SNI, and never to an address that is not public
+ * or of the platform. A chat without a site lists no host: the open internet is all it has
+ * (docs/plan/61-chats-first.md, К12). Local sites (outside production) are plain-http routes to a
+ * fixed target; `host.docker.internal` names this host on Linux as on Docker Desktop.
  */
 export function egressContainer(input: {
   place: BrowserSessionPlace

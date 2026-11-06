@@ -7,7 +7,8 @@
 import { createServer as createHttpsServer } from 'node:https'
 import { Readable } from 'node:stream'
 
-import { createFakeZaiState, handleZai, isZaiRequest } from '../llm-verify/fake-zai.mjs'
+import { programAnswer, usableProgram } from '../browser-task-verify/model.mjs'
+import { createFakeZaiState, handleZai, isZaiRequest, zaiFrames } from '../llm-verify/fake-zai.mjs'
 
 /** The tool steps a chat request holds since the last message of the user (fake-zai.mjs). */
 export function roundOf(body) {
@@ -22,6 +23,18 @@ export async function startFakeModel({ key, cert, port }) {
   const state = createFakeZaiState({})
   /** round → what its first request waits for; each opens once. */
   let gates = new Map()
+  /** The program of a turn that reads pages (`--browser`, browser-task-verify/programs.mjs). */
+  let program = null
+  let sequence = 0
+  const answerWith = (res, body, config) => {
+    sequence += 1
+    const frames = zaiFrames(body, config, sequence)
+    res.writeHead(200, {
+      'content-type': 'text/event-stream;charset=UTF-8',
+      'x-request-id': `synthetic-program-${sequence}`,
+    })
+    res.end(frames.body.join('') + frames.last + frames.done)
+  }
   const provider = createHttpsServer({ key, cert, minVersion: 'TLSv1.2' }, async (req, res) => {
     if (!isZaiRequest(req)) {
       req.resume()
@@ -31,7 +44,7 @@ export async function startFakeModel({ key, cert, port }) {
     try {
       // The quota path answers at once: the role llm probes the windows of the account.
       let request = req
-      if (req.method === 'POST' && gates.size > 0) {
+      if (req.method === 'POST' && (gates.size > 0 || program !== null)) {
         const chunks = []
         for await (const chunk of req) chunks.push(chunk)
         const bytes = Buffer.concat(chunks)
@@ -43,6 +56,10 @@ export async function startFakeModel({ key, cert, port }) {
         }
         // A request that declares no tool (the CLI's compaction) is no round of the script.
         const declared = Array.isArray(body?.tools) && body.tools.length > 0
+        if (declared && program !== null) {
+          state.requests.push({ method: req.method, path: req.url, body })
+          return answerWith(res, body, programAnswer(program, body))
+        }
         const round = declared ? roundOf(body) : null
         const gate = round === null ? undefined : gates.get(round)
         if (gate) {
@@ -78,10 +95,19 @@ export async function startFakeModel({ key, cert, port }) {
      * throw: what it finds is kept for the scenario to check.
      */
     script(turn, { waitFor = null, gates: given = {} } = {}) {
+      program = null
       state.setScenario(turn)
       gates = new Map(Object.entries(given).map(([round, gate]) => [Number(round), gate]))
       if (waitFor) gates.set(0, waitFor)
     },
+    /** The next turn is `name` of programs.mjs: it reads what the tools answer and decides. */
+    program(name, ctx = {}) {
+      gates = new Map()
+      program = usableProgram(name, ctx)
+      state.setScenario({ scenario: 'text', text: 'Задача в браузере' })
+      return program
+    },
+    current: () => program,
     /** Chat requests so far, by the credential they carried. */
     chats: () => state.requests.filter((request) => request.method === 'POST'),
     close: () =>

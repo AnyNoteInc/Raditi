@@ -127,6 +127,18 @@ describe('landing texts', () => {
     )
   })
 
+  it('ends the page with the way in: sign-in for a guest, the chats for anybody else', () => {
+    const wayIn = (viewer: LandingViewer) => {
+      const links = renderLanding(viewer).querySelectorAll('footer a')
+      return Array.from(links).find((link) => link.textContent?.trim().match(/^(Войти|Открыть)/))
+    }
+
+    expect(wayIn(guest)).toHaveAttribute('href', '/sign-in')
+    expect(wayIn(guest)).toHaveTextContent(/^Войти$/)
+    expect(wayIn(member)).toHaveAttribute('href', '/chats')
+    expect(wayIn(member)).toHaveTextContent(/^Открыть чаты$/)
+  })
+
   it('tells a visitor whose session is unknown what is open without the registration either', () => {
     const container = renderLanding({ status: 'unavailable', user: null })
     const hero = plain(

@@ -157,7 +157,15 @@ export const agentDriverSeeds: readonly AgentDriverSeed[] = [
     id: 'opencode',
     image: placeholderImage('opencode'),
     // No forced output schema, no image input.
-    capabilities: { resume: true, jsonEvents: true, outputSchema: false, mcp: true, images: false },
+    capabilities: {
+      resume: true,
+      jsonEvents: true,
+      outputSchema: false,
+      mcp: true,
+      images: false,
+      reasoningEvents: true,
+      compaction: true,
+    },
     enabled: true,
   },
 ]

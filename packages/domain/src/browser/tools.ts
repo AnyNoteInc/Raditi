@@ -287,6 +287,8 @@ export type BrowserToolResult = z.infer<typeof browserToolResultSchema>
 
 export const browserTaskCodeNames = [
   'BROWSER_SESSION_UNAVAILABLE',
+  'BROWSER_STARTING',
+  'BROWSER_WORKSPACE_BUSY',
   'BROWSER_USER_IN_CONTROL',
   'BROWSER_STALE_OBSERVATION',
   'BROWSER_ACTION_DENIED',
@@ -307,6 +309,14 @@ export const browserTaskCodes: Readonly<
     status: 503,
     message: 'The browser is not available now. End the turn and tell the client.',
   },
+  BROWSER_STARTING: {
+    status: 503,
+    message: 'The browser is starting: call the tool again. This is no failure.',
+  },
+  BROWSER_WORKSPACE_BUSY: {
+    status: 429,
+    message: 'Too many browsers are open for this client: tell the client and end the turn.',
+  },
   BROWSER_USER_IN_CONTROL: {
     status: 409,
     message: 'The client controls the browser. End the turn and wait for the client.',
@@ -319,7 +329,10 @@ export const browserTaskCodes: Readonly<
     status: 403,
     message: 'This page or action is not allowed for this task.',
   },
-  BROWSER_ADDRESS_DENIED: { status: 403, message: 'This address is outside the site.' },
+  BROWSER_ADDRESS_DENIED: {
+    status: 403,
+    message: 'This address cannot be opened from this browser.',
+  },
   BROWSER_TIMEOUT: { status: 504, message: 'The page did not respond in time.' },
   BROWSER_ACTION_FAILED: {
     status: 502,

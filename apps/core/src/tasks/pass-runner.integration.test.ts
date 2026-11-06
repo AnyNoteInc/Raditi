@@ -4,8 +4,13 @@ import type { AgentDriverRegistry } from '@repo/agent-drivers'
 import { ensurePersonalWorkspaceWithGift } from '@repo/billing'
 import { billingFixtures } from '@repo/billing/testing'
 import {
+  bindAttachments,
+  closeBrowserSession,
+  createAttachment,
   createPrismaClient,
   insertFeedEvent,
+  markAttachmentReady,
+  markBrowserSessionReady,
   openBrowserSession,
   PostgresSiteLeaseStore,
   PostgresTaskTurnAssignmentStore,
@@ -15,8 +20,8 @@ import {
 } from '@repo/db'
 import {
   BROWSER_ONLY,
-  browserTaskError,
   siteBusy,
+  siteIdOf,
   toTurnPlan,
   type AgentDriver,
   type SnapshotManifest,
@@ -34,6 +39,7 @@ import type { CandidateGit } from './candidate-git.ts'
 import { LivePasses } from './live-passes.ts'
 import { PassRunner } from './pass-runner.ts'
 import { PassSettlement } from './pass-settlement.ts'
+import { INIT_PROMPT } from './turn-instructions.ts'
 
 // The handler of a pass on PostgreSQL. The first suite runs wherever a database is given: a
 // task without a reserve is never run, in every environment (spec §20 «Задачи до биллинга»,
@@ -53,7 +59,15 @@ const driver = {
   id: sampleDriverId,
   image,
   cliVersion: '1.0.0',
-  capabilities: { resume: true, jsonEvents: true, outputSchema: false, mcp: true, images: false },
+  capabilities: {
+    resume: true,
+    jsonEvents: true,
+    outputSchema: false,
+    mcp: true,
+    images: false,
+    reasoningEvents: false,
+    compaction: false,
+  },
   prepare: vi.fn(),
   command: vi.fn(),
   parseEvent: vi.fn(),
@@ -113,7 +127,16 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
    * A queued dialog of a client with the gift of the registration, and its first words; with
    * `browser`, a task in the cloud browser on a site without a repository (plan 57, Б2, Б8).
    */
-  async function queued({ reserve, browser = false }: { reserve: boolean; browser?: boolean }) {
+  async function queued({
+    reserve,
+    browser = false,
+    chat = false,
+  }: {
+    reserve: boolean
+    browser?: boolean
+    /** A chat without a project (docs/plan/61-chats-first.md, §5.6). */
+    chat?: boolean
+  }) {
     const { userId } = await fixtures.user()
     const workspace = await db.$transaction((tx) =>
       ensurePersonalWorkspaceWithGift(tx, { userId, appEnv: 'test' }),
@@ -121,17 +144,20 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     const { taskId } = await fixtures.task(workspace.id, {
       status: 'queued',
       ...(browser ? { needsRepository: false, needsBrowser: true } : {}),
+      ...(chat ? { siteId: null, needsRepository: false, needsBrowser: browser } : {}),
     })
     const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
-    if (browser)
+    if (chat) {
+      // Neither a site nor a repository to prepare.
+    } else if (browser)
       await db.site.update({
-        where: { id: task.siteId },
+        where: { id: siteIdOf(task) },
         data: { agentNotes: 'Вход по адресу /login' },
       })
     else
       await db.gitRepository.create({
         data: {
-          siteId: task.siteId,
+          siteId: siteIdOf(task),
           provider: 'gitea',
           owner: 'sites-r3-test',
           name: `site-${task.siteId}`,
@@ -172,11 +198,12 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     inspect: () => Promise<unknown> = async () => null,
     options: {
       git?: CandidateGit | null
-      browser?: { ensure: ReturnType<typeof vi.fn>; verify: ReturnType<typeof vi.fn> } | null
+      browser?: { reclaim: ReturnType<typeof vi.fn>; verify: ReturnType<typeof vi.fn> } | null
     } = {},
   ) {
     const queue = { enqueue: vi.fn(async () => {}) }
     const close = vi.fn(async () => {})
+    const live = new LivePasses()
     const settlement = new PassSettlement({
       db,
       candidates,
@@ -197,12 +224,12 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       runtime: 'runc',
       previews: null,
       settlement,
-      live: new LivePasses(),
+      live,
       queue,
       logger: quiet,
       now: () => NOW,
     })
-    return { passes, queue, supervisor, close }
+    return { passes, queue, supervisor, close, live }
   }
 
   const failure = async (taskId: string) =>
@@ -404,6 +431,375 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       ).toBe(true)
     })
 
+    // docs/plan/61-chats-first.md, К31, §5.14: `/init` is a pass, paid as any other.
+    describe('of `/init`', () => {
+      async function init(dialog: Awaited<ReturnType<typeof queued>>) {
+        const requestEventId = await insertFeedEvent(db, {
+          taskId: dialog.taskId,
+          row: {
+            type: 'feed.request',
+            payload: {
+              v: 1,
+              kind: 'agent_command',
+              command: 'init',
+              authorId: dialog.userId,
+              requestId: randomUUID(),
+            },
+          },
+        })
+        return { ...dialog.job, requestEventId: requestEventId.toString() }
+      }
+      const answering = (taskId: string, clientMessage: string) => async () => {
+        await db.task.update({ where: { id: taskId }, data: { status: 'running', turnNo: 1 } })
+        await db.taskTurn.create({
+          data: {
+            taskId,
+            turnNo: 1,
+            status: 'completed',
+            driverId: sampleDriverId,
+            image,
+            headSha: HEAD,
+          },
+        })
+        return {
+          result: {
+            summary: 'Изучил код',
+            change_type: 'none',
+            client_message: clientMessage,
+            files_changed: [],
+            questions: [],
+            needs_approval: false,
+            risk: 'low',
+          },
+          manifest: { git: { headSha: HEAD } } as SnapshotManifest,
+        }
+      }
+
+      it('asks in the words of the platform, answers and charges the pass', async () => {
+        await rate()
+        const dialog = await queued({ reserve: true })
+        const job = await init(dialog)
+        const answer = 'Тема лежит в wp-content/themes/shop, стили собирает Vite.'
+        const run = vi.fn<Run>(answering(dialog.taskId, answer))
+
+        await runner(run).passes.run(job)
+
+        expect(run.mock.calls[0]![0].input.prompt).toContain(INIT_PROMPT)
+        expect(run.mock.calls[0]![0].input.prompt).not.toContain('/init')
+        const [row] = await db.taskEvent.findMany({
+          where: { taskId: dialog.taskId, type: 'feed.result' },
+        })
+        expect(row?.payload).toMatchObject({ message: answer, next: 'awaiting_user' })
+        const holds = await db.creditHold.findMany({ where: { taskId: dialog.taskId } })
+        expect(holds.length).toBeGreaterThan(0)
+        expect(holds.every((hold) => hold.status === 'captured')).toBe(true)
+        expect(
+          holds.reduce((sum, hold) => sum + Number(hold.charged ?? 0), 0),
+        ).toBeGreaterThanOrEqual(5)
+      })
+
+      it('takes an answer of the longest size the result has', async () => {
+        await rate()
+        const dialog = await queued({ reserve: true })
+        const job = await init(dialog)
+
+        await runner(answering(dialog.taskId, 'а'.repeat(2000))).passes.run(job)
+
+        expect(await failure(dialog.taskId)).toEqual([])
+        expect(
+          await db.taskEvent.count({ where: { taskId: dialog.taskId, type: 'feed.result' } }),
+        ).toBe(1)
+      })
+
+      it('ends a longer answer as a failure of the platform, and it is not paid for', async () => {
+        await rate()
+        const dialog = await queued({ reserve: true })
+        const job = await init(dialog)
+
+        await runner(answering(dialog.taskId, 'а'.repeat(2001))).passes.run(job)
+
+        expect(await failure(dialog.taskId)).toEqual([
+          expect.objectContaining({ code: 'technical' }),
+        ])
+        expect(
+          await db.taskEvent.count({ where: { taskId: dialog.taskId, type: 'feed.result' } }),
+        ).toBe(0)
+        const holds = await db.creditHold.findMany({ where: { taskId: dialog.taskId } })
+        expect(holds.some((hold) => hold.status === 'captured')).toBe(false)
+      })
+    })
+
+    // docs/plan/61-chats-first.md, К30, §5.14: a pass of its own over the session of the last turn.
+    describe('of `/compact`', () => {
+      const answer = {
+        summary: 'Ответил',
+        change_type: 'none',
+        client_message: 'Готово.',
+        files_changed: [],
+        questions: [],
+        needs_approval: false,
+        risk: 'low',
+      }
+      /** A chat whose first pass completed, with the plan a compaction restores its session by. */
+      async function answered(status: 'awaiting_user' | 'awaiting_approval' = 'awaiting_user') {
+        await rate()
+        const dialog = await queued({ reserve: true })
+        await runner(async (request) => {
+          await db.task.update({
+            where: { id: dialog.taskId },
+            data: { status: 'running', turnNo: 1 },
+          })
+          const row = await db.taskEvent.findFirstOrThrow({
+            where: { taskId: dialog.taskId },
+            orderBy: { id: 'desc' },
+            select: { createdAt: true },
+          })
+          const startedAt = new Date(row.createdAt.getTime() + 1)
+          await db.taskTurn.create({
+            data: {
+              taskId: dialog.taskId,
+              turnNo: 1,
+              status: 'completed',
+              driverId: sampleDriverId,
+              image,
+              headSha: HEAD,
+              nativeSessionId: 'ses_0001',
+              startedAt,
+              finishedAt: startedAt,
+            },
+          })
+          await db.turnAssignment.create({
+            data: {
+              taskId: dialog.taskId,
+              siteId: siteIdOf(dialog),
+              sessionId: dialog.taskId,
+              turnNo: 1,
+              executor: 'local',
+              plan: toTurnPlan(request, sampleDriverId) as never,
+              firstEpoch: 1,
+              leaseEpoch: 1,
+              deadlineAt: new Date(startedAt.getTime() + 60_000),
+              outcome: 'completed',
+              finishedAt: startedAt,
+            },
+          })
+          return { result: answer, manifest: { git: { headSha: HEAD } } as SnapshotManifest }
+        }).passes.run(dialog.job)
+        const { workspaceId } = await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })
+        await db.task.update({ where: { id: dialog.taskId }, data: { status, attempt: 2 } })
+        await fixtures.reserve({
+          workspaceId,
+          taskId: dialog.taskId,
+          attempt: 2,
+          follows: 'message',
+          now: NOW,
+          expiresAt: new Date(NOW.getTime() + 3_600_000),
+        })
+        vi.mocked(git.readBranchHead).mockImplementation(async () => HEAD)
+        return dialog
+      }
+      /** `/compact` as `task.compact` writes it, and the job of its pass. */
+      async function compact(dialog: Awaited<ReturnType<typeof queued>>) {
+        await db.task.update({ where: { id: dialog.taskId }, data: { status: 'queued' } })
+        const requestEventId = await insertFeedEvent(db, {
+          taskId: dialog.taskId,
+          row: {
+            type: 'feed.request',
+            payload: {
+              v: 1,
+              kind: 'agent_command',
+              command: 'compact',
+              authorId: dialog.userId,
+              requestId: randomUUID(),
+            },
+          },
+        })
+        return { taskId: dialog.taskId, attempt: 2, requestEventId: requestEventId.toString() }
+      }
+      /** What the supervisor leaves of a compaction: its turn and the fixed line of the platform. */
+      const compacts =
+        (taskId: string, headSha = HEAD) =>
+        async () => {
+          await db.task.update({ where: { id: taskId }, data: { status: 'running', turnNo: 2 } })
+          await db.taskTurn.create({
+            data: {
+              taskId,
+              turnNo: 2,
+              status: 'completed',
+              driverId: sampleDriverId,
+              image,
+              headSha,
+              nativeSessionId: 'ses_0001',
+            },
+          })
+          return {
+            result: { ...answer, client_message: 'Готово: переписка сжата.' },
+            manifest: { git: { headSha } } as SnapshotManifest,
+          }
+        }
+      const holdsOf = (taskId: string, attempt: number) =>
+        db.creditHold.findMany({ where: { taskId, attempt } })
+
+      it('runs the action over the session of the last turn and charges it like any pass', async () => {
+        const dialog = await answered()
+        const job = await compact(dialog)
+        const pool = await fixtures.modelPool()
+        const price = await fixtures.modelPrice(pool, {
+          effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+        })
+        const finished = compacts(dialog.taskId)
+        const run = vi.fn<Run>(async () => {
+          const completed = await finished()
+          // The summary went through the gateway like any call: its tokens are what is charged.
+          await fixtures.modelCall({
+            taskId: dialog.taskId,
+            pool,
+            priceId: price.id,
+            costRub: '12.00',
+            occurredAt: NOW,
+            attempt: 2,
+            turnNo: 2,
+          })
+          return completed
+        })
+
+        await runner(run).passes.run(job)
+
+        const [request] = run.mock.calls[0]!
+        expect(request.input.action).toBe('compact')
+        expect(request.input.attachments).toEqual([])
+        expect(request.input.prompt).not.toContain('Поменяйте телефон')
+        expect(request.previous?.turn).toBe(1)
+        const [row] = await db.taskEvent.findMany({
+          where: { taskId: dialog.taskId, type: 'feed.result' },
+          orderBy: { id: 'desc' },
+          take: 1,
+        })
+        expect(row?.payload).toMatchObject({
+          turn: 2,
+          message: 'Готово: переписка сжата.',
+          next: 'awaiting_user',
+        })
+        const holds = await holdsOf(dialog.taskId, 2)
+        expect(holds.reduce((sum, hold) => sum + Number(hold.charged ?? 0), 0)).toBeGreaterThan(0)
+        expect(holds.some((hold) => hold.status === 'active')).toBe(false)
+      })
+
+      it('costs nothing when it fails: the reserve goes back and the chat stays open', async () => {
+        const dialog = await answered()
+        const job = await compact(dialog)
+        const charges = () =>
+          db.creditLedger.count({
+            where: { taskId: dialog.taskId, idempotencyKey: { contains: ':charge:' } },
+          })
+        const charged = await charges()
+
+        await runner(async () => {
+          await db.task.update({
+            where: { id: dialog.taskId },
+            data: { status: 'running', turnNo: 2 },
+          })
+          await db.taskTurn.create({
+            data: {
+              taskId: dialog.taskId,
+              turnNo: 2,
+              status: 'failed',
+              driverId: sampleDriverId,
+              image,
+            },
+          })
+          throw new Error('the provider refused')
+        }).passes.run(job)
+
+        expect(await failure(dialog.taskId)).toEqual([
+          expect.objectContaining({
+            turn: 2,
+            code: 'technical',
+            credits: 'returned',
+            next: 'awaiting_user',
+          }),
+        ])
+        expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
+          status: 'awaiting_user',
+        })
+        const holds = await holdsOf(dialog.taskId, 2)
+        expect(holds.length).toBeGreaterThan(0)
+        expect(holds.every((hold) => hold.status === 'released')).toBe(true)
+        expect(await charges()).toBe(charged)
+      })
+
+      it('leaves the candidate where it stands: the chat waits for the release with the same one', async () => {
+        const dialog = await answered('awaiting_approval')
+        const candidate = await db.taskCandidate.create({
+          data: {
+            taskId: dialog.taskId,
+            revision: 1,
+            turnNo: 1,
+            baseSha: MAIN,
+            baseTree: 'd'.repeat(40),
+            headSha: HEAD,
+            dbPlanSha256: '0'.repeat(64),
+            proposedBump: 'minor',
+            proposedVersion: 'v0.1.0',
+            facts: {
+              changeType: 'code',
+              risk: 'low',
+              addedFiles: 0,
+              modifiedFiles: 1,
+              deletedFiles: 0,
+              mediaFiles: 0,
+              dbObjects: 0,
+              newFunctionality: false,
+            },
+          },
+        })
+        const job = await compact(dialog)
+        vi.mocked(candidates.build).mockImplementationOnce(
+          async () => ({ kind: 'unchanged' }) as never,
+        )
+        const run = vi.fn<Run>(compacts(dialog.taskId))
+
+        await runner(run).passes.run(job)
+
+        expect(run.mock.calls[0]![0].input.action).toBe('compact')
+        expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
+          status: 'awaiting_approval',
+        })
+        expect(
+          await db.taskCandidate.findMany({
+            where: { taskId: dialog.taskId },
+            select: { id: true, revision: true, status: true },
+          }),
+        ).toEqual([{ id: candidate.id, revision: 1, status: 'current' }])
+      })
+
+      it('answers words that never reached the session instead: no summary would tell them', async () => {
+        const dialog = await answered()
+        await insertFeedEvent(db, {
+          taskId: dialog.taskId,
+          row: {
+            type: 'feed.request',
+            payload: {
+              v: 1,
+              kind: 'revision',
+              text: 'И логотип',
+              candidateRevision: 1,
+              authorId: dialog.userId,
+              requestId: randomUUID(),
+            },
+          },
+        })
+        const job = await compact(dialog)
+        const run = vi.fn<Run>(compacts(dialog.taskId))
+
+        await runner(run).passes.run(job)
+
+        const [request] = run.mock.calls[0]!
+        expect(request.input).not.toHaveProperty('action')
+        expect(request.input.prompt).toContain('И логотип')
+      })
+    })
+
     it('refuses a task with a repository while git is not configured, before its turn', async () => {
       await rate()
       const dialog = await queued({ reserve: true })
@@ -425,17 +821,17 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     describe('a task in the cloud browser (docs/plan/57-browser-tasks.md)', () => {
       const editUrl = 'https://example.ru/wp-admin/post.php?post=12&action=edit'
       const browserSessions = () => ({
-        ensure: vi.fn(async (_taskId: string, _signal: AbortSignal) => {}),
+        reclaim: vi.fn(async (_taskId: string, _signal: AbortSignal) => {}),
         verify: vi.fn(async (_taskId: string) => true),
       })
 
-      it('runs on a core without git: opens the browser, plans no repository, verifies, answers', async () => {
+      it('runs on a core without git: starts no browser, plans no repository, verifies, answers', async () => {
         await rate()
         const dialog = await queued({ reserve: true, browser: true })
         const browser = browserSessions()
         const order: string[] = []
-        browser.ensure.mockImplementation(async () => {
-          order.push('ensure')
+        browser.reclaim.mockImplementation(async () => {
+          order.push('reclaim')
         })
         browser.verify.mockImplementation(async () => {
           order.push('verify')
@@ -497,8 +893,8 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
 
         await passes.run(dialog.job)
 
-        expect(order).toEqual(['ensure', 'run', 'verify'])
-        expect(browser.ensure).toHaveBeenCalledWith(dialog.taskId, expect.any(AbortSignal))
+        expect(order).toEqual(['reclaim', 'run', 'verify'])
+        expect(browser.reclaim).toHaveBeenCalledWith(dialog.taskId, expect.any(AbortSignal))
         const request = planned!
         expect(() => toTurnPlan(request, sampleDriverId)).not.toThrow()
         expect(request.requirements).toEqual(BROWSER_ONLY)
@@ -506,7 +902,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         expect(request.input.prompt).toContain('Поменяйте телефон в шапке')
         expect(request.input.prompt).toContain('Вход по адресу /login')
         expect(request.context.instructions).toContain('cloud browser')
-        // Like a dialog of «Работа» (owner's answer of 26.10.2026): the answer leaves the dialog
+        // Like a dialog with the repository (owner's answer of 26.10.2026): the answer leaves it
         // open, the pass is charged, and the browser lives on for the next words.
         const task = await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })
         expect(task.status).toBe('awaiting_user')
@@ -519,6 +915,145 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
           objects: [{ kind: 'post', status: 'draft', title: 'Скидки', editUrl }],
         })
         expect(close).not.toHaveBeenCalled()
+      })
+
+      describe('a browser that failed to start in the turn', () => {
+        /** A turn that asked for a browser and ended with words; `session` is what became of it. */
+        const turnThatAsked = (
+          dialog: { taskId: string; siteId: string | null },
+          session: (id: string) => Promise<unknown>,
+        ) =>
+          runner(
+            async () => {
+              await db.task.update({
+                where: { id: dialog.taskId },
+                data: { status: 'running', turnNo: 1 },
+              })
+              await db.taskTurn.create({
+                data: {
+                  taskId: dialog.taskId,
+                  turnNo: 1,
+                  status: 'completed',
+                  driverId: sampleDriverId,
+                  image,
+                },
+              })
+              await db.turnAssignment.create({
+                data: {
+                  taskId: dialog.taskId,
+                  siteId: dialog.siteId ?? dialog.taskId,
+                  sessionId: dialog.taskId,
+                  turnNo: 1,
+                  executor: 'local',
+                  plan: {},
+                  firstEpoch: 1,
+                  leaseEpoch: 1,
+                  deadlineAt: new Date(Date.now() + 60_000),
+                  outcome: 'completed',
+                  finishedAt: new Date(),
+                },
+              })
+              const { id } = await openBrowserSession(db, { taskId: dialog.taskId })
+              await session(id)
+              return {
+                result: {
+                  summary: 'Браузер недоступен',
+                  change_type: 'content',
+                  client_message: 'Не удалось открыть браузер.',
+                  files_changed: [],
+                  questions: [],
+                  needs_approval: false,
+                  risk: 'low',
+                },
+                manifest: {} as SnapshotManifest,
+              }
+            },
+            undefined,
+            { git: null, browser: browserSessions() },
+          )
+        const charges = (taskId: string) =>
+          db.creditLedger.count({ where: { taskId, idempotencyKey: { contains: ':charge:' } } })
+
+        it.each([
+          ['core gave up', 'BROWSER_START_FAILED'],
+          ['the worker gave up', 'TimeoutError'],
+        ])('is not charged when %s: the failure is the platform’s (rule 7)', async (_who, code) => {
+          await rate()
+          const dialog = await queued({ reserve: true, browser: true })
+          const { passes } = turnThatAsked(dialog, (sessionId) =>
+            closeBrowserSession(db, {
+              sessionId,
+              status: 'failed',
+              reason: 'crashed',
+              errorCode: code,
+            }),
+          )
+
+          await passes.run(dialog.job)
+
+          expect(await failure(dialog.taskId)).toEqual([
+            expect.objectContaining({
+              code: 'unavailable',
+              next: 'awaiting_user',
+              credits: 'returned',
+            }),
+          ])
+          expect(await charges(dialog.taskId)).toBe(0)
+          expect(
+            await db.taskEvent.count({ where: { taskId: dialog.taskId, type: 'feed.result' } }),
+          ).toBe(0)
+          expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
+            status: 'awaiting_user',
+          })
+        })
+
+        it('is charged in a chat without a site: the browser was not all it had (plan 61, 61.9)', async () => {
+          await rate()
+          const dialog = await queued({ reserve: true, chat: true, browser: true })
+          const { passes } = turnThatAsked(dialog, (sessionId) =>
+            closeBrowserSession(db, {
+              sessionId,
+              status: 'failed',
+              reason: 'crashed',
+              errorCode: 'BROWSER_START_FAILED',
+            }),
+          )
+
+          await passes.run(dialog.job)
+
+          expect(await failure(dialog.taskId)).toEqual([])
+          expect(await charges(dialog.taskId)).toBeGreaterThan(0)
+          expect(
+            await db.taskEvent.count({ where: { taskId: dialog.taskId, type: 'feed.result' } }),
+          ).toBe(1)
+        })
+
+        it('is charged when a browser came up in the turn and the next one failed', async () => {
+          await rate()
+          const dialog = await queued({ reserve: true, browser: true })
+          const { passes } = turnThatAsked(dialog, async (sessionId) => {
+            await markBrowserSessionReady(db, { sessionId })
+            await closeBrowserSession(db, { sessionId, status: 'lost', reason: 'crashed' })
+            const { id } = await openBrowserSession(db, { taskId: dialog.taskId })
+            await closeBrowserSession(db, { sessionId: id, status: 'failed', reason: 'crashed' })
+          })
+
+          await passes.run(dialog.job)
+
+          expect(await failure(dialog.taskId)).toEqual([])
+          expect(await charges(dialog.taskId)).toBeGreaterThan(0)
+        })
+
+        it('is charged while the browser only starts: the agent was told to call again', async () => {
+          await rate()
+          const dialog = await queued({ reserve: true, browser: true })
+          const { passes } = turnThatAsked(dialog, async () => {})
+
+          await passes.run(dialog.job)
+
+          expect(await failure(dialog.taskId)).toEqual([])
+          expect(await charges(dialog.taskId)).toBeGreaterThan(0)
+        })
       })
 
       it('refuses the task when no browser worker is configured, before its turn', async () => {
@@ -539,21 +1074,22 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         ])
       })
 
-      it('refuses the task `unavailable` when its browser could not be opened', async () => {
+      it('ends a pass the client cancelled while its browser came back, before its turn', async () => {
         await rate()
         const dialog = await queued({ reserve: true, browser: true })
         const browser = browserSessions()
-        browser.ensure.mockRejectedValue(browserTaskError('BROWSER_SESSION_UNAVAILABLE'))
         const run = vi.fn<Run>()
-        const { passes } = runner(run, undefined, { git: null, browser })
+        const { passes, live } = runner(run, undefined, { git: null, browser })
+        browser.reclaim.mockImplementation(async (taskId: string) => {
+          live.abort(taskId)
+        })
 
         await passes.run(dialog.job)
 
         expect(run).not.toHaveBeenCalled()
-        expect(browser.verify).not.toHaveBeenCalled()
-        expect(await failure(dialog.taskId)).toEqual([
-          expect.objectContaining({ code: 'unavailable', next: 'awaiting_user' }),
-        ])
+        expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
+          status: 'cancelled',
+        })
       })
     })
 
@@ -647,6 +1183,171 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         await db.taskEvent.deleteMany({ where: { taskId: other.id } })
         await db.task.delete({ where: { id: other.id } })
       }
+    })
+
+    describe('a chat without a project (docs/plan/61-chats-first.md, §5.3, §5.6)', () => {
+      const answer = {
+        summary: 'Посчитал смету',
+        change_type: 'none',
+        client_message: 'Смета готова: 12 500 ₽.',
+        files_changed: [],
+        questions: [],
+        needs_approval: false,
+        risk: 'low',
+      }
+      const completes = (taskId: string) => async (request: UnkeyedTurnRequest) => {
+        void request
+        await db.task.update({ where: { id: taskId }, data: { status: 'running', turnNo: 1 } })
+        await db.taskTurn.create({
+          data: {
+            taskId,
+            turnNo: 1,
+            status: 'completed',
+            driverId: sampleDriverId,
+            image,
+          },
+        })
+        return { result: answer, manifest: {} as SnapshotManifest }
+      }
+
+      it('runs without git, plans no repository, answers and charges the pass', async () => {
+        await rate()
+        const dialog = await queued({ reserve: true, chat: true })
+        const run = vi.fn<Run>(completes(dialog.taskId))
+        const { passes } = runner(run, async () => null, { git: null, browser: null })
+
+        await passes.run(dialog.job)
+
+        const [request, policy] = run.mock.calls[0]!
+        expect(request.workspace).toBeUndefined()
+        expect(request.requirements).toEqual({ repository: false, browser: false })
+        expect(request.sandbox.labels.siteId).toBe(dialog.taskId)
+        expect(request.context.instructions).toContain('a chat that has no site and no repository')
+        expect(policy).toMatchObject({ backend: sampleBackendId })
+        expect(() => toTurnPlan(request, sampleDriverId)).not.toThrow()
+        expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
+          status: 'awaiting_user',
+          turnNo: 1,
+        })
+        const [row] = await db.taskEvent.findMany({
+          where: { taskId: dialog.taskId, type: 'feed.result' },
+        })
+        expect(row?.payload).toMatchObject({ message: answer.client_message })
+        expect(
+          (await db.creditHold.findMany({ where: { taskId: dialog.taskId } })).every(
+            (hold) => hold.status === 'captured',
+          ),
+        ).toBe(true)
+      })
+
+      it('puts a file of the chat into the plan of its turn', async () => {
+        await rate()
+        const dialog = await queued({ reserve: true, chat: true })
+        const { workspaceId } = await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })
+        const file = (await createAttachment(db, {
+          workspaceId,
+          siteId: null,
+          uploadedById: dialog.userId,
+          fileName: 'смета.pdf',
+          contentType: 'application/pdf',
+          sizeBytes: 2048,
+        }))!
+        try {
+          await markAttachmentReady(db, {
+            id: file.id,
+            sizeBytes: 2048,
+            contentType: 'application/pdf',
+          })
+          await bindAttachments(db, {
+            ids: [file.id],
+            taskId: dialog.taskId,
+            userId: dialog.userId,
+            workspaceId,
+            siteId: null,
+          })
+          const run = vi.fn<Run>(completes(dialog.taskId))
+          await runner(run, async () => null, { git: null, browser: null }).passes.run(dialog.job)
+          const [request] = run.mock.calls[0]!
+          expect(request.input.attachments).toEqual([`/workspace/inbox/${file.id}/смета.pdf`])
+          expect(request.context.instructions).toContain('/workspace/inbox')
+        } finally {
+          await db.attachment.delete({ where: { id: file.id } })
+        }
+      })
+
+      it('looks at the lease of its own id while it is busy (#siteRetry)', async () => {
+        await rate()
+        const dialog = await queued({ reserve: true, chat: true })
+        const inspect = vi.fn(async () => ({
+          expiresAt: new Date(NOW.getTime() + 30_000),
+          serverNow: NOW,
+        }))
+        const { passes, queue } = runner(
+          async () => {
+            throw siteBusy()
+          },
+          inspect,
+          { git: null, browser: null },
+        )
+
+        await passes.run(dialog.job)
+
+        expect(inspect).toHaveBeenCalledExactlyOnceWith(dialog.taskId)
+        expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
+          status: 'queued',
+          waiting: 'site',
+        })
+        expect(queue.enqueue).toHaveBeenCalledWith(
+          'agent-turns',
+          'turn.run',
+          dialog.job,
+          expect.objectContaining({ delayMs: 30_000 }),
+        )
+      })
+
+      it('wakes nobody when its turn ended: a lease of its own has no one waiting (#wakeSite)', async () => {
+        await rate()
+        const dialog = await queued({ reserve: true, chat: true })
+        const row = await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })
+        // Another dialog of the workspace that waits: for a site, not for this chat.
+        const { taskId: other } = await fixtures.task(row.workspaceId, {
+          status: 'queued',
+          waiting: 'site',
+        })
+        const request = await insertFeedEvent(db, {
+          taskId: other,
+          row: {
+            type: 'feed.request',
+            payload: {
+              v: 1,
+              kind: 'first',
+              authorId: dialog.userId,
+              requestId: randomUUID(),
+              text: 'Поменяйте адрес в подвале',
+            },
+          },
+        })
+        const key = `turn.run:${other}:1:${request}:retry:turn-${dialog.taskId}-0`
+        try {
+          const { passes } = runner(
+            async () => {
+              throw new Error('the sandbox did not start')
+            },
+            async () => null,
+            { git: null, browser: null },
+          )
+          await passes.run(dialog.job)
+          expect((await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).status).toBe(
+            'awaiting_user',
+          )
+          expect(await db.outboxEvent.count({ where: { dedupeKey: key } })).toBe(0)
+          // It did not try: a wake without a site is no wake that failed.
+          expect(quiet.warn).not.toHaveBeenCalledWith(expect.stringContaining('pass_wake_failed'))
+        } finally {
+          await db.outboxEvent.deleteMany({ where: { dedupeKey: key } })
+          await db.taskEvent.deleteMany({ where: { taskId: other } })
+        }
+      })
     })
 
     it('looks again when a short lease ends, not before ten seconds', async () => {
@@ -827,7 +1528,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         // The store that opens the turn under the site lease admits what the planner built:
         // both read where the platform last left the task branch the same way.
         const fence = await new PostgresSiteLeaseStore(db).acquire({
-          siteId: dialog.siteId,
+          siteId: siteIdOf(dialog),
           taskId: dialog.taskId,
           operation: 'turn',
           ttlMs: 60_000,
@@ -846,7 +1547,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       try {
         await passes.run(dialog.job)
       } finally {
-        await db.siteLease.deleteMany({ where: { siteId: dialog.siteId } })
+        await db.siteLease.deleteMany({ where: { siteId: siteIdOf(dialog) } })
       }
 
       expect(planned).toMatchObject({
@@ -864,7 +1565,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         await db.turnAssignment.create({
           data: {
             taskId: dialog.taskId,
-            siteId: dialog.siteId,
+            siteId: siteIdOf(dialog),
             sessionId: dialog.taskId,
             turnNo: 1,
             executor: 'local',

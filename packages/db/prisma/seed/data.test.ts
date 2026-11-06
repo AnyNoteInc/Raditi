@@ -226,10 +226,12 @@ describe('agent drivers', () => {
 
   it('carry exactly the AgentCapabilities keys', () => {
     const keys: (keyof AgentCapabilities)[] = [
+      'compaction',
       'images',
       'jsonEvents',
       'mcp',
       'outputSchema',
+      'reasoningEvents',
       'resume',
     ]
     for (const driver of agentDriverSeeds) {
@@ -243,6 +245,8 @@ describe('agent drivers', () => {
       outputSchema: false,
       mcp: true,
       images: false,
+      reasoningEvents: true,
+      compaction: true,
     })
   })
 })

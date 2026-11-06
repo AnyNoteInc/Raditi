@@ -198,7 +198,11 @@ describe.skipIf(!databaseUrl)('«Отменить выпуск» on PostgreSQL',
       }),
     )
     // The undo ran and ended: the site runs the release still, yet production may have moved.
-    await db.siteRelease.create({ data: undoRow(f, first.id, { status: 'failed' }) })
+    // Its row names when by hand: Prisma stamps it with this process's clock, the plan is stamped
+    // by the database's, and the plan asked for next must be the later of the two.
+    await db.siteRelease.create({
+      data: undoRow(f, first.id, { status: 'failed', createdAt: new Date(Date.now() - 60_000) }),
+    })
     const again = await db.$transaction((tx) => requestUndoPlan(tx, input))
     expect(again).toMatchObject({ status: 'pending', created: true })
     expect(again.id).not.toBe(first.id)
@@ -206,6 +210,53 @@ describe.skipIf(!databaseUrl)('«Отменить выпуск» on PostgreSQL',
       id: again.id,
       created: false,
     })
+  })
+
+  it('asks again once any other release of the site started after the plan', async () => {
+    const f = await fixture()
+    const input = {
+      releaseId: f.release.id,
+      siteId: f.siteId,
+      installedSha: sha('f'),
+      userId: f.user.id,
+    }
+    const first = await db.$transaction((tx) => requestUndoPlan(tx, input))
+    await db.$transaction((tx) =>
+      recordUndoPlan(tx, {
+        planId: first.id,
+        targetTree: sha('9'),
+        files: { back: 1, removed: 0, restored: 0, mediaKept: 0, paths: [] },
+        items: [],
+        dbPlan: [],
+        nothingToUndo: false,
+        planSha256: '7'.repeat(64),
+      }),
+    )
+    expect(await db.$transaction((tx) => requestUndoPlan(tx, input))).toMatchObject({
+      id: first.id,
+      created: false,
+    })
+    // An ordinary release, of no plan: a minute on, so the two clocks cannot put it before.
+    await db.siteRelease.create({
+      data: {
+        ...undoRow(f, first.id, {
+          kind: 'release',
+          undoesReleaseId: null,
+          undoPlanId: null,
+          undoPlanSha256: null,
+          candidateId: f.release.candidateId,
+          candidateRevision: 1,
+          attempt: 2,
+          version: 'v1.5.0',
+          tag: 'v1.5.0',
+          bump: 'minor',
+          createdAt: new Date(Date.now() + 60_000),
+        }),
+      },
+    })
+    const again = await db.$transaction((tx) => requestUndoPlan(tx, input))
+    expect(again).toMatchObject({ status: 'pending', created: true })
+    expect(again.id).not.toBe(first.id)
   })
 
   it('makes a ready plan whole and a failed one with its code', async () => {

@@ -79,7 +79,7 @@ const rules: Record<string, Rule> = {
   },
   INVALID_TOKEN: { message: INVALID_LINK_ERROR },
   TOKEN_EXPIRED: { message: INVALID_LINK_ERROR },
-  EMAIL_ALREADY_VERIFIED: { message: 'Адрес уже подтверждён. Войдите, чтобы открыть проекты.' },
+  EMAIL_ALREADY_VERIFIED: { message: 'Адрес уже подтверждён. Войдите, чтобы открыть чаты.' },
   USER_NOT_FOUND: { message: INVALID_LINK_ERROR },
   TOO_MANY_REQUESTS: { message: RATE_LIMITED_ERROR },
 }

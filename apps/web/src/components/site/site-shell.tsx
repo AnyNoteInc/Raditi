@@ -5,7 +5,7 @@ import Drawer from '@mui/material/Drawer'
 import MuiLink from '@mui/material/Link'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { useState, type CSSProperties, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { applicationSurface } from '@/components/application/application-surface'
@@ -21,15 +21,11 @@ import {
   hasSiteList,
   inSiteSetup,
   SITE_LIST_WIDTH,
-  paneWidthCss,
-  SITE_PANE_WIDTH,
-  SITE_PANE_WIDTH_VAR,
   SITE_RAIL_WIDTH,
   SITE_TOOLBAR_HEIGHT,
-  siteEntryHref,
+  siteHref,
   siteItemOpen,
   siteNav,
-  sitePaneOpen,
   siteSectionAvailable,
   type SiteNavEntry,
   type SiteSetup,
@@ -195,7 +191,7 @@ function SectionLink({
   return (
     <Box
       component={Link}
-      href={siteEntryHref(site.id, entry.section)}
+      href={siteHref(site.id, entry.section)}
       aria-current={active ? 'page' : undefined}
       sx={{
         ...look,
@@ -213,7 +209,7 @@ function SectionLink({
 }
 
 /**
- * The page of one site: a rail of its seven sections with the site's mark on top, breadcrumbs
+ * The page of one site: a rail of its six sections with the site's mark on top, breadcrumbs
  * that lead back to the projects, and on a phone a bottom bar instead of the rail. Which of
  * the two is shown is decided by styles alone, so the first paint is right on every width.
  *
@@ -223,13 +219,10 @@ function SectionLink({
 export function SiteShell({
   user,
   site,
-  paneWidth = null,
   children,
 }: {
   user: ApplicationUser
   site: ShellSite
-  /** The viewer's width of the panel beside a dialog, from its cookie; null — the default. */
-  paneWidth?: number | null
   children: ReactNode
 }) {
   const pathname = usePathname()
@@ -239,10 +232,6 @@ export function SiteShell({
   const framed = hasSiteList(active)
   // An open item takes the whole phone screen: its back arrow leads to the list and the bar.
   const itemOpen = siteItemOpen(pathname, site.id)
-  // An open dialog: from `lg` the list column gives way, and the panel of its changes stands at
-  // the right edge. The dialog draws the panel (`data-site-pane`), and the shell leaves it room
-  // only while it is there — not beside a dialog that is not found.
-  const paned = sitePaneOpen(pathname, site.id)
   const [moreOpen, setMoreOpen] = useState(false)
   const secondary = siteNav.filter((entry) => !entry.primary)
   const inMore = secondary.some((entry) => entry.section === active)
@@ -262,10 +251,10 @@ export function SiteShell({
     justifyContent: 'space-between',
     gap: '4px 16px',
   } as const
-  // The bar of a section page: from the rail to the right edge, over the list column and the panel
-  // of a dialog too (owner's request of 26.10.2026). From `md` it stays at the top in one line of
-  // its own height — the list column and the panel stand under it — and a long name of the site
-  // ends with an ellipsis instead of a second line.
+  // The bar of a section page: from the rail to the right edge, over the list column too (owner's
+  // request of 26.10.2026). From `md` it stays at the top in one line of its own height — the list
+  // column stands under it — and a long name of the site ends with an ellipsis instead of a second
+  // line.
   const sectionToolbarSx = {
     ...toolbarSx,
     height: { md: SITE_TOOLBAR_HEIGHT },
@@ -317,16 +306,7 @@ export function SiteShell({
   }
 
   return (
-    <Box
-      data-site-shell=""
-      // The panel beside a dialog and the room the content leaves it read the same width.
-      style={
-        paneWidth === null
-          ? undefined
-          : ({ [SITE_PANE_WIDTH_VAR]: paneWidthCss(paneWidth) } as CSSProperties)
-      }
-      sx={{ ...applicationSurface, bgcolor: 'background.paper' }}
-    >
+    <Box sx={{ ...applicationSurface, bgcolor: 'background.paper' }}>
       <SkipLink target="site-content" left={{ xs: 8, sm: RAIL + 12 }} />
       {closedNote ? (
         <span id={CLOSED_NOTE} hidden>
@@ -402,9 +382,6 @@ export function SiteShell({
           },
           minWidth: 0,
           ...(framed && { minHeight: '100dvh', display: 'flex', flexDirection: 'column' }),
-          // An open dialog from `lg`: the page stands at the height of the window and the dialog
-          // scrolls inside itself (owner's request of 26.10.2026) — nothing below the surface.
-          ...(paned && { height: { lg: '100dvh' }, overflow: { lg: 'hidden' } }),
         }}
       >
         <ApplicationToolbar
@@ -413,26 +390,13 @@ export function SiteShell({
           end={<ToolbarEnd user={user} site={site} menuEverywhere={false} />}
           sx={sectionToolbarSx}
         />
-        {/* Under the bar: the content leaves room for the list column from `md` and for the panel
-            of a dialog from `lg` — the bar above runs over both. */}
+        {/* Under the bar: the content leaves room for the list column from `md` — the bar above
+            runs over it. */}
         <Box
           sx={{
             ml: { ...(framed && { md: `${SITE_LIST_WIDTH}px` }) },
-            // The list stays beside an open dialog, like the chats of ChatGPT and Claude (owner's
-            // request of 26.10.2026); the panel of its tools, while it is drawn, takes its room.
-            // Below `lg` a tool drawn in place of the dialog takes the height the window leaves
-            // under the bar, whatever lines the bar takes (docs/plan/59, И14): this box and the
-            // content pass it down.
-            ...(paned && {
-              '&:has([data-site-pane])': {
-                ml: { lg: 0 },
-                mr: { lg: SITE_PANE_WIDTH },
-                flex: { xs: '1 0 auto', lg: '1 1 0' },
-              },
-            }),
             minWidth: 0,
             ...(framed && { flex: '1 0 auto', display: 'flex', flexDirection: 'column' }),
-            ...(paned && { flex: { lg: '1 1 0' }, minHeight: { lg: 0 } }),
           }}
         >
           <Box
@@ -445,11 +409,6 @@ export function SiteShell({
               minWidth: 0,
               outline: 'none',
               ...(framed && { flex: '1 0 auto', display: 'flex', flexDirection: 'column' }),
-              ...(paned && {
-                flex: { lg: '1 1 0' },
-                minHeight: { lg: 0 },
-                '&:has([data-site-pane])': { flex: { xs: '1 0 auto', lg: '1 1 0' } },
-              }),
             }}
           >
             {children}
@@ -537,12 +496,19 @@ export function SiteShell({
         >
           {[
             ...secondary.map((entry) => ({
-              href: siteEntryHref(site.id, entry.section),
+              href: siteHref(site.id, entry.section),
               label: entry.label,
               icon: entry.icon,
               current: entry.section === active,
               open: siteSectionAvailable(site.status, entry.section),
             })),
+            {
+              href: '/chats',
+              label: 'К чатам',
+              icon: 'chat' as const,
+              current: false,
+              open: true,
+            },
             {
               href: '/projects',
               label: 'К проектам',

@@ -1193,6 +1193,23 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       expect(await db.giftSiteClaim.count({ where: { hostKey: 'shop.example.ru' } })).toBe(1)
     })
 
+    it('asks nothing about a site of a chat without one: nothing to claim (plan 61, К17)', async () => {
+      const { workspaceId } = await funded({ tariff: 0, gift: 35, subscription: null })
+      const claims = await db.giftSiteClaim.count()
+      const chat = await db.task.create({
+        data: {
+          id: '0196abcd-0000-7000-8000-000000000b17',
+          workspaceId,
+          siteId: null,
+          needsRepository: false,
+          needsBrowser: true,
+          modelClass: 'standard',
+        },
+      })
+      expect(await place(workspaceId, chat.id)).toMatchObject({ applied: true })
+      expect(await db.giftSiteClaim.count()).toBe(claims)
+    })
+
     it('asks nothing about the site of a paid tariff, gift credits or not', async () => {
       const trial = await funded({ tariff: 0, gift: 35, subscription: null })
       await place(trial.workspaceId, await taskOn(trial.workspaceId, 'https://paid.example.ru'))

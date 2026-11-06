@@ -35,7 +35,7 @@ vi.mock('@/trpc/client', () => ({
 }))
 
 const ORIGIN = 'http://site-0a1b2c3d-chat-4e5f6a.localhost:8090'
-const FRAME = 'Предпросмотр сайта с изменениями диалога'
+const FRAME = 'Предпросмотр сайта с изменениями чата'
 
 function previewOf(patch: Partial<PreviewHead> = {}): PreviewHead {
   return {
@@ -282,7 +282,7 @@ describe('the tab of the preview (И10: the preview chosen is asked for)', () =>
     // The menu offers no such preview (И6); a tab open as the dialog ended says what became of it.
     showPreview({ preview: previewOf({ status: 'destroyed' }) })
     expect(within(panel()).getByRole('status').textContent).toBe(
-      'Диалог закрыт, и его предпросмотр остановлен.',
+      'Чат закрыт, и его предпросмотр остановлен.',
     )
     expect(screen.queryByTitle(FRAME)).toBeNull()
     expect(ticket).not.toHaveBeenCalled()
@@ -379,7 +379,7 @@ describe('the tabs of the changes', () => {
   it('says a dialog that has ended has none, and where the released versions are', () => {
     showChanges('files', { candidate: null, ended: true })
     expect(plain(panel().textContent)).toBe(
-      'Диалог закрыт: изменений для показа здесь нет.Выпущенные версии — в разделе «Изменения».',
+      'Чат закрыт: изменений для показа здесь нет.Выпущенные версии — в разделе «Изменения».',
     )
     expect(candidate).not.toHaveBeenCalled()
   })

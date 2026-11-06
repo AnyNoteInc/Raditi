@@ -237,6 +237,69 @@ describe('SandboxRunner with core', () => {
   })
 })
 
+describe('A chat without a site on the runner (docs/plan/61-chats-first.md, К16)', () => {
+  it('fetches the files of the client from core into a turn without a bundle', async () => {
+    const c = await core()
+    const side = sandboxSide()
+    side.finish()
+    // The commands that make the empty working directory print nothing.
+    vi.mocked(side.sandbox.exec).mockImplementation(async () => ({
+      id: 'setup',
+      output: async function* () {},
+      wait: async () => ({ code: 0, reason: 'exited' as const }),
+      kill: async () => {},
+    }))
+    const runner = new SandboxRunner({
+      transport: c.transport(),
+      executor: side.executor,
+      maxTurns: 1,
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    })
+    runner.start()
+    closers.push(() => runner.stop())
+    // The lease of a chat is its own id: the labels are all that says so on the wire.
+    const chatFence = { ...fence, siteId: labels.taskId }
+    const assignment = (await c.assignments.open({
+      fence: chatFence,
+      sessionId: labels.sessionId,
+      turn: 1,
+      executor: 'runner',
+      plan: {} as TurnPlan,
+      remainingMs: MAX_SANDBOX_TURN_MS,
+    }))!
+    const path = '/workspace/inbox/0199a3f2-0000-7000-8000-0000000000f1/Смета.pdf'
+    const body = Buffer.from('%PDF synthetic estimate')
+    const { bundle: _bundle, ...input } = prepareInput(assignment.id)
+
+    const execution = await c.executor.prepare(
+      {
+        ...input,
+        fence: chatFence,
+        sandbox: {
+          ...input.sandbox,
+          labels: { ...input.sandbox.labels, siteId: labels.taskId },
+        },
+        inbox: [
+          {
+            path,
+            sizeBytes: body.byteLength,
+            read: async function* () {
+              yield body
+            },
+          },
+        ],
+      },
+      new AbortController().signal,
+    )
+    await execution.destroy('completed')
+
+    expect(side.importBundle).not.toHaveBeenCalled()
+    const written = vi.mocked(side.sandbox.fs.write).mock.calls.find(([to]) => to === path)!
+    expect(Buffer.from(written[1])).toEqual(body)
+    expect(written[2]).toEqual({ mode: 0o444 })
+  })
+})
+
 describe('HttpRunnerTransport', () => {
   it('carries a whole turn between a runner and core over HTTP with the VM token', async () => {
     const c = await core()

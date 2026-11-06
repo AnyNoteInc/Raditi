@@ -4,7 +4,14 @@ import type { Locator, Page } from '@playwright/test'
 import { baseURL } from '../../fixtures/billing-stand.ts'
 import { expect, test } from '../../fixtures/signed-in.ts'
 
-import { addSite, closedSites, hideDevIndicator } from './site.ts'
+import {
+  acceptUploads,
+  addBrowserTask,
+  addLongChat,
+  addSite,
+  closedSites,
+  hideDevIndicator,
+} from './site.ts'
 
 // What every slice of the site page owes (docs/plan/38-site-page-plan.md, assumption «л»): the
 // rules of axe, the dark scheme and a pressing area of 44px. The sections that read data today
@@ -30,14 +37,7 @@ interface SitePage {
 const pages: readonly SitePage[] = [
   { path: 'overview', heading: 'Обзор', current: 'Обзор', inMore: false },
   { path: 'settings', heading: 'Настройки', current: 'Настройки', inMore: true },
-  { path: 'chat', heading: 'Чат', current: 'Чат', inMore: false, ownTargets: true },
-  {
-    path: 'chat/new',
-    heading: 'Новый диалог',
-    current: 'Чат',
-    inMore: false,
-    ownTargets: true,
-  },
+  { path: 'changes', heading: 'Изменения', current: 'Изменения', inMore: false },
 ]
 
 const violations = async (page: Page) => {
@@ -63,6 +63,16 @@ const backgroundLuminance = (page: Page) =>
     const [red = 0, green = 0, blue = 0] = context.getImageData(0, 0, 1, 1).data
     return (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255
   })
+
+/** A menu that came up: while it grows in, axe reads the colours through its opacity. */
+const menuSettled = (menu: Locator) =>
+  expect
+    .poll(() => menu.evaluate((list) => getComputedStyle(list.parentElement!).opacity))
+    .toBe('1')
+
+/** A menu that closed: it leaves the roles at once and the page only after it faded out. */
+const menuGone = (page: Page) =>
+  expect(page.locator('.MuiPopover-root, .MuiDrawer-root')).toHaveCount(0)
 
 /** The items of the navigation a site keeps closed: they hold their place and their size. */
 const CLOSED = '[aria-disabled="true"]'
@@ -117,7 +127,7 @@ for (const scheme of ['light', 'dark'] as const) {
           expect(await violations(page)).toEqual([])
 
           const navigation = page.getByRole('navigation', { name: 'Разделы сайта' })
-          // The rail or the bottom bar, never both and never neither: a new dialog keeps the bar.
+          // The rail or the bottom bar, never both and never neither.
           await expect(navigation).toHaveCount(1)
           if (phone && inMore) {
             // The section lives in the sheet: the bar marks nothing as the current page.
@@ -194,7 +204,7 @@ for (const scheme of ['light', 'dark'] as const) {
           await expect(current).toHaveCount(1)
           await expect(current).toHaveText('Обзор')
           // Every section but «Обзор»: «Переменные» is one of them since 26.10.2026.
-          await expect(navigation.locator(CLOSED)).toHaveCount(phone ? 3 : 6)
+          await expect(navigation.locator(CLOSED)).toHaveCount(phone ? 2 : 5)
 
           const overflow = await page.evaluate(
             () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -215,6 +225,119 @@ for (const scheme of ['light', 'dark'] as const) {
           expect(await violations(page)).toEqual([])
         })
       }
+    })
+  }
+}
+
+// «Чаты»: the rail of the cabinet, the list and a new chat, in a browser on both schemes.
+for (const scheme of ['light', 'dark'] as const) {
+  for (const [width, height] of [
+    [390, 844],
+    [1280, 900],
+  ] as const) {
+    test(`the ${scheme} scheme at ${width}px: «Чаты»`, async ({ page, context, signedInUser }) => {
+      void signedInUser
+      await context.addCookies([{ name: 'theme', value: scheme, url: baseURL }])
+      await hideDevIndicator(page)
+      await page.setViewportSize({ width, height })
+      for (const [path, heading] of [
+        ['/chats', 'Чаты'],
+        ['/chats/new', 'Новый чат'],
+      ] as const) {
+        await test.step(heading, async () => {
+          await page.goto(path)
+          await expect(page.getByRole('heading', { level: 1, name: heading })).toBeVisible()
+          await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1)
+          const luminance = await backgroundLuminance(page)
+          if (scheme === 'dark') expect(luminance).toBeLessThan(0.2)
+          else expect(luminance).toBeGreaterThan(0.8)
+          expect(await violations(page)).toEqual([])
+          expect(await lowTargets(page.getByRole('main'))).toEqual([])
+        })
+      }
+    })
+  }
+}
+
+// The same rules on what a user with chats sees: rows with their project, folders open and closed,
+// the menu of the way the list is shown, the choice of a project and its locked pill.
+for (const scheme of ['light', 'dark'] as const) {
+  for (const [width, height] of [
+    [390, 844],
+    [1280, 900],
+  ] as const) {
+    test(`the ${scheme} scheme at ${width}px: the chats of a user`, async ({
+      page,
+      context,
+      signedInUser,
+    }) => {
+      test.slow()
+      // A chat of a project that waits for the client, and one without a project.
+      const asked = await addBrowserTask(signedInUser.id)
+      await addLongChat(signedInUser.id, 1)
+      await context.addCookies([{ name: 'theme', value: scheme, url: baseURL }])
+      await hideDevIndicator(page)
+      await acceptUploads(page)
+      await page.setViewportSize({ width, height })
+      const list = page.getByRole('navigation', { name: 'Чаты' })
+      const expectClean = async () => {
+        expect(await violations(page)).toEqual([])
+        expect(await lowTargets(list)).toEqual([])
+      }
+
+      await test.step('one list, the rows with their project', async () => {
+        await page.goto('/chats')
+        await expect(list.getByRole('link', { name: new RegExp(asked.title) })).toContainText(
+          '· Кофейня «Крошка»',
+        )
+        await expectClean()
+      })
+
+      await test.step('the menu of the way the list is shown', async () => {
+        await page.getByRole('button', { name: 'Группировка чатов' }).click()
+        const menu = page.getByRole('menu', { name: 'Показывать чаты' })
+        await expect(menu).toBeVisible()
+        await menuSettled(menu)
+        expect(await violations(page)).toEqual([])
+        await menu.getByRole('menuitemradio', { name: 'По проектам' }).click()
+        await menuGone(page)
+      })
+
+      await test.step('the folders: a closed one that says a chat waits, then an open one', async () => {
+        const closed = list.getByRole('button', { name: /Есть чаты, которые ждут вас/ })
+        await expect(closed).toHaveAttribute('aria-expanded', 'false')
+        await expectClean()
+        await closed.click()
+        await expect(list.getByRole('link', { name: new RegExp(asked.title) })).toBeVisible()
+        await expectClean()
+      })
+
+      await test.step('the choice of a project, a menu or a sheet', async () => {
+        await page.goto('/chats/new')
+        const pill = page.getByRole('button', { name: /^Проект для этого чата/ })
+        await pill.click()
+        const add = page.getByRole('menuitem', { name: 'Добавить проект' })
+        await expect(add).toBeVisible()
+        await menuSettled(add.locator('xpath=ancestor::ul[1]'))
+        expect(await violations(page)).toEqual([])
+        await page.keyboard.press('Escape')
+        await menuGone(page)
+      })
+
+      await test.step('the pill locked by a file', async () => {
+        await page.getByTestId('composer-files').setInputFiles({
+          name: 'Меню.pdf',
+          mimeType: 'application/pdf',
+          buffer: Buffer.from('%PDF-1.4 меню'),
+        })
+        await expect(page.getByRole('list', { name: 'Файлы к сообщению' })).toContainText(
+          'Меню.pdf',
+        )
+        await expect(
+          page.getByRole('button', { name: 'Без проекта', exact: true }),
+        ).toHaveAttribute('aria-disabled', 'true')
+        expect(await violations(page)).toEqual([])
+      })
     })
   }
 }

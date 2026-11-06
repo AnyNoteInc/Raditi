@@ -23,13 +23,19 @@ import { projectChip, stackLabels } from './project-labels'
 /** The wizard of a new project is a page of its own (spec §12). */
 const NEW_PROJECT = '/projects/new'
 
+/** A list this long is read at a glance: search only above it (К24). */
+const SEARCH_ABOVE = 6
+
 export function ProjectsView() {
   const trpc = useTRPC()
   const projects = useQuery(trpc.project.list.queryOptions())
   const [search, setSearch] = useState('')
   const searchInput = useRef<HTMLInputElement>(null)
   const allProjects = projects.data ?? []
-  const query = search.trim().toLocaleLowerCase('ru')
+  const searchable = allProjects.length > SEARCH_ABOVE
+  // A search typed earlier stops filtering with its field: a project deleted in another tab must
+  // not leave a list that is narrowed with nothing on the screen to clear it.
+  const query = searchable ? search.trim().toLocaleLowerCase('ru') : ''
   const visibleProjects = allProjects.filter((project) =>
     `${project.name} ${project.url} ${project.host}`.toLocaleLowerCase('ru').includes(query),
   )
@@ -189,37 +195,39 @@ export function ProjectsView() {
                 {query ? `${visibleProjects.length} из ${allProjects.length}` : allProjects.length}
               </Typography>
             </Box>
-            <TextField
-              inputRef={searchInput}
-              size="small"
-              placeholder="Найти проект"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              slotProps={{
-                htmlInput: { 'aria-label': 'Поиск проектов' },
-                input: {
-                  startAdornment: (
-                    <InputAdornment position="start">
-                      <AppIcon name="search" size={18} />
-                    </InputAdornment>
-                  ),
-                  endAdornment: search ? (
-                    <InputAdornment position="end">
-                      <IconButton
-                        size="small"
-                        aria-label="Очистить поиск"
-                        onClick={clearSearch}
-                        edge="end"
-                        sx={{ width: 44, height: 44 }}
-                      >
-                        <AppIcon name="close" size={16} />
-                      </IconButton>
-                    </InputAdornment>
-                  ) : undefined,
-                },
-              }}
-              sx={{ width: { xs: '100%', sm: 280 }, '& .MuiInputBase-root': { minHeight: 48 } }}
-            />
+            {searchable ? (
+              <TextField
+                inputRef={searchInput}
+                size="small"
+                placeholder="Найти проект"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                slotProps={{
+                  htmlInput: { 'aria-label': 'Поиск проектов' },
+                  input: {
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <AppIcon name="search" size={18} />
+                      </InputAdornment>
+                    ),
+                    endAdornment: search ? (
+                      <InputAdornment position="end">
+                        <IconButton
+                          size="small"
+                          aria-label="Очистить поиск"
+                          onClick={clearSearch}
+                          edge="end"
+                          sx={{ width: 44, height: 44 }}
+                        >
+                          <AppIcon name="close" size={16} />
+                        </IconButton>
+                      </InputAdornment>
+                    ) : undefined,
+                  },
+                }}
+                sx={{ width: { xs: '100%', sm: 280 }, '& .MuiInputBase-root': { minHeight: 48 } }}
+              />
+            ) : null}
           </Box>
           {visibleProjects.length === 0 ? (
             <Box sx={{ py: 6, px: 1, textAlign: 'center' }}>

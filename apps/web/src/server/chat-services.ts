@@ -1,7 +1,16 @@
 import 'server-only'
 
-import { envVar, parseEnv, previewDefaults, type Env, type ObjectStorage } from '@repo/domain'
+import {
+  envVar,
+  isDomainError,
+  parseEnv,
+  previewDefaults,
+  type Env,
+  type ObjectStorage,
+  type SiteStack,
+} from '@repo/domain'
 import { throttledLogger } from '@repo/observability'
+import { getSiteAdapter } from '@repo/site-adapters'
 import { createS3ObjectStorage } from '@repo/storage'
 import { releaseConfirmKey, type ChatContext, type SiteSecretWriter } from '@repo/trpc'
 import { createVaultSecretStore } from '@repo/vault'
@@ -36,6 +45,17 @@ function writerOf(store: ReturnType<typeof createVaultSecretStore>): SiteSecretW
   }
 }
 
+/** Whether the adapter of a stack works in the site's admin pages (`SiteAdapter.browserGuide`). */
+export function browserSupported(stack: SiteStack): boolean {
+  try {
+    getSiteAdapter(stack).browserGuide()
+    return true
+  } catch (error) {
+    if (isDomainError(error) && error.code === 'NOT_IMPLEMENTED') return false
+    throw error
+  }
+}
+
 let built: ChatContext | undefined
 let storage: ObjectStorage | undefined
 let secrets: SiteSecretWriter | undefined
@@ -62,6 +82,7 @@ export function chatServices(): ChatContext | null {
           ? null
           : { address: web.preview, ttlHours: previewTtlHours(process.env) },
       browser: web.browserStreamUrl === null ? null : { streamUrl: web.browserStreamUrl },
+      browserSupported,
       releaseConfirmKey: releaseConfirmKey(env.auth().secret),
       storage: () => (storage ??= createS3ObjectStorage(env.storage())),
       secrets: () => (secrets ??= writerOf(createVaultSecretStore(env.vault()))),

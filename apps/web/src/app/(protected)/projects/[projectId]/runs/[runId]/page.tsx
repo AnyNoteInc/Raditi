@@ -24,5 +24,5 @@ export default async function Page({
     caller.siteHistory.run({ siteId: site.id, runId: runId.toLowerCase() }),
   )
   if (run === UNAVAILABLE) return <ServiceUnavailable />
-  return <RunDetail siteId={site.id} run={run} now={new Date()} />
+  return <RunDetail run={run} now={new Date()} />
 }

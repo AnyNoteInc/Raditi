@@ -2,6 +2,8 @@ import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import { fontFamilies } from '@repo/ui/theme/tokens'
 
+import { newChatHref } from '@/components/chat/chat-address'
+import { chatsText } from '@/components/chat/chat-texts'
 import { statusLabels } from '@/components/projects/project-labels'
 import { formatMoscowMoment } from '@/lib/moscow-date'
 
@@ -49,8 +51,7 @@ const IMPORTED_ONBOARDING_NOTE =
   'Файлы сайта сохранены, но агент пока не может менять сайт: остальную часть подключения мы ещё делаем.'
 
 /** A site added without access to its files (docs/plan/57-browser-tasks.md, Б8). */
-const BROWSER_ONLY_NOTE =
-  'Сайт добавлен без доступа к файлам: агент работает в админке сайта через браузер. Начните задачу в разделе «Чат».'
+const NO_FILES_NOTE = 'Сайт добавлен без доступа к файлам. Выберите этот проект в новом чате.'
 
 /** The saved first version: its tag and when it was saved, by the Moscow clock. */
 function InitialVersionCard({
@@ -143,7 +144,7 @@ export function SiteOverview({
     site.capabilities?.browser === 'ready' &&
     site.capabilities.repository === 'absent'
   const note = browserOnly
-    ? BROWSER_ONLY_NOTE
+    ? NO_FILES_NOTE
     : imported && site.status === 'onboarding'
       ? IMPORTED_ONBOARDING_NOTE
       : statusNotes[site.status]
@@ -164,6 +165,11 @@ export function SiteOverview({
         >
           <Typography sx={{ fontWeight: 600 }}>{statusLabels[site.status]}</Typography>
           {note ? <Typography color="text.secondary">{note}</Typography> : null}
+          {browserOnly && site.id ? (
+            <Typography>
+              <SiteLink href={newChatHref(site.id)}>{chatsText.newChat}</SiteLink>
+            </Typography>
+          ) : null}
           {closed ? <Typography color="text.secondary">{closed}</Typography> : null}
         </Box>
       </SiteCard>

@@ -47,8 +47,20 @@ export function parseJsonObject(line: string): JsonObject | undefined {
   return root
 }
 
+/**
+ * Text of the CLI as the journal can store it. jsonb refuses U+0000 and half of a surrogate pair,
+ * and a refused row costs the turn, however little the text matters.
+ */
+const storable = (value: string): string => value.replaceAll('\u0000', '').toWellFormed()
+
+/** The first `max` units of a well-formed text, never between the two halves of a pair. */
+function cut(value: string, max: number): string {
+  const last = value.charCodeAt(max - 1)
+  return value.slice(0, last >= 0xd800 && last <= 0xdbff ? max - 1 : max)
+}
+
 export const text = (value: unknown, max: number): string | undefined =>
-  typeof value === 'string' ? value.slice(0, max) : undefined
+  typeof value === 'string' ? cut(storable(value), max) : undefined
 
 export const count = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
@@ -69,17 +81,27 @@ export function events(...values: unknown[]): AgentEvent[] {
 
 const TRUNCATED_MESSAGE_MARKER = '\n[Вывод обрезан]'
 
+function clipped(value: string): string {
+  const whole = storable(value)
+  return whole.length > agentOutputLimits.messageText
+    ? cut(whole, agentOutputLimits.messageText - TRUNCATED_MESSAGE_MARKER.length) +
+        TRUNCATED_MESSAGE_MARKER
+    : whole
+}
+
 export function message(value: unknown): AgentEvent[] {
   if (typeof value !== 'string') return []
   // Keep the last message even when it is too long. Silently dropping it could reuse an older
   // result; silently clipping it could remove an invalid JSON suffix and manufacture success.
   // A literal newline plus unquoted marker makes every truncated candidate invalid JSON.
-  const valueText =
-    value.length > agentOutputLimits.messageText
-      ? value.slice(0, agentOutputLimits.messageText - TRUNCATED_MESSAGE_MARKER.length) +
-        TRUNCATED_MESSAGE_MARKER
-      : value
-  return events({ type: 'message', text: valueText })
+  return events({ type: 'message', text: clipped(value) })
+}
+
+/** Clipped as a message is, with the same mark; nothing reads a result from it. */
+export function reasoning(value: unknown): AgentEvent[] {
+  if (typeof value !== 'string') return []
+  const thought = clipped(value)
+  return thought.trim() === '' ? [] : events({ type: 'reasoning', text: thought })
 }
 
 const FAILURE_FALLBACK = 'Агент не смог завершить действие.'

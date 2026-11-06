@@ -172,15 +172,25 @@ function readKey(key: string): { role: string; name: string; ref: string | null;
 
 /**
  * Names of fields whose value is a secret: password, PIN, one-time or confirmation code, token,
- * secret, API key — as a word, not inside one («Шорткод», «Кодировка», «Postcode» are not).
+ * secret, API key, a payment card's number and code — as a word, not inside one («Шорткод»,
+ * «Кодировка», «Postcode», «Карта сайта» are not).
  */
 const SECRET_FIELD =
-  /(?<![\p{L}\p{N}])(?:парол\p{L}*|pass(?:word|wd|phrase|code)s?|pin(?:[\s-]?(?:code|код))?|код\p{L}{0,2}|codes?|t?otp|2fa|токен\p{L}*|tokens?|секрет\p{L}*|secrets?|api[\s_-]?keys?|ключ\p{L}{0,2}\s+api)(?![\p{L}\p{N}])/iu
+  /(?<![\p{L}\p{N}])(?:парол\p{L}*|pass(?:word|wd|phrase|code)s?|pin(?:[\s-]?(?:code|код))?|код\p{L}{0,2}|codes?|t?otp|2fa|токен\p{L}*|tokens?|секрет\p{L}*|secrets?|api[\s_-]?keys?|ключ\p{L}{0,2}\s+api|cvc2?|cvv2?|card[\s_-]?(?:number|no)|номер\p{L}{0,2}\s+карт\p{L}{0,2})(?![\p{L}\p{N}])/iu
 
 /** Whether the label or placeholder of a text field names a secret. */
 export const isSecretFieldName = (name: string): boolean => SECRET_FIELD.test(name)
 
 const isTextValue = (line: TreeLine) => line.key === 'text' && line.value !== null
+
+/**
+ * An option of a secret list, with neither its name nor `[selected]`: naming the rest and hiding
+ * only the chosen one would tell which it is.
+ */
+function hiddenOption(line: TreeLine, ref: string | null): string {
+  const reference = ref === null ? '' : ` [ref=${ref}]`
+  return `${' '.repeat(line.indent)}- option "${BROWSER_HIDDEN_VALUE}"${reference}`
+}
 
 /** The placeholder a field node's own child line states, if any. */
 function placeholderOf(lines: readonly (TreeLine | null)[], at: number, indent: number): string {
@@ -193,11 +203,50 @@ function placeholderOf(lines: readonly (TreeLine | null)[], at: number, indent: 
   return ''
 }
 
+/** Digits in groups by one space, hyphen or slash (`12/27`), never glued to a letter. */
+const DIGIT_RUN = /(?<![\p{L}\p{N}])\d(?:[ /-]?\d)*(?![\p{L}\p{N}])/gu
+
+/** Whether digits pass the check every payment card number passes (Luhn). */
+function passesLuhn(digits: string): boolean {
+  let sum = 0
+  for (let at = digits.length - 1, double = false; at >= 0; at -= 1, double = !double) {
+    const digit = Number(digits[at])
+    sum += double ? (digit > 4 ? digit * 2 - 9 : digit * 2) : digit
+  }
+  return sum % 10 === 0
+}
+
+/**
+ * Whether a run of digits holds a card number: 13 to 19 digits that pass the check, from the start
+ * of one group to the end of another, so a number followed by its expiry or code is still found.
+ */
+function holdsCardNumber(run: string): boolean {
+  const groups = run.split(/[ /-]/)
+  for (let first = 0; first < groups.length; first += 1) {
+    let digits = ''
+    for (let last = first; last < groups.length && digits.length < 19; last += 1) {
+      digits += groups[last] ?? ''
+      if (digits.length >= 13 && digits.length <= 19 && passesLuhn(digits)) return true
+    }
+  }
+  return false
+}
+
+/**
+ * The text without what reads as a payment card number (docs/plan/61-chats-first.md, К33). The
+ * whole run goes: the digits beside a number are most often its expiry and code.
+ */
+function hideCardNumbers(text: string): string {
+  return text.replace(DIGIT_RUN, (run) => (holdsCardNumber(run) ? BROWSER_HIDDEN_VALUE : run))
+}
+
 /**
  * The tree with the values of secret fields replaced by `[hidden]`: of every element whose
  * reference is in `secretRefs` (the adapter's password and code fields), and of every `textbox`
  * whose name or placeholder names a secret. A value on the field's own line and on the `text`
- * lines below it are hidden; an empty one (`""`) is left, which tells only that the field is empty.
+ * lines below it are hidden, and so are the options of a list; an empty one (`""`) is left, which
+ * tells only that the field is empty. What reads as a payment card number is hidden wherever it stands, in any field and in the text
+ * of a page: a number the client typed never reaches the model in a tree (К33).
  */
 export function redactSecretValues(tree: string, secretRefs: Iterable<string> = []): string {
   const refs = new Set(secretRefs)
@@ -223,9 +272,11 @@ export function redactSecretValues(tree: string, secretRefs: Iterable<string> = 
       if (child === null || child === undefined) continue
       if (child.indent <= line.indent) break
       if (isTextValue(child)) hide(below)
+      const { role: childRole, ref: childRef } = readKey(child.key)
+      if (childRole === 'option') out[below] = hiddenOption(child, childRef)
     }
   }
-  return out.join('\n')
+  return hideCardNumbers(out.join('\n'))
 }
 
 /**

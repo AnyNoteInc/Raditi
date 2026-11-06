@@ -7,7 +7,9 @@ import {
   agentTurnCancelJobSchema,
   agentTurnJobSchema,
   CANDIDATE_REBASE_JOB,
+  CANDIDATE_REWIND_JOB,
   candidateRebaseJobSchema,
+  candidateRewindJobSchema,
   MAX_SANDBOX_TURN_MS,
   TURN_PUBLICATION_GRACE_MS,
 } from '@repo/domain'
@@ -16,6 +18,7 @@ import { UnrecoverableError, type Job } from 'bullmq'
 import type { z } from 'zod'
 
 import { CandidateRebase } from './candidate-rebase.ts'
+import { CandidateRewind } from './candidate-rewind.ts'
 import { PassRunner } from './pass-runner.ts'
 
 /**
@@ -41,8 +44,9 @@ function parsed<T>(schema: z.ZodType<T>, job: Job): T {
 
 /**
  * Works the `agent-turns` queue (docs/plan/53-chat-preview-release.md, «Очереди и задания»):
- * a pass of the agent, the client's «Отменить» of a pass, «Обновить» of a candidate. Every
- * handler reads the state from PostgreSQL; the payload carries ids only, and so do the logs.
+ * a pass of the agent, the client's «Отменить» of a pass, «Обновить» of a candidate, `/undo` of a
+ * turn. Every handler reads the state from PostgreSQL; the payload carries ids only, and so do
+ * the logs.
  */
 @Processor(AGENT_TURN_QUEUE, {
   concurrency: AGENT_TURN_CONCURRENCY,
@@ -56,6 +60,7 @@ export class TurnsProcessor extends WorkerHost {
   constructor(
     @Inject(PassRunner) private readonly passes: Pick<PassRunner, 'run' | 'cancel'>,
     @Inject(CandidateRebase) private readonly rebase: Pick<CandidateRebase, 'run'>,
+    @Inject(CandidateRewind) private readonly rewind: Pick<CandidateRewind, 'run'>,
   ) {
     super()
   }
@@ -68,6 +73,9 @@ export class TurnsProcessor extends WorkerHost {
         return this.passes.cancel(parsed(agentTurnCancelJobSchema, job))
       case CANDIDATE_REBASE_JOB:
         await this.rebase.run(parsed(candidateRebaseJobSchema, job))
+        return
+      case CANDIDATE_REWIND_JOB:
+        await this.rewind.run(parsed(candidateRewindJobSchema, job))
         return
       default:
         // A job this build does not know (left by another version) cannot succeed later.

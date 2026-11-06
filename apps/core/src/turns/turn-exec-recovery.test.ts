@@ -220,7 +220,15 @@ function world(kind: string, { repository = true } = {}) {
     id: sampleDriverId,
     image,
     cliVersion: '1.0.0',
-    capabilities: { resume: true, jsonEvents: true, outputSchema: true, mcp: false, images: false },
+    capabilities: {
+      resume: true,
+      jsonEvents: true,
+      outputSchema: true,
+      mcp: false,
+      images: false,
+      reasoningEvents: false,
+      compaction: false,
+    },
     prepare: vi.fn(async (context) => ({
       context: { ...context },
       files: [

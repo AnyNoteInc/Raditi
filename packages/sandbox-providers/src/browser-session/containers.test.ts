@@ -89,6 +89,28 @@ describe('browser session containers', () => {
     })
   })
 
+  it('gives the proxy of a chat without a site no host: the open web over TLS is all it has', () => {
+    const egress = egressContainer({
+      place: { ...place, identity: { ...place.identity, siteId: place.identity.taskId } },
+      appEnv: 'production',
+      image: image('egress'),
+      limits: browserSessionDefaultLimits.service,
+      allowedHosts: [],
+      localRoutes: {},
+      refusedSubnets: ['84.201.128.0/18'],
+      maxTunnels: 48,
+    })
+    expect(egress.Env).toEqual(
+      expect.arrayContaining([
+        'ALLOWED_HOSTS=[]',
+        'ALLOW_PUBLIC=1',
+        'PUBLIC_TLS_ONLY=1',
+        'REFUSED_SUBNETS=84.201.128.0/18',
+      ]),
+    )
+    expect(egress.Labels).toMatchObject({ 'io.raditi.browser.site': place.identity.taskId })
+  })
+
   it('names local sites only with their guard, and the host as host-gateway names it', () => {
     const egress = egressOf({ 'wp.localhost:8080': 'host.docker.internal:18080' }, 'test')
     expect(egress.Env).toEqual(
