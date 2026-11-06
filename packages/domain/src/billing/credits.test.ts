@@ -25,6 +25,8 @@ import {
   tariffHoldCreatedAt,
   toCredits,
   trialUnpaidWorkCredits,
+  unpaidWorkLimit,
+  unpaidWorkShareOfMonth,
   type CreditAccounts,
   type CreditAccountSnapshot,
   type CreditAmountValue,
@@ -232,10 +234,28 @@ describe('the numbers of the model that no text prints', () => {
     expect(maxTaskAttempts).toBe(3)
   })
 
-  it('bounds the unpaid work of a workspace without a tariff at twice the gift', () => {
-    expect(trialUnpaidWorkCredits).toBe(70)
-    expect(trialUnpaidWorkCredits).toBe(2 * signupGiftCredits)
+  // The pricing of 06.11.2026 (docs/plan/63-new-pricing.md, Ц8, Ц9): both bounds are half of
+  // what they were — the month of a tariff and twice the gift before.
+  it('bounds the unpaid work of a workspace without a tariff at the gift itself', () => {
+    expect(trialUnpaidWorkCredits).toBe(50)
+    expect(trialUnpaidWorkCredits).toBe(signupGiftCredits)
   })
+
+  it('bounds the unpaid work of a paid tariff at half its month, rounded down', () => {
+    expect(unpaidWorkShareOfMonth).toBe(0.5)
+    // «Старт», «Бизнес» and «Агентство» of 06.11.2026.
+    expect([150, 600, 2000].map(unpaidWorkLimit)).toEqual([75, 300, 1000])
+    expect([1, 2, 3, 151, 2501].map(unpaidWorkLimit)).toEqual([0, 1, 1, 75, 1250])
+  })
+
+  it.each([0, -150, 150.5, Number.NaN, 10 ** 13])(
+    'refuses %s as the monthly credits of a plan',
+    (credits) => {
+      expect(() => unpaidWorkLimit(credits)).toThrow(
+        expect.objectContaining({ name: 'DomainError', code: 'BAD_REQUEST' }),
+      )
+    },
+  )
 
   // 45 + 120 + 120 credits: a new task, and two retries in the stronger mode.
   it('lets one task reserve 285 credits at most over its attempts', () => {

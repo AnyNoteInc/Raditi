@@ -158,11 +158,11 @@ describe('usage summary DTO', () => {
   it('accepts the gift a user without a workspace is promised: credits left, nothing granted', () => {
     const promised = {
       ...withoutTariff,
-      gift: { left: 35, held: 0, granted: false },
+      gift: { left: 50, held: 0, granted: false },
       pack: { left: 0, held: 0 },
-      totalLeft: 35,
-      spendable: 35,
-      spendableNow: 35,
+      totalLeft: 50,
+      spendable: 50,
+      spendableNow: 50,
       newTask: TAKEN,
     }
     expect(usageSummarySchema.parse(promised)).toEqual(promised)
@@ -331,10 +331,10 @@ describe('promisedUsage', () => {
   it('shows a user without a workspace the gift they are promised, and that a task would be taken', async () => {
     expect(promisedUsage(await promised(rated, false))).toEqual({
       ...empty,
-      gift: { left: 35, held: 0, granted: false },
-      totalLeft: 35,
-      spendable: 35,
-      spendableNow: 35,
+      gift: { left: 50, held: 0, granted: false },
+      totalLeft: 50,
+      spendable: 50,
+      spendableNow: 50,
       newTask: TAKEN,
     })
   })
@@ -352,8 +352,8 @@ describe('promisedUsage', () => {
 
   it('tells that no task is taken while no credit rate is in force, whatever is promised', async () => {
     expect(promisedUsage(await promised(unrated, false))).toMatchObject({
-      gift: { left: 35, held: 0, granted: false },
-      spendable: 35,
+      gift: { left: 50, held: 0, granted: false },
+      spendable: 50,
       newTask: { allowed: false, reason: 'rate_missing' },
     })
   })
@@ -417,7 +417,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
     return { userId, workspaceId, plan, subscription }
   }
 
-  /** «Старт» of the decision of 17.10.2026: of the 300 credits of a month, 50 a day. */
+  /**
+   * «Старт» of the decision of 17.10.2026: of the 300 credits of a month, 50 a day. A plan of
+   * its own: no published plan has a day since 06.11.2026 (plan 63, Ц6), and the limit stays in
+   * the code for a plan that sets one.
+   */
   const startDay = { creditsPerDay: 50 }
   /** The tariff credits of the Moscow day as the summary tells them. */
   const dayOf = (limit: number | null, charged: number, held: number, free: number) => {
@@ -624,12 +628,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
 
     const summary = await summaryAt(workspaceId)
 
-    expect(summary.gift).toEqual({ left: 35, held: 0, granted: true })
+    expect(summary.gift).toEqual({ left: 50, held: 0, granted: true })
     expect(summary.pack).toEqual({ left: 100, held: 0 })
-    expect(summary.totalLeft).toBe(435)
-    expect(summary.spendable).toBe(435)
+    expect(summary.totalLeft).toBe(450)
+    expect(summary.spendable).toBe(450)
     // Gift and pack credits are outside the day: fifty of the tariff, and all of them.
-    expect(summary.spendableNow).toBe(185)
+    expect(summary.spendableNow).toBe(200)
     // The gift is no part of the quota: it was not granted for the period and is not charged
     // to it.
     expect(summary.tariff).toMatchObject({
@@ -647,9 +651,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
 
     const summary = await summaryAt(workspaceId)
 
-    expect(summary.gift).toEqual({ left: 30, held: 5, granted: true })
-    expect(summary.totalLeft).toBe(330)
-    expect(summary).toMatchObject({ spendable: 330, setAside: 5, newTask: TAKEN })
+    expect(summary.gift).toEqual({ left: 45, held: 5, granted: true })
+    expect(summary.totalLeft).toBe(345)
+    expect(summary).toMatchObject({ spendable: 345, setAside: 5, newTask: TAKEN })
     expect(summary.tariff?.credits).toEqual(FULL)
   })
 
@@ -859,29 +863,30 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       const { userId, workspaceId } = await funded({ tariff: 5, pack: 100, plan: startDay })
       await db.$transaction((tx) => grantSignupGift(tx, { userId, workspaceId }))
       const shop = await site(workspaceId, 'Магазин')
-      const big = await task(workspaceId, shop.id, { status: 'running' })
-      // 5 of the tariff, 35 of the gift and 5 of the pack: three rows of one attempt.
+      // A heavy task: its step of 120 credits is more than the tariff and the gift of 50 hold.
+      const big = await task(workspaceId, shop.id, { status: 'running', modelClass: 'heavy' })
+      // 5 of the tariff, 50 of the gift and 65 of the pack: three rows of one attempt.
       await place(workspaceId, big.id)
       expect(await db.creditHold.count({ where: { taskId: big.id } })).toBe(3)
 
       const inWork = await summaryAt(workspaceId)
 
       expect(inWork.tariff?.credits).toMatchObject({ granted: 5, held: 5, left: 0 })
-      expect(inWork.gift).toEqual({ left: 0, held: 35, granted: true })
-      expect(inWork.pack).toEqual({ left: 95, held: 5 })
+      expect(inWork.gift).toEqual({ left: 0, held: 50, granted: true })
+      expect(inWork.pack).toEqual({ left: 35, held: 65 })
       // One line; the day took five of the tariff, gift and pack credits are outside it.
       expect(inWork.tariff?.today).toEqual(dayOf(50, 0, 5, 0))
       expect(inWork.history.items).toMatchObject([
-        { id: big.id, outcome: 'held', credits: 45, from: { tariff: 5, gift: 35, pack: 5 } },
+        { id: big.id, outcome: 'held', credits: 120, from: { tariff: 5, gift: 50, pack: 65 } },
       ])
 
-      // Done for 43: the tariff pays 5, the gift 35, the pack 3.
-      await charge(big.id, 43)
+      // Done for 100: the tariff pays 5, the gift 50, the pack 45.
+      await charge(big.id, 100)
       const done = await summaryAt(workspaceId)
 
-      expect(done.tariff?.bySite).toEqual([{ siteId: shop.id, name: 'Магазин', credits: 43 }])
+      expect(done.tariff?.bySite).toEqual([{ siteId: shop.id, name: 'Магазин', credits: 100 }])
       expect(done.history.items).toMatchObject([
-        { id: big.id, outcome: 'charged', credits: 43, from: { tariff: 5, gift: 35, pack: 3 } },
+        { id: big.id, outcome: 'charged', credits: 100, from: { tariff: 5, gift: 50, pack: 45 } },
       ])
     })
 
@@ -1316,8 +1321,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       expect(order).toMatchObject({ periodStart: FIRST.start, periodEnd: FIRST.end })
       expect(summary.tariff?.credits).toEqual(FULL)
       // The checkout made the workspace, and the gift of the registration with it.
-      expect(summary.gift).toEqual({ left: 35, held: 0, granted: true })
-      expect(summary.totalLeft).toBe(335)
+      expect(summary.gift).toEqual({ left: 50, held: 0, granted: true })
+      expect(summary.totalLeft).toBe(350)
     })
 
     it('refuses to answer for a period that was moved without the order that paid for it', async () => {
@@ -1449,13 +1454,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       expect(await summaryAt(workspaceId)).toEqual({
         subscription: null,
         tariff: null,
-        gift: { left: 35, held: 0, granted: true },
+        gift: { left: 50, held: 0, granted: true },
         pack: { left: 100, held: 0 },
-        totalLeft: 135,
+        totalLeft: 150,
         history: noHistory,
         // Purchased credits wait for a tariff: a task may take the gift alone.
-        spendable: 35,
-        spendableNow: 35,
+        spendable: 50,
+        spendableNow: 50,
         setAside: 0,
         minToStart: 5,
         // Without a tariff there is no day: the gift is the bound.
@@ -1469,18 +1474,19 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       await db.$transaction((tx) => grantSignupGift(tx, { userId, workspaceId }))
       const blog = await site(workspaceId, 'Блог')
       const first = await task(workspaceId, blog.id, { summary: 'Заменил телефон в шапке' })
-      // The whole gift is set aside for the task: it is the trial.
+      // The step of the task, 45 of the 50 gift credits, is set aside: five are left, enough to
+      // start another.
       await place(workspaceId, first.id, { now: minutesAfter(0) })
       const inWork = await summaryAt(workspaceId, minutesAfter(1))
-      expect(inWork.gift).toEqual({ left: 0, held: 35, granted: true })
+      expect(inWork.gift).toEqual({ left: 5, held: 45, granted: true })
       expect(inWork.history.items).toMatchObject([
-        { id: first.id, outcome: 'held', credits: 35, from: { tariff: 0, gift: 35, pack: 0 } },
+        { id: first.id, outcome: 'held', credits: 45, from: { tariff: 0, gift: 45, pack: 0 } },
       ])
       expect(inWork).toMatchObject({
         today: null,
-        spendable: 0,
-        setAside: 35,
-        newTask: { allowed: false, reason: 'held' },
+        spendable: 5,
+        setAside: 45,
+        newTask: TAKEN,
       })
 
       await doneFor(first.id, '22.09', { now: minutesAfter(10) })
@@ -1496,7 +1502,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       const summary = await summaryAt(workspaceId, minutesAfter(20))
 
       expect(summary.tariff).toBeNull()
-      expect(summary.gift).toEqual({ left: 30, held: 0, granted: true })
+      expect(summary.gift).toEqual({ left: 45, held: 0, granted: true })
       expect(summary.today).toBeNull()
       expect(
         summary.history.items.map(({ id, outcome, credits, from }) => [id, outcome, credits, from]),

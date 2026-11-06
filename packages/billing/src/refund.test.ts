@@ -299,7 +299,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL refund', () => {
     })
 
   /**
-   * Grants the gift of the registration to the customer and reserves 5 of its 35 credits for a
+   * Grants the gift of the registration to the customer and reserves 5 of its 50 credits for a
    * task; the gift account as it then is.
    */
   async function gifted(t: { userId: string; workspaceId: string }) {
@@ -1805,9 +1805,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL refund', () => {
       // The customer has no tariff any more, and the gift is theirs to spend all the same.
       expect(state.balances).toEqual({
         tariff: { balance: 0, held: 0, available: 0 },
-        gift: { balance: 35, held: 5, available: 30, granted: true },
+        gift: { balance: 50, held: 5, available: 45, granted: true },
         pack: { balance: 0, held: 0, available: 0 },
-        totalAvailable: 30,
+        totalAvailable: 45,
       })
       expect(state.ledger.filter((row) => row.kind === 'expire')).toMatchObject([
         { unit: 'credit_tariff' },
@@ -2225,9 +2225,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL refund', () => {
       const state = await written(t)
       expect(state.balances).toEqual({
         tariff: { balance: 30, held: 0, available: 30 },
-        gift: { balance: 35, held: 5, available: 30, granted: true },
+        gift: { balance: 50, held: 5, available: 45, granted: true },
         pack: { balance: 3, held: 3, available: 0 },
-        totalAvailable: 60,
+        totalAvailable: 75,
       })
       expect(state.ledger.filter((row) => row.kind === 'adjust').map((row) => row.unit)).toEqual([
         'credit_pack',
@@ -2258,6 +2258,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL refund', () => {
       // and five credits of the pack, the second and the third stand on the pack alone.
       const t = await paidTariff({ plan: { creditsPerMonth: 5 } })
       const pack = await boughtPack(t)
+      // 15 of the 50 gift credits are set aside for a task of their own: 35 are left free.
+      await fixtures.hold(t.workspaceId, 'gift', 15)
       const tasks = await Promise.all([1, 2, 3].map(() => fixtures.task(t.workspaceId)))
       for (const { taskId } of tasks) {
         await fixtures.reserve({

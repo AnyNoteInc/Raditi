@@ -479,7 +479,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     const { charged, held } = await tariffCreditsOfDay(db, { workspaceId, now: new Date(now) })
     return `${charged} + ${held}`
   }
-  /** «Старт» of the decision of 17.10.2026: 300 tariff credits a month, of them 50 a day. */
+  /**
+   * «Старт» of the decision of 17.10.2026: 300 tariff credits a month, of them 50 a day. A plan
+   * of its own: no published plan has a day since 06.11.2026 (plan 63, Ц6), and the limit stays
+   * in the code for a plan that sets one.
+   */
   const startDay = { creditsPerMonth: 300, creditsPerDay: 50 }
 
   /** A model of its own with a price row: what a recorded model call needs. */
@@ -1018,9 +1022,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       ).toMatchObject(needsTariff('gift_spent', 0))
     })
 
-    it('stops new tasks of a paid tariff when the work it got without a charge reaches its monthly credits', async () => {
-      // A tariff of 50 credits a month: 300 RUB of work at 6 RUB a credit.
-      const { workspaceId } = await funded({ plan: { creditsPerMonth: 50 } })
+    it('stops new tasks of a paid tariff when the work it got without a charge reaches half its monthly credits', async () => {
+      // A tariff of 100 credits a month bounds its unpaid work at 50 (plan 63, Ц8): 300 RUB of
+      // work at 6 RUB a credit.
+      const { workspaceId } = await funded({ plan: { creditsPerMonth: 100 } })
       const model = await modelPool()
       const [failed, working, asked] = await tasks(workspaceId, 3)
       await place(workspaceId, failed!)
@@ -1084,8 +1089,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
         await place(t.workspaceId, failed!, { now: minutesAfter(20, t.periodEnd) }),
       ).toMatchObject({ applied: true, reserved: 45 })
 
-      // What nobody paid for still counts: 50 credits of a failed task reach the bound.
-      await worked(model, failed!, '300', { occurredAt: minutesAfter(21, t.periodEnd) })
+      // What nobody paid for still counts: 25 credits of a failed task reach the bound, half the
+      // 50 credits of the month.
+      await worked(model, failed!, '150', { occurredAt: minutesAfter(21, t.periodEnd) })
       await release(failed!, { now: minutesAfter(22, t.periodEnd) })
       expect(
         await refused(t.workspaceId, asked!, { now: minutesAfter(23, t.periodEnd) }),
@@ -1093,7 +1099,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     })
 
     it.each(['past_due', 'cancelled', 'expired'] as const)(
-      'stops a workspace whose tariff is %s at 70 credits of unpaid work, counted from the end of its paid period',
+      'stops a workspace whose tariff is %s at 50 credits of unpaid work, counted from the end of its paid period',
       async (status) => {
         const ended = new Date('2026-10-01T09:00:00.000Z')
         const { workspaceId, plan } = await funded({
@@ -1118,8 +1124,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
         // Work of the tariff that ended is not the trial's.
         await worked(model, old!, '5000', { occurredAt: minutesAfter(-1, ended) })
         await place(workspaceId, failed!)
-        // 419.99 RUB: a hair below 70 credits.
-        await worked(model, failed!, '419.99')
+        // 299.99 RUB: a hair below 50 credits, the gift of the registration (plan 63, Ц9).
+        await worked(model, failed!, '299.99')
         await release(failed!)
 
         expect(await place(workspaceId, next!, { now: minutesAfter(10) })).toMatchObject({
@@ -1144,7 +1150,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       const model = await modelPool()
       const [failed, next] = await tasks(workspaceId, 2)
       await place(workspaceId, failed!)
-      await worked(model, failed!, '420')
+      await worked(model, failed!, '300')
       await release(failed!)
 
       expect(await refused(workspaceId, next!, { now: minutesAfter(10) })).toMatchObject(
@@ -1274,8 +1280,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       const asked = await taskOn(workspaceId, 'https://taken.example.ru')
       const at = minutesAfter(30)
 
-      // Four gift credits are left; 85 credits of work with 15 charged are 70 unpaid; the site
-      // is another workspace's. The credits are said first.
+      // Four gift credits are left; 85 credits of work with 15 charged are 70 unpaid, above the
+      // bound of 50; the site is another workspace's. The credits are said first.
       expect(await refused(workspaceId, asked, { now: at })).toMatchObject(
         needsTariff('gift_below_start', 4),
       )

@@ -212,7 +212,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL checkout', () => {
       const rows = await giftRows(userId)
       expect(rows).toHaveLength(1)
       expect(rows[0]).toMatchObject({ kind: 'grant', unit: 'credit_gift', orderId: null })
-      expect(rows[0]?.amount.toFixed(2)).toBe('35.00')
+      expect(rows[0]?.amount.toFixed(2)).toBe('50.00')
       const account = await db.billingAccount.findUniqueOrThrow({
         where: { id: rows[0]?.accountId },
       })

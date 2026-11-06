@@ -375,7 +375,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL renewal', () => {
     })
 
   /**
-   * Grants the gift of the registration to the owner of the workspace and reserves 5 of its 35
+   * Grants the gift of the registration to the owner of the workspace and reserves 5 of its 50
    * credits for a task; the gift account as it then is.
    */
   async function gifted(s: Subscribed) {
@@ -938,16 +938,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL renewal', () => {
       // 30 expire with the period and 30 come. The gift is neither expired nor granted anew.
       expect(state.balances).toEqual({
         tariff: { balance: 30, held: 0, available: 30 },
-        gift: { balance: 35, held: 5, available: 30, granted: true },
+        gift: { balance: 50, held: 5, available: 45, granted: true },
         pack: { balance: 0, held: 0, available: 0 },
-        totalAvailable: 60,
+        totalAvailable: 75,
       })
       expect(
         state.ledger.map((entry) => [entry.unit, entry.kind, entry.amount.toNumber()]).sort(),
       ).toEqual(
         [
           ['credit_tariff', 'grant', 30],
-          ['credit_gift', 'grant', 35],
+          ['credit_gift', 'grant', 50],
           ['credit_tariff', 'expire', -30],
           ['credit_tariff', 'grant', 30],
         ].sort(),
@@ -1099,11 +1099,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL renewal', () => {
 
       const state = await written(s)
       expect(state.subscription.status).toBe('past_due')
-      // What can be spent, not the balance: 35 granted, 5 of them held by a task. With it the
+      // What can be spent, not the balance: 50 granted, 5 of them held by a task. With it the
       // letter says «принимаются, только пока есть подарочные кредиты», as «Тарифы» does.
       expect(only(state.letters)).toMatchObject({
         type: 'billing.payment_failed',
-        payload: { giftCreditsLeft: 30 },
+        payload: { giftCreditsLeft: 45 },
       })
       // The gift itself is not touched by the refusal.
       expect(await giftRows(s.workspaceId)).toEqual(gift)
@@ -2338,17 +2338,17 @@ describe.skipIf(!databaseUrl)('PostgreSQL renewal', () => {
       expect(state.subscription.status).toBe('cancelled')
       expect(state.balances).toEqual({
         tariff: { balance: 0, held: 0, available: 0 },
-        gift: { balance: 35, held: 5, available: 30, granted: true },
+        gift: { balance: 50, held: 5, available: 45, granted: true },
         pack: { balance: 0, held: 0, available: 0 },
-        totalAvailable: 30,
+        totalAvailable: 45,
       })
       expect(state.ledger.filter((entry) => entry.kind === 'expire')).toMatchObject([
         { unit: 'credit_tariff' },
       ])
       expect(await giftRows(s.workspaceId)).toEqual(gift)
-      // The letter is told what of the gift can be spent — 35 less the 5 a task holds —, so it
+      // The letter is told what of the gift can be spent — 50 less the 5 a task holds —, so it
       // says that tasks are taken on gift credits, as the page does.
-      expect(only(state.letters).payload).toMatchObject({ packCreditsLeft: 0, giftCreditsLeft: 30 })
+      expect(only(state.letters).payload).toMatchObject({ packCreditsLeft: 0, giftCreditsLeft: 45 })
     })
 
     it('is decided by one of two passes that run at once', async () => {
@@ -2458,12 +2458,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL renewal', () => {
       expect(state.subscription.status).toBe('expired')
       expect(state.balances).toEqual({
         tariff: { balance: 0, held: 0, available: 0 },
-        gift: { balance: 35, held: 5, available: 30, granted: true },
+        gift: { balance: 50, held: 5, available: 45, granted: true },
         pack: { balance: 0, held: 0, available: 0 },
-        totalAvailable: 30,
+        totalAvailable: 45,
       })
       expect(await giftRows(s.workspaceId)).toEqual(gift)
-      expect(only(state.letters).payload).toMatchObject({ packCreditsLeft: 0, giftCreditsLeft: 30 })
+      expect(only(state.letters).payload).toMatchObject({ packCreditsLeft: 0, giftCreditsLeft: 45 })
     })
 
     it('waits for a payment that is on its way, and not for an order nobody can pay', async () => {

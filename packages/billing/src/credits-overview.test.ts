@@ -274,15 +274,15 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
     it('takes a task while credits can be spent: those of the tariff, the gift and a pack', async () => {
       const { workspaceId } = await funded({ gift: true, pack: 100 })
 
-      const read = await expectAgreement(workspaceId, { reason: null, spendable: 435, setAside: 0 })
+      const read = await expectAgreement(workspaceId, { reason: null, spendable: 450, setAside: 0 })
 
       expect(read).toEqual({
         tariff: { balance: 300, held: 0, available: 300 },
-        gift: { balance: 35, held: 0, available: 35, granted: true },
+        gift: { balance: 50, held: 0, available: 50, granted: true },
         pack: { balance: 100, held: 0, available: 100 },
-        totalAvailable: 435,
-        spendable: 435,
-        spendableNow: 435,
+        totalAvailable: 450,
+        spendable: 450,
+        spendableNow: 450,
         setAside: 0,
         minToStart: 5,
         // a plan without a daily limit: the day is counted, and nothing caps it
@@ -351,8 +351,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
     })
 
     it('tells that too much work of the period ended without a charge', async () => {
-      // A tariff of 50 credits a month: 300 RUB of work at 6 RUB a credit.
-      const { workspaceId } = await funded({ plan: { creditsPerMonth: 50 } })
+      // A tariff of 100 credits a month bounds its unpaid work at 50, half its month (plan 63,
+      // Ц8): 300 RUB of work at 6 RUB a credit.
+      const { workspaceId } = await funded({ plan: { creditsPerMonth: 100 } })
       await failedAfter(workspaceId, '300')
 
       const read = await expectAgreement(workspaceId, {
@@ -374,7 +375,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
     it('says the credits first, then the day, then the unpaid work', async () => {
       const { workspaceId } = await funded({
         tariff: 9,
-        plan: { creditsPerMonth: 50, creditsPerDay: 5 },
+        plan: { creditsPerMonth: 100, creditsPerDay: 5 },
       })
       // A task of the day failed after 300 RUB of work — 50 credits, the bound of this tariff —
       // and gave its reserve back; another, queued earlier today, holds one credit of the day:
@@ -423,12 +424,15 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
     it('takes a task on the gift of the registration', async () => {
       const { workspaceId } = await funded({ tariff: 0, gift: true, subscription: null })
 
-      await expectAgreement(workspaceId, { reason: null, spendable: 35, setAside: 0 })
+      await expectAgreement(workspaceId, { reason: null, spendable: 50, setAside: 0 })
     })
 
     it('tells that the gift is used up, and that less of it is left than a task needs', async () => {
       const { workspaceId } = await funded({ tariff: 0, gift: true, subscription: null })
-      await done(workspaceId, 32)
+      // 50 credits of the gift: a task done for its whole step of 45, and one for two of the
+      // five that are left.
+      await done(workspaceId, 45)
+      await done(workspaceId, 2, minutesAfter(10))
 
       await expectAgreement(workspaceId, { reason: 'gift_below_start', spendable: 3, setAside: 0 })
 
@@ -458,33 +462,35 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
       expect(read.gift).toEqual({ balance: 0, held: 0, available: 0, granted: false })
     })
 
-    it('tells that the gift is set aside for the task in work', async () => {
+    it('tells that the gift is set aside for the tasks in work', async () => {
       const { workspaceId } = await funded({ tariff: 0, gift: true, subscription: null })
+      // The step of the first, 45 credits, and the five that are left for the second.
+      await place(workspaceId, await task(workspaceId))
       await place(workspaceId, await task(workspaceId))
 
-      await expectAgreement(workspaceId, { reason: 'held', spendable: 0, setAside: 35 })
+      await expectAgreement(workspaceId, { reason: 'held', spendable: 0, setAside: 50 })
     })
 
     it('has no day: tasks are taken while the gift lasts', async () => {
       const { workspaceId } = await funded({ tariff: 0, gift: true, subscription: null })
       for (const minute of [0, 10, 20, 30]) await done(workspaceId, 5, minutesAfter(minute))
 
-      const read = await expectAgreement(workspaceId, { reason: null, spendable: 15, setAside: 0 })
+      const read = await expectAgreement(workspaceId, { reason: null, spendable: 30, setAside: 0 })
       expect(read.today).toBeNull()
     })
 
-    it('tells that the trial is over: 70 credits of work ended without a charge', async () => {
+    it('tells that the trial is over: 50 credits of work ended without a charge', async () => {
       const { workspaceId } = await funded({ tariff: 0, gift: true, subscription: null })
       // The bound is counted from the creation of the workspace.
       await db.workspace.update({
         where: { id: workspaceId },
         data: { createdAt: new Date('2026-10-01T00:00:00.000Z') },
       })
-      await failedAfter(workspaceId, '420')
+      await failedAfter(workspaceId, '300')
 
       await expectAgreement(workspaceId, {
         reason: 'trial_unpaid_limit',
-        spendable: 35,
+        spendable: 50,
         setAside: 0,
       })
     })
@@ -506,7 +512,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
     it('takes a task on the gift while the tariff is not paid', async () => {
       const { workspaceId } = await funded({ gift: true, subscription: { status: 'past_due' } })
 
-      await expectAgreement(workspaceId, { reason: null, spendable: 35, setAside: 0 })
+      await expectAgreement(workspaceId, { reason: null, spendable: 50, setAside: 0 })
     })
 
     it('tells that credits of a pack wait for a tariff once the tariff has ended', async () => {
@@ -528,14 +534,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
       const read = await getCreditsOverview(db, { workspaceId, now: NOW })
 
       expect(read).toMatchObject({
-        spendable: 335,
+        spendable: 350,
         setAside: 0,
         minToStart: 5,
         newTask: { allowed: false, reason: 'rate_missing' },
       })
       expect(await newTaskCheck(db, { workspaceId, now: NOW })).toEqual({
-        spendable: 335,
-        spendableNow: 335,
+        spendable: 350,
+        spendableNow: 350,
         held: 0,
         needed: 5,
         allowed: false,
@@ -566,11 +572,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
     it('is promised the gift, and the first task would be taken on it', async () => {
       expect(await promisedAt(false)).toEqual({
         tariff: ACCOUNT,
-        gift: { balance: 35, held: 0, available: 35, granted: false },
+        gift: { balance: 50, held: 0, available: 50, granted: false },
         pack: ACCOUNT,
-        totalAvailable: 35,
-        spendable: 35,
-        spendableNow: 35,
+        totalAvailable: 50,
+        spendable: 50,
+        spendableNow: 50,
         setAside: 0,
         minToStart: 5,
         today: null,
@@ -588,7 +594,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
 
     it('is told that no task is taken while no rate is in force', async () => {
       expect(await getPromisedCreditsOverview(db, { giftGranted: false, now: NOW })).toMatchObject({
-        spendable: 35,
+        spendable: 50,
         newTask: { allowed: false, reason: 'rate_missing' },
       })
     })

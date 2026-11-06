@@ -1216,7 +1216,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL management of a tariff through the rou
     })
     // Nothing changes today: the tariff, the credits and the list of what is on sale.
     expect((await caller.billing.plans()).plans.find((plan) => plan.current)?.slug).toBe('start')
-    expect((await caller.billing.overview()).credits.tariff.available).toBe(300)
+    expect((await caller.billing.overview()).credits.tariff.available).toBe(
+      (await seeded('start')).creditsPerMonth,
+    )
     // The letter before the charge has to be written again, with the new amount.
     expect((await subscriptionOf(paying)).renewalNoticePeriodEnd).toBeNull()
     await expect(caller.billing.schedulePlanChange({ planSlug: 'business' })).rejects.toMatchObject(
@@ -1474,7 +1476,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL management of a tariff through the rou
     expect(await caller.billing.overview()).toMatchObject({
       subscription: order.subscription,
       pastDueEndsAt: null,
-      credits: { tariff: { available: 300 } },
+      credits: { tariff: { available: (await seeded('start')).creditsPerMonth } },
     })
     expect(await subscriptionOf(paying)).toMatchObject({
       periodAnchor: paidAt,

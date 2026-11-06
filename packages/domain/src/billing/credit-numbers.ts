@@ -68,10 +68,11 @@ export const attemptStepCredits = Object.freeze({
 
 /**
  * The gift of the registration: credits a user is given once, to try the service before a
- * tariff. About three average tasks. A change of the number does not touch gifts already
- * granted: each stands in the ledger with the amount of its day.
+ * tariff — 50 since the pricing of 06.11.2026 (docs/plan/63-new-pricing.md, Ц5; 35 before).
+ * About five average tasks. A change of the number does not touch gifts already granted: each
+ * stands in the ledger with the amount of its day.
  */
-export const signupGiftCredits = 35
+export const signupGiftCredits = 50
 
 function assertCredits(credits: number): void {
   if (!Number.isSafeInteger(credits) || credits < 0) throw badRequest('Invalid count of credits')
@@ -80,13 +81,15 @@ function assertCredits(credits: number): void {
 /**
  * How many average tasks a number of credits holds, for a sentence that says «в среднем около»:
  * credits ÷ `averageTaskCredits`, rounded half up to a whole task and, from a hundred tasks up,
- * to the nearest ten — 300 → 27, 800 → 73, 2 500 → 230, 100 → 9. A promise, not arithmetic of
- * the ledger: the charge of a task comes from the work it took.
+ * to the nearest ten — the tariffs of 06.11.2026 150 → 14, 600 → 55, 2 000 → 180, the pack
+ * 100 → 9. A promise, not arithmetic of the ledger: the charge of a task comes from the work it
+ * took.
  *
- * Rounded to the nearest, the count can stand a little above what the credits hold: 230 average
- * tasks are 2 530 credits, and the calculator of the landing adds a pack at that count. Known
- * and kept as the default of the design (docs/research/2026-10-credits/credits-design.md, §10,
- * item 13); rounding down — 27, 72, 220, 9 — is the owner's to choose.
+ * Rounded to the nearest, the count can stand a little above what the credits hold: 14 average
+ * tasks are 154 credits, 55 are 605, and the calculator of the landing adds a pack at such a
+ * count. Known and kept as the default of the design
+ * (docs/research/2026-10-credits/credits-design.md, §10, item 13); rounding down — 13, 54, 180,
+ * 9 — is the owner's to choose.
  */
 export function averageTaskCount(credits: number): number {
   assertCredits(credits)
@@ -109,8 +112,8 @@ export interface GiftTaskCounts {
 }
 
 /**
- * What a number of gift credits is enough for, for the sentence «их хватит на семь небольших
- * правок или на две-три задачи побольше»: 35 → 7 small edits, 2–3 larger tasks. Small edits at
+ * What a number of gift credits is enough for, for the sentence «их хватит на десять небольших
+ * правок или на три-пять задач побольше»: 50 → 10 small edits, 3–5 larger tasks. Small edits at
  * their usual charge, rounded down; larger tasks from blocks at the bottom of their range,
  * rounded down, to tasks of the average charge (`averageTaskCount`). A promise, like every
  * count of tasks: the charge of a task comes from the work it took.

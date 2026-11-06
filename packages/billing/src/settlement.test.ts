@@ -114,7 +114,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL settlement', () => {
       unit: 'credit_gift',
       orderId: null,
     })
-    expect(state.gift.ledger[0]?.amount.toFixed(2)).toBe('35.00')
+    expect(state.gift.ledger[0]?.amount.toFixed(2)).toBe('50.00')
     expect(state.gift.audit).toHaveLength(1)
     expect(state.balances.gift).toEqual(GIFT_GRANTED)
   }
@@ -185,7 +185,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL settlement', () => {
         tariff: { balance: 30, held: 0, available: 30 },
         gift: GIFT_GRANTED,
         pack: EMPTY,
-        totalAvailable: 65,
+        totalAvailable: 30 + GIFT_GRANTED.balance,
       })
       giftStands(state)
       expect(state.ledger).toHaveLength(1)

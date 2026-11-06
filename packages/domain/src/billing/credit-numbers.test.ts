@@ -26,7 +26,7 @@ describe('the numbers of the credits model', () => {
       large: { from: 25, to: 40 },
     })
     expect(attemptStepCredits).toEqual({ light: 20, standard: 45, heavy: 120 })
-    expect(signupGiftCredits).toBe(35)
+    expect(signupGiftCredits).toBe(50)
     expect(minStartCredits).toBe(5)
   })
 
@@ -71,12 +71,13 @@ describe('the numbers of the credits model', () => {
     expect(Object.keys(attemptStepCredits)).toEqual([...modelClasses])
     expect(attemptStepCredits.light).toBeLessThan(attemptStepCredits.standard)
     expect(attemptStepCredits.standard).toBeLessThan(attemptStepCredits.heavy)
-    // The gift is a whole number of credits that holds about three average tasks and every
-    // task of the list at least once; one attempt of a new task sets the whole of it aside.
+    // The gift is a whole number of credits that holds about five average tasks and every task
+    // of the list at least once. Since 06.11.2026 (plan 63, Ц5) it is more than one attempt of
+    // a new task sets aside: a step of the standard class leaves enough of it to start another.
     expect(Number.isSafeInteger(signupGiftCredits)).toBe(true)
-    expect(averageTaskCount(signupGiftCredits)).toBe(3)
-    expect(signupGiftCredits).toBeGreaterThanOrEqual(typicalTaskCredits.large.from)
-    expect(signupGiftCredits).toBeLessThan(attemptStepCredits.standard)
+    expect(averageTaskCount(signupGiftCredits)).toBe(5)
+    expect(signupGiftCredits).toBeGreaterThanOrEqual(typicalTaskCredits.large.to)
+    expect(signupGiftCredits - attemptStepCredits.standard).toBeGreaterThanOrEqual(minStartCredits)
     // A task starts on what a done task is charged at least: it can always be charged.
     expect(minStartCredits).toBe(minTaskChargeCredits)
     // The gift starts a task.
@@ -96,11 +97,16 @@ describe('the numbers of the credits model', () => {
 
 describe('averageTaskCount', () => {
   it.each([
-    // The tariffs, the pack and the gift of the design.
+    // The tariffs, the pack and the gift of 06.11.2026 (plan 63).
+    [150, 14],
+    [600, 55],
+    [2000, 180],
+    [100, 9],
+    [50, 5],
+    // The tariffs and the gift before them.
     [300, 27],
     [800, 73],
     [2500, 230],
-    [100, 9],
     [35, 3],
     // Half a task rounds up; just under a half does not.
     [0, 0],
@@ -144,8 +150,8 @@ describe('averageTaskCount', () => {
 })
 
 describe('giftTaskCounts', () => {
-  it('finds in the gift of the registration seven small edits or two to three larger tasks', () => {
-    expect(giftTaskCounts(signupGiftCredits)).toEqual({ small: 7, larger: { from: 2, to: 3 } })
+  it('finds in the gift of the registration ten small edits or three to five larger tasks', () => {
+    expect(giftTaskCounts(signupGiftCredits)).toEqual({ small: 10, larger: { from: 3, to: 5 } })
   })
 
   it.each([
@@ -163,6 +169,7 @@ describe('giftTaskCounts', () => {
     [30, 6, 2, 3],
     [34, 6, 2, 3],
     [45, 9, 3, 4],
+    [50, 10, 3, 5],
     [100, 20, 6, 9],
   ])('finds in %i credits %i small edits and %i to %i larger tasks', (credits, small, from, to) => {
     expect(giftTaskCounts(credits)).toEqual({ small, larger: { from, to } })

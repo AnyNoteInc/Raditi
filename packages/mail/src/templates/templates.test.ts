@@ -132,7 +132,7 @@ describe('welcome greeting', () => {
 describe('welcome letter', () => {
   const out = renderTemplate('welcome', samples.welcome)
   const gift =
-    'Мы дарим вам 35 кредитов, чтобы попробовать: их хватит на семь небольших правок или на две-три задачи побольше.'
+    'Мы дарим вам 50 кредитов, чтобы попробовать: их хватит на десять небольших правок или на три-пять задач побольше.'
 
   it('says how the service works and tells of the gift of the registration, in this order', () => {
     // The footer of every letter follows.
@@ -148,7 +148,7 @@ describe('welcome letter', () => {
   })
 
   it('takes the number of the gift from the domain, and the promise from that number', () => {
-    expect(signupGiftCredits).toBe(35)
+    expect(signupGiftCredits).toBe(50)
     expect(signupGiftLine()).toBe(gift)
     expect(signupGiftLine(signupGiftCredits)).toBe(gift)
   })

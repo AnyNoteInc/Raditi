@@ -22,6 +22,7 @@ import {
   conflict,
   legalDocuments,
   Money,
+  signupGiftCredits,
   type DomainError,
 } from '@repo/domain'
 import { YookassaApiError, YookassaError, type Payment, type YookassaClient } from '@repo/yookassa'
@@ -253,27 +254,32 @@ const noCredits = {
   today: null,
   newTask: { allowed: false, reason: 'gift_spent' },
 }
-/** The tariff credits of a day that took nothing yet: its limit, and what the tariff has free. */
-const freshDay = (limit: number, free: number) => ({
+/**
+ * The tariff credits of a day that took nothing yet: its limit — null for a plan without one,
+ * as every tariff of the seeds since 06.11.2026 (plan 63, Ц6) —, and what the tariff has free.
+ */
+const freshDay = (limit: number | null, free: number) => ({
   limit,
   charged: 0,
   held: 0,
   used: 0,
   room: limit,
-  left: Math.min(limit, free),
+  left: limit === null ? free : Math.min(limit, free),
 })
+/** The gift of the registration: 50 credits since 06.11.2026 (plan 63, Ц5). */
+const GIFT = signupGiftCredits
 /** The gift of the registration on the account of a workspace the product made. */
-const giftGranted = { balance: 35, held: 0, available: 35, granted: true }
+const giftGranted = { balance: GIFT, held: 0, available: GIFT, granted: true }
 /**
  * What a user without a workspace reads: the gift they are granted together with it, and that
  * the first task would be taken on it.
  */
 const promisedCredits = {
   ...noCredits,
-  gift: { balance: 35, held: 0, available: 35, granted: false },
-  totalAvailable: 35,
-  spendable: 35,
-  spendableNow: 35,
+  gift: { balance: GIFT, held: 0, available: GIFT, granted: false },
+  totalAvailable: GIFT,
+  spendable: GIFT,
+  spendableNow: GIFT,
   newTask: TAKEN,
 }
 /**
@@ -613,7 +619,7 @@ describe('billing.overview', () => {
     db.subscription.findFirst.mockResolvedValue(subscription)
     db.billingAccount.findMany.mockResolvedValue([
       { id: randomUUID(), unit: 'credit_tariff', balance: new Money(80), held: new Money(0) },
-      { id: giftAccount, unit: 'credit_gift', balance: new Money(35), held: new Money(0) },
+      { id: giftAccount, unit: 'credit_gift', balance: new Money(GIFT), held: new Money(0) },
       { id: randomUUID(), unit: 'credit_pack', balance: new Money(0), held: new Money(0) },
     ])
     db.creditLedger.findFirst.mockResolvedValue({ id: randomUUID() })
@@ -624,9 +630,9 @@ describe('billing.overview', () => {
       tariff: { balance: 80, held: 0, available: 80 },
       gift: giftGranted,
       pack: { balance: 0, held: 0, available: 0 },
-      totalAvailable: 115,
-      spendable: 115,
-      spendableNow: 55,
+      totalAvailable: 80 + GIFT,
+      spendable: 80 + GIFT,
+      spendableNow: 20 + GIFT,
       setAside: 0,
       minToStart: 5,
       today: freshDay(20, 80),
@@ -1610,13 +1616,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
         tariff: { balance: quota, held: 0, available: quota },
         gift: giftGranted,
         pack: { balance: 0, held: 0, available: 0 },
-        totalAvailable: quota + 35,
-        spendable: quota + 35,
-        // Of the tariff, no more than the day gives; the gift is outside it.
-        spendableNow: Math.min(plan.creditsPerDay!, quota) + 35,
+        totalAvailable: quota + GIFT,
+        spendable: quota + GIFT,
+        // Of the tariff, no more than the day gives, if it has a day; the gift is outside it.
+        spendableNow: freshDay(plan.creditsPerDay, quota).left + GIFT,
         setAside: 0,
         minToStart: 5,
-        today: freshDay(plan.creditsPerDay!, quota),
+        today: freshDay(plan.creditsPerDay, quota),
         newTask: NO_RATE,
       },
       ...noWaits,
@@ -1725,7 +1731,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
     }
     expect(await caller.billing.syncOrder({ orderId: started.orderId })).toEqual(waiting)
     const quota = plan.creditsPerMonth
-    expect((await caller.billing.overview()).credits.totalAvailable).toBe(quota + 35)
+    expect((await caller.billing.overview()).credits.totalAvailable).toBe(quota + GIFT)
 
     shop.pay(payment.id)
     const paid = await caller.billing.syncOrder({ orderId: started.orderId })
@@ -1741,12 +1747,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
         tariff: { balance: quota, held: 0, available: quota },
         gift: giftGranted,
         pack: { balance: pack.credits, held: 0, available: pack.credits },
-        totalAvailable: quota + 35 + pack.credits,
-        spendable: quota + 35 + pack.credits,
-        spendableNow: Math.min(plan.creditsPerDay!, quota) + 35 + pack.credits,
+        totalAvailable: quota + GIFT + pack.credits,
+        spendable: quota + GIFT + pack.credits,
+        spendableNow: freshDay(plan.creditsPerDay, quota).left + GIFT + pack.credits,
         setAside: 0,
         minToStart: 5,
-        today: freshDay(plan.creditsPerDay!, quota),
+        today: freshDay(plan.creditsPerDay, quota),
         newTask: NO_RATE,
       },
       ...noWaits,
@@ -1804,7 +1810,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
       orderId: null,
       account: { workspaceId, unit: 'credit_gift' },
     })
-    expect(gift[0]!.amount.toFixed(2)).toBe('35.00')
+    expect(gift[0]!.amount.toFixed(2)).toBe(GIFT.toFixed(2))
     expect(await db.creditLedger.count({ where: { account: { workspaceId } } })).toBe(1)
     expect(await db.auditLog.count({ where: { workspaceId, action: 'billing.gift.grant' } })).toBe(
       1,

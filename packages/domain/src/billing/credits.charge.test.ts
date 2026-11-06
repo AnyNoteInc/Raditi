@@ -553,7 +553,7 @@ describe('unpaidWork', () => {
     ['a failed attempt of 25 credits', '25', 0, '25'],
     ['a done block and a failed attempt', '41.895', 17, '24.895'],
     ['work in progress counts until it is charged', '37.2', 0, '37.2'],
-    ['the bound of the gift, to the credit', '70', 0, '70'],
+    ['the bound without a tariff, to the credit', '50', 0, '50'],
     ['a period of failures on a tariff', '320.5', 40, '280.5'],
     ['more charged than worked', '10', 300, '0'],
   ])('%s: %s of work, %i charged → %s', (_name, credits, charged, expected) => {

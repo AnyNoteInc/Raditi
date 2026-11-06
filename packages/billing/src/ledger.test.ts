@@ -821,15 +821,15 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
         where: { workspaceId: { in: workspaceIds }, action: giftAuditActions.grant },
       })
 
-    it('is the 35 credits of the design, on the gift account, with no order behind it', async () => {
+    it('is the 50 credits of the pricing of 06.11.2026, on the gift account, with no order behind it', async () => {
       const { userId, workspaceId } = await fixtures.workspace()
       const posting = await gift(userId, workspaceId)
 
-      expect(signupGiftCredits).toBe(35)
+      expect(signupGiftCredits).toBe(50)
       expect(posting.applied).toBe(true)
       expect(await accounts(workspaceId)).toEqual({
         tariff: { balance: '0.00', held: '0.00' },
-        gift: { balance: '35.00', held: '0.00' },
+        gift: { balance: '50.00', held: '0.00' },
         pack: { balance: '0.00', held: '0.00' },
         count: 3,
       })
@@ -843,8 +843,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
         note: null,
         idempotencyKey: `user:${userId}:signup-gift`,
       })
-      expect(rows[0]!.amount.toFixed(2)).toBe('35.00')
-      expect(rows[0]!.balanceAfter.toFixed(2)).toBe('35.00')
+      expect(rows[0]!.amount.toFixed(2)).toBe('50.00')
+      expect(rows[0]!.balanceAfter.toFixed(2)).toBe('50.00')
       await expectBalancesToMatchLedger(workspaceId)
 
       const account = await db.billingAccount.findUniqueOrThrow({
@@ -860,7 +860,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
         action: 'billing.gift.grant',
         targetType: 'billing_account',
         targetId: account.id,
-        meta: { userId, credits: 35 },
+        meta: { userId, credits: 50 },
         ip: null,
       })
     })
@@ -890,7 +890,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
 
       expect(postings.filter((posting) => posting.applied)).toHaveLength(1)
       expect(new Set(postings.map((posting) => posting.entry.id)).size).toBe(1)
-      expect((await accounts(workspaceId)).gift).toEqual({ balance: '35.00', held: '0.00' })
+      expect((await accounts(workspaceId)).gift).toEqual({ balance: '50.00', held: '0.00' })
       expect(await entries(workspaceId)).toHaveLength(1)
       expect(await giftAudit([workspaceId])).toHaveLength(1)
       await expectBalancesToMatchLedger(workspaceId)
@@ -903,7 +903,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
 
       expect(postings.filter((posting) => posting.applied)).toHaveLength(1)
       expect(new Set(postings.map((posting) => posting.entry.id)).size).toBe(1)
-      expect((await accounts(workspaceId)).gift).toEqual({ balance: '35.00', held: '0.00' })
+      expect((await accounts(workspaceId)).gift).toEqual({ balance: '50.00', held: '0.00' })
       expect(await entries(workspaceId)).toHaveLength(1)
       expect(await giftAudit([workspaceId])).toHaveLength(1)
     })
@@ -920,7 +920,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
       expect(await accounts(second)).toEqual({ tariff: null, gift: null, pack: null, count: 0 })
       expect(await entries(second)).toEqual([])
       expect(await giftAudit([workspaceId, second])).toHaveLength(1)
-      expect((await accounts(workspaceId)).gift).toEqual({ balance: '35.00', held: '0.00' })
+      expect((await accounts(workspaceId)).gift).toEqual({ balance: '50.00', held: '0.00' })
 
       // Nor when the second workspace already has its accounts.
       await db.$transaction((tx) => ensureAccounts(tx, second))
@@ -946,7 +946,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
       const rows = [...(await entries(workspaceId)), ...(await entries(second))]
       expect(rows.map((row) => row.id)).toEqual([postings[0]!.entry.id])
       const balances = [(await accounts(workspaceId)).gift, (await accounts(second)).gift]
-      expect(balances.filter((account) => account?.balance === '35.00')).toHaveLength(1)
+      expect(balances.filter((account) => account?.balance === '50.00')).toHaveLength(1)
       expect(balances.filter((account) => (account?.balance ?? '0.00') === '0.00')).toHaveLength(1)
       expect(await giftAudit([workspaceId, second])).toHaveLength(1)
     })
@@ -984,7 +984,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
 
       expect(postings.map((posting) => posting.applied)).toEqual([true, true])
       for (const { workspaceId } of [one, other]) {
-        expect((await accounts(workspaceId)).gift).toEqual({ balance: '35.00', held: '0.00' })
+        expect((await accounts(workspaceId)).gift).toEqual({ balance: '50.00', held: '0.00' })
         await expectBalancesToMatchLedger(workspaceId)
       }
     })
@@ -1008,7 +1008,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
       expect(await others()).toEqual(before)
       expect(await accounts(workspaceId)).toEqual({
         tariff: { balance: '30.00', held: '0.00' },
-        gift: { balance: '35.00', held: '0.00' },
+        gift: { balance: '50.00', held: '0.00' },
         pack: { balance: '10.00', held: '0.00' },
         count: 3,
       })
@@ -1136,7 +1136,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
 
       const { workspaceId, posting } = await create(false)
       expect(posting.applied).toBe(true)
-      expect((await accounts(workspaceId)).gift).toEqual({ balance: '35.00', held: '0.00' })
+      expect((await accounts(workspaceId)).gift).toEqual({ balance: '50.00', held: '0.00' })
       expect(await giftAudit([workspaceId])).toHaveLength(1)
       // Whether or not the workspace is new, the call is safe.
       expect((await create(false)).posting).toEqual({ entry: posting.entry, applied: false })
@@ -1161,7 +1161,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
       )
       expect(await accounts(workspaceId)).toMatchObject({
         tariff: { balance: '0.00', held: '0.00' },
-        gift: { balance: '35.00', held: '0.00' },
+        gift: { balance: '50.00', held: '0.00' },
       })
       await expectBalancesToMatchLedger(workspaceId)
     })
