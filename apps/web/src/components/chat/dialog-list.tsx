@@ -125,7 +125,7 @@ function DialogLink({
       ? undoText.running
       : item.undo === 'installed'
         ? undoText.installed
-        : item.answered
+        : item.answered || item.failed
           ? null
           : taskStatusListHint[item.status]
   // On the fill of the open dialog the cabinet's quiet colour falls under 4.5:1 in the dark scheme
@@ -198,6 +198,7 @@ function DialogLink({
           status={item.status}
           answered={item.answered}
           rewound={item.rewound}
+          failed={item.failed}
           onFill={current}
         />
         {hint ? (

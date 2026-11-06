@@ -29,6 +29,12 @@ export interface DialogListItem {
   answered: boolean
   /** It is `/undo` that left it so: there is no answer to speak of (`taskRewoundLabel`). */
   rewound: boolean
+  /**
+   * The last pass of the open dialog failed (`feed.failure` is its newest ending, a kept candidate
+   * included): the list says «Ошибка» and does not put it among those that wait for the client —
+   * there is nothing to confirm (owner's request of 06.11.2026). The client may still write on.
+   */
+  failed: boolean
   createdAt: Date
   updatedAt: Date
   /** null — a chat without a project (docs/plan/61-chats-first.md, §5.9). */
@@ -73,15 +79,27 @@ const ANSWERED = Prisma.sql`(t.status = 'awaiting_user'
 /** `DialogListItem.rewound` of the row `t`. */
 const REWOUND = Prisma.sql`(t.status = 'awaiting_user' AND COALESCE(${ENDING} = 'feed.rewind', false))`
 
+/**
+ * `DialogListItem.failed` of the row `t`: of the rows that end a pass — a candidate too, which a
+ * pass after a failure may bring — the newest is a failure.
+ */
+const FAILED = Prisma.sql`(t.status IN ('awaiting_user', 'awaiting_approval')
+  AND COALESCE((SELECT e.type FROM task_events e
+    WHERE e.task_id = t.id
+      AND e.type IN ('feed.result', 'feed.question', 'feed.failure', 'feed.candidate',
+        'feed.rewind', 'feed.redo')
+    ORDER BY e.id DESC LIMIT 1) = 'feed.failure', false))`
+
 /** The chat `t` waits for the client: «Ждёт вашего решения» of the list (`dialogGroups`). */
-const WAITS_FOR_CLIENT = Prisma.sql`(t.status = 'awaiting_approval'
-  OR (t.status = 'awaiting_user' AND NOT ${ANSWERED}))`
+const WAITS_FOR_CLIENT = Prisma.sql`(NOT ${FAILED} AND (t.status = 'awaiting_approval'
+  OR (t.status = 'awaiting_user' AND NOT ${ANSWERED})))`
 
 /**
  * One page of the chats of the workspaces of `userId`, the latest changed first. A page per
  * workspace, then the page of them all: `tasks_workspace_updated_idx` gives each in its order, and
  * the rest of a workspace is not read — `workspace_id IN (…)` would read every chat it has and sort
- * them for each page. `undo`, `answered` and `rewound` are asked of the rows of the page alone.
+ * them for each page. `undo`, `answered`, `rewound` and `failed` are asked of the rows of the page
+ * alone.
  */
 export function dialogPageQuery(input: {
   userId: string
@@ -107,6 +125,7 @@ export function dialogPageQuery(input: {
         FROM site_releases u WHERE u.task_id = t.id AND u.kind = 'undo') AS undo,
       ${ANSWERED} AS answered,
       ${REWOUND} AS rewound,
+      ${FAILED} AS failed,
       t.project_id, t.project_name
     FROM members m
     CROSS JOIN LATERAL (
@@ -148,6 +167,7 @@ export async function listDialogs(
       undo: 'running' | 'installed' | null
       answered: boolean
       rewound: boolean
+      failed: boolean
       created_at: Date
       updated_at: Date
       updated_us: bigint
@@ -165,6 +185,7 @@ export async function listDialogs(
       undo: row.undo,
       answered: row.answered,
       rewound: row.rewound,
+      failed: row.failed,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       project: projectOf(row),

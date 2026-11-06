@@ -49,6 +49,7 @@ function dialog(id: string, patch: Partial<DialogListItem> = {}): DialogListItem
     undo: null,
     answered: false,
     rewound: false,
+    failed: false,
     createdAt: now,
     updatedAt: now,
     project: null,
@@ -126,6 +127,20 @@ describe('the list of dialogs', () => {
     const today = await screen.findByRole('list', { name: 'Сегодня' })
     expect(plain(today.textContent)).toContain('Запрос отменён')
     expect(plain(today.textContent)).not.toContain('Агент ответил')
+    expect(screen.queryByRole('list', { name: 'Ждёт вашего решения' })).toBeNull()
+  })
+
+  // The owner, 06.11.2026: «просто помечай, что упало с ошибкой» — nothing to confirm or answer.
+  it('says «Ошибка» of a chat whose last pass failed, with no hint and not as waiting', async () => {
+    listPage.mockResolvedValue({
+      items: [dialog('4', { title: 'Про сайт', status: 'awaiting_user', failed: true })],
+      nextCursor: null,
+    })
+    showList()
+    const today = await screen.findByRole('list', { name: 'Сегодня' })
+    expect(plain(today.textContent)).toContain('Ошибка')
+    expect(plain(today.textContent)).not.toContain('Нужен ваш ответ')
+    expect(plain(today.textContent)).not.toContain('Ответьте агенту')
     expect(screen.queryByRole('list', { name: 'Ждёт вашего решения' })).toBeNull()
   })
 

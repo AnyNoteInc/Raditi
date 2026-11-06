@@ -73,6 +73,13 @@ export const taskAnsweredLabel = 'Агент ответил'
  */
 export const taskRewoundLabel = 'Запрос отменён'
 
+/**
+ * The word of an open dialog whose last pass failed (owner's request of 06.11.2026: «не вноси в
+ * ждёт вашего подтверждения… просто помечай, что упало с ошибкой»): in place of «Нужен ваш ответ»
+ * and «Ждёт вашего решения», which are for a question and a decision. The list has no hint for it.
+ */
+export const taskFailedLabel = 'Ошибка'
+
 /** The second line of a dialog in the list; null — the status has none. */
 export const taskStatusListHint: Readonly<Record<TaskStatus, string | null>> = Object.freeze({
   queued: null,
@@ -88,7 +95,10 @@ export const taskStatusListHint: Readonly<Record<TaskStatus, string | null>> = O
   cancelled: null,
 })
 
-/** Groups of the list: `awaiting` gathers `awaiting_user` and `awaiting_approval`. */
+/**
+ * Groups of the list: `awaiting` gathers `awaiting_user` and `awaiting_approval`, except a dialog
+ * the agent answered and one whose last pass failed.
+ */
 export const taskListGroupLabel = Object.freeze({
   awaiting: 'Ждёт вашего решения',
   today: 'Сегодня',

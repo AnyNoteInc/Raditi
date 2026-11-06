@@ -75,6 +75,50 @@ const components: Components = {
   ),
 }
 
+const TREE_LINE = /[├└│]/
+const FENCE = /^\s*(`{3,}|~{3,})/
+
+/**
+ * A tree of folders drawn with lines (`├──`, `└──`, `│`) is code: in a paragraph Markdown joins
+ * its lines and drops their indent (06.11.2026: a tree of the project came as one paragraph). A run
+ * of lines with two branches or more is fenced — with the line right before it, the root, when it
+ * is a name and not a sentence. Text in a fence stays.
+ */
+export function fenceTextTrees(text: string): string {
+  const lines = text.split('\n')
+  const out: string[] = []
+  let fenced = false
+  for (let i = 0; i < lines.length;) {
+    const line = lines[i]!
+    if (FENCE.test(line)) fenced = !fenced
+    if (fenced || !TREE_LINE.test(line)) {
+      out.push(line)
+      i++
+      continue
+    }
+    let end = i
+    while (end < lines.length && TREE_LINE.test(lines[end]!) && !FENCE.test(lines[end]!)) end++
+    const run = lines.slice(i, end)
+    if (run.filter((entry) => /[├└]/.test(entry)).length < 2) {
+      out.push(...run)
+      i = end
+      continue
+    }
+    const root = out.at(-1)
+    // The root is a name, not the sentence that says what follows («Вот структура:»).
+    const withRoot =
+      root !== undefined &&
+      root.trim() !== '' &&
+      root.length <= 120 &&
+      !/^\s*[-*+>#|]/.test(root) &&
+      !/[:.!?]\s*$/.test(root)
+    if (withRoot) out.pop()
+    out.push('```', ...(withRoot ? [root] : []), ...run, '```')
+    i = end
+  }
+  return out.join('\n')
+}
+
 export function AgentMarkdown({ text }: { text: string }) {
   return (
     <Box
@@ -86,6 +130,8 @@ export function AgentMarkdown({ text }: { text: string }) {
         '& > :first-of-type': { mt: 0 },
         '& > :last-child': { mb: 0 },
         '& p, & ul, & ol, & pre, & blockquote, & table': { my: 1.5 },
+        // A line break of the agent stays one, as in a chat: Markdown would join the lines.
+        '& p, & li': { whiteSpace: 'pre-line' },
         '& ul, & ol': { pl: 3 },
         '& li + li': { mt: 0.5 },
         '& li > p': { my: 0.5 },
@@ -120,7 +166,7 @@ export function AgentMarkdown({ text }: { text: string }) {
       }}
     >
       <Markdown remarkPlugins={[remarkGfm]} components={components} urlTransform={linkUrl} skipHtml>
-        {text}
+        {fenceTextTrees(text)}
       </Markdown>
     </Box>
   )

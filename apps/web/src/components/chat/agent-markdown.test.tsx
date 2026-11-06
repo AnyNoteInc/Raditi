@@ -2,7 +2,7 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
-import { AgentMarkdown, hiddenHost, linkUrl } from './agent-markdown'
+import { AgentMarkdown, fenceTextTrees, hiddenHost, linkUrl } from './agent-markdown'
 
 describe('the agent’s words as Markdown', () => {
   it('draws emphasis, lists and code, and drops raw HTML', () => {
@@ -18,6 +18,41 @@ describe('the agent’s words as Markdown', () => {
     expect(container.querySelector('code')?.textContent).toBe('wp_head')
     expect(container.querySelector('script')).toBeNull()
     expect(container.querySelector('b')).toBeNull()
+  })
+
+  // 06.11.2026: the tree of a project came as one paragraph — its lines joined, its indent lost.
+  it('draws a tree of folders as code, with its root and its indent', () => {
+    const tree = [
+      'Вот структура:',
+      '',
+      'репозиторий сайта/',
+      '└── wp-content/',
+      '    ├── mu-plugins/',
+      '    │   └── site-favicon.php',
+      '    └── themes/',
+      '',
+      'Если нужно, раскрою.',
+    ].join('\n')
+    const { container } = render(<AgentMarkdown text={tree} />)
+    expect(container.querySelector('pre code')?.textContent).toBe(
+      'репозиторий сайта/\n└── wp-content/\n    ├── mu-plugins/\n    │   └── site-favicon.php\n    └── themes/\n',
+    )
+    expect([...container.querySelectorAll('p')].map((p) => p.textContent)).toEqual([
+      'Вот структура:',
+      'Если нужно, раскрою.',
+    ])
+  })
+
+  it('fences no lone line, no sentence before a tree and nothing already fenced', () => {
+    expect(fenceTextTrees('Итог │ всё')).toBe('Итог │ всё')
+    expect(fenceTextTrees('Вот так:\n├── a\n└── b')).toBe('Вот так:\n```\n├── a\n└── b\n```')
+    const fenced = '```\nroot/\n├── a\n└── b\n```'
+    expect(fenceTextTrees(fenced)).toBe(fenced)
+  })
+
+  it('keeps a line break of the agent inside a paragraph', () => {
+    const { container } = render(<AgentMarkdown text={'Первая строка\nвторая строка'} />)
+    expect(container.querySelector('p')?.textContent).toBe('Первая строка\nвторая строка')
   })
 
   it('loads no picture and keeps only absolute http(s) and mailto links', () => {

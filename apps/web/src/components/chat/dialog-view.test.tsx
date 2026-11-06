@@ -1263,7 +1263,9 @@ describe('a dialog', () => {
     expect(
       screen.getAllByRole('status').some((node) => node.textContent?.includes('Агент ответил')),
     ).toBe(false)
-    expect(screen.getAllByText('Нужен ваш ответ').length).toBeGreaterThan(0)
+    // Nothing to confirm or answer (06.11.2026): the status of a failure is «Ошибка».
+    expect(screen.queryByText('Нужен ваш ответ')).toBeNull()
+    expect(screen.getAllByText('Ошибка').length).toBeGreaterThan(0)
   })
 
   it('offers «Продолжить» on the question about credits and keeps the field open (28.10.2026)', async () => {

@@ -34,6 +34,11 @@ export interface AttachmentItem {
   attachmentId: string | null
   /** Why it failed, as a sentence. */
   error: string | null
+  /**
+   * A picture of the file on this page (`blob:`), for an image the field may take: its chip shows
+   * it, and a press opens it (owner's request of 06.11.2026). null — not an image, or no page URL.
+   */
+  preview: string | null
 }
 
 type Action =
@@ -77,6 +82,15 @@ export interface AttachmentsControl {
 let counter = 0
 const nextKey = () => `file-${++counter}`
 
+/** A `blob:` address of the file on this page; null where the page cannot make one. */
+function pictureOf(file: File): string | null {
+  try {
+    return URL.createObjectURL(file)
+  } catch {
+    return null
+  }
+}
+
 /**
  * The files of one message for a site; null — of a chat without a project. `upload` sends the
  * bytes (an XMLHttpRequest by default).
@@ -92,6 +106,8 @@ export function useAttachments(
     null,
   )
   const files = useRef(new Map<string, File>())
+  // The pictures of the chips: each is let go with its file, and all of them with the page.
+  const previews = useRef(new Map<string, string>())
   const controllers = useRef(new Map<string, AbortController>())
   // The server's id of each file, as soon as it is announced: what removing it must forget.
   const announced = useRef(new Map<string, string>())
@@ -109,10 +125,20 @@ export function useAttachments(
   useEffect(() => {
     alive.current = true
     const running = controllers.current
+    const pictures = previews.current
     return () => {
       alive.current = false
       for (const controller of running.values()) controller.abort()
+      for (const url of pictures.values()) URL.revokeObjectURL(url)
+      pictures.clear()
     }
+  }, [])
+
+  const letGo = useCallback((key: string) => {
+    const url = previews.current.get(key)
+    if (url === undefined) return
+    URL.revokeObjectURL(url)
+    previews.current.delete(key)
   }, [])
 
   const forget = useCallback(
@@ -192,16 +218,20 @@ export function useAttachments(
       for (const file of list.slice(0, Math.max(0, room))) {
         const key = nextKey()
         const refusal = localRefusal(file)
+        const kind = attachmentTypeByName(file.name)?.kind ?? 'document'
         files.current.set(key, file)
+        const preview = kind === 'image' && refusal === null ? pictureOf(file) : null
+        if (preview !== null) previews.current.set(key, preview)
         added.push({
           key,
           name: file.name,
           size: file.size,
-          kind: attachmentTypeByName(file.name)?.kind ?? 'document',
+          kind,
           state: refusal === null ? 'queued' : 'failed',
           progress: 0,
           attachmentId: null,
           error: refusal === null ? null : localRefusalText(refusal),
+          preview,
         })
       }
       if (added.length === 0) return
@@ -231,20 +261,22 @@ export function useAttachments(
     (key: string) => {
       controllers.current.get(key)?.abort()
       files.current.delete(key)
+      letGo(key)
       dispatch({ type: 'remove', key })
       forget(announced.current.get(key) ?? null)
       announced.current.delete(key)
     },
-    [forget],
+    [forget, letGo],
   )
 
   const clear = useCallback(() => {
+    for (const key of previews.current.keys()) letGo(key)
     files.current.clear()
     announced.current.clear()
     queue.current = []
     dispatch({ type: 'clear' })
     setNotice(null)
-  }, [])
+  }, [letGo])
 
   return useMemo(
     () => ({

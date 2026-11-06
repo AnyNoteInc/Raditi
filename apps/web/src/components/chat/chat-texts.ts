@@ -405,6 +405,9 @@ export const attachmentText = Object.freeze({
   retryNamed: (name: string) => `Повторить загрузку ${name}`,
   removeNamed: (name: string) => `Убрать ${name}`,
   cancelNamed: (name: string) => `Отменить загрузку ${name}`,
+  /** The picture of a chosen photo: a press opens it, before the message is sent (06.11.2026). */
+  openNamed: (name: string) => `Открыть фото ${name}`,
+  close: 'Закрыть',
   /** The send button waits for the files. */
   wait: 'Дождитесь загрузки файлов',
   /** A file failed: the message waits until it is sent again or taken out. */

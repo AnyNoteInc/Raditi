@@ -10,6 +10,7 @@ import {
   feedStateText,
   feedVersionText,
   taskAnsweredLabel,
+  taskFailedLabel,
   taskRewoundLabel,
   taskStatusLabel,
 } from '@repo/domain/tasks/client-feed-labels'
@@ -651,6 +652,9 @@ export function DialogView({
     status === 'awaiting_user' && question === null && ending?.type !== 'feed.failure'
   // `/undo` leaves the dialog open as an answer does, and takes that answer back.
   const rewound = answered && ending?.type === 'feed.rewind'
+  // A failure that left the dialog open asks nothing to confirm (06.11.2026): it reads «Ошибка».
+  const openFailure =
+    status === 'awaiting_user' && question === null && ending?.type === 'feed.failure'
   const announcement =
     status === undefined
       ? ''
@@ -660,7 +664,9 @@ export function DialogView({
           ? taskRewoundLabel
           : answered
             ? taskAnsweredLabel
-            : taskStatusLabel[status]
+            : openFailure
+              ? taskFailedLabel
+              : taskStatusLabel[status]
 
   /** The focus goes to the tab of a tool: what moved it is gone or behind. */
   function focusSoon(id: string) {

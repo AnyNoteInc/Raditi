@@ -1033,10 +1033,15 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       )
       expect(await activeHolds(taskId)).toEqual([])
       const listed = (await caller.task.list({ folder: site.id })).items
+      // A failure asks nothing to confirm (06.11.2026): «Ошибка», and the folder is not lit.
       expect(listed.find((item) => item.id === taskId)).toMatchObject({
         status: 'awaiting_user',
         answered: false,
+        failed: true,
       })
+      expect(
+        (await caller.task.folders({})).folders.find((folder) => folder.project?.id === site.id),
+      ).toMatchObject({ attention: false })
 
       const posted = await caller.task.message({
         taskId,
