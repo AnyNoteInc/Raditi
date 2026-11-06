@@ -353,6 +353,17 @@ describe('the release dialog', () => {
     expect(plain(dialog().textContent)).toContain('Изменения есть, но подсчитать их не получилось.')
     expect(within(dialog()).queryByRole('blockquote')).toBeNull()
   })
+
+  // docs/plan/61-chats-first.md, §5.14: without words of the agent the window tells its own facts
+  // and leaves the section of the agent out, with no empty heading.
+  it('tells its own facts without a section of the agent when no words stand', async () => {
+    showDialog(null)
+    await releaseButton('1.4.0')
+    const text = plain(dialog().textContent)
+    expect(text).not.toContain('Что сделал агент')
+    expect(within(dialog()).queryByRole('blockquote')).toBeNull()
+    expect(within(dialog()).getAllByRole('listitem').length).toBeGreaterThan(0)
+  })
 })
 
 describe('releaseFacts', () => {

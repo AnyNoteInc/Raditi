@@ -16,7 +16,12 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 
 import type { CandidateRebase as CandidateRebaseAnswer } from '../git-workspace/git-workspace.service.ts'
 import { sampleDriverId } from '../testing/ids.ts'
-import type { CandidateBuild, CandidateBuilder, CandidateContext } from './candidate-builder.ts'
+import {
+  answersAgentCommand,
+  type CandidateBuild,
+  type CandidateBuilder,
+  type CandidateContext,
+} from './candidate-builder.ts'
 import type { CandidateGit } from './candidate-git.ts'
 import { CANDIDATE_REBASE_EVENT, CandidateRebase } from './candidate-rebase.ts'
 
@@ -527,6 +532,81 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
       expect(await said(dialog.taskId)).toEqual([
         [1, 1],
         [2, 3],
+      ])
+    })
+
+    // `#emptied` with «Продолжить» queued: the site holds the change, and the pass goes on from the
+    // carrier `#emptied` records — a new session with nothing to shorten. Its result is an
+    // ordinary one by the rule core reads (`answersAgentCommand`), not the answer of `/compact`.
+    it('says the words of the pass that went on after «Обновить» found the change on the site', async () => {
+      const dialog = await waiting()
+      await candidateRow(dialog, 1, 1)
+      await agentCommand(dialog, 'compact')
+      const ceiling = await insertFeedEvent(db, {
+        taskId: dialog.taskId,
+        row: {
+          type: 'feed.question',
+          payload: { v: 1, kind: 'ceiling', turn: 1, reason: 'step', spent: 18, held: 20, left: 2 },
+        },
+      })
+      await insertFeedEvent(db, {
+        taskId: dialog.taskId,
+        row: {
+          type: 'feed.request',
+          payload: {
+            v: 1,
+            kind: 'continue',
+            authorId: dialog.userId,
+            requestId: randomUUID(),
+            questionEventId: ceiling.toString(),
+          },
+        },
+      })
+      const emptied = setup({
+        build: async () => {
+          await db.task.update({ where: { id: dialog.taskId }, data: { status: 'queued' } })
+          return EMPTY
+        },
+      })
+
+      expect(await emptied.rebase.run(await update(dialog))).toBe('emptied')
+
+      expect(await revisions(dialog.taskId)).toEqual([
+        [1, 'superseded', BASE, HEAD],
+        [2, 'superseded', MAIN, REBASED],
+      ])
+      expect(await told(dialog.taskId)).toEqual([{ v: 1, outcome: 'emptied', conflicts: 0 }])
+
+      // The pass: turn 2 on the carrier, its candidate before its result, as a pass writes them.
+      await db.taskTurn.create({
+        data: {
+          taskId: dialog.taskId,
+          turnNo: 2,
+          status: 'completed',
+          driverId: sampleDriverId,
+          image,
+          headSha: 'd'.repeat(40),
+        },
+      })
+      await db.$transaction((tx) =>
+        recordCandidate(tx, { ...record(dialog.taskId, 3, MAIN, 'd'.repeat(40)), turnNo: 2 }),
+      )
+      await candidateRow(dialog, 3, 2)
+      await resultRow(dialog, 2)
+      await db.task.update({
+        where: { id: dialog.taskId },
+        data: { status: 'awaiting_approval', turnNo: 2 },
+      })
+
+      expect(await answersAgentCommand(db, dialog.taskId, 2)).toBe(false)
+
+      const later = setup({ branch: 'd'.repeat(40), main: 'f'.repeat(40) })
+      expect(await later.rebase.run(await update(dialog))).toBe('rebased')
+
+      expect(await said(dialog.taskId)).toEqual([
+        [1, 1],
+        [3, 2],
+        [4, 2],
       ])
     })
 

@@ -12,8 +12,11 @@ const hasWords = (row: Row): boolean =>
  * result after it. A press of the same work (`retry`, «Продолжить»), a failure and a question end
  * none of it. Words after `/compact` do: the planner gives a pass an action only while no words wait
  * (`actionOf`), so the turn they get is an ordinary one, and so does «Обновить» that moved the
- * candidate — a `feed.candidate` after its press, a press that moved nothing leaves `feed.update`:
- * the next pass is a new session on the new head (`startOf`), with nothing to shorten. Words after
+ * candidate — a `feed.candidate` after its press, or a `feed.update` of the outcome `emptied`: the
+ * site holds the change, and a pass queued meanwhile goes on from the revision that carries the
+ * pushed head (`#emptied` in `candidate-rebase.ts`). Either way the next pass is a new session on
+ * the new head (`startOf`), with nothing to shorten. A press that moved nothing (any other
+ * `feed.update`) leaves the session to the compaction. Words after
  * `/init` on a session that lives go on with it, for its prompt carries the command again
  * (`promptOf`); a new session tells only the client's words, and the feed cannot tell the two
  * apart, so the result counts as the answer.
@@ -39,6 +42,7 @@ export function agentCommandAnswerIds(
     } else if (row.type === 'feed.request' && row.kind === 'command') {
       if (row.command === 'update') updating = true
     } else if (row.type === 'feed.update') {
+      if (updating && row.outcome === 'emptied') asked = false
       updating = false
     } else if (row.type === 'feed.candidate' && updating) {
       asked = false

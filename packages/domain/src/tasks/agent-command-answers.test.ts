@@ -76,11 +76,19 @@ const candidate = (id: string, turn: number, revision: number): Row => ({
   media: 0,
   records: 0,
 })
-const updated = (id: string): Row => ({
+const updated = (id: string, outcome: 'conflict' | 'emptied' = 'conflict'): Row => ({
   id,
   type: 'feed.update',
-  outcome: 'conflict',
-  conflicts: 1,
+  outcome,
+  conflicts: outcome === 'conflict' ? 1 : 0,
+})
+const continued = (id: string): Row => ({
+  id,
+  type: 'feed.request',
+  kind: 'continue',
+  authorId,
+  requestId,
+  questionEventId: '2',
 })
 
 // docs/plan/61-chats-first.md, §5.14: the rule of the page and of «Обновить» in core.
@@ -125,6 +133,22 @@ describe('agentCommandAnswerIds', () => {
       result('5', 2),
     ]
     expect([...agentCommandAnswerIds(rows, 'compact')]).toEqual(['5'])
+  })
+
+  // `#emptied`: the site holds the change, and the pass «Продолжить» queued goes on from the
+  // revision that carries the pushed head — a new session, as after a moved candidate.
+  it('lets «Обновить» that found the change on the site take a waiting `/compact` away', () => {
+    const rows = [
+      command('1', 'compact'),
+      question('2'),
+      continued('3'),
+      press('4', 'update'),
+      updated('5', 'emptied'),
+      result('6', 2),
+    ]
+    expect([...agentCommandAnswerIds(rows, 'compact')]).toEqual([])
+    // `/init` is told by the prompt of a new session as well.
+    expect([...agentCommandAnswerIds(rows.with(0, command('1', 'init')), 'init')]).toEqual(['6'])
   })
 
   // The candidate of a pass comes before its result: the compaction's answer stays its answer.

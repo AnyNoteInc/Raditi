@@ -338,8 +338,9 @@ describe('the candidate of the dialog', () => {
         agentCommandRow('4', 'compact'),
         resultRow('5', 2, 'Готово: переписка сжата.'),
       ]
-      // «Обновить» named the compaction, and a question left the next candidate without words.
-      expect(messageOf([...compacted, candidateRow('6', 2, 2)])).toBe('Поменял цвет шапки.')
+      // A row written before «Обновить» kept the turn of the words names the compaction: in doubt,
+      // no words. A question left the next candidate without words of its own turn.
+      expect(messageOf([...compacted, candidateRow('6', 2, 2)])).toBeNull()
       expect(messageOf([...compacted, candidateRow('6', 3, 2)])).toBe('Поменял цвет шапки.')
     })
 
@@ -361,8 +362,44 @@ describe('the candidate of the dialog', () => {
       )
     })
 
+    // «Обновить» found the change on the site while «Продолжить» was queued: the pass goes on from
+    // the carrier in a new session, with nothing to shorten, and its result is an ordinary one.
+    it('takes the words of the pass after «Обновить» found the change on the site', () => {
+      const continued: FeedRow = {
+        id: '6',
+        at: '2026-10-17T09:45:00.000Z',
+        type: 'feed.request',
+        kind: 'continue',
+        authorId: AUTHOR_ID,
+        requestId: REQUEST_ID,
+        questionEventId: '5',
+      }
+      const emptied: FeedRow = {
+        id: '8',
+        at: '2026-10-17T09:50:00.000Z',
+        type: 'feed.update',
+        outcome: 'emptied',
+        conflicts: 0,
+      }
+      const rows = [
+        resultRow('2', 1, 'Поменял цвет шапки.'),
+        candidateRow('3', 1),
+        agentCommandRow('4', 'compact'),
+        ceilingRow('5', 1),
+        continued,
+        commandRow('7', 'update'),
+        emptied,
+        candidateRow('9', 2, 3),
+        resultRow('10', 2, 'Добавил баннер.'),
+      ]
+      const carried = rows.find((row) => row.id === '9')
+      expect(candidateMessage(rows, carried as Parameters<typeof candidateMessage>[1])).toBe(
+        'Добавил баннер.',
+      )
+    })
+
     // К31: the answer of `/init` describes the code, not the changes; «Обновить» after it names
-    // the turn of the candidate's words, and a row that named `/init` itself says nothing either.
+    // the turn of the candidate's words. A row that named `/init` itself takes no other words.
     it('never takes the answer of `/init` for the words about the changes', () => {
       const studied = [
         resultRow('2', 1, 'Поменял цвет шапки.'),
@@ -371,7 +408,25 @@ describe('the candidate of the dialog', () => {
         resultRow('5', 2, 'Тема сайта лежит в папке shop.'),
       ]
       expect(messageOf([...studied, candidateRow('6', 1, 2)])).toBe('Поменял цвет шапки.')
-      expect(messageOf([...studied, candidateRow('6', 2, 2)])).toBe('Поменял цвет шапки.')
+      expect(messageOf([...studied, candidateRow('6', 2, 2)])).toBeNull()
+    })
+
+    // `/init` on a new session after «Обновить» failed, then the client's words got a turn of their
+    // own: the feed reads its result as the answer of `/init` (`promptOf` would carry the command
+    // on a session that lives). The words of turn 1 are those of another request: none are shown.
+    it('takes no words of another request when the turn of the candidate reads as `/init`', () => {
+      const rows = [
+        resultRow('2', 1, 'Поменял цвет шапки.'),
+        candidateRow('3', 1),
+        commandRow('4', 'update'),
+        candidateRow('5', 1, 2),
+        agentCommandRow('6', 'init'),
+        failureRow('7', 2),
+        requestRow('8', 'Теперь добавьте баннер'),
+        candidateRow('9', 3, 3),
+        resultRow('10', 3, 'Добавил баннер.'),
+      ]
+      expect(candidateMessage(rows, rows[7] as Parameters<typeof candidateMessage>[1])).toBeNull()
     })
 
     it('holds a turn undone though a later `/redo` brought another back', () => {

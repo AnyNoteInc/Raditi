@@ -226,7 +226,11 @@ export function liveCandidateRow(
  * a fact about the site. The feed keeps the result of an undone turn, and the changes it told of
  * are in no candidate (docs/plan/61-chats-first.md, §5.14): only `/redo` of that turn counts it.
  * What a command of the agent answered says nothing of the changes either: a compaction answers in
- * the platform's line, `/init` describes the code.
+ * the platform's line, `/init` describes the code. When the result of the candidate's own turn is
+ * read as such an answer, no earlier words stand in for it: the feed cannot tell a turn that
+ * answered the command from one that answered the client's words after it — in that doubt there
+ * are none (null). A turn of the candidate without a result of its own (a question of the agent)
+ * still takes the last result before the candidate's row, as before (§9, known limitations).
  */
 export function candidateMessage(
   rows: readonly FeedRow[],
@@ -239,15 +243,16 @@ export function candidateMessage(
     if (row.type === 'feed.redo') undone.delete(row.turn)
   }
   const commands = agentCommandAnswers(rows)
-  const stands = (row: FeedRow): row is ResultRow =>
-    row.type === 'feed.result' && !undone.has(row.turn) && !commands.has(row.id)
+  const said = (row: FeedRow): row is ResultRow =>
+    row.type === 'feed.result' && !undone.has(row.turn)
+  const ownTurn = rows.filter((row): row is ResultRow => said(row) && row.turn === candidate.turn)
+  if (ownTurn.some((row) => commands.has(row.id))) return null
   let found: ResultRow | null = null
   for (const row of rows) {
     if (row.id === candidate.id) break
-    if (stands(row)) found = row
+    if (said(row) && !commands.has(row.id)) found = row
   }
-  const sameTurn = rows.find((row): row is ResultRow => stands(row) && row.turn === candidate.turn)
-  return (sameTurn ?? found)?.message ?? null
+  return (ownTurn[0] ?? found)?.message ?? null
 }
 
 /** `/redo` of the press `pressId` was recorded: the turn is back (§5.14). */
