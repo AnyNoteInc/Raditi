@@ -42,6 +42,7 @@
 | [modx.md](modx.md) | MODX Revolution 2.8 и 3.x: сведения для адаптера стека |
 | [opencart.md](opencart.md) | OpenCart 2.3, 3.x, 4.x, ocStore, OPENCART.PRO: сведения для адаптера стека |
 | [base-images.md](base-images.md) | Базовые образы предпросмотра: основа, расширения, замеры прототипа |
+| [e15-site-image-snapshot/](e15-site-image-snapshot/) | Снимок образа `site` PHP 8.3 до и после смены основы WordPress на `php-base` (срез Э1.5, 06.11.2026, arm64): `old/`, `new/`, `diff.txt`; имя контейнера в строке `System` заменено на `<container>`; разбор — план 62, §10 |
 
 ### map/
 

@@ -6,20 +6,26 @@
 | --- | --- | --- |
 | `tools` | `PREVIEW_FORWARDER_IMAGE` | Node 26.10 и tini; `forward.mjs` — пересыльщик браузера агента (шлюз входа — тот же скрипт в образе `site`), `files.mjs` — запись дерева в том docroot; метка срока предпросмотра |
 | `browser` | `PREVIEW_BROWSER_IMAGE` | Chromium образа Playwright 1.63.0, `playwright-core` 1.63.0 из `browser/package-lock.json` (`npm ci`, без скриптов установки), `browser-server.mjs` |
-| `site` | `PREVIEW_SITE_IMAGES` (по версии PHP) | Предпросмотр одним контейнером ([план 58](../../docs/plan/58-preview-single-container.md), §10): PHP и Apache образа `BASE` (WordPress одной версии PHP по digest), MariaDB 11.8.9, WP-CLI 2.12.0, Node 26.10 из цели `tools`, tini; `init.sh`, `run-as.sh`, `forward.mjs`, `dns.mjs` |
+| `site` | `PREVIEW_SITE_IMAGES` (по версии PHP) | Предпросмотр одним контейнером ([план 58](../../docs/plan/58-preview-single-container.md), §10): PHP и Apache стадии `php-base` — официального образа `php:<x.y>-apache` одной из восьми версий PHP 7.3–8.5 по digest ([план 62](../../docs/plan/62-site-stacks.md), Т19, Т22), MariaDB 11.8.9, WP-CLI 2.12.0, Node 26.10 из цели `tools`, tini; `init.sh`, `run-as.sh`, `forward.mjs`, `dns.mjs` |
 
-Образ `site` собирается на версию PHP: `--build-arg BASE=wordpress@sha256:…` (по умолчанию — PHP 8.3, тот же digest, что в `.env.example`):
+Образ `site` без аргументов сборки — PHP 8.3 на основе `php:8.3-apache`:
+
+```sh
+docker build -f infra/preview/Dockerfile --target site -t "raditi-preview-site:8.3-local" infra/preview
+```
+
+Сборка на другую версию берёт строку `site-bases.json`; её ведёт стенд:
+
+```sh
+pnpm verify:site-images --only 7.4   # собирает, проверяет, печатает строку PREVIEW_SITE_IMAGES
+```
+
+Путь назад — только PHP 8.3: `--build-arg BASE=wordpress@sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5` (до плана 62 основой `site` был образ WordPress; откат — план 62, Э1.5).
+
+Стадия `php-base` ([план 62](../../docs/plan/62-site-stacks.md), Т19, Т21) — основа, общая для всех стеков: официальный образ `php:<x.y>-apache` одной версии PHP по digest индекса (amd64 и arm64 — одна строка), восемь версий 7.3–8.5 в `site-bases.json`. В ней 26 расширений через `install-php-extensions` (выпуск и sha256 закреплены, версии PECL — строка `pecl` этой версии), ionCube Loader на всех версиях, кроме 8.0, вместе с его `LICENSE.txt` (архив производителя по sha256 своей архитектуры), `ghostscript`, на trixie — `libheif`, модули Apache `rewrite`, `expires`, `remoteip`, `headers` без `status`, `preview-php.ini` (журнал ошибок и OPcache, как в образе WordPress, `display_errors=Off`) и `no-sendmail`: письмо `mail()` дочитывается и пропадает. Установщик и архив ionCube в образ не попадают — они только смонтированы в шаг сборки. О стеках в образе ничего нет: их различия идут в рецепте. Цель `site` стоит на этой стадии по умолчанию (`BASE=php-base`). Строка `site-bases.json` даёт остальные аргументы:
 
 ```sh
 docker build -f infra/preview/Dockerfile --target site \
-  --build-arg BASE=wordpress@sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5 \
-  -t "raditi-preview-site:8.3-local" infra/preview
-```
-
-Стадия `php-base` ([план 62](../../docs/plan/62-site-stacks.md), Т19, Т21) — основа, общая для всех стеков: официальный образ `php:<x.y>-apache` одной версии PHP по digest индекса (amd64 и arm64 — одна строка), восемь версий 7.3–8.5 в `site-bases.json`. В ней 26 расширений через `install-php-extensions` (выпуск и sha256 закреплены, версии PECL — строка `pecl` этой версии), ionCube Loader на всех версиях, кроме 8.0, вместе с его `LICENSE.txt` (архив производителя по sha256 своей архитектуры), `ghostscript`, на trixie — `libheif`, модули Apache `rewrite`, `expires`, `remoteip`, `headers` без `status`, `preview-php.ini` (журнал ошибок и OPcache, как в образе WordPress, `display_errors=Off`) и `no-sendmail`: письмо `mail()` дочитывается и пропадает. Установщик и архив ionCube в образ не попадают — они только смонтированы в шаг сборки. О стеках в образе ничего нет: их различия идут в рецепте. Цель `site` встаёт на эту стадию значением `--build-arg BASE=php-base`; без него сборка идёт прежним путём и стадии `php-base` не трогает. Строка `site-bases.json` даёт остальные аргументы:
-
-```sh
-docker build -f infra/preview/Dockerfile --target site --build-arg BASE=php-base \
   --build-arg PHP_BASE=php@sha256:… --build-arg PHP_PECL_PINS="<pecl строки через пробел>" \
   --build-arg PHP_EXTENSIONS_SKIP="<without строки через пробел>" -t "raditi-site-verify:<версия>" infra/preview
 ```

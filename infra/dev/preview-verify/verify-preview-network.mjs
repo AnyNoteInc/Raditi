@@ -24,9 +24,6 @@ import { createDockerPreviewRuntime } from '../../../packages/sandbox-providers/
 import { previewBridge } from '../../../packages/sandbox-providers/src/preview/resources.ts'
 import { NODE_PROBE, PHP_PROBE, passed, table, ustar, verdict } from './probes.mjs'
 
-/** The base of the site image (infra/preview/Dockerfile, `BASE`): wordpress:7.1.2-php8.3-apache. */
-const WORDPRESS =
-  'wordpress@sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5'
 const images = {}
 const repository = fileURLToPath(new URL('../../../', import.meta.url))
 const run = randomBytes(4).toString('hex')
@@ -102,7 +99,9 @@ async function build(target, buildArgs = [], version = 'local') {
         tag,
         'infra/preview',
       ],
-      { timeoutMs: 900_000 },
+      // The site image compiles its PHP extensions, 6–9 minutes on an empty cache: 30 minutes
+      // leave room for a slow machine.
+      { timeoutMs: 1_800_000 },
     ).catch(() => {
       throw new Error(`docker build of the ${target} image failed (run from ${repository})`)
     })
@@ -260,11 +259,9 @@ const PUBLIC = { address: '1.1.1.1', port: 443 }
 async function main() {
   process.chdir(repository)
   stage = 'images'
-  if ((await docker(['image', 'inspect', WORDPRESS], { allowFailure: true })).code !== 0)
-    throw new Error('The pinned WordPress image is missing; docker pull it first (README)')
   images.tools = await build('tools')
   images.browser = await build('browser')
-  images.site = await build('site', ['--build-arg', `BASE=${WORDPRESS}`], '8.3-local')
+  images.site = await build('site', [], '8.3-local')
   images.guard = await buildGuard()
 
   // The control: the default bridge, like any trusted platform container. It also tells where

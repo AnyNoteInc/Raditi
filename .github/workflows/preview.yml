@@ -114,8 +114,9 @@ jobs:
           sudo systemctl restart docker
           docker info --format '{{.DriverStatus}}' | grep -q io.containerd.snapshotter
           test "$(docker version --format '{{.Server.Version}}')" = "$SANDBOX_DOCKER_VERSION"
-      # By tag, as the suites of the recipe and the copier name them: the base of the site image,
-      # the WP-CLI of the recipe's suite, the temporary database of a dump and the second server of
+      # By tag, as the suites of the recipe and the copier name them: the WordPress the suites of
+      # the recipe and the plugin run on (the site image stands on php-base, built below), the
+      # WP-CLI of the recipe's suite, the temporary database of a dump and the second server of
       # the plugin's suite.
       - name: Pull the public images of previews
         run: |

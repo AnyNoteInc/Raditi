@@ -3,9 +3,9 @@
 # The runtime pins each by digest (PREVIEW_FORWARDER_IMAGE, PREVIEW_BROWSER_IMAGE,
 # PREVIEW_SITE_IMAGES); README.md.
 
-# The base of the `site` target: the image of WordPress until docs/plan/62 moves it over;
-# `php-base` — the stage below, on the official image of one PHP version.
-ARG BASE=wordpress@sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5
+# The base of the `site` target: `php-base`, the stage below. The way back, PHP 8.3 only:
+# BASE=wordpress@sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5.
+ARG BASE=php-base
 # The official image of one PHP version, by the digest of its index: amd64 and arm64 alike.
 # site-bases.json lists them; the default is PHP 8.3.
 ARG PHP_BASE=php@sha256:df17bb6139ae1667c9d9c042a4f0bf9e4e3767e0a940fadc7b17727e6e55c418

@@ -1,0 +1,33 @@
+## /usr/local/etc/php/conf.d/docker-php-ext-bcmath.ini
+extension=bcmath
+## /usr/local/etc/php/conf.d/docker-php-ext-exif.ini
+extension=exif
+## /usr/local/etc/php/conf.d/docker-php-ext-gd.ini
+extension=gd
+## /usr/local/etc/php/conf.d/docker-php-ext-imagick.ini
+extension=imagick
+## /usr/local/etc/php/conf.d/docker-php-ext-intl.ini
+extension=intl
+## /usr/local/etc/php/conf.d/docker-php-ext-mysqli.ini
+extension=mysqli
+## /usr/local/etc/php/conf.d/docker-php-ext-opcache.ini
+zend_extension=opcache
+## /usr/local/etc/php/conf.d/docker-php-ext-sodium.ini
+extension=sodium
+## /usr/local/etc/php/conf.d/docker-php-ext-zip.ini
+extension=zip
+## /usr/local/etc/php/conf.d/error-logging.ini
+error_reporting = E_ERROR | E_WARNING | E_PARSE | E_CORE_ERROR | E_CORE_WARNING | E_COMPILE_ERROR | E_COMPILE_WARNING | E_RECOVERABLE_ERROR
+display_errors = Off
+display_startup_errors = Off
+log_errors = On
+error_log = /dev/stderr
+log_errors_max_len = 1024
+ignore_repeated_errors = On
+ignore_repeated_source = Off
+html_errors = Off
+## /usr/local/etc/php/conf.d/opcache-recommended.ini
+opcache.memory_consumption=128
+opcache.interned_strings_buffer=8
+opcache.max_accelerated_files=4000
+opcache.revalidate_freq=2

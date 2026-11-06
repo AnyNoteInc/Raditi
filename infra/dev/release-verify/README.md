@@ -63,12 +63,14 @@ rm -rf "$TMPDIR"/raditi-release-verify-run-<run>-*
 
 ## Что нужно
 
-Docker Desktop с хранилищем образов containerd (ссылки на собранные образы — по digest), Node 26.10, pnpm, `git`, `rsync`, `openssl` и уже загруженные образы (стенд ничего не тянет):
+Docker Desktop с хранилищем образов containerd (ссылки на собранные образы — по digest), Node 26.10, pnpm, `git`, `rsync`, `openssl` и уже загруженные образы (стенд ничего не тянет — кроме того, что берёт сборка образа `site`: при пустом кеше она идёт 6–9 минут и берёт основу `php`, пакеты apt, PECL, установщик расширений и архив ionCube, [план 62](../../../docs/plan/62-site-stacks.md), Т19, Т22):
 
 ```sh
 docker pull wordpress:7.1.2-php8.3-apache && docker pull mariadb:11.4.13 && docker pull wordpress:cli-php8.3
 docker pull chrislusf/seaweedfs:4.47
 ```
+
+Образ `wordpress` основой предпросмотра больше не служит, но остаётся: на нём стоит синтетический прод.
 
 а также образы других стендов: `postgres:17.11-alpine3.24`, `redis:8.10.2-alpine`, `ghcr.io/openbao/openbao:2.7.0`, `gitea/gitea:1.27.3-rootless`, `gitea/runner:4.0.0`, `linuxserver/openssh-server` (digest — в `pipeline-verify/stand.mjs`) и базовые образы `infra/sandbox/Dockerfile`, `infra/preview/Dockerfile`, `apps/core/Dockerfile`. Браузеры Playwright 1.63 (`~/Library/Caches/ms-playwright`) — для страницы кабинета в S2, S8a и S10. Корневой `.env`, dev-инфраструктура, настоящие модели и ключи не используются.
 

@@ -105,7 +105,8 @@ jobs:
           test "$(docker version --format '{{.Server.Version}}')" = "$SANDBOX_DOCKER_VERSION"
       # The stand pulls nothing itself (infra/dev/preview-verify/README.md): the tree of the core
       # each row of a stack reads (`treeImage` of infra/dev/preview-verify/site-*.mjs) and the base
-      # of this version, both by digest, into the image store the step above switched to.
+      # of this version, both by digest, into the image store the step above switched to. On 8.3
+      # the image of WordPress is also the old base of the snapshot.
       - name: Pull the images the stand reads
         env:
           PHP_VERSION: ${{ matrix.php }}
@@ -118,6 +119,19 @@ jobs:
       # with the architecture named in the PR (docs/plan/62-slices/e1.md, Э1.3).
       - name: Build and check the image
         run: pnpm verify:site-images --only ${{ matrix.php }}
+      # The image of PHP 8.3 against the one on the way back, the base of WordPress (Т22;
+      # docs/plan/62-slices/e1.md, Э1.5, step 2), on amd64: the Mac takes the same snapshot on arm64.
+      - name: Snapshot against the old base
+        if: matrix.php == '8.3'
+        run: bash infra/dev/preview-verify/site-image-snapshot.sh
+      - name: Upload the snapshot
+        if: matrix.php == '8.3' && !cancelled()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: site-image-snapshot
+          path: ${{ runner.temp }}/site-image-snapshot
+          if-no-files-found: ignore
+          retention-days: 30
       # Trivy by digest, reading the image locally (docs/plan/62-slices/e1.md, В1, В2): the summary
       # of the job and an artifact for a person to read. A finding never fails the job (Т23), and
       # neither does a scanner that could not run: the image was checked by the step above.

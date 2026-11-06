@@ -18,7 +18,7 @@ const runAs = read('run-as.sh')
 const site = dockerfile.slice(dockerfile.indexOf('FROM ${BASE} AS site'))
 
 // The base every stack stands on (docs/plan/62, Т19, Т21): the official image of one PHP version,
-// the stage `php-base` that `site` takes with --build-arg BASE=php-base, and site-bases.json.
+// the stage `php-base` that `site` stands on by default (BASE=php-base), and site-bases.json.
 const stage = (from, to) => {
   const start = dockerfile.indexOf(from)
   assert.ok(start >= 0, from)
@@ -153,8 +153,20 @@ const sh = (script, env = {}, args = []) =>
   })
 
 test('the site image: its base, MariaDB, WP-CLI and Node are pinned', () => {
-  assert.match(dockerfile, /^ARG BASE=wordpress@sha256:[0-9a-f]{64}$/m)
+  assert.match(dockerfile, /^ARG BASE=php-base$/m)
   assert.ok(dockerfile.indexOf('ARG BASE=') < dockerfile.indexOf('FROM '), 'BASE before any FROM')
+  // The way back stays named (docs/plan/62-slices/e1.md, Э1.5): the old base in the header, the
+  // same digest in the snapshot that builds it, and the step of site-images.yml that runs it.
+  const head = dockerfile.slice(0, dockerfile.indexOf('FROM '))
+  const back = /^# BASE=(wordpress@sha256:[0-9a-f]{64})\.$/m.exec(head)
+  assert.ok(back, 'the way back in the header')
+  const snapshot = readFileSync(
+    new URL('../dev/preview-verify/site-image-snapshot.sh', here),
+    'utf8',
+  )
+  assert.ok(snapshot.includes(`wordpress=${back[1]}\n`), 'the snapshot builds the way back')
+  const workflow = readFileSync(new URL('../../.github/workflows/site-images.yml', here), 'utf8')
+  assert.match(workflow, /^\s+run: bash infra\/dev\/preview-verify\/site-image-snapshot\.sh$/m)
   assert.match(site, /^ARG MARIADB_VERSION=\d+\.\d+\.\d+$/m)
   assert.match(site, /archive\.mariadb\.org\/mariadb-\$\{MARIADB_VERSION\}\/repo\/debian/)
   assert.match(site, /"mariadb-server-core=1:\$\{MARIADB_VERSION\}\+maria~deb\$\{debian\}"/)

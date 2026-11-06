@@ -101,7 +101,7 @@ export function wordpressPreviewRecipe(site: SiteFacts): PreviewRecipe {
       DB_COLLATE: database.collation ?? '',
     },
     healthPath: '/',
-    // Apache of the official PHP images (wordpress:*-apache) as www-data on 127.0.0.1:8081, behind
+    // Apache of the official PHP images (php:*-apache) as www-data on 127.0.0.1:8081, behind
     // the gateway of the preview's own container (docs/plan/58). The whole configuration is
     // preview-apache.conf; its run and lock folders are on the tmpfs /tmp.
     web: {
