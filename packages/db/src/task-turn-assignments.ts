@@ -9,6 +9,7 @@ import {
   terminalTaskStatuses,
   turnEvidenceSchema,
   turnAssignmentOutcomes,
+  turnLeaseOf,
   turnPlanSchema,
   type OpenTurnAssignment,
   type TurnAssignment,
@@ -82,7 +83,8 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
       const task = await tx.task.findUniqueOrThrow({ where: { id: fence.taskId } })
       if (task.contentRetiredAt) throw conflict('Task content context has expired')
       if (
-        leaseScopeOf(task) !== fence.siteId ||
+        // Its own row for a chat with the code (`turnLeaseOf`), its site's for a stand's turn.
+        (fence.siteId !== turnLeaseOf(task) && fence.siteId !== leaseScopeOf(task)) ||
         task.workspaceId !== labels.workspaceId ||
         terminalTaskStatuses.includes(task.status)
       )

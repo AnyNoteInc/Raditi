@@ -1,7 +1,7 @@
 import type { AttemptCreditBudget } from '@repo/billing'
 import {
   attemptBudgetRub,
-  leaseScopeOf,
+  turnLeaseOf,
   MAX_SANDBOX_EGRESS_HOSTS,
   MAX_SANDBOX_TURN_MS,
   Money,
@@ -761,7 +761,9 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
       image: env.driver.image,
       labels: {
         workspaceId: task.workspaceId,
-        siteId: leaseScopeOf(task),
+        // The row of the turn's lease (`turnLeaseOf`): a chat with the code works beside the
+        // other chats of its project.
+        siteId: turnLeaseOf({ ...task, needsRepository: requirements.repository }),
         taskId: task.id,
         sessionId,
         turn,

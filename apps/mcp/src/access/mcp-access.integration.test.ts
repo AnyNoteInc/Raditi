@@ -2169,6 +2169,7 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
           turn: 1,
           firstEpoch: 1,
           epoch: 1,
+          leaseId: turn.task.id,
           stack: null,
           url: null,
           preview: null,

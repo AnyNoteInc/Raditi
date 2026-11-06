@@ -30,6 +30,7 @@ import {
   readFeedRow,
   taskHoldExpiry,
   terminalTaskStatuses,
+  turnLeaseOf,
   withSite,
   type CandidateRewindJob,
   type JobQueue,
@@ -192,8 +193,9 @@ export class CandidateRewind {
 
       const sited = withSite(task)
       const redo = await this.#isRedo(job)
+      // A chat with a candidate has the code: it leases its own row, as its turns (`turnLeaseOf`).
       lease = await this.deps.leases.acquire({
-        siteId: sited.siteId,
+        siteId: turnLeaseOf({ ...sited, needsRepository: true }),
         taskId: task.id,
         operation: 'turn',
         ttlMs: REWIND_LEASE_MS,

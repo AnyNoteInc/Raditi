@@ -98,9 +98,9 @@ export class TaskEventTurnJournal implements TurnJournal {
       SELECT task.id, turn.id, ${evidence.phase === 'output' ? 'turn.output' : 'turn.lifecycle'},
         ${payload}::jsonb, false
       FROM tasks task
-      JOIN owned_lease lease ON lease.site_id = COALESCE(task.site_id, task.id)
+      JOIN owned_lease lease ON lease.site_id IN (task.id, task.site_id)
       LEFT JOIN task_turns turn ON turn.task_id = task.id AND turn.turn_no = ${evidence.turn}
-      WHERE task.id = ${fence.taskId}::uuid AND COALESCE(task.site_id, task.id) = ${fence.siteId}::uuid
+      WHERE task.id = ${fence.taskId}::uuid AND ${fence.siteId}::uuid IN (task.id, task.site_id)
         AND (${recovery} OR (NOT lease.held_for_operator AND lease.expires_at > clock_timestamp()))
       RETURNING id, turn_id
       ), projected AS (

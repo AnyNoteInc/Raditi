@@ -18,7 +18,7 @@ import {
 } from '@repo/domain'
 import { z } from 'zod'
 
-import type { McpAccess } from '../access/mcp-access.ts'
+import { leaseIdOf, type McpAccess } from '../access/mcp-access.ts'
 
 /**
  * What the agent's browser tools keep in PostgreSQL (docs/plan/53-chat-preview-release.md, Р21,
@@ -134,9 +134,10 @@ export class PostgresMcpBrowserStore implements McpBrowserStore {
           p.revision
         FROM llm_keys k JOIN tasks t ON t.id = k.task_id
         JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id
-        JOIN turn_assignments a ON a.task_id = t.id AND a.site_id = s.id
+        JOIN turn_assignments a ON a.task_id = t.id AND a.site_id = ${leaseIdOf(scope)}::uuid
+          AND a.site_id IN (t.id, s.id)
           AND a.session_id = k.session_id AND a.turn_no = k.turn_no AND a.first_epoch = k.first_epoch
-        JOIN site_leases l ON l.site_id = s.id AND l.holder_task_id = t.id AND l.epoch = a.lease_epoch
+        JOIN site_leases l ON l.site_id = a.site_id AND l.holder_task_id = t.id AND l.epoch = a.lease_epoch
         JOIN preview_environments p ON p.task_id = t.id AND p.site_id = s.id
         LEFT JOIN task_turns tt ON tt.task_id = t.id AND tt.turn_no = a.turn_no AND tt.status = 'running'
         WHERE k.id = ${scope.keyId}::uuid AND t.id = ${scope.taskId}::uuid

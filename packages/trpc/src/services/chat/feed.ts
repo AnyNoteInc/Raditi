@@ -160,8 +160,10 @@ export async function feedHead(
     modelClass: string | null
   },
 ): Promise<FeedTaskHead> {
-  const lease = await tx.siteLease.findUnique({
-    where: { siteId: leaseScopeOf(task) },
+  // The chat's own row and its site's: its turns hold one of them (`turnLeaseOf`), a release of
+  // it the site's.
+  const leases = await tx.siteLease.findMany({
+    where: { siteId: { in: [...new Set([leaseScopeOf(task), task.id])] } },
     select: { heldForOperator: true, holderTaskId: true },
   })
   // The work of the agent began with the last words or «Продолжить»; a press of a command
@@ -193,7 +195,7 @@ export async function feedHead(
     attempt: task.attempt,
     turnNo: task.turnNo,
     waiting: task.status === 'queued' ? task.waiting : null,
-    held: lease !== null && lease.heldForOperator && lease.holderTaskId === task.id,
+    held: leases.some((lease) => lease.heldForOperator && lease.holderTaskId === task.id),
     // docs/plan/53, «Попробовать ещё (18.10)»: decided by `retryVerdict` alone.
     canRetry: (await dialogRetry(tx, task)).allowed,
     workingSince: request?.createdAt.toISOString() ?? null,

@@ -239,7 +239,8 @@ describe('planTurn', () => {
     })
     expect(turn.sandbox).toMatchObject({
       image,
-      labels: { workspaceId: WORKSPACE, siteId: SITE, taskId: TASK, sessionId: TASK, turn: 1 },
+      // A chat with the code leases its own row (`turnLeaseOf`, 06.11.2026).
+      labels: { workspaceId: WORKSPACE, siteId: TASK, taskId: TASK, sessionId: TASK, turn: 1 },
       runtime: 'runc',
       resources: { cpu: 2, memoryMiB: 4096, pids: 512 },
       user: { uid: 10001, gid: 10001 },

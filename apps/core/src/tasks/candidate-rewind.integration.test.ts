@@ -138,9 +138,14 @@ describe.skipIf(!databaseUrl)('`/undo` of a turn with the repository on PostgreS
     await db.gitRepository.deleteMany({ where: { owner: 'sites-61-rewind' } })
     const sites = await db.site.findMany({
       where: { name: 'Billing verification', tasks: { some: { turns: { some: {} } } } },
-      select: { id: true },
+      select: { id: true, tasks: { select: { id: true } } },
     })
-    await db.siteLease.deleteMany({ where: { siteId: { in: sites.map((site) => site.id) } } })
+    // The rows of the sites and those of their chats (`turnLeaseOf`).
+    await db.siteLease.deleteMany({
+      where: {
+        siteId: { in: sites.flatMap((site) => [site.id, ...site.tasks.map((task) => task.id)]) },
+      },
+    })
     await fixtures.cleanup()
     vi.clearAllMocks()
   })
@@ -920,13 +925,18 @@ describe.skipIf(!databaseUrl)('`/undo` of a turn with the repository on PostgreS
     expect((await feedOf(dialog.taskId)).filter((row) => row.type === 'feed.update')).toEqual([])
   })
 
-  it('waits for a busy site and answers nothing meanwhile', async () => {
+  it('waits for a release of its site and answers nothing meanwhile', async () => {
     const dialog = await chat({ heads: [HEAD1, HEAD2] })
-    const other = await fixtures.task(dialog.workspaceId, { siteId: dialog.siteId })
+    // A release of another chat of the site holds it (a turn of another chat would not,
+    // `turnLeaseOf`).
+    const other = await fixtures.task(dialog.workspaceId, {
+      siteId: dialog.siteId,
+      status: 'deploying',
+    })
     const held = await leases.acquire({
       siteId: dialog.siteId,
       taskId: other.taskId,
-      operation: 'turn',
+      operation: 'deploy',
       ttlMs: 60_000,
     })
     const { rewind, git, queue } = setup({ branch: HEAD2 })
@@ -1115,13 +1125,16 @@ describe.skipIf(!databaseUrl)('`/undo` of a turn with the repository on PostgreS
       expect(await feedOf(dialog.taskId)).toEqual([failedRow])
     })
 
-    it('gives up a press past its time while the site is held for days', async () => {
+    it('gives up a press past its time while a release holds the site for days', async () => {
       const dialog = await chat({ heads: [HEAD1, HEAD2] })
-      const other = await fixtures.task(dialog.workspaceId, { siteId: dialog.siteId })
+      const other = await fixtures.task(dialog.workspaceId, {
+        siteId: dialog.siteId,
+        status: 'deploying',
+      })
       const held = await leases.acquire({
         siteId: dialog.siteId,
         taskId: other.taskId,
-        operation: 'turn',
+        operation: 'deploy',
         ttlMs: 60_000,
       })
       const job = await press(dialog)
@@ -1707,8 +1720,9 @@ describe.skipIf(!databaseUrl)('`/undo` of a turn with the repository on PostgreS
         ...unchanged,
         afterPush: async () => {
           // It froze past its lease: the sweep put the press again, and the client pressed `/undo`.
+          // The chat's own row (`turnLeaseOf`).
           await db.siteLease.update({
-            where: { siteId: dialog.siteId },
+            where: { siteId: dialog.taskId },
             data: { expiresAt: new Date(0) },
           })
           expect(await setup({ branch: HEAD2, ...unchanged }).rewind.run(job)).toBe('redone')
@@ -2021,7 +2035,7 @@ describe.skipIf(!databaseUrl)('`/undo` of a turn with the repository on PostgreS
       expect(plan.workspace).toMatchObject({ expectedBaseSha: HEAD2 })
 
       const fence = (await leases.acquire({
-        siteId: dialog.siteId,
+        siteId: dialog.taskId,
         taskId: dialog.taskId,
         operation: 'turn',
         ttlMs: 60_000,
@@ -2106,7 +2120,7 @@ describe.skipIf(!databaseUrl)('`/undo` of a turn with the repository on PostgreS
     expect(plan.workspace).toMatchObject({ expectedBaseSha: OTHER, expectedBranchSha: OTHER })
 
     const fence = (await leases.acquire({
-      siteId: dialog.siteId,
+      siteId: dialog.taskId,
       taskId: dialog.taskId,
       operation: 'turn',
       ttlMs: 60_000,

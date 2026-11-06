@@ -8,7 +8,7 @@ import {
   CANDIDATE_REBASE_JOB,
   candidateRebaseDedupeKey,
   isDomainError,
-  leaseScopeOf,
+  turnLeaseOf,
   readFeedRow,
   turnEvidenceSchema,
   type AgentTurnCancelJob,
@@ -482,12 +482,12 @@ export class PassRunner {
   async #siteRetry(ref: PassRef): Promise<Retry> {
     const task = await this.deps.db.task.findUnique({
       where: { id: ref.taskId },
-      select: { siteId: true },
+      select: { siteId: true, needsRepository: true },
     })
+    // The turn's own row: a chat with the code that waited for a release of its site finds it
+    // free, and the release wakes the pass when it ends.
     const lease = task
-      ? await this.deps.leases
-          .inspect(leaseScopeOf({ id: ref.taskId, siteId: task.siteId }))
-          .catch(() => null)
+      ? await this.deps.leases.inspect(turnLeaseOf({ id: ref.taskId, ...task })).catch(() => null)
       : null
     if (!lease?.expiresAt) return { delayMs: RETRY_DELAY_MS.site }
     const left = lease.expiresAt.getTime() - lease.serverNow.getTime()

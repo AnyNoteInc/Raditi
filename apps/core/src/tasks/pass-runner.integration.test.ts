@@ -1548,10 +1548,11 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       let admitted: unknown = null
       const { passes } = runner(async (request) => {
         planned = request
-        // The store that opens the turn under the site lease admits what the planner built:
-        // both read where the platform last left the task branch the same way.
+        // The store that opens the turn under its lease — the chat's own row, as the planner
+        // names it (`turnLeaseOf`) — admits what the planner built: both read where the platform
+        // last left the task branch the same way.
         const fence = await new PostgresSiteLeaseStore(db).acquire({
-          siteId: siteIdOf(dialog),
+          siteId: request.sandbox.labels.siteId,
           taskId: dialog.taskId,
           operation: 'turn',
           ttlMs: 60_000,
@@ -1570,7 +1571,9 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       try {
         await passes.run(dialog.job)
       } finally {
-        await db.siteLease.deleteMany({ where: { siteId: siteIdOf(dialog) } })
+        await db.siteLease.deleteMany({
+          where: { siteId: { in: [siteIdOf(dialog), dialog.taskId] } },
+        })
       }
 
       expect(planned).toMatchObject({

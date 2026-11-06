@@ -16,7 +16,7 @@ import {
 } from '@repo/domain'
 import { z } from 'zod'
 
-import type { McpTurnAccess } from '../access/mcp-access.ts'
+import { leaseIdOf, type McpTurnAccess } from '../access/mcp-access.ts'
 
 /**
  * What the `web` tools of a browser task keep in PostgreSQL (docs/plan/57-browser-tasks.md,
@@ -86,9 +86,10 @@ export class PostgresMcpWebStore implements McpWebStore {
             WHERE b.task_id = t.id AND b.created_at >= a.created_at) AS started
         FROM llm_keys k JOIN tasks t ON t.id = k.task_id
         LEFT JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id
-        JOIN turn_assignments a ON a.task_id = t.id AND a.site_id = COALESCE(t.site_id, t.id)
+        JOIN turn_assignments a ON a.task_id = t.id AND a.site_id = ${leaseIdOf(scope)}::uuid
+          AND a.site_id IN (t.id, t.site_id)
           AND a.session_id = k.session_id AND a.turn_no = k.turn_no AND a.first_epoch = k.first_epoch
-        JOIN site_leases l ON l.site_id = COALESCE(t.site_id, t.id) AND l.holder_task_id = t.id
+        JOIN site_leases l ON l.site_id = a.site_id AND l.holder_task_id = t.id
           AND l.epoch = a.lease_epoch
         WHERE k.id = ${scope.keyId}::uuid AND t.id = ${scope.taskId}::uuid
           AND t.site_id IS NOT DISTINCT FROM ${scope.siteId}::uuid
