@@ -10,8 +10,8 @@ import { SectionTitle } from './section-empty'
 import { Fact, Facts, SiteCard } from './site-cards'
 import { SiteLink } from './site-link'
 import { runTitle, type RunView } from './history-text'
-import { isBrowserOnly, SiteConnection, type ConnectionSite } from './site-connection'
-import { siteHref } from './site-nav'
+import { SiteConnection, type ConnectionSite } from './site-connection'
+import { isBrowserOnly, siteHref } from './site-nav'
 import { versionTitle, type VersionView } from './site-versions'
 
 /** The first commit of the site repository, once `main` and its tag are on the remote. */

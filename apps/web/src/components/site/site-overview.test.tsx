@@ -71,6 +71,21 @@ describe('site overview', () => {
     expect(tooltip).toHaveTextContent('Работа через браузер:сайт должен открываться по https://')
   })
 
+  it('says when the platform of the site has no work through the browser', async () => {
+    render(
+      <SiteOverview
+        site={{
+          status: 'active',
+          state: 'free',
+          capabilities: { repository: 'ready', browser: 'unsupported' },
+        }}
+      />,
+    )
+    expect(await tooltipOf('Подключён')).toHaveTextContent(
+      'Работа через браузер:для этой платформы пока недоступна',
+    )
+  })
+
   it.each([
     ['paused', 'Пока работа приостановлена, остальные разделы сайта недоступны.'],
     ['disconnected', 'Пока связи с сайтом нет, остальные разделы сайта недоступны.'],
@@ -120,7 +135,9 @@ describe('site overview', () => {
     )
     const tooltip = await tooltipOf('Ожидает подключения')
     expect(
-      within(tooltip).getByText('Сайт добавлен без доступа к файлам. Выберите этот проект в новом чате.'),
+      within(tooltip).getByText(
+        'Сайт добавлен без доступа к файлам. Выберите этот проект в новом чате.',
+      ),
     ).toBeTruthy()
     expect(within(tooltip).queryByText(/ещё не подключён/)).toBeNull()
     // The owner's words of 31.10.2026: nothing says how the agent works on such a site.

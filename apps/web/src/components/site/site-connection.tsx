@@ -9,7 +9,7 @@ import { useState } from 'react'
 
 import { stackLabels, statusLabels, type ProjectStack } from '@/components/projects/project-labels'
 
-import { closedSectionsNote, type SiteSetup } from './site-nav'
+import { closedSectionsNote, isBrowserOnly, type SiteSetup } from './site-nav'
 
 export type ConnectionSite = {
   status: keyof typeof statusLabels
@@ -38,8 +38,7 @@ const IMPORTED_ONBOARDING_NOTE =
   'Файлы сайта сохранены, но агент пока не может менять сайт: остальную часть подключения мы ещё делаем.'
 
 /** A site added without access to its files (docs/plan/57-browser-tasks.md, Б8). */
-const BROWSER_ONLY_NOTE =
-  'Сайт добавлен без доступа к файлам: агент работает в админке сайта через браузер. Начните задачу в разделе «Чат».'
+const NO_FILES_NOTE = 'Сайт добавлен без доступа к файлам. Выберите этот проект в новом чате.'
 
 /** The hue of the dot; its words are in the name of the button and in the tooltip. */
 const statusTones: Readonly<Record<ConnectionSite['status'], keyof typeof statusDotColors>> = {
@@ -63,6 +62,7 @@ const browserTexts: Readonly<Record<string, string>> = {
   not_configured: 'пока недоступна',
   closed: 'закрыта',
   insecure: 'сайт должен открываться по https://',
+  unsupported: 'для этой платформы пока недоступна',
 }
 
 type ConnectionFact = { name: string; value: string; address?: boolean }
@@ -70,12 +70,8 @@ type ConnectionFact = { name: string; value: string; address?: boolean }
 /** The phrases that say why the site is in its status and what that closes. */
 function reasonsOf(site: ConnectionSite): string[] {
   const imported = site.setup === 'done' || Boolean(site.initialVersion)
-  const browserOnly =
-    site.status === 'onboarding' &&
-    site.capabilities?.browser === 'ready' &&
-    site.capabilities.repository === 'absent'
-  const note = browserOnly
-    ? BROWSER_ONLY_NOTE
+  const note = isBrowserOnly(site)
+    ? NO_FILES_NOTE
     : imported && site.status === 'onboarding'
       ? IMPORTED_ONBOARDING_NOTE
       : statusNotes[site.status]
