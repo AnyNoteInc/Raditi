@@ -184,19 +184,29 @@ for (const scheme of ['light', 'dark'] as const) {
       await page.setViewportSize({ width, height })
       const phone = width < 600
 
-      for (const [status, , note] of closedSites) {
+      for (const [status, label, note] of closedSites) {
         await test.step(`a ${status} site`, async () => {
           const siteId = await addSite(signedInUser.id, status)
           await page.goto(`/projects/${siteId}/overview`)
           await expect(page.getByRole('heading', { level: 1, name: 'Обзор' })).toBeVisible()
           await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1)
-          await expect(page.getByRole('main').getByText(note, { exact: true })).toBeVisible()
+          // By the keyboard: axe scrolls the page, and that would take the button from under a
+          // pointer and fade the tooltip out while its contrast is read.
+          await page.keyboard.press('Tab')
+          const connection = page
+            .getByRole('main')
+            .getByRole('button', { name: `Подключение: ${label}` })
+          await connection.focus()
+          await expect(page.getByRole('tooltip').getByText(note, { exact: true })).toBeVisible()
+          await expect(page.locator('.MuiTooltip-tooltip')).toHaveCSS('opacity', '1')
 
           const luminance = await backgroundLuminance(page)
           if (scheme === 'dark') expect(luminance).toBeLessThan(0.2)
           else expect(luminance).toBeGreaterThan(0.8)
 
           expect(await violations(page)).toEqual([])
+          await connection.blur()
+          await expect(page.getByRole('tooltip')).toHaveCount(0)
 
           const navigation = page.getByRole('navigation', { name: 'Разделы сайта' })
           await expect(navigation).toHaveCount(1)

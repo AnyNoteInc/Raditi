@@ -111,3 +111,15 @@ export const siteSectionAvailable = (
   section: SiteSection,
   setup?: SiteSetup,
 ): boolean => availableSiteSections(status, setup).includes(section)
+
+/** A site added without access to its files that the browser can already work on. */
+export function isBrowserOnly(site: {
+  status: string
+  capabilities?: { repository: string; browser: string }
+}): boolean {
+  return (
+    site.status === 'onboarding' &&
+    site.capabilities?.browser === 'ready' &&
+    site.capabilities.repository === 'absent'
+  )
+}
