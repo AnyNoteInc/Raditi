@@ -2118,8 +2118,10 @@ async function scenarioP(stand) {
     where: { account: { workspaceId: chat.workspaceId, unit: 'credit_gift' } },
     orderBy: { createdAt: 'asc' },
   })
+  // The gift is the product's number, not the stand's: 50 since the pricing of 06.11.2026.
+  const { signupGiftCredits } = stand.modules.domain
   rt.check(
-    gift.some((row) => row.kind === 'grant' && Number(row.amount) === 35) &&
+    gift.some((row) => row.kind === 'grant' && Number(row.amount) === signupGiftCredits) &&
       gift.some((row) => row.kind === 'charge' && row.taskId === first),
     'the chat created the workspace with the gift, and the gift paid for the answer',
     gift.map((row) => `${row.kind} ${row.amount}`),

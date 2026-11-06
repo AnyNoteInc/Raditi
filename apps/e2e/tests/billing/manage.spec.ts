@@ -193,7 +193,7 @@ test('a customer switches auto-renewal off and on again', async ({ page, signedI
     await expect(page).toHaveURL('/settings/plans')
     await expect(tariff(page, 'Старт')).toContainText('Активен')
     await expect(row(page, 'Следующее списание')).toHaveText(
-      new RegExp(String.raw`^${DATE}\s—\s4\s900\s₽$`),
+      new RegExp(String.raw`^${DATE}\s—\s1\s990\s₽$`),
     )
     await expect(renewal(page)).toContainText(
       `Перед списанием пришлём письмо на ${signedInUser.email}.`,
@@ -347,7 +347,7 @@ test('a customer schedules another tariff for the next period and takes the choi
       new RegExp(sentence`${DAY} спишем 6 990 ₽ сохранённым способом оплаты.`),
     )
     await expect(row(page, 'Следующее списание')).toHaveText(
-      new RegExp(String.raw`^${DATE}\s—\s12\s900\s₽$`),
+      new RegExp(String.raw`^${DATE}\s—\s6\s990\s₽$`),
     )
     // Today the tariff, its price and its credits are what they were: the accounts hold the
     // quota of «Старт» and the gift.
@@ -382,7 +382,7 @@ test('a customer schedules another tariff for the next period and takes the choi
     await expect(said).toBeFocused()
     await expect(tariff(page, 'Старт').getByRole('group')).toHaveCount(0)
     await expect(row(page, 'Следующее списание')).toHaveText(
-      new RegExp(String.raw`^${DATE}\s—\s4\s900\s₽$`),
+      new RegExp(String.raw`^${DATE}\s—\s1\s990\s₽$`),
     )
     await expect(
       planCard(page, 'Бизнес').getByRole('button', { name: 'Перейти на тариф «Бизнес»' }),
@@ -487,7 +487,7 @@ test('a customer whose renewal charge failed pays on the page of the shop and th
     await expect(row(page, 'Кредиты')).toHaveText(creditsRow(accounts))
     await expect(row(page, 'Способ оплаты')).toHaveText('Карта Visa •• 1234')
     await expect(row(page, 'Следующее списание')).toHaveText(
-      new RegExp(String.raw`^${DATE}\s—\s4\s900\s₽$`),
+      new RegExp(String.raw`^${DATE}\s—\s1\s990\s₽$`),
     )
     await expect(page.getByRole('button', { name: 'Оплатить сейчас' })).toHaveCount(0)
   })
