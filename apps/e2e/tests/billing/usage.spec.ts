@@ -120,7 +120,7 @@ test('a customer who paid for a tariff sees its full quota and an empty history'
     )
     // The rule of the charge stands once, above the block (Ц14).
     await expect(page.getByRole('main')).toContainText(
-      /Списываем\sтолько\sза\sвыполненную\sработу:\sесли\sзадача\sне\sполучилась,\sкредиты\sвозвращаются\./,
+      /Списываем\sтолько\sза\sвыполненную\sработу:\sпопытка,\sкоторая\sоборвалась\sиз-за\sсбоя,\sничего\sне\sстоит\./,
     )
     // No tariff on sale has a daily limit: the block does not explain one.
     await expect(explainer).not.toContainText('дневной лимит')
