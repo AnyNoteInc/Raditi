@@ -26,6 +26,10 @@ describe('turnInstructions', () => {
     // What a release cannot carry is said to the client, not worked around (plan 53, Р3).
     expect(rules).toContain('## What a release can carry')
     expect(rules).toContain('no menus, widgets')
+    // Т37: an unsaid list is not «none» — the first build has not finished.
+    expect(rules).toContain(
+      "While it is null the preview's first build has not finished: call `site_info` again before\n  you change the database or tell the client it cannot be done.",
+    )
     expect(rules).not.toContain('{{database}}')
   })
 
@@ -72,7 +76,7 @@ describe('turnInstructions', () => {
     for (const words of ['/wp/v2', '$wpdb', 'dbDelta']) expect(bare).not.toContain(words)
     const guide = '- On this site: a stack of a test — `wp_rest` POST /x.\n'
     const told = turnInstructions({ state: 'absent' }, { names: [], hosts: [] }, guide)
-    expect(told).toContain(`table of the platform created or extended.\n${guide}- A new page`)
+    expect(told).toContain(`tell the client it cannot be done.\n${guide}- A new page`)
   })
 })
 

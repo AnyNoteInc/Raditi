@@ -25,7 +25,8 @@ export const mcpPreviewSchema = z.strictObject({
   hostname: z.string().min(1).max(253),
   /**
    * The kinds of a plan its last build found writable (`runtime.db.kinds`, docs/plan/53,
-   * «Операции БД и миграции»): what tools the request is offered. Absent — the text of records.
+   * «Операции БД и миграции»): what tools the request is offered. Absent — no build has said
+   * yet (docs/plan/62-site-stacks.md, Т37): each call checks the kinds itself.
    */
   dbKinds: z.array(z.enum(dbOperationKinds)).max(dbOperationKinds.length).optional(),
 })

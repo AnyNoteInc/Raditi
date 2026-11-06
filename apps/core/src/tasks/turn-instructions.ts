@@ -45,6 +45,8 @@ ${ANSWERING}
   change in the database with the platform's tools — only what \`site_info\` lists under
   \`database.operations\`: the title, the text and the excerpt of an existing post or page; a new
   page or post; a setting of the list; a table of the platform created or extended.
+  While it is null the preview's first build has not finished: call \`site_info\` again before
+  you change the database or tell the client it cannot be done.
 {{database}}- A new page or post gets another ID on the site than in the preview: refer to it by its address
   (slug), never by its ID — not in content, not in a setting, not in a file name, a style or code.
 - Structure only through \`db_schema\`: never create or alter tables in code. If the release

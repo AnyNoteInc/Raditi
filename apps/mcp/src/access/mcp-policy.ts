@@ -138,36 +138,46 @@ export function mcpSecurityOf(config: McpConfig): McpSecurity {
 }
 
 /**
- * Tool families beside site_info; a request sees and calls only those of its scope. `schema` —
- * `db_schema`, where the preview's last build found tables of the platform writable, or where
- * no build has said yet: the CLI asks for its tools once, when its turn starts, and the first
- * turn of a dialog starts while its preview is still being built. Each call checks the kinds of
- * the preview as built then (`DB_OPERATION_NOT_ALLOWED`). `web` — the cloud browser of a task
- * on the site itself (docs/plan/57-browser-tasks.md, Б20); `browser` is the preview's.
+ * Tool families beside site_info; a request sees and calls only those of its scope. `content` —
+ * on a preview, where its last build found any kind of a plan a release could carry, or where no
+ * build has said yet (docs/plan/62-site-stacks.md, Т37); `schema` — `db_schema`, where the
+ * preview's last build found tables of the platform writable, or where no build has said yet:
+ * the CLI asks for its tools once, when its turn starts, and the first turn of a dialog starts
+ * while its preview is still being built. Each call checks the kinds of the preview as built
+ * then (`DB_OPERATION_NOT_ALLOWED`). `web` — the cloud browser of a task on the site itself
+ * (docs/plan/57-browser-tasks.md, Б20); `browser` is the preview's.
  */
 export const mcpToolFamilies = ['content', 'browser', 'schema', 'web'] as const
 export type McpToolFamily = (typeof mcpToolFamilies)[number]
 
 /** A preview that is gone for the dialog, or never was there to work on (Р4, Р16). */
 const closedPreview = new Set(['unavailable', 'destroyed'])
+export const isClosedPreview = (preview: NonNullable<McpAccess['preview']>) =>
+  closedPreview.has(preview.status)
+
+/** `kinds` of the preview's last build; undefined — no build has said yet (each call checks). */
+const kindsAllowContent = (preview: NonNullable<McpAccess['preview']>) =>
+  preview.dbKinds === undefined || preview.dbKinds.length > 0
 
 /**
  * What a request of this scope is offered (Р3, Р4, Р21): content tools only for a preview with
- * its own database — or, where previews are not configured, the P6 path of a dialog without
- * one; the browser only on a preview. Each call checks the preview again under its own lock.
+ * its own database a release could carry a change of (Т37) — or, where previews are not
+ * configured, the P6 path of a dialog without one; the browser only on a preview. Each call checks the preview again under its own lock.
  * A task without a repository changes its site through the browser alone (docs/plan/57, Б1):
  * no content tools, whatever the profile; the `web` tools go to a task that needs a browser
  * where the worker is configured, each call admitted again with its session (Б20).
  */
 export function mcpToolFamiliesOf(access: McpAccess, security: McpSecurity): McpToolFamily[] {
   const preview = access.preview
-  const open = preview !== null && !closedPreview.has(preview.status)
+  const open = preview !== null && !isClosedPreview(preview)
   const requirements = requirementsOf(access)
   const families: McpToolFamily[] = []
   if (
     security.contentTools &&
     requirements.repository &&
-    (preview === null ? security.siteContent : open && preview.database)
+    (preview === null
+      ? security.siteContent
+      : open && preview.database && kindsAllowContent(preview))
   )
     families.push('content')
   if (

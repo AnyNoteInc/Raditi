@@ -5,6 +5,7 @@ import { markStaleCandidates } from '@repo/db'
 import {
   assertPreviewTransition,
   DB_CREATED_ID_BASE,
+  dbOperationKinds,
   DomainError,
   envVarReachesPreview,
   isDatabaseCopyError,
@@ -31,6 +32,7 @@ import {
   type PublishedContentGateway,
   type RepoRef,
   type SecretStore,
+  type SiteAccessKind,
   type SiteAdapter,
   type SiteContentAdapter,
   type SiteDatabaseSettings,
@@ -40,7 +42,12 @@ import {
   type SiteRuntime,
   type SiteStack,
 } from '@repo/domain'
-import { previewContentGateway, textOnlyDbRuntime, type PreviewDbRuntime } from '@repo/site-content'
+import {
+  noDbRuntime,
+  previewContentGateway,
+  textOnlyDbRuntime,
+  type PreviewDbRuntime,
+} from '@repo/site-content'
 
 import type { PreviewsConfig } from '../config/config.ts'
 import type { ExportedTree, TreeExportInput } from '../git-workspace/git-workspace.service.ts'
@@ -203,48 +210,56 @@ async function runtimeOf(gateway: PublishedContentGateway | null): Promise<SiteR
   }
 }
 
-/** What a gateway's plugin can write of a database plan; null — it did not answer. */
-async function dbCapabilitiesOf(
+/**
+ * What a gateway's plugin can write of a database plan: null — there is no gateway, or no way to
+ * ask it; 'no_answer' — it is there and did not answer, twice. One timeout does not take the text
+ * of records from a site with a plugin until its next build (docs/plan/62-site-stacks.md, Т37).
+ */
+export async function dbCapabilitiesOf(
   gateway: SiteContentGateway | null,
-): Promise<SiteDbCapabilities | null> {
+): Promise<SiteDbCapabilities | null | 'no_answer'> {
   if (!gateway?.db) return null
-  try {
-    return await gateway.db.capabilities()
-  } catch {
-    return null
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await gateway.db.capabilities()
+    } catch {
+      // asked once more: the next build is far
+    }
   }
+  return 'no_answer'
 }
 
 /**
- * What the agent may change in the preview's database (docs/plan/53, «Операции БД и миграции»):
- * the text of records always, as before; any other kind only where the stack's adapter, the
- * plugin of production and the plugin of the preview all have it — a release has to write it
- * on production —, the settings of the list both plugins keep, and created records only while
- * production's ids stay below DB_CREATED_ID_BASE. The preview's plugin runs the agent's code:
- * its word only ever narrows what production's allows.
+ * What the agent may change in the preview's database (docs/plan/53, «Операции БД и миграции»;
+ * docs/plan/62-site-stacks.md, Т37): a kind only where the stack's adapter, the plugin of
+ * production and the plugin of the preview all have it — a release has to write it on
+ * production —, the settings of the list both plugins keep, and created records only while
+ * production's ids stay below DB_CREATED_ID_BASE. A side without a gateway gives nothing a
+ * release could carry; a gateway that is there and did not answer, the text of records until the
+ * next build. The preview's plugin runs the agent's code: its word only ever narrows what
+ * production's allows.
  */
 export function previewDbRuntime(
   adapter: Pick<SiteAdapter, 'dbOperationKinds' | 'dbSettings'>,
   site: Parameters<SiteAdapter['dbSettings']>[0],
-  production: SiteDbCapabilities | null,
-  preview: SiteDbCapabilities | null,
+  production: SiteDbCapabilities | null | 'no_answer',
+  preview: SiteDbCapabilities | null | 'no_answer',
 ): PreviewDbRuntime {
-  if (!production || !preview) return { ...textOnlyDbRuntime }
+  if (production === null || preview === null) return { ...noDbRuntime }
+  if (production === 'no_answer' || preview === 'no_answer') return { ...textOnlyDbRuntime }
   let declared: readonly string[]
   let settings: readonly string[]
   try {
     declared = adapter.dbOperationKinds(site)
     settings = adapter.dbSettings(site).map((setting) => setting.option)
   } catch {
-    return { ...textOnlyDbRuntime }
+    return { ...noDbRuntime }
   }
-  const kinds = textOnlyDbRuntime.kinds.concat(
-    (['option_update', 'post_create', 'schema_migration'] as const).filter(
-      (kind) =>
-        declared.includes(kind) &&
-        production.operations.includes(kind) &&
-        preview.operations.includes(kind),
-    ),
+  const kinds = dbOperationKinds.filter(
+    (kind) =>
+      declared.includes(kind) &&
+      production.operations.includes(kind) &&
+      preview.operations.includes(kind),
   )
   return {
     kinds,
@@ -559,6 +574,32 @@ export function dumpStaging(deps: PreviewBuildDeps, facts: PreviewFacts, signal:
   }
 }
 
+/**
+ * What production's database says when its gateway could not be had (docs/plan/62-site-stacks.md,
+ * Т37; Р16 of its slices): the resolver refuses a site without its access to the plugin with the
+ * same code as a failed read of that access, so the row decides, as `ReleaseSkill` does. No row of
+ * the content adapter's kind, or no content adapter for the stack — no gateway; a row — one that
+ * did not answer now, and so does a count that failed: a site with a plugin keeps the text of
+ * records until its next build.
+ */
+export async function unaskedProduction(
+  deps: Pick<PreviewBuildDeps, 'db' | 'contentAdapters'>,
+  siteId: string,
+  stack: SiteStack,
+): Promise<null | 'no_answer'> {
+  let kind: SiteAccessKind
+  try {
+    kind = deps.contentAdapters(stack).accessKind
+  } catch {
+    return null
+  }
+  try {
+    return (await deps.db.credentialRef.count({ where: { siteId, kind } })) > 0 ? 'no_answer' : null
+  } catch {
+    return 'no_answer'
+  }
+}
+
 async function buildPreviewOn(
   deps: PreviewBuildDeps,
   hold: PreviewHold,
@@ -610,7 +651,9 @@ async function buildPreviewOn(
     // Nothing of the copy is known equal, nothing is editable, the runtime is the default.
   }
   const siteRuntime = await runtimeOf(production)
-  const productionDb = await dbCapabilitiesOf(production)
+  const productionDb = production
+    ? await dbCapabilitiesOf(production)
+    : await unaskedProduction(deps, site.id, site.stack)
   const siteFacts = previewSiteFacts(site, database, siteRuntime?.runtimeVersion)
   let recipe: PreviewRecipe
   try {
@@ -798,7 +841,11 @@ async function buildPreviewOn(
         },
         signal,
       )
-  } else if (candidate?.dbPlan.length) throw previewFailure('content_unsupported')
+  } else {
+    if (candidate?.dbPlan.length) throw previewFailure('content_unsupported')
+    // Always written: a record without `db` reads as «the text of records» (mcp-journal.ts).
+    record = { ...record, db: { ...noDbRuntime } }
+  }
 
   // A stack that says how its live page looks: a dead site answers 200 too (Т33). A base that does
   // not start has no preview; a candidate that does not start keeps it, and its `preview_smoke`

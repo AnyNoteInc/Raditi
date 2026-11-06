@@ -704,6 +704,41 @@ describe.skipIf(!enabled)('MCP on the preview of a dialog with PostgreSQL', () =
     expect(await create('again', 'again')).toMatchObject({
       response: { objectRef: `page:${DB_CREATED_ID_BASE + 2}` },
     })
+    // A build that found no text of records a release could carry refuses that alone (Т37): a
+    // creation and a setting still go in.
+    await db.previewEnvironment.update({
+      where: { id: fixture.previewId },
+      data: {
+        runtime: {
+          v: 1,
+          database: null,
+          web: null,
+          seedChecked: true,
+          sync: null,
+          db: { kinds: ['option_update', 'post_create'], settings: ['blogname'], createdIds: true },
+        },
+      },
+    })
+    expect(await create('without-text', 'without-text')).toMatchObject({
+      result: 'ok',
+      response: { objectRef: `page:${DB_CREATED_ID_BASE + 3}` },
+    })
+    expect(
+      await f.service.wpRest(scope, {
+        method: 'POST',
+        route: '/wp/v2/settings',
+        body: { title: 'Цветы у дома и в саду' },
+        idempotencyKey: 'rename-again',
+      }),
+    ).toMatchObject({ result: 'ok', response: { setting: 'title' } })
+    expect(
+      await f.service.wpRest(scope, {
+        method: 'POST',
+        route: '/wp/v2/posts/42',
+        body: { title: 'После' },
+        idempotencyKey: 'text-refused',
+      }),
+    ).toEqual({ result: 'error', response: { code: 'DB_OPERATION_NOT_ALLOWED' } })
   })
 
   it('refuses an object the seed did not find equal to production', async () => {
@@ -713,6 +748,37 @@ describe.skipIf(!enabled)('MCP on the preview of a dialog with PostgreSQL', () =
     })
     await expect(f.edit('mismatch')).rejects.toMatchObject({ code: 'CONTENT_OBJECT_UNAVAILABLE' })
     expect(await f.edit('other', { title: 'После' }, 43)).toMatchObject({ result: 'ok' })
+  })
+
+  it('refuses the text of a record where its build found nothing a release could carry (Т37)', async () => {
+    const f = await previewFixture()
+    await db.previewEnvironment.update({
+      where: { id: fixture.previewId },
+      data: {
+        runtime: {
+          v: 1,
+          database: null,
+          web: null,
+          seedChecked: true,
+          sync: null,
+          db: { kinds: [], settings: [], createdIds: false },
+        },
+      },
+    })
+    // The turn's list of tools was asked before the build said so: the call refuses in words.
+    expect(await f.edit('no-plan', { title: 'После' })).toEqual({
+      result: 'error',
+      response: { code: 'DB_OPERATION_NOT_ALLOWED' },
+    })
+    expect(f.sent).toEqual([])
+    const call = await db.mcpCall.findFirstOrThrow({ where: { turn: { taskId: fixture.taskId } } })
+    expect(call).toMatchObject({ result: 'error', writeStartedAt: null })
+    expect(call.finishedAt).not.toBeNull()
+    expect(await db.previewDbOperation.count({ where: { taskId: fixture.taskId } })).toBe(0)
+    // Reading the record stays open: it changes nothing a release would have to carry.
+    expect(
+      await f.service.wpRest(f.scope, { method: 'GET', route: '/wp/v2/posts/42' }),
+    ).toMatchObject({ result: 'ok', response: { objectRef: 'post:42', title: 'До' } })
   })
 
   it('takes no content while the preview is built, or without its database', async () => {
@@ -949,6 +1015,31 @@ describe.skipIf(!enabled)('MCP on the preview of a dialog with PostgreSQL', () =
       restored: 0,
     })
     expect(f.site).not.toHaveBeenCalled()
+  })
+
+  it('restores an edit of the turn into a preview whose later build found nothing to carry (Т37)', async () => {
+    const f = await previewFixture()
+    const edited = await f.edit('edit', { title: 'После' })
+    const snapshotId = (edited.response as { snapshotId: string }).snapshotId
+    await db.previewEnvironment.update({
+      where: { id: fixture.previewId },
+      data: {
+        runtime: {
+          v: 1,
+          database: null,
+          web: null,
+          seedChecked: true,
+          sync: null,
+          db: { kinds: [], settings: [], createdIds: false },
+        },
+      },
+    })
+    // A restore takes the agent's own change back: it is not refused for the kinds.
+    expect(await f.service.restore(f.scope, { snapshotId, idempotencyKey: 'undo' })).toMatchObject({
+      result: 'ok',
+      response: { restored: true, snapshotId },
+    })
+    expect(f.stateOf('post:42').title).toBe('До')
   })
 
   it('restores an edit of the turn into the preview it was made in', async () => {

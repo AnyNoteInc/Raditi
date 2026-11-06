@@ -1,24 +1,31 @@
 import {
   DatabaseCopyError,
+  DB_CREATED_ID_BASE,
   DomainError,
   previewDatabaseSecretPath,
   SiteConnectionError,
   type PreviewFilesInput,
+  type SiteContentGateway,
+  type SiteDbCapabilities,
 } from '@repo/domain'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 
 import { extract } from 'tar-stream'
+import { wordpressAdapter } from '@repo/site-adapters'
 import { describe, expect, it } from 'vitest'
 
 import { TAR_END, tarFileHeader, tarPadding } from '../git-workspace/tree-tar.ts'
 import { MemoryVault } from '../testing/previews.ts'
 import {
+  dbCapabilitiesOf,
   DIFF_REBUILD_FILES,
   dumpStaging,
   previewDatabasePasswords,
   previewErrorCode,
+  previewDbRuntime,
   previewFailure,
+  unaskedProduction,
   writePreviewTree,
 } from './preview-builder.ts'
 
@@ -412,5 +419,100 @@ describe('the temporary database of a site’s dump', () => {
     expect(previewErrorCode(await staging.access().catch((error: unknown) => error))).toBe(
       'dump_not_found',
     )
+  })
+})
+
+describe('what production’s plugin can write of a plan (Т37)', () => {
+  const everything: SiteDbCapabilities = {
+    version: 1,
+    kind: 'capabilities',
+    plugin: 2,
+    operations: ['content_update', 'option_update', 'post_create', 'schema_migration'],
+    settings: ['blogname'],
+    maxRecordId: 812,
+  }
+  const site = {
+    stack: 'wordpress' as const,
+    url: 'https://site.example.test/',
+    docroot: '/',
+    extras: {},
+  }
+  /** A gateway whose plugin fails the first `failures` questions of what it can write. */
+  const gateway = (failures: number) => {
+    let asked = 0
+    return {
+      db: {
+        capabilities: () => {
+          asked += 1
+          return asked <= failures
+            ? Promise.reject(new Error('timed out'))
+            : Promise.resolve(everything)
+        },
+      },
+    } as unknown as SiteContentGateway
+  }
+  const preview = { ...everything, nextCreatedId: DB_CREATED_ID_BASE }
+
+  it('asks once more after a failure, and the answer gives every kind', async () => {
+    expect(
+      previewDbRuntime(wordpressAdapter, site, await dbCapabilitiesOf(gateway(1)), preview).kinds,
+    ).toEqual(['content_update', 'option_update', 'post_create', 'schema_migration'])
+  })
+
+  it('leaves the text of records alone after two failures', async () => {
+    expect(await dbCapabilitiesOf(gateway(2))).toBe('no_answer')
+    expect(
+      previewDbRuntime(wordpressAdapter, site, await dbCapabilitiesOf(gateway(2)), preview).kinds,
+    ).toEqual(['content_update'])
+  })
+
+  it('tells a gateway without a plan apart from one that does not answer', async () => {
+    expect(await dbCapabilitiesOf(null)).toBeNull()
+    expect(await dbCapabilitiesOf({} as SiteContentGateway)).toBeNull()
+  })
+
+  describe('a production whose gateway could not be had', () => {
+    type Deps = Parameters<typeof unaskedProduction>[0]
+    const deps = (count: () => Promise<number>, adapters: Deps['contentAdapters']) =>
+      ({ db: { credentialRef: { count } }, contentAdapters: adapters }) as unknown as Deps
+    const wp = (() => ({ accessKind: 'wp' })) as unknown as Deps['contentAdapters']
+
+    it('has no gateway without an access row of its content adapter', async () => {
+      expect(
+        await unaskedProduction(
+          deps(() => Promise.resolve(0), wp),
+          'site',
+          'wordpress',
+        ),
+      ).toBe(null)
+    })
+
+    it('did not answer where the row is there', async () => {
+      expect(
+        await unaskedProduction(
+          deps(() => Promise.resolve(1), wp),
+          'site',
+          'wordpress',
+        ),
+      ).toBe('no_answer')
+    })
+
+    it('keeps the text of records where the count itself failed', async () => {
+      const failed = deps(() => Promise.reject(new Error('connection reset')), wp)
+      expect(await unaskedProduction(failed, 'site', 'wordpress')).toBe('no_answer')
+    })
+
+    it('has no gateway where the stack has no content adapter', async () => {
+      const none = (() => {
+        throw new Error('no content adapter')
+      }) as unknown as Deps['contentAdapters']
+      expect(
+        await unaskedProduction(
+          deps(() => Promise.resolve(1), none),
+          'site',
+          'bitrix',
+        ),
+      ).toBe(null)
+    })
   })
 })

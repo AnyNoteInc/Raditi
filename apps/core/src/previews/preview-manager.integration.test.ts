@@ -4,6 +4,8 @@ import type { RequestListener, Server } from 'node:http'
 import { createPrismaClient, markStaleCandidates, type PrismaClient } from '@repo/db'
 import {
   conflict,
+  DB_CREATED_ID_BASE,
+  DomainError,
   previewAccessPath,
   previewDatabaseSecretPath,
   previewBrowserSecretPath,
@@ -16,6 +18,7 @@ import {
   type DbPlan,
   type PublishedContentGateway,
   type SiteAdapter,
+  type SiteDbCapabilities,
   type SiteFacts,
   type SiteRuntime,
   type SiteStack,
@@ -23,7 +26,7 @@ import {
   type TurnPlan,
 } from '@repo/domain'
 import { wordpressAdapter } from '@repo/site-adapters'
-import type { previewRequest } from '@repo/site-content'
+import { noDbRuntime, textOnlyDbRuntime, type previewRequest } from '@repo/site-content'
 import { createHostLookup, siteSource } from '@repo/site-connections'
 import { databaseInspector } from '@repo/site-connections/databases'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -133,6 +136,18 @@ const withRuntime = (
   gateway: PublishedContentGateway,
   runtime: SiteRuntime | undefined,
 ): PublishedContentGateway => (runtime ? { ...gateway, runtime: async () => runtime } : gateway)
+
+/** A gateway whose plugin tells what it can write of a plan; without `db` it has no plan. */
+const withPlan = (
+  gateway: PublishedContentGateway,
+  db: SiteDbCapabilities | (() => Promise<SiteDbCapabilities>) | undefined,
+): PublishedContentGateway =>
+  db
+    ? ({
+        ...gateway,
+        db: { capabilities: typeof db === 'function' ? db : async () => db },
+      } as unknown as PublishedContentGateway)
+    : gateway
 
 describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
   let db: PrismaClient
@@ -246,6 +261,12 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
       adapters?: (stack: SiteStack) => SiteAdapter
       /** How often a holder renews its hold; a test that takes the preview over shortens it. */
       heartbeatMs?: number
+      /** What production's gateway cannot be had for; a generic failure by default. */
+      productionRefusal?: Error
+      /** What the preview's plugin can write of a plan; without it the gateway has no plan. */
+      previewDb?: SiteDbCapabilities
+      /** What production's plugin answers when asked what it can write of a plan. */
+      productionDb?: () => Promise<SiteDbCapabilities>
     } = {},
   ) {
     const runtime = new FakeRuntime(upstream)
@@ -290,11 +311,17 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
         adapters: options.adapters ?? (() => wordpressAdapter),
         contentAdapters: () =>
           contentAdapter(
-            withRuntime(contentGateway(previewStates, options.writes), options.runtimes?.preview),
+            withPlan(
+              withRuntime(contentGateway(previewStates, options.writes), options.runtimes?.preview),
+              options.previewDb,
+            ),
           ),
         production: async () => {
-          if (!production) throw new Error('unreachable')
-          return withRuntime(contentGateway(production), options.runtimes?.production)
+          if (!production) throw options.productionRefusal ?? new Error('unreachable')
+          return withPlan(
+            withRuntime(contentGateway(production), options.runtimes?.production),
+            options.productionDb,
+          )
         },
         values: recordValues(async (_owner, objectRef) => ({
           version: 1,
@@ -457,6 +484,101 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
     const row = await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } })
     expect(previewRecordOf(row.runtime).seedChecked).toBe(false)
     expect(await db.previewSeedMismatch.count({ where: { previewId: preview.id } })).toBe(3)
+  })
+
+  describe('what a release could carry of the database (Т37)', () => {
+    const everything: SiteDbCapabilities = {
+      version: 1,
+      kind: 'capabilities',
+      plugin: 2,
+      operations: ['content_update', 'option_update', 'post_create', 'schema_migration'],
+      settings: ['blogname'],
+      maxRecordId: 812,
+    }
+    const previewDb = { ...everything, nextCreatedId: DB_CREATED_ID_BASE }
+    /** What the resolver throws for a site without its access to the plugin, or a failed read. */
+    const noAccess = () =>
+      new DomainError(
+        'CONTENT_SITE_ACCESS_UNAVAILABLE',
+        'Site content access is unavailable',
+        503,
+        {
+          reason: 'reference',
+        },
+      )
+    const dbOf = async (previewId: string) =>
+      previewRecordOf(
+        (await db.previewEnvironment.findUniqueOrThrow({ where: { id: previewId } })).runtime,
+      ).db
+
+    it('writes that nothing is carried for a stack whose recipe has no content', async () => {
+      const { site, preview } = await dialog()
+      const f = manager({
+        adapters: () => ({
+          ...wordpressAdapter,
+          previewRecipe: (facts) => ({ ...wordpressAdapter.previewRecipe(facts), content: null }),
+        }),
+      })
+      await databaseAccess(f, site.id)
+      expect(await f.m.refresh(preview.id, { requested: true })).toBe(true)
+      expect(await dbOf(preview.id)).toEqual(noDbRuntime)
+    })
+
+    it('carries nothing for a site without access to the plugin of production', async () => {
+      const { site, preview } = await dialog()
+      const f = manager({ production: null, productionRefusal: noAccess(), previewDb })
+      await databaseAccess(f, site.id)
+      await f.m.refresh(preview.id, { requested: true })
+      expect(await dbOf(preview.id)).toEqual(noDbRuntime)
+    })
+
+    it('carries every kind for a site whose plugin on production answers (WordPress as before)', async () => {
+      const { site, preview } = await dialog()
+      // No settings of the list: the seed would read them from production, which this fake lacks.
+      const f = manager({ productionDb: async () => ({ ...everything, settings: [] }), previewDb })
+      await databaseAccess(f, site.id)
+      expect(await f.m.refresh(preview.id, { requested: true })).toBe(true)
+      expect(await dbOf(preview.id)).toEqual({
+        kinds: ['content_update', 'option_update', 'post_create', 'schema_migration'],
+        settings: [],
+        createdIds: true,
+      })
+    })
+
+    it('keeps the text of records where production’s plugin twice did not answer', async () => {
+      const { site, preview } = await dialog()
+      let asked = 0
+      const f = manager({
+        productionDb: () => {
+          asked += 1
+          return Promise.reject(new Error('timed out'))
+        },
+        previewDb,
+      })
+      await databaseAccess(f, site.id)
+      await f.m.refresh(preview.id, { requested: true })
+      expect(asked).toBe(2)
+      // Production's gateway is there: its access row is not what decides.
+      expect(await db.credentialRef.count({ where: { siteId: site.id, kind: 'wp' } })).toBe(0)
+      expect(await dbOf(preview.id)).toEqual(textOnlyDbRuntime)
+    })
+
+    it('keeps the text of records for a site with a plugin that could not be asked now', async () => {
+      const { workspace, site, preview } = await dialog()
+      await db.credentialRef.create({
+        data: {
+          workspaceId: workspace.id,
+          siteId: site.id,
+          kind: 'wp',
+          vaultPath: siteAccessPath(site.id, 'wp'),
+          keyVersion: 1,
+        },
+      })
+      const f = manager({ production: null, productionRefusal: noAccess(), previewDb })
+      await databaseAccess(f, site.id)
+      await f.m.refresh(preview.id, { requested: true })
+      expect(await dbOf(preview.id)).toEqual(textOnlyDbRuntime)
+    })
   })
 
   it('rebuilds to a candidate: its plan replayed, its checks recorded, earlier ones stale', async () => {
