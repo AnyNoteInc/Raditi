@@ -2,7 +2,8 @@ import type { SiteStatus } from '@repo/db'
 
 import type { AppIconName } from '@/components/application/app-icon'
 
-export type SiteSection = 'overview' | 'changes' | 'runs' | 'database' | 'vault' | 'settings'
+export type SiteSection =
+  'overview' | 'changes' | 'runs' | 'terminal' | 'database' | 'vault' | 'settings'
 
 export type SiteNavEntry = {
   section: SiteSection
@@ -26,6 +27,8 @@ export const siteNav: readonly SiteNavEntry[] = [
   { section: 'overview', label: 'Обзор', icon: 'globe', primary: true },
   { section: 'changes', label: 'Изменения', icon: 'changes', primary: true },
   { section: 'runs', label: 'Запуски', icon: 'runs', primary: true },
+  // The files of the version the site has, to read (owner's request of 06.11.2026).
+  { section: 'terminal', label: 'Терминал', icon: 'terminal', primary: false },
   { section: 'database', label: 'База и бэкап', icon: 'database', primary: false },
   // The client's environment variables (docs/plan/53, Р13): the values live in Vault.
   { section: 'vault', label: 'Переменные', icon: 'key', primary: false },

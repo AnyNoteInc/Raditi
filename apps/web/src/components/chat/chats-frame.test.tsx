@@ -45,6 +45,7 @@ const chat: DialogListPage['items'][number] = {
   undo: null,
   answered: false,
   rewound: false,
+  failed: false,
   createdAt: NOW,
   updatedAt: NOW,
   project: null,

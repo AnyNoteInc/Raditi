@@ -50,6 +50,12 @@ export interface CandidateGit {
   rewindBranch(input: BranchRewindInput, assertFence?: () => Promise<void>): Promise<void>
   /** `/undo`, before the branch moves: `GitWorkspaceService.holdUndoneCommit`. */
   holdUndoneCommit(input: UndoneCommitInput, assertFence?: () => Promise<void>): Promise<void>
+  /**
+   * The client's edit of a file in «Терминал» (06.11.2026): `GitWorkspaceService.readFile` and
+   * `commitFileEdit`. Absent where git cannot do it: the edit is not saved.
+   */
+  readFile?: GitWorkspaceService['readFile']
+  commitFileEdit?: GitWorkspaceService['commitFileEdit']
 }
 
 export interface CommitComparisonInput {
@@ -120,12 +126,23 @@ export function candidateGitOf(
   service: Pick<
     GitWorkspaceService,
     'readBranchHead' | 'rebaseCandidate' | 'rewindBranch' | 'holdUndoneCommit' | 'treeOf'
-  > & {
-    compareCommits?: unknown
-  },
+  > &
+    Partial<Pick<GitWorkspaceService, 'readFile' | 'commitFileEdit'>> & {
+      compareCommits?: unknown
+    },
 ): CandidateGit {
   const compare = service.compareCommits
+  const { readFile, commitFileEdit } = service
   return {
+    ...(readFile
+      ? { readFile: (input) => readFile.call(service, { ...input, repo: refOf(input.repo) }) }
+      : {}),
+    ...(commitFileEdit
+      ? {
+          commitFileEdit: (input, assertFence) =>
+            commitFileEdit.call(service, { ...input, repo: refOf(input.repo) }, assertFence),
+        }
+      : {}),
     readBranchHead: (input) => service.readBranchHead({ ...input, repo: refOf(input.repo) }),
     treeOf: (input) => service.treeOf({ ...input, repo: refOf(input.repo) }),
     rebaseCandidate: (input, assertFence) =>

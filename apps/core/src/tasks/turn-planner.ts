@@ -1,7 +1,7 @@
 import type { AttemptCreditBudget } from '@repo/billing'
 import {
   attemptBudgetRub,
-  leaseScopeOf,
+  turnLeaseOf,
   MAX_SANDBOX_EGRESS_HOSTS,
   MAX_SANDBOX_TURN_MS,
   Money,
@@ -375,10 +375,12 @@ async function startOf(facts: PassFacts, env: PlannerEnvironment): Promise<Start
     const head = await env.mainHead()
     return head ? { expectedBaseSha: head, since: null } : null
   }
-  // «Обновить» moved the dialog onto a new `main` after its last turn (Р27): it records the
-  // candidate under the task's turn number, with a head that turn did not write. The next turn
-  // is a new session on that head — after an unsuccessful turn a replacement of it, so that its
-  // content is undone first; its own input stands on the old `main`.
+  // «Обновить» moved the dialog onto a new `main` after its last turn (Р27), or the client saved
+  // a file of the chat («Терминал»): either records the candidate under the task's turn number,
+  // with a head that turn did not write. The next turn starts on that head and goes on with the
+  // session it left off (owner's request of 06.11.2026: «необходимо продолжать сессию») — after an
+  // unsuccessful turn a replacement of it, so that its content is undone first, restoring the
+  // session the replaced turn started from. A turn without a checkpoint starts a new session.
   const moved =
     facts.candidate &&
     facts.candidate.turnNo === facts.task.turnNo &&
@@ -386,13 +388,21 @@ async function startOf(facts: PassFacts, env: PlannerEnvironment): Promise<Start
       ? facts.candidate.headSha
       : null
   if (moved !== null) {
-    if (succeeded(last)) return { expectedBaseSha: moved, rebased: true, since: null }
+    if (succeeded(last)) {
+      const previous = snapshotOf(facts, env.driver, last)
+      return previous
+        ? { expectedBaseSha: moved, previous, rebased: true, since: last.startedAt }
+        : { expectedBaseSha: moved, rebased: true, since: null }
+    }
+    const before = last.plan?.previous
+    const restored = before ? facts.turns.get(before.turn) : undefined
     return {
       expectedBaseSha: moved,
       expectedBranchSha: facts.writtenHead,
       replacesTurn: last.turnNo,
+      ...(before ? { previous: before } : {}),
       rebased: true,
-      since: null,
+      since: before ? (restored?.startedAt ?? null) : null,
     }
   }
   if (succeeded(last)) {
@@ -581,6 +591,24 @@ function filesNotUndone<File extends { id: string }>(
   return files.filter((file) => !undone.has(file.id))
 }
 
+/**
+ * Said to a session that goes on after its working copy moved under it (owner's request of
+ * 06.11.2026): what it remembers of the files may be out of date.
+ */
+const MOVED_NOTE =
+  'Since your last turn the working copy has changed: the client edited files or the changes were carried onto the current version of the site. Read a file again before you change it.'
+
+/**
+ * What the platform adds to a session that goes on after its working copy moved. A `/compact`
+ * right after the move hears no words, so the turn of words after it is told instead.
+ */
+function movedContext(facts: PassFacts, start: Start | StartWithoutRepository): string {
+  if (!start.previous || !('expectedBaseSha' in start)) return ''
+  if (start.rebased) return MOVED_NOTE
+  const last = facts.turns.get(facts.task.turnNo)?.plan
+  return last?.rebased && last.previous && last.input.action !== undefined ? MOVED_NOTE : ''
+}
+
 /** A prompt: the client's words, then what the platform adds, which is always kept whole. */
 function promptWith(facts: PassFacts, context: string, since: Date | null): string {
   const requests = requestsNotUndone(facts)
@@ -595,9 +623,11 @@ function browserPromptOf(
   browser: BrowserPassFacts,
   since: Date | null,
   workspace: { inbox: readonly string[] } | null,
+  moved = '',
 ): string {
   const attachments = filesNotUndone(facts, browser.attachments)
-  return promptWith(facts, browserContextOf({ ...browser, attachments }, workspace), since)
+  const context = browserContextOf({ ...browser, attachments }, workspace)
+  return promptWith(facts, moved ? `${moved}\n\n${context}` : context, since)
 }
 
 /**
@@ -619,9 +649,10 @@ function actionOf(facts: PassFacts, start: Start | StartWithoutRepository): Turn
 }
 
 /** The prompt of a pass with the code alone: the notes of the project are data, not rules (§5.7). */
-function codePromptOf(facts: PassFacts, since: Date | null): string {
+function codePromptOf(facts: PassFacts, since: Date | null, moved = ''): string {
   const notes = facts.agentNotes?.trim()
-  return promptWith(facts, notes ? `---\n${PROJECT_NOTES}\n${notes}` : '', since)
+  const context = [moved, notes ? `---\n${PROJECT_NOTES}\n${notes}` : '']
+  return promptWith(facts, context.filter(Boolean).join('\n\n'), since)
 }
 
 /**
@@ -761,7 +792,9 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
       image: env.driver.image,
       labels: {
         workspaceId: task.workspaceId,
-        siteId: leaseScopeOf(task),
+        // The row of the turn's lease (`turnLeaseOf`): a chat with the code works beside the
+        // other chats of its project.
+        siteId: turnLeaseOf({ ...task, needsRepository: requirements.repository }),
         taskId: task.id,
         sessionId,
         turn,
@@ -816,8 +849,9 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
                 browser,
                 start.since,
                 workspace ? { inbox: inbox?.paths ?? [] } : null,
+                movedContext(facts, start),
               )
-            : codePromptOf(facts, start.since),
+            : codePromptOf(facts, start.since, movedContext(facts, start)),
           // Their paths only: core puts the files there when the sandbox is prepared.
           attachments: inbox?.paths ?? [],
         },

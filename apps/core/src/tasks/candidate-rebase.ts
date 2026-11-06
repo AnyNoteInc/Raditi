@@ -21,6 +21,7 @@ import {
   leaseLost,
   taskHoldExpiry,
   terminalTaskStatuses,
+  turnLeaseOf,
   withSite,
   type CandidateRebaseJob,
   type FeedUpdateOutcome,
@@ -191,8 +192,9 @@ export class CandidateRebase {
       )
 
     const sited = withSite(task)
+    // A chat with a candidate has the code: it leases its own row, as its turns (`turnLeaseOf`).
     const lease = await this.deps.leases.acquire({
-      siteId: sited.siteId,
+      siteId: turnLeaseOf({ ...sited, needsRepository: true }),
       taskId: task.id,
       operation: 'turn',
       ttlMs: REBASE_LEASE_MS,

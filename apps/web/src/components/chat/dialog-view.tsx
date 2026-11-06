@@ -10,6 +10,7 @@ import {
   feedStateText,
   feedVersionText,
   taskAnsweredLabel,
+  taskFailedLabel,
   taskRewoundLabel,
   taskStatusLabel,
 } from '@repo/domain/tasks/client-feed-labels'
@@ -27,6 +28,7 @@ import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } 
 import { AppIcon } from '@/components/application/app-icon'
 import { ConfirmDialog } from '@/components/billing/confirm-dialog'
 import { siteHref } from '@/components/site/site-nav'
+import { SiteFiles } from '@/components/site/site-files'
 import { downloadText } from '@/lib/download-text'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
@@ -85,6 +87,7 @@ import {
   retryFailure,
   stopRequested,
   undoFailedAfter,
+  updateRowsOf,
   withoutRedoneRewinds,
 } from './feed-model'
 import { showsRefresh, type FeedHeadState } from './feed-state'
@@ -378,6 +381,13 @@ export function DialogView({
     over: ReasoningEffort | undefined
   } | null>(null)
   const [releaseOpen, setReleaseOpen] = useState(false)
+  // `/release` of changes the site moved past: «Обновить» first, then the release of what it made.
+  // What the dialog showed when it was pressed: the revision it carries on and the updates of it
+  // the feed had told — a new one says the update recorded no revision.
+  const [releaseAfterUpdate, setReleaseAfterUpdate] = useState<{
+    revision: number
+    updates: number
+  } | null>(null)
   const [undoOpen, setUndoOpen] = useState(false)
   const [cancelOpen, setCancelOpen] = useState(false)
   // Why the server refused the last thing written or pressed: one sentence under the field.
@@ -622,6 +632,22 @@ export function DialogView({
       })
     shownCandidate.current = candidateMark
   }, [candidateMark, candidateRevision, queryClient, taskId, trpc])
+  // `/release` of changes the site moved past waits for its «Обновить»: the next revision, made
+  // current, opens its release; a conflict or a failure — a row of the update — or the end of the
+  // dialog ends the wait, and the row says why. Never a revision some later pass makes.
+  // State adjusted while rendering, not in an effect: the head that says so is this render's.
+  if (releaseAfterUpdate) {
+    const updates = updateRowsOf(rows)
+    if (
+      status === 'awaiting_approval' &&
+      candidate?.status === 'current' &&
+      candidate.revision > releaseAfterUpdate.revision
+    ) {
+      setReleaseAfterUpdate(null)
+      setReleaseOpen(true)
+    } else if (updates > releaseAfterUpdate.updates || terminal || status === 'awaiting_user')
+      setReleaseAfterUpdate(null)
+  }
   // A tab of the changes on the screen — beside the dialog or in its place — shows the client this
   // revision: «+» bears no dot for it (И13). A revision that comes after is new again.
   const changesShown = shown && isChangesTool(tools.active)
@@ -651,6 +677,9 @@ export function DialogView({
     status === 'awaiting_user' && question === null && ending?.type !== 'feed.failure'
   // `/undo` leaves the dialog open as an answer does, and takes that answer back.
   const rewound = answered && ending?.type === 'feed.rewind'
+  // A failure that left the dialog open asks nothing to confirm (06.11.2026): it reads «Ошибка».
+  const openFailure =
+    status === 'awaiting_user' && question === null && ending?.type === 'feed.failure'
   const announcement =
     status === undefined
       ? ''
@@ -660,7 +689,9 @@ export function DialogView({
           ? taskRewoundLabel
           : answered
             ? taskAnsweredLabel
-            : taskStatusLabel[status]
+            : openFailure
+              ? taskFailedLabel
+              : taskStatusLabel[status]
 
   /** The focus goes to the tab of a tool: what moved it is gone or behind. */
   function focusSoon(id: string) {
@@ -795,11 +826,14 @@ export function DialogView({
       // «Продолжить» sets credits aside for the next attempt.
       if (which === 'continue')
         void queryClient.invalidateQueries({ queryKey: trpc.billing.usage.queryKey() })
+      refresh()
+      return true
     } catch (failure) {
       setFieldError(callErrorText(failure))
+      // A refusal says the verdicts changed: the commands are read again with the dialog.
+      refresh()
+      return false
     }
-    // A refusal says the verdicts changed: the commands are read again with the dialog.
-    refresh()
   }
 
   /** `/undo`: the agent forgets the last request, and its words come back to the field (§5.14). */
@@ -952,7 +986,12 @@ export function DialogView({
     setFieldError(null)
     switch (id) {
       case 'release':
-        setReleaseOpen(true)
+        if (head?.candidate?.status === 'stale') {
+          setReleaseAfterUpdate({ revision: head.candidate.revision, updates: updateRowsOf(rows) })
+          void press('update', update.mutateAsync).then((ok) => {
+            if (!ok) setReleaseAfterUpdate(null)
+          })
+        } else setReleaseOpen(true)
         return
       case 'preview':
         openTool('preview', { by: 'command' })
@@ -1230,6 +1269,13 @@ export function DialogView({
             onReset={() => runCommand('reset')}
             resetting={reset.isPending}
           />
+        )
+      case 'terminal':
+        // The files of the agent's working copy, and the client's edit of one (06.11.2026).
+        return siteId === null ? null : (
+          <Box sx={{ p: 2 }}>
+            <SiteFiles siteId={siteId} taskId={taskId} ended={terminal} onEdited={refresh} />
+          </Box>
         )
       case 'files':
       case 'database':

@@ -385,6 +385,8 @@ export const taskRouter = router({
             answered: z.boolean(),
             /** `/undo` left it so: the answer it would name was just taken back. */
             rewound: z.boolean(),
+            /** The last pass failed: nothing to confirm, the list says «Ошибка» (06.11.2026). */
+            failed: z.boolean(),
             createdAt: z.date(),
             updatedAt: z.date(),
             project: projectOutput.nullable(),

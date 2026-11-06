@@ -67,13 +67,11 @@ describe('revocation of a turn key', () => {
     ])
   })
 
-  it('finds the lease of a chat without a site by the id of the task (plan 61, К14)', async () => {
+  it("locks both rows a turn of the task may hold: its own and its site's (turnLeaseOf)", async () => {
     const f = fixture()
     await revokeTurnCredentials(f, ref)
     const lock = f.queries.find((sql) => sql.includes('site_leases'))!
-    expect(lock.replace(/\s+/g, ' ')).toContain(
-      'JOIN tasks t ON COALESCE(t.site_id, t.id) = l.site_id',
-    )
+    expect(lock.replace(/\s+/g, ' ')).toContain('JOIN tasks t ON l.site_id IN (t.id, t.site_id)')
   })
 
   it('leaves the durable fence when Vault fails and answers with an unavailable gateway', async () => {

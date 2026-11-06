@@ -9,6 +9,7 @@ import {
   feedCardTitle,
   feedCeilingText,
   feedCommandText,
+  feedEditText,
   feedRedoText,
   feedRewindText,
   feedCreditsSentence,
@@ -235,6 +236,8 @@ function rowBlock(row: FeedItem, withSite: boolean): string | null {
       return feedRewindText(row)
     case 'feed.redo':
       return feedRedoText(row)
+    case 'feed.edit':
+      return block([heading(feedExportText.you, row.at), feedEditText(row)])
     case 'newer':
       return feedRowText.newer
     case 'unreadable':

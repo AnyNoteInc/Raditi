@@ -13,6 +13,7 @@ import { PreviewsModule } from './previews/previews.module.ts'
 import { QueueModule } from './queue/queue.module.ts'
 import { ReleaseApiModule } from './release-api/release-api.module.ts'
 import { ReleasesModule } from './releases/releases.module.ts'
+import { SiteFilesModule } from './site-files/site-files.module.ts'
 import { SiteProvisioningModule } from './site-provisioning/site-provisioning.module.ts'
 import { TasksModule } from './tasks/tasks.module.ts'
 import { TurnsModule } from './turns/turns.module.ts'
@@ -45,6 +46,8 @@ export class AppModule {
         NotificationsModule,
         BillingModule,
         SiteProvisioningModule,
+        // The files of a project for its section «Терминал» (06.11.2026).
+        SiteFilesModule,
         // The turn engine between the site import and the dialogs: Nest starts and stops the
         // modules of one level in the order it meets them, the order AppModule's test pins.
         turns,

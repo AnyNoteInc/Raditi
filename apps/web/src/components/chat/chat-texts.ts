@@ -405,6 +405,9 @@ export const attachmentText = Object.freeze({
   retryNamed: (name: string) => `Повторить загрузку ${name}`,
   removeNamed: (name: string) => `Убрать ${name}`,
   cancelNamed: (name: string) => `Отменить загрузку ${name}`,
+  /** The picture of a chosen photo: a press opens it, before the message is sent (06.11.2026). */
+  openNamed: (name: string) => `Открыть фото ${name}`,
+  close: 'Закрыть',
   /** The send button waits for the files. */
   wait: 'Дождитесь загрузки файлов',
   /** A file failed: the message waits until it is sent again or taken out. */
@@ -654,6 +657,7 @@ export const toolText = Object.freeze({
     files: previewPanelText.files,
     database: previewPanelText.database,
     checks: previewPanelText.checks,
+    terminal: 'Терминал',
   }),
   /** The name of a tool in the menu. */
   item: Object.freeze({
@@ -662,6 +666,7 @@ export const toolText = Object.freeze({
     files: 'Файлы и изменения',
     database: previewPanelText.database,
     checks: previewPanelText.checks,
+    terminal: 'Терминал',
   }),
   /** The marks on the right of the tiles (И5); a browser that holds a session says who drives it. */
   mark: Object.freeze({

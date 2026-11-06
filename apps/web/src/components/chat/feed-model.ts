@@ -262,6 +262,14 @@ export function redoneAfter(rows: readonly FeedRow[], pressId: string): boolean 
 }
 
 /** `/undo` of the press `pressId` failed: core wrote that the chat stands as it did (§5.14). */
+/**
+ * How many «Обновить» rows the feed tells: an update that recorded no revision — a conflict, a
+ * failure, nothing to carry — leaves one, the one that moved the changes leaves a new revision.
+ */
+export function updateRowsOf(rows: readonly FeedRow[]): number {
+  return rows.filter((row) => row.type === 'feed.update').length
+}
+
 export function undoFailedAfter(rows: readonly FeedRow[], pressId: string): boolean {
   const press = BigInt(pressId)
   return rows.some(

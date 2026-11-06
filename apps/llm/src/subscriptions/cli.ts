@@ -149,16 +149,24 @@ export interface SubscriptionImport {
   planExample: string
 }
 const imports = new Map<string, SubscriptionImport>([
-  // One turn at a time until the plan's real concurrency is measured (owner's question П4).
+  // Eight turns at a time, the bound of an account (owner's request of 06.11.2026: eight agents
+  // side by side; it was one until the plan's real concurrency is measured, П4). A request or two
+  // of each turn at once: sixteen. The operator lowers them in the account's row if the plan
+  // answers 429.
   [
     zaiCodingBackend.id,
-    { backend: zaiCodingBackend, driverId: 'opencode', turns: 1, requests: 2, planExample: 'lite' },
+    {
+      backend: zaiCodingBackend,
+      driverId: 'opencode',
+      turns: 8,
+      requests: 16,
+      planExample: 'lite',
+    },
   ],
-  // The pay-per-token API has no plan cap, only rate limits nobody has measured yet: the same
-  // values until then, raised by the operator in the account's row within its bounds.
+  // The pay-per-token API has no plan cap, only rate limits nobody has measured yet: the same.
   [
     zaiApiBackend.id,
-    { backend: zaiApiBackend, driverId: 'opencode', turns: 1, requests: 2, planExample: 'payg' },
+    { backend: zaiApiBackend, driverId: 'opencode', turns: 8, requests: 16, planExample: 'payg' },
   ],
 ])
 /** `--backend` accepts exactly these ids: a login never meets an id without settings. */

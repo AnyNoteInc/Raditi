@@ -31,10 +31,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL site leases', () => {
   afterEach(async () => {
     for (const workspaceId of workspaces.splice(0)) {
       const sites = await db.site.findMany({ where: { workspaceId }, select: { id: true } })
-      const chats = await db.task.findMany({
-        where: { workspaceId, siteId: null },
-        select: { id: true },
-      })
+      // A chat leases its own row with or without a site (`turnLeaseOf`).
+      const chats = await db.task.findMany({ where: { workspaceId }, select: { id: true } })
       await db.siteLease.deleteMany({
         where: { siteId: { in: [...sites, ...chats].map(({ id }) => id) } },
       })
@@ -116,9 +114,34 @@ describe.skipIf(!databaseUrl)('PostgreSQL site leases', () => {
       expect(await store.inspect(other.taskId)).toBeNull()
     })
 
-    it('never lets a task of a site lease by its own id', async () => {
+    // The owner, 06.11.2026: the chats of one project work side by side (`turnLeaseOf`).
+    it('lets two tasks of one site lease their own rows at once, beside the site', async () => {
       const site = await fixture()
-      expect(await store.acquire({ ...site, siteId: site.taskId })).toBeNull()
+      const first = await store.acquire({ ...site, siteId: site.taskId })
+      const second = await store.acquire({
+        ...site,
+        taskId: site.otherTaskId,
+        siteId: site.otherTaskId,
+      })
+      expect(first).toMatchObject({ siteId: site.taskId, taskId: site.taskId })
+      expect(second).toMatchObject({ siteId: site.otherTaskId, taskId: site.otherTaskId })
+      // The site's own row stays free for a release.
+      expect(await store.acquire({ ...site, operation: 'deploy' })).not.toBeNull()
+    })
+
+    it('starts no turn of the site on its own row while a release holds the site', async () => {
+      const site = await fixture()
+      const release = await store.acquire({ ...site, operation: 'deploy' })
+      expect(release).not.toBeNull()
+      const own = { ...site, taskId: site.otherTaskId, siteId: site.otherTaskId }
+      expect(await store.acquire(own)).toBeNull()
+      expect(await store.release(release!)).toBe(true)
+      expect(await store.acquire(own)).not.toBeNull()
+    })
+
+    it('never lets a task lease the row of another task', async () => {
+      const site = await fixture()
+      expect(await store.acquire({ ...site, siteId: site.otherTaskId })).toBeNull()
     })
 
     it('is refused by the database with the id of a site', async () => {

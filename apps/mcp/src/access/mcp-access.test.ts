@@ -176,8 +176,8 @@ describe('MCP token access', () => {
     for (const condition of [
       'JOIN tasks t ON t.id = k.task_id',
       'LEFT JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id',
-      'JOIN turn_assignments a ON a.task_id = k.task_id AND a.turn_no = k.turn_no AND a.first_epoch = k.first_epoch AND a.session_id = k.session_id AND a.site_id = COALESCE(t.site_id, t.id)',
-      'JOIN site_leases l ON l.site_id = COALESCE(t.site_id, t.id) AND l.holder_task_id = t.id AND l.epoch = a.lease_epoch',
+      'JOIN turn_assignments a ON a.task_id = k.task_id AND a.turn_no = k.turn_no AND a.first_epoch = k.first_epoch AND a.session_id = k.session_id AND a.site_id IN (t.id, t.site_id)',
+      'JOIN site_leases l ON l.site_id = a.site_id AND l.holder_task_id = t.id AND l.epoch = a.lease_epoch',
       'k.mcp_token_hash = $',
       'k.revoke_requested_at IS NULL',
       'k.revoked_at IS NULL',

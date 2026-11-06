@@ -91,9 +91,14 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
     await db.gitRepository.deleteMany({ where: { owner: 'sites-r3-rebase' } })
     const sites = await db.site.findMany({
       where: { name: 'Billing verification', tasks: { some: { candidates: { some: {} } } } },
-      select: { id: true },
+      select: { id: true, tasks: { select: { id: true } } },
     })
-    await db.siteLease.deleteMany({ where: { siteId: { in: sites.map((site) => site.id) } } })
+    // The rows of the sites and those of their chats (`turnLeaseOf`).
+    await db.siteLease.deleteMany({
+      where: {
+        siteId: { in: sites.flatMap((site) => [site.id, ...site.tasks.map((task) => task.id)]) },
+      },
+    })
     await fixtures.cleanup()
     vi.clearAllMocks()
   })
@@ -240,7 +245,7 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
       (c) => [c.revision, c.status, c.baseSha, c.headSha],
     )
 
-  it('carries the candidate onto main as the next revision, under the lease of the site', async () => {
+  it('carries the candidate onto main as the next revision, under its own lease', async () => {
     const dialog = await waiting()
     const job = await update(dialog)
     const written = await db.taskEvent.findUniqueOrThrow({
@@ -281,8 +286,8 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
     ).toEqual([2])
     // The new revision is told by its own card.
     expect(await told(dialog.taskId)).toEqual([])
-    // The site is free again.
-    expect((await leases.inspect(siteIdOf(dialog)))?.taskId).toBeNull()
+    // The chat's own row is free again (`turnLeaseOf`).
+    expect((await leases.inspect(dialog.taskId))?.taskId).toBeNull()
     // A repeat of the command (a pass that waited put it again) finds it done and keeps its answer.
     expect(await setup({ branch: REBASED }).rebase.run(job)).toBe('nothing')
     expect(await outcomes(dialog.taskId)).toEqual(['rebased'])
@@ -676,7 +681,7 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
     expect(await outcomes(dialog.taskId)).toEqual(['conflict'])
     // The client sees it: the update did not carry, and why.
     expect(await told(dialog.taskId)).toEqual([{ v: 1, outcome: 'conflict', conflicts: 1 }])
-    expect((await leases.inspect(siteIdOf(dialog)))?.taskId).toBeNull()
+    expect((await leases.inspect(dialog.taskId))?.taskId).toBeNull()
   })
 
   it('refuses an update that would change a path the rules of the workspace refuse', async () => {
@@ -695,18 +700,19 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
     expect(await told(dialog.taskId)).toEqual([{ v: 1, outcome: 'failed', conflicts: 0 }])
   })
 
-  it('waits for a busy site and does nothing for a dialog that does not wait with a candidate', async () => {
+  it('waits for a release of its site and does nothing for a dialog that does not wait with a candidate', async () => {
     const dialog = await waiting()
-    // Another dialog of the same site holds it.
+    // A release of another dialog of the same site holds it: a turn of another dialog would not
+    // (the chats of one project work side by side, `turnLeaseOf`).
     const row = await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })
     const other = await db.task.create({
-      data: { workspaceId: row.workspaceId, siteId: dialog.siteId, status: 'running' },
+      data: { workspaceId: row.workspaceId, siteId: dialog.siteId, status: 'deploying' },
     })
     expect(
       await leases.acquire({
         siteId: siteIdOf(dialog),
         taskId: other.id,
-        operation: 'turn',
+        operation: 'deploy',
         ttlMs: 60_000,
       }),
     ).not.toBeNull()

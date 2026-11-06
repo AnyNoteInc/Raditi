@@ -831,7 +831,7 @@ export interface ChatCommand {
 `feedCommandIds` исключает `retry` и все `scope: 'client'`. `ChatCommandFacts` получает `repository: boolean`, `turnUndo`, `turnRedo`, `cancelPending`, `browserWrote`, `compaction: boolean` и, с 61.16k, `projectClosed: boolean`. Источник `compaction` — контекст `chat-services`: tRPC и web драйверов не импортируют. Новые отказы и тексты:
 
 - `nothing_to_undo` — «Отменять пока нечего.»
-- `undo_past_update` — «Этот запрос отменить нельзя: после него рабочая копия перешла на новую версию сайта.»
+- `undo_past_update` — «Этот запрос отменить нельзя: после него рабочая копия перешла на новую версию сайта.» С 06.11.2026 — «Этот запрос отменить нельзя: после него рабочая копия изменилась — вы правили её файлы или она перешла на новую версию сайта.» (правка клиента в «Терминале» тоже сдвигает голову; spec §20, «Чаты и проект — запросы владельца от 06.11.2026»).
 - `content_written` — «Этот запрос отменить нельзя: он изменил содержимое сайта.»
 - `turn_rewinding` — «Подождите: последний запрос ещё отменяется.» (61.22: команды на время задания `candidate.rewind`, кроме `/preview` и `/cancel`)
 - `nothing_to_redo` — «Возвращать нечего.»

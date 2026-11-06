@@ -691,7 +691,7 @@ async function ownedTask(tx: Transaction, ref: TurnCredentialRef): Promise<Owned
     FROM tasks t
     JOIN workspaces w ON w.id = t.workspace_id
     LEFT JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id
-    JOIN site_leases l ON l.site_id = COALESCE(t.site_id, t.id)
+    JOIN site_leases l ON l.site_id IN (t.id, t.site_id)
     WHERE t.id = ${ref.taskId}::uuid AND (t.site_id IS NULL OR s.id IS NOT NULL)
       AND l.holder_task_id = t.id AND l.epoch = ${ref.epoch}
       AND l.operation = 'turn' AND NOT l.held_for_operator AND l.expires_at > clock_timestamp()
@@ -732,7 +732,7 @@ async function assertCurrentFence(tx: Transaction, ref: TurnCredentialRef): Prom
   const rows = await tx.$queryRaw<{ owned: boolean }[]>`
     SELECT EXISTS (SELECT 1 FROM tasks t
       LEFT JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id
-      JOIN site_leases l ON l.site_id = COALESCE(t.site_id, t.id)
+      JOIN site_leases l ON l.site_id IN (t.id, t.site_id)
       WHERE t.id = ${ref.taskId}::uuid AND (t.site_id IS NULL OR s.id IS NOT NULL)
         AND l.holder_task_id = t.id AND l.epoch = ${ref.epoch}
         AND l.operation = 'turn' AND NOT l.held_for_operator

@@ -1,11 +1,7 @@
 'use client'
 
 import type { ChatCommandId, FeedReleaseOutcome, FeedUpdateOutcome } from '@repo/domain'
-import {
-  chatCommandRefusalText,
-  chatCommands,
-  type ChatCommandRefusal,
-} from '@repo/domain/release/chat-commands'
+import { chatCommandRefusalText, type ChatCommandRefusal } from '@repo/domain/release/chat-commands'
 import { feedFailureTextOf } from '@repo/domain/tasks/client-feed-failures'
 import {
   feedApprovalSiteText,
@@ -19,6 +15,7 @@ import {
   feedCeilingButtons,
   feedCeilingText,
   feedCommandText,
+  feedEditText,
   feedRedoText,
   feedRewindText,
   feedCreditsSentence,
@@ -693,7 +690,6 @@ function SiteObjects({ objects, heading }: { objects: readonly ShownObject[]; he
 /** Why `/release` cannot be run on the live candidate: said where the button would stand. */
 const RELEASE_HINTS: readonly ChatCommandRefusal[] = [
   'not_allowed',
-  'needs_update',
   'checks_failed',
   'release_in_progress',
   'project_closed',
@@ -703,13 +699,11 @@ function CandidateCard({
   row,
   live,
   release,
-  update,
   actions,
 }: {
   row: CandidateRow
   live: boolean
   release: CommandVerdict | undefined
-  update: CommandVerdict | undefined
   actions: FeedActions
 }) {
   const changed = row.files.added + row.files.modified + row.files.deleted
@@ -730,16 +724,6 @@ function CandidateCard({
                   disabled={actions.busy || actions.stopping}
                 >
                   {feedCandidateText.release}
-                </Button>
-              ) : null}
-              {refusal === 'needs_update' && update?.available ? (
-                <Button
-                  variant="contained"
-                  onClick={actions.onUpdate}
-                  loading={actions.busy}
-                  disabled={actions.stopping}
-                >
-                  {chatCommands.update.label}
                 </Button>
               ) : null}
               <Button variant="outlined" onClick={actions.onShowChanges}>
@@ -989,7 +973,6 @@ function RowView({
           row={row}
           live={row.id === liveCandidateId}
           release={commands.find((command) => command.id === ('release' satisfies ChatCommandId))}
-          update={commands.find((command) => command.id === ('update' satisfies ChatCommandId))}
           actions={actions}
         />
       )
@@ -1084,6 +1067,9 @@ function RowView({
       return <Note text={feedRewindText(row)} />
     case 'feed.redo':
       return <Note text={feedRedoText(row)} />
+    // The client's edit of a file in «Терминал» (06.11.2026).
+    case 'feed.edit':
+      return <Note text={feedEditText(row)} />
     case 'newer':
       return <Note text={feedRowText.newer} />
     case 'unreadable':

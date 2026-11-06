@@ -8,7 +8,7 @@ import {
   CANDIDATE_REBASE_JOB,
   candidateRebaseDedupeKey,
   isDomainError,
-  leaseScopeOf,
+  turnLeaseOf,
   readFeedRow,
   turnEvidenceSchema,
   type AgentTurnCancelJob,
@@ -48,6 +48,13 @@ const RETRY_DELAY_MS = Object.freeze({
   update: 30_000,
   max: 10 * 60_000,
 })
+
+/**
+ * Passes of one workspace that run at a time (owner's request of 06.11.2026: «расширь количество
+ * параллельных агентов на одного пользователя до 8»): the next one waits as for a busy pool. The
+ * pool and the worker of `agent-turns` bound all the workspaces together.
+ */
+export const WORKSPACE_PASS_LIMIT = 8
 
 const clamp = (value: number) =>
   Math.min(RETRY_DELAY_MS.max, Math.max(RETRY_DELAY_MS.min, Math.round(value)))
@@ -163,6 +170,16 @@ export class PassRunner {
     if (billable && !(await this.#holdsReserve(job))) {
       this.#logger.warn(`pass_without_reserve task=${job.taskId} attempt=${job.attempt}`)
       await settlement.settle(ref, { kind: 'refused', code: 'unavailable' })
+      return
+    }
+    // The claim above moved this task to `preparing` before it counts the others: passes that
+    // claim at once count each other, so the workspace never runs more than its limit.
+    if (await this.#workspaceFull(job.taskId)) {
+      const answer = await settlement.settle(ref, { kind: 'busy', waiting: 'agents' })
+      this.#logger.log(
+        `pass_settled task=${job.taskId} ending=busy answer=${answer} cause=WORKSPACE_FULL`,
+      )
+      if (answer === 'moved') await this.#requeue(job, { delayMs: RETRY_DELAY_MS.update })
       return
     }
     const supervisor = this.deps.supervisor
@@ -413,6 +430,15 @@ export class PassRunner {
     return task?.turnNo ?? null
   }
 
+  /** The workspace of the task runs `WORKSPACE_PASS_LIMIT` passes of its other tasks. */
+  async #workspaceFull(taskId: string): Promise<boolean> {
+    const [row] = await this.deps.db.$queryRaw<Array<{ busy: number }>>`
+      SELECT count(*)::int AS busy
+      FROM tasks t JOIN tasks o ON o.workspace_id = t.workspace_id AND o.id <> t.id
+      WHERE t.id = ${taskId}::uuid AND o.status IN ('preparing', 'running')`
+    return (row?.busy ?? 0) >= WORKSPACE_PASS_LIMIT
+  }
+
   async #holdsReserve(job: AgentTurnJob): Promise<boolean> {
     const holds = await this.deps.db.creditHold.count({
       where: { taskId: job.taskId, attempt: job.attempt, status: 'active' },
@@ -456,12 +482,12 @@ export class PassRunner {
   async #siteRetry(ref: PassRef): Promise<Retry> {
     const task = await this.deps.db.task.findUnique({
       where: { id: ref.taskId },
-      select: { siteId: true },
+      select: { siteId: true, needsRepository: true },
     })
+    // The turn's own row: a chat with the code that waited for a release of its site finds it
+    // free, and the release wakes the pass when it ends.
     const lease = task
-      ? await this.deps.leases
-          .inspect(leaseScopeOf({ id: ref.taskId, siteId: task.siteId }))
-          .catch(() => null)
+      ? await this.deps.leases.inspect(turnLeaseOf({ id: ref.taskId, ...task })).catch(() => null)
       : null
     if (!lease?.expiresAt) return { delayMs: RETRY_DELAY_MS.site }
     const left = lease.expiresAt.getTime() - lease.serverNow.getTime()

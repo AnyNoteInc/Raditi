@@ -149,7 +149,7 @@ export class PostgresTurnAssignmentStore implements TurnAssignmentStore {
       WITH owned AS MATERIALIZED (
         SELECT lease.site_id, clock_timestamp() AS instant FROM site_leases lease
         JOIN tasks task ON task.id = lease.holder_task_id
-          AND COALESCE(task.site_id, task.id) = lease.site_id
+          AND lease.site_id IN (task.id, task.site_id)
         WHERE lease.site_id = ${fence.siteId}::uuid AND lease.holder_task_id = ${fence.taskId}::uuid
           AND lease.epoch = ${fence.epoch} AND lease.operation = 'turn'::"LeaseOperation"
           AND NOT lease.held_for_operator AND lease.expires_at > clock_timestamp()

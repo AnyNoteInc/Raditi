@@ -9,6 +9,7 @@ import type {
   FeedCeilingReason,
   FeedCommandId,
   FeedCreditsState,
+  FeedEditPayload,
   FeedFailurePayload,
   FeedObjectKind,
   FeedObjectStatus,
@@ -73,6 +74,13 @@ export const taskAnsweredLabel = 'Агент ответил'
  */
 export const taskRewoundLabel = 'Запрос отменён'
 
+/**
+ * The word of an open dialog whose last pass failed (owner's request of 06.11.2026: «не вноси в
+ * ждёт вашего подтверждения… просто помечай, что упало с ошибкой»): in place of «Нужен ваш ответ»
+ * and «Ждёт вашего решения», which are for a question and a decision. The list has no hint for it.
+ */
+export const taskFailedLabel = 'Ошибка'
+
 /** The second line of a dialog in the list; null — the status has none. */
 export const taskStatusListHint: Readonly<Record<TaskStatus, string | null>> = Object.freeze({
   queued: null,
@@ -88,7 +96,10 @@ export const taskStatusListHint: Readonly<Record<TaskStatus, string | null>> = O
   cancelled: null,
 })
 
-/** Groups of the list: `awaiting` gathers `awaiting_user` and `awaiting_approval`. */
+/**
+ * Groups of the list: `awaiting` gathers `awaiting_user` and `awaiting_approval`, except a dialog
+ * the agent answered and one whose last pass failed.
+ */
 export const taskListGroupLabel = Object.freeze({
   awaiting: 'Ждёт вашего решения',
   today: 'Сегодня',
@@ -223,6 +234,20 @@ export function feedRewindText(row: Pick<FeedRewindPayload, 'files' | 'site'>): 
 /** The row of `/redo` in the feed. */
 export const feedRedoText = (row: Pick<FeedRedoPayload, 'files'>): string =>
   row.files ? 'Отменённый запрос и его файлы возвращены.' : 'Отменённый запрос возвращён.'
+
+/** The row of the client's edit of a file in «Терминал» (06.11.2026), by its outcome. */
+export function feedEditText(row: Pick<FeedEditPayload, 'path' | 'outcome' | 'revision'>): string {
+  switch (row.outcome) {
+    case 'saved':
+      return `Вы изменили файл ${row.path}. Изменение сохранено в чате: агент продолжит с ним, а на сайт оно попадёт командой /release.`
+    case 'conflict':
+      return `Файл ${row.path} не сохранён: за это время агент изменил его. Откройте файл заново и повторите правку.`
+    case 'refused':
+      return `Файл ${row.path} не сохранён: его менять нельзя — он вне рабочей копии агента, защищён правилами сайта или лежит в медиатеке.`
+    case 'failed':
+      return `Файл ${row.path} не сохранён. Попробуйте ещё раз.`
+  }
+}
 
 /** Shown when `filesChanged` of a result is a number. */
 export const feedFilesChangedText = (count: number): string =>

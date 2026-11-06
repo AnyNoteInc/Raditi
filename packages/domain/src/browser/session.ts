@@ -101,8 +101,11 @@ export const browserSessionLimits = Object.freeze({
   helpChars: 500,
   /** Entries of the `accept` of a file chooser. */
   chooserAccept: 32,
-  /** Live sessions of one workspace (К36): the worker's limit is shared by every client. */
-  perWorkspace: 2,
+  /**
+   * Live sessions of one workspace (К36): the worker's limit is shared by every client. Eight, as
+   * the passes of a workspace that run at once (owner's request of 06.11.2026); it was two.
+   */
+  perWorkspace: 8,
   /** Sessions one assignment of a turn may start: the first and one replacement (К41). */
   perAssignment: 2,
 })

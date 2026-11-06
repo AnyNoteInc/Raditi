@@ -93,11 +93,17 @@ export async function verifyZaiApi(ctx) {
     plan: OFFER.plan,
     health: 'ok',
     enabled: false,
-    maxConcurrentTurns: 1,
-    maxConcurrentRequests: 2,
+    maxConcurrentTurns: 8,
+    maxConcurrentRequests: 16,
     limitsSeenAt: null,
   })
   assert.equal(fresh.limitWindows?.length ?? 0, 0)
+  // The stand's scenarios fence on a capacity of one turn (two requests): the account goes back
+  // to it once the import's own numbers are checked.
+  await db.subscriptionAccount.update({
+    where: { id: accountId },
+    data: { maxConcurrentTurns: 1, maxConcurrentRequests: 2 },
+  })
   // The import asked the monitor path alone — the probe of the key, free and without content —
   // and generated nothing.
   let state = await zai()

@@ -37,7 +37,7 @@ import type { TurnSupervisor } from '../turns/turn-supervisor.ts'
 import type { CandidateBuilder } from './candidate-builder.ts'
 import type { CandidateGit } from './candidate-git.ts'
 import { LivePasses } from './live-passes.ts'
-import { PassRunner } from './pass-runner.ts'
+import { PassRunner, WORKSPACE_PASS_LIMIT } from './pass-runner.ts'
 import { PassSettlement } from './pass-settlement.ts'
 import { INIT_PROMPT } from './turn-instructions.ts'
 
@@ -280,6 +280,29 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     ])
     const holds = await db.creditHold.findMany({ where: { taskId: dialog.taskId } })
     expect(holds.every((hold) => hold.status === 'released')).toBe(true)
+  })
+
+  // The owner, 06.11.2026: «расширь количество параллельных агентов на одного пользователя до 8».
+  it('lets a pass wait while its workspace runs eight others, as for a busy pool', async () => {
+    const dialog = await queued({ reserve: true, chat: true })
+    const { workspaceId } = await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })
+    for (let i = 0; i < WORKSPACE_PASS_LIMIT; i++)
+      await fixtures.task(workspaceId, { status: i % 2 === 0 ? 'running' : 'preparing' })
+    const run = vi.fn<Run>()
+    const { passes, queue } = runner(run)
+
+    await passes.run(dialog.job)
+
+    expect(run).not.toHaveBeenCalled()
+    expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
+      status: 'queued',
+      waiting: 'agents',
+    })
+    expect(queue.enqueue).toHaveBeenCalledTimes(1)
+    // Its reserve stays: the pass goes as soon as one of the eight ends.
+    expect(
+      (await db.creditHold.findMany({ where: { taskId: dialog.taskId } })).map((h) => h.status),
+    ).toEqual(['active'])
   })
 
   it('takes no pass of another attempt', async () => {
@@ -1517,7 +1540,9 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       )
     })
 
-    it('starts the turn after «Обновить» as a new session on the head the update wrote', async () => {
+    // Turn 1 of this dialog kept no plan, so no checkpoint: a new session (the owner, 06.11.2026 — a
+    // session with one goes on; the planner and the store test that path).
+    it('starts the turn after «Обновить» without a checkpoint as a new session on the moved head', async () => {
       await rate()
       const dialog = await rebasedDialog()
       vi.mocked(git.readBranchHead).mockResolvedValue(REBASED)
@@ -1525,10 +1550,11 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       let admitted: unknown = null
       const { passes } = runner(async (request) => {
         planned = request
-        // The store that opens the turn under the site lease admits what the planner built:
-        // both read where the platform last left the task branch the same way.
+        // The store that opens the turn under its lease — the chat's own row, as the planner
+        // names it (`turnLeaseOf`) — admits what the planner built: both read where the platform
+        // last left the task branch the same way.
         const fence = await new PostgresSiteLeaseStore(db).acquire({
-          siteId: siteIdOf(dialog),
+          siteId: request.sandbox.labels.siteId,
           taskId: dialog.taskId,
           operation: 'turn',
           ttlMs: 60_000,
@@ -1547,7 +1573,9 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       try {
         await passes.run(dialog.job)
       } finally {
-        await db.siteLease.deleteMany({ where: { siteId: siteIdOf(dialog) } })
+        await db.siteLease.deleteMany({
+          where: { siteId: { in: [siteIdOf(dialog), dialog.taskId] } },
+        })
       }
 
       expect(planned).toMatchObject({

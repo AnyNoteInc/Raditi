@@ -269,7 +269,10 @@ export class McpContentMaintenance {
         Array<{ held: boolean; writer: string | null; holder: string | null }>
       >`
         SELECT held_for_operator AS held, inflight_mcp_call_id AS writer, holder_task_id AS holder
-        FROM site_leases WHERE site_id = ${leaseScopeOf(initial)}::uuid FOR UPDATE`
+        FROM site_leases
+        WHERE site_id IN (${leaseScopeOf(initial)}::uuid, ${initial.taskId ?? initial.siteId}::uuid)
+        ORDER BY site_id FOR UPDATE`
+      // Its turns held the task's own row or its site's (`turnLeaseOf`): both are looked at.
       // Snapshots outlive the task by the undo window, whatever their capture expiry.
       const clocks = await tx.$queryRaw<Array<{ now: Date }>>`
         SELECT clock_timestamp() AS now FROM snapshots s JOIN tasks t ON t.id = s.task_id
@@ -346,7 +349,8 @@ export class McpContentMaintenance {
         Array<{ held: boolean; writer: string | null; holder: string | null }>
       >`
         SELECT held_for_operator AS held, inflight_mcp_call_id AS writer, holder_task_id AS holder
-        FROM site_leases WHERE site_id = ${leaseScopeOf(initial)}::uuid FOR UPDATE`
+        FROM site_leases WHERE site_id IN (${leaseScopeOf(initial)}::uuid, ${initial.id}::uuid)
+        ORDER BY site_id FOR UPDATE`
       const clocks = await tx.$queryRaw<Array<{ now: Date }>>`
         SELECT clock_timestamp() AS now FROM tasks WHERE id = ${id}::uuid
           AND content_masks_purged_at IS NULL AND ${contentExpiredSql('tasks')} FOR UPDATE`

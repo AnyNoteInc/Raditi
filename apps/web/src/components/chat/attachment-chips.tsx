@@ -2,7 +2,9 @@
 
 import { attachmentSizeText } from '@repo/domain/attachments/labels'
 import Box from '@mui/material/Box'
+import Dialog from '@mui/material/Dialog'
 import IconButton from '@mui/material/IconButton'
+import { useState } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 
@@ -48,6 +50,94 @@ function Tile({ kind, failed }: { kind: 'image' | 'document'; failed?: boolean }
   )
 }
 
+/**
+ * The picture of a chosen photo in place of its sign: a press opens the photo, before the message
+ * is sent (owner's request of 06.11.2026).
+ */
+function PhotoTile({ name, src, onOpen }: { name: string; src: string; onOpen: () => void }) {
+  return (
+    <Box
+      component="button"
+      type="button"
+      onClick={onOpen}
+      aria-label={attachmentText.openNamed(name)}
+      sx={{
+        width: 40,
+        height: 40,
+        flex: 'none',
+        p: 0,
+        border: 0,
+        borderRadius: '8px',
+        overflow: 'hidden',
+        cursor: 'zoom-in',
+        bgcolor: 'action.selected',
+        '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: 2 },
+      }}
+    >
+      <Box
+        component="img"
+        src={src}
+        alt=""
+        sx={{ display: 'block', width: '100%', height: '100%', objectFit: 'cover' }}
+      />
+    </Box>
+  )
+}
+
+/** A chosen photo at full size, over the page; Esc, the cross or a press beside it closes it. */
+function PhotoViewer({
+  photo,
+  onClose,
+}: {
+  photo: { name: string; src: string } | null
+  onClose: () => void
+}) {
+  return (
+    <Dialog
+      open={photo !== null}
+      onClose={onClose}
+      maxWidth={false}
+      slotProps={{
+        paper: {
+          'aria-label': photo?.name,
+          sx: { m: 2, bgcolor: 'background.paper', borderRadius: '12px', overflow: 'hidden' },
+        },
+      }}
+    >
+      {photo ? (
+        <Box sx={{ position: 'relative' }}>
+          <Box
+            component="img"
+            src={photo.src}
+            alt={photo.name}
+            sx={{
+              display: 'block',
+              maxWidth: 'calc(100vw - 32px)',
+              maxHeight: 'calc(100dvh - 32px)',
+              objectFit: 'contain',
+            }}
+          />
+          <IconButton
+            aria-label={attachmentText.close}
+            onClick={onClose}
+            sx={{
+              position: 'absolute',
+              top: 8,
+              right: 8,
+              width: 44,
+              height: 44,
+              bgcolor: 'background.paper',
+              '&:hover': { bgcolor: 'background.paper' },
+            }}
+          >
+            <AppIcon name="close" size={18} />
+          </IconButton>
+        </Box>
+      ) : null}
+    </Dialog>
+  )
+}
+
 const nameSx = {
   fontSize: 14,
   fontWeight: 500,
@@ -68,6 +158,7 @@ export function AttachmentChips({
   onRetry: (key: string) => void
   onRemove: (key: string) => void
 }) {
+  const [photo, setPhoto] = useState<{ name: string; src: string } | null>(null)
   if (items.length === 0) return null
   return (
     <Box
@@ -75,6 +166,7 @@ export function AttachmentChips({
       aria-label={attachmentText.list}
       sx={{ m: 0, p: '4px 4px 0', listStyle: 'none', display: 'flex', flexWrap: 'wrap', gap: 1 }}
     >
+      <PhotoViewer photo={photo} onClose={() => setPhoto(null)} />
       {items.map((item) => {
         const failed = item.state === 'failed'
         const busy = item.state === 'queued' || item.state === 'uploading'
@@ -88,7 +180,15 @@ export function AttachmentChips({
               ...(failed && { borderColor: 'error.main' }),
             }}
           >
-            <Tile kind={item.kind} failed={failed} />
+            {item.preview !== null && !failed ? (
+              <PhotoTile
+                name={item.name}
+                src={item.preview}
+                onOpen={() => setPhoto({ name: item.name, src: item.preview! })}
+              />
+            ) : (
+              <Tile kind={item.kind} failed={failed} />
+            )}
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: '3px', minWidth: 0 }}>
               <Box component="span" sx={nameSx} title={item.name}>
                 {item.name}

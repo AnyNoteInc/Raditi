@@ -240,7 +240,7 @@ describe('the commands of a dialog', () => {
   it('says the refusals of `/undo`, `/redo` and `/compact` in the words of the plan', () => {
     expect(chatCommandRefusalText.nothing_to_undo).toBe('Отменять пока нечего.')
     expect(chatCommandRefusalText.undo_past_update).toBe(
-      'Этот запрос отменить нельзя: после него рабочая копия перешла на новую версию сайта.',
+      'Этот запрос отменить нельзя: после него рабочая копия изменилась — вы правили её файлы или она перешла на новую версию сайта.',
     )
     expect(chatCommandRefusalText.content_written).toBe(
       'Этот запрос отменить нельзя: он изменил содержимое сайта.',
@@ -479,16 +479,17 @@ describe('availability', () => {
     expect(verdict({ ...waiting, role: 'admin' }).release).toBeNull()
   })
 
-  it('wants «update» first when the site moved on', () => {
+  // The owner, 06.11.2026: the release carries the changes onto the current `main` itself.
+  it('takes `/release` when the site moved on, the update coming first', () => {
     const moved = {
       ...waiting,
       candidate: { status: 'current' as const, baseIsMain: false, checksFailed: false },
     }
-    expect(verdict(moved)).toMatchObject({ release: 'needs_update', update: null })
+    expect(verdict(moved)).toMatchObject({ release: null, update: null })
     expect(
       verdict({ ...waiting, candidate: { status: 'stale', baseIsMain: true, checksFailed: false } })
         .release,
-    ).toBe('needs_update')
+    ).toBeNull()
   })
 
   it('waits while the agent works and while a release goes on', () => {

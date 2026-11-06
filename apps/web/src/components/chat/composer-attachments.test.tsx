@@ -113,6 +113,32 @@ describe('files of a message', () => {
     expect(click).toHaveBeenCalled()
   })
 
+  // The owner, 06.11.2026: «когда я загружаю фото, но не начал диалог, при клике на превью
+  // открывай фото».
+  it('shows a chosen photo in its chip and opens it on a press, and lets its picture go', async () => {
+    const created = vi.fn((_file: Blob) => 'blob:http://localhost/photo-1')
+    const revoked = vi.fn()
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: created, revokeObjectURL: revoked }))
+    try {
+      show()
+      choose(jpeg('кофе.jpg'), new File(['%PDF'], 'прайс.pdf', { type: 'application/pdf' }))
+      expect(created).toHaveBeenCalledTimes(1)
+      // A document keeps its sign: nothing to open.
+      expect(screen.queryByRole('button', { name: 'Открыть фото прайс.pdf' })).toBeNull()
+      fireEvent.click(await screen.findByRole('button', { name: 'Открыть фото кофе.jpg' }))
+      const viewer = await screen.findByRole('dialog', { name: 'кофе.jpg' })
+      expect(within(viewer).getByRole('img', { name: 'кофе.jpg' }).getAttribute('src')).toBe(
+        'blob:http://localhost/photo-1',
+      )
+      fireEvent.click(within(viewer).getByRole('button', { name: 'Закрыть' }))
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+      fireEvent.click(screen.getByRole('button', { name: 'Отменить загрузку кофе.jpg' }))
+      expect(revoked).toHaveBeenCalledWith('blob:http://localhost/photo-1')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('attaches a file pasted into the field as if it were chosen', async () => {
     const { pending } = show()
     const shot = new File([new Uint8Array(8)], 'image.png', { type: 'image/png' })

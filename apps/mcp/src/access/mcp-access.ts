@@ -57,6 +57,12 @@ export const mcpAccessSchema = z.strictObject({
   turn: z.number().int().positive(),
   firstEpoch: z.number().int().positive(),
   epoch: z.number().int().positive(),
+  /**
+   * The row of `site_leases` the turn holds (`turn_assignments.site_id`): the chat's own for a chat
+   * with the code (`turnLeaseOf`), the site's for a chat without the code and for a stand's turn.
+   * Absent — a scope made before the field, fenced by its site (`leaseIdOf`).
+   */
+  leaseId: z.uuid().optional(),
   stack: z.enum(siteStacks),
   url: siteUrlSchema,
   /** null — the dialog has no preview row (previews are not configured where it was made). */
@@ -98,6 +104,13 @@ export const mcpTurnAccessSchema = mcpAccessSchema
     )
   })
 export type McpTurnAccess = z.infer<typeof mcpTurnAccessSchema>
+
+/** The row of `site_leases` the turn of a scope holds: the lease, not the site, of its fence. */
+export const leaseIdOf = (scope: {
+  leaseId?: string | undefined
+  siteId: string | null
+  taskId: string
+}): string => scope.leaseId ?? scope.siteId ?? scope.taskId
 
 /** The access of a turn on a site; null — the chat has none, and no tool of a site is its. */
 export function siteAccessOf(access: McpTurnAccess): McpAccess | null {
@@ -144,9 +157,10 @@ export const MCP_ACCESS_PROBE_TOKEN = `mcp_${'0'.repeat(64)}`
  * the `web` tools this one, content and the preview's browser `active` alone (they are offered
  * to repository tasks only, `mcpToolFamiliesOf`).
  *
- * A chat without a site is admitted by its own lease (`leaseScopeOf`): the joins of the fence go
- * by `COALESCE(t.site_id, t.id)`. The condition on `t.site_id` is what refuses a task whose site
- * is of another workspace: `LEFT JOIN` finds no site for it, and it must stay as written.
+ * A turn is admitted by the row its assignment names — the chat's own or its site's
+ * (`turnLeaseOf`; a chat without a site has only its own): the joins of the fence go by
+ * `a.site_id`. The condition on `t.site_id` is what refuses a task whose site is of another
+ * workspace: `LEFT JOIN` finds no site for it, and it must stay as written.
  */
 export class PostgresMcpAccess implements McpAccessStore {
   constructor(private readonly prisma: Pick<PrismaClient, '$queryRaw'>) {}
@@ -157,7 +171,8 @@ export class PostgresMcpAccess implements McpAccessStore {
     const rows = await this.prisma.$queryRaw<unknown[]>`
       SELECT k.id AS "keyId", t.id AS "taskId", t.workspace_id AS "workspaceId",
         s.id AS "siteId", k.session_id AS "sessionId", k.turn_no AS turn,
-        k.first_epoch AS "firstEpoch", a.lease_epoch AS epoch, s.stack::text AS stack, s.url,
+        k.first_epoch AS "firstEpoch", a.lease_epoch AS epoch, a.site_id AS "leaseId",
+        s.stack::text AS stack, s.url,
         t.needs_repository AS "needsRepository", t.needs_browser AS "needsBrowser",
         p.id AS "previewId", p.status::text AS "previewStatus",
         p.db_mode = 'copy' AS "previewDatabase", p.hostname AS "previewHostname",
@@ -167,8 +182,8 @@ export class PostgresMcpAccess implements McpAccessStore {
       LEFT JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id
       JOIN turn_assignments a ON a.task_id = k.task_id AND a.turn_no = k.turn_no
         AND a.first_epoch = k.first_epoch AND a.session_id = k.session_id
-        AND a.site_id = COALESCE(t.site_id, t.id)
-      JOIN site_leases l ON l.site_id = COALESCE(t.site_id, t.id) AND l.holder_task_id = t.id
+        AND a.site_id IN (t.id, t.site_id)
+      JOIN site_leases l ON l.site_id = a.site_id AND l.holder_task_id = t.id
         AND l.epoch = a.lease_epoch
       LEFT JOIN preview_environments p ON p.task_id = t.id AND p.site_id = s.id
       WHERE k.mcp_token_hash = ${hash} AND k.revoke_requested_at IS NULL AND k.revoked_at IS NULL

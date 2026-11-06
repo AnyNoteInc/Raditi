@@ -475,20 +475,18 @@ describe('the rows of a dialog', () => {
     expect(handlers.onShowChanges).toHaveBeenCalledTimes(1)
   })
 
-  it('says why the release is closed and offers the update when the site moved on', () => {
+  // The owner, 06.11.2026: `/release` carries the changes onto the current site itself.
+  it('offers the release when the site moved on: the update comes first, without a word of it', () => {
     const row = candidateRow('6', 1)
     const head = headOf({
       status: 'awaiting_approval',
       candidate: { ...candidateHead, status: 'stale' },
-      commands: verdicts({ release: 'needs_update' }),
+      commands: verdicts({}),
     })
     const { feed, handlers } = showFeed([row], head, { candidate: row.id })
-    expect(within(feed).queryByRole('button', { name: 'Выпустить новую версию' })).toBeNull()
-    expect(text(feed)).toContain(
-      'Сайт изменился после начала чата. Сначала обновите рабочую копию.',
-    )
-    fireEvent.click(within(feed).getByRole('button', { name: 'Обновить рабочую копию' }))
-    expect(handlers.onUpdate).toHaveBeenCalledTimes(1)
+    expect(text(feed)).not.toContain('Сначала обновите рабочую копию')
+    fireEvent.click(within(feed).getByRole('button', { name: 'Выпустить новую версию' }))
+    expect(handlers.onRelease).toHaveBeenCalledTimes(1)
   })
 
   it('shows an old candidate without its buttons', () => {
@@ -620,6 +618,28 @@ describe('the rows of a dialog', () => {
       'Отменённый запрос возвращён.',
       'Отменённый запрос и его файлы возвращены.',
     ])
+  })
+
+  // The owner, 06.11.2026: an edit of a file in «Терминал» is saved into the chat.
+  it('says what came of the client’s edit of a file', () => {
+    const edit = (id: string, outcome: 'saved' | 'conflict' | 'refused' | 'failed'): FeedRow => ({
+      id,
+      at: '2026-10-17T09:50:00.000Z',
+      type: 'feed.edit',
+      editId: '0199a3f2-0000-7000-8000-0000000000e1',
+      path: 'wp-content/themes/kadence/style.css',
+      outcome,
+      revision: outcome === 'saved' ? 2 : null,
+    })
+    const { feed } = showFeed(
+      [edit('14', 'saved'), edit('15', 'conflict'), edit('16', 'refused')],
+      headOf({ status: 'awaiting_approval' }),
+    )
+    expect(text(feed)).toContain(
+      'Вы изменили файл wp-content/themes/kadence/style.css. Изменение сохранено в чате',
+    )
+    expect(text(feed)).toContain('за это время агент изменил его')
+    expect(text(feed)).toContain('его менять нельзя')
   })
 
   it('says what `/undo` took back, and what stayed by what the chat left', () => {

@@ -365,8 +365,10 @@ export interface TurnRequest {
   replacesTurn?: number
   /**
    * The first turn after «Обновить» moved the dialog onto a new `main`
-   * (docs/plan/53-chat-preview-release.md, Р27): a new session of the agent, no previous
-   * snapshot is restored; the feed keeps its history. Only with a repository.
+   * (docs/plan/53-chat-preview-release.md, Р27) or the client saved a file of the chat: it starts
+   * on the moved head and goes on with the session of the turn before when `previous` names its
+   * checkpoint (owner's request of 06.11.2026), a new session of the agent without one; the feed
+   * keeps its history. Only with a repository.
    */
   rebased?: boolean
   /**
@@ -569,7 +571,7 @@ export const turnPlanSchema = z
           : 'a turn without a repository has no workspace',
       })
     // Both are git notions: a replacement undoes content of the previous turn, a rebased start
-    // follows «Обновить» onto a new `main`.
+    // follows «Обновить» or the client's edit onto a moved head.
     if (!repository)
       for (const key of ['replacesTurn', 'rebased'] as const)
         if (plan[key] !== undefined)
