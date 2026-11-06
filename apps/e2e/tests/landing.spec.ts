@@ -1990,7 +1990,7 @@ test.describe('pricing', () => {
   })
 
   // A price is set as the expressive numbers of the page: in the face of the headings, with
-  // digits of one width, the ruble sign small beside it. «39 900 ₽» is the widest of the three.
+  // digits of one width, the ruble sign small beside it. «19 990 ₽» is the widest of the three.
   test('sets the prices in the face of the headings, whole inside their columns', async ({
     page,
   }) => {
@@ -2044,7 +2044,7 @@ test.describe('pricing', () => {
           ),
         }
       })
-      soft(read.plans.map((plan) => plan.text?.replaceAll('\u00a0', ' '))).toContain('39 900 ₽')
+      soft(read.plans.map((plan) => plan.text?.replaceAll('\u00a0', ' '))).toContain('19 990 ₽')
       for (const price of [read.total, ...read.plans]) {
         soft(price.family, price.text ?? '').toBe(read.heading)
         soft(price.weight).toBe('500')
@@ -2087,6 +2087,7 @@ test.describe('pricing', () => {
           heading: text(section.querySelector('h2')).left,
           plans: [...section.querySelectorAll('article h3')].map((name) => text(name).left),
           included: text(paragraph('В каждый тариф')).left,
+          charged: text(paragraph('Списываем только за выполненную работу')).left,
           packs: text(paragraph('Кредитов не хватит')).left,
           vat: text(paragraph('Цены в')).left,
           action: { left: action.left, right: action.right },
@@ -2095,14 +2096,22 @@ test.describe('pricing', () => {
       })
       const [first = NaN, second = NaN, third = NaN] = edges.plans
       if (width <= 680) {
-        for (const left of [edges.included, edges.packs, edges.vat, edges.action.left]) {
+        for (const left of [
+          edges.included,
+          edges.charged,
+          edges.packs,
+          edges.vat,
+          edges.action.left,
+        ]) {
           soft(left).toBeCloseTo(edges.heading, 1)
         }
         return
       }
       soft(edges.included).toBeCloseTo(first, 1)
-      soft(edges.packs).toBeCloseTo(first, 1)
-      soft(edges.vat).toBeCloseTo(second, 1)
+      // The rule of the charge, the pack and the currency: one row under the three plans.
+      soft(edges.charged).toBeCloseTo(first, 1)
+      soft(edges.packs).toBeCloseTo(second, 1)
+      soft(edges.vat).toBeCloseTo(third, 1)
       // The action ends where the text of the third plan ends, and starts with it where the
       // column is wide enough for the label.
       soft(edges.action.right).toBeCloseTo(edges.lastPlanRight, 1)
@@ -2119,7 +2128,7 @@ test.describe('pricing', () => {
       await soft(page.locator('#pricing article')).toHaveCount(3)
       const note = pricingAction(page).locator('xpath=following-sibling::p')
       await soft(note).toHaveText(
-        'При регистрации — 35 кредитов в подарок: хватит на несколько небольших правок. Тариф выберете позже.',
+        'При регистрации — 50 кредитов в подарок: хватит на несколько небольших правок. Тариф выберете позже.',
       )
       const edges = await note.evaluate((paragraph) => {
         const action = paragraph.previousElementSibling?.getBoundingClientRect()
@@ -2165,9 +2174,9 @@ test.describe('pricing', () => {
       await slider.fill('120')
       // The sentence of the result; the name of the plan is an element of its own inside it.
       const result = page.locator('#pricing p').filter({ hasText: /^Тариф «Бизнес»/ })
-      // 120 tasks at eleven credits each: the 800 of «Бизнес» and six packs of a hundred.
-      await expect(result).toContainText('и 6 дополнительных пакетов по 100 кредитов')
-      await expect(page.locator('#pricing').getByText(/12.900.₽ \+ 6 × 1.990.₽/)).toBeVisible()
+      // 120 tasks at eleven credits each: the 600 of «Бизнес» and eight packs of a hundred.
+      await expect(result).toContainText('и 8 дополнительных пакетов по 100 кредитов')
+      await expect(page.locator('#pricing').getByText(/6.990.₽ \+ 8 × 1.490.₽/)).toBeVisible()
       const edges = await result.evaluate((element) => {
         const range = document.createRange()
         range.selectNodeContents(element)
@@ -2210,8 +2219,9 @@ test.describe('pricing', () => {
     await slider.focus()
     for (let step = 0; step < 3; step++) await page.keyboard.press('ArrowRight')
     await expect(pricing.locator('output')).toHaveText('45')
+    // 45 tasks are 495 credits: «Бизнес» alone is cheaper than «Старт» with four packs.
     await expect(announcement).toHaveText(
-      /^Тариф «Старт» и 2 дополнительных пакета по 100 кредитов, 8.880 ₽ в месяц, в среднем около 197 ₽ за задачу$/,
+      /^Тариф «Бизнес», 6.990 ₽ в месяц, в среднем около 155 ₽ за задачу\. Небольшая правка — около 58 ₽$/,
     )
     // Heard, not seen: the region takes no room on the page.
     const box = await announcement.boundingBox()
@@ -2351,7 +2361,7 @@ test.describe('navigation and questions', () => {
     await expect(question).toHaveAttribute('open', '')
     await expect(question.locator('p')).toBeVisible()
     await expect(question.locator('p')).toHaveText(
-      'Кредитами мы считаем работу Радити над вашими задачами: чем больше нужно прочитать и изменить на сайте, тем больше кредитов стоит задача. Поменять цену, текст или фото — обычно 5 кредитов, добавить блок или страницу — 15–25. Кредиты списываются только за выполненные задачи. Кредиты тарифа начисляются каждый месяц, а кредиты из пакета не сгорают.',
+      'Кредитами мы считаем работу Радити над вашими задачами: чем больше нужно прочитать и изменить на сайте, тем больше кредитов стоит задача. Поменять цену, текст или фото — обычно 5 кредитов, добавить блок или страницу — 15–25. Списываем только за выполненную работу: если задача не получилась, кредиты возвращаются. Кредиты тарифа начисляются каждый месяц. Неистраченные кредиты тарифа переходят на следующий месяц, один раз. Кредиты из пакета не сгорают.',
     )
   })
 })
@@ -4243,11 +4253,11 @@ test.describe('pricing in motion', () => {
       )
     expect(await motionOf(name())).toEqual([])
 
-    // One pack more with the same plan — thirty tasks take one, forty take two: words change,
+    // One pack more with the same plan — thirty tasks take two, forty take three: words change,
     // nothing moves. The page binds a number to its word with a non-breaking space.
-    await expect(pricing.getByText(/1.дополнительный пакет/)).toBeVisible()
-    await slider.fill('40')
     await expect(pricing.getByText(/2.дополнительных пакета/)).toBeVisible()
+    await slider.fill('40')
+    await expect(pricing.getByText(/3.дополнительных пакета/)).toBeVisible()
     await expect(name()).toHaveText(first ?? '')
     expect(await motionOf(name())).toEqual([])
     expect(await numbersInMotion()).toEqual([])

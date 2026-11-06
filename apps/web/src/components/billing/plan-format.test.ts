@@ -173,7 +173,7 @@ describe('the limits of a tariff', () => {
 describe('what a task costs', () => {
   it('says the rule in the numbers of the credits model', () => {
     expect(taskCostRule()).toBe(
-      'Задача стоит столько кредитов, сколько работы она потребовала, но не меньше 5: небольшая правка текста, цены или фото — обычно 5 кредитов, добавить блок или страницу — 15–25. Кредиты списываются только за выполненную задачу. Уточнения и «Изменить» — часть той же задачи: работа над ними добавляется к её стоимости. «Отменить» — бесплатно.',
+      'Задача стоит столько кредитов, сколько работы она потребовала, но не меньше 5: небольшая правка текста, цены или фото — обычно 5 кредитов, добавить блок или страницу — 15–25. Списываем только за выполненную работу: если задача не получилась, кредиты возвращаются. Уточнения и «Изменить» — часть той же задачи: работа над ними добавляется к её стоимости. «Отменить» — бесплатно.',
     )
   })
 
@@ -340,7 +340,7 @@ describe('the gift of the registration', () => {
 
   it('says what the gift is enough for, as the welcome letter does', () => {
     expect(giftIsEnoughFor(signupGiftCredits)).toBe(
-      'на семь небольших правок или на две-три задачи побольше',
+      'на десять небольших правок или на три-пять задач побольше',
     )
   })
 
@@ -717,23 +717,37 @@ describe('a pack of credits', () => {
     expect(packAdded(null)).toBe('Кредиты из пакета уже добавлены и не сгорают в конце периода.')
   })
 
-  // The row of the pack on «Тарифы»: when it is of use, how many average tasks it holds, and
-  // the promise of its dialog.
-  it('offers the pack with the average tasks its credits hold', () => {
-    expect(packOffer(100)).toBe(
-      'Пригодится, если кредиты по тарифу закончатся на сегодня или до конца периода: это в среднем около 9 задач. Добавим 100 кредитов сразу после оплаты. Кредиты из пакета не сгорают в конце периода.',
+  // The row of the pack on «Тарифы»: when it is of use, how many average tasks it holds, what
+  // a small edit costs out of it, and the promise of its dialog.
+  const pack = (credits: number, price = '1490.00') => ({ price, credits })
+
+  it('offers the pack with the average tasks its credits hold and the price of a small edit', () => {
+    expect(packOffer(pack(100), false)).toBe(
+      'Пригодится, если кредиты по тарифу закончатся до конца периода: это в среднем около 9 задач. Небольшая правка из пакета — около 75 ₽. Добавим 100 кредитов сразу после оплаты. Кредиты из пакета не сгорают в конце периода.',
     )
-    expect(packOffer(11)).toBe(
-      `Пригодится, если кредиты по тарифу закончатся на сегодня или до конца периода: это в среднем около 1 задачи. ${packPromise(11)}`,
+    expect(plain(packOffer(pack(11, '220.00'), false))).toBe(
+      `Пригодится, если кредиты по тарифу закончатся до конца периода: это в среднем около 1 задачи. Небольшая правка из пакета — около 100 ₽. ${packPromise(11)}`,
     )
     // A pack that holds no average task makes no promise of tasks.
-    expect(packOffer(5)).toBe(
-      `Пригодится, если кредиты по тарифу закончатся на сегодня или до конца периода. ${packPromise(5)}`,
+    expect(plain(packOffer(pack(5), false))).toBe(
+      `Пригодится, если кредиты по тарифу закончатся до конца периода. Небольшая правка из пакета — около 1 490 ₽. ${packPromise(5)}`,
+    )
+  })
+
+  it('names the day as well while a tariff on sale has a daily limit', () => {
+    expect(packOffer(pack(100), true)).toBe(
+      'Пригодится, если кредиты по тарифу закончатся на сегодня или до конца периода: это в среднем около 9 задач. Небольшая правка из пакета — около 75 ₽. Добавим 100 кредитов сразу после оплаты. Кредиты из пакета не сгорают в конце периода.',
     )
   })
 
   it('never speaks of receipts, VAT or the customer on «ты»', () => {
-    for (const text of [packPromise(100), packOffer(100), packAdded(100), packAdded(null)]) {
+    for (const text of [
+      packPromise(100),
+      packOffer(pack(100), false),
+      packOffer(pack(100), true),
+      packAdded(100),
+      packAdded(null),
+    ]) {
       expect(text).not.toMatch(/[A-Za-z]|НДС|чек/i)
     }
   })
@@ -884,7 +898,7 @@ describe('managing the tariff', () => {
       ),
     ).toBe('4 900 ₽ сохранённым способом оплаты — Карта «Мир» •• 4444')
     expect(plain(planChangeTerms({ currentName: 'Старт', periodEnd, replacedName: null }))).toBe(
-      'Тариф изменится 18 октября 2026 — с началом нового периода. До этого дня действует «Старт». Кредиты по тарифу можно использовать до 18 октября, на новый период они не переносятся. Кредиты из пакета остаются.',
+      'Тариф изменится 18 октября 2026 — с началом нового периода. До этого дня действует «Старт». Неистраченные кредиты тарифа переходят на следующий месяц, один раз. Кредиты из пакета остаются.',
     )
   })
 

@@ -11,7 +11,7 @@ describe('main action of the landing', () => {
 
   it('tells a guest of the gift of the registration, and of no day without a tariff', () => {
     expect(mainActionNote(true)).toBe(
-      'При регистрации — 35 кредитов в подарок: хватит на несколько небольших правок. Тариф выберете позже.',
+      'При регистрации — 50 кредитов в подарок: хватит на несколько небольших правок. Тариф выберете позже.',
     )
   })
 
@@ -19,7 +19,7 @@ describe('main action of the landing', () => {
     const note = mainActionNote(true)
 
     expect(note).toContain(`— ${signupGiftCredits} кредитов в подарок`)
-    // «Несколько небольших правок» stands on the gift itself: it holds seven of them.
+    // «Несколько небольших правок» stands on the gift itself: it holds ten of them.
     expect(giftTaskCounts(signupGiftCredits).small).toBeGreaterThanOrEqual(3)
     // The only count of the line is the gift: it is not turned into a number of tasks, and no
     // limit of a day — of a tariff or without one — is promised with it.

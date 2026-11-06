@@ -35,6 +35,7 @@ import { PastDueDialog } from './past-due-dialog'
 import { LEAVING_WAIT_MS, OFFER_PATH } from './payment-dialog'
 import { PlanChangeDialog } from './plan-change-dialog'
 import {
+  anyDailyLimit,
   changeCancelledText,
   changeScheduledText,
   renewalOffWhileOverdue,
@@ -320,7 +321,10 @@ export function PlansView({ email }: { email: string }) {
               <Typography variant="body2" color="textSecondary" sx={{ mt: 0.5 }}>
                 {nbsp(taskCostRule())}
               </Typography>
-              <CreditsExplainer conversion={offers.data.creditConversion} />
+              <CreditsExplainer
+                conversion={offers.data.creditConversion}
+                dayLimited={anyDailyLimit(offers.data.plans)}
+              />
               {offers.data.plans.length > 0 ? (
                 <PlanGrid
                   plans={offers.data.plans}
@@ -339,7 +343,11 @@ export function PlansView({ email }: { email: string }) {
                 </Typography>
               )}
               {pack ? (
-                <PackRow pack={pack} onBuy={() => setPackPurchase(opened({ pack }))} />
+                <PackRow
+                  pack={pack}
+                  dayLimited={anyDailyLimit(offers.data.plans)}
+                  onBuy={() => setPackPurchase(opened({ pack }))}
+                />
               ) : null}
             </Box>
             {/* A tariff that is paid for and does not renew is told of in its own block. */}

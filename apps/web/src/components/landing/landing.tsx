@@ -4,6 +4,7 @@ import { AnimatedBrandSymbol } from '@repo/ui/animated-brand-symbol'
 import Link from 'next/link'
 import type { ReactNode } from 'react'
 
+import { CHARGED_FOR_DONE_WORK, TARIFF_CREDITS_CARRY_OVER } from '@/lib/credit-price'
 import { legalDocumentHref } from '@/lib/legal'
 import { nbsp } from '@/lib/nbsp'
 import type { LandingViewer } from '@/server/landing-viewer'
@@ -81,9 +82,11 @@ const questions = [
   },
   {
     // What the two commonest kinds of request cost: estimates of the credits model, so the answer
-    // says «обычно»; the numbers are constants of the domain, as under the calculator.
+    // says «обычно»; the numbers are constants of the domain, as under the calculator. The rule
+    // of the charge is the sentence of the tariffs, word for word (Ц14), and the tariff credits
+    // live one more month (Ц7).
     question: 'Что такое кредит?',
-    answer: `Кредитами мы считаем работу Радити над вашими задачами: чем больше нужно прочитать и изменить на сайте, тем больше кредитов стоит задача. Поменять цену, текст или фото — обычно ${typicalCreditsInWords(typicalTaskCredits.small)}, добавить блок или страницу — ${typicalCreditsInWords(typicalTaskCredits.block, false)}. Кредиты списываются только за выполненные задачи. Кредиты тарифа начисляются каждый месяц, а кредиты из пакета не сгорают.`,
+    answer: `Кредитами мы считаем работу Радити над вашими задачами: чем больше нужно прочитать и изменить на сайте, тем больше кредитов стоит задача. Поменять цену, текст или фото — обычно ${typicalCreditsInWords(typicalTaskCredits.small)}, добавить блок или страницу — ${typicalCreditsInWords(typicalTaskCredits.block, false)}. ${CHARGED_FOR_DONE_WORK} Кредиты тарифа начисляются каждый месяц. ${TARIFF_CREDITS_CARRY_OVER} Кредиты из пакета не сгорают.`,
   },
   {
     question: 'Что, если результат не понравится?',

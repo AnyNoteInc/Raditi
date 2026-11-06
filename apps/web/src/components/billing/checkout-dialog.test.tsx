@@ -86,16 +86,14 @@ describe('the checkout dialog', () => {
     showDialog()
 
     expect(screen.getByRole('dialog', { name: 'Тариф «Бизнес»' })).toHaveAccessibleDescription(
-      plainPattern('800 кредитов в месяц, до 100 кредитов в день · до 3 сайтов на WordPress'),
+      plainPattern('600 кредитов в месяц · до 3 сайтов на WordPress'),
     )
-    expect(dialogText()).toContain(
-      '800 кредитов в месяц, до 100 кредитов в день · до 3 сайтов на WordPress',
-    )
+    expect(dialogText()).toContain('600 кредитов в месяц · до 3 сайтов на WordPress')
     expect(plain(screen.getByText('Период').nextElementSibling?.textContent)).toBe(
       'С сегодняшнего дня на месяц',
     )
     expect(plain(screen.getByText('К оплате сегодня').nextElementSibling?.textContent)).toBe(
-      '12 900 ₽',
+      '6 990 ₽',
     )
   })
 
@@ -118,7 +116,7 @@ describe('the checkout dialog', () => {
     expect(consent()).not.toBeChecked()
     expect(consent()).toHaveAccessibleDescription(
       plainPattern(
-        'Сохраним способ оплаты, которым вы заплатите сейчас, и каждый месяц будем списывать 4 900 ₽ тем же способом. Перед списанием пришлём письмо. Отключить можно в настройках в любой день.',
+        'Сохраним способ оплаты, которым вы заплатите сейчас, и каждый месяц будем списывать 1 990 ₽ тем же способом. Перед списанием пришлём письмо. Отключить можно в настройках в любой день.',
       ),
     )
   })
@@ -190,7 +188,7 @@ describe('the checkout dialog', () => {
       expect(dialogText()).not.toMatch(/Сохраним способ оплаты|будем списывать|Перед списанием/)
       // The rest of the dialog is the same: what is bought, for how much, on which terms.
       expect(plain(screen.getByText('К оплате сегодня').nextElementSibling?.textContent)).toBe(
-        '4 900 ₽',
+        '1 990 ₽',
       )
       expect(dialogText()).toContain('Оплачивая, вы принимаете условия публичной оферты.')
     })

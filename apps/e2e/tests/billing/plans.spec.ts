@@ -96,7 +96,7 @@ const DATE = String.raw`${DAY}\s\d{4}`
  * of the registration — promised before the first site or checkout, on the account after it.
  */
 const GIFT_LEAD =
-  'У вас 35 подарочных кредитов — их хватит на семь небольших правок или на две-три задачи побольше. Когда кредиты закончатся, понадобится тариф.'
+  'У вас 50 подарочных кредитов — их хватит на десять небольших правок или на три-пять задач побольше. Когда кредиты закончатся, понадобится тариф.'
 
 test('a customer picks a tariff, pays for it and sees it active', async ({
   page,
@@ -125,22 +125,31 @@ test('a customer picks a tariff, pays for it and sees it active', async ({
         planCard(page, name).getByRole('button', { name: `Выбрать «${name}»` }),
       ).toBeVisible()
     }
-    await expect(planCard(page, 'Старт')).toContainText('4 900 ₽')
+    await expect(planCard(page, 'Старт')).toContainText('1 990 ₽')
     await expect(planCard(page, 'Старт')).toContainText('Подходит вам')
     // What a task costs and what a tariff holds, in the numbers of the credits model: the
     // credits come from the seeds, the minimum, the examples and the average from the domain.
     await expect(page.getByRole('main')).toContainText(
-      'Задача стоит столько кредитов, сколько работы она потребовала, но не меньше 5: небольшая правка текста, цены или фото — обычно 5 кредитов, добавить блок или страницу — 15–25. Кредиты списываются только за выполненную задачу.',
+      'Задача стоит столько кредитов, сколько работы она потребовала, но не меньше 5: небольшая правка текста, цены или фото — обычно 5 кредитов, добавить блок или страницу — 15–25. Списываем только за выполненную работу: если задача не получилась, кредиты возвращаются.',
     )
+    // The terms of 06.11.2026: no tariff has a daily limit, and each card names the price of a
+    // small edit in rubles — 5 credits at the price of a credit of the tariff.
     for (const [name, lines] of [
-      ['Старт', ['300 кредитов в месяц', 'В среднем около 27 задач', 'До 50 кредитов в день']],
-      ['Бизнес', ['800 кредитов в месяц', 'В среднем около 73 задач', 'До 100 кредитов в день']],
+      [
+        'Старт',
+        ['150 кредитов в месяц', 'В среднем около 14 задач', 'Небольшая правка — около 66 ₽'],
+      ],
+      [
+        'Бизнес',
+        ['600 кредитов в месяц', 'В среднем около 55 задач', 'Небольшая правка — около 58 ₽'],
+      ],
       [
         'Агентство',
-        ['2 500 кредитов в месяц', 'В среднем около 230 задач', 'До 300 кредитов в день'],
+        ['2 000 кредитов в месяц', 'В среднем около 180 задач', 'Небольшая правка — около 50 ₽'],
       ],
     ] as const) {
       for (const line of lines) await expect(planCard(page, name)).toContainText(line)
+      await expect(planCard(page, name)).not.toContainText('в день')
     }
     await expect(page.getByRole('main')).not.toContainText('один кредит')
     await expect(page.getByRole('link', { name: 'Публичная оферта' })).toHaveAttribute(
@@ -153,11 +162,9 @@ test('a customer picks a tariff, pays for it and sees it active', async ({
     const opener = planCard(page, 'Старт').getByRole('button', { name: 'Выбрать «Старт»' })
     await opener.click()
     const dialog = page.getByRole('dialog', { name: 'Тариф «Старт»' })
-    await expect(dialog).toContainText(
-      '300 кредитов в месяц, до 50 кредитов в день · один сайт на WordPress',
-    )
+    await expect(dialog).toContainText('150 кредитов в месяц · один сайт на WordPress')
     await expect(dialog).toContainText('К оплате сегодня')
-    await expect(dialog).toContainText('4 900 ₽')
+    await expect(dialog).toContainText('1 990 ₽')
     await expect(dialog).toContainText('Оплата принимается только с личной карты')
     await dialog.getByRole('button', { name: 'Отмена' }).click()
     await expect(dialog).toBeHidden()
@@ -167,7 +174,7 @@ test('a customer picks a tariff, pays for it and sees it active', async ({
 
   await test.step('the customer agrees to auto-renewal and pays', async () => {
     await checkout(page, 'Старт', { autoRenew: true })
-    await expect(page.getByRole('heading', { level: 1 })).toContainText('4900.00')
+    await expect(page.getByRole('heading', { level: 1 })).toContainText('1990.00')
     await page.getByRole('button', { name: 'Оплатить' }).click()
   })
 
@@ -178,7 +185,7 @@ test('a customer picks a tariff, pays for it and sees it active', async ({
       /^Настройки\s*\/\s*Оплата$/,
     )
     const outcome = page.getByRole('main').getByRole('status')
-    await expect(outcome).toContainText('Тариф «Старт» — 4 900 ₽.')
+    await expect(outcome).toContainText('Тариф «Старт» — 1 990 ₽.')
     await expect(outcome).toContainText(new RegExp(String.raw`Тариф действует до\s${DATE}\.`))
   })
 
@@ -197,16 +204,16 @@ test('a customer picks a tariff, pays for it and sees it active', async ({
     })
     await expect(block).toBeVisible(SLOW)
     await expect(block).toContainText('Активен')
-    await expect(block).toContainText('4 900 ₽ в месяц')
+    await expect(block).toContainText('1 990 ₽ в месяц')
     await expect(row(page, 'Следующее списание')).toHaveText(
-      new RegExp(String.raw`^${DATE}\s—\s4\s900\s₽$`),
+      new RegExp(String.raw`^${DATE}\s—\s1\s990\s₽$`),
     )
     // The card of the fake, saved because the customer agreed to it.
     await expect(row(page, 'Способ оплаты')).toHaveText('Карта «Мир» •• 4444')
     // The quota of the tariff beside the gift, which the checkout granted with the workspace:
     // what the two accounts hold.
     const stored = await credits.stored()
-    expect([stored.tariff.left, stored.gift.left, stored.pack.left]).toEqual([300, 35, 0])
+    expect([stored.tariff.left, stored.gift.left, stored.pack.left]).toEqual([150, 50, 0])
     await expect(row(page, 'Кредиты')).toHaveText(creditsRow(stored))
 
     await expect(planCard(page, 'Старт')).toContainText('Ваш тариф')
@@ -268,7 +275,7 @@ test('the return page switches the tariff on when the notification never comes',
   await expect(page).toHaveURL(returnPage, SLOW)
   await expect(page.getByRole('heading', { level: 2, name: 'Оплата прошла' })).toBeVisible(SLOW)
   await expect(page.getByRole('main').getByRole('status')).toContainText(
-    'Тариф «Бизнес» — 12 900 ₽.',
+    'Тариф «Бизнес» — 6 990 ₽.',
   )
   // Nothing was sent to web: the page alone read the payment back and settled the order.
   expect(await deliveries()).toEqual([
@@ -288,7 +295,7 @@ test('the return page switches the tariff on when the notification never comes',
   await expect(row(page, 'Действует до')).toHaveText(new RegExp(`^${DATE}$`))
   await expect(row(page, 'Способ оплаты')).toHaveText('Не сохранён')
   const stored = await credits.stored()
-  expect([stored.tariff.left, stored.gift.left]).toEqual([800, 35])
+  expect([stored.tariff.left, stored.gift.left]).toEqual([600, 50])
   await expect(row(page, 'Кредиты')).toHaveText(creditsRow(stored))
   await expect(page.getByRole('heading', { level: 2, name: 'Автопродление' })).toHaveCount(0)
   await expect(planCard(page, 'Бизнес')).toContainText('Ваш тариф')
@@ -349,10 +356,10 @@ test('a customer with an active tariff buys a pack and sees its credits beside t
   await test.step('«Тарифы» offers the pack of the seeds under the tariffs', async () => {
     // The pages bind a number to its word with a non-breaking space: a pattern, not a string.
     await expect(
-      page.getByRole('heading', { level: 3, name: /^Пакет\sиз\s100\sкредитов\s—\s1\s990\s₽$/ }),
+      page.getByRole('heading', { level: 3, name: /^Пакет\sиз\s100\sкредитов\s—\s1\s490\s₽$/ }),
     ).toBeVisible()
     await expect(page.getByRole('main')).toContainText(
-      'Пригодится, если кредиты по тарифу закончатся на сегодня или до конца периода: это в среднем около 9 задач. Добавим 100 кредитов сразу после оплаты. Кредиты из пакета не сгорают в конце периода.',
+      'Пригодится, если кредиты по тарифу закончатся до конца периода: это в среднем около 9 задач. Небольшая правка из пакета — около 75 ₽. Добавим 100 кредитов сразу после оплаты. Кредиты из пакета не сгорают в конце периода.',
     )
     await expect(buyPack).toBeVisible()
   })
@@ -360,7 +367,7 @@ test('a customer with an active tariff buys a pack and sees its credits beside t
   await test.step('the dialog names the pack and the amount, and «Отмена» pays nothing', async () => {
     await buyPack.click()
     await expect(packDialog).toContainText('К оплате сегодня')
-    await expect(packDialog).toContainText('1 990 ₽')
+    await expect(packDialog).toContainText('1 490 ₽')
     await expect(packDialog).toContainText('Оплата принимается только с личной карты')
     await expect(packDialog.getByRole('link', { name: 'публичной оферты' })).toHaveAttribute(
       'href',
@@ -378,7 +385,7 @@ test('a customer with an active tariff buys a pack and sees its credits beside t
     await buyPack.click()
     await packDialog.getByRole('button', { name: 'Перейти к оплате' }).click()
     await page.waitForURL(`http://127.0.0.1:${fakeYookassa.port}/pay/**`, SLOW)
-    await expect(page.getByRole('heading', { level: 1 })).toContainText('1990.00')
+    await expect(page.getByRole('heading', { level: 1 })).toContainText('1490.00')
     await expect(page.getByText('Радити: «Пакет из 100 кредитов»')).toBeVisible()
     await page.getByRole('button', { name: 'Оплатить' }).click()
   })
@@ -387,7 +394,7 @@ test('a customer with an active tariff buys a pack and sees its credits beside t
     await expect(page).toHaveURL(returnPage, SLOW)
     await expect(page.getByRole('heading', { level: 2, name: 'Оплата прошла' })).toBeVisible(SLOW)
     const outcome = page.getByRole('main').getByRole('status')
-    await expect(outcome).toContainText('Пакет из 100 кредитов — 1 990 ₽.')
+    await expect(outcome).toContainText('Пакет из 100 кредитов — 1 490 ₽.')
     await expect(outcome).toContainText(
       'Добавили 100 кредитов. Кредиты из пакета не сгорают в конце периода.',
     )
@@ -408,8 +415,8 @@ test('a customer with an active tariff buys a pack and sees its credits beside t
     await expect(page).toHaveURL('/settings/plans')
     // The three accounts, in the order their credits are spent in, as the database holds them.
     const stored = await credits.stored()
-    expect([stored.tariff.left, stored.gift.left, stored.pack.left]).toEqual([300, 35, 100])
-    expect(creditsRow(stored)).toBe('Осталось 435: 300 по тарифу, 35 подарочных и 100 из пакета')
+    expect([stored.tariff.left, stored.gift.left, stored.pack.left]).toEqual([150, 50, 100])
+    expect(creditsRow(stored)).toBe('Осталось 300: 150 по тарифу, 50 подарочных и 100 из пакета')
     await expect(row(page, 'Кредиты')).toContainText(creditsRow(stored), SLOW)
     // No auto-renewal was agreed to with the tariff, and the pack saved no card either.
     await expect(row(page, 'Способ оплаты')).toHaveText('Не сохранён')

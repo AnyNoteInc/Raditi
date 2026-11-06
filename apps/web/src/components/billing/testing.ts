@@ -9,8 +9,10 @@ import type {
   TaskCredits,
 } from './billing-types'
 
-// Answers of the billing router for the component tests: the three tariffs of the seeds and a
-// subscription to «Бизнес» for the month that ends on 18 October 2026.
+// Answers of the billing router for the component tests: the three tariffs of the seeds — the
+// terms of 06.11.2026, without a daily limit — and a subscription to «Бизнес» for the month that
+// ends on 18 October 2026. A test of the daily limit, which stays in the code for a plan that
+// sets one, gives a tariff its day itself (`withDay`).
 
 /** The text as it reads: the pages set non-breaking spaces, the expectations use plain ones. */
 export const plain = (text: string | null | undefined) =>
@@ -31,9 +33,9 @@ export const start = offer({
   id: '018f0000-0000-7000-8000-000000000001',
   slug: 'start',
   name: 'Старт',
-  price: '4900.00',
-  creditsPerMonth: 300,
-  creditsPerDay: 50,
+  price: '1990.00',
+  creditsPerMonth: 150,
+  creditsPerDay: null,
   maxSites: 1,
 })
 
@@ -41,9 +43,9 @@ export const business = offer({
   id: '018f0000-0000-7000-8000-000000000002',
   slug: 'business',
   name: 'Бизнес',
-  price: '12900.00',
-  creditsPerMonth: 800,
-  creditsPerDay: 100,
+  price: '6990.00',
+  creditsPerMonth: 600,
+  creditsPerDay: null,
   maxSites: 3,
 })
 
@@ -51,10 +53,19 @@ export const agency = offer({
   id: '018f0000-0000-7000-8000-000000000003',
   slug: 'agency',
   name: 'Агентство',
-  price: '39900.00',
-  creditsPerMonth: 2500,
-  creditsPerDay: 300,
+  price: '19990.00',
+  creditsPerMonth: 2000,
+  creditsPerDay: null,
   maxSites: 15,
+})
+
+/**
+ * A tariff with a daily limit of `creditsPerDay` tariff credits: none on sale has one since
+ * 06.11.2026, the code of the day stays for a plan that sets one.
+ */
+export const withDay = (plan: PlanOffer, creditsPerDay: number): PlanOffer => ({
+  ...plan,
+  creditsPerDay,
 })
 
 const planOf = ({
@@ -94,7 +105,7 @@ export function offers({
       id: '018f0000-0000-7000-8000-000000000004',
       slug: 'pack',
       name: 'Пакет из 100 кредитов',
-      price: '1990.00',
+      price: '1490.00',
       credits: 100,
     },
     siteCount,
