@@ -250,7 +250,7 @@ describe('landing pricing', () => {
   it('says once under the plans that only done work is paid for', () => {
     const { unmount } = render(<Pricing plans={plans} pack={pack} />)
     const rule =
-      'Списываем только за выполненную работу: если задача не получилась, кредиты возвращаются.'
+      'Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит.'
     expect(screen.getAllByText(rule)).toHaveLength(1)
     for (const name of ['Старт', 'Бизнес', 'Агентство']) {
       expect(planCard(name)).not.toHaveTextContent('только за выполненную')

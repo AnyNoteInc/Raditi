@@ -222,6 +222,49 @@ describe('the credits of a tariff', () => {
     )
   })
 
+  it('names the carry of the month before as what expires after part of it was spent', () => {
+    // 300 carried, 250 of the period spent — from the carried ones first: 50 of them are left.
+    const credits = meter({ carried: 300, charged: 200, held: 50, left: 850 })
+    expect(credits).toMatchObject({ granted: 800, carryLimit: 800, burnNext: 50 })
+    expect(plain(tariffNote(tariff(), credits))).toBe(
+      '18 октября начислим новые 800. Неистраченные кредиты тарифа перейдут на новый месяц — до 800. Из перенесённых с прошлого месяца сгорят 50 кредитов, если не потратить их до 18 октября.',
+    )
+  })
+
+  it.each([
+    [1, 'Из остатка сверх 800 сгорит 1 кредит, если не потратить его до 18 октября.'],
+    [2, 'Из остатка сверх 800 сгорят 2 кредита, если не потратить их до 18 октября.'],
+    [21, 'Из остатка сверх 800 сгорит 21 кредит, если не потратить его до 18 октября.'],
+    [50, 'Из остатка сверх 800 сгорят 50 кредитов, если не потратить их до 18 октября.'],
+    [1200, 'Из остатка сверх 800 сгорят 1 200 кредитов, если не потратить их до 18 октября.'],
+  ])(
+    'does not call %i credits an operator added «перенесённые» when nothing was carried',
+    (added, sentence) => {
+      // The quota of 800 and what an operator added: nothing came from the month before.
+      const credits = meter({ granted: 800 + added, carryLimit: 800, left: 800 + added })
+      expect(credits).toMatchObject({ carried: 0, carryNext: 800, burnNext: added })
+      expect(plain(tariffNote(tariff(), credits))).toBe(
+        `18 октября начислим новые 800. Неистраченные кредиты тарифа перейдут на новый месяц — до 800. ${sentence}`,
+      )
+    },
+  )
+
+  it('speaks of the rest beyond the quota when an operator added credits beside a carry', () => {
+    // 30 carried and 50 added: the 80 beyond the quota are not all of the carry.
+    const credits = meter({ carried: 30, granted: 850, carryLimit: 800, left: 880 })
+    expect(credits).toMatchObject({ carryNext: 800, burnNext: 80 })
+    expect(plain(tariffNote(tariff(), credits))).toBe(
+      '18 октября начислим новые 800. Неистраченные кредиты тарифа перейдут на новый месяц — до 800. Из остатка сверх 800 сгорят 80 кредитов, если не потратить их до 18 октября.',
+    )
+    expect(
+      plain(
+        tariffNote(tariff(), meter({ carried: 1, granted: 1600, carryLimit: 1500, left: 1601 })),
+      ),
+    ).toBe(
+      '18 октября начислим новые 800. Неистраченные кредиты тарифа перейдут на новый месяц — до 1 500. Из остатка сверх 1 500 сгорит 101 кредит, если не потратить его до 18 октября.',
+    )
+  })
+
   it('bounds the carry by the quota of this period, whatever the next tariff grants', () => {
     expect(
       plain(

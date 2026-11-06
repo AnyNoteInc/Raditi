@@ -1,4 +1,4 @@
-import { minTaskChargeCredits } from '@repo/domain/billing/credit-numbers'
+import { typicalTaskCredits } from '@repo/domain/billing/credit-numbers'
 
 import { formatRubles, Money } from './rubles'
 
@@ -11,16 +11,18 @@ import { formatRubles, Money } from './rubles'
 // nbsp().
 
 /**
- * What a small edit costs in rubles, «66.00»: the charge of a small edit — the minimum of a done
- * task, `minTaskChargeCredits` — times the price, divided by the credits it buys, rounded half up
- * to a whole ruble once, from the exact quotient. 1 990 ₽ for 150 credits → 66, 6 990 ₽ for 600
- * → 58, 19 990 ₽ for 2 000 → 50, 1 490 ₽ for 100 → 75. null when the credits are not a positive
- * whole number: nothing is bought, and no price is promised.
+ * What a small edit costs in rubles, «66.00»: the credits a small edit usually takes — the
+ * lower end of `typicalTaskCredits.small`, the number «небольшая правка — обычно …» says, so the
+ * rubles and the credits never part (the minimum of a done task today) — times the price, divided
+ * by the credits it buys, rounded half up to a whole ruble once, from the exact quotient. 1 990 ₽
+ * for 150 credits → 66, 6 990 ₽ for 600 → 58, 19 990 ₽ for 2 000 → 50, 1 490 ₽ for 100 → 75.
+ * null when the credits are not a positive whole number: nothing is bought, and no price is
+ * promised.
  */
 export function smallEditRubles(price: string, credits: number): string | null {
   if (!Number.isSafeInteger(credits) || credits < 1) return null
   return new Money(price)
-    .times(minTaskChargeCredits)
+    .times(typicalTaskCredits.small.from)
     .dividedBy(credits)
     .toDecimalPlaces(0, Money.ROUND_HALF_UP)
     .toFixed(2)
@@ -45,9 +47,15 @@ export function smallEditPrice(price: string, credits: number, from = ''): strin
   return rubles === null ? null : smallEditSentence(rubles, from)
 }
 
-/** The rule of the charge, word for word as the report of the prices puts it. */
+/**
+ * The rule of the charge (Ц14), in words that hold while a chat is charged pass by pass (spec
+ * §17, how a chat is paid for): a pass that broke off on a failure is not charged — its turn is
+ * rejected and its model calls stay out of the charge —, while passes that ended stay charged
+ * even when the chat is dropped later or its release is rolled back. So the sentence promises
+ * no return of credits for a task that «не получилась».
+ */
 export const CHARGED_FOR_DONE_WORK =
-  'Списываем только за выполненную работу: если задача не получилась, кредиты возвращаются.'
+  'Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит.'
 
 /**
  * What becomes of the tariff credits a period leaves (Ц7, from 06.11.2026): they live one more

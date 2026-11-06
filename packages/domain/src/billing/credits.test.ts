@@ -246,7 +246,12 @@ describe('the numbers of the model that no text prints', () => {
     expect(unpaidWorkShareOfMonth).toBe(0.5)
     // «Старт», «Бизнес» and «Агентство» of 06.11.2026.
     expect([150, 600, 2000].map(unpaidWorkLimit)).toEqual([75, 300, 1000])
-    expect([1, 2, 3, 151, 2501].map(unpaidWorkLimit)).toEqual([0, 1, 1, 75, 1250])
+    expect([2, 3, 151, 2501].map(unpaidWorkLimit)).toEqual([1, 1, 75, 1250])
+  })
+
+  it('never bounds the unpaid work of a plan with credits below one', () => {
+    // Half of 1 rounded down is 0, and at 0 not even the first task of the period would start.
+    expect(unpaidWorkLimit(1)).toBe(1)
   })
 
   it.each([0, -150, 150.5, Number.NaN, 10 ** 13])(

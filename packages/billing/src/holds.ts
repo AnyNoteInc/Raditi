@@ -690,10 +690,10 @@ async function placementFacts(
  *    owner, 19.10.2026): its tariff part is bounded by the free tariff credits alone, and what it
  *    holds counts on the day it is placed on for the placements after it;
  * 4. unpaid work, for a new task, a retry and the next words: what the workspace got without a
- *    charge since the
- *    start of its paid period against the monthly credits of the plan —
- *    BILLING_UNPAID_WORK_LIMIT —, without a paid tariff since the end of its last tariff
- *    against `trialUnpaidWorkCredits` — BILLING_TASK_NEEDS_SUBSCRIPTION;
+ *    charge since the start of its paid period against `unpaidWorkLimit` of the plan — half its
+ *    monthly credits (docs/plan/63-new-pricing.md, Ц8) — BILLING_UNPAID_WORK_LIMIT —, without a
+ *    paid tariff since the end of its last tariff against `trialUnpaidWorkCredits` —
+ *    BILLING_TASK_NEEDS_SUBSCRIPTION;
  * 5. without a paid tariff, the gift of the site: one site spends gift credits in one workspace
  *    only (`gift_site_claims`) — BILLING_TASK_NEEDS_SUBSCRIPTION.
  *

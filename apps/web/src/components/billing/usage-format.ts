@@ -121,17 +121,27 @@ export function heldEarlierNote(heldEarlier: number): string {
 
 /**
  * What becomes of the tariff credits left when a renewal comes (decision of 06.11.2026): they
- * pass into the new month, no more than the quota of this one — and what is beyond it, the rest
- * of the carry of the month before, expires unless it is spent first. Empty when the period had
- * no quota to carry up to.
+ * pass into the new month, no more than the quota of this one — and what is beyond it expires
+ * unless it is spent first. Empty when the period had no quota to carry up to.
+ *
+ * What is beyond the quota is the rest of the carry of the month before only while nothing but
+ * the carry stands above it: credits are spent from the carried ones first, so with no credits
+ * an operator added (`granted` is the quota, `carryLimit`) what expires is exactly what is left
+ * of the carry. Credits an operator added are beyond the quota as well and were never carried;
+ * then the sentence speaks of the rest beyond the quota, which is always true.
  */
-function carryOver({ carryLimit, burnNext }: TariffCredits, day: string): string {
+function carryOver({ carried, granted, carryLimit, burnNext }: TariffCredits, day: string): string {
   if (carryLimit === 0) return ''
-  const carry = ` Неистраченные кредиты тарифа перейдут на новый месяц — до ${formatCount(carryLimit)}.`
+  const limit = formatCount(carryLimit)
+  const carry = ` Неистраченные кредиты тарифа перейдут на новый месяц — до ${limit}.`
   if (burnNext === 0) return carry
   const burn = `${formatCount(burnNext)} ${creditsWord(burnNext)}`
   const them = plural(burnNext, 'его', 'их', 'их')
-  return `${carry} Из перенесённых с прошлого месяца ${plural(burnNext, 'сгорит', 'сгорят', 'сгорят')} ${burn}, если не потратить ${them} до ${day}.`
+  const of =
+    carried > 0 && granted === carryLimit
+      ? 'Из перенесённых с прошлого месяца'
+      : `Из остатка сверх ${limit}`
+  return `${carry} ${of} ${plural(burnNext, 'сгорит', 'сгорят', 'сгорят')} ${burn}, если не потратить ${them} до ${day}.`
 }
 
 /**

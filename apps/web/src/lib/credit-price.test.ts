@@ -12,7 +12,7 @@ import {
 
 describe('smallEditRubles', () => {
   it('is the charge of a small edit at the price of the credits, half up to a whole ruble', () => {
-    // A small edit is usually charged the minimum of a done task.
+    // A small edit usually takes the minimum of a done task.
     expect(minTaskChargeCredits).toBe(5)
     expect(typicalTaskCredits.small).toEqual({
       from: minTaskChargeCredits,
@@ -25,6 +25,12 @@ describe('smallEditRubles', () => {
     expect(smallEditRubles('1490.00', 100)).toBe('75.00')
     // What the calculator of the landing adds up: «Старт» and two packs, 4 970 ₽ for 350.
     expect(smallEditRubles('4970.00', 350)).toBe('71.00')
+  })
+
+  it('takes the credits «небольшая правка — обычно …» names, so rubles and credits agree', () => {
+    // At a ruble a credit the price of a small edit is its credits in rubles.
+    expect(smallEditRubles('100.00', 100)).toBe(`${typicalTaskCredits.small.from}.00`)
+    expect(smallEditRubles('1000.00', 1000)).toBe('5.00')
   })
 
   it('rounds once, from the exact quotient and not from the kopecks', () => {
@@ -79,7 +85,7 @@ describe('smallEditPrice', () => {
 describe('CHARGED_FOR_DONE_WORK', () => {
   it('is the rule of the charge, word for word', () => {
     expect(CHARGED_FOR_DONE_WORK).toBe(
-      'Списываем только за выполненную работу: если задача не получилась, кредиты возвращаются.',
+      'Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит.',
     )
   })
 })

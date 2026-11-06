@@ -130,7 +130,7 @@ test('a customer picks a tariff, pays for it and sees it active', async ({
     // What a task costs and what a tariff holds, in the numbers of the credits model: the
     // credits come from the seeds, the minimum, the examples and the average from the domain.
     await expect(page.getByRole('main')).toContainText(
-      'Задача стоит столько кредитов, сколько работы она потребовала, но не меньше 5: небольшая правка текста, цены или фото — обычно 5 кредитов, добавить блок или страницу — 15–25. Списываем только за выполненную работу: если задача не получилась, кредиты возвращаются.',
+      'Задача стоит столько кредитов, сколько работы она потребовала, но не меньше 5: небольшая правка текста, цены или фото — обычно 5 кредитов, добавить блок или страницу — 15–25. Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит.',
     )
     // The terms of 06.11.2026: no tariff has a daily limit, and each card names the price of a
     // small edit in rubles — 5 credits at the price of a credit of the tariff.

@@ -812,13 +812,14 @@ export function unpaidWork(input: UnpaidWorkInput): Decimal {
 
 /**
  * The bound on unpaid work of a period of a paid tariff, in whole credits:
- * `unpaidWorkShareOfMonth` of the monthly credits of its plan, rounded down — 150 → 75,
- * 151 → 75.
+ * `unpaidWorkShareOfMonth` of the monthly credits of its plan, rounded down, and never below 1 —
+ * 150 → 75, 151 → 75, 1 → 1. At 0 the check `неоплачено ≥ граница` would refuse every new task
+ * of a plan of one credit before it did any work; 1 lets the first one in.
  */
 export function unpaidWorkLimit(creditsPerMonth: number): Credits {
   const result = positiveCreditsSchema.safeParse(creditsPerMonth)
   if (!result.success) throw badRequest('Invalid monthly credits of a plan')
-  return toCredits(new Money(result.data).times(unpaidWorkShareOfMonth).floor())
+  return toCredits(Money.max(1, new Money(result.data).times(unpaidWorkShareOfMonth).floor()))
 }
 
 /**

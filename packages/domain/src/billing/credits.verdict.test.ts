@@ -155,6 +155,13 @@ describe('newTaskVerdict', () => {
       ],
       ['a credit under the bound on unpaid work', { unpaidWork: credits('149.99') }, allowed(435)],
       [
+        // Half of one credit rounded down would bound the period at 0 and refuse even its first
+        // task; the bound of a plan with credits is at least 1.
+        'the first task of a plan of one credit a month',
+        { subscription: tariff('active', { creditsPerMonth: 1, creditsPerDay: null }) },
+        allowed(435, 0, 5, 435),
+      ],
+      [
         'on the gift without a tariff',
         { accounts: three(empty, account(35), empty), subscription: null },
         allowed(35),
@@ -278,6 +285,14 @@ describe('newTaskVerdict', () => {
       [
         'a paid tariff whose unpaid work reached half its monthly credits',
         { unpaidWork: credits('150') },
+        refused('unpaid_limit', 435),
+      ],
+      [
+        'a plan of one credit a month after one unpaid credit',
+        {
+          subscription: tariff('active', { creditsPerMonth: 1, creditsPerDay: null }),
+          unpaidWork: credits('1'),
+        },
         refused('unpaid_limit', 435),
       ],
       ['no usable credit rate', { rateUsable: false }, refused('rate_missing', 435)],
