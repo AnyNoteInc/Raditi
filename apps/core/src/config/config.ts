@@ -22,6 +22,7 @@ import {
   browserSessionTimings,
   browserSettingBounds,
   previewRuntimes,
+  runnerIdSchema,
   sandboxRuntimes,
   turnExecutorKinds,
   type AppEnv,
@@ -305,6 +306,10 @@ const ownEnvSchema = z.object({
   // A container never outlives the deadline of its first turn, and waits only while it leaves
   // the next turn half of one (WARM_MIN_LEFT_MS): more than 10 minutes would never be waited.
   SANDBOX_WARM_MINUTES: envVar(z.coerce.number().int().min(0).max(10).default(10)),
+  // The deployment label of core's own turn containers with TURN_EXECUTOR=local: core lists and
+  // collects only those, so two trees or a stand on one Docker daemon never remove each other's
+  // turns. It is the provider's runner label, so it takes the form of a runner id.
+  SANDBOX_DEPLOYMENT: envVar(runnerIdSchema.default('local')),
   RELEASE_API_PORT: port(DEFAULT_RELEASE_API_PORT),
   RELEASE_API_HOST: envVar(
     z
@@ -406,6 +411,11 @@ export function loadConfig(env: Env): CoreConfig {
     [
       (env.TURN_EXECUTOR?.trim() || (production ? 'runner' : 'local')) === 'runner',
       ['RUNNER_API_PORT', 'RUNNER_TOKENS'],
+    ],
+    // The label of core's own turn containers; on runner VMs the runner's token gives it.
+    [
+      (env.TURN_EXECUTOR?.trim() || (production ? 'runner' : 'local')) === 'local',
+      ['SANDBOX_DEPLOYMENT'],
     ],
   ]
   for (const [enabled, names] of fields)
@@ -678,7 +688,7 @@ export function loadConfig(env: Env): CoreConfig {
     db: present(db),
     storage: present(storage),
     vault: present(vault),
-    sandbox: coreSandbox ? present(sandbox) : null,
+    sandbox: coreSandbox ? { ...present(sandbox), runnerId: own.SANDBOX_DEPLOYMENT } : null,
     agentDrivers: present(agentDrivers),
     mailer: present(mailer),
     turnExecutor,

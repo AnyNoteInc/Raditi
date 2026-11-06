@@ -430,6 +430,12 @@ describe('PreviewGatewayServer: sessions', () => {
     expect(page.body).not.toContain('addEventListener')
     expect(page.body).not.toContain('location')
     expect(page.body).toContain('Открываем предпросмотр')
+    // When no new frame comes, the page sends the client to the tab the panel links to (Т35):
+    // reloading the cabinet would bring back the same frame.
+    expect(page.body).not.toContain('Обновите страницу кабинета')
+    expect(page.body).toContain(
+      "say('Не удалось открыть предпросмотр','Откройте его в новой вкладке: ссылка над этим окном.')",
+    )
     // Nothing from outside: no external script, style, image or frame.
     expect(page.body).not.toMatch(/<(script|link|img|iframe)[^>]*\s(src|href)=/i)
     // A destination that would leave the host becomes the home page.

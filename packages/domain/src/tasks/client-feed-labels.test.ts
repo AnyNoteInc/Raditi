@@ -175,6 +175,12 @@ describe('totality of the catalogue', () => {
     expect(feedCandidateText.release).toBe('Выпустить новую версию')
   })
 
+  it('sends to a tab the browser that keeps no preview inside the cabinet (Т35)', () => {
+    expect(previewPanelText.frameRefused).toBe(
+      'Этот браузер не открывает предпросмотр внутри кабинета. Откройте его в новой вкладке.',
+    )
+  })
+
   it('says a preview did not start in the words of Т33', () => {
     expect(previewUnavailableText.boot_failed).toBe(
       'Предпросмотр не запустился: сайт не заработал в нашей копии. На настоящий сайт это не влияет.',

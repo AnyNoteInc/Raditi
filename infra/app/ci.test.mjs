@@ -1289,3 +1289,14 @@ test('the import builds its path policy from every field of the rules of an adap
   const callers = sources.filter((file) => read(file).includes('createImportPathPolicy('))
   assert.deepEqual(callers, [policyFile])
 })
+
+test('the core of the smoke labels its turn containers apart from `pnpm dev`', () => {
+  // With the label `local` of .env.example, core of `pnpm e2e` would collect the turns of
+  // `pnpm dev` on the same Docker daemon and they its own (SANDBOX_DEPLOYMENT, Э0и).
+  const config = read('apps/e2e/playwright.config.ts')
+  assert.match(config, /TURN_EXECUTOR: 'local',/)
+  const label = /SANDBOX_DEPLOYMENT: '([^']+)'/.exec(config)?.[1]
+  assert.ok(label, 'the smoke core sets SANDBOX_DEPLOYMENT')
+  assert.notEqual(label, /^SANDBOX_DEPLOYMENT=(.*)$/m.exec(read('.env.example'))?.[1])
+  assert.notEqual(label, 'local')
+})

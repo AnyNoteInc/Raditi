@@ -128,12 +128,30 @@ describe('loadConfig — development', () => {
     expect(loadConfig(devEnv).sandbox).toEqual({
       runtime: 'runc',
       socketPath: '/var/run/docker.sock',
+      runnerId: 'local',
     })
     const runner = loadConfig({
       ...devEnv,
       TURN_EXECUTOR: 'runner',
       RUNNER_TOKENS: `sandbox-1:${RUNNER_HASH}@127.0.0.1`,
       SANDBOX_RUNTIME: 'kata',
+    })
+    expect(runner.sandbox).toBeNull()
+  })
+
+  it('sees only the sandboxes of its own deployment: two trees on one Docker keep their turns', () => {
+    expect(loadConfig(devEnv).sandbox?.runnerId).toBe('local')
+    expect(loadConfig({ ...devEnv, SANDBOX_DEPLOYMENT: 'two' }).sandbox?.runnerId).toBe('two')
+    for (const value of ['Bad Name', '-two', 'two_trees', 'a'.repeat(64)])
+      expect(problemsOf({ ...devEnv, SANDBOX_DEPLOYMENT: value })[0]).toMatch(
+        /^SANDBOX_DEPLOYMENT:/,
+      )
+    // On runner VMs the label of a turn's container is the runner's, from its token.
+    const runner = loadConfig({
+      ...devEnv,
+      TURN_EXECUTOR: 'runner',
+      RUNNER_TOKENS: `sandbox-1:${RUNNER_HASH}@127.0.0.1`,
+      SANDBOX_DEPLOYMENT: 'Bad Name',
     })
     expect(runner.sandbox).toBeNull()
   })

@@ -67,6 +67,8 @@ export default defineConfig({
         CORE_PORT: String(CORE_PORT),
         MCP_PORT: String(MCP_PORT),
         TURN_EXECUTOR: 'local',
+        // The smoke's own label of turn containers: its core never collects those of `pnpm dev`.
+        SANDBOX_DEPLOYMENT: 'e2e',
         // The release API of a developer's .env would take the port of `pnpm dev`.
         RELEASE_API_HOST: '',
         METRICS_TOKEN: metricsToken,

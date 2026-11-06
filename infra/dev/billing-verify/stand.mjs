@@ -17,6 +17,15 @@ export const OPENBAO_IMAGE =
 /** Every container of a run carries `io.raditi.billing-verify=<run>`. */
 export const STAND_LABEL = 'io.raditi.billing-verify'
 const RUN = /^[0-9a-f]{8}$/
+
+/**
+ * The deployment label of core's turn containers in this run. Without the run it would be one
+ * label for every run of every tree, and their cores would collect each other's turns.
+ */
+function sandboxDeployment(stand, run) {
+  if (typeof run !== 'string' || !RUN.test(run)) throw new Error('Invalid run id of the stand')
+  return `${stand}-${run}`
+}
 const SERVICES = ['postgres', 'redis', 'vault']
 
 /** The scheduler of core runs every pass this often: the lower bound of BILLING_TICK_SECONDS. */
@@ -548,6 +557,7 @@ export function webEnvironment({
  * NODE_ENV=production keeps core from looking for a `.env`.
  */
 export function coreEnvironment({
+  run,
   path,
   directory,
   ports,
@@ -566,6 +576,8 @@ export function coreEnvironment({
     CORE_PORT: String(port),
     // core's own Docker would run turns; none is started, and Docker is not asked at start.
     TURN_EXECUTOR: 'local',
+    // Its sweep lists only the turn containers of this run: none, and never another tree's.
+    SANDBOX_DEPLOYMENT: sandboxDeployment('billing-verify', run),
     DATABASE_URL: databaseUrl,
     REDIS_URL: redisUrl,
     METRICS_TOKEN: secrets.metrics,

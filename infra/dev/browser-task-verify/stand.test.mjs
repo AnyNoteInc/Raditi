@@ -21,6 +21,7 @@ import {
 } from './stand.mjs'
 
 const context = {
+  run: '0123abcd',
   path: '/usr/bin',
   directory: '/tmp/run',
   ports: {
@@ -103,6 +104,11 @@ describe('the environments of the apps', () => {
     assert.equal(core.BROWSER_WORKER_TOKEN, context.secrets.workerToken)
     assert.equal(core.TURN_EXECUTOR, 'local')
     assert.equal(core.SANDBOX_WARM_MINUTES, '0')
+    // Its own deployment label: a core of another tree on this daemon never removes its turns.
+    assert.equal(core.SANDBOX_DEPLOYMENT, 'browser-task-verify-0123abcd')
+    // Without the run every run of every tree would share one label.
+    for (const run of [undefined, 'undefined', '0123ABCD'])
+      assert.throws(() => appEnvironment('core', { ...context, run }), /Invalid run id/)
     assert.equal(core.NODE_ENV, 'production')
   })
 

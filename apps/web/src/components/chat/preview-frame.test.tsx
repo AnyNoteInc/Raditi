@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { PREVIEW_SANDBOX } from '@repo/domain/preview/hostname'
+import { PREVIEW_SANDBOX, previewOpenUrl } from '@repo/domain/preview/hostname'
+import { previewPanelText } from '@repo/domain/tasks/client-feed-labels'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -26,6 +27,7 @@ vi.mock('@/trpc/client', () => ({
 
 const ORIGIN = 'http://site-0a1b2c3d-chat-4e5f6a.localhost:8090'
 const HOST = 'site-0a1b2c3d-chat-4e5f6a.localhost'
+const OPEN_URL = previewOpenUrl('http://localhost:3000', HOST, '/')
 let issued = 0
 const entry = (to = '/') => {
   issued += 1
@@ -40,7 +42,7 @@ function showFrame(revision = 1) {
   const client = new QueryClient()
   const view = render(
     <QueryClientProvider client={client}>
-      <PreviewFrame taskId={TASK_ID} origin={ORIGIN} revision={revision} />
+      <PreviewFrame taskId={TASK_ID} origin={ORIGIN} revision={revision} openUrl={OPEN_URL} />
     </QueryClientProvider>,
   )
   return {
@@ -48,7 +50,7 @@ function showFrame(revision = 1) {
     rerenderAt: (next: number) =>
       view.rerender(
         <QueryClientProvider client={client}>
-          <PreviewFrame taskId={TASK_ID} origin={ORIGIN} revision={next} />
+          <PreviewFrame taskId={TASK_ID} origin={ORIGIN} revision={next} openUrl={OPEN_URL} />
         </QueryClientProvider>,
       ),
   }
@@ -57,6 +59,7 @@ function showFrame(revision = 1) {
 const TITLE = 'Предпросмотр сайта с изменениями диалога'
 const frame = () => screen.getByTitle<HTMLIFrameElement>(TITLE)
 const shown = () => screen.findByTitle<HTMLIFrameElement>(TITLE)
+const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
 
 function ask(source: unknown, data: unknown, origin = ORIGIN) {
   act(() => {
@@ -105,24 +108,60 @@ describe('the frame of a preview', () => {
     ask(own, { ...request(), host: 'site-0a1b2c3d-chat-ffffff.localhost' })
     ask(own, { ...request(), type: 'raditi-preview-ticket' })
     ask(own, 'raditi-preview-ticket-request')
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await settle()
     expect(ticket).toHaveBeenCalledTimes(1)
+    // A request of another window says nothing about the cookie of this frame.
+    expect(screen.queryByRole('alert')).toBeNull()
+    ask(own, request('/a'))
+    await waitFor(() => expect(ticket).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(frame().getAttribute('src')).toContain('%2Fa'))
+    ask(window, request('/b'))
+    ask(frame().contentWindow, request('/b'), 'http://site-0a1b2c3d-chat-ffffff.localhost:8090')
+    ask(frame().contentWindow, { ...request('/b'), host: 'site-0a1b2c3d-chat-ffffff.localhost' })
+    await settle()
+    expect(ticket).toHaveBeenCalledTimes(2)
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(frame()).toBeTruthy()
   })
 
-  it('answers at most once in 10 s', async () => {
+  it('says so when the frame comes back at once', async () => {
+    let now = 1_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const view = showFrame(1)
+    ask((await shown()).contentWindow, request('/a'))
+    await waitFor(() => expect(ticket).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(frame().getAttribute('src')).toContain('%2Fa'))
+    // The new frame asks again right away: this browser kept no cookie of the gateway.
+    now += 9_999
+    ask(frame().contentWindow, request('/b'))
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toBe(previewPanelText.frameRefused)
+    const link = screen.getByRole('link', { name: previewPanelText.openInNewTab })
+    expect(link.getAttribute('href')).toBe(OPEN_URL)
+    expect(link.getAttribute('target')).toBe('_blank')
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer')
+    expect(screen.queryByTitle(TITLE)).toBeNull()
+    await settle()
+    expect(ticket).toHaveBeenCalledTimes(2)
+    // A new revision is a new frame, and the frame is tried again.
+    view.rerenderAt(2)
+    await shown()
+    expect(ticket).toHaveBeenCalledTimes(3)
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('answers a request 10 s after the last answer, and says nothing', async () => {
     let now = 1_000_000
     vi.spyOn(Date, 'now').mockImplementation(() => now)
     showFrame()
     ask((await shown()).contentWindow, request('/a'))
     await waitFor(() => expect(ticket).toHaveBeenCalledTimes(2))
     await waitFor(() => expect(frame().getAttribute('src')).toContain('%2Fa'))
-    now += 9_999
-    ask(frame().contentWindow, request('/b'))
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(ticket).toHaveBeenCalledTimes(2)
-    now += 1
+    now += 10_000
     ask(frame().contentWindow, request('/c'))
     await waitFor(() => expect(ticket).toHaveBeenCalledTimes(3))
+    await waitFor(() => expect(frame().getAttribute('src')).toContain('%2Fc'))
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('takes a new ticket for a new revision of the preview', async () => {

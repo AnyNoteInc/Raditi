@@ -131,6 +131,7 @@ const secrets = {
   unused: 'synthetic-unused-value',
 }
 const shared = {
+  run: RUN,
   path: '/usr/bin:/bin',
   directory: '/tmp/raditi-billing-verify-run-x',
   ports: { web: 43_100 },
@@ -804,6 +805,7 @@ test('core gets PostgreSQL and Redis of the stand; S3 and Vault are throwaway va
     'S3_ACCESS_KEY_ID',
     'S3_ENDPOINT',
     'S3_SECRET_ACCESS_KEY',
+    'SANDBOX_DEPLOYMENT',
     'TMPDIR',
     'TURN_EXECUTOR',
     'VAULT_ADDR',
@@ -813,6 +815,11 @@ test('core gets PostgreSQL and Redis of the stand; S3 and Vault are throwaway va
     'YOOKASSA_SHOP_ID',
   ])
   assert.equal(env.CORE_PORT, '43200')
+  // Its own deployment label: a core of another tree on this daemon never removes its turns.
+  assert.equal(env.SANDBOX_DEPLOYMENT, `billing-verify-${RUN}`)
+  // Without the run every run of every tree would share one label.
+  for (const run of [undefined, 'undefined', '0123ABCD'])
+    assert.throws(() => coreEnvironment({ ...shared, run, port: 43_200 }), /Invalid run id/)
   assert.equal(env.DATABASE_URL, shared.databaseUrl)
   assert.equal(env.REDIS_URL, shared.redisUrl)
   // The letters of core link to web, and web tells the day an overdue tariff ends by the same

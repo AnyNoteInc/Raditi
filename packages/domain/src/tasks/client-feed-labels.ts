@@ -705,6 +705,9 @@ export const previewPanelText = Object.freeze({
   expired:
     'Предпросмотр остановлен, потому что его давно не открывали. Откройте его снова — мы его подготовим.',
   failed: 'Не удалось подготовить предпросмотр. Попробуйте сбросить его данные или напишите нам.',
+  /** The browser keeps no cookie of the gateway inside the cabinet's frame (Т35): a tab will. */
+  frameRefused:
+    'Этот браузер не открывает предпросмотр внутри кабинета. Откройте его в новой вкладке.',
 })
 
 /** Why there is no preview, by `unavailable_reason` (Р4, Р16): said plainly, never drawn. */

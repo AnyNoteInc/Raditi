@@ -28,8 +28,8 @@ const testEnv = {
   METRICS_TOKEN: TEST_METRICS_TOKEN,
 }
 
-export function testCoreConfig(): CoreConfig {
-  return loadConfig(testEnv)
+export function testCoreConfig(overrides: Record<string, string> = {}): CoreConfig {
+  return loadConfig({ ...testEnv, ...overrides })
 }
 
 export interface Dependencies extends SharedDependencies {

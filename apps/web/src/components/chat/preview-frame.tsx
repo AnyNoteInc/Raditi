@@ -5,6 +5,7 @@ import { previewPanelText } from '@repo/domain/tasks/client-feed-labels'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import CircularProgress from '@mui/material/CircularProgress'
+import MuiLink from '@mui/material/Link'
 import Typography from '@mui/material/Typography'
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
@@ -23,7 +24,10 @@ import { paneText } from './chat-texts'
 /** The type of the request the gateway's page sends. */
 export const TICKET_REQUEST_TYPE = 'raditi-preview-ticket-request'
 
-/** At most one request of a frame is answered in this time; the rest are dropped silently. */
+/**
+ * At most one request of a frame is answered in this time. One more within it means the frame came
+ * back without the gateway's cookie: the frame gives way to a link to a tab (Т35).
+ */
 export const TICKET_REQUEST_INTERVAL_MS = 10_000
 
 /**
@@ -83,17 +87,21 @@ const nextRound = (previous: Entry): Entry => ({ round: previous.round + 1, path
 /**
  * The frame of a ready preview. Each mount takes a fresh ticket, and so does a new revision of
  * the preview: a frame never outlives the changes it shows. The frame-ticket requests of the
- * frame are answered as the contract says.
+ * frame are answered as the contract says. A browser that keeps no cookie of a frame (Safari
+ * before 26.2) is told by what it does, never by its User-Agent: it asks again at once.
  */
 export function PreviewFrame({
   taskId,
   origin,
   revision,
+  openUrl,
 }: {
   taskId: string
   /** `scheme://host[:port]` of the preview. */
   origin: string
   revision: number
+  /** The cabinet's address that opens this preview in a tab of its own. */
+  openUrl: string
 }) {
   const client = useTRPCClient()
   const hostname = previewHostOf(origin)
@@ -102,6 +110,8 @@ export function PreviewFrame({
   const [entry, setEntry] = useState<Entry>({ round: 0, path: '/' })
   const iframe = useRef<HTMLIFrameElement>(null)
   const lastAnswered = useRef<number | null>(null)
+  /** The revision whose frame this browser cannot keep open; null — none. */
+  const [refusedRevision, setRefusedRevision] = useState<number | null>(null)
   const ticket = useQuery({
     queryKey: ['chat', 'preview-ticket', taskId, revision, entry.round, entry.path],
     queryFn: () => client.preview.ticket.mutate({ taskId, to: entry.path }),
@@ -131,13 +141,18 @@ export function PreviewFrame({
       })
       if (path === null) return
       const now = Date.now()
-      if (!ticketRequestAllowed(lastAnswered.current, now)) return
+      if (!ticketRequestAllowed(lastAnswered.current, now)) {
+        // A second request right after the answer: the frame came back without the gateway's
+        // cookie. This browser keeps no cookie of a frame, whatever the page does next.
+        setRefusedRevision(revision)
+        return
+      }
       lastAnswered.current = now
       setEntry((previous) => ({ round: previous.round + 1, path }))
     }
     window.addEventListener('message', answer)
     return () => window.removeEventListener('message', answer)
-  }, [hostname, origin])
+  }, [hostname, origin, revision])
 
   // A stopped preview is being built again: the panel shows it so, and asks again by itself.
   if (notReady) return <Building />
@@ -164,6 +179,15 @@ export function PreviewFrame({
       </Typography>
     )
   }
+  if (refusedRevision === revision)
+    return (
+      <Box sx={{ p: 2.5, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+        <Typography role="alert">{previewPanelText.frameRefused}</Typography>
+        <MuiLink href={openUrl} target="_blank" rel="noopener noreferrer" variant="body2">
+          {previewPanelText.openInNewTab}
+        </MuiLink>
+      </Box>
+    )
   return (
     <Box sx={{ flex: '1 1 auto', display: 'flex', minHeight: 420, bgcolor: 'common.white' }}>
       <iframe

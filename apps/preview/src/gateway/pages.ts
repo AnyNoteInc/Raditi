@@ -173,6 +173,6 @@ var parentOrigin=${scriptString(appOrigin)},host=${scriptString(hostname)},path=
 function say(title,text){document.getElementById('title').textContent=title;document.getElementById('text').textContent=text}
 if(window.parent===window){say('Предпросмотр открывается из кабинета','Откройте его из диалога в кабинете.');return}
 window.parent.postMessage({type:${scriptString(PREVIEW_TICKET_REQUEST)},host:host,path:path},parentOrigin);
-setTimeout(function(){say('Не удалось открыть предпросмотр','Обновите страницу кабинета.')},${FRAME_TICKET_WAIT_SECONDS * 1000});
+setTimeout(function(){say('Не удалось открыть предпросмотр','Откройте его в новой вкладке: ссылка над этим окном.')},${FRAME_TICKET_WAIT_SECONDS * 1000});
 })();`
 }

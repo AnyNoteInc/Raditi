@@ -723,6 +723,7 @@ async function main(options, owned) {
   })
   owned.fake = fake
   const shared = {
+    run: runId,
     path: callerEnv.PATH,
     directory,
     ports,

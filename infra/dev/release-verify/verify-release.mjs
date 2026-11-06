@@ -423,6 +423,7 @@ async function main(options, owned) {
     botToken: gitea.tokens.bot,
   }
   const context = {
+    run: names.run,
     path: callerEnv.PATH,
     directory,
     ports,

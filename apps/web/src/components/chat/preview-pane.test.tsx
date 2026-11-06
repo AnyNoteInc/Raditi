@@ -8,6 +8,7 @@ import { plain } from '@/components/billing/testing'
 
 import type { CandidateHead, CandidateView, FileDiffView, PreviewHead } from './chat-types'
 import type { ChangesTool } from './dialog-tools'
+import { TICKET_REQUEST_TYPE } from './preview-frame'
 import { CandidateTab, PreviewTab, usePreviewCalls } from './preview-pane'
 import { CANDIDATE_ID, candidateHead, TASK_ID } from './testing'
 
@@ -224,6 +225,43 @@ describe('the tab of the preview (И10: the preview chosen is asked for)', () =>
     )
     expect(open.getAttribute('target')).toBe('_blank')
     expect(open.getAttribute('rel')).toBe('noopener noreferrer')
+  })
+
+  it('gives way to the same tab as the link above when the frame comes back at once (Т35)', async () => {
+    showPreview()
+    const asked = () =>
+      act(() => {
+        window.dispatchEvent(
+          new MessageEvent('message', {
+            data: {
+              type: TICKET_REQUEST_TYPE,
+              host: 'site-0a1b2c3d-chat-4e5f6a.localhost',
+              path: '/',
+            },
+            origin: ORIGIN,
+            source: screen.getByTitle<HTMLIFrameElement>(FRAME).contentWindow,
+          }),
+        )
+      })
+    await screen.findByTitle(FRAME)
+    asked()
+    await waitFor(() => expect(ticket).toHaveBeenCalledTimes(2))
+    await screen.findByTitle(FRAME)
+    // The new frame asks again within 10 s: this browser kept no cookie of the gateway.
+    asked()
+    const alert = await within(panel()).findByRole('alert')
+    expect(alert.textContent).toBe(
+      'Этот браузер не открывает предпросмотр внутри кабинета. Откройте его в новой вкладке.',
+    )
+    expect(screen.queryByTitle(FRAME)).toBeNull()
+    const links = within(panel())
+      .getAllByRole('link', { name: 'Открыть в новой вкладке' })
+      .map((link) => link.getAttribute('href'))
+    expect(links).toEqual([
+      `${window.location.origin}/preview/open?host=site-0a1b2c3d-chat-4e5f6a.localhost&path=%2F`,
+      `${window.location.origin}/preview/open?host=site-0a1b2c3d-chat-4e5f6a.localhost&path=%2F`,
+    ])
+    expect(ticket).toHaveBeenCalledTimes(2)
   })
 
   it('says the preview is being built, and spends no ticket on it', () => {
