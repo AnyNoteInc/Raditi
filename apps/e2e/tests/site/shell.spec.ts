@@ -1,7 +1,9 @@
 import { expect, test } from '../../fixtures/signed-in.ts'
 
 import {
+  addConnectedSite,
   addForeignSite,
+  addImportedSite,
   addSite,
   CLOSED_NOTE_ID,
   CLOSED_SUFFIX,
@@ -109,6 +111,38 @@ test('the address of a connected site opens its overview: a project has no chat'
   const navigation = page.getByRole('navigation', { name: 'Разделы сайта' })
   await expect(navigation.locator('[aria-current="page"]')).toHaveText('Обзор')
   await expect(navigation.getByRole('link', { name: /^Чат/ })).toHaveCount(0)
+})
+
+// «Новый чат» under the heading follows the chat the server takes of the project (`project.get`),
+// not a second rule of the page. This stand has no browser of the platform.
+test('the overview offers a new chat of the project only when the server takes one', async ({
+  page,
+  signedInUser,
+}) => {
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  const main = page.getByRole('main')
+
+  await test.step('a connected site: a new chat of this project', async () => {
+    const siteId = await addConnectedSite(signedInUser.id)
+    await page.goto(`/projects/${siteId}/overview`)
+    await expect(main.getByRole('link', { name: 'Новый чат' })).toHaveAttribute(
+      'href',
+      `/chats/new?project=${siteId}`,
+    )
+  })
+
+  await test.step('an imported site without the browser: no chat, the files wait', async () => {
+    const siteId = await addImportedSite(signedInUser.id)
+    await page.goto(`/projects/${siteId}/overview`)
+    await expect(main.getByText('Первоначальная версия сайта сохранена')).toBeVisible()
+    await expect(main.getByRole('link', { name: 'Новый чат' })).toHaveCount(0)
+    await main.getByRole('button', { name: 'Подключение: Ожидает подключения' }).hover()
+    await expect(page.getByRole('tooltip')).toContainText(
+      'Файлы сайта сохранены, но агент пока не может менять сайт',
+    )
+    await expect(page.getByRole('tooltip')).not.toContainText(/админк|сразу|без выпуска/)
+  })
 })
 
 // Every address under a site besides the overview.

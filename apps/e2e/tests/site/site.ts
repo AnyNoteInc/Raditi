@@ -36,6 +36,45 @@ export async function addSite(userId: string, status: SiteStatus = 'onboarding')
   }
 }
 
+/**
+ * A site the wizard imported and nothing connected yet: `onboarding`, its first import succeeded,
+ * the first version `v0.0.0` saved and confirmed. No file of it exists anywhere.
+ */
+export async function addImportedSite(userId: string): Promise<string> {
+  const siteId = await addSite(userId)
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    const repository = await prisma.gitRepository.create({
+      data: {
+        siteId,
+        provider: 'gitea',
+        owner: 'sites',
+        name: `site-${siteId}`,
+        url: `https://gitea.raditi.test/sites/site-${siteId}`,
+      },
+      select: { id: true },
+    })
+    await prisma.siteInitialVersion.create({
+      data: {
+        siteId,
+        gitRepositoryId: repository.id,
+        commitSha: 'c'.repeat(40),
+        tag: 'v0.0.0',
+        files: 10,
+        bytes: 2048,
+        leaseEpoch: 1,
+        importedAt: new Date(),
+      },
+    })
+    await prisma.siteProvisioningStage.create({
+      data: { siteId, stage: 'code_import', status: 'succeeded', finishedAt: new Date() },
+    })
+    return siteId
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
 /** `count` sites of the user, each with a name and an address of its own. */
 export async function addSites(userId: string, count: number): Promise<void> {
   const prisma = createPrismaClient({ databaseUrl: databaseUrl() })

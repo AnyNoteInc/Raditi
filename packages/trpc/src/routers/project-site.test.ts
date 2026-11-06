@@ -86,6 +86,7 @@ describe('project.get', () => {
       initialVersion: null,
       // No browser is set up in this context: the repository alone.
       capabilities: { repository: 'ready', browser: 'not_configured' },
+      chat: { state: 'ready', requirements: { repository: true, browser: false } },
     })
   })
 

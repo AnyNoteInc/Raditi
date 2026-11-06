@@ -11,7 +11,7 @@ import { Fact, Facts, SiteCard } from './site-cards'
 import { SiteLink } from './site-link'
 import { runTitle, type RunView } from './history-text'
 import { SiteConnection, type ConnectionSite } from './site-connection'
-import { isBrowserOnly, siteHref } from './site-nav'
+import { siteHref, takesNewChat } from './site-nav'
 import { versionTitle, type VersionView } from './site-versions'
 
 /** The first commit of the site repository, once `main` and its tag are on the remote. */
@@ -122,7 +122,7 @@ export function SiteOverview({
         <SiteConnection site={site} />
         <SectionTitle>Обзор</SectionTitle>
       </Box>
-      {isBrowserOnly(site) && site.id ? (
+      {takesNewChat(site) && site.id ? (
         <Typography>
           <SiteLink href={newChatHref(site.id)}>{chatsText.newChat}</SiteLink>
         </Typography>
