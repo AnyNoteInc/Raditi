@@ -261,7 +261,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
       expect(await store.open(f.step(2, { base: headSha, previous: 1 }))).not.toBeNull()
     })
 
-    it('starts a new session on the moved head and refuses the continuation of the old one', async () => {
+    it('starts on the moved head, the session going on, and refuses the old head', async () => {
       const f = await fixture()
       await f.close((await store.open(f.input))!, 'completed', headSha)
       await f.candidate(1, headSha)
@@ -270,17 +270,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
       await expect(store.open(f.step(2, { base: headSha, previous: 1 }))).rejects.toThrow(
         '«Обновить» moved the task branch',
       )
-      for (const wrong of [
-        f.step(2, { base: headSha, rebased: true }),
-        f.step(2, { base: moved, rebased: true, previous: 1 }),
-      ])
-        await expect(store.open(wrong)).rejects.toMatchObject({
-          code: 'CONFLICT',
-          message: 'A rebased turn does not start on the candidate «Обновить» moved',
-        })
+      await expect(store.open(f.step(2, { base: headSha, rebased: true }))).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: 'A rebased turn does not start on the candidate «Обновить» moved',
+      })
       expect(await db.taskTurn.count({ where: { taskId: f.task.id } })).toBe(1)
 
-      const second = (await store.open(f.step(2, { base: moved, rebased: true })))!
+      // The owner, 06.11.2026: the session of turn 1 goes on, on the moved head.
+      const second = (await store.open(f.step(2, { base: moved, rebased: true, previous: 1 })))!
       expect(second.plan.rebased).toBe(true)
       expect(
         await db.taskTurn.findUniqueOrThrow({
@@ -326,16 +323,17 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
         store.open(f.step(3, { base: headSha, previous: 1, pin: headSha })),
       ).rejects.toThrow('pin the published task branch')
       // The input of the failed turn stands on the old main: publishing it would undo the move.
-      for (const wrong of [
-        f.step(3, { base: headSha, previous: 1, pin: moved }),
-        f.step(3, { base: moved, previous: 1, pin: moved, rebased: true }),
-      ])
-        await expect(store.open(wrong)).rejects.toMatchObject({
-          code: 'CONFLICT',
-          message: 'Replacement does not start on the candidate «Обновить» moved',
-        })
+      await expect(
+        store.open(f.step(3, { base: headSha, previous: 1, pin: moved })),
+      ).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: 'Replacement does not start on the candidate «Обновить» moved',
+      })
 
-      const third = (await store.open(f.step(3, { base: moved, rebased: true, pin: moved })))!
+      // The replacement restores the session the failed turn started from, on the moved head.
+      const third = (await store.open(
+        f.step(3, { base: moved, previous: 1, pin: moved, rebased: true }),
+      ))!
       expect(third.plan).toMatchObject({ replacesTurn: 2, rebased: true })
       await f.close(third, 'failed')
 

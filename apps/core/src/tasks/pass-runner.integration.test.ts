@@ -1540,7 +1540,9 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       )
     })
 
-    it('starts the turn after «Обновить» as a new session on the head the update wrote', async () => {
+    // Turn 1 of this dialog kept no plan, so no checkpoint: a new session (the owner, 06.11.2026 — a
+    // session with one goes on; the planner and the store test that path).
+    it('starts the turn after «Обновить» without a checkpoint as a new session on the moved head', async () => {
       await rate()
       const dialog = await rebasedDialog()
       vi.mocked(git.readBranchHead).mockResolvedValue(REBASED)

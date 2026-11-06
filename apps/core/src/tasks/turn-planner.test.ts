@@ -522,7 +522,8 @@ describe('planTurn', () => {
     expect(continued.request.workspace?.expectedBaseSha).toBe(HEAD2)
   })
 
-  it('starts a new session on the candidate «Обновить» moved onto a new main', async () => {
+  // The owner, 06.11.2026: «необходимо продолжать сессию» — after «Обновить» or an edit too.
+  it('goes on with the session on the candidate «Обновить» moved onto a new main', async () => {
     const last = finished(1, 'completed', { headSha: HEAD1 })
     const plan = await planTurn(
       facts({
@@ -536,10 +537,10 @@ describe('planTurn', () => {
     )
     if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
     expect(plan.request.rebased).toBe(true)
-    expect(plan.request.previous).toBeUndefined()
+    expect(plan.request.previous).toMatchObject({ turn: 1 })
     expect(plan.request.workspace?.expectedBaseSha).toBe(HEAD2)
-    // A new session hears the whole dialog.
-    expect(plan.request.input.prompt).toBe('Первая\n\nВторая')
+    // The session heard the first words; it is told its working copy moved.
+    expect(plan.request.input.prompt).toMatch(/^Вторая\n\nSince your last turn the working copy/)
   })
 
   it('replaces the new session after «Обновить», pinned on the head the update wrote', async () => {
@@ -568,7 +569,7 @@ describe('planTurn', () => {
     })
   })
 
-  it('replaces a turn that failed before «Обновить» with a new session on the moved head', async () => {
+  it('replaces a turn that failed before «Обновить» on the moved head, its session restored', async () => {
     // Turn 2 continued turn 1 and failed; the dialog waited with its candidate, and «Обновить»
     // moved it under the task's turn 2 onto a new main (HEAD2). The input of turn 2 stands on
     // the old main: publishing it over HEAD2 would undo the move.
@@ -594,14 +595,12 @@ describe('planTurn', () => {
       env({}, HEAD2),
     )
     if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
-    expect(plan.request).toMatchObject({ replacesTurn: 2, rebased: true })
-    expect(plan.request.previous).toBeUndefined()
+    expect(plan.request).toMatchObject({ replacesTurn: 2, rebased: true, previous })
     expect(plan.request.workspace).toMatchObject({
       expectedBaseSha: HEAD2,
       expectedBranchSha: HEAD2,
     })
-    // A new session hears the whole dialog.
-    expect(plan.request.input.prompt).toBe('Первая\n\nВторая')
+    expect(plan.request.input.prompt).toMatch(/^Вторая\n\nSince your last turn the working copy/)
   })
 
   it('runs no turn on a task branch that is not where the platform left it', async () => {
@@ -770,6 +769,45 @@ describe('planTurn of `/compact` (docs/plan/61-chats-first.md, К30, §5.14)', (
     }
   })
 
+  // A compaction right after an edit hears no words: the turn of words after it is told of the move.
+  it('tells the turn of words after a compaction on a moved head that its copy changed', async () => {
+    const checkpoint = {
+      workspaceId: WORKSPACE,
+      sessionId: TASK,
+      turn: 1,
+      image,
+      driver: { id: sampleDriverId, version: driver.cliVersion },
+      home,
+    }
+    const compacted = finished(2, 'completed', {
+      headSha: HEAD2,
+      base: HEAD2,
+      previous: checkpoint,
+    })
+    compacted.plan = {
+      ...compacted.plan!,
+      rebased: true,
+      input: { ...compacted.plan!.input, action: 'compact' },
+    }
+    const plan = await planTurn(
+      chat([first, compact(11, 15), request(12, 'revision', 'Дальше', 25)], {
+        task: { ...facts().task, turnNo: 2 },
+        turns: new Map([
+          [1, finished(1, 'completed', { headSha: HEAD1 })],
+          [2, compacted],
+        ]),
+        writtenHead: HEAD2,
+        candidate: { turnNo: 1, headSha: HEAD2 },
+      }),
+      env({}, HEAD2),
+    )
+    if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+    const { input, previous, rebased } = plan.request
+    expect(rebased).toBeUndefined()
+    expect(previous?.turn).toBe(2)
+    expect(input.prompt).toMatch(/^Дальше\n\nSince your last turn the working copy has changed/)
+  })
+
   it('repeats a compaction that failed in its turn: it replaces it, from the same checkpoint', async () => {
     const checkpoint = {
       workspaceId: WORKSPACE,
@@ -854,15 +892,14 @@ describe('planTurn of `/compact` (docs/plan/61-chats-first.md, К30, §5.14)', (
     expect(previous).toBeUndefined()
   })
 
-  it('goes as words would on a candidate «Обновить» moved: that is a new session', async () => {
+  it('shortens the session on a candidate «Обновить» moved: the session goes on', async () => {
     const plan = await planTurn(
       chat([first, compact(11, after)], { candidate: { turnNo: 1, headSha: HEAD2 } }),
       env({}, HEAD2),
     )
     if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
-    expect(plan.request.input).not.toHaveProperty('action')
-    expect(plan.request.input.prompt).toBe('Сделайте шапку синей')
-    expect(plan.request.previous).toBeUndefined()
+    expect(plan.request.input).toHaveProperty('action')
+    expect(plan.request.previous).toMatchObject({ turn: 1 })
     expect(plan.request.rebased).toBe(true)
   })
 })

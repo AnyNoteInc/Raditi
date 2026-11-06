@@ -1209,8 +1209,14 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     expect(f.publication.publish).not.toHaveBeenCalled()
   })
 
-  /** The committed checkpoint of turn 1, whose candidate is the fixture's base commit. */
-  async function checkpointOfTurnOne(f: Fixture) {
+  /**
+   * The committed checkpoint of turn 1, whose candidate is the fixture's base commit — or the
+   * commit given, a head the branch moved from after it (an edit of the client, «Обновить»).
+   */
+  async function checkpointOfTurnOne(
+    f: Fixture,
+    saved: { headSha?: string; branch?: string } = {},
+  ) {
     const memory = memoryStorage()
     const transit = memoryTransit()
     const service = new SnapshotService(memory.storage, transit.secrets)
@@ -1229,9 +1235,9 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
         home,
         git: {
           provider: 'gitea',
-          branch: f.request.workspace.branch,
+          branch: saved.branch ?? f.request.workspace.branch,
           baseSha: 'a'.repeat(40),
-          headSha: baseSha,
+          headSha: saved.headSha ?? baseSha,
         },
       },
       prior,
@@ -1275,6 +1281,48 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
       expect.objectContaining({ nativeSessionId: 'prior-native' }),
     )
     expect(vi.mocked(f.driver.command).mock.calls.at(-1)![1].action).toBe('compact')
+  })
+
+  // The owner, 06.11.2026: «необходимо продолжать сессию» — after an edit or «Обновить» too.
+  it('goes on with the session of turn n−1 on the head the branch moved to', async () => {
+    const f = fixture()
+    const { prior, reference } = await checkpointOfTurnOne(f, { headSha: 'd'.repeat(40) })
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+    f.request.context = { ...f.request.context, turn: 2 }
+    f.request.previous = reference
+    f.request.rebased = true
+    await f.run()
+    // The session comes back; the checkout is the bundle of the moved head, not the checkpoint's.
+    expect(f.transport.restore).toHaveBeenCalledWith(f.sandbox, home, {
+      home: Buffer.from(prior.home),
+      untracked: Buffer.from(prior.untracked),
+      patch: Buffer.from(prior.patch),
+    })
+    expect(f.workspace.buildBaseBundle).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedBaseSha: f.request.workspace.expectedBaseSha }),
+      expect.anything(),
+    )
+    expect(f.driver.prepare).toHaveBeenCalledWith(
+      expect.objectContaining({ nativeSessionId: 'prior-native' }),
+    )
+    expect([...f.assignments.rows.values()][0]!.plan).toMatchObject({
+      rebased: true,
+      previous: { turn: 1 },
+    })
+  })
+
+  it('refuses a rebased turn the checkpoint of another branch, before creating a container', async () => {
+    const f = fixture()
+    const { reference } = await checkpointOfTurnOne(f, {
+      headSha: 'd'.repeat(40),
+      branch: 'agent/other-task',
+    })
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+    f.request.context = { ...f.request.context, turn: 2 }
+    f.request.previous = reference
+    f.request.rebased = true
+    await expect(f.run()).rejects.toMatchObject({ code: 'CONFLICT' })
+    expect(f.sandboxes.create).not.toHaveBeenCalled()
   })
 
   it('restores turn n−1 through presigned GETs before installing the new turn secrets', async () => {
@@ -1668,41 +1716,12 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
   it.each([
     ['a first turn', (f: Fixture) => void f],
     [
-      'a checkpoint',
-      (f: Fixture) => {
-        f.request.previous = {
-          workspaceId: labels.workspaceId,
-          sessionId: labels.sessionId,
-          turn: 1,
-          image,
-          driver: { id: sampleDriverId, version: '1.0.0' },
-          home,
-        }
-      },
-    ],
-    [
-      'a replacement that restores a checkpoint',
-      (f: Fixture) => {
-        f.request.replacesTurn = 1
-        f.request.workspace = { ...f.request.workspace, expectedBranchSha: baseSha }
-        f.request.previous = {
-          workspaceId: labels.workspaceId,
-          sessionId: labels.sessionId,
-          turn: 1,
-          image,
-          driver: { id: sampleDriverId, version: '1.0.0' },
-          home,
-        }
-        f.deps.contentRollback = { rollback: vi.fn(async () => {}) }
-      },
-    ],
-    [
       'a resumed session',
       (f: Fixture) => {
         f.request.context = { ...f.request.context, nativeSessionId: 'prior-native' }
       },
     ],
-  ])('refuses a rebased turn with %s before the lease', async (name, change) => {
+  ])('refuses a rebased turn as %s before the lease', async (name, change) => {
     const f = fixture()
     if (name !== 'a first turn') {
       f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }

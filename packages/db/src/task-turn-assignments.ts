@@ -129,12 +129,13 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
         if (plan.replacesTurn === undefined) {
           if (prior.status !== 'completed') throw conflict('An unsuccessful turn must be replaced')
           if (prior.undoneAt !== null) throw conflict('An undone turn must be replaced')
-          // After «Обновить» (plan 53, Р27) the turn is a new session on the moved candidate;
-          // a continuation would restore a session of the old `main` and publish over the move.
+          // After «Обновить» (plan 53, Р27) or the client's edit the turn starts on the moved
+          // candidate, going on with the session of the completed turn or a new one; a plain
+          // continuation would start on the old head and publish over the move.
           if (plan.rebased) {
             if (
               branch.movedAfterLastTurn === null ||
-              plan.previous ||
+              (plan.previous !== undefined && plan.previous.turn !== turn - 1) ||
               workspace.expectedBaseSha !== branch.movedAfterLastTurn
             )
               throw conflict('A rebased turn does not start on the candidate «Обновить» moved')
@@ -159,11 +160,13 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
           if (previous[0]!.sessionId !== sessionId)
             throw conflict('Replacement does not restore the replaced turn input')
           if (branch.movedAfterLastTurn !== null) {
-            // «Обновить» moved the candidate after the replaced turn (plan 53, Р27): its input
-            // stands on the old `main`, so the replacement is a new session on the moved head.
+            // «Обновить» or the client's edit moved the candidate after the replaced turn: the
+            // replacement starts on the moved head, with the session the replaced turn started
+            // from or a new one.
             if (
               !plan.rebased ||
-              plan.previous ||
+              (plan.previous !== undefined &&
+                !isDeepStrictEqual(plan.previous, replaced.previous)) ||
               workspace.expectedBaseSha !== branch.movedAfterLastTurn
             )
               throw conflict('Replacement does not start on the candidate «Обновить» moved')

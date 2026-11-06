@@ -13,6 +13,7 @@ import {
   requestShown,
   stopRequested,
   undoFailedAfter,
+  updateRowsOf,
   withoutRedoneRewinds,
 } from './feed-model'
 import {
@@ -456,6 +457,22 @@ describe('undoFailedAfter', () => {
 
   it('compares ids as numbers: `9` comes before `10`', () => {
     expect(undoFailedAfter([failed('100')], '99')).toBe(true)
+  })
+})
+
+describe('updateRowsOf', () => {
+  const update = (id: string): FeedRow => ({
+    id,
+    at: '2026-10-17T09:50:00.000Z',
+    type: 'feed.update',
+    outcome: 'conflict',
+    conflicts: 1,
+  })
+
+  // `/release` of stale changes waits for its «Обновить»: a new row ends the wait (dialog-view).
+  it('counts the «Обновить» rows that recorded no revision, and nothing else', () => {
+    expect(updateRowsOf([])).toBe(0)
+    expect(updateRowsOf([requestRow('1'), update('2'), resultRow('3', 1), update('4')])).toBe(2)
   })
 })
 

@@ -198,9 +198,16 @@ export class TurnSupervisor {
         )
         // The next turn starts from the previous turn's candidate commit; the snapshot carries
         // the session only. A turn without a repository restores only a checkpoint without one,
-        // and a turn with one never restores such a checkpoint.
+        // and a turn with one never restores such a checkpoint. A rebased turn starts on the head
+        // the branch moved to after that commit — the session goes on, the checkout is new.
         if (request.workspace) {
-          if (source.manifest.git?.headSha !== request.workspace.expectedBaseSha)
+          const saved = source.manifest.git
+          if (
+            saved === undefined ||
+            saved.branch !== request.workspace.branch ||
+            saved.provider !== request.workspace.repo.provider ||
+            (!request.rebased && saved.headSha !== request.workspace.expectedBaseSha)
+          )
             throw conflict('Previous checkpoint differs from the expected checkout')
         } else if (source.manifest.git !== undefined)
           throw conflict('Previous checkpoint holds a repository the turn has not')
@@ -333,15 +340,15 @@ export class TurnSupervisor {
       throw badRequest('Replacement requires the published task branch fence')
     if (request.replacesTurn !== undefined && !request.previous && request.context.nativeSessionId)
       throw badRequest('A replacement without a checkpoint must start a fresh session')
-    // After «Обновить» (plan 53, Р27) the dialog stands on a new `main`: the next turn starts a
-    // new session from the moved candidate, with nothing of the old one to restore. It replaces
-    // the last turn when that one did not succeed (its content is undone first), and a failed
-    // rebased turn is replaced by a rebased one; the store checks which head it starts on.
+    // After «Обновить» (plan 53, Р27) or the client's edit of a file the chat stands on a moved
+    // candidate: the next turn starts on it and goes on with the session of the turn before
+    // (owner's request of 06.11.2026), or a new one when there is no checkpoint. It replaces the
+    // last turn when that one did not succeed (its content is undone first), and a failed rebased
+    // turn is replaced by a rebased one; the store checks which head it starts on.
     if (request.rebased === true) {
       if (labels.turn < 2) throw badRequest('A rebased turn follows an earlier turn')
-      if (request.previous) throw badRequest('A rebased turn restores no checkpoint')
-      if (request.context.nativeSessionId)
-        throw badRequest('A rebased turn must start a fresh session')
+      if (!request.previous && request.context.nativeSessionId)
+        throw badRequest('A rebased turn without a checkpoint must start a fresh session')
     } else if (
       workspace &&
       labels.turn > 1 &&

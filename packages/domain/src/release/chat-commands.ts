@@ -348,7 +348,7 @@ export const chatCommandRefusalText: Readonly<Record<ChatCommandRefusal, string>
   no_repository: 'В этом чате нет кода проекта.',
   nothing_to_undo: 'Отменять пока нечего.',
   undo_past_update:
-    'Этот запрос отменить нельзя: после него рабочая копия перешла на новую версию сайта.',
+    'Этот запрос отменить нельзя: после него рабочая копия изменилась — вы правили её файлы или она перешла на новую версию сайта.',
   content_written: 'Этот запрос отменить нельзя: он изменил содержимое сайта.',
   nothing_to_redo: 'Возвращать нечего.',
   turn_redoing: 'Подождите: отменённый запрос ещё возвращается.',
@@ -519,7 +519,10 @@ function refusalOf(id: ServerCommandId, facts: ChatCommandFacts): ChatCommandRef
       if (BUSY.includes(status)) return 'busy'
       if (candidate === null) return 'no_candidate'
       if (status !== 'awaiting_approval') return 'awaiting_answer'
-      if (candidate.status === 'stale' || !candidate.baseIsMain) return 'needs_update'
+      // The site moved on: `/release` carries the changes onto the current `main` first
+      // («Обновить») and then asks for the release of the new revision (owner's answer of
+      // 06.11.2026: «будет мерджить в main текущий код и потом делать новый релиз»).
+      if (candidate.status === 'stale' || !candidate.baseIsMain) return null
       if (candidate.checksFailed) return 'checks_failed'
       return null
     case 'preview':

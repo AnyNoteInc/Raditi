@@ -475,20 +475,18 @@ describe('the rows of a dialog', () => {
     expect(handlers.onShowChanges).toHaveBeenCalledTimes(1)
   })
 
-  it('says why the release is closed and offers the update when the site moved on', () => {
+  // The owner, 06.11.2026: `/release` carries the changes onto the current site itself.
+  it('offers the release when the site moved on: the update comes first, without a word of it', () => {
     const row = candidateRow('6', 1)
     const head = headOf({
       status: 'awaiting_approval',
       candidate: { ...candidateHead, status: 'stale' },
-      commands: verdicts({ release: 'needs_update' }),
+      commands: verdicts({}),
     })
     const { feed, handlers } = showFeed([row], head, { candidate: row.id })
-    expect(within(feed).queryByRole('button', { name: 'Выпустить новую версию' })).toBeNull()
-    expect(text(feed)).toContain(
-      'Сайт изменился после начала чата. Сначала обновите рабочую копию.',
-    )
-    fireEvent.click(within(feed).getByRole('button', { name: 'Обновить рабочую копию' }))
-    expect(handlers.onUpdate).toHaveBeenCalledTimes(1)
+    expect(text(feed)).not.toContain('Сначала обновите рабочую копию')
+    fireEvent.click(within(feed).getByRole('button', { name: 'Выпустить новую версию' }))
+    expect(handlers.onRelease).toHaveBeenCalledTimes(1)
   })
 
   it('shows an old candidate without its buttons', () => {
