@@ -247,10 +247,15 @@ describe('MCP tools of a dialog with a preview', () => {
     expect(siteInfoOf(scopeOf({ ...previewOf('ready'), dbKinds: [] }), address)).toMatchObject({
       database: { operations: [] },
     })
-    // A closed preview has no build coming that would say more: none, not «call again».
+    // A closed preview has no build coming that would say more: none, not «call again» — and
+    // none even where its record still keeps the kinds of an older build (a base that does not
+    // start, Э1.6): its content tools are closed.
     for (const status of ['unavailable', 'destroyed'] as const) {
       const { dbKinds: _gone, ...closed } = previewOf(status)
       expect(siteInfoOf(scopeOf(closed), address)).toMatchObject({
+        database: { operations: [] },
+      })
+      expect(siteInfoOf(scopeOf(previewOf(status)), address)).toMatchObject({
         database: { operations: [] },
       })
     }

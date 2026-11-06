@@ -18,6 +18,9 @@ export const WORDPRESS_IMAGE =
 
 export const name = 'wordpress'
 
+/** What the recipe's wp-config.php says on every page it served (`ready` of the recipe, Э1.6). */
+export const PREVIEW_HEADER = 'x-raditi-preview'
+
 /** The versions of PHP the recipe runs on: the row is there only on them. */
 export const versions = () => wordpressPhpVersions(undefined)
 
@@ -105,6 +108,10 @@ export const treeArchiveArgv = [
  */
 export async function check(stand) {
   const recipeOf = stand.recipe
+  // The row proves on every version that a live page comes from the recipe's wp-config.php
+  // (Э1.6): a recipe without `ready`, or with another header, proves nothing — the row fails.
+  if (recipeOf.ready?.header !== PREVIEW_HEADER)
+    return { ok: false, detail: `the recipe's ready names no ${PREVIEW_HEADER}` }
   await stand.write({ archive: [stand.tree], deletes: [], replace: true })
   const bare = await stand.http('/')
   if (bare.status === 200) return { ok: false, detail: 'control: / is 200 without wp-config.php' }
@@ -138,11 +145,11 @@ export async function check(stand) {
   if (access.code !== 0) return { ok: false, detail: `content.access: exit ${access.code}` }
   if (!/"applicationPassword"/.test(access.stdout))
     return { ok: false, detail: 'content.access printed no account' }
-  const header = recipeOf.ready?.header
   for (const path of ['/', '/wp-login.php']) {
     const page = await stand.http(path)
     if (page.status !== 200) return { ok: false, detail: `${path}: ${page.status}` }
-    if (header && !page.headers.has(header)) return { ok: false, detail: `${path}: no ${header}` }
+    if (!page.headers.has(PREVIEW_HEADER))
+      return { ok: false, detail: `${path}: no ${PREVIEW_HEADER}` }
   }
   const api = await stand.http('/wp-json/raditi/v1/capabilities')
   // The route of the plugin answers itself — 401 without an account — not a redirect.
@@ -155,6 +162,6 @@ export async function check(stand) {
     return { ok: false, detail: `/wp-json/raditi/v1/capabilities: ${api.status}` }
   return {
     ok: true,
-    detail: `control ${bare.status}; / and /wp-login.php 200${header ? ` with ${header}` : ''}; capabilities ${api.status}`,
+    detail: `control ${bare.status}; / and /wp-login.php 200 with ${PREVIEW_HEADER}; capabilities ${api.status}`,
   }
 }

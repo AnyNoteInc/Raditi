@@ -423,6 +423,15 @@ test('php-base: status is off and the modules of the WordPress image are on', ()
   assert.match(base, /trixie\) heif='libheif-plugin-aomenc libheif-plugin-x265'/)
 })
 
+test("php-base: apt retries every download, the installer's too (Э1 review fixes, not measured)", () => {
+  const base = phpBase()
+  const retries = base.indexOf(`printf 'Acquire::Retries "3";\\n' > /etc/apt/apt.conf.d/`)
+  assert.ok(retries >= 0, 'no Acquire::Retries')
+  // Before the first download: the installer runs apt-get itself.
+  assert.ok(retries < base.indexOf('install-php-extensions $names'), 'after the installer')
+  assert.ok(retries < base.indexOf('apt-get update'), 'after apt-get update')
+})
+
 test('preview-php.ini: errors never reach a page, mail goes nowhere', () => {
   const ini = parseIni(read('preview-php.ini'))
   for (const key of ['display_errors', 'display_startup_errors', 'html_errors'])

@@ -32,6 +32,8 @@ import { PreviewDbValueStorage, previewDbValueKey } from '@repo/site-content'
 import { ContentPrivacy } from '../privacy/content-privacy.ts'
 import { ContentSnapshotStorage } from './content-snapshots.ts'
 import { PostgresMcpAccess, type McpAccess } from '../access/mcp-access.ts'
+import { mcpToolFamiliesOf } from '../access/mcp-policy.ts'
+import { siteInfoOf } from '../site-info/mcp-tools.controller.ts'
 import {
   BROWSER_CHECKS_EVENT,
   BROWSER_SCREENSHOT_EVENT,
@@ -453,6 +455,37 @@ describe.skipIf(!enabled)('MCP on the preview of a dialog with PostgreSQL', () =
     // A repeated key replays and adds no operation.
     await f.edit('title', { title: 'После' })
     expect(await db.previewDbOperation.count({ where: { taskId: fixture.taskId } })).toBe(2)
+  })
+
+  it('offers no kind of a plan on a WordPress base that does not start, whatever its record keeps', async () => {
+    // As an older build left it: `boot_failed` of the base with the kinds it had counted (Э1.6
+    // writes the record of a dead base without them since the review of Э1).
+    await db.previewEnvironment.update({
+      where: { id: fixture.previewId },
+      data: {
+        status: 'unavailable',
+        unavailableReason: 'boot_failed',
+        upstreamHost: null,
+        upstreamPort: null,
+        runtime: {
+          v: 1,
+          database: null,
+          web: null,
+          seedChecked: true,
+          sync: null,
+          baseBoot: 'dead',
+          db: { kinds: ['content_update', 'schema_migration'], settings: [], createdIds: true },
+        },
+      },
+    })
+    const scope = await admitted()
+    expect(scope.stack).toBe('wordpress')
+    expect(scope.preview).toMatchObject({ status: 'unavailable' })
+    expect(scope.preview?.dbKinds).toBeUndefined()
+    expect(siteInfoOf(scope, null)).toMatchObject({ database: { operations: [] } })
+    expect(
+      mcpToolFamiliesOf(scope, { allowedHosts: [], allowLocalOrigin: false, contentTools: true }),
+    ).not.toContain('content')
   })
 
   it('gives created records ids of their own and keeps a plan of every kind', async () => {

@@ -24,7 +24,7 @@ import {
   restoreArgumentsSchema,
   wpRestArgumentsSchema,
 } from '../content/content-arguments.ts'
-import type { McpAccess } from './mcp-access.ts'
+import { closedPreviewStatuses, type McpAccess } from './mcp-access.ts'
 
 export const MCP_SECURITY = Symbol('MCP_SECURITY')
 export const MCP_BODY_LIMIT = 100 * 1024
@@ -151,7 +151,7 @@ export const mcpToolFamilies = ['content', 'browser', 'schema', 'web'] as const
 export type McpToolFamily = (typeof mcpToolFamilies)[number]
 
 /** A preview that is gone for the dialog, or never was there to work on (Р4, Р16). */
-const closedPreview = new Set(['unavailable', 'destroyed'])
+const closedPreview = new Set<string>(closedPreviewStatuses)
 export const isClosedPreview = (preview: NonNullable<McpAccess['preview']>) =>
   closedPreview.has(preview.status)
 

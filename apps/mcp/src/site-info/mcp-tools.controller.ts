@@ -53,8 +53,9 @@ export function siteInfoOf(
     // writable — an empty list, none —, null while no build has said yet: the first turn starts
     // beside the first build, and «none» read then would refuse the text of records on a site
     // whose plugin carries it. A preview that is closed (a build that ended `unavailable`, or one
-    // destroyed) has no build coming that would say more: none.
-    database: { operations: preview.dbKinds ?? (isClosedPreview(preview) ? [] : null) },
+    // destroyed) is told first, whatever its record keeps: its content tools are closed, and no
+    // build is coming that would say more — none.
+    database: { operations: isClosedPreview(preview) ? [] : (preview.dbKinds ?? null) },
     ...session,
   }
 }

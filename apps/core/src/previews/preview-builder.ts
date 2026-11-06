@@ -866,8 +866,10 @@ async function buildPreviewOn(
       // of the seed that differ from production go with it: the record says they were compared.
       // A dead candidate's `preview_smoke` fails with the build (`failBuild`).
       if (!candidate) {
-        record = { ...record, baseBoot: 'dead' }
-        const judged = record
+        // Without `db`: every build counts it again, and a base that does not start offers no
+        // kind of a plan — `site_info` reads the closed preview as none.
+        const { db: _recounted, ...judged } = { ...record, baseBoot: 'dead' as const }
+        record = judged
         await deps.db.$transaction(
           async (tx) => {
             await updatePreview(tx, hold, ['building'], { runtime: previewRecordJson(judged) })

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { Buffer } from 'node:buffer'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 
@@ -161,4 +162,40 @@ test('the stand finds the file of WordPress and its rows on the versions of its 
       bases.some((entry) => entry.php === php),
       php,
     )
+})
+
+test('the row of WordPress needs the header of its recipe on every version, never by choice', async () => {
+  const wordpress = await import('./site-wordpress.mjs')
+  /** A preview that serves the recipe's pages once its files are written; `headers` of a page. */
+  const stand = (recipe, headers = { [wordpress.PREVIEW_HEADER]: '1' }) => {
+    let platform = false
+    return {
+      recipe,
+      tree: Buffer.alloc(0),
+      origin: 'http://site.preview.test',
+      write: async (input) => {
+        platform ||= input.platform !== undefined
+      },
+      loadSeed: async () => {},
+      exec: async () => ({ code: 0, stdout: '{"applicationPassword":"x"}' }),
+      http: async (path) => {
+        if (!platform) return { status: 500, headers: new Headers() }
+        if (path.startsWith('/wp-json/')) return { status: 401, headers: new Headers() }
+        return { status: 200, headers: new Headers(headers) }
+      },
+    }
+  }
+  const recipe = wordpress.recipe('8.3')
+  assert.equal(recipe.ready?.header, wordpress.PREVIEW_HEADER)
+  const passed = await wordpress.check(stand(recipe))
+  assert.equal(passed.ok, true, passed.detail)
+  assert.match(passed.detail, /with x-raditi-preview/)
+  // A page without the header: a dead site answers 200 too.
+  const bare = await wordpress.check(stand(recipe, {}))
+  assert.deepEqual(bare, { ok: false, detail: '/: no x-raditi-preview' })
+  // A recipe that lost `ready`, or names another header, fails the row: nothing quietly green.
+  const { ready: _lost, ...unready } = recipe
+  assert.equal((await wordpress.check(stand(unready))).ok, false)
+  const other = { ...recipe, ready: { ...recipe.ready, header: 'x-other' } }
+  assert.equal((await wordpress.check(stand(other, { 'x-other': '1' }))).ok, false)
 })

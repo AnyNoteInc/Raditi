@@ -60,13 +60,17 @@ FROM ioncube-archive-${TARGETARCH} AS ioncube-archive
 # ionCube has no Loader for PHP 8.0 on any architecture. Its first ini name loads it before
 # OPcache, as its README asks. status is off: the entry forwarder comes from the loopback, and
 # Debian opens /server-status to `Require local`. PHP_PECL_PINS names the version of every PECL
-# extension: an empty cache and the monthly rebuild give the same imagick, redis and apcu.
+# extension: an empty cache and the monthly rebuild give the same imagick, redis and apcu. apt tries
+# every download three times — the installer's packages too: the sources of the bullseye images
+# (7.3, 7.4 — snapshot.debian.org) answered 503 and 504 now and then (docs/plan/62, §10). Whether the
+# retries ride out those outages is not measured: one of 20 minutes they do not.
 FROM ${PHP_BASE} AS php-base
 ARG PHP_EXTENSIONS_SKIP=
 ARG PHP_PECL_PINS="apcu-5.1.28 imagick-3.8.1 mcrypt-1.0.9 memcached-3.4.0 redis-6.3.0 xmlrpc-1.0.0RC3"
 RUN --mount=type=bind,from=php-extension-installer,source=/install-php-extensions,target=/usr/local/bin/install-php-extensions \
     --mount=type=bind,from=ioncube-archive,source=/ioncube.tar.gz,target=/tmp/ioncube.tar.gz \
     set -eu; \
+    printf 'Acquire::Retries "3";\n' > /etc/apt/apt.conf.d/80-raditi-retries; \
     . /etc/os-release; \
     php_version=$(php -r 'echo PHP_MAJOR_VERSION, ".", PHP_MINOR_VERSION;'); \
     names=; \

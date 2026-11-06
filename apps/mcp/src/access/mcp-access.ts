@@ -88,6 +88,11 @@ export type McpHostScope = z.infer<typeof mcpHostScopeSchema>
 export interface McpAccessStore {
   authenticate(token: string): Promise<McpAccess | null>
 }
+/**
+ * A preview that is gone for the dialog, or never was there to work on (Р4, Р16): whatever its
+ * record keeps, it offers no kind of a plan (`isClosedPreview`).
+ */
+export const closedPreviewStatuses = ['unavailable', 'destroyed'] as const
 export const MCP_ACCESS = Symbol('MCP_ACCESS')
 /** Never issued (tokens are 32 random bytes): health runs the real admission query with it. */
 export const MCP_ACCESS_PROBE_TOKEN = `mcp_${'0'.repeat(64)}`
@@ -115,7 +120,8 @@ export class PostgresMcpAccess implements McpAccessStore {
         t.needs_repository AS "needsRepository", t.needs_browser AS "needsBrowser",
         p.id AS "previewId", p.status::text AS "previewStatus",
         p.db_mode = 'copy' AS "previewDatabase", p.hostname AS "previewHostname",
-        CASE WHEN jsonb_typeof(p.runtime->'db'->'kinds') = 'array'
+        CASE WHEN p.status::text <> ALL(${[...closedPreviewStatuses]}::text[])
+          AND jsonb_typeof(p.runtime->'db'->'kinds') = 'array'
           THEN p.runtime->'db'->'kinds' END AS "previewDbKinds"
       FROM llm_keys k JOIN tasks t ON t.id = k.task_id
       JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id

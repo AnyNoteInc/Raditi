@@ -1030,6 +1030,10 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
       })
       expect(f.runtime.calls.at(-1)).toBe('stop')
       expect(f.runtime.running.has(preview.id)).toBe(false)
+      // The record of a dead base keeps no kinds of a plan: every build counts them again, and
+      // `site_info` hears none of a closed preview.
+      expect(await recordOf(preview.id)).toMatchObject({ baseBoot: 'dead' })
+      expect((await recordOf(preview.id)).db).toBeUndefined()
       // As a preview whose time is up: the seed stays, the next build copies nothing again.
       expect(row.seedObjectKey).not.toBeNull()
       expect(f.storage.objects.has(row.seedObjectKey!)).toBe(true)
@@ -1047,6 +1051,8 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
         boot: 'not_compared',
         differences: [],
       })
+      // The next build counts them again.
+      expect((await recordOf(preview.id)).db).toMatchObject({ kinds: [] })
     })
 
     it('keeps the preview of a candidate that does not start and fails its smoke check', async () => {
@@ -1136,9 +1142,11 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
         expect(
           await db.candidateCheck.count({ where: { candidateId: candidate.id, status: 'failed' } }),
         ).toBe(1)
-        // The base said it; a candidate says nothing of its base.
+        // The base said it; a candidate says nothing of its base. Nor does the record of the dead
+        // base keep the kinds the candidate's build counted.
         expect(said).toBe('dead')
         expect(await baseBootOf(preview.id)).toBe('dead')
+        expect((await recordOf(preview.id)).db).toBeUndefined()
       })
 
       it('keeps what the dead base found of its seed for the next builds', async () => {
