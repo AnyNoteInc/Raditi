@@ -16,6 +16,8 @@ export const queueNames = [
   'previews',
   // Starting the browser of a task the first time its agent needs it (docs/plan/61-chats-first.md, К11).
   'browser-sessions',
+  // The files of a project for its section «Терминал», read by core for web (06.11.2026).
+  'site-files',
 ] as const
 export type QueueName = (typeof queueNames)[number]
 

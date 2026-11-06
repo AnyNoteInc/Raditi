@@ -29,6 +29,8 @@ export const queueJobDefaults: Record<QueueName, DefaultJobOptions> = {
   previews: lifecycleJobs,
   // The start of a task's browser: a failed job is put again by the call that waits for it.
   'browser-sessions': lifecycleJobs,
+  // The files of a project for web (06.11.2026): a failed job is put again by the next look.
+  'site-files': lifecycleJobs,
   // SendSay hiccups are retried: 15 s, 30 s, … about half an hour in total.
   // Job data holds one-time links: a delivered letter leaves Redis at once, a failed one
   // after a day.

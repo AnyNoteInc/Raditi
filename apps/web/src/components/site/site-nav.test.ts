@@ -15,11 +15,12 @@ import {
 const id = '0199a3f2-5d1c-7b3e-9c41-2f6a8d0e4b17'
 
 describe('site navigation', () => {
-  it('lists the six sections in rail order, three of them on the phone bar', () => {
+  it('lists the seven sections in rail order, three of them on the phone bar', () => {
     expect(siteNav.map((entry) => entry.section)).toEqual([
       'overview',
       'changes',
       'runs',
+      'terminal',
       'database',
       'vault',
       'settings',
@@ -30,6 +31,7 @@ describe('site navigation', () => {
   it.each([
     [`/projects/${id}/runs/42`, 'runs'],
     [`/projects/${id}/vault`, 'vault'],
+    [`/projects/${id}/terminal`, 'terminal'],
     [`/projects/${id}/settings`, 'settings'],
   ] as const)('lights the section of %s', (path, section) => {
     expect(activeSiteSection(path, id)).toBe(section)

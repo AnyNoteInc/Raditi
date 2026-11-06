@@ -649,6 +649,111 @@ export class GitWorkspaceService implements TurnWorkspace {
   }
 
   /**
+   * The regular files of a commit of the site with their sizes and content ids, at most `limit`
+   * of them in the order of git (the section «Терминал» of a project, 06.11.2026). A link or a
+   * submodule is left out, a path that is not UTF-8 too. Reads the mirror only.
+   */
+  async listFiles(input: {
+    repo: RepoRef
+    sha: string
+    limit: number
+  }): Promise<{ files: Array<{ path: string; size: number; oid: string }>; truncated: boolean }> {
+    const parsed = z
+      .object({
+        repo: publicationSourceSchema.shape.repo,
+        sha: publicationShaSchema,
+        limit: z.number().int().positive(),
+      })
+      .strict()
+      .safeParse(input)
+    if (!parsed.success || parsed.data.repo.provider !== this.provider.kind)
+      throw badRequest('Invalid repository commit')
+    const { repo, sha, limit } = parsed.data
+    const workspace = await this.workspace(repo, [sha])
+    try {
+      const output = await this.list(
+        workspace,
+        ['ls-tree', '-rlz', '--full-tree', sha],
+        publicationLimits.repositoryFiles,
+        REPOSITORY,
+      )
+      const files: Array<{ path: string; size: number; oid: string }> = []
+      let truncated = false
+      for (const row of Buffer.from(output).toString('utf8').split('\0')) {
+        const match = /^(?:100644|100755) blob ([a-f0-9]{40}) +([0-9]+)\t(.+)$/s.exec(row)
+        if (!match || match[3]!.includes('�')) continue
+        if (files.length >= limit) {
+          truncated = true
+          break
+        }
+        files.push({ path: match[3]!, size: Number(match[2]), oid: match[1]! })
+      }
+      return { files, truncated }
+    } catch (error) {
+      if (isDomainError(error)) throw error
+      throw failed()
+    } finally {
+      await this.dispose(workspace)
+    }
+  }
+
+  /**
+   * One regular file of a commit of the site: its content id, its size and — when it is at most
+   * `maxBytes` — its bytes; null when the commit has no regular file at the path. Reads the mirror
+   * only.
+   */
+  async readFile(input: {
+    repo: RepoRef
+    sha: string
+    path: string
+    maxBytes: number
+  }): Promise<{ oid: string; size: number; bytes: Buffer | null } | null> {
+    const parsed = z
+      .object({
+        repo: publicationSourceSchema.shape.repo,
+        sha: publicationShaSchema,
+        // `<sha>:<path>` is one line of `cat-file --batch-check`: no line break in the path.
+        path: z
+          .string()
+          .min(1)
+          .max(publicationLimits.pathBytes)
+          .regex(/^[^\0\n]+$/),
+        maxBytes: z.number().int().positive(),
+      })
+      .strict()
+      .safeParse(input)
+    if (!parsed.success || parsed.data.repo.provider !== this.provider.kind)
+      throw badRequest('Invalid repository file')
+    const { repo, sha, path, maxBytes } = parsed.data
+    const workspace = await this.workspace(repo, [sha])
+    try {
+      const check = text(
+        (
+          await this.git(
+            workspace,
+            ['cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'],
+            Buffer.from(`${sha}:${path}\n`),
+            256,
+          )
+        ).stdout,
+      ).trim()
+      const match = /^([a-f0-9]{40}) blob ([0-9]+)$/.exec(check)
+      if (!match) return null
+      const oid = match[1]!
+      const size = Number(match[2])
+      if (size > maxBytes) return { oid, size, bytes: null }
+      const bytes = (await this.git(workspace, ['cat-file', 'blob', oid], undefined, size)).stdout
+      if (bytes.byteLength !== size) throw failed()
+      return { oid, size, bytes: Buffer.from(bytes) }
+    } catch (error) {
+      if (isDomainError(error)) throw error
+      throw failed()
+    } finally {
+      await this.dispose(workspace)
+    }
+  }
+
+  /**
    * «Обновить» (plan 53, Р27): the candidate's changes since `fromBase` carried onto `toBase` by
    * a three-way merge of trees, without a model and without rename detection — a change stays at
    * its own path and never follows a file `main` moved, into a folder the candidate may not
