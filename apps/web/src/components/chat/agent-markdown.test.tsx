@@ -50,9 +50,15 @@ describe('the agent’s words as Markdown', () => {
     expect(fenceTextTrees(fenced)).toBe(fenced)
   })
 
-  it('keeps a line break of the agent inside a paragraph', () => {
+  it('keeps a line break of the agent inside a paragraph, and adds none between the blocks of a list', () => {
     const { container } = render(<AgentMarkdown text={'Первая строка\nвторая строка'} />)
-    expect(container.querySelector('p')?.textContent).toBe('Первая строка\nвторая строка')
+    // The page puts a line feed after `<br>`, which the browser draws as nothing.
+    const html = (node: Element | null | undefined) => node?.innerHTML.replace(/\n/g, '')
+    expect(html(container.querySelector('p'))).toBe('Первая строка<br>вторая строка')
+    const loose = render(<AgentMarkdown text={'1. Раз\n\n2. Два:\n// строка'} />).container
+    const items = [...loose.querySelectorAll('li')]
+    expect(items.map((item) => item.querySelectorAll('br').length)).toEqual([0, 1])
+    expect(html(items[1]!.querySelector('p'))).toBe('Два:<br>// строка')
   })
 
   it('loads no picture and keeps only absolute http(s) and mailto links', () => {

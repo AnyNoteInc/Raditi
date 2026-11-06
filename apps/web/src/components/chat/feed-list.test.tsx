@@ -622,6 +622,28 @@ describe('the rows of a dialog', () => {
     ])
   })
 
+  // The owner, 06.11.2026: an edit of a file in «Терминал» is saved into the chat.
+  it('says what came of the client’s edit of a file', () => {
+    const edit = (id: string, outcome: 'saved' | 'conflict' | 'refused' | 'failed'): FeedRow => ({
+      id,
+      at: '2026-10-17T09:50:00.000Z',
+      type: 'feed.edit',
+      editId: '0199a3f2-0000-7000-8000-0000000000e1',
+      path: 'wp-content/themes/kadence/style.css',
+      outcome,
+      revision: outcome === 'saved' ? 2 : null,
+    })
+    const { feed } = showFeed(
+      [edit('14', 'saved'), edit('15', 'conflict'), edit('16', 'refused')],
+      headOf({ status: 'awaiting_approval' }),
+    )
+    expect(text(feed)).toContain(
+      'Вы изменили файл wp-content/themes/kadence/style.css. Изменение сохранено в чате',
+    )
+    expect(text(feed)).toContain('за это время агент изменил его')
+    expect(text(feed)).toContain('его менять нельзя')
+  })
+
   it('says what `/undo` took back, and what stayed by what the chat left', () => {
     const rewind = (id: string, site: 'none' | 'check' | 'elsewhere'): FeedRow => ({
       id,

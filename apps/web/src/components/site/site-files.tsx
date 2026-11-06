@@ -2,6 +2,7 @@
 
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
+import MuiLink from '@mui/material/Link'
 import MenuItem from '@mui/material/MenuItem'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
@@ -74,7 +75,7 @@ export const siteFilesText = Object.freeze({
     conflict:
       'Не сохранено: агент изменил этот файл, пока вы его правили. Откройте файл заново и повторите правку.',
     refused:
-      'Не сохранено: этот файл менять нельзя — в нём настройки выкладки, защищённые файлы сайта или медиатека.',
+      'Не сохранено: этот файл менять нельзя — он вне рабочей копии агента, защищён правилами сайта или лежит в медиатеке.',
     failed: 'Не сохранено. Попробуйте ещё раз.',
   }),
 })
@@ -94,9 +95,11 @@ export interface SiteFilesProps {
   taskId?: string
   /** The chat has ended: its files are shown, no edit is taken. */
   ended?: boolean
+  /** An edit got its answer: the chat reads its feed again, where its rows are. */
+  onEdited?: () => void
 }
 
-export function SiteFiles({ siteId, taskId, ended = false }: SiteFilesProps) {
+export function SiteFiles({ siteId, taskId, ended = false, onEdited }: SiteFilesProps) {
   const trpc = useTRPC()
   const inChat = taskId !== undefined
   const list = useQuery({
@@ -112,7 +115,11 @@ export function SiteFiles({ siteId, taskId, ended = false }: SiteFilesProps) {
       window.requestAnimationFrame(() => viewer.current?.scrollIntoView?.({ block: 'nearest' }))
   }
   const data = list.data
-  const ready = data?.state === 'ready' ? data : null
+  // A saved edit moves the working copy: while core lists the new commit, the last list stays on
+  // the screen, and with it the file and what came of the edit.
+  const [shown, setShown] = useState<Extract<typeof data, { state: 'ready' }> | null>(null)
+  if (data?.state === 'ready' && data !== shown) setShown(data)
+  const ready = data?.state === 'ready' ? data : data?.state === 'preparing' ? shown : null
   const tree = useMemo(() => (ready ? siteFileTree(ready.files) : null), [ready])
 
   return (
@@ -169,6 +176,7 @@ export function SiteFiles({ siteId, taskId, ended = false }: SiteFilesProps) {
             sha={ready.sha}
             path={chosen}
             viewer={viewer}
+            onEdited={onEdited}
           />
         </Box>
       )}
@@ -316,6 +324,7 @@ function FileView({
   sha,
   path,
   viewer,
+  onEdited,
 }: {
   siteId: string
   taskId: string | undefined
@@ -323,6 +332,7 @@ function FileView({
   sha: string
   path: string | null
   viewer: RefObject<HTMLElement | null>
+  onEdited: (() => void) | undefined
 }) {
   const trpc = useTRPC()
   const file = useQuery({
@@ -415,6 +425,7 @@ function FileView({
           draft={draft}
           onDraft={setDraft}
           onClose={() => setDraft(null)}
+          onEdited={onEdited}
         />
       ) : lines ? (
         <Box
@@ -477,6 +488,7 @@ function Editor({
   draft,
   onDraft,
   onClose,
+  onEdited,
 }: {
   siteId: string
   taskId: string | undefined
@@ -485,6 +497,7 @@ function Editor({
   draft: string
   onDraft: (text: string) => void
   onClose: () => void
+  onEdited: (() => void) | undefined
 }) {
   const trpc = useTRPC()
   const queryClient = useQueryClient()
@@ -512,9 +525,11 @@ function Editor({
   const outcome = state.data && state.data.state !== 'pending' ? state.data.state : null
   // A saved edit moved the working copy of the chat: its list names the new commit.
   useEffect(() => {
+    if (outcome === null) return
     if (outcome === 'saved')
       void queryClient.invalidateQueries({ queryKey: trpc.siteFiles.list.queryKey() })
-  }, [outcome, queryClient, trpc])
+    onEdited?.()
+  }, [outcome, queryClient, trpc, onEdited])
   const pending = save.isPending || (editId !== null && outcome === null)
   const status = save.isError
     ? callErrorText(save.error)
@@ -551,7 +566,9 @@ function Editor({
         chats.length === 0 ? (
           <Typography color="text.secondary" sx={{ fontSize: 14 }}>
             {siteFilesText.noChats}{' '}
-            <Link href={`/chats/new?project=${siteId}`}>{siteFilesText.newChat}</Link>
+            <MuiLink component={Link} href={`/chats/new?project=${siteId}`}>
+              {siteFilesText.newChat}
+            </MuiLink>
           </Typography>
         ) : (
           <TextField
@@ -586,7 +603,9 @@ function Editor({
           {outcome === 'saved' && taskId === undefined && savedTo ? (
             <>
               {' '}
-              <Link href={`/chats/${savedTo}`}>{siteFilesText.openChat}</Link>
+              <MuiLink component={Link} href={`/chats/${savedTo}`}>
+                {siteFilesText.openChat}
+              </MuiLink>
             </>
           ) : null}
         </Typography>

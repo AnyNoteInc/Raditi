@@ -75,6 +75,36 @@ const components: Components = {
   ),
 }
 
+interface MarkdownNode {
+  type: string
+  value?: string
+  children?: MarkdownNode[]
+}
+
+/**
+ * A line break of the agent stays one, as in a chat (06.11.2026): Markdown joins the lines of a
+ * paragraph, so the break inside a text becomes a `break` node — the `<br>` of the page. Code and
+ * the white space between the blocks of a list item are left as they are.
+ */
+function remarkSoftBreaks() {
+  const walk = (node: MarkdownNode): void => {
+    if (!node.children || node.type === 'code') return
+    node.children = node.children.flatMap((child): MarkdownNode[] => {
+      if (child.type !== 'text' || !child.value?.includes('\n')) {
+        walk(child)
+        return [child]
+      }
+      return child.value
+        .split('\n')
+        .flatMap((part, index): MarkdownNode[] => [
+          ...(index > 0 ? [{ type: 'break' }] : []),
+          ...(part === '' ? [] : [{ type: 'text', value: part }]),
+        ])
+    })
+  }
+  return (tree: MarkdownNode) => walk(tree)
+}
+
 const TREE_LINE = /[├└│]/
 const FENCE = /^\s*(`{3,}|~{3,})/
 
@@ -130,8 +160,6 @@ export function AgentMarkdown({ text }: { text: string }) {
         '& > :first-of-type': { mt: 0 },
         '& > :last-child': { mb: 0 },
         '& p, & ul, & ol, & pre, & blockquote, & table': { my: 1.5 },
-        // A line break of the agent stays one, as in a chat: Markdown would join the lines.
-        '& p, & li': { whiteSpace: 'pre-line' },
         '& ul, & ol': { pl: 3 },
         '& li + li': { mt: 0.5 },
         '& li > p': { my: 0.5 },
@@ -165,7 +193,12 @@ export function AgentMarkdown({ text }: { text: string }) {
         '& hr': { border: 0, borderTop: 1, borderColor: 'divider', my: 2 },
       }}
     >
-      <Markdown remarkPlugins={[remarkGfm]} components={components} urlTransform={linkUrl} skipHtml>
+      <Markdown
+        remarkPlugins={[remarkGfm, remarkSoftBreaks]}
+        components={components}
+        urlTransform={linkUrl}
+        skipHtml
+      >
         {fenceTextTrees(text)}
       </Markdown>
     </Box>

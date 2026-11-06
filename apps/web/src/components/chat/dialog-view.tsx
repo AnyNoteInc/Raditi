@@ -1242,7 +1242,7 @@ export function DialogView({
         // The files of the agent's working copy, and the client's edit of one (06.11.2026).
         return siteId === null ? null : (
           <Box sx={{ p: 2 }}>
-            <SiteFiles siteId={siteId} taskId={taskId} ended={terminal} />
+            <SiteFiles siteId={siteId} taskId={taskId} ended={terminal} onEdited={refresh} />
           </Box>
         )
       case 'files':

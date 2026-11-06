@@ -19,6 +19,7 @@ import {
   feedCeilingButtons,
   feedCeilingText,
   feedCommandText,
+  feedEditText,
   feedRedoText,
   feedRewindText,
   feedCreditsSentence,
@@ -1084,6 +1085,9 @@ function RowView({
       return <Note text={feedRewindText(row)} />
     case 'feed.redo':
       return <Note text={feedRedoText(row)} />
+    // The client's edit of a file in «Терминал» (06.11.2026).
+    case 'feed.edit':
+      return <Note text={feedEditText(row)} />
     case 'newer':
       return <Note text={feedRowText.newer} />
     case 'unreadable':
