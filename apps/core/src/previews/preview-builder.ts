@@ -62,7 +62,7 @@ import {
   seedMismatches,
 } from './preview-content.ts'
 import type { PreviewFacts } from './preview-facts.ts'
-import { previewBootOf } from './preview-checks.ts'
+import { previewBootOf, recordCandidateChecks } from './preview-checks.ts'
 import type { PreviewHold } from './preview-lease.ts'
 import { previewRecordSchema, type PreviewRecord } from './preview-record.ts'
 import { openPreviewSeed, storePreviewSeed, type PreviewSeedRef } from './preview-seed.ts'
@@ -693,7 +693,9 @@ async function buildPreviewOn(
       signal,
     )
     seed = { key: stored.key, sha256: stored.sha256, releaseId: seedRef.releaseId }
-    record = { ...record, seedChecked: false, seedTablesLeftOut: stored.summary.leftOutTables }
+    // Another seed is another base: what was said of the old one's health page is forgotten.
+    const { baseBoot: _forgotten, ...unjudged } = record
+    record = { ...unjudged, seedChecked: false, seedTablesLeftOut: stored.summary.leftOutTables }
     // Kept at once — a build that fails later loads it again instead of copying the site again —
     // with the objects of the old seed forgotten: the rows of this one are written with `ready`,
     // and the mcp role writes into nothing else (R7). A release that took the site during the
@@ -850,7 +852,8 @@ async function buildPreviewOn(
   }
 
   // A stack that says how its live page looks: a dead site answers 200 too (Т33). A base that does
-  // not start has no preview; a candidate that does not start keeps it, and its `preview_smoke`
+  // not start has no preview, nor has a candidate that does not start on it; a candidate that
+  // does not start on a live base — or one no build judged — keeps it, and its `preview_smoke`
   // fails: what the agent broke must not take the preview away from the client.
   if (recipe.ready) {
     const boot = await previewBootOf(
@@ -858,12 +861,27 @@ async function buildPreviewOn(
       { healthPath: recipe.healthPath, ready: recipe.ready },
       signal,
     )
-    if (boot.state === 'dead' && !candidate) {
+    if (boot.state === 'dead' && (!candidate || record.baseBoot === 'dead')) {
+      // Only a build of the base says it: a dead candidate tells nothing of its base. The objects
+      // of the seed that differ from production go with it: the record says they were compared.
+      // A dead candidate's `preview_smoke` fails with the build (`failBuild`).
+      if (!candidate) {
+        record = { ...record, baseBoot: 'dead' }
+        const judged = record
+        await deps.db.$transaction(
+          async (tx) => {
+            await updatePreview(tx, hold, ['building'], { runtime: previewRecordJson(judged) })
+            if (mismatches !== null) await writeSeedMismatches(tx, preview.id, mismatches)
+          },
+          { isolationLevel: 'ReadCommitted' },
+        )
+      }
       hold.assert() // a holder that lost the preview stops nothing of the next one's build
       // As `expirePreview` does: the volumes and the seed stay, the next build copies nothing.
       await runtime.stop(preview.id)
       throw new PreviewUnavailable('boot_failed')
     }
+    if (!candidate) record = { ...record, baseBoot: 'alive' }
     const away = boot.state === 'alive' && boot.redirectsAway
     record = {
       ...record,
@@ -888,14 +906,7 @@ async function buildPreviewOn(
         dirty: false,
         runtime: previewRecordJson(record),
       })
-      if (mismatches !== null) {
-        await tx.previewSeedMismatch.deleteMany({ where: { previewId: preview.id } })
-        if (mismatches.length)
-          await tx.previewSeedMismatch.createMany({
-            data: mismatches.map((objectRef) => ({ previewId: preview.id, objectRef })),
-            skipDuplicates: true,
-          })
-      }
+      if (mismatches !== null) await writeSeedMismatches(tx, preview.id, mismatches)
       // A seed older than the release the site holds makes the dialog's candidate stale (Р15).
       await markStaleCandidates(tx, { siteId: site.id })
     },
@@ -904,20 +915,53 @@ async function buildPreviewOn(
   return { upstream, revision, recipe }
 }
 
-/** Ends a build that threw: `unavailable` with its cause, or `failed` with its code. */
+/** The objects of the preview's seed that differ from production, in place of the old ones (Р15). */
+async function writeSeedMismatches(
+  tx: Prisma.TransactionClient,
+  previewId: string,
+  mismatches: readonly string[],
+): Promise<void> {
+  await tx.previewSeedMismatch.deleteMany({ where: { previewId } })
+  if (mismatches.length)
+    await tx.previewSeedMismatch.createMany({
+      data: mismatches.map((objectRef) => ({ previewId, objectRef })),
+      skipDuplicates: true,
+    })
+}
+
+/**
+ * Ends a build that threw: `unavailable` with its cause, or `failed` with its code. A candidate
+ * that did not start (`boot_failed` of a build to it) fails its `preview_smoke` in the same
+ * transaction: no preview shows it, and its release stays closed (rule 3; Т33).
+ */
 export async function failBuild(
   db: PrismaClient,
   hold: PreviewHold,
   error: unknown,
+  shown?: { taskId: string; candidate: { id: string; revision: number } | null },
 ): Promise<void> {
-  if (error instanceof PreviewUnavailable)
-    await movePreview(db, hold, 'building', 'unavailable', {
+  if (error instanceof PreviewUnavailable) {
+    const unavailable = {
       unavailableReason: error.reason,
       ...(error.reason === 'no_database' ? { dbMode: 'none' as const } : {}),
       upstreamHost: null,
       upstreamPort: null,
-    })
-  else
+    }
+    const candidate = shown?.candidate
+    if (error.reason === 'boot_failed' && candidate)
+      await db.$transaction(
+        async (tx) => {
+          await movePreview(tx, hold, 'building', 'unavailable', unavailable)
+          await recordCandidateChecks(tx, {
+            taskId: shown.taskId,
+            candidate,
+            results: { preview_smoke: { passed: false, summary: { pages: 1, failed: 1 } } },
+          })
+        },
+        { isolationLevel: 'ReadCommitted' },
+      )
+    else await movePreview(db, hold, 'building', 'unavailable', unavailable)
+  } else
     await movePreview(db, hold, 'building', 'failed', {
       errorCode: previewErrorCode(error),
       upstreamHost: null,

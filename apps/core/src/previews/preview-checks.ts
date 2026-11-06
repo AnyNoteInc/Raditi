@@ -1,4 +1,6 @@
-import type { PrismaClient } from '@repo/db'
+import { randomBytes } from 'node:crypto'
+
+import type { Prisma, PrismaClient } from '@repo/db'
 import type { CandidateFiles, DbPlan, PreviewRecipe, PreviewRuntime } from '@repo/domain'
 import { previewRequest, type PreviewResponse, type PreviewTarget } from '@repo/site-content'
 
@@ -67,13 +69,22 @@ export async function lintChangedFiles(
 const FATAL = /(?:<b>)?(?:PHP )?(?:Fatal|Parse) error(?:<\/b>)?:/i
 const PAGES_MAX = 20
 
-/** How core asks a page of a preview for a check: one GET, no redirect followed. */
-const CHECK_REQUEST = {
-  method: 'GET',
-  headers: { 'user-agent': 'raditi-preview-check' },
-  timeoutMs: 30_000,
-  maxResponseBytes: 8 * 1024 * 1024,
-} as const
+/**
+ * How core asks a page of a preview for a check: one GET, no redirect followed, with a key of its
+ * own in `x-raditi-check` — the configuration of a stack with `ready.fatalMark` ends a page that
+ * died of a fatal error of PHP with it (docs/plan/62-site-stacks.md, Т33).
+ */
+export function checkRequest() {
+  return {
+    method: 'GET',
+    headers: {
+      'user-agent': 'raditi-preview-check',
+      'x-raditi-check': randomBytes(16).toString('hex'),
+    },
+    timeoutMs: 30_000,
+    maxResponseBytes: 8 * 1024 * 1024,
+  } as const
+}
 
 /** What a page of a stack that declared `ready` says about the site (docs/plan/62-site-stacks.md, Т33). */
 export type PreviewBoot =
@@ -153,16 +164,21 @@ export function phpMessageIn(page: string): boolean {
   return false
 }
 
-/** One answer of a stack that declared `ready` (Т33): no `Warning` here, OpenCart prints it alive. */
+/**
+ * One answer of a stack that declared `ready` (Т33): no `Warning` here, OpenCart prints it alive.
+ * `check` — the key of the request that asked it: with `ready.fatalMark` a message of PHP is read
+ * by the mark of that key alone, never by its text, which a live page may quote.
+ */
 export function pageVerdict(
   response: PreviewResponse,
   ready: NonNullable<PreviewRecipe['ready']>,
   hostname: string,
+  check: string,
 ): Exclude<PreviewBoot, { state: 'unproved' }> {
   if (response.headers[ready.header] === undefined) return { state: 'dead' }
   const page = Buffer.from(response.body).toString('utf8')
-  if (phpMessageIn(page) || ready.absent.some((text) => page.includes(text)))
-    return { state: 'dead' }
+  const fatal = ready.fatalMark ? page.includes(`raditi-fatal:${check}`) : phpMessageIn(page)
+  if (fatal || ready.absent.some((text) => page.includes(text))) return { state: 'dead' }
   if (response.status >= 500) return { state: 'dead' }
   // The header proves the configuration ran: a closed site answers a guest 401, 403 or 404.
   if (response.status >= 400) return { state: 'closed' }
@@ -190,14 +206,15 @@ export async function previewBootOf(
 ): Promise<PreviewBoot> {
   for (let attempt = 0; attempt < 2; attempt++) {
     signal.throwIfAborted()
+    const request = checkRequest()
     let response: PreviewResponse
     try {
-      response = await previewRequest(target, { ...CHECK_REQUEST, path: recipe.healthPath })
+      response = await previewRequest(target, { ...request, path: recipe.healthPath })
     } catch {
       // A slow or heavy home page proves no death: the preview stays, the client sees `suspect`.
       continue
     }
-    return pageVerdict(response, recipe.ready, target.hostname)
+    return pageVerdict(response, recipe.ready, target.hostname, request.headers['x-raditi-check'])
   }
   return { state: 'unproved' }
 }
@@ -225,10 +242,13 @@ export async function smokeCheck(
   for (const path of input.pages) {
     signal.throwIfAborted()
     try {
-      const response = await previewRequest(input.target, { ...CHECK_REQUEST, path })
+      const request = checkRequest()
+      const response = await previewRequest(input.target, { ...request, path })
       if (input.ready) {
         // A stack that says how its live page looks: only PHP's own message is death (Т33).
-        if (pageVerdict(response, input.ready, input.target.hostname).state !== 'alive') failed++
+        const key = request.headers['x-raditi-check']
+        if (pageVerdict(response, input.ready, input.target.hostname, key).state !== 'alive')
+          failed++
         continue
       }
       const page = Buffer.from(response.body).toString('utf8')
@@ -295,33 +315,50 @@ export async function runCandidateChecks(
         },
       })
       if (shown !== 1) return
-      const finishedAt = new Date()
-      for (const kind of previewCheckKinds) {
-        const result = results[kind]
-        const data = {
-          status: result.passed ? ('passed' as const) : ('failed' as const),
-          summary: result.summary,
-          finishedAt,
-        }
-        const { count } = await tx.candidateCheck.updateMany({
-          where: { candidateId: candidate.id, revision: candidate.revision, kind },
-          data,
-        })
-        if (count === 0)
-          await tx.candidateCheck.create({
-            data: { candidateId: candidate.id, revision: candidate.revision, kind, ...data },
-          })
-      }
-      await tx.candidateCheck.updateMany({
-        where: {
-          candidate: { taskId: input.taskId },
-          revision: { lt: candidate.revision },
-          status: { in: ['pending', 'passed', 'failed'] },
-        },
-        data: { status: 'stale' },
-      })
+      await recordCandidateChecks(tx, { taskId: input.taskId, candidate, results })
     },
     { isolationLevel: 'ReadCommitted' },
   )
   return results
+}
+
+/**
+ * Writes the results of checks for a candidate's revision; the checks of its earlier revisions
+ * become stale. The caller proves, in the same transaction, that its hold may write them.
+ */
+export async function recordCandidateChecks(
+  tx: Prisma.TransactionClient,
+  input: {
+    taskId: string
+    candidate: { id: string; revision: number }
+    results: Partial<Record<PreviewCheckKind, CheckResult>>
+  },
+): Promise<void> {
+  const { candidate } = input
+  const finishedAt = new Date()
+  for (const kind of previewCheckKinds) {
+    const result = input.results[kind]
+    if (!result) continue
+    const data = {
+      status: result.passed ? ('passed' as const) : ('failed' as const),
+      summary: result.summary,
+      finishedAt,
+    }
+    const { count } = await tx.candidateCheck.updateMany({
+      where: { candidateId: candidate.id, revision: candidate.revision, kind },
+      data,
+    })
+    if (count === 0)
+      await tx.candidateCheck.create({
+        data: { candidateId: candidate.id, revision: candidate.revision, kind, ...data },
+      })
+  }
+  await tx.candidateCheck.updateMany({
+    where: {
+      candidate: { taskId: input.taskId },
+      revision: { lt: candidate.revision },
+      status: { in: ['pending', 'passed', 'failed'] },
+    },
+    data: { status: 'stale' },
+  })
 }

@@ -180,6 +180,12 @@ export const previewRecipeSchema = z.strictObject({
     .strictObject({
       header: z.string().regex(/^x-raditi-[a-z-]{1,32}$/),
       absent: z.array(z.string().min(1).max(256)).max(16),
+      /**
+       * The configuration of the stack marks a fatal error of PHP under a check of the platform
+       * with the key of that check (`raditi-fatal:<key>`, docs/plan/62-site-stacks.md, Т33): a
+       * message of PHP is then read by that mark alone, as a page quoting one cannot know the key.
+       */
+      fatalMark: z.literal(true).optional(),
     })
     .optional(),
 })

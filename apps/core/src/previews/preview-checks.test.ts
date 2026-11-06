@@ -6,6 +6,7 @@ import { previewRequest, type PreviewResponse } from '@repo/site-content'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import {
+  checkRequest,
   lintChangedFiles,
   pageVerdict,
   phpMessageIn,
@@ -95,7 +96,8 @@ describe('the checks of a candidate on its preview', () => {
       body: string,
       headers: Record<string, string> = { 'x-raditi-stand': '1' },
     ): PreviewResponse => ({ status, body: Buffer.from(body, 'utf8'), headers })
-    const verdict = (response: PreviewResponse) => pageVerdict(response, ready, hostname)
+    const key = 'a'.repeat(32)
+    const verdict = (response: PreviewResponse) => pageVerdict(response, ready, hostname, key)
     const alive = { state: 'alive', redirectsAway: false }
 
     it('is alive with the header, and dead without it or with a text of a dead site', () => {
@@ -227,6 +229,55 @@ describe('the checks of a candidate on its preview', () => {
       expect(verdict(answer(101, ''))).toEqual({ state: 'dead' })
       expect(verdict(answer(0, ''))).toEqual({ state: 'dead' })
     })
+
+    describe('of a configuration that marks a fatal error of PHP with the key of the check', () => {
+      const marked = { ...ready, fatalMark: true as const }
+      const of = (response: PreviewResponse, readyOf: typeof ready = marked) =>
+        pageVerdict(response, readyOf, hostname, key)
+      // A whole message quoted where it starts a line itself: a page of the site cannot tell it
+      // from PHP's own one, the key of the request alone can.
+      const quote = '<pre>\nFatal error: Uncaught Error in /var/www/html/x.php on line 3</pre>'
+
+      it('reads a message of PHP only by the mark with the key of its own request', () => {
+        expect(of(answer(200, quote))).toEqual(alive)
+        expect(
+          of(answer(200, `<html>ok</html>\n<!-- raditi-fatal:${'b'.repeat(32)} -->\n`)),
+        ).toEqual(alive)
+        expect(of(answer(200, `<html>ok</html>\n<!-- raditi-fatal:${key} -->\n`))).toEqual({
+          state: 'dead',
+        })
+        expect(of(answer(200, `${quote}\n<!-- raditi-fatal:${key} -->\n`))).toEqual({
+          state: 'dead',
+        })
+        // A stack without the field: the quote is a message of PHP, as before (Э0д).
+        expect(of(answer(200, quote), ready)).toEqual({ state: 'dead' })
+      })
+
+      it('still reads the header, the status and the texts of a dead site', () => {
+        expect(of(answer(200, '<html>ok</html>', {}))).toEqual({ state: 'dead' })
+        expect(of(answer(500, quote))).toEqual({ state: 'dead' })
+        expect(of(answer(200, 'Error: No configuration file found.'))).toEqual({ state: 'dead' })
+      })
+    })
+  })
+
+  describe('a request of a check', () => {
+    it('carries a key of its own: 32 hexadecimal digits, another one each time', () => {
+      const one = checkRequest().headers['x-raditi-check']
+      const two = checkRequest().headers['x-raditi-check']
+      expect(one).toMatch(/^[0-9a-f]{32}$/)
+      expect(two).toMatch(/^[0-9a-f]{32}$/)
+      expect(two).not.toBe(one)
+    })
+
+    it('is a GET of the platform’s user agent, as before', () => {
+      expect(checkRequest()).toMatchObject({
+        method: 'GET',
+        headers: { 'user-agent': 'raditi-preview-check' },
+        timeoutMs: 30_000,
+        maxResponseBytes: 8 * 1024 * 1024,
+      })
+    })
   })
 
   describe('over the entry forwarder of the preview', () => {
@@ -250,6 +301,17 @@ describe('the checks of a candidate on its preview', () => {
         else if (request.url === '/flaky' && flaky++ === 0) request.socket.destroy()
         else if (request.url === '/flaky')
           response.writeHead(200, { 'x-raditi-stand': '1' }).end('<html>ok</html>')
+        else if (request.url === '/marked' || request.url === '/foreign')
+          // As the generated configuration marks a fatal error: with the key of the request.
+          response
+            .writeHead(200, { 'x-raditi-stand': '1' })
+            .end(
+              `<html>ok</html>\n<!-- raditi-fatal:${
+                request.url === '/marked'
+                  ? String(request.headers['x-raditi-check'])
+                  : 'c'.repeat(32)
+              } -->\n`,
+            )
         else if (request.url === '/heavy')
           response.writeHead(200, { 'x-raditi-stand': '1' }).end('x'.repeat(9 * 1024 * 1024))
         else response.end('<html>ok</html>')
@@ -295,6 +357,29 @@ describe('the checks of a candidate on its preview', () => {
         passed: false,
         summary: { pages: 1, failed: 1 },
       })
+    })
+
+    it('gives the verdict of a page the key of the request that asked it', async () => {
+      const target = { upstream: { host: '127.0.0.1', port }, hostname }
+      const ready = { header: 'x-raditi-stand', absent: [], fatalMark: true as const }
+      expect(await previewBootOf(target, { healthPath: '/marked', ready }, signal)).toEqual({
+        state: 'dead',
+      })
+      expect(await previewBootOf(target, { healthPath: '/foreign', ready }, signal)).toEqual({
+        state: 'alive',
+        redirectsAway: false,
+      })
+      expect(await smokeCheck({ target, pages: ['/marked', '/foreign'], ready }, signal)).toEqual({
+        passed: false,
+        summary: { pages: 2, failed: 1 },
+      })
+      // Every request with a key of its own.
+      const keys = vi
+        .mocked(previewRequest)
+        .mock.calls.slice(-3)
+        .map(([, input]) => input.headers?.['x-raditi-check'])
+      expect(keys.every((value) => /^[0-9a-f]{32}$/.test(value ?? ''))).toBe(true)
+      expect(new Set(keys).size).toBe(3)
     })
 
     it('asks the health page once more when a request failed, and reads the second', async () => {

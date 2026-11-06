@@ -30,6 +30,7 @@ import { noDbRuntime, textOnlyDbRuntime, type previewRequest } from '@repo/site-
 import { createHostLookup, siteSource } from '@repo/site-connections'
 import { databaseInspector } from '@repo/site-connections/databases'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { z } from 'zod'
 
 import type { PreviewsConfig } from '../config/config.ts'
 import { sampleDriverId } from '../testing/ids.ts'
@@ -50,7 +51,7 @@ import {
 } from '../testing/previews.ts'
 import { PreviewManager } from './preview-manager.ts'
 import { wakeStoppedPreview } from './preview-wake.ts'
-import { previewRecordOf } from './preview-record.ts'
+import { previewRecordOf, previewRecordSchema } from './preview-record.ts'
 import { createPreviewSiteSources } from './site-sources.ts'
 
 // The manager of previews over PostgreSQL with its runtime, copier, git, storage and Vault faked
@@ -954,10 +955,54 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
   })
 
   describe('a stack that says how its live page looks (Т33)', () => {
-    const passportOf = async (previewId: string) =>
+    const recordOf = async (previewId: string) =>
       previewRecordOf(
         (await db.previewEnvironment.findUniqueOrThrow({ where: { id: previewId } })).runtime,
-      ).passport
+      )
+    const passportOf = async (previewId: string) => (await recordOf(previewId)).passport
+    const baseBootOf = async (previewId: string) => (await recordOf(previewId)).baseBoot
+    /** A candidate of the dialog with its checks pending, shown at the next build. */
+    const candidateOf = async (taskId: string, revision: number) => {
+      const candidate = await db.taskCandidate.create({
+        data: {
+          taskId,
+          revision,
+          turnNo: revision,
+          baseSha: main,
+          baseTree: 'b'.repeat(40),
+          headSha: candidateHead,
+          files: [
+            {
+              path: 'wp-content/themes/shop/functions.php',
+              change: 'modified',
+              sizeBytes: 10,
+              executable: false,
+            },
+          ],
+          dbPlan: [],
+          dbPlanSha256: hash('d'),
+          proposedBump: 'patch',
+          proposedVersion: 'v0.0.1',
+          facts: {},
+          previewRevision: revision,
+        },
+      })
+      await db.candidateCheck.createMany({
+        data: [
+          { candidateId: candidate.id, revision, kind: 'php_lint' },
+          { candidateId: candidate.id, revision, kind: 'preview_smoke' },
+        ],
+      })
+      return candidate
+    }
+    const smokeOf = async (candidateId: string) =>
+      (
+        await db.candidateCheck.findFirstOrThrow({
+          where: { candidateId, kind: 'preview_smoke' },
+        })
+      ).status
+    const rowOf = (previewId: string) =>
+      db.previewEnvironment.findUniqueOrThrow({ where: { id: previewId } })
 
     it('has no preview of a base that does not start, and stops its containers', async () => {
       const { site, preview } = await dialog()
@@ -1058,6 +1103,193 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
       expect(await passportOf(preview.id)).toMatchObject({ boot: 'suspect', differences: [] })
     })
 
+    describe('a candidate that does not start, by what its base said (Э1.6)', () => {
+      it('has no preview on a dead base: the base said so at its own build', async () => {
+        const { site, task, preview } = await dialog()
+        const f = manager({ adapters: () => readyAdapter })
+        await databaseAccess(f, site.id)
+        respond = answer(200)
+        await f.m.refresh(preview.id, { requested: true })
+        expect(await rowOf(preview.id)).toMatchObject({
+          status: 'unavailable',
+          unavailableReason: 'boot_failed',
+        })
+        const said = await baseBootOf(preview.id)
+        const candidate = await candidateOf(task.id, 1)
+        await f.m.refresh(preview.id, { requested: true })
+        expect(await rowOf(preview.id)).toMatchObject({
+          status: 'unavailable',
+          unavailableReason: 'boot_failed',
+        })
+        expect(f.runtime.calls.at(-1)).toBe('stop')
+        expect(f.runtime.running.has(preview.id)).toBe(false)
+        // No preview shows the revision, yet its smoke check fails with the build: the release
+        // stays closed (`ReleaseSkill` counts the failed checks of the candidate).
+        const checks = await db.candidateCheck.findMany({
+          where: { candidateId: candidate.id },
+          orderBy: { kind: 'asc' },
+        })
+        expect(checks.map((check) => [check.kind, check.status, check.summary])).toEqual([
+          ['php_lint', 'pending', null],
+          ['preview_smoke', 'failed', { pages: 1, failed: 1 }],
+        ])
+        expect(
+          await db.candidateCheck.count({ where: { candidateId: candidate.id, status: 'failed' } }),
+        ).toBe(1)
+        // The base said it; a candidate says nothing of its base.
+        expect(said).toBe('dead')
+        expect(await baseBootOf(preview.id)).toBe('dead')
+      })
+
+      it('keeps what the dead base found of its seed for the next builds', async () => {
+        const { site, task, preview } = await dialog()
+        const f = manager({ adapters: () => readyAdapter })
+        await databaseAccess(f, site.id)
+        respond = answer(200)
+        await f.m.refresh(preview.id, { requested: true })
+        expect(await rowOf(preview.id)).toMatchObject({ unavailableReason: 'boot_failed' })
+        // post:2 differs from production: the record says the seed was compared, so the rows say
+        // what it found, and no later build on the seed compares it again.
+        const mismatches = async () =>
+          (await db.previewSeedMismatch.findMany({ where: { previewId: preview.id } })).map(
+            (mismatch) => mismatch.objectRef,
+          )
+        expect(await recordOf(preview.id)).toMatchObject({ seedChecked: true, baseBoot: 'dead' })
+        expect(await mismatches()).toEqual(['post:2'])
+        await candidateOf(task.id, 1)
+        respond = live
+        await f.m.refresh(preview.id, { requested: true })
+        expect(await rowOf(preview.id)).toMatchObject({ status: 'ready', revision: 1 })
+        expect(await mismatches()).toEqual(['post:2'])
+      })
+
+      it('forgets what the base said once a new seed is copied for the candidate', async () => {
+        const { site, task, preview } = await dialog()
+        const f = manager({ adapters: () => readyAdapter })
+        await databaseAccess(f, site.id)
+        respond = answer(200)
+        await f.m.refresh(preview.id, { requested: true })
+        expect(await baseBootOf(preview.id)).toBe('dead')
+        // The seed is lost (as when another dialog's release makes it old): the candidate's build
+        // copies the site again.
+        await db.previewEnvironment.update({
+          where: { id: preview.id },
+          data: { seedObjectKey: null, seedSha256: null, seedReleaseId: null },
+        })
+        const candidate = await candidateOf(task.id, 1)
+        await f.m.refresh(preview.id, { requested: true })
+        // No build judged the new base: the dead candidate keeps the preview (§7, question 32).
+        expect(await rowOf(preview.id)).toMatchObject({ status: 'ready', revision: 1 })
+        expect(await passportOf(preview.id)).toMatchObject({ boot: 'suspect' })
+        expect(await smokeOf(candidate.id)).toBe('failed')
+        expect(await baseBootOf(preview.id)).toBeUndefined()
+      })
+
+      it('says the base is alive again when the same seed answers closed', async () => {
+        const { site, preview } = await dialog()
+        const f = manager({ adapters: () => readyAdapter })
+        await databaseAccess(f, site.id)
+        respond = answer(200)
+        await f.m.refresh(preview.id, { requested: true })
+        expect(await baseBootOf(preview.id)).toBe('dead')
+        respond = answer(403, { 'x-raditi-stand': '1' })
+        await f.m.refresh(preview.id, { requested: true })
+        expect(await rowOf(preview.id)).toMatchObject({ status: 'ready' })
+        expect(await passportOf(preview.id)).toMatchObject({ boot: 'suspect' })
+        expect(await baseBootOf(preview.id)).toBe('alive')
+      })
+
+      it('reads as a record of the code before Э1.6 once the rollback step removed the sign', async () => {
+        const { site, preview } = await dialog()
+        const f = manager({ adapters: () => readyAdapter })
+        await databaseAccess(f, site.id)
+        respond = live
+        await f.m.refresh(preview.id, { requested: true })
+        const judged = await recordOf(preview.id)
+        expect(judged.baseBoot).toBe('alive')
+        // The strict record of the code before Э1.6 refuses the sign: its reader would see none.
+        const before = z.strictObject(previewRecordSchema.omit({ baseBoot: true }).shape)
+        expect(before.safeParse(judged).success).toBe(false)
+        // The step of the rollback (docs/plan/62-site-stacks.md §10, «Э1.6: откат»).
+        await db.$executeRaw`
+          UPDATE preview_environments SET runtime = runtime - 'baseBoot'
+          WHERE runtime ? 'baseBoot'`
+        const { baseBoot: _sign, ...rest } = judged
+        expect(before.parse((await rowOf(preview.id)).runtime)).toEqual(rest)
+      })
+
+      it('has none once the base died on a new seed, whatever passport it had', async () => {
+        const { site, task, preview } = await dialog()
+        const f = manager({ adapters: () => readyAdapter })
+        await databaseAccess(f, site.id)
+        respond = live
+        await f.m.refresh(preview.id, { requested: true })
+        expect(await rowOf(preview.id)).toMatchObject({ status: 'ready' })
+        const said = [await baseBootOf(preview.id)]
+        expect(await passportOf(preview.id)).toMatchObject({ boot: 'not_compared' })
+        // The seed is lost: the next build of the base — the agent wrote into the copy — copies
+        // the site again, and the copy dies.
+        await db.previewEnvironment.update({
+          where: { id: preview.id },
+          data: { seedObjectKey: null, seedSha256: null, seedReleaseId: null, dirty: true },
+        })
+        respond = answer(200)
+        await f.m.refresh(preview.id, { requested: true })
+        expect(await rowOf(preview.id)).toMatchObject({
+          status: 'unavailable',
+          unavailableReason: 'boot_failed',
+        })
+        said.push(await baseBootOf(preview.id))
+        // The passport of the earlier ready build is still in the record: it is not the sign.
+        expect(await passportOf(preview.id)).toBeDefined()
+        await candidateOf(task.id, 1)
+        await f.m.refresh(preview.id, { requested: true })
+        expect(await rowOf(preview.id)).toMatchObject({
+          status: 'unavailable',
+          unavailableReason: 'boot_failed',
+        })
+        expect(said).toEqual(['alive', 'dead'])
+      })
+
+      it('keeps the preview on a live base and fails its smoke check', async () => {
+        const { site, task, preview } = await dialog()
+        const f = manager({ adapters: () => readyAdapter })
+        await databaseAccess(f, site.id)
+        respond = live
+        await f.m.refresh(preview.id, { requested: true })
+        const candidate = await candidateOf(task.id, 1)
+        respond = answer(200)
+        await f.m.refresh(preview.id, { requested: true })
+        expect(await rowOf(preview.id)).toMatchObject({
+          status: 'ready',
+          revision: 1,
+          candidateId: candidate.id,
+        })
+        expect(await passportOf(preview.id)).toMatchObject({ boot: 'suspect', differences: [] })
+        expect(await smokeOf(candidate.id)).toBe('failed')
+      })
+
+      it('keeps the preview on a base no build judged: a record before Э1.6', async () => {
+        const { site, task, preview } = await dialog()
+        const f = manager({ adapters: () => readyAdapter })
+        await databaseAccess(f, site.id)
+        respond = live
+        await f.m.refresh(preview.id, { requested: true })
+        // As a build before Э1.6 left it: no `baseBoot`, no passport.
+        const { baseBoot: _base, passport: _passport, ...before } = await recordOf(preview.id)
+        await db.previewEnvironment.update({
+          where: { id: preview.id },
+          data: { runtime: before as object },
+        })
+        const candidate = await candidateOf(task.id, 1)
+        respond = answer(200)
+        await f.m.refresh(preview.id, { requested: true })
+        expect(await rowOf(preview.id)).toMatchObject({ status: 'ready', revision: 1 })
+        expect(await smokeOf(candidate.id)).toBe('failed')
+        expect(await baseBootOf(preview.id)).toBeUndefined()
+      })
+    })
+
     it('serves a site that sends its home page to another host, as a suspect', async () => {
       const { site, preview } = await dialog()
       const f = manager({ adapters: () => readyAdapter })
@@ -1072,16 +1304,24 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
       expect(Number.isNaN(Date.parse(passport!.checkedAt))).toBe(false)
     })
 
-    it('leaves WordPress as it was: no check before ready and no passport', async () => {
+    it('checks WordPress by the header of its wp-config.php before ready (Э1.6)', async () => {
       const { site, preview } = await dialog()
       const f = manager()
       await databaseAccess(f, site.id)
-      respond = answer(200, {}, '')
+      // A page of the generated configuration: `x-raditi-preview: 1`.
       await f.m.refresh(preview.id, { requested: true })
       expect(
         await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } }),
       ).toMatchObject({ status: 'ready' })
-      expect(await passportOf(preview.id)).toBeUndefined()
+      expect(await passportOf(preview.id)).toMatchObject({ boot: 'not_compared', differences: [] })
+      expect(await baseBootOf(preview.id)).toBe('alive')
+      // A page without it, at the next build: WordPress did not start in the copy.
+      await db.previewEnvironment.update({ where: { id: preview.id }, data: { dirty: true } })
+      respond = answer(200, {}, '')
+      await f.m.refresh(preview.id, { requested: true })
+      expect(
+        await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } }),
+      ).toMatchObject({ status: 'unavailable', unavailableReason: 'boot_failed' })
     })
 
     it('serves a closed home page with the header, as a suspect', async () => {
@@ -1094,6 +1334,7 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
         await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } }),
       ).toMatchObject({ status: 'ready' })
       expect(await passportOf(preview.id)).toMatchObject({ boot: 'suspect', differences: [] })
+      expect(await baseBootOf(preview.id)).toBe('alive')
     })
 
     it('serves a home page that twice gave nothing to read in time, as a suspect', async () => {
@@ -1114,6 +1355,7 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
       expect(f.runtime.calls).not.toContain('stop')
       expect(f.runtime.running.has(preview.id)).toBe(true)
       expect(await passportOf(preview.id)).toMatchObject({ boot: 'suspect', differences: [] })
+      expect(await baseBootOf(preview.id)).toBe('alive')
     })
 
     it('stops nothing when the preview was taken over before the check ended', async () => {

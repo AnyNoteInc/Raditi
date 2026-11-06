@@ -58,6 +58,13 @@ export const previewRecordSchema = z.strictObject({
    * Т34); absent — a stack that does not say how its live page looks. Not shown yet (Э7).
    */
   passport: previewPassportSchema.optional(),
+  /**
+   * What the health page of the base said on the seed the record holds (`previewBootOf`, Т33):
+   * written by a build without a candidate alone — `alive` with `ready`, `dead` before
+   * `boot_failed` — and forgotten with a new seed. A candidate that does not start on a dead base
+   * has no preview either; absent — no build judged this base, and such a candidate keeps it.
+   */
+  baseBoot: z.enum(['alive', 'dead']).optional(),
 })
 export type PreviewRecord = z.infer<typeof previewRecordSchema>
 

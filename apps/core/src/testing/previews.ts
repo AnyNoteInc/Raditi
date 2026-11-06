@@ -31,9 +31,18 @@ import type { DbPlanValueOwner, DbPlanValueReader } from '../site-content/db-pla
 
 export const hash = (c: string) => c.repeat(64)
 
-/** What the entry forwarder of a preview answers by default: a page, or a fatal error of PHP. */
+/**
+ * What the entry forwarder of a preview answers by default: a page of WordPress — with the header
+ * of its wp-config.php — or a fatal error of PHP, which that wp-config.php ends with the mark of
+ * the key of a check (docs/plan/62-site-stacks.md, Т33).
+ */
 export const previewPage: RequestListener = (request, response) => {
-  if (request.url?.startsWith('/broken')) response.end('<b>Fatal error</b>: x')
+  response.setHeader('x-raditi-preview', '1')
+  const check = request.headers['x-raditi-check']
+  if (request.url?.startsWith('/broken'))
+    response.end(
+      `<b>Fatal error</b>: x${typeof check === 'string' ? `\n<!-- raditi-fatal:${check} -->\n` : ''}`,
+    )
   else response.end('<html>ok</html>')
 }
 

@@ -73,6 +73,18 @@ describe('the preview recipe of WordPress', () => {
     expect(recipe.healthPath).toBe('/')
   })
 
+  it('says how a live page differs from a dead one', () => {
+    // A dead WordPress answers 5xx or fails `content.access` first; its fatal errors are marked
+    // with the key of the check by wp-config.php (docs/plan/62-site-stacks.md, Т33).
+    expect(wordpressPreviewRecipe(site).ready).toEqual({
+      header: 'x-raditi-preview',
+      absent: [],
+      fatalMark: true,
+    })
+    expect(sources.previewWpConfigPhp).toContain("header('X-Raditi-Preview: 1');")
+    expect(sources.previewWpConfigPhp).toContain('raditi-fatal:')
+  })
+
   it('passes the prefix and the encoding of production to wp-config.php', () => {
     expect(
       wordpressPreviewRecipe({
