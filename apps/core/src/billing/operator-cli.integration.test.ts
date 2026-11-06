@@ -55,8 +55,20 @@ const cwd = fileURLToPath(new URL('../../', import.meta.url))
 
 const SHOP = { shopId: '123456', secretKey: 'test_synthetic-key' }
 const WHO = ['--operator', 'operator-test']
-const START = new Date('2026-10-04T09:00:00.000Z')
-const END = new Date('2026-11-04T09:00:00.000Z')
+const DAY = 24 * 60 * 60_000
+/** The tariff period of every customer: begun three days ago, so it is running whenever the test is. */
+const START = new Date(Math.floor(Date.now() / 60_000) * 60_000 - 3 * DAY)
+const END = new Date(START.getTime() + 31 * DAY)
+/** A moment as the commands print it: Moscow time to the minute. */
+const moscowMinute = new Intl.DateTimeFormat('ru-RU', {
+  timeZone: 'Europe/Moscow',
+  day: '2-digit',
+  month: '2-digit',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+})
+const shown = (moment: Date) => `${moscowMinute.format(moment).replace(',', '')} МСК`
 
 describe.skipIf(!enabled)('operator billing commands with PostgreSQL and the fake ЮKassa', () => {
   let db: PrismaClient
@@ -200,7 +212,7 @@ describe.skipIf(!enabled)('operator billing commands with PostgreSQL and the fak
     return payment.id
   }
 
-  /** A customer on a tariff until 4 November: a paid order of its period, 30 credits granted. */
+  /** A customer on a tariff until `END`: a paid order of its period, 30 credits granted. */
   async function customer() {
     const email = `${randomUUID()}@billing.example.ru`
     const user = await db.user.create({ data: { name: 'Billing verification', email } })
@@ -516,7 +528,7 @@ describe.skipIf(!enabled)('operator billing commands with PostgreSQL and the fak
     // The tariff renews: another order pays for its next month.
     await db.subscription.update({
       where: { id: c.subscriptionId },
-      data: { currentPeriodStart: END, currentPeriodEnd: new Date('2026-12-04T09:00:00.000Z') },
+      data: { currentPeriodStart: END, currentPeriodEnd: new Date(END.getTime() + 30 * DAY) },
     })
 
     const result = await run('refund', [...args, '--end-subscription'])
@@ -726,9 +738,7 @@ describe.skipIf(!enabled)('operator billing commands with PostgreSQL and the fak
     expect(first.stdout).toContain(
       `Автопродление отключено: клиент ${c.email}, подписка ${c.subscriptionId}`,
     )
-    expect(first.stdout).toContain(
-      'Тариф действует до 04.11.2026 12:00 МСК и больше не списывается.',
-    )
+    expect(first.stdout).toContain(`Тариф действует до ${shown(END)} и больше не списывается.`)
     // The command reads no shop setting: it names the condition, true at either value of it.
     expect(first.stdout).toContain(
       'Способ оплаты сохранён: клиент может включить автопродление снова, если магазину разрешены автоплатежи (YOOKASSA_AUTOPAYMENTS=on).',

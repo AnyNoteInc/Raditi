@@ -53,6 +53,7 @@ import type { PreviewsConfig } from '../config/config.ts'
 import type { ExportedTree, TreeExportInput } from '../git-workspace/git-workspace.service.ts'
 import { TAR_END, tarDirectoryHeader } from '../git-workspace/tree-tar.ts'
 import type { DbPlanValueReader } from '../site-content/db-plan-values.ts'
+import { hasSiteAccess } from '../site-content/site-access.ts'
 import { databaseSettingsFromCatalog, type CatalogTable } from './database-settings.ts'
 import {
   previewContentAccess,
@@ -577,10 +578,11 @@ export function dumpStaging(deps: PreviewBuildDeps, facts: PreviewFacts, signal:
 /**
  * What production's database says when its gateway could not be had (docs/plan/62-site-stacks.md,
  * Т37; Р16 of its slices): the resolver refuses a site without its access to the plugin with the
- * same code as a failed read of that access, so the row decides, as `ReleaseSkill` does. No row of
- * the content adapter's kind, or no content adapter for the stack — no gateway; a row — one that
- * did not answer now, and so does a count that failed: a site with a plugin keeps the text of
- * records until its next build.
+ * same code as a failed read of that access, so the row decides, by the rule `ReleaseSkill` reads
+ * it with (`hasSiteAccess`: exactly one row). No row of the content adapter's kind, two of them,
+ * or no content adapter for the stack — no gateway; the one row — a gateway that did not answer
+ * now, and so does a count that failed: a site with a plugin keeps the text of records until its
+ * next build.
  */
 export async function unaskedProduction(
   deps: Pick<PreviewBuildDeps, 'db' | 'contentAdapters'>,
@@ -594,7 +596,7 @@ export async function unaskedProduction(
     return null
   }
   try {
-    return (await deps.db.credentialRef.count({ where: { siteId, kind } })) > 0 ? 'no_answer' : null
+    return (await hasSiteAccess(deps.db, siteId, kind)) ? 'no_answer' : null
   } catch {
     return 'no_answer'
   }

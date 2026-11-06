@@ -497,6 +497,16 @@ describe('what production’s plugin can write of a plan (Т37)', () => {
       ).toBe('no_answer')
     })
 
+    it('has no gateway where two rows of the kind stand, as the resolver and a release read them', async () => {
+      expect(
+        await unaskedProduction(
+          deps(() => Promise.resolve(2), wp),
+          'site',
+          'wordpress',
+        ),
+      ).toBe(null)
+    })
+
     it('keeps the text of records where the count itself failed', async () => {
       const failed = deps(() => Promise.reject(new Error('connection reset')), wp)
       expect(await unaskedProduction(failed, 'site', 'wordpress')).toBe('no_answer')

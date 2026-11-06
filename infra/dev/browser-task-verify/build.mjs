@@ -5,7 +5,7 @@
 // reuses both and is refused when the tree has changed since (the same stamps as the billing and
 // release stands).
 import assert from 'node:assert/strict'
-import { access, cp, lstat, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, cp, lstat, mkdir, readdir, readFile, rm, rmdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -15,10 +15,12 @@ import {
   buildEnvironment,
   buildStamp,
   copyablePath,
+  keptFolder,
   manifestDuringCopy,
   outside,
   readBuildStamp,
   staleCopy,
+  staleDirectories,
   staleFiles,
   treeDigest,
   treeEntry,
@@ -108,7 +110,10 @@ export async function buildCopy(rt, copy, options) {
     const manifest = join(marker, 'manifest')
     const previous = (await readFile(manifest, 'utf8').catch(() => '')).split('\0').filter(Boolean)
     await writeFile(manifest, manifestDuringCopy(previous, present).join('\0'))
-    for (const path of staleFiles(previous, present)) await rm(join(copy, path), { force: true })
+    const stale = staleFiles(previous, present)
+    for (const path of stale) await rm(join(copy, path), { force: true })
+    for (const folder of staleDirectories(stale, present))
+      await rmdir(join(copy, folder)).catch(keptFolder)
     await rt.run('rsync', ['-a', '--from0', '--files-from=-', `${rt.root}/`, `${copy}/`], {
       input: present.join('\0'),
       timeoutMs: 600_000,

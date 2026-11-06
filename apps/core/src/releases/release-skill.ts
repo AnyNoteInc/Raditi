@@ -79,6 +79,7 @@ import {
   type ReleaseGit,
   type TrustedCommitInput,
 } from '../git-workspace/release-git.ts'
+import { hasSiteAccess } from '../site-content/site-access.ts'
 import { readSiteEnvValuesToRefuse } from '../site-env/site-env-values.ts'
 import {
   sealDbOperationValue,
@@ -553,17 +554,13 @@ export class ReleaseSkill {
       select: { kind: true },
     })
     const hosting = source ? hostingAccessKind(source.kind) : null
-    if (hosting === null || !(await this.#hasAccess(tx, row.siteId, hosting)))
+    if (hosting === null || !(await hasSiteAccess(tx, row.siteId, hosting)))
       return releaseErrors.noHosting
     const writes = dbUndoPlanSchema.safeParse(row.undoPlan.dbPlan)
     if (!writes.success) return releaseErrors.undoPlanChanged
     if (writes.data.length > 0) {
       const content = this.#contentAccessKind(row.site.stack)
-      if (
-        !this.deps.values ||
-        content === null ||
-        !(await this.#hasAccess(tx, row.siteId, content))
-      )
+      if (!this.deps.values || content === null || !(await hasSiteAccess(tx, row.siteId, content)))
         return releaseErrors.dbPlan
     }
     return null
@@ -611,7 +608,7 @@ export class ReleaseSkill {
       select: { kind: true },
     })
     const hosting = source ? hostingAccessKind(source.kind) : null
-    if (hosting === null || !(await this.#hasAccess(tx, row.siteId, hosting)))
+    if (hosting === null || !(await hasSiteAccess(tx, row.siteId, hosting)))
       return releaseErrors.noHosting
     const plan = releasablePlan(candidate.dbPlan, this.#dbOperationKinds(row))
     if (plan === null) return releaseErrors.dbPlan
@@ -627,7 +624,7 @@ export class ReleaseSkill {
         !this.deps.values ||
         !this.deps.production ||
         content === null ||
-        !(await this.#hasAccess(tx, row.siteId, content))
+        !(await hasSiteAccess(tx, row.siteId, content))
       )
         return releaseErrors.dbPlan
       return this.#viewRefusal(candidate.dbView, candidate.dbPlanSha256, plan.length)
@@ -659,14 +656,6 @@ export class ReleaseSkill {
     return db.siteRelease.count({
       where: { siteId: row.siteId, id: { not: row.id }, status: { in: [...openReleaseStatuses] } },
     })
-  }
-
-  async #hasAccess(
-    tx: Pick<Prisma.TransactionClient, 'credentialRef'>,
-    siteId: string,
-    kind: SiteAccessKind,
-  ): Promise<boolean> {
-    return (await tx.credentialRef.count({ where: { siteId, kind } })) === 1
   }
 
   /**

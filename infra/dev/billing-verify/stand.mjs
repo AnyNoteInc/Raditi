@@ -3,7 +3,7 @@
 // on record and what of a dead run is swept, the list of scenarios, the order of the cleanup,
 // and the small readers the scenarios share. Nothing here touches Docker, the network or a file.
 import { createHash } from 'node:crypto'
-import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 /** The PostgreSQL and Redis of infra/app and of the other stands, by digest. Never pulled. */
 export const POSTGRES_IMAGE =
@@ -252,6 +252,30 @@ export function copyablePath(path) {
 export function staleFiles(previous, current) {
   const kept = new Set(current)
   return previous.filter((path) => copyablePath(path) && !kept.has(path))
+}
+
+/**
+ * Folders of the copy that only stale files lived in, deepest first: none of them holds or leads
+ * to a file the tree still has. Removing the files alone leaves them behind, and an empty folder
+ * of a migration another tree had makes Prisma refuse the copy's migrations (P3015). A folder that
+ * build output or dependencies have filled is not empty, and its removal is left undone.
+ */
+export function staleDirectories(stale, current) {
+  const live = new Set()
+  for (const path of current)
+    for (let folder = dirname(path); folder !== '.'; folder = dirname(folder)) live.add(folder)
+  const gone = new Set()
+  for (const path of stale)
+    for (let folder = dirname(path); folder !== '.' && !live.has(folder); folder = dirname(folder))
+      gone.add(folder)
+  const depth = (folder) => folder.split('/').length
+  return [...gone].sort((a, b) => depth(b) - depth(a) || a.localeCompare(b))
+}
+
+/** A stale folder that is not empty, or is gone already, stays as it is. */
+export function keptFolder(error) {
+  if (error?.code !== 'ENOTEMPTY' && error?.code !== 'EEXIST' && error?.code !== 'ENOENT')
+    throw error
 }
 
 /**

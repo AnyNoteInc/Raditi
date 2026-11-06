@@ -579,6 +579,28 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
       await f.m.refresh(preview.id, { requested: true })
       expect(await dbOf(preview.id)).toEqual(textOnlyDbRuntime)
     })
+
+    it('carries nothing for a site with two access rows of the plugin, which a release refuses', async () => {
+      const { workspace, site, preview } = await dialog()
+      // The index on (site_id, kind) is not unique; the resolver and `/release` take two rows as none.
+      for (const vaultPath of [
+        siteAccessPath(site.id, 'wp'),
+        `${siteAccessPath(site.id, 'wp')}-old`,
+      ])
+        await db.credentialRef.create({
+          data: {
+            workspaceId: workspace.id,
+            siteId: site.id,
+            kind: 'wp',
+            vaultPath,
+            keyVersion: 1,
+          },
+        })
+      const f = manager({ production: null, productionRefusal: noAccess(), previewDb })
+      await databaseAccess(f, site.id)
+      await f.m.refresh(preview.id, { requested: true })
+      expect(await dbOf(preview.id)).toEqual(noDbRuntime)
+    })
   })
 
   it('rebuilds to a candidate: its plan replayed, its checks recorded, earlier ones stale', async () => {

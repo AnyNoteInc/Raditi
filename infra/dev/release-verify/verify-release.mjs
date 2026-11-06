@@ -19,6 +19,7 @@ import {
   readdir,
   readFile,
   rm,
+  rmdir,
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -34,10 +35,12 @@ import {
   buildEnvironment,
   buildStamp,
   copyablePath,
+  keptFolder,
   manifestDuringCopy,
   outside,
   readBuildStamp,
   staleCopy,
+  staleDirectories,
   staleFiles,
   treeDigest,
   treeEntry,
@@ -161,7 +164,10 @@ async function buildCopy(copy, options) {
     const manifest = join(marker, 'manifest')
     const previous = (await readFile(manifest, 'utf8').catch(() => '')).split('\0').filter(Boolean)
     await writeFile(manifest, manifestDuringCopy(previous, present).join('\0'))
-    for (const path of staleFiles(previous, present)) await rm(join(copy, path), { force: true })
+    const stale = staleFiles(previous, present)
+    for (const path of stale) await rm(join(copy, path), { force: true })
+    for (const folder of staleDirectories(stale, present))
+      await rmdir(join(copy, folder)).catch(keptFolder)
     await rt.run('rsync', ['-a', '--from0', '--files-from=-', `${root}/`, `${copy}/`], {
       input: present.join('\0'),
       timeoutMs: 600_000,
