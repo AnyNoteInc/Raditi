@@ -29,10 +29,15 @@ import { useTRPC } from '@/trpc/client'
 
 /**
  * A changed access of a working site becomes the site's variables again, as at creation (owner's
- * decision of 26.10.2026): the panel says so, as the last step of the wizard does.
+ * decision of 26.10.2026): the panel says so, as the last step of the wizard does. An access to
+ * the files stops at a chat that has the browser as well (docs/plan/61, К21).
  */
 export const ACCESS_VARIABLES_NOTE =
   'Новый доступ мы сохраним и как переменные сайта, как при добавлении проекта: их получат команды агента и предпросмотр только в чате без браузера. Это можно отключить в списке переменных.'
+
+/** The same of the database, which reaches every chat with the code (docs/plan/61, 61.27). */
+export const DATABASE_VARIABLES_NOTE =
+  'Новый доступ мы сохраним и как переменные сайта, как при добавлении проекта: их получат команды агента и предпросмотр. Это можно отключить в списке переменных.'
 
 const FIELDS = 'replace-access'
 const PROBLEM = 'replace-access-problem'

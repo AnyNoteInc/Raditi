@@ -3,7 +3,7 @@
 import {
   envVarLimits,
   envVarNameProblem,
-  isSiteAccessVariable,
+  isHostingFileAccessVariable,
   isSiteSignInEnvVar,
   siteSignInEnvVars,
 } from '@repo/domain/release/env-vars'
@@ -92,7 +92,7 @@ export const envText = Object.freeze({
 /**
  * Whom a variable is given to, in words. A preview gets only what the agent may see, and in a
  * workspace that may not give variables to the agent (`agentAllowed`) nobody gets them. An access
- * of the site stops at a chat that has the browser as well (`envVarReachesTask`), and a project
+ * to the site's files stops at a chat that has the browser as well (`envVarReachesTask`), and a project
  * without access to its files (`withFiles`) has no chat that gets any variable.
  */
 export function recipientsText(
@@ -104,7 +104,7 @@ export function recipientsText(
   if (!agentAllowed) return `Не передаётся. ${envText.toAgentClosed}`
   if (!withFiles) return envText.noFilesRecipients
   const agent = variable.toAgent && variable.agentConsentAt !== null
-  const where = isSiteAccessVariable(variable.name) ? ' только в чате без браузера' : ''
+  const where = isHostingFileAccessVariable(variable.name) ? ' только в чате без браузера' : ''
   if (agent && variable.toPreview) return `Передаётся агенту и предпросмотру${where}.`
   if (agent) return `Передаётся агенту${where}.`
   if (variable.toPreview)

@@ -251,7 +251,7 @@ test('a site of someone else and a made-up address answer «not found» alike', 
     for (const path of [
       `/projects/${foreign.siteId}`,
       `/projects/${foreign.siteId}/settings`,
-      '/projects/0199a3f2-5d1c-7b3e-9c41-2f6a8d0e4b17/chat',
+      '/projects/0199a3f2-5d1c-7b3e-9c41-2f6a8d0e4b17/changes',
       '/projects/not-an-id/settings',
     ]) {
       await page.goto(path)

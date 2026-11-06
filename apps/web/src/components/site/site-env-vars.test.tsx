@@ -371,8 +371,16 @@ describe('helpers', () => {
     )
   })
 
-  it('says an access of the site stops at a chat with the browser (К21)', () => {
-    for (const name of ['FTP_PASSWORD', 'SFTP_PRIVATE_KEY', 'SITE_DB_PASSWORD', 'SITE_GIT_TOKEN']) {
+  it('says the database and git reach every chat with the code (61.27)', () => {
+    for (const name of ['SITE_DB_PASSWORD', 'SITE_GIT_TOKEN']) {
+      const consented = { name, toAgent: true, toPreview: true, agentConsentAt: new Date() }
+      expect(recipientsText(consented)).toBe('Передаётся агенту и предпросмотру.')
+      expect(recipientsText({ ...consented, toPreview: false })).toBe('Передаётся агенту.')
+    }
+  })
+
+  it('says an access to the files stops at a chat with the browser (К21)', () => {
+    for (const name of ['FTP_PASSWORD', 'SFTP_PRIVATE_KEY']) {
       const consented = { name, toAgent: true, toPreview: true, agentConsentAt: new Date() }
       expect(recipientsText(consented)).toBe(
         'Передаётся агенту и предпросмотру только в чате без браузера.',

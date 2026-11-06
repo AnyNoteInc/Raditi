@@ -258,6 +258,8 @@ for (const [name, width, height] of viewports.filter(([, wide]) => wide < 900)) 
   })
 }
 
+// The chat left the projects (К4) and its old addresses are gone (61.27): of someone else's
+// project and of none they answer as an address of the user's own one does (chats.spec.ts).
 test('the old address of the chat of someone else’s project answers «not found»', async ({
   page,
   signedInUser,
@@ -275,9 +277,8 @@ test('the old address of the chat of someone else’s project answers «not foun
       await test.step(path, async () => {
         const response = await page.goto(path)
         expect(response?.status()).toBe(404)
-        await expect(
-          page.getByRole('heading', { level: 1, name: 'Такого проекта нет' }),
-        ).toBeVisible()
+        await expect(page).toHaveURL(path)
+        await expect(page.getByRole('heading', { level: 1 })).toHaveText('Страница не найдена')
         await expect(page.getByText('Кофейня «Крошка»')).toHaveCount(0)
         await expect(chats(page)).toHaveCount(0)
         await expect(message(page)).toHaveCount(0)

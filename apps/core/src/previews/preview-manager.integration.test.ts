@@ -375,36 +375,39 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
       false,
       ['FTP_PASSWORD', 'MAIL_API_KEY', 'SFTP_PRIVATE_KEY', 'SITE_DB_PASSWORD', 'SITE_GIT_TOKEN'],
     ],
-    ['the code and the browser', true, ['MAIL_API_KEY']],
-  ])('gives a preview of a chat with %s its variables (К21)', async (_, needsBrowser, names) => {
-    const { site, preview } = await dialog('awaiting_approval', { needsBrowser })
-    const f = manager()
-    await databaseAccess(f, site.id)
-    for (const name of [
-      'MAIL_API_KEY',
-      'FTP_PASSWORD',
-      'SFTP_PRIVATE_KEY',
-      'SITE_DB_PASSWORD',
-      'SITE_GIT_TOKEN',
-    ]) {
-      await db.siteEnvVar.create({
-        data: {
-          siteId: site.id,
-          name,
-          hosts: [],
-          toAgent: true,
-          agentConsentAt: new Date(),
-          toPreview: true,
-          keyVersion: 1,
-        },
-      })
-      await f.vault.kvWrite(siteEnvVarPath(site.id, name), siteEnvVarSecret(`${name}-value`))
-    }
+    ['the code and the browser', true, ['MAIL_API_KEY', 'SITE_DB_PASSWORD', 'SITE_GIT_TOKEN']],
+  ])(
+    'gives a preview of a chat with %s its variables (К21, 61.27)',
+    async (_, needsBrowser, names) => {
+      const { site, preview } = await dialog('awaiting_approval', { needsBrowser })
+      const f = manager()
+      await databaseAccess(f, site.id)
+      for (const name of [
+        'MAIL_API_KEY',
+        'FTP_PASSWORD',
+        'SFTP_PRIVATE_KEY',
+        'SITE_DB_PASSWORD',
+        'SITE_GIT_TOKEN',
+      ]) {
+        await db.siteEnvVar.create({
+          data: {
+            siteId: site.id,
+            name,
+            hosts: [],
+            toAgent: true,
+            agentConsentAt: new Date(),
+            toPreview: true,
+            keyVersion: 1,
+          },
+        })
+        await f.vault.kvWrite(siteEnvVarPath(site.id, name), siteEnvVarSecret(`${name}-value`))
+      }
 
-    expect(await f.m.refresh(preview.id, { requested: true })).toBe(true)
+      expect(await f.m.refresh(preview.id, { requested: true })).toBe(true)
 
-    expect(Object.keys(f.runtime.secrets[0]!.env).toSorted()).toEqual(names)
-  })
+      expect(Object.keys(f.runtime.secrets[0]!.env).toSorted()).toEqual(names)
+    },
+  )
 
   it('runs on the closest PHP to the site’s and keeps what the preview lacks (Р2, Р18)', async () => {
     const { site, preview } = await dialog()

@@ -501,21 +501,36 @@ test('a chat on a phone: the list, a new chat and a sheet of projects', async ({
   })
 })
 
-test('the old addresses of a chat lead to «Чаты»', async ({ page, signedInUser }) => {
+// The addresses a chat had under its project are gone, not moved: the site is not in production
+// yet (owner's answer of 06.11.2026, docs/plan/61-chats-first.md, 61.27).
+test('the old addresses of a chat answer «not found»', async ({ page, signedInUser }) => {
   const { siteId, taskId, title } = await addLongDialog(signedInUser.id, 2)
   await hideDevIndicator(page)
   await page.setViewportSize({ width: 1280, height: 900 })
 
-  await page.goto(`/projects/${siteId}/chat`)
-  await expect(page).toHaveURL('/chats')
-  await page.goto(`/projects/${siteId}/chat/new`)
-  await expect(page).toHaveURL(`/chats/new?project=${siteId}`)
-  await expect(pill(page, KROSHKA)).toBeVisible()
-  await page.goto(`/projects/${siteId}/chat/${taskId}`)
+  for (const path of [
+    `/projects/${siteId}/chat`,
+    `/projects/${siteId}/chat/new`,
+    `/projects/${siteId}/chat/${taskId}`,
+    `/projects/${siteId}/chat/nothing`,
+  ]) {
+    await test.step(path, async () => {
+      const response = await page.goto(path)
+      expect(response?.status()).toBe(404)
+      await expect(page).toHaveURL(path)
+      // The root «not found» page, not the project's shell under a 404.
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText('Страница не найдена')
+      await expect(page.getByText(KROSHKA)).toHaveCount(0)
+      await expect(page.getByText(title)).toHaveCount(0)
+      await expect(chats(page)).toHaveCount(0)
+      await expect(page.getByRole('textbox', { name: 'Сообщение' })).toHaveCount(0)
+    })
+  }
+  // The chat itself is where it is.
+  const response = await page.goto(`/chats/${taskId}`)
+  expect(response?.status()).toBe(200)
   await expect(page).toHaveURL(`/chats/${taskId}`)
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(title)
-  const response = await page.goto(`/projects/${siteId}/chat/nothing`)
-  expect(response?.status()).toBe(404)
 })
 
 test('an address of no chat of the user is «not found»', async ({ page, signedInUser }) => {

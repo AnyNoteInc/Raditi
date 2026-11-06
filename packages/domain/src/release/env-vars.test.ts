@@ -6,7 +6,7 @@ import {
   envVarsMayReachAgent,
   envVarReachesPreview,
   envVarReachesTask,
-  isSiteAccessVariable,
+  isHostingFileAccessVariable,
   envVarValueSchema,
   refusedEnvVarPrefixes,
   isSiteSignInEnvVar,
@@ -176,24 +176,36 @@ describe('the variables of a task, by what it works with', () => {
       expect(envVarReachesTask(name, code)).toBe(true)
   })
 
-  it('gives a chat with the code and the browser all but the accesses of the wizard (К21)', () => {
-    expect(accesses).toEqual(
+  it('gives a chat with the code and the browser all but the accesses to the files (К21, 61.27)', () => {
+    const files = ['ftp', 'ssh'].flatMap(siteAccessVariableNames)
+    expect(files).toEqual(
+      expect.arrayContaining(['FTP_HOST', 'FTP_PASSWORD', 'SFTP_PASSWORD', 'SFTP_PRIVATE_KEY']),
+    )
+    for (const name of files) expect(envVarReachesTask(name, both)).toBe(false)
+    // The owner's answer of 06.11.2026: the database and git reach the agent like any variable.
+    const opened = ['db', 'git'].flatMap(siteAccessVariableNames)
+    expect(opened).toEqual(
       expect.arrayContaining([
-        'FTP_PASSWORD',
-        'SFTP_PASSWORD',
-        'SFTP_PRIVATE_KEY',
+        'SITE_DB_HOST',
         'SITE_DB_PASSWORD',
+        'SITE_GIT_URL',
         'SITE_GIT_TOKEN',
       ]),
     )
-    for (const name of accesses) expect(envVarReachesTask(name, both)).toBe(false)
+    for (const name of opened) expect(envVarReachesTask(name, both)).toBe(true)
     expect(envVarReachesTask('MAIL_API_KEY', both)).toBe(true)
   })
 
-  it('knows a variable of an access by its name, of every kind, and no other', () => {
-    for (const name of accesses) expect(isSiteAccessVariable(name)).toBe(true)
-    for (const name of ['MAIL_API_KEY', 'SITE_ADMIN_PASSWORD', 'SITE_DB_PASSWORD_2'])
-      expect(isSiteAccessVariable(name)).toBe(false)
+  it('knows a variable of an access to the files by its name, and no other', () => {
+    for (const name of ['ftp', 'ssh'].flatMap(siteAccessVariableNames))
+      expect(isHostingFileAccessVariable(name)).toBe(true)
+    for (const name of [
+      'MAIL_API_KEY',
+      'SITE_ADMIN_PASSWORD',
+      'SFTP_PASSWORD_2',
+      ...['db', 'git'].flatMap(siteAccessVariableNames),
+    ])
+      expect(isHostingFileAccessVariable(name)).toBe(false)
   })
 
   it('gives a task without the repository nothing', () => {

@@ -531,7 +531,7 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     expect(await f.credentials.recover(browser.ref)).toEqual(issued)
   })
 
-  it('gives a chat with the code and the browser its variables without the accesses (К21)', async () => {
+  it('gives a chat with the code and the browser its variables without the file accesses (К21, 61.27)', async () => {
     const f = await fixture({ slots: 2 })
     const consented = { toAgent: true, agentConsentAt: new Date() }
     const chat = await f.taskFixture({ needsRepository: true, needsBrowser: true })
@@ -558,11 +558,16 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     )
     f.vault.kvRead.mockClear()
     const issued = await f.credentials.issue(chat.ref, f.grant)
-    expect(issued.envValues).toEqual({ MAIL_API_KEY: 'MAIL_API_KEY-value' })
-    // An access is not even read.
-    expect(
-      f.vault.kvRead.mock.calls.filter(([path]) => /PASSWORD|PRIVATE_KEY|TOKEN/.test(String(path))),
-    ).toEqual([])
+    // The database and git reach it like any variable (owner's answer of 06.11.2026).
+    expect(issued.envValues).toEqual({
+      MAIL_API_KEY: 'MAIL_API_KEY-value',
+      SITE_DB_PASSWORD: 'SITE_DB_PASSWORD-value',
+      SITE_GIT_TOKEN: 'SITE_GIT_TOKEN-value',
+    })
+    // An access to the files is not even read.
+    expect(f.vault.kvRead.mock.calls.filter(([path]) => /FTP_|SFTP_/.test(String(path)))).toEqual(
+      [],
+    )
     expect(await f.credentials.recover(chat.ref)).toEqual(issued)
   })
 

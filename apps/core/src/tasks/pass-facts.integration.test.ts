@@ -477,8 +477,9 @@ describe.skipIf(!databaseUrl)('the egress of a pass with PostgreSQL', () => {
     expect(read).not.toHaveProperty('browser')
   })
 
-  // docs/plan/61-chats-first.md, §5.6, К21: the row as a test writes it, up to the plan of its turn.
-  it('reads of a chat with the code and the browser what its turn gets, the accesses aside', async () => {
+  // docs/plan/61-chats-first.md, §5.6, К21 and 61.27: the row as a test writes it, up to the plan
+  // of its turn. The database and git reach it (owner's answer of 06.11.2026), the files do not.
+  it('reads of a chat with the code and the browser what its turn gets, the file accesses aside', async () => {
     const { task, workspaceId, userId, facts } = await dialog({ both: true })
     const siteId = siteIdOf(task)
     await db.gitRepository.create({
@@ -515,8 +516,12 @@ describe.skipIf(!databaseUrl)('the egress of a pass with PostgreSQL', () => {
 
     expect(read?.requirements).toEqual({ repository: true, browser: true })
     expect(read?.repo).toMatchObject({ owner: 'sites', name: `site-${siteId}` })
-    expect(read?.variables).toEqual(['MAIL_API_KEY'])
-    expect(read?.egress).toEqual(['mail.example.ru:443'])
+    expect(read?.variables).toEqual(['MAIL_API_KEY', 'SITE_DB_PASSWORD', 'SITE_GIT_TOKEN'])
+    expect(read?.egress).toEqual([
+      'db.example.ru:3306',
+      'git.example.ru:443',
+      'mail.example.ru:443',
+    ])
     expect(read?.attachments).toEqual([expect.objectContaining({ id: file.id })])
     expect(read?.browser?.attachments).toEqual([expect.objectContaining({ id: file.id })])
     // The repository's rules of the stack, which a task in the browser alone has none of.
