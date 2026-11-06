@@ -99,6 +99,53 @@ systemctl reload-or-restart raditi-llm-firewall.service
 
 Перед пересозданием или ротацией прекратить выдачу новых ходов и дождаться активных вызовов. Vault-agent атомарно заменяет файлы внутри смонтированного каталога; затем `docker compose restart llm`: сертификаты и `app.env` читаются при старте. Приватный CA Vault не добавляется к доверию TLS провайдеров. Ротация mTLS не требует повторного входа в подписки.
 
+## Модель в production
+
+Агент в production работает на плане GLM Coding Plan: OpenCode в песочнице, бэкенд `zai-coding`, ключ плана — в Vault `subs/zai-coding/<UUID>`, его читает только `llm` (решение владельца от 06.11.2026; [spec §20](../../docs/spec.md), «Production на плане GLM Coding Plan — решение 06.11.2026», П86–П92). Условия плана запрещают отдавать его квоту клиентам и вызывать его из своего сервиса (§4.2, §4.3); риск, что Z.ai урежет квоту или закроет план и изъяет остаток, владелец принял (П87). API Z.ai с оплатой за токены (`zai-api`) — запасной путь (П88).
+
+Код бэкенд не выбирает по окружению: ход получает профиль включённого провайдера (`classProfile`), а при двух включённых — первого в `llmBackends`, то есть плана. Сиды создают обоих провайдеров выключенными, поэтому после первой выкладки модели нет, пока оператор не сделает шаги ниже. Команды оператора окружение `.env` не читают: `APP_ENV=production`, `VAULT_ADDR=https://vault.raditi.internal:8200` и `DATABASE_URL` задаются явно, токен writer — из входа оператора в Vault ([runbook Vault](../vault/README.md)), dev-root в production запрещён.
+
+1. **Ключ плана.** Ключ аккаунта Z.ai с действующим планом уходит на stdin, аккаунт создаётся выключенным; `--plan` — уровень плана (`lite`, `pro` или `max`, его называет владелец, П89):
+
+   ```sh
+   pnpm --filter llm subscriptions:login -- --backend zai-coding --label <метка> --plan <уровень> \
+     --paid-until <YYYY-MM-DD> --vault-token-file <абсолютный путь>
+   ```
+
+   Ключ принимается, только если Z.ai ответил на проверочный запрос. `--paid-until` — дата, до которой оплачен план: её требует чек-лист аккаунта плана. Импорт ставит аккаунту один ход одновременно (`max_concurrent_turns = 1`, П89); поднять до 8 — правкой строки аккаунта, когда владелец решит. Где на app-ВМ запускаются команды оператора `llm` — вместе с порядком их запуска в M10 (П41); до него — из checkout репозитория с явным окружением.
+
+2. **Провайдер и профили.** До этого `issue` отвечает «The requested model profile is unavailable», а проход чата — отказом `unavailable` (профиля класса нет):
+
+   ```sql
+   UPDATE llm_providers SET enabled = true, updated_at = clock_timestamp()
+    WHERE slug = 'zai-coding' AND kind = 'subscription';
+   UPDATE llm_models SET enabled = true, updated_at = clock_timestamp()
+    WHERE provider_id = (SELECT id FROM llm_providers WHERE slug = 'zai-coding')
+      AND slug IN ('glm-5.3-light', 'glm-5.3-standard', 'glm-5.3-heavy');
+   ```
+
+3. **Ставка и курс кредита** — одним запуском `billing:rates` ([файлы ставок](../billing/rates/README.md)); до этого `issue` отвечает `LLM_PRICE_MISSING`, а резерв задачи — `BILLING_CREDIT_RATE_MISSING`. На app-ВМ команда идёт в образе `core` с окружением `core` (шапка `apps/core/src/billing/operator-cli.ts`); файл ставок лежит в `/opt/raditi/app` — checkout репозитория — и монтируется в контейнер, `--operator` — имя для `audit_log` (у uid контейнера имени нет):
+
+   ```sh
+   docker compose run --rm --no-deps -v /opt/raditi/app/infra/billing/rates:/rates:ro \
+     --entrypoint node core scripts/billing-rates.mjs \
+     --file /rates/2026-11-06-zai-coding.json --reason "<причина>" --operator <имя>
+   ```
+
+   Из checkout вне ВМ — `pnpm --filter core billing:rates -- --file "$PWD/infra/billing/rates/2026-11-06-zai-coding.json" …` из корня репозитория с `APP_ENV` и `DATABASE_URL`: скрипт идёт из `apps/core`, относительный путь он не найдёт. Числа файла — значение по умолчанию (П90): владелец их для плана не подтверждал.
+
+4. **Аккаунт** — после [чек-листа аккаунта плана](../../docs/spec.md) (spec §18, «Чек-лист аккаунта плана»: он проходится до включения каждого аккаунта). До этого `issue` отвечает `SUBSCRIPTION_WAIT`:
+
+   ```sql
+   UPDATE subscription_accounts SET enabled = true, updated_at = clock_timestamp() WHERE id = '<UUID аккаунта>';
+   ```
+
+5. **Данные клиентов** — только после гейта 152-ФЗ: запись `cross_border_clearances` для провайдера `zai-coding`, когда юрист оценил режим данных подписчика плана (П91; spec §18, «Чек-лист гейта 152-ФЗ для Z.ai»). До неё ключ хода получают только рабочие пространства `synthetic`.
+
+Проверка: чат в кабинете — в логе `llm` строки `llm_call` с `"path":"/zai/v4/chat/completions","backend":"zai-coding"`. Исчерпанное окно плана ставит новые ходы в очередь до сброса (П89).
+
+**Переход на запасной путь.** Если Z.ai ограничит или закроет план: выключить провайдера `zai-coding`, его профили и аккаунт (те же `UPDATE … SET enabled = false`) и пройти шаги 1–5 для `zai-api` — `--backend zai-api --plan payg`, ставки `infra/billing/rates/2026-10-17-zai-api.json`, своя запись гейта ([отчёт 52](../../docs/plan/52-zai-api-backend.md), «Оператору»). Идущие чаты на другой бэкенд не переходят (`SUBSCRIPTION_OPERATOR_REQUIRED/binding_missing`): клиент видит в них карточку технического сбоя, и каждый следующий проход падает так же — работает только новый чат; своего текста для этого случая нет, он ждёт владельца (П88). Обратный переход — так же.
+
 ## Предпросмотры
 
 Предпросмотр диалога — рабочая копия сайта по адресу `https://site-<алиас сайта>-chat-<алиас диалога>.<PREVIEW_BASE_DOMAIN>` ([план 53](../../docs/plan/53-chat-preview-release.md), Р17, Р19). Снаружи его открывает шлюз — приложение `apps/preview` со своим образом `PREVIEW_GATEWAY_IMAGE`: по точному `Host` он находит предпросмотр в `preview_environments` и проксирует к его upstream; адрес upstream берётся только из строки, не из запроса. Вход — только по одноразовому билету из кабинета (`/preview/open` web), дальше — собственная cookie шлюза.
@@ -133,6 +180,7 @@ systemctl reload-or-restart raditi-llm-firewall.service
    - CAA: `0 issue "letsencrypt.org"`. Для MVP ограничиваем центр сертификации без привязки к одному ACME-аккаунту или способу проверки. Это обычная запись из [документации Let's Encrypt](https://letsencrypt.org/docs/caa/); `accounturi` и `validationmethods` — дополнительные ограничения, которые здесь не требуются.
    - Включить `.github/workflows/edge-cert.yml`: переменная репозитория `EDGE_CERT_HOST=raditi.ru`.
    - `systemctl enable raditi-app.service` (файл — `systemd/raditi-app.service`).
+   - Модель: план GLM Coding Plan — шаги раздела «Модель в production». Без них агент не работает: сиды оставляют провайдеров выключенными.
 
 ## Обычная выкладка
 
