@@ -6,16 +6,18 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 
-import { BUILT_IMAGES, standNames } from '../release-verify/stand.mjs'
+import { BUILT_IMAGES, LARGE_USAGE, standNames } from '../release-verify/stand.mjs'
 import { CMS_ARCHIVES } from './fetch-cms.mjs'
 import {
   GROUP_NEEDS,
+  GROUP_ROWS,
   STACK_BUILT_IMAGES,
   STACK_LABEL,
   STAND_FIELDS,
   STAND_GROUPS,
   WRITTEN_GROUPS,
   buildNames,
+  groupRowProblems,
   groupsOf,
   needleScanner,
   productionArgs,
@@ -33,6 +35,18 @@ import {
   uuid7,
 } from './stand.mjs'
 import { STACK_STANDS } from './stacks.mjs'
+import {
+  appendLine,
+  breakingTurn,
+  conflictPart,
+  conflictTurn,
+  editTurn,
+  forbiddenTurn,
+  insertBefore,
+  markOf,
+  ownerLine,
+  shellQuote,
+} from './turns.mjs'
 
 /** The vendor whose core may not be here (plan 62, §5), named in parts: no file of the stand says it. */
 const closed = ['bit', 'rix'].join('')
@@ -49,8 +63,8 @@ test('the options take the stacks, the builds, the groups and the runtime only',
     all.runs.map(({ build }) => build.archive),
     Object.values(STACK_STANDS).flatMap((stand) => stand.builds.map((build) => build.archive)),
   )
-  for (const entry of all.runs) assert.deepEqual(entry.groups, ['import', 'preview'])
-  assert.deepEqual(all.unwritten, ['release'])
+  for (const entry of all.runs) assert.deepEqual(entry.groups, ['import', 'preview', 'release'])
+  assert.deepEqual(all.unwritten, [])
 
   const named = standOptions([
     '--',
@@ -87,8 +101,6 @@ test('the options refuse a stack, a build, a group or a runtime the stand does n
   // A database, an address or a key is never taken: the stand works on what it started.
   for (const arg of ['--database=postgres://x', '--url=https://example.ru', '--key=x', 'joomla'])
     assert.throws(() => standOptions([arg]), /it takes no database, address or key/)
-  // A group not written yet would pass empty: it is refused.
-  assert.throws(() => standOptions(['--group=release']), /the group release are not written yet/)
 })
 
 test('a named group brings the group it runs on the results of', () => {
@@ -103,6 +115,13 @@ test('a named group brings the group it runs on the results of', () => {
   assert.deepEqual(standOptions(['--group=import', '--group=preview']).runs[0].groups, [
     'import',
     'preview',
+  ])
+  // `release` takes the site of `import` and the dialogs of `preview` before it (Э3.12).
+  assert.deepEqual(GROUP_NEEDS.release, ['import', 'preview'])
+  assert.deepEqual(standOptions(['--group=release', '--build=joomla-6.2.0']).runs[0].groups, [
+    'import',
+    'preview',
+    'release',
   ])
 })
 
@@ -143,7 +162,7 @@ test('a named build of another stack, or a group no chosen build runs, is refuse
   )
   assert.deepEqual(
     standOptions([], { stands: { joomla: walking }, supports: { joomla: open } }).unwritten,
-    ['release', 'browser'],
+    ['browser'],
   )
 })
 
@@ -231,6 +250,25 @@ test('every record of a stack has every field, and its builds are rows of the ta
       signIn: (build) => ({ ...joomla.signIn(build), lostCookie: null }),
     }),
     joomla.builds.map((build) => `${build.archive}: signIn is not whole`),
+  )
+  // R1–R6 read what a turn edits, the file R2 may not add and the line R4 breaks production with.
+  assert.deepEqual(
+    standProblems({ ...joomla, edit: () => ({ template: null, style: null }) }),
+    joomla.builds.map((build) => `${build.archive}: edit names no template and no style`),
+  )
+  assert.deepEqual(
+    standProblems({
+      ...joomla,
+      edit: (build) => ({ ...joomla.edit(build), template: { path: 'x.php', line: 'x' } }),
+    }),
+    joomla.builds.map((build) => `${build.archive}: edit names no template and no style`),
+  )
+  assert.deepEqual(standProblems({ ...joomla, outsideWorkingSet: '/libraries/x.php' }), [
+    'outsideWorkingSet: no relative path',
+  ])
+  assert.deepEqual(
+    standProblems({ ...joomla, breakOnProduction: () => '' }),
+    joomla.builds.map((build) => `${build.archive}: breakOnProduction is no line`),
   )
   const sample = { archive: 'joomla-6.2.0', php: '8.3', generation: 'j6', version: '6.2.0' }
   assert.deepEqual(standProblems({ ...joomla, builds: [] }), ['no build'])
@@ -396,6 +434,8 @@ test('the stand builds its copy with the contract of the copies, and takes the r
     'services.mjs',
     'scenarios-import.mjs',
     'scenarios-preview.mjs',
+    'scenarios-release.mjs',
+    'turns.mjs',
     'frame.mjs',
   ]) {
     const text = readFileSync(new URL(`./${file}`, import.meta.url), 'utf8')
@@ -493,4 +533,139 @@ test('the id of a chat is a UUID of version 7', () => {
   const id = uuid7(Date.UTC(2026, 10, 7), Buffer.alloc(16, 0xff))
   assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
   assert.notEqual(uuid7(), uuid7())
+})
+
+test('the turns of the release are built of the record of the stack, with no tool of content', () => {
+  for (const [stack, stand] of Object.entries(STACK_STANDS))
+    for (const build of stand.builds) {
+      const edit = stand.edit(build)
+      const turns = {
+        edit: editTurn(edit),
+        forbidden: forbiddenTurn(stand.outsideWorkingSet),
+        breaking: breakingTurn(edit, stand.breakOnProduction(build)),
+        conflict: conflictTurn(edit),
+      }
+      for (const [name, turn] of Object.entries(turns)) {
+        const text = JSON.stringify(turn)
+        assert.doesNotMatch(text, /wp_rest|raditi_content|raditi_restore/, `${stack} ${name}`)
+        assert.equal(turn.scenario, 'tools')
+        for (const round of turn.rounds)
+          for (const call of round)
+            assert.ok(
+              ['bash', 'raditi_browser_navigate', 'raditi_browser_run_checks'].includes(call.name),
+              `${stack} ${name}: ${call.name}`,
+            )
+        assert.doesNotThrow(() => JSON.parse(turn.text), `${stack} ${name}: a result of a turn`)
+      }
+      // R1 checks the mark in the agent's browser and names the files it changed.
+      const checks = turns.edit.rounds.flat().find((call) => call.name.endsWith('run_checks'))
+      assert.deepEqual(checks.arguments.checks, [
+        { path: '/', selector: '.stack-mark', ...markOf(edit) },
+      ])
+      const result = JSON.parse(turns.edit.text)
+      assert.deepEqual(
+        result.files_changed.toSorted(),
+        [edit.template, edit.style, edit.texts]
+          .filter(Boolean)
+          .map((part) => part.path)
+          .toSorted(),
+      )
+      assert.match(JSON.stringify(turns.breaking), /RADITI_PREVIEW_ORIGIN/)
+      assert.match(JSON.stringify(turns.forbidden), new RegExp(stand.outsideWorkingSet))
+      // R1 reports a usage above the minimum of a task, so its charge is told from the minimum.
+      assert.deepEqual(turns.edit.usage, LARGE_USAGE)
+      // R6 changes one file the installed version holds after the undo of R5: never a new one.
+      const part = conflictPart(edit)
+      assert.ok(part === edit.template || part === edit.style, `${stack} ${build.archive}`)
+      assert.notEqual(part.created, true, `${stack} ${build.archive}: ${part.path}`)
+      assert.deepEqual(JSON.parse(turns.conflict.text).files_changed, [part.path])
+      assert.match(turns.conflict.rounds[0][0].arguments.command, new RegExp(part.path))
+    }
+})
+
+test('R6 takes the style the supply has, else the template; the owner writes in its language', () => {
+  const template = { path: 't/index.php', before: '</body>', line: '<p class="stack-mark">M</p>' }
+  const style = (created) => ({ path: 'css/s.css', line: '.m {}', created })
+  assert.equal(conflictPart({ template, style: style(false) }).path, 'css/s.css')
+  assert.equal(conflictPart({ template, style: style(true) }).path, 't/index.php')
+  assert.equal(conflictPart({ template: null, style: style(false) }).path, 'css/s.css')
+  assert.throws(
+    () => conflictPart({ template: null, style: style(true) }),
+    /no file of the installed/,
+  )
+  // A rule of style before the tag of the template, a line of the stylesheet otherwise.
+  assert.match(
+    conflictTurn({ template, style: style(true) }).rounds[0][0].arguments.command,
+    /^sed -i .*<style>\.stack-mark \{ font-weight: bold; \}<\/style><\/body>/,
+  )
+  assert.match(
+    conflictTurn({ template, style: style(false) }).rounds[0][0].arguments.command,
+    /printf .* >> 'css\/s\.css'$/,
+  )
+  assert.equal(ownerLine('css/s.css'), '/* Правка владельца на хостинге */')
+  assert.equal(ownerLine('t/index.php'), '<!-- Правка владельца на хостинге -->')
+  // Without a template the mark is the plain text of shownAt.
+  assert.deepEqual(markOf({ template: null }, { path: '/', text: 'Подвал: версия 1' }), {
+    text: 'Подвал: версия 1',
+  })
+  assert.throws(() => markOf({ template: null }, { path: '/', text: '<p>x</p>' }), /carries a mark/)
+  assert.throws(() => markOf({ template: null }), /carries a mark/)
+})
+
+test('a group that ran on a build left a row of its letter naming the build', () => {
+  assert.deepEqual(Object.keys(GROUP_ROWS).toSorted(), [...WRITTEN_GROUPS].toSorted())
+  const build = (archive) => ({ archive })
+  const runs = [
+    { build: build('joomla-3.10.12'), groups: ['import', 'preview', 'release'] },
+    { build: build('joomla-6.2.0'), groups: ['import'] },
+  ]
+  const rows = [
+    { id: 'I1 joomla-3.10.12', ok: true },
+    { id: 'P5 joomla-3.10.12 webkit', ok: true },
+    { id: 'R1 joomla-3.10.12', ok: true },
+    { id: 'I5 joomla', ok: true },
+    { id: 'I1 joomla-6.2.0', ok: true },
+  ]
+  assert.deepEqual(groupRowProblems(runs, rows), [])
+  // A group whose call was dropped, a row that did not end, and a row of another build all fail.
+  assert.deepEqual(
+    groupRowProblems(
+      runs,
+      rows.filter((row) => !row.id.startsWith('R')),
+    ),
+    ['no row of the group release names joomla-3.10.12'],
+  )
+  assert.deepEqual(
+    groupRowProblems(runs, [...rows.slice(0, 2), { id: 'R1 joomla-3.10.12', ok: false }, rows[4]]),
+    ['no row of the group release names joomla-3.10.12'],
+  )
+  assert.deepEqual(groupRowProblems([runs[1]], rows.slice(0, 3)), [
+    'no row of the group import names joomla-6.2.0',
+  ])
+  assert.deepEqual(groupRowProblems([{ build: build('x'), groups: ['browser'] }], rows), [
+    'the group browser has no letter of its rows',
+  ])
+})
+
+test('the commands of a turn quote what they write and insert it before the tag once', () => {
+  assert.equal(shellQuote("it's"), "'it'\\''s'")
+  assert.equal(
+    insertBefore('a b/index.php', '</body>', '<p class="m">1 & 2</p>'),
+    "sed -i 's|</body>|<p class=\"m\">1 \\& 2</p></body>|' 'a b/index.php'",
+  )
+  assert.equal(
+    insertBefore('x.php', '</footer>', "<?php f('x'); ?>"),
+    "sed -i 's|</footer>|<?php f('\\''x'\\''); ?></footer>|' 'x.php'",
+  )
+  // A tag a regular expression would read otherwise is matched as it is written.
+  assert.match(insertBefore('x', 'a.b*', 'y'), /s\|a\\\.b\\\*\|ya\.b\*\|/)
+  assert.throws(() => insertBefore('x', '</body>', 'a|b'), /neither a bar nor a line break/)
+  assert.throws(() => insertBefore('x', '</body>', 'a\nb'), /neither a bar nor a line break/)
+  assert.equal(
+    appendLine('css/user.css', '.m { color: red; }'),
+    "mkdir -p 'css' && printf '%s\\n' '.m { color: red; }' >> 'css/user.css'",
+  )
+  assert.deepEqual(markOf({ template: { line: '<p class="stack-mark">Подвал: версия 1</p>' } }), {
+    text: 'Подвал: версия 1',
+  })
 })

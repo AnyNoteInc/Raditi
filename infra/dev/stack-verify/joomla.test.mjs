@@ -2,6 +2,11 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 
+import { workingSetMatcher } from '../../../packages/domain/src/index.ts'
+import {
+  joomlaAgentWorkingSet,
+  joomlaProtectedPaths,
+} from '../../../packages/site-adapters/src/joomla/joomla-working-set.ts'
 import {
   installJoomla,
   JOOMLA_BUILDS,
@@ -15,6 +20,7 @@ import {
   joomlaIndexerArgv,
   joomlaStand,
   joomlaSeedSql,
+  TEMPLATE_PATHS,
   withProperty,
 } from './joomla.mjs'
 
@@ -273,5 +279,49 @@ test('P5 marks the panel by what only the panel has, and counts a refused passwo
     assert.equal(sign.signedIn, build.generation === 'j3' ? 'header.header' : '#sidebarmenu')
     assert.notEqual(sign.signedIn, '#header')
     assert.ok(sign.lostCookie.includes('Username and password do not match'))
+  }
+})
+
+test('R1–R6 edit the template of the branch from the list, inside the working set of the agent', () => {
+  // docs/plan/62-slices/e3.md, Э3.12: the template file comes from the explicit list per branch;
+  // whether the supply holds it is R1's to see on the tree of the archive (fixtures.ts names no
+  // template), so a new user.css is neither looked for here nor counted as missing.
+  const inSet = workingSetMatcher(joomlaAgentWorkingSet())
+  // The paths of the table of the contract, as literals: `edit` reads the same map, so only these
+  // tell a misspelt theme or Protostar and Cassiopeia swapped between the branches.
+  assert.deepEqual(TEMPLATE_PATHS, {
+    j3: 'templates/protostar/index.php',
+    j4: 'templates/cassiopeia/index.php',
+    j5: 'templates/cassiopeia/index.php',
+    j6: 'templates/cassiopeia/index.php',
+  })
+  for (const build of JOOMLA_BUILDS) {
+    const edit = joomlaStand.edit(build)
+    assert.equal(edit.template.path, TEMPLATE_PATHS[build.generation], build.archive)
+    assert.equal(edit.template.before, build.generation === 'j3' ? '</footer>' : '</body>')
+    assert.equal(edit.template.line, '<p class="stack-mark">Подвал: версия 1</p>')
+    // 3.x appends to the style of Protostar; Cassiopeia links its user.css itself (template.user).
+    assert.equal(
+      edit.style.path,
+      build.generation === 'j3'
+        ? 'templates/protostar/css/template.css'
+        : 'media/templates/site/cassiopeia/css/user.css',
+    )
+    assert.equal(edit.style.created, build.generation !== 'j3')
+    assert.equal(edit.texts.path, 'language/overrides/en-GB.override.ini')
+    assert.equal(edit.texts.created, true)
+    assert.match(edit.texts.line, /^[A-Z_]+="[^"]+"$/)
+    for (const part of [edit.template, edit.style, edit.texts])
+      assert.ok(inSet(part.path), `${build.archive}: ${part.path} is in the working set`)
+  }
+  // R2: a file outside the working set, under a path no candidate may change.
+  assert.equal(joomlaStand.outsideWorkingSet, 'libraries/stack-verify.php')
+  assert.ok(!inSet(joomlaStand.outsideWorkingSet))
+  assert.ok(joomlaProtectedPaths().some((path) => joomlaStand.outsideWorkingSet.startsWith(path)))
+  // R4: what breaks production only — the preview defines the constant, production does not.
+  for (const build of JOOMLA_BUILDS) {
+    const broken = joomlaStand.breakOnProduction(build)
+    assert.match(broken, /RADITI_PREVIEW_ORIGIN/)
+    assert.match(broken, /^<\?php .* \?>$/)
   }
 })

@@ -408,6 +408,50 @@ function joomlaSignIn(build) {
   }
 }
 
+/**
+ * The template file each branch's release edits (Э3.12): Protostar on 3.x, Cassiopeia since 4.0.
+ * An explicit list, not a search: R1 checks on the tree of the archive that the file is there.
+ */
+export const TEMPLATE_PATHS = Object.freeze({
+  j3: 'templates/protostar/index.php',
+  j4: 'templates/cassiopeia/index.php',
+  j5: 'templates/cassiopeia/index.php',
+  j6: 'templates/cassiopeia/index.php',
+})
+
+/** The line of the template R1 adds and R3 looks for on production. */
+const STACK_MARK = '<p class="stack-mark">Подвал: версия 1</p>'
+
+/**
+ * What a turn of R1 changes (docs/plan/62-slices/e3.md, Э3.12). `template` — the file and the tag
+ * the mark goes right before: `</footer>` of Protostar, `</body>` of Cassiopeia (its footer stands
+ * inside `countModules('footer', true)` and is not drawn without a module). `style` — appended to:
+ * the stylesheet of Protostar, or `user.css` of Cassiopeia, which the supply has not and the
+ * template links itself (`template.user` of its joomla.asset.json) — `created` says the supply has
+ * no such file. `texts` — an override of the texts, a new file: the supply holds only index.html
+ * in `language/overrides/`.
+ */
+function joomlaEdit(build) {
+  const template = TEMPLATE_PATHS[build.generation]
+  if (!template) throw new Error(`No template of the branch ${build.generation}`)
+  const branch3 = isBranch3(build)
+  return {
+    template: { path: template, before: branch3 ? '</footer>' : '</body>', line: STACK_MARK },
+    style: {
+      path: branch3
+        ? 'templates/protostar/css/template.css'
+        : 'media/templates/site/cassiopeia/css/user.css',
+      line: '.stack-mark { color: #1f6f43; }',
+      created: !branch3,
+    },
+    texts: {
+      path: 'language/overrides/en-GB.override.ini',
+      line: 'RADITI_STACK_MARK="Подвал: версия 1"',
+      created: true,
+    },
+  }
+}
+
 /** The configuration of a production: the file the import must never take. */
 const CONFIGURATION = `${ROOT}/configuration.php`
 
@@ -441,8 +485,9 @@ const joomlaManifest = (version) =>
  * later (Э3.3, discrepancy 3); `absentFromRepository` — what it never holds; `secrets` — the values
  * of the configuration that are nowhere on the platform; `factsOf`, `refusedLayout`, `refusedVersion` —
  * the fields of every stack the plan names `StackStandCases` (Э5.8), with the values of Joomla;
- * `scannerFinds` — whether the scanner drops files of the build (Т48). The groups `preview` and
- * `release` add their fields (Э3.11, Э3.12).
+ * `scannerFinds` — whether the scanner drops files of the build (Т48); `copyChecks`, `browserPaths`
+ * and `signIn` — the group `preview` (Э3.11); `edit`, `outsideWorkingSet` and `breakOnProduction` —
+ * the group `release` (Э3.12).
  */
 export const joomlaStand = Object.freeze({
   stack: 'joomla',
@@ -513,4 +558,11 @@ export const joomlaStand = Object.freeze({
   }),
   /** P5: the sign-in to the panel in the cabinet's frame. */
   signIn: joomlaSignIn,
+  /** R1, R6: the template, its style and an override of the texts of the branch. */
+  edit: joomlaEdit,
+  /** R2: a file a turn may not add — the libraries of the core, outside the working set. */
+  outsideWorkingSet: 'libraries/stack-verify.php',
+  /** R4: a call that fails where the preview's constant is not defined — on production only. */
+  breakOnProduction: () =>
+    "<?php if (!defined('RADITI_PREVIEW_ORIGIN')) { raditi_stack_verify_missing(); } ?>",
 })

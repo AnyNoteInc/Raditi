@@ -24,17 +24,49 @@ export const STAND_GROUPS = Object.freeze([
 ])
 
 /**
- * The groups whose scenarios are written. `release` comes with Э3.12, `browser`, `safety` and
- * `safety-browser` with Э8 and Э11: until then a group is never run, so that an empty group never
- * passes as a proof.
+ * The groups whose scenarios are written. `browser`, `safety` and `safety-browser` come with Э8
+ * and Э11: until then a group is never run, so that an empty group never passes as a proof.
  */
-export const WRITTEN_GROUPS = Object.freeze(['import', 'preview'])
+export const WRITTEN_GROUPS = Object.freeze(['import', 'preview', 'release'])
 
 /**
- * The groups a group runs on the results of: `preview` opens the site `import` made (Э3.11).
- * A named group brings these with it.
+ * The groups a group runs on the results of: `preview` opens the site `import` made (Э3.11);
+ * `release` takes that site after `preview` closed its dialog (Э3.12). A named group brings these
+ * with it.
  */
-export const GROUP_NEEDS = Object.freeze({ preview: Object.freeze(['import']) })
+export const GROUP_NEEDS = Object.freeze({
+  preview: Object.freeze(['import']),
+  release: Object.freeze(['import', 'preview']),
+})
+
+/**
+ * The first letter of the rows a written group adds to the final table: `I1 <archive>`,
+ * `P5 <archive> <engine>`, `R6 <archive>`… A group written later adds its letter with its scenarios.
+ */
+export const GROUP_ROWS = Object.freeze({ import: 'I', preview: 'P', release: 'R' })
+
+/**
+ * What the final table of a run lacks: each build of `runs` has, for each of its groups, at least
+ * one row of that group that names its archive and ended. Without it a group dropped by a filter or
+ * a missing call would pass as a shorter table.
+ */
+export function groupRowProblems(runs, rows) {
+  const problems = []
+  for (const { build, groups } of runs)
+    for (const group of groups) {
+      const letter = GROUP_ROWS[group]
+      if (!letter) {
+        problems.push(`the group ${group} has no letter of its rows`)
+        continue
+      }
+      const ran = rows.some((row) => {
+        const [id, ...rest] = row.id.split(' ')
+        return row.ok && id[0] === letter && rest.includes(build.archive)
+      })
+      if (!ran) problems.push(`no row of the group ${group} names ${build.archive}`)
+    }
+  return problems
+}
 
 /**
  * The groups a build runs: `import`, `preview` and `release` always; `browser` when the stand walks
@@ -59,8 +91,13 @@ export function groupsOf(stand, build, support = null) {
  * the three of `StackStandCases` (docs/plan/62-slices/e5.md, Э5.8) the group `import` reads —
  * `factsOf(build)` (what I1 expects in `stack_facts` beside the version, the branch and the limit),
  * `refusedLayout` ({ files, limit }, the tree of I4) and `refusedVersion` ({ files } or null — a
- * stack without `refuseBelow`, and I5 does not run). `signIn` joins with the group `preview`
- * (Э3.11), `edit`, `outsideWorkingSet` and `breakOnProduction` with `release` (Э3.12).
+ * stack without `refuseBelow`, and I5 does not run). `copyChecks`, `browserPaths` and `signIn` —
+ * the group `preview` (Э3.11); `edit(build)` (`{ template, style, texts }`: `template` —
+ * `{ path, before, line }`, the line goes right before the tag; `style` and `texts` —
+ * `{ path, line, created }`, the line is appended, `created` — the supply has no such file; one of
+ * `template` and `style` at least), `outsideWorkingSet` (a path R2 may not add) and
+ * `breakOnProduction(build)` (the line R4 breaks production only with) — the group `release`
+ * (Э3.12).
  * `scannerFinds(build)` is optional: when it says so, I2 requires the scanner to have dropped files.
  */
 export const STAND_FIELDS = Object.freeze({
@@ -78,8 +115,22 @@ export const STAND_FIELDS = Object.freeze({
   copyChecks: 'function',
   browserPaths: 'object',
   signIn: 'function',
+  edit: 'function',
+  outsideWorkingSet: 'string',
+  breakOnProduction: 'function',
 })
 const BUILD = /^[a-z0-9][a-z0-9.-]{0,63}$/
+
+const RELATIVE_PATH = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/
+
+/** An edit of R1: a template with its tag or a style, and every part named by a relative path. */
+function editIsWhole(edit) {
+  const named = (part) => RELATIVE_PATH.test(part?.path ?? '') && typeof part.line === 'string'
+  const { template = null, style = null, texts = null } = edit ?? {}
+  if (template === null && style === null) return false
+  if (template !== null && !(named(template) && typeof template.before === 'string')) return false
+  return [style, texts].every((part) => part === null || named(part))
+}
 
 const fits = (value, type) =>
   type === 'object or null' ? typeof value === 'object' : typeof value === type && value !== null
@@ -136,7 +187,16 @@ export function standProblems(stand, archives = CMS_ARCHIVES) {
       typeof sign.setPassword !== 'function'
     )
       problems.push(`${build.archive}: signIn is not whole`)
+    // What a turn edits is a fact of the branch: a build that names none is reported above.
+    if (typeof build.generation !== 'string') continue
+    if (!editIsWhole(stand.edit(build)))
+      problems.push(`${build.archive}: edit names no template and no style`)
+    const broken = stand.breakOnProduction(build)
+    if (typeof broken !== 'string' || broken.trim() === '' || /\n/.test(broken))
+      problems.push(`${build.archive}: breakOnProduction is no line`)
   }
+  if (!RELATIVE_PATH.test(stand.outsideWorkingSet))
+    problems.push('outsideWorkingSet: no relative path')
   return problems
 }
 

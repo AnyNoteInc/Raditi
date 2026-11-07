@@ -86,7 +86,7 @@ function previewSql(rt, previewId) {
  * makes it the session cookie, then the pages — every request to the gateway on the loopback with
  * the preview's own Host.
  */
-async function previewVisit(rt, ctx, taskId, paths) {
+export async function previewVisit(rt, ctx, taskId, paths) {
   const { url } = await ctx.owner.mutate('preview.ticket', { taskId })
   const entry = new URL(url)
   const gateway = (path) => `http://127.0.0.1:${ctx.ports.preview}${path}`
@@ -344,6 +344,28 @@ async function signInInFrame(rt, ctx, entry, { engine, forwarder, login, passwor
   rt.end()
 }
 
+/** Every container, volume and network Docker holds with the labels of core for a site. */
+export async function dockerOfSite(rt, siteId) {
+  const left = []
+  for (const label of [
+    'io.raditi.preview.site',
+    'io.raditi.sandbox.siteId',
+    'io.raditi.gateway.siteId',
+  ])
+    for (const kind of [
+      ['ps', '-aq'],
+      ['volume', 'ls', '-q'],
+      ['network', 'ls', '-q'],
+    ])
+      left.push(
+        ...(await rt.docker([...kind, '--filter', `label=${label}=${siteId}`])).output
+          .split('\n')
+          .filter(Boolean)
+          .map((id) => `${kind[0]} ${id}`),
+      )
+  return left
+}
+
 /**
  * The dialog of a build closed by `/cancel`, as the owner closes one: core destroys its preview and
  * the browser of its agent, and Docker holds nothing with the labels of the site — the stand never
@@ -362,26 +384,7 @@ async function closeDialog(rt, ctx, entry) {
       })) === 0,
     { timeoutMs: 5 * MINUTE, intervalMs: 1000, service: ctx.processes.core },
   )
-  const leftOfSite = async () => {
-    const left = []
-    for (const label of [
-      'io.raditi.preview.site',
-      'io.raditi.sandbox.siteId',
-      'io.raditi.gateway.siteId',
-    ])
-      for (const kind of [
-        ['ps', '-aq'],
-        ['volume', 'ls', '-q'],
-        ['network', 'ls', '-q'],
-      ])
-        left.push(
-          ...(await rt.docker([...kind, '--filter', `label=${label}=${siteId}`])).output
-            .split('\n')
-            .filter(Boolean)
-            .map((id) => `${kind[0]} ${id}`),
-        )
-    return left
-  }
+  const leftOfSite = () => dockerOfSite(rt, siteId)
   const left = await rt
     .until(
       'Docker holds nothing of the site',
