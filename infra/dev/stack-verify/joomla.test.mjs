@@ -1,0 +1,135 @@
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { test } from 'node:test'
+
+import {
+  installJoomla,
+  JOOMLA_BUILDS,
+  JOOMLA_CANARIES,
+  JOOMLA_CONFIG_CANARIES,
+  JOOMLA_INSTALLATION_MARKER,
+  JOOMLA_SEED,
+  joomlaIndexerArgv,
+  joomlaSeedSql,
+  withProperty,
+} from './joomla.mjs'
+
+const j6 = { archive: 'joomla-6.2.0', php: '8.3', generation: 'j6', version: '6.2.0' }
+const j3 = JOOMLA_BUILDS.find((build) => build.generation === 'j3')
+
+test('the seed of 3.x has no workflow, that of 6.x has its row', () => {
+  assert.ok(j3, 'a build of 3.x is in the list')
+  const old = joomlaSeedSql('jos_', j3)
+  const recent = joomlaSeedSql('jos_', j6)
+  assert.doesNotMatch(old, /workflow_associations/)
+  assert.match(recent, /INSERT INTO `jos_workflow_associations`/)
+  // 3.x has no nested set of taxonomy; 4.0 and later have one.
+  assert.doesNotMatch(old, /`jos_finder_taxonomy` \(parent_id, lft/)
+  assert.match(recent, /`jos_finder_taxonomy` \(parent_id, lft/)
+  // Every table is named with the prefix it was given.
+  assert.doesNotMatch(joomlaSeedSql('x1_', j3), /`jos_/)
+})
+
+test('every canary is in the seed, and the seed names the article, its menu item and the draft', () => {
+  for (const build of [j3, j6]) {
+    const seed = joomlaSeedSql('jos_', build)
+    for (const value of JOOMLA_CANARIES)
+      assert.ok(seed.includes(value.replaceAll("'", "''")), `${build.generation}: ${value}`)
+    assert.ok(seed.includes(`'${JOOMLA_SEED.articleAlias}'`))
+    assert.ok(
+      seed.includes(`index.php?option=com_content&view=article&id=${JOOMLA_SEED.articleId}`),
+    )
+    assert.match(seed, /dlid=/)
+    assert.match(seed, /'joomlatoken\.token'/)
+    assert.match(seed, /'com_users\.user'/)
+    assert.match(seed, /INSERT INTO `jos_session` /)
+    // The full text is the article's alone: the draft has none.
+    assert.equal(seed.split(JOOMLA_SEED.articleFullText).length, 2)
+  }
+  assert.equal(new Set(JOOMLA_CANARIES).size, JOOMLA_CANARIES.length)
+})
+
+test('every build names a row of the table with its PHP', () => {
+  const table = JSON.parse(readFileSync(new URL('./cms-archives.json', import.meta.url), 'utf8'))
+  for (const build of JOOMLA_BUILDS) {
+    assert.equal(table[build.archive]?.stack, 'joomla', build.archive)
+    assert.equal(table[build.archive].php, build.php, build.archive)
+    assert.ok(table[build.archive].url.includes(`/${build.version}/`), build.archive)
+  }
+})
+
+test('a property of the configuration is set once, as a string of PHP', () => {
+  const text =
+    "<?php\nclass JConfig {\n\tpublic $sef = '1';\n\tpublic $sef_rewrite = '0';\n\tpublic $secret = 'x'; // c\n}\n"
+  const changed = withProperty(withProperty(text, 'sef_rewrite', '1'), 'secret', "a'b\\$1")
+  assert.match(changed, /public \$sef = '1';/)
+  assert.match(changed, /public \$sef_rewrite = '1';/)
+  assert.ok(changed.includes("public $secret = 'a\\'b\\\\$1'; // c"))
+  assert.throws(() => withProperty(text, 'smtppass', 'x'), /0 times/)
+})
+
+test('the install of 3.10 loads the schema and writes a configuration with the marks', async () => {
+  const calls = []
+  const files = {
+    '/prod-secrets/db': 'StandPassword123\n',
+    '/var/www/html/installation/sql/mysql/joomla.sql': 'CREATE TABLE `#__users` (id int);\n',
+    '/var/www/html/installation/configuration.php-dist': [
+      '<?php',
+      'class JConfig {',
+      "\tpublic $host = 'localhost';",
+      "\tpublic $user = '';",
+      "\tpublic $password = '';",
+      "\tpublic $db = '';",
+      "\tpublic $dbprefix = 'jos_';",
+      "\tpublic $sitename = 'Joomla!';",
+      "\tpublic $live_site = '';",
+      "\tpublic $secret = 'FBVtggIk5lAzEU9H';",
+      "\tpublic $smtppass = '';",
+      "\tpublic $sef_rewrite = '0';",
+      "\tpublic $tmp_path = '/tmp';",
+      "\tpublic $log_path = '/administrator/logs';",
+      '}',
+    ].join('\n'),
+  }
+  const production = {
+    exec: async (argv, input) => {
+      calls.push({ argv, input })
+      return argv[0] === 'cat' ? files[argv[1]] : ''
+    },
+    sql: async (query) => {
+      calls.push({ sql: query })
+      return ''
+    },
+  }
+  await assert.rejects(installJoomla(production, j3), /productionOrigin/)
+  await assert.rejects(
+    installJoomla(production, j3, { productionOrigin: 'https://prod.example.ru/path' }),
+    /productionOrigin/,
+  )
+  calls.length = 0
+  await installJoomla(production, j3, { productionOrigin: 'https://prod.example.ru' })
+  assert.deepEqual(
+    calls.filter((call) => call.sql).map((call) => call.sql),
+    ['CREATE TABLE `jos_users` (id int);\n'],
+  )
+  const written = calls.find((call) => call.input !== undefined)
+  assert.deepEqual(written.argv, ['sh', '-c', 'cat > /var/www/html/configuration.php'])
+  assert.match(written.input, /public \$password = 'StandPassword123';/)
+  assert.match(written.input, /public \$sef_rewrite = '1';/)
+  assert.ok(written.input.includes(`public $smtppass = '${JOOMLA_CONFIG_CANARIES.smtppass}';`))
+  assert.ok(written.input.includes(`public $secret = '${JOOMLA_CONFIG_CANARIES.secret}';`))
+  // The production names itself, where a broken preview would show it.
+  assert.ok(written.input.includes("public $live_site = 'https://prod.example.ru';"))
+  // installation/ goes but for one harmless file, which the import rules must drop.
+  assert.match(calls.at(-1).argv[2], /rm -rf installation && mkdir installation &&/)
+  assert.ok(calls.at(-1).argv[2].includes(`> ${JOOMLA_INSTALLATION_MARKER} &&`))
+  assert.match(JOOMLA_INSTALLATION_MARKER, /^installation\/[a-z-]+\.txt$/)
+  assert.match(calls.at(-1).argv[2], /cp htaccess\.txt \.htaccess/)
+  // The password is never part of an argument.
+  assert.ok(calls.every((call) => !(call.argv ?? []).join(' ').includes('StandPassword123')))
+})
+
+test('the indexer is the script of 3.x and the console of 4.0 and later', () => {
+  assert.deepEqual(joomlaIndexerArgv(j3), ['php', '/var/www/html/cli/finder_indexer.php'])
+  assert.deepEqual(joomlaIndexerArgv(j6), ['php', '/var/www/html/cli/joomla.php', 'finder:index'])
+})

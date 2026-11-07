@@ -1,0 +1,126 @@
+name: Site stacks
+
+# М2 of the site stacks (docs/plan/62-site-stacks.md, §5.5; docs/plan/62-slices/e3.md, Э3.8): each
+# stack of the matrix — every stack with a suite apps/core/src/previews/<stack>-preview.integration.test.ts
+# — on the real releases of its CMS, downloaded by sha256 from cms-archives.json into the
+# temporary folder of the runner on every run (never a cache, an artifact or an image), installed on
+# a synthetic production and run as a preview by its adapter, the real copier and the real runtime
+# of previews, under runc. Only synthetic data; no repository secrets.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/site-stacks.yml
+      - .github/actions/setup/**
+      - infra/preview/**
+      - infra/joomla/**
+      - infra/dev/stack-verify/**
+      - packages/site-adapters/src/joomla/**
+      - packages/site-adapters/src/php/**
+      # What the adapters of the matrix import outside their own folder (infra/app/ci.test.mjs
+      # checks it), and what the harness of М2 runs besides the folders above.
+      - packages/site-adapters/src/php-config.ts
+      - packages/site-adapters/src/php-hosting.ts
+      - packages/site-adapters/src/no-browser-tasks.ts
+      - packages/site-content/src/**
+      - packages/domain/src/site-connection/import-policy.ts
+      - apps/core/src/site-provisioning/stack-reading.ts
+      - apps/core/src/git-workspace/tree-tar.ts
+      - infra/sandbox/Dockerfile
+      - infra/dev/preview-verify/verify-site-images.mjs
+      - packages/site-connections/src/database-copy/**
+      - packages/sandbox-providers/src/preview/**
+      - apps/core/src/previews/**
+      - apps/core/src/testing/stack-preview.ts
+      - packages/domain/src/preview/**
+  workflow_dispatch:
+
+concurrency:
+  group: site-stacks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    name: Preview of ${{ matrix.stack }}
+    runs-on: ubuntu-latest
+    # A first value, not a measurement: after the first run on every build of the stacks it becomes
+    # the measured time plus half.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: [joomla]
+    env:
+      # The engine of the sandbox VM (spec §8), as in preview.yml.
+      SANDBOX_DOCKER_VERSION: 29.5.2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup toolchain
+        uses: ./.github/actions/setup
+      - name: Docker Engine of the sandbox VM
+        run: |
+          key=$(mktemp)
+          curl -fsSL --retry 3 https://download.docker.com/linux/ubuntu/gpg -o "$key"
+          fingerprint=$(gpg --show-keys --with-colons "$key" | awk -F: '$1 == "fpr" { print $10; exit }')
+          if [ "$fingerprint" != 9DC858229FC7DD38854AE2D88D81803C0EBFCD88 ]; then
+            echo "Unexpected fingerprint of the key of Docker's repository: $fingerprint" >&2
+            exit 1
+          fi
+          sudo install -D -m 0644 "$key" /etc/apt/keyrings/docker.asc
+          codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $codename stable" \
+            | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+          sudo apt-get -q -o Acquire::Retries=3 update
+          package=$(apt-cache madison docker-ce | awk '{ print $3 }' \
+            | grep -F ":$SANDBOX_DOCKER_VERSION-" | head -n 1)
+          if [ -z "$package" ]; then
+            echo "Docker's repository has no docker-ce $SANDBOX_DOCKER_VERSION for $codename" >&2
+            exit 1
+          fi
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get -q -y -o Acquire::Retries=3 install \
+            --no-install-recommends --allow-downgrades --allow-change-held-packages \
+            "docker-ce=$package" "docker-ce-cli=$package"
+      # The runtime takes images pinned by digest only, and a local build has a repository digest
+      # only in the containerd image store.
+      - name: Docker with the containerd image store
+        run: |
+          daemon=/etc/docker/daemon.json
+          current=$(sudo cat "$daemon" 2>/dev/null || echo '{}')
+          printf '%s' "$current" \
+            | jq '.features = ((.features // {}) + {"containerd-snapshotter": true})' \
+            | sudo tee "$daemon" >/dev/null
+          sudo systemctl restart docker
+          docker info --format '{{.DriverStatus}}' | grep -q io.containerd.snapshotter
+          test "$(docker version --format '{{.Server.Version}}')" = "$SANDBOX_DOCKER_VERSION"
+      # Only the `site` images of the PHP versions of this stack's builds, without the probes of
+      # site-images.yml: `raditi-site-verify:<version>`.
+      - name: Build the site images of the stack
+        run: >-
+          pnpm verify:site-images -- --build-only
+          --only "$(node infra/dev/stack-verify/fetch-cms.mjs --php=${{ matrix.stack }})"
+      - name: Build the tools and the rules of the host
+        run: |
+          docker build -q -f infra/preview/Dockerfile --target tools \
+            -t raditi-preview-tools:local infra/preview
+          docker build -q -f infra/sandbox/Dockerfile --target network-guard \
+            -t raditi-network-guard:local .
+      # The releases of the stack, checked by sha256 before they are unpacked; unpacked only, they
+      # run in the containers of the suite.
+      - name: Download the releases of the stack
+        env:
+          RADITI_CMS_DIR: ${{ runner.temp }}/raditi-cms
+        run: node infra/dev/stack-verify/fetch-cms.mjs --stack=${{ matrix.stack }}
+      - name: Generate the database client
+        run: pnpm db:generate
+      - name: Preview of every build of the stack
+        env:
+          RADITI_PREVIEW_DOCKER_TESTS: '1'
+          RADITI_CMS_DIR: ${{ runner.temp }}/raditi-cms
+        run: |
+          pnpm --filter core exec vitest run --testTimeout=600000 \
+            src/previews/${{ matrix.stack }}-preview.integration.test.ts

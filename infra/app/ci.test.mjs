@@ -252,8 +252,36 @@ const workflows = readdirSync(join(root, '.github/workflows'))
 const sets = (source, variable) =>
   new RegExp(`^ +${variable}: \\S|\\b${variable}=`, 'm').test(source)
 /**
+ * The values of the matrix of a job (or of a workflow of one job), as the workflows write them: one
+ * line `key: [a, b]` under `matrix:`, a value quoted or not.
+ */
+function matrixOf(text) {
+  const block = /^ {6}matrix:\n((?: {8}.*\n)+)/m.exec(text)?.[1] ?? ''
+  return Object.fromEntries(
+    [...block.matchAll(/^ {8}([\w-]+): \[(.*)\]$/gm)].map(([, key, list]) => [
+      key,
+      list
+        .split(',')
+        .map((value) => value.trim().replace(/^(['"])(.*)\1$/, '$2'))
+        .filter(Boolean),
+    ]),
+  )
+}
+/** A text with every `${{ matrix.<key> }}` written out, once for each combination of the matrix. */
+function expandMatrix(text, matrix) {
+  let texts = [text]
+  for (const [key, values] of Object.entries(matrix)) {
+    const expression = new RegExp(`\\$\\{\\{ *matrix\\.${key} *\\}\\}`, 'g')
+    if (!texts.some((each) => each.match(expression))) continue
+    texts = texts.flatMap((each) => values.map((value) => each.replace(expression, value)))
+  }
+  return texts
+}
+/**
  * Whether one step of a workflow runs a test file with its variables set, by the step itself or by
  * the job or the workflow around it. Comment lines run nothing, and neither does the step's name.
+ * An expression of the matrix in the step is written out for each value of the job's matrix: a
+ * step runs the file of every value (docs/plan/62-slices/e3.md, Э3.8).
  */
 function runsSuite(source, path, variables) {
   const live = source
@@ -275,7 +303,10 @@ function runsSuite(source, path, variables) {
         .some((step) => {
           const run = /^(?: {8})?run: (.*(?:\n(?: {9,}.*)?)*)/m.exec(step)?.[1] ?? ''
           const inherited = `${head}\n${around}\n${step}`
-          return run.includes(path) && variables.every((name) => sets(inherited, name))
+          return (
+            expandMatrix(run, matrixOf(`${around}\n`)).some((each) => each.includes(path)) &&
+            variables.every((name) => sets(inherited, name))
+          )
         })
     })
 }
@@ -546,6 +577,17 @@ test('a suite counts as run only by a step that names it and sets its variable',
   // A name or a variable alone runs nothing.
   assert.equal(runs({ steps: `      - name: ${file}\n${on}        run: pnpm other\n` }), false)
   assert.equal(runs({ steps: `      - name: Suite\n        run: ${command}\n` }), false)
+  // An expression of the matrix runs the file of each of its values, and of nothing else.
+  const each = (values) => ({
+    around: `    strategy:\n      matrix:\n        part: [${values}]\n`,
+    steps: `      - name: Suite\n${on}        run: pnpm --filter sample exec vitest run src/\${{ matrix.part }}.integration.test.ts\n`,
+  })
+  const parts = (values, name) =>
+    runsSuite(sample(each(values)), `src/${name}.integration.test.ts`, [variable])
+  assert.equal(parts('sample', 'sample'), true)
+  assert.equal(parts("other, 'sample'", 'sample'), true)
+  assert.equal(parts('other', 'sample'), false)
+  assert.equal(matrixOf(each("'7.4', 8.0").around).part.join(' '), '7.4 8.0')
 })
 
 test('the images the suites of previews run by tag are pulled at a pinned digest', () => {
@@ -695,6 +737,88 @@ test('site-images.yml builds every PHP version of the table and sends nothing an
   for (const file of stand) assert.ok(starts(filter, file), `${file} does not start the workflow`)
   for (const file of copied('infra/sandbox/Dockerfile', 'network-guard'))
     assert.ok(starts(filter, file), `${file} (network-guard) does not start the workflow`)
+})
+
+/**
+ * The files outside `folder` that its code (not its tests) imports by a relative path, followed
+ * through every file found, in the order found.
+ */
+function importedOutside(folder) {
+  const code = (file) => file.endsWith('.ts') && !/\.test\.ts$|\/fixtures\.ts$/.test(file)
+  const queue = readdirSync(join(root, folder), { recursive: true })
+    .map((name) => `${folder}/${name}`)
+    .filter(code)
+  const seen = new Set(queue)
+  const outside = []
+  while (queue.length > 0) {
+    const file = queue.shift()
+    for (const [, specifier] of read(file).matchAll(/\bfrom '(\.\.?\/[^']+)'/g)) {
+      const target = relative(root, join(root, dirname(file), specifier))
+      if (seen.has(target)) continue
+      seen.add(target)
+      assert.ok(existsSync(join(root, target)), `${file} imports ${specifier}, which is not there`)
+      if (!target.startsWith(`${folder}/`)) outside.push(target)
+      queue.push(target)
+    }
+  }
+  return outside
+}
+
+// The closed vendor of plan 62, in parts: this file would otherwise name it to itself.
+const closedVendor = new RegExp(['bit', 'rix'].join(''), 'i')
+
+test('site-stacks.yml runs М2 of every stack that has its suite, on archives of the run only', () => {
+  // docs/plan/62-slices/e3.md, Э3.8: the matrix is read from the folder of the suites, no stack is
+  // named here; each value starts the workflow by the files of its stack and runs its own file.
+  const source = workflow('site-stacks')
+  const suites = readdirSync(join(root, 'apps/core/src/previews'))
+    .map((name) => /^([a-z0-9]+)-preview\.integration\.test\.ts$/.exec(name)?.[1])
+    .filter(Boolean)
+    .toSorted()
+  assert.ok(suites.length > 0, 'a suite of a stack is found')
+  const stacks = matrixOf(source).stack ?? []
+  assert.deepEqual(stacks.toSorted(), suites)
+  const filter = pathFilter(source)
+  for (const stack of stacks) {
+    assert.ok(filter.includes(`infra/${stack}/**`), `the filter does not name infra/${stack}/**`)
+    assert.ok(
+      filter.includes(`packages/site-adapters/src/${stack}/**`),
+      `the filter does not name packages/site-adapters/src/${stack}/**`,
+    )
+    // What the adapter imports outside its folder, followed through those files: a change there
+    // changes the adapter, so it starts the workflow as well.
+    for (const file of importedOutside(`packages/site-adapters/src/${stack}`))
+      assert.ok(
+        starts(filter, file),
+        `${file}, imported by the adapter of ${stack}, does not start the workflow`,
+      )
+    assert.ok(
+      runsSuite(source, `src/previews/${stack}-preview.integration.test.ts`, [
+        'RADITI_PREVIEW_DOCKER_TESTS',
+        'RADITI_CMS_DIR',
+      ]),
+      `no step runs the suite of ${stack}`,
+    )
+  }
+  // The archives live in the temporary folder of the runner: no cache, artifact or image keeps them.
+  assert.match(source, /^ +RADITI_CMS_DIR: \$\{\{ runner\.temp \}\}\/raditi-cms$/m)
+  assert.doesNotMatch(source, /actions\/cache|upload-artifact|docker push/)
+  assert.match(
+    source,
+    /node infra\/dev\/stack-verify\/fetch-cms\.mjs --stack=\$\{\{ matrix\.stack \}\}/,
+  )
+  assert.doesNotMatch(source, closedVendor)
+})
+
+test('no file of the stands of the site stacks names the closed vendor but their README', () => {
+  // The core of that CMS is never fetched, unpacked or run here (plan 62): a table of archives,
+  // a stand or a fixture that names it is refused before it is used.
+  const folder = 'infra/dev/stack-verify'
+  const files = readdirSync(join(root, folder), { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name !== 'README.md')
+    .map((entry) => relative(root, join(entry.parentPath, entry.name)))
+  assert.ok(files.includes(`${folder}/cms-archives.json`), 'the files of the stand are read')
+  for (const file of files) assert.doesNotMatch(read(file), closedVendor, file)
 })
 
 test('CI runs the Docker isolation suites of the sandbox provider on a real daemon', () => {
@@ -1073,14 +1197,28 @@ test('a cached test run sees a change of a file its tests read outside their pac
     'packages/site-connections/src/database-copy/wordpress-policy.fixture.json': [
       'packages/site-adapters/src/wordpress-db-copy.test.ts',
     ],
+    // The stand of Joomla and the table of the archives of the CMS, against the suite of М2 and
+    // its harness (docs/plan/62-slices/e3.md, Э3.8); the inputs name the folder of the stand and
+    // every folder under it.
+    'infra/dev/stack-verify/joomla.mjs': [
+      'apps/core/src/previews/joomla-preview.integration.test.ts',
+    ],
+    'infra/dev/stack-verify/cms-archives.json': ['apps/core/src/testing/stack-preview.ts'],
+    // The files of the production container the harness copies (`**` takes the folder prod/).
+    'infra/dev/stack-verify/prod/entry.sh': ['apps/core/src/testing/stack-preview.ts'],
+    'infra/dev/stack-verify/prod/apache.conf': ['apps/core/src/testing/stack-preview.ts'],
     // The token command of the runner image (the runbook issues it on the sandbox VM), against
     // the RUNNER_TOKENS entries core accepts.
     'apps/runner/scripts/runner-token.mjs': ['apps/core/src/runner-api/runner-auth.test.ts'],
     // The llm service of the app VM's compose against the one extra CA the production role takes.
     'infra/app/docker-compose.yml': ['apps/llm/src/config/llm-config.contract.test.ts'],
   }
+  // An input names the file itself or a pattern of its folder (`*` does not cross a folder, `**` does).
+  const root$ = '$TURBO_ROOT$/'
+  const isInput = (file) =>
+    inputs.some((input) => input.startsWith(root$) && starts([input.slice(root$.length)], file))
   for (const [file, readers] of Object.entries(outside)) {
-    assert.ok(inputs.includes(`$TURBO_ROOT$/${file}`), `${file} is not an input of test`)
+    assert.ok(isInput(file), `${file} is not an input of test`)
     for (const reader of readers)
       assert.ok(
         read(reader).includes(`'${relative(dirname(reader), file)}'`),
