@@ -123,6 +123,27 @@ export interface SiteHttpResponse {
    * check of a release follows a redirect within the site); absent otherwise.
    */
   location?: string
+  /**
+   * `X-Powered-By` as the site sent it, on any status (plan 62, Т18: the first guess at the
+   * site's PHP). Untrusted: absent when the site sent none or the value does not pass
+   * `poweredByOf`. A header the site repeats reaches both transports as one string joined with
+   * ", " (Node and fetch join it so), e.g. `PleskLin, PHP/7.4.33`, and is kept whole when it
+   * passes the rule: a reader looks for `PHP/` in every part, not only at the start.
+   */
+  poweredBy?: string
+}
+
+const poweredByLimit = 128
+
+/**
+ * A header value the platform may keep as `poweredBy`: one string of printable ASCII, at most
+ * 128 characters, nothing empty; anything else is undefined. An array (the type Node gives some
+ * headers) is not a string either; the transports never pass one for `X-Powered-By`.
+ */
+export function poweredByOf(value: string | string[] | null | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined
+  if (value.length === 0 || value.length > poweredByLimit) return undefined
+  return /^[\x20-\x7e]+$/.test(value) ? value : undefined
 }
 
 /** The composition root owns it: the place that decides which addresses a site may resolve to. */

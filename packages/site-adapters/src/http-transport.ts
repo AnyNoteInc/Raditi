@@ -1,4 +1,4 @@
-import type { SiteHttpTransport } from '@repo/domain'
+import { poweredByOf, type SiteHttpTransport } from '@repo/domain'
 
 /**
  * The plain transport of a site adapter: global fetch by the site's name, one request, no
@@ -13,7 +13,10 @@ export const fetchSiteTransport: SiteHttpTransport = async (request) => {
     headers: { ...request.headers },
     ...(request.body === undefined ? {} : { body: request.body }),
   })
-  if (!response.body) return { status: response.status, body: new Uint8Array() }
+  const poweredBy = poweredByOf(response.headers.get('x-powered-by'))
+  // An untrusted header: kept only when the rule of the port lets it through.
+  const header = poweredBy === undefined ? {} : { poweredBy }
+  if (!response.body) return { status: response.status, body: new Uint8Array(), ...header }
   const chunks: Uint8Array[] = []
   let size = 0
   for await (const chunk of response.body) {
@@ -25,5 +28,5 @@ export const fetchSiteTransport: SiteHttpTransport = async (request) => {
     }
     chunks.push(chunk)
   }
-  return { status: response.status, body: Buffer.concat(chunks) }
+  return { status: response.status, body: Buffer.concat(chunks), ...header }
 }

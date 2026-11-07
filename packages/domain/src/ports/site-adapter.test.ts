@@ -3,6 +3,7 @@ import { z } from 'zod'
 
 import type { PublishedContentGateway } from './published-content.ts'
 import {
+  poweredByOf,
   siteAccessKinds,
   siteAccessPath,
   type SiteContentAdapter,
@@ -63,5 +64,32 @@ describe('SiteContentAdapter', () => {
     expect(neutral.accessSchema.safeParse({ origin: 'https://site.example.test' }).success).toBe(
       false,
     )
+  })
+})
+
+describe('poweredByOf', () => {
+  it('keeps a short line of printable ASCII as it is', () => {
+    expect(poweredByOf('PHP/7.4.33')).toBe('PHP/7.4.33')
+    expect(poweredByOf('P'.repeat(128))).toBe('P'.repeat(128))
+  })
+
+  it('keeps a header the site repeated, which the transports join with ", "', () => {
+    expect(poweredByOf('PleskLin, PHP/7.4.33')).toBe('PleskLin, PHP/7.4.33')
+  })
+
+  it('gives nothing for a missing value, a list, a long or an unprintable value', () => {
+    for (const value of [
+      undefined,
+      null,
+      '',
+      ['PHP/7.4.33'],
+      ['PHP/7.4.33', 'PleskLin'],
+      'P'.repeat(129),
+      'PHP/7.4\t33',
+      'PHP/7.4\n33',
+      'PHP/7.4\u007f',
+      'PHP/7.4 — сайт',
+    ])
+      expect(poweredByOf(value)).toBeUndefined()
   })
 })
