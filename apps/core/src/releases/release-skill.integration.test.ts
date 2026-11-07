@@ -548,6 +548,13 @@ describe.skipIf(!enabled)('the release skill with PostgreSQL', () => {
         await refused(await world({ candidatePath }), 'forbidden_path', 'technical')
     })
 
+    it('when the candidate changes a path outside the working set that no rule protects (rule 6)', async () => {
+      // Publication refuses such a path (`assertCandidatePath`); a head of `agent/<taskId>` someone
+      // else moved would carry it past: the second line reads the working set too (Э3.4).
+      for (const candidatePath of ['robots.txt', 'cgi-bin/script.pl'])
+        await refused(await world({ candidatePath }), 'forbidden_path', 'technical')
+    })
+
     it('when the candidate adds media a protected pattern at any depth names (rule 6)', async () => {
       // Under the add-only folder the patterns at any depth still hold (owner, 19.10.2026);
       // a folder of the library outside it is no media of a candidate at all.
@@ -568,9 +575,50 @@ describe.skipIf(!enabled)('the release skill with PostgreSQL', () => {
           dbOperationKinds: (site) => real.dbOperationKinds(site),
           dbSettings: (site) => real.dbSettings(site),
           protectedPaths: (site) => real.protectedPaths(site),
+          agentWorkingSet: (site) => real.agentWorkingSet(site),
           mediaRules: () => {
             throw notImplemented('Media rules of the stack')
           },
+        }
+      }
+      await refused(await world({ adapter }), 'forbidden_path', 'technical')
+    })
+
+    it('when the candidate changes a file under an add-only folder no rule protects (rule 6)', async () => {
+      // Publication only adds media there (`assertCandidateChange`), and media is no file of a
+      // candidate: a stack whose add-only folder lies outside its protected paths must not let a
+      // moved head replace or delete a file in it (Э3.4).
+      const adapter: ReleaseSkillDependencies['adapter'] = (stack) => {
+        const real = getSiteAdapter(stack)
+        return {
+          dbOperationKinds: (site) => real.dbOperationKinds(site),
+          dbSettings: (site) => real.dbSettings(site),
+          protectedPaths: (site) =>
+            real.protectedPaths(site).filter((path) => path !== 'wp-content/uploads/'),
+          agentWorkingSet: (site) => real.agentWorkingSet(site),
+          mediaRules: (site) => real.mediaRules(site),
+        }
+      }
+      await refused(
+        await world({ adapter, candidatePath: 'wp-content/uploads/raditi/a.png' }),
+        'forbidden_path',
+        'technical',
+      )
+    })
+
+    it('when the stack does not say its working set (Т8, rule 5)', async () => {
+      // A stack with files must declare a working set (plan 62, question 11): without one the
+      // second line cannot read what publication allowed, and the release is refused.
+      const adapter: ReleaseSkillDependencies['adapter'] = (stack) => {
+        const real = getSiteAdapter(stack)
+        return {
+          dbOperationKinds: (site) => real.dbOperationKinds(site),
+          dbSettings: (site) => real.dbSettings(site),
+          protectedPaths: (site) => real.protectedPaths(site),
+          agentWorkingSet: () => {
+            throw notImplemented('Working set of the stack')
+          },
+          mediaRules: (site) => real.mediaRules(site),
         }
       }
       await refused(await world({ adapter }), 'forbidden_path', 'technical')

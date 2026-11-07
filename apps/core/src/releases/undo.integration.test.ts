@@ -604,9 +604,41 @@ describe.skipIf(!enabled)('«Отменить выпуск» with PostgreSQL', (
           dbOperationKinds: (site) => real.dbOperationKinds(site),
           dbSettings: (site) => real.dbSettings(site),
           protectedPaths: (site) => real.protectedPaths(site),
+          agentWorkingSet: (site) => real.agentWorkingSet(site),
           mediaRules: () => {
             throw notImplemented('Media rules of the stack')
           },
+        }
+      },
+    })
+    const main = w.git.main
+    await advance({ ...w, skill }, undoId)
+    expect(await release(undoId)).toMatchObject({
+      status: 'failed',
+      errorCode: 'forbidden_path',
+      mainPushedAt: null,
+    })
+    expect(w.git.main).toBe(main)
+    expect(await taskStatus(w)).toBe('done')
+  })
+
+  it('refuses the commit of an undo before `main` moves when the stack does not say its working set (Т8)', async () => {
+    const w = await installed()
+    const planRow = await planOf(w)
+    const undoId = await confirmed(w, planRow.id)
+    // The same core, whose adapter no longer answers `agentWorkingSet`: a stack with files must
+    // declare one (plan 62, question 11), and the rules of the undo are unknown without it.
+    const skill = skillOf(w, {
+      adapter: (stack) => {
+        const real = getSiteAdapter(stack)
+        return {
+          dbOperationKinds: (site) => real.dbOperationKinds(site),
+          dbSettings: (site) => real.dbSettings(site),
+          protectedPaths: (site) => real.protectedPaths(site),
+          agentWorkingSet: () => {
+            throw notImplemented('Working set of the stack')
+          },
+          mediaRules: (site) => real.mediaRules(site),
         }
       },
     })

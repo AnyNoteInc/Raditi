@@ -18,7 +18,8 @@ import {
 } from '@repo/domain'
 import { z } from 'zod'
 
-import { isUploadDenied, segmentsOf } from './wordpress-browser.ts'
+import { segmentsOf } from './php/media.ts'
+import { isUploadDenied } from './wordpress-browser.ts'
 import { adminScriptPath, isAdminUrlDenied, isRestRouteDenied } from './wordpress-mcp-policy.ts'
 
 /**
