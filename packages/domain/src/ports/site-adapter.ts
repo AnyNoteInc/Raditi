@@ -240,6 +240,10 @@ export interface SiteDriftProbe {
 
 /** One public page of the site as the wizard read it: its path below the origin and its text. */
 export interface PublicPage {
+  /**
+   * The path the wizard asked for, not where a redirect within the site led: `GET /` gives `/` after
+   * a redirect to `/ru/` too. Adapters judge «the home page» and their own addresses by it.
+   */
   path: string
   html: string
 }
