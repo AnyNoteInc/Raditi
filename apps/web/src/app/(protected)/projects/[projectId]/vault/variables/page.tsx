@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 
 import { ServiceUnavailable } from '@/components/layout/service-unavailable'
+import { TabContent } from '@/components/site/site-section'
 import { UNAVAILABLE } from '@/lib/access'
 
 import { variablesBlock } from '../blocks'
@@ -8,6 +9,6 @@ import { variablesBlock } from '../blocks'
 export const metadata: Metadata = { title: 'Переменные окружения' }
 
 export default async function Page({ params }: { params: Promise<{ projectId: string }> }) {
-  const block = await variablesBlock((await params).projectId)
-  return block === UNAVAILABLE ? <ServiceUnavailable /> : block
+  const block = await variablesBlock((await params).projectId, true)
+  return block === UNAVAILABLE ? <ServiceUnavailable /> : <TabContent>{block}</TabContent>
 }

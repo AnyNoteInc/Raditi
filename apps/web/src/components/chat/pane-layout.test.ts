@@ -12,10 +12,10 @@ describe('the width of the panel beside a chat', () => {
   })
 
   it('keeps the panel and the chat beside it within their minimums', () => {
-    // 72 (rail) + 64 (paddings) + 360 (the chat) = 496 px are left to the rest.
-    expect(clampPaneWidth(2000, 1440)).toBe(944)
+    // 72 (rail) + 30 (three gaps) + 64 (paddings) + 360 (the chat) = 526 px are left to the rest.
+    expect(clampPaneWidth(2000, 1440)).toBe(914)
     expect(clampPaneWidth(100, 1440)).toBe(SITE_PANE_MIN)
     expect(clampPaneWidth(700, 900)).toBe(SITE_PANE_MIN)
-    expect(paneWidthCss(700)).toBe('clamp(440px, 700px, max(440px, calc(100vw - 496px)))')
+    expect(paneWidthCss(700)).toBe('clamp(440px, 700px, max(440px, calc(100vw - 526px)))')
   })
 })

@@ -20,6 +20,7 @@ import {
   type ToolsState,
 } from './dialog-tools'
 import { SITE_PANE_WIDTH } from './pane-layout'
+import { CABINET_GAP, CABINET_RADIUS } from '@/components/application/cabinet-shell'
 import { PaneResizer } from './pane-resizer'
 
 // The panel of the tools beside a dialog (docs/plan/59-dialog-tools-panel.md, И7, И8, И14, И20):
@@ -107,15 +108,17 @@ export function ToolsPanel({
         // never sideways.
         flex: { xs: '1 1 0', lg: 'none' },
         minHeight: { xs: 480, lg: 0 },
+        // From `lg` a card at the right edge, like the panel beside the rail
+        // (docs/plan/64-cabinet-navigation.md, Н1).
         position: { lg: 'fixed' },
-        top: { lg: 0 },
-        bottom: { lg: 0 },
-        right: { lg: 'env(safe-area-inset-right)' },
+        top: { lg: CABINET_GAP },
+        bottom: { lg: CABINET_GAP },
+        right: { lg: `calc(${CABINET_GAP}px + env(safe-area-inset-right))` },
         width: { lg: SITE_PANE_WIDTH },
-        border: { xs: 1, lg: 0 },
-        borderLeft: { lg: 1 },
-        borderColor: { xs: 'divider', lg: 'divider' },
-        borderRadius: { xs: '14px', lg: 0 },
+        border: 1,
+        borderColor: 'divider',
+        borderRadius: { xs: '14px', lg: CABINET_RADIUS },
+        zIndex: { lg: 1100 },
         // The panel holds its edge outside itself: the edge is not cut off.
         overflow: { xs: 'hidden', lg: 'visible' },
         bgcolor: 'background.paper',
@@ -143,6 +146,7 @@ export function ToolsPanel({
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
+          borderRadius: 'inherit',
         }}
       >
         {wide ? null : (

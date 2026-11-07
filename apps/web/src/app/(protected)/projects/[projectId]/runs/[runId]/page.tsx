@@ -2,7 +2,9 @@ import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 
 import { ServiceUnavailable } from '@/components/layout/service-unavailable'
+import { siteHref } from '@/components/site/site-nav'
 import { RunDetail } from '@/components/site/site-runs'
+import { BackLink } from '@/components/site/site-section'
 import { UNAVAILABLE } from '@/lib/access'
 import { loadSiteHistory, loadSiteSection } from '@/lib/site'
 
@@ -10,7 +12,7 @@ export const metadata: Metadata = { title: 'Запуск' }
 
 const RUN_ID = /^(import|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
 
-/** One run of «Запуски» with its steps and journal. */
+/** One run of «Запуски» with its steps and journal, a page of its own (Н6). */
 export default async function Page({
   params,
 }: {
@@ -24,5 +26,10 @@ export default async function Page({
     caller.siteHistory.run({ siteId: site.id, runId: runId.toLowerCase() }),
   )
   if (run === UNAVAILABLE) return <ServiceUnavailable />
-  return <RunDetail run={run} now={new Date()} />
+  return (
+    <>
+      <BackLink href={siteHref(site.id, 'runs')}>Все запуски</BackLink>
+      <RunDetail run={run} now={new Date()} nested />
+    </>
+  )
 }

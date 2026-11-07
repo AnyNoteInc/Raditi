@@ -89,8 +89,9 @@ for (const [name, width, height] of viewports) {
         const listBox = await box(chats(page))
         const listEnd = listBox.x + listBox.width
         expect(listBox.x).toBe(railBox.x + railBox.width)
-        expect(listBox.y).toBe(0)
-        expect(listBox.y + listBox.height).toBe(height)
+        // A card with the gap of 10 px above and below it (docs/plan/64-cabinet-navigation.md, Н1).
+        expect(listBox.y).toBe(10)
+        expect(listBox.y + listBox.height).toBe(height - 10)
         for (const part of [newChatHeading(page), message(page), send(page)]) {
           const partBox = await box(part)
           expect(partBox.x).toBeGreaterThanOrEqual(listEnd)

@@ -1,15 +1,12 @@
-import type { Metadata } from 'next'
+import { redirect } from 'next/navigation'
 
-import { ServiceUnavailable } from '@/components/layout/service-unavailable'
-import { SiteFiles } from '@/components/site/site-files'
-import { UNAVAILABLE } from '@/lib/access'
-import { loadSiteSection } from '@/lib/site'
+import { siteHref } from '@/components/site/site-nav'
 
-export const metadata: Metadata = { title: 'Терминал' }
-
-/** «Терминал»: the files of the version the site has, to read (owner's request of 06.11.2026). */
+/**
+ * The files of the version on the site are the tab «Файлы» of «Изменения» since 07.11.2026
+ * (docs/plan/64-cabinet-navigation.md, Н4): the old address leads there — not for good, so that a
+ * browser does not keep the move should the address be needed again.
+ */
 export default async function Page({ params }: { params: Promise<{ projectId: string }> }) {
-  const site = await loadSiteSection((await params).projectId, 'terminal')
-  if (site === UNAVAILABLE) return <ServiceUnavailable />
-  return <SiteFiles siteId={site.id} />
+  redirect(siteHref((await params).projectId, 'changes'))
 }

@@ -252,7 +252,7 @@ export function SiteAccesses({
   platform: string
   accesses: readonly Access[] | null
   editable: EditableAccessView | null
-  /** Beside the menu that holds the h1 of «Переменные»: the heading is an h2. */
+  /** A tab of «Переменные», under the h1 of the section: the heading is an h2. */
   nested?: boolean
 }) {
   const router = useRouter()

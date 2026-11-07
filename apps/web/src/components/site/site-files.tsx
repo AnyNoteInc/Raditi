@@ -26,7 +26,8 @@ import {
   type SiteTreeNode,
 } from './site-files-tree'
 
-// «Терминал» (owner's requests of 06.11.2026): the files of a project, a tree and the file chosen
+// The files of a site (owner's requests of 06.11.2026; until 07.11.2026 the section «Терминал», now
+// the tab «Файлы» of «Изменения», docs/plan/64-cabinet-navigation.md, Н4): a tree and the file chosen
 // beside it, and an edit of a text file. In a project the files are those of the version on the
 // site, and an edit is saved into an open chat of the project; in a chat with the code they are
 // the working copy of its agent, and an edit is saved into that chat. Core commits it to the
@@ -39,7 +40,7 @@ const fileCount = (count: number) =>
   `${count.toLocaleString('ru-RU')} ${plural(count, 'файл', 'файла', 'файлов')}`
 
 export const siteFilesText = Object.freeze({
-  title: 'Терминал',
+  title: 'Файлы',
   intro: (version: string | null) =>
     `Файлы ${version ? `версии ${version}, которая` : 'версии, которая'} сейчас на сайте. Правку файла можно сохранить в открытый чат проекта, а на сайт она попадёт командой /release.`,
   chatIntro: (changed: boolean) =>
@@ -125,7 +126,7 @@ export function SiteFiles({ siteId, taskId, ended = false, onEdited }: SiteFiles
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-        {inChat ? null : <SectionTitle>{siteFilesText.title}</SectionTitle>}
+        {inChat ? null : <SectionTitle level="h2">{siteFilesText.title}</SectionTitle>}
         {ready ? (
           <Typography color="text.secondary" sx={{ fontSize: inChat ? 14 : undefined }}>
             {inChat ? siteFilesText.chatIntro(ready.changed) : siteFilesText.intro(ready.version)}

@@ -4,10 +4,8 @@ import {
   activeSiteSection,
   availableSiteSections,
   closedSectionsNote,
-  hasSiteList,
   inSiteSetup,
   siteHref,
-  siteItemOpen,
   siteNav,
   siteSectionAvailable,
 } from './site-nav'
@@ -15,70 +13,44 @@ import {
 const id = '0199a3f2-5d1c-7b3e-9c41-2f6a8d0e4b17'
 
 describe('site navigation', () => {
-  it('lists the seven sections in rail order, three of them on the phone bar', () => {
-    expect(siteNav.map((entry) => entry.section)).toEqual([
-      'overview',
-      'changes',
-      'runs',
-      'terminal',
-      'database',
-      'vault',
-      'settings',
+  it('lists the six sections in the order of the panel', () => {
+    expect(siteNav.map((entry) => [entry.section, entry.label])).toEqual([
+      ['overview', 'Обзор'],
+      ['changes', 'Изменения'],
+      ['runs', 'Запуски'],
+      ['database', 'База'],
+      ['vault', 'Переменные'],
+      ['settings', 'Настройки'],
     ])
-    expect(siteNav.filter((entry) => entry.primary)).toHaveLength(3)
   })
 
   it.each([
     [`/projects/${id}/runs/42`, 'runs'],
     [`/projects/${id}/vault`, 'vault'],
-    [`/projects/${id}/terminal`, 'terminal'],
+    [`/projects/${id}/changes/versions`, 'changes'],
     [`/projects/${id}/settings`, 'settings'],
   ] as const)('lights the section of %s', (path, section) => {
     expect(activeSiteSection(path, id)).toBe(section)
   })
 
-  it.each([`/projects/${id}`, `/projects/${id}/unknown`, `/projects/${id}x/runs`, '/projects'])(
-    'lights nothing for %s',
-    (path) => {
-      expect(activeSiteSection(path, id)).toBeUndefined()
-    },
-  )
+  it.each([
+    `/projects/${id}`,
+    `/projects/${id}/terminal`,
+    `/projects/${id}/unknown`,
+    `/projects/${id}x/runs`,
+    '/projects',
+  ])('lights nothing for %s', (path) => {
+    expect(activeSiteSection(path, id)).toBeUndefined()
+  })
 
   it('knows the section of an address that spells the id in upper case', () => {
     const path = `/projects/${id.toUpperCase()}/runs`
     expect(activeSiteSection(path, id)).toBe('runs')
-    expect(siteItemOpen(path, id)).toBe(false)
-    expect(siteItemOpen(`/projects/${id.toUpperCase()}/runs/42`, id)).toBe(true)
   })
 
   it('builds the address of a section', () => {
     expect(siteHref(id, 'database')).toBe(`/projects/${id}/database`)
     expect(siteHref(id)).toBe(`/projects/${id}`)
-  })
-
-  it('lays the changes and the runs out as a list beside the content', () => {
-    expect(siteNav.map((entry) => entry.section).filter(hasSiteList)).toEqual([
-      'changes',
-      'runs',
-      'database',
-      'vault',
-      'settings',
-    ])
-    expect(hasSiteList(undefined)).toBe(false)
-  })
-
-  it.each([
-    [`/projects/${id}/runs/42`, true],
-    [`/projects/${id}/runs`, false],
-    [`/projects/${id}/runs/`, false],
-    [`/projects/${id}/changes/initial`, true],
-    [`/projects/${id}/database/backups`, true],
-    [`/projects/${id}/vault`, false],
-    [`/projects/${id}/settings`, false],
-    [`/projects/${id}/settings/danger`, true],
-    [`/projects/${id}`, false],
-  ] as const)('knows whether %s is an item opened from a list', (path, open) => {
-    expect(siteItemOpen(path, id)).toBe(open)
   })
 
   it.each(['paused', 'disconnected', 'archived'])(

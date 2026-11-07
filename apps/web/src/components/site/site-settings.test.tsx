@@ -2,7 +2,7 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
-import { DangerBlock, settingsBlocks, SiteSettings } from './site-settings'
+import { DangerBlock, SiteSettings } from './site-settings'
 
 const site = { name: 'Кофейня «Крошка»' }
 
@@ -29,23 +29,13 @@ describe('site settings', () => {
     expect(screen.queryByText(/Доступ/)).toBeNull()
   })
 
-  it('is split by its cards: the site and its dangerous actions, beside the menu at the root', () => {
-    expect(
-      settingsBlocks({ host: 'kroshka.example' }).map(({ segment, title, note }) => ({
-        segment,
-        title,
-        note,
-      })),
-    ).toEqual([
-      { segment: 'site', title: 'Сайт', note: 'kroshka.example' },
-      { segment: 'danger', title: 'Опасная область', note: 'Удаление проекта' },
-    ])
+  it('names the tab «Опасная область» with a heading of the next level', () => {
     render(
       <DangerBlock nested>
         <p>Удалить проект</p>
       </DangerBlock>,
     )
-    // At the root the menu holds the h1 of the section.
+    // A tab, under the h1 of the section (docs/plan/64, Н5).
     expect(screen.getByRole('heading', { level: 2, name: 'Опасная область' })).toBeTruthy()
   })
 })

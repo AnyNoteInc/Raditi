@@ -1,8 +1,6 @@
 'use client'
 
 import Box from '@mui/material/Box'
-import IconButton from '@mui/material/IconButton'
-import Tooltip from '@mui/material/Tooltip'
 import { BrandMark } from '@repo/ui/components'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
@@ -48,8 +46,9 @@ export function ApplicationRail({
         display: { xs: hiddenOnPhone ? 'none' : 'flex', sm: 'flex' },
         flexDirection: 'column',
         alignItems: 'center',
-        bgcolor: 'background.default',
-        borderRight: 1,
+        // From `md` the rail lies on the ground of the page, beside the cards (docs/plan/64, Н1).
+        bgcolor: { xs: 'background.default', md: 'transparent' },
+        borderRight: { xs: 1, md: 0 },
         borderColor: 'divider',
         zIndex: 1100,
         pt: 1.5,
@@ -76,32 +75,51 @@ export function ApplicationRail({
       <Box
         component="nav"
         aria-label="Основная навигация"
-        sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}
+        sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.75 }}
       >
         {sections.map(({ href, label, icon }) => {
           const current = within(pathname, href)
           return (
-            <Tooltip key={href} title={label} placement="right">
-              <IconButton
-                component={Link}
-                href={href}
-                aria-label={label}
-                aria-current={current ? 'page' : undefined}
-                sx={{
-                  width: 44,
-                  height: 44,
-                  borderRadius: '12px',
-                  color: 'text.secondary',
-                  '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
-                  '&[aria-current="page"]': {
-                    bgcolor: 'action.selected',
-                    color: 'primary.main',
-                  },
-                }}
+            <Box
+              key={href}
+              component={Link}
+              href={href}
+              aria-label={label}
+              aria-current={current ? 'page' : undefined}
+              sx={{
+                width: { xs: 48, sm: 60 },
+                minHeight: { xs: 48, sm: 56 },
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 0.5,
+                borderRadius: '14px',
+                color: 'text.secondary',
+                fontSize: 11,
+                lineHeight: '14px',
+                fontWeight: 500,
+                textDecoration: 'none',
+                '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
+                '&[aria-current="page"]': {
+                  bgcolor: { xs: 'action.selected', md: 'background.paper' },
+                  boxShadow: { md: 'inset 0 0 0 1px var(--mui-palette-divider)' },
+                  color: 'text.primary',
+                  fontWeight: 600,
+                  '& svg': { color: 'primary.main' },
+                },
+              }}
+            >
+              <AppIcon name={icon} />
+              {/* On the narrow rail of a phone the label is only read: the link is named by it. */}
+              <Box
+                component="span"
+                aria-hidden="true"
+                sx={{ display: { xs: 'none', sm: 'block' } }}
               >
-                <AppIcon name={icon} />
-              </IconButton>
-            </Tooltip>
+                {label}
+              </Box>
+            </Box>
           )
         })}
       </Box>

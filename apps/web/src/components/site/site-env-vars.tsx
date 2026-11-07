@@ -365,7 +365,7 @@ export function SiteEnvVars({
   siteId: string
   /** The project has access to the files of its site: `repository` of `siteCapabilities` is not `absent`. */
   withFiles: boolean
-  /** At the root of «Переменные», beside the menu that holds the h1: the heading is an h2. */
+  /** A tab of «Переменные», under the h1 of the section: the heading is an h2. */
   nested?: boolean
 }) {
   const titleId = useId()

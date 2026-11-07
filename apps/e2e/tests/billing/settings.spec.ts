@@ -19,17 +19,21 @@ function hydrated(element: Locator): Promise<void> {
   )
 }
 
-test('a signed-in user opens the settings and collapses the sidebar', async ({
+test('a signed-in user opens the settings and hides their panel', async ({
   page,
   signedInUser,
 }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/settings')
   await expect(page).toHaveURL('/settings')
-  const sidebar = page.getByRole('complementary', { name: 'Боковая панель' })
+  // The sections of the settings are the panel beside the rail of the cabinet
+  // (docs/plan/64-cabinet-navigation.md, Н2).
+  const panel = page.getByRole('complementary', { name: 'Настройки' })
+  const rail = page.getByRole('complementary', { name: 'Боковая панель' })
 
   await test.step('the shell names the section and the user', async () => {
     await expect(page.getByRole('heading', { level: 1, name: 'Общее' })).toBeVisible()
-    const sections = sidebar.getByRole('navigation', { name: 'Разделы настроек' })
+    const sections = panel.getByRole('navigation', { name: 'Разделы настроек' })
     await expect(sections.getByRole('link', { name: 'Общее' })).toHaveAttribute(
       'aria-current',
       'page',
@@ -43,32 +47,31 @@ test('a signed-in user opens the settings and collapses the sidebar', async ({
     )
     await expect(breadcrumbs.getByText('Общее')).toHaveAttribute('aria-current', 'page')
 
-    const name = `${signedInUser.name} ${signedInUser.lastName}`
-    const userBlock = sidebar.getByRole('button', {
-      name: `Меню пользователя: ${name}, ${signedInUser.email}`,
-    })
-    await expect(userBlock).toContainText(name)
-    await expect(userBlock).toContainText(signedInUser.email)
+    // The rail of the cabinet leads to the chats and the projects, the account menu at its foot.
+    const main = rail.getByRole('navigation', { name: 'Основная навигация' })
+    await expect(main.getByRole('link', { name: 'Чаты' })).toHaveAttribute('href', '/chats')
+    await expect(main.getByRole('link', { name: 'Проекты' })).toHaveAttribute('href', '/projects')
+    await expect(
+      rail.getByRole('button', { name: 'Меню пользователя в боковой панели' }),
+    ).toBeVisible()
+    void signedInUser
   })
 
-  await test.step('a collapsed sidebar stays collapsed after a reload', async () => {
-    const collapse = page.getByRole('button', { name: 'Свернуть боковую панель' })
-    const expand = page.getByRole('button', { name: 'Развернуть боковую панель' })
-    await expect(sidebar).toHaveCSS('width', '264px')
-
-    await hydrated(collapse)
-    await collapse.click()
-    await expect(expand).toHaveAttribute('aria-expanded', 'false')
-    await expect(sidebar).toHaveCSS('width', '72px')
+  await test.step('a hidden panel stays hidden after a reload', async () => {
+    const hide = panel.getByRole('button', { name: 'Скрыть панель' })
+    const show = page.getByRole('button', { name: 'Показать панель' })
+    await hydrated(hide)
+    await hide.click()
+    await expect(panel).toBeHidden()
+    await expect(show).toHaveAttribute('aria-expanded', 'false')
 
     await page.reload()
-    // The server reads the choice from the cookie: the page arrives collapsed, still signed in.
+    // The server reads the choice from the cookie: the page arrives without the panel.
     await expect(page).toHaveURL('/settings')
-    await expect(expand).toHaveAttribute('aria-expanded', 'false')
-    await expect(sidebar).toHaveCSS('width', '72px')
-    await expect(
-      sidebar.getByRole('button', { name: 'Меню пользователя в боковой панели' }),
-    ).toBeVisible()
+    await expect(panel).toBeHidden()
+    await hydrated(show)
+    await show.click()
+    await expect(panel).toBeVisible()
   })
 })
 

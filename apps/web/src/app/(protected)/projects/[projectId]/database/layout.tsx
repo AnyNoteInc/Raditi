@@ -1,16 +1,11 @@
 import type { ReactNode } from 'react'
 
-import { SiteBlockNav } from '@/components/site/site-block-nav'
-import { databaseBlocks } from '@/components/site/site-database'
-import { SiteListFrame } from '@/components/site/site-list-frame'
 import { siteHref } from '@/components/site/site-nav'
-import { UNAVAILABLE } from '@/lib/access'
-import { loadSiteHistory } from '@/lib/site'
+import { SiteSection } from '@/components/site/site-section'
 
 /**
- * «База и бэкап», split by its cards (owner's request of 26.10.2026): the menu of its blocks
- * beside the one that is open, at the root the first. Access is checked by every page under it;
- * the reads of the menu check it themselves.
+ * «База» (until 07.11.2026 «База и бэкап») with its tabs «Подключение» and «Копии»
+ * (docs/plan/64-cabinet-navigation.md, Н5). Access is checked by every page under it.
  */
 export default async function DatabaseLayout({
   children,
@@ -19,31 +14,17 @@ export default async function DatabaseLayout({
   children: ReactNode
   params: Promise<{ projectId: string }>
 }) {
-  const { projectId } = await params
-  const [connections, backups] = await Promise.all([
-    loadSiteHistory('connections', (caller) =>
-      caller.siteHistory.connections({ siteId: projectId }),
-    ),
-    loadSiteHistory('backups', (caller) => caller.siteHistory.backups({ siteId: projectId })),
-  ])
-  const root = siteHref(projectId, 'database')
+  const root = siteHref((await params).projectId, 'database')
   return (
-    <SiteListFrame
-      label="База и бэкап"
-      title="База и бэкап"
+    <SiteSection
+      title="База"
       root={root}
-      backLabel="Назад к базе и бэкапу"
-      list={
-        <SiteBlockNav
-          root={root}
-          blocks={databaseBlocks(
-            connections === UNAVAILABLE ? undefined : connections.database,
-            backups === UNAVAILABLE ? null : backups,
-          )}
-        />
-      }
+      tabs={[
+        { label: 'Подключение', href: root, segments: ['', 'connection'] },
+        { label: 'Копии', href: `${root}/backups`, segments: ['backups'] },
+      ]}
     >
       {children}
-    </SiteListFrame>
+    </SiteSection>
   )
 }

@@ -11,12 +11,22 @@ import { useRouter, useSearchParams, useSelectedLayoutSegment } from 'next/navig
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
+import {
+  CABINET_PANEL_ID,
+  PanelToggle,
+  useCabinetPanel,
+} from '@/components/application/cabinet-panel'
+import { PanelResizer } from '@/components/application/panel-resizer'
+import {
+  CABINET_GAP,
+  CABINET_PANEL_WIDTH,
+  CABINET_RADIUS,
+} from '@/components/application/cabinet-shell'
 
 import { CHATS_HREF, NEW_CHAT_HREF, NEW_CHAT_SEGMENT } from './chat-address'
 import { chatsText } from './chat-texts'
 import { rememberChatsGroup, type ChatsGroup } from './chats-group'
 import { DialogList, useChatsKnownEmpty } from './dialog-list'
-import { CHATS_LIST_WIDTH } from './pane-layout'
 
 /** The page draws the panel of the tools beside a chat: the list gives the chat its room. */
 const PANE_DRAWN = '[data-chat-shell]:has([data-chat-pane]) &'
@@ -131,6 +141,7 @@ export function ChatsFrame({
   const folder = useSearchParams().get('folder')
   const shownGroup = folder === null ? group : 'projects'
   const empty = useChatsKnownEmpty()
+  const { open: panelOpen } = useCabinetPanel()
 
   function changeGroup(next: ChatsGroup) {
     rememberChatsGroup(next)
@@ -164,6 +175,7 @@ export function ChatsFrame({
     >
       <Box
         component="nav"
+        id={CABINET_PANEL_ID}
         aria-label={chatsText.title}
         // The browser of a chat over the content covers this column: it leaves the tab order then.
         data-chat-list=""
@@ -172,30 +184,38 @@ export function ChatsFrame({
           display: {
             xs: selected ? 'none' : 'flex',
             sm: selected ? 'none' : 'grid',
-            md: 'grid',
+            md: panelOpen ? 'grid' : 'none',
           },
           ...(collapsed && { [PANE_DRAWN]: { display: { lg: 'none' } } }),
           flexDirection: 'column',
           flex: '1 0 auto',
           minWidth: 0,
-          gridTemplateColumns: { sm: 'minmax(0, 1fr) auto' },
-          gridTemplateRows: { sm: 'auto 1fr' },
+          // In the panel from `md` «Новый чат» takes a row of its own under the heading and its
+          // buttons: the card is too narrow for all of them in one line.
+          gridTemplateColumns: { sm: 'minmax(0, 1fr) auto', md: 'minmax(0, 1fr)' },
+          gridTemplateRows: { sm: 'auto 1fr', md: 'auto auto 1fr' },
           alignItems: { xs: 'stretch', sm: 'start' },
           gap: '12px 8px',
+          // From `md` the list is the panel beside the rail (docs/plan/64-cabinet-navigation.md,
+          // Н2): a card the viewer hides with «]».
           position: { md: 'fixed' },
-          top: { md: 0 },
-          bottom: { md: 0 },
+          top: { md: CABINET_GAP },
+          bottom: { md: CABINET_GAP },
           left: { md: 'var(--app-rail-width)' },
-          width: { md: CHATS_LIST_WIDTH },
+          width: { md: CABINET_PANEL_WIDTH },
           overflowY: { md: 'auto' },
           px: { md: 1.5 },
-          pt: { md: 2 },
+          pt: { md: 1.5 },
           pb: { md: 'max(16px, env(safe-area-inset-bottom))' },
           bgcolor: { md: 'background.paper' },
-          borderRight: { md: 1 },
+          border: { md: 1 },
           borderColor: { md: 'divider' },
+          borderRadius: { md: CABINET_RADIUS },
+          zIndex: { md: 1100 },
         }}
       >
+        {/* First, out of the flow: it stands on the right edge of the card from `md`. */}
+        <PanelResizer label="Ширина списка чатов" />
         {/* The heading of the page while the list is all there is; beside an item, of the list. */}
         <Box sx={{ alignSelf: 'center', minWidth: 0, display: 'flex', alignItems: 'center' }}>
           <Typography
@@ -212,6 +232,7 @@ export function ChatsFrame({
             {chatsText.title}
           </Typography>
           {empty ? null : <GroupMenu value={shownGroup} onChange={changeGroup} />}
+          <PanelToggle place="panel" />
         </Box>
         <Button
           component={Link}
@@ -221,8 +242,8 @@ export function ChatsFrame({
           startIcon={<AppIcon name="plus" size={18} />}
           sx={{
             order: { xs: 1, sm: 0 },
-            gridRow: { sm: 1 },
-            gridColumn: { sm: 2 },
+            gridRow: { sm: 1, md: 2 },
+            gridColumn: { sm: 2, md: 1 },
             minHeight: { xs: 48, sm: 44 },
             borderRadius: '999px',
             whiteSpace: 'nowrap',
@@ -237,7 +258,7 @@ export function ChatsFrame({
           sx={{
             flex: { xs: '1 0 auto' },
             gridColumn: { sm: '1 / -1' },
-            gridRow: { sm: 2 },
+            gridRow: { sm: 2, md: 3 },
             minWidth: 0,
             px: { md: 1.5 },
           }}
@@ -289,6 +310,12 @@ export function ChatsFrame({
           >
             <AppIcon name="back" size={22} />
             {chatsText.back}
+          </Box>
+        )}
+        {panelOpen ? null : (
+          // The list is hidden: the way to bring it back stands over the content (Н3).
+          <Box sx={{ display: { xs: 'none', md: 'flex' }, mt: -1.5, mb: 1, ml: -1.5 }}>
+            <PanelToggle place="content" />
           </Box>
         )}
         {children}

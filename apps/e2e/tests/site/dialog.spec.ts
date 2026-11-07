@@ -1113,8 +1113,11 @@ test('the names of the tools in «+» wrap instead of being cut, on a desktop', 
       await plus(page).click()
       await menuSettled(page)
       const tiles = toolsMenu(page).getByRole('menuitem')
-      await expect(tiles).toHaveCount(2)
+      // The changes of the chat and, since 06.11.2026, the files of its working copy — «Изменения»
+      // since 07.11.2026 (docs/plan/64-cabinet-navigation.md, Н9).
+      await expect(tiles).toHaveCount(3)
       await expect(tiles.nth(0)).toHaveAccessibleName(tile('Файлы и изменения', '1'))
+      await expect(tiles.nth(2)).toHaveAccessibleName('Изменения')
       // Every part of a tile on the screen shows all its words: the name, its sign, its mark.
       const cut = await toolsMenu(page).evaluate((menu) =>
         [...menu.querySelectorAll('[role="menuitem"] > *')]

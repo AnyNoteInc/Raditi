@@ -1,16 +1,16 @@
-import Box from '@mui/material/Box'
 import type { Metadata } from 'next'
 
 import { ServiceUnavailable } from '@/components/layout/service-unavailable'
+import { TabContent } from '@/components/site/site-section'
 import { UNAVAILABLE } from '@/lib/access'
 
 import { variablesBlock } from './blocks'
 
 export const metadata: Metadata = { title: 'Переменные' }
 
-/** «Переменные» at its root: the first block beside the menu. On a phone the menu alone is shown. */
+/** The section at its root: its first tab (docs/plan/64-cabinet-navigation.md, Н5). */
 export default async function Page({ params }: { params: Promise<{ projectId: string }> }) {
   const block = await variablesBlock((await params).projectId, true)
   if (block === UNAVAILABLE) return <ServiceUnavailable />
-  return <Box sx={{ display: { xs: 'none', md: 'block' } }}>{block}</Box>
+  return <TabContent>{block}</TabContent>
 }

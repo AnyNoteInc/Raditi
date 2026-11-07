@@ -9,7 +9,7 @@ export function SectionTitle({
   children,
 }: {
   id?: string
-  /** `h2` where the page's own heading is elsewhere: beside the list of a section. */
+  /** `h2` where the page's own heading is elsewhere: in a tab, under the heading of the section. */
   level?: 'h1' | 'h2'
   children: ReactNode
 }) {
@@ -17,6 +17,8 @@ export function SectionTitle({
     <Typography
       component={level}
       id={id}
+      // A section with tabs hides a block's heading of level `h2`: its tab names it (docs/plan/64).
+      data-section-title={level}
       sx={{ fontSize: { xs: 26, md: 30 }, fontWeight: 600, lineHeight: 1.25 }}
     >
       {children}

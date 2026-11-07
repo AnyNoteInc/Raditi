@@ -5,9 +5,8 @@ import { BackupsBlock, DatabaseBlock } from '@/components/site/site-database'
 import { UNAVAILABLE } from '@/lib/access'
 import { loadSiteHistory, loadSiteSection } from '@/lib/site'
 
-// The two blocks of «База и бэкап» as its pages read them: the block's own page, and the root of
-// the section, which shows the first block beside the menu (`nested`). UNAVAILABLE — what the
-// block needs could not be read; the page says so.
+// The two blocks of «База» as its tabs read them (`nested`: the heading of the section is above).
+// UNAVAILABLE — what the block needs could not be read; the page says so.
 
 /** «База данных сайта»: the database as the platform knows it, or the SQL dump form without one. */
 export async function databaseConnectionBlock(

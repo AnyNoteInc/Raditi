@@ -7,7 +7,7 @@ import { SITE_ID } from '@/components/chat/testing'
 
 import { SiteFiles } from './site-files'
 
-// «Терминал» of a project (owner's request of 06.11.2026): the files of the version the site has,
+// The tab «Файлы» of «Изменения» (owner's request of 06.11.2026): the files of the version the site has,
 // a tree and the file chosen beside it, read only.
 
 type ListAnswer =
@@ -90,7 +90,7 @@ beforeEach(() => {
   for (const call of Object.values(calls)) call.mockReset()
 })
 
-describe('«Терминал» of a project', () => {
+describe('the tab «Файлы» of a project', () => {
   it('shows the tree of the version and a file chosen in it, with its lines', async () => {
     calls.list.mockResolvedValue({
       state: 'ready',

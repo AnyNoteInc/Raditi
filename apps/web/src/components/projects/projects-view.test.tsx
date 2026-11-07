@@ -73,20 +73,24 @@ const others = (count: number): Project[] =>
 
 describe('the search of the list', () => {
   const field = () => screen.queryByRole('textbox', { name: 'Поиск проектов' })
+  const openSearch = () => fireEvent.click(screen.getByRole('button', { name: 'Найти проект' }))
   const shown = () => within(screen.getByRole('list', { name: 'Сайты' })).getAllByRole('listitem')
 
-  it('has no field for six projects', async () => {
+  it('has no search for six projects', async () => {
     listProjects.mockResolvedValue([project(), ...others(5)])
     showProjects()
     await screen.findByRole('list', { name: 'Сайты' })
     expect(shown()).toHaveLength(6)
+    expect(screen.queryByRole('button', { name: 'Найти проект' })).toBeNull()
     expect(field()).toBeNull()
   })
 
-  it('has the field for seven projects, and it filters', async () => {
+  it('opens the field for seven projects from the head of the page, and it filters', async () => {
     listProjects.mockResolvedValue([project(), ...others(6)])
     showProjects()
     await screen.findByRole('list', { name: 'Сайты' })
+    expect(field()).toBeNull()
+    openSearch()
     fireEvent.change(field()!, { target: { value: 'кофейня' } })
     expect(shown()).toHaveLength(1)
     expect(screen.getByText('1 из 7')).toBeTruthy()
@@ -97,6 +101,7 @@ describe('the search of the list', () => {
     listProjects.mockResolvedValue(seven)
     const queryClient = showProjects()
     await screen.findByRole('list', { name: 'Сайты' })
+    openSearch()
     fireEvent.change(field()!, { target: { value: 'кофейня' } })
     expect(shown()).toHaveLength(1)
 
@@ -126,6 +131,7 @@ describe('project list', () => {
     expect(link).toHaveAttribute('href', 'https://xn--e1aiboc0b6e.xn--p1ai')
     expect(screen.queryByText(/xn--/)).not.toBeInTheDocument()
 
+    fireEvent.click(screen.getByRole('button', { name: 'Найти проект' }))
     fireEvent.change(screen.getByRole('textbox', { name: 'Поиск проектов' }), {
       target: { value: 'КОФЕЙНЯ.рф' },
     })
@@ -151,6 +157,7 @@ describe('project list', () => {
     })
     expect(link).toHaveTextContent('магазин.рф:8443')
     expect(link).toHaveAttribute('href', 'https://xn--e1aiboc0b6e.xn--p1ai')
+    fireEvent.click(screen.getByRole('button', { name: 'Найти проект' }))
     fireEvent.change(screen.getByRole('textbox', { name: 'Поиск проектов' }), {
       target: { value: 'магазин.рф' },
     })
@@ -163,8 +170,11 @@ describe('project list', () => {
 describe('adding a project', () => {
   it('leads from the empty list to the wizard of a new project', async () => {
     showProjects()
-    const add = await screen.findByRole('link', { name: 'Добавить проект' })
-    expect(add).toHaveAttribute('href', '/projects/new')
+    expect(await screen.findByRole('heading', { name: 'Добавим первый сайт?' })).toBeTruthy()
+    // The head of the page and the empty list both lead there (docs/plan/64, Н8).
+    const links = screen.getAllByRole('link', { name: 'Новый проект' })
+    expect(links).toHaveLength(2)
+    for (const link of links) expect(link).toHaveAttribute('href', '/projects/new')
     // No form in the list: the wizard is a page of its own.
     expect(screen.queryByRole('textbox', { name: /Название проекта/ })).not.toBeInTheDocument()
   })
@@ -173,7 +183,7 @@ describe('adding a project', () => {
     listProjects.mockResolvedValue([project()])
     showProjects()
     await screen.findByRole('list', { name: 'Сайты' })
-    const links = screen.getAllByRole('link', { name: 'Добавить проект' })
+    const links = screen.getAllByRole('link', { name: 'Новый проект' })
     expect(links).toHaveLength(1)
     expect(links[0]).toHaveAttribute('href', '/projects/new')
   })

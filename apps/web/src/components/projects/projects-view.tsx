@@ -8,6 +8,8 @@ import Divider from '@mui/material/Divider'
 import IconButton from '@mui/material/IconButton'
 import InputAdornment from '@mui/material/InputAdornment'
 import Link from '@mui/material/Link'
+import Menu from '@mui/material/Menu'
+import MenuItem from '@mui/material/MenuItem'
 import Skeleton from '@mui/material/Skeleton'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
@@ -19,6 +21,7 @@ import { AppIcon } from '@/components/application/app-icon'
 import { useTRPC } from '@/trpc/client'
 
 import { projectChip, stackLabels } from './project-labels'
+import { ProjectsIllustration } from './projects-illustration'
 
 /** The wizard of a new project is a page of its own (spec §12). */
 const NEW_PROJECT = '/projects/new'
@@ -26,20 +29,39 @@ const NEW_PROJECT = '/projects/new'
 /** A list this long is read at a glance: search only above it (К24). */
 const SEARCH_ABOVE = 6
 
+/** The order of the list: the server gives the newest first. */
+type ProjectsOrder = 'newest' | 'name'
+const sortNames: Readonly<Record<ProjectsOrder, string>> = {
+  newest: 'Сначала новые',
+  name: 'По названию',
+}
+
+const iconButtonSx = {
+  width: 44,
+  height: 44,
+  borderRadius: '12px',
+  color: 'text.secondary',
+  '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
+} as const
+
 export function ProjectsView() {
   const trpc = useTRPC()
   const projects = useQuery(trpc.project.list.queryOptions())
   const [search, setSearch] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [order, setOrder] = useState<ProjectsOrder>('newest')
+  const [sortMenu, setSortMenu] = useState<HTMLElement | null>(null)
   const searchInput = useRef<HTMLInputElement>(null)
   const allProjects = projects.data ?? []
   const searchable = allProjects.length > SEARCH_ABOVE
   // A search typed earlier stops filtering with its field: a project deleted in another tab must
   // not leave a list that is narrowed with nothing on the screen to clear it.
-  const query = searchable ? search.trim().toLocaleLowerCase('ru') : ''
-  const visibleProjects = allProjects.filter((project) =>
-    `${project.name} ${project.url} ${project.host}`.toLocaleLowerCase('ru').includes(query),
-  )
-  const showHeaderAction = allProjects.length > 0 || (projects.isError && !projects.data)
+  const query = searchable && searchOpen ? search.trim().toLocaleLowerCase('ru') : ''
+  const visibleProjects = allProjects
+    .filter((project) =>
+      `${project.name} ${project.url} ${project.host}`.toLocaleLowerCase('ru').includes(query),
+    )
+    .sort(order === 'name' ? (a, b) => a.name.localeCompare(b.name, 'ru') : () => 0)
   const projectColumns = {
     xs: 'minmax(0, 1fr)',
     md: 'repeat(2, minmax(0, 1fr))',
@@ -52,42 +74,77 @@ export function ProjectsView() {
   }
 
   return (
-    <Box sx={{ maxWidth: 1200, mx: 'auto' }}>
-      <Box
-        sx={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: { xs: 'flex-start', sm: 'center' },
-          flexDirection: { xs: 'column', sm: 'row' },
-          gap: 2.5,
-        }}
-      >
-        <Box sx={{ minWidth: 0 }}>
-          <Typography
-            component="h1"
-            sx={{
-              fontSize: { xs: 28, md: 32 },
-              fontWeight: 600,
-              letterSpacing: '-0.025em',
-              lineHeight: 1.25,
+    <Box
+      sx={{
+        width: '100%',
+        maxWidth: 1200,
+        mx: 'auto',
+        flex: '1 0 auto',
+        display: 'flex',
+        flexDirection: 'column',
+      }}
+    >
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minHeight: 48 }}>
+        <Typography
+          variant="h2"
+          component="h1"
+          sx={{ flex: '1 1 auto', minWidth: 0, fontSize: { xs: 26, md: 30 }, lineHeight: 1.2 }}
+        >
+          Проекты
+        </Typography>
+        {searchable ? (
+          <IconButton
+            aria-label="Найти проект"
+            aria-pressed={searchOpen}
+            onClick={() => {
+              setSearchOpen(!searchOpen)
+              if (searchOpen) setSearch('')
             }}
+            sx={iconButtonSx}
           >
-            Проекты
-          </Typography>
-          <Typography color="text.secondary" sx={{ mt: 1, textWrap: 'pretty' }}>
-            Все ваши сайты в одном месте.
-          </Typography>
-        </Box>
-        {showHeaderAction && (
-          <Button
-            variant="contained"
-            href={NEW_PROJECT}
-            startIcon={<AppIcon name="plus" size={18} />}
-            sx={{ flexShrink: 0, width: { xs: '100%', sm: 'auto' } }}
-          >
-            Добавить проект
-          </Button>
-        )}
+            <AppIcon name="search" size={20} />
+          </IconButton>
+        ) : null}
+        {allProjects.length > 1 ? (
+          <>
+            <IconButton
+              aria-label="Порядок проектов"
+              aria-haspopup="menu"
+              aria-expanded={sortMenu !== null}
+              onClick={(event) => setSortMenu(event.currentTarget)}
+              sx={iconButtonSx}
+            >
+              <AppIcon name="sort" size={20} />
+            </IconButton>
+            <Menu
+              anchorEl={sortMenu}
+              open={sortMenu !== null}
+              onClose={() => setSortMenu(null)}
+              anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+              transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+              slotProps={{ paper: { sx: { borderRadius: '14px', minWidth: 200 } } }}
+            >
+              {(Object.keys(sortNames) as ProjectsOrder[]).map((key) => (
+                <MenuItem
+                  key={key}
+                  role="menuitemradio"
+                  aria-checked={order === key}
+                  selected={order === key}
+                  onClick={() => {
+                    setOrder(key)
+                    setSortMenu(null)
+                  }}
+                  sx={{ minHeight: 44, fontSize: 14 }}
+                >
+                  {sortNames[key]}
+                </MenuItem>
+              ))}
+            </Menu>
+          </>
+        ) : null}
+        <Button variant="contained" href={NEW_PROJECT} sx={{ flexShrink: 0, ml: 1, minHeight: 40 }}>
+          Новый проект
+        </Button>
       </Box>
 
       {projects.isPending ? (
@@ -120,51 +177,30 @@ export function ProjectsView() {
       ) : allProjects.length === 0 ? (
         <Box
           sx={{
-            mt: 4,
-            border: 1,
-            borderColor: 'divider',
-            borderRadius: '14px',
-            bgcolor: 'background.default',
+            flex: '1 0 auto',
             display: 'flex',
+            flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
             textAlign: 'center',
-            px: { xs: 2, sm: 4 },
-            py: { xs: 5, sm: 7 },
+            gap: 1.5,
+            py: { xs: 6, md: 8 },
           }}
         >
-          <Box sx={{ maxWidth: 400, minWidth: 0 }}>
-            <Box sx={{ color: 'primary.main', mb: 2.5 }}>
-              <AppIcon name="globe" size={36} />
-            </Box>
-            <Typography
-              component="h2"
-              sx={{
-                fontSize: { xs: 22, sm: 24 },
-                fontWeight: 600,
-                lineHeight: 1.3,
-                letterSpacing: '-0.02em',
-                textWrap: 'balance',
-              }}
-            >
-              Здесь будут ваши сайты
-            </Typography>
-            <Typography
-              color="text.secondary"
-              sx={{ mt: 1.5, mb: 3, lineHeight: 1.6, textWrap: 'pretty' }}
-            >
-              Добавьте первый сайт: укажите его адрес и доступ к файлам, а мы сохраним его
-              первоначальную версию.
-            </Typography>
-            <Button
-              variant="contained"
-              href={NEW_PROJECT}
-              startIcon={<AppIcon name="plus" size={18} />}
-              sx={{ width: { xs: '100%', sm: 'auto' } }}
-            >
-              Добавить проект
-            </Button>
-          </Box>
+          <ProjectsIllustration />
+          <Typography component="h2" sx={{ mt: 1, fontSize: 17, fontWeight: 600 }}>
+            Добавим первый сайт?
+          </Typography>
+          <Typography
+            color="text.secondary"
+            sx={{ maxWidth: 430, fontSize: 14, lineHeight: 1.55, textWrap: 'pretty' }}
+          >
+            Подключите сайт — агент будет готовить правки по вашим просьбам, а на сайт они попадут,
+            когда вы их выпустите. Здесь же будут версии, запуски, копии базы и переменные.
+          </Typography>
+          <Button variant="outlined" color="inherit" href={NEW_PROJECT} sx={{ mt: 1 }}>
+            Новый проект
+          </Button>
         </Box>
       ) : (
         <>
@@ -195,9 +231,10 @@ export function ProjectsView() {
                 {query ? `${visibleProjects.length} из ${allProjects.length}` : allProjects.length}
               </Typography>
             </Box>
-            {searchable ? (
+            {searchable && searchOpen ? (
               <TextField
                 inputRef={searchInput}
+                autoFocus
                 size="small"
                 placeholder="Найти проект"
                 value={search}

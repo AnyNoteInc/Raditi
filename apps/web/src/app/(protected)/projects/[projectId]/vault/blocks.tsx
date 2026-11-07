@@ -6,9 +6,8 @@ import { SiteEnvVars } from '@/components/site/site-env-vars'
 import { UNAVAILABLE } from '@/lib/access'
 import { loadSiteCredentials, loadSiteHistory, loadSiteSection } from '@/lib/site'
 
-// The two blocks of «Переменные» as its pages read them: the block's own page, and the root of
-// the section, which shows the first block beside the menu (`nested`). UNAVAILABLE — the site
-// could not be read; the page says so.
+// The two blocks of «Переменные» as its tabs read them (`nested`: the heading of the section is
+// above). UNAVAILABLE — the site could not be read; the page says so.
 
 /** «Переменные окружения»: the list reads itself, an owner or an admin changes it. */
 export async function variablesBlock(
