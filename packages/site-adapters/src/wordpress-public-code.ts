@@ -21,7 +21,7 @@ function headerVersion(text: string): string | null {
 }
 
 /** `$wp_version = '6.9';` of wp-includes/version.php. */
-function coreVersion(text: string): string | null {
+export function coreVersion(text: string): string | null {
   const match = /^\$wp_version\s*=\s*'([^']+)'\s*;/m.exec(text)
   const version = match?.[1] ?? null
   return version !== null && VERSION.test(version) ? version : null

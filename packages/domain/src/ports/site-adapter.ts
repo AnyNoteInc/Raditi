@@ -20,7 +20,9 @@ import type {
 import type { AgentWorkingSet, MediaRules } from '../release/candidate.ts'
 import type { DbSetting } from '../release/db-objects.ts'
 import type { DbOperationKind } from '../release/db-plan.ts'
-import type { SiteStack } from '../site-stack/stacks.ts'
+import type { DatabaseEngine } from '../site-connection/kinds.ts'
+import type { SiteLimit, SiteStack } from '../site-stack/stacks.ts'
+import type { StackSupport } from '../site-stack/support.ts'
 import type { SiteCodeCacheGateway } from './published-content.ts'
 import type { SiteContentGateway } from './site-db.ts'
 
@@ -31,6 +33,12 @@ export interface SiteFacts {
   url: string
   docroot: string
   version?: string
+  /**
+   * The id of the row of the stack's table of generations (`sites.stack_facts.generation`): the
+   * only thing of the site's version `stackGuide` reads (docs/plan/62-site-stacks.md, Т14, Р6 of
+   * Э2). `version` is a string from the hosting and never reaches the instructions of a turn.
+   */
+  generation?: string
   runtimeVersion?: string
   /**
    * What the production configuration says about the database (`databaseSettings`); absent —
@@ -154,12 +162,147 @@ export interface SiteContentAdapter<Access extends SiteContentAccess = SiteConte
   createCodeCache?(connection: SiteContentConnection<Access>): SiteCodeCacheGateway
 }
 
+/** The longest file a `SiteRead` hands over (docs/plan/62-site-stacks.md, §2.3). */
+export const siteReadBytes = 256 * 1024
+
+/** The most entries of one folder a `SiteTree.list` hands over (question В1 of Э2). */
+export const siteReadEntries = 4096
+
+/**
+ * One file from the site root, by its relative path (ASCII, `/` separators). Longer than
+ * `siteReadBytes` or a failure to read — null; an expired deadline throws. `configSecrets` reads
+ * as before: without the values of the secrets the import does not go on.
+ *
+ * In the check session of the wizard a failure of the connection throws: it is `transfer_failed`
+ * with a retry, not `version_unknown` (Т26). null there means only «no such file», «too long»
+ * or, by default (question В10 of Э2), «closed to this access»: no retry mends `access_denied`.
+ */
+export type SiteRead = (path: string) => Promise<Uint8Array | null>
+
+/** The files of a site root as `readLayout` reads them: one file, or the entries of a folder. */
+export interface SiteTree {
+  read: SiteRead
+  /** At most `siteReadEntries` entries; null — no such folder, or it cannot be read. */
+  list(
+    path: string,
+  ): Promise<readonly { name: string; type: 'file' | 'directory' | 'link' }[] | null>
+}
+
+/** Other products of the same vendor a version file may name: a closed list. */
+export const otherProducts = ['modx_evolution', 'bitrix24'] as const
+export type OtherProduct = (typeof otherProducts)[number]
+
+export type SiteVersionReading =
+  /** Only a value that passes `siteVersionSchema`. */
+  | { kind: 'read'; version: string }
+  | { kind: 'other_product'; product: OtherProduct }
+  | { kind: 'unknown' }
+
+export type SiteLayoutReading =
+  /** The values are checked by the adapter. */
+  | { kind: 'read'; extras: Record<string, string>; adminPath: string | null }
+  | {
+      kind: 'refused'
+      limit: Extract<
+        SiteLimit,
+        'outside_root' | 'renamed_folder' | 'other_engine' | 'encoding_unsupported'
+      >
+    }
+
+/** What tells that the site on the hosting moved away from `main`. */
+export interface SiteDriftProbe {
+  /** Compared with `main` byte for byte. */
+  versionFile: string
+  /** The names of their folders are compared. */
+  extensionRoots: readonly string[]
+}
+
+/** One public page of the site as the wizard read it: its path below the origin and its text. */
+export interface PublicPage {
+  path: string
+  html: string
+}
+
+/** How a site of the stack is recognised: every adapter has it, a closed panel too. */
+export interface StackRecognition {
+  /** Addresses of the signs below the origin, each read once. */
+  publicPaths: readonly string[]
+  /**
+   * `yes` only on the stack's own signs. A page of a bot check, an error 503 or a stub of the
+   * hosting says nothing, and is `unknown`: a working site behind a guard is not «another site»
+   * (Т26).
+   */
+  fingerprint(pages: readonly PublicPage[]): 'yes' | 'no' | 'unknown'
+  /** The generation by the public signs; null — unknown, and that is no refusal. */
+  publicGeneration(pages: readonly PublicPage[]): string | null
+  /** A closed list of screens: the stack is taken only on its own `yes` (Т29). */
+  needsOwnYes: boolean
+  /** The names of the root tell a layout the markers do not pass (MODX without `core`). */
+  rootHint(names: readonly string[]): SiteLimit | null
+  /**
+   * Names in the folder of the core: a copy moved without the files of the root (Р17). Read for a
+   * stack with `files: 'off'` too.
+   */
+  coreFolder: readonly string[] | null
+}
+
+/** What the wizard asks and says. Without it the screens would know the stacks (rule 8). */
+export interface StackConnection {
+  /** The engines the step of the database offers. */
+  databaseEngines: readonly DatabaseEngine[]
+  /** «MODX Revolution» of `other_product`; the word `product` of the limit texts. */
+  fullName: string
+  /** The default of the field «Адрес панели управления»; null — the field is not shown. */
+  adminPathDefault: string | null
+  shops: readonly { folder: string; products: 'open' | 'closed' }[]
+  /** OpenCart — `open`: the site is a shop whatever its folders say. */
+  alwaysShop: 'open' | 'closed' | null
+  /** The guard of prices stands: the words of prices in the text of a shop are true (Э9.6). */
+  pricesGuarded: boolean
+  /** The name of the file in the hint of the step of the database (Т28). */
+  configFile: string | null
+  /**
+   * The lines of the summary panel and of the block «Что мы умеем» (Т27, Т32), shown as they are;
+   * null — the stack is not connected. The contract wants lines that are not empty, «в течение 7
+   * дней» in `copy` and «отменить это мы не сможем» in `live` (question В14 of Э2).
+   */
+  terms: {
+    /** «В копии»: the phrase of the agreement. */
+    copy: string
+    /** What exactly. */
+    copyDetail: string
+    /** «Сразу на сайте»: the phrase of the agreement. */
+    live: string
+    /** What exactly. */
+    liveDetail: string
+    /** «Закрыто для агента», a line a paragraph; checked by the journal of Э8.16 and Т64. */
+    closed: readonly string[]
+  } | null
+}
+
 export interface SiteAdapter {
   readonly stack: SiteStack
+  /** What the platform may do with a site of the stack (`siteSupportOf` judges it). */
+  readonly support: StackSupport
+  readonly recognition: StackRecognition
+  readonly connection: StackConnection
+  /**
+   * Only the files of the release, no secret, at most two reads. Runs in the check session of the
+   * wizard and over git in core. null — the stack's files are closed.
+   */
+  readVersion: ((read: SiteRead) => Promise<SiteVersionReading>) | null
+  /** Only core: the layout and the settings of the copy. May read the configuration, gives no secret. */
+  readLayout: ((tree: SiteTree) => Promise<SiteLayoutReading>) | null
+  driftProbe: SiteDriftProbe | null
+  /** Pure: the paths of the copies the site runs instead of this file (OCMOD). */
+  derivedCopyOf: ((path: string) => readonly string[]) | null
+  /**
+   * How the stack is built and its traps: Markdown in English, list items, at most 6 000 characters.
+   * Reads no version from the site: only `site.generation` (Т14).
+   */
+  stackGuide(site: SiteFacts): string
   importRules(site: SiteFacts): ImportRules
   verify(site: SiteFacts): VerifyPlan
-  /** Draft of the site AGENTS.md. */
-  agentGuide(site: SiteFacts): string
   /** Paths an agent diff may not touch, e.g. wp-config.php or /bitrix/. */
   protectedPaths(site: SiteFacts): string[]
   /**

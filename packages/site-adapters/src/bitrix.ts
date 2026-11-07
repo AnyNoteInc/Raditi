@@ -1,115 +1,92 @@
 import type { SiteAdapter } from '@repo/domain'
 import { notImplemented } from '@repo/domain'
-import { phpConfigStrings, secretValues } from './php-config.ts'
-import {
-  archivesAndDumps,
-  dataFiles,
-  phpServerConfigFiles,
-  phpServerConfigProtected,
-  secretFiles,
-  serverLogs,
-} from './php-hosting.ts'
+import { noBrowserTasks } from './no-browser-tasks.ts'
 
-// 1С-Битрикс — stage 3 (spec §13). Site code lives in /local/; the core /bitrix/ and the
-// media in /upload/ are never imported or touched. Pattern syntax as in wordpress.ts.
-
-const anchored = (paths: readonly string[]) => paths.map((p) => `/${p}`)
-
-const kernelAndMedia = ['bitrix/', 'upload/']
-
-// `.htaccess`, `.user.ini` and `php.ini` at any depth: Apache and PHP read them in every folder.
-const protectedPaths = [...kernelAndMedia, ...phpServerConfigProtected]
-
-const buildOutput = ['node_modules/', '*.log']
-
-// Backups live in /bitrix/backup/, already excluded with the core; dumps and archives elsewhere
-// are caught by pattern. gitleaks scans the imported tree as well (P11).
-const importExcludes = [
-  ...anchored([...kernelAndMedia, ...phpServerConfigFiles]),
-  ...buildOutput,
-  ...serverLogs,
-  ...archivesAndDumps,
-  ...dataFiles,
-  ...secretFiles,
-]
+// 1С-Битрикс (docs/plan/62-site-stacks.md, Т8, Т15, fact 14): the platform recognises a site of
+// it and connects none. Both ways are closed, so every method of the files throws: nothing reaches
+// it, and a stack that opens its files must answer them (the contract of a stack adapter). No code
+// of its core is in the repository or read here.
 
 /**
- * The kernel folder: every installation has it in its root.
- * TODO(stage 3): too weak for the import, which does not enter a folder below the root that has
- * every marker — the `components` folder of a template and of /local/ holds a namespace folder
- * `bitrix` too. Before Bitrix becomes connectable the list needs an entry such a folder lacks.
+ * The folder of the core and the access file of the root, which every installation has. The
+ * `components` folder of a template and of /local/ holds a namespace folder `bitrix` too, but not
+ * `.access.php` (Т15).
  */
-const rootMarkers = ['bitrix']
+const rootMarkers = ['bitrix', '.access.php']
 
-// The connection of the kernel is written twice: `$DBPassword = "…";` of dbconn.php and
-// `'password' => '…'` of .settings.php, which keeps the passwords of its other services
-// under the same key. Whitespace is all that may stand between the tokens, as in wordpress.ts.
-const dbconnPassword = /\$DBPassword[ \t\r\n]*=[ \t\r\n]*/
-const statementEnd = /[ \t\r\n]*;/
-const settingsPassword = /(['"])password\1[ \t\r\n]*=>[ \t\r\n]*/
-const elementEnd = /[ \t\r\n]*[,)\]]/
-
-const todo = (method: string) => notImplemented(`BitrixAdapter.${method} (stage 3)`)
+const closed = (method: string) => notImplemented(`BitrixAdapter.${method}`)
 
 export const bitrixAdapter: SiteAdapter = {
   stack: 'bitrix',
+  support: {
+    files: 'off',
+    browser: 'off',
+    generations: [],
+    refuseBelow: null,
+    releaseNeedsChecks: true,
+    unknownVersion: 'closed',
+  },
+  recognition: {
+    publicPaths: [],
+    // Read by the early refusal of step 1 (Э9.1): `/bitrix/` is seen on `GET /` without a path.
+    fingerprint: (pages) =>
+      pages.some((page) => page.html.includes('/bitrix/')) ? 'yes' : 'unknown',
+    publicGeneration: () => null,
+    needsOwnYes: false,
+    rootHint: () => null,
+    // Names without a dot: a hosting may hide a file with a dot even from `LIST -a`.
+    coreFolder: ['modules', 'php_interface'],
+  },
+  // No step of the database and no summary panel: `terms: null` — the stack is not connected.
+  connection: {
+    databaseEngines: [],
+    fullName: '1С-Битрикс',
+    adminPathDefault: null,
+    shops: [],
+    alwaysShop: null,
+    pricesGuarded: false,
+    configFile: null,
+    terms: null,
+  },
+  readVersion: null,
+  readLayout: null,
+  driftProbe: null,
+  derivedCopyOf: null,
+  stackGuide() {
+    return ''
+  },
   importRules() {
-    return {
-      gitignore: [
-        '# Managed by Raditi: the core, media and caches stay out of git',
-        ...importExcludes,
-      ],
-      exclude: [...importExcludes],
-      // No folder of documents: none of them is imported (plan 62, Т57).
-      documentFolders: [],
-    }
+    throw closed('importRules')
   },
   verify() {
-    throw todo('verify')
-  },
-  agentGuide() {
-    throw todo('agentGuide')
+    throw closed('verify')
   },
   protectedPaths() {
-    return [...protectedPaths]
+    throw closed('protectedPaths')
   },
   rootMarkers() {
     return [...rootMarkers]
   },
-  async configSecrets(read) {
-    // One after the other: the reader may have a single connection to the site.
-    const dbconn = await phpConfigStrings(
-      read,
-      'bitrix/php_interface/dbconn.php',
-      dbconnPassword,
-      statementEnd,
-    )
-    const settings = await phpConfigStrings(
-      read,
-      'bitrix/.settings.php',
-      settingsPassword,
-      elementEnd,
-    )
-    return secretValues([...dbconn, ...settings])
+  configSecrets() {
+    return Promise.reject(closed('configSecrets'))
   },
-  // Previews and releases of Bitrix come with stage 3 (docs/plan/53-chat-preview-release.md).
   agentWorkingSet() {
-    throw todo('agentWorkingSet')
+    throw closed('agentWorkingSet')
   },
   mediaRules() {
-    throw todo('mediaRules')
+    throw closed('mediaRules')
   },
-  // Until stage 3 a database of Bitrix is not copied: its preview is `unavailable`.
+  // A database of Bitrix is not copied: its preview is `unavailable`.
   async databaseSettings() {
     return null
   },
   previewRecipe() {
-    throw todo('previewRecipe')
+    throw closed('previewRecipe')
   },
   databaseCopyPolicy() {
-    throw todo('databaseCopyPolicy')
+    throw closed('databaseCopyPolicy')
   },
-  // Until stage 3 a release of Bitrix carries no database operation.
+  // A release of Bitrix carries no database operation.
   dbOperationKinds() {
     return []
   },
@@ -119,24 +96,9 @@ export const bitrixAdapter: SiteAdapter = {
   dbPlanGuide() {
     return ''
   },
-  // No preview of Bitrix runs before stage 3: its browser opens nothing.
+  // No preview of Bitrix runs: its browser opens nothing.
   browserRequestDenied() {
     return true
   },
-  // Tasks in the browser on a Bitrix site come with stage 3 (docs/plan/57-browser-tasks.md).
-  browserTaskPolicy() {
-    throw todo('browserTaskPolicy')
-  },
-  browserCheckpointOf() {
-    throw todo('browserCheckpointOf')
-  },
-  browserCommitAction() {
-    throw todo('browserCommitAction')
-  },
-  browserVerification() {
-    throw todo('browserVerification')
-  },
-  browserGuide() {
-    throw todo('browserGuide')
-  },
+  ...noBrowserTasks('bitrix'),
 }

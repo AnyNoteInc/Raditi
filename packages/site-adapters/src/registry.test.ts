@@ -39,12 +39,10 @@ describe('connectableStacks', () => {
     }
   })
 
-  it('keeps Bitrix out while its markers also fit a folder of component namespaces', () => {
+  it('keeps a folder of component namespaces apart from a root of Bitrix (Т15)', () => {
     // /local/components/ and the components folder of a template hold `bitrix` next to the
-    // namespaces of the site: the import would leave such a folder out as a nested installation.
-    const markers = getSiteAdapter('bitrix').rootMarkers()
-    const namespacesFit = isNestedSiteRoot(['bitrix', 'shop'], markers)
-    expect(connectableStacks.includes('bitrix') && namespacesFit).toBe(false)
+    // namespaces of the site: the import must not leave such a folder out as a nested installation.
+    expect(isNestedSiteRoot(['bitrix', 'shop'], getSiteAdapter('bitrix').rootMarkers())).toBe(false)
   })
 })
 

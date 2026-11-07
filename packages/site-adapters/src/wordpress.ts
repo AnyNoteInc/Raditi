@@ -1,6 +1,5 @@
 import { wordpressPublicOriginals } from './wordpress-public-code.ts'
 import type { SiteAdapter } from '@repo/domain'
-import { notImplemented } from '@repo/domain'
 import { phpConfigStrings, secretValues } from './php-config.ts'
 import { wordpressBrowserRequestDenied } from './wordpress-browser.ts'
 import {
@@ -17,6 +16,14 @@ import {
   wordpressDbSettings,
 } from './wordpress-db.ts'
 import { wordpressPreviewRecipe } from './wordpress-preview.ts'
+import {
+  wordpressConnection,
+  wordpressDriftProbe,
+  wordpressReadVersion,
+  wordpressRecognition,
+  wordpressStackGuide,
+  wordpressSupport,
+} from './wordpress-stack.ts'
 import { wordpressVerifyPlan } from './wordpress-verify.ts'
 import {
   wordpressAgentWorkingSet,
@@ -163,10 +170,17 @@ const defineEnd = /[ \t\r\n]*[),]/
 /** What wp-config-sample.php ships in place of a key: no secret, and present in every copy of it. */
 const samplePhrase = 'put your unique phrase here'
 
-const todo = (method: string) => notImplemented(`WordPressAdapter.${method} (P10)`)
-
 export const wordpressAdapter: SiteAdapter = {
   stack: 'wordpress',
+  support: wordpressSupport,
+  recognition: wordpressRecognition,
+  connection: wordpressConnection,
+  readVersion: wordpressReadVersion,
+  // The layout of WordPress is not read: its preview takes the configuration as it is.
+  readLayout: null,
+  driftProbe: wordpressDriftProbe,
+  derivedCopyOf: null,
+  stackGuide: wordpressStackGuide,
   importRules() {
     return {
       gitignore: [
@@ -181,9 +195,6 @@ export const wordpressAdapter: SiteAdapter = {
     }
   },
   verify: wordpressVerifyPlan,
-  agentGuide() {
-    throw todo('agentGuide')
-  },
   protectedPaths() {
     return [...protectedPaths]
   },

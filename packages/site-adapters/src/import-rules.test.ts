@@ -14,10 +14,14 @@ import { connectableStacks, getSiteAdapter } from './registry.ts'
 // (docs/plan/39-site-connection-wizard.md). The policy refuses a line outside the syntax it
 // supports, so a line added to an adapter is proven here, not by the first import.
 
-/** Every stack that has an adapter; the others are planned and throw. */
+/**
+ * Every stack that has an adapter with open files; the others are planned and throw, and a stack
+ * with closed files imports nothing (Т8).
+ */
 const adapters = siteStacks.flatMap((stack): SiteAdapter[] => {
   try {
-    return [getSiteAdapter(stack)]
+    const adapter = getSiteAdapter(stack)
+    return adapter.support.files === 'off' ? [] : [adapter]
   } catch {
     return []
   }
@@ -44,9 +48,9 @@ const clientToolFiles = [
 ]
 
 describe('exclude lines of the adapters', () => {
-  it('covers every adapter of the registry, the connectable stacks among them', () => {
+  it('covers every adapter of the registry with open files, the connectable stacks among them', () => {
     const stacks = adapters.map((adapter) => adapter.stack)
-    expect(stacks).toEqual(['wordpress', 'bitrix'])
+    expect(stacks).toEqual(['wordpress'])
     expect(stacks).toEqual(expect.arrayContaining([...connectableStacks]))
   })
 
@@ -245,36 +249,5 @@ describe('import of a WordPress site', () => {
     expect(policy.decide('.git/config', 'file')).toBe('vcs')
     expect(policy.decide('.github/workflows/deploy.yml', 'file')).toBe('ci')
     expect(policy.decide('.gitmodules', 'file')).toBe('ci')
-  })
-})
-
-describe('import of a Bitrix site', () => {
-  const policy = importPolicy(getSiteAdapter('bitrix'))
-
-  it.each([
-    ['bitrix', 'directory'],
-    ['bitrix/php_interface/dbconn.php', 'file'],
-    ['bitrix/.settings.php', 'file'],
-    ['upload/iblock/a.jpg', 'file'],
-    ['local/export.csv', 'file'],
-    ['local/php_interface/error_log', 'file'],
-    ['.htaccess', 'file'],
-  ] as const)('leaves %s out', (path, type) => {
-    expect(policy.decide(path, type)).toBe('excluded')
-  })
-
-  it.each([
-    ['local', 'directory'],
-    ['local/php_interface/init.php', 'file'],
-    ['local/templates/main/header.php', 'file'],
-    ['local/components/shop/catalog/class.php', 'file'],
-    // The configuration of another platform is no rule of this one.
-    ['local/wp-config.php', 'file'],
-  ] as const)('takes %s', (path, type) => {
-    expect(policy.decide(path, type)).toBe('take')
-  })
-
-  it('names no folder of documents (plan 62, Т57)', () => {
-    expect(policy.decide('local/price.pdf', 'file')).toBe('document')
   })
 })
