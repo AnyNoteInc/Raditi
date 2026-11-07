@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common'
 import type { PrismaClient } from '@repo/db'
 import type { ObjectStorage, SecretStore } from '@repo/domain'
-import { getSiteAdapter, getSiteContentAdapter } from '@repo/site-adapters'
+import { findSiteContentAdapter, getSiteAdapter } from '@repo/site-adapters'
 import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
 
 import type { CoreConfig } from '../config/config.ts'
@@ -10,7 +10,16 @@ import { GitWorkspaceModule } from '../git-workspace/git-workspace.module.ts'
 import { GitWorkspaceService } from '../git-workspace/git-workspace.service.ts'
 import { OBJECT_STORAGE } from '../infra/infra.tokens.ts'
 import { ReleaseApiServer } from './release-api.server.ts'
-import { ReleaseApi } from './release-api.service.ts'
+import { ReleaseApi, type ReleaseApiDependencies } from './release-api.service.ts'
+
+/**
+ * The adapters of the stacks the release API reads: a stack without published content has no
+ * plugin, and its release goes without one (docs/plan/62-site-stacks.md, Т8).
+ */
+export const releaseApiStacks: Pick<ReleaseApiDependencies, 'adapter' | 'contentAdapter'> = {
+  adapter: getSiteAdapter,
+  contentAdapter: findSiteContentAdapter,
+}
 
 /**
  * The release API of the core role (docs/plan/53-chat-preview-release.md, Р32, R8b). startCore
@@ -35,8 +44,7 @@ import { ReleaseApi } from './release-api.service.ts'
               git: workspace,
               secrets,
               storage,
-              adapter: getSiteAdapter,
-              contentAdapter: getSiteContentAdapter,
+              ...releaseApiStacks,
               publicUrl: config.releaseApi.publicUrl,
             })
           : null,

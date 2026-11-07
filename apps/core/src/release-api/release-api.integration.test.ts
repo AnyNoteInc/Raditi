@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { billingFixtures } from '@repo/billing/testing'
 import { createPrismaClient, PostgresSiteLeaseStore, type PrismaClient } from '@repo/db'
 import {
+  notImplemented,
   releaseReportKey,
   siteAccessPath,
   type ReleaseStep,
@@ -25,7 +26,7 @@ import {
   type ReleaseFixture,
   type ReleaseFixtureOptions,
 } from '../testing/releases.ts'
-import { ReleaseApi } from './release-api.service.ts'
+import { ReleaseApi, type ReleaseApiDependencies } from './release-api.service.ts'
 
 // The release API of core on PostgreSQL (docs/plan/53-chat-preview-release.md, Р29–Р32): the
 // bearer token of one deploy attempt, a report kept once per key, the barrier of the site as the
@@ -53,7 +54,10 @@ describe.skipIf(!enabled)('the release API with PostgreSQL', () => {
   })
 
   /** A published release: its tag made, its job about to call. */
-  async function published(options: ReleaseFixtureOptions = {}) {
+  async function published(
+    options: ReleaseFixtureOptions = {},
+    stack: Partial<Pick<ReleaseApiDependencies, 'adapter' | 'contentAdapter'>> = {},
+  ) {
     const f: ReleaseFixture = await releaseFixture(db, fixtures, options)
     sites.push(f.siteId)
     const git = new FakeReleaseGit()
@@ -101,6 +105,7 @@ describe.skipIf(!enabled)('the release API with PostgreSQL', () => {
       adapter: getSiteAdapter,
       contentAdapter: getSiteContentAdapter,
       publicUrl: 'http://release-api.invalid',
+      ...stack,
     })
     const auth = `Bearer ${vault.latestToken()}`
     const report = (
@@ -393,6 +398,64 @@ describe.skipIf(!enabled)('the release API with PostgreSQL', () => {
         applicationPassword: 'x',
       },
     })
+  })
+
+  it('describes no release whose stack does not say its check (Т8)', async () => {
+    // A stack with files must answer `verify`: the home page is no fallback for it.
+    const refusal = notImplemented('The check of the stack')
+    const r = await published(
+      {},
+      {
+        adapter: (stack) => {
+          const real = getSiteAdapter(stack)
+          return {
+            mediaRules: (site) => real.mediaRules(site),
+            verify: () => {
+              throw refusal
+            },
+          }
+        },
+      },
+    )
+    await expect(r.api.manifest(r.f.releaseId, r.auth)).rejects.toBe(refusal)
+  })
+
+  it('describes no release whose stack does not say its media rules (Т8)', async () => {
+    // A stack with files must answer `mediaRules`: no folder is taken as add-only by default.
+    const refusal = notImplemented('Media rules of the stack')
+    const r = await published(
+      {},
+      {
+        adapter: (stack) => {
+          const real = getSiteAdapter(stack)
+          return {
+            mediaRules: () => {
+              throw refusal
+            },
+            verify: (site) => real.verify(site),
+          }
+        },
+      },
+    )
+    await expect(r.api.manifest(r.f.releaseId, r.auth)).rejects.toBe(refusal)
+  })
+
+  it('gives no plugin access to the job of a stack without published content', async () => {
+    const r = await published({ contentAccess: true }, { contentAdapter: () => null })
+    r.vault.kv.set(siteAccessPath(r.f.siteId, 'wp'), {
+      data: {
+        v: '1',
+        origin: 'https://site.invalid',
+        username: 'raditi',
+        applicationPassword: 'x',
+      },
+      version: 1,
+    })
+    await r.report('conflicts', 'started')
+    const access = await r.api.access(r.f.releaseId, r.auth, { deployAttempt: 1 })
+    expect(access.hosting.method).toBe('sftp')
+    // The release goes without the plugin, as it did for a stack that had none.
+    expect(access.content).toBeNull()
   })
 
   it('stops answering once the release ended', async () => {

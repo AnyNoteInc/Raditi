@@ -160,6 +160,16 @@ describe('the contract of a stack adapter', () => {
       'agentWorkingSet: throws while the files are open',
     ],
     [
+      'settings of the database that are not there',
+      {
+        ...wordpressAdapter,
+        dbSettings: () => {
+          throw notImplemented('WordPressAdapter.dbSettings')
+        },
+      },
+      'dbSettings: throws while the files are open',
+    ],
+    [
       'a preview of another user',
       {
         ...wordpressAdapter,

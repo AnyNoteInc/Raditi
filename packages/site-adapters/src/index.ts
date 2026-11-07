@@ -3,6 +3,7 @@ export { bitrixAdapter } from './bitrix.ts'
 export { fetchSiteTransport } from './http-transport.ts'
 export {
   connectableStacks,
+  findSiteContentAdapter,
   getSiteAdapter,
   getSiteContentAdapter,
   siteAdapters,

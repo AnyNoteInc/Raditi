@@ -9,6 +9,7 @@ import {
 } from '@repo/db'
 import {
   deployWrapDataSchema,
+  notImplemented,
   releaseReportKey,
   siteAccessPath,
   undoKeyMaterial,
@@ -378,6 +379,38 @@ describe.skipIf(!enabled)('«Отменить выпуск» with PostgreSQL', (
     )
   })
 
+  it('builds no plan of an undo whose stack does not say its media rules (Т8)', async () => {
+    const w = await installed()
+    // A stack with files must answer `mediaRules`: no media are taken as add-only by default.
+    const planner = new UndoPlanner({
+      db,
+      git: w.git,
+      production: w.production.resolve,
+      values: w.values,
+      adapter: () => ({
+        mediaRules: () => {
+          throw notImplemented('Media rules of the stack')
+        },
+      }),
+      previewBaseDomain: 'preview.example.test',
+      logger: { log: vi.fn(), warn: vi.fn() },
+    })
+    const installedSha = (await release(w.f.releaseId)).approvedSha!
+    const asked = await db.$transaction((tx) =>
+      requestUndoPlan(tx, {
+        releaseId: w.f.releaseId,
+        siteId: w.f.siteId,
+        installedSha,
+        userId: w.f.userId,
+      }),
+    )
+    await planner.plan({ planId: asked.id })
+    const planRow = await db.releaseUndoPlan.findUniqueOrThrow({ where: { id: asked.id } })
+    expect(planRow).toMatchObject({ status: 'failed', errorCode: 'technical' })
+    expect(planRow.dbPlan).toEqual([])
+    expect(planRow.targetTree).toBeNull()
+  })
+
   it('waits for a production that does not answer, then fails the plan', async () => {
     const w = await installed()
     w.production.unreachable = true
@@ -532,6 +565,48 @@ describe.skipIf(!enabled)('«Отменить выпуск» with PostgreSQL', (
         }),
       ])
     }
+  })
+
+  it('refuses the commit of an undo before `main` moves when the stack does not say its media rules (Т8)', async () => {
+    const w = await installed()
+    const planRow = await planOf(w)
+    const undoId = await confirmed(w, planRow.id)
+    // The same core, whose adapter no longer answers `mediaRules`: no media of the release are
+    // taken as add-only by default — the undo is refused before its commit.
+    const skill = new ReleaseSkill({
+      db,
+      leases: new PostgresSiteLeaseStore(db),
+      git: w.git,
+      provider: w.provider,
+      secrets: w.vault,
+      storage: w.storage,
+      adapter: (stack) => {
+        const real = getSiteAdapter(stack)
+        return {
+          dbOperationKinds: (site) => real.dbOperationKinds(site),
+          dbSettings: (site) => real.dbSettings(site),
+          protectedPaths: (site) => real.protectedPaths(site),
+          mediaRules: () => {
+            throw notImplemented('Media rules of the stack')
+          },
+        }
+      },
+      contentAccessKind: (stack) => getSiteContentAdapter(stack).accessKind,
+      api: { startTimeoutMs: 10 * 60_000 },
+      values: w.values,
+      production: w.production.resolve,
+      previewBaseDomain: 'preview.example.test',
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    })
+    const main = w.git.main
+    await advance({ ...w, skill }, undoId)
+    expect(await release(undoId)).toMatchObject({
+      status: 'failed',
+      errorCode: 'forbidden_path',
+      mainPushedAt: null,
+    })
+    expect(w.git.main).toBe(main)
+    expect(await taskStatus(w)).toBe('done')
   })
 
   it('goes back to the release when the undo fails its check: the revert commit, the dialog done', async () => {

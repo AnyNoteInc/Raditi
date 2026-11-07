@@ -3,6 +3,7 @@ import { appEnvs, connectionWays, isNestedSiteRoot, siteStacks, stackAxisOpen } 
 import { describe, expect, it } from 'vitest'
 import {
   connectableStacks,
+  findSiteContentAdapter,
   getSiteAdapter,
   getSiteContentAdapter,
   siteAdapters,
@@ -136,5 +137,18 @@ describe('getSiteContentAdapter', () => {
   it('rejects unknown stacks, including prototype keys', () => {
     expect(() => getSiteContentAdapter('drupal' as never)).toThrow(/Unknown site stack/)
     expect(() => getSiteContentAdapter('constructor' as never)).toThrow(/Unknown site stack/)
+  })
+})
+
+describe('findSiteContentAdapter', () => {
+  it('returns the published-content adapter of a stack that has one, and null for one without', () => {
+    expect(findSiteContentAdapter('wordpress')).toBe(getSiteContentAdapter('wordpress'))
+    // A release of such a stack goes without the plugin.
+    expect(findSiteContentAdapter('bitrix')).toBeNull()
+  })
+
+  it('rejects unknown stacks, including prototype keys', () => {
+    expect(() => findSiteContentAdapter('drupal' as never)).toThrow(/Unknown site stack/)
+    expect(() => findSiteContentAdapter('constructor' as never)).toThrow(/Unknown site stack/)
   })
 })

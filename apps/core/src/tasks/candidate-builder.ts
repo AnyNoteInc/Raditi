@@ -13,7 +13,6 @@ import {
   canonicalDbPlanJson,
   compactDbPlan,
   dbPlanEntryFromJournal,
-  isDomainError,
   isEmptyCandidate,
   proposeVersion,
   versionTagSchema,
@@ -230,13 +229,8 @@ export class CandidateBuilder {
     ])
     const base = standing?.baseSha ?? latest?.baseSha ?? first?.baseSha ?? null
     if (!repository || !base || !site) return null
-    let addOnlyPaths: readonly string[] = []
-    try {
-      addOnlyPaths = this.adapter(task.site.stack).mediaRules(siteFactsOf(task.site)).addOnlyPaths
-    } catch (error) {
-      // The stack has no media rules yet: nothing is add-only.
-      if (!isDomainError(error) || error.code !== 'NOT_IMPLEMENTED') throw error
-    }
+    // A stack with files says its media rules (Т8): nothing to fall back to.
+    const { addOnlyPaths } = this.adapter(task.site.stack).mediaRules(siteFactsOf(task.site))
     return {
       taskId: task.id,
       workspaceId: site.workspaceId,
@@ -328,12 +322,7 @@ export class CandidateBuilder {
     } catch {
       throw valuesUnavailable()
     }
-    let settings: ReturnType<SiteAdapter['dbSettings']> = []
-    try {
-      settings = this.adapter(context.site.stack).dbSettings(siteFactsOf(context.site))
-    } catch (error) {
-      if (!isDomainError(error) || error.code !== 'NOT_IMPLEMENTED') throw error
-    }
+    const settings = this.adapter(context.site.stack).dbSettings(siteFactsOf(context.site))
     const view = buildDbPlanView({
       planSha256,
       operations,

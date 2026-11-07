@@ -206,6 +206,10 @@ export async function stackContractViolations(
           adapter.databaseCopyPolicy(site, { previewId: '00000000-0000-4000-8000-000000000001' }),
       ],
       ['protectedPaths', () => adapter.protectedPaths(site)],
+      // The release reads both with no fallback (Э2.10): a plan of the database is refused
+      // when building its candidate otherwise.
+      ['dbOperationKinds', () => adapter.dbOperationKinds(site)],
+      ['dbSettings', () => adapter.dbSettings(site)],
     ] as const) {
       if (await fails(call)) violations.push(`${name}: throws while the files are open`)
     }

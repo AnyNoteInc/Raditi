@@ -108,7 +108,8 @@ export interface ReleaseApiDependencies {
   secrets: Pick<SecretStore, 'kvRead'>
   storage: Pick<ObjectStorage, 'presign' | 'get' | 'delete'>
   adapter: (stack: SiteStack) => Pick<SiteAdapter, 'verify' | 'mediaRules'>
-  contentAdapter: (stack: SiteStack) => Pick<SiteContentAdapter, 'accessKind'>
+  /** The published-content adapter of the stack; null — the release goes without the plugin. */
+  contentAdapter: (stack: SiteStack) => Pick<SiteContentAdapter, 'accessKind'> | null
   /**
    * RELEASE_API_PUBLIC_URL: the origin deploy jobs call. The manifest names the values of the
    * database plan by it (`…/values/<index>`).
@@ -251,53 +252,42 @@ export class ReleaseApi {
 
   /**
    * `SiteAdapter.mediaRules().addOnlyPaths` (Р12, R8c): folders where the release only adds
-   * files — the job refuses a manifest that replaces or deletes one there. A stack that does not
-   * say yet has none.
+   * files — the job refuses a manifest that replaces or deletes one there. A stack with files
+   * says them (docs/plan/62-site-stacks.md, Т8).
    */
   #addOnlyPaths(row: ReleaseRow): string[] {
     const site = { stack: row.site.stack, url: row.site.url, docroot: '/', extras: {} }
-    try {
-      return [...this.deps.adapter(row.site.stack).mediaRules(site).addOnlyPaths]
-    } catch (error) {
-      if (!isDomainError(error) || error.code !== 'NOT_IMPLEMENTED') throw error
-      return []
-    }
+    return [...this.deps.adapter(row.site.stack).mediaRules(site).addOnlyPaths]
   }
 
   /**
    * `SiteAdapter.verify()` against the origin of the site's address: its pages and failure
-   * markers; a stack that does not say yet is checked by its home page.
+   * markers. A stack with files says them (docs/plan/62-site-stacks.md, Т8); when its filter
+   * leaves no page, the job checks the home page.
    */
   #verifyPlan(row: ReleaseRow): DeployManifest['verify'] {
     const origin = new URL(row.site.url).origin
-    try {
-      const plan = this.deps
-        .adapter(row.site.stack)
-        .verify({ stack: row.site.stack, url: row.site.url, docroot: '/', extras: {} })
-      const pages = plan.pages.filter(
-        (page) => /^\/[\x21-\x7e]*$/.test(page) && page.length <= 1024,
-      )
-      const failureMarkers = plan.failureMarkers.filter(
-        (marker) => marker.length >= 4 && marker.length <= 200,
-      )
-      // The pages of the records a release creates, those the manifest takes.
-      const recordPages = Object.fromEntries(
-        Object.entries(plan.recordPages ?? {})
-          .filter(
-            ([type, page]) =>
-              /^[a-z][a-z_]{0,31}$/.test(type) && verifyRecordPageSchema.safeParse(page).success,
-          )
-          .slice(0, 8),
-      )
-      return {
-        origin,
-        failureMarkers: failureMarkers.slice(0, 32),
-        pages: pages.length > 0 ? pages.slice(0, releaseApiLimits.verifyPages) : ['/'],
-        ...(Object.keys(recordPages).length > 0 ? { recordPages } : {}),
-      }
-    } catch (error) {
-      if (!isDomainError(error) || error.code !== 'NOT_IMPLEMENTED') throw error
-      return { origin, failureMarkers: [], pages: ['/'] }
+    const plan = this.deps
+      .adapter(row.site.stack)
+      .verify({ stack: row.site.stack, url: row.site.url, docroot: '/', extras: {} })
+    const pages = plan.pages.filter((page) => /^\/[\x21-\x7e]*$/.test(page) && page.length <= 1024)
+    const failureMarkers = plan.failureMarkers.filter(
+      (marker) => marker.length >= 4 && marker.length <= 200,
+    )
+    // The pages of the records a release creates, those the manifest takes.
+    const recordPages = Object.fromEntries(
+      Object.entries(plan.recordPages ?? {})
+        .filter(
+          ([type, page]) =>
+            /^[a-z][a-z_]{0,31}$/.test(type) && verifyRecordPageSchema.safeParse(page).success,
+        )
+        .slice(0, 8),
+    )
+    return {
+      origin,
+      failureMarkers: failureMarkers.slice(0, 32),
+      pages: pages.length > 0 ? pages.slice(0, releaseApiLimits.verifyPages) : ['/'],
+      ...(Object.keys(recordPages).length > 0 ? { recordPages } : {}),
     }
   }
 
@@ -398,16 +388,13 @@ export class ReleaseApi {
         ? { method, access: sshAccessSchema.parse(stored) }
         : { method, access: ftpAccessSchema.parse(stored) }
     let content: DeployAccess['content'] = null
-    let contentKind: SiteAccessKind | null = null
     // The plugin's access to every job: it writes and restores the records of the plan, and it
     // drops the code a job wrote from the code cache of the site's PHP before the site is
     // checked (stand R12). It gives the job nothing its access to the hosting does not: that one
-    // writes every file of the site, its configuration included.
-    try {
-      contentKind = this.deps.contentAdapter(row.site.stack).accessKind
-    } catch (error) {
-      if (!isDomainError(error) || error.code !== 'NOT_IMPLEMENTED') throw error
-    }
+    // writes every file of the site, its configuration included. A stack without published
+    // content has no plugin: its release goes without one.
+    const contentKind: SiteAccessKind | null =
+      this.deps.contentAdapter(row.site.stack)?.accessKind ?? null
     if (contentKind !== null) {
       const access = await this.#secret(row.siteId, contentKind)
       if (access !== null) content = { stack: row.site.stack, access }

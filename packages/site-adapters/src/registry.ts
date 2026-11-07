@@ -70,9 +70,19 @@ const contentAdapters = new Map<SiteStack, SiteContentAdapter>([
  * and never compares it with a CMS itself.
  */
 export function getSiteContentAdapter(stack: SiteStack): SiteContentAdapter {
+  const adapter = findSiteContentAdapter(stack)
+  if (adapter) return adapter
+  throw notImplemented(`Published content for ${stack}`)
+}
+
+/**
+ * The published-content adapter of a stack; null — the stack has none, and a release of its site
+ * goes without the plugin (docs/plan/62-site-stacks.md, Т8).
+ */
+export function findSiteContentAdapter(stack: SiteStack): SiteContentAdapter | null {
   const adapter = contentAdapters.get(stack)
   if (adapter) return adapter
-  if (siteStacks.includes(stack)) throw notImplemented(`Published content for ${stack}`)
+  if (siteStacks.includes(stack)) return null
   // `stack` may come from the database as a plain string.
   throw badRequest(`Unknown site stack: ${String(stack)}`)
 }

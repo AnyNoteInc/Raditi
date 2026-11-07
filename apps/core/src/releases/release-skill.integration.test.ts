@@ -13,6 +13,7 @@ import {
   DEPLOY_WRAP_TTL_SECONDS,
   deployValueAad,
   deployWrapDataSchema,
+  notImplemented,
   parseDeployWrap,
   releaseReportKey,
   siteAccessPath,
@@ -123,7 +124,12 @@ describe.skipIf(!enabled)('the release skill with PostgreSQL', () => {
   }
 
   async function world(
-    options: ReleaseFixtureOptions & { gitOff?: boolean; noValues?: boolean } = {},
+    options: ReleaseFixtureOptions & {
+      gitOff?: boolean
+      noValues?: boolean
+      /** The adapter of the stack the skill reads; the registry's by default. */
+      adapter?: ReleaseSkillDependencies['adapter']
+    } = {},
   ): Promise<World> {
     const f = await releaseFixture(db, fixtures, options)
     sites.push(f.siteId)
@@ -144,7 +150,7 @@ describe.skipIf(!enabled)('the release skill with PostgreSQL', () => {
       provider,
       secrets: vault,
       storage,
-      adapter: getSiteAdapter,
+      adapter: options.adapter ?? getSiteAdapter,
       contentAccessKind: (stack) => getSiteContentAdapter(stack).accessKind,
       api: { startTimeoutMs: 10 * 60_000 },
       values: options.noValues ? null : values,
@@ -547,6 +553,23 @@ describe.skipIf(!enabled)('the release skill with PostgreSQL', () => {
         'wp-content/uploads/2026/a.png',
       ])
         await refused(await world({ candidateMedia }), 'forbidden_path', 'technical')
+    })
+
+    it('when the stack does not say its media rules (Т8)', async () => {
+      // A stack with files must answer `mediaRules`: no media are taken as add-only by default,
+      // and a candidate without media is refused all the same.
+      const adapter: ReleaseSkillDependencies['adapter'] = (stack) => {
+        const real = getSiteAdapter(stack)
+        return {
+          dbOperationKinds: (site) => real.dbOperationKinds(site),
+          dbSettings: (site) => real.dbSettings(site),
+          protectedPaths: (site) => real.protectedPaths(site),
+          mediaRules: () => {
+            throw notImplemented('Media rules of the stack')
+          },
+        }
+      }
+      await refused(await world({ adapter }), 'forbidden_path', 'technical')
     })
 
     it('when a check of the candidate failed', async () => {

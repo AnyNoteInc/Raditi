@@ -691,13 +691,8 @@ export class ReleaseSkill {
     try {
       const adapter = this.deps.adapter(row.site.stack)
       const protectedPaths = adapter.protectedPaths(site)
-      let addOnlyPaths: readonly string[] = []
-      try {
-        addOnlyPaths = adapter.mediaRules(site).addOnlyPaths
-      } catch (error) {
-        // A stack without media rules adds no media.
-        if (!isDomainError(error) || error.code !== 'NOT_IMPLEMENTED') throw error
-      }
+      // A stack with files says its media rules (Т8); a stack that cannot refuses the release.
+      const { addOnlyPaths } = adapter.mediaRules(site)
       return { protectedPaths, addOnlyPaths }
     } catch {
       return null
