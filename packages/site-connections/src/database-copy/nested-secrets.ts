@@ -13,10 +13,12 @@
 /**
  * A key whose value is a secret: a key, a token, a password, a secret, a webhook. `smtp_pass` and
  * `smtppass` of mailers, `mail_smtp_pass` of MODX (plan 62, Т57); a bare `pass` is none of them:
- * `bypass`, `compass` and `passage` are no secrets.
+ * `bypass`, `compass` and `passage` are no secrets. `webcron` of Joomla's scheduler holds the key
+ * that runs any task of the site from a URL; `banned_email` of Joomla's contacts holds the
+ * addresses of people the site keeps out of its contact form — data of people, blanked alike.
  */
 const SECRET_KEY =
-  /api[_-]?key|apikey|secret|passw(?:or)?d|pwd|smtp[_-]?pass|token|private[_-]?key|access[_-]?key|license[_-]?key|webhook|auth[_-]?key/i
+  /api[_-]?key|apikey|secret|passw(?:or)?d|pwd|smtp[_-]?pass|token|private[_-]?key|access[_-]?key|license[_-]?key|webhook|auth[_-]?key|webcron|banned[_-]?email/i
 /** How deep a value is followed: deeper and it is copied as it is. */
 const MAX_DEPTH = 64
 

@@ -70,6 +70,18 @@ describe('secrets nested in copied values', () => {
     }
   })
 
+  it("blanks the webcron key of Joomla's scheduler and the addresses its contacts ban", () => {
+    // `com_scheduler` since 4.1: `plg_system_schedulerunner` writes the key on every save of the
+    // options; with it a URL runs any task of the site. Numbers stay: Joomla makes a new key.
+    expect(
+      scrub('{"unit":"1","interval":"300","webcron":{"enabled":1,"key":"Xy7pQ2rT9wZ4kL8mN3vB"}}'),
+    ).toBe('{"unit":"1","interval":"300","webcron":{"enabled":1,"key":""}}')
+    // `com_contact`: senders the site closed its contact form to, people of no one's consent.
+    expect(
+      scrub('{"show_email_form":"1","banned_email":"spam1@mail.ru;spam2@yandex.ru","redirect":""}'),
+    ).toBe('{"show_email_form":"1","banned_email":"","redirect":""}')
+  })
+
   it('keeps a value whose key only contains the letters of a password', () => {
     // A bare `pass` is no secret: `bypass`, `compass` and `passage` are words of settings.
     for (const key of ['bypass', 'passage', 'smtp_host']) {
