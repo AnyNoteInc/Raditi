@@ -1,7 +1,7 @@
 import { badRequest } from '../errors.ts'
 import { isPublicationPath } from '../git/publication.ts'
 import { isForbiddenPath } from '../policies/diff-paths.ts'
-import type { ImportRules, SiteAdapter } from '../ports/site-adapter.ts'
+import type { ImportConfigCopies, ImportRules, SiteAdapter } from '../ports/site-adapter.ts'
 import { hasControlCharacter } from './inputs.ts'
 import type { ImportSkipReason } from './reasons.ts'
 
@@ -60,6 +60,32 @@ const isDocumentFolder = (folder: string): boolean =>
   !folder.includes('*') &&
   isSupportedLine(folder)
 
+/**
+ * The copies of the configuration as a test of a file path: a name of `names` in any case, below
+ * no folder of `except`, at most `maxDepth` folders deep. Throws badRequest for copies an adapter
+ * could not mean: no name, a name that is not one plain segment or holds `*`, a folder of `except`
+ * that is not `<path>/` from the root, a depth that is not a whole number from 0.
+ */
+function configCopyTest(copies: ImportConfigCopies): (segments: readonly string[]) => boolean {
+  const refuse = () => badRequest(`Unsupported import config copies: ${JSON.stringify(copies)}`)
+  const plainName = (name: string) =>
+    name !== '' && !name.includes('/') && !name.includes('*') && isSupportedLine(name)
+  if (copies.names.length === 0 || !copies.names.every(plainName)) throw refuse()
+  if (!copies.except.every(isDocumentFolder)) throw refuse()
+  if (copies.maxDepth !== null && !(Number.isInteger(copies.maxDepth) && copies.maxDepth >= 0))
+    throw refuse()
+  const names = new Set(copies.names.map((name) => name.toLowerCase()))
+  const except = copies.except.map((folder) => folder.toLowerCase())
+  const { maxDepth } = copies
+  return (segments) => {
+    const folders = segments.length - 1
+    if (maxDepth !== null && folders > maxDepth) return false
+    if (!names.has(segments[folders]!.toLowerCase())) return false
+    const path = segments.join('/').toLowerCase()
+    return !except.some((folder) => path.startsWith(folder))
+  }
+}
+
 interface AnchoredRule {
   segments: RegExp[]
   directoryOnly: boolean
@@ -75,15 +101,21 @@ interface AnchoredRule {
  *
  * A document (`DOCUMENT`) the lines let through is taken only below one of `documentFolders`
  * (`ImportRules.documentFolders`, plan 62, Т57); without them — the default — none is: a call
- * that forgets them closes, it does not open. Product code calls `importPolicyOf`.
+ * that forgets them closes, it does not open.
+ *
+ * A file named as one of `configCopies` (`ImportRules.configCopies`, Э3.3) is `excluded` too, by a
+ * branch of its own: the exclude lines are read as they are. Without the field — the default — no
+ * file is. Product code calls `importPolicyOf`.
  */
 export function createImportPathPolicy(
   excludeLines: readonly string[],
   documentFolders: readonly string[] = [],
+  configCopies?: ImportConfigCopies,
 ): ImportPathPolicy {
   for (const folder of documentFolders)
     if (!isDocumentFolder(folder))
       throw badRequest(`Unsupported import document folder: "${folder}"`)
+  const isConfigCopy = configCopies === undefined ? null : configCopyTest(configCopies)
   const anchored: AnchoredRule[] = []
   const names: string[] = []
   const directoryNames: string[] = []
@@ -138,6 +170,7 @@ export function createImportPathPolicy(
       // CLAUDE.md rule 6: the CI paths of every provider and `.gitmodules`.
       if (isForbiddenPath(path, [])) return 'ci'
       if (isExcluded(segments, type)) return 'excluded'
+      if (type === 'file' && isConfigCopy?.(segments)) return 'excluded'
       const inFolder = (folder: string) => path.toLowerCase().startsWith(folder.toLowerCase())
       return type === 'file' && DOCUMENT.test(path) && !documentFolders.some(inFolder)
         ? 'document'
@@ -146,10 +179,11 @@ export function createImportPathPolicy(
   }
 }
 
-/** The policy of an adapter's rules: so no call loses a field of them. Э3.3 adds a third one. */
+/** The policy of an adapter's rules: so no call loses a field of them. */
 export const importPolicyOf = (
-  rules: Pick<ImportRules, 'exclude' | 'documentFolders'>,
-): ImportPathPolicy => createImportPathPolicy(rules.exclude, rules.documentFolders)
+  rules: Pick<ImportRules, 'exclude' | 'documentFolders' | 'configCopies'>,
+): ImportPathPolicy =>
+  createImportPathPolicy(rules.exclude, rules.documentFolders, rules.configCopies)
 
 /**
  * Folders a walk does not enter: the roots and the core of stacks closed for files (Т40, fact 14 of

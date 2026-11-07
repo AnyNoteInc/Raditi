@@ -377,6 +377,104 @@ describe('createImportPathPolicy', () => {
     )
   })
 
+  describe('copies of the configuration (`configCopies`, Э3.3)', () => {
+    const anyDepth = { names: ['config.php'], except: ['vendor/', 'core/lib/'], maxDepth: null }
+
+    it.each([
+      'config.php',
+      'old/config.php',
+      'a/b/c/d/config.php',
+      'Old/CONFIG.PHP',
+      // A folder that only starts like one of `except` is not it.
+      'vendors/config.php',
+      'core/config.php',
+      'core/library/config.php',
+    ])('leaves out %s at any depth outside `except`', (path) => {
+      expect(createImportPathPolicy([], [], anyDepth).decide(path, 'file')).toBe('excluded')
+    })
+
+    it.each([
+      'vendor/config.php',
+      'vendor/x/y/config.php',
+      'Vendor/X/Config.php',
+      'core/lib/config.php',
+      'core/lib/a/config.php',
+      // An exact name: no prefix, no suffix, no other name.
+      'old/config.php.txt',
+      'old/my-config.php',
+      'old/configphp',
+    ])('takes %s', (path) => {
+      expect(createImportPathPolicy([], [], anyDepth).decide(path, 'file')).toBe('take')
+    })
+
+    it('judges files only: a folder of that name is entered', () => {
+      expect(createImportPathPolicy([], [], anyDepth).decide('old/config.php', 'directory')).toBe(
+        'take',
+      )
+    })
+
+    it('looks no deeper than `maxDepth` folders above the file', () => {
+      const shallow = createImportPathPolicy([], [], { ...anyDepth, maxDepth: 1 })
+      expect(shallow.decide('config.php', 'file')).toBe('excluded')
+      expect(shallow.decide('old/config.php', 'file')).toBe('excluded')
+      expect(shallow.decide('a/old/config.php', 'file')).toBe('take')
+      const rootOnly = createImportPathPolicy([], [], { ...anyDepth, maxDepth: 0 })
+      expect(rootOnly.decide('config.php', 'file')).toBe('excluded')
+      expect(rootOnly.decide('old/config.php', 'file')).toBe('take')
+    })
+
+    it('decides as before without the field, and the exclude lines do not change', () => {
+      for (const [path, decision] of [
+        ['old/config.php', 'take'],
+        ['vendor/config.php', 'take'],
+        ['a.log', 'excluded'],
+        ['x.pdf', 'document'],
+      ] as const)
+        expect(createImportPathPolicy(['*.log']).decide(path, 'file')).toBe(decision)
+      expect(createImportPathPolicy([]).decide('old/config.php', 'file')).toBe('take')
+      expect(createImportPathPolicy(['*.log'], [], anyDepth).decide('vendor/a.log', 'file')).toBe(
+        'excluded',
+      )
+      // `except` opens nothing an exclude line closes.
+      expect(
+        createImportPathPolicy(['vendor/'], [], anyDepth).decide('vendor/config.php', 'file'),
+      ).toBe('excluded')
+    })
+
+    it('builds the policy of an adapter with the copies of its rules', () => {
+      const rules = { exclude: ['*.log'], documentFolders: ['media/'], configCopies: anyDepth }
+      expect(importPolicyOf(rules).decide('old/config.php', 'file')).toBe('excluded')
+      expect(importPolicyOf(rules).decide('vendor/config.php', 'file')).toBe('take')
+      expect(importPolicyOf(rules).decide('media/x.pdf', 'file')).toBe('take')
+      expect(
+        importPolicyOf({ exclude: [], documentFolders: [] }).decide('old/config.php', 'file'),
+      ).toBe('take')
+    })
+
+    it.each([
+      [{ names: [], except: [], maxDepth: null }],
+      [{ names: [''], except: [], maxDepth: null }],
+      [{ names: ['a/config.php'], except: [], maxDepth: null }],
+      [{ names: ['config*.php'], except: [], maxDepth: null }],
+      [{ names: ['..'], except: [], maxDepth: null }],
+      [{ names: ['config.php'], except: ['/vendor/'], maxDepth: null }],
+      [{ names: ['config.php'], except: ['vendor'], maxDepth: null }],
+      [{ names: ['config.php'], except: ['ven*dor/'], maxDepth: null }],
+      [{ names: ['config.php'], except: [], maxDepth: -1 }],
+      [{ names: ['config.php'], except: [], maxDepth: 1.5 }],
+    ])('refuses the copies %j at construction', (copies) => {
+      let thrown: unknown
+      try {
+        createImportPathPolicy([], [], copies)
+      } catch (error) {
+        thrown = error
+      }
+      expect(isDomainError(thrown)).toBe(true)
+      expect(thrown).toMatchObject({ code: 'BAD_REQUEST' })
+      expect((thrown as Error).message).toMatch(/^Unsupported import config copies: /)
+    })
+  })
+
   describe('lines outside the supported subset', () => {
     it.each([
       '**/cache',

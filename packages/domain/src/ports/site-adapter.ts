@@ -49,6 +49,20 @@ export interface SiteFacts {
   extras: Record<string, string>
 }
 
+/**
+ * Copies of the stack's configuration left at any depth under its exact name (`old/configuration.php`):
+ * the exclude lines cannot say it — `**` and `!` are not theirs, and a mask at any depth would cut
+ * classes of the core with the same letters in another case (docs/plan/62-slices/e3.md, Э3.3).
+ */
+export interface ImportConfigCopies {
+  /** Names of files, an exact match without regard to letter case. */
+  names: readonly string[]
+  /** Folders `a/b/` from the root where such a name is the stack's own code. */
+  except: readonly string[]
+  /** How many folders above the file are looked at; null — any depth. */
+  maxDepth: number | null
+}
+
 export interface ImportRules {
   /** Lines of the repository .gitignore. */
   gitignore: string[]
@@ -61,6 +75,8 @@ export interface ImportRules {
    * Т57).
    */
   documentFolders: string[]
+  /** Absent — none: a stack whose configuration has no name of its own to look for. */
+  configCopies?: ImportConfigCopies
 }
 
 export interface VerifyPlan {
