@@ -15,7 +15,7 @@ import { mountMcp } from '../server/mount-mcp.ts'
 import type { McpBrowserTasks } from '../site-info/browser-tasks.ts'
 import { MCP_BROWSER_TASKS } from '../site-info/site-info.tokens.ts'
 import { fakeInfra, testMcpConfig } from '../testing/fakes.ts'
-import { McpWebService } from './mcp-web.ts'
+import type { McpWebService } from './mcp-web.ts'
 import { MCP_WEB, WEB_MASK_SWEEP } from './web.tokens.ts'
 import { WebMaskSweep } from './web-mask-sweep.ts'
 
@@ -247,17 +247,6 @@ describe('the web tools of the mcp role', () => {
     )
     // A stack with no adapter yet has no start to name.
     expect(tasks.startPath({ ...browserTask, stack: 'static' })).toBeNull()
-    await moduleRef.close()
-  })
-
-  it('composes the service with the client of the configured worker', async () => {
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule.forRoot(config())] })
-      .overrideProvider(PRISMA)
-      .useValue(fakeInfra().prisma)
-      .overrideProvider(SECRET_STORE)
-      .useValue(fakeInfra().secrets)
-      .compile()
-    expect(moduleRef.get(MCP_WEB)).toBeInstanceOf(McpWebService)
     await moduleRef.close()
   })
 

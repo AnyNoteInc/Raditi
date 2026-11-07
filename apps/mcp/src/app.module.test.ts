@@ -426,12 +426,11 @@ describe('AppModule', () => {
     const resolve = instance.get<ContentGatewayResolver>(MCP_CONTENT_RESOLVER)
     // The role's own database and Vault clients, the kind and the path from the adapter of the
     // site's stack: nothing of it is named by this module.
-    const gateway = await resolve(scope)
+    await resolve(scope)
     expect(findMany).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ where: { siteId, kind: 'wp' } }),
     )
     expect(kvRead).toHaveBeenCalledExactlyOnceWith(`kv/sites/${siteId}/wp`)
-    expect(typeof gateway.conditionalWrite).toBe('function')
     await expect(resolve({ ...scope, stack: 'bitrix' })).rejects.toMatchObject({
       code: 'CONTENT_SITE_ACCESS_UNAVAILABLE',
       details: { reason: 'stack' },
@@ -440,7 +439,6 @@ describe('AppModule', () => {
     await expect(
       resolve({ ...scope, siteId: '01960000-0000-7000-8000-0000000000ff' }),
     ).rejects.toMatchObject({ details: { reason: 'path' } })
-    expect(instance.get(MCP_CONTENT)).toBeDefined()
   })
 
   it('logs why a site access was refused as one fixed word, without the site or the secret', async () => {

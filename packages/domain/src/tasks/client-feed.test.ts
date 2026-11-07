@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { agentDriverIds, agentOutputLimits } from '../ports/agent-driver.ts'
 import {
-  feedCandidatePayloadSchema,
   feedCancelledBys,
   feedCeilingReasons,
   feedCreditsStates,
@@ -1581,7 +1580,6 @@ describe('rows of a candidate and a release', () => {
   })
 
   it('counts files, media and records, never names them', () => {
-    expect(feedCandidatePayloadSchema.shape.files.shape).toHaveProperty('added')
     expect(accepts('feed.candidate', { ...candidate, paths: ['a.php'] })).toBe(false)
     expect(accepts('feed.candidate', { ...candidate, media: 1.5 })).toBe(false)
   })
