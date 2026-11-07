@@ -6,7 +6,7 @@ import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { promisify } from 'node:util'
 
-import type { GitProvider } from '@repo/domain'
+import { siteReadBytes, siteReadEntries, type GitProvider } from '@repo/domain'
 import { extract } from 'tar-stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -14,7 +14,8 @@ import { GitWorkspaceService, type ExportedTree } from './git-workspace.service.
 
 // The files of a commit for the docroot of a preview (docs/plan/53-chat-preview-release.md, Р16,
 // Р22; R5c) on a real repository: the whole tree or some paths of it as a tar, the paths a tree
-// lacks, the difference of two commits.
+// lacks, the difference of two commits; one file or one folder of a commit without a working copy
+// (docs/plan/62-site-stacks.md, Т14, Т17; slice Э2.6).
 
 const execute = promisify(execFile)
 const roots: string[] = []
@@ -30,6 +31,11 @@ const env = (cwd: string) => ({
 })
 const git = async (cwd: string, ...args: string[]) =>
   (await execute('git', args, { cwd, env: env(cwd) })).stdout.trim()
+const gitWithInput = async (cwd: string, input: string, ...args: string[]) => {
+  const run = execute('git', args, { cwd, env: env(cwd), maxBuffer: 16 * 1024 * 1024 })
+  run.child.stdin?.end(input)
+  return (await run).stdout.trim()
+}
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
@@ -68,6 +74,31 @@ async function fixture() {
   await git(work, 'add', '.')
   await git(work, 'commit', '-m', 'change')
   const second = await git(work, 'rev-parse', 'HEAD')
+  // Two files at the read limit and one byte over it, off the commits the other tests export.
+  const limit = Buffer.alloc(siteReadBytes, 0x61)
+  await mkdir(join(work, 'wp-content/uploads'), { recursive: true })
+  await writeFile(join(work, 'wp-content/uploads/limit.bin'), limit)
+  await writeFile(
+    join(work, 'wp-content/uploads/over.bin'),
+    Buffer.concat([limit, Buffer.of(0x62)]),
+  )
+  // Bytes that are no UTF-8, a submodule, and two folders at the entry limit and one over it.
+  const raw = Buffer.of(0xff, 0xfe, 0x00, 0x80, 0xc3)
+  await writeFile(join(work, 'wp-content/uploads/raw.bin'), raw)
+  await git(work, 'add', '.')
+  await git(work, 'update-index', '--add', '--cacheinfo', `160000,${first},wp-content/uploads/sub`)
+  const empty = await gitWithInput(work, '', 'hash-object', '-w', '--stdin')
+  const folder = (name: string, count: number) =>
+    Array.from({ length: count }, (_, n) => `100644 ${empty}\t${name}/f${n}\n`).join('')
+  await gitWithInput(
+    work,
+    folder('many', siteReadEntries) + folder('more', siteReadEntries + 1),
+    'update-index',
+    '--add',
+    '--index-info',
+  )
+  await git(work, 'commit', '-m', 'large')
+  const third = await git(work, 'rev-parse', 'HEAD')
   await git(work, 'push', remote, 'HEAD:refs/heads/main')
   const repo = { provider: 'gitea' as const, owner: 'fixture', name: 'site' }
   const provider = {
@@ -87,7 +118,7 @@ async function fixture() {
     gitleaksBinary: '/usr/bin/false',
     mirrorDir: join(root, 'mirrors'),
   })
-  return { service, repo, first, second, files }
+  return { service, repo, first, second, third, files, limit, raw }
 }
 
 async function entries(tree: ExportedTree) {
@@ -187,6 +218,104 @@ describe('the tree of a commit for a preview', { timeout: 60_000 }, () => {
     const f = await fixture()
     await expect(
       f.service.exportTree({ repo: f.repo, sha: f.first, paths: ['../etc/passwd'] }, entries),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+  })
+
+  it('reads one regular file of a commit byte for byte, and nothing else', async () => {
+    const f = await fixture()
+    const read = (sha: string, path: string) => f.service.readFile({ repo: f.repo, sha, path })
+    expect(Buffer.from((await read(f.first, 'wp-includes/version.php'))!).toString('utf8')).toBe(
+      f.files['wp-includes/version.php'],
+    )
+    expect(Buffer.from((await read(f.first, longPath))!).toString('utf8')).toBe(f.files[longPath])
+    expect(
+      Buffer.from((await read(f.second, 'wp-content/themes/shop/style.css'))!).toString(),
+    ).toBe('body { color: red; }\n')
+    expect(Buffer.from((await read(f.first, 'bin/tool.sh'))!).toString('utf8')).toBe(
+      f.files['bin/tool.sh'],
+    )
+    expect(Buffer.from((await read(f.third, 'wp-content/uploads/raw.bin'))!).equals(f.raw)).toBe(
+      true,
+    )
+    expect(await read(f.first, 'wp-content/link.php')).toBeNull()
+    expect(await read(f.first, 'wp-content')).toBeNull()
+    expect(await read(f.first, 'wp-content/themes/shop')).toBeNull()
+    expect(await read(f.first, 'wp-load.php')).toBeNull()
+    expect(await read(f.second, 'wp-content/themes/shop/old.php')).toBeNull()
+  })
+
+  it('reads a file at the read limit and gives null for one byte more', async () => {
+    const f = await fixture()
+    const read = (path: string) => f.service.readFile({ repo: f.repo, sha: f.third, path })
+    expect(Buffer.from((await read('wp-content/uploads/limit.bin'))!).equals(f.limit)).toBe(true)
+    expect(await read('wp-content/uploads/over.bin')).toBeNull()
+  })
+
+  it('lists the entries of a folder of a commit with their types', async () => {
+    const f = await fixture()
+    const list = (sha: string, path: string) => f.service.listDirectory({ repo: f.repo, sha, path })
+    const byName = <T extends { name: string }>(rows: readonly T[] | null) =>
+      [...(rows ?? [])].sort((a, b) => a.name.localeCompare(b.name))
+    expect(byName(await list(f.first, ''))).toEqual([
+      { name: 'bin', type: 'directory' },
+      { name: 'index.php', type: 'file' },
+      { name: 'wp-content', type: 'directory' },
+      { name: 'wp-includes', type: 'directory' },
+    ])
+    expect(byName(await list(f.first, 'wp-content'))).toEqual([
+      { name: 'link.php', type: 'link' },
+      { name: 'themes', type: 'directory' },
+    ])
+    expect(byName(await list(f.first, 'wp-content/themes/shop'))).toEqual([
+      { name: 'deep', type: 'directory' },
+      { name: 'old.php', type: 'file' },
+      { name: 'style.css', type: 'file' },
+    ])
+    expect(await list(f.first, 'bin')).toEqual([{ name: 'tool.sh', type: 'file' }])
+    expect(await list(f.first, 'index.php')).toBeNull()
+    expect(await list(f.first, 'wp-content/link.php')).toBeNull()
+    expect(await list(f.first, 'wp-admin')).toBeNull()
+  })
+
+  it('leaves submodules out of a folder and reads none', async () => {
+    const f = await fixture()
+    const at = { repo: f.repo, sha: f.third }
+    expect(
+      [...((await f.service.listDirectory({ ...at, path: 'wp-content/uploads' })) ?? [])].sort(
+        (a, b) => a.name.localeCompare(b.name),
+      ),
+    ).toEqual([
+      { name: 'limit.bin', type: 'file' },
+      { name: 'over.bin', type: 'file' },
+      { name: 'raw.bin', type: 'file' },
+    ])
+    expect(await f.service.listDirectory({ ...at, path: 'wp-content/uploads/sub' })).toBeNull()
+    expect(await f.service.readFile({ ...at, path: 'wp-content/uploads/sub' })).toBeNull()
+  })
+
+  it('lists a folder at the entry limit and gives null for one entry more', async () => {
+    const f = await fixture()
+    const listed = await f.service.listDirectory({ repo: f.repo, sha: f.third, path: 'many' })
+    expect(listed).toHaveLength(siteReadEntries)
+    expect(listed?.every((entry) => entry.type === 'file')).toBe(true)
+    expect(await f.service.listDirectory({ repo: f.repo, sha: f.third, path: 'more' })).toBeNull()
+  })
+
+  it('refuses a path of a read that is not one of the repository', async () => {
+    const f = await fixture()
+    for (const path of ['../etc/passwd', 'wp-content/../index.php', '/index.php', ''])
+      await expect(f.service.readFile({ repo: f.repo, sha: f.first, path })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      })
+    for (const path of ['..', 'wp-content/..', 'wp-content/', '/'])
+      await expect(
+        f.service.listDirectory({ repo: f.repo, sha: f.first, path }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    await expect(
+      f.service.readFile({ repo: { ...f.repo, provider: 'github' }, sha: f.first, path: 'a' }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    await expect(
+      f.service.listDirectory({ repo: { ...f.repo, provider: 'github' }, sha: f.first, path: '' }),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
   })
 })

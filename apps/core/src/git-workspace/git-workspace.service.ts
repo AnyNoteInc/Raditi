@@ -40,6 +40,8 @@ import {
   publicationTooLarge,
   repositoryTooLarge,
   repositoryUnsupported,
+  siteReadBytes,
+  siteReadEntries,
   snapshotHasCredential,
   snapshotLimits,
   turnOutputRejected,
@@ -270,6 +272,16 @@ const treeExportSchema = z
     exclude: z.array(z.string().refine(isPublicationPath)).max(64).optional(),
   })
   .strict()
+const treeFileSchema = z
+  .object({
+    repo: publicationSourceSchema.shape.repo,
+    sha: publicationShaSchema,
+    path: z.string().refine(isPublicationPath),
+  })
+  .strict()
+const treeFolderSchema = treeFileSchema.extend({
+  path: z.string().refine((path) => path === '' || isPublicationPath(path)),
+})
 const changedPathsSchema = z
   .object({
     repo: publicationSourceSchema.shape.repo,
@@ -417,6 +429,8 @@ const CANDIDATE: Scope = {
 }
 /** Rows of the full tree outside the working set: links and submodules the agent never sees. */
 const ANY_TREE_ROW = /^(100644|100755|120000|160000) (?:blob|commit) ([a-f0-9]{40})\t([^\0]+)$/
+const ANY_FOLDER_ROW =
+  /^(100644|100755|120000|040000|160000) (blob|tree|commit) ([a-f0-9]{40})\t([^\0]+)$/
 const ANY_INDEX_ROW = /^(100644|100755|120000|160000) ([a-f0-9]{40}) 0\t([^\0]+)$/
 /** At most one `ls-tree -z` or `ls-files --stage -z` row per file: mode, type, OID, path, NUL. */
 const listBytes = (files: number) => files * (64 + publicationLimits.pathBytes)
@@ -1116,6 +1130,100 @@ export class GitWorkspaceService implements TurnWorkspace {
         if (match && (match[1] === '100644' || match[1] === '100755')) present.add(match[3]!)
       }
       return paths.filter((path) => !present.has(path))
+    } catch (error) {
+      if (isDomainError(error)) throw error
+      throw failed()
+    } finally {
+      await this.dispose(workspace)
+    }
+  }
+
+  /**
+   * One regular file of a commit, without a working copy (docs/plan/62-site-stacks.md, Т14, Т17).
+   * null — no regular file at `path` (a link, a folder, a submodule, nothing), or it is longer
+   * than `siteReadBytes`.
+   */
+  async readFile(input: { repo: RepoRef; sha: string; path: string }): Promise<Uint8Array | null> {
+    const parsed = treeFileSchema.safeParse(input)
+    if (!parsed.success || parsed.data.repo.provider !== this.provider.kind)
+      throw badRequest('Invalid tree path')
+    const { repo, sha, path } = parsed.data
+    const workspace = await this.workspace(repo, [sha])
+    try {
+      const listed = await this.git(workspace, ['ls-tree', '-z', '--full-tree', sha, '--', path])
+      let oid: string | undefined
+      for (const row of text(listed.stdout).split('\0')) {
+        const match = ANY_TREE_ROW.exec(row)
+        if (match?.[3] === path && (match[1] === '100644' || match[1] === '100755')) oid = match[2]
+      }
+      if (!oid) return null
+      try {
+        return (await this.git(workspace, ['cat-file', 'blob', oid], undefined, siteReadBytes))
+          .stdout
+      } catch (error) {
+        if (isDomainError(error) && error.code === PROCESS_OUTPUT_LIMIT) return null
+        throw error
+      }
+    } catch (error) {
+      if (isDomainError(error)) throw error
+      throw failed()
+    } finally {
+      await this.dispose(workspace)
+    }
+  }
+
+  /**
+   * The entries of one folder of a commit, `''` — its root, without a working copy (Т14, Т17).
+   * Submodules are left out, one at `path` is no folder. null — no folder at `path`, or more than
+   * `siteReadEntries` entries (submodules counted).
+   */
+  async listDirectory(input: {
+    repo: RepoRef
+    sha: string
+    path: string
+  }): Promise<readonly { name: string; type: 'file' | 'directory' | 'link' }[] | null> {
+    const parsed = treeFolderSchema.safeParse(input)
+    if (!parsed.success || parsed.data.repo.provider !== this.provider.kind)
+      throw badRequest('Invalid tree path')
+    const { repo, sha, path } = parsed.data
+    const prefix = path ? `${path}/` : ''
+    const workspace = await this.workspace(repo, [sha])
+    try {
+      let listed: Uint8Array
+      try {
+        listed = (
+          await this.git(
+            workspace,
+            ['ls-tree', '-z', '--full-tree', sha, ...(path ? ['--', prefix] : [])],
+            undefined,
+            listBytes(siteReadEntries),
+          )
+        ).stdout
+      } catch (error) {
+        if (isDomainError(error) && error.code === PROCESS_OUTPUT_LIMIT) return null
+        throw error
+      }
+      const rows = text(listed)
+      if (!rows) return null
+      if (!rows.endsWith('\0')) throw failed()
+      const all = rows.slice(0, -1).split('\0')
+      if (all.length > siteReadEntries) return null
+      const entries: { name: string; type: 'file' | 'directory' | 'link' }[] = []
+      for (const row of all) {
+        const match = ANY_FOLDER_ROW.exec(row)
+        // `<path>/` names a submodule at `path` itself as well: that is no folder.
+        if (match?.[1] === '160000') {
+          if (match[4] === path) return null
+          continue
+        }
+        const name = match?.[4]?.startsWith(prefix) ? match[4].slice(prefix.length) : ''
+        if (!match || !name || name.includes('/')) throw failed()
+        entries.push({
+          name,
+          type: match[1] === '040000' ? 'directory' : match[1] === '120000' ? 'link' : 'file',
+        })
+      }
+      return entries
     } catch (error) {
       if (isDomainError(error)) throw error
       throw failed()
