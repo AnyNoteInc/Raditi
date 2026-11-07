@@ -1,16 +1,11 @@
 import type { ReactNode } from 'react'
 
-import { SiteBlockNav } from '@/components/site/site-block-nav'
-import { SiteListFrame } from '@/components/site/site-list-frame'
 import { siteHref } from '@/components/site/site-nav'
-import { settingsBlocks } from '@/components/site/site-settings'
-import { UNAVAILABLE } from '@/lib/access'
-import { loadSite } from '@/lib/site'
+import { SiteSection } from '@/components/site/site-section'
 
 /**
- * «Настройки», split by its cards (owner's request of 26.10.2026): the menu of its blocks beside
- * the one that is open, at the root the first. Access is checked by every page under it; the read
- * of the menu checks it itself.
+ * «Настройки» with its tabs «Сайт» and «Опасная область» (docs/plan/64-cabinet-navigation.md, Н5).
+ * Access is checked by every page under it.
  */
 export default async function SettingsLayout({
   children,
@@ -19,23 +14,17 @@ export default async function SettingsLayout({
   children: ReactNode
   params: Promise<{ projectId: string }>
 }) {
-  const { projectId } = await params
-  const site = await loadSite(projectId)
-  const root = siteHref(projectId, 'settings')
+  const root = siteHref((await params).projectId, 'settings')
   return (
-    <SiteListFrame
-      label="Настройки"
+    <SiteSection
       title="Настройки"
       root={root}
-      backLabel="Назад к настройкам"
-      list={
-        <SiteBlockNav
-          root={root}
-          blocks={settingsBlocks(site === UNAVAILABLE ? { host: '' } : site)}
-        />
-      }
+      tabs={[
+        { label: 'Сайт', href: root, segments: ['', 'site'] },
+        { label: 'Опасная область', href: `${root}/danger`, segments: ['danger'] },
+      ]}
     >
       {children}
-    </SiteListFrame>
+    </SiteSection>
   )
 }

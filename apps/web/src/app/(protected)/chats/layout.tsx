@@ -8,6 +8,12 @@ import { ChatsShell } from '@/components/chat/chats-shell'
 import { parsePaneWidth, SITE_PANE_COOKIE } from '@/components/chat/pane-layout'
 import { ServiceUnavailable } from '@/components/layout/service-unavailable'
 import { requireSession, UNAVAILABLE } from '@/lib/access'
+import {
+  CABINET_PANEL_COOKIE,
+  CABINET_PANEL_WIDTH_COOKIE,
+  parseCabinetPanelState,
+  parseCabinetPanelWidth,
+} from '@/lib/cabinet-panel'
 
 /** The field of a chat sits above the gesture area of a phone. */
 export const viewport: Viewport = { viewportFit: 'cover' }
@@ -23,7 +29,12 @@ export default async function ChatsLayout({ children }: { children: ReactNode })
   if (session === UNAVAILABLE) return <ServiceUnavailable />
   const jar = await cookies()
   return (
-    <ChatsShell user={session.user} paneWidth={parsePaneWidth(jar.get(SITE_PANE_COOKIE)?.value)}>
+    <ChatsShell
+      user={session.user}
+      paneWidth={parsePaneWidth(jar.get(SITE_PANE_COOKIE)?.value)}
+      panelState={parseCabinetPanelState(jar.get(CABINET_PANEL_COOKIE)?.value)}
+      panelWidth={parseCabinetPanelWidth(jar.get(CABINET_PANEL_WIDTH_COOKIE)?.value)}
+    >
       <ChatsFrame group={parseChatsGroup(jar.get(CHATS_GROUP_COOKIE)?.value)}>
         {children}
       </ChatsFrame>

@@ -429,7 +429,10 @@ test('one list and the folders of projects, kept for the next visit', async ({
     )
     await menu.getByRole('menuitemradio', { name: 'По проектам' }).click()
     await expect(folder(new RegExp(KROSHKA))).toBeVisible()
-    const names = chats(page).locator('[aria-expanded]:not([aria-haspopup])')
+    // The folders: not the menu of the way, nor the button «]» that hides the panel.
+    const names = chats(page).locator(
+      '[aria-expanded]:not([aria-haspopup]):not([aria-keyshortcuts])',
+    )
     await expect(names).toHaveCount(2)
     await expect(names.nth(0)).toContainText(KROSHKA)
     await expect(names.nth(1)).toContainText('Без проекта')
@@ -556,9 +559,13 @@ test('the list of projects is searched only above six', async ({ page, signedInU
   await expect(projects).toHaveCount(6)
   await expect(search).toHaveCount(0)
 
+  await expect(page.getByRole('button', { name: 'Найти проект' })).toHaveCount(0)
+
   await addSites(signedInUser.id, 1)
   await page.reload()
   await expect(projects).toHaveCount(7)
+  // The search opens from the head of the page (docs/plan/64-cabinet-navigation.md, Н8).
+  await page.getByRole('button', { name: 'Найти проект' }).click()
   await search.fill('нет такого проекта')
   await expect(page.getByRole('heading', { name: 'Проекты не найдены' })).toBeVisible()
   await page.getByRole('button', { name: 'Сбросить поиск' }).click()

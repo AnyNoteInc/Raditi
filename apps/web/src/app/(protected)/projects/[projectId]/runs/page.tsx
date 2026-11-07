@@ -1,14 +1,15 @@
-import Box from '@mui/material/Box'
 import type { Metadata } from 'next'
 
 import { ServiceUnavailable } from '@/components/layout/service-unavailable'
-import { NoRuns, RunDetail } from '@/components/site/site-runs'
+import { HistoryList } from '@/components/site/history-list'
+import { siteHref } from '@/components/site/site-nav'
+import { runItems } from '@/components/site/site-runs'
 import { UNAVAILABLE } from '@/lib/access'
 import { loadSiteHistory, loadSiteSection } from '@/lib/site'
 
 export const metadata: Metadata = { title: 'Запуски' }
 
-/** «Запуски» at its root: the newest run. On a phone the list alone is shown. */
+/** «Запуски» at its root: every run across the full width, with the tabs of the filter (Н5, Н6). */
 export default async function Page({ params }: { params: Promise<{ projectId: string }> }) {
   const site = await loadSiteSection((await params).projectId, 'runs')
   if (site === UNAVAILABLE) return <ServiceUnavailable />
@@ -16,15 +17,13 @@ export default async function Page({ params }: { params: Promise<{ projectId: st
     caller.siteHistory.runs({ siteId: site.id }),
   )
   if (runs === UNAVAILABLE) return <ServiceUnavailable />
-  const newest = runs[0]
-  if (!newest) return <NoRuns />
-  const run = await loadSiteHistory('run', (caller) =>
-    caller.siteHistory.run({ siteId: site.id, runId: newest.id }),
-  )
-  if (run === UNAVAILABLE) return <ServiceUnavailable />
   return (
-    <Box sx={{ display: { xs: 'none', md: 'block' } }}>
-      <RunDetail run={run} now={new Date()} nested />
-    </Box>
+    <HistoryList
+      label="Запуски"
+      root={siteHref(site.id, 'runs')}
+      items={runItems(runs)}
+      emptyText="Запусков пока нет. Здесь появится каждое обновление сайта: его шаги и журнал."
+      filters
+    />
   )
 }

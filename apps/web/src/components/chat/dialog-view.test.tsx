@@ -1795,7 +1795,7 @@ describe('the five kinds of a chat (docs/plan/61-chats-first.md, §5.6)', () => 
     await screen.findByText('Вот пять вариантов.')
     expect(toolsPanel()).toBeNull()
     // The files of the working copy, to look at and to change (06.11.2026).
-    expect(await menuTiles()).toEqual(['Терминал'])
+    expect(await menuTiles()).toEqual(['Изменения'])
     expect(document.body.textContent).not.toMatch(/Изменено файлов|Файлы и изменения|Браузер/u)
     const listed = listedCommands().join(' ')
     expect(listed).toContain('Выпустить новую версию')
@@ -1830,7 +1830,7 @@ describe('the five kinds of a chat (docs/plan/61-chats-first.md, §5.6)', () => 
       'Файлы и изменения, 4',
       'База данных, 3',
       'Проверки, 2 из 2',
-      'Терминал',
+      'Изменения',
       'Браузер, Агент ответил',
     ])
     // The commands of the site are there: the browser takes nothing from the code.
@@ -1982,7 +1982,7 @@ describe('the five kinds of a chat (docs/plan/61-chats-first.md, §5.6)', () => 
       STREAM_URL,
     )
     await screen.findByText('Готово.')
-    expect(await menuTiles()).toEqual(['Терминал', 'Браузер, Агент ответил'])
+    expect(await menuTiles()).toEqual(['Изменения', 'Браузер, Агент ответил'])
   })
 
   it('gives the panel of a browser beside the open changes to the client who asks for it', async () => {
@@ -2539,7 +2539,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       'Файлы и изменения, 4',
       'База данных, 3',
       'Проверки, 2 из 2',
-      'Терминал',
+      'Изменения',
     ])
     await choose(/^Файлы и изменения/)
     expect(tabNames()).toEqual(['Файлы'])
@@ -2554,7 +2554,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       'Файлы и изменения, Открыто',
       'База данных, 3',
       'Проверки, 2 из 2',
-      'Терминал',
+      'Изменения',
     ])
     await choose(/^Файлы и изменения/)
     expect(tabNames()).toEqual(['Файлы'])
@@ -2664,7 +2664,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
         'Файлы и изменения, 4',
         'База данных, 3',
         'Проверки, 2 из 2',
-        'Терминал',
+        'Изменения',
       ])
       // The arrows go through the tiles in the order of reading, two columns or one.
       press('ArrowDown')
@@ -2701,9 +2701,9 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       fireEvent.keyDown(last, { key: ' ' })
       fireEvent.keyUp(last, { key: ' ' })
       // The last tile is the files of the working copy now (06.11.2026).
-      const terminal = await screen.findByRole('tab', { name: 'Терминал', selected: true })
+      const terminal = await screen.findByRole('tab', { name: 'Изменения', selected: true })
       await waitFor(() => expect(document.activeElement).toBe(terminal))
-      expect(tabNames()).toEqual(['Файлы', 'Терминал'])
+      expect(tabNames()).toEqual(['Файлы', 'Изменения'])
     },
   )
 
@@ -2723,7 +2723,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       within(menu)
         .getAllByRole('menuitem')
         .map((item) => plain(item.textContent)),
-    ).toEqual(['Файлы и изменения, 4', 'База данных, 3', 'Проверки, 2 из 2', 'Терминал'])
+    ).toEqual(['Файлы и изменения, 4', 'База данных, 3', 'Проверки, 2 из 2', 'Изменения'])
     if (wide) {
       expect(screen.queryByRole('button', { name: 'Закрыть меню' })).toBeNull()
       fireEvent.keyDown(menu, { key: 'Escape' })
@@ -2995,7 +2995,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
   it('offers the preview and the files in a dialog at work, not a word of changes (К19)', async () => {
     showDialog(started())
     await screen.findByText('Поменял цену капучино на 290 ₽.')
-    expect(await menuTiles()).toEqual(['Предпросмотр', 'Терминал'])
+    expect(await menuTiles()).toEqual(['Предпросмотр', 'Изменения'])
     expect(calls.candidate).not.toHaveBeenCalled()
   })
 
@@ -3088,7 +3088,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       'Предпросмотр',
       'Файлы и изменения, 4',
       'Проверки, 2 из 2',
-      'Терминал',
+      'Изменения',
     ])
     later(withRecords)
     expect(await screen.findByText('Поменял ещё и цену в меню на сайте.')).toBeTruthy()
@@ -3097,7 +3097,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       'Файлы и изменения, 4',
       'База данных, 3',
       'Проверки, 2 из 2',
-      'Терминал',
+      'Изменения',
     ])
   })
 
@@ -3125,7 +3125,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       'Файлы и изменения, 4',
       'База данных, 3',
       'Проверки, 2 из 2',
-      'Терминал',
+      'Изменения',
     ])
     // Chosen there, it is on the screen again in place of the dialog, alone on its strip.
     await choose(/^Предпросмотр, Открыто/)
@@ -3144,7 +3144,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       'Файлы и изменения, 4',
       'База данных, 3',
       'Проверки, 2 из 2',
-      'Терминал',
+      'Изменения',
     ])
   })
 

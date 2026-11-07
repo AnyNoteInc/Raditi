@@ -1,3 +1,5 @@
+import type { Locator, Page } from '@playwright/test'
+
 import { expect, test } from '../../fixtures/signed-in.ts'
 
 import {
@@ -11,11 +13,31 @@ import {
   hideDevIndicator,
 } from './site.ts'
 
-// The shell of the site page in a real browser: unit tests see the markup of both navigations,
-// only a browser shows which of them the width leaves on the screen.
+// The shell of the site page in a real browser (docs/plan/64-cabinet-navigation.md): from `md` the
+// sections are the panel beside the rail, below it they open from a button of the bar. Unit tests
+// see the markup of both, only a browser shows which of them the width leaves on the screen.
 
-// «Переменные» is a section of its own since 26.10.2026 (the variables and the accesses).
-const sections = ['Обзор', 'Изменения', 'Запуски', 'База и бэкап', 'Переменные', 'Настройки']
+// «Переменные» is a section of its own since 26.10.2026 (the variables and the accesses); «База»
+// is named so since 07.11.2026.
+const sections = ['Обзор', 'Изменения', 'Запуски', 'База', 'Переменные', 'Настройки']
+
+/** The panel beside the rail is drawn from this width (`md`). */
+const PANEL_FROM = 900
+
+/** The sections on the screen: the panel from `md`, below it the drawer the bar opens. */
+async function sectionsOnScreen(page: Page, width: number): Promise<Locator> {
+  if (width >= PANEL_FROM) {
+    await expect(page.getByRole('button', { name: /^Разделы сайта: / })).toBeHidden()
+    return page
+      .getByRole('complementary', { name: 'Разделы сайта' })
+      .getByRole('navigation', { name: 'Разделы сайта' })
+  }
+  await expect(page.getByRole('complementary', { name: 'Разделы сайта' })).toBeHidden()
+  await page.getByRole('button', { name: /^Разделы сайта: / }).click()
+  return page
+    .getByRole('dialog', { name: 'Разделы сайта' })
+    .getByRole('navigation', { name: 'Разделы сайта' })
+}
 
 for (const [name, width, height] of [
   ['phone', 390, 844],
@@ -41,19 +63,19 @@ for (const [name, width, height] of [
       await connection.blur()
     })
 
-    await test.step('exactly one navigation of sections is on the screen', async () => {
-      const navigations = page.getByRole('navigation', { name: 'Разделы сайта' })
-      await expect(navigations).toHaveCount(1)
-      const labels = await navigations.getByRole('link').allTextContents()
-      expect(labels).toEqual(width < 600 ? sections.slice(0, 3) : sections)
-      await expect(navigations.getByRole('link', { name: 'Обзор' })).toHaveAttribute(
+    await test.step('one navigation of sections is on the screen', async () => {
+      const navigation = await sectionsOnScreen(page, width)
+      await expect(navigation).toHaveCount(1)
+      expect(await navigation.getByRole('link').allTextContents()).toEqual(sections)
+      await expect(navigation.getByRole('link', { name: 'Обзор' })).toHaveAttribute(
         'href',
         `/projects/${siteId}/overview`,
       )
-      await expect(navigations.getByRole('link', { name: 'Обзор' })).toHaveAttribute(
+      await expect(navigation.getByRole('link', { name: 'Обзор' })).toHaveAttribute(
         'aria-current',
         'page',
       )
+      if (width < PANEL_FROM) await page.keyboard.press('Escape')
     })
 
     await test.step('nothing scrolls sideways', async () => {
@@ -64,31 +86,36 @@ for (const [name, width, height] of [
     })
 
     await test.step('the settings show the site; «Переменные → Доступы», no accesses yet', async () => {
-      if (width < 600) {
-        await page.getByRole('button', { name: 'Ещё' }).click()
-        await page
-          .getByRole('navigation', { name: 'Ещё разделы' })
-          .getByRole('link', { name: 'Настройки' })
-          .click()
-      } else {
-        await page
-          .getByRole('navigation', { name: 'Разделы сайта' })
-          .getByRole('link', { name: 'Настройки' })
-          .click()
-      }
+      const navigation = await sectionsOnScreen(page, width)
+      await navigation.getByRole('link', { name: 'Настройки' }).click()
       await expect(page).toHaveURL(`/projects/${siteId}/settings`)
-      await expect(page.getByText('Кофейня «Крошка»').first()).toBeVisible()
-      // The accesses are a block of «Переменные» since 26.10.2026, not of the settings.
+      await expect(page.getByRole('heading', { level: 1, name: 'Настройки' })).toBeVisible()
+      // The third layer is the tabs of the section (Н5): the first is open at its root.
+      const tabs = page.getByRole('navigation', { name: 'Настройки', exact: true })
+      await expect(tabs.getByRole('link', { name: 'Сайт' })).toHaveAttribute('aria-current', 'page')
+      await expect(page.getByRole('main').getByText('Кофейня «Крошка»').first()).toBeVisible()
+      // The accesses are a tab of «Переменные» since 26.10.2026, not of the settings.
       await page.goto(`/projects/${siteId}/vault/accesses`)
-      await expect(page.getByRole('heading', { level: 1, name: 'Доступы' })).toBeVisible()
+      await expect(page.getByRole('heading', { level: 1, name: 'Переменные' })).toBeVisible()
+      await expect(
+        page.getByRole('navigation', { name: 'Переменные' }).getByRole('link', { name: 'Доступы' }),
+      ).toHaveAttribute('aria-current', 'page')
       await expect(page.getByText(/^Доступов пока нет\. Они появятся/)).toBeVisible()
     })
 
-    await test.step('breadcrumbs lead back to the projects', async () => {
-      await page
-        .getByRole('navigation', { name: 'Хлебные крошки' })
-        .getByRole('link', { name: 'Проекты' })
-        .click()
+    await test.step('the way back leads to the projects', async () => {
+      if (width >= PANEL_FROM) {
+        await page
+          .getByRole('navigation', { name: 'Хлебные крошки' })
+          .getByRole('link', { name: 'Проекты' })
+          .click()
+      } else {
+        await page.getByRole('button', { name: /^Разделы сайта: / }).click()
+        await page
+          .getByRole('dialog', { name: 'Разделы сайта' })
+          .getByRole('link', { name: 'Все проекты' })
+          .click()
+      }
       await expect(page).toHaveURL('/projects')
       await expect(
         page.getByRole('link', { name: 'Кофейня «Крошка»', exact: true }),
@@ -108,7 +135,7 @@ test('the address of a connected site opens its overview: a project has no chat'
 
   await expect(page).toHaveURL(`/projects/${siteId}/overview`)
   await expect(page.getByRole('heading', { level: 1, name: 'Обзор' })).toBeVisible()
-  const navigation = page.getByRole('navigation', { name: 'Разделы сайта' })
+  const navigation = await sectionsOnScreen(page, 1280)
   await expect(navigation.locator('[aria-current="page"]')).toHaveText('Обзор')
   await expect(navigation.getByRole('link', { name: /^Чат/ })).toHaveCount(0)
 })
@@ -174,7 +201,7 @@ for (const [status, label, note] of closedSites) {
     }) => {
       const siteId = await addSite(signedInUser.id, status)
       const overview = `/projects/${siteId}/overview`
-      const phone = width < 600
+      const narrow = width < PANEL_FROM
       await hideDevIndicator(page)
       await page.setViewportSize({ width, height })
 
@@ -196,7 +223,7 @@ for (const [status, label, note] of closedSites) {
       }
 
       await test.step('the navigation keeps one link and shows the rest closed', async () => {
-        const navigation = page.getByRole('navigation', { name: 'Разделы сайта' })
+        const navigation = await sectionsOnScreen(page, width)
         await expect(navigation).toHaveCount(1)
         const link = navigation.locator('a')
         await expect(link).toHaveCount(1)
@@ -205,10 +232,9 @@ for (const [status, label, note] of closedSites) {
         await expect(link).toHaveAttribute('aria-current', 'page')
 
         const closed = navigation.locator('[aria-disabled="true"]')
-        const shown = phone ? sections.slice(0, 3) : sections
         // The state is part of the text of an item: a span without a role announces no other.
         expect(await closed.allTextContents()).toEqual(
-          shown.filter((name) => name !== 'Обзор').map((name) => name + CLOSED_SUFFIX),
+          sections.filter((name) => name !== 'Обзор').map((name) => name + CLOSED_SUFFIX),
         )
         for (const item of await closed.all()) {
           await expect(item).toBeVisible()
@@ -224,7 +250,11 @@ for (const [status, label, note] of closedSites) {
       })
 
       await test.step('a closed section cannot be followed', async () => {
-        const navigation = page.getByRole('navigation', { name: 'Разделы сайта' })
+        const navigation = narrow
+          ? page.getByRole('dialog', { name: 'Разделы сайта' }).getByRole('navigation')
+          : page
+              .getByRole('complementary', { name: 'Разделы сайта' })
+              .getByRole('navigation', { name: 'Разделы сайта' })
         // Forced: Playwright waits for an item marked `aria-disabled` to become enabled.
         await navigation
           .locator('[aria-disabled="true"]')
@@ -237,7 +267,8 @@ for (const [status, label, note] of closedSites) {
             .filter((element) => element.tabIndex >= 0)
             .map((element) => element.textContent),
         )
-        expect(focusable).toEqual(phone ? ['Обзор', 'Ещё'] : ['Обзор'])
+        expect(focusable).toEqual(['Обзор'])
+        if (narrow) await page.keyboard.press('Escape')
       })
 
       await test.step('nothing scrolls sideways', async () => {
@@ -247,29 +278,13 @@ for (const [status, label, note] of closedSites) {
         expect(overflow).toBeLessThanOrEqual(0)
       })
 
-      if (!phone) return
-      await test.step('«Ещё» still opens: its sections are closed, the way back is not', async () => {
-        await page.getByRole('button', { name: 'Ещё' }).click()
-        const more = page.getByRole('navigation', { name: 'Ещё разделы' })
-        await expect(more.locator('a')).toHaveCount(2)
-        await expect(more.getByRole('link', { name: 'К чатам' })).toHaveAttribute('href', '/chats')
-        const closed = more.locator('[aria-disabled="true"]')
-        expect(await closed.allTextContents()).toEqual(
-          sections.slice(3).map((name) => name + CLOSED_SUFFIX),
-        )
-        for (const item of await closed.all()) {
-          await expect(item).toBeVisible()
-          await expect(item).not.toHaveAttribute('href')
-          await expect(item).toHaveAttribute('aria-describedby', CLOSED_NOTE_ID)
-          await expect(item.locator('svg')).toHaveCount(2)
-          expect((await item.boundingBox())?.height).toBeGreaterThanOrEqual(44)
-        }
-        // The sheet slides up from below the window: the click waits until it has arrived.
-        const settings = closed.filter({ hasText: 'Настройки' })
-        await expect(settings).toBeInViewport()
-        await settings.click({ force: true })
-        await expect(page).toHaveURL(overview)
-        await more.getByRole('link', { name: 'К проектам' }).click()
+      if (!narrow) return
+      await test.step('the drawer keeps the way back to the projects', async () => {
+        await page.getByRole('button', { name: /^Разделы сайта: / }).click()
+        await page
+          .getByRole('dialog', { name: 'Разделы сайта' })
+          .getByRole('link', { name: 'Все проекты' })
+          .click()
         await expect(page).toHaveURL('/projects')
       })
     })
@@ -288,7 +303,7 @@ test('every section of a site that is not connected yet still opens', async ({
     await expect(page).toHaveURL(`/projects/${siteId}/${address}`)
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
   }
-  const navigation = page.getByRole('navigation', { name: 'Разделы сайта' })
+  const navigation = await sectionsOnScreen(page, 1280)
   await expect(navigation.getByRole('link')).toHaveCount(sections.length)
   await expect(navigation.locator('[aria-disabled="true"]')).toHaveCount(0)
   await expect(page.locator(`#${CLOSED_NOTE_ID}`)).toHaveCount(0)
@@ -316,4 +331,69 @@ test('a site of someone else and a made-up address answer «not found» alike', 
   } finally {
     await foreign.remove()
   }
+})
+
+// The panel beside the rail hides and comes back with its button and with «]» (Н3), and the
+// choice holds on the next page; a «]» typed into a field stays in the field.
+test('the panel of a site hides with its button and with «]», and its edge is dragged', async ({
+  page,
+  signedInUser,
+}) => {
+  const siteId = await addSite(signedInUser.id, 'active')
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto(`/projects/${siteId}/overview`)
+  const panel = page.getByRole('complementary', { name: 'Разделы сайта' })
+  await expect(panel).toBeVisible()
+
+  await panel.getByRole('button', { name: 'Скрыть панель' }).click()
+  await expect(panel).toBeHidden()
+  const show = page.getByRole('button', { name: 'Показать панель' })
+  await expect(show).toHaveAttribute('aria-keyshortcuts', ']')
+  await page.goto(`/projects/${siteId}/settings`)
+  await expect(panel).toBeHidden()
+
+  await page.keyboard.press(']')
+  await expect(panel).toBeVisible()
+  await page.keyboard.press(']')
+  await expect(panel).toBeHidden()
+  await show.click()
+  await expect(panel).toBeVisible()
+
+  // Its right edge is dragged (owner's answer of 07.11.2026): the width holds after a reload.
+  const before = (await panel.boundingBox())!
+  expect(before.width).toBe(284)
+  const edge = panel.getByRole('separator', { name: 'Ширина левой панели' })
+  const grip = (await edge.boundingBox())!
+  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(before.x + 360, grip.y + grip.height / 2, { steps: 5 })
+  await page.mouse.up()
+  await expect.poll(async () => (await panel.boundingBox())?.width).toBe(360)
+  await page.reload()
+  await expect.poll(async () => (await panel.boundingBox())?.width).toBe(360)
+  // The content starts past the wider panel.
+  const main = (await page.getByRole('main').boundingBox())!
+  expect(main.x).toBeGreaterThanOrEqual(before.x + 360)
+
+  // The rail of the cabinet stays whatever the panel does.
+  await expect(page.getByRole('navigation', { name: 'Основная навигация' })).toBeVisible()
+})
+
+test('the files of a site are the tab «Файлы» of «Изменения»', async ({ page, signedInUser }) => {
+  const siteId = await addSite(signedInUser.id)
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+
+  await page.goto(`/projects/${siteId}/terminal`)
+  await expect(page).toHaveURL(`/projects/${siteId}/changes`)
+  await expect(page.getByRole('heading', { level: 1, name: 'Изменения' })).toBeVisible()
+  const tabs = page.getByRole('navigation', { name: 'Изменения' })
+  await expect(tabs.getByRole('link')).toHaveText(['Файлы', 'Версии'])
+  await expect(tabs.getByRole('link', { name: 'Файлы' })).toHaveAttribute('aria-current', 'page')
+
+  await tabs.getByRole('link', { name: 'Версии' }).click()
+  await expect(page).toHaveURL(`/projects/${siteId}/changes/versions`)
+  await expect(tabs.getByRole('link', { name: 'Версии' })).toHaveAttribute('aria-current', 'page')
+  await expect(page.getByText('Версий пока нет.', { exact: false })).toBeVisible()
 })

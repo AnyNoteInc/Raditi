@@ -2,13 +2,15 @@ import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 
 import { ServiceUnavailable } from '@/components/layout/service-unavailable'
+import { siteHref } from '@/components/site/site-nav'
+import { BackLink } from '@/components/site/site-section'
 import { VersionDetail } from '@/components/site/site-versions'
 import { UNAVAILABLE } from '@/lib/access'
 import { loadSiteHistory, loadSiteSection } from '@/lib/site'
 
 export const metadata: Metadata = { title: 'Версия сайта' }
 
-/** One version of «Изменения»; a version of no such site is «not found». */
+/** One version of «Изменения», a page of its own under «Версии» (Н6); one of no such site — «not found». */
 export default async function Page({
   params,
 }: {
@@ -25,11 +27,15 @@ export default async function Page({
   const version = versions[index]
   if (!version) notFound()
   return (
-    <VersionDetail
-      siteId={site.id}
-      version={version}
-      next={versions[index - 1] ?? null}
-      now={new Date()}
-    />
+    <>
+      <BackLink href={`${siteHref(site.id, 'changes')}/versions`}>Все версии</BackLink>
+      <VersionDetail
+        siteId={site.id}
+        version={version}
+        next={versions[index - 1] ?? null}
+        now={new Date()}
+        nested
+      />
+    </>
   )
 }

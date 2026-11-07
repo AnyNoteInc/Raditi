@@ -15,9 +15,8 @@ import {
 
 // What every slice of the site page owes (docs/plan/38-site-page-plan.md, assumption «л»): the
 // rules of axe, the dark scheme and a pressing area of 44px. The sections that read data today
-// are «Обзор» and «Настройки»; a slice that fills another section adds it to `pages`. «Чат» is
-// here with both of its addresses: the root — the list, and from 900px a new dialog beside it —
-// and the new dialog itself, which keeps the bottom bar of a phone.
+// are «Обзор» and «Настройки»; a slice that fills another section adds it to `pages`. Below 900px
+// the sections are the drawer the bar opens (docs/plan/64-cabinet-navigation.md, Н7).
 
 // No motion: axe reads the colours, and a sheet that is still sliding in has not its own yet.
 test.use({ reducedMotion: 'reduce' })
@@ -28,16 +27,14 @@ interface SitePage {
   heading: string
   /** The section the navigation marks as the current page. */
   current: string
-  /** The section opens from «Ещё» on a phone. */
-  inMore: boolean
   /** The content is checked for the pressing area too, not the navigation alone. */
   ownTargets?: true
 }
 
 const pages: readonly SitePage[] = [
-  { path: 'overview', heading: 'Обзор', current: 'Обзор', inMore: false },
-  { path: 'settings', heading: 'Настройки', current: 'Настройки', inMore: true },
-  { path: 'changes', heading: 'Изменения', current: 'Изменения', inMore: false },
+  { path: 'overview', heading: 'Обзор', current: 'Обзор' },
+  { path: 'settings', heading: 'Настройки', current: 'Настройки' },
+  { path: 'changes', heading: 'Изменения', current: 'Изменения' },
 ]
 
 const violations = async (page: Page) => {
@@ -74,6 +71,22 @@ const menuSettled = (menu: Locator) =>
 const menuGone = (page: Page) =>
   expect(page.locator('.MuiPopover-root, .MuiDrawer-root')).toHaveCount(0)
 
+/**
+ * The sections on the screen (docs/plan/64-cabinet-navigation.md, Н7): the panel from `md`, below
+ * it the drawer that the button of the bar opens.
+ */
+async function sectionsOnScreen(page: Page, phone: boolean): Promise<Locator> {
+  if (!phone) {
+    return page
+      .getByRole('complementary', { name: 'Разделы сайта' })
+      .getByRole('navigation', { name: 'Разделы сайта' })
+  }
+  await page.getByRole('button', { name: /^Разделы сайта: / }).click()
+  const drawer = page.getByRole('dialog', { name: 'Разделы сайта' })
+  await expect(drawer).toBeVisible()
+  return drawer.getByRole('navigation', { name: 'Разделы сайта' })
+}
+
 /** The items of the navigation a site keeps closed: they hold their place and their size. */
 const CLOSED = '[aria-disabled="true"]'
 
@@ -81,8 +94,6 @@ const CLOSED = '[aria-disabled="true"]'
 async function lowTargets(scope: Locator, selector = 'a, button'): Promise<string[]> {
   const low: string[] = []
   const targets = scope.locator(selector)
-  // The bottom bar keeps «Ещё» as a button; the rail has links only.
-  // Not the first in the markup: a «list — content» section keeps the hidden half in it.
   await expect(targets.filter({ visible: true }).first()).toBeVisible()
   for (const target of await targets.all()) {
     if (!(await target.isVisible())) continue
@@ -114,7 +125,7 @@ for (const scheme of ['light', 'dark'] as const) {
       await page.setViewportSize({ width, height })
       const phone = width < 600
 
-      for (const { path, heading, current: section, inMore, ownTargets } of pages) {
+      for (const { path, heading, current: section, ownTargets } of pages) {
         await test.step(`«${heading}»`, async () => {
           await page.goto(`/projects/${siteId}/${path}`)
           await expect(page.getByRole('heading', { level: 1, name: heading })).toBeVisible()
@@ -126,40 +137,29 @@ for (const scheme of ['light', 'dark'] as const) {
 
           expect(await violations(page)).toEqual([])
 
-          const navigation = page.getByRole('navigation', { name: 'Разделы сайта' })
-          // The rail or the bottom bar, never both and never neither.
-          await expect(navigation).toHaveCount(1)
-          if (phone && inMore) {
-            // The section lives in the sheet: the bar marks nothing as the current page.
-            await expect(navigation.locator('[aria-current]')).toHaveCount(0)
-          } else {
-            const current = navigation.locator('[aria-current="page"]')
-            await expect(current).toHaveCount(1)
-            await expect(current).toHaveText(section)
-          }
-
           const overflow = await page.evaluate(
             () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
           )
           expect(overflow).toBeLessThanOrEqual(0)
-
-          expect(await lowTargets(navigation)).toEqual([])
           if (ownTargets) expect(await lowTargets(page.getByRole('main'))).toEqual([])
-          const projects = page
-            .getByRole('navigation', { name: 'Хлебные крошки' })
-            .getByRole('link', { name: 'Проекты' })
-          await expect(projects).toBeVisible()
-          expect((await projects.boundingBox())?.height).toBeGreaterThanOrEqual(44)
 
+          if (!phone) {
+            const projects = page
+              .getByRole('navigation', { name: 'Хлебные крошки' })
+              .getByRole('link', { name: 'Проекты' })
+            await expect(projects).toBeVisible()
+            expect((await projects.boundingBox())?.height).toBeGreaterThanOrEqual(44)
+          }
+
+          const navigation = await sectionsOnScreen(page, phone)
+          const current = navigation.locator('[aria-current="page"]')
+          await expect(current).toHaveCount(1)
+          await expect(current).toHaveText(section)
+          expect(await lowTargets(navigation)).toEqual([])
           if (!phone) return
-          await page.getByRole('button', { name: 'Ещё' }).click()
-          const more = page.getByRole('navigation', { name: 'Ещё разделы' })
-          await expect(more.getByRole('link', { name: 'Настройки' })).toBeVisible()
-          const currentInMore = more.locator('[aria-current="page"]')
-          if (inMore) await expect(currentInMore).toHaveText(section)
-          else await expect(currentInMore).toHaveCount(0)
-          expect(await lowTargets(more)).toEqual([])
           expect(await violations(page)).toEqual([])
+          await page.keyboard.press('Escape')
+          await menuGone(page)
         })
       }
     })
@@ -182,7 +182,7 @@ for (const scheme of ['light', 'dark'] as const) {
       await context.addCookies([{ name: 'theme', value: scheme, url: baseURL }])
       await hideDevIndicator(page)
       await page.setViewportSize({ width, height })
-      const phone = width < 600
+      const narrow = width < 900
 
       for (const [status, label, note] of closedSites) {
         await test.step(`a ${status} site`, async () => {
@@ -208,31 +208,23 @@ for (const scheme of ['light', 'dark'] as const) {
           await connection.blur()
           await expect(page.getByRole('tooltip')).toHaveCount(0)
 
-          const navigation = page.getByRole('navigation', { name: 'Разделы сайта' })
-          await expect(navigation).toHaveCount(1)
-          const current = navigation.locator('[aria-current="page"]')
-          await expect(current).toHaveCount(1)
-          await expect(current).toHaveText('Обзор')
-          // Every section but «Обзор»: «Переменные» is one of them since 26.10.2026.
-          await expect(navigation.locator(CLOSED)).toHaveCount(phone ? 2 : 5)
-
           const overflow = await page.evaluate(
             () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
           )
           expect(overflow).toBeLessThanOrEqual(0)
 
+          const navigation = await sectionsOnScreen(page, narrow)
+          const current = navigation.locator('[aria-current="page"]')
+          await expect(current).toHaveCount(1)
+          await expect(current).toHaveText('Обзор')
+          // Every section but «Обзор»: «Переменные» is one of them since 26.10.2026.
+          await expect(navigation.locator(CLOSED)).toHaveCount(5)
           expect(await lowTargets(navigation)).toEqual([])
           expect(await lowTargets(navigation, CLOSED)).toEqual([])
-
-          if (!phone) return
-          await page.getByRole('button', { name: 'Ещё' }).click()
-          const more = page.getByRole('navigation', { name: 'Ещё разделы' })
-          await expect(more.getByRole('link', { name: 'К проектам' })).toBeVisible()
-          await expect(more.locator(CLOSED)).toHaveCount(3)
-          await expect(more.locator('[aria-current]')).toHaveCount(0)
-          expect(await lowTargets(more)).toEqual([])
-          expect(await lowTargets(more, CLOSED)).toEqual([])
+          if (!narrow) return
           expect(await violations(page)).toEqual([])
+          await page.keyboard.press('Escape')
+          await menuGone(page)
         })
       }
     })

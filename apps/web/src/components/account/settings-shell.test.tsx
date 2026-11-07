@@ -3,7 +3,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import { renderToString } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { SETTINGS_SIDEBAR_COOKIE, type SettingsSidebarState } from '@/lib/settings-sidebar'
+import { CABINET_PANEL_COOKIE } from '@/lib/cabinet-panel'
 
 import type * as SettingsNav from './settings-nav'
 import { SettingsShell } from './settings-shell'
@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({ pathname: '/settings' }))
 vi.mock('next/navigation', () => ({ usePathname: () => mocks.pathname }))
 vi.mock('@/app/(protected)/app/actions', () => ({ signOut: vi.fn() }))
 vi.mock('@/lib/hard-navigate', () => ({ hardNavigate: vi.fn() }))
+// The credits of the rail read the server: here they are left out.
+vi.mock('@/components/billing/credit-ring', () => ({ CreditRing: () => null }))
 // The shell is pinned on a list of its own: which sections are switched on changes with the
 // product, and settings-nav.test.ts follows that.
 vi.mock('./settings-nav', async (importOriginal) => ({
@@ -26,9 +28,9 @@ vi.mock('./settings-nav', async (importOriginal) => ({
 
 const user = { name: 'Анна', lastName: 'Иванова', email: 'anna@example.ru' }
 
-function shell(sidebar: SettingsSidebarState = 'expanded') {
+function shell() {
   return (
-    <SettingsShell user={user} sidebar={sidebar}>
+    <SettingsShell user={user}>
       <h1>Содержимое раздела</h1>
     </SettingsShell>
   )
@@ -39,11 +41,6 @@ function showShell(pathname = '/settings') {
   render(shell())
 }
 
-/** What an earlier visit left behind: on the client the cookie is the state. */
-function rememberSidebar(state: SettingsSidebarState) {
-  document.cookie = `${SETTINGS_SIDEBAR_COOKIE}=${state}; Path=/`
-}
-
 const sections = () => screen.getByRole('navigation', { name: 'Разделы настроек' })
 
 beforeEach(() => {
@@ -51,21 +48,22 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  document.cookie = `${SETTINGS_SIDEBAR_COOKIE}=; Path=/; Max-Age=0`
+  document.cookie = `${CABINET_PANEL_COOKIE}=; Path=/; Max-Age=0`
   vi.restoreAllMocks()
 })
 
 describe('settings shell navigation', () => {
-  it('lists the way back to the chats and the sections that are switched on', () => {
+  it('lists the sections that are switched on; the rail of the cabinet leads to the chats', () => {
     showShell()
 
     const links = within(sections()).getAllByRole('link')
     expect(links.map((link) => [link.textContent, link.getAttribute('href')])).toEqual([
-      ['К чатам', '/chats'],
       ['Общее', '/settings'],
       ['Тарифы', '/settings/plans'],
     ])
     expect(screen.queryByRole('link', { name: 'Оплата' })).not.toBeInTheDocument()
+    const rail = screen.getByRole('navigation', { name: 'Основная навигация' })
+    expect(within(rail).getByRole('link', { name: 'Чаты' })).toHaveAttribute('href', '/chats')
     expect(screen.getByRole('link', { name: 'Радити — главная страница' })).toHaveAttribute(
       'href',
       '/chats',
@@ -99,7 +97,7 @@ describe('settings shell navigation', () => {
   })
 
   it.each(['/settings/billing', '/settings/billing/return'])(
-    'names a switched-off section in the breadcrumbs of %s and lights nothing in the sidebar',
+    'names a switched-off section in the breadcrumbs of %s and lights nothing in the panel',
     (pathname) => {
       showShell(pathname)
 
@@ -118,109 +116,39 @@ describe('settings shell navigation', () => {
   )
 })
 
-describe('settings shell sidebar', () => {
-  it('starts expanded with the account block and collapses to a rail, writing the cookie', () => {
-    showShell()
-    const toggle = screen.getByRole('button', { name: 'Свернуть боковую панель' })
-
-    expect(toggle).toHaveAttribute('aria-expanded', 'true')
-    expect(document.getElementById(toggle.getAttribute('aria-controls') ?? '')).toBe(
-      screen.getByRole('complementary', { name: 'Боковая панель' }),
-    )
-    expect(
-      screen.getByRole('button', { name: 'Меню пользователя: Анна Иванова, anna@example.ru' }),
-    ).toBeVisible()
-
-    fireEvent.click(toggle)
-
-    expect(toggle).toHaveAttribute('aria-expanded', 'false')
-    expect(toggle).toHaveAccessibleName('Развернуть боковую панель')
-    expect(screen.getByRole('button', { name: 'Меню пользователя в боковой панели' })).toBeVisible()
-    expect(document.cookie).toContain(`${SETTINGS_SIDEBAR_COOKIE}=collapsed`)
-
-    fireEvent.click(toggle)
-
-    expect(toggle).toHaveAttribute('aria-expanded', 'true')
-    expect(toggle).toHaveAccessibleName('Свернуть боковую панель')
-    expect(
-      screen.getByRole('button', { name: 'Меню пользователя: Анна Иванова, anna@example.ru' }),
-    ).toBeVisible()
-    expect(document.cookie).toContain(`${SETTINGS_SIDEBAR_COOKIE}=expanded`)
-  })
-
-  it('keeps the names of the icon-only links and the avatar menu in the rail', () => {
-    rememberSidebar('collapsed')
+describe('settings shell panel', () => {
+  it('hides the panel with «Скрыть панель» and brings it back from the bar, writing the cookie', () => {
     showShell()
 
-    expect(screen.getByRole('button', { name: 'Развернуть боковую панель' })).toHaveAttribute(
-      'aria-expanded',
-      'false',
-    )
-    expect(screen.getByRole('link', { name: 'Радити — главная страница' })).toBeVisible()
-    expect(screen.getByRole('link', { name: 'К чатам' })).toHaveAttribute('href', '/chats')
-    expect(screen.getByRole('link', { name: 'Общее' })).toHaveAttribute('aria-current', 'page')
-    expect(screen.getByRole('link', { name: 'Тарифы' })).toHaveAttribute('href', '/settings/plans')
+    const panel = screen.getByRole('complementary', { name: 'Настройки' })
+    fireEvent.click(within(panel).getByRole('button', { name: 'Скрыть панель' }))
+    expect(document.cookie).toContain(`${CABINET_PANEL_COOKIE}=closed`)
+    // The panel stays in the page, hidden by its styles: only the button that hides it goes.
+    expect(within(panel).queryByRole('button', { name: 'Скрыть панель' })).toBeNull()
 
-    const account = screen.getByRole('button', { name: 'Меню пользователя в боковой панели' })
-    expect(account).toHaveTextContent(/^АИ$/)
-    fireEvent.click(account)
-    expect(
-      within(screen.getByRole('menu'))
-        .getAllByRole('menuitem')
-        .map((item) => item.textContent),
-    ).toEqual(['Чаты', 'Проекты', 'Профиль', 'Настройки', 'Выход'])
+    fireEvent.click(screen.getByRole('button', { name: 'Показать панель' }))
+    expect(document.cookie).toContain(`${CABINET_PANEL_COOKIE}=open`)
+    expect(sections()).toBeTruthy()
   })
 
-  it('restores the latest choice, not the one the layout was rendered with', () => {
-    rememberSidebar('collapsed')
-    mocks.pathname = '/settings'
-    render(shell('expanded'))
-
-    expect(screen.getByRole('button', { name: 'Развернуть боковую панель' })).toHaveAttribute(
-      'aria-expanded',
-      'false',
+  it('draws the panel hidden on the server when the cookie read there says so', () => {
+    mocks.pathname = '/settings/plans'
+    const markup = renderToString(
+      <SettingsShell user={user} panelState="closed">
+        <h1>Тарифы</h1>
+      </SettingsShell>,
     )
+    expect(markup).toContain('aria-label="Показать панель"')
+    expect(markup).not.toContain('aria-label="Скрыть панель"')
   })
 
-  it.each(['expanded', 'collapsed'] as const)(
-    'renders the %s state the server read from the cookie',
-    (state) => {
-      // A cookie the browser holds must not leak into the server markup that hydration expects.
-      rememberSidebar(state === 'expanded' ? 'collapsed' : 'expanded')
-      const page = document.createElement('div')
-      page.innerHTML = renderToString(shell(state))
+  it('opens the sections from the bar on a phone', () => {
+    showShell('/settings/plans')
 
-      const toggle = page.querySelector('button[aria-controls]')
-      expect(toggle).toHaveAttribute('aria-expanded', String(state === 'expanded'))
-      expect(toggle).toHaveAttribute(
-        'aria-label',
-        state === 'expanded' ? 'Свернуть боковую панель' : 'Развернуть боковую панель',
-      )
-      expect(page.querySelector('aside button')).toHaveAttribute(
-        'aria-label',
-        state === 'expanded'
-          ? 'Меню пользователя: Анна Иванова, anna@example.ru'
-          : 'Меню пользователя в боковой панели',
-      )
-    },
-  )
-
-  it('is a rail with the avatar menu on a narrow screen even when expanded', () => {
-    vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
-      matches: /max-width:\s*899/.test(query),
-      media: query,
-      onchange: null,
-      addEventListener: () => undefined,
-      removeEventListener: () => undefined,
-      addListener: () => undefined,
-      removeListener: () => undefined,
-      dispatchEvent: () => false,
-    }))
-    showShell()
-
-    expect(screen.getByRole('button', { name: 'Меню пользователя в боковой панели' })).toBeVisible()
-    expect(screen.getByRole('link', { name: 'Общее' })).toBeVisible()
-    expect(screen.getByRole('link', { name: 'Тарифы' })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Разделы настроек: Тарифы' }))
+    const drawer = screen.getByRole('dialog', { name: 'Разделы настроек' })
+    const current = within(drawer).getByRole('link', { current: 'page' })
+    expect(current).toHaveTextContent('Тарифы')
   })
 })
 
@@ -236,7 +164,7 @@ describe('settings shell keyboard access', () => {
     expect(screen.getAllByRole('link')[0]).toBe(skip)
   })
 
-  it('offers the toggle, the links and the account menu as native controls in page order', () => {
+  it('offers the rail, the panel and the bar as native controls in page order', () => {
     showShell()
 
     const controls = [...document.querySelectorAll<HTMLElement>('a[href], button')]
@@ -245,11 +173,13 @@ describe('settings shell keyboard access', () => {
     ).toEqual([
       'Перейти к содержимому',
       'Радити — главная страница',
-      'К чатам',
+      'Чаты',
+      'Проекты',
+      'Меню пользователя в боковой панели',
+      'Скрыть панель',
       'Общее',
       'Тарифы',
-      'Меню пользователя: Анна Иванова, anna@example.ru',
-      'Свернуть боковую панель',
+      'Разделы настроек: Общее',
       'Настройки',
     ])
     for (const control of controls) expect(control).not.toHaveAttribute('tabindex', '-1')

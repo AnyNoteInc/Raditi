@@ -4,12 +4,10 @@ import { fontFamilies } from '@repo/ui/theme/tokens'
 import type { ReactNode } from 'react'
 
 import { fileSizeText } from '@/components/chat/chat-format'
-import { formatMoscowDay, formatMoscowMoment } from '@/lib/moscow-date'
-import { plural } from '@/lib/plural'
+import { formatMoscowMoment } from '@/lib/moscow-date'
 
 import { engineText, tlsText } from './history-text'
 import { SectionTitle } from './section-empty'
-import type { SiteBlock } from './site-block-nav'
 import { Fact, Facts, SiteCard } from './site-cards'
 import { SiteLink } from './site-link'
 import { siteHref } from './site-nav'
@@ -37,54 +35,11 @@ export const backupDownloadHref = (siteId: string, backupId: string) =>
 
 const cell = { px: { xs: 2, sm: 2.75 }, py: 1.5 } as const
 
-/** The blocks of «База и бэкап», each a page beside the menu (owner's request of 26.10.2026). */
-export const DATABASE_BLOCK = 'connection'
-export const BACKUPS_BLOCK = 'backups'
-
-/**
- * The menu of «База и бэкап»: what each block holds now. `database` — undefined when it could not
- * be read; `backups` — null then.
- */
-export function databaseBlocks(
-  database: DatabaseView | null | undefined,
-  backups: readonly BackupView[] | null,
-): SiteBlock[] {
-  const latest =
-    backups?.reduce<Date | null>(
-      (newest, backup) => (newest === null || backup.at > newest ? backup.at : newest),
-      null,
-    ) ?? null
-  return [
-    {
-      segment: DATABASE_BLOCK,
-      title: 'База данных сайта',
-      icon: 'database',
-      note:
-        database === undefined
-          ? 'Не удалось загрузить'
-          : database === null
-            ? 'Не подключена'
-            : `${engineText[database.engine]} · ${database.databaseName}`,
-    },
-    {
-      segment: BACKUPS_BLOCK,
-      title: 'Копии',
-      icon: 'folder',
-      note:
-        backups === null
-          ? 'Не удалось загрузить'
-          : latest === null
-            ? 'Копий пока нет'
-            : `${backups.length} ${plural(backups.length, 'копия', 'копии', 'копий')} · последняя ${formatMoscowDay(latest)}`,
-    },
-  ]
-}
-
 /**
  * «База данных сайта»: the database as the platform knows it — only its kind, name and protection;
  * the address, the user and the password stay in the vault. Without a live database, `dump` —
- * where a preview takes its copy from (the SQL dump form). `nested` — at the root of the section,
- * where the menu holds the h1.
+ * where a preview takes its copy from (the SQL dump form). `nested` — a tab, under the h1 of the
+ * section.
  */
 export function DatabaseBlock({
   database,

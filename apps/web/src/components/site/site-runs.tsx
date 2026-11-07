@@ -62,7 +62,7 @@ export function RunDetail({
 }: {
   run: RunDetailView
   now: Date
-  /** At the root of the section the list holds the page's heading: this one is the next level. */
+  /** Under the heading of «Запуски»: this one is the next level (docs/plan/64, Н6). */
   nested?: boolean
 }) {
   const outcome = runOutcomeText(run)
@@ -209,16 +209,5 @@ export function RunDetail({
         </Typography>
       </SiteCard>
     </Box>
-  )
-}
-
-/** «Запуски» of a site that has none yet. The list beside it names the section — the
- * heading of the page — and says it is empty on a phone, where the list is all that is shown.
- */
-export function NoRuns() {
-  return (
-    <Typography color="text.secondary" sx={{ display: { xs: 'none', md: 'block' } }}>
-      Запусков пока нет. Здесь появится каждое обновление сайта: его шаги и журнал.
-    </Typography>
   )
 }

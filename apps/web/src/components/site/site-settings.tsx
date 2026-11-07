@@ -5,29 +5,15 @@ import { stackLabels } from '@/components/projects/project-labels'
 
 import { sourceText } from './history-text'
 import { SectionTitle } from './section-empty'
-import type { SiteBlock } from './site-block-nav'
 import { Fact, Facts, SiteCard } from './site-cards'
 
 type SettingsSite = { name: string; host: string; stack: keyof typeof stackLabels }
 type Source = Parameters<typeof sourceText>[0]
 
-/** The blocks of «Настройки», each a page beside the menu (owner's request of 26.10.2026). */
-export const SITE_BLOCK = 'site'
-export const DANGER_BLOCK = 'danger'
-
-/** The menu of «Настройки»: the site by its address, and its dangerous actions. */
-export function settingsBlocks(site: { host: string }): SiteBlock[] {
-  return [
-    { segment: SITE_BLOCK, title: 'Сайт', icon: 'globe', note: site.host },
-    { segment: DANGER_BLOCK, title: 'Опасная область', icon: 'warning', note: 'Удаление проекта' },
-  ]
-}
-
 /**
  * «Сайт», a block of «Настройки»: what the site is and how its files reach Радити. The saved
  * accesses and their change are in «Переменные» (owner's request of 26.10.2026). `source` —
- * undefined when it could not be read. `nested` — at the root of the section, beside the menu that
- * holds the h1.
+ * undefined when it could not be read. `nested` — a tab, under the h1 of the section.
  */
 export function SiteSettings({
   site,

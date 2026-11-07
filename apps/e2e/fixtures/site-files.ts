@@ -68,11 +68,11 @@ export async function fillBasics(page: Page, { name, url }: { name: string; url:
   await page.getByRole('button', { name: 'Далее' }).click()
 }
 
-/** From «Проекты» to the wizard, by «Добавить проект». */
+/** From «Проекты» to the wizard, by «Новый проект». */
 export async function openWizard(page: Page) {
   await page.goto('/projects')
   await expect(page.getByRole('heading', { level: 1, name: 'Проекты' })).toBeVisible(SLOW)
-  await page.getByRole('link', { name: 'Добавить проект' }).first().click()
+  await page.getByRole('link', { name: 'Новый проект' }).first().click()
   await expect(page).toHaveURL('/projects/new', SLOW)
 }
 

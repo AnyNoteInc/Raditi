@@ -2,37 +2,26 @@ import type { SiteStatus } from '@repo/db'
 
 import type { AppIconName } from '@/components/application/app-icon'
 
-export type SiteSection =
-  'overview' | 'changes' | 'runs' | 'terminal' | 'database' | 'vault' | 'settings'
+export type SiteSection = 'overview' | 'changes' | 'runs' | 'database' | 'vault' | 'settings'
 
 export type SiteNavEntry = {
   section: SiteSection
   label: string
   icon: AppIconName
-  /** Shown in the bottom bar of a phone; the rest opens from «Ещё». */
-  primary: boolean
 }
 
-/** The fixed columns of the site page: the rail of sections and the list beside it. */
-export const SITE_RAIL_WIDTH = 88
-export const SITE_LIST_WIDTH = 300
 /**
- * The bar of breadcrumbs from `md` (owner's request of 26.10.2026): it runs from the rail to the
- * right edge and stays at the top; the list column and the panel of a dialog stand under it.
+ * The sections of a site page in the order of its panel (docs/plan/64-cabinet-navigation.md, Н4):
+ * the files of the version the site has are the tab «Файлы» of «Изменения», not a section.
  */
-export const SITE_TOOLBAR_HEIGHT = 44
-
-/** The sections of a site page in rail order. */
 export const siteNav: readonly SiteNavEntry[] = [
-  { section: 'overview', label: 'Обзор', icon: 'globe', primary: true },
-  { section: 'changes', label: 'Изменения', icon: 'changes', primary: true },
-  { section: 'runs', label: 'Запуски', icon: 'runs', primary: true },
-  // The files of the version the site has, to read (owner's request of 06.11.2026).
-  { section: 'terminal', label: 'Терминал', icon: 'terminal', primary: false },
-  { section: 'database', label: 'База и бэкап', icon: 'database', primary: false },
+  { section: 'overview', label: 'Обзор', icon: 'globe' },
+  { section: 'changes', label: 'Изменения', icon: 'changes' },
+  { section: 'runs', label: 'Запуски', icon: 'runs' },
+  { section: 'database', label: 'База', icon: 'database' },
   // The client's environment variables (docs/plan/53, Р13): the values live in Vault.
-  { section: 'vault', label: 'Переменные', icon: 'key', primary: false },
-  { section: 'settings', label: 'Настройки', icon: 'settings', primary: false },
+  { section: 'vault', label: 'Переменные', icon: 'key' },
+  { section: 'settings', label: 'Настройки', icon: 'settings' },
 ]
 
 export const siteHref = (siteId: string, section?: SiteSection) =>
@@ -47,27 +36,6 @@ export function activeSiteSection(pathname: string, siteId: string): SiteSection
   if (pathname.length > root.length && pathname[root.length] !== '/') return undefined
   const segment = pathname.slice(root.length + 1).split('/')[0]
   return siteNav.find((entry) => entry.section === segment)?.section
-}
-
-/**
- * The sections laid out as «list — content»: the versions, the runs, and the sections split by
- * their cards — the database and its copies, the variables and the accesses,
- * the site and its dangerous actions (owner's requests of 26.10.2026). The shell leaves room for their list column.
- */
-const listSections: readonly SiteSection[] = ['changes', 'runs', 'database', 'vault', 'settings']
-
-export const hasSiteList = (section: SiteSection | undefined) =>
-  section !== undefined && listSections.includes(section)
-
-/**
- * True on an item of a «list — content» section that the user opened from its list: on a phone
- * such a path gives up the bottom bar to the content.
- */
-export function siteItemOpen(pathname: string, siteId: string): boolean {
-  const section = activeSiteSection(pathname, siteId)
-  if (section === undefined || !hasSiteList(section)) return false
-  const rest = pathname.slice(siteHref(siteId, section).length).replace(/\/+$/, '')
-  return rest !== ''
 }
 
 /**

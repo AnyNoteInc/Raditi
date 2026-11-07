@@ -71,7 +71,7 @@ export function VersionDetail({
   version: VersionView
   next: VersionView | null
   now: Date
-  /** At the root of the section the list holds the page's heading: this one is the next level. */
+  /** Under the heading of «Изменения»: this one is the next level (docs/plan/64, Н6). */
   nested?: boolean
 }) {
   const undoUntil = new Date(version.installedAt.getTime() + UNDO_DAYS * DAY_MS)
@@ -184,16 +184,5 @@ export function VersionDetail({
         </SiteCard>
       ) : null}
     </Box>
-  )
-}
-
-/** «Изменения» of a site with no version yet. The list beside it names the section — the
- * heading of the page — and says it is empty on a phone, where the list is all that is shown.
- */
-export function NoVersions() {
-  return (
-    <Typography color="text.secondary" sx={{ display: { xs: 'none', md: 'block' } }}>
-      Версий пока нет. Первая появится, когда Радити сохранит файлы сайта.
-    </Typography>
   )
 }

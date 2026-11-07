@@ -657,7 +657,7 @@ export const toolText = Object.freeze({
     files: previewPanelText.files,
     database: previewPanelText.database,
     checks: previewPanelText.checks,
-    terminal: 'Терминал',
+    terminal: 'Изменения',
   }),
   /** The name of a tool in the menu. */
   item: Object.freeze({
@@ -666,7 +666,7 @@ export const toolText = Object.freeze({
     files: 'Файлы и изменения',
     database: previewPanelText.database,
     checks: previewPanelText.checks,
-    terminal: 'Терминал',
+    terminal: 'Изменения',
   }),
   /** The marks on the right of the tiles (И5); a browser that holds a session says who drives it. */
   mark: Object.freeze({

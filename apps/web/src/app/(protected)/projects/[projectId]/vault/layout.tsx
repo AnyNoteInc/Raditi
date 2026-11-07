@@ -1,16 +1,11 @@
 import type { ReactNode } from 'react'
 
-import { SiteBlockNav } from '@/components/site/site-block-nav'
-import { SiteListFrame } from '@/components/site/site-list-frame'
 import { siteHref } from '@/components/site/site-nav'
-import { vaultBlocks } from '@/components/site/vault-blocks'
-import { UNAVAILABLE } from '@/lib/access'
-import { loadSiteCredentials } from '@/lib/site'
+import { SiteSection } from '@/components/site/site-section'
 
 /**
- * «Переменные», split by its cards (owner's request of 26.10.2026): the menu of its blocks beside
- * the one that is open, at the root the first. Access is checked by every page under it; the read
- * of the menu checks it itself.
+ * «Переменные» with its tabs «Переменные окружения» and «Доступы»
+ * (docs/plan/64-cabinet-navigation.md, Н5). Access is checked by every page under it.
  */
 export default async function VaultLayout({
   children,
@@ -19,23 +14,17 @@ export default async function VaultLayout({
   children: ReactNode
   params: Promise<{ projectId: string }>
 }) {
-  const { projectId } = await params
-  const accesses = await loadSiteCredentials(projectId)
-  const root = siteHref(projectId, 'vault')
+  const root = siteHref((await params).projectId, 'vault')
   return (
-    <SiteListFrame
-      label="Переменные"
+    <SiteSection
       title="Переменные"
       root={root}
-      backLabel="Назад к переменным"
-      list={
-        <SiteBlockNav
-          root={root}
-          blocks={vaultBlocks(accesses === UNAVAILABLE ? null : accesses)}
-        />
-      }
+      tabs={[
+        { label: 'Переменные окружения', href: root, segments: ['', 'variables'] },
+        { label: 'Доступы', href: `${root}/accesses`, segments: ['accesses'] },
+      ]}
     >
       {children}
-    </SiteListFrame>
+    </SiteSection>
   )
 }
