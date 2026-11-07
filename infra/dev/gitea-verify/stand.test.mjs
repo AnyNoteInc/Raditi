@@ -122,12 +122,18 @@ test('an account gets a password Gitea generates: it is never a process argument
     giteaAccountArgs({ container: 'raditi-release-verify-0123abcd-gitea', user: 'raditi-bot' })[1],
     'raditi-release-verify-0123abcd-gitea',
   )
+  // And the Gitea of the stand of the site stacks.
+  assert.equal(
+    giteaAccountArgs({ container: 'raditi-stack-verify-0123abcd-gitea', user: 'raditi-bot' })[1],
+    'raditi-stack-verify-0123abcd-gitea',
+  )
   for (const other of [
     'raditi-dev-gitea-1',
     'gitea',
     '',
     'raditi-gitea-verify-0123abcd x',
     'raditi-release-verify-0123abcd-runner',
+    'raditi-stack-verify-0123abcd-runner',
   ])
     assert.throws(
       () => giteaAccountArgs({ container: other, user: 'raditi-bot' }),

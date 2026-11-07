@@ -294,3 +294,101 @@ export function joomlaSeedSql(prefix, build) {
   ]
   return `${lines.join('\n')}\n`
 }
+
+/** The configuration of a production: the file the import must never take. */
+const CONFIGURATION = `${ROOT}/configuration.php`
+
+/** One value of the configuration of the production, read inside its container. */
+async function configurationValue(production, name) {
+  const text = await production.exec(['cat', CONFIGURATION])
+  const value = new RegExp(`\\bpublic[ \\t]+\\$${name}[ \\t]*=[ \\t]*'([^']*)'`).exec(text)?.[1]
+  if (!value) throw new Error(`configuration: no $${name}`)
+  return value
+}
+
+/** The three folders a root of Joomla is recognised by, each with its empty page. */
+const JOOMLA_MARKERS = Object.freeze(
+  Object.fromEntries(
+    ['administrator', 'libraries', 'plugins'].map((folder) => [
+      `${folder}/index.html`,
+      '<!DOCTYPE html><title></title>\n',
+    ]),
+  ),
+)
+
+/** The manifest of the files of Joomla that names its version. */
+const joomlaManifest = (version) =>
+  '<?xml version="1.0" encoding="utf-8"?>\n<extension type="file" method="upgrade">\n' +
+  `  <name>files_joomla</name>\n  <version>${version}</version>\n</extension>\n`
+
+/**
+ * What Joomla gives the stand of the site stacks (stacks.mjs; docs/plan/62-slices/e3.md, Э3.10).
+ * `install` — the install of the build, its seed and the installer gone; `markersInRepository` —
+ * what `main` holds after the import, with the two classes the import rules must not cut on 4.0 and
+ * later (Э3.3, discrepancy 3); `absentFromRepository` — what it never holds; `secrets` — the values
+ * of the configuration that are nowhere on the platform; `factsOf`, `refusedLayout`, `refusedVersion` —
+ * the fields of every stack the plan names `StackStandCases` (Э5.8), with the values of Joomla;
+ * `scannerFinds` — whether the scanner drops files of the build (Т48). The groups `preview` and
+ * `release` add their fields (Э3.11, Э3.12).
+ */
+export const joomlaStand = Object.freeze({
+  stack: 'joomla',
+  builds: JOOMLA_BUILDS,
+  database: Object.freeze({ name: 'site', user: 'site', prefix: JOOMLA_PREFIX }),
+  async install(production, build) {
+    await installJoomla(production, build, { productionOrigin: production.origin })
+    await production.sql(joomlaSeedSql(JOOMLA_PREFIX, build))
+    await production.exec(['test', '-f', `${ROOT}/${JOOMLA_INSTALLATION_MARKER}`])
+  },
+  markersInRepository: (build) => [
+    'index.php',
+    'administrator/manifests/files/joomla.xml',
+    'libraries/src/Version.php',
+    ...(isBranch3(build)
+      ? []
+      : [
+          'libraries/vendor/joomla/application/src/ConfigurationAwareApplicationInterface.php',
+          'administrator/components/com_admin/src/Service/HTML/Configuration.php',
+        ]),
+  ],
+  absentFromRepository: Object.freeze([
+    'configuration.php',
+    'installation/',
+    'administrator/logs/',
+    'cache/index.html',
+    '.htaccess',
+  ]),
+  /** `$password`, `$secret` and `$smtppass` of the configuration, as the production holds them. */
+  secrets: async (production) => [
+    await configurationValue(production, 'password'),
+    await configurationValue(production, 'secret'),
+    await configurationValue(production, 'smtppass'),
+  ],
+  page: () => ({ path: JOOMLA_SEED.articlePath, text: JOOMLA_SEED.articleFullText }),
+  /** What I1 expects in `stack_facts` beside the version, the branch and the limit of the build. */
+  factsOf: () => ({ adminPath: '/administrator/', extras: { sitename: JOOMLA_SEED.sitename } }),
+  /**
+   * The tree of I4: the markers, a manifest of a supported version, a configuration of MySQL and
+   * `defines.php`, as a root of 5.0 and later that moved its public folder (Т13). With the
+   * configuration there, `defines.php` is the only reason of `outside_root`.
+   */
+  refusedLayout: Object.freeze({
+    files: Object.freeze({
+      ...JOOMLA_MARKERS,
+      'administrator/manifests/files/joomla.xml': joomlaManifest(JOOMLA_BUILDS.at(-1).version),
+      'configuration.php':
+        "<?php\nclass JConfig\n{\n\tpublic $dbtype = 'mysqli';\n\tpublic $sitename = 'Стенд';\n}\n",
+      'defines.php': '<?php\n// Left by the stand: the root of a site whose public folder moved.\n',
+    }),
+    limit: 'outside_root',
+  }),
+  /** The tree of I5: the markers and a manifest of 2.5, refused before anything is written. */
+  refusedVersion: Object.freeze({
+    files: Object.freeze({
+      ...JOOMLA_MARKERS,
+      'administrator/manifests/files/joomla.xml': joomlaManifest('2.5.28'),
+    }),
+  }),
+  /** Т48: Gitleaks drops files of `libraries/vendor` on 4.4, 5.4 and 6.2; the number is not pinned. */
+  scannerFinds: (build) => !isBranch3(build),
+})

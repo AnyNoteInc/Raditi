@@ -389,6 +389,7 @@ test('the copy loses the folders of files the tree has lost, deepest first, and 
     'infra/dev/billing-verify/verify-billing.mjs',
     'infra/dev/release-verify/verify-release.mjs',
     'infra/dev/browser-task-verify/build.mjs',
+    'infra/dev/stack-verify/verify-stack.mjs',
   ])
     assert.match(
       read(file),

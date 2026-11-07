@@ -59,11 +59,12 @@ export function giteaContainerArgs({ name, port }) {
 }
 
 /**
- * A Gitea container of this stand, of the pipeline stand (infra/dev/pipeline-verify) or of the
- * release stand (infra/dev/release-verify).
+ * A Gitea container of this stand, of the pipeline stand (infra/dev/pipeline-verify), of the
+ * release stand (infra/dev/release-verify) or of the stand of the site stacks
+ * (infra/dev/stack-verify), which starts the Gitea of the release stand under its own names.
  */
 const STAND_GITEA =
-  /^raditi-(?:gitea-verify-[0-9a-f]{8}|pipeline-verify-[0-9a-f]{8}-[a-z-]+|release-verify-[0-9a-f]{8}-gitea)$/
+  /^raditi-(?:gitea-verify-[0-9a-f]{8}|pipeline-verify-[0-9a-f]{8}-[a-z-]+|(?:release|stack)-verify-[0-9a-f]{8}-gitea)$/
 const ACCOUNT = /^[a-z][a-z0-9-]{0,39}$/
 const PASSWORD_LENGTH = 36
 
