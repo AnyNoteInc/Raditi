@@ -71,6 +71,12 @@ export interface DatabaseCopySummary {
    * cannot answer, a table outside the policy whose definition a seed cannot hold.
    */
   leftOutTables: number
+  /**
+   * Columns of copied tables written empty or NULL by `DatabaseCopyPolicy.suspectColumns`, each
+   * pair of table and column once; 0 — a policy without it. A table it takes out whole counts in
+   * `leftOutTables`.
+   */
+  emptiedColumns: number
   rows: number
   bytes: number
   /** SHA-256 of the seed as written, hex. */

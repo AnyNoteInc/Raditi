@@ -24,6 +24,12 @@ const wordpressPolicy = JSON.parse(
   readFileSync(new URL('./wordpress-policy.fixture.json', import.meta.url), 'utf8'),
 ) as DatabaseCopyPolicy
 
+/**
+ * SHA-256 of the seed of `fixture` by `wordpressPolicy` with every `user_pass` hash replaced by
+ * one constant, as the copier wrote it before `suspectColumns` (plan 62, Э3.5).
+ */
+const WORDPRESS_SEED_SHA256 = '7c9b54ed1a92db49b98cf39de06af58264752f1e15fc4296a7d06d3c34e50df4'
+
 interface Server {
   container: string
   port: number
@@ -511,6 +517,24 @@ describe.skipIf(!enabled)('the MySQL copier against MariaDB', () => {
     }
   }, 120_000)
 
+  it('writes the seed of WordPress as before the second line of unnamed columns', async () => {
+    // WordPress has no `suspectColumns`: `comment_status` and `comment_count` would go empty.
+    // The hash of `user_pass` is random on every copy (`random_password_hash`), written as a
+    // literal of hex: each one is replaced by one constant, and the rest is the same bytes.
+    const { summary, seed } = await copy(source, wordpressPolicy)
+    const constant = Buffer.from(`$P$B${'.'.repeat(31)}`).toString('hex')
+    const fixed = Buffer.from(
+      seed
+        .toString('latin1')
+        .replaceAll(/_utf8mb4 X'24502442[0-9a-f]{62}'/g, () => `_utf8mb4 X'${constant}'`),
+      'latin1',
+    )
+    expect(fixed.byteLength).toBe(seed.byteLength)
+    expect(fixed.equals(seed)).toBe(false)
+    expect(createHash('sha256').update(fixed).digest('hex')).toBe(WORDPRESS_SEED_SHA256)
+    expect(summary.emptiedColumns).toBe(0)
+  }, 120_000)
+
   it('copies every kind of value byte for byte, page after page', async () => {
     const policy: DatabaseCopyPolicy = {
       engine: 'mysql',
@@ -820,6 +844,199 @@ describe.skipIf(!enabled)('the MySQL copier against MariaDB', () => {
         }),
       ).rejects.toEqual(new DatabaseCopyError('structure_unsupported'))
     })
+  }, 120_000)
+
+  it('copies an unnamed column with the name of people empty, and the seed loads', async () => {
+    await withTables(
+      ['wp_acme_contacts'],
+      `CREATE TABLE wp_acme_contacts (id int NOT NULL, acme_phone varchar(32) NOT NULL,
+         billing_zip int NOT NULL, birthdate date NOT NULL, title varchar(64) NOT NULL,
+         customer_type enum('retail', 'trade') NOT NULL, PRIMARY KEY (id))
+         DEFAULT CHARSET=utf8mb4;
+       INSERT INTO wp_acme_contacts VALUES
+         (1, '+7 900 000-00-07', 101000, '1990-05-01', 'Контакты', 'trade'),
+         (2, '+7 900 000-00-08', 190000, '1985-11-30', 'Доставка', 'trade');`,
+      async () => {
+        const rule = { table: 'acme_contacts', where: [] }
+        const policyOf = (
+          columns: Record<string, 'keep'> | undefined,
+          suspectColumns: 'empty' | undefined,
+        ): DatabaseCopyPolicy => ({
+          ...termsOnly,
+          tables: [...termsOnly.tables, columns ? { ...rule, columns } : rule],
+          ...(suspectColumns ? { suspectColumns } : {}),
+        })
+        const contacts = async (policy: DatabaseCopyPolicy) => {
+          const { summary, seed } = await copy(source, policy)
+          await load(target, seed)
+          const connection = await connectTo(target)
+          try {
+            const [rows] = await connection.query<RowDataPacket[]>(
+              `SELECT id, acme_phone, billing_zip, birthdate, title, customer_type
+                FROM wp_acme_contacts ORDER BY id`,
+            )
+            return {
+              emptied: summary.emptiedColumns,
+              seed: seed.toString('utf8'),
+              rows: rows.map((row) => ({ ...row })),
+            }
+          } finally {
+            await connection.end()
+          }
+        }
+
+        // Each column counts once, whatever the number of rows.
+        const second = await contacts(policyOf(undefined, 'empty'))
+        // Without NULL every row gets the empty literal a lax seed loads: '', 0, a zero date
+        // and the empty value of an enum.
+        expect(second.emptied).toBe(4)
+        // `trade` stays in the definition of the enum, not in a row.
+        const inserted = second.seed.slice(second.seed.indexOf('INSERT INTO `wp_acme_contacts`'))
+        for (const value of ['+7 900', '101000', '1990-05-01', 'trade'])
+          expect(inserted).not.toContain(value)
+        const emptyRow = { acme_phone: '', billing_zip: 0, birthdate: '0000-00-00' }
+        expect(second.rows).toEqual([
+          { id: 1, ...emptyRow, title: 'Контакты', customer_type: '' },
+          { id: 2, ...emptyRow, title: 'Доставка', customer_type: '' },
+        ])
+
+        // A column the adapter names passes as it says.
+        const kept = await contacts(policyOf({ acme_phone: 'keep' }, 'empty'))
+        expect(kept.emptied).toBe(3)
+        expect(kept.rows.map((row) => row.acme_phone)).toEqual([
+          '+7 900 000-00-07',
+          '+7 900 000-00-08',
+        ])
+
+        // Without the field the copy is as before: every unnamed column as it is.
+        const before = await contacts(policyOf(undefined, undefined))
+        expect(before.emptied).toBe(0)
+        expect(before.rows).toEqual([
+          {
+            id: 1,
+            acme_phone: '+7 900 000-00-07',
+            billing_zip: 101000,
+            birthdate: '1990-05-01',
+            title: 'Контакты',
+            customer_type: 'trade',
+          },
+          {
+            id: 2,
+            acme_phone: '+7 900 000-00-08',
+            billing_zip: 190000,
+            birthdate: '1985-11-30',
+            title: 'Доставка',
+            customer_type: 'trade',
+          },
+        ])
+      },
+    )
+  }, 120_000)
+
+  it('writes NULL into an unnamed column that takes it: JSON, geometry and a unique key load', async () => {
+    await withTables(
+      ['wp_acme_extras'],
+      `CREATE TABLE wp_acme_extras (id int NOT NULL, title varchar(64) NOT NULL,
+         customer_meta json NULL, acme_token varchar(64) NULL, address_point point NULL,
+         PRIMARY KEY (id), UNIQUE KEY acme_token (acme_token)) DEFAULT CHARSET=utf8mb4;
+       INSERT INTO wp_acme_extras VALUES
+         (1, 'Первый', '{"customer":"Анна"}', 'tok-secret-1', POINT(37.6, 55.7)),
+         (2, 'Второй', '{"customer":"Борис"}', NULL, NULL),
+         (3, 'Третий', NULL, 'tok-secret-3', POINT(30.3, 59.9));`,
+      async () => {
+        const { summary, seed } = await copy(source, {
+          ...termsOnly,
+          tables: [...termsOnly.tables, { table: 'acme_extras', where: [] }],
+          suspectColumns: 'empty',
+        })
+        expect(summary).toMatchObject({ emptiedColumns: 3, leftOutTables: 0 })
+        for (const value of ['Анна', 'Борис', 'tok-secret'])
+          expect(seed.toString('utf8')).not.toContain(value)
+        await load(target, seed)
+        const connection = await connectTo(target)
+        try {
+          const [rows] = await connection.query<RowDataPacket[]>(
+            `SELECT id, title, customer_meta, acme_token, ST_AsText(address_point) AS address_point
+              FROM wp_acme_extras ORDER BY id`,
+          )
+          expect(rows.map((row) => ({ ...row }))).toEqual(
+            ['Первый', 'Второй', 'Третий'].map((title, index) => ({
+              id: index + 1,
+              title,
+              customer_meta: null,
+              acme_token: null,
+              address_point: null,
+            })),
+          )
+        } finally {
+          await connection.end()
+        }
+      },
+    )
+  }, 120_000)
+
+  it('leaves the rows of a table out when an unnamed column of it holds neither empty nor NULL', async () => {
+    const baseline = await baselineOf()
+    // A key of a name of people, a JSON column without NULL: one value in every row would not
+    // load, the copy goes on without the rows and says so.
+    await withTables(
+      ['wp_acme_keyed', 'wp_acme_profile', 'wp_acme_child'],
+      `CREATE TABLE wp_acme_keyed (client_id int NOT NULL, id int NOT NULL,
+         title varchar(64) NOT NULL, PRIMARY KEY (client_id, id)) DEFAULT CHARSET=utf8mb4;
+       INSERT INTO wp_acme_keyed VALUES (1, 1, 'Первый'), (2, 1, 'Второй');
+       CREATE TABLE wp_acme_profile (id int NOT NULL, customer_data json NOT NULL,
+         PRIMARY KEY (id)) DEFAULT CHARSET=utf8mb4;
+       INSERT INTO wp_acme_profile VALUES (1, '{"customer":"Анна"}'), (2, '{"customer":"Борис"}');
+       CREATE TABLE wp_acme_child (id int NOT NULL, profile_id int NOT NULL, title varchar(64),
+         PRIMARY KEY (id)) DEFAULT CHARSET=utf8mb4;
+       INSERT INTO wp_acme_child VALUES (1, 1, 'Дочерняя');`,
+      async () => {
+        const rules: DatabaseCopyPolicy['tables'] = [
+          { table: 'acme_keyed', where: [] },
+          { table: 'acme_profile', where: [] },
+          {
+            table: 'acme_child',
+            where: [{ op: 'inCopied', column: 'profile_id', table: 'acme_profile', key: 'id' }],
+          },
+        ]
+        const { summary, seed } = await copy(source, {
+          ...termsOnly,
+          tables: [...termsOnly.tables, ...rules],
+          suspectColumns: 'empty',
+        })
+        // The rule that follows a table left out goes with it.
+        expect(summary).toMatchObject({
+          tables: baseline.tables + 3,
+          leftOutTables: baseline.leftOutTables + 3,
+          emptiedColumns: 0,
+        })
+        for (const value of ['Анна', 'Первый', 'Дочерняя'])
+          expect(seed.toString('utf8')).not.toContain(value)
+        await load(target, seed)
+        const connection = await connectTo(target)
+        try {
+          for (const table of ['wp_acme_keyed', 'wp_acme_profile', 'wp_acme_child']) {
+            const [rows] = await connection.query<RowDataPacket[]>(
+              `SELECT COUNT(*) AS n FROM ${table}`,
+            )
+            expect(Number(rows[0]?.n), table).toBe(0)
+          }
+        } finally {
+          await connection.end()
+        }
+        // A column the adapter names keeps the rows.
+        const named = await copy(source, {
+          ...termsOnly,
+          tables: [
+            ...termsOnly.tables,
+            { table: 'acme_keyed', where: [], columns: { client_id: 'keep' } },
+          ],
+          suspectColumns: 'empty',
+        })
+        expect(named.summary).toMatchObject({ leftOutTables: baseline.leftOutTables })
+        expect(named.seed.toString('utf8')).toContain('Второй')
+      },
+    )
   }, 120_000)
 
   it('loads a table wider than a strict server creates', async () => {

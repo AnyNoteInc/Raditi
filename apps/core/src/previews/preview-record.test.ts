@@ -25,6 +25,19 @@ describe('the record of a preview', () => {
       expect(previewRecordOf({ ...older, seedTablesLeftOut: broken })).toEqual(emptyPreviewRecord())
   })
 
+  it('keeps the columns the seed wrote empty, and reads an older record without them', () => {
+    const older = { ...emptyPreviewRecord(), seedChecked: true }
+    expect(previewRecordOf(older).seedColumnsEmptied).toBeUndefined()
+    expect(previewRecordOf({ ...older, seedColumnsEmptied: 2 }).seedColumnsEmptied).toBe(2)
+    expect(previewRecordOf({ ...older, seedColumnsEmptied: 128 * 4_096 }).seedColumnsEmptied).toBe(
+      524_288,
+    )
+    for (const broken of [-1, 1.5, 128 * 4_096 + 1])
+      expect(previewRecordOf({ ...older, seedColumnsEmptied: broken })).toEqual(
+        emptyPreviewRecord(),
+      )
+  })
+
   it('keeps the passport of a copy, and reads a record without it as before (Т33)', () => {
     const older = { ...emptyPreviewRecord(), seedChecked: true }
     const passport = {
@@ -60,6 +73,7 @@ describe('the record of a preview', () => {
       database: { tablePrefix: 'wp_', charset: 'utf8mb4', collation: 'utf8mb4_unicode_ci' },
       web: `registry.invalid/web@sha256:${'a'.repeat(64)}`,
       seedTablesLeftOut: 1_000,
+      seedColumnsEmptied: 524_288,
       // The longest passport: 24 differences, each the longest name of the table.
       passport: {
         boot: 'not_compared',

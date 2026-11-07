@@ -381,7 +381,9 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
 
   it('builds a new preview to the base of its dialog', async () => {
     const { site, preview } = await dialog()
-    const f = manager({ copier: fakeCopier(undefined, { tables: 4, leftOutTables: 3 }) })
+    const f = manager({
+      copier: fakeCopier(undefined, { tables: 4, leftOutTables: 3, emptiedColumns: 2 }),
+    })
     await databaseAccess(f, site.id)
     expect(await f.m.refresh(preview.id, { requested: true })).toBe(true)
 
@@ -404,6 +406,8 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
       seedChecked: true,
       // The copier's count of tables it left out, for the passport of a preview (plan 62, Т57).
       seedTablesLeftOut: 3,
+      // And of columns the second line wrote empty (Э3.5).
+      seedColumnsEmptied: 2,
       sync: null,
     })
     expect(f.runtime.calls).toEqual(['ensure', 'writeFiles', 'loadDatabase'])
@@ -747,6 +751,7 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
           tables: 1,
           structureOnly: 0,
           leftOutTables: 0,
+          emptiedColumns: 0,
           rows: 1,
           bytes: 1,
           sha256: hash('5'),

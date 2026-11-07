@@ -244,6 +244,16 @@ export const databaseColumnTreatments = [
 export type DatabaseColumnTreatment = (typeof databaseColumnTreatments)[number]
 
 /**
+ * Names of columns the copy does not take without an explicit treatment: the second line behind
+ * the allow list of tables (docs/plan/62-site-stacks.md, Т57), for a column an extension added to
+ * a copied table. Words found inside other names (`bypass`, `capacity`, `gzip`, `wildcard`,
+ * `winner`) count only as a whole word between `_`. A bare `name` is not taken: it is the title of
+ * sections and templates.
+ */
+export const suspectColumnNames =
+  /e?mail|phone|mobile|fax|passw|pwd|token|secret|api_?key|auth_?key|license_?key|webhook|ip_?addr|firstname|lastname|fio|passport|comment|note|message|address|birth|customer|(?:^|_)(?:pass|city|zip|postcode|dob|client|card|inn)(?:_|$)/i
+
+/**
  * The preview a database copy is made for (`SiteAdapter.databaseCopyPolicy`): the stack binds
  * its own state in the copy to it — the platform plugin to the preview, not to the site (Р15).
  * The seed is made once and loaded again by every rebuild, so nothing here changes per build.
@@ -271,6 +281,15 @@ export const databaseCopyPolicySchema = z.strictObject({
       (tables) => new Set(tables.map((rule) => rule.table)).size === tables.length,
       'one rule per table',
     ),
+  /**
+   * 'empty' — a column of a copied table that the rule does not name and whose name matches
+   * `suspectColumnNames` is copied empty: NULL where the column takes it, `''` where a seed loads
+   * it into every row alike, and a table whose such column holds neither (a key, a CHECK, JSON)
+   * goes as structure only. A named column passes, `keep` included: the adapter answers for it.
+   * Absent — every unnamed column is copied as it is. Never set for WordPress: `comment_status`
+   * and `comment_count` would go empty.
+   */
+  suspectColumns: z.literal('empty').optional(),
   /**
    * Rows of the copy the stack sets itself, e.g. the platform plugin's own state: the copied row
    * that matches gets `set`, and without one a row of `match` and `set` is added; null in `set`

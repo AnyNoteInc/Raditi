@@ -195,6 +195,7 @@ export const fakeCopier = (
       tables: 1,
       structureOnly: 0,
       leftOutTables: 0,
+      emptiedColumns: 0,
       rows: 1,
       bytes: sql.length,
       sha256: hash('5'),

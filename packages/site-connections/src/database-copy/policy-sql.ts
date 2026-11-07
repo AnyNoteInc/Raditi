@@ -120,13 +120,15 @@ export function namedColumns(policy: DatabaseCopyPolicy, table: string): string[
  * its table lacks, and every rule that follows such a table or a key its target lacks. A
  * condition dropped without its table would copy every row, so the rule goes whole. A column
  * only a treatment names is not here: that treatment has nothing to apply to. `columnsOf`
- * answers null for a table the source lacks: `rowFilter` already makes that `FALSE`.
+ * answers null for a table the source lacks: `rowFilter` already makes that `FALSE`. `taken` —
+ * tables the copy writes as structure only for its own reason, followed the same way.
  */
 export function rulesWithoutRows(
   policy: DatabaseCopyPolicy,
   columnsOf: (table: string) => ReadonlySet<string> | null,
+  taken: Iterable<string> = [],
 ): Set<string> {
-  const emptied = new Set<string>()
+  const emptied = new Set<string>(taken)
   const lacks = (table: string, column: string) => {
     const columns = columnsOf(table)
     return columns !== null && !columns.has(column)

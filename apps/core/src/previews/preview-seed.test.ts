@@ -42,6 +42,7 @@ function deps(chunks: Uint8Array[]) {
         tables: 1,
         structureOnly: 0,
         leftOutTables: 0,
+        emptiedColumns: 0,
         rows: 1,
         bytes: 1,
         sha256: 'x',

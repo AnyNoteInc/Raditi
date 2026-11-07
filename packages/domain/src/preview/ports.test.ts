@@ -158,6 +158,19 @@ describe('what a stack says about previews', () => {
     expect(databaseCopyPolicySchema.safeParse(of(129)).success).toBe(false)
   })
 
+  it('turns on the second line of unnamed columns by one value only', () => {
+    const policy = { engine: 'mysql', tables: [], overrides: [] }
+    expect(databaseCopyPolicySchema.parse({ ...policy, suspectColumns: 'empty' })).toEqual({
+      ...policy,
+      suspectColumns: 'empty',
+    })
+    expect(databaseCopyPolicySchema.parse(policy)).toEqual(policy)
+    for (const other of ['keep', 'null', true, null])
+      expect(databaseCopyPolicySchema.safeParse({ ...policy, suspectColumns: other }).success).toBe(
+        false,
+      )
+  })
+
   it('takes the database settings of a production configuration', () => {
     const settings = { tablePrefix: 'wp_', charset: 'utf8mb4', collation: null }
     expect(siteDatabaseSettingsSchema.parse(settings)).toEqual(settings)

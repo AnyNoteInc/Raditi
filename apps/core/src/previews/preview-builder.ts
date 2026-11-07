@@ -778,7 +778,12 @@ async function buildPreviewOn(
     seed = { key: stored.key, sha256: stored.sha256, releaseId: seedRef.releaseId }
     // Another seed is another base: what was said of the old one's health page is forgotten.
     const { baseBoot: _forgotten, ...unjudged } = record
-    record = { ...unjudged, seedChecked: false, seedTablesLeftOut: stored.summary.leftOutTables }
+    record = {
+      ...unjudged,
+      seedChecked: false,
+      seedTablesLeftOut: stored.summary.leftOutTables,
+      seedColumnsEmptied: stored.summary.emptiedColumns,
+    }
     // Kept at once — a build that fails later loads it again instead of copying the site again —
     // with the objects of the old seed forgotten: the rows of this one are written with `ready`,
     // and the mcp role writes into nothing else (R7). A release that took the site during the

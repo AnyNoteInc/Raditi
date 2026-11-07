@@ -152,6 +152,16 @@ describe('rules a copy writes as structure only', () => {
     ])
   })
 
+  it('takes a table the copy leaves out for its own reason, and every rule after it', () => {
+    const present = (name: string) => (columns[name] ? new Set(columns[name]) : null)
+    expect([...rulesWithoutRows(policy, present, ['posts'])].sort()).toEqual([
+      'postmeta',
+      'posts',
+      'users',
+    ])
+    expect([...rulesWithoutRows(policy, present, ['postmeta'])].sort()).toEqual(['postmeta'])
+  })
+
   it('leaves a rule whose treatment names a column the source lacks', () => {
     expect(emptied(without('posts', 'post_password'))).toEqual([])
     expect(emptied(without('users', 'user_email'))).toEqual([])

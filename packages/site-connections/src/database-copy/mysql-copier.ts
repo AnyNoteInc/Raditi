@@ -24,6 +24,7 @@ import {
   isSiteConnectionError,
   resolvePinnedAddress,
   SiteConnectionError,
+  suspectColumnNames,
 } from '@repo/domain'
 import { createConnection, type Connection, type FieldPacket } from 'mysql2'
 
@@ -141,6 +142,37 @@ async function readCatalog(
 const ROW_SLACK_BYTES = 1024 * 1024
 const INTEGER_TYPES = new Set(['tinyint', 'smallint', 'mediumint', 'int', 'integer', 'bigint'])
 const GENERATED = /\b(?:VIRTUAL|STORED|PERSISTENT) GENERATED\b/i
+/**
+ * Types whose column takes `''` in a seed of a lax `SQL_MODE`: text and bytes as they are,
+ * numbers as 0, times as zero. JSON, geometry, `bit`, `year`, `uuid`, `inet6` and the rest are
+ * not among them.
+ */
+const EMPTY_TAKING_TYPES = new Set([
+  ...INTEGER_TYPES,
+  'decimal',
+  'numeric',
+  'float',
+  'double',
+  'real',
+  'char',
+  'varchar',
+  'tinytext',
+  'text',
+  'mediumtext',
+  'longtext',
+  'binary',
+  'varbinary',
+  'tinyblob',
+  'blob',
+  'mediumblob',
+  'longblob',
+  'enum',
+  'set',
+  'date',
+  'datetime',
+  'timestamp',
+  'time',
+])
 /** Names the seed can write as they are, in any of its encodings. */
 const PLAIN_NAME = /^[A-Za-z0-9_$]{1,64}$/
 
@@ -464,13 +496,19 @@ function randomPasswordHash(): string {
   return `$P$B${[...randomBytes(31)].map((byte) => ITOA64[byte % 64]).join('')}`
 }
 
-interface Column {
+export interface Column {
   name: string
   type: string
   generated: boolean
+  /** The column takes NULL. */
+  nullable: boolean
+  /** The column is in the primary key or a unique one. */
+  unique: boolean
+  /** A CHECK of the table names the column: MariaDB keeps a JSON column as `longtext` and one. */
+  checked: boolean
 }
 
-interface TableInfo {
+export interface TableInfo {
   columns: Column[]
   primaryKey: string[]
 }
@@ -599,9 +637,12 @@ async function copyTables(
   ])
   const info = new Map<string, TableInfo>()
   const columnsOf = new Map<string, ReadonlySet<string>>()
+  const statements = new Map<string, Buffer>()
   for (const table of named) {
     if (!exists(table)) continue
-    const found = await tableInfo(connection, nameOf(table))
+    const statement = await createTable(connection, nameOf(table))
+    statements.set(table, statement)
+    const found = await tableInfo(connection, nameOf(table), statement)
     const columns = new Set(found.columns.map((column) => column.name))
     const anyCase = new Set(found.columns.map((column) => column.name.toLowerCase()))
     if (overrideColumns(policy, table).some((column) => !columns.has(column)))
@@ -616,7 +657,13 @@ async function copyTables(
     info.set(table, found)
     columnsOf.set(table, columns)
   }
-  const emptied = rulesWithoutRows(policy, (table) => columnsOf.get(table) ?? null)
+  // A table with an unnamed column the second line can write neither empty nor NULL goes as
+  // structure only, and so do the rules that follow it.
+  const unwritable = policy.tables
+    .filter((rule) => info.has(rule.table))
+    .filter((rule) => leavesRowsOut(rule, info.get(rule.table)!, policy.suspectColumns))
+    .map((rule) => rule.table)
+  const emptied = rulesWithoutRows(policy, (table) => columnsOf.get(table) ?? null, unwritable)
   // A rule that follows a table taken out copies nothing of it, down the whole chain.
   const copied = (table: string) => exists(table) && !emptied.has(table)
 
@@ -624,13 +671,17 @@ async function copyTables(
   let rows = 0
   let structureOnly = 0
   let leftOutTables = 0
+  let emptiedColumns = 0
   for (const name of tables) {
     const table = name.slice(tablePrefix.length)
     const rule = policy.tables.find((candidate) => candidate.table === table)
     const overrides = policy.overrides.filter((override) => override.table === table)
     let statement: Buffer
     try {
-      statement = tableStatement(name, await createTable(connection, name))
+      statement = tableStatement(
+        name,
+        statements.get(table) ?? (await createTable(connection, name)),
+      )
     } catch (error) {
       // Outside the policy no row of it is wanted: the preview runs without it, and says so.
       // Its definition is never softened: this check keeps FEDERATED and CONNECT out of a seed.
@@ -643,7 +694,14 @@ async function copyTables(
     await writer.raw(statement)
     const seen = new Set<number>()
     if (rule && !emptied.has(table)) {
-      const tableRows = new TableRows(rule, overrides, info.get(table)!, seen)
+      const tableRows = new TableRows(
+        rule,
+        overrides,
+        info.get(table)!,
+        seen,
+        policy.suspectColumns,
+      )
+      emptiedColumns += tableRows.emptiedColumns
       rows += await copyRows(connection, guard, writer, {
         name,
         rows: tableRows,
@@ -670,6 +728,7 @@ async function copyTables(
     tables: tables.length,
     structureOnly,
     leftOutTables,
+    emptiedColumns,
     rows,
     bytes: writer.bytes,
     sha256: writer.sha256(),
@@ -677,13 +736,31 @@ async function copyTables(
   }
 }
 
-async function tableInfo(connection: Connection, name: string): Promise<TableInfo> {
-  const columns = await catalog<{ name: unknown; type: unknown; extra: unknown }>(
+async function tableInfo(
+  connection: Connection,
+  name: string,
+  statement: Buffer,
+): Promise<TableInfo> {
+  const columns = await catalog<{
+    name: unknown
+    type: unknown
+    extra: unknown
+    nullable: unknown
+  }>(
     connection,
-    `SELECT COLUMN_NAME AS name, DATA_TYPE AS type, EXTRA AS extra FROM information_schema.COLUMNS
+    `SELECT COLUMN_NAME AS name, DATA_TYPE AS type, EXTRA AS extra, IS_NULLABLE AS nullable
+      FROM information_schema.COLUMNS
       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION`,
     [name],
   )
+  const unique = await catalog<{ name: unknown }>(
+    connection,
+    `SELECT DISTINCT COLUMN_NAME AS name FROM information_schema.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND NON_UNIQUE = 0`,
+    [name],
+  )
+  const uniqueColumns = new Set(unique.map((column) => String(column.name).toLowerCase()))
+  const checked = checkedColumns(statement)
   const primaryKey = await catalog<{ name: unknown }>(
     connection,
     `SELECT COLUMN_NAME AS name FROM information_schema.STATISTICS
@@ -696,6 +773,9 @@ async function tableInfo(connection: Connection, name: string): Promise<TableInf
       name: String(column.name),
       type: String(column.type).toLowerCase(),
       generated: GENERATED.test(String(column.extra ?? '')),
+      nullable: String(column.nullable) === 'YES',
+      unique: uniqueColumns.has(String(column.name).toLowerCase()),
+      checked: checked.has(String(column.name).toLowerCase()),
     })),
     primaryKey: primaryKey.map((column) => String(column.name)),
   }
@@ -703,6 +783,54 @@ async function tableInfo(connection: Connection, name: string): Promise<TableInf
   if (result.columns.some((column) => !PLAIN_NAME.test(column.name)))
     throw new DatabaseCopyError('structure_unsupported')
   return result
+}
+
+/**
+ * Columns, in lower case, that a CHECK of `SHOW CREATE TABLE` names: each clause stands on its own
+ * line, inline in a column or as a constraint of the table, and its columns are quoted. A comment
+ * or a default that reads like one only counts a column more.
+ */
+export function checkedColumns(statement: Uint8Array): Set<string> {
+  const checked = new Set<string>()
+  for (const line of Buffer.from(statement).toString('utf8').split('\n')) {
+    const at = line.search(/\bCHECK\s*\(/i)
+    if (at < 0) continue
+    for (const match of line.slice(at).matchAll(/`((?:[^`]|``)+)`/g))
+      checked.add(match[1]!.replaceAll('``', '`').toLowerCase())
+  }
+  return checked
+}
+
+/**
+ * What the second line behind the allow list (docs/plan/62-site-stacks.md, Т57) writes into one
+ * column: nothing of its own (undefined) for a column the rule names, a generated one, one whose
+ * name does not match `suspectColumnNames` or a policy without `suspectColumns`. Otherwise no
+ * value of the site: NULL where the column takes it — a CHECK and a unique key pass it — and `''`
+ * where a lax seed loads it into every row alike. A column that holds neither — a key, a CHECK,
+ * JSON or geometry without NULL — is 'unwritable': its table goes as structure only.
+ */
+export function suspectTreatment(
+  rule: DatabaseCopyPolicy['tables'][number],
+  column: Column,
+  suspectColumns: DatabaseCopyPolicy['suspectColumns'],
+): 'null' | 'empty' | 'unwritable' | undefined {
+  const named = rule.columns !== undefined && Object.hasOwn(rule.columns, column.name)
+  if (named || column.generated || suspectColumns !== 'empty') return undefined
+  if (!suspectColumnNames.test(column.name)) return undefined
+  if (column.nullable) return 'null'
+  if (!column.unique && !column.checked && EMPTY_TAKING_TYPES.has(column.type)) return 'empty'
+  return 'unwritable'
+}
+
+/** The table holds a column the second line can write neither empty nor NULL. */
+export function leavesRowsOut(
+  rule: DatabaseCopyPolicy['tables'][number],
+  info: TableInfo,
+  suspectColumns: DatabaseCopyPolicy['suspectColumns'],
+): boolean {
+  return info.columns.some(
+    (column) => suspectTreatment(rule, column, suspectColumns) === 'unwritable',
+  )
 }
 
 function createTable(connection: Connection, name: string): Promise<Buffer> {
@@ -735,11 +863,16 @@ function setLiteral(value: string | number): Buffer {
 
 type Override = DatabaseCopyPolicy['overrides'][number]
 
-/** How the rows of one table become tuples: treatments, overrides, the synthetic id. */
-class TableRows {
+/**
+ * How the rows of one table become tuples: treatments, overrides, the synthetic id. Exported for
+ * its test; the package does not export it.
+ */
+export class TableRows {
   readonly columns: string[]
   /** The integer primary key the pages follow; null — one query for the whole table. */
   readonly keyset: string[] | null
+  /** Unnamed columns `suspectColumns` writes empty or NULL (docs/plan/62-site-stacks.md, Т57). */
+  readonly emptiedColumns: number
   private readonly treatments: (string | undefined)[]
   private readonly idIndex: number
   private readonly matches: { index: number; column: number; value: Buffer }[]
@@ -752,6 +885,7 @@ class TableRows {
     overrides: readonly Override[],
     info: TableInfo,
     seen: Set<number>,
+    suspectColumns: DatabaseCopyPolicy['suspectColumns'],
   ) {
     this.overrides = overrides
     this.seen = seen
@@ -761,7 +895,20 @@ class TableRows {
       info.primaryKey.length > 0 &&
       info.primaryKey.every((column) => INTEGER_TYPES.has(typeOf.get(column) ?? ''))
     this.keyset = integerKey ? info.primaryKey : null
-    this.treatments = this.columns.map((column) => rule.columns?.[column])
+    // The second line behind the allow list: a column the adapter does not name, with the name
+    // of people or a secret, is not copied. A named one passes as the adapter says.
+    const columnOf = new Map(info.columns.map((column) => [column.name, column]))
+    let emptied = 0
+    this.treatments = this.columns.map((name) => {
+      const second = suspectTreatment(rule, columnOf.get(name)!, suspectColumns)
+      if (second === undefined)
+        return rule.columns && Object.hasOwn(rule.columns, name) ? rule.columns[name] : undefined
+      // `copyTables` writes such a table as structure only and builds no rows of it.
+      if (second === 'unwritable') throw new Error(`Column ${name} takes neither '' nor NULL`)
+      emptied += 1
+      return second
+    })
+    this.emptiedColumns = emptied
     const synthetic = this.treatments.some((treatment) => treatment?.startsWith('synthetic_'))
     // A synthetic value names the row by its one integer key.
     if (synthetic && !(integerKey && info.primaryKey.length === 1))

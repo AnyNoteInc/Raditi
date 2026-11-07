@@ -44,6 +44,12 @@ export const previewRecordSchema = z.strictObject({
    * shown yet: the passport of a preview (Т34) reads it as the difference `extension_data_left_out`.
    */
   seedTablesLeftOut: z.number().int().min(0).max(1_000).optional(),
+  /**
+   * Columns the seed wrote empty by the second line of unnamed columns
+   * (`DatabaseCopySummary.emptiedColumns`, plan 62, Т57); absent — an older seed. Read by the
+   * passport as `extension_data_left_out` too. Bound: 128 rules of 4 096 columns of MySQL each.
+   */
+  seedColumnsEmptied: z.number().int().min(0).max(524_288).optional(),
   sync: syncSchema.nullable(),
   /**
    * How the preview's runtime stands to the site's (Р2, Р18): the version the site's server
