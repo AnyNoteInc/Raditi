@@ -5,6 +5,9 @@ export const stackLabels = {
   static: 'HTML / CSS',
   node: 'Node.js',
   python: 'Python',
+  joomla: 'Joomla',
+  modx: 'MODX',
+  opencart: 'OpenCart',
 } as const
 
 export type ProjectStack = keyof typeof stackLabels

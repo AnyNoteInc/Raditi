@@ -15,6 +15,9 @@ const plannedStacks = new Map<SiteStack, string>([
   ['laravel', 'stage 3'],
   ['node', 'stage 3'],
   ['python', 'stage 3'],
+  ['joomla', 'plan 62'],
+  ['modx', 'plan 62'],
+  ['opencart', 'plan 62'],
 ])
 
 export function getSiteAdapter(stack: SiteStack): SiteAdapter {

@@ -172,7 +172,7 @@ describe('the release API', () => {
     const content = { stack: 'wordpress', access: { v: '1', origin: 'https://shop.example.ru' } }
     expect(deployAccessSchema.safeParse({ ...access, content }).success).toBe(true)
     expect(
-      deployAccessSchema.safeParse({ ...access, content: { ...content, stack: 'joomla' } }).success,
+      deployAccessSchema.safeParse({ ...access, content: { ...content, stack: 'drupal' } }).success,
     ).toBe(false)
   })
 

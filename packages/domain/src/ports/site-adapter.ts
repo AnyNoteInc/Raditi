@@ -20,11 +20,11 @@ import type {
 import type { AgentWorkingSet, MediaRules } from '../release/candidate.ts'
 import type { DbSetting } from '../release/db-objects.ts'
 import type { DbOperationKind } from '../release/db-plan.ts'
+import type { SiteStack } from '../site-stack/stacks.ts'
 import type { SiteCodeCacheGateway } from './published-content.ts'
 import type { SiteContentGateway } from './site-db.ts'
 
-export const siteStacks = ['wordpress', 'bitrix', 'laravel', 'static', 'node', 'python'] as const
-export type SiteStack = (typeof siteStacks)[number]
+export * from '../site-stack/stacks.ts'
 
 export interface SiteFacts {
   stack: SiteStack

@@ -374,7 +374,7 @@ Laravel, Node.js, Python, Docker-проекты — новыми адаптер�
   - [ ] **Э1.5.** WordPress переходит на `php-base`.
   - [x] **Э1.6.** Мёртвый предпросмотр WordPress больше не считается готовым.
 - [ ] **Э2. Порт и факты.** Новых стеков нет, WordPress как был. Договор — [`62-slices/e2.md`](62-slices/e2.md). Зависит: Э0, вопрос 11. Рубеж 1.
-  - [ ] **Э2.1.** Значения стеков и запись `sites.stack_facts`.
+  - [x] **Э2.1.** Значения стеков и запись `sites.stack_facts`.
   - [ ] **Э2.2.** Поддержка стека и `siteSupportOf`.
   - [ ] **Э2.3.** Порт `SiteAdapter`: `support`, `recognition`, `connection`, чтения, `stackGuide`.
   - [ ] **Э2.4.** `connectableStacks(env, way)`.

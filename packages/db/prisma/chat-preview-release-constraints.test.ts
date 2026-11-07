@@ -361,21 +361,25 @@ describe.skipIf(!databaseUrl)('chat preview release constraints', () => {
             installed_release_id,
             agent_notes,
             deleted_at,
+            stack_facts,
             ...rest
           }) => ({
             ...rest,
             installed: [installed_version, installed_sha, installed_at, installed_release_id],
             agent_notes,
             deleted_at,
+            stack_facts,
           }),
         ),
       ).toEqual(
-        // The mark of a deleted site (20261025100000_site_deleted) comes later, empty.
+        // The mark of a deleted site (20261025100000_site_deleted) comes later, empty; so do the
+        // facts of a site (20261101100100_site_stack_facts), the empty record.
         before_.sites.map((row) => ({
           ...row,
           installed: [null, null, null, null],
           agent_notes: null,
           deleted_at: null,
+          stack_facts: {},
         })),
       )
     })

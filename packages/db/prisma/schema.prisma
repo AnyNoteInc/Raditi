@@ -275,6 +275,8 @@ model Site {
   /// «Удалить проект»: the row stays for its history; the cabinet no longer finds the site, and
   /// its address may be added again (the unique address holds among the rows without it).
   deletedAt          DateTime?   @map("deleted_at") @db.Timestamptz(6)
+  /// What the platform knows of the site (`siteStackFactsSchema`): written in parts, `stack_facts || $1`.
+  stackFacts         Json        @default("{}") @map("stack_facts")
 
   workspace          Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
   installedRelease   SiteRelease?            @relation("SiteInstalledRelease", fields: [installedReleaseId], references: [id], onDelete: SetNull)
@@ -314,6 +316,9 @@ enum SiteStack {
   static
   node
   python
+  joomla
+  modx
+  opencart
 }
 
 enum SiteStatus {

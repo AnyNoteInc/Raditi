@@ -16,7 +16,7 @@ describe('getSiteAdapter', () => {
   })
 
   it('rejects unknown stacks, including prototype keys', () => {
-    expect(() => getSiteAdapter('joomla' as never)).toThrow(/Unknown site stack/)
+    expect(() => getSiteAdapter('drupal' as never)).toThrow(/Unknown site stack/)
     expect(() => getSiteAdapter('constructor' as never)).toThrow(/Unknown site stack/)
   })
 })
@@ -61,7 +61,7 @@ describe('getSiteContentAdapter', () => {
   })
 
   it('rejects unknown stacks, including prototype keys', () => {
-    expect(() => getSiteContentAdapter('joomla' as never)).toThrow(/Unknown site stack/)
+    expect(() => getSiteContentAdapter('drupal' as never)).toThrow(/Unknown site stack/)
     expect(() => getSiteContentAdapter('constructor' as never)).toThrow(/Unknown site stack/)
   })
 })
