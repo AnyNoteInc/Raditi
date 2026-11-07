@@ -1,6 +1,7 @@
 // Stack adapters (spec §13): everything that depends on the CMS stays behind SiteAdapter.
 export { bitrixAdapter } from './bitrix.ts'
 export { fetchSiteTransport } from './http-transport.ts'
+export { joomlaAdapter } from './joomla/joomla.ts'
 export {
   connectableStacks,
   findSiteContentAdapter,

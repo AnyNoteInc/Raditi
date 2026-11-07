@@ -50,7 +50,7 @@ const clientToolFiles = [
 describe('exclude lines of the adapters', () => {
   it('covers every adapter of the registry with open files, the connectable stacks among them', () => {
     const stacks = adapters.map((adapter) => adapter.stack)
-    expect(stacks).toEqual(['wordpress'])
+    expect(stacks).toEqual(['wordpress', 'joomla'])
     for (const env of appEnvs)
       expect(stacks).toEqual(expect.arrayContaining([...connectableStacks(env, 'files')]))
   })

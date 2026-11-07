@@ -11,14 +11,25 @@ import {
 } from './registry.ts'
 
 describe('getSiteAdapter', () => {
-  it('returns the adapter for WordPress and Bitrix', () => {
+  it('returns the adapter for WordPress, Bitrix and Joomla', () => {
     expect(getSiteAdapter('wordpress').stack).toBe('wordpress')
     expect(getSiteAdapter('bitrix').stack).toBe('bitrix')
+    expect(getSiteAdapter('joomla').stack).toBe('joomla')
+  })
+
+  it('holds WordPress first: the wizard starts on the first stack', () => {
+    expect(siteAdapters().map((adapter) => adapter.stack)).toEqual([
+      'wordpress',
+      'bitrix',
+      'joomla',
+    ])
   })
 
   it('reports the stage of every other known stack', () => {
     expect(() => getSiteAdapter('static')).toThrow('(stage 2)')
-    for (const stack of siteStacks.filter((s) => s !== 'wordpress' && s !== 'bitrix')) {
+    expect(() => getSiteAdapter('opencart')).toThrow('(plan 62)')
+    const withAdapter: readonly SiteStack[] = ['wordpress', 'bitrix', 'joomla']
+    for (const stack of siteStacks.filter((s) => !withAdapter.includes(s))) {
       expect(() => getSiteAdapter(stack)).toThrow(/NOT_IMPLEMENTED|not implemented/)
     }
   })
@@ -45,6 +56,14 @@ describe('connectableStacks', () => {
     for (const env of appEnvs)
       for (const way of connectionWays)
         for (const stack of planned) expect(connectableStacks(env, way)).not.toContain(stack)
+  })
+
+  it('takes Joomla by the files outside production only, after WordPress (Т4)', () => {
+    for (const env of ['development', 'test'] as const)
+      expect(connectableStacks(env, 'files')).toEqual(['wordpress', 'joomla'])
+    expect(connectableStacks('production', 'files')).not.toContain('joomla')
+    // The panel of Joomla stays closed until Э8: the tab «Без доступа» does not offer it (Т6).
+    for (const env of appEnvs) expect(connectableStacks(env, 'browser')).not.toContain('joomla')
   })
 
   it('takes into production by the files only a stack it takes by the browser too (Т2)', () => {
@@ -145,6 +164,7 @@ describe('findSiteContentAdapter', () => {
     expect(findSiteContentAdapter('wordpress')).toBe(getSiteContentAdapter('wordpress'))
     // A release of such a stack goes without the plugin.
     expect(findSiteContentAdapter('bitrix')).toBeNull()
+    expect(findSiteContentAdapter('joomla')).toBeNull()
   })
 
   it('rejects unknown stacks, including prototype keys', () => {

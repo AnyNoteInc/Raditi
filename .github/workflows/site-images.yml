@@ -19,6 +19,7 @@ on:
       # The recipe of WordPress the stand runs on every version of it, and what it loads.
       - packages/site-adapters/src/wordpress-preview.ts
       - packages/site-adapters/src/wordpress-preview-files.ts
+      - packages/site-adapters/src/php/versions.ts
       - packages/site-adapters/src/wordpress-db-copy.ts
       - packages/site-adapters/src/wordpress-db.ts
       - packages/site-adapters/src/wordpress-mcp-policy.ts

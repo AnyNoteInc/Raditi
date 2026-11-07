@@ -26,8 +26,10 @@ export default async function NewProjectPage() {
     >
       <ProjectWizard
         stacks={siteConnections()?.connectableStacks('files') ?? []}
-        // A site without access to its files works only through the browser (docs/plan/57, Б8).
+        // A site without access to its files works only through the browser (docs/plan/57, Б8),
+        // and only on a platform the server takes that way (docs/plan/62-site-stacks.md, Т6).
         browserAccess={(chatServices()?.browser ?? null) !== null}
+        browserStacks={siteConnections()?.connectableStacks('browser') ?? []}
       />
     </ApplicationShell>
   )

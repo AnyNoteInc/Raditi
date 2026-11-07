@@ -1,6 +1,7 @@
 import type { PreviewRecipe, SiteFacts } from '@repo/domain'
 import { PREVIEW_SETTINGS_PATH, previewRecipeSchema } from '@repo/domain'
 
+import { phpVersionNumber, phpVersionsNear } from './php/versions.ts'
 import { wordpressDatabaseOf } from './wordpress-db-copy.ts'
 import {
   previewApacheConf,
@@ -19,22 +20,13 @@ const phpVersions = ['7.4', '8.0', '8.1', '8.2', '8.3', '8.4', '8.5'] as const
 /** A site whose PHP is unknown runs on the version WordPress recommends. */
 const DEFAULT_PHP = '8.3'
 
-/** `8.3` → 803; null for anything that does not start with major.minor. */
-function versionNumber(version: string): number | null {
-  const match = /^(\d{1,2})\.(\d{1,2})(?:\.|$)/.exec(version)
-  return match ? Number(match[1]) * 100 + Number(match[2]) : null
-}
-
 /**
  * The PHP versions to try for a site, the one of its hosting first, then by distance from it
- * (the older of two equally near first: code runs on an older minor more often than on a newer).
+ * (`phpVersionsNear`); a site whose PHP is unknown runs on the version WordPress recommends.
  */
 export function wordpressPhpVersions(runtimeVersion: string | undefined): string[] {
-  const wanted = versionNumber(runtimeVersion ?? '') ?? versionNumber(DEFAULT_PHP) ?? 0
-  const of = (version: string) => versionNumber(version) ?? 0
-  return [...phpVersions].sort(
-    (a, b) => Math.abs(of(a) - wanted) - Math.abs(of(b) - wanted) || of(a) - of(b),
-  )
+  const known = phpVersionNumber(runtimeVersion ?? '') !== null
+  return phpVersionsNear(phpVersions, known ? runtimeVersion : DEFAULT_PHP)
 }
 
 /** Where the runtime writes the configuration files of the server: next to the settings file. */

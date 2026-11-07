@@ -7,12 +7,15 @@ import type {
 } from '@repo/domain'
 import { badRequest, notImplemented, siteStacks, stackAxisOpen } from '@repo/domain'
 import { bitrixAdapter } from './bitrix.ts'
+import { joomlaAdapter } from './joomla/joomla.ts'
 import { wordpressContentAdapter } from './wordpress-content.ts'
 import { wordpressAdapter } from './wordpress.ts'
 
 const adapters = new Map<SiteStack, SiteAdapter>([
+  // WordPress first: the wizard starts on the first stack it is given.
   ['wordpress', wordpressAdapter],
   ['bitrix', bitrixAdapter],
+  ['joomla', joomlaAdapter],
 ])
 
 /** Spec §13: stacks without an adapter yet and the stage that brings one. */
@@ -21,7 +24,6 @@ const plannedStacks = new Map<SiteStack, string>([
   ['laravel', 'stage 3'],
   ['node', 'stage 3'],
   ['python', 'stage 3'],
-  ['joomla', 'plan 62'],
   ['modx', 'plan 62'],
   ['opencart', 'plan 62'],
 ])

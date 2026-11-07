@@ -7,6 +7,9 @@ import { URL } from 'node:url'
 /** The folder of infra and the file of its constants. A new stack is a new line. */
 export const EMBEDDED = Object.freeze({
   wordpress: 'src/wordpress-preview-files.ts',
+  joomla: 'src/joomla/preview-files.ts',
+  // The files a preview of every stack but WordPress takes from infra/preview (Т11, Т21).
+  preview: 'src/php/preview-files.ts',
 })
 
 const EMBEDDABLE = /\.(?:php|conf|ini)$/

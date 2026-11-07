@@ -2,6 +2,9 @@ import type { SiteAdapter, SiteFacts, StackGeneration } from '@repo/domain'
 import { notImplemented, parseSiteVersion } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
 import { bitrixAdapter } from './bitrix.ts'
+import { joomlaContractFixture } from './joomla/fixtures.ts'
+import { joomlaAdapter } from './joomla/joomla.ts'
+import { siteAdapters } from './registry.ts'
 import {
   neutralPublicPages,
   stackContractViolations,
@@ -64,7 +67,20 @@ const bitrix: StackContractFixture = {
   site: bitrixSite,
 }
 
-const others = [wordpressAdapter, bitrixAdapter]
+const others = siteAdapters()
+
+/** The fixture of the contract of every stack the file knows. */
+const fixtures: Readonly<Record<string, StackContractFixture>> = {
+  wordpress,
+  bitrix,
+  joomla: joomlaContractFixture,
+}
+
+/** The stacks of `registry` without a fixture, and the fixtures of no stack of it. */
+const unmatched = (registry: readonly string[]) => [
+  ...registry.filter((stack) => !Object.hasOwn(fixtures, stack)),
+  ...Object.keys(fixtures).filter((stack) => !registry.includes(stack)),
+]
 
 const violationsOf = (adapter: SiteAdapter, fixture: StackContractFixture) =>
   stackContractViolations(adapter, fixture, others)
@@ -102,9 +118,26 @@ const withoutConfig = (lines: readonly string[]) =>
   lines.filter((line) => !line.includes('wp-config'))
 
 describe('the contract of a stack adapter', () => {
-  it('is kept by WordPress and Bitrix', async () => {
-    expect(await violationsOf(wordpressAdapter, wordpress)).toEqual([])
-    expect(await violationsOf(bitrixAdapter, bitrix)).toEqual([])
+  it('is kept by every adapter of the registry, on the fixture of its stack', async () => {
+    // Read from the registry, so a stack whose fixture is in the map is the stack the contract runs
+    // on: a fixture never left unchecked beside a list of its own.
+    const stacks = siteAdapters().map((adapter) => adapter.stack)
+    expect(stacks).toEqual(expect.arrayContaining(['wordpress', 'bitrix', 'joomla']))
+    for (const adapter of siteAdapters()) {
+      const fixture = fixtures[adapter.stack]
+      expect(fixture, adapter.stack).toBeDefined()
+      expect(await violationsOf(adapter, fixture!), adapter.stack).toEqual([])
+    }
+  })
+
+  it('has a fixture for every adapter of the registry and for no other stack', () => {
+    // Without a fixture the working set, media, verify and database settings of a new stack were
+    // never checked, and its first release would end in a refusal.
+    expect(unmatched(siteAdapters().map((adapter) => adapter.stack))).toEqual([])
+    expect(unmatched([...siteAdapters().map((adapter) => adapter.stack), 'opencart'])).toEqual([
+      'opencart',
+    ])
+    expect(unmatched(['wordpress'])).not.toEqual([])
   })
 
   it('takes neutral pages that carry no sign of either stack', () => {
@@ -493,6 +526,63 @@ describe('the contract of a stack adapter', () => {
     expect(await violationsOf(wordpressAdapter, lacking)).toEqual([
       'rootMarkers: the root of the fixture does not have every marker',
     ])
+  })
+
+  const readJoomla = joomlaAdapter.readLayout!
+  const { layoutTree: _layoutTree, ...joomlaWithoutLayout } = joomlaContractFixture
+  const joomlaBroken: [string, SiteAdapter, StackContractFixture, string][] = [
+    [
+      'a reading of the layout with empty extras',
+      { ...joomlaAdapter, readLayout: async () => ({ kind: 'read', extras: {}, adminPath: null }) },
+      joomlaContractFixture,
+      'readLayout: the import would not record the layout of the fixture',
+    ],
+    [
+      'a reading of the layout with a path of the panel without its last slash',
+      {
+        ...joomlaAdapter,
+        readLayout: async (tree) => {
+          const layout = await readJoomla(tree)
+          return layout.kind === 'read' ? { ...layout, adminPath: '/administrator' } : layout
+        },
+      },
+      joomlaContractFixture,
+      'readLayout: the import would not record the layout of the fixture',
+    ],
+    [
+      'a reading of the layout that refuses the root',
+      { ...joomlaAdapter, readLayout: async () => ({ kind: 'refused', limit: 'outside_root' }) },
+      joomlaContractFixture,
+      'readLayout: the import would not record the layout of the fixture',
+    ],
+    [
+      'a reading of the layout that throws',
+      {
+        ...joomlaAdapter,
+        readLayout: () => Promise.reject(new Error('The root of the site could not be read')),
+      },
+      joomlaContractFixture,
+      'readLayout: the import would not record the layout of the fixture',
+    ],
+    [
+      'a fixture without the root of the layout',
+      joomlaAdapter,
+      joomlaWithoutLayout,
+      'readLayout: the fixture has no layoutTree',
+    ],
+  ]
+
+  it.each(joomlaBroken)('finds Joomla with %s', async (_, adapter, fixture, violation) => {
+    expect(await violationsOf(adapter, fixture)).toEqual([violation])
+  })
+
+  it('reads a layout the import records on the fixture of Joomla', async () => {
+    const layout = await readJoomla(joomlaContractFixture.layoutTree!)
+    expect(layout).toEqual({
+      kind: 'read',
+      extras: expect.objectContaining({ dbtype: 'pdomysql', sef: '1' }) as unknown,
+      adminPath: '/administrator/',
+    })
   })
 
   const bitrixBroken: [string, SiteAdapter, string][] = [

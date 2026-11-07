@@ -5,12 +5,13 @@
  * the instructions of a turn. A pure function without vitest: a test of each adapter asks for the
  * list of violations and expects none.
  */
-import type { PublicPage, SiteAdapter, SiteFacts, SiteVersionReading } from '@repo/domain'
+import type { PublicPage, SiteAdapter, SiteFacts, SiteTree, SiteVersionReading } from '@repo/domain'
 import {
   compareSiteVersions,
   importPolicyOf,
   isForbiddenPath,
   isNestedSiteRoot,
+  siteStackFactsPatchSchema,
   siteStackFactsSchema,
 } from '@repo/domain'
 
@@ -30,6 +31,11 @@ export interface StackContractFixture {
   /** Pages on which `fingerprint` answers `yes`. */
   publicPages: readonly PublicPage[]
   site: SiteFacts
+  /**
+   * The root on which the stack reads its layout (Т13). Needed only by a stack whose `readLayout`
+   * is not null: no one reads the layout of another.
+   */
+  layoutTree?: SiteTree
 }
 
 /**
@@ -352,6 +358,29 @@ export async function stackContractViolations(
       violations.push(`connection: terms.copy does not say «${copyWords}»`)
     if (!terms.live.includes(liveWords))
       violations.push(`connection: terms.live does not say «${liveWords}»`)
+  }
+
+  // 15. The layout an import records (Т13; Р16 of Э2): what `readStack` of the import writes. A
+  // field that fails the schema of the record leaves every field unwritten, and an empty `extras`
+  // is no recorded layout, so a rebuild on the same seed would end in `no_layout`. A closed stack
+  // with a reading of the layout is violation 4 alone.
+  if (filesOpen && adapter.readLayout !== null) {
+    if (fixture.layoutTree === undefined) {
+      violations.push('readLayout: the fixture has no layoutTree')
+    } else {
+      const tree = fixture.layoutTree
+      const readLayout = adapter.readLayout
+      const layout = await Promise.resolve()
+        .then(() => readLayout(tree))
+        .catch(() => null)
+      if (
+        layout?.kind !== 'read' ||
+        Object.keys(layout.extras).length === 0 ||
+        !siteStackFactsPatchSchema.safeParse({ extras: layout.extras, adminPath: layout.adminPath })
+          .success
+      )
+        violations.push('readLayout: the import would not record the layout of the fixture')
+    }
   }
 
   return violations
