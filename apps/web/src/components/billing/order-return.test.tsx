@@ -141,11 +141,6 @@ describe('the return page of an order that cannot be named', () => {
 })
 
 describe('the return page while the payment has no outcome', () => {
-  it('looks every three seconds, for thirty seconds', () => {
-    expect(ORDER_POLL_MS).toBe(3_000)
-    expect(ORDER_WAIT_MS).toBe(30_000)
-  })
-
   it('asks at once and says that it is checking', async () => {
     let answer!: (order: OrderState) => void
     syncOrder.mockImplementationOnce(

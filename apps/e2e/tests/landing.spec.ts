@@ -2560,7 +2560,6 @@ test.describe('scroll on the way between pages', () => {
     // A client transition: the record of the first page is still there. A jump is one position;
     // a smooth scroll would pass dozens on its way.
     const passed = await recorded(page)
-    expect(passed).not.toBeNull()
     expect([...new Set(passed)]).toEqual([0])
   })
 

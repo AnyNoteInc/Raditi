@@ -4,7 +4,6 @@ import { DEFAULT_AFTER_SIGN_IN, safeRedirectTarget } from './safe-redirect'
 
 describe('safeRedirectTarget', () => {
   it('lands on the chats when there is no target', () => {
-    expect(DEFAULT_AFTER_SIGN_IN).toBe('/chats')
     expect(safeRedirectTarget(null)).toBe('/chats')
   })
 

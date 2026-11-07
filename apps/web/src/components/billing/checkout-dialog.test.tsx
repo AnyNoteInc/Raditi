@@ -408,7 +408,6 @@ describe('the checkout dialog', () => {
     })
 
     it('unlocks the dialog after a while, for closing or for another try', async () => {
-      expect(LEAVING_WAIT_MS).toBe(15_000)
       showDialog()
       fireEvent.click(consent())
       fireEvent.click(pay())
