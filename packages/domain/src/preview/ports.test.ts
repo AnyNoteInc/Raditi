@@ -150,6 +150,28 @@ describe('what a stack says about previews', () => {
     ).toBe(false)
   })
 
+  it('blanks keys of a column of a matched row, never one it sets or deletes (Э3.11)', () => {
+    const sef = {
+      table: 'extensions',
+      match: { column: 'name', value: 'plg_system_sef' },
+      set: {},
+      blank: { column: 'params', keys: ['domain'] },
+    }
+    const policy = { engine: 'mysql', tables: [], overrides: [sef] }
+    expect(databaseCopyPolicySchema.parse(policy)).toEqual(policy)
+    for (const override of [
+      { ...sef, set: null },
+      { ...sef, set: { params: '{}' } },
+      { ...sef, blank: { column: 'params', keys: [] } },
+      { ...sef, blank: { column: 'params', keys: ['a"b'] } },
+      { ...sef, blank: { column: 'params; DROP', keys: ['domain'] } },
+    ])
+      expect(
+        databaseCopyPolicySchema.safeParse({ ...policy, overrides: [override] }).success,
+        JSON.stringify(override),
+      ).toBe(false)
+  })
+
   it('holds a policy of up to 128 tables', () => {
     const rules = (count: number) =>
       Array.from({ length: count }, (_, index) => ({ table: `t${index}`, where: [] }))

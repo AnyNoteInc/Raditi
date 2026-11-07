@@ -81,5 +81,38 @@ export function joomlaImportRules(): ImportRules {
       ],
       maxDepth: null,
     },
+    coreFiles: [...joomlaCoreFiles],
   }
 }
+
+/**
+ * The names of the SQL of the schema updates of the core: `<version>-<yyyy>-<mm>-<dd>[-<n>].sql`
+ * since 3.2.2, plain `<version>.sql` of 2.5.5–3.2.1 before (the names of 3.10.12, 4.4.14, 5.4.10 and
+ * 6.2.0). A pattern holds only `*`, so a dated name is three dots and three dashes before `.sql`; any
+ * other SQL beside them — a dump the owner left there — stays out by `archivesAndDumps`.
+ */
+const joomlaUpdateNames = [
+  '*.*.*-*-*-*.sql',
+  ...['2.5.5', '2.5.6', '2.5.7', '3.0.0', '3.0.1', '3.0.2', '3.0.3']
+    .concat(['3.1.0', '3.1.1', '3.1.2', '3.1.3', '3.1.4', '3.1.5', '3.2.0', '3.2.1'])
+    .map((version) => `${version}.sql`),
+] as const
+
+/**
+ * Files of the release of Joomla the lines above would cut (`*.sql` of `archivesAndDumps`, `*.pem`
+ * of `secretFiles`; docs/plan/62-slices/e3.md, Э3.11, discrepancy 24): the SQL of the schema
+ * updates the panel checks the database by, and the bundles of CA the HTTP transports of the core
+ * load with no other way — without them the copy has no outgoing HTTPS. Paths of 3.10.12, 4.4.14,
+ * 5.4.10 and 6.2.0 (sqlazure only on 3.x); a path a branch lacks matches nothing. The SQL of the
+ * installer and of extensions stays out.
+ */
+const joomlaCoreFiles = [
+  ...['mysql', 'postgresql', 'sqlazure'].flatMap((driver) =>
+    [...joomlaUpdateNames].map(
+      (name) => `/administrator/components/com_admin/sql/updates/${driver}/${name}`,
+    ),
+  ),
+  '/libraries/vendor/composer/ca-bundle/res/cacert.pem',
+  '/libraries/src/Http/Transport/cacert.pem',
+  '/libraries/fof/download/adapter/cacert.pem',
+] as const

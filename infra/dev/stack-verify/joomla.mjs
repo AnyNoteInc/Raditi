@@ -4,6 +4,7 @@
 // what no preview may hold (people, their contacts and tokens, the secrets of the configuration).
 // Only synthetic data. The core of Joomla runs in the container of the production only: this file
 // is the stand's, the downloaded tree is not.
+import { createHash, randomBytes } from 'node:crypto'
 
 /**
  * A build of a stand: a row of cms-archives.json and the `site` image of its PHP. `absolutePageLinks`
@@ -44,6 +45,9 @@ export const JOOMLA_BUILDS = [
 
 /** The prefix of the tables of the production. */
 export const JOOMLA_PREFIX = 'jos_'
+/** A setting of the SEF plugin the plugin does not read: what a copy must keep beside `domain`. */
+const SEF_KEPT_KEY = 'raditiStandKept'
+export const JOOMLA_SEF_KEPT = 'kept-41c7'
 /** The webroot of the production container. */
 const ROOT = '/var/www/html'
 
@@ -130,8 +134,9 @@ export function withProperty(text, name, value) {
  * Installs Joomla without a browser on the production of a stand. 3.10: the SQL of
  * `installation/sql/mysql/joomla.sql` with `#__` replaced, and `configuration.php` from
  * `configuration.php-dist`; from 4.3: `php installation/joomla.php install`. Then `installation/`
- * goes but for JOOMLA_INSTALLATION_MARKER, `htaccess.txt` becomes `.htaccess`, `sef_rewrite` is 1
- * and `$live_site` is the production's own origin, where a broken preview would show it. The
+ * goes but for JOOMLA_INSTALLATION_MARKER, `htaccess.txt` becomes `.htaccess`, `sef_rewrite` is 1,
+ * and `$live_site` and the address of the canonical links of the SEF plugin (`params.domain`) are
+ * the production's own origin, where a broken preview would show it. The
  * password of the database is read from the container's own file, never written here.
  */
 export async function installJoomla(production, build, { productionOrigin } = {}) {
@@ -175,6 +180,16 @@ export async function installJoomla(production, build, { productionOrigin } = {}
   configuration = withProperty(configuration, 'secret', JOOMLA_CONFIG_CANARIES.secret)
   configuration = withProperty(configuration, 'smtppass', JOOMLA_CONFIG_CANARIES.smtppass)
   await production.exec(['sh', '-c', `cat > ${ROOT}/configuration.php`], configuration)
+  // The address of the canonical links of the SEF plugin is the production's own (Э3.11): a copy
+  // that kept it would name production in `<link rel="canonical">` of every page. 3.10 installs
+  // the plugin with empty `params`, 4.0 and later with JSON. A key the plugin does not read beside
+  // it: the copy blanks the address and keeps the rest of the settings.
+  await production.sql(
+    `UPDATE \`${JOOMLA_PREFIX}extensions\` SET params = IF(JSON_VALID(params) AND` +
+      ` JSON_TYPE(params) = 'OBJECT', JSON_SET(params, '$.domain', ${q(productionOrigin)},` +
+      ` '$.${SEF_KEPT_KEY}', ${q(JOOMLA_SEF_KEPT)}), JSON_OBJECT('domain', ${q(productionOrigin)},` +
+      ` ${q(SEF_KEPT_KEY)}, ${q(JOOMLA_SEF_KEPT)})) WHERE name = 'plg_system_sef';\n`,
+  )
   await production.exec([
     'sh',
     '-c',
@@ -295,6 +310,104 @@ export function joomlaSeedSql(prefix, build) {
   return `${lines.join('\n')}\n`
 }
 
+/**
+ * The row of the SEF plugin as one line `<rows>|<rows of valid JSON>|<domain>|<kept>`: on a
+ * production `1|1|<its origin>|<JOOMLA_SEF_KEPT>`, on a copy `1|1||<JOOMLA_SEF_KEPT>` — the address
+ * blanked, the row and its other settings kept. A missing row or key reads `0|x|NULL|NULL`.
+ */
+export const JOOMLA_SEF_SQL =
+  "SELECT CONCAT(COUNT(*), '|', COALESCE(SUM(JSON_VALID(params)), 'x'), '|'," +
+  " COALESCE(MAX(JSON_VALUE(params, '$.domain')), 'NULL'), '|'," +
+  ` COALESCE(MAX(JSON_VALUE(params, '$.${SEF_KEPT_KEY}')), 'NULL'))` +
+  ` FROM \`${JOOMLA_PREFIX}extensions\` WHERE name = 'plg_system_sef'`
+
+/** What JOOMLA_SEF_SQL answers on a copy that blanked the address and kept the rest. */
+export const JOOMLA_SEF_OF_COPY = `1|1||${JOOMLA_SEF_KEPT}`
+
+/**
+ * P3 of Joomla (docs/plan/62-slices/e3.md, Э3.11): the authors of the copy are synthetic, the
+ * contacts and the profiles of people are empty, the draft is not there and the published article
+ * is (the control), the page cache is not loaded and the SEF plugin names no address. `sql` — a
+ * query as root of the preview's database, its answer as text; a row of the answer per check.
+ */
+async function joomlaCopyChecks(sql) {
+  const t = (name) => `\`${JOOMLA_PREFIX}${name}\``
+  const number = async (query) => Number((await sql(query)).trim())
+  const authors = (await sql(`SELECT email FROM ${t('users')}`)).trim().split('\n').filter(Boolean)
+  const checks = [
+    {
+      name: 'the authors of the copy are synthetic, at @preview.invalid',
+      ok: authors.length > 0 && authors.every((email) => email.endsWith('@preview.invalid')),
+      found: { authors: authors.length },
+    },
+  ]
+  for (const table of ['contact_details', 'user_profiles']) {
+    const rows = await number(`SELECT COUNT(*) FROM ${t(table)}`)
+    checks.push({ name: `${table} is empty`, ok: rows === 0, found: { rows } })
+  }
+  const ofContent = (id) => number(`SELECT COUNT(*) FROM ${t('content')} WHERE id = ${id}`)
+  const draft = await ofContent(JOOMLA_SEED.draftId)
+  const article = await ofContent(JOOMLA_SEED.articleId)
+  checks.push({
+    name: 'the draft is not in the copy, the published article is',
+    ok: draft === 0 && article === 1,
+    found: { draft, article },
+  })
+  const cache = await number(
+    `SELECT COUNT(*) FROM ${t('extensions')} WHERE name = 'plg_system_cache'`,
+  )
+  checks.push({ name: 'plg_system_cache is not in the copy', ok: cache === 0, found: { cache } })
+  const [rows, valid, domain, kept] = (await sql(JOOMLA_SEF_SQL)).trim().split('|')
+  checks.push({
+    name: 'the SEF plugin of the copy names no address for its canonical links: one row of valid JSON, the address blank, its other settings kept',
+    ok: [rows, valid, domain, kept].join('|') === JOOMLA_SEF_OF_COPY,
+    found: { rows, valid, blank: domain === '', kept: kept === JOOMLA_SEF_KEPT },
+  })
+  return checks
+}
+
+/**
+ * P5 of Joomla: the sign-in form of the administrator, the button (`.login-button` of 3.x), the
+ * mark only the panel has once in — `header.header` of Isis on 3.x (its `login.php` has no
+ * header), `#sidebarmenu` of Atum since 4.0 (its `login.php` has `#header` too, the menu only
+ * `index.php`; checked on the trees of 4.4.14, 5.4.10 and 6.2.0) — and the texts after which the
+ * sign-in did not hold: Joomla lost its cookie of the session, or refused the password
+ * (JLIB_LOGIN_AUTHENTICATE).
+ * `setPassword(rootSql, password)` makes the author of the copy a superuser with the stand's
+ * password and gives the login: a copy keeps a random hash, and its author is no superuser. The
+ * hash is the legacy `md5(password . salt):salt` every branch still reads (and rehashes at the
+ * sign-in): SQL makes no bcrypt.
+ */
+function joomlaSignIn(build) {
+  const t = (name) => `\`${JOOMLA_PREFIX}${name}\``
+  return {
+    path: '/administrator/',
+    fields: { login: '#mod-login-username', password: '#mod-login-password' },
+    submit: isBranch3(build) ? '.login-button' : '#btn-login-submit',
+    signedIn: isBranch3(build) ? 'header.header' : '#sidebarmenu',
+    lostCookie: [
+      'Username and password do not match',
+      'invalid security token',
+      'security token did not match',
+      'Cookies must be enabled',
+      'Your session has expired',
+    ],
+    async setPassword(rootSql, password) {
+      const id = JOOMLA_SEED.authorId
+      const login = (await rootSql(`SELECT username FROM ${t('users')} WHERE id = ${id}`)).trim()
+      if (!login) throw new Error('The copy holds no author to sign in as')
+      const salt = randomBytes(16).toString('hex')
+      const hash = `${createHash('md5').update(`${password}${salt}`).digest('hex')}:${salt}`
+      await rootSql(
+        `UPDATE ${t('users')} SET password = ${q(hash)}, block = 0, requireReset = 0` +
+          ` WHERE id = ${id}; INSERT IGNORE INTO ${t('user_usergroup_map')} (user_id, group_id)` +
+          ` VALUES (${id}, 8);`,
+      )
+      return login
+    },
+  }
+}
+
 /** The configuration of a production: the file the import must never take. */
 const CONFIGURATION = `${ROOT}/configuration.php`
 
@@ -391,4 +504,13 @@ export const joomlaStand = Object.freeze({
   }),
   /** Т48: Gitleaks drops files of `libraries/vendor` on 4.4, 5.4 and 6.2; the number is not pinned. */
   scannerFinds: (build) => !isBranch3(build),
+  /** P3: what the copy of a preview holds, a row per check, by SQL as root of its database. */
+  copyChecks: joomlaCopyChecks,
+  /** P4: what the agent's browser may not open, and an image of the media library it may. */
+  browserPaths: Object.freeze({
+    closed: Object.freeze(['/administrator/', '/configuration.php']),
+    open: `/${JOOMLA_SEED.introImage}`,
+  }),
+  /** P5: the sign-in to the panel in the cabinet's frame. */
+  signIn: joomlaSignIn,
 })

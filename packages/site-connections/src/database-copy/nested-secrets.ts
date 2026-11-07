@@ -24,6 +24,9 @@ const MAX_DEPTH = 64
 
 const isSecretKey = (key: string | null): boolean => key !== null && SECRET_KEY.test(key)
 
+/** Which keys a walk blanks the values of: `isSecretKey`, or the names an override gives. */
+type KeyTest = (key: string | null) => boolean
+
 class Unreadable extends Error {}
 
 /** PHP's serialization (`serialize()`), the subset WordPress stores. */
@@ -32,16 +35,18 @@ class Serialized {
   readonly #out: string[] = []
 
   readonly text: string
+  readonly #isKey: KeyTest
 
-  constructor(text: string) {
+  constructor(text: string, isKey: KeyTest) {
     this.text = text
+    this.#isKey = isKey
   }
 
   /** The value with every secret under a secret key blanked; null — not a value of this form. */
-  static scrub(text: string, depth: number): string | null {
+  static scrub(text: string, depth: number, isKey: KeyTest): string | null {
     if (depth > MAX_DEPTH || !/^(?:[aOsibdNCE]:|N;)/.test(text)) return null
     try {
-      const reader = new Serialized(text)
+      const reader = new Serialized(text, isKey)
       reader.#value({ secret: false, key: false }, depth)
       return reader.#at === text.length ? reader.#out.join('') : null
     } catch (error) {
@@ -123,7 +128,7 @@ class Serialized {
         else {
           // A string may hold a serialized value or JSON of its own: scrubbed too, its length
           // written anew.
-          const inner = type === 's' && !at.key ? scrubNested(bytes, depth + 1) : bytes
+          const inner = type === 's' && !at.key ? scrubNested(bytes, depth + 1, this.#isKey) : bytes
           this.#out.push(`${type}:${inner.length}:"${inner}";`)
         }
         return bytes
@@ -171,7 +176,7 @@ class Serialized {
   #pairs(count: number, secret: boolean, depth: number): void {
     for (let index = 0; index < count; index++) {
       const key = this.#value({ secret: false, key: true }, depth + 1)
-      this.#value({ secret: secret || isSecretKey(key), key: false }, depth + 1)
+      this.#value({ secret: secret || this.#isKey(key), key: false }, depth + 1)
     }
   }
 }
@@ -182,15 +187,17 @@ class Json {
   readonly #out: string[] = []
 
   readonly text: string
+  readonly #isKey: KeyTest
 
-  constructor(text: string) {
+  constructor(text: string, isKey: KeyTest) {
     this.text = text
+    this.#isKey = isKey
   }
 
-  static scrub(text: string, depth: number): string | null {
+  static scrub(text: string, depth: number, isKey: KeyTest): string | null {
     if (depth > MAX_DEPTH || !/^\s*[[{]/.test(text)) return null
     try {
-      const reader = new Json(text)
+      const reader = new Json(text, isKey)
       reader.#space()
       reader.#value(false, depth)
       reader.#space()
@@ -248,7 +255,7 @@ class Json {
         this.#space()
         this.#punctuation(':')
         this.#space()
-        this.#value(secret || isSecretKey(name), depth + 1)
+        this.#value(secret || this.#isKey(name), depth + 1)
         this.#space()
         if (this.text[this.#at] === '}') return this.#punctuation('}')
         this.#punctuation(',')
@@ -282,8 +289,14 @@ class Json {
   }
 }
 
-function scrubNested(text: string, depth: number): string {
-  return Serialized.scrub(text, depth) ?? Json.scrub(text, depth) ?? text
+function scrubNested(text: string, depth: number, isKey: KeyTest): string {
+  return Serialized.scrub(text, depth, isKey) ?? Json.scrub(text, depth, isKey) ?? text
+}
+
+function scrubWith(value: Buffer, isKey: KeyTest): Buffer {
+  const text = value.toString('latin1')
+  const scrubbed = scrubNested(text, 0, isKey)
+  return scrubbed === text ? value : Buffer.from(scrubbed, 'latin1')
 }
 
 /**
@@ -291,7 +304,15 @@ function scrubNested(text: string, depth: number): string {
  * serialization or JSON, at any depth; the bytes as they are when the value is neither.
  */
 export function scrubNestedSecrets(value: Buffer): Buffer {
-  const text = value.toString('latin1')
-  const scrubbed = scrubNested(text, 0)
-  return scrubbed === text ? value : Buffer.from(scrubbed, 'latin1')
+  return scrubWith(value, isSecretKey)
+}
+
+/**
+ * The bytes of a copied value with the string under each of `keys` — exact names — blanked, in
+ * PHP's serialization or JSON, at any depth, the same way (an override's `blank`, Э3.11: a setting
+ * that names production); the bytes as they are when the value is neither.
+ */
+export function blankNestedKeys(value: Buffer, keys: readonly string[]): Buffer {
+  const names = new Set(keys)
+  return scrubWith(value, (key) => key !== null && names.has(key))
 }

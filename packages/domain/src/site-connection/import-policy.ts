@@ -86,6 +86,32 @@ function configCopyTest(copies: ImportConfigCopies): (segments: readonly string[
   }
 }
 
+/**
+ * The files of the stack's release as a test of a file path (`ImportRules.coreFiles`): each line
+ * from the root, every segment matched whole and in its letter case, `*` only in the last one.
+ * Throws badRequest for a line it could not mean: outside the subset, not anchored, a folder, a `*`
+ * above the name — a wider line would take more than the release holds.
+ */
+function coreFileTest(lines: readonly string[]): (segments: readonly string[]) => boolean {
+  const rules = lines.map((line) => {
+    const segments = line.slice(1).split('/')
+    if (
+      !line.startsWith('/') ||
+      line.endsWith('/') ||
+      !isSupportedLine(line) ||
+      segments.slice(0, -1).some((segment) => segment.includes('*'))
+    )
+      throw badRequest(`Unsupported import core file: "${line}"`)
+    return segments.map((segment) => new RegExp(`^${segmentSource(segment)}$`))
+  })
+  return (segments) =>
+    rules.some(
+      (rule) =>
+        rule.length === segments.length &&
+        rule.every((pattern, index) => pattern.test(segments[index]!)),
+    )
+}
+
 interface AnchoredRule {
   segments: RegExp[]
   directoryOnly: boolean
@@ -105,17 +131,23 @@ interface AnchoredRule {
  *
  * A file named as one of `configCopies` (`ImportRules.configCopies`, Э3.3) is `excluded` too, by a
  * branch of its own: the exclude lines are read as they are. Without the field — the default — no
- * file is. Product code calls `importPolicyOf`.
+ * file is.
+ *
+ * A file of `coreFiles` (`ImportRules.coreFiles`, Э3.11) is taken whatever the exclude lines and
+ * `configCopies` say — never past the checks of version control, the publication rule and CI.
+ * Product code calls `importPolicyOf`.
  */
 export function createImportPathPolicy(
   excludeLines: readonly string[],
   documentFolders: readonly string[] = [],
   configCopies?: ImportConfigCopies,
+  coreFiles: readonly string[] = [],
 ): ImportPathPolicy {
   for (const folder of documentFolders)
     if (!isDocumentFolder(folder))
       throw badRequest(`Unsupported import document folder: "${folder}"`)
   const isConfigCopy = configCopies === undefined ? null : configCopyTest(configCopies)
+  const isCoreFile = coreFiles.length === 0 ? null : coreFileTest(coreFiles)
   const anchored: AnchoredRule[] = []
   const names: string[] = []
   const directoryNames: string[] = []
@@ -169,6 +201,7 @@ export function createImportPathPolicy(
       if (!isPublicationPath(path)) return 'unsupported_path'
       // CLAUDE.md rule 6: the CI paths of every provider and `.gitmodules`.
       if (isForbiddenPath(path, [])) return 'ci'
+      if (type === 'file' && isCoreFile?.(segments)) return 'take'
       if (isExcluded(segments, type)) return 'excluded'
       if (type === 'file' && isConfigCopy?.(segments)) return 'excluded'
       const inFolder = (folder: string) => path.toLowerCase().startsWith(folder.toLowerCase())
@@ -181,9 +214,9 @@ export function createImportPathPolicy(
 
 /** The policy of an adapter's rules: so no call loses a field of them. */
 export const importPolicyOf = (
-  rules: Pick<ImportRules, 'exclude' | 'documentFolders' | 'configCopies'>,
+  rules: Pick<ImportRules, 'exclude' | 'documentFolders' | 'configCopies' | 'coreFiles'>,
 ): ImportPathPolicy =>
-  createImportPathPolicy(rules.exclude, rules.documentFolders, rules.configCopies)
+  createImportPathPolicy(rules.exclude, rules.documentFolders, rules.configCopies, rules.coreFiles)
 
 /**
  * Folders a walk does not enter: the roots and the core of stacks closed for files (Т40, fact 14 of

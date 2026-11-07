@@ -190,11 +190,23 @@ export function joomlaDatabaseCopyPolicy(
     // A null `set`, not `enabled = 0`: 3.10 and 4.0 lack the scheduler, 5.0 and later the update
     // mail, and the row a `set` adds where the source has none would not load.
     overrides: [
-      'plg_system_cache',
-      'plg_system_schedulerunner',
-      'plg_system_stats',
-      'plg_system_updatenotification',
-    ].map((name) => ({ table: 'extensions', match: { column: 'name', value: name }, set: null })),
+      ...[
+        'plg_system_cache',
+        'plg_system_schedulerunner',
+        'plg_system_stats',
+        'plg_system_updatenotification',
+      ].map((name) => ({ table: 'extensions', match: { column: 'name', value: name }, set: null })),
+      // The address the SEF plugin writes into `<link rel="canonical">` of every page
+      // (`params.domain`; plugins/system/sef, 3.10 and later): a copy that kept it would name
+      // production (docs/plan/62-slices/e3.md, Э3.11, discrepancy 25). Blank, the plugin adds no
+      // such link; its other settings stay.
+      {
+        table: 'extensions',
+        match: { column: 'name', value: 'plg_system_sef' },
+        set: {},
+        blank: { column: 'params', keys: ['domain'] },
+      },
+    ],
     suspectColumns: 'empty',
   })
 }

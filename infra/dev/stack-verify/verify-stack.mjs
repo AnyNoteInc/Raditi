@@ -1,5 +1,5 @@
 // The stand of the site stacks (docs/plan/62-site-stacks.md, Т66, §5.5; docs/plan/62-slices/e3.md,
-// Э3.10): a real release of each CMS of STACK_STANDS installed on a synthetic production — the image
+// Э3.10, Э3.11): a real release of each CMS of STACK_STANDS installed on a synthetic production — the image
 // `site` of its PHP, its database inside — behind an SFTP hosting, and the real platform around it:
 // web, core, llm, mcp and preview of the builds of a private copy of this tree, Gitea with its
 // runner, OpenBao, PostgreSQL, Redis, S3 and the real OpenCode CLI on a scripted synthetic Z.ai. The
@@ -93,6 +93,7 @@ import {
 import { GITLEAKS_VERSION } from '../site-import-verify/stand.mjs'
 import { fetchCmsArchive } from './fetch-cms.mjs'
 import { runImportGroup } from './scenarios-import.mjs'
+import { runPreviewGroup } from './scenarios-preview.mjs'
 import { addProvisioner, startBuildHosting, startProduction } from './services.mjs'
 import { STACK_STANDS } from './stacks.mjs'
 import {
@@ -407,7 +408,7 @@ async function main(options, owned) {
   const { socket, gitleaks } = await preflight(options)
   if (options.unwritten.length > 0)
     console.log(
-      `NOTE the groups ${options.unwritten.join(', ')} are not written yet and do not run (docs/plan/62-slices/e3.md, Э3.11, Э3.12)`,
+      `NOTE the groups ${options.unwritten.join(', ')} are not written yet and do not run (docs/plan/62-slices/e3.md, Э3.12)`,
     )
 
   // The trees of the chosen builds: downloaded once and checked by their sums, never run here.
@@ -641,12 +642,19 @@ async function main(options, owned) {
     webUrl,
     processes,
     directory,
+    ports,
+    model: owned.model,
+    siteImages,
+    certificates,
     caFile: certificates.caFile,
     siteIds: [],
   }
   owned.siteIds = ctx.siteIds
   const importing = runs.filter((run) => run.groups.includes('import'))
   if (importing.length > 0) await runImportGroup(rt, ctx, importing)
+  // On the sites `import` made: the group never runs without it (GROUP_NEEDS).
+  const previewing = runs.filter((run) => run.groups.includes('preview'))
+  if (previewing.length > 0) await runPreviewGroup(rt, ctx, previewing)
 
   if (options.keep) {
     console.log(`KEEP the stand is up: web ${webUrl}; Ctrl-C cleans it up`)

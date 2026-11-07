@@ -9,7 +9,11 @@ import {
   JOOMLA_CONFIG_CANARIES,
   JOOMLA_INSTALLATION_MARKER,
   JOOMLA_SEED,
+  JOOMLA_SEF_KEPT,
+  JOOMLA_SEF_OF_COPY,
+  JOOMLA_SEF_SQL,
   joomlaIndexerArgv,
+  joomlaStand,
   joomlaSeedSql,
   withProperty,
 } from './joomla.mjs'
@@ -130,10 +134,17 @@ test('the install of 3.10 loads the schema and writes a configuration with the m
   )
   calls.length = 0
   await installJoomla(production, j3, { productionOrigin: 'https://prod.example.ru' })
-  assert.deepEqual(
-    calls.filter((call) => call.sql).map((call) => call.sql),
-    ['CREATE TABLE `jos_users` (id int);\n'],
+  const statements = calls.filter((call) => call.sql).map((call) => call.sql)
+  assert.equal(statements.length, 2)
+  assert.equal(statements[0], 'CREATE TABLE `jos_users` (id int);\n')
+  // The SEF plugin names the production in its canonical links (Э3.11): 3.10 has empty params.
+  assert.match(statements[1], /^UPDATE `jos_extensions` SET params = IF\(JSON_VALID\(params\)/)
+  assert.ok(
+    statements[1].includes(
+      `JSON_OBJECT('domain', 'https://prod.example.ru', 'raditiStandKept', '${JOOMLA_SEF_KEPT}')`,
+    ),
   )
+  assert.ok(statements[1].endsWith("WHERE name = 'plg_system_sef';\n"))
   const written = calls.find((call) => call.input !== undefined)
   assert.deepEqual(written.argv, ['sh', '-c', 'cat > /var/www/html/configuration.php'])
   assert.match(written.input, /public \$password = 'StandPassword123';/)
@@ -182,8 +193,16 @@ test('the install of 4.3 and later is the installer of the command line, run as 
       },
     }
     await installJoomla(production, build, { productionOrigin: 'https://prod.example.ru' })
-    // No schema by hand: the installer makes the tables.
-    assert.equal(calls.filter((call) => call.sql).length, 0, build.version)
+    // No schema by hand: the installer makes the tables; SQL only names the production in the
+    // canonical links of the SEF plugin.
+    const statements = calls.filter((call) => call.sql).map((call) => call.sql)
+    assert.equal(statements.length, 1, build.version)
+    assert.ok(
+      statements[0].includes(
+        `JSON_SET(params, '$.domain', 'https://prod.example.ru', '$.raditiStandKept', '${JOOMLA_SEF_KEPT}')`,
+      ),
+      build.version,
+    )
     const install = calls.find((call) => (call.argv[2] ?? '').includes('installation/joomla.php'))
     assert.ok(install, build.version)
     assert.match(
@@ -214,4 +233,45 @@ test('the install of 4.3 and later is the installer of the command line, run as 
 test('the indexer is the script of 3.x and the console of 4.0 and later', () => {
   assert.deepEqual(joomlaIndexerArgv(j3), ['php', '/var/www/html/cli/finder_indexer.php'])
   assert.deepEqual(joomlaIndexerArgv(j6), ['php', '/var/www/html/cli/joomla.php', 'finder:index'])
+})
+
+test('P3 counts the SEF plugin blank only when its one row of valid JSON kept its other settings', async () => {
+  // A copy as it should be, then the plugin's row gone, its JSON broken and its settings wiped.
+  const answers = {
+    [JOOMLA_SEF_OF_COPY]: true,
+    '0|x|NULL|NULL': false,
+    '1|0|NULL|NULL': false,
+    '1|1||NULL': false,
+    [`1|1|https://prod.example.ru|${JOOMLA_SEF_KEPT}`]: false,
+    [`2|2||${JOOMLA_SEF_KEPT}`]: false,
+  }
+  for (const [row, ok] of Object.entries(answers)) {
+    const sql = async (query) =>
+      query === JOOMLA_SEF_SQL
+        ? `${row}\n`
+        : query.startsWith('SELECT email')
+          ? 'user1900@preview.invalid\n'
+          : query.includes(`id = ${JOOMLA_SEED.articleId}`)
+            ? '1\n'
+            : '0\n'
+    const checks = await joomlaStand.copyChecks(sql)
+    assert.equal(checks.length, 6, row)
+    const sef = checks.at(-1)
+    assert.match(sef.name, /SEF plugin/)
+    assert.equal(sef.ok, ok, row)
+    assert.ok(
+      checks.slice(0, -1).every((check) => check.ok),
+      row,
+    )
+  }
+})
+
+test('P5 marks the panel by what only the panel has, and counts a refused password as failed', () => {
+  // `#header` of Atum is on its page of sign-in too (atum/login.php of 4.4.14, 5.4.10, 6.2.0).
+  for (const build of JOOMLA_BUILDS) {
+    const sign = joomlaStand.signIn(build)
+    assert.equal(sign.signedIn, build.generation === 'j3' ? 'header.header' : '#sidebarmenu')
+    assert.notEqual(sign.signedIn, '#header')
+    assert.ok(sign.lostCookie.includes('Username and password do not match'))
+  }
 })

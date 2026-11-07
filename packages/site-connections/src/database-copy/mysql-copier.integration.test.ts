@@ -846,6 +846,46 @@ describe.skipIf(!enabled)('the MySQL copier against MariaDB', () => {
     })
   }, 120_000)
 
+  it('blanks a key of one row an override names, and adds no row when the source has none (Э3.11)', async () => {
+    await withTables(
+      ['wp_acme_ext'],
+      `CREATE TABLE wp_acme_ext (id int NOT NULL, name varchar(64) NOT NULL, params text,
+         PRIMARY KEY (id)) DEFAULT CHARSET=utf8mb4;
+       INSERT INTO wp_acme_ext VALUES
+         (1, 'plg_sef', '{"domain":"https://prod-domain.example.ru","indexphp":"1"}'),
+         (2, 'plg_other', '{"domain":"kept-domain.example.ru"}');`,
+      async () => {
+        const blank = (value: string) => ({
+          table: 'acme_ext',
+          match: { column: 'name', value },
+          set: {},
+          blank: { column: 'params', keys: ['domain'] },
+        })
+        const tables = [{ table: 'acme_ext', where: [] }]
+        const { seed } = await copy(source, {
+          ...termsOnly,
+          tables,
+          overrides: [blank('plg_sef'), blank('plg_absent')],
+        })
+        const text = seed.toString('utf8')
+        expect(text).not.toContain('prod-domain.example.ru')
+        // The seed escapes the quotes of a text literal.
+        expect(text).toContain(String.raw`(1,'plg_sef','{\"domain\":\"\",\"indexphp\":\"1\"}')`)
+        // Another row keeps its key; a row the source lacks is not added.
+        expect(text).toContain('kept-domain.example.ru')
+        expect(text).not.toContain('plg_absent')
+        // The column must be there: an override of a missing one stops the copy.
+        await expect(
+          copy(source, {
+            ...termsOnly,
+            tables,
+            overrides: [{ ...blank('plg_sef'), blank: { column: 'no_such', keys: ['domain'] } }],
+          }),
+        ).rejects.toEqual(new DatabaseCopyError('structure_unsupported'))
+      },
+    )
+  }, 120_000)
+
   it('copies an unnamed column with the name of people empty, and the seed loads', async () => {
     await withTables(
       ['wp_acme_contacts'],

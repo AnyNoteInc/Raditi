@@ -292,17 +292,39 @@ export const databaseCopyPolicySchema = z.strictObject({
   suspectColumns: z.literal('empty').optional(),
   /**
    * Rows of the copy the stack sets itself, e.g. the platform plugin's own state: the copied row
-   * that matches gets `set`, and without one a row of `match` and `set` is added; null in `set`
-   * — the copy holds no such row.
+   * that matches gets `set`, and without one a row of `match` and `set` is added when `set` names
+   * a column; null in `set` — the copy holds no such row.
    */
   overrides: z
     .array(
-      z.strictObject({
-        table: identifier,
-        match: z.strictObject({ column: identifier, value: z.string().max(256) }),
-        /** null in `set` deletes the matched rows instead of changing them. */
-        set: z.record(identifier, z.union([z.string().max(1024), z.number()])).nullable(),
-      }),
+      z
+        .strictObject({
+          table: identifier,
+          match: z.strictObject({ column: identifier, value: z.string().max(256) }),
+          /** null in `set` deletes the matched rows instead of changing them. */
+          set: z.record(identifier, z.union([z.string().max(1024), z.number()])).nullable(),
+          /**
+           * The string under each of `keys` (exact names) in the value of `column` of a matched
+           * row, in JSON or PHP's serialization, at any depth, is blanked, and the column's own
+           * treatment applies to what is left: a setting of an extension that names production (docs/plan/62-slices/e3.md,
+           * Э3.11). It adds no row and deletes none.
+           */
+          blank: z
+            .strictObject({
+              column: identifier,
+              keys: z
+                .array(z.string().regex(/^[A-Za-z0-9_.-]{1,64}$/))
+                .min(1)
+                .max(8),
+            })
+            .optional(),
+        })
+        .refine(
+          (override) =>
+            override.blank === undefined ||
+            (override.set !== null && !Object.hasOwn(override.set, override.blank.column)),
+          'an override blanks keys of a column it neither sets nor deletes',
+        ),
     )
     .max(32),
 })

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { scrubNestedSecrets } from './nested-secrets.ts'
+import { blankNestedKeys, scrubNestedSecrets } from './nested-secrets.ts'
 
 // Secrets inside copied values (plan 53, Р14, Р15): the string under a secret key of a serialized
 // or JSON value is blanked, at any depth; nothing else of the value changes.
@@ -112,5 +112,21 @@ describe('secrets nested in copied values', () => {
   it('stops following a value deeper than it reads', () => {
     const deep = `${'a:1:{i:0;'.repeat(80)}${s('x')}${'}'.repeat(80)}`
     expect(scrub(deep)).toBe(deep)
+  })
+})
+
+describe('keys an override names (Э3.11)', () => {
+  const blank = (text: string, keys: string[]) =>
+    blankNestedKeys(Buffer.from(text, 'utf8'), keys).toString('utf8')
+
+  it('blanks the string under an exact name, in JSON and in PHP serialization, and no other', () => {
+    expect(blank('{"domain":"http:\\/\\/prod.example.ru","api_key":"k"}', ['domain'])).toBe(
+      '{"domain":"","api_key":"k"}',
+    )
+    expect(blank('{"Domain":"a","domains":"b","x":{"domain":"c"}}', ['domain'])).toBe(
+      '{"Domain":"a","domains":"b","x":{"domain":""}}',
+    )
+    expect(blank('a:1:{s:6:"domain";s:4:"prod";}', ['domain'])).toBe('a:1:{s:6:"domain";s:0:"";}')
+    expect(blank('plain domain text', ['domain'])).toBe('plain domain text')
   })
 })

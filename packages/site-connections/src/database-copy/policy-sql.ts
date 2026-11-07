@@ -87,13 +87,14 @@ export function rowFilter(
   return clause(rule)
 }
 
-/** The columns the overrides of `table` set or match: the platform's own state in the copy. */
+/** The columns the overrides of `table` set, match or blank keys of: the stack's own state in the copy. */
 export function overrideColumns(policy: DatabaseCopyPolicy, table: string): string[] {
   const named = new Set<string>()
   for (const override of policy.overrides)
     if (override.table === table) {
       named.add(override.match.column)
       for (const column of Object.keys(override.set ?? {})) named.add(column)
+      if (override.blank) named.add(override.blank.column)
     }
   return [...named]
 }

@@ -28,7 +28,7 @@ import {
 } from '@repo/domain'
 import { createConnection, type Connection, type FieldPacket } from 'mysql2'
 
-import { scrubNestedSecrets } from './nested-secrets.ts'
+import { blankNestedKeys, scrubNestedSecrets } from './nested-secrets.ts'
 import {
   assertCopyPolicy,
   namedColumns,
@@ -713,9 +713,11 @@ async function copyTables(
       structureOnly += 1
       if (emptied.has(table)) leftOutTables += 1
     }
-    // An override without a copied row adds one.
+    // An override without a copied row adds one, when it sets a column: one that only blanks
+    // keys of a row (`blank`) has nothing to add.
     for (const [index, override] of overrides.entries()) {
-      if (seen.has(index) || override.set === null) continue
+      if (seen.has(index) || override.set === null || Object.keys(override.set).length === 0)
+        continue
       const columns = [override.match.column, ...Object.keys(override.set)]
       const values = [override.match.value, ...Object.values(override.set)].map(setLiteral)
       await writer.raw(insertStatement(name, columns, [tuple(values)]))
@@ -919,7 +921,8 @@ export class TableRows {
       // A column the policy names is in the table; a generated one cannot be matched or set.
       if (
         column < 0 ||
-        Object.keys(override.set ?? {}).some((name) => !this.columns.includes(name))
+        Object.keys(override.set ?? {}).some((name) => !this.columns.includes(name)) ||
+        (override.blank !== undefined && !this.columns.includes(override.blank.column))
       )
         throw new DatabaseCopyError('structure_unsupported')
       return { index, column, value: Buffer.from(override.match.value, 'utf8') }
@@ -936,21 +939,30 @@ export class TableRows {
     const size = row.reduce((sum, value) => sum + (value?.byteLength ?? 0), 0)
     if (size > databaseCopyLimits.rowBytes) throw new DatabaseCopyError('too_large')
     let set: Override['set'] | undefined
+    const blanks = new Map<string, string[]>()
     for (const match of this.matches) {
       const value = row[match.column]
       if (value && value.equals(match.value)) {
         this.seen.add(match.index)
-        set = this.overrides[match.index]?.set
+        const override = this.overrides[match.index]
+        set = override?.set
         if (set === null) return null
+        if (override?.blank)
+          blanks.set(override.blank.column, [
+            ...(blanks.get(override.blank.column) ?? []),
+            ...override.blank.keys,
+          ])
       }
     }
     const id = this.idIndex >= 0 ? (row[this.idIndex]?.toString('latin1') ?? '') : ''
     if (this.idIndex >= 0 && !/^\d{1,20}$/.test(id))
       throw new DatabaseCopyError('structure_unsupported')
     return tuple(
-      row.map((value, index) => {
+      row.map((given, index) => {
         const column = this.columns[index]!
         if (set && Object.hasOwn(set, column)) return setLiteral(set[column]!)
+        const keys = blanks.get(column)
+        const value = keys && given !== null ? blankNestedKeys(given, keys) : given
         switch (this.treatments[index]) {
           case 'empty':
             return EMPTY_LITERAL

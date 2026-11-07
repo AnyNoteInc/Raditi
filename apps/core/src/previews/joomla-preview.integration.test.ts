@@ -1,4 +1,6 @@
 import { randomBytes } from 'node:crypto'
+import { readdir } from 'node:fs/promises'
+import { join } from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 
 import { joomlaAdapter } from '@repo/site-adapters'
@@ -22,6 +24,17 @@ import {
 // and the host rules of infra/preview/README.md; runs with RADITI_PREVIEW_DOCKER_TESTS=1 and
 // RADITI_CMS_DIR, the absolute folder of the archives. A build whose tree is not there fails: a skip
 // would hide a download that was forgotten. Only synthetic data.
+
+/** The canonical links of a page, whatever the order of `rel` and `href` in the tag. */
+function canonicalLinks(html: string): string[] {
+  const links: string[] = []
+  for (const [tag] of html.matchAll(/<link\b[^>]*>/gi)) {
+    if (!/\brel\s*=\s*["']?canonical\b/i.test(tag)) continue
+    const href = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(tag)
+    if (href) links.push((href[1] ?? href[2] ?? '').replaceAll('&amp;', '&'))
+  }
+  return links
+}
 
 const enabled =
   process.env.RADITI_PREVIEW_DOCKER_TESTS === '1' && Boolean(process.env.RADITI_CMS_DIR)
@@ -54,6 +67,9 @@ const stand = z
     JOOMLA_INSTALLATION_MARKER: z.string(),
     JOOMLA_CANARIES: z.array(z.string()),
     JOOMLA_CONFIG_CANARIES: z.object({ smtppass: z.string(), secret: z.string() }),
+    JOOMLA_SEF_SQL: z.string(),
+    JOOMLA_SEF_OF_COPY: z.string(),
+    JOOMLA_SEF_KEPT: z.string(),
     installJoomla:
       fn<
         (
@@ -172,24 +188,67 @@ describe.skipIf(!enabled).each(stand.JOOMLA_BUILDS)('Joomla $version as a previe
     // and the feed writes the relative image of the intro with it (_relToAbs of DocumentRenderer),
     // HTML-escaped in `<summary>` — the link that would name production (docs/plan/62-site-stacks.md,
     // §10, Э3.9). Case 5 checks `$live_site` of the running configuration itself.
-    const production = new URL(productionOrigin)
+    const named = new URL(productionOrigin)
     const feed = '/?format=feed&type=atom'
     for (const path of ['/', seed.articlePath, feed]) {
       const { page, hops } = await followed(preview, path)
       expect(page.status, hops.join(' → ')).toBe(200)
-      expect(page.body, path).not.toContain(production.hostname)
+      expect(page.body, path).not.toContain(named.hostname)
       const absolute = [...page.body.matchAll(/\b(?:href|src|action)="((?:https?:)?\/\/[^"]+)"/g)]
         .map(([, link]) => new URL(link!.replaceAll('&amp;', '&'), `${preview.origin}/`))
         // Links to joomla.org and other sites of the template are not addresses of the site.
-        .filter(
-          (link) => link.hostname.endsWith('.localhost') || link.hostname === production.hostname,
-        )
+        .filter((link) => link.hostname.endsWith('.localhost') || link.hostname === named.hostname)
       if (path === feed || build.absolutePageLinks) expect(absolute.length, path).toBeGreaterThan(0)
       // The scheme, the name and the port of the gateway: a link without the port is broken.
       for (const link of absolute) expect(link.origin, link.href).toBe(preview.origin)
       if (path === feed)
         expect(page.body, path).toContain(`src=&quot;${preview.origin}/${seed.introImage}&quot;`)
+      // The SEF plugin of production names it in `<link rel="canonical">` (installJoomla): the
+      // copy blanks that address, and a canonical link left is the preview's (Э3.11).
+      for (const link of canonicalLinks(page.body))
+        expect(new URL(link, `${preview.origin}/`).origin, path).toBe(preview.origin)
     }
+    // The control: the page of production has the canonical link on its own name, and the same
+    // reading finds it — Joomla writes `href` before `rel`.
+    const ofProduction = await production!.exec([
+      'php',
+      '-r',
+      `echo file_get_contents('http://127.0.0.1${seed.articlePath}');`,
+    ])
+    expect(ofProduction).toContain(seed.articleFullText)
+    expect(canonicalLinks(ofProduction).map((link) => new URL(link).origin)).toEqual([
+      productionOrigin,
+    ])
+    // One row of the plugin in the copy, its JSON valid, the address blank, its other settings kept.
+    expect((await production!.sql(stand.JOOMLA_SEF_SQL)).trim()).toBe(
+      `1|1|${productionOrigin}|${stand.JOOMLA_SEF_KEPT}`,
+    )
+    expect((await preview.rootSql(stand.JOOMLA_SEF_SQL)).trim()).toBe(stand.JOOMLA_SEF_OF_COPY)
+  })
+
+  it('takes the schema updates and the bundles of CA of the release the lists of dumps and keys would cut', async () => {
+    // Every such file of the archive (docs/plan/62-slices/e3.md, Э3.11, discrepancy 24).
+    const tree = stackTreeOf(build)
+    const updates = 'administrator/components/com_admin/sql/updates'
+    const release = (await readdir(tree, { recursive: true, withFileTypes: true }))
+      .filter((entry) => entry.isFile())
+      .map((entry) => join(entry.parentPath, entry.name).slice(tree.length + 1))
+    const core = release.filter(
+      (path) =>
+        (path.startsWith(`${updates}/`) && path.endsWith('.sql')) || path.endsWith('/cacert.pem'),
+    )
+    expect(core.filter((path) => path.endsWith('/cacert.pem')).length).toBeGreaterThan(0)
+    expect(core.filter((path) => path.endsWith('.sql')).length).toBeGreaterThan(20)
+    for (const path of core) expect(preview.treePaths, path).toContain(path)
+    // Where the preview's PHP finds them: the transports of the core read the bundle.
+    for (const path of core.filter((file) => file.endsWith('/cacert.pem'))) {
+      const found = await preview.exec(['test', '-s', `/var/www/html/${path}`])
+      expect(found.code, path).toBe(0)
+    }
+    // The control: the SQL of the installer and of extensions still stays out.
+    const other = release.filter((path) => path.endsWith('.sql') && !core.includes(path))
+    expect(other.length).toBeGreaterThan(0)
+    for (const path of other) expect(preview.treePaths, path).not.toContain(path)
   })
 
   it('without the files of the platform is dead, with them alive again', async () => {

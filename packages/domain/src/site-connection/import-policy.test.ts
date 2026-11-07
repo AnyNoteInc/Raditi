@@ -475,6 +475,69 @@ describe('createImportPathPolicy', () => {
     })
   })
 
+  describe('files of the release (`coreFiles`, Э3.11)', () => {
+    const exclude = ['*.sql', '*.pem', 'old/', '/configuration*']
+    const core = ['/admin/sql/updates/mysql/*.sql', '/lib/res/cacert.pem']
+    const policy = createImportPathPolicy(exclude, [], undefined, core)
+
+    it.each(['admin/sql/updates/mysql/4.0.0-2018-03-05.sql', 'lib/res/cacert.pem'])(
+      'takes %s, which the exclude lines leave out',
+      (path) => {
+        expect(createImportPathPolicy(exclude).decide(path, 'file')).toBe('excluded')
+        expect(policy.decide(path, 'file')).toBe('take')
+      },
+    )
+
+    it.each([
+      // Another folder, another depth, another name or another letter case.
+      'admin/sql/updates/postgresql/4.0.0.sql',
+      'admin/sql/updates/mysql/x/4.0.0.sql',
+      'x/admin/sql/updates/mysql/4.0.0.sql',
+      'admin/sql/dump.sql',
+      'admin/sql/updates/mysql/4.0.0.sql.gz',
+      'admin/sql/updates/mysql/4.0.0.SQL',
+      'Admin/sql/updates/mysql/4.0.0.sql',
+      'lib/res/cacert.pem.bak',
+      'lib/res/server.pem',
+      'lib/cacert.pem',
+      'lib/res/x/cacert.pem',
+    ])('decides %s as without the field', (path) => {
+      expect(policy.decide(path, 'file')).toBe(createImportPathPolicy(exclude).decide(path, 'file'))
+    })
+
+    it('judges files only, and never takes past version control and CI', () => {
+      expect(
+        createImportPathPolicy(['cacert.pem/'], [], undefined, ['/cacert.pem']).decide(
+          'cacert.pem',
+          'directory',
+        ),
+      ).toBe('excluded')
+      expect(createImportPathPolicy([], [], undefined, ['/.git/x']).decide('.git/x', 'file')).toBe(
+        'vcs',
+      )
+      expect(
+        createImportPathPolicy([], [], undefined, ['/.gitmodules']).decide('.gitmodules', 'file'),
+      ).toBe('ci')
+    })
+
+    it('builds the policy of an adapter with the files of its rules', () => {
+      const rules = { exclude, documentFolders: [], coreFiles: core }
+      expect(importPolicyOf(rules).decide('lib/res/cacert.pem', 'file')).toBe('take')
+      expect(
+        importPolicyOf({ exclude, documentFolders: [] }).decide('lib/res/cacert.pem', 'file'),
+      ).toBe('excluded')
+    })
+
+    it.each(['admin/x.sql', '/admin/', '/admin/*/x.sql', '/**/x.sql', '/a/[x].sql', '/a/../x.sql'])(
+      'refuses the line %s at construction',
+      (line) => {
+        expect(() => createImportPathPolicy([], [], undefined, [line])).toThrow(
+          /^Unsupported import core file: /,
+        )
+      },
+    )
+  })
+
   describe('lines outside the supported subset', () => {
     it.each([
       '**/cache',

@@ -77,6 +77,15 @@ export interface ImportRules {
   documentFolders: string[]
   /** Absent — none: a stack whose configuration has no name of its own to look for. */
   configCopies?: ImportConfigCopies
+  /**
+   * Files of the stack's own release that the lines above would leave out, taken all the same:
+   * the SQL of its schema updates, the bundles of CA its HTTP client loads with no other way
+   * (docs/plan/62-slices/e3.md, Э3.11). Lines of the subset of `exclude`, from the root
+   * (`/a/b/*.sql`): each matches files only, the whole path, letter case and all, `*` in the last
+   * segment alone. Such a file is still scanned for secrets; one below a folder the lines leave out
+   * stays out — the walk never enters it. Absent — none.
+   */
+  coreFiles?: string[]
 }
 
 export interface VerifyPlan {

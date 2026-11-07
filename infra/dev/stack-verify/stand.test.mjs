@@ -9,6 +9,7 @@ import { test } from 'node:test'
 import { BUILT_IMAGES, standNames } from '../release-verify/stand.mjs'
 import { CMS_ARCHIVES } from './fetch-cms.mjs'
 import {
+  GROUP_NEEDS,
   STACK_BUILT_IMAGES,
   STACK_LABEL,
   STAND_FIELDS,
@@ -21,8 +22,15 @@ import {
   siteImageTag,
   stackCoreEnvironment,
   stackNames,
+  browserTurn,
+  canonicalLinks,
+  navigationStatus,
+  pageProblems,
+  refusalCode,
   standOptions,
   standProblems,
+  toolCallsOf,
+  uuid7,
 } from './stand.mjs'
 import { STACK_STANDS } from './stacks.mjs'
 
@@ -41,8 +49,8 @@ test('the options take the stacks, the builds, the groups and the runtime only',
     all.runs.map(({ build }) => build.archive),
     Object.values(STACK_STANDS).flatMap((stand) => stand.builds.map((build) => build.archive)),
   )
-  for (const entry of all.runs) assert.deepEqual(entry.groups, ['import'])
-  assert.deepEqual(all.unwritten, ['preview', 'release'])
+  for (const entry of all.runs) assert.deepEqual(entry.groups, ['import', 'preview'])
+  assert.deepEqual(all.unwritten, ['release'])
 
   const named = standOptions([
     '--',
@@ -80,7 +88,22 @@ test('the options refuse a stack, a build, a group or a runtime the stand does n
   for (const arg of ['--database=postgres://x', '--url=https://example.ru', '--key=x', 'joomla'])
     assert.throws(() => standOptions([arg]), /it takes no database, address or key/)
   // A group not written yet would pass empty: it is refused.
-  assert.throws(() => standOptions(['--group=preview']), /the group preview are not written yet/)
+  assert.throws(() => standOptions(['--group=release']), /the group release are not written yet/)
+})
+
+test('a named group brings the group it runs on the results of', () => {
+  // `preview` opens the site `import` made: it never runs without it (Э3.11).
+  const preview = standOptions(['--group=preview', '--build=joomla-4.4.14'])
+  assert.deepEqual(
+    preview.runs.map(({ build, groups }) => [build.archive, groups]),
+    [['joomla-4.4.14', ['import', 'preview']]],
+  )
+  assert.deepEqual(GROUP_NEEDS.preview, ['import'])
+  assert.deepEqual(standOptions(['--group=import']).runs[0].groups, ['import'])
+  assert.deepEqual(standOptions(['--group=import', '--group=preview']).runs[0].groups, [
+    'import',
+    'preview',
+  ])
 })
 
 test('a named build of another stack, or a group no chosen build runs, is refused', () => {
@@ -120,7 +143,7 @@ test('a named build of another stack, or a group no chosen build runs, is refuse
   )
   assert.deepEqual(
     standOptions([], { stands: { joomla: walking }, supports: { joomla: open } }).unwritten,
-    ['preview', 'release', 'browser'],
+    ['release', 'browser'],
   )
 })
 
@@ -194,6 +217,21 @@ test('every record of a stack has every field, and its builds are rows of the ta
     'scannerFinds: not a function',
   ])
   assert.deepEqual(standProblems({ ...joomla, scannerFinds: undefined }), [])
+  // P4 and P5 read the paths of the agent's browser and the sign-in to the panel of each build.
+  assert.deepEqual(standProblems({ ...joomla, browserPaths: { closed: [], open: '/x' } }), [
+    'browserPaths: no closed paths or no open one',
+  ])
+  assert.deepEqual(
+    standProblems({ ...joomla, browserPaths: { closed: ['/administrator/'], open: 'x' } }),
+    ['browserPaths: no closed paths or no open one'],
+  )
+  assert.deepEqual(
+    standProblems({
+      ...joomla,
+      signIn: (build) => ({ ...joomla.signIn(build), lostCookie: null }),
+    }),
+    joomla.builds.map((build) => `${build.archive}: signIn is not whole`),
+  )
   const sample = { archive: 'joomla-6.2.0', php: '8.3', generation: 'j6', version: '6.2.0' }
   assert.deepEqual(standProblems({ ...joomla, builds: [] }), ['no build'])
   assert.deepEqual(standProblems({ ...joomla, builds: [{ ...sample, archive: 'joomla-0.1' }] }), [
@@ -353,9 +391,106 @@ test('the stand builds its copy with the contract of the copies, and takes the r
   assert.match(source, /from '\.\.\/billing-verify\/verify-billing\.mjs'/)
   assert.match(source, /lockCopy/)
   // The stand reads the files of the release stand and writes none of them.
-  for (const file of ['verify-stack.mjs', 'services.mjs', 'scenarios-import.mjs']) {
+  for (const file of [
+    'verify-stack.mjs',
+    'services.mjs',
+    'scenarios-import.mjs',
+    'scenarios-preview.mjs',
+    'frame.mjs',
+  ]) {
     const text = readFileSync(new URL(`./${file}`, import.meta.url), 'utf8')
     assert.doesNotMatch(text, /(?:writeFile|rm|cp)\([^)]*release-verify/)
     assert.doesNotMatch(text, new RegExp(closed, 'i'))
   }
+})
+
+test('a page of a preview is judged by its errors, its links to production and its canonical link', () => {
+  const facts = {
+    productionOrigin: 'http://localhost:18080',
+    previewOrigin: 'http://site-a-chat-b.localhost:18090',
+  }
+  const clean =
+    '<base href="http://site-a-chat-b.localhost:18090/"><link href="/o-kompanii" rel="canonical">' +
+    '<a href="http://localhost:180800/">another port</a><img src="/images/x.png">'
+  assert.deepEqual(pageProblems(clean, facts), [])
+  assert.deepEqual(canonicalLinks(clean), ['/o-kompanii'])
+  assert.deepEqual(pageProblems('<b>Fatal error</b>: x', facts), ['Fatal error'])
+  assert.deepEqual(pageProblems('<b>Warning:</b> Undefined', facts), ['Warning:'])
+  assert.deepEqual(pageProblems('<a href="http://localhost:18080/o-kompanii">x</a>', facts), [
+    'a link to production: http://localhost:18080/o-kompanii',
+  ])
+  // As JSON writes a slash, and in a script's options.
+  assert.equal(
+    pageProblems('<div data-src="http:\\/\\/localhost:18080\\/x"></div>', facts).length,
+    1,
+  )
+  assert.deepEqual(
+    pageProblems('<link rel="canonical" href="http://localhost:18080/o-kompanii">', facts),
+    [
+      'a link to production: http://localhost:18080/o-kompanii',
+      'a canonical link off the preview: http://localhost:18080/o-kompanii',
+    ],
+  )
+  // A host that only ends like the production's is another host.
+  assert.deepEqual(pageProblems('<a href="http://site-x.localhost:18080/">', facts), [])
+})
+
+test('the turn of the browser names its tools only, and its answers are read back by call', () => {
+  const turn = browserTurn({
+    closed: ['/administrator/', '/configuration.php'],
+    open: '/images/x.png',
+  })
+  assert.deepEqual(
+    turn.rounds.map((round) => round.map((call) => [call.name, call.arguments.path])),
+    [
+      [['raditi_browser_navigate', '/']],
+      [['raditi_browser_navigate', '/administrator/']],
+      [['raditi_browser_navigate', '/configuration.php']],
+      [['raditi_browser_navigate', '/images/x.png']],
+    ],
+  )
+  assert.doesNotMatch(JSON.stringify(turn), /wp_rest|bash|content/)
+  assert.equal(JSON.parse(turn.text).change_type, 'none')
+  const body = {
+    messages: [
+      { role: 'user', content: 'x' },
+      {
+        role: 'assistant',
+        tool_calls: [
+          { id: 'a', function: { name: 'raditi_browser_navigate', arguments: '{"path":"/"}' } },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'a', content: '{"path":"/","title":"x","status":200}' },
+      {
+        role: 'assistant',
+        tool_calls: [
+          {
+            id: 'b',
+            function: { name: 'raditi_browser_navigate', arguments: '{"path":"/administrator/"}' },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'b',
+        content: [{ type: 'text', text: '{"code":"BROWSER_PATH_DENIED"}' }],
+      },
+    ],
+  }
+  const calls = toolCallsOf(body)
+  assert.deepEqual(
+    calls.map((call) => [call.args.path, refusalCode(call.result), navigationStatus(call.result)]),
+    [
+      ['/', null, 200],
+      ['/administrator/', 'BROWSER_PATH_DENIED', null],
+    ],
+  )
+  assert.equal(refusalCode('{\\"code\\":\\"BROWSER_PATH_DENIED\\"}'), 'BROWSER_PATH_DENIED')
+  assert.deepEqual(toolCallsOf(null), [])
+})
+
+test('the id of a chat is a UUID of version 7', () => {
+  const id = uuid7(Date.UTC(2026, 10, 7), Buffer.alloc(16, 0xff))
+  assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+  assert.notEqual(uuid7(), uuid7())
 })

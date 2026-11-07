@@ -101,6 +101,68 @@ describe('the MySQL copier before the first row', () => {
   })
 })
 
+describe('an override that blanks keys of a matched row (Э3.11)', () => {
+  const info: TableInfo = {
+    columns: ['extension_id', 'name', 'params'].map((name) => ({
+      name,
+      type: name === 'extension_id' ? 'int' : 'varchar',
+      generated: false,
+      nullable: false,
+      unique: name === 'extension_id',
+      checked: false,
+    })),
+    primaryKey: ['extension_id'],
+  }
+  const fields = [
+    { columnType: 0x03 },
+    { columnType: 0xfd, characterSet: 45 },
+    { columnType: 0xfd, characterSet: 45 },
+  ] as FieldPacket[]
+  const sef = {
+    table: 'extensions',
+    match: { column: 'name', value: 'plg_system_sef' },
+    set: {},
+    blank: { column: 'params', keys: ['domain'] },
+  }
+  const tupleOf = (name: string, params: string, treatment?: 'scrub_secrets') => {
+    const rule = {
+      table: 'extensions',
+      where: [],
+      ...(treatment ? { columns: { params: treatment } } : {}),
+    }
+    const rows = new TableRows(rule, [sef], info, new Set(), undefined)
+    rows.fields(fields)
+    return rows.tuple(['10', name, params].map((value) => Buffer.from(value)))!.toString('utf8')
+  }
+  const filled = '{"domain":"http:\\/\\/localhost:8080","indexphp":"1","api_key":"k-41c7"}'
+
+  it('blanks the key in the matched row, before the treatment of the column', () => {
+    const text = tupleOf('plg_system_sef', filled, 'scrub_secrets')
+    expect(text).not.toContain('localhost:8080')
+    expect(text).not.toContain('k-41c7')
+    expect(text).toContain('indexphp')
+    expect(tupleOf('plg_system_sef', filled)).not.toContain('localhost:8080')
+    expect(tupleOf('plg_system_sef', filled)).toContain('k-41c7')
+  })
+
+  it('leaves the key of another row as it is', () => {
+    expect(tupleOf('plg_system_other', filled)).toContain('localhost:8080')
+  })
+
+  it('refuses a column the table lacks', () => {
+    expect(
+      () =>
+        new TableRows(
+          { table: 'extensions', where: [] },
+          [{ ...sef, blank: { column: 'no_such', keys: ['domain'] } }],
+          info,
+          new Set(),
+          undefined,
+        ),
+    ).toThrow()
+  })
+})
+
 describe('the second line of unnamed columns', () => {
   const column = (name: string, type: string, rest: Partial<Column> = {}): Column => ({
     name,

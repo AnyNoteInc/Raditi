@@ -3,6 +3,7 @@
 ```sh
 pnpm verify:stack                                  # все стеки, все их сборки, все написанные группы
 pnpm verify:stack -- --group=import                # только группа import
+pnpm verify:stack -- --group=preview               # import и preview: preview идёт на сайте import
 pnpm verify:stack -- --build=joomla-5.4.10 --keep  # одна сборка, стенд остаётся поднятым до Ctrl-C
 pnpm verify:stack -- --no-build                    # сборки копии и образы прошлого прогона; отказ, если дерево изменилось
 ```
@@ -17,7 +18,7 @@ pnpm verify:stack -- --no-build                    # сборки копии и 
 | --- | --- |
 | `--stack=<стек>` | Стек из `STACK_STANDS`, повторяется. По умолчанию — все. |
 | `--build=<id>` | Строка `cms-archives.json` (как у `fetch-cms.mjs`), повторяется. Сборка не выбранного стека — отказ. |
-| `--group=<группа>` | Повторяется. Группа, которая не идёт ни на одной выбранной сборке, — отказ: иначе она прошла бы пусто. Группа, чьи сценарии ещё не написаны (`preview` — Э3.11, `release` — Э3.12, `browser`, `safety`, `safety-browser` — Э8 и Э11), — тоже отказ; без `--group` такие группы не идут, стенд пишет о них строку `NOTE`. |
+| `--group=<группа>` | Повторяется. Группа, которая не идёт ни на одной выбранной сборке, — отказ: иначе она прошла бы пусто. Группа, чьи сценарии ещё не написаны (`release` — Э3.12, `browser`, `safety`, `safety-browser` — Э8 и Э11), — тоже отказ; без `--group` такие группы не идут, стенд пишет о них строку `NOTE`. Группа приводит с собой ту, на чьих итогах идёт (`GROUP_NEEDS`): `--group=preview` включает `import`. |
 | `--no-build` | Сборки копии и образы прошлого прогона; отказ, если дерево изменилось после них. |
 | `--keep` | Стенд остаётся поднятым после сценариев (и после провала) до Ctrl-C. |
 | `--runtime=runc\|runsc` | Среда ходов и предпросмотров `core`; по умолчанию `runc`. До Э3.13 опция до `core` не доходит (окружение ролей стенда выпуска — `runc`), поэтому `runsc` — отказ в проверке перед запуском: иначе прогон шёл бы под `runc` и выглядел доказательством. |
@@ -26,7 +27,7 @@ pnpm verify:stack -- --no-build                    # сборки копии и 
 
 ## Что нужно на машине
 
-- macOS с Docker Desktop (хранилище образов containerd: digest локальной сборки даёт только оно), `git`, `rsync`, `openssl`, `pnpm`, Gitleaks 8.30.1 (`P2_GITLEAKS_BINARY` или `PATH`), Chromium Playwright этого дерева (`pnpm --filter e2e exec playwright install chromium`; с группой `preview` — ещё `webkit`).
+- macOS с Docker Desktop (хранилище образов containerd: digest локальной сборки даёт только оно), `git`, `rsync`, `openssl`, `pnpm`, Gitleaks 8.30.1 (`P2_GITLEAKS_BINARY` или `PATH`), Chromium и WebKit Playwright этого дерева (`pnpm --filter e2e exec playwright install chromium webkit`; WebKit нужен группе `preview`).
 - Закреплённые образы — стенд их не скачивает (`--pull never`): те же, что у `verify:release` (`postgres`, `redis`, `chrislusf/seaweedfs:4.47`, `ghcr.io/openbao/openbao:2.7.0`, `gitea/gitea:1.27.3-rootless`, `gitea/runner:4.0.0`, `linuxserver/openssh-server` по digest, `mariadb:11.4.13` — команды `docker pull` в [README стенда выпуска](../release-verify/README.md)), и основы `php@sha256:…` строк `infra/preview/site-bases.json` для версий PHP выбранных сборок (`docker pull <image>` строки).
 - Архивы CMS стенд берёт сам: `fetchCmsArchive` для выбранных сборок в `RADITI_CMS_DIR` (без переменной — `$TMPDIR/raditi-cms`), сверка по сумме строки; повтор ничего не скачивает. Скачанное дерево только копируется в том «прода» и исполняется внутри его контейнера.
 - Mac не должен засыпать: `caffeinate -i -s pnpm verify:stack`.
@@ -57,6 +58,21 @@ pnpm verify:stack -- --no-build                    # сборки копии и 
 I5 идёт перед I4: отказ не пишет сайта, и I4 берёт тот же адрес `http://127.0.0.1:<порт прода первой сборки>` (`project.create` отвергает повтор адреса у одного владельца). I3 идёт после них: пароль хостинга проходит и через проверки SFTP веток отказа.
 
 Объекты git ищутся потоком `git cat-file --batch-all-objects --batch` каждого зеркала: хранилище объектов CMS больше 8 МиБ вывода, которые держит помощник `repositoryObjects` стенда импорта. Дампы PostgreSQL и Redis — его помощники `databaseDump` и `redisDump`, без маскирования вывода.
+
+## Группа `preview`
+
+Идёт за `import` на том же сайте каждой сборки и без него не запускается. Диалог открывает владелец (`task.create`); первый ответ сценарной модели держит гейт `waitFor` (`fake-model.mjs`), пока предпросмотр диалога не `ready`, — это предусловие стенда, не проверка. Ход — только `browser_navigate` (`browserTurn`): главная, закрытые пути `browserPaths.closed` записи стека, открытый `browserPaths.open`, затем ответ без изменений.
+
+| Сценарий | Что проверяется |
+| --- | --- |
+| P1 готов | `preview_environments`: `ready`, ревизия 0, основа диалога; `runtime.web` — образ `site` версии PHP сборки; `unavailable_reason` пуст; запись несёт `seedTablesLeftOut` и `seedColumnsEmptied`, на чистой поставке оба 0 |
+| P2 витрина | Вход по билету `preview.ticket` и куке шлюза: главная 200 с `x-raditi-preview: 1`, страница `page(build)` по ЧПУ 200 с её текстом; на обеих нет `Fatal error`, `Warning:`, ссылки на `localhost:<порт прода>` и канонической ссылки не на `origin` предпросмотра (`pageProblems`). Контроль: прод даёт обеим страницам каноническую ссылку на свой адрес (у Joomla — `params.domain` плагина `plg_system_sef`, который ставит установка стенда, а политика копии очищает). На сборках, где сканер снял файлы при импорте (`scannerFinds`), это и есть витрина без них (Т48) |
+| P3 копия | `copyChecks(sql)` записи, строка на проверку, SQL от root сокета предпросмотра (`PREVIEW_ROOT_QUERY`). У Joomla: авторы на `@preview.invalid`; `contact_details` и `user_profiles` пусты; черновика нет, опубликованная статья есть; `plg_system_cache` нет; строка плагина SEF одна, её `params` — валидный JSON, `domain` пуст, а ключ, который установка стенда пишет рядом (`raditiStandKept`), на месте (`JOOMLA_SEF_SQL`) |
+| P4 браузер агента | По телу последнего запроса хода к синтетическому Z.ai: `browser_navigate /` открыл главную (200); каждый путь `browserPaths.closed` (у Joomla `/administrator/`, `/configuration.php`) — отказ `BROWSER_PATH_DENIED`; контроль — `browserPaths.open` (картинка `images/`) открыт (200); ход не упал, диалог `awaiting_user` |
+| P5 кадр (М2к) | Строка на сборку и движок: Chromium и WebKit. Страница кабинета (`frame.mjs`) — ответ самого браузера на адрес `APP_URL` стенда (`http://127.0.0.1:<порт web>`, маршрут Playwright), кадр с `PREVIEW_SANDBOX` и без referrer, вход — настоящий шлюз и билет `preview.ticket`. Контроль межсайтовости: кука из скрипта без атрибутов в кадре не живёт (Chromium запрещает кадру `document.cookie` — тоже «не живёт»), во вкладке того же предпросмотра живёт; иначе строка не считается. Затем вход в панель по `signIn(build)`: стенд ставит автору копии свой случайный пароль и права суперпользователя (`setPassword`, SQL от root: копия хранит случайный хеш), сначала контроли: на форме нет метки панели `signedIn`, а неверный пароль оставляет форму и текст из `lostCookie` (у Joomla — `JLIB_LOGIN_AUTHENTICATE`) без метки; затем верный пароль: форма из кадра ушла, метка `signedIn` есть (у Joomla 4.0 и новее `#sidebarmenu` — `#header` Atum есть и на странице входа), кадр на панели, текстов из `lostCookie` (потерянная кука, токен, отказ в пароле) нет; строка `NOTE` — имена кук предпросмотра, без значений |
+| Pc закрытие | Диалог сборки закрыт `task.cancel`, как его закрывает владелец: `core` убирает предпросмотр (`destroyed`), браузер агента и песочницу хода — в Docker нет контейнера, сети или тома с метками сайта. Иначе уборка стенда сняла бы то, что принадлежит `core`, и прогон провалился бы |
+
+WebKit не знает `--host-rules` и на `http://*.localhost` не держит куку шлюза с префиксом `__Host-` (замер 07.11.2026, WebKit 26.6: кука с одним `Secure` живёт, с префиксом — нет). Поэтому WebKit идёт через пересыльщик `startSecureForwarder` на loopback: он принимает `CONNECT` только к `*.localhost` на порту шлюза, завершает TLS сертификатом стенда (браузер — с `ignoreHTTPSErrors`), шлёт запрос шлюзу как браузер — в форме пути, с Host предпросмотра — и меняет `http://<хост предпросмотра>` на `https://` в `Location` и текстах ответа; простой `http://` предпросмотра получает 301 на `https://`. Настоящий Safari остаётся ручной проверкой (Т69).
 
 ## Как не мешает соседям
 

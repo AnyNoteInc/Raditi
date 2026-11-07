@@ -92,6 +92,29 @@ describe('the WHERE of a copy policy', () => {
     expect(namedColumns(policy, 'options').sort()).toEqual(['option_name', 'option_value'])
     expect(namedColumns(policy, 'terms')).toEqual([])
   })
+
+  it('names the column whose keys an override blanks, so that the source must have it', () => {
+    // An override that only blanks keys of a row (Э3.11): its column is the stack's own state too.
+    const blanking: DatabaseCopyPolicy = {
+      ...policy,
+      overrides: [
+        ...policy.overrides,
+        {
+          table: 'options',
+          match: { column: 'option_name', value: 'siteurl' },
+          set: {},
+          blank: { column: 'autoload', keys: ['domain'] },
+        },
+      ],
+    }
+    expect(overrideColumns(blanking, 'options').sort()).toEqual([
+      'autoload',
+      'option_name',
+      'option_value',
+    ])
+    expect(namedColumns(blanking, 'options')).toContain('autoload')
+    expect(overrideColumns(blanking, 'posts')).toEqual([])
+  })
 })
 
 describe('rules a copy writes as structure only', () => {

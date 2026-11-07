@@ -28,6 +28,41 @@ describe('joomlaImportRules', () => {
     expect(policy.decide('a/b/c/Configuration.PHP', 'file')).toBe('excluded')
   })
 
+  it.each([
+    // Paths of the releases 3.10.12, 4.4.14, 5.4.10 and 6.2.0 (Э3.11, discrepancy 24).
+    'administrator/components/com_admin/sql/updates/mysql/3.10.0-2021-05-28.sql',
+    'administrator/components/com_admin/sql/updates/postgresql/4.0.0-2018-03-05.sql',
+    'administrator/components/com_admin/sql/updates/sqlazure/3.9.0-2018-05-02.sql',
+    'administrator/components/com_admin/sql/updates/mysql/3.2.0.sql',
+    'administrator/components/com_admin/sql/updates/sqlazure/2.5.5.sql',
+    'administrator/components/com_admin/sql/updates/mysql/2.5.0-2011-12-21-1.sql',
+    'libraries/vendor/composer/ca-bundle/res/cacert.pem',
+    'libraries/src/Http/Transport/cacert.pem',
+    'libraries/fof/download/adapter/cacert.pem',
+  ])('takes the file of the release %s, which the lists of dumps and secrets would cut', (path) => {
+    expect(importPolicyOf({ ...rules, coreFiles: undefined }).decide(path, 'file')).toBe('excluded')
+    expect(policy.decide(path, 'file')).toBe('take')
+  })
+
+  it.each([
+    // The SQL of the installer, of extensions and a dump next to the updates; a key of the client.
+    'installation/sql/mysql/base.sql',
+    'administrator/components/com_admin/sql/others/mysql/utf8mb4-conversion-01.sql',
+    'administrator/components/com_banners/sql/install.mysql.utf8.sql',
+    'administrator/components/com_admin/sql/updates/dump.sql',
+    'administrator/components/com_admin/sql/updates/mysql/site.sql.gz',
+    'administrator/components/com_admin/sql/updates/mysql/backup.sql',
+    'administrator/components/com_admin/sql/updates/mysql/site-2024-05-01.sql',
+    'administrator/components/com_admin/sql/updates/postgresql/9.9.sql',
+    'administrator/components/com_admin/sql/updates/mysql/old/4.0.0.sql',
+    'backup.sql',
+    'libraries/src/Http/Transport/server.pem',
+    'cacert.pem',
+    'images/cacert.pem',
+  ])('still leaves out %s', (path) => {
+    expect(policy.decide(path, 'file')).toBe('excluded')
+  })
+
   it('leaves out the folders of the installer, the caches and the logs only at the root', () => {
     for (const folder of ['installation', 'cache', 'tmp', 'logs', 'administrator/cache'])
       expect(policy.decide(folder, 'directory')).toBe('excluded')

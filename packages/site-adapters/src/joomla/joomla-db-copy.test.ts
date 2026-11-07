@@ -267,8 +267,41 @@ describe('the database copy of a Joomla preview (Т56, Т57)', () => {
     for (const rule of policy.tables) visit(rule.table, [rule.table])
   })
 
+  it.each(branches)(
+    '%s: blanks the address of the SEF plugin in a row where production filled it (Э3.11)',
+    (branch) => {
+      const { overrides } = policyOf(branch)
+      // The row of the installer of 6.2.0, as a site that set the address of its canonical links has it.
+      const row = {
+        name: 'plg_system_sef',
+        params:
+          '{"domain":"https:\\/\\/shop.example.ru","indexphp":"1","trailingslash":"0","enforcesuffix":"1","strictrouting":"1"}',
+      }
+      const matched = overrides.filter(
+        (override) =>
+          override.table === 'extensions' &&
+          row[override.match.column as keyof typeof row] === override.match.value,
+      )
+      expect(matched).toHaveLength(1)
+      const [sef] = matched
+      // The row stays, its other columns and settings as production has them.
+      expect(sef!.set).toEqual({})
+      expect(sef!.blank?.column).toBe('params')
+      const params = JSON.parse(row.params) as Record<string, string>
+      for (const key of sef!.blank!.keys) params[key] = ''
+      expect(params).toEqual({
+        domain: '',
+        indexphp: '1',
+        trailingslash: '0',
+        enforcesuffix: '1',
+        strictrouting: '1',
+      })
+      expect(ruleOf(policyOf(branch), 'extensions').columns?.params).toBe('scrub_secrets')
+    },
+  )
+
   it('keeps no row of the cache, the scheduler, the statistics or the update mail plugin (Т56)', () => {
-    const { overrides } = policyOf('j3')
+    const overrides = policyOf('j3').overrides.filter((override) => override.set === null)
     expect(overrides.map((override) => override.match)).toEqual([
       { column: 'name', value: 'plg_system_cache' },
       { column: 'name', value: 'plg_system_schedulerunner' },
