@@ -375,9 +375,9 @@ Laravel, Node.js, Python, Docker-проекты — новыми адаптер�
   - [x] **Э1.6.** Мёртвый предпросмотр WordPress больше не считается готовым.
 - [ ] **Э2. Порт и факты.** Новых стеков нет, WordPress как был. Договор — [`62-slices/e2.md`](62-slices/e2.md). Зависит: Э0, вопрос 11. Рубеж 1.
   - [x] **Э2.1.** Значения стеков и запись `sites.stack_facts`.
-  - [ ] **Э2.2.** Поддержка стека и `siteSupportOf`.
-  - [ ] **Э2.3.** Порт `SiteAdapter`: `support`, `recognition`, `connection`, чтения, `stackGuide`.
-  - [ ] **Э2.4.** `connectableStacks(env, way)`.
+  - [x] **Э2.2.** Поддержка стека и `siteSupportOf`.
+  - [x] **Э2.3.** Порт `SiteAdapter`: `support`, `recognition`, `connection`, чтения, `stackGuide`.
+  - [x] **Э2.4.** `connectableStacks(env, way)`.
   - [ ] **Э2.5.** `poweredBy` в ответе сайта.
   - [ ] **Э2.6.** `readFile` и `listDirectory` у `GitWorkspaceService`.
   - [ ] **Э2.7.** Проверка мастера: чтение в сеансе, `foundStack`, `version_unsupported`.

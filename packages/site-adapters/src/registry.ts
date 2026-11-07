@@ -1,5 +1,11 @@
-import type { SiteAdapter, SiteContentAdapter, SiteStack } from '@repo/domain'
-import { badRequest, notImplemented, siteStacks } from '@repo/domain'
+import type {
+  AppEnv,
+  ConnectionWay,
+  SiteAdapter,
+  SiteContentAdapter,
+  SiteStack,
+} from '@repo/domain'
+import { badRequest, notImplemented, siteStacks, stackAxisOpen } from '@repo/domain'
 import { bitrixAdapter } from './bitrix.ts'
 import { wordpressContentAdapter } from './wordpress-content.ts'
 import { wordpressAdapter } from './wordpress.ts'
@@ -29,11 +35,31 @@ export function getSiteAdapter(stack: SiteStack): SiteAdapter {
   throw badRequest(`Unknown site stack: ${String(stack)}`)
 }
 
+/** Every adapter of the registry, in its order. */
+export const siteAdapters = (): readonly SiteAdapter[] => [...adapters.values()]
+
 /**
- * Stacks whose sites the connection wizard takes (spec §12). An adapter alone is not enough:
- * the stack joins the list when the rest of its way into the product is there.
+ * Stacks whose sites the connection wizard takes by `way` in `env` (spec §12; docs/plan/62-site-stacks.md,
+ * Т4, Т6): the adapters whose support opens that axis, in the order of the registry. An adapter alone is
+ * not enough — a stack joins when its support says so, and an axis at `dev` is open outside production
+ * only.
  */
-export const connectableStacks: readonly SiteStack[] = ['wordpress']
+export function connectableStacks(env: AppEnv, way: ConnectionWay): readonly SiteStack[] {
+  return stacksOpenBy(siteAdapters(), env, way)
+}
+
+/** The rule of `connectableStacks` over any adapters: the stacks whose `way` axis is open in `env`. */
+export function stacksOpenBy(
+  of: readonly Pick<SiteAdapter, 'stack' | 'support'>[],
+  env: AppEnv,
+  way: ConnectionWay,
+): readonly SiteStack[] {
+  return of
+    .filter((adapter) =>
+      stackAxisOpen(way === 'files' ? adapter.support.files : adapter.support.browser, env),
+    )
+    .map((adapter) => adapter.stack)
+}
 
 const contentAdapters = new Map<SiteStack, SiteContentAdapter>([
   ['wordpress', wordpressContentAdapter],

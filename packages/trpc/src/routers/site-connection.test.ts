@@ -403,6 +403,47 @@ describe('siteConnection.checkSource', () => {
   })
 })
 
+// docs/plan/62-slices/e2.md, Э2.4: the check of the files and its replacement ask the support of the files.
+describe('a stack the wizard opens by the browser only', () => {
+  const browserOnly = (services: SiteConnectionServices): SiteConnectionServices => ({
+    ...services,
+    connectableStacks: (way) => (way === 'browser' ? ['wordpress'] : []),
+  })
+
+  it('is refused by checkSource before any connection', async () => {
+    const fake = fakeSiteConnections()
+    await expect(
+      createCaller(context(fakeDb().prisma, browserOnly(fake.services))).siteConnection.checkSource(
+        { stack: 'wordpress', source: sftpSource() },
+      ),
+    ).rejects.toMatchObject({ cause: { code: 'SITE_STACK_NOT_CONNECTABLE' } })
+    expect(fake.sourceChecks).toEqual([])
+    expect(fake.lookup).not.toHaveBeenCalled()
+  })
+
+  it('is refused by replaceAccess before any connection or write', async () => {
+    const fake = fakeSiteConnections()
+    const { prisma, db } = fakeDb()
+    db.site.findFirst.mockResolvedValue({
+      id: randomUUID(),
+      status: 'onboarding',
+      stack: 'wordpress',
+      workspaceId: randomUUID(),
+      provisioningStages: [{ status: 'failed' }],
+      codeSource: { kind: 'sftp', host: 'files.example.ru', port: 22, hostKey: FAKE_HOST_KEY },
+    })
+    await expect(
+      createCaller(context(prisma, browserOnly(fake.services))).siteConnection.replaceAccess({
+        id: randomUUID(),
+        source: sftpSource(),
+      }),
+    ).rejects.toMatchObject({ cause: { code: 'SITE_STACK_NOT_CONNECTABLE' } })
+    expect(fake.sourceChecks).toEqual([])
+    expect(fake.lookup).not.toHaveBeenCalled()
+    expect(fake.secrets.writes).toEqual([])
+  })
+})
+
 describe('siteConnection.setup, read model', () => {
   const siteId = randomUUID()
   const row = (stage: Record<string, unknown> | null, extra: Record<string, unknown> = {}) => ({

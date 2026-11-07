@@ -8,11 +8,13 @@ import {
   type PrismaClient,
 } from '@repo/db'
 import {
+  connectionWays,
   DomainError,
   isProduction,
   liveSubscriptionStatuses,
   siteConnectionLimits,
-  type AppEnv,
+  type ConnectionWay,
+  type SiteConnectionServices,
   type SiteStack,
 } from '@repo/domain'
 import { z } from 'zod'
@@ -214,12 +216,18 @@ const planLimitReached = (maxSites: number, tariff: LimitingTariff) =>
     tariff === 'live' ? { maxSites } : { maxSites, [tariff]: true },
   )
 
-/** A platform the wizard connects (`connectableStacks` of the registry of site adapters). */
+/**
+ * A platform the wizard connects by `way` (`connectableStacks` of the registry of site adapters,
+ * judged by their support and the environment). Without `way` — open by at least one of them: the
+ * first step does not know yet how the site will be connected.
+ */
 export function assertStackConnectable(
-  rule: { connectableStacks: readonly SiteStack[] },
+  rule: Pick<SiteConnectionServices, 'connectableStacks'>,
   stack: SiteStack,
+  way?: ConnectionWay,
 ): void {
-  if (!rule.connectableStacks.includes(stack)) {
+  const ways = way === undefined ? connectionWays : [way]
+  if (!ways.some((each) => rule.connectableStacks(each).includes(stack))) {
     throw new DomainError(
       'SITE_STACK_NOT_CONNECTABLE',
       'The wizard does not connect sites of this platform',
@@ -230,11 +238,12 @@ export function assertStackConnectable(
 
 /**
  * What a site is accepted as before anything is read: in production an address that opens from the
- * internet, and a platform the wizard connects.
+ * internet, and a platform the wizard connects by `way` (any, when it is not known yet).
  */
 export function assertSiteAccepted(
-  rule: { appEnv: AppEnv; connectableStacks: readonly SiteStack[] },
+  rule: Pick<SiteConnectionServices, 'appEnv' | 'connectableStacks'>,
   site: { url: string; stack: SiteStack },
+  way?: ConnectionWay,
 ): void {
   if (isProduction(rule.appEnv) && siteHost(new URL(site.url).hostname) !== 'public') {
     throw new DomainError(
@@ -243,7 +252,7 @@ export function assertSiteAccepted(
       400,
     )
   }
-  assertStackConnectable(rule, site.stack)
+  assertStackConnectable(rule, site.stack, way)
 }
 
 /** The client or a transaction: everything the room for a site is read from. */

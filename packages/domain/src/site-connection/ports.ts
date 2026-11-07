@@ -2,7 +2,7 @@ import type { z } from 'zod'
 
 import type { AppEnv } from '../app-env.ts'
 import type { SecretStore } from '../ports/secret-store.ts'
-import type { SiteAccessKind, SiteStack } from '../ports/site-adapter.ts'
+import type { ConnectionWay, SiteAccessKind, SiteStack } from '../ports/site-adapter.ts'
 import type { CodeSourceTarget, DatabaseTarget, PreparedAccess } from './access.ts'
 import type { HostLookup, PinnedAddress } from './address.ts'
 import type { DatabaseStructure } from './database-schema.ts'
@@ -208,7 +208,8 @@ export interface SiteConnectionServices {
   /** Write only, as the `sites-writer` policy: no read method is reachable from a procedure. */
   secrets: Pick<SecretStore, 'kvWrite' | 'kvMetadata'>
   lookup: HostLookup
-  connectableStacks: readonly SiteStack[]
+  /** The stacks the wizard connects by `way` in `appEnv`: the support of the adapters judges (Т4, Т6). */
+  connectableStacks(way: ConnectionWay): readonly SiteStack[]
   rootMarkers(stack: SiteStack): readonly string[]
   sources(kind: SiteSourceKind): SiteSourceAdapter
   databases(engine: DatabaseEngine): DatabaseInspector

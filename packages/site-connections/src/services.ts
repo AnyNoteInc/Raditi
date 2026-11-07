@@ -1,5 +1,6 @@
 import type {
   AppEnv,
+  ConnectionWay,
   DatabaseEngine,
   HostLookup,
   SecretStore,
@@ -15,7 +16,8 @@ export interface SiteConnectionServicesDeps {
   appEnv: AppEnv
   /** The store of the caller; only its two write-side methods are kept. */
   secrets: Pick<SecretStore, 'kvWrite' | 'kvMetadata'>
-  connectableStacks: readonly SiteStack[]
+  /** The registry of site adapters asked with the environment of the app: `appEnv` is bound by the caller. */
+  connectableStacks: (way: ConnectionWay) => readonly SiteStack[]
   rootMarkers: (stack: SiteStack) => readonly string[]
   /** The resolver of every check; a fresh c-ares lookup by default. */
   lookup?: HostLookup
@@ -43,7 +45,7 @@ export function createSiteConnectionServices(
     appEnv: deps.appEnv,
     secrets: writeOnly,
     lookup: deps.lookup ?? createHostLookup(),
-    connectableStacks: Object.freeze([...deps.connectableStacks]),
+    connectableStacks: (way: ConnectionWay) => Object.freeze([...deps.connectableStacks(way)]),
     rootMarkers: (stack: SiteStack) => deps.rootMarkers(stack),
     sources: siteSource,
     databases: databaseInspector,

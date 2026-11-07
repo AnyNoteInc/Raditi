@@ -302,7 +302,7 @@ export async function changeSiteSource(
   const { db, services, userId, source } = request
   const site = await changeableSite(db, userId, request.siteId, new Date())
   if (!site.codeSource) throw siteAccessMissing()
-  assertStackConnectable(services, site.stack)
+  assertStackConnectable(services, site.stack, 'files')
   if (!offersSource(services, source.kind))
     return { outcome: 'source_refused', reason: 'unsupported' }
   const accepted = request.acceptNewHostKey
@@ -427,7 +427,7 @@ export async function changeSiteDatabase(
   const { db, services, userId, database } = request
   const site = await changeableSite(db, userId, request.siteId, new Date())
   if (!site.database) throw siteAccessMissing()
-  assertStackConnectable(services, site.stack)
+  assertStackConnectable(services, site.stack, 'files')
   if (!services.databaseOptions.some((option) => option.engine === database.engine))
     return { outcome: 'database_refused', reason: 'unsupported' }
 

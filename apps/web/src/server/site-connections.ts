@@ -39,7 +39,7 @@ export function siteConnections(): SiteConnectionServices | null {
           kvWrite: (path, data, options) => store.kvWrite(path, data, options),
           kvMetadata: (path) => store.kvMetadata(path),
         },
-        connectableStacks,
+        connectableStacks: (way) => connectableStacks(config.appEnv, way),
         rootMarkers: (stack) => getSiteAdapter(stack).rootMarkers(),
       }),
     }

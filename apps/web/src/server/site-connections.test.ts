@@ -14,6 +14,7 @@ const stand = vi.hoisted(() => ({
   createStore: vi.fn(),
   createServices: vi.fn((deps: unknown) => ({ built: deps })),
   rootMarkers: vi.fn(() => ['wp-config.php', 'wp-includes']),
+  connectableStacks: vi.fn((_env: string, _way: string) => ['wordpress']),
 }))
 
 vi.mock('@/env', () => ({ env: { vault: () => stand.vault(), web: () => stand.web() } }))
@@ -22,7 +23,7 @@ vi.mock('@repo/site-connections/services', () => ({
   createSiteConnectionServices: stand.createServices,
 }))
 vi.mock('@repo/site-adapters', () => ({
-  connectableStacks: ['wordpress'],
+  connectableStacks: stand.connectableStacks,
   getSiteAdapter: () => ({ rootMarkers: stand.rootMarkers }),
 }))
 
@@ -32,7 +33,7 @@ const load = async () => (await import('./site-connections')).siteConnections
 type Deps = {
   appEnv: string
   secrets: Record<string, (...args: unknown[]) => unknown>
-  connectableStacks: readonly string[]
+  connectableStacks: (way: string) => readonly string[]
   rootMarkers: (stack: string) => readonly string[]
 }
 
@@ -58,8 +59,18 @@ describe('the site connection services of web', () => {
     })
     const [deps] = stand.createServices.mock.calls[0] as unknown as [Deps]
     expect(deps.appEnv).toBe('development')
-    expect(deps.connectableStacks).toEqual(['wordpress'])
+    expect(deps.connectableStacks('files')).toEqual(['wordpress'])
+    // The registry is asked with the environment of the app, not of the caller.
+    expect(stand.connectableStacks).toHaveBeenCalledExactlyOnceWith('development', 'files')
     expect(deps.rootMarkers('wordpress')).toEqual(['wp-config.php', 'wp-includes'])
+  })
+
+  it('passes the registry the environment of the app and the way the caller asks for', async () => {
+    stand.web = () => ({ appEnv: 'production' })
+    ;(await load())()
+    const [deps] = stand.createServices.mock.calls[0] as unknown as [Deps]
+    deps.connectableStacks('browser')
+    expect(stand.connectableStacks).toHaveBeenCalledExactlyOnceWith('production', 'browser')
   })
 
   it('hands the services a store that can write and look at metadata, and nothing else', async () => {

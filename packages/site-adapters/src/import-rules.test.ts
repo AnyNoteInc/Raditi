@@ -1,5 +1,5 @@
 import type { SiteAdapter, SiteFacts } from '@repo/domain'
-import { createImportPathPolicy, importPolicyOf, siteStacks } from '@repo/domain'
+import { appEnvs, createImportPathPolicy, importPolicyOf, siteStacks } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
 import {
   dataFiles,
@@ -51,7 +51,8 @@ describe('exclude lines of the adapters', () => {
   it('covers every adapter of the registry with open files, the connectable stacks among them', () => {
     const stacks = adapters.map((adapter) => adapter.stack)
     expect(stacks).toEqual(['wordpress'])
-    expect(stacks).toEqual(expect.arrayContaining([...connectableStacks]))
+    for (const env of appEnvs)
+      expect(stacks).toEqual(expect.arrayContaining([...connectableStacks(env, 'files')]))
   })
 
   it('shares the lists of data files, server logs and client tool files', () => {

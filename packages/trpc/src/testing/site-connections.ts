@@ -357,7 +357,7 @@ export function fakeSiteConnections(options: FakeSiteConnectionsOptions = {}) {
     appEnv,
     secrets,
     lookup,
-    connectableStacks: ['wordpress'],
+    connectableStacks: () => ['wordpress'],
     rootMarkers: () => ['wp-content', 'wp-includes'],
     sources(kind) {
       const adapter = sources[kind]

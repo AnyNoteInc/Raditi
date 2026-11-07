@@ -153,7 +153,7 @@ export const siteConnectionRouter = router({
     .output(sourceCheckOutput)
     .mutation(async ({ ctx, input }) => {
       const services = requireSiteConnections(ctx.siteConnections)
-      assertStackConnectable(services, input.stack)
+      assertStackConnectable(services, input.stack, 'files')
       if (!offersSource(services, input.source.kind))
         return { ok: false as const, reason: 'unsupported' as const }
       const { source } = await gatedChecks(services, {
@@ -231,7 +231,7 @@ export const siteConnectionRouter = router({
       })
       if (!site) throw siteNotFound()
       await assertRetryable(ctx.prisma, site)
-      assertStackConnectable(services, site.stack)
+      assertStackConnectable(services, site.stack, 'files')
       const { source } = input
       if (!offersSource(services, source.kind))
         return { outcome: 'source_refused', reason: 'unsupported' }

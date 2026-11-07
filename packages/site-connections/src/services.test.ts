@@ -21,7 +21,7 @@ describe('createSiteConnectionServices', () => {
     const services = createSiteConnectionServices({
       appEnv: 'test',
       secrets: secrets as unknown as Pick<SecretStore, 'kvWrite' | 'kvMetadata'>,
-      connectableStacks: ['wordpress'],
+      connectableStacks: () => ['wordpress'],
       rootMarkers: () => ['wp-content', 'wp-includes'],
       lookup: async () => [],
     })
@@ -45,13 +45,15 @@ describe('createSiteConnectionServices', () => {
     const services = createSiteConnectionServices({
       appEnv: 'production',
       secrets: store() as unknown as Pick<SecretStore, 'kvWrite' | 'kvMetadata'>,
-      connectableStacks: ['wordpress'],
+      connectableStacks: (way) => (way === 'files' ? ['wordpress'] : ['wordpress', 'bitrix']),
       rootMarkers: (stack) => (stack === 'wordpress' ? ['wp-content'] : []),
       lookup,
     })
     expect(services.appEnv).toBe('production')
     expect(services.lookup).toBe(lookup)
-    expect(services.connectableStacks).toEqual(['wordpress'])
+    // The way reaches the registry as it is.
+    expect(services.connectableStacks('files')).toEqual(['wordpress'])
+    expect(services.connectableStacks('browser')).toEqual(['wordpress', 'bitrix'])
     expect(services.rootMarkers('wordpress')).toEqual(['wp-content'])
     expect(services.sources('sftp')).toBe(sftpSource)
     expect(services.sources('ftp')).toBe(ftpSource)
@@ -80,7 +82,7 @@ describe('createSiteConnectionServices', () => {
     const services = createSiteConnectionServices({
       appEnv: 'development',
       secrets: store() as unknown as Pick<SecretStore, 'kvWrite' | 'kvMetadata'>,
-      connectableStacks: [],
+      connectableStacks: () => [],
       rootMarkers: () => [],
     })
     expect(typeof services.lookup).toBe('function')

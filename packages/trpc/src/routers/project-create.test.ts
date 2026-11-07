@@ -1036,6 +1036,51 @@ describe('project.create of a site for the browser alone', () => {
   })
 })
 
+// docs/plan/62-slices/e2.md, Э2.4: the stacks come from the support of each way, not from one list.
+describe('a stack open by one way of connection only', () => {
+  const browserOnly = (services: SiteConnectionServices): SiteConnectionServices => ({
+    ...services,
+    connectableStacks: (way) => (way === 'browser' ? ['wordpress'] : []),
+  })
+
+  it('is refused with its files and accepted for the browser alone', async () => {
+    const refused = fakeDb()
+    const fake = connections(refused.order)
+    await expect(
+      createCaller(context(refused.prisma, browserOnly(fake.services))).project.create(
+        siteCreateInput(),
+      ),
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      cause: { code: 'SITE_STACK_NOT_CONNECTABLE' },
+    })
+    expect(refused.order).toEqual([])
+    expect(fake.sourceChecks).toEqual([])
+    expect(fake.lookup).not.toHaveBeenCalled()
+
+    const accepted = fakeDb()
+    const outcome = await createCaller({
+      ...context(accepted.prisma, browserOnly(connections(accepted.order).services)),
+      chat: withBrowser,
+    }).project.create(browserSiteInput())
+    expect(outcome).toMatchObject({ outcome: 'created', project: { stack: 'wordpress' } })
+    expect(accepted.tx.site.create).toHaveBeenCalledOnce()
+  })
+
+  it('passes the first step, where the way is not known yet', async () => {
+    const { prisma, order } = fakeDb()
+    await expect(
+      createCaller(
+        context(prisma, browserOnly(connections(order).services)),
+      ).siteConnection.checkBasics({
+        name: 'Мой сайт',
+        url: 'https://example.ru',
+        stack: 'wordpress',
+      }),
+    ).resolves.toMatchObject({ url: 'https://example.ru', stack: 'wordpress' })
+  })
+})
+
 const databaseUrl = process.env.DATABASE_URL
 
 describe.skipIf(!databaseUrl)('PostgreSQL: project.create writes one connected site', () => {
