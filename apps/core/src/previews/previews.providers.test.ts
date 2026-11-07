@@ -1,8 +1,12 @@
+import type { FactoryProvider } from '@nestjs/common'
 import { dockerPreviewConfigSchema } from '@repo/sandbox-providers'
+import { findSiteContentAdapter, getSiteAdapter, getSiteContentAdapter } from '@repo/site-adapters'
 import { describe, expect, it } from 'vitest'
 
-import type { PreviewsConfig } from '../config/config.ts'
-import { previewRuntimeConfig } from './previews.providers.ts'
+import type { CoreConfig, PreviewsConfig } from '../config/config.ts'
+import type { PreviewBuildDeps } from './preview-builder.ts'
+import { PreviewManager } from './preview-manager.ts'
+import { previewProviders, previewRuntimeConfig, previewStacks } from './previews.providers.ts'
 
 const guard = `registry.invalid/guard@sha256:${'6'.repeat(64)}`
 
@@ -44,5 +48,47 @@ describe('the runtime of previews in core', () => {
         docker: { socketPath: '/run/docker.sock', firewallImage: null },
       }),
     ).toBeNull()
+  })
+})
+
+describe('the adapters of the stacks a preview is built with', () => {
+  it('gives a stack without published content no plugin, not an error (Т8)', () => {
+    expect(previewStacks.contentAdapters('wordpress')).toBe(getSiteContentAdapter('wordpress'))
+    expect(previewStacks.contentAdapters('bitrix')).toBeNull()
+  })
+
+  it('does not take an unknown stack for one without a plugin', () => {
+    expect(() => previewStacks.contentAdapters('drupal' as never)).toThrow(/Unknown site stack/)
+  })
+
+  it('gives the manager its factory builds those adapters, not ones of its own', () => {
+    const provider = previewProviders.find(
+      (one): one is FactoryProvider => typeof one === 'object' && one.provide === PreviewManager,
+    )
+    if (!provider) throw new Error('no PreviewManager factory')
+    const config = {
+      appEnv: 'test',
+      previews: { ...previews, executor: 'runner', docker: null },
+    } as unknown as CoreConfig
+    const stub = {} as never
+    const manager: unknown = provider.useFactory(
+      config,
+      stub,
+      null,
+      null,
+      stub,
+      stub,
+      stub,
+      stub,
+      stub,
+      () => stub,
+      stub,
+    )
+    expect(manager).toBeInstanceOf(PreviewManager)
+    // The dependencies are the manager's own; read here only to see what the factory gave it.
+    const deps = (manager as { deps: PreviewBuildDeps }).deps
+    expect(deps.adapters).toBe(getSiteAdapter)
+    expect(deps.contentAdapters).toBe(findSiteContentAdapter)
+    expect(deps.contentAdapters('bitrix')).toBeNull()
   })
 })

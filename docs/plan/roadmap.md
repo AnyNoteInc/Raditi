@@ -373,18 +373,18 @@ Laravel, Node.js, Python, Docker-проекты — новыми адаптер�
   - [x] **Э1.4.** Настоящие CMS поднимаются на `php:*-apache` под `runc` и `runsc`.
   - [ ] **Э1.5.** WordPress переходит на `php-base`.
   - [x] **Э1.6.** Мёртвый предпросмотр WordPress больше не считается готовым.
-- [ ] **Э2. Порт и факты.** Новых стеков нет, WordPress как был. Договор — [`62-slices/e2.md`](62-slices/e2.md). Зависит: Э0, вопрос 11. Рубеж 1.
+- [x] **Э2. Порт и факты.** Новых стеков нет, WordPress как был. Договор — [`62-slices/e2.md`](62-slices/e2.md). Зависит: Э0, вопрос 11. Рубеж 1.
   - [x] **Э2.1.** Значения стеков и запись `sites.stack_facts`.
   - [x] **Э2.2.** Поддержка стека и `siteSupportOf`.
   - [x] **Э2.3.** Порт `SiteAdapter`: `support`, `recognition`, `connection`, чтения, `stackGuide`.
   - [x] **Э2.4.** `connectableStacks(env, way)`.
-  - [ ] **Э2.5.** `poweredBy` в ответе сайта.
-  - [ ] **Э2.6.** `readFile` и `listDirectory` у `GitWorkspaceService`.
-  - [ ] **Э2.7.** Проверка мастера: чтение в сеансе, `foundStack`, `version_unsupported`.
-  - [ ] **Э2.8.** Импорт читает версию и раскладку и пишет факты.
-  - [ ] **Э2.9.** Свежая копия: `SiteTree` в `withRoot`, факты в сборке, `no_layout`.
-  - [ ] **Э2.10.** Удаление перехватов `NOT_IMPLEMENTED` и `findSiteContentAdapter`.
-  - [ ] **Э2.11.** Правила 5 и 8, spec и регрессия этапа.
+  - [x] **Э2.5.** `poweredBy` в ответе сайта.
+  - [x] **Э2.6.** `readFile` и `listDirectory` у `GitWorkspaceService`.
+  - [x] **Э2.7.** Проверка мастера: чтение в сеансе, `foundStack`, `version_unsupported`.
+  - [x] **Э2.8.** Импорт читает версию и раскладку и пишет факты.
+  - [x] **Э2.9.** Свежая копия: `SiteTree` в `withRoot`, факты в сборке, `no_layout`.
+  - [x] **Э2.10.** Удаление перехватов `NOT_IMPLEMENTED` и `findSiteContentAdapter`.
+  - [x] **Э2.11.** Правила 5 и 8, spec и регрессия этапа.
 - [ ] **Э3. Joomla и стенд.** М0, М1–М4, М7 зелёные. Договор — [`62-slices/e3.md`](62-slices/e3.md). Зависит: Э1, Э2. Рубеж 1.
   - [ ] **Э3.1.** Файлы `infra/<стек>/` встраиваются одним скриптом, контракты обходят все каталоги.
   - [ ] **Э3.2.** Joomla узнаётся по файлам, версия читается из манифеста поставки.

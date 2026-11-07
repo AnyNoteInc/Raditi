@@ -19,7 +19,7 @@ import {
   type ReleaseStepDetail,
   type ReleaseStepState,
 } from '@repo/domain'
-import { getSiteAdapter, getSiteContentAdapter } from '@repo/site-adapters'
+import { getSiteAdapter } from '@repo/site-adapters'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -47,7 +47,9 @@ import {
   releaseFixture,
   type ReleaseFixture,
 } from '../testing/releases.ts'
-import { ReleaseSkill } from './release-skill.ts'
+import { ReleaseSkill, type ReleaseSkillDependencies } from './release-skill.ts'
+import { releaseSkillStacks } from './releases.module.ts'
+import { releaseApiStacks } from '../release-api/release-api.module.ts'
 import { UndoPlanner } from './undo-planner.ts'
 
 // «Отменить выпуск» on PostgreSQL (docs/plan/53-chat-preview-release.md, «Отмена выпуска»): the
@@ -149,7 +151,7 @@ describe.skipIf(!enabled)('«Отменить выпуск» with PostgreSQL', (
       secrets: vault,
       storage,
       adapter: getSiteAdapter,
-      contentAccessKind: (stack) => getSiteContentAdapter(stack).accessKind,
+      contentAccessKind: releaseSkillStacks.contentAccessKind,
       api: { startTimeoutMs: 10 * 60_000 },
       values,
       production: production.resolve,
@@ -171,7 +173,7 @@ describe.skipIf(!enabled)('«Отменить выпуск» with PostgreSQL', (
       secrets: vault,
       storage,
       adapter: getSiteAdapter,
-      contentAdapter: getSiteContentAdapter,
+      contentAdapter: releaseApiStacks.contentAdapter,
       publicUrl: RELEASE_API_URL,
     })
     const w = { f, git, provider, vault, storage, values, production, skill, planner, api }
@@ -310,6 +312,28 @@ describe.skipIf(!enabled)('«Отменить выпуск» with PostgreSQL', (
       },
     })
     return undo.id
+  }
+
+  /** The same core as the world's, with some of the stack's answers of its own. */
+  function skillOf(
+    w: World,
+    stacks: Partial<Pick<ReleaseSkillDependencies, 'adapter' | 'contentAccessKind'>>,
+  ) {
+    return new ReleaseSkill({
+      db,
+      leases: new PostgresSiteLeaseStore(db),
+      git: w.git,
+      provider: w.provider,
+      secrets: w.vault,
+      storage: w.storage,
+      ...releaseSkillStacks,
+      ...stacks,
+      api: { startTimeoutMs: 10 * 60_000 },
+      values: w.values,
+      production: w.production.resolve,
+      previewBaseDomain: 'preview.example.test',
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    })
   }
 
   it('plans the undo from production: what goes back, what stays, the tree of the version before', async () => {
@@ -573,13 +597,7 @@ describe.skipIf(!enabled)('«Отменить выпуск» with PostgreSQL', (
     const undoId = await confirmed(w, planRow.id)
     // The same core, whose adapter no longer answers `mediaRules`: no media of the release are
     // taken as add-only by default — the undo is refused before its commit.
-    const skill = new ReleaseSkill({
-      db,
-      leases: new PostgresSiteLeaseStore(db),
-      git: w.git,
-      provider: w.provider,
-      secrets: w.vault,
-      storage: w.storage,
+    const skill = skillOf(w, {
       adapter: (stack) => {
         const real = getSiteAdapter(stack)
         return {
@@ -591,12 +609,6 @@ describe.skipIf(!enabled)('«Отменить выпуск» with PostgreSQL', (
           },
         }
       },
-      contentAccessKind: (stack) => getSiteContentAdapter(stack).accessKind,
-      api: { startTimeoutMs: 10 * 60_000 },
-      values: w.values,
-      production: w.production.resolve,
-      previewBaseDomain: 'preview.example.test',
-      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
     })
     const main = w.git.main
     await advance({ ...w, skill }, undoId)
@@ -607,6 +619,48 @@ describe.skipIf(!enabled)('«Отменить выпуск» with PostgreSQL', (
     })
     expect(w.git.main).toBe(main)
     expect(await taskStatus(w)).toBe('done')
+  })
+
+  it('refuses an undo with writes before `main` moves when the stack has no content plugin (Т8)', async () => {
+    const w = await installed()
+    const planRow = await planOf(w)
+    const undoId = await confirmed(w, planRow.id)
+    // The same core, for which the stack has no published content: the writes of the undo have
+    // no plugin to be delivered with.
+    const skill = skillOf(w, { contentAccessKind: () => null })
+    const main = w.git.main
+    await advance({ ...w, skill }, undoId)
+    expect(await release(undoId)).toMatchObject({
+      status: 'failed',
+      errorCode: 'db_plan_unsupported',
+      mainPushedAt: null,
+    })
+    expect(w.git.main).toBe(main)
+    expect(await taskStatus(w)).toBe('done')
+    expect(await undoFeed(w)).toEqual([
+      expect.objectContaining({ stage: 'refused', reason: 'technical' }),
+    ])
+  })
+
+  it('does not take another failure of the content adapter for no plugin: it goes up, nothing moves', async () => {
+    const w = await installed()
+    const planRow = await planOf(w)
+    const undoId = await confirmed(w, planRow.id)
+    const skill = skillOf(w, {
+      contentAccessKind: () => {
+        throw new Error('content adapter broke')
+      },
+    })
+    const before = await release(undoId)
+    const main = w.git.main
+    await expect(advance({ ...w, skill }, undoId)).rejects.toThrow('content adapter broke')
+    expect(await release(undoId)).toMatchObject({
+      status: before.status,
+      errorCode: null,
+      mainPushedAt: null,
+    })
+    expect(w.git.main).toBe(main)
+    expect(await undoFeed(w)).toEqual([])
   })
 
   it('goes back to the release when the undo fails its check: the revert commit, the dialog done', async () => {

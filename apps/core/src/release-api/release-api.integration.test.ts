@@ -10,10 +10,12 @@ import {
   type ReleaseStepDetail,
   type ReleaseStepState,
 } from '@repo/domain'
-import { getSiteAdapter, getSiteContentAdapter } from '@repo/site-adapters'
+import { getSiteAdapter } from '@repo/site-adapters'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { ReleaseSkill } from '../releases/release-skill.ts'
+import { releaseSkillStacks } from '../releases/releases.module.ts'
+import { releaseApiStacks } from './release-api.module.ts'
 import {
   cleanupReleases,
   FakePlanValues,
@@ -84,7 +86,7 @@ describe.skipIf(!enabled)('the release API with PostgreSQL', () => {
       secrets: vault,
       storage,
       adapter: getSiteAdapter,
-      contentAccessKind: (stack) => getSiteContentAdapter(stack).accessKind,
+      contentAccessKind: releaseSkillStacks.contentAccessKind,
       api: { startTimeoutMs: 10 * 60_000 },
       values: new FakePlanValues(),
       production: new FakeProduction().resolve,
@@ -103,7 +105,7 @@ describe.skipIf(!enabled)('the release API with PostgreSQL', () => {
       secrets: vault,
       storage,
       adapter: getSiteAdapter,
-      contentAdapter: getSiteContentAdapter,
+      contentAdapter: releaseApiStacks.contentAdapter,
       publicUrl: 'http://release-api.invalid',
       ...stack,
     })

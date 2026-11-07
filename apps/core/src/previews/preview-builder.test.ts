@@ -520,9 +520,7 @@ describe('what production’s plugin can write of a plan (Т37)', () => {
     })
 
     it('has no gateway where the stack has no content adapter', async () => {
-      const none = (() => {
-        throw new Error('no content adapter')
-      }) as unknown as Deps['contentAdapters']
+      const none: Deps['contentAdapters'] = () => null
       expect(
         await unaskedProduction(
           deps(() => Promise.resolve(1), none),
@@ -530,6 +528,19 @@ describe('what production’s plugin can write of a plan (Т37)', () => {
           'bitrix',
         ),
       ).toBe(null)
+    })
+
+    it('does not take another failure of the content adapter for a stack without one', async () => {
+      const broken: Deps['contentAdapters'] = () => {
+        throw new Error('content adapter broke')
+      }
+      await expect(
+        unaskedProduction(
+          deps(() => Promise.resolve(1), broken),
+          'site',
+          'wordpress',
+        ),
+      ).rejects.toThrow('content adapter broke')
     })
   })
 })

@@ -263,6 +263,8 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
       runtimes?: { production?: SiteRuntime; preview?: SiteRuntime }
       /** The adapters of the stacks; WordPress by default. */
       adapters?: (stack: SiteStack) => SiteAdapter
+      /** `none` — the stack has no published-content adapter (`findSiteContentAdapter` null). */
+      content?: 'none'
       /** How often a holder renews its hold; a test that takes the preview over shortens it. */
       heartbeatMs?: number
       /** What production's gateway cannot be had for; a generic failure by default. */
@@ -321,12 +323,17 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
         secrets: vault,
         adapters: options.adapters ?? (() => wordpressAdapter),
         contentAdapters: () =>
-          contentAdapter(
-            withPlan(
-              withRuntime(contentGateway(previewStates, options.writes), options.runtimes?.preview),
-              options.previewDb,
-            ),
-          ),
+          options.content === 'none'
+            ? null
+            : contentAdapter(
+                withPlan(
+                  withRuntime(
+                    contentGateway(previewStates, options.writes),
+                    options.runtimes?.preview,
+                  ),
+                  options.previewDb,
+                ),
+              ),
         production: async () => {
           if (!production) throw options.productionRefusal ?? new Error('unreachable')
           return withPlan(
@@ -942,6 +949,28 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
     await f.m.idle()
     expect((await db.taskCandidate.findUniqueOrThrow({ where: { id: fresh.id } })).status).toBe(
       'current',
+    )
+  })
+
+  it('builds nothing when the recipe asks for a content plugin the stack does not have (Т8)', async () => {
+    const { site, preview } = await dialog()
+    const f = manager({ content: 'none' })
+    await databaseAccess(f, site.id)
+    await f.m.refresh(preview.id, { requested: true })
+    expect(
+      await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } }),
+    ).toMatchObject({
+      status: 'unavailable',
+      unavailableReason: 'not_supported',
+      upstreamHost: null,
+    })
+    // Refused before the copy is touched: no tree, no seed, no database, no access of the preview.
+    expect(f.runtime.calls).toEqual([])
+    expect(f.git.exports).toEqual([])
+    expect(f.storage.objects.size).toBe(0)
+    expect([...f.vault.kv.keys()].filter((path) => path.includes(preview.id))).toEqual([])
+    expect(await db.credentialRef.count({ where: { siteId: site.id, kind: { not: 'db' } } })).toBe(
+      0,
     )
   })
 

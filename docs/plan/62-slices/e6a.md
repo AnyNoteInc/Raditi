@@ -4,7 +4,7 @@
 
 **Как читать.** Пути — от корня дерева. Номера строк сверены по `raditi-stacks` (`feat/site-stacks`, `c811abf1`, равно `main`) и сдвинутся после Э0 и Э2: ищите по символам. Пересечение с веткой чатов сверено по `raditi-chats` `f4501ebb`: из файлов этапа ветка меняет `packages/db/src/site-leases.ts`, `site-leases.test.ts`, `index.ts`, `enums.test.ts`, `release-undo.test.ts`, `packages/db/prisma/schema.prisma`, `packages/domain/src/ports/turn-runner.ts`, `apps/core/src/previews/preview-builder.ts`, `preview-facts.ts`, `preview-facts.test.ts`, `preview-manager.integration.test.ts`, `packages/trpc/src/services/chat/undo.ts`, `packages/trpc/src/routers/site-access-change.test.ts` (уборка фикстуры, другое место), `infra/dev/release-verify/scenarios.mjs`, `README.md`, `docs/spec.md`; конфликт малый, строки названы в срезах. Файлы импорта, `git-workspace`, `site-setup.tsx` и `setup-text.ts` ветка не меняет.
 
-**Что считается известным из ранних этапов** (`62-slices/e0.md`, `62-slices/e2.md`). Э0ж: `ImportRules.documentFolders`, `createImportPathPolicy(exclude, documentFolders)`, `importPolicyOf`. Э2.1: `sites.stack_facts`, `siteStackFactsPatchSchema`, `mergeSiteStackFacts`. Э2.3: `SiteTree`, `SiteRead`, `driftProbe`, `SiteDriftProbe`. Э2.6: `GitWorkspaceService.readFile` и `listDirectory`. Э2.8: `readStack`, `StackReading`, `siteTreeOf`, `recordStackFacts`, код `layout_unsupported`. Э2.9: `withRoot(siteId, signal, (tree) => …)`, `readSiteRoot`, `RootReading`, правило «один `withRoot` на сборку». Если в дереве другое имя, срез останавливается и правит этот договор.
+**Что считается известным из ранних этапов** (`62-slices/e0.md`, `62-slices/e2.md`). Э0ж: `ImportRules.documentFolders`, `createImportPathPolicy(exclude, documentFolders)`, `importPolicyOf`. Э2.1: `sites.stack_facts`, `siteStackFactsPatchSchema`, `mergeSiteStackFacts`. Э2.3: `SiteTree`, `SiteRead`, `driftProbe`, `SiteDriftProbe`. Э2.6: `GitWorkspaceService.readFile` и `listDirectory`. Э2.8: `readStack`, `StackReading`, `siteTreeOf`, `recordStackFacts`, код `layout_unsupported`; после ревью Э2.8 — `recheckVersion` (вторая запись версии, по скачанной копии, Т14), `takenFilesRead` (`tree-walk.ts`: скачанные файлы как `SiteRead`) и провайдер `CLOSED_STACK_ROOTS` (`site-provisioning.tokens.ts`: папки закрытых стеков, `closedStackRoots(siteAdapters())` один раз на модуль). Э2.9: `withRoot(siteId, signal, (tree) => …)`, `readSiteRoot`, `RootReading`, правило «один `withRoot` на сборку». Если в дереве другое имя, срез останавливается и правит этот договор.
 
 **Общее для всех срезов.**
 - Срез — один коммит, Conventional Commits, только свои пути. После него `pnpm gates` зелёный, WordPress работает как раньше, кроме изменений, названных в «Договоре».
@@ -259,6 +259,11 @@
     onStack(reading: StackReading): Promise<void>
     /** Runs right after the listing, before the first file: the threshold and `setStep` of an import. */
     onListed(listing: TreeListing): Promise<void>
+    /**
+     * Runs after the scans, on the files that go to `main`, with what `onStack` got: the version
+     * once more from the downloaded copy (Т14), since the hosting may have changed it during the walk.
+     */
+    onTaken(taken: readonly TakenFile[], reading: StackReading): Promise<void>
   }
   export interface CodeTree { taken: TakenFile[]; skipped: SkipCounts }
 
@@ -278,7 +283,7 @@
   }
   ```
 
-  `onStack` импорта — три строки Э2.8: `recordStackFacts`, `if (reading.refused) throw refuse('layout_unsupported')`. `onListed` импорта: `mediaOverThreshold` и `setStep(lease, 'fetch')`. Сам `readStack` и `siteTreeOf` зовёт `readCodeTree`, на том же месте внутри `try`.
+  `onStack` импорта — три строки Э2.8: `recordStackFacts`, `if (reading.refused) throw refuse('layout_unsupported')`. `onListed` импорта: `mediaOverThreshold` и `setStep(lease, 'fetch')`. `onTaken` импорта — вторая запись Э2.8, как сейчас в конце `fetchTree` (блок `if (reading)`): `const settled = await recheckVersion(rules, takenFilesRead(taken), reading)`, непустая часть — `recordStackFacts(lease, settled)`; `rules` — правила того же стека, `deps.stacks(site.stack)`. Сам `readStack` и `siteTreeOf` зовёт `readCodeTree`, на том же месте внутри `try`; `onTaken` — после `publicOriginalsOf` и отказа `source_empty` по взятым файлам, на месте нынешнего блока `if (reading)`, и только когда `readStack` дал чтение.
 
   `stage-store.ts`: код внутри `#fenced` в `readAccess` (строки 303–353) становится приватной `#accessOf(tx, siteId)`. Появляется `readAccessOf(siteId): Promise<StoredAccess>` без ограждения этапа, через `#transaction`.
 
@@ -286,6 +291,7 @@
 - *Тесты.*
   - Все существующие `site-import.test.ts`, `site-import.runner.test.ts`, `stage-store.integration.test.ts` проходят без правок: это и есть доказательство. Меняются только импорты.
   - Новый `code-tree.test.ts`: `reads the tree of a site that is no longer being connected` — `stored.siteStatus === 'active'`, функция работает без этапа и без `store`. Не компилируется до правки.
+  - `code-tree.test.ts`: `hands the taken files and the first reading to onTaken` — `onTaken` зовётся один раз, после сканов, с теми файлами, что вернул `readCodeTree`, и с тем же `StackReading`, что получил `onStack`; при отказе раскладки не зовётся. Тест импорта Э2.8 «хостинг сменил версию во время обхода» (`site-import.test.ts`) проходит без правок.
 - *Стенды.* `pnpm gates`, `pnpm verify:db`, `pnpm verify:site-import`.
 - *Готово.* `site-import.ts` короче на 300 строк, дифф поведения пуст.
 - *Зависит.* Э6а.1. С Э6а.2 — один файл, порядок: сначала Э6а.2.
@@ -891,12 +897,12 @@
   1. Приватный каталог `mkdtemp(join(tmpdir(), CLONE_PREFIX))`, в `finally` удаляется; `assertScanner`. Нет `git` — `refuse('repository_not_configured')`.
   2. `store.readAccess(site.id)`, `checkedAccess`. Статус сайта здесь не проверяется: это делает постановка.
   3. `git.readBranchHead({ repo: run.repo, branch: run.branch })`; `null` — `refuse('repository_mismatch')`. `refuse` здесь свой, он бросает `CodeSyncFailure`; `import-failure.ts`, `provisioningErrorCodes` и `importTexts` не меняются. `store.recordMain(run.id, head)`.
-  4. `readCodeTree(…, media: 'apart')`. `onStack` запоминает `reading.patch`, при `reading.refused` бросает `refuse('layout_unsupported')`, а записи в сайт не делает: она идёт при принятии. `onListed` пуст: порог Т49 не действует, медиа не скачиваются.
+  4. `readCodeTree(…, media: 'apart')`. `onStack` запоминает `reading.patch`, при `reading.refused` бросает `refuse('layout_unsupported')`, а записи в сайт не делает: она идёт при принятии. `onListed` пуст: порог Т49 не действует, медиа не скачиваются. `onTaken` сливает запомненную часть с версией скачанной копии, по правилу импорта (Т14): `facts = { ...reading.patch, ...(await recheckVersion(rules, takenFilesRead(taken), reading)) }`. Так сводка называет версию файлов, которые лягут в `main`, а не ту, что хостинг показал до листинга.
   5. `listing.closedFolders > 0` — `refuse('source_unreadable')`. `source_inconsistent` приходит из обхода сам. Это остановка А11: папка, которая не открылась, значит, что сервер скрывает её содержимое, коммита нет. Отдельный файл остановкой не служит: он идёт в `left_out` и остаётся из `main`, это вторая половина А11.
   6. `git.treeFiles({ repo, sha: head })`, `blobOid` каждой копии (sha1 от `blob <bytes>\0` и потока файла, функция в `code-sync.ts`).
   7. `compareWithMain`. Нет `write` и `remove` — `no_changes`.
   8. `git.hostingCommit({ repo, parent: head, write: diff.write.map(({ change, ...file }) => file), remove, message: codeSyncMessage(…), committedAt: run.createdAt.toISOString() })`: поле `change` остаётся для сводки, а строгая схема ответила бы BAD_REQUEST на лишнее поле. `null` — `no_changes`. `dropped` уходят из `added` в `left_out`.
-  9. Сводка: числа, `facts: reading.patch`, затем пути по порядку `deleted`, `modified`, `added`, `left_out`, внутри по алфавиту, первые `codeSyncLimits.summaryPaths`; `truncated` — если отрезано. Схема проверяет `codeSyncSummarySchema.parse`.
+  9. Сводка: числа, `facts` — часть шага 4, слитая с `recheckVersion`, затем пути по порядку `deleted`, `modified`, `added`, `left_out`, внутри по алфавиту, первые `codeSyncLimits.summaryPaths`; `truncated` — если отрезано. Схема проверяет `codeSyncSummarySchema.parse`.
 
   `created_at` строки — и есть момент коммита: отдельной колонки не нужно, повтор пуша собирает тот же SHA.
 
@@ -960,7 +966,7 @@
   }
   ```
 
-  Модуль собирает `CodeSyncRunner` рядом с `SiteImportRunner`: `git` — `GitWorkspaceService | null` из `GitWorkspaceModule`, `stacks: getSiteAdapter`, `closedRoots: closedStackRoots(siteAdapters())`: иначе сравнение скачает ядро закрытого стека из `old/bitrix/` в `added` и в `main`, а импорт такую папку отсекает (факт 14). Запуска фазы `push` в этом срезе нет: `run` с `phase: 'push'` возвращает `skipped`.
+  Модуль собирает `CodeSyncRunner` рядом с `SiteImportRunner`: `git` — `GitWorkspaceService | null` из `GitWorkspaceModule`, `stacks: getSiteAdapter`, `closedRoots` — провайдер `CLOSED_STACK_ROOTS` (Э2.8; заново `closedStackRoots(siteAdapters())` модуль не собирает): иначе сравнение скачает ядро закрытого стека из `old/bitrix/` в `added` и в `main`, а импорт такую папку отсекает (факт 14). Вторая запись версии — та же пара `recheckVersion` и `takenFilesRead`, что у импорта, в `onTaken` (шаг 4). Запуска фазы `push` в этом срезе нет: `run` с `phase: 'push'` возвращает `skipped`.
 
   **Постановка.**
 
@@ -1066,6 +1072,7 @@
     - `a file left out of an empty comparison is not called unchanged`: файл с находкой изменён на хостинге, других отличий нет: итог `no_changes`, `summary.leftOut` равен 1, `codeSyncSummaryLines` не содержит «не изменились». Падает, если ветка `code = 0` не смотрит на `leftOut`.
     - `a login the hosting refuses ends the comparison with auth_failed`: узел дерева с `fails: 'auth_failed'`, как в `tree-walk.test.ts:181`; `compareSite` бросает отказ с этим кодом, коммита нет. Падает, если сбой входа уходит в `internal`: клиент получил бы сбой без текста и выхода.
     - `.php` под `wp-content/uploads/` прочитан и попал в сводку.
+    - `the summary names the version the hosting changed between the listing and the download` (Т14): файл версии отвечает X при чтении `readStack` и X+1 при скачивании; `summary.facts` называет X+1 (и `limit: null`, когда X+1 снимает предел), а не X. Падает, если шаг 9 берёт `reading.patch` без `recheckVersion`: принятие записало бы в сайт версию, которой нет в `main`, и ветку рецепта PHP и `stackGuide` по ней.
   - `code-sync.runner.test.ts`: исходы таблицы, вторая доставка — `skipped`, потеря пульса прерывает запуск.
   - `site-import.processor.test.ts`: `site.codeSync` идёт в `CodeSyncRunner`, неверная нагрузка — `UnrecoverableError`.
   - `site-code-sync.test.ts`: `requestCodeSync` на каждое значение таблицы; предел в час не считает упавшее; после трёх упавших за сутки четвёртый запуск отказан; `ready` старше часа заменяется; участник без прав отказан.

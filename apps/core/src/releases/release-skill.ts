@@ -222,9 +222,11 @@ export interface ReleaseSkillDependencies {
   production: ProductionContent | null
   /**
    * The kind of access the content plugin of a stack reads (`SiteContentAdapter.accessKind`);
-   * throws for a stack without one. A release with a database plan needs it.
+   * null — the stack has no content adapter (`findSiteContentAdapter`, docs/plan/62-site-stacks.md,
+   * Т8), and a release with a database plan is refused. Any other failure is not one of its
+   * answers and goes up as it is.
    */
-  contentAccessKind: (stack: SiteStack) => SiteAccessKind
+  contentAccessKind: (stack: SiteStack) => SiteAccessKind | null
   /**
    * The release API deploy jobs call; null — RELEASE_API_HOST is unset, and every release is
    * refused before `main` moves.
@@ -559,7 +561,7 @@ export class ReleaseSkill {
     const writes = dbUndoPlanSchema.safeParse(row.undoPlan.dbPlan)
     if (!writes.success) return releaseErrors.undoPlanChanged
     if (writes.data.length > 0) {
-      const content = this.#contentAccessKind(row.site.stack)
+      const content = this.deps.contentAccessKind(row.site.stack)
       if (!this.deps.values || content === null || !(await hasSiteAccess(tx, row.siteId, content)))
         return releaseErrors.dbPlan
     }
@@ -619,7 +621,7 @@ export class ReleaseSkill {
       .safeParse(candidate.facts)
     if (!counted.success || counted.data.createdIdFiles > 0) return releaseErrors.createdIdInCode
     if (plan.length > 0) {
-      const content = this.#contentAccessKind(row.site.stack)
+      const content = this.deps.contentAccessKind(row.site.stack)
       if (
         !this.deps.values ||
         !this.deps.production ||
@@ -710,14 +712,6 @@ export class ReleaseSkill {
       })
     } catch {
       return []
-    }
-  }
-
-  #contentAccessKind(stack: SiteStack): SiteAccessKind | null {
-    try {
-      return this.deps.contentAccessKind(stack)
-    } catch {
-      return null
     }
   }
 

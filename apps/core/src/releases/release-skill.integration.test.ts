@@ -25,7 +25,7 @@ import {
   type ReleaseStepDetail,
   type ReleaseStepState,
 } from '@repo/domain'
-import { getSiteAdapter, getSiteContentAdapter } from '@repo/site-adapters'
+import { getSiteAdapter } from '@repo/site-adapters'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { newTurnKeys } from '@repo/turn-keys'
 
@@ -53,6 +53,8 @@ import {
   type ReleaseFixtureOptions,
 } from '../testing/releases.ts'
 import { ReleaseSkill, type ReleaseSkillDependencies } from './release-skill.ts'
+import { releaseSkillStacks } from './releases.module.ts'
+import { releaseApiStacks } from '../release-api/release-api.module.ts'
 import {
   RELEASE_PRODUCTION_WAIT_MS,
   RELEASE_PUBLISH_GIVE_UP_MS,
@@ -129,6 +131,8 @@ describe.skipIf(!enabled)('the release skill with PostgreSQL', () => {
       noValues?: boolean
       /** The adapter of the stack the skill reads; the registry's by default. */
       adapter?: ReleaseSkillDependencies['adapter']
+      /** The content plugin's access of the stack; the registry's by default. */
+      contentAccessKind?: ReleaseSkillDependencies['contentAccessKind']
     } = {},
   ): Promise<World> {
     const f = await releaseFixture(db, fixtures, options)
@@ -151,7 +155,7 @@ describe.skipIf(!enabled)('the release skill with PostgreSQL', () => {
       secrets: vault,
       storage,
       adapter: options.adapter ?? getSiteAdapter,
-      contentAccessKind: (stack) => getSiteContentAdapter(stack).accessKind,
+      contentAccessKind: options.contentAccessKind ?? releaseSkillStacks.contentAccessKind,
       api: { startTimeoutMs: 10 * 60_000 },
       values: options.noValues ? null : values,
       production: production.resolve,
@@ -166,7 +170,7 @@ describe.skipIf(!enabled)('the release skill with PostgreSQL', () => {
       secrets: vault,
       storage,
       adapter: getSiteAdapter,
-      contentAdapter: getSiteContentAdapter,
+      contentAdapter: releaseApiStacks.contentAdapter,
       publicUrl: RELEASE_API_URL,
     })
     return { f, git, provider, vault, storage, values, production, skill, deps, api, logger, now }
@@ -591,6 +595,40 @@ describe.skipIf(!enabled)('the release skill with PostgreSQL', () => {
         'db_plan_unsupported',
         'technical',
       )
+    })
+
+    it('when the stack has no content plugin to deliver the plan with (Т8)', async () => {
+      const { operation, state } = planOperation()
+      const w = await world({
+        dbPlan: [operation],
+        contentAccess: true,
+        contentAccessKind: () => null,
+      })
+      // The values read back: only the missing plugin stops the release.
+      w.values.states.set(operation.objectRef, state)
+      await refused(w, 'db_plan_unsupported', 'technical')
+    })
+
+    it('not when the content adapter failed otherwise: the failure goes up, nothing moves', async () => {
+      const { operation, state } = planOperation()
+      const w = await world({
+        dbPlan: [operation],
+        contentAccess: true,
+        contentAccessKind: () => {
+          throw new Error('content adapter broke')
+        },
+      })
+      w.values.states.set(operation.objectRef, state)
+      const before = await release(w)
+      await expect(advance(w)).rejects.toThrow('content adapter broke')
+      expect(await release(w)).toMatchObject({
+        status: before.status,
+        errorCode: null,
+        mainPushedAt: null,
+      })
+      expect(w.git.main).toBe(INSTALLED_SHA)
+      expect(w.git.pushes).toEqual([])
+      expect(await feed(w)).toEqual([])
     })
 
     it('when a value of the plan does not read back', async () => {

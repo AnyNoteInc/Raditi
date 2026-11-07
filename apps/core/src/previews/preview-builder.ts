@@ -34,7 +34,6 @@ import {
   type PublishedContentGateway,
   type RepoRef,
   type SecretStore,
-  type SiteAccessKind,
   type SiteAdapter,
   type SiteContentAdapter,
   type SiteDatabaseSettings,
@@ -127,7 +126,11 @@ export interface PreviewBuildDeps {
     'kvRead' | 'kvWrite' | 'kvList' | 'kvDestroyAll' | 'transitDataKey' | 'transitDecryptDataKey'
   >
   adapters: (stack: SiteStack) => SiteAdapter
-  contentAdapters: (stack: SiteStack) => SiteContentAdapter
+  /**
+   * The published-content adapter of a stack (`findSiteContentAdapter`); null — the stack has
+   * none (docs/plan/62-site-stacks.md, Т8). Any other failure goes up as it is.
+   */
+  contentAdapters: (stack: SiteStack) => SiteContentAdapter | null
   production: ProductionContent
   values: DbPlanValueReader
   now?: () => Date
@@ -654,14 +657,10 @@ export async function unaskedProduction(
   siteId: string,
   stack: SiteStack,
 ): Promise<null | 'no_answer'> {
-  let kind: SiteAccessKind
+  const content = deps.contentAdapters(stack)
+  if (content === null) return null
   try {
-    kind = deps.contentAdapters(stack).accessKind
-  } catch {
-    return null
-  }
-  try {
-    return (await hasSiteAccess(deps.db, siteId, kind)) ? 'no_answer' : null
+    return (await hasSiteAccess(deps.db, siteId, content.accessKind)) ? 'no_answer' : null
   } catch {
     return 'no_answer'
   }
@@ -743,6 +742,10 @@ async function buildPreviewOn(
   } catch {
     throw new PreviewUnavailable('not_supported')
   }
+  // A recipe with a content plugin from a stack that has no published content: the adapters of
+  // the stack disagree, and nothing of the copy is built on them.
+  const contentAdapter = recipe.content ? deps.contentAdapters(site.stack) : null
+  if (recipe.content && contentAdapter === null) throw new PreviewUnavailable('not_supported')
   const missing = await git.missingPaths({ repo, sha: headSha, paths: recipe.requiredPaths })
   if (missing.length) throw new PreviewUnavailable('no_core')
   const web = siteImage(deps.config, recipe)
@@ -874,8 +877,7 @@ async function buildPreviewOn(
     )
   }
   let mismatches: string[] | null = null
-  if (recipe.content) {
-    const contentAdapter = deps.contentAdapters(site.stack)
+  if (recipe.content && contentAdapter !== null) {
     const contentAccess = await previewContentAccess(
       { runtime, previewId: preview.id, recipe: recipe.content, adapter: contentAdapter, origin },
       signal,
