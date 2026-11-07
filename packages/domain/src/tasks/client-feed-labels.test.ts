@@ -187,6 +187,15 @@ describe('totality of the catalogue', () => {
     )
   })
 
+  it('says why a copy of a stack is not built (В2 of plan 62, Э2)', () => {
+    expect(previewUnavailableText.no_layout).toBe(
+      'Предпросмотр недоступен: мы не смогли прочитать, как устроены папки сайта. Попробуйте позже.',
+    )
+    expect(previewUnavailableText.version_unsupported).toBe(
+      'Предпросмотр недоступен: такую версию сайта мы не поддерживаем.',
+    )
+  })
+
   it('says what a rollback left on the site', () => {
     expect(feedReleaseKeptText(undefined)).toEqual([])
     expect(feedReleaseKeptText({ records: 0, tables: 0 })).toEqual([])

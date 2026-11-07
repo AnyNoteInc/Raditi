@@ -14,6 +14,15 @@ describe('turnInstructions', () => {
     const dead = turnInstructions({ state: 'unavailable', reason: 'boot_failed' })
     expect(dead).toContain('The site does not start in the copy of the platform')
     expect(dead).toContain('Change files only; your changes are checked when the client releases')
+    // A layout not read, or a version not supported, builds no copy (В2 of plan 62, Э2).
+    expect(turnInstructions({ state: 'unavailable', reason: 'no_layout' })).toContain(
+      'The layout of this site cannot be read now: no preview can be built. Do not rely on a ' +
+        'preview in this turn.',
+    )
+    expect(turnInstructions({ state: 'unavailable', reason: 'version_unsupported' })).toContain(
+      'This version of the site is not supported: no preview can be built. Do not rely on a ' +
+        'preview in this turn.',
+    )
     const starting = turnInstructions({
       state: 'starting',
       origin: 'http://site-a-chat-b.localhost:8090',

@@ -30,6 +30,8 @@ describe('preview statuses', () => {
       'no_core',
       'not_supported',
       'boot_failed',
+      'version_unsupported',
+      'no_layout',
     ])
   })
 

@@ -12,6 +12,7 @@ import {
   previewBrowserSecretSchema,
   previewHostname,
   siteAccessPath,
+  siteStackFactsOf,
   siteWorkspaceRules,
   type ContentWriteRequest,
   type DatabaseCopier,
@@ -20,6 +21,7 @@ import {
   type SiteAdapter,
   type SiteDbCapabilities,
   type SiteFacts,
+  type SiteLayoutReading,
   type SiteRuntime,
   type SiteStack,
   type PreviewUpstream,
@@ -45,6 +47,7 @@ import {
   MemoryStorage,
   MemoryVault,
   previewPage,
+  siteRootSources,
   upstreamServer,
   workingTreeArchive,
   recordValues,
@@ -52,7 +55,7 @@ import {
 import { PreviewManager } from './preview-manager.ts'
 import { wakeStoppedPreview } from './preview-wake.ts'
 import { previewRecordOf, previewRecordSchema } from './preview-record.ts'
-import { createPreviewSiteSources } from './site-sources.ts'
+import { createPreviewSiteSources, type PreviewSiteSources } from './site-sources.ts'
 
 // The manager of previews over PostgreSQL with its runtime, copier, git, storage and Vault faked
 // (docs/plan/53-chat-preview-release.md, R5c). Runs on a disposable database only:
@@ -268,6 +271,10 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
       previewDb?: SiteDbCapabilities
       /** What production's plugin answers when asked what it can write of a plan. */
       productionDb?: () => Promise<SiteDbCapabilities>
+      /** The sources of the site, made from the ones of the wizard's rows. */
+      sources?: (base: PreviewSiteSources) => PreviewSiteSources
+      /** The catalog of production's database; WordPress tables under `wp_` by default. */
+      catalog?: ReturnType<typeof fakeCatalog>
     } = {},
   ) {
     const runtime = new FakeRuntime(upstream)
@@ -294,18 +301,21 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
       {
         db,
         config,
+        appEnv: 'test',
         runtime,
         copier: options.copier ?? fakeCopier(),
-        catalog: fakeCatalog(),
+        catalog: options.catalog ?? fakeCatalog(),
         // No file source in these sites: the prefix comes from the catalog.
-        sources: createPreviewSiteSources({
-          db,
-          secrets: vault,
-          sources: siteSource,
-          databases: databaseInspector,
-          lookup: createHostLookup(),
-          appEnv: 'test',
-        }),
+        sources: (options.sources ?? ((base) => base))(
+          createPreviewSiteSources({
+            db,
+            secrets: vault,
+            sources: siteSource,
+            databases: databaseInspector,
+            lookup: createHostLookup(),
+            appEnv: 'test',
+          }),
+        ),
         git,
         storage,
         secrets: vault,
@@ -952,6 +962,298 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
     expect(
       await db.previewEnvironment.findUniqueOrThrow({ where: { id: other.preview.id } }),
     ).toMatchObject({ status: 'failed', errorCode: 'access_missing' })
+  })
+
+  describe('the record of the site a fresh copy reads (plan 62, Т13, Т16)', () => {
+    const WP_CONFIG = "<?php\ndefine( 'DB_CHARSET', 'utf8mb4' );\n$table_prefix = 'shop_';\n"
+    const VERSION = "<?php\n$wp_version = '6.8.3';\n"
+    /** WordPress with a layout to read, and the facts each recipe was made with. */
+    function layoutStack(layout: SiteLayoutReading) {
+      const recipes: SiteFacts[] = []
+      const adapter: SiteAdapter = {
+        ...wordpressAdapter,
+        readLayout: async () => layout,
+        previewRecipe: (site) => {
+          recipes.push(site)
+          return wordpressAdapter.previewRecipe(site)
+        },
+      }
+      return { adapter, recipes }
+    }
+    const read: SiteLayoutReading = { kind: 'read', extras: { admin: 'manager' }, adminPath: null }
+    const factsOf = async (siteId: string) =>
+      siteStackFactsOf(
+        (await db.site.findUniqueOrThrow({ where: { id: siteId }, select: { stackFacts: true } }))
+          .stackFacts,
+      )
+    const rowOf = (previewId: string) =>
+      db.previewEnvironment.findUniqueOrThrow({ where: { id: previewId } })
+
+    it('reads the configuration, the version and the layout in one session, for the recipe', async () => {
+      const { site, preview } = await dialog()
+      const stack = layoutStack(read)
+      let sources: ReturnType<typeof siteRootSources> | undefined
+      const f = manager({
+        adapters: () => stack.adapter,
+        sources: (base) =>
+          (sources = siteRootSources(base, {
+            'wp-config.php': WP_CONFIG,
+            'wp-includes/version.php': VERSION,
+          })),
+      })
+      await databaseAccess(f, site.id)
+      await f.m.refresh(preview.id, { requested: true })
+
+      const row = await rowOf(preview.id)
+      expect(row.status).toBe('ready')
+      expect(sources?.roots).toBe(1)
+      expect(previewRecordOf(row.runtime).database).toMatchObject({ tablePrefix: 'shop_' })
+      expect(await factsOf(site.id)).toMatchObject({
+        cmsVersion: '6.8.3',
+        extras: { admin: 'manager' },
+        adminPath: null,
+        limit: null,
+      })
+      expect(stack.recipes[0]).toMatchObject({ extras: { admin: 'manager' }, version: '6.8.3' })
+    })
+
+    it('goes on with the recorded layout when the hosting cannot be read now', async () => {
+      const { site, preview } = await dialog()
+      await db.site.update({
+        where: { id: site.id },
+        data: { stackFacts: { v: 1, extras: { admin: 'manager' } } },
+      })
+      const stack = layoutStack(read)
+      let sources: ReturnType<typeof siteRootSources> | undefined
+      const f = manager({
+        adapters: () => stack.adapter,
+        sources: (base) => (sources = siteRootSources(base, null)),
+      })
+      await databaseAccess(f, site.id)
+      await f.m.refresh(preview.id, { requested: true })
+
+      expect((await rowOf(preview.id)).status).toBe('ready')
+      expect(sources?.roots).toBe(1)
+      expect(stack.recipes[0]?.extras).toEqual({ admin: 'manager' })
+    })
+
+    /** The catalog of production's database, and how often a build asked it. */
+    function countedCatalog() {
+      const catalog = fakeCatalog()
+      const counted = {
+        asked: 0,
+        tables: (...args: Parameters<typeof catalog.tables>) => {
+          counted.asked += 1
+          return catalog.tables(...args)
+        },
+      }
+      return counted
+    }
+
+    it('builds no copy of a layout neither read now nor recorded: none is guessed', async () => {
+      const { site, preview } = await dialog()
+      const stack = layoutStack(read)
+      const catalog = countedCatalog()
+      let sources: ReturnType<typeof siteRootSources> | undefined
+      const f = manager({
+        adapters: () => stack.adapter,
+        catalog,
+        sources: (base) => (sources = siteRootSources(base, null)),
+      })
+      await databaseAccess(f, site.id)
+      await f.m.refresh(preview.id, { requested: true })
+
+      expect(await rowOf(preview.id)).toMatchObject({
+        status: 'unavailable',
+        unavailableReason: 'no_layout',
+        upstreamHost: null,
+      })
+      expect(stack.recipes).toEqual([])
+      expect(f.runtime.calls).toEqual([])
+      // Settled before the database: its access is not taken, its catalog not read.
+      expect(sources?.accesses).toBe(0)
+      expect(catalog.asked).toBe(0)
+    })
+
+    it('builds no copy of a version read now that the platform does not support', async () => {
+      const { site, preview } = await dialog()
+      const catalog = countedCatalog()
+      let sources: ReturnType<typeof siteRootSources> | undefined
+      const f = manager({
+        adapters: () => ({
+          ...wordpressAdapter,
+          support: { ...wordpressAdapter.support, refuseBelow: '7.0' },
+        }),
+        catalog,
+        sources: (base) =>
+          (sources = siteRootSources(base, { 'wp-includes/version.php': VERSION })),
+      })
+      await databaseAccess(f, site.id)
+      await f.m.refresh(preview.id, { requested: true })
+
+      expect(await rowOf(preview.id)).toMatchObject({
+        status: 'unavailable',
+        unavailableReason: 'version_unsupported',
+        upstreamHost: null,
+      })
+      expect((await factsOf(site.id)).cmsVersion).toBe('6.8.3')
+      expect(f.runtime.calls).toEqual([])
+      expect(sources?.accesses).toBe(0)
+      expect(catalog.asked).toBe(0)
+    })
+
+    it('keeps the settings of the configuration when the stack cannot be read', async () => {
+      const { site, preview } = await dialog()
+      await db.site.update({
+        where: { id: site.id },
+        data: { stackFacts: { v: 1, extras: { admin: 'manager' } } },
+      })
+      const stack = layoutStack(read)
+      stack.adapter.readLayout = async () => {
+        throw new Error('the hosting dropped the session')
+      }
+      let sources: ReturnType<typeof siteRootSources> | undefined
+      const f = manager({
+        adapters: () => stack.adapter,
+        sources: (base) =>
+          (sources = siteRootSources(base, {
+            'wp-config.php': WP_CONFIG,
+            'wp-includes/version.php': VERSION,
+          })),
+      })
+      await databaseAccess(f, site.id)
+      await f.m.refresh(preview.id, { requested: true })
+
+      const row = await rowOf(preview.id)
+      expect(row.status).toBe('ready')
+      expect(sources?.roots).toBe(1)
+      // From wp-config.php, not the `wp_` of the catalog.
+      expect(previewRecordOf(row.runtime).database).toMatchObject({ tablePrefix: 'shop_' })
+      expect(stack.recipes[0]?.extras).toEqual({ admin: 'manager' })
+    })
+
+    it('writes the limit of a refused layout and builds no copy', async () => {
+      const { site, preview } = await dialog()
+      await db.site.update({
+        where: { id: site.id },
+        data: { stackFacts: { v: 1, extras: { admin: 'manager' } } },
+      })
+      const stack = layoutStack({ kind: 'refused', limit: 'renamed_folder' })
+      const f = manager({
+        adapters: () => stack.adapter,
+        sources: (base) => siteRootSources(base, { 'wp-includes/version.php': VERSION }),
+      })
+      await databaseAccess(f, site.id)
+      await f.m.refresh(preview.id, { requested: true })
+
+      expect(await rowOf(preview.id)).toMatchObject({
+        status: 'unavailable',
+        unavailableReason: 'no_layout',
+      })
+      expect(await factsOf(site.id)).toMatchObject({
+        cmsVersion: '6.8.3',
+        limit: 'renamed_folder',
+        extras: { admin: 'manager' },
+      })
+    })
+
+    it('builds WordPress as before, reading its version on a fresh copy only', async () => {
+      const { site, preview } = await dialog()
+      let sources: ReturnType<typeof siteRootSources> | undefined
+      const f = manager({ sources: (base) => (sources = siteRootSources(base, null)) })
+      await databaseAccess(f, site.id)
+      await f.m.refresh(preview.id, { requested: true })
+      expect(await rowOf(preview.id)).toMatchObject({ status: 'ready', unavailableReason: null })
+      expect(sources?.roots).toBe(1)
+      expect(await factsOf(site.id)).toEqual(siteStackFactsOf({}))
+
+      // A rebuild on the same seed keeps the settings and the record: no session is opened.
+      await db.previewEnvironment.update({ where: { id: preview.id }, data: { dirty: true } })
+      await f.m.refresh(preview.id, { requested: true })
+      expect((await rowOf(preview.id)).status).toBe('ready')
+      expect(sources?.roots).toBe(1)
+
+      // A fresh copy of a site whose version file is there writes the version it read.
+      const other = await dialog()
+      const g = manager({
+        sources: (base) => siteRootSources(base, { 'wp-includes/version.php': VERSION }),
+      })
+      await databaseAccess(g, other.site.id)
+      await g.m.refresh(other.preview.id, { requested: true })
+      expect((await rowOf(other.preview.id)).status).toBe('ready')
+      expect((await factsOf(other.site.id)).cmsVersion).toBe('6.8.3')
+    })
+
+    it('reads the hosting again on every fresh copy, the settings included', async () => {
+      const { site, task, preview } = await dialog()
+      const root: Record<string, string> = {
+        'wp-config.php': WP_CONFIG,
+        'wp-includes/version.php': "<?php\n$wp_version = '6.8.1';\n",
+      }
+      let sources: ReturnType<typeof siteRootSources> | undefined
+      const f = manager({ sources: (base) => (sources = siteRootSources(base, root)) })
+      await databaseAccess(f, site.id)
+      await f.m.refresh(preview.id, { requested: true })
+      expect(await rowOf(preview.id)).toMatchObject({ status: 'ready' })
+      expect(previewRecordOf((await rowOf(preview.id)).runtime).database).toMatchObject({
+        tablePrefix: 'shop_',
+      })
+      expect((await factsOf(site.id)).cmsVersion).toBe('6.8.1')
+
+      // A release installs: the next build is a fresh copy of a preview that has its settings.
+      const candidate = await db.taskCandidate.create({
+        data: {
+          taskId: task.id,
+          revision: 1,
+          turnNo: 1,
+          baseSha: main,
+          baseTree: 'b'.repeat(40),
+          headSha: candidateHead,
+          files: [],
+          dbPlan: [],
+          dbPlanSha256: hash('d'),
+          proposedBump: 'patch',
+          proposedVersion: 'v0.0.1',
+          facts: {},
+          // Released and done with: the next build is the dialog's base, not this candidate.
+          status: 'superseded',
+          supersededAt: new Date(),
+        },
+      })
+      const release = await db.siteRelease.create({
+        data: {
+          siteId: site.id,
+          taskId: task.id,
+          candidateId: candidate.id,
+          candidateRevision: 1,
+          attempt: 1,
+          releaseKey: hash('8'),
+          version: 'v0.0.1',
+          tag: 'v0.0.1',
+          bump: 'patch',
+          mainBeforeSha: main,
+          approvedSha: main,
+          mainPushedAt: new Date(),
+          status: 'installed',
+          committedAt: new Date(),
+          approvedAt: new Date(),
+        },
+      })
+      await db.$executeRaw`UPDATE sites SET installed_release_id = ${release.id}::uuid,
+        installed_version = 'v0.0.1', installed_sha = ${main}, installed_at = now()
+        WHERE id = ${site.id}::uuid`
+      root['wp-includes/version.php'] = VERSION
+      root['wp-config.php'] =
+        "<?php\ndefine( 'DB_CHARSET', 'utf8mb4' );\n$table_prefix = 'next_';\n"
+      await db.previewEnvironment.update({ where: { id: preview.id }, data: { dirty: true } })
+      await f.m.refresh(preview.id, { requested: true })
+
+      const row = await rowOf(preview.id)
+      expect(row.status).toBe('ready')
+      expect(sources?.roots).toBe(2)
+      expect(previewRecordOf(row.runtime).database).toMatchObject({ tablePrefix: 'next_' })
+      expect((await factsOf(site.id)).cmsVersion).toBe('6.8.3')
+    })
   })
 
   describe('a stack that says how its live page looks (Т33)', () => {

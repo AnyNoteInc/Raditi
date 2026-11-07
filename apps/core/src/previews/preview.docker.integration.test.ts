@@ -470,6 +470,7 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
     manager = new PreviewManager({
       db,
       config,
+      appEnv: 'test',
       runtime,
       copier: createMysqlDatabaseCopier(connections),
       catalog: createMysqlDatabaseCatalog(connections),

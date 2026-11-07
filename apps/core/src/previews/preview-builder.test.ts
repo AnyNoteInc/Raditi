@@ -2,11 +2,14 @@ import {
   DatabaseCopyError,
   DB_CREATED_ID_BASE,
   DomainError,
+  emptySiteStackFacts,
   previewDatabaseSecretPath,
   SiteConnectionError,
   type PreviewFilesInput,
+  type SiteAdapter,
   type SiteContentGateway,
   type SiteDbCapabilities,
+  type SiteStackFacts,
 } from '@repo/domain'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -16,7 +19,7 @@ import { wordpressAdapter } from '@repo/site-adapters'
 import { describe, expect, it } from 'vitest'
 
 import { TAR_END, tarFileHeader, tarPadding } from '../git-workspace/tree-tar.ts'
-import { MemoryVault } from '../testing/previews.ts'
+import { MemoryVault, memorySiteTree } from '../testing/previews.ts'
 import {
   dbCapabilitiesOf,
   DIFF_REBUILD_FILES,
@@ -25,6 +28,10 @@ import {
   previewErrorCode,
   previewDbRuntime,
   previewFailure,
+  previewSiteFacts,
+  PreviewUnavailable,
+  readSiteRoot,
+  settleStackFacts,
   unaskedProduction,
   writePreviewTree,
 } from './preview-builder.ts'
@@ -524,5 +531,205 @@ describe('what production’s plugin can write of a plan (Т37)', () => {
         ),
       ).toBe(null)
     })
+  })
+})
+
+describe('the record of the site a fresh copy goes on with (Т13, Т16)', () => {
+  const siteId = '0199a3f2-0000-7000-8000-0000000000f1'
+  /** A stack with a layout to read, its versions judged from 3.0 on. */
+  const layoutStack: Pick<SiteAdapter, 'support' | 'readLayout'> = {
+    support: {
+      ...wordpressAdapter.support,
+      refuseBelow: '3.0',
+    },
+    readLayout: async () => ({
+      kind: 'read',
+      extras: { admin: 'manager' },
+      adminPath: '/manager/',
+    }),
+  }
+  /** A database that keeps the parts of the record it is asked to write. */
+  function recording() {
+    const writes: string[] = []
+    const db = {
+      $executeRaw: async (_strings: TemplateStringsArray, ...values: unknown[]) => {
+        writes.push(String(values[0]))
+        return 1
+      },
+    }
+    return { writes, deps: { db, appEnv: 'test' as const } as never }
+  }
+  const site = (stackFacts: Partial<SiteStackFacts> = {}) => ({
+    id: siteId,
+    stackFacts: { ...emptySiteStackFacts, ...stackFacts },
+  })
+  const unavailable = (reason: string) =>
+    expect.objectContaining({ name: 'PreviewUnavailable', reason }) as unknown
+
+  it('writes what the look read, and the recipe gets its layout and generation', async () => {
+    const { writes, deps } = recording()
+    const facts = await settleStackFacts(deps, layoutStack, site(), {
+      patch: {
+        cmsVersion: '3.0.4',
+        generation: 'r3',
+        extras: { admin: 'manager' },
+        adminPath: '/manager/',
+        limit: null,
+      },
+      refused: false,
+      layoutRead: true,
+    })
+    expect(writes.map((json) => JSON.parse(json) as unknown)).toEqual([
+      {
+        v: 1,
+        cmsVersion: '3.0.4',
+        generation: 'r3',
+        extras: { admin: 'manager' },
+        adminPath: '/manager/',
+        limit: null,
+      },
+    ])
+    expect(facts).toMatchObject({ cmsVersion: '3.0.4', extras: { admin: 'manager' } })
+    expect(
+      previewSiteFacts({ stack: 'modx', url: 'https://a.example', stackFacts: facts }, null),
+    ).toEqual({
+      stack: 'modx',
+      url: 'https://a.example',
+      docroot: '/',
+      extras: { admin: 'manager' },
+      version: '3.0.4',
+      generation: 'r3',
+    })
+  })
+
+  it('goes on with the recorded layout when the hosting could not be read now', async () => {
+    const { writes, deps } = recording()
+    const recorded = site({ cmsVersion: '3.0.4', extras: { admin: 'manager' } })
+    await expect(settleStackFacts(deps, layoutStack, recorded, null)).resolves.toEqual(
+      recorded.stackFacts,
+    )
+    // A layout that did not pass now keeps the recorded one too.
+    await expect(
+      settleStackFacts(deps, layoutStack, recorded, {
+        patch: { cmsVersion: '3.0.5', generation: null },
+        refused: false,
+        layoutRead: false,
+      }),
+    ).resolves.toMatchObject({ cmsVersion: '3.0.5', extras: { admin: 'manager' } })
+    expect(writes).toHaveLength(1)
+  })
+
+  it('builds no copy of a layout neither read now nor recorded: none is guessed', async () => {
+    const { writes, deps } = recording()
+    await expect(settleStackFacts(deps, layoutStack, site(), null)).rejects.toEqual(
+      unavailable('no_layout'),
+    )
+    await expect(
+      settleStackFacts(deps, layoutStack, site(), {
+        patch: { cmsVersion: '3.0.4', generation: null },
+        refused: false,
+        layoutRead: false,
+      }),
+    ).rejects.toBeInstanceOf(PreviewUnavailable)
+    // The version it did read is written all the same.
+    expect(writes.map((json) => JSON.parse(json) as unknown)).toEqual([
+      { v: 1, cmsVersion: '3.0.4', generation: null },
+    ])
+  })
+
+  it('writes the limit of a refused layout and builds nothing, a recorded layout or not', async () => {
+    const { writes, deps } = recording()
+    await expect(
+      settleStackFacts(deps, layoutStack, site({ extras: { admin: 'manager' } }), {
+        patch: { limit: 'renamed_folder' },
+        refused: true,
+        layoutRead: false,
+      }),
+    ).rejects.toEqual(unavailable('no_layout'))
+    expect(writes.map((json) => JSON.parse(json) as unknown)).toEqual([
+      { v: 1, limit: 'renamed_folder' },
+    ])
+  })
+
+  it('builds no copy of a version the platform does not support', async () => {
+    const { writes, deps } = recording()
+    await expect(
+      settleStackFacts(deps, layoutStack, site({ cmsVersion: '2.8.1', extras: { a: 'b' } }), null),
+    ).rejects.toEqual(unavailable('version_unsupported'))
+    // The version read now is judged, not the record: an empty one, and a supported one.
+    const read = {
+      patch: { cmsVersion: '2.8.1', generation: null, extras: { a: 'b' } },
+      refused: false,
+      layoutRead: true,
+    }
+    await expect(settleStackFacts(deps, layoutStack, site(), read)).rejects.toEqual(
+      unavailable('version_unsupported'),
+    )
+    await expect(
+      settleStackFacts(deps, layoutStack, site({ cmsVersion: '3.0.4', extras: { a: 'b' } }), read),
+    ).rejects.toEqual(unavailable('version_unsupported'))
+    expect(writes).toHaveLength(2)
+  })
+
+  it('leaves WordPress as it was: no layout to read, an unread hosting stops nothing', async () => {
+    const { writes, deps } = recording()
+    await expect(settleStackFacts(deps, wordpressAdapter, site(), null)).resolves.toEqual(
+      emptySiteStackFacts,
+    )
+    await expect(
+      settleStackFacts(deps, wordpressAdapter, site({ cmsVersion: '6.8.1' }), {
+        patch: { cmsVersion: '6.8.3', generation: null, limit: null },
+        refused: false,
+        layoutRead: false,
+      }),
+    ).resolves.toMatchObject({ cmsVersion: '6.8.3', extras: {} })
+    expect(writes).toHaveLength(1)
+  })
+})
+
+describe('one look at the site root for a build (Т13, Т16)', () => {
+  const root = memorySiteTree({
+    'wp-config.php': "<?php\ndefine( 'DB_CHARSET', 'utf8mb4' );\n$table_prefix = 'shop_';\n",
+    'wp-includes/version.php': "<?php\n$wp_version = '6.8.3';\n",
+  })
+  /** A source whose session hands `use` the root and lets its failure through. */
+  const sources = {
+    sources: {
+      withRoot: <T>(
+        _siteId: string,
+        _signal: AbortSignal,
+        use: (tree: typeof root) => Promise<T>,
+      ) => use(root),
+    },
+  } as never
+  const failing = (onRead: () => void) => ({
+    ...wordpressAdapter,
+    readLayout: async () => {
+      onRead()
+      throw new Error('the hosting dropped the session')
+    },
+  })
+
+  it('keeps the settings it read when the stack cannot be read', async () => {
+    const reading = await readSiteRoot(
+      sources,
+      failing(() => {}),
+      { id: 'site' },
+      signal,
+    )
+    expect(reading?.settings).toMatchObject({ tablePrefix: 'shop_' })
+    expect(reading?.stack).toBeNull()
+  })
+
+  it('stops a cancelled build instead of going on without the stack', async () => {
+    const cancel = new AbortController()
+    await expect(
+      readSiteRoot(
+        sources,
+        failing(() => cancel.abort()),
+        { id: 'site' },
+        cancel.signal,
+      ),
+    ).rejects.toMatchObject({ name: 'AbortError' })
   })
 })

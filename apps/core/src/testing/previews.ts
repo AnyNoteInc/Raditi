@@ -22,11 +22,13 @@ import {
   type PublishedContentGateway,
   type PublishedContentState,
   type SiteContentAdapter,
+  type SiteTree,
 } from '@repo/domain'
 import { wordpressContentAccessSchema } from '@repo/site-adapters'
 
 import { TAR_END, tarFileHeader, tarPadding } from '../git-workspace/tree-tar.ts'
 import type { PreviewSyncGit } from '../previews/preview-sync.ts'
+import type { PreviewSiteSources } from '../previews/site-sources.ts'
 import type { DbPlanValueOwner, DbPlanValueReader } from '../site-content/db-plan-values.ts'
 
 export const hash = (c: string) => c.repeat(64)
@@ -222,6 +224,65 @@ export const fakeCatalog = (prefix = 'wp_') => ({
     }))
   },
 })
+
+/**
+ * A site root of `files` (path → content) as a session of its file source reads it: a file that
+ * is not there and a folder that is not there are null, as `siteTreeOf` answers them.
+ */
+export function memorySiteTree(files: Record<string, string>): SiteTree {
+  const paths = Object.keys(files)
+  return {
+    read: async (path) => (path in files ? new TextEncoder().encode(files[path]) : null),
+    async list(path) {
+      const prefix = path === '' ? '' : `${path}/`
+      const below = paths.filter((file) => file.startsWith(prefix))
+      if (below.length === 0) return null
+      const entries = new Map<string, 'file' | 'directory'>()
+      for (const file of below) {
+        const [name, ...rest] = file.slice(prefix.length).split('/')
+        if (name) entries.set(name, rest.length ? 'directory' : 'file')
+      }
+      return [...entries].map(([name, type]) => ({ name, type }))
+    },
+  }
+}
+
+/**
+ * The sources of a site whose root on the hosting is `root` — null: it has none, or it cannot be
+ * read now —, the access to its database and its dumps as `base` gives them. `roots` counts the
+ * sessions a build opened of the root (one at most, plan 62, Э2.9), `accesses` the reads of the
+ * access to its database.
+ */
+export function siteRootSources(
+  base: PreviewSiteSources,
+  root: Record<string, string> | null,
+): PreviewSiteSources & { roots: number; accesses: number } {
+  const sources = {
+    roots: 0,
+    accesses: 0,
+    databaseAccess: (siteId: string) => {
+      sources.accesses += 1
+      return base.databaseAccess(siteId)
+    },
+    withDump: base.withDump.bind(base),
+    async withRoot<T>(
+      _siteId: string,
+      signal: AbortSignal,
+      use: (tree: SiteTree) => Promise<T>,
+    ): Promise<T | null> {
+      sources.roots += 1
+      if (root === null) return null
+      try {
+        return await use(memorySiteTree(root))
+      } catch {
+        // As the real source: a cancelled build is not read as an unreadable hosting.
+        signal.throwIfAborted()
+        return null
+      }
+    },
+  }
+  return sources
+}
 
 export class FakeGit implements PreviewSyncGit {
   readonly exports: Array<{ sha: string; paths?: readonly string[] }> = []

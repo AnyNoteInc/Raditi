@@ -34,6 +34,7 @@ beforeAll(async () => {
     files: {
       'public_html/wp-config.php': WP_CONFIG,
       'public_html/index.php': '<?php',
+      'public_html/manager/index.php': '<?php',
       // Dumps next to the site folder, as a hosting keeps them (owner's decision of 26.10.2026).
       'backup-2026-08-30.sql': DUMP,
       'dumps/old.sql.gz': gzipSync(Buffer.from(DUMP)),
@@ -151,7 +152,9 @@ const databaseRow = (overrides: Record<string, unknown> = {}) => ({
 })
 
 const settingsOf = (rows: Rows, vault: VersionedVault, signal = AbortSignal.timeout(20_000)) =>
-  sources(rows, vault).withRoot(SITE, signal, (read) => wordpressAdapter.databaseSettings(read))
+  sources(rows, vault).withRoot(SITE, signal, (tree) =>
+    wordpressAdapter.databaseSettings(tree.read),
+  )
 
 describe('the configuration of the site on its hosting', () => {
   it('reads the prefix and the encoding from wp-config.php through the wizard’s file source', async () => {
@@ -200,6 +203,31 @@ describe('the configuration of the site on its hosting', () => {
     const otherKey = sftpRow({ hostKey: `ssh-ed25519 SHA256:${'A'.repeat(43)}` })
     await expect(settingsOf({ codeSource: otherKey }, vault)).resolves.toBeNull()
     expect(server.authAttempts.length).toBe(attempts)
+  })
+
+  it('lists the folders of the root in the same session, for the layout of the stack', async () => {
+    const vault = new VersionedVault()
+    vault.write(siteAccessPath(SITE, 'ssh'), sshAccess())
+    const listed = await sources({ codeSource: sftpRow() }, vault).withRoot(
+      SITE,
+      AbortSignal.timeout(20_000),
+      async (tree) => ({
+        root: await tree.list(''),
+        folder: await tree.list('manager'),
+        missing: await tree.list('no-such-folder'),
+        outside: await tree.list('../public_html'),
+      }),
+    )
+    expect(listed?.root).toEqual(
+      expect.arrayContaining([
+        { name: 'manager', type: 'directory' },
+        { name: 'wp-config.php', type: 'file' },
+        { name: 'index.php', type: 'file' },
+      ]),
+    )
+    expect(listed?.folder).toEqual([{ name: 'index.php', type: 'file' }])
+    expect(listed?.missing).toBeNull()
+    expect(listed?.outside).toBeNull()
   })
 
   it('answers null when the hosting refuses the login: the catalog decides then', async () => {

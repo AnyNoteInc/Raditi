@@ -81,6 +81,12 @@ const unavailable: Readonly<Record<PreviewUnavailableReason, string>> = Object.f
   boot_failed:
     'The site does not start in the copy of the platform: no preview can be shown. ' +
     'Change files only; your changes are checked when the client releases them.',
+  version_unsupported:
+    'This version of the site is not supported: no preview can be built. ' +
+    'Do not rely on a preview in this turn.',
+  no_layout:
+    'The layout of this site cannot be read now: no preview can be built. ' +
+    'Do not rely on a preview in this turn.',
 })
 
 function previewSection(preview: PreviewFacts): string {

@@ -90,6 +90,7 @@ export const previewProviders: Provider[] = [
       return new PreviewManager({
         db: prisma,
         config: previews,
+        appEnv: config.appEnv,
         runtime,
         copier: createMysqlDatabaseCopier(connections),
         // A site's SQL dump is loaded here before its copy (26.10.2026): core's own Docker only.

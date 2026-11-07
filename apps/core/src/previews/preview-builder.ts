@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 
 import type { Prisma, PrismaClient } from '@repo/db'
-import { markStaleCandidates } from '@repo/db'
+import { markStaleCandidates, mergeSiteStackFacts } from '@repo/db'
 import {
   assertPreviewTransition,
   DB_CREATED_ID_BASE,
@@ -18,6 +18,8 @@ import {
   previewRuntimeMatch,
   siteEnvVarPath,
   siteEnvVarValueOf,
+  siteSupportOf,
+  type AppEnv,
   type DatabaseCopier,
   type StagingDatabaseRuntime,
   type DbAccess,
@@ -41,6 +43,7 @@ import {
   type SiteDbCapabilities,
   type SiteRuntime,
   type SiteStack,
+  type SiteStackFacts,
 } from '@repo/domain'
 import {
   noDbRuntime,
@@ -54,6 +57,7 @@ import type { ExportedTree, TreeExportInput } from '../git-workspace/git-workspa
 import { TAR_END, tarDirectoryHeader } from '../git-workspace/tree-tar.ts'
 import type { DbPlanValueReader } from '../site-content/db-plan-values.ts'
 import { hasSiteAccess } from '../site-content/site-access.ts'
+import { readStack, type StackReading } from '../site-provisioning/stack-reading.ts'
 import { databaseSettingsFromCatalog, type CatalogTable } from './database-settings.ts'
 import {
   previewContentAccess,
@@ -102,6 +106,8 @@ export type ProductionContent = (scope: {
 export interface PreviewBuildDeps {
   db: PrismaClient
   config: PreviewsConfig
+  /** What the platform supports of a stack depends on it (`siteSupportOf`); PreviewsConfig has none. */
+  appEnv: AppEnv
   /** null — this core runs no preview (PREVIEW_EXECUTOR=runner until M10). */
   runtime: PreviewRuntime | null
   copier: DatabaseCopier
@@ -186,17 +192,20 @@ export function previewErrorCode(error: unknown): string {
 /**
  * The site's facts as core knows them, with the settings of its database once read and the
  * version of the runtime its server runs (its plugin tells it): the recipe takes the closest
- * runtime the host of previews has (Р2, Р18).
+ * runtime the host of previews has (Р2, Р18). The layout (`extras`), the version and its
+ * generation come from the record `sites.stack_facts` (docs/plan/62-site-stacks.md, Т13, Р6 of Э2).
  */
 export const previewSiteFacts = (
-  site: { stack: SiteStack; url: string },
+  site: { stack: SiteStack; url: string; stackFacts: SiteStackFacts },
   database: SiteDatabaseSettings | null,
   runtimeVersion?: string | null,
 ): SiteFacts => ({
   stack: site.stack,
   url: site.url,
   docroot: '/',
-  extras: {},
+  extras: { ...site.stackFacts.extras },
+  ...(site.stackFacts.cmsVersion ? { version: site.stackFacts.cmsVersion } : {}),
+  ...(site.stackFacts.generation ? { generation: site.stackFacts.generation } : {}),
   ...(database ? { database } : {}),
   ...(runtimeVersion ? { runtimeVersion } : {}),
 })
@@ -277,25 +286,81 @@ export function previewDbRuntime(
 export const previewOriginOf = (config: PreviewsConfig, hostname: string): string =>
   previewOrigin(hostname, config.address)
 
+/** What one look at the site root on its hosting gave a build (`readSiteRoot`). */
+export interface RootReading {
+  /** The settings of the database its configuration states; null — it states none. */
+  settings: SiteDatabaseSettings | null
+  /** The version and the layout of the stack; null — they could not be read in time. */
+  stack: StackReading | null
+}
+
+/**
+ * One session of the site's file source for a build (docs/plan/62-site-stacks.md, Т13, Т16): the
+ * configuration of the database (`SiteAdapter.databaseSettings`), then the version and the layout
+ * of the stack (`readStack`, shared with the import). A failure of the second is caught here: the
+ * settings already read are kept, and `stack` is null. null — the site has no file source, or it
+ * could not be opened or read: the build goes on without the files of the hosting.
+ */
+export async function readSiteRoot(
+  deps: Pick<PreviewBuildDeps, 'sources'>,
+  adapter: Pick<SiteAdapter, 'databaseSettings' | 'support' | 'readVersion' | 'readLayout'>,
+  site: { id: string },
+  signal: AbortSignal,
+): Promise<RootReading | null> {
+  return deps.sources.withRoot(site.id, signal, async (tree) => ({
+    settings: await adapter.databaseSettings(tree.read),
+    stack: await readStack(adapter, tree).catch(() => {
+      signal.throwIfAborted()
+      return null
+    }),
+  }))
+}
+
+/**
+ * The record of the site a build goes on with (docs/plan/62-site-stacks.md, Т13, Т16, Р16 of Э2):
+ * what a fresh look at its files read is written first and wins; a layout the stack refused, or
+ * one it has and that is neither read now nor recorded before (no `extras`), builds no copy
+ * (`no_layout`) — no layout is guessed —, and nor does a version the platform does not support
+ * (`version_unsupported`). A stack without a layout to read (WordPress) never meets the first two.
+ * No stack is named here (rule 8).
+ */
+export async function settleStackFacts(
+  deps: Pick<PreviewBuildDeps, 'db' | 'appEnv'>,
+  adapter: Pick<SiteAdapter, 'support' | 'readLayout'>,
+  site: { id: string; stackFacts: SiteStackFacts },
+  reading: StackReading | null,
+): Promise<SiteStackFacts> {
+  let facts = site.stackFacts
+  if (reading !== null) {
+    await mergeSiteStackFacts(deps.db, site.id, reading.patch)
+    facts = { ...facts, ...reading.patch }
+  }
+  if (reading?.refused) throw new PreviewUnavailable('no_layout')
+  if (adapter.readLayout !== null && !reading?.layoutRead && Object.keys(facts.extras).length === 0)
+    throw new PreviewUnavailable('no_layout')
+  if (siteSupportOf(adapter.support, facts, [], deps.appEnv).limit === 'version_unsupported')
+    throw new PreviewUnavailable('version_unsupported')
+  return facts
+}
+
 /**
  * The settings the stack's recipe and copy are made with, read once per seed (Р15). First the
- * configuration on the hosting, as `SiteAdapter.databaseSettings(read)` reads it through the file
- * source the connection wizard recorded (plan 39); a site without one, a hosting that cannot be
- * read now, or a configuration that does not state them as constants falls back to the catalog
- * of the production database: the tables of the stack's copy policy under one prefix, and the
- * collation they share is the encoding of the copy (database-settings.ts).
+ * configuration on the hosting, as `SiteAdapter.databaseSettings(read)` read it through the file
+ * source the connection wizard recorded (plan 39; `configured`, from `readSiteRoot`); a site
+ * without one, a hosting that cannot be read now, or a configuration that does not state them as
+ * constants falls back to the catalog of the production database: the tables of the stack's copy
+ * policy under one prefix, and the collation they share is the encoding of the copy
+ * (database-settings.ts).
  */
 async function databaseSettings(
   deps: PreviewBuildDeps,
   adapter: SiteAdapter,
-  site: { id: string; stack: SiteStack; url: string },
+  site: { id: string; stack: SiteStack; url: string; stackFacts: SiteStackFacts },
   previewId: string,
   access: () => Promise<DbAccess>,
+  configured: SiteDatabaseSettings | null,
   signal: AbortSignal,
 ): Promise<SiteDatabaseSettings> {
-  const configured = await deps.sources.withRoot(site.id, signal, (read) =>
-    adapter.databaseSettings(read),
-  )
   if (configured) return configured
   let named
   try {
@@ -636,9 +701,24 @@ async function buildPreviewOn(
   let access: DbAccess | null = null
   // The site's database, or the temporary one its dump was loaded into.
   const accessOf = async () => (access ??= await staging.access())
+  // One session of the hosting per build, and only when something is read in it: a new seed
+  // reads the version and the layout again (Т16), a rebuild on the old one keeps the record.
+  const asked = freshSeed || !preview.record.database
+  const root = asked ? await readSiteRoot(deps, adapter, site, signal) : null
+  // Settled before the database is touched: a copy that cannot be built copies nothing.
+  const stackFacts = await settleStackFacts(deps, adapter, site, root?.stack ?? null)
+  const current = { ...site, stackFacts }
   const database =
     (!freshSeed && preview.record.database) ||
-    (await databaseSettings(deps, adapter, site, preview.id, accessOf, signal))
+    (await databaseSettings(
+      deps,
+      adapter,
+      current,
+      preview.id,
+      accessOf,
+      root?.settings ?? null,
+      signal,
+    ))
   // Production, through its plugin: what its server runs, and the state of its objects for the
   // seed. One that cannot be asked now leaves the defaults and asks again at the next build.
   let production: PublishedContentGateway | null = null
@@ -656,7 +736,7 @@ async function buildPreviewOn(
   const productionDb = production
     ? await dbCapabilitiesOf(production)
     : await unaskedProduction(deps, site.id, site.stack)
-  const siteFacts = previewSiteFacts(site, database, siteRuntime?.runtimeVersion)
+  const siteFacts = previewSiteFacts(current, database, siteRuntime?.runtimeVersion)
   let recipe: PreviewRecipe
   try {
     recipe = adapter.previewRecipe(siteFacts)

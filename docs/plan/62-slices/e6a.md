@@ -1381,7 +1381,7 @@
   - `a read that fails is unknown and throws nothing`.
   - `no probe`: `'none'`, хостинг не читался.
   - `git reads go after the hosting's session`: подделка `git` считает вызовы до закрытия `withRoot`, их ноль.
-  - `preview-builder.test.ts`: `withRoot` зовётся один раз (тест Э2.9 остаётся зелёным); `withRoot: async () => null` — `drift: 'unknown'`, сборка доходит до `ready`; кандидат есть и копия свежая — сравнение с головой `main`; кандидат без свежей копии — `readBranchHead` не вызван.
+  - `preview-manager.integration.test.ts` (сборку `buildPreview` без PostgreSQL не провести, поэтому сценарии сборки Э2.9 идут в наборе менеджера, а не в `preview-builder.test.ts`; источники — `siteRootSources` и `memorySiteTree` из `apps/core/src/testing/previews.ts`): `withRoot` зовётся один раз — счётчик `roots` равен 1 (тесты Э2.9 «the record of the site a fresh copy reads» остаются зелёными); `siteRootSources(base, null)` — `drift: 'unknown'`, сборка доходит до `ready`; кандидат есть и копия свежая — сравнение с головой `main`; кандидат без свежей копии — `readBranchHead` не вызван.
   - `preview-record.test.ts`: запись прежнего вида без `drift` читается, размер с `drift` и полными путями синхронизации в пределах 8 КиБ.
 - *Стенды.* `pnpm gates`, `pnpm verify:release`: в S11 шаг перед `sites:sync` проверяет `drift: 'version'` в записи предпросмотра после правки `wp-includes/version.php` на хостинге; после принятия `preview_environments.seed_sync_id` не равен `sites.code_sync_id`, в записи новой сборки `none`. `project.get.drift` рождается в Э7.2 после слияния чатов, поэтому его здесь не проверяют: `undefined` тоже ложно.
 - *Готово.* `preview_environments.runtime` несёт `drift` после каждой свежей копии, сборка при дрейфе доходит до `ready`.

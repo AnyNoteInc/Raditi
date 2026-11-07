@@ -2,6 +2,7 @@ import { Prisma, type PrismaClient } from '@repo/db'
 import {
   candidateFilesSchema,
   dbPlanSchema,
+  siteStackFactsOf,
   terminalTaskStatuses,
   type CandidateFiles,
   type DbPlan,
@@ -9,6 +10,7 @@ import {
   type PreviewStatus,
   type RepoRef,
   type SiteStack,
+  type SiteStackFacts,
   type TaskStatus,
 } from '@repo/domain'
 
@@ -63,7 +65,14 @@ export interface PreviewFacts {
     written: boolean
   }
   task: { status: TaskStatus; workspaceId: string; dataClass: 'synthetic' | 'client' }
-  site: { id: string; stack: SiteStack; url: string; installedReleaseId: string | null }
+  site: {
+    id: string
+    stack: SiteStack
+    url: string
+    installedReleaseId: string | null
+    /** `sites.stack_facts`: a row of another shape reads as the empty record (Т13). */
+    stackFacts: SiteStackFacts
+  }
   repo: (RepoRef & { defaultBranch: string }) | null
   /** The candidate the preview should show: the dialog's `current` or `stale` one. */
   candidate: {
@@ -114,7 +123,9 @@ export async function loadPreviewFacts(
       task: {
         select: { status: true, workspaceId: true, workspace: { select: { dataClass: true } } },
       },
-      site: { select: { id: true, stack: true, url: true, installedReleaseId: true } },
+      site: {
+        select: { id: true, stack: true, url: true, installedReleaseId: true, stackFacts: true },
+      },
     },
   })
   if (!row) return null
@@ -181,6 +192,7 @@ export async function loadPreviewFacts(
       stack: row.site.stack,
       url: row.site.url,
       installedReleaseId: row.site.installedReleaseId,
+      stackFacts: siteStackFactsOf(row.site.stackFacts),
     },
     repo: repository
       ? {
