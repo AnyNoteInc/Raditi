@@ -380,20 +380,19 @@ test('the panel of a site hides with its button and with «]», and its edge is 
   await expect(page.getByRole('navigation', { name: 'Основная навигация' })).toBeVisible()
 })
 
-test('the files of a site are the tab «Файлы» of «Изменения»', async ({ page, signedInUser }) => {
+test('«Изменения» are the versions of a site, with no tab «Файлы»', async ({
+  page,
+  signedInUser,
+}) => {
   const siteId = await addSite(signedInUser.id)
   await hideDevIndicator(page)
   await page.setViewportSize({ width: 1280, height: 900 })
 
-  await page.goto(`/projects/${siteId}/terminal`)
-  await expect(page).toHaveURL(`/projects/${siteId}/changes`)
+  for (const address of ['terminal', 'changes/versions']) {
+    await page.goto(`/projects/${siteId}/${address}`)
+    await expect(page).toHaveURL(`/projects/${siteId}/changes`)
+  }
   await expect(page.getByRole('heading', { level: 1, name: 'Изменения' })).toBeVisible()
-  const tabs = page.getByRole('navigation', { name: 'Изменения' })
-  await expect(tabs.getByRole('link')).toHaveText(['Файлы', 'Версии'])
-  await expect(tabs.getByRole('link', { name: 'Файлы' })).toHaveAttribute('aria-current', 'page')
-
-  await tabs.getByRole('link', { name: 'Версии' }).click()
-  await expect(page).toHaveURL(`/projects/${siteId}/changes/versions`)
-  await expect(tabs.getByRole('link', { name: 'Версии' })).toHaveAttribute('aria-current', 'page')
+  await expect(page.getByRole('navigation', { name: 'Изменения' })).toHaveCount(0)
   await expect(page.getByText('Версий пока нет.', { exact: false })).toBeVisible()
 })
