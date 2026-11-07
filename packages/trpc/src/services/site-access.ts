@@ -1,10 +1,13 @@
 import {
   DomainError,
+  emptySiteStackFacts,
   isDomainError,
   isSiteConnectionError,
   resolvePinnedAddress,
   siteAccessPath,
   siteConnectionLimits,
+  siteSupportOf,
+  versionFactsOf,
   type CodeSourceInput,
   type CodeSourceTarget,
   type ConnectionCheckReason,
@@ -120,6 +123,10 @@ function refusalOf(error: unknown, signal: AbortSignal, kind: string): Refused {
  * One check of the files of a site: the address resolved and pinned by the rule of spec §12, then the
  * adapter of the kind connects to that literal. `pinRequired`: false for the wizard's «Далее» (an sftp check
  * without a key answers `host_key_unknown` and logs in nowhere), true for create and replaceAccess.
+ *
+ * The check reads the version of the site in its session (Т26): a site of the chosen stack below what the
+ * stack connects is refused `version_unsupported` (Т27), nothing is written. Another stack found in the
+ * folder refuses nothing here: the markers of the chosen stack judge the root.
  */
 export async function checkSiteSource(
   services: SiteConnectionServices,
@@ -133,12 +140,15 @@ export async function checkSiteSource(
     signal,
   )
   if (!pinned.ok) return { ok: false, reason: pinned.reason }
+  let outcome: SourceCheckOutcome
   try {
-    return await settleBy(
+    outcome = await settleBy(
       adapter.check(source, {
         address: pinned.address,
         signal,
-        markers: services.rootMarkers(stack),
+        // Until the wizard stops sending a stack (Э9) the root is judged by its markers alone (Р7).
+        stacks: [{ stack, markers: services.rootMarkers(stack) }],
+        inspect: (names, read) => services.inspectRoot(names, read),
         pinRequired,
       }),
       signal,
@@ -147,6 +157,15 @@ export async function checkSiteSource(
   } catch (error) {
     return refusalOf(error, signal, source.kind)
   }
+  if (!outcome.ok || outcome.inspection === null) return outcome
+  const support = services.stackSupport(stack)
+  const facts = { ...emptySiteStackFacts, ...versionFactsOf(support, outcome.inspection.version) }
+  if (
+    outcome.inspection.foundStack === stack &&
+    siteSupportOf(support, facts, [], services.appEnv).limit === 'version_unsupported'
+  )
+    return { ok: false, reason: 'version_unsupported' }
+  return outcome
 }
 
 /** One check of a database: `SELECT 1` and the count of its tables, at the pinned address. */
@@ -225,12 +244,16 @@ export async function gatedChecks(
   return outcomes
 }
 
-/** The fields of a refused source check the wizard shows: the reason, and the folder or key it offers. */
+/**
+ * The fields of a refused source check the wizard shows: the reason, the folder or key it offers, and what a
+ * folder without the markers holds instead.
+ */
 export function sourceRefusal(outcome: Extract<SourceCheckOutcome, { ok: false }>) {
   return {
     reason: outcome.reason,
     ...(outcome.suggestedRoot === undefined ? {} : { suggestedRoot: outcome.suggestedRoot }),
     ...(outcome.hostKey === undefined ? {} : { hostKey: outcome.hostKey }),
+    ...(outcome.inspection === undefined ? {} : { inspection: outcome.inspection }),
   }
 }
 

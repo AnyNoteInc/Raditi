@@ -28,10 +28,13 @@ import {
   FAKE_HOST_KEY,
   fakeSiteConnections,
   ftpSource,
+  NOTHING_FOUND,
   OTHER_HOST_KEY,
+  passedWith,
   SECRET_VALUES,
   sftpSource,
   siteCreateInput,
+  STACK_SUPPORT_FROM_4,
 } from '../testing/site-connections.ts'
 import type { Context } from '../trpc.ts'
 import { MAX_SITES_PER_USER } from './project.ts'
@@ -255,14 +258,19 @@ describe('siteConnection.checkSource', () => {
     })
     expect(fake.sourceChecks[0]!.context).toMatchObject({
       pinRequired: false,
-      markers: ['wp-content', 'wp-includes'],
+      stacks: [{ stack: 'wordpress', markers: ['wp-content', 'wp-includes'] }],
     })
     expect(fake.lookup).toHaveBeenCalledWith('files.example.ru', expect.any(AbortSignal))
   })
 
   it('passes with the confirmed key, and answers host_key_changed with the key of a server that changed', async () => {
     const fake = fakeSiteConnections()
-    await expect(checkOf(fake)).resolves.toEqual({ ok: true, hostKey: FAKE_HOST_KEY, entries: 12 })
+    await expect(checkOf(fake)).resolves.toEqual({
+      ok: true,
+      hostKey: FAKE_HOST_KEY,
+      entries: 12,
+      inspection: null,
+    })
     fake.presentHostKey(OTHER_HOST_KEY)
     await expect(checkOf(fake)).resolves.toEqual({
       ok: false,
@@ -277,6 +285,7 @@ describe('siteConnection.checkSource', () => {
       ok: true,
       hostKey: null,
       entries: 12,
+      inspection: null,
     })
     fake.answerSource({ ok: false, reason: 'not_site_root', suggestedRoot: 'public_html' })
     await expect(checkOf(fake, ftpSource())).resolves.toEqual({
@@ -284,6 +293,75 @@ describe('siteConnection.checkSource', () => {
       reason: 'not_site_root',
       suggestedRoot: 'public_html',
     })
+  })
+
+  it('hands the adapter the stack chosen and an inspection by the registry, and answers what it found', async () => {
+    const fake = fakeSiteConnections()
+    const inspection = {
+      foundStack: 'wordpress',
+      version: { kind: 'read', version: '6.9.1' },
+      hint: null,
+      hasIndexPhp: true,
+    } as const
+    fake.answerSource(async (source, context) => {
+      // The inspection runs in the session of the adapter, through the services.
+      expect(await context.inspect(['index.php'], async () => null)).toBe(NOTHING_FOUND)
+      return passedWith(inspection, (source as { hostKey?: string }).hostKey ?? null)
+    })
+    await expect(checkOf(fake)).resolves.toEqual({
+      ok: true,
+      hostKey: FAKE_HOST_KEY,
+      entries: 12,
+      inspection,
+    })
+    expect(fake.services.inspectRoot).toHaveBeenCalledExactlyOnceWith(
+      ['index.php'],
+      expect.any(Function),
+    )
+    expect(fake.sourceChecks[0]!.context.stacks).toEqual([
+      { stack: 'wordpress', markers: ['wp-content', 'wp-includes'] },
+    ])
+
+    // A folder without the markers tells what it holds instead.
+    const foreign = { ...NOTHING_FOUND, hasIndexPhp: true }
+    fake.answerSource({ ok: false, reason: 'not_site_root', inspection: foreign })
+    await expect(checkOf(fake, ftpSource())).resolves.toEqual({
+      ok: false,
+      reason: 'not_site_root',
+      inspection: foreign,
+    })
+  })
+
+  it('refuses a site of the chosen stack below what it connects, and only of that stack', async () => {
+    const fake = fakeSiteConnections()
+    fake.declareSupport(STACK_SUPPORT_FROM_4)
+    const found = (foundStack: 'wordpress' | 'joomla' | null, version: string) => ({
+      foundStack,
+      version: { kind: 'read' as const, version },
+      hint: null,
+      hasIndexPhp: true,
+    })
+    // Before the check read the version, this site passed.
+    fake.answerSource(passedWith(found('wordpress', '3.9.2'), FAKE_HOST_KEY))
+    await expect(checkOf(fake)).resolves.toEqual({ ok: false, reason: 'version_unsupported' })
+    expect(fake.secrets.writes).toEqual([])
+
+    // The bound itself and a version above it pass, with what was found.
+    for (const version of ['4.0', '5.2.1']) {
+      fake.answerSource(passedWith(found('wordpress', version), FAKE_HOST_KEY))
+      await expect(checkOf(fake)).resolves.toMatchObject({
+        ok: true,
+        inspection: found('wordpress', version),
+      })
+    }
+    // The markers of the chosen stack judge the root: another stack found there refuses nothing here.
+    fake.answerSource(passedWith(found('joomla', '3.9.2'), FAKE_HOST_KEY))
+    await expect(checkOf(fake)).resolves.toMatchObject({ ok: true })
+    // An unknown version is no refusal of this reason.
+    fake.answerSource(
+      passedWith({ ...found('wordpress', '1.0'), version: { kind: 'unknown' } }, FAKE_HOST_KEY),
+    )
+    await expect(checkOf(fake)).resolves.toMatchObject({ ok: true })
   })
 
   it('does not offer git: unsupported, without a check', async () => {
@@ -362,11 +440,13 @@ describe('siteConnection.checkSource', () => {
       canonicalUrl: null,
       defaultBranch: null,
       entries: 3,
+      inspection: null,
     })
     await expect(checkOf(fake, ftpSource())).resolves.toEqual({
       ok: true,
       hostKey: null,
       entries: 3,
+      inspection: null,
     })
     expect(fake.sourceChecks).toHaveLength(siteConnectionLimits.refusedLoginsPerWindow * 2 + 2)
   })
@@ -1143,6 +1223,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the setup of a connected site', () =>
     canonicalUrl: null,
     defaultBranch: null,
     entries: 3,
+    inspection: null,
   })
 
   describe('the key of the pinned server', () => {

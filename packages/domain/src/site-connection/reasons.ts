@@ -37,6 +37,8 @@ export const connectionCheckReasons = [
   'no_write_access',
   // Signed in, but a listing or a query could not be completed.
   'transfer_failed',
+  // The version of the site is below what the stack connects (SiteLimit of the same name).
+  'version_unsupported',
   // A server feature the platform does not speak.
   'unsupported',
 ] as const

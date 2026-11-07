@@ -41,6 +41,8 @@ export interface TestSftpServerOptions {
   keyboardInteractiveOnly?: boolean
   /** READ requests are never answered: a transfer that stalls. */
   stallReads?: boolean
+  /** Files whose READ requests fail (SSH_FX_FAILURE): a transfer broken on the server. */
+  failReads?: string[]
   /** Entries per READDIR answer. */
   readdirBatch?: number
 }
@@ -96,6 +98,7 @@ export async function startTestSftpServer(options: TestSftpServerOptions): Promi
   })
   const home = normalizePath('/', options.home ?? '/')
   const denied = new Set((options.deniedPaths ?? []).map((path) => normalizePath('/', path)))
+  const failing = new Set((options.failReads ?? []).map((path) => normalizePath('/', path)))
   const batchSize = options.readdirBatch ?? 64
   const hostKeyPem = options.hostKeyPem ?? generateTestSshKey().privateKey
   const users = new Map(
@@ -148,12 +151,13 @@ export async function startTestSftpServer(options: TestSftpServerOptions): Promi
   function serve(sftp: SFTPWrapper): void {
     const handles = new Map<
       number,
-      { kind: 'file'; data: Buffer } | { kind: 'dir'; entries: FileEntry[] }
+      { kind: 'file'; data: Buffer; failing?: boolean } | { kind: 'dir'; entries: FileEntry[] }
     >()
     let nextHandle = 0
     const handleOf = (buffer: Buffer) => (buffer.length === 4 ? buffer.readUInt32BE(0) : -1)
     const issue = (
-      value: { kind: 'file'; data: Buffer } | { kind: 'dir'; entries: FileEntry[] },
+      value:
+        { kind: 'file'; data: Buffer; failing?: boolean } | { kind: 'dir'; entries: FileEntry[] },
     ) => {
       const id = nextHandle++
       handles.set(id, value)
@@ -202,12 +206,16 @@ export async function startTestSftpServer(options: TestSftpServerOptions): Promi
       if (!found) return sftp.status(id, STATUS.NO_SUCH_FILE)
       if (denied.has(found.path)) return sftp.status(id, STATUS.PERMISSION_DENIED)
       if (found.node.type !== 'file') return sftp.status(id, STATUS.FAILURE)
-      sftp.handle(id, issue({ kind: 'file', data: found.node.data }))
+      sftp.handle(
+        id,
+        issue({ kind: 'file', data: found.node.data, failing: failing.has(found.path) }),
+      )
     })
     sftp.on('READ', (id, buffer, offset, length) => {
       if (options.stallReads) return
       const handle = handles.get(handleOf(buffer))
-      if (!handle || handle.kind !== 'file') return sftp.status(id, STATUS.FAILURE)
+      if (!handle || handle.kind !== 'file' || handle.failing)
+        return sftp.status(id, STATUS.FAILURE)
       if (offset >= handle.data.length) return sftp.status(id, STATUS.EOF)
       const chunk = handle.data.subarray(offset, Math.min(handle.data.length, offset + length))
       served += chunk.length

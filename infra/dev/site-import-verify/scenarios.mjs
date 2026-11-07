@@ -365,6 +365,50 @@ export const clientOf = (stand, account, signal) =>
 
 // ─── Scenarios run by the stand ──────────────────────────────────────────────────────────────
 
+/** What the check of the fixture site finds: the version is read by the WordPress adapter. */
+export const FIXTURE_INSPECTION = {
+  foundStack: 'wordpress',
+  version: { kind: 'read', version: '6.8.3' },
+  hint: null,
+  hasIndexPhp: true,
+}
+
+/**
+ * «Далее» of the step «Доступ к файлам», as the wizard calls it: over SFTP (`ssh` an account whose
+ * logins are counted) and over FTPS with a verified certificate, the answer carries what the real
+ * adapters found in the root and read in the same session — sshd sees one login for the check.
+ */
+export async function assertCheckInspection(stand, client, ssh) {
+  const hosting = stand.coordinates.siteServer
+  const before = await stand.siteServer.logins(ssh.user)
+  const sftp = await client.mutation('siteConnection.checkSource', {
+    stack: 'wordpress',
+    source: sftpSource(stand, { user: ssh.user, password: ssh.password }),
+  })
+  assert.equal(sftp.ok, true, `SFTP check: ${sftp.reason ?? ''}`)
+  assert.deepEqual(sftp.inspection, FIXTURE_INSPECTION, 'SFTP check: the inspection')
+  assert.equal(
+    (await stand.siteServer.logins(ssh.user)) - before,
+    1,
+    'SFTP check: one login for the listing, the version and the proof read',
+  )
+  const { ftpsite } = stand.secrets
+  const ftps = await client.mutation('siteConnection.checkSource', {
+    stack: 'wordpress',
+    source: {
+      kind: 'ftp',
+      host: hosting.host,
+      port: hosting.ftp.port,
+      username: ftpsite.user,
+      password: ftpsite.password,
+      rootPath: hosting.roots.site,
+      tls: 'verified',
+    },
+  })
+  assert.equal(ftps.ok, true, `FTPS check: ${ftps.reason ?? ''}`)
+  assert.deepEqual(ftps.inspection, FIXTURE_INSPECTION, 'FTPS check: the inspection')
+}
+
 /**
  * R3: the tag went missing after `main` was published. The tag is deleted in Gitea, the stage
  * marked failed by hand; «Повторить» brings the same commit back under the tag — fetched from
@@ -373,6 +417,11 @@ export const clientOf = (stand, account, signal) =>
 export async function scenarioTagMissing(stand, { account, run, report, signal }) {
   const client = clientOf(stand, account, signal)
   const { sitec } = stand.secrets
+  await assertCheckInspection(stand, client, sitec)
+  report.pass(
+    'r3',
+    'checkSource over SFTP and verified FTPS: WordPress 6.8.3 read by the adapter in the session of the check, one login over SSH',
+  )
   const siteId = await createProject(client, {
     name: 'R3 tag missing',
     url: projectUrl(run, 'r3'),

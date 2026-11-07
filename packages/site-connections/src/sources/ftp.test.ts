@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import {
   ftpAccessSchema,
+  inspectSiteRoot,
   isFileSourceGuardError,
   isSiteConnectionError,
   resolvePinnedAddress,
@@ -12,6 +13,8 @@ import {
   type ConnectionTls,
   type FtpAccess,
   type PinnedAddress,
+  type SiteRead,
+  type SiteRootInspector,
   type SourceCheckContext,
 } from '@repo/domain'
 
@@ -33,6 +36,39 @@ import {
 } from './ftp.ts'
 
 const MARKERS = ['wp-content', 'wp-includes']
+
+/**
+ * An adapter of the markers above that reads two files one after the other, as MODX does: a file of
+ * the root first, then the file of the version it names. `versionFile` may be absent.
+ */
+function twoReads(versionFile = 'wp-includes/version.php'): SiteRootInspector {
+  return {
+    stack: 'wordpress',
+    rootMarkers: () => MARKERS,
+    async readVersion(read: SiteRead) {
+      if ((await read('index.php')) === null) return { kind: 'unknown' }
+      const bytes = await read(versionFile)
+      const version = bytes && /\$wp_version = "([^"]+)"/.exec(Buffer.from(bytes).toString())?.[1]
+      return version ? { kind: 'read', version } : { kind: 'unknown' }
+    },
+    recognition: {
+      publicPaths: [],
+      fingerprint: () => 'unknown',
+      publicGeneration: () => null,
+      needsOwnYes: false,
+      rootHint: () => null,
+      coreFolder: null,
+    },
+  }
+}
+
+/** What a root holds for an inspection by no adapter: only whether it has an `index.php`. */
+const bareInspection = (hasIndexPhp: boolean) => ({
+  foundStack: null,
+  version: { kind: 'unknown' },
+  hint: null,
+  hasIndexPhp,
+})
 const BIG = Buffer.alloc(512 * 1024 + 777)
 for (let index = 0; index < BIG.length; index += 1) BIG[index] = (index * 17 + 3) % 253
 
@@ -101,7 +137,9 @@ function context(
   return {
     address,
     signal: AbortSignal.timeout(10_000),
-    markers: MARKERS,
+    stacks: [{ stack: 'wordpress', markers: MARKERS }],
+    // By no adapter unless a test gives some: the check reads nothing but its one proof.
+    inspect: (names, read) => inspectSiteRoot([], names, read),
     pinRequired: true,
     ...overrides,
   }
@@ -198,9 +236,88 @@ describe('ftpSource.check', () => {
       canonicalUrl: null,
       defaultBranch: null,
       entries: 6,
+      inspection: bareInspection(true),
     })
     expect(server.writeAttempts).toEqual([])
     expect(server.commands).not.toContain('AUTH TLS')
+    expect(server.logins()).toBe(1)
+  })
+
+  it('reads two files of the version in its one session, then proves reading, with one login', async () => {
+    const server = await start()
+    const inspect: SourceCheckContext['inspect'] = (names, read) =>
+      inspectSiteRoot([twoReads()], names, read)
+    expect(await ftpSource.check(input(server, 'plain'), context(loopback, { inspect }))).toEqual({
+      ok: true,
+      hostKey: null,
+      canonicalUrl: null,
+      defaultBranch: null,
+      entries: 6,
+      inspection: {
+        foundStack: 'wordpress',
+        version: { kind: 'read', version: '6.9' },
+        hint: null,
+        hasIndexPhp: true,
+      },
+    })
+    const reads = server.commands.filter((command) => command.startsWith('RETR'))
+    expect(reads.slice(0, 2)).toEqual([
+      'RETR /public_html/index.php',
+      'RETR /public_html/wp-includes/version.php',
+    ])
+    // The read that proves reading comes last (it may cut the one connection of the check).
+    expect(reads).toHaveLength(3)
+    expect(server.logins()).toBe(1)
+    expect(server.writeAttempts).toEqual([])
+  })
+
+  it('passes with an unknown version where the file of the version is not there', async () => {
+    const server = await start()
+    const inspect: SourceCheckContext['inspect'] = (names, read) =>
+      inspectSiteRoot([twoReads('wp-includes/absent.php')], names, read)
+    expect(
+      await ftpSource.check(input(server, 'plain'), context(loopback, { inspect })),
+    ).toMatchObject({
+      ok: true,
+      inspection: { foundStack: 'wordpress', version: { kind: 'unknown' } },
+    })
+    expect(server.logins()).toBe(1)
+  })
+
+  it('fails transfer_failed, never an unknown version, where the server cuts the read of the version', async () => {
+    const server = await start({ cutTransfers: ['public_html/wp-includes/version.php'] })
+    // How the inspection itself settled: the outcome of the check alone would be transfer_failed
+    // even after an unknown version, as the read that proves reading meets the broken connection.
+    const settled: string[] = []
+    const inspect: SourceCheckContext['inspect'] = async (names, read) => {
+      try {
+        const inspection = await inspectSiteRoot([twoReads()], names, read)
+        settled.push(`version:${inspection.version.kind}`)
+        return inspection
+      } catch (error) {
+        settled.push(await reasonOf(Promise.reject(error)))
+        throw error
+      }
+    }
+    expect(await ftpSource.check(input(server, 'plain'), context(loopback, { inspect }))).toEqual({
+      ok: false,
+      reason: 'transfer_failed',
+    })
+    expect(settled).toEqual(['connection:transfer_failed'])
+    expect(server.logins()).toBe(1)
+  })
+
+  it('answers access_denied where the server refuses to read the file it has just listed', async () => {
+    // The smallest file of the root is the proof; SIZE unanswered leaves the refusal unexplained.
+    const server = await start({
+      deniedPaths: [...shared.deniedPaths, 'public_html/Файл.txt'],
+      refuseSize: true,
+    })
+    expect(await ftpSource.check(input(server, 'plain'), context(loopback))).toEqual({
+      ok: false,
+      reason: 'access_denied',
+    })
+    expect(server.commands.filter((command) => command.startsWith('RETR'))).toHaveLength(1)
     expect(server.logins()).toBe(1)
   })
 
@@ -224,12 +341,14 @@ describe('ftpSource.check', () => {
       ok: false,
       reason: 'not_site_root',
       suggestedRoot: '/public_html',
+      inspection: bareInspection(false),
     })
     expect(
       await ftpSource.check(input(server, 'plain', { rootPath: 'other' }), context(loopback)),
     ).toEqual({
       ok: false,
       reason: 'not_site_root',
+      inspection: bareInspection(false),
     })
     // TLS asked of a server that offers none: refused before any login, never retried in clear.
     for (const tls of ['verified', 'unverified'] as const) {
@@ -245,7 +364,14 @@ describe('ftpSource.check', () => {
     const server = await start()
     expect(
       await ftpSource.check(input(server, 'plain', { rootPath: 'bare' }), context(loopback)),
-    ).toEqual({ ok: true, hostKey: null, canonicalUrl: null, defaultBranch: null, entries: 2 })
+    ).toEqual({
+      ok: true,
+      hostKey: null,
+      canonicalUrl: null,
+      defaultBranch: null,
+      entries: 2,
+      inspection: bareInspection(false),
+    })
     expect(server.commands).toContain('RETR /bare/wp-content/index.php')
     expect(
       await ftpSource.check(input(server, 'plain', { rootPath: 'hollow' }), context(loopback)),
@@ -796,6 +922,27 @@ describe('ftpSource.open', () => {
     }
   })
 
+  it('keeps the answer of the import to a transfer the server cut with 426: not_found, read once', async () => {
+    // Only the check reads a cut transfer as a failure of the access (Т26): the walk of the import
+    // passes such a file over as unreadable, as before, rather than fail the stage on it every time.
+    const server = await start({ cutTransfers: ['public_html/index.php'] })
+    const quick = createFtpSource({ retryDelaysMs: [20, 20] })
+    const session = await quick.open(access(server, 'plain'), {
+      address: loopback,
+      signal: AbortSignal.timeout(10_000),
+    })
+    try {
+      expect(await reasonOf(session.read(['index.php'], async () => {}, 1024))).toBe(
+        'connection:not_found',
+      )
+      expect(
+        server.commands.filter((command) => command === 'RETR /public_html/index.php'),
+      ).toHaveLength(1)
+    } finally {
+      await session.close()
+    }
+  })
+
   it('refuses a wrong password at open', async () => {
     const server = await start()
     expect(
@@ -817,6 +964,7 @@ describe('ftpSource records', () => {
       canonicalUrl: null,
       defaultBranch: null,
       entries: 7,
+      inspection: null,
     })
     expect(prepared.accessKind).toBe('ftp')
     expect(prepared.secret).toEqual({
@@ -862,6 +1010,7 @@ describe('ftpSource records', () => {
         canonicalUrl: null,
         defaultBranch: null,
         entries: null,
+        inspection: null,
       }),
     ).toThrow()
   })

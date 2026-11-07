@@ -154,6 +154,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: «Изменить» an access of a w
       canonicalUrl: null,
       defaultBranch: null,
       entries: 3,
+      inspection: null,
     }
   }
 

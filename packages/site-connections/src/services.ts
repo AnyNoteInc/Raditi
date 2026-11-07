@@ -5,7 +5,10 @@ import type {
   HostLookup,
   SecretStore,
   SiteConnectionServices,
+  SiteRead,
+  SiteRootInspection,
   SiteStack,
+  StackSupport,
 } from '@repo/domain'
 
 import { databaseInspector } from './databases/index.ts'
@@ -19,6 +22,10 @@ export interface SiteConnectionServicesDeps {
   /** The registry of site adapters asked with the environment of the app: `appEnv` is bound by the caller. */
   connectableStacks: (way: ConnectionWay) => readonly SiteStack[]
   rootMarkers: (stack: SiteStack) => readonly string[]
+  /** What the adapter of the stack declares. */
+  stackSupport: (stack: SiteStack) => StackSupport
+  /** `inspectSiteRoot` over the adapters of the registry: the caller holds them. */
+  inspectRoot: (names: readonly string[], read: SiteRead) => Promise<SiteRootInspection>
   /** The resolver of every check; a fresh c-ares lookup by default. */
   lookup?: HostLookup
 }
@@ -47,6 +54,8 @@ export function createSiteConnectionServices(
     lookup: deps.lookup ?? createHostLookup(),
     connectableStacks: (way: ConnectionWay) => Object.freeze([...deps.connectableStacks(way)]),
     rootMarkers: (stack: SiteStack) => deps.rootMarkers(stack),
+    stackSupport: (stack: SiteStack) => deps.stackSupport(stack),
+    inspectRoot: (names: readonly string[], read: SiteRead) => deps.inspectRoot(names, read),
     sources: siteSource,
     databases: databaseInspector,
     sourceOptions: Object.freeze(

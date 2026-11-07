@@ -155,8 +155,8 @@ describe('kinds', () => {
 describe('reasons and error codes', () => {
   it('lets a stage fail with every reason of a connection check', () => {
     for (const reason of connectionCheckReasons) expect(provisioningErrorCodes).toContain(reason)
-    expect(connectionCheckReasons).toHaveLength(17)
-    expect(provisioningErrorCodes).toHaveLength(34)
+    expect(connectionCheckReasons).toHaveLength(18)
+    expect(provisioningErrorCodes).toHaveLength(35)
     expect(importSkipReasons).toEqual([
       'excluded',
       'ci',
