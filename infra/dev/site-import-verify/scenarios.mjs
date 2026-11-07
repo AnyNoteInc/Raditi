@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 
 import { runCommand } from '../../../apps/core/scripts/verify-agent-supervisor.mjs'
+import { WP_VERSION } from './fixture.mjs'
 import { trpcClient } from './trpc.mjs'
 
 const STAGE = 'code_import'
@@ -185,9 +186,18 @@ export async function verifySite(stand, siteId, expect) {
   const byteCount = expected.files.reduce((total, file) => total + file.bytes, 0)
 
   const [site] = await query(
-    `SELECT status::text AS status, stack::text AS stack, workspace_id FROM sites WHERE id = $1::uuid`,
+    `SELECT status::text AS status, stack::text AS stack, workspace_id, stack_facts
+     FROM sites WHERE id = $1::uuid`,
   )
   assert.ok(site, 'The site exists')
+  // The import read the version of the core through the session and wrote it (Т14): the
+  // record names what wp-includes/version.php of the fixture says.
+  if (!expect.failedWith)
+    assert.equal(
+      site.stack_facts?.cmsVersion,
+      WP_VERSION,
+      'sites.stack_facts.cmsVersion is the version of the imported core',
+    )
   // Owner's decision of 26.10.2026: after a successful import the first version is the installed
   // one and the site takes tasks; a stopped import leaves it onboarding.
   assert.equal(

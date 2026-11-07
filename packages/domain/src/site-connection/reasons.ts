@@ -70,6 +70,8 @@ export const provisioningErrorCodes = [
   'source_has_secrets',
   // Nothing left to import after filtering.
   'source_empty',
+  // SiteAdapter.readLayout refused: the project stays, without its files (sites.stack_facts.limit says why).
+  'layout_unsupported',
   'scan_failed',
   'schema_unreadable',
   // The stage deadline: 60 minutes for code_import, 60 seconds for database_schema.
@@ -95,6 +97,8 @@ export const importSkipReasons = [
   'unreadable',
   // A document outside the folders the adapter names (Т57).
   'document',
+  // A folder of a stack closed for files (Т40): no copy of it is made.
+  'closed_stack',
 ] as const
 export type ImportSkipReason = (typeof importSkipReasons)[number]
 

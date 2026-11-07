@@ -2,6 +2,7 @@ import { Logger, Module } from '@nestjs/common'
 import { Counter, type Registry } from '@prometheus-io/client'
 import type { PrismaClient } from '@repo/db'
 import {
+  closedStackRoots,
   SITE_REPOSITORY_OWNER,
   type DatabaseEngine,
   type DatabaseInspector,
@@ -15,7 +16,7 @@ import {
   type SiteSourceKind,
 } from '@repo/domain'
 import { createGiteaRepositoryProvisioner } from '@repo/git-providers'
-import { getSiteAdapter } from '@repo/site-adapters'
+import { getSiteAdapter, siteAdapters } from '@repo/site-adapters'
 import { siteSource } from '@repo/site-connections'
 import { databaseInspector } from '@repo/site-connections/databases'
 import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
@@ -37,6 +38,7 @@ import { SiteImportProcessor } from './site-import.processor.ts'
 import { siteImportOutcomes, SiteImportRunner } from './site-import.runner.ts'
 import { SiteImportSweeper } from './site-import.sweeper.ts'
 import {
+  CLOSED_STACK_ROOTS,
   SITE_DATABASES,
   SITE_REPOSITORY_PROVISIONER,
   SITE_SOURCES,
@@ -64,6 +66,11 @@ const GITLEAKS_BINARY = 'gitleaks'
     {
       provide: SITE_DATABASES,
       useValue: (engine: DatabaseEngine): DatabaseInspector => databaseInspector(engine),
+    },
+    {
+      provide: CLOSED_STACK_ROOTS,
+      // Once: the registry does not change while core runs.
+      useFactory: (): readonly (readonly string[])[] => closedStackRoots(siteAdapters()),
     },
     {
       provide: SITE_REPOSITORY_PROVISIONER,
@@ -96,6 +103,7 @@ const GITLEAKS_BINARY = 'gitleaks'
         queue: JobQueue,
         registry: Registry,
         backups: InitialBackupWorker,
+        closedRoots: readonly (readonly string[])[],
       ) => {
         // Jobs by how they ended: no site, workspace or code in a label.
         const imports = new Counter({
@@ -122,6 +130,7 @@ const GITLEAKS_BINARY = 'gitleaks'
           sources,
           databases,
           stacks: getSiteAdapter,
+          closedRoots,
           lookup,
           provisioner,
           git,
@@ -148,6 +157,7 @@ const GITLEAKS_BINARY = 'gitleaks'
         JOB_QUEUE,
         METRICS_REGISTRY,
         InitialBackupWorker,
+        CLOSED_STACK_ROOTS,
       ],
     },
     {

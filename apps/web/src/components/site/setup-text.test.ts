@@ -3,6 +3,7 @@ import {
   provisioningErrorCodes,
   siteConnectionLimits,
   siteImportLimits,
+  siteLimitLateText,
 } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
 
@@ -57,5 +58,11 @@ describe('the setup screen', () => {
     expect(setupErrorText('transfer_failed', context)).toMatch(/пока мы копировали файлы/)
     expect(setupErrorText('transfer_failed', context)).not.toMatch(/список файлов/)
     expect(setupErrorText('unreachable', context)).toMatch(/перестал принимать подключения/)
+  })
+
+  it('says a refused layout as the late text of a saved project says it', () => {
+    expect(setupErrorText('layout_unsupported', context)).toBe(
+      siteLimitLateText('outside_root', true),
+    )
   })
 })

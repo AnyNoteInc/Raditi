@@ -1,7 +1,7 @@
 import { badRequest } from '../errors.ts'
 import { isPublicationPath } from '../git/publication.ts'
 import { isForbiddenPath } from '../policies/diff-paths.ts'
-import type { ImportRules } from '../ports/site-adapter.ts'
+import type { ImportRules, SiteAdapter } from '../ports/site-adapter.ts'
 import { hasControlCharacter } from './inputs.ts'
 import type { ImportSkipReason } from './reasons.ts'
 
@@ -150,6 +150,23 @@ export function createImportPathPolicy(
 export const importPolicyOf = (
   rules: Pick<ImportRules, 'exclude' | 'documentFolders'>,
 ): ImportPathPolicy => createImportPathPolicy(rules.exclude, rules.documentFolders)
+
+/**
+ * Folders a walk does not enter: the roots and the core of stacks closed for files (Т40, fact 14 of
+ * plan 62). Each set is matched as `isNestedSiteRoot` matches markers: a folder that has every name
+ * of one set. No stack is named: the sets come from the adapters' own answers (rule 8).
+ */
+export function closedStackRoots(
+  adapters: readonly Pick<SiteAdapter, 'support' | 'rootMarkers' | 'recognition'>[],
+): (readonly string[])[] {
+  return adapters
+    .filter((adapter) => adapter.support.files === 'off')
+    .flatMap((adapter) => [
+      adapter.rootMarkers(),
+      ...(adapter.recognition.coreFolder ? [adapter.recognition.coreFolder] : []),
+    ])
+    .filter((markers) => markers.length > 0)
+}
 
 /** A folder below the root that has every marker is another installation: not entered. */
 export function isNestedSiteRoot(

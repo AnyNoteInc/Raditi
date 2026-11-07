@@ -47,12 +47,26 @@ import type {
   StoredAccess,
   StoredReference,
 } from './stage-store.ts'
-import { readRootFile, walkSiteTree, type SkipCounts, type TakenFile } from './tree-walk.ts'
+import { readStack, recheckVersion, type StackReading } from './stack-reading.ts'
+import {
+  readRootFile,
+  siteTreeOf,
+  takenFilesRead,
+  walkSiteTree,
+  type SkipCounts,
+  type TakenFile,
+} from './tree-walk.ts'
 
 /** What the import needs of the stack's adapter: no CMS name ever reaches this file. */
 export type StackImportRules = Pick<
   SiteAdapter,
-  'importRules' | 'rootMarkers' | 'configSecrets' | 'publicOriginals'
+  | 'importRules'
+  | 'rootMarkers'
+  | 'configSecrets'
+  | 'publicOriginals'
+  | 'support'
+  | 'readVersion'
+  | 'readLayout'
 >
 
 /** What the import needs of a database inspector: the access it checks and the values it hides. */
@@ -75,6 +89,8 @@ export interface SiteImportDeps {
   /** The inspectors of @repo/site-connections: the password of the site's database is a secret too. */
   databases: (engine: DatabaseEngine) => DatabaseAccessRules
   stacks: (stack: SiteStack) => StackImportRules
+  /** `closedStackRoots` of the registry: folders of stacks closed for files the walk does not enter. */
+  closedRoots: readonly (readonly string[])[]
   lookup: HostLookup
   /** null — no provisioner token (or no git): the import refuses `repository_not_configured`. */
   provisioner: SiteRepositoryProvisioner | null
@@ -479,6 +495,7 @@ async function fetchTree(
   checked: CheckedAccess,
 ): Promise<{ taken: TakenFile[]; skipped: SkipCounts }> {
   const { stage, root, env, signal, deps } = run
+  // `extras` stay empty here: the rules of the import give one answer whatever the layout (Т13).
   const rules = deps.stacks(stage.stack)
   const policy = importPolicyOf(
     rules.importRules({ stack: stage.stack, url: stage.url, docroot: '/', extras: {} }),
@@ -510,6 +527,7 @@ async function fetchTree(
   watch.unref()
 
   let walk
+  let reading: StackReading | undefined
   try {
     let opened: FileSourceSession
     try {
@@ -533,6 +551,16 @@ async function fetchTree(
       close: () => opened.close(),
     }
     try {
+      // The version and the layout first, one read at a time: the record of the site gets them
+      // even when the import stops (Т13), and a refused layout stops it before any download.
+      try {
+        reading = await readStack(rules, siteTreeOf(session, walkSignal))
+      } catch (error) {
+        throw sessionFailure(error)
+      }
+      await deps.store.recordStackFacts(run.lease, reading.patch)
+      if (reading.refused) throw refuse('layout_unsupported')
+
       let configValues: string[]
       try {
         configValues = await rules.configSecrets((path) => readRootFile(session, path, walkSignal))
@@ -548,6 +576,7 @@ async function fetchTree(
         session,
         policy,
         markers: rules.rootMarkers(),
+        closedRoots: deps.closedRoots,
         blobs,
         values,
         signal: walkSignal,
@@ -588,5 +617,11 @@ async function fetchTree(
   const skipped: SkipCounts = { ...walk.skipped }
   addCounts(skipped, 'secret', flagged.size - vouched.size)
   if (taken.length === 0) throw refuse('source_empty')
+  // The version once more, from what goes into `main`: the hosting may have changed it during
+  // the walk (Т14). A copy that says nothing, or says the same, writes nothing.
+  if (reading) {
+    const settled = await recheckVersion(rules, takenFilesRead(taken), reading)
+    if (Object.keys(settled).length > 0) await deps.store.recordStackFacts(run.lease, settled)
+  }
   return { taken, skipped }
 }

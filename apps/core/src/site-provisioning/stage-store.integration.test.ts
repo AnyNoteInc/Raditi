@@ -161,6 +161,30 @@ describe.skipIf(!enabled)('the import stage store with PostgreSQL', () => {
     expect((await row(id)).status).toBe('running')
   })
 
+  it('records a part of the facts of the site under its lease, and nothing under another epoch', async () => {
+    const id = await site(await workspace())
+    const lease = await claimed(id)
+    const facts = async () => (await db.site.findUniqueOrThrow({ where: { id } })).stackFacts
+    const written = {
+      v: 1,
+      cmsVersion: '6.8.3',
+      generation: null,
+      limit: null,
+      extras: { charset: 'utf8mb4' },
+    }
+
+    await store.recordStackFacts(lease, { cmsVersion: '6.8.3', generation: null, limit: null })
+    await store.recordStackFacts(lease, { extras: { charset: 'utf8mb4' } })
+    expect(await facts()).toEqual(written)
+
+    const stale = { ...lease, leaseEpoch: lease.leaseEpoch + 1 }
+    await expect(
+      store.recordStackFacts(stale, { cmsVersion: '7.0', limit: 'outside_root' }),
+    ).rejects.toMatchObject({ name: 'LeaseLost' })
+    expect(await facts()).toEqual(written)
+    expect((await row(id)).status).toBe('running')
+  })
+
   it('reads the access rows of a held stage', async () => {
     const ws = await workspace()
     const id = await site(ws)

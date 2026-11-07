@@ -2,7 +2,8 @@ import { execFile } from 'node:child_process'
 import { access, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
-import { DomainError, INITIAL_SITE_TAG } from '@repo/domain'
+import { DomainError, INITIAL_SITE_TAG, type SiteStack } from '@repo/domain'
+import { getSiteAdapter } from '@repo/site-adapters'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { directory, file, type FakeNode } from '../testing/file-source.ts'
@@ -17,6 +18,8 @@ import {
   type SiteImportFixture,
 } from '../testing/site-import.ts'
 import { InitialVersionGit, TAG_REF, MAIN_REF } from './initial-version.ts'
+import { importSite } from './site-import.ts'
+import { SiteImportRunner } from './site-import.runner.ts'
 
 const fixtures: SiteImportFixture[] = []
 afterEach(async () => {
@@ -120,6 +123,74 @@ describe('importSite', () => {
         'json',
       ]),
     )
+  })
+
+  it('records the version of the site in its facts', async () => {
+    const f = await fixture()
+    await f.run()
+    expect(f.store.stackFacts.get(f.siteId)).toMatchObject({ cmsVersion: '6.8.3', limit: null })
+    // The version file is read once by the adapter and once more by the walk, which takes it.
+    expect(
+      f.sessions[0]!.reads.filter((path) => path.join('/') === 'wp-includes/version.php'),
+    ).toHaveLength(2)
+  })
+
+  it('records the version of the copy it took when the hosting changes it during the walk', async () => {
+    const f = await fixture()
+    const wordpress = getSiteAdapter('wordpress')
+    const versionFile = (f.tree['wp-includes'] as Extract<FakeNode, { type: 'directory' }>)
+      .children['version.php'] as Extract<FakeNode, { type: 'file' }>
+    let readings = 0
+    f.deps.stacks = (stack: SiteStack) => ({
+      ...getSiteAdapter(stack),
+      readVersion: async (read) => {
+        const reading = await wordpress.readVersion!(read)
+        // A core update on the hosting lands between the first look and the walk.
+        if (++readings === 1) versionFile.content = "<?php\n$wp_version = '6.8.4';\n"
+        return reading
+      },
+    })
+    const { commitSha } = await f.run()
+
+    expect(readings).toBe(2)
+    expect(f.store.stackFacts.get(f.siteId)).toMatchObject({ cmsVersion: '6.8.4', limit: null })
+    // The record names what `main` holds; the hosting was read once for it, by the walk.
+    expect(await fixtureGit(f.remote, 'show', `${commitSha}:wp-includes/version.php`)).toContain(
+      '6.8.4',
+    )
+    expect(
+      f.sessions[0]!.reads.filter((path) => path.join('/') === 'wp-includes/version.php'),
+    ).toHaveLength(2)
+  })
+
+  it('fails layout_unsupported before any download when the adapter refuses the layout', async () => {
+    const f = await fixture()
+    f.deps.stacks = (stack: SiteStack) => ({
+      ...getSiteAdapter(stack),
+      readLayout: async () => ({ kind: 'refused', limit: 'outside_root' }),
+    })
+    const runner = new SiteImportRunner({
+      store: f.store,
+      importer: (stage, signal) => importSite(stage, signal, f.deps),
+      queue: { enqueue: vi.fn(async () => {}) },
+      logger: { log: vi.fn(), warn: vi.fn() },
+      count: () => {},
+    })
+    expect(await runner.run(f.siteId, new AbortController().signal)).toBe('failed')
+
+    expect(f.store.stage(f.siteId)).toMatchObject({
+      status: 'failed',
+      errorCode: 'layout_unsupported',
+    })
+    expect(f.store.stackFacts.get(f.siteId)).toMatchObject({
+      cmsVersion: '6.8.3',
+      limit: 'outside_root',
+    })
+    // Only what the adapter read: no file of the walk, no listing.
+    expect(f.sessions[0]!.reads).toEqual([['wp-includes', 'version.php']])
+    expect(f.sessions[0]!.lists).toEqual([])
+    expect(f.sessions[0]!.closed).toBe(true)
+    expect(await remoteRef(f, MAIN_REF)).toBeNull()
   })
 
   it('takes a document only from a folder of the adapter: the media library, not the root', async () => {
@@ -401,6 +472,21 @@ describe('importSite', () => {
       expect(f.opened()).toBe(1)
       expect(await remoteRef(f, TAG_REF)).toBe(recorded)
       expect((await fixtureGit(f.remote, 'rev-list', '--all', '--count')).trim()).toBe('1')
+    })
+
+    it('between main and the tag: the run that adds the tag writes no facts', async () => {
+      const f = await fixture()
+      const versions = f.deps.git!.versions
+      f.deps.git!.versions = new Interrupted(f, TAG_REF)
+      await expect(f.run()).rejects.toThrow()
+      expect(f.store.stackFacts.get(f.siteId)).toMatchObject({ cmsVersion: '6.8.3' })
+
+      f.deps.git!.versions = versions
+      const record = vi.spyOn(f.store, 'recordStackFacts')
+      requeue(f)
+      await f.run()
+      expect(f.opened()).toBe(1)
+      expect(record).not.toHaveBeenCalled()
     })
 
     it('after the tag, before the database: only the check is left', async () => {

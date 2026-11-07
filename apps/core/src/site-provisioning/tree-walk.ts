@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer'
-import { open, rm, type FileHandle } from 'node:fs/promises'
+import { open, readFile, rm, type FileHandle } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import {
@@ -9,10 +9,14 @@ import {
   isNestedSiteRoot,
   isSiteConnectionError,
   siteImportLimits,
+  siteReadBytes,
+  siteReadEntries,
   type FileSourceEntry,
   type FileSourceSession,
   type ImportPathPolicy,
   type ImportSkipReason,
+  type SiteRead,
+  type SiteTree,
 } from '@repo/domain'
 
 import type { ExactValues } from './exact-values.ts'
@@ -52,6 +56,11 @@ export interface WalkInput {
   policy: ImportPathPolicy
   /** SiteAdapter.rootMarkers of the stack: a folder below the root with all of them is not entered. */
   markers: readonly string[]
+  /**
+   * `closedStackRoots` of the registry: a folder below the root with every name of one set holds
+   * a stack closed for files (Т40) and is not entered.
+   */
+  closedRoots: readonly (readonly string[])[]
   /** A private directory (0700) for the copies. */
   blobs: string
   values: ExactValues
@@ -114,14 +123,14 @@ async function writeAll(handle: FileHandle, chunk: Uint8Array): Promise<void> {
  * the files of one directory are read `session.concurrency` at a time. Every name passes
  * `isImportSegment`, every path the import policy of the stack (rule 6 among it); links and
  * other entries are counted, never followed; a folder below the root that is another
- * installation is not entered. A folder or a file the server refuses to open, or that is gone
+ * installation, or holds a stack closed for files, is not entered. A folder or a file the server refuses to open, or that is gone
  * since its listing, is left out and counted as `unreadable`. A file over `fileBytes` is left out
  * and counted, more files or bytes than the limits allow fail the import, and a server that sends
  * more than it listed fails it as inconsistent. A downloaded file with an exact secret of the
  * site is dropped.
  */
 export async function walkSiteTree(input: WalkInput): Promise<WalkResult> {
-  const { session, policy, markers, blobs, values, signal } = input
+  const { session, policy, markers, closedRoots, blobs, values, signal } = input
   const limits: WalkLimits = { ...siteImportLimits, ...input.limits }
   const work = input.onWork ?? (() => {})
   const concurrency = Number.isSafeInteger(session.concurrency)
@@ -207,15 +216,16 @@ export async function walkSiteTree(input: WalkInput): Promise<WalkResult> {
     if (!Array.isArray(entries) || entries.length > room) throw refuse('source_too_large')
     listed += entries.length
     work(entries.length * LISTED_ENTRY_WORK)
-    if (
-      directory.names.length > 0 &&
-      isNestedSiteRoot(
-        entries.map((entry) => entry.name),
-        markers,
-      )
-    ) {
-      skip('nested_site')
-      continue
+    if (directory.names.length > 0) {
+      const names = entries.map((entry) => entry.name)
+      if (closedRoots.some((closed) => isNestedSiteRoot(names, closed))) {
+        skip('closed_stack')
+        continue
+      }
+      if (isNestedSiteRoot(names, markers)) {
+        skip('nested_site')
+        continue
+      }
     }
 
     const downloads: Download[] = []
@@ -297,4 +307,62 @@ export async function readRootFile(
     throw sessionFailure(error)
   }
   return Buffer.concat(chunks)
+}
+
+/** The segments of a path of the site root: '' is the root, a segment the import refuses — null. */
+function segmentsOf(path: string): string[] | null {
+  if (path === '') return []
+  const segments = path.split('/')
+  return segments.every(isImportSegment) ? segments : null
+}
+
+/**
+ * The tree of an open session for SiteAdapter.readVersion and readLayout: `path` from the root,
+ * '' — the root. A file or a folder that cannot be read — null (Р9 of Э2): a hiccup of the
+ * hosting never says anything of the site, and the record keeps what it had. An expired deadline
+ * throws. Unlike `readRootFile` for `configSecrets`, a broken transfer is null here too: the walk
+ * that follows meets it again.
+ */
+export function siteTreeOf(session: FileSourceSession, signal: AbortSignal): SiteTree {
+  return {
+    async read(path) {
+      try {
+        return await readRootFile(session, path, signal)
+      } catch {
+        signal.throwIfAborted()
+        return null
+      }
+    },
+    async list(path) {
+      signal.throwIfAborted()
+      const segments = segmentsOf(path)
+      if (segments === null) return null
+      let entries: FileSourceEntry[]
+      try {
+        entries = await session.list(segments, siteReadEntries)
+      } catch (error) {
+        signal.throwIfAborted()
+        if (isFileSourceGuardError(error) || isSiteConnectionError(error)) return null
+        throw error
+      }
+      if (!Array.isArray(entries) || entries.length > siteReadEntries) return null
+      return entries.flatMap((entry) =>
+        entry.type === 'other' ? [] : [{ name: entry.name, type: entry.type }],
+      )
+    },
+  }
+}
+
+/**
+ * The files a walk took, as a `SiteRead` for SiteAdapter.readVersion (Т14): a path the walk did
+ * not take, or a copy longer than `siteReadBytes`, is null. The copies lie in the private
+ * directory of the run; failing to read one of them is the platform's fault and throws.
+ */
+export function takenFilesRead(files: readonly TakenFile[]): SiteRead {
+  const byPath = new Map(files.map((taken) => [taken.path, taken]))
+  return async (path) => {
+    const taken = byPath.get(path)
+    if (!taken || taken.bytes > siteReadBytes) return null
+    return new Uint8Array(await readFile(taken.blob))
+  }
 }

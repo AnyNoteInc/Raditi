@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
 import { isDomainError } from '../errors.ts'
+import type { SiteAdapter } from '../ports/site-adapter.ts'
 import { isPublicationPath } from '../git/publication.ts'
 import { forbiddenCiPaths } from '../policies/diff-paths.ts'
 import {
+  closedStackRoots,
   createImportPathPolicy,
   importPolicyOf,
   isImportSegment,
@@ -505,5 +507,35 @@ describe('isImportSegment', () => {
     'я'.repeat(128),
   ])('refuses %j', (name) => {
     expect(isImportSegment(name)).toBe(false)
+  })
+})
+
+describe('closedStackRoots', () => {
+  const adapter = (
+    files: SiteAdapter['support']['files'],
+    markers: string[],
+    coreFolder: string[] | null,
+  ): Pick<SiteAdapter, 'support' | 'rootMarkers' | 'recognition'> => ({
+    support: { files } as SiteAdapter['support'],
+    rootMarkers: () => markers,
+    recognition: { coreFolder } as SiteAdapter['recognition'],
+  })
+
+  it('names the root and the core of a stack closed for files, never of an open one', () => {
+    expect(
+      closedStackRoots([
+        adapter('on', ['open-a', 'open-b'], ['open-core']),
+        adapter('off', ['closed', '.closed.php'], ['modules', 'kernel']),
+        adapter('dev', ['dev-a'], null),
+      ]),
+    ).toEqual([
+      ['closed', '.closed.php'],
+      ['modules', 'kernel'],
+    ])
+  })
+
+  it('leaves out an empty set: it would match every folder', () => {
+    expect(closedStackRoots([adapter('off', [], null), adapter('off', [], [])])).toEqual([])
+    expect(closedStackRoots([])).toEqual([])
   })
 })

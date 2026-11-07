@@ -1,6 +1,7 @@
 import {
   activateSite,
   enqueueSiteProvisioningStage,
+  mergeSiteStackFacts,
   type Prisma,
   type PrismaClient,
 } from '@repo/db'
@@ -16,6 +17,7 @@ import {
   type ProvisioningStep,
   type SiteSourceKind,
   type SiteStack,
+  type SiteStackFactsPatch,
 } from '@repo/domain'
 import { z } from 'zod'
 
@@ -135,6 +137,8 @@ export interface SiteImportStore {
   /** The id of the repository row of the site; a name another site holds is refused. */
   recordRepository(lease: StageLease, repository: RecordedRepository): Promise<string>
   readPlan(siteId: string): Promise<InitialVersionPlan | null>
+  /** A part of `sites.stack_facts` the walk read (Т13): fenced, merged by `mergeSiteStackFacts`. */
+  recordStackFacts(lease: StageLease, patch: SiteStackFactsPatch): Promise<void>
   /** The commit about to be pushed, with the counts of the walk; never over an imported one. */
   recordPlan(
     lease: StageLease,
@@ -381,6 +385,10 @@ export class PostgresSiteImportStore implements SiteImportStore {
       })
       return created.id
     })
+  }
+
+  async recordStackFacts(lease: StageLease, patch: SiteStackFactsPatch): Promise<void> {
+    await this.#fenced(lease, (tx) => mergeSiteStackFacts(tx, lease.siteId, patch))
   }
 
   async readPlan(siteId: string): Promise<InitialVersionPlan | null> {

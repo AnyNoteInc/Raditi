@@ -4,12 +4,15 @@
 import { randomUUID } from 'node:crypto'
 
 import {
+  badRequest,
   provisioningLimits,
+  siteStackFactsPatchSchema,
   type ProvisioningErrorCode,
   type ProvisioningStageStatus,
   type ProvisioningStageSummary,
   type ProvisioningStep,
   type SiteStack,
+  type SiteStackFactsPatch,
 } from '@repo/domain'
 
 import { LeaseLost, refuse } from '../site-provisioning/import-failure.ts'
@@ -55,6 +58,8 @@ export class FakeSiteImportStore implements SiteImportStore {
   readonly access = new Map<string, StoredAccess>()
   readonly plans = new Map<string, InitialVersionPlan>()
   readonly repositories = new Map<string, RecordedRepository & { id: string; siteId: string }>()
+  /** `sites.stack_facts` by site, merged as `stack_facts || $1` merges: keys of a part replace. */
+  readonly stackFacts = new Map<string, SiteStackFactsPatch>()
   readonly outbox: FakeOutboxEvent[] = []
   readonly heartbeats: StageLease[] = []
   now = () => Date.now()
@@ -197,6 +202,20 @@ export class FakeSiteImportStore implements SiteImportStore {
     const id = randomUUID()
     this.repositories.set(key, { ...repository, id, siteId: lease.siteId })
     return id
+  }
+
+  async recordStackFacts(lease: StageLease, patch: SiteStackFactsPatch): Promise<void> {
+    this.#maybeFail('recordStackFacts')
+    this.#held(lease)
+    // As mergeSiteStackFacts: a part outside the schema of the record is refused.
+    const parsed = siteStackFactsPatchSchema.safeParse(patch)
+    if (!parsed.success) throw badRequest('Invalid facts of a site')
+    const part = Object.fromEntries(
+      Object.entries(parsed.data).filter(([, value]) => value !== undefined),
+    ) as SiteStackFactsPatch
+    // An empty part sends no query, as mergeSiteStackFacts.
+    if (Object.keys(part).length === 0) return
+    this.stackFacts.set(lease.siteId, { ...this.stackFacts.get(lease.siteId), ...part })
   }
 
   async readPlan(siteId: string): Promise<InitialVersionPlan | null> {

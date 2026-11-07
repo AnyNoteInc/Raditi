@@ -10,3 +10,8 @@ export const SITE_DATABASES = Symbol('SITE_DATABASES')
  * configured: the import of a connected site then refuses `repository_not_configured`.
  */
 export const SITE_REPOSITORY_PROVISIONER = Symbol('SITE_REPOSITORY_PROVISIONER')
+/**
+ * readonly (readonly string[])[]: `closedStackRoots` of the adapter registry, built once — the
+ * folders of stacks closed for files that the walk of an import does not enter (fact 14, Т40).
+ */
+export const CLOSED_STACK_ROOTS = Symbol('CLOSED_STACK_ROOTS')
