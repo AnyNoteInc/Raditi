@@ -211,8 +211,14 @@ test('a stack names its rows by the field, not by the id', () => {
   ])
   assert.deepEqual(phpVersionsOfStack('opencart', archives), ['7.4', '8.3'])
   assert.throws(() => archivesOfStack('nope', archives), /no archive/)
-  assert.deepEqual(archivesOfStack('joomla'), ['joomla-3.10.12'])
-  assert.deepEqual(phpVersionsOfStack('joomla'), ['7.4'])
+  assert.deepEqual(archivesOfStack('joomla'), [
+    'joomla-3.10.12',
+    'joomla-4.4.14',
+    'joomla-5.4.10',
+    'joomla-6.2.0',
+  ])
+  // One version of PHP once, though two builds run on it.
+  assert.deepEqual(phpVersionsOfStack('joomla'), ['7.4', '8.1', '8.3'])
 })
 
 test('the command: versions of PHP without a download, an unknown stack fails', () => {
@@ -223,7 +229,7 @@ test('the command: versions of PHP without a download, an unknown stack fails', 
     })
   const versions = run('--php=joomla')
   assert.equal(versions.status, 0, versions.stderr)
-  assert.equal(versions.stdout, '7.4\n')
+  assert.equal(versions.stdout, '7.4,8.1,8.3\n')
   assert.equal(run('--stack=nope').status, 1)
   assert.equal(run('--php=nope').status, 1)
   // A download needs an absolute folder.

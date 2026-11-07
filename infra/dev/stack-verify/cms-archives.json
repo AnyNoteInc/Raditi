@@ -6,5 +6,29 @@
     "sha256": "80238884543b71451f659635594c2100d5b4092bc05d928f6f47e22a4cff89ae",
     "sha256Source": "published",
     "license": "GPL-2.0-or-later"
+  },
+  "joomla-4.4.14": {
+    "stack": "joomla",
+    "php": "8.1",
+    "url": "https://github.com/joomla/joomla-cms/releases/download/4.4.14/Joomla_4.4.14-Stable-Full_Package.tar.gz",
+    "sha256": "b5f6d227cc0c2e057517c21aa7c3b4ac3350d82da0ba8954a92d3832bdf00a2c",
+    "sha256Source": "published",
+    "license": "GPL-2.0-or-later"
+  },
+  "joomla-5.4.10": {
+    "stack": "joomla",
+    "php": "8.3",
+    "url": "https://github.com/joomla/joomla-cms/releases/download/5.4.10/Joomla_5.4.10-Stable-Full_Package.tar.gz",
+    "sha256": "aa72c425105cf775312f9610598b9f1c8866c7f3219a729b59d29a56ff7f76c4",
+    "sha256Source": "published",
+    "license": "GPL-2.0-or-later"
+  },
+  "joomla-6.2.0": {
+    "stack": "joomla",
+    "php": "8.3",
+    "url": "https://github.com/joomla/joomla-cms/releases/download/6.2.0/Joomla_6.2.0-Stable-Full_Package.tar.gz",
+    "sha256": "f7a4c3962c4a8682f5847ea9d47d2848f6eb475109805935c9e19a5c6511829d",
+    "sha256Source": "published",
+    "license": "GPL-2.0-or-later"
   }
 }

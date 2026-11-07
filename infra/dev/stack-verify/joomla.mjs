@@ -1,13 +1,45 @@
 // Joomla on the synthetic production of a stand of the site stacks (docs/plan/62-slices/e3.md,
-// Э3.8): the builds the stand runs, the install without a browser, and the synthetic content a copy
+// Э3.8, Э3.9): the builds the stand runs, the install without a browser, and the synthetic content a copy
 // is judged by — a published article with an alias and a menu item, a draft, and values that mark
 // what no preview may hold (people, their contacts and tokens, the secrets of the configuration).
 // Only synthetic data. The core of Joomla runs in the container of the production only: this file
 // is the stand's, the downloaded tree is not.
 
-/** A build of a stand: a row of cms-archives.json and the `site` image of its PHP. */
+/**
+ * A build of a stand: a row of cms-archives.json and the `site` image of its PHP. `absolutePageLinks`
+ * — the pages of the build link to the site by absolute addresses (`<base href>` of 3.x); those of
+ * 4.0 and later link relatively (docs/plan/62-site-stacks.md, §10, Э3.9). A fact of the build, so the
+ * test of the preview asks it and compares no branch.
+ */
 export const JOOMLA_BUILDS = [
-  { archive: 'joomla-3.10.12', php: '7.4', generation: 'j3', version: '3.10.12' },
+  {
+    archive: 'joomla-3.10.12',
+    php: '7.4',
+    generation: 'j3',
+    version: '3.10.12',
+    absolutePageLinks: true,
+  },
+  {
+    archive: 'joomla-4.4.14',
+    php: '8.1',
+    generation: 'j4',
+    version: '4.4.14',
+    absolutePageLinks: false,
+  },
+  {
+    archive: 'joomla-5.4.10',
+    php: '8.3',
+    generation: 'j5',
+    version: '5.4.10',
+    absolutePageLinks: false,
+  },
+  {
+    archive: 'joomla-6.2.0',
+    php: '8.3',
+    generation: 'j6',
+    version: '6.2.0',
+    absolutePageLinks: false,
+  },
 ]
 
 /** The prefix of the tables of the production. */
@@ -17,7 +49,8 @@ const ROOT = '/var/www/html'
 
 /** What the seed writes, by the ids a test asks for. */
 export const JOOMLA_SEED = Object.freeze({
-  authorId: 900,
+  /** Above 1000: the installer of 4.0 and later gives its superuser a random id of 1–1000. */
+  authorId: 1900,
   articleId: 50,
   draftId: 51,
   menuId: 150,
@@ -29,6 +62,12 @@ export const JOOMLA_SEED = Object.freeze({
   articleAlias: 'o-kompanii',
   /** The address of the article by its menu item, with SEF rewriting on. */
   articlePath: '/o-kompanii',
+  /**
+   * An image of the core the intro text points to by a relative address: the Atom feed makes it
+   * absolute from `Uri::base()`, which takes `$live_site` — the one link a preview that took the
+   * production's `$live_site` would point at production with (_relToAbs of DocumentRenderer).
+   */
+  introImage: 'images/joomla_black.png',
   sitename: 'Стенд Joomla Радити',
 })
 
@@ -189,7 +228,7 @@ export function joomlaSeedSql(prefix, build) {
       1,
       s.articleTitle,
       s.articleAlias,
-      'Синтетическая страница стенда: о компании.',
+      `Синтетическая страница стенда: о компании. <img src="${s.introImage}" alt="">`,
       1,
       s.articleFullText,
     ),

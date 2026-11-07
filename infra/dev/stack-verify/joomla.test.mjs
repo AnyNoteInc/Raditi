@@ -14,8 +14,30 @@ import {
   withProperty,
 } from './joomla.mjs'
 
-const j6 = { archive: 'joomla-6.2.0', php: '8.3', generation: 'j6', version: '6.2.0' }
 const j3 = JOOMLA_BUILDS.find((build) => build.generation === 'j3')
+const j6 = JOOMLA_BUILDS.find((build) => build.generation === 'j6')
+
+test('the builds are the four branches of the stand, one generation each', () => {
+  // docs/plan/62-slices/e3.md, Э3.9: 3.10, 4.4, 5.4 and 6.2, each on the first PHP of its branch.
+  assert.deepEqual(
+    JOOMLA_BUILDS.map((build) => [build.generation, build.version, build.php]),
+    [
+      ['j3', '3.10.12', '7.4'],
+      ['j4', '4.4.14', '8.1'],
+      ['j5', '5.4.10', '8.3'],
+      ['j6', '6.2.0', '8.3'],
+    ],
+  )
+  // `<base href>` of 3.x: only its pages link to the site by absolute addresses.
+  assert.deepEqual(
+    JOOMLA_BUILDS.filter((build) => build.absolutePageLinks).map((build) => build.generation),
+    ['j3'],
+  )
+  for (const build of JOOMLA_BUILDS) assert.equal(build.archive, `joomla-${build.version}`)
+  // The superuser of the installer of 4.0 and later takes a random id of 1–1000
+  // (installation/src/Model/ConfigurationModel.php): the author of the seed never meets it.
+  assert.ok(JOOMLA_SEED.authorId > 1000)
+})
 
 test('the seed of 3.x has no workflow, that of 6.x has its row', () => {
   assert.ok(j3, 'a build of 3.x is in the list')
@@ -127,6 +149,66 @@ test('the install of 3.10 loads the schema and writes a configuration with the m
   assert.match(calls.at(-1).argv[2], /cp htaccess\.txt \.htaccess/)
   // The password is never part of an argument.
   assert.ok(calls.every((call) => !(call.argv ?? []).join(' ').includes('StandPassword123')))
+})
+
+test('the install of 4.3 and later is the installer of the command line, run as www-data', async () => {
+  const builds = JOOMLA_BUILDS.filter((row) => row.generation !== 'j3')
+  assert.deepEqual(
+    builds.map((build) => build.version),
+    ['4.4.14', '5.4.10', '6.2.0'],
+  )
+  for (const build of builds) {
+    const calls = []
+    const production = {
+      exec: async (argv, input) => {
+        calls.push({ argv, input })
+        if (argv[0] === 'cat' && argv[1] === '/prod-secrets/db') return 'StandPassword123\n'
+        if (argv[0] === 'cat' && argv[1] === '/var/www/html/configuration.php')
+          return [
+            '<?php',
+            'class JConfig {',
+            "\tpublic $sitename = 'x';",
+            "\tpublic $live_site = '';",
+            "\tpublic $secret = 'random';",
+            "\tpublic $smtppass = '';",
+            '\tpublic $sef_rewrite = false;',
+            '}',
+          ].join('\n')
+        return ''
+      },
+      sql: async (query) => {
+        calls.push({ sql: query })
+        return ''
+      },
+    }
+    await installJoomla(production, build, { productionOrigin: 'https://prod.example.ru' })
+    // No schema by hand: the installer makes the tables.
+    assert.equal(calls.filter((call) => call.sql).length, 0, build.version)
+    const install = calls.find((call) => (call.argv[2] ?? '').includes('installation/joomla.php'))
+    assert.ok(install, build.version)
+    assert.match(
+      install.argv[2],
+      /setpriv --reuid=33 --regid=33 --clear-groups php installation\/joomla\.php install/,
+    )
+    assert.match(install.argv[2], /--db-prefix=jos_ /)
+    // The password of the database is read inside the container, never written in an argument.
+    assert.ok(install.argv[2].includes('--db-pass="$(cat /prod-secrets/db)"'))
+    assert.ok(calls.every((call) => !(call.argv ?? []).join(' ').includes('StandPassword123')))
+    const written = calls.find((call) => call.input !== undefined)
+    assert.match(written.input, /public \$sef_rewrite = '1';/)
+    assert.ok(written.input.includes(`public $secret = '${JOOMLA_CONFIG_CANARIES.secret}';`))
+    assert.ok(written.input.includes(`public $smtppass = '${JOOMLA_CONFIG_CANARIES.smtppass}';`))
+    assert.ok(written.input.includes("public $live_site = 'https://prod.example.ru';"))
+  }
+  // 4.0–4.2 have no installer without a browser.
+  await assert.rejects(
+    installJoomla(
+      { exec: async () => '', sql: async () => '' },
+      { archive: 'x', php: '8.1', generation: 'j4', version: '4.2.9' },
+      { productionOrigin: 'https://prod.example.ru' },
+    ),
+    /no installer without a browser/,
+  )
 })
 
 test('the indexer is the script of 3.x and the console of 4.0 and later', () => {

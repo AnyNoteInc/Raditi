@@ -14,7 +14,7 @@ import {
   type StackProduction,
 } from '../testing/stack-preview.ts'
 
-// М2 of Joomla (docs/plan/62-site-stacks.md, §5.5; docs/plan/62-slices/e3.md, Э3.8): each build of
+// М2 of Joomla (docs/plan/62-site-stacks.md, §5.5; docs/plan/62-slices/e3.md, Э3.8, Э3.9): each build of
 // the stand — a release of joomla.org downloaded and checked by infra/dev/stack-verify/fetch-cms.mjs —
 // installed on a synthetic production, seeded with synthetic content and marks, then run as a preview
 // by the adapter of Joomla, the real copier and the real runtime of previews (PREVIEW_RUNTIME, runc
@@ -38,6 +38,7 @@ const stand = z
         php: z.string(),
         generation: z.string(),
         version: z.string(),
+        absolutePageLinks: z.boolean(),
       }),
     ),
     JOOMLA_PREFIX: z.string(),
@@ -48,6 +49,7 @@ const stand = z
       articleTitle: z.string(),
       articleFullText: z.string(),
       articlePath: z.string(),
+      introImage: z.string(),
     }),
     JOOMLA_INSTALLATION_MARKER: z.string(),
     JOOMLA_CANARIES: z.array(z.string()),
@@ -71,6 +73,24 @@ const holds = (text: string, value: string) =>
   text.includes(value) || text.toLowerCase().includes(Buffer.from(value, 'utf8').toString('hex'))
 const count = async (preview: StackPreview, query: string) =>
   Number((await preview.rootSql(query)).trim())
+
+/**
+ * A page, its redirects followed while they stay on the preview's own origin, five redirects at
+ * most: Joomla 5.1 and later send `/index.php?…` to `/?…` and then, with strict routing, to the
+ * address of the menu item — two redirects inside the site (plugins/system/sef, `indexphp` and
+ * `strictrouting`). `hops` is the address asked for, then the address of each redirect.
+ */
+async function followed(preview: StackPreview, path: string) {
+  const hops = [path]
+  for (let redirects = 0; ; redirects += 1) {
+    const page = await preview.request(hops.at(-1)!)
+    if (page.status < 300 || page.status >= 400) return { page, hops }
+    expect(redirects, hops.join(' → ')).toBeLessThan(5)
+    const location = new URL(page.header('location') ?? '', `${preview.origin}${hops.at(-1)}`)
+    expect(location.origin, hops.join(' → ')).toBe(preview.origin)
+    hops.push(`${location.pathname}${location.search}`)
+  }
+}
 
 describe.skipIf(!enabled).each(stand.JOOMLA_BUILDS)('Joomla $version as a preview', (build) => {
   const productionOrigin = `https://joomla-${randomBytes(3).toString('hex')}.example.ru`
@@ -133,28 +153,30 @@ describe.skipIf(!enabled).each(stand.JOOMLA_BUILDS)('Joomla $version as a previe
     const article = await preview.request(seed.articlePath)
     expect(article.status).toBe(200)
     expect(article.body).toContain(seed.articleFullText)
-    const byQuery = await preview.request(
+    // 200, or redirects inside the site that end at the article.
+    const byQuery = await followed(
+      preview,
       `/index.php?option=com_content&view=article&id=${seed.articleId}`,
     )
-    if (byQuery.status >= 300 && byQuery.status < 400) {
-      const location = new URL(byQuery.header('location') ?? '', `${preview.origin}/`)
-      expect(location.origin).toBe(preview.origin)
-      const followed = await preview.request(`${location.pathname}${location.search}`)
-      expect(followed.status).toBe(200)
-      expect(followed.body).toContain(seed.articleFullText)
-    } else {
-      expect(byQuery.status).toBe(200)
-      expect(byQuery.body).toContain(seed.articleFullText)
-    }
+    expect(byQuery.page.status, byQuery.hops.join(' → ')).toBe(200)
+    expect(byQuery.page.body).toContain(seed.articleFullText)
   })
 
   it('links to the preview’s own origin, never to production', async () => {
     // The production names itself in its `$live_site` (installJoomla): a preview that took it
     // would link there. Absolute links in the content are not rewritten for Joomla — the seed has
     // none, and the copy holds them as the production does (docs/plan/62-site-stacks.md, §10).
+    // The pages of 3.x link absolutely (`<base href>`), those of 4.0 and later relatively — a fact
+    // of the build; the Atom feed of the front page links absolutely on every branch. These links
+    // are built from the request, not from `$live_site`: what `$live_site` reaches is `Uri::base()`,
+    // and the feed writes the relative image of the intro with it (_relToAbs of DocumentRenderer),
+    // HTML-escaped in `<summary>` — the link that would name production (docs/plan/62-site-stacks.md,
+    // §10, Э3.9). Case 5 checks `$live_site` of the running configuration itself.
     const production = new URL(productionOrigin)
-    for (const path of ['/', seed.articlePath]) {
-      const page = await preview.request(path)
+    const feed = '/?format=feed&type=atom'
+    for (const path of ['/', seed.articlePath, feed]) {
+      const { page, hops } = await followed(preview, path)
+      expect(page.status, hops.join(' → ')).toBe(200)
       expect(page.body, path).not.toContain(production.hostname)
       const absolute = [...page.body.matchAll(/\b(?:href|src|action)="((?:https?:)?\/\/[^"]+)"/g)]
         .map(([, link]) => new URL(link!.replaceAll('&amp;', '&'), `${preview.origin}/`))
@@ -162,9 +184,11 @@ describe.skipIf(!enabled).each(stand.JOOMLA_BUILDS)('Joomla $version as a previe
         .filter(
           (link) => link.hostname.endsWith('.localhost') || link.hostname === production.hostname,
         )
-      expect(absolute.length, path).toBeGreaterThan(0)
+      if (path === feed || build.absolutePageLinks) expect(absolute.length, path).toBeGreaterThan(0)
       // The scheme, the name and the port of the gateway: a link without the port is broken.
       for (const link of absolute) expect(link.origin, link.href).toBe(preview.origin)
+      if (path === feed)
+        expect(page.body, path).toContain(`src=&quot;${preview.origin}/${seed.introImage}&quot;`)
     }
   })
 
@@ -219,6 +243,8 @@ describe.skipIf(!enabled).each(stand.JOOMLA_BUILDS)('Joomla $version as a previe
     ])
     expect(running.code, running.output).toBe(0)
     expect(running.output).toContain("'mailonline' => false")
+    // No address of production: the links of `Uri::base()` and `Uri::root()` take `$live_site`.
+    expect(running.output).toContain("'live_site' => ''")
     for (const value of [...config, password]) {
       expect(JSON.stringify(preview.stackFacts), value).not.toContain(value)
       expect(JSON.stringify(preview.recipe), value).not.toContain(value)
