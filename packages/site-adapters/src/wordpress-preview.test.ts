@@ -11,7 +11,6 @@ import {
   wordpressPreviewFiles,
   wordpressPreviewRecipe,
 } from './wordpress-preview.ts'
-import * as embedded from './wordpress-preview-files.ts'
 
 const site: SiteFacts = {
   stack: 'wordpress',
@@ -21,7 +20,8 @@ const site: SiteFacts = {
   database: { tablePrefix: 'wp_', charset: 'utf8mb4', collation: null },
 }
 
-// The files are embedded because the orchestrator image has no infra/; these are their sources.
+// The files are embedded because the orchestrator image has no infra/; these are their sources
+// (stack-files.test.ts holds the constants to them).
 const sources = {
   raditiContentPhp: readFileSync(
     new URL('../../../infra/wordpress/raditi-content.php', import.meta.url),
@@ -42,12 +42,6 @@ const sources = {
 }
 
 describe('the preview recipe of WordPress', () => {
-  it('embeds the files of infra/wordpress as they are', () => {
-    const run = 'run `node packages/site-adapters/scripts/embed-wordpress-files.mjs`'
-    for (const [name, source] of Object.entries(sources))
-      expect(embedded[name as keyof typeof sources], `${name} differs: ${run}`).toBe(source)
-  })
-
   it('writes the configuration, the mu-plugin and the content plugin over the tree', () => {
     const recipe = wordpressPreviewRecipe(site)
     expect(recipe.generatedFiles).toEqual([

@@ -1009,49 +1009,30 @@ test('CI runs the presigned-URL suite of the storage adapter on a real S3', () =
   assert.ok(!sets(job('gates'), 'S3_ENDPOINT'))
 })
 
-test('the required CI job checks the syntax of the WordPress plugin', () => {
+test('the required CI job checks the syntax of every PHP file of infra', () => {
+  // The content plugin and the preview files of every stack, and the prologue of a generated
+  // configuration (docs/plan/62-site-stacks.md, Т12, Т21): the step walks infra/*/ and names no
+  // file, so the folder of a new stack is checked without a new line.
   const gates = job('gates')
-  // Every PHP file there: the content plugin, and the wp-config.php and mu-plugin of a preview.
-  const files = readdirSync(join(root, 'infra/wordpress'))
-    .filter((name) => name.endsWith('.php'))
-    .sort()
-  assert.deepEqual(files, ['preview-wp-config.php', 'raditi-content.php', 'raditi-preview.php'])
-  for (const file of files) {
-    const name = file.replaceAll('.', '\\.')
-    assert.ok(read(`infra/wordpress/${file}`).startsWith('<?php'))
-    assert.match(gates, new RegExp(`^ {12}php -l infra/wordpress/${name}$`, 'm'))
-    // A runner without PHP uses the PHP of the pinned WordPress image, offline and read-only.
-    const [, image] =
-      new RegExp(
-        `docker run --rm --network none --entrypoint php \\\\\\n +-v "\\$PWD/infra/wordpress:/plugin:ro" \\\\\\n +(\\S+) -l /plugin/${name}`,
-      ).exec(gates) ?? []
-    assert.equal(
-      image,
-      siteImages.find((name) => name.startsWith('wordpress:7.')),
-      file,
-    )
-  }
-})
-
-test('the required CI job checks the syntax of the shared prologue', () => {
-  // The prologue of a generated configuration every stack but WordPress requires (docs/plan/62,
-  // Т21): a recipe file of infra/preview, checked in the same step and on the same pinned PHP.
-  const gates = job('gates')
-  assert.ok(read('infra/preview/prologue.php').startsWith('<?php'))
-  assert.match(gates, /^ {12}php -l infra\/preview\/prologue\.php$/m)
+  const files = globSync('infra/*/*.php', { cwd: root })
+  assert.ok(files.length > 0)
+  assert.ok(files.includes('infra/preview/prologue.php'))
+  for (const file of files) assert.ok(read(file).startsWith('<?php'), file)
+  const step = gates.slice(gates.indexOf('- name: PHP syntax of infra'))
+  assert.ok(step.length < gates.length, 'the gates job has the step PHP syntax of infra')
+  const run = step.slice(0, step.indexOf('\n      - name: '))
+  assert.match(run, /^ {10}for file in infra\/\*\/\*\.php; do$/m)
+  assert.match(run, /^ {14}php -l "\$file"$/m)
+  assert.doesNotMatch(run, /infra\/(?!\*)/, 'the step names no folder of infra')
+  // A runner without PHP uses the PHP of the pinned WordPress image, offline and read-only.
   const [, image] =
-    /docker run --rm --network none --entrypoint php \\\n +-v "\$PWD\/infra\/preview:\/plugin:ro" \\\n +(\S+) -l \/plugin\/prologue\.php/.exec(
-      gates,
+    /docker run --rm --network none --entrypoint php -v "\$PWD\/infra:\/infra:ro" \\\n +(\S+) -l "\/\$file"/.exec(
+      run,
     ) ?? []
   assert.equal(
     image,
     siteImages.find((name) => name.startsWith('wordpress:7.')),
   )
-  // One line in each branch of the same step.
-  const step = gates.slice(gates.indexOf('WordPress plugin syntax'))
-  const branches = step.slice(0, step.indexOf('\n          fi\n')).split('\n          else\n')
-  assert.equal(branches.length, 2)
-  for (const branch of branches) assert.match(branch, /prologue\.php/)
 })
 
 test('a cached gate sees a source change in a package it depends on', () => {
@@ -1087,14 +1068,8 @@ test('a cached test run sees a change of a file its tests read outside their pac
       'apps/llm/src/gateway/sandbox-routes.contract.test.ts',
       'apps/core/src/llm/backends.test.ts',
     ],
-    // The files a WordPress preview gets, embedded in the adapter, against their sources; the
-    // policy of its database copy, against the file the copier is tested with (plan 53, R5b).
-    'infra/wordpress/raditi-content.php': ['packages/site-adapters/src/wordpress-preview.test.ts'],
-    'infra/wordpress/raditi-preview.php': ['packages/site-adapters/src/wordpress-preview.test.ts'],
-    'infra/wordpress/preview-wp-config.php': [
-      'packages/site-adapters/src/wordpress-preview.test.ts',
-    ],
-    'infra/wordpress/preview-apache.conf': ['packages/site-adapters/src/wordpress-preview.test.ts'],
+    // The policy of the WordPress database copy, against the file the copier is tested with
+    // (plan 53, R5b). The embedded files of the stacks are the next test.
     'packages/site-connections/src/database-copy/wordpress-policy.fixture.json': [
       'packages/site-adapters/src/wordpress-db-copy.test.ts',
     ],
@@ -1121,6 +1096,22 @@ test('a cached test run sees a change of a file its tests read outside their pac
       `${importer} no longer imports ${file}`,
     )
   }
+})
+
+test('a cached test run sees a change of any file of a stack', () => {
+  // stack-files.test.ts holds the constants of every folder of EMBEDDED to the files of
+  // infra/<stack>/ through stack-files.mjs (docs/plan/62-site-stacks.md, Т12). The inputs walk
+  // infra/*/ as the script does, so a new stack needs no new line here.
+  const { inputs = [] } = JSON.parse(read('turbo.json')).tasks.test
+  for (const pattern of ['infra/*/*.php', 'infra/*/*.conf', 'infra/*/*.ini'])
+    assert.ok(inputs.includes(`$TURBO_ROOT$/${pattern}`), `${pattern} is not an input of test`)
+  assert.ok(!inputs.some((input) => input.startsWith('$TURBO_ROOT$/infra/wordpress/')))
+  const reader = 'packages/site-adapters/src/stack-files.test.ts'
+  assert.ok(read(reader).includes("from '../scripts/stack-files.mjs'"), `${reader} reads no files`)
+  assert.match(
+    read('packages/site-adapters/scripts/stack-files.mjs'),
+    /const EMBEDDABLE = \/\\\.\(\?:php\|conf\|ini\)\$\//,
+  )
 })
 
 test('a cached typecheck or test of core sees a change of the runner engine its tests drive', () => {
