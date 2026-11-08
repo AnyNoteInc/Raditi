@@ -28,7 +28,7 @@ export default async function Page({
   if (!version) notFound()
   return (
     <>
-      <BackLink href={`${siteHref(site.id, 'changes')}/versions`}>Все версии</BackLink>
+      <BackLink href={siteHref(site.id, 'changes')}>Все версии</BackLink>
       <VersionDetail
         siteId={site.id}
         version={version}

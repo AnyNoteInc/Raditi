@@ -146,7 +146,7 @@ export interface ComposerCommands {
  * of the empty field or its button opens it —, the paperclip «Прикрепить файлы» with «Загрузить
  * файл» (not «+»: «+» of a dialog is its tools, docs/plan/59-dialog-tools-panel.md, И15),
  * «Размышление», and the send button. A file pasted into the field is attached as if it were
- * chosen. Enter in the field is a new line; Ctrl+Enter or ⌘+Enter sends. A text that is a command
+ * chosen. Enter in the field sends; Shift+Enter is a new line. A text that is a command
  * alone runs the command and is never sent. The text stays in the field until the server has
  * taken it.
  */
@@ -391,7 +391,14 @@ export function Composer({
       )
     )
       return
-    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+    // Enter sends, Shift+Enter is a new line (owner's request of 07.11.2026); an Enter that ends a
+    // word of an input method (229 — Safari's) is the method's, not a send.
+    if (
+      event.key === 'Enter' &&
+      !event.shiftKey &&
+      !event.nativeEvent.isComposing &&
+      event.keyCode !== 229
+    ) {
       event.preventDefault()
       void send()
     }

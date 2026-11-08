@@ -437,12 +437,13 @@ describe('a field without commands', () => {
 })
 
 describe('the field', () => {
-  it('sends with the button or Ctrl+Enter; Enter alone is a new line', async () => {
+  it('sends with the button or Enter; Shift+Enter and the Enter of an input method do not', async () => {
     const { onSend } = showComposer()
     type('Поменяйте цену')
-    press('Enter')
+    press('Enter', field(), { shiftKey: true })
+    press('Enter', field(), { keyCode: 229 })
     expect(onSend).not.toHaveBeenCalled()
-    press('Enter', field(), { ctrlKey: true })
+    press('Enter')
     expect(onSend).toHaveBeenCalledWith('Поменяйте цену', [])
     await vi.waitFor(() => expect(field().value).toBe(''))
   })
