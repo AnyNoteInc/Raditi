@@ -19,7 +19,7 @@
 | Файл | Что это |
 | --- | --- |
 | `docker-compose.server.yml` | Наложение: S3, `mcp`, `browser`, шлюз трансляции (`preview`), раннер, watchdog, `llm` без узла выхода, маршруты сервера в Traefik |
-| `traefik/server.yml` | Панель Traefik `traefik.raditi.ru` с basic auth, корень `raditi-preview.ru` → кабинет, поток браузера `wss://raditi.ru/v1/browser/stream` → шлюз трансляции |
+| `traefik/server.yml` | `deploy.sh` копирует его в `traefik/dynamic/` рядом с `raditi.yml`. Панель Traefik `traefik.raditi.ru` с basic auth, корень `raditi-preview.ru` → кабинет, поток браузера `wss://raditi.ru/v1/browser/stream` → шлюз трансляции |
 | `env.example` | Образец `/opt/raditi/app/.env`: только несекретное; `*_IMAGE` и `APP_REVISION` пишет `deploy.sh` |
 | `preflight.sh` | Проверки хоста перед стартом (часть `infra/app/preflight.sh`, которая верна для одной машины, плюс адрес, firewall, OpenBao, gVisor) |
 | `deploy.sh` | Выкладка тега: запись для отката, файлы, digest, pull, preflight, дамп, миграции, сиды, `up` |
@@ -51,7 +51,7 @@ systemctl start raditi-secrets
 - **Порядок загрузки:** `raditi-net` (адрес) и `raditi-host-firewall` → `openbao` → `openbao-unseal` → `raditi-secrets` → `chrony-wait` (`time-sync.target`) → `docker`. `/run` — tmpfs, секреты рендерятся заново при каждой загрузке, а каждый сервис получает новый SecretID AppRole (прежние уничтожаются).
 - **Ключи владельца** уходят в Vault только со stdin: `printf %s "<ключ>" | ssh … /usr/local/lib/raditi/platform-secrets.mjs set app/core SENDSAY_API_KEY`, затем `platform-secrets.mjs render core` и `docker compose up -d --force-recreate --no-deps core`. Рендер выпускает названным сервисам с AppRole новый SecretID и уничтожает прежние, поэтому рендерят только те сервисы, которые сразу пересоздают; `systemctl restart raditi-secrets` рендерит все — это делается только при загрузке. Поля — `app/web` `SMARTCAPTCHA_CLIENT_KEY`, `SMARTCAPTCHA_SERVER_KEY`; `app/core` `SENDSAY_API_KEY`, `LEADS_TELEGRAM_BOT_TOKEN`, `GITEA_TOKEN`.
 - **Пароль панели Traefik** — `kv/platform/app/traefik` (`dashboard_user`, `dashboard_password`); прочитать на сервере: `curl -s -H "X-Vault-Token: $(cat /etc/raditi/openbao/root-token)" http://127.0.0.1:8200/v1/kv/data/platform/app/traefik | jq -r '.data.data.dashboard_password'`.
-- **Токен раннера** выпущен на сервере (`/etc/raditi/runner/runner-token`, 0400) и его не покидает; в `.env` — только `server-1:<sha256>@10.10.0.10`. Раннер работает в сети хоста, поэтому `core` видит его с этого адреса.
+- **Токен раннера** выпущен на сервере (`/etc/raditi/runner/runner-token`, 0400) и его не покидает; в `.env` — только `server-1:<sha256>@172.29.83.1`. Раннер работает в сети хоста, а Docker без userland-proxy подменяет адрес локального соединения с опубликованным портом на шлюз моста `core`: поэтому подсеть `core-egress` закреплена (`172.29.83.0/24`), и хеш привязан к её шлюзу. С того же адреса `core` видит любой контейнер, который пришёл к `10.10.0.10:8083` через hairpin, — допуск держит токен.
 
 ## Выкладка
 

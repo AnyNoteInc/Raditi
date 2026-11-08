@@ -2,6 +2,7 @@
 # The model in production on the single server: the steps of «Модель в production» of
 # infra/app/README.md, run as root from /opt/raditi/app (README.md, «Модель»).
 #   model-setup.sh key <lite|pro|max> <paid until YYYY-MM-DD>   the plan key of Z.ai on stdin
+#   model-setup.sh search-key                                   the key of Parallel Search on stdin (subs/search/parallel)
 #   model-setup.sh enable                                        provider zai-coding, its profiles, rates, accounts
 #   model-setup.sh clearance <countries> <notice22 ref> <notice22 date> <notice12 ref> <notice12 date>
 #                            <transfer allowed from> <documents>
@@ -22,9 +23,9 @@ vault_post() { # <path> <json>
 psql_c() { docker compose exec -T postgres psql -U postgres -d raditi -v ON_ERROR_STOP=1 -tA "$@"; }
 
 case "${1:-}" in
-key)
-  plan=${2:?plan: lite, pro or max}
-  paid=${3:?paid until YYYY-MM-DD}
+key | search-key)
+  [ "$1" = search-key ] || plan=${2:?plan: lite, pro or max}
+  [ "$1" = search-key ] || paid=${3:?paid until YYYY-MM-DD}
   dir=$(mktemp -d -p /run)
   trap 'rm -rf "$dir"' EXIT
   vault_post auth/token/create \
@@ -32,11 +33,15 @@ key)
     jq -r .auth.client_token >"$dir/token"
   chown 10008:10008 "$dir" "$dir/token"
   chmod 0400 "$dir/token"
+  if [ "$1" = search-key ]; then
+    set -- scripts/subscription-search-key.mjs --vault-token-file /run/writer-token
+  else
+    set -- scripts/subscription-login.mjs --backend zai-coding --label production-1 \
+      --plan "$plan" --paid-until "$paid" --vault-token-file /run/writer-token
+  fi
   docker compose run --rm --no-deps -T -v "$dir/token:/run/writer-token:ro" \
     -e APP_ENV=production -e VAULT_ADDR=https://vault.raditi.internal:8200 \
-    --entrypoint node llm --env-file=/run/raditi/app.env scripts/subscription-login.mjs \
-    --backend zai-coding --label production-1 --plan "$plan" --paid-until "$paid" \
-    --vault-token-file /run/writer-token
+    --entrypoint node llm --env-file=/run/raditi/app.env "$@"
   ;;
 enable)
   psql_c <<'EOF'

@@ -57,6 +57,8 @@ trap restore EXIT
 install -d -m 0755 "$app"
 rsync -a --delete --exclude /.env --exclude /.tag --exclude /server "$src/app/" "$app/"
 rsync -a --delete "$src/server/" "$app/server/"
+# The routes of the single server next to raditi.yml in the directory Traefik watches
+install -m 0644 "$app/server/traefik/server.yml" "$app/traefik/dynamic/server.yml"
 [ -f "$app/.env" ] || { echo "deploy: $app/.env is missing: first deploy is manual (README.md)" >&2; exit 1; }
 
 # 2. Digests of the release and its revision into .env (only these lines change)

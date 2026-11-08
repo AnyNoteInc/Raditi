@@ -40,12 +40,13 @@ x-secrets: &secrets
 services:
   traefik:
     environment:
-      # server/traefik/server.yml: the dashboard with basic auth and the apex of previews
+      # traefik/dynamic/server.yml (deploy.sh copies it there from server/traefik): the dashboard
+      # with basic auth and the apex of previews. Not a bind mount of its own: Docker cannot make
+      # its mount point inside the read-only bind of traefik/dynamic.
       DASHBOARD_HOST: ${DASHBOARD_HOST:?Set DASHBOARD_HOST}
       PREVIEW_APEX_HOST: ${PREVIEW_APEX_HOST:-}
       BROWSER_STREAM_HOST: ${APP_DOMAIN}
     volumes:
-      - ./server/traefik/server.yml:/etc/traefik/dynamic/server.yml:ro
       - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/traefik' }
     networks: [stream-edge]
 
@@ -176,8 +177,8 @@ services:
       VAULT_ADDR: https://vault.raditi.internal:8200
       NODE_EXTRA_CA_CERTS: /run/raditi/vault-ca.pem
       MCP_PORT: '8082'
-      # The Host sandbox-gw sends upstream (SANDBOX_MCP_UPSTREAM of the runner)
-      MCP_ALLOWED_HOSTS: 10.10.0.10:8082
+      # The host of the Host sandbox-gw sends upstream (SANDBOX_MCP_UPSTREAM of the runner), no port
+      MCP_ALLOWED_HOSTS: 10.10.0.10
       BROWSER_WORKER_URL: http://10.10.0.10:8086
       HOME: /tmp
     extra_hosts: *internal-hosts
@@ -311,7 +312,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     logging: *logging
 
-  # Host network: core sees the runner from 10.10.0.10, the address its token hash is bound to.
+  # Host network. Without the userland proxy Docker masquerades a local connection to a published
+  # port as the gateway of the target's bridge: core sees the runner from 172.29.83.1, the gateway
+  # of core-egress pinned below, and its token hash is bound to that address.
   # Only /etc/raditi/runner (the token) and the public CA are mounted, never /etc/raditi itself.
   runner:
     image: ${RUNNER_IMAGE:?Set the digest-pinned runner image}
@@ -350,6 +353,12 @@ services:
     logging: *logging
 
 networks:
+  # Pinned: the runner's token hash is bound to its gateway (RUNNER_TOKENS=…@172.29.83.1)
+  core-egress:
+    ipam:
+      config:
+        - subnet: 172.29.83.0/24
+          gateway: 172.29.83.1
   s3-net: { internal: true }
   # The gateway of the ports published on the private address (S3, PostgreSQL)
   server-pub:
