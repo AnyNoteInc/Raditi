@@ -840,8 +840,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL payment no order holds', () => {
           pastDueSince: null,
         },
       ])
-      // What was left of the old quota expired; the quota of the paid month is granted.
-      expect(state.balances.tariff.balance).toBe(30)
+      // What was left of the old quota is carried; the quota of the paid month is granted.
+      expect(state.balances.tariff.balance).toBe(37)
       expect(state.entries(paymentAttached)).toHaveLength(1)
       expect(state.entries(settlementAuditActions.pastDuePayment)).toHaveLength(1)
       expect(await toReturn(t)).toEqual([])

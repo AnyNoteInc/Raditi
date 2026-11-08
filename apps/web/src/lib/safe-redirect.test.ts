@@ -3,6 +3,10 @@ import { describe, expect, it } from 'vitest'
 import { DEFAULT_AFTER_SIGN_IN, safeRedirectTarget } from './safe-redirect'
 
 describe('safeRedirectTarget', () => {
+  it('lands on the chats when there is no target', () => {
+    expect(safeRedirectTarget(null)).toBe('/chats')
+  })
+
   it('keeps same-origin paths with query and hash', () => {
     expect(safeRedirectTarget('/app')).toBe('/app')
     expect(safeRedirectTarget('/app/tasks/42?tab=log#end')).toBe('/app/tasks/42?tab=log#end')

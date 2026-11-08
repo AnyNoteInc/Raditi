@@ -305,7 +305,9 @@ describe.skipIf(!databaseUrl)('the migration of the credits of a day', () => {
     })
 
     // The rule of the seed: plan terms are what customers buy, and a term that differs from the
-    // stored one fails the seed. The migration ran first, so the seed finds its own numbers.
+    // stored one fails the seed. The migrations ran first, so the seed finds its own numbers —
+    // the day this one gave is taken away again by billing_pricing_2026_11 (06.11.2026, Ц6),
+    // which finds the terms this one left.
     it('lets the seed run after it without a plan created, changed or refused', async () => {
       await schema.migrate()
       const db = schemaClient(databaseUrl ?? '', schema)
@@ -314,9 +316,9 @@ describe.skipIf(!databaseUrl)('the migration of the credits of a day', () => {
         expect([report.created.plans, report.updated.plans]).toEqual([0, 0])
         const plans = await db.plan.findMany({ orderBy: { sortOrder: 'asc' } })
         expect(plans.map((plan) => [plan.slug, plan.creditsPerDay])).toEqual([
-          ['start', 50],
-          ['business', 100],
-          ['agency', 300],
+          ['start', null],
+          ['business', null],
+          ['agency', null],
           ['pack', null],
           ['payg', null],
         ])

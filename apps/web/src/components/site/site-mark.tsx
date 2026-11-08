@@ -8,7 +8,7 @@ export const siteFaviconHref = (siteId: string) =>
   `/api/projects/${encodeURIComponent(siteId)}/favicon`
 
 /**
- * The tile on top of the rail of a site: the site's /favicon.ico when it has one, else the first
+ * The tile of a site on its card in the panel: the site's /favicon.ico when it has one, else the first
  * character of its name. The letter stays until the icon has loaded, and comes back if it fails
  * to: a site without an icon, or one that is not an image, keeps its letter.
  */
@@ -33,7 +33,6 @@ export function SiteMark({ siteId, name, mark }: { siteId: string; name: string;
         width: 44,
         height: 44,
         flex: 'none',
-        mb: 1,
         borderRadius: '10px',
         display: 'flex',
         alignItems: 'center',

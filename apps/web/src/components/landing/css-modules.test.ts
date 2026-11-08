@@ -75,7 +75,13 @@ function referencesTo(module: string): Set<string> {
 
 describe('landing CSS modules', () => {
   it('finds the modules', () => {
-    expect(modules).toEqual(['landing.module.css', 'pricing.module.css', 'site-demo.module.css'])
+    expect(modules).toEqual([
+      'landing.module.css',
+      'lead.module.css',
+      'platforms.module.css',
+      'pricing.module.css',
+      'site-demo.module.css',
+    ])
   })
 
   describe.each(modules)('%s', (module) => {

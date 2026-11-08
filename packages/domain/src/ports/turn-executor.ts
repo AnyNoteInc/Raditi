@@ -19,6 +19,7 @@ import {
   agentDriverIds,
   nativeSessionIdSchema,
   SANDBOX_INBOX,
+  turnActions,
   type AgentDriverId,
   type AgentEvent,
   type PreparedFiles,
@@ -144,7 +145,7 @@ export interface TurnPrepareInput {
   /**
    * The files the client sent with the task, as the plan names them (`input.attachments`): the
    * executor writes each at its path, read-only, after the restore. Only a turn with a bundle
-   * has them (assertTurnInbox); absent — none.
+   * or of a chat without a site has them (turnMayHoldInbox, assertTurnInbox); absent — none.
    */
   inbox?: readonly TurnInboxFile[]
   /** Selects the stateless event parser on the executor side. */
@@ -364,10 +365,17 @@ export interface TurnRequest {
   replacesTurn?: number
   /**
    * The first turn after «Обновить» moved the dialog onto a new `main`
-   * (docs/plan/53-chat-preview-release.md, Р27): a new session of the agent, no previous
-   * snapshot is restored; the feed keeps its history. Only with a repository.
+   * (docs/plan/53-chat-preview-release.md, Р27) or the client saved a file of the chat: it starts
+   * on the moved head and goes on with the session of the turn before when `previous` names its
+   * checkpoint (owner's request of 06.11.2026), a new session of the agent without one; the feed
+   * keeps its history. Only with a repository.
    */
   rebased?: boolean
+  /**
+   * The turn before it was undone (`/undo`, docs/plan/61-chats-first.md, §5.14): the session goes
+   * back to the checkpoint that turn started from. A turn with a repository replaces it instead.
+   */
+  rewound?: true
 }
 
 /**
@@ -423,6 +431,7 @@ export const turnInputSchema = z
   .object({
     prompt: z.string().min(1).max(turnPlanLimits.prompt),
     attachments: z.array(turnInboxPathSchema).max(turnPlanLimits.attachments),
+    action: z.enum(turnActions).optional(),
   })
   .strict() satisfies z.ZodType<TurnInput>
 
@@ -459,16 +468,29 @@ export function turnInboxAttachmentId(path: string): string | null {
 }
 
 /**
- * The files of a prepare, as both executors and the runner protocol take them: only a turn with
- * a repository has them (a task in the browser hands its files to the browser worker, Б26),
- * each at a path of turnInboxPath() once, each of a file's size, all within turnInboxLimits.
+ * Whether the sandbox of a turn may hold the client's files: one with a repository, or the turn
+ * of a chat without a site, whose lease is its own id (`leaseScopeOf`, docs/plan/61-chats-first.md,
+ * К14, К16). A task on a site without a repository hands them to the browser worker alone (Б26):
+ * its turn has the open internet and may have the site's admin pages in its browser, so the
+ * labels of the turn are the second line against a planner that gets this wrong.
+ */
+export const turnMayHoldInbox = (
+  hasRepository: boolean,
+  labels: Pick<SandboxLabels, 'siteId' | 'taskId'>,
+): boolean => hasRepository || labels.siteId === labels.taskId
+
+/**
+ * The files of a prepare, as both executors and the runner protocol take them: only a turn
+ * turnMayHoldInbox() lets hold them, each at a path of turnInboxPath() once, each of a file's
+ * size, all within turnInboxLimits.
  */
 export function assertTurnInbox(
   files: readonly Pick<TurnInboxFile, 'path' | 'sizeBytes'>[],
-  hasRepository: boolean,
+  mayHold: boolean,
 ): void {
   if (files.length === 0) return
-  if (!hasRepository) throw badRequest('Files of the client go only to a turn with a repository')
+  if (!mayHold)
+    throw badRequest('Files of the client go only to a turn with a repository or without a site')
   if (files.length > turnInboxLimits.files) throw badRequest('Too many files for one turn')
   let bytes = 0
   const paths = new Set<string>()
@@ -535,6 +557,7 @@ export const turnPlanSchema = z
     previous: snapshotReferenceSchema.optional(),
     replacesTurn: z.number().int().positive().max(999_999).optional(),
     rebased: z.boolean().optional(),
+    rewound: z.literal(true).optional(),
   })
   .strict()
   .superRefine((plan, ctx) => {
@@ -548,13 +571,32 @@ export const turnPlanSchema = z
           : 'a turn without a repository has no workspace',
       })
     // Both are git notions: a replacement undoes content of the previous turn, a rebased start
-    // follows «Обновить» onto a new `main`.
+    // follows «Обновить» or the client's edit onto a moved head.
     if (!repository)
       for (const key of ['replacesTurn', 'rebased'] as const)
         if (plan[key] !== undefined)
           ctx.addIssue({ code: 'custom', path: [key], message: 'only a turn with a repository' })
+    if (repository && plan.rewound !== undefined)
+      ctx.addIssue({
+        code: 'custom',
+        path: ['rewound'],
+        message: 'a turn with a repository replaces the undone one',
+      })
   })
 export type TurnPlan = z.infer<typeof turnPlanSchema>
+
+/**
+ * Where `agent/<taskId>` stood when a turn started, as its plan pinned it: what `/undo` of that turn
+ * takes the branch back to (docs/plan/61-chats-first.md, §5.14). A replacement names it; a later
+ * turn started on it; the first one found no branch: null. Not always the commit the turn worked
+ * from: a turn the platform refused published past that one, and the replacement left it there.
+ */
+export function branchBeforeTurn(plan: Pick<TurnPlan, 'context' | 'workspace'>): string | null {
+  const { workspace, context } = plan
+  if (!workspace) return null
+  if (workspace.expectedBranchSha !== undefined) return workspace.expectedBranchSha
+  return context.turn > 1 ? workspace.expectedBaseSha : null
+}
 
 /** The request without the LLM key and MCP token; refuses anything the plan cannot hold. */
 export function toTurnPlan(

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { DomainError, isDomainError, isTooLarge } from '../errors.ts'
+import { conflict, DomainError, isDomainError, isTooLarge } from '../errors.ts'
 import {
   publicationShaSchema,
   type PublicationMetadata,
@@ -16,6 +16,46 @@ import { execCursorSchema } from './sandbox-provider.ts'
 
 export const siteLeaseOperations = ['turn', 'deploy', 'revert'] as const
 export type SiteLeaseOperation = (typeof siteLeaseOperations)[number]
+
+/**
+ * The site of a task, or the task itself without one: the row of `site_leases` the releases of
+ * its site are fenced by, and the scope its contact maps are kept under (docs/plan/61-chats-
+ * first.md, К14). The turns of a chat with the code lease their own row instead (`turnLeaseOf`).
+ */
+export const leaseScopeOf = (task: { id: string; siteId: string | null }): string =>
+  task.siteId ?? task.id
+
+/**
+ * The row of `site_leases` the turns of a task are fenced by — what `site_id` holds in
+ * `turn_assignments`, `SiteLeaseFence` and the labels of a turn, and what its «Обновить»,
+ * `/undo` and `/redo` lease. A chat with the code, or one without a site, leases its own id: the
+ * chats of one project work side by side (owner's answer of 06.11.2026: «конечно, чаты идут в
+ * общей квоте параллельных запросов, которых 8»), each on its own branch and preview. A chat of a
+ * project without the code works on the live site alone and keeps the site's row, one at a time
+ * (the inbox rule `turnMayHoldInbox` reads that). A release of the site keeps the site's row;
+ * no turn of the site starts while it holds it (`PostgresSiteLeaseStore.acquire`). The SQL of
+ * admission takes either key: a stand fences a turn by the site as before.
+ */
+export const turnLeaseOf = (task: {
+  id: string
+  siteId: string | null
+  needsRepository: boolean
+}): string => (task.needsRepository ? task.id : leaseScopeOf(task))
+
+/** The site of a task on a path only a task with a site reaches; CONFLICT otherwise. */
+export function siteIdOf(task: { siteId: string | null }): string {
+  if (task.siteId === null) throw conflict('The task has no site')
+  return task.siteId
+}
+
+/** A task read with its site, on such a path: both are there; CONFLICT otherwise. */
+export function withSite<T extends { siteId: string | null; site: unknown }>(
+  task: T,
+): T & { siteId: string; site: NonNullable<T['site']> } {
+  const { site } = task
+  if (site === null || site === undefined) throw conflict('The task has no site')
+  return { ...task, siteId: siteIdOf(task), site }
+}
 
 /** A fenced publication may spend 60s in a native command after core dies; retain 30s cleanup margin. */
 export const TURN_PUBLICATION_GRACE_MS = 90_000

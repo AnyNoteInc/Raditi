@@ -74,6 +74,11 @@ describe('result contract for a CLI without an output-schema flag', () => {
     expect(extractJsonResult([], JSON.stringify(RESULT_EXAMPLE))).toEqual(RESULT_EXAMPLE)
   })
 
+  it('speaks of no site: the example goes to the turns of a chat without one too', () => {
+    expect(RESULT_EXAMPLE.summary).not.toMatch(/сайт/iu)
+    expect(RESULT_EXAMPLE.client_message).not.toMatch(/сайт/iu)
+  })
+
   it('stays small', () => {
     expect(RESULT_CONTRACT.length).toBeLessThanOrEqual(MAX_CONTRACT_CHARS)
   })

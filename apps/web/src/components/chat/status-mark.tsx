@@ -1,5 +1,10 @@
 import type { TaskStatus } from '@repo/domain'
-import { taskAnsweredLabel, taskStatusLabel } from '@repo/domain/tasks/client-feed-labels'
+import {
+  taskAnsweredLabel,
+  taskFailedLabel,
+  taskRewoundLabel,
+  taskStatusLabel,
+} from '@repo/domain/tasks/client-feed-labels'
 import Box from '@mui/material/Box'
 
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
@@ -38,25 +43,31 @@ const statusTone: Readonly<Record<TaskStatus, Tone>> = Object.freeze({
 /**
  * The status of a dialog: a sign and its word. `answered` — the dialog waits for nothing, the
  * agent answered (26.10.2026): it reads «Агент ответил», in the colour of a status that asks
- * nothing.
+ * nothing. `rewound` — the same after `/undo`, which took the answer back. `failed` — the last
+ * pass of the open dialog failed (06.11.2026): «Ошибка» in the colour of a failure.
  */
 export function StatusMark({
   status,
   size = 'small',
   answered = false,
+  rewound = false,
+  failed = false,
   onFill = false,
 }: {
   status: TaskStatus
   size?: 'small' | 'medium'
   answered?: boolean
+  rewound?: boolean
+  failed?: boolean
   /**
    * The mark stands on a fill — the open dialog of the list: the quiet tone takes the colour of
    * the text, which keeps 4.5:1 there in the dark scheme as well.
    */
   onFill?: boolean
 }) {
-  const idle = answered && status === 'awaiting_user'
-  const tone = idle ? 'text.primary' : statusTone[status]
+  const broken = failed && (status === 'awaiting_user' || status === 'awaiting_approval')
+  const idle = !broken && answered && status === 'awaiting_user'
+  const tone = broken ? 'error.main' : idle ? 'text.primary' : statusTone[status]
   return (
     <Box
       component="span"
@@ -71,8 +82,14 @@ export function StatusMark({
         lineHeight: 1.3,
       }}
     >
-      <AppIcon name={statusIcon[status]} size={size === 'small' ? 15 : 17} />
-      {idle ? taskAnsweredLabel : taskStatusLabel[status]}
+      <AppIcon name={broken ? 'warning' : statusIcon[status]} size={size === 'small' ? 15 : 17} />
+      {broken
+        ? taskFailedLabel
+        : idle
+          ? rewound
+            ? taskRewoundLabel
+            : taskAnsweredLabel
+          : taskStatusLabel[status]}
     </Box>
   )
 }

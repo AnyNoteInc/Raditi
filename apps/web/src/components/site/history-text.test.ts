@@ -6,6 +6,7 @@ import {
   runListNote,
   runMatches,
   runOutcomeText,
+  runStateText,
   runTitle,
   sourceText,
   type RunView,
@@ -26,6 +27,16 @@ const run: RunView = {
 }
 
 describe('history texts', () => {
+  it('says of a refused run what it did, not what the site holds', () => {
+    expect(runOutcomeText({ ...run, state: 'refused' })).toBe(
+      'Обновление остановилось до того, как изменило сайт.',
+    )
+  })
+
+  it('promises nothing of the site in the state of a refused run: the browser may have changed it', () => {
+    expect(runStateText.refused).toBe('Не выполнен · выпуск сайт не менял')
+  })
+
   it('names a run by its dialog, its import or its version', () => {
     expect(runTitle(run)).toBe('Поменять цену капучино')
     expect(runTitle({ ...run, kind: 'import', title: null })).toBe('Подключение сайта')

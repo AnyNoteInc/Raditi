@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { telegramConfigFromEnv } from './config.ts'
+import { leadsTelegramConfigFromEnv, telegramConfigFromEnv } from './config.ts'
 
 const TOKEN = '123456789:AAFakeTokenForTests_abcdefghij'
 const SECRET = 'a'.repeat(43)
@@ -63,5 +63,62 @@ describe('telegramConfigFromEnv', () => {
     expect(message).toContain('TELEGRAM_PROXY_URL')
     expect(message).not.toContain('secret-token-value')
     expect(message).not.toContain('p4ss')
+  })
+})
+
+describe('leadsTelegramConfigFromEnv', () => {
+  it('returns null when the bot of leads is off', () => {
+    expect(
+      leadsTelegramConfigFromEnv({ LEADS_TELEGRAM_BOT_TOKEN: '', LEADS_TELEGRAM_CHAT_ID: '' }),
+    ).toBeNull()
+  })
+
+  it('reads the token, the group and the proxy', () => {
+    expect(
+      leadsTelegramConfigFromEnv({
+        LEADS_TELEGRAM_BOT_TOKEN: TOKEN,
+        LEADS_TELEGRAM_CHAT_ID: '-1001234567890',
+        TELEGRAM_PROXY_URL: 'http://egress.internal:3128',
+      }),
+    ).toEqual({
+      botToken: TOKEN,
+      chatId: '-1001234567890',
+      proxyUrl: 'http://egress.internal:3128',
+    })
+  })
+
+  it('wants both variables or neither', () => {
+    expect(() => leadsTelegramConfigFromEnv({ LEADS_TELEGRAM_BOT_TOKEN: TOKEN })).toThrow(
+      /LEADS_TELEGRAM_CHAT_ID/,
+    )
+    expect(() => leadsTelegramConfigFromEnv({ LEADS_TELEGRAM_CHAT_ID: '-100' })).toThrow(
+      /LEADS_TELEGRAM_BOT_TOKEN/,
+    )
+  })
+
+  it('takes a group or a private chat, never a public name', () => {
+    expect(
+      leadsTelegramConfigFromEnv({
+        LEADS_TELEGRAM_BOT_TOKEN: TOKEN,
+        LEADS_TELEGRAM_CHAT_ID: '12345',
+      })?.chatId,
+    ).toBe('12345')
+    for (const chat of ['@raditi_leads', '-', '1.5']) {
+      expect(() =>
+        leadsTelegramConfigFromEnv({
+          LEADS_TELEGRAM_BOT_TOKEN: TOKEN,
+          LEADS_TELEGRAM_CHAT_ID: chat,
+        }),
+      ).toThrow(/LEADS_TELEGRAM_CHAT_ID/)
+    }
+  })
+
+  it('never names the token in an error', () => {
+    expect(() =>
+      leadsTelegramConfigFromEnv({
+        LEADS_TELEGRAM_BOT_TOKEN: 'not-a-token',
+        LEADS_TELEGRAM_CHAT_ID: '-1',
+      }),
+    ).toThrow(expect.objectContaining({ message: expect.not.stringContaining('not-a-token') }))
   })
 })

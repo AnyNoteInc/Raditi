@@ -11,13 +11,14 @@ const { findMany } = vi.hoisted(() => ({ findMany: vi.fn() }))
 vi.mock('@repo/db', () => ({ prisma: { plan: { findMany } } }))
 
 const START = Date.parse('2026-10-02T09:00:00Z')
+// A tariff as the seeds of 06.11.2026 write it: without a daily limit.
 const quota = (price: string) => ({
   slug: 'start',
   name: 'Старт',
   kind: 'quota',
   price: new Decimal(price),
   creditsPerMonth: 20,
-  creditsPerDay: 5,
+  creditsPerDay: null,
   maxSites: 1,
   packCredits: null,
 })
@@ -83,18 +84,35 @@ describe('landing tariff data boundary', () => {
     expect(JSON.parse(JSON.stringify(data))).toEqual(data)
   })
 
-  it('leaves out a tariff whose card could not name its daily limit in credits', async () => {
+  it('sells a tariff without a daily limit and one with a limit, but not a limit of nothing', async () => {
     findMany.mockResolvedValue([
-      { ...quota('4900'), slug: 'no-day', creditsPerDay: null },
+      { ...quota('4900'), slug: 'no-day' },
       { ...quota('4900'), slug: 'zero-day', creditsPerDay: 0 },
-      quota('5200'),
+      { ...quota('4900'), slug: 'negative-day', creditsPerDay: -1 },
+      { ...quota('5200'), slug: 'day', creditsPerDay: 5 },
     ])
 
     const data = await getLandingPlans()
 
     expect(data.plans.map(({ slug, creditsPerDay }) => ({ slug, creditsPerDay }))).toEqual([
-      { slug: 'start', creditsPerDay: 5 },
+      { slug: 'no-day', creditsPerDay: null },
+      { slug: 'day', creditsPerDay: 5 },
     ])
+  })
+
+  it('leaves out a tariff without credits, sites or a price', async () => {
+    findMany.mockResolvedValue([
+      { ...quota('4900'), slug: 'no-credits', creditsPerMonth: null },
+      { ...quota('4900'), slug: 'zero-credits', creditsPerMonth: 0 },
+      { ...quota('4900'), slug: 'no-sites', maxSites: null },
+      { ...quota('4900'), slug: 'zero-sites', maxSites: 0 },
+      { ...quota('-1'), slug: 'negative-price' },
+      quota('1990'),
+    ])
+
+    const data = await getLandingPlans()
+
+    expect(data.plans.map(({ slug }) => slug)).toEqual(['start'])
   })
 
   it('keeps the landing available without inventing prices when the database fails', async () => {

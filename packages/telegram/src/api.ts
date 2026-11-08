@@ -50,6 +50,22 @@ export type TelegramBotUser = z.infer<typeof botUserSchema>
 
 const sentMessageSchema = z.object({ message_id: z.number() })
 
+/** A press of an inline button: what this client reads of an update. */
+const callbackQuerySchema = z.object({
+  id: z.string(),
+  from: z.object({ id: z.number() }),
+  data: z.string().optional(),
+  message: z.object({ message_id: z.number(), chat: z.object({ id: z.number() }) }).optional(),
+})
+export type TelegramCallbackQuery = z.infer<typeof callbackQuerySchema>
+
+/** An update: only presses of buttons are read, anything else is an update to skip. */
+const updateSchema = z.object({
+  update_id: z.number(),
+  callback_query: callbackQuerySchema.optional(),
+})
+export type TelegramUpdate = z.infer<typeof updateSchema>
+
 const webhookInfoSchema = z.object({
   url: z.string(),
   pending_update_count: z.number(),
@@ -91,6 +107,26 @@ export interface TelegramBotApi {
     text: string,
     opts?: SendMessageOptions,
   ): Promise<TelegramApiResult<{ message_id: number }>>
+  /**
+   * Updates after `offset` (exclusive of the ones confirmed by it), without waiting: a short
+   * poll. Only a bot without a webhook can call it.
+   */
+  getUpdates(opts: {
+    offset?: number
+    allowedUpdates?: readonly string[]
+    limit?: number
+  }): Promise<TelegramApiResult<TelegramUpdate[]>>
+  /** Telegram lets a bot delete a message in a group only within 48 hours of sending it. */
+  deleteMessage(chatId: number | string, messageId: number): Promise<TelegramApiResult<boolean>>
+  /** Replaces the text of a message the bot sent; the inline keyboard goes away unless given. */
+  editMessageText(
+    chatId: number | string,
+    messageId: number,
+    text: string,
+    opts?: Pick<SendMessageOptions, 'parseMode' | 'inlineKeyboard'>,
+  ): Promise<TelegramApiResult<unknown>>
+  /** Stops the spinner of a pressed button, with a short notice when `text` is set. */
+  answerCallbackQuery(id: string, text?: string): Promise<TelegramApiResult<boolean>>
 }
 
 /**
@@ -204,6 +240,43 @@ export function createTelegramBotApi(options: TelegramBotApiOptions): TelegramBo
         body.reply_parameters = { message_id: opts.replyToMessageId }
       }
       return call('sendMessage', body, sentMessageSchema)
+    },
+
+    getUpdates(opts) {
+      const body: Record<string, unknown> = { timeout: 0 }
+      if (opts.offset !== undefined) body.offset = opts.offset
+      if (opts.limit !== undefined) body.limit = opts.limit
+      if (opts.allowedUpdates) body.allowed_updates = opts.allowedUpdates
+      return call('getUpdates', body, z.array(updateSchema))
+    },
+
+    deleteMessage(chatId, messageId) {
+      return call('deleteMessage', { chat_id: chatId, message_id: messageId }, z.boolean())
+    },
+
+    editMessageText(chatId, messageId, text, opts = {}) {
+      if (text.length === 0 || text.length > TELEGRAM_LIMITS.messageTextMax) {
+        return Promise.resolve({
+          ok: false,
+          description: `Message text must be 1–${TELEGRAM_LIMITS.messageTextMax} characters`,
+        })
+      }
+      const body: Record<string, unknown> = {
+        chat_id: chatId,
+        message_id: messageId,
+        text,
+        link_preview_options: { is_disabled: true },
+        reply_markup: { inline_keyboard: opts.inlineKeyboard ?? [] },
+      }
+      if (opts.parseMode) body.parse_mode = opts.parseMode
+      // An edited message comes back as the message, an inline one as `true`.
+      return call('editMessageText', body, z.unknown())
+    },
+
+    answerCallbackQuery(id, text) {
+      const body: Record<string, unknown> = { callback_query_id: id }
+      if (text !== undefined) body.text = text
+      return call('answerCallbackQuery', body, z.boolean())
     },
   }
 }

@@ -980,7 +980,7 @@ describe('project.create of a site for the browser alone', () => {
     [
       'Пароль от админки: Qwerty123456',
       'PROJECT_NOTES_HAS_SECRET',
-      'Похоже, в подсказке для агента есть пароль или ключ. Уберите его: в админку вы входите сами, в окне браузера',
+      'Похоже, в подсказке для агента есть пароль или ключ. Уберите его',
     ],
     [
       'я'.repeat(2001),
@@ -1216,7 +1216,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: project.create writes one connected s
       where: { idempotencyKey: `user:${owner.id}:signup-gift` },
       select: { amount: true },
     })
-    expect(gift.map((row) => row.amount.toFixed(2))).toEqual(['35.00'])
+    expect(gift.map((row) => row.amount.toFixed(2))).toEqual(['50.00'])
 
     // The same request again: the same site, nothing written.
     await expect(caller.project.create(input)).resolves.toEqual({ outcome: 'created', project })

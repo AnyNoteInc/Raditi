@@ -5,37 +5,38 @@ import type { LandingViewer } from '@/server/landing-viewer'
 
 import type { LandingPricingData } from './pricing-calculator'
 
-// What the tests of the landing share: the plans of the seeds, the two visitors, the reading of a
-// text with non-breaking spaces, the passing of time and a stub of IntersectionObserver.
+// What the tests of the landing share: the plans of the seeds (the terms of 06.11.2026, without a
+// daily limit), the two visitors, the reading of a text with non-breaking spaces, the passing of
+// time and a stub of IntersectionObserver.
 
 export const pricing: LandingPricingData = {
   plans: [
     {
       slug: 'start',
       name: 'Старт',
-      price: '4900.00',
-      creditsPerMonth: 300,
-      creditsPerDay: 50,
+      price: '1990.00',
+      creditsPerMonth: 150,
+      creditsPerDay: null,
       maxSites: 1,
     },
     {
       slug: 'business',
       name: 'Бизнес',
-      price: '12900.00',
-      creditsPerMonth: 800,
-      creditsPerDay: 100,
+      price: '6990.00',
+      creditsPerMonth: 600,
+      creditsPerDay: null,
       maxSites: 3,
     },
     {
       slug: 'agency',
       name: 'Агентство',
-      price: '39900.00',
-      creditsPerMonth: 2500,
-      creditsPerDay: 300,
+      price: '19990.00',
+      creditsPerMonth: 2000,
+      creditsPerDay: null,
       maxSites: 15,
     },
   ],
-  pack: { price: '1990.00', credits: 100 },
+  pack: { price: '1490.00', credits: 100 },
 }
 
 export const guest: LandingViewer = { status: 'guest', user: null }

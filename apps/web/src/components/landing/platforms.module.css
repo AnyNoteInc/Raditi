@@ -1,0 +1,328 @@
+/* «Пять систем. Один чат.»: a board of five rows on the chocolate field, the chosen one on the
+   amber plate, and a card with an example for it. Sizes and times come from the page root. */
+.platforms {
+  background: var(--raditi-ink);
+  color: var(--raditi-paper);
+}
+.inner {
+  max-width: var(--container);
+  margin: auto;
+  padding: var(--section-y) var(--gutter);
+}
+.heading {
+  display: grid;
+  grid-template-columns: 1.45fr 1fr;
+  gap: 60px;
+  align-items: end;
+  margin-bottom: 56px;
+}
+.heading em {
+  font-style: normal;
+  color: var(--raditi-marker);
+}
+.heading > p {
+  justify-self: end;
+  max-width: 360px;
+  color: var(--raditi-on-ink);
+}
+.label {
+  display: inline-block;
+  margin-bottom: 20px;
+  padding: 5px 9px;
+  border-radius: 3px;
+  background: var(--raditi-marker);
+  color: var(--raditi-ink);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.board {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 64px;
+  align-items: stretch;
+}
+.rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--raditi-on-ink);
+}
+.row {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 24px;
+  width: 100%;
+  min-height: 44px;
+  padding: 18px 0;
+  border: 0;
+  border-bottom: 1px solid var(--raditi-rule-ink);
+  background: none;
+  color: inherit;
+  text-align: left;
+}
+.number,
+.parts {
+  color: var(--raditi-on-ink);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.parts {
+  text-align: right;
+}
+.nowrap {
+  white-space: nowrap;
+}
+.name {
+  position: relative;
+  z-index: 0;
+  justify-self: start;
+  font-family: var(--font-unbounded), sans-serif;
+  font-size: clamp(34px, 4.2vw, 60px);
+  font-weight: 500;
+  letter-spacing: -0.04em;
+  line-height: 1.15;
+  color: var(--raditi-on-ink);
+  transition: color var(--raditi-motion-fast) var(--raditi-ease-out);
+}
+/* The plate of the chosen row: the marker of the hero, a little less turned. */
+.name::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 10% -0.12em 2%;
+  background: var(--raditi-marker);
+  transform: rotate(-2deg) scaleX(0);
+  transform-origin: left;
+  transition: transform var(--motion-swap) var(--raditi-ease-out);
+}
+.row[aria-pressed='true'] .name {
+  color: var(--raditi-ink);
+}
+.row[aria-pressed='true'] .name::before {
+  transform: rotate(-2deg) scaleX(1);
+}
+.row[aria-pressed='true'] .parts {
+  color: var(--raditi-paper);
+}
+.example {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 36px;
+  border-radius: var(--radius-card);
+  background: var(--raditi-ink-2);
+  box-shadow: var(--shadow-card);
+}
+.sign {
+  position: absolute;
+  top: -30px;
+  right: -22px;
+  width: 88px;
+  height: 88px;
+}
+.sign circle {
+  fill: var(--raditi-marker);
+}
+.sign path {
+  fill: none;
+  stroke: var(--raditi-ink);
+  stroke-width: 8.3;
+  stroke-linecap: round;
+}
+.system {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.system small {
+  display: block;
+  color: var(--raditi-on-ink);
+  font-size: 13px;
+}
+.system strong {
+  font-size: 18px;
+  font-weight: 600;
+}
+.mark {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  flex: none;
+  border-radius: 12px;
+  background: var(--raditi-paper);
+  color: var(--raditi-ink);
+  font-family: var(--font-unbounded), sans-serif;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.04em;
+}
+.exchange {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.caption {
+  color: var(--raditi-on-ink);
+  font-size: 13px;
+}
+.request {
+  align-self: flex-start;
+  max-width: 92%;
+  padding: 13px 18px;
+  border-radius: 18px 18px 18px 4px;
+  background: var(--raditi-paper);
+  color: var(--raditi-ink);
+  font-size: 19px;
+  line-height: 1.4;
+}
+.result {
+  font-family: var(--font-unbounded), sans-serif;
+  font-size: 26px;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1.3;
+  text-wrap: balance;
+}
+.promises {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: auto 0 0;
+  padding: 20px 0 0;
+  border-top: 1px solid var(--raditi-rule-ink);
+  list-style: none;
+}
+.promises li {
+  padding: 7px 12px;
+  border: 1px solid var(--raditi-rule-ink);
+  border-radius: var(--raditi-radius-pill);
+  color: var(--raditi-on-ink);
+  font-size: 13px;
+}
+/* States. A press looks as the hover does: on a touch screen it is the whole answer. */
+.row:active .name {
+  color: var(--raditi-paper);
+}
+.row[aria-pressed='true']:active .name {
+  color: var(--raditi-ink);
+}
+.row:focus-visible {
+  outline-offset: 4px;
+}
+@media (hover: hover) {
+  .row:hover .name {
+    color: var(--raditi-paper);
+  }
+  .row[aria-pressed='true']:hover .name {
+    color: var(--raditi-ink);
+  }
+}
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .row:hover .number {
+    transform: translateX(6px);
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .number {
+    transition: transform var(--raditi-motion-base) var(--raditi-ease-out);
+  }
+  .row:active {
+    transform: scale(0.98);
+    transition-duration: var(--raditi-motion-press);
+  }
+  /* Nothing on the page moves for ever: the sign stands still, and the example of a newly
+     chosen system comes up in place. */
+  .exchange {
+    animation: exampleIn var(--motion-swap) var(--raditi-ease-out) backwards;
+  }
+}
+@keyframes exampleIn {
+  from {
+    opacity: 0;
+    transform: translateY(var(--motion-rise));
+  }
+}
+@media (max-width: 1100px) {
+  .board {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 48px;
+  }
+  .heading {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+  .heading > p {
+    justify-self: start;
+  }
+}
+@media (max-width: 800px) {
+  .heading {
+    margin-bottom: 36px;
+  }
+  /* The longest name, «1С-Битрикс», stays in one piece on a phone of 320px even with the
+     widest spacing a visitor may set for reading. */
+  .name {
+    font-size: clamp(22px, 7vw, 34px);
+  }
+  .row {
+    grid-template-columns: 36px minmax(0, 1fr);
+    gap: 4px 12px;
+    padding: 14px 0;
+  }
+  .parts {
+    grid-column: 2;
+    text-align: left;
+  }
+  .example {
+    padding: 28px 20px 24px;
+  }
+  .sign {
+    top: -24px;
+    right: -6px;
+    width: 64px;
+    height: 64px;
+  }
+  .request {
+    max-width: 100%;
+    font-size: 17px;
+  }
+  .result {
+    font-size: 21px;
+  }
+}
+/* Whole pixels. The rest of the page is measured to the pixel (an anchor, the card of the undo):
+   a section of a fractional height would move all that follows it by a part of a pixel. Every
+   line of this section is a whole number of pixels high, at every width. */
+.label,
+.number,
+.parts,
+.caption,
+.system small,
+.promises li {
+  line-height: 20px;
+}
+.label {
+  line-height: 16px;
+}
+.heading h2 {
+  line-height: round(1.22em, 1px);
+}
+.heading > p {
+  line-height: round(1.55em, 1px);
+}
+.name {
+  line-height: round(1.15em, 1px);
+}
+.system strong {
+  line-height: 28px;
+}
+.request {
+  line-height: round(1.4em, 1px);
+}
+.result {
+  line-height: round(1.3em, 1px);
+}

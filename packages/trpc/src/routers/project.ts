@@ -49,9 +49,15 @@ import {
 } from '../services/site-basics.ts'
 import { deleteSite } from '../services/site-delete.ts'
 import { siteIdForRequest } from '../services/site-request-id.ts'
-import { browserConfigured, browserUnavailable } from '../services/chat/context.ts'
+import {
+  browserConfigured,
+  browserStackSupported,
+  browserUnavailable,
+} from '../services/chat/context.ts'
 import {
   browserAddressSecure,
+  chatRequirements,
+  projectChatOutput,
   siteCapabilities,
   siteCapabilitiesOutput,
 } from '../services/site-capabilities.ts'
@@ -61,7 +67,12 @@ import {
   initialVersionOutput,
   siteSetupStates,
 } from '../services/site-setup.ts'
-import { agentNotesOf, agentNotesInput } from '../services/site-notes.ts'
+import {
+  agentNotesInput,
+  agentNotesOf,
+  readSiteAgentNotes,
+  setSiteAgentNotes,
+} from '../services/site-notes.ts'
 import { consentedProcedure, router, type Context } from '../trpc.ts'
 import { sourceRefusalFields } from './site-connection.ts'
 
@@ -93,7 +104,12 @@ const setupField = z.enum(siteSetupStates).nullable()
  * What the site can be worked on with now (docs/plan/57-browser-tasks.md, Б9): its repository and
  * the browser of the platform, each decided by the server.
  */
-const listOutput = projectOutput.extend({ setup: setupField, capabilities: siteCapabilitiesOutput })
+const listOutput = projectOutput.extend({
+  setup: setupField,
+  capabilities: siteCapabilitiesOutput,
+  /** What a new chat of it says in the picker and works with (docs/plan/61-chats-first.md, К8). */
+  chat: projectChatOutput,
+})
 
 /** What `siteCapabilities` reads of a site besides its status and its import. */
 const capabilitySelect = {
@@ -103,7 +119,7 @@ const capabilitySelect = {
 /** The capabilities of a site read with `capabilitySelect` and its first import. */
 const capabilitiesOf = (
   context: Pick<Context, 'chat'>,
-  site: { status: SiteStatus; url: string; gitRepositories: unknown[] },
+  site: { status: SiteStatus; stack: SiteStack; url: string; gitRepositories: unknown[] },
   setup: ReturnType<typeof siteSetupState>,
 ) =>
   siteCapabilities({
@@ -111,6 +127,7 @@ const capabilitiesOf = (
     setup,
     hasRepository: site.gitRepositories.length > 0,
     browserConfigured: browserConfigured(context),
+    browserStack: browserStackSupported(context, site.stack),
     secureAddress: browserAddressSecure(site.url, context.chat?.appEnv ?? null),
   })
 
@@ -150,6 +167,8 @@ const siteOutput = projectOutput.extend({
   setup: setupField,
   initialVersion: initialVersionOutput,
   capabilities: siteCapabilitiesOutput,
+  /** Whether a new chat of it is taken and what it works with, as in `list` (docs/plan/61, К8). */
+  chat: projectChatOutput,
 })
 
 /** A saved access of the site as its owner may see it: never the Vault path, never a value. */
@@ -376,15 +395,12 @@ export const projectRouter = router({
     })
     return sites.map(({ provisioningStages, gitRepositories, ...site }) => {
       const setup = siteSetupState(provisioningStages[0])
-      return {
-        ...withHost(site),
+      const capabilities = capabilitiesOf(
+        ctx,
+        { status: site.status, stack: site.stack, url: site.url, gitRepositories },
         setup,
-        capabilities: capabilitiesOf(
-          ctx,
-          { status: site.status, url: site.url, gitRepositories },
-          setup,
-        ),
-      }
+      )
+      return { ...withHost(site), setup, capabilities, chat: chatRequirements(capabilities) }
     })
   }),
 
@@ -397,34 +413,64 @@ export const projectRouter = router({
         where: accessibleSite(ctx.user.id, input.id),
         select: {
           ...projectSelect,
-          lease: {
-            select: {
-              operation: true,
-              expiresAt: true,
-              heldForOperator: true,
-              inflightMcpCallId: true,
-            },
-          },
           ...capabilitySelect,
           provisioningStages: { ...codeImportOnly, select: { status: true } },
           initialVersion: { select: { tag: true, commitSha: true, importedAt: true } },
         },
       })
       if (!site) throw siteNotFound()
-      const { lease, provisioningStages, initialVersion, gitRepositories, ...row } = site
+      const lease = await ctx.prisma.siteLease.findUnique({
+        where: { siteId: site.id },
+        select: {
+          operation: true,
+          expiresAt: true,
+          heldForOperator: true,
+          inflightMcpCallId: true,
+        },
+      })
+      const { provisioningStages, initialVersion, gitRepositories, ...row } = site
       const setup = siteSetupState(provisioningStages[0])
+      const capabilities = capabilitiesOf(
+        ctx,
+        { status: row.status, stack: row.stack, url: row.url, gitRepositories },
+        setup,
+      )
       return {
         ...withHost(row),
         state: siteState(lease),
         setup,
         initialVersion: confirmedInitialVersion(initialVersion),
-        capabilities: capabilitiesOf(
-          ctx,
-          { status: row.status, url: row.url, gitRepositories },
-          setup,
-        ),
+        capabilities,
+        chat: chatRequirements(capabilities),
       }
     }),
+
+  /** The hints for the agent as they are now: what «Сохранить в подсказки агенту» shows beside. */
+  agentNotes: consentedProcedure
+    .input(z.strictObject({ id: z.uuid() }))
+    .output(z.strictObject({ notes: z.string().nullable(), canManage: z.boolean() }))
+    .query(({ ctx, input }) =>
+      readSiteAgentNotes(ctx.prisma, { siteId: input.id, userId: ctx.user.id }),
+    ),
+
+  /**
+   * The hints for the agent, replaced with what the client left in the field (docs/plan/61, К31):
+   * data of the project for every next turn. An owner or an admin.
+   */
+  setAgentNotes: consentedProcedure
+    .input(
+      z.strictObject({ id: z.uuid(), notes: agentNotesInput, seen: agentNotesInput.nullable() }),
+    )
+    .output(z.strictObject({ notes: z.string().nullable() }))
+    .mutation(({ ctx, input }) =>
+      setSiteAgentNotes(ctx.prisma, {
+        siteId: input.id,
+        userId: ctx.user.id,
+        ip: clientIp(ctx.headers),
+        notes: input.notes,
+        seen: input.seen,
+      }),
+    ),
 
   /** Which accesses of the site are saved: kind, version and date — the secrets stay in Vault. */
   credentials: consentedProcedure

@@ -1238,6 +1238,16 @@ test('the open internet is a switch of the configuration, with or without listed
     clientEgressConfig({ ...base, ALLOW_PUBLIC: '1', PUBLIC_TLS_ONLY: '1' }).publicHttp,
     false,
   )
+  // The browser of a chat without a site (plan 61, К12): no host of its own, the open web over TLS.
+  const chat = clientEgressConfig({
+    ...base,
+    ALLOWED_HOSTS: '[]',
+    ALLOW_PUBLIC: '1',
+    PUBLIC_TLS_ONLY: '1',
+  })
+  assert.deepEqual([...chat.allow], [])
+  assert.equal(chat.anyPublic, true)
+  assert.equal(chat.publicHttp, false)
   for (const bad of [
     { ALLOWED_HOSTS: '["a.example.ru:443"]', PUBLIC_TLS_ONLY: '1' },
     { ALLOW_PUBLIC: '1', PUBLIC_TLS_ONLY: 'yes' },

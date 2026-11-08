@@ -28,6 +28,7 @@ export const isSessionUuid = (value: unknown): value is string =>
 export interface BrowserSessionIdentity {
   sessionId: string
   taskId: string
+  /** The session's site, or its task in a chat without one (docs/plan/61-chats-first.md, К12). */
   siteId: string
 }
 

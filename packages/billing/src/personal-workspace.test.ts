@@ -47,8 +47,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL personal workspace with the gift', () 
     const rows = await giftRows(userId)
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({ kind: 'grant', unit: 'credit_gift', orderId: null })
-    expect(rows[0]?.amount.toFixed(2)).toBe('35.00')
-    expect(rows[0]?.balanceAfter.toFixed(2)).toBe('35.00')
+    expect(rows[0]?.amount.toFixed(2)).toBe('50.00')
+    expect(rows[0]?.balanceAfter.toFixed(2)).toBe('50.00')
     const accounts = await db.billingAccount.findMany({ where: { workspaceId } })
     expect(accounts.map(({ unit }) => unit).sort()).toEqual([
       'credit_gift',
@@ -58,7 +58,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL personal workspace with the gift', () 
     expect(accounts.find(({ unit }) => unit === 'credit_gift')?.id).toBe(rows[0]?.accountId)
     const entries = await giftEntries(workspaceId)
     expect(entries).toHaveLength(1)
-    expect(entries[0]?.meta).toEqual({ userId, credits: 35 })
+    expect(entries[0]?.meta).toEqual({ userId, credits: 50 })
   }
 
   it('makes the workspace of a new user and grants the gift of the registration with it', async () => {

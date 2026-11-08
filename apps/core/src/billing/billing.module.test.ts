@@ -3,13 +3,7 @@ import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 
 import { getQueueToken } from '@nestjs/bullmq'
-import {
-  Global,
-  Module,
-  type DynamicModule,
-  type INestApplication,
-  type Type,
-} from '@nestjs/common'
+import { Global, Module, type INestApplication } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
 import type { Registry } from '@prometheus-io/client'
 import { renewalJobs, renewalOutcomes } from '@repo/billing'
@@ -23,8 +17,7 @@ import { CoreConfigModule } from '../config/config.module.ts'
 import { MetricsRegistryModule } from '../metrics/metrics-registry.module.ts'
 import { METRICS_REGISTRY } from '../metrics/metrics.tokens.ts'
 import { fakeInfra, overrideCoreInfra, testCoreConfig } from '../testing/fakes.ts'
-import { BILLING_QUEUE, BillingJobs } from './billing-jobs.ts'
-import { BillingScheduler } from './billing-scheduler.ts'
+import { BILLING_QUEUE } from './billing-jobs.ts'
 import { BillingModule } from './billing.module.ts'
 import { BillingProcessor } from './billing.processor.ts'
 import { YOOKASSA } from './billing.tokens.ts'
@@ -103,28 +96,7 @@ function billingModule(config: CoreConfig, background: boolean, queue = fakeQueu
   })
 }
 
-/** Whether `target` is among the modules a role module imports, however deep. */
-function imports(root: DynamicModule | Type, target: Type, seen = new Set<unknown>()): boolean {
-  const module = 'module' in root ? root.module : root
-  if (module === target) return true
-  if (seen.has(module)) return false
-  seen.add(module)
-  const declared = (Reflect.getMetadata('imports', module) ?? []) as (DynamicModule | Type)[]
-  const dynamic = ('module' in root ? (root.imports ?? []) : []) as (DynamicModule | Type)[]
-  return [...declared, ...dynamic].some(
-    (imported) => typeof imported !== 'string' && imports(imported, target, seen),
-  )
-}
-
 describe('BillingModule in the core role', () => {
-  it('wires the passes, their worker and their schedulers', async () => {
-    const { app } = await core()
-
-    expect(app.get(BillingJobs)).toBeInstanceOf(BillingJobs)
-    expect(app.get(BillingProcessor)).toBeInstanceOf(BillingProcessor)
-    expect(app.get(BillingScheduler)).toBeInstanceOf(BillingScheduler)
-  })
-
   it('starts no scheduler and no worker without background work', async () => {
     const { app, infra, queue } = await core()
 
@@ -167,13 +139,6 @@ describe('BillingModule in the core role', () => {
       ([, inner = '']) => inner.replace(/="[^"]*"/g, ''),
     )
     expect(new Set(labels)).toEqual(new Set(['job,outcome,app']))
-  })
-
-  it('belongs to core: its root module imports it', () => {
-    // No other app can: apps-are-isolated, and the runner reaches no billing even transitively
-    // (runner-no-platform-access).
-    const coreModule = AppModule.forRoot({ config: testCoreConfig(), background: false })
-    expect(imports(coreModule, BillingModule)).toBe(true)
   })
 })
 

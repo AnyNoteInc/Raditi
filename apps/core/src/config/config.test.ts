@@ -1111,24 +1111,14 @@ describe('loadConfig — the browser worker (docs/plan/57-browser-tasks.md, Б10
     expect(loadConfig({ ...devEnv, BROWSER_WORKER_TOKEN: 'short' }).browser).toBeNull()
   })
 
-  it('reads the origin of the worker, its token and the deadline of its sessions', () => {
+  it('reads the origin of the worker and its token', () => {
     expect(
       loadConfig({
         ...devEnv,
         BROWSER_WORKER_URL: 'http://127.0.0.1:8086/',
         BROWSER_WORKER_TOKEN: TOKEN,
       }).browser,
-    ).toEqual({ url: 'http://127.0.0.1:8086', token: TOKEN, sessionMaxHours: 4 })
-    // The worker's own BROWSER_SESSION_MAX_HOURS: the deadline core writes is the worker's.
-    const worker = { BROWSER_WORKER_URL: 'http://127.0.0.1:8086', BROWSER_WORKER_TOKEN: TOKEN }
-    expect(
-      loadConfig({ ...devEnv, ...worker, BROWSER_SESSION_MAX_HOURS: '8' }).browser,
-    ).toMatchObject({ sessionMaxHours: 8 })
-    expect(problemsOf({ ...devEnv, ...worker, BROWSER_SESSION_MAX_HOURS: '25' })).toEqual([
-      expect.stringMatching(/^BROWSER_SESSION_MAX_HOURS: /),
-    ])
-    // Without the worker core reads none of it.
-    expect(loadConfig({ ...devEnv, BROWSER_SESSION_MAX_HOURS: '25' }).browser).toBeNull()
+    ).toEqual({ url: 'http://127.0.0.1:8086', token: TOKEN })
   })
 
   it('names what is wrong with the worker settings, never their values', () => {
@@ -1170,7 +1160,7 @@ describe('loadConfig — the browser worker (docs/plan/57-browser-tasks.md, Б10
       loadConfig(
         prodEnv({ BROWSER_WORKER_URL: 'http://10.20.0.30:8086', BROWSER_WORKER_TOKEN: TOKEN }),
       ).browser,
-    ).toEqual({ url: 'http://10.20.0.30:8086', token: TOKEN, sessionMaxHours: 4 })
+    ).toEqual({ url: 'http://10.20.0.30:8086', token: TOKEN })
     expect(
       problemsOf(
         prodEnv({ BROWSER_WORKER_URL: 'http://browser:8086', BROWSER_WORKER_TOKEN: TOKEN }),

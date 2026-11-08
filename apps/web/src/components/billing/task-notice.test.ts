@@ -13,7 +13,7 @@ import {
   type NoticeTariff,
   type TaskNoticeInput,
 } from './task-notice'
-import { subscriptionTo, start, taskCreditsFor, type TaskFacts } from './testing'
+import { agency, subscriptionTo, start, taskCreditsFor, type TaskFacts } from './testing'
 
 // What stands in the way of a new task, sentence by sentence. The answer about the task is the
 // one the server gives for the accounts of each case (`taskCreditsFor`): a notice is never
@@ -26,9 +26,9 @@ const plain = (text: string | null | undefined) =>
 const periodEnd = new Date('2026-10-18T09:00:00Z')
 /** 15:00 in Moscow on 4 October: the next Moscow day starts at 21:00 UTC. */
 const NOW = new Date('2026-10-04T12:00:00Z')
-const PACK = { credits: 100, price: '1990.00' }
+const PACK = { credits: 100, price: '1490.00' }
 
-/** «Старт», 300 credits a month and 50 a day, paid and renewing on 18 October. */
+/** «Старт» as the seeds sell it: 150 credits a month and no daily limit, paid and renewing on 18 October. */
 const startPlan = {
   id: start.id,
   slug: start.slug,
@@ -38,12 +38,22 @@ const startPlan = {
   creditsPerDay: start.creditsPerDay,
   maxSites: start.maxSites,
 }
-const tariffOf = (patch: Partial<NoticeTariff> = {}): NoticeTariff => ({
+type Terms = typeof startPlan
+/**
+ * A tariff with a daily limit: «Старт» of before, 300 credits a month and 50 a day. No tariff on
+ * sale has a day since 06.11.2026 (Ц6); the code of the day stays for a plan that sets one.
+ */
+const dayPlan: Terms = { ...startPlan, creditsPerMonth: 300, creditsPerDay: 50 }
+const tariffOf = (patch: Partial<NoticeTariff> = {}, terms: Terms = startPlan): NoticeTariff => ({
   status: 'active',
-  name: 'Старт',
+  name: terms.name,
   periodEnd,
   autoRenewal: true,
-  nextPlan: { name: 'Старт', creditsPerMonth: 300, creditsPerDay: 50 },
+  nextPlan: {
+    name: terms.name,
+    creditsPerMonth: terms.creditsPerMonth,
+    creditsPerDay: terms.creditsPerDay,
+  },
   ...patch,
 })
 
@@ -56,6 +66,8 @@ interface Case {
   packHeld?: number
   /** The tariff of the customer; null — none. «Старт», paid, unless told. */
   plan?: Partial<NoticeTariff> | null
+  /** The terms of that tariff: those of «Старт» on sale unless told. */
+  terms?: Terms
   /** The pack on sale that the customer may buy; none unless told. */
   offer?: typeof PACK | null
   canResume?: boolean
@@ -64,9 +76,9 @@ interface Case {
 
 function input(scenario: Case = {}): TaskNoticeInput {
   const { tariff = 0, tariffHeld = 0, gift = 0, giftHeld = 0, pack = 0, packHeld = 0 } = scenario
-  const plan = scenario.plan === null ? null : tariffOf(scenario.plan)
-  const subscription =
-    plan === null ? null : subscriptionTo({ status: plan.status, plan: startPlan })
+  const terms = scenario.terms ?? startPlan
+  const plan = scenario.plan === null ? null : tariffOf(scenario.plan, terms)
+  const subscription = plan === null ? null : subscriptionTo({ status: plan.status, plan: terms })
   return {
     task: taskCreditsFor(
       {
@@ -99,7 +111,7 @@ function told(scenario: Case = {}, payable = true) {
 
 describe('a task that would be taken', () => {
   it.each([
-    ['on a paid tariff', { tariff: 300 }],
+    ['on a paid tariff', { tariff: 150 }],
     ['on the gift, without a tariff', { gift: 35, plan: null }],
     ['on the gift, while the tariff is overdue', { gift: 35, plan: { status: 'past_due' } }],
     ['on a pack, when the quota is used up', { pack: 100 }],
@@ -180,12 +192,12 @@ describe('without a tariff', () => {
 })
 
 describe('on a paid tariff that renews', () => {
-  const grant = '18 октября начислим 300 кредитов по тарифу «Старт».'
+  const grant = '18 октября начислим 150 кредитов по тарифу «Старт».'
 
   it('says that the limits ran out, when the next credits come and that a pack helps now (A7)', () => {
     expect(told({ offer: PACK })).toEqual({
       reason: 'empty',
-      text: `Лимиты закончились: кредиты по тарифу и из пакета израсходованы. ${grant} Чтобы продолжить сейчас, купите пакет — 100 кредитов за 1 990 ₽. Кредиты из пакета не сгорают.`,
+      text: `Лимиты закончились: кредиты по тарифу и из пакета израсходованы. ${grant} Чтобы продолжить сейчас, купите пакет — 100 кредитов за 1 490 ₽. Кредиты из пакета не сгорают.`,
       actions: ['buy_pack', 'change_plan'],
     })
   })
@@ -206,7 +218,7 @@ describe('on a paid tariff that renews', () => {
   ])('says that %i credits start no task (A8)', (tariff, left) => {
     expect(told({ tariff, offer: PACK })).toEqual({
       reason: 'below_start',
-      text: `Лимиты закончились: ${left}, а на новую задачу нужно не меньше 5. ${grant} Чтобы продолжить сейчас, купите пакет — 100 кредитов за 1 990 ₽.`,
+      text: `Лимиты закончились: ${left}, а на новую задачу нужно не меньше 5. ${grant} Чтобы продолжить сейчас, купите пакет — 100 кредитов за 1 490 ₽.`,
       actions: ['buy_pack', 'change_plan'],
     })
     expect(told({ tariff }).text).toBe(
@@ -219,9 +231,11 @@ describe('on a paid tariff that renews', () => {
   })
 
   it('names the tariff of the next period when a change is scheduled', () => {
-    const next = { nextPlan: { name: 'Агентство', creditsPerMonth: 2500, creditsPerDay: 300 } }
+    const next = {
+      nextPlan: { name: agency.name, creditsPerMonth: agency.creditsPerMonth, creditsPerDay: null },
+    }
     expect(told({ plan: next }).text).toBe(
-      'Лимиты закончились: кредиты по тарифу и из пакета израсходованы. 18 октября начислим 2 500 кредитов по тарифу «Агентство».',
+      'Лимиты закончились: кредиты по тарифу и из пакета израсходованы. 18 октября начислим 2 000 кредитов по тарифу «Агентство».',
     )
   })
 
@@ -230,7 +244,7 @@ describe('on a paid tariff that renews', () => {
       'Кредиты заняты задачами в работе: под них отложено 90. Когда задачи закончатся, спишем только то, что ушло на работу, остальное вернётся — и можно будет поставить новую.'
     expect(told({ tariffHeld: 45, packHeld: 45, offer: PACK })).toEqual({
       reason: 'held',
-      text: `${state} Чтобы не ждать, купите пакет — 100 кредитов за 1 990 ₽.`,
+      text: `${state} Чтобы не ждать, купите пакет — 100 кредитов за 1 490 ₽.`,
       actions: ['buy_pack'],
     })
     expect(told({ tariffHeld: 45, packHeld: 45 })).toEqual({
@@ -241,19 +255,22 @@ describe('on a paid tariff that renews', () => {
     expect(told({ tariff: 2, tariffHeld: 1200 }).text).toContain('под них отложено 1 200.')
   })
 
-  // The tariff credits of the day (§6.2 of the design of 17.10.2026): a pack lifts it today.
+  // The tariff credits of the day (§6.2 of the design of 17.10.2026): a pack lifts it today. No
+  // tariff on sale has a day since 06.11.2026; these are the sentences of one that sets it.
+  const onDay = (scenario: Case = {}, payable = true) =>
+    told({ terms: dayPlan, ...scenario }, payable)
   const packToday =
-    'Чтобы продолжить сегодня, купите пакет — 100 кредитов за 1 990 ₽. Кредиты из пакета не сгорают и дневным лимитом не ограничены.'
+    'Чтобы продолжить сегодня, купите пакет — 100 кредитов за 1 490 ₽. Кредиты из пакета не сгорают и дневным лимитом не ограничены.'
   const tomorrow = 'Завтра снова можно будет потратить до 50 кредитов.'
 
   it('says that the tariff credits of the day are spent, and that a pack lifts it (A11)', () => {
-    expect(told({ tariff: 250, offer: PACK, facts: { today: { charged: 50 } } })).toEqual({
+    expect(onDay({ tariff: 250, offer: PACK, facts: { today: { charged: 50 } } })).toEqual({
       reason: 'daily_limit',
       text: `Кредиты по тарифу на сегодня закончились: потрачено 50 из 50. ${tomorrow} ${packToday}`,
       actions: ['buy_pack'],
     })
     // Without a pack on sale the day is all there is to wait for.
-    expect(told({ tariff: 250, facts: { today: { charged: 50 } } })).toEqual({
+    expect(onDay({ tariff: 250, facts: { today: { charged: 50 } } })).toEqual({
       reason: 'daily_limit',
       text: `Кредиты по тарифу на сегодня закончились: потрачено 50 из 50. ${tomorrow}`,
       actions: [],
@@ -262,7 +279,7 @@ describe('on a paid tariff that renews', () => {
 
   it('says that the day is set aside for tasks in work, and that what they do not use comes back', () => {
     expect(
-      told({
+      onDay({
         tariff: 255,
         tariffHeld: 45,
         offer: PACK,
@@ -273,7 +290,7 @@ describe('on a paid tariff that renews', () => {
       text: `Кредиты по тарифу на сегодня заняты: из 50 списано 5 и отложено под задачи в работе 45. Неиспользованные кредиты вернутся, когда задачи закончатся, а завтра снова можно будет потратить до 50 кредитов. ${packToday}`,
       actions: ['buy_pack'],
     })
-    expect(told({ tariff: 250, tariffHeld: 50, facts: { today: { held: 50 } } }).text).toBe(
+    expect(onDay({ tariff: 250, tariffHeld: 50, facts: { today: { held: 50 } } }).text).toBe(
       'Кредиты по тарифу на сегодня заняты: из 50 отложено под задачи в работе 50. Неиспользованные кредиты вернутся, когда задачи закончатся, а завтра снова можно будет потратить до 50 кредитов.',
     )
   })
@@ -281,7 +298,7 @@ describe('on a paid tariff that renews', () => {
   // Review of M5.33a: the day need not be spent — three of it and one of a pack are four.
   it('says how much the day still gives when it is too little to start a task', () => {
     expect(
-      told({
+      onDay({
         tariff: 255,
         tariffHeld: 45,
         pack: 1,
@@ -294,17 +311,17 @@ describe('on a paid tariff that renews', () => {
       actions: ['buy_pack'],
     })
     expect(
-      told({ tariff: 255, tariffHeld: 45, facts: { today: { charged: 4, held: 45 } } }).text,
+      onDay({ tariff: 255, tariffHeld: 45, facts: { today: { charged: 4, held: 45 } } }).text,
     ).toBe(`Сегодня можно потратить ещё 1 кредит, а на новую задачу нужно не меньше 5. ${tomorrow}`)
   })
 
   it('names the limit of now when the day took more after a renewal onto a smaller plan', () => {
-    expect(told({ tariff: 700, facts: { today: { charged: 120 } } }).text).toBe(
+    expect(onDay({ tariff: 700, facts: { today: { charged: 120 } } }).text).toBe(
       `Кредиты по тарифу на сегодня закончились: дневной лимит — 50. ${tomorrow}`,
     )
     // What is set aside cannot give the day back once the charges took all of it.
     expect(
-      told({ tariff: 700, tariffHeld: 10, facts: { today: { charged: 60, held: 10 } } }).text,
+      onDay({ tariff: 700, tariffHeld: 10, facts: { today: { charged: 60, held: 10 } } }).text,
     ).toBe(`Кредиты по тарифу на сегодня закончились: дневной лимит — 50. ${tomorrow}`)
   })
 
@@ -312,14 +329,14 @@ describe('on a paid tariff that renews', () => {
   // than the limit; what it does not use still comes back to the day.
   it('says that the day is set aside when a retry holds more than the limit', () => {
     expect(
-      told({ tariff: 180, tariffHeld: 120, offer: PACK, facts: { today: { held: 120 } } }),
+      onDay({ tariff: 180, tariffHeld: 120, offer: PACK, facts: { today: { held: 120 } } }),
     ).toEqual({
       reason: 'daily_limit',
       text: `Кредиты по тарифу на сегодня заняты: при дневном лимите 50 отложено под задачи в работе 120. Неиспользованные кредиты вернутся, когда задачи закончатся, а завтра снова можно будет потратить до 50 кредитов. ${packToday}`,
       actions: ['buy_pack'],
     })
     expect(
-      told({ tariff: 170, tariffHeld: 120, facts: { today: { charged: 10, held: 120 } } }).text,
+      onDay({ tariff: 170, tariffHeld: 120, facts: { today: { charged: 10, held: 120 } } }).text,
     ).toBe(
       'Кредиты по тарифу на сегодня заняты: при дневном лимите 50 списано 10 и отложено под задачи в работе 120. Неиспользованные кредиты вернутся, когда задачи закончатся, а завтра снова можно будет потратить до 50 кредитов.',
     )
@@ -329,14 +346,14 @@ describe('on a paid tariff that renews', () => {
   it('promises no tomorrow to a tariff that ends tonight', () => {
     const tonight = { autoRenewal: false, periodEnd: new Date('2026-10-04T21:00:00Z') }
     expect(
-      told({ tariff: 250, offer: PACK, plan: tonight, facts: { today: { charged: 50 } } }),
+      onDay({ tariff: 250, offer: PACK, plan: tonight, facts: { today: { charged: 50 } } }),
     ).toEqual({
       reason: 'daily_limit',
       text: `Кредиты по тарифу на сегодня закончились: потрачено 50 из 50. ${packToday}`,
       actions: ['buy_pack'],
     })
     expect(
-      told({
+      onDay({
         tariff: 255,
         tariffHeld: 45,
         plan: tonight,
@@ -348,7 +365,7 @@ describe('on a paid tariff that renews', () => {
     // Ending tomorrow morning, it still takes tasks when the day starts.
     const tomorrowMorning = { autoRenewal: false, periodEnd: new Date('2026-10-05T09:00:00Z') }
     expect(
-      told({ tariff: 250, plan: tomorrowMorning, facts: { today: { charged: 50 } } }).text,
+      onDay({ tariff: 250, plan: tomorrowMorning, facts: { today: { charged: 50 } } }).text,
     ).toContain(tomorrow)
   })
 
@@ -356,9 +373,12 @@ describe('on a paid tariff that renews', () => {
   // the plan of the next period.
   it('promises the day of the scheduled plan when the period renews tonight', () => {
     const tonight = new Date('2026-10-04T19:00:00Z')
-    const toAgency = { nextPlan: { name: 'Агентство', creditsPerMonth: 2500, creditsPerDay: 300 } }
+    // A scheduled tariff with a day of its own, of 300 credits.
+    const toAgency = {
+      nextPlan: { name: agency.name, creditsPerMonth: agency.creditsPerMonth, creditsPerDay: 300 },
+    }
     expect(
-      told({
+      onDay({
         tariff: 250,
         plan: { ...toAgency, periodEnd: tonight },
         facts: { today: { charged: 50 } },
@@ -367,16 +387,20 @@ describe('on a paid tariff that renews', () => {
       'Кредиты по тарифу на сегодня закончились: потрачено 50 из 50. Завтра снова можно будет потратить до 300 кредитов.',
     )
     // While the period runs past midnight, tomorrow is the day of the plan of now.
-    expect(told({ tariff: 250, plan: toAgency, facts: { today: { charged: 50 } } }).text).toContain(
-      tomorrow,
-    )
+    expect(
+      onDay({ tariff: 250, plan: toAgency, facts: { today: { charged: 50 } } }).text,
+    ).toContain(tomorrow)
   })
 
   it('tells the daily limit the tariff gives when the next Moscow day starts', () => {
     const midnight = new Date('2026-10-04T21:00:00Z')
-    const tariff = tariffOf({ periodEnd: midnight, autoRenewal: false })
+    const tariff = tariffOf({ periodEnd: midnight, autoRenewal: false }, dayPlan)
     const later = { ...tariff, periodEnd: new Date(midnight.getTime() + 1) }
-    const toAgency = { name: 'Агентство', creditsPerMonth: 2500, creditsPerDay: 300 }
+    const toAgency = {
+      name: agency.name,
+      creditsPerMonth: agency.creditsPerMonth,
+      creditsPerDay: 300,
+    }
     // Ending at that midnight without a renewal: nothing.
     expect(dayLimitTomorrow(tariff, 50, false, NOW)).toBeNull()
     // Renewing by then: the day of the plan of the next period, the current or the scheduled.
@@ -401,7 +425,8 @@ describe('on a paid tariff that renews', () => {
   })
 
   it('says that too much work ended without a charge, and asks to write (A14)', () => {
-    expect(told({ tariff: 300, offer: PACK, facts: { unpaidWork: 300 } })).toEqual({
+    // Half the 150 credits of «Старт» a month.
+    expect(told({ tariff: 150, offer: PACK, facts: { unpaidWork: 75 } })).toEqual({
       reason: 'unpaid_limit',
       text: 'В этом периоде слишком много задач остановилось без результата, поэтому новые задачи временно не принимаются. Кредиты за них не списаны. Напишите нам — разберёмся, в чём дело.',
       actions: [],
@@ -416,24 +441,24 @@ describe('on a paid tariff that does not renew (A9)', () => {
   it('offers the pack and auto-renewal', () => {
     expect(told({ ...ending, offer: PACK })).toEqual({
       reason: 'empty',
-      text: `${state} Купите пакет — 100 кредитов за 1 990 ₽, они не сгорают, — или включите автопродление: тогда 18 октября начислим 300 кредитов.`,
+      text: `${state} Купите пакет — 100 кредитов за 1 490 ₽, они не сгорают, — или включите автопродление: тогда 18 октября начислим 150 кредитов.`,
       actions: ['buy_pack', 'resume_renewal'],
     })
     // The same with a few credits left: fewer than a task needs.
     expect(told({ ...ending, tariff: 3, offer: PACK }).text).toBe(
-      `${state} Купите пакет — 100 кредитов за 1 990 ₽, они не сгорают, — или включите автопродление: тогда 18 октября начислим 300 кредитов.`,
+      `${state} Купите пакет — 100 кредитов за 1 490 ₽, они не сгорают, — или включите автопродление: тогда 18 октября начислим 150 кредитов.`,
     )
   })
 
   it('offers only what there is: the pack, auto-renewal, or neither', () => {
     expect(told({ ...ending, offer: PACK, canResume: false })).toEqual({
       reason: 'empty',
-      text: `${state} Купите пакет — 100 кредитов за 1 990 ₽, они не сгорают.`,
+      text: `${state} Купите пакет — 100 кредитов за 1 490 ₽, они не сгорают.`,
       actions: ['buy_pack'],
     })
     expect(told(ending)).toEqual({
       reason: 'empty',
-      text: `${state} Включите автопродление: тогда 18 октября начислим 300 кредитов.`,
+      text: `${state} Включите автопродление: тогда 18 октября начислим 150 кредитов.`,
       actions: ['resume_renewal'],
     })
     expect(told({ ...ending, canResume: false })).toEqual({
@@ -449,7 +474,7 @@ describe('on a tariff that is not paid', () => {
     told({ ...scenario, plan: { status: 'past_due', ...scenario.plan } })
 
   it('says that the tariff is not paid and that the payment brings the credits (A12)', () => {
-    expect(overdue({ tariff: 250, pack: 100 })).toEqual({
+    expect(overdue({ tariff: 120, pack: 100 })).toEqual({
       reason: 'past_due',
       text: 'Тариф «Старт» не оплачен, поэтому новые задачи не принимаются. Оплатите тариф — кредиты нового периода начислим сразу.',
       actions: ['pay'],
@@ -488,7 +513,7 @@ describe('whether the gift still carries the tasks of a tariff that is not paid'
   })
 
   it('does not once only the payment brings tasks back', () => {
-    expect(carries({ tariff: 250, pack: 100 })).toEqual(['past_due', false])
+    expect(carries({ tariff: 120, pack: 100 })).toEqual(['past_due', false])
     expect(carries({ gift: 4 })).toEqual(['past_due', false])
     expect(carries({ gift: 15, facts: { unpaidWork: 70 } })).toEqual(['trial_unpaid_limit', false])
     // The pause is the platform's: no task is taken, with the payment or without it.
@@ -499,8 +524,8 @@ describe('whether the gift still carries the tasks of a tariff that is not paid'
 describe('the pause of the platform', () => {
   it('says that no task is taken while the calculation is being updated, whatever the credits are', () => {
     for (const scenario of [
-      { tariff: 300 },
-      { plan: null, gift: 35 },
+      { tariff: 150 },
+      { plan: null, gift: 50 },
       { plan: null },
       { plan: { status: 'past_due' } },
     ] as const) {
@@ -519,18 +544,17 @@ describe('the pause of the platform', () => {
 describe('where nothing can be paid for', () => {
   it('leaves out the sentence that takes a payment, and keeps what ran out and when credits come', () => {
     expect(told({ offer: PACK }, false).text).toBe(
-      'Лимиты закончились: кредиты по тарифу и из пакета израсходованы. 18 октября начислим 300 кредитов по тарифу «Старт».',
+      'Лимиты закончились: кредиты по тарифу и из пакета израсходованы. 18 октября начислим 150 кредитов по тарифу «Старт».',
     )
     expect(told({ plan: { status: 'past_due' } }, false).text).toBe(
       'Тариф «Старт» не оплачен, поэтому новые задачи не принимаются.',
     )
     expect(told({ plan: null }, false).text).toBe('Подарочные кредиты закончились.')
     // A notice that names no payment reads the same.
-    expect(told({ tariff: 250, facts: { today: { charged: 50 } } }, false).text).toBe(
-      told({ tariff: 250, facts: { today: { charged: 50 } } }).text,
-    )
+    const day = { terms: dayPlan, tariff: 250, facts: { today: { charged: 50 } } }
+    expect(told(day, false).text).toBe(told(day).text)
     // A pack lifts the day: where it cannot be bought, only the day is told.
-    expect(told({ tariff: 250, offer: PACK, facts: { today: { charged: 50 } } }, false).text).toBe(
+    expect(told({ ...day, offer: PACK }, false).text).toBe(
       `Кредиты по тарифу на сегодня закончились: потрачено 50 из 50. Завтра снова можно будет потратить до 50 кредитов.`,
     )
   })
@@ -555,12 +579,18 @@ describe('every notice', () => {
     { tariff: 3, offer: PACK },
     { plan: { autoRenewal: false }, offer: PACK },
     { tariffHeld: 90, offer: PACK },
-    { tariff: 250, offer: PACK, facts: { today: { charged: 50 } } },
-    { tariff: 255, tariffHeld: 45, facts: { today: { charged: 5, held: 45 } } },
-    { tariff: 255, tariffHeld: 45, pack: 1, facts: { today: { charged: 2, held: 45 } } },
-    { tariff: 300, facts: { unpaidWork: 300 } },
+    { terms: dayPlan, tariff: 250, offer: PACK, facts: { today: { charged: 50 } } },
+    { terms: dayPlan, tariff: 255, tariffHeld: 45, facts: { today: { charged: 5, held: 45 } } },
+    {
+      terms: dayPlan,
+      tariff: 255,
+      tariffHeld: 45,
+      pack: 1,
+      facts: { today: { charged: 2, held: 45 } },
+    },
+    { tariff: 150, facts: { unpaidWork: 75 } },
     { plan: { status: 'past_due' } },
-    { tariff: 300, facts: { rateUsable: false } },
+    { tariff: 150, facts: { rateUsable: false } },
   ]
 
   it('says «вы», names no receipt and no VAT, and ends every sentence', () => {

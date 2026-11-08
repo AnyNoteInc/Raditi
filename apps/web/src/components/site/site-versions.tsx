@@ -2,6 +2,7 @@ import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import { fontFamilies } from '@repo/ui/theme/tokens'
 
+import { chatHref } from '@/components/chat/chat-address'
 import { formatMoscowDay, formatMoscowMoment } from '@/lib/moscow-date'
 
 import type { HistoryItem } from './history-list'
@@ -70,7 +71,7 @@ export function VersionDetail({
   version: VersionView
   next: VersionView | null
   now: Date
-  /** At the root of the section the list holds the page's heading: this one is the next level. */
+  /** Under the heading of «Изменения»: this one is the next level (docs/plan/64, Н6). */
   nested?: boolean
 }) {
   const undoUntil = new Date(version.installedAt.getTime() + UNDO_DAYS * DAY_MS)
@@ -154,11 +155,7 @@ export function VersionDetail({
             gap: '8px 20px',
           }}
         >
-          {version.taskId ? (
-            <SiteLink href={`${siteHref(siteId, 'chat')}/${version.taskId}`}>
-              Открыть диалог
-            </SiteLink>
-          ) : null}
+          {version.taskId ? <SiteLink href={chatHref(version.taskId)}>Открыть чат</SiteLink> : null}
           <SiteLink
             href={`${siteHref(siteId, 'runs')}/${version.kind === 'initial' ? 'import' : version.id}`}
           >
@@ -182,23 +179,10 @@ export function VersionDetail({
               Этот выпуск можно отменить до {formatMoscowDay(undoUntil)}: на сайт вернутся прежние
               файлы и записи. Что изменили на сайте после выпуска, останется.
             </Typography>
-            <SiteButtonLink href={`${siteHref(siteId, 'chat')}/${version.taskId}`}>
-              Отменить в диалоге
-            </SiteButtonLink>
+            <SiteButtonLink href={chatHref(version.taskId)}>Отменить в чате</SiteButtonLink>
           </Box>
         </SiteCard>
       ) : null}
     </Box>
-  )
-}
-
-/** «Изменения» of a site with no version yet. The list beside it names the section — the
- * heading of the page — and says it is empty on a phone, where the list is all that is shown.
- */
-export function NoVersions() {
-  return (
-    <Typography color="text.secondary" sx={{ display: { xs: 'none', md: 'block' } }}>
-      Версий пока нет. Первая появится, когда Радити сохранит файлы сайта.
-    </Typography>
   )
 }

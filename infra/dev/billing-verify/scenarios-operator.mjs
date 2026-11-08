@@ -43,6 +43,8 @@ scenarios['credit-rate'] = async (t) => {
   })
   const PAUSED = { allowed: false, reason: 'rate_missing' }
   const TAKEN = { allowed: true, reason: null }
+  /** What the customer with a tariff and a pack could spend: the three accounts whole. */
+  const ALL = CREDITS.start + CREDITS.pack + CREDITS.gift
   const rates = () =>
     t.rows(
       `SELECT id, rub_per_credit::text AS rate, basis, effective_from FROM credit_rates
@@ -70,9 +72,9 @@ scenarios['credit-rate'] = async (t) => {
   const withSite = await t.customer()
   await addSite(t, withSite, { name: 'Кофейня', url: `https://rate-${withSite.id}.example.ru` })
   t.equal(
-    'without a rate nobody’s task is taken, whatever they could spend: the gift promised, the gift granted, 435 credits of three accounts',
+    'without a rate nobody’s task is taken, whatever they could spend: the gift promised, the gift granted, 300 credits of three accounts',
     [await told(onlooker), await told(withSite), await told(paying.customer)],
-    [both(PAUSED, 35), both(PAUSED, 35), both(PAUSED, 435)],
+    [both(PAUSED, CREDITS.gift), both(PAUSED, CREDITS.gift), both(PAUSED, ALL)],
   )
   t.equal(
     '«Тарифы» has no table of «Точный расчёт» to show',
@@ -86,10 +88,12 @@ scenarios['credit-rate'] = async (t) => {
   const dear = await t.operatorFile('rates-dear.json', { rubPerCredit: '9.00', basis, prices: [] })
   const refused = await t.operator('billing-rates', ['--file', dear, ...signed('курс выше')])
   t.check(
-    'billing:rates refuses 9.00 ₽ a credit without --confirm-exposure: «Старт» would cost more than half of its price',
+    'billing:rates refuses 9.00 ₽ a credit without --confirm-exposure: every tariff would cost more than half of its price',
     refused.code === 1 &&
-      refused.stdout.includes('  start (тариф): 300 кредитов — 2700.00 ₽, 55.1 % цены 4900.00 ₽') &&
-      refused.stdout.includes('Учётная стоимость выше половины цены у тарифов: start') &&
+      refused.stdout.includes('  start (тариф): 150 кредитов — 1350.00 ₽, 67.8 % цены 1990.00 ₽') &&
+      refused.stdout.includes(
+        'Учётная стоимость выше половины цены у тарифов: start, business, agency.',
+      ) &&
       refused.stderr.includes('Курс и ставки не записаны.') &&
       refused.stderr.includes('Нужно подтверждение --confirm-exposure'),
     refused,
@@ -112,7 +116,28 @@ scenarios['credit-rate'] = async (t) => {
   t.equal(
     'neither refusal wrote anything: no rate, no entry in the audit, and still no task is taken',
     [await rates(), await approvals(), await told(paying.customer)],
-    [[], [], both(PAUSED, 435)],
+    [[], [], both(PAUSED, ALL)],
+  )
+
+  // The provisional rate of the credits model, 6.00 ₽, puts more than half of the prices of
+  // 06.11.2026 behind «Бизнес» and «Агентство» (docs/plan/63-new-pricing.md): it is refused as
+  // well until the operator confirms what was printed.
+  const unconfirmed = await t.operator('billing-rates', ['--file', file, ...signed('первый курс')])
+  t.check(
+    'billing:rates refuses 6.00 ₽ a credit without --confirm-exposure as well: «Бизнес» and «Агентство» would cost more than half of their prices',
+    unconfirmed.code === 1 &&
+      unconfirmed.stdout.includes(
+        '  business (тариф): 600 кредитов — 3600.00 ₽, 51.5 % цены 6990.00 ₽',
+      ) &&
+      unconfirmed.stdout.includes(
+        '  agency (тариф): 2000 кредитов — 12000.00 ₽, 60.0 % цены 19990.00 ₽',
+      ) &&
+      unconfirmed.stdout.includes(
+        'Учётная стоимость выше половины цены у тарифов: business, agency.',
+      ) &&
+      unconfirmed.stderr.includes('Нужно подтверждение --confirm-exposure') &&
+      (await rates()).length === 0,
+    unconfirmed,
   )
 
   // The approval. The command counts what the rate stands behind by the accounts of every
@@ -123,10 +148,15 @@ scenarios['credit-rate'] = async (t) => {
      FROM billing_accounts`,
   )
   const cost = (credits) => (credits * Number(CREDIT_RATE)).toFixed(2)
-  const approved = await t.operator('billing-rates', ['--file', file, ...signed('первый курс')])
+  const approved = await t.operator('billing-rates', [
+    '--file',
+    file,
+    '--confirm-exposure',
+    ...signed('первый курс'),
+  ])
   const [rate, ...otherRates] = await rates()
   t.check(
-    'billing:rates approves 6.00 ₽ a credit and says what it means: the cost behind every tariff and the pack, and behind the credits not spent yet',
+    'billing:rates approves 6.00 ₽ a credit with --confirm-exposure and says what it means: the cost behind every tariff and the pack, the warning it was confirmed over, and the cost behind the credits not spent yet',
     approved.code === 0 &&
       approved.stdout.includes(
         'Действие: утвердить курс кредита 6.00 ₽ учётной стоимости за кредит; ставки моделей не меняются.',
@@ -135,16 +165,17 @@ scenarios['credit-rate'] = async (t) => {
       approved.stdout.includes(
         'На момент начала действующего курса нет. Новый курс — 6.000000 ₽ учётной стоимости за кредит.',
       ) &&
+      approved.stdout.includes('  start (тариф): 150 кредитов — 900.00 ₽, 45.2 % цены 1990.00 ₽') &&
       approved.stdout.includes(
-        '  start (тариф): 300 кредитов — 1800.00 ₽, 36.7 % цены 4900.00 ₽',
+        '  business (тариф): 600 кредитов — 3600.00 ₽, 51.5 % цены 6990.00 ₽',
       ) &&
       approved.stdout.includes(
-        '  business (тариф): 800 кредитов — 4800.00 ₽, 37.2 % цены 12900.00 ₽',
+        '  agency (тариф): 2000 кредитов — 12000.00 ₽, 60.0 % цены 19990.00 ₽',
       ) &&
+      approved.stdout.includes('  pack (пакет): 100 кредитов — 600.00 ₽, 40.3 % цены 1490.00 ₽') &&
       approved.stdout.includes(
-        '  agency (тариф): 2500 кредитов — 15000.00 ₽, 37.6 % цены 39900.00 ₽',
+        'Учётная стоимость выше половины цены у тарифов: business, agency.',
       ) &&
-      approved.stdout.includes('  pack (пакет): 100 кредитов — 600.00 ₽, 30.2 % цены 1990.00 ₽') &&
       approved.stdout.includes(
         `Не потраченные кредиты всех рабочих пространств: из пакетов — ${outstanding.pack} (${cost(outstanding.pack)} ₽ учётной стоимости), подарочные — ${outstanding.gift} (${cost(outstanding.gift)} ₽).`,
       ) &&
@@ -183,7 +214,7 @@ scenarios['credit-rate'] = async (t) => {
   t.equal(
     'the same three customers read that a task would be taken; what they could spend is what it was',
     [await told(onlooker), await told(withSite), await told(paying.customer)],
-    [both(TAKEN, 35), both(TAKEN, 35), both(TAKEN, 435)],
+    [both(TAKEN, CREDITS.gift), both(TAKEN, CREDITS.gift), both(TAKEN, ALL)],
   )
   t.equal(
     'the rate alone gives «Точный расчёт» no table: no enabled model has a price',
@@ -222,8 +253,8 @@ scenarios.refund = async (t) => {
   t.check(
     'billing:refund says what it is about to do and that the refund went through',
     refunded.code === 0 &&
-      refunded.stdout.includes(`Заказ ${order.id}: тариф, 4900.00 ₽, оплачен.`) &&
-      refunded.stdout.includes('Действие: вернуть 4900.00 ₽ через ЮKassa (весь платёж).') &&
+      refunded.stdout.includes(`Заказ ${order.id}: тариф, 1990.00 ₽, оплачен.`) &&
+      refunded.stdout.includes('Действие: вернуть 1990.00 ₽ через ЮKassa (весь платёж).') &&
       refunded.stdout.includes(
         'Тариф и кредиты клиента не меняются: возвращаются только деньги.',
       ) &&
@@ -328,7 +359,7 @@ scenarios.refund = async (t) => {
   t.check(
     'billing:refund --end-subscription ends the tariff at once without another refund',
     ending.code === 0 &&
-      /Тариф завершён \d{2}\.\d{2}\.\d{4} \d{2}:\d{2} МСК; сгорело кредитов тарифа: 300\./.test(
+      /Тариф завершён \d{2}\.\d{2}\.\d{4} \d{2}:\d{2} МСК; сгорело кредитов тарифа: 150\./.test(
         ending.stdout,
       ) &&
       (await refundRequests(t)).length === 1,
@@ -354,14 +385,14 @@ scenarios.refund = async (t) => {
       end.meta.orderId,
       end.meta.expiredCredits,
     ],
-    ['expire', 'operator', 'refund', order.id, 300],
+    ['expire', 'operator', 'refund', order.id, CREDITS.start],
   )
   // The rule of a tariff the operator ends, on the three accounts (the expiry rules of the
   // credits design): what is available of the tariff expires — under the key of the period it
   // was paid for, though the tariff ends now —; the gift stays and can be spent; the packs stay
   // and wait for a tariff.
   t.equal(
-    'a refund with --end-subscription: the rest of the quota expired, the gift is its one grant, both packs are whole',
+    'a refund with --end-subscription: the rest of the quota expired and nothing was carried, the gift is its one grant, both packs are whole',
     await journalsOf(t, workspaceId),
     {
       tariff: [
@@ -374,9 +405,9 @@ scenarios.refund = async (t) => {
   )
   const overview = await customer.query('billing.overview')
   t.equal(
-    'of the 235 credits that are left a task could spend the 35 of the gift',
+    'of the 250 credits that are left a task could spend the 50 of the gift',
     [overview.credits.spendable, overview.credits.totalAvailable],
-    [35, 235],
+    [CREDITS.gift, CREDITS.gift + 2 * CREDITS.pack],
   )
   t.equal(
     '«Тарифы» shows no tariff and says the last one was returned; no «Тариф закончился» letter is sent',
@@ -401,7 +432,7 @@ scenarios.refund = async (t) => {
   t.check(
     'billing:refund --take-credits returns the pack and takes its hundred credits',
     packRefund.code === 0 &&
-      packRefund.stdout.includes(`Заказ ${pack.orderId}: пакет кредитов, 1990.00 ₽, оплачен.`) &&
+      packRefund.stdout.includes(`Заказ ${pack.orderId}: пакет кредитов, 1490.00 ₽, оплачен.`) &&
       packRefund.stdout.includes('Снято кредитов пакета: 100.'),
     packRefund,
   )
@@ -673,7 +704,7 @@ scenarios['double-payment'] = async (t) => {
       (await subscriptionOf(t, workspaceId)).plan,
       journal(accounts.credit_tariff),
     ],
-    [1, 'business', [{ kind: 'grant', amount: '800.00', key: `order:${second.orderId}:grant` }]],
+    [1, 'business', [journalRow.quota({ id: second.orderId }, CREDITS.business)]],
   )
   const page = await customer.mutate('billing.syncOrder', { orderId: first.orderId })
   t.equal(
@@ -689,7 +720,7 @@ scenarios['double-payment'] = async (t) => {
       listed.stdout.includes('Ожидают возврата: 1.') &&
       listed.stdout.includes(`заказ ${first.orderId} (отменён) · платёж ${firstPayment}`) &&
       listed.stdout.includes(
-        'к возврату 4900.00 ₽ из 4900.00 ₽; причина: платёж прошёл после закрытия заказа',
+        'к возврату 1990.00 ₽ из 1990.00 ₽; причина: платёж прошёл после закрытия заказа',
       ) &&
       listed.stdout.includes('как вернуть: в кабинете ЮKassa'),
     listed,

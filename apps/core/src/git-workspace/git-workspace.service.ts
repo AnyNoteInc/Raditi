@@ -12,7 +12,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, isAbsolute, join, relative } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 
 import {
   addOnlyPathOf,
@@ -176,6 +176,23 @@ export type CandidateRebase =
    * change a path the candidate never did. Nothing was written.
    */
   | { status: 'conflict'; paths: string[] }
+/** Who takes a task branch back (docs/plan/61-chats-first.md, §5.14: `/undo`). */
+export interface BranchRewindInput {
+  repo: RepoRef
+  /** `agent/<taskId>`. */
+  branch: string
+  /** Where the branch stands; null — nowhere: `/undo` of the first turn deleted it. */
+  from: string | null
+  /** Where it goes; null — the turn found no branch, and it is deleted. */
+  to: string | null
+}
+/** The commit `/undo` takes off a task branch, held for `/redo`. */
+export interface UndoneCommitInput {
+  repo: RepoRef
+  /** `agent/<taskId>`. */
+  branch: string
+  sha: string
+}
 /** What a candidate of a dialog needs to know about its commits (plan 53, R3: CandidateGit). */
 export interface CommitComparisonInput {
   repo: RepoRef
@@ -224,6 +241,10 @@ export const treeExportLimits = Object.freeze({
 const BOT_NAME = 'Raditi Bot'
 const BOT_EMAIL = 'bot@raditi.ru'
 const GITLEAKS_CONFIG = '[extend]\nuseDefault = true\n'
+/** Where the commits `/undo` takes off task branches are held on the remote, for `/redo`. */
+const UNDONE_COMMIT_REFS = 'refs/raditi/undone/'
+/** One per task: `agent/<taskId>` → `refs/raditi/undone/<taskId>`. */
+const undoneCommitRef = (branch: string) => `${UNDONE_COMMIT_REFS}${basename(branch)}`
 /** Gitleaks exits 1 on its own errors too: `--exit-code` changes only the code of a finding. */
 const GITLEAKS_FINDING_EXIT = 99
 /**
@@ -248,6 +269,24 @@ const botIdentity = (at: string): NodeJS.ProcessEnv => {
   }
 }
 const instantSchema = z.iso.datetime().refine((value) => Number.isFinite(Date.parse(value)))
+const rewindSchema = z
+  .object({
+    repo: publicationSourceSchema.shape.repo,
+    branch: publicationSourceSchema.shape.branch,
+    from: publicationShaSchema.nullable(),
+    to: publicationShaSchema.nullable(),
+  })
+  .strict()
+  .refine((rewind) => rewind.from !== null || rewind.to !== null)
+
+const undoneCommitSchema = z
+  .object({
+    repo: publicationSourceSchema.shape.repo,
+    branch: publicationSourceSchema.shape.branch,
+    sha: publicationShaSchema,
+  })
+  .strict()
+
 const rebaseSchema = z
   .object({
     repo: publicationSourceSchema.shape.repo,
@@ -624,6 +663,221 @@ export class GitWorkspaceService implements TurnWorkspace {
   }
 
   /**
+   * The regular files of a commit of the site with their sizes and content ids, at most `limit`
+   * of them in the order of git (the section «Терминал» of a project, 06.11.2026). A link or a
+   * submodule is left out, a path that is not UTF-8 too. Reads the mirror only.
+   */
+  async listFiles(input: {
+    repo: RepoRef
+    sha: string
+    limit: number
+  }): Promise<{ files: Array<{ path: string; size: number; oid: string }>; truncated: boolean }> {
+    const parsed = z
+      .object({
+        repo: publicationSourceSchema.shape.repo,
+        sha: publicationShaSchema,
+        limit: z.number().int().positive(),
+      })
+      .strict()
+      .safeParse(input)
+    if (!parsed.success || parsed.data.repo.provider !== this.provider.kind)
+      throw badRequest('Invalid repository commit')
+    const { repo, sha, limit } = parsed.data
+    const workspace = await this.workspace(repo, [sha])
+    try {
+      const output = await this.list(
+        workspace,
+        ['ls-tree', '-rlz', '--full-tree', sha],
+        publicationLimits.repositoryFiles,
+        REPOSITORY,
+      )
+      const files: Array<{ path: string; size: number; oid: string }> = []
+      let truncated = false
+      for (const row of Buffer.from(output).toString('utf8').split('\0')) {
+        const match = /^(?:100644|100755) blob ([a-f0-9]{40}) +([0-9]+)\t(.+)$/s.exec(row)
+        if (!match || match[3]!.includes('�')) continue
+        if (files.length >= limit) {
+          truncated = true
+          break
+        }
+        files.push({ path: match[3]!, size: Number(match[2]), oid: match[1]! })
+      }
+      return { files, truncated }
+    } catch (error) {
+      if (isDomainError(error)) throw error
+      throw failed()
+    } finally {
+      await this.dispose(workspace)
+    }
+  }
+
+  /**
+   * One regular file of a commit of the site: its content id, its size and — when it is at most
+   * `maxBytes` — its bytes; null when the commit has no regular file at the path. Reads the mirror
+   * only.
+   */
+  async readFile(input: {
+    repo: RepoRef
+    sha: string
+    path: string
+    maxBytes: number
+  }): Promise<{ oid: string; size: number; bytes: Buffer | null } | null> {
+    const parsed = z
+      .object({
+        repo: publicationSourceSchema.shape.repo,
+        sha: publicationShaSchema,
+        // `<sha>:<path>` is one line of `cat-file --batch-check`: no line break in the path.
+        path: z
+          .string()
+          .min(1)
+          .max(publicationLimits.pathBytes)
+          .regex(/^[^\0\n]+$/),
+        maxBytes: z.number().int().positive(),
+      })
+      .strict()
+      .safeParse(input)
+    if (!parsed.success || parsed.data.repo.provider !== this.provider.kind)
+      throw badRequest('Invalid repository file')
+    const { repo, sha, path, maxBytes } = parsed.data
+    const workspace = await this.workspace(repo, [sha])
+    try {
+      const check = text(
+        (
+          await this.git(
+            workspace,
+            ['cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'],
+            Buffer.from(`${sha}:${path}\n`),
+            256,
+          )
+        ).stdout,
+      ).trim()
+      const match = /^([a-f0-9]{40}) blob ([0-9]+)$/.exec(check)
+      if (!match) return null
+      const oid = match[1]!
+      const size = Number(match[2])
+      if (size > maxBytes) return { oid, size, bytes: null }
+      const bytes = (await this.git(workspace, ['cat-file', 'blob', oid], undefined, size)).stdout
+      if (bytes.byteLength !== size) throw failed()
+      return { oid, size, bytes: Buffer.from(bytes) }
+    } catch (error) {
+      if (isDomainError(error)) throw error
+      throw failed()
+    } finally {
+      await this.dispose(workspace)
+    }
+  }
+
+  /**
+   * The client's edit of one file of a chat's working copy (the section «Терминал», 06.11.2026):
+   * a commit of the bot on `parent` whose tree is the parent's with `path` holding `content` —
+   * its mode kept, 100644 for a new file — pushed to the chat's `agent/<taskId>` by CAS: the
+   * branch must stand at `expected` (null — it does not exist yet) or at the commit already
+   * (`present`); anywhere else nothing is pushed (`moved`). The same input is the same commit.
+   * `assertFence` — the chat's lease — runs right before the push and is required. The caller
+   * holds the path to the rules of the site's workspace before it comes here.
+   */
+  async commitFileEdit(
+    input: {
+      repo: RepoRef
+      branch: string
+      parent: string
+      expected: string | null
+      path: string
+      content: Uint8Array
+      message: string
+      committedAt: string
+    },
+    assertFence: () => Promise<void>,
+  ): Promise<TrustedCommitPush> {
+    if (typeof assertFence !== 'function') throw badRequest('A push fence is required')
+    const parsed = z
+      .object({
+        repo: publicationSourceSchema.shape.repo,
+        branch: branchHeadSchema.shape.branch.refine((value) => value.startsWith('agent/')),
+        parent: publicationShaSchema,
+        expected: publicationShaSchema.nullable(),
+        path: z.string().refine(isPublicationPath),
+        content: z
+          .instanceof(Uint8Array)
+          .refine((bytes) => bytes.byteLength <= publicationLimits.fileBytes),
+        message: z
+          .string()
+          .min(1)
+          .max(4096)
+          .refine((value) => !value.includes('\0')),
+        committedAt: instantSchema,
+      })
+      .strict()
+      .safeParse(input)
+    if (!parsed.success || parsed.data.repo.provider !== this.provider.kind)
+      throw badRequest('Invalid file edit')
+    const edit = parsed.data
+    const workspace = await this.workspace(edit.repo, [edit.parent])
+    try {
+      // The entry at the path alone: `ls-tree` takes it as a pattern, so its name is compared.
+      const listed = (
+        await this.git(workspace, ['ls-tree', '-z', '--full-tree', edit.parent, '--', edit.path])
+      ).stdout
+      let mode = '100644'
+      for (const row of Buffer.from(listed).toString('utf8').split('\0')) {
+        const match = /^([0-7]{6}) (\w+) [a-f0-9]{40}\t(.+)$/s.exec(row)
+        if (!match || match[3] !== edit.path) continue
+        if (match[2] !== 'blob' || (match[1] !== '100644' && match[1] !== '100755'))
+          throw repositoryUnsupported('An edited path is a link, a folder or a submodule')
+        mode = match[1]
+      }
+      const oid = this.sha(
+        (await this.git(workspace, ['hash-object', '-w', '--stdin'], edit.content)).stdout,
+      )
+      await this.git(workspace, ['read-tree', edit.parent])
+      await this.git(
+        workspace,
+        ['update-index', '-z', '--index-info'],
+        Buffer.from(`${mode} ${oid}\t${edit.path}\0`),
+      )
+      const tree = this.sha((await this.git(workspace, ['write-tree'])).stdout)
+      const message = edit.message.endsWith('\n') ? edit.message : `${edit.message}\n`
+      const sha = this.sha(
+        (
+          await this.git(
+            workspace,
+            ['commit-tree', tree, '-p', edit.parent],
+            Buffer.from(message),
+            undefined,
+            botIdentity(edit.committedAt),
+          )
+        ).stdout,
+      )
+      await this.fsck(workspace, sha)
+      const auth = await this.auth(edit.repo, 'write')
+      const ref = `refs/heads/${edit.branch}`
+      const remote = (await this.remoteHead(workspace, ref, auth)) || null
+      if (remote === sha) return { status: 'present', sha }
+      if (remote !== edit.expected) return { status: 'moved', sha, remote }
+      await assertFence()
+      await this.git(
+        workspace,
+        [
+          'push',
+          '--porcelain',
+          `--force-with-lease=${ref}:${edit.expected ?? ''}`,
+          workspace.url,
+          `${sha}:${ref}`,
+        ],
+        undefined,
+        16 * 1024,
+        auth,
+      )
+      return { status: 'pushed', sha }
+    } catch (error) {
+      if (isDomainError(error)) throw error
+      throw failed()
+    } finally {
+      await this.dispose(workspace)
+    }
+  }
+
+  /**
    * «Обновить» (plan 53, Р27): the candidate's changes since `fromBase` carried onto `toBase` by
    * a three-way merge of trees, without a model and without rename detection — a change stays at
    * its own path and never follows a file `main` moved, into a folder the candidate may not
@@ -727,6 +981,92 @@ export class GitWorkspaceService implements TurnWorkspace {
           auth,
         )
       return { status: 'rebased', headSha, treeSha: tree }
+    } catch (error) {
+      if (isDomainError(error)) throw error
+      throw failed()
+    } finally {
+      await this.dispose(workspace)
+    }
+  }
+
+  /**
+   * `/undo` and `/redo` of a turn (docs/plan/61-chats-first.md, §5.14): the task branch goes back to
+   * where the turn found it, or is deleted when the turn found none, and comes forward again, by
+   * CAS — the branch must still be at `from` (or already at `to`, which makes a retry a no-op).
+   * Nothing else is written. `assertFence` — the site lease of the press — runs right before the
+   * push and is required, as for publish().
+   */
+  async rewindBranch(
+    input: BranchRewindInput,
+    // Optional in the type only for the port of the dialogs (CandidateGit); refused when absent.
+    assertFence?: () => Promise<void>,
+  ): Promise<void> {
+    if (typeof assertFence !== 'function') throw badRequest('A rewind fence is required')
+    const parsed = rewindSchema.safeParse(input)
+    if (!parsed.success || parsed.data.repo.provider !== this.provider.kind)
+      throw badRequest('Invalid branch rewind')
+    const { repo, branch, from, to } = parsed.data
+    const workspace = await this.workspace(
+      repo,
+      [from, to].filter((sha) => sha !== null),
+    )
+    try {
+      const auth = await this.auth(repo, 'write')
+      const ref = `refs/heads/${branch}`
+      const remote = await this.remoteHead(workspace, ref, auth)
+      if (remote === (to ?? '')) return
+      if (remote !== (from ?? '')) throw conflict('Task branch changed before the rewind')
+      await assertFence()
+      await this.git(
+        workspace,
+        [
+          'push',
+          '--porcelain',
+          `--force-with-lease=${ref}:${from ?? ''}`,
+          workspace.url,
+          `${to ?? ''}:${ref}`,
+        ],
+        undefined,
+        16 * 1024,
+        auth,
+      )
+    } catch (error) {
+      if (isDomainError(error)) throw error
+      throw failed()
+    } finally {
+      await this.dispose(workspace)
+    }
+  }
+
+  /**
+   * The commit `/undo` takes off a task branch stays on the remote under a ref of its own, for
+   * `/redo`: a push of the branch leaves it only in the mirror, and a mirror lives in its container
+   * (docs/plan/61-chats-first.md, §5.14). No branch and no tag — no clone sees it, no workflow runs
+   * on it —, one per task, written over by the next `/undo`, and it lives as the task branch does.
+   * Called before the branch moves. `assertFence`, as for rewindBranch().
+   */
+  async holdUndoneCommit(
+    input: UndoneCommitInput,
+    assertFence?: () => Promise<void>,
+  ): Promise<void> {
+    if (typeof assertFence !== 'function') throw badRequest('A rewind fence is required')
+    const parsed = undoneCommitSchema.safeParse(input)
+    if (!parsed.success || parsed.data.repo.provider !== this.provider.kind)
+      throw badRequest('Invalid undone commit')
+    const { repo, branch, sha } = parsed.data
+    const workspace = await this.workspace(repo, [sha])
+    try {
+      const auth = await this.auth(repo, 'write')
+      const ref = undoneCommitRef(branch)
+      if ((await this.remoteHead(workspace, ref, auth)) === sha) return
+      await assertFence()
+      await this.git(
+        workspace,
+        ['push', '--porcelain', workspace.url, `+${sha}:${ref}`],
+        undefined,
+        16 * 1024,
+        auth,
+      )
     } catch (error) {
       if (isDomainError(error)) throw error
       throw failed()
@@ -1638,7 +1978,7 @@ export class GitWorkspaceService implements TurnWorkspace {
   /**
    * The bare mirror of the workspace's repository, holding every commit of `shas`. A commit is
    * named by its content, so one the mirror has is the one asked for and costs no network; a
-   * missing one is fetched — all branches and tags, under a short read grant, with every
+   * missing one is fetched — all branches, tags and held commits, under a short read grant, with every
    * received object checked (transfer.fsckObjects). One operation per mirror at a time. A mirror
    * whose configuration is not the one `git init` writes, or which borrows objects elsewhere, is
    * made again: git reads that configuration in fetch and cat-file.
@@ -1664,6 +2004,7 @@ export class GitWorkspaceService implements TurnWorkspace {
           workspace.url,
           '+refs/heads/*:refs/heads/*',
           '+refs/tags/*:refs/tags/*',
+          `+${UNDONE_COMMIT_REFS}*:${UNDONE_COMMIT_REFS}*`,
         ],
         undefined,
         undefined,

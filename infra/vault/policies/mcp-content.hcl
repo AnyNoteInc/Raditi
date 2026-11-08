@@ -30,3 +30,9 @@ path "transit/datakey/plaintext/ws-*" {
 path "transit/decrypt/ws-*" {
   capabilities = ["update"]
 }
+
+# The key of the agent's web search (raditi_search_web, spec §20, «Веб-поиск агента»): kept where
+# the keys of the model are, put there by the operator command alone. Only this one path of subs/.
+path "subs/data/search/parallel" {
+  capabilities = ["read"]
+}

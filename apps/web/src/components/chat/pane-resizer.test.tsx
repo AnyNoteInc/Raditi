@@ -3,8 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { useRef } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { paneWidthCss, SITE_PANE_COOKIE } from '@/components/site/site-nav'
-
+import { paneWidthCss, SITE_PANE_COOKIE } from './pane-layout'
 import { PaneResizer, PANE_STEP } from './pane-resizer'
 
 // The edge of the panel beside a dialog (docs/plan/57-browser-tasks.md, Б29; the panel of the
@@ -14,7 +13,7 @@ import { PaneResizer, PANE_STEP } from './pane-resizer'
 function Stand() {
   const pane = useRef<HTMLElement | null>(null)
   return (
-    <div data-site-shell="" data-testid="shell">
+    <div data-chat-shell="" data-testid="shell">
       <aside ref={pane} data-testid="pane">
         <PaneResizer pane={pane} />
       </aside>
@@ -66,10 +65,10 @@ describe('the edge of the panel', () => {
     render(<Stand />)
     fireEvent.keyDown(separator(), { key: 'End' })
     expect(separator().getAttribute('aria-valuenow')).toBe('440')
-    // 1440 − 88 (rail) − 64 (paddings) − 360 (the dialog) = 928.
+    // 1440 − 72 (rail) − 30 (three gaps) − 64 (paddings) − 360 (the chat) = 914.
     fireEvent.keyDown(separator(), { key: 'Home' })
-    expect(separator().getAttribute('aria-valuenow')).toBe('928')
-    expect(separator().getAttribute('aria-valuemax')).toBe('928')
+    expect(separator().getAttribute('aria-valuenow')).toBe('914')
+    expect(separator().getAttribute('aria-valuemax')).toBe('914')
   })
 
   it('follows a drag and keeps the width where it stops', () => {
@@ -79,11 +78,11 @@ describe('the edge of the panel', () => {
     expect(width()).toBe(paneWidthCss(700))
     expect(document.cookie).not.toContain(`${SITE_PANE_COOKIE}=700`)
     fireEvent.pointerMove(separator(), { pointerId: 3, clientX: 100 })
-    expect(separator().getAttribute('aria-valuenow')).toBe('928')
+    expect(separator().getAttribute('aria-valuenow')).toBe('914')
     fireEvent.pointerUp(separator(), { pointerId: 3, clientX: 100 })
-    expect(document.cookie).toContain(`${SITE_PANE_COOKIE}=928`)
+    expect(document.cookie).toContain(`${SITE_PANE_COOKIE}=914`)
     // A move after the pointer was let go changes nothing.
     fireEvent.pointerMove(separator(), { pointerId: 3, clientX: 900 })
-    expect(separator().getAttribute('aria-valuenow')).toBe('928')
+    expect(separator().getAttribute('aria-valuenow')).toBe('914')
   })
 })

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { Buffer } from 'node:buffer'
 import { spawn, spawnSync } from 'node:child_process'
 import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { createServer as createHttpServer, request as httpRequest } from 'node:http'
@@ -22,13 +23,16 @@ import {
   LIVE_LIMITS,
   liveServices,
   liveStartRefusal,
+  longestReasoningRow,
   PROVIDER,
   readLedger,
+  requestMessagesText,
   resultVerdict,
   roleProfileProblems,
   searchPlaces,
   standMode,
   startLlmObserver,
+  streamContent,
   streamSummary,
   sumUsage,
   takePlanKey,
@@ -52,15 +56,20 @@ test('the limits of a live run are the numbers of the plan', () => {
     measure: { requests: 40, minutes: 20 },
     // The default of the owner's question П30: a live check of the result within 20 requests.
     results: { requests: 20, minutes: 10 },
+    compaction: { requests: 10, minutes: 5 },
+    // Six calls of the key of the pass of `/init`, the role holds them (LLM_MAX_CALLS_PER_KEY).
+    init: { requests: 11, minutes: 5 },
   })
   assert.deepEqual(PROVIDER, { host: 'api.z.ai', port: 443 })
 })
 
-test('a stand takes --live, --measure, --results, --rehearsal, --no-build and --keep, and nothing else', () => {
+test('a stand takes --live, --measure, --results, --compact, --init, --rehearsal, --no-build and --keep, and nothing else', () => {
   const plain = {
     live: false,
     measure: false,
     results: false,
+    compact: false,
+    init: false,
     api: false,
     rehearsal: false,
     noBuild: false,
@@ -99,6 +108,30 @@ test('a stand takes --live, --measure, --results, --rehearsal, --no-build and --
     }),
     { ...plain, rehearsal: true, results: true, noBuild: true, keep: '/private/x' },
   )
+  // One session through `/compact`, live and rehearsed (docs/plan/61-chats-first.md, §5.14).
+  assert.deepEqual(standMode(['--live', '--compact'], { stand: 'gateway' }), {
+    ...plain,
+    live: true,
+    compact: true,
+  })
+  assert.deepEqual(standMode(['--rehearsal', '--compact', '--no-build'], { stand: 'gateway' }), {
+    ...plain,
+    rehearsal: true,
+    compact: true,
+    noBuild: true,
+  })
+  // One pass on the words of `/init`, live and rehearsed (docs/plan/61-chats-first.md, 61.25).
+  assert.deepEqual(standMode(['--live', '--init'], { stand: 'gateway' }), {
+    ...plain,
+    live: true,
+    init: true,
+  })
+  assert.deepEqual(standMode(['--rehearsal', '--init', '--no-build'], { stand: 'gateway' }), {
+    ...plain,
+    rehearsal: true,
+    init: true,
+    noBuild: true,
+  })
   // The acceptance on the pay-per-token API, live and rehearsed (П15).
   assert.deepEqual(standMode(['--live', '--api', '--keep=/private/x'], { stand: 'gateway' }), {
     ...plain,
@@ -138,6 +171,21 @@ test('a stand takes --live, --measure, --results, --rehearsal, --no-build and --
     [['--live', '--api', '--api'], 'gateway'],
     [['--live', '--api', '--measure'], 'gateway'],
     [['--rehearsal', '--api', '--results'], 'gateway'],
+    // A compaction is a run of its own, under its own cap.
+    [['--compact'], 'gateway'],
+    [['--compact', '--no-build'], 'gateway'],
+    [['--live', '--compact', '--measure'], 'gateway'],
+    [['--rehearsal', '--compact', '--results'], 'gateway'],
+    [['--live', '--compact', '--api'], 'gateway'],
+    [['--live', '--compact'], 'content'],
+    // So is the pass of `/init`.
+    [['--init'], 'gateway'],
+    [['--init', '--no-build'], 'gateway'],
+    [['--live', '--init', '--measure'], 'gateway'],
+    [['--rehearsal', '--init', '--results'], 'gateway'],
+    [['--live', '--init', '--api'], 'gateway'],
+    [['--live', '--init', '--compact'], 'gateway'],
+    [['--live', '--init'], 'content'],
     [['--live', '--api'], 'content'],
     [['--rehearsal', '--api'], 'content'],
     [['--keep=/private/x'], 'gateway'],
@@ -881,6 +929,32 @@ test('the observer in front of the role llm passes the stream on as it comes and
     compaction: true,
   })
   assert.equal(chatRequestSummary('not json'), null)
+  assert.equal(
+    requestMessagesText(
+      JSON.stringify({
+        messages: [
+          { role: 'system', content: 'rules' },
+          { role: 'user', content: [{ type: 'text', text: 'the summary' }, { type: 'image_url' }] },
+          { role: 'assistant', content: null },
+        ],
+      }),
+    ),
+    'rules\nthe summary\n\n',
+  )
+  assert.equal(requestMessagesText('not json'), '')
+  assert.equal(
+    streamContent(
+      [
+        'data: {"choices":[{"delta":{"reasoning_content":"thinking"}}]}',
+        'data: {"choices":[{"delta":{"content":"The "}}]}',
+        'data: {"choices":[{"delta":{"content":"summary"},"finish_reason":"stop"}]}',
+        'data: {"usage":{"prompt_tokens":1}}',
+        'data: broken',
+        'data: [DONE]',
+      ].join('\n\n'),
+    ),
+    'The summary',
+  )
   // An upstream that is gone is an answer of the hop, not a hang; the next request still passes.
   await new Promise((resolve) => upstream.close(resolve))
   upstream.closeAllConnections()
@@ -1632,4 +1706,45 @@ test('no script of the stands and no document of theirs names the flags that nev
     const source = await readFile(join(repository, file), 'utf8')
     assert.equal(/--real\b|--record\b|--key-file\b/.test(source), false, file)
   }
+})
+
+test('longestReasoningRow measures the rows of reasoning in bytes, and only them', () => {
+  const row = (type, text) => JSON.stringify({ type, part: { type, text } })
+  const thought = row('reasoning', 'мысль')
+  const whole = (bytes) => ({ bytes, cut: false })
+  assert.deepEqual(longestReasoningRow(''), whole(0))
+  // A row of another kind is longer, and so is a line that is no row.
+  assert.deepEqual(
+    longestReasoningRow([row('text', 'я'.repeat(99)), 'не строка'].join('\n')),
+    whole(0),
+  )
+  // The longest stands between two shorter rows: neither the first nor the last is the answer.
+  assert.deepEqual(
+    longestReasoningRow(
+      [row('reasoning', 'a'), thought, row('reasoning', 'b'), row('step_finish', '')].join('\n'),
+    ),
+    whole(Buffer.byteLength(thought)),
+  )
+  assert.notEqual(Buffer.byteLength(thought), thought.length)
+})
+
+test('longestReasoningRow counts the row the exit of the CLI cut off, and says so', () => {
+  const row = (type, text) => JSON.stringify({ type, part: { type, text } })
+  const whole = row('reasoning', 'мысль')
+  const cut = row('reasoning', 'м'.repeat(99)).slice(0, -20)
+  assert.deepEqual(longestReasoningRow([whole, cut].join('\n')), {
+    bytes: Buffer.byteLength(cut),
+    cut: true,
+  })
+  // A cut row shorter than a whole one does not hide the longest, and is still reported.
+  const short = row('reasoning', 'м').slice(0, -5)
+  assert.deepEqual(longestReasoningRow([whole, short].join('\n')), {
+    bytes: Buffer.byteLength(whole),
+    cut: true,
+  })
+  // A row of another kind cut off the same way is not a row of reasoning.
+  assert.deepEqual(longestReasoningRow(row('text', 'я'.repeat(99)).slice(0, -5)), {
+    bytes: 0,
+    cut: false,
+  })
 })

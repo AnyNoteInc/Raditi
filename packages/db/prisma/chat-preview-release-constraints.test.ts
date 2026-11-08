@@ -326,29 +326,29 @@ describe.skipIf(!databaseUrl)('chat preview release constraints', () => {
           ({
             alias: _a,
             title,
-            mode,
             waiting,
             needs_repository,
             needs_browser,
             deleted_at,
+            web_masks_purged_at,
             ...rest
           }) => ({
             ...rest,
             title,
-            mode,
             waiting,
             needs: [needs_repository, needs_browser],
             deleted: deleted_at,
+            webMasksPurged: web_masks_purged_at,
           }),
         ),
       ).toEqual(
         before_.tasks.map((row) => ({
           ...row,
           title: null,
-          mode: 'work',
           waiting: null,
           needs: [true, false],
           deleted: null,
+          webMasksPurged: null,
         })),
       )
       expect(

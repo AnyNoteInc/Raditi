@@ -254,6 +254,8 @@ pnpm db:deploy
 
 ### Что включает оператор
 
+> С 06.11.2026 production снова работает на плане `zai-coding` — решение владельца, риск условий плана принят; `zai-api` — запасной путь (spec §20, П86–П88). Порядок для production — [`infra/app/README.md`](../../infra/app/README.md), «Модель в production»; фраза ниже о `zai-api` как пути production — запись на 17.10.2026.
+
 После миграции и сидов в базе включён драйвер `opencode` и больше ничего. С 17.10.2026 путь production — провайдер `zai-api` (API с оплатой за токены): для него порядок тот же, с `--backend zai-api --plan payg`, а `zai-coding` в production не включается ([отчёт 52](52-zai-api-backend.md), «Оператору»). Чтобы `issue` выдал ключ хода, оператор делает четыре вещи; команды шагов 2 и 4 и запись ставки шага 3 (строкой в базе, а не командой) исполняет тест `turn-credentials.integration.test.ts` («issues no key for the product profile until the operator switches on…») и после каждой проверяет отказ или выдачу.
 
 1. Импортирует ключ плана — он уходит в Vault `subs/zai-coding/<UUID>`, аккаунт создаётся выключенным:

@@ -19,10 +19,17 @@ vi.mock('@/components/billing/credit-ring', () => ({
 }))
 
 const user = { name: 'Анна', lastName: 'Петрова', email: 'anna@example.ru' }
-const site = { id, name: 'Кофейня «Крошка»', url: 'https://kroshka.example', status: 'active' }
+const site = {
+  id,
+  name: 'Кофейня «Крошка»',
+  url: 'https://kroshka.example',
+  status: 'active',
+  chat: { requirements: { repository: true, browser: false } },
+}
+const sections = ['Обзор', 'Изменения', 'Запуски', 'База', 'Переменные', 'Настройки']
 
 function showShell(
-  section = 'chat',
+  section = 'overview',
   status = 'active',
   setup?: 'pending' | 'failed' | 'done' | null,
 ) {
@@ -34,83 +41,131 @@ function showShell(
   )
 }
 
-/** The rail and the phone bar are both in the markup; styles show one of them. */
-const navigation = (index: number) =>
-  screen.getAllByRole('navigation', { name: 'Разделы сайта' })[index]!
-const rail = () => navigation(0)
-const bar = () => navigation(1)
+/** The panel of the site beside the rail (docs/plan/64-cabinet-navigation.md, Н2). */
+const panel = () => screen.getByRole('complementary', { name: 'Разделы сайта' })
+const panelNav = () => within(panel()).getByRole('navigation', { name: 'Разделы сайта' })
+/** The drawer of the sections of a phone, opened from the bar (Н7). */
+function openPhoneMenu() {
+  fireEvent.click(screen.getByRole('button', { name: /^Разделы сайта: / }))
+  return within(screen.getByRole('dialog', { name: 'Разделы сайта' })).getByRole('navigation', {
+    name: 'Разделы сайта',
+  })
+}
 
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  vi.restoreAllMocks()
+  document.cookie = 'raditi-panel=; Max-Age=0; Path=/'
+})
 
 describe('site shell', () => {
-  it('lists the seven sections in the rail, each leading to its own address', () => {
+  it('lists the six sections in the panel, each leading to its own address', () => {
     showShell()
-    const links = within(rail()).getAllByRole('link')
-    expect(links.map((link) => link.textContent)).toEqual([
-      'Обзор',
-      'Чат',
-      'Изменения',
-      'Запуски',
-      'База и бэкап',
-      'Переменные',
-      'Настройки',
-    ])
+    const links = within(panelNav()).getAllByRole('link')
+    expect(links.map((link) => link.textContent)).toEqual(sections)
     expect(links.map((link) => link.getAttribute('href'))).toEqual(
-      // «Чат» opens on a new dialog, the rest on themselves.
-      ['overview', 'chat/new', 'changes', 'runs', 'database', 'vault', 'settings'].map(
+      ['overview', 'changes', 'runs', 'database', 'vault', 'settings'].map(
         (s) => `/projects/${id}/${s}`,
       ),
     )
   })
 
-  it('marks the open section in both navigations and nothing else', () => {
+  it('marks the open section in the panel and in the menu of a phone, and nothing else', () => {
     showShell('changes')
-    for (const nav of [rail(), bar()]) {
-      const current = within(nav)
+    expect(screen.getByRole('button', { name: 'Разделы сайта: Изменения' })).toBeTruthy()
+    // The panel first: the open drawer hides the rest of the page from a screen reader.
+    for (const nav of [panelNav, openPhoneMenu]) {
+      const current = within(nav())
         .getAllByRole('link')
         .filter((link) => link.getAttribute('aria-current'))
       expect(current.map((link) => link.textContent)).toEqual(['Изменения'])
     }
   })
 
-  it('leads back to the projects from the breadcrumbs and names the site', () => {
-    showShell()
+  it('leads back to the projects from the breadcrumbs, names the site and the section', () => {
+    showShell('database')
     const crumbs = screen.getByRole('navigation', { name: 'Хлебные крошки' })
     expect(within(crumbs).getByRole('link', { name: 'Проекты' }).getAttribute('href')).toBe(
       '/projects',
     )
-    expect(within(crumbs).getByText(site.name).getAttribute('aria-current')).toBe('page')
+    expect(within(crumbs).getByRole('link', { name: site.name }).getAttribute('href')).toBe(
+      `/projects/${id}/overview`,
+    )
+    expect(within(crumbs).getByText('База').getAttribute('aria-current')).toBe('page')
   })
 
-  it('opens the site itself in a new tab without handing it the opener', () => {
+  it('holds the card of the site, the way to all projects, a new chat and the site itself', () => {
     showShell()
-    const open = screen.getByRole('link', { name: `Открыть сайт ${site.name} в новой вкладке` })
+    const aside = panel()
+    expect(within(aside).getByRole('link', { name: 'Все проекты' })).toHaveAttribute(
+      'href',
+      '/projects',
+    )
+    expect(within(aside).getByText('kroshka.example')).toBeTruthy()
+    expect(within(aside).getByText('Подключён')).toBeTruthy()
+    expect(within(aside).getByRole('link', { name: 'Чат в этом проекте' })).toHaveAttribute(
+      'href',
+      `/chats/new?project=${id}`,
+    )
+    const open = within(aside).getByRole('link', {
+      name: `Открыть сайт ${site.name} в новой вкладке`,
+    })
     expect(open.getAttribute('href')).toBe(site.url)
     expect(open.getAttribute('target')).toBe('_blank')
     expect(open.getAttribute('rel')).toContain('noopener')
   })
 
-  it('keeps four sections and «Ещё» on the phone bar and the rest behind «Ещё»', () => {
-    showShell('settings')
-    expect(
-      within(bar())
-        .getAllByRole('link')
-        .map((link) => link.textContent),
-    ).toEqual(['Обзор', 'Чат', 'Изменения', 'Запуски'])
-    fireEvent.click(within(bar()).getByRole('button', { name: 'Ещё' }))
-    const more = screen.getByRole('navigation', { name: 'Ещё разделы' })
-    expect(
-      within(more)
-        .getAllByRole('link')
-        .map((link) => link.textContent),
-    ).toEqual(['База и бэкап', 'Переменные', 'Настройки', 'К проектам'])
-    expect(within(more).getByRole('link', { name: 'Настройки' }).getAttribute('aria-current')).toBe(
-      'page',
+  it('offers no new chat of a project that takes none now', () => {
+    mocks.pathname = `/projects/${id}/overview`
+    render(
+      <SiteShell user={user} site={{ ...site, chat: { requirements: null } }}>
+        <p>Содержимое</p>
+      </SiteShell>,
     )
+    expect(screen.queryByRole('link', { name: 'Чат в этом проекте' })).toBeNull()
+  })
+
+  it('hides the panel with its button and brings it back from the bar (Н3)', () => {
+    showShell()
+    fireEvent.click(within(panel()).getByRole('button', { name: 'Скрыть панель' }))
+    expect(document.cookie).toContain('raditi-panel=closed')
+    const show = screen.getByRole('button', { name: 'Показать панель' })
+    expect(show).toHaveAttribute('aria-keyshortcuts', ']')
+    fireEvent.click(show)
+    expect(document.cookie).toContain('raditi-panel=open')
+    expect(within(panel()).getByRole('button', { name: 'Скрыть панель' })).toBeTruthy()
+  })
+
+  it('toggles the panel with «]» outside a field, and leaves a typed «]» to the field', () => {
+    showShell()
+    fireEvent.keyDown(window, { key: ']', code: 'BracketRight' })
+    expect(document.cookie).toContain('raditi-panel=closed')
+    // The same key of a Russian layout types «ъ».
+    fireEvent.keyDown(window, { key: 'ъ', code: 'BracketRight' })
+    expect(document.cookie).toContain('raditi-panel=open')
+
+    const field = document.createElement('input')
+    document.body.append(field)
+    fireEvent.keyDown(field, { key: ']', code: 'BracketRight' })
+    fireEvent.keyDown(window, { key: ']', code: 'BracketRight', metaKey: true })
+    expect(document.cookie).toContain('raditi-panel=open')
+    field.remove()
+  })
+
+  it('draws the page on the server as the cookie read there says', () => {
+    mocks.pathname = `/projects/${id}/overview`
+    const markup = (panelState: 'open' | 'closed') =>
+      renderToString(
+        <SiteShell user={user} site={site} panelState={panelState}>
+          <h1>Обзор</h1>
+        </SiteShell>,
+      )
+    expect(markup('closed')).toContain('aria-label="Показать панель"')
+    expect(markup('closed')).not.toContain('aria-label="Скрыть панель"')
+    expect(markup('open')).toContain('aria-label="Скрыть панель"')
   })
 
   it('takes the first character of the name whole for the mark of the site', () => {
-    mocks.pathname = `/projects/${id}/chat`
+    mocks.pathname = `/projects/${id}/overview`
     render(
       <SiteShell user={user} site={{ ...site, name: '🍰 Крошка' }}>
         <p>Содержимое</p>
@@ -130,23 +185,21 @@ describe('site shell', () => {
     const announced = (labels: readonly string[]) =>
       labels.map((label) => `${label}, раздел недоступен`)
 
-    it('keeps «Обзор» the only link of the rail and of the phone bar', () => {
+    it('keeps «Обзор» the only link of the panel and of the menu of a phone', () => {
       showShell('overview', status)
-      for (const [nav, closed] of [
-        [rail(), ['Чат', 'Изменения', 'Запуски', 'База и бэкап', 'Переменные', 'Настройки']],
-        [bar(), ['Чат', 'Изменения', 'Запуски']],
-      ] as const) {
+      for (const open of [panelNav, openPhoneMenu]) {
+        const nav = open()
         const links = within(nav).getAllByRole('link')
         expect(links.map((link) => link.textContent)).toEqual(['Обзор'])
         expect(links[0]!.getAttribute('href')).toBe(`/projects/${id}/overview`)
         expect(links[0]!.getAttribute('aria-current')).toBe('page')
-        expect(closedLabels(nav)).toEqual(announced(closed))
+        expect(closedLabels(nav)).toEqual(announced(sections.slice(1)))
       }
     })
 
     it('shows a closed section as an item that cannot be followed and says why', () => {
       showShell('overview', status)
-      for (const item of rail().querySelectorAll('[aria-disabled="true"]')) {
+      for (const item of panelNav().querySelectorAll('[aria-disabled="true"]')) {
         expect(item.tagName).toBe('SPAN')
         expect(item.hasAttribute('href')).toBe(false)
         expect(item.hasAttribute('tabindex')).toBe(false)
@@ -158,24 +211,7 @@ describe('site shell', () => {
       }
     })
 
-    it('keeps «Ещё» open for the way back to the projects, its sections closed', () => {
-      showShell('overview', status)
-      const more = within(bar()).getByRole('button', { name: 'Ещё' })
-      fireEvent.click(more)
-      const sheet = screen.getByRole('navigation', { name: 'Ещё разделы' })
-      const links = within(sheet).getAllByRole('link')
-      expect(links.map((link) => link.textContent)).toEqual(['К проектам'])
-      expect(links[0]!.getAttribute('href')).toBe('/projects')
-      expect(closedLabels(sheet)).toEqual(announced(['База и бэкап', 'Переменные', 'Настройки']))
-      for (const item of sheet.querySelectorAll('[aria-disabled="true"]')) {
-        expect(item.querySelectorAll('svg')).toHaveLength(2)
-        expect(document.getElementById(item.getAttribute('aria-describedby')!)?.textContent).toBe(
-          note,
-        )
-      }
-    })
-
-    it('renders the same on the server: one link among the sections of the rail', () => {
+    it('renders the same on the server: one link among the sections of the panel', () => {
       mocks.pathname = `/projects/${id}/overview`
       const page = document.createElement('div')
       page.innerHTML = renderToString(
@@ -183,20 +219,20 @@ describe('site shell', () => {
           <h1>Обзор</h1>
         </SiteShell>,
       )
-      const railMarkup = page.querySelector('nav[aria-label="Разделы сайта"]')!
-      const links = Array.from(railMarkup.querySelectorAll('a'))
+      const markup = page.querySelector('nav[aria-label="Разделы сайта"]')!
+      const links = Array.from(markup.querySelectorAll('a'))
       expect(links.map((link) => link.textContent)).toEqual(['Обзор'])
       expect(links[0]!.getAttribute('aria-current')).toBe('page')
-      const closed = Array.from(railMarkup.querySelectorAll('[aria-disabled="true"]'))
-      expect(closed).toHaveLength(6)
-      expect(closed[0]!.textContent).toBe('Чат, раздел недоступен')
+      const closed = Array.from(markup.querySelectorAll('[aria-disabled="true"]'))
+      expect(closed).toHaveLength(5)
+      expect(closed[0]!.textContent).toBe('Изменения, раздел недоступен')
       expect(page.querySelector('#site-closed-sections')?.textContent).toBe(note)
     })
   })
 
   it.each(['onboarding', 'active', 'something-new'])('closes nothing of a %s site', (status) => {
     showShell('overview', status)
-    expect(within(rail()).getAllByRole('link')).toHaveLength(7)
+    expect(within(panelNav()).getAllByRole('link')).toHaveLength(6)
     expect(document.body.textContent).not.toContain('недоступ')
     expect(document.querySelector('[aria-disabled="true"]')).toBeNull()
     expect(document.getElementById('site-closed-sections')).toBeNull()
@@ -211,18 +247,19 @@ describe('site shell', () => {
   })
 
   describe.each(['pending', 'failed'] as const)('of a site whose setup is %s', (setup) => {
-    it('shows no navigation of sections: no rail, no phone bar, no «Ещё»', () => {
+    it('shows no panel and no sections: the rail of the cabinet stays', () => {
       showShell('overview', 'onboarding', setup)
       expect(screen.queryByRole('navigation', { name: 'Разделы сайта' })).not.toBeInTheDocument()
-      expect(screen.queryByRole('complementary')).not.toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: 'Ещё' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('complementary', { name: 'Разделы сайта' })).toBeNull()
+      expect(screen.queryByRole('button', { name: /^Разделы сайта/ })).toBeNull()
       expect(screen.queryByRole('img', { name: `Сайт ${site.name}` })).not.toBeInTheDocument()
-      for (const label of ['Чат', 'Изменения', 'Запуски', 'Настройки']) {
+      for (const label of ['Изменения', 'Запуски', 'Настройки']) {
         expect(screen.queryByText(label)).not.toBeInTheDocument()
       }
+      expect(screen.getByRole('navigation', { name: 'Основная навигация' })).toBeTruthy()
     })
 
-    it('keeps the way back to the projects, the site, the account menu and the content', () => {
+    it('keeps the way back to the projects, the site and the content', () => {
       showShell('overview', 'onboarding', setup)
       const crumbs = screen.getByRole('navigation', { name: 'Хлебные крошки' })
       expect(within(crumbs).getByRole('link', { name: 'Проекты' })).toHaveAttribute(
@@ -233,8 +270,6 @@ describe('site shell', () => {
       expect(
         screen.getByRole('link', { name: `Открыть сайт ${site.name} в новой вкладке` }),
       ).toBeInTheDocument()
-      const bar = screen.getByRole('banner', { name: 'Панель сайта' })
-      expect(within(bar).getByRole('button')).toBeInTheDocument()
       expect(screen.getByRole('main')).toHaveTextContent('Содержимое раздела')
       expect(screen.getAllByRole('link')[0]).toHaveTextContent('Перейти к содержимому')
     })
@@ -242,6 +277,6 @@ describe('site shell', () => {
 
   it.each(['done', null] as const)('shows the sections of a site whose setup is %s', (setup) => {
     showShell('overview', 'onboarding', setup)
-    expect(within(rail()).getAllByRole('link')).toHaveLength(7)
+    expect(within(panelNav()).getAllByRole('link')).toHaveLength(6)
   })
 })

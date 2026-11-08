@@ -8,6 +8,7 @@ import {
   CANDIDATE_REBASE_JOB,
   candidateRebaseDedupeKey,
   isDomainError,
+  turnLeaseOf,
   readFeedRow,
   turnEvidenceSchema,
   type AgentTurnCancelJob,
@@ -48,6 +49,13 @@ const RETRY_DELAY_MS = Object.freeze({
   max: 10 * 60_000,
 })
 
+/**
+ * Passes of one workspace that run at a time (owner's request of 06.11.2026: «расширь количество
+ * параллельных агентов на одного пользователя до 8»): the next one waits as for a busy pool. The
+ * pool and the worker of `agent-turns` bound all the workspaces together.
+ */
+export const WORKSPACE_PASS_LIMIT = 8
+
 const clamp = (value: number) =>
   Math.min(RETRY_DELAY_MS.max, Math.max(RETRY_DELAY_MS.min, Math.round(value)))
 
@@ -62,9 +70,9 @@ export interface PassRunnerDependencies {
   git: CandidateGit | null
   /**
    * The cloud browser of tasks that need one (docs/plan/57, Б18); null while no worker is
-   * configured: such a task is refused `unavailable`.
+   * configured: the planner refuses such a task `unavailable`.
    */
-  browser?: Pick<BrowserSessions, 'ensure' | 'verify'> | null
+  browser?: Pick<BrowserSessions, 'reclaim' | 'verify'> | null
   drivers: AgentDriverRegistry
   backends: readonly LlmBackend[]
   adapter: (stack: SiteStack) => SiteAdapter
@@ -164,6 +172,16 @@ export class PassRunner {
       await settlement.settle(ref, { kind: 'refused', code: 'unavailable' })
       return
     }
+    // The claim above moved this task to `preparing` before it counts the others: passes that
+    // claim at once count each other, so the workspace never runs more than its limit.
+    if (await this.#workspaceFull(job.taskId)) {
+      const answer = await settlement.settle(ref, { kind: 'busy', waiting: 'agents' })
+      this.#logger.log(
+        `pass_settled task=${job.taskId} ending=busy answer=${answer} cause=WORKSPACE_FULL`,
+      )
+      if (answer === 'moved') await this.#requeue(job, { delayMs: RETRY_DELAY_MS.update })
+      return
+    }
     const supervisor = this.deps.supervisor
     if (!supervisor) {
       await settlement.settle(ref, { kind: 'refused', code: 'unavailable' })
@@ -197,8 +215,15 @@ export class PassRunner {
       await this.#settle(ref, { kind: 'cancelled', turn: null }, browser)
       return
     }
-    // The browser lives with the task, not with the turn: opened or found before it (Б18).
-    if (browser && !(await this.#openBrowser(job, ref, controller))) return
+    // The browser lives with the task, not with the turn (Б18), and starts with the agent's first
+    // `web_*` call (docs/plan/61, К11): a live one only comes back to the agent here.
+    if (browser) {
+      await this.deps.browser?.reclaim(job.taskId, controller.signal)
+      if (controller.signal.aborted) {
+        await this.#settle(ref, { kind: 'cancelled', turn: null }, true)
+        return
+      }
+    }
 
     const watch = this.#watchCancel(job, controller)
     let ending: PassEnding | null
@@ -251,36 +276,6 @@ export class PassRunner {
   }
 
   /**
-   * The cloud browser of the task before its turn (Б16, Б18): opened, or found and given back to
-   * the agent. false — the pass was ended here: no worker, or it did not answer (`unavailable`),
-   * or the client cancelled meanwhile.
-   */
-  async #openBrowser(
-    job: AgentTurnJob,
-    ref: PassRef,
-    controller: AbortController,
-  ): Promise<boolean> {
-    const { browser, settlement } = this.deps
-    if (!browser) {
-      await settlement.settle(ref, { kind: 'refused', code: 'unavailable' })
-      return false
-    }
-    try {
-      await browser.ensure(job.taskId, controller.signal)
-      return true
-    } catch (error) {
-      if (controller.signal.aborted) {
-        await this.#settle(ref, { kind: 'cancelled', turn: null }, true)
-        return false
-      }
-      const code = feedFailureOf({ ...failureFactsOf(error), policyFlagged: false })
-      this.#logger.warn(`pass_browser_unavailable task=${job.taskId} cause=${causeOf(error)}`)
-      await settlement.settle(ref, { kind: 'refused', code })
-      return false
-    }
-  }
-
-  /**
    * The dialog's preview, stopped while no one used it (owner's answer of 26.10.2026), is built
    * again for this pass: asked here, before the turn is planned, so the build runs beside the
    * preparation of the sandbox. A wake that is not written leaves it to the sweep of previews.
@@ -304,7 +299,8 @@ export class PassRunner {
         where: { id: job.taskId },
         select: { siteId: true },
       })
-      if (!task) return
+      // Nobody waits for a task without a site: its lease is its own.
+      if (!task?.siteId) return
       await enqueueSiteWaitingPasses(this.deps.db, {
         siteId: task.siteId,
         tag: `turn-${job.taskId}-${turnNo}`,
@@ -341,6 +337,7 @@ export class PassRunner {
       driver,
       backends: this.deps.backends,
       runtime: this.deps.runtime,
+      browser: Boolean(this.deps.browser),
       mainHead: () =>
         repo && git
           ? git.readBranchHead({ repo, branch: repo.defaultBranch })
@@ -433,6 +430,15 @@ export class PassRunner {
     return task?.turnNo ?? null
   }
 
+  /** The workspace of the task runs `WORKSPACE_PASS_LIMIT` passes of its other tasks. */
+  async #workspaceFull(taskId: string): Promise<boolean> {
+    const [row] = await this.deps.db.$queryRaw<Array<{ busy: number }>>`
+      SELECT count(*)::int AS busy
+      FROM tasks t JOIN tasks o ON o.workspace_id = t.workspace_id AND o.id <> t.id
+      WHERE t.id = ${taskId}::uuid AND o.status IN ('preparing', 'running')`
+    return (row?.busy ?? 0) >= WORKSPACE_PASS_LIMIT
+  }
+
   async #holdsReserve(job: AgentTurnJob): Promise<boolean> {
     const holds = await this.deps.db.creditHold.count({
       where: { taskId: job.taskId, attempt: job.attempt, status: 'active' },
@@ -476,9 +482,13 @@ export class PassRunner {
   async #siteRetry(ref: PassRef): Promise<Retry> {
     const task = await this.deps.db.task.findUnique({
       where: { id: ref.taskId },
-      select: { siteId: true },
+      select: { siteId: true, needsRepository: true },
     })
-    const lease = task ? await this.deps.leases.inspect(task.siteId).catch(() => null) : null
+    // The turn's own row: a chat with the code that waited for a release of its site finds it
+    // free, and the release wakes the pass when it ends.
+    const lease = task
+      ? await this.deps.leases.inspect(turnLeaseOf({ id: ref.taskId, ...task })).catch(() => null)
+      : null
     if (!lease?.expiresAt) return { delayMs: RETRY_DELAY_MS.site }
     const left = lease.expiresAt.getTime() - lease.serverNow.getTime()
     // A release barrier outlives its lease (an attempt whose run still goes, a release held for

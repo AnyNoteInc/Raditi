@@ -9,7 +9,7 @@ import {
 } from '../browser/session.ts'
 import { reasoningEffortSchema } from '../llm/model-class.ts'
 import { agentOutputLimits } from '../ports/agent-driver.ts'
-import { chatCommandIds } from '../release/chat-commands.ts'
+import { serverCommandIds } from '../release/chat-commands.ts'
 import { releaseOutcomes } from '../release/release-state.ts'
 import { versionBumps, versionTagSchema } from '../release/semver.ts'
 import { FEED_FAILURE_FALLBACK, feedFailureCodes } from './client-feed-failures.ts'
@@ -56,6 +56,12 @@ export const feedEventTypes = [
   'feed.undo',
   // A snapshot of the task's browser for the client (`web_screenshot`, docs/plan/57, Б20).
   'feed.screenshot',
+  // `/undo` took the last turn back (docs/plan/61-chats-first.md, §5.14).
+  'feed.rewind',
+  // `/redo` brought it back: the two rows are read as if neither were there.
+  'feed.redo',
+  // The client changed a file in «Терминал» of the chat (06.11.2026): what came of it.
+  'feed.edit',
 ] as const
 export type FeedEventType = (typeof feedEventTypes)[number]
 
@@ -98,7 +104,8 @@ const limits = feedLimits
 // candidate; `command` — a command of the chat (docs/plan/53-chat-preview-release.md, Р6, Р34);
 // `continue` — «Продолжить» after a question of the platform about credits (Р8), the kind the
 // design reserved for it; `resume` — «Продолжить работу агента» of a task in the browser
-// (docs/plan/57-browser-tasks.md, Б16).
+// (docs/plan/57-browser-tasks.md, Б16); `agent_command` — a command that is a pass of the agent on
+// the platform's words: paid and moving the dialog on, unlike `command` (docs/plan/61, §5.2).
 export const feedRequestKinds = [
   'first',
   'answer',
@@ -107,11 +114,16 @@ export const feedRequestKinds = [
   'command',
   'continue',
   'resume',
+  'agent_command',
 ] as const
 export type FeedRequestKind = (typeof feedRequestKinds)[number]
 
-/** A stage of work the customer understands; `site` and `files` wait for trusted sources. */
-export const feedSteps = ['work', 'save', 'site', 'files'] as const
+/**
+ * A stage of work the customer understands; `code` — the code of the project was loaded, for a
+ * task with a repository (docs/plan/61-chats-first.md, §5.8); `site` and `files` wait for trusted
+ * sources.
+ */
+export const feedSteps = ['code', 'work', 'save', 'site', 'files'] as const
 export const feedStepSchema = z.enum(feedSteps)
 export type FeedStep = z.infer<typeof feedStepSchema>
 
@@ -157,11 +169,45 @@ export type FeedObjectStatus = (typeof feedObjectStatuses)[number]
 /**
  * What the platform knows about the site. Trusted: written from the platform's own records,
  * never from the agent's words. A result never says `restored`, a failure never `changed`.
+ *
+ * A chat without a project has no site to speak of (docs/plan/61-chats-first.md, К18): `none`, or
+ * in a failure and a cancellation `elsewhere` once anyone acted in its browser. A result stays
+ * `none` then: any click counts, and the agent tells of its own actions itself.
  */
-export const feedSiteStates = ['unchanged', 'changed', 'restored', 'check'] as const
+export const feedSiteStates = [
+  'unchanged',
+  'changed',
+  'restored',
+  'check',
+  'none',
+  'elsewhere',
+] as const
 export type FeedSiteState = (typeof feedSiteStates)[number]
-const resultSites = ['unchanged', 'changed', 'check'] as const
-const endedSites = ['unchanged', 'restored', 'check'] as const
+const resultSites = ['unchanged', 'changed', 'check', 'none'] as const
+const endedSites = ['unchanged', 'restored', 'check', 'none', 'elsewhere'] as const
+/** `/undo` gives back the session and the files, never what the task left on a site. */
+const rewindSites = ['unchanged', 'check', 'none', 'elsewhere'] as const
+type ResultSiteState = (typeof resultSites)[number]
+type EndedSiteState = (typeof endedSites)[number]
+
+/** What a row of a result says of the site: a task without one says nothing of it. */
+export const feedSiteOf = (
+  task: { siteId: string | null },
+  state: ResultSiteState,
+): ResultSiteState => (task.siteId === null ? 'none' : state)
+
+/**
+ * What a failure or a cancellation says of the site, by whether the task left anything on it
+ * that nothing gives back (`taskHasProductionWrites`); without a site that can only be what was
+ * done in its browser, on sites of others.
+ */
+export const feedEndedSiteOf = (
+  task: { siteId: string | null },
+  writes: boolean,
+): Exclude<EndedSiteState, 'restored'> => {
+  if (task.siteId === null) return writes ? 'elsewhere' : 'none'
+  return writes ? 'check' : 'unchanged'
+}
 
 /** What became of the held credits; null — not known or not applicable. Trusted. */
 export const feedCreditsStates = ['returned', 'expired'] as const
@@ -321,12 +367,18 @@ export function feedObjectOf(read: {
 }
 
 /**
- * The commands a `feed.request` of the kind `command` is written with: every command of the chat
- * but «Попробовать ещё», whose press is a row of its own kind (`retry`).
+ * The commands a `feed.request` of the kind `command` is written with: every command of the server
+ * but «Попробовать ещё», whose press is a row of its own kind (`retry`). What the page runs by
+ * itself leaves no row.
  */
-export const feedCommandIds = chatCommandIds.filter(
-  (id): id is Exclude<(typeof chatCommandIds)[number], 'retry'> => id !== 'retry',
+export const feedCommandIds = serverCommandIds.filter(
+  (id): id is Exclude<(typeof serverCommandIds)[number], 'retry'> => id !== 'retry',
 )
+export type FeedCommandId = (typeof feedCommandIds)[number]
+
+/** The commands that are a pass of the agent: `feed.request` of the kind `agent_command`. */
+export const feedAgentCommandIds = ['init', 'compact'] as const satisfies readonly FeedCommandId[]
+export type FeedAgentCommandId = (typeof feedAgentCommandIds)[number]
 
 const requestBase = {
   v: version,
@@ -348,7 +400,8 @@ export const feedRequestPayloadSchema = z.discriminatedUnion('kind', [
     attachments,
     /**
      * The `feed.question` row this answers, or the `feed.result` or `feed.failure` that left the
-     * dialog open (`next: 'awaiting_user'`, owner's decisions of 26.10.2026 and 28.10.2026).
+     * dialog open (`next: 'awaiting_user'`, owner's decisions of 26.10.2026 and 28.10.2026), or
+     * the `feed.rewind` it waits after.
      */
     answersEventId: feedEventIdSchema,
   }),
@@ -384,6 +437,12 @@ export const feedRequestPayloadSchema = z.discriminatedUnion('kind', [
   // «Продолжить работу агента» (docs/plan/57, Б16): the customer gave the browser back to the
   // agent. A press: no words, nothing else.
   z.strictObject({ ...requestBase, kind: z.literal('resume') }),
+  // A command the agent carries out on the words of the platform (docs/plan/61, §5.2, §5.14).
+  z.strictObject({
+    ...requestBase,
+    kind: z.literal('agent_command'),
+    command: z.enum(feedAgentCommandIds),
+  }),
 ])
 export type FeedRequestPayload = z.infer<typeof feedRequestPayloadSchema>
 
@@ -574,12 +633,24 @@ export type FeedReleasePayload = z.infer<typeof feedReleasePayloadSchema>
  * - `conflict` — the change does not carry onto the site as it is now: the same places changed;
  * - `current` — the dialog already stands on the site as it is now;
  * - `withdrawn` — the client wrote to the dialog before the update was made: it was not made;
- * - `failed` — the update could not be made.
+ * - `failed` — the update could not be made;
+ * - `rewind_failed` — `/undo` could not take the turn back: the chat stands as it did
+ *   (docs/plan/61-chats-first.md, §5.14). A taken-back turn is a `feed.rewind`;
+ * - `redo_failed` — `/redo` could not bring it back: the chat stands as it did. A turn brought
+ *   back is a `feed.redo`.
  */
-export const feedUpdateOutcomes = ['emptied', 'conflict', 'current', 'withdrawn', 'failed'] as const
+export const feedUpdateOutcomes = [
+  'emptied',
+  'conflict',
+  'current',
+  'withdrawn',
+  'failed',
+  'rewind_failed',
+  'redo_failed',
+] as const
 export type FeedUpdateOutcome = (typeof feedUpdateOutcomes)[number]
 
-/** `feed.update` v1 — the answer to an «Обновить» that did not record a new revision. */
+/** `feed.update` v1 — an «Обновить» that recorded no revision, or an `/undo` or `/redo` that failed. */
 export const feedUpdatePayloadSchema = z.strictObject({
   v: version,
   outcome: z.enum(feedUpdateOutcomes),
@@ -641,6 +712,67 @@ export const feedScreenshotPayloadSchema = z.strictObject({
 })
 export type FeedScreenshotPayload = z.infer<typeof feedScreenshotPayloadSchema>
 
+/**
+ * `feed.rewind` v1 — `/undo` took the last turn back: the conversation, and with `files` the
+ * changes in the files too. `site` says what stays all the same, by the writes of the whole task:
+ * a browser session belongs to the task, not to a turn. Trusted, no text.
+ */
+export const feedRewindPayloadSchema = z.strictObject({
+  v: version,
+  turn: turnNo,
+  files: z.boolean(),
+  site: z.enum(rewindSites),
+})
+export type FeedRewindPayload = z.infer<typeof feedRewindPayloadSchema>
+
+/**
+ * `feed.redo` v1 — `/redo` brought back the turn `/undo` took: `files` as the `feed.rewind` of that
+ * turn said it. Rows are not rewritten, so this one cancels that one for whoever reads what the
+ * chat waits for: the two together are as if neither were there. `open` — the turn came back with
+ * nothing to release, where the chat had waited with a candidate: what it waited after can take no
+ * words any more, so this row does (§5.14). Trusted, no text.
+ */
+export const feedRedoPayloadSchema = z.strictObject({
+  v: version,
+  turn: turnNo,
+  files: z.boolean(),
+  open: z.boolean(),
+})
+export type FeedRedoPayload = z.infer<typeof feedRedoPayloadSchema>
+
+/** What came of the client's edit of a file: saved, or why not. */
+export const feedEditOutcomes = [
+  /** A commit of the chat's working copy and a revision of its changes. */
+  'saved',
+  /** The file changed in the working copy since the client opened it: nothing was written. */
+  'conflict',
+  /** The rules of the site do not let the file change (CI, a protected path, media). */
+  'refused',
+  /** Not saved: the chat ended, the edit waited too long, or the platform failed. */
+  'failed',
+] as const
+export type FeedEditOutcome = (typeof feedEditOutcomes)[number]
+
+/**
+ * `feed.edit` v1 — the client saved a file of the chat's working copy in «Терминал» (owner's
+ * request of 06.11.2026: «при сохранении файл должен сохраняться в агента, а потом по
+ * возможности комититься в гит»). Written by core when the edit is applied or given up; `path` is
+ * a path of the site's repository, `revision` the revision of the changes it made. Trusted.
+ */
+export const feedEditPayloadSchema = z.strictObject({
+  v: version,
+  editId: z.uuid(),
+  /** A path of the repository: no control character, so it is never a line of its own. */
+  path: z
+    .string()
+    .min(1)
+    .max(1024)
+    .regex(/^\P{Cc}+$/u),
+  outcome: z.enum(feedEditOutcomes),
+  revision: z.number().int().min(1).max(999_999).nullable(),
+})
+export type FeedEditPayload = z.infer<typeof feedEditPayloadSchema>
+
 /** The writing schema of each type. */
 export const feedPayloadSchemas = Object.freeze({
   'feed.request': feedRequestPayloadSchema,
@@ -655,6 +787,9 @@ export const feedPayloadSchemas = Object.freeze({
   'feed.update': feedUpdatePayloadSchema,
   'feed.undo': feedUndoPayloadSchema,
   'feed.screenshot': feedScreenshotPayloadSchema,
+  'feed.rewind': feedRewindPayloadSchema,
+  'feed.redo': feedRedoPayloadSchema,
+  'feed.edit': feedEditPayloadSchema,
 }) satisfies Record<FeedEventType, z.ZodType>
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength
@@ -684,6 +819,9 @@ export const feedRowSchemaWithin = (maxBytes: number) =>
       row('feed.update', feedUpdatePayloadSchema),
       row('feed.undo', feedUndoPayloadSchema),
       row('feed.screenshot', feedScreenshotPayloadSchema),
+      row('feed.rewind', feedRewindPayloadSchema),
+      row('feed.redo', feedRedoPayloadSchema),
+      row('feed.edit', feedEditPayloadSchema),
     ])
     .superRefine((value, ctx) => {
       if (feedPayloadBytes(value.payload) > maxBytes)
@@ -768,7 +906,7 @@ const readRequest = {
     kind: z.literal('command'),
     authorId: z.uuid(),
     requestId: z.uuid(),
-    command: known(chatCommandIds, null),
+    command: known(feedCommandIds, null),
   }),
   continue: z.object({
     kind: z.literal('continue'),
@@ -780,6 +918,13 @@ const readRequest = {
     kind: z.literal('resume'),
     authorId: z.uuid(),
     requestId: z.uuid(),
+  }),
+  // As `command`: a command added later reads as a press without a name.
+  agent_command: z.object({
+    kind: z.literal('agent_command'),
+    authorId: z.uuid(),
+    requestId: z.uuid(),
+    command: known(feedAgentCommandIds, null),
   }),
 } satisfies Record<FeedRequestKind, z.ZodType>
 // A kind added later: the text is shown when there is one.
@@ -912,6 +1057,23 @@ const readScreenshot = z.object({
   height: z.number().int().min(1),
 })
 
+const readRewind = z.object({
+  turn: turnNo,
+  files: z.boolean(),
+  // A value this code does not know: the client is asked to check the site, as a failure does.
+  site: known(rewindSites, 'check' as const),
+})
+
+const readRedo = z.object({ turn: turnNo, files: z.boolean(), open: z.boolean() })
+
+const readEdit = z.object({
+  editId: z.uuid(),
+  path: z.string().min(1).max(1024),
+  // An outcome this code does not know reads as not saved.
+  outcome: known(feedEditOutcomes, 'failed' as const),
+  revision: z.number().int().min(1).nullable(),
+})
+
 const readCancelled = z.object({
   turn: turnNo.nullable(),
   /** null — a way of cancelling added later: the plate is shown without a reason. */
@@ -940,6 +1102,7 @@ export type FeedEvent =
       | z.infer<typeof readRequest.command>
       | z.infer<typeof readRequest.continue>
       | z.infer<typeof readRequest.resume>
+      | z.infer<typeof readRequest.agent_command>
       | ({ kind: 'other' } & z.infer<typeof readOtherRequest>)
     ))
   | { type: 'feed.step'; turn: number; attempt: number; step: FeedStep }
@@ -957,6 +1120,9 @@ export type FeedEvent =
   | ({ type: 'feed.update' } & z.infer<typeof readUpdate>)
   | ({ type: 'feed.undo' } & (z.infer<typeof readUndoConfirmed> | z.infer<typeof readUndoOutcome>))
   | ({ type: 'feed.screenshot' } & z.infer<typeof readScreenshot>)
+  | ({ type: 'feed.rewind' } & z.infer<typeof readRewind>)
+  | ({ type: 'feed.redo' } & z.infer<typeof readRedo>)
+  | ({ type: 'feed.edit' } & z.infer<typeof readEdit>)
   | { type: 'newer' }
   | { type: 'unreadable' }
   | { type: 'skipped' }
@@ -1074,6 +1240,15 @@ const readers: Record<FeedEventType, Record<number, Reader>> = {
     1: (payload) =>
       readWith(readScreenshot, payload, (data) => ({ type: 'feed.screenshot', ...data })),
   },
+  'feed.rewind': {
+    1: (payload) => readWith(readRewind, payload, (data) => ({ type: 'feed.rewind', ...data })),
+  },
+  'feed.redo': {
+    1: (payload) => readWith(readRedo, payload, (data) => ({ type: 'feed.redo', ...data })),
+  },
+  'feed.edit': {
+    1: (payload) => readWith(readEdit, payload, (data) => ({ type: 'feed.edit', ...data })),
+  },
 }
 
 export const isFeedEventType = (type: string): type is FeedEventType =>
@@ -1107,8 +1282,6 @@ export function readFeedRow(type: string, payload: unknown): FeedEvent {
 
 export const taskWaitingReasons = ['agents', 'site'] as const
 export type TaskWaitingReason = (typeof taskWaitingReasons)[number]
-export const taskModes = ['work', 'chat'] as const
-export type TaskMode = (typeof taskModes)[number]
 
 /**
  * The state of the task read in the same snapshot as its rows. A status change is not a feed
@@ -1118,7 +1291,6 @@ export const feedTaskHeadSchema = z.strictObject({
   id: z.uuid(),
   // Design reading: `tasks.title` is a nullable column, set once from the first request.
   title: z.string().max(limits.title).nullable(),
-  mode: z.enum(taskModes),
   status: z.enum(taskStatuses),
   attempt: z.number().int().min(1),
   turnNo: z.number().int().min(0).max(limits.turn),

@@ -23,7 +23,7 @@ import { formatMoscowMoment } from '@/lib/moscow-date'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
 
-import { ACCESS_VARIABLES_NOTE, ReplaceAccessForm } from './replace-access'
+import { DATABASE_VARIABLES_NOTE, ReplaceAccessForm } from './replace-access'
 import { SectionTitle } from './section-empty'
 import { SiteCard } from './site-cards'
 import { accessFieldsOf, accessLabel, accessPurpose } from './site-format'
@@ -190,7 +190,7 @@ function DatabaseAccessForm({
           прежние.
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1, lineHeight: 1.6 }}>
-          {ACCESS_VARIABLES_NOTE}
+          {DATABASE_VARIABLES_NOTE}
         </Typography>
       </Box>
       <DatabaseFields
@@ -252,7 +252,7 @@ export function SiteAccesses({
   platform: string
   accesses: readonly Access[] | null
   editable: EditableAccessView | null
-  /** Beside the menu that holds the h1 of «Переменные»: the heading is an h2. */
+  /** A tab of «Переменные», under the h1 of the section: the heading is an h2. */
   nested?: boolean
 }) {
   const router = useRouter()

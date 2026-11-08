@@ -1,6 +1,7 @@
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 
+import { chatHref } from '@/components/chat/chat-address'
 import { moscowClock } from '@/components/chat/chat-format'
 import { formatMoscowDay, formatMoscowMoment } from '@/lib/moscow-date'
 import { plural } from '@/lib/plural'
@@ -22,7 +23,6 @@ import {
 import { SectionTitle } from './section-empty'
 import { SiteCard } from './site-cards'
 import { SiteLink } from './site-link'
-import { siteHref } from './site-nav'
 
 export interface RunDetailView extends RunView {
   steps: { step: StepName; state: StepState; startedAt: Date; finishedAt: Date | null }[]
@@ -56,15 +56,13 @@ const stepTone = {
  * the full width — made of the platform's own reports, never of the output of a program.
  */
 export function RunDetail({
-  siteId,
   run,
   now,
   nested = false,
 }: {
-  siteId: string
   run: RunDetailView
   now: Date
-  /** At the root of the section the list holds the page's heading: this one is the next level. */
+  /** Under the heading of «Запуски»: this one is the next level (docs/plan/64, Н6). */
   nested?: boolean
 }) {
   const outcome = runOutcomeText(run)
@@ -88,7 +86,7 @@ export function RunDetail({
         </Typography>
         {run.taskId ? (
           <Box sx={{ pt: 0.5 }}>
-            <SiteLink href={`${siteHref(siteId, 'chat')}/${run.taskId}`}>Открыть диалог</SiteLink>
+            <SiteLink href={chatHref(run.taskId)}>Открыть чат</SiteLink>
           </Box>
         ) : null}
       </Box>
@@ -211,16 +209,5 @@ export function RunDetail({
         </Typography>
       </SiteCard>
     </Box>
-  )
-}
-
-/** «Запуски» of a site that has none yet. The list beside it names the section — the
- * heading of the page — and says it is empty on a phone, where the list is all that is shown.
- */
-export function NoRuns() {
-  return (
-    <Typography color="text.secondary" sx={{ display: { xs: 'none', md: 'block' } }}>
-      Запусков пока нет. Здесь появится каждое обновление сайта: его шаги и журнал.
-    </Typography>
   )
 }

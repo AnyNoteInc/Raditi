@@ -10,6 +10,8 @@ import {
   feedStateText,
   feedVersionText,
   taskAnsweredLabel,
+  taskFailedLabel,
+  taskRewoundLabel,
   taskStatusLabel,
 } from '@repo/domain/tasks/client-feed-labels'
 import { terminalTaskStatuses } from '@repo/domain/tasks/task-status'
@@ -25,17 +27,24 @@ import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } 
 
 import { AppIcon } from '@/components/application/app-icon'
 import { ConfirmDialog } from '@/components/billing/confirm-dialog'
-import { siteHref, SITE_TOOLBAR_HEIGHT } from '@/components/site/site-nav'
+import { siteHref } from '@/components/site/site-nav'
+import { SiteFiles } from '@/components/site/site-files'
+import { downloadText } from '@/lib/download-text'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
 
 import type { SentFile } from './attachment-chips'
 import { BrowserPane } from './browser-pane'
 import { sessionLive } from './browser-pane-model'
-import { callErrorText } from './call-error'
-import type { SiteCapabilities } from './chat-types'
+import { callErrorText, sendErrorText } from './call-error'
+import { newChatHref } from './chat-address'
+import { useChatDetails, useChatThinking } from './chat-details'
+import type { ChatProject } from './chat-types'
 import {
+  agentNotesText,
   cancelText,
+  chatsText,
+  clientCommandText,
   composerText,
   dialogText,
   effortText,
@@ -45,6 +54,7 @@ import {
   taskWayText,
   undoText,
 } from './chat-texts'
+import { useClientCommands } from './client-commands'
 import { Composer, offScreen } from './composer'
 import { DialogMenuButton, dialogListKey, RemoveDialogConfirm, RenameField } from './dialog-actions'
 import { DialogNotFound } from './dialog-not-found'
@@ -62,20 +72,27 @@ import {
   type DialogTool,
   type ToolOpener,
 } from './dialog-tools'
-import { EffortMenu } from './effort-menu'
+import { EffortMenu, type EffortMenuHandle } from './effort-menu'
+import { ProjectMark } from './project-mark'
 import { FeedList, LiveBlock, type FeedActions } from './feed-list'
 import {
   candidateMessage,
+  initAnswerIds,
   liveCandidateRow,
   liveSteps,
   openQuestion,
+  projectClosed,
+  redoneAfter,
   requestShown,
   retryFailure,
   stopRequested,
+  undoFailedAfter,
+  updateRowsOf,
+  withoutRedoneRewinds,
 } from './feed-model'
 import { showsRefresh, type FeedHeadState } from './feed-state'
-import { ModeLinks, type DialogMode } from './mode-switch'
 import { CandidateTab, PreviewTab, usePreviewCalls } from './preview-pane'
+import { AgentNotesDialog } from './agent-notes-dialog'
 import { ReleaseDialog } from './release-dialog'
 import { TOOLS_BUTTON_ID, TOOLS_MENU_MARK, ToolsMenu } from './tools-menu'
 import { ToolsPanel } from './tools-panel'
@@ -89,25 +106,23 @@ import { useFeedFollow } from './use-feed-follow'
 import { useDialogFeed } from './use-dialog-feed'
 import { uuidv7 } from './uuid'
 
-// One dialog (docs/plan/53-chat-preview-release.md, R9; feed design, «Экраны, которых нет на
-// макетах»): its head, its rows, the live block and the field. Its tools — the browser of a task
-// in the browser (docs/plan/57-browser-tasks.md), the preview, files, records and checks of a task
-// with the repository — open beside it only when the client asks for one (docs/plan/59-dialog-
-// tools-panel.md): by «+» in the corner, «Посмотреть изменения», `/preview` and «Взять
-// управление»; by themselves only once, when the browser of the task starts while the client looks
-// at the dialog. From `lg` they stand at the right edge; below, in place of the dialog, «К диалогу»
-// leading back to it.
-
-/** The one command of a task in the browser: stopping it (docs/plan/57-browser-tasks.md, Б24). */
-const BROWSER_COMMANDS: readonly ChatCommandId[] = ['cancel']
+// One chat (docs/plan/53-chat-preview-release.md, R9; feed design, «Экраны, которых нет на
+// макетах»): its head, its rows, the live block and the field. How it works follows from the
+// requirements the server gave it (docs/plan/61-chats-first.md, §5.6), never from a mode: a chat
+// with the repository has the preview, files, records and checks of its changes, a chat with a
+// browser has the browser (docs/plan/57-browser-tasks.md), a chat may have both or neither. Its
+// tools open beside it only when the client asks for one (docs/plan/59-dialog-tools-panel.md): by
+// «+» in the corner, «Посмотреть изменения», `/preview` and «Взять управление»; by themselves only
+// once, when the browser of the chat starts while the client looks at it. From `lg` they stand at
+// the right edge; below, in place of the dialog, «К чату» leading back to it.
 
 /**
  * What a focused element of the feed keeps clear above it (WCAG 2.4.11): below `lg` the head of
- * the dialog sticks to the top of the window — 96px on two lines below `md`, from `md` 44px under
- * the bar of the shell, which sticks too — and a step of 16px, as the landing keeps its anchors
- * from under its header (DESIGN.md, «Шапка»). The room is a margin of the rows and not a padding
- * of the scroller: with a padding, the head itself would count as hidden, and Tab onto it would
- * scroll the page. From `lg` the head stands over the area the feed scrolls in, never over it.
+ * the dialog sticks to the top of the window — a line of 44px, below `md` 96px when the link of
+ * its project takes a second one — and a step of 16px, as the landing keeps its anchors from under
+ * its header (DESIGN.md, «Шапка»). The room is a margin of the rows and not a padding of the
+ * scroller: with a padding, the head itself would count as hidden, and Tab onto it would scroll
+ * the page. From `lg` the head stands over the area the feed scrolls in, never over it.
  */
 const HEAD_ROOM = '--dialog-head-room'
 /** What a focused element of the feed keeps clear below it: the field that sticks to the bottom. */
@@ -127,12 +142,23 @@ function focusTakenByOpening(dialog: Element | null): Element | null {
   const taken =
     active.id === TOOLS_BUTTON_ID ||
     active.closest(`[${TOOLS_MENU_MARK}]`) !== null ||
-    (dialog === null ? active.closest('[data-site-list]') !== null : dialog.contains(active))
+    (dialog === null ? active.closest('[data-chat-list]') !== null : dialog.contains(active))
   return taken ? active : null
 }
 
 /** What a press of the client sends: one id per press, kept for its repeats. */
-type Press = 'message' | 'continue' | 'retry' | 'cancel' | 'reset' | 'update' | 'resume'
+type Press =
+  | 'message'
+  | 'continue'
+  | 'retry'
+  | 'cancel'
+  | 'reset'
+  | 'update'
+  | 'resume'
+  | 'init'
+  | 'compact'
+  | 'undoTurn'
+  | 'redoTurn'
 
 /** A release or an undo of it that is under way: its words in the head of the dialog. */
 function releaseProgress(head: FeedHeadState): string | null {
@@ -151,27 +177,24 @@ function releaseProgress(head: FeedHeadState): string | null {
  * The head of a dialog (owner's request of 26.10.2026): one quiet line — its name, a release under
  * way beside it, its menu («Переименовать», «Удалить») and, while the panel of its tools is closed,
  * «+» of the tools in the corner (docs/plan/59, И4). The name is written in place of itself. In
- * the middle stands «Чат | Работа» with the dialog's own mode, as on «Новый диалог» (owner's
- * request of 29.10.2026); on a phone the switch takes a line of its own under the name.
+ * the middle stands the link to the project of the chat, when it has one; on a phone it takes a
+ * line of its own under the name.
  */
 function DialogHead({
-  siteId,
+  project,
   taskId,
   title,
   head,
   onRenamed,
   tools,
-  closedModes,
 }: {
-  siteId: string
+  project: ChatProject | null
   taskId: string
   title: string
   head: FeedHeadState | null
   onRenamed: () => void
   /** «+» of the tools while their panel is closed; null — it stands at the end of the tabs. */
   tools: ReactNode
-  /** A mode the site does not offer now, and why: the switch does not lead to it. */
-  closedModes: Partial<Record<DialogMode, string>>
 }) {
   // «Отменить выпуск» is offered now: deleting the dialog takes it away too.
   const undoable =
@@ -199,7 +222,6 @@ function DialogHead({
       <Box sx={{ gridColumn: 1, gridRow: 1, minWidth: 0, display: 'flex' }}>
         {renaming ? (
           <RenameField
-            siteId={siteId}
             taskId={taskId}
             initial={head?.task.title ?? ''}
             fontSize={15}
@@ -246,19 +268,34 @@ function DialogHead({
           </Box>
         )}
       </Box>
-      {head !== null ? (
+      {project !== null ? (
         <Box
+          component={Link}
+          href={siteHref(project.id)}
+          aria-label={chatsText.openProject(project.name)}
           sx={{
             gridColumn: { xs: '1 / -1', md: 2 },
             gridRow: { xs: 2, md: 1 },
-            justifySelf: 'center',
+            justifySelf: { xs: 'start', md: 'center' },
+            maxWidth: '100%',
+            minWidth: 0,
+            minHeight: 44,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 1,
+            px: { md: 1.5 },
+            borderRadius: '999px',
+            fontSize: 14,
+            color: 'text.secondary',
+            textDecoration: 'none',
+            whiteSpace: 'nowrap',
+            '&:hover': { color: 'text.primary' },
           }}
         >
-          <ModeLinks
-            value={head.task.mode}
-            newDialogHref={`${siteHref(siteId, 'chat')}/new`}
-            closed={closedModes}
-          />
+          <ProjectMark name={project.name} />
+          <Box component="span" sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {project.name}
+          </Box>
         </Box>
       ) : null}
       <Box
@@ -282,8 +319,8 @@ function DialogHead({
       </Box>
       {removing ? (
         <RemoveDialogConfirm
-          siteId={siteId}
           taskId={taskId}
+          withSite={project !== null}
           undoable={undoable}
           open
           onClose={() => setRemoving(false)}
@@ -298,15 +335,13 @@ function DialogHead({
  * shown; whatever the client writes or presses is read back at once.
  */
 export function DialogView({
-  siteId,
-  siteUrl,
+  project,
   taskId,
   title,
   browserStreamUrl = null,
-  capabilities,
 }: {
-  siteId: string
-  siteUrl: string
+  /** The project of the chat, from `task.get`; null — a chat without one. */
+  project: ChatProject | null
   taskId: string
   title: string | null
   /**
@@ -314,9 +349,9 @@ export function DialogView({
    * docs/plan/57-browser-tasks.md, Б12); null — the platform has no browser here.
    */
   browserStreamUrl?: string | null
-  /** What the site can be worked on with now (`project.get`): the modes a new dialog has. */
-  capabilities?: SiteCapabilities
 }) {
+  const siteId = project?.id ?? null
+  const siteUrl = project?.url ?? null
   const trpc = useTRPC()
   const queryClient = useQueryClient()
   const { state, refresh } = useDialogFeed(taskId)
@@ -333,14 +368,26 @@ export function DialogView({
   // The client's calls for the preview: every choice of it is one (И10); a stopped one wakes only
   // on a call made after it stopped.
   const previewCalls = usePreviewCalls(head?.preview?.status ?? null)
-  // Said to a screen reader once the server took a new level.
-  const [effortNote, setEffortNote] = useState('')
+  // Said to a screen reader: the server took a new level, the file of the chat was saved.
+  const [note, setNote] = useState('')
+  /** The answer to `/init` in «Сохранить в подсказки агенту»; null — closed. */
+  const [notesText, setNotesText] = useState<string | null>(null)
+  const effortMenu = useRef<EffortMenuHandle>(null)
+  const { details } = useChatDetails()
+  const { thinking } = useChatThinking()
   // The level chosen here, shown while the head still says the level it was chosen over.
   const [effortChosen, setEffortChosen] = useState<{
     effort: ReasoningEffort
     over: ReasoningEffort | undefined
   } | null>(null)
   const [releaseOpen, setReleaseOpen] = useState(false)
+  // `/release` of changes the site moved past: «Обновить» first, then the release of what it made.
+  // What the dialog showed when it was pressed: the revision it carries on and the updates of it
+  // the feed had told — a new one says the update recorded no revision.
+  const [releaseAfterUpdate, setReleaseAfterUpdate] = useState<{
+    revision: number
+    updates: number
+  } | null>(null)
   const [undoOpen, setUndoOpen] = useState(false)
   const [cancelOpen, setCancelOpen] = useState(false)
   // Why the server refused the last thing written or pressed: one sentence under the field.
@@ -371,6 +418,21 @@ export function DialogView({
     observer.observe(box)
     return () => observer.disconnect()
   }, [])
+  const clientCommands = useClientCommands({ projectId: siteId, anchor: field })
+  // The words `/undo` gave back, and what the field holds now: a draft is never written over.
+  const [undoneWords, setUndoneWords] = useState<string | null>(null)
+  // The press that gave them, and how many times a press that failed took its words away: they
+  // leave the field then, or sending them would ask again over the turn that stayed (§5.14).
+  const [undonePress, setUndonePress] = useState<string | null>(null)
+  const [wordsTaken, setWordsTaken] = useState(0)
+  // The press of `/redo` whose turn takes those words back: they leave the field once it is.
+  const [redoPress, setRedoPress] = useState<string | null>(null)
+  const fieldText = useRef('')
+  const fieldTextChanged = useCallback((text: string) => {
+    fieldText.current = text
+    // They left the field: the next `/undo` may bring the same words back.
+    setUndoneWords((words) => (words === text ? words : null))
+  }, [])
 
   const message = useMutation(trpc.task.message.mutationOptions())
   const proceed = useMutation(trpc.task.continue.mutationOptions())
@@ -379,18 +441,37 @@ export function DialogView({
   const update = useMutation(trpc.candidate.update.mutationOptions())
   const retry = useMutation(trpc.task.retry.mutationOptions())
   const resumeAgent = useMutation(trpc.task.resumeAgent.mutationOptions())
+  const init = useMutation(trpc.task.init.mutationOptions())
+  const compact = useMutation(trpc.task.compact.mutationOptions())
+  const undoTurn = useMutation(trpc.task.undoTurn.mutationOptions())
+  const redoTurn = useMutation(trpc.task.redoTurn.mutationOptions())
+  if (
+    undoneWords !== null &&
+    ((undonePress !== null && undoFailedAfter(rows, undonePress)) ||
+      (redoPress !== null && redoneAfter(rows, redoPress)))
+  ) {
+    setUndoneWords(null)
+    setUndonePress(null)
+    setRedoPress(null)
+    setWordsTaken((times) => times + 1)
+  }
   const setEffort = useMutation(trpc.task.setEffort.mutationOptions())
   const busy =
+    undoTurn.isPending ||
+    redoTurn.isPending ||
     proceed.isPending ||
     retry.isPending ||
     cancel.isPending ||
     reset.isPending ||
     update.isPending ||
-    resumeAgent.isPending
+    resumeAgent.isPending ||
+    init.isPending ||
+    compact.isPending
 
-  // A task in the browser (docs/plan/57-browser-tasks.md): the browser instead of the preview.
-  const inBrowser = head?.task.requirements.browser === true
-  const browserLive = inBrowser && sessionLive(head?.browser ?? null)
+  // What the chat works with (docs/plan/61-chats-first.md, §5.6): the two do not exclude each other.
+  const withRepository = head?.task.requirements.repository === true
+  const withBrowser = head?.task.requirements.browser === true
+  const browserLive = withBrowser && sessionLive(head?.browser ?? null)
   // The stream goes while the tab of the browser is on the screen, beside the dialog or in its
   // place; a press of «Взять управление» or «Продолжить работу агента» opens it for that press alone
   // (docs/plan/59, И11). Nothing of it before the client asked for the browser.
@@ -407,7 +488,8 @@ export function DialogView({
   // Never by the words of the agent, and not where the cabinet cannot show the browser. Nobody
   // pressed anything, so the focus stays where it is — unless it stood on what this very opening
   // takes away (`focusTakenByOpening`): then «+» takes it, in the same corner (И4), and it is never
-  // dropped to the start of the page. A launch that opens nothing — spent — moves nothing.
+  // dropped to the start of the page. A launch that opens nothing — spent, or the browser joining
+  // the tabs of a panel on the screen, which stays as it was — moves nothing.
   const heldAtLaunch = useRef<Element | null>(null)
   const launched = useCallback(() => {
     const opens = !toolsShown(tools) && toolsShown(toolsReducer(tools, { type: 'launch' }))
@@ -424,7 +506,7 @@ export function DialogView({
   }, [shown])
   useBrowserLaunch(head, {
     taskId,
-    enabled: inBrowser && browserStreamUrl !== null,
+    enabled: withBrowser && browserStreamUrl !== null,
     onLaunch: launched,
   })
   // The chat counts as watching the browser (И18; owner's answer of 30.10.2026): while the dialog
@@ -440,6 +522,12 @@ export function DialogView({
   const sentFiles = useQuery({
     ...trpc.attachment.list.queryOptions({ taskId }),
     enabled: sentIds.length > 0,
+  })
+  // The notes of the project are read once there is an answer to `/init` to keep among them.
+  const notesRows = initAnswerIds(rows)
+  const agentNotes = useQuery({
+    ...trpc.project.agentNotes.queryOptions({ id: siteId ?? '' }),
+    enabled: siteId !== null && notesRows.size > 0,
   })
   // A message sent since the list was read names files it does not have yet — this tab's own or
   // one from another tab: the list is read again. Once for the same missing files: one still
@@ -475,21 +563,26 @@ export function DialogView({
   const status = head?.task.status
   const question = openQuestion(rows, status)
   const candidateRow = liveCandidateRow(rows, head)
+  const closedProject = projectClosed(head)
   // The failure «Попробовать ещё» answers: the server offers it (docs/plan/53).
   const retryRow = retryFailure(rows, head)
   const terminal = status !== undefined && terminalTaskStatuses.includes(status)
   // `/cancel` was taken while the agent works: core stops it, and it is not asked twice — the
-  // agent is still at work until then, as the list says of the command. A task in the browser is
-  // stopped by core while it waits for the client too: it takes no words or presses meanwhile.
+  // agent is still at work until then, as the list says of the command. A chat with a browser is
+  // stopped by core while it waits for the client too, with its changes as well: it takes no words
+  // or presses meanwhile.
   const stopping =
-    !terminal && (stopRequested(rows, status, inBrowser) || cancel.data?.state === 'stopping')
+    !terminal && (stopRequested(rows, status, withBrowser) || cancel.data?.state === 'stopping')
   // «Отменить выпуск» is listed only in a dialog that installed a version, «Попробовать ещё» only
   // while it is offered (critique of the plan: a refusal in every other dialog would be noise).
-  // A task in the browser has one command: stopping it (no preview, release or undo).
+  // Without the repository — no project, or a project without its files — a chat has neither the
+  // commands of the site nor anything to retry (docs/plan/61-chats-first.md, К27).
   const verdicts = (head?.commands ?? []).filter(
     (command) =>
-      (!inBrowser || command.id === 'cancel') &&
+      (withRepository || chatCommands[command.id].needs !== 'repository') &&
       (command.id !== 'undo' || command.refusal !== 'no_release') &&
+      // A driver without the compaction: the command is not there, closed or not (§5.14).
+      command.refusal !== 'no_compaction' &&
       (command.id !== 'retry' || (command.available && retryRow !== null)),
   )
   const commands = stopping
@@ -508,11 +601,11 @@ export function DialogView({
     if (status === undefined) return
     if (shownStatus.current !== null && shownStatus.current !== status) {
       presses.current.clear()
-      void queryClient.invalidateQueries({ queryKey: dialogListKey(siteId) })
+      void queryClient.invalidateQueries({ queryKey: dialogListKey })
       void queryClient.invalidateQueries({ queryKey: trpc.billing.usage.queryKey() })
     }
     shownStatus.current = status
-  }, [status, queryClient, siteId, trpc])
+  }, [status, queryClient, trpc])
 
   // The changes are read again when their numbers in the head move: a check that ends, a
   // candidate the site moved on under. The panel and the release show what the head says.
@@ -539,6 +632,22 @@ export function DialogView({
       })
     shownCandidate.current = candidateMark
   }, [candidateMark, candidateRevision, queryClient, taskId, trpc])
+  // `/release` of changes the site moved past waits for its «Обновить»: the next revision, made
+  // current, opens its release; a conflict or a failure — a row of the update — or the end of the
+  // dialog ends the wait, and the row says why. Never a revision some later pass makes.
+  // State adjusted while rendering, not in an effect: the head that says so is this render's.
+  if (releaseAfterUpdate) {
+    const updates = updateRowsOf(rows)
+    if (
+      status === 'awaiting_approval' &&
+      candidate?.status === 'current' &&
+      candidate.revision > releaseAfterUpdate.revision
+    ) {
+      setReleaseAfterUpdate(null)
+      setReleaseOpen(true)
+    } else if (updates > releaseAfterUpdate.updates || terminal || status === 'awaiting_user')
+      setReleaseAfterUpdate(null)
+  }
   // A tab of the changes on the screen — beside the dialog or in its place — shows the client this
   // revision: «+» bears no dot for it (И13). A revision that comes after is new again.
   const changesShown = shown && isChangesTool(tools.active)
@@ -560,29 +669,49 @@ export function DialogView({
       : null
   // The agent answered and asked nothing: the dialog waits for no one (26.10.2026). A failure
   // that left the dialog open (28.10.2026) asks the client again: «продолжи».
-  const ending = rows.findLast((row) => row.type === 'feed.result' || row.type === 'feed.failure')
+  const ending = withoutRedoneRewinds(rows).findLast(
+    (row) =>
+      row.type === 'feed.result' || row.type === 'feed.failure' || row.type === 'feed.rewind',
+  )
   const answered =
     status === 'awaiting_user' && question === null && ending?.type !== 'feed.failure'
+  // `/undo` leaves the dialog open as an answer does, and takes that answer back.
+  const rewound = answered && ending?.type === 'feed.rewind'
+  // A failure that left the dialog open asks nothing to confirm (06.11.2026): it reads «Ошибка».
+  const openFailure =
+    status === 'awaiting_user' && question === null && ending?.type === 'feed.failure'
   const announcement =
     status === undefined
       ? ''
       : keptFailure !== null
         ? `${feedFailureText[keptFailure.code]} ${feedFailureKeptText}`
-        : answered
-          ? taskAnsweredLabel
-          : taskStatusLabel[status]
+        : rewound
+          ? taskRewoundLabel
+          : answered
+            ? taskAnsweredLabel
+            : openFailure
+              ? taskFailedLabel
+              : taskStatusLabel[status]
+
+  /** The focus goes to the tab of a tool: what moved it is gone or behind. */
+  function focusSoon(id: string) {
+    window.setTimeout(() => document.getElementById(id)?.focus(), 0)
+  }
 
   /**
-   * The focus goes where the tools are drawn next — the tab of a tool, or «+» once none is open:
-   * what moved it is gone or behind. «+» takes it where it stands, the page left where it is: the
-   * head keeps «+» in sight as it sticks, and in a window lower than 420px, where the head goes
-   * with the page, the feed comes back where the client read it rather than at the head (И19).
+   * The focus once no tool stands open: on «+» where it stands, the page left where it is — the head
+   * keeps «+» in sight as it sticks, and in a window lower than 420px, where the head goes with the
+   * page, the feed comes back where the client read it rather than at the head (И19). A chat left
+   * with no tool has no «+» (К19): the field takes it then, or what still works there when it is
+   * closed, so that the focus is never dropped to the start of the page.
    */
-  function focusSoon(id: string) {
-    window.setTimeout(
-      () => document.getElementById(id)?.focus({ preventScroll: id === TOOLS_BUTTON_ID }),
-      0,
-    )
+  function focusBackSoon() {
+    window.setTimeout(() => {
+      const target =
+        document.getElementById(TOOLS_BUTTON_ID) ??
+        field.current?.querySelector<HTMLElement>('textarea:enabled, button:enabled')
+      target?.focus({ preventScroll: true })
+    }, 0)
   }
 
   /**
@@ -597,7 +726,19 @@ export function DialogView({
     if (tool === 'preview') previewCalls.call()
     const covers = !wide && !shown
     dispatchTools({ type: 'open', tool, by })
+    leaveFullscreenFor(tool)
     if (movesFocus(by, { covers })) focusSoon(toolTabId(tool))
+  }
+
+  /** Only the browser goes over the content: its button back is not there on any other tab. */
+  function leaveFullscreenFor(tool: DialogTool) {
+    if (tool !== 'browser') setFullscreen(false)
+  }
+
+  /** A tab chosen on the strip of the panel. */
+  function showTool(tool: DialogTool) {
+    dispatchTools({ type: 'show', tool })
+    leaveFullscreenFor(tool)
   }
 
   /**
@@ -609,7 +750,8 @@ export function DialogView({
     const next = toolsReducer(tools, { type: 'close', tool })
     dispatchTools({ type: 'close', tool })
     setFullscreen(false)
-    focusSoon(next.active === null ? TOOLS_BUTTON_ID : toolTabId(next.active))
+    if (next.active === null) focusBackSoon()
+    else focusSoon(toolTabId(next.active))
   }
 
   /**
@@ -619,28 +761,28 @@ export function DialogView({
   function closeTools() {
     dispatchTools({ type: 'closeAll' })
     setFullscreen(false)
-    focusSoon(TOOLS_BUTTON_ID)
+    focusBackSoon()
   }
 
   /**
-   * «К диалогу» below `lg` (И14, owner's answer of 30.10.2026): the tab on the screen closes, the
+   * «К чату» below `lg` (И14, owner's answer of 30.10.2026): the tab on the screen closes, the
    * other open ones stay behind the dialog for «+»; the dialog comes back where the client read it,
    * the focus on «+» in its head (И19).
    */
   function backToDialog() {
     dispatchTools({ type: 'back' })
     setFullscreen(false)
-    focusSoon(TOOLS_BUTTON_ID)
+    focusBackSoon()
   }
 
   /** «Размышление» of the dialog: from the agent's next turn (`task.setEffort`). */
   async function changeEffort(effort: ReasoningEffort) {
     setFieldError(null)
-    setEffortNote('')
+    setNote('')
     setEffortChosen({ effort, over: head?.task.effort })
     try {
       await setEffort.mutateAsync({ taskId, effort })
-      setEffortNote(effortText.changed)
+      setNote(effortText.changed)
     } catch (failure) {
       setEffortChosen(null)
       setFieldError(callErrorText(failure))
@@ -652,8 +794,8 @@ export function DialogView({
   // these very words): they are in the dialog, and the field is cleared like after a first send.
   async function send(text: string, attachmentIds: readonly string[] = []): Promise<boolean> {
     setFieldError(null)
-    // Files go with the messages of either mode: to the browser's pages, or into the copy of
-    // the site the agent works on.
+    // Files go with the messages of any chat: to the browser's pages, or into the copy of the
+    // site the agent works on.
     const files = [...attachmentIds]
     try {
       await message.mutateAsync({
@@ -667,7 +809,7 @@ export function DialogView({
       refresh()
       return true
     } catch (failure) {
-      setFieldError(callErrorText(failure))
+      setFieldError(sendErrorText(failure, { withProject: project !== null }))
       refresh()
       return false
     }
@@ -684,10 +826,51 @@ export function DialogView({
       // «Продолжить» sets credits aside for the next attempt.
       if (which === 'continue')
         void queryClient.invalidateQueries({ queryKey: trpc.billing.usage.queryKey() })
+      refresh()
+      return true
+    } catch (failure) {
+      setFieldError(callErrorText(failure))
+      // A refusal says the verdicts changed: the commands are read again with the dialog.
+      refresh()
+      return false
+    }
+  }
+
+  /** `/undo`: the agent forgets the last request, and its words come back to the field (§5.14). */
+  async function pressUndoTurn() {
+    setFieldError(null)
+    try {
+      const { words, requestEventId } = await undoTurn.mutateAsync({
+        taskId,
+        requestId: pressId('undoTurn'),
+      })
+      pressed('undoTurn')
+      if (words !== null && fieldText.current.trim() === '') {
+        setUndoneWords(words)
+        setUndonePress(requestEventId)
+      }
     } catch (failure) {
       setFieldError(callErrorText(failure))
     }
-    // A refusal says the verdicts changed: the commands are read again with the dialog.
+    refresh()
+  }
+
+  /**
+   * `/redo`: the turn comes back, and with it the words `/undo` put into the field: sent, they would
+   * ask a second time. Words the client changed are theirs by now, and they stay.
+   */
+  async function pressRedoTurn() {
+    setFieldError(null)
+    try {
+      const { words, requestEventId } = await redoTurn.mutateAsync({
+        taskId,
+        requestId: pressId('redoTurn'),
+      })
+      pressed('redoTurn')
+      if (words !== null && words === undoneWords) setRedoPress(requestEventId)
+    } catch (failure) {
+      setFieldError(callErrorText(failure))
+    }
     refresh()
   }
 
@@ -747,12 +930,12 @@ export function DialogView({
   // Esc leaves the browser over the content — unless the page itself is being typed into.
   useEffect(() => {
     if (!fullscreen) return
-    // The bar of the shell, the list of dialogs and the way back to it are under the browser too:
+    // The list of dialogs and the way back to it are under the browser too:
     // out of the tab order while it covers them (WCAG 2.4.11), as the dialog's own column is.
     const covered = [
       ...(pane.current
-        ?.closest('[data-site-shell]')
-        ?.querySelectorAll('header, [data-site-list], [data-site-back]') ?? []),
+        ?.closest('[data-chat-shell]')
+        ?.querySelectorAll('[data-chat-list], [data-chat-back]') ?? []),
     ].filter((element) => !root.current?.contains(element))
     for (const element of covered) element.setAttribute('inert', '')
     const leave = (event: KeyboardEvent) => {
@@ -768,11 +951,47 @@ export function DialogView({
     }
   }, [fullscreen])
 
-  function runCommand(id: ChatCommandId) {
+  /** `/export`: the server writes the chat out, the browser saves it (§5.14). */
+  async function exportChat() {
+    setNote('')
+    try {
+      const file = await queryClient.fetchQuery({
+        ...trpc.task.export.queryOptions({ taskId }),
+        // Read anew on every press, and not kept on the page afterwards.
+        staleTime: 0,
+        gcTime: 0,
+      })
+      downloadText(file.fileName, file.markdown, 'text/markdown;charset=utf-8')
+      setNote(clientCommandText.exported)
+    } catch (failure) {
+      setFieldError(callErrorText(failure))
+    }
+  }
+
+  /** «Сохранить в подсказки агенту»: the notes are read anew, what the window shows is current. */
+  async function openNotes(text: string) {
+    setFieldError(null)
+    try {
+      await queryClient.fetchQuery({
+        ...trpc.project.agentNotes.queryOptions({ id: siteId ?? '' }),
+        staleTime: 0,
+      })
+      setNotesText(text)
+    } catch (failure) {
+      setFieldError(callErrorText(failure))
+    }
+  }
+
+  function runCommand(id: ChatCommandId): string | undefined {
     setFieldError(null)
     switch (id) {
       case 'release':
-        setReleaseOpen(true)
+        if (head?.candidate?.status === 'stale') {
+          setReleaseAfterUpdate({ revision: head.candidate.revision, updates: updateRowsOf(rows) })
+          void press('update', update.mutateAsync).then((ok) => {
+            if (!ok) setReleaseAfterUpdate(null)
+          })
+        } else setReleaseOpen(true)
         return
       case 'preview':
         openTool('preview', { by: 'command' })
@@ -782,6 +1001,18 @@ export function DialogView({
         return
       case 'update':
         void press('update', update.mutateAsync)
+        return
+      case 'init':
+        void press('init', init.mutateAsync)
+        return
+      case 'compact':
+        void press('compact', compact.mutateAsync)
+        return
+      case 'turn_undo':
+        void pressUndoTurn()
+        return
+      case 'turn_redo':
+        void pressRedoTurn()
         return
       case 'retry':
         if (retryRow !== null) void pressRetry(retryRow.id)
@@ -793,11 +1024,26 @@ export function DialogView({
       case 'undo':
         setUndoOpen(true)
         return
+      case 'models':
+        effortMenu.current?.open()
+        return
+      case 'export':
+        void exportChat()
+        return
+      case 'new':
+      case 'sessions':
+      case 'details':
+      case 'thinking':
+      case 'themes':
+        return clientCommands.run(id)
+      // `/help` is the field's.
+      default:
+        id satisfies 'help'
+        return
     }
   }
 
   const actions: FeedActions = {
-    onContinue: () => void press('continue', proceed.mutateAsync),
     onRetry: (failureEventId) => void pressRetry(failureEventId),
     onStop: () => runCommand('cancel'),
     onRelease: () => runCommand('release'),
@@ -807,8 +1053,18 @@ export function DialogView({
     onShowChanges: () => {
       if (head !== null) openTool(changesToolOf(head), { by: 'changes' })
     },
-    onTakeControl: takeControl,
-    onResumeAgent: resumeWork,
+    // A closed project is read: nothing that carries the work on is offered (К39), «Остановить» is.
+    ...(closedProject
+      ? {}
+      : {
+          onContinue: () => void press('continue', proceed.mutateAsync),
+          onTakeControl: takeControl,
+          onResumeAgent: resumeWork,
+        }),
+    // A press the server would refuse is not drawn: an owner or an admin, of a project that is open.
+    ...(!closedProject && project?.closed !== true && agentNotes.data?.canManage
+      ? { onSaveNotes: (text: string) => void openNotes(text), notesRows }
+      : {}),
     // The client holds the control of a browser that is there: a closed session holds nothing.
     controlling: head?.browser?.controller === 'user' && browserLive,
     browserLive,
@@ -826,7 +1082,7 @@ export function DialogView({
       }
     })
 
-  if (state.missing) return <DialogNotFound listHref={siteHref(siteId, 'chat')} />
+  if (state.missing) return <DialogNotFound />
 
   const shownTitle = head?.task.title ?? title ?? listText.untitled
   const releasing = status === 'deploying' || status === 'verifying'
@@ -837,7 +1093,7 @@ export function DialogView({
       ? effortChosen.effort
       : (head?.task.effort ?? 'high')
   // «Размышление» in the row of the field (owner's requests of 26.10.2026): the level holds from
-  // the agent's next turn. The mode the dialog started in is in its head (29.10.2026).
+  // the agent's next turn.
   const settings =
     head === null ? null : (
       <EffortMenu
@@ -845,8 +1101,20 @@ export function DialogView({
         onChange={(next) => void changeEffort(next)}
         // The level holds from the agent's next turn: it is changed while the dialog waits.
         disabled={!awaitingClient || setEffort.isPending}
+        lockedText={terminal ? effortText.ended : effortText.locked}
+        handle={effortMenu}
       />
     )
+  const composerCommands = {
+    verdicts: commands,
+    onRun: runCommand,
+    onOpen: refresh,
+    plain: !withRepository,
+  }
+  // The reminder of the field names the «Переменные» of a project, and none without one
+  // (docs/plan/61-chats-first.md, §5.11): an ended chat reads it from its closed field too.
+  const noSecrets =
+    project === null ? taskWayText.noSecretsPlain : withBrowser ? taskWayText.noSecrets : undefined
   let composer
   if (head === null) composer = null
   else if (terminal) {
@@ -863,17 +1131,13 @@ export function DialogView({
             busy={false}
             onSend={send}
             effort={settings}
-            commands={{
-              verdicts: commands,
-              onRun: runCommand,
-              onOpen: refresh,
-              listed: inBrowser ? BROWSER_COMMANDS : undefined,
-            }}
+            commands={composerCommands}
+            noSecrets={noSecrets}
           />
         </Box>
         <Button
           component={Link}
-          href={`${siteHref(siteId, 'chat')}/new`}
+          href={newChatHref(siteId)}
           variant="outlined"
           startIcon={<AppIcon name="plus" size={18} />}
           sx={{ borderRadius: '999px' }}
@@ -892,24 +1156,32 @@ export function DialogView({
       (status === 'awaiting_user' &&
         (question === null || question.kind === 'agent' || question.kind === 'browser'))
     const revising = status === 'awaiting_approval' && question === null
+    // A paused, disconnected or archived project takes no words (docs/plan/61-chats-first.md,
+    // К39). The field stays closed rather than gone: a turn already under way can still be stopped.
+    // The feed says it live; the word of the page is as of its load, before the first feed.
+    const closedField = closedProject || project?.closed === true
     const disabledReason = stopping
       ? composerText.stopping
-      : answering || revising
-        ? null
-        : releasing
-          ? composerText.releasing
-          : feedInputText.disabled
+      : closedField
+        ? chatsText.closedProject
+        : answering || revising
+          ? null
+          : releasing
+            ? composerText.releasing
+            : feedInputText.disabled
     // While the agent works «Остановить» stands in place of «Отправить» (`/cancel`).
     const working = status === 'queued' || status === 'preparing' || status === 'running'
     const cancelVerdict = commands.find((command) => command.id === 'cancel')
     composer = (
       <Composer
         placeholder={
-          answering && !answered
-            ? feedQuestionText.placeholder
-            : revising
-              ? composerText.revisionPlaceholder
-              : composerText.newPlaceholder
+          closedField
+            ? chatsText.closedProject
+            : answering && !answered
+              ? feedQuestionText.placeholder
+              : revising
+                ? composerText.revisionPlaceholder
+                : composerText.newPlaceholder
         }
         // An answer of the agent asks nothing: the field is the field of a new message.
         sendLabel={answering && !answered ? feedQuestionText.send : composerText.send}
@@ -918,14 +1190,12 @@ export function DialogView({
         busy={message.isPending}
         onSend={send}
         effort={settings}
-        commands={{
-          verdicts: commands,
-          onRun: runCommand,
-          onOpen: refresh,
-          listed: inBrowser ? BROWSER_COMMANDS : undefined,
-        }}
+        commands={composerCommands}
         attachments={attachments}
-        noSecrets={inBrowser ? taskWayText.noSecrets : undefined}
+        noSecrets={noSecrets}
+        restored={undoneWords}
+        restoredTaken={wordsTaken}
+        onTextChange={fieldTextChanged}
         {...(working
           ? {
               stop: {
@@ -940,11 +1210,12 @@ export function DialogView({
 
   // «+» of the tools: in the head while their panel is closed, at the end of its tabs while open.
   // Its dot says what is new behind it, never while the panel is open (И13); below `lg` its menu
-  // comes up from the bottom of the screen (И14).
+  // comes up from the bottom of the screen (И14). A chat with no tool has no «+» at all (К19).
+  const tiles = head === null ? [] : toolTilesOf(head, tools, { answered, rewound })
   const menu =
-    head === null ? null : (
+    head === null || tiles.length === 0 ? null : (
       <ToolsMenu
-        tiles={toolTilesOf(head, tools)}
+        tiles={tiles}
         onOpen={(tool) => openTool(tool, { by: 'menu' })}
         dot={toolsDot(head, tools)}
         sheet={!wide}
@@ -970,6 +1241,7 @@ export function DialogView({
             onFullscreen={setFullscreen}
             onTake={takeControl}
             onResume={resumeWork}
+            readOnly={closedProject}
             onStop={() => runCommand('cancel')}
             stopping={stopping}
             canStop={
@@ -979,6 +1251,7 @@ export function DialogView({
             }
             busy={busy}
             answered={answered}
+            rewound={rewound}
           />
         )
       case 'preview':
@@ -996,6 +1269,13 @@ export function DialogView({
             onReset={() => runCommand('reset')}
             resetting={reset.isPending}
           />
+        )
+      case 'terminal':
+        // The files of the agent's working copy, and the client's edit of one (06.11.2026).
+        return siteId === null ? null : (
+          <Box sx={{ p: 2 }}>
+            <SiteFiles siteId={siteId} taskId={taskId} ended={terminal} onEdited={refresh} />
+          </Box>
         )
       case 'files':
       case 'database':
@@ -1021,17 +1301,15 @@ export function DialogView({
         flexDirection: 'column',
         minWidth: 0,
         // What sticks over the top of the window below `lg`, as measured, and a step: the head of
-        // 96px (two lines of 44px and 8px between them), from `md` the bar of the shell and the
-        // head of one line, 44px each (`HEAD_ROOM`). Nothing over the feed from `lg`.
+        // one line of 44px, or below `md` with the line of the project under it, 8px between them
+        // (`HEAD_ROOM`). Nothing over the feed from `lg`.
         [HEAD_ROOM]: {
-          xs: `${96 + ROOM_STEP}px`,
-          md: `${SITE_TOOLBAR_HEIGHT + 44 + ROOM_STEP}px`,
+          xs: `${(project === null ? 44 : 96) + ROOM_STEP}px`,
+          md: `${44 + ROOM_STEP}px`,
           lg: '0px',
         },
-        // A window lower than 420px sticks no head (below): only the bar of the shell from `md`.
-        '@media (max-height: 420px)': {
-          [HEAD_ROOM]: { xs: '0px', md: `${SITE_TOOLBAR_HEIGHT + ROOM_STEP}px`, lg: '0px' },
-        },
+        // A window lower than 420px sticks no head (below).
+        '@media (max-height: 420px)': { [HEAD_ROOM]: '0px' },
       }}
     >
       {/* The browser over the whole area covers the head and the dialog: neither takes focus. */}
@@ -1041,12 +1319,11 @@ export function DialogView({
           display: covered ? 'none' : 'block',
           flex: 'none',
           mb: { xs: 3, md: 4, lg: 0 },
-          // Below `lg` the page scrolls the dialog, and the head keeps to the top of the window —
-          // under the bar of the shell, which keeps there too from `md` — «+» within reach (docs/
-          // plan/59, И4, И14). It runs from edge to edge of the content, so the rows pass under it
-          // unseen; the field and its list of commands stay over it.
+          // Below `lg` the page scrolls the dialog, and the head keeps to the top of the window, «+»
+          // within reach (docs/plan/59, И4, И14). It runs from edge to edge of the content, so the
+          // rows pass under it unseen; the field and its list of commands stay over it.
           position: { xs: 'sticky', lg: 'static' },
-          top: { xs: 0, md: SITE_TOOLBAR_HEIGHT },
+          top: 0,
           zIndex: { xs: 1, lg: 'auto' },
           // A window lower than 420px — a phone on its side, a page zoomed to 400% — leaves the head
           // with the page: stuck over the field, it would leave the feed a line to be read in (WCAG
@@ -1054,9 +1331,9 @@ export function DialogView({
           '@media (max-height: 420px)': { position: 'static' },
           bgcolor: 'background.paper',
           // From `lg` the head stands over the area of the feed, which scrolls under it, from edge
-          // to edge of the dialog. While the panel is closed it stands right under the bar, «+» in
-          // the corner the strip of the panel's tabs takes when it opens (docs/plan/59, И4); while
-          // it is open, under «Назад к диалогам» of the list that gave the dialog its room.
+          // to edge of the dialog. While the panel is closed it stands at the top of the window,
+          // «+» in the corner the strip of the panel's tabs takes when it opens (docs/plan/59, И4);
+          // while it is open, under «К чатам» of the list that gave the dialog its room.
           mt: { lg: shown ? 0 : -3.5 },
           mx: { xs: -2, sm: -2.5, md: -4 },
           pl: { xs: 2, sm: 2.5, md: 4, lg: 3 },
@@ -1064,18 +1341,10 @@ export function DialogView({
         }}
       >
         <DialogHead
-          siteId={siteId}
+          project={project}
           taskId={taskId}
           title={shownTitle}
           head={head}
-          closedModes={
-            capabilities === undefined
-              ? {}
-              : {
-                  ...(capabilities.browser === 'ready' ? {} : { chat: composerText.chatOff }),
-                  ...(capabilities.repository === 'ready' ? {} : { work: composerText.workOff }),
-                }
-          }
           onRenamed={refresh}
           tools={shown ? null : menu}
         />
@@ -1147,6 +1416,7 @@ export function DialogView({
               retryId={retryRow?.id ?? null}
               actions={actions}
               filesOf={sentFilesOf}
+              details={details || thinking}
               activityOf={(turn) => <TurnActivity taskId={taskId} turn={turn} live={false} />}
             />
           )}
@@ -1155,6 +1425,7 @@ export function DialogView({
               head={head}
               steps={liveSteps(rows, head)}
               stopping={stopping}
+              withSite={siteUrl !== null}
               activity={
                 head.task.status === 'running' && head.task.turnNo > 0 ? (
                   <TurnActivity
@@ -1166,7 +1437,7 @@ export function DialogView({
                 ) : undefined
               }
               browser={
-                inBrowser
+                withBrowser && !closedProject
                   ? {
                       controlling: head.browser?.controller === 'user' && browserLive,
                       onResume: resumeWork,
@@ -1215,8 +1486,9 @@ export function DialogView({
         {announcement}
       </Box>
       <Box role="status" aria-live="polite" sx={offScreen}>
-        {effortNote}
+        {note}
       </Box>
+      {clientCommands.menu}
 
       {/* Drawn only while a tool is on the screen: no empty column, no hidden tool that reads. */}
       <ToolsPanel
@@ -1225,7 +1497,7 @@ export function DialogView({
         wide={wide}
         fullscreen={fullscreen}
         menu={shown ? menu : null}
-        onShow={(tool) => dispatchTools({ type: 'show', tool })}
+        onShow={showTool}
         onClose={closeTool}
         onCloseAll={closeTools}
         onBack={backToDialog}
@@ -1255,6 +1527,18 @@ export function DialogView({
           }}
         />
       ) : null}
+      {notesText !== null && siteId !== null ? (
+        <AgentNotesDialog
+          siteId={siteId}
+          text={notesText}
+          current={agentNotes.data?.notes ?? null}
+          onClose={() => setNotesText(null)}
+          onSaved={() => {
+            setNotesText(null)
+            setNote(agentNotesText.saved)
+          }}
+        />
+      ) : null}
       <ConfirmDialog
         open={cancelOpen}
         onClose={() => setCancelOpen(false)}
@@ -1266,7 +1550,14 @@ export function DialogView({
         danger
         onConfirm={() => void confirmCancel()}
       >
-        <Typography sx={{ mt: 1.5 }}>{nbsp(chatCommands.cancel.description)}</Typography>
+        <Typography sx={{ mt: 1.5 }}>
+          {nbsp(
+            cancelText.body({
+              changes: candidate !== null,
+              onSite: project !== null && withBrowser,
+            }),
+          )}
+        </Typography>
       </ConfirmDialog>
     </Box>
   )

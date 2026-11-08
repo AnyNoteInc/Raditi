@@ -41,11 +41,28 @@ export const feedFailureText: Readonly<Record<FeedFailureCode, string>> = Object
   site_held:
     'При работе с сайтом произошёл сбой, мы его разбираем. Новые задачи для этого сайта пока недоступны.',
   content_refused:
-    'Мы не можем выполнить эту задачу: её не пропустила проверка безопасности. Начните новый диалог и опишите задачу по-другому.',
+    'Мы не можем выполнить эту задачу: её не пропустила проверка безопасности. Начните новый чат и опишите задачу по-другому.',
   unavailable: 'Сейчас мы не можем взять задачу в работу. Попробуйте ещё раз немного позже.',
   not_accepted:
     'Задачи для этого сайта пока не принимаются. Напишите нам — расскажем, когда это изменится.',
 })
+
+/**
+ * The failures a chat without a project can come to whose words above name a site or files
+ * (docs/plan/61-chats-first.md, К18). `site_files` is of a repository, which such a chat has not.
+ */
+const feedFailureNoSiteText: Partial<Readonly<Record<FeedFailureCode, string>>> = Object.freeze({
+  secret_found:
+    'В работе агента нашлось что-то похожее на пароль или ключ, поэтому мы её не сохранили. Попробуйте описать задачу по-другому.',
+  // A lease of its own, and no content write can hold it: the recovery sweep frees it within a
+  // minute, and words written before that end in the same card, free of charge.
+  site_held: 'Произошёл сбой, мы его разбираем. Подождите минуту, прежде чем писать дальше.',
+  not_accepted: 'Задачи пока не принимаются. Напишите нам — расскажем, когда это изменится.',
+})
+
+/** The words of a failure, in a chat with a site or without one. */
+export const feedFailureTextOf = (code: FeedFailureCode, withSite: boolean): string =>
+  (withSite ? undefined : feedFailureNoSiteText[code]) ?? feedFailureText[code]
 
 /**
  * Whether the code alone allows «Попробовать ещё», as the feed design has it. Today a retry is

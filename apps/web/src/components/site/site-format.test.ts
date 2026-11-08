@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { formatMoscowMoment } from '@/lib/moscow-date'
 
-import { accessLabel } from './site-format'
+import { accessLabel, accessPurpose } from './site-format'
 
 describe('site page formatting', () => {
   it('shows a moment in Moscow time', () => {
@@ -14,5 +14,7 @@ describe('site page formatting', () => {
     expect(accessLabel('ftp')).toBe('SFTP / FTP')
     expect(accessLabel('wp')).toBe('Вход в панель сайта')
     expect(accessLabel('something-new')).toBe('Доступ')
+    // docs/plan/61-chats-first.md, §5.13: no word of how the agent works on a site.
+    expect(accessPurpose('browser')).toBe('Вход в админку сайта для браузера')
   })
 })

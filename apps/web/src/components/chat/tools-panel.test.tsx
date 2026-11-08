@@ -38,19 +38,35 @@ describe('a tab of the panel of the tools', () => {
   })
 })
 
+describe('a chat with the code and the browser (plan 61, К10)', () => {
+  it('stands the browser that started beside the changes as one more tab, by the ids the stands find', () => {
+    const tools = toolsReducer(after(open('files')), { type: 'launch' })
+    showPanel(tools, { wide: true })
+    expect(screen.getAllByRole('tab').map((tab) => tab.id)).toEqual([
+      'dialog-pane-tab-files',
+      'dialog-pane-tab-browser',
+    ])
+    // What the client reads stays on the screen; the browser is a press away, and mounted.
+    expect(screen.getByRole('tab', { name: 'Файлы' }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByRole('tab', { name: 'Браузер' }).getAttribute('aria-selected')).toBe('false')
+    expect(document.getElementById('dialog-pane-panel-files')?.hidden).toBe(false)
+    expect(document.getElementById('dialog-pane-panel-browser')?.hidden).toBe(true)
+  })
+})
+
 describe('the ways back to the dialog (И8, И14)', () => {
-  it('goes back by «К диалогу» below `lg`: the dialog is told to put the tab away, not every tab', () => {
+  it('goes back by «К чату» below `lg`: the dialog is told to put the tab away, not every tab', () => {
     const { handlers } = showPanel(after(open('preview'), open('files')), { wide: false })
     expect(screen.queryByRole('button', { name: 'Скрыть панель' })).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'К диалогу' }))
+    fireEvent.click(screen.getByRole('button', { name: 'К чату' }))
     expect(handlers.onBack).toHaveBeenCalledTimes(1)
     expect(handlers.onCloseAll).not.toHaveBeenCalled()
     expect(handlers.onClose).not.toHaveBeenCalled()
   })
 
-  it('hides every tab by «Скрыть панель» from `lg`, where there is no «К диалогу»', () => {
+  it('hides every tab by «Скрыть панель» from `lg`, where there is no «К чату»', () => {
     const { handlers } = showPanel(after(open('preview'), open('files')), { wide: true })
-    expect(screen.queryByRole('button', { name: 'К диалогу' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'К чату' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Скрыть панель' }))
     expect(handlers.onCloseAll).toHaveBeenCalledTimes(1)
     expect(handlers.onBack).not.toHaveBeenCalled()
@@ -65,7 +81,7 @@ describe('the ways back to the dialog (И8, И14)', () => {
     expect(showPanel(closedTools, { wide: true }).container.innerHTML).toBe('')
     // Chosen again: drawn with the tab kept.
     showPanel(toolsReducer(behind, open('preview')), { wide: false })
-    expect(screen.getByRole('complementary', { name: 'Инструменты диалога' })).toBeTruthy()
+    expect(screen.getByRole('complementary', { name: 'Инструменты чата' })).toBeTruthy()
     expect(screen.getByRole('tab', { name: 'Предпросмотр' }).getAttribute('aria-selected')).toBe(
       'true',
     )

@@ -93,11 +93,17 @@ export async function verifyZaiApi(ctx) {
     plan: OFFER.plan,
     health: 'ok',
     enabled: false,
-    maxConcurrentTurns: 1,
-    maxConcurrentRequests: 2,
+    maxConcurrentTurns: 8,
+    maxConcurrentRequests: 16,
     limitsSeenAt: null,
   })
   assert.equal(fresh.limitWindows?.length ?? 0, 0)
+  // The stand's scenarios fence on a capacity of one turn (two requests): the account goes back
+  // to it once the import's own numbers are checked.
+  await db.subscriptionAccount.update({
+    where: { id: accountId },
+    data: { maxConcurrentTurns: 1, maxConcurrentRequests: 2 },
+  })
   // The import asked the monitor path alone — the probe of the key, free and without content —
   // and generated nothing.
   let state = await zai()
@@ -198,6 +204,12 @@ export async function verifyZaiApi(ctx) {
     assert.equal(body.stream_options?.include_usage, true)
     assert.ok(body.tools.some((tool) => tool.function?.name === 'raditi_site_info'))
   }
+  // The reasoning of each answer came through the role on the route of the API, as on the plan.
+  assert.deepEqual(
+    turn.events.filter((event) => event.type === 'reasoning').map((event) => event.text),
+    turn.provider.map(() => 'Synthetic reasoning.'),
+    'The reasoning of the provider did not reach the events of the turn',
+  )
   // The usage of each call is the provider's own count, written once, on the API's own profile.
   const rows = await settled(written, 2)
   for (const row of rows) {

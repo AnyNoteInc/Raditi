@@ -1,5 +1,6 @@
 import type { Prisma } from '@repo/db'
 import {
+  carriedTariffCredits,
   creditAccountKinds,
   creditAccountUnits,
   liveSubscriptionStatuses,
@@ -35,9 +36,15 @@ import { getCreditsOverview, getPlanOverview } from './read-models.ts'
 // - the quota by the order it was paid with: `orders.period_start` is the start of its period;
 // - the remainder that expired when a period ended (`sub:<subscriptionId>:<periodEndMs>:expire`)
 //   belongs to the period in its key, the one that ended — although the renewal writes it in
-//   the transaction that grants the next quota.
+//   the transaction that grants the next quota;
+// - the part of it a renewal carried into the next period (`sub:<subscriptionId>:<periodEndMs>:
+//   carry`, a grant without an order) belongs to that next period, the one its renewal opened:
+//   the period after the one in its key. The end of the period before the current one is
+//   `orders.period_end` of the order that paid for it — the order of the latest period that
+//   started earlier —, whether the current one starts at that end (a renewal) or later (a
+//   payment of an overdue tariff).
 // So a task that was queued before a renewal and finished after it is counted in the period
-// that ended, and the numbers of a period add up to what it was granted.
+// that ended, and the numbers of a period add up to what was carried into it and granted.
 //
 // Before the task queue of P12 nothing places a reserve: a workspace then has its quota, its
 // gift and purchased credits and its sites, and no line of history.
@@ -52,7 +59,9 @@ const CREDIT_UNITS = Object.values(creditAccountUnits)
 const LIVE_STATUSES = [...liveSubscriptionStatuses]
 
 interface MeterRow {
+  carried: string
   granted: string
+  quota: string
   charged: string
   expired: string
   held: string
@@ -63,6 +72,8 @@ interface MeterRow {
 /**
  * The meter of the current period of the live subscription, on the tariff account — every part
  * read from the ledger and the reserves by the stamp that says its period:
+ * - `carried`: what the renewal that opened this period carried from the one before — the grant
+ *   of the live subscription keyed `…:carry` by the end of that period;
  * - `granted`: the quota of the order that paid for this period, and what an operator added to
  *   the account since it started;
  * - `charged`: charges from credits of this period — rows of the account stamped in it, and
@@ -71,11 +82,15 @@ interface MeterRow {
  * - `expired`: what reserve rows stamped in this period lost, and what an operator took off the
  *   account since it started;
  * - `left`: `balance − held` of the account;
- * - `heldEarlier`, beside the meter: active reserve rows stamped before this period.
+ * - `heldEarlier`, beside the meter: active reserve rows stamped before this period;
+ * - `carryNext` and `burnNext`, beside the meter: what the next renewal would do with `left` if
+ *   nothing more were spent (`carriedTariffCredits`) — carry up to `carryLimit`, the quota of
+ *   the order of this period, and let the rest expire.
  *
  * One statement, so the parts are of one instant and add up: what is left of earlier periods on
- * the account is exactly `heldEarlier`, and everything else on it came with this period.
- * null without a live subscription; zeros while the workspace has no tariff account.
+ * the account is exactly `heldEarlier`, and everything else on it came with this period —
+ * carried into it or granted for it. null without a live subscription; zeros while the
+ * workspace has no tariff account.
  */
 async function tariffMeter(
   db: HistoryReader,
@@ -83,7 +98,7 @@ async function tariffMeter(
 ): Promise<TariffUsageDto['credits'] | null> {
   const [row] = await db.$queryRaw<MeterRow[]>`
     WITH live AS (
-      SELECT s.current_period_start AS since
+      SELECT s.id, s.current_period_start AS since
       FROM subscriptions s
       WHERE s.workspace_id = ${workspaceId}::uuid
         AND s.status = ANY(${LIVE_STATUSES}::"SubscriptionStatus"[])
@@ -92,10 +107,26 @@ async function tariffMeter(
       FROM billing_accounts a
       WHERE a.workspace_id = ${workspaceId}::uuid
         AND a.unit = ${creditAccountUnits.tariff}::"BillingUnit"
+    ), opened AS (
+      -- The key of the carry of the renewal that opened this period: the end of the period
+      -- before, in milliseconds, as the order that paid for that period holds it.
+      SELECT 'sub:' || live.id::text || ':'
+        || floor(EXTRACT(EPOCH FROM o.period_end) * 1000)::bigint::text || ':carry' AS key
+      FROM account
+      CROSS JOIN live
+      JOIN credit_ledger g ON g.account_id = account.id AND g.kind = 'grant'
+      JOIN orders o ON o.id = g.order_id
+      WHERE o.period_start < live.since
+      ORDER BY o.period_start DESC
+      LIMIT 1
     ), entries AS (
       SELECT l.kind, l.amount,
+        l.kind = 'grant' AND l.order_id IS NULL AS carry,
         CASE l.kind
-          WHEN 'grant' THEN o.period_start = live.since
+          WHEN 'grant' THEN CASE
+            WHEN l.order_id IS NULL THEN l.idempotency_key = (SELECT key FROM opened)
+            ELSE o.period_start = live.since
+          END
           WHEN 'charge' THEN COALESCE(h.created_at, l.created_at) >= live.since
           WHEN 'expire' THEN h.created_at >= live.since
           WHEN 'adjust' THEN l.created_at >= live.since
@@ -114,8 +145,12 @@ async function tariffMeter(
       JOIN credit_holds h ON h.account_id = account.id AND h.status = 'active'
     )
     SELECT
+      (SELECT COALESCE(SUM(amount), 0) FROM entries WHERE current AND carry)::text AS carried,
       (SELECT COALESCE(SUM(amount), 0) FROM entries
-        WHERE current AND (kind = 'grant' OR (kind = 'adjust' AND amount > 0)))::text AS granted,
+        WHERE current AND ((kind = 'grant' AND NOT carry) OR (kind = 'adjust' AND amount > 0))
+      )::text AS granted,
+      (SELECT COALESCE(SUM(amount), 0) FROM entries
+        WHERE current AND kind = 'grant' AND NOT carry)::text AS quota,
       (SELECT COALESCE(-SUM(amount), 0) FROM entries
         WHERE current AND kind = 'charge')::text AS charged,
       (SELECT COALESCE(-SUM(amount), 0) FROM entries
@@ -126,19 +161,27 @@ async function tariffMeter(
     FROM live
   `
   if (row === undefined) return null
+  const left = toCredits(row.left)
+  const carryLimit = toCredits(row.quota)
+  const carryNext = carriedTariffCredits({ balance: left, held: toCredits(0) }, carryLimit)
   return {
+    carried: toCredits(row.carried),
     granted: toCredits(row.granted),
     charged: toCredits(row.charged),
     held: toCredits(row.held),
     expired: toCredits(row.expired),
-    left: toCredits(row.left),
+    left,
     heldEarlier: toCredits(row.heldEarlier),
+    carryLimit,
+    carryNext,
+    burnNext: toCredits(left - carryNext),
   }
 }
 
 interface SiteUsageRow {
-  siteId: string
-  name: string
+  /** null with `name` — the chats without a project, one line. */
+  siteId: string | null
+  name: string | null
   credits: number
 }
 
@@ -148,6 +191,8 @@ interface SiteUsageRow {
  * and counted in the period its stamp says. A row a reserve of an ended period paid —
  * `hold:<holdId>:charge` — takes the stamp of that reserve row, every other row its own. So a
  * task continued across a renewal may stand here in two periods, each with what it took of it.
+ * What chats without a project took is one more line, so that no charge drops out of the page
+ * (docs/plan/61-chats-first.md, §5.10); among equal sums it stands last.
  */
 function chargedBySite(
   db: HistoryReader,
@@ -159,7 +204,7 @@ function chargedBySite(
     FROM credit_ledger l
     JOIN billing_accounts a ON a.id = l.account_id
     JOIN tasks t ON t.id = l.task_id
-    JOIN sites s ON s.id = t.site_id
+    LEFT JOIN sites s ON s.id = t.site_id
     LEFT JOIN credit_holds h ON h.task_id = l.task_id
       AND l.idempotency_key = 'hold:' || h.id::text || ':charge'
     WHERE a.workspace_id = ${workspaceId}::uuid
@@ -181,8 +226,9 @@ interface HistoryRow extends ByAccount<'held'>, ByAccount<'paid'> {
   taskId: string
   title: string | null
   status: string
-  siteId: string
-  siteName: string
+  /** Both null — a chat without a project. */
+  siteId: string | null
+  siteName: string | null
 }
 
 const byAccount = (row: HistoryRow, prefix: 'held' | 'paid') => ({
@@ -264,7 +310,7 @@ async function historyPage(
       s.id AS "siteId", s.name AS "siteName"
     FROM entries e
     JOIN tasks t ON t.id = e.task_id
-    JOIN sites s ON s.id = t.site_id
+    LEFT JOIN sites s ON s.id = t.site_id
     CROSS JOIN LATERAL (
       SELECT
         COALESCE(-SUM(l.amount) FILTER (WHERE l.unit = ${tariff}::"BillingUnit"), 0)::int
@@ -290,7 +336,7 @@ async function historyPage(
       outcome: row.outcome,
       ...entryCredits(row),
       task: { id: row.taskId, title: row.title, status: row.status },
-      site: { id: row.siteId, name: row.siteName },
+      site: row.siteId === null ? null : { id: row.siteId, name: row.siteName },
     })),
     nextCursor: rows.length > limit ? (items.at(-1)?.id ?? null) : null,
   })

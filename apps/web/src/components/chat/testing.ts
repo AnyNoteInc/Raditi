@@ -1,5 +1,5 @@
-import { chatCommandIds } from '@repo/domain/release/chat-commands'
-import type { TaskStatus } from '@repo/domain'
+import { serverCommandIds } from '@repo/domain/release/chat-commands'
+import type { FeedAgentCommandId, FeedCommandId, TaskStatus } from '@repo/domain'
 
 import type { CandidateView, CommandVerdict, DialogFeed, FeedHead, FeedRow } from './chat-types'
 
@@ -22,10 +22,11 @@ export const RELEASE_ID = '0199a3f2-0000-7000-8000-0000000000d1'
 export function verdicts(
   refused: Partial<Record<CommandVerdict['id'], CommandVerdict['refusal']>> = {},
 ): CommandVerdict[] {
-  return chatCommandIds
+  const closed = { turn_undo: 'nothing_to_undo', turn_redo: 'nothing_to_redo', ...refused } as const
+  return serverCommandIds
     .filter((id) => (id !== 'undo' && id !== 'retry') || id in refused)
     .map((id) => {
-      const refusal = refused[id] ?? null
+      const refusal = closed[id] ?? null
       return { id, available: refusal === null, refusal }
     })
 }
@@ -34,7 +35,6 @@ export function taskHead(patch: Partial<FeedHead> = {}): FeedHead {
   return {
     id: TASK_ID,
     title: 'Поменять цену капучино',
-    mode: 'work',
     status: 'queued',
     attempt: 1,
     turnNo: 0,
@@ -153,7 +153,7 @@ export function ceilingRow(id: string, turn: number, reason: 'step' | 'credits' 
   }
 }
 
-export function commandRow(id: string, command: CommandVerdict['id']): FeedRow {
+export function commandRow(id: string, command: FeedCommandId): FeedRow {
   return {
     id,
     at: nextAt(),
@@ -162,6 +162,33 @@ export function commandRow(id: string, command: CommandVerdict['id']): FeedRow {
     command,
     authorId: AUTHOR_ID,
     requestId: REQUEST_ID,
+  }
+}
+
+/** A command the agent carries out (docs/plan/61-chats-first.md, §5.2). */
+export function agentCommandRow(id: string, command: FeedAgentCommandId = 'init'): FeedRow {
+  return {
+    id,
+    at: nextAt(),
+    type: 'feed.request',
+    kind: 'agent_command',
+    command,
+    authorId: AUTHOR_ID,
+    requestId: REQUEST_ID,
+  }
+}
+
+/** A pass that failed and left the chat open: the client writes «продолжи» (28.10.2026). */
+export function failureRow(id: string, turn: number): FeedRow {
+  return {
+    id,
+    at: nextAt(),
+    type: 'feed.failure',
+    turn,
+    code: 'technical',
+    site: 'unchanged',
+    credits: 'returned',
+    next: 'awaiting_user',
   }
 }
 
@@ -272,7 +299,7 @@ export function browserAnswer(
     status: 'running',
     commands: verdicts(
       Object.fromEntries(
-        chatCommandIds
+        serverCommandIds
           .filter((id) => id !== 'cancel' && id !== 'undo' && id !== 'retry')
           .map((id) => [id, 'not_allowed' as const]),
       ),
@@ -280,8 +307,6 @@ export function browserAnswer(
     ...rest,
     task: {
       title: 'Новость о летней веранде',
-      // «Чат» is the dialog in the browser, as `task.create` writes it.
-      mode: 'chat',
       turnNo: 1,
       runningSince: '2026-10-17T09:01:00.000Z',
       requirements: { repository: false, browser: true },

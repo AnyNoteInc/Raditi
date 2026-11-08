@@ -75,6 +75,80 @@ const components: Components = {
   ),
 }
 
+interface MarkdownNode {
+  type: string
+  value?: string
+  children?: MarkdownNode[]
+}
+
+/**
+ * A line break of the agent stays one, as in a chat (06.11.2026): Markdown joins the lines of a
+ * paragraph, so the break inside a text becomes a `break` node — the `<br>` of the page. Code and
+ * the white space between the blocks of a list item are left as they are.
+ */
+function remarkSoftBreaks() {
+  const walk = (node: MarkdownNode): void => {
+    if (!node.children || node.type === 'code') return
+    node.children = node.children.flatMap((child): MarkdownNode[] => {
+      if (child.type !== 'text' || !child.value?.includes('\n')) {
+        walk(child)
+        return [child]
+      }
+      return child.value
+        .split('\n')
+        .flatMap((part, index): MarkdownNode[] => [
+          ...(index > 0 ? [{ type: 'break' }] : []),
+          ...(part === '' ? [] : [{ type: 'text', value: part }]),
+        ])
+    })
+  }
+  return (tree: MarkdownNode) => walk(tree)
+}
+
+const TREE_LINE = /[├└│]/
+const FENCE = /^\s*(`{3,}|~{3,})/
+
+/**
+ * A tree of folders drawn with lines (`├──`, `└──`, `│`) is code: in a paragraph Markdown joins
+ * its lines and drops their indent (06.11.2026: a tree of the project came as one paragraph). A run
+ * of lines with two branches or more is fenced — with the line right before it, the root, when it
+ * is a name and not a sentence. Text in a fence stays.
+ */
+export function fenceTextTrees(text: string): string {
+  const lines = text.split('\n')
+  const out: string[] = []
+  let fenced = false
+  for (let i = 0; i < lines.length;) {
+    const line = lines[i]!
+    if (FENCE.test(line)) fenced = !fenced
+    if (fenced || !TREE_LINE.test(line)) {
+      out.push(line)
+      i++
+      continue
+    }
+    let end = i
+    while (end < lines.length && TREE_LINE.test(lines[end]!) && !FENCE.test(lines[end]!)) end++
+    const run = lines.slice(i, end)
+    if (run.filter((entry) => /[├└]/.test(entry)).length < 2) {
+      out.push(...run)
+      i = end
+      continue
+    }
+    const root = out.at(-1)
+    // The root is a name, not the sentence that says what follows («Вот структура:»).
+    const withRoot =
+      root !== undefined &&
+      root.trim() !== '' &&
+      root.length <= 120 &&
+      !/^\s*[-*+>#|]/.test(root) &&
+      !/[:.!?]\s*$/.test(root)
+    if (withRoot) out.pop()
+    out.push('```', ...(withRoot ? [root] : []), ...run, '```')
+    i = end
+  }
+  return out.join('\n')
+}
+
 export function AgentMarkdown({ text }: { text: string }) {
   return (
     <Box
@@ -119,8 +193,13 @@ export function AgentMarkdown({ text }: { text: string }) {
         '& hr': { border: 0, borderTop: 1, borderColor: 'divider', my: 2 },
       }}
     >
-      <Markdown remarkPlugins={[remarkGfm]} components={components} urlTransform={linkUrl} skipHtml>
-        {text}
+      <Markdown
+        remarkPlugins={[remarkGfm, remarkSoftBreaks]}
+        components={components}
+        urlTransform={linkUrl}
+        skipHtml
+      >
+        {fenceTextTrees(text)}
       </Markdown>
     </Box>
   )

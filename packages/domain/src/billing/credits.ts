@@ -5,7 +5,12 @@ import type { ModelClass } from '../llm/model-class.ts'
 import { decimalStringSchema, Money } from '../money.ts'
 import { normalizeSiteHost } from '../policies/site-address.ts'
 import type { TaskStatus } from '../tasks/task-status.ts'
-import { attemptStepCredits, minStartCredits, minTaskChargeCredits } from './credit-numbers.ts'
+import {
+  attemptStepCredits,
+  minStartCredits,
+  minTaskChargeCredits,
+  signupGiftCredits,
+} from './credit-numbers.ts'
 import { rubPerCreditSchema } from './credit-rate.ts'
 import type { TaskRefusalReason } from './errors.ts'
 import {
@@ -39,11 +44,21 @@ export const minContinueCredits = 1
 export const maxTaskAttempts = 3
 
 /**
- * The bound on unpaid work of a workspace without a paid tariff, in credits: twice the gift of
- * the registration, counted from the end of its last tariff or from its creation. With a paid
- * tariff the bound is the monthly credits of the plan (`unpaidWork`, `newTaskVerdict`).
+ * The share of the monthly credits of a paid tariff that bounds its unpaid work in a period:
+ * half — 75, 300 and 1 000 credits on «Старт», «Бизнес» and «Агентство» (the pricing of
+ * 06.11.2026, docs/plan/63-new-pricing.md, Ц8; the whole month before). `unpaidWorkLimit`
+ * applies it.
  */
-export const trialUnpaidWorkCredits = 70
+export const unpaidWorkShareOfMonth = 0.5
+
+/**
+ * The bound on unpaid work of a workspace without a paid tariff, in credits: the gift of the
+ * registration itself, 50 — half the bound before it, twice the gift, as the bound of a tariff
+ * became half its month (Ц9 of 06.11.2026). Counted from the end of its last tariff or from its
+ * creation. With a paid tariff the bound is `unpaidWorkLimit` of its plan (`unpaidWork`,
+ * `newTaskVerdict`).
+ */
+export const trialUnpaidWorkCredits = signupGiftCredits
 
 /**
  * A workspace keeps credits on three accounts. Tariff credits are granted anew every period and
@@ -253,6 +268,23 @@ export function expiringTariffCredits(tariff: CreditAccountSnapshot): Credits {
   return toCredits(balance - held)
 }
 
+/**
+ * How many of the tariff credits that expire when a period ends are carried into the next one
+ * (decision of 06.11.2026, docs/plan/63-new-pricing.md, §2): what is available, but no more
+ * than `granted` — the quota the period that ends was granted by its order. Credits are spent
+ * from the carried ones first, as the older, so of what is available only up to the quota is of
+ * this period; the rest is the carry of the period before, which has lived its one period and
+ * expires. A carry is never carried again.
+ *
+ * Only at a renewal — the subscription moves on to its next period. When the tariff itself
+ * ends, everything available expires (`expiringTariffCredits`).
+ */
+export function carriedTariffCredits(tariff: CreditAccountSnapshot, granted: Credits): Credits {
+  const quota = creditsSchema.safeParse(granted)
+  if (!quota.success) throw badRequest('Invalid count of granted credits')
+  return toCredits(Math.min(expiringTariffCredits(tariff), quota.data))
+}
+
 const isInstant = (value: Date): boolean =>
   value instanceof Date && Number.isFinite(value.getTime())
 
@@ -284,9 +316,10 @@ export function tariffHoldCreatedAt(
 
 /**
  * Whether a tariff credit that a hold gives back is gone with its period instead of returning
- * to the account. Tariff credits are not carried over, so the credit returns only into the
- * period it was reserved in, while that period is still paid for: the subscription takes tasks
- * and the hold is not older than its current period. It expires when the hold is of an earlier
+ * to the account. What a period carries into the next one is decided when it ends, from the
+ * credits available then (`carriedTariffCredits`); a credit held at that moment is not among
+ * them, so it returns only into the period it was reserved in, while that period is still paid
+ * for: the subscription takes tasks and the hold is not older than its current period. It expires when the hold is of an earlier
  * period, when the subscription is past_due — its period is over and the next one starts with a
  * new quota — and when the workspace has no live subscription any more (`subscription` null).
  * `holdCreatedAt` is the stamp `tariffHoldCreatedAt` gave the hold. Gift and purchased credits
@@ -765,16 +798,28 @@ export interface UnpaidWorkInput {
 /**
  * The work a workspace got without a charge, in credits, not rounded: max(0, work − charged).
  * Failed, cancelled and rolled-back tasks cost the customer nothing, so this is what bounds
- * them: new tasks and retries stop when it reaches the monthly credits of the paid tariff —
- * counted from the start of its current period — or `trialUnpaidWorkCredits` without a paid
- * tariff, counted from the end of the last tariff or from the creation of the workspace
- * (`newTaskVerdict`).
+ * them: new tasks and retries stop when it reaches `unpaidWorkLimit` of the paid tariff — half
+ * its monthly credits, counted from the start of its current period — or
+ * `trialUnpaidWorkCredits` without a paid tariff, counted from the end of the last tariff or
+ * from the creation of the workspace (`newTaskVerdict`).
  */
 export function unpaidWork(input: UnpaidWorkInput): Decimal {
   const result = unpaidWorkSchema.safeParse(input)
   if (!result.success) throw badRequest('Invalid unpaid work')
   const { work, charged } = result.data
   return Money.max(0, new Money(work).minus(charged))
+}
+
+/**
+ * The bound on unpaid work of a period of a paid tariff, in whole credits:
+ * `unpaidWorkShareOfMonth` of the monthly credits of its plan, rounded down, and never below 1 —
+ * 150 → 75, 151 → 75, 1 → 1. At 0 the check `неоплачено ≥ граница` would refuse every new task
+ * of a plan of one credit before it did any work; 1 lets the first one in.
+ */
+export function unpaidWorkLimit(creditsPerMonth: number): Credits {
+  const result = positiveCreditsSchema.safeParse(creditsPerMonth)
+  if (!result.success) throw badRequest('Invalid monthly credits of a plan')
+  return toCredits(Money.max(1, new Money(result.data).times(unpaidWorkShareOfMonth).floor()))
 }
 
 /**
@@ -886,7 +931,10 @@ export interface NewTaskInput {
   /** The live subscription of the workspace with the terms of its plan; null when none is live. */
   subscription: {
     status: SubscriptionStatus
-    /** `plans.credits_per_month`: the bound on unpaid work of a period. */
+    /**
+     * `plans.credits_per_month`: half of it bounds the unpaid work of a period
+     * (`unpaidWorkLimit`).
+     */
     creditsPerMonth: number
     /** `plans.credits_per_day`: the tariff credits a Moscow day may take; null — no limit. */
     creditsPerDay: number | null
@@ -993,8 +1041,9 @@ export type NewTaskVerdict = {
  *    the day, with the gift and pack credits, cannot cover what the placement needs although the
  *    accounts can — `daily_limit`. Only a paid tariff whose plan has a daily limit gets here; a
  *    pack bought today lifts it. A retry is never refused by the day (`placementTariffRoom`);
- * 4. unpaid work, for a new task, a retry and the next words: against the monthly credits of the plan —
- *    `unpaid_limit` — or `trialUnpaidWorkCredits` — `trial_unpaid_limit`;
+ * 4. unpaid work, for a new task, a retry and the next words: against half the monthly credits
+ *    of the plan (`unpaidWorkLimit`) — `unpaid_limit` — or `trialUnpaidWorkCredits` —
+ *    `trial_unpaid_limit`;
  * 5. without a paid tariff, the gift of the site: `gift_site_used` when another workspace has
  *    spent gift credits on it.
  *
@@ -1056,7 +1105,9 @@ export function newTaskVerdict(input: NewTaskInput): NewTaskVerdict {
   if (numbers.spendableNow < numbers.needed) return refused('daily_limit')
 
   if (!goesOn(placement)) {
-    const unpaidLimit = paid ? subscription.creditsPerMonth : trialUnpaidWorkCredits
+    const unpaidLimit = paid
+      ? unpaidWorkLimit(subscription.creditsPerMonth)
+      : trialUnpaidWorkCredits
     if (new Money(result.data.unpaidWork).gte(unpaidLimit)) {
       return refused(paid ? 'unpaid_limit' : 'trial_unpaid_limit')
     }

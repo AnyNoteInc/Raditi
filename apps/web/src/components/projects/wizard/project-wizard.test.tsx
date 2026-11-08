@@ -52,13 +52,19 @@ function showWizard(
   stacks: readonly ProjectStack[] = ['wordpress'],
   browserAccess = false,
   browserStacks: readonly ProjectStack[] = stacks,
+  fromChats = false,
 ) {
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
   return render(
     <QueryClientProvider client={queryClient}>
-      <ProjectWizard stacks={stacks} browserAccess={browserAccess} browserStacks={browserStacks} />
+      <ProjectWizard
+        stacks={stacks}
+        browserAccess={browserAccess}
+        browserStacks={browserStacks}
+        fromChats={fromChats}
+      />
     </QueryClientProvider>,
   )
 }
@@ -214,6 +220,9 @@ describe('the access to the files', () => {
     expect(sourceCalls()[1]).toMatchObject({ source: { hostKey: KEY } })
     // The step that adds the project says the accesses become variables of the site.
     expect(screen.getByText(VARIABLES_NOTE)).toBeVisible()
+    // The access to the files stops at a chat that has the browser as well, the database does not
+    // (docs/plan/61-chats-first.md, К21 and 61.27).
+    expect(VARIABLES_NOTE).toContain('доступ к файлам — только в чате без браузера')
   })
 
   it('takes a changed key only by its own explicit button', async () => {
@@ -575,7 +584,7 @@ describe('a site without access to its files (docs/plan/57-browser-tasks.md, Б8
     // What the agent can do there, and nothing the browser of a task closes to it (Б21).
     expect(
       screen.getByText(
-        'Агент меняет записи, страницы и медиафайлы в админке сайта — через браузер, и вы видите каждый шаг.',
+        'Агент меняет записи, страницы и медиафайлы через браузер, и вы видите каждый шаг.',
       ),
     ).toBeTruthy()
     expect(
@@ -584,6 +593,14 @@ describe('a site without access to its files (docs/plan/57-browser-tasks.md, Б8
       ),
     ).toBeTruthy()
     expect(screen.queryByText(/меняет[^.]*настройки/)).toBeNull()
+    // Rule 3 and Б1: no promise of an undo there is not; no twin of the phrase the owner removed.
+    expect(
+      screen.getByText(
+        'Предпросмотра и выпуска версий здесь нет, а сделанное агентом на сайте отменить нельзя. Первоначальную версию сайта мы не сохраним.',
+      ),
+    ).toBeTruthy()
+    expect(screen.getByText('Агент работает только в браузере.')).toBeTruthy()
+    expect(screen.queryAllByText(/сразу|без выпуска|в админке сайта/i)).toEqual([])
     // No server, no password: only the hints.
     expect(screen.queryByRole('textbox', { name: /^Сервер/ })).toBeNull()
     type(
@@ -602,6 +619,14 @@ describe('a site without access to its files (docs/plan/57-browser-tasks.md, Б8
       access: 'browser',
       agentNotes: 'Вход в админку — по адресу /login',
     })
+  })
+
+  it('goes back to a new chat with the project chosen when it came from one', async () => {
+    showWizard(['wordpress'], true, ['wordpress'], true)
+    await passBasics()
+    fireEvent.click(screen.getByRole('tab', { name: 'Без доступа к файлам' }))
+    fireEvent.click(next())
+    await waitFor(() => expect(push).toHaveBeenCalledWith(`/chats/new?project=${SITE_ID}`))
   })
 
   it('sends no hints when there are none, and says a refused hint on its step', async () => {
@@ -755,5 +780,26 @@ describe('the platform of the site', () => {
       url: 'https://example.ru',
       stack: 'wordpress',
     })
+  })
+})
+
+describe('the wizard opened from a new chat (docs/plan/61-chats-first.md, §5.11)', () => {
+  it('leads a project with an import to its setup: there is no chat to start yet', async () => {
+    showWizard(['wordpress'], true, ['wordpress'], true)
+    await passBasics()
+    await passSource()
+    fireEvent.click(next())
+    await waitFor(() => expect(push).toHaveBeenCalledWith(`/projects/${SITE_ID}`))
+    expect(push).toHaveBeenCalledTimes(1)
+  })
+
+  it('leads «Отмена» back to the chat', () => {
+    showWizard(['wordpress'], true, ['wordpress'], true)
+    expect(screen.getByRole('link', { name: 'Отмена' }).getAttribute('href')).toBe('/chats/new')
+  })
+
+  it('leads «Отмена» to the projects otherwise', () => {
+    showWizard()
+    expect(screen.getByRole('link', { name: 'Отмена' }).getAttribute('href')).toBe('/projects')
   })
 })

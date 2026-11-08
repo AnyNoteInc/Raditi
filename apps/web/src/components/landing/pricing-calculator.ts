@@ -5,6 +5,7 @@ import {
 } from '@repo/domain/billing/credit-numbers'
 
 import { formatCount } from '@/lib/count'
+import { smallEditRubles } from '@/lib/credit-price'
 import { plural } from '@/lib/plural'
 import { Money } from '@/lib/rubles'
 
@@ -13,8 +14,11 @@ export interface LandingPlan {
   name: string
   price: string
   creditsPerMonth: number
-  /** The tariff credits the plan gives a Moscow day: the daily limit. */
-  creditsPerDay: number
+  /**
+   * The tariff credits the plan gives a Moscow day: the daily limit; null — the plan has none,
+   * as no plan on sale has since 06.11.2026.
+   */
+  creditsPerDay: number | null
   maxSites: number
 }
 
@@ -38,6 +42,13 @@ export interface PlanRecommendation {
    * kopecks and then to rubles would give 496.
    */
   perTaskRounded: string
+  /**
+   * What a small edit costs on what is paid, in whole rubles (`smallEditRubles`): the total
+   * over the credits the plan and its packs give — the price of a credit of the card when no
+   * pack is added, and the blend of the two when packs are. null when the plan gives no
+   * credits to count by.
+   */
+  smallEditRounded: string | null
 }
 
 /**
@@ -67,11 +78,13 @@ export function recommendPlan(
     const packs = extraCredits > 0 && pack ? Math.ceil(extraCredits / pack.credits) : 0
     const total = new Money(plan.price).plus(new Money(pack?.price ?? '0').times(packs))
     if (best && !total.lessThan(best.total)) continue
+    const bought = plan.creditsPerMonth + packs * (pack?.credits ?? 0)
     best = {
       plan,
       packs,
       total: total.toFixed(2),
       perTaskRounded: total.dividedBy(tasks).toDecimalPlaces(0, Money.ROUND_HALF_UP).toFixed(2),
+      smallEditRounded: smallEditRubles(total.toFixed(2), bought),
     }
   }
 
@@ -114,14 +127,19 @@ export function typicalCreditsInWords({ from, to }: TypicalCredits, withWord = t
 }
 
 /**
- * What a tariff gives, after the count of its credits: «кредитов в месяц — в среднем около 27
- * задач, до 50 кредитов в день». The average tasks are left out where the credits hold none; the
- * day caps only the tariff credits, the month stays their quota.
+ * What a tariff gives, after the count of its credits: «кредитов в месяц — в среднем около 14
+ * задач», and for a tariff with a daily limit «…, до 50 кредитов в день». The average tasks are
+ * left out where the credits hold none; the day caps only the tariff credits, the month stays
+ * their quota.
  */
-export function planInWords(creditsPerMonth: number, creditsPerDay: number): string {
+export function planInWords(creditsPerMonth: number, creditsPerDay: number | null): string {
   const tasks = averageTaskCount(creditsPerMonth)
   const average = tasks === 0 ? '' : ` — в среднем около ${formatCount(tasks)} ${tasksOf(tasks)}`
-  return `${pluralCredits(creditsPerMonth)} в месяц${average}, до ${formatCount(creditsPerDay)} ${creditsOf(creditsPerDay)} в день`
+  const day =
+    creditsPerDay === null
+      ? ''
+      : `, до ${formatCount(creditsPerDay)} ${creditsOf(creditsPerDay)} в день`
+  return `${pluralCredits(creditsPerMonth)} в месяц${average}${day}`
 }
 
 /** The extra packs of a recommendation in words: «4 дополнительных пакета по 100 кредитов». */

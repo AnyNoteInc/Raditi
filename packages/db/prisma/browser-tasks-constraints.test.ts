@@ -30,6 +30,11 @@ describe.skipIf(!databaseUrl)('browser task constraints', () => {
     task: randomUUID(),
     otherTask: randomUUID(),
   }
+  /** A UUID of the given version: what the check on a chat without a project reads. */
+  const uuidOf = (version: number) => {
+    const id = randomUUID()
+    return `${id.slice(0, 14)}${version}${id.slice(15)}`
+  }
 
   async function insert(table: string, values: Values) {
     const columns = Object.keys(values)
@@ -164,6 +169,7 @@ describe.skipIf(!databaseUrl)('browser task constraints', () => {
   })
 
   it('takes a task that needs something and keeps what it needs', async () => {
+    // A task with a site needs something; only a chat without a project may need nothing.
     await refuses(
       () =>
         insert('tasks', {
@@ -176,7 +182,7 @@ describe.skipIf(!databaseUrl)('browser task constraints', () => {
         }),
       'tasks_requirements_check',
     )
-    // Both together are a shape the schema keeps for later (Б3).
+    // Both together: a chat with a project (docs/plan/61-chats-first.md, К10).
     await insert('tasks', {
       id: randomUUID(),
       workspace_id: ids.workspace,
@@ -199,6 +205,93 @@ describe.skipIf(!databaseUrl)('browser task constraints', () => {
       `UPDATE tasks SET status = 'cancelled', needs_repository = needs_repository WHERE id = $1`,
       [ids.oldTask],
     )
+  })
+
+  describe('a chat without a project', () => {
+    const chat = (extra: Values = {}) =>
+      insert('tasks', {
+        id: uuidOf(7),
+        workspace_id: ids.workspace,
+        site_id: null,
+        needs_repository: false,
+        needs_browser: false,
+        updated_at: at,
+        ...extra,
+      })
+
+    it('needs nothing or the browser, never the repository', async () => {
+      await chat()
+      await chat({ needs_browser: true })
+      for (const needsBrowser of [false, true])
+        await refuses(
+          () => chat({ needs_repository: true, needs_browser: needsBrowser }),
+          'tasks_requirements_check',
+        )
+    })
+
+    // The browser invents the id, and the lease of the chat is its id: a version 8 id would be
+    // the id of a site of the product (`tasks_chat_id_check`, К14).
+    it.each([1, 3, 4, 5, 6, 8])('refuses an id of version %i', async (version) => {
+      await refuses(() => chat({ id: uuidOf(version) }), 'tasks_chat_id_check')
+    })
+
+    it('leaves the id of a task with a site as it was', async () => {
+      await insert('tasks', {
+        id: uuidOf(8),
+        workspace_id: ids.workspace,
+        site_id: ids.site,
+        updated_at: at,
+      })
+    })
+
+    it('keeps its site as its requirements: fixed when it is created', async () => {
+      const { id } = await chat({ needs_browser: true })
+      const other = randomUUID()
+      await insert('sites', {
+        id: other,
+        workspace_id: ids.workspace,
+        name: 'Another synthetic site',
+        url: `https://${other}.invalid`,
+        stack: 'wordpress',
+        updated_at: at,
+      })
+      const moved = (site: string | null, task: unknown) => () =>
+        schema.db.query('UPDATE tasks SET site_id = $1 WHERE id = $2', [site, task])
+      await refuses(moved(ids.site, id), 'tasks_requirements_fixed')
+      await refuses(moved(other, ids.oldTask), 'tasks_requirements_fixed')
+      await refuses(moved(null, ids.oldTask), 'tasks_requirements_fixed')
+      await schema.db.query(`UPDATE tasks SET site_id = site_id, title = 'x' WHERE id = $1`, [id])
+    })
+
+    it('holds a file and a browser session without a site', async () => {
+      const { id } = await chat({ needs_browser: true })
+      await attachment({ site_id: null })
+      await attachment({ site_id: null, status: 'bound', task_id: id, bound_at: at })
+      const browser = await session({ task_id: id, site_id: null })
+      await schema.db.query('UPDATE browser_sessions SET last_wrote_at = $1 WHERE id = $2', [
+        at,
+        browser.id,
+      ])
+      await schema.db.query('DELETE FROM tasks WHERE id = $1', [id])
+    })
+
+    it('leases by its own id: nothing makes the scope a site', async () => {
+      const { id } = await chat()
+      await insert('site_leases', { site_id: id, updated_at: at })
+      await insert('turn_assignments', {
+        id: randomUUID(),
+        task_id: id,
+        site_id: id,
+        session_id: 'chat',
+        turn_no: 1,
+        executor: 'local',
+        plan: {},
+        first_epoch: 1,
+        lease_epoch: 1,
+        deadline_at: later,
+        updated_at: at,
+      })
+    })
   })
 
   it('keeps hints of a site up to 2000 characters', async () => {

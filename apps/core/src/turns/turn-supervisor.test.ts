@@ -283,7 +283,15 @@ function turnFixture(kind: string) {
     id: sampleDriverId,
     image,
     cliVersion: '1.0.0',
-    capabilities: { resume: true, jsonEvents: true, outputSchema: true, mcp: false, images: false },
+    capabilities: {
+      resume: true,
+      jsonEvents: true,
+      outputSchema: true,
+      mcp: false,
+      images: false,
+      reasoningEvents: false,
+      compaction: false,
+    },
     prepare: vi.fn(async (context) => {
       order.push('prepare')
       return { ...prepared, context: { ...context } }
@@ -639,6 +647,16 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     })
     expect(f.leases.acquire).not.toHaveBeenCalled()
     expect(rollback).not.toHaveBeenCalled()
+  })
+
+  it('refuses an action of a turn without a checkpoint before taking a lease', async () => {
+    const f = fixture()
+    f.request.input = { ...f.request.input, attachments: [], action: 'compact' }
+    await expect(f.run()).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'An action of a turn needs the checkpoint of an earlier turn',
+    })
+    expect(f.leases.acquire).not.toHaveBeenCalled()
   })
 
   it('rejects replacement without an undo dependency before taking a lease', async () => {
@@ -1191,8 +1209,14 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     expect(f.publication.publish).not.toHaveBeenCalled()
   })
 
-  /** The committed checkpoint of turn 1, whose candidate is the fixture's base commit. */
-  async function checkpointOfTurnOne(f: Fixture) {
+  /**
+   * The committed checkpoint of turn 1, whose candidate is the fixture's base commit — or the
+   * commit given, a head the branch moved from after it (an edit of the client, «Обновить»).
+   */
+  async function checkpointOfTurnOne(
+    f: Fixture,
+    saved: { headSha?: string; branch?: string } = {},
+  ) {
     const memory = memoryStorage()
     const transit = memoryTransit()
     const service = new SnapshotService(memory.storage, transit.secrets)
@@ -1211,9 +1235,9 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
         home,
         git: {
           provider: 'gitea',
-          branch: f.request.workspace.branch,
+          branch: saved.branch ?? f.request.workspace.branch,
           baseSha: 'a'.repeat(40),
-          headSha: baseSha,
+          headSha: saved.headSha ?? baseSha,
         },
       },
       prior,
@@ -1232,6 +1256,74 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     }
     return { prior, transit, reference }
   }
+
+  it('carries out an action over the restored session: no words of the model are its result', async () => {
+    const f = fixture()
+    const { reference } = await checkpointOfTurnOne(f)
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+    f.request.context = { ...f.request.context, turn: 2 }
+    f.request.previous = reference
+    f.request.input = { ...f.request.input, attachments: [], action: 'compact' }
+    // As the driver does: an action has no meaning without the session it acts on.
+    vi.mocked(f.driver.command).mockImplementation((run) => {
+      if (!run.context.nativeSessionId) throw new Error('An action needs a session')
+      return ['synthetic-agent']
+    })
+    vi.mocked(f.driver.extractResult).mockReturnValue(null)
+
+    const { result: ended } = await f.run()
+
+    expect(ended).toMatchObject({ change_type: 'none', files_changed: [], questions: [] })
+    expect(ended.client_message).toBe(
+      'Готово: переписка сжата. Агент продолжит с её кратким пересказом.',
+    )
+    expect(f.driver.prepare).toHaveBeenLastCalledWith(
+      expect.objectContaining({ nativeSessionId: 'prior-native' }),
+    )
+    expect(vi.mocked(f.driver.command).mock.calls.at(-1)![1].action).toBe('compact')
+  })
+
+  // The owner, 06.11.2026: «необходимо продолжать сессию» — after an edit or «Обновить» too.
+  it('goes on with the session of turn n−1 on the head the branch moved to', async () => {
+    const f = fixture()
+    const { prior, reference } = await checkpointOfTurnOne(f, { headSha: 'd'.repeat(40) })
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+    f.request.context = { ...f.request.context, turn: 2 }
+    f.request.previous = reference
+    f.request.rebased = true
+    await f.run()
+    // The session comes back; the checkout is the bundle of the moved head, not the checkpoint's.
+    expect(f.transport.restore).toHaveBeenCalledWith(f.sandbox, home, {
+      home: Buffer.from(prior.home),
+      untracked: Buffer.from(prior.untracked),
+      patch: Buffer.from(prior.patch),
+    })
+    expect(f.workspace.buildBaseBundle).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedBaseSha: f.request.workspace.expectedBaseSha }),
+      expect.anything(),
+    )
+    expect(f.driver.prepare).toHaveBeenCalledWith(
+      expect.objectContaining({ nativeSessionId: 'prior-native' }),
+    )
+    expect([...f.assignments.rows.values()][0]!.plan).toMatchObject({
+      rebased: true,
+      previous: { turn: 1 },
+    })
+  })
+
+  it('refuses a rebased turn the checkpoint of another branch, before creating a container', async () => {
+    const f = fixture()
+    const { reference } = await checkpointOfTurnOne(f, {
+      headSha: 'd'.repeat(40),
+      branch: 'agent/other-task',
+    })
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
+    f.request.context = { ...f.request.context, turn: 2 }
+    f.request.previous = reference
+    f.request.rebased = true
+    await expect(f.run()).rejects.toMatchObject({ code: 'CONFLICT' })
+    expect(f.sandboxes.create).not.toHaveBeenCalled()
+  })
 
   it('restores turn n−1 through presigned GETs before installing the new turn secrets', async () => {
     const f = fixture()
@@ -1624,41 +1716,12 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
   it.each([
     ['a first turn', (f: Fixture) => void f],
     [
-      'a checkpoint',
-      (f: Fixture) => {
-        f.request.previous = {
-          workspaceId: labels.workspaceId,
-          sessionId: labels.sessionId,
-          turn: 1,
-          image,
-          driver: { id: sampleDriverId, version: '1.0.0' },
-          home,
-        }
-      },
-    ],
-    [
-      'a replacement that restores a checkpoint',
-      (f: Fixture) => {
-        f.request.replacesTurn = 1
-        f.request.workspace = { ...f.request.workspace, expectedBranchSha: baseSha }
-        f.request.previous = {
-          workspaceId: labels.workspaceId,
-          sessionId: labels.sessionId,
-          turn: 1,
-          image,
-          driver: { id: sampleDriverId, version: '1.0.0' },
-          home,
-        }
-        f.deps.contentRollback = { rollback: vi.fn(async () => {}) }
-      },
-    ],
-    [
       'a resumed session',
       (f: Fixture) => {
         f.request.context = { ...f.request.context, nativeSessionId: 'prior-native' }
       },
     ],
-  ])('refuses a rebased turn with %s before the lease', async (name, change) => {
+  ])('refuses a rebased turn as %s before the lease', async (name, change) => {
     const f = fixture()
     if (name !== 'a first turn') {
       f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 2 } }
@@ -2411,6 +2474,90 @@ describe.each(executorKinds)('TurnSupervisor without a repository (%s executor)'
     expect(f.workspace.buildBaseBundle).not.toHaveBeenCalled()
   })
 
+  it('after `/undo` restores the checkpoint the undone turn started from, not turn n−1', async () => {
+    const store = snapshotStore()
+    const first = fixture()
+    withoutRepository(first)
+    realSnapshots(first, store)
+    await capturesHome(first, 'first session')
+    await first.run()
+    const f = fixture()
+    withoutRepository(f)
+    realSnapshots(f, store)
+    await capturesHome(f, 'after the undone turn')
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 3 } }
+    f.request.context = { ...f.request.context, turn: 3 }
+    f.request.rewound = true
+    f.request.previous = {
+      workspaceId: labels.workspaceId,
+      sessionId: labels.sessionId,
+      turn: 1,
+      image,
+      driver: { id: sampleDriverId, version: '1.0.0' },
+      home,
+    }
+    const finished = await f.run()
+    expect(finished.manifest.git).toBeUndefined()
+    expect(f.transport.restore).toHaveBeenCalledOnce()
+  })
+
+  it('after two `/undo` in a row restores the same checkpoint, further back', async () => {
+    const store = snapshotStore()
+    const first = fixture()
+    withoutRepository(first)
+    realSnapshots(first, store)
+    await capturesHome(first, 'first session')
+    await first.run()
+    const f = fixture()
+    withoutRepository(f)
+    realSnapshots(f, store)
+    await capturesHome(f, 'after both undone turns')
+    f.request.sandbox = { ...f.request.sandbox, labels: { ...labels, turn: 4 } }
+    f.request.context = { ...f.request.context, turn: 4 }
+    f.request.rewound = true
+    f.request.previous = {
+      workspaceId: labels.workspaceId,
+      sessionId: labels.sessionId,
+      turn: 1,
+      image,
+      driver: { id: sampleDriverId, version: '1.0.0' },
+      home,
+    }
+    await f.run()
+    expect(f.transport.restore).toHaveBeenCalledOnce()
+  })
+
+  it('refuses a rewound turn that restores the undone turn, or is no later turn, or has a repository', async () => {
+    const undone = fixture()
+    withoutRepository(undone)
+    undone.request.sandbox = { ...undone.request.sandbox, labels: { ...labels, turn: 3 } }
+    undone.request.context = { ...undone.request.context, turn: 3 }
+    undone.request.rewound = true
+    undone.request.previous = {
+      workspaceId: labels.workspaceId,
+      sessionId: labels.sessionId,
+      turn: 2,
+      image,
+      driver: { id: sampleDriverId, version: '1.0.0' },
+      home,
+    }
+    await expect(undone.run()).rejects.toThrow('Incompatible previous turn snapshot')
+    expect(undone.leases.acquire).not.toHaveBeenCalled()
+
+    const firstTurn = fixture()
+    withoutRepository(firstTurn)
+    firstTurn.request.rewound = true
+    await expect(firstTurn.run()).rejects.toThrow('Only a later turn without a repository')
+    expect(firstTurn.leases.acquire).not.toHaveBeenCalled()
+
+    const repository = fixture()
+    repository.request.sandbox = { ...repository.request.sandbox, labels: { ...labels, turn: 2 } }
+    repository.request.context = { ...repository.request.context, turn: 2 }
+    repository.request.rewound = true
+    await expect(repository.run()).rejects.toThrow('Only a later turn without a repository')
+    expect(repository.leases.acquire).not.toHaveBeenCalled()
+  })
+
   it('refuses a checkpoint with a repository as turn n−1 before creating a container', async () => {
     const f = fixture()
     // The checkpoint of a turn with a repository, read before the task loses its workspace.
@@ -2820,9 +2967,34 @@ describe.each(executorKinds)('TurnSupervisor with files of the client (%s execut
     withoutRepository(browser)
     await expect(browser.run()).rejects.toMatchObject({
       code: 'BAD_REQUEST',
-      message: 'Files of the client go only to a turn with a repository',
+      message: 'Files of the client go only to a turn with a repository or without a site',
     })
     expect(browser.leases.acquire).not.toHaveBeenCalled()
     expect(files).not.toHaveBeenCalled()
+  })
+
+  it('writes the files of a chat without a site, which has no repository (docs/plan/61, К16)', async () => {
+    const f = turnFixture(kind)
+    const files = withFiles(f)
+    withoutRepository(f)
+    const request = f.request as TurnRequest
+    request.requirements = { repository: false, browser: false }
+    // Its lease is its own id (К14): that is what lets the sandbox hold them.
+    request.sandbox = {
+      ...request.sandbox,
+      labels: { ...request.sandbox.labels, siteId: labels.taskId },
+    }
+    const chatLease = async (input: { ttlMs: number }) => ({
+      ...f.lease,
+      siteId: labels.taskId,
+      expiresAt: new Date(Date.now() + input.ttlMs),
+    })
+    f.leases.acquire.mockImplementation(chatLease)
+    f.leases.renew.mockImplementation((_fence, ttlMs) => chatLease({ ttlMs }))
+    await f.run()
+    expect(files).toHaveBeenCalledExactlyOnceWith(labels.taskId, [path])
+    expect(f.order).toContain(`write:${path}`)
+    expect(f.order.indexOf(`write:${path}`)).toBeGreaterThan(f.order.indexOf('workdir:mkdir'))
+    expect([...f.assignments.rows.values()][0]!.outcome).toBe('completed')
   })
 })

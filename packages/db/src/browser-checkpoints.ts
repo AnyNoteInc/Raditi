@@ -69,6 +69,9 @@ interface CheckpointRow {
  * Records a checkpoint of the task, seen in one of its sessions. `seen` only adds an object the
  * task had not met: opening an editor again unsaves nothing, so the state and what a read found
  * stay. Any other state replaces them — a save after a confirmation is unverified again.
+ * `updated_at` moves on every save and otherwise only when one of them changed: every pass ends
+ * with a read of every object, and the object a pass of a chat left on the site is told by this
+ * time (docs/plan/61-chats-first.md, §5.8). Only a save records `unverified`.
  */
 export async function upsertBrowserCheckpoint(
   db: Pick<Prisma.TransactionClient, '$queryRaw'>,
@@ -96,7 +99,13 @@ export async function upsertBrowserCheckpoint(
                    ELSE EXCLUDED.state END,
       verified = CASE WHEN EXCLUDED.state = 'seen' THEN browser_checkpoints.verified
                       ELSE EXCLUDED.verified END,
-      updated_at = EXCLUDED.updated_at
+      updated_at = CASE
+        WHEN EXCLUDED.state = 'seen'
+          OR (EXCLUDED.state <> 'unverified'
+              AND browser_checkpoints.state = EXCLUDED.state
+              AND browser_checkpoints.verified IS NOT DISTINCT FROM EXCLUDED.verified)
+        THEN browser_checkpoints.updated_at
+        ELSE EXCLUDED.updated_at END
     RETURNING id, task_id, session_id, kind, object_id, edit_url, state, verified, created_at,
               updated_at`
   if (!row) throw conflict('The browser session is not one of the task')

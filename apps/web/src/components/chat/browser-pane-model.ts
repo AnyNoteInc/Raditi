@@ -11,6 +11,9 @@ import type { BrowserHead } from './chat-types'
 
 export type PaneStatus = keyof typeof browserText.status
 
+/** The address of a browser with no page yet: a chat without a project has no site to start on. */
+export const BLANK_PAGE = 'about:blank'
+
 /** The session still holds a browser: the stream can be opened. */
 export const sessionLive = (session: BrowserHead | null): boolean =>
   session !== null && (session.status === 'starting' || session.status === 'ready')
@@ -28,29 +31,57 @@ export interface PaneFacts {
    * browser is the agent's, idle, not waiting for the client.
    */
   answered?: boolean
+  /** It is `/undo` that left the task so: there is no answer to speak of. */
+  rewound?: boolean
 }
 
 const TERMINAL: readonly (TaskStatus | undefined)[] = ['done', 'failed', 'cancelled', 'rolled_back']
+
+/**
+ * What a browser the client does not drive is doing, one word for the chip of the panel and for
+ * the tile of «+»: a request for help waits for the client whatever the status of the chat says;
+ * a chat that waits with no such request waits for an answer, or for nothing once the agent has
+ * answered, or took its answer back; a chat with changes waits for `/release` or installs them, and the agent is not at
+ * work in its browser then (docs/plan/61-chats-first.md, К10).
+ */
+export function agentBrowserStatus(
+  taskStatus: TaskStatus | undefined,
+  { help, answered, rewound = false }: { help: boolean; answered: boolean; rewound?: boolean },
+): Extract<PaneStatus, 'waiting' | 'idle' | 'rewound' | 'agent'> {
+  if (help) return 'waiting'
+  if (taskStatus === 'awaiting_user') {
+    if (!answered) return 'waiting'
+    return rewound ? 'rewound' : 'idle'
+  }
+  const offBrowser =
+    taskStatus === 'awaiting_approval' || taskStatus === 'deploying' || taskStatus === 'verifying'
+  return offBrowser ? 'idle' : 'agent'
+}
 
 /** The chip of the toolbar: who drives the browser, or why nothing is shown. */
 export function paneStatus(facts: PaneFacts): PaneStatus {
   const { session, taskStatus, connection } = facts
   const finished = taskStatus === 'done' ? 'finished' : 'closed'
-  if (!sessionLive(session))
-    return session === null && !TERMINAL.includes(taskStatus) ? 'connecting' : finished
+  if (session === null) return 'notStarted'
+  if (!sessionLive(session)) return finished
   if (connection === 'ended') return finished
   if (!facts.configured || connection === 'failed') return 'error'
   if (connection === 'reconnecting') return 'reconnecting'
   if (connection !== 'open') return 'connecting'
-  if ((facts.state?.controller ?? session!.controller) === 'user') return 'user'
-  if (taskStatus === 'awaiting_user') return facts.answered ? 'idle' : 'waiting'
-  return 'agent'
+  if ((facts.state?.controller ?? session.controller) === 'user') return 'user'
+  return agentBrowserStatus(taskStatus, {
+    help: Boolean(facts.state?.help ?? session.help),
+    answered: facts.answered === true,
+    rewound: facts.rewound === true,
+  })
 }
 
 export type PaneOverlay =
   | { kind: 'none' }
-  /** No session yet: the browser opens when the agent starts. */
+  /** No session yet: the browser opens when the agent needs it. */
   | { kind: 'starting' }
+  /** The task ended and no turn of it needed a browser. */
+  | { kind: 'neverStarted' }
   | { kind: 'connecting' }
   /** Over the last frame, which stays on the screen. */
   | { kind: 'reconnecting' }
@@ -83,10 +114,7 @@ export function paneOverlay(
   facts: PaneFacts & { painted: boolean; endReason: BrowserStreamEndReason | null },
 ): PaneOverlay {
   const { session, taskStatus, connection, state } = facts
-  if (session === null)
-    return TERMINAL.includes(taskStatus)
-      ? { kind: 'closed', ...closedWords(null, taskStatus) }
-      : { kind: 'starting' }
+  if (session === null) return { kind: TERMINAL.includes(taskStatus) ? 'neverStarted' : 'starting' }
   if (!sessionLive(session))
     return { kind: 'closed', ...closedWords(session.closeReason, taskStatus) }
   if (connection === 'ended') return { kind: 'closed', ...closedWords(facts.endReason, taskStatus) }

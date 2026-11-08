@@ -48,11 +48,14 @@ export function orientationList(): { request: string; cost: string }[] {
   ]
 }
 
-/** The three promises: each is a rule of the charge, not a slogan. */
+/**
+ * The three promises: each is a rule of the charge, not a slogan. That only done work is paid
+ * for, the line above the block says (`taskCostRule`): the first promise is the minimum.
+ */
 export function creditPromises(): string[] {
   const step = attemptStepCredits.standard
   return [
-    `Кредиты списываются только за выполненную задачу — не меньше ${minTaskChargeCredits} за задачу.`,
+    `За выполненную задачу списывается не меньше ${minTaskChargeCredits} ${creditsOf(minTaskChargeCredits)}, даже если работы было совсем мало.`,
     `Больше ${step} ${creditsOf(step)} без вашего согласия задача не потратит: если она окажется больше, мы спросим, продолжать ли.`,
     'Каждое списание видно в «Использовании»: задача, сайт, дата и сколько кредитов.',
   ]

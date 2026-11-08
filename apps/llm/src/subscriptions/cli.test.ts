@@ -163,7 +163,7 @@ describe('operator subscription commands', { timeout: 90_000 }, () => {
       ).toMatchObject({ command: 'login', value: { backend, plan } })
       const entry = subscriptionImports.get(backend)!
       expect(entry.backend.id).toBe(backend)
-      expect(entry).toMatchObject({ driverId: 'opencode', turns: 1, requests: 2 })
+      expect(entry).toMatchObject({ driverId: 'opencode', turns: 8, requests: 16 })
       // A key from stdin.
       expect(entry.backend.importCredential).toBeTypeOf('function')
     },
@@ -538,5 +538,116 @@ describe('operator subscription commands', { timeout: 90_000 }, () => {
     expect(result.code).toBe(1)
     expect(result.stdout + result.stderr).not.toContain('private-')
     await expect(stat(out)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  /** A Vault of the search key alone: its metadata (null — none yet) and the writes it took. */
+  async function searchKeyVault(current: number | null) {
+    const requests: { method: string; path: string; token: string | undefined; body: unknown }[] =
+      []
+    const server: Server = createServer((req, res) => {
+      const chunks: Buffer[] = []
+      req.on('data', (chunk: Buffer) => chunks.push(chunk))
+      req.on('end', () => {
+        const text = Buffer.concat(chunks).toString()
+        requests.push({
+          method: req.method!,
+          path: req.url!,
+          token: req.headers['x-vault-token'] as string | undefined,
+          body: text ? JSON.parse(text) : null,
+        })
+        const json = (status: number, body: unknown) => {
+          res.writeHead(status, { 'content-type': 'application/json' })
+          res.end(JSON.stringify(body))
+        }
+        if (req.method === 'GET' && req.url === '/v1/subs/metadata/search/parallel')
+          return current === null
+            ? json(404, { errors: [] })
+            : json(200, {
+                data: {
+                  current_version: current,
+                  created_time: '2026-11-08T00:00:00Z',
+                  custom_metadata: null,
+                  versions: {
+                    [current]: { deletion_time: '', destroyed: false },
+                  },
+                },
+              })
+        if (req.method === 'POST' && req.url === '/v1/subs/data/search/parallel')
+          return json(200, {
+            data: {
+              version: (current ?? 0) + 1,
+              created_time: '2026-11-08T00:00:00Z',
+              deletion_time: '',
+              destroyed: false,
+            },
+          })
+        json(404, { errors: [] })
+      })
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    cleanup.push(() => new Promise<void>((resolve) => server.close(() => resolve())))
+    return { requests, address: `http://127.0.0.1:${(server.address() as AddressInfo).port}` }
+  }
+  const searchKey = 'private-parallel-key-0123456789'
+  async function writerFile() {
+    const file = join(await privateDirectory(), 'writer-token')
+    const { writeFile } = await import('node:fs/promises')
+    await writeFile(file, 'private-writer-token', { mode: 0o400 })
+    return file
+  }
+
+  it('takes the web search key on stdin into subs/search/parallel with the writer token, CAS from its metadata', async () => {
+    for (const current of [null, 3]) {
+      const vault = await searchKeyVault(current)
+      const result = await command('search-key', ['--vault-token-file', await writerFile()], {
+        env: { APP_ENV: 'test', VAULT_ADDR: vault.address },
+        input: `${searchKey}\n`,
+      })
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain(`версия ${(current ?? 0) + 1}`)
+      expect(result.stdout + result.stderr).not.toContain('private-')
+      const writes = vault.requests.filter((request) => request.method === 'POST')
+      expect(writes).toEqual([
+        {
+          method: 'POST',
+          path: '/v1/subs/data/search/parallel',
+          token: 'private-writer-token',
+          body: { data: { key: searchKey }, options: { cas: current ?? 0 } },
+        },
+      ])
+      // The command never reads the value back.
+      expect(
+        vault.requests.some(
+          (request) => request.path.startsWith('/v1/subs/data/') && request.method === 'GET',
+        ),
+      ).toBe(false)
+    }
+  })
+
+  it('refuses a malformed web search key before writing anything, without repeating it', async () => {
+    const vault = await searchKeyVault(null)
+    const result = await command('search-key', ['--vault-token-file', await writerFile()], {
+      env: { APP_ENV: 'test', VAULT_ADDR: vault.address },
+      input: 'privkey\n',
+    })
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain('16–512 видимых знаков ASCII')
+    expect(result.stdout + result.stderr).not.toContain('privkey')
+    expect(vault.requests.filter((request) => request.method === 'POST')).toHaveLength(0)
+  })
+
+  it('takes nothing but the writer token file and says how in its help', () => {
+    expect(parseSubscriptionArguments('search-key', ['--vault-token-file', '/tmp/t'])).toEqual({
+      command: 'search-key',
+      help: false,
+      value: { vaultTokenFile: '/tmp/t' },
+    })
+    for (const args of [
+      [],
+      ['--vault-token-file', 'relative'],
+      ['--vault-token-file', '/tmp/t', '--label', 'x'],
+    ])
+      expect(() => parseSubscriptionArguments('search-key', args)).toThrow()
+    expect(subscriptionHelp('search-key')).toContain('subs/search/parallel')
   })
 })

@@ -13,7 +13,7 @@ import { useTRPCClient } from '@/trpc/client'
 
 import { sectionHeading, sectionPadding } from './billing-surface'
 import type { BillingUsage, UsageEntry } from './billing-types'
-import { outcomeText, taskNote } from './usage-format'
+import { NO_PROJECT, outcomeText, taskNote } from './usage-format'
 
 const cell = { py: 1.75, pr: 2, borderBottom: 1, borderColor: 'divider', verticalAlign: 'top' }
 const lastCell = { '&:last-child': { pr: 0 } }
@@ -67,7 +67,7 @@ function HistoryRow({ entry, withYear }: { entry: UsageEntry; withYear: boolean 
         ) : null}
       </Box>
       <Box component="td" sx={{ ...cell, overflowWrap: 'anywhere' }}>
-        {entry.site.name}
+        {entry.site?.name ?? NO_PROJECT}
       </Box>
       <Box component="td" sx={{ ...cell, ...lastCell }}>
         <Outcome entry={entry} />
@@ -169,7 +169,7 @@ export function UsageHistory({
               <tr>
                 <th scope="col">Дата</th>
                 <th scope="col">Задача</th>
-                <th scope="col">Сайт</th>
+                <th scope="col">Проект</th>
                 <th scope="col">Списано</th>
               </tr>
             </thead>

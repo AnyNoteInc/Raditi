@@ -8,6 +8,11 @@ import {
 } from '@repo/domain/billing/credit-numbers'
 
 import { formatCount } from '@/lib/count'
+import {
+  CHARGED_FOR_DONE_WORK,
+  smallEditPrice,
+  TARIFF_CREDITS_CARRY_OVER,
+} from '@/lib/credit-price'
 import { formatMoscowDate, formatMoscowDay } from '@/lib/moscow-date'
 import { plural } from '@/lib/plural'
 import { formatRubles } from '@/lib/rubles'
@@ -84,11 +89,12 @@ function typicalCredits({ from, to }: TypicalCredits, withWord: boolean): string
 
 /**
  * What a task costs, under the heading of the tariffs. The numbers are the constants of the
- * credits model: the minimum of a task and the first two rows of the orientation list.
+ * credits model: the minimum of a task and the first two rows of the orientation list. The page
+ * says here, and only here, that done work alone is paid for (`CHARGED_FOR_DONE_WORK`, Ц14).
  */
 export function taskCostRule(): string {
   const { small, block } = typicalTaskCredits
-  return `Задача стоит столько кредитов, сколько работы она потребовала, но не меньше ${minTaskChargeCredits}: небольшая правка текста, цены или фото — обычно ${typicalCredits(small, true)}, добавить блок или страницу — ${typicalCredits(block, false)}. Кредиты списываются только за выполненную задачу. Уточнения и «Изменить» — часть той же задачи: работа над ними добавляется к её стоимости. «Отменить» — бесплатно.`
+  return `Задача стоит столько кредитов, сколько работы она потребовала, но не меньше ${minTaskChargeCredits}: небольшая правка текста, цены или фото — обычно ${typicalCredits(small, true)}, добавить блок или страницу — ${typicalCredits(block, false)}. ${CHARGED_FOR_DONE_WORK} Уточнения и «Изменить» — часть той же задачи: работа над ними добавляется к её стоимости. «Отменить» — бесплатно.`
 }
 
 /**
@@ -115,6 +121,14 @@ export function planSites(maxSites: number): string {
 /** «до 50 кредитов в день», «до 21 кредита в день»: the daily limit of a tariff. */
 const upToADay = (creditsPerDay: number) =>
   `до ${formatCount(creditsPerDay)} ${creditsOf(creditsPerDay)} в день`
+
+/**
+ * Some tariff of the list caps the tariff credits of a day. Since 06.11.2026 none on sale does
+ * (Ц6): the sentences about the day are kept for a tariff that has one, and said only then.
+ */
+export function anyDailyLimit(plans: readonly Pick<PlanLimits, 'creditsPerDay'>[]): boolean {
+  return plans.some((plan) => plan.creditsPerDay !== null)
+}
 
 /** «До 50 кредитов в день»; null for a tariff without a daily limit. */
 export function planDailyLimit(creditsPerDay: number | null): string | null {
@@ -314,12 +328,20 @@ export function packPromise(credits: number): string {
 }
 
 /**
- * The pack on «Тарифы»: when it is of use, how many average tasks it holds, and its promise.
+ * The pack on «Тарифы»: when it is of use, how many average tasks it holds, what a small edit
+ * costs out of it, and its promise. «На сегодня» only while a tariff on sale has a daily limit
+ * (`dayLimited`): without one, the tariff credits run out only before the period ends.
  */
-export function packOffer(credits: number): string {
+export function packOffer(
+  { price, credits }: { price: string; credits: number },
+  dayLimited: boolean,
+): string {
   const about = aboutTasks(credits)
   const holds = about === null ? '' : `: это в среднем ${about}`
-  return `Пригодится, если кредиты по тарифу закончатся на сегодня или до конца периода${holds}. ${packPromise(credits)}`
+  const when = dayLimited ? 'на сегодня или до конца периода' : 'до конца периода'
+  const smallEdit = smallEditPrice(price, credits, 'из пакета')
+  const edit = smallEdit === null ? '' : ` ${smallEdit}.`
+  return `Пригодится, если кредиты по тарифу закончатся ${when}${holds}.${edit} ${packPromise(credits)}`
 }
 
 /** A paid pack on the page of its order. `credits`: the size of the pack, null when unknown. */
@@ -487,10 +509,9 @@ export function planChangeTerms(input: {
   replacedName: string | null
 }): string {
   const { currentName, periodEnd, replacedName } = input
-  const day = formatMoscowDay(periodEnd)
   const replaced =
     replacedName === null ? '' : ` Переход на «${replacedName}», выбранный раньше, отменится.`
-  return `Тариф изменится ${formatMoscowDate(periodEnd)} — с началом нового периода. До этого дня действует «${currentName}». Кредиты по тарифу можно использовать до ${day}, на новый период они не переносятся. Кредиты из пакета остаются.${replaced}`
+  return `Тариф изменится ${formatMoscowDate(periodEnd)} — с началом нового периода. До этого дня действует «${currentName}». ${TARIFF_CREDITS_CARRY_OVER} Кредиты из пакета остаются.${replaced}`
 }
 
 /** The row of the change dialog that tells how the new tariff is paid for: label and value. */

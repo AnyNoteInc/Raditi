@@ -19,15 +19,16 @@ const money12x2 = /^\d{1,10}\.\d{2}$/
 const markup8x4 = /^\d{1,4}\.\d{4}$/
 
 describe('plans (docs/business.md §6)', () => {
+  // The pricing of 06.11.2026 (docs/plan/63-new-pricing.md, Ц1–Ц6).
   it('match the tariff table exactly', () => {
     expect(planSeeds.map(({ sortOrder: _, ...plan }) => plan)).toEqual([
       {
         slug: 'start',
         name: 'Старт',
         kind: 'quota',
-        price: '4900.00',
-        creditsPerMonth: 300,
-        creditsPerDay: 50,
+        price: '1990.00',
+        creditsPerMonth: 150,
+        creditsPerDay: null,
         packCredits: null,
         maxSites: 1,
       },
@@ -35,9 +36,9 @@ describe('plans (docs/business.md §6)', () => {
         slug: 'business',
         name: 'Бизнес',
         kind: 'quota',
-        price: '12900.00',
-        creditsPerMonth: 800,
-        creditsPerDay: 100,
+        price: '6990.00',
+        creditsPerMonth: 600,
+        creditsPerDay: null,
         packCredits: null,
         maxSites: 3,
       },
@@ -45,9 +46,9 @@ describe('plans (docs/business.md §6)', () => {
         slug: 'agency',
         name: 'Агентство',
         kind: 'quota',
-        price: '39900.00',
-        creditsPerMonth: 2500,
-        creditsPerDay: 300,
+        price: '19990.00',
+        creditsPerMonth: 2000,
+        creditsPerDay: null,
         packCredits: null,
         maxSites: 15,
       },
@@ -55,7 +56,7 @@ describe('plans (docs/business.md §6)', () => {
         slug: 'pack',
         name: 'Пакет из 100 кредитов',
         kind: 'pack',
-        price: '1990.00',
+        price: '1490.00',
         creditsPerMonth: null,
         creditsPerDay: null,
         packCredits: 100,
@@ -74,17 +75,11 @@ describe('plans (docs/business.md §6)', () => {
     ])
   })
 
-  // CHECK plans_credits_per_day_check and plans_day_within_month_check: a day of a tariff gives
-  // some of its month, never more; a pack and pay-per-action have no day.
-  it('give a day only to a tariff, and never more than its month', () => {
-    for (const plan of planSeeds) {
-      if (plan.kind !== 'quota') {
-        expect(plan.creditsPerDay).toBeNull()
-        continue
-      }
-      expect(plan.creditsPerDay).toBeGreaterThan(0)
-      expect(plan.creditsPerDay).toBeLessThanOrEqual(plan.creditsPerMonth)
-    }
+  // No plan limits the credits of a day since 06.11.2026 (Ц6). The limit stays in the code for a
+  // plan that sets one; CHECK plans_credits_per_day_check and plans_day_within_month_check hold
+  // with NULL.
+  it('give no plan a day', () => {
+    expect(planSeeds.map((plan) => plan.creditsPerDay)).toEqual(planSeeds.map(() => null))
   })
 
   it('have unique slugs, valid kinds and prices as Decimal(12,2) strings', () => {
@@ -113,16 +108,19 @@ describe('Appendix 1 of the public offer', () => {
 
   // Whole numbers in groups of three, as money is printed: «2 500», never «2500».
   const whole = String.raw`(\d{1,3}(?: \d{3})*)`
+  // A daily limit is printed after the month — «…, из них не более 50 Кредитов в день» — only
+  // for a tariff that has one; since 06.11.2026 none has (plan 63, Ц6), and a row without it
+  // promises a seed with `creditsPerDay` null.
   const tariff = {
     price: new RegExp(`^${whole} ₽ в месяц$`),
     terms: new RegExp(
-      `^${whole} Кредит(?:|а|ов) в месяц, из них не более ${whole} Кредит(?:|а|ов) в день; ` +
+      `^${whole} Кредит(?:|а|ов) в месяц(?:, из них не более ${whole} Кредит(?:|а|ов) в день)?; ` +
         String.raw`(?:до )?(\d+) Сайт(?:|а|ов) Заказчика$`,
     ),
   }
   const pack = {
     price: new RegExp(`^${whole} ₽$`),
-    terms: new RegExp(`^${whole} Кредит(?:|а|ов); не сгорают, дневным лимитом не ограничены$`),
+    terms: new RegExp(`^${whole} Кредит(?:|а|ов); не сгорают$`),
   }
   const count = (printed = '') => Number(printed.replaceAll(' ', ''))
   const roubles = (printed = '') => `${printed.replaceAll(' ', '')}.00`
@@ -137,7 +135,7 @@ describe('Appendix 1 of the public offer', () => {
         name,
         price: roubles(month[1]),
         creditsPerMonth: count(credits),
-        creditsPerDay: count(creditsPerDay),
+        creditsPerDay: creditsPerDay === undefined ? null : count(creditsPerDay),
         maxSites: count(maxSites),
       }
     const once = pack.price.exec(price)
@@ -226,10 +224,12 @@ describe('agent drivers', () => {
 
   it('carry exactly the AgentCapabilities keys', () => {
     const keys: (keyof AgentCapabilities)[] = [
+      'compaction',
       'images',
       'jsonEvents',
       'mcp',
       'outputSchema',
+      'reasoningEvents',
       'resume',
     ]
     for (const driver of agentDriverSeeds) {
@@ -243,6 +243,8 @@ describe('agent drivers', () => {
       outputSchema: false,
       mcp: true,
       images: false,
+      reasoningEvents: true,
+      compaction: true,
     })
   })
 })

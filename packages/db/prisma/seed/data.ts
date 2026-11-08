@@ -4,7 +4,7 @@ import type { AgentCapabilities, AgentDriverId } from '@repo/domain'
 
 import type { ModelClass, PlanKind } from '../../src/generated/prisma/enums.ts'
 
-/** A decimal number as a string, e.g. "4900.00": money never passes through a JS number. */
+/** A decimal number as a string, e.g. "1990.00": money never passes through a JS number. */
 export type DecimalString = string
 
 /** Start of a Moscow calendar day: tariffs and our rules switch at local midnight. */
@@ -14,10 +14,11 @@ export function moscowMidnight(isoDate: string): Date {
 
 // ─── Plans (docs/business.md §6) ──────────────────────────────────────────────
 //
-// The credits of the tariffs and of the pack are the numbers of the credits model (spec §17): a
-// database seeded with the terms of before gets them by the migration billing_credit_amounts,
-// which runs before this seed. The credits of a day (decision of 17.10.2026) come the same way,
-// by the migration billing_daily_credits.
+// The terms are those of the pricing of 06.11.2026 (docs/plan/63-new-pricing.md, Ц1–Ц6): lower
+// prices and credits, and no tariff limits the credits of a day. A database seeded with the
+// terms of before gets them by migrations that run before this seed: billing_credit_amounts
+// (the credits of the credits model), billing_daily_credits (the day of 17.10.2026) and
+// billing_pricing_2026_11 (these terms).
 
 /** Everything except name and sortOrder is a plan term: the seed creates it but never changes it. */
 export interface PlanSeed {
@@ -27,7 +28,10 @@ export interface PlanSeed {
   /** RUB without VAT (the seller is self-employed), Decimal(12,2). */
   price: DecimalString
   creditsPerMonth: number | null
-  /** Tariff credits of a Moscow day, never more than the month; NULL: no daily cap. */
+  /**
+   * Tariff credits of a Moscow day, never more than the month; NULL: no daily cap — every plan
+   * since 06.11.2026 (Ц6). The limit stays in the code for a plan that sets one.
+   */
   creditsPerDay: number | null
   packCredits: number | null
   maxSites: number | null
@@ -39,9 +43,9 @@ export const planSeeds = [
     slug: 'start',
     name: 'Старт',
     kind: 'quota',
-    price: '4900.00',
-    creditsPerMonth: 300,
-    creditsPerDay: 50,
+    price: '1990.00',
+    creditsPerMonth: 150,
+    creditsPerDay: null,
     packCredits: null,
     maxSites: 1,
     sortOrder: 10,
@@ -50,9 +54,9 @@ export const planSeeds = [
     slug: 'business',
     name: 'Бизнес',
     kind: 'quota',
-    price: '12900.00',
-    creditsPerMonth: 800,
-    creditsPerDay: 100,
+    price: '6990.00',
+    creditsPerMonth: 600,
+    creditsPerDay: null,
     packCredits: null,
     maxSites: 3,
     sortOrder: 20,
@@ -61,9 +65,9 @@ export const planSeeds = [
     slug: 'agency',
     name: 'Агентство',
     kind: 'quota',
-    price: '39900.00',
-    creditsPerMonth: 2500,
-    creditsPerDay: 300,
+    price: '19990.00',
+    creditsPerMonth: 2000,
+    creditsPerDay: null,
     packCredits: null,
     maxSites: 15,
     sortOrder: 30,
@@ -75,7 +79,7 @@ export const planSeeds = [
     slug: 'pack',
     name: 'Пакет из 100 кредитов',
     kind: 'pack',
-    price: '1990.00',
+    price: '1490.00',
     creditsPerMonth: null,
     creditsPerDay: null,
     packCredits: 100,
@@ -157,7 +161,15 @@ export const agentDriverSeeds: readonly AgentDriverSeed[] = [
     id: 'opencode',
     image: placeholderImage('opencode'),
     // No forced output schema, no image input.
-    capabilities: { resume: true, jsonEvents: true, outputSchema: false, mcp: true, images: false },
+    capabilities: {
+      resume: true,
+      jsonEvents: true,
+      outputSchema: false,
+      mcp: true,
+      images: false,
+      reasoningEvents: true,
+      compaction: true,
+    },
     enabled: true,
   },
 ]

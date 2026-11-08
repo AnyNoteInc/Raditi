@@ -2,11 +2,14 @@ import { isDeepStrictEqual } from 'node:util'
 
 import {
   badRequest,
+  branchBeforeTurn,
   conflict,
+  leaseScopeOf,
   requirementsOf,
   terminalTaskStatuses,
   turnEvidenceSchema,
   turnAssignmentOutcomes,
+  turnLeaseOf,
   turnPlanSchema,
   type OpenTurnAssignment,
   type TurnAssignment,
@@ -37,7 +40,8 @@ const closureSchema = z.object({
  * A turn meets the requirements of its task (docs/plan/57-browser-tasks.md, Б2, Б3), fixed when
  * the task was created. A turn without a repository has no branch, base or head: it continues the
  * completed turn before it by its snapshot, and after an unsuccessful one starts a new session —
- * nothing it did on the site is undone, so it is never replaced.
+ * nothing it did on the site is undone, so it is never replaced. After `/undo` of the turn before
+ * it (docs/plan/61-chats-first.md, §5.14) it starts where that turn started, one step back.
  */
 export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore {
   private readonly productDb: Database
@@ -79,7 +83,8 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
       const task = await tx.task.findUniqueOrThrow({ where: { id: fence.taskId } })
       if (task.contentRetiredAt) throw conflict('Task content context has expired')
       if (
-        task.siteId !== fence.siteId ||
+        // Its own row for a chat with the code (`turnLeaseOf`), its site's for a stand's turn.
+        (fence.siteId !== turnLeaseOf(task) && fence.siteId !== leaseScopeOf(task)) ||
         task.workspaceId !== labels.workspaceId ||
         terminalTaskStatuses.includes(task.status)
       )
@@ -98,7 +103,19 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
         const prior = await tx.taskTurn.findUniqueOrThrow({
           where: { taskId_turnNo: { taskId: task.id, turnNo: turn - 1 } },
         })
-        if (prior.status === 'completed') {
+        if (prior.undoneAt !== null) {
+          if (!plan.rewound) throw conflict('An undone turn is not continued')
+          const undone = await tx.turnAssignment.findMany({
+            where: { taskId: task.id, turnNo: turn - 1 },
+          })
+          const saved = turnPlanSchema.safeParse(undone[0]?.plan)
+          if (undone.length !== 1 || !saved.success)
+            throw conflict('The undone turn can no longer be restored')
+          if (!isDeepStrictEqual(plan.previous, saved.data.previous))
+            throw conflict('A rewound turn does not start where the undone one started')
+        } else if (plan.rewound) {
+          throw conflict('Only a turn after an undone one is rewound')
+        } else if (prior.status === 'completed') {
           if (plan.previous?.turn !== turn - 1)
             throw conflict('Continuation does not restore the completed product turn')
         } else if (plan.previous) {
@@ -111,12 +128,14 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
         const branch = await taskBranch(tx, task.id, prior)
         if (plan.replacesTurn === undefined) {
           if (prior.status !== 'completed') throw conflict('An unsuccessful turn must be replaced')
-          // After «Обновить» (plan 53, Р27) the turn is a new session on the moved candidate;
-          // a continuation would restore a session of the old `main` and publish over the move.
+          if (prior.undoneAt !== null) throw conflict('An undone turn must be replaced')
+          // After «Обновить» (plan 53, Р27) or the client's edit the turn starts on the moved
+          // candidate, going on with the session of the completed turn or a new one; a plain
+          // continuation would start on the old head and publish over the move.
           if (plan.rebased) {
             if (
               branch.movedAfterLastTurn === null ||
-              plan.previous ||
+              (plan.previous !== undefined && plan.previous.turn !== turn - 1) ||
               workspace.expectedBaseSha !== branch.movedAfterLastTurn
             )
               throw conflict('A rebased turn does not start on the candidate «Обновить» moved')
@@ -141,11 +160,13 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
           if (previous[0]!.sessionId !== sessionId)
             throw conflict('Replacement does not restore the replaced turn input')
           if (branch.movedAfterLastTurn !== null) {
-            // «Обновить» moved the candidate after the replaced turn (plan 53, Р27): its input
-            // stands on the old `main`, so the replacement is a new session on the moved head.
+            // «Обновить» or the client's edit moved the candidate after the replaced turn: the
+            // replacement starts on the moved head, with the session the replaced turn started
+            // from or a new one.
             if (
               !plan.rebased ||
-              plan.previous ||
+              (plan.previous !== undefined &&
+                !isDeepStrictEqual(plan.previous, replaced.previous)) ||
               workspace.expectedBaseSha !== branch.movedAfterLastTurn
             )
               throw conflict('Replacement does not start on the candidate «Обновить» moved')
@@ -156,7 +177,7 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
           )
             throw conflict('Replacement does not restore the replaced turn input')
         }
-      } else if (plan.previous || plan.replacesTurn !== undefined || plan.rebased) {
+      } else if (plan.previous || plan.replacesTurn !== undefined || plan.rebased || plan.rewound) {
         throw badRequest('The first product turn has no predecessor')
       }
       const assignment = await new PostgresTurnAssignmentStore(tx).open(parsed)
@@ -296,9 +317,10 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
  * Where the platform last left `agent/<taskId>` (docs/plan/53-chat-preview-release.md, R3), the
  * rule the planner's facts follow too. `written` — the head of the last completed turn or, when
  * «Обновить» moved the standing candidate after it, the candidate's head; null before the first
- * publication. `movedAfterLastTurn` — the candidate's head when «Обновить» moved it after the
- * turn before this one (it records the candidate under the task's turn number, with a head that
- * turn did not write); null otherwise.
+ * publication. A turn the client undid no longer counts (docs/plan/61-chats-first.md, §5.14): while
+ * it is the latest one the branch stands where its plan found it. `movedAfterLastTurn` — the
+ * candidate's head when «Обновить» moved it after the turn before this one (it records the
+ * candidate under the task's turn number, with a head that turn did not write); null otherwise.
  */
 async function taskBranch(
   tx: Tx,
@@ -306,12 +328,20 @@ async function taskBranch(
   prior: { turnNo: number; headSha: string | null },
 ): Promise<{ written: string | null; movedAfterLastTurn: string | null }> {
   const published = await tx.taskTurn.findFirst({
-    where: { taskId, status: 'completed' },
+    where: { taskId, status: 'completed', undoneAt: null },
     orderBy: { turnNo: 'desc' },
     select: { turnNo: true, headSha: true },
   })
   if (published && !published.headSha)
     throw conflict('Completed product turn has no publication evidence')
+  const undone = await tx.taskTurn.findFirst({
+    where: { taskId, undoneAt: { not: null }, turnNo: { gt: published?.turnNo ?? 0 } },
+    orderBy: { turnNo: 'desc' },
+    select: { turnNo: true },
+  })
+  const last = undone
+    ? await undoneTurnBranch(tx, taskId, undone.turnNo)
+    : { turnNo: published?.turnNo ?? 0, head: published?.headSha ?? null }
   // The latest revision whatever its status: an «Обновить» that left nothing to release while a
   // pass was queued records the head it pushed as a revision superseded at once (plan 53, R3).
   const standing = await tx.taskCandidate.findFirst({
@@ -330,12 +360,23 @@ async function taskBranch(
         )?.headSha ?? null)
     : null
   const moved = standing && standing.headSha !== own ? standing : null
-  const written =
-    moved && moved.turnNo >= (published?.turnNo ?? 0) ? moved.headSha : (published?.headSha ?? null)
   return {
-    written,
+    written: moved && moved.turnNo >= last.turnNo ? moved.headSha : last.head,
     movedAfterLastTurn: moved && moved.turnNo === prior.turnNo ? moved.headSha : null,
   }
+}
+
+/** Where `/undo` of a turn left the task branch: where the plan of that turn found it. */
+async function undoneTurnBranch(
+  tx: Tx,
+  taskId: string,
+  turnNo: number,
+): Promise<{ turnNo: number; head: string | null }> {
+  const assignments = await tx.turnAssignment.findMany({ where: { taskId, turnNo } })
+  const saved = turnPlanSchema.safeParse(assignments[0]?.plan)
+  if (assignments.length !== 1 || !saved.success)
+    throw conflict('The undone turn can no longer be restored')
+  return { turnNo, head: branchBeforeTurn(saved.data) }
 }
 
 /** A client's cancel and the turn's deadline are their own TaskTurn statuses, not failures. */

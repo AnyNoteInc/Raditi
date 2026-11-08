@@ -9,6 +9,9 @@ import {
   type Env,
   type LlmBackend,
   type TurnCredentialRef,
+  WEB_SEARCH_KEY_FIELD,
+  WEB_SEARCH_KEY_PATH,
+  webSearchKeySchema,
 } from '@repo/domain'
 import { llmBackends, zaiApiBackend, zaiCodingBackend } from '@repo/llm-backends'
 import { revokeTurnCredentials } from '@repo/turn-keys'
@@ -29,7 +32,7 @@ import {
 } from './retire.ts'
 import { readSecretFile, readSecretInput, writeSecretFile } from './secret-input.ts'
 
-export type SubscriptionCommand = 'login' | 'retire' | 'token'
+export type SubscriptionCommand = 'login' | 'retire' | 'token' | 'search-key'
 const invalid = () => new Error('Неверные параметры команды подписок. Используйте --help.')
 class OperatorCommandError extends Error {}
 const path = z.string().refine(isAbsolute)
@@ -80,11 +83,13 @@ const retireSchema = z
         : value.label !== undefined),
   )
 const tokenSchema = z.strictObject({ policy: z.enum(['writer', 'admin']), out: path })
+const searchKeySchema = z.strictObject({ vaultTokenFile: path })
 export type SubscriptionOptions =
   | { command: SubscriptionCommand; help: true }
   | { command: 'login'; help: false; value: z.output<typeof loginSchema> }
   | { command: 'retire'; help: false; value: z.output<typeof retireSchema> }
   | { command: 'token'; help: false; value: z.output<typeof tokenSchema> }
+  | { command: 'search-key'; help: false; value: z.output<typeof searchKeySchema> }
 
 /** Strict argument parsing completes before reading environment, files or any secret. */
 export function parseSubscriptionArguments(
@@ -131,6 +136,11 @@ export function parseSubscriptionArguments(
     if (!parsed.success) throw invalid()
     return { command, help: false, value: parsed.data }
   }
+  if (command === 'search-key') {
+    const parsed = searchKeySchema.safeParse(value)
+    if (!parsed.success) throw invalid()
+    return { command, help: false, value: parsed.data }
+  }
   const parsed = tokenSchema.safeParse(value)
   if (!parsed.success) throw invalid()
   return { command, help: false, value: parsed.data }
@@ -149,16 +159,24 @@ export interface SubscriptionImport {
   planExample: string
 }
 const imports = new Map<string, SubscriptionImport>([
-  // One turn at a time until the plan's real concurrency is measured (owner's question П4).
+  // Eight turns at a time, the bound of an account (owner's request of 06.11.2026: eight agents
+  // side by side; it was one until the plan's real concurrency is measured, П4). A request or two
+  // of each turn at once: sixteen. The operator lowers them in the account's row if the plan
+  // answers 429.
   [
     zaiCodingBackend.id,
-    { backend: zaiCodingBackend, driverId: 'opencode', turns: 1, requests: 2, planExample: 'lite' },
+    {
+      backend: zaiCodingBackend,
+      driverId: 'opencode',
+      turns: 8,
+      requests: 16,
+      planExample: 'lite',
+    },
   ],
-  // The pay-per-token API has no plan cap, only rate limits nobody has measured yet: the same
-  // values until then, raised by the operator in the account's row within its bounds.
+  // The pay-per-token API has no plan cap, only rate limits nobody has measured yet: the same.
   [
     zaiApiBackend.id,
-    { backend: zaiApiBackend, driverId: 'opencode', turns: 1, requests: 2, planExample: 'payg' },
+    { backend: zaiApiBackend, driverId: 'opencode', turns: 8, requests: 16, planExample: 'payg' },
   ],
 ])
 /** `--backend` accepts exactly these ids: a login never meets an id without settings. */
@@ -189,10 +207,12 @@ export function subscriptionHelp(command: SubscriptionCommand): string {
     login: `subscriptions:login -- --backend ${[...imports.keys()].join('|')} --label <имя> [--plan <план>] [--paid-until YYYY-MM-DD] --vault-token-file <абсолютный путь>\nПовторный вход: --backend <оболочка> --relogin <UUID> --vault-token-file <путь>.\n${input}\n--plan — метка тарифа нового аккаунта, например: ${plans}.`,
     retire:
       'subscriptions:retire -- --account <UUID> --label <метка> [--compromised --turns-token-file <путь>]\nОкончательное удаление: --account <UUID> --label <метка> --finalize --vault-token-file <путь> [--console-revoked].\n--console-revoked подтверждает ручной отзыв ключа в консоли провайдера.\nОтмена запроса, пока ключ не отозван: --account <UUID> --cancel.',
+    'search-key':
+      'subscriptions:search-key -- --vault-token-file <абсолютный путь>\nКлюч веб-поиска агента (Parallel Search) поступает через stdin или скрытый ввод и записывается в Vault subs/search/parallel токеном writer, с CAS; обратно команда его не читает. Читает его только роль mcp — инструмент появится у агента в течение 30 секунд. Ключ проверяйте в консоли Parallel: команда к сервису не обращается.',
     token:
       'subscriptions:token -- --policy writer|admin --out <абсолютный путь>\nТокен dev-root поступает через stdin или скрытый ввод. Новый файл создаётся с правами 0400.\nТолько development/test и числовой loopback VAULT_ADDR; срок — 15 минут.',
   }
-  return `${usage[command]}\nОкружение задаётся явно; команда не загружает .env автоматически. APP_ENV и VAULT_ADDR обязательны; login/retire также требуют DATABASE_URL, login — ещё LLM_EGRESS_PROXY_URL, LLM_EGRESS_CA_FILE, LLM_EGRESS_CLIENT_CERT_FILE и LLM_EGRESS_CLIENT_KEY_FILE, если провайдеру нужен узел выхода${egressNote}.\n`
+  return `${usage[command]}\nОкружение задаётся явно; команда не загружает .env автоматически. APP_ENV и VAULT_ADDR обязательны (search-key других не требует); login/retire также требуют DATABASE_URL, login — ещё LLM_EGRESS_PROXY_URL, LLM_EGRESS_CA_FILE, LLM_EGRESS_CLIENT_CERT_FILE и LLM_EGRESS_CLIENT_KEY_FILE, если провайдеру нужен узел выхода${egressNote}.\n`
 }
 
 const stages: Record<SubscriptionRetirementStage, string> = {
@@ -302,6 +322,30 @@ export async function runSubscriptionCommand(
       })
       await writeSecretFile(options.value.out, token)
       process.stdout.write('Токен записан в новый закрытый файл. Срок действия — 15 минут.\n')
+      return
+    }
+    if (options.command === 'search-key') {
+      // The writer of subs/ may write and read metadata, never the value: CAS from the metadata.
+      const writer = createVaultSecretStore({
+        addr: address,
+        token: await readSecretFile(options.value.vaultTokenFile),
+      })
+      const metadata = await writer.kvMetadata(WEB_SEARCH_KEY_PATH)
+      const key = webSearchKeySchema.safeParse(
+        (await readSecretInput('Ключ веб-поиска: ', controller.signal)).trim(),
+      )
+      if (!key.success)
+        throw new OperatorCommandError(
+          'Ключ веб-поиска должен состоять из 16–512 видимых знаков ASCII без пробелов.',
+        )
+      const { version } = await writer.kvWrite(
+        WEB_SEARCH_KEY_PATH,
+        { [WEB_SEARCH_KEY_FIELD]: key.data },
+        { cas: metadata?.currentVersion ?? 0 },
+      )
+      process.stdout.write(
+        `Ключ веб-поиска записан в Vault, версия ${version}. Роль mcp покажет инструмент агенту в течение 30 секунд.\n`,
+      )
       return
     }
     const config = configuration(() => dbConfigFromEnv(env))

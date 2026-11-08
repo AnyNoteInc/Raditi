@@ -87,7 +87,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: «Изменить» an access of a w
     const workspaces = await db.workspace.findMany({ where: owned, select: { id: true } })
     const workspaceIds = workspaces.map(({ id }) => id)
     const inWorkspaces = { workspaceId: { in: workspaceIds } }
-    await db.siteLease.deleteMany({ where: { site: inWorkspaces } })
+    const sites = await db.site.findMany({ where: inWorkspaces, select: { id: true } })
+    await db.siteLease.deleteMany({ where: { siteId: { in: sites.map(({ id }) => id) } } })
     await db.task.deleteMany({ where: inWorkspaces })
     await deleteSiteConnectionRows(db, workspaceIds)
     await db.gitRepository.deleteMany({ where: { site: inWorkspaces } })

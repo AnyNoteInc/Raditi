@@ -1,10 +1,17 @@
 // @vitest-environment jsdom
+import { signupGiftCredits } from '@repo/domain/billing/credit-numbers'
 import { QueryClient, QueryClientProvider, type QueryKey } from '@tanstack/react-query'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { BillingUsage } from '@/components/billing/billing-types'
-import { plain, subscriptionTo, taskCreditsFor, type TaskFacts } from '@/components/billing/testing'
+import {
+  plain,
+  subscriptionTo,
+  tariffMeter,
+  taskCreditsFor,
+  type TaskFacts,
+} from '@/components/billing/testing'
 
 import { CreditRing, creditRing, creditRows, creditWords, usageNotice } from './credit-ring'
 
@@ -32,7 +39,7 @@ function giftOnly(gift: number, facts: TaskFacts = {}): BillingUsage {
       slug: 'pack',
       name: 'Пакет из 100 кредитов',
       credits: 100,
-      price: '1990.00',
+      price: '1490.00',
     },
     subscription: null,
     tariff: null,
@@ -52,9 +59,17 @@ function giftOnly(gift: number, facts: TaskFacts = {}): BillingUsage {
   }
 }
 
-/** «Бизнес» with `left` of its 800 credits and a pack of 100 bought. */
-function onBusiness(left: number, facts: TaskFacts = {}): BillingUsage {
-  const subscription = subscriptionTo()
+/**
+ * «Бизнес» with `left` of its 600 credits and a pack of 100 bought; `creditsPerDay` gives it a
+ * daily limit, which no tariff on sale has since 06.11.2026.
+ */
+function onBusiness(
+  left: number,
+  facts: TaskFacts = {},
+  creditsPerDay: number | null = null,
+): BillingUsage {
+  const base = subscriptionTo()
+  const subscription = subscriptionTo({ plan: { ...base.plan, creditsPerDay } })
   const credits = taskCreditsFor(
     {
       tariff: { balance: left, held: 0 },
@@ -68,7 +83,7 @@ function onBusiness(left: number, facts: TaskFacts = {}): BillingUsage {
     ...giftOnly(0),
     subscription,
     tariff: {
-      credits: { granted: 800, charged: 800 - left, held: 0, expired: 0, left, heldEarlier: 0 },
+      credits: tariffMeter({ charged: 600 - left, left }),
       today: credits.today,
       sites: { count: 1, max: 3 },
       bySite: [],
@@ -95,22 +110,22 @@ describe('the credit ring over the account menu', () => {
     usageCall.mockResolvedValue(giftOnly(20))
     showRing()
     const ring = await screen.findByRole('button', {
-      name: 'Подарочные кредиты: осталось 20 из 35',
+      name: `Подарочные кредиты: осталось 20 из ${signupGiftCredits}`,
     })
     fireEvent.click(ring)
     const window = await screen.findByRole('dialog')
     expect(plain(within(window).getByRole('heading').textContent)).toBe('Без тарифа')
     expect(within(window).getByText('Подарок')).toBeTruthy()
-    expect(within(window).getByText('осталось 20 из 35')).toBeTruthy()
+    expect(within(window).getByText(`осталось 20 из ${signupGiftCredits}`)).toBeTruthy()
     const manage = within(window).getByRole('link', { name: 'Управлять использованием' })
     expect(manage.getAttribute('href')).toBe('/settings/usage')
   })
 
   it('tells why a new task would not be taken, in the words of the billing pages', async () => {
-    usageCall.mockResolvedValue(giftOnly(35, { rateUsable: false }))
+    usageCall.mockResolvedValue(giftOnly(signupGiftCredits, { rateUsable: false }))
     showRing()
     const ring = await screen.findByRole('button', {
-      name: 'Подарочные кредиты: осталось 35 из 35. Сейчас новую задачу начать нельзя',
+      name: `Подарочные кредиты: осталось ${signupGiftCredits} из ${signupGiftCredits}. Сейчас новую задачу начать нельзя`,
     })
     fireEvent.click(ring)
     expect(
@@ -120,17 +135,17 @@ describe('the credit ring over the account menu', () => {
     ).toBeTruthy()
   })
 
-  it('shows the tariff with its day, its period and the pack', async () => {
+  it('shows the tariff with its period and the pack', async () => {
     usageCall.mockResolvedValue(onBusiness(512))
     showRing()
     fireEvent.click(
-      await screen.findByRole('button', { name: 'Кредиты по тарифу: осталось 512 из 800' }),
+      await screen.findByRole('button', { name: 'Кредиты по тарифу: осталось 512 из 600' }),
     )
     const window = await screen.findByRole('dialog')
     expect(plain(within(window).getByRole('heading').textContent)).toBe(
       'Тариф «Бизнес» до 18 октября',
     )
-    expect(within(window).getByText('осталось 512 из 800')).toBeTruthy()
+    expect(within(window).getByText('осталось 512 из 600')).toBeTruthy()
   })
 
   it('says of an unpaid tariff that its period is over, as «Использование» does', async () => {
@@ -171,7 +186,7 @@ function unpaid(): BillingUsage {
     ...giftOnly(0),
     subscription,
     tariff: {
-      credits: { granted: 800, charged: 595, held: 0, expired: 0, left: 205, heldEarlier: 0 },
+      credits: tariffMeter({ charged: 395, left: 205 }),
       today: credits.today,
       sites: { count: 1, max: 3 },
       bySite: [],
@@ -184,15 +199,25 @@ function unpaid(): BillingUsage {
 describe('creditRing', () => {
   it('is full of the period of the tariff while there is one', () => {
     expect(creditRing(onBusiness(512))).toEqual({
-      label: 'Кредиты по тарифу: осталось 512 из 800',
-      share: 0.64,
+      label: 'Кредиты по тарифу: осталось 512 из 600',
+      share: 512 / 600,
       closed: false,
     })
   })
 
+  it('counts what the renewal carried into the period in what the ring is full of', () => {
+    const carried = onBusiness(700)
+    carried.tariff!.credits = tariffMeter({ carried: 120, charged: 20, left: 700 })
+    expect(creditRing(carried)).toMatchObject({
+      label: 'Кредиты по тарифу: осталось 700 из 720',
+      share: 700 / 720,
+    })
+    expect(creditRows(carried)).toContainEqual({ label: 'По тарифу', value: 'осталось 700 из 720' })
+  })
+
   it('is full of the gift without a tariff, and closed when a task would not be taken', () => {
     expect(creditRing(giftOnly(0))).toEqual({
-      label: 'Подарочные кредиты: осталось 0 из 35. Сейчас новую задачу начать нельзя',
+      label: `Подарочные кредиты: осталось 0 из ${signupGiftCredits}. Сейчас новую задачу начать нельзя`,
       share: 0,
       closed: true,
     })
@@ -203,13 +228,16 @@ describe('creditRing', () => {
   })
 
   it('says «остался» of 21 credits', () => {
-    expect(creditRing(giftOnly(21)).label).toBe('Подарочные кредиты: остался 21 из 35')
+    expect(creditRing(giftOnly(21)).label).toBe(
+      `Подарочные кредиты: остался 21 из ${signupGiftCredits}`,
+    )
   })
 })
 
 describe('creditRows', () => {
-  it('names the day, the period and the pack of a tariff', () => {
-    expect(creditRows(onBusiness(512)).map((row) => row.label)).toEqual([
+  it('names the period and the pack of a tariff, and the day of a tariff that has one', () => {
+    expect(creditRows(onBusiness(512)).map((row) => row.label)).toEqual(['По тарифу', 'Пакет'])
+    expect(creditRows(onBusiness(512, {}, 100)).map((row) => row.label)).toEqual([
       'Сегодня',
       'По тарифу',
       'Пакет',
@@ -217,7 +245,9 @@ describe('creditRows', () => {
   })
 
   it('names the gift alone without a tariff', () => {
-    expect(creditRows(giftOnly(20))).toEqual([{ label: 'Подарок', value: 'осталось 20 из 35' }])
+    expect(creditRows(giftOnly(20))).toEqual([
+      { label: 'Подарок', value: `осталось 20 из ${signupGiftCredits}` },
+    ])
   })
 
   it('shows no gift that was never granted', () => {
@@ -228,8 +258,8 @@ describe('creditRows', () => {
 
 describe('creditWords', () => {
   it('says nothing while a new task would be taken', () => {
-    expect(creditWords(giftOnly(35))).toBeNull()
-    expect(usageNotice(giftOnly(35))).toBeNull()
+    expect(creditWords(giftOnly(signupGiftCredits))).toBeNull()
+    expect(usageNotice(giftOnly(signupGiftCredits))).toBeNull()
   })
 
   it('names the end of the gift', () => {

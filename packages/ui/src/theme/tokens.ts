@@ -34,6 +34,17 @@ export const semanticColors = {
   },
 } as const
 
+/**
+ * The hues of a status dot. The status tones above are all brown at this size, so a dot told apart
+ * by colour has its own; each one stands 3:1 on the surfaces of both colour schemes.
+ */
+export const statusDotColors = {
+  ok: '#2E9F62',
+  waiting: '#C77F0A',
+  broken: '#D9482B',
+  off: '#8C8072',
+} as const
+
 // Keep this module dependency-free: metadata and error boundaries also consume the palette.
 function alpha(hex: string, opacity: number): string {
   const channels = [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16))

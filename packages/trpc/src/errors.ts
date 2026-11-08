@@ -172,11 +172,12 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   GIT_OPERATION_FAILED:
     'Не удалось получить или сохранить файлы сайта. Попробуйте ещё раз немного позже',
   // A dialog, its preview and the release of its changes (docs/plan/53-chat-preview-release.md).
-  CHAT_NOT_CONFIGURED: 'Диалоги сейчас недоступны. Попробуйте ещё раз немного позже',
+  CHAT_NOT_CONFIGURED: 'Чаты сейчас недоступны. Попробуйте ещё раз немного позже',
   // The Transit key of the workspace was not made before the task (docs/plan/57, Б32).
   WORKSPACE_KEY_UNAVAILABLE:
     'Не удалось начать задание из-за технического сбоя. Попробуйте ещё раз немного позже',
   TASK_NOT_ACCEPTED: 'Задания для этого сайта сейчас не принимаются',
+  TASK_ID_INVALID: 'Не удалось начать чат. Обновите страницу и попробуйте ещё раз',
   TASK_TEXT_EMPTY: 'Напишите, что нужно сделать на сайте',
   TASK_TEXT_TOO_LONG: feedTooLongText(FEED_REQUEST_TEXT_LIMIT),
   TASK_TEXT_HAS_SECRET: feedInputText.secret,
@@ -184,15 +185,20 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
     'В сообщении есть символы, которые мы не можем сохранить. Уберите их и отправьте снова',
   TASK_BUSY:
     'Подождите: агент ещё работает. Написать можно будет, когда он закончит или задаст вопрос',
-  TASK_FINISHED: 'Диалог завершён. Чтобы попросить что-то ещё, начните новый',
+  TASK_REWINDING: 'Подождите: последний запрос ещё отменяется. Написать можно будет через минуту',
+  TASK_REDOING: 'Подождите: отменённый запрос ещё возвращается. Написать можно будет через минуту',
+  TASK_FINISHED: 'Чат завершён. Чтобы попросить что-то ещё, начните новый',
+  // «Терминал»: the client's edit of a file of a chat (06.11.2026).
+  SITE_FILE_EDIT_CLOSED: 'Чат закрыт: правку файла в него сохранить нельзя',
+  SITE_FILE_EDIT_NO_TURN: 'Сохранить файл можно после первого ответа агента в этом чате',
   TASK_CONTINUE_REQUIRED:
     'Кредиты, отложенные на эту работу, закончились. Нажмите «Продолжить», чтобы агент работал дальше',
   TASK_NOTHING_TO_CONTINUE:
-    'Продолжать нечего: диалог не ждёт вашего решения. Обновите страницу, чтобы увидеть, что изменилось',
+    'Продолжать нечего: чат не ждёт вашего решения. Обновите страницу, чтобы увидеть, что изменилось',
   TASK_ATTEMPTS_EXHAUSTED:
-    'Эту задачу больше нельзя продолжить: на неё ушли все заходы, которые даются одной задаче. Начните новый диалог или напишите нам',
+    'Эту задачу больше нельзя продолжить: на неё ушли все заходы, которые даются одной задаче. Начните новый чат или напишите нам',
   // «Попробовать ещё» (docs/plan/53, «Попробовать ещё (18.10)»): the failure was answered meanwhile.
-  TASK_NOTHING_TO_RETRY: 'Повторить уже нельзя: в диалоге что-то изменилось',
+  TASK_NOTHING_TO_RETRY: 'Повторить уже нельзя: в чате что-то изменилось',
   CHAT_COMMAND_UNAVAILABLE:
     'Эта команда сейчас недоступна. Обновите страницу, чтобы увидеть, что изменилось',
   RELEASE_IN_PROGRESS: 'Сейчас выпускается новая версия сайта. Дождитесь, пока выпуск закончится',
@@ -219,19 +225,21 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   ATTACHMENT_NOT_READY:
     'Не все файлы готовы к отправке. Дождитесь, пока они загрузятся, или прикрепите их заново',
   ATTACHMENT_REFUSED: 'Этот файл прикрепить нельзя',
-  ATTACHMENT_SENT: 'Этот файл уже отправлен в диалог, удалить его нельзя',
+  ATTACHMENT_SENT: 'Этот файл уже отправлен в чат, удалить его нельзя',
   ATTACHMENTS_LIMIT:
     'Слишком много файлов ждут отправки. Отправьте или удалите их и попробуйте снова',
   PROJECT_NOTES_TOO_LONG: `Подсказка для агента слишком длинная — сократите её до ${BROWSER_AGENT_NOTES_MAX_CHARS} знаков`,
-  PROJECT_NOTES_HAS_SECRET:
-    'Похоже, в подсказке для агента есть пароль или ключ. Уберите его: в админку вы входите сами, в окне браузера',
+  PROJECT_NOTES_HAS_SECRET: 'Похоже, в подсказке для агента есть пароль или ключ. Уберите его',
   PROJECT_NOTES_INVALID:
     'В подсказке для агента есть символы, которые мы не можем сохранить. Уберите их и попробуйте снова',
+  PROJECT_NOTES_NOT_ALLOWED: 'Менять подсказки агенту могут только владелец и администраторы',
+  PROJECT_NOTES_CHANGED:
+    'Пока окно было открыто, подсказки изменились. Посмотрите новый текст и сохраните ещё раз',
   SITE_DELETE_NOT_ALLOWED: 'Удалить проект могут только владелец и администраторы',
   SITE_DELETE_NAME_MISMATCH:
     'Название не совпадает. Введите название проекта точно так, как оно написано',
   SITE_DELETE_BUSY:
-    'Сейчас на сайте идёт работа: диалог, выпуск или настройка. Дождитесь, пока она закончится, или остановите диалоги, затем удалите проект',
+    'Сейчас на сайте идёт работа: чат, выпуск или настройка. Дождитесь, пока она закончится, или остановите чаты, затем удалите проект',
   SITE_DELETE_UNAVAILABLE: 'Удалить проект сейчас не получается. Попробуйте ещё раз немного позже',
   SITE_DUMP_PATH_INVALID:
     'Укажите путь к файлу .sql или .sql.gz от папки, в которую попадает вход по FTP или SFTP, — например backup.sql',
@@ -442,11 +450,9 @@ const MESSAGE_FROM_DETAILS: Readonly<Record<string, (details: unknown) => string
     if (reason === 'class_unavailable')
       return 'Сейчас агент на этом уровне размышления недоступен. Попробуйте ещё раз немного позже'
     if (reason === 'browser_unavailable')
-      return 'Задания в браузере сейчас не принимаются. Попробуйте ещё раз немного позже'
+      return 'Сейчас этот проект недоступен для чата. Попробуйте ещё раз немного позже'
     if (reason === 'browser_insecure')
       return 'В браузере агент работает только с сайтами, которые открываются по защищённому адресу. Адрес сайта в кабинете поменять нельзя: добавьте сайт заново с адресом, который начинается с https://'
-    if (reason === 'environment_unsupported')
-      return 'Такое задание пока не принимается. Выберите один способ работы: в браузере или через копию сайта'
     return MESSAGE_BY_DOMAIN_CODE.TASK_NOT_ACCEPTED!
   },
   // Why a file is not attached (attachment.start): `details.reason`, in the words of the domain.
@@ -456,6 +462,11 @@ const MESSAGE_FROM_DETAILS: Readonly<Record<string, (details: unknown) => string
       ? attachmentRefusalText[reason as AttachmentRefusal].replace(/\.$/, '')
       : MESSAGE_BY_DOMAIN_CODE.ATTACHMENT_REFUSED!
   },
+  // A project with chats that are not over: the way out is the client's own (docs/plan/61, К40).
+  SITE_DELETE_BUSY: (details) =>
+    reasonOf(details) === 'tasks'
+      ? 'Сначала завершите или отмените чаты этого проекта'
+      : MESSAGE_BY_DOMAIN_CODE.SITE_DELETE_BUSY!,
   // A command of the chat the server refused: the words `task.commands` shows for it.
   CHAT_COMMAND_UNAVAILABLE: (details) => {
     const refusal = commandRefusalOf(details)
@@ -542,16 +553,20 @@ export interface ErrorDetails {
  * Error shape sent to clients: a Russian message on «вы» (clientMessage) and the DomainError
  * code in `data.domainCode`; a refused command of the chat adds which refusal it was,
  * `data.refusal` — one of `chatCommandRefusals`, the same id `task.commands` gives — so the
- * screen can offer the way out (a reset for a broken preview) without parsing words. Nothing
- * else of the details leaves the server. The original message, zod issues and the stack trace
- * are added only in development.
+ * screen can offer the way out (a reset for a broken preview) without parsing words; so does a
+ * project that cannot be deleted, with the reason of `siteDeleteBusy`, for the link to its chats.
+ * Nothing else of the details leaves the server. The original message, zod issues and the stack
+ * trace are added only in development.
  */
 export function formatError<S extends ErrorShape>(shape: S, error: TRPCError, isDev: boolean) {
   const domainCode = isDomainError(error.cause) ? error.cause.code : null
-  const refusal =
-    isDomainError(error.cause) && error.cause.code === 'CHAT_COMMAND_UNAVAILABLE'
+  const refusal = !isDomainError(error.cause)
+    ? null
+    : error.cause.code === 'CHAT_COMMAND_UNAVAILABLE'
       ? commandRefusalOf(error.cause.details)
-      : null
+      : error.cause.code === 'SITE_DELETE_BUSY'
+        ? reasonOf(error.cause.details)
+        : null
   const { stack, ...data } = shape.data
   let details: ErrorDetails | undefined
   if (isDev) {

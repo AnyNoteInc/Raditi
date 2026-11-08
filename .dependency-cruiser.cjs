@@ -381,10 +381,10 @@ module.exports = {
     {
       name: 'mcp-profiles-apart',
       comment:
-        'The content and the browser tools of the mcp app are two profiles, and the web tools of a browser task the module of the browser worker (docs/plan/57-browser-tasks.md, Б20), each its own module: no folder of them imports another (plan 56, §4.3).',
+        'The content and the browser tools of the mcp app are two profiles, the web tools of a browser task the module of the browser worker (docs/plan/57-browser-tasks.md, Б20) and the web search its own family (spec §20, «Веб-поиск агента»), each its own module: no folder of them imports another (plan 56, §4.3).',
       severity: 'error',
-      from: { path: '^apps/mcp/src/(content|browser|web)/', pathNot: '\\.test\\.ts$' },
-      to: { path: '^apps/mcp/src/(content|browser|web)/', pathNot: '^apps/mcp/src/$1/' },
+      from: { path: '^apps/mcp/src/(content|browser|web|search)/', pathNot: '\\.test\\.ts$' },
+      to: { path: '^apps/mcp/src/(content|browser|web|search)/', pathNot: '^apps/mcp/src/$1/' },
     },
     {
       name: 'mcp-base-no-profiles',
@@ -396,8 +396,9 @@ module.exports = {
         pathNot: '\\.test\\.ts$',
       },
       to: {
-        path: '^apps/mcp/src/(content|browser|web)/',
-        pathNot: '^apps/mcp/src/(content/content-arguments|browser/browser-arguments)\\.ts$',
+        path: '^apps/mcp/src/(content|browser|web|search)/',
+        pathNot:
+          '^apps/mcp/src/(content/content-arguments|browser/browser-arguments|search/search-arguments)\\.ts$',
       },
     },
     {
@@ -408,7 +409,7 @@ module.exports = {
       from: {
         path: [
           '^apps/mcp/src/common/',
-          '^apps/mcp/src/(content/content-arguments|browser/browser-arguments)\\.ts$',
+          '^apps/mcp/src/(content/content-arguments|browser/browser-arguments|search/search-arguments)\\.ts$',
         ],
         pathNot: '\\.test\\.ts$',
       },

@@ -5,7 +5,7 @@ import {
   type QueryKey,
   type UseMutationOptions,
 } from '@tanstack/react-query'
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { StrictMode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -14,10 +14,17 @@ import { plain, serverRefusal } from '@/components/billing/testing'
 
 import type * as Upload from './attachment-upload'
 import { composerText } from './chat-texts'
-import type { CandidateView, DialogFeed, FeedRow, PreparedRelease } from './chat-types'
+import type {
+  CandidateView,
+  DialogFeed,
+  FeedRow,
+  PreparedRelease,
+  TurnActivityPage,
+} from './chat-types'
 import { DialogView } from './dialog-view'
 import { forgetNewDialog, isNewDialog, markNewDialog } from './new-dialog-hint'
 import {
+  agentCommandRow,
   ATTACHMENT_ID,
   AUTHOR_ID,
   browserAnswer,
@@ -35,6 +42,7 @@ import {
   resumeRow,
   SESSION_ID,
   SITE_ID,
+  stepRow,
   TASK_ID,
   verdicts,
 } from './testing'
@@ -44,6 +52,7 @@ type Posted = { requestEventId: string; repeated: boolean }
 
 const calls = vi.hoisted(() => ({
   feed: vi.fn<(input: { taskId: string; after: string }) => Promise<DialogFeed>>(),
+  activity: vi.fn<(input: { after: string }) => Promise<TurnActivityPage>>(),
   message: vi.fn<(input: Press & { text: string }) => Promise<Posted>>(),
   proceed: vi.fn<(input: Press) => Promise<Posted>>(),
   retry: vi.fn<(input: Press & { failureEventId: string }) => Promise<Posted>>(),
@@ -56,11 +65,22 @@ const calls = vi.hoisted(() => ({
   undoPrepare:
     vi.fn<(input: { taskId: string; releaseId: string }) => Promise<{ planId: string }>>(),
   resumeAgent: vi.fn<(input: Press) => Promise<Posted>>(),
+  init: vi.fn<(input: Press) => Promise<Posted>>(),
+  compact: vi.fn<(input: Press) => Promise<Posted>>(),
+  undoTurn: vi.fn<(input: Press) => Promise<Posted & { words: string | null }>>(),
+  redoTurn: vi.fn<(input: Press) => Promise<Posted & { words: string | null }>>(),
+  agentNotes:
+    vi.fn<(input: { id: string }) => Promise<{ notes: string | null; canManage: boolean }>>(),
+  setAgentNotes:
+    vi.fn<(input: { id: string; notes: string }) => Promise<{ notes: string | null }>>(),
   attachments: vi.fn(async (_input: { taskId: string }) => [] as unknown[]),
   setEffort: vi.fn<(input: { taskId: string; effort: string }) => Promise<{ effort: string }>>(),
   rename: vi.fn<(input: { taskId: string; title: string }) => Promise<{ title: string }>>(),
   remove: vi.fn<(input: { taskId: string }) => Promise<{ removed: true }>>(),
   replace: vi.fn<(href: string) => void>(),
+  push: vi.fn<(href: string) => void>(),
+  setPreference: vi.fn<(preference: string) => void>(),
+  exported: vi.fn<(input: { taskId: string }) => Promise<{ fileName: string; markdown: string }>>(),
   ticket:
     vi.fn<(input: { taskId: string; to?: string }) => Promise<{ url: string; expiresAt: Date }>>(),
   streamTicket:
@@ -70,9 +90,13 @@ const calls = vi.hoisted(() => ({
   watch: vi.fn(async (_input: { taskId: string }) => ({ watched: true })),
 }))
 
+vi.mock('@repo/ui/providers', () => ({
+  useThemePreference: () => ({ preference: 'system', setPreference: calls.setPreference }),
+}))
+
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ replace: calls.replace, push: vi.fn() }),
-  usePathname: () => `/projects/${SITE_ID}/chat/${TASK_ID}`,
+  useRouter: () => ({ replace: calls.replace, push: calls.push }),
+  usePathname: () => `/chats/${TASK_ID}`,
 }))
 
 const mutation = <I, O>(fn: (input: I) => Promise<O>) => ({
@@ -94,7 +118,7 @@ vi.mock('./attachment-upload', async (original) => ({
 const client = vi.hoisted(() => ({
   task: {
     feed: { query: calls.feed },
-    activity: { query: async () => ({ events: [], cursor: '0', more: false }) },
+    activity: { query: calls.activity },
   },
   preview: { ticket: { mutate: calls.ticket } },
   release: {
@@ -122,9 +146,18 @@ vi.mock('@/trpc/client', () => ({
       retry: mutation(calls.retry),
       cancel: mutation(calls.cancel),
       resumeAgent: mutation(calls.resumeAgent),
+      init: mutation(calls.init),
+      compact: mutation(calls.compact),
+      undoTurn: mutation(calls.undoTurn),
+      redoTurn: mutation(calls.redoTurn),
       setEffort: mutation(calls.setEffort),
       rename: mutation(calls.rename),
       remove: mutation(calls.remove),
+      export: query('task.export', calls.exported),
+    },
+    project: {
+      agentNotes: query('project.agentNotes', calls.agentNotes),
+      setAgentNotes: mutation(calls.setAgentNotes),
     },
     attachment: { list: query('attachment.list', calls.attachments) },
     preview: { reset: mutation(calls.reset) },
@@ -138,6 +171,13 @@ vi.mock('@/trpc/client', () => ({
     },
     browser: { watch: mutation(calls.watch) },
     billing: { usage: query('billing.usage', async () => null) },
+    // «Терминал» of the chat (06.11.2026): its files are read while it is open.
+    siteFiles: {
+      list: query('siteFiles.list', async () => ({ state: 'preparing' as const })),
+      read: query('siteFiles.read', async () => ({ state: 'preparing' as const })),
+      editState: query('siteFiles.editState', async () => ({ state: 'pending' as const })),
+      save: mutation(async () => ({ editId: '0199a3f2-0000-7000-8000-0000000000e1' })),
+    },
   }),
   useTRPCClient: () => client,
 }))
@@ -155,7 +195,30 @@ const waiting = (patch: Parameters<typeof feedAnswer>[0] = {}) =>
 
 const posted: Posted = { requestEventId: '9', repeated: false }
 
-function showDialog(answer: DialogFeed = waiting(), browserStreamUrl: string | null = null) {
+/** What the server says of the commands of a chat of a closed project (К39). */
+const closedVerdicts = () =>
+  verdicts({
+    release: 'project_closed',
+    preview: 'project_closed',
+    reset: 'project_closed',
+    update: 'project_closed',
+    retry: 'project_closed',
+  })
+
+/** The project of the chat, as `task.get` gives it. */
+const PROJECT = {
+  id: SITE_ID,
+  name: 'Кофейня «Крошка»',
+  url: 'https://kroshka.example',
+  closed: false,
+}
+const projectOf = (url: string | null) => (url === null ? null : { ...PROJECT, url })
+
+function showDialog(
+  answer: DialogFeed = waiting(),
+  browserStreamUrl: string | null = null,
+  siteUrl: string | null = 'https://kroshka.example',
+) {
   calls.feed.mockResolvedValue(answer)
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -163,8 +226,7 @@ function showDialog(answer: DialogFeed = waiting(), browserStreamUrl: string | n
   render(
     <QueryClientProvider client={queryClient}>
       <DialogView
-        siteId={SITE_ID}
-        siteUrl="https://kroshka.example"
+        project={projectOf(siteUrl)}
         taskId={TASK_ID}
         title="Поменять цену капучино"
         browserStreamUrl={browserStreamUrl}
@@ -195,8 +257,8 @@ const readyPreview = {
   revision: 1,
   dirty: false,
 }
-const FRAME = 'Предпросмотр сайта с изменениями диалога'
-const TOOLS = 'Инструменты диалога'
+const FRAME = 'Предпросмотр сайта с изменениями чата'
+const TOOLS = 'Инструменты чата'
 
 /** The panel of the tools beside the dialog, when it is drawn. */
 const toolsPanel = () => screen.queryByRole('complementary', { name: TOOLS })
@@ -353,6 +415,7 @@ const streamState = (controller: 'agent' | 'user') => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  calls.activity.mockResolvedValue({ events: [], cursor: '0', more: false })
   calls.message.mockResolvedValue(posted)
   calls.proceed.mockResolvedValue(posted)
   calls.retry.mockResolvedValue(posted)
@@ -424,27 +487,137 @@ const network = () => new TypeError('Failed to fetch')
 const NETWORK_TEXT = 'Не удалось связаться с сервером. Проверьте подключение и попробуйте ещё раз.'
 
 describe('a dialog', () => {
-  it('reads its head and rows: its name, its mode in the middle, its menu', async () => {
+  // The page passes null from 61.12 on: nothing fails by itself then (docs/plan/61, К18).
+  it.each([
+    ['in the queue', { status: 'queued', task: { waiting: 'site' } }, 'Агент скоро возьмётся'],
+    ['held', { status: 'running', task: { turnNo: 1, held: true } }, 'Произошёл сбой, мы'],
+  ] as const)('says nothing of a site without a project, %s', async (_what, state, words) => {
+    showDialog(feedAnswer({ ...state, events: [requestRow('1')], cursor: '1' }), null, null)
+    expect(await screen.findByText(new RegExp(`^${words}`, 'u'))).toBeTruthy()
+    expect(document.body.textContent).not.toContain('На сайте')
+    expect(document.body.textContent).not.toContain('При работе с сайтом')
+  })
+
+  it('reads its head and rows: its name, its project in the middle, its menu', async () => {
     showDialog()
     expect(await screen.findByText('Изменения готовы')).toBeTruthy()
     expect(screen.getByRole('heading', { level: 1, name: 'Поменять цену капучино' })).toBeTruthy()
     expect(calls.feed).toHaveBeenCalledWith({ taskId: TASK_ID, after: '0' })
     expect(
-      screen.getByRole('button', { name: 'Действия с диалогом: Поменять цену капучино' }),
+      screen.getByRole('button', { name: 'Действия с чатом: Поменять цену капучино' }),
     ).toBeTruthy()
-    // «Чат | Работа» over the dialog (owner's request of 29.10.2026): its own mode is marked, the
-    // other one opens «Новый диалог» in that mode — a started dialog keeps its mode.
-    const modes = within(screen.getByRole('navigation', { name: 'Режим диалога' }))
-    expect(modes.getByText('Работа').getAttribute('aria-current')).toBe('true')
-    const chat = modes.getByRole('link', { name: 'Чат' })
-    expect(chat.getAttribute('href')).toBe(`/projects/${SITE_ID}/chat/new?mode=chat`)
-    expect(chat.getAttribute('aria-describedby')).toBeTruthy()
-    expect(document.getElementById(chat.getAttribute('aria-describedby')!)?.textContent).toBe(
-      'Откроет новый диалог в режиме «Чат»: режим начатого диалога не меняется.',
-    )
+    const link = screen.getByRole('link', { name: `Открыть проект «${PROJECT.name}»` })
+    expect(link.getAttribute('href')).toBe(`/projects/${SITE_ID}`)
+    expect(screen.queryByRole('navigation', { name: /Режим/ })).toBeNull()
     expect(field().getAttribute('placeholder')).toBe('Что поправить?')
     // No standing words under the field (owner, 26.10.2026): the reminder is read aloud only.
     expect(screen.queryByText('ИИ может допускать ошибки. Проверяйте важное.')).toBeNull()
+  })
+
+  it('has no way to a project in a chat without one', async () => {
+    showDialog(waiting(), null, null)
+    await screen.findByText('Изменения готовы')
+    expect(screen.queryByRole('link', { name: /^Открыть проект/ })).toBeNull()
+  })
+
+  it('reads a chat of a closed project, its field closed with the reason', async () => {
+    calls.feed.mockResolvedValue(waiting())
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <DialogView project={{ ...PROJECT, closed: true }} taskId={TASK_ID} title={null} />
+      </QueryClientProvider>,
+    )
+    await screen.findByText('Изменения готовы')
+    expect(field().disabled).toBe(true)
+    expect(field().getAttribute('placeholder')).toBe('Сайт на паузе или отключён.')
+    // The head still leads to the project, where the client sees why.
+    expect(screen.getByRole('link', { name: `Открыть проект «${PROJECT.name}»` })).toBeTruthy()
+  })
+
+  it('offers nothing on the changes of a closed project and says why, by the server’s verdicts', async () => {
+    calls.feed.mockResolvedValue(waiting({ commands: closedVerdicts() }))
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <DialogView project={{ ...PROJECT, closed: true }} taskId={TASK_ID} title={null} />
+      </QueryClientProvider>,
+    )
+    await screen.findByText('Изменения готовы')
+    const feed = screen.getByRole('list', { name: 'Сообщения чата' })
+    expect(within(feed).getByText('Сайт на паузе или отключён.')).toBeTruthy()
+    expect(within(feed).queryByRole('button', { name: 'Выпустить новую версию' })).toBeNull()
+    expect(within(feed).queryByRole('button', { name: 'Обновить рабочую копию' })).toBeNull()
+    expect(within(feed).getByRole('button', { name: 'Посмотреть изменения' })).toBeTruthy()
+  })
+
+  it('keeps `/cancel` in the window of commands of a closed project: the one way to stop a chat that waits', async () => {
+    calls.feed.mockResolvedValue(waiting({ commands: closedVerdicts() }))
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <DialogView project={{ ...PROJECT, closed: true }} taskId={TASK_ID} title={null} />
+      </QueryClientProvider>,
+    )
+    await screen.findByText('Изменения готовы')
+    expect(field().disabled).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Остановить' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+    const release = option(/^Выпустить/u)
+    expect(release.getAttribute('aria-disabled')).toBe('true')
+    expect(release.textContent).toContain('Сайт на паузе или отключён.')
+    fireEvent.click(option(/^Отменить чат/u))
+    const confirm = await screen.findByRole('dialog', { name: 'Отменить чат?' })
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Отменить чат' }))
+    await waitFor(() => expect(calls.cancel).toHaveBeenCalledTimes(1))
+  })
+
+  it.each([
+    ['step', 'Остановиться', null],
+    ['credits', 'Остановить задачу', 'Купить пакет'],
+  ] as const)(
+    'offers no «Продолжить» on the question (%s) of a project closed since the page opened (К39)',
+    async (reason, stop, buy) => {
+      showDialog(
+        feedAnswer({
+          status: 'awaiting_user',
+          task: { turnNo: 1 },
+          commands: closedVerdicts(),
+          events: [requestRow('1'), ceilingRow('2', 1, reason)],
+          cursor: '2',
+        }),
+      )
+      const stopButton = await screen.findByRole('button', { name: stop })
+      expect(screen.queryByRole('button', { name: 'Продолжить' })).toBeNull()
+      if (buy !== null) expect(screen.getByRole('link', { name: buy })).toBeTruthy()
+      // The page was loaded with the project open: the feed closes the field all the same.
+      expect(field().disabled).toBe(true)
+      fireEvent.click(stopButton)
+      expect(await screen.findByRole('dialog', { name: 'Отменить чат?' })).toBeTruthy()
+      expect(calls.proceed).not.toHaveBeenCalled()
+    },
+  )
+
+  it('still stops a turn under way in a chat of a closed project (К39): only words are closed', async () => {
+    calls.feed.mockResolvedValue(
+      feedAnswer({
+        status: 'running',
+        task: { turnNo: 1, runningSince: '2026-10-17T09:01:00.000Z' },
+        events: [requestRow('1')],
+        cursor: '1',
+      }),
+    )
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <DialogView project={{ ...PROJECT, closed: true }} taskId={TASK_ID} title={null} />
+      </QueryClientProvider>,
+    )
+    const stop = await screen.findByRole<HTMLButtonElement>('button', { name: 'Остановить' })
+    await waitFor(() => expect(stop.disabled).toBe(false))
+    expect(field().disabled).toBe(true)
+    fireEvent.click(stop)
+    const confirm = screen.getByRole('dialog', { name: 'Отменить чат?' })
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Отменить чат' }))
+    await waitFor(() => expect(calls.cancel).toHaveBeenCalledTimes(1))
+    expect(calls.cancel.mock.calls[0]![0]).toMatchObject({ taskId: TASK_ID })
   })
 
   it('changes how hard the model thinks from the agent’s next turn', async () => {
@@ -464,27 +637,26 @@ describe('a dialog', () => {
     showDialog()
     await screen.findByText('Изменения готовы')
     const menu = () =>
-      screen.getByRole('button', { name: 'Действия с диалогом: Поменять цену капучино' })
+      screen.getByRole('button', { name: 'Действия с чатом: Поменять цену капучино' })
 
     fireEvent.click(menu())
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Переименовать' }))
-    const name = screen.getByRole('textbox', { name: 'Название диалога' })
+    const name = screen.getByRole('textbox', { name: 'Название чата' })
     fireEvent.change(name, { target: { value: '  Цена   латте ' } })
     fireEvent.keyDown(name, { key: 'Enter' })
     await waitFor(() => expect(calls.rename).toHaveBeenCalledTimes(1))
     expect(calls.rename.mock.calls[0]![0]).toEqual({ taskId: TASK_ID, title: 'Цена латте' })
 
-    await waitFor(() =>
-      expect(screen.queryByRole('textbox', { name: 'Название диалога' })).toBeNull(),
-    )
+    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Название чата' })).toBeNull())
     fireEvent.click(menu())
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Удалить' }))
-    const ask = await screen.findByRole('dialog', { name: 'Удалить диалог?' })
+    const ask = await screen.findByRole('dialog', { name: 'Удалить чат?' })
+    expect(plain(ask.textContent)).toContain('То, что агент уже сделал на сайте, останется.')
     fireEvent.click(within(ask).getByRole('button', { name: 'Удалить' }))
     await waitFor(() => expect(calls.remove).toHaveBeenCalledTimes(1))
     expect(calls.remove.mock.calls[0]![0]).toEqual({ taskId: TASK_ID })
-    // The page of a deleted dialog leaves for the root of «Чат».
-    await waitFor(() => expect(calls.replace).toHaveBeenCalledWith(`/projects/${SITE_ID}/chat`))
+    // The page of a deleted dialog leaves for the root of «Чаты».
+    await waitFor(() => expect(calls.replace).toHaveBeenCalledWith('/chats'))
   })
 
   it('sends words as a new pass on top of the changes and reads the dialog again', async () => {
@@ -535,27 +707,483 @@ describe('a dialog', () => {
 
   it('runs `/update`, and says a refusal of the server in its words', async () => {
     calls.update.mockRejectedValueOnce(
-      serverRefusal('Сначала ответьте на вопрос в диалоге', 'CHAT_COMMAND_UNAVAILABLE'),
+      serverRefusal('Сначала ответьте на вопрос в чате', 'CHAT_COMMAND_UNAVAILABLE'),
     )
     showDialog()
     await run(/Обновить рабочую копию/)
     // Opening the window reads the verdicts again.
     await waitFor(() => expect(calls.feed).toHaveBeenCalledTimes(2))
     expect((await screen.findByRole('alert')).textContent).toBe(
-      'Сначала ответьте на вопрос в диалоге.',
+      'Сначала ответьте на вопрос в чате.',
     )
     expect(calls.update).toHaveBeenCalledTimes(1)
     // The verdicts may have changed with the refusal: the dialog is read once more.
     await waitFor(() => expect(calls.feed).toHaveBeenCalledTimes(3))
   })
 
+  describe('the commands of the page (docs/plan/61-chats-first.md, §5.14)', () => {
+    afterEach(() => {
+      window.localStorage.clear()
+      Reflect.deleteProperty(URL, 'createObjectURL')
+      Reflect.deleteProperty(URL, 'revokeObjectURL')
+    })
+
+    /** `/models` from the button: a closed field takes no words, and it works there too. */
+    const openedEfforts = async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+      await screen.findByRole('listbox', { name: 'Команды' })
+      fireEvent.click(option(/Модель и размышление/))
+      return within(await screen.findByRole('menu', { name: 'Размышление' }))
+    }
+
+    it('`/new` starts a chat of the same project, without one where the chat has none', async () => {
+      showDialog()
+      await run(/Новый чат/)
+      expect(calls.push).toHaveBeenCalledWith(`/chats/new?project=${SITE_ID}`)
+      cleanup()
+      calls.push.mockClear()
+      showDialog(waiting(), null, null)
+      await run(/Новый чат/)
+      expect(calls.push).toHaveBeenCalledWith('/chats/new')
+    })
+
+    it('`/sessions` leads to the list of chats, and its other words do too', async () => {
+      showDialog()
+      await screen.findByText('Изменения готовы')
+      type('/resume')
+      fireEvent.keyDown(field(), { key: 'Enter' })
+      expect(calls.push).toHaveBeenCalledWith('/chats')
+      expect(calls.message).not.toHaveBeenCalled()
+    })
+
+    it('`/export` saves what the server wrote out as a file, and says so', async () => {
+      const blobs: Blob[] = []
+      const clicked: { name: string; href: string }[] = []
+      Object.assign(URL, {
+        createObjectURL: (blob: Blob) => {
+          blobs.push(blob)
+          return 'blob:chat'
+        },
+        revokeObjectURL: vi.fn(),
+      })
+      const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+        this: HTMLAnchorElement,
+      ) {
+        clicked.push({ name: this.download, href: this.href })
+      })
+      calls.exported.mockResolvedValue({ fileName: 'Цена капучино.md', markdown: '# Цена\n' })
+      showDialog()
+      await run(/Скачать переписку/)
+      await waitFor(() =>
+        expect(clicked).toEqual([{ name: 'Цена капучино.md', href: 'blob:chat' }]),
+      )
+      expect(calls.exported).toHaveBeenCalledWith({ taskId: TASK_ID })
+      expect(await blobs[0]!.text()).toBe('# Цена\n')
+      expect(blobs[0]!.type).toBe('text/markdown;charset=utf-8')
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:chat')
+      await screen.findByText('Переписка сохранена')
+      click.mockRestore()
+    })
+
+    // docs/plan/61-chats-first.md, К30, §5.14.
+    describe('`/compact`', () => {
+      it('asks the server to run it', async () => {
+        calls.compact.mockResolvedValue(posted)
+        showDialog()
+        await run(/Сжать переписку/)
+        await waitFor(() => expect(calls.compact).toHaveBeenCalledTimes(1))
+        expect(calls.compact.mock.calls[0]![0].taskId).toBe(TASK_ID)
+      })
+
+      it('takes no release from the card while the press is unanswered', async () => {
+        calls.compact.mockReturnValue(new Promise(() => {}))
+        showDialog(waiting())
+        const release = await screen.findByRole<HTMLButtonElement>('button', {
+          name: 'Выпустить новую версию',
+        })
+        expect(release.disabled).toBe(false)
+
+        await run(/Сжать переписку/)
+
+        await waitFor(() => expect(calls.compact).toHaveBeenCalledTimes(1))
+        await waitFor(() => expect(release.disabled).toBe(true))
+      })
+
+      it('lists no such command when the driver has none: closed, it would only hang there', async () => {
+        showDialog(waiting({ commands: verdicts({ compact: 'no_compaction' }) }))
+        await screen.findByText('Изменения готовы')
+        fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+        const list = within(screen.getByRole('listbox', { name: 'Команды' }))
+        expect(list.queryByRole('option', { name: /Сжать переписку/ })).toBeNull()
+      })
+    })
+
+    // docs/plan/61-chats-first.md, К31.
+    describe('`/init`', () => {
+      const answer = 'Тема лежит в wp-content/themes/shop.'
+      const save = 'Сохранить в подсказки агенту'
+      const answered = () =>
+        feedAnswer({
+          status: 'awaiting_user',
+          task: { turnNo: 2 },
+          events: [
+            requestRow('1'),
+            resultRow('2', 1),
+            agentCommandRow('3'),
+            resultRow('4', 2, answer),
+          ],
+          cursor: '4',
+        })
+
+      it('asks the server to run it', async () => {
+        calls.init.mockResolvedValue(posted)
+        showDialog()
+        await run(/Описать проект для агента/)
+        await waitFor(() => expect(calls.init).toHaveBeenCalledTimes(1))
+        expect(calls.init.mock.calls[0]![0].taskId).toBe(TASK_ID)
+      })
+
+      it('reads no notes before there is an answer to keep', async () => {
+        showDialog()
+        await screen.findByRole('heading', { level: 1, name: 'Поменять цену капучино' })
+        expect(calls.agentNotes).not.toHaveBeenCalled()
+      })
+
+      it('opens the answer in a field beside the notes that stand, and saves what is left', async () => {
+        calls.agentNotes.mockResolvedValue({ notes: 'Вход по адресу /login', canManage: true })
+        calls.setAgentNotes.mockResolvedValue({ notes: 'Своими словами' })
+        showDialog(answered())
+        fireEvent.click(await screen.findByRole('button', { name: save }))
+
+        const dialog = within(await screen.findByRole('dialog', { name: 'Подсказки агенту' }))
+        const edited = dialog.getByRole<HTMLTextAreaElement>('textbox', { name: 'Подсказки' })
+        expect(edited.value).toBe(answer)
+        expect(dialog.getByText('Вход по адресу /login')).toBeTruthy()
+        expect(dialog.getByText(/Новый текст заменит их/)).toBeTruthy()
+
+        fireEvent.change(edited, { target: { value: 'Своими словами' } })
+        fireEvent.click(dialog.getByRole('button', { name: 'Сохранить' }))
+        await waitFor(() =>
+          expect(calls.setAgentNotes.mock.calls[0]![0]).toEqual({
+            id: SITE_ID,
+            notes: 'Своими словами',
+            seen: 'Вход по адресу /login',
+          }),
+        )
+        await screen.findByText('Подсказки сохранены')
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+      })
+
+      it('shows the notes saved a moment ago when the window opens again', async () => {
+        calls.agentNotes.mockResolvedValue({ notes: null, canManage: true })
+        calls.setAgentNotes.mockResolvedValue({ notes: 'Первые подсказки' })
+        showDialog(answered())
+        fireEvent.click(await screen.findByRole('button', { name: save }))
+        const first = within(await screen.findByRole('dialog', { name: 'Подсказки агенту' }))
+        expect(first.queryByText('Сейчас в подсказках')).toBeNull()
+
+        calls.agentNotes.mockResolvedValue({ notes: 'Первые подсказки', canManage: true })
+        fireEvent.click(first.getByRole('button', { name: 'Сохранить' }))
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+
+        fireEvent.click(await screen.findByRole('button', { name: save }))
+        const second = within(await screen.findByRole('dialog', { name: 'Подсказки агенту' }))
+        expect(second.getByText('Первые подсказки')).toBeTruthy()
+      })
+
+      // Another admin or another tab, after this tab read them: the cache of the page is old.
+      it('reads the notes again when the window opens: what it shows is what stands now', async () => {
+        calls.agentNotes.mockResolvedValue({ notes: null, canManage: true })
+        showDialog(answered())
+        const button = await screen.findByRole('button', { name: save })
+        calls.agentNotes.mockResolvedValue({ notes: 'Подсказки коллеги', canManage: true })
+
+        fireEvent.click(button)
+        const dialog = within(await screen.findByRole('dialog', { name: 'Подсказки агенту' }))
+        expect(dialog.getByText('Подсказки коллеги')).toBeTruthy()
+        expect(dialog.getByText(/Новый текст заменит их/)).toBeTruthy()
+      })
+
+      it('shows the new notes when they changed while the window was open', async () => {
+        calls.agentNotes.mockResolvedValue({ notes: null, canManage: true })
+        calls.setAgentNotes.mockRejectedValue(
+          serverRefusal('Пока окно было открыто, подсказки изменились', 'CONFLICT'),
+        )
+        showDialog(answered())
+        fireEvent.click(await screen.findByRole('button', { name: save }))
+        const dialog = within(await screen.findByRole('dialog', { name: 'Подсказки агенту' }))
+
+        calls.agentNotes.mockResolvedValue({ notes: 'Подсказки коллеги', canManage: true })
+        fireEvent.click(dialog.getByRole('button', { name: 'Сохранить' }))
+
+        expect((await dialog.findByRole('alert')).textContent).toContain('подсказки изменились')
+        expect(await dialog.findByText('Подсказки коллеги')).toBeTruthy()
+        expect(calls.setAgentNotes.mock.calls[0]![0]).toMatchObject({ seen: null })
+      })
+
+      it('opens no window on notes it could not read, and says why', async () => {
+        calls.agentNotes.mockResolvedValue({ notes: null, canManage: true })
+        showDialog(answered())
+        const button = await screen.findByRole('button', { name: save })
+        calls.agentNotes.mockRejectedValue(serverRefusal('Проект не найден', 'NOT_FOUND'))
+
+        fireEvent.click(button)
+
+        expect((await screen.findByRole('alert')).textContent).toContain('Проект не найден')
+        expect(screen.queryByRole('dialog')).toBeNull()
+      })
+
+      it('keeps the words in the field and says why when the server refuses them', async () => {
+        calls.agentNotes.mockResolvedValue({ notes: null, canManage: true })
+        calls.setAgentNotes.mockRejectedValue(
+          serverRefusal('Похоже, в подсказке для агента есть пароль или ключ', 'BAD_REQUEST'),
+        )
+        showDialog(answered())
+        fireEvent.click(await screen.findByRole('button', { name: save }))
+        const dialog = within(await screen.findByRole('dialog', { name: 'Подсказки агенту' }))
+        expect(dialog.queryByText('Сейчас в подсказках')).toBeNull()
+        const edited = dialog.getByRole<HTMLTextAreaElement>('textbox', { name: 'Подсказки' })
+        fireEvent.change(edited, { target: { value: 'Свои слова' } })
+        fireEvent.click(dialog.getByRole('button', { name: 'Сохранить' }))
+        expect((await dialog.findByRole('alert')).textContent).toContain('пароль или ключ')
+        expect(edited.value).toBe('Свои слова')
+      })
+
+      /** A page whose answer about the notes has come: the button has drawn, or never will. */
+      async function shownWith(project: typeof PROJECT & { closed?: boolean }) {
+        const queries = new QueryClient()
+        calls.feed.mockResolvedValue(answered())
+        render(
+          <QueryClientProvider client={queries}>
+            <DialogView project={project} taskId={TASK_ID} title={null} />
+          </QueryClientProvider>,
+        )
+        await screen.findByText(answer)
+        await waitFor(() =>
+          expect(queries.getQueryData(['project.agentNotes', { id: SITE_ID }])).toBeDefined(),
+        )
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        })
+      }
+
+      it('offers the button to a manager of an open project: the control of the two below', async () => {
+        calls.agentNotes.mockResolvedValue({ notes: null, canManage: true })
+        await shownWith(PROJECT)
+        expect(screen.getByRole('button', { name: save })).toBeTruthy()
+      })
+
+      it('offers nothing to a member, who may not change the notes', async () => {
+        calls.agentNotes.mockResolvedValue({ notes: null, canManage: false })
+        await shownWith(PROJECT)
+        expect(screen.queryByRole('button', { name: save })).toBeNull()
+      })
+
+      it('offers nothing in a closed project: it is read', async () => {
+        calls.agentNotes.mockResolvedValue({ notes: null, canManage: true })
+        await shownWith({ ...PROJECT, closed: true })
+        expect(screen.queryByRole('button', { name: save })).toBeNull()
+      })
+    })
+
+    it('`/export` that fails says so under the field and saves nothing', async () => {
+      Object.assign(URL, { createObjectURL: vi.fn(), revokeObjectURL: vi.fn() })
+      calls.exported.mockRejectedValue(serverRefusal('Чат не найден', 'NOT_FOUND'))
+      showDialog()
+      await run(/Скачать переписку/)
+      expect((await screen.findByRole('alert')).textContent).toBe('Чат не найден.')
+      expect(URL.createObjectURL).not.toHaveBeenCalled()
+    })
+
+    it('`/models` opens the menu of the level, which changes it as its button does', async () => {
+      showDialog()
+      await run(/Модель и размышление/)
+      const efforts = within(await screen.findByRole('menu', { name: 'Размышление' }))
+      fireEvent.click(efforts.getByRole('menuitemradio', { name: /Максимальное/ }))
+      await waitFor(() => expect(calls.setEffort).toHaveBeenCalledTimes(1))
+      expect(calls.setEffort.mock.calls[0]![0]).toEqual({ taskId: TASK_ID, effort: 'max' })
+    })
+
+    it('`/models` shows the level while the agent works, and says when it can be changed', async () => {
+      showDialog(
+        feedAnswer({
+          status: 'running',
+          task: { turnNo: 1 },
+          events: [requestRow('1', 'Поменяйте цену')],
+          cursor: '1',
+        }),
+      )
+      await screen.findByText('Поменяйте цену')
+      const efforts = await openedEfforts()
+      expect(efforts.getByText('Уровень можно поменять, пока чат ждёт вас.')).toBeTruthy()
+      const levels = efforts.getAllByRole('menuitemradio')
+      expect(levels.map((level) => level.getAttribute('aria-disabled'))).toEqual([
+        'true',
+        'true',
+        'true',
+      ])
+      fireEvent.click(efforts.getByRole('menuitemradio', { name: /Максимальное/ }))
+      // The mutation would start on the next tick: nothing is left to run when this is read.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      expect(calls.setEffort).not.toHaveBeenCalled()
+    })
+
+    it('`/models` of a chat that has ended promises no change of the level', async () => {
+      showDialog(
+        waiting({ status: 'done', commands: verdicts({ undo: null, cancel: 'finished' }) }),
+      )
+      await screen.findByText('Изменения готовы')
+      const efforts = await openedEfforts()
+      expect(efforts.getByText('Чат завершён: уровень уже не поменять.')).toBeTruthy()
+      expect(efforts.queryByText('Уровень можно поменять, пока чат ждёт вас.')).toBeNull()
+    })
+
+    it('`/themes` opens its menu over the field, which takes the choice', async () => {
+      showDialog()
+      await run(/Оформление/)
+      const menu = within(await screen.findByRole('menu', { name: 'Оформление' }))
+      fireEvent.click(menu.getByRole('menuitemradio', { name: 'Светлая' }))
+      expect(calls.setPreference).toHaveBeenCalledWith('light')
+      expect(screen.queryByRole('menu')).toBeNull()
+    })
+
+    it('`/details` opens «Ход работы» of finished turns, for the next visit too', async () => {
+      const worked = waiting({
+        events: [
+          requestRow('1', 'Поменяйте цену'),
+          { ...stepRow('2', 1), at: '2026-10-17T09:00:00.000Z' },
+          { ...resultRow('3', 1), at: '2026-10-17T09:02:14.000Z' },
+        ],
+        cursor: '3',
+      })
+      showDialog(worked)
+      await screen.findByText('Поменяйте цену')
+      const line = () => screen.getByText(/Агент работал/).closest('details')!
+      expect(line().open).toBe(false)
+      await run(/Подробности работы/)
+      await waitFor(() => expect(line().open).toBe(true))
+      await screen.findByRole('heading', { name: 'Ход работы' })
+      await screen.findByText('Подробности работы показаны')
+      cleanup()
+      showDialog(worked)
+      await screen.findByText('Поменяйте цену')
+      await waitFor(() => expect(line().open).toBe(true))
+    })
+
+    it('`/thinking` shows what the model thought, in a finished turn too, and hides it again', async () => {
+      calls.activity.mockResolvedValue({
+        events: [
+          { id: '7:0', type: 'reasoning', text: 'Look at the prices first.' },
+          { id: '7:1', type: 'command', command: 'ls', exitCode: 0 },
+        ],
+        cursor: '7',
+        more: false,
+      })
+      window.localStorage.clear()
+      showDialog(
+        waiting({
+          events: [
+            requestRow('1', 'Поменяйте цену'),
+            { ...stepRow('2', 1), at: '2026-10-17T09:00:00.000Z' },
+            { ...resultRow('3', 1), at: '2026-10-17T09:02:14.000Z' },
+          ],
+          cursor: '3',
+        }),
+      )
+      await screen.findByText('Поменяйте цену')
+      const line = () => screen.getByText(/Агент работал/).closest('details')!
+      expect(line().open).toBe(false)
+      await run(/Размышления агента/)
+      await screen.findByText('Размышления агента показаны')
+      await waitFor(() => expect(line().open).toBe(true))
+      await screen.findByText('Look at the prices first.')
+      await run(/Размышления агента/)
+      await screen.findByText('Размышления агента скрыты')
+      await waitFor(() => expect(screen.queryByText('Look at the prices first.')).toBeNull())
+      expect(line().open).toBe(false)
+      window.localStorage.clear()
+    })
+
+    it('`/details` and `/thinking` together: each says what the page shows', async () => {
+      calls.activity.mockResolvedValue({
+        events: [
+          { id: '7:0', type: 'reasoning', text: 'Look at the prices first.' },
+          { id: '7:1', type: 'command', command: 'ls wp-content', exitCode: 0 },
+        ],
+        cursor: '7',
+        more: false,
+      })
+      window.localStorage.clear()
+      showDialog(
+        waiting({
+          events: [
+            requestRow('1', 'Поменяйте цену'),
+            { ...stepRow('2', 1), at: '2026-10-17T09:00:00.000Z' },
+            { ...resultRow('3', 1), at: '2026-10-17T09:02:14.000Z' },
+          ],
+          cursor: '3',
+        }),
+      )
+      await screen.findByText('Поменяйте цену')
+      const line = () => screen.getByText(/Агент работал/).closest('details')!
+      // `/details` alone: the line stands open, and what the model thought stays hidden.
+      await run(/Подробности работы/)
+      await waitFor(() => expect(line().open).toBe(true))
+      await screen.findByText('ls wp-content')
+      expect(screen.queryByText('Look at the prices first.')).toBeNull()
+      // With `/thinking` on, `/details` off leaves the line open, and says so.
+      await run(/Размышления агента/)
+      await screen.findByText('Look at the prices first.')
+      await run(/Подробности работы/)
+      await screen.findByText('Строки работы останутся открытыми, пока показаны размышления агента')
+      expect(screen.queryByText('Подробности работы скрыты')).toBeNull()
+      expect(line().open).toBe(true)
+      // `/thinking` off then closes it: no choice holds it any more.
+      await run(/Размышления агента/)
+      await waitFor(() => expect(line().open).toBe(false))
+      window.localStorage.clear()
+    })
+
+    it('`/help` opens the whole list and sends nothing', async () => {
+      showDialog()
+      await screen.findByText('Изменения готовы')
+      type('/help')
+      fireEvent.keyDown(field(), { key: 'Enter' })
+      expect(
+        within(screen.getByRole('listbox', { name: 'Команды' })).getAllByRole('option').length,
+      ).toBeGreaterThan(10)
+      expect(field().value).toBe('')
+      expect(calls.message).not.toHaveBeenCalled()
+    })
+
+    it('stay with a closed project: it is read, and it refuses only what works on it', async () => {
+      showDialog(waiting({ commands: verdicts({ release: 'project_closed' }) }))
+      await screen.findByText('Изменения готовы')
+      fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+      expect(option(/Скачать переписку/).getAttribute('aria-disabled')).toBeNull()
+      expect(option(/Выпустить новую версию/).getAttribute('aria-disabled')).toBe('true')
+    })
+  })
+
+  it('finds «Отменить выпуск» by `/rollback`, and `/undo` is the last request now', async () => {
+    showDialog(waiting({ status: 'done', commands: verdicts({ undo: null, cancel: 'finished' }) }))
+    await screen.findByText('Изменения готовы')
+    fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+    expect(option(/Отменить выпуск/).textContent).toContain('/rollback')
+    expect(option(/Отменить последний запрос/).textContent).toContain('/undo')
+  })
+
   it('asks before `/cancel` closes the dialog', async () => {
     showDialog()
-    await run(/Отменить диалог/)
-    const confirm = screen.getByRole('dialog', { name: 'Отменить диалог?' })
-    expect(plain(confirm.textContent)).toContain('Закрыть диалог без выпуска')
+    await run(/Отменить чат/)
+    const confirm = screen.getByRole('dialog', { name: 'Отменить чат?' })
+    expect(plain(confirm.textContent)).toContain(
+      'Чат завершится, а агент остановится, если ещё работает. Подготовленные изменения на сайт не попадут.',
+    )
     expect(calls.cancel).not.toHaveBeenCalled()
-    fireEvent.click(within(confirm).getByRole('button', { name: 'Отменить диалог' }))
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Отменить чат' }))
     await waitFor(() => expect(calls.cancel).toHaveBeenCalledTimes(1))
     expect(calls.cancel.mock.calls[0]![0]).toMatchObject({ taskId: TASK_ID })
   })
@@ -634,7 +1262,7 @@ describe('a dialog', () => {
         cursor: '3',
       }),
     )
-    await screen.findByText(/Диалог не закрыт: напишите «продолжи»/)
+    await screen.findByText(/Чат не закрыт: напишите «продолжи»/)
     // The owner: «пользователь всегда должен иметь возможность ввести промпт».
     expect(field().disabled).toBe(false)
     // The dialog asks: the field is that of an answer to the failure.
@@ -642,7 +1270,9 @@ describe('a dialog', () => {
     expect(
       screen.getAllByRole('status').some((node) => node.textContent?.includes('Агент ответил')),
     ).toBe(false)
-    expect(screen.getAllByText('Нужен ваш ответ').length).toBeGreaterThan(0)
+    // Nothing to confirm or answer (06.11.2026): the status of a failure is «Ошибка».
+    expect(screen.queryByText('Нужен ваш ответ')).toBeNull()
+    expect(screen.getAllByText('Ошибка').length).toBeGreaterThan(0)
   })
 
   it('offers «Продолжить» on the question about credits and keeps the field open (28.10.2026)', async () => {
@@ -682,6 +1312,15 @@ describe('a dialog', () => {
         cursor: '4',
         commands: verdicts(canRetry ? { retry: null } : { retry: 'nothing_to_retry' }),
       })
+
+    it('offers no «Попробовать ещё» when the project is closed (К39)', async () => {
+      showDialog({
+        ...kept(true),
+        commands: verdicts({ retry: 'project_closed', release: 'project_closed' }),
+      })
+      await screen.findByText('Изменения готовы')
+      expect(screen.queryByRole('button', { name: 'Попробовать ещё' })).toBeNull()
+    })
 
     it('offers «Попробовать ещё» on the failure, keeps the field and the release open', async () => {
       showDialog(kept(true))
@@ -776,7 +1415,7 @@ describe('a dialog', () => {
     )
     const button = await screen.findByRole('button', { name: 'Команды' })
     expect(field().disabled).toBe(true)
-    expect(screen.getByRole('link', { name: 'Новый диалог' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Новый чат' })).toBeTruthy()
     fireEvent.click(button)
     fireEvent.click(option(/Отменить выпуск/))
     expect(
@@ -808,12 +1447,12 @@ describe('a dialog', () => {
     // The field stays, closed: it says the dialog has ended, read aloud with the reason.
     const closed = await screen.findByRole('textbox', { name: 'Сообщение' })
     expect((closed as HTMLTextAreaElement).disabled).toBe(true)
-    expect(closed.getAttribute('placeholder')).toBe('Диалог завершён')
+    expect(closed.getAttribute('placeholder')).toBe('Чат завершён')
     expect(
-      screen.getByText('Диалог завершён. Чтобы попросить что-то ещё, начните новый.'),
+      screen.getByText('Чат завершён. Чтобы попросить что-то ещё, начните новый.'),
     ).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'Новый диалог' }).getAttribute('href')).toBe(
-      `/projects/${SITE_ID}/chat/new`,
+    expect(screen.getByRole('link', { name: 'Новый чат' }).getAttribute('href')).toBe(
+      `/chats/new?project=${SITE_ID}`,
     )
     // The level of a dialog that has ended is no longer changed.
     expect(
@@ -828,18 +1467,11 @@ describe('a dialog', () => {
     const queryClient = new QueryClient()
     render(
       <QueryClientProvider client={queryClient}>
-        <DialogView
-          siteId={SITE_ID}
-          siteUrl="https://kroshka.example"
-          taskId={TASK_ID}
-          title={null}
-        />
+        <DialogView project={PROJECT} taskId={TASK_ID} title={null} />
       </QueryClientProvider>,
     )
-    expect(await screen.findByRole('heading', { name: 'Такого диалога нет' })).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'К диалогам' }).getAttribute('href')).toBe(
-      `/projects/${SITE_ID}/chat`,
-    )
+    expect(await screen.findByRole('heading', { name: 'Такого чата нет' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'К чатам' }).getAttribute('href')).toBe('/chats')
   })
 
   it('repeats the same words after a lost answer under the same id, and other words under a new one', async () => {
@@ -894,12 +1526,7 @@ describe('a dialog', () => {
     })
     render(
       <QueryClientProvider client={queryClient}>
-        <DialogView
-          siteId={SITE_ID}
-          siteUrl="https://kroshka.example"
-          taskId={TASK_ID}
-          title={null}
-        />
+        <DialogView project={PROJECT} taskId={TASK_ID} title={null} />
       </QueryClientProvider>,
     )
     await screen.findByText('Изменения готовы')
@@ -947,13 +1574,13 @@ describe('a dialog', () => {
     )
     const commandsButton = await screen.findByRole('button', { name: 'Команды' })
     fireEvent.click(commandsButton)
-    fireEvent.click(option(/Отменить диалог/))
-    const confirm = screen.getByRole('dialog', { name: 'Отменить диалог?' })
-    fireEvent.click(within(confirm).getByRole('button', { name: 'Отменить диалог' }))
+    fireEvent.click(option(/Отменить чат/))
+    const confirm = screen.getByRole('dialog', { name: 'Отменить чат?' })
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Отменить чат' }))
     expect(await screen.findByText('Останавливаем работу агента…')).toBeTruthy()
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
-    const again = option(/Отменить диалог/)
+    const again = option(/Отменить чат/)
     expect(again.getAttribute('aria-disabled')).toBe('true')
     expect(again.textContent).toContain('Подождите: агент ещё работает.')
     fireEvent.click(again)
@@ -975,12 +1602,7 @@ describe('a dialog', () => {
     })
     render(
       <QueryClientProvider client={queryClient}>
-        <DialogView
-          siteId={SITE_ID}
-          siteUrl="https://kroshka.example"
-          taskId={TASK_ID}
-          title={null}
-        />
+        <DialogView project={PROJECT} taskId={TASK_ID} title={null} />
       </QueryClientProvider>,
     )
     await screen.findByText('Изменения готовы')
@@ -997,7 +1619,7 @@ describe('a dialog', () => {
       feedAnswer({
         status: 'awaiting_user',
         task: { turnNo: 1 },
-        preview: null,
+        preview: readyPreview,
         candidate: null,
         events: [requestRow('1')],
         cursor: '1',
@@ -1025,7 +1647,7 @@ describe('a dialog', () => {
     )
   })
 
-  it('shows the changes in place of the dialog below `lg`, «К диалогу» leading back (И14)', async () => {
+  it('shows the changes in place of the dialog below `lg`, «К чату» leading back (И14)', async () => {
     showDialog()
     await screen.findByText('Изменения готовы')
     const heading = screen.getByRole('heading', { level: 1, name: 'Поменять цену капучино' })
@@ -1036,16 +1658,16 @@ describe('a dialog', () => {
     await waitFor(() => expect(document.activeElement).toBe(tab))
     // The tool takes the place of the dialog: its head, rows and field are hidden, never gone.
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull()
-    expect(screen.queryByRole('list', { name: 'Сообщения диалога' })).toBeNull()
+    expect(screen.queryByRole('list', { name: 'Сообщения чата' })).toBeNull()
     expect(screen.queryByRole('textbox', { name: 'Сообщение' })).toBeNull()
     expect(heading.isConnected).toBe(true)
-    // «К диалогу» and «+» over the one strip of tabs: no «Диалог | Изменения», no edge to drag,
+    // «К чату» and «+» over the one strip of tabs: no «Диалог | Изменения», no edge to drag,
     // no «Скрыть панель».
     expect(screen.getAllByRole('tablist')).toHaveLength(1)
     expect(within(pane()).getByRole('button', { name: /^Инструменты/ })).toBe(plus())
     expect(within(pane()).queryByRole('button', { name: 'Скрыть панель' })).toBeNull()
     expect(screen.queryByRole('separator')).toBeNull()
-    fireEvent.click(within(pane()).getByRole('button', { name: 'К диалогу' }))
+    fireEvent.click(within(pane()).getByRole('button', { name: 'К чату' }))
     await waitFor(() => expect(toolsPanel()).toBeNull())
     // The same dialog again, the focus on «+» of its head.
     expect(screen.getByRole('heading', { level: 1, name: 'Поменять цену капучино' })).toBe(heading)
@@ -1093,8 +1715,7 @@ function mountDialog({
   const view = (
     <QueryClientProvider client={queryClient}>
       <DialogView
-        siteId={SITE_ID}
-        siteUrl="https://kroshka.example"
+        project={PROJECT}
         taskId={TASK_ID}
         title="Поменять цену капучино"
         browserStreamUrl={streamUrl}
@@ -1102,9 +1723,9 @@ function mountDialog({
     </QueryClientProvider>
   )
   const dialog = list ? (
-    <div data-site-shell="">
-      <nav data-site-list="" aria-label="Диалоги">
-        <a href={`/projects/${SITE_ID}/chat/${TASK_ID}`}>Поменять цену капучино</a>
+    <div data-chat-shell="">
+      <nav data-chat-list="" aria-label="Чаты">
+        <a href={`/chats/${TASK_ID}`}>Поменять цену капучино</a>
       </nav>
       <main>{view}</main>
     </div>
@@ -1120,6 +1741,770 @@ function showAnswers(...answers: (DialogFeed | Promise<DialogFeed>)[]) {
   mountDialog()
 }
 
+describe('the five kinds of a chat (docs/plan/61-chats-first.md, §5.6)', () => {
+  const BOTH = { repository: true, browser: true }
+  const NEITHER = { repository: false, browser: false }
+  /** What a chat without the repository lists: no group «Сайт», no `/retry` (К27). */
+  const WITHOUT_REPOSITORY = [
+    /^\/compactСжать переписку/u,
+    /^\/undoОтменить последний запросНедоступна/u,
+    /^\/redoВернуть отменённый запросНедоступна/u,
+    /^\/cancelОтменить чат/u,
+    /^\/newНовый чат/u,
+    /^\/sessionsВсе чаты/u,
+    /^\/exportСкачать переписку/u,
+    /^\/modelsМодель и размышление/u,
+    /^\/detailsПодробности работы/u,
+    /^\/thinkingРазмышления агента/u,
+    /^\/themesОформление/u,
+    /^\/helpСправка/u,
+  ].map((name) => expect.stringMatching(name))
+  /** The names of the commands the window lists. */
+  const listedCommands = () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+    const names = within(screen.getByRole('listbox', { name: 'Команды' }))
+      .getAllByRole('option')
+      .map((item) => plain(item.textContent))
+    fireEvent.keyDown(field(), { key: 'Escape' })
+    return names
+  }
+  const hint = () =>
+    (field().getAttribute('aria-describedby') ?? '')
+      .split(' ')
+      .map((id) => document.getElementById(id)?.textContent ?? '')
+      .join(' ')
+  const answered = (requirements: { repository: boolean; browser: boolean }) =>
+    feedAnswer({
+      status: 'awaiting_user',
+      task: { turnNo: 1, requirements },
+      commands: verdicts({ retry: 'nothing_to_retry' }),
+      events: [
+        requestRow('1'),
+        {
+          ...resultRow('2', 1, 'Вот пять вариантов.'),
+          next: 'awaiting_user',
+          site: 'none',
+          filesChanged: 0,
+        } as FeedRow,
+      ],
+      cursor: '2',
+    })
+
+  it('a chat with the repository alone: its files in «+», no words of changes or the browser', async () => {
+    showDialog(answered({ repository: true, browser: false }))
+    await screen.findByText('Вот пять вариантов.')
+    expect(toolsPanel()).toBeNull()
+    // The files of the working copy, to look at and to change (06.11.2026).
+    expect(await menuTiles()).toEqual(['Изменения'])
+    expect(document.body.textContent).not.toMatch(/Изменено файлов|Файлы и изменения|Браузер/u)
+    const listed = listedCommands().join(' ')
+    expect(listed).toContain('Выпустить новую версию')
+    expect(listed).toContain('Открыть предпросмотр')
+    expect(listed).toContain('Отменить чат')
+    // The words of the site's variables stand where the project has them.
+    expect(hint()).toContain('доступы задаются в разделе «Переменные»')
+  })
+
+  it('a chat with the code and the browser: every tool, the browser last, the panel closed', async () => {
+    wideLayout()
+    showDialog(
+      browserAnswer({
+        status: 'awaiting_approval',
+        task: { requirements: BOTH },
+        preview: readyPreview,
+        candidate: candidateHead,
+        commands: verdicts(),
+        events: [requestRow('1'), resultRow('2', 1), candidateRow('3', 1)],
+        cursor: '3',
+      }),
+      STREAM_URL,
+    )
+    await screen.findByText('Изменения готовы')
+    // The panel stays closed at the start of a showing (И1), no stream, no frame, no changes read.
+    expect(toolsPanel()).toBeNull()
+    expect(calls.streamTicket).not.toHaveBeenCalled()
+    expect(calls.candidate).not.toHaveBeenCalled()
+    expect(document.querySelector('iframe')).toBeNull()
+    expect(await menuTiles()).toEqual([
+      'Предпросмотр',
+      'Файлы и изменения, 4',
+      'База данных, 3',
+      'Проверки, 2 из 2',
+      'Изменения',
+      'Браузер, Агент ответил',
+    ])
+    // The commands of the site are there: the browser takes nothing from the code.
+    const listed = listedCommands().join(' ')
+    expect(listed).toContain('Выпустить новую версию')
+    expect(listed).toContain('Открыть предпросмотр')
+    expect(listed).toContain('Отменить чат')
+    expect(hint()).toContain('вход в админку сохраните в разделе «Переменные»')
+    // «Посмотреть изменения» goes to the changes, never to the browser.
+    fireEvent.click(screen.getByRole('button', { name: 'Посмотреть изменения' }))
+    await waitFor(() => expect(tabNames()).toEqual(['Файлы']))
+  })
+
+  it('stops a chat with the code and the browser that waits: `/release` waits with it', async () => {
+    const answer = browserAnswer({
+      status: 'awaiting_approval',
+      task: { requirements: BOTH },
+      candidate: candidateHead,
+      // As the server answers while the press stands in the feed (`cancelPending`).
+      commands: verdicts({
+        release: 'finished',
+        preview: 'finished',
+        update: 'finished',
+        reset: 'finished',
+      }),
+      events: [requestRow('1'), resultRow('2', 1), candidateRow('3', 1), commandRow('4', 'cancel')],
+      cursor: '4',
+    })
+    showDialog(answer)
+    await screen.findByText('Изменения готовы')
+    // core has not ended the chat yet, and the press stands in the feed: nothing else is taken.
+    await waitFor(() => expect(field().disabled).toBe(true))
+    expect(field().getAttribute('placeholder')).not.toBe('Что нужно сделать?')
+    expect(screen.queryByRole('button', { name: 'Выпустить новую версию' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+    expect(option(/Отменить чат/).getAttribute('aria-disabled')).toBe('true')
+    expect(option(/Выпустить новую версию/).getAttribute('aria-disabled')).toBe('true')
+  })
+
+  it('closes `/release` on the card from the press of `/cancel`, before the feed is read again', async () => {
+    calls.cancel.mockResolvedValue({ ...posted, state: 'stopping' })
+    showDialog(
+      browserAnswer({
+        status: 'awaiting_approval',
+        task: { requirements: BOTH },
+        candidate: candidateHead,
+        commands: verdicts(),
+        events: [requestRow('1'), resultRow('2', 1), candidateRow('3', 1)],
+        cursor: '3',
+      }),
+    )
+    const release = await screen.findByRole<HTMLButtonElement>('button', {
+      name: 'Выпустить новую версию',
+    })
+    expect(release.disabled).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+    fireEvent.click(option(/Отменить чат/))
+    const confirm = screen.getByRole('dialog', { name: 'Отменить чат?' })
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Отменить чат' }))
+    await waitFor(() => expect(calls.cancel).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(field().disabled).toBe(true))
+    expect(release.disabled).toBe(true)
+  })
+
+  it.each([
+    [
+      'the code alone, with changes',
+      { repository: true, browser: false },
+      candidateHead,
+      'https://kroshka.example',
+      ['Подготовленные изменения на сайт не попадут.'],
+      ['проверьте сайт'],
+    ],
+    [
+      'the code alone, nothing ready yet',
+      { repository: true, browser: false },
+      null,
+      'https://kroshka.example',
+      [],
+      ['проверьте сайт', 'Подготовленные'],
+    ],
+    [
+      'the code and the browser',
+      BOTH,
+      candidateHead,
+      'https://kroshka.example',
+      [
+        'Подготовленные изменения на сайт не попадут.',
+        'То, что он уже сделал на сайте, останется: проверьте сайт.',
+      ],
+      [],
+    ],
+    [
+      'the browser on a project',
+      { repository: false, browser: true },
+      null,
+      'https://kroshka.example',
+      ['То, что он уже сделал на сайте, останется: проверьте сайт.'],
+      ['Подготовленные'],
+    ],
+    [
+      'the browser without a project',
+      { repository: false, browser: true },
+      null,
+      null,
+      [],
+      ['сайт'],
+    ],
+  ] as const)(
+    'says what cancelling leaves of a chat with %s',
+    async (_what, requirements, candidate, url, says, never) => {
+      showDialog(
+        browserAnswer({
+          status: 'awaiting_user',
+          task: { requirements },
+          candidate,
+          commands: verdicts(),
+          events: [
+            requestRow('1'),
+            { ...resultRow('2', 1, 'Готово.'), next: 'awaiting_user' } as FeedRow,
+          ],
+          cursor: '2',
+        }),
+        null,
+        url,
+      )
+      await screen.findByText('Готово.')
+      fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+      fireEvent.click(option(/Отменить чат/))
+      const words = plain(screen.getByRole('dialog', { name: 'Отменить чат?' }).textContent)
+      expect(words).toContain('Чат завершится, а агент остановится, если ещё работает.')
+      for (const line of says) expect(words).toContain(line)
+      for (const line of never) expect(words).not.toContain(line)
+    },
+  )
+
+  it('calls an answer an answer on the tile of a chat with the code and the browser', async () => {
+    showDialog(
+      browserAnswer({
+        status: 'awaiting_user',
+        task: { requirements: BOTH },
+        commands: verdicts(),
+        events: [
+          requestRow('1'),
+          { ...resultRow('2', 1, 'Готово.'), next: 'awaiting_user' } as FeedRow,
+        ],
+        cursor: '2',
+      }),
+      STREAM_URL,
+    )
+    await screen.findByText('Готово.')
+    expect(await menuTiles()).toEqual(['Изменения', 'Браузер, Агент ответил'])
+  })
+
+  it('gives the panel of a browser beside the open changes to the client who asks for it', async () => {
+    wideLayout()
+    showDialog(
+      browserAnswer({
+        status: 'awaiting_approval',
+        task: { requirements: BOTH },
+        preview: readyPreview,
+        candidate: candidateHead,
+        commands: verdicts(),
+        events: [requestRow('1'), resultRow('2', 1), candidateRow('3', 1)],
+        cursor: '3',
+      }),
+      STREAM_URL,
+    )
+    await screen.findByText('Изменения готовы')
+    await choose(/^Файлы и изменения/)
+    expect(calls.streamTicket).not.toHaveBeenCalled()
+    await choose(/^Браузер/)
+    expect(tabNames()).toEqual(['Файлы', 'Браузер'])
+    // The real panel of the browser, on the one stream it reads.
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    expect(calls.streamTicket).toHaveBeenCalledTimes(1)
+    connect(sockets[0]!, 'agent')
+    expect(within(pane()).getAllByRole('button', { name: 'Взять управление' })).not.toEqual([])
+    expect(within(pane()).getByLabelText('Адрес страницы').textContent).toContain('kroshka.example')
+    // Back on the changes the browser stays open, its stream asleep behind them.
+    fireEvent.click(screen.getByRole('tab', { name: 'Файлы' }))
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: 'Браузер' }).getAttribute('aria-selected')).toBe(
+        'false',
+      ),
+    )
+    expect(tabNames()).toEqual(['Файлы', 'Браузер'])
+  })
+
+  describe('asked to sign in while the changes wait', () => {
+    const help = { reason: 'login', message: null } as const
+    const asks = (browser: Partial<FeedBrowserHead>) =>
+      browserAnswer({
+        status: 'awaiting_user',
+        task: { requirements: BOTH },
+        candidate: candidateHead,
+        commands: verdicts(),
+        browser: { help, ...browser },
+        events: [requestRow('1'), browserQuestionRow('2', 1, 'login')],
+        cursor: '2',
+      })
+
+    it('takes the control of the browser from the card, opening it', async () => {
+      wideLayout()
+      showDialog(asks({}), STREAM_URL)
+      await screen.findByText('Нужно войти на сайт')
+      expect(plusName()).toBe(DOT.browser)
+      fireEvent.click(screen.getByRole('button', { name: 'Взять управление' }))
+      await screen.findByRole('tab', { name: 'Браузер', selected: true })
+      await waitFor(() => expect(sockets).toHaveLength(1))
+      connect(sockets[0]!, 'agent')
+      expect(sockets[0]!.sent).toContainEqual({ t: 'take' })
+    })
+
+    it('gives the browser back to the agent from the card', async () => {
+      wideLayout()
+      showDialog(asks({ controller: 'user' }), STREAM_URL)
+      await screen.findByText('Нужно войти на сайт')
+      fireEvent.click(screen.getByRole('button', { name: 'Продолжить работу агента' }))
+      await waitFor(() => expect(calls.resumeAgent).toHaveBeenCalledTimes(1))
+    })
+  })
+
+  it.each([
+    ['on a project without its files', 'https://kroshka.example', 'вход в админку'],
+    ['without a project', null, null],
+  ] as const)(
+    'a chat with the browser alone %s: the browser, /cancel',
+    async (_what, url, words) => {
+      showDialog(
+        browserAnswer({ events: [requestRow('1', 'Добавьте новость')], cursor: '1' }),
+        null,
+        url,
+      )
+      await screen.findByText('Добавьте новость')
+      expect(toolsPanel()).toBeNull()
+      expect(await menuTiles()).toEqual(['Браузер, Работает агент'])
+      expect(listedCommands()).toEqual(WITHOUT_REPOSITORY)
+      if (words === null) expect(hint()).not.toContain('Переменные')
+      else expect(hint()).toContain(words)
+    },
+  )
+
+  it('a chat with neither: no tools, no commands of the site, no word of a project', async () => {
+    showDialog(answered(NEITHER), null, null)
+    await screen.findByText('Вот пять вариантов.')
+    expect(screen.queryByRole('button', { name: /^Инструменты/ })).toBeNull()
+    expect(screen.queryByRole('link', { name: /Открыть проект/ })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Открыть сайт' })).toBeNull()
+    expect(screen.getByRole('list', { name: 'Сообщения чата' }).textContent).not.toMatch(
+      /сайт|файл/iu,
+    )
+    expect(listedCommands()).toEqual(WITHOUT_REPOSITORY)
+    expect(hint()).toContain('Не отправляйте в чат пароли и ключи')
+    expect(hint()).not.toContain('Переменные')
+  })
+
+  it('takes a command of the site in a chat without the repository for none it has', async () => {
+    showDialog(answered(NEITHER), null, null)
+    await screen.findByText('Вот пять вариантов.')
+    type('/release')
+    expect(screen.queryByRole('listbox', { name: 'Команды' })).toBeNull()
+    fireEvent.keyDown(field(), { key: 'Enter', ctrlKey: true })
+    await screen.findByText(composerText.commandUnavailable)
+    expect(calls.message).not.toHaveBeenCalled()
+  })
+
+  it('offers no /retry, /undo or commands of the site on a project without its files', async () => {
+    const failure = {
+      id: '2',
+      at: '2026-10-17T10:00:00.000Z',
+      type: 'feed.failure',
+      turn: 1,
+      code: 'technical',
+      site: 'unchanged',
+      credits: null,
+      next: 'awaiting_user',
+    } as unknown as FeedRow
+    showDialog(
+      browserAnswer({
+        status: 'awaiting_user',
+        task: { canRetry: true },
+        // Each of them available or refused for a reason of its own: only the requirements say no.
+        commands: verdicts({ undo: 'busy', retry: null, release: null, cancel: null }),
+        events: [requestRow('1', 'Добавьте новость'), failure],
+        cursor: '2',
+      }),
+    )
+    await screen.findByText('Добавьте новость')
+    expect(listedCommands()).toEqual(WITHOUT_REPOSITORY)
+  })
+
+  it('says what `/undo` does in a chat without the repository', async () => {
+    showDialog(
+      browserAnswer({
+        status: 'awaiting_user',
+        commands: verdicts({ turn_undo: null }),
+        events: [requestRow('1', 'Добавьте новость')],
+        cursor: '1',
+      }),
+    )
+    await screen.findByText('Добавьте новость')
+    type('/und')
+    expect(option(/Отменить последний запрос/u).textContent).toContain(
+      'Агент забудет последний запрос и ответ на него.',
+    )
+  })
+
+  describe('`/undo`', () => {
+    const open = () =>
+      browserAnswer({
+        status: 'awaiting_user',
+        commands: verdicts({ turn_undo: null }),
+        events: [requestRow('1', 'Добавьте новость')],
+        cursor: '1',
+      })
+
+    const undo = () => {
+      type('/')
+      fireEvent.click(option(/Отменить последний запрос/))
+    }
+
+    it('asks the server to run it, and the words of the request come back to the field', async () => {
+      calls.undoTurn.mockResolvedValue({ ...posted, words: 'Добавьте новость' })
+      showDialog(open())
+      await screen.findByText('Добавьте новость')
+      undo()
+      await waitFor(() => expect(calls.undoTurn).toHaveBeenCalledTimes(1))
+      expect(calls.undoTurn.mock.calls[0]![0].taskId).toBe(TASK_ID)
+      await waitFor(() => expect(field().value).toBe('Добавьте новость'))
+    })
+
+    it('leaves a draft of the client where it is', async () => {
+      calls.undoTurn.mockResolvedValue({ ...posted, words: 'Добавьте новость' })
+      showDialog(open())
+      await screen.findByText('Добавьте новость')
+      type('Свой черновик')
+      fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+      fireEvent.click(option(/Отменить последний запрос/))
+      await waitFor(() => expect(calls.undoTurn).toHaveBeenCalledTimes(1))
+      await waitFor(() => expect(calls.feed.mock.calls.length).toBeGreaterThan(1))
+      expect(field().value).toBe('Свой черновик')
+    })
+
+    it('brings the same words back after they left the field', async () => {
+      calls.undoTurn.mockResolvedValue({ ...posted, words: 'Добавьте новость' })
+      showDialog(open())
+      await screen.findByText('Добавьте новость')
+      undo()
+      await waitFor(() => expect(field().value).toBe('Добавьте новость'))
+      type('')
+      undo()
+      await waitFor(() => expect(calls.undoTurn).toHaveBeenCalledTimes(2))
+      await waitFor(() => expect(field().value).toBe('Добавьте новость'))
+      // A new press: the same id would be a repeat of the first, and nothing would be undone.
+      const [first, second] = calls.undoTurn.mock.calls.map(([input]) => input.requestId)
+      expect(second).not.toBe(first)
+    })
+
+    it('repeats a press after a lost answer under the same id, and takes the words then', async () => {
+      calls.undoTurn
+        .mockRejectedValueOnce(network())
+        .mockResolvedValueOnce({ ...posted, repeated: true, words: 'Добавьте новость' })
+      showDialog(open())
+      await screen.findByText('Добавьте новость')
+      undo()
+      expect((await screen.findByRole('alert')).textContent).toBe(NETWORK_TEXT)
+      expect(field().value).toBe('')
+      type('')
+      undo()
+      await waitFor(() => expect(calls.undoTurn).toHaveBeenCalledTimes(2))
+      const [first, again] = calls.undoTurn.mock.calls.map(([input]) => input.requestId)
+      expect(again).toBe(first)
+      await waitFor(() => expect(field().value).toBe('Добавьте новость'))
+    })
+
+    describe('when core could not take the turn back', () => {
+      /** The next read of the feed brings the row core wrote: the press stayed where it was. */
+      const failed = () => {
+        const row = {
+          id: '10',
+          at: '2026-10-17T10:00:00.000Z',
+          type: 'feed.update',
+          outcome: 'rewind_failed',
+          conflicts: 0,
+        } as unknown as FeedRow
+        calls.feed.mockResolvedValue(
+          browserAnswer({
+            status: 'awaiting_user',
+            commands: verdicts({ turn_undo: null }),
+            events: [requestRow('1', 'Добавьте новость'), row],
+            cursor: '10',
+          }),
+        )
+        // Opening the window of commands reads the chat again.
+        fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+      }
+
+      it('takes the words out of the field: sending them would ask again over the same turn', async () => {
+        calls.undoTurn.mockResolvedValue({ ...posted, words: 'Добавьте новость' })
+        showDialog(open())
+        await screen.findByText('Добавьте новость')
+        undo()
+        await waitFor(() => expect(field().value).toBe('Добавьте новость'))
+        failed()
+        await screen.findByRole('heading', { name: 'Запрос не отменён' })
+        await waitFor(() => expect(field().value).toBe(''))
+      })
+
+      it('leaves words the client changed meanwhile', async () => {
+        calls.undoTurn.mockResolvedValue({ ...posted, words: 'Добавьте новость' })
+        showDialog(open())
+        await screen.findByText('Добавьте новость')
+        undo()
+        await waitFor(() => expect(field().value).toBe('Добавьте новость'))
+        type('Добавьте новость о скидках')
+        failed()
+        await screen.findByRole('heading', { name: 'Запрос не отменён' })
+        expect(field().value).toBe('Добавьте новость о скидках')
+      })
+    })
+
+    it('says a refusal in the field and gives nothing back', async () => {
+      calls.undoTurn.mockRejectedValue(serverRefusal('Отменять пока нечего.'))
+      showDialog(open())
+      await screen.findByText('Добавьте новость')
+      undo()
+      expect((await screen.findByRole('alert')).textContent).toBe('Отменять пока нечего.')
+      expect(field().value).toBe('')
+    })
+
+    // A failure, words, and the question of the turn on them, taken back: without the row of
+    // `/undo` the failure before them would be the last word, and the chat would ask again.
+    it('neither calls a chat answered nor asks for an answer right after `/undo`', async () => {
+      const at = '2026-10-17T10:00:00.000Z'
+      showDialog(
+        browserAnswer({
+          status: 'awaiting_user',
+          commands: verdicts({ turn_undo: 'nothing_to_undo' }),
+          events: [
+            requestRow('1', 'Добавьте новость'),
+            {
+              id: '2',
+              at,
+              type: 'feed.failure',
+              turn: 1,
+              code: 'technical',
+              site: 'none',
+              credits: null,
+              next: 'awaiting_user',
+            } as unknown as FeedRow,
+            requestRow('3', 'Продолжайте'),
+            {
+              id: '4',
+              at,
+              type: 'feed.question',
+              kind: 'agent',
+              turn: 2,
+              intro: 'Уточните.',
+              questions: [{ text: 'Какой адрес?', options: [] }],
+            } as unknown as FeedRow,
+            {
+              id: '5',
+              at,
+              type: 'feed.rewind',
+              turn: 2,
+              files: false,
+              site: 'none',
+            } as unknown as FeedRow,
+          ],
+          cursor: '5',
+        }),
+      )
+      await screen.findByText('Последний запрос отменён.')
+      const said = () => screen.getAllByRole('status').map((region) => region.textContent)
+      await waitFor(() => expect(said()).toContain('Запрос отменён'))
+      expect(said()).not.toContain('Агент ответил')
+      expect(said()).not.toContain('Нужен ваш ответ')
+      expect(field().getAttribute('placeholder')).not.toBe('Ваш ответ')
+    })
+  })
+
+  describe('`/redo`', () => {
+    const at = '2026-10-17T10:00:00.000Z'
+    const row = (fields: Record<string, unknown>) => ({ at, ...fields }) as unknown as FeedRow
+    const asked = requestRow('1', 'Добавьте новость')
+    const result = row({
+      id: '2',
+      type: 'feed.result',
+      turn: 1,
+      message: 'Новость добавлена.',
+      site: 'none',
+      next: 'awaiting_user',
+      filesChanged: null,
+      changeType: 'none',
+      needsApproval: false,
+      risk: 'low',
+    })
+    const rewind = row({ id: '3', type: 'feed.rewind', turn: 1, files: false, site: 'none' })
+    const redone = row({ id: '5', type: 'feed.redo', turn: 1, files: false, open: false })
+    const chat = (events: FeedRow[], commands = verdicts({ turn_undo: null, turn_redo: null })) =>
+      browserAnswer({
+        status: 'awaiting_user',
+        commands,
+        events,
+        cursor: events.at(-1)!.id,
+      })
+    const undo = () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+      fireEvent.click(option(/Отменить последний запрос/))
+    }
+    const redo = () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+      fireEvent.click(option(/Вернуть отменённый запрос/))
+    }
+    /** `/undo` gave the words to the field, and the next read of the feed shows its row. */
+    async function undoneChat() {
+      calls.undoTurn.mockResolvedValue({ ...posted, words: 'Добавьте новость' })
+      calls.redoTurn.mockResolvedValue({
+        ...posted,
+        requestEventId: '4',
+        words: 'Добавьте новость',
+      })
+      showDialog(chat([asked, result]))
+      await screen.findByText('Новость добавлена.')
+      calls.feed.mockResolvedValue(chat([asked, result, rewind]))
+      undo()
+      await waitFor(() => expect(field().value).toBe('Добавьте новость'))
+      await screen.findByText('Последний запрос отменён.')
+    }
+
+    it('takes the words out of the field once the turn is back: sent, they would ask twice', async () => {
+      await undoneChat()
+      calls.feed.mockResolvedValue(chat([asked, result, rewind, redone]))
+      redo()
+      await waitFor(() => expect(calls.redoTurn).toHaveBeenCalledTimes(1))
+      await screen.findByText('Отменённый запрос возвращён.')
+      await waitFor(() => expect(field().value).toBe(''))
+    })
+
+    it('leaves words the client changed, or wrote in their place', async () => {
+      await undoneChat()
+      type('Добавьте новость о скидках')
+      calls.feed.mockResolvedValue(chat([asked, result, rewind, redone]))
+      redo()
+      await screen.findByText('Отменённый запрос возвращён.')
+      expect(field().value).toBe('Добавьте новость о скидках')
+    })
+
+    it('keeps the words until core brought the turn back, and keeps them when it could not', async () => {
+      await undoneChat()
+      redo()
+      await waitFor(() => expect(calls.redoTurn).toHaveBeenCalledTimes(1))
+      expect(field().value).toBe('Добавьте новость')
+      calls.feed.mockResolvedValue(
+        chat([
+          asked,
+          result,
+          rewind,
+          row({ id: '5', type: 'feed.update', outcome: 'redo_failed', conflicts: 0 }),
+        ]),
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+      await screen.findByRole('heading', { name: 'Запрос не возвращён' })
+      expect(field().value).toBe('Добавьте новость')
+    })
+
+    it('says the chat answered again: `/redo` took the `/undo` back', async () => {
+      showDialog(chat([asked, result, rewind, redone]))
+      await screen.findByText('Отменённый запрос возвращён.')
+      const said = () => screen.getAllByRole('status').map((region) => region.textContent)
+      await waitFor(() => expect(said()).toContain('Агент ответил'))
+      expect(said()).not.toContain('Запрос отменён')
+    })
+
+    it('opens the question of the turn again', async () => {
+      const question = row({
+        id: '2',
+        type: 'feed.question',
+        kind: 'agent',
+        turn: 1,
+        intro: 'Уточните.',
+        questions: [{ text: 'Какой адрес?', options: [] }],
+      })
+      showDialog(chat([asked, question, rewind, redone]))
+      await screen.findByText('Отменённый запрос возвращён.')
+      await waitFor(() => expect(field().getAttribute('placeholder')).toBe('Ваш ответ'))
+    })
+
+    it('shows the refusal of the server', async () => {
+      await undoneChat()
+      calls.redoTurn.mockRejectedValue(serverRefusal('Возвращать нечего.'))
+      redo()
+      expect((await screen.findByRole('alert')).textContent).toBe('Возвращать нечего.')
+    })
+  })
+
+  it('reads an ended chat without a project no words of the «Переменные» either', async () => {
+    showDialog(
+      browserAnswer({
+        status: 'cancelled',
+        commands: verdicts({ cancel: 'finished' }),
+        events: [requestRow('1', 'Найдите цены')],
+        cursor: '1',
+      }),
+      null,
+      null,
+    )
+    await screen.findByText('Найдите цены')
+    await waitFor(() => expect(field().disabled).toBe(true))
+    expect(hint()).toContain('Не отправляйте в чат пароли и ключи')
+    expect(hint()).not.toContain('Переменные')
+  })
+
+  it('sends no client without a project to the «Переменные» it does not have for a password', async () => {
+    const refusal =
+      'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат — доступы задаются в разделе «Переменные»'
+    calls.message.mockRejectedValue(serverRefusal(refusal, 'TASK_TEXT_HAS_SECRET'))
+    showDialog(answered(NEITHER), null, null)
+    await screen.findByText('Вот пять вариантов.')
+    type('пароль: hunter2')
+    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }))
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат.',
+    )
+  })
+
+  it('keeps those words for a chat of a project, which has the «Переменные»', async () => {
+    const refusal =
+      'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат — доступы задаются в разделе «Переменные»'
+    calls.message.mockRejectedValue(serverRefusal(refusal, 'TASK_TEXT_HAS_SECRET'))
+    showDialog(answered({ repository: true, browser: false }))
+    await screen.findByText('Вот пять вариантов.')
+    type('пароль: hunter2')
+    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }))
+    expect((await screen.findByRole('alert')).textContent).toBe(`${refusal}.`)
+  })
+
+  it('asks to sign in on a site, not in the admin of one, without a project', async () => {
+    showDialog(
+      browserAnswer({
+        status: 'awaiting_user',
+        browser: { help: { reason: 'login', message: null } },
+        events: [requestRow('1'), browserQuestionRow('2', 1, 'login')],
+        cursor: '2',
+      }),
+      null,
+      null,
+    )
+    await screen.findByText('Нужно войти на сайт')
+    expect(plain(document.body.textContent)).toContain(
+      'Агенту нужно, чтобы вы вошли на сайт в браузере задачи.',
+    )
+    expect(document.body.textContent).not.toContain('админку')
+  })
+
+  it('says nothing of a site asking to cancel or to delete a chat without a project', async () => {
+    showDialog(answered(NEITHER), null, null)
+    await screen.findByText('Вот пять вариантов.')
+    fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
+    fireEvent.click(option(/Отменить чат/))
+    const confirm = screen.getByRole('dialog', { name: 'Отменить чат?' })
+    expect(plain(confirm.textContent)).toContain('Чат завершится, а агент остановится')
+    expect(confirm.textContent).not.toContain('сайт')
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Не отменять' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: /^Действия с чатом/ }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Удалить' }))
+    const ask = await screen.findByRole('dialog', { name: 'Удалить чат?' })
+    expect(plain(ask.textContent)).toContain('Чат пропадёт из списка')
+    expect(ask.textContent).not.toContain('сайт')
+  })
+})
+
 describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
   it.each([
     ['below the wide layout', false],
@@ -1131,10 +2516,10 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     // The changes open nothing by themselves (И1): no panel, no edge, no switch, nothing read —
     // and no mark the shell would leave an empty column for.
     expect(toolsPanel()).toBeNull()
-    expect(document.querySelector('[data-site-pane]')).toBeNull()
+    expect(document.querySelector('[data-chat-pane]')).toBeNull()
     expect(screen.queryByRole('separator')).toBeNull()
     expect(screen.queryByRole('tablist')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'К диалогу' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'К чату' })).toBeNull()
     // «+» in the head says they are there, by its dot and its name (И13).
     expect(within(screen.getByRole('banner')).getByRole('button', { name: DOT.changes })).toBe(
       plus(),
@@ -1154,6 +2539,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       'Файлы и изменения, 4',
       'База данных, 3',
       'Проверки, 2 из 2',
+      'Изменения',
     ])
     await choose(/^Файлы и изменения/)
     expect(tabNames()).toEqual(['Файлы'])
@@ -1168,6 +2554,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       'Файлы и изменения, Открыто',
       'База данных, 3',
       'Проверки, 2 из 2',
+      'Изменения',
     ])
     await choose(/^Файлы и изменения/)
     expect(tabNames()).toEqual(['Файлы'])
@@ -1190,8 +2577,8 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     const shown = screen.getByRole('tab', { name: 'Проверки', selected: true })
     await waitFor(() => expect(document.activeElement).toBe(shown))
     // The panel is the one the shell leaves its room to.
-    expect(document.querySelectorAll('[data-site-pane]')).toHaveLength(1)
-    expect(pane().hasAttribute('data-site-pane')).toBe(true)
+    expect(document.querySelectorAll('[data-chat-pane]')).toHaveLength(1)
+    expect(pane().hasAttribute('data-chat-pane')).toBe(true)
   })
 
   it('steps aside with the cross of its last tab: no panel, no edge, the focus back on «+»', async () => {
@@ -1208,7 +2595,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     await waitFor(() => expect(toolsPanel()).toBeNull())
     expect(screen.queryByRole('separator')).toBeNull()
     // The shell gives the dialog the room back: nothing of the panel is left to keep it.
-    expect(document.querySelector('[data-site-pane]')).toBeNull()
+    expect(document.querySelector('[data-chat-pane]')).toBeNull()
     await waitFor(() => expect(document.activeElement).toBe(plus()))
     expect(plus().id).toBe('dialog-tools')
   })
@@ -1277,6 +2664,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
         'Файлы и изменения, 4',
         'База данных, 3',
         'Проверки, 2 из 2',
+        'Изменения',
       ])
       // The arrows go through the tiles in the order of reading, two columns or one.
       press('ArrowDown')
@@ -1286,7 +2674,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       press('ArrowUp')
       expect(document.activeElement).toBe(tiles[1])
       press('End')
-      expect(document.activeElement).toBe(tiles[3])
+      expect(document.activeElement).toBe(tiles[4])
       press('Home')
       expect(document.activeElement).toBe(tiles[0])
       // Esc closes the menu, the focus back on «+», nothing opened.
@@ -1312,9 +2700,10 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       const last = document.activeElement!
       fireEvent.keyDown(last, { key: ' ' })
       fireEvent.keyUp(last, { key: ' ' })
-      const checks = await screen.findByRole('tab', { name: 'Проверки', selected: true })
-      await waitFor(() => expect(document.activeElement).toBe(checks))
-      expect(tabNames()).toEqual(['Файлы', 'Проверки'])
+      // The last tile is the files of the working copy now (06.11.2026).
+      const terminal = await screen.findByRole('tab', { name: 'Изменения', selected: true })
+      await waitFor(() => expect(document.activeElement).toBe(terminal))
+      expect(tabNames()).toEqual(['Файлы', 'Изменения'])
     },
   )
 
@@ -1334,7 +2723,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       within(menu)
         .getAllByRole('menuitem')
         .map((item) => plain(item.textContent)),
-    ).toEqual(['Файлы и изменения, 4', 'База данных, 3', 'Проверки, 2 из 2'])
+    ).toEqual(['Файлы и изменения, 4', 'База данных, 3', 'Проверки, 2 из 2', 'Изменения'])
     if (wide) {
       expect(screen.queryByRole('button', { name: 'Закрыть меню' })).toBeNull()
       fireEvent.keyDown(menu, { key: 'Escape' })
@@ -1351,13 +2740,13 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       expect(screen.getByRole('heading', { level: 1, name: 'Поменять цену капучино' })).toBeTruthy()
       expect(screen.getByRole('separator', { name: 'Ширина панели' })).toBeTruthy()
       expect(within(pane()).getByRole('button', { name: 'Скрыть панель' })).toBeTruthy()
-      expect(screen.queryByRole('button', { name: 'К диалогу' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'К чату' })).toBeNull()
     } else {
       // The tool takes the place of the dialog, the way back in plain sight.
       expect(screen.queryByRole('heading', { level: 1 })).toBeNull()
       expect(screen.queryByRole('separator')).toBeNull()
       expect(within(pane()).queryByRole('button', { name: 'Скрыть панель' })).toBeNull()
-      expect(within(pane()).getByRole('button', { name: 'К диалогу' })).toBeTruthy()
+      expect(within(pane()).getByRole('button', { name: 'К чату' })).toBeTruthy()
     }
   })
 
@@ -1509,7 +2898,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
   })
 
   it.each([
-    ['below `lg`, «К диалогу»', false, 'К диалогу'],
+    ['below `lg`, «К чату»', false, 'К чату'],
     ['from `lg`, «Скрыть панель»', true, 'Скрыть панель'],
   ])(
     'keeps the draft and the files of the field while the tools open, switch and close %s',
@@ -1545,7 +2934,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     showDialog(waiting({ preview: readyPreview }))
     await screen.findByText('Изменения готовы')
     const textarea = field()
-    const feed = screen.getByRole('list', { name: 'Сообщения диалога' })
+    const feed = screen.getByRole('list', { name: 'Сообщения чата' })
     type('А ещё поменяйте цену латте')
     fireEvent.change(screen.getByTestId('composer-files'), {
       target: { files: [new File([new Uint8Array(16)], 'Фото.jpg', { type: 'image/jpeg' })] },
@@ -1556,7 +2945,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     expect(screen.getByRole('separator', { name: 'Ширина панели' })).toBeTruthy()
     // Narrower than `lg`: the open tool takes the place of the dialog, which is only hidden.
     resize(false)
-    expect(within(pane()).getByRole('button', { name: 'К диалогу' })).toBeTruthy()
+    expect(within(pane()).getByRole('button', { name: 'К чату' })).toBeTruthy()
     expect(screen.queryByRole('separator')).toBeNull()
     expect(screen.queryByRole('textbox', { name: 'Сообщение' })).toBeNull()
     expect(screen.getByRole('tab', { name: 'Файлы', selected: true })).toBeTruthy()
@@ -1573,18 +2962,16 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     resize(true)
     expect(field()).toBe(textarea)
     expect(field().value).toBe('А ещё поменяйте цену латте')
-    expect(screen.getByRole('list', { name: 'Сообщения диалога' })).toBe(feed)
+    expect(screen.getByRole('list', { name: 'Сообщения чата' })).toBe(feed)
     expect(files.isConnected).toBe(true)
     expect(plain(files.textContent)).toContain('Фото.jpg')
   })
 
-  it('says «нет» in a closed dialog without changes, and so do their tabs', async () => {
+  it('has no «+» in a closed dialog that left no changes and no preview (К19)', async () => {
     showDialog(
       feedAnswer({
         status: 'done',
-        // A preview with a copy of the database, gone with the dialog: its preview is offered no
-        // more, and without records among changes no «База данных» either (И6, owner's answer of
-        // 30.10.2026).
+        // A preview with a copy of the database, gone with the dialog: nothing is offered any more.
         preview: { ...readyPreview, status: 'destroyed' },
         events: [requestRow('1')],
         cursor: '1',
@@ -1599,36 +2986,79 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     )
     await screen.findByRole('textbox', { name: 'Сообщение' })
     expect(screen.getByRole('textbox', { name: 'Сообщение' }).getAttribute('placeholder')).toBe(
-      'Диалог завершён',
+      'Чат завершён',
     )
-    expect(await menuTiles()).toEqual(['Файлы и изменения, нет', 'Проверки, нет'])
-    await choose(/^Файлы и изменения/)
-    expect(plain(within(pane()).getByRole('tabpanel').textContent)).toBe(
-      'Диалог закрыт: изменений для показа здесь нет.Выпущенные версии — в разделе «Изменения».',
-    )
-    await choose(/^Проверки/)
-    expect(plain(within(pane()).getByRole('tabpanel').textContent)).toBe(
-      'Диалог закрыт: проверок нет.',
-    )
-    // The tiles of the open tools say so; nothing was read for them.
-    expect(await menuTiles()).toEqual(['Файлы и изменения, Открыто', 'Проверки, Открыто'])
+    expect(screen.queryByRole('button', { name: /^Инструменты/ })).toBeNull()
     expect(calls.candidate).not.toHaveBeenCalled()
   })
 
-  it('says the changes are yet to come in a dialog at work', async () => {
+  it('offers the preview and the files in a dialog at work, not a word of changes (К19)', async () => {
     showDialog(started())
     await screen.findByText('Поменял цену капучино на 290 ₽.')
-    expect(await menuTiles()).toEqual([
-      'Предпросмотр',
-      'Файлы и изменения, пока нет',
-      'Проверки, пока нет',
-    ])
-    await choose(/^Файлы и изменения/)
-    expect(plain(within(pane()).getByRole('tabpanel').textContent)).toBe(
-      'Изменений пока нет.Они появятся здесь, когда агент закончит работу.',
-    )
+    expect(await menuTiles()).toEqual(['Предпросмотр', 'Изменения'])
     expect(calls.candidate).not.toHaveBeenCalled()
   })
+
+  it('keeps an open tab of the changes when they are gone, saying so', async () => {
+    let later!: (answer: DialogFeed) => void
+    const gone = waiting({
+      status: 'awaiting_user',
+      candidate: null,
+      preview: readyPreview,
+      events: [requestRow('1'), resultRow('2', 1), candidateRow('3', 1), requestRow('4', 'Ещё')],
+      cursor: '4',
+    })
+    showAnswers(
+      waiting({ preview: readyPreview, more: true }),
+      new Promise<DialogFeed>((resolve) => (later = resolve)),
+      gone,
+    )
+    await screen.findByText('Изменения готовы')
+    await choose(/^Файлы и изменения/)
+    expect(toolsPanel()).not.toBeNull()
+    later(gone)
+    await waitFor(() =>
+      expect(plain(within(pane()).getByRole('tabpanel').textContent)).toBe(
+        'Изменений пока нет.Они появятся здесь, когда агент закончит работу.',
+      ),
+    )
+  })
+
+  it.each([
+    ['the field, open to words', 'awaiting_user', () => field()],
+    [
+      'what works in the closed field',
+      'done',
+      () => screen.getByRole('button', { name: 'Команды' }),
+    ],
+  ] as const)(
+    'keeps «+» for the files of the working copy when the last tab closes, %s still there (К19)',
+    async (_what, status, target) => {
+      wideLayout()
+      let later!: (answer: DialogFeed) => void
+      const gone = waiting({
+        status,
+        candidate: null,
+        preview: null,
+        commands: verdicts({ cancel: status === 'done' ? 'finished' : null }),
+        events: [requestRow('1'), resultRow('2', 1), candidateRow('3', 1), requestRow('4', 'Ещё')],
+        cursor: '4',
+      })
+      showAnswers(
+        waiting({ more: true }),
+        new Promise<DialogFeed>((resolve) => (later = resolve)),
+        gone,
+      )
+      await screen.findByText('Изменения готовы')
+      await choose(/^Файлы и изменения/)
+      later(gone)
+      fireEvent.click(within(pane()).getByRole('button', { name: 'Скрыть панель' }))
+      await waitFor(() => expect(toolsPanel()).toBeNull())
+      // A chat with the code keeps its «Терминал» (06.11.2026): «+» stays, and takes the focus.
+      await waitFor(() => expect(document.activeElement).toBe(plus()))
+      expect(target()).toBeTruthy()
+    },
+  )
 
   it("offers «База данных» only once the changes hold records (owner's answer of 30.10.2026)", async () => {
     let later!: (answer: DialogFeed) => void
@@ -1654,7 +3084,12 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     )
     await screen.findByText('Изменения готовы')
     // The changes touch the files alone: no tile of the records, whatever the stack could do.
-    expect(await menuTiles()).toEqual(['Предпросмотр', 'Файлы и изменения, 4', 'Проверки, 2 из 2'])
+    expect(await menuTiles()).toEqual([
+      'Предпросмотр',
+      'Файлы и изменения, 4',
+      'Проверки, 2 из 2',
+      'Изменения',
+    ])
     later(withRecords)
     expect(await screen.findByText('Поменял ещё и цену в меню на сайте.')).toBeTruthy()
     expect(await menuTiles()).toEqual([
@@ -1662,10 +3097,11 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       'Файлы и изменения, 4',
       'База данных, 3',
       'Проверки, 2 из 2',
+      'Изменения',
     ])
   })
 
-  it("closes only the tab on the screen by «К диалогу» below `lg`: the others wait behind the dialog (owner's answer of 30.10.2026)", async () => {
+  it("closes only the tab on the screen by «К чату» below `lg`: the others wait behind the dialog (owner's answer of 30.10.2026)", async () => {
     showDialog(waiting({ preview: readyPreview }))
     await screen.findByText('Изменения готовы')
     const heading = screen.getByRole('heading', { level: 1, name: 'Поменять цену капучино' })
@@ -1673,7 +3109,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     await within(pane()).findByTitle(FRAME)
     await choose(/^Проверки/)
     expect(tabNames()).toEqual(['Предпросмотр', 'Проверки'])
-    fireEvent.click(within(pane()).getByRole('button', { name: 'К диалогу' }))
+    fireEvent.click(within(pane()).getByRole('button', { name: 'К чату' }))
     // The dialog again, the focus on «+» of its head; the area of the tools is put away, and
     // nothing of it reads anything meanwhile.
     await waitFor(() => expect(toolsPanel()).toBeNull())
@@ -1689,6 +3125,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       'Файлы и изменения, 4',
       'База данных, 3',
       'Проверки, 2 из 2',
+      'Изменения',
     ])
     // Chosen there, it is on the screen again in place of the dialog, alone on its strip.
     await choose(/^Предпросмотр, Открыто/)
@@ -1698,8 +3135,8 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     await waitFor(() => expect(document.activeElement).toBe(tab))
     // Choosing the preview is the client's call to show it (И10).
     await waitFor(() => expect(calls.ticket).toHaveBeenCalledTimes(2))
-    // «К диалогу» on the last tab closes the tools: nothing is kept open any more.
-    fireEvent.click(within(pane()).getByRole('button', { name: 'К диалогу' }))
+    // «К чату» on the last tab closes the tools: nothing is kept open any more.
+    fireEvent.click(within(pane()).getByRole('button', { name: 'К чату' }))
     await waitFor(() => expect(toolsPanel()).toBeNull())
     await waitFor(() => expect(document.activeElement).toBe(plus()))
     expect(await menuTiles()).toEqual([
@@ -1707,6 +3144,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
       'Файлы и изменения, 4',
       'База данных, 3',
       'Проверки, 2 из 2',
+      'Изменения',
     ])
   })
 
@@ -1731,7 +3169,7 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     await screen.findByText('Изменения готовы')
     await choose(/^Предпросмотр/)
     await choose(/^Файлы и изменения/)
-    fireEvent.click(within(pane()).getByRole('button', { name: 'К диалогу' }))
+    fireEvent.click(within(pane()).getByRole('button', { name: 'К чату' }))
     await waitFor(() => expect(toolsPanel()).toBeNull())
     // The files were on the screen at these changes: no dot for them.
     expect(plusName()).toBe('Инструменты')
@@ -1758,18 +3196,16 @@ describe('a task in the browser', () => {
     )
     expect(await screen.findByText('Добавьте новость о веранде')).toBeTruthy()
     expect(toolsPanel()).toBeNull()
-    expect(await menuTiles()).toEqual(['Браузер, Закрыт'])
+    expect(await menuTiles()).toEqual(['Браузер, нет'])
     await choose(/^Браузер/)
-    expect(plain(pane().textContent)).toContain(
-      'Агент закончил работу в браузере. Результат — в диалоге.',
-    )
+    expect(plain(pane().textContent)).toContain('Браузер в этом чате не запускался.')
   })
 
   it.each([
     ['below the wide layout', false],
     ['from `lg`', true],
   ])(
-    'starts with the dialog alone %s while its browser works, and offers only /cancel',
+    'starts with the dialog alone %s while its browser works: of the server, only /cancel',
     async (_width, wide) => {
       if (wide) wideLayout()
       showDialog(
@@ -1777,25 +3213,32 @@ describe('a task in the browser', () => {
         STREAM_URL,
       )
       expect(await screen.findByText('Добавьте новость о веранде')).toBeTruthy()
-      expect(
-        within(screen.getByRole('navigation', { name: 'Режим диалога' }))
-          .getByText('Чат')
-          .getAttribute('aria-current'),
-      ).toBe('true')
       // The browser works on the server; the client looks at the dialog alone (И1): no panel, no
       // switch, no stream.
       expect(toolsPanel()).toBeNull()
       expect(screen.queryByRole('tablist')).toBeNull()
       expect(calls.streamTicket).not.toHaveBeenCalled()
       expect(sockets).toHaveLength(0)
-      // The agent works: the field waits, and the window of commands has only «Отменить диалог».
+      // The agent works: the field waits, and of the server's commands the window of commands has
+      // only «Отменить чат» to run; those of the page work all the same.
       fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
       const options = within(screen.getByRole('listbox', { name: 'Команды' })).getAllByRole(
         'option',
       )
-      expect(options.map((option) => plain(option.textContent))).toEqual([
-        expect.stringContaining('Отменить диалог'),
-      ])
+      const open = options.filter((option) => option.getAttribute('aria-disabled') === null)
+      expect(open.map((option) => plain(option.textContent))).toEqual(
+        [
+          'Отменить чат',
+          'Новый чат',
+          'Все чаты',
+          'Скачать переписку',
+          'Модель и размышление',
+          'Подробности работы',
+          'Размышления агента',
+          'Оформление',
+          'Справка',
+        ].map((name) => expect.stringContaining(name)),
+      )
       expect(
         screen.getByText(
           'Не отправляйте в чат пароли и ключи: вход в админку сохраните в разделе «Переменные» или войдите сами в окне браузера.',
@@ -1831,7 +3274,7 @@ describe('a task in the browser', () => {
       expect(screen.getByRole('separator', { name: 'Ширина панели' })).toBeTruthy()
     } else {
       expect(screen.queryByRole('heading', { level: 1 })).toBeNull()
-      expect(within(pane()).getByRole('button', { name: 'К диалогу' })).toBeTruthy()
+      expect(within(pane()).getByRole('button', { name: 'К чату' })).toBeTruthy()
     }
   })
 
@@ -1918,6 +3361,62 @@ describe('a task in the browser', () => {
     expect(sockets[0]!.sent).not.toContainEqual({ t: 'take' })
   })
 
+  describe('of a closed project (К39)', () => {
+    const noControl = () => {
+      expect(screen.queryByRole('button', { name: 'Взять управление' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Продолжить работу агента' })).toBeNull()
+    }
+
+    it('offers no «Взять управление» on the question, on the card or beside the picture', async () => {
+      showDialog(
+        browserAnswer({
+          status: 'awaiting_user',
+          commands: closedVerdicts(),
+          browser: { help: { reason: 'login', message: null } },
+          events: [requestRow('1'), browserQuestionRow('2', 1, 'login')],
+          cursor: '2',
+        }),
+        STREAM_URL,
+      )
+      await screen.findByText('Нужно войти на сайт')
+      noControl()
+      await choose(/^Браузер/)
+      await waitFor(() => expect(sockets).toHaveLength(1))
+      connect(sockets[0]!, 'agent')
+      noControl()
+    })
+
+    it('offers no «Продолжить работу агента» while the client held the control', async () => {
+      showDialog(
+        browserAnswer({
+          status: 'awaiting_user',
+          commands: closedVerdicts(),
+          browser: { controller: 'user' },
+          events: [requestRow('1'), browserQuestionRow('2', 1, 'control')],
+          cursor: '2',
+        }),
+        STREAM_URL,
+      )
+      await waitFor(() => expect(field().disabled).toBe(true))
+      noControl()
+    })
+
+    it('says nothing of a press that goes nowhere while a turn under way holds the client', async () => {
+      showDialog(
+        browserAnswer({
+          commands: closedVerdicts(),
+          browser: { controller: 'user' },
+          events: [requestRow('1', 'Добавьте новость')],
+          cursor: '1',
+        }),
+        STREAM_URL,
+      )
+      await screen.findByText('Добавьте новость')
+      noControl()
+      expect(screen.queryByText(/нажмите «Продолжить работу агента»/u)).toBeNull()
+    })
+  })
+
   it('offers «Продолжить работу агента» alone while the client drives; «+» opens the browser to look', async () => {
     showDialog(
       browserAnswer({
@@ -1957,9 +3456,9 @@ describe('a task in the browser', () => {
       (tab: HTMLElement) => fireEvent.keyDown(tab, { key: 'Delete' }),
     ],
     [
-      'by «К диалогу» below `lg`',
+      'by «К чату» below `lg`',
       false,
-      () => fireEvent.click(within(pane()).getByRole('button', { name: 'К диалогу' })),
+      () => fireEvent.click(within(pane()).getByRole('button', { name: 'К чату' })),
     ],
     [
       'by «Скрыть панель» from `lg`',
@@ -2096,9 +3595,9 @@ describe('a task in the browser', () => {
     expect(field().disabled).toBe(false)
     expect(take().disabled).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: 'Команды' }))
-    fireEvent.click(option(/Отменить диалог/))
-    const confirm = screen.getByRole('dialog', { name: 'Отменить диалог?' })
-    fireEvent.click(within(confirm).getByRole('button', { name: 'Отменить диалог' }))
+    fireEvent.click(option(/Отменить чат/))
+    const confirm = screen.getByRole('dialog', { name: 'Отменить чат?' })
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Отменить чат' }))
     // core closes the task: until then the field and the control wait, and say why.
     await waitFor(() => expect(field().disabled).toBe(true))
     expect(take().disabled).toBe(true)
@@ -2137,31 +3636,23 @@ describe('a task in the browser', () => {
     expect(calls.resumeAgent).not.toHaveBeenCalled()
   })
 
-  it('takes the covered head, dialog, bar, list and way back out of the tab order in full screen, until it closes', async () => {
+  it('takes the covered head, dialog, list and way back out of the tab order in full screen, until it closes', async () => {
     calls.feed.mockResolvedValue(browserAnswer({ events: [requestRow('1')], cursor: '1' }))
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     })
     render(
-      <div data-site-shell="">
-        <header aria-label="Панель сайта">
-          <button type="button">Проекты</button>
-        </header>
-        <nav data-site-list="" aria-label="Диалоги">
-          <button type="button">Новый диалог</button>
+      <div data-chat-shell="">
+        <nav data-chat-list="" aria-label="Чаты">
+          <button type="button">Новый чат</button>
         </nav>
         <main>
           {/* From `lg` the way back to the list stands over a dialog its panel took the room of. */}
-          <a data-site-back="" href={`/projects/${SITE_ID}/chat`}>
-            Назад к диалогам
+          <a data-chat-back="" href="#chats">
+            Назад к чатам
           </a>
           <QueryClientProvider client={queryClient}>
-            <DialogView
-              siteId={SITE_ID}
-              siteUrl="https://kroshka.example"
-              taskId={TASK_ID}
-              title={null}
-            />
+            <DialogView project={PROJECT} taskId={TASK_ID} title={null} />
           </QueryClientProvider>
         </main>
       </div>,
@@ -2170,16 +3661,14 @@ describe('a task in the browser', () => {
       level: 1,
       name: 'Новость о летней веранде',
     })
-    const feed = screen.getByRole('list', { name: 'Сообщения диалога' })
-    const bar = screen.getByRole('banner', { name: 'Панель сайта' })
-    const list = screen.getByRole('navigation', { name: 'Диалоги' })
-    const back = screen.getByRole('link', { name: 'Назад к диалогам' })
+    const feed = screen.getByRole('list', { name: 'Сообщения чата' })
+    const list = screen.getByRole('navigation', { name: 'Чаты' })
+    const back = screen.getByRole('link', { name: 'Назад к чатам' })
     await choose(/^Браузер/)
     expect(feed.closest('[inert]')).toBeNull()
     fireEvent.click(within(pane()).getByRole('button', { name: 'Во весь экран' }))
     await waitFor(() => expect(feed.closest('[inert]')).not.toBeNull())
     expect(name.closest('[inert]')).not.toBeNull()
-    expect(bar.hasAttribute('inert')).toBe(true)
     expect(list.hasAttribute('inert')).toBe(true)
     // The way back to the list is under the browser too: Shift+Tab from its tabs never lands on it.
     expect(back.hasAttribute('inert')).toBe(true)
@@ -2196,20 +3685,49 @@ describe('a task in the browser', () => {
     expect(live!.closest('[inert]')).toBeNull()
     fireEvent.click(within(pane()).getByRole('button', { name: 'Свернуть' }))
     await waitFor(() => expect(feed.closest('[inert]')).toBeNull())
-    expect(bar.hasAttribute('inert')).toBe(false)
     expect(list.hasAttribute('inert')).toBe(false)
     expect(back.hasAttribute('inert')).toBe(false)
     // The browser closed over the content leaves nothing out of reach (И17).
     fireEvent.click(within(pane()).getByRole('button', { name: 'Во весь экран' }))
-    await waitFor(() => expect(bar.hasAttribute('inert')).toBe(true))
+    await waitFor(() => expect(list.hasAttribute('inert')).toBe(true))
     expect(back.hasAttribute('inert')).toBe(true)
-    fireEvent.click(within(pane()).getByRole('button', { name: 'К диалогу' }))
+    fireEvent.click(within(pane()).getByRole('button', { name: 'К чату' }))
     await waitFor(() => expect(toolsPanel()).toBeNull())
     expect(feed.closest('[inert]')).toBeNull()
     expect(name.closest('[inert]')).toBeNull()
-    expect(bar.hasAttribute('inert')).toBe(false)
     expect(list.hasAttribute('inert')).toBe(false)
     expect(back.hasAttribute('inert')).toBe(false)
+  })
+
+  it('leaves the whole area when another tool is chosen: only the browser has the way back', async () => {
+    wideLayout()
+    showDialog(
+      browserAnswer({
+        status: 'awaiting_approval',
+        task: { requirements: { repository: true, browser: true } },
+        candidate: candidateHead,
+        commands: verdicts(),
+        events: [requestRow('1'), resultRow('2', 1), candidateRow('3', 1)],
+        cursor: '3',
+      }),
+      STREAM_URL,
+    )
+    const feed = await screen.findByRole('list', { name: 'Сообщения чата' })
+    await choose(/^Браузер/)
+    await choose(/^Файлы и изменения/)
+    const browser = await screen.findByRole('tab', { name: 'Браузер' })
+    fireEvent.click(browser)
+    fireEvent.click(await within(pane()).findByRole('button', { name: 'Во весь экран' }))
+    await waitFor(() => expect(feed.closest('[inert]')).not.toBeNull())
+    // A tab of the strip…
+    fireEvent.click(screen.getByRole('tab', { name: 'Файлы' }))
+    await waitFor(() => expect(feed.closest('[inert]')).toBeNull())
+    // …and a tool of «+» at its end, which stands over the browser too.
+    fireEvent.click(browser)
+    fireEvent.click(await within(pane()).findByRole('button', { name: 'Во весь экран' }))
+    await waitFor(() => expect(feed.closest('[inert]')).not.toBeNull())
+    await choose(/^База данных/)
+    await waitFor(() => expect(feed.closest('[inert]')).toBeNull())
   })
 
   it('names the files of a later message too: the list is read again for them', async () => {
@@ -2244,12 +3762,7 @@ describe('a task in the browser', () => {
     })
     render(
       <QueryClientProvider client={queryClient}>
-        <DialogView
-          siteId={SITE_ID}
-          siteUrl="https://kroshka.example"
-          taskId={TASK_ID}
-          title={null}
-        />
+        <DialogView project={PROJECT} taskId={TASK_ID} title={null} />
       </QueryClientProvider>,
     )
     expect(await screen.findByText('menu-leto.pdf')).toBeTruthy()
@@ -2357,6 +3870,63 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
     expect(calls.resumeAgent).not.toHaveBeenCalled()
   })
 
+  describe('in a chat with the code too (docs/plan/61-chats-first.md, К10, К11)', () => {
+    const BOTH = { repository: true, browser: true }
+    /** The agent works on the changes; the first word to the browser starts it. */
+    const both = (browser: Partial<FeedBrowserHead> | null, rows: number, more = false) => {
+      const { task: _task, ...answer } = atWork(browser, rows, more)
+      return browserAnswer({
+        ...answer,
+        browser,
+        task: { requirements: BOTH },
+        candidate: candidateHead,
+      })
+    }
+
+    it('opens the browser by itself once, on its tab, with its stream', async () => {
+      wideLayout()
+      const second = later()
+      queueAnswers(both(null, 1, true), second.answer, both({ status: 'ready' }, 2))
+      mountDialog({ streamUrl: STREAM_URL })
+      await screen.findByText(WORDS[0]!)
+      expect(toolsPanel()).toBeNull()
+      expect(calls.streamTicket).not.toHaveBeenCalled()
+      second.give(both({ status: 'ready' }, 2, true))
+      expect(await screen.findByRole('tab', { name: 'Браузер', selected: true })).toBeTruthy()
+      await waitFor(() => expect(sockets).toHaveLength(1))
+      expect(calls.streamTicket).toHaveBeenCalledTimes(1)
+      closeBrowser()
+      await waitFor(() => expect(toolsPanel()).toBeNull())
+      expect(sockets).toHaveLength(1)
+    })
+
+    it('leaves the client on the tab read, the focus inside it, the browser a tab beside', async () => {
+      wideLayout()
+      const second = later()
+      queueAnswers(both(null, 1, true), second.answer, both({ status: 'ready' }, 2))
+      calls.candidate.mockResolvedValue(candidateWith('passed'))
+      mountDialog({ streamUrl: STREAM_URL })
+      await screen.findByText(WORDS[0]!)
+      await choose(/^Проверки/)
+      const panel = await screen.findByRole('tabpanel')
+      const held = document.createElement('button')
+      panel.appendChild(held)
+      held.focus()
+      second.give(both({ status: 'ready' }, 2, true))
+      await waitFor(() => expect(tabNames()).toEqual(['Проверки', 'Браузер']))
+      await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
+      expect(screen.getByRole('tab', { name: 'Проверки' }).getAttribute('aria-selected')).toBe(
+        'true',
+      )
+      expect(panel.hidden).toBe(false)
+      expect(document.activeElement).toBe(held)
+      // Nothing of the browser before the client asks for it (docs/plan/59, И11).
+      expect(calls.streamTicket).not.toHaveBeenCalled()
+      expect(sockets).toHaveLength(0)
+      panel.removeChild(held)
+    })
+  })
+
   /** «+» at the end of the tabs, where it stands while the panel is open (И4). */
   const plusOfTabs = () => within(pane()).getByRole('button', { name: /^Инструменты/ })
 
@@ -2405,7 +3975,7 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
     await screen.findByText(WORDS[0]!)
     // The client came from the list: its link keeps the focus. From `lg` the list gives its room
     // to the panel, the link with it.
-    const link = within(screen.getByRole('navigation', { name: 'Диалоги' })).getByRole('link')
+    const link = within(screen.getByRole('navigation', { name: 'Чаты' })).getByRole('link')
     link.focus()
     second.give(atWork({ status: 'ready' }, 2))
     expect(await screen.findByRole('tab', { name: 'Браузер', selected: true })).toBeTruthy()
@@ -2413,7 +3983,7 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
   })
 
   it.each([
-    ['«⋯» of the head', () => screen.getByRole('button', { name: /^Действия с диалогом/ })],
+    ['«⋯» of the head', () => screen.getByRole('button', { name: /^Действия с чатом/ })],
     ['«Команды» of the field', () => screen.getByRole('button', { name: 'Команды' })],
   ])('leaves a focus on %s where it is as the browser opens by itself', async (_what, target) => {
     wideLayout()
@@ -2440,7 +4010,7 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
     await waitFor(() => expect(toolsPanel()).toBeNull())
     await waitFor(() => expect(document.activeElement).toBe(plus()))
     // The client went on to the list of dialogs meanwhile.
-    const link = within(screen.getByRole('navigation', { name: 'Диалоги' })).getByRole('link')
+    const link = within(screen.getByRole('navigation', { name: 'Чаты' })).getByRole('link')
     link.focus()
     second.give(atWork({ status: 'ready' }, 2))
     expect(await screen.findByText(WORDS[1]!)).toBeTruthy()
@@ -2451,7 +4021,7 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
 
   it.each([
     ['«+» of the head', () => plus()],
-    ['«⋯» of the head', () => screen.getByRole('button', { name: /^Действия с диалогом/ })],
+    ['«⋯» of the head', () => screen.getByRole('button', { name: /^Действия с чатом/ })],
     ['«Команды» of the field', () => screen.getByRole('button', { name: 'Команды' })],
   ])(
     'gives a focus on %s below `lg`, which the browser takes the place of, to «+» over the browser',
@@ -2465,7 +4035,7 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
       expect(document.activeElement).toBe(held)
       second.give(atWork({ status: 'ready' }, 2))
       expect(await screen.findByRole('tab', { name: 'Браузер', selected: true })).toBeTruthy()
-      // «+» beside «К диалогу», in the same corner, never the start of the page (И4).
+      // «+» beside «К чату», in the same corner, never the start of the page (И4).
       await waitFor(() => expect(document.activeElement).toBe(plusOfTabs()))
       expect(plusOfTabs().id).toBe('dialog-tools')
     },
@@ -2477,7 +4047,7 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
     mountDialog({ streamUrl: STREAM_URL, list: true })
     await screen.findByText(WORDS[0]!)
     // Below `lg` the shell around the dialog stays: what is in it keeps the focus.
-    const link = within(screen.getByRole('navigation', { name: 'Диалоги' })).getByRole('link')
+    const link = within(screen.getByRole('navigation', { name: 'Чаты' })).getByRole('link')
     link.focus()
     second.give(atWork({ status: 'ready' }, 2))
     expect(await screen.findByRole('tab', { name: 'Браузер', selected: true })).toBeTruthy()
@@ -2547,14 +4117,16 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
   })
 
   it.each([
-    ['in «Чат», its browser still being started', () => atWork({ status: 'starting' }, 1)],
+    ['with the browser, still being started', () => atWork({ status: 'starting' }, 1), true],
     [
-      'in «Работа», on the copy of the site',
+      'with the repository, on the copy of the site',
       () => feedAnswer({ status: 'queued', events: [requestRow('1', WORDS[0])], cursor: '1' }),
+      // No tool yet: «+» has nothing to offer (docs/plan/61-chats-first.md, К19).
+      false,
     ],
   ])(
     'starts a dialog the client has just started with the chat alone, %s (И1)',
-    async (_what, answer) => {
+    async (_what, answer, withPlus) => {
       wideLayout()
       markNewDialog(TASK_ID)
       queueAnswers(answer())
@@ -2563,12 +4135,12 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
       await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
       // Watched from its start, it opens nothing before its browser starts (И2), and reads nothing.
       expect(toolsPanel()).toBeNull()
-      expect(document.querySelector('[data-site-pane]')).toBeNull()
+      expect(document.querySelector('[data-chat-pane]')).toBeNull()
       expect(calls.streamTicket).not.toHaveBeenCalled()
       expect(calls.candidate).not.toHaveBeenCalled()
-      expect(within(screen.getByRole('banner')).getByRole('button', { name: /^Инструменты/ })).toBe(
-        plus(),
-      )
+      expect(
+        within(screen.getByRole('banner')).queryAllByRole('button', { name: /^Инструменты/ }),
+      ).toHaveLength(withPlus ? 1 : 0)
     },
   )
 
@@ -2590,12 +4162,12 @@ describe('the browser that starts while the client looks at the dialog (docs/pla
     expect(await screen.findByRole('tab', { name: 'Браузер', selected: true })).toBeTruthy()
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull()
     expect(heading.isConnected).toBe(true)
-    expect(within(pane()).getByRole('button', { name: 'К диалогу' })).toBeTruthy()
+    expect(within(pane()).getByRole('button', { name: 'К чату' })).toBeTruthy()
     await waitFor(() => expect(sockets).toHaveLength(1))
     // «+» over the browser has no dot: the client sees what started.
     expect(plusName()).toBe('Инструменты')
     // Back to the dialog: no dot «браузер запущен», and the next answer opens nothing again.
-    fireEvent.click(within(pane()).getByRole('button', { name: 'К диалогу' }))
+    fireEvent.click(within(pane()).getByRole('button', { name: 'К чату' }))
     await waitFor(() => expect(toolsPanel()).toBeNull())
     expect(screen.getByRole('heading', { level: 1, name: 'Новость о летней веранде' })).toBe(
       heading,

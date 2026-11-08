@@ -4,14 +4,14 @@ import { describe, expect, it } from 'vitest'
 import { mainAction, mainActionNote } from './main-action'
 
 describe('main action of the landing', () => {
-  it('leads a guest to the registration and a visitor with an account to the projects', () => {
+  it('leads a guest to the registration and a visitor with an account to the chats', () => {
     expect(mainAction(true)).toEqual({ href: '/sign-up', label: 'Зарегистрироваться' })
-    expect(mainAction(false)).toEqual({ href: '/projects', label: 'Открыть проекты' })
+    expect(mainAction(false)).toEqual({ href: '/chats', label: 'Открыть чаты' })
   })
 
   it('tells a guest of the gift of the registration, and of no day without a tariff', () => {
     expect(mainActionNote(true)).toBe(
-      'При регистрации — 35 кредитов в подарок: хватит на несколько небольших правок. Тариф выберете позже.',
+      'При регистрации — 50 кредитов в подарок: хватит на несколько небольших правок. Тариф выберете позже.',
     )
   })
 
@@ -19,7 +19,7 @@ describe('main action of the landing', () => {
     const note = mainActionNote(true)
 
     expect(note).toContain(`— ${signupGiftCredits} кредитов в подарок`)
-    // «Несколько небольших правок» stands on the gift itself: it holds seven of them.
+    // «Несколько небольших правок» stands on the gift itself: it holds ten of them.
     expect(giftTaskCounts(signupGiftCredits).small).toBeGreaterThanOrEqual(3)
     // The only count of the line is the gift: it is not turned into a number of tasks, and no
     // limit of a day — of a tariff or without one — is promised with it.

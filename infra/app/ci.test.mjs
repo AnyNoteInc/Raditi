@@ -52,7 +52,8 @@ const copied = (dockerfile, target) => {
 }
 
 test('the Vitest timeout of CI reaches Vitest in every workspace', () => {
-  const [, passed] = /^ +run: pnpm test -- (--testTimeout=\d+)$/m.exec(ci) ?? []
+  const [, passed] =
+    /^ +run: pnpm test --concurrency=\d+ -- (--testTimeout=\d+) --maxWorkers=\d+$/m.exec(ci) ?? []
   assert.ok(passed, 'ci.yml passes --testTimeout to the test task')
   let checked = 0
   for (const workspace of workspaces) {
@@ -67,6 +68,16 @@ test('the Vitest timeout of CI reaches Vitest in every workspace', () => {
     checked++
   }
   assert.ok(checked > 10)
+})
+
+test('the test step of CI keeps its workers to the cores of the runner', () => {
+  const [, workspaces, workers] =
+    /^ +run: pnpm test --concurrency=(\d+) -- --testTimeout=\d+ --maxWorkers=(\d+)$/m.exec(ci) ?? []
+  assert.ok(workspaces && workers, 'ci.yml bounds the workspaces and the workers of the test step')
+  // ubuntu-latest of a public repository has four cores. Unbounded, turbo runs ten workspaces and
+  // Vitest one worker less than the cores in each: tests that wait for a socket, a lock or a
+  // child process missed their bounds by turns (28.10.2026, release of v1.10.0).
+  assert.ok(Number(workspaces) * Number(workers) <= 4, `${workspaces} × ${workers} workers`)
 })
 
 // schema.prisma against the database the migrations have just built: a model changed without a
@@ -443,6 +454,8 @@ test('the rehearsals of the live mode run in CI, each after the deterministic pa
     'pnpm verify:llm-gateway --rehearsal --no-build',
     'pnpm verify:llm-gateway --rehearsal --measure --no-build',
     'pnpm verify:llm-gateway --rehearsal --results --no-build',
+    'pnpm verify:llm-gateway --rehearsal --compact --no-build',
+    'pnpm verify:llm-gateway --rehearsal --init --no-build',
     'pnpm verify:llm-gateway --rehearsal --api --no-build',
   ])
   assert.deepEqual(stands('agent-content'), [
@@ -451,7 +464,15 @@ test('the rehearsals of the live mode run in CI, each after the deterministic pa
   ])
   // The options exist and mean what the steps take them for.
   const live = read('infra/dev/llm-verify/live.mjs')
-  for (const option of ['--rehearsal', '--measure', '--results', '--api', '--no-build'])
+  for (const option of [
+    '--rehearsal',
+    '--measure',
+    '--results',
+    '--compact',
+    '--init',
+    '--api',
+    '--no-build',
+  ])
     assert.ok(live.includes(`['${option}', '`), `${option} is an option of the stands`)
   // GitHub sets CI in every job: that refuses a live run and must not refuse its rehearsal.
   assert.match(
@@ -1380,6 +1401,16 @@ test('a cached test run sees a change of a file its tests read outside their pac
       'apps/web/src/lib/legal-content.test.ts',
     ],
     'apps/web/content/legal/public-offer.md': ['packages/db/prisma/seed/data.test.ts'],
+    // The catalogues of the chat keep their words in functions too; a domain test reads no file.
+    'packages/domain/src/tasks/client-feed-labels.ts': [
+      'apps/web/src/components/chat/chat-texts.test.ts',
+    ],
+    'packages/domain/src/tasks/client-feed-failures.ts': [
+      'apps/web/src/components/chat/chat-texts.test.ts',
+    ],
+    'packages/domain/src/release/chat-commands.ts': [
+      'apps/web/src/components/chat/chat-texts.test.ts',
+    ],
     // The LLM paths of sandbox-gw against the routes of the registry and the base URL of each.
     'infra/sandbox/gateway.mjs': [
       'apps/llm/src/gateway/sandbox-routes.contract.test.ts',

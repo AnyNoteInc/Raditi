@@ -16,6 +16,7 @@ import {
   parseVersion,
   releaseKeyMaterial,
   releaseOutcomeOf,
+  siteIdOf,
   taskHoldExpiry,
   versionBumps,
   type CandidateRefusal,
@@ -27,9 +28,11 @@ import {
   type VersionBump,
 } from '@repo/domain'
 
+import { siteClosed } from '../site-capabilities.ts'
 import { accessibleTask, isManagerRole, memberRole, taskNotFound } from './access.ts'
 import { candidateCountsOf, dialogFacts, assertCommandAvailable } from './dialog-facts.ts'
 import { moveTo, underDialogLock } from './dialog-lock.ts'
+import { cancelPending, liveCandidate, turnRewinding } from './dialog-state.ts'
 import {
   commandUnavailable,
   releaseCandidateChanged,
@@ -205,12 +208,13 @@ export async function prepareRelease(
   if (refused !== undefined) throw commandUnavailable('release', refusalOfCandidate[refused])
   assertDatabaseReleasable(candidate)
 
+  const siteId = siteIdOf(task)
   const site = await db.site.findUniqueOrThrow({
-    where: { id: task.siteId },
+    where: { id: siteId },
     select: { installedVersion: true },
   })
   const proposal = await versionProposal(db, {
-    siteId: task.siteId,
+    siteId,
     baseVersion: candidate.baseVersion,
     facts: candidate.facts,
   })
@@ -300,8 +304,31 @@ export async function confirmRelease(
           repeated: true,
         }
 
+      // The project closed after the window opened (К39): `core` would refuse the release only
+      // after its number was taken. As `refusalOf` has it: before every other refusal.
+      if (task.siteId !== null) {
+        const { status } = await tx.site.findUniqueOrThrow({
+          where: { id: task.siteId },
+          select: { status: true },
+        })
+        if (siteClosed(status)) throw commandUnavailable('release', 'project_closed')
+      }
       if (!isManagerRole(await memberRole(tx, task.workspaceId, userId)))
         throw commandUnavailable('release', 'not_allowed')
+      // `/cancel` came after the window opened: core is closing the chat, and a release begun now
+      // would leave it nothing to close (`cancelWaiting` skips a release in work).
+      if (task.requirements.browser && (await cancelPending(tx, task.id))) throw taskFinished()
+      // `/undo` or `/redo` came after the window opened: the candidate of this window is going
+      // away, and the job may be past its last look at the chat.
+      const pending = task.requirements.repository ? await turnRewinding(tx, task.id) : null
+      if (pending !== null)
+        throw commandUnavailable('release', pending.redo ? 'turn_redoing' : 'turn_rewinding')
+      // `/undo` or `/redo` after the window opened: the chat is open, as `task.commands` says.
+      if (task.status === 'awaiting_user')
+        throw commandUnavailable(
+          'release',
+          (await liveCandidate(tx, task.id)) === null ? 'no_candidate' : 'awaiting_answer',
+        )
       if (task.status !== 'awaiting_approval') {
         if (task.status === 'deploying' || task.status === 'verifying') throw releaseInProgress()
         if (task.status === 'queued' || task.status === 'preparing' || task.status === 'running')
@@ -358,8 +385,10 @@ export async function confirmRelease(
       if (refused !== undefined) throw commandUnavailable('release', refusalOfCandidate[refused])
       assertDatabaseReleasable(candidate)
 
+      // A candidate has a repository, and that has a site.
+      const siteId = siteIdOf(task)
       const proposal = await versionProposal(tx, {
-        siteId: task.siteId,
+        siteId,
         baseVersion: candidate.baseVersion,
         facts: candidate.facts,
       })
@@ -367,19 +396,19 @@ export async function confirmRelease(
       const bump = base === null ? null : bumpOf(base, claims.version)
       if (bump === null) throw releaseVersionNotOffered()
       const taken = await tx.siteRelease.findFirst({
-        where: { siteId: task.siteId, version: claims.version },
+        where: { siteId, version: claims.version },
         select: { id: true },
       })
       if (taken !== null) throw releaseVersionTaken()
 
       const site = await tx.site.findUniqueOrThrow({
-        where: { id: task.siteId },
+        where: { id: siteId },
         select: { installedSha: true },
       })
       const attempt = (await tx.siteRelease.count({ where: { candidateId: candidate.id } })) + 1
       const release = await tx.siteRelease.create({
         data: {
-          siteId: task.siteId,
+          siteId,
           taskId: task.id,
           candidateId: candidate.id,
           candidateRevision: candidate.revision,

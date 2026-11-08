@@ -15,8 +15,10 @@ const SOL = {
   cacheWrite: '38.75',
   output: '193.75',
 }
-const show = (conversion: CreditConversion | null) =>
-  render(<CreditsExplainer conversion={conversion} />)
+const show = (conversion: CreditConversion | null, dayLimited = false) =>
+  render(<CreditsExplainer conversion={conversion} dayLimited={dayLimited} />)
+const DAY_RULE_TEXT =
+  'В дневной лимит входят кредиты по тарифу, отложенные под задачи за день, — в том числе на продолжение задачи и повторную попытку. Повторную попытку после сбоя («Попробовать ещё») дневной лимит не останавливает и не уменьшает, поэтому за день может быть отложено больше лимита. Когда задача закончится, в лимите дня останется только то, что за неё списано, а остальное вернётся. Если при списании задачу оплатят кредиты по тарифу вместо отложенных под неё подарочных кредитов или кредитов из пакета, эти кредиты по тарифу войдут в лимит дня списания. Подарочные кредиты и кредиты из пакета дневным лимитом не ограничены. День считается по московскому времени.'
 /** The collapsed block a summary opens. */
 const blockOf = (summary: string) => {
   const details = screen.getByText(summary).closest('details')
@@ -25,7 +27,7 @@ const blockOf = (summary: string) => {
 }
 
 describe('«Как считаются кредиты»', () => {
-  it('is collapsed, and holds the definition, the list, the promises and the two rules', () => {
+  it('is collapsed, and holds the definition, the list, the promises and the rule of revisions', () => {
     show(null)
     const block = blockOf('Как считаются кредиты')
 
@@ -36,12 +38,13 @@ describe('«Как считаются кредиты»', () => {
       'небольшая правка обычно стоит 5 кредитов, а в среднем задача — около 11.',
     )
     expect(text).toContain(
-      'Кредиты списываются только за выполненную задачу — не меньше 5 за задачу.',
+      'За выполненную задачу списывается не меньше 5 кредитов, даже если работы было совсем мало.',
     )
+    // That only done work is paid for, the line above the block says: not a second time here.
+    expect(text).not.toContain('только за выполн')
     expect(text).toContain('Больше 45 кредитов без вашего согласия задача не потратит')
-    expect(text).toContain(
-      'В дневной лимит входят кредиты по тарифу, отложенные под задачи за день, — в том числе на продолжение задачи и повторную попытку. Повторную попытку после сбоя («Попробовать ещё») дневной лимит не останавливает и не уменьшает, поэтому за день может быть отложено больше лимита. Когда задача закончится, в лимите дня останется только то, что за неё списано, а остальное вернётся. Если при списании задачу оплатят кредиты по тарифу вместо отложенных под неё подарочных кредитов или кредитов из пакета, эти кредиты по тарифу войдут в лимит дня списания. Подарочные кредиты и кредиты из пакета дневным лимитом не ограничены. День считается по московскому времени.',
-    )
+    // No tariff on sale has a daily limit: the block does not explain one.
+    expect(text).not.toMatch(/дневн|лимит/)
     expect(text).toContain('не чаще раза в квартал и предупредим об этом за 10 дней')
 
     const list = within(block).getByRole('table')
@@ -60,6 +63,12 @@ describe('«Как считаются кредиты»', () => {
       'Добавить блок, баннер или страницу, поправить оформлениеобычно 15–25 кредитов',
       'Большая задача: несколько страниц, новая форма, сложная логикаобычно 25–40 кредитов',
     ])
+  })
+
+  it('explains what the daily limit counts while a tariff on sale has one', () => {
+    show(null, true)
+
+    expect(plain(blockOf('Как считаются кредиты').textContent)).toContain(DAY_RULE_TEXT)
   })
 
   it('does not show «Точный расчёт» without a credit rate, and names no token anywhere', () => {

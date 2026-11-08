@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import { badRequest } from '../errors.ts'
 import { egressHostListSchema } from '../preview/egress-hosts.ts'
+import type { TaskRequirements } from '../tasks/task-requirements.ts'
 
 /**
  * Environment variables of a client's site (docs/plan/53-chat-preview-release.md, Р13): the
@@ -251,6 +252,38 @@ const accessVariableFields: Readonly<Record<string, readonly (readonly [string, 
 /** Every name an access of this kind may become, whichever fields it has. */
 export const siteAccessVariableNames = (accessKind: string): string[] =>
   (accessVariableFields[accessKind] ?? []).map(([, name]) => name)
+
+/**
+ * The kinds of access that reach the hosting's files. A chat with the code and the browser never
+ * gets their variables (`envVarReachesTask`); the database and git do not count (owner's answer
+ * of 06.11.2026: «базу и гит можно открывать доступ к агенту»).
+ */
+const hostingFileAccessKinds = ['ftp', 'ssh'] as const
+
+/**
+ * Whether the name is one an access of the wizard to the hosting's files becomes (FTP or SFTP).
+ * A variable the client named so himself counts too: the value reaches as far as the name says.
+ */
+export const isHostingFileAccessVariable = (name: string): boolean =>
+  hostingFileAccessKinds.some((kind) =>
+    accessVariableFields[kind]?.some(([, variable]) => variable === name),
+  )
+
+/**
+ * Whether a task gets this variable at all, before the client's consent is read. A task on the
+ * live site in the browser gets none (docs/plan/57, Б20): nothing refuses a value written there.
+ * A chat with the code and the browser (docs/plan/61-chats-first.md, К21 and §10, 61.11k, 61.27)
+ * gets all of them but the accesses of the wizard to the hosting's files: with them its commands
+ * would write the live site's files past the release — a preview runs the agent's PHP on the open
+ * internet. The database and git of the site reach it like any other variable (owner's answer of
+ * 06.11.2026). The same answer for the commands of the agent and for the preview, which runs the
+ * agent's code.
+ */
+export function envVarReachesTask(name: string, requirements: TaskRequirements): boolean {
+  if (!requirements.repository) return false
+  if (!requirements.browser) return true
+  return !isHostingFileAccessVariable(name)
+}
 
 /**
  * The variables of one access: its secret as the wizard stored it (`PreparedAccess.secret`), the

@@ -13,6 +13,10 @@ import {
   AGENT_TURN_JOB,
   AGENT_TURN_QUEUE,
   agentTurnRetryJobId,
+  CANDIDATE_REWIND_EVENT,
+  CANDIDATE_REWIND_JOB,
+  candidateRewindDedupeKey,
+  feedEndedSiteOf,
   isDomainError,
   requirementsOf,
   type FeedCreditsState,
@@ -52,6 +56,11 @@ export const LOST_RETRY_MS = 15 * 60_000
  * still in the queue meanwhile only finds the task taken (claimQueuedTask).
  */
 export const LOST_TURN_JOB_MS = 5 * 60_000
+/**
+ * An `/undo` left unanswered this long lost its job — a core that died at it, Redis, an outbox row
+ * that failed: it is put again, once in such a span. A job still at work only finds the lease taken.
+ */
+export const LOST_REWIND_MS = 2 * 60_000
 /** A pass that could not be ended yet (`later`) is not looked at again before this. */
 export const LATER_PAUSE_MS = 5 * 60_000
 const BATCH = 50
@@ -85,9 +94,9 @@ export interface TaskSweepDependencies {
  * «Сверка»): every minute it ends the passes whose turn recovery closed or whose handler died,
  * keeps the reserves of dialogs that wait with a candidate while their preview lives, cancels
  * those whose reserve ran out — never one with a release in work —, puts again a pass whose
- * retry got lost, compares the browsers of tasks with the worker and removes the files nobody
- * sent. Every write is a conditional move in PostgreSQL, so a pass is idempotent and
- * may race the live handler.
+ * retry got lost or an `/undo` nobody answered, compares the browsers of tasks with the worker
+ * and removes the files nobody sent. Every write is a conditional move in PostgreSQL, so a pass
+ * is idempotent and may race the live handler.
  */
 export class TaskSweep {
   readonly #logger: { log(message: string): void; warn(message: string): void }
@@ -109,6 +118,7 @@ export class TaskSweep {
       ['holds', () => this.extendHolds()],
       ['expiry', () => this.expireHolds()],
       ['retries', () => this.requeueLost()],
+      ['rewinds', () => this.rewinds()],
       ['browsers', () => this.sweepBrowsers()],
       ['attachments', () => this.collectAttachments()],
     ] as const) {
@@ -260,7 +270,11 @@ export class TaskSweep {
     if (replayed.lastPhase === recovered) {
       if (!plan || !published || !this.deps.drivers.has(plan.driverId)) return technical
       try {
-        const result = readTurnResult(this.deps.drivers.get(plan.driverId), replayed.events)
+        const result = readTurnResult(
+          this.deps.drivers.get(plan.driverId),
+          replayed.events,
+          plan.input.action,
+        )
         return { kind: 'completed', turn, result, ...published }
       } catch {
         return { kind: 'failed', turn, errorCode: 'TURN_OUTPUT_REJECTED' }
@@ -413,7 +427,7 @@ export class TaskSweep {
         const writes = await taskHasProductionWrites(tx, row.id)
         const task = await tx.task.findUniqueOrThrow({
           where: { id: row.id },
-          select: { turnNo: true },
+          select: { turnNo: true, siteId: true },
         })
         // What a task in the browser had saved, as last read there (Б24); its session is
         // closed by the browser pass of this tick.
@@ -427,7 +441,7 @@ export class TaskSweep {
               v: 1,
               turn: task.turnNo > 0 ? task.turnNo : null,
               by: row.status === 'queued' ? 'queue_timeout' : 'no_answer',
-              site: writes ? 'check' : 'unchanged',
+              site: feedEndedSiteOf(task, writes),
               credits,
               ...(objects.length ? { objects } : {}),
             },
@@ -496,7 +510,46 @@ export class TaskSweep {
     return put
   }
 
-  /** Puts the pass of the attempt again, answering its last request; false — it has none. */
+  /**
+   * An `/undo` or a `/redo` of a chat with the repository nobody answered (docs/plan/61-chats-first.md,
+   * §5.14) is put again: `agent-turns` runs a job once, and until a `candidate.rewind` row answers the press
+   * the chat takes nothing but `/cancel`. The job decides what is left of it — it finds an answer,
+   * goes on from a branch that moved, or gives the press up.
+   */
+  async rewinds(): Promise<number> {
+    const rows = await this.deps.db.$queryRaw<Array<{ id: string; press: bigint }>>`
+      SELECT t.id, p.id AS press FROM tasks t
+      CROSS JOIN LATERAL (
+        SELECT e.id, e.created_at FROM task_events e
+        WHERE e.task_id = t.id AND e.type = 'feed.request'
+          AND e.payload->>'kind' = 'command' AND e.payload->>'command' IN ('turn_undo', 'turn_redo')
+        ORDER BY e.id DESC LIMIT 1) p
+      WHERE t.status IN ('awaiting_user', 'awaiting_approval') AND t.needs_repository
+        AND p.created_at < now() - make_interval(secs => ${LOST_REWIND_MS / 1000})
+        AND NOT EXISTS (SELECT 1 FROM task_events a
+          WHERE a.task_id = t.id AND a.type = ${CANDIDATE_REWIND_EVENT}
+            AND a.payload->>'requestEventId' = p.id::text)
+      ORDER BY p.created_at LIMIT ${BATCH}`
+    const span = Math.floor(this.#now().getTime() / LOST_REWIND_MS)
+    let put = 0
+    for (const row of rows)
+      try {
+        const job = { taskId: row.id, requestEventId: row.press.toString() }
+        await this.deps.queue.enqueue(AGENT_TURN_QUEUE, CANDIDATE_REWIND_JOB, job, {
+          jobId: `${candidateRewindDedupeKey(job)}:sweep:${span}`,
+        })
+        put++
+      } catch (error) {
+        this.#warn(`task sweep rewind task=${row.id}`, logged(error))
+      }
+    if (put > 0) this.#logger.log(`task_sweep_rewinds count=${put}`)
+    return put
+  }
+
+  /**
+   * Puts the pass of the attempt again, answering its last request; false — it has none. A press
+   * of a command moves nothing; `agent_command` — `/init` — is a pass, and it is put again.
+   */
   async #put(taskId: string, attempt: number, tag: string): Promise<boolean> {
     const [request] = await this.deps.db.$queryRaw<Array<{ id: bigint | null }>>`
       SELECT max(id) AS id FROM task_events

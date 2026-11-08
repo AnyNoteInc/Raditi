@@ -252,7 +252,7 @@ describe('the saved payment method', () => {
     const block = await method()
     expect(text(block)).toContain('Карта «Мир» •• 4444')
     expect(text(block)).toContain(
-      '18 октября спишем этим способом 12 900 ₽ за тариф «Бизнес». Если его отвязать, автопродление отключится.',
+      '18 октября спишем этим способом 6 990 ₽ за тариф «Бизнес». Если его отвязать, автопродление отключится.',
     )
     expect(text(block)).toContain(
       'Данные карты хранит ЮKassa. У нас — только идентификатор сохранённого способа оплаты и последние четыре цифры карты.',
@@ -271,7 +271,7 @@ describe('the saved payment method', () => {
     showBilling()
 
     expect(text(await method())).toContain(
-      '18 октября спишем этим способом 39 900 ₽ за тариф «Агентство».',
+      '18 октября спишем этим способом 19 990 ₽ за тариф «Агентство».',
     )
   })
 
@@ -502,7 +502,7 @@ describe('«Оплата» of a shop that takes one-time payments only', () => {
     // The card is still the one the tariff is renewed with: the charge is named as it is.
     expect(text(block)).toContain('Карта «Мир» •• 4444')
     expect(text(block)).toContain(
-      '18 октября спишем этим способом 12 900 ₽ за тариф «Бизнес». Если его отвязать, автопродление отключится.',
+      '18 октября спишем этим способом 6 990 ₽ за тариф «Бизнес». Если его отвязать, автопродление отключится.',
     )
     expect(
       within(block)

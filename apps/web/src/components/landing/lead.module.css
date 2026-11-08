@@ -1,0 +1,425 @@
+/* «50 кредитов в подарок»: the offer and the form of a lead on the amber field. Sizes and times
+   come from the page root; the red of an invalid field is the error tone of the light theme. */
+.lead {
+  --lead-error: #9c3d26;
+  background: var(--raditi-marker);
+  color: var(--raditi-ink);
+}
+.inner {
+  max-width: var(--container);
+  margin: auto;
+  padding: 96px var(--gutter);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 600px);
+  gap: 72px;
+  align-items: center;
+}
+.offer {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  min-width: 0;
+}
+.free {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-radius: var(--raditi-radius-pill);
+  background: var(--raditi-ink);
+  color: var(--raditi-paper);
+  font-size: 13px;
+  font-weight: 500;
+}
+.free i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--raditi-accent);
+}
+.gift {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+}
+.gift span {
+  font-family: var(--font-unbounded), sans-serif;
+  font-size: clamp(150px, 20vw, 300px);
+  font-weight: 500;
+  letter-spacing: -0.08em;
+  line-height: 0.82;
+}
+.gift svg {
+  width: clamp(64px, 7.8vw, 112px);
+  height: clamp(64px, 7.8vw, 112px);
+  margin-top: 0.6em;
+  flex: none;
+}
+.gift circle,
+.doneSign circle {
+  fill: var(--raditi-ink);
+}
+.gift path,
+.doneSign path {
+  fill: none;
+  stroke: var(--raditi-marker);
+  stroke-width: 8.3;
+  stroke-linecap: round;
+}
+/* The number is drawn large above the heading; a screen reader takes it in the heading. */
+.giftWords {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.lede {
+  max-width: 480px;
+  font-size: 18px;
+  line-height: 1.6;
+}
+.steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+  max-width: 640px;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--raditi-ink);
+  list-style: none;
+}
+.steps li {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 16px;
+}
+.steps span {
+  font-size: 13px;
+}
+.steps strong {
+  font-weight: 600;
+}
+.steps p {
+  font-size: 14px;
+  line-height: 1.45;
+}
+.card {
+  min-width: 0;
+  padding: 36px;
+  border-radius: 16px;
+  background: var(--raditi-card);
+  box-shadow: var(--shadow-card);
+}
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.formHead {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px 16px;
+}
+.formHead h3,
+.done h3 {
+  font-family: var(--font-unbounded), sans-serif;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+}
+.formHead h3 {
+  font-size: 24px;
+  /* With the widest spacing a visitor may set, «подключение» is wider than a phone of 320px. */
+  overflow-wrap: anywhere;
+}
+.formHead span {
+  color: var(--raditi-graphite);
+  font-size: 13px;
+}
+.pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+.field label {
+  font-size: 13px;
+  font-weight: 500;
+}
+.field input,
+.field textarea {
+  width: 100%;
+  min-height: 52px;
+  padding: 14px 16px;
+  border: 1px solid var(--raditi-rule);
+  border-radius: 10px;
+  background: var(--raditi-paper);
+  color: var(--raditi-ink);
+  font: inherit;
+  font-size: 16px;
+  transition:
+    border-color var(--raditi-motion-fast) var(--raditi-ease-out),
+    box-shadow var(--raditi-motion-fast) var(--raditi-ease-out);
+}
+.field textarea {
+  min-height: 112px;
+  line-height: 1.5;
+  resize: vertical;
+}
+.field input::placeholder,
+.field textarea::placeholder {
+  color: var(--raditi-graphite);
+  opacity: 0.75;
+}
+.field input:focus-visible,
+.field textarea:focus-visible {
+  outline: none;
+  border-color: var(--raditi-ink);
+  box-shadow: 0 0 0 4px var(--raditi-marker);
+}
+.field [aria-invalid='true'],
+.consent [aria-invalid='true'] {
+  border-color: var(--lead-error);
+  background: var(--raditi-snow);
+}
+.error {
+  color: var(--lead-error);
+  font-size: 13px;
+  line-height: 1.4;
+}
+/* The trap: out of sight and out of the keyboard. */
+.trap {
+  position: absolute;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+.consent {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 4px 12px;
+  align-items: start;
+  min-height: 44px;
+  color: var(--raditi-graphite);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.consent input {
+  width: 20px;
+  height: 20px;
+  margin: 1px 0 0;
+  accent-color: var(--raditi-ink);
+}
+.consent a {
+  color: var(--raditi-accent-text);
+  text-decoration: underline;
+}
+.consent .error {
+  grid-column: 2;
+}
+.failure {
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--raditi-snow);
+  color: var(--lead-error);
+  font-size: 14px;
+}
+.send {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  min-height: 58px;
+  padding: 0 24px;
+  border: 1px solid var(--raditi-accent-text);
+  border-radius: var(--raditi-radius-pill);
+  background: var(--raditi-accent);
+  color: var(--raditi-on-accent);
+  font-size: 16px;
+  font-weight: 600;
+  transition:
+    background var(--raditi-motion-fast) var(--raditi-ease-out),
+    transform var(--raditi-motion-fast) var(--raditi-ease-out);
+}
+.send svg {
+  transition: transform var(--raditi-motion-base) var(--raditi-ease-out);
+}
+.send:disabled {
+  cursor: progress;
+  opacity: 0.75;
+}
+.done {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 22px;
+  min-height: 540px;
+}
+.doneSign {
+  width: 96px;
+  height: 96px;
+}
+.done h3 {
+  font-size: clamp(30px, 3vw, 40px);
+  line-height: 1.2;
+}
+.done h3:focus {
+  outline: none;
+}
+.done p {
+  max-width: 420px;
+  color: var(--raditi-graphite);
+  font-size: 17px;
+  line-height: 1.6;
+}
+.again {
+  align-self: flex-start;
+  min-height: 44px;
+  padding: 0 20px;
+  border: 1px solid var(--raditi-ink);
+  border-radius: var(--raditi-radius-pill);
+  background: none;
+  color: var(--raditi-ink);
+  font-size: 14px;
+  transition: background var(--raditi-motion-fast) var(--raditi-ease-out);
+}
+/* States. A press looks as the hover does. */
+.send:not(:disabled):active {
+  background: var(--raditi-accent-hover);
+}
+.again:active {
+  background: var(--raditi-paper-2);
+}
+@media (hover: hover) {
+  .send:not(:disabled):hover {
+    background: var(--raditi-accent-hover);
+  }
+  .again:hover {
+    background: var(--raditi-paper-2);
+  }
+}
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .send:not(:disabled):hover {
+    transform: translateY(-2px);
+  }
+  .send:not(:disabled):hover svg {
+    transform: translate(3px, -3px);
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .send:not(:disabled):active,
+  .again:active {
+    transform: scale(0.98);
+    transition-duration: var(--raditi-motion-press);
+  }
+  /* One turn of the sign when the lead is in: nothing on the page moves for ever. */
+  .doneSign {
+    animation: leadSignTurn calc(2 * var(--motion-move)) var(--raditi-ease-out) backwards;
+  }
+  .done {
+    animation: leadDone var(--motion-move) var(--raditi-ease-out) backwards;
+  }
+}
+@keyframes leadSignTurn {
+  from {
+    transform: rotate(-120deg);
+  }
+}
+@keyframes leadDone {
+  from {
+    opacity: 0;
+    transform: translateY(var(--motion-rise)) scale(0.96);
+  }
+}
+@media (max-width: 1100px) {
+  .inner {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 48px;
+  }
+}
+@media (max-width: 800px) {
+  .inner {
+    padding-block: 56px 48px;
+  }
+  .steps {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+  /* A step in a row: its number, then its name over its line, the same in all three. */
+  .steps li {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 2px 8px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--raditi-marker-rule);
+  }
+  .steps li > :not(span) {
+    grid-column: 2;
+  }
+  .steps li:last-child {
+    border-bottom: 0;
+  }
+  .card {
+    padding: 22px 18px;
+  }
+  .formHead h3 {
+    font-size: 20px;
+  }
+  .pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .done {
+    min-height: 0;
+    padding: 24px 0;
+  }
+}
+/* Whole pixels, as in the section of the platforms: every line of this section is a whole number
+   of pixels high, so the questions below it stay on the pixel the page measures them at. */
+.free,
+.steps span,
+.steps p,
+.formHead span,
+.field label,
+.consent,
+.failure {
+  line-height: 20px;
+}
+.error {
+  line-height: 18px;
+}
+.steps strong {
+  line-height: 26px;
+}
+.gift span {
+  line-height: round(0.82em, 1px);
+}
+.offer h2 {
+  line-height: round(1.22em, 1px);
+}
+.lede {
+  line-height: round(1.6em, 1px);
+}
+.formHead h3 {
+  line-height: round(1.3em, 1px);
+}
+.field input {
+  line-height: 24px;
+}
+.consent label {
+  display: block;
+}
+.consent a {
+  vertical-align: top;
+}

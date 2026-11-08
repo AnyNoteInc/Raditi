@@ -69,7 +69,8 @@ describe.skipIf(!databaseUrl)('the site lease of a release on PostgreSQL', () =>
           OR: releases.map(({ id }) => ({ dedupeKey: { startsWith: `release.advance:${id}` } })),
         },
       })
-      await db.siteLease.deleteMany({ where: { site: { workspaceId } } })
+      const sites = await db.site.findMany({ where: { workspaceId }, select: { id: true } })
+      await db.siteLease.deleteMany({ where: { siteId: { in: sites.map(({ id }) => id) } } })
       await db.siteRelease.deleteMany({ where: { site: { workspaceId } } })
       await db.task.deleteMany({ where: { workspaceId } })
       await db.site.deleteMany({ where: { workspaceId } })

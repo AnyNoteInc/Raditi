@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { agentDriverIds, agentOutputLimits } from '../ports/agent-driver.ts'
 import {
-  feedCandidatePayloadSchema,
   feedCancelledBys,
   feedCeilingReasons,
   feedCreditsStates,
@@ -18,6 +17,7 @@ import {
   feedObjectStatuses,
   feedPayloadBytes,
   feedPayloadSchemas,
+  feedRewindPayloadSchema,
   feedQuestionKinds,
   feedQuestionPayloadSchema,
   feedReleaseOutcomes,
@@ -28,13 +28,14 @@ import {
   feedResultPayloadSchema,
   feedRowSchema,
   feedRowSchemaWithin,
+  feedEndedSiteOf,
+  feedSiteOf,
   feedSiteStates,
   feedStepPayloadSchema,
   feedSteps,
   feedTaskHeadSchema,
   isFeedEventType,
   readFeedRow,
-  taskModes,
   taskWaitingReasons,
   type FeedEvent,
   type FeedEventType,
@@ -44,6 +45,7 @@ import {
   feedFailureCodes,
   feedFailureRetry,
   feedFailureText,
+  feedFailureTextOf,
 } from './client-feed-failures.ts'
 import { feedFixtures } from './client-feed-fixtures.ts'
 import { feedText } from './client-feed-text.ts'
@@ -122,6 +124,13 @@ const release = {
 }
 
 const resume = { v: 1, kind: 'resume', authorId: author, requestId: request }
+const agentCommand = {
+  v: 1,
+  kind: 'agent_command',
+  command: 'init',
+  authorId: author,
+  requestId: request,
+}
 const browserQuestion = {
   v: 1,
   kind: 'browser',
@@ -181,6 +190,7 @@ const samples: Record<FeedEventType, Record<string, unknown>[]> = {
     { ...command, command: 'cancel' },
     continued,
     resume,
+    agentCommand,
   ],
   'feed.step': [step],
   'feed.question': [
@@ -214,6 +224,32 @@ const samples: Record<FeedEventType, Record<string, unknown>[]> = {
     { ...undoInstalled, stage: 'refused', reason: 'undo_outdated' },
   ],
   'feed.screenshot': [screenshot, { ...screenshot, number: 50 }],
+  'feed.rewind': [
+    { v: 1, turn: 2, files: false, site: 'none' },
+    { v: 1, turn: 3, files: true, site: 'check' },
+    { v: 1, turn: 3, files: false, site: 'elsewhere' },
+    { v: 1, turn: 1, files: false, site: 'unchanged' },
+  ],
+  'feed.redo': [
+    { v: 1, turn: 2, files: false, open: false },
+    { v: 1, turn: 3, files: true, open: true },
+  ],
+  'feed.edit': [
+    {
+      v: 1,
+      editId: '0199a3f2-0000-7000-8000-0000000000e1',
+      path: 'wp-content/themes/kadence/style.css',
+      outcome: 'saved',
+      revision: 2,
+    },
+    {
+      v: 1,
+      editId: '0199a3f2-0000-7000-8000-0000000000e2',
+      path: 'index.php',
+      outcome: 'conflict',
+      revision: null,
+    },
+  ],
 }
 
 const accepts = (type: FeedEventType, payload: unknown) =>
@@ -225,7 +261,7 @@ const shown = (type: FeedEventType, { v: _v, ...fields }: Record<string, unknown
 })
 
 describe('feed vocabulary', () => {
-  it('lists the six types of the design, the four of a release and the snapshot, all under the feed prefix', () => {
+  it('lists the six types of the design, the four of a release, the snapshot, `/undo`, `/redo` and the edit of a file, all under the feed prefix', () => {
     expect(feedEventTypes).toEqual([
       'feed.request',
       'feed.step',
@@ -239,6 +275,9 @@ describe('feed vocabulary', () => {
       'feed.update',
       'feed.undo',
       'feed.screenshot',
+      'feed.rewind',
+      'feed.redo',
+      'feed.edit',
     ])
     expect(Object.keys(feedPayloadSchemas)).toEqual([...feedEventTypes])
     expect(isFeedEventType('feed.step')).toBe(true)
@@ -704,7 +743,7 @@ describe('feed.request', () => {
     expect(accepts('feed.request', { ...retry, attachments: [] })).toBe(false)
   })
 
-  it('lists the seven kinds written today', () => {
+  it('lists the eight kinds written today', () => {
     expect(feedRequestKinds).toEqual([
       'first',
       'answer',
@@ -713,7 +752,23 @@ describe('feed.request', () => {
       'command',
       'continue',
       'resume',
+      'agent_command',
     ])
+  })
+
+  it('takes a command the agent carries out without words of its own (docs/plan/61, §5.2)', () => {
+    expect(accepts('feed.request', agentCommand)).toBe(true)
+    expect(accepts('feed.request', { ...agentCommand, text: 'Опишите проект' })).toBe(false)
+    expect(accepts('feed.request', { ...agentCommand, command: 'release' })).toBe(false)
+    expect(readFeedRow('feed.request', agentCommand)).toEqual(shown('feed.request', agentCommand))
+  })
+
+  it('reads a command of a later version as a press without a name', () => {
+    expect(readFeedRow('feed.request', { ...agentCommand, command: 'later' })).toMatchObject({
+      type: 'feed.request',
+      kind: 'agent_command',
+      command: null,
+    })
   })
 
   it('refuses a kind it does not know', () => {
@@ -748,9 +803,9 @@ describe('feed.request', () => {
 })
 
 describe('feed.step', () => {
-  it('takes the four stages and nothing else', () => {
+  it('takes the five stages and nothing else', () => {
     for (const name of feedSteps) expect(accepts('feed.step', { ...step, step: name })).toBe(true)
-    expect(feedSteps).toEqual(['work', 'save', 'site', 'files'])
+    expect(feedSteps).toEqual(['code', 'work', 'save', 'site', 'files'])
     expect(accepts('feed.step', { ...step, step: 'thinking' })).toBe(false)
   })
 
@@ -841,6 +896,10 @@ describe('feed.result', () => {
       expect(accepts('feed.result', { ...result, site })).toBe(true)
     // A result never claims a restore.
     expect(accepts('feed.result', { ...result, site: 'restored' })).toBe(false)
+    // A chat without a site says nothing of one; in a result never of other sites either
+    // (docs/plan/61-chats-first.md, К18).
+    expect(readFeedRow('feed.result', { ...result, site: 'none' })).toMatchObject({ site: 'none' })
+    expect(accepts('feed.result', { ...result, site: 'elsewhere' })).toBe(false)
     expect(accepts('feed.result', { ...result, next: 'awaiting_approval' })).toBe(true)
     // A pass that changed nothing leaves the dialog open (owner's decision of 26.10.2026).
     expect(accepts('feed.result', { ...result, next: 'awaiting_user' })).toBe(true)
@@ -851,6 +910,28 @@ describe('feed.result', () => {
   })
 })
 
+describe('what a row says of the site of its task (docs/plan/61-chats-first.md, К18)', () => {
+  const site = { siteId: '0199a000-0000-7000-8000-0000000000a1' }
+  const chat = { siteId: null }
+
+  it('keeps the state of a task with a site', () => {
+    expect(feedSiteOf(site, 'changed')).toBe('changed')
+    expect(feedSiteOf(site, 'unchanged')).toBe('unchanged')
+    expect(feedEndedSiteOf(site, true)).toBe('check')
+    expect(feedEndedSiteOf(site, false)).toBe('unchanged')
+  })
+
+  it('has nothing to say of a site without one', () => {
+    expect(feedSiteOf(chat, 'changed')).toBe('none')
+    expect(feedSiteOf(chat, 'unchanged')).toBe('none')
+    expect(feedEndedSiteOf(chat, false)).toBe('none')
+  })
+
+  it('names other sites when a chat without a site acted in its browser', () => {
+    expect(feedEndedSiteOf(chat, true)).toBe('elsewhere')
+  })
+})
+
 describe('feed.failure and feed.cancelled', () => {
   it('take every code of the catalogue and a null turn', () => {
     for (const code of feedFailureCodes)
@@ -858,11 +939,18 @@ describe('feed.failure and feed.cancelled', () => {
   })
 
   it('close the trusted facts about the site and the credits', () => {
-    expect(feedSiteStates).toEqual(['unchanged', 'changed', 'restored', 'check'])
+    expect(feedSiteStates).toEqual([
+      'unchanged',
+      'changed',
+      'restored',
+      'check',
+      'none',
+      'elsewhere',
+    ])
     expect(feedCreditsStates).toEqual(['returned', 'expired'])
     for (const type of ['feed.failure', 'feed.cancelled'] as const) {
       const base = type === 'feed.failure' ? failure : cancelled
-      for (const site of ['unchanged', 'restored', 'check'])
+      for (const site of ['unchanged', 'restored', 'check', 'none', 'elsewhere'])
         expect(accepts(type, { ...base, site })).toBe(true)
       // A failed or cancelled task never claims «changed»: it is restored or in doubt.
       expect(accepts(type, { ...base, site: 'changed' })).toBe(false)
@@ -871,6 +959,13 @@ describe('feed.failure and feed.cancelled', () => {
       expect(accepts(type, { ...base, credits: 'charged' })).toBe(false)
       const { credits: _credits, ...noCredits } = base
       expect(accepts(type, noCredits)).toBe(false)
+    }
+  })
+
+  it('read `none` and `elsewhere` as they are written', () => {
+    for (const site of ['none', 'elsewhere']) {
+      expect(readFeedRow('feed.failure', { ...failure, site })).toMatchObject({ site })
+      expect(readFeedRow('feed.cancelled', { ...cancelled, site })).toMatchObject({ site })
     }
   })
 
@@ -1057,6 +1152,30 @@ describe('reading stored rows', () => {
         { ...screenshot, number: 0 },
         { ...screenshot, width: undefined },
       ],
+      'feed.rewind': [
+        { v: 1, turn: 0, files: false, site: 'none' },
+        { v: 1, turn: 2, files: 'нет', site: 'none' },
+        { v: 1, turn: 2, files: false, site: undefined },
+        { v: 1, turn: 2, files: false, site: 7 },
+      ],
+      'feed.redo': [
+        { v: 1, turn: 0, files: false, open: false },
+        { v: 1, turn: 2, files: 'нет', open: false },
+        { v: 1, turn: 2, files: undefined, open: false },
+        { v: 1, turn: 2, files: false, open: 'да' },
+        { v: 1, turn: 2, files: false },
+      ],
+      'feed.edit': [
+        { v: 1, editId: 'not-a-uuid', path: 'a.php', outcome: 'saved', revision: 1 },
+        {
+          v: 1,
+          editId: '0199a3f2-0000-7000-8000-0000000000e1',
+          path: '',
+          outcome: 'saved',
+          revision: 1,
+        },
+        { v: 1, editId: '0199a3f2-0000-7000-8000-0000000000e1', path: 'a.php', revision: 1 },
+      ],
     }
     for (const type of feedEventTypes)
       for (const payload of broken[type])
@@ -1090,6 +1209,16 @@ describe('reading stored rows', () => {
         type: 'feed.result',
         site: 'check',
       })
+      expect(read('feed.rewind', { v: 1, turn: 2, files: false, site: 'partly' })).toMatchObject({
+        type: 'feed.rewind',
+        site: 'check',
+      })
+    })
+
+    it('`/undo` never writes that it restored a site: it takes nothing back there', () => {
+      const rewind = { v: 1, turn: 2, files: false }
+      expect(feedRewindPayloadSchema.safeParse({ ...rewind, site: 'none' }).success).toBe(true)
+      expect(feedRewindPayloadSchema.safeParse({ ...rewind, site: 'restored' }).success).toBe(false)
     })
 
     it('credits → null: no phrase about credits', () => {
@@ -1290,7 +1419,6 @@ describe('task head', () => {
   const head = {
     id: author,
     title: 'Добавьте блок отзывов',
-    mode: 'work',
     status: 'running',
     attempt: 1,
     turnNo: 1,
@@ -1322,7 +1450,6 @@ describe('task head', () => {
       }).success,
     ).toBe(true)
     expect(taskWaitingReasons).toEqual(['agents', 'site'])
-    expect(taskModes).toEqual(['work', 'chat'])
   })
 
   it('takes the largest turn number and the longest title', () => {
@@ -1335,7 +1462,6 @@ describe('task head', () => {
       expect(feedTaskHeadSchema.safeParse({ ...head, ...patch }).success).toBe(false)
     refused({ status: 'paused' })
     refused({ waiting: 'credits' })
-    refused({ mode: 'plan' })
     refused({ attempt: 0 })
     refused({ turnNo: -1 })
     refused({ turnNo: 1_000_000 })
@@ -1373,6 +1499,14 @@ describe('failure catalogue', () => {
     expect(Object.keys(feedFailureRetry).sort()).toEqual([...feedFailureCodes].sort())
   })
 
+  it('names no site or files in a failure a chat without one can come to (docs/plan/61, К18)', () => {
+    // `site_files` is of a repository, which such a chat has not.
+    for (const code of feedFailureCodes.filter((code) => code !== 'site_files'))
+      expect(feedFailureTextOf(code, false), code).not.toMatch(/сайт|файл/iu)
+    for (const code of feedFailureCodes)
+      expect(feedFailureTextOf(code, true)).toBe(feedFailureText[code])
+  })
+
   it('allows a retry exactly where the design does', () => {
     expect(feedFailureCodes.filter((code) => !feedFailureRetry[code])).toEqual([
       'credits_out',
@@ -1384,13 +1518,13 @@ describe('failure catalogue', () => {
   })
 
   it('speaks Russian, politely, without code names', () => {
-    for (const code of feedFailureCodes) {
-      const text = feedFailureText[code]
-      expect(text).not.toMatch(/[A-Za-z_]/)
-      expect(text).not.toMatch(/(^|[^\p{L}])(ты|тебя|тебе|твой|твоя|твои)([^\p{L}]|$)/iu)
-      expect(text.endsWith('.')).toBe(true)
-      for (const name of feedFailureCodes) expect(text).not.toContain(name)
-    }
+    for (const code of feedFailureCodes)
+      for (const text of [feedFailureTextOf(code, true), feedFailureTextOf(code, false)]) {
+        expect(text).not.toMatch(/[A-Za-z_]/)
+        expect(text).not.toMatch(/(^|[^\p{L}])(ты|тебя|тебе|твой|твоя|твои)([^\p{L}]|$)/iu)
+        expect(text.endsWith('.')).toBe(true)
+        for (const name of feedFailureCodes) expect(text).not.toContain(name)
+      }
   })
 })
 
@@ -1446,7 +1580,6 @@ describe('rows of a candidate and a release', () => {
   })
 
   it('counts files, media and records, never names them', () => {
-    expect(feedCandidatePayloadSchema.shape.files.shape).toHaveProperty('added')
     expect(accepts('feed.candidate', { ...candidate, paths: ['a.php'] })).toBe(false)
     expect(accepts('feed.candidate', { ...candidate, media: 1.5 })).toBe(false)
   })
@@ -1696,7 +1829,6 @@ describe('the requirements of a task in its head', () => {
   const head = {
     id: author,
     title: null,
-    mode: 'work',
     status: 'awaiting_user',
     attempt: 1,
     turnNo: 2,
@@ -1714,14 +1846,14 @@ describe('the requirements of a task in its head', () => {
     })
   })
 
-  it('carries a browser task, and both together, but never neither', () => {
+  it('carries every requirements, and refuses a head that does not name both', () => {
     const parse = (requirements: unknown) => feedTaskHeadSchema.safeParse({ ...head, requirements })
     expect(parse({ repository: false, browser: true }).data?.requirements).toEqual({
       repository: false,
       browser: true,
     })
     expect(parse({ repository: true, browser: true }).success).toBe(true)
-    expect(parse({ repository: false, browser: false }).success).toBe(false)
+    expect(parse({ repository: false, browser: false }).success).toBe(true)
     expect(parse({ repository: true }).success).toBe(false)
     expect(parse({ repository: true, browser: false, preview: true }).success).toBe(false)
   })

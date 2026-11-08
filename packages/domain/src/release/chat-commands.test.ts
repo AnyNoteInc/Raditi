@@ -2,58 +2,424 @@ import { describe, expect, it } from 'vitest'
 
 import { taskStatuses } from '../tasks/task-status.ts'
 import {
+  CLOSED_PROJECT_TEXT,
   chatCommandAvailability,
+  chatCommandGroupLabel,
   chatCommandIds,
   chatCommandRefusals,
   chatCommandRefusalText,
   chatCommands,
   matchChatCommands,
   parseChatCommand,
+  serverCommandIds,
   type ChatCommandFacts,
 } from './chat-commands.ts'
 
 const waiting: ChatCommandFacts = {
   taskStatus: 'awaiting_approval',
+  repository: true,
   role: 'owner',
   candidate: { status: 'current', baseIsMain: true, checksFailed: false },
   preview: { status: 'ready' },
   releaseInProgress: false,
   undo: null,
   retry: 'nothing_to_retry',
+  cancelPending: false,
+  browserWrote: false,
+  projectClosed: false,
+  turnUndo: 'nothing_to_undo',
+  turnRewinding: false,
+  turnRedo: 'nothing_to_redo',
+  turnRedoing: false,
+  compaction: true,
+  agentBrowser: null,
+  compactRefusal: null,
 }
 const verdict = (facts: ChatCommandFacts) =>
   Object.fromEntries(chatCommandAvailability(facts).map((item) => [item.id, item.refusal]))
 
 describe('the commands of a dialog', () => {
-  it('lists the seven commands with the labels of the plan', () => {
-    expect(chatCommandIds).toEqual([
+  it('takes nothing but `/cancel` while core closes a chat with a browser (Б24)', () => {
+    const pressed = { ...waiting, cancelPending: true, retry: null }
+    expect(verdict(pressed)).toMatchObject({
+      release: 'finished',
+      preview: 'finished',
+      reset: 'finished',
+      update: 'finished',
+      retry: 'finished',
+      cancel: null,
+    })
+    // The same chat before the press: `/release` is on offer.
+    expect(verdict({ ...pressed, cancelPending: false }).release).toBeNull()
+  })
+
+  // docs/plan/61-chats-first.md, К31: a pass of the agent, as the next words would be.
+  describe('`/init`', () => {
+    const init = (patch: Partial<ChatCommandFacts>) => verdict({ ...waiting, ...patch }).init
+
+    it('takes a chat with the code that waits, with a candidate or without', () => {
+      expect(init({})).toBeNull()
+      expect(init({ taskStatus: 'awaiting_user', candidate: null })).toBeNull()
+      expect(init({ role: 'member' })).toBeNull()
+    })
+
+    it('has nothing to study in a chat without the code', () => {
+      expect(init({ repository: false })).toBe('no_repository')
+      expect(chatCommandRefusalText.no_repository).toBe('В этом чате нет кода проекта.')
+    })
+
+    it('waits for the agent and for a release, and a chat that ended takes none', () => {
+      for (const taskStatus of ['queued', 'preparing', 'running'] as const)
+        expect(init({ taskStatus })).toBe('busy')
+      expect(init({ taskStatus: 'deploying' })).toBe('release_in_progress')
+      expect(init({ releaseInProgress: true })).toBe('release_in_progress')
+      expect(init({ taskStatus: 'done' })).toBe('finished')
+      expect(init({ cancelPending: true })).toBe('finished')
+    })
+
+    // A turn of the command would take the browser from the client, as one of `/compact` would.
+    it('leaves the browser with the client and a request of the agent unanswered', () => {
+      expect(init({ agentBrowser: 'browser_with_client' })).toBe('browser_with_client')
+      expect(init({ agentBrowser: 'awaiting_answer' })).toBe('awaiting_answer')
+      expect(init({ agentBrowser: 'awaiting_answer', taskStatus: 'running' })).toBe('busy')
+      expect(init({ agentBrowser: 'browser_with_client', repository: false })).toBe('no_repository')
+    })
+  })
+
+  // docs/plan/61-chats-first.md, К39: the chat of a closed project is read, not worked in.
+  describe('of a closed project', () => {
+    const closed = { ...waiting, projectClosed: true, retry: null }
+    const installed = {
+      installedNow: true,
+      undone: false,
+      expired: false,
+      siteReleasing: false,
+      siteHeld: false,
+      siteActive: false,
+    }
+
+    it('refuses every command but «Отменить чат» and «Отменить выпуск»', () => {
+      expect(verdict(closed)).toEqual({
+        release: 'project_closed',
+        preview: 'project_closed',
+        reset: 'project_closed',
+        update: 'project_closed',
+        init: 'project_closed',
+        compact: 'project_closed',
+        retry: 'project_closed',
+        cancel: null,
+        undo: 'no_release',
+        turn_undo: 'project_closed',
+        turn_redo: 'project_closed',
+      })
+    })
+
+    it('stops what works, and the words of «Отменить выпуск» stay its own', () => {
+      const running = { ...closed, taskStatus: 'running' as const }
+      expect(verdict(running)).toMatchObject({ cancel: null, release: 'project_closed' })
+      expect(verdict({ ...closed, releaseInProgress: true }).cancel).toBe('release_in_progress')
+      const done = { ...closed, taskStatus: 'done' as const, undo: installed }
+      expect(verdict(done)).toMatchObject({ undo: 'site_inactive', cancel: 'finished' })
+    })
+
+    it('closes `/preview` of a chat that has ended, and a press of `/cancel` changes nothing', () => {
+      const ended = { ...closed, taskStatus: 'cancelled' as const }
+      expect(verdict({ ...ended, projectClosed: false }).preview).toBeNull()
+      expect(verdict(ended)).toMatchObject({ preview: 'project_closed', release: 'project_closed' })
+      expect(verdict({ ...closed, cancelPending: true })).toMatchObject({
+        release: 'project_closed',
+        cancel: null,
+      })
+    })
+
+    it('says one sentence, and a project that is not closed is not refused by it', () => {
+      expect(chatCommandRefusalText.project_closed).toBe(CLOSED_PROJECT_TEXT)
+      expect(CLOSED_PROJECT_TEXT).toBe('Сайт на паузе или отключён.')
+      expect(Object.values(verdict({ ...closed, projectClosed: false }))).not.toContain(
+        'project_closed',
+      )
+    })
+  })
+
+  it('lists the nineteen commands of the plan, each with its slash, words and group', () => {
+    const release =
+      'Установить проверенные изменения на сайт: с резервной копией и проверкой после.'
+    const compact = 'Агент заменит длинную историю кратким пересказом и продолжит с ним.'
+    const turnUndo =
+      'Изменения файлов вернутся. То, что агент сделал на сайте через браузер, останется.'
+    expect(
+      chatCommandIds.map((id) => {
+        const { slash, label, description, group } = chatCommands[id]
+        return [id, slash, label, description, group]
+      }),
+    ).toEqual([
+      ['release', '/release', 'Выпустить новую версию', release, 'site'],
+      [
+        'preview',
+        '/preview',
+        'Открыть предпросмотр',
+        'Показать рабочую копию сайта с изменениями этого чата.',
+        'site',
+      ],
+      [
+        'update',
+        '/update',
+        'Обновить рабочую копию',
+        'Перенести изменения этого чата на текущую версию сайта.',
+        'site',
+      ],
+      [
+        'reset',
+        '/reset',
+        'Сбросить данные предпросмотра',
+        'Вернуть рабочую копию к последним изменениям агента.',
+        'site',
+      ],
+      [
+        'undo',
+        '/rollback',
+        'Отменить выпуск',
+        'Вернуть файлы и записи к версии до выпуска этого чата.',
+        'site',
+      ],
+      [
+        'init',
+        '/init',
+        'Описать проект для агента',
+        'Агент изучит код и подготовит правила работы с проектом.',
+        'site',
+      ],
+      ['compact', '/compact', 'Сжать переписку', compact, 'agent'],
+      ['turn_undo', '/undo', 'Отменить последний запрос', turnUndo, 'agent'],
+      [
+        'turn_redo',
+        '/redo',
+        'Вернуть отменённый запрос',
+        'Снова применить то, что вы отменили.',
+        'agent',
+      ],
+      [
+        'retry',
+        '/retry',
+        'Попробовать ещё',
+        'Повторить просьбу, на которой работа оборвалась.',
+        'agent',
+      ],
+      ['cancel', '/cancel', 'Отменить чат', 'Завершить чат и остановить агента.', 'agent'],
+      ['new', '/new', 'Новый чат', 'Начать другой разговор.', 'chat'],
+      ['sessions', '/sessions', 'Все чаты', 'Перейти к списку чатов.', 'chat'],
+      // Not «файлом Markdown» of the plan: no Latin in the words of the client (§10).
+      ['export', '/export', 'Скачать переписку', 'Сохранить чат текстовым файлом.', 'chat'],
+      [
+        'models',
+        '/models',
+        'Модель и размышление',
+        'Посмотреть модель и выбрать уровень размышления.',
+        'chat',
+      ],
+      [
+        'details',
+        '/details',
+        'Подробности работы',
+        'Показывать или скрывать команды и инструменты агента.',
+        'chat',
+      ],
+      [
+        'thinking',
+        '/thinking',
+        'Размышления агента',
+        'Показывать или скрывать ход мыслей агента.',
+        'chat',
+      ],
+      ['themes', '/themes', 'Оформление', 'Светлая, тёмная или как в системе.', 'chat'],
+      ['help', '/help', 'Справка', 'Что умеют команды.', 'chat'],
+    ])
+    expect(Object.values(chatCommandGroupLabel)).toEqual(['Сайт', 'Агент', 'Чат'])
+  })
+
+  it('says the refusals of `/undo`, `/redo` and `/compact` in the words of the plan', () => {
+    expect(chatCommandRefusalText.nothing_to_undo).toBe('Отменять пока нечего.')
+    expect(chatCommandRefusalText.undo_past_update).toBe(
+      'Этот запрос отменить нельзя: после него рабочая копия изменилась — вы правили её файлы или она перешла на новую версию сайта.',
+    )
+    expect(chatCommandRefusalText.content_written).toBe(
+      'Этот запрос отменить нельзя: он изменил содержимое сайта.',
+    )
+    expect(chatCommandRefusalText.nothing_to_redo).toBe('Возвращать нечего.')
+    expect(chatCommandRefusalText.nothing_to_compact).toBe('Сжимать пока нечего.')
+  })
+
+  it('keeps the commands of the site and `/retry` to a chat with the repository (К27)', () => {
+    expect(chatCommandIds.filter((id) => chatCommands[id].needs === 'repository')).toEqual([
       'release',
       'preview',
-      'reset',
       'update',
-      'retry',
-      'cancel',
+      'reset',
       'undo',
+      'init',
+      'retry',
     ])
-    expect(
-      Object.fromEntries(
-        chatCommandIds.map((id) => [chatCommands[id].slash, chatCommands[id].label]),
-      ),
-    ).toEqual({
-      '/release': 'Выпустить новую версию',
-      '/preview': 'Открыть предпросмотр',
-      '/reset': 'Сбросить данные предпросмотра',
-      '/update': 'Обновить рабочую копию',
-      '/retry': 'Попробовать ещё',
-      '/cancel': 'Отменить диалог',
-      '/undo': 'Отменить выпуск',
+    for (const id of chatCommandIds)
+      if (chatCommands[id].group === 'site') expect(chatCommands[id].needs).toBe('repository')
+  })
+
+  it('leaves what the page runs by itself to the page: no verdict, no row of the feed', () => {
+    expect(serverCommandIds).toEqual(
+      chatCommandIds.filter((id) => chatCommands[id].scope === 'server'),
+    )
+    expect(chatCommandIds.filter((id) => chatCommands[id].scope === 'client')).toEqual([
+      'new',
+      'sessions',
+      'export',
+      'models',
+      'details',
+      'thinking',
+      'themes',
+      'help',
+    ])
+    expect(chatCommandAvailability(waiting).map((item) => item.id)).toEqual(serverCommandIds)
+  })
+
+  it('moves «Отменить выпуск» to `/rollback`: `/undo` is the last request now (К28)', () => {
+    expect(parseChatCommand('/rollback')).toBe('undo')
+    expect(parseChatCommand('/undo')).toBe('turn_undo')
+    expect(chatCommands.undo.description).toBe(
+      'Вернуть файлы и записи к версии до выпуска этого чата.',
+    )
+    expect(chatCommands.turn_undo.descriptionPlain).toBe(
+      'Агент забудет последний запрос и ответ на него.',
+    )
+  })
+
+  it('takes `/compact` while the chat waits and its session holds a finished turn (К30)', () => {
+    const compact = (facts: Partial<ChatCommandFacts>) => verdict({ ...waiting, ...facts }).compact
+    expect(compact({})).toBeNull()
+    expect(compact({ taskStatus: 'awaiting_user', candidate: null, repository: false })).toBeNull()
+    expect(compact({ compactRefusal: 'nothing_to_compact' })).toBe('nothing_to_compact')
+    expect(compact({ compactRefusal: 'browser_with_client' })).toBe('browser_with_client')
+    expect(chatCommandRefusalText.browser_with_client).toBe(
+      'Сначала закончите в браузере и нажмите «Продолжить работу агента».',
+    )
+    expect(compact({ compactRefusal: 'awaiting_answer' })).toBe('awaiting_answer')
+    expect(chatCommandRefusalText.nothing_to_compact).toBe('Сжимать пока нечего.')
+    expect(compact({ taskStatus: 'running' })).toBe('busy')
+    expect(compact({ taskStatus: 'queued' })).toBe('busy')
+    expect(compact({ taskStatus: 'deploying' })).toBe('release_in_progress')
+    expect(compact({ releaseInProgress: true })).toBe('release_in_progress')
+    expect(compact({ taskStatus: 'done' })).toBe('finished')
+    expect(compact({ projectClosed: true })).toBe('project_closed')
+    expect(compact({ turnRewinding: true })).toBe('turn_rewinding')
+    expect(compact({ cancelPending: true })).toBe('finished')
+  })
+
+  it('names a driver without the compaction: the page lists no such command (§5.14)', () => {
+    expect(verdict({ ...waiting, compaction: false }).compact).toBe('no_compaction')
+    expect(chatCommandRefusalText.no_compaction).toBe('Эта команда сейчас недоступна.')
+  })
+
+  it('gives no other refusal without the compaction: only this one takes the row off (§5.14)', () => {
+    const off = (facts: Partial<ChatCommandFacts>) =>
+      verdict({ ...waiting, compaction: false, ...facts }).compact
+    expect(off({ taskStatus: 'done' })).toBe('no_compaction')
+    expect(off({ projectClosed: true })).toBe('no_compaction')
+    expect(off({ cancelPending: true })).toBe('no_compaction')
+    expect(off({ turnRewinding: true })).toBe('no_compaction')
+    expect(off({ turnRedoing: true })).toBe('no_compaction')
+    expect(off({ releaseInProgress: true })).toBe('no_compaction')
+  })
+
+  it('takes `/undo` by the facts of its turn, while nothing works or is released', () => {
+    const open: ChatCommandFacts = {
+      ...waiting,
+      taskStatus: 'awaiting_user',
+      repository: false,
+      candidate: null,
+      preview: null,
+      turnUndo: null,
+    }
+    expect(verdict(open).turn_undo).toBeNull()
+    for (const refusal of [
+      'nothing_to_undo',
+      'undo_past_update',
+      'content_written',
+      'awaiting_answer',
+    ] as const)
+      expect(verdict({ ...open, turnUndo: refusal }).turn_undo).toBe(refusal)
+    for (const taskStatus of ['queued', 'preparing', 'running'] as const)
+      expect(verdict({ ...open, taskStatus }).turn_undo).toBe('busy')
+    for (const taskStatus of ['deploying', 'verifying'] as const)
+      expect(verdict({ ...open, taskStatus }).turn_undo).toBe('release_in_progress')
+    expect(verdict({ ...open, releaseInProgress: true }).turn_undo).toBe('release_in_progress')
+    // core is taking a turn back: only the preview and «Отменить чат» stay.
+    const rewinding = verdict({ ...open, preview: { status: 'ready' }, turnRewinding: true })
+    expect(rewinding).toMatchObject({
+      release: 'turn_rewinding',
+      update: 'turn_rewinding',
+      reset: 'turn_rewinding',
+      init: 'turn_rewinding',
+      turn_undo: 'turn_rewinding',
+      preview: null,
+      cancel: null,
     })
+    // The agent is not at work then: the words say what is under way.
+    expect(chatCommandRefusalText.turn_rewinding).toBe(
+      'Подождите: последний запрос ещё отменяется.',
+    )
+  })
+
+  it('takes `/redo` while what `/undo` took may come back, and says what stands in its way', () => {
+    const open = { ...waiting, turnRedo: null, preview: { status: 'ready' as const } }
+    expect(verdict(open).turn_redo).toBeNull()
+    expect(verdict({ ...open, taskStatus: 'awaiting_user' }).turn_redo).toBeNull()
+    // A chat at work moved on from what `/undo` took: there is nothing to wait for.
+    for (const taskStatus of ['queued', 'preparing', 'running'] as const)
+      expect(verdict({ ...waiting, taskStatus }).turn_redo).toBe('nothing_to_redo')
+    for (const taskStatus of ['deploying', 'verifying'] as const)
+      expect(verdict({ ...open, taskStatus }).turn_redo).toBe('release_in_progress')
+    expect(verdict({ ...open, releaseInProgress: true }).turn_redo).toBe('release_in_progress')
+    // core is bringing a turn back: only the preview and «Отменить чат» stay.
+    expect(verdict({ ...open, turnRedoing: true })).toMatchObject({
+      release: 'turn_redoing',
+      update: 'turn_redoing',
+      reset: 'turn_redoing',
+      init: 'turn_redoing',
+      turn_undo: 'turn_redoing',
+      turn_redo: 'turn_redoing',
+      preview: null,
+      cancel: null,
+    })
+    expect(chatCommandRefusalText.turn_redoing).toBe(
+      'Подождите: отменённый запрос ещё возвращается.',
+    )
+  })
+
+  it('closes `/redo` without a turn to bring back, a project that is closed before `/undo` and `/redo`', () => {
+    expect(verdict(waiting)).toMatchObject({
+      turn_undo: 'nothing_to_undo',
+      turn_redo: 'nothing_to_redo',
+    })
+    // The exception of К39 is the id `undo` of `/rollback`, not `/undo`.
+    expect(verdict({ ...waiting, projectClosed: true })).toMatchObject({
+      turn_undo: 'project_closed',
+      turn_redo: 'project_closed',
+    })
+    const ended = { ...waiting, taskStatus: 'done' as const }
+    expect(verdict(ended)).toMatchObject({ turn_undo: 'finished', turn_redo: 'finished' })
+    expect(verdict({ ...waiting, cancelPending: true })).toMatchObject({
+      turn_undo: 'finished',
+      turn_redo: 'finished',
+    })
+  })
+
+  it('promises no more of `/cancel` than it does: what happens to the changes depends on the chat', () => {
+    expect(chatCommands.cancel.description).toBe('Завершить чат и остановить агента.')
   })
 
   it('speaks to the client in Russian, without Latin words', () => {
     for (const id of chatCommandIds) {
       expect(chatCommands[id].label).not.toMatch(/[A-Za-z]/)
       expect(chatCommands[id].description).not.toMatch(/[A-Za-z]/)
+      expect(chatCommands[id].descriptionPlain ?? '').not.toMatch(/[A-Za-z]/)
     }
     expect(Object.keys(chatCommandRefusalText).sort()).toEqual([...chatCommandRefusals].sort())
     for (const text of Object.values(chatCommandRefusalText)) expect(text).not.toMatch(/[A-Za-z]/)
@@ -65,8 +431,22 @@ describe('the commands of a dialog', () => {
     for (const text of ['/release сейчас', 'release', '/Release', '/deploy', ''])
       expect(parseChatCommand(text)).toBeNull()
     expect(matchChatCommands('/')).toEqual([...chatCommandIds])
-    expect(matchChatCommands('/re')).toEqual(['release', 'reset', 'retry'])
     expect(matchChatCommands('re')).toEqual([])
+  })
+
+  it('finds a command by its slash and its other words, not by its id', () => {
+    expect(matchChatCommands('/re')).toEqual(['release', 'reset', 'turn_redo', 'retry', 'sessions'])
+    expect(matchChatCommands('/turn')).toEqual([])
+    expect(matchChatCommands('/ro')).toEqual(['undo'])
+    expect(matchChatCommands('/MO')).toEqual(['models'])
+    expect(['/summarize', '/clear', '/resume', '/continue', '/mo'].map(parseChatCommand)).toEqual([
+      'compact',
+      'new',
+      'sessions',
+      'sessions',
+      'models',
+    ])
+    expect(parseChatCommand('/turn_undo')).toBeNull()
   })
 })
 
@@ -77,9 +457,13 @@ describe('availability', () => {
       preview: null,
       reset: null,
       update: 'up_to_date',
+      init: null,
+      compact: null,
       retry: 'nothing_to_retry',
       cancel: null,
       undo: 'no_release',
+      turn_undo: 'nothing_to_undo',
+      turn_redo: 'nothing_to_redo',
     })
   })
 
@@ -95,16 +479,17 @@ describe('availability', () => {
     expect(verdict({ ...waiting, role: 'admin' }).release).toBeNull()
   })
 
-  it('wants «update» first when the site moved on', () => {
+  // The owner, 06.11.2026: the release carries the changes onto the current `main` itself.
+  it('takes `/release` when the site moved on, the update coming first', () => {
     const moved = {
       ...waiting,
       candidate: { status: 'current' as const, baseIsMain: false, checksFailed: false },
     }
-    expect(verdict(moved)).toMatchObject({ release: 'needs_update', update: null })
+    expect(verdict(moved)).toMatchObject({ release: null, update: null })
     expect(
       verdict({ ...waiting, candidate: { status: 'stale', baseIsMain: true, checksFailed: false } })
         .release,
-    ).toBe('needs_update')
+    ).toBeNull()
   })
 
   it('waits while the agent works and while a release goes on', () => {
@@ -176,9 +561,13 @@ describe('availability', () => {
         preview: null,
         reset: 'finished',
         update: 'finished',
+        init: 'finished',
+        compact: 'finished',
         retry: 'finished',
         cancel: 'finished',
         undo: 'no_release',
+        turn_undo: 'finished',
+        turn_redo: 'finished',
       })
   })
 
@@ -215,7 +604,7 @@ describe('availability', () => {
   it('answers every status of spec §7', () => {
     for (const taskStatus of taskStatuses)
       expect(chatCommandAvailability({ ...waiting, taskStatus })).toHaveLength(
-        chatCommandIds.length,
+        serverCommandIds.length,
       )
   })
 })

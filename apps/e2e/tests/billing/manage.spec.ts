@@ -125,7 +125,7 @@ test('a customer switches auto-renewal off and on again', async ({ page, signedI
     await expect(dialog).toContainText(
       new RegExp(sentence`Тариф «Старт» будет действовать до ${DATE}.`),
     )
-    await expect(dialog).toContainText('300 кредитов по тарифу можно использовать до этого дня.')
+    await expect(dialog).toContainText('150 кредитов по тарифу можно использовать до этого дня.')
     // The gift of the registration is untouched: tasks are taken on it after the tariff.
     await expect(dialog).toContainText(
       new RegExp(
@@ -151,7 +151,7 @@ test('a customer switches auto-renewal off and on again', async ({ page, signedI
     const said = block.getByRole('status')
     await expect(said).toContainText(
       new RegExp(
-        `^${sentence`Автопродление отключено. Тариф и 300 кредитов по тарифу доступны до ${DATE}. После этого новые задачи принимаются, только пока есть подарочные кредиты. Сайты и история правок сохранятся.`}$`,
+        `^${sentence`Автопродление отключено. Тариф и 150 кредитов по тарифу доступны до ${DATE}. После этого новые задачи принимаются, только пока есть подарочные кредиты. Сайты и история правок сохранятся.`}$`,
       ),
       SLOW,
     )
@@ -176,7 +176,7 @@ test('a customer switches auto-renewal off and on again', async ({ page, signedI
     await expect(block).toContainText('Автопродление отключено.', SLOW)
     await expect(block).toContainText(
       new RegExp(
-        sentence`Если включите, ${DAY} и дальше каждый месяц будем списывать 4 900 ₽ сохранённым способом оплаты — Карта «Мир» •• 4444.`,
+        sentence`Если включите, ${DAY} и дальше каждый месяц будем списывать 1 990 ₽ сохранённым способом оплаты — Карта «Мир» •• 4444.`,
       ),
     )
   })
@@ -193,7 +193,7 @@ test('a customer switches auto-renewal off and on again', async ({ page, signedI
     await expect(page).toHaveURL('/settings/plans')
     await expect(tariff(page, 'Старт')).toContainText('Активен')
     await expect(row(page, 'Следующее списание')).toHaveText(
-      new RegExp(String.raw`^${DATE}\s—\s4\s900\s₽$`),
+      new RegExp(String.raw`^${DATE}\s—\s1\s990\s₽$`),
     )
     await expect(renewal(page)).toContainText(
       `Перед списанием пришлём письмо на ${signedInUser.email}.`,
@@ -241,7 +241,7 @@ test('a customer without a saved card switches auto-renewal on through the bindi
     const outcome = page.getByRole('main').getByRole('status')
     await expect(outcome).toContainText('Способ оплаты — Карта Visa •• 1234.')
     await expect(outcome).toContainText(
-      new RegExp(sentence`${DAY} спишем этим способом 4 900 ₽ за тариф «Старт».`),
+      new RegExp(sentence`${DAY} спишем этим способом 1 990 ₽ за тариф «Старт».`),
     )
     expect(await subscriptionOf(signedInUser)).toMatchObject({
       cancelAtPeriodEnd: false,
@@ -277,10 +277,12 @@ test('a customer schedules another tariff for the next period and takes the choi
       new RegExp(sentence`Тариф изменится ${DATE} — с началом нового периода.`),
     )
     await expect(dialog).toContainText('До этого дня действует «Старт».')
+    // Ц7: what is left of the credits of the tariff lives one more month.
     await expect(dialog).toContainText(
-      '800 кредитов в месяц, до 100 кредитов в день · до 3 сайтов на WordPress',
+      'Неистраченные кредиты тарифа переходят на следующий месяц, один раз.',
     )
-    await expect(dialog).toContainText('12 900 ₽ сохранённым способом оплаты — Карта «Мир» •• 4444')
+    await expect(dialog).toContainText('600 кредитов в месяц · до 3 сайтов на WordPress')
+    await expect(dialog).toContainText('6 990 ₽ сохранённым способом оплаты — Карта «Мир» •• 4444')
     await dialog.getByRole('button', { name: 'Не менять' }).click()
     await expect(dialog).toBeHidden()
     await expect(opener).toBeFocused()
@@ -342,16 +344,16 @@ test('a customer schedules another tariff for the next period and takes the choi
     await expect(said).toBeFocused()
     const coming = block.getByRole('group', { name: /тариф «Бизнес»$/ })
     await expect(coming).toContainText(
-      new RegExp(sentence`${DAY} спишем 12 900 ₽ сохранённым способом оплаты.`),
+      new RegExp(sentence`${DAY} спишем 6 990 ₽ сохранённым способом оплаты.`),
     )
     await expect(row(page, 'Следующее списание')).toHaveText(
-      new RegExp(String.raw`^${DATE}\s—\s12\s900\s₽$`),
+      new RegExp(String.raw`^${DATE}\s—\s6\s990\s₽$`),
     )
     // Today the tariff, its price and its credits are what they were: the accounts hold the
     // quota of «Старт» and the gift.
-    await expect(block).toContainText('4 900 ₽ в месяц')
+    await expect(block).toContainText('1 990 ₽ в месяц')
     const accounts = await credits.stored()
-    expect([accounts.tariff.left, accounts.gift.left]).toEqual([300, 35])
+    expect([accounts.tariff.left, accounts.gift.left]).toEqual([150, 50])
     await expect(row(page, 'Кредиты')).toHaveText(creditsRow(accounts))
     await expect(planCard(page, 'Старт')).toContainText('Ваш тариф')
     await expect(planCard(page, 'Бизнес')).toContainText(
@@ -380,7 +382,7 @@ test('a customer schedules another tariff for the next period and takes the choi
     await expect(said).toBeFocused()
     await expect(tariff(page, 'Старт').getByRole('group')).toHaveCount(0)
     await expect(row(page, 'Следующее списание')).toHaveText(
-      new RegExp(String.raw`^${DATE}\s—\s4\s900\s₽$`),
+      new RegExp(String.raw`^${DATE}\s—\s1\s990\s₽$`),
     )
     await expect(
       planCard(page, 'Бизнес').getByRole('button', { name: 'Перейти на тариф «Бизнес»' }),
@@ -419,7 +421,7 @@ test('a customer whose renewal charge failed pays on the page of the shop and th
     const block = tariff(page, 'Старт')
     await expect(block).toContainText('Оплата не прошла', SLOW)
     const alert = block.getByRole('alert')
-    await expect(alert).toContainText('Не получилось списать 4 900 ₽')
+    await expect(alert).toContainText('Не получилось списать 1 990 ₽')
     await expect(alert).toContainText(
       new RegExp(
         sentence`Оплатите тариф: пока оплата не пройдёт, новые задачи принимаются, только пока есть подарочные кредиты. ${DATE} тариф закончится, если оплата не пройдёт раньше. Карту для следующих списаний можно заменить.`,
@@ -429,7 +431,7 @@ test('a customer whose renewal charge failed pays on the page of the shop and th
     await expect(alert).not.toContainText('или замените')
     // Nothing of the tariff is left to the customer; the gift of the registration is.
     await expect(row(page, 'Кредиты')).toHaveText(
-      'Осталось 35 подарочных. Кредиты по тарифу начислим после оплаты',
+      'Осталось 50 подарочных. Кредиты по тарифу начислим после оплаты',
     )
     await expect(block.getByRole('link', { name: 'Заменить карту' })).toHaveAttribute(
       'href',
@@ -446,14 +448,14 @@ test('a customer whose renewal charge failed pays on the page of the shop and th
     await tariff(page, 'Старт').getByRole('button', { name: 'Оплатить сейчас' }).click()
     const dialog = page.getByRole('dialog', { name: 'Тариф «Старт»' })
     await expect(dialog).toContainText('С сегодняшнего дня на месяц')
-    await expect(dialog).toContainText('4 900 ₽')
+    await expect(dialog).toContainText('1 990 ₽')
     await expect(dialog).toContainText(
       'Автопродление включено: сохраним способ оплаты, которым вы заплатите сейчас',
     )
     await fake('card', { last4: '1234', card_type: 'Visa', first6: '411111' })
     await dialog.getByRole('button', { name: 'Перейти к оплате' }).click()
     await page.waitForURL(fakePage, SLOW)
-    await expect(page.getByRole('heading', { level: 1 })).toContainText('4900.00')
+    await expect(page.getByRole('heading', { level: 1 })).toContainText('1990.00')
     await page.getByRole('button', { name: 'Оплатить' }).click()
   })
 
@@ -461,7 +463,7 @@ test('a customer whose renewal charge failed pays on the page of the shop and th
     await expect(page).toHaveURL(returnPage, SLOW)
     await expect(page.getByRole('heading', { level: 2, name: 'Оплата прошла' })).toBeVisible(SLOW)
     const outcome = page.getByRole('main').getByRole('status')
-    await expect(outcome).toContainText('Тариф «Старт» — 4 900 ₽.')
+    await expect(outcome).toContainText('Тариф «Старт» — 1 990 ₽.')
     await expect(outcome).toContainText(new RegExp(sentence`Тариф действует до ${DATE}.`))
   })
 
@@ -481,11 +483,11 @@ test('a customer whose renewal charge failed pays on the page of the shop and th
     await expect(block.getByRole('alert')).toHaveCount(0)
     // The quota of the new period, granted anew, beside the gift.
     const accounts = await credits.stored()
-    expect([accounts.tariff.left, accounts.gift.left]).toEqual([300, 35])
+    expect([accounts.tariff.left, accounts.gift.left]).toEqual([150, 50])
     await expect(row(page, 'Кредиты')).toHaveText(creditsRow(accounts))
     await expect(row(page, 'Способ оплаты')).toHaveText('Карта Visa •• 1234')
     await expect(row(page, 'Следующее списание')).toHaveText(
-      new RegExp(String.raw`^${DATE}\s—\s4\s900\s₽$`),
+      new RegExp(String.raw`^${DATE}\s—\s1\s990\s₽$`),
     )
     await expect(page.getByRole('button', { name: 'Оплатить сейчас' })).toHaveCount(0)
   })
@@ -532,7 +534,7 @@ test('a customer whose tariff is over sees when it ended and chooses a tariff ag
     await expect(block).not.toContainText('Выберите тариф')
     await expect(
       page.getByText(
-        'У вас 35 подарочных кредитов — их хватит на семь небольших правок или на две-три задачи побольше. Когда кредиты закончатся, понадобится тариф.',
+        'У вас 50 подарочных кредитов — их хватит на десять небольших правок или на три-пять задач побольше. Когда кредиты закончатся, понадобится тариф.',
       ),
     ).toBeVisible()
     await expect(page.getByRole('main')).not.toContainText('не принимаются')
@@ -569,7 +571,7 @@ test('a user who has not accepted a new edition of the documents sees the coming
     const block = page.getByRole('region', { name: 'Автопродление тарифа' })
     await expect(block).toContainText(
       new RegExp(
-        sentence`У вас включено автопродление тарифа «Старт»: ${DAY} спишем 4 900 ₽. Отключить его можно, не принимая документы.`,
+        sentence`У вас включено автопродление тарифа «Старт»: ${DAY} спишем 1 990 ₽. Отключить его можно, не принимая документы.`,
       ),
       SLOW,
     )

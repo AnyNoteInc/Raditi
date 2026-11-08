@@ -719,6 +719,155 @@ describe('the mirror of a site repository (plan 53, Р10)', { timeout: 60_000 },
   })
 })
 
+describe('`/undo`: the task branch goes back (docs/plan/61, §5.14)', { timeout: 60_000 }, () => {
+  const fence = async () => {}
+  /** Two published turns of a task: the second one is what `/undo` takes back. */
+  async function published() {
+    const f = await fixture()
+    const bundle = await f.service.buildBaseBundle(f.source, committedAt)
+    const repoDir = await f.sandbox(bundle)
+    await write(repoDir, { 'wp-content/themes/shop/style.css': 'body { color: navy; }\n' })
+    const { patch, untracked } = await f.capture(repoDir, bundle.sandboxBaseSha!)
+    const candidate = await f.prepare(patch, untracked)
+    await candidate.publish(fence)
+    return { ...f, head: candidate.headSha, branch: 'agent/task1', ref: 'refs/heads/agent/task1' }
+  }
+
+  it('moves the branch back by compare-and-swap, and a retry finds it there', async () => {
+    const f = await published()
+    const assertFence = vi.fn(fence)
+    const input = { repo: f.repo, branch: f.branch, from: f.head, to: f.baseSha }
+    await f.service.rewindBranch(input, assertFence)
+    expect(assertFence).toHaveBeenCalledOnce()
+    expect(await out(f.remote, 'rev-parse', f.ref)).toBe(f.baseSha)
+    await f.service.rewindBranch(input, assertFence)
+    expect(assertFence).toHaveBeenCalledOnce()
+  })
+
+  it('deletes the branch of a first turn, which found none', async () => {
+    const f = await published()
+    const input = { repo: f.repo, branch: f.branch, from: f.head, to: null }
+    await f.service.rewindBranch(input, fence)
+    await expect(f.service.readBranchHead({ repo: f.repo, branch: f.branch })).resolves.toBeNull()
+    await expect(f.service.rewindBranch(input, fence)).resolves.toBeUndefined()
+  })
+
+  it('loses to a branch that moved after it was read: the compare-and-swap of the push', async () => {
+    const f = await published()
+    // The read saw `head`; the branch moves right before the push, under the fence.
+    const moved = async () => {
+      await out(f.remote, 'update-ref', f.ref, f.baseSha)
+    }
+    await expect(
+      f.service.rewindBranch({ repo: f.repo, branch: f.branch, from: f.head, to: null }, moved),
+    ).rejects.toMatchObject({ code: expect.any(String) })
+    expect(await out(f.remote, 'rev-parse', f.ref)).toBe(f.baseSha)
+  })
+
+  it('moves nothing when the branch is not at the turn, or the fence refuses', async () => {
+    const f = await published()
+    const input = { repo: f.repo, branch: f.branch, from: f.baseSha, to: f.baseSha }
+    await expect(f.service.rewindBranch({ ...input, to: null }, fence)).rejects.toMatchObject({
+      code: 'CONFLICT',
+    })
+    const lost = new Error('fence')
+    await expect(
+      f.service.rewindBranch({ ...input, from: f.head }, () => Promise.reject(lost)),
+    ).rejects.toMatchObject({ code: expect.any(String) })
+    expect(await out(f.remote, 'rev-parse', f.ref)).toBe(f.head)
+    await expect(f.service.rewindBranch(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    await expect(f.service.rewindBranch({ ...input, to: 'nope' }, fence)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    })
+  })
+})
+
+describe('`/redo`: the task branch comes back (docs/plan/61, §5.14)', { timeout: 60_000 }, () => {
+  const fence = async () => {}
+  /** A published turn, and a service that keeps no mirror of it: `/undo` happened, core restarted. */
+  async function undone(to: 'base' | 'none') {
+    const f = await fixture()
+    const bundle = await f.service.buildBaseBundle(f.source, committedAt)
+    const repoDir = await f.sandbox(bundle)
+    await write(repoDir, { 'wp-content/themes/shop/style.css': 'body { color: navy; }\n' })
+    const { patch, untracked } = await f.capture(repoDir, bundle.sandboxBaseSha!)
+    const candidate = await f.prepare(patch, untracked)
+    await candidate.publish(fence)
+    const head = candidate.headSha
+    const branch = 'agent/task1'
+    await f.service.holdUndoneCommit({ repo: f.repo, branch, sha: head }, fence)
+    const back = to === 'base' ? f.baseSha : null
+    await f.service.rewindBranch({ repo: f.repo, branch, from: head, to: back }, fence)
+    const restarted = new GitWorkspaceService({ ...f.provider } as GitProvider, {
+      transport: { kind: 'local-test', root: f.root },
+      mirrorDir: join(f.root, 'mirrors-after'),
+    })
+    return { ...f, head, branch, back, restarted, ref: `refs/heads/${branch}` }
+  }
+
+  it('holds the commit under a ref of its own, written over, and takes no second push', async () => {
+    const f = await undone('base')
+    const ref = 'refs/raditi/undone/task1'
+    expect(await out(f.remote, 'rev-parse', ref)).toBe(f.head)
+    const assertFence = vi.fn(fence)
+    await f.service.holdUndoneCommit({ repo: f.repo, branch: f.branch, sha: f.head }, assertFence)
+    expect(assertFence).not.toHaveBeenCalled()
+    await f.service.holdUndoneCommit(
+      { repo: f.repo, branch: f.branch, sha: f.baseSha },
+      assertFence,
+    )
+    expect(assertFence).toHaveBeenCalledOnce()
+    expect(await out(f.remote, 'rev-parse', ref)).toBe(f.baseSha)
+    expect(await out(f.remote, 'for-each-ref', '--format=%(refname)', 'refs/heads')).not.toContain(
+      'undone',
+    )
+  })
+
+  it('refuses a hold without its fence, and pushes nothing past a fence that refuses', async () => {
+    const f = await undone('base')
+    const input = { repo: f.repo, branch: f.branch, sha: f.baseSha }
+    await expect(f.service.holdUndoneCommit(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    const lost = new Error('fence')
+    await expect(
+      f.service.holdUndoneCommit(input, () => Promise.reject(lost)),
+    ).rejects.toMatchObject({ code: expect.any(String) })
+    expect(await out(f.remote, 'rev-parse', 'refs/raditi/undone/task1')).toBe(f.head)
+  })
+
+  it('moves the branch forward from a mirror that lost the commit, and a retry finds it there', async () => {
+    const f = await undone('base')
+    const assertFence = vi.fn(fence)
+    const input = { repo: f.repo, branch: f.branch, from: f.baseSha, to: f.head }
+    await f.restarted.rewindBranch(input, assertFence)
+    expect(assertFence).toHaveBeenCalledOnce()
+    expect(await out(f.remote, 'rev-parse', f.ref)).toBe(f.head)
+    await f.restarted.rewindBranch(input, assertFence)
+    expect(assertFence).toHaveBeenCalledOnce()
+  })
+
+  it('creates the branch `/undo` of a first turn deleted, and only if none stands', async () => {
+    const f = await undone('none')
+    const input = { repo: f.repo, branch: f.branch, from: null, to: f.head }
+    await expect(
+      f.restarted.rewindBranch(input, async () => {
+        // The branch comes up after the read, under the fence: only the lease can refuse this.
+        await out(f.remote, 'update-ref', f.ref, f.baseSha)
+      }),
+    ).rejects.toMatchObject({ code: expect.any(String) })
+    expect(await out(f.remote, 'rev-parse', f.ref)).toBe(f.baseSha)
+    await out(f.remote, 'update-ref', '-d', f.ref)
+    await f.restarted.rewindBranch(input, fence)
+    expect(await out(f.remote, 'rev-parse', f.ref)).toBe(f.head)
+  })
+
+  it('takes a move with nowhere to go for a mistake', async () => {
+    const f = await undone('base')
+    await expect(
+      f.service.rewindBranch({ repo: f.repo, branch: f.branch, from: null, to: null }, fence),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+  })
+})
+
 describe('«Обновить»: the candidate onto a new base (plan 53, Р27)', { timeout: 60_000 }, () => {
   const fence = async () => {}
   /**

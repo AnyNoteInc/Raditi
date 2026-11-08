@@ -1,0 +1,36 @@
+{
+  "rubPerCredit": "6.00",
+  "basis": "Ставки трёх профилей zai-coding (план GLM Coding Plan) модели glm-5.3 — по П3, публичная цена той же модели у Z.ai при оплате за токены: те же числа, что у профилей zai-api в файле 2026-10-17-zai-api.json — 1.40, 0.26 и 4.40 USD за 1 млн токенов входа, кэша и выхода (https://docs.z.ai/guides/overview/pricing, прочитано 16.10.2026) × курс ЦБ РФ 83.6177 ₽ за 1 USD на 17.10.2026 (https://www.cbr.ru/scripts/XML_daily.asp?date_req=17/10/2026) × 1.30, HALF_UP до 6 знаков: 152.184214, 28.262783 и 478.293244 ₽; НДС 0; курс кредита 6.00 ₽ (П85). Production на плане — решение владельца от 06.11.2026 (spec §20, П86); числа для плана — значение по умолчанию П90, владелец их для zai-coding не подтверждал.",
+  "prices": [
+    {
+      "provider": "zai-coding",
+      "model": "glm-5.3-light",
+      "inputPer1m": "152.184214",
+      "cacheReadPer1m": "28.262783",
+      "cacheWritePer1m": null,
+      "outputPer1m": "478.293244",
+      "vatRate": "0.0000",
+      "sourceUrl": "https://docs.z.ai/guides/overview/pricing"
+    },
+    {
+      "provider": "zai-coding",
+      "model": "glm-5.3-standard",
+      "inputPer1m": "152.184214",
+      "cacheReadPer1m": "28.262783",
+      "cacheWritePer1m": null,
+      "outputPer1m": "478.293244",
+      "vatRate": "0.0000",
+      "sourceUrl": "https://docs.z.ai/guides/overview/pricing"
+    },
+    {
+      "provider": "zai-coding",
+      "model": "glm-5.3-heavy",
+      "inputPer1m": "152.184214",
+      "cacheReadPer1m": "28.262783",
+      "cacheWritePer1m": null,
+      "outputPer1m": "478.293244",
+      "vatRate": "0.0000",
+      "sourceUrl": "https://docs.z.ai/guides/overview/pricing"
+    }
+  ]
+}

@@ -24,6 +24,14 @@ export interface RequestMeta {
   userAgent: string | null
 }
 
+/**
+ * The key a limit per address counts by: the client address, an IPv6 one collapsed to its /64 as
+ * the rate limiter of better-auth does; null when the address cannot be trusted.
+ */
+export function clientRateKey(source: Headers | Request | undefined): string | null {
+  return source ? getIP(source, { advanced: { ipAddress: ipAddressOptions } }) : null
+}
+
 /** Client address as the reverse proxy reported it; null when it cannot be trusted. */
 export function clientIp(source: Headers | Request | undefined): string | null {
   return source ? getIP(source, fullAddressOptions) : null

@@ -12,12 +12,17 @@ export {
 export { enqueueOutbox, type OutboxMessage, type OutboxWriter } from './outbox.ts'
 export {
   enqueueAgentTurn,
+  enqueueBrowserEnsure,
   enqueuePreviewBrowser,
   enqueuePreviewSync,
   enqueueReleaseAdvance,
   enqueueSiteWaitingPasses,
 } from './chat-outbox.ts'
-export { enqueueCandidateRebase, enqueueTurnCancel } from './task-commands-outbox.ts'
+export {
+  enqueueCandidateRebase,
+  enqueueCandidateRewind,
+  enqueueTurnCancel,
+} from './task-commands-outbox.ts'
 export { taskHasProductionWrites } from './task-production-writes.ts'
 export {
   browserClosedSiteStatuses,
@@ -130,6 +135,7 @@ export {
   cancelWaitingTask,
   claimQueuedTask,
   excludeTurnDbOperations,
+  includeTurnDbOperations,
   finishEmptiedDialog,
   nextCandidateRevision,
   recordCandidate,
@@ -138,6 +144,10 @@ export {
   settledTaskStatuses,
   settleTurn,
   supersedeStandingCandidate,
+  redoDialog,
+  redoTurn,
+  rewindDialog,
+  undoTurn,
   waitingTaskStatuses,
   type CandidateRecordInput,
   type ClaimedTask,
@@ -194,7 +204,6 @@ export {
   SiteStack,
   SiteStatus,
   SubscriptionStatus,
-  TaskMode,
   TaskStatus,
   TaskWaiting,
   TurnAssignmentOutcome,

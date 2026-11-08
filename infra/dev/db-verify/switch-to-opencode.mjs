@@ -333,9 +333,10 @@ export async function verifySwitchToOpencode({ client, psql, deploy, resolve, se
     models: earlier.models,
   })
   const report = seedReport(await seed())
+  // The one driver row: the capabilities follow the seed, which names one the migration did not.
   assert.deepEqual(
     { drivers: report.agent_drivers, providers: report.llm_providers, models: report.llm_models },
-    { drivers: [0, 0], providers: [2, 0], models: [6, 0] },
+    { drivers: [0, 1], providers: [2, 0], models: [6, 0] },
   )
   const seeded = await catalogue(client)
   assert.deepEqual(seeded, {

@@ -14,6 +14,12 @@ export const queueNames = [
   'billing',
   // Building, syncing and the browser of a dialog's preview (docs/plan/53-chat-preview-release.md).
   'previews',
+  // Starting the browser of a task the first time its agent needs it (docs/plan/61-chats-first.md, К11).
+  'browser-sessions',
+  // The files of a project for its section «Терминал», read by core for web (06.11.2026).
+  'site-files',
+  // Leads of the landing on their way to the Telegram group (docs/plan/65-landing-platforms-leads.md).
+  'leads',
 ] as const
 export type QueueName = (typeof queueNames)[number]
 

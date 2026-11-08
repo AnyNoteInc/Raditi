@@ -112,7 +112,7 @@ export async function addProject(page: Page): Promise<string> {
   return id
 }
 
-/** The section rail of a site; absent while its first import is not done. */
+/** The sections of a site in its panel; absent while its first import is not done. */
 export const siteSections = (page: Page): Locator =>
   page.getByRole('navigation', { name: 'Разделы сайта' })
 

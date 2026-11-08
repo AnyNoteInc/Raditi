@@ -8,7 +8,9 @@ import {
 } from '@repo/db'
 import {
   BROWSER_ONLY,
+  leaseScopeOf,
   notFound,
+  PLAIN_CHAT,
   type SnapshotManifest,
   type TurnEvidence,
   type TurnPlan,
@@ -42,7 +44,14 @@ describe.skipIf(!enabled)(
     afterEach(async () => {
       vi.restoreAllMocks()
       for (const workspaceId of workspaces.splice(0)) {
-        await db.siteLease.deleteMany({ where: { site: { workspaceId } } })
+        const sites = await db.site.findMany({ where: { workspaceId }, select: { id: true } })
+        const chats = await db.task.findMany({
+          where: { workspaceId, siteId: null },
+          select: { id: true },
+        })
+        await db.siteLease.deleteMany({
+          where: { siteId: { in: [...sites, ...chats].map(({ id }) => id) } },
+        })
         await db.mcpCall.deleteMany({ where: { turn: { task: { workspaceId } } } })
         await db.task.deleteMany({ where: { workspaceId } })
         await db.site.deleteMany({ where: { workspaceId } })
@@ -56,9 +65,10 @@ describe.skipIf(!enabled)(
     /**
      * A product turn as its owner left it: a content write of the running agent got no answer
      * (McpJournal.markAmbiguous: the lease names its writer and is held), the owner journaled
-     * `failed{lease_lost}`, and neither its release nor its finish went through.
+     * `failed{lease_lost}`, and neither its release nor its finish went through. `chat` — the
+     * same stop of a chat without a site, under the lease of its own id (plan 61, К14).
      */
-    async function endedBehindWrite() {
+    async function endedBehindWrite({ chat = false }: { chat?: boolean } = {}) {
       const workspace = await db.workspace.create({ data: { name: 'Synthetic turn recovery' } })
       workspaces.push(workspace.id)
       const site = await db.site.create({
@@ -69,13 +79,19 @@ describe.skipIf(!enabled)(
           stack: 'wordpress',
         },
       })
-      const task = await db.task.create({ data: { workspaceId: workspace.id, siteId: site.id } })
+      const task = await db.task.create({
+        data: {
+          workspaceId: workspace.id,
+          ...(chat ? { needsRepository: false, needsBrowser: false } : { siteId: site.id }),
+        },
+      })
+      const scope = leaseScopeOf(task)
       const sessionId = randomUUID()
       const leases = new PostgresSiteLeaseStore(db)
       const assignments = new PostgresTaskTurnAssignmentStore(db)
       const journal = new TaskEventTurnJournal(db)
       const fence = (await leases.acquire({
-        siteId: site.id,
+        siteId: scope,
         taskId: task.id,
         operation: 'turn',
         ttlMs: 60_000,
@@ -85,7 +101,7 @@ describe.skipIf(!enabled)(
           image,
           labels: {
             workspaceId: workspace.id,
-            siteId: site.id,
+            siteId: scope,
             taskId: task.id,
             sessionId,
             turn: 1,
@@ -109,12 +125,16 @@ describe.skipIf(!enabled)(
         input: { prompt: 'Synthetic', attachments: [] },
         driverId: sampleDriverId,
         driverVersion: '1.0.0',
-        workspace: {
-          repo: { provider: 'gitea', owner: 'sites', name: 'synthetic' },
-          branch: `agent/${task.id}`,
-          expectedBaseSha: 'b'.repeat(40),
-          protectedPaths: [],
-        },
+        ...(chat
+          ? { requirements: PLAIN_CHAT }
+          : {
+              workspace: {
+                repo: { provider: 'gitea', owner: 'sites', name: 'synthetic' },
+                branch: `agent/${task.id}`,
+                expectedBaseSha: 'b'.repeat(40),
+                protectedPaths: [],
+              },
+            }),
         committedAt: '2026-10-01T00:00:00.000Z',
       }
       const assignment = (await assignments.open({
@@ -143,7 +163,7 @@ describe.skipIf(!enabled)(
         data: { turnId: turn.id, tool: 'synthetic', idempotencyKey: randomUUID() },
       })
       await db.siteLease.update({
-        where: { siteId: site.id },
+        where: { siteId: scope },
         data: { inflightMcpCallId: call.id, heldForOperator: true },
       })
       await journal.record(
@@ -179,6 +199,7 @@ describe.skipIf(!enabled)(
       })
       return {
         site,
+        scope,
         task,
         workspace,
         leases,
@@ -191,10 +212,31 @@ describe.skipIf(!enabled)(
           await recovery.settled()
         },
         assignment: async () => (await assignments.get(assignment.id))!,
-        lease: () => db.siteLease.findUniqueOrThrow({ where: { siteId: site.id } }),
+        lease: () => db.siteLease.findUniqueOrThrow({ where: { siteId: scope } }),
         taskTurn: () => db.taskTurn.findUniqueOrThrow({ where: { id: turn.id } }),
       }
     }
+
+    it('journals and closes the turn of a chat without a site under the lease of its own id', async () => {
+      const f = await endedBehindWrite({ chat: true })
+      expect(f.scope).toBe(f.task.id)
+      await f.pass()
+      expect((await f.assignment()).outcome).toBeNull()
+      expect(await f.lease()).toMatchObject({ holderTaskId: f.task.id, heldForOperator: true })
+
+      await db.siteLease.update({
+        where: { siteId: f.scope },
+        data: { inflightMcpCallId: null },
+      })
+      await f.pass()
+      expect(await f.assignment()).toMatchObject({ outcome: 'failed', fence: { epoch: 1 } })
+      expect(await f.lease()).toMatchObject({
+        holderTaskId: null,
+        epoch: 1,
+        heldForOperator: false,
+      })
+      expect(await f.taskTurn()).toMatchObject({ status: 'failed', failureReason: 'lease_lost' })
+    })
 
     it('parks the turn after one pass and closes it once the writer is cleared', async () => {
       const f = await endedBehindWrite()
@@ -278,7 +320,8 @@ describe.skipIf(!enabled)(
     afterEach(async () => {
       vi.restoreAllMocks()
       for (const workspaceId of workspaces.splice(0)) {
-        await db.siteLease.deleteMany({ where: { site: { workspaceId } } })
+        const sites = await db.site.findMany({ where: { workspaceId }, select: { id: true } })
+        await db.siteLease.deleteMany({ where: { siteId: { in: sites.map(({ id }) => id) } } })
         await db.task.deleteMany({ where: { workspaceId } })
         await db.site.deleteMany({ where: { workspaceId } })
         await db.workspace.delete({ where: { id: workspaceId } })

@@ -9,9 +9,11 @@ import {
 import { z } from 'zod'
 
 import type {
+  BranchRewindInput,
   CandidateRebase,
   CandidateRebaseInput,
   GitWorkspaceService,
+  UndoneCommitInput,
 } from '../git-workspace/git-workspace.service.ts'
 
 /**
@@ -44,6 +46,16 @@ export interface CandidateGit {
     input: CandidateRebaseInput,
     assertFence?: () => Promise<void>,
   ): Promise<CandidateRebase>
+  /** `/undo` and `/redo`: `GitWorkspaceService.rewindBranch`. */
+  rewindBranch(input: BranchRewindInput, assertFence?: () => Promise<void>): Promise<void>
+  /** `/undo`, before the branch moves: `GitWorkspaceService.holdUndoneCommit`. */
+  holdUndoneCommit(input: UndoneCommitInput, assertFence?: () => Promise<void>): Promise<void>
+  /**
+   * The client's edit of a file in «Терминал» (06.11.2026): `GitWorkspaceService.readFile` and
+   * `commitFileEdit`. Absent where git cannot do it: the edit is not saved.
+   */
+  readFile?: GitWorkspaceService['readFile']
+  commitFileEdit?: GitWorkspaceService['commitFileEdit']
 }
 
 export interface CommitComparisonInput {
@@ -111,16 +123,34 @@ const refOf = (repo: RepoRef): RepoRef => ({
  * passes that changed nothing settle by their trees.
  */
 export function candidateGitOf(
-  service: Pick<GitWorkspaceService, 'readBranchHead' | 'rebaseCandidate' | 'treeOf'> & {
-    compareCommits?: unknown
-  },
+  service: Pick<
+    GitWorkspaceService,
+    'readBranchHead' | 'rebaseCandidate' | 'rewindBranch' | 'holdUndoneCommit' | 'treeOf'
+  > &
+    Partial<Pick<GitWorkspaceService, 'readFile' | 'commitFileEdit'>> & {
+      compareCommits?: unknown
+    },
 ): CandidateGit {
   const compare = service.compareCommits
+  const { readFile, commitFileEdit } = service
   return {
+    ...(readFile
+      ? { readFile: (input) => readFile.call(service, { ...input, repo: refOf(input.repo) }) }
+      : {}),
+    ...(commitFileEdit
+      ? {
+          commitFileEdit: (input, assertFence) =>
+            commitFileEdit.call(service, { ...input, repo: refOf(input.repo) }, assertFence),
+        }
+      : {}),
     readBranchHead: (input) => service.readBranchHead({ ...input, repo: refOf(input.repo) }),
     treeOf: (input) => service.treeOf({ ...input, repo: refOf(input.repo) }),
     rebaseCandidate: (input, assertFence) =>
       service.rebaseCandidate({ ...input, repo: refOf(input.repo) }, assertFence),
+    rewindBranch: (input, assertFence) =>
+      service.rewindBranch({ ...input, repo: refOf(input.repo) }, assertFence),
+    holdUndoneCommit: (input, assertFence) =>
+      service.holdUndoneCommit({ ...input, repo: refOf(input.repo) }, assertFence),
     comparesCommits: typeof compare === 'function',
     async compareCommits(input) {
       if (typeof compare !== 'function') throw notImplemented('Comparison of candidate commits')

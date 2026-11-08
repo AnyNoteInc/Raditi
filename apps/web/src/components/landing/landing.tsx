@@ -4,13 +4,16 @@ import { AnimatedBrandSymbol } from '@repo/ui/animated-brand-symbol'
 import Link from 'next/link'
 import type { ReactNode } from 'react'
 
+import { CHARGED_FOR_DONE_WORK, TARIFF_CREDITS_CARRY_OVER } from '@/lib/credit-price'
 import { legalDocumentHref } from '@/lib/legal'
 import { nbsp } from '@/lib/nbsp'
 import type { LandingViewer } from '@/server/landing-viewer'
 
 import { LandingHeader } from './landing-header'
 import { LandingIcon } from './landing-icons'
+import { LandingLead } from './landing-lead'
 import { LandingMotion } from './landing-motion'
+import { LandingPlatforms } from './landing-platforms'
 import { cafe, story } from './landing-story'
 import { mainAction } from './main-action'
 import { typicalCreditsInWords } from './pricing-calculator'
@@ -62,17 +65,17 @@ const questions = [
   {
     question: 'Для каких сайтов подойдёт Радити?',
     answer:
-      'Начинаем с сайтов малого бизнеса на WordPress: кафе, студий, локальных магазинов и сервисных компаний. Поддержка 1С-Битрикс и других систем — в планах. Не знаете, на чём сделан ваш сайт? Спросите у того, кто его делал. Частый признак WordPress — адрес входа в панель управления сайтом заканчивается на /wp-admin.',
+      'Для сайтов малого бизнеса — кафе, студий, локальных магазинов и сервисных компаний — на WordPress, Joomla, OpenCart, MODX и 1С-Битрикс. Не знаете, на чём сделан ваш сайт? Укажите его адрес в заявке на подключение — подскажем.',
   },
   {
     question: 'Можно уже подключить сайт и оплатить?',
     answer:
-      'Пока нет. Сейчас можно зарегистрироваться и посмотреть личный кабинет. Подключение сайтов, выполнение задач и оплата откроются позже. Пример на этой странице работает только в вашем браузере и ничего не меняет на вашем сайте.',
+      'Подключить — да: оставьте заявку на этой странице, мы свяжемся с вами и подключим сайт сами, бесплатно. Оплата откроется позже. Пример вверху страницы работает только в вашем браузере и ничего не меняет на вашем сайте.',
   },
   {
     question: 'Что понадобится, чтобы подключить сайт?',
     answer:
-      'Как подключать сайт, покажем по шагам, когда откроем подключение, и заранее скажем, что понадобится.',
+      'Только заявка. Мы свяжемся с вами, скажем, какие доступы понадобятся, и подключим сайт сами. Подключение и настройка бесплатны.',
   },
   {
     question: 'Нужно разбираться в коде?',
@@ -81,9 +84,11 @@ const questions = [
   },
   {
     // What the two commonest kinds of request cost: estimates of the credits model, so the answer
-    // says «обычно»; the numbers are constants of the domain, as under the calculator.
+    // says «обычно»; the numbers are constants of the domain, as under the calculator. The rule
+    // of the charge is the sentence of the tariffs, word for word (Ц14), and the tariff credits
+    // live one more month (Ц7).
     question: 'Что такое кредит?',
-    answer: `Кредитами мы считаем работу Радити над вашими задачами: чем больше нужно прочитать и изменить на сайте, тем больше кредитов стоит задача. Поменять цену, текст или фото — обычно ${typicalCreditsInWords(typicalTaskCredits.small)}, добавить блок или страницу — ${typicalCreditsInWords(typicalTaskCredits.block, false)}. Кредиты списываются только за выполненные задачи. Кредиты тарифа начисляются каждый месяц, а кредиты из пакета не сгорают.`,
+    answer: `Кредитами мы считаем работу Радити над вашими задачами: чем больше нужно прочитать и изменить на сайте, тем больше кредитов стоит задача. Поменять цену, текст или фото — обычно ${typicalCreditsInWords(typicalTaskCredits.small)}, добавить блок или страницу — ${typicalCreditsInWords(typicalTaskCredits.block, false)}. ${CHARGED_FOR_DONE_WORK} Кредиты тарифа начисляются каждый месяц. ${TARIFF_CREDITS_CARRY_OVER} Кредиты из пакета не сгорают.`,
   },
   {
     question: 'Что, если результат не понравится?',
@@ -104,7 +109,7 @@ const questions = [
 
 // A hyphen or a slash lets the browser break the line inside a name, and so does a dash between
 // the figures of a range: «15–» would end a line and «25» start the next.
-const UNBREAKABLE = /(1С-Битрикс|\/wp-admin|\d+–\d+)/
+const UNBREAKABLE = /(1С-Битрикс|\d+–\d+)/
 
 /** Readable text with non-breaking spaces and with the names and ranges kept in one piece. */
 function readable(text: string): ReactNode {
@@ -122,7 +127,16 @@ function readable(text: string): ReactNode {
     )
 }
 
-export function Landing({ pricing, viewer }: { pricing: ReactNode; viewer: LandingViewer }) {
+export function Landing({
+  pricing,
+  viewer,
+  captchaSiteKey,
+}: {
+  pricing: ReactNode
+  viewer: LandingViewer
+  /** SMARTCAPTCHA_CLIENT_KEY for the form of a lead; none in local development and tests. */
+  captchaSiteKey?: string
+}) {
   const isGuest = viewer.status === 'guest'
   const action = mainAction(isGuest)
   return (
@@ -162,8 +176,8 @@ export function Landing({ pricing, viewer }: { pricing: ReactNode; viewer: Landi
               <p className={styles.heroFootnote}>
                 {nbsp(
                   isGuest
-                    ? 'Сервис готовится к запуску. Сейчас можно попробовать пример и зарегистрироваться; подключение сайта и оплата откроются позже.'
-                    : 'Сервис готовится к запуску. Сейчас можно попробовать пример; подключение сайта и оплата откроются позже.',
+                    ? 'Сервис готовится к запуску. Попробуйте пример, зарегистрируйтесь и оставьте заявку — подключим сайт бесплатно. Оплата откроется позже.'
+                    : 'Сервис готовится к запуску. Оставьте заявку — подключим сайт бесплатно. Оплата откроется позже.',
                 )}
               </p>
             </div>
@@ -229,12 +243,12 @@ export function Landing({ pricing, viewer }: { pricing: ReactNode; viewer: Landi
               <span className={styles.stepNumber}>01</span>
               <h3>Подключите сайт</h3>
               <p>
-                {nbsp(
-                  'Подключение откроется позже. Мы проведём вас по шагам и заранее скажем, что понадобится. Начинаем с сайтов на WordPress.',
+                {readable(
+                  'Оставьте заявку — подключим сами и бесплатно. WordPress, Joomla, OpenCart, MODX или 1С-Битрикс — подойдёт любой.',
                 )}
               </p>
               {/* Frame 1 of one change: the site as it is. No button and no promise of a
-                  connection in one click: connecting is not open yet. */}
+                  connection in one click: a site is connected by a lead, by people. */}
               <div
                 className={styles.stepExample}
                 role="img"
@@ -354,11 +368,9 @@ export function Landing({ pricing, viewer }: { pricing: ReactNode; viewer: Landi
               </article>
             ))}
           </div>
-          <div className={styles.capabilitiesNote}>
-            <span>Сначала&nbsp;— WordPress.</span>
-            <span>{readable('Другие системы, например 1С-Битрикс, — в планах.')}</span>
-          </div>
         </section>
+
+        <LandingPlatforms />
 
         <section id="safety" className={styles.safety} aria-labelledby="safety-title">
           <div className={styles.safetyInner}>
@@ -414,6 +426,8 @@ export function Landing({ pricing, viewer }: { pricing: ReactNode; viewer: Landi
           {pricing}
         </section>
 
+        <LandingLead captchaSiteKey={captchaSiteKey} isGuest={isGuest} />
+
         <section
           id="faq"
           className={`${styles.section} ${styles.faqSection}`}
@@ -456,8 +470,8 @@ export function Landing({ pricing, viewer }: { pricing: ReactNode; viewer: Landi
               </h2>
               <p>
                 {isGuest
-                  ? nbsp('Зарегистрируйтесь сейчас — подключение сайта откроется позже.')
-                  : 'Подключение сайта откроется позже.'}
+                  ? nbsp('Зарегистрируйтесь и оставьте заявку — подключим сайт бесплатно.')
+                  : nbsp('Оставьте заявку — подключим сайт бесплатно.')}
               </p>
             </div>
             <Link href={action.href} className={`${styles.primaryButton} ${styles.finalButton}`}>
@@ -466,7 +480,11 @@ export function Landing({ pricing, viewer }: { pricing: ReactNode; viewer: Landi
             </Link>
           </div>
           <div className={styles.finalMeta}>
-            <span>{nbsp('Сервис готовится к запуску · пока для сайтов на WordPress')}</span>
+            <span>
+              {readable(
+                'Поддерживаемые платформы · WordPress, Joomla, OpenCart, MODX и 1С-Битрикс',
+              )}
+            </span>
           </div>
         </section>
       </main>
@@ -480,8 +498,8 @@ export function Landing({ pricing, viewer }: { pricing: ReactNode; viewer: Landi
             </span>
           </Link>
           <p>Ваш сайт в&nbsp;заботливых руках.</p>
-          <Link href={isGuest ? '/sign-in' : '/projects'}>
-            {isGuest ? 'Войти' : 'Открыть проекты'} <LandingIcon name="arrow-up-right" {...arrow} />
+          <Link href={isGuest ? '/sign-in' : '/chats'}>
+            {isGuest ? 'Войти' : 'Открыть чаты'} <LandingIcon name="arrow-up-right" {...arrow} />
           </Link>
         </div>
         <nav aria-label="Юридические документы" className={styles.legalLinks}>

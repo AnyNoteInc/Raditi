@@ -90,7 +90,15 @@ const driver: AgentDriver = {
   id: sampleDriverId,
   image,
   cliVersion: '1.0.0',
-  capabilities: { resume: true, jsonEvents: true, outputSchema: true, mcp: false, images: false },
+  capabilities: {
+    resume: true,
+    jsonEvents: true,
+    outputSchema: true,
+    mcp: false,
+    images: false,
+    reasoningEvents: false,
+    compaction: false,
+  },
   prepare: async (context) => ({
     context: { ...context },
     files: [

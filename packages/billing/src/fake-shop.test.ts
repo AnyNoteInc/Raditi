@@ -202,7 +202,7 @@ describe.skipIf(!databaseUrl)('checkout against the fake ЮKassa', () => {
     expect(await getCreditBalances(db, workspaceId)).toMatchObject({
       tariff: { balance: 30, held: 0, available: 30 },
       gift: GIFT_GRANTED,
-      totalAvailable: 65,
+      totalAvailable: 30 + GIFT_GRANTED.balance,
     })
   })
 
@@ -369,7 +369,7 @@ describe.skipIf(!databaseUrl)('checkout against the fake ЮKassa', () => {
       expect(await getCreditBalances(db, workspaceId)).toMatchObject({
         tariff: { balance: 30, held: 0, available: 30 },
         gift: GIFT_GRANTED,
-        totalAvailable: 65,
+        totalAvailable: 30 + GIFT_GRANTED.balance,
       })
       expect(await db.order.count({ where: { workspaceId, status: 'pending' } })).toBe(0)
     })

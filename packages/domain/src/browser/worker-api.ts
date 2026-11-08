@@ -52,17 +52,18 @@ export const browserSignInSchema = z.strictObject({
 export type BrowserSignIn = z.infer<typeof browserSignInSchema>
 
 /**
- * `POST /v1/sessions/ensure` (core, before a pass): the live session of the task, started when
- * there is none. `takeControl` — a turn starts: the agent takes the browser back from the client
- * (Б16). `signIn` — the site's saved sign-in, which replaces what the session held; none — the
+ * `POST /v1/sessions/ensure` (core): the live session of the task, started when there is none —
+ * core asks it to start a session a `web_*` call opened, and when a turn starts. `takeControl` — a
+ * turn starts: the agent takes the browser back from the client (Б16). `signIn` — the site's saved sign-in, which replaces what the session held; none — the
  * session forgets it. Answers the state (`browserSessionStateSchema`). The worker reads the
  * site's address and stack from the database by `siteId`: where the browser may go is never the
- * caller's word.
+ * caller's word. `siteId` null — a chat without a site (docs/plan/61-chats-first.md, К12): the
+ * worker checks it against the session's row and the task's.
  */
 export const browserEnsureRequestSchema = z.strictObject({
   sessionId: z.uuid(),
   taskId: z.uuid(),
-  siteId: z.uuid(),
+  siteId: z.uuid().nullable(),
   takeControl: z.boolean(),
   signIn: browserSignInSchema.optional(),
 })

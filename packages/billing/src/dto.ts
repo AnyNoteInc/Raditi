@@ -328,7 +328,8 @@ export const usageEntrySchema = z
       title: z.string().min(1).nullable(),
       status: z.enum(taskStatuses),
     }),
-    site: z.object({ id: z.uuid(), name: z.string() }),
+    /** null — a chat without a project (docs/plan/61-chats-first.md, §5.10). */
+    site: z.object({ id: z.uuid(), name: z.string() }).nullable(),
   })
   .refine(
     ({ outcome, credits }) => (credits !== null) === (outcome === 'charged' || outcome === 'held'),
@@ -360,11 +361,17 @@ export type UsageHistoryPageDto = z.infer<typeof usageHistoryPageSchema>
 export const tariffUsageSchema = z.object({
   /**
    * The credits of the tariff account that belong to the period, each part read from the
-   * ledger by the stamp that says its period: what was granted is what was charged, what is
-   * set aside, what expired and what is left — always.
+   * ledger by the stamp that says its period: what was carried into it and granted for it is
+   * what was charged, what is set aside, what expired and what is left — always.
    */
   credits: z
     .object({
+      /**
+       * Carried from the period before by the renewal that started this one: what was left of
+       * its quota, no more than that quota (decision of 06.11.2026). Spent first, and not
+       * carried again.
+       */
+      carried: wholeCredits,
       /** The quota the paid period was granted, and what an operator added to it since. */
       granted: wholeCredits,
       /** Charged to credits of this period by tasks that are done. */
@@ -383,10 +390,28 @@ export const tariffUsageSchema = z.object({
        * work. What that task does not use is not carried into this period.
        */
       heldEarlier: wholeCredits,
+      /**
+       * Beside the meter, not in it: the most the next renewal carries into its period — the
+       * quota the order of this period granted; what an operator added is not of it.
+       */
+      carryLimit: wholeCredits,
+      /**
+       * Beside the meter: what the next renewal would carry of `left` if nothing more were
+       * spent — no more than `carryLimit` —, and what would expire then: the rest of the carry
+       * of the period before. The tariff that is not renewed carries nothing.
+       */
+      carryNext: wholeCredits,
+      burnNext: wholeCredits,
     })
     .refine(
-      ({ granted, charged, held, expired, left }) => granted === charged + held + expired + left,
-      { message: 'The parts of the period do not add up to what it was granted' },
+      ({ carried, granted, charged, held, expired, left }) =>
+        carried + granted === charged + held + expired + left,
+      { message: 'The parts of the period do not add up to what it was carried and granted' },
+    )
+    .refine(
+      ({ left, carryLimit, carryNext, burnNext }) =>
+        carryNext === Math.min(left, carryLimit) && carryNext + burnNext === left,
+      { message: 'The forecast of the renewal does not add up to what is left' },
     ),
   /**
    * The tariff credits of the Moscow day, as the answer about a new task tells them (`today`
@@ -395,8 +420,15 @@ export const tariffUsageSchema = z.object({
   today: tariffDaySchema.nullable(),
   /** Sites of the workspace, whatever their status, against the site limit of the plan. */
   sites: z.object({ count: wholeCredits, max: positiveCount }),
-  /** Credits charged in the period per site, the largest first; a site without any is absent. */
-  bySite: z.array(z.object({ siteId: z.uuid(), name: z.string(), credits: positiveCount })),
+  /**
+   * Credits charged in the period per site, the largest first; a site without any is absent. The
+   * chats without a project stand as one line with neither an id nor a name.
+   */
+  bySite: z.array(
+    z
+      .object({ siteId: z.uuid().nullable(), name: z.string().nullable(), credits: positiveCount })
+      .refine(({ siteId, name }) => (siteId === null) === (name === null)),
+  ),
 })
 export type TariffUsageDto = z.infer<typeof tariffUsageSchema>
 

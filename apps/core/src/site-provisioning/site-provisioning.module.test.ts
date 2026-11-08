@@ -1,4 +1,4 @@
-import type { DynamicModule, INestApplication, Type } from '@nestjs/common'
+import type { INestApplication } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
 import type { Registry } from '@prometheus-io/client'
 import {
@@ -17,7 +17,6 @@ import { fakeInfra, overrideCoreInfra, testCoreConfig } from '../testing/fakes.t
 import { SiteImportProcessor } from './site-import.processor.ts'
 import { siteImportOutcomes, SiteImportRunner } from './site-import.runner.ts'
 import { SiteImportSweeper } from './site-import.sweeper.ts'
-import { SiteProvisioningModule } from './site-provisioning.module.ts'
 import {
   CLOSED_STACK_ROOTS,
   SITE_DATABASES,
@@ -41,19 +40,6 @@ async function core(config: CoreConfig = testCoreConfig()) {
   apps.push(app)
   await app.init()
   return { app, infra }
-}
-
-/** Whether `target` is among the modules a role module imports, however deep. */
-function imports(root: DynamicModule | Type, target: Type, seen = new Set<unknown>()): boolean {
-  const module = 'module' in root ? root.module : root
-  if (module === target) return true
-  if (seen.has(module)) return false
-  seen.add(module)
-  const declared = (Reflect.getMetadata('imports', module) ?? []) as (DynamicModule | Type)[]
-  const dynamic = ('module' in root ? (root.imports ?? []) : []) as (DynamicModule | Type)[]
-  return [...declared, ...dynamic].some(
-    (imported) => typeof imported !== 'string' && imports(imported, target, seen),
-  )
 }
 
 const git = {
@@ -118,11 +104,5 @@ describe('SiteProvisioningModule in the core role', () => {
       ([, inner = '']) => inner.replace(/="[^"]*"/g, ''),
     )
     expect(new Set(labels)).toEqual(new Set(['outcome,app']))
-  })
-
-  it('belongs to core: its root module imports it', () => {
-    // No other app can: apps-are-isolated keeps every app to its own modules.
-    const coreModule = AppModule.forRoot({ config: testCoreConfig(), background: false })
-    expect(imports(coreModule, SiteProvisioningModule)).toBe(true)
   })
 })

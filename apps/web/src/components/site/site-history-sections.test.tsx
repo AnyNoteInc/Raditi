@@ -1,11 +1,9 @@
 // @vitest-environment jsdom
 import { render, screen, within } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
-
-vi.mock('next/navigation', () => ({ useSelectedLayoutSegment: () => null }))
+import { describe, expect, it } from 'vitest'
 
 import { HistoryList } from './history-list'
-import { BackupsBlock, DatabaseBlock, databaseBlocks, type BackupView } from './site-database'
+import { BackupsBlock, DatabaseBlock, type BackupView } from './site-database'
 import { RunDetail, runItems, type RunDetailView } from './site-runs'
 import { VersionDetail, versionItems, type VersionView } from './site-versions'
 
@@ -43,19 +41,24 @@ const release: VersionView = {
 }
 
 describe('«Изменения»', () => {
-  it('marks the version on the site in the list', () => {
+  it('lists the versions across the full width, each leading to its own page', () => {
     render(
       <HistoryList
+        label="Версии сайта"
         root={`/projects/${siteId}/changes`}
         items={versionItems([release, initial])}
-        rootSegment={release.id}
         emptyText="Версий пока нет."
       />,
     )
-    const current = screen.getByRole('link', { current: 'page' })
-    expect(within(current).getByText('Поменять цену капучино')).toBeTruthy()
-    expect(within(current).getByText('на сайте')).toBeTruthy()
-    expect(screen.getByText('Первоначальная версия сайта')).toBeTruthy()
+    const rows = within(screen.getByRole('list', { name: 'Версии сайта' })).getAllByRole('link')
+    expect(rows.map((row) => row.getAttribute('href'))).toEqual([
+      `/projects/${siteId}/changes/${release.id}`,
+      `/projects/${siteId}/changes/initial`,
+    ])
+    // The list marks nothing as open (docs/plan/64, Н6): it marks the version on the site.
+    expect(screen.queryByRole('link', { current: 'page' })).toBeNull()
+    expect(within(rows[0]!).getByText('на сайте')).toBeTruthy()
+    expect(within(rows[1]!).getByText('Первоначальная версия сайта')).toBeTruthy()
   })
 
   it('shows who asked, the copy before it, the run and the dialog, and the way to undo', () => {
@@ -65,8 +68,11 @@ describe('«Изменения»', () => {
     expect(screen.getByRole('link', { name: 'Открыть запуск № 2' }).getAttribute('href')).toBe(
       `/projects/${siteId}/runs/${release.id}`,
     )
-    expect(screen.getByRole('link', { name: 'Отменить в диалоге' }).getAttribute('href')).toBe(
-      `/projects/${siteId}/chat/${release.taskId}`,
+    expect(screen.getByRole('link', { name: 'Отменить в чате' }).getAttribute('href')).toBe(
+      `/chats/${release.taskId}`,
+    )
+    expect(screen.getByRole('link', { name: 'Открыть чат' }).getAttribute('href')).toBe(
+      `/chats/${release.taskId}`,
     )
   })
 
@@ -79,7 +85,7 @@ describe('«Изменения»', () => {
         now={new Date(Date.UTC(2026, 10, 2))}
       />,
     )
-    expect(screen.queryByRole('link', { name: 'Отменить в диалоге' })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Отменить в чате' })).toBeNull()
     rerender(<VersionDetail siteId={siteId} version={initial} next={release} now={at(30)} />)
     expect(screen.getByText(/^Была на сайте до 25/)).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Открыть запуск № 1' }).getAttribute('href')).toBe(
@@ -114,12 +120,12 @@ describe('«Запуски»', () => {
   it('lists runs and filters those with an error', async () => {
     const { container } = render(
       <HistoryList
+        label="Запуски"
         root={`/projects/${siteId}/runs`}
         items={runItems([
           run,
           { ...run, id: 'import', number: 1, kind: 'import', state: 'installed', title: null },
         ])}
-        rootSegment={run.id}
         emptyText="Запусков пока нет."
         filters
       />,
@@ -131,8 +137,15 @@ describe('«Запуски»', () => {
     expect(screen.getByText('№ 3 · Баннер на главной')).toBeTruthy()
   })
 
+  it('leads from a run to its chat', () => {
+    render(<RunDetail run={run} now={at(5)} />)
+    expect(screen.getByRole('link', { name: 'Открыть чат' }).getAttribute('href')).toBe(
+      `/chats/${run.taskId}`,
+    )
+  })
+
   it("tells how a run ended, its steps and a journal of the platform's own reports", () => {
-    render(<RunDetail siteId={siteId} run={run} now={at(5)} />)
+    render(<RunDetail run={run} now={at(5)} />)
     expect(screen.getByText(/сайт вернули к прежнему виду/)).toBeTruthy()
     expect(screen.getByText('Возврат как было')).toBeTruthy()
     expect(screen.getByText('Проверка сайта: не получилось')).toBeTruthy()
@@ -140,7 +153,7 @@ describe('«Запуски»', () => {
   })
 })
 
-describe('«База и бэкап»', () => {
+describe('«База»', () => {
   const backups: BackupView[] = [
     {
       id: 'initial',
@@ -193,33 +206,9 @@ describe('«База и бэкап»', () => {
         }}
       />,
     )
-    // Beside the menu, which holds the h1 of the section.
+    // A tab, under the h1 of the section.
     expect(screen.getByRole('heading', { level: 2, name: 'База данных сайта' })).toBeTruthy()
     expect(screen.getByText('MySQL или MariaDB')).toBeTruthy()
     expect(screen.getByText('kroshka_wp')).toBeTruthy()
-  })
-
-  it('says what each block holds in the menu', () => {
-    const database = {
-      engine: 'mysql' as const,
-      databaseName: 'kroshka_wp',
-      tls: 'verified' as const,
-      updatedAt: at(0),
-    }
-    expect(
-      databaseBlocks(database, backups).map(({ segment, note }) => ({ segment, note })),
-    ).toEqual([
-      { segment: 'connection', note: 'MySQL или MariaDB · kroshka_wp' },
-      // The day keeps its month on one line.
-      { segment: 'backups', note: '2 копии · последняя 25\u00a0октября' },
-    ])
-    expect(databaseBlocks(null, []).map(({ note }) => note)).toEqual([
-      'Не подключена',
-      'Копий пока нет',
-    ])
-    expect(databaseBlocks(undefined, null).map(({ note }) => note)).toEqual([
-      'Не удалось загрузить',
-      'Не удалось загрузить',
-    ])
   })
 })

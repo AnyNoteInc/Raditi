@@ -5,6 +5,7 @@ import {
   DomainError,
   previewStatuses,
   siteStacks,
+  siteTaskRequirementsSchema,
   taskRequirementsSchema,
   terminalTaskStatuses,
 } from '@repo/domain'
@@ -32,7 +33,22 @@ export const mcpPreviewSchema = z.strictObject({
 })
 export type McpPreview = z.infer<typeof mcpPreviewSchema>
 
-/** Derived only from the admitted token and current assignment, never from tool arguments. */
+const siteUrlSchema = z.url().refine((value) => {
+  const url = new URL(value)
+  return (
+    ['http:', 'https:'].includes(url.protocol) &&
+    !url.username &&
+    !url.password &&
+    !url.search &&
+    !url.hash &&
+    url.pathname === '/'
+  )
+})
+
+/**
+ * A turn on a site: what content and the preview's browser take. Derived only from the admitted
+ * token and current assignment, never from tool arguments.
+ */
 export const mcpAccessSchema = z.strictObject({
   keyId: z.uuid(),
   taskId: z.uuid(),
@@ -42,18 +58,14 @@ export const mcpAccessSchema = z.strictObject({
   turn: z.number().int().positive(),
   firstEpoch: z.number().int().positive(),
   epoch: z.number().int().positive(),
+  /**
+   * The row of `site_leases` the turn holds (`turn_assignments.site_id`): the chat's own for a chat
+   * with the code (`turnLeaseOf`), the site's for a chat without the code and for a stand's turn.
+   * Absent — a scope made before the field, fenced by its site (`leaseIdOf`).
+   */
+  leaseId: z.uuid().optional(),
   stack: z.enum(siteStacks),
-  url: z.url().refine((value) => {
-    const url = new URL(value)
-    return (
-      ['http:', 'https:'].includes(url.protocol) &&
-      !url.username &&
-      !url.password &&
-      !url.search &&
-      !url.hash &&
-      url.pathname === '/'
-    )
-  }),
+  url: siteUrlSchema,
   /** null — the dialog has no preview row (previews are not configured where it was made). */
   preview: mcpPreviewSchema.nullable(),
   /**
@@ -61,9 +73,53 @@ export const mcpAccessSchema = z.strictObject({
    * tasks.md, Б2): the `web` tools go to a task that needs a browser. Absent — a scope made
    * before the field, which is a repository task (`requirementsOf`).
    */
-  requirements: taskRequirementsSchema.optional(),
+  requirements: siteTaskRequirementsSchema.optional(),
 })
 export type McpAccess = z.infer<typeof mcpAccessSchema>
+
+/**
+ * What an admitted token gives: the same, on a site or in a chat without one
+ * (docs/plan/61-chats-first.md, §5.3). `siteId`, `stack` and `url` are null together, only in a
+ * task without a site and a repository, which has no preview either.
+ */
+export const mcpTurnAccessSchema = mcpAccessSchema
+  .extend({
+    siteId: z.uuid().nullable(),
+    stack: z.enum(siteStacks).nullable(),
+    url: siteUrlSchema.nullable(),
+    requirements: taskRequirementsSchema.optional(),
+  })
+  .refine((access) => {
+    if (access.siteId === null)
+      return (
+        access.stack === null &&
+        access.url === null &&
+        access.preview === null &&
+        access.requirements?.repository === false
+      )
+    return (
+      access.stack !== null &&
+      access.url !== null &&
+      (access.requirements === undefined ||
+        siteTaskRequirementsSchema.safeParse(access.requirements).success)
+    )
+  })
+export type McpTurnAccess = z.infer<typeof mcpTurnAccessSchema>
+
+/** The row of `site_leases` the turn of a scope holds: the lease, not the site, of its fence. */
+export const leaseIdOf = (scope: {
+  leaseId?: string | undefined
+  siteId: string | null
+  taskId: string
+}): string => scope.leaseId ?? scope.siteId ?? scope.taskId
+
+/** The access of a turn on a site; null — the chat has none, and no tool of a site is its. */
+export function siteAccessOf(access: McpTurnAccess): McpAccess | null {
+  const { siteId, stack, url } = access
+  return siteId === null || stack === null || url === null
+    ? null
+    : { ...access, siteId, stack, url }
+}
 
 /** What it takes to reach a site. The resolver of its content gateway reads nothing else. */
 export type McpSiteScope = Pick<McpAccess, 'workspaceId' | 'siteId' | 'stack' | 'url'>
@@ -86,7 +142,7 @@ export const mcpHostScopeSchema = mcpSiteScopeSchema
 export type McpHostScope = z.infer<typeof mcpHostScopeSchema>
 
 export interface McpAccessStore {
-  authenticate(token: string): Promise<McpAccess | null>
+  authenticate(token: string): Promise<McpTurnAccess | null>
 }
 /**
  * A preview that is gone for the dialog, or never was there to work on (Р4, Р16): whatever its
@@ -106,17 +162,23 @@ export const MCP_ACCESS_PROBE_TOKEN = `mcp_${'0'.repeat(64)}`
  * closed to every task. Every other admission of this role repeats the condition it needs:
  * the `web` tools this one, content and the preview's browser `active` alone (they are offered
  * to repository tasks only, `mcpToolFamiliesOf`).
+ *
+ * A turn is admitted by the row its assignment names — the chat's own or its site's
+ * (`turnLeaseOf`; a chat without a site has only its own): the joins of the fence go by
+ * `a.site_id`. The condition on `t.site_id` is what refuses a task whose site is of another
+ * workspace: `LEFT JOIN` finds no site for it, and it must stay as written.
  */
 export class PostgresMcpAccess implements McpAccessStore {
   constructor(private readonly prisma: Pick<PrismaClient, '$queryRaw'>) {}
 
-  async authenticate(token: string): Promise<McpAccess | null> {
+  async authenticate(token: string): Promise<McpTurnAccess | null> {
     if (!MCP_TOKEN_PATTERN.test(token)) return null
     const hash = turnKeyHash(token)
     const rows = await this.prisma.$queryRaw<unknown[]>`
       SELECT k.id AS "keyId", t.id AS "taskId", t.workspace_id AS "workspaceId",
         s.id AS "siteId", k.session_id AS "sessionId", k.turn_no AS turn,
-        k.first_epoch AS "firstEpoch", a.lease_epoch AS epoch, s.stack::text AS stack, s.url,
+        k.first_epoch AS "firstEpoch", a.lease_epoch AS epoch, a.site_id AS "leaseId",
+        s.stack::text AS stack, s.url,
         t.needs_repository AS "needsRepository", t.needs_browser AS "needsBrowser",
         p.id AS "previewId", p.status::text AS "previewStatus",
         p.db_mode = 'copy' AS "previewDatabase", p.hostname AS "previewHostname",
@@ -124,10 +186,11 @@ export class PostgresMcpAccess implements McpAccessStore {
           AND jsonb_typeof(p.runtime->'db'->'kinds') = 'array'
           THEN p.runtime->'db'->'kinds' END AS "previewDbKinds"
       FROM llm_keys k JOIN tasks t ON t.id = k.task_id
-      JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id
+      LEFT JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id
       JOIN turn_assignments a ON a.task_id = k.task_id AND a.turn_no = k.turn_no
-        AND a.first_epoch = k.first_epoch AND a.session_id = k.session_id AND a.site_id = s.id
-      JOIN site_leases l ON l.site_id = s.id AND l.holder_task_id = t.id
+        AND a.first_epoch = k.first_epoch AND a.session_id = k.session_id
+        AND a.site_id IN (t.id, t.site_id)
+      JOIN site_leases l ON l.site_id = a.site_id AND l.holder_task_id = t.id
         AND l.epoch = a.lease_epoch
       LEFT JOIN preview_environments p ON p.task_id = t.id AND p.site_id = s.id
       WHERE k.mcp_token_hash = ${hash} AND k.revoke_requested_at IS NULL AND k.revoked_at IS NULL
@@ -135,15 +198,15 @@ export class PostgresMcpAccess implements McpAccessStore {
         AND k.valid_until > clock_timestamp() AND a.deadline_at > clock_timestamp()
         AND a.finished_at IS NULL AND a.outcome IS NULL
         AND l.operation = 'turn' AND NOT l.held_for_operator AND l.expires_at > clock_timestamp()
-        AND (s.status = 'active' OR (t.needs_browser AND NOT t.needs_repository
-          AND s.status = 'onboarding'))
+        AND (t.site_id IS NULL OR s.status = 'active' OR (t.needs_browser
+          AND NOT t.needs_repository AND s.status = 'onboarding'))
         AND t.content_retired_at IS NULL
         AND t.status <> ALL(${[...terminalTaskStatuses]}::"TaskStatus"[])
     `
     if (rows.length === 0) return null
     // A matched hash with no single valid scope is broken data, not a bad token: fail closed
     // as an outage the operator sees, with a fixed message that carries none of the row.
-    const parsed = rows.length === 1 ? mcpAccessSchema.safeParse(accessOf(rows[0])) : undefined
+    const parsed = rows.length === 1 ? mcpTurnAccessSchema.safeParse(accessOf(rows[0])) : undefined
     if (!parsed?.success)
       throw new DomainError('MCP_ACCESS_SCOPE_INVALID', 'MCP admission row is invalid', 503)
     return parsed.data

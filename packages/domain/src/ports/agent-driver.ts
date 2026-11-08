@@ -29,6 +29,10 @@ export interface AgentCapabilities {
   mcp: boolean
   /** Accepts images as input. */
   images: boolean
+  /** Prints the model's reasoning as `reasoning` events. */
+  reasoningEvents: boolean
+  /** Can replace the history of a native session with a summary: `TurnInput.action`. */
+  compaction: boolean
 }
 
 /** Fixed paths: a CLI may bind its session to the path of the working directory. */
@@ -234,7 +238,15 @@ export interface TurnInput {
   prompt: string
   /** Client files already placed under SANDBOX_INBOX. */
   attachments: string[]
+  /**
+   * What the turn does instead of answering `prompt`: `compact` replaces the history of the
+   * session it resumes with a summary. No tool runs and no result of the model is read.
+   */
+  action?: TurnAction
 }
+
+export const turnActions = ['compact'] as const
+export type TurnAction = (typeof turnActions)[number]
 
 /**
  * Where the driver keeps its native session; packed into home.tar.zst after each turn.
@@ -297,6 +309,11 @@ export const agentEventSchema = z.discriminatedUnion('type', [
     nativeSessionId: nativeSessionIdSchema.optional(),
   }),
   z.object({ type: z.literal('message'), text: z.string().max(limits.messageText) }),
+  /**
+   * What the model thought before it acted: raw, often English, and no answer of the agent. It
+   * never reaches a result; a viewer sees it only by choice (docs/plan/61-chats-first.md, К32).
+   */
+  z.object({ type: z.literal('reasoning'), text: z.string().max(limits.messageText) }),
   z.object({
     type: z.literal('command'),
     command: z.string().max(limits.command),

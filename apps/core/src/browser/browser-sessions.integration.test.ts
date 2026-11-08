@@ -1,15 +1,23 @@
 import { ensurePersonalWorkspaceWithGift } from '@repo/billing'
 import { billingFixtures } from '@repo/billing/testing'
 import {
+  closeBrowserSession,
   createPrismaClient,
+  markBrowserSessionReady,
   openBrowserSession,
   recordBrowserHelp,
   type PrismaClient,
 } from '@repo/db'
 import type { BrowserSessionState } from '@repo/domain'
+import { DomainError, siteIdOf } from '@repo/domain'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
-import { BROWSER_ENSURE_GRACE_MS, BrowserSessions } from './browser-sessions.ts'
+import { readBrowserTaskFacts } from './browser-facts.ts'
+import {
+  BROWSER_ENSURE_GRACE_MS,
+  BROWSER_START_FAILED,
+  BrowserSessions,
+} from './browser-sessions.ts'
 
 // The cloud browser of a task as core keeps it in PostgreSQL (docs/plan/57-browser-tasks.md,
 // Б16, Б18), against a stand-in of the worker. The collector reads every open session of the
@@ -17,6 +25,8 @@ import { BROWSER_ENSURE_GRACE_MS, BrowserSessions } from './browser-sessions.ts'
 const databaseUrl = process.env.DATABASE_URL
 const enabled = Boolean(databaseUrl && process.env.RADITI_GATEWAY_DB_TESTS === '1')
 const quiet = { log: vi.fn(), warn: vi.fn() }
+/** core keeps running: nothing stops a start. */
+const running = new AbortController().signal
 
 describe.skipIf(!enabled)('the browsers of tasks with PostgreSQL', () => {
   let db: PrismaClient
@@ -45,14 +55,14 @@ describe.skipIf(!enabled)('the browsers of tasks with PostgreSQL', () => {
       needsBrowser: true,
     })
     const task = await db.task.findUniqueOrThrow({ where: { id: taskId } })
-    await db.site.update({ where: { id: task.siteId }, data: { agentNotes: 'Вход по /login' } })
+    await db.site.update({ where: { id: siteIdOf(task) }, data: { agentNotes: 'Вход по /login' } })
     return task
   }
 
   function worker() {
     const live = new Set<string>()
     const client = {
-      ensure: vi.fn(async (request: { sessionId: string }) => {
+      ensure: vi.fn(async (request: { sessionId: string }, _options?: object) => {
         live.add(request.sessionId)
         return {
           session: request.sessionId,
@@ -86,33 +96,137 @@ describe.skipIf(!enabled)('the browsers of tasks with PostgreSQL', () => {
     return { client, live }
   }
 
-  it('opens the session of a task once, marks it ready and answers the agent’s help', async () => {
+  it('starts the session of a job and gives it back to the agent with the next turn', async () => {
     const task = await browserTask()
     const { client } = worker()
     const sessions = new BrowserSessions({ db, client: client as never, logger: quiet })
+    const opened = await openBrowserSession(db, { taskId: task.id })
 
-    await sessions.ensure(task.id, new AbortController().signal)
-    const [opened] = await db.browserSession.findMany({ where: { taskId: task.id } })
-    expect(opened).toMatchObject({ status: 'ready', siteId: task.siteId })
+    await sessions.start({ taskId: task.id, sessionId: opened.id }, running)
+    expect(await db.browserSession.findUnique({ where: { id: opened.id } })).toMatchObject({
+      status: 'ready',
+      siteId: task.siteId,
+    })
     // Ids alone: the worker reads the site's address itself, the notes go to the turn's prompt.
-    expect(client.ensure).toHaveBeenCalledWith(
-      { sessionId: opened!.id, taskId: task.id, siteId: task.siteId, takeControl: true },
-      expect.anything(),
+    expect(client.ensure).toHaveBeenCalledExactlyOnceWith(
+      {
+        sessionId: opened.id,
+        taskId: task.id,
+        siteId: task.siteId,
+        takeControl: false,
+      },
+      { signal: running },
     )
 
-    // The next pass finds the same session; the help the agent asked for is answered by it.
-    await recordBrowserHelp(db, { sessionId: opened!.id, reason: 'login', message: 'Войдите' })
-    await sessions.ensure(task.id, new AbortController().signal)
+    // The next turn takes the same session back; the help the agent asked for is answered by it.
+    await recordBrowserHelp(db, { sessionId: opened.id, reason: 'login', message: 'Войдите' })
+    await sessions.reclaim(task.id, new AbortController().signal)
     const again = await db.browserSession.findMany({ where: { taskId: task.id } })
     expect(again).toHaveLength(1)
     expect(again[0]).toMatchObject({ helpReason: null, helpMessage: null })
+    expect(client.ensure).toHaveBeenLastCalledWith(
+      { sessionId: opened.id, taskId: task.id, siteId: task.siteId, takeControl: true },
+      expect.anything(),
+    )
+  })
+
+  it('answers the request for help of the last pass even when the worker does not answer', async () => {
+    const task = await browserTask()
+    const { client } = worker()
+    const sessions = new BrowserSessions({ db, client: client as never, logger: quiet })
+    const opened = await openBrowserSession(db, { taskId: task.id })
+    await sessions.start({ taskId: task.id, sessionId: opened.id }, running)
+    await recordBrowserHelp(db, { sessionId: opened.id, reason: 'login', message: 'Войдите' })
+    client.ensure.mockRejectedValue(new DomainError('CONFLICT', 'refused', 409))
+
+    await sessions.reclaim(task.id, new AbortController().signal)
+
+    // A pass about the code goes on without the browser, and it ends with its own result.
+    expect((await readBrowserTaskFacts(db, task.id)).help).toBeNull()
+  })
+
+  it('never takes the browser from a client mid sign-in when a job comes late', async () => {
+    const task = await browserTask()
+    const { client } = worker()
+    const sessions = new BrowserSessions({ db, client: client as never, logger: quiet })
+    const opened = await openBrowserSession(db, { taskId: task.id })
+    await sessions.start({ taskId: task.id, sessionId: opened.id }, running)
+    await recordBrowserHelp(db, { sessionId: opened.id, reason: 'login', message: 'Войдите' })
+    client.ensure.mockClear()
+
+    await sessions.start({ taskId: task.id, sessionId: opened.id }, running)
+
+    expect(client.ensure).not.toHaveBeenCalled()
+    expect(await db.browserSession.findUnique({ where: { id: opened.id } })).toMatchObject({
+      helpReason: 'login',
+      helpMessage: 'Войдите',
+    })
+  })
+
+  it('opens no session for a turn that needs no browser', async () => {
+    const task = await browserTask()
+    const { client } = worker()
+    const sessions = new BrowserSessions({ db, client: client as never, logger: quiet })
+    await sessions.reclaim(task.id, new AbortController().signal)
+    expect(await db.browserSession.count({ where: { taskId: task.id } })).toBe(0)
+    expect(client.ensure).not.toHaveBeenCalled()
+  })
+
+  it('closes a session it could not start, so the waiting call says so at once', async () => {
+    const task = await browserTask()
+    const { client } = worker()
+    client.ensure.mockRejectedValue(new DomainError('CONFLICT', 'refused', 409))
+    const sessions = new BrowserSessions({ db, client: client as never, logger: quiet })
+    const opened = await openBrowserSession(db, { taskId: task.id })
+
+    await sessions.start({ taskId: task.id, sessionId: opened.id }, running)
+
+    expect(await db.browserSession.findUnique({ where: { id: opened.id } })).toMatchObject({
+      status: 'failed',
+      closeReason: 'crashed',
+      errorCode: BROWSER_START_FAILED,
+    })
+  })
+
+  it('keeps a browser the worker started though its answer was lost, for a client mid sign-in', async () => {
+    const task = await browserTask()
+    const { client } = worker()
+    const sessions = new BrowserSessions({ db, client: client as never, logger: quiet })
+    const opened = await openBrowserSession(db, { taskId: task.id })
+    client.ensure.mockImplementation(async () => {
+      await markBrowserSessionReady(db, { sessionId: opened.id })
+      throw new DomainError('CONFLICT', 'timeout', 409, { failure: 'timeout' })
+    })
+
+    await sessions.start({ taskId: task.id, sessionId: opened.id }, running)
+
+    expect(await db.browserSession.findUnique({ where: { id: opened.id } })).toMatchObject({
+      status: 'ready',
+      closedAt: null,
+      errorCode: null,
+    })
+  })
+
+  it('forgets a request for help of a session that is gone: no false question to the client', async () => {
+    const task = await browserTask()
+    const opened = await openBrowserSession(db, { taskId: task.id })
+    await recordBrowserHelp(db, { sessionId: opened.id, reason: 'login', message: 'Войдите' })
+    expect((await readBrowserTaskFacts(db, task.id)).help).toEqual({
+      reason: 'login',
+      message: 'Войдите',
+    })
+
+    await closeBrowserSession(db, { sessionId: opened.id, status: 'closed', reason: 'idle' })
+
+    expect((await readBrowserTaskFacts(db, task.id)).help).toBeNull()
   })
 
   it('closes the session with its task, in the database and on the worker', async () => {
     const task = await browserTask()
     const { client, live } = worker()
     const sessions = new BrowserSessions({ db, client: client as never, logger: quiet })
-    await sessions.ensure(task.id, new AbortController().signal)
+    const opened = await openBrowserSession(db, { taskId: task.id })
+    await sessions.start({ taskId: task.id, sessionId: opened.id }, running)
 
     await sessions.close(task.id, 'task_done')
 
@@ -132,7 +246,8 @@ describe.skipIf(!enabled)('the browsers of tasks with PostgreSQL', () => {
       // Past the grace a session that is still starting may take.
       now: () => new Date(Date.now() + BROWSER_ENSURE_GRACE_MS + 60_000),
     })
-    await sessions.ensure(ended.id, new AbortController().signal)
+    const finished = await openBrowserSession(db, { taskId: ended.id })
+    await sessions.start({ taskId: ended.id, sessionId: finished.id }, running)
     const gone = await openBrowserSession(db, { taskId: lost.id })
     await db.task.update({ where: { id: ended.id }, data: { status: 'done' } })
     live.add('0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a99')

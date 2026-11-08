@@ -28,9 +28,9 @@ const NO_ACCOUNT = { balance: 0, held: 0, available: 0 }
 /** What a user without a workspace reads while the gift of the registration is still to come. */
 const PROMISED = {
   tariff: NO_ACCOUNT,
-  gift: { balance: 35, held: 0, available: 35, granted: false },
+  gift: { balance: 50, held: 0, available: 50, granted: false },
   pack: NO_ACCOUNT,
-  totalAvailable: 35,
+  totalAvailable: 50,
 }
 /** What the same user reads when nothing is to come. */
 const NOTHING = { tariff: NO_ACCOUNT, gift: NO_GIFT, pack: NO_ACCOUNT, totalAvailable: 0 }
@@ -577,9 +577,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
       const empty = { balance: 0, held: 0, available: 0 }
       expect(await getCreditBalances(db, workspaceId)).toEqual({
         tariff: empty,
-        gift: { balance: 35, held: 0, available: 35, granted: true },
+        gift: { balance: 50, held: 0, available: 50, granted: true },
         pack: empty,
-        totalAvailable: 35,
+        totalAvailable: 50,
       })
 
       // Next to a tariff and with a part of it reserved.
@@ -590,9 +590,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
       await fixtures.hold(workspaceId, 'gift', 5)
       expect(await getCreditBalances(db, workspaceId)).toEqual({
         tariff: { balance: 47, held: 0, available: 47 },
-        gift: { balance: 35, held: 5, available: 30, granted: true },
+        gift: { balance: 50, held: 5, available: 45, granted: true },
         pack: empty,
-        totalAvailable: 77,
+        totalAvailable: 92,
       })
 
       // Spent to the last credit, it is still the gift that was granted.

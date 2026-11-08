@@ -202,7 +202,17 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
       await db.taskAccountBinding.deleteMany({ where: tasks })
       await db.turnAssignment.deleteMany({ where: { task: { workspaceId: row.workspaceId } } })
       await db.taskEvent.deleteMany({ where: tasks })
-      await db.siteLease.deleteMany({ where: { site: { workspaceId: row.workspaceId } } })
+      const sites = await db.site.findMany({
+        where: { workspaceId: row.workspaceId },
+        select: { id: true },
+      })
+      const chats = await db.task.findMany({
+        where: { workspaceId: row.workspaceId, siteId: null },
+        select: { id: true },
+      })
+      await db.siteLease.deleteMany({
+        where: { siteId: { in: [...sites, ...chats].map(({ id }) => id) } },
+      })
       await db.task.deleteMany({ where: { workspaceId: row.workspaceId } })
       await db.site.deleteMany({ where: { workspaceId: row.workspaceId } })
       await db.workspace.delete({ where: { id: row.workspaceId } })
@@ -323,6 +333,29 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
       const ref: TurnCredentialRef = { taskId: task.id, sessionId: randomUUID(), turn: 1, epoch: 1 }
       return { task, site, ref }
     }
+    /** A chat without a project, under the lease of its own id (plan 61, К14). */
+    async function chat() {
+      const task = await db.task.create({
+        data: {
+          workspaceId: workspace.id,
+          status: 'running',
+          modelClass: 'standard',
+          needsRepository: false,
+          needsBrowser: false,
+        },
+      })
+      await db.siteLease.create({
+        data: {
+          siteId: task.id,
+          holderTaskId: task.id,
+          epoch: 1,
+          operation: 'turn',
+          expiresAt: new Date(Date.now() + 1_200_000),
+        },
+      })
+      const ref: TurnCredentialRef = { taskId: task.id, sessionId: randomUUID(), turn: 1, epoch: 1 }
+      return { task, ref }
+    }
     async function account(
       options: { usedPct?: number; maxTurns?: number; suspended?: boolean } = {},
     ) {
@@ -411,6 +444,7 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
       credentials,
       grant,
       taskFixture: task,
+      chatFixture: chat,
       account,
       payAsYouGo,
       row,
@@ -495,6 +529,133 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     ).toEqual([])
     expect(f.vault.entries.get(turnCredentialPath(browser.ref))?.data).not.toHaveProperty('env')
     expect(await f.credentials.recover(browser.ref)).toEqual(issued)
+  })
+
+  it('gives a chat with the code and the browser its variables without the file accesses (К21, 61.27)', async () => {
+    const f = await fixture({ slots: 2 })
+    const consented = { toAgent: true, agentConsentAt: new Date() }
+    const chat = await f.taskFixture({ needsRepository: true, needsBrowser: true })
+    const names = [
+      'FTP_PASSWORD',
+      'MAIL_API_KEY',
+      'SFTP_PASSWORD',
+      'SFTP_PRIVATE_KEY',
+      'SITE_DB_PASSWORD',
+      'SITE_GIT_TOKEN',
+    ]
+    for (const site of [f.site, chat.site])
+      for (const name of names) {
+        await db.siteEnvVar.create({ data: { siteId: site.id, name, hosts: [], ...consented } })
+        f.vault.entries.set(siteEnvVarPath(site.id, name), {
+          data: { value: `${name}-value` },
+          custom: {},
+          deleted: false,
+        })
+      }
+    // The code alone keeps them all, as it did.
+    expect(Object.keys((await f.credentials.issue(f.ref, f.grant)).envValues ?? {}).sort()).toEqual(
+      names,
+    )
+    f.vault.kvRead.mockClear()
+    const issued = await f.credentials.issue(chat.ref, f.grant)
+    // The database and git reach it like any variable (owner's answer of 06.11.2026).
+    expect(issued.envValues).toEqual({
+      MAIL_API_KEY: 'MAIL_API_KEY-value',
+      SITE_DB_PASSWORD: 'SITE_DB_PASSWORD-value',
+      SITE_GIT_TOKEN: 'SITE_GIT_TOKEN-value',
+    })
+    // An access to the files is not even read.
+    expect(f.vault.kvRead.mock.calls.filter(([path]) => /FTP_|SFTP_/.test(String(path)))).toEqual(
+      [],
+    )
+    expect(await f.credentials.recover(chat.ref)).toEqual(issued)
+  })
+
+  describe('a chat without a site (docs/plan/61-chats-first.md, К14)', () => {
+    it('issues, finds again and revokes the key under the lease of its own id', async () => {
+      const f = await fixture()
+      const { task, ref } = await f.chatFixture()
+      f.vault.kvRead.mockClear()
+      const issued = await f.credentials.issue(ref, f.grant)
+      // No site, no variables: nothing of a site is even looked for.
+      expect(issued).not.toHaveProperty('envValues')
+      expect(
+        f.vault.kvRead.mock.calls.filter(([path]) => String(path).startsWith('kv/sites/')),
+      ).toEqual([])
+      expect(await f.credentials.issue(ref, f.grant)).toEqual(issued)
+      expect(await f.credentials.recover(ref)).toEqual(issued)
+      expect(await f.credentials.siteValues(ref)).toEqual([])
+      expect(await admissibleKey(db, sha256(issued.llmApiKey))).not.toBeNull()
+
+      await f.credentials.revoke(ref)
+      expect(await admissibleKey(db, sha256(issued.llmApiKey))).toBeNull()
+      expect(await db.llmKey.findFirstOrThrow({ where: { taskId: task.id } })).toMatchObject({
+        revokeRequestedAt: expect.any(Date),
+        revokedAt: expect.any(Date),
+        usageClosedAt: expect.any(Date),
+      })
+      expect(
+        await db.taskEvent.count({ where: { taskId: task.id, type: 'llm.revoke_requested' } }),
+      ).toBe(1)
+    })
+
+    it('issues to two chats of one workspace at once: each has a lease of its own', async () => {
+      const f = await fixture({ slots: 2 })
+      const one = await f.chatFixture()
+      const other = await f.chatFixture()
+      const [first, second] = await Promise.all([
+        f.credentials.issue(one.ref, f.grant),
+        f.credentials.issue(other.ref, f.grant),
+      ])
+      expect(first.llmApiKey).not.toBe(second.llmApiKey)
+    })
+
+    it('issues no key to a chat of a client workspace without a clearance, as with a site', async () => {
+      const f = await fixture({ client: true })
+      const { task, ref } = await f.chatFixture()
+      await expect(f.credentials.issue(ref, f.grant)).rejects.toMatchObject({
+        code: 'CROSS_BORDER_NOT_CLEARED',
+      })
+      expect(f.vault.entries.size).toBe(0)
+      expect(await db.llmKey.count({ where: { taskId: task.id } })).toBe(0)
+    })
+
+    it.each(['expired', 'epoch', 'holder', 'held', 'operation'])(
+      'rejects the %s lease of a chat before creating secrets',
+      async (reason) => {
+        const f = await fixture()
+        const { task, ref } = await f.chatFixture()
+        const changes = {
+          expired: { expiresAt: new Date(Date.now() - 1_000) },
+          epoch: { epoch: 2 },
+          holder: { holderTaskId: null, operation: null, expiresAt: null },
+          held: { heldForOperator: true },
+          operation: { operation: 'deploy' as const },
+        }
+        await db.siteLease.update({
+          where: { siteId: task.id },
+          data: changes[reason as keyof typeof changes],
+        })
+        await expect(f.credentials.issue(ref, f.grant)).rejects.toMatchObject({
+          code: 'LEASE_LOST',
+        })
+        expect(f.vault.entries.size).toBe(0)
+      },
+    )
+
+    it('rejects a chat under the lease of another chat', async () => {
+      const f = await fixture()
+      const one = await f.chatFixture()
+      const other = await f.chatFixture()
+      await db.siteLease.update({
+        where: { siteId: other.task.id },
+        data: { holderTaskId: one.task.id },
+      })
+      await db.siteLease.delete({ where: { siteId: one.task.id } })
+      await expect(f.credentials.issue(one.ref, f.grant)).rejects.toMatchObject({
+        code: 'LEASE_LOST',
+      })
+    })
   })
 
   it('persists the selected binding and secret hash, and retry preserves the first budget and expiry', async () => {

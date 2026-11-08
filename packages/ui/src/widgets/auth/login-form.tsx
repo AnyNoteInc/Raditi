@@ -19,7 +19,7 @@ export type LoginFormProps = {
   forgotPasswordHref: string
   homeHref?: string
   defaultEmail?: string
-  /** Information above the form, e.g. «Адрес подтверждён. Войдите, чтобы открыть проекты». */
+  /** Information above the form, e.g. «Адрес подтверждён. Войдите, чтобы открыть чаты». */
   notice?: string
 }
 
@@ -42,7 +42,7 @@ export function LoginForm({
 
   return (
     <Stack component="form" noValidate onSubmit={submit} spacing={3}>
-      <AuthHeader title="Вход в проекты" homeHref={homeHref} />
+      <AuthHeader title="Вход в кабинет" homeHref={homeHref} />
       {notice ? (
         <Alert severity="info" role="status">
           {notice}

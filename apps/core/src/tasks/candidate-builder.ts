@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
 
-import type { CandidateRecordInput, PrismaClient } from '@repo/db'
+import type { CandidateRecordInput, Prisma, PrismaClient } from '@repo/db'
 import {
+  agentCommandAnswers,
   buildDbPlanView,
   candidateCounts,
   candidatePatchKey,
@@ -15,8 +16,10 @@ import {
   dbPlanEntryFromJournal,
   isEmptyCandidate,
   proposeVersion,
+  readFeedRow,
   versionTagSchema,
   DomainError,
+  candidateFactsSchema,
   type CandidateFacts,
   type CandidateFiles,
   type CandidateMedia,
@@ -108,6 +111,16 @@ export interface CandidatePass {
   baseSha?: string
   /** The agent's claims of the pass; null — keep those of the standing candidate. */
   claims: Pick<TurnResult, 'change_type' | 'risk'> | null
+  /**
+   * The turn `/undo` is taking back: its database writes are not in the plan of this build, and
+   * leave it for good when the undo is recorded (docs/plan/61-chats-first.md, §5.14).
+   */
+  withoutTurn?: number
+  /**
+   * The turn `/redo` is bringing back: its database writes are in the plan of this build, and come
+   * back for good when the redo is recorded (§5.14).
+   */
+  withTurn?: number
 }
 
 export type CandidateBuild =
@@ -159,6 +172,70 @@ export interface CandidateTask {
   site: { stack: SiteStack; url: string; installedVersion: string | null }
 }
 
+/** The standing candidate of a dialog; null — none, or its facts no longer pass their schema. */
+export async function standingCandidateOf(
+  db: Pick<PrismaClient, 'taskCandidate'>,
+  taskId: string,
+): Promise<StandingCandidate | null> {
+  const row = await db.taskCandidate.findFirst({
+    where: { taskId, status: { in: ['current', 'stale'] } },
+    orderBy: { revision: 'desc' },
+    select: {
+      id: true,
+      revision: true,
+      baseSha: true,
+      headSha: true,
+      dbPlanSha256: true,
+      facts: true,
+    },
+  })
+  const facts = row ? candidateFactsSchema.safeParse(row.facts) : null
+  return row && facts?.success ? { ...row, facts: facts.data } : null
+}
+
+/**
+ * The turn whose words the feed gave a revision: a later revision of the same work says the same
+ * (docs/plan/61-chats-first.md, §5.14). null — the feed says nothing of it.
+ */
+export async function wordsTurnOf(
+  db: Pick<Prisma.TransactionClient, 'taskEvent'>,
+  taskId: string,
+  revision: number,
+): Promise<number | null> {
+  const row = await db.taskEvent.findFirst({
+    where: { taskId, type: 'feed.candidate', payload: { path: ['revision'], equals: revision } },
+    orderBy: { id: 'desc' },
+    select: { payload: true },
+  })
+  const said = row === null ? null : readFeedRow('feed.candidate', row.payload)
+  return said?.type === 'feed.candidate' ? said.turn : null
+}
+
+/**
+ * Whether the turn answered a command of the agent (`/init`, `/compact`), by the rule the feed of
+ * the page reads (`agentCommandAnswers`): its result says nothing of the changes of a candidate
+ * (docs/plan/61-chats-first.md, §5.14).
+ */
+export async function answersAgentCommand(
+  db: Pick<Prisma.TransactionClient, 'taskEvent'>,
+  taskId: string,
+  turnNo: number,
+): Promise<boolean> {
+  const rows = await db.taskEvent.findMany({
+    where: {
+      taskId,
+      type: { in: ['feed.request', 'feed.result', 'feed.candidate', 'feed.update'] },
+    },
+    orderBy: { id: 'asc' },
+    select: { id: true, type: true, payload: true },
+  })
+  const feed = rows.map((row) => ({ ...readFeedRow(row.type, row.payload), id: row.id.toString() }))
+  const answers = agentCommandAnswers(feed)
+  return feed.some(
+    (row) => row.type === 'feed.result' && row.turn === turnNo && answers.has(row.id),
+  )
+}
+
 type CandidateDatabase = Pick<
   PrismaClient,
   'previewDbOperation' | 'gitRepository' | 'taskCandidate' | 'taskTurn' | 'siteRelease' | 'site'
@@ -198,13 +275,15 @@ export class CandidateBuilder {
 
   /**
    * The facts a candidate of the dialog is built from, read in PostgreSQL: its repository, its
-   * media paths, its base — the standing candidate's, the last one's, or its first turn's — and
-   * the versions of the site. null — the dialog has no repository or no base yet.
+   * media paths, its base — the standing candidate's, the last one's, its first turn's, or
+   * `fallbackBase` (the `main` a client's edit of a dialog without changes starts on) — and the
+   * versions of the site. null — the dialog has no repository or no base yet.
    */
   async context(
     task: CandidateTask,
     standing: StandingCandidate | null,
     revision: number,
+    fallbackBase?: string,
   ): Promise<CandidateContext | null> {
     const [repository, latest, first, releases, site] = await Promise.all([
       this.db.gitRepository.findFirst({
@@ -227,7 +306,7 @@ export class CandidateBuilder {
         select: { installedSha: true, workspaceId: true },
       }),
     ])
-    const base = standing?.baseSha ?? latest?.baseSha ?? first?.baseSha ?? null
+    const base = standing?.baseSha ?? latest?.baseSha ?? first?.baseSha ?? fallbackBase ?? null
     if (!repository || !base || !site) return null
     // A stack with files says its media rules (Т8): nothing to fall back to.
     const { addOnlyPaths } = this.adapter(task.site.stack).mediaRules(siteFactsOf(task.site))
@@ -333,12 +412,30 @@ export class CandidateBuilder {
   }
 
   /** The compacted plan of the dialog's database writes that were not excluded (Р3, Р22). */
-  async dbPlan(taskId: string): Promise<{ plan: DbPlan; sha256: string }> {
+  async dbPlan(
+    taskId: string,
+    withoutTurn?: number,
+    withTurn?: number,
+  ): Promise<{ plan: DbPlan; sha256: string }> {
     const rows = await this.db.previewDbOperation.findMany({
-      where: { taskId, excluded: false },
+      where: {
+        taskId,
+        ...(withTurn === undefined
+          ? { excluded: false }
+          : { OR: [{ excluded: false }, { turnNo: withTurn }] }),
+        ...(withoutTurn === undefined ? {} : { turnNo: { not: withoutTurn } }),
+      },
       orderBy: { id: 'asc' },
     })
-    const plan = compactDbPlan(rows.map((row) => dbPlanEntryFromJournal(row)))
+    const plan = compactDbPlan(
+      rows.map((row) => {
+        const entry = dbPlanEntryFromJournal(row)
+        return {
+          ...entry,
+          excluded: entry.excluded && (withTurn === undefined || row.turnNo !== withTurn),
+        }
+      }),
+    )
     return { plan, sha256: sha256(canonicalDbPlanJson(plan)) }
   }
 
@@ -351,7 +448,11 @@ export class CandidateBuilder {
    * number overwrites.
    */
   async build(context: CandidateContext, pass: CandidatePass): Promise<CandidateBuild> {
-    const { plan, sha256: planSha } = await this.dbPlan(context.taskId)
+    const { plan, sha256: planSha } = await this.dbPlan(
+      context.taskId,
+      pass.withoutTurn,
+      pass.withTurn,
+    )
     const standing = context.standing
     const base = pass.baseSha ?? standing?.baseSha ?? context.base
     const { repo } = context

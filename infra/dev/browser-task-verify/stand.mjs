@@ -62,6 +62,9 @@ export const SCENARIO_IDS = Object.freeze([
   'H',
   'I',
   'J',
+  'N',
+  'O',
+  'P',
   'K',
   'L',
   'M',
@@ -77,6 +80,9 @@ const NEEDS = Object.freeze({
   H: ['A'],
   I: ['A'],
   J: ['A'],
+  N: ['A'],
+  O: ['A'],
+  P: ['A'],
   K: ['A'],
   L: ['A'],
   M: ['A'],
@@ -368,6 +374,9 @@ const workerOf = (ports, secrets) => ({
   BROWSER_WORKER_TOKEN: secrets.workerToken,
 })
 
+/** The name of the platform: the refusal comes before the name is ever looked up. */
+export const PLATFORM_HOST = 'raditi.ru'
+
 /**
  * The local site of the stand as the worker's egress proxies reach it: the exact origin of the
  * site to the address of its web server on Docker's default bridge (Б11, outside production only).
@@ -446,6 +455,8 @@ export function appEnvironment(app, context) {
         BROWSER_FORWARDER_IMAGE: context.images.tools,
         BROWSER_EGRESS_IMAGE: context.images.egress,
         BROWSER_LOCAL_SITES: localSites(context.siteTarget),
+        // No page of any session reaches a name of the platform (К37): scenario P opens one.
+        BROWSER_PLATFORM_HOSTS: PLATFORM_HOST,
       }
     case 'core':
       return {

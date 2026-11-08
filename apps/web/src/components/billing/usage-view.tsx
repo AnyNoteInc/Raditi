@@ -29,16 +29,19 @@ import {
 } from './task-notice'
 import {
   buyPackLabel,
+  carriedEntry,
   creditsLeftWords,
   giftNote,
   heldEarlierNote,
   heldNote,
+  NO_PROJECT,
   ofDailyLimit,
   ofSiteLimit,
   packCredits,
   packNote,
   sitesMeterLabel,
   sitesNote,
+  tariffCreditsOfPeriod,
   tariffMeterLabel,
   tariffNote,
   tariffRestEntry,
@@ -203,8 +206,9 @@ function Credits({
   const { credits } = tariff
   const pastDue = subscription.status === 'past_due'
   const state = tariffState(subscription)
-  // The period of a tariff that is not paid for is over: what it did not use is not carried
-  // over, so the customer has the gift and the purchased credits left and nothing of the tariff.
+  // The period of a tariff that is not paid for is over: what it did not use waits for the
+  // payment, which carries it on up to its quota, so the customer has the gift and the purchased
+  // credits to spend and nothing of the tariff.
   const left = pastDue ? usage.gift.left + usage.pack.left : usage.totalLeft
   // A gift that is used up is not shown as an account with nothing on it.
   const hasGift = usage.gift.left + usage.gift.held > 0
@@ -301,10 +305,16 @@ function Credits({
             ) : (
               <>
                 По тарифу&nbsp;— {nbsp(formatCount(credits.left))} из&nbsp;
-                {nbsp(formatCount(credits.granted))}
+                {nbsp(formatCount(tariffCreditsOfPeriod(credits)))}
               </>
             )}
           </Typography>
+          {/* What of the whole came from the month before: said only when anything did. */}
+          {credits.carried > 0 ? (
+            <Typography variant="body2" color="textSecondary" sx={{ mt: 0.5 }}>
+              {nbsp(carriedEntry(credits.carried))}
+            </Typography>
+          ) : null}
           <Box sx={{ mt: 1.5 }}>
             <Meter
               label={tariffMeterLabel(credits, pastDue)}
@@ -339,7 +349,7 @@ function Credits({
             </Typography>
           ) : null}
           <Typography variant="body2" color="textSecondary" sx={{ mt: 1.5 }}>
-            {nbsp(tariffNote(state))}
+            {nbsp(tariffNote(state, credits))}
           </Typography>
         </Box>
         {/* The accounts stand in the order their credits are spent in. */}
@@ -512,13 +522,16 @@ function Limits({
   )
 }
 
-/** The credits charged in the period, site by site; one line while nothing is charged. */
+/**
+ * The credits charged in the period, project by project, and what chats without one took; one
+ * line while nothing is charged.
+ */
 function BySite({ sites }: { sites: TariffUsage['bySite'] }) {
   const most = Math.max(...sites.map(({ credits }) => credits), 1)
   return (
     <Box component="section" aria-labelledby="sites-title" sx={{ p: sectionPadding }}>
       <Typography component="h2" id="sites-title" sx={sectionHeading}>
-        По сайтам
+        По проектам
       </Typography>
       <Typography variant="body2" color="textSecondary" sx={{ mt: 0.5 }}>
         {nbsp(
@@ -536,7 +549,7 @@ function BySite({ sites }: { sites: TariffUsage['bySite'] }) {
           {sites.map(({ siteId, name, credits }) => (
             <Box
               component="li"
-              key={siteId}
+              key={siteId ?? 'none'}
               sx={{
                 display: 'grid',
                 // A count of four digits keeps its width: the column grows with it.
@@ -548,7 +561,7 @@ function BySite({ sites }: { sites: TariffUsage['bySite'] }) {
               }}
             >
               <Box component="span" sx={{ overflowWrap: 'anywhere' }}>
-                {name}
+                {name ?? NO_PROJECT}
               </Box>
               <Bar share={credits / most} />
               <Box component="span" sx={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>

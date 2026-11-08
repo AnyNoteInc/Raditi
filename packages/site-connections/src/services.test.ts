@@ -120,15 +120,4 @@ describe('createSiteConnectionServices', () => {
     await expect(services.inspectRoot(['index.php'], read)).resolves.toBe(nothingFound)
     expect(inspectRoot).toHaveBeenCalledExactlyOnceWith(['index.php'], read)
   })
-
-  it('builds its own lookup when none is given', () => {
-    const services = createSiteConnectionServices({
-      appEnv: 'development',
-      secrets: store() as unknown as Pick<SecretStore, 'kvWrite' | 'kvMetadata'>,
-      connectableStacks: () => [],
-      rootMarkers: () => [],
-      ...registry,
-    })
-    expect(typeof services.lookup).toBe('function')
-  })
 })

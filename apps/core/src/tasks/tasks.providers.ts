@@ -22,7 +22,9 @@ import { TurnSupervisor } from '../turns/turn-supervisor.ts'
 import { CandidateBuilder } from './candidate-builder.ts'
 import { candidateClientValues } from './candidate-client-values.ts'
 import { candidateGitOf, type CandidateGit } from './candidate-git.ts'
+import { CandidateEdit } from './candidate-edit.ts'
 import { CandidateRebase } from './candidate-rebase.ts'
+import { CandidateRewind } from './candidate-rewind.ts'
 import { LivePasses } from './live-passes.ts'
 import { PassRunner } from './pass-runner.ts'
 import { PassSettlement } from './pass-settlement.ts'
@@ -130,6 +132,38 @@ export const taskProviders: Provider[] = [
         adapter: getSiteAdapter,
       }),
     inject: [PRISMA, CANDIDATE_GIT, CandidateBuilder, SITE_LEASES, JOB_QUEUE],
+  },
+  {
+    provide: CandidateRewind,
+    useFactory: (
+      prisma: PrismaClient,
+      git: CandidateGit | null,
+      candidates: CandidateBuilder | null,
+      leases: SiteLeaseStore,
+      queue: JobQueue,
+    ) => new CandidateRewind({ db: prisma, git, candidates, leases, queue }),
+    inject: [PRISMA, CANDIDATE_GIT, CandidateBuilder, SITE_LEASES, JOB_QUEUE],
+  },
+  {
+    provide: CandidateEdit,
+    useFactory: (
+      prisma: PrismaClient,
+      git: CandidateGit | null,
+      candidates: CandidateBuilder | null,
+      leases: SiteLeaseStore,
+      queue: JobQueue,
+      inbox: ObjectStorage,
+    ) =>
+      new CandidateEdit({
+        db: prisma,
+        git,
+        candidates,
+        leases,
+        queue,
+        inbox,
+        adapter: getSiteAdapter,
+      }),
+    inject: [PRISMA, CANDIDATE_GIT, CandidateBuilder, SITE_LEASES, JOB_QUEUE, OBJECT_STORAGE],
   },
   TurnsProcessor,
   {

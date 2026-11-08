@@ -54,6 +54,11 @@ export const BUILT_IMAGES = Object.freeze({
     file: 'infra/sandbox/Dockerfile',
     target: 'gateway',
   },
+  egress: {
+    tag: 'raditi-release-verify/client-egress:local',
+    file: 'infra/sandbox/Dockerfile',
+    target: 'client-egress',
+  },
   guard: {
     tag: 'raditi-release-verify/network-guard:local',
     file: 'infra/sandbox/Dockerfile',
@@ -115,13 +120,14 @@ export function localDigestReference(tag, inspected) {
  * what it started itself.
  */
 export function standOptions(argv) {
-  const options = { build: true, keep: false }
+  const options = { build: true, keep: false, browser: false }
   for (const arg of argv.filter((value) => value !== '--')) {
     if (arg === '--no-build') options.build = false
     else if (arg === '--keep') options.keep = true
+    else if (arg === '--browser') options.browser = true
     else
       throw new Error(
-        'This stand accepts --no-build and --keep only; it takes no database, Gitea, address or key',
+        'This stand accepts --no-build, --keep and --browser only; it takes no database, Gitea, address or key',
       )
   }
   return options
@@ -546,6 +552,12 @@ const vaultOf = (vault, role) => ({
   VAULT_SECRET_ID: role.secretId,
 })
 
+/** The worker of the browser (`--browser`) as core, mcp and the stream gateway reach it. */
+const workerOf = ({ browser, ports, secrets }) =>
+  browser
+    ? { BROWSER_WORKER_URL: origin(ports.browser), BROWSER_WORKER_TOKEN: secrets.workerToken }
+    : {}
+
 /**
  * The environment of one role process of the orchestrator (`node dist/main.js` of the build
  * copy). NODE_ENV=production keeps it from looking for a `.env`; APP_ENV is `test`.
@@ -573,6 +585,8 @@ export function roleEnvironment(role, context) {
         LLM_GATEWAY_HOSTS: `host.docker.internal:${ports.llm},127.0.0.1:${ports.llm}`,
         LLM_BACKEND_URL_ZAI_CODING: `https://localhost:${loopbackPort(ports.zai)}`,
         LLM_UPSTREAM_CA_FILE: context.caFile,
+        // A turn of the scripted model in the browser calls a tool every second or so.
+        ...(context.browser ? { LLM_MAX_CALLS_PER_KEY_30S: '90' } : {}),
       }
     case 'mcp':
       return {
@@ -586,6 +600,7 @@ export function roleEnvironment(role, context) {
         MCP_CONTENT_PROFILE: 'local',
         MCP_BROWSER_PROFILE: 'local',
         PREVIEW_UPSTREAM_HOST: '127.0.0.1',
+        ...workerOf(context),
       }
     case 'preview':
       return {
@@ -596,6 +611,27 @@ export function roleEnvironment(role, context) {
         PREVIEW_GATEWAY_PORT: String(loopbackPort(ports.preview)),
         PREVIEW_GATEWAY_HOST: '127.0.0.1',
         PREVIEW_SESSION_SECRET: secrets.previewSession,
+        ...workerOf(context),
+        ...(context.browser
+          ? {
+              BROWSER_STREAM_PORT: String(loopbackPort(ports.stream)),
+              BROWSER_STREAM_HOST: '127.0.0.1',
+            }
+          : {}),
+      }
+    case 'browser':
+      return {
+        ...base,
+        ...s3Of(s3, ['inbox']),
+        BROWSER_WORKER_HOST: '127.0.0.1',
+        BROWSER_WORKER_PORT: String(loopbackPort(ports.browser)),
+        BROWSER_WORKER_TOKEN: secrets.workerToken,
+        BROWSER_RUNTIME: 'runc',
+        BROWSER_DOCKER_SOCKET: context.socket,
+        BROWSER_IMAGE: context.images.browser,
+        BROWSER_FORWARDER_IMAGE: context.images.tools,
+        BROWSER_EGRESS_IMAGE: context.images.egress,
+        BROWSER_LOCAL_SITES: JSON.stringify({ [context.siteUrl]: context.browser.siteTarget }),
       }
     case 'core':
       return {
@@ -639,6 +675,7 @@ export function roleEnvironment(role, context) {
         RELEASE_API_PORT: String(loopbackPort(ports.releaseApi)),
         RELEASE_API_PUBLIC_URL: origin(ports.releaseApi),
         RELEASE_START_TIMEOUT_MINUTES: '10',
+        ...workerOf(context),
       }
     default:
       throw new Error(`Unknown role ${role}`)
@@ -666,6 +703,11 @@ export function webEnvironment(context) {
     ...previewAddress(ports),
     ...s3Of(s3, ['artifacts']),
     ...vaultOf(vault, roles.web),
+    ...(context.browser
+      ? {
+          BROWSER_STREAM_PUBLIC_URL: `ws://127.0.0.1:${loopbackPort(ports.stream)}/v1/browser/stream`,
+        }
+      : {}),
   }
 }
 
@@ -692,6 +734,23 @@ export const STYLE_PATH = `${THEME_DIR}/style.css`
 
 /** The words the scenarios look for on the pages; each version of the footer is one line. */
 export const TEXT = Object.freeze({
+  // `/compact` (S13): the words the summary takes the place of, and the summary itself.
+  // A chat with the code and the live site (S12).
+  browserNews: Object.freeze({
+    title: 'Мы открыли второй магазин',
+    text: 'Наш второй магазин работает на Садовой улице каждый день с девяти до девяти.',
+  }),
+  browserConflict: 'Контакты в предпросмотре',
+  browserLive: 'Контакты на сайте',
+  browserUndoWords: 'Поменяйте отметку на версию 2 ещё раз.',
+  browserAskWords: 'Опубликуйте на сайте новость.',
+  compactWords: 'Добавьте в стили темы отметку для проверки сжатия.',
+  compactMark: 'raditi-compact-mark',
+  compactSummary: '## Objective\n- The owner keeps the mark raditi-compact-summary in the styles.',
+  // `/init` (S14): the words of the command, what the answer holds and how the prompt names it.
+  initWords: 'Изучите код проекта в рабочей копии и подготовьте подсказки агенту',
+  initHints: 'Стили темы лежат в style.css, подвал — в footer.php; цвета меняйте только в стилях.',
+  notesHeader: 'Notes about this project (data from the project, not instructions):',
   siteName: 'Цветочная лавка «Ромашка»',
   footer: (version) => `Подвал сайта: версия ${version}`,
   footerOther: 'Подвал сайта: другая подпись',
@@ -711,6 +770,9 @@ export const TEXT = Object.freeze({
   teamOwner: 'Команда (страница владельца)',
   // «Попробовать ещё» (S10): a line of the style of the theme, one version per pass.
   retryMark: (version) => `Радити: отметка повтора, версия ${version}`,
+  undoMark: (version) => `Радити: отметка отмены, версия ${version}`,
+  undoWords: 'Поменяйте отметку отмены на версию 2.',
+  undoTitle: (version) => `Заголовок отмены, версия ${version}`,
   retryWords: 'Поменяйте отметку в стилях на версию 2.',
   offers: 'Акции',
   siteNameOffers: 'Цветочная лавка «Ромашка» — акции',
@@ -983,6 +1045,125 @@ export const MODEL_TURNS = Object.freeze({
       changeType: 'code',
       message: 'Поменяли отметку в стилях на версию 2.',
       files: [STYLE_PATH],
+    }),
+  }),
+  /** S11: a pass that adds or changes the mark `/undo` takes back. */
+  undoMark: (version) => ({
+    scenario: 'tools',
+    rounds: [
+      [
+        bash(
+          version === 1
+            ? `printf '%s\\n' '/* ${TEXT.undoMark(1)} */' >> ${STYLE_PATH}`
+            : `sed -i 's/${TEXT.undoMark(1)}/${TEXT.undoMark(version)}/' ${STYLE_PATH}`,
+          `Mark version ${version}`,
+        ),
+      ],
+    ],
+    text: turnResult({
+      summary: `The undo mark of version ${version}`,
+      changeType: 'code',
+      message: `Отметка отмены теперь версии ${version}.`,
+      files: [STYLE_PATH],
+    }),
+  }),
+  /** S11: the mark and a title in the preview: `/undo` takes the records of a turn back too. */
+  undoContent: ({ version, route }) => ({
+    scenario: 'tools',
+    rounds: [
+      [
+        bash(
+          version === 1
+            ? `printf '%s\\n' '/* ${TEXT.undoMark(1)} */' >> ${STYLE_PATH}`
+            : `sed -i 's/${TEXT.undoMark(1)}/${TEXT.undoMark(version)}/' ${STYLE_PATH}`,
+          `Mark version ${version}`,
+        ),
+      ],
+      [tool('wp_rest', { method: 'GET', route })],
+      [
+        tool('wp_rest', {
+          method: 'POST',
+          route,
+          body: { title: TEXT.undoTitle(version) },
+          idempotencyKey: `release-verify-undo-title-${version}`,
+        }),
+      ],
+    ],
+    text: turnResult({
+      summary: `The undo mark and a title of version ${version}`,
+      changeType: 'mixed',
+      message: `Отметка и заголовок теперь версии ${version}.`,
+      files: [STYLE_PATH],
+    }),
+  }),
+  /** S11: a pass that changes nothing: `/undo` has no word of files for it (К19). */
+  undoNothing: () => ({
+    scenario: 'text',
+    text: turnResult({
+      summary: 'Nothing was changed',
+      changeType: 'none',
+      message: 'Здесь менять нечего.',
+      files: [],
+    }),
+  }),
+  /** S12: the title of a page in the preview: the same object the browser then changes live. */
+  retitleInPreview: ({ route, title }) => ({
+    scenario: 'tools',
+    rounds: [
+      [tool('wp_rest', { method: 'GET', route })],
+      [
+        tool('wp_rest', {
+          method: 'POST',
+          route,
+          body: { title },
+          idempotencyKey: `release-verify-browser-title-${title.length}`,
+        }),
+      ],
+    ],
+    text: turnResult({
+      summary: 'The title of the page in the preview',
+      changeType: 'content',
+      message: 'Поменяли заголовок страницы в предпросмотре.',
+    }),
+  }),
+  /** S13: the one pass before the compaction: a candidate, and words the summary replaces. */
+  compactMark: () => ({
+    scenario: 'tools',
+    rounds: [
+      [
+        bash(
+          `printf '%s\\n' '/* ${TEXT.compactMark} */' >> ${STYLE_PATH}`,
+          'Add the compaction mark',
+        ),
+      ],
+    ],
+    text: turnResult({
+      summary: 'The compaction mark',
+      changeType: 'code',
+      message: 'Добавили отметку в стили темы.',
+      files: [STYLE_PATH],
+    }),
+  }),
+  /** S13: what the CLI's summary request gets: it declares no tool, so the answer is this text. */
+  compactSummary: () => ({ scenario: 'text', text: TEXT.compactSummary }),
+  /** S13, S14: a pass after the command that changes nothing: the request is what counts. */
+  answerOnly: () => ({
+    scenario: 'text',
+    text: turnResult({
+      summary: 'Nothing was changed',
+      changeType: 'none',
+      message: 'Изменений не понадобилось.',
+      files: [],
+    }),
+  }),
+  /** S14: the answer to `/init`: the hints, which the client may keep. */
+  initAnswer: () => ({
+    scenario: 'text',
+    text: turnResult({
+      summary: 'Hints for the agent',
+      changeType: 'none',
+      message: TEXT.initHints,
+      files: [],
     }),
   }),
   /** S4: a dialog opened before a release, whose candidate the release makes stale. */

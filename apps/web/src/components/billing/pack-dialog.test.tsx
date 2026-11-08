@@ -114,7 +114,7 @@ describe('the pack dialog', () => {
       ),
     )
     expect(plain(screen.getByText('К оплате сегодня').nextElementSibling?.textContent)).toBe(
-      '1 990 ₽',
+      '1 490 ₽',
     )
     // A pack has no period of its own and renews nothing: neither is asked about.
     expect(screen.queryByText('Период')).not.toBeInTheDocument()

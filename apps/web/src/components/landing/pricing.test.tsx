@@ -16,7 +16,7 @@ const { plans, pack } = pricing
 const TASK_HINT =
   'Задача — одна ваша просьба. В расчёте берём 11 кредитов на задачу — это среднее: поменять цену или фото стоит обычно 5 кредитов, добавить блок или страницу — 15–25.'
 const GIFT_NOTE =
-  'При регистрации — 35 кредитов в подарок: хватит на несколько небольших правок. Тариф выберете позже.'
+  'При регистрации — 50 кредитов в подарок: хватит на несколько небольших правок. Тариф выберете позже.'
 
 function planCard(name: string): HTMLElement {
   const card = screen.getByRole('heading', { name }).closest('article')
@@ -56,13 +56,13 @@ describe('landing pricing', () => {
     expect(start.closest('[aria-live]')).toBeNull()
 
     expect(plain(name().parentElement?.textContent ?? '')).toBe(
-      'Тариф «Старт» и 1 дополнительный пакет по 100 кредитов',
+      'Тариф «Старт» и 2 дополнительных пакета по 100 кредитов',
     )
 
     fireEvent.change(slider, { target: { value: '40' } })
     expect(name()).toBe(start)
     expect(plain(name().parentElement?.textContent ?? '')).toBe(
-      'Тариф «Старт» и 2 дополнительных пакета по 100 кредитов',
+      'Тариф «Старт» и 3 дополнительных пакета по 100 кредитов',
     )
 
     fireEvent.change(slider, { target: { value: '80' } })
@@ -81,34 +81,39 @@ describe('landing pricing', () => {
     const hint = screen.getByText(TASK_HINT)
     expect(screen.queryByText(/Один кредит/)).not.toBeInTheDocument()
     expect(screen.getByText('Самый выгодный вариант для такого числа задач')).toBeInTheDocument()
-    // Thirty tasks at eleven credits each are more than the 300 of «Старт»: one pack is added.
+    // Thirty tasks at eleven credits each are more than the 150 of «Старт»: two packs are added.
     const start = screen.getByText('Тариф «Старт»').parentElement
-    expect(start).toHaveTextContent('Тариф «Старт» и 1 дополнительный пакет по 100 кредитов')
-    expect(screen.getByText('4 900 ₽ + 1 × 1 990 ₽')).toBeInTheDocument()
+    expect(start).toHaveTextContent('Тариф «Старт» и 2 дополнительных пакета по 100 кредитов')
+    expect(screen.getByText('1 990 ₽ + 2 × 1 490 ₽')).toBeInTheDocument()
     expect(
-      screen.getByText('В среднем около 230 ₽ за задачу при 30 задачах в месяц'),
+      screen.getByText('В среднем около 166 ₽ за задачу при 30 задачах в месяц'),
     ).toBeInTheDocument()
+    // A small edit on what is paid: 4 970 ₽ for 350 credits.
+    expect(screen.getByText('Небольшая правка — около 71 ₽')).toBeInTheDocument()
 
     const slider = screen.getByRole('slider', { name: 'Сколько задач в месяц вы планируете?' })
     expect(slider).toHaveAttribute('aria-describedby', hint.id)
-    // Twenty-five tasks fit the tariff: no pack, and no sum of two parts.
-    fireEvent.change(slider, { target: { value: '25' } })
+    // Ten tasks fit the tariff: no pack, no sum of two parts, and the small edit of the card.
+    fireEvent.change(slider, { target: { value: '10' } })
     expect(screen.getByText('Тариф «Старт»')).toBeInTheDocument()
     expect(screen.queryByText(/дополнительн/)).not.toBeInTheDocument()
     expect(screen.queryByText(/ × /)).not.toBeInTheDocument()
     expect(
-      screen.getByText('В среднем около 196 ₽ за задачу при 25 задачах в месяц'),
+      screen.getByText('В среднем около 199 ₽ за задачу при 10 задачах в месяц'),
     ).toBeInTheDocument()
+    const result10 = screen.getByText('Самый выгодный вариант для такого числа задач').parentElement
+    expect(within(result10!).getByText('Небольшая правка — около 66 ₽')).toBeInTheDocument()
 
     fireEvent.change(slider, { target: { value: '120' } })
 
     // The name of the plan is an element of its own inside the sentence of the result.
     const result = screen.getByText(/^Тариф «Бизнес»/).parentElement
-    expect(result).toHaveTextContent('Тариф «Бизнес» и 6 дополнительных пакетов по 100 кредитов')
-    expect(screen.getByText('12 900 ₽ + 6 × 1 990 ₽')).toBeInTheDocument()
+    expect(result).toHaveTextContent('Тариф «Бизнес» и 8 дополнительных пакетов по 100 кредитов')
+    expect(screen.getByText('6 990 ₽ + 8 × 1 490 ₽')).toBeInTheDocument()
     expect(
-      screen.getByText('В среднем около 207 ₽ за задачу при 120 задачах в месяц'),
+      screen.getByText('В среднем около 158 ₽ за задачу при 120 задачах в месяц'),
     ).toBeInTheDocument()
+    expect(screen.getByText('Небольшая правка — около 68 ₽')).toBeInTheDocument()
     expect(
       screen.getByText('Если сайтов больше одного — смотрите число сайтов в тарифе.'),
     ).toBeInTheDocument()
@@ -133,9 +138,9 @@ describe('landing pricing', () => {
     expect(hint.textContent).toContain('обычно 5\u00a0кредитов')
     expect(hint.textContent).toContain('страницу\u00a0— 15–25.')
     // The average of the hint is the one the result divides by: thirty tasks need 330 credits,
-    // more than the 300 of «Старт», so a pack is added.
+    // more than the 150 of «Старт», so two packs are added.
     expect(screen.getByText('Тариф «Старт»').parentElement).toHaveTextContent(
-      '1 дополнительный пакет',
+      '2 дополнительных пакета',
     )
   })
 
@@ -173,24 +178,24 @@ describe('landing pricing', () => {
       }
       pass(1)
       const business =
-        'Тариф «Бизнес» и 6 дополнительных пакетов по 100 кредитов, 24 840 ₽ в месяц, в среднем около 207 ₽ за задачу'
+        'Тариф «Бизнес» и 8 дополнительных пакетов по 100 кредитов, 18 910 ₽ в месяц, в среднем около 158 ₽ за задачу. Небольшая правка — около 68 ₽'
       expect(plain(announcement.textContent)).toBe(business)
 
       // The next step keeps the last words until it rests too; then the plan alone is named,
       // as no pack is needed.
-      fireEvent.change(slider, { target: { value: '25' } })
+      fireEvent.change(slider, { target: { value: '10' } })
       pass(ANNOUNCE_DELAY_MS - 1)
       expect(plain(announcement.textContent)).toBe(business)
       pass(1)
       expect(plain(announcement.textContent)).toBe(
-        'Тариф «Старт», 4 900 ₽ в месяц, в среднем около 196 ₽ за задачу',
+        'Тариф «Старт», 1 990 ₽ в месяц, в среднем около 199 ₽ за задачу. Небольшая правка — около 66 ₽',
       )
 
-      // And with a pack: the words of the visible result, the amounts and the estimate.
-      fireEvent.change(slider, { target: { value: '45' } })
+      // And with a pack: the words of the visible result, the amounts and the estimates.
+      fireEvent.change(slider, { target: { value: '20' } })
       pass(ANNOUNCE_DELAY_MS)
       expect(plain(announcement.textContent)).toBe(
-        'Тариф «Старт» и 2 дополнительных пакета по 100 кредитов, 8 880 ₽ в месяц, в среднем около 197 ₽ за задачу',
+        'Тариф «Старт» и 1 дополнительный пакет по 100 кредитов, 3 480 ₽ в месяц, в среднем около 174 ₽ за задачу. Небольшая правка — около 70 ₽',
       )
     })
 
@@ -216,17 +221,45 @@ describe('landing pricing', () => {
 
   it('offers the packs in the future tense, and not at all when there are none', () => {
     const { unmount } = render(<Pricing plans={plans} pack={pack} />)
-    expect(
-      screen.getByText(
-        'Кредитов не хватит? Можно будет докупить пакет — 100 кредитов за 1 990 ₽. Кредиты из пакета не сгорают и дневным лимитом не ограничены.',
-      ),
-    ).toBeInTheDocument()
+    const offer = screen.getByText(/^Кредитов не хватит\?/)
+    expect(plain(offer.textContent)).toBe(
+      'Кредитов не хватит? Можно будет докупить пакет — 100 кредитов за 1 490 ₽. Небольшая правка из пакета — около 75 ₽. Кредиты из пакета не сгорают.',
+    )
     expect(screen.getByText('Цены в рублях.')).toBeInTheDocument()
     unmount()
 
     render(<Pricing plans={plans} pack={null} />)
     expect(screen.queryByText(/докупить пакет/)).not.toBeInTheDocument()
     expect(screen.getByText('Цены в рублях.')).toBeInTheDocument()
+  })
+
+  it('says the pack is free of the daily limit only while a plan on sale has one', () => {
+    const [first, ...others] = plans
+    render(<Pricing plans={[{ ...first!, creditsPerDay: 50 }, ...others]} pack={pack} />)
+
+    expect(plain(screen.getByText(/^Кредитов не хватит\?/).textContent)).toBe(
+      'Кредитов не хватит? Можно будет докупить пакет — 100 кредитов за 1 490 ₽. Небольшая правка из пакета — около 75 ₽. Кредиты из пакета не сгорают и дневным лимитом не ограничены.',
+    )
+    expect(
+      within(planCard('Старт'))
+        .getAllByRole('listitem')
+        .map((item) => plain(item.textContent))[0],
+    ).toBe('150 кредитов в месяц — в среднем около 14 задач, до 50 кредитов в день')
+  })
+
+  it('says once under the plans that only done work is paid for', () => {
+    const { unmount } = render(<Pricing plans={plans} pack={pack} />)
+    const rule =
+      'Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит.'
+    expect(screen.getAllByText(rule)).toHaveLength(1)
+    for (const name of ['Старт', 'Бизнес', 'Агентство']) {
+      expect(planCard(name)).not.toHaveTextContent('только за выполненную')
+    }
+    unmount()
+
+    // Whether a pack is on sale or not.
+    render(<Pricing plans={plans} pack={null} />)
+    expect(screen.getAllByText(rule)).toHaveLength(1)
   })
 
   it('keeps the limits of a plan in one line and what every plan includes under the plans', () => {
@@ -237,7 +270,8 @@ describe('landing pricing', () => {
         .getAllByRole('listitem')
         .map((item) => plain(item.textContent)),
     ).toEqual([
-      '300 кредитов в месяц — в среднем около 27 задач, до 50 кредитов в день',
+      '150 кредитов в месяц — в среднем около 14 задач',
+      'Небольшая правка — около 66 ₽',
       'Один сайт',
     ])
     expect(
@@ -245,7 +279,8 @@ describe('landing pricing', () => {
         .getAllByRole('listitem')
         .map((item) => plain(item.textContent)),
     ).toEqual([
-      '800 кредитов в месяц — в среднем около 73 задач, до 100 кредитов в день',
+      '600 кредитов в месяц — в среднем около 55 задач',
+      'Небольшая правка — около 58 ₽',
       'До 3 сайтов',
     ])
     expect(
@@ -253,17 +288,22 @@ describe('landing pricing', () => {
         .getAllByRole('listitem')
         .map((item) => plain(item.textContent)),
     ).toEqual([
-      '2 500 кредитов в месяц — в среднем около 230 задач, до 300 кредитов в день',
+      '2 000 кредитов в месяц — в среднем около 180 задач',
+      'Небольшая правка — около 50 ₽',
       'До 15 сайтов',
     ])
+    // No plan on sale has a daily limit: no card speaks of a day.
+    for (const name of ['Старт', 'Бизнес', 'Агентство']) {
+      expect(planCard(name)).not.toHaveTextContent(/в день|дневн/)
+    }
 
     const included = screen.getByText(/^В каждый тариф войдут/)
     expect(included).toHaveTextContent(
-      'В каждый тариф войдут правки текстов, цен, фото, акций и страниц на сайтах WordPress, копия перед правкой и отмена.',
+      'В каждый тариф войдут правки текстов, цен, фото, акций и страниц сайта, копия перед правкой и отмена.',
     )
     for (const name of ['Старт', 'Бизнес', 'Агентство']) {
       expect(planCard(name).contains(included)).toBe(false)
-      expect(planCard(name)).not.toHaveTextContent('WordPress')
+      expect(planCard(name)).not.toHaveTextContent('отмена')
     }
   })
 
@@ -297,16 +337,16 @@ describe('landing pricing', () => {
     expect(screen.queryByText(/когда откроется оплата/)).toBeNull()
     // A number stays with its word and a dash with the word before it.
     expect(note.textContent).toContain(
-      'При\u00a0регистрации\u00a0— 35\u00a0кредитов в\u00a0подарок:',
+      `При\u00a0регистрации\u00a0— ${signupGiftCredits}\u00a0кредитов в\u00a0подарок:`,
     )
   })
 
-  it('leads a signed-in visitor to the projects with the same single action', () => {
+  it('leads a signed-in visitor to the chats with the same single action', () => {
     render(<Pricing plans={plans} pack={pack} isGuest={false} />)
 
     expect(screen.getAllByRole('link')).toHaveLength(1)
-    const action = screen.getByRole('link', { name: 'Открыть проекты' })
-    expect(action).toHaveAttribute('href', '/projects')
+    const action = screen.getByRole('link', { name: 'Открыть чаты' })
+    expect(action).toHaveAttribute('href', '/chats')
     // They have registered: the line by the action says only when the tariff is chosen, and
     // promises no gift the page cannot know of.
     expect(action.nextElementSibling).toHaveTextContent(/^Тариф выберете позже\.$/)
@@ -326,16 +366,13 @@ describe('landing pricing', () => {
     )
   })
 
-  it('leads a signed-in visitor to the projects when the plans are unavailable', () => {
+  it('leads a signed-in visitor to the chats when the plans are unavailable', () => {
     render(<Pricing plans={[]} pack={null} isGuest={false} />)
 
-    const way = screen.getByText(/Перейти к проектам можно по ссылке ниже\./)
+    const way = screen.getByText(/Перейти к чатам можно по ссылке ниже\./)
     // The prepositions stay with their words.
-    expect(way.textContent).toContain('к\u00a0проектам можно по\u00a0ссылке')
+    expect(way.textContent).toContain('к\u00a0чатам можно по\u00a0ссылке')
     expect(screen.queryByText(/Зарегистрироваться/)).not.toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Открыть проекты' })).toHaveAttribute(
-      'href',
-      '/projects',
-    )
+    expect(screen.getByRole('link', { name: 'Открыть чаты' })).toHaveAttribute('href', '/chats')
   })
 })

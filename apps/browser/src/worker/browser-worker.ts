@@ -75,6 +75,7 @@ export class BrowserWorker implements OnApplicationBootstrap, BeforeApplicationS
         maxSessions: config.session.maxSessions,
         extraHosts: config.extraHosts,
         localSites: config.localSites,
+        platformHosts: config.platformHosts,
         stream: { maxFps: config.stream.maxFps, quality: config.stream.quality },
       },
     })

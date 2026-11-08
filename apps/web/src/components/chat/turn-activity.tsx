@@ -7,13 +7,16 @@ import { useEffect, useRef } from 'react'
 
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 
+import { useChatThinking } from './chat-details'
 import { activityText } from './chat-texts'
 import type { ActivityEvent } from './chat-types'
 import { useTurnActivity, type ActivityState } from './use-turn-activity'
 
 // «Ход работы» (owner's decision of 26.10.2026): everything the agent wrote, ran and changed in a
 // turn, in the order it came. What the agent wrote is set as text — never markup; commands,
-// names of tools and paths in the monospace face, as the agent gave them.
+// names of tools and paths in the monospace face, as the agent gave them. What the model thought
+// stands here only for a viewer who asked (`/thinking`), set apart from what the agent said: it is
+// raw and often English, and no answer of the agent (docs/plan/61-chats-first.md, К32).
 
 const mono = {
   fontFamily: fontFamilies.mono,
@@ -83,6 +86,24 @@ function ActivityLine({ event }: { event: ActivityEvent }) {
           {event.text}
         </Typography>
       )
+    case 'reasoning':
+      return (
+        <Box sx={{ display: 'grid', gap: 0.5, minWidth: 0 }}>
+          <Label icon="brain" text={activityText.reasoning} />
+          <Typography
+            sx={{
+              m: 0,
+              fontSize: 13,
+              lineHeight: 1.55,
+              color: 'text.secondary',
+              whiteSpace: 'pre-wrap',
+              overflowWrap: 'anywhere',
+            }}
+          >
+            {event.text}
+          </Typography>
+        </Box>
+      )
     case 'command': {
       const failed = event.exitCode !== null && event.exitCode !== 0
       return (
@@ -148,10 +169,20 @@ const FOLLOW_SLACK = 32
  * The events of a turn in a block of bounded height that scrolls. While the turn is `live` it
  * keeps to its end as events arrive — unless the client scrolled up to read.
  */
-export function TurnActivityView({ state, live }: { state: ActivityState; live: boolean }) {
+export function TurnActivityView({
+  state,
+  live,
+  thinking = false,
+}: {
+  state: ActivityState
+  live: boolean
+  /** The viewer's choice: what the model thought stands among the events. */
+  thinking?: boolean
+}) {
   const scroller = useRef<HTMLDivElement>(null)
   const following = useRef(true)
-  const count = state.events.length
+  const shown = state.events.filter((event) => thinking || event.type !== 'reasoning')
+  const count = shown.length
   useEffect(() => {
     const block = scroller.current
     if (block && live && following.current) block.scrollTop = block.scrollHeight
@@ -188,7 +219,7 @@ export function TurnActivityView({ state, live }: { state: ActivityState; live: 
         '&:focus-visible': { outline: '2px solid', outlineColor: 'text.primary', outlineOffset: 2 },
       }}
     >
-      {state.events.map((event) => (
+      {shown.map((event) => (
         <ActivityLine key={event.id} event={event} />
       ))}
       {status ? (
@@ -209,5 +240,6 @@ export function TurnActivity({
   live: boolean
 }) {
   const state = useTurnActivity(taskId, turn, live)
-  return <TurnActivityView state={state} live={live} />
+  const { thinking } = useChatThinking()
+  return <TurnActivityView state={state} live={live} thinking={thinking} />
 }

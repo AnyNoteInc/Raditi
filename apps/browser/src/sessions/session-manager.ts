@@ -1,14 +1,18 @@
 import {
   browserAllowedHosts,
   browserEnsureResponseSchema,
+  browserPlatformHost,
   browserSessionTimings,
   browserTaskError,
   conflict,
   isBrowserSessionLive,
   notFound,
+  OPEN_WEB_OBJECTS,
+  OPEN_WEB_POLICY,
   type BrowserActionRequest,
   type BrowserCloseReason,
   type BrowserEnsureRequest,
+  type BrowserSignIn,
   type BrowserListResponse,
   type BrowserLocalSite,
   type BrowserSessionState,
@@ -21,7 +25,12 @@ import {
 } from '@repo/domain'
 
 import type { BrowserWorkerMetrics } from '../metrics/worker-metrics.ts'
-import { WorkerSession, type SessionContext, type SessionSettings } from './worker-session.ts'
+import {
+  WorkerSession,
+  type SessionContext,
+  type SessionSettings,
+  type SessionSpec,
+} from './worker-session.ts'
 
 export interface SessionManagerSettings extends SessionSettings {
   idleMinutes: number
@@ -31,6 +40,8 @@ export interface SessionManagerSettings extends SessionSettings {
   maxSessions: number
   extraHosts: readonly string[]
   localSites: readonly BrowserLocalSite[]
+  /** BROWSER_PLATFORM_HOSTS: names of the platform no page of any session reaches (К37). */
+  platformHosts: readonly string[]
 }
 
 /** Defaults of the timings a session needs besides the configuration. */
@@ -59,9 +70,19 @@ export interface SessionManagerDeps extends Omit<
 
 const HOUR_MS = 3_600_000
 
+/** Where a session's browser may go and what it knows about its pages. */
+/** `ensure` as this worker reads it: the sign-in it takes, null when there is none or no site. */
+type EnsuredSession = Omit<BrowserEnsureRequest, 'signIn'> & { signIn: BrowserSignIn | null }
+
+type SessionPlace = Pick<
+  SessionSpec,
+  'openWeb' | 'adapter' | 'policy' | 'allowedHosts' | 'localOrigins' | 'localSites' | 'startUrl'
+>
+
 /**
- * The sessions of this worker (docs/plan/57-browser-tasks.md, §3.5, Б18): the ones core ensures
- * before a pass and closes with the task, idle ones closed after `idleMinutes`, every one at its
+ * The sessions of this worker (docs/plan/57-browser-tasks.md, §3.5, Б18): the ones core starts on
+ * the agent's first `web_*` call (docs/plan/61-chats-first.md, К11), gives back with the next turn
+ * and closes with the task, idle ones closed after `idleMinutes`, every one at its
  * hard deadline. In memory only: a worker that restarts holds none, and the sessions it held
  * are lost (core's collector marks them; an `ensure` of one says so at once).
  */
@@ -116,23 +137,25 @@ export class SessionManager {
       ...input,
       sessionId: input.sessionId.toLowerCase(),
       taskId: input.taskId.toLowerCase(),
-      siteId: input.siteId.toLowerCase(),
+      siteId: input.siteId?.toLowerCase() ?? null,
+      // Nothing to sign in to without a site, whatever the caller says (К12).
+      signIn: input.siteId === null ? null : (input.signIn ?? null),
     }
     const session = await this.#held(request)
     if (!session.live) {
       // Ending here (idle, expired, crashed): its row is closed only once the containers are
-      // gone. Answered after that, core replaces it with a new session instead of failing.
+      // gone. Answered after that, the next `web_*` call opens a new session (К11).
       await session.ending?.catch(() => undefined)
       throw conflict('The browser session is closed')
     }
     // A pass of the task is about to use it: an idle sweep reading its row meanwhile keeps it.
     session.noteActivity(this.#deps.now())
-    session.useSignIn(request.signIn ?? null)
+    session.useSignIn(request.signIn)
     if (request.takeControl) session.agentTakesControl()
     return browserEnsureResponseSchema.parse(session.state())
   }
 
-  async #held(request: BrowserEnsureRequest): Promise<WorkerSession> {
+  async #held(request: EnsuredSession): Promise<WorkerSession> {
     const id = request.sessionId
     const known = this.#sessions.get(id) ?? (await this.#starting.get(id))
     if (known) {
@@ -149,7 +172,7 @@ export class SessionManager {
     }
   }
 
-  async #create(request: BrowserEnsureRequest): Promise<WorkerSession> {
+  async #create(request: EnsuredSession): Promise<WorkerSession> {
     const context = this.#context
     const { store, settings, now } = this.#deps
     if (this.#stopping || context === null) throw browserTaskError('BROWSER_SESSION_UNAVAILABLE')
@@ -159,6 +182,8 @@ export class SessionManager {
     const row = await store.session(request.sessionId)
     if (!row || row.taskId !== request.taskId || row.siteId !== request.siteId)
       throw notFound('Browser session not found')
+    // Second line: a row at odds with its task never opens the whole internet to a site's task.
+    if (row.taskSiteId !== row.siteId) throw conflict('The browser session is not of its task')
     if (!isBrowserSessionLive(row.status)) throw conflict('The browser session is closed')
     if (row.readyAt !== null) {
       // Another worker process started it and is gone with its sign-in (Б18).
@@ -175,35 +200,19 @@ export class SessionManager {
     for (const other of this.#sessions.values())
       if (other.taskId === request.taskId) await other.close('orphaned')
 
-    // Where the browser may go comes from the site's row alone, never from the caller (Б11).
-    const stored = await store.site(request.siteId)
-    if (stored === null) throw notFound('Site not found')
-    if (!URL.canParse(stored.url)) throw conflict('The site cannot be reached by the browser')
-    const adapter = this.#deps.adapters(stored.stack)
-    const policy = adapter.browserTaskPolicy({ url: stored.url })
-    const site = new URL(stored.url)
-    const localSites = settings.localSites.filter((local) => local.origin === site.origin)
-    const allowedHosts = browserAllowedHosts(stored.url, policy.extraHosts, settings.extraHosts)
-    // An https site of a public name, or a local site of the stand: anything else is unreachable.
-    if (localSites.length === 0 && !allowedHosts.includes(`${site.hostname}:${site.port || 443}`))
-      throw conflict('The site cannot be reached by the browser')
+    const place = row.siteId === null ? this.#openWeb() : await this.#site(row.siteId)
     const deadline = Math.min(row.expiresAt.getTime(), now() + settings.maxHours * HOUR_MS)
     if (deadline <= now()) throw conflict('The browser session has expired')
     const session = new WorkerSession(
       {
+        ...place,
         id: row.id,
         taskId: row.taskId,
         siteId: row.siteId,
-        siteUrl: stored.url,
-        adapter,
-        policy,
-        allowedHosts,
-        localOrigins: localSites.map((local) => local.origin),
-        localSites,
-        startUrl: new URL(policy.startPath, site.origin).href,
+        platformHosts: settings.platformHosts,
         deadline,
         checkpoints: await store.checkpoints(row.taskId),
-        signIn: request.signIn ?? null,
+        signIn: request.signIn,
       },
       context,
       (ended) => {
@@ -213,6 +222,54 @@ export class SessionManager {
     this.#sessions.set(session.id, session)
     await session.start()
     return session
+  }
+
+  /** Where the browser of a site's task may go: from the site's row alone, never the caller (Б11). */
+  async #site(siteId: string): Promise<SessionPlace> {
+    const { store, settings } = this.#deps
+    const stored = await store.site(siteId)
+    if (stored === null) throw notFound('Site not found')
+    if (!URL.canParse(stored.url)) throw conflict('The site cannot be reached by the browser')
+    const adapter = this.#deps.adapters(stored.stack)
+    const policy = adapter.browserTaskPolicy({ url: stored.url })
+    const site = new URL(stored.url)
+    const localSites = settings.localSites.filter((local) => local.origin === site.origin)
+    const allowedHosts = browserAllowedHosts(stored.url, policy.extraHosts, settings.extraHosts)
+    // An https site of a public name, or a local site of the stand: anything else is unreachable.
+    // So is a site at an address of the platform: a project is no way into the cabinet (К37).
+    if (
+      browserPlatformHost(site.hostname, settings.platformHosts) ||
+      (localSites.length === 0 && !allowedHosts.includes(`${site.hostname}:${site.port || 443}`))
+    )
+      throw conflict('The site cannot be reached by the browser')
+    return {
+      openWeb: false,
+      adapter,
+      policy,
+      allowedHosts,
+      localOrigins: localSites.map((local) => local.origin),
+      localSites,
+      startUrl: new URL(policy.startPath, site.origin).href,
+    }
+  }
+
+  /**
+   * The browser of a chat without a site (docs/plan/61-chats-first.md, К12): an empty page, no host
+   * of its own, no sign-in, no policy and no object. `BROWSER_EXTRA_HOSTS` are hosts a site's pages
+   * load from: there is no site here, and every public host opens anyway. Local sites exist only
+   * outside production (the configuration refuses them there).
+   */
+  #openWeb(): SessionPlace {
+    const { localSites } = this.#deps.settings
+    return {
+      openWeb: true,
+      adapter: OPEN_WEB_OBJECTS,
+      policy: OPEN_WEB_POLICY,
+      allowedHosts: [],
+      localOrigins: localSites.map((local) => local.origin),
+      localSites,
+      startUrl: null,
+    }
   }
 
   /** `POST /v1/sessions/:id/close`; a session this worker does not hold is closed in the database. */

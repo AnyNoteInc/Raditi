@@ -25,7 +25,12 @@ import { memoryStorage, memoryTransit } from '@repo/snapshots/testing'
 import { sampleDriverId } from '../testing/ids.ts'
 import { ContentPrivacy } from '../privacy/content-privacy.ts'
 import { ContentSnapshotStorage } from './content-snapshots.ts'
-import { PostgresMcpAccess, type McpAccess, type McpHostScope } from '../access/mcp-access.ts'
+import {
+  PostgresMcpAccess,
+  siteAccessOf,
+  type McpAccess,
+  type McpHostScope,
+} from '../access/mcp-access.ts'
 import { McpContentMaintenance } from './mcp-content-maintenance.ts'
 import { McpContentService, type ContentGatewayResolver } from './mcp-content.ts'
 import { PostgresMcpJournal } from './mcp-journal.ts'
@@ -243,7 +248,13 @@ describe.skipIf(!enabled)('trusted host undo in the MCP content journal with Pos
     })
     const scope = await access.authenticate(token)
     expect(scope).toMatchObject({ turn, epoch: fence.epoch })
-    return { scope: scope!, token, keyId: key.id, assignmentId: assignment.id, turnId: taskTurn.id }
+    return {
+      scope: siteAccessOf(scope!)!,
+      token,
+      keyId: key.id,
+      assignmentId: assignment.id,
+      turnId: taskTurn.id,
+    }
   }
 
   /** The turn stops: its key is revoked or already cleaned up; the lease is still its own. */

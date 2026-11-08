@@ -28,7 +28,7 @@ import {
   type NoticeAction,
   type TaskNotice,
 } from './task-notice'
-import { unpaidWhileTasksTaken, usageWithoutTariff } from './usage-format'
+import { tariffCreditsOfPeriod, unpaidWhileTasksTaken, usageWithoutTariff } from './usage-format'
 
 const USAGE_PATH = '/settings/usage'
 const PLANS_PATH = '/settings/plans'
@@ -134,10 +134,12 @@ export function creditRing(usage: BillingUsage): {
   const closed = !usage.newTask.allowed || pastDue(usage)
   const said = (label: string) => (usage.newTask.allowed ? label : `${label}. ${NEW_TASK_CLOSED}`)
   if (usage.tariff !== null && !pastDue(usage)) {
-    const { left: count, granted } = usage.tariff.credits
+    const count = usage.tariff.credits.left
+    // Of everything the period has: carried into it and granted for it.
+    const of = tariffCreditsOfPeriod(usage.tariff.credits)
     return {
-      label: said(creditRingText.onTariff(count, granted)),
-      share: granted > 0 ? count / granted : 0,
+      label: said(creditRingText.onTariff(count, of)),
+      share: of > 0 ? count / of : 0,
       closed,
     }
   }
@@ -161,10 +163,11 @@ export function creditRows(usage: BillingUsage): { label: string; value: string 
     })
   }
   if (usage.tariff !== null) {
-    const { left: count, granted } = usage.tariff.credits
+    const count = usage.tariff.credits.left
+    const of = tariffCreditsOfPeriod(usage.tariff.credits)
     rows.push({
       label: creditRingText.onTariffRow,
-      value: pastDue(usage) ? creditRingText.over : creditRingText.leftOf(count, granted),
+      value: pastDue(usage) ? creditRingText.over : creditRingText.leftOf(count, of),
     })
   }
   if (usage.pack.left > 0) {

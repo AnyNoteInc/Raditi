@@ -298,6 +298,13 @@ describe('MCP request policy', () => {
     expect(mcpToolFamiliesOf(access(repositoryOnly), all)).toEqual(['content'])
     // A scope made before requirements is a repository task: no web tools.
     expect(mcpToolFamiliesOf(access(undefined), all)).toEqual(['content'])
+    // A chat without a site: the browser when it needs one, and no family of a site.
+    const chat = { ...access(browserOnly), siteId: null, stack: null, url: null }
+    expect(mcpToolFamiliesOf(chat, all)).toEqual(['web'])
+    expect(mcpToolFamiliesOf(chat, { ...all, webTools: false })).toEqual([])
+    expect(
+      mcpToolFamiliesOf({ ...chat, requirements: { repository: false, browser: false } }, all),
+    ).toEqual([])
     // Both needs, as schemas allow: each family by its own rule.
     expect(
       mcpToolFamiliesOf(
@@ -379,5 +386,60 @@ describe('MCP request policy', () => {
       call('web_screenshot', { ref: 'e1' }),
     ]
     for (const body of refused) expect(mcpBodyAllowed(body, ['web', 'browser'])).toBe(false)
+  })
+
+  it('offers search_web to every turn, with a site or without, only where its key is configured', () => {
+    const access: McpAccess = {
+      keyId: '01960000-0000-7000-8000-000000000001',
+      taskId: '01960000-0000-7000-8000-000000000002',
+      workspaceId: '01960000-0000-7000-8000-000000000003',
+      siteId: '01960000-0000-7000-8000-000000000004',
+      sessionId: 'synthetic',
+      turn: 1,
+      firstEpoch: 1,
+      epoch: 1,
+      stack: 'wordpress',
+      url: 'https://site.example.test',
+      preview: null,
+      requirements: { repository: true, browser: false },
+    }
+    const base = { allowedHosts: ['mcp'], allowLocalOrigin: false }
+    const chat = {
+      ...access,
+      siteId: null,
+      stack: null,
+      url: null,
+      requirements: { repository: false, browser: false },
+    }
+    expect(mcpToolFamiliesOf(access, base)).toEqual([])
+    expect(mcpToolFamiliesOf(access, { ...base, searchTools: true })).toEqual(['search'])
+    expect(mcpToolFamiliesOf(chat, { ...base, searchTools: true })).toEqual(['search'])
+    expect(
+      mcpToolFamiliesOf(
+        { ...chat, requirements: { repository: false, browser: true } },
+        { ...base, webTools: true, searchTools: true },
+      ),
+    ).toEqual(['web', 'search'])
+
+    const call = (args: unknown) => ({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'search_web', arguments: args },
+    })
+    expect(mcpBodyAllowed(call({ query: 'wordpress register_post_type' }), ['search'])).toBe(true)
+    // Not without the family, whatever else the request may call.
+    expect(
+      mcpBodyAllowed(call({ query: 'wordpress register_post_type' }), ['web', 'content']),
+    ).toBe(false)
+    for (const args of [
+      {},
+      { query: 'x' },
+      { query: 'a'.repeat(201) },
+      { query: 'two\nlines' },
+      { query: 'ok words', mode: 'advanced' },
+      { query: ['wordpress'] },
+    ])
+      expect(mcpBodyAllowed(call(args), ['search'])).toBe(false)
   })
 })

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ProjectsView } from './projects-view'
@@ -52,6 +52,7 @@ function showProjects() {
       <ProjectsView />
     </QueryClientProvider>,
   )
+  return queryClient
 }
 
 beforeEach(() => {
@@ -59,17 +60,68 @@ beforeEach(() => {
   listProjects.mockResolvedValue([])
 })
 
+/** More projects: each with a name of its own, none matching a search for the first project. */
+const others = (count: number): Project[] =>
+  Array.from({ length: count }, (_, index) =>
+    project({
+      id: `019f1a21-1800-7f00-8abc-${String(index + 1).padStart(12, '2')}`,
+      name: `Студия ${index + 1}`,
+      url: `https://studio-${index + 1}.example`,
+      host: `studio-${index + 1}.example`,
+    }),
+  )
+
+describe('the search of the list', () => {
+  const field = () => screen.queryByRole('textbox', { name: 'Поиск проектов' })
+  const openSearch = () => fireEvent.click(screen.getByRole('button', { name: 'Найти проект' }))
+  const shown = () => within(screen.getByRole('list', { name: 'Сайты' })).getAllByRole('listitem')
+
+  it('has no search for six projects', async () => {
+    listProjects.mockResolvedValue([project(), ...others(5)])
+    showProjects()
+    await screen.findByRole('list', { name: 'Сайты' })
+    expect(shown()).toHaveLength(6)
+    expect(screen.queryByRole('button', { name: 'Найти проект' })).toBeNull()
+    expect(field()).toBeNull()
+  })
+
+  it('opens the field for seven projects from the head of the page, and it filters', async () => {
+    listProjects.mockResolvedValue([project(), ...others(6)])
+    showProjects()
+    await screen.findByRole('list', { name: 'Сайты' })
+    expect(field()).toBeNull()
+    openSearch()
+    fireEvent.change(field()!, { target: { value: 'кофейня' } })
+    expect(shown()).toHaveLength(1)
+    expect(screen.getByText('1 из 7')).toBeTruthy()
+  })
+
+  it('stops filtering when the list falls to six: no field is left to clear it', async () => {
+    const seven = [project(), ...others(6)]
+    listProjects.mockResolvedValue(seven)
+    const queryClient = showProjects()
+    await screen.findByRole('list', { name: 'Сайты' })
+    openSearch()
+    fireEvent.change(field()!, { target: { value: 'кофейня' } })
+    expect(shown()).toHaveLength(1)
+
+    queryClient.setQueryData(['project', 'list'], seven.slice(0, 6))
+    await waitFor(() => expect(field()).toBeNull())
+    expect(shown()).toHaveLength(6)
+    expect(screen.queryByText(/ из /)).toBeNull()
+    expect(screen.queryByText('Проекты не найдены')).toBeNull()
+
+    // The seventh project is back: the field returns with its text, and the text filters again.
+    queryClient.setQueryData(['project', 'list'], seven)
+    await waitFor(() => expect(field()).toHaveValue('кофейня'))
+    expect(shown()).toHaveLength(1)
+    expect(screen.getByText('1 из 7')).toBeTruthy()
+  })
+})
+
 describe('project list', () => {
   it('shows a .рф site by the host the server returned and finds it by that host', async () => {
-    listProjects.mockResolvedValue([
-      project(),
-      project({
-        id: '019f1a21-1800-7f00-8abc-222222222222',
-        name: 'Студия',
-        url: 'https://studio.example',
-        host: 'studio.example',
-      }),
-    ])
+    listProjects.mockResolvedValue([project(), ...others(6)])
     showProjects()
 
     const link = await screen.findByRole('link', {
@@ -79,6 +131,7 @@ describe('project list', () => {
     expect(link).toHaveAttribute('href', 'https://xn--e1aiboc0b6e.xn--p1ai')
     expect(screen.queryByText(/xn--/)).not.toBeInTheDocument()
 
+    fireEvent.click(screen.getByRole('button', { name: 'Найти проект' }))
     fireEvent.change(screen.getByRole('textbox', { name: 'Поиск проектов' }), {
       target: { value: 'КОФЕЙНЯ.рф' },
     })
@@ -96,7 +149,7 @@ describe('project list', () => {
 
   it('does not decode an address by itself: the readable host is the one in the answer', async () => {
     // Deliberately not the host of `url`: only the field of the answer can produce this text.
-    listProjects.mockResolvedValue([project({ host: 'магазин.рф:8443' })])
+    listProjects.mockResolvedValue([project({ host: 'магазин.рф:8443' }), ...others(6)])
     showProjects()
 
     const link = await screen.findByRole('link', {
@@ -104,6 +157,7 @@ describe('project list', () => {
     })
     expect(link).toHaveTextContent('магазин.рф:8443')
     expect(link).toHaveAttribute('href', 'https://xn--e1aiboc0b6e.xn--p1ai')
+    fireEvent.click(screen.getByRole('button', { name: 'Найти проект' }))
     fireEvent.change(screen.getByRole('textbox', { name: 'Поиск проектов' }), {
       target: { value: 'магазин.рф' },
     })
@@ -116,8 +170,11 @@ describe('project list', () => {
 describe('adding a project', () => {
   it('leads from the empty list to the wizard of a new project', async () => {
     showProjects()
-    const add = await screen.findByRole('link', { name: 'Добавить проект' })
-    expect(add).toHaveAttribute('href', '/projects/new')
+    expect(await screen.findByRole('heading', { name: 'Добавим первый сайт?' })).toBeTruthy()
+    // The head of the page and the empty list both lead there (docs/plan/64, Н8).
+    const links = screen.getAllByRole('link', { name: 'Новый проект' })
+    expect(links).toHaveLength(2)
+    for (const link of links) expect(link).toHaveAttribute('href', '/projects/new')
     // No form in the list: the wizard is a page of its own.
     expect(screen.queryByRole('textbox', { name: /Название проекта/ })).not.toBeInTheDocument()
   })
@@ -126,7 +183,7 @@ describe('adding a project', () => {
     listProjects.mockResolvedValue([project()])
     showProjects()
     await screen.findByRole('list', { name: 'Сайты' })
-    const links = screen.getAllByRole('link', { name: 'Добавить проект' })
+    const links = screen.getAllByRole('link', { name: 'Новый проект' })
     expect(links).toHaveLength(1)
     expect(links[0]).toHaveAttribute('href', '/projects/new')
   })

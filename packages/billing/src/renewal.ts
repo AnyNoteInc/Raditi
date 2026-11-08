@@ -1073,7 +1073,7 @@ export const renewalOutcomes = {
  * Ends the tariffs that are over. An active subscription whose period ended and is not renewed
  * automatically becomes `cancelled`; one that has been past due for BILLING_PAST_DUE_DAYS
  * becomes `expired`. Either way what is left of the tariff quota expires — the available
- * credits only — and the owner is told, with the purchased and the gift credits that stay:
+ * credits only, and none is carried: the tariff ends — and the owner is told, with the purchased and the gift credits that stay:
  * those are never touched. A subscription whose payment is on its way is not ended; that
  * payment decides.
  *

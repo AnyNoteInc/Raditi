@@ -14,9 +14,14 @@ export const metadata: Metadata = { title: 'Новый проект' }
  * site page `/projects/[projectId]`. The platforms are the stacks the services of the wizard
  * connect by the files (the support of the site adapters in this environment), so the wizard
  * offers exactly what the server accepts; without the services the list is empty and creating a
- * project answers SITE_CONNECTION_UNAVAILABLE, as before.
+ * project answers SITE_CONNECTION_UNAVAILABLE, as before. `?from=chats` — the client came from a
+ * new chat and goes back to it (docs/plan/61-chats-first.md, §5.11): one fixed word, not an address.
  */
-export default async function NewProjectPage() {
+export default async function NewProjectPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ from?: string | string[] }>
+}) {
   const session = await requireSession()
   if (session === UNAVAILABLE) return <ServiceUnavailable />
   return (
@@ -30,6 +35,7 @@ export default async function NewProjectPage() {
         // and only on a platform the server takes that way (docs/plan/62-site-stacks.md, Т6).
         browserAccess={(chatServices()?.browser ?? null) !== null}
         browserStacks={siteConnections()?.connectableStacks('browser') ?? []}
+        fromChats={(await searchParams).from === 'chats'}
       />
     </ApplicationShell>
   )

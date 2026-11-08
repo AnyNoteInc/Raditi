@@ -43,6 +43,7 @@ export function sessionHarness(settings: Partial<SessionManagerSettings> = {}) {
       maxSessions: 4,
       extraHosts: [],
       localSites: [],
+      platformHosts: [],
       stream: { maxFps: 30, quality: 70 },
       ...settings,
     },
@@ -61,6 +62,19 @@ export function sessionHarness(settings: Partial<SessionManagerSettings> = {}) {
     if (!session) throw new Error('not held')
     return { row, state, session, browser: browsers.last }
   }
+  /** A session of a chat without a site, ensured on the worker (docs/plan/61-chats-first.md, К12). */
+  const ensuredWithoutSite = async () => {
+    const row = store.openWithoutSite()
+    const state = await manager.ensure({
+      sessionId: row.id,
+      taskId: row.taskId,
+      siteId: null,
+      takeControl: false,
+    })
+    const session = manager.session(row.id)
+    if (!session) throw new Error('not held')
+    return { row, state, session, browser: browsers.last }
+  }
   const act = (row: { id: string; taskId: string }, action: BrowserAction) =>
     manager.act(row.id, { taskId: row.taskId, assignmentId: randomUUID(), action })
   return {
@@ -74,6 +88,7 @@ export function sessionHarness(settings: Partial<SessionManagerSettings> = {}) {
     metrics,
     warnings,
     ensured,
+    ensuredWithoutSite,
     act,
   }
 }

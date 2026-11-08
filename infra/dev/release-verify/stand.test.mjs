@@ -104,11 +104,40 @@ const context = {
   ),
 }
 
-test('the stand takes --no-build and --keep only: never a database, a Gitea or a key', () => {
-  assert.deepEqual(standOptions([]), { build: true, keep: false })
-  assert.deepEqual(standOptions(['--', '--no-build', '--keep']), { build: false, keep: true })
+test('the stand takes --no-build, --keep and --browser only: never a database, a Gitea or a key', () => {
+  assert.deepEqual(standOptions([]), { build: true, keep: false, browser: false })
+  assert.deepEqual(standOptions(['--', '--no-build', '--keep']), {
+    build: false,
+    keep: true,
+    browser: false,
+  })
+  assert.deepEqual(standOptions(['--browser']), { build: true, keep: false, browser: true })
   for (const argv of [['--live'], ['--database=postgresql://x'], ['--only=S1']])
-    assert.throws(() => standOptions(argv), /accepts --no-build and --keep only/)
+    assert.throws(() => standOptions(argv), /accepts --no-build, --keep and --browser only/)
+})
+
+test('`--browser` gives the apps the worker of the browser, and no other run has it', () => {
+  const browser = { siteTarget: '172.17.0.9:80' }
+  const secrets = { ...context.secrets, workerToken: 'w'.repeat(64) }
+  const ports = { ...context.ports, browser: 41_000, stream: 41_001 }
+  const withBrowser = { ...context, browser, secrets, ports, siteUrl: 'http://localhost:40000' }
+  for (const role of ['core', 'mcp', 'preview']) {
+    assert.equal(roleEnvironment(role, context).BROWSER_WORKER_URL, undefined, role)
+    assert.equal(
+      roleEnvironment(role, withBrowser).BROWSER_WORKER_URL,
+      'http://127.0.0.1:41000',
+      role,
+    )
+  }
+  assert.deepEqual(JSON.parse(roleEnvironment('browser', withBrowser).BROWSER_LOCAL_SITES), {
+    'http://localhost:40000': '172.17.0.9:80',
+  })
+  assert.equal(webEnvironment(context).BROWSER_STREAM_PUBLIC_URL, undefined)
+  assert.equal(
+    webEnvironment(withBrowser).BROWSER_STREAM_PUBLIC_URL,
+    'ws://127.0.0.1:41001/v1/browser/stream',
+  )
+  assert.equal(roleEnvironment('preview', withBrowser).BROWSER_STREAM_PORT, '41001')
 })
 
 test('every resource of a run is named by the run and labelled with it', () => {
@@ -335,6 +364,22 @@ test('the scripted turns call tools the CLI declares and end with a result of th
     MODEL_TURNS.retryDone().rounds[0][0].arguments.command,
     new RegExp(`${TEXT.retryMark(1)}/${TEXT.retryMark(2)}`),
   )
+  // S11: `/undo` takes the second mark back; a pass without a change has no step at all.
+  assert.match(
+    MODEL_TURNS.undoMark(2).rounds[0][0].arguments.command,
+    new RegExp(`${TEXT.undoMark(1)}/${TEXT.undoMark(2)}`),
+  )
+  assert.deepEqual(JSON.parse(MODEL_TURNS.undoNothing().text).files_changed, [])
+  const undoContent = MODEL_TURNS.undoContent({ version: 2, route: '/wp/v2/posts/7' })
+  assert.equal(undoContent.rounds[2][0].arguments.body.title, TEXT.undoTitle(2))
+  // S13: the pass adds the mark, and the answer to the summary request is the summary alone.
+  assert.match(
+    MODEL_TURNS.compactMark().rounds[0][0].arguments.command,
+    new RegExp(`${TEXT.compactMark}.*${STYLE_PATH}`),
+  )
+  assert.deepEqual(MODEL_TURNS.compactSummary(), { scenario: 'text', text: TEXT.compactSummary })
+  // S14: the answer to `/init` is a result whose message is the hints.
+  assert.equal(JSON.parse(MODEL_TURNS.initAnswer().text).client_message, TEXT.initHints)
   // The large usage of the first turn stays far from the compaction of the CLI.
   assert.deepEqual(MODEL_TURNS.first({ contactsId: 4 }).usage, LARGE_USAGE)
   assert.ok(LARGE_USAGE.prompt + LARGE_USAGE.completion <= 500_000)
@@ -434,7 +479,7 @@ test('a request of the cabinet calls the procedures its tRPC path names, a batch
     'preview.ticket',
   ])
   // A page, its data, the preview — no procedure; nor a URL that is none.
-  assert.deepEqual(trpcProcedures(`${web}/projects/a/chat/b?_rsc=1`), [])
+  assert.deepEqual(trpcProcedures(`${web}/chats/b?_rsc=1`), [])
   assert.deepEqual(trpcProcedures(`${web}/api/trpc`), [])
   assert.deepEqual(trpcProcedures('http://site-a-chat-b.localhost:41002/'), [])
   assert.deepEqual(trpcProcedures('not a url'), [])

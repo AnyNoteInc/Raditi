@@ -15,9 +15,11 @@ const ref: TurnCredentialRef = {
 function fixture() {
   const steps: string[] = []
   const text = (query: TemplateStringsArray) => query.join('?')
+  const queries: string[] = []
   const tx = {
     $queryRaw: vi.fn(async (query: TemplateStringsArray) => {
       const sql = text(query)
+      queries.push(sql)
       steps.push(
         sql.includes('site_leases')
           ? 'lease lock'
@@ -45,7 +47,7 @@ function fixture() {
       steps.push(`destroy ${path}`)
     }),
   } satisfies Pick<SecretStore, 'kvDelete' | 'kvDestroyAll'>
-  return { prisma, secrets, steps }
+  return { prisma, secrets, steps, queries }
 }
 
 describe('revocation of a turn key', () => {
@@ -63,6 +65,13 @@ describe('revocation of a turn key', () => {
       'close',
       `destroy ${path}`,
     ])
+  })
+
+  it("locks both rows a turn of the task may hold: its own and its site's (turnLeaseOf)", async () => {
+    const f = fixture()
+    await revokeTurnCredentials(f, ref)
+    const lock = f.queries.find((sql) => sql.includes('site_leases'))!
+    expect(lock.replace(/\s+/g, ' ')).toContain('JOIN tasks t ON l.site_id IN (t.id, t.site_id)')
   })
 
   it('leaves the durable fence when Vault fails and answers with an unavailable gateway', async () => {

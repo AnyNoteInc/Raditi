@@ -45,7 +45,12 @@ import {
   type ExecExit,
 } from '../ports/sandbox-provider.ts'
 import { attachmentLimits } from '../attachments/rules.ts'
-import { assertTurnInbox, turnInboxLimits, turnInboxPathSchema } from '../ports/turn-executor.ts'
+import {
+  assertTurnInbox,
+  turnInboxLimits,
+  turnInboxPathSchema,
+  turnMayHoldInbox,
+} from '../ports/turn-executor.ts'
 import { execLost, siteLeaseFenceSchema, snapshotHasCredential } from '../ports/turn-runner.ts'
 import { envVarValueSchema } from '../release/env-vars.ts'
 
@@ -262,7 +267,8 @@ const prepareCommand = command('prepare', {
     .optional(),
   /**
    * The files of the client the runner fetches from runnerInboxPath() by their place here and
-   * writes at their paths after the restore (TurnPrepareInput.inbox). Only with a bundle.
+   * writes at their paths after the restore (TurnPrepareInput.inbox). Only with a bundle or in a
+   * chat without a site (turnMayHoldInbox).
    */
   inbox: z
     .array(
@@ -384,7 +390,7 @@ export const runnerCommandSchema = z
       }
       if (cmd.inbox) {
         try {
-          assertTurnInbox(cmd.inbox, cmd.bundle !== undefined)
+          assertTurnInbox(cmd.inbox, turnMayHoldInbox(cmd.bundle !== undefined, cmd.sandbox.labels))
         } catch {
           ctx.addIssue({ code: 'custom', path: ['inbox'], message: 'invalid files of the client' })
         }

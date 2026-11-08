@@ -12,11 +12,11 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { ConfirmDialog } from '@/components/billing/confirm-dialog'
-import { siteHref } from '@/components/site/site-nav'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
 
 import { callErrorText, isNotFound } from './call-error'
+import { chatHref, CHATS_HREF } from './chat-address'
 import { dialogMenuText } from './chat-texts'
 
 // What the client does to a dialog as a whole (owner's request of 26.10.2026): renames it in
@@ -25,8 +25,11 @@ import { dialogMenuText } from './chat-texts'
 /** The longest name `tasks.title` holds (`feedLimits.title`); the server checks it again. */
 const TITLE_LIMIT = 120
 
-/** The key of the list of a site's dialogs: a change of a dialog makes it read again. */
-export const dialogListKey = (siteId: string) => ['chat', 'dialogs', siteId] as const
+/**
+ * The key every read of the list of chats starts with — one list, the folders, each folder: a
+ * change of a chat makes them all read again.
+ */
+export const dialogListKey = ['chat', 'dialogs'] as const
 
 /** «⋯» of a dialog: «Переименовать» and «Удалить». */
 export function DialogMenuButton({
@@ -122,13 +125,11 @@ export function DialogMenuButton({
  * the old one. A refusal of the server stays under the field and the field stays open.
  */
 export function RenameField({
-  siteId,
   taskId,
   initial,
   onDone,
   fontSize = 14,
 }: {
-  siteId: string
   taskId: string
   initial: string
   /** The field closes: with the new name the server took, or null — nothing changed. */
@@ -161,7 +162,7 @@ export function RenameField({
     setError(null)
     try {
       const saved = await rename.mutateAsync({ taskId, title: next })
-      void queryClient.invalidateQueries({ queryKey: dialogListKey(siteId) })
+      void queryClient.invalidateQueries({ queryKey: dialogListKey })
       onDone(saved.title)
     } catch (failure) {
       setError(callErrorText(failure))
@@ -220,21 +221,22 @@ export function RenameField({
 }
 
 /**
- * «Удалить диалог?»: what the deletion leads to and two buttons. The deleted dialog leaves the list;
- * the page of it, when it is the one open, goes to the root of «Чат». A dialog already gone (another
+ * «Удалить чат?»: what the deletion leads to and two buttons. The deleted dialog leaves the list;
+ * the page of it, when it is the one open, goes to the root of «Чаты». A dialog already gone (another
  * tab deleted it) counts as deleted.
  */
 export function RemoveDialogConfirm({
-  siteId,
   taskId,
   open,
   onClose,
+  withSite,
   undoable = false,
 }: {
-  siteId: string
   taskId: string
   open: boolean
   onClose: () => void
+  /** The chat has a project; without one the words say nothing of a site. */
+  withSite: boolean
   /** «Отменить выпуск» of the dialog is offered now: deleting it takes the button away too. */
   undoable?: boolean
 }) {
@@ -255,12 +257,11 @@ export function RemoveDialogConfirm({
         return
       }
     }
-    void queryClient.invalidateQueries({ queryKey: dialogListKey(siteId) })
+    void queryClient.invalidateQueries({ queryKey: dialogListKey })
     // Credits the dialog held came back.
     void queryClient.invalidateQueries({ queryKey: trpc.billing.usage.queryKey() })
     onClose()
-    const own = `${siteHref(siteId, 'chat')}/${taskId}`
-    if (pathname.toLowerCase() === own.toLowerCase()) router.replace(siteHref(siteId, 'chat'))
+    if (pathname.toLowerCase() === chatHref(taskId).toLowerCase()) router.replace(CHATS_HREF)
   }
 
   return (
@@ -278,7 +279,7 @@ export function RemoveDialogConfirm({
       danger
       onConfirm={() => void confirm()}
     >
-      <Typography sx={{ mt: 1.5 }}>{nbsp(dialogMenuText.removeBody)}</Typography>
+      <Typography sx={{ mt: 1.5 }}>{nbsp(dialogMenuText.removeBody(withSite))}</Typography>
       {undoable ? <Typography sx={{ mt: 1 }}>{nbsp(dialogMenuText.removeUndo)}</Typography> : null}
     </ConfirmDialog>
   )

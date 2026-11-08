@@ -8,8 +8,6 @@ import Tabs from '@mui/material/Tabs'
 import type { ReactNode, RefObject } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
-import { SITE_PANE_WIDTH, SITE_RAIL_WIDTH, SITE_TOOLBAR_HEIGHT } from '@/components/site/site-nav'
-
 import { toolText } from './chat-texts'
 import {
   isChangesTool,
@@ -21,12 +19,14 @@ import {
   type DialogTool,
   type ToolsState,
 } from './dialog-tools'
+import { SITE_PANE_WIDTH } from './pane-layout'
+import { CABINET_GAP, CABINET_RADIUS } from '@/components/application/cabinet-shell'
 import { PaneResizer } from './pane-resizer'
 
 // The panel of the tools beside a dialog (docs/plan/59-dialog-tools-panel.md, И7, И8, И14, И20):
-// one landmark «Инструменты диалога», drawn only while a tool is on the screen. From `lg` it stands
+// one landmark «Инструменты чата», drawn only while a tool is on the screen. From `lg` it stands
 // at the right edge under the bar of breadcrumbs, its edge dragged to make it wider; below it takes
-// the place of the dialog, «К диалогу» (which closes the tab on the screen and leaves the others
+// the place of the dialog, «К чату» (which closes the tab on the screen and leaves the others
 // behind the dialog) and «+» over its tabs. On its strip the tabs of the open tools —
 // a sign and a name each, closed by the cross at its end or by Delete —, and from `lg` «Скрыть
 // панель» and «+» outside the tabs: a tablist holds its tabs alone (axe), and MUI takes every child
@@ -77,7 +77,7 @@ export function ToolsPanel({
   wide: boolean
   /** The browser over the whole area of the content (Б29): no edge to drag then. */
   fullscreen: boolean
-  /** «+» at the end of the strip, or beside «К диалогу» (`ToolsMenu`). */
+  /** «+» at the end of the strip, or beside «К чату» (`ToolsMenu`). */
   menu: ReactNode
   /** A tab chosen on the strip. */
   onShow: (tool: DialogTool) => void
@@ -85,7 +85,7 @@ export function ToolsPanel({
   onClose: (tool: DialogTool) => void
   /** «Скрыть панель»: every tab at once. */
   onCloseAll: () => void
-  /** «К диалогу» below `lg`: the tab on the screen closes, the others stay behind the dialog. */
+  /** «К чату» below `lg`: the tab on the screen closes, the others stay behind the dialog. */
   onBack: () => void
   /** What the panel of a tool holds. */
   content: (tool: DialogTool) => ReactNode
@@ -97,27 +97,28 @@ export function ToolsPanel({
       ref={pane}
       aria-label={toolText.panel}
       // The shell leaves this panel its room at the right edge only while it is drawn.
-      data-site-pane=""
+      data-chat-pane=""
       sx={{
         display: 'flex',
         flexDirection: 'column',
         minWidth: 0,
-        // Below `lg` the area of a tool takes what the window leaves under the bar of the shell —
-        // however many lines the bar takes — and the paddings of the content: the shell is as high
-        // as the window at least and hands its height down to the dialog, so the page does not
-        // scroll under the area. What it holds scrolls inside it, never sideways.
+        // Below `lg` the area of a tool takes what the window leaves under the paddings of the
+        // content: the shell is as high as the window at least and hands its height down to the
+        // dialog, so the page does not scroll under the area. What it holds scrolls inside it,
+        // never sideways.
         flex: { xs: '1 1 0', lg: 'none' },
         minHeight: { xs: 480, lg: 0 },
+        // From `lg` a card at the right edge, like the panel beside the rail
+        // (docs/plan/64-cabinet-navigation.md, Н1).
         position: { lg: 'fixed' },
-        // Under the bar of breadcrumbs, which runs over the panel to the right edge.
-        top: { lg: SITE_TOOLBAR_HEIGHT },
-        bottom: { lg: 0 },
-        right: { lg: 'env(safe-area-inset-right)' },
+        top: { lg: CABINET_GAP },
+        bottom: { lg: CABINET_GAP },
+        right: { lg: `calc(${CABINET_GAP}px + env(safe-area-inset-right))` },
         width: { lg: SITE_PANE_WIDTH },
-        border: { xs: 1, lg: 0 },
-        borderLeft: { lg: 1 },
-        borderColor: { xs: 'divider', lg: 'divider' },
-        borderRadius: { xs: '14px', lg: 0 },
+        border: 1,
+        borderColor: 'divider',
+        borderRadius: { xs: '14px', lg: CABINET_RADIUS },
+        zIndex: { lg: 1100 },
         // The panel holds its edge outside itself: the edge is not cut off.
         overflow: { xs: 'hidden', lg: 'visible' },
         bgcolor: 'background.paper',
@@ -127,7 +128,7 @@ export function ToolsPanel({
           top: 0,
           bottom: 0,
           right: 0,
-          left: { xs: 0, sm: `calc(${SITE_RAIL_WIDTH}px + env(safe-area-inset-left))` },
+          left: 'var(--app-rail-width)',
           width: 'auto',
           height: 'auto',
           minHeight: 0,
@@ -145,6 +146,7 @@ export function ToolsPanel({
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
+          borderRadius: 'inherit',
         }}
       >
         {wide ? null : (

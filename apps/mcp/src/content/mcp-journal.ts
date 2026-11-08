@@ -33,6 +33,7 @@ import { z } from 'zod'
 import { previewDbValueKey, previewDbRuntimeSchema, textOnlyDbRuntime } from '@repo/site-content'
 
 import {
+  leaseIdOf,
   mcpAccessSchema,
   mcpHostScopeSchema,
   type McpAccess,
@@ -76,6 +77,11 @@ interface HostScope {
   epoch: number
 }
 type Scope = (McpAccess & { host?: undefined }) | HostScope
+/**
+ * The row of `site_leases` the scope writes under: the host's fence is its site's; the agent's
+ * turn holds the chat's own row or its site's (`turnLeaseOf`, `leaseIdOf`).
+ */
+const leaseKeyOf = (scope: Scope): string => (scope.host ? scope.siteId : leaseIdOf(scope))
 /** An edit the trusted undo returns: its snapshot and the turn that made it. */
 export interface McpUndoTarget {
   snapshotId: string
@@ -717,7 +723,7 @@ export class PostgresMcpJournal {
         throw leaseLost('MCP write deadline is too close')
       if (!call.previewId)
         await tx.siteLease.update({
-          where: { siteId: scope.siteId },
+          where: { siteId: leaseKeyOf(scope) },
           data: { inflightMcpCallId: call.id },
         })
       // The preview's own durable mark of a write that may land (Р22, Р24): from here on it no
@@ -818,7 +824,7 @@ export class PostgresMcpJournal {
       })
       if (call.writeStartedAt && !call.previewId)
         await tx.siteLease.update({
-          where: { siteId: scope.siteId },
+          where: { siteId: leaseKeyOf(scope) },
           data: { inflightMcpCallId: null },
         })
       // An operator hold is not silently cleared by a late acknowledgement.
@@ -888,7 +894,7 @@ export class PostgresMcpJournal {
       if (call.result !== null || !call.writeStartedAt || owned.inflightMcpCallId !== call.id)
         throw mismatch()
       await tx.siteLease.update({
-        where: { siteId: scope.siteId },
+        where: { siteId: leaseKeyOf(scope) },
         data: { heldForOperator: true },
       })
     })
@@ -1108,10 +1114,11 @@ export class PostgresMcpJournal {
       }
       const targets: number[] = []
       for (let next: number | undefined = turnNo; next !== undefined;) {
+        // The turns of one session hold one row: the chat's own or its site's (`turnLeaseOf`).
         const rows = await tx.turnAssignment.findMany({
           where: {
             taskId: scope.taskId,
-            siteId: scope.siteId,
+            siteId: { in: [scope.siteId, scope.taskId] },
             sessionId,
             turnNo: next,
           },
@@ -1161,7 +1168,8 @@ export class PostgresMcpJournal {
       call.previewId !== (scope.host ? null : (scope.preview?.id ?? null)) ||
       !call.assignmentId ||
       call.assignment?.taskId !== scope.taskId ||
-      call.assignment.siteId !== scope.siteId ||
+      // The edit's turn held the chat's own row or its site's (`turnLeaseOf`).
+      (call.assignment.siteId !== scope.siteId && call.assignment.siteId !== scope.taskId) ||
       call.assignment.turnNo !== call.turn.turnNo ||
       !call.credentialKeyId ||
       !call.appliedStateHash ||
@@ -1378,7 +1386,7 @@ export class PostgresMcpJournal {
   async #lease(tx: Tx, scope: McpAccess) {
     const rows = await tx.$queryRaw<Array<{ inflightMcpCallId: string | null; now: Date }>>`
       SELECT inflight_mcp_call_id AS "inflightMcpCallId", clock_timestamp() AS now
-      FROM site_leases WHERE site_id = ${scope.siteId}::uuid AND holder_task_id = ${scope.taskId}::uuid
+      FROM site_leases WHERE site_id = ${leaseIdOf(scope)}::uuid AND holder_task_id = ${scope.taskId}::uuid
         AND epoch = ${scope.epoch} AND operation = 'turn' FOR UPDATE`
     if (rows.length !== 1) throw leaseLost('MCP call no longer owns its site lease')
     return rows[0]!
@@ -1394,9 +1402,10 @@ export class PostgresMcpJournal {
           clock_timestamp() + interval '15 seconds') AS "deadlineAt"
       FROM llm_keys k JOIN tasks t ON t.id = k.task_id
       JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id
-      JOIN turn_assignments a ON a.task_id = t.id AND a.site_id = s.id
+      JOIN turn_assignments a ON a.task_id = t.id AND a.site_id = ${leaseIdOf(scope)}::uuid
+        AND a.site_id IN (t.id, s.id)
         AND a.session_id = k.session_id AND a.turn_no = k.turn_no AND a.first_epoch = k.first_epoch
-      JOIN site_leases l ON l.site_id = s.id AND l.holder_task_id = t.id AND l.epoch = a.lease_epoch
+      JOIN site_leases l ON l.site_id = a.site_id AND l.holder_task_id = t.id AND l.epoch = a.lease_epoch
       LEFT JOIN task_turns tt ON tt.task_id = t.id AND tt.turn_no = a.turn_no AND tt.status = 'running'
       WHERE k.id = ${scope.keyId}::uuid AND t.id = ${scope.taskId}::uuid AND s.id = ${scope.siteId}::uuid
         AND t.workspace_id = ${scope.workspaceId}::uuid AND a.session_id = ${scope.sessionId}

@@ -1,5 +1,4 @@
 import {
-  chatCommandIds,
   chatCommandRefusals,
   FEED_REQUEST_TEXT_LIMIT,
   feedCursorSchema,
@@ -9,8 +8,7 @@ import {
   reasoningEffortSchema,
   releaseOutcomes,
   releaseStatuses,
-  taskModes,
-  taskRequirementsSchema,
+  serverCommandIds,
   taskStatuses,
   type FeedItem,
 } from '@repo/domain'
@@ -20,8 +18,12 @@ import { activityEventSchema, readTurnActivity } from '../services/chat/activity
 import { attachmentIdsSchema } from '../services/chat/attachments.ts'
 import { feedBrowserOutput } from '../services/chat/browser.ts'
 import { chatContextOf } from '../services/chat/context.ts'
-import { DIALOG_CURSOR_PATTERN, listDialogs } from '../services/chat/dialog-list.ts'
-import { readDialogFeed, readDialogHead } from '../services/chat/feed.ts'
+import {
+  DIALOG_CURSOR_PATTERN,
+  listDialogFolders,
+  listDialogs,
+} from '../services/chat/dialog-list.ts'
+import { readDialogExport, readDialogFeed, readDialogHead } from '../services/chat/feed.ts'
 import { removeDialog, renameDialog, setDialogEffort } from '../services/chat/dialog-manage.ts'
 import { dialogCommands, dialogFacts } from '../services/chat/dialog-facts.ts'
 import { accessibleTask, taskNotFound } from '../services/chat/access.ts'
@@ -29,9 +31,12 @@ import {
   cancelDialog,
   continueDialog,
   createDialog,
+  agentCommandDialog,
   postDialogMessage,
   resumeDialog,
   retryDialog,
+  redoDialogTurn,
+  undoDialogTurn,
 } from '../services/chat/tasks.ts'
 import { consentedProcedure, router } from '../trpc.ts'
 
@@ -51,7 +56,7 @@ const postedOutput = z.strictObject({
 
 export const commandsOutput = z.array(
   z.strictObject({
-    id: z.enum(chatCommandIds),
+    id: z.enum(serverCommandIds),
     available: z.boolean(),
     refusal: z.enum(chatCommandRefusals).nullable(),
   }),
@@ -135,20 +140,23 @@ const feedOutput = z.strictObject({
   more: z.boolean(),
 })
 
+/** The project of a chat as a row of the list shows it. */
+const projectOutput = z.strictObject({ id: z.uuid(), name: z.string() })
+
 export const taskRouter = router({
   /**
    * A new dialog with the client's first words: the task, its reserve, the files, the row, the
    * pass and the preview in one transaction. `taskId` comes from the browser; a repeat returns the
-   * same task. `requirements` — with the repository or in the browser (docs/plan/57, Б2, Б9);
-   * absent, the server takes what the site offers (`project.get`, `capabilities`).
+   * same task. `siteId` is required and null for a chat without a project: a forgotten field must
+   * not silently give one, and what the chat works with is the server's, read from the project
+   * (docs/plan/61-chats-first.md, К7).
    */
   create: consentedProcedure
     .input(
       z.strictObject({
-        siteId: z.uuid(),
+        siteId: z.uuid().nullable(),
         taskId: browserId,
         text: words,
-        requirements: taskRequirementsSchema.optional(),
         attachments: attachmentIdsSchema.optional(),
         /** How hard the model thinks: `low`, `high` (the default) or `max`. */
         effort: reasoningEffortSchema.optional(),
@@ -161,7 +169,6 @@ export const taskRouter = router({
         siteId: input.siteId,
         taskId: input.taskId,
         text: input.text,
-        ...(input.requirements === undefined ? {} : { requirements: input.requirements }),
         ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
         ...(input.effort === undefined ? {} : { effort: input.effort }),
         now: new Date(),
@@ -200,6 +207,56 @@ export const taskRouter = router({
     .mutation(({ ctx, input }) =>
       resumeDialog(ctx.prisma, { ...input, userId: ctx.user.id, now: new Date() }),
     ),
+
+  /**
+   * `/init`: the agent studies the code and answers with hints for it, a paid pass of its own
+   * (docs/plan/61-chats-first.md, К31).
+   */
+  init: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid(), requestId: browserId }))
+    .output(postedOutput)
+    .mutation(({ ctx, input }) =>
+      agentCommandDialog(ctx.prisma, {
+        ...input,
+        command: 'init',
+        userId: ctx.user.id,
+        now: new Date(),
+      }),
+    ),
+
+  /**
+   * `/compact`: the session of the chat is replaced by a summary, a paid pass of its own, free when
+   * it fails (docs/plan/61-chats-first.md, К30).
+   */
+  compact: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid(), requestId: browserId }))
+    .output(postedOutput)
+    .mutation(({ ctx, input }) =>
+      agentCommandDialog(ctx.prisma, {
+        ...input,
+        command: 'compact',
+        userId: ctx.user.id,
+        now: new Date(),
+      }),
+    ),
+
+  /**
+   * `/undo`: the last turn of a chat without the repository is taken back, free and without the
+   * model (docs/plan/61-chats-first.md, К29); `words` — what the client wrote for it, for the field.
+   */
+  undoTurn: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid(), requestId: browserId }))
+    .output(postedOutput.extend({ words: z.string().nullable() }))
+    .mutation(({ ctx, input }) => undoDialogTurn(ctx.prisma, { ...input, userId: ctx.user.id })),
+
+  /**
+   * `/redo`: the turn `/undo` took comes back, free and without the model (§5.14); `words` — what
+   * the client wrote for it, for the page to take out of the field.
+   */
+  redoTurn: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid(), requestId: browserId }))
+    .output(postedOutput.extend({ words: z.string().nullable() }))
+    .mutation(({ ctx, input }) => redoDialogTurn(ctx.prisma, { ...input, userId: ctx.user.id })),
 
   /** «Продолжить» after a question of the platform about credits: the next attempt. */
   continue: consentedProcedure
@@ -304,11 +361,14 @@ export const taskRouter = router({
       }),
     ),
 
-  /** The dialogs of a site, the latest changed first; `cursor` is `nextCursor` of the page before. */
+  /**
+   * The chats of the user, the latest changed first; `folder` — of one project, or `none` for those
+   * without one; `cursor` is `nextCursor` of the page before.
+   */
   list: consentedProcedure
     .input(
       z.strictObject({
-        siteId: z.uuid(),
+        folder: z.union([z.uuid(), z.literal('none')]).optional(),
         cursor: z.string().regex(DIALOG_CURSOR_PATTERN).optional(),
       }),
     )
@@ -319,32 +379,75 @@ export const taskRouter = router({
             id: z.uuid(),
             title: z.string().nullable(),
             status: z.enum(taskStatuses),
-            mode: z.enum(taskModes),
             /** «Отменить выпуск» of the dialog's release: under way, or installed. */
             undo: z.enum(['running', 'installed']).nullable(),
             /** The agent answered and asked nothing: the dialog waits for no one (26.10.2026). */
             answered: z.boolean(),
+            /** `/undo` left it so: the answer it would name was just taken back. */
+            rewound: z.boolean(),
+            /** The last pass failed: nothing to confirm, the list says «Ошибка» (06.11.2026). */
+            failed: z.boolean(),
             createdAt: z.date(),
             updatedAt: z.date(),
+            project: projectOutput.nullable(),
           }),
         ),
         nextCursor: z.string().nullable(),
       }),
     )
-    .query(({ ctx, input }) => listDialogs(ctx.prisma, { ...input, userId: ctx.user.id })),
+    .query(({ ctx, input }) =>
+      listDialogs(ctx.prisma, {
+        userId: ctx.user.id,
+        folder: input.folder,
+        cursor: input.cursor,
+      }),
+    ),
 
-  /** The head of one dialog with its site. */
+  /** «По проектам»: the folders of the user's chats, counted on the server over all of them. */
+  folders: consentedProcedure
+    .input(z.strictObject({}))
+    .output(
+      z.strictObject({
+        folders: z.array(
+          z.strictObject({
+            project: projectOutput.nullable(),
+            count: z.number().int(),
+            attention: z.boolean(),
+          }),
+        ),
+      }),
+    )
+    .query(async ({ ctx }) => ({
+      folders: await listDialogFolders(ctx.prisma, { userId: ctx.user.id }),
+    })),
+
+  /** The head of one chat with its project; both null for a chat without one. */
   get: consentedProcedure
     .input(z.strictObject({ taskId: z.uuid() }))
     .output(
       feedTaskHeadSchema.extend({
-        siteId: z.uuid(),
+        siteId: z.uuid().nullable(),
+        project: z
+          .strictObject({
+            id: z.uuid(),
+            name: z.string(),
+            url: z.string(),
+            /** Paused, disconnected or archived: the chat reads and takes no words (К39). */
+            closed: z.boolean(),
+          })
+          .nullable(),
         alias: z.string(),
         createdAt: z.date(),
         updatedAt: z.date(),
       }),
     )
     .query(({ ctx, input }) => readDialogHead(ctx.prisma, { ...input, userId: ctx.user.id })),
+
+  /** `/export`: the whole chat as a Markdown file, in the words of the screen (§5.14). */
+  export: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid() }))
+    .output(z.strictObject({ fileName: z.string(), markdown: z.string() }))
+    .query(({ ctx, input }) => readDialogExport(ctx.prisma, { ...input, userId: ctx.user.id })),
 
   /** The commands of the chat with the server's verdict on each (Р34). */
   commands: consentedProcedure

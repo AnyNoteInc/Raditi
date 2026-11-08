@@ -10,13 +10,18 @@ import {
   type CandidateRecordInput,
   type PrismaClient,
 } from '@repo/db'
-import { DomainError, type CandidateFacts } from '@repo/domain'
+import { DomainError, siteIdOf, type CandidateFacts } from '@repo/domain'
 import { getSiteAdapter } from '@repo/site-adapters'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import type { CandidateRebase as CandidateRebaseAnswer } from '../git-workspace/git-workspace.service.ts'
 import { sampleDriverId } from '../testing/ids.ts'
-import type { CandidateBuild, CandidateBuilder, CandidateContext } from './candidate-builder.ts'
+import {
+  answersAgentCommand,
+  type CandidateBuild,
+  type CandidateBuilder,
+  type CandidateContext,
+} from './candidate-builder.ts'
 import type { CandidateGit } from './candidate-git.ts'
 import { CANDIDATE_REBASE_EVENT, CandidateRebase } from './candidate-rebase.ts'
 
@@ -86,9 +91,14 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
     await db.gitRepository.deleteMany({ where: { owner: 'sites-r3-rebase' } })
     const sites = await db.site.findMany({
       where: { name: 'Billing verification', tasks: { some: { candidates: { some: {} } } } },
-      select: { id: true },
+      select: { id: true, tasks: { select: { id: true } } },
     })
-    await db.siteLease.deleteMany({ where: { siteId: { in: sites.map((site) => site.id) } } })
+    // The rows of the sites and those of their chats (`turnLeaseOf`).
+    await db.siteLease.deleteMany({
+      where: {
+        siteId: { in: sites.flatMap((site) => [site.id, ...site.tasks.map((task) => task.id)]) },
+      },
+    })
     await fixtures.cleanup()
     vi.clearAllMocks()
   })
@@ -115,7 +125,7 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
     })
     await db.gitRepository.create({
       data: {
-        siteId: task.siteId,
+        siteId: siteIdOf(task),
         provider: 'gitea',
         owner: 'sites-r3-rebase',
         name: `site-${task.siteId}`,
@@ -133,6 +143,8 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
     rebased?: () => Promise<CandidateRebaseAnswer>
     /** The head of `agent/<taskId>`: the standing candidate's unless told. */
     branch?: string
+    /** The head of `main`. */
+    main?: string
     /** What the builder of the new revision answers. */
     build?: (
       context: CandidateContext,
@@ -144,7 +156,7 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
   function setup(options: Setup = {}) {
     const git = {
       readBranchHead: vi.fn(async ({ branch }: { branch: string }) =>
-        branch === 'main' ? MAIN : (options.branch ?? HEAD),
+        branch === 'main' ? (options.main ?? MAIN) : (options.branch ?? HEAD),
       ),
       treeOf: vi.fn(),
       comparesCommits: options.comparesCommits ?? true,
@@ -233,7 +245,7 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
       (c) => [c.revision, c.status, c.baseSha, c.headSha],
     )
 
-  it('carries the candidate onto main as the next revision, under the lease of the site', async () => {
+  it('carries the candidate onto main as the next revision, under its own lease', async () => {
     const dialog = await waiting()
     const job = await update(dialog)
     const written = await db.taskEvent.findUniqueOrThrow({
@@ -274,11 +286,346 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
     ).toEqual([2])
     // The new revision is told by its own card.
     expect(await told(dialog.taskId)).toEqual([])
-    // The site is free again.
-    expect((await leases.inspect(dialog.siteId))?.taskId).toBeNull()
+    // The chat's own row is free again (`turnLeaseOf`).
+    expect((await leases.inspect(dialog.taskId))?.taskId).toBeNull()
     // A repeat of the command (a pass that waited put it again) finds it done and keeps its answer.
     expect(await setup({ branch: REBASED }).rebase.run(job)).toBe('nothing')
     expect(await outcomes(dialog.taskId)).toEqual(['rebased'])
+  })
+
+  // docs/plan/61-chats-first.md, §5.14: «Обновить» writes the turn of the words about the candidate.
+  describe('the turn of the words the feed gives the revision', () => {
+    const candidateRow = (dialog: { taskId: string }, revision: number, turn: number) =>
+      insertFeedEvent(db, {
+        taskId: dialog.taskId,
+        row: {
+          type: 'feed.candidate',
+          payload: {
+            v: 1,
+            turn,
+            revision,
+            version: 'v0.1.0',
+            bump: 'minor',
+            files: { added: 1, modified: 0, deleted: 0 },
+            media: 0,
+            records: 0,
+          },
+        },
+      })
+    /** The last turn of the chat, after turn 1 whose words stand over the candidate. */
+    async function nextTurn(
+      dialog: { taskId: string },
+      data: { undoneAt?: Date; rejectedAt?: Date } = {},
+    ) {
+      await candidateRow(dialog, 1, 1)
+      await db.taskTurn.create({
+        data: {
+          taskId: dialog.taskId,
+          turnNo: 2,
+          status: 'completed',
+          driverId: sampleDriverId,
+          image,
+          headSha: 'd'.repeat(40),
+          ...data,
+        },
+      })
+      await db.task.update({ where: { id: dialog.taskId }, data: { turnNo: 2 } })
+    }
+    const said = async (taskId: string) =>
+      (
+        await db.taskEvent.findMany({
+          where: { taskId, type: 'feed.candidate' },
+          orderBy: { id: 'asc' },
+        })
+      ).map((row) => {
+        const { turn, revision } = row.payload as { turn: number; revision: number }
+        return [revision, turn]
+      })
+
+    it('says the words of the turn the candidate stands on, not those of a turn taken back', async () => {
+      const dialog = await waiting()
+      await nextTurn(dialog, { undoneAt: new Date() })
+
+      const first = setup()
+      expect(await first.rebase.run(await update(dialog))).toBe('rebased')
+
+      expect(await said(dialog.taskId)).toEqual([
+        [1, 1],
+        [2, 1],
+      ])
+      // The record stays under the task's turn: the planner reads the move from it.
+      expect(first.candidates.build).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ turnNo: 2 }),
+      )
+
+      // The next «Обновить» carries a revision recorded under the undone turn.
+      await db.taskCandidate.updateMany({
+        where: { taskId: dialog.taskId, revision: 2 },
+        data: { turnNo: 2 },
+      })
+      const second = setup({
+        branch: REBASED,
+        main: 'f'.repeat(40),
+        rebased: async () => ({
+          status: 'rebased',
+          headSha: 'd'.repeat(40),
+          treeSha: '1'.repeat(40),
+        }),
+      })
+      expect(await second.rebase.run(await update(dialog))).toBe('rebased')
+      expect(await said(dialog.taskId)).toEqual([
+        [1, 1],
+        [2, 1],
+        [3, 1],
+      ])
+    })
+
+    it('says those of the candidate after a turn the platform refused: it has none', async () => {
+      const dialog = await waiting()
+      await nextTurn(dialog, { rejectedAt: new Date() })
+      const { rebase } = setup({ branch: 'd'.repeat(40) })
+
+      expect(await rebase.run(await update(dialog))).toBe('rebased')
+
+      expect(await said(dialog.taskId)).toEqual([
+        [1, 1],
+        [2, 1],
+      ])
+    })
+
+    /** A press of a command of the agent, as web writes it. */
+    const agentCommand = (dialog: { taskId: string }, command: 'init' | 'compact') =>
+      insertFeedEvent(db, {
+        taskId: dialog.taskId,
+        row: {
+          type: 'feed.request',
+          payload: {
+            v: 1,
+            kind: 'agent_command',
+            command,
+            authorId: randomUUID(),
+            requestId: randomUUID(),
+          },
+        },
+      })
+    /** The client's words that answer the row `answers`. */
+    const words = (dialog: { taskId: string }, answers: bigint) =>
+      insertFeedEvent(db, {
+        taskId: dialog.taskId,
+        row: {
+          type: 'feed.request',
+          payload: {
+            v: 1,
+            kind: 'answer',
+            text: 'Теперь добавьте баннер.',
+            authorId: randomUUID(),
+            requestId: randomUUID(),
+            answersEventId: answers.toString(),
+          },
+        },
+      })
+    const resultRow = (dialog: { taskId: string }, turn: number) =>
+      insertFeedEvent(db, {
+        taskId: dialog.taskId,
+        row: {
+          type: 'feed.result',
+          payload: {
+            v: 1,
+            turn,
+            message: 'Тема сайта лежит в папке shop.',
+            site: 'none',
+            next: 'awaiting_user',
+            filesChanged: null,
+            changeType: 'none',
+            needsApproval: false,
+            risk: 'low',
+          },
+        },
+      })
+    const failureRow = (dialog: { taskId: string }, turn: number | null) =>
+      insertFeedEvent(db, {
+        taskId: dialog.taskId,
+        row: {
+          type: 'feed.failure',
+          payload: {
+            v: 1,
+            turn,
+            code: 'technical',
+            site: 'unchanged',
+            credits: 'returned',
+            next: 'awaiting_user',
+          },
+        },
+      })
+    /** Turn 3, completed, the task's turn now. */
+    const thirdTurn = async (dialog: { taskId: string }) => {
+      await db.taskTurn.create({
+        data: {
+          taskId: dialog.taskId,
+          turnNo: 3,
+          status: 'completed',
+          driverId: sampleDriverId,
+          image,
+          headSha: 'd'.repeat(40),
+        },
+      })
+      await db.task.update({ where: { id: dialog.taskId }, data: { turnNo: 3 } })
+    }
+
+    // К31: the answer of `/init` describes the code; the candidate's words are those of its turn.
+    it('says the words of the turn the candidate stands on after `/init`', async () => {
+      const dialog = await waiting()
+      await nextTurn(dialog)
+      await agentCommand(dialog, 'init')
+      await resultRow(dialog, 2)
+
+      expect(await setup().rebase.run(await update(dialog))).toBe('rebased')
+
+      expect(await said(dialog.taskId)).toEqual([
+        [1, 1],
+        [2, 1],
+      ])
+    })
+
+    // A compaction answers in the platform's line: it says nothing of the changes either.
+    it('says the words of the turn the candidate stands on after `/compact`', async () => {
+      const dialog = await waiting()
+      await nextTurn(dialog)
+      await agentCommand(dialog, 'compact')
+      await resultRow(dialog, 2)
+
+      expect(await setup().rebase.run(await update(dialog))).toBe('rebased')
+
+      expect(await said(dialog.taskId)).toEqual([
+        [1, 1],
+        [2, 1],
+      ])
+    })
+
+    // Only the answer of the task's own turn counts: an older one says nothing of the last turn.
+    it('says the words of the last turn after an older answer of `/init`', async () => {
+      const dialog = await waiting()
+      await nextTurn(dialog)
+      await agentCommand(dialog, 'init')
+      const answered = await resultRow(dialog, 2)
+      await words(dialog, answered)
+      await resultRow(dialog, 3)
+      await thirdTurn(dialog)
+
+      expect(await setup().rebase.run(await update(dialog))).toBe('rebased')
+
+      expect(await said(dialog.taskId)).toEqual([
+        [1, 1],
+        [2, 3],
+      ])
+    })
+
+    // `actionOf`: words after a failed compaction take its place, and their turn is an ordinary one.
+    it('says the words of the last turn after a failed `/compact` and the words after it', async () => {
+      const dialog = await waiting()
+      await nextTurn(dialog)
+      await agentCommand(dialog, 'compact')
+      // The pass ended before it opened a turn.
+      const failed = await failureRow(dialog, null)
+      await words(dialog, failed)
+      await resultRow(dialog, 3)
+      await thirdTurn(dialog)
+
+      expect(await setup().rebase.run(await update(dialog))).toBe('rebased')
+
+      expect(await said(dialog.taskId)).toEqual([
+        [1, 1],
+        [2, 3],
+      ])
+    })
+
+    // `#emptied` with «Продолжить» queued: the site holds the change, and the pass goes on from the
+    // carrier `#emptied` records — a new session with nothing to shorten. Its result is an
+    // ordinary one by the rule core reads (`answersAgentCommand`), not the answer of `/compact`.
+    it('says the words of the pass that went on after «Обновить» found the change on the site', async () => {
+      const dialog = await waiting()
+      await candidateRow(dialog, 1, 1)
+      await agentCommand(dialog, 'compact')
+      const ceiling = await insertFeedEvent(db, {
+        taskId: dialog.taskId,
+        row: {
+          type: 'feed.question',
+          payload: { v: 1, kind: 'ceiling', turn: 1, reason: 'step', spent: 18, held: 20, left: 2 },
+        },
+      })
+      await insertFeedEvent(db, {
+        taskId: dialog.taskId,
+        row: {
+          type: 'feed.request',
+          payload: {
+            v: 1,
+            kind: 'continue',
+            authorId: dialog.userId,
+            requestId: randomUUID(),
+            questionEventId: ceiling.toString(),
+          },
+        },
+      })
+      const emptied = setup({
+        build: async () => {
+          await db.task.update({ where: { id: dialog.taskId }, data: { status: 'queued' } })
+          return EMPTY
+        },
+      })
+
+      expect(await emptied.rebase.run(await update(dialog))).toBe('emptied')
+
+      expect(await revisions(dialog.taskId)).toEqual([
+        [1, 'superseded', BASE, HEAD],
+        [2, 'superseded', MAIN, REBASED],
+      ])
+      expect(await told(dialog.taskId)).toEqual([{ v: 1, outcome: 'emptied', conflicts: 0 }])
+
+      // The pass: turn 2 on the carrier, its candidate before its result, as a pass writes them.
+      await db.taskTurn.create({
+        data: {
+          taskId: dialog.taskId,
+          turnNo: 2,
+          status: 'completed',
+          driverId: sampleDriverId,
+          image,
+          headSha: 'd'.repeat(40),
+        },
+      })
+      await db.$transaction((tx) =>
+        recordCandidate(tx, { ...record(dialog.taskId, 3, MAIN, 'd'.repeat(40)), turnNo: 2 }),
+      )
+      await candidateRow(dialog, 3, 2)
+      await resultRow(dialog, 2)
+      await db.task.update({
+        where: { id: dialog.taskId },
+        data: { status: 'awaiting_approval', turnNo: 2 },
+      })
+
+      expect(await answersAgentCommand(db, dialog.taskId, 2)).toBe(false)
+
+      const later = setup({ branch: 'd'.repeat(40), main: 'f'.repeat(40) })
+      expect(await later.rebase.run(await update(dialog))).toBe('rebased')
+
+      expect(await said(dialog.taskId)).toEqual([
+        [1, 1],
+        [3, 2],
+        [4, 2],
+      ])
+    })
+
+    it('says the words of the last turn while it stands, though the candidate is older', async () => {
+      const dialog = await waiting()
+      await nextTurn(dialog)
+
+      expect(await setup().rebase.run(await update(dialog))).toBe('rebased')
+
+      expect(await said(dialog.taskId)).toEqual([
+        [1, 1],
+        [2, 2],
+      ])
+    })
   })
 
   // docs/plan/53, «Попробовать ещё (18.10)»: a pass of the dialog failed after its turn
@@ -334,7 +681,7 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
     expect(await outcomes(dialog.taskId)).toEqual(['conflict'])
     // The client sees it: the update did not carry, and why.
     expect(await told(dialog.taskId)).toEqual([{ v: 1, outcome: 'conflict', conflicts: 1 }])
-    expect((await leases.inspect(dialog.siteId))?.taskId).toBeNull()
+    expect((await leases.inspect(dialog.taskId))?.taskId).toBeNull()
   })
 
   it('refuses an update that would change a path the rules of the workspace refuse', async () => {
@@ -353,18 +700,19 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
     expect(await told(dialog.taskId)).toEqual([{ v: 1, outcome: 'failed', conflicts: 0 }])
   })
 
-  it('waits for a busy site and does nothing for a dialog that does not wait with a candidate', async () => {
+  it('waits for a release of its site and does nothing for a dialog that does not wait with a candidate', async () => {
     const dialog = await waiting()
-    // Another dialog of the same site holds it.
+    // A release of another dialog of the same site holds it: a turn of another dialog would not
+    // (the chats of one project work side by side, `turnLeaseOf`).
     const row = await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })
     const other = await db.task.create({
-      data: { workspaceId: row.workspaceId, siteId: dialog.siteId, status: 'running' },
+      data: { workspaceId: row.workspaceId, siteId: dialog.siteId, status: 'deploying' },
     })
     expect(
       await leases.acquire({
-        siteId: dialog.siteId,
+        siteId: siteIdOf(dialog),
         taskId: other.id,
-        operation: 'turn',
+        operation: 'deploy',
         ttlMs: 60_000,
       }),
     ).not.toBeNull()
@@ -380,6 +728,27 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
 
     await db.task.update({ where: { id: dialog.taskId }, data: { status: 'cancelled' } })
     expect(await rebase.run({ taskId: dialog.taskId, requestEventId: '2' })).toBe('nothing')
+  })
+
+  it('reads the candidate anew under the lease: `/undo` may have finished before it', async () => {
+    const dialog = await waiting()
+    const taken = vi.spyOn(leases, 'acquire').mockImplementationOnce(async (input) => {
+      // The candidate the job read goes while it waits for the site.
+      await db.$transaction((tx) => recordCandidate(tx, record(dialog.taskId, 2, BASE, BASE)))
+      taken.mockRestore()
+      return leases.acquire(input)
+    })
+    const { rebase, git, queue } = setup()
+
+    expect(await rebase.run({ taskId: dialog.taskId, requestEventId: '1' })).toBe('busy')
+
+    expect(git.rebaseCandidate).not.toHaveBeenCalled()
+    expect(queue.enqueue).toHaveBeenCalledWith(
+      'agent-turns',
+      'candidate.rebase',
+      { taskId: dialog.taskId, requestEventId: '1' },
+      expect.objectContaining({ delayMs: 30_000 }),
+    )
   })
 
   it('pushes nothing while this core cannot compare commits', async () => {

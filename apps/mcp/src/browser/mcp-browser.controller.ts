@@ -3,6 +3,7 @@ import { Ctx, Payload } from '@nestjs/microservices'
 import { McpController, Tool, ToolScopes, type McpContext } from '@rekog/mcp-nest'
 import { isDomainError } from '@repo/domain'
 
+import { siteAccessOf, type McpAccess } from '../access/mcp-access.ts'
 import { MCP_REQUEST_ACCESS, type McpRequest } from '../access/mcp-request.ts'
 import { mcpCanonicalJson } from '../common/canonical-json.ts'
 import {
@@ -152,13 +153,10 @@ export class McpBrowserController {
     return this.#call(context, (scope) => this.browser.runChecks(scope, args))
   }
 
-  async #call(
-    context: McpContext,
-    run: (
-      scope: NonNullable<McpRequest[typeof MCP_REQUEST_ACCESS]>,
-    ) => Promise<BrowserToolResponse>,
-  ) {
-    const scope = context.getRawRequest<McpRequest>()?.[MCP_REQUEST_ACCESS]
+  async #call(context: McpContext, run: (scope: McpAccess) => Promise<BrowserToolResponse>) {
+    const access = context.getRawRequest<McpRequest>()?.[MCP_REQUEST_ACCESS]
+    // This family is not offered to a chat without a site (`mcpToolFamiliesOf`).
+    const scope = access ? siteAccessOf(access) : null
     if (!scope)
       return { isError: true, content: [{ type: 'text', text: 'MCP authorization is required' }] }
     try {

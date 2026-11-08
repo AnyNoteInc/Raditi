@@ -12,6 +12,7 @@ import {
   brandCssVariables,
   motionTokens,
   semanticColors,
+  statusDotColors,
 } from './tokens.ts'
 
 /** The colour of a role mixed in CSS from two palette tokens, as a browser computes it in sRGB. */
@@ -90,6 +91,14 @@ describe('createAppTheme', () => {
       )
     },
   )
+
+  it.each(['light', 'dark'] as const)('keeps status dots visible in %s mode', (mode) => {
+    const { background } = createAppTheme(mode).palette
+    for (const dot of Object.values(statusDotColors)) {
+      expect(getContrastRatio(dot, background.default)).toBeGreaterThanOrEqual(3)
+      expect(getContrastRatio(dot, background.paper)).toBeGreaterThanOrEqual(3)
+    }
+  })
 
   it('renders colours through CSS variables', () => {
     const theme = createAppTheme('light')

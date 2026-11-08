@@ -12,6 +12,7 @@ import {
   preparedRunSchema,
   publicationMetadataSchema,
   requirementsOf,
+  turnMayHoldInbox,
   runEnvValues,
   siteBusy,
   siteHeld,
@@ -197,9 +198,16 @@ export class TurnSupervisor {
         )
         // The next turn starts from the previous turn's candidate commit; the snapshot carries
         // the session only. A turn without a repository restores only a checkpoint without one,
-        // and a turn with one never restores such a checkpoint.
+        // and a turn with one never restores such a checkpoint. A rebased turn starts on the head
+        // the branch moved to after that commit — the session goes on, the checkout is new.
         if (request.workspace) {
-          if (source.manifest.git?.headSha !== request.workspace.expectedBaseSha)
+          const saved = source.manifest.git
+          if (
+            saved === undefined ||
+            saved.branch !== request.workspace.branch ||
+            saved.provider !== request.workspace.repo.provider ||
+            (!request.rebased && saved.headSha !== request.workspace.expectedBaseSha)
+          )
             throw conflict('Previous checkpoint differs from the expected checkout')
         } else if (source.manifest.git !== undefined)
           throw conflict('Previous checkpoint holds a repository the turn has not')
@@ -295,7 +303,10 @@ export class TurnSupervisor {
    * costs neither a turn number nor an undo. Nothing of the run is kept.
    */
   private async assertLaunchable(plan: TurnPlan): Promise<void> {
-    const { context, input } = withTurnCredentials(plan, newTurnKeys())
+    const keyed = withTurnCredentials(plan, newTurnKeys())
+    const { input } = keyed
+    // The session of an action comes out of its checkpoint, under the lease: a stand-in here.
+    const context = input.action ? { ...keyed.context, nativeSessionId: 'dry-run' } : keyed.context
     const prepared = await this.deps.driver.prepare(context)
     checkPreparedRun(context, prepared, this.deps.driver.command(prepared, input))
   }
@@ -311,26 +322,33 @@ export class TurnSupervisor {
     // not undone, and «Обновить» moves a branch it does not have.
     if (!workspace && (request.replacesTurn !== undefined || request.rebased !== undefined))
       throw badRequest('A turn without a repository neither replaces nor rebases')
-    // A task in the browser hands its files to the browser worker, never to the sandbox (Б26).
-    if (request.input.attachments.length && !workspace)
-      throw badRequest('Files of the client go only to a turn with a repository')
+    // A turn with one replaces the undone turn (docs/plan/61-chats-first.md, §5.14).
+    if (request.rewound !== undefined && (workspace || labels.turn < 2))
+      throw badRequest('Only a later turn without a repository is rewound')
+    // A task on a site without a repository hands its files to the browser worker, never to the
+    // sandbox (Б26); a chat without a site has no site to hand them to (docs/plan/61, К16).
+    if (request.input.attachments.length && !turnMayHoldInbox(workspace !== undefined, labels))
+      throw badRequest('Files of the client go only to a turn with a repository or without a site')
     if (request.input.attachments.length && !this.deps.inbox)
       throw badRequest('Files of the client need the inbox of core')
+    // A compaction shortens a session: only a checkpoint brings one (docs/plan/61, §5.14).
+    if (request.input.action !== undefined && !request.previous)
+      throw badRequest('An action of a turn needs the checkpoint of an earlier turn')
     if (request.replacesTurn !== undefined && request.replacesTurn !== labels.turn - 1)
       throw badRequest('Replacement must name the latest turn')
     if (request.replacesTurn !== undefined && workspace?.expectedBranchSha === undefined)
       throw badRequest('Replacement requires the published task branch fence')
     if (request.replacesTurn !== undefined && !request.previous && request.context.nativeSessionId)
       throw badRequest('A replacement without a checkpoint must start a fresh session')
-    // After «Обновить» (plan 53, Р27) the dialog stands on a new `main`: the next turn starts a
-    // new session from the moved candidate, with nothing of the old one to restore. It replaces
-    // the last turn when that one did not succeed (its content is undone first), and a failed
-    // rebased turn is replaced by a rebased one; the store checks which head it starts on.
+    // After «Обновить» (plan 53, Р27) or the client's edit of a file the chat stands on a moved
+    // candidate: the next turn starts on it and goes on with the session of the turn before
+    // (owner's request of 06.11.2026), or a new one when there is no checkpoint. It replaces the
+    // last turn when that one did not succeed (its content is undone first), and a failed rebased
+    // turn is replaced by a rebased one; the store checks which head it starts on.
     if (request.rebased === true) {
       if (labels.turn < 2) throw badRequest('A rebased turn follows an earlier turn')
-      if (request.previous) throw badRequest('A rebased turn restores no checkpoint')
-      if (request.context.nativeSessionId)
-        throw badRequest('A rebased turn must start a fresh session')
+      if (!request.previous && request.context.nativeSessionId)
+        throw badRequest('A rebased turn without a checkpoint must start a fresh session')
     } else if (
       workspace &&
       labels.turn > 1 &&
@@ -393,9 +411,11 @@ export class TurnSupervisor {
         !prior ||
         prior.workspaceId !== labels.workspaceId ||
         prior.sessionId !== labels.sessionId ||
-        (request.replacesTurn === undefined
-          ? prior.turn !== labels.turn - 1
-          : prior.turn >= request.replacesTurn) ||
+        (request.replacesTurn !== undefined
+          ? prior.turn >= request.replacesTurn
+          : request.rewound
+            ? prior.turn >= labels.turn - 1
+            : prior.turn !== labels.turn - 1) ||
         prior.image !== request.sandbox.image ||
         prior.driver.id !== this.deps.driver.id ||
         prior.driver.version !== request.driverVersion

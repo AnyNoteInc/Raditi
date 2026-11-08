@@ -101,9 +101,16 @@ export async function verifyZai(ctx) {
     plan: 'lite',
     health: 'ok',
     enabled: false,
-    // The settings of the operator command for this backend; П4 of the pivot plan.
-    maxConcurrentTurns: 1,
-    maxConcurrentRequests: 2,
+    // The settings of the operator command for this backend: eight turns and sixteen requests
+    // since the owner's request of 06.11.2026 (before it one and two, П4 of the pivot plan).
+    maxConcurrentTurns: 8,
+    maxConcurrentRequests: 16,
+  })
+  // The stand's scenarios fence on a capacity of one turn (two requests): the account goes back
+  // to it once the import's own numbers are checked.
+  await db.subscriptionAccount.update({
+    where: { id: accountId },
+    data: { maxConcurrentTurns: 1, maxConcurrentRequests: 2 },
   })
   // The import asked the quota and nothing else, with the key it was given, without a proxy.
   let state = await zai()
@@ -273,6 +280,12 @@ export async function verifyZai(ctx) {
       .sort(),
     ['bash true', 'bash true', 'site_info true'],
   )
+  // The reasoning of each answer came through the gateway and out of the CLI as a row of its own.
+  assert.deepEqual(
+    exec.events.filter((event) => event.type === 'reasoning').map((event) => event.text),
+    exec.provider.map(() => 'Synthetic reasoning.'),
+    'The reasoning of the provider did not reach the events of the turn',
+  )
   // The tool's answer went back to the model through the body policy of the gateway.
   assert.ok(
     JSON.stringify(exec.provider.at(-1).body).includes(SYNTHETIC_MCP_MARKER),
@@ -290,7 +303,7 @@ export async function verifyZai(ctx) {
   // No tunnel was opened since the role lost its proxy: the fake was reached directly.
   assert.equal(await proxyTunnels(), tunnels)
   passed(
-    'driver-prepared OpenCode exec on the direct path: two tool rounds, an MCP tool, provider usage in llm_calls',
+    'driver-prepared OpenCode exec on the direct path: two tool rounds, an MCP tool, the reasoning of each answer, provider usage in llm_calls',
   )
 
   const secondResult = resultFor('B13 OpenCode resume')

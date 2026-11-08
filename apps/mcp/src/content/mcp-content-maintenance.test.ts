@@ -4,7 +4,7 @@ import { Prisma, type PrismaClient } from '@repo/db'
 import { terminalTaskStatuses } from '@repo/domain'
 import { describe, expect, it, vi } from 'vitest'
 
-import { CONTENT_SNAPSHOT_TTL_MS, contentExpiredSql } from './content-snapshots.ts'
+import { CONTENT_SNAPSHOT_TTL_MS, contentExpiredSql } from '../privacy/content-expiry.ts'
 import { McpContentMaintenance } from './mcp-content-maintenance.ts'
 
 /** A database that finds one row to sweep and records every raw query it is given. */

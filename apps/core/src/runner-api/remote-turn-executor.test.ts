@@ -1562,6 +1562,48 @@ describe('RemoteTurnExecutor: a turn without a repository (docs/plan/57-browser-
     await expect(turn.finish()).resolves.toMatchObject({ containerId: 'container1' })
   })
 
+  describe('files of the client without a bundle', () => {
+    const path = '/workspace/inbox/0199a3f2-0000-7000-8000-0000000000f1/Смета.pdf'
+    const inbox = [
+      {
+        path,
+        sizeBytes: 3,
+        read: async function* () {
+          yield Buffer.from('abc')
+        },
+      },
+    ]
+
+    it('sends them with the prepare of a chat without a site (К16)', async () => {
+      const f = fixture()
+      const plain = f.input('unused')
+      const turn = await preparedWithoutRepository(f, {
+        inbox,
+        fence: { ...plain.fence, siteId: taskId },
+        sandbox: { ...plain.sandbox, labels: { ...plain.sandbox.labels, siteId: taskId } },
+      })
+      expect(turn.command).toMatchObject({ type: 'prepare', inbox: [{ path, sizeBytes: 3 }] })
+      expect(turn.command).not.toHaveProperty('bundle')
+      await expect(turn.finish()).resolves.toMatchObject({ containerId: 'container1' })
+    })
+
+    it('refuses them on a site without a repository before a runner is reserved', async () => {
+      const f = fixture()
+      const reserve = vi.spyOn(f.hub, 'reserve')
+      const assignment = await f.open()
+      await expect(
+        f.executor.prepare(
+          f.input(assignment.id, { bundle: undefined, inbox }),
+          new AbortController().signal,
+        ),
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'Files of the client go only to a turn with a repository or without a site',
+      })
+      expect(reserve).not.toHaveBeenCalled()
+    })
+  })
+
   it('refuses a restore and a bundle that disagree on the repository before a runner is reserved', async () => {
     const f = fixture()
     const reserve = vi.spyOn(f.hub, 'reserve')

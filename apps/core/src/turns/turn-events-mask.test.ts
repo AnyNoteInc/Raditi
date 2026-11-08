@@ -10,14 +10,16 @@ describe('the client variables of a turn in its events (plan 53, Р13)', () => {
     const events: AgentEvent[] = [
       { type: 'started', nativeSessionId: 'native1' },
       { type: 'message', text: `ключ ${value}, снова ${value}` },
+      { type: 'reasoning', text: `подумаю о ${value}` },
       { type: 'failed', reason: `HTTP 401 for ${JSON.stringify(value)}` },
       { type: 'completed' },
     ]
     expect(maskTurnEvents(events, [value])).toEqual([
       events[0],
       { type: 'message', text: `ключ ${ENV_VALUE_MASK}, снова ${ENV_VALUE_MASK}` },
+      { type: 'reasoning', text: `подумаю о ${ENV_VALUE_MASK}` },
       { type: 'failed', reason: `HTTP 401 for "${ENV_VALUE_MASK}"` },
-      events[3],
+      events[4],
     ])
     expect(maskTurnEvents(events, [])).toEqual(events)
   })

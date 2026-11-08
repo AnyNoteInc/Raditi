@@ -10,6 +10,7 @@ import { releaseRouter } from './routers/release.ts'
 import { siteAgentSkillsRouter } from './routers/site-agent-skills.ts'
 import { siteDatabaseDumpRouter } from './routers/site-database-dump.ts'
 import { siteEnvRouter } from './routers/site-env.ts'
+import { siteFilesRouter } from './routers/site-files.ts'
 import { siteHistoryRouter } from './routers/site-history.ts'
 import { taskRouter } from './routers/task.ts'
 import { siteConnectionRouter } from './routers/site-connection.ts'
@@ -33,6 +34,8 @@ export const appRouter = router({
   siteDatabaseDump: siteDatabaseDumpRouter,
   // «Изменения», «Запуски», «База и бэкап» and where the files and the database of a site are.
   siteHistory: siteHistoryRouter,
+  // «Терминал»: the files of the version a site has, to read (06.11.2026).
+  siteFiles: siteFilesRouter,
   // «Навыки агента»: the MCP servers a site's agent connects to besides the platform's.
   siteAgentSkills: siteAgentSkillsRouter,
   // A task in the cloud browser and the files of messages (docs/plan/57-browser-tasks.md).

@@ -6,7 +6,8 @@ import ButtonBase from '@mui/material/ButtonBase'
 import ListItemText from '@mui/material/ListItemText'
 import Menu from '@mui/material/Menu'
 import MenuItem from '@mui/material/MenuItem'
-import { useId, useState } from 'react'
+import Typography from '@mui/material/Typography'
+import { useId, useImperativeHandle, useRef, useState, type Ref } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 
@@ -19,27 +20,41 @@ const hintOf: Readonly<Record<ReasoningEffort, string>> = {
   max: effortText.maxHint,
 }
 
+/** What `/models` does with the menu. */
+export interface EffortMenuHandle {
+  open: () => void
+}
+
 /**
  * «Размышление»: how hard the model thinks (owner's requests of 26.10.2026) — a quiet button in
  * the row of the field, the brain beside the level chosen (29.10.2026), and a menu of the three
  * under it. The same on a new dialog and in one that goes on, where the level holds from the
- * agent's next turn.
+ * agent's next turn. `/models` opens the same menu (docs/plan/61-chats-first.md, §5.14), also while
+ * the level cannot be changed: then it shows the level and says when it can.
  */
 export function EffortMenu({
   value,
   onChange,
   disabled = false,
+  lockedText = effortText.locked,
+  handle,
 }: {
   value: ReasoningEffort
   onChange: (effort: ReasoningEffort) => void
   disabled?: boolean
+  /** What the closed menu says of the level. */
+  lockedText?: string
+  handle?: Ref<EffortMenuHandle>
 }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const menuId = useId()
   const open = anchor !== null
+  const button = useRef<HTMLButtonElement>(null)
+  useImperativeHandle(handle, () => ({ open: () => setAnchor(button.current) }), [])
   return (
     <>
       <ButtonBase
+        ref={button}
         aria-label={`${effortText.label}: ${effortText[value]}`}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -78,12 +93,22 @@ export function EffortMenu({
           list: { 'aria-label': effortText.label },
         }}
       >
+        {disabled ? (
+          <Typography
+            component="li"
+            role="presentation"
+            sx={{ px: 2, py: 0.75, maxWidth: 300, fontSize: 13, color: 'text.secondary' }}
+          >
+            {lockedText}
+          </Typography>
+        ) : null}
         {reasoningEfforts.map((effort) => (
           <MenuItem
             key={effort}
             role="menuitemradio"
             aria-checked={effort === value}
             selected={effort === value}
+            disabled={disabled}
             onClick={() => {
               setAnchor(null)
               if (effort !== value) onChange(effort)

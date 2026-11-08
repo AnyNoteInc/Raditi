@@ -3,8 +3,9 @@
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import Link from 'next/link'
-import { useSelectedLayoutSegment } from 'next/navigation'
 import { useState } from 'react'
+
+import { AppIcon } from '@/components/application/app-icon'
 
 import { runFilterText, type RunFilter } from './history-text'
 
@@ -29,153 +30,171 @@ const toneColor = {
 } as const
 
 /**
- * The list column of a history section: links to the items, the open one marked. At the root of
- * the section the item the root page shows (`rootSegment`) is the open one.
+ * The versions or the runs of a site as a list across the full width
+ * (docs/plan/64-cabinet-navigation.md, Н6): each row leads to the item's own page. The runs are
+ * told apart by the tabs «Все», «Идут» and «С ошибкой» (Н5).
  */
 export function HistoryList({
+  label,
   root,
   items,
-  rootSegment,
   emptyText,
   filters = false,
 }: {
+  /** The accessible name of the list. */
+  label: string
   root: string
   items: readonly HistoryItem[]
-  rootSegment: string | null
   emptyText: string
   filters?: boolean
 }) {
-  const segment = useSelectedLayoutSegment() ?? rootSegment
   const [filter, setFilter] = useState<RunFilter>('all')
   const shown =
     filter === 'all' ? items : items.filter((item) => item.filters?.includes(filter) ?? false)
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
       {filters ? (
         <Box
           role="group"
           aria-label="Какие запуски показать"
-          sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, pb: 0.5 }}
+          sx={{ display: 'flex', gap: 0.5, borderBottom: 1, borderColor: 'divider', mt: -1 }}
         >
-          {(Object.keys(runFilterText) as RunFilter[]).map((key) => (
-            <Box
-              key={key}
-              component="button"
-              type="button"
-              aria-pressed={filter === key}
-              onClick={() => setFilter(key)}
-              sx={{
-                minHeight: 36,
-                px: 1.5,
-                borderRadius: '999px',
-                border: 1,
-                borderColor: filter === key ? 'text.primary' : 'divider',
-                bgcolor: filter === key ? 'text.primary' : 'transparent',
-                color: filter === key ? 'background.paper' : 'text.primary',
-                font: 'inherit',
-                fontSize: 14,
-                cursor: 'pointer',
-                '&:focus-visible': {
-                  outline: '2px solid',
-                  outlineColor: 'primary.main',
-                  outlineOffset: 2,
-                },
-              }}
-            >
-              {runFilterText[key]}
-            </Box>
-          ))}
+          {(Object.keys(runFilterText) as RunFilter[]).map((key) => {
+            const on = filter === key
+            return (
+              <Box
+                key={key}
+                component="button"
+                type="button"
+                aria-pressed={on}
+                onClick={() => setFilter(key)}
+                sx={{
+                  position: 'relative',
+                  minHeight: 44,
+                  px: 1.75,
+                  border: 0,
+                  borderRadius: '8px 8px 0 0',
+                  bgcolor: 'transparent',
+                  font: 'inherit',
+                  fontSize: 14,
+                  fontWeight: on ? 600 : 500,
+                  color: on ? 'text.primary' : 'text.secondary',
+                  cursor: 'pointer',
+                  '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
+                  '&::after': {
+                    content: '""',
+                    position: 'absolute',
+                    left: 10,
+                    right: 10,
+                    bottom: -1,
+                    height: 2,
+                    borderRadius: 2,
+                    bgcolor: on ? 'primary.main' : 'transparent',
+                  },
+                }}
+              >
+                {runFilterText[key]}
+              </Box>
+            )
+          })}
         </Box>
       ) : null}
       {shown.length === 0 ? (
-        <Typography color="text.secondary" sx={{ px: 1.5, py: 1 }}>
+        <Typography color="text.secondary">
           {items.length === 0 ? emptyText : 'Таких запусков нет.'}
         </Typography>
       ) : (
         <Box
           component="ul"
-          sx={{ m: 0, p: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 0.5 }}
+          aria-label={label}
+          sx={{
+            m: 0,
+            p: 0,
+            listStyle: 'none',
+            border: 1,
+            borderColor: 'divider',
+            borderRadius: '16px',
+            overflow: 'hidden',
+          }}
         >
-          {shown.map((item) => {
-            const current = item.segment === segment
-            return (
-              <li key={item.segment}>
+          {shown.map((item) => (
+            <Box
+              component="li"
+              key={item.segment}
+              sx={{ '& + &': { borderTop: 1, borderColor: 'divider' } }}
+            >
+              <Box
+                component={Link}
+                href={`${root}/${item.segment}`}
+                sx={{
+                  display: 'grid',
+                  gridTemplateColumns: 'auto minmax(0, 1fr) auto auto',
+                  alignItems: 'center',
+                  gap: '2px 14px',
+                  minHeight: 60,
+                  px: { xs: 2, md: 2.5 },
+                  py: 1.25,
+                  textDecoration: 'none',
+                  color: 'text.primary',
+                  '&:hover': { bgcolor: 'action.hover' },
+                  '&:focus-visible': {
+                    outline: '2px solid',
+                    outlineColor: 'primary.main',
+                    outlineOffset: -2,
+                  },
+                }}
+              >
                 <Box
-                  component={Link}
-                  href={`${root}/${item.segment}`}
-                  aria-current={current ? 'page' : undefined}
-                  sx={{
-                    display: 'grid',
-                    gridTemplateColumns: 'auto minmax(0, 1fr) auto',
-                    alignItems: 'baseline',
-                    gap: '2px 10px',
-                    minHeight: 44,
-                    px: 1.5,
-                    py: 1.25,
-                    borderRadius: '12px',
-                    textDecoration: 'none',
-                    color: 'text.primary',
-                    bgcolor: current ? 'action.selected' : 'transparent',
-                    '&:hover': { bgcolor: current ? 'action.selected' : 'action.hover' },
-                    '&:focus-visible': {
-                      outline: '2px solid',
-                      outlineColor: 'primary.main',
-                      outlineOffset: 2,
-                    },
-                  }}
+                  component="span"
+                  aria-hidden="true"
+                  sx={{ width: 9, height: 9, borderRadius: '50%', bgcolor: toneColor[item.tone] }}
+                />
+                <Box
+                  component="span"
+                  sx={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}
                 >
-                  <Box
-                    component="span"
-                    aria-hidden="true"
-                    sx={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: '50%',
-                      bgcolor: toneColor[item.tone],
-                      alignSelf: 'center',
-                    }}
-                  />
                   <Typography
                     component="span"
                     sx={{
-                      minWidth: 0,
                       fontSize: 15,
-                      fontWeight: current ? 600 : 500,
+                      fontWeight: 500,
                       lineHeight: 1.35,
                       overflowWrap: 'anywhere',
                     }}
                   >
                     {item.title}
                   </Typography>
-                  {item.badge ? (
-                    <Typography
-                      component="span"
-                      variant="caption"
-                      sx={{
-                        px: 1,
-                        borderRadius: '999px',
-                        border: 1,
-                        borderColor: 'divider',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {item.badge}
-                    </Typography>
-                  ) : (
-                    <span />
-                  )}
-                  <Typography
-                    component="span"
-                    variant="caption"
-                    color="text.secondary"
-                    sx={{ gridColumn: '2 / -1' }}
-                  >
+                  <Typography component="span" variant="caption" color="text.secondary">
                     {item.note}
                   </Typography>
                 </Box>
-              </li>
-            )
-          })}
+                {item.badge ? (
+                  <Typography
+                    component="span"
+                    variant="caption"
+                    sx={{
+                      px: 1,
+                      borderRadius: '999px',
+                      border: 1,
+                      borderColor: 'divider',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {item.badge}
+                  </Typography>
+                ) : (
+                  <span />
+                )}
+                <Box
+                  component="span"
+                  aria-hidden="true"
+                  sx={{ display: 'flex', color: 'text.secondary' }}
+                >
+                  <AppIcon name="chevron" size={18} />
+                </Box>
+              </Box>
+            </Box>
+          ))}
         </Box>
       )}
     </Box>

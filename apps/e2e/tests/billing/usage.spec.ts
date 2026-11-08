@@ -84,7 +84,7 @@ test('a customer who paid for a tariff sees its full quota and an empty history'
     await expect(state).toBeVisible(SLOW)
     // A new user has no workspace yet: the gift of the registration is shown as promised.
     await expect(state).toContainText(
-      'У вас 35 подарочных кредитов. Они не сгорают, а задачи принимаются, пока подарочные кредиты не закончатся. Здесь видно, сколько кредитов осталось и на что они ушли.',
+      'У вас 50 подарочных кредитов. Они не сгорают, а задачи принимаются, пока подарочные кредиты не закончатся. Здесь видно, сколько кредитов осталось и на что они ушли.',
     )
     await expect(state).not.toContainText('Кредиты входят в тариф')
     await expect(state.getByRole('link', { name: 'Выбрать тариф' })).toHaveAttribute(
@@ -116,8 +116,14 @@ test('a customer who paid for a tariff sees its full quota and an empty history'
     await expect(definition).toBeVisible()
     await expect(explainer).toContainText(/небольшая правка обычно стоит 5\sкредитов/)
     await expect(explainer).toContainText(
-      /Кредиты списываются только за\sвыполненную задачу\s—\sне\sменьше 5\sза\sзадачу\./,
+      /За\sвыполненную\sзадачу\sсписывается\sне\sменьше\s5\sкредитов,\sдаже\sесли\sработы\sбыло\sсовсем\sмало\./,
     )
+    // The rule of the charge stands once, above the block (Ц14).
+    await expect(page.getByRole('main')).toContainText(
+      /Списываем\sтолько\sза\sвыполненную\sработу:\sпопытка,\sкоторая\sоборвалась\sиз-за\sсбоя,\sничего\sне\sстоит\./,
+    )
+    // No tariff on sale has a daily limit: the block does not explain one.
+    await expect(explainer).not.toContainText('дневной лимит')
     // No model has an approved price in this database: there is no table to print, and the
     // unit of a model's work is named nowhere.
     await expect(explainer.getByText('Точный расчёт')).toHaveCount(0)
@@ -138,17 +144,17 @@ test('a customer who paid for a tariff sees its full quota and an empty history'
     // The quota of the tariff and the gift, which the checkout granted with the workspace: what
     // the accounts hold.
     const accounts = await stored.stored()
-    expect([accounts.tariff.left, accounts.gift.left, accounts.pack.left]).toEqual([800, 35, 0])
+    expect([accounts.tariff.left, accounts.gift.left, accounts.pack.left]).toEqual([600, 50, 0])
     await expect(leftHeadlineOf(credits)).toHaveText(leftHeadline(totalLeft(accounts)))
     await expect(credits.getByRole('heading', { level: 3, name: /^По тарифу/ })).toHaveText(
-      /^По тарифу\s—\s800\sиз\s800$/,
+      /^По тарифу\s—\s600\sиз\s600$/,
     )
     await expect(
       credits.getByRole('img', {
-        name: 'Из 800 кредитов по тарифу: 0 списано, 0 отложено под задачи в работе, 800 осталось',
+        name: 'Из 600 кредитов по тарифу: 0 списано, 0 отложено под задачи в работе, 600 осталось',
       }),
     ).toBeVisible()
-    for (const entry of [/^Списано\s—\s0$/, /^Отложено\s—\s0$/, /^Осталось\s—\s800$/]) {
+    for (const entry of [/^Списано\s—\s0$/, /^Отложено\s—\s0$/, /^Осталось\s—\s600$/]) {
       await expect(credits.getByRole('listitem').filter({ hasText: entry })).toHaveCount(1)
     }
     // The consent to auto-renewal was not given: no new quota is promised.
@@ -157,8 +163,8 @@ test('a customer who paid for a tariff sees its full quota and an empty history'
     )
     // The three accounts, in the order their credits are spent in.
     await expect(credits.getByRole('heading', { level: 3 })).toHaveText([
-      /^По тарифу\s—\s800\sиз\s800$/,
-      /^Подарочные\s—\s35$/,
+      /^По тарифу\s—\s600\sиз\s600$/,
+      /^Подарочные\s—\s50$/,
       /^Из пакета\s—\s0$/,
     ])
     await expect(credits).toContainText(
@@ -173,27 +179,21 @@ test('a customer who paid for a tariff sees its full quota and an empty history'
 
   await test.step('the limits of the tariff are untouched', async () => {
     const limits = section(page, 'Лимиты тарифа')
-    // The day counts tariff credits: «Бизнес» gives 100 of its 800 a day.
-    await expect(limits).toContainText(/Сегодня\s*0\s+из\s100\sкредитов/)
-    await expect(
-      limits.getByRole('img', {
-        name: 'Сегодня из 100 кредитов: 0 списано, 0 отложено под задачи в работе, 100 осталось',
-      }),
-    ).toBeVisible()
-    await expect(limits).toContainText(/Сегодня можно потратить ещё\s100\sкредитов\./)
-    await expect(limits).toContainText(
-      /Подарочные кредиты и\sкредиты из\sпакета дневным лимитом не\sограничены\./,
-    )
+    // The day counts tariff credits, and «Бизнес» has no daily limit (Ц6): no meter of a day.
+    await expect(limits).toContainText(/Сегодня\s*0\s+кредитов/)
+    await expect(limits.getByRole('img', { name: /^Сегодня/ })).toHaveCount(0)
+    await expect(limits).toContainText(/Дневного\sлимита\sна\sвашем\sтарифе\sнет\./)
+    await expect(limits).not.toContainText('Сегодня можно потратить')
     await expect(limits).toContainText(/Сайты\s*0\s+из\s3\sсайтов/)
     await expect(limits.getByRole('img', { name: 'Добавлено 0 сайтов из 3' })).toBeVisible()
     await expect(limits).toContainText(/Можно добавить ещё\s3\sсайта\./)
   })
 
   await test.step('nothing is charged yet: one line by site and an empty history', async () => {
-    await expect(section(page, 'По сайтам')).toContainText(
+    await expect(section(page, 'По проектам')).toContainText(
       /В\sэтом периоде кредиты ещё не\sсписывались\./,
     )
-    await expect(section(page, 'По сайтам').getByRole('list')).toHaveCount(0)
+    await expect(section(page, 'По проектам').getByRole('list')).toHaveCount(0)
     const history = section(page, 'История списаний')
     await expect(history).toContainText(
       /Сколько кредитов ушло на\sкаждую задачу\. Списываем только за\sвыполненные задачи/,
@@ -206,7 +206,7 @@ test('a customer who paid for a tariff sees its full quota and an empty history'
   })
 
   await test.step('more credits are offered: the dialog of the pack opens and closes', async () => {
-    const buyMore = page.getByRole('button', { name: 'Купить ещё 100 кредитов — 1 990 ₽' })
+    const buyMore = page.getByRole('button', { name: 'Купить ещё 100 кредитов — 1 490 ₽' })
     await buyMore.click()
     const dialog = page.getByRole('dialog', { name: 'Пакет из 100 кредитов' })
     await expect(dialog).toContainText('К оплате сегодня')

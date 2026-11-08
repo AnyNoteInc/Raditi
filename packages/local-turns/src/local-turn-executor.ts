@@ -14,6 +14,7 @@ import {
   SANDBOX_WORKDIR,
   snapshotHasRepository,
   snapshotManifestSchema,
+  turnMayHoldInbox,
   type AgentDriver,
   type AgentDriverId,
   type CapturedTurn,
@@ -104,8 +105,11 @@ export class LocalTurnExecutor implements TurnExecutor {
       snapshotHasRepository(input.restore.manifest) !== (input.bundle !== undefined)
     )
       throw badRequest('The snapshot and the bundle disagree on the repository')
-    // The client's files go only to a turn with a repository, within one turn's limits.
-    assertTurnInbox(input.inbox ?? [], input.bundle !== undefined)
+    // The client's files go only to a turn that may hold them, within one turn's limits.
+    assertTurnInbox(
+      input.inbox ?? [],
+      turnMayHoldInbox(input.bundle !== undefined, input.sandbox.labels),
+    )
     const { files, env, secrets } = parsed.data
     const parser = this.deps.parser(input.driverId)
     input.dispatched()

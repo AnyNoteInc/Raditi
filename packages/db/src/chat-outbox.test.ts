@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   enqueueAgentTurn,
+  enqueueBrowserEnsure,
   enqueuePreviewBrowser,
   enqueuePreviewSync,
   enqueueReleaseAdvance,
@@ -90,6 +91,24 @@ describe('enqueuePreviewBrowser', () => {
         type: 'preview.browser',
         payload: { previewId, requestId },
         dedupeKey: `preview.browser:${previewId}:${requestId}`,
+      },
+    ])
+  })
+})
+
+describe('enqueueBrowserEnsure', () => {
+  it('keys the job by its session and window, on a queue of its own, in lower case', async () => {
+    const { writer, rows } = fakeWriter()
+    const sessionId = requestId.toUpperCase()
+
+    await enqueueBrowserEnsure(writer, { taskId, sessionId }, { window: 7 })
+
+    expect(rows()).toEqual([
+      {
+        topic: 'browser-sessions',
+        type: 'browser.ensure',
+        payload: { taskId, sessionId: requestId },
+        dedupeKey: `browser.ensure:${requestId}:7`,
       },
     ])
   })

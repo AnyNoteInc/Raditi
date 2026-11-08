@@ -49,7 +49,9 @@ const fits = (entries: Entry[]) => {
 
 /**
  * Where the map of one task lives. Third parties' contacts are not access to a site: the
- * prefix stands apart from `kv/sites/<siteId>/`, which web writes and a deploy token reads.
+ * prefix stands apart from `kv/sites/<siteId>/`, which web writes and a deploy token reads. The
+ * `siteId` of the scope is `leaseScopeOf(task)`: a task without a site keeps its map under its own
+ * id, in the same form of path, under the same policy.
  */
 export function contentMaskPath(scope: { siteId: string; taskId: string }): string {
   if (!z.uuid().safeParse(scope.siteId).success || !z.uuid().safeParse(scope.taskId).success)

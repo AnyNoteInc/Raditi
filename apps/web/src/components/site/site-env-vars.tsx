@@ -3,6 +3,7 @@
 import {
   envVarLimits,
   envVarNameProblem,
+  isHostingFileAccessVariable,
   isSiteSignInEnvVar,
   siteSignInEnvVars,
 } from '@repo/domain/release/env-vars'
@@ -66,7 +67,7 @@ export const envText = Object.freeze({
   consentNeeded: 'Чтобы передать переменную агенту, отметьте согласие.',
   toPreview: 'Передавать предпросмотру',
   toPreviewHelp:
-    'Предпросмотр — рабочая копия сайта с изменениями диалога. В нём работает код, который пишет агент, поэтому переменная попадёт в предпросмотр, только если её передают и агенту.',
+    'Предпросмотр — рабочая копия сайта с изменениями чата. В нём работает код, который пишет агент, поэтому переменная попадёт в предпросмотр, только если её передают и агенту.',
   save: 'Сохранить',
   cancel: 'Отмена',
   saved: (name: string) => `Переменная ${name} сохранена.`,
@@ -83,21 +84,29 @@ export const envText = Object.freeze({
   signInHelp:
     'Логин и пароль входа в админку агенту не передаются: их вводит браузер задачи на странице входа.',
   signInRecipients: 'Вводится браузером задачи на странице входа в админку. Агенту не передаётся.',
+  /** A project without access to its files: its chats work in the browser alone (`agentVariables`). */
+  noFilesRecipients:
+    'Не передаётся: в проекте без доступа к файлам агент работает только в браузере.',
 })
 
 /**
  * Whom a variable is given to, in words. A preview gets only what the agent may see, and in a
- * workspace that may not give variables to the agent (`agentAllowed`) nobody gets them.
+ * workspace that may not give variables to the agent (`agentAllowed`) nobody gets them. An access
+ * to the site's files stops at a chat that has the browser as well (`envVarReachesTask`), and a project
+ * without access to its files (`withFiles`) has no chat that gets any variable.
  */
 export function recipientsText(
   variable: Pick<SiteEnvVar, 'name' | 'toAgent' | 'toPreview' | 'agentConsentAt'>,
   agentAllowed = true,
+  withFiles = true,
 ): string {
   if (isSiteSignInEnvVar(variable.name)) return envText.signInRecipients
   if (!agentAllowed) return `Не передаётся. ${envText.toAgentClosed}`
+  if (!withFiles) return envText.noFilesRecipients
   const agent = variable.toAgent && variable.agentConsentAt !== null
-  if (agent && variable.toPreview) return 'Передаётся агенту и предпросмотру.'
-  if (agent) return 'Передаётся агенту.'
+  const where = isHostingFileAccessVariable(variable.name) ? ' только в чате без браузера' : ''
+  if (agent && variable.toPreview) return `Передаётся агенту и предпросмотру${where}.`
+  if (agent) return `Передаётся агенту${where}.`
   if (variable.toPreview)
     return 'Пока не передаётся: предпросмотр получит её, только когда её начнут передавать агенту.'
   return 'Не передаётся ни агенту, ни предпросмотру.'
@@ -350,10 +359,13 @@ function EnvForm({
  */
 export function SiteEnvVars({
   siteId,
+  withFiles,
   nested = false,
 }: {
   siteId: string
-  /** At the root of «Переменные», beside the menu that holds the h1: the heading is an h2. */
+  /** The project has access to the files of its site: `repository` of `siteCapabilities` is not `absent`. */
+  withFiles: boolean
+  /** A tab of «Переменные», under the h1 of the section: the heading is an h2. */
   nested?: boolean
 }) {
   const titleId = useId()
@@ -468,7 +480,7 @@ export function SiteEnvVars({
                   {envText.valueHidden}
                 </Typography>
                 <Typography variant="body2" sx={{ mt: 0.5 }}>
-                  {nbsp(recipientsText(variable, list.data.agentAllowed))}
+                  {nbsp(recipientsText(variable, list.data.agentAllowed, withFiles))}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
                   {envText.updated(formatMoscowMoment(variable.updatedAt))}

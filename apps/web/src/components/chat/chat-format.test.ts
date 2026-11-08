@@ -11,11 +11,13 @@ function dialog(id: string, status: DialogListItem['status'], createdAt: string)
     id,
     title: id,
     status,
-    mode: 'work',
     undo: null,
     answered: false,
+    rewound: false,
+    failed: false,
     createdAt: new Date(createdAt),
     updatedAt: new Date(createdAt),
+    project: null,
   }
 }
 
@@ -50,6 +52,18 @@ describe('dialogGroups', () => {
   it('keeps a dialog whose agent only answered out of the dialogs that wait (26.10.2026)', () => {
     const answered = { ...dialog('e', 'awaiting_user', '2026-10-17T06:00:00.000Z'), answered: true }
     expect(dialogGroups([answered], now).map((group) => group.key)).toEqual(['today'])
+  })
+
+  // The owner, 06.11.2026: a failure has nothing to confirm — it is not among the dialogs that wait.
+  it('keeps a dialog whose last pass failed out of the dialogs that wait', () => {
+    const open = { ...dialog('f', 'awaiting_user', '2026-10-17T06:00:00.000Z'), failed: true }
+    const kept = { ...dialog('g', 'awaiting_approval', '2026-10-10T06:00:00.000Z'), failed: true }
+    expect(dialogGroups([open, kept], now).map((group) => [group.key, group.items.length])).toEqual(
+      [
+        ['today', 1],
+        ['earlier', 1],
+      ],
+    )
   })
 
   it('leaves out an empty group', () => {

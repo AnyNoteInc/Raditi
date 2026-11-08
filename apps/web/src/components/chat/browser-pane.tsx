@@ -40,6 +40,7 @@ import {
 import { FileChooserDialog, PageDialog } from './browser-page-dialogs'
 import {
   addressParts,
+  BLANK_PAGE,
   paneOverlay,
   paneStatus,
   sessionLive,
@@ -58,10 +59,12 @@ import type { BrowserStream } from './use-browser-stream'
 
 /** The colours of the chip by the state, in the theme's own palette. */
 const chipTone: Readonly<Record<PaneStatus, { bg: string; fg: string; dot?: boolean }>> = {
+  notStarted: { bg: 'action.hover', fg: 'text.secondary' },
   connecting: { bg: 'action.hover', fg: 'text.secondary' },
   agent: { bg: 'action.hover', fg: 'text.primary', dot: true },
   waiting: { bg: 'warning.main', fg: 'warning.contrastText' },
   idle: { bg: 'action.hover', fg: 'text.primary' },
+  rewound: { bg: 'action.hover', fg: 'text.primary' },
   user: { bg: 'primary.main', fg: 'primary.contrastText' },
   reconnecting: { bg: 'action.hover', fg: 'text.secondary' },
   error: { bg: 'error.main', fg: 'error.contrastText' },
@@ -183,6 +186,8 @@ function Overlay({
   switch (overlay.kind) {
     case 'starting':
       return card(<Typography color="text.secondary">{browserText.starting}</Typography>)
+    case 'neverStarted':
+      return card(<Typography color="text.secondary">{browserText.neverStarted}</Typography>)
     case 'connecting':
       return card(
         <>
@@ -276,10 +281,18 @@ function Address({
   onReload: () => void
 }) {
   const fieldId = useId()
-  const parts = addressParts(url)
+  // The browser of a chat without a project starts with no page: the client types the first one
+  // (docs/plan/61-chats-first.md, К13), and there is nothing to read, to edit or to load again.
+  const blank = url === BLANK_PAGE
+  const page = blank ? '' : url
+  const parts = addressParts(page)
   const [draft, setDraft] = useState<string | null>(null)
   const icon = (
-    <AppIcon name={parts?.secure === false ? 'globe' : 'lock'} size={16} style={{ opacity: 0.7 }} />
+    <AppIcon
+      name={blank || parts?.secure === false ? 'globe' : 'lock'}
+      size={16}
+      style={{ opacity: 0.7 }}
+    />
   )
   if (!editable) {
     return (
@@ -314,7 +327,7 @@ function Address({
               </Box>
             </>
           ) : (
-            url
+            page
           )}
         </Box>
       </Box>
@@ -322,7 +335,7 @@ function Address({
   }
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    const target = (draft ?? url).trim()
+    const target = (draft ?? page).trim()
     if (target !== '')
       onNavigate(/^[a-z][a-z\d+.-]*:\/\//i.test(target) ? target : `https://${target}`)
     setDraft(null)
@@ -333,7 +346,12 @@ function Address({
       onSubmit={submit}
       sx={{ flex: '1 1 auto', minWidth: 0, display: 'flex', alignItems: 'center', gap: 0.5 }}
     >
-      <IconButton aria-label={browserText.reload} onClick={onReload} sx={{ width: 44, height: 44 }}>
+      <IconButton
+        aria-label={browserText.reload}
+        onClick={onReload}
+        disabled={blank}
+        sx={{ width: 44, height: 44 }}
+      >
         <AppIcon name="retry" size={18} />
       </IconButton>
       <Box
@@ -357,7 +375,7 @@ function Address({
         <Box
           component="input"
           id={fieldId}
-          value={draft ?? url}
+          value={draft ?? page}
           onChange={(event: ChangeEvent<HTMLInputElement>) => setDraft(event.target.value)}
           onBlur={() => setDraft(null)}
           inputMode="url"
@@ -385,7 +403,8 @@ function Address({
 
 export interface BrowserPaneProps {
   taskId: string
-  siteId: string
+  /** null — a chat without a project. */
+  siteId: string | null
   head: FeedHeadState | null
   stream: BrowserStream
   /** The cabinet knows where the stream is. */
@@ -398,6 +417,8 @@ export interface BrowserPaneProps {
   onTake: () => void
   /** «Продолжить работу агента»: released on the stream or `task.resumeAgent`, by the status. */
   onResume: () => void
+  /** A closed project: the browser is only looked at, its control is neither taken nor given (К39). */
+  readOnly?: boolean
   /** «Остановить»: `/cancel` with its confirmation. */
   onStop: () => void
   canStop: boolean
@@ -406,6 +427,8 @@ export interface BrowserPaneProps {
   busy: boolean
   /** The agent answered and asked nothing (26.10.2026): the browser waits for no one. */
   answered?: boolean
+  /** `/undo` left it so: there is no answer to speak of. */
+  rewound?: boolean
 }
 
 /** One input of the client, stamped with what the latest state says. */
@@ -422,11 +445,13 @@ export function BrowserPane({
   onFullscreen,
   onTake,
   onResume,
+  readOnly = false,
   onStop,
   canStop,
   stopping = false,
   busy,
   answered = false,
+  rewound = false,
 }: BrowserPaneProps) {
   const chipId = useId()
   const hintId = useId()
@@ -447,7 +472,15 @@ export function BrowserPane({
   const [menu, setMenu] = useState<HTMLElement | null>(null)
   const [tabsMenu, setTabsMenu] = useState<HTMLElement | null>(null)
 
-  const facts = { session, taskStatus, connection: stream.connection, state, configured, answered }
+  const facts = {
+    session,
+    taskStatus,
+    connection: stream.connection,
+    state,
+    configured,
+    answered,
+    rewound,
+  }
   const status = paneStatus(facts)
   const overlay = paneOverlay({ ...facts, painted, endReason: stream.endReason })
 
@@ -758,10 +791,12 @@ export function BrowserPane({
   const refusalText =
     refusal === null || refusal.reason.startsWith('stale_') || refusal.reason === 'outside_viewport'
       ? null
-      : ((browserText.refused as Record<string, string>)[refusal.reason] ??
-        browserText.refused.other)
-  const showTake = live && !holding && status !== 'error'
-  const showResume = live && holding
+      : refusal.reason === 'address_denied' && siteId === null
+        ? browserText.refused.address_denied_public
+        : ((browserText.refused as Record<string, string>)[refusal.reason] ??
+          browserText.refused.other)
+  const showTake = !readOnly && live && !holding && status !== 'error'
+  const showResume = !readOnly && live && holding
 
   const takeButton = (
     <Button

@@ -823,17 +823,6 @@
   line-height: 1.45;
   text-wrap: balance;
 }
-.capabilitiesNote {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 28px;
-  font-size: 13px;
-}
-.capabilitiesNote > span:last-child {
-  color: var(--raditi-graphite);
-}
 .safety {
   background: var(--raditi-accent);
   color: var(--raditi-on-accent);
@@ -1947,10 +1936,6 @@
   }
   .capability:first-child .capabilityResult {
     margin-top: 0;
-  }
-  .capabilitiesNote {
-    gap: 5px;
-    font-size: 12px;
   }
   .safetyInner {
     padding-block: 58px;

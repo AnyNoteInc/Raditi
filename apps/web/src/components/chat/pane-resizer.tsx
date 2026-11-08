@@ -10,15 +10,14 @@ import {
   type RefObject,
 } from 'react'
 
+import { toolText } from './chat-texts'
 import {
   clampPaneWidth,
   paneWidthCss,
   SITE_PANE_COOKIE,
   SITE_PANE_MIN,
   SITE_PANE_WIDTH_VAR,
-} from '@/components/site/site-nav'
-
-import { toolText } from './chat-texts'
+} from './pane-layout'
 
 // The edge of the panel beside a dialog, dragged to make it wider or narrower (docs/plan/57-
 // browser-tasks.md, Б29; one panel of the tools since docs/plan/59, И20): with a pointer, or with
@@ -67,7 +66,7 @@ export function PaneResizer({
 
   function apply(next: number, keep: boolean) {
     const clamped = clampPaneWidth(next, windowWidth())
-    const shell = pane.current?.closest<HTMLElement>('[data-site-shell]')
+    const shell = pane.current?.closest<HTMLElement>('[data-chat-shell]')
     shell?.style.setProperty(SITE_PANE_WIDTH_VAR, paneWidthCss(clamped))
     setSize({ width: clamped, max: max() })
     if (keep) remember(clamped)

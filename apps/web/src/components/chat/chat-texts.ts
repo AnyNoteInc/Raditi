@@ -1,5 +1,6 @@
 import type { CandidateCheckStatus, ReleaseStatus } from '@repo/domain'
-import { feedRetryText, previewPanelText } from '@repo/domain/tasks/client-feed-labels'
+import { CLOSED_PROJECT_TEXT } from '@repo/domain/release/chat-commands'
+import { previewPanelText, taskRewoundLabel } from '@repo/domain/tasks/client-feed-labels'
 
 import { plural } from '@/lib/plural'
 
@@ -14,9 +15,9 @@ import { plural } from '@/lib/plural'
  * the panel itself and its strip speak with `toolText`.
  */
 export const paneText = Object.freeze({
-  frameTitle: 'Предпросмотр сайта с изменениями диалога',
+  frameTitle: 'Предпросмотр сайта с изменениями чата',
   /** The dialog has ended and its preview with it. */
-  destroyed: 'Диалог закрыт, и его предпросмотр остановлен.',
+  destroyed: 'Чат закрыт, и его предпросмотр остановлен.',
   /** A preview that stopped while its tab was open is opened again by the client (И10). */
   reopen: 'Открыть предпросмотр',
   reset: 'Сбросить данные предпросмотра',
@@ -53,10 +54,10 @@ export const databaseText = Object.freeze({
   note: 'Так изменится база данных сайта, когда вы выпустите версию.',
   /** A plan without a description of its values (recorded before them, or taken back). */
   noValues:
-    'Значения этих изменений сейчас не показать, поэтому выпустить их нельзя. Напишите в диалог, чтобы агент собрал изменения заново.',
+    'Значения этих изменений сейчас не показать, поэтому выпустить их нельзя. Напишите в чат, чтобы агент собрал изменения заново.',
   /** The cards of the plan do not fit even shortened: nothing is shown or released. */
   oversize:
-    'Изменений базы данных слишком много, чтобы показать их здесь, поэтому выпустить их нельзя. Попросите агента разделить работу на несколько диалогов.',
+    'Изменений базы данных слишком много, чтобы показать их здесь, поэтому выпустить их нельзя. Попросите агента разделить работу на несколько чатов.',
   /** Something of a card is shortened. */
   shortened: 'Показано не всё изменение. Полностью его видно в предпросмотре.',
   /** A plan with new records or tables: what a failed release leaves. */
@@ -75,7 +76,7 @@ export const databaseText = Object.freeze({
   linksRemoved: 'Убраны ссылки',
   linksIn: 'Ссылки в тексте',
   published: 'Будет опубликована сразу.',
-  draft: 'Сохранится черновиком: опубликовать её можно в админке сайта.',
+  draft: 'Сохранится черновиком: опубликовать её можно в админке.',
   maybeEmpty: 'может быть пустым',
   defaultValue: 'по умолчанию',
   defaultNow: 'по умолчанию — время записи',
@@ -245,8 +246,10 @@ export const undoText = Object.freeze({
   notes: [
     'Новые заказы, заявки и комментарии не тронем: данные, которые сайт записал сам после выпуска, останутся.',
     'Перед возвратом сделаем свежую резервную копию.',
-    'Отмена бесплатна. Кредиты, списанные за этот диалог, не возвращаются.',
+    'Отмена бесплатна. Кредиты, списанные за этот чат, не возвращаются.',
   ],
+  /** Said when anyone acted in the browser of the chat: a release did not carry that. */
+  browserStays: 'То, что агент сделал на сайте через браузер, останется.',
   safety: (undone: string) =>
     `Если после возврата сайт не пройдёт проверку, вернём версию ${undone}.`,
   nothing: 'Всё, что изменил выпуск, на сайте уже изменили после него — возвращать нечего.',
@@ -269,8 +272,18 @@ export const undoText = Object.freeze({
 })
 
 export const cancelText = Object.freeze({
-  title: 'Отменить диалог?',
-  confirm: 'Отменить диалог',
+  title: 'Отменить чат?',
+  /**
+   * What the cancelling leads to: `changes` — the chat holds changes that go nowhere now; `onSite`
+   * — its agent can have written on the site through the browser of a project.
+   */
+  body: ({ changes, onSite }: { changes: boolean; onSite: boolean }) =>
+    [
+      'Чат завершится, а агент остановится, если ещё работает.',
+      ...(changes ? ['Подготовленные изменения на сайт не попадут.'] : []),
+      ...(onSite ? ['То, что он уже сделал на сайте, останется: проверьте сайт.'] : []),
+    ].join(' '),
+  confirm: 'Отменить чат',
   keep: 'Не отменять',
 })
 
@@ -285,58 +298,67 @@ export const paletteText = Object.freeze({
 
 export const composerText = Object.freeze({
   label: 'Сообщение',
-  newPlaceholder: 'Что поменять на сайте?',
+  newPlaceholder: 'Что нужно сделать?',
   revisionPlaceholder: 'Что поправить?',
   send: 'Отправить',
-  /** The field of a new dialog while the site is not connected. */
-  notConnected: `${feedRetryText.siteNotConnected}.`,
   /** The field while a release is installed on the site. */
   releasing: 'Написать можно будет, когда установка закончится.',
   /** The field after «Остановить», until core has ended the task. */
   stopping: 'Останавливаем задачу…',
-  /** «Чат» works in the cloud browser: a site or a platform without it cannot take one. */
-  chatOff: 'Режим «Чат» для этого сайта сейчас недоступен: облачный браузер не подключён.',
-  /** «Работа» works on a copy of the site: a site without its files cannot take one. */
-  workOff: 'Режим «Работа» недоступен: у сайта нет копии файлов.',
-  modes: 'Режим диалога',
   /**
    * The paperclip of the field, and its menu: files for the message. Not «+» — «+» of a dialog is
    * its tools (docs/plan/59-dialog-tools-panel.md, И15).
    */
   attach: 'Прикрепить файлы',
-  /** A command typed on «Новый диалог»: there is no dialog to run it in yet. */
-  commandsInDialog: 'Команды работают внутри диалога. Сначала опишите, что поменять на сайте.',
+  /** A command typed on «Новый чат»: there is no chat to run it in yet. */
+  commandsInDialog: 'Команды работают внутри чата. Сначала напишите, что нужно сделать.',
   /** A command typed in full that cannot be run now, and the server gave no reason. */
   commandUnavailable: 'Эта команда сейчас недоступна.',
   /** The button in place of «Отправить» while the agent works: the same as `/cancel`. */
   stop: 'Остановить',
   /** The field of a dialog that has ended. */
-  finished: 'Диалог завершён',
-  /**
-   * The other mode on the switch of a dialog that goes on: the mode is chosen when a dialog
-   * starts, so the other one starts a new dialog.
-   */
-  otherMode: (label: string) =>
-    `Откроет новый диалог в режиме «${label}»: режим начатого диалога не меняется.`,
+  finished: 'Чат завершён',
+})
+
+/** The section «Чаты» and its screens (docs/plan/61-chats-first.md, §5.13). */
+export const chatsText = Object.freeze({
+  title: 'Чаты',
+  newChat: 'Новый чат',
+  back: 'К чатам',
+  groupButton: 'Группировка чатов',
+  groupTitle: 'Показывать чаты',
+  groupList: 'Одним списком',
+  groupProjects: 'По проектам',
+  /** A folder that is closed holds a chat that waits for the client. */
+  attention: 'Есть чаты, которые ждут вас',
+  noProject: 'Без проекта',
+  pickerTitle: 'Проект для этого чата',
+  addProject: 'Добавить проект',
+  /** Where the pill of the project stands locked: a file is bound to its site. */
+  lockedProject: 'Чтобы сменить проект, уберите прикреплённые файлы.',
+  openProject: (name: string) => `Открыть проект «${name}»`,
+  closedProject: CLOSED_PROJECT_TEXT,
+  unavailableProject: 'Сейчас этот проект недоступен для чата. Попробуйте ещё раз немного позже.',
+  importingProject: 'Файлы сайта ещё загружаются.',
+  importFailedProject: 'Файлы сайта не загрузились.',
 })
 
 export const listText = Object.freeze({
-  empty: 'Диалогов пока нет. Опишите, что поменять на сайте, — диалог появится здесь.',
+  empty: 'Чатов пока нет. Напишите, что нужно сделать, — чат появится здесь.',
   more: 'Показать ещё',
-  untitled: 'Диалог без названия',
-  loading: 'Загружаем диалоги',
+  untitled: 'Чат без названия',
+  loading: 'Загружаем чаты',
 })
 
 export const dialogText = Object.freeze({
-  notFound: 'Такого диалога нет',
-  notFoundHint: 'Возможно, его открыли по старой ссылке. Все диалоги сайта — в списке.',
-  toList: 'К диалогам',
-  loading: 'Загружаем диалог',
+  notFound: 'Такого чата нет',
+  notFoundHint: 'Возможно, его открыли по старой ссылке. Все чаты — в списке.',
+  toList: 'К чатам',
+  loading: 'Загружаем чат',
   showChanges: 'Посмотреть изменения',
   stoppedHint: 'Останавливаем работу агента…',
   /** The steps of a finished turn, unfolded. */
   stages: 'Этапы работы',
-  mode: 'Режим',
 })
 
 /**
@@ -350,6 +372,8 @@ export const activityText = Object.freeze({
   empty: 'Агент пока ничего не вывел.',
   failed: 'Не удалось загрузить ход работы. Попробуем ещё раз.',
   more: 'Загружаем дальше…',
+  /** The model's own words before it acts (`/thinking`): raw, often English. */
+  reasoning: 'Размышления агента',
   command: 'Команда',
   tool: 'Инструмент',
   question: 'Вопрос',
@@ -381,6 +405,9 @@ export const attachmentText = Object.freeze({
   retryNamed: (name: string) => `Повторить загрузку ${name}`,
   removeNamed: (name: string) => `Убрать ${name}`,
   cancelNamed: (name: string) => `Отменить загрузку ${name}`,
+  /** The picture of a chosen photo: a press opens it, before the message is sent (06.11.2026). */
+  openNamed: (name: string) => `Открыть фото ${name}`,
+  close: 'Закрыть',
   /** The send button waits for the files. */
   wait: 'Дождитесь загрузки файлов',
   /** A file failed: the message waits until it is sent again or taken out. */
@@ -401,6 +428,39 @@ export const effortText = Object.freeze({
   maxHint: 'Дольше и дороже — для сложных задач',
   /** The level of a dialog that goes on changes from the agent's next turn. */
   changed: 'Уровень размышления изменится со следующего шага агента',
+  /** `/models` while the level cannot be changed. */
+  locked: 'Уровень можно поменять, пока чат ждёт вас.',
+  /** The same menu of a chat that has ended: it will not wait for anyone again. */
+  ended: 'Чат завершён: уровень уже не поменять.',
+})
+
+/** What the commands of the page say (docs/plan/61-chats-first.md, §5.14). */
+export const clientCommandText = Object.freeze({
+  themes: 'Оформление',
+  light: 'Светлая',
+  dark: 'Тёмная',
+  system: 'Как в системе',
+  detailsShown: 'Подробности работы показаны',
+  detailsHidden: 'Подробности работы скрыты',
+  /** `/details` is off, and `/thinking` holds the lines of finished turns open all the same. */
+  detailsHeldOpen: 'Строки работы останутся открытыми, пока показаны размышления агента',
+  thinkingShown: 'Размышления агента показаны',
+  thinkingHidden: 'Размышления агента скрыты',
+  exported: 'Переписка сохранена',
+})
+
+/** The answer to `/init` kept as the hints for the agent (docs/plan/61-chats-first.md, К31). */
+export const agentNotesText = Object.freeze({
+  button: 'Сохранить в подсказки агенту',
+  title: 'Подсказки агенту',
+  body: 'Агент читает подсказки в каждом запросе этого проекта как сведения о проекте. Поправьте текст, если нужно.',
+  field: 'Подсказки',
+  hint: 'Не пишите сюда пароли и коды.',
+  current: 'Сейчас в подсказках',
+  replaces: 'Новый текст заменит их. Что нужно оставить, перенесите в поле.',
+  keep: 'Не сохранять',
+  confirm: 'Сохранить',
+  saved: 'Подсказки сохранены',
 })
 
 /**
@@ -408,31 +468,24 @@ export const effortText = Object.freeze({
  * in its head, the name written in place, the confirmation of «Удалить».
  */
 export const dialogMenuText = Object.freeze({
-  open: 'Действия с диалогом',
+  open: 'Действия с чатом',
   rename: 'Переименовать',
   remove: 'Удалить',
-  name: 'Название диалога',
-  removeTitle: 'Удалить диалог?',
-  removeBody:
-    'Диалог пропадёт из списка. Если агент ещё работает, он остановится, а отложенные кредиты вернутся. То, что уже выпущено на сайт, останется.',
+  name: 'Название чата',
+  removeTitle: 'Удалить чат?',
+  /** What the deletion leads to; a chat without a project has no site to speak of. */
+  removeBody: (withSite: boolean) =>
+    withSite
+      ? 'Чат пропадёт из списка. Если агент ещё работает, он остановится, а отложенные кредиты вернутся. То, что агент уже сделал на сайте, останется.'
+      : 'Чат пропадёт из списка. Если агент ещё работает, он остановится, а отложенные кредиты вернутся.',
   /** The dialog's release can still be undone: the button goes with the dialog. */
   removeUndo:
-    'Кнопка «Отменить выпуск» этого диалога тоже пропадёт: вернуть прежнюю версию можно будет только новым диалогом.',
+    'Кнопка «Отменить выпуск» этого чата тоже пропадёт: вернуть прежнюю версию можно будет только новым чатом.',
   removeConfirm: 'Удалить',
   removeKeep: 'Оставить',
 })
 
 export const taskWayText = Object.freeze({
-  label: 'Как агент будет работать',
-  browser: 'В браузере',
-  repository: 'Через копию сайта',
-  browserNote:
-    'В режиме «Чат» агент работает без копии файлов сайта: открывает сайт в облачном браузере, а вы видите каждый его шаг и можете помочь — например, войти в админку сами. Изменения в админке появляются на сайте сразу.',
-  repositoryNote:
-    'В режиме «Работа» агент получает копию файлов сайта из последней версии, вы смотрите результат в предпросмотре и сами выпускаете новую версию на сайт.',
-  /** A site added without access to its files. */
-  browserOnly:
-    'Сайт добавлен без доступа к файлам: агент работает в админке сайта через браузер. Изменения появляются на сайте сразу.',
   /** The site's address is not https in production: the words of TASK_NOT_ACCEPTED browser_insecure. */
   insecure:
     'В браузере агент работает только с сайтами, которые открываются по защищённому адресу. Адрес сайта в кабинете поменять нельзя: добавьте сайт заново с адресом, который начинается с https://.',
@@ -442,6 +495,10 @@ export const taskWayText = Object.freeze({
    */
   noSecrets:
     'Не отправляйте в чат пароли и ключи: вход в админку сохраните в разделе «Переменные» или войдите сами в окне браузера',
+  /** The same reminder in a chat without a project: it has no «Переменные» to point to. */
+  noSecretsPlain: 'Не отправляйте в чат пароли и ключи',
+  /** The refusal `TASK_TEXT_HAS_SECRET` in a chat without a project, by the same reasoning. */
+  secretRefusedPlain: 'Похоже, в сообщении есть пароль или ключ. Не отправляйте их в чат.',
 })
 
 /** The browser of a task beside its dialog (docs/plan/57-browser-tasks.md, Б12–Б17, Б27, Б29). */
@@ -451,11 +508,15 @@ export const browserText = Object.freeze({
   toolbar: 'Управление браузером',
   canvas: 'Страница сайта в браузере задачи',
   status: {
+    /** No session: the browser starts only when the agent needs it. */
+    notStarted: 'Не запускался',
     connecting: 'Подключение',
     agent: 'Работает агент',
     waiting: 'Ждём вас',
     /** The agent answered and asked nothing: the browser waits for no one (26.10.2026). */
     idle: 'Агент ответил',
+    /** The same after `/undo`: the answer was taken back. */
+    rewound: taskRewoundLabel,
     user: 'Управляете вы',
     reconnecting: 'Переподключение',
     error: 'Ошибка',
@@ -484,20 +545,21 @@ export const browserText = Object.freeze({
   keyboard: 'Клавиатура',
   keyboardInput: 'Ввод на страницу',
   connecting: 'Подключаемся к браузеру…',
-  starting: 'Браузер откроется, когда агент начнёт работу.',
+  starting: 'Браузер откроется, когда понадобится агенту.',
+  neverStarted: 'Браузер в этом чате не запускался.',
   reconnecting: 'Связь прервалась. Переподключаемся…',
   reconnectingNote:
     'Агент продолжает работу — прервался только показ страницы. Пока что на экране последний кадр.',
   failed: 'Не удалось показать браузер',
-  failedNote: 'Работа агента от этого не останавливается: результат появится в диалоге.',
+  failedNote: 'Работа агента от этого не останавливается: результат появится в чате.',
   retry: 'Повторить',
   closed: 'Браузер закрыт',
   closedIdle: 'Браузер закрыт: 30 минут без действий',
   closedExpired: 'Браузер закрыт по времени',
   closedCrashed: 'Браузер закрылся из-за сбоя',
   closedNote:
-    'Чтобы продолжить, напишите агенту в диалоге — браузер откроется заново. Войти на сайт, возможно, придётся снова.',
-  finishedNote: 'Агент закончил работу в браузере. Результат — в диалоге.',
+    'Чтобы продолжить, напишите агенту в чате — браузер откроется заново. Войти на сайт, возможно, придётся снова.',
+  finishedNote: 'Агент закончил работу в браузере. Результат — в чате.',
   help: {
     login: 'Войдите на сайт',
     captcha: 'Пройдите проверку',
@@ -518,6 +580,9 @@ export const browserText = Object.freeze({
       'Браузером управляют в другой вкладке. Нажмите «Взять управление», чтобы управлять здесь.',
     not_ready: 'Агент заканчивает действие на странице. Подождите несколько секунд.',
     address_denied: 'На эту страницу агенту и вам переходить нельзя.',
+    /** The same refusal in a chat without a project: the browser has no site to keep to. */
+    address_denied_public:
+      'Этот адрес не открыть: браузер открывает только публичные сайты по https://.',
     busy: 'Слишком много действий сразу. Подождите немного.',
     other: 'Это действие сейчас не выполнить.',
   },
@@ -572,7 +637,7 @@ export const toolText = Object.freeze({
     changes: 'есть новые изменения',
   }),
   /** The landmark beside the dialog (И20). */
-  panel: 'Инструменты диалога',
+  panel: 'Инструменты чата',
   /** The strip of the tabs of the open tools (И7). */
   tabs: 'Открытые инструменты',
   /** The edge of the panel that is dragged (И20). */
@@ -580,7 +645,7 @@ export const toolText = Object.freeze({
   /** Closes every tab at once: the panel steps aside, the dialog takes the width (И8). */
   hide: 'Скрыть панель',
   /** Back from the area of a tool on a narrow screen: closes every tab (И14). */
-  back: 'К диалогу',
+  back: 'К чату',
   /** The sheet of the menu below `lg` closes under a finger too (И14). */
   closeMenu: 'Закрыть меню',
   /** The hint of the cross of a tab; the cross itself is hidden from a screen reader (И7). */
@@ -592,6 +657,7 @@ export const toolText = Object.freeze({
     files: previewPanelText.files,
     database: previewPanelText.database,
     checks: previewPanelText.checks,
+    terminal: 'Изменения',
   }),
   /** The name of a tool in the menu. */
   item: Object.freeze({
@@ -600,6 +666,7 @@ export const toolText = Object.freeze({
     files: 'Файлы и изменения',
     database: previewPanelText.database,
     checks: previewPanelText.checks,
+    terminal: 'Изменения',
   }),
   /** The marks on the right of the tiles (И5); a browser that holds a session says who drives it. */
   mark: Object.freeze({
@@ -610,7 +677,7 @@ export const toolText = Object.freeze({
     none: 'нет',
     /** The checks of the changes: those passed of all. */
     checks: (passed: number, all: number) => `${passed} из ${all}`,
-    /** The session of the browser holds none any more, or the dialog ended without one. */
+    /** The session of the browser holds none any more. */
     browserClosed: 'Закрыт',
   }),
   /** What a tab of the changes says while there are none yet (И6). */
@@ -625,10 +692,10 @@ export const toolText = Object.freeze({
   /** What it says in a dialog that has ended without them (И6). */
   ended: Object.freeze({
     files: Object.freeze({
-      title: 'Диалог закрыт: изменений для показа здесь нет.',
+      title: 'Чат закрыт: изменений для показа здесь нет.',
       note: 'Выпущенные версии — в разделе «Изменения».',
     }),
-    database: Object.freeze({ title: 'Диалог закрыт: изменений в базе данных нет.', note: null }),
-    checks: Object.freeze({ title: 'Диалог закрыт: проверок нет.', note: null }),
+    database: Object.freeze({ title: 'Чат закрыт: изменений в базе данных нет.', note: null }),
+    checks: Object.freeze({ title: 'Чат закрыт: проверок нет.', note: null }),
   }),
 })

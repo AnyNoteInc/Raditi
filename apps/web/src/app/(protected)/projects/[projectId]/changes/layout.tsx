@@ -1,15 +1,13 @@
 import type { ReactNode } from 'react'
 
-import { HistoryList } from '@/components/site/history-list'
-import { SiteListFrame } from '@/components/site/site-list-frame'
 import { siteHref } from '@/components/site/site-nav'
-import { versionItems } from '@/components/site/site-versions'
-import { UNAVAILABLE } from '@/lib/access'
-import { loadSiteHistory } from '@/lib/site'
+import { SiteSection } from '@/components/site/site-section'
 
 /**
- * «Изменения»: the versions that were on the site beside the one that is open — at the root the
- * one on the site now. Access is checked by every page under it; the list asks the server itself.
+ * «Изменения»: the versions of the site, a list across the full width; a version opens as a page of
+ * its own under it (docs/plan/64-cabinet-navigation.md, Н6). The tab «Файлы» — the files of the
+ * version on the site — is gone since 07.11.2026 (the owner's request). Access is checked by every
+ * page.
  */
 export default async function ChangesLayout({
   children,
@@ -18,32 +16,10 @@ export default async function ChangesLayout({
   children: ReactNode
   params: Promise<{ projectId: string }>
 }) {
-  const { projectId } = await params
-  const versions = await loadSiteHistory('versions', (caller) =>
-    caller.siteHistory.versions({ siteId: projectId }),
-  )
-  const items = versions === UNAVAILABLE ? [] : versionItems(versions)
-  const current = versions === UNAVAILABLE ? null : (versions.find((v) => v.current) ?? null)
+  const root = siteHref((await params).projectId, 'changes')
   return (
-    <SiteListFrame
-      label="Версии сайта"
-      title="Изменения"
-      root={siteHref(projectId, 'changes')}
-      backLabel="Назад к версиям"
-      list={
-        <HistoryList
-          root={siteHref(projectId, 'changes')}
-          items={items}
-          rootSegment={current?.id ?? null}
-          emptyText={
-            versions === UNAVAILABLE
-              ? 'Не удалось загрузить версии. Обновите страницу через пару минут.'
-              : 'Версий пока нет.'
-          }
-        />
-      }
-    >
+    <SiteSection title="Изменения" root={root}>
       {children}
-    </SiteListFrame>
+    </SiteSection>
   )
 }

@@ -72,7 +72,8 @@ function grant(raw: unknown): SiteLeaseGrant | null {
  * Durable site serialization. No JS wall clock participates in ownership decisions. A site's
  * epoch only ever grows: while the site exists its row is never deleted or reset, because the
  * site itself fences content writes by the epoch it last saw (forgetting a receipt moves that
- * fence to epoch + 1).
+ * fence to epoch + 1). A chat without a site holds a row of its own under its own id
+ * (`leaseScopeOf`), and that row stays too: its turns are fenced the same way.
  */
 export class PostgresSiteLeaseStore implements SiteLeaseStore {
   private readonly db: LeaseDatabase
@@ -85,9 +86,11 @@ export class PostgresSiteLeaseStore implements SiteLeaseStore {
     input: Omit<SiteLeaseFence, 'epoch'> & { ttlMs: number },
   ): Promise<SiteLeaseGrant | null> {
     const parsed = fenceSchema.omit({ epoch: true }).extend({ ttlMs: ttlSchema }).parse(input)
-    // The task/site match is checked here, not left to two independent foreign keys. A release
-    // barrier refuses even under an expired lease: recovery of a release moves its lease with
-    // its own row (plan 53, R8b), never through acquire.
+    // The match of the task and the row of the lease is checked here: there is no foreign key
+    // (a chat leases by its own id or by its site, `turnLeaseOf`). A release barrier refuses
+    // even under an expired lease: recovery of a release moves its lease with its own row
+    // (plan 53, R8b), never through acquire. A chat of a site that leases its own row waits
+    // while the site's row is a release's — held by one, barred by one or left to an operator.
     return grant(
       await this.db.$queryRaw`
       WITH lease_clock AS MATERIALIZED (SELECT clock_timestamp() AS instant)
@@ -96,7 +99,12 @@ export class PostgresSiteLeaseStore implements SiteLeaseStore {
       SELECT ${parsed.siteId}::uuid, t.id, ${parsed.operation}::"LeaseOperation", 1,
         c.instant, c.instant + ${parsed.ttlMs}::int * interval '1 millisecond', false, c.instant
       FROM tasks t CROSS JOIN lease_clock c
-      WHERE t.id = ${parsed.taskId}::uuid AND t.site_id = ${parsed.siteId}::uuid
+      WHERE t.id = ${parsed.taskId}::uuid AND ${parsed.siteId}::uuid IN (t.id, t.site_id)
+        AND (t.site_id IS NULL OR ${parsed.siteId}::uuid = t.site_id OR NOT EXISTS (
+          SELECT 1 FROM site_leases r WHERE r.site_id = t.site_id
+            AND (r.held_for_operator OR r.inflight_release_id IS NOT NULL
+              OR (r.operation IN ('deploy', 'revert') AND r.holder_task_id IS NOT NULL
+                AND r.expires_at > c.instant))))
       ON CONFLICT (site_id) DO UPDATE SET
         holder_task_id = EXCLUDED.holder_task_id, operation = EXCLUDED.operation,
         epoch = site_leases.epoch + 1, acquired_at = EXCLUDED.acquired_at,
