@@ -122,9 +122,11 @@ async function previewOfBuild(rt, ctx, entry) {
     waitFor: async () => {
       await previewReady(rt, ctx, taskId).catch(() => null)
       // The sandbox of the turn lives only while the turn does (SANDBOX_WARM_MINUTES 0): its
-      // runtime is read now, while the turn waits for this answer, and checked in P4.
+      // runtime is read now, while the turn waits for this answer, and checked in P4. By the
+      // chat: a chat with the code holds a lease of its own, and its sandbox carries the chat's
+      // id as `siteId` (docs/plan/61-chats-first.md, К14; `turnLeaseOf`).
       entry.turnRuntimes = await containerRuntimes(rt, [
-        `label=io.raditi.sandbox.siteId=${siteId}`,
+        `label=io.raditi.sandbox.taskId=${taskId}`,
       ]).catch((error) => ({ error: error.message }))
     },
   })
