@@ -5,8 +5,8 @@
 #                                                     paid per token) or zai-coding lite|pro|max
 #   model-setup.sh search-key                                   the key of Parallel Search on stdin (subs/search/parallel)
 #   model-setup.sh enable <backend>                   that provider, its profiles, rates and accounts
-#   model-setup.sh clearance <countries> <notice22 ref> <notice22 date> <notice12 ref> <notice12 date>
-#                            <transfer allowed from> <documents>
+#   model-setup.sh clearance <backend> <countries> <notice22 ref> <notice22 date> <notice12 ref>
+#                            <notice12 date> <transfer allowed from> <documents>
 # The key reaches only `subscriptions:login` on stdin, with a writer token for 15 minutes in a
 # tmpfs file; nothing is printed. The clearance (rule 1, spec §18) records the owner's notices to
 # Roskomnadzor as given: no value is made up here.
@@ -77,12 +77,12 @@ RETURNING id;
 EOF
   ;;
 clearance)
-  [ $# -eq 8 ] || { echo "usage: clearance <countries> <notice22 ref> <notice22 date> <notice12 ref> <notice12 date> <transfer allowed from> <documents>" >&2; exit 2; }
-  psql_c -v countries="$2" -v n22="$3" -v d22="$4" -v n12="$5" -v d12="$6" -v from="$7" -v docs="$8" <<'EOF'
-INSERT INTO cross_border_clearances (provider_id, countries, notice22_ref, notice22_date,
+  [ $# -eq 9 ] || { echo "usage: clearance <backend> <countries> <notice22 ref> <notice22 date> <notice12 ref> <notice12 date> <transfer allowed from> <documents>" >&2; exit 2; }
+  psql_c -v backend="$2" -v countries="$3" -v n22="$4" -v d22="$5" -v n12="$6" -v d12="$7" -v from="$8" -v docs="$9" <<'EOF'
+INSERT INTO cross_border_clearances (id, provider_id, countries, notice22_ref, notice22_date,
   recipients_assessed_on, notice12_ref, notice12_received_on, transfer_allowed_from, documents, recorded_by)
-SELECT id, :'countries', :'n22', :'d22', :'d12', :'n12', :'d12', :'from', :'docs', 'owner'
-  FROM llm_providers WHERE slug = 'zai-coding'
+SELECT gen_random_uuid(), id, :'countries', :'n22', :'d22', :'d12', :'n12', :'d12', :'from', :'docs', 'owner'
+  FROM llm_providers WHERE slug = :'backend'
 RETURNING id;
 EOF
   ;;
