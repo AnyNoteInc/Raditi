@@ -1,6 +1,5 @@
 'use client'
 
-import Box from '@mui/material/Box'
 import ButtonBase from '@mui/material/ButtonBase'
 import Tooltip from '@mui/material/Tooltip'
 import { createContext, useContext, useEffect, useSyncExternalStore, type ReactNode } from 'react'
@@ -116,8 +115,8 @@ export function CabinetPanelProvider({
 
 /**
  * The button that hides the panel (in its head) or shows it (in the head of the content). The key
- * is drawn beside the icon, so it is learnt by looking. Only from `md`: below, the panel is not
- * beside the content.
+ * is named only in its tooltip (the owner's request of 07.11.2026). Only from `md`: below, the
+ * panel is not beside the content.
  */
 export function PanelToggle({ place }: { place: 'panel' | 'content' }) {
   const { present, open, toggle } = useCabinetPanel()
@@ -136,33 +135,15 @@ export function PanelToggle({ place }: { place: 'panel' | 'content' }) {
           display: { xs: 'none', md: 'inline-flex' },
           flex: 'none',
           alignItems: 'center',
-          gap: 0.75,
+          justifyContent: 'center',
+          width: 44,
           height: 44,
-          px: 1,
           borderRadius: '12px',
           color: 'text.secondary',
           '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
         }}
       >
         <AppIcon name="panel" size={20} />
-        <Box
-          component="kbd"
-          aria-hidden="true"
-          sx={{
-            minWidth: 18,
-            height: 20,
-            boxSizing: 'border-box',
-            border: 1,
-            borderColor: 'divider',
-            borderRadius: '5px',
-            font: 'inherit',
-            fontSize: 11,
-            lineHeight: '18px',
-            textAlign: 'center',
-          }}
-        >
-          {panelText.key}
-        </Box>
       </ButtonBase>
     </Tooltip>
   )
