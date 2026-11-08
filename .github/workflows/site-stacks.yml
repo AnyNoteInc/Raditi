@@ -60,6 +60,8 @@ on:
       # What the stand loads beyond its folder (infra/app/ci.test.mjs follows its imports): the
       # services, setup and runtime of the release stand and the stands it borrows from.
       - infra/dev/release-verify/fake-model.mjs
+      - infra/dev/browser-task-verify/model.mjs
+      - infra/dev/browser-task-verify/programs.mjs
       - infra/dev/release-verify/runtime.mjs
       - infra/dev/release-verify/services.mjs
       - infra/dev/release-verify/setup.mjs
