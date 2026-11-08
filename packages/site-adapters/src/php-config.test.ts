@@ -1,6 +1,6 @@
 import { siteImportLimits } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
-import { phpConfigStrings, phpStringsAfter, secretValues } from './php-config.ts'
+import { phpBareAfter, phpConfigStrings, phpStringsAfter, secretValues } from './php-config.ts'
 
 const encoder = new TextEncoder()
 const php = (text: string) => encoder.encode(text)
@@ -157,6 +157,61 @@ describe('phpStringsAfter', () => {
       'across two chunks of the conversion',
       'at the end',
     ])
+  })
+})
+
+describe('phpBareAfter', () => {
+  const bare = (text: string) => phpBareAfter(php(text), before, after)
+
+  it.each([
+    [`KEY = true;`, 'true'],
+    [`KEY = false;`, 'false'],
+    [`KEY = null;`, 'null'],
+    // PHP reads the three constants in any letter case.
+    [`KEY = TRUE;`, 'true'],
+    [`KEY = False;`, 'false'],
+    [`KEY = NULL;`, 'null'],
+    [`KEY = 0;`, '0'],
+    [`KEY = 20;`, '20'],
+    [`KEY = 6379;`, '6379'],
+  ])('reads the bare literal of %s', (text, value) => {
+    expect(bare(text)).toEqual([value])
+  })
+
+  it.each([
+    // A string is phpStringsAfter's, not this one's.
+    `KEY = 'true';`,
+    `KEY = "20";`,
+    // A call, a constant, an expression: not one literal.
+    `KEY = true();`,
+    `KEY = trueish;`,
+    `KEY = intval('20');`,
+    `KEY = PHP_INT_MAX;`,
+    `KEY = 1 + 1;`,
+    `KEY = -1;`,
+    `KEY = 1.5;`,
+    `KEY = 1_000;`,
+    `KEY = 0x1F;`,
+    // A leading zero makes an octal number in PHP: its value is not the digits.
+    `KEY = 017;`,
+    `KEY = 12abc;`,
+    `KEY = $other;`,
+    `KEY = ;`,
+    `KEY = `,
+  ])('reads no value from %s', (text) => {
+    expect(bare(text)).toEqual([])
+  })
+
+  it('returns every value in the order of the file, the patterns as phpStringsAfter reads them', () => {
+    expect(bare(`KEY = 1; KEY = 'x'; KEY = true;KEY =  2;`)).toEqual(['1', 'true'])
+    expect(
+      phpBareAfter(php(`key =\t\nTrue \r\n;`), /KEY[ \t\r\n]*=[ \t\r\n]*/i, /[ \t\r\n]*;/),
+    ).toEqual(['true'])
+  })
+
+  it('reads no number longer than nineteen digits', () => {
+    expect(bare(`KEY = ${'9'.repeat(19)};`)).toEqual(['9'.repeat(19)])
+    expect(bare(`KEY = ${'9'.repeat(20)};`)).toEqual([])
   })
 })
 

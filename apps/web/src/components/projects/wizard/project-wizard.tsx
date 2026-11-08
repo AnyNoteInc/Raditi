@@ -142,11 +142,17 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 export function ProjectWizard({
   stacks,
   browserAccess = false,
+  browserStacks = stacks,
   fromChats = false,
 }: {
   stacks: readonly ProjectStack[]
   /** The platform has a browser for tasks: a site may be added without access to its files. */
   browserAccess?: boolean
+  /**
+   * The platforms a site may be added for without access to its files (the browser axis of the
+   * support of the site adapters, docs/plan/62-site-stacks.md, Т6); by default those of `stacks`.
+   */
+  browserStacks?: readonly ProjectStack[]
   /**
    * The client came from a new chat (docs/plan/61-chats-first.md, §5.11): «Отмена» leads back to
    * it, and so does a project added without files, chosen in the chat. A project with files
@@ -205,6 +211,8 @@ export function ProjectWizard({
   const createProject = useMutation(trpc.project.create.mutationOptions(gcTime))
 
   const platform = stackLabels[basics.stack]
+  /** «Без доступа к файлам» is offered only for a platform the server takes that way. */
+  const browserOpen = browserAccess && browserStacks.includes(basics.stack)
   const basicsShown = shown[0] ? basicsErrors(basics) : {}
   const sourceShown = shown[1] ? sourceErrors(source) : {}
   const databaseShown = shown[2] ? databaseErrors(database) : {}
@@ -238,7 +246,10 @@ export function ProjectWizard({
     setCheckedBasics(null)
     setProblem(null)
     // The folder of the site is checked for the files of its platform.
-    if (patch.stack !== undefined) setSourcePassed(false)
+    if (patch.stack !== undefined) {
+      setSourcePassed(false)
+      setBrowserOnly(false)
+    }
   }
 
   function editSource(next: SourceDraft) {
@@ -369,7 +380,7 @@ export function ProjectWizard({
   }
 
   function submitSource() {
-    if (browserAccess && browserOnly) return void submitCreate()
+    if (browserOpen && browserOnly) return void submitCreate()
     setShown((previous) => ({ ...previous, 1: true }))
     const field = firstProblem(sourceFieldOrder, sourceErrors(source))
     if (field) {
@@ -389,7 +400,7 @@ export function ProjectWizard({
 
   async function submitCreate() {
     // Without access to the files there is nothing to check on a server and no database step.
-    const viaBrowser = browserAccess && browserOnly
+    const viaBrowser = browserOpen && browserOnly
     // The step the refusals of this creation are told on.
     const at: StepIndex = viaBrowser ? 1 : 2
     if (!viaBrowser) {
@@ -491,8 +502,8 @@ export function ProjectWizard({
 
   const disabled = busy !== null
   const current = steps[step]!
-  const viaBrowser = browserAccess && browserOnly
-  const stepNote = step === 1 && browserAccess ? SOURCE_NOTE_WITH_BROWSER : current.note
+  const viaBrowser = browserOpen && browserOnly
+  const stepNote = step === 1 && browserOpen ? SOURCE_NOTE_WITH_BROWSER : current.note
 
   return (
     <Box sx={{ maxWidth: 760, mx: 'auto' }}>
@@ -639,7 +650,7 @@ export function ProjectWizard({
               errors={sourceShown}
               disabled={disabled}
               browser={
-                browserAccess
+                browserOpen
                   ? {
                       selected: browserOnly,
                       onSelect: (selected) => {

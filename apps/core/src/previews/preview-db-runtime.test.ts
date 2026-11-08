@@ -1,5 +1,6 @@
 import { DB_CREATED_ID_BASE, type SiteDbCapabilities } from '@repo/domain'
 import { wordpressAdapter } from '@repo/site-adapters'
+import { textOnlyDbRuntime } from '@repo/site-content'
 import { describe, expect, it } from 'vitest'
 
 import { previewDbRuntime } from './preview-builder.ts'
@@ -38,10 +39,13 @@ describe('previewDbRuntime', () => {
     })
   })
 
-  it('keeps the text of records alone where a side cannot tell, or production is of version 1', () => {
-    const textOnly = { kinds: ['content_update'], settings: [], createdIds: false }
-    expect(previewDbRuntime(wordpressAdapter, site, null, everything)).toEqual(textOnly)
-    expect(previewDbRuntime(wordpressAdapter, site, everything, null)).toEqual(textOnly)
+  it('gives nothing a release could not carry where a side has no gateway (Т37)', () => {
+    const none = { kinds: [], settings: [], createdIds: false }
+    expect(previewDbRuntime(wordpressAdapter, site, null, everything)).toEqual(none)
+    expect(previewDbRuntime(wordpressAdapter, site, everything, null)).toEqual(none)
+  })
+
+  it('keeps the text of records alone where production is of version 1', () => {
     expect(
       previewDbRuntime(
         wordpressAdapter,
@@ -49,7 +53,49 @@ describe('previewDbRuntime', () => {
         { ...everything, plugin: 1, operations: ['content_update'], settings: [] },
         everything,
       ),
-    ).toEqual(textOnly)
+    ).toEqual({ kinds: ['content_update'], settings: [], createdIds: false })
+  })
+
+  it('keeps the text of records alone where a gateway that is there did not answer', () => {
+    expect(previewDbRuntime(wordpressAdapter, site, 'no_answer', everything)).toEqual(
+      textOnlyDbRuntime,
+    )
+    expect(previewDbRuntime(wordpressAdapter, site, everything, 'no_answer')).toEqual(
+      textOnlyDbRuntime,
+    )
+  })
+
+  it('gives no kind at all to a stack whose adapter declares none, whatever the plugins say', () => {
+    expect(
+      previewDbRuntime({ ...wordpressAdapter, dbOperationKinds: () => [] }, site, everything, {
+        ...everything,
+        nextCreatedId: DB_CREATED_ID_BASE,
+      }),
+    ).toEqual({ kinds: [], settings: [], createdIds: false })
+  })
+
+  it('judges the text of records as every other kind: a side that does not name it narrows it out', () => {
+    const settingsOnly = { ...everything, operations: ['option_update' as const] }
+    expect(previewDbRuntime(wordpressAdapter, site, settingsOnly, everything).kinds).toEqual([
+      'option_update',
+    ])
+    expect(previewDbRuntime(wordpressAdapter, site, everything, settingsOnly).kinds).toEqual([
+      'option_update',
+    ])
+  })
+
+  it('gives nothing where the adapter cannot say what the stack has', () => {
+    const broken = {
+      ...wordpressAdapter,
+      dbSettings: () => {
+        throw new Error('no settings')
+      },
+    }
+    expect(previewDbRuntime(broken, site, everything, everything)).toEqual({
+      kinds: [],
+      settings: [],
+      createdIds: false,
+    })
   })
 
   it('gives no created records to a site whose own ids reach the base', () => {

@@ -9,6 +9,7 @@ import {
 } from '@repo/db'
 import {
   deployWrapDataSchema,
+  notImplemented,
   releaseReportKey,
   siteAccessPath,
   undoKeyMaterial,
@@ -18,7 +19,7 @@ import {
   type ReleaseStepDetail,
   type ReleaseStepState,
 } from '@repo/domain'
-import { getSiteAdapter, getSiteContentAdapter } from '@repo/site-adapters'
+import { getSiteAdapter } from '@repo/site-adapters'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -46,7 +47,9 @@ import {
   releaseFixture,
   type ReleaseFixture,
 } from '../testing/releases.ts'
-import { ReleaseSkill } from './release-skill.ts'
+import { ReleaseSkill, type ReleaseSkillDependencies } from './release-skill.ts'
+import { releaseSkillStacks } from './releases.module.ts'
+import { releaseApiStacks } from '../release-api/release-api.module.ts'
 import { UndoPlanner } from './undo-planner.ts'
 
 // «Отменить выпуск» on PostgreSQL (docs/plan/53-chat-preview-release.md, «Отмена выпуска»): the
@@ -148,7 +151,7 @@ describe.skipIf(!enabled)('«Отменить выпуск» with PostgreSQL', (
       secrets: vault,
       storage,
       adapter: getSiteAdapter,
-      contentAccessKind: (stack) => getSiteContentAdapter(stack).accessKind,
+      contentAccessKind: releaseSkillStacks.contentAccessKind,
       api: { startTimeoutMs: 10 * 60_000 },
       values,
       production: production.resolve,
@@ -170,7 +173,7 @@ describe.skipIf(!enabled)('«Отменить выпуск» with PostgreSQL', (
       secrets: vault,
       storage,
       adapter: getSiteAdapter,
-      contentAdapter: getSiteContentAdapter,
+      contentAdapter: releaseApiStacks.contentAdapter,
       publicUrl: RELEASE_API_URL,
     })
     const w = { f, git, provider, vault, storage, values, production, skill, planner, api }
@@ -311,6 +314,28 @@ describe.skipIf(!enabled)('«Отменить выпуск» with PostgreSQL', (
     return undo.id
   }
 
+  /** The same core as the world's, with some of the stack's answers of its own. */
+  function skillOf(
+    w: World,
+    stacks: Partial<Pick<ReleaseSkillDependencies, 'adapter' | 'contentAccessKind'>>,
+  ) {
+    return new ReleaseSkill({
+      db,
+      leases: new PostgresSiteLeaseStore(db),
+      git: w.git,
+      provider: w.provider,
+      secrets: w.vault,
+      storage: w.storage,
+      ...releaseSkillStacks,
+      ...stacks,
+      api: { startTimeoutMs: 10 * 60_000 },
+      values: w.values,
+      production: w.production.resolve,
+      previewBaseDomain: 'preview.example.test',
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    })
+  }
+
   it('plans the undo from production: what goes back, what stays, the tree of the version before', async () => {
     const w = await installed()
     const planRow = await planOf(w)
@@ -376,6 +401,38 @@ describe.skipIf(!enabled)('«Отменить выпуск» with PostgreSQL', (
     expect((planRow.dbPlan as DbUndoOperation[]).map((write) => write.kind)).not.toContain(
       'post_trash',
     )
+  })
+
+  it('builds no plan of an undo whose stack does not say its media rules (Т8)', async () => {
+    const w = await installed()
+    // A stack with files must answer `mediaRules`: no media are taken as add-only by default.
+    const planner = new UndoPlanner({
+      db,
+      git: w.git,
+      production: w.production.resolve,
+      values: w.values,
+      adapter: () => ({
+        mediaRules: () => {
+          throw notImplemented('Media rules of the stack')
+        },
+      }),
+      previewBaseDomain: 'preview.example.test',
+      logger: { log: vi.fn(), warn: vi.fn() },
+    })
+    const installedSha = (await release(w.f.releaseId)).approvedSha!
+    const asked = await db.$transaction((tx) =>
+      requestUndoPlan(tx, {
+        releaseId: w.f.releaseId,
+        siteId: w.f.siteId,
+        installedSha,
+        userId: w.f.userId,
+      }),
+    )
+    await planner.plan({ planId: asked.id })
+    const planRow = await db.releaseUndoPlan.findUniqueOrThrow({ where: { id: asked.id } })
+    expect(planRow).toMatchObject({ status: 'failed', errorCode: 'technical' })
+    expect(planRow.dbPlan).toEqual([])
+    expect(planRow.targetTree).toBeNull()
   })
 
   it('waits for a production that does not answer, then fails the plan', async () => {
@@ -532,6 +589,110 @@ describe.skipIf(!enabled)('«Отменить выпуск» with PostgreSQL', (
         }),
       ])
     }
+  })
+
+  it('refuses the commit of an undo before `main` moves when the stack does not say its media rules (Т8)', async () => {
+    const w = await installed()
+    const planRow = await planOf(w)
+    const undoId = await confirmed(w, planRow.id)
+    // The same core, whose adapter no longer answers `mediaRules`: no media of the release are
+    // taken as add-only by default — the undo is refused before its commit.
+    const skill = skillOf(w, {
+      adapter: (stack) => {
+        const real = getSiteAdapter(stack)
+        return {
+          dbOperationKinds: (site) => real.dbOperationKinds(site),
+          dbSettings: (site) => real.dbSettings(site),
+          protectedPaths: (site) => real.protectedPaths(site),
+          agentWorkingSet: (site) => real.agentWorkingSet(site),
+          mediaRules: () => {
+            throw notImplemented('Media rules of the stack')
+          },
+        }
+      },
+    })
+    const main = w.git.main
+    await advance({ ...w, skill }, undoId)
+    expect(await release(undoId)).toMatchObject({
+      status: 'failed',
+      errorCode: 'forbidden_path',
+      mainPushedAt: null,
+    })
+    expect(w.git.main).toBe(main)
+    expect(await taskStatus(w)).toBe('done')
+  })
+
+  it('refuses the commit of an undo before `main` moves when the stack does not say its working set (Т8)', async () => {
+    const w = await installed()
+    const planRow = await planOf(w)
+    const undoId = await confirmed(w, planRow.id)
+    // The same core, whose adapter no longer answers `agentWorkingSet`: a stack with files must
+    // declare one (plan 62, question 11), and the rules of the undo are unknown without it.
+    const skill = skillOf(w, {
+      adapter: (stack) => {
+        const real = getSiteAdapter(stack)
+        return {
+          dbOperationKinds: (site) => real.dbOperationKinds(site),
+          dbSettings: (site) => real.dbSettings(site),
+          protectedPaths: (site) => real.protectedPaths(site),
+          agentWorkingSet: () => {
+            throw notImplemented('Working set of the stack')
+          },
+          mediaRules: (site) => real.mediaRules(site),
+        }
+      },
+    })
+    const main = w.git.main
+    await advance({ ...w, skill }, undoId)
+    expect(await release(undoId)).toMatchObject({
+      status: 'failed',
+      errorCode: 'forbidden_path',
+      mainPushedAt: null,
+    })
+    expect(w.git.main).toBe(main)
+    expect(await taskStatus(w)).toBe('done')
+  })
+
+  it('refuses an undo with writes before `main` moves when the stack has no content plugin (Т8)', async () => {
+    const w = await installed()
+    const planRow = await planOf(w)
+    const undoId = await confirmed(w, planRow.id)
+    // The same core, for which the stack has no published content: the writes of the undo have
+    // no plugin to be delivered with.
+    const skill = skillOf(w, { contentAccessKind: () => null })
+    const main = w.git.main
+    await advance({ ...w, skill }, undoId)
+    expect(await release(undoId)).toMatchObject({
+      status: 'failed',
+      errorCode: 'db_plan_unsupported',
+      mainPushedAt: null,
+    })
+    expect(w.git.main).toBe(main)
+    expect(await taskStatus(w)).toBe('done')
+    expect(await undoFeed(w)).toEqual([
+      expect.objectContaining({ stage: 'refused', reason: 'technical' }),
+    ])
+  })
+
+  it('does not take another failure of the content adapter for no plugin: it goes up, nothing moves', async () => {
+    const w = await installed()
+    const planRow = await planOf(w)
+    const undoId = await confirmed(w, planRow.id)
+    const skill = skillOf(w, {
+      contentAccessKind: () => {
+        throw new Error('content adapter broke')
+      },
+    })
+    const before = await release(undoId)
+    const main = w.git.main
+    await expect(advance({ ...w, skill }, undoId)).rejects.toThrow('content adapter broke')
+    expect(await release(undoId)).toMatchObject({
+      status: before.status,
+      errorCode: null,
+      mainPushedAt: null,
+    })
+    expect(w.git.main).toBe(main)
+    expect(await undoFeed(w)).toEqual([])
   })
 
   it('goes back to the release when the undo fails its check: the revert commit, the dialog done', async () => {

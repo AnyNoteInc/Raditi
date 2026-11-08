@@ -205,6 +205,8 @@ export function seedHeader(charset: string, collation: string | null): Buffer {
       // Ids of 0 stay 0, zero dates load (WordPress keeps them in posts).
       `SET SQL_MODE = 'NO_AUTO_VALUE_ON_ZERO';`,
       `SET TIME_ZONE = '+00:00';`,
+      // A wide table of an extension is created as its server keeps it (ERROR 1118 otherwise).
+      'SET SESSION innodb_strict_mode = 0;',
       '',
     ].join('\n'),
   )

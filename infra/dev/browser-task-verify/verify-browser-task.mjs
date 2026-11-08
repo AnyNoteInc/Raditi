@@ -196,6 +196,7 @@ async function main(options, owned) {
     workerToken: rt.secret(randomBytes(36).toString('base64url')),
   }
   const context = {
+    run: names.run,
     path: callerEnv.PATH,
     directory,
     ports,

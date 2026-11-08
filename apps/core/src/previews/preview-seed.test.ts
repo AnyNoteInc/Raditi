@@ -38,7 +38,16 @@ function deps(chunks: Uint8Array[]) {
   const copier: DatabaseCopier = {
     async copy(_input, write) {
       for (const chunk of chunks) await write(chunk)
-      return { tables: 1, structureOnly: 0, rows: 1, bytes: 1, sha256: 'x', serverVersion: null }
+      return {
+        tables: 1,
+        structureOnly: 0,
+        leftOutTables: 0,
+        emptiedColumns: 0,
+        rows: 1,
+        bytes: 1,
+        sha256: 'x',
+        serverVersion: null,
+      }
     },
   }
   return {

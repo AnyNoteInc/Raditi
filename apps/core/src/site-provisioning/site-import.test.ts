@@ -2,10 +2,17 @@ import { execFile } from 'node:child_process'
 import { access, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
-import { DomainError, INITIAL_SITE_TAG } from '@repo/domain'
+import {
+  DomainError,
+  INITIAL_SITE_TAG,
+  siteImportLimits,
+  siteReadEntries,
+  type SiteStack,
+} from '@repo/domain'
+import { getSiteAdapter } from '@repo/site-adapters'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { directory, file } from '../testing/file-source.ts'
+import { directory, file, type FakeNode } from '../testing/file-source.ts'
 import {
   DATABASE_PASSWORD,
   FTP_PASSWORD,
@@ -17,6 +24,8 @@ import {
   type SiteImportFixture,
 } from '../testing/site-import.ts'
 import { InitialVersionGit, TAG_REF, MAIN_REF } from './initial-version.ts'
+import { importSite } from './site-import.ts'
+import { SiteImportRunner } from './site-import.runner.ts'
 
 const fixtures: SiteImportFixture[] = []
 afterEach(async () => {
@@ -121,6 +130,169 @@ describe('importSite', { timeout: 20_000 }, () => {
         'json',
       ]),
     )
+  })
+
+  it('records the version of the site in its facts', async () => {
+    const f = await fixture()
+    await f.run()
+    expect(f.store.stackFacts.get(f.siteId)).toMatchObject({ cmsVersion: '6.8.3', limit: null })
+    // The version file is read once by the adapter and once more by the walk, which takes it.
+    expect(
+      f.sessions[0]!.reads.filter((path) => path.join('/') === 'wp-includes/version.php'),
+    ).toHaveLength(2)
+  })
+
+  it('records the version of the copy it took when the hosting changes it during the walk', async () => {
+    const f = await fixture()
+    const wordpress = getSiteAdapter('wordpress')
+    const versionFile = (f.tree['wp-includes'] as Extract<FakeNode, { type: 'directory' }>)
+      .children['version.php'] as Extract<FakeNode, { type: 'file' }>
+    let readings = 0
+    f.deps.stacks = (stack: SiteStack) => ({
+      ...getSiteAdapter(stack),
+      readVersion: async (read) => {
+        const reading = await wordpress.readVersion!(read)
+        // A core update on the hosting lands between the first look and the walk.
+        if (++readings === 1) versionFile.content = "<?php\n$wp_version = '6.8.4';\n"
+        return reading
+      },
+    })
+    const { commitSha } = await f.run()
+
+    expect(readings).toBe(2)
+    expect(f.store.stackFacts.get(f.siteId)).toMatchObject({ cmsVersion: '6.8.4', limit: null })
+    // The record names what `main` holds; the hosting was read once for it, by the walk.
+    expect(await fixtureGit(f.remote, 'show', `${commitSha}:wp-includes/version.php`)).toContain(
+      '6.8.4',
+    )
+    expect(
+      f.sessions[0]!.reads.filter((path) => path.join('/') === 'wp-includes/version.php'),
+    ).toHaveLength(2)
+  })
+
+  it('fails layout_unsupported before any download when the adapter refuses the layout', async () => {
+    const f = await fixture()
+    f.deps.stacks = (stack: SiteStack) => ({
+      ...getSiteAdapter(stack),
+      readLayout: async () => ({ kind: 'refused', limit: 'outside_root' }),
+    })
+    const runner = new SiteImportRunner({
+      store: f.store,
+      importer: (stage, signal) => importSite(stage, signal, f.deps),
+      queue: { enqueue: vi.fn(async () => {}) },
+      logger: { log: vi.fn(), warn: vi.fn() },
+      count: () => {},
+    })
+    expect(await runner.run(f.siteId, new AbortController().signal)).toBe('failed')
+
+    expect(f.store.stage(f.siteId)).toMatchObject({
+      status: 'failed',
+      errorCode: 'layout_unsupported',
+    })
+    expect(f.store.stackFacts.get(f.siteId)).toMatchObject({
+      cmsVersion: '6.8.3',
+      limit: 'outside_root',
+    })
+    // Only what the adapter read: no file of the walk, no listing.
+    expect(f.sessions[0]!.reads).toEqual([['wp-includes', 'version.php']])
+    expect(f.sessions[0]!.lists).toEqual([])
+    expect(f.sessions[0]!.closed).toBe(true)
+    expect(await remoteRef(f, MAIN_REF)).toBeNull()
+  })
+
+  describe('Joomla, whose layout stands on the listing of the root', () => {
+    // Synthetic: one driver of MySQL is all the layout needs to be read.
+    const configuration =
+      "<?php\nclass JConfig {\n\tpublic $dbtype = 'mysqli';\n\tpublic $dbprefix = 'jx1_';\n" +
+      "\tpublic $password = 'synthetic-joomla-db-password';\n}\n"
+    const joomlaSite = (): Record<string, FakeNode> => ({
+      'index.php': file('<?php // synthetic Joomla\n'),
+      'configuration.php': file(configuration),
+      templates: directory({ cassiopeia: directory({ 'index.php': file('<?php\n') }) }),
+    })
+    const joomlaFixture = async (tree: Record<string, FakeNode>) => {
+      const f = await fixture({ tree })
+      f.deps.stacks = () => getSiteAdapter('joomla')
+      return f
+    }
+
+    it('retries a root the hosting failed to list, and imports it on the next run', async () => {
+      const f = await joomlaFixture(joomlaSite())
+      f.rootOptions = { fails: 'transfer_failed' }
+      await expect(f.run()).rejects.toMatchObject({ code: 'transfer_failed', transient: true })
+      // A hiccup writes no limit: the record keeps what it had.
+      expect(f.store.stackFacts.get(f.siteId)?.limit).toBeUndefined()
+
+      requeue(f)
+      f.rootOptions = {}
+      const { commitSha } = await f.run()
+      expect(await remoteRef(f, MAIN_REF)).toBe(commitSha)
+      expect(f.store.stackFacts.get(f.siteId)).toMatchObject({
+        extras: { dbtype: 'mysqli' },
+        adminPath: '/administrator/',
+      })
+    })
+
+    it('says a root the hosting refuses to list as the walk would say it', async () => {
+      const f = await joomlaFixture(joomlaSite())
+      f.rootOptions = { fails: 'access_denied' }
+      await expect(f.run()).rejects.toMatchObject({ code: 'access_denied', transient: false })
+    })
+
+    it('retries a configuration the hosting listed and failed to give', async () => {
+      const tree = joomlaSite()
+      tree['configuration.php'] = file(configuration, { fails: 'transfer_failed' })
+      const f = await joomlaFixture(tree)
+      await expect(f.run()).rejects.toMatchObject({ code: 'transfer_failed', transient: true })
+      expect(f.store.stackFacts.get(f.siteId)?.limit).toBeUndefined()
+    })
+
+    it('lets only the call that gave the null speak, never an earlier broken read', async () => {
+      // The manifest of the version is refused, the root lists, and the configuration is past
+      // configFileBytes: the null of the configuration is an answer, so the refusal of the
+      // manifest is not what the client hears.
+      const tree = joomlaSite()
+      tree.administrator = directory({
+        manifests: directory({
+          files: directory({ 'joomla.xml': file('<extension/>\n', { fails: 'access_denied' }) }),
+        }),
+      })
+      tree['configuration.php'] = file('x'.repeat(siteImportLimits.configFileBytes + 1))
+      const f = await joomlaFixture(tree)
+      await expect(f.run()).rejects.toMatchObject({ code: 'internal', transient: false })
+    })
+
+    it('refuses a root of more than siteReadEntries names with folder_too_large, not internal', async () => {
+      const tree = joomlaSite()
+      for (let index = 0; index <= siteReadEntries; index += 1)
+        tree[`page-${index}.html`] = file('<p>synthetic</p>\n')
+      const f = await joomlaFixture(tree)
+      await expect(f.run()).rejects.toMatchObject({ code: 'folder_too_large', transient: false })
+      // Stopped before any download: only the version file was asked for.
+      expect(f.sessions[0]!.lists).toEqual([[]])
+      expect(await remoteRef(f, MAIN_REF)).toBeNull()
+    })
+  })
+
+  it('takes a document only from a folder of the adapter: the media library, not the root', async () => {
+    const tree = sampleSite()
+    const content = tree['wp-content'] as Extract<FakeNode, { type: 'directory' }>
+    const uploads = content.children.uploads as Extract<FakeNode, { type: 'directory' }>
+    uploads.children['price.pdf'] = file('%PDF-1.4 synthetic price list\n')
+    tree.notes = directory({ 'invoice.pdf': file('%PDF-1.4 synthetic invoice\n') })
+    const f = await fixture({ tree })
+    const { commitSha } = await f.run()
+
+    const paths = (await fixtureGit(f.remote, 'ls-tree', '-r', '--name-only', commitSha))
+      .trim()
+      .split('\n')
+    expect(paths).toContain('wp-content/uploads/price.pdf')
+    expect(paths).not.toContain('notes/invoice.pdf')
+    expect(f.store.stage(f.siteId).summary).toEqual({
+      files: 5,
+      bytes: expect.any(Number),
+      skipped: { excluded: 1, document: 1 },
+    })
   })
 
   it('leaves out the files with a secret of the access or a scanner finding', async () => {
@@ -381,6 +553,21 @@ describe('importSite', { timeout: 20_000 }, () => {
       expect(f.opened()).toBe(1)
       expect(await remoteRef(f, TAG_REF)).toBe(recorded)
       expect((await fixtureGit(f.remote, 'rev-list', '--all', '--count')).trim()).toBe('1')
+    })
+
+    it('between main and the tag: the run that adds the tag writes no facts', async () => {
+      const f = await fixture()
+      const versions = f.deps.git!.versions
+      f.deps.git!.versions = new Interrupted(f, TAG_REF)
+      await expect(f.run()).rejects.toThrow()
+      expect(f.store.stackFacts.get(f.siteId)).toMatchObject({ cmsVersion: '6.8.3' })
+
+      f.deps.git!.versions = versions
+      const record = vi.spyOn(f.store, 'recordStackFacts')
+      requeue(f)
+      await f.run()
+      expect(f.opened()).toBe(1)
+      expect(record).not.toHaveBeenCalled()
     })
 
     it('after the tag, before the database: only the check is left', async () => {

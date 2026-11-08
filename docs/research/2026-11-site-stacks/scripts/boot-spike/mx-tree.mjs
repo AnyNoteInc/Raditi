@@ -1,0 +1,20 @@
+import { openAgent } from './agent-lib.mjs'
+const [tag, origin] = process.argv.slice(2)
+const a = await openAgent({ tag: `${tag}-tree`, origin, startPath: '/manager/' })
+try {
+  await a.observe('login')
+  await a.fill(/- textbox "(Имя пользователя|Username)/, 'spikeadmin'); await a.fill(/- textbox "(Пароль|Password)/, '<hidden>'); await a.click(/- button "(Войти|Log In)/); await a.wait(5000)
+  await a.observe('dash')
+  await a.click(/- link "Контакты \(\d+\)"/); await a.wait(3000)
+  const o = await a.observe('after-click'); console.log('left click opens:', o.page.url.replace(origin, ''))
+  await a.open('/manager/'); await a.wait(5000); await a.observe('dash2')
+  const ref = a.ref(/- link "Контакты \(\d+\)"/)
+  await a.session.act({ tool: 'web_click', ref, button: 'right' }); await a.wait(900)
+  await a.observe('context-menu')
+  const menu = a.tree.split('\n').filter((l) => /(Редактировать|Быстрое|Просмотр|Удалить|Дублировать|Создать|Опубликовать|Снять|Edit|Delete|Publish)/.test(l)).map((l) => l.trim().slice(0, 70))
+  console.log('context menu lines:', menu.slice(0, 16).join(' | '))
+  await a.open('/manager/?a=element/chunk/update&id=1'); await a.wait(3000)
+  await a.observe('chunk'); console.log('chunk:', a.lines(/textbox/).slice(0, 8).map((l) => l.trim().slice(0, 90)).join(' | '))
+  console.log('buttons:', a.lines(/- button "/).slice(0, 8).map((l) => l.trim().slice(0, 50)).join(' | '))
+  await a.open('/manager/?a=security/user'); await a.wait(3000); await a.observe('users'); console.log('grid rows:', a.lines(/spikeadmin|row /).slice(0, 8).map((l) => l.trim().slice(0, 90)).join(' | '))
+} catch (e) { console.log('FAILED', e?.message?.slice(0, 200)); await a.observe('failed').catch(() => {}) } finally { await a.close() }

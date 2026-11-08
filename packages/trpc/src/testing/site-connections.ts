@@ -19,10 +19,12 @@ import {
   type LookedUpAddress,
   type PreparedAccess,
   type SiteConnectionServices,
+  type SiteRootInspection,
   type SiteSourceKind,
   type SourceCheckContext,
   type SourceCheckOutcome,
   type SourceCheckPassed,
+  type StackSupport,
 } from '@repo/domain'
 import { vi } from 'vitest'
 
@@ -174,7 +176,59 @@ const passed = (hostKey: string | null): SourceCheckOutcome => ({
   canonicalUrl: null,
   defaultBranch: null,
   entries: 12,
+  inspection: null,
 })
+
+/** What WordPress declares: every version is open (`wordpressSupport` of @repo/site-adapters). */
+export const OPEN_STACK_SUPPORT: StackSupport = Object.freeze({
+  files: 'on',
+  browser: 'on',
+  generations: [],
+  refuseBelow: null,
+  releaseNeedsChecks: false,
+  unknownVersion: 'open',
+})
+
+/** A support with a table: a version below 4.0 is refused, a version of 4.x and 5.x is known. */
+export const STACK_SUPPORT_FROM_4: StackSupport = Object.freeze({
+  files: 'on',
+  browser: 'on',
+  generations: Object.freeze([
+    Object.freeze({
+      id: 'g4',
+      from: '4.0',
+      to: '5.99',
+      php: ['8.2'],
+      files: 'on',
+      browser: true,
+      ended: false,
+    }),
+  ]),
+  refuseBelow: '4.0',
+  releaseNeedsChecks: true,
+  unknownVersion: 'closed',
+}) as StackSupport
+
+/** A passed check of the files that found `inspection` in the folder: what the real adapters answer. */
+export const passedWith = (
+  inspection: SiteRootInspection,
+  hostKey: string | null = null,
+): SourceCheckOutcome => ({
+  ok: true,
+  hostKey,
+  canonicalUrl: null,
+  defaultBranch: null,
+  entries: 12,
+  inspection,
+})
+
+/** What the registry finds in a root where no adapter knows anything: no stack, nothing read. */
+export const NOTHING_FOUND: SiteRootInspection = Object.freeze({
+  foundStack: null,
+  version: Object.freeze({ kind: 'unknown' }),
+  hint: null,
+  hasIndexPhp: false,
+}) as SiteRootInspection
 
 /**
  * What the real sftp adapter answers about the key of a server that presents `presented`. A required key
@@ -303,6 +357,7 @@ export function fakeSiteConnections(options: FakeSiteConnectionsOptions = {}) {
     presentedHostKey: FAKE_HOST_KEY,
     sourceResponder: null as SourceResponder | null,
     databaseResponder: null as DatabaseResponder | null,
+    support: OPEN_STACK_SUPPORT,
   }
   const sourceChecks: { input: CodeSourceInput; context: SourceCheckContext }[] = []
   const databaseChecks: { input: DatabaseInput; context: ConnectionContext }[] = []
@@ -357,8 +412,10 @@ export function fakeSiteConnections(options: FakeSiteConnectionsOptions = {}) {
     appEnv,
     secrets,
     lookup,
-    connectableStacks: ['wordpress'],
+    connectableStacks: () => ['wordpress'],
     rootMarkers: () => ['wp-content', 'wp-includes'],
+    stackSupport: () => control.support,
+    inspectRoot: vi.fn(async () => NOTHING_FOUND),
     sources(kind) {
       const adapter = sources[kind]
       if (!adapter) throw new Error(`No adapter of kind ${kind}`)
@@ -390,6 +447,10 @@ export function fakeSiteConnections(options: FakeSiteConnectionsOptions = {}) {
     /** The key the fake sftp server presents. */
     presentHostKey(key: string) {
       control.presentedHostKey = key
+    },
+    /** What the adapter of every stack declares from now on. */
+    declareSupport(support: StackSupport) {
+      control.support = support
     },
   }
 }

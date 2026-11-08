@@ -21,6 +21,7 @@ import {
 import { CLI_IMAGE, CLI_VERSIONS } from '../../../infra/dev/llm-verify/cli.mjs'
 import { ZAI_PATHS } from '../../../infra/dev/llm-verify/fake-zai.mjs'
 import { repository, run } from '../../../infra/dev/llm-verify/stack.mjs'
+import { fixtureWord } from './verify-agent-content-live.mjs'
 import { resultReadings } from './verify-llm-live-results.mjs'
 import {
   resetOpencodeHome,
@@ -405,7 +406,7 @@ export async function verifyAgentContentTurns(ctx) {
     await rolePath(row.path)
     const page = site.pages[driver]
     const route = `/wp/v2/pages/${page.id}`
-    const changed = `raditi-agent-changed-${randomUUID()}`
+    const changed = fixtureWord('raditi-agent-changed')
 
     // Turn A: read, edit with an idempotency key, the same edit again, a content result.
     const label = `${name} content edit`

@@ -205,14 +205,6 @@ function passiveToPinned(literal: string): (ftp: FTPContext) => Promise<FTPRespo
   }
 }
 
-/** The transfer of a check reached its byte budget: not a failure. */
-class HeadReached extends Error {
-  constructor() {
-    super('Read enough')
-    this.name = 'HeadReached'
-  }
-}
-
 interface FtpLogin {
   address: PinnedAddress
   port: number
@@ -409,11 +401,15 @@ class FtpControl {
     }
   }
 
-  /** Streams one file into `sink` (awaited per chunk: backpressure); past `maxBytes` the guard trips. */
+  /**
+   * Streams one file into `sink` (awaited per chunk: backpressure); past `maxBytes` the guard trips.
+   * `cut` is the answer to a transfer the server could not open or cut (425, 426, 451).
+   */
   async download(
     path: string,
     sink: (chunk: Uint8Array) => Promise<void>,
     maxBytes: number,
+    cut: CutTransferReason,
   ): Promise<number> {
     let total = 0
     let stopped: Error | null = null
@@ -446,28 +442,10 @@ class FtpControl {
       // Whatever the reply of the cut transfer will be, it must not answer the next command.
       this.broken = true
       if (stopped) throw stopped
-      throw this.failure(error, 'not_found')
+      const wasCut = error instanceof FTPError && CUT_TRANSFER_CODES.has(error.code)
+      throw this.failure(error, wasCut ? cut : 'not_found')
     }
     return total
-  }
-
-  /** At most `bytes` of the file, then the transfer is cut: the connection is not used again. */
-  async readHead(path: string, bytes: number): Promise<void> {
-    let received = 0
-    const destination = new Writable({
-      write(chunk: Buffer, _encoding, callback) {
-        received += chunk.length
-        callback(received >= bytes ? new HeadReached() : null)
-      },
-    })
-    try {
-      await this.client.downloadTo(destination, path)
-    } catch (error) {
-      this.broken = true
-      if (received >= bytes) return
-      // Listed, yet RETR refused: no right to read it.
-      throw this.failure(error, 'access_denied')
-    }
   }
 
   close(): void {
@@ -506,6 +484,17 @@ class FtpControl {
   }
 }
 
+/** Replies of a data connection that could not open or was cut: «425», «426», «451». */
+const CUT_TRANSFER_CODES: ReadonlySet<number> = new Set([425, 426, 451])
+
+/**
+ * What a cut transfer is to the reader. The check answers `transfer_failed`: a cut read of a version
+ * is a failure of the access with a retry, never an unknown version (Т26). The import answers
+ * `not_found`, as it always has: its walk passes such a file over as unreadable rather than fail the
+ * stage again and again on a file a hosting cuts every time (451 «Failure reading local file»).
+ */
+type CutTransferReason = 'transfer_failed' | 'not_found'
+
 /** How long a broken connection may take to close before its replacement is opened anyway. */
 const CONTROL_CLOSE_WAIT_MS = 2_000
 /** After the close: the server process of a hosting ends the session a moment later. */
@@ -526,17 +515,24 @@ function onlyControl(control: FtpControl): ControlUse {
  */
 class FtpTree implements CheckBrowser {
   private readonly use: ControlUse
+  private readonly cut: CutTransferReason
   readonly root: string
 
-  private constructor(use: ControlUse, root: string) {
+  private constructor(use: ControlUse, root: string, cut: CutTransferReason) {
     this.use = use
     this.root = root
+    this.cut = cut
   }
 
   /** CWD to the folder as typed (relative to the login folder unless absolute); PWD names the root. */
-  static async locate(control: FtpControl, rootPath: string, use: ControlUse): Promise<FtpTree> {
+  static async locate(
+    control: FtpControl,
+    rootPath: string,
+    use: ControlUse,
+    cut: CutTransferReason,
+  ): Promise<FtpTree> {
     await control.cwd(rawFromTyped(rootPath), 'not_found')
-    return new FtpTree(use, await control.pwd())
+    return new FtpTree(use, await control.pwd(), cut)
   }
 
   /**
@@ -579,12 +575,7 @@ class FtpTree implements CheckBrowser {
     maxBytes: number,
   ): Promise<number> {
     const path = this.filePath(refs)
-    return this.use((control) => control.download(path, sink, maxBytes))
-  }
-
-  async readHead(refs: readonly string[], bytes: number): Promise<void> {
-    const path = this.filePath(refs)
-    await this.use((control) => control.readHead(path, bytes))
+    return this.use((control) => control.download(path, sink, maxBytes, this.cut))
   }
 
   /** FTP names are bytes: a folder is typed only when its name is UTF-8, which is what the field sends. */
@@ -805,12 +796,9 @@ export function createFtpSource(options: FtpSourceOptions = {}): FileSourceAdapt
         // One connection for the whole check: a second login would double the attempts the server counts.
         const tree = await abortable(
           context.signal,
-          FtpTree.locate(control, ftp.rootPath, onlyControl(control)),
+          FtpTree.locate(control, ftp.rootPath, onlyControl(control), 'transfer_failed'),
         )
-        const inspection = await abortable(
-          context.signal,
-          inspectRoot(tree, ftp.rootPath, context.markers),
-        )
+        const inspection = await abortable(context.signal, inspectRoot(tree, ftp.rootPath, context))
         if (!inspection.ok) return inspection
         return {
           ok: true,
@@ -818,6 +806,7 @@ export function createFtpSource(options: FtpSourceOptions = {}): FileSourceAdapt
           canonicalUrl: null,
           defaultBranch: null,
           entries: inspection.entries,
+          inspection: inspection.inspection,
         }
       } catch (error) {
         return { ok: false, reason: checkReason(error, context.signal) }
@@ -898,7 +887,7 @@ export function createFtpSource(options: FtpSourceOptions = {}): FileSourceAdapt
       try {
         tree = await abortable(
           context.signal,
-          FtpTree.locate(first, access.rootPath, connections.use),
+          FtpTree.locate(first, access.rootPath, connections.use, 'not_found'),
         )
       } catch (error) {
         connections.close()

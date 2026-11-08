@@ -2,24 +2,39 @@ import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { createImportPathPolicy, SiteConnectionError, siteImportLimits } from '@repo/domain'
-import { getSiteAdapter } from '@repo/site-adapters'
+import {
+  closedStackRoots,
+  FileSourceGuardError,
+  importPolicyOf,
+  SiteConnectionError,
+  siteImportLimits,
+  siteReadBytes,
+  siteReadEntries,
+} from '@repo/domain'
+import { getSiteAdapter, siteAdapters } from '@repo/site-adapters'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { directory, fakeSession, file, type FakeNode } from '../testing/file-source.ts'
 import { ExactValues } from './exact-values.ts'
-import { readRootFile, walkSiteTree, type WalkInput } from './tree-walk.ts'
+import {
+  readRootFile,
+  siteTreeOf,
+  takenFilesRead,
+  walkSiteTree,
+  type WalkInput,
+} from './tree-walk.ts'
 
 const wordpress = getSiteAdapter('wordpress')
-const policy = createImportPathPolicy(
+const policy = importPolicyOf(
   wordpress.importRules({
     stack: 'wordpress',
     url: 'https://site.example.test',
     docroot: '/',
     extras: {},
-  }).exclude,
+  }),
 )
 const markers = wordpress.rootMarkers()
+const closedRoots = closedStackRoots(siteAdapters())
 const roots: string[] = []
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
@@ -37,6 +52,7 @@ async function walk(
     session,
     policy,
     markers,
+    closedRoots,
     blobs,
     values: extra.values ?? new ExactValues([]),
     signal: new AbortController().signal,
@@ -134,6 +150,71 @@ describe('walkSiteTree', () => {
     expect(session.lists.filter((path) => path[0] === 'old')).toEqual([['old']])
   })
 
+  describe('a folder of a stack closed for files', () => {
+    // A stack closed for files names its root and its core itself: no literal of it here.
+    const bitrix = getSiteAdapter('bitrix')
+    const rootNames = bitrix.rootMarkers()
+    const coreNames = bitrix.recognition.coreFolder ?? []
+    /** A name with a dot is a file of the root, any other a folder. */
+    const entriesOf = (names: readonly string[]): Record<string, FakeNode> =>
+      Object.fromEntries(
+        names.map((name) => [
+          name,
+          name.includes('.')
+            ? file('<?php // synthetic\n')
+            : directory({ 'index.php': file('<?php // synthetic\n') }),
+        ]),
+      )
+
+    it('is not entered when it holds the root of such a stack', async () => {
+      const { result, session } = await walk(site({ old: directory(entriesOf(rootNames)) }))
+      const { files, skipped } = await result
+
+      expect(skipped.closed_stack).toBe(1)
+      expect(files.some((taken) => taken.path.startsWith('old/'))).toBe(false)
+      // Listed once to recognise it, never descended into, nothing under it read.
+      expect(session.lists.filter((path) => path[0] === 'old')).toEqual([['old']])
+      expect(session.reads.filter((path) => path[0] === 'old')).toEqual([])
+    })
+
+    it('is not entered when it holds the core of such a stack without the files of its root', async () => {
+      expect(coreNames.length).toBeGreaterThan(0)
+      const core = directory(entriesOf(coreNames))
+      const { result, session } = await walk(site({ backup: directory({ [rootNames[0]!]: core }) }))
+      const { files, skipped } = await result
+
+      expect(skipped.closed_stack).toBe(1)
+      expect(files.some((taken) => taken.path.startsWith('backup/'))).toBe(false)
+      expect(session.lists.filter((path) => path[0] === 'backup')).toEqual([
+        ['backup'],
+        ['backup', rootNames[0]!],
+      ])
+    })
+
+    it('counts a folder that is also a root of the own stack as closed, not as another site', async () => {
+      const both = { ...entriesOf(rootNames), ...entriesOf(markers) }
+      const { result, session } = await walk(site({ old: directory(both) }))
+      const { files, skipped } = await result
+
+      expect(skipped.closed_stack).toBe(1)
+      expect(skipped.nested_site).toBeUndefined()
+      expect(files.some((taken) => taken.path.startsWith('old/'))).toBe(false)
+      expect(session.lists.filter((path) => path[0] === 'old')).toEqual([['old']])
+    })
+
+    it('imports a folder that has only some of those names', async () => {
+      const { result } = await walk(
+        site({ lib: directory({ [rootNames[0]!]: directory(entriesOf(coreNames.slice(0, 1))) }) }),
+      )
+      const { files, skipped } = await result
+
+      expect(skipped.closed_stack).toBeUndefined()
+      expect(files.map((taken) => taken.path)).toContain(
+        `lib/${rootNames[0]}/${coreNames[0]}/index.php`,
+      )
+    })
+  })
+
   it('counts a folder the server resolves outside the listed one as a link', async () => {
     const { result } = await walk(site({ mirror: directory({ 'a.php': file('x') }, true) }))
     expect((await result).skipped.link).toBe(1)
@@ -220,6 +301,7 @@ describe('walkSiteTree', () => {
         session,
         policy,
         markers,
+        closedRoots,
         blobs,
         values: new ExactValues([]),
         signal: new AbortController().signal,
@@ -285,5 +367,208 @@ describe('readRootFile', () => {
     })
     expect(await readRootFile(large, 'wp-config.php', signal)).toBeNull()
     expect(await readRootFile(session, '../etc/passwd', signal)).toBeNull()
+  })
+})
+
+describe('takenFilesRead', () => {
+  it('reads a file the walk took from its copy, null for one it did not take or a long one', async () => {
+    const { result, blobs } = await walk({
+      'wp-includes': directory({ 'version.php': file("<?php\n$wp_version = '6.8.3';\n") }),
+      'wp-config.php': file('<?php // synthetic\n'),
+    })
+    const { files } = await result
+    // Longer than a SiteRead hands over: never opened, so its copy need not even exist.
+    const long = { path: 'big.js', blob: join(blobs, 'absent'), bytes: siteReadBytes + 1 }
+    const read = takenFilesRead([...files, long])
+    expect(Buffer.from((await read('wp-includes/version.php'))!).toString()).toBe(
+      "<?php\n$wp_version = '6.8.3';\n",
+    )
+    // Left out by the rules of the import: the copy never had it.
+    expect(await read('wp-config.php')).toBeNull()
+    expect(await read('big.js')).toBeNull()
+    expect(await read('missing.php')).toBeNull()
+  })
+})
+
+describe('siteTreeOf', () => {
+  const signal = new AbortController().signal
+  const tree = () =>
+    fakeSession({
+      'index.php': file('<?php // synthetic\n'),
+      'wp-includes': directory({ 'version.php': file('<?php $wp_version = "6.8";\n') }),
+      locked: directory({ 'a.php': file('x') }, { fails: 'access_denied' }),
+      broken: directory({ 'a.php': file('x') }, { fails: 'transfer_failed' }),
+      mirror: directory({ 'a.php': file('x') }, true),
+      device: { type: 'other' },
+      feed: { type: 'link' },
+      'cut.php': file('x', { fails: 'transfer_failed' }),
+    })
+
+  it('lists the root and a folder by their path, without entries of another kind', async () => {
+    const site = siteTreeOf(tree(), signal)
+    expect(await site.list('')).toEqual([
+      { name: 'index.php', type: 'file' },
+      { name: 'wp-includes', type: 'directory' },
+      { name: 'locked', type: 'directory' },
+      { name: 'broken', type: 'directory' },
+      { name: 'mirror', type: 'directory' },
+      { name: 'feed', type: 'link' },
+      { name: 'cut.php', type: 'file' },
+    ])
+    expect(await site.list('wp-includes')).toEqual([{ name: 'version.php', type: 'file' }])
+  })
+
+  it('asks for at most siteReadEntries entries', async () => {
+    const session = tree()
+    const asked: number[] = []
+    const list = session.list.bind(session)
+    session.list = (path, maxEntries) => {
+      asked.push(maxEntries)
+      return list(path, maxEntries)
+    }
+    await siteTreeOf(session, signal).list('')
+    expect(asked).toEqual([siteReadEntries])
+  })
+
+  it('answers null where a folder cannot be listed, never an error', async () => {
+    const site = siteTreeOf(tree(), signal)
+    expect(await site.list('missing')).toBeNull()
+    expect(await site.list('locked')).toBeNull()
+    expect(await site.list('broken')).toBeNull()
+    // The guards of the session: a folder resolved elsewhere, too many entries.
+    expect(await site.list('mirror')).toBeNull()
+    const crowded = fakeSession({ many: directory({ a: file('x'), b: file('y') }) })
+    const list = crowded.list.bind(crowded)
+    crowded.list = (path) => list(path, 1)
+    expect(await siteTreeOf(crowded, signal).list('many')).toBeNull()
+    // A path the import would not take is never asked for.
+    const session = tree()
+    for (const path of ['../etc', 'wp-includes/../..', 'a//b', '/abs'])
+      expect(await siteTreeOf(session, signal).list(path)).toBeNull()
+    expect(session.lists).toEqual([])
+  })
+
+  it('reads a file, and answers null where it cannot be read', async () => {
+    const site = siteTreeOf(tree(), signal)
+    expect(Buffer.from((await site.read('wp-includes/version.php'))!).toString()).toBe(
+      '<?php $wp_version = "6.8";\n',
+    )
+    expect(await site.read('missing.php')).toBeNull()
+    expect(await site.read('cut.php')).toBeNull()
+    expect(await site.read('../etc/passwd')).toBeNull()
+  })
+
+  it('keeps why its last null was no answer about the site', async () => {
+    const site = siteTreeOf(tree(), signal)
+    expect(site.failure).toBeNull()
+    // «No such file or folder» below the root is an answer.
+    expect(await site.list('missing')).toBeNull()
+    expect(await site.read('missing.php')).toBeNull()
+    expect(site.failure).toBeNull()
+    // A broken listing or read is a hiccup; a refused one, the refusal the walk would say.
+    expect(await site.list('broken')).toBeNull()
+    expect(site.failure).toMatchObject({ code: 'transfer_failed', transient: true })
+    expect(await site.list('locked')).toBeNull()
+    expect(site.failure).toMatchObject({ code: 'access_denied', transient: false })
+    expect(await site.read('cut.php')).toBeNull()
+    expect(site.failure).toMatchObject({ code: 'transfer_failed', transient: true })
+
+    // Each call starts anew: a later null that is an answer, or a result, leaves no failure behind.
+    expect(await site.read('missing.php')).toBeNull()
+    expect(site.failure).toBeNull()
+    expect(await site.list('locked')).toBeNull()
+    expect(await site.list('wp-includes')).not.toBeNull()
+    expect(site.failure).toBeNull()
+    expect(await site.read('cut.php')).toBeNull()
+    expect(await site.read('index.php')).not.toBeNull()
+    expect(site.failure).toBeNull()
+    expect(await site.list('broken')).toBeNull()
+    expect(await site.list('missing')).toBeNull()
+    expect(site.failure).toBeNull()
+    // A file past configFileBytes is an answer of its own: too large to read, not a broken read.
+    const large = fakeSession({
+      'cut.php': file('x', { fails: 'transfer_failed' }),
+      'configuration.php': file('x'.repeat(siteImportLimits.configFileBytes + 1)),
+    })
+    const oversized = siteTreeOf(large, signal)
+    expect(await oversized.read('cut.php')).toBeNull()
+    expect(await oversized.read('configuration.php')).toBeNull()
+    expect(oversized.failure).toBeNull()
+
+    // A root that is not there is no answer either.
+    const gone = fakeSession({}, { root: { fails: 'not_found' } })
+    const rootless = siteTreeOf(gone, signal)
+    expect(await rootless.list('')).toBeNull()
+    expect(rootless.failure).toMatchObject({ code: 'not_found', transient: false })
+  })
+
+  it('says a folder past siteReadEntries as folder_too_large, the guard or a longer answer', async () => {
+    const crowded = fakeSession({ many: directory({ a: file('x'), b: file('y') }) })
+    const list = crowded.list.bind(crowded)
+    crowded.list = (path) => list(path, 1)
+    const guarded = siteTreeOf(crowded, signal)
+    expect(await guarded.list('many')).toBeNull()
+    expect(guarded.failure).toMatchObject({ code: 'folder_too_large', transient: false })
+
+    const longer = tree()
+    longer.list = async () =>
+      Array.from({ length: siteReadEntries + 1 }, (_, index) => ({
+        name: `f${index}`,
+        ref: `f${index}`,
+        type: 'file' as const,
+        size: 1,
+      }))
+    const answered = siteTreeOf(longer, signal)
+    expect(await answered.list('')).toBeNull()
+    expect(answered.failure).toMatchObject({ code: 'folder_too_large', transient: false })
+
+    // A folder resolved elsewhere is no failure of the size.
+    const mirrored = siteTreeOf(tree(), signal)
+    expect(await mirrored.list('mirror')).toBeNull()
+    expect(mirrored.failure).toBeNull()
+  })
+
+  it('throws once its deadline has passed', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const site = siteTreeOf(tree(), controller.signal)
+    await expect(site.read('index.php')).rejects.toThrow()
+    await expect(site.list('')).rejects.toThrow()
+  })
+
+  it('lets a guard error of a listing pass as null only, not any other error', async () => {
+    const session = tree()
+    session.list = async () => {
+      throw new FileSourceGuardError('listing')
+    }
+    // The byte cap of a listing (sftp.ts, ftp.ts) comes before its count of entries: a root of
+    // many long names is a folder too large as well.
+    const capped = siteTreeOf(session, signal)
+    expect(await capped.list('')).toBeNull()
+    expect(capped.failure).toMatchObject({ code: 'folder_too_large', transient: false })
+
+    // Anything else is no answer about the site: it is never read as «no such folder».
+    const failing = tree()
+    failing.list = async () => {
+      throw new Error('synthetic failure')
+    }
+    await expect(siteTreeOf(failing, signal).list('')).rejects.toThrow('synthetic failure')
+  })
+
+  it('throws when the deadline ends a listing or a read midway, rather than answer null', async () => {
+    // A session cut by its deadline destroys its sockets: the call fails as a broken transfer.
+    const cut = (controller: AbortController) => async () => {
+      controller.abort()
+      throw new SiteConnectionError('transfer_failed')
+    }
+    const listing = new AbortController()
+    const listed = tree()
+    listed.list = cut(listing)
+    await expect(siteTreeOf(listed, listing.signal).list('')).rejects.toThrow()
+
+    const reading = new AbortController()
+    const read = tree()
+    read.read = cut(reading)
+    await expect(siteTreeOf(read, reading.signal).read('index.php')).rejects.toThrow()
   })
 })

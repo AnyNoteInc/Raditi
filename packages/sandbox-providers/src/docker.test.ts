@@ -231,7 +231,8 @@ describe('Docker sandbox provider', () => {
       { client: fake.client },
     )
     expect(await other.list()).toEqual([])
-    // Core's own local executor labels no runner and sees every turn container.
+    // Without a runner id — a core without a deployment label, as before SANDBOX_DEPLOYMENT —
+    // the provider sees every turn container; core with the label always passes one.
     expect(await createDockerSandboxProvider(config, { client: fake.client }).list()).toHaveLength(
       1,
     )

@@ -1,6 +1,8 @@
-import type { PrismaClient } from '@repo/db'
+import { randomBytes } from 'node:crypto'
+
+import type { Prisma, PrismaClient } from '@repo/db'
 import type { CandidateFiles, DbPlan, PreviewRecipe, PreviewRuntime } from '@repo/domain'
-import { previewRequest, type PreviewTarget } from '@repo/site-content'
+import { previewRequest, type PreviewResponse, type PreviewTarget } from '@repo/site-content'
 
 import type { PreviewHold } from './preview-lease.ts'
 
@@ -67,6 +69,156 @@ export async function lintChangedFiles(
 const FATAL = /(?:<b>)?(?:PHP )?(?:Fatal|Parse) error(?:<\/b>)?:/i
 const PAGES_MAX = 20
 
+/**
+ * How core asks a page of a preview for a check: one GET, no redirect followed, with a key of its
+ * own in `x-raditi-check` — the configuration of a stack with `ready.fatalMark` ends a page that
+ * died of a fatal error of PHP with it (docs/plan/62-site-stacks.md, Т33).
+ */
+export function checkRequest() {
+  return {
+    method: 'GET',
+    headers: {
+      'user-agent': 'raditi-preview-check',
+      'x-raditi-check': randomBytes(16).toString('hex'),
+    },
+    timeoutMs: 30_000,
+    maxResponseBytes: 8 * 1024 * 1024,
+  } as const
+}
+
+/** What a page of a stack that declared `ready` says about the site (docs/plan/62-site-stacks.md, Т33). */
+export type PreviewBoot =
+  /** The site did not start: no header, 5xx, a message of PHP, a text of `ready.absent`. */
+  | { state: 'dead' }
+  /** It answered as itself; `redirectsAway` — to another host. */
+  | { state: 'alive'; redirectsAway: boolean }
+  /** 4xx with the header: the configuration ran, this page is closed or gone. */
+  | { state: 'closed' }
+  /** Twice no answer to read: a network failure, the time or the size. Nothing is proved. */
+  | { state: 'unproved' }
+
+/**
+ * Where a message of PHP begins: PHP starts it on a line of its own, plain (`\nFatal error: `) or
+ * with html_errors (`<br />\n<b>Fatal error</b>:`). A post quoting one inside its text is no death.
+ */
+const PHP_HEADER = /(?:^|\n)(?:<b>)?(?:PHP )?(?:Fatal|Parse) error(?:<\/b>)?:/g
+/** Where a message of PHP ends. */
+const PHP_LINE = / on line (?:<b>)?\d+/g
+/** How far the file of a message may be from its header, and how long the file may be. */
+const PHP_GAP_MAX = 8192
+const PHP_FILE_MAX = 512
+
+/** Where `needle` starts in `text`, ascending. */
+function positionsOf(text: string, needle: string): number[] {
+  const found: number[] = []
+  for (let at = text.indexOf(needle); at !== -1; at = text.indexOf(needle, at + 1)) found.push(at)
+  return found
+}
+
+/** The index of the first value at least `limit` in an ascending list, or its length. */
+function firstAtLeast(sorted: readonly number[], limit: number): number {
+  let low = 0
+  let high = sorted.length
+  while (low < high) {
+    const middle = (low + high) >>> 1
+    if (sorted[middle]! < limit) low = middle + 1
+    else high = middle
+  }
+  return low
+}
+
+/**
+ * A message PHP itself printed, plain or with html_errors: `… in <file> on line <n>`, an uncaught
+ * exception over several lines included, up to 8 KiB between the header and ` in `, a file of at
+ * most 512 characters without `<` or a line break. Words alone are not one: a post may quote
+ * «Fatal error:». Linear in the page, whatever it holds: the page is the site's or the agent's.
+ */
+export function phpMessageIn(page: string): boolean {
+  const headerEnds = Array.from(page.matchAll(PHP_HEADER), (match) => match.index + match[0].length)
+  if (headerEnds.length === 0) return false
+  const ins = positionsOf(page, ' in ')
+  // The last `<` or line break before the end of the file of the current message.
+  let separator = -1
+  let scanned = 0
+  for (const match of page.matchAll(PHP_LINE)) {
+    const end = page.endsWith('</b>', match.index) ? match.index - 4 : match.index
+    for (; scanned < end; scanned++) {
+      const code = page.charCodeAt(scanned)
+      if (code === 0x0a || code === 0x3c) separator = scanned
+    }
+    // ` in <b>file</b>`: the `<` of `<b>` is the separator itself.
+    let start = -1
+    if (separator >= 4 && page.startsWith(' in <b>', separator - 4)) start = separator - 4
+    if (start !== -1 && (end - separator - 3 < 1 || end - separator - 3 > PHP_FILE_MAX)) start = -1
+    if (start === -1) {
+      // ` in file`: the first ` in ` that leaves a file of 1 to 512 characters after it.
+      const at = firstAtLeast(ins, Math.max(separator + 1, end - PHP_FILE_MAX - 4))
+      if (at < ins.length && ins[at]! <= end - 5) start = ins[at]!
+    }
+    if (start === -1) continue
+    // No header ends between the separator and the end, so the nearest header is the same for
+    // every ` in ` that fits: the first one is the nearest to it.
+    const header = firstAtLeast(headerEnds, start + 1) - 1
+    if (header >= 0 && start - headerEnds[header]! <= PHP_GAP_MAX) return true
+  }
+  return false
+}
+
+/**
+ * One answer of a stack that declared `ready` (Т33): no `Warning` here, OpenCart prints it alive.
+ * `check` — the key of the request that asked it: with `ready.fatalMark` a message of PHP is read
+ * by the mark of that key alone, never by its text, which a live page may quote.
+ */
+export function pageVerdict(
+  response: PreviewResponse,
+  ready: NonNullable<PreviewRecipe['ready']>,
+  hostname: string,
+  check: string,
+): Exclude<PreviewBoot, { state: 'unproved' }> {
+  if (response.headers[ready.header] === undefined) return { state: 'dead' }
+  const page = Buffer.from(response.body).toString('utf8')
+  const fatal = ready.fatalMark ? page.includes(`raditi-fatal:${check}`) : phpMessageIn(page)
+  if (fatal || ready.absent.some((text) => page.includes(text))) return { state: 'dead' }
+  if (response.status >= 500) return { state: 'dead' }
+  // The header proves the configuration ran: a closed site answers a guest 401, 403 or 404.
+  if (response.status >= 400) return { state: 'closed' }
+  if (response.status >= 200 && response.status < 300)
+    return { state: 'alive', redirectsAway: false }
+  if (response.status >= 300) {
+    const location = response.headers.location
+    if (!location) return { state: 'dead' }
+    let target: URL
+    try {
+      target = new URL(location, `http://${hostname}/`)
+    } catch {
+      return { state: 'dead' }
+    }
+    return { state: 'alive', redirectsAway: target.hostname !== hostname }
+  }
+  return { state: 'dead' }
+}
+
+/** The health page before `ready`; a request that failed is tried once more. */
+export async function previewBootOf(
+  target: PreviewTarget,
+  recipe: Pick<PreviewRecipe, 'healthPath'> & { ready: NonNullable<PreviewRecipe['ready']> },
+  signal: AbortSignal,
+): Promise<PreviewBoot> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    signal.throwIfAborted()
+    const request = checkRequest()
+    let response: PreviewResponse
+    try {
+      response = await previewRequest(target, { ...request, path: recipe.healthPath })
+    } catch {
+      // A slow or heavy home page proves no death: the preview stays, the client sees `suspect`.
+      continue
+    }
+    return pageVerdict(response, recipe.ready, target.hostname, request.headers['x-raditi-check'])
+  }
+  return { state: 'unproved' }
+}
+
 /** The pages of the smoke check: the health page, then those of the plan's objects. */
 export function smokePages(
   recipe: Pick<PreviewRecipe, 'healthPath' | 'content'>,
@@ -83,20 +235,22 @@ export function smokePages(
 }
 
 export async function smokeCheck(
-  input: { target: PreviewTarget; pages: readonly string[] },
+  input: { target: PreviewTarget; pages: readonly string[]; ready?: PreviewRecipe['ready'] },
   signal: AbortSignal,
 ): Promise<CheckResult> {
   let failed = 0
   for (const path of input.pages) {
     signal.throwIfAborted()
     try {
-      const response = await previewRequest(input.target, {
-        method: 'GET',
-        path,
-        headers: { 'user-agent': 'raditi-preview-check' },
-        timeoutMs: 30_000,
-        maxResponseBytes: 8 * 1024 * 1024,
-      })
+      const request = checkRequest()
+      const response = await previewRequest(input.target, { ...request, path })
+      if (input.ready) {
+        // A stack that says how its live page looks: only PHP's own message is death (Т33).
+        const key = request.headers['x-raditi-check']
+        if (pageVerdict(response, input.ready, input.target.hostname, key).state !== 'alive')
+          failed++
+        continue
+      }
       const page = Buffer.from(response.body).toString('utf8')
       if (response.status < 200 || response.status >= 400 || FATAL.test(page)) failed++
     } catch {
@@ -121,7 +275,7 @@ export async function runCandidateChecks(
   input: {
     taskId: string
     candidate: { id: string; revision: number; files: CandidateFiles; dbPlan: DbPlan }
-    recipe: Pick<PreviewRecipe, 'runtime' | 'healthPath' | 'content'>
+    recipe: Pick<PreviewRecipe, 'runtime' | 'healthPath' | 'content' | 'ready'>
     target: PreviewTarget
   },
 ): Promise<Record<PreviewCheckKind, CheckResult>> {
@@ -138,7 +292,11 @@ export async function runCandidateChecks(
       signal,
     ).catch(() => failed),
     preview_smoke: await smokeCheck(
-      { target: input.target, pages: smokePages(input.recipe, input.candidate.dbPlan) },
+      {
+        target: input.target,
+        pages: smokePages(input.recipe, input.candidate.dbPlan),
+        ready: input.recipe.ready,
+      },
       signal,
     ).catch(() => failed),
   }
@@ -157,33 +315,50 @@ export async function runCandidateChecks(
         },
       })
       if (shown !== 1) return
-      const finishedAt = new Date()
-      for (const kind of previewCheckKinds) {
-        const result = results[kind]
-        const data = {
-          status: result.passed ? ('passed' as const) : ('failed' as const),
-          summary: result.summary,
-          finishedAt,
-        }
-        const { count } = await tx.candidateCheck.updateMany({
-          where: { candidateId: candidate.id, revision: candidate.revision, kind },
-          data,
-        })
-        if (count === 0)
-          await tx.candidateCheck.create({
-            data: { candidateId: candidate.id, revision: candidate.revision, kind, ...data },
-          })
-      }
-      await tx.candidateCheck.updateMany({
-        where: {
-          candidate: { taskId: input.taskId },
-          revision: { lt: candidate.revision },
-          status: { in: ['pending', 'passed', 'failed'] },
-        },
-        data: { status: 'stale' },
-      })
+      await recordCandidateChecks(tx, { taskId: input.taskId, candidate, results })
     },
     { isolationLevel: 'ReadCommitted' },
   )
   return results
+}
+
+/**
+ * Writes the results of checks for a candidate's revision; the checks of its earlier revisions
+ * become stale. The caller proves, in the same transaction, that its hold may write them.
+ */
+export async function recordCandidateChecks(
+  tx: Prisma.TransactionClient,
+  input: {
+    taskId: string
+    candidate: { id: string; revision: number }
+    results: Partial<Record<PreviewCheckKind, CheckResult>>
+  },
+): Promise<void> {
+  const { candidate } = input
+  const finishedAt = new Date()
+  for (const kind of previewCheckKinds) {
+    const result = input.results[kind]
+    if (!result) continue
+    const data = {
+      status: result.passed ? ('passed' as const) : ('failed' as const),
+      summary: result.summary,
+      finishedAt,
+    }
+    const { count } = await tx.candidateCheck.updateMany({
+      where: { candidateId: candidate.id, revision: candidate.revision, kind },
+      data,
+    })
+    if (count === 0)
+      await tx.candidateCheck.create({
+        data: { candidateId: candidate.id, revision: candidate.revision, kind, ...data },
+      })
+  }
+  await tx.candidateCheck.updateMany({
+    where: {
+      candidate: { taskId: input.taskId },
+      revision: { lt: candidate.revision },
+      status: { in: ['pending', 'passed', 'failed'] },
+    },
+    data: { status: 'stale' },
+  })
 }

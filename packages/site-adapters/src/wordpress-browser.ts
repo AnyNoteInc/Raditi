@@ -1,5 +1,6 @@
 import type { SiteBrowserRequest } from '@repo/domain'
 
+import { mediaRequestDenied, segmentsOf } from './php/media.ts'
 import {
   isAdminAjaxActionDenied,
   isAdminUrlDenied,
@@ -19,33 +20,13 @@ const base = 'https://site.invalid'
  */
 const uploadsDir = ['wp-content', 'uploads']
 const mediaDir = WORDPRESS_MEDIA_DIR.split('/').filter(Boolean)
-const pageAsset =
-  /\.(?:avif|bmp|gif|ico|jpe?g|png|svg|webp|css|js|mjs|eot|otf|ttf|woff2?|m4a|mp3|mp4|oga|ogg|ogv|wav|webm)$/
 
 const startsWith = (segments: readonly string[], prefix: readonly string[]) =>
   prefix.every((part, index) => segments[index] === part)
 
-/** The decoded, lower-case segments of a path; null for one that cannot be read plainly. */
-export function segmentsOf(path: string): string[] | null {
-  let decoded: string
-  try {
-    decoded = decodeURIComponent(path)
-  } catch {
-    return null
-  }
-  if (decoded.includes('\0') || decoded.includes('\\')) return null
-  const segments = decoded
-    .toLowerCase()
-    .split('/')
-    .filter((segment) => segment !== '' && segment !== '.')
-  return segments.includes('..') ? null : segments
-}
-
 /** A path of the media library (segments from `wp-content`) the agent's browser may not open. */
 export function isUploadDenied(segments: readonly string[]): boolean {
-  if (!startsWith(segments, uploadsDir)) return false
-  if (startsWith(segments, mediaDir) && segments.length > mediaDir.length) return false
-  return !pageAsset.test(segments.at(-1) ?? '')
+  return mediaRequestDenied(segments, [uploadsDir], mediaDir)
 }
 
 /** A REST route of the media library, by path or `rest_route`: its list names every file. */

@@ -54,6 +54,14 @@ const importTexts: Record<Exclude<ProvisioningErrorCode, ConnectionCheckReason>,
     'В файлах сайта слишком много мест, похожих на пароли и ключи доступа, поэтому копию мы не сохранили. Напишите нам — мы разберёмся.',
   source_empty:
     'В папке сайта не нашлось файлов, которые можно сохранить. Проверьте папку и укажите доступ заново.',
+  // The ceiling is siteReadEntries; the test ties the number to it. Any folder the reading of
+  // the layout lists may be the one: the root or a folder inside it.
+  folder_too_large:
+    'Чтобы узнать, как устроен сайт, мы читаем списки файлов в его папке, а в ней или в одной из вложенных папок больше 4 096 файлов и папок — столько мы не разбираем. Уберите лишние файлы с сервера и попробуйте повторить.',
+  // Т16 as written; the text by `stack_facts.limit` (siteLimitLateText) and «Указать другую
+  // папку» come with Э9.
+  layout_unsupported:
+    'Часть файлов сайта лежит выше выбранной папки, поэтому копию сайта мы собрать не сможем. Проект сохранён: агент будет работать через панель управления, правки идут сразу на сайт, и отменить их мы не сможем.',
   scan_failed: 'Не удалось проверить файлы сайта. Попробуйте повторить.',
   schema_unreadable: 'Не удалось прочитать устройство базы данных. Попробуйте повторить.',
   timed_out:

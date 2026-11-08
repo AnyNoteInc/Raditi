@@ -159,6 +159,8 @@ export function PreviewTab({
   }
   if (origin === null || hostname === null)
     return <State>{chatCommandRefusalText.preview_unavailable}</State>
+  // The link above the frame and the one the frame gives way to open the same tab.
+  const openUrl = previewOpenUrl(cabinet, hostname, '/')
   return (
     <Box sx={{ flex: '1 1 auto', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <Box
@@ -171,7 +173,7 @@ export function PreviewTab({
         }}
       >
         <MuiLink
-          href={previewOpenUrl(cabinet, hostname, '/')}
+          href={openUrl}
           target="_blank"
           rel="noopener noreferrer"
           variant="body2"
@@ -181,7 +183,7 @@ export function PreviewTab({
           <AppIcon name="arrow" size={16} />
         </MuiLink>
       </Box>
-      <PreviewFrame taskId={taskId} origin={origin} revision={preview.revision} />
+      <PreviewFrame taskId={taskId} origin={origin} revision={preview.revision} openUrl={openUrl} />
     </Box>
   )
 }

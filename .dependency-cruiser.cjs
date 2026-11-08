@@ -248,6 +248,7 @@ module.exports = {
         path: [
           '^packages/(turn-keys|snapshots|local-turns)/src/testing\\.ts$',
           '^packages/(app-bootstrap|service-runtime)/src/testing/',
+          '^packages/site-adapters/src/testing/',
         ],
       },
     },

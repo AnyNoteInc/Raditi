@@ -24,9 +24,6 @@ import { createDockerPreviewRuntime } from '../../../packages/sandbox-providers/
 import { previewBridge } from '../../../packages/sandbox-providers/src/preview/resources.ts'
 import { NODE_PROBE, PHP_PROBE, passed, table, ustar, verdict } from './probes.mjs'
 
-/** The base of the site image (infra/preview/Dockerfile, `BASE`): wordpress:7.1.2-php8.3-apache. */
-const WORDPRESS =
-  'wordpress@sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5'
 const images = {}
 const repository = fileURLToPath(new URL('../../../', import.meta.url))
 const run = randomBytes(4).toString('hex')
@@ -102,7 +99,9 @@ async function build(target, buildArgs = [], version = 'local') {
         tag,
         'infra/preview',
       ],
-      { timeoutMs: 900_000 },
+      // The site image compiles its PHP extensions, 6–9 minutes on an empty cache: 30 minutes
+      // leave room for a slow machine.
+      { timeoutMs: 1_800_000 },
     ).catch(() => {
       throw new Error(`docker build of the ${target} image failed (run from ${repository})`)
     })
@@ -250,6 +249,9 @@ const page = (name) =>
   `<?php $s = json_decode(file_get_contents('/run/raditi/preview/settings.json'), true); ` +
   `echo 'preview-${name} ' . $s['hostname'];\n`
 
+/** Written by the root step of the runtime (writePlatformFiles), the one gVisor once broke. */
+const PLATFORM_FILE = { path: 'raditi-stand/platform.php', content: '<?php echo "platform-a";' }
+
 /** A public address this run refuses as a subnet of the platform: its neighbour stays open. */
 const REFUSED = { subnet: '1.0.0.0/24', address: '1.0.0.1', port: 443 }
 const PUBLIC = { address: '1.1.1.1', port: 443 }
@@ -257,11 +259,9 @@ const PUBLIC = { address: '1.1.1.1', port: 443 }
 async function main() {
   process.chdir(repository)
   stage = 'images'
-  if ((await docker(['image', 'inspect', WORDPRESS], { allowFailure: true })).code !== 0)
-    throw new Error('The pinned WordPress image is missing; docker pull it first (README)')
   images.tools = await build('tools')
   images.browser = await build('browser')
-  images.site = await build('site', ['--build-arg', `BASE=${WORDPRESS}`], '8.3-local')
+  images.site = await build('site', [], '8.3-local')
   images.guard = await buildGuard()
 
   // The control: the default bridge, like any trusted platform container. It also tells where
@@ -378,14 +378,16 @@ async function measure(control, servers) {
     stage = 'previews'
     const upstreamA = await runtime.ensure(previewA, { env: {}, database: passwords })
     const upstreamB = await runtime.ensure(previewB, { env: {}, database: null })
-    for (const [spec, name] of [
-      [previewA, 'a'],
-      [previewB, 'b'],
+    // A file of the platform in A; B stays without one: its root remains PHP's.
+    for (const [spec, name, platform] of [
+      [previewA, 'a', [PLATFORM_FILE]],
+      [previewB, 'b', undefined],
     ])
       await runtime.writeFiles(spec.previewId, {
         archive: [ustar([{ path: 'index.php', content: page(name) }])],
         deletes: [],
         replace: true,
+        ...(platform ? { platform } : {}),
       })
     stage = 'browser'
     const endpoint = await runtime.startBrowser(previewA.previewId, {
@@ -475,6 +477,13 @@ async function measure(control, servers) {
       to: `preview A via its gateway 127.0.0.1:${upstreamA.port}`,
       expect: 'reachable',
       actual: answer.body === `preview-a ${previewA.hostname}` ? 'open' : 'wrong answer',
+    })
+    const platformAnswer = await httpGet(upstreamA.port, hostA, `/${PLATFORM_FILE.path}`)
+    rows.push({
+      from: 'host',
+      to: 'platform file of A, by its gateway',
+      expect: 'reachable',
+      actual: platformAnswer.body === 'platform-a' ? 'open' : 'closed',
     })
     // A caller holding a stale port of another preview: the gateway refuses the foreign Host.
     const ownB = await httpGet(upstreamB.port, hostB)
@@ -631,6 +640,32 @@ async function measure(control, servers) {
       actual: await runsAs(boxA, '33:33', ['cat', '/run/raditi/db/root']),
       control: await runsAs(boxA, '999:999', ['cat', '/run/raditi/db/root']),
     })
+    const platformFile = `/var/www/html/${PLATFORM_FILE.path}`
+    rows.push({
+      from: 'PHP of A',
+      to: 'write the platform file',
+      expect: 'blocked',
+      actual: await runsAs(boxA, '33:33', ['sh', '-c', `echo x > ${platformFile}`]),
+      control: await runsAs(boxA, '33:33', ['sh', '-c', 'echo x > /var/www/html/control.txt']),
+    })
+    // PHP may write in the folder of the platform (its group), so only the sticky bit of the
+    // folder keeps a file of PHP from being renamed over the platform's.
+    const platformFolder = `/var/www/html/${PLATFORM_FILE.path.split('/')[0]}`
+    rows.push({
+      from: 'PHP of A',
+      to: 'replace the platform file by a rename',
+      expect: 'blocked',
+      actual: await runsAs(boxA, '33:33', [
+        'sh',
+        '-c',
+        `echo x > ${platformFolder}/swap.txt && mv -f ${platformFolder}/swap.txt ${platformFile}`,
+      ]),
+      control: await runsAs(boxA, '33:33', [
+        'sh',
+        '-c',
+        `echo x > ${platformFolder}/own.txt && mv -f ${platformFolder}/own.txt ${platformFolder}/moved.txt`,
+      ]),
+    })
     const gatewayPid = (
       await docker(['exec', '-u', '0:0', boxA, 'cat', '/run/raditi/ready/forward.pid'], {
         allowFailure: true,
@@ -657,6 +692,27 @@ async function measure(control, servers) {
     })
 
     stage = 'root of the container'
+    // Read after the attempts of PHP above: the file of the platform is unchanged.
+    const platformStat = await docker(
+      ['exec', '-u', '0:0', boxA, 'stat', '-c', '%u %a', platformFile],
+      { allowFailure: true },
+    )
+    rows.push({
+      from: 'root of A',
+      to: "platform file of A is root's, mode 0444",
+      expect: 'reachable',
+      actual: platformStat.stdout === '0 444' ? 'open' : 'closed',
+    })
+    // B got no file of the platform: its root stays PHP's.
+    const rootOfB = await docker(['exec', '-u', '0:0', boxB, 'stat', '-c', '%u', '/var/www/html'], {
+      allowFailure: true,
+    })
+    rows.push({
+      from: 'root of B',
+      to: "the root folder of B is PHP's, without a file of the platform",
+      expect: 'reachable',
+      actual: rootOfB.stdout === '33' ? 'open' : 'closed',
+    })
     // The rules are the host's: root of the preview's container is held as its PHP is.
     await reachable(
       'root of A',

@@ -3,6 +3,7 @@ import { request as httpsRequest } from 'node:https'
 
 import {
   normalizeSiteHost,
+  poweredByOf,
   resolvePinnedAddress,
   tlsIdentity,
   type AppEnv,
@@ -17,9 +18,10 @@ import {
  * name of the URL is resolved once per request (`resolvePinnedAddress`: in production only public
  * addresses), and the connection goes to that one literal — a name that changes its answer
  * between a check and the request is not followed. The TLS identity is the name. No redirect is
- * followed — a 3xx comes back with its `Location` (at most 2 KiB) for the caller to decide —, the
- * time and the size of the answer are bounded; a refused address or any failure rejects with
- * fixed text, never what the site or the resolver said.
+ * followed — a 3xx comes back with its `Location` (at most 2 KiB) for the caller to decide —,
+ * `X-Powered-By` comes back as `poweredBy` when `poweredByOf` keeps it, the time and the size
+ * of the answer are bounded; a refused address or any failure rejects with fixed text, never
+ * what the site or the resolver said.
  */
 export function createPinnedSiteTransport(deps: {
   lookup: HostLookup
@@ -79,12 +81,14 @@ export function createPinnedSiteTransport(deps: {
             settled = true
             const status = response.statusCode ?? 0
             const location = response.headers.location
+            const poweredBy = poweredByOf(response.headers['x-powered-by'])
             resolve({
               status,
               body: Buffer.concat(chunks, size),
               ...(status >= 300 && status < 400 && location && location.length <= 2048
                 ? { location }
                 : {}),
+              ...(poweredBy === undefined ? {} : { poweredBy }),
             })
           })
         },

@@ -7,6 +7,7 @@ import {
   databaseEngines,
   databaseInputSchema,
   siteConnectionLimits,
+  siteRootInspectionSchema,
   siteSourceKinds,
   type CodeSourceTarget,
   type PreparedAccess,
@@ -64,16 +65,28 @@ import { consentedProcedure, router } from '../trpc.ts'
 
 const reasonSchema = z.enum(connectionCheckReasons)
 
-/** What a refused check of the files tells: the reason, and the folder or the key it saw. */
+/**
+ * What a refused check of the files tells: the reason, the folder or the key it saw, and — only with
+ * `not_site_root` — what the folder holds instead (Э9.1 tells a wrong folder from an unknown system by it).
+ */
 export const sourceRefusalFields = {
   reason: reasonSchema,
   suggestedRoot: z.string().optional(),
   hostKey: z.string().optional(),
+  inspection: siteRootInspectionSchema.optional(),
 }
 
-/** What a check of the files answers: the key and the folder it saw, or why it failed. */
+/**
+ * What a check of the files answers: the key and the folder it saw with what the folder holds — the stack
+ * found by the markers, its version, a hint of the layout and `index.php` —, or why it failed.
+ */
 const sourceCheckOutput = z.discriminatedUnion('ok', [
-  z.object({ ok: z.literal(true), hostKey: z.string().nullable(), entries: z.number().nullable() }),
+  z.object({
+    ok: z.literal(true),
+    hostKey: z.string().nullable(),
+    entries: z.number().nullable(),
+    inspection: siteRootInspectionSchema.nullable(),
+  }),
   z.object({ ok: z.literal(false), ...sourceRefusalFields }),
 ])
 
@@ -145,15 +158,16 @@ export const siteConnectionRouter = router({
 
   /**
    * Step 2, «Далее»: a real check of the files — the address, the connection and the login, the folder and
-   * the markers of the platform, one bounded read. Nothing is written, here or on the server. An sftp check
-   * without a key answers `host_key_unknown` with the key the server presented and sends no credential.
+   * the markers of the platform, the version of the site read in the same session, one bounded read.
+   * Nothing is written, here or on the server. An sftp check without a key answers `host_key_unknown` with
+   * the key the server presented and sends no credential.
    */
   checkSource: consentedProcedure
     .input(z.strictObject({ stack: z.enum(SiteStack), source: codeSourceInputSchema }))
     .output(sourceCheckOutput)
     .mutation(async ({ ctx, input }) => {
       const services = requireSiteConnections(ctx.siteConnections)
-      assertStackConnectable(services, input.stack)
+      assertStackConnectable(services, input.stack, 'files')
       if (!offersSource(services, input.source.kind))
         return { ok: false as const, reason: 'unsupported' as const }
       const { source } = await gatedChecks(services, {
@@ -166,7 +180,12 @@ export const siteConnectionRouter = router({
         ms: siteConnectionLimits.checkMs,
       })
       return source.ok
-        ? { ok: true as const, hostKey: source.hostKey, entries: source.entries }
+        ? {
+            ok: true as const,
+            hostKey: source.hostKey,
+            entries: source.entries,
+            inspection: source.inspection,
+          }
         : { ok: false as const, ...sourceRefusal(source) }
     }),
 
@@ -231,7 +250,7 @@ export const siteConnectionRouter = router({
       })
       if (!site) throw siteNotFound()
       await assertRetryable(ctx.prisma, site)
-      assertStackConnectable(services, site.stack)
+      assertStackConnectable(services, site.stack, 'files')
       const { source } = input
       if (!offersSource(services, source.kind))
         return { outcome: 'source_refused', reason: 'unsupported' }

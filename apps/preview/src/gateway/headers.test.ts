@@ -113,10 +113,29 @@ describe('headers towards the browser', () => {
       { appOrigin },
     )
     expect(headers['set-cookie']).toEqual([
-      'wordpress_test_cookie=WP%20Cookie%20check; path=/; HttpOnly',
-      'theme=dark; Expires=Wed, 21 Oct 2037 07:28:00 GMT',
+      'wordpress_test_cookie=WP%20Cookie%20check; path=/; HttpOnly; Secure; SameSite=None; Partitioned',
+      'theme=dark; Expires=Wed, 21 Oct 2037 07:28:00 GMT; Secure; SameSite=None; Partitioned',
     ])
     expect(siteSetCookie('=nameless')).toBeNull()
+  })
+
+  it('makes every cookie of the site live in a cross-site frame', () => {
+    expect(siteSetCookie('a=1; Path=/; SameSite=Strict')).toBe(
+      'a=1; Path=/; Secure; SameSite=None; Partitioned',
+    )
+    expect(siteSetCookie('b=2; SameSite=lax; HttpOnly')).toBe(
+      'b=2; HttpOnly; Secure; SameSite=None; Partitioned',
+    )
+    expect(siteSetCookie('c=3; Secure; Partitioned; Path=/x')).toBe(
+      'c=3; Path=/x; Secure; SameSite=None; Partitioned',
+    )
+    expect(siteSetCookie('gone=; Max-Age=0; path=/')).toBe(
+      'gone=; Max-Age=0; path=/; Secure; SameSite=None; Partitioned',
+    )
+    expect(siteSetCookie('__Host-x=1; Path=/; Secure')).toBe(
+      '__Host-x=1; Path=/; Secure; SameSite=None; Partitioned',
+    )
+    expect(siteSetCookie('__Host-raditi-preview=forged; Path=/; Secure')).toBeNull()
   })
 
   it('owns transport, data wiping and service workers', () => {
@@ -151,7 +170,7 @@ describe('headers towards the browser', () => {
       { appOrigin, clearForRevision: 4 },
     )
     expect(headers['set-cookie']).toEqual([
-      'wp=1; path=/',
+      'wp=1; path=/; Secure; SameSite=None; Partitioned',
       '__Host-raditi-preview-rev=4; Max-Age=2678400; HttpOnly; Secure; SameSite=None; Partitioned; Path=/',
     ])
   })

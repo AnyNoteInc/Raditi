@@ -1,5 +1,5 @@
 import type { SiteAdapter, SiteFacts } from '@repo/domain'
-import { createImportPathPolicy, siteStacks } from '@repo/domain'
+import { appEnvs, createImportPathPolicy, importPolicyOf, siteStacks } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
 import {
   dataFiles,
@@ -14,10 +14,14 @@ import { connectableStacks, getSiteAdapter } from './registry.ts'
 // (docs/plan/39-site-connection-wizard.md). The policy refuses a line outside the syntax it
 // supports, so a line added to an adapter is proven here, not by the first import.
 
-/** Every stack that has an adapter; the others are planned and throw. */
+/**
+ * Every stack that has an adapter with open files; the others are planned and throw, and a stack
+ * with closed files imports nothing (Т8).
+ */
 const adapters = siteStacks.flatMap((stack): SiteAdapter[] => {
   try {
-    return [getSiteAdapter(stack)]
+    const adapter = getSiteAdapter(stack)
+    return adapter.support.files === 'off' ? [] : [adapter]
   } catch {
     return []
   }
@@ -30,8 +34,8 @@ const factsOf = (adapter: SiteAdapter): SiteFacts => ({
   docroot: '/',
   extras: {},
 })
-const importPolicy = (adapter: SiteAdapter) =>
-  createImportPathPolicy(adapter.importRules(factsOf(adapter)).exclude)
+// Built the way the import builds it, so every field of `ImportRules` reaches the policy here too.
+const importPolicy = (adapter: SiteAdapter) => importPolicyOf(adapter.importRules(factsOf(adapter)))
 
 const clientToolFiles = [
   '.my.cnf',
@@ -44,10 +48,11 @@ const clientToolFiles = [
 ]
 
 describe('exclude lines of the adapters', () => {
-  it('covers every adapter of the registry, the connectable stacks among them', () => {
+  it('covers every adapter of the registry with open files, the connectable stacks among them', () => {
     const stacks = adapters.map((adapter) => adapter.stack)
-    expect(stacks).toEqual(['wordpress', 'bitrix'])
-    expect(stacks).toEqual(expect.arrayContaining([...connectableStacks]))
+    expect(stacks).toEqual(['wordpress', 'joomla'])
+    for (const env of appEnvs)
+      expect(stacks).toEqual(expect.arrayContaining([...connectableStacks(env, 'files')]))
   })
 
   it('shares the lists of data files, server logs and client tool files', () => {
@@ -77,12 +82,6 @@ describe('exclude lines of the adapters', () => {
         for (const line of exclude) expect(() => createImportPathPolicy([line]), line).not.toThrow()
       })
 
-      it('writes snapshot lines of the same syntax', () => {
-        const lines = adapter.snapshotExcludes(facts)
-        expect(lines.length).toBeGreaterThan(0)
-        for (const line of lines) expect(() => createImportPathPolicy([line]), line).not.toThrow()
-      })
-
       it('never imports data files, server logs or the files of client tools', () => {
         expect(adapter.importRules(facts).exclude).toEqual(
           expect.arrayContaining([...dataFiles, ...serverLogs, ...clientToolFiles]),
@@ -100,12 +99,6 @@ describe('exclude lines of the adapters', () => {
           expect(importPolicy(adapter).decide(name, 'file')).toBe('excluded')
           expect(importPolicy(adapter).decide(`some/folder/below/${name}`, 'file')).toBe('take')
         }
-      })
-
-      it('keeps server logs and the files of client tools out of turn snapshots', () => {
-        expect(adapter.snapshotExcludes(facts)).toEqual(
-          expect.arrayContaining([...serverLogs, ...clientToolFiles]),
-        )
       })
 
       it.each([
@@ -161,9 +154,6 @@ describe('import of a WordPress site', () => {
   it('excludes copies of the configuration at any depth and the firewall logs', () => {
     expect(adapter.importRules(facts).exclude).toEqual(
       expect.arrayContaining(['wp-config*', '/wp-content/wflogs/']),
-    )
-    expect(adapter.snapshotExcludes(facts)).toEqual(
-      expect.arrayContaining(['/wp-content/blogs.dir/', '/wp-content/wflogs/']),
     )
   })
 
@@ -245,37 +235,20 @@ describe('import of a WordPress site', () => {
     expect(policy.decide(path, type)).toBe('take')
   })
 
+  it('takes the documents of the media library and no others (plan 62, Т57)', () => {
+    expect(policy.decide('wp-content/uploads/2026/10/price.pdf', 'file')).toBe('take')
+    expect(policy.decide('wp-content/blogs.dir/2/files/x.pdf', 'file')).toBe('take')
+    expect(policy.decide('wp-content/themes/shop/docs/price.pdf', 'file')).toBe('document')
+    // What visitors sent stays excluded: the exclude lines stand before the folders.
+    expect(policy.decide('wp-content/uploads/gravity_forms/1-abc/passport.pdf', 'file')).toBe(
+      'excluded',
+    )
+  })
+
   it('leaves version control and pipeline paths to the rules that stand before the lines', () => {
     expect(policy.decide('.svn/pristine/ab/abc.svn-base', 'file')).toBe('vcs')
     expect(policy.decide('.git/config', 'file')).toBe('vcs')
     expect(policy.decide('.github/workflows/deploy.yml', 'file')).toBe('ci')
     expect(policy.decide('.gitmodules', 'file')).toBe('ci')
-  })
-})
-
-describe('import of a Bitrix site', () => {
-  const policy = importPolicy(getSiteAdapter('bitrix'))
-
-  it.each([
-    ['bitrix', 'directory'],
-    ['bitrix/php_interface/dbconn.php', 'file'],
-    ['bitrix/.settings.php', 'file'],
-    ['upload/iblock/a.jpg', 'file'],
-    ['local/export.csv', 'file'],
-    ['local/php_interface/error_log', 'file'],
-    ['.htaccess', 'file'],
-  ] as const)('leaves %s out', (path, type) => {
-    expect(policy.decide(path, type)).toBe('excluded')
-  })
-
-  it.each([
-    ['local', 'directory'],
-    ['local/php_interface/init.php', 'file'],
-    ['local/templates/main/header.php', 'file'],
-    ['local/components/shop/catalog/class.php', 'file'],
-    // The configuration of another platform is no rule of this one.
-    ['local/wp-config.php', 'file'],
-  ] as const)('takes %s', (path, type) => {
-    expect(policy.decide(path, type)).toBe('take')
   })
 })

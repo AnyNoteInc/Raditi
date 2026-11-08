@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer'
-import { request } from 'node:http'
+import { type IncomingHttpHeaders, request } from 'node:http'
 
 import type { PreviewUpstream, SiteHttpTransport } from '@repo/domain'
 
@@ -39,11 +39,18 @@ export interface PreviewRequest {
   maxResponseBytes: number
 }
 
+export interface PreviewResponse {
+  status: number
+  body: Uint8Array
+  /** As Node gives them: lower-case names. No redirect is followed: `location` tells where. */
+  headers: IncomingHttpHeaders
+}
+
 /** One request, no redirect followed; rejects on a network failure, the time or the size. */
 export function previewRequest(
   target: PreviewTarget,
   input: PreviewRequest,
-): Promise<{ status: number; body: Uint8Array }> {
+): Promise<PreviewResponse> {
   if (!input.path.startsWith('/') || input.path.startsWith('//'))
     return Promise.reject(new Error('A preview request names a path'))
   return new Promise((resolve, reject) => {
@@ -79,7 +86,11 @@ export function previewRequest(
         })
         response.on('error', reject)
         response.on('end', () =>
-          resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks) }),
+          resolve({
+            status: response.statusCode ?? 0,
+            body: Buffer.concat(chunks),
+            headers: response.headers,
+          }),
         )
       },
     )

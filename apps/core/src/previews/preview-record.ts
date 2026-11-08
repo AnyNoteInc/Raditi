@@ -1,6 +1,7 @@
 import {
   isPublicationPath,
   previewImageSchema,
+  previewPassportSchema,
   previewRuntimeMatchSchema,
   siteDatabaseSettingsSchema,
 } from '@repo/domain'
@@ -38,6 +39,17 @@ export const previewRecordSchema = z.strictObject({
    * object of the copy is there, and the next build asks again.
    */
   seedChecked: z.boolean(),
+  /**
+   * Tables the seed left out (`DatabaseCopySummary.leftOutTables`); absent — an older seed. Not
+   * shown yet: the passport of a preview (Т34) reads it as the difference `extension_data_left_out`.
+   */
+  seedTablesLeftOut: z.number().int().min(0).max(1_000).optional(),
+  /**
+   * Columns the seed wrote empty by the second line of unnamed columns
+   * (`DatabaseCopySummary.emptiedColumns`, plan 62, Т57); absent — an older seed. Read by the
+   * passport as `extension_data_left_out` too. Bound: 128 rules of 4 096 columns of MySQL each.
+   */
+  seedColumnsEmptied: z.number().int().min(0).max(524_288).optional(),
   sync: syncSchema.nullable(),
   /**
    * How the preview's runtime stands to the site's (Р2, Р18): the version the site's server
@@ -47,6 +59,18 @@ export const previewRecordSchema = z.strictObject({
   runtimeMatch: previewRuntimeMatchSchema.nullable().optional(),
   /** Absent — a record of a build before the kinds of a plan: the text of records alone. */
   db: previewDbRuntimeSchema.optional(),
+  /**
+   * How the copy started and how it differs from the site (docs/plan/62-site-stacks.md, Т33,
+   * Т34); absent — a stack that does not say how its live page looks. Not shown yet (Э7).
+   */
+  passport: previewPassportSchema.optional(),
+  /**
+   * What the health page of the base said on the seed the record holds (`previewBootOf`, Т33):
+   * written by a build without a candidate alone — `alive` with `ready`, `dead` before
+   * `boot_failed` — and forgotten with a new seed. A candidate that does not start on a dead base
+   * has no preview either; absent — no build judged this base, and such a candidate keeps it.
+   */
+  baseBoot: z.enum(['alive', 'dead']).optional(),
 })
 export type PreviewRecord = z.infer<typeof previewRecordSchema>
 

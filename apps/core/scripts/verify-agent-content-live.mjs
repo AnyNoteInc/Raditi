@@ -11,7 +11,7 @@
 // only the scripted model makes them certain.
 import assert from 'node:assert/strict'
 import { Buffer } from 'node:buffer'
-import { randomUUID } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 
@@ -34,6 +34,16 @@ export const CONTENT_ATTEMPTS = 3
  */
 export const liveContentPages = () =>
   Array.from({ length: CONTENT_ATTEMPTS }, (_, index) => `attempt-${index + 1}`)
+
+/**
+ * A unique word for the text of a page the stand reads and writes: letters only. The role masks
+ * what looks like a phone in what the agent reads (apps/mcp/src/privacy/content-contacts.ts), and
+ * the digit groups of a UUID sometimes do — «…-7482-4425-952e-…» reads as «7482-4425-952», about
+ * one page in 600. The scripted model then copies that marker, not the contact's, and the page
+ * shows another «contact» than the fixture's: the run failed by chance (PR #41, 08.11.2026).
+ */
+export const fixtureWord = (prefix) =>
+  `${prefix}-${[...randomBytes(16)].map((byte) => String.fromCharCode(97 + (byte >> 4), 97 + (byte & 15))).join('')}`
 
 /**
  * What is wrong with the public page once the journal holds an applied write, whatever the
@@ -91,7 +101,7 @@ export function liveContentTurns({ live, accountId, script, undo, outputs }) {
       attempts += 1
       const label = `content edit, attempt ${attempts}`
       setStage(label)
-      const changed = `raditi-live-changed-${randomUUID()}`
+      const changed = fixtureWord('raditi-live-changed')
       const route = `/wp/v2/pages/${page.id}`
       const idempotencyKey = `live-content-${attempts}`
       const expected = {

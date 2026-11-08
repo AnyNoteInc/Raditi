@@ -128,12 +128,30 @@ describe('loadConfig — development', () => {
     expect(loadConfig(devEnv).sandbox).toEqual({
       runtime: 'runc',
       socketPath: '/var/run/docker.sock',
+      runnerId: 'local',
     })
     const runner = loadConfig({
       ...devEnv,
       TURN_EXECUTOR: 'runner',
       RUNNER_TOKENS: `sandbox-1:${RUNNER_HASH}@127.0.0.1`,
       SANDBOX_RUNTIME: 'kata',
+    })
+    expect(runner.sandbox).toBeNull()
+  })
+
+  it('sees only the sandboxes of its own deployment: two trees on one Docker keep their turns', () => {
+    expect(loadConfig(devEnv).sandbox?.runnerId).toBe('local')
+    expect(loadConfig({ ...devEnv, SANDBOX_DEPLOYMENT: 'two' }).sandbox?.runnerId).toBe('two')
+    for (const value of ['Bad Name', '-two', 'two_trees', 'a'.repeat(64)])
+      expect(problemsOf({ ...devEnv, SANDBOX_DEPLOYMENT: value })[0]).toMatch(
+        /^SANDBOX_DEPLOYMENT:/,
+      )
+    // On runner VMs the label of a turn's container is the runner's, from its token.
+    const runner = loadConfig({
+      ...devEnv,
+      TURN_EXECUTOR: 'runner',
+      RUNNER_TOKENS: `sandbox-1:${RUNNER_HASH}@127.0.0.1`,
+      SANDBOX_DEPLOYMENT: 'Bad Name',
     })
     expect(runner.sandbox).toBeNull()
   })
@@ -860,9 +878,55 @@ describe('loadConfig — previews and releases', () => {
       upstreamHost: '127.0.0.1',
       dnsServers: ['77.88.8.8', '77.88.8.1'],
       gatewayPort: 8090,
+      relayGatewayHost: 'host.docker.internal',
       refusedSubnets: [],
       docker: { socketPath: '/var/run/docker.sock', firewallImage: guard },
     })
+  })
+
+  it("sends the relay of the agent's browser to host.docker.internal or to an IPv4 (Э3.16)", () => {
+    // Unset or empty — this host, as Docker's host-gateway names it: the behaviour of before.
+    expect(loadConfig(previewDev()).previews?.relayGatewayHost).toBe('host.docker.internal')
+    expect(
+      loadConfig(previewDev({ PREVIEW_RELAY_GATEWAY_HOST: '' })).previews?.relayGatewayHost,
+    ).toBe('host.docker.internal')
+    expect(
+      loadConfig(previewDev({ PREVIEW_RELAY_GATEWAY_HOST: 'host.docker.internal' })).previews
+        ?.relayGatewayHost,
+    ).toBe('host.docker.internal')
+    // A VM whose host-gateway is the Mac: the bridge of the VM, by address.
+    expect(
+      loadConfig(previewDev({ PREVIEW_RELAY_GATEWAY_HOST: '172.17.0.1' })).previews
+        ?.relayGatewayHost,
+    ).toBe('172.17.0.1')
+    // Any other name is refused: the relay resolves no name but the one host-gateway gives.
+    for (const value of ['gateway.local', 'localhost', '2a02:6b8::1', '172.17.0.1:8090'])
+      expect(problemsOf(previewDev({ PREVIEW_RELAY_GATEWAY_HOST: value }))).toEqual([
+        'PREVIEW_RELAY_GATEWAY_HOST: must be host.docker.internal or an IPv4 address',
+      ])
+  })
+
+  it("keeps the relay of the agent's browser on the private network in production", () => {
+    expect(problemsOf(previewProd({ PREVIEW_RELAY_GATEWAY_HOST: '203.0.113.7' }))).toEqual([
+      'PREVIEW_RELAY_GATEWAY_HOST: must be a private IP address in production (spec §19)',
+    ])
+    expect(problemsOf(previewProd({ PREVIEW_RELAY_GATEWAY_HOST: '127.0.0.1' }))).toEqual([
+      'PREVIEW_RELAY_GATEWAY_HOST: must be a private IP address in production (spec §19)',
+    ])
+    expect(
+      loadConfig(previewProd({ PREVIEW_RELAY_GATEWAY_HOST: '10.20.0.9' })).previews
+        ?.relayGatewayHost,
+    ).toBe('10.20.0.9')
+    // Unset, the default stands: no executor of production reads it. Set to the name, refused.
+    expect(loadConfig(previewProd()).previews?.relayGatewayHost).toBe('host.docker.internal')
+    expect(problemsOf(previewProd({ PREVIEW_RELAY_GATEWAY_HOST: 'host.docker.internal' }))).toEqual(
+      ['PREVIEW_RELAY_GATEWAY_HOST: must be a private IP address in production (spec §19)'],
+    )
+    // Outside production any IPv4 is taken.
+    expect(
+      loadConfig(previewDev({ PREVIEW_RELAY_GATEWAY_HOST: '203.0.113.7' })).previews
+        ?.relayGatewayHost,
+    ).toBe('203.0.113.7')
   })
 
   it('asks the resolvers of a preview and the image of the rules of its bridge (plan 58)', () => {

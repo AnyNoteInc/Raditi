@@ -155,6 +155,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: «Изменить» an access of a w
       canonicalUrl: null,
       defaultBranch: null,
       entries: 3,
+      inspection: null,
     }
   }
 
@@ -322,6 +323,31 @@ describe.skipIf(!databaseUrl)('PostgreSQL: «Изменить» an access of a w
     await expect(
       caller.siteConnection.changeDatabase({ id: siteId, database: mysqlDatabase() }),
     ).rejects.toMatchObject({ cause: { code: 'SITE_ACCESS_MISSING' } })
+  })
+
+  it('refuses both changes for a stack the wizard opens by the browser only, before any check or write', async () => {
+    // docs/plan/62-slices/e2.md, Э2.4: «Изменить» asks the support of the files, not of any way.
+    const { fake, owner, siteId } = await workingSite({ withDatabase: true })
+    const browserOnly: SiteConnectionServices = {
+      ...fake.services,
+      connectableStacks: (way) => (way === 'browser' ? ['wordpress'] : []),
+    }
+    const caller = createCaller(context(db, browserOnly, owner))
+    const checks = { files: fake.sourceChecks.length, databases: fake.databaseChecks.length }
+    const writes = fake.secrets.writes.length
+    fake.lookup.mockClear()
+
+    await expect(
+      caller.siteConnection.changeSource({ id: siteId, source: sftpSource() }),
+    ).rejects.toMatchObject({ cause: { code: 'SITE_STACK_NOT_CONNECTABLE' } })
+    await expect(
+      caller.siteConnection.changeDatabase({ id: siteId, database: mysqlDatabase() }),
+    ).rejects.toMatchObject({ cause: { code: 'SITE_STACK_NOT_CONNECTABLE' } })
+    expect(fake.sourceChecks).toHaveLength(checks.files)
+    expect(fake.databaseChecks).toHaveLength(checks.databases)
+    expect(fake.lookup).not.toHaveBeenCalled()
+    expect(fake.secrets.writes).toHaveLength(writes)
+    expect(await changes(siteId)).toEqual([])
   })
 
   it('lets only an owner or an admin change an access, and tells the others nothing of it', async () => {

@@ -3,7 +3,7 @@
 // on record and what of a dead run is swept, the list of scenarios, the order of the cleanup,
 // and the small readers the scenarios share. Nothing here touches Docker, the network or a file.
 import { createHash } from 'node:crypto'
-import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 /** The PostgreSQL and Redis of infra/app and of the other stands, by digest. Never pulled. */
 export const POSTGRES_IMAGE =
@@ -17,6 +17,15 @@ export const OPENBAO_IMAGE =
 /** Every container of a run carries `io.raditi.billing-verify=<run>`. */
 export const STAND_LABEL = 'io.raditi.billing-verify'
 const RUN = /^[0-9a-f]{8}$/
+
+/**
+ * The deployment label of core's turn containers in this run. Without the run it would be one
+ * label for every run of every tree, and their cores would collect each other's turns.
+ */
+function sandboxDeployment(stand, run) {
+  if (typeof run !== 'string' || !RUN.test(run)) throw new Error('Invalid run id of the stand')
+  return `${stand}-${run}`
+}
 const SERVICES = ['postgres', 'redis', 'vault']
 
 /** The scheduler of core runs every pass this often: the lower bound of BILLING_TICK_SECONDS. */
@@ -243,6 +252,30 @@ export function copyablePath(path) {
 export function staleFiles(previous, current) {
   const kept = new Set(current)
   return previous.filter((path) => copyablePath(path) && !kept.has(path))
+}
+
+/**
+ * Folders of the copy that only stale files lived in, deepest first: none of them holds or leads
+ * to a file the tree still has. Removing the files alone leaves them behind, and an empty folder
+ * of a migration another tree had makes Prisma refuse the copy's migrations (P3015). A folder that
+ * build output or dependencies have filled is not empty, and its removal is left undone.
+ */
+export function staleDirectories(stale, current) {
+  const live = new Set()
+  for (const path of current)
+    for (let folder = dirname(path); folder !== '.'; folder = dirname(folder)) live.add(folder)
+  const gone = new Set()
+  for (const path of stale)
+    for (let folder = dirname(path); folder !== '.' && !live.has(folder); folder = dirname(folder))
+      gone.add(folder)
+  const depth = (folder) => folder.split('/').length
+  return [...gone].sort((a, b) => depth(b) - depth(a) || a.localeCompare(b))
+}
+
+/** A stale folder that is not empty, or is gone already, stays as it is. */
+export function keptFolder(error) {
+  if (error?.code !== 'ENOTEMPTY' && error?.code !== 'EEXIST' && error?.code !== 'ENOENT')
+    throw error
 }
 
 /**
@@ -548,6 +581,7 @@ export function webEnvironment({
  * NODE_ENV=production keeps core from looking for a `.env`.
  */
 export function coreEnvironment({
+  run,
   path,
   directory,
   ports,
@@ -566,6 +600,8 @@ export function coreEnvironment({
     CORE_PORT: String(port),
     // core's own Docker would run turns; none is started, and Docker is not asked at start.
     TURN_EXECUTOR: 'local',
+    // Its sweep lists only the turn containers of this run: none, and never another tree's.
+    SANDBOX_DEPLOYMENT: sandboxDeployment('billing-verify', run),
     DATABASE_URL: databaseUrl,
     REDIS_URL: redisUrl,
     METRICS_TOKEN: secrets.metrics,

@@ -22,6 +22,33 @@ beforeAll(async () => {
       response.end()
       return
     }
+    if (request.url === '/php') {
+      response.writeHead(200, { 'x-powered-by': 'PHP/7.4.33' })
+      response.end('ok')
+      return
+    }
+    if (request.url === '/php-moved') {
+      response.writeHead(301, { 'x-powered-by': 'PHP/8.1.2', location: '/' })
+      response.end()
+      return
+    }
+    if (request.url === '/php-twice') {
+      // Two header lines on the wire, as hostings with Plesk send them.
+      response.setHeader('x-powered-by', ['PleskLin', 'PHP/7.4.33'])
+      response.end('ok')
+      return
+    }
+    if (request.url === '/php-long') {
+      response.writeHead(200, { 'x-powered-by': 'P'.repeat(129) })
+      response.end('ok')
+      return
+    }
+    if (request.url === '/php-control') {
+      // A tab is the one control character HTTP lets through inside a field value.
+      response.setHeader('x-powered-by', 'PHP/7.4\t33')
+      response.end('ok')
+      return
+    }
     if (request.url === '/large') {
       response.end('x'.repeat(2048))
       return
@@ -106,5 +133,37 @@ describe('the pinned transport to a site', () => {
     await expect(transport(request(`http://127.0.0.1:${port}/large`, 1024))).rejects.toThrow(
       'Site request failed',
     )
+  })
+
+  it('hands over X-Powered-By as the site sent it, on any status', async () => {
+    const transport = createPinnedSiteTransport({
+      lookup: lookupTo('127.0.0.1').lookup,
+      appEnv: 'development',
+    })
+    expect((await transport(request(`http://127.0.0.1:${port}/php`))).poweredBy).toBe('PHP/7.4.33')
+    expect((await transport(request(`http://127.0.0.1:${port}/php-moved`))).poweredBy).toBe(
+      'PHP/8.1.2',
+    )
+  })
+
+  it('hands over a repeated X-Powered-By as one string joined with ", "', async () => {
+    const transport = createPinnedSiteTransport({
+      lookup: lookupTo('127.0.0.1').lookup,
+      appEnv: 'development',
+    })
+    expect((await transport(request(`http://127.0.0.1:${port}/php-twice`))).poweredBy).toBe(
+      'PleskLin, PHP/7.4.33',
+    )
+  })
+
+  it('gives no poweredBy without the header or with a value the rule refuses', async () => {
+    const transport = createPinnedSiteTransport({
+      lookup: lookupTo('127.0.0.1').lookup,
+      appEnv: 'development',
+    })
+    for (const path of ['/', '/php-long', '/php-control'])
+      expect(await transport(request(`http://127.0.0.1:${port}${path}`))).not.toHaveProperty(
+        'poweredBy',
+      )
   })
 })

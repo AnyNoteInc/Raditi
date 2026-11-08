@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common'
 import type { PrismaClient } from '@repo/db'
 import type { GitProvider, ObjectStorage, SecretStore, SiteLeaseStore } from '@repo/domain'
 import { giteaOrgOwnerToken } from '@repo/git-providers'
-import { getSiteAdapter, getSiteContentAdapter } from '@repo/site-adapters'
+import { getSiteAdapter } from '@repo/site-adapters'
 import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
 
 import type { CoreConfig } from '../config/config.ts'
@@ -14,17 +14,28 @@ import { OBJECT_STORAGE } from '../infra/infra.tokens.ts'
 import { LeasesModule } from '../leases/leases.module.ts'
 import { SITE_LEASES } from '../leases/leases.tokens.ts'
 import type { DbPlanValueReader } from '../site-content/db-plan-values.ts'
+import { contentAccessKindOf } from '../site-content/site-access.ts'
 import {
   productionContent,
   type SiteContentResolvers,
 } from '../site-content/site-content-access.ts'
 import { SiteContentModule } from '../site-content/site-content.module.ts'
 import { PLAN_VALUES, SITE_CONTENT_RESOLVERS } from '../site-content/site-content.tokens.ts'
-import { ReleaseSkill } from './release-skill.ts'
+import { ReleaseSkill, type ReleaseSkillDependencies } from './release-skill.ts'
 import { ReleaseSweep, ReleaseSweepRuntime } from './release-sweep.ts'
 import { RELEASE_GIT_PROVIDER } from './releases.tokens.ts'
 import { ReleasesProcessor } from './releases.processor.ts'
 import { UndoPlanner } from './undo-planner.ts'
+
+/**
+ * The adapters of the stacks the release skill reads: a stack without published content has no
+ * plugin, and a release of its site with a database plan is refused (docs/plan/62-site-stacks.md,
+ * Т8); an unknown stack throws, as the registry does (`contentAccessKindOf`).
+ */
+export const releaseSkillStacks: Pick<ReleaseSkillDependencies, 'adapter' | 'contentAccessKind'> = {
+  adapter: getSiteAdapter,
+  contentAccessKind: contentAccessKindOf,
+}
 
 /**
  * Releases in the core role (docs/plan/53-chat-preview-release.md, R8b): the release skill, the
@@ -65,8 +76,7 @@ import { UndoPlanner } from './undo-planner.ts'
           provider,
           secrets,
           storage,
-          adapter: getSiteAdapter,
-          contentAccessKind: (stack) => getSiteContentAdapter(stack).accessKind,
+          ...releaseSkillStacks,
           api: config.releaseApi
             ? { startTimeoutMs: config.releaseApi.startTimeoutMinutes * 60_000 }
             : null,

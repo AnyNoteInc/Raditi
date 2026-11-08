@@ -323,6 +323,12 @@ describe.skipIf(!enabled)('a WordPress preview as the recipe runs it', () => {
     expect(pretty.body).toContain(`href="${origin}/about/"`)
   })
 
+  it('marks its pages with the header of `ready` (docs/plan/62-site-stacks.md, Т33)', async () => {
+    const home = await request('/')
+    expect(home.status).toBe(200)
+    expect(home.header('x-raditi-preview')).toEqual(['1'])
+  })
+
   it('answers with its own address where the copied database keeps another of the site', async () => {
     // The `home` and `siteurl` of the seed are production's, which may be an older address.
     const raw = (value: string) =>

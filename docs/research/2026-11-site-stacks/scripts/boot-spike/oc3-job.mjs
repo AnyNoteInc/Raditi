@@ -1,0 +1,28 @@
+import { openAgent } from './agent-lib.mjs'
+const [tag, origin, name, bodyMark] = process.argv.slice(2)
+const a = await openAgent({ tag: `${tag}-job`, origin, startPath: '/admin/' })
+try {
+  await a.observe('login')
+  await a.fill(/- textbox "Username"/, 'spikeadmin'); await a.fill(/- textbox "Password"/, '<hidden>')
+  await a.click(/- button "[^A-Za-z]*Login"/); await a.wait(2000, { until: 'load' })
+  const o = await a.observe('dashboard'); console.log('token in url:', /user_token=/.test(o.page.url))
+  const dlg = a.lines(/dialog|Important Security/).slice(0, 3); console.log('dialog:', dlg.map((l) => l.trim().slice(0, 90)).join(' | '))
+  if (a.line(/Important Security/)) { const ls = a.tree.split('\n'); const i = ls.findIndex((l) => /Important Security/.test(l)); const near = ls.slice(i - 2, i + 3).find((l) => /- button/.test(l)); console.log('close:', near?.trim()); await a.session.act({ tool: 'web_click', ref: /\[ref=([a-z0-9]+)\]/.exec(near)[1] }); await a.wait(900) ; await a.observe('no-modal') }
+  console.log('menu:', a.lines(/- link "[^"]*(Catalog|Products)/).map((l) => l.trim().slice(0, 60)).join(' | '))
+  await a.click(/- link "[^A-Za-z"]*Catalog/); await a.wait(600); await a.observe('menu')
+  await a.click(/- link "[^A-Za-z"]*Products"/); await a.wait(1800, { until: 'load' }); await a.observe('products')
+  const ls = a.tree.split('\n'); const row = ls.findIndex((l) => /- cell "iPhone/.test(l)); const editLine = ls.slice(row).find((l) => /- link( "[^"]*")? \[ref/.test(l)); console.log('edit:', editLine?.trim().slice(0, 80))
+  await a.session.act({ tool: 'web_click', ref: /\[ref=([a-z0-9]+)\]/.exec(editLine)[1] }); await a.wait(2500, { until: 'load' })
+  await a.observe('form')
+  console.log('name:', a.lines(/Product Name/).slice(0, 3).map((l) => l.trim().slice(0, 90)).join(' | '))
+  console.log('editor:', a.lines(/note-editable|textbox|Description/).slice(0, 10).map((l) => l.trim().slice(0, 80)).join(' | '))
+  console.log('save:', a.lines(/- button "Save"|- button "[^"]*Save/).map((l) => l.trim().slice(0, 80)).join(' | '))
+  await a.fill(/- textbox "(\* )?Product Name/, name)
+  const ls2 = a.tree.split('\n'); const d = ls2.findIndex((l) => /: Description$/.test(l)); const rte = ls2.slice(d).find((l) => /- textbox( |\[)/.test(l) && !/"/.test(l.split('[ref')[0])); console.log('rte:', rte?.trim().slice(0, 100))
+  await a.session.act({ tool: 'web_fill', ref: /\[ref=([a-z0-9]+)\]/.exec(rte)[1], text: bodyMark })
+  await a.observe('form2')
+  const first = a.tree.split('\n').find((l) => /- button "[^A-Za-z"]+" \[ref/.test(l)); console.log('first toolbar button:', JSON.stringify(first.trim()))
+  await a.session.act({ tool: 'web_click', ref: /\[ref=([a-z0-9]+)\]/.exec(first)[1] }); await a.wait(2500, { until: 'load' })
+  await a.observe('saved')
+  console.log('alert:', a.lines(/Success|Warning|error/i).slice(0, 3).map((l) => l.trim().slice(0, 110)).join(' | '))
+} catch (e) { console.log('FAILED', e?.code ?? '', e?.message?.slice(0, 240)); await a.observe('failed').catch(() => {}) } finally { await a.close() }

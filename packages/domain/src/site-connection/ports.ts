@@ -2,7 +2,9 @@ import type { z } from 'zod'
 
 import type { AppEnv } from '../app-env.ts'
 import type { SecretStore } from '../ports/secret-store.ts'
-import type { SiteAccessKind, SiteStack } from '../ports/site-adapter.ts'
+import type { ConnectionWay, SiteAccessKind, SiteRead, SiteStack } from '../ports/site-adapter.ts'
+import type { SiteRootInspection } from '../site-stack/inspect.ts'
+import type { StackSupport } from '../site-stack/support.ts'
 import type { CodeSourceTarget, DatabaseTarget, PreparedAccess } from './access.ts'
 import type { HostLookup, PinnedAddress } from './address.ts'
 import type { DatabaseStructure } from './database-schema.ts'
@@ -21,8 +23,16 @@ export interface ConnectionContext {
 }
 
 export interface SourceCheckContext extends ConnectionContext {
-  /** Entries the root folder must have (SiteAdapter.rootMarkers of the chosen stack). */
-  markers: readonly string[]
+  /**
+   * The stacks whose markers the root may hold (SiteAdapter.rootMarkers): one of them is enough. Until
+   * the wizard stops sending a stack (Э9) — the chosen stack alone (Р7 of Э2).
+   */
+  stacks: readonly { stack: SiteStack; markers: readonly string[] }[]
+  /**
+   * What the root holds, by every adapter: runs in the same session of the check, with `read` over its
+   * connection — there is no second login to the hosting (Т26). A failure of `read` rejects it.
+   */
+  inspect(names: readonly string[], read: SiteRead): Promise<SiteRootInspection>
   /**
    * create and replaceAccess: an adapter that pins a host key refuses when none was sent. (The worker does
    * not come through `check`: `open` and `probe` take the secret, which always holds the key.) Without it a
@@ -40,6 +50,8 @@ export interface SourceCheckPassed {
   defaultBranch: string | null
   /** ftp, sftp: entries in the root folder; else null. */
   entries: number | null
+  /** ftp, sftp: what the check found in the root; git: null. */
+  inspection: SiteRootInspection | null
 }
 
 export type SourceCheckOutcome =
@@ -47,8 +59,16 @@ export type SourceCheckOutcome =
   /**
    * `suggestedRoot`: only with `not_site_root`, a folder one level down that has the markers.
    * `hostKey`: only with `host_key_unknown` and `host_key_changed`, the key the server presented.
+   * `inspection`: only with `not_site_root`, what the root holds instead (a wrong folder or a site of
+   * an unknown system, Т27).
    */
-  | { ok: false; reason: ConnectionCheckReason; suggestedRoot?: string; hostKey?: string }
+  | {
+      ok: false
+      reason: ConnectionCheckReason
+      suggestedRoot?: string
+      hostKey?: string
+      inspection?: SiteRootInspection
+    }
 
 export type DatabaseCheckOutcome =
   { ok: true; tables: number } | { ok: false; reason: ConnectionCheckReason }
@@ -208,8 +228,13 @@ export interface SiteConnectionServices {
   /** Write only, as the `sites-writer` policy: no read method is reachable from a procedure. */
   secrets: Pick<SecretStore, 'kvWrite' | 'kvMetadata'>
   lookup: HostLookup
-  connectableStacks: readonly SiteStack[]
+  /** The stacks the wizard connects by `way` in `appEnv`: the support of the adapters judges (Т4, Т6). */
+  connectableStacks(way: ConnectionWay): readonly SiteStack[]
   rootMarkers(stack: SiteStack): readonly string[]
+  /** What the adapter of the stack declares: the check refuses a version below `refuseBelow`. */
+  stackSupport(stack: SiteStack): StackSupport
+  /** `inspectSiteRoot` over every adapter of the registry, for `SourceCheckContext.inspect`. */
+  inspectRoot(names: readonly string[], read: SiteRead): Promise<SiteRootInspection>
   sources(kind: SiteSourceKind): SiteSourceAdapter
   databases(engine: DatabaseEngine): DatabaseInspector
   /** What `options` returns as `sources` and `databases`. */

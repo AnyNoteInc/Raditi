@@ -222,12 +222,8 @@ export class UndoPlanner {
     if (!git || !repository) throw new NotYet('repository')
     const returnsTo = installedBaseOf(undone)
     const site = { stack: undone.stack, url: undone.url, docroot: '/', extras: {} }
-    let addOnlyPaths: readonly string[] = []
-    try {
-      addOnlyPaths = this.deps.adapter(undone.stack).mediaRules(site).addOnlyPaths
-    } catch (error) {
-      if (!isDomainError(error) || error.code !== 'NOT_IMPLEMENTED') throw error
-    }
+    // A stack with files says its media rules (Т8): nothing to fall back to.
+    const { addOnlyPaths } = this.deps.adapter(undone.stack).mediaRules(site)
     const changes = await this.#git(() =>
       git.changeDigests({ repo: repository.repo, baseSha: returnsTo, headSha: undone.approvedSha }),
     )

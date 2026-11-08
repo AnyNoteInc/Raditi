@@ -1,0 +1,5 @@
+PHP 8.3.36 (cli) (built: Nov  5 2026 07:27:41) (NTS)
+Copyright (c) The PHP Group
+Zend Engine v4.3.36, Copyright (c) Zend Technologies
+    with the ionCube PHP Loader v15.5.1, Copyright (c) 2002-2026, by ionCube Ltd.
+    with Zend OPcache v8.3.36, Copyright (c), by Zend Technologies

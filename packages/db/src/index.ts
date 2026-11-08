@@ -87,6 +87,7 @@ export {
   type SiteActivationInput,
   type SiteActivationResult,
 } from './site-activation.ts'
+export { mergeSiteStackFacts } from './site-stack-facts.ts'
 export { PostgresSiteLeaseStore } from './site-leases.ts'
 export {
   freeReleaseLease,

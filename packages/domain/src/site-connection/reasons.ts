@@ -37,6 +37,8 @@ export const connectionCheckReasons = [
   'no_write_access',
   // Signed in, but a listing or a query could not be completed.
   'transfer_failed',
+  // The version of the site is below what the stack connects (SiteLimit of the same name).
+  'version_unsupported',
   // A server feature the platform does not speak.
   'unsupported',
 ] as const
@@ -68,6 +70,11 @@ export const provisioningErrorCodes = [
   'source_has_secrets',
   // Nothing left to import after filtering.
   'source_empty',
+  // A folder SiteAdapter.readLayout lists holds more than siteReadEntries entries: the layout of
+  // the stack cannot be read, and no retry mends it until the client clears the folder.
+  'folder_too_large',
+  // SiteAdapter.readLayout refused: the project stays, without its files (sites.stack_facts.limit says why).
+  'layout_unsupported',
   'scan_failed',
   'schema_unreadable',
   // The stage deadline: 60 minutes for code_import, 60 seconds for database_schema.
@@ -91,6 +98,10 @@ export const importSkipReasons = [
   'nested_site',
   // A folder or a file the server listed but refused to open or no longer has.
   'unreadable',
+  // A document outside the folders the adapter names (Т57).
+  'document',
+  // A folder of a stack closed for files (Т40): no copy of it is made.
+  'closed_stack',
 ] as const
 export type ImportSkipReason = (typeof importSkipReasons)[number]
 

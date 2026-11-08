@@ -1,10 +1,6 @@
-import {
-  mediaLimits,
-  WORKING_SET_MAX_BYTES,
-  type AgentWorkingSet,
-  type MediaRules,
-} from '@repo/domain'
+import { WORKING_SET_MAX_BYTES, type AgentWorkingSet, type MediaRules } from '@repo/domain'
 
+import { phpMediaRules } from './php/media.ts'
 import { archivesAndDumps, dataFiles, secretFiles, serverLogs } from './php-hosting.ts'
 
 // The agent's tree and its media for WordPress (docs/plan/53-chat-preview-release.md, Р11,
@@ -48,39 +44,10 @@ const workingSet: AgentWorkingSet = {
   maxBytes: WORKING_SET_MAX_BYTES,
 }
 
-/** Leading bytes, all of which a file of the extension carries (lower-case hex). */
-const jpeg = [{ offset: 0, hex: 'ffd8ff' }]
-const mediaRules: MediaRules = {
-  addOnlyPaths: [WORDPRESS_MEDIA_DIR],
-  extensions: {
-    jpg: jpeg,
-    jpeg,
-    png: [{ offset: 0, hex: '89504e470d0a1a0a' }],
-    // GIF87a and GIF89a.
-    gif: [
-      { offset: 0, hex: '47494638' },
-      { offset: 5, hex: '61' },
-    ],
-    webp: [
-      { offset: 0, hex: '52494646' },
-      { offset: 8, hex: '57454250' },
-    ],
-    // ISO media with an `avif` or `avis` brand.
-    avif: [{ offset: 4, hex: '66747970617669' }],
-    mp4: [{ offset: 4, hex: '66747970' }],
-    webm: [{ offset: 0, hex: '1a45dfa3' }],
-    pdf: [{ offset: 0, hex: '255044462d' }],
-    woff2: [{ offset: 0, hex: '774f4632' }],
-  },
-  // Anything Apache or PHP-FPM may run or read as configuration, and SVG, which a browser runs.
-  refusedNameParts: ['.php', '.pht', '.phar', '.htaccess', '.user.ini', '.svg'],
-  maxFileBytes: mediaLimits.fileBytes,
-}
-
 export function wordpressAgentWorkingSet(): AgentWorkingSet {
   return structuredClone(workingSet)
 }
 
 export function wordpressMediaRules(): MediaRules {
-  return structuredClone(mediaRules)
+  return phpMediaRules(WORDPRESS_MEDIA_DIR)
 }

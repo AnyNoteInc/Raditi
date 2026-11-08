@@ -44,6 +44,19 @@ describe('turnInstructions', () => {
     expect(turnInstructions({ state: 'unavailable', reason: 'no_database' })).toContain(
       'no database',
     )
+    // A copy that did not start has no preview: the agent changes files only (Т33).
+    const dead = turnInstructions({ state: 'unavailable', reason: 'boot_failed' })
+    expect(dead).toContain('The site does not start in the copy of the platform')
+    expect(dead).toContain('Change files only; your changes are checked when the client releases')
+    // A layout not read, or a version not supported, builds no copy (В2 of plan 62, Э2).
+    expect(turnInstructions({ state: 'unavailable', reason: 'no_layout' })).toContain(
+      'The layout of this site cannot be read now: no preview can be built. Do not rely on a ' +
+        'preview in this turn.',
+    )
+    expect(turnInstructions({ state: 'unavailable', reason: 'version_unsupported' })).toContain(
+      'This version of the site is not supported: no preview can be built. Do not rely on a ' +
+        'preview in this turn.',
+    )
     const starting = turnInstructions({
       state: 'starting',
       origin: 'http://site-a-chat-b.localhost:8090',
@@ -56,6 +69,10 @@ describe('turnInstructions', () => {
     // What a release cannot carry is said to the client, not worked around (plan 53, Р3).
     expect(rules).toContain('## What a release can carry')
     expect(rules).toContain('no menus, widgets')
+    // Т37: an unsaid list is not «none» — the first build has not finished.
+    expect(rules).toContain(
+      "While it is null the preview's first build has not finished: call `site_info` again before\n  you change the database or tell the client it cannot be done.",
+    )
     expect(rules).not.toContain('{{database}}')
   })
 
@@ -102,7 +119,7 @@ describe('turnInstructions', () => {
     for (const words of ['/wp/v2', '$wpdb', 'dbDelta']) expect(bare).not.toContain(words)
     const guide = '- On this site: a stack of a test — `wp_rest` POST /x.\n'
     const told = turnInstructions({ state: 'absent' }, { names: [], hosts: [] }, guide)
-    expect(told).toContain(`table of the platform created or extended.\n${guide}- A new page`)
+    expect(told).toContain(`tell the client it cannot be done.\n${guide}- A new page`)
   })
 })
 
@@ -301,7 +318,12 @@ describe('browserTaskInstructions (docs/plan/57-browser-tasks.md, Б20–Б24)',
   // did when the rules of the browser were split for the chats (docs/plan/61, §3.11, §5.7). The
   // text of a task with a repository differs by one word, which it dictates to the client (К26).
   // The line of the web search came on 08.11.2026 (spec §20, «Веб-поиск агента»); the rest stays.
-  const withoutSearch = (text: string) => text.replace(/^- When `raditi_search_web`.*\n/m, '')
+  // The two lines on `database.operations` still null came with the site stacks
+  // (docs/plan/62-site-stacks.md, Т37).
+  const withoutSearch = (text: string) =>
+    text
+      .replace(/^- When `raditi_search_web`.*\n/m, '')
+      .replace(/^ {2}While it is null the preview's first build .*\n.*cannot be done\.\n/m, '')
   const beforeTheWord = (text: string) =>
     withoutSearch(text).replace('in the chat that installed it', 'in the dialog that installed it')
   it('keeps the words of a task in the browser and of a task with a repository byte for byte', () => {

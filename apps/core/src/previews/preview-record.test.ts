@@ -17,6 +17,43 @@ describe('the record of a preview', () => {
     )
   })
 
+  it('keeps the tables the seed left out, and reads an older record without them', () => {
+    const older = { ...emptyPreviewRecord(), seedChecked: true }
+    expect(previewRecordOf(older)).toEqual(older)
+    expect(previewRecordOf({ ...older, seedTablesLeftOut: 3 }).seedTablesLeftOut).toBe(3)
+    for (const broken of [-1, 1.5, 1_001])
+      expect(previewRecordOf({ ...older, seedTablesLeftOut: broken })).toEqual(emptyPreviewRecord())
+  })
+
+  it('keeps the columns the seed wrote empty, and reads an older record without them', () => {
+    const older = { ...emptyPreviewRecord(), seedChecked: true }
+    expect(previewRecordOf(older).seedColumnsEmptied).toBeUndefined()
+    expect(previewRecordOf({ ...older, seedColumnsEmptied: 2 }).seedColumnsEmptied).toBe(2)
+    expect(previewRecordOf({ ...older, seedColumnsEmptied: 128 * 4_096 }).seedColumnsEmptied).toBe(
+      524_288,
+    )
+    for (const broken of [-1, 1.5, 128 * 4_096 + 1])
+      expect(previewRecordOf({ ...older, seedColumnsEmptied: broken })).toEqual(
+        emptyPreviewRecord(),
+      )
+  })
+
+  it('keeps the passport of a copy, and reads a record without it as before (Т33)', () => {
+    const older = { ...emptyPreviewRecord(), seedChecked: true }
+    const passport = {
+      boot: 'suspect',
+      differences: ['redirects_away'],
+      checkedAt: '2026-11-06T09:00:00.000Z',
+    }
+    expect(previewRecordOf(older).passport).toBeUndefined()
+    expect(previewRecordOf({ ...older, passport }).passport).toEqual(passport)
+    for (const broken of [
+      { ...passport, boot: 'failed' },
+      { ...passport, differences: ['looks_odd'] },
+    ])
+      expect(previewRecordOf({ ...older, passport: broken })).toEqual(emptyPreviewRecord())
+  })
+
   it('keeps the synced paths of a turn sorted and once, until they no longer fit', () => {
     expect(withSyncedPaths(['b.php'], ['a.php', 'b.php'])).toEqual(['a.php', 'b.php'])
     expect(withSyncedPaths(null, ['a.php'])).toBeNull()
@@ -35,6 +72,14 @@ describe('the record of a preview', () => {
       ...emptyPreviewRecord(),
       database: { tablePrefix: 'wp_', charset: 'utf8mb4', collation: 'utf8mb4_unicode_ci' },
       web: `registry.invalid/web@sha256:${'a'.repeat(64)}`,
+      seedTablesLeftOut: 1_000,
+      seedColumnsEmptied: 524_288,
+      // The longest passport: 24 differences, each the longest name of the table.
+      passport: {
+        boot: 'not_compared',
+        differences: Array.from({ length: 24 }, () => 'extension_data_left_out'),
+        checkedAt: '2026-11-06T09:00:00.000Z',
+      },
       sync: {
         assignmentId: '00000000-0000-4000-8000-000000000001',
         baseSha: 'a'.repeat(40),

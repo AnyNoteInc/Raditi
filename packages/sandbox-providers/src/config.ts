@@ -36,8 +36,9 @@ export interface SandboxConfig {
   socketPath?: string
   gateway?: GatewayConfig
   /**
-   * The runner whose turn containers these are, from its VM token: they carry its id and list
-   * finds only them, so runners that share one Docker daemon never collect each other's.
+   * The runner or deployment whose turn containers these are: a runner's id from its VM token,
+   * or core's SANDBOX_DEPLOYMENT with TURN_EXECUTOR=local. They carry it and list finds only
+   * them, so runners, trees and stands that share one Docker daemon never collect each other's.
    */
   runnerId?: string
 }

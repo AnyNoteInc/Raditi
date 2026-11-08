@@ -1,10 +1,35 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { isDomainError, type SecretStore } from '@repo/domain'
+import {
+  isDomainError,
+  type SecretStore,
+  type SiteRootInspection,
+  type StackSupport,
+} from '@repo/domain'
 
 import { mysqlInspector, postgresInspector } from './databases/index.ts'
 import { ftpSource, sftpSource } from './index.ts'
 import { createSiteConnectionServices } from './services.ts'
+
+const support: StackSupport = {
+  files: 'on',
+  browser: 'on',
+  generations: [],
+  refuseBelow: null,
+  releaseNeedsChecks: false,
+  unknownVersion: 'open',
+}
+const nothingFound: SiteRootInspection = {
+  foundStack: null,
+  version: { kind: 'unknown' },
+  hint: null,
+  hasIndexPhp: false,
+}
+/** The parts of the deps the registry of adapters gives. */
+const registry = {
+  stackSupport: () => support,
+  inspectRoot: async () => nothingFound,
+}
 
 function store() {
   return {
@@ -21,8 +46,9 @@ describe('createSiteConnectionServices', () => {
     const services = createSiteConnectionServices({
       appEnv: 'test',
       secrets: secrets as unknown as Pick<SecretStore, 'kvWrite' | 'kvMetadata'>,
-      connectableStacks: ['wordpress'],
+      connectableStacks: () => ['wordpress'],
       rootMarkers: () => ['wp-content', 'wp-includes'],
+      ...registry,
       lookup: async () => [],
     })
     expect(Object.keys(services.secrets).sort()).toEqual(['kvMetadata', 'kvWrite'])
@@ -45,14 +71,18 @@ describe('createSiteConnectionServices', () => {
     const services = createSiteConnectionServices({
       appEnv: 'production',
       secrets: store() as unknown as Pick<SecretStore, 'kvWrite' | 'kvMetadata'>,
-      connectableStacks: ['wordpress'],
+      connectableStacks: (way) => (way === 'files' ? ['wordpress'] : ['wordpress', 'bitrix']),
       rootMarkers: (stack) => (stack === 'wordpress' ? ['wp-content'] : []),
+      ...registry,
       lookup,
     })
     expect(services.appEnv).toBe('production')
     expect(services.lookup).toBe(lookup)
-    expect(services.connectableStacks).toEqual(['wordpress'])
+    // The way reaches the registry as it is.
+    expect(services.connectableStacks('files')).toEqual(['wordpress'])
+    expect(services.connectableStacks('browser')).toEqual(['wordpress', 'bitrix'])
     expect(services.rootMarkers('wordpress')).toEqual(['wp-content'])
+    expect(services.stackSupport('wordpress')).toBe(support)
     expect(services.sources('sftp')).toBe(sftpSource)
     expect(services.sources('ftp')).toBe(ftpSource)
     expect(services.databases('postgres')).toBe(postgresInspector)
@@ -74,5 +104,20 @@ describe('createSiteConnectionServices', () => {
     expect(isDomainError(refused) && refused.code).toBe('NOT_IMPLEMENTED')
     expect(() => services.sources('svn' as never)).toThrow()
     expect(() => services.databases('oracle' as never)).toThrow()
+  })
+
+  it('hands the inspection of a root to the registry with the read of the session as it is', async () => {
+    const inspectRoot = vi.fn(async () => nothingFound)
+    const services = createSiteConnectionServices({
+      appEnv: 'test',
+      secrets: store() as unknown as Pick<SecretStore, 'kvWrite' | 'kvMetadata'>,
+      connectableStacks: () => [],
+      rootMarkers: () => [],
+      ...registry,
+      inspectRoot,
+    })
+    const read = async () => null
+    await expect(services.inspectRoot(['index.php'], read)).resolves.toBe(nothingFound)
+    expect(inspectRoot).toHaveBeenCalledExactlyOnceWith(['index.php'], read)
   })
 })

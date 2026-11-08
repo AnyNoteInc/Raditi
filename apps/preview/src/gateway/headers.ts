@@ -10,7 +10,8 @@ import {
  * Headers across the gateway of previews (docs/plan/53-chat-preview-release.md, Р19). Towards
  * the site: no gateway cookie, no forwarding header a client chose, the preview's own origin.
  * Towards the browser: framed only by the cabinet, no cookie that could pass for the
- * gateway's or reach another host, never indexed.
+ * gateway's or reach another host, every cookie of the site one a cross-site frame keeps
+ * (`Secure; SameSite=None; Partitioned`, docs/plan/62-site-stacks.md, Т35), never indexed.
  */
 
 /** Hop-by-hop: they describe one connection and never cross the gateway (RFC 9110, 7.6.1). */
@@ -120,14 +121,23 @@ export function withoutFrameAncestors(policy: string): string | null {
   return policies.length > 0 ? policies.join(', ') : null
 }
 
-/** A Set-Cookie of the site without Domain; null — it names the gateway's cookie. */
+/** What the gateway decides for every cookie of the site: the cabinet's frame is cross-site. */
+const GATEWAY_COOKIE_ATTRIBUTE = /^\s*(domain|secure|samesite|partitioned)\s*(=|$)/i
+
+/**
+ * A Set-Cookie of the site as the cabinet's frame keeps it; null — it names the gateway's cookie.
+ * A browser drops any other cookie of a cross-site frame on write, silently, and WebKit keeps
+ * only a partitioned one. `SameSite` is replaced, not left: `Lax; Secure; Partitioned` is dropped
+ * too. No condition on the request, the tab or the stack: an answer to a fetch sets cookies as
+ * well, and in a tab a partitioned cookie is keyed by its own site.
+ */
 export function siteSetCookie(line: string): string | null {
   const [pair = '', ...attributes] = line.split(';')
   const at = pair.indexOf('=')
   const name = (at < 0 ? pair : pair.slice(0, at)).trim()
   if (name === '' || isGatewayCookieName(name)) return null
-  const kept = attributes.filter((attribute) => !/^\s*domain\s*(=|$)/i.test(attribute))
-  return [pair, ...kept].join(';')
+  const kept = attributes.filter((attribute) => !GATEWAY_COOKIE_ATTRIBUTE.test(attribute))
+  return [pair, ...kept, ' Secure', ' SameSite=None', ' Partitioned'].join(';')
 }
 
 export interface ResponseRewriteContext {

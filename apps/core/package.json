@@ -77,6 +77,7 @@
     "@types/supertest": "catalog:",
     "@typescript/native": "catalog:",
     "eslint": "catalog:",
+    "playwright-core": "catalog:",
     "supertest": "catalog:",
     "typescript": "catalog:",
     "unplugin-swc": "catalog:",

@@ -79,6 +79,7 @@ import {
   coreEnvironment,
   databaseEnvironment,
   isRunDirectory,
+  keptFolder,
   letterReaderEnvironment,
   lettersOf,
   logDirectory,
@@ -99,6 +100,7 @@ import {
   runRecord,
   staleCopy,
   staleCopyAllowed,
+  staleDirectories,
   staleFiles,
   standOptions,
   sweepLine,
@@ -132,6 +134,7 @@ const secrets = {
   unused: 'synthetic-unused-value',
 }
 const shared = {
+  run: RUN,
   path: '/usr/bin:/bin',
   directory: '/tmp/raditi-billing-verify-run-x',
   ports: { web: 43_100 },
@@ -356,6 +359,47 @@ test('the copy takes what git does not ignore, and forgets what the tree has los
   const stand = read('infra/dev/billing-verify/verify-billing.mjs')
   assert.match(stand, /'ls-files', '-co', '--exclude-standard', '-z'/)
   assert.match(stand, /!present\.includes\('\.env'\)/)
+})
+
+test('the copy loses the folders of files the tree has lost, deepest first, and only those', () => {
+  const current = [
+    'package.json',
+    'packages/db/prisma/migrations/20261101000000_kept/migration.sql',
+  ]
+  const stale = staleFiles(
+    [
+      ...current,
+      'packages/db/prisma/migrations/20261105000000_other_tree/migration.sql',
+      'packages/gone/src/deep/a.ts',
+      'packages/gone/src/b.ts',
+    ],
+    current,
+  )
+  assert.deepEqual(staleDirectories(stale, current), [
+    'packages/db/prisma/migrations/20261105000000_other_tree',
+    'packages/gone/src/deep',
+    'packages/gone/src',
+    'packages/gone',
+  ])
+  // A folder a file of the tree still lives in, or leads to, is never named.
+  assert.deepEqual(staleDirectories(['apps/web/old.ts'], ['apps/web/new.ts']), [])
+  assert.deepEqual(staleDirectories(['top.ts'], []), [])
+  // Every stand that keeps a copy removes the folders too, and leaves one build output filled —
+  // after the files: a folder removed before its files are gone is not empty, and stays.
+  for (const file of [
+    'infra/dev/billing-verify/verify-billing.mjs',
+    'infra/dev/release-verify/verify-release.mjs',
+    'infra/dev/browser-task-verify/build.mjs',
+    'infra/dev/stack-verify/verify-stack.mjs',
+  ])
+    assert.match(
+      read(file),
+      /for \(const path of stale\) await rm\(join\(copy, path\), \{ force: true \}\)\n\s+for \(const folder of staleDirectories\(stale, present\)\)\n\s+await rmdir\(join\(copy, folder\)\)\.catch\(keptFolder\)/,
+      file,
+    )
+  for (const code of ['ENOTEMPTY', 'EEXIST', 'ENOENT'])
+    assert.equal(keptFolder(Object.assign(new Error(code), { code })), undefined)
+  assert.throws(() => keptFolder(Object.assign(new Error('EACCES'), { code: 'EACCES' })), /EACCES/)
 })
 
 test('a run that dies while it copies leaves a manifest of everything it may have copied', () => {
@@ -805,6 +849,7 @@ test('core gets PostgreSQL and Redis of the stand; S3 and Vault are throwaway va
     'S3_ACCESS_KEY_ID',
     'S3_ENDPOINT',
     'S3_SECRET_ACCESS_KEY',
+    'SANDBOX_DEPLOYMENT',
     'TMPDIR',
     'TURN_EXECUTOR',
     'VAULT_ADDR',
@@ -814,6 +859,11 @@ test('core gets PostgreSQL and Redis of the stand; S3 and Vault are throwaway va
     'YOOKASSA_SHOP_ID',
   ])
   assert.equal(env.CORE_PORT, '43200')
+  // Its own deployment label: a core of another tree on this daemon never removes its turns.
+  assert.equal(env.SANDBOX_DEPLOYMENT, `billing-verify-${RUN}`)
+  // Without the run every run of every tree would share one label.
+  for (const run of [undefined, 'undefined', '0123ABCD'])
+    assert.throws(() => coreEnvironment({ ...shared, run, port: 43_200 }), /Invalid run id/)
   assert.equal(env.DATABASE_URL, shared.databaseUrl)
   assert.equal(env.REDIS_URL, shared.redisUrl)
   // The letters of core link to web, and web tells the day an overdue tariff ends by the same

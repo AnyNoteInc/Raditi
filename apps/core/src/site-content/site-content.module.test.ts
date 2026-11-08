@@ -91,6 +91,7 @@ describe('SiteContentModule', () => {
         upstreamHost: '127.0.0.1',
         dnsServers: ['77.88.8.8'],
         gatewayPort: 8090,
+        relayGatewayHost: 'host.docker.internal',
         refusedSubnets: [],
         docker: null,
       },

@@ -1,6 +1,13 @@
+import type { PrismaClient } from '@repo/db'
+import { emptySiteStackFacts } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
 
-import { previewAction, previewShowsTarget, type PreviewFacts } from './preview-facts.ts'
+import {
+  loadPreviewFacts,
+  previewAction,
+  previewShowsTarget,
+  type PreviewFacts,
+} from './preview-facts.ts'
 import { emptyPreviewRecord } from './preview-record.ts'
 
 const now = new Date('2026-10-17T12:00:00Z')
@@ -41,7 +48,13 @@ function facts(
       ...preview,
     },
     task: { status: 'awaiting_approval', ...OF_TASK },
-    site: { id: 's', stack: 'wordpress', url: 'https://shop.example.ru', installedReleaseId: null },
+    site: {
+      id: 's',
+      stack: 'wordpress',
+      url: 'https://shop.example.ru',
+      installedReleaseId: null,
+      stackFacts: emptySiteStackFacts,
+    },
     repo: null,
     candidate: {
       id: '00000000-0000-4000-8000-0000000000c1',
@@ -207,5 +220,68 @@ describe('what a preview needs now', () => {
     expect(previewShowsTarget(written)).toBe(false)
     expect(previewAction(written, { requested: true, now })).toBe('build')
     expect(previewAction(written, { requested: false, now })).toBe('none')
+  })
+})
+
+describe('loadPreviewFacts', () => {
+  /** A database that holds one preview, its site keeping `stackFacts` in `sites.stack_facts`. */
+  function oneRow(stackFacts: unknown): PrismaClient {
+    const none = async () => null
+    const row = {
+      id: '00000000-0000-4000-8000-0000000000a1',
+      siteId: '00000000-0000-4000-8000-0000000000a2',
+      taskId: '00000000-0000-4000-8000-0000000000a3',
+      status: 'ready',
+      dbMode: 'copy',
+      unavailableReason: null,
+      hostname: 'site-0f3a9c1b-chat-a1b2c3.localhost',
+      candidateId: null,
+      filesSha: null,
+      revision: 0,
+      dirty: false,
+      upstreamHost: null,
+      upstreamPort: null,
+      writeEpoch: 1,
+      seedObjectKey: null,
+      seedSha256: null,
+      seedReleaseId: null,
+      expiresAt: later,
+      lastViewedAt: null,
+      runtime: {},
+      task: { status: 'awaiting_user', workspaceId: 'w', workspace: { dataClass: 'synthetic' } },
+      site: {
+        id: '00000000-0000-4000-8000-0000000000a2',
+        stack: 'wordpress',
+        url: 'https://shop.example.ru',
+        installedReleaseId: null,
+        stackFacts,
+      },
+    }
+    return {
+      previewEnvironment: { findUnique: async () => row },
+      gitRepository: { findFirst: none },
+      taskCandidate: { findFirst: none },
+      siteDatabase: { findUnique: none },
+      credentialRef: { findFirst: none },
+      previewDbOperation: { findFirst: none },
+      siteDatabaseDump: { findUnique: none },
+      $queryRaw: async () => [{ at: now }],
+    } as unknown as PrismaClient
+  }
+
+  it('reads the record of the site, and a column of another shape as the empty record', async () => {
+    const written = await loadPreviewFacts(
+      oneRow({ v: 1, cmsVersion: '6.8.1', extras: { admin: 'manager' } }),
+      'p',
+    )
+    expect(written?.site.stackFacts).toEqual({
+      ...emptySiteStackFacts,
+      cmsVersion: '6.8.1',
+      extras: { admin: 'manager' },
+    })
+    for (const junk of [null, 'text', [1, 2], { v: 2 }, { extras: { admin: 7 } }])
+      expect((await loadPreviewFacts(oneRow(junk), 'p'))?.site.stackFacts).toEqual(
+        emptySiteStackFacts,
+      )
   })
 })

@@ -1,0 +1,74 @@
+## /usr/local/etc/php/conf.d/00-ioncube.ini
+zend_extension=/usr/local/lib/raditi/ioncube/ioncube_loader_lin_8.3.so
+## /usr/local/etc/php/conf.d/50-raditi.ini
+; Settings of a preview's PHP on every stack (docs/plan/62, Т21): what the WordPress image gave
+; (error-logging.ini, opcache-recommended.ini; preview-apache.conf overrides revalidate_freq),
+; and mail that leaves nothing. A stack adds its own through PHP_INI_SCAN_DIR.
+error_reporting = E_ERROR | E_WARNING | E_PARSE | E_CORE_ERROR | E_CORE_WARNING | E_COMPILE_ERROR | E_COMPILE_WARNING | E_RECOVERABLE_ERROR
+display_errors = Off
+display_startup_errors = Off
+log_errors = On
+error_log = /dev/stderr
+log_errors_max_len = 1024
+ignore_repeated_errors = On
+ignore_repeated_source = Off
+html_errors = Off
+opcache.memory_consumption=128
+opcache.interned_strings_buffer=8
+opcache.max_accelerated_files=4000
+opcache.revalidate_freq=2
+sendmail_path = /usr/local/lib/raditi/no-sendmail
+## /usr/local/etc/php/conf.d/docker-php-ext-apcu.ini
+extension=apcu.so
+## /usr/local/etc/php/conf.d/docker-php-ext-bcmath.ini
+extension=bcmath
+## /usr/local/etc/php/conf.d/docker-php-ext-bz2.ini
+extension=bz2
+## /usr/local/etc/php/conf.d/docker-php-ext-calendar.ini
+extension=calendar
+## /usr/local/etc/php/conf.d/docker-php-ext-exif.ini
+extension=exif
+## /usr/local/etc/php/conf.d/docker-php-ext-gd.ini
+extension=gd
+## /usr/local/etc/php/conf.d/docker-php-ext-gettext.ini
+extension=gettext
+## /usr/local/etc/php/conf.d/docker-php-ext-gmp.ini
+extension=gmp
+## /usr/local/etc/php/conf.d/docker-php-ext-imagick.ini
+extension=imagick.so
+## /usr/local/etc/php/conf.d/docker-php-ext-intl.ini
+extension=intl
+## /usr/local/etc/php/conf.d/docker-php-ext-ldap.ini
+extension=ldap
+## /usr/local/etc/php/conf.d/docker-php-ext-mcrypt.ini
+extension=mcrypt.so
+## /usr/local/etc/php/conf.d/docker-php-ext-mysqli.ini
+extension=mysqli
+## /usr/local/etc/php/conf.d/docker-php-ext-opcache.ini
+zend_extension=opcache
+## /usr/local/etc/php/conf.d/docker-php-ext-pdo_mysql.ini
+extension=pdo_mysql
+## /usr/local/etc/php/conf.d/docker-php-ext-redis.ini
+extension=redis.so
+## /usr/local/etc/php/conf.d/docker-php-ext-shmop.ini
+extension=shmop
+## /usr/local/etc/php/conf.d/docker-php-ext-soap.ini
+extension=soap
+## /usr/local/etc/php/conf.d/docker-php-ext-sockets.ini
+extension=sockets
+## /usr/local/etc/php/conf.d/docker-php-ext-sodium.ini
+extension=sodium
+## /usr/local/etc/php/conf.d/docker-php-ext-sysvmsg.ini
+extension=sysvmsg
+## /usr/local/etc/php/conf.d/docker-php-ext-sysvsem.ini
+extension=sysvsem
+## /usr/local/etc/php/conf.d/docker-php-ext-sysvshm.ini
+extension=sysvshm
+## /usr/local/etc/php/conf.d/docker-php-ext-xmlrpc.ini
+extension=xmlrpc.so
+## /usr/local/etc/php/conf.d/docker-php-ext-xsl.ini
+extension=xsl
+## /usr/local/etc/php/conf.d/docker-php-ext-zip.ini
+extension=zip
+## /usr/local/etc/php/conf.d/xx-php-ext-memcached.ini
+extension=memcached.so

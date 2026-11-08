@@ -548,7 +548,7 @@ export const projectRouter = router({
       if (replay) return replay
 
       // Fail fast, before any connection to a server: the transaction asks all of this again.
-      assertSiteAccepted(services, input)
+      assertSiteAccepted(services, input, input.access === 'browser' ? 'browser' : 'files')
       // The browser of the platform opens https sites only in production, and the address of a
       // site is never changed: a site at any other would take no task at all (Б33).
       if (input.access === 'browser' && !browserAddressSecure(input.url, appEnv))

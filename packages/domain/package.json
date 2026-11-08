@@ -20,6 +20,7 @@
     "./preview/hostname": "./src/preview/hostname.ts",
     "./release/env-vars": "./src/release/env-vars.ts",
     "./site-connection/database-dump": "./src/site-connection/database-dump.ts",
+    "./site-stack/limit-texts": "./src/site-stack/limit-texts.ts",
     "./release/release-state": "./src/release/release-state.ts",
     "./attachments/rules": "./src/attachments/rules.ts",
     "./attachments/labels": "./src/attachments/labels.ts",

@@ -9,3 +9,5 @@
 !dns.mjs
 !run-as.sh
 !mariadb-release-signing-key.asc
+!preview-php.ini
+!no-sendmail

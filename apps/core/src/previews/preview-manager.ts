@@ -290,7 +290,10 @@ export class PreviewManager {
       if (error instanceof PreviewLater || hold.signal.aborted || isLeaseLost(error)) throw error
       if (!(error instanceof PreviewUnavailable))
         this.#warn(`preview ${facts.preview.id} build`, logged(error))
-      await failBuild(this.deps.db, hold, error)
+      await failBuild(this.deps.db, hold, error, {
+        taskId: facts.preview.taskId,
+        candidate: facts.candidate,
+      })
       return
     }
     const { candidate } = facts

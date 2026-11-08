@@ -67,6 +67,31 @@ describe('what a stack says about previews', () => {
       expect(previewRecipeSchema.safeParse(broken).success).toBe(false)
   })
 
+  it('takes what a live page looks like and the folders PHP owns (Т33, Т21)', () => {
+    const declared = {
+      ...recipe,
+      ready: { header: 'x-raditi-preview', absent: [] },
+      writableFolders: ['logs'],
+    }
+    expect(previewRecipeSchema.parse(declared)).toEqual(declared)
+    for (const broken of [
+      { ...recipe, ready: { header: 'x-site', absent: [] } },
+      { ...recipe, ready: { header: 'x-raditi-preview' } },
+      { ...recipe, ready: { header: 'x-raditi-preview', absent: [''] } },
+      { ...recipe, ready: { header: 'x-raditi-preview', absent: [], extra: true } },
+      { ...recipe, writableFolders: Array.from({ length: 33 }, (_, index) => `f${index}`) },
+      { ...recipe, writableFolders: ['../x'] },
+      { ...recipe, writableFolders: ['/var/log'] },
+    ])
+      expect(previewRecipeSchema.safeParse(broken).success).toBe(false)
+    expect(
+      previewRecipeSchema.safeParse({
+        ...recipe,
+        writableFolders: Array.from({ length: 32 }, (_, index) => `f${index}`),
+      }).success,
+    ).toBe(true)
+  })
+
   it('takes a copy policy of allowed tables, filters at the source and overrides', () => {
     const policy = {
       engine: 'mysql',
@@ -123,6 +148,49 @@ describe('what a stack says about previews', () => {
     expect(
       databaseCopyPolicySchema.safeParse({ ...policy, tables: [options, options] }).success,
     ).toBe(false)
+  })
+
+  it('blanks keys of a column of a matched row, never one it sets or deletes (Э3.11)', () => {
+    const sef = {
+      table: 'extensions',
+      match: { column: 'name', value: 'plg_system_sef' },
+      set: {},
+      blank: { column: 'params', keys: ['domain'] },
+    }
+    const policy = { engine: 'mysql', tables: [], overrides: [sef] }
+    expect(databaseCopyPolicySchema.parse(policy)).toEqual(policy)
+    for (const override of [
+      { ...sef, set: null },
+      { ...sef, set: { params: '{}' } },
+      { ...sef, blank: { column: 'params', keys: [] } },
+      { ...sef, blank: { column: 'params', keys: ['a"b'] } },
+      { ...sef, blank: { column: 'params; DROP', keys: ['domain'] } },
+    ])
+      expect(
+        databaseCopyPolicySchema.safeParse({ ...policy, overrides: [override] }).success,
+        JSON.stringify(override),
+      ).toBe(false)
+  })
+
+  it('holds a policy of up to 128 tables', () => {
+    const rules = (count: number) =>
+      Array.from({ length: count }, (_, index) => ({ table: `t${index}`, where: [] }))
+    const of = (count: number) => ({ engine: 'mysql', tables: rules(count), overrides: [] })
+    expect(databaseCopyPolicySchema.safeParse(of(128)).success).toBe(true)
+    expect(databaseCopyPolicySchema.safeParse(of(129)).success).toBe(false)
+  })
+
+  it('turns on the second line of unnamed columns by one value only', () => {
+    const policy = { engine: 'mysql', tables: [], overrides: [] }
+    expect(databaseCopyPolicySchema.parse({ ...policy, suspectColumns: 'empty' })).toEqual({
+      ...policy,
+      suspectColumns: 'empty',
+    })
+    expect(databaseCopyPolicySchema.parse(policy)).toEqual(policy)
+    for (const other of ['keep', 'null', true, null])
+      expect(databaseCopyPolicySchema.safeParse({ ...policy, suspectColumns: other }).success).toBe(
+        false,
+      )
   })
 
   it('takes the database settings of a production configuration', () => {

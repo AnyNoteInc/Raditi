@@ -3,9 +3,13 @@
 # The runtime pins each by digest (PREVIEW_FORWARDER_IMAGE, PREVIEW_BROWSER_IMAGE,
 # PREVIEW_SITE_IMAGES); README.md.
 
-# The PHP and Apache of a `site` image: a WordPress image of one PHP version, by digest
-# (docker build … --target site --build-arg BASE=wordpress@sha256:…). The default is PHP 8.3.
-ARG BASE=wordpress@sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5
+# The base of the `site` target: `php-base`, the stage below. The way back, PHP 8.3 only:
+# BASE=wordpress@sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5.
+ARG BASE=php-base
+# The official image of one PHP version, by the digest of its index: amd64 and arm64 alike.
+# site-bases.json lists them; the default is PHP 8.3.
+ARG PHP_BASE=php@sha256:df17bb6139ae1667c9d9c042a4f0bf9e4e3767e0a940fadc7b17727e6e55c418
+ARG TARGETARCH
 
 # Trusted tools of a preview: the entry forwarder, the browser relay and the files helper. The
 # runtime sets the entrypoint and the user of each container; a bare run is not root either.
@@ -34,6 +38,69 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright HOME=/tmp
 USER 10001:10001
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["sleep", "infinity"]
+
+# The extension installer of the official PHP images, by version and sha256; a stage of its own,
+# so nothing of it stays in an image.
+FROM scratch AS php-extension-installer
+ADD --chmod=0755 --checksum=sha256:27fa8d80bd4e22feb9ddcadff1ca40c8f3e8ea942eb2dd8f446ed1afd2f2f0ab \
+    https://github.com/mlocati/docker-php-extension-installer/releases/download/2.13.2/install-php-extensions \
+    /install-php-extensions
+
+# ionCube Loader 15.5.1 (18.09.2026). The address has no version: a new release of the vendor
+# fails the checksum and stops the build until the version and both sums change together.
+FROM scratch AS ioncube-archive-amd64
+ADD --checksum=sha256:739962bd012e77ee82bf01f77a9641f050e4be057f0a5d1a95fe59ce11fd62ba \
+    https://downloads.ioncube.com/loader_downloads/ioncube_loaders_lin_x86-64.tar.gz /ioncube.tar.gz
+FROM scratch AS ioncube-archive-arm64
+ADD --checksum=sha256:b091974aa80a76bd798d71fd5209797d93749b0be13eaff978a3dbe0106b9e1f \
+    https://downloads.ioncube.com/loader_downloads/ioncube_loaders_lin_aarch64.tar.gz /ioncube.tar.gz
+FROM ioncube-archive-${TARGETARCH} AS ioncube-archive
+
+# What every stack of a preview runs on (docs/plan/62, Т21). Nothing here knows a stack.
+# ionCube has no Loader for PHP 8.0 on any architecture. Its first ini name loads it before
+# OPcache, as its README asks. status is off: the entry forwarder comes from the loopback, and
+# Debian opens /server-status to `Require local`. PHP_PECL_PINS names the version of every PECL
+# extension: an empty cache and the monthly rebuild give the same imagick, redis and apcu. apt tries
+# every download three times — the installer's packages too: the sources of the bullseye images
+# (7.3, 7.4 — snapshot.debian.org) answered 503 and 504 now and then (docs/plan/62, §10). Whether the
+# retries ride out those outages is not measured: one of 20 minutes they do not.
+FROM ${PHP_BASE} AS php-base
+ARG PHP_EXTENSIONS_SKIP=
+ARG PHP_PECL_PINS="apcu-5.1.28 imagick-3.8.1 mcrypt-1.0.9 memcached-3.4.0 redis-6.3.0 xmlrpc-1.0.0RC3"
+RUN --mount=type=bind,from=php-extension-installer,source=/install-php-extensions,target=/usr/local/bin/install-php-extensions \
+    --mount=type=bind,from=ioncube-archive,source=/ioncube.tar.gz,target=/tmp/ioncube.tar.gz \
+    set -eu; \
+    printf 'Acquire::Retries "3";\n' > /etc/apt/apt.conf.d/80-raditi-retries; \
+    . /etc/os-release; \
+    php_version=$(php -r 'echo PHP_MAJOR_VERSION, ".", PHP_MINOR_VERSION;'); \
+    names=; \
+    for name in apcu bcmath bz2 calendar exif gd gettext gmp imagick intl ldap mcrypt memcached \
+      mysqli opcache pdo_mysql redis shmop soap sockets sysvmsg sysvsem sysvshm xmlrpc xsl zip; do \
+      pinned=$name; \
+      for pin in $PHP_PECL_PINS; do case "$pin" in "$name"-*) pinned=$pin ;; esac; done; \
+      case " $PHP_EXTENSIONS_SKIP " in *" $name "*) ;; *) names="$names $pinned" ;; esac; \
+    done; \
+    install-php-extensions $names; \
+    install -d -m 0755 /usr/local/lib/raditi; \
+    if [ "$php_version" != 8.0 ]; then \
+      install -d -m 0755 /usr/local/lib/raditi/ioncube; \
+      tar -xzf /tmp/ioncube.tar.gz -C /usr/local/lib/raditi/ioncube --strip-components=1 \
+        --no-same-owner ioncube/LICENSE.txt "ioncube/ioncube_loader_lin_${php_version}.so"; \
+      chmod -R a+rX /usr/local/lib/raditi/ioncube; \
+      printf 'zend_extension=/usr/local/lib/raditi/ioncube/ioncube_loader_lin_%s.so\n' "$php_version" \
+        > /usr/local/etc/php/conf.d/00-ioncube.ini; \
+    fi; \
+    case "$VERSION_CODENAME" in \
+      trixie) heif='libheif-plugin-aomenc libheif-plugin-x265' ;; \
+      *) heif= ;; \
+    esac; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ghostscript $heif; \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/*; \
+    a2enmod rewrite expires remoteip headers; \
+    a2dismod -f status
+COPY --chmod=0644 preview-php.ini /usr/local/etc/php/conf.d/50-raditi.ini
+COPY --chmod=0755 no-sendmail /usr/local/lib/raditi/no-sendmail
 
 # A preview in one container (docs/plan/58-preview-single-container.md, §10): the PHP and Apache
 # of BASE, MariaDB, the entry forwarder and WP-CLI, started by init.sh under tini, each service

@@ -1,0 +1,110 @@
+{
+  "versions": [
+    {
+      "php": "7.3",
+      "tag": "7.3-apache",
+      "image": "php@sha256:b9872cd287ef72bc17d45d713aa2742f3d3bcf2503fea2506fd93aa94995219f",
+      "debian": "bullseye",
+      "without": [],
+      "pecl": ["apcu-5.1.28", "imagick-3.8.1", "mcrypt-1.0.9", "memcached-3.4.0", "redis-6.0.2"]
+    },
+    {
+      "php": "7.4",
+      "tag": "7.4-apache",
+      "image": "php@sha256:c9d7e608f73832673479770d66aacc8100011ec751d1905ff63fae3fe2e0ca6d",
+      "debian": "bullseye",
+      "without": [],
+      "pecl": ["apcu-5.1.28", "imagick-3.8.1", "mcrypt-1.0.9", "memcached-3.4.0", "redis-6.3.0"]
+    },
+    {
+      "php": "8.0",
+      "tag": "8.0-apache",
+      "image": "php@sha256:c87b4c94d53b35520467b6d026f38656ab9a6d446fa3a0fbba1bc633125f9ad2",
+      "debian": "bullseye",
+      "without": [],
+      "pecl": [
+        "apcu-5.1.28",
+        "imagick-3.8.1",
+        "mcrypt-1.0.9",
+        "memcached-3.4.0",
+        "redis-6.3.0",
+        "xmlrpc-1.0.0RC3"
+      ]
+    },
+    {
+      "php": "8.1",
+      "tag": "8.1-apache",
+      "image": "php@sha256:72f0c0134922985022d55a39b0390d35dc7a10e961aa6c44fa35b4c3102f4268",
+      "debian": "trixie",
+      "without": [],
+      "pecl": [
+        "apcu-5.1.28",
+        "imagick-3.8.1",
+        "mcrypt-1.0.9",
+        "memcached-3.4.0",
+        "redis-6.3.0",
+        "xmlrpc-1.0.0RC3"
+      ]
+    },
+    {
+      "php": "8.2",
+      "tag": "8.2-apache",
+      "image": "php@sha256:e8d7ae73c794b83fd38005288fa504c563e2bd29bc8bfe6e4a47a15d69fec645",
+      "debian": "trixie",
+      "without": [],
+      "pecl": [
+        "apcu-5.1.28",
+        "imagick-3.8.1",
+        "mcrypt-1.0.9",
+        "memcached-3.4.0",
+        "redis-6.3.0",
+        "xmlrpc-1.0.0RC3"
+      ]
+    },
+    {
+      "php": "8.3",
+      "tag": "8.3-apache",
+      "image": "php@sha256:df17bb6139ae1667c9d9c042a4f0bf9e4e3767e0a940fadc7b17727e6e55c418",
+      "debian": "trixie",
+      "without": [],
+      "pecl": [
+        "apcu-5.1.28",
+        "imagick-3.8.1",
+        "mcrypt-1.0.9",
+        "memcached-3.4.0",
+        "redis-6.3.0",
+        "xmlrpc-1.0.0RC3"
+      ]
+    },
+    {
+      "php": "8.4",
+      "tag": "8.4-apache-trixie",
+      "image": "php@sha256:f32426503c85a6a61cbd8c89d75365917b7ae021f222e036ca1a7ba466f2025c",
+      "debian": "trixie",
+      "without": [],
+      "pecl": [
+        "apcu-5.1.28",
+        "imagick-3.8.1",
+        "mcrypt-1.0.9",
+        "memcached-3.4.0",
+        "redis-6.3.0",
+        "xmlrpc-1.0.0RC3"
+      ]
+    },
+    {
+      "php": "8.5",
+      "tag": "8.5-apache-trixie",
+      "image": "php@sha256:08af36df144462d84c7f16190557eec06cb9f656882685610b712a15eec54d46",
+      "debian": "trixie",
+      "without": [],
+      "pecl": [
+        "apcu-5.1.28",
+        "imagick-3.8.1",
+        "mcrypt-1.0.9",
+        "memcached-3.4.0",
+        "redis-6.3.0",
+        "xmlrpc-1.0.0RC3"
+      ]
+    }
+  ]
+}

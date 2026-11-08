@@ -13,7 +13,7 @@ import {
   createDockerStagingDatabaseRuntime,
   type DockerPreviewConfig,
 } from '@repo/sandbox-providers'
-import { getSiteAdapter, getSiteContentAdapter } from '@repo/site-adapters'
+import { findSiteContentAdapter, getSiteAdapter } from '@repo/site-adapters'
 import { siteSource } from '@repo/site-connections'
 import {
   createMysqlDatabaseCatalog,
@@ -35,6 +35,7 @@ import {
   SITE_CONTENT_RESOLVERS,
 } from '../site-content/site-content.tokens.ts'
 import { TURN_EXECUTOR } from '../turns/turns.tokens.ts'
+import type { PreviewBuildDeps } from './preview-builder.ts'
 import { PreviewLoops } from './preview-loops.ts'
 import { PreviewManager } from './preview-manager.ts'
 import { PREVIEW_RUNTIME } from './previews.tokens.ts'
@@ -53,10 +54,21 @@ export function previewRuntimeConfig(previews: PreviewsConfig | null): DockerPre
     runtime: previews.runtime,
     socketPath: previews.docker.socketPath,
     gatewayPort: previews.gatewayPort,
+    gatewayHost: previews.relayGatewayHost,
     firewallImage: previews.docker.firewallImage,
     refusedSubnets: [...previews.refusedSubnets],
     dnsServers: [...previews.dnsServers],
   }
+}
+
+/**
+ * The adapters of the stacks a preview is built with: a stack without published content has no
+ * plugin to ask production through (docs/plan/62-site-stacks.md, Т8); an unknown stack throws, as
+ * the registry does.
+ */
+export const previewStacks: Pick<PreviewBuildDeps, 'adapters' | 'contentAdapters'> = {
+  adapters: getSiteAdapter,
+  contentAdapters: findSiteContentAdapter,
 }
 
 /** The previews of dialogs: their runtime, their manager and its loops. */
@@ -90,6 +102,7 @@ export const previewProviders: Provider[] = [
       return new PreviewManager({
         db: prisma,
         config: previews,
+        appEnv: config.appEnv,
         runtime,
         copier: createMysqlDatabaseCopier(connections),
         // A site's SQL dump is loaded here before its copy (26.10.2026): core's own Docker only.
@@ -115,8 +128,7 @@ export const previewProviders: Provider[] = [
         storage,
         secrets,
         // The stack of the site picks its adapters; this module names no CMS.
-        adapters: getSiteAdapter,
-        contentAdapters: getSiteContentAdapter,
+        ...previewStacks,
         production: production(),
         values,
       })

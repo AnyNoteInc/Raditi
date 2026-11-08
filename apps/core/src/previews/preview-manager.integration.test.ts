@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto'
-import type { Server } from 'node:http'
+import type { RequestListener, Server } from 'node:http'
 
 import { createPrismaClient, markStaleCandidates, type PrismaClient } from '@repo/db'
 import {
   conflict,
+  DB_CREATED_ID_BASE,
+  DomainError,
   previewAccessPath,
   previewDatabaseSecretPath,
   previewBrowserSecretPath,
@@ -12,20 +14,27 @@ import {
   siteAccessPath,
   siteEnvVarPath,
   siteEnvVarSecret,
+  siteStackFactsOf,
   siteWorkspaceRules,
   type ContentWriteRequest,
   type DatabaseCopier,
   type DbPlan,
   type PublishedContentGateway,
+  type SiteAdapter,
+  type SiteDbCapabilities,
   type SiteFacts,
+  type SiteLayoutReading,
   type SiteRuntime,
+  type SiteStack,
   type PreviewUpstream,
   type TurnPlan,
 } from '@repo/domain'
 import { wordpressAdapter } from '@repo/site-adapters'
+import { noDbRuntime, textOnlyDbRuntime, type previewRequest } from '@repo/site-content'
 import { createHostLookup, siteSource } from '@repo/site-connections'
 import { databaseInspector } from '@repo/site-connections/databases'
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { z } from 'zod'
 
 import type { PreviewsConfig } from '../config/config.ts'
 import { sampleDriverId } from '../testing/ids.ts'
@@ -39,18 +48,56 @@ import {
   hash,
   MemoryStorage,
   MemoryVault,
+  previewPage,
+  siteRootSources,
   upstreamServer,
   workingTreeArchive,
   recordValues,
 } from '../testing/previews.ts'
 import { PreviewManager } from './preview-manager.ts'
 import { wakeStoppedPreview } from './preview-wake.ts'
-import { previewRecordOf } from './preview-record.ts'
-import { createPreviewSiteSources } from './site-sources.ts'
+import { previewRecordOf, previewRecordSchema } from './preview-record.ts'
+import { createPreviewSiteSources, type PreviewSiteSources } from './site-sources.ts'
 
 // The manager of previews over PostgreSQL with its runtime, copier, git, storage and Vault faked
 // (docs/plan/53-chat-preview-release.md, R5c). Runs on a disposable database only:
 // RADITI_GATEWAY_DB_TESTS=1 with DATABASE_URL.
+
+// The real requests of core to a preview; a scenario may shorten their time: a page that never
+// answers is waited for 30 s twice otherwise (docs/plan/62-site-stacks.md, Т33).
+const requests = vi.hoisted(() => ({ timeoutMs: null as number | null }))
+vi.mock('@repo/site-content', async (importOriginal) => {
+  const actual = await importOriginal<{ previewRequest: typeof previewRequest }>()
+  return {
+    ...actual,
+    previewRequest: (...[target, input]: Parameters<typeof actual.previewRequest>) =>
+      actual.previewRequest(
+        target,
+        requests.timeoutMs === null ? input : { ...input, timeoutMs: requests.timeoutMs },
+      ),
+  }
+})
+
+/** WordPress with what a live page of a stack looks like (Т33): a stand of a stack with `ready`. */
+const readyAdapter: SiteAdapter = {
+  ...wordpressAdapter,
+  previewRecipe: (site) => ({
+    ...wordpressAdapter.previewRecipe(site),
+    ready: { header: 'x-raditi-stand', absent: ['No configuration file found'] },
+  }),
+}
+
+/** An answer of the entry forwarder: a status, its headers, a page. */
+const answer =
+  (
+    status: number,
+    headers: Record<string, string> = {},
+    body = '<html>ok</html>',
+  ): RequestListener =>
+  (_request, response) => {
+    response.writeHead(status, headers).end(body)
+  }
+const live = answer(200, { 'x-raditi-stand': '1' })
 
 const siteFacts: SiteFacts = {
   stack: 'wordpress',
@@ -83,6 +130,7 @@ const config: PreviewsConfig = {
   upstreamHost: '127.0.0.1',
   dnsServers: ['77.88.8.8'],
   gatewayPort: 8090,
+  relayGatewayHost: 'host.docker.internal',
   refusedSubnets: [],
   docker: {
     socketPath: '/var/run/docker.sock',
@@ -96,17 +144,35 @@ const withRuntime = (
   runtime: SiteRuntime | undefined,
 ): PublishedContentGateway => (runtime ? { ...gateway, runtime: async () => runtime } : gateway)
 
+/** A gateway whose plugin tells what it can write of a plan; without `db` it has no plan. */
+const withPlan = (
+  gateway: PublishedContentGateway,
+  db: SiteDbCapabilities | (() => Promise<SiteDbCapabilities>) | undefined,
+): PublishedContentGateway =>
+  db
+    ? ({
+        ...gateway,
+        db: { capabilities: typeof db === 'function' ? db : async () => db },
+      } as unknown as PublishedContentGateway)
+    : gateway
+
 describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
   let db: PrismaClient
   let server: Server
   let upstream: PreviewUpstream
   const workspaces: string[] = []
+  /** What the entry forwarder answers in this test; null — `previewPage`. */
+  let respond: RequestListener | null = null
 
   beforeAll(async () => {
     db = createPrismaClient({ databaseUrl: databaseUrl ?? '', log: [] })
-    ;({ server, upstream } = await upstreamServer())
+    ;({ server, upstream } = await upstreamServer((request, response) =>
+      (respond ?? previewPage)(request, response),
+    ))
   })
   afterEach(async () => {
+    respond = null
+    requests.timeoutMs = null
     const ids = workspaces.splice(0)
     const of = { task: { workspaceId: { in: ids } } }
     const previews = await db.previewEnvironment.findMany({ where: of, select: { id: true } })
@@ -205,6 +271,22 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
       copier?: DatabaseCopier
       /** What the plugins of production and of the preview say their servers run. */
       runtimes?: { production?: SiteRuntime; preview?: SiteRuntime }
+      /** The adapters of the stacks; WordPress by default. */
+      adapters?: (stack: SiteStack) => SiteAdapter
+      /** `none` — the stack has no published-content adapter (`findSiteContentAdapter` null). */
+      content?: 'none'
+      /** How often a holder renews its hold; a test that takes the preview over shortens it. */
+      heartbeatMs?: number
+      /** What production's gateway cannot be had for; a generic failure by default. */
+      productionRefusal?: Error
+      /** What the preview's plugin can write of a plan; without it the gateway has no plan. */
+      previewDb?: SiteDbCapabilities
+      /** What production's plugin answers when asked what it can write of a plan. */
+      productionDb?: () => Promise<SiteDbCapabilities>
+      /** The sources of the site, made from the ones of the wizard's rows. */
+      sources?: (base: PreviewSiteSources) => PreviewSiteSources
+      /** The catalog of production's database; WordPress tables under `wp_` by default. */
+      catalog?: ReturnType<typeof fakeCatalog>
     } = {},
   ) {
     const runtime = new FakeRuntime(upstream)
@@ -231,29 +313,43 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
       {
         db,
         config,
+        appEnv: 'test',
         runtime,
         copier: options.copier ?? fakeCopier(),
-        catalog: fakeCatalog(),
+        catalog: options.catalog ?? fakeCatalog(),
         // No file source in these sites: the prefix comes from the catalog.
-        sources: createPreviewSiteSources({
-          db,
-          secrets: vault,
-          sources: siteSource,
-          databases: databaseInspector,
-          lookup: createHostLookup(),
-          appEnv: 'test',
-        }),
+        sources: (options.sources ?? ((base) => base))(
+          createPreviewSiteSources({
+            db,
+            secrets: vault,
+            sources: siteSource,
+            databases: databaseInspector,
+            lookup: createHostLookup(),
+            appEnv: 'test',
+          }),
+        ),
         git,
         storage,
         secrets: vault,
-        adapters: () => wordpressAdapter,
+        adapters: options.adapters ?? (() => wordpressAdapter),
         contentAdapters: () =>
-          contentAdapter(
-            withRuntime(contentGateway(previewStates, options.writes), options.runtimes?.preview),
-          ),
+          options.content === 'none'
+            ? null
+            : contentAdapter(
+                withPlan(
+                  withRuntime(
+                    contentGateway(previewStates, options.writes),
+                    options.runtimes?.preview,
+                  ),
+                  options.previewDb,
+                ),
+              ),
         production: async () => {
-          if (!production) throw new Error('unreachable')
-          return withRuntime(contentGateway(production), options.runtimes?.production)
+          if (!production) throw options.productionRefusal ?? new Error('unreachable')
+          return withPlan(
+            withRuntime(contentGateway(production), options.runtimes?.production),
+            options.productionDb,
+          )
         },
         values: recordValues(async (_owner, objectRef) => ({
           version: 1,
@@ -275,7 +371,7 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
         },
         credentials: { recover: async () => turnCredentials },
       },
-      { heartbeatMs: 60_000 },
+      { heartbeatMs: options.heartbeatMs ?? 60_000 },
     )
     return { m, runtime, git, storage, vault, exportCalls, previewStates }
   }
@@ -295,7 +391,9 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
 
   it('builds a new preview to the base of its dialog', async () => {
     const { site, preview } = await dialog()
-    const f = manager()
+    const f = manager({
+      copier: fakeCopier(undefined, { tables: 4, leftOutTables: 3, emptiedColumns: 2 }),
+    })
     await databaseAccess(f, site.id)
     expect(await f.m.refresh(preview.id, { requested: true })).toBe(true)
 
@@ -316,6 +414,10 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
     expect(previewRecordOf(row.runtime)).toMatchObject({
       database: { tablePrefix: 'wp_', charset: 'utf8mb4', collation: 'utf8mb4_unicode_ci' },
       seedChecked: true,
+      // The copier's count of tables it left out, for the passport of a preview (plan 62, Т57).
+      seedTablesLeftOut: 3,
+      // And of columns the second line wrote empty (Э3.5).
+      seedColumnsEmptied: 2,
       sync: null,
     })
     expect(f.runtime.calls).toEqual(['ensure', 'writeFiles', 'loadDatabase'])
@@ -457,6 +559,123 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
     expect(await db.previewSeedMismatch.count({ where: { previewId: preview.id } })).toBe(3)
   })
 
+  describe('what a release could carry of the database (Т37)', () => {
+    const everything: SiteDbCapabilities = {
+      version: 1,
+      kind: 'capabilities',
+      plugin: 2,
+      operations: ['content_update', 'option_update', 'post_create', 'schema_migration'],
+      settings: ['blogname'],
+      maxRecordId: 812,
+    }
+    const previewDb = { ...everything, nextCreatedId: DB_CREATED_ID_BASE }
+    /** What the resolver throws for a site without its access to the plugin, or a failed read. */
+    const noAccess = () =>
+      new DomainError(
+        'CONTENT_SITE_ACCESS_UNAVAILABLE',
+        'Site content access is unavailable',
+        503,
+        {
+          reason: 'reference',
+        },
+      )
+    const dbOf = async (previewId: string) =>
+      previewRecordOf(
+        (await db.previewEnvironment.findUniqueOrThrow({ where: { id: previewId } })).runtime,
+      ).db
+
+    it('writes that nothing is carried for a stack whose recipe has no content', async () => {
+      const { site, preview } = await dialog()
+      const f = manager({
+        adapters: () => ({
+          ...wordpressAdapter,
+          previewRecipe: (facts) => ({ ...wordpressAdapter.previewRecipe(facts), content: null }),
+        }),
+      })
+      await databaseAccess(f, site.id)
+      expect(await f.m.refresh(preview.id, { requested: true })).toBe(true)
+      expect(await dbOf(preview.id)).toEqual(noDbRuntime)
+    })
+
+    it('carries nothing for a site without access to the plugin of production', async () => {
+      const { site, preview } = await dialog()
+      const f = manager({ production: null, productionRefusal: noAccess(), previewDb })
+      await databaseAccess(f, site.id)
+      await f.m.refresh(preview.id, { requested: true })
+      expect(await dbOf(preview.id)).toEqual(noDbRuntime)
+    })
+
+    it('carries every kind for a site whose plugin on production answers (WordPress as before)', async () => {
+      const { site, preview } = await dialog()
+      // No settings of the list: the seed would read them from production, which this fake lacks.
+      const f = manager({ productionDb: async () => ({ ...everything, settings: [] }), previewDb })
+      await databaseAccess(f, site.id)
+      expect(await f.m.refresh(preview.id, { requested: true })).toBe(true)
+      expect(await dbOf(preview.id)).toEqual({
+        kinds: ['content_update', 'option_update', 'post_create', 'schema_migration'],
+        settings: [],
+        createdIds: true,
+      })
+    })
+
+    it('keeps the text of records where production’s plugin twice did not answer', async () => {
+      const { site, preview } = await dialog()
+      let asked = 0
+      const f = manager({
+        productionDb: () => {
+          asked += 1
+          return Promise.reject(new Error('timed out'))
+        },
+        previewDb,
+      })
+      await databaseAccess(f, site.id)
+      await f.m.refresh(preview.id, { requested: true })
+      expect(asked).toBe(2)
+      // Production's gateway is there: its access row is not what decides.
+      expect(await db.credentialRef.count({ where: { siteId: site.id, kind: 'wp' } })).toBe(0)
+      expect(await dbOf(preview.id)).toEqual(textOnlyDbRuntime)
+    })
+
+    it('keeps the text of records for a site with a plugin that could not be asked now', async () => {
+      const { workspace, site, preview } = await dialog()
+      await db.credentialRef.create({
+        data: {
+          workspaceId: workspace.id,
+          siteId: site.id,
+          kind: 'wp',
+          vaultPath: siteAccessPath(site.id, 'wp'),
+          keyVersion: 1,
+        },
+      })
+      const f = manager({ production: null, productionRefusal: noAccess(), previewDb })
+      await databaseAccess(f, site.id)
+      await f.m.refresh(preview.id, { requested: true })
+      expect(await dbOf(preview.id)).toEqual(textOnlyDbRuntime)
+    })
+
+    it('carries nothing for a site with two access rows of the plugin, which a release refuses', async () => {
+      const { workspace, site, preview } = await dialog()
+      // The index on (site_id, kind) is not unique; the resolver and `/release` take two rows as none.
+      for (const vaultPath of [
+        siteAccessPath(site.id, 'wp'),
+        `${siteAccessPath(site.id, 'wp')}-old`,
+      ])
+        await db.credentialRef.create({
+          data: {
+            workspaceId: workspace.id,
+            siteId: site.id,
+            kind: 'wp',
+            vaultPath,
+            keyVersion: 1,
+          },
+        })
+      const f = manager({ production: null, productionRefusal: noAccess(), previewDb })
+      await databaseAccess(f, site.id)
+      await f.m.refresh(preview.id, { requested: true })
+      expect(await dbOf(preview.id)).toEqual(noDbRuntime)
+    })
+  })
+
   it('rebuilds to a candidate: its plan replayed, its checks recorded, earlier ones stale', async () => {
     const { site, task, preview } = await dialog()
     const writes: ContentWriteRequest[] = []
@@ -582,6 +801,8 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
         return {
           tables: 1,
           structureOnly: 0,
+          leftOutTables: 0,
+          emptiedColumns: 0,
           rows: 1,
           bytes: 1,
           sha256: hash('5'),
@@ -787,6 +1008,28 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
     )
   })
 
+  it('builds nothing when the recipe asks for a content plugin the stack does not have (Т8)', async () => {
+    const { site, preview } = await dialog()
+    const f = manager({ content: 'none' })
+    await databaseAccess(f, site.id)
+    await f.m.refresh(preview.id, { requested: true })
+    expect(
+      await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } }),
+    ).toMatchObject({
+      status: 'unavailable',
+      unavailableReason: 'not_supported',
+      upstreamHost: null,
+    })
+    // Refused before the copy is touched: no tree, no seed, no database, no access of the preview.
+    expect(f.runtime.calls).toEqual([])
+    expect(f.git.exports).toEqual([])
+    expect(f.storage.objects.size).toBe(0)
+    expect([...f.vault.kv.keys()].filter((path) => path.includes(preview.id))).toEqual([])
+    expect(await db.credentialRef.count({ where: { siteId: site.id, kind: { not: 'db' } } })).toBe(
+      0,
+    )
+  })
+
   it('says why a preview cannot be built, and keeps the code of a failure', async () => {
     const { site, preview } = await dialog()
     const f = manager()
@@ -804,6 +1047,733 @@ describe.skipIf(!enabled)('the manager of previews with PostgreSQL', () => {
     expect(
       await db.previewEnvironment.findUniqueOrThrow({ where: { id: other.preview.id } }),
     ).toMatchObject({ status: 'failed', errorCode: 'access_missing' })
+  })
+
+  describe('the record of the site a fresh copy reads (plan 62, Т13, Т16)', () => {
+    const WP_CONFIG = "<?php\ndefine( 'DB_CHARSET', 'utf8mb4' );\n$table_prefix = 'shop_';\n"
+    const VERSION = "<?php\n$wp_version = '6.8.3';\n"
+    /** WordPress with a layout to read, and the facts each recipe was made with. */
+    function layoutStack(layout: SiteLayoutReading) {
+      const recipes: SiteFacts[] = []
+      const adapter: SiteAdapter = {
+        ...wordpressAdapter,
+        readLayout: async () => layout,
+        previewRecipe: (site) => {
+          recipes.push(site)
+          return wordpressAdapter.previewRecipe(site)
+        },
+      }
+      return { adapter, recipes }
+    }
+    const read: SiteLayoutReading = { kind: 'read', extras: { admin: 'manager' }, adminPath: null }
+    const factsOf = async (siteId: string) =>
+      siteStackFactsOf(
+        (await db.site.findUniqueOrThrow({ where: { id: siteId }, select: { stackFacts: true } }))
+          .stackFacts,
+      )
+    const rowOf = (previewId: string) =>
+      db.previewEnvironment.findUniqueOrThrow({ where: { id: previewId } })
+
+    it('reads the configuration, the version and the layout in one session, for the recipe', async () => {
+      const { site, preview } = await dialog()
+      const stack = layoutStack(read)
+      let sources: ReturnType<typeof siteRootSources> | undefined
+      const f = manager({
+        adapters: () => stack.adapter,
+        sources: (base) =>
+          (sources = siteRootSources(base, {
+            'wp-config.php': WP_CONFIG,
+            'wp-includes/version.php': VERSION,
+          })),
+      })
+      await databaseAccess(f, site.id)
+      await f.m.refresh(preview.id, { requested: true })
+
+      const row = await rowOf(preview.id)
+      expect(row.status).toBe('ready')
+      expect(sources?.roots).toBe(1)
+      expect(previewRecordOf(row.runtime).database).toMatchObject({ tablePrefix: 'shop_' })
+      expect(await factsOf(site.id)).toMatchObject({
+        cmsVersion: '6.8.3',
+        extras: { admin: 'manager' },
+        adminPath: null,
+        limit: null,
+      })
+      expect(stack.recipes[0]).toMatchObject({ extras: { admin: 'manager' }, version: '6.8.3' })
+    })
+
+    it('goes on with the recorded layout when the hosting cannot be read now', async () => {
+      const { site, preview } = await dialog()
+      await db.site.update({
+        where: { id: site.id },
+        data: { stackFacts: { v: 1, extras: { admin: 'manager' } } },
+      })
+      const stack = layoutStack(read)
+      let sources: ReturnType<typeof siteRootSources> | undefined
+      const f = manager({
+        adapters: () => stack.adapter,
+        sources: (base) => (sources = siteRootSources(base, null)),
+      })
+      await databaseAccess(f, site.id)
+      await f.m.refresh(preview.id, { requested: true })
+
+      expect((await rowOf(preview.id)).status).toBe('ready')
+      expect(sources?.roots).toBe(1)
+      expect(stack.recipes[0]?.extras).toEqual({ admin: 'manager' })
+    })
+
+    /** The catalog of production's database, and how often a build asked it. */
+    function countedCatalog() {
+      const catalog = fakeCatalog()
+      const counted = {
+        asked: 0,
+        tables: (...args: Parameters<typeof catalog.tables>) => {
+          counted.asked += 1
+          return catalog.tables(...args)
+        },
+      }
+      return counted
+    }
+
+    it('builds no copy of a layout neither read now nor recorded: none is guessed', async () => {
+      const { site, preview } = await dialog()
+      const stack = layoutStack(read)
+      const catalog = countedCatalog()
+      let sources: ReturnType<typeof siteRootSources> | undefined
+      const f = manager({
+        adapters: () => stack.adapter,
+        catalog,
+        sources: (base) => (sources = siteRootSources(base, null)),
+      })
+      await databaseAccess(f, site.id)
+      await f.m.refresh(preview.id, { requested: true })
+
+      expect(await rowOf(preview.id)).toMatchObject({
+        status: 'unavailable',
+        unavailableReason: 'no_layout',
+        upstreamHost: null,
+      })
+      expect(stack.recipes).toEqual([])
+      expect(f.runtime.calls).toEqual([])
+      // Settled before the database: its access is not taken, its catalog not read.
+      expect(sources?.accesses).toBe(0)
+      expect(catalog.asked).toBe(0)
+    })
+
+    it('builds no copy of a version read now that the platform does not support', async () => {
+      const { site, preview } = await dialog()
+      const catalog = countedCatalog()
+      let sources: ReturnType<typeof siteRootSources> | undefined
+      const f = manager({
+        adapters: () => ({
+          ...wordpressAdapter,
+          support: { ...wordpressAdapter.support, refuseBelow: '7.0' },
+        }),
+        catalog,
+        sources: (base) =>
+          (sources = siteRootSources(base, { 'wp-includes/version.php': VERSION })),
+      })
+      await databaseAccess(f, site.id)
+      await f.m.refresh(preview.id, { requested: true })
+
+      expect(await rowOf(preview.id)).toMatchObject({
+        status: 'unavailable',
+        unavailableReason: 'version_unsupported',
+        upstreamHost: null,
+      })
+      expect((await factsOf(site.id)).cmsVersion).toBe('6.8.3')
+      expect(f.runtime.calls).toEqual([])
+      expect(sources?.accesses).toBe(0)
+      expect(catalog.asked).toBe(0)
+    })
+
+    it('keeps the settings of the configuration when the stack cannot be read', async () => {
+      const { site, preview } = await dialog()
+      await db.site.update({
+        where: { id: site.id },
+        data: { stackFacts: { v: 1, extras: { admin: 'manager' } } },
+      })
+      const stack = layoutStack(read)
+      stack.adapter.readLayout = async () => {
+        throw new Error('the hosting dropped the session')
+      }
+      let sources: ReturnType<typeof siteRootSources> | undefined
+      const f = manager({
+        adapters: () => stack.adapter,
+        sources: (base) =>
+          (sources = siteRootSources(base, {
+            'wp-config.php': WP_CONFIG,
+            'wp-includes/version.php': VERSION,
+          })),
+      })
+      await databaseAccess(f, site.id)
+      await f.m.refresh(preview.id, { requested: true })
+
+      const row = await rowOf(preview.id)
+      expect(row.status).toBe('ready')
+      expect(sources?.roots).toBe(1)
+      // From wp-config.php, not the `wp_` of the catalog.
+      expect(previewRecordOf(row.runtime).database).toMatchObject({ tablePrefix: 'shop_' })
+      expect(stack.recipes[0]?.extras).toEqual({ admin: 'manager' })
+    })
+
+    it('writes the limit of a refused layout and builds no copy', async () => {
+      const { site, preview } = await dialog()
+      await db.site.update({
+        where: { id: site.id },
+        data: { stackFacts: { v: 1, extras: { admin: 'manager' } } },
+      })
+      const stack = layoutStack({ kind: 'refused', limit: 'renamed_folder' })
+      const f = manager({
+        adapters: () => stack.adapter,
+        sources: (base) => siteRootSources(base, { 'wp-includes/version.php': VERSION }),
+      })
+      await databaseAccess(f, site.id)
+      await f.m.refresh(preview.id, { requested: true })
+
+      expect(await rowOf(preview.id)).toMatchObject({
+        status: 'unavailable',
+        unavailableReason: 'no_layout',
+      })
+      expect(await factsOf(site.id)).toMatchObject({
+        cmsVersion: '6.8.3',
+        limit: 'renamed_folder',
+        extras: { admin: 'manager' },
+      })
+    })
+
+    it('builds WordPress as before, reading its version on a fresh copy only', async () => {
+      const { site, preview } = await dialog()
+      let sources: ReturnType<typeof siteRootSources> | undefined
+      const f = manager({ sources: (base) => (sources = siteRootSources(base, null)) })
+      await databaseAccess(f, site.id)
+      await f.m.refresh(preview.id, { requested: true })
+      expect(await rowOf(preview.id)).toMatchObject({ status: 'ready', unavailableReason: null })
+      expect(sources?.roots).toBe(1)
+      expect(await factsOf(site.id)).toEqual(siteStackFactsOf({}))
+
+      // A rebuild on the same seed keeps the settings and the record: no session is opened.
+      await db.previewEnvironment.update({ where: { id: preview.id }, data: { dirty: true } })
+      await f.m.refresh(preview.id, { requested: true })
+      expect((await rowOf(preview.id)).status).toBe('ready')
+      expect(sources?.roots).toBe(1)
+
+      // A fresh copy of a site whose version file is there writes the version it read.
+      const other = await dialog()
+      const g = manager({
+        sources: (base) => siteRootSources(base, { 'wp-includes/version.php': VERSION }),
+      })
+      await databaseAccess(g, other.site.id)
+      await g.m.refresh(other.preview.id, { requested: true })
+      expect((await rowOf(other.preview.id)).status).toBe('ready')
+      expect((await factsOf(other.site.id)).cmsVersion).toBe('6.8.3')
+    })
+
+    it('reads the hosting again on every fresh copy, the settings included', async () => {
+      const { site, task, preview } = await dialog()
+      const root: Record<string, string> = {
+        'wp-config.php': WP_CONFIG,
+        'wp-includes/version.php': "<?php\n$wp_version = '6.8.1';\n",
+      }
+      let sources: ReturnType<typeof siteRootSources> | undefined
+      const f = manager({ sources: (base) => (sources = siteRootSources(base, root)) })
+      await databaseAccess(f, site.id)
+      await f.m.refresh(preview.id, { requested: true })
+      expect(await rowOf(preview.id)).toMatchObject({ status: 'ready' })
+      expect(previewRecordOf((await rowOf(preview.id)).runtime).database).toMatchObject({
+        tablePrefix: 'shop_',
+      })
+      expect((await factsOf(site.id)).cmsVersion).toBe('6.8.1')
+
+      // A release installs: the next build is a fresh copy of a preview that has its settings.
+      const candidate = await db.taskCandidate.create({
+        data: {
+          taskId: task.id,
+          revision: 1,
+          turnNo: 1,
+          baseSha: main,
+          baseTree: 'b'.repeat(40),
+          headSha: candidateHead,
+          files: [],
+          dbPlan: [],
+          dbPlanSha256: hash('d'),
+          proposedBump: 'patch',
+          proposedVersion: 'v0.0.1',
+          facts: {},
+          // Released and done with: the next build is the dialog's base, not this candidate.
+          status: 'superseded',
+          supersededAt: new Date(),
+        },
+      })
+      const release = await db.siteRelease.create({
+        data: {
+          siteId: site.id,
+          taskId: task.id,
+          candidateId: candidate.id,
+          candidateRevision: 1,
+          attempt: 1,
+          releaseKey: hash('8'),
+          version: 'v0.0.1',
+          tag: 'v0.0.1',
+          bump: 'patch',
+          mainBeforeSha: main,
+          approvedSha: main,
+          mainPushedAt: new Date(),
+          status: 'installed',
+          committedAt: new Date(),
+          approvedAt: new Date(),
+        },
+      })
+      await db.$executeRaw`UPDATE sites SET installed_release_id = ${release.id}::uuid,
+        installed_version = 'v0.0.1', installed_sha = ${main}, installed_at = now()
+        WHERE id = ${site.id}::uuid`
+      root['wp-includes/version.php'] = VERSION
+      root['wp-config.php'] =
+        "<?php\ndefine( 'DB_CHARSET', 'utf8mb4' );\n$table_prefix = 'next_';\n"
+      await db.previewEnvironment.update({ where: { id: preview.id }, data: { dirty: true } })
+      await f.m.refresh(preview.id, { requested: true })
+
+      const row = await rowOf(preview.id)
+      expect(row.status).toBe('ready')
+      expect(sources?.roots).toBe(2)
+      expect(previewRecordOf(row.runtime).database).toMatchObject({ tablePrefix: 'next_' })
+      expect((await factsOf(site.id)).cmsVersion).toBe('6.8.3')
+    })
+  })
+
+  describe('a stack that says how its live page looks (Т33)', () => {
+    const recordOf = async (previewId: string) =>
+      previewRecordOf(
+        (await db.previewEnvironment.findUniqueOrThrow({ where: { id: previewId } })).runtime,
+      )
+    const passportOf = async (previewId: string) => (await recordOf(previewId)).passport
+    const baseBootOf = async (previewId: string) => (await recordOf(previewId)).baseBoot
+    /** A candidate of the dialog with its checks pending, shown at the next build. */
+    const candidateOf = async (taskId: string, revision: number) => {
+      const candidate = await db.taskCandidate.create({
+        data: {
+          taskId,
+          revision,
+          turnNo: revision,
+          baseSha: main,
+          baseTree: 'b'.repeat(40),
+          headSha: candidateHead,
+          files: [
+            {
+              path: 'wp-content/themes/shop/functions.php',
+              change: 'modified',
+              sizeBytes: 10,
+              executable: false,
+            },
+          ],
+          dbPlan: [],
+          dbPlanSha256: hash('d'),
+          proposedBump: 'patch',
+          proposedVersion: 'v0.0.1',
+          facts: {},
+          previewRevision: revision,
+        },
+      })
+      await db.candidateCheck.createMany({
+        data: [
+          { candidateId: candidate.id, revision, kind: 'php_lint' },
+          { candidateId: candidate.id, revision, kind: 'preview_smoke' },
+        ],
+      })
+      return candidate
+    }
+    const smokeOf = async (candidateId: string) =>
+      (
+        await db.candidateCheck.findFirstOrThrow({
+          where: { candidateId, kind: 'preview_smoke' },
+        })
+      ).status
+    const rowOf = (previewId: string) =>
+      db.previewEnvironment.findUniqueOrThrow({ where: { id: previewId } })
+
+    it('has no preview of a base that does not start, and stops its containers', async () => {
+      const { site, preview } = await dialog()
+      let copies = 0
+      const copier = fakeCopier()
+      const f = manager({
+        adapters: () => readyAdapter,
+        copier: {
+          copy(input, write) {
+            copies++
+            return copier.copy(input, write)
+          },
+        },
+      })
+      await databaseAccess(f, site.id)
+      // A dead site answers 200 too: without the header of its configuration.
+      respond = answer(200)
+      await f.m.refresh(preview.id, { requested: true })
+      const row = await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } })
+      expect(row).toMatchObject({
+        status: 'unavailable',
+        unavailableReason: 'boot_failed',
+        upstreamHost: null,
+        upstreamPort: null,
+      })
+      expect(f.runtime.calls.at(-1)).toBe('stop')
+      expect(f.runtime.running.has(preview.id)).toBe(false)
+      // The record of a dead base keeps no kinds of a plan: every build counts them again, and
+      // `site_info` hears none of a closed preview.
+      expect(await recordOf(preview.id)).toMatchObject({ baseBoot: 'dead' })
+      expect((await recordOf(preview.id)).db).toBeUndefined()
+      // As a preview whose time is up: the seed stays, the next build copies nothing again.
+      expect(row.seedObjectKey).not.toBeNull()
+      expect(f.storage.objects.has(row.seedObjectKey!)).toBe(true)
+      respond = live
+      await f.m.refresh(preview.id, { requested: true })
+      expect(
+        await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } }),
+      ).toMatchObject({
+        status: 'ready',
+        seedObjectKey: row.seedObjectKey,
+        unavailableReason: null,
+      })
+      expect(copies).toBe(1)
+      expect(await passportOf(preview.id)).toMatchObject({
+        boot: 'not_compared',
+        differences: [],
+      })
+      // The next build counts them again.
+      expect((await recordOf(preview.id)).db).toMatchObject({ kinds: [] })
+    })
+
+    it('keeps the preview of a candidate that does not start and fails its smoke check', async () => {
+      const { site, task, preview } = await dialog()
+      const f = manager({ adapters: () => readyAdapter })
+      await databaseAccess(f, site.id)
+      respond = live
+      await f.m.refresh(preview.id, { requested: true })
+      const candidate = await db.taskCandidate.create({
+        data: {
+          taskId: task.id,
+          revision: 1,
+          turnNo: 1,
+          baseSha: main,
+          baseTree: 'b'.repeat(40),
+          headSha: candidateHead,
+          files: [
+            {
+              path: 'wp-content/themes/shop/functions.php',
+              change: 'modified',
+              sizeBytes: 10,
+              executable: false,
+            },
+          ],
+          dbPlan: [],
+          dbPlanSha256: hash('d'),
+          proposedBump: 'patch',
+          proposedVersion: 'v0.0.1',
+          facts: {},
+          previewRevision: 1,
+        },
+      })
+      await db.candidateCheck.createMany({
+        data: [
+          { candidateId: candidate.id, revision: 1, kind: 'php_lint' },
+          { candidateId: candidate.id, revision: 1, kind: 'preview_smoke' },
+        ],
+      })
+      // What the agent broke: the page no longer comes from the configuration.
+      respond = answer(200)
+      await f.m.refresh(preview.id, { requested: true })
+      expect(
+        await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } }),
+      ).toMatchObject({ status: 'ready', revision: 1, candidateId: candidate.id })
+      expect(f.runtime.calls).not.toContain('stop')
+      const checks = await db.candidateCheck.findMany({
+        where: { candidateId: candidate.id },
+        orderBy: { kind: 'asc' },
+      })
+      expect(checks.map((check) => [check.kind, check.status, check.summary])).toEqual([
+        ['php_lint', 'passed', { files: 1, failed: 0 }],
+        ['preview_smoke', 'failed', { pages: 1, failed: 1 }],
+      ])
+      expect(await passportOf(preview.id)).toMatchObject({ boot: 'suspect', differences: [] })
+    })
+
+    describe('a candidate that does not start, by what its base said (Э1.6)', () => {
+      it('has no preview on a dead base: the base said so at its own build', async () => {
+        const { site, task, preview } = await dialog()
+        const f = manager({ adapters: () => readyAdapter })
+        await databaseAccess(f, site.id)
+        respond = answer(200)
+        await f.m.refresh(preview.id, { requested: true })
+        expect(await rowOf(preview.id)).toMatchObject({
+          status: 'unavailable',
+          unavailableReason: 'boot_failed',
+        })
+        const said = await baseBootOf(preview.id)
+        const candidate = await candidateOf(task.id, 1)
+        await f.m.refresh(preview.id, { requested: true })
+        expect(await rowOf(preview.id)).toMatchObject({
+          status: 'unavailable',
+          unavailableReason: 'boot_failed',
+        })
+        expect(f.runtime.calls.at(-1)).toBe('stop')
+        expect(f.runtime.running.has(preview.id)).toBe(false)
+        // No preview shows the revision, yet its smoke check fails with the build: the release
+        // stays closed (`ReleaseSkill` counts the failed checks of the candidate).
+        const checks = await db.candidateCheck.findMany({
+          where: { candidateId: candidate.id },
+          orderBy: { kind: 'asc' },
+        })
+        expect(checks.map((check) => [check.kind, check.status, check.summary])).toEqual([
+          ['php_lint', 'pending', null],
+          ['preview_smoke', 'failed', { pages: 1, failed: 1 }],
+        ])
+        expect(
+          await db.candidateCheck.count({ where: { candidateId: candidate.id, status: 'failed' } }),
+        ).toBe(1)
+        // The base said it; a candidate says nothing of its base. Nor does the record of the dead
+        // base keep the kinds the candidate's build counted.
+        expect(said).toBe('dead')
+        expect(await baseBootOf(preview.id)).toBe('dead')
+        expect((await recordOf(preview.id)).db).toBeUndefined()
+      })
+
+      it('keeps what the dead base found of its seed for the next builds', async () => {
+        const { site, task, preview } = await dialog()
+        const f = manager({ adapters: () => readyAdapter })
+        await databaseAccess(f, site.id)
+        respond = answer(200)
+        await f.m.refresh(preview.id, { requested: true })
+        expect(await rowOf(preview.id)).toMatchObject({ unavailableReason: 'boot_failed' })
+        // post:2 differs from production: the record says the seed was compared, so the rows say
+        // what it found, and no later build on the seed compares it again.
+        const mismatches = async () =>
+          (await db.previewSeedMismatch.findMany({ where: { previewId: preview.id } })).map(
+            (mismatch) => mismatch.objectRef,
+          )
+        expect(await recordOf(preview.id)).toMatchObject({ seedChecked: true, baseBoot: 'dead' })
+        expect(await mismatches()).toEqual(['post:2'])
+        await candidateOf(task.id, 1)
+        respond = live
+        await f.m.refresh(preview.id, { requested: true })
+        expect(await rowOf(preview.id)).toMatchObject({ status: 'ready', revision: 1 })
+        expect(await mismatches()).toEqual(['post:2'])
+      })
+
+      it('forgets what the base said once a new seed is copied for the candidate', async () => {
+        const { site, task, preview } = await dialog()
+        const f = manager({ adapters: () => readyAdapter })
+        await databaseAccess(f, site.id)
+        respond = answer(200)
+        await f.m.refresh(preview.id, { requested: true })
+        expect(await baseBootOf(preview.id)).toBe('dead')
+        // The seed is lost (as when another dialog's release makes it old): the candidate's build
+        // copies the site again.
+        await db.previewEnvironment.update({
+          where: { id: preview.id },
+          data: { seedObjectKey: null, seedSha256: null, seedReleaseId: null },
+        })
+        const candidate = await candidateOf(task.id, 1)
+        await f.m.refresh(preview.id, { requested: true })
+        // No build judged the new base: the dead candidate keeps the preview (§7, question 32).
+        expect(await rowOf(preview.id)).toMatchObject({ status: 'ready', revision: 1 })
+        expect(await passportOf(preview.id)).toMatchObject({ boot: 'suspect' })
+        expect(await smokeOf(candidate.id)).toBe('failed')
+        expect(await baseBootOf(preview.id)).toBeUndefined()
+      })
+
+      it('says the base is alive again when the same seed answers closed', async () => {
+        const { site, preview } = await dialog()
+        const f = manager({ adapters: () => readyAdapter })
+        await databaseAccess(f, site.id)
+        respond = answer(200)
+        await f.m.refresh(preview.id, { requested: true })
+        expect(await baseBootOf(preview.id)).toBe('dead')
+        respond = answer(403, { 'x-raditi-stand': '1' })
+        await f.m.refresh(preview.id, { requested: true })
+        expect(await rowOf(preview.id)).toMatchObject({ status: 'ready' })
+        expect(await passportOf(preview.id)).toMatchObject({ boot: 'suspect' })
+        expect(await baseBootOf(preview.id)).toBe('alive')
+      })
+
+      it('reads as a record of the code before Э1.6 once the rollback step removed the sign', async () => {
+        const { site, preview } = await dialog()
+        const f = manager({ adapters: () => readyAdapter })
+        await databaseAccess(f, site.id)
+        respond = live
+        await f.m.refresh(preview.id, { requested: true })
+        const judged = await recordOf(preview.id)
+        expect(judged.baseBoot).toBe('alive')
+        // The strict record of the code before Э1.6 refuses the sign: its reader would see none.
+        const before = z.strictObject(previewRecordSchema.omit({ baseBoot: true }).shape)
+        expect(before.safeParse(judged).success).toBe(false)
+        // The step of the rollback (docs/plan/62-site-stacks.md §10, «Э1.6: откат»).
+        await db.$executeRaw`
+          UPDATE preview_environments SET runtime = runtime - 'baseBoot'
+          WHERE runtime ? 'baseBoot'`
+        const { baseBoot: _sign, ...rest } = judged
+        expect(before.parse((await rowOf(preview.id)).runtime)).toEqual(rest)
+      })
+
+      it('has none once the base died on a new seed, whatever passport it had', async () => {
+        const { site, task, preview } = await dialog()
+        const f = manager({ adapters: () => readyAdapter })
+        await databaseAccess(f, site.id)
+        respond = live
+        await f.m.refresh(preview.id, { requested: true })
+        expect(await rowOf(preview.id)).toMatchObject({ status: 'ready' })
+        const said = [await baseBootOf(preview.id)]
+        expect(await passportOf(preview.id)).toMatchObject({ boot: 'not_compared' })
+        // The seed is lost: the next build of the base — the agent wrote into the copy — copies
+        // the site again, and the copy dies.
+        await db.previewEnvironment.update({
+          where: { id: preview.id },
+          data: { seedObjectKey: null, seedSha256: null, seedReleaseId: null, dirty: true },
+        })
+        respond = answer(200)
+        await f.m.refresh(preview.id, { requested: true })
+        expect(await rowOf(preview.id)).toMatchObject({
+          status: 'unavailable',
+          unavailableReason: 'boot_failed',
+        })
+        said.push(await baseBootOf(preview.id))
+        // The passport of the earlier ready build is still in the record: it is not the sign.
+        expect(await passportOf(preview.id)).toBeDefined()
+        await candidateOf(task.id, 1)
+        await f.m.refresh(preview.id, { requested: true })
+        expect(await rowOf(preview.id)).toMatchObject({
+          status: 'unavailable',
+          unavailableReason: 'boot_failed',
+        })
+        expect(said).toEqual(['alive', 'dead'])
+      })
+
+      it('keeps the preview on a live base and fails its smoke check', async () => {
+        const { site, task, preview } = await dialog()
+        const f = manager({ adapters: () => readyAdapter })
+        await databaseAccess(f, site.id)
+        respond = live
+        await f.m.refresh(preview.id, { requested: true })
+        const candidate = await candidateOf(task.id, 1)
+        respond = answer(200)
+        await f.m.refresh(preview.id, { requested: true })
+        expect(await rowOf(preview.id)).toMatchObject({
+          status: 'ready',
+          revision: 1,
+          candidateId: candidate.id,
+        })
+        expect(await passportOf(preview.id)).toMatchObject({ boot: 'suspect', differences: [] })
+        expect(await smokeOf(candidate.id)).toBe('failed')
+      })
+
+      it('keeps the preview on a base no build judged: a record before Э1.6', async () => {
+        const { site, task, preview } = await dialog()
+        const f = manager({ adapters: () => readyAdapter })
+        await databaseAccess(f, site.id)
+        respond = live
+        await f.m.refresh(preview.id, { requested: true })
+        // As a build before Э1.6 left it: no `baseBoot`, no passport.
+        const { baseBoot: _base, passport: _passport, ...before } = await recordOf(preview.id)
+        await db.previewEnvironment.update({
+          where: { id: preview.id },
+          data: { runtime: before as object },
+        })
+        const candidate = await candidateOf(task.id, 1)
+        respond = answer(200)
+        await f.m.refresh(preview.id, { requested: true })
+        expect(await rowOf(preview.id)).toMatchObject({ status: 'ready', revision: 1 })
+        expect(await smokeOf(candidate.id)).toBe('failed')
+        expect(await baseBootOf(preview.id)).toBeUndefined()
+      })
+    })
+
+    it('serves a site that sends its home page to another host, as a suspect', async () => {
+      const { site, preview } = await dialog()
+      const f = manager({ adapters: () => readyAdapter })
+      await databaseAccess(f, site.id)
+      respond = answer(301, { 'x-raditi-stand': '1', location: 'https://example.ru/' }, '')
+      await f.m.refresh(preview.id, { requested: true })
+      expect(
+        await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } }),
+      ).toMatchObject({ status: 'ready', upstreamHost: upstream.host })
+      const passport = await passportOf(preview.id)
+      expect(passport).toMatchObject({ boot: 'suspect', differences: ['redirects_away'] })
+      expect(Number.isNaN(Date.parse(passport!.checkedAt))).toBe(false)
+    })
+
+    it('checks WordPress by the header of its wp-config.php before ready (Э1.6)', async () => {
+      const { site, preview } = await dialog()
+      const f = manager()
+      await databaseAccess(f, site.id)
+      // A page of the generated configuration: `x-raditi-preview: 1`.
+      await f.m.refresh(preview.id, { requested: true })
+      expect(
+        await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } }),
+      ).toMatchObject({ status: 'ready' })
+      expect(await passportOf(preview.id)).toMatchObject({ boot: 'not_compared', differences: [] })
+      expect(await baseBootOf(preview.id)).toBe('alive')
+      // A page without it, at the next build: WordPress did not start in the copy.
+      await db.previewEnvironment.update({ where: { id: preview.id }, data: { dirty: true } })
+      respond = answer(200, {}, '')
+      await f.m.refresh(preview.id, { requested: true })
+      expect(
+        await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } }),
+      ).toMatchObject({ status: 'unavailable', unavailableReason: 'boot_failed' })
+    })
+
+    it('serves a closed home page with the header, as a suspect', async () => {
+      const { site, preview } = await dialog()
+      const f = manager({ adapters: () => readyAdapter })
+      await databaseAccess(f, site.id)
+      respond = answer(404, { 'x-raditi-stand': '1' })
+      await f.m.refresh(preview.id, { requested: true })
+      expect(
+        await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } }),
+      ).toMatchObject({ status: 'ready' })
+      expect(await passportOf(preview.id)).toMatchObject({ boot: 'suspect', differences: [] })
+      expect(await baseBootOf(preview.id)).toBe('alive')
+    })
+
+    it('serves a home page that twice gave nothing to read in time, as a suspect', async () => {
+      const { site, preview } = await dialog()
+      const f = manager({ adapters: () => readyAdapter })
+      await databaseAccess(f, site.id)
+      let asked = 0
+      // Never answers: the request runs out of its time, then once more.
+      respond = () => {
+        asked++
+      }
+      requests.timeoutMs = 300
+      await f.m.refresh(preview.id, { requested: true })
+      expect(asked).toBe(2)
+      expect(
+        await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } }),
+      ).toMatchObject({ status: 'ready', upstreamHost: upstream.host })
+      expect(f.runtime.calls).not.toContain('stop')
+      expect(f.runtime.running.has(preview.id)).toBe(true)
+      expect(await passportOf(preview.id)).toMatchObject({ boot: 'suspect', differences: [] })
+      expect(await baseBootOf(preview.id)).toBe('alive')
+    })
+
+    it('stops nothing when the preview was taken over before the check ended', async () => {
+      const { site, preview } = await dialog()
+      const f = manager({ adapters: () => readyAdapter, heartbeatMs: 50 })
+      await databaseAccess(f, site.id)
+      // Another core takes the preview while its home page is asked; then the page is dead.
+      respond = (_request, response) => {
+        void (async () => {
+          await db.$executeRaw`
+            UPDATE preview_environments SET lease_epoch = lease_epoch + 1
+            WHERE id = ${preview.id}::uuid`
+          await new Promise((resolve) => setTimeout(resolve, 400))
+          response.writeHead(200).end('<html>dead</html>')
+        })()
+      }
+      await f.m.refresh(preview.id, { requested: true })
+      expect(f.runtime.calls).not.toContain('stop')
+      expect(f.runtime.running.has(preview.id)).toBe(true)
+      expect(
+        await db.previewEnvironment.findUniqueOrThrow({ where: { id: preview.id } }),
+      ).toMatchObject({ status: 'building', unavailableReason: null })
+    })
   })
 
   it('destroys the preview of a closed dialog with its secrets and its seed', async () => {

@@ -46,6 +46,7 @@ import {
   optionNameOf,
   recordIdOf,
   recordTypeOf,
+  workingSetMatcher,
   workspaceTransitKey,
   type DbObjectState,
   type DbOperation,
@@ -79,6 +80,7 @@ import {
   type ReleaseGit,
   type TrustedCommitInput,
 } from '../git-workspace/release-git.ts'
+import { hasSiteAccess } from '../site-content/site-access.ts'
 import { readSiteEnvValuesToRefuse } from '../site-env/site-env-values.ts'
 import {
   sealDbOperationValue,
@@ -212,7 +214,10 @@ export interface ReleaseSkillDependencies {
   storage: Pick<ObjectStorage, 'putIfAbsent' | 'get'>
   adapter: (
     stack: SiteStack,
-  ) => Pick<SiteAdapter, 'dbOperationKinds' | 'dbSettings' | 'protectedPaths' | 'mediaRules'>
+  ) => Pick<
+    SiteAdapter,
+    'dbOperationKinds' | 'dbSettings' | 'protectedPaths' | 'agentWorkingSet' | 'mediaRules'
+  >
   /**
    * The content gateway of production through its plugin (the site's `wp` access, the address
    * rule of a site): the readiness reads what a plan's preconditions say before `main` moves.
@@ -221,9 +226,11 @@ export interface ReleaseSkillDependencies {
   production: ProductionContent | null
   /**
    * The kind of access the content plugin of a stack reads (`SiteContentAdapter.accessKind`);
-   * throws for a stack without one. A release with a database plan needs it.
+   * null — the stack has no content adapter (`findSiteContentAdapter`, docs/plan/62-site-stacks.md,
+   * Т8), and a release with a database plan is refused. Any other failure is not one of its
+   * answers and goes up as it is.
    */
-  contentAccessKind: (stack: SiteStack) => SiteAccessKind
+  contentAccessKind: (stack: SiteStack) => SiteAccessKind | null
   /**
    * The release API deploy jobs call; null — RELEASE_API_HOST is unset, and every release is
    * refused before `main` moves.
@@ -553,17 +560,13 @@ export class ReleaseSkill {
       select: { kind: true },
     })
     const hosting = source ? hostingAccessKind(source.kind) : null
-    if (hosting === null || !(await this.#hasAccess(tx, row.siteId, hosting)))
+    if (hosting === null || !(await hasSiteAccess(tx, row.siteId, hosting)))
       return releaseErrors.noHosting
     const writes = dbUndoPlanSchema.safeParse(row.undoPlan.dbPlan)
     if (!writes.success) return releaseErrors.undoPlanChanged
     if (writes.data.length > 0) {
-      const content = this.#contentAccessKind(row.site.stack)
-      if (
-        !this.deps.values ||
-        content === null ||
-        !(await this.#hasAccess(tx, row.siteId, content))
-      )
+      const content = this.deps.contentAccessKind(row.site.stack)
+      if (!this.deps.values || content === null || !(await hasSiteAccess(tx, row.siteId, content)))
         return releaseErrors.dbPlan
     }
     return null
@@ -611,7 +614,7 @@ export class ReleaseSkill {
       select: { kind: true },
     })
     const hosting = source ? hostingAccessKind(source.kind) : null
-    if (hosting === null || !(await this.#hasAccess(tx, row.siteId, hosting)))
+    if (hosting === null || !(await hasSiteAccess(tx, row.siteId, hosting)))
       return releaseErrors.noHosting
     const plan = releasablePlan(candidate.dbPlan, this.#dbOperationKinds(row))
     if (plan === null) return releaseErrors.dbPlan
@@ -622,12 +625,12 @@ export class ReleaseSkill {
       .safeParse(candidate.facts)
     if (!counted.success || counted.data.createdIdFiles > 0) return releaseErrors.createdIdInCode
     if (plan.length > 0) {
-      const content = this.#contentAccessKind(row.site.stack)
+      const content = this.deps.contentAccessKind(row.site.stack)
       if (
         !this.deps.values ||
         !this.deps.production ||
         content === null ||
-        !(await this.#hasAccess(tx, row.siteId, content))
+        !(await hasSiteAccess(tx, row.siteId, content))
       )
         return releaseErrors.dbPlan
       return this.#viewRefusal(candidate.dbView, candidate.dbPlanSha256, plan.length)
@@ -661,19 +664,12 @@ export class ReleaseSkill {
     })
   }
 
-  async #hasAccess(
-    tx: Pick<Prisma.TransactionClient, 'credentialRef'>,
-    siteId: string,
-    kind: SiteAccessKind,
-  ): Promise<boolean> {
-    return (await tx.credentialRef.count({ where: { siteId, kind } })) === 1
-  }
-
   /**
    * The second line of rule 6: the release commit changes, against `main`, the candidate's files
    * and adds its media — and none of them may be a path publication could not have written (a
-   * CI path, a protected one, media outside its add-only folders or named by a protected pattern
-   * at any depth). The trusted side built the
+   * CI path, a protected one, a file outside the working set or under an add-only folder, media
+   * outside its add-only folders or named by a protected pattern at any depth), as
+   * `assertCandidateChange` reads it. The trusted side built the
    * candidate from its commits, but the head of `agent/<taskId>` is the only thing it checks
    * them against, and a head that someone else moved would be released as it is.
    */
@@ -683,9 +679,16 @@ export class ReleaseSkill {
     if (!changed.success || !added.success) return false
     const rules = this.#pathRules(row)
     if (rules === null) return false
-    const { protectedPaths, addOnlyPaths } = rules
+    const { protectedPaths, addOnlyPaths, inWorkingSet } = rules
     return (
-      changed.data.every((file) => !isForbiddenPath(file.path, protectedPaths)) &&
+      changed.data.every(
+        (file) =>
+          // Under an add-only folder publication only adds media, and media is no file of a
+          // candidate (`assertCandidateChange`): a changed or deleted file there is refused.
+          addOnlyPathOf(file.path, addOnlyPaths) === undefined &&
+          inWorkingSet(file.path) &&
+          !isForbiddenPath(file.path, protectedPaths),
+      ) &&
       added.data.every(
         (file) =>
           addOnlyPathOf(file.path, addOnlyPaths) !== undefined &&
@@ -694,22 +697,24 @@ export class ReleaseSkill {
     )
   }
 
-  /** The paths a release may not write (rule 6) and where it only adds media; null — unknown. */
-  #pathRules(
-    row: ReleaseRow,
-  ): { protectedPaths: string[]; addOnlyPaths: readonly string[] } | null {
+  /**
+   * The paths a release may not write (rule 6), the working set it may change and where it only
+   * adds media; null — unknown.
+   */
+  #pathRules(row: ReleaseRow): {
+    protectedPaths: string[]
+    addOnlyPaths: readonly string[]
+    inWorkingSet: (path: string) => boolean
+  } | null {
     const site = { stack: row.site.stack, url: row.site.url, docroot: '/', extras: {} }
     try {
       const adapter = this.deps.adapter(row.site.stack)
       const protectedPaths = adapter.protectedPaths(site)
-      let addOnlyPaths: readonly string[] = []
-      try {
-        addOnlyPaths = adapter.mediaRules(site).addOnlyPaths
-      } catch (error) {
-        // A stack without media rules adds no media.
-        if (!isDomainError(error) || error.code !== 'NOT_IMPLEMENTED') throw error
-      }
-      return { protectedPaths, addOnlyPaths }
+      // A stack with files says its media rules (Т8) and its working set; a stack that cannot
+      // refuses the release.
+      const { addOnlyPaths } = adapter.mediaRules(site)
+      const inWorkingSet = workingSetMatcher(adapter.agentWorkingSet(site))
+      return { protectedPaths, addOnlyPaths, inWorkingSet }
     } catch {
       return null
     }
@@ -726,14 +731,6 @@ export class ReleaseSkill {
       })
     } catch {
       return []
-    }
-  }
-
-  #contentAccessKind(stack: SiteStack): SiteAccessKind | null {
-    try {
-      return this.deps.contentAccessKind(stack)
-    } catch {
-      return null
     }
   }
 

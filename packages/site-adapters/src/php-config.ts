@@ -152,6 +152,30 @@ export function phpStringsAfter(file: Uint8Array, before: RegExp, after: RegExp)
   return values
 }
 
+/**
+ * `true`, `false`, `null` in any letter case, or a decimal integer without a sign, a leading zero,
+ * a separator or more than nineteen digits: `017` is octal to PHP and `1_000` is not the digits.
+ */
+const bareLiteral = /(?:true|false|null|0|[1-9][0-9]{0,18})(?![A-Za-z0-9_\x80-\xff])/iy
+
+/**
+ * As phpStringsAfter, for bare literals: `true`, `false`, `null`, an integer. The three constants
+ * come lower case, an integer as its digits; a string, a call, a constant or an expression gives
+ * no value.
+ */
+export function phpBareAfter(file: Uint8Array, before: RegExp, after: RegExp): string[] {
+  const source = toByteString(file)
+  const head = new RegExp(before.source, before.ignoreCase ? 'gi' : 'g')
+  const tail = new RegExp(after.source, 'y')
+  const values: string[] = []
+  for (const match of source.matchAll(head)) {
+    const literal = matchAt(bareLiteral, source, match.index + match[0].length)
+    if (!literal || !matchAt(tail, source, literal.index + literal[0].length)) continue
+    values.push(literal[0].toLowerCase())
+  }
+  return values
+}
+
 /** `phpStringsAfter` over one file of the site root; nothing when the reader has no such file. */
 export async function phpConfigStrings(
   read: ConfigFileReader,

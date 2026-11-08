@@ -6,15 +6,31 @@
 | --- | --- | --- |
 | `tools` | `PREVIEW_FORWARDER_IMAGE` | Node 26.10 и tini; `forward.mjs` — пересыльщик браузера агента (шлюз входа — тот же скрипт в образе `site`), `files.mjs` — запись дерева в том docroot; метка срока предпросмотра |
 | `browser` | `PREVIEW_BROWSER_IMAGE` | Chromium образа Playwright 1.63.0, `playwright-core` 1.63.0 из `browser/package-lock.json` (`npm ci`, без скриптов установки), `browser-server.mjs` |
-| `site` | `PREVIEW_SITE_IMAGES` (по версии PHP) | Предпросмотр одним контейнером ([план 58](../../docs/plan/58-preview-single-container.md), §10): PHP и Apache образа `BASE` (WordPress одной версии PHP по digest), MariaDB 11.8.9, WP-CLI 2.12.0, Node 26.10 из цели `tools`, tini; `init.sh`, `run-as.sh`, `forward.mjs`, `dns.mjs` |
+| `site` | `PREVIEW_SITE_IMAGES` (по версии PHP) | Предпросмотр одним контейнером ([план 58](../../docs/plan/58-preview-single-container.md), §10): PHP и Apache стадии `php-base` — официального образа `php:<x.y>-apache` одной из восьми версий PHP 7.3–8.5 по digest ([план 62](../../docs/plan/62-site-stacks.md), Т19, Т22), MariaDB 11.8.9, WP-CLI 2.12.0, Node 26.10 из цели `tools`, tini; `init.sh`, `run-as.sh`, `forward.mjs`, `dns.mjs` |
 
-Образ `site` собирается на версию PHP: `--build-arg BASE=wordpress@sha256:…` (по умолчанию — PHP 8.3, тот же digest, что в `.env.example`):
+Образ `site` без аргументов сборки — PHP 8.3 на основе `php:8.3-apache`:
+
+```sh
+docker build -f infra/preview/Dockerfile --target site -t "raditi-preview-site:8.3-local" infra/preview
+```
+
+Сборка на другую версию берёт строку `site-bases.json`; её ведёт стенд:
+
+```sh
+pnpm verify:site-images --only 7.4   # собирает, проверяет, печатает строку PREVIEW_SITE_IMAGES
+```
+
+Путь назад — только PHP 8.3: `--build-arg BASE=wordpress@sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5` (до плана 62 основой `site` был образ WordPress; откат — план 62, Э1.5).
+
+Стадия `php-base` ([план 62](../../docs/plan/62-site-stacks.md), Т19, Т21) — основа, общая для всех стеков: официальный образ `php:<x.y>-apache` одной версии PHP по digest индекса (amd64 и arm64 — одна строка), восемь версий 7.3–8.5 в `site-bases.json`. В ней 26 расширений через `install-php-extensions` (выпуск и sha256 закреплены, версии PECL — строка `pecl` этой версии), ionCube Loader на всех версиях, кроме 8.0, вместе с его `LICENSE.txt` (архив производителя по sha256 своей архитектуры), `ghostscript`, на trixie — `libheif`, модули Apache `rewrite`, `expires`, `remoteip`, `headers` без `status`, `preview-php.ini` (журнал ошибок и OPcache, как в образе WordPress, `display_errors=Off`) и `no-sendmail`: письмо `mail()` дочитывается и пропадает. Установщик и архив ionCube в образ не попадают — они только смонтированы в шаг сборки. О стеках в образе ничего нет: их различия идут в рецепте. Цель `site` стоит на этой стадии по умолчанию (`BASE=php-base`). Строка `site-bases.json` даёт остальные аргументы:
 
 ```sh
 docker build -f infra/preview/Dockerfile --target site \
-  --build-arg BASE=wordpress@sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5 \
-  -t "raditi-preview-site:8.3-local" infra/preview
+  --build-arg PHP_BASE=php@sha256:… --build-arg PHP_PECL_PINS="<pecl строки через пробел>" \
+  --build-arg PHP_EXTENSIONS_SKIP="<without строки через пробел>" -t "raditi-site-verify:<версия>" infra/preview
 ```
+
+Значения по умолчанию `PHP_BASE` и `PHP_PECL_PINS` — строка 8.3. Строка таблицы: `image` — только индекс (`application/vnd.oci.image.index.v1+json` или список манифестов Docker) с `linux/amd64` и `linux/arm64`; `debian` — `VERSION_CODENAME` образа; `without` — расширения, которые на этой версии не собираются (девять — `bcmath`, `exif`, `gd`, `imagick`, `intl`, `mysqli`, `zip`, `pdo_mysql`, `opcache` — обязательны везде, у 8.3 `without` пуст); `pecl` — точные версии `apcu`, `imagick`, `mcrypt`, `memcached`, `redis` и, с 8.0, `xmlrpc`. Таблицу и шаг сверяет `site.test.mjs`.
 
 MariaDB — из архива mariadb.org по точной версии, ключ проверяется отпечатком `177F 4010 FE56 CA33 3630 0305 F165 6F24 C74C D1D8` (`mariadb-release-signing-key.asc`, проверку держит `site.test.mjs`). Версия 11.8, а не 11.4, как у `PREVIEW_DB_IMAGE`: 11.4 для Debian 13 (trixie), на котором стоят образы PHP 8.2 и новее, не собирается, а 11.8.9 есть и для bullseye, и для bookworm, и для trixie. Временная база дампа (`PREVIEW_DB_IMAGE`, `StagingDatabaseRuntime`) остаётся на 11.4: копия переносит данные запросами SQL, версии не обязаны совпадать.
 
@@ -53,4 +69,5 @@ Digest локальной сборки есть только в хранилищ
 - `pnpm test:infra` — разбор маршрутов, проверка `Host` и пересылка, разбор tar и кадра, подготовка тома, аргументы браузера; запись дерева проверяется только на Linux (`/proc/self/fd`).
 - `RADITI_PREVIEW_DOCKER_TESTS=1 pnpm --filter @repo/sandbox-providers exec vitest run src/preview/runtime.integration.test.ts` — среда на настоящем Docker с образами `raditi-preview-site:8.3-local`, `raditi-preview-tools:local`, `raditi-preview-browser:local` и `raditi-network-guard:local` (или `SANDBOX_NETWORK_GUARD_IMAGE`); `PREVIEW_RUNTIME=runsc` — под gVisor, `SANDBOX_DOCKER_SOCKET` — другой демон (например, Colima: `~/.colima/<профиль>/docker.sock`).
 - `pnpm verify:preview-network` — сеть предпросмотра со всех сторон ([README стенда](../dev/preview-verify/README.md)).
-- В CI — `.github/workflows/preview.yml`.
+- `pnpm verify:site-images [-- --only 7.4,8.3]` — образ `site` каждой строки `site-bases.json` на стадии `php-base`, снаружи настоящей средой ([план 62](../../docs/plan/62-site-stacks.md), Э1.2, М1; [README стенда](../dev/preview-verify/README.md), «Образы `site`»): `php -m` против модулей основы и списка, `init.sh`, база, правила рецепта, закрытый `/server-status`, ini стека под Apache и через `run-as.sh`, почта, OPcache, ionCube, IPC, картинки, WP-CLI, uid, и настоящий WordPress на каждой версии его рецепта. Рецепт стенда берёт общие файлы рецепта стека — `site-apache.conf` (конфигурация Apache без правил стека: на месте строки `    # RADITI_SITE_RULES` рецепт ставит свои) и `prologue.php` (первое, что делает сгенерированная конфигурация стека: 503, пока нет настроек, заголовок `X-Raditi-Preview: 1`, адрес предпросмотра в `$_SERVER`); в образ они не входят, в продукте их вшивает Э3. В конце стенд печатает готовую строку `PREVIEW_SITE_IMAGES=8.3=raditi-site-verify@sha256:…` собранных версий, у которых прошли все строки: digest у каждой машины и архитектуры свой, в файлы его стенд не пишет.
+- В CI — `.github/workflows/preview.yml` и `.github/workflows/site-images.yml`: по job на каждую версию таблицы `site-bases.json` — `pnpm verify:site-images --only <версия>` на `linux/amd64` под `runc`, на PR по образу, стенду и рецепту WordPress, раз в месяц и вручную; образ `wordpress@sha256:8ae73d59…`, из которого стенд берёт ядро, и основу версии job загружает по digest шагом до стенда. Месячный и ручной прогоны ещё сканируют собранный образ Trivy (по digest, `HIGH` и `CRITICAL`, без отправки данных об использовании и проверки версий): число находок — в итоге job, отчёт — артефакт `site-image-scan-<версия>` на 30 дней; находки и сбой сканера job красным не делают (Т23). Workflow ничего не отправляет: публикация образов и строка `PREVIEW_SITE_IMAGES` — M10.

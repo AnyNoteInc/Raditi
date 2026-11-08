@@ -1,7 +1,13 @@
 import type { INestApplication } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
 import type { Registry } from '@prometheus-io/client'
-import type { DatabaseEngine, DatabaseInspector, SiteRepositoryProvisioner } from '@repo/domain'
+import {
+  closedStackRoots,
+  type DatabaseEngine,
+  type DatabaseInspector,
+  type SiteRepositoryProvisioner,
+} from '@repo/domain'
+import { siteAdapters } from '@repo/site-adapters'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { AppModule } from '../app.module.ts'
@@ -12,6 +18,7 @@ import { SiteImportProcessor } from './site-import.processor.ts'
 import { siteImportOutcomes, SiteImportRunner } from './site-import.runner.ts'
 import { SiteImportSweeper } from './site-import.sweeper.ts'
 import {
+  CLOSED_STACK_ROOTS,
   SITE_DATABASES,
   SITE_REPOSITORY_PROVISIONER,
   SITE_SOURCES,
@@ -74,6 +81,17 @@ describe('SiteProvisioningModule in the core role', () => {
     })
     const provisioner = both.app.get<SiteRepositoryProvisioner>(SITE_REPOSITORY_PROVISIONER)
     expect(typeof provisioner.ensureRepository).toBe('function')
+  })
+
+  it('gives the import the folders of every stack closed for files (fact 14)', async () => {
+    const { app } = await core()
+    const closedRoots = app.get<readonly (readonly string[])[]>(CLOSED_STACK_ROOTS)
+
+    // An empty list would let the walk copy the core of such a stack into the repository.
+    expect(closedRoots.length).toBeGreaterThan(0)
+    expect(closedRoots).toEqual(closedStackRoots(siteAdapters()))
+    for (const adapter of siteAdapters().filter((one) => one.support.files === 'off'))
+      expect(closedRoots).toContainEqual(adapter.rootMarkers())
   })
 
   it('exposes a counter of jobs by outcome only, at zero from the start', async () => {

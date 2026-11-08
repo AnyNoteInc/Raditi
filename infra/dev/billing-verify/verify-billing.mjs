@@ -35,6 +35,7 @@ import {
   realpath,
   rename,
   rm,
+  rmdir,
   writeFile,
 } from 'node:fs/promises'
 import { createRequire } from 'node:module'
@@ -77,6 +78,7 @@ import {
   coreEnvironment,
   databaseEnvironment,
   isRunDirectory,
+  keptFolder,
   letterReaderEnvironment,
   lettersOf,
   logDirectory,
@@ -93,6 +95,7 @@ import {
   runRecord,
   staleCopy,
   staleCopyAllowed,
+  staleDirectories,
   staleFiles,
   standOptions,
   sweepLine,
@@ -299,7 +302,10 @@ async function syncCopy(copy) {
   const manifest = join(marker, 'manifest')
   const previous = (await readFile(manifest, 'utf8').catch(() => '')).split('\0').filter(Boolean)
   await writeFile(manifest, manifestDuringCopy(previous, present).join('\0'))
-  for (const path of staleFiles(previous, present)) await rm(join(copy, path), { force: true })
+  const stale = staleFiles(previous, present)
+  for (const path of stale) await rm(join(copy, path), { force: true })
+  for (const folder of staleDirectories(stale, present))
+    await rmdir(join(copy, folder)).catch(keptFolder)
   await command('rsync', ['-a', '--from0', '--files-from=-', `${root}/`, `${copy}/`], {
     input: present.join('\0'),
   })
@@ -723,6 +729,7 @@ async function main(options, owned) {
   })
   owned.fake = fake
   const shared = {
+    run: runId,
     path: callerEnv.PATH,
     directory,
     ports,

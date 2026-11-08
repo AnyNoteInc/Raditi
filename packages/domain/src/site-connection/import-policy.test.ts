@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest'
 
 import { isDomainError } from '../errors.ts'
+import type { SiteAdapter } from '../ports/site-adapter.ts'
 import { isPublicationPath } from '../git/publication.ts'
 import { forbiddenCiPaths } from '../policies/diff-paths.ts'
-import { createImportPathPolicy, isImportSegment, isNestedSiteRoot } from './import-policy.ts'
+import {
+  closedStackRoots,
+  createImportPathPolicy,
+  importPolicyOf,
+  isImportSegment,
+  isNestedSiteRoot,
+} from './import-policy.ts'
 
 const REPLACEMENT = String.fromCharCode(0xfffd)
 const LONE_SURROGATE = String.fromCharCode(0xd800)
@@ -94,7 +101,7 @@ describe('createImportPathPolicy', () => {
       ['.gitx/file', 'file'],
       ['svn/readme.txt', 'file'],
       // Lower case is an ordinary folder name («CVs»); the tool writes `CVS`.
-      ['cvs/ivanov.pdf', 'file'],
+      ['cvs/ivanov.txt', 'file'],
       ['hg/readme.txt', 'file'],
     ] as const)('does not take %s for a version control folder', (path, type) => {
       expect(nothingExcluded.decide(path, type)).toBe('take')
@@ -306,6 +313,231 @@ describe('createImportPathPolicy', () => {
     })
   })
 
+  describe('documents (plan 62, Т57)', () => {
+    it.each([
+      'a/price.pdf',
+      'A/PRICE.PDF',
+      'x.doc',
+      'x.docx',
+      'x.docm',
+      'x.dot',
+      'x.dotx',
+      'x.dotm',
+      'x.odt',
+      'x.rtf',
+    ])('leaves the document %s out without a folder of the adapter', (path) => {
+      expect(nothingExcluded.decide(path, 'file')).toBe('document')
+    })
+
+    it.each([
+      ['x.pdf.txt', 'file'],
+      ['docs.pdf', 'directory'],
+      ['class.document.php', 'file'],
+      ['system/helper/HTMLPurifier/ConfigSchema/schema/HTML.Doctype.txt', 'file'],
+      ['.dockerignore', 'file'],
+    ] as const)('takes %s: no document', (path, type) => {
+      expect(nothingExcluded.decide(path, type)).toBe('take')
+    })
+
+    it('takes a document only below a folder the adapter names, from the root', () => {
+      const media = createImportPathPolicy([], ['media/'])
+      expect(media.decide('media/2026/x.pdf', 'file')).toBe('take')
+      expect(media.decide('Media/2026/X.PDF', 'file')).toBe('take')
+      expect(media.decide('other/media/x.pdf', 'file')).toBe('document')
+      expect(media.decide('media.pdf', 'file')).toBe('document')
+    })
+
+    it('lets an exclude line win over a folder of documents', () => {
+      const media = createImportPathPolicy(['/media/forms/'], ['media/'])
+      expect(media.decide('media/forms/passport.pdf', 'file')).toBe('excluded')
+    })
+
+    it('builds the policy of an adapter from both fields of its rules', () => {
+      const rules = { exclude: ['*.log'], documentFolders: ['media/'] }
+      expect(importPolicyOf(rules).decide('media/x.pdf', 'file')).toBe('take')
+      expect(importPolicyOf(rules).decide('x.pdf', 'file')).toBe('document')
+      expect(importPolicyOf(rules).decide('media/x.log', 'file')).toBe('excluded')
+    })
+
+    it.each(['/media/', 'media', 'me*dia/', 'media/../', '../media/', 'media//', '', '/'])(
+      'refuses the document folder %j at construction',
+      (folder) => {
+        let thrown: unknown
+        try {
+          createImportPathPolicy([], ['media/', folder])
+        } catch (error) {
+          thrown = error
+        }
+        expect(isDomainError(thrown)).toBe(true)
+        expect(thrown).toMatchObject({
+          code: 'BAD_REQUEST',
+          message: `Unsupported import document folder: "${folder}"`,
+        })
+      },
+    )
+  })
+
+  describe('copies of the configuration (`configCopies`, Э3.3)', () => {
+    const anyDepth = { names: ['config.php'], except: ['vendor/', 'core/lib/'], maxDepth: null }
+
+    it.each([
+      'config.php',
+      'old/config.php',
+      'a/b/c/d/config.php',
+      'Old/CONFIG.PHP',
+      // A folder that only starts like one of `except` is not it.
+      'vendors/config.php',
+      'core/config.php',
+      'core/library/config.php',
+    ])('leaves out %s at any depth outside `except`', (path) => {
+      expect(createImportPathPolicy([], [], anyDepth).decide(path, 'file')).toBe('excluded')
+    })
+
+    it.each([
+      'vendor/config.php',
+      'vendor/x/y/config.php',
+      'Vendor/X/Config.php',
+      'core/lib/config.php',
+      'core/lib/a/config.php',
+      // An exact name: no prefix, no suffix, no other name.
+      'old/config.php.txt',
+      'old/my-config.php',
+      'old/configphp',
+    ])('takes %s', (path) => {
+      expect(createImportPathPolicy([], [], anyDepth).decide(path, 'file')).toBe('take')
+    })
+
+    it('judges files only: a folder of that name is entered', () => {
+      expect(createImportPathPolicy([], [], anyDepth).decide('old/config.php', 'directory')).toBe(
+        'take',
+      )
+    })
+
+    it('looks no deeper than `maxDepth` folders above the file', () => {
+      const shallow = createImportPathPolicy([], [], { ...anyDepth, maxDepth: 1 })
+      expect(shallow.decide('config.php', 'file')).toBe('excluded')
+      expect(shallow.decide('old/config.php', 'file')).toBe('excluded')
+      expect(shallow.decide('a/old/config.php', 'file')).toBe('take')
+      const rootOnly = createImportPathPolicy([], [], { ...anyDepth, maxDepth: 0 })
+      expect(rootOnly.decide('config.php', 'file')).toBe('excluded')
+      expect(rootOnly.decide('old/config.php', 'file')).toBe('take')
+    })
+
+    it('decides as before without the field, and the exclude lines do not change', () => {
+      for (const [path, decision] of [
+        ['old/config.php', 'take'],
+        ['vendor/config.php', 'take'],
+        ['a.log', 'excluded'],
+        ['x.pdf', 'document'],
+      ] as const)
+        expect(createImportPathPolicy(['*.log']).decide(path, 'file')).toBe(decision)
+      expect(createImportPathPolicy([]).decide('old/config.php', 'file')).toBe('take')
+      expect(createImportPathPolicy(['*.log'], [], anyDepth).decide('vendor/a.log', 'file')).toBe(
+        'excluded',
+      )
+      // `except` opens nothing an exclude line closes.
+      expect(
+        createImportPathPolicy(['vendor/'], [], anyDepth).decide('vendor/config.php', 'file'),
+      ).toBe('excluded')
+    })
+
+    it('builds the policy of an adapter with the copies of its rules', () => {
+      const rules = { exclude: ['*.log'], documentFolders: ['media/'], configCopies: anyDepth }
+      expect(importPolicyOf(rules).decide('old/config.php', 'file')).toBe('excluded')
+      expect(importPolicyOf(rules).decide('vendor/config.php', 'file')).toBe('take')
+      expect(importPolicyOf(rules).decide('media/x.pdf', 'file')).toBe('take')
+      expect(
+        importPolicyOf({ exclude: [], documentFolders: [] }).decide('old/config.php', 'file'),
+      ).toBe('take')
+    })
+
+    it.each([
+      [{ names: [], except: [], maxDepth: null }],
+      [{ names: [''], except: [], maxDepth: null }],
+      [{ names: ['a/config.php'], except: [], maxDepth: null }],
+      [{ names: ['config*.php'], except: [], maxDepth: null }],
+      [{ names: ['..'], except: [], maxDepth: null }],
+      [{ names: ['config.php'], except: ['/vendor/'], maxDepth: null }],
+      [{ names: ['config.php'], except: ['vendor'], maxDepth: null }],
+      [{ names: ['config.php'], except: ['ven*dor/'], maxDepth: null }],
+      [{ names: ['config.php'], except: [], maxDepth: -1 }],
+      [{ names: ['config.php'], except: [], maxDepth: 1.5 }],
+    ])('refuses the copies %j at construction', (copies) => {
+      let thrown: unknown
+      try {
+        createImportPathPolicy([], [], copies)
+      } catch (error) {
+        thrown = error
+      }
+      expect(isDomainError(thrown)).toBe(true)
+      expect(thrown).toMatchObject({ code: 'BAD_REQUEST' })
+      expect((thrown as Error).message).toMatch(/^Unsupported import config copies: /)
+    })
+  })
+
+  describe('files of the release (`coreFiles`, Э3.11)', () => {
+    const exclude = ['*.sql', '*.pem', 'old/', '/configuration*']
+    const core = ['/admin/sql/updates/mysql/*.sql', '/lib/res/cacert.pem']
+    const policy = createImportPathPolicy(exclude, [], undefined, core)
+
+    it.each(['admin/sql/updates/mysql/4.0.0-2018-03-05.sql', 'lib/res/cacert.pem'])(
+      'takes %s, which the exclude lines leave out',
+      (path) => {
+        expect(createImportPathPolicy(exclude).decide(path, 'file')).toBe('excluded')
+        expect(policy.decide(path, 'file')).toBe('take')
+      },
+    )
+
+    it.each([
+      // Another folder, another depth, another name or another letter case.
+      'admin/sql/updates/postgresql/4.0.0.sql',
+      'admin/sql/updates/mysql/x/4.0.0.sql',
+      'x/admin/sql/updates/mysql/4.0.0.sql',
+      'admin/sql/dump.sql',
+      'admin/sql/updates/mysql/4.0.0.sql.gz',
+      'admin/sql/updates/mysql/4.0.0.SQL',
+      'Admin/sql/updates/mysql/4.0.0.sql',
+      'lib/res/cacert.pem.bak',
+      'lib/res/server.pem',
+      'lib/cacert.pem',
+      'lib/res/x/cacert.pem',
+    ])('decides %s as without the field', (path) => {
+      expect(policy.decide(path, 'file')).toBe(createImportPathPolicy(exclude).decide(path, 'file'))
+    })
+
+    it('judges files only, and never takes past version control and CI', () => {
+      expect(
+        createImportPathPolicy(['cacert.pem/'], [], undefined, ['/cacert.pem']).decide(
+          'cacert.pem',
+          'directory',
+        ),
+      ).toBe('excluded')
+      expect(createImportPathPolicy([], [], undefined, ['/.git/x']).decide('.git/x', 'file')).toBe(
+        'vcs',
+      )
+      expect(
+        createImportPathPolicy([], [], undefined, ['/.gitmodules']).decide('.gitmodules', 'file'),
+      ).toBe('ci')
+    })
+
+    it('builds the policy of an adapter with the files of its rules', () => {
+      const rules = { exclude, documentFolders: [], coreFiles: core }
+      expect(importPolicyOf(rules).decide('lib/res/cacert.pem', 'file')).toBe('take')
+      expect(
+        importPolicyOf({ exclude, documentFolders: [] }).decide('lib/res/cacert.pem', 'file'),
+      ).toBe('excluded')
+    })
+
+    it.each(['admin/x.sql', '/admin/', '/admin/*/x.sql', '/**/x.sql', '/a/[x].sql', '/a/../x.sql'])(
+      'refuses the line %s at construction',
+      (line) => {
+        expect(() => createImportPathPolicy([], [], undefined, [line])).toThrow(
+          /^Unsupported import core file: /,
+        )
+      },
+    )
+  })
+
   describe('lines outside the supported subset', () => {
     it.each([
       '**/cache',
@@ -436,5 +668,35 @@ describe('isImportSegment', () => {
     'я'.repeat(128),
   ])('refuses %j', (name) => {
     expect(isImportSegment(name)).toBe(false)
+  })
+})
+
+describe('closedStackRoots', () => {
+  const adapter = (
+    files: SiteAdapter['support']['files'],
+    markers: string[],
+    coreFolder: string[] | null,
+  ): Pick<SiteAdapter, 'support' | 'rootMarkers' | 'recognition'> => ({
+    support: { files } as SiteAdapter['support'],
+    rootMarkers: () => markers,
+    recognition: { coreFolder } as SiteAdapter['recognition'],
+  })
+
+  it('names the root and the core of a stack closed for files, never of an open one', () => {
+    expect(
+      closedStackRoots([
+        adapter('on', ['open-a', 'open-b'], ['open-core']),
+        adapter('off', ['closed', '.closed.php'], ['modules', 'kernel']),
+        adapter('dev', ['dev-a'], null),
+      ]),
+    ).toEqual([
+      ['closed', '.closed.php'],
+      ['modules', 'kernel'],
+    ])
+  })
+
+  it('leaves out an empty set: it would match every folder', () => {
+    expect(closedStackRoots([adapter('off', [], null), adapter('off', [], [])])).toEqual([])
+    expect(closedStackRoots([])).toEqual([])
   })
 })

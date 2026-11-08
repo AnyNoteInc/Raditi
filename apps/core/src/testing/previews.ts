@@ -1,7 +1,7 @@
 // Test doubles of the manager of previews: a runtime that keeps what it was told, a database
 // copier and its catalog, git of one repository, in-memory storage and Vault, the content of a
 // preview and of production. Only for *.test.ts files.
-import { createServer, type Server } from 'node:http'
+import { createServer, type RequestListener, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { zstdCompressSync } from 'node:zlib'
 
@@ -9,6 +9,7 @@ import {
   type ContentWriteOutcome,
   type ContentWriteRequest,
   type DatabaseCopier,
+  type DatabaseCopySummary,
   type KvSecret,
   type PreviewBrowserInput,
   type PreviewDatabasePasswords,
@@ -21,21 +22,40 @@ import {
   type PublishedContentGateway,
   type PublishedContentState,
   type SiteContentAdapter,
+  type SiteTree,
 } from '@repo/domain'
 import { wordpressContentAccessSchema } from '@repo/site-adapters'
 
 import { TAR_END, tarFileHeader, tarPadding } from '../git-workspace/tree-tar.ts'
 import type { PreviewSyncGit } from '../previews/preview-sync.ts'
+import type { PreviewSiteSources } from '../previews/site-sources.ts'
 import type { DbPlanValueOwner, DbPlanValueReader } from '../site-content/db-plan-values.ts'
 
 export const hash = (c: string) => c.repeat(64)
 
-/** A local HTTP server standing in for the entry forwarder of a preview. */
-export async function upstreamServer(): Promise<{ server: Server; upstream: PreviewUpstream }> {
-  const server = createServer((request, response) => {
-    if (request.url?.startsWith('/broken')) response.end('<b>Fatal error</b>: x')
-    else response.end('<html>ok</html>')
-  })
+/**
+ * What the entry forwarder of a preview answers by default: a page of WordPress — with the header
+ * of its wp-config.php — or a fatal error of PHP, which that wp-config.php ends with the mark of
+ * the key of a check (docs/plan/62-site-stacks.md, Т33).
+ */
+export const previewPage: RequestListener = (request, response) => {
+  response.setHeader('x-raditi-preview', '1')
+  const check = request.headers['x-raditi-check']
+  if (request.url?.startsWith('/broken'))
+    response.end(
+      `<b>Fatal error</b>: x${typeof check === 'string' ? `\n<!-- raditi-fatal:${check} -->\n` : ''}`,
+    )
+  else response.end('<html>ok</html>')
+}
+
+/**
+ * A local HTTP server standing in for the entry forwarder of a preview; `handler` — what it
+ * answers instead of `previewPage` (a dead or a moved site, docs/plan/62-site-stacks.md, Т33).
+ */
+export async function upstreamServer(
+  handler: RequestListener = previewPage,
+): Promise<{ server: Server; upstream: PreviewUpstream }> {
+  const server = createServer(handler)
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   return { server, upstream: { host: '127.0.0.1', port: (server.address() as AddressInfo).port } }
 }
@@ -165,16 +185,22 @@ export class FakeRuntime implements PreviewRuntime {
   }
 }
 
-export const fakeCopier = (sql = 'INSERT INTO `wp_posts` VALUES (1);\n'): DatabaseCopier => ({
+export const fakeCopier = (
+  sql = 'INSERT INTO `wp_posts` VALUES (1);\n',
+  summary: Partial<DatabaseCopySummary> = {},
+): DatabaseCopier => ({
   async copy(_input, write) {
     await write(Buffer.from(sql))
     return {
       tables: 1,
       structureOnly: 0,
+      leftOutTables: 0,
+      emptiedColumns: 0,
       rows: 1,
       bytes: sql.length,
       sha256: hash('5'),
       serverVersion: '11.4.13-MariaDB',
+      ...summary,
     }
   },
 })
@@ -199,6 +225,65 @@ export const fakeCatalog = (prefix = 'wp_') => ({
     }))
   },
 })
+
+/**
+ * A site root of `files` (path → content) as a session of its file source reads it: a file that
+ * is not there and a folder that is not there are null, as `siteTreeOf` answers them.
+ */
+export function memorySiteTree(files: Record<string, string>): SiteTree {
+  const paths = Object.keys(files)
+  return {
+    read: async (path) => (path in files ? new TextEncoder().encode(files[path]) : null),
+    async list(path) {
+      const prefix = path === '' ? '' : `${path}/`
+      const below = paths.filter((file) => file.startsWith(prefix))
+      if (below.length === 0) return null
+      const entries = new Map<string, 'file' | 'directory'>()
+      for (const file of below) {
+        const [name, ...rest] = file.slice(prefix.length).split('/')
+        if (name) entries.set(name, rest.length ? 'directory' : 'file')
+      }
+      return [...entries].map(([name, type]) => ({ name, type }))
+    },
+  }
+}
+
+/**
+ * The sources of a site whose root on the hosting is `root` — null: it has none, or it cannot be
+ * read now —, the access to its database and its dumps as `base` gives them. `roots` counts the
+ * sessions a build opened of the root (one at most, plan 62, Э2.9), `accesses` the reads of the
+ * access to its database.
+ */
+export function siteRootSources(
+  base: PreviewSiteSources,
+  root: Record<string, string> | null,
+): PreviewSiteSources & { roots: number; accesses: number } {
+  const sources = {
+    roots: 0,
+    accesses: 0,
+    databaseAccess: (siteId: string) => {
+      sources.accesses += 1
+      return base.databaseAccess(siteId)
+    },
+    withDump: base.withDump.bind(base),
+    async withRoot<T>(
+      _siteId: string,
+      signal: AbortSignal,
+      use: (tree: SiteTree) => Promise<T>,
+    ): Promise<T | null> {
+      sources.roots += 1
+      if (root === null) return null
+      try {
+        return await use(memorySiteTree(root))
+      } catch {
+        // As the real source: a cancelled build is not read as an unreadable hosting.
+        signal.throwIfAborted()
+        return null
+      }
+    },
+  }
+  return sources
+}
 
 export class FakeGit implements PreviewSyncGit {
   readonly exports: Array<{ sha: string; paths?: readonly string[] }> = []

@@ -310,18 +310,6 @@ class SftpTree {
       this.closeHandle(handle)
     }
   }
-
-  /** One READ of at most `bytes` at the start of the file: what a check needs to prove reading. */
-  async readHead(refs: readonly string[], bytes: number): Promise<void> {
-    const handle = await this.open(refs)
-    try {
-      await withinIdle(this.readAt(handle, 0, bytes), this.idleMs).catch((error: unknown) => {
-        throw sftpFailure(error)
-      })
-    } finally {
-      this.closeHandle(handle)
-    }
-  }
 }
 
 type SshAuth = { method: 'password'; password: string } | { method: 'key'; key: ParsedKey }
@@ -454,6 +442,10 @@ function connectSftp(login: SshLogin): Promise<SftpConnection> {
         keepaliveInterval: 15_000,
         keepaliveCountMax: 3,
       })
+      // Every SFTP request goes out at once. Without TCP_NODELAY a request written in two parts
+      // waits for the ACK the server delays (Nagle): on a Linux host a small file took 2.7 s
+      // instead of 1 ms, and the import of a CMS never ended (docs/plan/62-site-stacks.md, Э3.16).
+      client.setNoDelay(true)
     } catch {
       fail(new SiteConnectionError('unreachable'))
     }
@@ -572,13 +564,13 @@ export function createSftpSource(options: SftpSourceOptions = {}): FileSourceAda
         )
         const browser: CheckBrowser = {
           list: (directory, maxBytes) => tree.list(directory, Number.MAX_SAFE_INTEGER, maxBytes),
-          readHead: (path, bytes) => tree.readHead(path, bytes),
+          read: (path, sink, maxBytes) => tree.read(path, sink, maxBytes),
           // SFTP names are UTF-8 on the wire: what is listed is what a user types.
           typedSegment: (entry) => entry.name,
         }
         const inspection = await abortable(
           context.signal,
-          inspectRoot(browser, sftp.rootPath, context.markers),
+          inspectRoot(browser, sftp.rootPath, context),
         )
         if (!inspection.ok) return inspection
         return {
@@ -587,6 +579,7 @@ export function createSftpSource(options: SftpSourceOptions = {}): FileSourceAda
           canonicalUrl: null,
           defaultBranch: null,
           entries: inspection.entries,
+          inspection: inspection.inspection,
         }
       } catch (error) {
         return { ok: false, reason: checkReason(error, context.signal) }

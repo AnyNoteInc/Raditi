@@ -23,6 +23,23 @@ $raditi_preview = (static function () {
     return $settings;
 })();
 
+// The mark of a page this configuration served: `ready.header` of the recipe (docs/plan/62, Т33).
+if (PHP_SAPI !== 'cli' && !headers_sent()) {
+    header('X-Raditi-Preview: 1');
+}
+// A fatal error of PHP under a check of the platform ends the page with the key of that check:
+// a quote of a message on a live page cannot carry it (`ready.fatalMark`; §10, Э0-правки).
+$raditi_check = $_SERVER['HTTP_X_RADITI_CHECK'] ?? '';
+if (PHP_SAPI !== 'cli' && preg_match('/\A[0-9a-f]{32}\z/', $raditi_check) === 1) {
+    register_shutdown_function(static function () use ($raditi_check): void {
+        $error = error_get_last();
+        $fatal = E_ERROR | E_PARSE | E_CORE_ERROR | E_COMPILE_ERROR | E_USER_ERROR;
+        if ($error !== null && ($error['type'] & $fatal) !== 0) {
+            echo "\n<!-- raditi-fatal:{$raditi_check} -->\n";
+        }
+    });
+}
+
 // The database of the preview's own container, on its loopback (docs/plan/58).
 $raditi_database = $raditi_preview['database'];
 define('DB_NAME', (string) $raditi_database['name']);
@@ -106,6 +123,6 @@ foreach ((array) ($raditi_preview['env'] ?? array()) as $raditi_name => $raditi_
     }
 }
 unset($raditi_preview, $raditi_database, $raditi_settings, $raditi_name, $raditi_origin, $raditi_value,
-    $raditi_reserved);
+    $raditi_reserved, $raditi_check);
 
 require_once ABSPATH . 'wp-settings.php';

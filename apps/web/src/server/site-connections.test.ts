@@ -14,6 +14,10 @@ const stand = vi.hoisted(() => ({
   createStore: vi.fn(),
   createServices: vi.fn((deps: unknown) => ({ built: deps })),
   rootMarkers: vi.fn(() => ['wp-config.php', 'wp-includes']),
+  support: { files: 'on', refuseBelow: null },
+  adapters: [] as unknown[],
+  inspectSiteRoot: vi.fn(async () => ({ found: 'by the domain' })),
+  connectableStacks: vi.fn((_env: string, _way: string) => ['wordpress']),
 }))
 
 vi.mock('@/env', () => ({ env: { vault: () => stand.vault(), web: () => stand.web() } }))
@@ -22,9 +26,11 @@ vi.mock('@repo/site-connections/services', () => ({
   createSiteConnectionServices: stand.createServices,
 }))
 vi.mock('@repo/site-adapters', () => ({
-  connectableStacks: ['wordpress'],
-  getSiteAdapter: () => ({ rootMarkers: stand.rootMarkers }),
+  connectableStacks: stand.connectableStacks,
+  getSiteAdapter: () => ({ rootMarkers: stand.rootMarkers, support: stand.support }),
+  siteAdapters: () => stand.adapters,
 }))
+vi.mock('@repo/domain', () => ({ inspectSiteRoot: stand.inspectSiteRoot }))
 
 /** A new module for every test: the services are kept for the life of the module. */
 const load = async () => (await import('./site-connections')).siteConnections
@@ -32,8 +38,10 @@ const load = async () => (await import('./site-connections')).siteConnections
 type Deps = {
   appEnv: string
   secrets: Record<string, (...args: unknown[]) => unknown>
-  connectableStacks: readonly string[]
+  connectableStacks: (way: string) => readonly string[]
   rootMarkers: (stack: string) => readonly string[]
+  stackSupport: (stack: string) => unknown
+  inspectRoot: (names: readonly string[], read: unknown) => Promise<unknown>
 }
 
 describe('the site connection services of web', () => {
@@ -58,8 +66,31 @@ describe('the site connection services of web', () => {
     })
     const [deps] = stand.createServices.mock.calls[0] as unknown as [Deps]
     expect(deps.appEnv).toBe('development')
-    expect(deps.connectableStacks).toEqual(['wordpress'])
+    expect(deps.connectableStacks('files')).toEqual(['wordpress'])
+    // The registry is asked with the environment of the app, not of the caller.
+    expect(stand.connectableStacks).toHaveBeenCalledExactlyOnceWith('development', 'files')
     expect(deps.rootMarkers('wordpress')).toEqual(['wp-config.php', 'wp-includes'])
+    expect(deps.stackSupport('wordpress')).toBe(stand.support)
+  })
+
+  it('inspects a root by every adapter of the registry, with the read of the check session', async () => {
+    ;(await load())()
+    const [deps] = stand.createServices.mock.calls[0] as unknown as [Deps]
+    const read = async () => null
+    await expect(deps.inspectRoot(['index.php'], read)).resolves.toEqual({ found: 'by the domain' })
+    expect(stand.inspectSiteRoot).toHaveBeenCalledExactlyOnceWith(
+      stand.adapters,
+      ['index.php'],
+      read,
+    )
+  })
+
+  it('passes the registry the environment of the app and the way the caller asks for', async () => {
+    stand.web = () => ({ appEnv: 'production' })
+    ;(await load())()
+    const [deps] = stand.createServices.mock.calls[0] as unknown as [Deps]
+    deps.connectableStacks('browser')
+    expect(stand.connectableStacks).toHaveBeenCalledExactlyOnceWith('production', 'browser')
   })
 
   it('hands the services a store that can write and look at metadata, and nothing else', async () => {

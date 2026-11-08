@@ -70,6 +70,7 @@ const ports = {
   zai: 40012,
 }
 const context = {
+  run: names.run,
   path: '/usr/bin',
   directory: '/tmp/raditi-release-verify-run',
   ports,
@@ -237,6 +238,11 @@ test('each process of the platform is its own role with its own AppRole, and nev
   const [, core] = roles.find(([role]) => role === 'core')
   assert.equal(core.TURN_EXECUTOR, 'local')
   assert.equal(core.SANDBOX_WARM_MINUTES, '0')
+  // Its own deployment label: a core of another tree on this daemon never removes its turns.
+  assert.equal(core.SANDBOX_DEPLOYMENT, 'release-verify-0123abcd')
+  // Without the run every run of every tree would share one label.
+  for (const run of [undefined, 'undefined', '0123ABCD'])
+    assert.throws(() => roleEnvironment('core', { ...context, run }), /Invalid run id/)
   assert.equal(core.SANDBOX_RUNTIME, 'runc')
   assert.equal(core.PREVIEW_EXECUTOR, 'local')
   for (const name of [

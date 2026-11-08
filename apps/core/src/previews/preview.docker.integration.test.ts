@@ -12,6 +12,7 @@ import {
   previewBrowserSecretPath,
   previewBrowserSecretSchema,
   previewBrowserSocket,
+  previewEnterUrl,
   previewHostname,
   publishedContentHashMaterial,
   siteAccessPath,
@@ -21,6 +22,7 @@ import {
   type GitProvider,
   type PreviewFilesInput,
   type PreviewRuntime,
+  type PreviewUpstream,
   type PublishedContentState,
   type TurnPlan,
 } from '@repo/domain'
@@ -40,28 +42,34 @@ import type { PreviewsConfig } from '../config/config.ts'
 import { GitWorkspaceService } from '../git-workspace/git-workspace.service.ts'
 import { sampleDriverId } from '../testing/ids.ts'
 import { startPreviewApp, type PreviewApp } from '../testing/preview-app.ts'
+import { openCabinetFrame } from '../testing/preview-frame.ts'
 import {
   MemoryStorage,
   MemoryVault,
   recordValues,
   workingTreeArchive,
 } from '../testing/previews.ts'
+import { checkRequest, phpMessageIn } from './preview-checks.ts'
 import { PreviewManager } from './preview-manager.ts'
 import { previewRecordOf } from './preview-record.ts'
 import { createPreviewSiteSources } from './site-sources.ts'
 
 // A preview end to end on this machine's Docker (docs/plan/53-chat-preview-release.md, R5c): a
 // synthetic «production» — MariaDB 11.4.13 with a WordPress 7.1.2 database — a git repository
-// with the full tree of the site, the real Docker runtime of previews (runc), the real copier,
-// PostgreSQL. The preview is built, opened through its entry forwarder, rebuilt to a candidate
-// with a database operation, synced from a turn, given a browser — which opens the preview through
-// the gateway of the `preview` app (R6), its build started as a process of its own on
-// PREVIEW_GATEWAY_PORT 18090 — and destroyed. Only synthetic data. Needs the images below, the
-// site, tools and browser images of infra/preview (README), the image of the host rules
-// (infra/sandbox/Dockerfile, `network-guard`, or SANDBOX_NETWORK_GUARD_IMAGE) and
-// `pnpm --filter preview build`; runs with
+// with the full tree of the site, the real Docker runtime of previews (PREVIEW_RUNTIME, runc by
+// default), the real copier, PostgreSQL. The preview is built, opened through its entry forwarder,
+// rebuilt to a candidate with a database operation, synced from a turn, given a browser — which
+// opens the preview through the gateway of the `preview` app (R6), its build started as a process
+// of its own on PREVIEW_GATEWAY_PORT 18090 — and destroyed. In between, the owner signs in to
+// WordPress inside the cabinet's frame (docs/plan/62-site-stacks.md, Т35, M2k): a Chromium of
+// playwright-core holds the preview in an iframe of a page on the gateway's APP_URL, port 18091.
+// Only synthetic data. Needs the images below, the site, tools and browser images of
+// infra/preview (README), the image of the host rules (infra/sandbox/Dockerfile, `network-guard`,
+// or SANDBOX_NETWORK_GUARD_IMAGE), `pnpm --filter preview build` and the Chromium of
+// playwright-core (`pnpm --filter e2e exec playwright install chromium`); runs with
 // RADITI_PREVIEW_DOCKER_TESTS=1, RADITI_GATEWAY_DB_TESTS=1 and a disposable DATABASE_URL, with
-// port 18090 free on loopback (Docker Desktop) or on the bridge of the host (Linux).
+// port 18090 free on loopback (Docker Desktop) or on the bridge of the host (Linux) and port 18091
+// free on loopback.
 
 const siteFacts: SiteFacts = {
   stack: 'wordpress',
@@ -74,6 +82,9 @@ const enabled =
   process.env.RADITI_PREVIEW_DOCKER_TESTS === '1' &&
   process.env.RADITI_GATEWAY_DB_TESTS === '1' &&
   Boolean(databaseUrl)
+/** As the suite of the runtime reads it: stands under gVisor set PREVIEW_RUNTIME=runsc. */
+const runtimeKind = process.env.PREVIEW_RUNTIME === 'runsc' ? 'runsc' : 'runc'
+const dockerSocket = process.env.SANDBOX_DOCKER_SOCKET ?? '/var/run/docker.sock'
 const run = promisify(execFile)
 const docker = async (...args: string[]) =>
   (await run('docker', args, { maxBuffer: 64 * 1024 * 1024 })).stdout.trim()
@@ -115,8 +126,23 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
   /** What each write of files asked: the docroot is written as a difference whenever it can. */
   const writes: Array<Omit<PreviewFilesInput, 'archive' | 'platform'> & { bytes: number }> = []
   let runtime: PreviewRuntime
+  /** Where each preview the runtime started answers, for a request of its own of a test. */
+  const targets = new Map<string, { upstream: PreviewUpstream; hostname: string }>()
+  /** What a test asks of a preview a build is about to stop (Т33: a dead base is stopped). */
+  let beforeStop:
+    ((target: { upstream: PreviewUpstream; hostname: string }) => Promise<void>) | null = null
   const recording = (docker_: PreviewRuntime): PreviewRuntime => ({
     ...docker_,
+    ensure: async (spec, secrets, signal) => {
+      const upstream = await docker_.ensure(spec, secrets, signal)
+      targets.set(spec.previewId, { upstream, hostname: spec.hostname })
+      return upstream
+    },
+    stop: async (previewId) => {
+      const target = targets.get(previewId)
+      if (beforeStop && target) await beforeStop(target)
+      return docker_.stop(previewId)
+    },
     writeFiles: (previewId, input, signal) => {
       const entry = { replace: input.replace, deletes: input.deletes, bytes: 0 }
       writes.push(entry)
@@ -135,10 +161,23 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
       )
     },
   })
-  const ids = { workspace: '', site: '', task: '', preview: '', hostname: '', pageId: 0 }
+  const ids = {
+    workspace: '',
+    site: '',
+    task: '',
+    preview: '',
+    hostname: '',
+    pageId: 0,
+    user: '',
+  }
   let mainSha = ''
   let candidateSha = ''
+  /** The working copy and the remote of the site's repository. */
+  let work = ''
+  let remote = ''
   let exported: Uint8Array = workingTreeArchive({})
+  /** The previews of the dialogs of the scenarios of `ready` below. */
+  const scenarioPreviews: string[] = []
   const newTitle = 'Новое название страницы'
 
   const wpProd = (...args: string[]) =>
@@ -155,12 +194,13 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
       'wp',
       ...args,
     )
-  const git = async (cwd: string, ...args: string[]) =>
+  const gitWith = async (extra: Record<string, string>, cwd: string, ...args: string[]) =>
     (
       await run('git', args, {
         cwd,
         maxBuffer: 64 * 1024 * 1024,
         env: {
+          ...extra,
           PATH: process.env.PATH,
           HOME: cwd,
           GIT_CONFIG_NOSYSTEM: '1',
@@ -172,6 +212,7 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
         },
       })
     ).stdout.trim()
+  const git = (cwd: string, ...args: string[]) => gitWith({}, cwd, ...args)
   const preview = () => db.previewEnvironment.findUniqueOrThrow({ where: { id: ids.preview } })
   const target = async () => {
     const row = await preview()
@@ -206,7 +247,7 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
       ttlHours: 72,
       idleMinutes: 30,
       executor: 'local',
-      runtime: 'runc',
+      runtime: runtimeKind,
       siteImages: { '8.3': await digest(SITE) },
       images: {
         db: await digest(DB),
@@ -216,12 +257,14 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
       upstreamHost: '127.0.0.1',
       dnsServers: ['77.88.8.8', '77.88.8.1'],
       gatewayPort: 18090,
+      relayGatewayHost: 'host.docker.internal',
       refusedSubnets: [],
-      docker: { socketPath: '/var/run/docker.sock', firewallImage },
+      docker: { socketPath: dockerSocket, firewallImage },
     }
     runtime = recording(
       createDockerPreviewRuntime({
-        runtime: 'runc',
+        runtime: runtimeKind,
+        socketPath: dockerSocket,
         gatewayPort: 18090,
         firewallImage,
         dnsServers: [...config.dnsServers],
@@ -313,8 +356,8 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
 
     // The repository of the site: the full tree — core, themes, media — as plan 39 imports it.
     root = await mkdtemp(join(tmpdir(), 'raditi-r5c-e2e-'))
-    const work = join(root, 'work')
-    const remote = join(root, 'remote.git')
+    work = join(root, 'work')
+    remote = join(root, 'remote.git')
     await mkdir(work)
     await docker(
       'run',
@@ -428,6 +471,7 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
     manager = new PreviewManager({
       db,
       config,
+      appEnv: 'test',
       runtime,
       copier: createMysqlDatabaseCopier(connections),
       catalog: createMysqlDatabaseCatalog(connections),
@@ -495,7 +539,7 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
       address: config.address,
       port: 18090,
       host: local ? '0.0.0.0' : '127.0.0.1',
-      appUrl: 'http://localhost:3000',
+      appUrl: 'http://localhost:18091',
       sessionSecret: randomBytes(32).toString('base64url'),
     })
   }, 600_000)
@@ -514,6 +558,7 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
     }
     await step(() => gateway?.stop())
     if (ids.preview) await runtime.destroy(ids.preview).catch(() => {})
+    for (const previewId of scenarioPreviews) await runtime.destroy(previewId).catch(() => {})
     await docker('rm', '--force', prod.db).catch(() => {})
     await docker('volume', 'rm', '--force', prod.volume).catch(() => {})
     await docker('network', 'rm', prod.network).catch(() => {})
@@ -529,6 +574,7 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
         await db.gitRepository.deleteMany({ where: { siteId: ids.site } })
         await db.credentialRef.deleteMany({ where: { siteId: ids.site } })
         await db.site.deleteMany({ where: { workspaceId: ids.workspace } })
+        if (ids.user) await db.user.deleteMany({ where: { id: ids.user } })
         await db.workspace.deleteMany({ where: { id: ids.workspace } })
       })
     await step(() => db?.$disconnect())
@@ -562,6 +608,11 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
       { method: 'GET', path: '/', timeoutMs: 10_000, maxResponseBytes: 1024 },
     )
     expect(other.status).toBe(421)
+    // The home page answered as WordPress: the header of the generated wp-config.php (Т33).
+    expect(previewRecordOf(row.runtime)).toMatchObject({
+      passport: { boot: 'not_compared', differences: [] },
+      baseBoot: 'alive',
+    })
     // The account of the platform reads the copy; production could not be asked: none editable.
     const state = await (await content()).read(`page:${ids.pageId}`)
     expect(state.title).toBe('О магазине')
@@ -570,6 +621,94 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
         (mismatch) => mismatch.objectRef,
       ),
     ).toContain(`page:${ids.pageId}`)
+  }, 600_000)
+
+  it('signs the owner in to WordPress inside the cabinet’s frame', async () => {
+    // The owner: a member of the workspace — the gateway lets only a member's ticket in.
+    const user = await db.user.create({
+      data: { name: 'Fixture', email: `frame-${suffix}@example.test` },
+    })
+    ids.user = user.id
+    await db.member.create({ data: { workspaceId: ids.workspace, userId: user.id } })
+    // A one-time ticket of the cabinet, as preview.ticket writes it; the gateway keeps the hash.
+    const ticketFor = async () => {
+      const ticket = randomBytes(32).toString('base64url')
+      await db.previewTicket.create({
+        data: {
+          previewId: ids.preview,
+          kind: 'user',
+          userId: user.id,
+          tokenHash: createHash('sha256').update(ticket).digest('hex'),
+          expiresAt: new Date(Date.now() + 60_000),
+        },
+      })
+      return ticket
+    }
+    // The account of the platform signs in with a synthetic password of this run: the copy keeps
+    // a random hash of it.
+    const password = randomBytes(18).toString('base64url')
+    const updated = await runtime.exec(ids.preview, {
+      argv: [
+        'wp',
+        '--skip-plugins',
+        '--skip-themes',
+        'user',
+        'update',
+        'raditi-platform',
+        `--user_pass=${password}`,
+        '--skip-email',
+      ],
+      timeoutMs: 60_000,
+    })
+    expect(updated.code, Buffer.from(updated.stderr).toString('utf8')).toBe(0)
+
+    const origin = `http://${ids.hostname}:8090`
+    const cabinet = await openCabinetFrame({
+      appOrigin: 'http://localhost:18091',
+      enterUrl: previewEnterUrl(origin, await ticketFor(), '/wp-login.php'),
+      gatewayPort: 18090,
+    })
+    try {
+      const { frame } = cabinet
+      await frame.locator('#user_login').waitFor({ state: 'visible', timeout: 60_000 })
+      const inFrame = await (await frame.owner().elementHandle())!.contentFrame()
+      // The control that the frame is cross-site: a cookie with no attributes does not live in
+      // it, and lives in a tab of the same preview. A same-site stand fails here, not silently.
+      expect(await cabinet.keepsPlainCookie(inFrame!)).toBe(false)
+      const tab = await cabinet.tab(previewEnterUrl(origin, await ticketFor(), '/'))
+      expect(new URL(tab.url()).origin).toBe(origin)
+      expect(await cabinet.keepsPlainCookie(tab)).toBe(true)
+      await tab.close()
+
+      await frame.locator('#user_login').fill('raditi-platform')
+      await frame.locator('#user_pass').fill(password)
+      await frame.locator('#wp-submit').click()
+      await frame
+        .locator('#wpadminbar, #login_error')
+        .first()
+        .waitFor({ state: 'attached', timeout: 60_000 })
+      // The refusal WordPress writes when its test cookie was lost: the frame dropped it.
+      const refusal = frame.locator('#login_error')
+      if ((await refusal.count()) > 0)
+        expect(await refusal.innerText()).not.toContain('Cookies are blocked')
+      await frame.locator('#wpadminbar').waitFor({ state: 'visible', timeout: 60_000 })
+      expect(new URL(inFrame!.url()).pathname).toBe('/wp-admin/')
+
+      // Names only, never values: which cookies the frame and the tab keep, and under what key.
+      const cookies = await cabinet.page.context().cookies(origin)
+      console.log(
+        `NOTE cookies of the preview: ${cookies
+          .map((cookie) =>
+            cookie.partitionKey === undefined
+              ? cookie.name
+              : `${cookie.name} (partitioned by ${cookie.partitionKey})`,
+          )
+          .sort()
+          .join(', ')}`,
+      )
+    } finally {
+      await cabinet.close()
+    }
   }, 600_000)
 
   it('rebuilds to a candidate: its files, its database operation and its checks', async () => {
@@ -649,7 +788,7 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
           sessionId: 'session1',
           turn: 2,
         },
-        runtime: 'runc',
+        runtime: runtimeKind,
         resources: { cpu: 1, memoryMiB: 256, pids: 64 },
         user: { uid: 10001, gid: 10001 },
         env: {},
@@ -772,4 +911,276 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
     expect(await runtime.list()).not.toContain(ids.preview)
     expect(vault.kv.has(previewAccessPath(ids.preview, 'wp'))).toBe(false)
   }, 300_000)
+
+  // How a WordPress preview tells a live page from a dead one (docs/plan/62-site-stacks.md, Т33;
+  // docs/plan/62-slices/e1.md, Э1.6): the header of its wp-config.php, and the mark of a fatal error
+  // of PHP with the key of the check. Each scenario is a dialog of its own on the site, its base a
+  // commit of `main` with some files over the tree of `mainSha`; production runs a classic theme of
+  // the tests, which every such tree holds, and a post that quotes a whole message of PHP.
+  describe('the home page of WordPress before ready (Э1.6)', () => {
+    const theme = 'wp-content/themes/raditi-classic'
+    // The mu-plugin raditi-preview.php holds the whole page until the end; a theme that sends its
+    // head early — as plugins of page speed do — has the page on its way before a later error.
+    const header =
+      '<!doctype html>\n<html><head><?php wp_head(); ?></head><body>\n' +
+      '<?php while (ob_get_level() > 0) { ob_end_flush(); } flush(); ?>\n'
+    const classic: Record<string, string> = {
+      [`${theme}/style.css`]: '/*\nTheme Name: Raditi classic\n*/\n',
+      [`${theme}/header.php`]: header,
+      [`${theme}/index.php`]:
+        "<?php get_header(); ?>\n<main><?php while (have_posts()) { the_post(); the_title('<h2>', '</h2>'); the_content(); } ?></main>\n<?php get_footer();\n",
+      [`${theme}/footer.php`]: '<?php wp_footer(); ?>\n</body></html>\n',
+    }
+    const quote = '<pre>\nFatal error: Uncaught Error in /var/www/html/x.php on line 3</pre>'
+    /** What a check — a request with a key of its own — and a visitor got of a dying base. */
+    let asked: Array<{
+      key: string
+      check: { status: number; headers: Record<string, unknown>; body: string }
+      visitor: { status: number; body: string }
+      /** Requests whose key is not one of a check: they get no mark, nor their value echoed. */
+      forged: Array<{ key: string; body: string }>
+    }> = []
+    let mainTip = ''
+
+    /** A commit of `files` over the tree of `mainSha`, after `parent`, pushed to `ref`. */
+    const commitOver = async (files: Record<string, string>, parent: string, ref: string) => {
+      const env = { GIT_INDEX_FILE: join(root, `index-${randomBytes(4).toString('hex')}`) }
+      await gitWith(env, work, 'read-tree', mainSha)
+      for (const [path, text] of Object.entries(files)) {
+        const file = join(root, 'blob')
+        await writeFile(file, text)
+        const blob = await gitWith(env, work, 'hash-object', '-w', file)
+        await gitWith(env, work, 'update-index', '--add', '--cacheinfo', `100644,${blob},${path}`)
+      }
+      const tree = await gitWith(env, work, 'write-tree')
+      const commit = await gitWith(env, work, 'commit-tree', tree, '-p', parent, '-m', 'scenario')
+      await git(work, 'push', '-q', remote, `${commit}:${ref}`)
+      return commit
+    }
+    /** A new dialog whose base is `main` with `files`, built once. */
+    const dialogOn = async (files: Record<string, string>) => {
+      mainTip = await commitOver({ ...classic, ...files }, mainTip, 'refs/heads/main')
+      const site = await db.site.findUniqueOrThrow({ where: { id: ids.site } })
+      const task = await db.task.create({
+        data: {
+          workspaceId: ids.workspace,
+          siteId: ids.site,
+          status: 'awaiting_approval',
+          turnNo: 1,
+        },
+      })
+      const row = await db.previewEnvironment.create({
+        data: {
+          siteId: ids.site,
+          taskId: task.id,
+          status: 'pending',
+          dbMode: 'copy',
+          hostname: previewHostname({ siteAlias: site.alias, taskAlias: task.alias }, 'localhost'),
+          expiresAt: new Date(Date.now() + 3_600_000),
+        },
+      })
+      scenarioPreviews.push(row.id)
+      asked = []
+      await manager.refresh(row.id, { requested: true })
+      return { taskId: task.id, previewId: row.id }
+    }
+    const rowOf = (previewId: string) =>
+      db.previewEnvironment.findUniqueOrThrow({ where: { id: previewId } })
+    const homeOf = async (previewId: string) => {
+      const row = await rowOf(previewId)
+      const answer = await previewRequest(
+        { upstream: { host: row.upstreamHost!, port: row.upstreamPort! }, hostname: row.hostname },
+        { method: 'GET', path: '/', timeoutMs: 30_000, maxResponseBytes: 8 * 1024 * 1024 },
+      )
+      return {
+        status: answer.status,
+        headers: answer.headers,
+        body: Buffer.from(answer.body).toString('utf8'),
+      }
+    }
+
+    beforeAll(async () => {
+      mainTip = (await git(work, 'ls-remote', remote, 'refs/heads/main')).split(/\s+/)[0]!
+      await wpProd('option', 'update', 'template', 'raditi-classic')
+      await wpProd('option', 'update', 'stylesheet', 'raditi-classic')
+      await wpProd(
+        'post',
+        'create',
+        '--post_type=post',
+        '--post_status=publish',
+        '--post_title=Что значит ошибка',
+        `--post_content=${quote}`,
+      )
+      // What a check and a visitor get of a base the build then stops as dead.
+      beforeStop = async (target) => {
+        const request = checkRequest()
+        const check = await previewRequest(target, { ...request, path: '/' })
+        const visitor = await previewRequest(target, {
+          method: 'GET',
+          path: '/',
+          timeoutMs: 30_000,
+          maxResponseBytes: 8 * 1024 * 1024,
+        })
+        const forged: Array<{ key: string; body: string }> = []
+        for (const key of ['zz--><b>raditi-forged</b>', 'a'.repeat(31), 'b'.repeat(33)]) {
+          const answer = await previewRequest(target, {
+            ...request,
+            headers: { ...request.headers, 'x-raditi-check': key },
+            path: '/',
+          })
+          forged.push({ key, body: Buffer.from(answer.body).toString('utf8') })
+        }
+        asked.push({
+          forged,
+          key: request.headers['x-raditi-check'],
+          check: {
+            status: check.status,
+            headers: check.headers,
+            body: Buffer.from(check.body).toString('utf8'),
+          },
+          visitor: { status: visitor.status, body: Buffer.from(visitor.body).toString('utf8') },
+        })
+      }
+    }, 300_000)
+    afterAll(() => {
+      beforeStop = null
+    })
+
+    it('a base that answers 200 without the mark is boot_failed', async () => {
+      // A dead site answers 200 too: nothing of WordPress, nor of its configuration, ran.
+      const { previewId } = await dialogOn({ 'index.php': '<?php exit(0);\n' })
+      expect(await rowOf(previewId)).toMatchObject({
+        status: 'unavailable',
+        unavailableReason: 'boot_failed',
+      })
+      expect(asked).toHaveLength(1)
+      expect(asked[0]!.check.status).toBe(200)
+      expect(asked[0]!.check.headers['x-raditi-preview']).toBeUndefined()
+      expect(previewRecordOf((await rowOf(previewId)).runtime).baseBoot).toBe('dead')
+    }, 600_000)
+
+    it('a static home page with the words of a fatal error and the header is ready', async () => {
+      const { previewId } = await dialogOn({
+        'index.php':
+          "<?php require __DIR__ . '/wp-load.php'; ?>\n<!doctype html>\n<html><body><h1>Магазин</h1>\n" +
+          '<p>Fatal error: Allowed memory size of 134217728 bytes exhausted</p>\n</body></html>\n',
+      })
+      expect(await rowOf(previewId)).toMatchObject({ status: 'ready' })
+      const home = await homeOf(previewId)
+      expect(home.headers['x-raditi-preview']).toBe('1')
+      expect(home.body).toContain('Fatal error: Allowed memory size')
+    }, 600_000)
+
+    it('a home page where a post quotes a whole message of PHP at a line start is ready', async () => {
+      const { previewId } = await dialogOn({})
+      expect(await rowOf(previewId)).toMatchObject({ status: 'ready' })
+      expect(previewRecordOf((await rowOf(previewId)).runtime).passport).toMatchObject({
+        boot: 'not_compared',
+      })
+      // The quote is one a reading of the text alone takes for PHP's own message.
+      const home = await homeOf(previewId)
+      expect(home.body).toContain('\nFatal error: Uncaught Error in /var/www/html/x.php on line 3')
+      expect(phpMessageIn(home.body)).toBe(true)
+    }, 600_000)
+
+    it('a theme that dies before its first output answers 500 without the message: boot_failed', async () => {
+      const { previewId } = await dialogOn({
+        [`${theme}/index.php`]: '<?php raditi_missing_function();\n',
+      })
+      expect(await rowOf(previewId)).toMatchObject({
+        status: 'unavailable',
+        unavailableReason: 'boot_failed',
+      })
+      expect(asked).toHaveLength(1)
+      expect(asked[0]!.check.status).toBe(500)
+      expect(asked[0]!.check.body).not.toContain('raditi_missing_function')
+      expect(phpMessageIn(asked[0]!.check.body)).toBe(false)
+    }, 600_000)
+
+    describe('a fatal error after the page went out, with display_errors switched back on', () => {
+      const broken = {
+        'wp-content/mu-plugins/raditi-test-display.php': "<?php ini_set('display_errors', '1');\n",
+        [`${theme}/footer.php`]: '<?php raditi_missing_function(); ?>\n</body></html>\n',
+      }
+
+      it('is marked with the key of the check alone, and the base is boot_failed', async () => {
+        const { previewId } = await dialogOn(broken)
+        expect(await rowOf(previewId)).toMatchObject({
+          status: 'unavailable',
+          unavailableReason: 'boot_failed',
+        })
+        expect(asked).toHaveLength(1)
+        const [{ key, check, visitor }] = asked as [(typeof asked)[number]]
+        // 200 with the message of PHP and the header: only the mark tells the page is dead.
+        expect(check.status).toBe(200)
+        expect(check.headers['x-raditi-preview']).toBe('1')
+        expect(phpMessageIn(check.body)).toBe(true)
+        expect(check.body).toContain(`raditi-fatal:${key}`)
+        // A visitor of the preview asks without a key: no mark for it.
+        expect(visitor.body).toContain('raditi_missing_function')
+        expect(visitor.body).not.toContain('raditi-fatal:')
+        // A key of another form is no key: nothing of it comes back into the page.
+        const { forged } = asked[0]!
+        expect(forged).toHaveLength(3)
+        for (const answer of forged) {
+          expect(answer.body).toContain('raditi_missing_function')
+          expect(answer.body).not.toContain('raditi-fatal:')
+          expect(answer.body).not.toContain(answer.key)
+        }
+      }, 600_000)
+
+      it('fails the smoke check of a candidate with it on a live base, which keeps its preview', async () => {
+        const { taskId, previewId } = await dialogOn({})
+        expect(await rowOf(previewId)).toMatchObject({ status: 'ready', revision: 0 })
+        const head = await commitOver(
+          { ...classic, ...broken },
+          mainTip,
+          `refs/heads/agent/${taskId}`,
+        )
+        const candidate = await db.taskCandidate.create({
+          data: {
+            taskId,
+            revision: 1,
+            turnNo: 1,
+            baseSha: mainTip,
+            baseTree: 'b'.repeat(40),
+            headSha: head,
+            files: Object.entries(broken).map(([path, text]) => ({
+              path,
+              change: path.endsWith('footer.php') ? 'modified' : 'added',
+              sizeBytes: Buffer.byteLength(text),
+              executable: false,
+            })),
+            dbPlan: [],
+            dbPlanSha256: 'd'.repeat(64),
+            proposedBump: 'patch',
+            proposedVersion: 'v0.0.1',
+            facts: {},
+            previewRevision: 1,
+          },
+        })
+        await db.candidateCheck.createMany({
+          data: [
+            { candidateId: candidate.id, revision: 1, kind: 'php_lint' },
+            { candidateId: candidate.id, revision: 1, kind: 'preview_smoke' },
+          ],
+        })
+        await manager.refresh(previewId, { requested: true })
+        expect(await rowOf(previewId)).toMatchObject({
+          status: 'ready',
+          revision: 1,
+          candidateId: candidate.id,
+          filesSha: head,
+        })
+        const checks = await db.candidateCheck.findMany({ where: { candidateId: candidate.id } })
+        expect(checks.map((check) => [check.kind, check.status]).sort()).toEqual([
+          ['php_lint', 'passed'],
+          ['preview_smoke', 'failed'],
+        ])
+        expect(previewRecordOf((await rowOf(previewId)).runtime).passport).toMatchObject({
+          boot: 'suspect',
+        })
+      }, 600_000)
+    })
+  })
 })

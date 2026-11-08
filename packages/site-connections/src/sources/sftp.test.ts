@@ -1,15 +1,18 @@
 import { createHash } from 'node:crypto'
-import { createServer, type Server } from 'node:net'
+import { createServer, type Server, Socket } from 'node:net'
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import {
+  inspectSiteRoot,
   isFileSourceGuardError,
   isSiteConnectionError,
   resolvePinnedAddress,
   sshAccessSchema,
   type CodeSourceInput,
   type PinnedAddress,
+  type SiteRead,
+  type SiteRootInspector,
   type SourceCheckContext,
   type SshAccess,
 } from '@repo/domain'
@@ -23,6 +26,44 @@ import {
 import { createSftpSource, sftpSource } from './sftp.ts'
 
 const MARKERS = ['wp-content', 'wp-includes']
+
+/**
+ * An adapter of the markers above that reads two files one after the other, as MODX does: a file of
+ * the root first, then the file of the version it names. `versionFile` may be absent.
+ */
+function twoReads(versionFile = 'wp-includes/version.php'): SiteRootInspector {
+  return {
+    stack: 'wordpress',
+    rootMarkers: () => MARKERS,
+    async readVersion(read: SiteRead) {
+      if ((await read('index.php')) === null) return { kind: 'unknown' }
+      const bytes = await read(versionFile)
+      const version = bytes && /\$wp_version = "([^"]+)"/.exec(Buffer.from(bytes).toString())?.[1]
+      return version ? { kind: 'read', version } : { kind: 'unknown' }
+    },
+    recognition: {
+      publicPaths: [],
+      fingerprint: () => 'unknown',
+      publicGeneration: () => null,
+      needsOwnYes: false,
+      rootHint: () => null,
+      coreFolder: null,
+    },
+  }
+}
+
+const inspectBy =
+  (adapter: SiteRootInspector): SourceCheckContext['inspect'] =>
+  (names, read) =>
+    inspectSiteRoot([adapter], names, read)
+
+/** What a root holds for an inspection by no adapter: only whether it has an `index.php`. */
+const bareInspection = (hasIndexPhp: boolean) => ({
+  foundStack: null,
+  version: { kind: 'unknown' },
+  hint: null,
+  hasIndexPhp,
+})
 const BIG = Buffer.alloc(1024 * 1024 + 4321, 0)
 for (let index = 0; index < BIG.length; index += 1) BIG[index] = (index * 31 + 7) % 251
 
@@ -62,7 +103,9 @@ function context(overrides: Partial<SourceCheckContext> = {}): SourceCheckContex
   return {
     address,
     signal: AbortSignal.timeout(10_000),
-    markers: MARKERS,
+    stacks: [{ stack: 'wordpress', markers: MARKERS }],
+    // By no adapter unless a test gives some: the check reads nothing but its one proof.
+    inspect: (names, read) => inspectSiteRoot([], names, read),
     pinRequired: false,
     ...overrides,
   }
@@ -180,8 +223,83 @@ describe('sftpSource.check', () => {
       canonicalUrl: null,
       defaultBranch: null,
       entries: 6,
+      inspection: bareInspection(true),
     })
     expect(server.writeAttempts).toEqual([])
+  })
+
+  it('sends each request at once: no Nagle wait on a request of the session (Э3.16)', async () => {
+    // Without TCP_NODELAY a request written in two parts waits for the ACK the server delays: on a
+    // Linux host a small file took 2.7 s instead of 1 ms, and an import of a CMS never ended.
+    // On the socket itself: ssh2's Client.setNoDelay does nothing before connect() made its
+    // socket, so a spy on the client would pass a call that never reached TCP. The sockets the
+    // test server accepted (`_server`) are not the client's.
+    const noDelay = vi.spyOn(Socket.prototype, 'setNoDelay')
+    try {
+      expect((await sftpSource.check(input(), context())).ok).toBe(true)
+      const ofClient = noDelay.mock.contexts
+        .map((socket, index) => ({ socket, args: noDelay.mock.calls[index] }))
+        .filter(({ socket }) => !(socket as unknown as { _server?: unknown })._server)
+      expect(ofClient.length).toBeGreaterThan(0)
+      expect(ofClient.every(({ args }) => args?.[0] === true)).toBe(true)
+    } finally {
+      noDelay.mockRestore()
+    }
+  })
+
+  it('reads two files of the version in its one session, then proves reading, with one login', async () => {
+    const attempts = server.authAttempts.length
+    const before = server.bytesServed()
+    const outcome = await sftpSource.check(input(), context({ inspect: inspectBy(twoReads()) }))
+    expect(outcome).toEqual({
+      ok: true,
+      hostKey: server.hostKey,
+      canonicalUrl: null,
+      defaultBranch: null,
+      entries: 6,
+      inspection: {
+        foundStack: 'wordpress',
+        version: { kind: 'read', version: '6.9' },
+        hint: null,
+        hasIndexPhp: true,
+      },
+    })
+    // Both files of the version, then the smallest file of the root to prove reading.
+    const read = server.bytesServed() - before
+    const versionFiles =
+      files['public_html/index.php'].length + files['public_html/wp-includes/version.php'].length
+    expect(read).toBeGreaterThan(versionFiles)
+    expect(server.authAttempts.length - attempts).toBe(1)
+    expect(server.writeAttempts).toEqual([])
+  })
+
+  it('passes with an unknown version where the file of the version is not there', async () => {
+    const outcome = await sftpSource.check(
+      input(),
+      context({ inspect: inspectBy(twoReads('wp-includes/absent.php')) }),
+    )
+    expect(outcome).toMatchObject({
+      ok: true,
+      inspection: { foundStack: 'wordpress', version: { kind: 'unknown' } },
+    })
+  })
+
+  it('fails transfer_failed, never an unknown version, where the server breaks the read of the version', async () => {
+    const breaking = await startTestSftpServer({
+      files,
+      failReads: ['public_html/wp-includes/version.php'],
+      users: [{ username: 'site', password: 'p@ss word' }],
+    })
+    try {
+      const outcome = await sftpSource.check(
+        input({ port: breaking.port, hostKey: breaking.hostKey }),
+        context({ inspect: inspectBy(twoReads()) }),
+      )
+      expect(outcome).toEqual({ ok: false, reason: 'transfer_failed' })
+      expect(breaking.authAttempts.length).toBe(1)
+    } finally {
+      await breaking.close()
+    }
   })
 
   it('passes with a private key, and with an encrypted one and its passphrase', async () => {
@@ -266,10 +384,12 @@ describe('sftpSource.check', () => {
       ok: false,
       reason: 'not_site_root',
       suggestedRoot: '/public_html',
+      inspection: bareInspection(false),
     })
     expect(await sftpSource.check(input({ rootPath: 'other' }), context())).toEqual({
       ok: false,
       reason: 'not_site_root',
+      inspection: bareInspection(false),
     })
   })
 
@@ -277,7 +397,8 @@ describe('sftpSource.check', () => {
     const before = server.bytesServed()
     const outcome = await sftpSource.check(input({ rootPath: 'large' }), context())
     expect(outcome).toMatchObject({ ok: true, entries: 3 })
-    expect(server.bytesServed() - before).toBeLessThanOrEqual(4096)
+    // 4 KiB and the one byte more that tells a longer file: the read of a session asks no further.
+    expect(server.bytesServed() - before).toBeLessThanOrEqual(4096 + 1)
     expect(server.bytesServed() - before).toBeGreaterThan(0)
   })
 
@@ -289,6 +410,7 @@ describe('sftpSource.check', () => {
       canonicalUrl: null,
       defaultBranch: null,
       entries: 2,
+      inspection: bareInspection(false),
     })
     expect(server.bytesServed() - before).toBe(files['bare/wp-content/index.php'].length)
     expect(await sftpSource.check(input({ rootPath: 'hollow' }), context())).toEqual({
@@ -572,6 +694,7 @@ describe('sftpSource records', () => {
     canonicalUrl: null,
     defaultBranch: null,
     entries: 3,
+    inspection: null,
   })
 
   it('prepares the secret and the row of a password access', () => {

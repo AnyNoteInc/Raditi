@@ -828,6 +828,16 @@ export class McpContentService implements TrustedContentUndo {
     try {
       if (change.kind !== 'fields' && change.kind !== 'restore' && !preview)
         throw dbOperationNotAllowed('option_update')
+      // The agent's text of a record, where a release could not carry it (Т37): tools offered before
+      // the first build said so are refused here, in words the agent reads. A target without `db`
+      // is the text of records (the journal reads a build before the kinds so).
+      if (
+        preview?.db &&
+        !creation &&
+        change.kind === 'fields' &&
+        !preview.db.kinds.includes('content_update')
+      )
+        throw dbOperationNotAllowed('content_update')
       // A value that names the id of a record of this dialog (this one's own included) means
       // nothing on production (M3 of the review).
       if (this.#changeValues(change).some((value) => mentionsCreatedId(value, createdIds)))

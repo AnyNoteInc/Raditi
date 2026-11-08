@@ -32,9 +32,11 @@ import {
   ftpSource,
   mysqlDatabase,
   OTHER_HOST_KEY,
+  passedWith,
   SECRET_VALUES,
   sftpSource,
   siteCreateInput,
+  STACK_SUPPORT_FROM_4,
   vaultUnavailable,
 } from '../testing/site-connections.ts'
 import type { Context } from '../trpc.ts'
@@ -181,6 +183,14 @@ function fakeDb() {
 }
 
 /** A fake of the servers whose checks and writes join the order of the database calls. */
+/** A folder of a site of another system: no markers, an `index.php`, nothing read. */
+const foreignRoot = {
+  foundStack: null,
+  version: { kind: 'unknown' },
+  hint: null,
+  hasIndexPhp: true,
+} as const
+
 function connections(order: string[], options: Parameters<typeof fakeSiteConnections>[0] = {}) {
   const fake = fakeSiteConnections(options)
   const write = fake.secrets.kvWrite.getMockImplementation()!
@@ -253,7 +263,7 @@ describe('project.create, the last step of the wizard', () => {
     expect(fake.sourceChecks).toHaveLength(1)
     expect(fake.sourceChecks[0]!.context).toMatchObject({
       pinRequired: true,
-      markers: ['wp-content', 'wp-includes'],
+      stacks: [{ stack: 'wordpress', markers: ['wp-content', 'wp-includes'] }],
     })
     expect(fake.sourceChecks[0]!.context.address).toMatchObject({
       host: 'files.example.ru',
@@ -465,6 +475,10 @@ describe('project.create, the last step of the wizard', () => {
       { ok: false, reason: 'host_key_changed', hostKey: OTHER_HOST_KEY },
       { reason: 'host_key_changed', hostKey: OTHER_HOST_KEY },
     ],
+    [
+      { ok: false, reason: 'not_site_root', inspection: foreignRoot },
+      { reason: 'not_site_root', inspection: foreignRoot },
+    ],
   ] as const)(
     'answers a files check refused now with source_refused and writes nothing: %o',
     async (answer, refusal) => {
@@ -486,6 +500,32 @@ describe('project.create, the last step of the wizard', () => {
       })
     },
   )
+
+  it('refuses a site of the chosen stack below what the stack connects, before Vault is touched', async () => {
+    const { prisma, order, db } = fakeDb()
+    const fake = connections(order)
+    fake.declareSupport(STACK_SUPPORT_FROM_4)
+    fake.answerSource((source) =>
+      passedWith(
+        {
+          foundStack: 'wordpress',
+          version: { kind: 'read', version: '3.9.2' },
+          hint: null,
+          hasIndexPhp: true,
+        },
+        (source as { hostKey?: string }).hostKey ?? null,
+      ),
+    )
+    const input = siteCreateInput()
+
+    // Before the check read the version, this site went on into Vault and the transaction.
+    await expect(
+      createCaller(context(prisma, fake.services)).project.create(input),
+    ).resolves.toEqual({ outcome: 'source_refused', reason: 'version_unsupported' })
+    expect(fake.secrets.writes).toEqual([])
+    expect(db.writeTransaction).not.toHaveBeenCalled()
+    expect(order).toEqual(['claim', 'release'])
+  })
 
   it('requires the key the user confirmed: an sftp source without one is refused, with no key to offer', async () => {
     const { prisma, order } = fakeDb()
@@ -1036,6 +1076,51 @@ describe('project.create of a site for the browser alone', () => {
   })
 })
 
+// docs/plan/62-slices/e2.md, Э2.4: the stacks come from the support of each way, not from one list.
+describe('a stack open by one way of connection only', () => {
+  const browserOnly = (services: SiteConnectionServices): SiteConnectionServices => ({
+    ...services,
+    connectableStacks: (way) => (way === 'browser' ? ['wordpress'] : []),
+  })
+
+  it('is refused with its files and accepted for the browser alone', async () => {
+    const refused = fakeDb()
+    const fake = connections(refused.order)
+    await expect(
+      createCaller(context(refused.prisma, browserOnly(fake.services))).project.create(
+        siteCreateInput(),
+      ),
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      cause: { code: 'SITE_STACK_NOT_CONNECTABLE' },
+    })
+    expect(refused.order).toEqual([])
+    expect(fake.sourceChecks).toEqual([])
+    expect(fake.lookup).not.toHaveBeenCalled()
+
+    const accepted = fakeDb()
+    const outcome = await createCaller({
+      ...context(accepted.prisma, browserOnly(connections(accepted.order).services)),
+      chat: withBrowser,
+    }).project.create(browserSiteInput())
+    expect(outcome).toMatchObject({ outcome: 'created', project: { stack: 'wordpress' } })
+    expect(accepted.tx.site.create).toHaveBeenCalledOnce()
+  })
+
+  it('passes the first step, where the way is not known yet', async () => {
+    const { prisma, order } = fakeDb()
+    await expect(
+      createCaller(
+        context(prisma, browserOnly(connections(order).services)),
+      ).siteConnection.checkBasics({
+        name: 'Мой сайт',
+        url: 'https://example.ru',
+        stack: 'wordpress',
+      }),
+    ).resolves.toMatchObject({ url: 'https://example.ru', stack: 'wordpress' })
+  })
+})
+
 const databaseUrl = process.env.DATABASE_URL
 
 describe.skipIf(!databaseUrl)('PostgreSQL: project.create writes one connected site', () => {
@@ -1337,7 +1422,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: project.create writes one connected s
         hostKey: (source as { hostKey?: string }).hostKey ?? null,
         canonicalUrl: null,
         defaultBranch: null,
-        entries: context.markers.length,
+        entries: context.stacks.length,
+        inspection: null,
       }
     })
     const input = siteCreateInput()
@@ -1423,6 +1509,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: project.create writes one connected s
         canonicalUrl: null,
         defaultBranch: null,
         entries: 3,
+        inspection: null,
       }
     })
 

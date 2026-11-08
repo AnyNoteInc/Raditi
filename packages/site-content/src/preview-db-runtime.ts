@@ -17,9 +17,18 @@ export const previewDbRuntimeSchema = z.strictObject({
   createdIds: z.boolean(),
 })
 export type PreviewDbRuntime = z.infer<typeof previewDbRuntimeSchema>
-/** A preview of a build before these kinds, or whose production could not be asked. */
+/**
+ * A preview of a build before these kinds, or of a site whose production has a gateway that did
+ * not answer now (docs/plan/62-site-stacks.md, Т37): the text of records, as before.
+ */
 export const textOnlyDbRuntime: PreviewDbRuntime = Object.freeze({
   kinds: ['content_update' as const],
+  settings: [],
+  createdIds: false,
+})
+/** A preview no release can carry a change of: production or the preview has no gateway. */
+export const noDbRuntime: PreviewDbRuntime = Object.freeze({
+  kinds: [],
   settings: [],
   createdIds: false,
 })

@@ -13,6 +13,7 @@ import {
   DEPLOY_WRAP_TTL_SECONDS,
   deployValueAad,
   deployWrapDataSchema,
+  notImplemented,
   parseDeployWrap,
   releaseReportKey,
   siteAccessPath,
@@ -24,7 +25,7 @@ import {
   type ReleaseStepDetail,
   type ReleaseStepState,
 } from '@repo/domain'
-import { getSiteAdapter, getSiteContentAdapter } from '@repo/site-adapters'
+import { getSiteAdapter } from '@repo/site-adapters'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { newTurnKeys } from '@repo/turn-keys'
 
@@ -52,6 +53,8 @@ import {
   type ReleaseFixtureOptions,
 } from '../testing/releases.ts'
 import { ReleaseSkill, type ReleaseSkillDependencies } from './release-skill.ts'
+import { releaseSkillStacks } from './releases.module.ts'
+import { releaseApiStacks } from '../release-api/release-api.module.ts'
 import {
   RELEASE_PRODUCTION_WAIT_MS,
   RELEASE_PUBLISH_GIVE_UP_MS,
@@ -123,7 +126,14 @@ describe.skipIf(!enabled)('the release skill with PostgreSQL', () => {
   }
 
   async function world(
-    options: ReleaseFixtureOptions & { gitOff?: boolean; noValues?: boolean } = {},
+    options: ReleaseFixtureOptions & {
+      gitOff?: boolean
+      noValues?: boolean
+      /** The adapter of the stack the skill reads; the registry's by default. */
+      adapter?: ReleaseSkillDependencies['adapter']
+      /** The content plugin's access of the stack; the registry's by default. */
+      contentAccessKind?: ReleaseSkillDependencies['contentAccessKind']
+    } = {},
   ): Promise<World> {
     const f = await releaseFixture(db, fixtures, options)
     sites.push(f.siteId)
@@ -144,8 +154,8 @@ describe.skipIf(!enabled)('the release skill with PostgreSQL', () => {
       provider,
       secrets: vault,
       storage,
-      adapter: getSiteAdapter,
-      contentAccessKind: (stack) => getSiteContentAdapter(stack).accessKind,
+      adapter: options.adapter ?? getSiteAdapter,
+      contentAccessKind: options.contentAccessKind ?? releaseSkillStacks.contentAccessKind,
       api: { startTimeoutMs: 10 * 60_000 },
       values: options.noValues ? null : values,
       production: production.resolve,
@@ -160,7 +170,7 @@ describe.skipIf(!enabled)('the release skill with PostgreSQL', () => {
       secrets: vault,
       storage,
       adapter: getSiteAdapter,
-      contentAdapter: getSiteContentAdapter,
+      contentAdapter: releaseApiStacks.contentAdapter,
       publicUrl: RELEASE_API_URL,
     })
     return { f, git, provider, vault, storage, values, production, skill, deps, api, logger, now }
@@ -538,6 +548,13 @@ describe.skipIf(!enabled)('the release skill with PostgreSQL', () => {
         await refused(await world({ candidatePath }), 'forbidden_path', 'technical')
     })
 
+    it('when the candidate changes a path outside the working set that no rule protects (rule 6)', async () => {
+      // Publication refuses such a path (`assertCandidatePath`); a head of `agent/<taskId>` someone
+      // else moved would carry it past: the second line reads the working set too (Э3.4).
+      for (const candidatePath of ['robots.txt', 'cgi-bin/script.pl'])
+        await refused(await world({ candidatePath }), 'forbidden_path', 'technical')
+    })
+
     it('when the candidate adds media a protected pattern at any depth names (rule 6)', async () => {
       // Under the add-only folder the patterns at any depth still hold (owner, 19.10.2026);
       // a folder of the library outside it is no media of a candidate at all.
@@ -547,6 +564,64 @@ describe.skipIf(!enabled)('the release skill with PostgreSQL', () => {
         'wp-content/uploads/2026/a.png',
       ])
         await refused(await world({ candidateMedia }), 'forbidden_path', 'technical')
+    })
+
+    it('when the stack does not say its media rules (Т8)', async () => {
+      // A stack with files must answer `mediaRules`: no media are taken as add-only by default,
+      // and a candidate without media is refused all the same.
+      const adapter: ReleaseSkillDependencies['adapter'] = (stack) => {
+        const real = getSiteAdapter(stack)
+        return {
+          dbOperationKinds: (site) => real.dbOperationKinds(site),
+          dbSettings: (site) => real.dbSettings(site),
+          protectedPaths: (site) => real.protectedPaths(site),
+          agentWorkingSet: (site) => real.agentWorkingSet(site),
+          mediaRules: () => {
+            throw notImplemented('Media rules of the stack')
+          },
+        }
+      }
+      await refused(await world({ adapter }), 'forbidden_path', 'technical')
+    })
+
+    it('when the candidate changes a file under an add-only folder no rule protects (rule 6)', async () => {
+      // Publication only adds media there (`assertCandidateChange`), and media is no file of a
+      // candidate: a stack whose add-only folder lies outside its protected paths must not let a
+      // moved head replace or delete a file in it (Э3.4).
+      const adapter: ReleaseSkillDependencies['adapter'] = (stack) => {
+        const real = getSiteAdapter(stack)
+        return {
+          dbOperationKinds: (site) => real.dbOperationKinds(site),
+          dbSettings: (site) => real.dbSettings(site),
+          protectedPaths: (site) =>
+            real.protectedPaths(site).filter((path) => path !== 'wp-content/uploads/'),
+          agentWorkingSet: (site) => real.agentWorkingSet(site),
+          mediaRules: (site) => real.mediaRules(site),
+        }
+      }
+      await refused(
+        await world({ adapter, candidatePath: 'wp-content/uploads/raditi/a.png' }),
+        'forbidden_path',
+        'technical',
+      )
+    })
+
+    it('when the stack does not say its working set (Т8, rule 5)', async () => {
+      // A stack with files must declare a working set (plan 62, question 11): without one the
+      // second line cannot read what publication allowed, and the release is refused.
+      const adapter: ReleaseSkillDependencies['adapter'] = (stack) => {
+        const real = getSiteAdapter(stack)
+        return {
+          dbOperationKinds: (site) => real.dbOperationKinds(site),
+          dbSettings: (site) => real.dbSettings(site),
+          protectedPaths: (site) => real.protectedPaths(site),
+          agentWorkingSet: () => {
+            throw notImplemented('Working set of the stack')
+          },
+          mediaRules: (site) => real.mediaRules(site),
+        }
+      }
+      await refused(await world({ adapter }), 'forbidden_path', 'technical')
     })
 
     it('when a check of the candidate failed', async () => {
@@ -568,6 +643,40 @@ describe.skipIf(!enabled)('the release skill with PostgreSQL', () => {
         'db_plan_unsupported',
         'technical',
       )
+    })
+
+    it('when the stack has no content plugin to deliver the plan with (Т8)', async () => {
+      const { operation, state } = planOperation()
+      const w = await world({
+        dbPlan: [operation],
+        contentAccess: true,
+        contentAccessKind: () => null,
+      })
+      // The values read back: only the missing plugin stops the release.
+      w.values.states.set(operation.objectRef, state)
+      await refused(w, 'db_plan_unsupported', 'technical')
+    })
+
+    it('not when the content adapter failed otherwise: the failure goes up, nothing moves', async () => {
+      const { operation, state } = planOperation()
+      const w = await world({
+        dbPlan: [operation],
+        contentAccess: true,
+        contentAccessKind: () => {
+          throw new Error('content adapter broke')
+        },
+      })
+      w.values.states.set(operation.objectRef, state)
+      const before = await release(w)
+      await expect(advance(w)).rejects.toThrow('content adapter broke')
+      expect(await release(w)).toMatchObject({
+        status: before.status,
+        errorCode: null,
+        mainPushedAt: null,
+      })
+      expect(w.git.main).toBe(INSTALLED_SHA)
+      expect(w.git.pushes).toEqual([])
+      expect(await feed(w)).toEqual([])
     })
 
     it('when a value of the plan does not read back', async () => {

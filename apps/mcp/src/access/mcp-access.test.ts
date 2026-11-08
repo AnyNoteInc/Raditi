@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { MCP_TOKEN_PATTERN, newTurnKeys, turnKeyHash } from '@repo/turn-keys'
 import {
+  closedPreviewStatuses,
   MCP_ACCESS_PROBE_TOKEN,
   mcpTurnAccessSchema,
   PostgresMcpAccess,
@@ -159,7 +160,8 @@ describe('MCP token access', () => {
     const $queryRaw = vi.fn(async (..._: unknown[]) => [])
     const store = new PostgresMcpAccess({ $queryRaw } as unknown as PrismaClient)
     expect(await store.authenticate(issued.mcpToken)).toBeNull()
-    expect($queryRaw.mock.calls[0]![1]).toBe(turnKeyHash(issued.mcpToken))
+    // The first parameter is the list of closed preview statuses; the hash comes second.
+    expect($queryRaw.mock.calls[0]![2]).toBe(turnKeyHash(issued.mcpToken))
     // The other half of the pair is not an MCP token.
     expect(await store.authenticate(issued.llmApiKey)).toBeNull()
     expect($queryRaw).toHaveBeenCalledTimes(1)
@@ -204,9 +206,15 @@ describe('MCP token access', () => {
     expect(sql).not.toMatch(/paused|disconnected|archived/)
     // The final statuses are the list of spec §7, not a copy of it in this query.
     expect($queryRaw.mock.calls[0]!.slice(1)).toEqual([
+      [...closedPreviewStatuses],
       createHash('sha256').update(token).digest('hex'),
       [...terminalTaskStatuses],
     ])
+    // A closed preview says no kind of a plan, whatever its record keeps (review of Э1).
+    expect(sql).toContain(
+      "CASE WHEN p.status::text <> ALL($::text[]) AND jsonb_typeof(p.runtime->'db'->'kinds') = 'array'",
+    )
+    expect(closedPreviewStatuses).toEqual(['unavailable', 'destroyed'])
     expect(terminalTaskStatuses).toEqual(['done', 'failed', 'rolled_back', 'cancelled'])
   })
 

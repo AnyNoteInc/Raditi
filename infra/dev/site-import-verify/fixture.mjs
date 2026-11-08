@@ -16,6 +16,8 @@ export const EMPTY_ROOT = 'empty_root'
 /** A folder whose WordPress lies one level down, and that level. */
 export const NESTED_PARENT = 'nested'
 export const NESTED_ROOT = 'nested/public_html'
+/** The version wp-includes/version.php of the site names: the import writes it to sites.stack_facts. */
+export const WP_VERSION = '6.8.3'
 
 /** The eight keys and salts of wp-config.php, in the order WordPress writes them. */
 export const WP_SECRET_NAMES = Object.freeze([
@@ -211,7 +213,10 @@ function siteEntries(values) {
       'xmlrpc.php',
       php('/** XML-RPC endpoint of the stand WordPress. */', "require __DIR__ . '/wp-load.php';"),
     ),
-    file('wp-includes/version.php', php("$wp_version = '6.8.3';", '$wp_db_version = 60421;')),
+    file(
+      'wp-includes/version.php',
+      php(`$wp_version = '${WP_VERSION}';`, '$wp_db_version = 60421;'),
+    ),
     file(
       'wp-includes/js/jquery.js',
       '/*! Stand stub of jQuery */\nwindow.jQuery = function jQuery() {}\n',
@@ -245,6 +250,8 @@ function siteEntries(values) {
       '<!doctype html>\n<title>Страница</title>\n<p>Страница стенда.</p>\n',
     ),
     file('notes/readme.txt', 'Notes of the stand site. Nothing secret here.\n'),
+    // A document outside the media library: left out (plan 62, Т57).
+    file('notes/price-list.pdf', brochurePdf(), skip('document', 'notes/price-list.pdf', 'file')),
     // The configuration and its copies, server settings, caches, logs, dumps: left out.
     file('wp-config.php', wpConfig(values), skip('excluded', 'wp-config.php', 'file')),
     file(
@@ -317,7 +324,7 @@ export function siteTree(values) {
     [`${NESTED_ROOT}/index.php`, php("require __DIR__ . '/wp-load.php';")],
     [`${NESTED_ROOT}/wp-load.php`, php("define( 'ABSPATH', __DIR__ . '/' );")],
     [`${NESTED_ROOT}/wp-content/index.php`, php('// Silence is golden.')],
-    [`${NESTED_ROOT}/wp-includes/version.php`, php("$wp_version = '6.8.3';")],
+    [`${NESTED_ROOT}/wp-includes/version.php`, php(`$wp_version = '${WP_VERSION}';`)],
   ].map(([path, content]) => ({ path, type: 'file', content: Buffer.from(content) }))
   return [...site, ...other]
 }

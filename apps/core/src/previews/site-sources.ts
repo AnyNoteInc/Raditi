@@ -23,9 +23,10 @@ import {
   type SiteAccessKind,
   type SiteSourceAdapter,
   type SiteSourceKind,
+  type SiteTree,
 } from '@repo/domain'
 
-import { readRootFile } from '../site-provisioning/tree-walk.ts'
+import { siteTreeOf } from '../site-provisioning/tree-walk.ts'
 
 // The site as the connection wizard recorded it (docs/plan/39-site-connection-wizard.md): where
 // its files are (`site_code_sources`) and where its database is (`site_databases`), each with its
@@ -33,9 +34,6 @@ import { readRootFile } from '../site-provisioning/tree-walk.ts'
 // is of the adapter's kind, of the site and its workspace, at the one canonical path; the secret
 // is read at the version the reference names — a newer one a request wrote before it failed to
 // move the reference does not stand in for it — and agrees with the row on everything both hold.
-
-/** A file of the site's document root on its hosting, as `SiteAdapter.databaseSettings` reads it. */
-export type SiteRootRead = (path: string) => Promise<Uint8Array | null>
 
 export type SiteDatabaseAccess =
   | { ok: true; access: DbAccess }
@@ -62,14 +60,16 @@ export interface PreviewSiteSources {
    */
   databaseAccess(siteId: string): Promise<SiteDatabaseAccess>
   /**
-   * `use` with a reader of the site's document root through its file source, the session closed
-   * after. null — the site has no file source, or it could not be opened or read: the caller
-   * decides without the configuration on the hosting.
+   * `use` with the tree of the site's document root through its file source (`siteTreeOf`: a file
+   * or a folder that cannot be read is null, an expired deadline throws), the session closed
+   * after: one session gives the configuration of the database and the version and the layout of
+   * the stack (docs/plan/62-site-stacks.md, Т13, Т16). null — the site has no file source, or it
+   * could not be opened, or `use` failed: the caller decides without the files on the hosting.
    */
   withRoot<T>(
     siteId: string,
     signal: AbortSignal,
-    use: (read: SiteRootRead) => Promise<T>,
+    use: (tree: SiteTree) => Promise<T>,
   ): Promise<T | null>
   /**
    * `use` with the SQL dump at `path` (relative to the login folder of the site's file source,
@@ -99,7 +99,7 @@ export interface PreviewSiteSourcesDeps {
   readMs?: number
 }
 
-/** One configuration file over a fresh session: a minute is plenty, a stuck server is not waited on. */
+/** The files of the root over a fresh session: a minute is plenty, a stuck server is not waited on. */
 const ROOT_READ_MS = 60_000
 
 const referenceSelect = {
@@ -211,7 +211,7 @@ export function createPreviewSiteSources(deps: PreviewSiteSourcesDeps): PreviewS
         const opened = await openSource(deps, source, source.access, bounded)
         if (!opened) return null
         session = opened
-        return await use((path) => readRootFile(opened, path, bounded))
+        return await use(siteTreeOf(opened, bounded))
       } catch {
         signal.throwIfAborted()
         return null

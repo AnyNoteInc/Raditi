@@ -1,7 +1,7 @@
 import 'server-only'
 
-import type { SiteConnectionServices } from '@repo/domain'
-import { connectableStacks, getSiteAdapter } from '@repo/site-adapters'
+import { inspectSiteRoot, type SiteConnectionServices } from '@repo/domain'
+import { connectableStacks, getSiteAdapter, siteAdapters } from '@repo/site-adapters'
 import { createSiteConnectionServices } from '@repo/site-connections/services'
 import { createVaultSecretStore } from '@repo/vault'
 
@@ -39,8 +39,11 @@ export function siteConnections(): SiteConnectionServices | null {
           kvWrite: (path, data, options) => store.kvWrite(path, data, options),
           kvMetadata: (path) => store.kvMetadata(path),
         },
-        connectableStacks,
+        connectableStacks: (way) => connectableStacks(config.appEnv, way),
         rootMarkers: (stack) => getSiteAdapter(stack).rootMarkers(),
+        stackSupport: (stack) => getSiteAdapter(stack).support,
+        // Web reads no configuration file: `readVersion` reads only the files of the release.
+        inspectRoot: (names, read) => inspectSiteRoot(siteAdapters(), names, read),
       }),
     }
   }

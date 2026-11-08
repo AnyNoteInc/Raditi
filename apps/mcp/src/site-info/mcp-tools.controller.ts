@@ -11,6 +11,7 @@ import {
 import { z } from 'zod'
 
 import { siteAccessOf, type McpTurnAccess } from '../access/mcp-access.ts'
+import { isClosedPreview } from '../access/mcp-policy.ts'
 import { MCP_REQUEST_ACCESS, type McpRequest } from '../access/mcp-request.ts'
 import type { McpBrowserTasks } from './browser-tasks.ts'
 import { MCP_BROWSER_TASKS } from './site-info.tokens.ts'
@@ -53,8 +54,13 @@ export function siteInfoOf(
     stack: access.stack,
     preview: preview.status,
     // What a release carries of the database of this site (docs/plan/53, «Операции БД и
-    // миграции»): the kinds the preview's last build found writable.
-    database: { operations: preview.dbKinds ?? ['content_update'] },
+    // миграции»; docs/plan/62-site-stacks.md, Т37): the kinds the preview's last build found
+    // writable — an empty list, none —, null while no build has said yet: the first turn starts
+    // beside the first build, and «none» read then would refuse the text of records on a site
+    // whose plugin carries it. A preview that is closed (a build that ended `unavailable`, or one
+    // destroyed) is told first, whatever its record keeps: its content tools are closed, and no
+    // build is coming that would say more — none.
+    database: { operations: isClosedPreview(preview) ? [] : (preview.dbKinds ?? null) },
     ...session,
   }
 }
@@ -69,7 +75,7 @@ export class McpToolsController {
   @Tool({
     name: 'site_info',
     description:
-      "Read the stack of the site of this turn and its addresses: url — where this dialog's preview answers (null while it is not ready; the site itself where there are no previews), siteUrl — the site's own address, which links inside content keep; database.operations — what of the database a release carries here. For a task in the browser, browser: the site, the path its browser starts at and who controls it now (agent or user; null — not started: it starts with your first web_* call).",
+      "Read the stack of the site of this turn and its addresses: url — where this dialog's preview answers (null while it is not ready; the site itself where there are no previews), siteUrl — the site's own address, which links inside content keep; database.operations — what of the database a release carries here; null — the preview's first build has not said yet, call site_info again before you rely on it. For a task in the browser, browser: the site, the path its browser starts at and who controls it now (agent or user; null — not started: it starts with your first web_* call).",
     parameters: z.strictObject({}),
     annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   })

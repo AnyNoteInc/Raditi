@@ -138,6 +138,10 @@ export function previewEnterUrl(origin: string, ticket: string, to = '/'): strin
   return `${origin}${previewGatewayPaths.enter}?t=${ticket}&to=${encodeURIComponent(to)}`
 }
 
+/** What the iframe is allowed: the site's own scripts, forms and windows, nothing of the cabinet. */
+export const PREVIEW_SANDBOX =
+  'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox'
+
 /** The cabinet's route that issues a fresh ticket for a preview and a path (apps/web, Р19). */
 export const PREVIEW_OPEN_PATH = '/preview/open'
 

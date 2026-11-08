@@ -430,6 +430,12 @@ describe('PreviewGatewayServer: sessions', () => {
     expect(page.body).not.toContain('addEventListener')
     expect(page.body).not.toContain('location')
     expect(page.body).toContain('Открываем предпросмотр')
+    // When no new frame comes, the page sends the client to the tab the panel links to (Т35):
+    // reloading the cabinet would bring back the same frame.
+    expect(page.body).not.toContain('Обновите страницу кабинета')
+    expect(page.body).toContain(
+      "say('Не удалось открыть предпросмотр','Откройте его в новой вкладке: ссылка над этим окном.')",
+    )
     // Nothing from outside: no external script, style, image or frame.
     expect(page.body).not.toMatch(/<(script|link|img|iframe)[^>]*\s(src|href)=/i)
     // A destination that would leave the host becomes the home page.
@@ -469,8 +475,23 @@ describe('PreviewGatewayServer: the proxy', () => {
 
     expect(answer.headers['x-frame-options']).toBeUndefined()
     expect(answer.headers['content-security-policy']).toBe(`img-src 'self', frame-ancestors ${APP}`)
-    expect(answer.headers['set-cookie']).toEqual(['wordpress_test_cookie=WP; path=/'])
+    expect(answer.headers['set-cookie']).toEqual([
+      'wordpress_test_cookie=WP; path=/; Secure; SameSite=None; Partitioned',
+    ])
     expect(answer.headers['x-robots-tag']).toBe('noindex, nofollow')
+  })
+
+  it('rewrites the cookies of the site whatever the request is for: a frame, a tab or a fetch', async () => {
+    const cookie = await enter(serving())
+    for (const destination of ['iframe', 'document', 'empty']) {
+      const answer = await send('/framed', {
+        headers: { cookie: `${cookie}; ${REV}=1`, 'sec-fetch-dest': destination },
+      })
+      expect(answer.status, destination).toBe(200)
+      expect(answer.headers['set-cookie'], destination).toEqual([
+        'wordpress_test_cookie=WP; path=/; Secure; SameSite=None; Partitioned',
+      ])
+    }
   })
 
   it('follows no redirect of the site', async () => {
@@ -706,7 +727,7 @@ describe('PreviewGatewayServer: websockets', () => {
     expect(head).toMatch(/^HTTP\/1\.1 101 /)
     expect(head).toMatch(/\r\nupgrade: websocket\r\n/i)
     expect(head).toContain('sec-websocket-accept: fake')
-    expect(head).toContain('set-cookie: x=1\r\n')
+    expect(head).toContain('set-cookie: x=1; Secure; SameSite=None; Partitioned\r\n')
     expect(upstream.websockets[0]?.cookie).toBe('wp=1')
     expect(upstream.websockets[0]?.host).toBe(`${HOST}:8090`)
     socket.write('ping')

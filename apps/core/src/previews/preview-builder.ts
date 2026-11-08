@@ -1,10 +1,11 @@
 import { randomBytes } from 'node:crypto'
 
 import type { Prisma, PrismaClient } from '@repo/db'
-import { markStaleCandidates } from '@repo/db'
+import { markStaleCandidates, mergeSiteStackFacts } from '@repo/db'
 import {
   assertPreviewTransition,
   DB_CREATED_ID_BASE,
+  dbOperationKinds,
   DomainError,
   envVarReachesPreview,
   envVarReachesTask,
@@ -18,6 +19,8 @@ import {
   previewRuntimeMatch,
   siteEnvVarPath,
   siteEnvVarValueOf,
+  siteSupportOf,
+  type AppEnv,
   type DatabaseCopier,
   type StagingDatabaseRuntime,
   type DbAccess,
@@ -40,14 +43,22 @@ import {
   type SiteDbCapabilities,
   type SiteRuntime,
   type SiteStack,
+  type SiteStackFacts,
   type TaskRequirements,
 } from '@repo/domain'
-import { previewContentGateway, textOnlyDbRuntime, type PreviewDbRuntime } from '@repo/site-content'
+import {
+  noDbRuntime,
+  previewContentGateway,
+  textOnlyDbRuntime,
+  type PreviewDbRuntime,
+} from '@repo/site-content'
 
 import type { PreviewsConfig } from '../config/config.ts'
 import type { ExportedTree, TreeExportInput } from '../git-workspace/git-workspace.service.ts'
-import { TAR_END } from '../git-workspace/tree-tar.ts'
+import { TAR_END, tarDirectoryHeader } from '../git-workspace/tree-tar.ts'
 import type { DbPlanValueReader } from '../site-content/db-plan-values.ts'
+import { hasSiteAccess } from '../site-content/site-access.ts'
+import { readStack, type StackReading } from '../site-provisioning/stack-reading.ts'
 import { databaseSettingsFromCatalog, type CatalogTable } from './database-settings.ts'
 import {
   previewContentAccess,
@@ -56,6 +67,7 @@ import {
   seedMismatches,
 } from './preview-content.ts'
 import type { PreviewFacts } from './preview-facts.ts'
+import { previewBootOf, recordCandidateChecks } from './preview-checks.ts'
 import type { PreviewHold } from './preview-lease.ts'
 import { previewRecordSchema, type PreviewRecord } from './preview-record.ts'
 import { openPreviewSeed, storePreviewSeed, type PreviewSeedRef } from './preview-seed.ts'
@@ -95,6 +107,8 @@ export type ProductionContent = (scope: {
 export interface PreviewBuildDeps {
   db: PrismaClient
   config: PreviewsConfig
+  /** What the platform supports of a stack depends on it (`siteSupportOf`); PreviewsConfig has none. */
+  appEnv: AppEnv
   /** null — this core runs no preview (PREVIEW_EXECUTOR=runner until M10). */
   runtime: PreviewRuntime | null
   copier: DatabaseCopier
@@ -114,7 +128,11 @@ export interface PreviewBuildDeps {
     'kvRead' | 'kvWrite' | 'kvList' | 'kvDestroyAll' | 'transitDataKey' | 'transitDecryptDataKey'
   >
   adapters: (stack: SiteStack) => SiteAdapter
-  contentAdapters: (stack: SiteStack) => SiteContentAdapter
+  /**
+   * The published-content adapter of a stack (`findSiteContentAdapter`); null — the stack has
+   * none (docs/plan/62-site-stacks.md, Т8). Any other failure goes up as it is.
+   */
+  contentAdapters: (stack: SiteStack) => SiteContentAdapter | null
   production: ProductionContent
   values: DbPlanValueReader
   now?: () => Date
@@ -179,17 +197,20 @@ export function previewErrorCode(error: unknown): string {
 /**
  * The site's facts as core knows them, with the settings of its database once read and the
  * version of the runtime its server runs (its plugin tells it): the recipe takes the closest
- * runtime the host of previews has (Р2, Р18).
+ * runtime the host of previews has (Р2, Р18). The layout (`extras`), the version and its
+ * generation come from the record `sites.stack_facts` (docs/plan/62-site-stacks.md, Т13, Р6 of Э2).
  */
 export const previewSiteFacts = (
-  site: { stack: SiteStack; url: string },
+  site: { stack: SiteStack; url: string; stackFacts: SiteStackFacts },
   database: SiteDatabaseSettings | null,
   runtimeVersion?: string | null,
 ): SiteFacts => ({
   stack: site.stack,
   url: site.url,
   docroot: '/',
-  extras: {},
+  extras: { ...site.stackFacts.extras },
+  ...(site.stackFacts.cmsVersion ? { version: site.stackFacts.cmsVersion } : {}),
+  ...(site.stackFacts.generation ? { generation: site.stackFacts.generation } : {}),
   ...(database ? { database } : {}),
   ...(runtimeVersion ? { runtimeVersion } : {}),
 })
@@ -204,48 +225,56 @@ async function runtimeOf(gateway: PublishedContentGateway | null): Promise<SiteR
   }
 }
 
-/** What a gateway's plugin can write of a database plan; null — it did not answer. */
-async function dbCapabilitiesOf(
+/**
+ * What a gateway's plugin can write of a database plan: null — there is no gateway, or no way to
+ * ask it; 'no_answer' — it is there and did not answer, twice. One timeout does not take the text
+ * of records from a site with a plugin until its next build (docs/plan/62-site-stacks.md, Т37).
+ */
+export async function dbCapabilitiesOf(
   gateway: SiteContentGateway | null,
-): Promise<SiteDbCapabilities | null> {
+): Promise<SiteDbCapabilities | null | 'no_answer'> {
   if (!gateway?.db) return null
-  try {
-    return await gateway.db.capabilities()
-  } catch {
-    return null
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await gateway.db.capabilities()
+    } catch {
+      // asked once more: the next build is far
+    }
   }
+  return 'no_answer'
 }
 
 /**
- * What the agent may change in the preview's database (docs/plan/53, «Операции БД и миграции»):
- * the text of records always, as before; any other kind only where the stack's adapter, the
- * plugin of production and the plugin of the preview all have it — a release has to write it
- * on production —, the settings of the list both plugins keep, and created records only while
- * production's ids stay below DB_CREATED_ID_BASE. The preview's plugin runs the agent's code:
- * its word only ever narrows what production's allows.
+ * What the agent may change in the preview's database (docs/plan/53, «Операции БД и миграции»;
+ * docs/plan/62-site-stacks.md, Т37): a kind only where the stack's adapter, the plugin of
+ * production and the plugin of the preview all have it — a release has to write it on
+ * production —, the settings of the list both plugins keep, and created records only while
+ * production's ids stay below DB_CREATED_ID_BASE. A side without a gateway gives nothing a
+ * release could carry; a gateway that is there and did not answer, the text of records until the
+ * next build. The preview's plugin runs the agent's code: its word only ever narrows what
+ * production's allows.
  */
 export function previewDbRuntime(
   adapter: Pick<SiteAdapter, 'dbOperationKinds' | 'dbSettings'>,
   site: Parameters<SiteAdapter['dbSettings']>[0],
-  production: SiteDbCapabilities | null,
-  preview: SiteDbCapabilities | null,
+  production: SiteDbCapabilities | null | 'no_answer',
+  preview: SiteDbCapabilities | null | 'no_answer',
 ): PreviewDbRuntime {
-  if (!production || !preview) return { ...textOnlyDbRuntime }
+  if (production === null || preview === null) return { ...noDbRuntime }
+  if (production === 'no_answer' || preview === 'no_answer') return { ...textOnlyDbRuntime }
   let declared: readonly string[]
   let settings: readonly string[]
   try {
     declared = adapter.dbOperationKinds(site)
     settings = adapter.dbSettings(site).map((setting) => setting.option)
   } catch {
-    return { ...textOnlyDbRuntime }
+    return { ...noDbRuntime }
   }
-  const kinds = textOnlyDbRuntime.kinds.concat(
-    (['option_update', 'post_create', 'schema_migration'] as const).filter(
-      (kind) =>
-        declared.includes(kind) &&
-        production.operations.includes(kind) &&
-        preview.operations.includes(kind),
-    ),
+  const kinds = dbOperationKinds.filter(
+    (kind) =>
+      declared.includes(kind) &&
+      production.operations.includes(kind) &&
+      preview.operations.includes(kind),
   )
   return {
     kinds,
@@ -262,25 +291,81 @@ export function previewDbRuntime(
 export const previewOriginOf = (config: PreviewsConfig, hostname: string): string =>
   previewOrigin(hostname, config.address)
 
+/** What one look at the site root on its hosting gave a build (`readSiteRoot`). */
+export interface RootReading {
+  /** The settings of the database its configuration states; null — it states none. */
+  settings: SiteDatabaseSettings | null
+  /** The version and the layout of the stack; null — they could not be read in time. */
+  stack: StackReading | null
+}
+
+/**
+ * One session of the site's file source for a build (docs/plan/62-site-stacks.md, Т13, Т16): the
+ * configuration of the database (`SiteAdapter.databaseSettings`), then the version and the layout
+ * of the stack (`readStack`, shared with the import). A failure of the second is caught here: the
+ * settings already read are kept, and `stack` is null. null — the site has no file source, or it
+ * could not be opened or read: the build goes on without the files of the hosting.
+ */
+export async function readSiteRoot(
+  deps: Pick<PreviewBuildDeps, 'sources'>,
+  adapter: Pick<SiteAdapter, 'databaseSettings' | 'support' | 'readVersion' | 'readLayout'>,
+  site: { id: string },
+  signal: AbortSignal,
+): Promise<RootReading | null> {
+  return deps.sources.withRoot(site.id, signal, async (tree) => ({
+    settings: await adapter.databaseSettings(tree.read),
+    stack: await readStack(adapter, tree).catch(() => {
+      signal.throwIfAborted()
+      return null
+    }),
+  }))
+}
+
+/**
+ * The record of the site a build goes on with (docs/plan/62-site-stacks.md, Т13, Т16, Р16 of Э2):
+ * what a fresh look at its files read is written first and wins; a layout the stack refused, or
+ * one it has and that is neither read now nor recorded before (no `extras`), builds no copy
+ * (`no_layout`) — no layout is guessed —, and nor does a version the platform does not support
+ * (`version_unsupported`). A stack without a layout to read (WordPress) never meets the first two.
+ * No stack is named here (rule 8).
+ */
+export async function settleStackFacts(
+  deps: Pick<PreviewBuildDeps, 'db' | 'appEnv'>,
+  adapter: Pick<SiteAdapter, 'support' | 'readLayout'>,
+  site: { id: string; stackFacts: SiteStackFacts },
+  reading: StackReading | null,
+): Promise<SiteStackFacts> {
+  let facts = site.stackFacts
+  if (reading !== null) {
+    await mergeSiteStackFacts(deps.db, site.id, reading.patch)
+    facts = { ...facts, ...reading.patch }
+  }
+  if (reading?.refused) throw new PreviewUnavailable('no_layout')
+  if (adapter.readLayout !== null && !reading?.layoutRead && Object.keys(facts.extras).length === 0)
+    throw new PreviewUnavailable('no_layout')
+  if (siteSupportOf(adapter.support, facts, [], deps.appEnv).limit === 'version_unsupported')
+    throw new PreviewUnavailable('version_unsupported')
+  return facts
+}
+
 /**
  * The settings the stack's recipe and copy are made with, read once per seed (Р15). First the
- * configuration on the hosting, as `SiteAdapter.databaseSettings(read)` reads it through the file
- * source the connection wizard recorded (plan 39); a site without one, a hosting that cannot be
- * read now, or a configuration that does not state them as constants falls back to the catalog
- * of the production database: the tables of the stack's copy policy under one prefix, and the
- * collation they share is the encoding of the copy (database-settings.ts).
+ * configuration on the hosting, as `SiteAdapter.databaseSettings(read)` read it through the file
+ * source the connection wizard recorded (plan 39; `configured`, from `readSiteRoot`); a site
+ * without one, a hosting that cannot be read now, or a configuration that does not state them as
+ * constants falls back to the catalog of the production database: the tables of the stack's copy
+ * policy under one prefix, and the collation they share is the encoding of the copy
+ * (database-settings.ts).
  */
 async function databaseSettings(
   deps: PreviewBuildDeps,
   adapter: SiteAdapter,
-  site: { id: string; stack: SiteStack; url: string },
+  site: { id: string; stack: SiteStack; url: string; stackFacts: SiteStackFacts },
   previewId: string,
   access: () => Promise<DbAccess>,
+  configured: SiteDatabaseSettings | null,
   signal: AbortSignal,
 ): Promise<SiteDatabaseSettings> {
-  const configured = await deps.sources.withRoot(site.id, signal, (read) =>
-    adapter.databaseSettings(read),
-  )
   if (configured) return configured
   let named
   try {
@@ -562,6 +647,29 @@ export function dumpStaging(deps: PreviewBuildDeps, facts: PreviewFacts, signal:
   }
 }
 
+/**
+ * What production's database says when its gateway could not be had (docs/plan/62-site-stacks.md,
+ * Т37; Р16 of its slices): the resolver refuses a site without its access to the plugin with the
+ * same code as a failed read of that access, so the row decides, by the rule `ReleaseSkill` reads
+ * it with (`hasSiteAccess`: exactly one row). No row of the content adapter's kind, two of them,
+ * or no content adapter for the stack — no gateway; the one row — a gateway that did not answer
+ * now, and so does a count that failed: a site with a plugin keeps the text of records until its
+ * next build.
+ */
+export async function unaskedProduction(
+  deps: Pick<PreviewBuildDeps, 'db' | 'contentAdapters'>,
+  siteId: string,
+  stack: SiteStack,
+): Promise<null | 'no_answer'> {
+  const content = deps.contentAdapters(stack)
+  if (content === null) return null
+  try {
+    return (await hasSiteAccess(deps.db, siteId, content.accessKind)) ? 'no_answer' : null
+  } catch {
+    return 'no_answer'
+  }
+}
+
 async function buildPreviewOn(
   deps: PreviewBuildDeps,
   hold: PreviewHold,
@@ -596,9 +704,24 @@ async function buildPreviewOn(
   let access: DbAccess | null = null
   // The site's database, or the temporary one its dump was loaded into.
   const accessOf = async () => (access ??= await staging.access())
+  // One session of the hosting per build, and only when something is read in it: a new seed
+  // reads the version and the layout again (Т16), a rebuild on the old one keeps the record.
+  const asked = freshSeed || !preview.record.database
+  const root = asked ? await readSiteRoot(deps, adapter, site, signal) : null
+  // Settled before the database is touched: a copy that cannot be built copies nothing.
+  const stackFacts = await settleStackFacts(deps, adapter, site, root?.stack ?? null)
+  const current = { ...site, stackFacts }
   const database =
     (!freshSeed && preview.record.database) ||
-    (await databaseSettings(deps, adapter, site, preview.id, accessOf, signal))
+    (await databaseSettings(
+      deps,
+      adapter,
+      current,
+      preview.id,
+      accessOf,
+      root?.settings ?? null,
+      signal,
+    ))
   // Production, through its plugin: what its server runs, and the state of its objects for the
   // seed. One that cannot be asked now leaves the defaults and asks again at the next build.
   let production: PublishedContentGateway | null = null
@@ -613,14 +736,20 @@ async function buildPreviewOn(
     // Nothing of the copy is known equal, nothing is editable, the runtime is the default.
   }
   const siteRuntime = await runtimeOf(production)
-  const productionDb = await dbCapabilitiesOf(production)
-  const siteFacts = previewSiteFacts(site, database, siteRuntime?.runtimeVersion)
+  const productionDb = production
+    ? await dbCapabilitiesOf(production)
+    : await unaskedProduction(deps, site.id, site.stack)
+  const siteFacts = previewSiteFacts(current, database, siteRuntime?.runtimeVersion)
   let recipe: PreviewRecipe
   try {
     recipe = adapter.previewRecipe(siteFacts)
   } catch {
     throw new PreviewUnavailable('not_supported')
   }
+  // A recipe with a content plugin from a stack that has no published content: the adapters of
+  // the stack disagree, and nothing of the copy is built on them.
+  const contentAdapter = recipe.content ? deps.contentAdapters(site.stack) : null
+  if (recipe.content && contentAdapter === null) throw new PreviewUnavailable('not_supported')
   const missing = await git.missingPaths({ repo, sha: headSha, paths: recipe.requiredPaths })
   if (missing.length) throw new PreviewUnavailable('no_core')
   const web = siteImage(deps.config, recipe)
@@ -651,7 +780,14 @@ async function buildPreviewOn(
       signal,
     )
     seed = { key: stored.key, sha256: stored.sha256, releaseId: seedRef.releaseId }
-    record = { ...record, seedChecked: false }
+    // Another seed is another base: what was said of the old one's health page is forgotten.
+    const { baseBoot: _forgotten, ...unjudged } = record
+    record = {
+      ...unjudged,
+      seedChecked: false,
+      seedTablesLeftOut: stored.summary.leftOutTables,
+      seedColumnsEmptied: stored.summary.emptiedColumns,
+    }
     // Kept at once — a build that fails later loads it again instead of copying the site again —
     // with the objects of the old seed forgotten: the rows of this one are written with `ready`,
     // and the mcp role writes into nothing else (R7). A release that took the site during the
@@ -750,8 +886,7 @@ async function buildPreviewOn(
     )
   }
   let mismatches: string[] | null = null
-  if (recipe.content) {
-    const contentAdapter = deps.contentAdapters(site.stack)
+  if (recipe.content && contentAdapter !== null) {
     const contentAccess = await previewContentAccess(
       { runtime, previewId: preview.id, recipe: recipe.content, adapter: contentAdapter, origin },
       signal,
@@ -801,7 +936,56 @@ async function buildPreviewOn(
         },
         signal,
       )
-  } else if (candidate?.dbPlan.length) throw previewFailure('content_unsupported')
+  } else {
+    if (candidate?.dbPlan.length) throw previewFailure('content_unsupported')
+    // Always written: a record without `db` reads as «the text of records» (mcp-journal.ts).
+    record = { ...record, db: { ...noDbRuntime } }
+  }
+
+  // A stack that says how its live page looks: a dead site answers 200 too (Т33). A base that does
+  // not start has no preview, nor has a candidate that does not start on it; a candidate that
+  // does not start on a live base — or one no build judged — keeps it, and its `preview_smoke`
+  // fails: what the agent broke must not take the preview away from the client.
+  if (recipe.ready) {
+    const boot = await previewBootOf(
+      target,
+      { healthPath: recipe.healthPath, ready: recipe.ready },
+      signal,
+    )
+    if (boot.state === 'dead' && (!candidate || record.baseBoot === 'dead')) {
+      // Only a build of the base says it: a dead candidate tells nothing of its base. The objects
+      // of the seed that differ from production go with it: the record says they were compared.
+      // A dead candidate's `preview_smoke` fails with the build (`failBuild`).
+      if (!candidate) {
+        // Without `db`: every build counts it again, and a base that does not start offers no
+        // kind of a plan — `site_info` reads the closed preview as none.
+        const { db: _recounted, ...judged } = { ...record, baseBoot: 'dead' as const }
+        record = judged
+        await deps.db.$transaction(
+          async (tx) => {
+            await updatePreview(tx, hold, ['building'], { runtime: previewRecordJson(judged) })
+            if (mismatches !== null) await writeSeedMismatches(tx, preview.id, mismatches)
+          },
+          { isolationLevel: 'ReadCommitted' },
+        )
+      }
+      hold.assert() // a holder that lost the preview stops nothing of the next one's build
+      // As `expirePreview` does: the volumes and the seed stay, the next build copies nothing.
+      await runtime.stop(preview.id)
+      throw new PreviewUnavailable('boot_failed')
+    }
+    if (!candidate) record = { ...record, baseBoot: 'alive' }
+    const away = boot.state === 'alive' && boot.redirectsAway
+    record = {
+      ...record,
+      passport: {
+        // `proved` needs a comparison with the real site, which comes with Э7 (Т34).
+        boot: boot.state === 'alive' && !away ? 'not_compared' : 'suspect',
+        differences: away ? ['redirects_away'] : [],
+        checkedAt: (deps.now?.() ?? new Date()).toISOString(),
+      },
+    }
+  }
 
   hold.assert()
   await deps.db.$transaction(
@@ -815,14 +999,7 @@ async function buildPreviewOn(
         dirty: false,
         runtime: previewRecordJson(record),
       })
-      if (mismatches !== null) {
-        await tx.previewSeedMismatch.deleteMany({ where: { previewId: preview.id } })
-        if (mismatches.length)
-          await tx.previewSeedMismatch.createMany({
-            data: mismatches.map((objectRef) => ({ previewId: preview.id, objectRef })),
-            skipDuplicates: true,
-          })
-      }
+      if (mismatches !== null) await writeSeedMismatches(tx, preview.id, mismatches)
       // A seed older than the release the site holds makes the dialog's candidate stale (Р15).
       await markStaleCandidates(tx, { siteId: site.id })
     },
@@ -831,20 +1008,53 @@ async function buildPreviewOn(
   return { upstream, revision, recipe }
 }
 
-/** Ends a build that threw: `unavailable` with its cause, or `failed` with its code. */
+/** The objects of the preview's seed that differ from production, in place of the old ones (Р15). */
+async function writeSeedMismatches(
+  tx: Prisma.TransactionClient,
+  previewId: string,
+  mismatches: readonly string[],
+): Promise<void> {
+  await tx.previewSeedMismatch.deleteMany({ where: { previewId } })
+  if (mismatches.length)
+    await tx.previewSeedMismatch.createMany({
+      data: mismatches.map((objectRef) => ({ previewId, objectRef })),
+      skipDuplicates: true,
+    })
+}
+
+/**
+ * Ends a build that threw: `unavailable` with its cause, or `failed` with its code. A candidate
+ * that did not start (`boot_failed` of a build to it) fails its `preview_smoke` in the same
+ * transaction: no preview shows it, and its release stays closed (rule 3; Т33).
+ */
 export async function failBuild(
   db: PrismaClient,
   hold: PreviewHold,
   error: unknown,
+  shown?: { taskId: string; candidate: { id: string; revision: number } | null },
 ): Promise<void> {
-  if (error instanceof PreviewUnavailable)
-    await movePreview(db, hold, 'building', 'unavailable', {
+  if (error instanceof PreviewUnavailable) {
+    const unavailable = {
       unavailableReason: error.reason,
       ...(error.reason === 'no_database' ? { dbMode: 'none' as const } : {}),
       upstreamHost: null,
       upstreamPort: null,
-    })
-  else
+    }
+    const candidate = shown?.candidate
+    if (error.reason === 'boot_failed' && candidate)
+      await db.$transaction(
+        async (tx) => {
+          await movePreview(tx, hold, 'building', 'unavailable', unavailable)
+          await recordCandidateChecks(tx, {
+            taskId: shown.taskId,
+            candidate,
+            results: { preview_smoke: { passed: false, summary: { pages: 1, failed: 1 } } },
+          })
+        },
+        { isolationLevel: 'ReadCommitted' },
+      )
+    else await movePreview(db, hold, 'building', 'unavailable', unavailable)
+  } else
     await movePreview(db, hold, 'building', 'failed', {
       errorCode: previewErrorCode(error),
       upstreamHost: null,
@@ -908,11 +1118,12 @@ export async function writePreviewTree(
     /** Paths written over `from` since it was written (syncs of a turn). */
     synced: readonly string[]
     to: string
-    recipe: Pick<PreviewRecipe, 'generatedFiles'>
+    recipe: Pick<PreviewRecipe, 'generatedFiles' | 'writableFolders'>
     signal: AbortSignal
   },
 ): Promise<void> {
   const platform = input.recipe.generatedFiles
+  const folders = input.recipe.writableFolders ?? []
   const platformPaths = new Set(platform.map((file) => file.path))
   const own = (path: string) => !platformPaths.has(path)
   let difference: { written: string[]; deleted: string[] } | null = null
@@ -949,7 +1160,7 @@ export async function writePreviewTree(
     git.exportTree({ repo: input.repo, sha: input.to, exclude: [...platformPaths] }, async (tree) =>
       runtime.writeFiles(
         input.previewId,
-        { archive: tree.archive, deletes: [], replace: true, platform },
+        { archive: withFolders(folders, tree.archive), deletes: [], replace: true, platform },
         input.signal,
       ),
     )
@@ -960,14 +1171,24 @@ export async function writePreviewTree(
     if (!written.length)
       await runtime.writeFiles(
         input.previewId,
-        { archive: emptyArchive(), deletes: deleted, replace: false, platform },
+        {
+          archive: withFolders(folders, emptyArchive()),
+          deletes: deleted,
+          replace: false,
+          platform,
+        },
         input.signal,
       )
     else
       await git.exportTree({ repo: input.repo, sha: input.to, paths: written }, async (tree) =>
         runtime.writeFiles(
           input.previewId,
-          { archive: tree.archive, deletes: deleted, replace: false, platform },
+          {
+            archive: withFolders(folders, tree.archive),
+            deletes: deleted,
+            replace: false,
+            platform,
+          },
           input.signal,
         ),
       )
@@ -982,6 +1203,15 @@ const isRefusedDifference = (error: unknown) => isDomainError(error) && error.co
 
 async function* emptyArchive(): AsyncIterable<Uint8Array> {
   yield TAR_END
+}
+
+/** Folder entries first: what a platform file goes through must not be made by PHP (Т21). */
+async function* withFolders(
+  folders: readonly string[],
+  archive: AsyncIterable<Uint8Array>,
+): AsyncIterable<Uint8Array> {
+  for (const folder of folders) yield tarDirectoryHeader(folder)
+  yield* archive
 }
 
 /** The secrets of the preview in Vault (`kv/previews/<previewId>/*`): all versions removed. */

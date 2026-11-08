@@ -9,20 +9,26 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 
 import {
+  closedStackRoots,
   siteRepositoryName,
   SITE_REPOSITORY_OWNER,
   type FileSourceAdapter,
   type KvSecret,
   type SiteRepositoryProvisioner,
 } from '@repo/domain'
-import { getSiteAdapter } from '@repo/site-adapters'
+import { getSiteAdapter, siteAdapters } from '@repo/site-adapters'
 import { databaseInspector } from '@repo/site-connections/databases'
 import { vi } from 'vitest'
 import { z } from 'zod'
 
 import { InitialVersionGit } from '../site-provisioning/initial-version.ts'
 import { importSite, type SiteImportDeps } from '../site-provisioning/site-import.ts'
-import { fakeSession, type FakeNode } from './file-source.ts'
+import {
+  fakeSession,
+  type DirectoryOptions,
+  type FakeNode,
+  type FakeSession,
+} from './file-source.ts'
 import { FakeSiteImportStore } from './site-import-store.ts'
 
 const execute = promisify(execFile)
@@ -69,6 +75,8 @@ export interface SiteImportFixture {
   store: FakeSiteImportStore
   deps: SiteImportDeps
   tree: Record<string, FakeNode>
+  /** How the root of `tree` lists in the next session opened: a failure of the root itself. */
+  rootOptions: DirectoryOptions
   /** Where the provisioner keeps the bare repository of the site. */
   remote: string
   /** The source access in Vault at the version its reference names (2). */
@@ -79,6 +87,8 @@ export interface SiteImportFixture {
   addDatabase: () => void
   /** Opened file sessions: a run that skips the fetch opens none. */
   opened: () => number
+  /** The sessions the runs opened, in order: what each listed and read. */
+  sessions: FakeSession[]
   provisioner: SiteRepositoryProvisioner & { ensureRepository: ReturnType<typeof vi.fn> }
   scannerLog: string
   /** Claims the stage and runs the import as the worker would, without its lifecycle. */
@@ -97,7 +107,8 @@ export const sampleSite = (): Record<string, FakeNode> => ({
   },
   'wp-includes': {
     type: 'directory',
-    children: { 'version.php': { type: 'file', content: '<?php $wp_version = "6.8";\n' } },
+    // As WordPress writes it: the adapter reads the version from this line.
+    children: { 'version.php': { type: 'file', content: "<?php\n$wp_version = '6.8.3';\n" } },
   },
   'wp-content': {
     type: 'directory',
@@ -185,6 +196,7 @@ process.exit(found.length ? exit : 0)
   })
 
   let opened = 0
+  const sessions: FakeSession[] = []
   const fixture = {} as SiteImportFixture
   const adapter: FileSourceAdapter<FakeAccess> = {
     kind: 'ftp',
@@ -207,7 +219,12 @@ process.exit(found.length ? exit : 0)
     scanValues: (stored) => [stored.password],
     open: async (_access, context) => {
       opened += 1
-      return fakeSession(fixture.tree, { signal: context.signal })
+      const session = fakeSession(fixture.tree, {
+        signal: context.signal,
+        root: fixture.rootOptions,
+      })
+      sessions.push(session)
+      return session
     },
   }
 
@@ -251,6 +268,7 @@ process.exit(found.length ? exit : 0)
     sources: () => adapter as FileSourceAdapter,
     databases: databaseInspector,
     stacks: getSiteAdapter,
+    closedRoots: closedStackRoots(siteAdapters()),
     lookup: async () => {
       throw new Error('An IP literal is never looked up')
     },
@@ -271,6 +289,7 @@ process.exit(found.length ? exit : 0)
     store,
     deps,
     tree: options.tree ?? sampleSite(),
+    rootOptions: {},
     remote,
     vault: new Map(),
     addDatabase: () => {
@@ -320,6 +339,7 @@ process.exit(found.length ? exit : 0)
       },
     },
     opened: () => opened,
+    sessions,
     provisioner,
     scannerLog,
     run: async ({ signal = new AbortController().signal, afterClaim } = {}) => {

@@ -25,7 +25,14 @@ describe('preview statuses', () => {
     ])
     expect(previewDbModes).toEqual(['copy', 'none'])
     expect(previewSessionKinds).toEqual(['user', 'browser'])
-    expect(previewUnavailableReasons).toEqual(['no_database', 'no_core', 'not_supported'])
+    expect(previewUnavailableReasons).toEqual([
+      'no_database',
+      'no_core',
+      'not_supported',
+      'boot_failed',
+      'version_unsupported',
+      'no_layout',
+    ])
   })
 
   it('builds, serves, rebuilds and stops', () => {

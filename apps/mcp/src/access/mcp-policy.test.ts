@@ -178,6 +178,8 @@ describe('MCP request policy', () => {
       'schema',
       'browser',
     ])
+    // Т37: a build that found nothing a release could carry closes content and its schema.
+    expect(mcpToolFamiliesOf(access(built([])), both)).toEqual(['browser'])
     expect(mcpToolFamiliesOf(access(preview('ready')), both)).toEqual([
       'content',
       'schema',

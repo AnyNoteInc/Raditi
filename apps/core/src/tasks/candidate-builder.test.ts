@@ -5,6 +5,7 @@ import {
   candidateFilesSchema,
   candidateMediaSchema,
   candidatePatchKey,
+  notImplemented,
   type SiteAdapter,
 } from '@repo/domain'
 import { describe, expect, it, vi } from 'vitest'
@@ -56,6 +57,7 @@ function setup(
   comparisons: Record<string, CommitComparison>,
   operations: ReturnType<typeof op>[] = [],
   trees: Record<string, string> = defaultTrees,
+  adapter: Pick<SiteAdapter, 'dbSettings'> = { dbSettings: () => [] },
 ) {
   const compareCommits = vi.fn(async (input: { baseSha: string; headSha: string }) => {
     const answer = comparisons[`${input.baseSha}..${input.headSha}`]
@@ -103,7 +105,7 @@ function setup(
     db,
     git,
     { put },
-    () => ({ dbSettings: () => [] }) as unknown as SiteAdapter,
+    () => adapter as unknown as SiteAdapter,
     values,
   )
   return { builder, db, compareCommits, treeOf, put, values }
@@ -225,6 +227,64 @@ describe('CandidateBuilder', () => {
       contentType: 'text/x-diff',
       sizeBytes: comparison().patch.byteLength,
     })
+  })
+
+  it('refuses the description of the plan when the stack does not say its settings (Т8)', async () => {
+    // A stack with files must answer `dbSettings`: there is nothing to fall back to.
+    const refusal = notImplemented('Database settings of the stack')
+    const { builder, put } = setup({ [`${BASE}..${HEAD}`]: comparison() }, [op(1)], defaultTrees, {
+      dbSettings: () => {
+        throw refusal
+      },
+    })
+
+    await expect(
+      builder.build(context(), {
+        turnNo: 1,
+        headSha: HEAD,
+        claims: { change_type: 'code', risk: 'low' },
+      }),
+    ).rejects.toBe(refusal)
+    expect(put).not.toHaveBeenCalled()
+  })
+
+  it('reads no context of a dialog whose stack does not say its media rules (Т8)', async () => {
+    // A stack with files must answer `mediaRules`: no media are taken as add-only by default.
+    const refusal = notImplemented('Media rules of the stack')
+    const db = {
+      gitRepository: { findFirst: vi.fn(async () => repo) },
+      taskCandidate: { findFirst: vi.fn(async () => null) },
+      taskTurn: { findUnique: vi.fn(async () => ({ baseSha: BASE })) },
+      siteRelease: { findMany: vi.fn(async () => []) },
+      site: {
+        findUnique: vi.fn(async () => ({
+          installedSha: null,
+          workspaceId: '00000000-0000-4000-8000-00000000000b',
+        })),
+      },
+    } as unknown as ConstructorParameters<typeof CandidateBuilder>[0]
+    const mediaRules = vi.fn(() => {
+      throw refusal
+    })
+    const builder = new CandidateBuilder(
+      db,
+      {} as CandidateGit,
+      { put: vi.fn() },
+      () => ({ mediaRules }) as unknown as SiteAdapter,
+    )
+
+    await expect(
+      builder.context(
+        {
+          id: TASK,
+          siteId: '00000000-0000-4000-8000-00000000000c',
+          site: { stack: 'wordpress', url: 'https://site.example.test/', installedVersion: null },
+        },
+        null,
+        1,
+      ),
+    ).rejects.toBe(refusal)
+    expect(mediaRules).toHaveBeenCalledOnce()
   })
 
   it('names what the site has installed, with its tree, for the record to judge the base', async () => {

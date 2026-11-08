@@ -42,6 +42,8 @@ on:
       # The values of a candidate's database plan a build replays (Р22).
       - apps/core/src/site-content/**
       - apps/core/src/testing/preview-app.ts
+      # The cabinet's frame of a preview (docs/plan/62-site-stacks.md, Т35): sign-in in the frame.
+      - apps/core/src/testing/preview-frame.ts
       - apps/preview/**
       - packages/observability/**
       - packages/service-runtime/**
@@ -112,8 +114,10 @@ jobs:
           sudo systemctl restart docker
           docker info --format '{{.DriverStatus}}' | grep -q io.containerd.snapshotter
           test "$(docker version --format '{{.Server.Version}}')" = "$SANDBOX_DOCKER_VERSION"
-      # By tag, as the suites of the recipe and the copier name them: the base of the site image,
-      # the WP-CLI of the recipe's suite and the temporary database of a dump.
+      # By tag, as the suites of the recipe and the copier name them: the WordPress the suites of
+      # the recipe and the plugin run on (the site image stands on php-base, built below), the
+      # WP-CLI of the recipe's suite, the temporary database of a dump and the second server of
+      # the plugin's suite.
       - name: Pull the public images of previews
         run: |
           # Docker Hub rebuilds an official image under the same tag; the pinned digest stays
@@ -125,6 +129,7 @@ jobs:
           wordpress:7.1.2-php8.3-apache sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5
           wordpress:cli-php8.3 sha256:2b5e9d4d3e51909dca1aaa4732e9f5e5bf0377c2114dbd8ff39f060bff202586
           mariadb:11.4.13 sha256:70cc072b29b4a89ae07abb2d4da2c64678a7f2dfe092751bb51c87d67dc1338b
+          mysql:8.4 sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
           IMAGES
       - name: Build the images of previews
         run: |
@@ -143,12 +148,25 @@ jobs:
           # The working tree of a turn is exported by the commands of the sandbox image itself.
           docker build -q -f infra/sandbox/Dockerfile --target runtime \
             -t raditi-preview-sandbox:local .
+      # The files of the platform on a real file system, as the helper runs them: root with CHOWN
+      # only (packages/sandbox-providers/src/preview/containers.ts). `pnpm test:infra` skips these
+      # tests without root and off Linux, so this step fails when one of them is skipped here.
+      - name: Files of the platform as the helper runs them
+        run: |
+          set -o pipefail
+          docker run --rm --network none --user 0:0 --cap-drop ALL --cap-add CHOWN \
+            --read-only --tmpfs /tmp -v "$PWD/infra:/w/infra:ro" -w /w \
+            --entrypoint node raditi-preview-tools:local \
+            --test --test-reporter=tap infra/preview/files.test.mjs | tee "$RUNNER_TEMP/files.tap"
+          if grep -E '# SKIP needs' "$RUNNER_TEMP/files.tap"; then exit 1; fi
       - name: Preview suites against the real daemon
         env:
           RADITI_PREVIEW_DOCKER_TESTS: '1'
         run: |
           pnpm --filter @repo/sandbox-providers exec vitest run src/preview/runtime.integration.test.ts
+          pnpm --filter @repo/sandbox-providers exec vitest run src/preview/staging.integration.test.ts
           pnpm --filter @repo/site-adapters exec vitest run src/wordpress-preview.integration.test.ts
+          pnpm --filter @repo/site-adapters exec vitest run src/wordpress-db.integration.test.ts
           pnpm --filter @repo/site-connections exec vitest run src/database-copy/mysql-copier.integration.test.ts
           pnpm --filter @repo/browser-providers exec vitest run src/playwright.integration.test.ts
       # The containers of a task's browser session (docs/plan/57-browser-tasks.md, Б10, Б11):

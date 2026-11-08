@@ -43,6 +43,10 @@ export interface TestFtpServerOptions {
   deniedPaths?: string[]
   /** Transfers send this many bytes, then nothing more and never end. */
   stallTransfersAfter?: number
+  /** Files whose RETR sends a few bytes, then drops the data connection and answers 426. */
+  cutTransfers?: string[]
+  /** SIZE is refused for every path, as by a hosting that does not answer it. */
+  refuseSize?: boolean
   /**
    * The numbers (from 1, over the whole server) of the passive replies that name a port nothing
    * listens on: the data connection is refused, as by a hosting whose passive range is busy.
@@ -248,6 +252,21 @@ class ControlSession {
     this.reply('226 Transfer complete.')
   }
 
+  /** 150, a few bytes of the payload, the data connection destroyed, then 426. */
+  private async cutTransfer(payload: Buffer): Promise<void> {
+    const channel = this.data
+    this.data = null
+    const socket = channel ? await channel.socket : null
+    if (!socket) {
+      this.reply('425 Cannot open data connection.')
+      return
+    }
+    this.reply('150 Opening BINARY mode data connection.')
+    await new Promise<void>((resolve) => socket.write(payload.subarray(0, 4), () => resolve()))
+    socket.destroy()
+    this.reply('426 Connection closed; transfer aborted.')
+  }
+
   private listing(path: string, machine: boolean): Buffer | null {
     const found = this.server.tree.resolve(path)
     if (!found || found.node.type !== 'directory' || this.server.denied.has(found.path)) return null
@@ -383,6 +402,7 @@ class ControlSession {
         )
       }
       case 'SIZE': {
+        if (this.server.refuseSize) return this.reply('550 Could not get file size.')
         const found = this.server.tree.resolve(this.resolve(argument))
         if (!found || found.node.type !== 'file') return this.reply('550 Could not get file size.')
         return this.reply(`213 ${found.node.data.length}`)
@@ -394,6 +414,7 @@ class ControlSession {
           this.data = null
           return this.reply('550 Failed to open file.')
         }
+        if (this.server.cut.has(found.path)) return this.cutTransfer(found.node.data)
         return this.transfer(found.node.data)
       }
       case 'ABOR':
@@ -431,6 +452,8 @@ class FtpFake {
   readonly mlsd: boolean
   readonly pasvAddress: string
   readonly stallTransfersAfter: number | undefined
+  readonly cut: Set<string>
+  readonly refuseSize: boolean
   readonly refusedPassive: Set<number>
   passiveReplies = 0
   readonly commands: string[] = []
@@ -463,6 +486,8 @@ class FtpFake {
     this.mlsd = options.mlsd !== false
     this.pasvAddress = options.pasvAddress ?? '127.0.0.1'
     this.stallTransfersAfter = options.stallTransfersAfter
+    this.refuseSize = options.refuseSize === true
+    this.cut = new Set((options.cutTransfers ?? []).map((path) => normalizePath('/', encode(path))))
     this.refusedPassive = new Set(options.refusedPassive ?? [])
   }
 }

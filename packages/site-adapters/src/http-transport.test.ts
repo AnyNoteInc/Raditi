@@ -63,4 +63,44 @@ describe('fetchSiteTransport', () => {
     await fetchSiteTransport({ ...request, timeoutMs: 1234 })
     expect(timeout).toHaveBeenCalledWith(1234)
   })
+
+  it('hands over X-Powered-By as the site sent it, also on an answer without a body', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response('{}', { headers: { 'x-powered-by': 'PHP/7.4.33' } })),
+    )
+    expect((await fetchSiteTransport(request)).poweredBy).toBe('PHP/7.4.33')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(null, {
+          status: 302,
+          headers: { location: 'https://site.example.test/', 'x-powered-by': 'PHP/8.1.2' },
+        }),
+      ),
+    )
+    const moved = await fetchSiteTransport(request)
+    expect(moved.body.byteLength).toBe(0)
+    expect(moved.poweredBy).toBe('PHP/8.1.2')
+  })
+
+  it('hands over a repeated X-Powered-By as one string joined with ", "', async () => {
+    const headers = new Headers([
+      ['x-powered-by', 'PleskLin'],
+      ['x-powered-by', 'PHP/7.4.33'],
+    ])
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { headers })))
+    expect((await fetchSiteTransport(request)).poweredBy).toBe('PleskLin, PHP/7.4.33')
+  })
+
+  it('gives no poweredBy without the header or with a value the rule refuses', async () => {
+    for (const headers of [
+      {},
+      { 'x-powered-by': 'P'.repeat(129) },
+      { 'x-powered-by': 'PHP/7.4\t33' },
+    ]) {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { headers })))
+      expect(await fetchSiteTransport(request)).not.toHaveProperty('poweredBy')
+    }
+  })
 })

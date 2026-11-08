@@ -45,6 +45,8 @@ export function sourceReasonText(
     not_site_root: `В этой папке нет файлов сайта на ${context.platform}. Укажите папку, где лежат файлы сайта.`,
     no_write_access: 'У этого доступа нет права записи.',
     transfer_failed: `Вход выполнен, но получить список файлов не удалось. ${LATER}`,
+    // Until Э9 the text has neither the version nor the bound (question В3 of Э2): `siteLimitTexts` will.
+    version_unsupported: `Такую версию ${context.platform} мы не поддерживаем: она давно не получает обновлений. Обновить её может ваш разработчик или студия.`,
     unsupported:
       'Этот сервер работает так, как мы пока не умеем. Попробуйте подключиться другим способом — по SSH или по FTP.',
   }
@@ -78,6 +80,7 @@ export function databaseReasonText(reason: ConnectionCheckReason): string {
     not_site_root: unknown,
     no_write_access: unknown,
     transfer_failed: `Подключение к базе данных есть, но прочитать список таблиц не удалось. ${LATER}`,
+    version_unsupported: 'Такую версию мы не поддерживаем.',
     unsupported: 'Такой сервер базы данных мы пока не поддерживаем.',
   }
   return texts[reason]

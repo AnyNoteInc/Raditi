@@ -8,6 +8,7 @@ import {
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { ProjectStack } from '../project-labels'
 import { CREATE_RESEND_MS, CREATE_RESENDS, ProjectWizard, VARIABLES_NOTE } from './project-wizard'
 
 type Call = Record<string, unknown>
@@ -48,8 +49,9 @@ const SITE_ID = '019f1a21-1800-7f00-8abc-111111111111'
 let queryClient: QueryClient
 
 function showWizard(
-  stacks: readonly ('wordpress' | 'bitrix')[] = ['wordpress'],
+  stacks: readonly ProjectStack[] = ['wordpress'],
   browserAccess = false,
+  browserStacks: readonly ProjectStack[] = stacks,
   fromChats = false,
 ) {
   queryClient = new QueryClient({
@@ -57,7 +59,12 @@ function showWizard(
   })
   return render(
     <QueryClientProvider client={queryClient}>
-      <ProjectWizard stacks={stacks} browserAccess={browserAccess} fromChats={fromChats} />
+      <ProjectWizard
+        stacks={stacks}
+        browserAccess={browserAccess}
+        browserStacks={browserStacks}
+        fromChats={fromChats}
+      />
     </QueryClientProvider>,
   )
 }
@@ -615,7 +622,7 @@ describe('a site without access to its files (docs/plan/57-browser-tasks.md, Б8
   })
 
   it('goes back to a new chat with the project chosen when it came from one', async () => {
-    showWizard(['wordpress'], true, true)
+    showWizard(['wordpress'], true, ['wordpress'], true)
     await passBasics()
     fireEvent.click(screen.getByRole('tab', { name: 'Без доступа к файлам' }))
     fireEvent.click(next())
@@ -711,9 +718,74 @@ describe('the secrets of the wizard', () => {
   })
 })
 
+// Outside production the wizard offers WordPress and Joomla, in production WordPress alone
+// (docs/plan/62-slices/e3.md, Э3.7): both branches of the field run here. Э9.2 removes the field of
+// the platform (Т26) and these cases with it.
+describe('the platform of the site', () => {
+  it('lists the platforms when there are two and checks the one chosen', async () => {
+    showWizard(['wordpress', 'joomla'])
+    const field = screen.getByRole('combobox', { name: 'Платформа сайта' })
+    expect(field).toHaveTextContent('WordPress')
+    expect(screen.queryByText(/^Сейчас подключаем сайты на/)).not.toBeInTheDocument()
+    fireEvent.mouseDown(field)
+    const options = within(screen.getByRole('listbox')).getAllByRole('option')
+    expect(options.map((option) => option.textContent)).toEqual(['WordPress', 'Joomla'])
+    fireEvent.click(options[1]!)
+    expect(field).toHaveTextContent('Joomla')
+    await passBasics()
+    expect(api.checkBasics).toHaveBeenCalledExactlyOnceWith({
+      name: 'Кофейня',
+      url: 'https://example.ru',
+      stack: 'joomla',
+    })
+  })
+
+  // The panel of Joomla stays closed until Э8: the server refuses it without access to the files,
+  // so the wizard does not offer that way for it (docs/plan/62-site-stacks.md, Т6).
+  it('offers «Без доступа к файлам» only for a platform taken that way', async () => {
+    showWizard(['wordpress', 'joomla'], true, ['wordpress'])
+    const field = screen.getByRole('combobox', { name: 'Платформа сайта' })
+    fireEvent.mouseDown(field)
+    fireEvent.click(within(screen.getByRole('listbox')).getAllByRole('option')[1]!)
+    await passBasics()
+    expect(screen.queryByRole('tab', { name: 'Без доступа к файлам' })).toBeNull()
+    expect(screen.queryByText(/Выберите, как агент будет работать с сайтом/)).toBeNull()
+
+    // Back to WordPress: the way is offered again, and choosing Joomla after it drops the choice.
+    fireEvent.click(back())
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Платформа сайта' }))
+    fireEvent.click(within(screen.getByRole('listbox')).getAllByRole('option')[0]!)
+    fireEvent.click(next())
+    await waitFor(() => expect(stepTitle()).toHaveTextContent('Доступ к файлам'))
+    fireEvent.click(screen.getByRole('tab', { name: 'Без доступа к файлам' }))
+    fireEvent.click(back())
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Платформа сайта' }))
+    fireEvent.click(within(screen.getByRole('listbox')).getAllByRole('option')[1]!)
+    fireEvent.click(next())
+    await waitFor(() => expect(stepTitle()).toHaveTextContent('Доступ к файлам'))
+    expect(screen.queryByRole('tab', { name: 'Без доступа к файлам' })).toBeNull()
+    fillSsh()
+    fireEvent.click(next())
+    await screen.findByRole('button', { name: 'Ключ совпадает, продолжить' })
+    expect(api.create).not.toHaveBeenCalled()
+  })
+
+  it('shows no field with one platform, as in production, and checks that one', async () => {
+    showWizard(['wordpress'])
+    expect(screen.queryByRole('combobox', { name: 'Платформа сайта' })).not.toBeInTheDocument()
+    expect(screen.getByText('Сейчас подключаем сайты на WordPress.')).toBeVisible()
+    await passBasics()
+    expect(api.checkBasics).toHaveBeenCalledExactlyOnceWith({
+      name: 'Кофейня',
+      url: 'https://example.ru',
+      stack: 'wordpress',
+    })
+  })
+})
+
 describe('the wizard opened from a new chat (docs/plan/61-chats-first.md, §5.11)', () => {
   it('leads a project with an import to its setup: there is no chat to start yet', async () => {
-    showWizard(['wordpress'], true, true)
+    showWizard(['wordpress'], true, ['wordpress'], true)
     await passBasics()
     await passSource()
     fireEvent.click(next())
@@ -722,7 +794,7 @@ describe('the wizard opened from a new chat (docs/plan/61-chats-first.md, §5.11
   })
 
   it('leads «Отмена» back to the chat', () => {
-    showWizard(['wordpress'], true, true)
+    showWizard(['wordpress'], true, ['wordpress'], true)
     expect(screen.getByRole('link', { name: 'Отмена' }).getAttribute('href')).toBe('/chats/new')
   })
 

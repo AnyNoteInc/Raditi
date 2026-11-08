@@ -20,6 +20,7 @@ import {
   previewImageRoles,
   previewImageSchema,
   previewRuntimes,
+  runnerIdSchema,
   sandboxRuntimes,
   turnExecutorKinds,
   type AppEnv,
@@ -63,6 +64,8 @@ export const DEFAULT_RUNNER_API_PORT = 8083
 export const DEFAULT_RELEASE_API_PORT = previewDefaults.releaseApiPort
 /** The gateway of previews (apps/preview): core builds the relay of the agent's browser to its port. */
 export const DEFAULT_PREVIEW_GATEWAY_PORT = previewDefaults.gatewayPort
+/** The host Docker's `host-gateway` names for a container: the default of PREVIEW_RELAY_GATEWAY_HOST. */
+const RELAY_GATEWAY_NAME = 'host.docker.internal'
 /**
  * SANDBOX_IMAGE of .env.example: no registry serves it, and agent drivers refuse it in
  * production. Core reads no stack image before the supervisor plans turns (P12), so outside
@@ -170,6 +173,13 @@ export interface PreviewsConfig {
   dnsServers: readonly string[]
   /** PREVIEW_GATEWAY_PORT: where the relay of the agent's browser reaches the gateway (Р21). */
   gatewayPort: number
+  /**
+   * PREVIEW_RELAY_GATEWAY_HOST: the host that relay sends to — `host.docker.internal`, this host as
+   * Docker's `host-gateway` names it, or an IPv4 when that name is another machine (a VM whose
+   * daemon points `host-gateway` at its own host, docs/plan/62-slices/e3.md, Э3.16) and, later,
+   * the runner executor (M10). Private only in production.
+   */
+  relayGatewayHost: string
   /**
    * SANDBOX_EGRESS_REFUSED_SUBNETS: the platform's own subnets the rules of a preview's bridge
    * close besides every address that is not public (docs/plan/58), as the sandbox gateway's.
@@ -280,6 +290,15 @@ const ownEnvSchema = z.object({
   // Previews and releases (docs/plan/53-chat-preview-release.md, «Переменные окружения»).
   ...previewAddressEnvShape,
   PREVIEW_GATEWAY_PORT: port(DEFAULT_PREVIEW_GATEWAY_PORT),
+  PREVIEW_RELAY_GATEWAY_HOST: envVar(
+    z
+      .string()
+      .refine(
+        (host) => host === RELAY_GATEWAY_NAME || z.ipv4().safeParse(host).success,
+        `must be ${RELAY_GATEWAY_NAME} or an IPv4 address`,
+      )
+      .default(RELAY_GATEWAY_NAME),
+  ),
   PREVIEW_TTL_HOURS: envVar(
     z.coerce.number().int().min(1).max(720).default(previewDefaults.ttlHours),
   ),
@@ -304,6 +323,10 @@ const ownEnvSchema = z.object({
   // A container never outlives the deadline of its first turn, and waits only while it leaves
   // the next turn half of one (WARM_MIN_LEFT_MS): more than 10 minutes would never be waited.
   SANDBOX_WARM_MINUTES: envVar(z.coerce.number().int().min(0).max(10).default(10)),
+  // The deployment label of core's own turn containers with TURN_EXECUTOR=local: core lists and
+  // collects only those, so two trees or a stand on one Docker daemon never remove each other's
+  // turns. It is the provider's runner label, so it takes the form of a runner id.
+  SANDBOX_DEPLOYMENT: envVar(runnerIdSchema.default('local')),
   RELEASE_API_PORT: port(DEFAULT_RELEASE_API_PORT),
   RELEASE_API_HOST: envVar(
     z
@@ -370,6 +393,7 @@ export function loadConfig(env: Env): CoreConfig {
         'PREVIEW_TTL_HOURS',
         'PREVIEW_IDLE_MINUTES',
         'PREVIEW_GATEWAY_PORT',
+        'PREVIEW_RELAY_GATEWAY_HOST',
         'PREVIEW_EXECUTOR',
         'PREVIEW_RUNTIME',
         'PREVIEW_SITE_IMAGES',
@@ -394,6 +418,11 @@ export function loadConfig(env: Env): CoreConfig {
     [
       (env.TURN_EXECUTOR?.trim() || (production ? 'runner' : 'local')) === 'runner',
       ['RUNNER_API_PORT', 'RUNNER_TOKENS'],
+    ],
+    // The label of core's own turn containers; on runner VMs the runner's token gives it.
+    [
+      (env.TURN_EXECUTOR?.trim() || (production ? 'runner' : 'local')) === 'local',
+      ['SANDBOX_DEPLOYMENT'],
     ],
   ]
   for (const [enabled, names] of fields)
@@ -530,6 +559,19 @@ export function loadConfig(env: Env): CoreConfig {
     problems.push(
       'PREVIEW_UPSTREAM_HOST: must be a private or loopback IP address in production (spec §19)',
     )
+  // The relay of the agent's browser carries its traffic to the gateway of previews over plain
+  // http: in production only to the private network, as the upstream of a preview. A value set in
+  // production is a private address; unset, the default name stands, which no executor of
+  // production reads (PREVIEW_EXECUTOR=local is refused there) — the runner executor of M10 will
+  // require the address.
+  if (
+    production &&
+    (env.PREVIEW_RELAY_GATEWAY_HOST ?? '').trim() !== '' &&
+    !isPrivateAddress(own.PREVIEW_RELAY_GATEWAY_HOST)
+  )
+    problems.push(
+      'PREVIEW_RELAY_GATEWAY_HOST: must be a private IP address in production (spec §19)',
+    )
   const previewAddress = previewAddressFromEnv(own, appEnv)
   problems.push(
     ...previewAddressProblems(
@@ -575,6 +617,7 @@ export function loadConfig(env: Env): CoreConfig {
         upstreamHost: own.PREVIEW_UPSTREAM_HOST,
         dnsServers: own.PREVIEW_DNS_SERVERS ?? previewDefaults.dnsServers,
         gatewayPort: own.PREVIEW_GATEWAY_PORT,
+        relayGatewayHost: own.PREVIEW_RELAY_GATEWAY_HOST,
         refusedSubnets: own.SANDBOX_EGRESS_REFUSED_SUBNETS ?? [],
         docker:
           executor === 'local'
@@ -662,7 +705,7 @@ export function loadConfig(env: Env): CoreConfig {
     db: present(db),
     storage: present(storage),
     vault: present(vault),
-    sandbox: coreSandbox ? present(sandbox) : null,
+    sandbox: coreSandbox ? { ...present(sandbox), runnerId: own.SANDBOX_DEPLOYMENT } : null,
     agentDrivers: present(agentDrivers),
     mailer: present(mailer),
     leads: leads ?? null,

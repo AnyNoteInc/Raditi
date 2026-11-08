@@ -65,6 +65,8 @@ ${withBrowser ? '' : WHERE_CHANGES_GO}
   change in the database with the platform's tools — only what \`site_info\` lists under
   \`database.operations\`: the title, the text and the excerpt of an existing post or page; a new
   page or post; a setting of the list; a table of the platform created or extended.
+  While it is null the preview's first build has not finished: call \`site_info\` again before
+  you change the database or tell the client it cannot be done.
 {{database}}- A new page or post gets another ID on the site than in the preview: refer to it by its address
   (slug), never by its ID — not in content, not in a setting, not in a file name, a style or code.
 - Structure only through \`db_schema\`: never create or alter tables in code. If the release
@@ -96,6 +98,15 @@ const unavailable: Readonly<Record<PreviewUnavailableReason, string>> = Object.f
     "The repository of this site has no core files of the site's engine: no preview can be built. " +
     'Change files only; your changes are checked when the client releases them.',
   not_supported: 'The stack of this site has no preview yet. Change files only.',
+  boot_failed:
+    'The site does not start in the copy of the platform: no preview can be shown. ' +
+    'Change files only; your changes are checked when the client releases them.',
+  version_unsupported:
+    'This version of the site is not supported: no preview can be built. ' +
+    'Do not rely on a preview in this turn.',
+  no_layout:
+    'The layout of this site cannot be read now: no preview can be built. ' +
+    'Do not rely on a preview in this turn.',
 })
 
 /**

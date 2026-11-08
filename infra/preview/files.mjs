@@ -533,6 +533,18 @@ export async function readPlatformFiles(input, limits = filesLimits) {
 }
 
 /**
+ * Gives an open folder to the platform. gVisor (runsc) answers EPERM to a fchmod right after a
+ * fchown; a stat of the descriptor in between cures it, the cause is not confirmed. The stat
+ * below is load-bearing, it is not a check. Measured: runsc release-20260921.0, not under runc.
+ */
+export async function adoptPlatformFolder(handle, gid) {
+  await handle.chown(0, gid)
+  await handle.stat()
+  // The users of the preview container read this folder; the sticky bit keeps each entry its owner's.
+  await handle.chmod(PLATFORM_FOLDER_MODE) // NOSONAR
+}
+
+/**
  * The folder `name` of an open folder of the platform, made the platform's: created when it is
  * missing, given to root with the PHP user's group and mode 1775 when it is not yet. Root has no
  * DAC_OVERRIDE here: it takes the folder by its name first, then opens it as its owner.
@@ -547,8 +559,7 @@ async function platformFolder(parent, name, gid) {
   const handle = await openDirectory(path)
   try {
     if (!isPlatformFolder(await handle.stat(), gid)) {
-      await handle.chown(0, gid)
-      await handle.chmod(PLATFORM_FOLDER_MODE)
+      await adoptPlatformFolder(handle, gid)
       if (!isPlatformFolder(await handle.stat(), gid)) refuse('path_conflict')
     }
     return handle
