@@ -482,7 +482,7 @@ export function Landing({
           <div className={styles.finalMeta}>
             <span>
               {readable(
-                'Сервис готовится к запуску · WordPress, Joomla, OpenCart, MODX и 1С-Битрикс',
+                'Поддерживаемые платформы · WordPress, Joomla, OpenCart, MODX и 1С-Битрикс',
               )}
             </span>
           </div>

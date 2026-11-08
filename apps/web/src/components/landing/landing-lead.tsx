@@ -344,8 +344,7 @@ export function LandingLead({
                   Согласен(на) на{' '}
                   <a href={legalDocumentHref('consent')} target="_blank" rel="noreferrer">
                     обработку персональных данных
-                  </a>{' '}
-                  {nbsp('для ответа на заявку, в том числе на передачу заявки в Telegram')}
+                  </a>
                 </label>
                 {errors.consent && (
                   <span id={errorId('consent')} className={styles.error}>
