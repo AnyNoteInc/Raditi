@@ -135,7 +135,12 @@ export const STAND_FILE =
 
 /** The operator's commands an image keeps next to where the stands were (its scripts/). */
 export const OPERATOR_SCRIPTS = {
-  llm: ['subscription-login.mjs', 'subscription-retire.mjs', 'subscription-token.mjs'],
+  llm: [
+    'subscription-login.mjs',
+    'subscription-retire.mjs',
+    'subscription-search-key.mjs',
+    'subscription-token.mjs',
+  ],
   mcp: [],
   preview: [],
   runner: ['runner-token.mjs'],
