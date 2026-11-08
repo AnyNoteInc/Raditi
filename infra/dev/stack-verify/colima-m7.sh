@@ -164,17 +164,8 @@ php=$(node -e '
 ' infra/dev/stack-verify/cms-archives.json "$stack" "${ids[@]}")
 
 echo "== step 2: pinned images (never pulled here)"
-node --input-type=module -e '
-  import { readFileSync } from "node:fs"
-  const release = await import(`${process.cwd()}/infra/dev/release-verify/stand.mjs`)
-  const bases = JSON.parse(readFileSync("infra/preview/site-bases.json", "utf8")).versions
-  const images = ["POSTGRES", "REDIS", "S3", "OPENBAO", "GITEA", "RUNNER", "HOSTING", "MARIADB"].map(
-    (name) => release[`${name}_IMAGE`],
-  )
-  for (const php of process.argv[1].split(","))
-    images.push(bases.find((row) => row.php === php).image)
-  for (const image of images) console.log(`${image}\t${release.PULLED_TAGS[image] ?? image}`)
-' "$php" | while IFS=$'\t' read -r image tag; do
+# The list the stand checks itself and the job `stand` of site-stacks.yml pulls (images.mjs).
+node infra/dev/stack-verify/images.mjs --tags "${ids[@]}" | while IFS=$'\t' read -r image tag; do
   docker image inspect "$image" >/dev/null 2>&1 ||
     refuse "the pinned image $image is not in the VM: docker pull $tag"
 done

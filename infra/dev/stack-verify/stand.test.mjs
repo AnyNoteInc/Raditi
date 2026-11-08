@@ -17,13 +17,17 @@ import {
   STAND_GROUPS,
   WRITTEN_GROUPS,
   buildNames,
+  gitleaksVersionOf,
+  gitleaksVersionProblem,
   groupRowProblems,
   groupsOf,
   hostGatewayOf,
   hostOf,
   hostRelays,
   needleScanner,
+  pinnedImagesOf,
   productionArgs,
+  SERVICE_IMAGES,
   siteImageTag,
   stackCoreEnvironment,
   stackNames,
@@ -38,6 +42,7 @@ import {
   toolCallsOf,
   uuid7,
 } from './stand.mjs'
+import { imageLines } from './images.mjs'
 import { parseRuntimes } from './scenarios-preview.mjs'
 import { STACK_STANDS } from './stacks.mjs'
 import {
@@ -851,4 +856,83 @@ test('the commands of a turn quote what they write and insert it before the tag 
   assert.deepEqual(markOf({ template: { line: '<p class="stack-mark">Подвал: версия 1</p>' } }), {
     text: 'Подвал: версия 1',
   })
+})
+
+test('the pinned images of a run: the services, then the PHP bases of its builds once each', () => {
+  const bases = [
+    { php: '8.3', image: 'php@sha256:' + 'a'.repeat(64) },
+    { php: '7.4', image: 'php@sha256:' + 'b'.repeat(64) },
+  ]
+  const pinned = pinnedImagesOf(['8.3', '7.4', '8.3'], bases)
+  assert.deepEqual(
+    pinned.map(({ image }) => image),
+    [...SERVICE_IMAGES, bases[0].image, bases[1].image],
+  )
+  // Every service is pinned by digest; a person pulls by the tag the release stand names, if any.
+  for (const image of SERVICE_IMAGES) assert.match(image, /@sha256:[0-9a-f]{64}$/)
+  assert.ok(pinned.some(({ image, tag }) => image !== tag && tag === 'mariadb:11.4.13'))
+  assert.throws(
+    () => pinnedImagesOf(['5.6'], bases),
+    /No row of infra\/preview\/site-bases\.json for PHP 5\.6/,
+  )
+})
+
+test('images.mjs prints the list of a stack or of its builds, by digest, with tags on request', () => {
+  const siteBases = JSON.parse(
+    readFileSync(new URL('../../preview/site-bases.json', import.meta.url), 'utf8'),
+  ).versions
+  const builds = Object.entries(CMS_ARCHIVES).filter(([, row]) => row.stack === 'joomla')
+  assert.ok(builds.length > 0, 'the table has builds of joomla')
+  const php = [...new Set(builds.map(([, row]) => row.php))]
+  const expected = pinnedImagesOf(php, siteBases)
+  assert.deepEqual(
+    imageLines(['--stack=joomla']),
+    expected.map(({ image }) => image),
+  )
+  assert.deepEqual(
+    imageLines(['--stack=joomla', '--tags']),
+    expected.map(({ image, tag }) => `${image}\t${tag}`),
+  )
+  const [id, row] = builds[0]
+  assert.deepEqual(
+    imageLines([id]),
+    pinnedImagesOf([row.php], siteBases).map(({ image }) => image),
+  )
+  assert.throws(() => imageLines([]), /usage: images\.mjs/)
+  assert.throws(() => imageLines(['--pull']), /unknown option --pull/)
+  assert.throws(() => imageLines(['joomla-0.0.0']), /no build joomla-0\.0\.0/)
+})
+
+test('the version of Gitleaks is read from a release archive and from the pinned core image', () => {
+  assert.equal(gitleaksVersionOf('8.30.1\n'), '8.30.1')
+  assert.equal(gitleaksVersionOf('v8.30.1'), '8.30.1')
+  for (const other of ['', 'dev', 'v8.30', '8.30.1-rc1', 'gitleaks 8.30.1', 'vv8.30.1'])
+    assert.equal(gitleaksVersionOf(other), null, other)
+})
+
+test('the stand refuses a Gitleaks of another version, in either form of its output', () => {
+  for (const output of ['8.30.1\n', 'v8.30.1'])
+    assert.equal(gitleaksVersionProblem(output, '8.30.1', '/bin/gitleaks'), null, output)
+  for (const output of ['8.31.0', 'v8.31.0\n', '8.30.0', ''])
+    assert.equal(
+      gitleaksVersionProblem(output, '8.30.1', '/bin/gitleaks'),
+      'Use Gitleaks 8.30.1; /bin/gitleaks is another version',
+      output,
+    )
+  // The run calls this check, not a comparison of its own (verify-stack.mjs, gitleaksBinary).
+  const main = readFileSync(new URL('./verify-stack.mjs', import.meta.url), 'utf8')
+  const binary = /async function gitleaksBinary\(\) \{\n([\s\S]*?)\n\}\n/.exec(main)?.[1] ?? ''
+  assert.match(binary, /gitleaksVersionProblem\(version\.output, GITLEAKS_VERSION, found\)/)
+  assert.doesNotMatch(binary, /!==|===/)
+})
+
+test('the run checks the rows of P5 against the kind of its own host', () => {
+  // frameRowProblems (frame.mjs) catches a wrong kind at the call of frameEnginesOn only when the
+  // run asks it with the host preflight read (hostOf), not a literal.
+  const main = readFileSync(new URL('./verify-stack.mjs', import.meta.url), 'utf8')
+  assert.match(main, /frameRowProblems\(runs, rt\.rows, frames\.noted, host\.kind\)/)
+  assert.match(main, /const \{ socket, gitleaks, host \} = await preflight\(options\)/)
+  const preview = readFileSync(new URL('./scenarios-preview.mjs', import.meta.url), 'utf8')
+  assert.match(preview, /frameEnginesOn\(ctx\.host\.kind\)/)
+  assert.match(preview, /return \{ failed, noted \}/)
 })

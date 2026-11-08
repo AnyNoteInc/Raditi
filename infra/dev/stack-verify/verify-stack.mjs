@@ -80,15 +80,7 @@ import {
   switchOnModel,
 } from '../release-verify/setup.mjs'
 import {
-  GITEA_IMAGE,
-  HOSTING_IMAGE,
   MARIADB_IMAGE,
-  OPENBAO_IMAGE,
-  POSTGRES_IMAGE,
-  PULLED_TAGS,
-  REDIS_IMAGE,
-  RUNNER_IMAGE,
-  S3_IMAGE,
   localDigestReference,
   summaryTable,
   webEnvironment,
@@ -96,17 +88,21 @@ import {
 import { GITLEAKS_VERSION } from '../site-import-verify/stand.mjs'
 import { fetchCmsArchive } from './fetch-cms.mjs'
 import { runImportGroup } from './scenarios-import.mjs'
+import { frameRowProblems } from './frame.mjs'
 import { parseRuntimes, runPreviewGroup } from './scenarios-preview.mjs'
 import { runReleaseGroup } from './scenarios-release.mjs'
 import { addProvisioner, startBuildHosting, startProduction, startRelays } from './services.mjs'
 import { STACK_STANDS } from './stacks.mjs'
 import {
+  COPY_MODULES,
   STACK_BUILT_IMAGES,
   buildNames,
+  gitleaksVersionProblem,
   groupRowProblems,
   hostGatewayOf,
   hostOf,
   hostRelays,
+  pinnedImagesOf,
   siteImageTag,
   stackCoreEnvironment,
   stackNames,
@@ -345,8 +341,8 @@ async function gitleaksBinary() {
       `Gitleaks ${GITLEAKS_VERSION} is needed: set P2_GITLEAKS_BINARY or put gitleaks on PATH`,
     )
   const version = await rt.run(found, ['version'], { allowFailure: true })
-  if (version.output.trim() !== GITLEAKS_VERSION)
-    throw new Error(`Use Gitleaks ${GITLEAKS_VERSION}; ${found} is another version`)
+  const problem = gitleaksVersionProblem(version.output, GITLEAKS_VERSION, found)
+  if (problem) throw new Error(problem)
   return found
 }
 
@@ -391,21 +387,15 @@ async function preflight(options) {
         '--runtime=runsc needs a daemon with gVisor: Linux or a VM (bash infra/dev/stack-verify/colima-m7.sh), never Docker Desktop',
       )
   }
-  const pinned = [
-    POSTGRES_IMAGE,
-    REDIS_IMAGE,
-    S3_IMAGE,
-    OPENBAO_IMAGE,
-    GITEA_IMAGE,
-    RUNNER_IMAGE,
-    HOSTING_IMAGE,
-    MARIADB_IMAGE,
-    ...siteImagesOf(options.runs).map((site) => site.base),
-  ]
-  for (const image of pinned)
+  // The list the job `stand` of site-stacks.yml pulls (images.mjs): one list for both.
+  const pinned = pinnedImagesOf(
+    options.runs.map(({ build }) => build.php),
+    SITE_BASES,
+  )
+  for (const { image, tag } of pinned)
     if ((await rt.docker(['image', 'inspect', image], { allowFailure: true })).code !== 0)
       throw new Error(
-        `The pinned image ${image} is missing locally; pull it first (docker pull ${PULLED_TAGS[image] ?? image})`,
+        `The pinned image ${image} is missing locally; pull it first (docker pull ${tag})`,
       )
   // OpenSSL 3 of Linux knows `version` only; LibreSSL of macOS takes both.
   for (const [tool, flag] of [
@@ -451,12 +441,12 @@ async function hostOfDaemon(operatingSystem) {
   })
 }
 
-/** The modules of the copy the stand calls itself: Prisma and billing. */
+/** The modules of the copy the stand calls itself: Prisma and billing (COPY_MODULES). */
 async function copyModules(copy) {
   const load = (path) => import(pathToFileURL(join(copy, path)).href)
   return {
-    db: await load('packages/db/src/index.ts'),
-    billing: await load('packages/billing/src/index.ts'),
+    db: await load(COPY_MODULES.db),
+    billing: await load(COPY_MODULES.billing),
   }
 }
 
@@ -734,6 +724,8 @@ async function main(options, owned) {
     caFile: certificates.caFile,
     // The runtime of the run: P4 compares what Docker ran the turn and the preview under with it.
     runtime: options.runtime,
+    // What the host is (hostOf): P5 signs in with WebKit on Docker Desktop only (frameEnginesOn).
+    host,
     // What the group `release` reads beside the product: the backups in S3, the wrappings in
     // OpenBao, the S3 client of the copy.
     vault,
@@ -747,13 +739,19 @@ async function main(options, owned) {
   // On the sites `import` made: the group never runs without it (GROUP_NEEDS).
   const previewing = runs.filter((run) => run.groups.includes('preview'))
   // A failed P5 does not stop `release` (runPreviewGroup): the run fails on it below.
-  const failedFrames = previewing.length > 0 ? await runPreviewGroup(rt, ctx, previewing) : []
+  const frames =
+    previewing.length > 0 ? await runPreviewGroup(rt, ctx, previewing) : { failed: [], noted: [] }
+  const failedFrames = frames.failed
   // On the sites of `import`, once `preview` closed its dialogs: never without both (GROUP_NEEDS).
   const releasing = runs.filter((run) => run.groups.includes('release'))
   if (releasing.length > 0) await runReleaseGroup(rt, ctx, releasing)
   // Every group a build was to run left its rows: a group that silently did not run fails here.
   const missing = groupRowProblems(runs, rt.rows)
   if (missing.length > 0) throw new Error(`The table lacks groups: ${missing.join('; ')}`)
+  // P5 has the engines of this host (frameEnginesOn): WebKit on Docker Desktop, its note on Linux.
+  const frameProblems = frameRowProblems(runs, rt.rows, frames.noted, host.kind)
+  if (frameProblems.length > 0)
+    throw new Error(`The rows of P5 do not match a ${host.kind} host: ${frameProblems.join('; ')}`)
   console.log(
     `PASS each build has the rows of each of its groups: ${runs.map(({ build, groups }) => `${build.archive} ${groups.join('+')}`).join(', ')}`,
   )

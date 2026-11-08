@@ -20,9 +20,54 @@ import { fileURLToPath } from 'node:url'
 
 import { PREVIEW_SANDBOX } from '../../../packages/domain/src/preview/hostname.ts'
 
+import { HOST_KINDS } from './stand.mjs'
+
 const root = fileURLToPath(new URL('../../../', import.meta.url))
 /** The engines P5 runs on; WebKit through the forwarder. */
 export const FRAME_ENGINES = Object.freeze(['chromium', 'webkit'])
+
+/** Why WebKit of Playwright on Linux does not sign in inside the cabinet's frame. */
+export const LINUX_WEBKIT_FRAME =
+  'WebKit of Playwright on Linux blocks third-party cookies and knows no Partitioned: the cookie of the gateway does not live in the cross-site frame of the cabinet (docs/plan/62-site-stacks.md, §10, Э3.16, item 9); the sign-in of WebKit in the frame is checked on Docker Desktop, Safari by hand (Т69)'
+
+/**
+ * The engines P5 signs in with on a host of `hostOf` (stand.mjs) and the ones it only notes, with
+ * the reason (docs/plan/62-site-stacks.md, §7, О2б, the default (а)): on Linux — a plain one, the
+ * Colima VM, the runner of CI — WebKit is a NOTE, no row; on Docker Desktop both engines sign in.
+ */
+export function frameEnginesOn(kind) {
+  if (!HOST_KINDS.includes(kind)) throw new Error(`No kind of host ${kind}`)
+  if (kind === 'desktop') return { signIn: [...FRAME_ENGINES], noted: [] }
+  return {
+    signIn: FRAME_ENGINES.filter((engine) => engine !== 'webkit'),
+    noted: [{ engine: 'webkit', reason: LINUX_WEBKIT_FRAME }],
+  }
+}
+
+/**
+ * What the rows of P5 lack on a host of `kind`: each build of `runs` with the group `preview` has a
+ * row `P5 <archive> <engine>` for every engine `frameEnginesOn(kind)` signs in with (whether it
+ * passed is judged by the failed rows, not here), no row for an engine it only notes, and that
+ * engine among `noted` (the ids `runPreviewGroup` noted). Without it a wrong kind of host at the call
+ * drops the WebKit rows of Docker Desktop, and the run stays green.
+ */
+export function frameRowProblems(runs, rows, noted, kind) {
+  const engines = frameEnginesOn(kind)
+  const problems = []
+  for (const { build, groups } of runs) {
+    if (!groups.includes('preview')) continue
+    for (const engine of engines.signIn) {
+      const id = `P5 ${build.archive} ${engine}`
+      if (!rows.some((row) => row.id === id)) problems.push(`no row ${id}`)
+    }
+    for (const { engine } of engines.noted) {
+      const id = `P5 ${build.archive} ${engine}`
+      if (rows.some((row) => row.id === id)) problems.push(`a row ${id} on a ${kind} host`)
+      if (!noted.includes(id)) problems.push(`no note of ${id}`)
+    }
+  }
+  return problems
+}
 
 const escapeAttribute = (value) =>
   String(value).replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;')

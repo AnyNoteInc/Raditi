@@ -7,7 +7,21 @@
 import { randomBytes } from 'node:crypto'
 import { dirname } from 'node:path'
 
-import { BUILT_IMAGES, CONTAINERS, roleEnvironment, turnResult } from '../release-verify/stand.mjs'
+import {
+  BUILT_IMAGES,
+  CONTAINERS,
+  GITEA_IMAGE,
+  HOSTING_IMAGE,
+  MARIADB_IMAGE,
+  OPENBAO_IMAGE,
+  POSTGRES_IMAGE,
+  PULLED_TAGS,
+  REDIS_IMAGE,
+  RUNNER_IMAGE,
+  S3_IMAGE,
+  roleEnvironment,
+  turnResult,
+} from '../release-verify/stand.mjs'
 import { CMS_ARCHIVES } from './fetch-cms.mjs'
 import { STACK_STANDS } from './stacks.mjs'
 
@@ -359,11 +373,73 @@ export const STACK_BUILT_IMAGES = Object.freeze(
   ),
 )
 
+/** The services of the release stand this stand starts as they are, by digest. Never pulled here. */
+export const SERVICE_IMAGES = Object.freeze([
+  POSTGRES_IMAGE,
+  REDIS_IMAGE,
+  S3_IMAGE,
+  OPENBAO_IMAGE,
+  GITEA_IMAGE,
+  RUNNER_IMAGE,
+  HOSTING_IMAGE,
+  MARIADB_IMAGE,
+])
+
+/**
+ * The pinned images a run needs before it starts (the stand checks them with `--pull never`; the
+ * job `stand` of site-stacks.yml and colima-m7.sh pull or check this same list, docs/plan/62-slices/
+ * e3.md, Э3.13): the services, then the base `php@sha256:…` of `infra/preview/site-bases.json` for
+ * each PHP version, once. `{ image, tag }` — `tag` is what a person pulls by, the image itself when
+ * the release stand names no tag for it.
+ */
+export function pinnedImagesOf(phpVersions, siteBases) {
+  const bases = [...new Set(phpVersions)].map((php) => {
+    const row = siteBases.find((base) => base.php === php)
+    if (!row) throw new Error(`No row of infra/preview/site-bases.json for PHP ${php}`)
+    return row.image
+  })
+  return [...SERVICE_IMAGES, ...bases].map((image) => ({
+    image,
+    tag: PULLED_TAGS[image] ?? image,
+  }))
+}
+
 /** The image `site` of one PHP version, built as `pnpm verify:site-images` builds it. */
 export function siteImageTag(php) {
   if (!/^\d\.\d$/.test(php)) throw new Error('Invalid PHP version')
   return `raditi-stack-verify/preview-site:${php}-local`
 }
+
+/**
+ * The version `gitleaks version` printed: a release archive prints `8.30.1`, the binary of the image
+ * apps/core/Dockerfile pins (what the job `stand` of site-stacks.yml takes, Э3.13) prints
+ * `v8.30.1`. Anything else is no version.
+ */
+export function gitleaksVersionOf(output) {
+  const match = /^v?(\d+\.\d+\.\d+)$/.exec(String(output).trim())
+  return match ? match[1] : null
+}
+
+/**
+ * Why the Gitleaks at `path` does not do, from what its `gitleaks version` printed: null when it is
+ * the `expected` version (GITLEAKS_VERSION of the import stand), in either form of
+ * `gitleaksVersionOf`. The stand refuses to start on anything else.
+ */
+export function gitleaksVersionProblem(output, expected, path) {
+  return gitleaksVersionOf(output) === expected
+    ? null
+    : `Use Gitleaks ${expected}; ${path} is another version`
+}
+
+/**
+ * The modules of the private copy the stand calls itself — Prisma and billing — by their path in
+ * the copy. They set the stand up; the product reaches them by package name. infra/app/ci.test.mjs
+ * names them as what only the weekly run of site-stacks.yml covers.
+ */
+export const COPY_MODULES = Object.freeze({
+  db: 'packages/db/src/index.ts',
+  billing: 'packages/billing/src/index.ts',
+})
 
 // ─── The production of a build ────────────────────────────────────────────────
 

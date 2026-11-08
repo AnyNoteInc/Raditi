@@ -810,6 +810,199 @@ test('site-stacks.yml runs М2 of every stack that has its suite, on archives of
   assert.doesNotMatch(source, closedVendor)
 })
 
+test('site-stacks.yml runs verify:stack of every stack on Linux, its groups named, never live', async () => {
+  // docs/plan/62-slices/e3.md, Э3.13: М3 and М4 in CI for the stacks of the matrix, under runc. The
+  // groups are named: without --group the stand runs every group of a stack, and `browser` (Э8)
+  // and `safety-browser` stay local (§5.5).
+  const source = workflow('site-stacks')
+  const stand = /^ {2}stand:\n(?:(?: {4}.*)?\n)+/m.exec(`${source}\n`)?.[0] ?? ''
+  assert.ok(stand, 'site-stacks.yml has the job stand')
+  assert.match(stand, /^ {4}needs: preview$/m)
+  assert.match(stand, /^ {4}timeout-minutes: 90$/m)
+  assert.deepEqual(matrixOf(stand).stack, matrixOf(source).stack)
+  const steps = stand.split(/^ {6}- /m).slice(1)
+  const runOf = (step) => /^ {8}run: (.*(?:\n(?: {9,}.*)?)*)/m.exec(step)?.[1] ?? ''
+  const verifying = steps.filter((step) => runOf(step).includes('pnpm verify:stack'))
+  assert.equal(verifying.length, 1, 'one step runs the stand')
+  const [step] = verifying
+  const command = runOf(step).trim()
+  assert.match(
+    command,
+    /^pnpm verify:stack -- --stack=\$\{\{ matrix\.stack \}\}(?: --group=[a-z-]+)+$/,
+  )
+  const groups = [...command.matchAll(/--group=([a-z-]+)/g)].map(([, group]) => group)
+  // М3 and М4 always; `safety` is what Э11.4 adds to this step; `browser` and `safety-browser`
+  // stay local (§5.5): any other group here is refused.
+  for (const group of ['import', 'preview', 'release'])
+    assert.ok(groups.includes(group), `the step does not name the group ${group}`)
+  for (const group of groups)
+    assert.ok(
+      ['import', 'preview', 'release', 'safety'].includes(group),
+      `CI runs the group ${group}`,
+    )
+  assert.equal(new Set(groups).size, groups.length, 'a group is named twice')
+  // runc: the option that would select gVisor is never passed here (М7 is a run by hand, Т69).
+  assert.doesNotMatch(stand, /--runtime|runsc/)
+  assert.match(step, /^ {10}RADITI_CMS_DIR: \$\{\{ runner\.temp \}\}\/raditi-cms$/m)
+  for (const forbidden of ['--live', 'ZAI_API_KEY'])
+    assert.equal(source.includes(forbidden), false, `site-stacks.yml names ${forbidden}`)
+  assert.doesNotMatch(source, /\$\{\{\s*secrets\./, 'site-stacks.yml reads a secret')
+  // The engine and the image store of the job preview: the stand needs repository digests of its
+  // own builds, and only the containerd store gives them.
+  for (const text of [
+    '"docker-ce=$package" "docker-ce-cli=$package"',
+    '"containerd-snapshotter": true',
+  ])
+    assert.ok(stand.includes(text), `the job stand lacks ${text}`)
+  // In this order: the images are pulled into the containerd store after the restart of Docker,
+  // and Gitleaks and the browsers are there before the stand. A red stand is a red job: no step
+  // of the job, nor the job, is skipped by a condition or let fail.
+  const index = (name) => steps.findIndex((each) => each.startsWith(`name: ${name}\n`))
+  const order = [
+    'Docker Engine of the sandbox VM',
+    'Docker with the containerd image store',
+    'Pull the pinned images',
+    'Gitleaks of the core image',
+    'Chromium and WebKit of Playwright',
+    'Import, preview and release of every build of the stack',
+  ].map(index)
+  assert.ok(!order.includes(-1), `a step of the job stand is missing: ${order}`)
+  assert.deepEqual(
+    order,
+    order.toSorted((a, b) => a - b),
+    'the steps of the job stand are out of order',
+  )
+  assert.equal(steps.indexOf(step), order.at(-1), 'the stand runs in its own step')
+  assert.doesNotMatch(stand, /^ +continue-on-error:/m, 'the job stand lets a step fail')
+  assert.doesNotMatch(stand, /^ +if:/m, 'the job stand skips a step by a condition')
+  // A failed images.mjs fails the pull: without pipefail the loop would end the pipe with 0.
+  assert.match(
+    steps[order[2]],
+    /^ {10}set -o pipefail\n {10}node infra\/dev\/stack-verify\/images\.mjs/m,
+  )
+  // The pinned images of the stand, by digest, from the one list the stand checks itself.
+  assert.match(
+    stand,
+    /node infra\/dev\/stack-verify\/images\.mjs --stack=\$\{\{ matrix\.stack \}\}[^\n]*\n[^\n]*docker pull --quiet "\$image"/,
+  )
+  assert.match(
+    read('infra/dev/stack-verify/verify-stack.mjs'),
+    /const pinned = pinnedImagesOf\(/,
+    'the stand checks the list the job pulls',
+  )
+  assert.ok(stand.includes('playwright install --with-deps chromium webkit'))
+  // Gitleaks of the pinned image of apps/core/Dockerfile: no second pin to drift, and its tag is the
+  // version the stand requires (the stand checks the binary's output, verify-stack.mjs).
+  const { GITLEAKS_VERSION } = await import(join(root, 'infra/dev/site-import-verify/stand.mjs'))
+  assert.match(GITLEAKS_VERSION, /^\d+\.\d+\.\d+$/)
+  assert.match(
+    read('apps/core/Dockerfile'),
+    new RegExp(
+      `^ARG GITLEAKS_IMAGE=ghcr\\.io/gitleaks/gitleaks:v${GITLEAKS_VERSION.replaceAll('.', '\\.')}@sha256:[0-9a-f]{64}$`,
+      'm',
+    ),
+  )
+  assert.match(
+    read('infra/dev/stack-verify/verify-stack.mjs'),
+    /import \{ GITLEAKS_VERSION \} from '\.\.\/site-import-verify\/stand\.mjs'/,
+  )
+  assert.ok(stand.includes("sed -n 's/^ARG GITLEAKS_IMAGE=//p' apps/core/Dockerfile"))
+  assert.ok(sets(stand, 'P2_GITLEAKS_BINARY'), 'the job gives the stand its Gitleaks')
+  // A change of the import or the release starts М3 and М4; tasks and mcp change in almost every
+  // pull request and are covered by the weekly run.
+  assert.match(source, /^ {2}schedule:\n {4}- cron: '37 3 \* \* 1'$/m)
+  const filter = pathFilter(source)
+  for (const pattern of [
+    'apps/core/src/site-provisioning/**',
+    'apps/core/src/releases/**',
+    'apps/core/src/release-api/**',
+    'apps/core/src/deploy-step/**',
+    'apps/preview/**',
+    'packages/site-connections/src/hosting/**',
+    'packages/site-content/**',
+    'ci/**',
+  ])
+    assert.ok(filter.includes(pattern), `${pattern} is not in the path filter`)
+  for (const pattern of ['apps/core/src/tasks/**', 'apps/mcp/**'])
+    assert.equal(filter.includes(pattern), false, `${pattern} starts the hour-long job`)
+  // Every file the stand loads by a relative import, beyond its own folder too, starts the workflow.
+  const loaded = loads([
+    'infra/dev/stack-verify/verify-stack.mjs',
+    'infra/dev/stack-verify/images.mjs',
+  ])
+  assert.ok(loaded.includes('infra/dev/release-verify/services.mjs'), 'the stand was read')
+  for (const file of loaded)
+    assert.ok(starts(filter, file), `${file}, loaded by the stand, does not start the workflow`)
+  // The images the stand builds: their Dockerfiles — apps/core/Dockerfile is the deploy runner of
+  // `release` — and what their stages copy from the repository (`COPY . .` of core is the tree, its
+  // folders are named above).
+  const { BUILT_IMAGES } = await import(join(root, 'infra/dev/release-verify/stand.mjs'))
+  const { COPY_MODULES, STACK_BUILT_IMAGES } = await import(
+    join(root, 'infra/dev/stack-verify/stand.mjs')
+  )
+  const images = [...Object.values(BUILT_IMAGES), ...Object.values(STACK_BUILT_IMAGES)]
+  assert.ok(
+    images.some((image) => image.file === 'apps/core/Dockerfile'),
+    'the images were read',
+  )
+  for (const { file, target, context } of images) {
+    assert.ok(starts(filter, file), `${file}, built by the stand, does not start the workflow`)
+    if (file === 'apps/core/Dockerfile') continue
+    for (const source of copied(file, target)) {
+      const path = context ? join(context, source) : source
+      assert.ok(starts(filter, path), `${path} (${file}, ${target}) does not start the workflow`)
+    }
+  }
+  // Prisma and billing of the copy set the stand up and change in almost every pull request: only
+  // the weekly run covers them. A module added to the copy is a decision of its own.
+  assert.deepEqual(Object.values(COPY_MODULES).toSorted(), [
+    'packages/billing/src/index.ts',
+    'packages/db/src/index.ts',
+  ])
+  for (const file of Object.values(COPY_MODULES))
+    assert.equal(starts(filter, file), false, `${file} starts the hour-long job`)
+  // What the import and the release run in core beside their own folders starts the workflow, but
+  // the frame every pull request touches — the weekly run covers it. A folder newly imported is a
+  // decision of its own.
+  const product = ['site-provisioning', 'releases', 'release-api', 'deploy-step']
+  const weekly = ['config', 'infra', 'leases', 'metrics', 'queue', 'site-env']
+  const reached = new Set()
+  for (const folder of product)
+    for (const name of readdirSync(join(root, 'apps/core/src', folder), { recursive: true })) {
+      if (!/\.ts$/.test(name) || /\.test\.ts$/.test(name)) continue
+      const file = join('apps/core/src', folder, name)
+      for (const [, specifier] of read(file).matchAll(/\bfrom\s*'(\.{1,2}\/[^']+)'/g)) {
+        const target = relative(join(root, 'apps/core/src'), join(root, dirname(file), specifier))
+        const [top] = target.split('/')
+        if (target.includes('/') && !top.startsWith('.')) reached.add(top)
+      }
+    }
+  assert.ok(reached.has('git-workspace'), 'the imports of the release were read')
+  for (const folder of reached) {
+    if (weekly.includes(folder)) continue
+    assert.ok(
+      filter.includes(`apps/core/src/${folder}/**`),
+      `apps/core/src/${folder}/** is reached by the import or the release and does not start the workflow`,
+    )
+  }
+  for (const folder of weekly)
+    assert.ok(
+      reached.has(folder),
+      `apps/core/src/${folder} is no longer reached: drop it from weekly`,
+    )
+  // The download of a site at the import (`siteSource`) and the writing on the hosting.
+  for (const file of [
+    'packages/site-connections/src/index.ts',
+    'packages/site-connections/src/sources/sftp.ts',
+    'packages/site-connections/src/sources/ftp.ts',
+    'packages/site-connections/src/hosting/index.ts',
+  ])
+    assert.ok(
+      existsSync(join(root, file)) && starts(filter, file),
+      `${file} does not start the workflow`,
+    )
+})
+
 test('no file of the stands of the site stacks names the closed vendor but their README', () => {
   // The core of that CMS is never fetched, unpacked or run here (plan 62): a table of archives,
   // a stand or a fixture that names it is refused before it is used.

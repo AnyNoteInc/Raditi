@@ -9,7 +9,7 @@ import { randomBytes } from 'node:crypto'
 
 import { CheckFailed, exchange } from '../release-verify/runtime.mjs'
 import { PREVIEW_ROOT_QUERY } from '../release-verify/stand.mjs'
-import { FRAME_ENGINES, openCabinetFrame, startSecureForwarder } from './frame.mjs'
+import { frameEnginesOn, openCabinetFrame, startSecureForwarder } from './frame.mjs'
 import {
   browserTurn,
   canonicalLinks,
@@ -456,15 +456,18 @@ async function closeDialog(rt, ctx, entry) {
 }
 
 /**
- * The group `preview` on the builds `import` made a site of: P1–P4, then P5 in both engines. A
+ * The group `preview` on the builds `import` made a site of: P1–P4, then P5 in the engines of the
+ * host (`frameEnginesOn`: on Linux WebKit is a NOTE with its reason, О2б, the default (а)). A
  * failed P5 is the failed row of its engine and nothing more: the sign-in in the cabinet's frame
  * gives the group `release` nothing it needs — the site, the preview and the closed dialog are there
  * after P1–P4 — so the dialog is still closed and `release` still runs (Э3.16: a P5 of WebKit on
- * Linux must not hide the answer to О2). Returns the rows of P5 that failed; the run fails on them
- * after the other groups (verify-stack.mjs). Anything else that fails ends the group as before.
+ * Linux must not hide the answer to О2). Returns `{ failed, noted }`: the rows of P5 that failed —
+ * the run fails on them after the other groups (verify-stack.mjs) — and the ids of P5 it only noted
+ * (`frameRowProblems`, frame.mjs). Anything else that fails ends the group as before.
  */
 export async function runPreviewGroup(rt, ctx, entries) {
   const failed = []
+  const noted = []
   const forwarder = await startSecureForwarder({
     key: ctx.certificates.key,
     cert: ctx.certificates.cert,
@@ -479,7 +482,13 @@ export async function runPreviewGroup(rt, ctx, entries) {
       const login = await entry.stand
         .signIn(entry.build)
         .setPassword(previewSql(rt, row.id), password)
-      for (const engine of FRAME_ENGINES) {
+      const engines = frameEnginesOn(ctx.host.kind)
+      for (const { engine, reason } of engines.noted) {
+        const id = `P5 ${entry.build.archive} ${engine}`
+        rt.note(`${id} does not run on a ${ctx.host.kind} host: ${reason}`)
+        noted.push(id)
+      }
+      for (const engine of engines.signIn) {
         try {
           await signInInFrame(rt, ctx, entry, { engine, forwarder, login, password })
         } catch (error) {
@@ -494,5 +503,5 @@ export async function runPreviewGroup(rt, ctx, entries) {
   } finally {
     await forwarder.close()
   }
-  return failed
+  return { failed, noted }
 }
