@@ -45,7 +45,7 @@ Compose app-ВМ (spec §19): Traefik — единственный публич�
 | Каталог | uid | Файлы |
 | --- | --- | --- |
 | `web/` | 10001 | `app.env`: `DATABASE_URL` (`raditi`), `REDIS_URL` (общий пользователь `default`), `BETTER_AUTH_SECRET`, ключи SmartCaptcha, ключи S3 сервисного аккаунта web, AppRole web (политики `sites-writer` и `workspace-provisioner`: доступы сайтов и переменные — только запись, ключ Transit рабочего пространства — только создание), собственный `METRICS_TOKEN` (не равен токену core и llm); `vault-ca.pem` |
-| `core/` | 10002 | `app.env`: `DATABASE_URL` (`raditi`), `REDIS_URL` (общий пользователь `default`), ключи S3 сервисного аккаунта core, AppRole core, `METRICS_TOKEN` (общий с llm), `SENDSAY_API_KEY`; `vault-ca.pem` |
+| `core/` | 10002 | `app.env`: `DATABASE_URL` (`raditi`), `REDIS_URL` (общий пользователь `default`), ключи S3 сервисного аккаунта core, AppRole core, `METRICS_TOKEN` (общий с llm), `SENDSAY_API_KEY`, `LEADS_TELEGRAM_BOT_TOKEN` (бот заявок с главной; id группы — `LEADS_TELEGRAM_CHAT_ID` в `.env` ВМ, [план 65](../../docs/plan/65-landing-platforms-leads.md)); `vault-ca.pem` |
 | `llm/` | 10008 | `app.env`: общий `DATABASE_URL` (`raditi`), собственные `VAULT_ROLE_ID`/`VAULT_SECRET_ID` для `llm-subscriptions`, общий с core `METRICS_TOKEN`; `vault-ca.pem`, `egress-ca.pem`, `egress-client.pem` (цепочка), `egress-client-key.pem` |
 | `migrate/` | 10004 | `app.env`: `DATABASE_URL` владельца схемы `raditi` (им же пользуется `seed`) |
 | `postgres/` | 70 | `superuser-password`, `password` (общий пароль `raditi`) |

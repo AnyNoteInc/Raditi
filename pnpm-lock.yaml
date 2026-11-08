@@ -695,6 +695,9 @@ importers:
       '@repo/storage':
         specifier: workspace:*
         version: link:../../packages/storage
+      '@repo/telegram':
+        specifier: workspace:*
+        version: link:../../packages/telegram
       '@repo/turn-keys':
         specifier: workspace:*
         version: link:../../packages/turn-keys

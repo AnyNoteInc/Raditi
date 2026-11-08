@@ -58,9 +58,11 @@ describe('landing texts', () => {
 
   it('keeps the names with a hyphen or a slash in one piece', () => {
     const texts = textsOf(renderLanding(guest))
-    const names = texts.filter(({ text }) => /1С-Битрикс|\/wp-admin/.test(text))
+    const names = texts.filter(({ text }) => /1С-Битрикс/.test(text))
 
-    expect(names.map(({ text }) => text).sort()).toEqual(['/wp-admin', '1С-Битрикс', '1С-Битрикс'])
+    // The answer about the sites, the first step, the row of the board of systems and the line at
+    // the foot of the page (docs/plan/65-landing-platforms-leads.md, Л2).
+    expect(names.map(({ text }) => text)).toEqual(Array.from({ length: 4 }, () => '1С-Битрикс'))
     for (const { parent } of names) expect(parent.className).toContain('nowrap')
   })
 
@@ -85,7 +87,7 @@ describe('landing texts', () => {
     // The header, its mobile menu, the first screen, the plans and the final block.
     expect(labels).toEqual(Array.from({ length: 5 }, () => 'Зарегистрироваться'))
     expect(plain(container.textContent)).toContain(
-      'Зарегистрируйтесь сейчас — подключение сайта откроется позже.',
+      'Зарегистрируйтесь и оставьте заявку — подключим сайт бесплатно.',
     )
   })
 
@@ -110,7 +112,7 @@ describe('landing texts', () => {
 
     expect(container.querySelectorAll('a[href="/sign-up"]')).toHaveLength(0)
     expect(container.textContent).not.toContain('Зарегистрируйтесь')
-    expect(container.textContent).toContain('Подключение сайта откроется позже.')
+    expect(plain(container.textContent)).toContain('Оставьте заявку — подключим сайт бесплатно.')
     // Nor is the gift of the registration offered again: by the action under the tariffs they
     // read only when the tariff is chosen.
     const tariffs = plain(container.querySelector('#pricing')?.textContent)
@@ -123,7 +125,7 @@ describe('landing texts', () => {
     )
     expect(hero).not.toMatch(/зарегистр/i)
     expect(hero).toContain(
-      'Сервис готовится к запуску. Сейчас можно попробовать пример; подключение сайта и оплата откроются позже.',
+      'Сервис готовится к запуску. Оставьте заявку — подключим сайт бесплатно. Оплата откроется позже.',
     )
   })
 
@@ -146,7 +148,7 @@ describe('landing texts', () => {
     )
 
     expect(hero).not.toMatch(/зарегистр/i)
-    expect(hero).toContain('Сейчас можно попробовать пример; подключение сайта')
+    expect(hero).toContain('Оставьте заявку — подключим сайт бесплатно.')
     // And no gift is promised to a visitor who may have had it.
     expect(plain(container.querySelector('#pricing')?.textContent)).not.toMatch(
       /при регистрации|в подарок/i,
@@ -159,7 +161,7 @@ describe('landing texts', () => {
 
     expect(text).toContain('Радити — ИИ-помощник для сайта вашего бизнеса.')
     expect(text).toContain(
-      'Сервис готовится к запуску. Сейчас можно попробовать пример и зарегистрироваться; подключение сайта и оплата откроются позже.',
+      'Сервис готовится к запуску. Попробуйте пример, зарегистрируйтесь и оставьте заявку — подключим сайт бесплатно. Оплата откроется позже.',
     )
     expect(text).toContain('ИИ-помощник для вашего сайта')
   })
@@ -191,7 +193,6 @@ describe('landing texts', () => {
       'Повторить правку',
       'анний доступ',
       'Агент ',
-      'Telegram',
       'Создать аккаунт',
       'Начать с Радити',
       'Познакомиться',
@@ -280,13 +281,19 @@ describe('landing texts', () => {
     }
   })
 
-  it('promises the gift of the registration once, by the action under the tariffs', () => {
+  it('promises the gift of the registration twice: by the action under the tariffs and in the lead', () => {
     const container = renderLanding(guest)
     const text = plain(container.textContent)
     const gift = `${signupGiftCredits} кредитов в подарок`
 
-    expect(text.split(gift)).toHaveLength(2)
+    // The lead offers the same gift (docs/plan/65-landing-platforms-leads.md, Л4) and says it
+    // comes with the registration.
+    expect(text.split(gift)).toHaveLength(3)
     expect(plain(container.querySelector('#pricing')?.textContent)).toContain(gift)
+    expect(plain(container.querySelector('#lead')?.textContent)).toContain(gift)
+    expect(plain(container.querySelector('#lead')?.textContent)).toContain(
+      'придут вместе с регистрацией',
+    )
     // In credits and in small edits: no count of tasks is made of the gift.
     expect(text).not.toMatch(/в подарок[^.]*\d+ задач/)
   })

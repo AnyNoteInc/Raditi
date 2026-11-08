@@ -299,11 +299,11 @@ describe('landing pricing', () => {
 
     const included = screen.getByText(/^В каждый тариф войдут/)
     expect(included).toHaveTextContent(
-      'В каждый тариф войдут правки текстов, цен, фото, акций и страниц на сайтах WordPress, копия перед правкой и отмена.',
+      'В каждый тариф войдут правки текстов, цен, фото, акций и страниц сайта, копия перед правкой и отмена.',
     )
     for (const name of ['Старт', 'Бизнес', 'Агентство']) {
       expect(planCard(name).contains(included)).toBe(false)
-      expect(planCard(name)).not.toHaveTextContent('WordPress')
+      expect(planCard(name)).not.toHaveTextContent('отмена')
     }
   })
 

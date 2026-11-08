@@ -31,6 +31,15 @@ export const queueJobDefaults: Record<QueueName, DefaultJobOptions> = {
   'browser-sessions': lifecycleJobs,
   // The files of a project for web (06.11.2026): a failed job is put again by the next look.
   'site-files': lifecycleJobs,
+  // A lead on its way to Telegram (docs/plan/65-landing-platforms-leads.md): its sending is retried
+  // for about two hours (15 s doubling, ten tries), then the poll posts it again; job data holds
+  // only the id. The poll of the bot's buttons sets its own single attempt.
+  leads: {
+    attempts: 10,
+    backoff: { type: 'exponential', delay: 15_000 },
+    removeOnComplete: { age: DAY, count: 1_000 },
+    removeOnFail: { age: 7 * DAY },
+  },
   // SendSay hiccups are retried: 15 s, 30 s, … about half an hour in total.
   // Job data holds one-time links: a delivered letter leaves Redis at once, a failed one
   // after a day.

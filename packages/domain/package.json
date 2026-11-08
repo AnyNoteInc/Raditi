@@ -8,6 +8,7 @@
     ".": "./src/index.ts",
     "./agent/skills": "./src/agent/skills.ts",
     "./billing/credit-numbers": "./src/billing/credit-numbers.ts",
+    "./leads/lead-input": "./src/leads/lead-input.ts",
     "./llm/model-class": "./src/llm/model-class.ts",
     "./tasks/agent-command-answers": "./src/tasks/agent-command-answers.ts",
     "./tasks/client-feed-labels": "./src/tasks/client-feed-labels.ts",

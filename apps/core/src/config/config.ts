@@ -33,6 +33,7 @@ import {
   type TurnExecutorKind,
 } from '@repo/domain'
 import { mailerConfigFromEnv, type MailerConfig } from '@repo/mail'
+import { leadsTelegramConfigFromEnv, type LeadsTelegramConfig } from '@repo/telegram'
 import { DEV_METRICS_TOKEN, metricsTokenProblem } from '@repo/observability'
 import {
   egressRefusedSubnetsVar,
@@ -85,6 +86,11 @@ export interface CoreConfig {
   sandbox: SandboxConfig | null
   agentDrivers: AgentDriverConfig
   mailer: MailerConfig
+  /**
+   * The bot of the leads of the landing (docs/plan/65-landing-platforms-leads.md, Л9); null:
+   * leads wait in their queue until it is set.
+   */
+  leads: LeadsTelegramConfig | null
   /** Where turns run: core's own Docker (local, not in production) or runner VMs. */
   turnExecutor: TurnExecutorKind
   /**
@@ -460,6 +466,7 @@ export function loadConfig(env: Env): CoreConfig {
   const coreSandbox = turnExecutor === 'local'
   const sandbox = coreSandbox ? section(() => sandboxConfigFromEnv(env)) : undefined
   const mailer = section(() => mailerConfigFromEnv(env))
+  const leads = section(() => leadsTelegramConfigFromEnv(env))
   // Only core charges renewals; the other roles neither need nor read the shop settings.
   const yookassa = section(() => yookassaConfigFromEnv(env))
   const agentDrivers = section(() =>
@@ -658,6 +665,7 @@ export function loadConfig(env: Env): CoreConfig {
     sandbox: coreSandbox ? present(sandbox) : null,
     agentDrivers: present(agentDrivers),
     mailer: present(mailer),
+    leads: leads ?? null,
     turnExecutor,
     sandboxWarmMs: turnExecutor === 'local' ? own.SANDBOX_WARM_MINUTES * 60_000 : 0,
     ...(runnerRuntime ? { runnerRuntime } : {}),

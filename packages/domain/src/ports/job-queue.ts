@@ -18,6 +18,8 @@ export const queueNames = [
   'browser-sessions',
   // The files of a project for its section «Терминал», read by core for web (06.11.2026).
   'site-files',
+  // Leads of the landing on their way to the Telegram group (docs/plan/65-landing-platforms-leads.md).
+  'leads',
 ] as const
 export type QueueName = (typeof queueNames)[number]
 

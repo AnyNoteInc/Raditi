@@ -3,6 +3,7 @@ import type { Metadata, Viewport } from 'next'
 
 import { Landing } from '@/components/landing/landing'
 import { Pricing } from '@/components/landing/pricing'
+import { env } from '@/env'
 import { getLandingPlans } from '@/server/landing-plans'
 import { getLandingViewer } from '@/server/landing-viewer'
 
@@ -22,6 +23,10 @@ export default async function HomePage() {
   // answers within three seconds; the plans are kept in memory for a minute.
   const [viewer, plans] = await Promise.all([getLandingViewer(), getLandingPlans()])
   return (
-    <Landing viewer={viewer} pricing={<Pricing {...plans} isGuest={viewer.status === 'guest'} />} />
+    <Landing
+      viewer={viewer}
+      pricing={<Pricing {...plans} isGuest={viewer.status === 'guest'} />}
+      captchaSiteKey={env.auth().captcha?.clientKey}
+    />
   )
 }
