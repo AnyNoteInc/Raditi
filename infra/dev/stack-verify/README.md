@@ -9,6 +9,7 @@ pnpm verify:stack -- --build=joomla-5.4.10 --keep  # одна сборка, ст
 pnpm verify:stack -- --no-build                    # сборки копии и образы прошлого прогона; отказ, если дерево изменилось
 bash infra/dev/stack-verify/colima-m7.sh joomla --build=joomla-5.4.10 --group=release --no-m2 --runtime=runsc
                                                    # тот же стенд внутри ВМ Colima, под gVisor (раздел «В ВМ Colima»)
+bash infra/dev/stack-verify/colima-m7.sh joomla    # М7: М2 и все группы по всем сборкам стека под gVisor (раздел «М7: порядок прогона»)
 node infra/dev/stack-verify/images.mjs --stack=joomla --tags
                                                    # закреплённые образы прогона и теги, по которым их тянут (раздел «В CI»)
 ```
@@ -66,6 +67,22 @@ bash infra/dev/stack-verify/colima-m7.sh <стек> [--no-sync] [--build=<id>]..
 4. `pnpm verify:stack -- --stack=<стек> --runtime=<среда>` с выбранными сборками и группами (без `--group` — `import`, `preview`, `release`).
 
 `--runtime` — по умолчанию `runsc`. ВМ скрипт не запускает, не останавливает и не настраивает. Инструменты ВМ ставятся один раз, в домашнюю папку ВМ, с проверкой сумм: Node 26.10.0 (`node-v26.10.0-linux-arm64.tar.gz` по `SHASUMS256.txt` nodejs.org) в `~/.raditi-m7/node`, ему нужен пакет `libatomic1`; pnpm 12.6.0 (`npm install -g --prefix ~/.raditi-m7/node pnpm@12.6.0`); Gitleaks 8.30.1 (`gitleaks_8.30.1_linux_arm64.tar.gz` по файлу сумм выпуска) в `~/.raditi-m7/bin`. Закреплённые образы — `docker pull` в демон ВМ (`DOCKER_HOST=unix://$HOME/.colima/gvisor/docker.sock` на Mac).
+
+### М7: порядок прогона
+
+М7 ([план 62](../../../docs/plan/62-site-stacks.md), §5.5) — М2 и М4 под `runsc`, целиком внутри ВМ, хотя бы раз на итоговом образе стека; в CI её нет (Т69): прогон руками, на смену образа и на ветку. Одна команда на стек, без `--build` и `--group`:
+
+```sh
+caffeinate -i -s bash infra/dev/stack-verify/colima-m7.sh joomla
+```
+
+1. До запуска: ВМ `gvisor` отвечает (`colima status -p gvisor`), рядом не идёт другой стенд Docker — М7 нагружает демон ВМ и сеть Mac; инструменты ВМ и закреплённые образы на месте (абзац выше; чего нет, скрипт называет словами).
+2. Шаги 1 и 2 скрипта: копия дерева в ВМ, установка и сборка, архивы всех сборок стека из `cms-archives.json` по закреплённой сумме, Playwright, образы `site` версий PHP этих сборок.
+3. Шаг 3 — набор М2 по всем сборкам под `runsc`. Строка `M2 <сборка>: PHP …, production … s, preview … s, … files` каждой сборки — срок готовности предпросмотра. Среду она не печатает: `runsc` набору задаёт скрипт переменной `PREVIEW_RUNTIME` (строка `runtime runsc` в начале лога), и набор ждёт среду из неё же; наблюдение `runsc` у контейнера предпросмотра — строки `PASS docker inspect` шага 4 (§10 плана 62, «Результат Э3», отступление 8).
+4. Шаг 4 — `verify:stack` с группами `import`, `preview`, `release` по всем сборкам под `runsc`. Среду доказывают строки `PASS docker inspect: … under runsc` у песочницы хода, контейнера предпросмотра и браузера агента и `both under runc by docker inspect` у прода и хостинга; строка `P5 … webkit` в ВМ — `NOTE` (О2б).
+5. Итог — в §10 плана 62, по строке на сборку и ступень: коммит дерева, дата, числа проверок.
+
+Прогон 08.11.2026 (Э3.14; дерево `c0ad6e2b` с правками документов среза; ВМ `gvisor`, arm64, Ubuntu 24.04.4): код 0, 38 минут целиком. Шаг 3 — 36 тестов из 36 за 383 с; готовность предпросмотра под `runsc` — 20 с (3.10.12, 6 206 файлов), 28 с (4.4.14, 9 360), 38 с (5.4.10, 9 823), 30 с (6.2.0, 9 521). Шаг 4 — хост `vm`, 66 строк таблицы, 479 проверок и 23 `NOTE` в строках, четыре строки `NOTE` о `P5` WebKit, 1 809 с.
 
 ## В CI
 
