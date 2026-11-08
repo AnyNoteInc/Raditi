@@ -236,7 +236,7 @@ describe.skipIf(!enabled)('MCP on the preview of a dialog with PostgreSQL', () =
     await db.previewBrowserRequest.deleteMany({ where: { previewId: fixture.previewId } })
     await db.previewSeedMismatch.deleteMany({ where: { previewId: fixture.previewId } })
     await db.llmKey.deleteMany({ where: { taskId: fixture.taskId } })
-    await db.siteLease.deleteMany({ where: { siteId: fixture.siteId } })
+    await db.siteLease.deleteMany({ where: { siteId: { in: [fixture.siteId, fixture.taskId] } } })
     await db.mcpCall.deleteMany({ where: { turn: { taskId: fixture.taskId } } })
     await db.snapshot.deleteMany({ where: { taskId: fixture.taskId } })
     await db.taskCandidate.deleteMany({ where: { taskId: fixture.taskId } })
@@ -411,6 +411,32 @@ describe.skipIf(!enabled)('MCP on the preview of a dialog with PostgreSQL', () =
     expect(call.snapshot?.previewId).toBe(fixture.previewId)
     const lease = await db.siteLease.findUniqueOrThrow({ where: { siteId: fixture.siteId } })
     expect(lease).toMatchObject({ inflightMcpCallId: null, heldForOperator: false })
+  })
+
+  it('writes into the preview of a chat with the code, whose turn holds the lease of the chat', async () => {
+    // A chat with the code holds a lease of its own (`turnLeaseOf`, docs/plan/61, К14): its
+    // assignment names the chat, not the site (the site's row stays, as the fake gateway reads it).
+    // A write of its turn belongs to it all the same.
+    await db.$transaction([
+      db.turnAssignment.updateMany({
+        where: { taskId: fixture.taskId },
+        data: { siteId: fixture.taskId },
+      }),
+      db.siteLease.create({
+        data: {
+          siteId: fixture.taskId,
+          holderTaskId: fixture.taskId,
+          epoch: 1,
+          operation: 'turn',
+          expiresAt: new Date(Date.now() + 600_000),
+        },
+      }),
+    ])
+    const f = await previewFixture()
+    expect(f.scope.leaseId).toBe(fixture.taskId)
+    expect(await f.edit('chat', { title: 'После' })).toMatchObject({ result: 'ok' })
+    expect(await f.edit('chat', { title: 'После' })).toMatchObject({ result: 'ok' })
+    expect(await db.previewDbOperation.count({ where: { taskId: fixture.taskId } })).toBe(1)
   })
 
   it('records each write as an operation of the plan with both states sealed', async () => {

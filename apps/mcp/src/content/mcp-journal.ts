@@ -1274,7 +1274,8 @@ export class PostgresMcpJournal {
       !call.requestHash ||
       (exactEpoch && call.leaseEpoch !== scope.epoch) ||
       assignment.taskId !== scope.taskId ||
-      assignment.siteId !== scope.siteId ||
+      // The turn holds the chat's own row or its site's (`turnLeaseOf`, `leaseIdOf`).
+      assignment.siteId !== leaseIdOf(scope) ||
       assignment.sessionId !== scope.sessionId ||
       assignment.turnNo !== scope.turn ||
       assignment.firstEpoch !== scope.firstEpoch ||
