@@ -1,0 +1,366 @@
+# The single server (infra/server/README.md): everything of the platform on one VM, layered over
+# infra/app/docker-compose.yml with COMPOSE_FILE=docker-compose.yml:server/docker-compose.server.yml.
+# What the multi-VM design (spec §19) puts on other machines lives here:
+#   - Vault (OpenBao) and the secret renderer — on the host, systemd (host/);
+#   - S3 — SeaweedFS, TLS from the internal CA as s3.raditi.internal;
+#   - the sandbox VM — runner and watchdog under gVisor (runsc), on this Docker;
+#   - mcp, browser and the stream gateway of the cloud browser (preview).
+# The private address 10.10.0.10 (raditi-net.service) stands for the private network: Vault, S3,
+# PostgreSQL for the host-network processes, the runner API, llm, mcp and browser listen or are
+# published only there, and raditi-host.nft drops it from outside. llm goes to Z.ai directly
+# (owner's answer to П2): no egress node, no LLM_EGRESS_*.
+name: raditi-app
+
+x-logging: &logging
+  driver: journald
+  options: { tag: '{{.Name}}' }
+
+x-hardened: &hardened
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  logging: *logging
+
+x-internal-hosts: &internal-hosts
+  - vault.raditi.internal:10.10.0.10
+  - s3.raditi.internal:10.10.0.10
+
+x-s3: &s3
+  S3_ENDPOINT: https://s3.raditi.internal:8333
+  S3_REGION: ru-msk
+  S3_FORCE_PATH_STYLE: 'true'
+
+x-secrets: &secrets
+  type: bind
+  target: /run/raditi
+  read_only: true
+  bind: { create_host_path: false }
+
+services:
+  traefik:
+    environment:
+      # server/traefik/server.yml: the dashboard with basic auth and the apex of previews
+      DASHBOARD_HOST: ${DASHBOARD_HOST:?Set DASHBOARD_HOST}
+      PREVIEW_APEX_HOST: ${PREVIEW_APEX_HOST:-}
+      BROWSER_STREAM_HOST: ${APP_DOMAIN}
+    volumes:
+      - ./server/traefik/server.yml:/etc/traefik/dynamic/server.yml:ro
+      - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/traefik' }
+    networks: [stream-edge]
+
+  web:
+    environment:
+      <<: *s3
+      # The panel of the cloud browser: Traefik routes this path of the apex to the stream gateway
+      BROWSER_STREAM_PUBLIC_URL: wss://${APP_DOMAIN}/v1/browser/stream
+    extra_hosts: *internal-hosts
+
+  core:
+    environment:
+      <<: *s3
+      LLM_CONTROL_URL: http://10.10.0.10:${LLM_GATEWAY_PUBLISH:-8084}
+      BROWSER_WORKER_URL: http://10.10.0.10:8086
+      SANDBOX_EGRESS_REFUSED_SUBNETS: ${SANDBOX_EGRESS_REFUSED_SUBNETS:?Set SANDBOX_EGRESS_REFUSED_SUBNETS}
+    extra_hosts: *internal-hosts
+
+  postgres:
+    # The host-network processes (browser) reach the database on the private address only
+    ports: ['10.10.0.10:5432:5432']
+    # A port is published only through a network with a gateway; the others are internal
+    networks: [mcp-data, preview-data, server-pub]
+
+  llm:
+    environment:
+      # The direct path to api.z.ai: the four egress variables empty (all or none, llm-config.ts)
+      LLM_EGRESS_PROXY_URL: ''
+      LLM_EGRESS_CA_FILE: ''
+      LLM_EGRESS_CLIENT_CERT_FILE: ''
+      LLM_EGRESS_CLIENT_KEY_FILE: ''
+      LLM_GATEWAY_HOSTS: 127.0.0.1:8084,10.10.0.10:${LLM_GATEWAY_PUBLISH:-8084}
+    # The base file leaves llm without a resolver (its only way out was the egress proxy by IP)
+    dns: !override [77.88.8.8, 77.88.8.1]
+    extra_hosts: *internal-hosts
+
+  s3:
+    <<: *hardened
+    image: ${SEAWEEDFS_IMAGE:?Set the digest-pinned SeaweedFS image}
+    user: '10007:10007'
+    depends_on:
+      server-volume-init: { condition: service_completed_successfully }
+    command:
+      - server
+      - -dir=/data
+      - -ip=s3
+      - -ip.bind=0.0.0.0
+      # Otherwise it reports cluster statistics abroad (telemetry.seaweedfs.com, rule 1)
+      - -master.telemetry=false
+      - -s3
+      - -s3.port=8333
+      - -s3.config=/run/raditi/s3.json
+      - -s3.cert.file=/run/raditi/s3.pem
+      - -s3.key.file=/run/raditi/s3.key
+      - -volume.max=0
+    ports: ['10.10.0.10:8333:8333']
+    volumes:
+      # nocopy: an empty volume would otherwise get /data of the image, owned by uid 1000
+      - { type: volume, source: s3-data, target: /data, volume: { nocopy: true } }
+      - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/s3' }
+    tmpfs: ['/tmp:size=64m,uid=10007,gid=10007,mode=0700']
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'wget -q -O /dev/null --no-check-certificate https://127.0.0.1:8333/healthz || exit 1',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    cpus: 1
+    mem_limit: 1g
+    pids_limit: 512
+    networks:
+      s3-net: { aliases: [s3.raditi.internal] }
+      server-pub: {}
+
+  # The six buckets of spec §14, created once and again on every deploy (no-op when they exist)
+  s3-buckets:
+    image: ${SEAWEEDFS_IMAGE:?Set the digest-pinned SeaweedFS image}
+    profiles: [ops]
+    restart: 'no'
+    user: '10007:10007'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    depends_on:
+      s3: { condition: service_healthy }
+    entrypoint: ['/bin/sh', '-euc']
+    command:
+      - |
+        for bucket in raditi-inbox raditi-sessions raditi-logs raditi-artifacts raditi-backups raditi-platform; do
+          printf 's3.bucket.create -name %s\nexit\n' "$$bucket" | weed shell -master=s3:9333 >/dev/null 2>&1 || true
+        done
+        # weed shell waits for more input without `exit`
+        printf 's3.bucket.list\nexit\n' | weed shell -master=s3:9333 2>&1 | grep -c '^  raditi-'
+    networks: [s3-net]
+
+  server-volume-init:
+    image: ${REDIS_IMAGE:?Set the digest-pinned Redis image}
+    restart: 'no'
+    user: '0:0'
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 32
+    logging: *logging
+    entrypoint: ['/bin/sh', '-euc']
+    command: ['chown 10007:10007 /v/s3 && chmod 0700 /v/s3']
+    volumes:
+      - s3-data:/v/s3
+
+  mcp:
+    <<: *hardened
+    image: ${MCP_IMAGE:?Set the digest-pinned mcp image}
+    init: true
+    user: '10005:10005'
+    command: ['--env-file=/run/raditi/app.env', 'dist/main.js']
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      NODE_ENV: production
+      APP_ENV: production
+      VAULT_ADDR: https://vault.raditi.internal:8200
+      NODE_EXTRA_CA_CERTS: /run/raditi/vault-ca.pem
+      MCP_PORT: '8082'
+      # The Host sandbox-gw sends upstream (SANDBOX_MCP_UPSTREAM of the runner)
+      MCP_ALLOWED_HOSTS: 10.10.0.10:8082
+      BROWSER_WORKER_URL: http://10.10.0.10:8086
+      HOME: /tmp
+    extra_hosts: *internal-hosts
+    ports: ['10.10.0.10:8082:8082']
+    volumes:
+      - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/mcp' }
+    tmpfs: ['/tmp:size=64m,uid=10005,gid=10005,mode=0700']
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:8082/health').then(r => process.exit(r.status === 200 ? 0 : 1), () => process.exit(1))
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    stop_grace_period: 40s
+    cpus: 1
+    mem_limit: 1g
+    pids_limit: 512
+    networks: [mcp-data, mcp-egress]
+
+  # The cloud browser of chats (apps/browser): Chromium of each session in its own container under
+  # runsc. Host network: the control ports of Chromium are published on the host's loopback, and
+  # it listens on the private address only.
+  browser:
+    <<: *hardened
+    image: ${BROWSER_WORKER_IMAGE:?Set the digest-pinned browser image}
+    init: true
+    user: '10006:10006'
+    group_add: ['${DOCKER_GID:?Set DOCKER_GID, the group of /var/run/docker.sock}']
+    network_mode: host
+    command: ['--env-file=/run/raditi/app.env', 'dist/main.js']
+    depends_on:
+      postgres: { condition: service_healthy }
+      s3: { condition: service_healthy }
+    environment:
+      <<: *s3
+      NODE_ENV: production
+      APP_ENV: production
+      NODE_EXTRA_CA_CERTS: /run/raditi/vault-ca.pem
+      S3_BUCKET_INBOX: raditi-inbox
+      BROWSER_WORKER_HOST: 10.10.0.10
+      BROWSER_WORKER_PORT: '8086'
+      BROWSER_RUNTIME: runsc
+      BROWSER_DOCKER_SOCKET: /var/run/docker.sock
+      BROWSER_IMAGE: ${BROWSER_IMAGE:?Set the digest-pinned browser session image}
+      BROWSER_FORWARDER_IMAGE: ${BROWSER_FORWARDER_IMAGE:?Set the digest-pinned forwarder image}
+      BROWSER_EGRESS_IMAGE: ${BROWSER_EGRESS_IMAGE:?Set the digest-pinned client egress image}
+      SANDBOX_NETWORK_GUARD_IMAGE: ${SANDBOX_NETWORK_GUARD_IMAGE:?Set the digest-pinned network guard image}
+      SANDBOX_EGRESS_REFUSED_SUBNETS: ${SANDBOX_EGRESS_REFUSED_SUBNETS:?Set SANDBOX_EGRESS_REFUSED_SUBNETS}
+      BROWSER_PLATFORM_HOSTS: ${BROWSER_PLATFORM_HOSTS:?Set BROWSER_PLATFORM_HOSTS}
+      HOME: /tmp
+    extra_hosts: *internal-hosts
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/browser' }
+    tmpfs: ['/tmp:size=256m,uid=10006,gid=10006,mode=0700']
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://10.10.0.10:8086/health').then(() => process.exit(0), () => process.exit(1))
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    stop_grace_period: 40s
+    cpus: 2
+    mem_limit: 2g
+    pids_limit: 1024
+
+  # The stream gateway of the cloud browser (apps/preview, its second listener on 8091). Previews
+  # themselves are not served yet: no wildcard certificate (owner, 08.11.2026: apex only) and no
+  # preview executor in production (M10). The gateway still needs its base domain to start.
+  preview:
+    <<: *hardened
+    image: ${PREVIEW_GATEWAY_IMAGE:?Set the digest-pinned preview gateway image}
+    init: true
+    user: '10009:10009'
+    command: ['--env-file=/run/raditi/app.env', 'dist/main.js']
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      NODE_ENV: production
+      APP_ENV: production
+      APP_URL: https://${APP_DOMAIN}
+      PREVIEW_BASE_DOMAIN: ${PREVIEW_BASE_DOMAIN:?Set PREVIEW_BASE_DOMAIN}
+      PREVIEW_SCHEME: https
+      PREVIEW_GATEWAY_PORT: '8090'
+      BROWSER_WORKER_URL: http://10.10.0.10:8086
+      BROWSER_STREAM_PORT: '8091'
+      HOME: /tmp
+    volumes:
+      - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/preview' }
+    tmpfs: ['/tmp:size=16m,uid=10009,gid=10009,mode=0700']
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:8090/__raditi/health').then(r => process.exit(r.status === 200 ? 0 : 1), () => process.exit(1))
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    stop_grace_period: 40s
+    cpus: 1
+    mem_limit: 512m
+    pids_limit: 256
+    networks: [stream-edge, preview-data, preview-out]
+
+  # The sandbox VM's two processes (infra/sandbox/docker-compose.yml), here on the same Docker.
+  watchdog:
+    image: ${SANDBOX_WATCHDOG_IMAGE:?Set the digest-pinned watchdog image}
+    restart: unless-stopped
+    user: '0:0'
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: 0.25
+    mem_limit: 128m
+    pids_limit: 32
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    logging: *logging
+
+  # Host network: core sees the runner from 10.10.0.10, the address its token hash is bound to.
+  # Only /etc/raditi/runner (the token) and the public CA are mounted, never /etc/raditi itself.
+  runner:
+    image: ${RUNNER_IMAGE:?Set the digest-pinned runner image}
+    restart: unless-stopped
+    user: '0:0'
+    read_only: true
+    init: true
+    network_mode: host
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    depends_on:
+      core: { condition: service_healthy }
+    cpus: 1
+    mem_limit: 512m
+    pids_limit: 256
+    tmpfs: ['/tmp:size=64m']
+    environment:
+      NODE_ENV: production
+      APP_ENV: production
+      RUNNER_CORE_URL: http://10.10.0.10:${RUNNER_API_PUBLISH:-8083}
+      RUNNER_TOKEN_FILE: /etc/raditi/runner-token
+      RUNNER_S3_ORIGIN: https://s3.raditi.internal:8333/raditi-sessions
+      RUNNER_S3_CA_FILE: /etc/raditi/ca.pem
+      RUNNER_MAX_TURNS: '1'
+      SANDBOX_RUNTIME: runsc
+      SANDBOX_DOCKER_SOCKET: /var/run/docker.sock
+      SANDBOX_GATEWAY_IMAGE: ${SANDBOX_GATEWAY_IMAGE:?Set the digest-pinned sandbox gateway image}
+      SANDBOX_NETWORK_GUARD_IMAGE: ${SANDBOX_NETWORK_GUARD_IMAGE:?Set the digest-pinned network guard image}
+      SANDBOX_LLM_UPSTREAM: http://10.10.0.10:${LLM_GATEWAY_PUBLISH:-8084}
+      SANDBOX_MCP_UPSTREAM: http://10.10.0.10:8082
+      SANDBOX_EGRESS_REFUSED_SUBNETS: ${SANDBOX_EGRESS_REFUSED_SUBNETS:?Set SANDBOX_EGRESS_REFUSED_SUBNETS}
+    extra_hosts: *internal-hosts
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /etc/raditi/runner:/etc/raditi:ro
+    logging: *logging
+
+networks:
+  s3-net: { internal: true }
+  # The gateway of the ports published on the private address (S3, PostgreSQL)
+  server-pub:
+    driver_opts: { com.docker.network.bridge.name: '${BRIDGE_PREFIX:-rd}-pub' }
+  mcp-data: { internal: true }
+  mcp-egress:
+    driver_opts: { com.docker.network.bridge.name: '${BRIDGE_PREFIX:-rd}-mcp' }
+  stream-edge: { internal: true } # Traefik ↔ the stream gateway
+  preview-data: { internal: true }
+  preview-out:
+    driver_opts: { com.docker.network.bridge.name: '${BRIDGE_PREFIX:-rd}-preview' }
+
+volumes:
+  s3-data: { external: true, name: '${VOLUME_PREFIX:-raditi-app}-s3' }

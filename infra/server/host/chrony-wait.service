@@ -1,0 +1,17 @@
+# /etc/systemd/system/chrony-wait.service: chrony of Ubuntu 22.04 has no such unit. docker.service
+# waits for time-sync.target (infra/app/README.md, «Хост»), which this unit holds until the sync.
+[Unit]
+Description=Wait for chrony to synchronize the system clock
+After=chrony.service
+Requires=chrony.service
+Before=time-sync.target
+Wants=time-sync.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/chronyc -h 127.0.0.1,::1 waitsync 0 1 0.0 1
+TimeoutStartSec=180
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

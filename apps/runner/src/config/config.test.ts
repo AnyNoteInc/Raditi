@@ -43,9 +43,35 @@ describe('loadRunnerConfig', () => {
       tokenFile: '/etc/raditi/runner-token',
       caFile: null,
       s3Origin: null,
+      s3CaFile: null,
       maxTurns: 1,
       sandbox: { runtime: 'runc', socketPath: '/var/run/docker.sock' },
     })
+  })
+
+  it('trusts a private CA of S3 only as an absolute file, and only next to its S3 origin', () => {
+    expect(
+      loadRunnerConfig(
+        runnerEnv({
+          RUNNER_S3_ORIGIN: 'https://s3.raditi.internal:8333/raditi-sessions',
+          RUNNER_S3_CA_FILE: '/etc/raditi/ca.pem',
+        }),
+      ),
+    ).toMatchObject({
+      s3Origin: 'https://s3.raditi.internal:8333/raditi-sessions',
+      s3CaFile: '/etc/raditi/ca.pem',
+    })
+    expect(problemsOf(runnerEnv({ RUNNER_S3_CA_FILE: 'ca.pem' }))).toEqual([
+      'RUNNER_S3_CA_FILE: must be an absolute path',
+    ])
+    expect(
+      problemsOf({
+        APP_ENV: 'development',
+        RUNNER_CORE_URL: 'http://127.0.0.1:8083',
+        RUNNER_TOKEN_FILE: '/etc/raditi/runner-token',
+        RUNNER_S3_CA_FILE: '/etc/raditi/ca.pem',
+      }),
+    ).toEqual(['RUNNER_S3_CA_FILE: only with RUNNER_S3_ORIGIN, the S3 it is for'])
   })
 
   it('refuses a runner without core, its token file or with more than one turn', () => {

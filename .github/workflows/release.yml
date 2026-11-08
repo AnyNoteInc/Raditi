@@ -55,7 +55,7 @@ jobs:
           echo "New release: ${tag:-none}"
 
   # The tag semantic-release pushed with GITHUB_TOKEN starts no workflow, so the images are built
-  # from here. Deploying the platform to a VM (spec §19, roadmap M10) will follow this job.
+  # from here, and the deploy to the single server follows them (infra/server/README.md).
   images:
     needs: release
     if: needs.release.outputs.tag != ''
@@ -65,3 +65,14 @@ jobs:
     permissions:
       contents: write
       packages: write
+
+  deploy:
+    needs: [release, images]
+    if: needs.release.outputs.tag != ''
+    uses: ./.github/workflows/deploy.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+    permissions:
+      contents: read
+      packages: read
+    secrets: inherit

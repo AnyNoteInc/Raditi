@@ -89,8 +89,10 @@ services:
       - core-work:/v/core-work
 
   # Static configuration only as flags (no /etc/traefik/traefik.*, no TRAEFIK_*): a changed flag
-  # recreates the container on `up -d`. Routes come from the file provider; no Docker socket, no
-  # dashboard. ping and metrics answer on :9000, which is never published.
+  # recreates the container on `up -d`. Routes come from the file provider; no Docker socket. The
+  # dashboard is off unless EDGE_DASHBOARD=true, and even then it has no route of its own: only the
+  # single server routes it, behind basic auth (infra/server/traefik/server.yml, owner's request of
+  # 08.11.2026). ping and metrics answer on :9000, which is never published.
   traefik:
     <<: *hardened
     image: ${TRAEFIK_IMAGE:?Set the digest-pinned Traefik image}
@@ -100,6 +102,7 @@ services:
     command:
       - --global.checknewversion=false
       - --global.sendanonymoususage=false
+      - --api.dashboard=${EDGE_DASHBOARD:-false}
       - --log.level=INFO
       - --log.format=json
       - --accesslog=true

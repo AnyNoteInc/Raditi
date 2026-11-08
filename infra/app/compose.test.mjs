@@ -526,10 +526,15 @@ test('nothing started by `up` depends on the ops profile', () => {
       assert.ok(!ops.includes(dependency), `${name} depends on ${dependency}`)
 })
 
-test('Traefik: static config only as flags, no dashboard or Docker provider, logs without secrets', () => {
+test('Traefik: static config only as flags, dashboard off by default, no Docker provider, logs without secrets', () => {
   const { command, environment, volumes } = services.traefik
   const flags = command.join('\n')
-  assert.doesNotMatch(flags, /--api\b/)
+  // The dashboard only by EDGE_DASHBOARD (off by default) and never on an entry point of its own:
+  // the single server routes api@internal behind basic auth (infra/server/traefik/server.yml).
+  assert.deepEqual(
+    command.filter((flag) => /--api\b/.test(flag)),
+    ['--api.dashboard=false'],
+  )
   assert.doesNotMatch(flags, /--providers\.docker/)
   assert.doesNotMatch(flags, /forwardedheaders/i)
   for (const flag of [
