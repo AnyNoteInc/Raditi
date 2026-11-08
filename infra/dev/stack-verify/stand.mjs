@@ -104,10 +104,15 @@ export function groupsOf(stand, build, support = null) {
  * What every record of STACK_STANDS gives by now: the fields of `StackStand` this slice reads and
  * the three of `StackStandCases` (docs/plan/62-slices/e5.md, Э5.8) the group `import` reads —
  * `factsOf(build)` (what I1 expects in `stack_facts` beside the version, the branch and the limit),
- * `refusedLayout` ({ files, limit }, the tree of I4) and `refusedVersion` ({ files } or null — a
- * stack without `refuseBelow`, and I5 does not run). `copyChecks`, `browserPaths` and `signIn` —
+ * `refusedLayout` ({ files, limit }, the tree of I4, or null — a stack that reads no layout, and I4
+ * does not run: WordPress, Э3.15) and `refusedVersion` ({ files } or null — a stack without
+ * `refuseBelow`, and I5 does not run). A build names its `generation`, or null when the stack has no
+ * table of generations (WordPress): I1 then expects none in `stack_facts`. Whether a null is
+ * right is the adapter's to say (`adapterProblems`). `copyChecks`, `browserPaths` and `signIn` —
  * the group `preview` (Э3.11); `edit(build)` (`{ template, style, texts }`: `template` —
- * `{ path, before, line }`, the line goes right before the tag; `style` and `texts` —
+ * `{ path, before, line, fromImport? }`, the line goes right before the tag, and R1 finds the
+ * template in the tree of the archive, or in the import when `fromImport` says it is a file the
+ * stand installs beside the supply (WordPress, Э3.15); `style` and `texts` —
  * `{ path, line, created }`, the line is appended, `created` — the supply has no such file; one of
  * `template` and `style` at least), `outsideWorkingSet` (a path R2 may not add) and
  * `breakOnProduction(build)` (the line R4 breaks production only with) — the group `release`
@@ -124,7 +129,7 @@ export const STAND_FIELDS = Object.freeze({
   secrets: 'function',
   page: 'function',
   factsOf: 'function',
-  refusedLayout: 'object',
+  refusedLayout: 'object or null',
   refusedVersion: 'object or null',
   copyChecks: 'function',
   browserPaths: 'object',
@@ -142,7 +147,15 @@ function editIsWhole(edit) {
   const named = (part) => RELATIVE_PATH.test(part?.path ?? '') && typeof part.line === 'string'
   const { template = null, style = null, texts = null } = edit ?? {}
   if (template === null && style === null) return false
-  if (template !== null && !(named(template) && typeof template.before === 'string')) return false
+  if (
+    template !== null &&
+    !(
+      named(template) &&
+      typeof template.before === 'string' &&
+      [undefined, true, false].includes(template.fromImport)
+    )
+  )
+    return false
   return [style, texts].every((part) => part === null || named(part))
 }
 
@@ -171,13 +184,19 @@ export function standProblems(stand, archives = CMS_ARCHIVES) {
       else if (row.stack !== stand.stack) problems.push(`${build.archive}: a row of ${row.stack}`)
       else if (row.php !== build.php)
         problems.push(`${build.archive}: PHP ${build.php}, the table says ${row.php}`)
-      if (typeof build.version !== 'string' || typeof build.generation !== 'string')
+      if (
+        typeof build.version !== 'string' ||
+        !(typeof build.generation === 'string' || build.generation === null)
+      )
         problems.push(`${build.archive}: no version or generation`)
     }
   for (const key of ['name', 'user', 'prefix'])
     if (typeof stand.database[key] !== 'string') problems.push(`database: no ${key}`)
   if (!Array.isArray(stand.absentFromRepository)) problems.push('absentFromRepository: no list')
-  if (!isTree(stand.refusedLayout.files) || typeof stand.refusedLayout.limit !== 'string')
+  if (
+    stand.refusedLayout !== null &&
+    (!isTree(stand.refusedLayout.files) || typeof stand.refusedLayout.limit !== 'string')
+  )
     problems.push('refusedLayout: no files or limit')
   if (stand.refusedVersion !== null && !isTree(stand.refusedVersion.files))
     problems.push('refusedVersion: no files')
@@ -201,8 +220,9 @@ export function standProblems(stand, archives = CMS_ARCHIVES) {
       typeof sign.setPassword !== 'function'
     )
       problems.push(`${build.archive}: signIn is not whole`)
-    // What a turn edits is a fact of the branch: a build that names none is reported above.
-    if (typeof build.generation !== 'string') continue
+    // What a turn edits is a fact of the branch, or of the stack when it has none (null): a build
+    // that names neither is reported above.
+    if (!(typeof build.generation === 'string' || build.generation === null)) continue
     if (!editIsWhole(stand.edit(build)))
       problems.push(`${build.archive}: edit names no template and no style`)
     const broken = stand.breakOnProduction(build)
@@ -211,6 +231,46 @@ export function standProblems(stand, archives = CMS_ARCHIVES) {
   }
   if (!RELATIVE_PATH.test(stand.outsideWorkingSet))
     problems.push('outsideWorkingSet: no relative path')
+  return problems
+}
+
+/**
+ * What is wrong with a record of a stack against its adapter (`SiteAdapter`: `readLayout` and
+ * `support`): a null says the stack has no such thing, so a null where the adapter has one would
+ * silently drop a check of the stand. `refusedLayout` is null exactly when the adapter reads no
+ * layout (else I4 would not run), `refusedVersion` exactly when its support refuses no version
+ * (else I5), and a build names no generation exactly when the support has no table of generations,
+ * else one of its rows. The stand runs without the adapters, so the tests hold every record of
+ * STACK_STANDS to this.
+ */
+export function adapterProblems(stand, adapter) {
+  const problems = []
+  if (adapter?.stack !== stand.stack)
+    return [`the adapter is of ${adapter?.stack}, not ${stand.stack}`]
+  const readsLayout = adapter.readLayout !== null
+  if ((stand.refusedLayout === null) === readsLayout)
+    problems.push(
+      readsLayout
+        ? 'refusedLayout: null, but the adapter reads a layout (I4 would not run)'
+        : 'refusedLayout: the adapter reads no layout, so it refuses none',
+    )
+  const refuses = adapter.support.refuseBelow !== null
+  if ((stand.refusedVersion === null) === refuses)
+    problems.push(
+      refuses
+        ? `refusedVersion: null, but the adapter refuses below ${adapter.support.refuseBelow} (I5 would not run)`
+        : 'refusedVersion: the adapter refuses no version',
+    )
+  const generations = adapter.support.generations.map((row) => row.id)
+  for (const build of stand.builds)
+    if (
+      generations.length === 0 ? build.generation !== null : !generations.includes(build.generation)
+    )
+      problems.push(
+        generations.length === 0
+          ? `${build.archive}: generation ${build.generation}, but the adapter has no table of generations`
+          : `${build.archive}: generation ${build.generation} is not one of ${generations.join(', ')}`,
+      )
   return problems
 }
 

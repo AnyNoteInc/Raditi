@@ -308,20 +308,29 @@ async function releaseOfBuild(rt, ctx, entry) {
   rt.begin(`R1 ${build.archive}`, 'ход и кандидат')
   // The record names the template by branch (TEMPLATE_PATHS): the tree of the archive says whether
   // the supply has it, with its tag once — a template that is not there fails here, in these words.
+  // A template of a theme the stand installs beside the supply says so (`fromImport`; WordPress,
+  // Э3.15: the block theme of the supply has no footer): the tree of the import is read instead, and
+  // only for such a record.
   // The other parts are matched with the tree of the import (the tag v0.0.0): a file the stand puts
   // beside the supply (a theme of its own, Э4.7, Э5.8) is a file of the site all the same.
+  const templateIn = edit.template?.fromImport ? IMPORT_TAG : 'the tree of the archive'
   const supplyProblems = []
   for (const part of parts) {
     if (part === edit.template) {
-      const held = await readFile(join(tree, part.path), 'utf8').catch(() => null)
+      const held = part.fromImport
+        ? await site.gitFile(IMPORT_TAG, part.path)
+        : await readFile(join(tree, part.path), 'utf8').catch(() => null)
       const tags = held === null ? 0 : held.split(part.before).length - 1
+      const branch = build.generation === null ? '' : ` for ${build.generation}`
       if (held === null)
         supplyProblems.push(
-          `the supply of ${build.archive} has no ${part.path}: the template the record names for ${build.generation} is not there`,
+          part.fromImport
+            ? `the import of ${build.archive} (${IMPORT_TAG}) has no ${part.path}: the template the record names${branch} is not there`
+            : `the supply of ${build.archive} has no ${part.path}: the template the record names${branch} is not there`,
         )
       else if (tags !== 1)
         supplyProblems.push(
-          `${part.path} of ${build.archive} holds ${part.before} ${tags} times, not once: the mark has no one place`,
+          `${part.path} of ${build.archive} holds ${part.before} ${tags} times in ${templateIn}, not once: the mark has no one place`,
         )
       continue
     }
@@ -340,7 +349,7 @@ async function releaseOfBuild(rt, ctx, entry) {
     `the site holds what the record edits: ${parts
       .map((part) =>
         part === edit.template
-          ? `${part.path} with one ${part.before} in the tree of the archive`
+          ? `${part.path} with one ${part.before} in ${templateIn}`
           : `${part.path} ${part.created ? 'absent (new)' : 'present (appended to)'} in ${IMPORT_TAG}`,
       )
       .join(', ')}`,

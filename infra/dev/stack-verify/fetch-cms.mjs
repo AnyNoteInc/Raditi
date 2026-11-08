@@ -1,7 +1,8 @@
 // The releases of the CMS a stand of the site stacks runs (docs/plan/62-site-stacks.md, §5.5;
 // docs/plan/62-slices/e3.md, Э3.8): a row of cms-archives.json per build, its sum pinned. An archive
 // is downloaded into $RADITI_CMS_DIR/<id>/archive.tar.gz, its sha256 checked before anything else
-// touches it, and unpacked into <id>/tree. On the host it is only unpacked: what it holds runs in a
+// touches it, and unpacked into <id>/tree (a row whose archive holds the site in one folder names it:
+// `tree`, Э3.15). On the host it is only unpacked: what it holds runs in a
 // container of the stand. Archives live on the machine of the run only — never in git, an image,
 // an artifact or a cache of Actions.
 //
@@ -10,9 +11,17 @@
 //   node infra/dev/stack-verify/fetch-cms.mjs --php=<stack>    the PHP versions of its rows, no download
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import {
+  createReadStream,
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+} from 'node:fs'
 import { rename, rm, writeFile } from 'node:fs/promises'
-import { isAbsolute, join } from 'node:path'
+import { isAbsolute, join, sep } from 'node:path'
 import process from 'node:process'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -28,6 +37,8 @@ const ID = /^[a-z0-9][a-z0-9.-]{0,63}$/
 const STACK = /^[a-z0-9]{1,32}$/
 const PHP = /^\d\.\d$/
 const SHA256 = /^[0-9a-f]{64}$/
+/** A folder inside the archive: plain names joined by `/`, none of them `.` or `..`, at most 128 signs. */
+const FOLDER = /^(?=.{1,128}$)[A-Za-z0-9_-][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$/
 /** The vendor whose core may not be here (plan 62, §5), named in parts: no file of the stand says it. */
 const CLOSED = new RegExp(['bit', 'rix'].join(''), 'i')
 const GPL = /^(?:L?GPL|AGPL)-\d(?:\.\d)?(?:-only|-or-later)?$/
@@ -43,7 +54,7 @@ export function readCmsArchives(table) {
     }
     if (!ID.test(id)) fail('the id is not a plain name')
     if (typeof entry !== 'object' || entry === null) fail('the row is not an object')
-    const known = ['stack', 'php', 'url', 'sha256', 'sha256Source', 'license']
+    const known = ['stack', 'php', 'url', 'sha256', 'sha256Source', 'license', 'tree']
     for (const key of Object.keys(entry)) if (!known.includes(key)) fail(`unknown field ${key}`)
     if (!STACK.test(entry.stack ?? '')) fail('no stack')
     if (!PHP.test(entry.php ?? '')) fail('no PHP version')
@@ -59,6 +70,13 @@ export function readCmsArchives(table) {
       fail(`sha256Source is one of ${SHA256_SOURCES.join(', ')}`)
     if (!GPL.test(entry.license ?? '')) fail(`the licence ${entry.license} is not one of the GPL`)
     if (CLOSED.test(id) || CLOSED.test(entry.url)) fail('a closed CMS is never fetched')
+    // The folder of the archive that holds the site (`wordpress/` of a release of WordPress,
+    // `ocStore-3.0.3.7/upload` of ocStore); without it the archive unpacks into the site itself.
+    if (
+      Object.hasOwn(entry, 'tree') &&
+      !(typeof entry.tree === 'string' && FOLDER.test(entry.tree))
+    )
+      fail('tree is a folder of the archive: plain names joined by /')
     rows[id] = { ...entry }
   }
   return rows
@@ -107,7 +125,8 @@ export function treeMatches(folder, sha256) {
  * into <id>/tree and writes the sum beside it (<id>/tree.sha256). A second run with the right
  * archive and its tree downloads nothing. A wrong sum throws and the file is removed; a tree not
  * unpacked from the archive of the row is removed and unpacked again. A licence outside the GPL in
- * the table is refused: the core of a closed CMS can never be here. Answers the folder of the tree.
+ * the table is refused: the core of a closed CMS can never be here. Answers the folder of the tree,
+ * or the folder `tree` of the row names inside it, which must be there.
  */
 export async function fetchCmsArchive(
   id,
@@ -167,7 +186,23 @@ export async function fetchCmsArchive(
       throw error
     }
   }
-  return tree
+  if (entry.tree === undefined) return tree
+  return siteFolderOf(tree, entry.tree, id)
+}
+
+/**
+ * The folder `folder` of an unpacked `tree`, which must be a directory of the tree itself: an
+ * archive is untrusted, and a symbolic link it unpacks under that name (`upload -> /Users/…`) would
+ * hand a folder of the host to `tar -C`, which follows it. Its real path lies inside the real path
+ * of the tree, or it is refused.
+ */
+export function siteFolderOf(tree, folder, id = 'the archive') {
+  const site = join(tree, folder)
+  if (!statSync(site, { throwIfNoEntry: false })?.isDirectory())
+    throw new Error(`${id}: the archive holds no folder ${folder}`)
+  if (!realpathSync(site).startsWith(realpathSync(tree) + sep))
+    throw new Error(`${id}: the folder ${folder} of the archive leads out of its tree`)
+  return site
 }
 
 async function main(argv, env) {

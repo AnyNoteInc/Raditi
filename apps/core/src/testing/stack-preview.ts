@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { lstat, mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
@@ -187,7 +187,7 @@ async function firstDigest(tags: readonly string[]): Promise<string | null> {
 export function stackTreeOf(build: StackBuild): string {
   const table = JSON.parse(readFileSync(archivesFile, 'utf8')) as Record<
     string,
-    { php?: string; sha256?: string } | undefined
+    { php?: string; sha256?: string; tree?: string } | undefined
   >
   const row = table[build.archive]
   if (!row) throw new Error(`${build.archive} is not a row of cms-archives.json`)
@@ -202,7 +202,28 @@ export function stackTreeOf(build: StackBuild): string {
     throw new Error(
       `No tree of ${build.archive} unpacked from the archive of its row: node infra/dev/stack-verify/fetch-cms.mjs ${build.archive}`,
     )
-  return tree
+  // A row whose archive holds the site in a folder names it (`tree`, Э3.15), as fetch-cms.mjs reads it.
+  return row.tree === undefined ? tree : siteFolderOf(tree, row.tree, build.archive)
+}
+
+/** A folder inside an archive: plain names joined by `/`, none of them `.` or `..` (fetch-cms.mjs). */
+const ARCHIVE_FOLDER =
+  /^(?=.{1,128}$)[A-Za-z0-9_-][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$/
+
+/**
+ * The folder `folder` of an unpacked tree, as `siteFolderOf` of fetch-cms.mjs answers it: a
+ * directory whose real path lies inside the real path of the tree. An archive is untrusted, and a
+ * symbolic link it unpacks under that name would hand a folder of the host to `tar -C`.
+ */
+export function siteFolderOf(tree: string, folder: string, archive: string): string {
+  if (!ARCHIVE_FOLDER.test(folder))
+    throw new Error(`${archive}: tree is a folder of the archive: plain names joined by /`)
+  const site = join(tree, folder)
+  if (!statSync(site, { throwIfNoEntry: false })?.isDirectory())
+    throw new Error(`${archive}: the archive holds no folder ${folder}`)
+  if (!realpathSync(site).startsWith(realpathSync(tree) + sep))
+    throw new Error(`${archive}: the folder ${folder} of the archive leads out of its tree`)
+  return site
 }
 
 /** A relative path of the site root, ASCII, `/` separators, no way out of the root. */

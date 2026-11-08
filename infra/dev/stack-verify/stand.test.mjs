@@ -6,6 +6,8 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 
+import { joomlaAdapter } from '../../../packages/site-adapters/src/joomla/joomla.ts'
+import { wordpressAdapter } from '../../../packages/site-adapters/src/wordpress.ts'
 import { BUILT_IMAGES, LARGE_USAGE, standNames } from '../release-verify/stand.mjs'
 import { CMS_ARCHIVES } from './fetch-cms.mjs'
 import {
@@ -16,6 +18,7 @@ import {
   STAND_FIELDS,
   STAND_GROUPS,
   WRITTEN_GROUPS,
+  adapterProblems,
   buildNames,
   gitleaksVersionOf,
   gitleaksVersionProblem,
@@ -45,6 +48,9 @@ import {
 import { imageLines } from './images.mjs'
 import { parseRuntimes } from './scenarios-preview.mjs'
 import { STACK_STANDS } from './stacks.mjs'
+
+/** The adapter of each stack of STACK_STANDS: Э4 and Э5 add theirs with their records. */
+const ADAPTERS = Object.freeze({ joomla: joomlaAdapter, wordpress: wordpressAdapter })
 import {
   appendLine,
   breakingTurn,
@@ -232,8 +238,10 @@ test('every record of a stack has every field, and its builds are rows of the ta
     const { [field]: _dropped, ...without } = joomla
     assert.ok(standProblems(without).includes(`no ${field}`), field)
   }
-  // A stack without `refuseBelow` says so with null: I5 does not run, the record is whole.
+  // A stack without `refuseBelow` says so with null, one that reads no layout (`readLayout: null` —
+  // WordPress) too: the shape of the record takes both, and its adapter says whether they are right.
   assert.deepEqual(standProblems({ ...joomla, refusedVersion: null }), [])
+  assert.deepEqual(standProblems({ ...joomla, refusedLayout: null }), [])
   assert.deepEqual(standProblems({ ...joomla, refusedVersion: {} }), ['refusedVersion: no files'])
   assert.deepEqual(standProblems({ ...joomla, refusedLayout: { files: {}, limit: 'x' } }), [
     'refusedLayout: no files or limit',
@@ -295,6 +303,42 @@ test('every record of a stack has every field, and its builds are rows of the ta
   assert.deepEqual(standProblems({ ...joomla, builds: [{ ...sample, generation: undefined }] }), [
     'joomla-6.2.0: no version or generation',
   ])
+  // A stack without a table of generations names none with null (WordPress, Э3.15): I1 then
+  // expects no generation in stack_facts, and the edit of R1 is still asked of the build.
+  const ofStack = () => joomla.edit(sample)
+  assert.deepEqual(
+    standProblems({ ...joomla, builds: [{ ...sample, generation: null }], edit: ofStack }),
+    [],
+  )
+  assert.deepEqual(
+    standProblems({
+      ...joomla,
+      builds: [{ ...sample, generation: null }],
+      edit: () => ({ template: null, style: null }),
+    }),
+    ['joomla-6.2.0: edit names no template and no style'],
+  )
+
+  // WordPress (Э3.15): the stack on which everything already works holds the groups to account.
+  const wordpress = STACK_STANDS.wordpress
+  assert.ok(wordpress, 'STACK_STANDS has the record of WordPress')
+  assert.equal(wordpress.stack, 'wordpress')
+  for (const field of Object.keys(STAND_FIELDS))
+    assert.ok(Object.hasOwn(wordpress, field), `wordpress: ${field}`)
+  assert.deepEqual(standProblems(wordpress), [])
+  assert.deepEqual(
+    wordpress.builds.map((build) => [build.archive, build.php, build.generation, build.version]),
+    [['wordpress-7.1.2', '8.3', null, '7.1.2']],
+  )
+  // No layout and no version is refused: neither I4 nor I5 runs on it.
+  assert.equal(wordpress.refusedLayout, null)
+  assert.equal(wordpress.refusedVersion, null)
+  assert.deepEqual(wordpress.database, { name: 'site', user: 'site', prefix: 'wp_' })
+  const byStack = standOptions(['--stack=wordpress'])
+  assert.deepEqual(
+    byStack.runs.map(({ stack, build, groups }) => [stack, build.archive, groups]),
+    [['wordpress', 'wordpress-7.1.2', ['import', 'preview', 'release']]],
+  )
   assert.deepEqual(standProblems({ ...joomla, database: { name: 'site', user: 'site' } }), [
     'database: no prefix',
   ])
@@ -319,6 +363,48 @@ test('every record of a stack has every field, and its builds are rows of the ta
   assert.doesNotMatch(JSON.stringify(CMS_ARCHIVES), new RegExp(closed, 'i'))
 })
 
+test('a null in a record is right only where its adapter has no such thing', () => {
+  // docs/plan/62-slices/e3.md, Э3.15: a null drops I4, I5 or the generation of I1 silently, so it is
+  // held to the adapter — `readLayout`, `support.refuseBelow`, `support.generations`.
+  for (const [stack, stand] of Object.entries(STACK_STANDS)) {
+    assert.ok(Object.hasOwn(ADAPTERS, stack), `the test knows the adapter of ${stack}`)
+    assert.deepEqual(adapterProblems(stand, ADAPTERS[stack]), [], stack)
+  }
+  const { joomla, wordpress } = STACK_STANDS
+  // Joomla reads a layout, refuses below 3.0 and has generations: none of its nulls is right.
+  assert.deepEqual(adapterProblems({ ...joomla, refusedLayout: null }, joomlaAdapter), [
+    'refusedLayout: null, but the adapter reads a layout (I4 would not run)',
+  ])
+  assert.deepEqual(adapterProblems({ ...joomla, refusedVersion: null }, joomlaAdapter), [
+    'refusedVersion: null, but the adapter refuses below 3.0 (I5 would not run)',
+  ])
+  const [sample] = joomla.builds
+  assert.deepEqual(
+    adapterProblems({ ...joomla, builds: [{ ...sample, generation: null }] }, joomlaAdapter),
+    [`${sample.archive}: generation null is not one of j30, j3, j4, j5, j6`],
+  )
+  assert.deepEqual(
+    adapterProblems({ ...joomla, builds: [{ ...sample, generation: 'j9' }] }, joomlaAdapter),
+    [`${sample.archive}: generation j9 is not one of j30, j3, j4, j5, j6`],
+  )
+  // WordPress has none of them: a value where the adapter has nothing is refused as well.
+  assert.deepEqual(
+    adapterProblems({ ...wordpress, refusedLayout: joomla.refusedLayout }, wordpressAdapter),
+    ['refusedLayout: the adapter reads no layout, so it refuses none'],
+  )
+  assert.deepEqual(
+    adapterProblems({ ...wordpress, refusedVersion: joomla.refusedVersion }, wordpressAdapter),
+    ['refusedVersion: the adapter refuses no version'],
+  )
+  const [build] = wordpress.builds
+  assert.deepEqual(
+    adapterProblems({ ...wordpress, builds: [{ ...build, generation: 'j5' }] }, wordpressAdapter),
+    [`${build.archive}: generation j5, but the adapter has no table of generations`],
+  )
+  assert.deepEqual(adapterProblems(wordpress, joomlaAdapter), [
+    'the adapter is of joomla, not wordpress',
+  ])
+})
 test('the names of a run have the form of the release stand, under a label of their own', () => {
   const names = stackNames(run)
   const release = standNames(run)

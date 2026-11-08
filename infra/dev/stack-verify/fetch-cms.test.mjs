@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
@@ -13,6 +21,7 @@ import {
   fetchCmsArchive,
   phpVersionsOfStack,
   readCmsArchives,
+  siteFolderOf,
   TREE_SUM,
 } from './fetch-cms.mjs'
 
@@ -86,6 +95,96 @@ test('a right sum unpacks the archive; a second run downloads nothing', async ()
   rmSync(tree, { recursive: true })
   await fetchCmsArchive('sample-1.0', { directory, fetch: noNetwork, archives })
   assert.ok(existsSync(join(tree, 'index.php')))
+})
+
+test('a row whose archive holds the site in one folder names it by tree', async () => {
+  // docs/plan/62-slices/e3.md, Э3.15: the release of WordPress unpacks into `wordpress/`; the row
+  // says so, and the folder of the site is what the stand copies into the production.
+  const source = join(scratch, `nested-${Math.random().toString(16).slice(2)}`)
+  mkdirSync(join(source, 'site', 'wp-includes'), { recursive: true })
+  writeFileSync(join(source, 'site', 'index.php'), '<?php echo 3;\n')
+  writeFileSync(join(source, 'site', 'wp-includes', 'version.php'), '<?php echo 4;\n')
+  execFileSync('tar', ['-czf', `${source}.tar.gz`, '-C', source, 'site'], {
+    env: { ...process.env, COPYFILE_DISABLE: '1' },
+  })
+  const bytes = readFileSync(`${source}.tar.gz`)
+  const directory = join(scratch, 'nested')
+  const archives = { 'sample-1.0': row(bytes, { tree: 'site' }) }
+  const tree = await fetchCmsArchive('sample-1.0', {
+    directory,
+    fetch: fakeFetch(bytes).fetch,
+    archives,
+  })
+  assert.equal(tree, join(directory, 'sample-1.0', 'tree', 'site'))
+  assert.equal(readFileSync(join(tree, 'index.php'), 'utf8'), '<?php echo 3;\n')
+  // Again without a network: the same folder of the same tree.
+  assert.equal(await fetchCmsArchive('sample-1.0', { directory, fetch: noNetwork, archives }), tree)
+  // A folder the archive does not hold fails: a row naming it would copy nothing into production.
+  await assert.rejects(
+    fetchCmsArchive('sample-1.0', {
+      directory,
+      fetch: noNetwork,
+      archives: { 'sample-1.0': row(bytes, { tree: 'other' }) },
+    }),
+    /holds no folder other/,
+  )
+  // Plain names joined by `/` (`ocStore-3.0.3.7/upload` of Э4): never a path out of the tree.
+  for (const name of ['site', 'a/b', 'ocStore-3.0.3.7/upload'])
+    assert.equal(
+      readCmsArchives({ 'sample-1.0': row(bytes, { tree: name }) })['sample-1.0'].tree,
+      name,
+    )
+  for (const name of [
+    '',
+    '..',
+    '.',
+    '/site',
+    'site/',
+    'a/../b',
+    'a//b',
+    './a',
+    'a/.',
+    '.hidden',
+    42,
+  ])
+    assert.throws(
+      () => readCmsArchives({ 'sample-1.0': row(bytes, { tree: name }) }),
+      /tree is a folder of the archive/,
+      String(name),
+    )
+})
+
+test('a folder of the tree that is a symbolic link out of it is refused', async () => {
+  // An archive is untrusted: a link it unpacks under the name of `tree` would hand a folder of the
+  // host to `tar -C`, which follows it, and the host folder would be copied into production.
+  const host = join(scratch, `host-${Math.random().toString(16).slice(2)}`)
+  mkdirSync(host, { recursive: true })
+  writeFileSync(join(host, 'id_rsa'), 'not a key of this machine\n')
+  const source = join(scratch, `linked-${Math.random().toString(16).slice(2)}`)
+  mkdirSync(source, { recursive: true })
+  symlinkSync(host, join(source, 'site'))
+  execFileSync('tar', ['-czf', `${source}.tar.gz`, '-C', source, 'site'], {
+    env: { ...process.env, COPYFILE_DISABLE: '1' },
+  })
+  const bytes = readFileSync(`${source}.tar.gz`)
+  const directory = join(scratch, `linked-${Math.random().toString(16).slice(2)}`)
+  await assert.rejects(
+    fetchCmsArchive('sample-1.0', {
+      directory,
+      fetch: fakeFetch(bytes).fetch,
+      archives: { 'sample-1.0': row(bytes, { tree: 'site' }) },
+    }),
+    /leads out of its tree/,
+  )
+  // A link below a real folder of the tree is refused all the same.
+  const tree = join(scratch, `tree-${Math.random().toString(16).slice(2)}`)
+  mkdirSync(join(tree, 'outer'), { recursive: true })
+  symlinkSync(host, join(tree, 'outer', 'upload'))
+  assert.throws(() => siteFolderOf(tree, 'outer/upload'), /leads out of its tree/)
+  // A link to a folder inside the tree is a folder of the tree.
+  mkdirSync(join(tree, 'real', 'upload'), { recursive: true })
+  assert.equal(siteFolderOf(tree, 'real/upload'), join(tree, 'real', 'upload'))
+  assert.throws(() => siteFolderOf(tree, 'none'), /holds no folder none/)
 })
 
 test('a wrong sum fails before anything is unpacked and leaves no file behind', async () => {
@@ -211,6 +310,7 @@ test('a stack names its rows by the field, not by the id', () => {
   ])
   assert.deepEqual(phpVersionsOfStack('opencart', archives), ['7.4', '8.3'])
   assert.throws(() => archivesOfStack('nope', archives), /no archive/)
+  assert.deepEqual(archivesOfStack('wordpress'), ['wordpress-7.1.2'])
   assert.deepEqual(archivesOfStack('joomla'), [
     'joomla-3.10.12',
     'joomla-4.4.14',

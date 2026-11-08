@@ -334,7 +334,8 @@ async function secretsOfBuilds(rt, ctx, entries) {
 /**
  * I4 and I5, once per stack: synthetic trees the stand writes on the hosting of the first build.
  * I5 goes first: a refused `project.create` writes no site, so I4 then takes the same address. A
- * stack whose `refusedVersion` is null refuses no version, and I5 does not run.
+ * stack whose `refusedVersion` is null refuses no version, and I5 does not run; one whose
+ * `refusedLayout` is null reads no layout (WordPress, Э3.15), and I4 does not run.
  */
 async function refusedTrees(rt, ctx, entry) {
   const { db } = ctx
@@ -342,7 +343,11 @@ async function refusedTrees(rt, ctx, entry) {
   const client = trpcClient({ origin: ctx.webUrl, cookie: ctx.owner.cookie(), signal: rt.signal })
   const url = `http://127.0.0.1:${production.port}`
 
-  if (stand.refusedVersion !== null) {
+  if (stand.refusedVersion === null)
+    rt.note(
+      `I5 does not run on ${stand.stack}: its adapter refuses no version (refusedVersion is null)`,
+    )
+  else {
     rt.begin(`I5 ${stand.stack}`, 'версия ниже поддержки')
     const old = '/stand-roots/old'
     await writeHostingFolder(rt, hosting.names, old, stand.refusedVersion.files)
@@ -363,6 +368,12 @@ async function refusedTrees(rt, ctx, entry) {
     rt.end()
   }
 
+  if (stand.refusedLayout === null) {
+    rt.note(
+      `I4 does not run on ${stand.stack}: its adapter reads no layout (refusedLayout is null)`,
+    )
+    return
+  }
   const { files, limit } = stand.refusedLayout
   rt.begin(`I4 ${stand.stack}`, 'раскладка, которую стек не берёт')
   const refusedRoot = '/stand-roots/layout'

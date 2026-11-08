@@ -30,5 +30,14 @@
     "sha256": "f7a4c3962c4a8682f5847ea9d47d2848f6eb475109805935c9e19a5c6511829d",
     "sha256Source": "published",
     "license": "GPL-2.0-or-later"
+  },
+  "wordpress-7.1.2": {
+    "stack": "wordpress",
+    "php": "8.3",
+    "url": "https://wordpress.org/wordpress-7.1.2.tar.gz",
+    "sha256": "c0c666689d66b870d8825500bb8e402ed04de52602c61a6f516c6236b8c9ac67",
+    "sha256Source": "first_download",
+    "license": "GPL-2.0-or-later",
+    "tree": "wordpress"
   }
 }
