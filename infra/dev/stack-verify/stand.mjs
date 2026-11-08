@@ -102,15 +102,6 @@ export function previewNamePattern(stack, ids, stands = STACK_STANDS) {
 }
 
 /**
- * The groups a build runs: `import`, `preview` and `release` always; `browser` when the stand walks
- * the panel, the stack opens it and the branch of the build does not close it; `safety` when the
- * stand has its cases; `safety-browser` with both. The branch is judged as `siteSupportOf` judges
- * it (Т3): a branch the table does not have — WordPress, `generation: null` — leaves the panel
- * open, only a row with `browser: false` closes it. The record of a stack names no group: a literal
- * there would drop a group added later. `support` — `StackSupport` of the adapter; without it no
- * `browser`.
- */
-/**
  * `StackSupport` of the adapter of every stack of STACK_STANDS, from the tables of the working tree
  * (the module of each table, not the registry: the registry would load every adapter, and each
  * file the stand loads starts site-stacks.yml — infra/app/ci.test.mjs). verify-stack.mjs hands it
@@ -123,6 +114,15 @@ export const STACK_SUPPORTS = Object.freeze({
   joomla: joomlaSupport,
 })
 
+/**
+ * The groups a build runs: `import`, `preview` and `release` always; `browser` when the stand walks
+ * the panel, the stack opens it and the branch of the build does not close it; `safety` when the
+ * stand has its cases; `safety-browser` with both. The branch is judged as `siteSupportOf` judges
+ * it (Т3): a branch the table does not have — WordPress, `generation: null` — leaves the panel
+ * open, only a row with `browser: false` closes it. The record of a stack names no group: a literal
+ * there would drop a group added later. `support` — `StackSupport` of the adapter; without it no
+ * `browser`.
+ */
 export function groupsOf(stand, build, support = null) {
   const groups = ['import', 'preview', 'release']
   const branch = support?.generations?.find((row) => row.id === build.generation)
@@ -330,8 +330,8 @@ const refuse = (why) => {
  * are not written yet. Nothing names a database, an address or a key: the stand works only on what
  * it started itself. `runs` — one entry per build: its stack, the build and its groups.
  * `supports` — the `StackSupport` of each stack's adapter, by stack: `groupsOf` reads it for
- * `browser`. No stack of the stand opens the panel yet, so the stand passes none; Э8 passes the
- * support of the adapter here.
+ * `browser`; verify-stack.mjs passes STACK_SUPPORTS here (§10, «Э3-правки», п. 5), the tests
+ * pass their own tables or none.
  */
 export function standOptions(
   argv,

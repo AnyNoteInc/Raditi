@@ -550,10 +550,46 @@ describe('the contract of a stack adapter', () => {
       'readLayout: the import would not record the layout of the fixture',
     ],
     [
-      'a reading of the layout that refuses the root',
-      { ...joomlaAdapter, readLayout: async () => ({ kind: 'refused', limit: 'outside_root' }) },
+      'a reading of the layout that refuses a root it listed',
+      {
+        ...joomlaAdapter,
+        readLayout: async (tree) =>
+          (await tree.list('')) === null
+            ? readJoomla(tree)
+            : { kind: 'refused', limit: 'outside_root' },
+      },
       joomlaContractFixture,
       'readLayout: the import would not record the layout of the fixture',
+    ],
+    [
+      'a reading of the layout that takes an unread root for an absent one',
+      {
+        ...joomlaAdapter,
+        readLayout: async (tree) =>
+          (await tree.list('')) === null
+            ? { kind: 'refused', limit: 'outside_root' }
+            : readJoomla(tree),
+      },
+      joomlaContractFixture,
+      'readLayout: refuses a root it could not read',
+    ],
+    [
+      'a reading of the layout that takes an unread configuration for a missing one',
+      {
+        ...joomlaAdapter,
+        readLayout: async (tree) => {
+          const listed = await tree.list('')
+          if (listed === null) {
+            // Like OpenCart and MODX of the first contracts: an unread file read as no file.
+            return (await tree.read('configuration.php')) === null
+              ? { kind: 'refused', limit: 'outside_root' }
+              : readJoomla(tree)
+          }
+          return readJoomla(tree)
+        },
+      },
+      joomlaContractFixture,
+      'readLayout: refuses a root it could not read',
     ],
     [
       'a reading of the layout that throws',
@@ -574,6 +610,15 @@ describe('the contract of a stack adapter', () => {
 
   it.each(joomlaBroken)('finds Joomla with %s', async (_, adapter, fixture, violation) => {
     expect(await violationsOf(adapter, fixture)).toEqual([violation])
+  })
+
+  it('throws, not refuses, on a root where every read and listing is null', async () => {
+    // The rule of violation 16 on the adapters there are: WordPress reads no layout, Joomla throws.
+    const unread = { read: async () => null, list: async () => null }
+    expect(wordpressAdapter.readLayout).toBeNull()
+    await expect(readJoomla(unread)).rejects.toThrow()
+    expect(await violationsOf(wordpressAdapter, wordpress)).toEqual([])
+    expect(await violationsOf(joomlaAdapter, joomlaContractFixture)).toEqual([])
   })
 
   it('reads a layout the import records on the fixture of Joomla', async () => {

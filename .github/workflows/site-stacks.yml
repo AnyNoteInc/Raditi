@@ -259,7 +259,8 @@ jobs:
           "$RUNNER_TEMP/gitleaks/gitleaks" version
           echo "P2_GITLEAKS_BINARY=$RUNNER_TEMP/gitleaks/gitleaks" >> "$GITHUB_ENV"
       # The cabinet's page of P5 runs in Chromium; WebKit is checked by the stand, and on Linux P5
-      # notes it (О2б, the default (а): WebKit of Playwright on Linux drops the frame's cookie).
+      # notes it (О2б (а), the answer of the owner of 08.11.2026: WebKit of Playwright on Linux
+      # drops the frame's cookie).
       - name: Chromium and WebKit of Playwright
         run: pnpm --filter e2e exec playwright install --with-deps chromium webkit
       # The groups are named: without --group the stand would run every group of the stack, and

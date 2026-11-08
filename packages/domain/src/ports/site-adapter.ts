@@ -225,7 +225,11 @@ export const siteReadEntries = 4096
  */
 export type SiteRead = (path: string) => Promise<Uint8Array | null>
 
-/** The files of a site root as `readLayout` reads them: one file, or the entries of a folder. */
+/**
+ * The files of a site root as `readLayout` reads them: one file, or the entries of a folder. null
+ * comes on a failure of the hosting as well, so a file or a folder is absent only by a listing of
+ * the root that was read; a null listing, or a null read of a file the listing names, throws.
+ */
 export interface SiteTree {
   read: SiteRead
   /** At most `siteReadEntries` entries; null — no such folder, or it cannot be read. */
@@ -341,7 +345,10 @@ export interface SiteAdapter {
    * wizard and over git in core. null — the stack's files are closed.
    */
   readVersion: ((read: SiteRead) => Promise<SiteVersionReading>) | null
-  /** Only core: the layout and the settings of the copy. May read the configuration, gives no secret. */
+  /**
+   * Only core: the layout and the settings of the copy. May read the configuration, gives no secret.
+   * `refused` only on a root it read (`SiteTree`): an unread root throws.
+   */
   readLayout: ((tree: SiteTree) => Promise<SiteLayoutReading>) | null
   driftProbe: SiteDriftProbe | null
   /** Pure: the paths of the copies the site runs instead of this file (OCMOD). */

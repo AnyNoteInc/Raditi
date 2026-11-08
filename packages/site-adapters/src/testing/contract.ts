@@ -383,5 +383,18 @@ export async function stackContractViolations(
     }
   }
 
+  // 16. A root that could not be read is no refusal (Э3.3, edit 2; Э3-правки, п. 1): `SiteTree`
+  // answers null on a failure of the hosting as well, so only a listed root tells that a file or a
+  // folder is absent. On a tree where every read and every listing is null the reading throws (a
+  // retry, or `folder_too_large`) and never answers `refused`, which an import takes for final.
+  if (filesOpen && adapter.readLayout !== null) {
+    const readLayout = adapter.readLayout
+    const unread: SiteTree = { read: async () => null, list: async () => null }
+    const layout = await Promise.resolve()
+      .then(() => readLayout(unread))
+      .catch(() => null)
+    if (layout?.kind === 'refused') violations.push('readLayout: refuses a root it could not read')
+  }
+
   return violations
 }
