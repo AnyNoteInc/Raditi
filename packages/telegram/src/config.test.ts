@@ -96,8 +96,14 @@ describe('leadsTelegramConfigFromEnv', () => {
     )
   })
 
-  it('takes only a group, never a private chat or a public name', () => {
-    for (const chat of ['12345', '@raditi_leads']) {
+  it('takes a group or a private chat, never a public name', () => {
+    expect(
+      leadsTelegramConfigFromEnv({
+        LEADS_TELEGRAM_BOT_TOKEN: TOKEN,
+        LEADS_TELEGRAM_CHAT_ID: '12345',
+      })?.chatId,
+    ).toBe('12345')
+    for (const chat of ['@raditi_leads', '-', '1.5']) {
       expect(() =>
         leadsTelegramConfigFromEnv({
           LEADS_TELEGRAM_BOT_TOKEN: TOKEN,

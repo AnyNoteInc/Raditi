@@ -56,7 +56,7 @@ export function telegramConfigFromEnv(env: Env): TelegramConfig | null {
 export interface LeadsTelegramConfig {
   /** Credential: never log this object. */
   botToken: string
-  /** The closed group the leads of the landing go to: a negative chat id. */
+  /** The chat the leads of the landing go to: a closed group (negative id) or a private chat. */
   chatId: string
   proxyUrl: string | undefined
 }
@@ -72,7 +72,7 @@ const leadsEnvSchema = z
     LEADS_TELEGRAM_CHAT_ID: envVar(
       z
         .string()
-        .regex(/^-\d{1,20}$/, 'must be the id of a group: a negative number')
+        .regex(/^-?\d{1,20}$/, 'must be a numeric chat id: a group (negative) or a private chat')
         .optional(),
     ),
     TELEGRAM_PROXY_URL: envVar(z.url({ protocol: /^https?$/ }).optional()),
