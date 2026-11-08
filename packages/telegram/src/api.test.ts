@@ -263,6 +263,77 @@ describe('method bodies', () => {
   })
 })
 
+describe('updates and buttons', () => {
+  it('getUpdates polls without waiting and reads presses of buttons', async () => {
+    const press = {
+      update_id: 7,
+      callback_query: {
+        id: 'q1',
+        from: { id: 5 },
+        data: 'lead:done:1',
+        message: { message_id: 9, chat: { id: -100 } },
+      },
+    }
+    const { calls, fetchFn } = capturingFetch({ ok: true, result: [press, { update_id: 8 }] })
+    const api = createTelegramBotApi({ token: TOKEN, fetch: fetchFn })
+
+    const res = await api.getUpdates({ offset: 7, allowedUpdates: ['callback_query'], limit: 50 })
+
+    expect(res).toEqual({ ok: true, result: [press, { update_id: 8 }] })
+    expect(calls[0]?.url).toMatch(/\/getUpdates$/)
+    expect(bodyOf(calls[0])).toEqual({
+      timeout: 0,
+      offset: 7,
+      limit: 50,
+      allowed_updates: ['callback_query'],
+    })
+  })
+
+  it('deleteMessage names the chat and the message', async () => {
+    const { calls, fetchFn } = capturingFetch({ ok: true, result: true })
+    const res = await createTelegramBotApi({ token: TOKEN, fetch: fetchFn }).deleteMessage(-100, 9)
+    expect(res).toEqual({ ok: true, result: true })
+    expect(bodyOf(calls[0])).toEqual({ chat_id: -100, message_id: 9 })
+  })
+
+  it('editMessageText replaces the text and drops the keyboard', async () => {
+    const { calls, fetchFn } = capturingFetch({ ok: true, result: { message_id: 9 } })
+    const res = await createTelegramBotApi({ token: TOKEN, fetch: fetchFn }).editMessageText(
+      -100,
+      9,
+      'Заявка №1 обработана',
+    )
+    expect(res.ok).toBe(true)
+    expect(bodyOf(calls[0])).toEqual({
+      chat_id: -100,
+      message_id: 9,
+      text: 'Заявка №1 обработана',
+      link_preview_options: { is_disabled: true },
+      reply_markup: { inline_keyboard: [] },
+    })
+  })
+
+  it('editMessageText refuses an empty text without a request', async () => {
+    const { calls, fetchFn } = capturingFetch({ ok: true, result: true })
+    const res = await createTelegramBotApi({ token: TOKEN, fetch: fetchFn }).editMessageText(
+      1,
+      2,
+      '',
+    )
+    expect(res.ok).toBe(false)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('answerCallbackQuery sends the notice when given', async () => {
+    const { calls, fetchFn } = capturingFetch({ ok: true, result: true })
+    const api = createTelegramBotApi({ token: TOKEN, fetch: fetchFn })
+    await api.answerCallbackQuery('q1', 'Готово')
+    await api.answerCallbackQuery('q2')
+    expect(bodyOf(calls[0])).toEqual({ callback_query_id: 'q1', text: 'Готово' })
+    expect(bodyOf(calls[1])).toEqual({ callback_query_id: 'q2' })
+  })
+})
+
 describe('error handling', () => {
   it('surfaces Telegram errors with the code', async () => {
     const { fetchFn } = capturingFetch(

@@ -52,3 +52,60 @@ export function telegramConfigFromEnv(env: Env): TelegramConfig | null {
     proxyUrl: e.TELEGRAM_PROXY_URL,
   }
 }
+
+export interface LeadsTelegramConfig {
+  /** Credential: never log this object. */
+  botToken: string
+  /** The chat the leads of the landing go to: a closed group (negative id) or a private chat. */
+  chatId: string
+  proxyUrl: string | undefined
+}
+
+const leadsEnvSchema = z
+  .object({
+    LEADS_TELEGRAM_BOT_TOKEN: envVar(
+      z
+        .string()
+        .regex(/^\d+:[A-Za-z0-9_-]+$/, 'must look like 123456:ABC-DEF')
+        .optional(),
+    ),
+    LEADS_TELEGRAM_CHAT_ID: envVar(
+      z
+        .string()
+        .regex(/^-?\d{1,20}$/, 'must be a numeric chat id: a group (negative) or a private chat')
+        .optional(),
+    ),
+    TELEGRAM_PROXY_URL: envVar(z.url({ protocol: /^https?$/ }).optional()),
+  })
+  .superRefine((env, ctx) => {
+    if (
+      (env.LEADS_TELEGRAM_BOT_TOKEN === undefined) !==
+      (env.LEADS_TELEGRAM_CHAT_ID === undefined)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [
+          env.LEADS_TELEGRAM_BOT_TOKEN === undefined
+            ? 'LEADS_TELEGRAM_BOT_TOKEN'
+            : 'LEADS_TELEGRAM_CHAT_ID',
+        ],
+        message: 'set both LEADS_TELEGRAM_BOT_TOKEN and LEADS_TELEGRAM_CHAT_ID or neither',
+      })
+    }
+  })
+
+/**
+ * The bot of the leads of the landing (docs/plan/65-landing-platforms-leads.md, Л9): a bot of its
+ * own, apart from the bot of the clients, because it reads the presses of its buttons with
+ * getUpdates and has no webhook. null when both variables are empty: leads wait in their queue.
+ */
+export function leadsTelegramConfigFromEnv(env: Env): LeadsTelegramConfig | null {
+  const e = parseEnv('leads telegram', leadsEnvSchema, env)
+  if (e.LEADS_TELEGRAM_BOT_TOKEN === undefined || e.LEADS_TELEGRAM_CHAT_ID === undefined)
+    return null
+  return {
+    botToken: e.LEADS_TELEGRAM_BOT_TOKEN,
+    chatId: e.LEADS_TELEGRAM_CHAT_ID,
+    proxyUrl: e.TELEGRAM_PROXY_URL,
+  }
+}

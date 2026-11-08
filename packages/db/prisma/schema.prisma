@@ -1747,6 +1747,38 @@ model OutboxEvent {
   @@map("outbox_events")
 }
 
+/// A lead of the landing: «оставьте заявку на подключение» (docs/plan/65-landing-platforms-leads.md).
+/// web writes it with an outbox row `leads`/`lead.send`; core posts it to the Telegram group of
+/// leads and deletes the message there once someone presses «Обработано». The row stays here.
+model Lead {
+  id                String    @id @default(uuid(7)) @db.Uuid
+  /// «Заявка №N» in the group.
+  number            Int       @unique @default(autoincrement())
+  name              String    @db.VarChar(100)
+  /// `+<digits>`, normalised by leadInputSchema of @repo/domain.
+  phone             String    @db.VarChar(16)
+  email             String    @db.VarChar(254)
+  /// The host of the site, lower-cased.
+  site              String    @db.VarChar(253)
+  about             String    @db.Text
+  /// The edition of «Согласие на обработку персональных данных» the visitor agreed to.
+  consentVersion    String    @map("consent_version") @db.VarChar(32)
+  /// Where the form stood: `landing`.
+  source            String    @db.VarChar(32)
+  /// HMAC-SHA256 of the client address (key BETTER_AUTH_SECRET), hex: the limit of leads per
+  /// address counts by it; the address itself is not kept.
+  ipHash            String    @map("ip_hash") @db.Char(64)
+  /// The message in the Telegram group; set once it is sent.
+  telegramMessageId BigInt?   @map("telegram_message_id")
+  sentAt            DateTime? @map("sent_at") @db.Timestamptz(6)
+  /// Someone pressed «Обработано»: the message in Telegram is deleted or emptied.
+  processedAt       DateTime? @map("processed_at") @db.Timestamptz(6)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([ipHash, createdAt])
+  @@map("leads")
+}
+
 enum OutboxEventStatus {
   pending
   published

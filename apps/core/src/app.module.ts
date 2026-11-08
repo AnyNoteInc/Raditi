@@ -1,7 +1,8 @@
-import { Module, type DynamicModule } from '@nestjs/common'
+import { Logger, Module, type DynamicModule } from '@nestjs/common'
 import { DatabaseModule } from '@repo/service-runtime'
 
 import { BillingModule } from './billing/billing.module.ts'
+import { LeadsModule } from './leads/leads.module.ts'
 import { CoreConfigModule, type AppModuleOptions } from './config/config.module.ts'
 import { CoreHealthModule } from './health/health.module.ts'
 import { InfraModule } from './infra/infra.module.ts'
@@ -30,6 +31,11 @@ import { TurnsModule } from './turns/turns.module.ts'
 export class AppModule {
   static forRoot(options: AppModuleOptions): DynamicModule {
     const { config, background } = options
+    if (!config.leads && background) {
+      new Logger('Leads').warn(
+        'The bot of leads is not configured (LEADS_TELEGRAM_BOT_TOKEN, LEADS_TELEGRAM_CHAT_ID): leads of the landing wait in their queue',
+      )
+    }
     // The one turn engine of the process: the dialogs and the previews import this same object.
     const turns = TurnsModule.forRoot(config.turnExecutor)
     return {
@@ -45,6 +51,8 @@ export class AppModule {
         OutboxModule,
         NotificationsModule,
         BillingModule,
+        // The leads of the landing go to Telegram only with the bot of leads configured.
+        ...(config.leads ? [LeadsModule] : []),
         SiteProvisioningModule,
         // The files of a project for its section «Терминал» (06.11.2026).
         SiteFilesModule,

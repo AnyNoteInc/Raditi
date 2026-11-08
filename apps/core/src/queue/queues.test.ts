@@ -14,8 +14,19 @@ describe('queueJobDefaults', () => {
     })
   })
 
+  it('retries the sending of a lead for about two hours and keeps its jobs as the other queues do', () => {
+    expect(queueJobDefaults.leads).toEqual({
+      attempts: 10,
+      backoff: { type: 'exponential', delay: 15_000 },
+      removeOnComplete: { age: DAY, count: 1_000 },
+      removeOnFail: { age: 7 * DAY },
+    })
+  })
+
   it('keeps completed jobs of the other queues for a day (at most 1000), failed for a week', () => {
-    for (const name of queueNames.filter((queue) => queue !== 'notifications')) {
+    for (const name of queueNames.filter(
+      (queue) => queue !== 'notifications' && queue !== 'leads',
+    )) {
       expect(queueJobDefaults[name]).toMatchObject({
         attempts: 1,
         removeOnComplete: { age: DAY, count: 1_000 },

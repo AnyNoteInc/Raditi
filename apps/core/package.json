@@ -51,6 +51,7 @@
     "@repo/site-content": "workspace:*",
     "@repo/snapshots": "workspace:*",
     "@repo/storage": "workspace:*",
+    "@repo/telegram": "workspace:*",
     "@repo/turn-keys": "workspace:*",
     "@repo/vault": "workspace:*",
     "@repo/yookassa": "workspace:*",

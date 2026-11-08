@@ -159,6 +159,8 @@ describe('API routes', () => {
   const limited: Record<string, RegExp> = {
     'auth/[...all]': /withBodyLimit\(MAX_AUTH_BODY_BYTES,/,
     'trpc/[trpc]': /withBodyLimit\(MAX_TRPC_BODY_BYTES,/,
+    // A lead of the landing: a few hundred bytes (docs/plan/65-landing-platforms-leads.md).
+    leads: /withBodyLimit\(MAX_LEAD_BODY_BYTES,/,
     // avatar.ts reads the file after the session, the origin and the upload limit: 5 MiB.
     'profile/avatar': /uploadAvatar\(request, avatarDependencies\)/,
     'webhooks/yookassa': /handleYookassaWebhook\(request,/,

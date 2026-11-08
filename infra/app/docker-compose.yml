@@ -240,6 +240,9 @@ services:
       RUNNER_TOKENS: ${RUNNER_TOKENS:?Set the runner token hashes}
       # One stack image from the platform registry for every agent driver, pinned by digest
       SANDBOX_IMAGE: ${SANDBOX_IMAGE:?Set the digest-pinned stack image}
+      # The closed Telegram group of the leads of the landing: not a secret; its bot's token is in app.env
+      LEADS_TELEGRAM_CHAT_ID: ${LEADS_TELEGRAM_CHAT_ID:-}
+      TELEGRAM_PROXY_URL: ${TELEGRAM_PROXY_URL:-}
       # Publication clones (git-workspace.service.ts) go to core's own volume, not to RAM
       TMPDIR: /work/tmp
       HOME: /work/home

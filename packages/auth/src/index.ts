@@ -9,4 +9,5 @@ export {
   type ConsentRow,
 } from './consents.ts'
 export { profileLastNameSchema, profileNameSchema } from './profile-schema.ts'
-export { clientIp, requestMeta, type RequestMeta } from './request-meta.ts'
+export { clientIp, clientRateKey, requestMeta, type RequestMeta } from './request-meta.ts'
+export { CAPTCHA_HEADER, validateSmartCaptcha, type CaptchaVerdict } from './smart-captcha.ts'

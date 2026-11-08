@@ -833,7 +833,8 @@ test.describe('highlights of the headings', () => {
         return { id: heading.id, text: heading.textContent.trim(), marks, coloured }
       }),
     )
-    expect(headings).toHaveLength(8)
+    // With the platforms and the lead (docs/plan/65-landing-platforms-leads.md).
+    expect(headings).toHaveLength(10)
     for (const heading of headings) {
       expect(heading.marks.length, heading.text).toBeLessThanOrEqual(1)
       expect(heading.coloured, heading.text).toBe(0)
@@ -3234,7 +3235,7 @@ function revealPrepared(page: Page): Promise<unknown> {
 const PUT_DOWN = 'matrix(1, 0, 0, 1, 0, 24)'
 
 test.describe('headings on the way into the window', () => {
-  test('are the heading groups of six sections, not the sections', async ({ page }) => {
+  test('are the heading groups of eight sections, not the sections', async ({ page }) => {
     await page.goto('/')
     const named = (selector: string) =>
       page.evaluate(
@@ -3258,8 +3259,10 @@ test.describe('headings on the way into the window', () => {
     expect(await named(RISING)).toEqual([
       'how:div',
       'possibilities:div',
+      'platforms:div',
       'safety:div',
       'pricing:div',
+      'lead:div',
       'faq:div',
       'start-title:h2',
     ])
@@ -3275,7 +3278,7 @@ test.describe('headings on the way into the window', () => {
       await revealPrepared(page)
       const targets = await revealTargets(page)
 
-      expect(targets).toHaveLength(6)
+      expect(targets).toHaveLength(8)
       for (const target of targets) {
         // Never dimmed: the text keeps its contrast even if the observer never reports.
         expect(target.opacity, target.name).toBe('1')
@@ -3461,7 +3464,7 @@ test.describe('headings on the way into the window', () => {
     test('stand in their places with their text', async ({ page }) => {
       await openAt(page, 1440)
       const targets = page.locator(RISING)
-      await expect(targets).toHaveCount(6)
+      await expect(targets).toHaveCount(8)
       for (const target of await targets.all()) {
         await expect(target).toHaveCSS('transform', 'none')
         await expect(target).toHaveCSS('opacity', '1')

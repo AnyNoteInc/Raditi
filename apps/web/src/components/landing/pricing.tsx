@@ -251,7 +251,7 @@ export function Pricing({
       <div className={styles.signup}>
         <p className={styles.included}>
           {nbsp(
-            'В каждый тариф войдут правки текстов, цен, фото, акций и страниц на сайтах WordPress, копия перед правкой и отмена.',
+            'В каждый тариф войдут правки текстов, цен, фото, акций и страниц сайта, копия перед правкой и отмена.',
           )}
         </p>
         <div className={styles.signupAction}>
