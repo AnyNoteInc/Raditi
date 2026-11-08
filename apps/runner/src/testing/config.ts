@@ -10,6 +10,7 @@ export function testRunnerConfig(overrides: Partial<RunnerConfig> = {}): RunnerC
     tokenFile: '/run/raditi/runner-token',
     caFile: null,
     s3Origin: null,
+    s3CaFile: null,
     maxTurns: 1,
     sandbox: sandboxConfigFromEnv({ APP_ENV: 'test' }),
     ...overrides,

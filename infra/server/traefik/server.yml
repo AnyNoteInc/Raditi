@@ -1,0 +1,49 @@
+# Routes of the single server (infra/server/README.md), mounted next to raditi.yml by
+# docker-compose.server.yml. Every host here is a separate HTTP-01 order, apex names only: no
+# wildcard yet (owner, 08.11.2026).
+#   - DASHBOARD_HOST: the Traefik dashboard (owner's request of 08.11.2026), basic auth from
+#     /run/raditi/dashboard-users (bcrypt; kv/platform/app/traefik in Vault);
+#   - PREVIEW_APEX_HOST: the apex of the preview domain answers with a redirect to the cabinet;
+#     previews themselves (one label under it) need the wildcard of traefik/dynamic/preview.yml;
+#   - the stream of the cloud browser on the cabinet's host goes to the stream gateway (preview).
+http:
+  routers:
+    dashboard:
+      entryPoints: [websecure]
+      rule: 'Host(`{{ env "DASHBOARD_HOST" }}`)'
+      middlewares: [dashboard-auth]
+      service: api@internal
+      tls:
+        certResolver: le
+        domains: [{ main: '{{ env "DASHBOARD_HOST" }}' }]
+    # {{ if env "PREVIEW_APEX_HOST" }}
+    preview-apex:
+      entryPoints: [websecure]
+      rule: 'Host(`{{ env "PREVIEW_APEX_HOST" }}`)'
+      middlewares: [to-cabinet]
+      service: noop@internal
+      tls:
+        certResolver: le
+        domains: [{ main: '{{ env "PREVIEW_APEX_HOST" }}' }]
+    # {{ end }}
+    browser-stream:
+      entryPoints: [websecure]
+      rule: 'Host(`{{ env "BROWSER_STREAM_HOST" }}`) && Path(`/v1/browser/stream`)'
+      priority: 1100
+      service: browser-stream
+      tls: {}
+  middlewares:
+    dashboard-auth:
+      basicAuth:
+        usersFile: /run/raditi/dashboard-users
+        realm: Raditi
+        removeHeader: true
+    to-cabinet:
+      redirectRegex:
+        regex: '^https?://[^/]+/.*$'
+        replacement: 'https://{{ env "BROWSER_STREAM_HOST" }}/'
+        permanent: false
+  services:
+    browser-stream:
+      loadBalancer:
+        servers: [{ url: 'http://preview:8091' }]

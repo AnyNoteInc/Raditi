@@ -1,0 +1,17 @@
+# /etc/systemd/system/raditi-net.service (infra/server/README.md): the private address 10.10.0.10
+# on a dummy interface. Vault, S3, Gitea, the runner API and the llm gateway listen or are
+# published only here; raditi-host.nft drops it from outside. Docker publishes to it, so it must
+# exist before dockerd.
+[Unit]
+Description=Raditi private address 10.10.0.10
+Before=docker.service openbao.service
+After=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c "ip link show raditi0 >/dev/null 2>&1 || ip link add raditi0 type dummy; ip addr replace 10.10.0.10/32 dev raditi0; ip link set raditi0 up"
+ExecStop=/sbin/ip link del raditi0
+
+[Install]
+WantedBy=multi-user.target

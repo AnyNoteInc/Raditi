@@ -1,0 +1,22 @@
+#!/usr/sbin/nft -f
+# /etc/raditi/raditi-host.nft (infra/server/README.md). The server has no cloud security group:
+# from the public interface only SSH (2222) reaches the host itself, and Docker's published 80
+# and 443 (they go through FORWARD, not INPUT). The private address 10.10.0.0/24 is dropped from
+# outside before Docker's DNAT: a neighbour on the provider's network could otherwise send to it.
+# Containers reach the host through their bridges, which these chains do not touch.
+table inet raditi_host
+delete table inet raditi_host
+table inet raditi_host {
+  chain prerouting {
+    type filter hook prerouting priority raw; policy accept;
+    iifname "eth0" ip daddr 10.10.0.0/24 drop
+  }
+  chain input {
+    type filter hook input priority filter - 10; policy accept;
+    iifname "eth0" ct state established,related accept
+    iifname "eth0" ip protocol icmp accept
+    iifname "eth0" ip6 nexthdr ipv6-icmp accept
+    iifname "eth0" tcp dport 2222 accept
+    iifname "eth0" drop
+  }
+}

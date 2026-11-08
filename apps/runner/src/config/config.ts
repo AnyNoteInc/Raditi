@@ -36,6 +36,11 @@ export interface RunnerConfig {
    * bucket as its path for path-style S3; https:// in production, null (no pin) only outside it.
    */
   s3Origin: string | null
+  /**
+   * RUNNER_S3_CA_FILE: a private CA for that S3 (the single server's internal CA,
+   * infra/server/README.md), added to the trusted roots at start; null — the built-in roots only.
+   */
+  s3CaFile: string | null
   /** RUNNER_MAX_TURNS: turns at once; one until several runners are supported (stage 2). */
   maxTurns: number
   sandbox: SandboxConfig
@@ -55,6 +60,7 @@ const ownEnvSchema = z.object({
   ),
   RUNNER_TOKEN_FILE: envVar(z.string().optional()),
   RUNNER_CORE_CA_FILE: envVar(z.string().optional()),
+  RUNNER_S3_CA_FILE: envVar(z.string().optional()),
   RUNNER_S3_ORIGIN: envVar(
     z.url({ protocol: /^https?$/, error: 'must be an http(s):// URL' }).optional(),
   ),
@@ -162,6 +168,11 @@ export function loadRunnerConfig(env: Env): RunnerConfig {
     problems.push('RUNNER_TOKEN_FILE: must be an absolute path')
   if (own.RUNNER_CORE_CA_FILE !== undefined && !isAbsolute(own.RUNNER_CORE_CA_FILE))
     problems.push('RUNNER_CORE_CA_FILE: must be an absolute path')
+  if (own.RUNNER_S3_CA_FILE !== undefined) {
+    if (!isAbsolute(own.RUNNER_S3_CA_FILE)) problems.push('RUNNER_S3_CA_FILE: must be an absolute path')
+    if (own.RUNNER_S3_ORIGIN === undefined)
+      problems.push('RUNNER_S3_CA_FILE: only with RUNNER_S3_ORIGIN, the S3 it is for')
+  }
   // Names only: the values may be exactly what must not be on a sandbox VM.
   if (production)
     for (const name of Object.keys(env).sort())
@@ -188,6 +199,7 @@ export function loadRunnerConfig(env: Env): RunnerConfig {
     tokenFile: own.RUNNER_TOKEN_FILE,
     caFile: own.RUNNER_CORE_CA_FILE ?? null,
     s3Origin,
+    s3CaFile: own.RUNNER_S3_CA_FILE ?? null,
     maxTurns: own.RUNNER_MAX_TURNS,
     sandbox,
   }
