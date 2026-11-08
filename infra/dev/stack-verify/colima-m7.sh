@@ -16,7 +16,8 @@
 #      pulls them); the archives of the builds in ~/raditi-cms; Chromium and WebKit of Playwright;
 #      the `site` images of the PHP of the builds with their tools and host rules
 #      (`pnpm verify:site-images -- --build-only`, under the tags of that stand).
-#   3. М2: the preview suite of the stack under the runtime (--no-m2 — skipped).
+#   3. М2: the preview suite of the stack under the runtime (--no-m2 — skipped); a stack without a
+#      suite of its own (WordPress) skips it with a NOTE line.
 #   4. `pnpm verify:stack` with the stack, the runtime, the builds and the groups (by default
 #      import, preview and release).
 #
@@ -179,17 +180,25 @@ pnpm --filter e2e exec playwright install --with-deps chromium webkit
 echo "== step 2: site images of PHP $php"
 pnpm verify:site-images -- --build-only --only "$php"
 
-if [[ $m2 == 1 ]]; then
+suite="src/previews/$stack-preview.integration.test.ts"
+if [[ $m2 == 1 && ! -f apps/core/$suite ]]; then
+  # WordPress has no suite of its own: its previews are proven by verify:release and the stand.
+  echo "NOTE step 3: М2 skipped, the stack $stack has no preview suite apps/core/$suite"
+elif [[ $m2 == 1 ]]; then
   echo "== step 3: М2 of $stack under $runtime"
-  # One build or more: the suite names each `<CMS> <version> as a preview`.
+  # One build or more: the suite names each `<CMS> <version> as a preview`. The version comes from
+  # the record of the build in STACK_STANDS, never from its id: an id need not start with the stack.
   only=()
   if [[ ${#builds[@]} -gt 0 ]]; then
-    versions=$(printf '%s\n' "${builds[@]}" | sed "s/^$stack-//; s/\./\\\\./g" | paste -sd '|' -)
-    only=(--testNamePattern=" ($versions) as a preview")
+    pattern=$(node --input-type=module -e '
+      const { previewNamePattern } = await import(process.argv[1])
+      console.log(previewNamePattern(process.argv[2], process.argv.slice(3)))
+    ' "$PWD/infra/dev/stack-verify/stand.mjs" "$stack" "${builds[@]}")
+    only=(--testNamePattern="$pattern")
   fi
   PREVIEW_RUNTIME=$runtime RADITI_PREVIEW_DOCKER_TESTS=1 \
     pnpm --filter core exec vitest run --testTimeout=600000 \
-    "${only[@]}" "src/previews/$stack-preview.integration.test.ts"
+    "${only[@]}" "$suite"
 fi
 
 echo "== step 4: verify:stack of $stack under $runtime"

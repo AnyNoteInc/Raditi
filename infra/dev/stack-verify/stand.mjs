@@ -22,6 +22,8 @@ import {
   roleEnvironment,
   turnResult,
 } from '../release-verify/stand.mjs'
+import { joomlaSupport } from '../../../packages/site-adapters/src/joomla/joomla-support.ts'
+import { wordpressSupport } from '../../../packages/site-adapters/src/wordpress-stack.ts'
 import { CMS_ARCHIVES } from './fetch-cms.mjs'
 import { STACK_STANDS } from './stacks.mjs'
 
@@ -83,15 +85,52 @@ export function groupRowProblems(runs, rows) {
 }
 
 /**
- * The groups a build runs: `import`, `preview` and `release` always; `browser` when the stand walks
- * the panel, the stack opens it and the branch of the build has it open; `safety` when the stand has
- * its cases; `safety-browser` with both. The record of a stack names no group: a literal there would
- * drop a group added later. `support` — `StackSupport` of the adapter; without it no `browser`.
+ * The name filter of М2 for the named builds (colima-m7.sh, step 3): the preview suite names each
+ * case `<CMS> <version> as a preview`, so the filter is ` (<version>|…) as a preview` with the dots
+ * escaped. The version comes from the record of the build in STACK_STANDS, never from its id: an id
+ * need not start with the stack (`ocstore-…` of OpenCart). A build the record of the stack does not
+ * have throws.
  */
+export function previewNamePattern(stack, ids, stands = STACK_STANDS) {
+  const builds = stands[stack]?.builds ?? []
+  const versions = ids.map((id) => {
+    const build = builds.find((row) => row.archive === id)
+    if (!build) throw new Error(`no build ${id} in the record of ${stack}`)
+    return build.version.replaceAll('.', '\\.')
+  })
+  return ` (${versions.join('|')}) as a preview`
+}
+
+/**
+ * The groups a build runs: `import`, `preview` and `release` always; `browser` when the stand walks
+ * the panel, the stack opens it and the branch of the build does not close it; `safety` when the
+ * stand has its cases; `safety-browser` with both. The branch is judged as `siteSupportOf` judges
+ * it (Т3): a branch the table does not have — WordPress, `generation: null` — leaves the panel
+ * open, only a row with `browser: false` closes it. The record of a stack names no group: a literal
+ * there would drop a group added later. `support` — `StackSupport` of the adapter; without it no
+ * `browser`.
+ */
+/**
+ * `StackSupport` of the adapter of every stack of STACK_STANDS, from the tables of the working tree
+ * (the module of each table, not the registry: the registry would load every adapter, and each
+ * file the stand loads starts site-stacks.yml — infra/app/ci.test.mjs). verify-stack.mjs hands it
+ * to `standOptions`, so `groupsOf` judges the branch of a build by the table of its stack
+ * (docs/plan/62-site-stacks.md, §10, «Э3-правки», п. 5). A stack added to STACK_STANDS adds its
+ * table here; stand.test.mjs checks the keys and that each is the table of its adapter.
+ */
+export const STACK_SUPPORTS = Object.freeze({
+  wordpress: wordpressSupport,
+  joomla: joomlaSupport,
+})
+
 export function groupsOf(stand, build, support = null) {
   const groups = ['import', 'preview', 'release']
   const branch = support?.generations?.find((row) => row.id === build.generation)
-  const browser = Boolean(stand.walks) && support?.browser !== 'off' && branch?.browser === true
+  const browser =
+    Boolean(stand.walks) &&
+    support !== null &&
+    support.browser !== 'off' &&
+    branch?.browser !== false
   if (browser) groups.push('browser')
   if (stand.safety) groups.push('safety')
   if (stand.safety && browser) groups.push('safety-browser')

@@ -1,8 +1,8 @@
 import type { StackGeneration, StackSupport } from '@repo/domain'
 
 // What the platform does with a site of Joomla (docs/plan/62-site-stacks.md, Т1, Т3, Т4, Т18, Т27;
-// docs/plan/62-slices/e3.md, Э3.2). Not in the registry yet: the adapter joins it whole in Э3.7,
-// because a stack with open files must answer every method (the contract of Э2.3).
+// docs/plan/62-slices/e3.md, Э3.2). The adapter is in the registry since Э3.7, files `dev`: the
+// wizard and the import read this table outside production.
 
 /**
  * The branches of Joomla. The first PHP of each is the table of the first choice (Т18), the rest is

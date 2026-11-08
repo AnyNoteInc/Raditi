@@ -23,7 +23,12 @@ import { z } from 'zod'
 
 import { InitialVersionGit } from '../site-provisioning/initial-version.ts'
 import { importSite, type SiteImportDeps } from '../site-provisioning/site-import.ts'
-import { fakeSession, type FakeNode, type FakeSession } from './file-source.ts'
+import {
+  fakeSession,
+  type DirectoryOptions,
+  type FakeNode,
+  type FakeSession,
+} from './file-source.ts'
 import { FakeSiteImportStore } from './site-import-store.ts'
 
 const execute = promisify(execFile)
@@ -70,6 +75,8 @@ export interface SiteImportFixture {
   store: FakeSiteImportStore
   deps: SiteImportDeps
   tree: Record<string, FakeNode>
+  /** How the root of `tree` lists in the next session opened: a failure of the root itself. */
+  rootOptions: DirectoryOptions
   /** Where the provisioner keeps the bare repository of the site. */
   remote: string
   /** The source access in Vault at the version its reference names (2). */
@@ -212,7 +219,10 @@ process.exit(found.length ? exit : 0)
     scanValues: (stored) => [stored.password],
     open: async (_access, context) => {
       opened += 1
-      const session = fakeSession(fixture.tree, { signal: context.signal })
+      const session = fakeSession(fixture.tree, {
+        signal: context.signal,
+        root: fixture.rootOptions,
+      })
       sessions.push(session)
       return session
     },
@@ -279,6 +289,7 @@ process.exit(found.length ? exit : 0)
     store,
     deps,
     tree: options.tree ?? sampleSite(),
+    rootOptions: {},
     remote,
     vault: new Map(),
     addDatabase: () => {

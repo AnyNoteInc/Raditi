@@ -70,6 +70,9 @@ export const provisioningErrorCodes = [
   'source_has_secrets',
   // Nothing left to import after filtering.
   'source_empty',
+  // A folder SiteAdapter.readLayout lists holds more than siteReadEntries entries: the layout of
+  // the stack cannot be read, and no retry mends it until the client clears the folder.
+  'folder_too_large',
   // SiteAdapter.readLayout refused: the project stays, without its files (sites.stack_facts.limit says why).
   'layout_unsupported',
   'scan_failed',

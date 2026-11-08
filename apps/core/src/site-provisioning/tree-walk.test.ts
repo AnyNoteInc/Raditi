@@ -458,6 +458,76 @@ describe('siteTreeOf', () => {
     expect(await site.read('../etc/passwd')).toBeNull()
   })
 
+  it('keeps why its last null was no answer about the site', async () => {
+    const site = siteTreeOf(tree(), signal)
+    expect(site.failure).toBeNull()
+    // «No such file or folder» below the root is an answer.
+    expect(await site.list('missing')).toBeNull()
+    expect(await site.read('missing.php')).toBeNull()
+    expect(site.failure).toBeNull()
+    // A broken listing or read is a hiccup; a refused one, the refusal the walk would say.
+    expect(await site.list('broken')).toBeNull()
+    expect(site.failure).toMatchObject({ code: 'transfer_failed', transient: true })
+    expect(await site.list('locked')).toBeNull()
+    expect(site.failure).toMatchObject({ code: 'access_denied', transient: false })
+    expect(await site.read('cut.php')).toBeNull()
+    expect(site.failure).toMatchObject({ code: 'transfer_failed', transient: true })
+
+    // Each call starts anew: a later null that is an answer, or a result, leaves no failure behind.
+    expect(await site.read('missing.php')).toBeNull()
+    expect(site.failure).toBeNull()
+    expect(await site.list('locked')).toBeNull()
+    expect(await site.list('wp-includes')).not.toBeNull()
+    expect(site.failure).toBeNull()
+    expect(await site.read('cut.php')).toBeNull()
+    expect(await site.read('index.php')).not.toBeNull()
+    expect(site.failure).toBeNull()
+    expect(await site.list('broken')).toBeNull()
+    expect(await site.list('missing')).toBeNull()
+    expect(site.failure).toBeNull()
+    // A file past configFileBytes is an answer of its own: too large to read, not a broken read.
+    const large = fakeSession({
+      'cut.php': file('x', { fails: 'transfer_failed' }),
+      'configuration.php': file('x'.repeat(siteImportLimits.configFileBytes + 1)),
+    })
+    const oversized = siteTreeOf(large, signal)
+    expect(await oversized.read('cut.php')).toBeNull()
+    expect(await oversized.read('configuration.php')).toBeNull()
+    expect(oversized.failure).toBeNull()
+
+    // A root that is not there is no answer either.
+    const gone = fakeSession({}, { root: { fails: 'not_found' } })
+    const rootless = siteTreeOf(gone, signal)
+    expect(await rootless.list('')).toBeNull()
+    expect(rootless.failure).toMatchObject({ code: 'not_found', transient: false })
+  })
+
+  it('says a folder past siteReadEntries as folder_too_large, the guard or a longer answer', async () => {
+    const crowded = fakeSession({ many: directory({ a: file('x'), b: file('y') }) })
+    const list = crowded.list.bind(crowded)
+    crowded.list = (path) => list(path, 1)
+    const guarded = siteTreeOf(crowded, signal)
+    expect(await guarded.list('many')).toBeNull()
+    expect(guarded.failure).toMatchObject({ code: 'folder_too_large', transient: false })
+
+    const longer = tree()
+    longer.list = async () =>
+      Array.from({ length: siteReadEntries + 1 }, (_, index) => ({
+        name: `f${index}`,
+        ref: `f${index}`,
+        type: 'file' as const,
+        size: 1,
+      }))
+    const answered = siteTreeOf(longer, signal)
+    expect(await answered.list('')).toBeNull()
+    expect(answered.failure).toMatchObject({ code: 'folder_too_large', transient: false })
+
+    // A folder resolved elsewhere is no failure of the size.
+    const mirrored = siteTreeOf(tree(), signal)
+    expect(await mirrored.list('mirror')).toBeNull()
+    expect(mirrored.failure).toBeNull()
+  })
+
   it('throws once its deadline has passed', async () => {
     const controller = new AbortController()
     controller.abort()
@@ -471,7 +541,11 @@ describe('siteTreeOf', () => {
     session.list = async () => {
       throw new FileSourceGuardError('listing')
     }
-    expect(await siteTreeOf(session, signal).list('')).toBeNull()
+    // The byte cap of a listing (sftp.ts, ftp.ts) comes before its count of entries: a root of
+    // many long names is a folder too large as well.
+    const capped = siteTreeOf(session, signal)
+    expect(await capped.list('')).toBeNull()
+    expect(capped.failure).toMatchObject({ code: 'folder_too_large', transient: false })
 
     // Anything else is no answer about the site: it is never read as «no such folder».
     const failing = tree()

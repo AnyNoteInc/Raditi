@@ -20,7 +20,7 @@ import {
 } from '@repo/domain'
 
 import type { ExactValues } from './exact-values.ts'
-import { refuse, sessionFailure } from './import-failure.ts'
+import { isImportFailure, refuse, sessionFailure, type ImportFailure } from './import-failure.ts'
 
 /**
  * A folder or a file the server listed and then refused to open, or no longer has: left out and
@@ -317,23 +317,48 @@ function segmentsOf(path: string): string[] | null {
 }
 
 /**
+ * The tree of an open session for SiteAdapter.readVersion and readLayout (`SiteTree`), and why its
+ * last null was no answer about the site: `failure` is what the import says when the adapter
+ * throws on such a null (docs/plan/62-site-stacks.md, §10, «Э3-правки», п. 1).
+ */
+export interface SessionSiteTree extends SiteTree {
+  /**
+   * Why the last call — read or listing, whatever came before it — broke rather than answered: a
+   * reason of the connection as the walk says it (`transfer_failed` and `unreachable` — a hiccup to
+   * retry), or `folder_too_large` for a folder past `siteReadEntries`, which no retry mends. null —
+   * the last call answered: a result, or a null that says something of the site (no such file or
+   * folder below the root, a file past `configFileBytes`, a path the import refuses). Each call
+   * starts it anew, so an earlier broken read never speaks for a later null.
+   */
+  readonly failure: ImportFailure | null
+}
+
+/**
  * The tree of an open session for SiteAdapter.readVersion and readLayout: `path` from the root,
  * '' — the root. A file or a folder that cannot be read — null (Р9 of Э2): a hiccup of the
  * hosting never says anything of the site, and the record keeps what it had. An expired deadline
  * throws. Unlike `readRootFile` for `configSecrets`, a broken transfer is null here too: the walk
- * that follows meets it again.
+ * that follows meets it again. Why a null was no answer is kept in `failure`: an adapter that has
+ * to throw on it (Joomla without its root) leaves the import a reason to say.
  */
-export function siteTreeOf(session: FileSourceSession, signal: AbortSignal): SiteTree {
+export function siteTreeOf(session: FileSourceSession, signal: AbortSignal): SessionSiteTree {
+  let failure: ImportFailure | null = null
   return {
+    get failure() {
+      return failure
+    },
     async read(path) {
+      failure = null
       try {
         return await readRootFile(session, path, signal)
-      } catch {
+      } catch (error) {
         signal.throwIfAborted()
+        if (isImportFailure(error)) failure = error
         return null
       }
     },
     async list(path) {
+      failure = null
       signal.throwIfAborted()
       const segments = segmentsOf(path)
       if (segments === null) return null
@@ -342,10 +367,22 @@ export function siteTreeOf(session: FileSourceSession, signal: AbortSignal): Sit
         entries = await session.list(segments, siteReadEntries)
       } catch (error) {
         signal.throwIfAborted()
-        if (isFileSourceGuardError(error) || isSiteConnectionError(error)) return null
+        if (isSiteConnectionError(error)) {
+          // «No such folder» is an answer below the root; a refused or broken listing is not.
+          if (error.reason !== 'not_found' || segments.length === 0) failure = sessionFailure(error)
+          return null
+        }
+        if (isFileSourceGuardError(error)) {
+          if (error.guard === 'entries' || error.guard === 'listing')
+            failure = refuse('folder_too_large')
+          return null
+        }
         throw error
       }
-      if (!Array.isArray(entries) || entries.length > siteReadEntries) return null
+      if (!Array.isArray(entries) || entries.length > siteReadEntries) {
+        failure = refuse('folder_too_large')
+        return null
+      }
       return entries.flatMap((entry) =>
         entry.type === 'other' ? [] : [{ name: entry.name, type: entry.type }],
       )

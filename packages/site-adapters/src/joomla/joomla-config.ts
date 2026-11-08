@@ -147,7 +147,8 @@ export async function joomlaDatabaseSettings(
 /**
  * A root the hosting did not show, or a configuration it listed and did not give: the layout is
  * unknown, not refused (Т13; Р9 of Э2). The reader of the stack lets it through: a fresh copy goes
- * on with the recorded layout, an import ends without writing a limit.
+ * on with the recorded layout, an import ends without writing a limit and says why the tree gave
+ * null — a broken listing is retried, a root past `siteReadEntries` is `folder_too_large`.
  */
 const unreadRoot = () => new Error('The root of the site could not be read')
 

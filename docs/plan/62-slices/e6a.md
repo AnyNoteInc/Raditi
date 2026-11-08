@@ -283,7 +283,7 @@
   }
   ```
 
-  `onStack` импорта — три строки Э2.8: `recordStackFacts`, `if (reading.refused) throw refuse('layout_unsupported')`. `onListed` импорта: `mediaOverThreshold` и `setStep(lease, 'fetch')`. `onTaken` импорта — вторая запись Э2.8, как сейчас в конце `fetchTree` (блок `if (reading)`): `const settled = await recheckVersion(rules, takenFilesRead(taken), reading)`, непустая часть — `recordStackFacts(lease, settled)`; `rules` — правила того же стека, `deps.stacks(site.stack)`. Сам `readStack` и `siteTreeOf` зовёт `readCodeTree`, на том же месте внутри `try`; `onTaken` — после `publicOriginalsOf` и отказа `source_empty` по взятым файлам, на месте нынешнего блока `if (reading)`, и только когда `readStack` дал чтение.
+  `onStack` импорта — три строки Э2.8: `recordStackFacts`, `if (reading.refused) throw refuse('layout_unsupported')`. `onListed` импорта: `mediaOverThreshold` и `setStep(lease, 'fetch')`. `onTaken` импорта — вторая запись Э2.8, как сейчас в конце `fetchTree` (блок `if (reading)`): `const settled = await recheckVersion(rules, takenFilesRead(taken), reading)`, непустая часть — `recordStackFacts(lease, settled)`; `rules` — правила того же стека, `deps.stacks(site.stack)`. Сам `readStack` и `siteTreeOf` зовёт `readCodeTree`, на том же месте внутри `try`, вместе с правилом броска адаптера (Э3-правки, п. 1): адаптер, который бросает на `null` дерева (Joomla без прочитанного корня), получает причину из `tree.failure` — сбой соединения — `connectionFailure(reason)` (`transfer_failed` и `unreachable` — повтор), отказ сервера — его отказ, папка длиннее `siteReadEntries` — `refuse('folder_too_large')`; `internal` — только когда дерево причины не знает. `tree.failure` говорит только о последнем вызове: каждый `read` и `list` начинает его заново, поэтому прежний сбой (манифест версии) не говорит за `null`, который был ответом (конфигурация длиннее `configFileBytes`, — тогда `internal`). `importSite` уже делает так (`site-import.ts`, `isImportFailure(error) || walkSignal.aborted ? null : tree.failure`), `readCodeTree` переносит это без изменений; `onTaken` — после `publicOriginalsOf` и отказа `source_empty` по взятым файлам, на месте нынешнего блока `if (reading)`, и только когда `readStack` дал чтение.
 
   `stage-store.ts`: код внутри `#fenced` в `readAccess` (строки 303–353) становится приватной `#accessOf(tx, siteId)`. Появляется `readAccessOf(siteId): Promise<StoredAccess>` без ограждения этапа, через `#transaction`.
 
@@ -291,6 +291,7 @@
 - *Тесты.*
   - Все существующие `site-import.test.ts`, `site-import.runner.test.ts`, `stage-store.integration.test.ts` проходят без правок: это и есть доказательство. Меняются только импорты.
   - Новый `code-tree.test.ts`: `reads the tree of a site that is no longer being connected` — `stored.siteStatus === 'active'`, функция работает без этапа и без `store`. Не компилируется до правки.
+  - `code-tree.test.ts`: `says why the tree gave null when the adapter throws on it` — сбой `list('')` у Joomla — `transfer_failed`, `transient`; корень больше `siteReadEntries` имён — `folder_too_large`; как в тестах импорта Joomla в `site-import.test.ts` (Э3-правки, п. 1), которые проходят без правок.
   - `code-tree.test.ts`: `hands the taken files and the first reading to onTaken` — `onTaken` зовётся один раз, после сканов, с теми файлами, что вернул `readCodeTree`, и с тем же `StackReading`, что получил `onStack`; при отказе раскладки не зовётся. Тест импорта Э2.8 «хостинг сменил версию во время обхода» (`site-import.test.ts`) проходит без правок.
 - *Стенды.* `pnpm gates`, `pnpm verify:db`, `pnpm verify:site-import`.
 - *Готово.* `site-import.ts` короче на 300 строк, дифф поведения пуст.
@@ -897,7 +898,7 @@
   1. Приватный каталог `mkdtemp(join(tmpdir(), CLONE_PREFIX))`, в `finally` удаляется; `assertScanner`. Нет `git` — `refuse('repository_not_configured')`.
   2. `store.readAccess(site.id)`, `checkedAccess`. Статус сайта здесь не проверяется: это делает постановка.
   3. `git.readBranchHead({ repo: run.repo, branch: run.branch })`; `null` — `refuse('repository_mismatch')`. `refuse` здесь свой, он бросает `CodeSyncFailure`; `import-failure.ts`, `provisioningErrorCodes` и `importTexts` не меняются. `store.recordMain(run.id, head)`.
-  4. `readCodeTree(…, media: 'apart')`. `onStack` запоминает `reading.patch`, при `reading.refused` бросает `refuse('layout_unsupported')`, а записи в сайт не делает: она идёт при принятии. `onListed` пуст: порог Т49 не действует, медиа не скачиваются. `onTaken` сливает запомненную часть с версией скачанной копии, по правилу импорта (Т14): `facts = { ...reading.patch, ...(await recheckVersion(rules, takenFilesRead(taken), reading)) }`. Так сводка называет версию файлов, которые лягут в `main`, а не ту, что хостинг показал до листинга.
+  4. `readCodeTree(…, media: 'apart')`. Бросок адаптера при чтении стека — по правилу Э6а.3 (`tree.failure`): сбой хостинга — его код соединения, корень длиннее `siteReadEntries` — `folder_too_large` (код из `provisioningErrorCodes`, входит в `codeSyncErrorCodes`), не `internal`. `onStack` запоминает `reading.patch`, при `reading.refused` бросает `refuse('layout_unsupported')`, а записи в сайт не делает: она идёт при принятии. `onListed` пуст: порог Т49 не действует, медиа не скачиваются. `onTaken` сливает запомненную часть с версией скачанной копии, по правилу импорта (Т14): `facts = { ...reading.patch, ...(await recheckVersion(rules, takenFilesRead(taken), reading)) }`. Так сводка называет версию файлов, которые лягут в `main`, а не ту, что хостинг показал до листинга.
   5. `listing.closedFolders > 0` — `refuse('source_unreadable')`. `source_inconsistent` приходит из обхода сам. Это остановка А11: папка, которая не открылась, значит, что сервер скрывает её содержимое, коммита нет. Отдельный файл остановкой не служит: он идёт в `left_out` и остаётся из `main`, это вторая половина А11.
   6. `git.treeFiles({ repo, sha: head })`, `blobOid` каждой копии (sha1 от `blob <bytes>\0` и потока файла, функция в `code-sync.ts`).
   7. `compareWithMain`. Нет `write` и `remove` — `no_changes`.
@@ -1429,19 +1430,19 @@
 
 ## Э6а.12. `code_sync` на новых стеках
 
-**Э6а.12. Сценарий R8: тупик `conflict` снимается на Joomla, OpenCart и MODX.**
-- *Цель.* М4б и строка З7 на каждом новом стеке. S11 доказывает это только на WordPress, а сценарий R6 оставляет сайт в тупике. Срез снимает круг: Э3 отсылал `code_sync` к Э6а, Э6а — к Э3.
+**Э6а.12. Сценарий R8: тупик `conflict` снимается на каждом стеке стенда — WordPress, Joomla, OpenCart и MODX.**
+- *Цель.* М4б и строка З7 на каждом новом стеке. S11 доказывает это только на WordPress, а сценарий R6 оставляет сайт в тупике. С Э3.15 в `STACK_STANDS` и WordPress, его группа `release` идёт на стенде (R1–R6 и Rc), поэтому R8 идёт и на нём: это тот же шов на записи стенда, а не замена S11 — М4б на WordPress по-прежнему держат S11 `verify:release` и C1–C4 `verify:site-import` (§5.5 проекта), R8 на WordPress добавляет проверку записи стенда и `mediaRoots` WordPress (Э3-правки ревью). Срез снимает круг: Э3 отсылал `code_sync` к Э6а, Э6а — к Э3.
 - *Файлы.*
   - `infra/dev/stack-verify/scenarios-release.mjs` — сценарий R8.
   - `infra/dev/stack-verify/stand.mjs` — `operatorEnvironment`, запуск `sites:sync` из приватной копии дерева, как у `verify:release` (`setup.mjs:461`).
   - `infra/dev/stack-verify/stand.test.mjs`, `README.md`.
-- *Договор.* R8 идёт в группе `release` сразу после R6 на той же сборке и подхватывает её сайт: кандидат есть, файл стиля на хостинге изменён, `main` стоит на прежнем. Поля `StackStand` новых не требует: `edit(build).style`, `shownAt`, `page`.
+- *Договор.* R8 идёт в группе `release` на той же сборке после R6 и до Rc и подхватывает её сайт: кандидат диалога R6 есть, файл `conflictPart(edit(build))` (`turns.mjs`) на хостинге изменён владельцем, `main` стоит на прежнем. `conflictPart` — файл стиля, только если стиль есть в поставке (`created: false`), иначе шаблон: на Joomla 4.4, 5.4 и 6.2 это `templates/cassiopeia/index.php` — `user.css` новый, и отмена R5 его удаляет (Э3.12, п. 9; Э3-правки, п. 4); на Joomla 3.10 — файл стиля; на WordPress — `style.css` темы стенда (`wordpress.mjs`, `created: false`). Rc идёт после R8: `/cancel` диалога R6 и снос предпросмотров стоят строкой Rc, и до R8 они убрали бы кандидата, которого ждут R8b и R8c. Поля `StackStand` новых не требует: `edit(build)` через `conflictPart`, `shownAt`, `page`.
 
   | Шаг | Что проверяется |
   | --- | --- |
-  | R8a | `sites:sync start`, `ready`: `modified` содержит файл стиля из `edit(build)`; картинка, добавленная на хостинге под корнем `mediaRoots`, есть только в `media`. Удалённый `main` прежний |
+  | R8a | `sites:sync start`, `ready`: `modified` содержит файл `conflictPart(edit(build))`, а не `edit(build).style`; картинка, добавленная на хостинге под корнем `mediaRoots`, есть только в `media`. Удалённый `main` прежний |
   | R8b | `accept`: `pushed`; голова `main` — `commit_sha`, один родитель, трейлер `Raditi-Sync`; нового тега нет, новых заданий нет; `installed_sha` равен коммиту, `installed_version` и `installed_release_id` прежние; файлы хостинга не менялись; кандидат диалога `stale` |
-  | R8c | «Обновить», затем `/release`: `installed`, правка хостинга на месте, номер следующий, а не сгоревший. Тупик снят |
+  | R8c | «Обновить», затем `/release`: `installed`, правка хостинга на месте, номер следующий, а не сгоревший. Тупик снят. Это и контроль причины отказа R6, который Э3.12 (п. 12) отдал R8: шаг конфликтов R6 сверял хостинг с установленной версией — после `code_sync` правка владельца входит в установленную, и тот же шаг пропускает выпуск. Шаг, сверявший бы хостинг не с установленной версией, отказал бы и здесь |
   | R8d | «Отменить выпуск» этого выпуска показывает `returnsTo`, равный версии до `code_sync` |
   | R8e | `release.undoPlan` выпуска до `code_sync` кончается `undo_outdated` |
 
@@ -1450,7 +1451,7 @@
   R8 не называет стеков: условие только по полям. У стека, где поля стиля нет, стенд не собирается, а не пропускает сценарий.
 
   Запрещено: правка файлов `release-verify`; условие по имени стека; подмена шага `sites:sync` записью в базу.
-- *Тесты.* `stand.test.mjs`: R8 идёт в `release` после R6 у каждой записи `STACK_STANDS`, у Joomla, OpenCart и MODX. Падает до правки: сценария нет.
+- *Тесты.* `stand.test.mjs`: R8 идёт в `release` после R6 и до Rc у каждой записи `STACK_STANDS` — у WordPress, Joomla, OpenCart и MODX; файл R8a — `conflictPart(edit(build))` (на WordPress — `style.css` темы, на Joomla 4.4–6.2 — шаблон, на 3.10 — стиль). R8 на WordPress проходит, а не пропускается. Падает до правки: сценария нет.
 - *Стенды.* `pnpm gates`; `pnpm verify:stack -- --group=release`; job `stand` на PR.
 - *Готово.* На каждой сборке каждого стека, который уже в `STACK_STANDS`, выпуск, заведённый в `conflict` правкой на хостинге, проходит после `sites:sync`. Стек, пришедший позже, получает R8 сам: сценарий общий.
 - *Зависит.* Э6а.9, Э3.12.

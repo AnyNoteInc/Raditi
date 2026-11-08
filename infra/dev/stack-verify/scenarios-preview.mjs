@@ -457,7 +457,7 @@ async function closeDialog(rt, ctx, entry) {
 
 /**
  * The group `preview` on the builds `import` made a site of: P1–P4, then P5 in the engines of the
- * host (`frameEnginesOn`: on Linux WebKit is a NOTE with its reason, О2б, the default (а)). A
+ * host (`frameEnginesOn`: on Linux WebKit is a NOTE with its reason, О2б (а), the owner's answer). A
  * failed P5 is the failed row of its engine and nothing more: the sign-in in the cabinet's frame
  * gives the group `release` nothing it needs — the site, the preview and the closed dialog are there
  * after P1–P4 — so the dialog is still closed and `release` still runs (Э3.16: a P5 of WebKit on

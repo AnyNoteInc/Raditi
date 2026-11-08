@@ -4,6 +4,7 @@ import {
   siteConnectionLimits,
   siteImportLimits,
   siteLimitLateText,
+  siteReadEntries,
 } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
 
@@ -42,6 +43,8 @@ describe('the setup screen', () => {
     expect(siteImportLimits.files).toBe(100_000)
     expect(siteImportLimits.treeBytes).toBe(1024 * 1024 * 1024)
     expect(setupErrorText('source_too_large', context)).toContain('100 000 файлов и до 1 ГБ')
+    expect(siteReadEntries).toBe(4096)
+    expect(setupErrorText('folder_too_large', context)).toContain('больше 4 096 файлов и папок')
     expect(RETRIES_PER_HOUR).toBe(siteConnectionLimits.retriesPerHour)
   })
 

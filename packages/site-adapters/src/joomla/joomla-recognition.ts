@@ -4,8 +4,9 @@ import { joomlaSupport } from './joomla-support.ts'
 import { isJoomlaManifest, JOOMLA_MANIFEST_URL, joomlaManifestVersion } from './joomla-version.ts'
 
 // How a site of Joomla is recognised and what the wizard says of it (docs/plan/62-site-stacks.md,
-// Т3, Т15, Т26–Т29, Т32; docs/plan/62-slices/e3.md, Э3.2). Nothing here is read by the product
-// before the adapter joins the registry (Э3.7) and the screens of Э9.
+// Т3, Т15, Т26–Т29, Т32; docs/plan/62-slices/e3.md, Э3.2). The adapter is in the registry since
+// Э3.7, files `dev`: the wizard and the import read these signs outside production; the screens
+// of Э9 read the rest.
 
 /** The markers of the root (Т15): what `rootMarkers()` of the adapter gives in Э3.7. */
 export const JOOMLA_ROOT_MARKERS: readonly string[] = ['administrator', 'libraries', 'plugins']

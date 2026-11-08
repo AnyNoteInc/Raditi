@@ -24,6 +24,9 @@ on:
       - packages/site-adapters/src/php-config.ts
       - packages/site-adapters/src/php-hosting.ts
       - packages/site-adapters/src/no-browser-tasks.ts
+      # The support table of WordPress, which the stand reads for its groups (stand.mjs, STACK_SUPPORTS).
+      - packages/site-adapters/src/wordpress-stack.ts
+      - packages/site-adapters/src/wordpress-public-code.ts
       - packages/site-content/src/**
       - packages/domain/src/site-connection/import-policy.ts
       - apps/core/src/site-provisioning/stack-reading.ts

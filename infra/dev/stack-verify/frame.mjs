@@ -32,7 +32,7 @@ export const LINUX_WEBKIT_FRAME =
 
 /**
  * The engines P5 signs in with on a host of `hostOf` (stand.mjs) and the ones it only notes, with
- * the reason (docs/plan/62-site-stacks.md, §7, О2б, the default (а)): on Linux — a plain one, the
+ * the reason (docs/plan/62-site-stacks.md, §7, О2б, (а) — the owner's answer of 08.11.2026): on Linux — a plain one, the
  * Colima VM, the runner of CI — WebKit is a NOTE, no row; on Docker Desktop both engines sign in.
  */
 export function frameEnginesOn(kind) {

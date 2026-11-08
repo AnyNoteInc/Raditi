@@ -96,6 +96,7 @@ import { STACK_STANDS } from './stacks.mjs'
 import {
   COPY_MODULES,
   STACK_BUILT_IMAGES,
+  STACK_SUPPORTS,
   buildNames,
   gitleaksVersionProblem,
   groupRowProblems,
@@ -917,7 +918,7 @@ export async function verifyStack(argv) {
   const owned = {}
   let failed = false
   try {
-    const options = standOptions(argv)
+    const options = standOptions(argv, { supports: STACK_SUPPORTS })
     owned.keep = options.keep
     await main(options, owned)
   } catch (error) {

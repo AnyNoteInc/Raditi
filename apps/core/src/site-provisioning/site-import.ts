@@ -35,7 +35,14 @@ import { runProcess } from '../git-workspace/process.ts'
 import { CLONE_PREFIX } from '../git-workspace/stale-clones.ts'
 import { trustedGitEnvironment } from '../git-workspace/trusted-git.ts'
 import { ExactValues } from './exact-values.ts'
-import { connectionFailure, hiccup, LeaseLost, refuse, sessionFailure } from './import-failure.ts'
+import {
+  connectionFailure,
+  hiccup,
+  isImportFailure,
+  LeaseLost,
+  refuse,
+  sessionFailure,
+} from './import-failure.ts'
 import { scanForSecrets } from './import-scan.ts'
 import { fetchOriginal, publicOriginalsOf, type FetchOriginal } from './public-originals.ts'
 import { MAIN_REF, TAG_REF, type InitialVersionGit, type RemoteRefs } from './initial-version.ts'
@@ -553,10 +560,17 @@ async function fetchTree(
     try {
       // The version and the layout first, one read at a time: the record of the site gets them
       // even when the import stops (Т13), and a refused layout stops it before any download.
+      const tree = siteTreeOf(session, walkSignal)
       try {
-        reading = await readStack(rules, siteTreeOf(session, walkSignal))
+        reading = await readStack(rules, tree)
       } catch (error) {
-        throw sessionFailure(error)
+        // An adapter that throws on a null of the tree (Joomla without its root) says why through
+        // the tree: a broken listing is a hiccup to retry, as the walk would say it, and a folder
+        // past siteReadEntries a refusal of its own (§10, «Э3-правки», п. 1). Only the call that
+        // gave the last null speaks: a throw after a null that was an answer (a configuration past
+        // configFileBytes) stays `internal`.
+        const said = isImportFailure(error) || walkSignal.aborted ? null : tree.failure
+        throw sessionFailure(said ?? error)
       }
       await deps.store.recordStackFacts(run.lease, reading.patch)
       if (reading.refused) throw refuse('layout_unsupported')

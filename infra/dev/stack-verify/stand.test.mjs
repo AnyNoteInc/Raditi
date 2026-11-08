@@ -15,6 +15,7 @@ import {
   GROUP_ROWS,
   STACK_BUILT_IMAGES,
   STACK_LABEL,
+  STACK_SUPPORTS,
   STAND_FIELDS,
   STAND_GROUPS,
   WRITTEN_GROUPS,
@@ -29,6 +30,7 @@ import {
   hostRelays,
   needleScanner,
   pinnedImagesOf,
+  previewNamePattern,
   productionArgs,
   SERVICE_IMAGES,
   siteImageTag,
@@ -220,10 +222,85 @@ test('the groups of a build are counted by one function, never written in a reco
     'release',
   )
   assert.deepEqual(groupsOf({ walks: true }, build).at(-1), 'release')
+  // A branch the table does not have leaves the panel open, as siteSupportOf reads it (Т3):
+  // WordPress, whose builds name no generation and whose adapter has none, runs `browser`.
+  const wordpress = STACK_STANDS.wordpress.builds[0]
+  assert.equal(wordpress.generation, null)
+  const noTable = { browser: 'dev', generations: [] }
+  assert.deepEqual(groupsOf({ walks: true }, wordpress, noTable).at(-1), 'browser')
+  assert.deepEqual(
+    groupsOf({ walks: true }, build, { browser: 'dev', generations: [] }).at(-1),
+    'browser',
+  )
+  // Joomla 3.10, a row whose panel is closed: no `browser`, whatever the stand.
+  const j310 = STACK_STANDS.joomla.builds.find((row) => row.archive === 'joomla-3.10.12')
+  const closed310 = { browser: 'dev', generations: [{ id: j310.generation, browser: false }] }
+  assert.deepEqual(groupsOf({ walks: true, safety: true }, j310, closed310), [
+    'import',
+    'preview',
+    'release',
+    'safety',
+  ])
   for (const group of WRITTEN_GROUPS) assert.ok(STAND_GROUPS.includes(group))
   // A record of a stack names no group.
   for (const stand of Object.values(STACK_STANDS))
     for (const group of STAND_GROUPS) assert.equal(stand[group], undefined)
+})
+
+test('the stand hands standOptions the support table of the adapter of every stack', () => {
+  // verify-stack.mjs passes STACK_SUPPORTS (§10, «Э3-правки», п. 5): one table per record, each the
+  // table of its adapter — without it `groupsOf` sees no support and `browser` never runs.
+  const adapters = { wordpress: wordpressAdapter, joomla: joomlaAdapter }
+  assert.deepEqual(Object.keys(STACK_SUPPORTS).toSorted(), Object.keys(STACK_STANDS).toSorted())
+  for (const [stack, support] of Object.entries(STACK_SUPPORTS))
+    assert.equal(support, adapters[stack].support, `the support of ${stack}`)
+  assert.match(
+    readFileSync(new URL('./verify-stack.mjs', import.meta.url), 'utf8'),
+    /standOptions\(argv, \{ supports: STACK_SUPPORTS \}\)/,
+  )
+  // By the real tables: a WordPress record that walks runs `browser` (its builds name no branch),
+  // and Joomla, whose panel is off in the product (`browser: 'off'`), never does.
+  const wordpress = STACK_STANDS.wordpress.builds[0]
+  assert.deepEqual(groupsOf({ walks: true }, wordpress, STACK_SUPPORTS.wordpress).at(-1), 'browser')
+  for (const build of STACK_STANDS.joomla.builds)
+    assert.equal(
+      groupsOf({ walks: true }, build, STACK_SUPPORTS.joomla).includes('browser'),
+      STACK_SUPPORTS.joomla.browser !== 'off' &&
+        STACK_SUPPORTS.joomla.generations.find((row) => row.id === build.generation)?.browser !==
+          false,
+    )
+  // No record walks the panel until Э8.16 (it drops this check): the groups of a run are the same.
+  for (const [stack, stand] of Object.entries(STACK_STANDS))
+    for (const build of stand.builds)
+      assert.deepEqual(groupsOf(stand, build, STACK_SUPPORTS[stack]), groupsOf(stand, build))
+})
+
+test('the name filter of М2 takes the versions of the named builds from their records', () => {
+  // colima-m7.sh, step 3 (§10, «Э3-правки», п. 8): the suite names `<CMS> <version> as a preview`.
+  assert.equal(
+    previewNamePattern('joomla', ['joomla-3.10.12', 'joomla-5.4.10']),
+    ' (3\\.10\\.12|5\\.4\\.10) as a preview',
+  )
+  const pattern = new RegExp(previewNamePattern('joomla', ['joomla-4.4.14']))
+  assert.ok(pattern.test('Joomla 4.4.14 as a preview'))
+  assert.equal(pattern.test('Joomla 4.4.140 as a preview'), false)
+  assert.equal(pattern.test('Joomla 4x4x14 as a preview'), false)
+  // A build of another stack, or none of the record, throws rather than run every case.
+  assert.throws(
+    () => previewNamePattern('joomla', ['wordpress-7.1.2']),
+    /no build wordpress-7\.1\.2/,
+  )
+  assert.throws(() => previewNamePattern('nostack', ['joomla-3.10.12']), /record of nostack/)
+  // An id that does not start with its stack still maps through `archive` to `version`.
+  const stands = { opencart: { builds: [{ archive: 'ocstore-3.0.3.7', version: '3.0.3.7' }] } }
+  assert.equal(
+    previewNamePattern('opencart', ['ocstore-3.0.3.7'], stands),
+    ' (3\\.0\\.3\\.7) as a preview',
+  )
+  // The script asks the function, not a derivation of its own.
+  const script = readFileSync(new URL('./colima-m7.sh', import.meta.url), 'utf8')
+  assert.match(script, /previewNamePattern\(process\.argv\[2\], process\.argv\.slice\(3\)\)/)
+  assert.doesNotMatch(script, /sed "s\/\^\$stack-/)
 })
 
 test('every record of a stack has every field, and its builds are rows of the table', () => {

@@ -64,9 +64,15 @@ const CHUNK = 7
 
 export function fakeSession(
   root: Record<string, FakeNode>,
-  options: { concurrency?: number; delayMs?: number; signal?: AbortSignal } = {},
+  options: {
+    concurrency?: number
+    delayMs?: number
+    signal?: AbortSignal
+    /** What a listing of the root does, as `directory` options of a folder. */
+    root?: DirectoryOptions
+  } = {},
 ): FakeSession {
-  const tree: FakeNode = { type: 'directory', children: root }
+  const tree: FakeNode = { type: 'directory', children: root, ...options.root }
   let reading = 0
   const find = (path: readonly string[]): FakeNode | undefined => {
     let node: FakeNode | undefined = tree

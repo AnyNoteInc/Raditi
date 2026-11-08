@@ -2,7 +2,13 @@ import { execFile } from 'node:child_process'
 import { access, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
-import { DomainError, INITIAL_SITE_TAG, type SiteStack } from '@repo/domain'
+import {
+  DomainError,
+  INITIAL_SITE_TAG,
+  siteImportLimits,
+  siteReadEntries,
+  type SiteStack,
+} from '@repo/domain'
 import { getSiteAdapter } from '@repo/site-adapters'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -191,6 +197,80 @@ describe('importSite', () => {
     expect(f.sessions[0]!.lists).toEqual([])
     expect(f.sessions[0]!.closed).toBe(true)
     expect(await remoteRef(f, MAIN_REF)).toBeNull()
+  })
+
+  describe('Joomla, whose layout stands on the listing of the root', () => {
+    // Synthetic: one driver of MySQL is all the layout needs to be read.
+    const configuration =
+      "<?php\nclass JConfig {\n\tpublic $dbtype = 'mysqli';\n\tpublic $dbprefix = 'jx1_';\n" +
+      "\tpublic $password = 'synthetic-joomla-db-password';\n}\n"
+    const joomlaSite = (): Record<string, FakeNode> => ({
+      'index.php': file('<?php // synthetic Joomla\n'),
+      'configuration.php': file(configuration),
+      templates: directory({ cassiopeia: directory({ 'index.php': file('<?php\n') }) }),
+    })
+    const joomlaFixture = async (tree: Record<string, FakeNode>) => {
+      const f = await fixture({ tree })
+      f.deps.stacks = () => getSiteAdapter('joomla')
+      return f
+    }
+
+    it('retries a root the hosting failed to list, and imports it on the next run', async () => {
+      const f = await joomlaFixture(joomlaSite())
+      f.rootOptions = { fails: 'transfer_failed' }
+      await expect(f.run()).rejects.toMatchObject({ code: 'transfer_failed', transient: true })
+      // A hiccup writes no limit: the record keeps what it had.
+      expect(f.store.stackFacts.get(f.siteId)?.limit).toBeUndefined()
+
+      requeue(f)
+      f.rootOptions = {}
+      const { commitSha } = await f.run()
+      expect(await remoteRef(f, MAIN_REF)).toBe(commitSha)
+      expect(f.store.stackFacts.get(f.siteId)).toMatchObject({
+        extras: { dbtype: 'mysqli' },
+        adminPath: '/administrator/',
+      })
+    })
+
+    it('says a root the hosting refuses to list as the walk would say it', async () => {
+      const f = await joomlaFixture(joomlaSite())
+      f.rootOptions = { fails: 'access_denied' }
+      await expect(f.run()).rejects.toMatchObject({ code: 'access_denied', transient: false })
+    })
+
+    it('retries a configuration the hosting listed and failed to give', async () => {
+      const tree = joomlaSite()
+      tree['configuration.php'] = file(configuration, { fails: 'transfer_failed' })
+      const f = await joomlaFixture(tree)
+      await expect(f.run()).rejects.toMatchObject({ code: 'transfer_failed', transient: true })
+      expect(f.store.stackFacts.get(f.siteId)?.limit).toBeUndefined()
+    })
+
+    it('lets only the call that gave the null speak, never an earlier broken read', async () => {
+      // The manifest of the version is refused, the root lists, and the configuration is past
+      // configFileBytes: the null of the configuration is an answer, so the refusal of the
+      // manifest is not what the client hears.
+      const tree = joomlaSite()
+      tree.administrator = directory({
+        manifests: directory({
+          files: directory({ 'joomla.xml': file('<extension/>\n', { fails: 'access_denied' }) }),
+        }),
+      })
+      tree['configuration.php'] = file('x'.repeat(siteImportLimits.configFileBytes + 1))
+      const f = await joomlaFixture(tree)
+      await expect(f.run()).rejects.toMatchObject({ code: 'internal', transient: false })
+    })
+
+    it('refuses a root of more than siteReadEntries names with folder_too_large, not internal', async () => {
+      const tree = joomlaSite()
+      for (let index = 0; index <= siteReadEntries; index += 1)
+        tree[`page-${index}.html`] = file('<p>synthetic</p>\n')
+      const f = await joomlaFixture(tree)
+      await expect(f.run()).rejects.toMatchObject({ code: 'folder_too_large', transient: false })
+      // Stopped before any download: only the version file was asked for.
+      expect(f.sessions[0]!.lists).toEqual([[]])
+      expect(await remoteRef(f, MAIN_REF)).toBeNull()
+    })
   })
 
   it('takes a document only from a folder of the adapter: the media library, not the root', async () => {
