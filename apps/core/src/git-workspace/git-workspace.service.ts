@@ -1481,9 +1481,13 @@ export class GitWorkspaceService implements TurnWorkspace {
   /**
    * One regular file of a commit, without a working copy (docs/plan/62-site-stacks.md, Т14, Т17).
    * null — no regular file at `path` (a link, a folder, a submodule, nothing), or it is longer
-   * than `siteReadBytes`.
+   * than `siteReadBytes`. Not `readFile`: that one, of «Терминал», tells the content id and size.
    */
-  async readFile(input: { repo: RepoRef; sha: string; path: string }): Promise<Uint8Array | null> {
+  async readTreeFile(input: {
+    repo: RepoRef
+    sha: string
+    path: string
+  }): Promise<Uint8Array | null> {
     const parsed = treeFileSchema.safeParse(input)
     if (!parsed.success || parsed.data.repo.provider !== this.provider.kind)
       throw badRequest('Invalid tree path')

@@ -223,7 +223,7 @@ describe('the tree of a commit for a preview', { timeout: 60_000 }, () => {
 
   it('reads one regular file of a commit byte for byte, and nothing else', async () => {
     const f = await fixture()
-    const read = (sha: string, path: string) => f.service.readFile({ repo: f.repo, sha, path })
+    const read = (sha: string, path: string) => f.service.readTreeFile({ repo: f.repo, sha, path })
     expect(Buffer.from((await read(f.first, 'wp-includes/version.php'))!).toString('utf8')).toBe(
       f.files['wp-includes/version.php'],
     )
@@ -246,7 +246,7 @@ describe('the tree of a commit for a preview', { timeout: 60_000 }, () => {
 
   it('reads a file at the read limit and gives null for one byte more', async () => {
     const f = await fixture()
-    const read = (path: string) => f.service.readFile({ repo: f.repo, sha: f.third, path })
+    const read = (path: string) => f.service.readTreeFile({ repo: f.repo, sha: f.third, path })
     expect(Buffer.from((await read('wp-content/uploads/limit.bin'))!).equals(f.limit)).toBe(true)
     expect(await read('wp-content/uploads/over.bin')).toBeNull()
   })
@@ -290,7 +290,7 @@ describe('the tree of a commit for a preview', { timeout: 60_000 }, () => {
       { name: 'raw.bin', type: 'file' },
     ])
     expect(await f.service.listDirectory({ ...at, path: 'wp-content/uploads/sub' })).toBeNull()
-    expect(await f.service.readFile({ ...at, path: 'wp-content/uploads/sub' })).toBeNull()
+    expect(await f.service.readTreeFile({ ...at, path: 'wp-content/uploads/sub' })).toBeNull()
   })
 
   it('lists a folder at the entry limit and gives null for one entry more', async () => {
@@ -304,7 +304,9 @@ describe('the tree of a commit for a preview', { timeout: 60_000 }, () => {
   it('refuses a path of a read that is not one of the repository', async () => {
     const f = await fixture()
     for (const path of ['../etc/passwd', 'wp-content/../index.php', '/index.php', ''])
-      await expect(f.service.readFile({ repo: f.repo, sha: f.first, path })).rejects.toMatchObject({
+      await expect(
+        f.service.readTreeFile({ repo: f.repo, sha: f.first, path }),
+      ).rejects.toMatchObject({
         code: 'BAD_REQUEST',
       })
     for (const path of ['..', 'wp-content/..', 'wp-content/', '/'])
@@ -312,7 +314,7 @@ describe('the tree of a commit for a preview', { timeout: 60_000 }, () => {
         f.service.listDirectory({ repo: f.repo, sha: f.first, path }),
       ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
     await expect(
-      f.service.readFile({ repo: { ...f.repo, provider: 'github' }, sha: f.first, path: 'a' }),
+      f.service.readTreeFile({ repo: { ...f.repo, provider: 'github' }, sha: f.first, path: 'a' }),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
     await expect(
       f.service.listDirectory({ repo: { ...f.repo, provider: 'github' }, sha: f.first, path: '' }),
