@@ -108,6 +108,15 @@ rm -f "$token"
 # --profile would replace COMPOSE_PROFILES of .env (llm): the ops jobs join it instead
 profiles="$(sed -n 's/^COMPOSE_PROFILES=//p' "$app/.env" | tail -n 1),ops"
 COMPOSE_PROFILES=$profiles DOCKER_CONFIG=$config compose pull --quiet
+# The images the processes start themselves, never compose: the sandbox and its gateway and guard
+# (runner), the browser session (browser), the preview's sites, forwarder, browser and database
+# (core). Their Docker finds them only on this host: a missing one fails the turn before it starts.
+for name in SANDBOX_IMAGE SANDBOX_GATEWAY_IMAGE SANDBOX_NETWORK_GUARD_IMAGE BROWSER_IMAGE \
+  BROWSER_FORWARDER_IMAGE BROWSER_EGRESS_IMAGE PREVIEW_FORWARDER_IMAGE PREVIEW_BROWSER_IMAGE \
+  PREVIEW_DB_IMAGE PREVIEW_SITE_IMAGES; do
+  sed -n "s/^$name=//p" "$app/.env" | tail -n 1 | tr ',' '\n' | sed 's/^[0-9.]*=//' | grep . |
+    while read -r image; do DOCKER_CONFIG=$config docker pull --quiet "$image" >/dev/null; done
+done
 rm -rf "$config"
 
 "$app/server/preflight.sh"
