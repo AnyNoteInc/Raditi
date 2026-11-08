@@ -1,0 +1,16 @@
+# /etc/systemd/system/raditi-host-firewall.service (infra/server/README.md)
+[Unit]
+Description=Raditi host firewall (inet raditi_host)
+After=nftables.service
+Before=network-pre.target docker.service openbao.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/raditi/raditi-host.nft
+ExecReload=/usr/sbin/nft -f /etc/raditi/raditi-host.nft
+ExecStop=/usr/sbin/nft delete table inet raditi_host
+
+[Install]
+WantedBy=multi-user.target

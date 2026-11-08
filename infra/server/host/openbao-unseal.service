@@ -1,0 +1,15 @@
+# /etc/systemd/system/openbao-unseal.service (infra/server/README.md)
+[Unit]
+Description=Unseal the host's OpenBao
+After=openbao.service
+Requires=openbao.service
+Before=raditi-secrets.service docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/raditi/openbao-unseal.sh
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target

@@ -1583,20 +1583,21 @@ test('publish-images.yml builds every app image of a release and names its diges
       /^ {10}- image: (\S+)\n {12}file: (\S+)\n {12}target: (\S+)\n {12}variable: (\S+)$/gm,
     ),
   ].map(([, image, file, target, variable]) => ({ image, file, target, variable }))
+  const ofApps = matrix.filter(({ file }) => file.startsWith('apps/'))
   // Every app with a Dockerfile ships its runtime image; core ships its migrate image as well.
   const apps = readdirSync(join(root, 'apps')).filter((app) =>
     existsSync(join(root, 'apps', app, 'Dockerfile')),
   )
   assert.ok(apps.length >= 7, 'the Dockerfiles of the apps were read')
   assert.deepEqual(
-    matrix
+    ofApps
       .filter(({ target }) => target === 'runtime')
       .map(({ image, file }) => [image, file])
       .sort(),
     apps.map((app) => [app, `apps/${app}/Dockerfile`]).sort(),
   )
   assert.deepEqual(
-    matrix.filter(({ target }) => target !== 'runtime'),
+    ofApps.filter(({ target }) => target !== 'runtime'),
     [
       {
         image: 'migrate',
@@ -1627,8 +1628,25 @@ test('publish-images.yml builds every app image of a release and names its diges
     )
     assert.match(deployed, new RegExp(`^${variable}=`, 'm'), `env.example deploys no ${variable}`)
   }
-  // BROWSER_IMAGE is the Chromium of a session, not the worker.
-  assert.ok(!matrix.some(({ variable }) => variable === 'BROWSER_IMAGE'))
+  // The sandbox side and the browser session, as the single server runs them (infra/server):
+  // BROWSER_IMAGE is the Chromium of a session (infra/preview), the worker is BROWSER_WORKER_IMAGE.
+  assert.deepEqual(
+    matrix
+      .filter(({ file }) => !file.startsWith('apps/'))
+      .map(({ file, target, variable }) => `${file}#${target}:${variable}`),
+    [
+      'infra/sandbox/Dockerfile#runtime:SANDBOX_IMAGE',
+      'infra/sandbox/Dockerfile#gateway:SANDBOX_GATEWAY_IMAGE',
+      'infra/sandbox/Dockerfile#network-guard:SANDBOX_NETWORK_GUARD_IMAGE',
+      'infra/sandbox/Dockerfile#watchdog:SANDBOX_WATCHDOG_IMAGE',
+      'infra/sandbox/Dockerfile#client-egress:BROWSER_EGRESS_IMAGE',
+      'infra/preview/Dockerfile#tools:BROWSER_FORWARDER_IMAGE',
+      'infra/preview/Dockerfile#browser:BROWSER_IMAGE',
+    ],
+  )
+  // infra/preview builds from its own folder (COPY forward.mjs …), the rest from the root
+  assert.equal((source.match(/^ {12}context: infra\/preview$/gm) ?? []).length, 2)
+  assert.match(source, /^ {10}context: \$\{\{ matrix\.context \|\| '\.' \}\}$/m)
   assert.equal(new Set(matrix.map(({ variable }) => variable)).size, matrix.length)
   // A release tag only, and the build uses the commit the version job resolved.
   assert.match(source, /\^v\(0\|\[1-9\]\[0-9\]\*\)/)
