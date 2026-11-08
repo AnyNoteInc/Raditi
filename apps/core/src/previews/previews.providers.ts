@@ -54,6 +54,7 @@ export function previewRuntimeConfig(previews: PreviewsConfig | null): DockerPre
     runtime: previews.runtime,
     socketPath: previews.docker.socketPath,
     gatewayPort: previews.gatewayPort,
+    gatewayHost: previews.relayGatewayHost,
     firewallImage: previews.docker.firewallImage,
     refusedSubnets: [...previews.refusedSubnets],
     dnsServers: [...previews.dnsServers],

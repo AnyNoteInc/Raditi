@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
-import { createServer, type Server } from 'node:net'
+import { createServer, type Server, Socket } from 'node:net'
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import {
   inspectSiteRoot,
@@ -226,6 +226,25 @@ describe('sftpSource.check', () => {
       inspection: bareInspection(true),
     })
     expect(server.writeAttempts).toEqual([])
+  })
+
+  it('sends each request at once: no Nagle wait on a request of the session (Э3.16)', async () => {
+    // Without TCP_NODELAY a request written in two parts waits for the ACK the server delays: on a
+    // Linux host a small file took 2.7 s instead of 1 ms, and an import of a CMS never ended.
+    // On the socket itself: ssh2's Client.setNoDelay does nothing before connect() made its
+    // socket, so a spy on the client would pass a call that never reached TCP. The sockets the
+    // test server accepted (`_server`) are not the client's.
+    const noDelay = vi.spyOn(Socket.prototype, 'setNoDelay')
+    try {
+      expect((await sftpSource.check(input(), context())).ok).toBe(true)
+      const ofClient = noDelay.mock.contexts
+        .map((socket, index) => ({ socket, args: noDelay.mock.calls[index] }))
+        .filter(({ socket }) => !(socket as unknown as { _server?: unknown })._server)
+      expect(ofClient.length).toBeGreaterThan(0)
+      expect(ofClient.every(({ args }) => args?.[0] === true)).toBe(true)
+    } finally {
+      noDelay.mockRestore()
+    }
   })
 
   it('reads two files of the version in its one session, then proves reading, with one login', async () => {

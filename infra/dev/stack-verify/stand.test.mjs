@@ -19,11 +19,15 @@ import {
   buildNames,
   groupRowProblems,
   groupsOf,
+  hostGatewayOf,
+  hostOf,
+  hostRelays,
   needleScanner,
   productionArgs,
   siteImageTag,
   stackCoreEnvironment,
   stackNames,
+  stackRoleEnvironment,
   browserTurn,
   canonicalLinks,
   navigationStatus,
@@ -34,6 +38,7 @@ import {
   toolCallsOf,
   uuid7,
 } from './stand.mjs'
+import { parseRuntimes } from './scenarios-preview.mjs'
 import { STACK_STANDS } from './stacks.mjs'
 import {
   appendLine,
@@ -362,11 +367,189 @@ test('the production of a build is published on the loopback and never pulled', 
   assert.ok(args.includes(`type=volume,src=${names.volumes.docroot},dst=/var/www/html`))
   assert.ok(args.includes('/prod/entry.sh'))
   assert.equal(args.filter((arg) => arg.startsWith('0.0.0.0')).length, 0)
+  // The stand's own production names its runtime: runc whatever --runtime of the run is (Э3.16).
+  assert.equal(args[args.indexOf('--runtime') + 1], 'runc')
   assert.throws(() => productionArgs({ names, image: 'x', port: 80 }), /Invalid port/)
+})
+
+/** A host of each kind, as `hostOf` reads them (Э3.16). */
+const DESKTOP = 'Docker Desktop'
+const BRIDGE = '172.17.0.1'
+const desktopHost = hostOf({
+  operatingSystem: DESKTOP,
+  bridgeGateway: BRIDGE,
+  hostGateway: '192.168.65.254',
+})
+// Plain Linux: host-gateway is the bridge gateway — whether docker0 is up or DOWN (idle) does not
+// matter, the interfaces of the machine are not read.
+const linuxHost = hostOf({
+  operatingSystem: 'Ubuntu 24.04.4 LTS',
+  bridgeGateway: BRIDGE,
+  hostGateway: BRIDGE,
+})
+// A VM of Colima: host-gateway leads to the Mac.
+const vmHost = hostOf({
+  operatingSystem: 'Ubuntu 24.04.4 LTS',
+  bridgeGateway: BRIDGE,
+  hostGateway: '192.168.5.2',
+})
+
+/** The context of the processes of a run, as verify-stack.mjs gives it. */
+const processContext = (overrides = {}) => ({
+  run,
+  path: '/usr/bin:/bin',
+  directory: '/tmp/stack-run',
+  ports: {
+    gitea: 20001,
+    vault: 20002,
+    s3: 20003,
+    web: 20004,
+    core: 20005,
+    mcp: 20006,
+    llm: 20007,
+    preview: 20008,
+    releaseApi: 20009,
+    zai: 20010,
+  },
+  databaseUrl: 'postgresql://raditi:x@127.0.0.1:1/raditi',
+  redisUrl: 'redis://default:x@127.0.0.1:2',
+  vault: { address: 'http://127.0.0.1:20002' },
+  roles: {
+    core: { roleId: 'r', secretId: 's' },
+    llm: { roleId: 'r', secretId: 's' },
+    mcp: { roleId: 'r', secretId: 's' },
+  },
+  s3: { endpoint: 'http://127.0.0.1:20003', accessKey: 'a', secretKey: 'b' },
+  secrets: { metrics: 'm', botToken: 'bot', provisionerToken: 'provisioner', previewSession: 'p' },
+  caFile: '/tmp/stack-run/ca.pem',
+  socket: '/var/run/docker.sock',
+  images: { sandbox: 's', gateway: 'g', guard: 'n', tools: 't', browser: 'b', core: 'c' },
+  siteImages: { 7.4: 'site74@sha256:a', 8.3: 'site83@sha256:b' },
+  gitleaks: '/opt/homebrew/bin/gitleaks',
+  runtime: 'runc',
+  host: desktopHost,
+  ...overrides,
+})
+
+test('the host is read from the daemon and a probe, three kinds (Э3.16)', () => {
+  assert.deepEqual(desktopHost, {
+    kind: 'desktop',
+    mirror: true,
+    listen: '127.0.0.1',
+    relay: null,
+    upstream: 'host.docker.internal',
+  })
+  // Plain Linux: host-gateway is this machine; the jobs see its loopback, no mirror.
+  assert.deepEqual(linuxHost, {
+    kind: 'linux',
+    mirror: false,
+    listen: '127.0.0.1',
+    relay: BRIDGE,
+    upstream: 'host.docker.internal',
+  })
+  // A VM whose host-gateway is another machine: by the probe, not by `docker info`, which says Ubuntu.
+  assert.deepEqual(vmHost, {
+    kind: 'vm',
+    mirror: false,
+    listen: '127.0.0.1',
+    relay: BRIDGE,
+    upstream: BRIDGE,
+  })
+  // Linux whose daemon sets `host-gateway-ip` to an address of this host other than the bridge
+  // (eth0): host.docker.internal is not where the relays listen, so containers go by address.
+  assert.deepEqual(
+    hostOf({ operatingSystem: 'Debian 13', bridgeGateway: BRIDGE, hostGateway: '10.0.0.5' }),
+    vmHost,
+  )
+})
+
+test('the address of host-gateway is read from getent of the probe container, in words when none', () => {
+  // As getent ahostsv4 prints it on Docker Desktop, on Linux and in the VM of Colima.
+  assert.equal(
+    hostGatewayOf('192.168.65.254  STREAM host.docker.internal\n192.168.65.254  DGRAM  \n'),
+    '192.168.65.254',
+  )
+  assert.equal(hostGatewayOf('172.17.0.1      STREAM host.docker.internal\n'), '172.17.0.1')
+  assert.equal(hostGatewayOf('192.168.5.2     STREAM host.docker.internal\n'), '192.168.5.2')
+  for (const output of ['', 'fe80::1  STREAM host.docker.internal', 'getent: not found'])
+    assert.throws(() => hostGatewayOf(output), /host-gateway of this daemon resolved to no IPv4/)
+})
+
+test('the runtimes of containers are read from docker inspect, by name', () => {
+  assert.deepEqual(parseRuntimes('/raditi-preview-1 runsc\n/raditi-sandbox-2 runc\n\n'), {
+    'raditi-preview-1': 'runsc',
+    'raditi-sandbox-2': 'runc',
+  })
+  assert.deepEqual(parseRuntimes(''), {})
+})
+
+test('a relay on the bridge per role a container reaches: llm, mcp and the gateway of previews', () => {
+  const { ports } = processContext()
+  assert.deepEqual(hostRelays(desktopHost, ports), [])
+  for (const host of [linuxHost, vmHost])
+    assert.deepEqual(hostRelays(host, ports), [
+      { role: 'llm', listen: BRIDGE, port: ports.llm, to: '127.0.0.1' },
+      { role: 'mcp', listen: BRIDGE, port: ports.mcp, to: '127.0.0.1' },
+      { role: 'preview', listen: BRIDGE, port: ports.preview, to: '127.0.0.1' },
+    ])
+})
+
+test('in a VM the containers go to the bridge by address; the roles listen on loopback', () => {
+  const context = processContext({ host: vmHost })
+  const core = stackCoreEnvironment(context)
+  assert.equal(core.SANDBOX_LLM_UPSTREAM, `http://${BRIDGE}:${context.ports.llm}`)
+  assert.equal(core.SANDBOX_MCP_UPSTREAM, `http://${BRIDGE}:${context.ports.mcp}`)
+  assert.equal(core.PREVIEW_RELAY_GATEWAY_HOST, BRIDGE)
+  const llm = stackRoleEnvironment('llm', context)
+  assert.ok(llm.LLM_GATEWAY_HOSTS.split(',').includes(`${BRIDGE}:${context.ports.llm}`))
+  // The relay is what the role sees: it connects from loopback.
+  assert.equal(llm.LLM_GATEWAY_CLIENTS, '127.0.0.1/32')
+  assert.equal(llm.LLM_GATEWAY_LISTEN_HOST, '127.0.0.1')
+  const mcp = stackRoleEnvironment('mcp', context)
+  assert.ok(mcp.MCP_ALLOWED_HOSTS.split(',').includes(BRIDGE))
+  // The address of the bridge would take the port of the relay: preview listens on loopback.
+  assert.equal(stackRoleEnvironment('preview', context).PREVIEW_GATEWAY_HOST, '127.0.0.1')
+  // On Docker Desktop and plain Linux host.docker.internal is this host: nothing by address.
+  for (const host of [desktopHost, linuxHost]) {
+    const same = processContext({ host })
+    const env = stackCoreEnvironment(same)
+    assert.equal(env.SANDBOX_LLM_UPSTREAM, `http://host.docker.internal:${same.ports.llm}`)
+    assert.equal(env.SANDBOX_MCP_UPSTREAM, `http://host.docker.internal:${same.ports.mcp}`)
+    assert.equal(env.PREVIEW_RELAY_GATEWAY_HOST, undefined)
+    assert.ok(!stackRoleEnvironment('llm', same).LLM_GATEWAY_HOSTS.includes(BRIDGE))
+    assert.equal(stackRoleEnvironment('mcp', same).MCP_ALLOWED_HOSTS, 'host.docker.internal')
+  }
+  assert.throws(
+    () => stackRoleEnvironment('core', processContext({ host: undefined })),
+    /kind of its host/,
+  )
+})
+
+test('under runsc the turns and previews of core run under it, production stays on runc', () => {
+  const env = stackCoreEnvironment(processContext({ runtime: 'runsc', host: vmHost }))
+  assert.equal(env.SANDBOX_RUNTIME, 'runsc')
+  assert.equal(env.PREVIEW_RUNTIME, 'runsc')
+  const runc = stackCoreEnvironment(processContext())
+  assert.equal(runc.SANDBOX_RUNTIME, 'runc')
+  assert.equal(runc.PREVIEW_RUNTIME, 'runc')
+  // Production is the stand's own container: it names runc, whatever the run's runtime (the
+  // hosting runs under the daemon's default, which the stand requires to be runc before it starts,
+  // and both are read back by docker inspect in the run).
+  const names = buildNames(stackNames(run), 'joomla-5.4.10')
+  const args = productionArgs({ names, image: 'site@sha256:x', port: 18080 })
+  assert.deepEqual(
+    args.filter((arg, index) => arg === '--runtime' || args[index - 1] === '--runtime'),
+    ['--runtime', 'runc'],
+  )
+  assert.throws(
+    () => stackCoreEnvironment(processContext({ runtime: 'docker' })),
+    /Invalid runtime/,
+  )
 })
 
 test('core gets the label of its run, the provisioner, Gitleaks first and the site images', () => {
   const context = {
+    host: desktopHost,
     run,
     path: '/usr/bin:/bin',
     directory: '/tmp/stack-run',

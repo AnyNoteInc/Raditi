@@ -121,6 +121,11 @@ async function previewOfBuild(rt, ctx, entry) {
   model.script(browserTurn(stand.browserPaths), {
     waitFor: async () => {
       await previewReady(rt, ctx, taskId).catch(() => null)
+      // The sandbox of the turn lives only while the turn does (SANDBOX_WARM_MINUTES 0): its
+      // runtime is read now, while the turn waits for this answer, and checked in P4.
+      entry.turnRuntimes = await containerRuntimes(rt, [
+        `label=io.raditi.sandbox.siteId=${siteId}`,
+      ]).catch((error) => ({ error: error.message }))
     },
   })
   await owner.mutate('task.create', {
@@ -235,8 +240,55 @@ async function previewOfBuild(rt, ctx, entry) {
     'the turn did not fail on the refusals: the dialog waits for the owner',
     { status: task.status },
   )
+  // What the run says of its runtime is what Docker ran (Э3.16): a run under runsc that went
+  // under runc would look like a proof of О2.
+  const turn = Object.values(entry.turnRuntimes ?? {})
+  rt.check(
+    turn.length > 0 && turn.every((runtime) => runtime === ctx.runtime),
+    `docker inspect: the sandbox of the turn ran under ${ctx.runtime} (HostConfig.Runtime)`,
+    entry.turnRuntimes ?? null,
+  )
+  for (const role of ['preview', 'browser']) {
+    const found = await containerRuntimes(rt, [
+      `label=io.raditi.preview.site=${siteId}`,
+      `label=io.raditi.preview.role=${role}`,
+    ])
+    rt.check(
+      Object.keys(found).length > 0 &&
+        Object.values(found).every((runtime) => runtime === ctx.runtime),
+      `docker inspect: the ${role === 'preview' ? 'container of the preview' : "agent's browser of the preview"} runs under ${ctx.runtime} (HostConfig.Runtime)`,
+      found,
+    )
+  }
   rt.end()
   return row
+}
+
+/**
+ * The runtime Docker runs each live container of `filters` under (`HostConfig.Runtime`), by name.
+ * Docker writes the daemon's default there when a container named none.
+ */
+export async function containerRuntimes(rt, filters) {
+  const listed = await rt.docker(['ps', '-q', ...filters.flatMap((filter) => ['--filter', filter])])
+  const ids = listed.output.split('\n').filter(Boolean)
+  if (ids.length === 0) return {}
+  const inspected = await rt.docker([
+    'inspect',
+    '--format',
+    '{{.Name}} {{.HostConfig.Runtime}}',
+    ...ids,
+  ])
+  return parseRuntimes(inspected.output)
+}
+
+/** `/<name> <runtime>` lines of `docker inspect` → `{ name: runtime }`. */
+export function parseRuntimes(output) {
+  const runtimes = {}
+  for (const line of output.split('\n')) {
+    const match = /^\/?(\S+) (\S+)$/.exec(line.trim())
+    if (match) runtimes[match[1]] = match[2]
+  }
+  return runtimes
 }
 
 /**
@@ -403,8 +455,16 @@ async function closeDialog(rt, ctx, entry) {
   rt.end()
 }
 
-/** The group `preview` on the builds `import` made a site of: P1–P4, then P5 in both engines. */
+/**
+ * The group `preview` on the builds `import` made a site of: P1–P4, then P5 in both engines. A
+ * failed P5 is the failed row of its engine and nothing more: the sign-in in the cabinet's frame
+ * gives the group `release` nothing it needs — the site, the preview and the closed dialog are there
+ * after P1–P4 — so the dialog is still closed and `release` still runs (Э3.16: a P5 of WebKit on
+ * Linux must not hide the answer to О2). Returns the rows of P5 that failed; the run fails on them
+ * after the other groups (verify-stack.mjs). Anything else that fails ends the group as before.
+ */
 export async function runPreviewGroup(rt, ctx, entries) {
+  const failed = []
   const forwarder = await startSecureForwarder({
     key: ctx.certificates.key,
     cert: ctx.certificates.cert,
@@ -419,11 +479,20 @@ export async function runPreviewGroup(rt, ctx, entries) {
       const login = await entry.stand
         .signIn(entry.build)
         .setPassword(previewSql(rt, row.id), password)
-      for (const engine of FRAME_ENGINES)
-        await signInInFrame(rt, ctx, entry, { engine, forwarder, login, password })
+      for (const engine of FRAME_ENGINES) {
+        try {
+          await signInInFrame(rt, ctx, entry, { engine, forwarder, login, password })
+        } catch (error) {
+          if (rt.signal.aborted) throw error
+          const id = `P5 ${entry.build.archive} ${engine}`
+          failed.push(id)
+          console.error(`FAIL ${id}: ${rt.redact(error?.message ?? String(error)).slice(0, 1500)}`)
+        }
+      }
       await closeDialog(rt, ctx, entry)
     }
   } finally {
     await forwarder.close()
   }
+  return failed
 }

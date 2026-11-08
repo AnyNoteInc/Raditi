@@ -257,6 +257,7 @@ describe.skipIf(!enabled)('a preview on this machine’s Docker, end to end', ()
       upstreamHost: '127.0.0.1',
       dnsServers: ['77.88.8.8', '77.88.8.1'],
       gatewayPort: 18090,
+      relayGatewayHost: 'host.docker.internal',
       refusedSubnets: [],
       docker: { socketPath: dockerSocket, firewallImage },
     }

@@ -383,6 +383,8 @@ const loopbackPort = (port) => {
 export function productionArgs({ names, image, port }) {
   return [
     ...['create', '--pull', 'never', '--name', names.containers.prod, '--label', names.label],
+    // The stand's own production: runc whatever --runtime of the run is (Э3.16).
+    ...['--runtime', 'runc'],
     ...['--network', names.network, '-p', `127.0.0.1:${loopbackPort(port)}:80`],
     ...['-p', '127.0.0.1::3306'],
     ...['--mount', `type=volume,src=${names.volumes.docroot},dst=${PRODUCTION_ROOT}`],
@@ -392,17 +394,152 @@ export function productionArgs({ names, image, port }) {
   ]
 }
 
+// ─── The host ─────────────────────────────────────────────────────────────────
+
+/** The kinds of host the stand runs on (`hostOf`). */
+export const HOST_KINDS = Object.freeze(['desktop', 'linux', 'vm'])
+
+/**
+ * What the host is for containers (docs/plan/62-slices/e3.md, Э3.16). Read from `docker info` and a
+ * probe container, never from process.platform. `operatingSystem` — `docker info`; `bridgeGateway` —
+ * the gateway of the default bridge; `hostGateway` — what `host-gateway` resolves to inside a
+ * container. Docker Desktop carries a container's `host.docker.internal` to the loopback of the
+ * Mac, and the deploy runner's network lacks the processes of the Mac: the loopback mirror gives
+ * them. On Linux the jobs on the network of the host see its loopback as it is: no mirror; the
+ * roles listen on loopback, and a relay of the stand on the bridge gateway carries a container to
+ * them. Whether `host.docker.internal` is that relay is decided by the addresses themselves: only
+ * when `host-gateway` is the bridge gateway (plain Linux). Otherwise — a VM whose `host-gateway`
+ * leads to another machine (Colima: to the Mac), or a daemon with `host-gateway-ip` set to an
+ * address of this host other than the bridge — containers go to the bridge gateway by address.
+ * Not by the interfaces of this machine: an idle `docker0` is DOWN and absent from them (Э3.16,
+ * review). `docker info` in a VM does not say Docker Desktop, so without the probe it would pass
+ * for plain Linux.
+ */
+export function hostOf({ operatingSystem, bridgeGateway, hostGateway }) {
+  if (/Docker Desktop/.test(operatingSystem))
+    return {
+      kind: 'desktop',
+      mirror: true,
+      listen: '127.0.0.1',
+      relay: null,
+      upstream: 'host.docker.internal',
+    }
+  return hostGateway === bridgeGateway
+    ? {
+        kind: 'linux',
+        mirror: false,
+        listen: '127.0.0.1',
+        relay: bridgeGateway,
+        upstream: 'host.docker.internal',
+      }
+    : {
+        kind: 'vm',
+        mirror: false,
+        listen: '127.0.0.1',
+        relay: bridgeGateway,
+        upstream: bridgeGateway,
+      }
+}
+
+/**
+ * The address `getent ahostsv4 host.docker.internal` printed in a probe container: the first
+ * column of its first line, an IPv4 or a refusal in words.
+ */
+export function hostGatewayOf(output) {
+  const address = String(output).trim().split(/\s+/)[0] ?? ''
+  if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(address))
+    throw new Error(
+      `host-gateway of this daemon resolved to no IPv4: ${String(output).slice(0, 200)}`,
+    )
+  return address
+}
+
+/** The roles a container reaches on the host: their relays on the bridge gateway (`hostOf`). */
+export const RELAYED_ROLES = Object.freeze(['llm', 'mcp', 'preview'])
+
+/**
+ * The relays of a run: one per role of `RELAYED_ROLES`, `<relay>:<port>` → `127.0.0.1:<port>`;
+ * none on Docker Desktop. The roles keep listening on loopback (`listenHost` of app-bootstrap):
+ * the relay is what a container meets on the bridge, and the role sees the relay from 127.0.0.1.
+ */
+export function hostRelays(host, ports) {
+  if (host.relay === null) return []
+  return RELAYED_ROLES.map((role) => ({
+    role,
+    listen: host.relay,
+    port: loopbackPort(ports[role]),
+    to: host.listen,
+  }))
+}
+
+/** What a container calls the host where a role of the stand is (`hostOf`). */
+const hostFor = (context) => {
+  const host = context.host
+  if (!host || !HOST_KINDS.includes(host.kind))
+    throw new Error('The stand needs the kind of its host')
+  return host
+}
+
 // ─── Processes ────────────────────────────────────────────────────────────────
 
 /**
- * The environment of core: that of the release stand, and over it the token of the provisioner of
- * repositories (the first import makes one), Gitleaks first on PATH, the label of this run's turn
- * containers and the `site` images of the chosen builds. The runtime of turns and previews stays
- * that of the release stand (`runc`): `--runtime` reaches core with Э3.13, and until then `runsc` is
- * refused before the start.
+ * The environment of a role of the platform: that of the release stand, and over it what the host
+ * and the runtime of the run change (Э3.16). In a VM (`hostOf`, kind `vm`) the containers go to the
+ * bridge gateway by address: the upstreams of sandbox-gw, the hosts the llm and mcp roles accept and
+ * the host the relay of the agent's browser sends to (PREVIEW_RELAY_GATEWAY_HOST) name it. The
+ * listen addresses stay loopback: PREVIEW_GATEWAY_HOST is where the role `preview` listens, and the
+ * bridge address would take the port of the relay. The runtime of turns and previews: the release
+ * stand writes `runc`, so `--runtime` is set over it here, or a run under `runsc` would go under
+ * `runc` and look like a proof. Production and the hosting stay on `runc` (`productionArgs`).
+ */
+export function stackRoleEnvironment(role, context) {
+  const host = hostFor(context)
+  const base = roleEnvironment(role, context)
+  const { ports } = context
+  const upstream = host.upstream
+  const byAddress = upstream !== 'host.docker.internal'
+  switch (role) {
+    case 'llm':
+      return byAddress
+        ? {
+            ...base,
+            LLM_GATEWAY_HOSTS: `${base.LLM_GATEWAY_HOSTS},${upstream}:${loopbackPort(ports.llm)}`,
+          }
+        : base
+    case 'mcp':
+      return byAddress
+        ? { ...base, MCP_ALLOWED_HOSTS: `${base.MCP_ALLOWED_HOSTS},${upstream}` }
+        : base
+    case 'preview':
+      return base
+    case 'core': {
+      if (!RUNTIMES.includes(context.runtime)) throw new Error('Invalid runtime of the run')
+      return {
+        ...base,
+        SANDBOX_RUNTIME: context.runtime,
+        PREVIEW_RUNTIME: context.runtime,
+        ...(byAddress
+          ? {
+              SANDBOX_LLM_UPSTREAM: `http://${upstream}:${loopbackPort(ports.llm)}`,
+              SANDBOX_MCP_UPSTREAM: `http://${upstream}:${loopbackPort(ports.mcp)}`,
+              PREVIEW_RELAY_GATEWAY_HOST: upstream,
+            }
+          : {}),
+      }
+    }
+    default:
+      throw new Error(`Unknown role ${role}`)
+  }
+}
+
+/**
+ * The environment of core: that of a role of the stand (`stackRoleEnvironment`: the host and the
+ * runtime of the run), and over it the token of the provisioner of repositories (the first import
+ * makes one), Gitleaks first on PATH, the label of this run's turn containers and the `site` images
+ * of the chosen builds.
  */
 export function stackCoreEnvironment(context) {
-  const base = roleEnvironment('core', context)
+  const base = stackRoleEnvironment('core', context)
   const images = Object.entries(context.siteImages ?? {})
   if (images.length === 0) throw new Error('core needs the site image of at least one build')
   return {

@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
+import { createServer, connect } from 'node:net'
 import { join } from 'node:path'
 
 import { generatedGiteaPassword, giteaAccountArgs } from '../gitea-verify/stand.mjs'
@@ -204,4 +205,51 @@ export async function writeHostingFolder(rt, names, folder, files) {
     )
   }
   await rt.docker(['exec', name, 'chown', '-R', '33:33', folder])
+}
+
+/**
+ * The relays of the stand on Linux and in a VM (stand.mjs, `hostRelays`; docs/plan/62-slices/e3.md,
+ * Э3.16): a plain TCP forwarder in this process per role, `<listen>:<port>` → `<to>:<port>`. The
+ * roles listen on loopback; a container that goes to the host meets the relay on the bridge
+ * gateway. Resolves once every relay listens; `close()` stops them and every open connection.
+ */
+export async function startRelays(relays) {
+  const servers = []
+  const sockets = new Set()
+  // Open connections first: a server closes only when the last of its connections did.
+  const close = async () => {
+    for (const socket of sockets) socket.destroy()
+    await Promise.all(servers.map((server) => new Promise((done) => server.close(() => done()))))
+  }
+  try {
+    for (const relay of relays) {
+      const server = createServer((inbound) => {
+        const outbound = connect({ host: relay.to, port: relay.port })
+        for (const end of [inbound, outbound]) {
+          sockets.add(end)
+          end.once('close', () => sockets.delete(end))
+          end.on('error', () => {
+            inbound.destroy()
+            outbound.destroy()
+          })
+        }
+        inbound.pipe(outbound).pipe(inbound)
+      })
+      servers.push(server)
+      await new Promise((resolve, reject) => {
+        server.once('error', (error) =>
+          reject(
+            new Error(
+              `The relay of ${relay.role} cannot listen on ${relay.listen}:${relay.port}: ${error.message}`,
+            ),
+          ),
+        )
+        server.listen(relay.port, relay.listen, () => resolve())
+      })
+    }
+  } catch (error) {
+    await close()
+    throw error
+  }
+  return { relays, close }
 }

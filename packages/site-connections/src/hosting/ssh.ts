@@ -155,6 +155,10 @@ export function connectSftp(
         keepaliveInterval: 15_000,
         keepaliveCountMax: 3,
       })
+      // Every SFTP request goes out at once. Without TCP_NODELAY a request written in two parts
+      // waits for the ACK the server delays (Nagle): on a Linux host a small file took 2.7 s
+      // instead of 1 ms, and the import of a CMS never ended (docs/plan/62-site-stacks.md, Э3.16).
+      client.setNoDelay(true)
     } catch {
       fail(new SiteConnectionError('unreachable'))
     }

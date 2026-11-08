@@ -9,6 +9,9 @@
 //
 //   pnpm verify:stack [-- --stack=joomla] [--build=joomla-5.4.10]... [--group=import]...
 //                        [--no-build] [--keep] [--runtime=runsc]
+//
+// It runs on Docker Desktop, on Linux and inside a VM whose `host-gateway` is another machine
+// (Colima; `bash infra/dev/stack-verify/colima-m7.sh`): what the host is, `hostOf` reads (Э3.16).
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
@@ -50,6 +53,7 @@ import {
   treeEntry,
 } from '../billing-verify/stand.mjs'
 import { lockCopy } from '../billing-verify/verify-billing.mjs'
+import { bridgeGatewayAddress } from '../../../apps/core/scripts/verify-agent-content-role.mjs'
 import { siteImageBuildArgs } from '../preview-verify/verify-site-images.mjs'
 import { startFakeModel } from '../release-verify/fake-model.mjs'
 import {
@@ -86,24 +90,27 @@ import {
   RUNNER_IMAGE,
   S3_IMAGE,
   localDigestReference,
-  roleEnvironment,
   summaryTable,
   webEnvironment,
 } from '../release-verify/stand.mjs'
 import { GITLEAKS_VERSION } from '../site-import-verify/stand.mjs'
 import { fetchCmsArchive } from './fetch-cms.mjs'
 import { runImportGroup } from './scenarios-import.mjs'
-import { runPreviewGroup } from './scenarios-preview.mjs'
+import { parseRuntimes, runPreviewGroup } from './scenarios-preview.mjs'
 import { runReleaseGroup } from './scenarios-release.mjs'
-import { addProvisioner, startBuildHosting, startProduction } from './services.mjs'
+import { addProvisioner, startBuildHosting, startProduction, startRelays } from './services.mjs'
 import { STACK_STANDS } from './stacks.mjs'
 import {
   STACK_BUILT_IMAGES,
   buildNames,
   groupRowProblems,
+  hostGatewayOf,
+  hostOf,
+  hostRelays,
   siteImageTag,
   stackCoreEnvironment,
   stackNames,
+  stackRoleEnvironment,
   standOptions,
 } from './stand.mjs'
 
@@ -366,14 +373,24 @@ async function preflight(options) {
   if (typeof endpoint !== 'string' || !endpoint.startsWith('unix://'))
     throw new Error('This stand needs a local Docker socket; remote Docker endpoints are refused')
   const info = await rt.docker(['info', '--format', '{{.OperatingSystem}}'])
-  if (!/Docker Desktop/.test(info.output))
-    throw new Error('This stand runs on Docker Desktop (macOS) until Э3.13: see README')
-  // The runtime reaches core with Э3.13 (and the stand leaves Docker Desktop with it): until then a
-  // run under `runsc` would go under `runc` and look like a proof.
-  if (options.runtime === 'runsc')
+  // The production and the hosting of a build name no runtime (productionArgs): they run under the
+  // daemon's default, which must be runc whatever --runtime says.
+  const defaultRuntime = (
+    await rt.docker(['info', '--format', '{{.DefaultRuntime}}'])
+  ).output.trim()
+  if (defaultRuntime !== 'runc')
     throw new Error(
-      '--runtime=runsc reaches the turns and previews of core with Э3.13: until then it is refused',
+      `The default runtime of this daemon is ${defaultRuntime}: the production and the hosting of the stand run under runc only; set the default back to runc`,
     )
+  // The runtime reaches the turns and previews of core (stackRoleEnvironment): a daemon without it
+  // would fail the first turn, so it is asked here.
+  if (options.runtime === 'runsc') {
+    const runtimes = await rt.docker(['info', '--format', '{{json .Runtimes}}'])
+    if (!Object.hasOwn(JSON.parse(runtimes.output || '{}'), 'runsc'))
+      throw new Error(
+        '--runtime=runsc needs a daemon with gVisor: Linux or a VM (bash infra/dev/stack-verify/colima-m7.sh), never Docker Desktop',
+      )
+  }
   const pinned = [
     POSTGRES_IMAGE,
     REDIS_IMAGE,
@@ -390,11 +407,48 @@ async function preflight(options) {
       throw new Error(
         `The pinned image ${image} is missing locally; pull it first (docker pull ${PULLED_TAGS[image] ?? image})`,
       )
-  for (const tool of ['git', 'rsync', 'openssl', 'pnpm']) await rt.run(tool, ['--version'])
+  // OpenSSL 3 of Linux knows `version` only; LibreSSL of macOS takes both.
+  for (const [tool, flag] of [
+    ['git', '--version'],
+    ['rsync', '--version'],
+    ['openssl', 'version'],
+    ['pnpm', '--version'],
+  ])
+    await rt.run(tool, [flag])
   const gitleaks = await gitleaksBinary()
   browserInstalled('chromium')
   if (options.runs.some(({ groups }) => groups.includes('preview'))) browserInstalled('webkit')
-  return { socket: endpoint.slice('unix://'.length), gitleaks }
+  const host = await hostOfDaemon(info.output.trim())
+  console.log(
+    `PASS host of the daemon: ${host.kind} (${info.output.trim()}); ${host.mirror ? 'the loopback mirror for the deploy jobs' : `relays of llm, mcp and preview on ${host.relay}, containers go to ${host.upstream}`}`,
+  )
+  return { socket: endpoint.slice('unix://'.length), gitleaks, host }
+}
+
+/**
+ * What the host is for containers (stand.mjs, `hostOf`): the gateway of the default bridge and what
+ * `host-gateway` resolves to in a probe container (the pinned MariaDB image, no network but the
+ * default bridge).
+ */
+async function hostOfDaemon(operatingSystem) {
+  const bridge = await rt.docker([
+    'network',
+    'inspect',
+    'bridge',
+    '--format',
+    '{{(index .IPAM.Config 0).Gateway}}',
+  ])
+  const probe = await rt.docker([
+    ...['run', '--rm', '--pull', 'never', '--label', names.label, '--network', 'bridge'],
+    ...['--add-host', 'host.docker.internal:host-gateway', '--entrypoint', 'getent'],
+    MARIADB_IMAGE,
+    ...['ahostsv4', 'host.docker.internal'],
+  ])
+  return hostOf({
+    operatingSystem,
+    bridgeGateway: bridgeGatewayAddress(bridge.output),
+    hostGateway: hostGatewayOf(probe.output),
+  })
 }
 
 /** The modules of the copy the stand calls itself: Prisma and billing. */
@@ -407,7 +461,7 @@ async function copyModules(copy) {
 }
 
 async function main(options, owned) {
-  const { socket, gitleaks } = await preflight(options)
+  const { socket, gitleaks, host } = await preflight(options)
   if (options.unwritten.length > 0)
     console.log(
       `NOTE the groups ${options.unwritten.join(', ')} are not written yet and do not run (docs/plan/62-site-stacks.md, Э8, Э11)`,
@@ -491,7 +545,8 @@ async function main(options, owned) {
   const gitea = await startGitea(rt, names, { port: ports.gitea, certificates, directory })
   const provisionerToken = await addProvisioner(rt, gitea)
   await storeOwnerToken(vault, gitea.tokens.owner)
-  await startMirror(rt, names, { image: images.core, ports: [ports.releaseApi] })
+  // Docker Desktop only: on Linux the jobs on the network of the host see its loopback (hostOf).
+  if (host.mirror) await startMirror(rt, names, { image: images.core, ports: [ports.releaseApi] })
   const runner = await startRunner(rt, names, {
     gitea,
     ports,
@@ -527,6 +582,20 @@ async function main(options, owned) {
       names: own,
     }
     rt.secret(hosting.access.password)
+    // The stand's own containers stay on runc whatever --runtime says (Э3.16): read from Docker.
+    const ownRuntimes = await rt.docker([
+      'inspect',
+      '--format',
+      '{{.Name}} {{.HostConfig.Runtime}}',
+      own.containers.prod,
+      own.containers.hosting,
+    ])
+    const productionRuntimes = parseRuntimes(ownRuntimes.output)
+    assert.deepEqual(
+      Object.values(productionRuntimes),
+      ['runc', 'runc'],
+      `The production and the hosting of ${build.archive} must run under runc: ${JSON.stringify(productionRuntimes)}`,
+    )
     runs.push({
       ...run,
       stand,
@@ -537,7 +606,7 @@ async function main(options, owned) {
       tree: trees[build.archive],
     })
     console.log(
-      `PASS production of ${build.archive}: ${stand.stack} ${build.version} on PHP ${build.php} installed at ${production.origin}, its database inside, an SFTP hosting over its document root (${Math.round((Date.now() - started) / 1000)} s)`,
+      `PASS production of ${build.archive}: ${stand.stack} ${build.version} on PHP ${build.php} installed at ${production.origin}, its database inside, an SFTP hosting over its document root; both under runc by docker inspect (${Math.round((Date.now() - started) / 1000)} s)`,
     )
   }
 
@@ -567,11 +636,23 @@ async function main(options, owned) {
     s3,
     secrets,
     caFile: certificates.caFile,
+    // The runtime of the run: P4 compares what Docker ran the turn and the preview under with it.
+    runtime: options.runtime,
     socket,
     images,
     siteImages,
     gitleaks,
     runtime: options.runtime,
+    host,
+  }
+
+  rt.setStage('the relays of the host')
+  const relays = hostRelays(host, ports)
+  if (relays.length > 0) {
+    owned.relays = await startRelays(relays)
+    console.log(
+      `PASS relays of the stand: ${relays.map(({ role, listen, port, to }) => `${role} ${listen}:${port} → ${to}:${port}`).join(', ')}`,
+    )
   }
 
   rt.setStage('the platform processes')
@@ -596,7 +677,7 @@ async function main(options, owned) {
       role,
       ['dist/main.js'],
       join(copy, `apps/${role}`),
-      roleEnvironment(role, context),
+      stackRoleEnvironment(role, context),
       role === 'preview'
         ? `http://127.0.0.1:${ports.preview}/__raditi/health`
         : `http://127.0.0.1:${ports[role]}/health`,
@@ -651,6 +732,8 @@ async function main(options, owned) {
     siteImages,
     certificates,
     caFile: certificates.caFile,
+    // The runtime of the run: P4 compares what Docker ran the turn and the preview under with it.
+    runtime: options.runtime,
     // What the group `release` reads beside the product: the backups in S3, the wrappings in
     // OpenBao, the S3 client of the copy.
     vault,
@@ -663,7 +746,8 @@ async function main(options, owned) {
   if (importing.length > 0) await runImportGroup(rt, ctx, importing)
   // On the sites `import` made: the group never runs without it (GROUP_NEEDS).
   const previewing = runs.filter((run) => run.groups.includes('preview'))
-  if (previewing.length > 0) await runPreviewGroup(rt, ctx, previewing)
+  // A failed P5 does not stop `release` (runPreviewGroup): the run fails on it below.
+  const failedFrames = previewing.length > 0 ? await runPreviewGroup(rt, ctx, previewing) : []
   // On the sites of `import`, once `preview` closed its dialogs: never without both (GROUP_NEEDS).
   const releasing = runs.filter((run) => run.groups.includes('release'))
   if (releasing.length > 0) await runReleaseGroup(rt, ctx, releasing)
@@ -673,6 +757,10 @@ async function main(options, owned) {
   console.log(
     `PASS each build has the rows of each of its groups: ${runs.map(({ build, groups }) => `${build.archive} ${groups.join('+')}`).join(', ')}`,
   )
+  if (failedFrames.length > 0)
+    throw new Error(
+      `The rows of the sign-in in the cabinet's frame failed: ${failedFrames.join(', ')}; the groups after them ran`,
+    )
 
   if (options.keep) {
     console.log(`KEEP the stand is up: web ${webUrl}; Ctrl-C cleans it up`)
@@ -744,6 +832,7 @@ async function cleanup(owned) {
   const quiet = { allowFailure: true, cleanup: true }
   for (const service of [...(owned.processes ?? [])].reverse()) await service.stop().catch(() => {})
   await owned.model?.close().catch(() => {})
+  await owned.relays?.close().catch(() => {})
   await owned.db?.$disconnect().catch(() => {})
   if (!owned.containers) return { left: [], coreOwned: [] }
   await rt.docker(['rm', '-f', '-v', names.containers.runner], quiet)

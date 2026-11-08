@@ -21,6 +21,7 @@ const previews: PreviewsConfig = {
   upstreamHost: '127.0.0.1',
   dnsServers: ['77.88.8.8', '77.88.8.1'],
   gatewayPort: 18090,
+  relayGatewayHost: 'host.docker.internal',
   refusedSubnets: ['84.201.128.0/18'],
   docker: { socketPath: '/run/docker.sock', firewallImage: guard },
 }
@@ -32,11 +33,19 @@ describe('the runtime of previews in core', () => {
       runtime: 'runc',
       socketPath: '/run/docker.sock',
       gatewayPort: 18090,
+      gatewayHost: 'host.docker.internal',
       firewallImage: guard,
       refusedSubnets: ['84.201.128.0/18'],
       dnsServers: ['77.88.8.8', '77.88.8.1'],
     })
     expect(dockerPreviewConfigSchema.parse(config).refusedSubnets).toEqual(['84.201.128.0/18'])
+  })
+
+  it("sends the relay of the agent's browser where PREVIEW_RELAY_GATEWAY_HOST says (Э3.16)", () => {
+    // A VM whose host-gateway is another machine: the relay goes to the bridge of this one.
+    const config = previewRuntimeConfig({ ...previews, relayGatewayHost: '172.17.0.1' })
+    expect(config?.gatewayHost).toBe('172.17.0.1')
+    expect(dockerPreviewConfigSchema.parse(config).gatewayHost).toBe('172.17.0.1')
   })
 
   it('runs none with runner VMs, without previews or without the image of the host rules', () => {
