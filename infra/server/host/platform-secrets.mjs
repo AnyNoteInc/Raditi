@@ -53,7 +53,12 @@ const GENERATED = {
 /** Fields `set` accepts: what the owner hands over. */
 const PROVIDED = {
   'app/web': ['SMARTCAPTCHA_CLIENT_KEY', 'SMARTCAPTCHA_SERVER_KEY'],
-  'app/core': ['SENDSAY_API_KEY', 'LEADS_TELEGRAM_BOT_TOKEN', 'GITEA_TOKEN'],
+  'app/core': [
+    'SENDSAY_API_KEY',
+    'LEADS_TELEGRAM_BOT_TOKEN',
+    'GITEA_TOKEN',
+    'GITEA_PROVISIONER_TOKEN',
+  ],
 }
 
 const fail = (message) => {
@@ -112,7 +117,7 @@ async function set(path, field) {
 
 /** One file of a service directory: name → contents. */
 function serviceFiles(kv, roles) {
-  const { shared, web, core, browser, preview, traefik } = kv
+  const { shared, web, core, browser, preview, traefik, gitea } = kv
   const db = `postgresql://raditi:${shared.pg_password}@postgres:5432/raditi`
   // browser runs in the host network: the database on the private address (docker-compose.server.yml)
   const hostDb = `postgresql://raditi:${shared.pg_password}@10.10.0.10:5432/raditi`
@@ -172,6 +177,7 @@ function serviceFiles(kv, roles) {
           SENDSAY_API_KEY: core.SENDSAY_API_KEY,
           LEADS_TELEGRAM_BOT_TOKEN: core.LEADS_TELEGRAM_BOT_TOKEN,
           GITEA_TOKEN: core.GITEA_TOKEN,
+          GITEA_PROVISIONER_TOKEN: core.GITEA_PROVISIONER_TOKEN,
           BROWSER_WORKER_TOKEN: core.BROWSER_WORKER_TOKEN,
           ...s3(core),
           ...approle('core'),
@@ -223,6 +229,19 @@ function serviceFiles(kv, roles) {
       uid: 65532,
       files: { 'dashboard-users': htpasswd(traefik.dashboard_user, traefik.dashboard_password) },
     },
+    // Gitea: the TLS pair of git.raditi.internal; its runner: the registration token gitea-setup.mjs
+    // stored (empty until then) and the public CA
+    gitea: {
+      uid: 1000,
+      files: {
+        'git.pem': readFileSync(`${TLS_DIR}/git.pem`, 'utf8'),
+        'git.key': readFileSync(`${TLS_DIR}/git.key`, 'utf8'),
+      },
+    },
+    'gitea-runner': {
+      uid: 0,
+      files: { 'registration-token': gitea.runner_registration_token ?? '', 'ca.pem': ca },
+    },
     // SeaweedFS: one identity per service that holds S3 keys; the TLS pair of s3.raditi.internal
     s3: {
       uid: 10007,
@@ -265,7 +284,7 @@ async function render(only) {
   const token = (await auth.json()).auth.client_token
 
   const kv = {}
-  for (const name of ['shared', 'web', 'core', 'browser', 'preview', 'traefik'])
+  for (const name of ['shared', 'web', 'core', 'browser', 'preview', 'traefik', 'gitea'])
     kv[name] = (await readKv(token, name === 'shared' ? 'shared' : `app/${name}`)).data ?? {}
   if (!kv.shared.pg_password) fail('kv/platform/shared is empty: run seed first')
 
@@ -281,6 +300,8 @@ async function render(only) {
     'preview',
     'traefik',
     's3',
+    'gitea',
+    'gitea-runner',
   ]
   const named = only.length === 0 ? all : only
   for (const name of named) if (!all.includes(name)) fail(`${name} is not a service`)

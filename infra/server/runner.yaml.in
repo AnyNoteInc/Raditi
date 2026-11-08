@@ -1,0 +1,28 @@
+# The deploy runner of the single server (docker-compose.server.yml, gitea-runner). deploy.sh
+# writes server/runner/runner.yaml from this file with the core image of the release in the label.
+# Jobs: the host network (Vault, S3 and Gitea on 10.10.0.10 by /etc/hosts of the host, the release
+# API on 172.29.83.10), no Docker socket, no privileges, the CA volume only; the addresses and
+# APP_ENV come from the runner, never from a repository (ci/README.md).
+log:
+  level: info
+runner:
+  capacity: 1
+  fetch_interval: 2s
+  fetch_interval_max: 10s
+  shutdown_timeout: 30s
+  envs:
+    RADITI_VAULT_ADDR: https://vault.raditi.internal:8200
+    RADITI_RELEASE_API_URL: http://172.29.83.10:8085
+    NODE_EXTRA_CA_CERTS: /run/raditi/ca/ca.pem
+    APP_ENV: production
+  # Not empty: the labels here replace those it registered with
+  labels:
+    - deploy:docker://@CORE_IMAGE@
+container:
+  network: host
+  docker_host: '-'
+  privileged: false
+  force_pull: false
+  options: --volume raditi-ci-ca:/run/raditi/ca:ro
+  valid_volumes:
+    - raditi-ci-ca

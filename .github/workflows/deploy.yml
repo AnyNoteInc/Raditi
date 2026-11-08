@@ -82,6 +82,7 @@ jobs:
           rsync -a --delete infra/app/ "server:/opt/raditi/incoming/$TAG/app/"
           rsync -a --delete infra/server/ "server:/opt/raditi/incoming/$TAG/server/"
           rsync -a infra/billing/rates/ "server:/opt/raditi/incoming/$TAG/server/rates/"
+          rsync -a --delete ci/ "server:/opt/raditi/incoming/$TAG/ci/"
           rsync -a "$RUNNER_TEMP/images.env" "server:/opt/raditi/incoming/$TAG/images.env"
       - name: Deploy
         env:

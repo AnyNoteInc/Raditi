@@ -75,6 +75,11 @@ grep -E '^[A-Z_]+_IMAGE=' "$images" | while IFS='=' read -r name value; do put "
 put APP_REVISION "$revision"
 say "revision $revision"
 
+# The deploy runner: label `deploy` on this release's core image, over what it registered with
+core_image=$(sed -n 's/^CORE_IMAGE=//p' "$app/.env" | tail -n 1)
+install -d -m 0755 "$app/server/runner"
+sed "s|@CORE_IMAGE@|$core_image|" "$app/server/runner.yaml.in" >"$app/server/runner/runner.yaml"
+
 # 3. Pull with a throwaway registry login: the token never lands in /root/.docker
 config=$(mktemp -d -p /run)
 DOCKER_CONFIG=$config docker login ghcr.io --username "$registry_user" --password-stdin >/dev/null
@@ -87,18 +92,26 @@ rm -rf "$config"
 
 # 5. Data services, buckets, migrations, seeds; from the migrations on there is no way back by files
 compose up -d --wait postgres redis s3
+# The internal CA for the deploy jobs (runner.yaml.in: options and valid_volumes)
+docker volume create raditi-ci-ca >/dev/null
+docker run --rm --network none -v raditi-ci-ca:/ca -v /etc/raditi/ca/ca.pem:/src.pem:ro \
+  --entrypoint cp "$(sed -n 's/^REDIS_IMAGE=//p' "$app/.env" | tail -n 1)" /src.pem /ca/ca.pem
 COMPOSE_PROFILES=$profiles compose run --rm s3-buckets >/dev/null
 trap 'rm -rf "${config:-}"' EXIT
 rm -rf "$prev"
 COMPOSE_PROFILES=$profiles compose run --rm migrate
 COMPOSE_PROFILES=$profiles compose run --rm seed || say "seed failed: web and core keep running (infra/app/README.md, step 7)"
 
-# 6. Everything else
+# 6. Everything else; the runner reads its labels only at start
 compose up -d --wait --remove-orphans
+compose restart gitea-runner >/dev/null
+
+# 7. platform/ci of this tag, the required source of the scoped workflows of every site
+NODE_EXTRA_CA_CERTS=/etc/raditi/ca/ca.pem /usr/bin/node "$app/server/gitea-setup.mjs" ci "$src/ci"
 echo "$tag" >"$app/.tag"
 say "running"
 
-# 7. Images of the platform registry no longer named by .env or by the last record of the log
+# 8. Images of the platform registry no longer named by .env or by the last record of the log
 keep=$( (grep -E '^[A-Z_]+_IMAGE=' "$app/.env"; tail -n 40 "$log" | grep -E '^[A-Z_]+_IMAGE=') |
   sed 's/^[A-Z_]*=//' | sed 's/.*@//' | sort -u)
 docker image ls --digests --format '{{.Repository}} {{.Digest}} {{.ID}}' |

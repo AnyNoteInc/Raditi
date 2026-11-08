@@ -55,6 +55,8 @@ check_secrets browser 10006 app.env vault-ca.pem
 check_secrets preview 10009 app.env
 check_secrets traefik 65532 dashboard-users
 check_secrets s3 10007 s3.json s3.pem s3.key
+check_secrets gitea 1000 git.pem git.key
+check_secrets gitea-runner 0 ca.pem
 [ -s /etc/raditi/runner/runner-token ] || fail "/etc/raditi/runner/runner-token is missing"
 [ -s /etc/raditi/runner/ca.pem ] || fail "/etc/raditi/runner/ca.pem is missing"
 
@@ -67,7 +69,7 @@ if grep -Eq "^[A-Z0-9_]+=([\"']|.*[[:space:]]#)" "$env_file"; then
 fi
 
 prefix=$(setting VOLUME_PREFIX)
-for volume in acme pgdata redis s3; do
+for volume in acme pgdata redis s3 gitea gitea-config gitea-runner; do
   docker volume inspect "${prefix:-raditi-app}-$volume" >/dev/null 2>&1 ||
     fail "volume ${prefix:-raditi-app}-$volume is missing"
 done
@@ -86,7 +88,7 @@ fi
 for name in WEB_IMAGE CORE_IMAGE LLM_IMAGE PREVIEW_GATEWAY_IMAGE MIGRATE_IMAGE MCP_IMAGE \
   RUNNER_IMAGE BROWSER_WORKER_IMAGE SANDBOX_IMAGE SANDBOX_GATEWAY_IMAGE SANDBOX_NETWORK_GUARD_IMAGE \
   SANDBOX_WATCHDOG_IMAGE BROWSER_EGRESS_IMAGE BROWSER_FORWARDER_IMAGE BROWSER_IMAGE \
-  TRAEFIK_IMAGE POSTGRES_IMAGE REDIS_IMAGE SEAWEEDFS_IMAGE; do
+  TRAEFIK_IMAGE POSTGRES_IMAGE REDIS_IMAGE SEAWEEDFS_IMAGE GITEA_IMAGE GITEA_RUNNER_IMAGE; do
   setting "$name" | grep -Eq '@sha256:[0-9a-f]{64}$' || fail "$name must be pinned by digest"
   ! setting "$name" | grep -Eq '@sha256:0{64}$' || fail "$name still has the all-zero placeholder digest"
 done

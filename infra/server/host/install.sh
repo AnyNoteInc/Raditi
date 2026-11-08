@@ -79,6 +79,10 @@ printf '[Unit]\nAfter=raditi-net.service\nRequires=raditi-net.service\n' \
   >/etc/systemd/system/openbao.service.d/raditi.conf
 install -d -m 0700 /etc/raditi/tls
 [ -s /etc/raditi/tls/s3.pem ] || "$lib/internal-ca.sh" issue s3 /etc/raditi/tls
+[ -s /etc/raditi/tls/git.pem ] || "$lib/internal-ca.sh" issue git /etc/raditi/tls
+# The internal names on the host: the deploy jobs run in its network and inherit /etc/hosts
+grep -q ' vault.raditi.internal' /etc/hosts ||
+  echo '10.10.0.10 vault.raditi.internal s3.raditi.internal git.raditi.internal' >>/etc/hosts
 # The runner sees only /etc/raditi/runner: its token and the public CA of S3
 install -m 0444 /etc/raditi/ca/ca.pem /etc/raditi/runner/ca.pem
 
