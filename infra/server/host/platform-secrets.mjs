@@ -47,11 +47,15 @@ const GENERATED = {
     S3_SECRET_ACCESS_KEY: b64url(30),
   },
   'app/preview': { PREVIEW_SESSION_SECRET: b64url(48) },
+  // mcp writes the content snapshots of previews into raditi-artifacts, its only bucket (spec §14)
+  'app/mcp': { S3_ACCESS_KEY_ID: s3Key, S3_SECRET_ACCESS_KEY: b64url(30) },
   'app/traefik': { dashboard_user: () => 'admin', dashboard_password: b64url(18) },
 }
 
 /** Fields `set` accepts: what the owner hands over. */
 const PROVIDED = {
+  // reg.ru API (an alternative password, the server's IP allowed): DNS-01 of *.raditi-preview.ru
+  'app/traefik': ['regru_username', 'regru_password'],
   'app/web': ['SMARTCAPTCHA_CLIENT_KEY', 'SMARTCAPTCHA_SERVER_KEY'],
   'app/core': [
     'SENDSAY_API_KEY',
@@ -117,7 +121,7 @@ async function set(path, field) {
 
 /** One file of a service directory: name → contents. */
 function serviceFiles(kv, roles) {
-  const { shared, web, core, browser, preview, traefik, gitea } = kv
+  const { shared, web, core, browser, preview, traefik, gitea, mcp } = kv
   const db = `postgresql://raditi:${shared.pg_password}@postgres:5432/raditi`
   // browser runs in the host network: the database on the private address (docker-compose.server.yml)
   const hostDb = `postgresql://raditi:${shared.pg_password}@10.10.0.10:5432/raditi`
@@ -195,9 +199,11 @@ function serviceFiles(kv, roles) {
     mcp: {
       uid: 10005,
       files: {
+        // mcp runs in the host network (the agent's browser on a preview): the private address
         'app.env': env({
-          DATABASE_URL: db,
+          DATABASE_URL: hostDb,
           BROWSER_WORKER_TOKEN: core.BROWSER_WORKER_TOKEN,
+          ...s3(mcp),
           ...approle('mcp'),
         }),
         'vault-ca.pem': ca,
@@ -227,7 +233,12 @@ function serviceFiles(kv, roles) {
     },
     traefik: {
       uid: 65532,
-      files: { 'dashboard-users': htpasswd(traefik.dashboard_user, traefik.dashboard_password) },
+      files: {
+        'dashboard-users': htpasswd(traefik.dashboard_user, traefik.dashboard_password),
+        ...(traefik.regru_username
+          ? { 'regru-username': traefik.regru_username, 'regru-password': traefik.regru_password }
+          : {}),
+      },
     },
     // Gitea: the TLS pair of git.raditi.internal; its runner: the registration token gitea-setup.mjs
     // stored (empty until then) and the public CA
@@ -252,6 +263,11 @@ function serviceFiles(kv, roles) {
             ['web', web, ['Read', 'Write', 'List', 'Tagging']],
             ['core', core, ['Read', 'Write', 'List', 'Tagging']],
             ['browser', browser, ['Read:raditi-inbox', 'List:raditi-inbox']],
+            [
+              'mcp',
+              mcp,
+              ['Read:raditi-artifacts', 'Write:raditi-artifacts', 'List:raditi-artifacts'],
+            ],
           ].map(([name, keys, actions]) => ({
             name,
             credentials: [
@@ -284,7 +300,7 @@ async function render(only) {
   const token = (await auth.json()).auth.client_token
 
   const kv = {}
-  for (const name of ['shared', 'web', 'core', 'browser', 'preview', 'traefik', 'gitea'])
+  for (const name of ['shared', 'web', 'core', 'browser', 'preview', 'traefik', 'gitea', 'mcp'])
     kv[name] = (await readKv(token, name === 'shared' ? 'shared' : `app/${name}`)).data ?? {}
   if (!kv.shared.pg_password) fail('kv/platform/shared is empty: run seed first')
 

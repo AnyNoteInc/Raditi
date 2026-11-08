@@ -306,6 +306,9 @@ const ownEnvSchema = z.object({
     z.coerce.number().int().min(1).max(1440).default(previewDefaults.idleMinutes),
   ),
   PREVIEW_EXECUTOR: envVar(z.enum(previewExecutorKinds).optional()),
+  // The whole platform on one machine (infra/server, owner's decision of 08.11.2026): core's
+  // Docker is that machine's, and production runs previews in it (PREVIEW_EXECUTOR=local)
+  SINGLE_SERVER: envVar(z.enum(['on', 'off'], { error: 'must be on or off' }).default('off')),
   PREVIEW_RUNTIME: envVar(z.enum(previewRuntimes).optional()),
   PREVIEW_SITE_IMAGES: envVar(z.string().optional()),
   PREVIEW_DB_IMAGE: envVar(previewImageSchema.optional()),
@@ -395,6 +398,7 @@ export function loadConfig(env: Env): CoreConfig {
         'PREVIEW_GATEWAY_PORT',
         'PREVIEW_RELAY_GATEWAY_HOST',
         'PREVIEW_EXECUTOR',
+        'SINGLE_SERVER',
         'PREVIEW_RUNTIME',
         'PREVIEW_SITE_IMAGES',
         'PREVIEW_DNS_SERVERS',
@@ -588,9 +592,21 @@ export function loadConfig(env: Env): CoreConfig {
   let releaseApi: ReleaseApiConfig | null = null
   {
     const executor = own.PREVIEW_EXECUTOR ?? (production ? 'runner' : 'local')
-    // Core's own Docker never runs a preview in production, as it never runs a turn there.
-    if (production && executor === 'local')
+    // Core's own Docker never runs a preview in production, as it never runs a turn there —
+    // except on the single server, where it is the Docker of the sandboxes as well.
+    if (production && executor === 'local' && own.SINGLE_SERVER !== 'on')
       problems.push('PREVIEW_EXECUTOR: production runs previews only on runner VMs (runner)')
+    // There the relay of the agent's browser needs the gateway's private address, never the
+    // default name host.docker.internal
+    if (
+      production &&
+      executor === 'local' &&
+      own.SINGLE_SERVER === 'on' &&
+      (env.PREVIEW_RELAY_GATEWAY_HOST ?? '').trim() === ''
+    )
+      problems.push(
+        'PREVIEW_RELAY_GATEWAY_HOST: required with PREVIEW_EXECUTOR=local in production (the gateway of previews)',
+      )
     const runtime = own.PREVIEW_RUNTIME ?? (production ? 'runsc' : 'runc')
     if (production && runtime !== 'runsc')
       problems.push('PREVIEW_RUNTIME: production previews run under gVisor (runsc)')

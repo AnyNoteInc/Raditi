@@ -160,7 +160,8 @@ services:
       - --certificatesresolvers.preview.acme.storage=/acme/${ACME_STORAGE_FILE:-acme.json}
       - --certificatesresolvers.preview.acme.keytype=EC256
       - --certificatesresolvers.preview.acme.certificatesduration=${ACME_CERT_HOURS:-2160}
-      - --certificatesresolvers.preview.acme.dnschallenge.provider=yandexcloud
+      # The DNS of the preview domain: Yandex Cloud DNS here, reg.ru on the single server (infra/server)
+      - --certificatesresolvers.preview.acme.dnschallenge.provider=${PREVIEW_DNS_PROVIDER:-yandexcloud}
     environment:
       APP_DOMAIN: ${APP_DOMAIN:?Set APP_DOMAIN}
     ports:

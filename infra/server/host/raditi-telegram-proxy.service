@@ -1,0 +1,20 @@
+# /etc/systemd/system/raditi-telegram-proxy.service (infra/server/README.md, «Telegram»): the only
+# way of core to api.telegram.org, TELEGRAM_PROXY_URL=http://10.10.0.10:3129.
+[Unit]
+Description=Raditi proxy to api.telegram.org through checked public proxies
+After=raditi-net.service network-online.target
+Requires=raditi-net.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/node /usr/local/lib/raditi/telegram-proxy.mjs
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+Restart=always
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target

@@ -349,6 +349,43 @@ describe('loadMcpConfig — production', () => {
     ])
   })
 
+  it('takes the preview profiles in production on the single server alone, never local-site', () => {
+    const s3 = {
+      S3_ENDPOINT: 'https://s3.raditi.internal:8333',
+      S3_ACCESS_KEY_ID: 'key-id',
+      S3_SECRET_ACCESS_KEY: 'very-secret-s3-key',
+      PREVIEW_BASE_DOMAIN: 'raditi-preview.ru',
+      PREVIEW_SCHEME: 'https',
+    }
+    expect(
+      loadMcpConfig(
+        prodEnv({
+          ...s3,
+          SINGLE_SERVER: 'on',
+          MCP_CONTENT_PROFILE: 'local',
+          MCP_BROWSER_PROFILE: 'local',
+        }),
+      ),
+    ).toMatchObject({
+      contentProfile: 'local',
+      browserProfile: 'local',
+      singleServer: true,
+      storage: { endpoint: 'https://s3.raditi.internal:8333' },
+    })
+    expect(
+      problemsOf(prodEnv({ ...s3, SINGLE_SERVER: 'on', MCP_CONTENT_PROFILE: 'local-site' })),
+    ).toEqual([
+      'MCP_CONTENT_PROFILE: production takes local alone (previews), never the site itself',
+    ])
+    expect(
+      problemsOf(
+        prodEnv({ SINGLE_SERVER: 'on', MCP_CONTENT_PROFILE: 'local', PREVIEW_BASE_DOMAIN: '' }),
+      ),
+    ).toContain('MCP_CONTENT_PROFILE: local writes into previews and needs PREVIEW_BASE_DOMAIN')
+    expect(problemsOf(prodEnv({ SINGLE_SERVER: 'yes' }))[0]).toMatch(/^SINGLE_SERVER: /)
+    expect(loadMcpConfig(prodEnv({}))).toMatchObject({ singleServer: false })
+  })
+
   it('sends the content of a preview in production only to a private or loopback upstream', () => {
     expect(problemsOf(prodEnv({ PREVIEW_UPSTREAM_HOST: '8.8.8.8' }))).toContain(
       'PREVIEW_UPSTREAM_HOST: must be a private or loopback IP address in production (spec §19)',

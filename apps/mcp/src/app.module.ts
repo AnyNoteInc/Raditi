@@ -45,11 +45,13 @@ export interface McpContentTesting extends ContentTesting {
 export class AppModule {
   static forRoot(config: McpConfig, testing?: McpContentTesting): DynamicModule {
     const { content, siteContent, browser, previews, worker } = mcpProfilesOf(config)
-    // Customer onboarding and the gate for real data are not in place (spec §20). loadConfig
-    // refuses the settings in production; this refuses a composition that got past it.
-    if ((content || testing) && isProduction(config.appEnv))
+    // loadConfig refuses the settings in production, except the previews of the single server
+    // (SINGLE_SERVER=on, infra/server); this refuses a composition that got past it. The test
+    // seams and the site itself (local-site) never run in production.
+    const production = isProduction(config.appEnv)
+    if (production && (testing || siteContent || (content && !config.singleServer)))
       throw new Error('Local MCP content profile cannot run in production')
-    if (browser && isProduction(config.appEnv))
+    if (browser && production && !config.singleServer)
       throw new Error('Local MCP browser profile cannot run in production')
     if ((testing?.wrapResolver || testing?.wrapPreviewResolver) && !content)
       throw new Error('MCP content test seams need the content profile')

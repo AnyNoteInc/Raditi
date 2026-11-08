@@ -3,7 +3,7 @@
 # infra/app/README.md for one machine. GitHub Actions (.github/workflows/deploy.yml) copies the
 # tag's infra/app and infra/server with its images.env to /opt/raditi/incoming/<tag>/ and runs
 #   /opt/raditi/incoming/<tag>/server/deploy.sh <tag> <registry user>
-# as root, with a registry token on stdin (read once, only for the pull, never stored).
+# as root, with a registry token on stdin (read first into a tmpfs file, removed after the pull).
 set -eu
 
 tag=${1:?tag}
@@ -17,6 +17,12 @@ images="$src/images.env"
 
 exec 9>/run/raditi-deploy.lock
 flock -n 9 || { echo "deploy: another deploy is running" >&2; exit 1; }
+# The registry token first, before any command can read stdin (docker compose exec does), into a
+# tmpfs file the pull reads; the rest of the script gets no stdin
+token=$(mktemp -p /run)
+chmod 0600 "$token"
+cat >"$token"
+exec </dev/null
 say() { echo "deploy $tag: $*"; }
 # From the app directory: COMPOSE_FILE in .env names its files relative to the working directory
 compose() { (cd "$app" && docker compose "$@"); }
@@ -49,7 +55,7 @@ restore() {
     rsync -a --delete "$prev/" "$app/"
     echo "deploy $tag: failed before the migrations, files and .env of the running release restored" >&2
   fi
-  rm -rf "${config:-}"
+  rm -rf "${config:-}" "$token"
 }
 trap restore EXIT
 
@@ -71,7 +77,7 @@ put() { # <name> <value>
     echo "$1=$2" >>"$app/.env"
   fi
 }
-grep -E '^[A-Z_]+_IMAGE=' "$images" | while IFS='=' read -r name value; do put "$name" "$value"; done
+grep -E '^([A-Z_]+_IMAGE|PREVIEW_SITE_IMAGES)=' "$images" | while IFS='=' read -r name value; do put "$name" "$value"; done
 put APP_REVISION "$revision"
 say "revision $revision"
 
@@ -82,7 +88,8 @@ sed "s|@CORE_IMAGE@|$core_image|" "$app/server/runner.yaml.in" >"$app/server/run
 
 # 3. Pull with a throwaway registry login: the token never lands in /root/.docker
 config=$(mktemp -d -p /run)
-DOCKER_CONFIG=$config docker login ghcr.io --username "$registry_user" --password-stdin >/dev/null
+DOCKER_CONFIG=$config docker login ghcr.io --username "$registry_user" --password-stdin <"$token" >/dev/null
+rm -f "$token"
 # --profile would replace COMPOSE_PROFILES of .env (llm): the ops jobs join it instead
 profiles="$(sed -n 's/^COMPOSE_PROFILES=//p' "$app/.env" | tail -n 1),ops"
 COMPOSE_PROFILES=$profiles DOCKER_CONFIG=$config compose pull --quiet
@@ -97,7 +104,7 @@ docker volume create raditi-ci-ca >/dev/null
 docker run --rm --network none -v raditi-ci-ca:/ca -v /etc/raditi/ca/ca.pem:/src.pem:ro \
   --entrypoint cp "$(sed -n 's/^REDIS_IMAGE=//p' "$app/.env" | tail -n 1)" /src.pem /ca/ca.pem
 COMPOSE_PROFILES=$profiles compose run --rm s3-buckets >/dev/null
-trap 'rm -rf "${config:-}"' EXIT
+trap 'rm -rf "${config:-}" "$token"' EXIT
 rm -rf "$prev"
 COMPOSE_PROFILES=$profiles compose run --rm migrate
 COMPOSE_PROFILES=$profiles compose run --rm seed || say "seed failed: web and core keep running (infra/app/README.md, step 7)"
@@ -112,8 +119,8 @@ echo "$tag" >"$app/.tag"
 say "running"
 
 # 8. Images of the platform registry no longer named by .env or by the last record of the log
-keep=$( (grep -E '^[A-Z_]+_IMAGE=' "$app/.env"; tail -n 40 "$log" | grep -E '^[A-Z_]+_IMAGE=') |
-  sed 's/^[A-Z_]*=//' | sed 's/.*@//' | sort -u)
+# Every digest .env names (PREVIEW_SITE_IMAGES names eight) and the recent records of the log do
+keep=$( (grep -E '^[A-Z_]+=' "$app/.env"; tail -n 60 "$log") | grep -ohE 'sha256:[0-9a-f]{64}' | sort -u)
 docker image ls --digests --format '{{.Repository}} {{.Digest}} {{.ID}}' |
   grep '^ghcr.io/' | while read -r _ digest id; do
     echo "$keep" | grep -qx "$digest" || docker image rm "$id" >/dev/null 2>&1 || true

@@ -1050,6 +1050,19 @@ describe('loadConfig — previews and releases', () => {
     expect(problemsOf(previewProd({ PREVIEW_EXECUTOR: 'local' }))).toEqual([
       'PREVIEW_EXECUTOR: production runs previews only on runner VMs (runner)',
     ])
+    // The single server (infra/server): core's Docker runs them, the relay names the gateway
+    expect(problemsOf(previewProd({ PREVIEW_EXECUTOR: 'local', SINGLE_SERVER: 'on' }))).toEqual([
+      'PREVIEW_RELAY_GATEWAY_HOST: required with PREVIEW_EXECUTOR=local in production (the gateway of previews)',
+    ])
+    expect(
+      loadConfig(
+        previewProd({
+          PREVIEW_EXECUTOR: 'local',
+          SINGLE_SERVER: 'on',
+          PREVIEW_RELAY_GATEWAY_HOST: '10.10.0.10',
+        }),
+      ).previews,
+    ).toMatchObject({ executor: 'local', runtime: 'runsc' })
     expect(problemsOf(previewProd({ PREVIEW_RUNTIME: 'runc' }))).toEqual([
       'PREVIEW_RUNTIME: production previews run under gVisor (runsc)',
     ])

@@ -98,6 +98,11 @@ export interface McpConfig {
   vault: VaultConfig
   contentProfile: McpContentProfile
   browserProfile: McpBrowserProfile
+  /**
+   * SINGLE_SERVER=on: the whole platform on one machine (infra/server, owner's decision of
+   * 08.11.2026). Production then takes the preview profiles `local`, which it refuses otherwise.
+   */
+  singleServer: boolean
   /** null while both profiles are off. Holds the S3 key: never log it. */
   storage: McpStorageConfig | null
   /** A configuration a stand builds by hand may leave it out: the defaults then. */
@@ -161,6 +166,7 @@ const ownEnvSchema = z.object({
       .enum(mcpBrowserProfiles, { error: `must be one of ${mcpBrowserProfiles.join(', ')}` })
       .default('off'),
   ),
+  SINGLE_SERVER: envVar(z.enum(['on', 'off'], { error: 'must be on or off' }).default('off')),
   ...previewAddressEnvShape,
   PREVIEW_UPSTREAM_HOST: envVar(
     z
@@ -237,15 +243,22 @@ export function loadMcpConfig(env: Env): McpConfig {
   // The mcp role keeps content snapshots in the artifacts bucket; its S3 key reaches no other
   // (spec §14), so the names of the other buckets and the runners' address are not its settings.
   let storage: McpStorageConfig | null = null
-  if (production && own.MCP_BROWSER_PROFILE !== 'off')
+  // On the single server previews run in production (infra/server, owner's decision of
+  // 08.11.2026): the agent writes into them and opens them in its browser. The site itself
+  // (local-site, the path of the stands) stays refused.
+  const singleServer = own.SINGLE_SERVER === 'on'
+  const previewsOpen = !production || singleServer
+  if (production && !singleServer && own.MCP_BROWSER_PROFILE !== 'off')
     problems.push(
       'MCP_BROWSER_PROFILE: only off is allowed in production (the agent browser is not open there)',
     )
   if (own.MCP_CONTENT_PROFILE !== 'off' || own.MCP_BROWSER_PROFILE !== 'off') {
-    if (production) {
+    if (production && (!singleServer || own.MCP_CONTENT_PROFILE === 'local-site')) {
       if (own.MCP_CONTENT_PROFILE !== 'off')
         problems.push(
-          'MCP_CONTENT_PROFILE: only off is allowed in production (published content is not open there)',
+          singleServer
+            ? 'MCP_CONTENT_PROFILE: production takes local alone (previews), never the site itself'
+            : 'MCP_CONTENT_PROFILE: only off is allowed in production (published content is not open there)',
         )
     } else {
       const read = section(() =>
@@ -277,7 +290,7 @@ export function loadMcpConfig(env: Env): McpConfig {
   const preview = previewAddressFromEnv(own, appEnv)
   // Where the agent's content goes is said, never inferred (Р3): `local` — the preview of the
   // dialog; `local-site` — the site itself, the P6 path of the stands, never beside previews.
-  if (!production && own.MCP_CONTENT_PROFILE === 'local' && preview === null)
+  if (previewsOpen && own.MCP_CONTENT_PROFILE === 'local' && preview === null)
     problems.push('MCP_CONTENT_PROFILE: local writes into previews and needs PREVIEW_BASE_DOMAIN')
   if (!production && own.MCP_CONTENT_PROFILE === 'local-site' && preview !== null)
     problems.push(
@@ -311,6 +324,7 @@ export function loadMcpConfig(env: Env): McpConfig {
     vault,
     contentProfile: own.MCP_CONTENT_PROFILE,
     browserProfile: own.MCP_BROWSER_PROFILE,
+    singleServer,
     storage,
     browserWorker:
       own.BROWSER_WORKER_URL !== undefined && own.BROWSER_WORKER_TOKEN !== undefined

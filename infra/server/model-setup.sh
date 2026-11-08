@@ -1,11 +1,12 @@
 #!/bin/sh
 # The model in production on the single server: the steps of «Модель в production» of
 # infra/app/README.md, run as root from /opt/raditi/app (README.md, «Модель»).
-#   model-setup.sh key <lite|pro|max> <paid until YYYY-MM-DD>   the plan key of Z.ai on stdin
+#   model-setup.sh key <backend> <plan> [paid until]  the key of Z.ai on stdin: zai-api payg (the API
+#                                                     paid per token) or zai-coding lite|pro|max
 #   model-setup.sh search-key                                   the key of Parallel Search on stdin (subs/search/parallel)
-#   model-setup.sh enable                                        provider zai-coding, its profiles, rates, accounts
-#   model-setup.sh clearance <countries> <notice22 ref> <notice22 date> <notice12 ref> <notice12 date>
-#                            <transfer allowed from> <documents>
+#   model-setup.sh enable <backend>                   that provider, its profiles, rates and accounts
+#   model-setup.sh clearance <backend> <countries> <notice22 ref> <notice22 date> <notice12 ref>
+#                            <notice12 date> <transfer allowed from> <documents>
 # The key reaches only `subscriptions:login` on stdin, with a writer token for 15 minutes in a
 # tmpfs file; nothing is printed. The clearance (rule 1, spec §18) records the owner's notices to
 # Roskomnadzor as given: no value is made up here.
@@ -24,8 +25,11 @@ psql_c() { docker compose exec -T postgres psql -U postgres -d raditi -v ON_ERRO
 
 case "${1:-}" in
 key | search-key)
-  [ "$1" = search-key ] || plan=${2:?plan: lite, pro or max}
-  [ "$1" = search-key ] || paid=${3:?paid until YYYY-MM-DD}
+  if [ "$1" = key ]; then
+    backend=${2:?backend: zai-api or zai-coding}
+    plan=${3:?plan: payg for zai-api, lite, pro or max for zai-coding}
+    paid=${4:-}
+  fi
   dir=$(mktemp -d -p /run)
   trap 'rm -rf "$dir"' EXIT
   vault_post auth/token/create \
@@ -36,37 +40,49 @@ key | search-key)
   if [ "$1" = search-key ]; then
     set -- scripts/subscription-search-key.mjs --vault-token-file /run/writer-token
   else
-    set -- scripts/subscription-login.mjs --backend zai-coding --label production-1 \
-      --plan "$plan" --paid-until "$paid" --vault-token-file /run/writer-token
+    set -- scripts/subscription-login.mjs --backend "$backend" --label "$backend-1" \
+      --plan "$plan" ${paid:+--paid-until "$paid"} --vault-token-file /run/writer-token
   fi
   docker compose run --rm --no-deps -T -v "$dir/token:/run/writer-token:ro" \
     -e APP_ENV=production -e VAULT_ADDR=https://vault.raditi.internal:8200 \
     --entrypoint node llm --env-file=/run/raditi/app.env "$@"
   ;;
 enable)
-  psql_c <<'EOF'
+  backend=${2:?backend: zai-api or zai-coding}
+  case $backend in
+  zai-api) rates=2026-10-17-zai-api.json ;;
+  zai-coding) rates=2026-11-06-zai-coding.json ;;
+  *)
+    echo "model-setup: $backend is not a backend" >&2
+    exit 2
+    ;;
+  esac
+  psql_c -v backend="$backend" <<'EOF'
 UPDATE llm_providers SET enabled = true, updated_at = clock_timestamp()
- WHERE slug = 'zai-coding' AND kind = 'subscription';
+ WHERE slug = :'backend' AND kind = 'subscription';
 UPDATE llm_models SET enabled = true, updated_at = clock_timestamp()
- WHERE provider_id = (SELECT id FROM llm_providers WHERE slug = 'zai-coding')
+ WHERE provider_id = (SELECT id FROM llm_providers WHERE slug = :'backend')
    AND slug IN ('glm-5.3-light', 'glm-5.3-standard', 'glm-5.3-heavy');
 EOF
   # Rates and the credit rate: Бизнес and Агентство cost more than half their price at 6.00 (plan 63)
-  docker compose run --rm --no-deps -T -v /opt/raditi/app/server/rates:/rates:ro \
-    --entrypoint node core --env-file=/run/raditi/app.env scripts/billing-rates.mjs \
-    --file /rates/2026-11-06-zai-coding.json --reason "single server, owner 08.11.2026" \
+  # In the running core: a second one would take its fixed address on core-egress
+  docker compose cp "/opt/raditi/app/server/rates/$rates" "core:/work/tmp/$rates"
+  docker compose exec -T core node --env-file=/run/raditi/app.env scripts/billing-rates.mjs \
+    --file "/work/tmp/$rates" --reason "single server, owner 08.11.2026" \
     --operator owner --confirm-exposure
-  psql_c -c "UPDATE subscription_accounts SET enabled = true, updated_at = clock_timestamp()
-    WHERE provider_id = (SELECT id FROM llm_providers WHERE slug = 'zai-coding') AND status <> 'retired'
-    RETURNING id"
+  psql_c -v backend="$backend" <<'EOF'
+UPDATE subscription_accounts SET enabled = true, updated_at = clock_timestamp()
+ WHERE provider_id = (SELECT id FROM llm_providers WHERE slug = :'backend') AND status <> 'retired'
+RETURNING id;
+EOF
   ;;
 clearance)
-  [ $# -eq 8 ] || { echo "usage: clearance <countries> <notice22 ref> <notice22 date> <notice12 ref> <notice12 date> <transfer allowed from> <documents>" >&2; exit 2; }
-  psql_c -v countries="$2" -v n22="$3" -v d22="$4" -v n12="$5" -v d12="$6" -v from="$7" -v docs="$8" <<'EOF'
-INSERT INTO cross_border_clearances (provider_id, countries, notice22_ref, notice22_date,
+  [ $# -eq 9 ] || { echo "usage: clearance <backend> <countries> <notice22 ref> <notice22 date> <notice12 ref> <notice12 date> <transfer allowed from> <documents>" >&2; exit 2; }
+  psql_c -v backend="$2" -v countries="$3" -v n22="$4" -v d22="$5" -v n12="$6" -v d12="$7" -v from="$8" -v docs="$9" <<'EOF'
+INSERT INTO cross_border_clearances (id, provider_id, countries, notice22_ref, notice22_date,
   recipients_assessed_on, notice12_ref, notice12_received_on, transfer_allowed_from, documents, recorded_by)
-SELECT id, :'countries', :'n22', :'d22', :'d12', :'n12', :'d12', :'from', :'docs', 'owner'
-  FROM llm_providers WHERE slug = 'zai-coding'
+SELECT gen_random_uuid(), id, :'countries', :'n22', :'d22', :'d12', :'n12', :'d12', :'from', :'docs', 'owner'
+  FROM llm_providers WHERE slug = :'backend'
 RETURNING id;
 EOF
   ;;

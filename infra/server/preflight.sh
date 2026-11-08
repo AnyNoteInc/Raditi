@@ -88,10 +88,13 @@ fi
 for name in WEB_IMAGE CORE_IMAGE LLM_IMAGE PREVIEW_GATEWAY_IMAGE MIGRATE_IMAGE MCP_IMAGE \
   RUNNER_IMAGE BROWSER_WORKER_IMAGE SANDBOX_IMAGE SANDBOX_GATEWAY_IMAGE SANDBOX_NETWORK_GUARD_IMAGE \
   SANDBOX_WATCHDOG_IMAGE BROWSER_EGRESS_IMAGE BROWSER_FORWARDER_IMAGE BROWSER_IMAGE \
-  TRAEFIK_IMAGE POSTGRES_IMAGE REDIS_IMAGE SEAWEEDFS_IMAGE GITEA_IMAGE GITEA_RUNNER_IMAGE; do
+  TRAEFIK_IMAGE POSTGRES_IMAGE REDIS_IMAGE SEAWEEDFS_IMAGE GITEA_IMAGE GITEA_RUNNER_IMAGE \
+  PREVIEW_FORWARDER_IMAGE PREVIEW_BROWSER_IMAGE PREVIEW_DB_IMAGE; do
   setting "$name" | grep -Eq '@sha256:[0-9a-f]{64}$' || fail "$name must be pinned by digest"
   ! setting "$name" | grep -Eq '@sha256:0{64}$' || fail "$name still has the all-zero placeholder digest"
 done
+setting PREVIEW_SITE_IMAGES | tr ',' '\n' | grep -Eqx '[0-9]+\.[0-9]+=[^=@]+@sha256:[0-9a-f]{64}' ||
+  fail "PREVIEW_SITE_IMAGES must name the site images by digest"
 setting APP_REVISION | grep -Eqx '[0-9a-f]{40}' || fail "APP_REVISION must be a full commit sha"
 
 journald=/etc/systemd/journald.conf.d/raditi.conf
