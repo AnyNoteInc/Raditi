@@ -12,11 +12,27 @@ const builtIn = getCACertificates('default')
 function selfSignedCa(): string {
   const dir = mkdtempSync(join(tmpdir(), 'raditi-ca-'))
   try {
-    execFileSync('openssl', [
-      'req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes',
-      '-keyout', join(dir, 'key.pem'), '-out', join(dir, 'ca.pem'), '-days', '1',
-      '-subj', '/CN=Raditi test CA',
-    ], { stdio: 'ignore' })
+    execFileSync(
+      'openssl',
+      [
+        'req',
+        '-x509',
+        '-newkey',
+        'ec',
+        '-pkeyopt',
+        'ec_paramgen_curve:prime256v1',
+        '-nodes',
+        '-keyout',
+        join(dir, 'key.pem'),
+        '-out',
+        join(dir, 'ca.pem'),
+        '-days',
+        '1',
+        '-subj',
+        '/CN=Raditi test CA',
+      ],
+      { stdio: 'ignore' },
+    )
     return readFileSync(join(dir, 'ca.pem'), 'utf8')
   } finally {
     rmSync(dir, { recursive: true, force: true })

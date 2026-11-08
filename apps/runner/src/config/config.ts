@@ -169,7 +169,8 @@ export function loadRunnerConfig(env: Env): RunnerConfig {
   if (own.RUNNER_CORE_CA_FILE !== undefined && !isAbsolute(own.RUNNER_CORE_CA_FILE))
     problems.push('RUNNER_CORE_CA_FILE: must be an absolute path')
   if (own.RUNNER_S3_CA_FILE !== undefined) {
-    if (!isAbsolute(own.RUNNER_S3_CA_FILE)) problems.push('RUNNER_S3_CA_FILE: must be an absolute path')
+    if (!isAbsolute(own.RUNNER_S3_CA_FILE))
+      problems.push('RUNNER_S3_CA_FILE: must be an absolute path')
     if (own.RUNNER_S3_ORIGIN === undefined)
       problems.push('RUNNER_S3_CA_FILE: only with RUNNER_S3_ORIGIN, the S3 it is for')
   }

@@ -41,7 +41,11 @@ const GENERATED = {
     S3_SECRET_ACCESS_KEY: b64url(30),
     BROWSER_WORKER_TOKEN: hex(32),
   },
-  'app/browser': { METRICS_TOKEN: hex(32), S3_ACCESS_KEY_ID: s3Key, S3_SECRET_ACCESS_KEY: b64url(30) },
+  'app/browser': {
+    METRICS_TOKEN: hex(32),
+    S3_ACCESS_KEY_ID: s3Key,
+    S3_SECRET_ACCESS_KEY: b64url(30),
+  },
   'app/preview': { PREVIEW_SESSION_SECRET: b64url(48) },
   'app/traefik': { dashboard_user: () => 'admin', dashboard_password: b64url(18) },
 }
@@ -69,7 +73,10 @@ async function vault(token, method, path, body) {
 }
 
 const readKv = async (token, path) =>
-  (await vault(token, 'GET', `kv/data/platform/${path}`))?.data ?? { data: {}, metadata: { version: 0 } }
+  (await vault(token, 'GET', `kv/data/platform/${path}`))?.data ?? {
+    data: {},
+    metadata: { version: 0 },
+  }
 
 async function writeKv(token, path, data, version) {
   await vault(token, 'POST', `kv/data/platform/${path}`, { options: { cas: version }, data })
@@ -93,7 +100,8 @@ async function seed() {
 async function set(path, field) {
   if (!PROVIDED[path]?.includes(field)) fail(`${path} ${field} is not a field the owner sets`)
   const value = readFileSync(0, 'utf8').trim()
-  if (!value || /["\\\n\r]/.test(value)) fail(`${field}: empty or holds a quote, backslash or newline`)
+  if (!value || /["\\\n\r]/.test(value))
+    fail(`${field}: empty or holds a quote, backslash or newline`)
   const token = rootToken()
   const { data, metadata } = await readKv(token, path)
   await writeKv(token, path, { ...data, [field]: value }, metadata.version)
@@ -120,10 +128,16 @@ function serviceFiles(kv, roles) {
       .join('')
   const approle = (name) =>
     roles[name] ? { VAULT_ROLE_ID: roles[name].roleId, VAULT_SECRET_ID: roles[name].secretId } : {}
-  const s3 = (keys) => ({ S3_ACCESS_KEY_ID: keys.S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY: keys.S3_SECRET_ACCESS_KEY })
+  const s3 = (keys) => ({
+    S3_ACCESS_KEY_ID: keys.S3_ACCESS_KEY_ID,
+    S3_SECRET_ACCESS_KEY: keys.S3_SECRET_ACCESS_KEY,
+  })
   const redisHash = createHash('sha256').update(shared.redis_password).digest('hex')
   return {
-    postgres: { uid: 70, files: { 'superuser-password': shared.pg_superuser_password, password: shared.pg_password } },
+    postgres: {
+      uid: 70,
+      files: { 'superuser-password': shared.pg_superuser_password, password: shared.pg_password },
+    },
     redis: {
       uid: 10003,
       files: {
@@ -175,7 +189,11 @@ function serviceFiles(kv, roles) {
     mcp: {
       uid: 10005,
       files: {
-        'app.env': env({ DATABASE_URL: db, BROWSER_WORKER_TOKEN: core.BROWSER_WORKER_TOKEN, ...approle('mcp') }),
+        'app.env': env({
+          DATABASE_URL: db,
+          BROWSER_WORKER_TOKEN: core.BROWSER_WORKER_TOKEN,
+          ...approle('mcp'),
+        }),
         'vault-ca.pem': ca,
       },
     },
@@ -201,7 +219,10 @@ function serviceFiles(kv, roles) {
         }),
       },
     },
-    traefik: { uid: 65532, files: { 'dashboard-users': htpasswd(traefik.dashboard_user, traefik.dashboard_password) } },
+    traefik: {
+      uid: 65532,
+      files: { 'dashboard-users': htpasswd(traefik.dashboard_user, traefik.dashboard_password) },
+    },
     // SeaweedFS: one identity per service that holds S3 keys; the TLS pair of s3.raditi.internal
     s3: {
       uid: 10007,
@@ -214,7 +235,9 @@ function serviceFiles(kv, roles) {
             ['browser', browser, ['Read:raditi-inbox', 'List:raditi-inbox']],
           ].map(([name, keys, actions]) => ({
             name,
-            credentials: [{ accessKey: keys.S3_ACCESS_KEY_ID, secretKey: keys.S3_SECRET_ACCESS_KEY }],
+            credentials: [
+              { accessKey: keys.S3_ACCESS_KEY_ID, secretKey: keys.S3_SECRET_ACCESS_KEY },
+            ],
             actions,
           })),
         }),
@@ -246,7 +269,19 @@ async function render(only) {
     kv[name] = (await readKv(token, name === 'shared' ? 'shared' : `app/${name}`)).data ?? {}
   if (!kv.shared.pg_password) fail('kv/platform/shared is empty: run seed first')
 
-  const all = ['postgres', 'redis', 'migrate', 'web', 'core', 'llm', 'mcp', 'browser', 'preview', 'traefik', 's3']
+  const all = [
+    'postgres',
+    'redis',
+    'migrate',
+    'web',
+    'core',
+    'llm',
+    'mcp',
+    'browser',
+    'preview',
+    'traefik',
+    's3',
+  ]
   const named = only.length === 0 ? all : only
   for (const name of named) if (!all.includes(name)) fail(`${name} is not a service`)
   const roles = {}
@@ -256,9 +291,14 @@ async function render(only) {
       continue
     }
     const roleId = (await vault(token, 'GET', `auth/approle/role/${name}/role-id`)).data.role_id
-    const earlier = (await vault(token, 'LIST', `auth/approle/role/${name}/secret-id-accessor/list`)
-      .catch(() => null))?.data?.keys ?? []
-    const secretId = (await vault(token, 'POST', `auth/approle/role/${name}/secret-id`, {})).data.secret_id
+    const earlier =
+      (
+        await vault(token, 'LIST', `auth/approle/role/${name}/secret-id-accessor/list`).catch(
+          () => null,
+        )
+      )?.data?.keys ?? []
+    const secretId = (await vault(token, 'POST', `auth/approle/role/${name}/secret-id`, {})).data
+      .secret_id
     for (const accessor of earlier)
       await vault(token, 'POST', `auth/approle/role/${name}/secret-id-accessor/destroy`, {
         secret_id_accessor: accessor,
