@@ -3,7 +3,7 @@
 # infra/app/README.md for one machine. GitHub Actions (.github/workflows/deploy.yml) copies the
 # tag's infra/app and infra/server with its images.env to /opt/raditi/incoming/<tag>/ and runs
 #   /opt/raditi/incoming/<tag>/server/deploy.sh <tag> <registry user>
-# as root, with a registry token on stdin (read once, only for the pull, never stored).
+# as root, with a registry token on stdin (read first into a tmpfs file, removed after the pull).
 set -eu
 
 tag=${1:?tag}
@@ -17,6 +17,12 @@ images="$src/images.env"
 
 exec 9>/run/raditi-deploy.lock
 flock -n 9 || { echo "deploy: another deploy is running" >&2; exit 1; }
+# The registry token first, before any command can read stdin (docker compose exec does), into a
+# tmpfs file the pull reads; the rest of the script gets no stdin
+token=$(mktemp -p /run)
+chmod 0600 "$token"
+cat >"$token"
+exec </dev/null
 say() { echo "deploy $tag: $*"; }
 # From the app directory: COMPOSE_FILE in .env names its files relative to the working directory
 compose() { (cd "$app" && docker compose "$@"); }
@@ -49,7 +55,7 @@ restore() {
     rsync -a --delete "$prev/" "$app/"
     echo "deploy $tag: failed before the migrations, files and .env of the running release restored" >&2
   fi
-  rm -rf "${config:-}"
+  rm -rf "${config:-}" "$token"
 }
 trap restore EXIT
 
@@ -82,7 +88,8 @@ sed "s|@CORE_IMAGE@|$core_image|" "$app/server/runner.yaml.in" >"$app/server/run
 
 # 3. Pull with a throwaway registry login: the token never lands in /root/.docker
 config=$(mktemp -d -p /run)
-DOCKER_CONFIG=$config docker login ghcr.io --username "$registry_user" --password-stdin >/dev/null
+DOCKER_CONFIG=$config docker login ghcr.io --username "$registry_user" --password-stdin <"$token" >/dev/null
+rm -f "$token"
 # --profile would replace COMPOSE_PROFILES of .env (llm): the ops jobs join it instead
 profiles="$(sed -n 's/^COMPOSE_PROFILES=//p' "$app/.env" | tail -n 1),ops"
 COMPOSE_PROFILES=$profiles DOCKER_CONFIG=$config compose pull --quiet
@@ -97,7 +104,7 @@ docker volume create raditi-ci-ca >/dev/null
 docker run --rm --network none -v raditi-ci-ca:/ca -v /etc/raditi/ca/ca.pem:/src.pem:ro \
   --entrypoint cp "$(sed -n 's/^REDIS_IMAGE=//p' "$app/.env" | tail -n 1)" /src.pem /ca/ca.pem
 COMPOSE_PROFILES=$profiles compose run --rm s3-buckets >/dev/null
-trap 'rm -rf "${config:-}"' EXIT
+trap 'rm -rf "${config:-}" "$token"' EXIT
 rm -rf "$prev"
 COMPOSE_PROFILES=$profiles compose run --rm migrate
 COMPOSE_PROFILES=$profiles compose run --rm seed || say "seed failed: web and core keep running (infra/app/README.md, step 7)"

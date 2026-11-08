@@ -12,7 +12,7 @@
 | Группы безопасности облака | `raditi-host.nft`: на хост снаружи — только SSH 2222; 80 и 443 — опубликованные порты Traefik |
 | Узел выхода `egress-1` | не нужен: `llm` ходит к `api.z.ai` прямым путём (ответ владельца на П2) |
 
-Чего пока нет: предпросмотров — нужен wildcard `*.raditi-preview.ru` (DNS-01 через API reg.ru) и исполнитель предпросмотров в production (M10). Работают кабинет, вход и регистрация, биллинг (без магазина ЮKassa), письма, чаты с проектом и без, `/release` и облачный браузер.
+Работают кабинет, вход и регистрация, биллинг (без магазина ЮKassa), письма, заявки в Telegram, чаты с проектом и без, предпросмотры, `/release` и облачный браузер.
 
 ## Что где
 
@@ -69,6 +69,21 @@ Gitea 1.27.3 — `https://git.raditi.internal:3443` (опубликован то
 Один раз, после первого старта Gitea: `NODE_EXTRA_CA_CERTS=/etc/raditi/ca/ca.pem node server/gitea-setup.mjs bootstrap`, затем `platform-secrets.mjs render core gitea-runner` и пересоздание `core` (новые токены и SecretID). `platform/ci` из `ci/` тега `deploy.sh` обновляет на каждой выкладке (`gitea-setup.mjs ci`): оба файла — обязательные, с шаблоном статуса `platform/ci: check / *`.
 
 Раннер выкладки `server-deploy` (gitea/runner 4.0.0, метка `deploy` на образе `core` выпуска) работает в сети хоста; его задания — тоже, без сокета Docker и привилегий, с томом CA `raditi-ci-ca`. Они ходят к Vault, S3 и Gitea по `/etc/hosts` хоста (`10.10.0.10`) и к API выпуска `core` на `172.29.83.10:8085` — закреплённый адрес `core` на мосту `core-egress`. Хостинг клиента они видят с публичного адреса сервера. Раннера `check` нет: `check.yml` у сайтов ждёт его в очереди (spec §10, раннер `check` — следующий шаг).
+
+## Предпросмотры
+
+`SINGLE_SERVER=on` у `core` и `mcp` (ответ владельца от 08.11.2026: «снимаю и подтверждаю»): production запускает предпросмотры в Docker `core` (`PREVIEW_EXECUTOR=local`, `runsc`, сокет Docker хоста — у `core` теперь фактически root хоста), а `mcp` — с профилями `local` (агент пишет контент в предпросмотр и открывает его браузером). `local-site` и тестовые швы по-прежнему закрыты. Предпросмотр публикует вход на `10.10.0.10` (`PREVIEW_UPSTREAM_HOST`), шлюз и `mcp` (в сети хоста — браузер агента управляет Chromium на loopback) ходят туда же; пересыльщик браузера агента идёт к шлюзу на `10.10.0.10:8090` и приходит с шлюза моста `preview-out` (`172.29.90.1`, `PREVIEW_BROWSER_RELAYS`).
+
+- **Сертификат** `*.raditi-preview.ru` — резолвер `preview`, DNS-01 через API reg.ru (lego `regru`, `PREVIEW_DNS_PROVIDER=regru`): логин и альтернативный пароль API — `kv/platform/app/traefik` (`regru_username`, `regru_password`), IP сервера разрешён в настройках API reg.ru; reg.ru отдаёт новую TXT-запись через минуты, поэтому `REGRU_PROPAGATION_TIMEOUT=1800`. Запись DNS `*.raditi-preview.ru` → `45.8.250.117`.
+- **Образы:** сайт предпросмотра под каждую версию PHP (`publish-images.yml`, задача `site`; `PREVIEW_SITE_IMAGES` в `images.env`), пересыльщик и браузер — те же образы, что у браузерной сессии, временная база дампа — upstream `mariadb:11.4.13`.
+
+## Telegram
+
+`api.telegram.org` с этого сервера не отвечает. По просьбе владельца (бесплатный прокси) `core` ходит к нему через `host/telegram-proxy.mjs` (`raditi-telegram-proxy.service`, `TELEGRAM_PROXY_URL=http://10.10.0.10:3129`): тот принимает только `CONNECT api.telegram.org:443` и ведёт его через пул проверенных бесплатных публичных HTTP-прокси (список proxyscrape, обновление раз в 20 минут и при нехватке, нерабочий отбрасывается). TLS — сквозной от `core` до Telegram: публичный прокси видит только имя хоста. Tor с этого сервера не проходит (DPI на рукопожатии, без мостов). Надёжность бесплатных прокси не гарантирована: при долгом сбое заявки ждут в очереди.
+
+## Модель
+
+Бэкенд — `zai-api`, API Z.ai с оплатой по факту использования (ответ владельца от 08.11.2026: «тариф не нужен, API оплачивается по факту»): `model-setup.sh key zai-api payg` (ключ со stdin) и `model-setup.sh enable zai-api` (провайдер, профили, ставки `2026-10-17-zai-api.json`, курс 6,00 с `--confirm-exposure`, аккаунт).
 
 ## Выкладка
 

@@ -61,6 +61,10 @@ services:
       PREVIEW_BASE_DOMAIN: ${PREVIEW_BASE_DOMAIN:?Set PREVIEW_BASE_DOMAIN}
       REGRU_USERNAME_FILE: /run/raditi/regru-username
       REGRU_PASSWORD_FILE: /run/raditi/regru-password
+      # reg.ru serves a new TXT record from its name servers after minutes, not seconds
+      REGRU_PROPAGATION_TIMEOUT: '1800'
+      REGRU_POLLING_INTERVAL: '30'
+      REGRU_TTL: '300'
     volumes:
       - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/traefik' }
     networks: [stream-edge]
