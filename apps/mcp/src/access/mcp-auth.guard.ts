@@ -15,6 +15,7 @@ import {
   type McpSecurity,
 } from './mcp-policy.ts'
 import { MCP_REQUEST_ACCESS, MCP_REQUEST_TOOLS, type McpRequest } from './mcp-request.ts'
+import { MCP_WEB_SEARCH_KEY, type WebSearchKey } from './web-search-key.ts'
 
 const unsupportedProtocolVersion = `Bad Request: Unsupported protocol version (supported versions: ${SUPPORTED_PROTOCOL_VERSIONS.join(', ')})`
 
@@ -26,6 +27,7 @@ export class McpAuthGuard implements CanActivate {
   constructor(
     @Inject(MCP_ACCESS) private readonly access: McpAccessStore,
     @Inject(MCP_SECURITY) private readonly security: McpSecurity,
+    @Inject(MCP_WEB_SEARCH_KEY) private readonly searchKey: Pick<WebSearchKey, 'available'>,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -68,7 +70,10 @@ export class McpAuthGuard implements CanActivate {
       return fail(503, 'MCP authorization is unavailable')
     }
     if (!authorized) return fail(401, 'MCP token is invalid or expired')
-    const families = mcpToolFamiliesOf(authorized, this.security)
+    let families = mcpToolFamiliesOf(authorized, this.security)
+    // The web search is offered while its key is in Vault (spec §20, «Веб-поиск агента»).
+    if (families.includes('search') && !(await this.searchKey.available()))
+      families = families.filter((family) => family !== 'search')
     if (req.method === 'POST' && !mcpBodyAllowed(req.body, families))
       fail(400, 'Invalid MCP request')
     // The SDK's Node/Web adapter rejects noncanonical IPv6 spellings when constructing a

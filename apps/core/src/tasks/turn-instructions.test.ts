@@ -300,14 +300,16 @@ describe('browserTaskInstructions (docs/plan/57-browser-tasks.md, Б20–Б24)',
   // The texts of `c811abf1`, byte for byte: a task on a site without a repository goes on as it
   // did when the rules of the browser were split for the chats (docs/plan/61, §3.11, §5.7). The
   // text of a task with a repository differs by one word, which it dictates to the client (К26).
+  // The line of the web search came on 08.11.2026 (spec §20, «Веб-поиск агента»); the rest stays.
+  const withoutSearch = (text: string) => text.replace(/^- When `raditi_search_web`.*\n/m, '')
   const beforeTheWord = (text: string) =>
-    text.replace('in the chat that installed it', 'in the dialog that installed it')
+    withoutSearch(text).replace('in the chat that installed it', 'in the dialog that installed it')
   it('keeps the words of a task in the browser and of a task with a repository byte for byte', () => {
     const skills = { skills: ['context7', 'playwright', 'other'] }
-    expect(digest(browserTaskInstructions('GUIDE\n', skills))).toBe(
+    expect(digest(withoutSearch(browserTaskInstructions('GUIDE\n', skills)))).toBe(
       '12a096ebcbd2b509c01956632786ef987bbf7f660d2ae18e1811a81f53b1512f',
     )
-    expect(digest(browserTaskInstructions(''))).toBe(
+    expect(digest(withoutSearch(browserTaskInstructions('')))).toBe(
       '32884da4a21ae3b59363ceb766c4ab542b7dc34efa171d0e5389661f5d3d6e3b',
     )
     expect(
@@ -347,6 +349,27 @@ describe('browserTaskInstructions (docs/plan/57-browser-tasks.md, Б20–Б24)',
     expect(
       digest(beforeTheWord(turnInstructions({ state: 'unavailable', reason: 'not_supported' }))),
     ).toBe('e278ac3663f329425c90189f63abe4544bb98b9c286e32f2ce63a6ccdbf52a86')
+  })
+})
+
+describe('the web search in the instructions (spec §20, «Веб-поиск агента — 08.11.2026»)', () => {
+  it('tells every kind of turn when to search, what never to send and to give the sources', () => {
+    for (const text of [
+      turnInstructions({ state: 'absent' }),
+      browserTaskInstructions(''),
+      openTaskInstructions({ skills: [] }, { browser: false, inbox: null }),
+    ]) {
+      const line = text.split('\n').find((row) => row.includes('raditi_search_web'))
+      expect(line).toBeDefined()
+      expect(line).toMatch(/^- When `raditi_search_web` is among your tools/)
+      expect(line).toContain('find public sources or to check current facts')
+      expect(line).toContain('webfetch')
+      expect(line).toContain('context7')
+      expect(line).toContain('never the chat history, a secret, personal data')
+      expect(line).toContain('give the client the addresses of the sources')
+      // In the section of the internet, beside the fetch tool.
+      expect(text.indexOf(line!)).toBeGreaterThan(text.indexOf('## The internet'))
+    }
   })
 })
 

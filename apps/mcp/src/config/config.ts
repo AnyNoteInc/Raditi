@@ -58,6 +58,28 @@ export interface McpBrowserWorkerConfig {
   sessionMaxHours: number
 }
 
+/**
+ * The agent's web search (`raditi_search_web`, Parallel Search in its `fast` mode; spec §20,
+ * «Веб-поиск агента — 08.11.2026»). Its key is no setting: it is read from Vault
+ * (`WEB_SEARCH_KEY_PATH`), where the operator command puts it, and the tool is there while it is.
+ */
+export interface McpWebSearchConfig {
+  /** How long one request may take, in milliseconds. */
+  timeoutMs: number
+  /**
+   * Calls a turn and the whole service in a calendar month (Moscow) may make. A workspace has no
+   * limit of its own: its credits are (a turn runs only on a reserve of them).
+   */
+  limits: { turn: number; serviceMonth: number }
+}
+
+/** Pilot values (spec §20): 3 a turn, 5 000 a month for the whole service. */
+export const webSearchDefaults = {
+  timeoutSeconds: 10,
+  turn: 3,
+  serviceMonth: 5000,
+} as const
+
 /** S3 of content snapshots: the connection and the artifacts bucket alone (spec §14). */
 export type McpStorageConfig = Omit<StorageConfig, 'buckets' | 'presignEndpoint'> & {
   buckets: Pick<StorageConfig['buckets'], 'artifacts'>
@@ -78,6 +100,8 @@ export interface McpConfig {
   browserProfile: McpBrowserProfile
   /** null while both profiles are off. Holds the S3 key: never log it. */
   storage: McpStorageConfig | null
+  /** A configuration a stand builds by hand may leave it out: the defaults then. */
+  webSearch?: McpWebSearchConfig
   /** null — the worker is not configured: browser tasks get no `web` tools here. */
   browserWorker?: McpBrowserWorkerConfig | null
   /**
@@ -108,11 +132,19 @@ export function mcpProfilesOf(config: McpConfig) {
     // The worker is no profile — a product path, production too (Б20) — but it turns the `web`
     // tools on the same way; a configuration written before it has none: no web tools.
     worker: config.browserWorker ?? null,
+    // A product path, like the worker: the tool is offered while its key is in Vault.
+    webSearch: config.webSearch ?? {
+      timeoutMs: webSearchDefaults.timeoutSeconds * 1000,
+      limits: { turn: webSearchDefaults.turn, serviceMonth: webSearchDefaults.serviceMonth },
+    },
   }
 }
 
 const port = (fallback: number) =>
   envVar(z.coerce.number().int().min(1).max(65_535).default(fallback))
+
+const count = (fallback: number, max: number) =>
+  envVar(z.coerce.number().int().min(0).max(max).default(fallback))
 
 const ownEnvSchema = z.object({
   // Required, never defaulted: a missing APP_ENV must not switch the production checks off.
@@ -152,6 +184,11 @@ const ownEnvSchema = z.object({
   ),
   // The rule every app reads the worker's token by (32 to 4096 visible ASCII characters).
   BROWSER_WORKER_TOKEN: envVar(browserWorkerTokenSchema.optional()),
+  WEB_SEARCH_TIMEOUT_SECONDS: envVar(
+    z.coerce.number().int().min(1).max(30).default(webSearchDefaults.timeoutSeconds),
+  ),
+  WEB_SEARCH_TURN_LIMIT: count(webSearchDefaults.turn, 100),
+  WEB_SEARCH_SERVICE_MONTH_LIMIT: count(webSearchDefaults.serviceMonth, 10_000_000),
   BROWSER_SESSION_MAX_HOURS: envVar(
     z.coerce
       .number()
@@ -174,7 +211,7 @@ const MCP_STORAGE_VARIABLES = [
 
 /**
  * The settings of the MCP gateway (spec §5, §8) and nothing else: the database, Vault, its own
- * port and profiles, the address of previews, the browser worker and, with a content profile,
+ * port and profiles, the address of previews, the browser worker, the limits of the web search and, with a content profile,
  * the one S3 bucket of snapshots. It reads none of the git, billing, Redis or runner settings.
  * Lists every problem at once.
  */
@@ -283,6 +320,10 @@ export function loadMcpConfig(env: Env): McpConfig {
             sessionMaxHours: own.BROWSER_SESSION_MAX_HOURS,
           }
         : null,
+    webSearch: {
+      timeoutMs: own.WEB_SEARCH_TIMEOUT_SECONDS * 1000,
+      limits: { turn: own.WEB_SEARCH_TURN_LIMIT, serviceMonth: own.WEB_SEARCH_SERVICE_MONTH_LIMIT },
+    },
     previewUpstreamHost: own.PREVIEW_UPSTREAM_HOST,
     preview,
   }
