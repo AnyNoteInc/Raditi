@@ -168,8 +168,66 @@ jobs:
           cache-from: type=gha,scope=publish-${{ matrix.image }}
           cache-to: type=gha,scope=publish-${{ matrix.image }},mode=max
 
+  # The images of a preview's site, one per PHP version of infra/preview/site-bases.json, built
+  # as pnpm verify:site-images builds them (the stand checks them in site-images.yml). The single
+  # server runs previews with them (infra/server/README.md, «Предпросмотры»).
+  site:
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.3', '7.4', '8.0', '8.1', '8.2', '8.3', '8.4', '8.5']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.revision }}
+          persist-credentials: false
+      # The same arguments as siteImageBuildArgs (infra/dev/preview-verify/verify-site-images.mjs)
+      - name: Read the base of PHP ${{ matrix.php }}
+        id: base
+        env:
+          PHP_VERSION: ${{ matrix.php }}
+        run: |
+          row=$(jq -ec --arg php "$PHP_VERSION" '.versions[] | select(.php == $php)' infra/preview/site-bases.json)
+          {
+            echo 'args<<EOF'
+            echo 'BASE=php-base'
+            echo "PHP_BASE=$(jq -r .image <<<"$row")"
+            echo "PHP_PECL_PINS=$(jq -r '.pecl | join(" ")' <<<"$row")"
+            without=$(jq -r '.without | join(" ")' <<<"$row")
+            [ -z "$without" ] || echo "PHP_EXTENSIONS_SKIP=$without"
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Log in to the GitHub Container Registry
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: Build and push the site of PHP ${{ matrix.php }}
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: infra/preview
+          file: infra/preview/Dockerfile
+          target: site
+          build-args: ${{ steps.base.outputs.args }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ needs.version.outputs.registry }}/preview-site:${{ needs.version.outputs.version }}-php${{ matrix.php }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.version.outputs.revision }}
+            org.opencontainers.image.version=${{ needs.version.outputs.version }}
+            org.opencontainers.image.title=raditi-preview-site-php${{ matrix.php }}
+          cache-from: type=gha,scope=publish-preview-site-${{ matrix.php }}
+          cache-to: type=gha,scope=publish-preview-site-${{ matrix.php }},mode=max
+
   digests:
-    needs: [version, build]
+    needs: [version, build, site]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -203,6 +261,18 @@ jobs:
               echo "${pair#*:}=$REGISTRY/$image@$digest"
             done
           } > images.env
+          # Previews use the forwarder and the Chromium of the browser session, under their names,
+          # and the sites of the site job, one per PHP version (its matrix, in its order)
+          sed -n 's/^BROWSER_FORWARDER_IMAGE=/PREVIEW_FORWARDER_IMAGE=/p; s/^BROWSER_IMAGE=/PREVIEW_BROWSER_IMAGE=/p' \
+            images.env > aliases.env
+          cat aliases.env >> images.env
+          sites=''
+          for php in 7.3 7.4 8.0 8.1 8.2 8.3 8.4 8.5; do
+            digest=$(docker buildx imagetools inspect "$REGISTRY/preview-site:$VERSION-php$php" \
+              --format '{{json .Manifest}}' | jq -er .digest)
+            sites="${sites:+$sites,}$php=$REGISTRY/preview-site@$digest"
+          done
+          echo "PREVIEW_SITE_IMAGES=$sites" >> images.env
           { echo '```'; cat images.env; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

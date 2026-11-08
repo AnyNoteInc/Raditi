@@ -50,8 +50,8 @@ echo br_netfilter >/etc/modules-load.d/raditi.conf
 install -d -m 0755 "$lib" /etc/raditi
 install -d -m 0700 /etc/raditi/openbao /etc/raditi/runner
 install -m 0755 "$here/internal-ca.sh" "$here/openbao-unseal.sh" "$here/vault-setup.sh" \
-  "$here/platform-secrets.mjs" "$lib/"
-for unit in raditi-net chrony-wait raditi-host-firewall openbao-unseal raditi-secrets; do
+  "$here/platform-secrets.mjs" "$here/telegram-proxy.mjs" "$lib/"
+for unit in raditi-net chrony-wait raditi-host-firewall openbao-unseal raditi-secrets raditi-telegram-proxy; do
   install -m 0644 "$here/$unit.service" /etc/systemd/system/
 done
 install -m 0644 "$here/raditi-host.nft" /etc/raditi/raditi-host.nft
@@ -90,6 +90,7 @@ systemctl daemon-reload
 systemctl restart systemd-journald
 systemctl enable -q --now raditi-net.service raditi-host-firewall.service chrony-wait.service openbao.service
 systemctl enable -q openbao-unseal.service raditi-secrets.service
+systemctl enable -q --now raditi-telegram-proxy.service
 # dockerd reads daemon.json only at start; live-restore keeps running containers
 [ "$daemon_before" = "$(cat /etc/docker/daemon.json)" ] || systemctl restart docker
 echo "install: host ready; next: initialize OpenBao once (README.md, «Vault»)"

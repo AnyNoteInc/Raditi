@@ -71,7 +71,7 @@ put() { # <name> <value>
     echo "$1=$2" >>"$app/.env"
   fi
 }
-grep -E '^[A-Z_]+_IMAGE=' "$images" | while IFS='=' read -r name value; do put "$name" "$value"; done
+grep -E '^([A-Z_]+_IMAGE|PREVIEW_SITE_IMAGES)=' "$images" | while IFS='=' read -r name value; do put "$name" "$value"; done
 put APP_REVISION "$revision"
 say "revision $revision"
 
@@ -112,8 +112,8 @@ echo "$tag" >"$app/.tag"
 say "running"
 
 # 8. Images of the platform registry no longer named by .env or by the last record of the log
-keep=$( (grep -E '^[A-Z_]+_IMAGE=' "$app/.env"; tail -n 40 "$log" | grep -E '^[A-Z_]+_IMAGE=') |
-  sed 's/^[A-Z_]*=//' | sed 's/.*@//' | sort -u)
+# Every digest .env names (PREVIEW_SITE_IMAGES names eight) and the recent records of the log do
+keep=$( (grep -E '^[A-Z_]+=' "$app/.env"; tail -n 60 "$log") | grep -ohE 'sha256:[0-9a-f]{64}' | sort -u)
 docker image ls --digests --format '{{.Repository}} {{.Digest}} {{.ID}}' |
   grep '^ghcr.io/' | while read -r _ digest id; do
     echo "$keep" | grep -qx "$digest" || docker image rm "$id" >/dev/null 2>&1 || true

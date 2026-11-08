@@ -31,6 +31,12 @@ x-internal-hosts: &internal-hosts
 x-gitea: &gitea-url
   GITEA_URL: https://git.raditi.internal:3443
 
+# Previews of chats on this machine (SINGLE_SERVER=on, owner's answer of 08.11.2026): one address
+# for web, core, mcp and the gateway; the wildcard of PREVIEW_BASE_DOMAIN comes by DNS-01 (reg.ru)
+x-preview-address: &preview-address
+  PREVIEW_BASE_DOMAIN: ${PREVIEW_BASE_DOMAIN:?Set PREVIEW_BASE_DOMAIN}
+  PREVIEW_SCHEME: https
+
 x-s3: &s3
   S3_ENDPOINT: https://s3.raditi.internal:8333
   S3_REGION: ru-msk
@@ -51,20 +57,41 @@ services:
       DASHBOARD_HOST: ${DASHBOARD_HOST:?Set DASHBOARD_HOST}
       PREVIEW_APEX_HOST: ${PREVIEW_APEX_HOST:-}
       BROWSER_STREAM_HOST: ${APP_DOMAIN}
+      # The wildcard of previews (traefik/dynamic/preview.yml): DNS-01 through the reg.ru API
+      PREVIEW_BASE_DOMAIN: ${PREVIEW_BASE_DOMAIN:?Set PREVIEW_BASE_DOMAIN}
+      REGRU_USERNAME_FILE: /run/raditi/regru-username
+      REGRU_PASSWORD_FILE: /run/raditi/regru-password
     volumes:
       - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/traefik' }
     networks: [stream-edge]
 
   web:
     environment:
-      <<: [*s3, *gitea-url]
+      <<: [*s3, *gitea-url, *preview-address]
       # The panel of the cloud browser: Traefik routes this path of the apex to the stream gateway
       BROWSER_STREAM_PUBLIC_URL: wss://${APP_DOMAIN}/v1/browser/stream
     extra_hosts: *internal-hosts
 
   core:
+    # Previews in this machine's Docker under runsc (PREVIEW_EXECUTOR=local): the socket's group
+    group_add: ['${DOCKER_GID:?Set DOCKER_GID, the group of /var/run/docker.sock}']
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      <<: [*s3, *gitea-url]
+      <<: [*s3, *gitea-url, *preview-address]
+      SINGLE_SERVER: 'on'
+      PREVIEW_EXECUTOR: local
+      PREVIEW_RUNTIME: runsc
+      SANDBOX_DOCKER_SOCKET: /var/run/docker.sock
+      SANDBOX_NETWORK_GUARD_IMAGE: ${SANDBOX_NETWORK_GUARD_IMAGE:?Set the digest-pinned network guard image}
+      PREVIEW_SITE_IMAGES: ${PREVIEW_SITE_IMAGES:?Set PREVIEW_SITE_IMAGES}
+      PREVIEW_FORWARDER_IMAGE: ${PREVIEW_FORWARDER_IMAGE:?Set the digest-pinned preview forwarder image}
+      PREVIEW_BROWSER_IMAGE: ${PREVIEW_BROWSER_IMAGE:?Set the digest-pinned preview browser image}
+      PREVIEW_DB_IMAGE: ${PREVIEW_DB_IMAGE:?Set the digest-pinned preview database image}
+      # A preview publishes its entry on the private address; the gateway and mcp reach it there
+      PREVIEW_UPSTREAM_HOST: 10.10.0.10
+      PREVIEW_GATEWAY_PORT: '8090'
+      PREVIEW_RELAY_GATEWAY_HOST: 10.10.0.10
       GIT_CA_FILE: /run/raditi/vault-ca.pem
       GIT_MIRROR_DIR: /work/mirrors
       # The release API for the deploy jobs: they run in the host network and reach core's fixed
@@ -84,7 +111,7 @@ services:
     # The host-network processes (browser) reach the database on the private address only
     ports: ['10.10.0.10:5432:5432']
     # A port is published only through a network with a gateway; the others are internal
-    networks: [mcp-data, preview-data, server-pub]
+    networks: [preview-data, server-pub]
 
   llm:
     environment:
@@ -178,15 +205,20 @@ services:
     volumes:
       - s3-data:/v/s3
 
+  # Host network: the agent's browser on a preview drives Chromium on the host's loopback
+  # (MCP_BROWSER_PROFILE=local); its port 8082 is closed from outside by raditi-host.nft.
   mcp:
     <<: *hardened
     image: ${MCP_IMAGE:?Set the digest-pinned mcp image}
     init: true
     user: '10005:10005'
+    network_mode: host
     command: ['--env-file=/run/raditi/app.env', 'dist/main.js']
     depends_on:
       postgres: { condition: service_healthy }
+      s3: { condition: service_healthy }
     environment:
+      <<: [*s3, *preview-address]
       NODE_ENV: production
       APP_ENV: production
       VAULT_ADDR: https://vault.raditi.internal:8200
@@ -195,9 +227,12 @@ services:
       # The host of the Host sandbox-gw sends upstream (SANDBOX_MCP_UPSTREAM of the runner), no port
       MCP_ALLOWED_HOSTS: 10.10.0.10
       BROWSER_WORKER_URL: http://10.10.0.10:8086
+      SINGLE_SERVER: 'on'
+      MCP_CONTENT_PROFILE: local
+      MCP_BROWSER_PROFILE: local
+      S3_BUCKET_ARTIFACTS: raditi-artifacts
+      PREVIEW_UPSTREAM_HOST: 10.10.0.10
       HOME: /tmp
-    extra_hosts: *internal-hosts
-    ports: ['10.10.0.10:8082:8082']
     volumes:
       - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/mcp' }
     tmpfs: ['/tmp:size=64m,uid=10005,gid=10005,mode=0700']
@@ -216,7 +251,6 @@ services:
     cpus: 1
     mem_limit: 1g
     pids_limit: 512
-    networks: [mcp-data, mcp-egress]
 
   # The cloud browser of chats (apps/browser): Chromium of each session in its own container under
   # runsc. Host network: the control ports of Chromium are published on the host's loopback, and
@@ -270,9 +304,9 @@ services:
     mem_limit: 2g
     pids_limit: 1024
 
-  # The stream gateway of the cloud browser (apps/preview, its second listener on 8091). Previews
-  # themselves are not served yet: no wildcard certificate (owner, 08.11.2026: apex only) and no
-  # preview executor in production (M10). The gateway still needs its base domain to start.
+  # The gateway of previews (8090, the wildcard route of traefik/dynamic/preview.yml) and the stream
+  # gateway of the cloud browser (8091). 8090 is published on the private address for the relay
+  # of the agent's browser, which comes from the gateway of preview-out (PREVIEW_BROWSER_RELAYS).
   preview:
     <<: *hardened
     image: ${PREVIEW_GATEWAY_IMAGE:?Set the digest-pinned preview gateway image}
@@ -284,13 +318,12 @@ services:
     environment:
       NODE_ENV: production
       APP_ENV: production
+      <<: [*preview-address, *gitea-url]
       APP_URL: https://${APP_DOMAIN}
-      PREVIEW_BASE_DOMAIN: ${PREVIEW_BASE_DOMAIN:?Set PREVIEW_BASE_DOMAIN}
-      PREVIEW_SCHEME: https
       PREVIEW_GATEWAY_PORT: '8090'
+      PREVIEW_BROWSER_RELAYS: 172.29.90.1/32
       BROWSER_WORKER_URL: http://10.10.0.10:8086
       BROWSER_STREAM_PORT: '8091'
-      <<: *gitea-url
       HOME: /tmp
     volumes:
       - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/preview' }
@@ -310,6 +343,7 @@ services:
     cpus: 1
     mem_limit: 512m
     pids_limit: 256
+    ports: ['10.10.0.10:8090:8090']
     networks: [stream-edge, preview-data, preview-out]
 
   # Gitea of the platform (spec §10): site repositories, git of turns, platform/ci and Actions.
@@ -451,13 +485,15 @@ networks:
   # The gateway of the ports published on the private address (S3, PostgreSQL)
   server-pub:
     driver_opts: { com.docker.network.bridge.name: '${BRIDGE_PREFIX:-rd}-pub' }
-  mcp-data: { internal: true }
-  mcp-egress:
-    driver_opts: { com.docker.network.bridge.name: '${BRIDGE_PREFIX:-rd}-mcp' }
   stream-edge: { internal: true } # Traefik ↔ the stream gateway
   preview-data: { internal: true }
+  # Pinned: a connection to 10.10.0.10:8090 arrives as its gateway (PREVIEW_BROWSER_RELAYS)
   preview-out:
     driver_opts: { com.docker.network.bridge.name: '${BRIDGE_PREFIX:-rd}-preview' }
+    ipam:
+      config:
+        - subnet: 172.29.90.0/24
+          gateway: 172.29.90.1
 
 volumes:
   s3-data: { external: true, name: '${VOLUME_PREFIX:-raditi-app}-s3' }
