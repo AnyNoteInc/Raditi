@@ -76,7 +76,8 @@ test('every policy grants exactly its scoped privileges and only on its own moun
       'turns/undelete/*': ['deny'],
       'turns/destroy/*': ['deny'],
     },
-    'llm-subscriptions': { 'subs/data/*': ['read'] },
+    // The account keys, never the key of the web search beside them.
+    'llm-subscriptions': { 'subs/data/*': ['read'], 'subs/data/search/*': ['deny'] },
     'subscriptions-writer': {
       'subs/data/*': ['create', 'update'],
       'subs/metadata/*': ['read'],
@@ -93,6 +94,8 @@ test('every policy grants exactly its scoped privileges and only on its own moun
       'kv/metadata/content-masks/*': ['delete'],
       'transit/datakey/plaintext/ws-*': ['update'],
       'transit/decrypt/ws-*': ['update'],
+      // The key of the agent's web search, beside the keys of the model (spec §20).
+      'subs/data/search/parallel': ['read'],
     },
     'core-transit': {
       'transit/datakey/plaintext/ws-*': ['update'],
@@ -133,7 +136,7 @@ test('every policy grants exactly its scoped privileges and only on its own moun
     'llm-subscriptions': ['subs'],
     'subscriptions-writer': ['subs'],
     'subscriptions-admin': ['subs'],
-    'mcp-content': ['kv', 'transit'],
+    'mcp-content': ['kv', 'transit', 'subs'],
     'core-transit': ['transit'],
     'sites-writer': ['kv'],
     'workspace-provisioner': ['transit'],

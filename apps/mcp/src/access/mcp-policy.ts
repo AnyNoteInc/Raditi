@@ -24,6 +24,7 @@ import {
   restoreArgumentsSchema,
   wpRestArgumentsSchema,
 } from '../content/content-arguments.ts'
+import { webSearchArgumentsSchema } from '../search/search-arguments.ts'
 import type { McpTurnAccess } from './mcp-access.ts'
 
 export const MCP_SECURITY = Symbol('MCP_SECURITY')
@@ -83,6 +84,7 @@ const webCall = z
     (request) =>
       browserToolArgumentSchemas[request.name].safeParse(request.arguments ?? {}).success,
   )
+const searchCall = call('search_web', webSearchArgumentsSchema)
 const envelope = z.strictObject({
   jsonrpc: z.literal('2.0'),
   id: rpcId.optional(),
@@ -123,6 +125,11 @@ export interface McpSecurity {
    * production too.
    */
   webTools?: boolean
+  /**
+   * `search_web` for every turn (spec §20, «Веб-поиск агента — 08.11.2026»): a product path,
+   * like the worker's. The guard drops it while the key of the search is not in Vault.
+   */
+  searchTools?: boolean
 }
 
 /** The security of the role's MCP endpoint, as the profiles of its configuration make it. */
@@ -134,6 +141,7 @@ export function mcpSecurityOf(config: McpConfig): McpSecurity {
     ...(content ? { contentTools: true, siteContent } : {}),
     ...(browser ? { browserTools: true } : {}),
     ...(worker ? { webTools: true } : {}),
+    searchTools: true,
   }
 }
 
@@ -143,9 +151,10 @@ export function mcpSecurityOf(config: McpConfig): McpSecurity {
  * no build has said yet: the CLI asks for its tools once, when its turn starts, and the first
  * turn of a dialog starts while its preview is still being built. Each call checks the kinds of
  * the preview as built then (`DB_OPERATION_NOT_ALLOWED`). `web` — the cloud browser of a task
- * on the site itself (docs/plan/57-browser-tasks.md, Б20); `browser` is the preview's.
+ * on the site itself (docs/plan/57-browser-tasks.md, Б20); `browser` is the preview's. `search` —
+ * the web search of any turn, with a site or without, while its key is in Vault.
  */
-export const mcpToolFamilies = ['content', 'browser', 'schema', 'web'] as const
+export const mcpToolFamilies = ['content', 'browser', 'schema', 'web', 'search'] as const
 export type McpToolFamily = (typeof mcpToolFamilies)[number]
 
 /** A preview that is gone for the dialog, or never was there to work on (Р4, Р16). */
@@ -178,6 +187,7 @@ export function mcpToolFamiliesOf(access: McpTurnAccess, security: McpSecurity):
     families.push('schema')
   if (security.browserTools && open) families.push('browser')
   if (security.webTools && requirements.browser) families.push('web')
+  if (security.searchTools) families.push('search')
   return families
 }
 
@@ -234,7 +244,8 @@ export function mcpBodyAllowed(body: unknown, families: readonly McpToolFamily[]
       (families.includes('content') && contentCall.safeParse(request.params).success) ||
       (families.includes('schema') && schemaCall.safeParse(request.params).success) ||
       (families.includes('browser') && browserCall.safeParse(request.params).success) ||
-      (families.includes('web') && webCall.safeParse(request.params).success)
+      (families.includes('web') && webCall.safeParse(request.params).success) ||
+      (families.includes('search') && searchCall.safeParse(request.params).success)
     )
   return true
 }

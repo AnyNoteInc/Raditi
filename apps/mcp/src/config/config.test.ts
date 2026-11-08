@@ -368,3 +368,42 @@ describe('loadMcpConfig — production', () => {
     )
   })
 })
+
+describe('the web search of the mcp role', () => {
+  const pilot = { timeoutMs: 10_000, limits: { turn: 3, serviceMonth: 5000 } }
+
+  it('has the pilot limits by default and in .env.example, in production too, and no key', () => {
+    expect(loadMcpConfig(devEnv).webSearch).toEqual(pilot)
+    expect(loadMcpConfig(exampleEnv).webSearch).toEqual(pilot)
+    expect(loadMcpConfig(prodEnv()).webSearch).toEqual(pilot)
+    // The key lives in Vault where the keys of the model are: PARALLEL_API_KEY is the input of the
+    // operator command alone, and the role reads nothing of it.
+    const withKey = loadMcpConfig({
+      ...devEnv,
+      PARALLEL_API_KEY: 'synthetic-parallel-key-0123456789',
+    })
+    expect(JSON.stringify(withKey)).not.toContain('synthetic-parallel-key')
+    expect(Object.keys(exampleEnv)).not.toContain('WEB_SEARCH_WORKSPACE_MONTH_LIMIT')
+  })
+
+  it('takes its limits and timeout from the environment', () => {
+    expect(
+      loadMcpConfig({
+        ...devEnv,
+        WEB_SEARCH_TIMEOUT_SECONDS: '5',
+        WEB_SEARCH_TURN_LIMIT: '0',
+        WEB_SEARCH_SERVICE_MONTH_LIMIT: '100',
+      }).webSearch,
+    ).toEqual({ timeoutMs: 5000, limits: { turn: 0, serviceMonth: 100 } })
+  })
+
+  it('refuses a malformed limit or timeout', () => {
+    const problems = problemsOf({
+      ...devEnv,
+      WEB_SEARCH_TURN_LIMIT: '-1',
+      WEB_SEARCH_TIMEOUT_SECONDS: '60',
+    }).join('\n')
+    expect(problems).toMatch(/WEB_SEARCH_TURN_LIMIT/)
+    expect(problems).toMatch(/WEB_SEARCH_TIMEOUT_SECONDS/)
+  })
+})

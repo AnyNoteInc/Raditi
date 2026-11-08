@@ -180,6 +180,7 @@ model Workspace {
   giftSiteClaims  GiftSiteClaim[]
   attachments     Attachment[]
   browserSessions BrowserSession[]
+  webSearchCalls  WebSearchCall[]
 
   @@index([createdById])
   @@map("workspaces")
@@ -2665,4 +2666,31 @@ model BrowserCheckpoint {
   @@unique([taskId, kind, objectId])
   @@index([sessionId])
   @@map("browser_checkpoints")
+}
+
+/// One call of the agent's web search (`raditi_search_web`, spec §20, «Веб-поиск агента —
+/// 08.11.2026»): a row is written, under one lock, before the request leaves for the search
+/// service, so the limits of a turn and of the whole service hold for parallel calls; the calls
+/// of a workspace are counted, not limited (its credits are). Neither the query nor what came
+/// back is kept: only who asked, when, how it ended and how long.
+model WebSearchCall {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  workspaceId String    @map("workspace_id") @db.Uuid
+  /// The turn of the call, as its key names it; no foreign keys: the counts outlive the task.
+  taskId      String    @map("task_id") @db.Uuid
+  sessionId   String    @map("session_id") @db.VarChar(64)
+  turnNo      Int       @map("turn_no")
+  firstEpoch  Int       @map("first_epoch")
+  /// webSearchStatuses; NULL while the request is out.
+  status      String?   @db.VarChar(24)
+  latencyMs   Int?      @map("latency_ms")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  finishedAt  DateTime? @map("finished_at") @db.Timestamptz(6)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, sessionId, turnNo, firstEpoch])
+  @@index([workspaceId, createdAt])
+  @@index([createdAt])
+  @@map("web_search_calls")
 }

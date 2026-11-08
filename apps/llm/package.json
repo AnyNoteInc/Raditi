@@ -14,6 +14,7 @@
     "test:db": "vitest run .integration.test.",
     "subscriptions:login": "node scripts/subscription-login.mjs",
     "subscriptions:retire": "node scripts/subscription-retire.mjs",
+    "subscriptions:search-key": "node scripts/subscription-search-key.mjs",
     "subscriptions:token": "node scripts/subscription-token.mjs"
   },
   "dependencies": {

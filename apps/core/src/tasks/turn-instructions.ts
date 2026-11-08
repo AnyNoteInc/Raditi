@@ -185,6 +185,17 @@ const OPEN_SKILL_USES: Readonly<Record<string, string>> = {
  */
 type InternetKind = 'site' | 'admin' | 'open'
 
+/**
+ * The platform's web search (`raditi_search_web`, spec §20, «Веб-поиск агента — 08.11.2026»):
+ * core does not know whether the mcp role has its key, so the words name it for when it is there.
+ */
+const WEB_SEARCH =
+  '- When `raditi_search_web` is among your tools, use it to find public sources or to check ' +
+  'current facts; open a known address with the fetch tool (webfetch), and read the documentation ' +
+  'of a library with context7 when you have it. Make the search phrase of public words only: never ' +
+  'the chat history, a secret, personal data or what of the site is not public. When your answer ' +
+  'rests on search results, give the client the addresses of the sources.\n'
+
 function internetSection(internet: InternetFacts, kind: InternetKind = 'site'): string {
   const known = kind === 'open' ? OPEN_SKILL_USES : SKILL_USES
   const uses = internet.skills.flatMap((name) => (known[name] ? [known[name]] : []))
@@ -197,6 +208,7 @@ function internetSection(internet: InternetFacts, kind: InternetKind = 'site'): 
     '- You may look things up on the public internet: the fetch tool, and the commands you run ' +
     "(curl, npm, composer), go through the platform's proxy to any public site over HTTP or " +
     'HTTPS. Addresses of private networks and of the platform are closed.\n' +
+    WEB_SEARCH +
     skills +
     (kind === 'admin'
       ? "- The site's admin pages are reached through the browser tools alone, never by a " +
