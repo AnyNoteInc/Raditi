@@ -66,6 +66,21 @@ rsync -a --delete "$src/server/" "$app/server/"
 # The routes of the single server next to raditi.yml in the directory Traefik watches
 install -m 0644 "$app/server/traefik/server.yml" "$app/traefik/dynamic/server.yml"
 [ -f "$app/.env" ] || { echo "deploy: $app/.env is missing: first deploy is manual (README.md)" >&2; exit 1; }
+# The host's helpers of this release (the secret renderer reads what the compose files need);
+# the units stay as install.sh put them
+for helper in platform-secrets.mjs telegram-proxy.mjs; do
+  if ! cmp -s "$app/server/host/$helper" "/usr/local/lib/raditi/$helper"; then
+    install -m 0755 "$app/server/host/$helper" "/usr/local/lib/raditi/$helper"
+    say "host helper $helper updated"
+    [ "$helper" != telegram-proxy.mjs ] || systemctl restart raditi-telegram-proxy.service
+  fi
+done
+
+# A variable the release added to env.example joins .env with its default (step 1 of «Обычная
+# выкладка»); a value already there is never changed
+grep -E '^[A-Z_]+=' "$app/server/env.example" | while IFS= read -r line; do
+  grep -q "^${line%%=*}=" "$app/.env" || { echo "$line" >>"$app/.env"; say "new setting ${line%%=*}"; }
+done
 
 # 2. Digests of the release and its revision into .env (only these lines change)
 revision=$(sed -n 's/^# Raditi v[0-9.]* (\([0-9a-f]\{40\}\))$/\1/p' "$images")
