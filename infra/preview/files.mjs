@@ -540,7 +540,8 @@ export async function readPlatformFiles(input, limits = filesLimits) {
 export async function adoptPlatformFolder(handle, gid) {
   await handle.chown(0, gid)
   await handle.stat()
-  await handle.chmod(PLATFORM_FOLDER_MODE)
+  // The users of the preview container read this folder; the sticky bit keeps each entry its owner's.
+  await handle.chmod(PLATFORM_FOLDER_MODE) // NOSONAR
 }
 
 /**

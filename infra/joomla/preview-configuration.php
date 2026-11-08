@@ -5,7 +5,9 @@
 // (docs/plan/62-site-stacks.md, Т21, Т33, Т56; docs/plan/62-slices/e3.md, Э3.7). The platform
 // writes this file over every tree it writes; the site's own configuration.php never reaches a
 // preview. The syntax is that of PHP 7.3: the branches j3 and j4 run it too.
-require '/run/raditi/preview/prologue.php';
+// Not require_once: Joomla includes this file inside a method, and the prologue must set its
+// variable in the scope of every include.
+require '/run/raditi/preview/prologue.php'; // NOSONAR
 
 class JConfig
 {

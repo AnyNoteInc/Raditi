@@ -66,7 +66,7 @@ describe('joomlaPreviewRecipe', () => {
     const code = previewConfigurationPhp
       .split('\n')
       .filter((line) => line !== '<?php' && !line.startsWith('//'))
-    expect(code[0]).toBe("require '/run/raditi/preview/prologue.php';")
+    expect(code[0]).toBe("require '/run/raditi/preview/prologue.php'; // NOSONAR")
   })
 
   it('reads in configuration.php every setting the recipe passes', () => {
