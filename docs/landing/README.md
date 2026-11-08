@@ -148,7 +148,7 @@
 - Тарифы, их кредиты и лимиты не хардкодить: брать из сидов `plans` (docs/business.md §6); числа примеров и подарка — из `packages/domain/src/billing/credit-numbers.ts`.
 - Форма «Перейти к оплате» → создание платежа ЮKassa (packages/yookassa).
 - Галочки формы — отдельные, как в `packages/ui` (`widgets/auth/consents-checkboxes.tsx`): соглашение, оферта и политика; согласие на обработку ПДн; согласие на передачу данных ИИ-моделям за рубежом. Каждое согласие — своей записью в `user_consents` с редакцией документа из `packages/domain/src/legal/documents.ts`.
-- Заполнить заглушки: ООО «[НАЗВАНИЕ]», ИНН [ИНН], [ПОЧТА ПОДДЕРЖКИ]. Ссылки `#terms`, `#offer`, `#privacy`, `#consent` и `#cross-border` заменить на `/terms/<slug>` из реестра документов.
+- Заполнить заглушки: ООО «[НАЗВАНИЕ]», ИНН [ИНН]; почта поддержки — elena.67reg@gmail.com. Ссылки `#terms`, `#offer`, `#privacy`, `#consent` и `#cross-border` заменить на `/terms/<slug>` из реестра документов.
 
 ## Что сверить до публикации
 
