@@ -66,6 +66,21 @@ rsync -a --delete "$src/server/" "$app/server/"
 # The routes of the single server next to raditi.yml in the directory Traefik watches
 install -m 0644 "$app/server/traefik/server.yml" "$app/traefik/dynamic/server.yml"
 [ -f "$app/.env" ] || { echo "deploy: $app/.env is missing: first deploy is manual (README.md)" >&2; exit 1; }
+# The host's helpers of this release (the secret renderer reads what the compose files need);
+# the units stay as install.sh put them
+for helper in platform-secrets.mjs telegram-proxy.mjs; do
+  if ! cmp -s "$app/server/host/$helper" "/usr/local/lib/raditi/$helper"; then
+    install -m 0755 "$app/server/host/$helper" "/usr/local/lib/raditi/$helper"
+    say "host helper $helper updated"
+    [ "$helper" != telegram-proxy.mjs ] || systemctl restart raditi-telegram-proxy.service
+  fi
+done
+
+# A variable the release added to env.example joins .env with its default (step 1 of «Обычная
+# выкладка»); a value already there is never changed
+grep -E '^[A-Z_]+=' "$app/server/env.example" | while IFS= read -r line; do
+  grep -q "^${line%%=*}=" "$app/.env" || { echo "$line" >>"$app/.env"; say "new setting ${line%%=*}"; }
+done
 
 # 2. Digests of the release and its revision into .env (only these lines change)
 revision=$(sed -n 's/^# Raditi v[0-9.]* (\([0-9a-f]\{40\}\))$/\1/p' "$images")
@@ -93,6 +108,15 @@ rm -f "$token"
 # --profile would replace COMPOSE_PROFILES of .env (llm): the ops jobs join it instead
 profiles="$(sed -n 's/^COMPOSE_PROFILES=//p' "$app/.env" | tail -n 1),ops"
 COMPOSE_PROFILES=$profiles DOCKER_CONFIG=$config compose pull --quiet
+# The images the processes start themselves, never compose: the sandbox and its gateway and guard
+# (runner), the browser session (browser), the preview's sites, forwarder, browser and database
+# (core). Their Docker finds them only on this host: a missing one fails the turn before it starts.
+for name in SANDBOX_IMAGE SANDBOX_GATEWAY_IMAGE SANDBOX_NETWORK_GUARD_IMAGE BROWSER_IMAGE \
+  BROWSER_FORWARDER_IMAGE BROWSER_EGRESS_IMAGE PREVIEW_FORWARDER_IMAGE PREVIEW_BROWSER_IMAGE \
+  PREVIEW_DB_IMAGE PREVIEW_SITE_IMAGES; do
+  sed -n "s/^$name=//p" "$app/.env" | tail -n 1 | tr ',' '\n' | sed 's/^[0-9.]*=//' | grep . |
+    while read -r image; do DOCKER_CONFIG=$config docker pull --quiet "$image" >/dev/null; done
+done
 rm -rf "$config"
 
 "$app/server/preflight.sh"

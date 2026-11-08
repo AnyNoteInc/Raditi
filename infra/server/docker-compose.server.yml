@@ -132,6 +132,9 @@ services:
   s3:
     <<: *hardened
     image: ${SEAWEEDFS_IMAGE:?Set the digest-pinned SeaweedFS image}
+    # weed is no init: without one every health check left a zombie, and 512 of them stopped
+    # the container from starting a process (v1.27.0)
+    init: true
     user: '10007:10007'
     depends_on:
       server-volume-init: { condition: service_completed_successfully }
