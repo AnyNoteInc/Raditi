@@ -66,8 +66,14 @@ jobs:
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_deploy
           chmod 0600 ~/.ssh/id_deploy
           printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          # The secrets as typed may carry a newline, spaces or `-p`: the port keeps its digits only
+          port=${SSH_PORT//[^0-9]/}
+          host=${SSH_HOST//[[:space:]]/}
+          user=${SSH_USERNAME//[[:space:]]/}
+          [ -n "$port" ] && [ -n "$host" ] && [ -n "$user" ] ||
+            { echo "::error::SSH_HOST, SSH_PORT and SSH_USERNAME must be set" >&2; exit 1; }
           printf 'Host server\n  HostName %s\n  Port %s\n  User %s\n  IdentityFile ~/.ssh/id_deploy\n  IdentitiesOnly yes\n  StrictHostKeyChecking yes\n' \
-            "$SSH_HOST" "$SSH_PORT" "$SSH_USERNAME" > ~/.ssh/config
+            "$host" "$port" "$user" > ~/.ssh/config
       - name: Copy the release to the server
         env:
           TAG: ${{ inputs.tag }}
