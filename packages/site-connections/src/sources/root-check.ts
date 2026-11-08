@@ -157,8 +157,9 @@ export async function readBytes(
   try {
     await browser.read(
       path,
-      async (chunk) => {
+      (chunk) => {
         chunks.push(chunk)
+        return Promise.resolve()
       },
       maxBytes,
     )

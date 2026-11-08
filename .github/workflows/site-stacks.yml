@@ -115,7 +115,7 @@ jobs:
       - name: Docker Engine of the sandbox VM
         run: |
           key=$(mktemp)
-          curl -fsSL --retry 3 https://download.docker.com/linux/ubuntu/gpg -o "$key"
+          curl -fsSL --proto '=https' --tlsv1.2 --retry 3 https://download.docker.com/linux/ubuntu/gpg -o "$key"
           fingerprint=$(gpg --show-keys --with-colons "$key" | awk -F: '$1 == "fpr" { print $10; exit }')
           if [ "$fingerprint" != 9DC858229FC7DD38854AE2D88D81803C0EBFCD88 ]; then
             echo "Unexpected fingerprint of the key of Docker's repository: $fingerprint" >&2
@@ -208,7 +208,7 @@ jobs:
       - name: Docker Engine of the sandbox VM
         run: |
           key=$(mktemp)
-          curl -fsSL --retry 3 https://download.docker.com/linux/ubuntu/gpg -o "$key"
+          curl -fsSL --proto '=https' --tlsv1.2 --retry 3 https://download.docker.com/linux/ubuntu/gpg -o "$key"
           fingerprint=$(gpg --show-keys --with-colons "$key" | awk -F: '$1 == "fpr" { print $10; exit }')
           if [ "$fingerprint" != 9DC858229FC7DD38854AE2D88D81803C0EBFCD88 ]; then
             echo "Unexpected fingerprint of the key of Docker's repository: $fingerprint" >&2
