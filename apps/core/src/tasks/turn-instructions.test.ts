@@ -318,7 +318,12 @@ describe('browserTaskInstructions (docs/plan/57-browser-tasks.md, Б20–Б24)',
   // did when the rules of the browser were split for the chats (docs/plan/61, §3.11, §5.7). The
   // text of a task with a repository differs by one word, which it dictates to the client (К26).
   // The line of the web search came on 08.11.2026 (spec §20, «Веб-поиск агента»); the rest stays.
-  const withoutSearch = (text: string) => text.replace(/^- When `raditi_search_web`.*\n/m, '')
+  // The two lines on `database.operations` still null came with the site stacks
+  // (docs/plan/62-site-stacks.md, Т37).
+  const withoutSearch = (text: string) =>
+    text
+      .replace(/^- When `raditi_search_web`.*\n/m, '')
+      .replace(/^ {2}While it is null the preview's first build .*\n.*cannot be done\.\n/m, '')
   const beforeTheWord = (text: string) =>
     withoutSearch(text).replace('in the chat that installed it', 'in the dialog that installed it')
   it('keeps the words of a task in the browser and of a task with a repository byte for byte', () => {
