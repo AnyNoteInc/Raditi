@@ -18,7 +18,8 @@ images="$src/images.env"
 exec 9>/run/raditi-deploy.lock
 flock -n 9 || { echo "deploy: another deploy is running" >&2; exit 1; }
 say() { echo "deploy $tag: $*"; }
-compose() { docker compose --project-directory "$app" "$@"; }
+# From the app directory: COMPOSE_FILE in .env names its files relative to the working directory
+compose() { (cd "$app" && docker compose "$@"); }
 
 # 0. The record for rollback: what runs now, before any file or digest changes
 [ -f "$log" ] || install -m 0640 -g docker /dev/null "$log"
