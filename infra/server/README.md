@@ -12,14 +12,14 @@
 | Группы безопасности облака | `raditi-host.nft`: на хост снаружи — только SSH 2222; 80 и 443 — опубликованные порты Traefik |
 | Узел выхода `egress-1` | не нужен: `llm` ходит к `api.z.ai` прямым путём (ответ владельца на П2) |
 
-Чего пока нет: Gitea и раннера выкладки сайтов — без них не работают чаты с проектом (git хода, `/release`); предпросмотров — нет wildcard-сертификата `*.raditi-preview.ru` (владелец: «сертификаты пока только на корень») и исполнителя предпросмотров в production (M10). Работают кабинет, вход и регистрация, биллинг (без магазина ЮKassa), письма, заявки, чаты без проекта с агентом и облачным браузером.
+Чего пока нет: предпросмотров — нужен wildcard `*.raditi-preview.ru` (DNS-01 через API reg.ru) и исполнитель предпросмотров в production (M10). Работают кабинет, вход и регистрация, биллинг (без магазина ЮKassa), письма, чаты с проектом и без, `/release` и облачный браузер.
 
 ## Что где
 
 | Файл | Что это |
 | --- | --- |
 | `docker-compose.server.yml` | Наложение: S3, `mcp`, `browser`, шлюз трансляции (`preview`), раннер, watchdog, `llm` без узла выхода, маршруты сервера в Traefik |
-| `traefik/server.yml` | Панель Traefik `traefik.raditi.ru` с basic auth, корень `raditi-preview.ru` → кабинет, поток браузера `wss://raditi.ru/v1/browser/stream` → шлюз трансляции |
+| `traefik/server.yml` | `deploy.sh` копирует его в `traefik/dynamic/` рядом с `raditi.yml`. Панель Traefik `traefik.raditi.ru` с basic auth, корень `raditi-preview.ru` → кабинет, поток браузера `wss://raditi.ru/v1/browser/stream` → шлюз трансляции |
 | `env.example` | Образец `/opt/raditi/app/.env`: только несекретное; `*_IMAGE` и `APP_REVISION` пишет `deploy.sh` |
 | `preflight.sh` | Проверки хоста перед стартом (часть `infra/app/preflight.sh`, которая верна для одной машины, плюс адрес, firewall, OpenBao, gVisor) |
 | `deploy.sh` | Выкладка тега: запись для отката, файлы, digest, pull, preflight, дамп, миграции, сиды, `up` |
@@ -27,6 +27,8 @@
 | `host/vault-setup.sh` | AppRole `web`, `core`, `llm`, `mcp` и `renderer` |
 | `host/platform-secrets.mjs` | `seed` — случайные секреты платформы в Vault, `set` — ключ владельца со stdin, `render` — `/run/raditi/<сервис>/` |
 | `host/internal-ca.sh` | Внутренний CA и сертификаты `*.raditi.internal` |
+| `gitea-setup.mjs` | Gitea: `bootstrap` — аккаунты, организации, команды, токены в Vault, токен регистрации раннера; `ci <каталог>` — `platform/ci` и обязательные scoped workflow |
+| `runner.yaml.in` | Конфиг раннера выкладки; `deploy.sh` подставляет образ `core` выпуска в метку `deploy` |
 
 ## Хост
 
@@ -51,7 +53,22 @@ systemctl start raditi-secrets
 - **Порядок загрузки:** `raditi-net` (адрес) и `raditi-host-firewall` → `openbao` → `openbao-unseal` → `raditi-secrets` → `chrony-wait` (`time-sync.target`) → `docker`. `/run` — tmpfs, секреты рендерятся заново при каждой загрузке, а каждый сервис получает новый SecretID AppRole (прежние уничтожаются).
 - **Ключи владельца** уходят в Vault только со stdin: `printf %s "<ключ>" | ssh … /usr/local/lib/raditi/platform-secrets.mjs set app/core SENDSAY_API_KEY`, затем `platform-secrets.mjs render core` и `docker compose up -d --force-recreate --no-deps core`. Рендер выпускает названным сервисам с AppRole новый SecretID и уничтожает прежние, поэтому рендерят только те сервисы, которые сразу пересоздают; `systemctl restart raditi-secrets` рендерит все — это делается только при загрузке. Поля — `app/web` `SMARTCAPTCHA_CLIENT_KEY`, `SMARTCAPTCHA_SERVER_KEY`; `app/core` `SENDSAY_API_KEY`, `LEADS_TELEGRAM_BOT_TOKEN`, `GITEA_TOKEN`.
 - **Пароль панели Traefik** — `kv/platform/app/traefik` (`dashboard_user`, `dashboard_password`); прочитать на сервере: `curl -s -H "X-Vault-Token: $(cat /etc/raditi/openbao/root-token)" http://127.0.0.1:8200/v1/kv/data/platform/app/traefik | jq -r '.data.data.dashboard_password'`.
-- **Токен раннера** выпущен на сервере (`/etc/raditi/runner/runner-token`, 0400) и его не покидает; в `.env` — только `server-1:<sha256>@10.10.0.10`. Раннер работает в сети хоста, поэтому `core` видит его с этого адреса.
+- **Токен раннера** выпущен на сервере (`/etc/raditi/runner/runner-token`, 0400) и его не покидает; в `.env` — только `server-1:<sha256>@172.29.83.1`. Раннер работает в сети хоста, а Docker без userland-proxy подменяет адрес локального соединения с опубликованным портом на шлюз моста `core`: поэтому подсеть `core-egress` закреплена (`172.29.83.0/24`), и хеш привязан к её шлюзу. С того же адреса `core` видит любой контейнер, который пришёл к `10.10.0.10:8083` через hairpin, — допуск держит токен.
+
+## Gitea
+
+Gitea 1.27.3 — `https://git.raditi.internal:3443` (опубликован только на `10.10.0.10`, TLS внутреннего CA): репозитории сайтов, git ходов, `platform/ci` и Actions. Рецепт — тот же, что у стенда `verify:release`; `WORKFLOW_DIRS` выключает workflow репозиториев, работают только scoped workflow `platform/ci` (правило 6).
+
+| Аккаунт | Где | Токен |
+| --- | --- | --- |
+| `raditi-admin` | администратор экземпляра | пароль и токен — `kv/platform/app/gitea` |
+| `raditi-bot` | `sites/bots` (write, все репозитории) | `GITEA_TOKEN` `core` (`kv/platform/app/core`) |
+| `raditi-provisioner` | `sites/creators` (создаёт репозитории) | `GITEA_PROVISIONER_TOKEN` `core` |
+| `raditi-release` | `sites/Owners` — учётная запись выпуска | `kv/platform/gitea-org-owner`, читает только `core` |
+
+Один раз, после первого старта Gitea: `NODE_EXTRA_CA_CERTS=/etc/raditi/ca/ca.pem node server/gitea-setup.mjs bootstrap`, затем `platform-secrets.mjs render core gitea-runner` и пересоздание `core` (новые токены и SecretID). `platform/ci` из `ci/` тега `deploy.sh` обновляет на каждой выкладке (`gitea-setup.mjs ci`): оба файла — обязательные, с шаблоном статуса `platform/ci: check / *`.
+
+Раннер выкладки `server-deploy` (gitea/runner 4.0.0, метка `deploy` на образе `core` выпуска) работает в сети хоста; его задания — тоже, без сокета Docker и привилегий, с томом CA `raditi-ci-ca`. Они ходят к Vault, S3 и Gitea по `/etc/hosts` хоста (`10.10.0.10`) и к API выпуска `core` на `172.29.83.10:8085` — закреплённый адрес `core` на мосту `core-egress`. Хостинг клиента они видят с публичного адреса сервера. Раннера `check` нет: `check.yml` у сайтов ждёт его в очереди (spec §10, раннер `check` — следующий шаг).
 
 ## Выкладка
 

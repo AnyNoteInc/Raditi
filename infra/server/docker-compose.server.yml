@@ -25,6 +25,11 @@ x-hardened: &hardened
 x-internal-hosts: &internal-hosts
   - vault.raditi.internal:10.10.0.10
   - s3.raditi.internal:10.10.0.10
+  - git.raditi.internal:10.10.0.10
+
+# Our Gitea (git of turns, site repositories, /release): https only, the internal CA
+x-gitea: &gitea-url
+  GITEA_URL: https://git.raditi.internal:3443
 
 x-s3: &s3
   S3_ENDPOINT: https://s3.raditi.internal:8333
@@ -40,29 +45,40 @@ x-secrets: &secrets
 services:
   traefik:
     environment:
-      # server/traefik/server.yml: the dashboard with basic auth and the apex of previews
+      # traefik/dynamic/server.yml (deploy.sh copies it there from server/traefik): the dashboard
+      # with basic auth and the apex of previews. Not a bind mount of its own: Docker cannot make
+      # its mount point inside the read-only bind of traefik/dynamic.
       DASHBOARD_HOST: ${DASHBOARD_HOST:?Set DASHBOARD_HOST}
       PREVIEW_APEX_HOST: ${PREVIEW_APEX_HOST:-}
       BROWSER_STREAM_HOST: ${APP_DOMAIN}
     volumes:
-      - ./server/traefik/server.yml:/etc/traefik/dynamic/server.yml:ro
       - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/traefik' }
     networks: [stream-edge]
 
   web:
     environment:
-      <<: *s3
+      <<: [*s3, *gitea-url]
       # The panel of the cloud browser: Traefik routes this path of the apex to the stream gateway
       BROWSER_STREAM_PUBLIC_URL: wss://${APP_DOMAIN}/v1/browser/stream
     extra_hosts: *internal-hosts
 
   core:
     environment:
-      <<: *s3
+      <<: [*s3, *gitea-url]
+      GIT_CA_FILE: /run/raditi/vault-ca.pem
+      GIT_MIRROR_DIR: /work/mirrors
+      # The release API for the deploy jobs: they run in the host network and reach core's fixed
+      # address on core-egress directly (spec §10, «Выпуск»)
+      RELEASE_API_HOST: 172.29.83.10
+      RELEASE_API_PORT: '8085'
+      RELEASE_API_PUBLIC_URL: http://172.29.83.10:8085
       LLM_CONTROL_URL: http://10.10.0.10:${LLM_GATEWAY_PUBLISH:-8084}
       BROWSER_WORKER_URL: http://10.10.0.10:8086
       SANDBOX_EGRESS_REFUSED_SUBNETS: ${SANDBOX_EGRESS_REFUSED_SUBNETS:?Set SANDBOX_EGRESS_REFUSED_SUBNETS}
     extra_hosts: *internal-hosts
+    networks:
+      core-data: {}
+      core-egress: { ipv4_address: 172.29.83.10 }
 
   postgres:
     # The host-network processes (browser) reach the database on the private address only
@@ -176,8 +192,8 @@ services:
       VAULT_ADDR: https://vault.raditi.internal:8200
       NODE_EXTRA_CA_CERTS: /run/raditi/vault-ca.pem
       MCP_PORT: '8082'
-      # The Host sandbox-gw sends upstream (SANDBOX_MCP_UPSTREAM of the runner)
-      MCP_ALLOWED_HOSTS: 10.10.0.10:8082
+      # The host of the Host sandbox-gw sends upstream (SANDBOX_MCP_UPSTREAM of the runner), no port
+      MCP_ALLOWED_HOSTS: 10.10.0.10
       BROWSER_WORKER_URL: http://10.10.0.10:8086
       HOME: /tmp
     extra_hosts: *internal-hosts
@@ -274,6 +290,7 @@ services:
       PREVIEW_GATEWAY_PORT: '8090'
       BROWSER_WORKER_URL: http://10.10.0.10:8086
       BROWSER_STREAM_PORT: '8091'
+      <<: *gitea-url
       HOME: /tmp
     volumes:
       - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/preview' }
@@ -295,6 +312,78 @@ services:
     pids_limit: 256
     networks: [stream-edge, preview-data, preview-out]
 
+  # Gitea of the platform (spec §10): site repositories, git of turns, platform/ci and Actions.
+  # Repository workflows are off (WORKFLOW_DIRS names a path no repository has): only the scoped
+  # workflows of platform/ci run, deploy.yml on a release tag. gitea-setup.mjs makes the
+  # accounts, the organisations and platform/ci (README.md, «Gitea»).
+  gitea:
+    image: ${GITEA_IMAGE:?Set the digest-pinned Gitea image}
+    restart: unless-stopped
+    user: '1000:1000'
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    environment:
+      GITEA__security__INSTALL_LOCK: 'true'
+      GITEA__database__DB_TYPE: sqlite3
+      GITEA__server__PROTOCOL: https
+      GITEA__server__HTTP_PORT: '3000'
+      GITEA__server__DOMAIN: git.raditi.internal
+      GITEA__server__ROOT_URL: https://git.raditi.internal:3443/
+      GITEA__server__CERT_FILE: /run/raditi/git.pem
+      GITEA__server__KEY_FILE: /run/raditi/git.key
+      GITEA__server__DISABLE_SSH: 'true'
+      GITEA__server__START_SSH_SERVER: 'false'
+      GITEA__service__DISABLE_REGISTRATION: 'true'
+      GITEA__actions__ENABLED: 'true'
+      GITEA__actions__DEFAULT_ACTIONS_URL: self
+      GITEA__actions__WORKFLOW_DIRS: .git/raditi-no-repository-workflows
+      GITEA__webhook__ALLOWED_HOST_LIST: private,loopback
+      GITEA__repository__DEFAULT_BRANCH: main
+      GITEA__log__LEVEL: Warn
+    ports: ['10.10.0.10:3443:3000']
+    volumes:
+      - gitea-data:/var/lib/gitea
+      - gitea-config:/etc/gitea
+      - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/gitea' }
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'wget -q -O /dev/null --no-check-certificate https://127.0.0.1:3000/api/healthz || exit 1',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    cpus: 1
+    mem_limit: 1g
+    pids_limit: 512
+    networks: [server-pub]
+
+  # The deploy runner of `sites` (ci/README.md): label `deploy` on the core image of this release,
+  # written by deploy.sh into server/runner/runner.yaml. Host network: its jobs reach Vault, S3 and
+  # Gitea on 10.10.0.10 and the release API on 172.29.83.10; they get no Docker socket.
+  gitea-runner:
+    image: ${GITEA_RUNNER_IMAGE:?Set the digest-pinned gitea/runner image}
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      gitea: { condition: service_healthy }
+    environment:
+      GITEA_INSTANCE_URL: https://git.raditi.internal:3443
+      GITEA_RUNNER_REGISTRATION_TOKEN_FILE: /run/raditi/registration-token
+      GITEA_RUNNER_NAME: server-deploy
+      GITEA_RUNNER_LABELS: deploy:docker://${CORE_IMAGE}
+      CONFIG_FILE: /config/runner.yaml
+      SSL_CERT_FILE: /run/raditi/ca.pem
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - gitea-runner-data:/data
+      - ./server/runner:/config:ro
+      - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/gitea-runner' }
+    logging: *logging
+
   # The sandbox VM's two processes (infra/sandbox/docker-compose.yml), here on the same Docker.
   watchdog:
     image: ${SANDBOX_WATCHDOG_IMAGE:?Set the digest-pinned watchdog image}
@@ -311,7 +400,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     logging: *logging
 
-  # Host network: core sees the runner from 10.10.0.10, the address its token hash is bound to.
+  # Host network. Without the userland proxy Docker masquerades a local connection to a published
+  # port as the gateway of the target's bridge: core sees the runner from 172.29.83.1, the gateway
+  # of core-egress pinned below, and its token hash is bound to that address.
   # Only /etc/raditi/runner (the token) and the public CA are mounted, never /etc/raditi itself.
   runner:
     image: ${RUNNER_IMAGE:?Set the digest-pinned runner image}
@@ -350,6 +441,12 @@ services:
     logging: *logging
 
 networks:
+  # Pinned: the runner's token hash is bound to its gateway (RUNNER_TOKENS=…@172.29.83.1)
+  core-egress:
+    ipam:
+      config:
+        - subnet: 172.29.83.0/24
+          gateway: 172.29.83.1
   s3-net: { internal: true }
   # The gateway of the ports published on the private address (S3, PostgreSQL)
   server-pub:
@@ -364,3 +461,7 @@ networks:
 
 volumes:
   s3-data: { external: true, name: '${VOLUME_PREFIX:-raditi-app}-s3' }
+  gitea-data: { external: true, name: '${VOLUME_PREFIX:-raditi-app}-gitea' }
+  # app.ini with the keys Gitea generates once (SECRET_KEY encrypts the secrets of Actions)
+  gitea-config: { external: true, name: '${VOLUME_PREFIX:-raditi-app}-gitea-config' }
+  gitea-runner-data: { external: true, name: '${VOLUME_PREFIX:-raditi-app}-gitea-runner' }
