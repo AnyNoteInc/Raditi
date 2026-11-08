@@ -56,6 +56,7 @@ import {
 } from './verify-agent-content-role.mjs'
 import {
   CONTENT_TURN_CALLS,
+  fixtureWord,
   liveContentPages,
   liveContentTurns,
 } from './verify-agent-content-live.mjs'
@@ -184,7 +185,7 @@ async function prepareSite({ wp, compose, url }, pageNames) {
   secretMarkers.add(applicationPassword)
   const pages = {}
   for (const driver of pageNames) {
-    const original = `raditi-agent-original-${randomUUID()}`
+    const original = fixtureWord('raditi-agent-original')
     // A third party's contact on the page: the model must only ever see its opaque marker.
     const contact = `contact-${driver}-${randomBytes(4).toString('hex')}@example.test`
     const content = `<p>${original}. Напишите нам: ${contact}</p>`

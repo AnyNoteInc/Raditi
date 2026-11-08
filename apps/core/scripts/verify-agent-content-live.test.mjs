@@ -6,6 +6,7 @@ import { test } from 'node:test'
 import {
   CONTENT_ATTEMPTS,
   CONTENT_TURN_CALLS,
+  fixtureWord,
   liveContentPages,
   publishedMarkerProblem,
 } from './verify-agent-content-live.mjs'
@@ -75,4 +76,10 @@ test('both live flows stop a turn at a refusal of a guard, and search before the
     await source('verify-llm-gateway.mjs'),
   ])
     assert.doesNotMatch(text, /flatMap\(\(worker\) => worker\.logs\)|texts: logs\.flat\(\)/)
+})
+
+test('the words of a page the stand edits carry no digit the role could read as a phone', () => {
+  const words = new Set(Array.from({ length: 200 }, () => fixtureWord('raditi-agent-original')))
+  assert.equal(words.size, 200)
+  for (const word of words) assert.match(word, /^raditi-agent-original-[a-p]{32}$/)
 })
