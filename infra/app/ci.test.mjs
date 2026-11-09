@@ -1733,7 +1733,16 @@ test('release.yml publishes the images of the release semantic-release made', ()
     order,
     order.toSorted((left, right) => left - right),
   )
-  assert.match(source, /^ {4}if: needs\.release\.outputs\.tag != ''$/m)
+  // gates is skipped on a tree the pull request verified, and a skipped job skips the whole chain
+  // after it unless the condition says !cancelled(): v1.28.2 shipped without images that way.
+  assert.match(
+    source,
+    /^ {2}images:\n {4}needs: release\n {4}if: >-\n {6}!cancelled\(\) && needs\.release\.result == 'success' && needs\.release\.outputs\.tag != ''$/m,
+  )
+  assert.match(
+    source,
+    /^ {2}deploy:\n {4}needs: \[release, images\]\n {4}if: >-\n {6}!cancelled\(\) && needs\.images\.result == 'success' && needs\.release\.outputs\.tag != ''$/m,
+  )
   assert.match(source, /^ {6}tag: \$\{\{ needs\.release\.outputs\.tag \}\}$/m)
   assert.match(source, /^ {6}packages: write$/m)
 })
