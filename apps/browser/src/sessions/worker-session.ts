@@ -290,6 +290,8 @@ export class WorkerSession {
   /** Writes of hand-overs and checkpoints, in the order they happened. */
   #writes: Promise<void> = Promise.resolve()
   #readyTimer: ReturnType<typeof setTimeout> | undefined
+  /** Docker starting the containers: an end waits for it, so its stop finds all of them. */
+  #containers: Promise<unknown> | null = null
   #closing: Promise<BrowserSessionStatus> | null = null
   readonly #onEnded: (session: WorkerSession) => void
 
@@ -352,7 +354,7 @@ export class WorkerSession {
     const { runtime, browsers, store } = this.#context
     const spec = this.#spec
     try {
-      const { endpoint } = await runtime.start({
+      const containers = runtime.start({
         sessionId: spec.id,
         taskId: spec.taskId,
         // What the containers are labelled by: the chat (`leaseScopeOf`).
@@ -362,6 +364,8 @@ export class WorkerSession {
         openWeb: spec.openWeb,
         deadline: spec.deadline,
       })
+      this.#containers = containers
+      const { endpoint } = await containers
       // A close that came meanwhile stopped the containers before they were all there.
       if (!this.live) {
         await runtime.stop(spec.id).catch(() => undefined)
@@ -434,6 +438,8 @@ export class WorkerSession {
       await browser
         ?.close()
         .catch((error: unknown) => this.#context.warn('browser_close_failed', error))
+      // Containers docker is still creating would outlive a stop that does not wait for them.
+      await this.#containers?.catch(() => undefined)
       await this.#context.runtime
         .stop(this.id)
         .catch((error: unknown) => this.#context.warn('browser_runtime_stop_failed', error))

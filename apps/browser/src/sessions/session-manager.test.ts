@@ -118,6 +118,133 @@ describe('SessionManager.ensure', () => {
     expect(manager.session(row.id)).toBeNull()
   })
 
+  it('starts one browser for ensures of one session that come together, and answers each', async () => {
+    const { runtime, browsers, store, manager } = setup()
+    const row = store.open()
+    const request = { sessionId: row.id, taskId: row.taskId }
+    // core's job retried while a turn reclaims the same session: same tick, three callers.
+    const states = await Promise.all([
+      manager.ensure({ ...request, takeControl: true }),
+      manager.ensure({ ...request, takeControl: false }),
+      manager.ensure({ ...request, sessionId: row.id.toUpperCase(), takeControl: false }),
+    ])
+    expect(runtime.started).toHaveLength(1)
+    expect(browsers.opened).toHaveLength(1)
+    // Each caller waited for the one start: none is answered a browser that is not there yet.
+    expect(states.map((state) => state.status)).toEqual(['ready', 'ready', 'ready'])
+    expect(manager.list().sessions).toEqual([
+      { sessionId: row.id, taskId: row.taskId, status: 'ready' },
+    ])
+    // A caller of another task that comes while it starts is refused, never handed the browser.
+    const next = store.open()
+    const [own, other] = await Promise.all([
+      manager.ensure({
+        sessionId: next.id,
+        taskId: next.taskId,
+        takeControl: true,
+      }),
+      codeOf(
+        manager.ensure({
+          sessionId: next.id,
+          taskId: randomUUID(),
+          takeControl: true,
+        }),
+      ),
+    ])
+    expect(own.status).toBe('ready')
+    expect(other).toBe('CONFLICT')
+    expect(runtime.started).toHaveLength(2)
+  })
+
+  it('gives every caller of a start that fails the same refusal, and leaves nothing behind', async () => {
+    const { runtime, browsers, store, manager } = setup()
+    browsers.failOpen = true
+    const row = store.open()
+    const ensure = () =>
+      codeOf(
+        manager.ensure({
+          sessionId: row.id,
+          taskId: row.taskId,
+          takeControl: true,
+        }),
+      )
+    expect(await Promise.all([ensure(), ensure()])).toEqual([
+      'BROWSER_SESSION_UNAVAILABLE',
+      'BROWSER_SESSION_UNAVAILABLE',
+    ])
+    expect(runtime.started).toHaveLength(1)
+    expect(runtime.held.size).toBe(0)
+    expect(store.sessions.get(row.id)).toMatchObject({ status: 'failed', closeReason: 'crashed' })
+    // The failed row is never started again: the next `web_*` call opens a new session (К11).
+    browsers.failOpen = false
+    expect(await ensure()).toBe('CONFLICT')
+    expect(runtime.started).toHaveLength(1)
+    expect(manager.size).toBe(0)
+  })
+
+  it('closes a session whose containers are starting once they exist, and only then answers', async () => {
+    const { runtime, browsers, store, manager } = setup()
+    let started = () => {}
+    runtime.startGate = new Promise((resolve) => (started = () => resolve(undefined)))
+    const row = store.open()
+    const ensuring = codeOf(
+      manager.ensure({
+        sessionId: row.id,
+        taskId: row.taskId,
+        takeControl: true,
+      }),
+    )
+    await settle()
+    expect(runtime.held.has(row.id)).toBe(true)
+    // Whether docker still held the containers when the close was answered.
+    let heldWhenAnswered: boolean | null = null
+    const closing = manager.close(row.id, 'task_cancelled').then((result) => {
+      heldWhenAnswered = runtime.held.has(row.id)
+      return result
+    })
+    await settle()
+    expect(heldWhenAnswered).toBeNull()
+    started()
+    expect(await closing).toEqual({ sessionId: row.id, status: 'closed' })
+    expect(heldWhenAnswered).toBe(false)
+    expect(await ensuring).toBe('BROWSER_SESSION_UNAVAILABLE')
+    expect(browsers.opened.every((browser) => browser.closed)).toBe(true)
+    expect(runtime.held.size).toBe(0)
+    expect(store.sessions.get(row.id)).toMatchObject({
+      status: 'closed',
+      closeReason: 'task_cancelled',
+    })
+    expect(manager.size).toBe(0)
+  })
+
+  it('starts no container for a session closed while its row is read', async () => {
+    const { runtime, store, manager } = setup()
+    const row = store.open()
+    // The read of the row is the first thing a start waits for.
+    let read = () => {}
+    store.sessionGate = new Promise((resolve) => (read = () => resolve(undefined)))
+    const ensuring = codeOf(
+      manager.ensure({
+        sessionId: row.id,
+        taskId: row.taskId,
+        takeControl: true,
+      }),
+    )
+    await settle()
+    const closing = manager.close(row.id, 'task_cancelled')
+    await settle()
+    store.sessionGate = null
+    read()
+    expect(await closing).toEqual({ sessionId: row.id, status: 'closed' })
+    expect(await ensuring).toBe('CONFLICT')
+    expect(runtime.started).toEqual([])
+    expect(store.sessions.get(row.id)).toMatchObject({
+      status: 'closed',
+      closeReason: 'task_cancelled',
+    })
+    expect(manager.size).toBe(0)
+  })
+
   it('answers every session unavailable while its images are not configured', async () => {
     const store = new FakeStore()
     const manager = new SessionManager({

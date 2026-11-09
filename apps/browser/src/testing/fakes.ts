@@ -78,11 +78,14 @@ export class FakeRuntime implements BrowserSessionRuntime {
   failStart = false
   /** Holds every stop until it settles (docker removing the containers). */
   stopGate: Promise<void> | null = null
+  /** Holds every start once its containers exist, until it settles (docker starting them). */
+  startGate: Promise<void> | null = null
 
   async start(spec: BrowserSessionRuntimeSpec): Promise<{ endpoint: string }> {
     if (this.failStart) throw new Error('docker refused')
     this.started.push(spec)
     this.held.add(spec.sessionId)
+    await this.startGate
     return { endpoint: `ws://127.0.0.1:9/${'s'.repeat(43)}` }
   }
 
@@ -402,7 +405,11 @@ export class FakeStore implements BrowserWorkerStore {
     return row
   }
 
+  /** Holds every read of a session's row until it settles. */
+  sessionGate: Promise<void> | null = null
+
   async session(sessionId: string) {
+    await this.sessionGate
     const row = this.sessions.get(sessionId)
     return row ? { ...row } : null
   }

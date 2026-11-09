@@ -101,7 +101,10 @@ export class SessionManager {
   readonly #deps: SessionManagerDeps
   readonly #context: SessionContext | null
   readonly #sessions = new Map<string, WorkerSession>()
+  /** One start per session id: every `ensure` of it while it starts waits for this one. */
   readonly #starting = new Map<string, Promise<WorkerSession>>()
+  /** Starts a close came for before their session existed: they start no container. */
+  readonly #cancelled = new Set<string>()
   #stopping = false
 
   constructor(deps: SessionManagerDeps) {
@@ -162,21 +165,34 @@ export class SessionManager {
     return browserEnsureResponseSchema.parse(session.state())
   }
 
-  async #held(request: EnsuredSession): Promise<WorkerSession> {
+  /**
+   * The session of `request`, started once whoever asks for it meanwhile. Synchronous up to the
+   * registration of its start: two ensures in one tick never start two browsers of one id, and
+   * every caller of a start that fails hears that failure.
+   */
+  #held(request: EnsuredSession): Promise<WorkerSession> {
     const id = request.sessionId
-    const known = this.#sessions.get(id) ?? (await this.#starting.get(id))
-    if (known) {
-      if (known.taskId !== request.taskId)
-        throw conflict('The browser session belongs to another task')
-      return known
+    let starting = this.#starting.get(id)
+    if (starting === undefined) {
+      const known = this.#sessions.get(id)
+      if (known) return Promise.resolve(this.#owned(known, request))
+      const start = this.#create(request)
+      const forget = () => {
+        if (this.#starting.get(id) !== start) return
+        this.#starting.delete(id)
+        this.#cancelled.delete(id)
+      }
+      start.then(forget, forget)
+      this.#starting.set(id, start)
+      starting = start
     }
-    const starting = this.#create(request)
-    this.#starting.set(id, starting)
-    try {
-      return await starting
-    } finally {
-      this.#starting.delete(id)
-    }
+    return starting.then((session) => this.#owned(session, request))
+  }
+
+  #owned(session: WorkerSession, request: EnsuredSession): WorkerSession {
+    if (session.taskId !== request.taskId)
+      throw conflict('The browser session belongs to another task')
+    return session
   }
 
   async #create(request: EnsuredSession): Promise<WorkerSession> {
@@ -206,6 +222,9 @@ export class SessionManager {
 
     const deadline = Math.min(row.expiresAt.getTime(), now() + settings.maxHours * HOUR_MS)
     if (deadline <= now()) throw conflict('The browser session has expired')
+    const checkpoints = await store.checkpoints(row.taskId)
+    // Closed while its rows were read: nothing of it is started (close() closes the row).
+    if (this.#cancelled.has(request.sessionId)) throw conflict('The browser session is closed')
     const session = new WorkerSession(
       {
         ...OPEN_WEB,
@@ -214,7 +233,7 @@ export class SessionManager {
         platformHosts: settings.platformHosts,
         pageDomain: settings.pageDomain,
         deadline,
-        checkpoints: await store.checkpoints(row.taskId),
+        checkpoints,
       },
       context,
       (ended) => {
@@ -231,8 +250,13 @@ export class SessionManager {
     sessionId: string,
     reason: BrowserCloseReason,
   ): Promise<{ sessionId: string; status: BrowserSessionStatus }> {
-    const held =
-      this.#sessions.get(sessionId) ?? (await this.#starting.get(sessionId)?.catch(() => null))
+    let held = this.#sessions.get(sessionId)
+    const starting = this.#starting.get(sessionId)
+    if (!held && starting) {
+      // Its rows are still read: the start stops before any container and the row closes here.
+      this.#cancelled.add(sessionId)
+      held = (await starting.catch(() => null)) ?? undefined
+    }
     if (held) return { sessionId, status: await held.close(reason) }
     const { store } = this.#deps
     const row = await store.session(sessionId)
