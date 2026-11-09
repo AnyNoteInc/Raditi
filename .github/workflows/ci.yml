@@ -3,19 +3,131 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  # main runs the gates too: its turbo caches are the only ones every pull request can restore
+  # (GitHub shares a branch's caches with no other branch but the default one).
+  push:
+    branches: [main]
   workflow_call:
 
+# github.workflow is the caller's name in a reusable run: the gates of Release and the run of a
+# push to main are two groups, so neither cancels the other.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
+  # Everything but the tests: they run in the job test below, split over four runners.
   gates:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+
+    # Synthetic CI values only: no real client data on GitHub runners (152-FZ). No database here:
+    # prisma.config.ts reads DATABASE_URL, and generate never connects (as in the Dockerfiles).
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql://build@localhost/build
+      BETTER_AUTH_SECRET: ci-secret-not-real-0123456789abcdef
+      BETTER_AUTH_URL: http://localhost:3000
+      APP_URL: http://localhost:3000
+      # Every turbo run writes .turbo/runs/*.json: the cache keeps only the hashes they name.
+      TURBO_RUN_SUMMARY: 'true'
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup toolchain
+        uses: ./.github/actions/setup
+
+      - name: Restore the turbo cache
+        uses: ./.github/actions/turbo-cache
+        with:
+          scope: gates
+
+      # Squash merges put the PR title into main, and semantic-release reads main.
+      - name: Conventional Commits
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          pnpm exec commitlint --from "$BASE_SHA" --to "$HEAD_SHA"
+          printf '%s\n' "$PR_TITLE" | pnpm exec commitlint
+
+      - name: Env vars are declared for turbo
+        run: pnpm check-env
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Architecture
+        run: pnpm check-architecture
+
+      # Sandbox gateway allowlist, watchdog and network guard (the Docker test skips itself);
+      # the app VM compose, edge routes and Dockerfiles (the Docker CLI, no daemon); the egress
+      # proxy on a synthetic CA (openssl).
+      - name: Infrastructure tests
+        run: pnpm test:infra
+
+      # The companion plugin is the only code that writes to a client's WordPress database. Its
+      # behaviour runs in the WordPress content workflow; a syntax error must not wait for that.
+      # The same for the wp-config.php and the mu-plugin every preview runs (plan 53, Р14, Р15),
+      # for the prologue the generated configuration of another stack requires (plan 62, Т21) and
+      # for the preview files of every stack: the step walks infra/*/ (plan 62, Т12). A runner
+      # without PHP uses the PHP of the WordPress image pinned in verify-site.mjs.
+      - name: PHP syntax of infra
+        run: |
+          for file in infra/*/*.php; do
+            if command -v php >/dev/null; then
+              php -l "$file"
+            else
+              docker run --rm --network none --entrypoint php -v "$PWD/infra:/infra:ro" \
+                wordpress:7.1.2-php8.3-apache@sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5 -l "/$file"
+            fi
+          done
+
+      - name: Format
+        run: pnpm format:check
+
+      - name: Build
+        run: pnpm build
+
+      - name: Save the turbo cache
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/turbo-cache
+        with:
+          scope: gates
+          save: 'true'
+
+  # The unit tests of every workspace, in four shards of some five minutes each: the three slowest
+  # workspaces alone, the rest together (infra/app/ci.test.mjs holds that every workspace with a
+  # test script is in exactly one shard). Tests of @repo/db run against the migrated and seeded
+  # CI Postgres (DATABASE_URL below).
+  test:
+    name: test (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: core
+            filter: --filter=core
+          - shard: web
+            filter: --filter=web
+          - shard: billing-db
+            filter: --filter=@repo/billing --filter=@repo/db
+          - shard: rest
+            filter: --filter=!core --filter=!web --filter=!@repo/billing --filter=!@repo/db
 
     services:
       postgres:
@@ -47,40 +159,21 @@ jobs:
       BETTER_AUTH_SECRET: ci-secret-not-real-0123456789abcdef
       BETTER_AUTH_URL: http://localhost:3000
       APP_URL: http://localhost:3000
+      TURBO_RUN_SUMMARY: 'true'
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
           persist-credentials: false
 
       - name: Setup toolchain
         uses: ./.github/actions/setup
 
-      # Squash merges put the PR title into main, and semantic-release reads main.
-      - name: Conventional Commits
-        if: github.event_name == 'pull_request'
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-        run: |
-          pnpm exec commitlint --from "$BASE_SHA" --to "$HEAD_SHA"
-          printf '%s\n' "$PR_TITLE" | pnpm exec commitlint
+      - name: Restore the turbo cache
+        uses: ./.github/actions/turbo-cache
+        with:
+          scope: test-${{ matrix.shard }}
 
-      - name: Env vars are declared for turbo
-        run: pnpm check-env
-
-      - name: Type check
-        run: pnpm typecheck
-
-      - name: Lint
-        run: pnpm lint
-
-      - name: Architecture
-        run: pnpm check-architecture
-
-      # Tests of @repo/db run against the migrated and seeded CI Postgres (DATABASE_URL above).
       - name: Prisma client
         run: pnpm db:generate
 
@@ -96,36 +189,14 @@ jobs:
         # workspaces at once and Vitest three workers in each — some thirty processes on the four
         # cores of the runner, and tests that wait for a socket, a lock or a child process miss
         # their bounds by turns. Two workspaces with two workers each keep to the cores.
-        run: pnpm test --concurrency=2 -- --testTimeout=30000 --maxWorkers=2
+        run: pnpm test ${{ matrix.filter }} --concurrency=2 -- --testTimeout=30000 --maxWorkers=2
 
-      # Sandbox gateway allowlist, watchdog and network guard (the Docker test skips itself);
-      # the app VM compose, edge routes and Dockerfiles (the Docker CLI, no daemon); the egress
-      # proxy on a synthetic CA (openssl).
-      - name: Infrastructure tests
-        run: pnpm test:infra
-
-      # The companion plugin is the only code that writes to a client's WordPress database. Its
-      # behaviour runs in the WordPress content workflow; a syntax error must not wait for that.
-      # The same for the wp-config.php and the mu-plugin every preview runs (plan 53, Р14, Р15),
-      # for the prologue the generated configuration of another stack requires (plan 62, Т21) and
-      # for the preview files of every stack: the step walks infra/*/ (plan 62, Т12). A runner
-      # without PHP uses the PHP of the WordPress image pinned in verify-site.mjs.
-      - name: PHP syntax of infra
-        run: |
-          for file in infra/*/*.php; do
-            if command -v php >/dev/null; then
-              php -l "$file"
-            else
-              docker run --rm --network none --entrypoint php -v "$PWD/infra:/infra:ro" \
-                wordpress:7.1.2-php8.3-apache@sha256:8ae73d594a154e30b112e8d085afbc0895acf7651d8f53ef63aefb42e30822d5 -l "/$file"
-            fi
-          done
-
-      - name: Format
-        run: pnpm format:check
-
-      - name: Build
-        run: pnpm build
+      - name: Save the turbo cache
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/turbo-cache
+        with:
+          scope: test-${{ matrix.shard }}
+          save: 'true'
 
   # The opt-in suites of the subscription gateway, turn keys, pool health, operator login and
   # retirement, MCP admission and the entry to previews: money, key revocation and access checks

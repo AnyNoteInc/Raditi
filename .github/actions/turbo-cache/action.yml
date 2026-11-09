@@ -1,0 +1,41 @@
+name: Turbo cache
+description: >-
+  Restore the local turbo cache of a job, or prune it to what this run used and save it. Turbo
+  hashes every task by its inputs, so a task restored here is one whose inputs did not change.
+
+inputs:
+  scope:
+    description: The job (and shard) the cache belongs to
+    required: true
+  save:
+    description: "'true' prunes the cache to the hashes of this run's summaries and saves it"
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    # The newest cache of this branch, else of main: GitHub gives a branch its own caches and
+    # those of the default branch only.
+    - name: Restore
+      if: inputs.save != 'true'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: .turbo/cache
+        key: turbo-${{ inputs.scope }}-${{ github.sha }}
+        restore-keys: turbo-${{ inputs.scope }}-
+
+    # Restored entries plus new ones would grow without bound from run to run: keep only the
+    # hashes the summaries of this job's turbo runs name (TURBO_RUN_SUMMARY), hits and misses.
+    - name: Prune
+      if: inputs.save == 'true'
+      shell: bash
+      run: node .github/actions/turbo-cache/prune.mjs
+
+    - name: Save
+      if: inputs.save == 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: .turbo/cache
+        # A rerun of the same commit finds the key taken and saves nothing: GitHub keys are
+        # immutable. The attempt keeps a rerun's cache apart.
+        key: turbo-${{ inputs.scope }}-${{ github.sha }}-${{ github.run_attempt }}

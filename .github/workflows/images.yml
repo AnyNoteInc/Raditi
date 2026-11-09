@@ -34,25 +34,24 @@ permissions:
   contents: read
 
 jobs:
+  # One image per runner, all five at once: the build of each is its own, the checks the same.
   images:
+    name: image (${{ matrix.app }})
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [llm, mcp, preview, runner, browser]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Five images, each with a pruned workspace install in its layers, plus the build cache:
-      # drop preinstalled toolchains this job never uses (as edge.yml does).
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
-            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
-          docker image prune --all --force >/dev/null
-          df -h /
-      # verify-images.mjs needs Node alone: Docker builds the images, the workspace is not installed.
+      # verify-images.mjs needs Node alone: Docker builds the image, the workspace is not installed.
+      # One image and its build cache fit the runner's disk as it comes.
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
-      - name: Build and check the images of llm, mcp, preview, runner and browser
-        run: node infra/app/verify-images.mjs
+      - name: Build and check the image of ${{ matrix.app }}
+        run: node infra/app/verify-images.mjs --only ${{ matrix.app }}

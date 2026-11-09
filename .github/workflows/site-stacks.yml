@@ -178,8 +178,13 @@ jobs:
   # М3 and М4 (docs/plan/62-site-stacks.md, §5.5; docs/plan/62-slices/e3.md, Э3.13): the stand of the
   # stacks on the Linux of the runner — `hostOf` reads the kind `linux`: no loopback mirror, relays of
   # llm, mcp and preview on the bridge gateway (Э3.16). Under runc; М7 (runsc) is a run by hand.
+  # One build of the stack per runner: the builds share no scenario (stand.mjs, `standOptions`
+  # gives each its own groups), and four of them in one job took 47 minutes. The platform is built
+  # in each job; the per-stack scenarios (I4, I5) run in each as well. The builds are every build
+  # of the stand of each stack (infra/app/ci.test.mjs): a second stack with builds of its own
+  # moves this matrix to `include`.
   stand:
-    name: Stand of ${{ matrix.stack }}
+    name: Stand of ${{ matrix.build }}
     needs: preview
     runs-on: ubuntu-latest
     # A first value, not a measurement (as the job preview): after the first run it becomes the
@@ -189,6 +194,7 @@ jobs:
       fail-fast: false
       matrix:
         stack: [joomla]
+        build: [joomla-3.10.12, joomla-4.4.14, joomla-5.4.10, joomla-6.2.0]
     env:
       SANDBOX_DOCKER_VERSION: 29.5.2
     steps:
@@ -268,7 +274,7 @@ jobs:
       # The groups are named: without --group the stand would run every group of the stack, and
       # `browser` and `safety-browser` stay local (§5.5). The releases are downloaded by the stand
       # into the temporary folder of the runner, checked by sha256, and run in its containers only.
-      - name: Import, preview and release of every build of the stack
+      - name: Import, preview and release of the build
         env:
           RADITI_CMS_DIR: ${{ runner.temp }}/raditi-cms
-        run: pnpm verify:stack -- --stack=${{ matrix.stack }} --group=import --group=preview --group=release
+        run: pnpm verify:stack -- --stack=${{ matrix.stack }} --build=${{ matrix.build }} --group=import --group=preview --group=release
