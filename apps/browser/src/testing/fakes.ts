@@ -9,6 +9,8 @@ import {
   type BrowserCheckpointState,
   type BrowserCloseReason,
   type BrowserController,
+  type BrowserDownload,
+  type BrowserDownloadText,
   type BrowserFile,
   type BrowserHelp,
   type BrowserInputEvent,
@@ -305,6 +307,23 @@ export class FakeCloudBrowser implements CloudBrowserSession {
   async verify(plan: BrowserVerificationPlan): Promise<BrowserVerificationReading> {
     this.verified.push(plan)
     return this.reading(plan)
+  }
+
+  /** Files the pages downloaded, as a test puts them (the owner's decision of 09.11.2026). */
+  readonly downloaded: Array<BrowserDownload & { text: string | null }> = []
+
+  async downloads(): Promise<BrowserDownload[]> {
+    return this.downloaded.map(({ number, name, sizeBytes, kind }) => ({
+      number,
+      name,
+      sizeBytes,
+      kind,
+    }))
+  }
+
+  downloadText(number: number): BrowserDownloadText | null {
+    const entry = this.downloaded.find((item) => item.number === number)
+    return entry && entry.text !== null ? { name: entry.name, text: entry.text } : null
   }
 
   isConnected(): boolean {

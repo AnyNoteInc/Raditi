@@ -33,14 +33,14 @@ export const WORDPRESS_SEED = Object.freeze({
   recordContent: 'Запись стенда: синтетический текст, который показывает только её страница.',
   frontTitle: 'Главная стенда',
   frontSlug: 'glavnaya-stenda',
-  /** A draft behind a password: Р15 copies drafts, and the copy clears `post_password`. */
+  /** A password-protected draft that the copy preserves. */
   draftTitle: 'Черновик стенда',
   draftSlug: 'stand-draft',
   /** An image of the media library, drawn by the front page: what the agent's browser may open. */
   image: 'wp-content/uploads/stand/stand-logo.png',
 })
 
-/** Values of the seed that no copy holds. */
+/** Synthetic values used to check that the seed is copied. */
 const canary = Object.freeze({
   adminEmail: 'kanareykin.admin@people.example',
   adminName: 'Канарейкин Администратор Сайта',
@@ -57,7 +57,7 @@ export const WORDPRESS_CANARIES = Object.freeze(Object.values(canary))
 /** The account of the platform a WordPress preview makes for itself (wordpress-preview.ts). */
 const PLATFORM_LOGIN = 'raditi-platform'
 
-/** An option with the name of a secret among the widgets the copy takes: refused by its name. */
+/** A synthetic option with the name of a secret. */
 const SECRET_OPTION = 'widget_raditi_stand_token'
 /** A widget of the seed without such a name, under the same rule of the copy: the control. */
 const WIDGET_OPTION = 'widget_raditi_stand_title'
@@ -358,99 +358,39 @@ export async function wordpressMarksIn(sql) {
   return found
 }
 
-/**
- * P3 of WordPress: the authors of the copy are synthetic, comments and the profiles of people are
- * not copied (the only profile is the platform's own account the preview makes), the record and
- * the front page are (the control), the draft is, without its password, the option named as a
- * secret is not while a widget of the seed under the same rule is, the address of the site's admin
- * and the search engines are the copy's own, and no mark of the seed is in any text column of the
- * copy (the install proves production holds every one). `sql` — a query as root of the preview's
- * database, its answer as text.
- */
+/** P3 of WordPress: site data reaches the copy and preview-specific settings still apply. */
 export async function wordpressCopyChecks(sql) {
   const t = (name) => `\`${WORDPRESS_PREFIX}${name}\``
   const text = async (query) => (await sql(query)).trim()
-  const number = async (query) => Number(await text(query))
-  const users = (await text(`SELECT CONCAT(user_login, '|', user_email) FROM ${t('users')}`))
-    .split('\n')
-    .filter(Boolean)
-    .map((row) => row.split('|'))
-  const checks = [
-    {
-      name: 'the authors of the copy are synthetic, at @preview.invalid, none under the login of production',
-      ok:
-        users.length > 0 &&
-        users.every(
-          ([login, email]) =>
-            email.endsWith('@preview.invalid') && login !== WORDPRESS_SEED.adminLogin,
-        ),
-      found: { authors: users.length },
-    },
-  ]
-  const comments = await number(`SELECT COUNT(*) FROM ${t('comments')}`)
-  checks.push({ name: 'comments is empty', ok: comments === 0, found: { rows: comments } })
-  // The preview makes its own account of the platform (`content.access` of the recipe), with its
-  // profile: every other row of usermeta would be a person's of production.
-  const profiles = await number(
-    `SELECT COUNT(*) FROM ${t('usermeta')} m LEFT JOIN ${t('users')} u ON u.ID = m.user_id` +
-      ` WHERE u.user_login IS NULL OR u.user_login <> ${q(PLATFORM_LOGIN)}`,
-  )
-  const platform = await number(
-    `SELECT COUNT(*) FROM ${t('usermeta')} m JOIN ${t('users')} u ON u.ID = m.user_id` +
-      ` WHERE u.user_login = ${q(PLATFORM_LOGIN)}`,
-  )
-  checks.push({
-    name: `usermeta holds only the profile of the account of the platform (${PLATFORM_LOGIN})`,
-    ok: profiles === 0 && platform > 0,
-    found: { others: profiles, platform },
-  })
-  const pages = await number(
-    `SELECT COUNT(*) FROM ${t('posts')} WHERE post_status = 'publish' AND post_name IN` +
-      ` (${q(WORDPRESS_SEED.recordSlug)}, ${q(WORDPRESS_SEED.frontSlug)})`,
-  )
-  checks.push({
-    name: 'the published record and the front page are in the copy',
-    ok: pages === 2,
-    found: { pages },
-  })
-  const drafts = (
-    await text(
-      `SELECT CONCAT(post_status, '|', post_password) FROM ${t('posts')}` +
-        ` WHERE post_name = ${q(WORDPRESS_SEED.draftSlug)} AND post_type = 'post'`,
-    )
-  )
-    .split('\n')
-    .filter(Boolean)
-  checks.push({
-    name: 'the draft is in the copy, its password cleared',
-    ok: drafts.length === 1 && drafts[0] === 'draft|',
-    found: { rows: drafts.length, cleared: drafts.length === 1 && drafts[0].endsWith('|') },
-  })
-  const count = (name) =>
-    number(`SELECT COUNT(*) FROM ${t('options')} WHERE option_name = ${q(name)}`)
-  const secret = await count(SECRET_OPTION)
-  const widget = await count(WIDGET_OPTION)
-  checks.push({
-    name: `the widget named as a secret is not in the copy, ${WIDGET_OPTION} is`,
-    ok: secret === 0 && widget === 1,
-    found: { secret, widget },
-  })
   const option = async (name) =>
     text(`SELECT option_value FROM ${t('options')} WHERE option_name = ${q(name)}`)
+  const marks = await wordpressMarksIn(sql)
+  const missing = WORDPRESS_CANARIES.filter((mark) => !marks?.includes(mark))
+  const pages = Number(
+    await text(
+      `SELECT COUNT(*) FROM ${t('posts')} WHERE post_status = 'publish' AND post_name IN` +
+        ` (${q(WORDPRESS_SEED.recordSlug)}, ${q(WORDPRESS_SEED.frontSlug)})`,
+    ),
+  )
   const adminEmail = await option('admin_email')
   const blogPublic = await option('blog_public')
-  checks.push({
-    name: 'the address of the admin is admin@preview.invalid, search engines are told to stay away',
-    ok: adminEmail === 'admin@preview.invalid' && blogPublic === '0',
-    found: { adminEmail: adminEmail === 'admin@preview.invalid', blogPublic },
-  })
-  const marks = await wordpressMarksIn(sql)
-  checks.push({
-    name: 'no mark of the seed is in a text column of the copy: names, addresses, comment, secrets',
-    ok: marks !== null && marks.length === 0,
-    found: marks === null ? { columns: 0 } : { marks: marks.length },
-  })
-  return checks
+  return [
+    {
+      name: 'the copy preserves users, comments, the draft password and plugin option values',
+      ok: missing.length === 0,
+      found: { missing: missing.length },
+    },
+    {
+      name: 'the published record and the front page are in the copy',
+      ok: pages === 2,
+      found: { pages },
+    },
+    {
+      name: 'the address of the admin is admin@preview.invalid, search engines are told to stay away',
+      ok: adminEmail === 'admin@preview.invalid' && blogPublic === '0',
+      found: { adminEmail: adminEmail === 'admin@preview.invalid', blogPublic },
+    },
+  ]
 }
 
 /**
@@ -459,10 +399,7 @@ export async function wordpressCopyChecks(sql) {
  * texts after which the sign-in did not hold — a wrong password, cookies WordPress did not get back,
  * an expired session or link.
  * `setPassword(rootSql, password)` makes the author of the record in the copy an administrator with
- * the stand's password and gives its login: a copy holds its authors with synthetic logins, a random
- * hash and no profile. The hash is the plain MD5 WordPress still reads and rehashes at the sign-in:
- * SQL makes no bcrypt. No mark of the address of the admin to confirm: the preview's must-use
- * plugin turns the check off.
+ * the stand's password and returns its login. WordPress rehashes the MD5 password at sign-in.
  */
 function wordpressSignIn() {
   const t = (name) => `\`${WORDPRESS_PREFIX}${name}\``
@@ -569,9 +506,9 @@ export const wordpressStand = Object.freeze({
   refusedVersion: null,
   /** P3: what the copy of a preview holds, a row per check, by SQL as root of its database. */
   copyChecks: wordpressCopyChecks,
-  /** P4: pages of the panel and the list of the media library are closed; an image is open. */
+  /** P4: a malformed address is refused, while the site's image is open. */
   browserPaths: Object.freeze({
-    closed: Object.freeze(['/wp-admin/users.php', '/wp-admin/plugins.php', '/wp-json/wp/v2/media']),
+    closed: Object.freeze(['/wp-admin/%zz']),
     open: `/${WORDPRESS_SEED.image}`,
   }),
   /** P5: the sign-in to the panel in the cabinet's frame. */

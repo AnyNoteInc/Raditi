@@ -19,7 +19,7 @@ import { WebMaskSweep } from './web-mask-sweep.ts'
  * The cloud browser of a browser task (web_*, docs/plan/57-browser-tasks.md, Б20). No profile:
  * a product path wherever the browser worker is configured (BROWSER_WORKER_URL), production too;
  * AppModule imports it only then. The role opens the session of a task with its first call and
- * passes the agent's actions to the worker; the worker holds the browser. What the page shows is masked with the task's contact map (PrivacyModule), and WebMaskSweep removes that map once the task is over.
+ * passes the agent's actions to the worker; the worker holds the browser. What the page shows goes to the agent as it is (the owner's decision of 09.11.2026); contact markers of earlier turns still come back as contacts through the task's map (PrivacyModule), and WebMaskSweep removes that map once the task is over.
  */
 @Module({
   imports: [PrivacyModule],

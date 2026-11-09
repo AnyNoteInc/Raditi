@@ -429,17 +429,13 @@ export interface SiteAdapter {
    */
   dbPlanGuide(site: SiteFacts): string
   /**
-   * Whether the agent's browser on a preview must not open or send `request` (Р21, spec §11,
-   * CLAUDE.md rule 4): the stack's admin pages and actions beyond the agent's work — users,
-   * orders, payments, plugins, themes, settings. Checked on every navigation and on every
-   * request a page makes; true for anything the adapter cannot read. Pure, no I/O.
+   * Whether the stack refuses a browser request on a preview (Р21). Checked on navigation and
+   * on requests the page makes. Pure, no I/O.
    */
   browserRequestDenied(request: SiteBrowserRequest): boolean
   /**
    * The policy of a task's browser on the site itself (docs/plan/57-browser-tasks.md, Б21): not
-   * the preview's — the agent works in the stack's own admin pages there, and uploads media. The
-   * stack's users, plugins, themes, settings, tools, comments, orders, forms and deletions stay
-   * closed (CLAUDE.md rule 4, spec §11), for the agent and for the client's input alike. Pure.
+   * the preview's. The stack decides what its own admin pages and requests may do. Pure.
    */
   browserTaskPolicy(site: BrowserTaskSite): BrowserTaskPolicy
   /**
@@ -452,7 +448,7 @@ export interface SiteAdapter {
    * publishes or saves the object it edits, or neither (null). The agent's click is judged by
    * the element its observation names (Б22).
    */
-  browserCommitAction(role: string, name: string): BrowserCommitAction | null
+  browserCommitAction(role: string, name: string, pageUrl?: string): BrowserCommitAction | null
   /**
    * The trusted read of an object through the session's own sign-in (Б22): GET requests only,
    * checked with `isBrowserVerificationPlan`, and their pure reading.

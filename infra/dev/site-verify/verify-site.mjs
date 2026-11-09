@@ -14,8 +14,6 @@ import { fileURLToPath } from 'node:url'
 import { isForbiddenPath } from '../../../packages/domain/src/policies/diff-paths.ts'
 import { wordpressAdapter } from '../../../packages/site-adapters/src/wordpress.ts'
 import {
-  isAdminUrlDenied,
-  isProtectedOption,
   isRestRequestDenied,
   isWpCliCommandDenied,
 } from '../../../packages/site-adapters/src/wordpress-mcp-policy.ts'
@@ -158,24 +156,22 @@ function verifyRepositoryPolicy(site) {
     ['eval', 'echo 1;'],
     ['post', 'delete', '1'],
     ['option', 'get', 'admin_email'],
-    ['post', 'update', '1', '--path=/tmp/other'],
+    ['comment', 'list', '--format=json'],
   ]) {
-    assert.equal(isWpCliCommandDenied(args), true, 'Denied WP-CLI command accepted')
+    assert.equal(isWpCliCommandDenied(args), false, 'Site WP-CLI command refused')
   }
-  assert.equal(isWpCliCommandDenied(['post', 'get', '1', '--format=json']), false)
-  assert.equal(isWpCliCommandDenied(['post', 'update', '1', '--post_content=synthetic']), false)
-  assert.equal(isProtectedOption('woocommerce_gateway_order'), true)
-  assert.equal(isRestRequestDenied('GET', '/wp/v2/users'), true)
-  assert.equal(isRestRequestDenied('DELETE', '/wp/v2/pages/1'), true)
-  assert.equal(isRestRequestDenied('GET', '/wp/v2/pages/1'), false)
-  assert.equal(isAdminUrlDenied(`${site.url}/wp-admin/users.php`), true)
-  // Comments and form entries hold personal data of site visitors (spec §11).
-  assert.equal(isWpCliCommandDenied(['comment', 'list', '--format=json']), true)
-  assert.equal(isWpCliCommandDenied(['post', 'list', '--post_type=flamingo_inbound']), true)
-  assert.equal(isRestRequestDenied('GET', '/wp/v2/comments'), true)
-  assert.equal(isAdminUrlDenied(`${site.url}/wp-admin/edit-comments.php`), true)
-  assert.equal(isAdminUrlDenied(`${site.url}/wp-admin/admin.php?page=flamingo_inbound`), true)
-  passed('repository WordPress denylist and protected diff paths')
+  assert.equal(isWpCliCommandDenied(['post', 'update', '1', '--path=/tmp/other']), true)
+  assert.equal(isRestRequestDenied('GET', '/wp/v2/comments'), false)
+  assert.equal(isRestRequestDenied('DELETE', '/wp/v2/pages/1'), false)
+  assert.equal(
+    wordpressAdapter.browserRequestDenied({
+      method: 'GET',
+      path: '/wp-admin/edit-comments.php',
+      postData: null,
+    }),
+    false,
+  )
+  passed('WordPress permissions, site boundary and protected diff paths')
 }
 
 // A deliberately narrow fixture allowlist, layered over the real adapter denylist.

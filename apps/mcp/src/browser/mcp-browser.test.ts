@@ -257,7 +257,7 @@ describe('the browser of the agent on its preview', () => {
       `http://site-0a1b2c3d-chat-ffffff.localhost:8090/`,
       '//elsewhere.example/',
       '/__raditi/enter?t=x&to=/',
-      '/wp-admin/users.php',
+      '/wp-admin/%zz',
       '/a\\b',
     ])
       await expect(service.navigate(scope, { path })).rejects.toEqual(

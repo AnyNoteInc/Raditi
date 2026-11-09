@@ -131,7 +131,7 @@ test('the configuration of the production replaces every placeholder of the samp
   assert.throws(() => wordpressConfig(sample, { password: 'pw1', keys: keys.slice(1) }), /8 keys/)
 })
 
-test('the seed marks what no copy holds: a person, a comment, a secret, a draft password', () => {
+test('the seed marks a person, a comment, a secret and a draft password', () => {
   const seed = wordpressSeedSql('wp_')
   for (const canary of WORDPRESS_CANARIES) assert.ok(seed.includes(canary), canary)
   // A comment of a person, a mark in the profile of the author, an option of a secret beside a
@@ -154,18 +154,11 @@ test('the seed marks what no copy holds: a person, a comment, a secret, a draft 
  */
 function copyDatabase(copy = {}) {
   const state = {
-    users: [['user5', 'user5@preview.invalid']],
-    comments: 0,
-    others: 0,
-    platform: 3,
     pages: 2,
-    drafts: ['draft|'],
-    secret: 0,
-    widget: 1,
     adminEmail: 'admin@preview.invalid',
     blogPublic: '0',
     columns: ['wp_posts|post_content', 'wp_users|display_name', 'wp_options|option_value'],
-    marks: [],
+    marks: WORDPRESS_CANARIES,
     ...copy,
   }
   return async (query) => {
@@ -178,51 +171,30 @@ function copyDatabase(copy = {}) {
       for (const row of state.columns) assert.ok(query.includes(`\`${row.split('|')[1]}\``), row)
       return state.marks.includes(mark) ? '1\n' : '0\n'
     }
-    if (query.startsWith("SELECT CONCAT(user_login, '|', user_email)"))
-      return state.users.map((row) => row.join('|')).join('\n')
-    if (query === 'SELECT COUNT(*) FROM `wp_comments`') return `${state.comments}\n`
-    if (query.includes('`wp_usermeta` m LEFT JOIN')) return `${state.others}\n`
-    if (query.includes('`wp_usermeta` m JOIN')) return `${state.platform}\n`
-    if (query.includes("post_status = 'publish'")) return `${state.pages}\n`
-    if (query.startsWith("SELECT CONCAT(post_status, '|', post_password)"))
-      return state.drafts.join('\n')
-    if (query.endsWith("option_name = 'widget_raditi_stand_token'")) return `${state.secret}\n`
-    if (query.endsWith("option_name = 'widget_raditi_stand_title'")) return `${state.widget}\n`
+    if (query.includes("post_status = 'publish'"))
+      return `${state.pages}
+`
     if (query.endsWith("option_name = 'admin_email'")) return `${state.adminEmail}\n`
     if (query.endsWith("option_name = 'blog_public'")) return `${state.blogPublic}\n`
     throw new Error(`P3 made a query the test does not know: ${query}`)
   }
 }
 
-test('P3 passes a healthy copy and fails exactly the check a leak breaks', async () => {
+test('P3 checks copied site data and preview settings', async () => {
   const healthy = await wordpressCopyChecks(copyDatabase())
   assert.equal(wordpressStand.copyChecks, wordpressCopyChecks)
-  assert.equal(healthy.length, 8)
+  assert.equal(healthy.length, 3)
   assert.deepEqual(
     healthy.filter((check) => !check.ok).map((check) => check.name),
     [],
   )
   const named = (pattern) => healthy.find((check) => pattern.test(check.name)).name
   const breaks = [
-    // A profile of a person beside the platform's, and the platform's own gone.
-    [{ others: 1 }, /usermeta holds only/],
-    [{ platform: 0 }, /usermeta holds only/],
-    [{ comments: 1 }, /comments is empty/],
-    [{ users: [['user5', 'kanareykin.admin@people.example']] }, /authors of the copy/],
-    [{ users: [[WORDPRESS_SEED.adminLogin, 'user5@preview.invalid']] }, /authors of the copy/],
-    [{ users: [] }, /authors of the copy/],
     [{ pages: 1 }, /published record/],
-    [{ drafts: [] }, /the draft is in the copy/],
-    [{ drafts: ['draft|canary-draft-pass-7e2c'] }, /the draft is in the copy/],
-    [{ secret: 1 }, /widget named as a secret/],
-    // The control: the copy took no widget at all.
-    [{ widget: 0 }, /widget named as a secret/],
     [{ adminEmail: 'kanareykin.admin@people.example' }, /address of the admin/],
     [{ blogPublic: '1' }, /address of the admin/],
-    // The name of the administrator kept in display_name, or a search that saw no column.
-    [{ marks: ['Канарейкин Администратор Сайта'] }, /no mark of the seed/],
-    [{ marks: ['Комментарий-канарейка 7e2c'] }, /no mark of the seed/],
-    [{ columns: [] }, /no mark of the seed/],
+    [{ marks: WORDPRESS_CANARIES.slice(1) }, /copy preserves users/],
+    [{ columns: [] }, /copy preserves users/],
   ]
   for (const [copy, pattern] of breaks) {
     const checks = await wordpressCopyChecks(copyDatabase(copy))
@@ -237,7 +209,7 @@ test('P3 passes a healthy copy and fails exactly the check a leak breaks', async
 test('the search of marks reads every text column by bytes and refuses a strange name', async () => {
   assert.match(WORDPRESS_TEXT_COLUMNS_SQL, /TABLE_SCHEMA = DATABASE\(\)/)
   assert.match(WORDPRESS_TEXT_COLUMNS_SQL, /'longtext'/)
-  assert.deepEqual(await wordpressMarksIn(copyDatabase()), [])
+  assert.deepEqual(await wordpressMarksIn(copyDatabase({ marks: [] })), [])
   assert.equal(await wordpressMarksIn(copyDatabase({ columns: [] })), null)
   // The production of the install holds every mark: the control of the search.
   assert.deepEqual(await wordpressMarksIn(copyDatabase({ marks: [...WORDPRESS_CANARIES] })), [

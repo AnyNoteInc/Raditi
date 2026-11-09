@@ -29,6 +29,23 @@ describe('the database settings of a copy from the catalog of production', () =>
     ).toEqual({ tablePrefix: 'shop_', charset: 'utf8mb4', collation: 'utf8mb4_unicode_ci' })
   })
 
+  it('identifies the site without requiring every table the copy can read', () => {
+    const expanded = {
+      catalogTables: ['posts', 'options'],
+      tables: [
+        { table: 'options', where: [] },
+        { table: 'commentmeta', where: [] },
+      ],
+    }
+    expect(
+      databaseSettingsFromCatalog(expanded, [
+        table('shop_posts'),
+        table('shop_options'),
+        table('other_options'),
+      ]),
+    ).toEqual({ tablePrefix: 'shop_', charset: 'utf8mb4', collation: 'utf8mb4_unicode_ci' })
+  })
+
   it("takes the server's collation of the set when the tables share the set alone", () => {
     expect(
       databaseSettingsFromCatalog(policy, [

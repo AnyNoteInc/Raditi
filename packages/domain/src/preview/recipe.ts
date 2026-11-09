@@ -264,10 +264,11 @@ export interface PreviewCopyTarget {
 
 export const databaseCopyPolicySchema = z.strictObject({
   engine: z.enum(databaseEngines),
-  /**
-   * Tables whose rows are copied, named without the site's table prefix. Every other table is
-   * copied as structure only: an allow list, never a deny list (Р15).
-   */
+  /** Copy rows from tables under the site prefix even when they have no explicit rule. */
+  copyUnlistedRows: z.literal(true).optional(),
+  /** Tables that identify the site in the database catalog. Defaults to the explicit rules. */
+  catalogTables: z.array(identifier).min(1).max(128).optional(),
+  /** Explicit rules by table name, without the site's prefix. */
   tables: z
     .array(
       z.strictObject({

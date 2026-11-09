@@ -421,7 +421,7 @@ describe('the cloud browser session', () => {
     expect(browser.newContext).toHaveBeenCalledExactlyOnceWith({
       viewport: { width: 1280, height: 800 },
       locale: 'ru-RU',
-      acceptDownloads: false,
+      acceptDownloads: true,
       serviceWorkers: 'block',
       permissions: [],
     })

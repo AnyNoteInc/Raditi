@@ -31,7 +31,7 @@ const multipart = (fields: Record<string, string>, file?: { name: string; text: 
 }
 
 describe('wordpressAdapter.browserTaskPolicy: start and hosts', () => {
-  it('starts at the list of posts below the folder of the site, never at the dashboard', () => {
+  it('starts at the list of posts below the folder of the site', () => {
     expect(policy.startPath).toBe('/wp-admin/edit.php')
     expect(wordpressAdapter.browserTaskPolicy({ url: 'https://news.example.ru' }).startPath).toBe(
       '/wp-admin/edit.php',
@@ -46,9 +46,9 @@ describe('wordpressAdapter.browserTaskPolicy: start and hosts', () => {
   })
 
   it.each(['/wp-admin', '/wp-admin/', '/wp-admin/index.php', '/blog/wp-admin/index.php?x=1'])(
-    'closes the dashboard %s: its widgets show the visitors who commented',
+    'opens the dashboard %s',
     (path) => {
-      expect(policy.pageDenied(path)).toBe(true)
+      expect(policy.pageDenied(path)).toBe(false)
     },
   )
 
@@ -128,12 +128,36 @@ describe('wordpressAdapter.browserTaskPolicy: pages', () => {
     '/wp-content/uploads/2026/10/photo-1024x768.webp?ver=2',
     '/wp-content/themes/twentytwentyfive/style.css',
     '/blog/wp-admin/post-new.php',
-  ])('opens %s', (path) => {
-    expect(policy.pageDenied(path)).toBe(false)
-    expect(denied(path)).toBe(false)
-  })
-
-  it.each([
+    // Form entries (заявки), leads and subscribers: the client's own data, and their export
+    // (the owner's decision of 09.11.2026).
+    '/wp-admin/admin.php?page=flamingo',
+    '/wp-admin/admin.php?page=wpforms-entries',
+    '/wp-admin/edit.php?post_type=feedback',
+    '/wp-admin/admin.php?page=gf_entries&id=1',
+    '/wp-admin/admin.php?page=formidable-entries',
+    '/wp-admin/admin.php?page=e-form-submissions',
+    '/wp-admin/edit.php?post_type=nf_sub',
+    '/wp-admin/admin.php?page=mailpoet-subscribers',
+    '/wp-admin/admin.php?page=cfdb7-list.php&fid=12',
+    '/wp-admin/admin.php?page=fluent_forms_all_entries',
+    '/wp-admin/admin.php?page=fluent_forms&route=entries&form_id=1',
+    '/wp-admin/admin.php?page=forminator-entries',
+    '/wp-admin/admin.php?page=evf-entries',
+    '/wp-admin/edit.php?post_type=x&page=forminator-entries',
+    // Orders, the shop's customers and every export: the client's own data (09.11.2026, ДС7).
+    '/wp-admin/admin.php?page=wc-orders',
+    '/wp-admin/admin.php?page=wc-orders&action=edit&id=5',
+    '/wp-admin/admin.php?page=wc-admin&path=/customers',
+    '/wp-admin/edit.php?post_type=shop_order',
+    '/wp-admin/admin.php?page=crm-customers',
+    '/wp-admin/export.php',
+    '/wp-admin/export.php?download=true&content=all',
+    '/wp-admin/admin.php?page=some-plugin&action=export_entries',
+    '/wp-admin/admin.php?page=pmxe-admin-export&action=wpallexport',
+    '/wp-admin/admin.php?page=fluent_forms&route=entries&form_id=3&action=export',
+    '/wp-admin/admin.php?page=cfdb7-list.php&fid=12&action=cfdb7_export_csv',
+    '/wp-admin/admin.php?page=reports&action=wc_order_export',
+    '/wp-admin/admin.php?page=crm&action=export-orders',
     // Users and their access.
     '/wp-admin/users.php',
     '/wp-admin/user-new.php',
@@ -154,6 +178,26 @@ describe('wordpressAdapter.browserTaskPolicy: pages', () => {
     '/wp-admin/nav-menus.php',
     '/wp-admin/edit.php?post_type=wp_navigation',
     '/wp-admin/post-new.php?post_type=wp_template',
+    // Payments and refunds.
+    '/wp-admin/admin.php?page=wc-settings&tab=checkout',
+    '/wp-admin/edit.php?post_type=shop_order_refund',
+    // A plugin's screen of the site's accounts.
+    '/wp-admin/admin.php?page=newsletter_users_index',
+    // Spelt otherwise.
+    '/WP-ADMIN/Users.php',
+    '/wp-admin/%75sers.php',
+    '/wp-admin//plugins.php',
+    '/wp-admin/x/../plugins.php',
+    '/wp-admin/users.php/x',
+    '/wp-admin/customize.php/x',
+    '/blog/wp-admin/plugins.php',
+    '/wp-admin/update.php?action=upload-plugin',
+  ])('opens %s', (path) => {
+    expect(policy.pageDenied(path)).toBe(false)
+    expect(denied(path)).toBe(false)
+  })
+
+  it.each([
     // Settings, the core's and a plugin's.
     '/wp-admin/options.php',
     '/wp-admin/options-general.php',
@@ -169,57 +213,24 @@ describe('wordpressAdapter.browserTaskPolicy: pages', () => {
     '/wp-admin/tools.php',
     '/wp-admin/import.php',
     '/wp-admin/admin.php?import=wordpress',
-    '/wp-admin/export.php',
     '/wp-admin/export-personal-data.php',
     '/wp-admin/erase-personal-data.php',
     '/wp-admin/site-health.php',
     '/wp-admin/site-health.php?tab=debug',
     '/wp-admin/update-core.php',
-    '/wp-admin/update.php?action=upload-plugin',
     '/wp-admin/upgrade.php',
     '/wp-admin/maint/repair.php',
     // Comments.
     '/wp-admin/edit-comments.php',
     '/wp-admin/comment.php?action=editcomment&c=3',
-    // Orders, customers and payments.
-    '/wp-admin/admin.php?page=wc-orders',
-    '/wp-admin/admin.php?page=wc-orders&action=edit&id=5',
-    '/wp-admin/admin.php?page=wc-settings&tab=checkout',
-    '/wp-admin/admin.php?page=wc-admin&path=/customers',
-    '/wp-admin/edit.php?post_type=shop_order',
-    // Form entries.
-    '/wp-admin/admin.php?page=flamingo',
-    '/wp-admin/admin.php?page=wpforms-entries',
-    '/wp-admin/edit.php?post_type=feedback',
-    '/wp-admin/admin.php?page=gf_entries&id=1',
-    '/wp-admin/admin.php?page=formidable-entries',
-    '/wp-admin/admin.php?page=e-form-submissions',
-    '/wp-admin/edit.php?post_type=nf_sub',
-    '/wp-admin/admin.php?page=mailpoet-subscribers',
-    '/wp-admin/admin.php?page=cfdb7-list.php&fid=12',
-    '/wp-admin/admin.php?page=fluent_forms_all_entries',
-    '/wp-admin/admin.php?page=fluent_forms&route=entries&form_id=1',
-    '/wp-admin/admin.php?page=forminator-entries',
-    '/wp-admin/admin.php?page=evf-entries',
-    '/wp-admin/admin.php?page=newsletter_users_index',
-    '/wp-admin/edit.php?post_type=x&page=forminator-entries',
     // The network admin and multisite.
     '/wp-admin/network/',
     '/wp-admin/network/plugins.php',
     '/wp-admin/user/',
     '/wp-admin/ms-sites.php',
-    // Spelt otherwise.
-    '/WP-ADMIN/Users.php',
-    '/wp-admin/%75sers.php',
-    '/wp-admin//plugins.php',
-    '/wp-admin/x/../plugins.php',
-    '/wp-admin/users.php/x',
-    '/wp-admin/customize.php/x',
-    '/blog/wp-admin/plugins.php',
-    '/wp-admin/%zz',
-  ])('closes %s', (path) => {
-    expect(policy.pageDenied(path)).toBe(true)
-    expect(denied(path)).toBe(true)
+  ])('opens formerly restricted admin pages at %s', (path) => {
+    expect(policy.pageDenied(path)).toBe(false)
+    expect(denied(path)).toBe(false)
   })
 
   it.each([
@@ -231,12 +242,18 @@ describe('wordpressAdapter.browserTaskPolicy: pages', () => {
     '/wp-admin/edit.php?action=-1&action2=delete&post[]=1&post[]=2',
     '/wp-admin/edit.php?post_status=trash&delete_all=Empty+Trash',
     '/wp-admin/edit.php?post_status=trash&delete.all=1',
-    '/wp-admin/edit.php?action=edit&bulk_edit=Update&post[]=1',
     '/wp-admin/upload.php?action=delete&media[]=5',
     '/wp-admin/edit-tags.php?action=delete&taxonomy=category&tag_ID=3',
-    '/wp-admin/admin.php?page=some-plugin&action=export_entries',
-  ])('closes the deletion or mass change %s', (path) => {
-    expect(policy.pageDenied(path)).toBe(true)
+    // Money: a refund by an action of its own.
+    '/wp-admin/admin.php?page=wc-orders&action=woocommerce_refund_line_items',
+  ])('opens deletion and refunds at %s', (path) => {
+    expect(policy.pageDenied(path)).toBe(false)
+  })
+
+  it('keeps bulk editing open', () => {
+    expect(policy.pageDenied('/wp-admin/edit.php?action=edit&bulk_edit=Update&post[]=1')).toBe(
+      false,
+    )
   })
 
   it.each([
@@ -247,8 +264,8 @@ describe('wordpressAdapter.browserTaskPolicy: pages', () => {
     '/wp-signup.php',
     '/wp-activate.php?key=x',
     '/wp-login.php?action=register',
-  ])('closes the site script %s', (path) => {
-    expect(policy.pageDenied(path)).toBe(true)
+  ])('opens the site script %s', (path) => {
+    expect(policy.pageDenied(path)).toBe(false)
   })
 
   it.each([
@@ -258,85 +275,43 @@ describe('wordpressAdapter.browserTaskPolicy: pages', () => {
     '/wp-content/uploads/2024/05/',
     '/WP-CONTENT/Uploads/2024/05/resume.pdf',
     '/blog/wp-content/uploads/forms/entry-1.json',
-  ])('closes a document of the media library %s: a visitor file may be there', (path) => {
+  ])('opens a document of the media library %s', (path) => {
+    expect(policy.pageDenied(path)).toBe(false)
+  })
+
+  it.each([
+    'wp-admin/users.php',
+    '//evil.example/x',
+    '',
+    'https://other.example/wp-admin/',
+    '/wp-admin/%zz',
+  ])('closes what is not a path of the site: %s', (path) => {
     expect(policy.pageDenied(path)).toBe(true)
-  })
-
-  it.each(['wp-admin/users.php', '//evil.example/x', '', 'https://other.example/wp-admin/'])(
-    'closes what is not a path of the site: %s',
-    (path) => {
-      expect(policy.pageDenied(path)).toBe(true)
-    },
-  )
-})
-
-// The owner's decision of 28.10.2026: the client at the controls deletes a news item in person.
-describe('wordpressAdapter.browserTaskPolicy: the trash of the client at the controls (Б37)', () => {
-  const byClient = (path: string, method = 'GET', postData: string | null = null) =>
-    policy.requestDenied({ path, method, postData }, 'user')
-  const nonce = '_wpnonce=0a1b2c3d4e'
-
-  it('lets the client move a post or a page to the trash and back, never the agent', () => {
-    const trash = [
-      [`/wp-admin/post.php?post=950&action=trash&${nonce}`, 'GET'],
-      [`/wp-admin/post.php?post=950&action=untrash&${nonce}`, 'GET'],
-      [`/blog/wp-admin/post.php?post=12&action=trash&${nonce}`, 'GET'],
-      [
-        `/wp-admin/edit.php?s=&post_status=all&post_type=post&${nonce}&action=trash&m=0&cat=0&paged=1&post%5B%5D=950&post%5B%5D=951&action2=-1`,
-        'GET',
-      ],
-      [`/wp-admin/edit.php?post_type=page&action=-1&action2=trash&post%5B%5D=7&${nonce}`, 'GET'],
-      ['/wp-json/wp/v2/posts/950?_locale=user', 'DELETE'],
-      ['/?rest_route=%2Fwp%2Fv2%2Fpages%2F7&_locale=user', 'DELETE'],
-    ] as const
-    for (const [path, method] of trash) {
-      expect(byClient(path, method), path).toBe(false)
-      expect(denied(path, method), path).toBe(true)
-      expect(policy.requestDenied({ path, method, postData: null }), path).toBe(true)
-    }
-    // The block editor sends its DELETE as a POST without a body and the method in a header.
-    expect(byClient('/wp-json/wp/v2/posts/950?_locale=user', 'POST')).toBe(false)
-    expect(denied('/wp-json/wp/v2/posts/950?_locale=user', 'POST')).toBe(true)
-    expect(policy.pageDenied(`/wp-admin/post.php?post=950&action=trash&${nonce}`, 'user')).toBe(
-      false,
-    )
-    expect(policy.pageDenied(`/wp-admin/post.php?post=950&action=trash&${nonce}`)).toBe(true)
-  })
-
-  it('keeps deleting past the trash, emptying it and everything else closed to the client', () => {
-    for (const [path, method, body] of [
-      [`/wp-admin/post.php?post=950&action=delete&${nonce}`, 'GET', null],
-      [`/wp-admin/edit.php?post_status=trash&post_type=post&delete_all=1&${nonce}`, 'GET', null],
-      [`/wp-admin/edit.php?action=delete&post%5B%5D=950&${nonce}`, 'GET', null],
-      [`/wp-admin/edit.php?post_type=wp_template&action=trash&post%5B%5D=3&${nonce}`, 'GET', null],
-      [`/wp-admin/edit.php?page=fluentform_entries&action=trash&${nonce}`, 'GET', null],
-      ['/wp-json/wp/v2/posts/950?force=true', 'DELETE', null],
-      ['/wp-json/wp/v2/posts/950?status=publish', 'POST', null],
-      ['/wp-json/wp/v2/posts/950?_locale=user&author=1', 'DELETE', null],
-      ['/wp-json/wp/v2/users/2', 'DELETE', null],
-      ['/wp-json/wp/v2/media/44', 'DELETE', null],
-      ['/wp-json/wp/v2/comments/5', 'DELETE', null],
-      ['/wp-json/wp/v2/posts', 'DELETE', null],
-      ['/wp-json/wp/v2/posts/950', 'POST', '{"status":"trash"}'],
-      [`/wp-admin/users.php?action=delete&user=2&${nonce}`, 'GET', null],
-      [`/wp-admin/edit-comments.php?action=trash&c=5&${nonce}`, 'GET', null],
-      ['/wp-admin/admin-ajax.php', 'POST', 'action=trash-post&id=950'],
-    ] as const)
-      expect(byClient(path, method, body), path).toBe(true)
-    // Everything else stays as it is for the agent: the dashboard, the users.
-    expect(policy.pageDenied('/wp-admin/', 'user')).toBe(true)
-    expect(policy.pageDenied('/wp-admin/users.php', 'user')).toBe(true)
   })
 })
 
 describe('wordpressAdapter.browserTaskPolicy: requests', () => {
-  it('closes every DELETE', () => {
-    for (const path of ['/wp-json/wp/v2/posts/12', '/wp-json/wp/v2/media/5', '/wp-admin/', '/'])
-      expect(denied(path, 'DELETE'), path).toBe(true)
-    expect(denied('/wp-json/wp/v2/posts/12', ' delete ')).toBe(true)
+  it.each([
+    ['/wp-json/wp/v2/posts/12?force=true', 'DELETE', null],
+    ['/?rest_route=/wp/v2/media/5', 'DELETE', null],
+    ['/wp-json/wp/v2/users/2?force=true&reassign=1', 'DELETE', null],
+    ['/wp-json/wp/v2/posts/12?_method=DELETE', 'POST', null],
+    ['/wp-json/wp/v2/posts/12', 'POST', null],
+    ['/wp-json/wp/v2/posts/12', 'POST', '{"status":"trash"}'],
+    ['/wp-admin/edit.php?post_status=trash', 'POST', 'delete_all=1'],
+  ])('opens deletion at %s for both controllers', (path, method, postData) => {
+    expect(policy.requestDenied({ path, method, postData }, 'agent')).toBe(false)
+    expect(policy.requestDenied({ path, method, postData }, 'user')).toBe(false)
   })
 
-  it('lets media be uploaded, unlike on a preview', () => {
+  it('allows POST overrides but refuses reads disguised as writes', () => {
+    expect(denied('/wp-json/wp/v2/comments/12?_method=DELETE', 'POST')).toBe(false)
+    expect(denied('/wp-json/wc-admin/options?_method=PATCH', 'POST')).toBe(false)
+    expect(denied('/wp-json/wp/v2/posts/12?_method=DELETE', 'GET')).toBe(true)
+    expect(denied('/wp-json/wp/v2/posts/12?_method=GET', 'GET')).toBe(false)
+  })
+
+  it('lets media be uploaded', () => {
     expect(denied('/wp-json/wp/v2/media', 'POST')).toBe(false)
     expect(denied('/?rest_route=/wp/v2/media', 'POST')).toBe(false)
     expect(denied('/wp-json/wp/v2/media', 'POST', multipart({ post: '12' }))).toBe(false)
@@ -369,185 +344,55 @@ describe('wordpressAdapter.browserTaskPolicy: requests', () => {
     expect(denied('/wp-json/wp/v2/global-styles/5?context=edit')).toBe(false)
   })
 
-  it('closes moving to the trash and deleting through REST', () => {
-    // The block editor sends DELETE as a POST without a body and the method in a header.
-    expect(denied('/wp-json/wp/v2/posts/12', 'POST')).toBe(true)
-    expect(denied('/?rest_route=/wp/v2/pages/7', 'POST')).toBe(true)
-    expect(denied('/wp-json/wp/v2/media/5', 'POST')).toBe(true)
-    expect(denied('/wp-json/wp/v2/posts/12?force=true', 'POST', '{}')).toBe(true)
-    expect(denied('/wp-json/wp/v2/posts/12', 'POST', '{"force":true}')).toBe(true)
-    expect(denied('/wp-json/wp/v2/posts/12', 'POST', '{"status":"trash"}')).toBe(true)
-    expect(denied('/wp-json/wp/v2/posts/12', 'POST', '{"status":" Trash "}')).toBe(true)
-    expect(denied('/wp-json/wp/v2/pages/7', 'POST', 'status=trash')).toBe(true)
-    expect(denied('/wp-json/wp/v2/posts/12?_method=DELETE', 'POST', '{}')).toBe(true)
-    expect(denied('/wp-json/wp/v2/posts/12?_embed=author')).toBe(true)
-  })
-
-  it('lets the block editor upload media with the featured image embedded, nothing else', () => {
-    // What the editor of WordPress 7.1 sends for a file of an Image or a File block.
-    const file = { name: 'file', text: 'PNG' }
-    const upload = '/index.php?rest_route=%2Fwp%2Fv2%2Fmedia&_embed=wp%3Afeaturedmedia&_locale=user'
-    expect(denied(upload, 'POST', multipart({}, file))).toBe(false)
-    expect(denied('/wp-json/wp/v2/media?_embed=wp%3Afeaturedmedia', 'POST')).toBe(false)
-    for (const path of [
-      '/wp-json/wp/v2/media?_embed=author',
-      '/wp-json/wp/v2/media?_embed=1',
-      '/wp-json/wp/v2/media?_embed',
-      '/wp-json/wp/v2/media?_embed=wp%3Afeaturedmedia,author',
-      '/wp-json/wp/v2/media?_embed=wp%3Afeaturedmedia&_embed=author',
-      '/wp-json/wp/v2/media/5?_embed=wp%3Afeaturedmedia',
-      '/wp-json/wp/v2/posts?_embed=wp%3Afeaturedmedia',
-    ])
-      expect(denied(path, 'POST', multipart({}, file)), path).toBe(true)
-    expect(denied('/wp-json/wp/v2/media?_embed=wp%3Afeaturedmedia')).toBe(true)
-  })
-
-  it('reads only the signed-in user of the users, and only reads it', () => {
-    expect(denied('/wp-json/wp/v2/users/me?context=edit')).toBe(false)
-    expect(denied('/wp-json/wp/v2/users/me', 'OPTIONS')).toBe(false)
-    expect(denied('/?rest_route=/wp/v2/users/me&_fields=id,name')).toBe(false)
-    for (const [path, method] of [
-      ['/wp-json/wp/v2/users/me', 'POST'],
-      ['/wp-json/wp/v2/users?who=authors&per_page=50', 'GET'],
-      ['/wp-json/wp/v2/users/1', 'GET'],
-      ['/wp-json/wp/v2/users', 'POST'],
-      ['/wp-json/wp/v2/users/me/application-passwords', 'GET'],
-      ['/wp-json/wp/v2/users/1/application-passwords', 'POST'],
-      ['/?rest_route=/wp/v2/users', 'GET'],
-      ['/index.php/wp-json/wp/v2/users/2', 'GET'],
-      ['/wp-json/WP/V2/Users', 'GET'],
-      ['/wp-json/wp/v2/%75sers', 'GET'],
-    ] as const)
-      expect(denied(path, method, method === 'POST' ? '{}' : null), path).toBe(true)
-  })
-
-  it('reads the active theme, nothing else of the themes', () => {
-    expect(denied('/wp-json/wp/v2/themes?status=active&_locale=user')).toBe(false)
-    expect(denied('/wp-json/wp/v2/themes')).toBe(true)
-    expect(denied('/wp-json/wp/v2/themes?status=active&status=inactive')).toBe(true)
-    expect(denied('/wp-json/wp/v2/themes/twentytwentyfive?status=active')).toBe(true)
-    expect(denied('/wp-json/wp/v2/themes?status=active', 'POST', '{}')).toBe(true)
-  })
-
   it.each([
-    '/wp-json/wp/v2/settings',
-    '/wp-json/wp/v2/plugins',
-    '/wp-json/wp/v2/plugins/akismet/akismet',
-    '/wp-json/wp/v2/comments?post=12',
-    '/wp-json/wp/v2/block-directory/search?term=x',
-    '/wp-json/batch/v1',
-    '/wp-json/oembed/1.0/proxy?url=https://example.com',
-    '/wp-json/wp-block-editor/v1/url-details?url=https://example.com',
-    '/wp-json/wp-site-health/v1/tests/background-updates',
-    '/wp-json/wc/v3/orders',
-    '/?rest_route=/wp/v2/settings',
-    '/?rest_route=%2Fwp%2Fv2%2Fcomments',
-  ])('closes the REST route %s whatever the method', (path) => {
-    expect(denied(path)).toBe(true)
-    expect(denied(path, 'POST', '{}')).toBe(true)
+    ['POST', '/wp-json/wp/v2/users'],
+    ['POST', '/wp-json/wp/v2/settings'],
+    ['DELETE', '/wp-json/wp/v2/comments/5'],
+    ['GET', '/wp-json/wp/v2/posts/5?_embed=replies,author'],
+    ['GET', '/wp-json/wp/v2/block-directory/search?term=x'],
+    ['POST', '/wp-json/batch/v1'],
+    ['POST', '/?rest_route=/wp-abilities/v1/abilities/example/run'],
+    ['GET', '/wp-json/oembed/1.0/proxy?url=https://example.com'],
+    ['GET', '/wp-json/wp-block-editor/v1/url-details?url=https://example.com'],
+    ['GET', '/wp-json/wp-site-health/v1/tests/background-updates'],
+    ['POST', '/wp-json/wc-admin/options'],
+    ['POST', '/wp-json/wc-analytics/admin/notes/5'],
+    ['POST', '/?rest_route=/wc-admin/onboarding/profile'],
+    ['POST', '/wp-json/wc/store/v1/checkout'],
+    ['POST', '/wp-json/wc/v3/webhooks'],
+  ])('opens %s %s', (method, path) => {
+    expect(denied(path, method)).toBe(false)
   })
 
-  it('closes writes of the look of the site and lets the editor read it', () => {
-    for (const path of [
-      '/wp-json/wp/v2/template-parts/theme//header',
-      '/wp-json/wp/v2/templates/theme//single',
-      '/wp-json/wp/v2/global-styles/5',
-      '/wp-json/wp/v2/navigation/9',
-      '/wp-json/wp/v2/menu-items',
-      '/wp-json/wp/v2/sidebars/sidebar-1',
-      '/wp-json/wp/v2/widgets',
-      '/wp-json/wp/v2/font-families',
-    ]) {
-      expect(denied(path, 'POST', '{}'), path).toBe(true)
-      expect(denied(path, 'PUT', '{}'), path).toBe(true)
-      expect(denied(path), path).toBe(false)
-    }
-  })
-
-  it('reads `rest_route` in a form body too, as WordPress does', () => {
-    expect(denied('/', 'POST', 'rest_route=/wp/v2/users/1&name=x')).toBe(true)
-    expect(denied('/', 'POST', multipart({ rest_route: '/wp/v2/settings' }))).toBe(true)
-    expect(denied('/?rest_route=%zz')).toBe(true)
-    expect(denied('/', 'POST', 'rest_route=%25zz')).toBe(true)
-  })
-
-  it('closes a body that claims JSON and is not an object', () => {
-    expect(denied('/wp-json/wp/v2/posts/12', 'POST', '{oops')).toBe(true)
-    expect(denied('/wp-json/wp/v2/posts/12', 'POST', '[{"status":"publish"}]')).toBe(true)
-  })
-
-  it('lets the editor talk to admin-ajax.php and closes actions that delete or reach closed parts', () => {
+  it('passes plugin payloads and administrative actions through to WordPress', () => {
+    expect(denied('/wp-json/plugin/v1/data', 'POST', '[{"value":"one"}]')).toBe(false)
     for (const action of [
-      'heartbeat',
-      'query-attachments',
-      'save-attachment',
-      'set-post-thumbnail',
-      'get-post-thumbnail-html',
-      'sample-permalink',
-      'wp-remove-post-lock',
-      'add-tag',
-      'wp-link-ajax',
-      'image-editor',
-      'rest-nonce',
-    ])
-      expect(denied('/wp-admin/admin-ajax.php', 'POST', `action=${action}&x=1`), action).toBe(false)
-    expect(denied('/wp-admin/admin-ajax.php?action=rest-nonce')).toBe(false)
-
-    for (const action of [
-      'delete-post',
-      'trash-post',
-      'untrash-post',
-      'delete-page',
-      'install-plugin',
-      'activate-plugin',
-      'update-plugin',
-      'Update-Theme',
-      'toggle-auto-updates',
+      'delete-comment',
       'wp-privacy-export-personal-data',
-      'wp-privacy-erase-personal-data',
-      'replyto-comment',
-      'get-comments',
-      'generate-password',
-      'destroy-sessions',
-      'autocomplete-user',
       'health-check-site-status-result',
-      'wpseo_set_option',
       'parse-embed',
       'oembed-cache',
-      // Quick Edit saves a post from the list: no checkpoint counts or confirms it (Б34).
       'inline-save',
+      'post-quickdraft-save',
+      'woocommerce_refund_line_items',
     ])
-      expect(denied('/wp-admin/admin-ajax.php', 'POST', `action=${action}`), action).toBe(true)
+      expect(denied('/wp-admin/admin-ajax.php', 'POST', `action=${action}`), action).toBe(false)
   })
 
-  it('reads the action of admin-ajax.php and admin-post.php in the query, a form and a multipart body', () => {
-    expect(denied('/wp-admin/admin-ajax.php?action=delete-post', 'POST', 'id=5')).toBe(true)
-    expect(denied('/wp-admin/admin-ajax.php', 'POST', multipart({ action: 'delete-post' }))).toBe(
-      true,
-    )
-    expect(denied('/wp-admin/admin-ajax.php', 'POST', 'action=heartbeat&action=trash-post')).toBe(
-      true,
-    )
-    expect(denied('/wp-admin/admin-ajax.php', 'POST', 'action%5B%5D=delete-post')).toBe(true)
-    expect(denied('/wp-admin/admin-ajax.php/x', 'POST', 'action=delete-post')).toBe(true)
-    expect(denied('/wp-admin/admin-post.php', 'POST', 'action=export_entries')).toBe(true)
-    expect(denied('/wp-admin/admin-post.php', 'POST', 'action=submit_form&name=x')).toBe(false)
-  })
-
-  it('lets the Classic Editor save its form and closes the Quick Draft', () => {
+  it('lets the Classic Editor save its form and use Quick Draft', () => {
     const classic =
       'action=editpost&originalaction=editpost&post_ID=12&user_ID=1&post_title=Открытие&publish=Publish'
     expect(denied('/wp-admin/post.php', 'POST', classic)).toBe(false)
     expect(denied('/wp-admin/post.php', 'POST', multipart({ action: 'editpost' }))).toBe(false)
     expect(denied('/wp-admin/post.php', 'POST', 'action=post-quickdraft-save&post_title=x')).toBe(
-      true,
+      false,
     )
   })
 
-  it('lets the client sign in and closes registering a user', () => {
+  it('lets the client sign in register and comment', () => {
     expect(denied('/wp-login.php', 'POST', 'log=owner&pwd=secret&wp-submit=Log+In')).toBe(false)
-    expect(denied('/wp-login.php?action=register', 'POST', 'user_login=x')).toBe(true)
-    expect(denied('/wp-comments-post.php', 'POST', 'comment=x&comment_post_ID=12')).toBe(true)
+    expect(denied('/wp-login.php?action=register', 'POST', 'user_login=x')).toBe(false)
+    expect(denied('/wp-comments-post.php', 'POST', 'comment=x&comment_post_ID=12')).toBe(false)
   })
 })
 
@@ -628,6 +473,20 @@ describe('wordpressAdapter.browserCheckpointOf', () => {
 })
 
 describe('wordpressAdapter.browserCommitAction', () => {
+  it('only treats a save as a post checkpoint when it comes from the post editor', () => {
+    const action = (page: string) =>
+      wordpressAdapter.browserCommitAction(
+        'button',
+        'Save',
+        `https://site.example/wp-admin/${page}`,
+      )
+    expect(action('post.php?post=12&action=edit')).toBe('save')
+    expect(action('post-new.php?post_type=page')).toBe('save')
+    expect(action('admin.php?page=wc-settings&tab=checkout')).toBeNull()
+    expect(action('user-edit.php?user_id=2')).toBeNull()
+    expect(action('site-editor.php')).toBeNull()
+  })
+
   it.each([
     ['Publish', 'publish'],
     ['Publish…', 'publish'],
@@ -891,7 +750,7 @@ describe('wordpressAdapter.browserGuide', () => {
       'Submit for Review',
       'Never type or guess a login or',
       'the platform fills the WordPress login form',
-      'Deleting is closed to you',
+      'issue refunds or delete items',
       'never start a second one',
       'web_screenshot',
     ])

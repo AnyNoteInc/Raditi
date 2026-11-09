@@ -60,6 +60,7 @@ const valid: Record<(typeof browserToolNames)[number], Record<string, unknown>[]
   web_help: [{ reason: 'login', message: 'Войдите в админку сайта, пожалуйста.' }],
   web_verify: [{}, { expect: 'publish' }],
   web_screenshot: [{}],
+  web_download: [{}, { number: 1 }, { number: 2, part: 3 }],
 }
 
 const invalid: Record<(typeof browserToolNames)[number], Record<string, unknown>[]> = {
@@ -123,11 +124,13 @@ const invalid: Record<(typeof browserToolNames)[number], Record<string, unknown>
   web_verify: [{ expect: 'trash' }, { objectId: '12' }],
   // Nothing to choose: no element, no area, no full page.
   web_screenshot: [{ fullPage: true }, { ref: 'e1' }],
+  // A part names its file; nothing past the number and the part.
+  web_download: [{ part: 2 }, { number: 0 }, { number: 1, part: 0 }, { number: '1' }, { url: '/' }],
 }
 
 describe('arguments of the web tools', () => {
-  it('names fourteen tools of the family', () => {
-    expect(browserToolNames).toHaveLength(14)
+  it('names fifteen tools of the family', () => {
+    expect(browserToolNames).toHaveLength(15)
     expect(Object.keys(browserToolArgumentSchemas).sort()).toEqual([...browserToolNames].sort())
   })
 
@@ -198,6 +201,12 @@ describe('results of the web tools', () => {
       { tool: 'web_wait', page, matched: false },
       { tool: 'web_help', requested: true, reason: 'captcha' },
       { tool: 'web_screenshot', page, attached: true, number: 3 },
+      { tool: 'web_download', downloads: [] },
+      {
+        tool: 'web_download',
+        downloads: [{ number: 1, name: 'Заявки.csv', sizeBytes: 120, kind: 'text' }],
+        file: { number: 1, name: 'Заявки.csv', part: 1, parts: 1, text: 'Имя;Телефон\n' },
+      },
       {
         tool: 'web_verify',
         matched: true,

@@ -48,6 +48,8 @@ function fakeSession(events: CloudBrowserEvent[], connection: CloudBrowserConnec
     setViewport: async () => undefined,
     signIn: async () => 'absent',
     setController: () => undefined,
+    downloads: async () => [],
+    downloadText: () => null,
     verify: async () => ({ state: 'unreadable' }),
     isConnected: () => true,
     close: async () => {

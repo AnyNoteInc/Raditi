@@ -9,7 +9,7 @@ import {
 // takes the table prefix and the encoding from that configuration, through the file source the
 // connection wizard recorded (plan 39, site-sources.ts); a site without one, a hosting that cannot
 // be read now, or a configuration that computes them leaves core the catalog of the database
-// itself: the prefix is the one under which every table the adapter's copy policy names exists —
+// itself: the prefix is the one under which every table that identifies the site exists —
 // one prefix, or none is guessed — and the encoding is the character set those tables share, with
 // their collation when they share one too — else the server's default of that set: a condition of
 // the copy compares by the collation of its column, which outranks the connection's. Tables in
@@ -25,10 +25,10 @@ const PREFIX = /^[A-Za-z0-9_]{0,32}$/
 
 /** null — no single prefix holds the policy's tables, or they share no character set. */
 export function databaseSettingsFromCatalog(
-  policy: Pick<DatabaseCopyPolicy, 'tables'>,
+  policy: Pick<DatabaseCopyPolicy, 'tables' | 'catalogTables'>,
   catalog: readonly CatalogTable[],
 ): SiteDatabaseSettings | null {
-  const wanted = [...new Set(policy.tables.map((rule) => rule.table))]
+  const wanted = [...new Set(policy.catalogTables ?? policy.tables.map((rule) => rule.table))]
   if (!wanted.length) return null
   const byName = new Map(catalog.map((table) => [table.name, table]))
   const prefixes = new Set<string>()
