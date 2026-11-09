@@ -20,6 +20,7 @@ import {
   publicationSourceSchema,
 } from '../git/publication.ts'
 import { sessionStateSchema, snapshotLimits } from '../sessions/session-state.ts'
+import { outboxLimits } from '../tasks/chat-files.ts'
 import {
   SNAPSHOT_SCHEMA_VERSION,
   snapshotHasRepository,
@@ -84,8 +85,15 @@ export const runnerInboxPath = (assignmentId: string, index: number) =>
 /** GET: 32 bytes of the data key, `no-store`; only for an open restore or seal command. */
 export const runnerKeyPath = (assignmentId: string, purpose: 'restore' | 'seal') =>
   `${assignmentPath(assignmentId)}/keys/${purpose}`
-/** PUT: an untrusted captured part of a capture with `baseSha`, before the captured report. */
-export const runnerCandidatePath = (assignmentId: string, part: 'patch' | 'untracked') =>
+/** The parts a capture may upload: the candidate of a turn with a repository and the outbox. */
+export type RunnerCandidatePart = 'patch' | 'untracked' | 'outbox'
+
+/**
+ * PUT: an untrusted captured part before the captured report — `patch` and `untracked` of a
+ * capture with `baseSha`, and `outbox`, the files the agent left for the client
+ * (docs/plan/66-chat-visuals.md, В8), of any capture that has one.
+ */
+export const runnerCandidatePath = (assignmentId: string, part: RunnerCandidatePart) =>
   `${assignmentPath(assignmentId)}/candidate/${part}`
 
 /** The fence of the binary endpoints above, which have no JSON body. */
@@ -530,12 +538,15 @@ export const runnerReportSchema = z
     /**
      * Sent after both candidate parts were uploaded to core. A capture without `baseSha` (plan 57,
      * Б5) uploads none and is answered with neither; core checks the parts against its command.
+     * `outbox` — the agent's files for the client (docs/plan/66, В8), uploaded the same way — may
+     * come with either kind of capture, or not at all.
      */
     report('captured', {
       commandId: uuid,
       homeBytes: z.number().int().nonnegative().max(snapshotLimits.archiveBytes),
       patch: candidatePart(snapshotLimits.patchBytes).optional(),
       untracked: candidatePart(snapshotLimits.archiveBytes).optional(),
+      outbox: candidatePart(outboxLimits.archiveBytes).optional(),
     }),
     report('sealed', {
       commandId: uuid,

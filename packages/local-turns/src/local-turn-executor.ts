@@ -54,7 +54,8 @@ export interface LocalTurnExecutorDependencies {
   sandboxes: SandboxProvider
   /** The stateless event parser of a driver: an executor never prepares a turn itself. */
   parser(id: AgentDriverId): Pick<AgentDriver, 'parseEvent'>
-  transport: Pick<SandboxSnapshotTransport, 'capture' | 'restore'>
+  transport: Pick<SandboxSnapshotTransport, 'capture' | 'restore'> &
+    Partial<Pick<SandboxSnapshotTransport, 'captureOutbox'>>
   /** Snapshot parts of the restored checkpoint in, the sealed home part out. */
   transfer: PresignedTransfer
   importBundle?: typeof importBaseBundle
@@ -63,6 +64,8 @@ export interface LocalTurnExecutorDependencies {
    * gets a new container and every removal removes it.
    */
   warm?: Pick<WarmSandboxes, 'take' | 'park' | 'forget'>
+  /** One line of the process log: why the agent's files for the client were left behind. */
+  log?: (line: string) => void
 }
 
 /** A prepared turn launches its agent; an adopted one only re-attaches to it. */
@@ -410,7 +413,7 @@ class LocalTurnExecution implements TurnExecution {
   #handedOver = false
 
   private readonly sandbox: Sandbox
-  private readonly deps: Pick<LocalTurnExecutorDependencies, 'transport' | 'transfer'>
+  private readonly deps: Pick<LocalTurnExecutorDependencies, 'transport' | 'transfer' | 'log'>
   private readonly purpose: Purpose
   private readonly parser: Pick<AgentDriver, 'parseEvent'>
   private readonly credentials: readonly string[]
@@ -421,7 +424,7 @@ class LocalTurnExecution implements TurnExecution {
 
   constructor(
     sandbox: Sandbox,
-    deps: Pick<LocalTurnExecutorDependencies, 'transport' | 'transfer'>,
+    deps: Pick<LocalTurnExecutorDependencies, 'transport' | 'transfer' | 'log'>,
     purpose: Purpose,
     parser: Pick<AgentDriver, 'parseEvent'>,
     credentials: readonly string[],
@@ -500,9 +503,29 @@ class LocalTurnExecution implements TurnExecution {
     )
     const { patch, untracked } = archives
     if (!patch || !untracked) throw conflict('A capture with a base took no candidate')
+    const outbox = await this.#outbox()
     this.#home = archives.home
     this.#capturedRepository = true
-    return { patch, untracked, homeBytes: archives.home.byteLength }
+    return { patch, untracked, homeBytes: archives.home.byteLength, ...(outbox ? { outbox } : {}) }
+  }
+
+  /**
+   * The files the agent left for the client (docs/plan/66-chat-visuals.md, В8): an outbox the
+   * checks refused is dropped whole and the turn goes on, with a line in the log why.
+   */
+  async #outbox(): Promise<Uint8Array | undefined> {
+    const { transport, log } = this.deps
+    if (!transport.captureOutbox) return undefined
+    try {
+      const taken = await transport.captureOutbox(this.sandbox, this.credentials, this.envValues)
+      if (taken.skipped > 0)
+        log?.(`turn_outbox_skipped container=${this.sandbox.id} entries=${taken.skipped}`)
+      return taken.archive
+    } catch (error) {
+      const reason = isDomainError(error) ? error.code : 'unknown'
+      log?.(`turn_outbox_dropped container=${this.sandbox.id} reason=${reason}`)
+      return undefined
+    }
   }
 
   /** A turn without a repository (plan 57, Б4): its session alone; no git command runs. */
@@ -523,9 +546,10 @@ class LocalTurnExecution implements TurnExecution {
       [],
       this.envValues,
     )
+    const outbox = await this.#outbox()
     this.#home = archives.home
     this.#capturedRepository = false
-    return { homeBytes: archives.home.byteLength }
+    return { homeBytes: archives.home.byteLength, ...(outbox ? { outbox } : {}) }
   }
 
   async seal({ base, dataKey, put }: TurnSealInput): Promise<SealedTurnPart> {

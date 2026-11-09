@@ -204,7 +204,10 @@ describe('the variables of a site', () => {
     type('Имя', 'CRM_TOKEN')
     type('Значение', 'Пароль-сайта-2026')
     fireEvent.click(screen.getByRole('switch', { name: 'Передавать агенту' }))
+    type('Адреса сервиса', 'укк-жкх.рф')
     type('Имя', 'SITE_ADMIN_PASSWORD')
+    // No service to list: the sign-in goes to the site's own form alone.
+    expect(screen.queryByLabelText('Адреса сервиса')).toBeNull()
     const toAgent = screen.getByRole('switch', { name: 'Передавать агенту' })
     expect((toAgent as HTMLInputElement).checked).toBe(false)
     expect((toAgent as HTMLInputElement).disabled).toBe(true)
@@ -220,6 +223,7 @@ describe('the variables of a site', () => {
     expect((toPreview as HTMLInputElement).disabled).toBe(true)
     expect(set.mock.calls[0]![0]).toMatchObject({
       name: 'SITE_ADMIN_PASSWORD',
+      hosts: [],
       toAgent: false,
       agentConsent: false,
       toPreview: false,

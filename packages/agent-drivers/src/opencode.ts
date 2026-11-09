@@ -7,6 +7,7 @@ import {
   ENV_VALUE_MASK,
   SANDBOX_AGENT_HOME,
   SANDBOX_INBOX,
+  SANDBOX_OUT,
   SANDBOX_SECRETS_DIR,
   SANDBOX_WORKDIR,
 } from '@repo/domain'
@@ -162,6 +163,8 @@ function permissionOf(context: Pick<RunContext, 'internet' | 'skills'>) {
     external_directory: {
       '*': 'deny',
       [`${SANDBOX_INBOX}/*`]: 'allow',
+      // The files the agent makes for the client (docs/plan/66-chat-visuals.md, В11).
+      [`${SANDBOX_OUT}/*`]: 'allow',
       // The page snapshots the browser skill writes, which its answers name by path.
       ...(context.skills?.some((skill) => skill.kind === 'local')
         ? { [`${playwrightOutput}/*`]: 'allow' }

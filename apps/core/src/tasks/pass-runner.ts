@@ -26,6 +26,7 @@ import type { BrowserSessions } from '../browser/browser-sessions.ts'
 import { wakeStoppedPreview } from '../previews/preview-wake.ts'
 import type { TurnSupervisor } from '../turns/turn-supervisor.ts'
 import type { CandidateGit } from './candidate-git.ts'
+import type { ChatFiles } from './chat-files.ts'
 import type { LivePasses } from './live-passes.ts'
 import { readPassFacts } from './pass-facts.ts'
 import type { PassEnding, PassRef, PassSettlement, SettleAnswer } from './pass-settlement.ts'
@@ -84,6 +85,11 @@ export interface PassRunnerDependencies {
   live: LivePasses
   queue: JobQueue
   logger?: { log(message: string): void; warn(message: string): void }
+  /**
+   * Brings the files the agent made for the client into the chat after a completed pass
+   * (docs/plan/66-chat-visuals.md, В8); absent — they stay with the turn's container.
+   */
+  chatFiles?: Pick<ChatFiles, 'deliver'>
   now?: () => Date
   cancelPollMs?: number
 }
@@ -229,8 +235,10 @@ export class PassRunner {
     let ending: PassEnding | null
     let retry: Retry | null = null
     let cause: string | null = null
+    let outbox: Uint8Array | undefined
     try {
       const completed = await supervisor.run(plan.request, plan.policy, controller.signal)
+      outbox = completed.outbox
       const git = completed.manifest.git
       ending = {
         kind: 'completed',
@@ -259,6 +267,9 @@ export class PassRunner {
     this.#logger.log(
       `pass_settled task=${job.taskId} ending=${ending.kind} answer=${answer}${cause ? ` cause=${cause}` : ''}`,
     )
+    // After the answer of the turn, so that its files stand below it in the chat.
+    if (ending.kind === 'completed' && answer === 'moved' && outbox)
+      await this.deps.chatFiles?.deliver({ taskId: job.taskId, turn: ending.turn, outbox })
     if (ending.kind === 'busy') {
       if (answer === 'moved' && retry) await this.#requeue(job, retry)
     } else await this.#wakeSite(job, turnNo)

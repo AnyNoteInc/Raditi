@@ -15,6 +15,7 @@ import {
   runnerTimings,
   runnerUnavailable,
   TURN_PUBLICATION_GRACE_MS,
+  type RunnerCandidatePart,
   type RunnerCommand,
   type RunnerPollRequest,
   type RunnerReport,
@@ -42,7 +43,7 @@ export type RunnerCommandBody = Body<RunnerCommand>
 export type RunnerReportType = RunnerReport['type']
 export type ReportOf<T extends RunnerReportType> = Extract<RunnerReport, { type: T }>
 export type RunnerReconcileRequest = z.infer<typeof runnerReconcileRequestSchema>
-export type CandidatePart = 'patch' | 'untracked'
+export type CandidatePart = RunnerCandidatePart
 export type CandidateParts = Partial<Record<CandidatePart, { bytes: Uint8Array; sha256: string }>>
 export interface ClaimedRunner {
   id: string
@@ -670,16 +671,17 @@ export class RunnerHub implements OnApplicationShutdown {
         const open = this.#answering(live, report.commandId, ['capture'])
         if (!open) return
         // Parts exactly when the capture named a base: a turn without a repository (plan 57,
-        // Б5) answers with home alone, and one with a repository with both uploads.
+        // Б5) answers with home alone, and one with a repository with both uploads. The outbox
+        // of the agent (docs/plan/66, В8) may come with either, exactly as uploaded.
+        const parts: CandidatePart[] = ['outbox']
         if (!capturesCandidate(open.command)) {
           if (report.patch !== undefined || report.untracked !== undefined)
             throw RunnerApiError.of('BAD_REQUEST')
-          this.#settle(live, open, report)
-          return
-        }
-        for (const part of ['patch', 'untracked'] as const) {
+        } else parts.push('patch', 'untracked')
+        for (const part of parts) {
           const uploaded = open.candidates?.[part]
           const reported = report[part]
+          if (part === 'outbox' && !uploaded && !reported) continue
           if (
             !uploaded ||
             !reported ||
@@ -842,7 +844,9 @@ export class RunnerHub implements OnApplicationShutdown {
     const { open } = await this.#binary(runnerId, assignmentId, headers, 'capture')
     const parts = open.candidates
     // A capture without a base takes no candidate: its turn has no repository (plan 57, Б5).
-    if (!parts || !capturesCandidate(open.command)) throw RunnerApiError.of('COMMAND_CLOSED')
+    // The outbox of the agent goes with either kind (docs/plan/66, В8).
+    if (!parts || (part !== 'outbox' && !capturesCandidate(open.command)))
+      throw RunnerApiError.of('COMMAND_CLOSED')
     return (bytes) => {
       if (!open.settled) parts[part] = { bytes, sha256: sha256(bytes) }
     }

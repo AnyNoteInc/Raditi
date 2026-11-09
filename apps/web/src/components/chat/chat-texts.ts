@@ -377,18 +377,32 @@ export const activityText = Object.freeze({
   /** What the agent is thinking or writing right now, as it comes. */
   thinkingNow: 'Агент размышляет…',
   answering: 'Агент пишет ответ…',
-  command: 'Команда',
   tool: 'Инструмент',
   question: 'Вопрос',
-  /** How a command ended: its exit code, as the agent's CLI reported it. */
-  exit: (code: number | null): string | null =>
-    code === null ? null : code === 0 ? 'выполнена' : `ошибка, код ${code}`,
   toolDone: (ok: boolean) => (ok ? 'выполнен' : 'ошибка'),
   file: Object.freeze({
     add: 'Добавлен файл',
     update: 'Изменён файл',
     delete: 'Удалён файл',
   }),
+})
+
+/** A command of the agent in «Ход работы» and its window (owner's request of 09.11.2026). */
+export const commandText = Object.freeze({
+  title: 'Команда',
+  input: 'Команда',
+  output: 'Вывод',
+  close: 'Закрыть',
+  /** How a command ended: its exit code, as the agent's CLI reported it. */
+  exit: (code: number | null): string | null =>
+    code === null ? null : code === 0 ? 'выполнена' : `ошибка, код ${code}`,
+  open: (command: string) => `Команда ${command} — открыть вывод`,
+  moreLines: (count: number) => `… ещё ${count} ${plural(count, 'строка', 'строки', 'строк')}`,
+  cutShort: '… вывод длинный',
+  cut: 'Вывод длинный: здесь его начало и конец, середина пропущена.',
+  noOutput: 'Команда ничего не вывела.',
+  noOutputKnown:
+    'Вывода этой команды нет: агент выполнял её до того, как чат начал его показывать.',
 })
 
 /** Files attached to a message (docs/plan/57-browser-tasks.md, Б26). */

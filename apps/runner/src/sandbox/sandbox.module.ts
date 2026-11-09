@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common'
+import { Logger, Module } from '@nestjs/common'
 import { agentEventParser } from '@repo/agent-drivers'
 import type { SandboxProvider } from '@repo/domain'
 import { LocalTurnExecutor } from '@repo/local-turns'
@@ -17,6 +17,9 @@ import { SANDBOX_PROVIDER, TURN_EXECUTOR } from './sandbox.tokens.ts'
  * sandbox steps core runs itself under TURN_EXECUTOR=local. Snapshot parts move only through
  * the presigned URLs core sends with a command.
  */
+/** Why the agent's files for the client stayed in the sandbox (docs/plan/66, В8). */
+const outboxLogger = new Logger('TurnOutbox')
+
 @Module({
   imports: [VmTokenModule],
   providers: [
@@ -34,6 +37,7 @@ import { SANDBOX_PROVIDER, TURN_EXECUTOR } from './sandbox.tokens.ts'
           parser: agentEventParser,
           transport: new SandboxSnapshotTransport(),
           transfer: fetchPresignedTransfer(),
+          log: (line) => outboxLogger.warn(line),
         }),
       inject: [SANDBOX_PROVIDER],
     },

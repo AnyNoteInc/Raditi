@@ -6,7 +6,10 @@ import {
   envValueForms,
   isSnapshotCredential,
   isTooLarge,
+  outboxFileNameSchema,
+  outboxLimits,
   publicationTooLarge,
+  SANDBOX_OUT,
   SANDBOX_WORKDIR,
   sandboxCommandFailed,
   sessionStateSchema,
@@ -24,6 +27,7 @@ import {
   validateSnapshotArchives,
   type TurnArchives,
 } from './archive-validation.ts'
+import { outboxTooLarge, readOutboxArchive } from './outbox.ts'
 
 export type { HomeOnlyArchives, SnapshotArchives, TurnArchives } from './archive-validation.ts'
 
@@ -34,8 +38,37 @@ const commandFailed = () =>
 const homeTooLarge = () => snapshotTooLarge('Agent session state exceeds the snapshot limits')
 const changesTooLarge = () => publicationTooLarge('Agent changes exceed the snapshot limits')
 
+/** The records of a NUL-terminated list; a last one without its NUL is dropped. */
+function splitNul(bytes: Uint8Array): Uint8Array[] {
+  const records: Uint8Array[] = []
+  let start = 0
+  for (let i = 0; i < bytes.length; i += 1)
+    if (bytes[i] === 0) {
+      records.push(bytes.subarray(start, i))
+      start = i + 1
+    }
+  return records
+}
+
+/** A record as UTF-8 text, or null when it is not. */
+function decodeName(bytes: Uint8Array): string | null {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+  } catch {
+    return null
+  }
+}
+
 async function* input(bytes: Uint8Array): AsyncIterable<Uint8Array> {
   if (bytes.byteLength > 0) yield bytes
+}
+
+/** What the capture of the outbox took: the archive, how many files, how many it left. */
+export interface OutboxCapture {
+  archive?: Uint8Array
+  files: number
+  /** Entries that are not regular files, or whose name cannot reach the client as it is. */
+  skipped: number
 }
 
 const nulList = (paths: string[]): Uint8Array =>
@@ -141,6 +174,68 @@ export class SandboxSnapshotTransport {
       credentials,
       envValues,
     )
+  }
+
+  /**
+   * The files the agent left for the client (docs/plan/66-chat-visuals.md, В8–В9): the regular
+   * files right in SANDBOX_OUT, never one in a folder below it, as one ustar archive in zstd with
+   * plain modes. An entry that is no regular file, or whose name cannot reach the client as it
+   * is, is left and counted. More than ten files, a file above 20 MiB or an archive above 16 MiB
+   * is refused (outboxTooLarge), and so is the archive that holds one of the turn's credentials
+   * or a spelling of a value of the client's variables (snapshotHasCredential): the caller drops
+   * the outbox, never the turn. The agent's processes are stopped before this runs.
+   */
+  async captureOutbox(
+    sandbox: Sandbox,
+    credentials: readonly string[] = [],
+    envValues: readonly string[] = [],
+  ): Promise<OutboxCapture> {
+    await this.#checkNoSymlinkAncestors(sandbox, SANDBOX_OUT)
+    const exists = await this.#exec(sandbox, ['test', '-d', SANDBOX_OUT], 0, {
+      allowedCodes: [0, 1],
+    })
+    if (exists.code !== 0) return { files: 0, skipped: 0 }
+    const list = await this.#exec(
+      sandbox,
+      ['find', '-P', SANDBOX_OUT, '-mindepth', '1', '-maxdepth', '1', '-printf', '%y %s %f\\0'],
+      LIST_BYTES,
+      { tooLarge: outboxTooLarge },
+    )
+    const names: string[] = []
+    let skipped = 0
+    for (const record of list.stdout.length ? splitNul(list.stdout) : []) {
+      const match = /^(\S) (\d+) ([\s\S]+)$/u.exec(decodeName(record) ?? '')
+      if (!match || match[1] !== 'f' || !outboxFileNameSchema.safeParse(match[3]).success) {
+        skipped += 1
+        continue
+      }
+      if (Number(match[2]) > outboxLimits.fileBytes) throw outboxTooLarge()
+      names.push(match[3]!)
+    }
+    if (names.length > outboxLimits.files) throw outboxTooLarge()
+    if (names.length === 0) return { files: 0, skipped }
+    const archive = await this.#exec(
+      sandbox,
+      [
+        'tar',
+        '--create',
+        '--zstd',
+        '--format=ustar',
+        '--file=-',
+        `--directory=${SANDBOX_OUT}`,
+        '--null',
+        '--verbatim-files-from',
+        '--no-recursion',
+        '--mode=u=rw,go=r',
+        '--files-from=-',
+      ],
+      outboxLimits.archiveBytes,
+      { stdin: input(nulList(names)), tooLarge: outboxTooLarge },
+    )
+    const entries = await readOutboxArchive(archive.stdout, {
+      refused: [...credentials, ...envValueForms(envValues)],
+    })
+    return { archive: archive.stdout, files: entries.length, skipped }
   }
 
   /** The agent's session: the includes that exist, without a symlink on the way to any. */

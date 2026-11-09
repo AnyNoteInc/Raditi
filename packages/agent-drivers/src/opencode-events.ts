@@ -1,4 +1,9 @@
-import { agentOutputLimits, SANDBOX_WORKDIR, type AgentEvent } from '@repo/domain'
+import {
+  agentOutputLimits,
+  clipCommandOutput,
+  SANDBOX_WORKDIR,
+  type AgentEvent,
+} from '@repo/domain'
 
 import {
   count,
@@ -96,9 +101,31 @@ function toolEvents(part: JsonObject): AgentEvent[] {
   const result = events({ type: 'tool_call', tool: platformToolName(tool), ok })
   if (tool === 'bash') {
     const command = text(input?.command, agentOutputLimits.command)
-    const exitCode = object(state.metadata)?.exit
+    const metadata = object(state.metadata)
+    const exitCode = metadata?.exit
+    // What it printed: the tool's answer to the model, or its metadata when the answer is gone.
+    const printed =
+      typeof state.output === 'string'
+        ? state.output
+        : typeof metadata?.output === 'string'
+          ? metadata.output
+          : undefined
+    const shown = printed === undefined ? undefined : clipCommandOutput(printed)
     if (command !== undefined)
-      result.push(...events({ type: 'command', command, exitCode: exitCode ?? null }))
+      result.push(
+        ...events({
+          type: 'command',
+          command,
+          exitCode: exitCode ?? null,
+          ...(shown === undefined
+            ? {}
+            : {
+                output: shown.output,
+                // OpenCode clips a long output itself and says so.
+                outputCut: shown.outputCut || metadata?.truncated === true,
+              }),
+        }),
+      )
   }
   if (ok && (tool === 'write' || tool === 'edit')) {
     const path = workspaceFile(input?.filePath)

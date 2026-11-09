@@ -1,4 +1,4 @@
-import type { Provider } from '@nestjs/common'
+import { Logger, type Provider } from '@nestjs/common'
 import type { AgentDriverRegistry } from '@repo/agent-drivers'
 import type { PrismaClient } from '@repo/db'
 import type { JobQueue, ObjectStorage, SecretStore, SiteLeaseStore } from '@repo/domain'
@@ -25,6 +25,7 @@ import { candidateGitOf, type CandidateGit } from './candidate-git.ts'
 import { CandidateEdit } from './candidate-edit.ts'
 import { CandidateRebase } from './candidate-rebase.ts'
 import { CandidateRewind } from './candidate-rewind.ts'
+import { ChatFiles } from './chat-files.ts'
 import { LivePasses } from './live-passes.ts'
 import { PassRunner } from './pass-runner.ts'
 import { PassSettlement } from './pass-settlement.ts'
@@ -85,6 +86,7 @@ export const taskProviders: Provider[] = [
       live: LivePasses,
       queue: JobQueue,
       browser: BrowserSessions | null,
+      storage: ObjectStorage,
     ) =>
       new PassRunner({
         db: prisma,
@@ -100,6 +102,11 @@ export const taskProviders: Provider[] = [
         settlement,
         live,
         queue,
+        chatFiles: new ChatFiles({
+          db: prisma,
+          storage,
+          logger: new Logger('ChatFiles'),
+        }),
       }),
     inject: [
       PRISMA,
@@ -112,6 +119,7 @@ export const taskProviders: Provider[] = [
       LivePasses,
       JOB_QUEUE,
       BrowserSessions,
+      OBJECT_STORAGE,
     ],
   },
   {

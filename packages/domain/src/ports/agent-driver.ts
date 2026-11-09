@@ -283,6 +283,11 @@ export const agentOutputLimits = Object.freeze({
   nativeSessionId: 200,
   messageText: 20_000,
   command: 10_000,
+  /**
+   * What a command printed, as the chat shows it under the command (owner's request of
+   * 09.11.2026): its start and its end, the middle left out (`clipCommandOutput`).
+   */
+  commandOutput: 4000,
   path: 1024,
   tool: 200,
   questionText: 1000,
@@ -298,6 +303,35 @@ export const agentOutputLimits = Object.freeze({
   turnEvents: 10_000,
 })
 const limits = agentOutputLimits
+
+/** Between the start and the end of a clipped output (`clipCommandOutput`). */
+export const COMMAND_OUTPUT_GAP = '\n…\n'
+
+/**
+ * What a command printed, as an event carries it: whole when it fits `commandOutput`, else its
+ * first three quarters and its last quarter — an error is printed last — with `COMMAND_OUTPUT_GAP`
+ * between them. Never splits a pair of surrogates.
+ */
+export function clipCommandOutput(output: string): { output: string; outputCut: boolean } {
+  const room = limits.commandOutput
+  if (output.length <= room) return { output, outputCut: false }
+  const keep = room - COMMAND_OUTPUT_GAP.length
+  const chars = [...output]
+  // Whole characters only: an astral one takes two units of `length`.
+  const take = (from: readonly string[], budget: number): string[] => {
+    const kept: string[] = []
+    let used = 0
+    for (const char of from) {
+      if (used + char.length > budget) break
+      kept.push(char)
+      used += char.length
+    }
+    return kept
+  }
+  const head = take(chars, Math.ceil(keep * 0.75))
+  const tail = take(chars.slice(head.length).reverse(), keep - Math.ceil(keep * 0.75)).reverse()
+  return { output: head.join('') + COMMAND_OUTPUT_GAP + tail.join(''), outputCut: true }
+}
 
 /** Native session ids end up in literal snapshot paths: validated whole, never truncated. */
 export const nativeSessionIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/)
@@ -328,6 +362,10 @@ export const agentEventSchema = z.discriminatedUnion('type', [
     type: z.literal('command'),
     command: z.string().max(limits.command),
     exitCode: z.number().int().nullable(),
+    /** What it printed, clipped (`clipCommandOutput`); absent — the driver does not say. */
+    output: z.string().max(limits.commandOutput).optional(),
+    /** The output was longer than `output`: its middle is left out. */
+    outputCut: z.boolean().optional(),
   }),
   z.object({
     type: z.literal('file_change'),

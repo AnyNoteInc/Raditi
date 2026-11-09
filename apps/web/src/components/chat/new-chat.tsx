@@ -1,6 +1,5 @@
 'use client'
 
-import type { ReasoningEffort } from '@repo/domain'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import { useTheme } from '@mui/material/styles'
@@ -14,8 +13,10 @@ import { useTRPC } from '@/trpc/client'
 import { sendErrorText } from './call-error'
 import { chatHref } from './chat-address'
 import { keepChatDraft, takeChatDraft } from './chat-draft'
+import { useRememberedEffort } from './chat-effort'
+import { useGreeting } from './chat-greeting'
 import { riseIn } from './chat-motion'
-import { chatsText, composerText, taskWayText } from './chat-texts'
+import { composerText, taskWayText } from './chat-texts'
 import type { ProjectListItem } from './chat-types'
 import { isPageCommand, useClientCommands } from './client-commands'
 import { Composer } from './composer'
@@ -38,7 +39,16 @@ import { uuidv7 } from './uuid'
  * is the list's, so the screen takes the level below; below `md` that screen stands hidden on the
  * page, and it leaves the words kept for a new chat to the one the client will see.
  */
-export function NewChat({ userId, beside = false }: { userId: string; beside?: boolean }) {
+export function NewChat({
+  userId,
+  userName = null,
+  beside = false,
+}: {
+  userId: string
+  /** The client's name: the greeting calls them by it (owner's request of 09.11.2026). */
+  userName?: string | null
+  beside?: boolean
+}) {
   const trpc = useTRPC()
   const queryClient = useQueryClient()
   const router = useRouter()
@@ -56,7 +66,9 @@ export function NewChat({ userId, beside = false }: { userId: string; beside?: b
   const found = projects.find((project) => project.id.toLowerCase() === wanted?.toLowerCase())
   const project = found !== undefined && (held !== null || projectChoosable(found)) ? found : null
   const siteId = held !== null ? held.siteId : (project?.id ?? null)
-  const [effort, setEffort] = useState<ReasoningEffort>('high')
+  // The level chosen last in this browser (owner's request of 09.11.2026).
+  const [effort, setEffort] = useRememberedEffort()
+  const greeting = useGreeting(userName)
   const attachments = useAttachments(siteId)
   const attached = attachments.items.length > 0
   if (attached !== (held !== null)) setHeld(attached ? { siteId } : null)
@@ -124,18 +136,22 @@ export function NewChat({ userId, beside = false }: { userId: string; beside?: b
         ...riseIn,
       }}
     >
-      <Typography
-        component={beside ? 'h2' : 'h1'}
-        sx={{
-          fontSize: { xs: 24, sm: 28 },
-          fontWeight: 500,
-          letterSpacing: '-0.01em',
-          lineHeight: 1.25,
-          textAlign: 'center',
-        }}
-      >
-        {chatsText.newChat}
-      </Typography>
+      <Box sx={{ textAlign: 'center' }}>
+        <Typography
+          component={beside ? 'h2' : 'h1'}
+          sx={{
+            fontSize: { xs: 24, sm: 28 },
+            fontWeight: 500,
+            letterSpacing: '-0.01em',
+            lineHeight: 1.25,
+          }}
+        >
+          {greeting.title}
+        </Typography>
+        <Typography color="text.secondary" sx={{ mt: 0.75, fontSize: { xs: 15, sm: 16 } }}>
+          {greeting.line}
+        </Typography>
+      </Box>
 
       <Composer
         placeholder={composerText.newPlaceholder}

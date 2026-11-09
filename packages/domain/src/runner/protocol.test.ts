@@ -592,6 +592,23 @@ describe('runner reports', () => {
     )
   })
 
+  it('reports the outbox of the agent with either kind of capture, within its limit', () => {
+    const captured = { ...base, type: 'captured', commandId: ids.command, homeBytes: 100 }
+    const part = { sha256: digest, sizeBytes: 10 }
+    expect(runnerReportSchema.parse({ ...captured, outbox: part })).toHaveProperty('outbox')
+    expect(
+      runnerReportSchema.safeParse({ ...captured, patch: part, untracked: part, outbox: part })
+        .success,
+    ).toBe(true)
+    expect(
+      runnerReportSchema.safeParse({
+        ...captured,
+        outbox: { sha256: digest, sizeBytes: 16 * 1024 * 1024 + 1 },
+      }).success,
+    ).toBe(false)
+    expect(runnerCandidatePath(ids.assignment, 'outbox')).toMatch(/\/candidate\/outbox$/)
+  })
+
   it('refuses a cursor that moves backwards, an oversized batch and invalid events', () => {
     expect(runnerReportSchema.safeParse(output([], { stdout: 9, stderr: 5 })).success).toBe(false)
     const text = 'x'.repeat(20_000)

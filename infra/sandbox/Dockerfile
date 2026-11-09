@@ -16,11 +16,14 @@ FROM base AS runtime
 # lockfile and the Chromium of its Playwright, with the system libraries Playwright names,
 # installed while building — a turn downloads nothing. The skill runs it headless, through the
 # egress proxy (packages/agent-drivers/src/opencode.ts).
+# Python with python-docx and openpyxl from Debian: the agent builds .docx and .xlsx files for the
+# client offline and leaves them in /workspace/out (docs/plan/66-chat-visuals.md, В11).
 # Changing a version: packages/agent-drivers/cli/README.md.
 COPY packages/agent-drivers/cli/package.json packages/agent-drivers/cli/package-lock.json /usr/local/lib/raditi/agent-clis/
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       git zstd ca-certificates curl jq ripgrep fd-find php-cli composer \
+      python3 python3-docx python3-openpyxl \
     && ln -s /usr/bin/fdfind /usr/local/bin/fd \
     && rm -rf /var/lib/apt/lists/* \
     && cd /usr/local/lib/raditi/agent-clis \

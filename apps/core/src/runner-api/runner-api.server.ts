@@ -12,6 +12,7 @@ import {
   runnerPollRequestSchema,
   runnerReconcileRequestSchema,
   runnerReportSchema,
+  outboxLimits,
   snapshotLimits,
 } from '@repo/domain'
 import { throttledLogger, type ThrottledLog } from '@repo/observability'
@@ -23,11 +24,12 @@ import type { RunnerAuthenticator } from './runner-auth.ts'
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 const ASSIGNMENT = new RegExp(
-  `^${RUNNER_API_PREFIX}/assignments/(${UUID})/(bundle|keys/(restore|seal)|candidate/(patch|untracked)|inbox/(0|[1-9][0-9]?))$`,
+  `^${RUNNER_API_PREFIX}/assignments/(${UUID})/(bundle|keys/(restore|seal)|candidate/(patch|untracked|outbox)|inbox/(0|[1-9][0-9]?))$`,
 )
 const candidateLimits: Record<CandidatePart, number> = {
   patch: snapshotLimits.patchBytes,
   untracked: snapshotLimits.archiveBytes,
+  outbox: outboxLimits.archiveBytes,
 }
 /** Headers of a response never let a proxy or client keep keys, bundles or commands. */
 const NO_STORE = { 'cache-control': 'no-store' }

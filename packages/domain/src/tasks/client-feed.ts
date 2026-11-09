@@ -12,6 +12,7 @@ import { agentOutputLimits } from '../ports/agent-driver.ts'
 import { serverCommandIds } from '../release/chat-commands.ts'
 import { releaseOutcomes } from '../release/release-state.ts'
 import { versionBumps, versionTagSchema } from '../release/semver.ts'
+import { outboxFileNameSchema, outboxLimits } from './chat-files.ts'
 import { FEED_FAILURE_FALLBACK, feedFailureCodes } from './client-feed-failures.ts'
 import {
   FEED_REQUEST_TEXT_LIMIT,
@@ -31,9 +32,9 @@ import { taskStatuses } from './task-status.ts'
  *
  * Two schemas per type. Writing is strict: closed enums, no extra keys, free text in exactly
  * four fields (`request.text`, `question.intro`, `question.questions[].text` with its
- * `options[]`, `result.message`), the agent's words of a `browser` question (`question.message`)
- * and the titles of objects the platform read on the site (`objects[].title`) — everything else
- * is a number, an enum, an id or an address, so nothing raw (a failure reason, a path, a
+ * `options[]`, `result.message`), the agent's words of a `browser` question (`question.message`),
+ * the titles of objects the platform read on the site (`objects[].title`) and the name of a file
+ * the agent made (`file.name`) — everything else is a number, an enum, an id or an address, so nothing raw (a failure reason, a path, a
  * command) can reach the customer. Reading is tolerant: rows are immutable and outlive the code
  * that wrote them.
  *
@@ -62,6 +63,8 @@ export const feedEventTypes = [
   'feed.redo',
   // The client changed a file in «Терминал» of the chat (06.11.2026): what came of it.
   'feed.edit',
+  // A file the agent made for the client in its turn (docs/plan/66-chat-visuals.md, В8).
+  'feed.file',
 ] as const
 export type FeedEventType = (typeof feedEventTypes)[number]
 
@@ -713,6 +716,19 @@ export const feedScreenshotPayloadSchema = z.strictObject({
 export type FeedScreenshotPayload = z.infer<typeof feedScreenshotPayloadSchema>
 
 /**
+ * `feed.file` v1 — a file the agent left in its outbox for the client (docs/plan/66-chat-visuals.md,
+ * В8–В10). The bytes are in the artifacts bucket under the task (`chatFileKey`); the row names
+ * the file by id with the name it had in the outbox and its size. Core writes it after the turn.
+ */
+export const feedFilePayloadSchema = z.strictObject({
+  v: version,
+  fileId: z.uuid(),
+  name: outboxFileNameSchema,
+  sizeBytes: z.number().int().min(0).max(outboxLimits.fileBytes),
+})
+export type FeedFilePayload = z.infer<typeof feedFilePayloadSchema>
+
+/**
  * `feed.rewind` v1 — `/undo` took the last turn back: the conversation, and with `files` the
  * changes in the files too. `site` says what stays all the same, by the writes of the whole task:
  * a browser session belongs to the task, not to a turn. Trusted, no text.
@@ -790,6 +806,7 @@ export const feedPayloadSchemas = Object.freeze({
   'feed.rewind': feedRewindPayloadSchema,
   'feed.redo': feedRedoPayloadSchema,
   'feed.edit': feedEditPayloadSchema,
+  'feed.file': feedFilePayloadSchema,
 }) satisfies Record<FeedEventType, z.ZodType>
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength
@@ -822,6 +839,7 @@ export const feedRowSchemaWithin = (maxBytes: number) =>
       row('feed.rewind', feedRewindPayloadSchema),
       row('feed.redo', feedRedoPayloadSchema),
       row('feed.edit', feedEditPayloadSchema),
+      row('feed.file', feedFilePayloadSchema),
     ])
     .superRefine((value, ctx) => {
       if (feedPayloadBytes(value.payload) > maxBytes)
@@ -1074,6 +1092,12 @@ const readEdit = z.object({
   revision: z.number().int().min(1).nullable(),
 })
 
+const readFile = z.object({
+  fileId: z.uuid(),
+  name: z.string().min(1).max(outboxLimits.nameChars),
+  sizeBytes: z.number().int().min(0),
+})
+
 const readCancelled = z.object({
   turn: turnNo.nullable(),
   /** null — a way of cancelling added later: the plate is shown without a reason. */
@@ -1123,6 +1147,7 @@ export type FeedEvent =
   | ({ type: 'feed.rewind' } & z.infer<typeof readRewind>)
   | ({ type: 'feed.redo' } & z.infer<typeof readRedo>)
   | ({ type: 'feed.edit' } & z.infer<typeof readEdit>)
+  | ({ type: 'feed.file' } & z.infer<typeof readFile>)
   | { type: 'newer' }
   | { type: 'unreadable' }
   | { type: 'skipped' }
@@ -1248,6 +1273,9 @@ const readers: Record<FeedEventType, Record<number, Reader>> = {
   },
   'feed.edit': {
     1: (payload) => readWith(readEdit, payload, (data) => ({ type: 'feed.edit', ...data })),
+  },
+  'feed.file': {
+    1: (payload) => readWith(readFile, payload, (data) => ({ type: 'feed.file', ...data })),
   },
 }
 

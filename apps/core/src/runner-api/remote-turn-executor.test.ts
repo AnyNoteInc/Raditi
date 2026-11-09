@@ -1684,6 +1684,38 @@ describe('RemoteTurnExecutor: a turn without a repository (docs/plan/57-browser-
     await expect(sealing).resolves.toEqual(sealed)
   })
 
+  it('takes the outbox of the agent with a capture of home alone, only as it was uploaded (docs/plan/66, В8)', async () => {
+    const f = fixture()
+    const turn = await preparedWithoutRepository(f)
+    const execution = await turn.finish()
+    const capturing = execution.capture({ home })
+    const [capture] = await turn.vm.poll()
+    const outbox = new Uint8Array([9, 8, 7, 6])
+    const digest = createHash('sha256').update(outbox).digest('hex')
+    const report = { type: 'captured', commandId: capture!.commandId, homeBytes: 321 }
+    // Reported without the upload, or with other bytes: refused.
+    expect(
+      await refusal(
+        turn.vm.report(turn.assignment.id, {
+          ...report,
+          outbox: { sha256: digest, sizeBytes: 4 },
+        }),
+      ),
+    ).toEqual({ error: 'BAD_REQUEST' })
+    ;(await f.hub.candidate('sandbox-1', turn.assignment.id, 'outbox', turn.vm.headers(capture!)))(
+      outbox,
+    )
+    // Uploaded but not reported: refused too.
+    expect(await refusal(turn.vm.report(turn.assignment.id, report))).toEqual({
+      error: 'BAD_REQUEST',
+    })
+    await turn.vm.report(turn.assignment.id, {
+      ...report,
+      outbox: { sha256: digest, sizeBytes: 4 },
+    })
+    await expect(capturing).resolves.toEqual({ homeBytes: 321, outbox })
+  })
+
   it('refuses a capture of the other kind, or a working set without a base, before the runner is asked', async () => {
     const f = fixture()
     const turn = await preparedWithoutRepository(f)

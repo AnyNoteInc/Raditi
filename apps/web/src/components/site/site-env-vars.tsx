@@ -212,7 +212,8 @@ function EnvForm({
       await onSave({
         name: form.name,
         value: form.value,
-        hosts: hostsOf(form.hosts),
+        // The saved sign-in goes to the sign-in form of the site alone: no service to list.
+        hosts: isSiteSignInEnvVar(form.name) ? [] : hostsOf(form.hosts),
         toPreview: form.toPreview && !isSiteSignInEnvVar(form.name),
         toAgent,
         agentConsent: toAgent && form.consent,
@@ -267,17 +268,19 @@ function EnvForm({
         fullWidth
         slotProps={{ htmlInput: { autoComplete: 'new-password', spellCheck: false } }}
       />
-      <TextField
-        label={envText.hosts}
-        value={form.hosts}
-        onChange={(event) => setForm({ ...form, hosts: event.target.value })}
-        disabled={saving}
-        helperText={envText.hostsHelp}
-        multiline
-        minRows={2}
-        fullWidth
-        slotProps={{ htmlInput: { spellCheck: false, autoCapitalize: 'none' } }}
-      />
+      {signIn ? null : (
+        <TextField
+          label={envText.hosts}
+          value={form.hosts}
+          onChange={(event) => setForm({ ...form, hosts: event.target.value })}
+          disabled={saving}
+          helperText={envText.hostsHelp}
+          multiline
+          minRows={2}
+          fullWidth
+          slotProps={{ htmlInput: { spellCheck: false, autoCapitalize: 'none' } }}
+        />
+      )}
       <Box>
         <FormControlLabel
           control={
