@@ -17,12 +17,4 @@ export {
   type WordpressContentAccess,
   type WordpressContentConnection,
 } from './wordpress-content.ts'
-export {
-  isAdminAjaxActionDenied,
-  isAdminUrlDenied,
-  isProtectedOption,
-  isRestRequestDenied,
-  isWpCliCommandDenied,
-  wordpressMcpPolicy,
-  type WordpressMcpPolicy,
-} from './wordpress-mcp-policy.ts'
+export { isRestRequestDenied, isWpCliCommandDenied } from './wordpress-mcp-policy.ts'

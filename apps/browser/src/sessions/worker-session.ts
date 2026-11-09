@@ -1252,7 +1252,9 @@ export class WorkerSession {
   /** What the element of a reference does to the object when pressed: a stack's save or publish. */
   #commitOf(ref: string): BrowserCommitAction | null {
     const element = this.#observation ? browserTreeElement(this.#observation.tree, ref) : null
-    return element ? this.#spec.adapter.browserCommitAction(element.role, element.name) : null
+    if (element === null) return null
+    const pageUrl = this.#tabs.find((tab) => tab.pageId === this.#control.pageId)?.url
+    return this.#spec.adapter.browserCommitAction(element.role, element.name, pageUrl)
   }
 
   /**
@@ -1270,7 +1272,9 @@ export class WorkerSession {
     if (!pressingKey(key)) return null
     if (ref !== undefined) return this.#commitOf(ref)
     const focused = await browser.focused()
-    return focused ? this.#spec.adapter.browserCommitAction(focused.role, focused.name) : null
+    if (focused === null) return null
+    const pageUrl = this.#tabs.find((tab) => tab.pageId === this.#control.pageId)?.url
+    return this.#spec.adapter.browserCommitAction(focused.role, focused.name, pageUrl)
   }
 
   /**

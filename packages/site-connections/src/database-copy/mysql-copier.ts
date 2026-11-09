@@ -53,8 +53,8 @@ import {
 
 // The DatabaseCopier of MySQL and MariaDB (docs/plan/53-chat-preview-release.md, Р15). One
 // read-only transaction with a consistent snapshot; every table of the site's prefix is written
-// as its structure, and only the rows the policy names are ever selected — filtered by the
-// server, paged by an integer primary key, turned into SQL row by row and handed to `write`.
+// as its structure. Rows requested by the policy are filtered by the server, paged by an integer
+// primary key, turned into SQL row by row and handed to `write`.
 // Nothing of the source is kept: no file, no dump in memory, no value in an error or a log.
 
 export interface MysqlDatabaseCopierDeps {
@@ -693,11 +693,20 @@ async function copyTables(
     }
     await writer.raw(statement)
     const seen = new Set<number>()
-    if (rule && !emptied.has(table)) {
+    const rowRule = rule ?? (policy.copyUnlistedRows ? { table, where: [] } : undefined)
+    const tableInfoForRows = rowRule
+      ? (info.get(table) ?? (await tableInfo(connection, name, statement)))
+      : undefined
+    if (
+      rowRule &&
+      tableInfoForRows &&
+      !emptied.has(table) &&
+      !leavesRowsOut(rowRule, tableInfoForRows, policy.suspectColumns)
+    ) {
       const tableRows = new TableRows(
-        rule,
+        rowRule,
         overrides,
-        info.get(table)!,
+        tableInfoForRows,
         seen,
         policy.suspectColumns,
       )
@@ -705,13 +714,13 @@ async function copyTables(
       rows += await copyRows(connection, guard, writer, {
         name,
         rows: tableRows,
-        where: rowFilter(policy, table, nameOf, copied),
+        where: rule ? rowFilter(policy, table, nameOf, copied) : { sql: 'TRUE', values: [] },
         limit: databaseCopyLimits.rows - rows,
         signal,
       })
     } else {
       structureOnly += 1
-      if (emptied.has(table)) leftOutTables += 1
+      if (rowRule) leftOutTables += 1
     }
     // An override without a copied row adds one, when it sets a column: one that only blanks
     // keys of a row (`blank`) has nothing to add.

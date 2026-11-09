@@ -1,414 +1,55 @@
-/**
- * Hard limits of the WordPress MCP tools — spec §8, §11, CLAUDE.md rule 4.
- *
- * `wp_cli` and `wp_rest` accept only their own allowlists (P10); this denylist is checked on top
- * of them, so a too-broad allowlist entry still cannot reach users, orders, payment settings,
- * plugins, themes, core or server config. The MCP gateway (P6 process, P10 WordPress tools)
- * enforces it on every call before anything reaches the site:
- * - wp_cli: isWpCliCommandDenied(argv); the gateway runs WP-CLI with an argv, never a shell,
- *   and sets --path, --url and --user itself;
- * - wp_rest: isRestRequestDenied(method, route); only the gateway builds headers, so there is
- *   no X-HTTP-Method-Override;
- * - browser_*: isAdminUrlDenied(url) on navigation and, through request interception, on every
- *   request the page makes (forms, XHR), plus isAdminAjaxActionDenied for admin-ajax.php;
- * - object-level checks need the site: a post ID that turns out to be an order (deniedPostTypes)
- *   is refused by the gateway after it looks the ID up;
- * - the gateway counts objects changed in a turn: above maxChangedObjectsPerTurn every further
- *   change needs request_approval (spec §11, mass edits).
- * Matching is case-insensitive and fails closed: anything that cannot be parsed is denied.
- */
-
-export interface WordpressMcpPolicy {
-  readonly wpCli: {
-    /** Command groups (the first argument) that never run. */
-    readonly deniedCommands: readonly string[]
-    /** `group subcommand` pairs that never run; deletions go through wp_delete. */
-    readonly deniedSubcommands: readonly string[]
-    /** Global parameters that run code, switch the target or the WordPress user. */
-    readonly deniedGlobalFlags: readonly string[]
-  }
-  readonly rest: {
-    /** Route prefixes under /wp-json; `*` is one path segment. */
-    readonly deniedRoutes: readonly string[]
-    readonly deniedMethods: readonly string[]
-    /**
-     * Routes open to reads only (GET, HEAD): WooCommerce Admin's namespaces hold the shop's
-     * reports and lists, and also writes of its options and the install of plugins.
-     */
-    readonly readOnlyRoutes: readonly string[]
-    /** Query parameters that change what WordPress runs. */
-    readonly deniedParams: readonly string[]
-  }
-  /** Options the agent may neither read nor write; `*` is a wildcard. */
-  readonly protectedOptions: readonly string[]
-  /** Refunds and personal data requests; orders and form entries are open since 09.11.2026. */
-  readonly deniedPostTypes: readonly string[]
-  readonly admin: {
-    /** Pages under /wp-admin/: `page.php`, `dir/` or `page.php?param=value`; `*` in a value is a wildcard. */
-    readonly deniedPages: readonly string[]
-    readonly deniedAjaxActions: readonly string[]
-  }
-  /** Above this, changes in one turn need request_approval (spec §11). */
-  readonly maxChangedObjectsPerTurn: number
-}
-
-const freezeDeep = <T extends object>(value: T): T => {
-  for (const nested of Object.values(value)) {
-    if (typeof nested === 'object' && nested !== null) freezeDeep(nested as object)
-  }
-  return Object.freeze(value)
-}
-
-export const wordpressMcpPolicy: WordpressMcpPolicy = freezeDeep({
-  wpCli: {
-    deniedCommands: [
-      // Users, roles and logins.
-      'user',
-      'role',
-      'cap',
-      'super-admin',
-      'login',
-      // Code, plugins, themes and server config: only through git or the dangerous tools.
-      'plugin',
-      'theme',
-      'core',
-      'config',
-      'package',
-      'language',
-      'scaffold',
-      'i18n',
-      'dist-archive',
-      'rewrite',
-      // Arbitrary PHP and SQL.
-      'eval',
-      'eval-file',
-      'shell',
-      'db',
-      'server',
-      'cli',
-      'cron',
-      'action-scheduler',
-      // WooCommerce: orders, customers, payments.
-      'wc',
-      // Names, emails and IP addresses of site visitors (spec §11).
-      'comment',
-      // Mass or site-wide changes.
-      'search-replace',
-      'import',
-      'export',
-      'site',
-      'network',
-      'maintenance-mode',
-    ],
-    deniedSubcommands: [
-      'post delete',
-      'term delete',
-      'comment delete',
-      'menu delete',
-      'post generate',
-      'term generate',
-      'comment generate',
-      'media regenerate',
-      // Dumps every option value, secrets included.
-      'option list',
-    ],
-    deniedGlobalFlags: ['exec', 'require', 'ssh', 'http', 'path', 'url', 'user'],
-  },
-  rest: {
-    deniedRoutes: [
-      '/wp/v2/users',
-      '/wp/v2/plugins',
-      '/wp/v2/themes',
-      '/wp/v2/settings',
-      '/wp/v2/block-directory',
-      // Comments are the visitors' part of the site (spec §11); form entries (Jetpack's
-      // `feedback`) are the client's own data and open (the owner's decision of 09.11.2026).
-      '/wp/v2/comments',
-      // One request that carries many: it would bypass every route below.
-      '/batch',
-      // Runs any registered ability, plugins' included; abilities get their own tools.
-      '/wp-abilities',
-      // Fetches arbitrary URLs from the site server.
-      '/oembed/1.0/proxy',
-      // Orders, customers and reports of the shop are the client's own data and open (the
-      // owner's decision of 09.11.2026, spec §20, «Данные сайта клиента», ДС7); money and the
-      // shop's settings are not.
-      '/wc/*/refunds',
-      '/wc/*/payment_gateways',
-      '/wc/*/settings',
-      '/wc/*/webhooks',
-      '/wc/*/system_status',
-      '/wc/store',
-      // WooCommerce Admin's options read any option of the site by name — the ones that keep
-      // keys and passwords too (\`protectedOptions\`); its plugins and onboarding install and set up.
-      '/wc-admin/options',
-      '/wc-admin/plugins',
-      '/wc-admin/onboarding',
-    ],
-    deniedMethods: ['DELETE'],
-    // Reports, orders and customers of WooCommerce Admin open to reads (ДС7); its writes — options,
-    // plugins, onboarding, notes — stay closed with the shop's settings and plugins (ДС8).
-    readOnlyRoutes: ['/wc-admin', '/wc-analytics'],
-    // `_embed` makes WordPress run the linked routes itself: comments (`replies`) and users
-    // (`author`) of a post would come back in spite of the routes denied above.
-    deniedParams: ['_method', '_embed'],
-  },
-  protectedOptions: [
-    'active_plugins',
-    'active_sitewide_plugins',
-    'recently_activated',
-    'uninstall_plugins',
-    'auto_update_plugins',
-    'auto_update_themes',
-    'template',
-    'stylesheet',
-    'current_theme',
-    'siteurl',
-    'home',
-    'admin_email',
-    'new_admin_email',
-    'blog_public',
-    'users_can_register',
-    'default_role',
-    '*user_roles',
-    'permalink_structure',
-    'rewrite_rules',
-    'upload_path',
-    'upload_url_path',
-    'cron',
-    'db_version',
-    'initial_db_version',
-    'mailserver_*',
-    'woocommerce_*_settings',
-    'woocommerce_gateway_order',
-    'woocommerce_currency*',
-    'yookassa_*',
-    // Credentials that plugins keep in options: never read into an LLM context.
-    '*password*',
-    '*passwd*',
-    '*secret*',
-    '*token*',
-    '*api_key*',
-    '*apikey*',
-    '*_key',
-    '*_salt',
-  ],
-  deniedPostTypes: [
-    // Orders and subscriptions are open since 09.11.2026 (ДС7); a refund moves money.
-    'shop_order_refund',
-    'user_request',
-  ],
-  admin: {
-    deniedPages: [
-      'plugins.php',
-      'plugin-install.php',
-      'plugin-editor.php',
-      'theme-editor.php',
-      'themes.php',
-      'theme-install.php',
-      'users.php',
-      'user-new.php',
-      'user-edit.php',
-      'profile.php',
-      'authorize-application.php',
-      'options.php',
-      'options-general.php',
-      'options-writing.php',
-      'options-reading.php',
-      'options-discussion.php',
-      'options-media.php',
-      'options-permalink.php',
-      'options-privacy.php',
-      'update-core.php',
-      'update.php',
-      'tools.php',
-      'import.php',
-      // The core's export (Tools → Export) is open since 09.11.2026 (ДС7); a request to export a
-      // person's data writes a request and mails that person.
-      'export-personal-data.php',
-      'erase-personal-data.php',
-      'network/',
-      'user/',
-      'admin.php?page=wc-settings',
-      'admin.php?page=wc-status',
-      'admin.php?page=wc-addons',
-      'edit.php?post_type=shop_order_refund',
-      'post-new.php?post_type=shop_order',
-      'edit-comments.php',
-      'comment.php',
-    ],
-    deniedAjaxActions: [
-      'install-plugin',
-      'update-plugin',
-      'delete-plugin',
-      'install-theme',
-      'update-theme',
-      'delete-theme',
-      'toggle-auto-updates',
-      'wp-privacy-export-personal-data',
-      'wp-privacy-erase-personal-data',
-    ],
-  },
-  maxChangedObjectsPerTurn: 20,
-})
-
-const policy = wordpressMcpPolicy
-const lower = (s: string) => s.toLowerCase()
-
-/** `*` matches any run of characters; the whole name must match. */
-function wildcard(pattern: string): RegExp {
-  const body = pattern
-    .split('*')
-    .map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
-    .join('.*')
-  return new RegExp(`^${body}$`, 'i')
-}
-
-const optionMatchers = policy.protectedOptions.map(wildcard)
-
-/** Option names compare case-insensitively, as the options table collation does. */
-export function isProtectedOption(name: string): boolean {
-  return optionMatchers.some((re) => re.test(name.trim()))
-}
+/** WP-CLI arguments that would override the runner's site or account. */
+const wpCliTargetFlags = new Set(['ssh', 'http', 'path', 'url', 'user'])
 
 /** argv of one WP-CLI call, with or without the leading `wp`. */
 export function isWpCliCommandDenied(argv: readonly string[]): boolean {
-  const args = argv[0] === 'wp' ? argv.slice(1) : [...argv]
-  const positional: string[] = []
+  const args = argv[0] === 'wp' ? argv.slice(1) : argv
+  let hasCommand = false
   for (const arg of args) {
-    if (arg === '--' || arg.includes('\0')) return true
-    if (!arg.startsWith('--')) {
-      positional.push(lower(arg))
-      continue
-    }
-    const [rawName = '', ...rest] = arg.slice(2).split('=')
-    const name = lower(rawName)
-    if (policy.wpCli.deniedGlobalFlags.includes(name)) return true
-    if (name === 'post_type' || name === 'post-type') {
-      const types = rest
-        .join('=')
-        .split(',')
-        .map((t) => lower(t.trim()))
-      if (types.some((t) => policy.deniedPostTypes.includes(t))) return true
+    if (arg === '--' || arg.includes('\0') || arg.startsWith('@')) return true
+    if (arg.startsWith('--')) {
+      const name = arg.slice(2).split('=', 1)[0]!.toLowerCase()
+      if (wpCliTargetFlags.has(name)) return true
+    } else if (arg.trim() !== '') {
+      hasCommand = true
     }
   }
-
-  const [group, subcommand] = positional
-  // No command, or an alias (`@prod`) that may point at another server.
-  if (group === undefined || positional.some((p) => p.startsWith('@'))) return true
-  if (policy.wpCli.deniedCommands.includes(group)) return true
-  if (policy.wpCli.deniedSubcommands.includes(`${group} ${subcommand ?? ''}`)) return true
-  return group === 'option' && positional.slice(2).some(isProtectedOption)
+  return !hasCommand
 }
 
-/** Collapses `//` and `.`, lower-cases; null for `..`, NUL or leftover percent-encoding. */
-function normalizeUrlPath(path: string): string[] | null {
+/** Reject paths with ambiguous encoding or traversal. */
+function isWordpressPathInvalid(path: string): boolean {
   let decoded: string
   try {
     decoded = decodeURIComponent(path)
   } catch {
-    return null
+    return true
   }
-  if (decoded.includes('\0') || decoded.includes('%') || decoded.includes('\\')) return null
-  const segments = lower(decoded)
-    .split('/')
-    .filter((s) => s !== '' && s !== '.')
-  return segments.includes('..') ? null : segments
-}
-
-const routeMatchers = policy.rest.deniedRoutes.map((route) => route.split('/').filter(Boolean))
-
-/** A REST route (relative to /wp-json, or with it) of the denied list, by its segments. */
-export function isRestRouteDenied(route: string): boolean {
-  const segments = normalizeUrlPath(route)
-  if (segments === null) return true
-  // /index.php/wp-json/… (PATH_INFO) and /wp-json/… both lead to the REST route.
-  if (segments[0] === 'index.php') segments.shift()
-  if (segments[0] === 'wp-json') segments.shift()
-  return routeMatchers.some(
-    (pattern) =>
-      segments.length >= pattern.length &&
-      pattern.every((part, i) => part === '*' || part === segments[i]),
+  return (
+    decoded.includes('\0') ||
+    decoded.includes('%') ||
+    decoded.includes('\\') ||
+    decoded.split('/').includes('..')
   )
 }
 
-/**
- * A request of the wp_rest tool: `route` is relative to /wp-json (a leading /wp-json is
- * accepted) and may carry a query string. `?rest_route=` wins over the path in WordPress, so
- * every such value is checked too.
- */
+const reads = new Set(['GET', 'HEAD', 'OPTIONS'])
+
+/** Preserve the browser's read/write boundary for WordPress's query method override. */
 export function isRestRequestDenied(method: string, route: string): boolean {
-  if (policy.rest.deniedMethods.includes(method.trim().toUpperCase())) return true
   const [path = '', query = ''] = route.split('#')[0]!.split(/\?(.*)/s)
   const params = new URLSearchParams(query)
-  for (const key of params.keys()) {
-    if (policy.rest.deniedParams.includes(lower(key))) return true
-  }
-  const routes = [path, ...params.getAll('rest_route')]
-  if (!READ_METHODS.has(method.trim().toUpperCase()) && routes.some(isReadOnlyRoute)) return true
-  return routes.some(isRestRouteDenied)
-}
-
-const READ_METHODS = new Set(['GET', 'HEAD'])
-
-/** A route of `readOnlyRoutes`, spelt any way `isRestRouteDenied` reads one. */
-export function isReadOnlyRoute(route: string): boolean {
-  const segments = normalizeUrlPath(route)
-  if (segments === null) return true
-  if (segments[0] === 'index.php') segments.shift()
-  if (segments[0] === 'wp-json') segments.shift()
-  return policy.rest.readOnlyRoutes.some((prefix) => {
-    const pattern = prefix.split('/').filter(Boolean)
-    return segments.length >= pattern.length && pattern.every((part, i) => part === segments[i])
-  })
-}
-
-const adminPages = policy.admin.deniedPages.map((entry) => {
-  const [page = '', query = ''] = entry.split('?')
-  return {
-    page,
-    params: [...new URLSearchParams(query)].map(([key, value]) => [key, wildcard(value)] as const),
-  }
-})
-
-/**
- * The page of segments below /wp-admin/ as PHP runs it: up to the first `.php` script, whose rest
- * is PATH_INFO — `users.php/x` runs users.php (and WordPress reads its `$pagenow` the same way).
- */
-export function adminScriptPath(segments: readonly string[]): string {
-  const script = segments.findIndex((segment) => segment.endsWith('.php'))
-  return (script === -1 ? segments : segments.slice(0, script + 1)).join('/')
-}
-
-/** A URL the browser tools would open or submit to, absolute or relative to the site. */
-export function isAdminUrlDenied(url: string): boolean {
-  let parsed: URL
-  try {
-    parsed = new URL(url, 'https://site.invalid/')
-  } catch {
-    return true
-  }
-  const segments = normalizeUrlPath(parsed.pathname)
-  if (segments === null) return true
-  const adminIndex = segments.indexOf('wp-admin')
-  if (adminIndex === -1) return false
-  const rest = adminScriptPath(segments.slice(adminIndex + 1))
-
-  return adminPages.some(({ page, params }) => {
-    const pageMatches = page.endsWith('/')
-      ? rest === page.slice(0, -1) || rest.startsWith(page)
-      : rest === page
-    // PHP keeps the last of repeated parameters: any matching value counts.
-    return (
-      pageMatches &&
-      params.every(([key, value]) =>
-        parsed.searchParams.getAll(key).some((v) => value.test(v.trim())),
-      )
+  if (isWordpressPathInvalid(path)) return true
+  for (const [key, value] of params) {
+    if (key.includes('\0')) return true
+    const name = key.replace(/^ +/, '').replace(/\[.*$/s, '').replace(/[ .]/g, '_')
+    if (name === 'rest_route' && isWordpressPathInvalid(value)) return true
+    if (
+      name === '_method' &&
+      reads.has(method.trim().toUpperCase()) &&
+      !reads.has(value.trim().toUpperCase())
     )
-  })
-}
-
-/** An admin-ajax.php `action` the browser page may not send. */
-export function isAdminAjaxActionDenied(action: string): boolean {
-  return policy.admin.deniedAjaxActions.includes(lower(action.trim()))
+      return true
+  }
+  return false
 }

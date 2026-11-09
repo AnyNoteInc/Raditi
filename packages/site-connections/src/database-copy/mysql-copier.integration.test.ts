@@ -11,7 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createMysqlDatabaseCopier } from './mysql-copier.ts'
 
 // The copier against two disposable MariaDB 11.4.13 servers: the source holds a WordPress-like
-// site with what a preview must never get, the seed is loaded into the second one. Needs Docker
+// site, and the seed is loaded into the second one. Needs Docker
 // and the image `mariadb:11.4.13` already pulled; runs with RADITI_PREVIEW_DOCKER_TESTS=1.
 
 const enabled = process.env.RADITI_PREVIEW_DOCKER_TESTS === '1'
@@ -23,12 +23,6 @@ const receipt = '0196abcd-0000-7000-8000-0000000000cc'
 const wordpressPolicy = JSON.parse(
   readFileSync(new URL('./wordpress-policy.fixture.json', import.meta.url), 'utf8'),
 ) as DatabaseCopyPolicy
-
-/**
- * SHA-256 of the seed of `fixture` by `wordpressPolicy` with every `user_pass` hash replaced by
- * one constant, as the copier wrote it before `suspectColumns` (plan 62, Э3.5).
- */
-const WORDPRESS_SEED_SHA256 = '7c9b54ed1a92db49b98cf39de06af58264752f1e15fc4296a7d06d3c34e50df4'
 
 interface Server {
   container: string
@@ -147,7 +141,7 @@ async function copy(server: Server, policy: DatabaseCopyPolicy, overrides?: Part
 
 const content = `<!-- wp:paragraph --><p>Цены «от 990 ₽» 🙂👍🏽 — 'кавычки', "двойные", \\слеш\\, \\n не перевод,\nперевод строки и табуляция\t; NUL: \0 конец.</p><!-- /wp:paragraph -->`
 
-/** A WordPress site as it lies on a hosting, with what a preview must never get. */
+/** A WordPress site on hosting, with another application sharing the database. */
 const fixture = `
 SET SESSION sql_mode = '';
 CREATE TABLE wp_users (
@@ -363,67 +357,19 @@ describe.skipIf(!enabled)('the MySQL copier against MariaDB', () => {
     )
   }, 60_000)
 
-  it('writes a seed without a row the policy does not name', async () => {
+  it('copies all WordPress and plugin rows under the prefix and rebinds the preview', async () => {
     const { summary, seed } = await copy(source, wordpressPolicy)
-    const text = seed.toString('utf8')
-    for (const secret of [
-      'owner@example.com',
-      'buyer@example.com',
-      'another@example.com',
-      'visitor@example.com',
-      '203.0.113.7',
-      'token-of-owner',
-      '+7 900',
-      'owner-activation',
-      'ownerhash',
-      'post-password-secret',
-      'sk_live_stripe-secret',
-      'token-of-a-plugin',
-      'term-license-secret',
-      'cron-event',
-      'doing_cron',
-      'smtp-secret',
-      // The SMTP passwords of a mailer and of MODX under scrub_secrets (plan 62, Т57).
-      'widget-smtp-pass',
-      'widget-mail-pass',
-      'wpforms-secret',
-      'salt-of-the-site',
-      'prod-site-binding',
-      receipt,
-      'receipt-of-production',
-      'Футболка',
-      'Борис',
-      'Анна',
-      // An author of Co-Authors Plus or PublishPress Authors: a person in the terms.
-      'coauthor@example.com',
-      'author-meta@example.com',
-      'Гюльнара',
-      "'author'",
-      'elementor-token',
-      "'shop_order'",
-      "'nf_sub'",
-      "'edd_payment'",
-      "'user_request'",
-      "'feedback'",
-      'В корзине',
-      'Ревизия',
-      'other_secrets',
-      'secret-of-another-application',
-      'AUTO_INCREMENT=',
-    ])
-      expect(text, secret).not.toContain(secret)
-    // People, comments, orders: structure only.
-    for (const table of ['wp_usermeta', 'wp_comments', 'wp_woocommerce_order_items']) {
-      expect(text).toContain(`CREATE TABLE \`${table}\``)
-      expect(text).not.toContain(`INSERT INTO \`${table}\``)
-    }
     expect(summary).toMatchObject({
       tables: 12,
-      structureOnly: 4,
+      structureOnly: 0,
+      leftOutTables: 0,
+      emptiedColumns: 0,
       bytes: seed.byteLength,
       sha256: createHash('sha256').update(seed).digest('hex'),
     })
     expect(summary.serverVersion).toMatch(/MariaDB/)
+    expect(seed.includes(Buffer.from('other_secrets'))).toBe(false)
+    expect(seed.includes(Buffer.from('AUTO_INCREMENT='))).toBe(false)
 
     await load(target, seed)
     const [sourceConnection, targetConnection] = await Promise.all([
@@ -431,108 +377,46 @@ describe.skipIf(!enabled)('the MySQL copier against MariaDB', () => {
       connectTo(target),
     ])
     try {
-      const posts = `SELECT ID, HEX(post_content) AS content, HEX(post_title) AS title, post_type,
-        post_status, post_date_gmt FROM wp_posts ORDER BY ID`
-      const [copied] = await targetConnection.query<RowDataPacket[]>(posts)
-      expect(copied.map((post) => Number(post.ID))).toEqual([10, 11, 12, 13, 14, 15, 18, 19])
-      // Their bytes are the source's, four-byte characters, quotes and NUL included.
-      const [original] = await sourceConnection.query<RowDataPacket[]>(
-        `${posts.replace(' ORDER BY ID', '')} WHERE ID IN (10, 11, 12, 13, 14, 15, 18, 19) ORDER BY ID`,
+      for (const table of [
+        'wp_posts',
+        'wp_users',
+        'wp_usermeta',
+        'wp_postmeta',
+        'wp_comments',
+        'wp_terms',
+        'wp_term_taxonomy',
+        'wp_term_relationships',
+        'wp_termmeta',
+        'wp_woocommerce_order_items',
+        'wp_raditi_types',
+      ]) {
+        const query = `SELECT * FROM \`${table}\` ORDER BY 1, 2`
+        const [original] = await sourceConnection.query<RowDataPacket[]>(query)
+        const [copied] = await targetConnection.query<RowDataPacket[]>(query)
+        expect(original.length, table).toBeGreaterThan(0)
+        expect(copied, table).toEqual(original)
+      }
+      const options =
+        'SELECT option_name, option_value, autoload FROM wp_options ORDER BY option_name'
+      const [original] = await sourceConnection.query<RowDataPacket[]>(options)
+      const [copied] = await targetConnection.query<RowDataPacket[]>(options)
+      const values = new Map([
+        ['raditi_content_site_id', previewId],
+        ['raditi_content_epoch', '0'],
+        ['blog_public', '0'],
+        ['admin_email', 'admin@preview.invalid'],
+      ])
+      expect(copied).toEqual(
+        original
+          .filter((row) => row.option_name !== `raditi_content_call_${receipt}`)
+          .map((row) => ({
+            ...row,
+            option_value: values.get(String(row.option_name)) ?? row.option_value,
+          })),
       )
-      expect(copied).toEqual(original)
-      expect(Buffer.from(String(copied[0]?.content), 'hex').toString('utf8')).toBe(content)
-      expect(copied[0]?.post_date_gmt).toBe('0000-00-00 00:00:00')
-
-      const one = async (sql: string) =>
-        (await targetConnection.query<RowDataPacket[]>(sql))[0].map((row) => ({ ...row }))
-      expect(await one('SELECT post_password FROM wp_posts WHERE ID = 11')).toEqual([
-        { post_password: '' },
-      ])
-      expect(
-        await one(
-          'SELECT ID, user_login, user_nicename, user_email, user_url, user_activation_key, display_name FROM wp_users',
-        ),
-      ).toEqual([
-        {
-          ID: '1',
-          user_login: 'user1',
-          user_nicename: 'user1',
-          user_email: 'user1@preview.invalid',
-          user_url: '',
-          user_activation_key: '',
-          display_name: 'Пользователь 1',
-        },
-      ])
-      const [[password]] = await targetConnection.query<RowDataPacket[]>(
-        'SELECT user_pass FROM wp_users WHERE ID = 1',
-      )
-      expect(String(password?.user_pass)).toMatch(/^\$P\$B[./0-9A-Za-z]{31}$/)
-      expect(await one('SELECT post_id, meta_key FROM wp_postmeta ORDER BY meta_id')).toEqual([
-        { post_id: '10', meta_key: '_thumbnail_id' },
-        { post_id: '10', meta_key: '_wp_page_template' },
-        { post_id: '13', meta_key: '_wp_attached_file' },
-        { post_id: '19', meta_key: '_elementor_template_type' },
-        { post_id: '10', meta_key: '_elementor_data' },
-      ])
-      // A secret key inside a copied value (Р14): its string is blanked, nothing else changes.
-      expect(
-        await one(`SELECT meta_value FROM wp_postmeta WHERE meta_key = '_elementor_data'`),
-      ).toEqual([{ meta_value: '[{"settings":{"form_name":"Заявка","mailchimp_api_key":""}}]' }])
-      expect(await one('SELECT term_id, taxonomy FROM wp_term_taxonomy')).toEqual([
-        { term_id: '1', taxonomy: 'category' },
-      ])
-      expect(await one('SELECT term_id FROM wp_terms')).toEqual([{ term_id: '1' }])
-      expect(await one('SELECT object_id, term_taxonomy_id FROM wp_term_relationships')).toEqual([
-        { object_id: '11', term_taxonomy_id: '1' },
-      ])
-      expect(await one('SELECT meta_key FROM wp_termmeta')).toEqual([{ meta_key: 'color' }])
-      const byName = (a: Record<string, unknown>, b: Record<string, unknown>) =>
-        String(a.option_name) < String(b.option_name) ? -1 : 1
-      expect((await one('SELECT option_name, option_value FROM wp_options')).sort(byName)).toEqual(
-        [
-          ['active_plugins', 'a:1:{i:0;s:27:"woocommerce/woocommerce.php";}'],
-          ['admin_email', 'admin@preview.invalid'],
-          ['blog_public', '0'],
-          ['blogname', 'Магазин «Ромашка»'],
-          ['elementor_active_kit', '19'],
-          ['home', 'https://shop.example.ru'],
-          ['raditi_content_epoch', '0'],
-          ['raditi_content_site_id', previewId],
-          ['siteurl', 'https://shop.example.ru'],
-          ['theme_mods_twentytwentyfive', 'a:0:{}'],
-          ['widget_block', 'a:0:{}'],
-          [
-            'widget_text',
-            'a:1:{i:2;a:4:{s:5:"title";s:12:"Привет";s:7:"api_key";s:0:"";s:8:"smtppass";s:0:"";s:14:"mail_smtp_pass";s:0:"";}}',
-          ],
-          ['wp_user_roles', 'a:1:{s:13:"administrator";}'],
-        ]
-          .map(([option_name, option_value]) => ({ option_name, option_value }))
-          .sort(byName),
-      )
-      for (const table of ['wp_usermeta', 'wp_comments', 'wp_woocommerce_order_items'])
-        expect(await one(`SELECT COUNT(*) AS n FROM ${table}`)).toEqual([{ n: '0' }])
     } finally {
       await Promise.all([sourceConnection.end(), targetConnection.end()])
     }
-  }, 120_000)
-
-  it('writes the seed of WordPress as before the second line of unnamed columns', async () => {
-    // WordPress has no `suspectColumns`: `comment_status` and `comment_count` would go empty.
-    // The hash of `user_pass` is random on every copy (`random_password_hash`), written as a
-    // literal of hex: each one is replaced by one constant, and the rest is the same bytes.
-    const { summary, seed } = await copy(source, wordpressPolicy)
-    const constant = Buffer.from(`$P$B${'.'.repeat(31)}`).toString('hex')
-    const fixed = Buffer.from(
-      seed
-        .toString('latin1')
-        .replaceAll(/_utf8mb4 X'24502442[0-9a-f]{62}'/g, () => `_utf8mb4 X'${constant}'`),
-      'latin1',
-    )
-    expect(fixed.byteLength).toBe(seed.byteLength)
-    expect(fixed.equals(seed)).toBe(false)
-    expect(createHash('sha256').update(fixed).digest('hex')).toBe(WORDPRESS_SEED_SHA256)
-    expect(summary.emptiedColumns).toBe(0)
   }, 120_000)
 
   it('copies every kind of value byte for byte, page after page', async () => {

@@ -904,6 +904,19 @@ describe('the agent’s actions', () => {
     ])
   })
 
+  it('saves WooCommerce settings without starting a post checkpoint', async () => {
+    const { store, ensured, act } = setup()
+    const { row, browser } = await ensured()
+    browser.go(`${SITE}/wp-admin/admin.php?page=wc-settings&tab=checkout`)
+    browser.tree = '- button "Save" [ref=e5]'
+    await act(row, { tool: 'web_observe' })
+    await act(row, { tool: 'web_click', observation: 'o1', ref: 'e5' })
+    browser.onFocused = async () => ({ role: 'button', name: 'Save' })
+    await act(row, { tool: 'web_press', key: 'Enter' })
+    await act(row, { tool: 'web_open', url: `${SITE}/wp-admin/plugins.php` })
+    expect(store.checkpointRows.size).toBe(0)
+  })
+
   it('keeps a saved object unconfirmed until a check reads it, and allows no new one meanwhile', async () => {
     const { store, ensured, act } = setup()
     const { row, browser } = await ensured()

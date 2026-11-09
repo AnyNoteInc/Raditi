@@ -177,7 +177,9 @@ describe('turnInstructions of a chat with the code and the browser (docs/plan/61
     const text = told()
     expect(text).toContain('## What a release can carry')
     expect(text).toContain('`web_observe` reads')
-    expect(text).toContain('One task saves or publishes at most 20 different objects')
+    expect(text).toContain(
+      'The post editor tracks saves and publishes for up to 20 different objects',
+    )
     // What only a task without a repository is told.
     for (const words of [
       'This task has no repository',
@@ -276,9 +278,9 @@ describe('browserTaskInstructions (docs/plan/57-browser-tasks.md, Б20–Б24)',
     expect(text).toContain('The request lists what this task already saved on the site')
     // Irreversible and wide changes wait for the client's explicit request.
     expect(text).toContain("need the client's explicit")
-    // Б34: a mass edit is refused, and the agent says so instead of looking for a way around.
-    expect(text).toContain('at most 20 different objects')
-    expect(text).toContain('do not look for another way')
+    // Б34: the post editor still tracks changes and refuses saves beyond its limit.
+    expect(text).toContain('up to 20 different objects')
+    expect(text).toContain('`BROWSER_ACTION_DENIED`')
     // A snapshot for the client: attached to the dialog, never seen by the agent (Б20).
     expect(text).toContain('`web_screenshot`')
     expect(text).toContain('you\n  never see it')
@@ -321,7 +323,9 @@ describe('browserTaskInstructions (docs/plan/57-browser-tasks.md, Б20–Б24)',
   // The two lines on `database.operations` still null came with the site stacks
   // (docs/plan/62-site-stacks.md, Т37), the files for the client with docs/plan/66, В11.
   // The lines on the visitors' data became the client's own on 09.11.2026 (the owner's decision:
-  // form entries are the client's; `web_download` reads the site's exports).
+  // form entries are the client's; `web_download` reads the site's exports). ДС9 opens WordPress
+  // administration and keeps its changes tied to an explicit client request. ДС10 removes
+  // the remaining WordPress-specific restrictions.
   const withoutSearch = (text: string) =>
     text
       .replace(/\n## Files for the client\n[\s\S]*?by their names\.\n/, '')
@@ -333,10 +337,10 @@ describe('browserTaskInstructions (docs/plan/57-browser-tasks.md, Б20–Б24)',
   it('keeps the words of a task in the browser and of a task with a repository byte for byte', () => {
     const skills = { skills: ['context7', 'playwright', 'other'] }
     expect(digest(withoutSearch(browserTaskInstructions('GUIDE\n', skills)))).toBe(
-      '777374024cdeeae232b2a3cd75c2db7cdbd28bb69071a7e37245b6771b8cc4b0',
+      'e94cae6ce4439590b81b7189d5830b4f45e8aede0965bf8d35ba692827055cb9',
     )
     expect(digest(withoutSearch(browserTaskInstructions('')))).toBe(
-      '2e4a11f3dcd563bcbcb9050aa41f8d80eba8bed85d517da261a6fb4c0bf362b0',
+      '2424d6ba8868cfa538544b8764d0e4485b399c410cffc68c83c862faf09ef837',
     )
     expect(
       digest(
@@ -350,13 +354,13 @@ describe('browserTaskInstructions (docs/plan/57-browser-tasks.md, Б20–Б24)',
           ),
         ),
       ),
-    ).toBe('c13f9aaef51bd5e09d6e3d274e564fad6b42741b1336db6be7f62cb770f31fb9')
+    ).toBe('66a3e3b0afdb23e6b2ee1445a7dba92b0430deb3b72b3142495d70c7464107e7')
     const origin = 'http://site-a-chat-b.localhost:8090'
     expect(digest(beforeTheWord(turnInstructions({ state: 'serving', origin })))).toBe(
-      '456fc95c7907ffbfa6441cf78d954ed315ba7c090f96ecea30698d7ba8bdbc20',
+      'd87caa00e39f945209dd18c4bd5263d1f3e8074326b34cf2e0f84a34b5babb47',
     )
     expect(digest(beforeTheWord(turnInstructions({ state: 'starting', origin })))).toBe(
-      '45f7188a791f1a1fce24b4aeecea3d226b4fce5cebce8190504257f577dbc5a8',
+      '61dc9299bc76fec461bce74b9085316943ba4bac23f165a4c360a8415a37e223',
     )
     expect(
       digest(
@@ -371,10 +375,10 @@ describe('browserTaskInstructions (docs/plan/57-browser-tasks.md, Б20–Б24)',
           ),
         ),
       ),
-    ).toBe('1b8ba238419efc8a39e54ff42470d1347674e167a242c817962a61ff56db352b')
+    ).toBe('8026cc53f0ef5b010bcebd4b505c8b6671d004befdf3e4d8bf0212edbc5b6ddd')
     expect(
       digest(beforeTheWord(turnInstructions({ state: 'unavailable', reason: 'not_supported' }))),
-    ).toBe('1e848c9a36e0b73f27ee473c1af58c740cc6aad4a11ec5a2da9f2b39f2c7cd28')
+    ).toBe('dfd793ba9aadbd4dee16a647a3d67343fe56c489583f6f7db46bfc983d77af39')
   })
 })
 
