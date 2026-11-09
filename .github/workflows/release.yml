@@ -89,9 +89,12 @@ jobs:
 
   # The tag semantic-release pushed with GITHUB_TOKEN starts no workflow, so the images are built
   # from here, and the deploy to the single server follows them (infra/server/README.md).
+  # A job whose chain holds a skipped job (gates, when the tree was verified) is skipped too unless
+  # its condition says !cancelled(), so both jobs below state it with the result they need.
   images:
     needs: release
-    if: needs.release.outputs.tag != ''
+    if: >-
+      !cancelled() && needs.release.result == 'success' && needs.release.outputs.tag != ''
     uses: ./.github/workflows/publish-images.yml
     with:
       tag: ${{ needs.release.outputs.tag }}
@@ -101,7 +104,8 @@ jobs:
 
   deploy:
     needs: [release, images]
-    if: needs.release.outputs.tag != ''
+    if: >-
+      !cancelled() && needs.images.result == 'success' && needs.release.outputs.tag != ''
     uses: ./.github/workflows/deploy.yml
     with:
       tag: ${{ needs.release.outputs.tag }}
