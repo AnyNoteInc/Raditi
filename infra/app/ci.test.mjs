@@ -53,7 +53,9 @@ const copied = (dockerfile, target) => {
 
 test('the Vitest timeout of CI reaches Vitest in every workspace', () => {
   const [, passed] =
-    /^ +run: pnpm test --concurrency=\d+ -- (--testTimeout=\d+) --maxWorkers=\d+$/m.exec(ci) ?? []
+    /^ +run: pnpm test \$\{\{ matrix\.filter \}\} --concurrency=\d+ -- (--testTimeout=\d+) --maxWorkers=\d+$/m.exec(
+      ci,
+    ) ?? []
   assert.ok(passed, 'ci.yml passes --testTimeout to the test task')
   let checked = 0
   for (const workspace of workspaces) {
@@ -72,12 +74,48 @@ test('the Vitest timeout of CI reaches Vitest in every workspace', () => {
 
 test('the test step of CI keeps its workers to the cores of the runner', () => {
   const [, workspaces, workers] =
-    /^ +run: pnpm test --concurrency=(\d+) -- --testTimeout=\d+ --maxWorkers=(\d+)$/m.exec(ci) ?? []
+    /^ +run: pnpm test \$\{\{ matrix\.filter \}\} --concurrency=(\d+) -- --testTimeout=\d+ --maxWorkers=(\d+)$/m.exec(
+      ci,
+    ) ?? []
   assert.ok(workspaces && workers, 'ci.yml bounds the workspaces and the workers of the test step')
   // ubuntu-latest of a public repository has four cores. Unbounded, turbo runs ten workspaces and
   // Vitest one worker less than the cores in each: tests that wait for a socket, a lock or a
   // child process missed their bounds by turns (28.10.2026, release of v1.10.0).
   assert.ok(Number(workspaces) * Number(workers) <= 4, `${workspaces} × ${workers} workers`)
+})
+
+test('the shards of the test job run every workspace with tests exactly once', () => {
+  // Three shards name workspaces, the last one runs the rest: it excludes exactly what the others
+  // name, so a new workspace lands in it without a line here.
+  const shards = [...job('test').matchAll(/^ {10}- shard: (\S+)\n {12}filter: (.+)$/gm)].map(
+    ([, shard, filter]) => ({
+      shard,
+      filters: [...filter.matchAll(/--filter=(\S+)/g)].map(([, name]) => name),
+    }),
+  )
+  assert.ok(shards.length >= 2, 'ci.yml splits the tests into shards')
+  const [rest, ...named] = [shards.at(-1), ...shards.slice(0, -1)]
+  const included = named.flatMap(({ filters }) => filters)
+  assert.ok(
+    named.every(({ filters }) => filters.every((name) => !name.startsWith('!'))),
+    'only the last shard excludes',
+  )
+  assert.equal(new Set(included).size, included.length, 'a workspace is in two shards')
+  assert.deepEqual(
+    rest.filters.toSorted(),
+    included.map((name) => `!${name}`).toSorted(),
+    'the last shard runs the workspaces the others do not name',
+  )
+  const names = new Map(
+    workspaces.map((workspace) => [JSON.parse(read(`${workspace}/package.json`)).name, workspace]),
+  )
+  for (const name of included) {
+    assert.ok(names.has(name), `the shard names ${name}, which is no workspace`)
+    assert.ok(scripts(names.get(name)).test, `${name} has no test script`)
+  }
+  // The shards share the database steps of the job.
+  for (const command of ['pnpm db:generate', 'pnpm db:deploy', 'pnpm db:seed'])
+    assert.ok(job('test').includes(`run: ${command}`), `the test job lacks ${command}`)
 })
 
 // schema.prisma against the database the migrations have just built: a model changed without a
@@ -849,8 +887,18 @@ test('site-stacks.yml runs verify:stack of every stack on Linux, its groups name
   const command = runOf(step).trim()
   assert.match(
     command,
-    /^pnpm verify:stack -- --stack=\$\{\{ matrix\.stack \}\}(?: --group=[a-z-]+)+$/,
+    /^pnpm verify:stack -- --stack=\$\{\{ matrix\.stack \}\} --build=\$\{\{ matrix\.build \}\}(?: --group=[a-z-]+)+$/,
   )
+  // One build per job, and together every build of the stand of each stack in the matrix.
+  const { STACK_STANDS } = await import(join(root, 'infra/dev/stack-verify/stacks.mjs'))
+  assert.deepEqual(
+    matrixOf(stand).build.toSorted(),
+    matrixOf(stand)
+      .stack.flatMap((stack) => STACK_STANDS[stack].builds.map(({ archive }) => archive))
+      .toSorted(),
+  )
+  // A cross product of two stacks and their builds names builds of the other stack.
+  assert.equal(matrixOf(stand).stack.length, 1, 'two stacks in the stand move it to include')
   const groups = [...command.matchAll(/--group=([a-z-]+)/g)].map(([, group]) => group)
   // М3 and М4 always; `safety` is what Э11.4 adds to this step; `browser` and `safety-browser`
   // stay local (§5.5): any other group here is refused.
@@ -885,7 +933,7 @@ test('site-stacks.yml runs verify:stack of every stack on Linux, its groups name
     'Pull the pinned images',
     'Gitleaks of the core image',
     'Chromium and WebKit of Playwright',
-    'Import, preview and release of every build of the stack',
+    'Import, preview and release of the build',
   ].map(index)
   assert.ok(!order.includes(-1), `a step of the job stand is missing: ${order}`)
   assert.deepEqual(
@@ -1574,6 +1622,16 @@ test('the llm profile of the app VM is verified on the engine of the VM, without
     'apps/llm/Dockerfile',
   ])
     assert.ok(starts(filter, file), `${file} does not start the workflow`)
+})
+
+test('images.yml checks every image of verify:images, one per job', async () => {
+  const source = workflow('images')
+  const { APPS } = await import(join(root, 'infra/app/verify-images.mjs'))
+  assert.deepEqual(matrixOf(source).app, APPS)
+  assert.match(
+    source,
+    /^ {8}run: node infra\/app\/verify-images\.mjs --only \$\{\{ matrix\.app \}\}$/m,
+  )
 })
 
 test('publish-images.yml builds every app image of a release and names its digest', () => {

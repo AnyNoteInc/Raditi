@@ -11,13 +11,46 @@ concurrency:
 permissions: {}
 
 jobs:
+  # A pull request merged up to date with main brings main the very tree its CI has passed on:
+  # the gates of that tree are not run a second time (.github/scripts/verified-by-pull-request.sh).
+  # Any other push — a merge of a branch behind main, a commit straight to main — runs them here.
+  verified:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      passed: ${{ steps.check.outputs.passed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Was this tree checked in its pull request
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: .github/scripts/verified-by-pull-request.sh
+
   gates:
+    needs: verified
+    if: needs.verified.outputs.passed != 'true'
     uses: ./.github/workflows/ci.yml
     permissions:
       contents: read
 
   release:
-    needs: gates
+    needs: [verified, gates]
+    # gates is skipped when the tree was verified: then release runs on the verdict alone.
+    if: >-
+      !cancelled() && needs.verified.result == 'success' &&
+      (needs.gates.result == 'success' ||
+       (needs.gates.result == 'skipped' && needs.verified.outputs.passed == 'true'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
