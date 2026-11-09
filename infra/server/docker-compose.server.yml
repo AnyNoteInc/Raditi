@@ -127,6 +127,11 @@ services:
       LLM_GATEWAY_HOSTS: 127.0.0.1:8084,10.10.0.10:${LLM_GATEWAY_PUBLISH:-8084}
     # The base file leaves llm without a resolver (its only way out was the egress proxy by IP)
     dns: !override [77.88.8.8, 77.88.8.1]
+    # Its published port goes to its address on core-egress (the gateway network): a sandbox then
+    # reaches it from 172.29.83.1, the very address core sees the runner from and binds the turn
+    # key to (llm_keys.bound_source). On llm-out it came from 172.29.84.1, and every key failed.
+    networks:
+      core-egress: { gw_priority: 2 }
     extra_hosts: *internal-hosts
 
   s3:
