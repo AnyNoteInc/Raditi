@@ -55,14 +55,15 @@ export const isWebAgentCode = (code: string): code is WebAgentCode => webCodes.h
 export const webRefusal = (code: WebAgentCode): DomainError =>
   new DomainError(code, webAgentTexts[code].message, webAgentTexts[code].status)
 
-/** What a tool answers the agent: the worker's result, masked and bounded. */
+/** What a tool answers the agent: the worker's result, without secrets of addresses, bounded. */
 export type WebToolResponse = Record<string, unknown>
 
 export interface McpWebDeps {
   store: McpWebStore
   /** The worker's client (`@repo/browser-link`): one action per call, no retry. */
   worker: Pick<BrowserWorkerClient, 'action'>
-  privacy: Pick<ContentPrivacy, 'mask' | 'rehydrate'>
+  /** Only gives back contact markers of turns before 09.11.2026: pages are not masked any more. */
+  privacy: Pick<ContentPrivacy, 'rehydrate'>
 }
 
 export interface McpWebOptions {
@@ -97,12 +98,9 @@ const defaults: {
 const MIN_ACTION_MS = 1_000
 
 /**
- * Fields of a result that carry what the page or the site wrote: masked before the agent reads
- * them. Ids, numbers and words of the contract (statuses, kinds, the controller) are not.
+ * What the agent sends that reaches the site, by tool: a contact marker of an earlier turn, when
+ * the platform still masked pages (until 09.11.2026), becomes the contact again.
  */
-const PAGE_TEXT_KEYS = new Set(['url', 'title', 'tree', 'message', 'defaultValue', 'editUrl'])
-
-/** What the agent sends that reaches the site, by tool: its contact markers become contacts. */
 const SENT_TEXT: Partial<Record<BrowserToolName, readonly string[]>> = {
   web_open: ['url'],
   web_fill: ['text'],
@@ -156,7 +154,10 @@ export class McpWebService {
       if (left < MIN_ACTION_MS) throw webRefusal('BROWSER_TIMEOUT')
       const action = await this.#action(scope, tool, args)
       const result = await this.#act(admission, scope, action, left)
-      return this.#bounded(await this.#masked(scope, result))
+      // What the page shows goes to the agent as it is: the data of the site and of the pages the
+      // client signed in to is the client's own (the owner's decision of 09.11.2026, spec §20,
+      // «Данные сайта клиента»). Only the secret parameters of addresses go.
+      return this.#bounded(redactResultAddresses(result) as unknown as WebToolResponse)
     })
   }
 
@@ -299,46 +300,6 @@ export class McpWebService {
   // -------------------------------------------------------------------------------------------
   // What the agent gets back
   // -------------------------------------------------------------------------------------------
-
-  /**
-   * The result with what the page wrote masked by the task's contact map, all in one read. Its
-   * addresses lose their secret parameters first — the worker did so already; this is the second
-   * line, and a repeat changes nothing (CLAUDE.md rule 2).
-   */
-  async #masked(scope: McpTurnAccess, result: BrowserToolResult): Promise<WebToolResponse> {
-    const copy = redactResultAddresses(result) as unknown as WebToolResponse
-    const places: Array<{ holder: Record<string, unknown>; key: string; text: string }> = []
-    const visit = (value: unknown) => {
-      if (Array.isArray(value)) value.forEach(visit)
-      else if (value !== null && typeof value === 'object')
-        for (const [key, child] of Object.entries(value)) {
-          if (typeof child === 'string' && PAGE_TEXT_KEYS.has(key))
-            places.push({ holder: value as Record<string, unknown>, key, text: child })
-          else visit(child)
-        }
-    }
-    visit(copy)
-    if (places.length === 0) return copy
-    let masked: Record<string, string>
-    try {
-      masked = await this.#deps.privacy.mask(
-        maskScopeOf(scope),
-        Object.fromEntries(places.map((place, index) => [`t${index}`, place.text])),
-      )
-    } catch (error) {
-      if (isDomainError(error) && error.code === 'CONTENT_PRIVACY_LIMIT')
-        throw webRefusal('CONTENT_PRIVACY_LIMIT')
-      if (isDomainError(error) && error.code === 'CONTENT_PRIVACY_UNAVAILABLE')
-        throw webRefusal('BROWSER_SESSION_UNAVAILABLE')
-      // A page that writes the platform's own marker: it is not shown, a marker of the page is
-      // never taken for one of the task.
-      throw webRefusal('BROWSER_ACTION_FAILED')
-    }
-    places.forEach((place, index) => {
-      place.holder[place.key] = masked[`t${index}`]!
-    })
-    return copy
-  }
 
   /**
    * The answer within its bound (§3.7): the tree of an observation is cut at a line end, the

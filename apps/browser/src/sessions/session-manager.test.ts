@@ -1719,3 +1719,46 @@ describe('a snapshot for the client (web_screenshot)', () => {
     expect(inbox.written.size).toBe(0)
   })
 })
+
+describe('the files the site gave to download (web_download, the owner’s decision of 09.11.2026)', () => {
+  it('lists them, gives a text part by part, and refuses what does not read', async () => {
+    const { store, inbox, ensured, act } = setup()
+    const { row, browser } = await ensured()
+    expect(await act(row, { tool: 'web_download' })).toEqual({
+      tool: 'web_download',
+      downloads: [],
+    })
+    const lines = Array.from({ length: 3_000 }, (_, index) => `Заявка ${index};anna@example.test\n`)
+    browser.downloaded.push(
+      { number: 1, name: 'entries.csv', sizeBytes: 100_000, kind: 'text', text: lines.join('') },
+      { number: 2, name: 'scan.pdf', sizeBytes: 9, kind: 'binary', text: null },
+    )
+    const first = (await act(row, { tool: 'web_download', number: 1 })) as {
+      downloads: unknown[]
+      file: { part: number; parts: number; text: string }
+    }
+    expect(first.downloads).toHaveLength(2)
+    expect(first.file).toMatchObject({ part: 1, name: 'entries.csv' })
+    expect(first.file.parts).toBeGreaterThan(1)
+    // The contacts are the client's own data and come as they are.
+    expect(first.file.text.startsWith('Заявка 0;anna@example.test\n')).toBe(true)
+    let joined = first.file.text
+    for (let part = 2; part <= first.file.parts; part++) {
+      const next = (await act(row, { tool: 'web_download', number: 1, part })) as {
+        file: { text: string }
+      }
+      joined += next.file.text
+    }
+    expect(joined).toBe(lines.join(''))
+    for (const action of [
+      { tool: 'web_download', number: 1, part: first.file.parts + 1 },
+      { tool: 'web_download', number: 2 },
+      { tool: 'web_download', number: 3 },
+    ] as const)
+      expect(await codeOf(act(row, action))).toBe('BROWSER_ACTION_FAILED')
+    // A read, not a change of the site, and nothing of it stored anywhere.
+    expect(store.checkpointRows.size).toBe(0)
+    expect(store.wrote).toBe(0)
+    expect(inbox.written.size).toBe(0)
+  })
+})

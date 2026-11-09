@@ -36,7 +36,7 @@ export interface WordpressMcpPolicy {
   }
   /** Options the agent may neither read nor write; `*` is a wildcard. */
   readonly protectedOptions: readonly string[]
-  /** Orders, personal data requests and form entries (spec §11). */
+  /** Orders and personal data requests (spec §11); form entries are open since 09.11.2026. */
   readonly deniedPostTypes: readonly string[]
   readonly admin: {
     /** Pages under /wp-admin/: `page.php`, `dir/` or `page.php?param=value`; `*` in a value is a wildcard. */
@@ -116,9 +116,9 @@ export const wordpressMcpPolicy: WordpressMcpPolicy = freezeDeep({
       '/wp/v2/themes',
       '/wp/v2/settings',
       '/wp/v2/block-directory',
-      // Comments and form entries carry personal data of site visitors (spec §11).
+      // Comments are the visitors' part of the site (spec §11); form entries (Jetpack's
+      // `feedback`) are the client's own data and open (the owner's decision of 09.11.2026).
       '/wp/v2/comments',
-      '/wp/v2/feedback',
       // One request that carries many: it would bypass every route below.
       '/batch',
       // Runs any registered ability, plugins' included; abilities get their own tools.
@@ -188,10 +188,6 @@ export const wordpressMcpPolicy: WordpressMcpPolicy = freezeDeep({
     'shop_order_placehold',
     'shop_subscription',
     'user_request',
-    // Form entries: Flamingo (Contact Form 7) and Jetpack.
-    'flamingo_inbound',
-    'flamingo_contact',
-    'feedback',
   ],
   admin: {
     deniedPages: [
@@ -235,11 +231,6 @@ export const wordpressMcpPolicy: WordpressMcpPolicy = freezeDeep({
       'post-new.php?post_type=shop_order',
       'edit-comments.php',
       'comment.php',
-      'admin.php?page=flamingo*',
-      'admin.php?page=wpforms-entries',
-      'edit.php?post_type=flamingo_inbound',
-      'edit.php?post_type=flamingo_contact',
-      'edit.php?post_type=feedback',
     ],
     deniedAjaxActions: [
       'install-plugin',

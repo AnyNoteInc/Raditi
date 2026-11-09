@@ -203,6 +203,18 @@ export class McpWebController {
     return this.#call(context, 'web_screenshot', args)
   }
 
+  @ToolScopes(['web'])
+  @Tool({
+    name: 'web_download',
+    description:
+      'Read the files the site gave the browser to download — an export of form entries, a report, a list. Click the export or download button first (it saves nothing on the site), then call this without arguments: the answer lists the downloads with their number, name, size and kind (text and workbook read; binary, too_large and failed do not). Call it with number to read that file as text — a CSV as it is, an Excel workbook as tab-separated rows under «## <sheet>» — part by part: the answer says part of parts, call again with the next part. The files stay in the browser session only; to give the client a file, build it in the outbox (an .xlsx with python3 and openpyxl, say).',
+    parameters: schemas.web_download,
+    annotations: reads,
+  })
+  download(@Payload() args: BrowserToolArguments<'web_download'>, @Ctx() context: McpContext) {
+    return this.#call(context, 'web_download', args)
+  }
+
   async #call<T extends BrowserToolName>(
     context: McpContext,
     tool: T,

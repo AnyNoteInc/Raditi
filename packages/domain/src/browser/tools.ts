@@ -23,6 +23,7 @@ import {
   browserSessionLimits,
   browserTabSchema,
 } from './session.ts'
+import { browserDownloadLimits, browserDownloadSchema } from './downloads.ts'
 import { BROWSER_CHOOSER_MAX_FILES, isBrowserKey, isBrowserTypedText } from './stream-messages.ts'
 
 /**
@@ -48,6 +49,7 @@ export const browserToolNames = [
   'web_help',
   'web_verify',
   'web_screenshot',
+  'web_download',
 ] as const
 export type BrowserToolName = (typeof browserToolNames)[number]
 
@@ -165,7 +167,19 @@ const shapes = {
   web_verify: { expect: z.enum(['publish', 'draft', 'any']).optional() },
   /** A snapshot of the shown page for the client: attached to the dialog, never to the model. */
   web_screenshot: {},
+  /**
+   * Files the site gave the browser to download (the owner's decision of 09.11.2026): without a
+   * `number`, the list; with one, the `part`-th piece (from 1) of its text.
+   */
+  web_download: {
+    number: z.number().int().min(1).max(browserDownloadLimits.perSession).optional(),
+    part: z.number().int().min(1).max(10_000).optional(),
+  },
 } as const
+
+const downloadTarget = (args: { number?: number; part?: number }) =>
+  args.part === undefined || args.number !== undefined
+const downloadMessage = { message: 'expected a number with a part' }
 
 const tabTarget = (args: { action: string; pageId?: number }) =>
   (args.action === 'list') === (args.pageId === undefined)
@@ -186,6 +200,7 @@ export const browserToolArgumentSchemas = {
   web_help: z.strictObject(shapes.web_help),
   web_verify: z.strictObject(shapes.web_verify),
   web_screenshot: z.strictObject(shapes.web_screenshot),
+  web_download: z.strictObject(shapes.web_download).refine(downloadTarget, downloadMessage),
 } as const satisfies Record<BrowserToolName, z.ZodType>
 export type BrowserToolArguments<T extends BrowserToolName> = z.infer<
   (typeof browserToolArgumentSchemas)[T]
@@ -213,6 +228,9 @@ export const browserActionSchema = z.discriminatedUnion('tool', [
   z.strictObject({ tool: z.literal('web_help'), ...shapes.web_help }),
   z.strictObject({ tool: z.literal('web_verify'), ...shapes.web_verify }),
   z.strictObject({ tool: z.literal('web_screenshot'), ...shapes.web_screenshot }),
+  z
+    .strictObject({ tool: z.literal('web_download'), ...shapes.web_download })
+    .refine(downloadTarget, downloadMessage),
 ])
 export type BrowserAction = z.infer<typeof browserActionSchema>
 
@@ -237,7 +255,7 @@ export const browserVerifiedCheckpointSchema = z.strictObject({
 })
 export type BrowserVerifiedCheckpoint = z.infer<typeof browserVerifiedCheckpointSchema>
 
-/** What the worker answers each tool with; `apps/mcp` masks contacts in it before the agent. */
+/** What the worker answers each tool with; `apps/mcp` drops secrets of addresses in it. */
 export const browserToolResultSchema = z.discriminatedUnion('tool', [
   z.strictObject({ tool: z.literal('web_open'), ...outcome }),
   z.strictObject({ tool: z.literal('web_observe'), ...browserObservationSchema.shape }),
@@ -277,6 +295,23 @@ export const browserToolResultSchema = z.discriminatedUnion('tool', [
     page: browserTabSchema,
     attached: z.literal(true),
     number: z.number().int().min(1).max(browserScreenshotLimits.perTask),
+  }),
+  /**
+   * The downloads of the session, newest last; with `file`, one piece of the text of one of them
+   * (`part` of `parts`). A download that does not read as text has no piece.
+   */
+  z.strictObject({
+    tool: z.literal('web_download'),
+    downloads: z.array(browserDownloadSchema).max(browserDownloadLimits.perSession),
+    file: z
+      .strictObject({
+        number: z.number().int().min(1),
+        name: browserDownloadSchema.shape.name,
+        part: z.number().int().min(1),
+        parts: z.number().int().min(1),
+        text: z.string(),
+      })
+      .optional(),
   }),
 ])
 export type BrowserToolResult = z.infer<typeof browserToolResultSchema>

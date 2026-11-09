@@ -11,6 +11,7 @@ import {
   browserCheckpointAfterRead,
   browserCheckpointLimits,
   browserCheckpointsBlock,
+  browserDownloadPart,
   browserNavigationAllowed,
   browserObservationLimits,
   browserPageShown,
@@ -1183,6 +1184,28 @@ export class WorkerSession {
           verified.length > 0 &&
           (expect === 'any' || verified.every((item) => item.object?.status === expect))
         return this.#checked({ tool: 'web_verify', objects, matched })
+      }
+      case 'web_download': {
+        // The site's files the pages downloaded (the owner's decision of 09.11.2026): the list,
+        // or one piece of the text of one of them. They never leave the session's memory.
+        const downloads = await browser.downloads()
+        if (action.number === undefined) return this.#checked({ tool: 'web_download', downloads })
+        const file = browser.downloadText(action.number)
+        if (file === null) throw browserTaskError('BROWSER_ACTION_FAILED')
+        const part = action.part ?? 1
+        const piece = browserDownloadPart(file.text, part)
+        if (part > piece.parts) throw browserTaskError('BROWSER_ACTION_FAILED')
+        return this.#checked({
+          tool: 'web_download',
+          downloads,
+          file: {
+            number: action.number,
+            name: file.name,
+            part,
+            parts: piece.parts,
+            text: piece.text,
+          },
+        })
       }
     }
   }

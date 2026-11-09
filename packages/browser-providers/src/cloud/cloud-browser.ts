@@ -1,6 +1,7 @@
 import {
   badRequest,
   BROWSER_CHOOSER_MAX_FILES,
+  browserDownloadLimits,
   browserModifiers,
   browserNamedKeys,
   browserRefSchema,
@@ -27,6 +28,8 @@ import {
   type BrowserSignIn,
   type BrowserSignInForm,
   type BrowserSignInOutcome,
+  type BrowserDownload,
+  type BrowserDownloadText,
   type BrowserTab,
   type BrowserVerificationPlan,
   type BrowserVerificationReading,
@@ -46,6 +49,7 @@ import {
   type Browser,
   type BrowserContext,
   type Dialog,
+  type Download,
   type FileChooser,
   type Frame,
   type Locator,
@@ -53,6 +57,7 @@ import {
   type Route,
 } from 'playwright-core'
 
+import { downloadKindOf, readDownload } from './download-text.ts'
 import { jpegSize } from './jpeg.ts'
 import { committedAllowed, openAllowed, requestVerdict, type PageRules } from './page-rules.ts'
 import { withEditableText } from './editable-text.ts'
@@ -219,6 +224,21 @@ function oneLine(text: string, limit: number): string {
 const clipUrl = (url: string) =>
   url.length <= browserSessionLimits.urlChars ? url : url.slice(0, browserSessionLimits.urlChars)
 
+interface DownloadEntry extends BrowserDownload {
+  /** The file as it came, until it is read; null — not kept (too large, cancelled, failed). */
+  bytes: Uint8Array | null
+  done: Promise<void>
+}
+
+/** The name a site gave its file, without a path or a control character, within the limit. */
+function downloadName(suggested: string): string {
+  const name = (suggested.split(/[\\/]/).pop() ?? '')
+    .replace(/\p{Cc}/gu, '')
+    .trim()
+    .slice(0, browserDownloadLimits.nameChars)
+  return name === '' || name === '.' || name === '..' ? 'download' : name
+}
+
 const DIALOG_KINDS: ReadonlySet<string> = new Set(['alert', 'confirm', 'prompt', 'beforeunload'])
 
 /** The `accept` of a file input as a list: `image/*`, `.pdf`. */
@@ -314,6 +334,12 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
   readonly #entries = new WeakMap<Page, PageEntry>()
   #nextPageId = 1
   #nextEventId = 1
+  /** Files the pages downloaded, oldest first, at most `browserDownloadLimits.perSession`. */
+  readonly #downloads: DownloadEntry[] = []
+  #nextDownload = 1
+  #downloadsInFlight = 0
+  /** The text of the download the agent read last: the parts of one file are read in turn. */
+  #lastRead: { number: number; text: string } | null = null
   #shown: PageEntry | null = null
   /** The tree the agent may act on: the shown page's, before it navigated again. */
   #observed: { entry: PageEntry; generation: number } | null = null
@@ -366,7 +392,9 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
     const context = await browser.newContext({
       viewport: { ...connection.viewport },
       locale: 'ru-RU',
-      acceptDownloads: false,
+      // The site's exports and reports (the owner's decision of 09.11.2026): kept in the memory of
+      // the session alone and read by the agent through `web_download`, never written anywhere.
+      acceptDownloads: true,
       serviceWorkers: 'block',
       permissions: [],
     })
@@ -475,6 +503,7 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
     this.#pages.set(entry.id, entry)
     page.on('dialog', (dialog) => this.#dialogOpened(entry, dialog))
     page.on('filechooser', (chooser) => void this.#chooserOpened(entry, chooser))
+    page.on('download', (download) => this.#downloaded(download))
     page.on('framenavigated', (frame) => this.#navigated(entry, frame))
     page.on('domcontentloaded', () => void this.#refreshTitle(entry))
     page.on('load', () => void this.#refreshTitle(entry))
@@ -1436,6 +1465,101 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
     const origins = new Set([start.origin, twin.origin])
     const shown = URL.parse(this.#shown?.page.url() ?? '')?.origin ?? ''
     return { origin: origins.has(shown) ? shown : start.origin, origins }
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Downloads
+  // -------------------------------------------------------------------------------------------
+
+  /** A file a page downloads: read whole into memory, its copy in the container deleted. */
+  #downloaded(download: Download) {
+    const cancel = () => void download.cancel().catch(() => undefined)
+    // At most so many files a session, so many at once and so many bytes: a page that starts
+    // download after download fills neither the worker's memory nor the list.
+    if (this.#closing || this.#downloads.length >= browserDownloadLimits.perSession) return cancel()
+    const entry: DownloadEntry = {
+      number: this.#nextDownload++,
+      name: downloadName(download.suggestedFilename()),
+      sizeBytes: 0,
+      kind: 'failed',
+      bytes: null,
+      done: Promise.resolve(),
+    }
+    this.#downloads.push(entry)
+    if (this.#downloadsInFlight >= browserDownloadLimits.inFlight) return cancel()
+    this.#downloadsInFlight += 1
+    entry.done = (async () => {
+      const stream = await download.createReadStream()
+      const chunks: Buffer[] = []
+      let size = 0
+      const room = Math.min(
+        browserDownloadLimits.fileBytes,
+        browserDownloadLimits.sessionBytes - this.#downloadBytes(),
+      )
+      for await (const chunk of stream as AsyncIterable<Buffer>) {
+        size += chunk.byteLength
+        if (size > room) {
+          stream.destroy()
+          entry.kind = 'too_large'
+          entry.sizeBytes = Math.min(size, browserDownloadLimits.fileBytes)
+          cancel()
+          return
+        }
+        chunks.push(chunk)
+      }
+      const bytes = new Uint8Array(Buffer.concat(chunks))
+      entry.sizeBytes = size
+      entry.kind = downloadKindOf({ name: entry.name, bytes })
+      // A file that does not read is not kept.
+      entry.bytes = entry.kind === 'binary' ? null : bytes
+    })()
+      .catch(() => {
+        entry.kind = 'failed'
+        entry.bytes = null
+      })
+      .finally(() => {
+        this.#downloadsInFlight -= 1
+        void download.delete().catch(() => undefined)
+      })
+  }
+
+  #downloadBytes(): number {
+    return this.#downloads.reduce((sum, entry) => sum + (entry.bytes?.byteLength ?? 0), 0)
+  }
+
+  async downloads(): Promise<BrowserDownload[]> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([
+      Promise.allSettled(this.#downloads.map((entry) => entry.done)),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, browserDownloadLimits.settleMs)
+      }),
+    ])
+    clearTimeout(timer)
+    return this.#downloads.map(({ number, name, sizeBytes, kind }) => ({
+      number,
+      name,
+      sizeBytes,
+      kind,
+    }))
+  }
+
+  /**
+   * Read only when the agent asks for it, never as the file comes: parsing a workbook is the
+   * agent's action, within the limits of `readDownload`. The last text read is kept for its parts.
+   */
+  downloadText(number: number): BrowserDownloadText | null {
+    const entry = this.#downloads.find((item) => item.number === number)
+    if (!entry || entry.bytes === null) return null
+    if (this.#lastRead?.number === number) return { name: entry.name, text: this.#lastRead.text }
+    const read = readDownload({ name: entry.name, bytes: entry.bytes })
+    if (read.text === null) {
+      entry.kind = read.kind
+      entry.bytes = null
+      return null
+    }
+    this.#lastRead = { number, text: read.text }
+    return { name: entry.name, text: read.text }
   }
 
   isConnected(): boolean {

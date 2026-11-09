@@ -69,7 +69,9 @@ ${ANSWERING}
   bitbucket-pipelines.yml, .circleci/), .gitmodules, or the protected paths of the site: such
   changes are refused and the work is lost.
 - Files for the client go to ${SANDBOX_OUT}, never into the working copy.
-${withBrowser ? '' : CONTENT_TOOLS}- Personal data of the site's visitors, customers and users is not yours to read or change.
+${withBrowser ? '' : CONTENT_TOOLS}- Users of the site (their logins, roles and passwords), its orders and its shop's customers are
+  not yours to read or change. Form entries (заявки), leads and subscribers are the client's own
+  data: when the client asks, you may read them and collect them into a file for the client.
 - Deleting pages, switching the theme, installing plugins, payment settings and edits of more
   than 20 objects need the client's approval first.
 ${withBrowser ? '' : WHERE_CHANGES_GO}
@@ -383,8 +385,11 @@ ${parts.workspace}- ${parts.tools}\`web_observe\` reads
   in the same browser and gives it back to you.
 - When the client takes the browser over, your actions are refused: end the turn and say in
   \`client_message\` what is left to do.
-- Personal data of the site's visitors, customers and users is not yours to read or change: do
-  not open their lists, and do not repeat what a page shows of them.
+- The site's form entries (заявки), leads, subscribers and messages are the client's own data:
+  when the client asks, open their lists, read them page by page — or download their export
+  with \`web_download\` — and collect what was asked into a file for the client (an Excel
+  workbook with openpyxl, say). Users of the site, its orders and its shop's customers stay
+  closed.
 
 ## What happens on the site
 ${parts.live}- Do only what the client asked. Publishing what the client did not ask to publish, deleting
@@ -520,15 +525,14 @@ const OPEN_BROWSER = `- The platform's browser tools (\`web_*\`) open any public
 - When the client asks for a screenshot of a page, open it, wait until it has loaded and call
   \`web_screenshot\`: the platform attaches the snapshot to the dialog for the client, and you
   never see it. Then say in \`client_message\` that the screenshot is attached.
-- The platform hides phone numbers and addresses on pages from you: \`[[raditi:…]]\` is such a
-  contact, and the client sees it hidden too. Say so when a contact is what the client asked for.
 
 ## What you may not do
 - Never type, paste or upload a secret, a value of a variable or personal data of anyone, never
   pay, confirm a payment, change settings or delete anything, unless the client asked for
   exactly that.
-- On an admin page, a mailbox or a personal account the client signed in to, do not open lists of
-  users, customers, orders or messages, and do not repeat what they show.
+- On an admin page, a mailbox or a personal account the client signed in to, what you read is
+  the client's own data: when they ask, read it — a download with \`web_download\` included —
+  and collect it into a file for the client.
 - What you do on a site is not undone and not checked by the platform: say in
   \`client_message\` which sites you used and what you did.
 `

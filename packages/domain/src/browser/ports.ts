@@ -1,5 +1,6 @@
 import type { BrowserTaskPolicy } from '../ports/site-adapter.ts'
 import type { BrowserVerificationPlan, BrowserVerificationReading } from './checkpoint.ts'
+import type { BrowserDownload, BrowserDownloadText } from './downloads.ts'
 import type {
   BrowserChooser,
   BrowserController,
@@ -45,8 +46,8 @@ type ByRef<T> = Omit<T, 'observation'>
  * An action of the agent as the browser performs it: the worker has checked the observation
  * (references are of the latest one of the shown page) and read the attachments, so a reference
  * comes alone and an upload carries the files — without a reference, into the file chooser that
- * waits. `web_observe`, `web_tab`, `web_help`, `web_verify` and `web_screenshot` are the
- * worker's own (`observe`, the tab methods, its state, `verify`, `screenshot`).
+ * waits. `web_observe`, `web_tab`, `web_help`, `web_verify`, `web_screenshot` and `web_download` are the
+ * worker's own (`observe`, the tab methods, its state, `verify`, `screenshot`, `downloads`).
  */
 export type CloudBrowserAction =
   | ActionOf<'web_open'>
@@ -192,6 +193,13 @@ export interface CloudBrowserSession {
    * failure of a step is `unreadable`, never a guess.
    */
   verify(plan: BrowserVerificationPlan): Promise<BrowserVerificationReading>
+  /**
+   * The files pages of the session downloaded, oldest first, after those still under way finish
+   * (at most `browserDownloadLimits.settleMs`). Their bytes stay in the session's memory alone.
+   */
+  downloads(): Promise<BrowserDownload[]>
+  /** The text of a download (`kind` `text` or `workbook`); null — no such one, or not readable. */
+  downloadText(number: number): BrowserDownloadText | null
   /** false once the browser or the connection is gone. */
   isConnected(): boolean
   /** Closes the context and the connection; the containers are the runtime's. */

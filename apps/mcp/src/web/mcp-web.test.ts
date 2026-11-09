@@ -6,6 +6,8 @@ import { createBrowserWorkerClient } from '@repo/browser-link'
 
 import {
   BROWSER_TOOL_RESPONSE_MAX_BYTES,
+  browserDownloadLimits,
+  browserDownloadPart,
   browserTaskCodes,
   browserTaskError,
   conflict,
@@ -69,6 +71,8 @@ function resultOf(request: BrowserActionRequest): BrowserToolResult {
       return { tool: 'web_verify', objects: [], matched: true }
     case 'web_screenshot':
       return { tool: 'web_screenshot', page: PAGE, attached: true, number: 1 }
+    case 'web_download':
+      return { tool: 'web_download', downloads: [] }
     default:
       return { tool: action.tool, page: PAGE }
   }
@@ -141,7 +145,7 @@ const refused = (code: keyof typeof browserTaskCodes | 'CONTENT_PRIVACY_LIMIT') 
 describe('the web tools of a chat without a site (plan 61, §5.3, §5.5)', () => {
   const chat = (): McpTurnAccess => ({ ...scopeOf(), siteId: null, stack: null, url: null })
 
-  it('keeps the contact map under the id of the task, in the same form of path', async () => {
+  it('reads a page as it is, and still gives back a contact marker of an earlier turn', async () => {
     const { scope, service, worker, records, known } = fixture({ scope: chat() })
     worker.action.mockResolvedValueOnce({
       tool: 'web_observe',
@@ -152,10 +156,11 @@ describe('the web tools of a chat without a site (plan 61, §5.3, §5.5)', () =>
       tree: '- text "anna@example.test" [ref=e5]',
       truncated: false,
     })
+    // The data of a page is the client's own (the owner's decision of 09.11.2026): no marker.
     const answer = await service.call(scope, 'web_observe', {})
-    expect(JSON.stringify(answer)).not.toContain('anna@example.test')
-    expect(records.has(`kv/content-masks/${scope.taskId}/${scope.taskId}`)).toBe(true)
-    // The agent types a contact back: the same map gives it.
+    expect(JSON.stringify(answer)).toContain('anna@example.test')
+    expect(records.has(`kv/content-masks/${scope.taskId}/${scope.taskId}`)).toBe(false)
+    // A marker the map of the task kept from before (under the id of the task) gives its contact.
     const marker = known('boris@example.test')
     await service.call(scope, 'web_fill', {
       observation: 'o1',
@@ -294,7 +299,7 @@ describe('the web tools of a browser task', () => {
     expect(worker.action).toHaveBeenCalledTimes(2)
   })
 
-  it('hides contacts of the page from the model in every text it reads', async () => {
+  it('gives the agent the contacts of the page as they are (the owner’s decision of 09.11.2026)', async () => {
     const { scope, service, worker, records } = fixture()
     const at = `${SITE}wp-admin/edit.php?s=anna@example.test`
     worker.action.mockResolvedValueOnce({
@@ -310,22 +315,20 @@ describe('the web tools of a browser task', () => {
     })
     const answer = await service.call(scope, 'web_observe', {})
     const text = JSON.stringify(answer)
-    expect(text).not.toMatch(/anna@example\.test|123-45-67/)
-    expect(text).toContain('[[raditi:email:')
-    expect(text).toContain('[[raditi:phone:')
-    // The words of the contract, ids and references are not texts of the page.
+    expect(text).toContain('anna@example.test')
+    expect(text).toContain('+7 (999) 123-45-67')
+    expect(text).not.toContain('[[raditi:')
     expect(answer).toMatchObject({
       observation: 'o4',
       controller: 'agent',
+      dialog: { message: 'Написать anna@example.test?' },
       checkpoint: { kind: 'post', objectId: '79991234567', state: 'seen' },
     })
-    expect(records.has(contentMaskPath(scope))).toBe(true)
-    // One value is one marker wherever it stands.
-    const markers = new Set(text.match(/\[\[raditi:email:[0-9a-f-]+\]\]/g))
-    expect(markers.size).toBe(1)
+    // No contact map is written for a page any more.
+    expect(records.has(contentMaskPath(scope))).toBe(false)
   })
 
-  it('masks what a check of the site reads: titles and addresses of the objects', async () => {
+  it('gives what a check of the site reads as it is: titles and addresses of the objects', async () => {
     const { scope, service, worker } = fixture()
     worker.action.mockResolvedValueOnce({
       tool: 'web_verify',
@@ -350,10 +353,15 @@ describe('the web tools of a browser task', () => {
       ],
     })
     const answer = await service.call(scope, 'web_verify', { expect: 'publish' })
-    expect(JSON.stringify(answer)).not.toContain('anna@example.test')
     expect(answer).toMatchObject({
       matched: true,
-      objects: [{ objectId: '12', state: 'verified', object: { status: 'publish', images: 2 } }],
+      objects: [
+        {
+          objectId: '12',
+          state: 'verified',
+          object: { title: 'Пишите на anna@example.test', status: 'publish', images: 2 },
+        },
+      ],
     })
   })
 
@@ -414,29 +422,29 @@ describe('the web tools of a browser task', () => {
     })
   })
 
-  it('refuses a page that writes a marker of the platform, and a full contact map', async () => {
+  it('never takes a marker a page writes for one of the task, and names no fault of the map', async () => {
     const { scope, service, worker, secrets } = fixture()
+    const forged = `[[raditi:email:${randomUUID()}]]`
     worker.action.mockResolvedValueOnce({
       ...(resultOf({
         taskId: scope.taskId,
         assignmentId: randomUUID(),
         action: { tool: 'web_observe' },
       }) as Extract<BrowserToolResult, { tool: 'web_observe' }>),
-      tree: `- text "[[raditi:email:${randomUUID()}]]"`,
+      tree: `- text "${forged}"`,
     })
-    await expect(service.call(scope, 'web_observe', {})).rejects.toEqual(
-      refused('BROWSER_ACTION_FAILED'),
-    )
+    // The page's text comes as it is; typed back, a marker the task does not know is refused.
+    expect(JSON.stringify(await service.call(scope, 'web_observe', {}))).toContain(forged)
+    await expect(
+      service.call(scope, 'web_fill', { observation: 'o1', ref: 'e1', text: forged }),
+    ).rejects.toEqual(refused('BROWSER_ACTION_FAILED'))
+    // A map that cannot be read leaves the browser out of reach, and says nothing of Vault.
     secrets.kvRead.mockRejectedValueOnce(new Error('vault.internal:8200 sealed'))
-    worker.action.mockResolvedValueOnce({
-      tool: 'web_open',
-      page: { ...PAGE, title: 'Связь: anna@example.test' },
-    })
     const unavailable = await service
-      .call(scope, 'web_open', { url: '/' })
+      .call(scope, 'web_fill', { observation: 'o1', ref: 'e1', text: forged })
       .catch((caught: unknown) => caught)
     expect(unavailable).toEqual(refused('BROWSER_SESSION_UNAVAILABLE'))
-    expect(JSON.stringify(unavailable)).not.toMatch(/vault|anna/)
+    expect(JSON.stringify(unavailable)).not.toMatch(/vault/)
   })
 
   it('answers a refusal of the worker with its fixed code and text, anything else as its own', async () => {
@@ -720,10 +728,37 @@ describe('the web tools of a browser task', () => {
     expect(worker.action).toHaveBeenCalledTimes(3)
   })
 
+  it('passes the worst part of a download within the bound of an answer, whole', async () => {
+    const { scope, service, worker } = fixture()
+    // Every byte of the part escapes to two in JSON: tabs, line breaks and quotes; and a full list.
+    const text = '\t"\n'.repeat(60_000)
+    const piece = browserDownloadPart(text, 1)
+    const downloads = Array.from({ length: browserDownloadLimits.perSession }, (_, index) => ({
+      number: index + 1,
+      name: `${'Заявки на обучение '.repeat(10)}${index}.xlsx`,
+      sizeBytes: browserDownloadLimits.fileBytes,
+      kind: 'workbook' as const,
+    }))
+    worker.action.mockResolvedValueOnce({
+      tool: 'web_download',
+      downloads,
+      file: { number: 1, name: downloads[0]!.name, part: 1, parts: piece.parts, text: piece.text },
+    })
+    const answer = (await service.call(scope, 'web_download', { number: 1 })) as {
+      file: { text: string }
+      truncated?: boolean
+    }
+    expect(Buffer.byteLength(JSON.stringify(answer))).toBeLessThanOrEqual(
+      BROWSER_TOOL_RESPONSE_MAX_BYTES,
+    )
+    expect(answer.file.text).toBe(piece.text)
+    expect(answer.truncated).toBeUndefined()
+  })
+
   it('keeps an answer within 64 KiB, cut where nothing is split, and says so', async () => {
     const { scope, service, worker } = fixture()
-    // One contact on every line: its marker is longer than it, so the answer grows past the bound.
-    const line = (index: number) => `- text "Строка ${index}: пишите anna@example.test"`
+    const line = (index: number) =>
+      `- text "Строка ${index}: пишите anna@example.test, заявка с сайта, перезвонить днём"`
     const tree = Array.from({ length: 1200 }, (_, index) => line(index)).join('\n')
     worker.action.mockResolvedValueOnce({
       tool: 'web_observe',
@@ -738,10 +773,8 @@ describe('the web tools of a browser task', () => {
     const size = Buffer.byteLength(JSON.stringify(answer))
     expect(size).toBeLessThanOrEqual(BROWSER_TOOL_RESPONSE_MAX_BYTES)
     expect(answer).toMatchObject({ observation: 'o9', truncated: true })
-    // Whole lines, every marker whole.
-    for (const kept of answer.tree.split('\n'))
-      expect(kept).toMatch(/\[\[raditi:email:[0-9a-f-]+\]\]"$/)
-    expect(answer.tree).not.toContain('@example.test')
+    // Whole lines.
+    for (const kept of answer.tree.split('\n')) expect(kept).toMatch(/перезвонить днём"$/)
     const object = (index: number) => ({
       kind: 'post' as const,
       objectId: String(index + 1),

@@ -169,12 +169,13 @@ function verifyRepositoryPolicy(site) {
   assert.equal(isRestRequestDenied('DELETE', '/wp/v2/pages/1'), true)
   assert.equal(isRestRequestDenied('GET', '/wp/v2/pages/1'), false)
   assert.equal(isAdminUrlDenied(`${site.url}/wp-admin/users.php`), true)
-  // Comments and form entries hold personal data of site visitors (spec §11).
+  // Comments are the visitors' part of the site (spec §11); form entries are the client's own data
+  // and open (the owner's decision of 09.11.2026).
   assert.equal(isWpCliCommandDenied(['comment', 'list', '--format=json']), true)
-  assert.equal(isWpCliCommandDenied(['post', 'list', '--post_type=flamingo_inbound']), true)
+  assert.equal(isWpCliCommandDenied(['post', 'list', '--post_type=flamingo_inbound']), false)
   assert.equal(isRestRequestDenied('GET', '/wp/v2/comments'), true)
   assert.equal(isAdminUrlDenied(`${site.url}/wp-admin/edit-comments.php`), true)
-  assert.equal(isAdminUrlDenied(`${site.url}/wp-admin/admin.php?page=flamingo_inbound`), true)
+  assert.equal(isAdminUrlDenied(`${site.url}/wp-admin/admin.php?page=flamingo_inbound`), false)
   passed('repository WordPress denylist and protected diff paths')
 }
 

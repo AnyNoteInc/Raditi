@@ -43,6 +43,14 @@ const html = (title: string, body: string) =>
   `<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>${title}</title></head><body>${body}</body></html>`
 
 const PAGES: Record<string, string> = {
+  '/many': html(
+    'Много файлов',
+    `<button onclick="for (let n = 1; n <= 25; n++) { const a = document.createElement('a'); a.href = '/slow.csv?n=' + n; a.download = 'f' + n + '.csv'; document.body.append(a); a.click() }">Скачать всё</button>`,
+  ),
+  '/entries': html(
+    'Заявки',
+    '<h1>Заявки</h1><a href="/export.csv">Экспорт в CSV</a> <a href="/export-big">Большой экспорт</a>',
+  ),
   '/login': html(
     'Вход',
     `<form>
@@ -311,6 +319,31 @@ function site(hits: string[]) {
     // Chromium's error page commits a moment later.
     if (url.pathname === '/go-nowhere')
       return res.writeHead(302, { location: 'http://127.0.0.1:1/' }).end()
+    // A form plugin's export: a CSV in Windows-1251 to download, and one past the limit.
+    if (url.pathname === '/export.csv')
+      return res
+        .writeHead(200, {
+          'content-type': 'text/csv',
+          'content-disposition': 'attachment; filename="entries.csv"',
+        })
+        .end(Buffer.from([0xc8, 0xec, 0xff, 0x3b, 0x31, 0x0a]))
+    // A file that takes a while: the downloads of a page overlap.
+    if (url.pathname === '/slow.csv') {
+      res.writeHead(200, {
+        'content-type': 'text/csv',
+        'content-disposition': `attachment; filename="f${url.searchParams.get('n')}.csv"`,
+      })
+      res.write('a;b\n')
+      setTimeout(() => res.end('1;2\n'), 1_500)
+      return
+    }
+    if (url.pathname === '/export-big')
+      return res
+        .writeHead(200, {
+          'content-type': 'application/octet-stream',
+          'content-disposition': 'attachment; filename="../big.bin"',
+        })
+        .end(Buffer.alloc(21 * 1024 * 1024))
     if (url.pathname === '/nonce')
       return signedIn ? res.writeHead(200).end(' nonce-123 \n') : res.writeHead(403).end('0')
     if (url.pathname === '/posts/12') {
@@ -493,6 +526,43 @@ describe.skipIf(!enabled || !installed)('the cloud browser on a local Chromium',
     expect(shot).toMatchObject({ width: 1280, height: 800, page: { pageId: browser.shown() } })
     expect(shot.bytes.byteLength).toBeLessThanOrEqual(1024 * 1024)
   }, 30_000)
+
+  it('keeps what a page downloads in memory and reads it as text; too large a file not at all', async () => {
+    const browser = await open('/entries')
+    expect(await browser.downloads()).toEqual([])
+    const tree = (await browser.observe({})).tree
+    await browser.act({ tool: 'web_click', ref: refOf(tree, 'link', 'Экспорт в CSV') })
+    await browser.act({ tool: 'web_click', ref: refOf(tree, 'link', 'Большой экспорт') })
+    let downloads = await browser.downloads()
+    for (let tries = 0; downloads.length < 2 && tries < 100; tries++) {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      downloads = await browser.downloads()
+    }
+    expect(downloads).toEqual([
+      { number: 1, name: 'entries.csv', sizeBytes: 6, kind: 'text' },
+      // Chromium names a file with a path in it itself; a path never comes through.
+      { number: 2, name: '_big.bin', sizeBytes: 20 * 1024 * 1024, kind: 'too_large' },
+    ])
+    expect(browser.downloadText(1)).toEqual({ name: 'entries.csv', text: 'Имя;1\n' })
+    expect(browser.downloadText(2)).toBeNull()
+    expect(browser.downloadText(3)).toBeNull()
+  }, 60_000)
+
+  it('takes at most two downloads at once and twenty a session, whatever a page starts', async () => {
+    const browser = await open('/many')
+    const tree = (await browser.observe({})).tree
+    await browser.act({ tool: 'web_click', ref: refOf(tree, 'button', 'Скачать всё') })
+    await new Promise((resolve) => setTimeout(resolve, 3_000))
+    const downloads = await browser.downloads()
+    expect(downloads.length).toBeLessThanOrEqual(20)
+    const kept = downloads.filter((item) => item.kind === 'text')
+    expect(kept.length).toBeGreaterThan(0)
+    expect(kept.length).toBeLessThanOrEqual(2)
+    expect(downloads.filter((item) => item.kind === 'failed').length).toBe(
+      downloads.length - kept.length,
+    )
+    expect(browser.downloadText(kept[0]!.number)?.text).toBe('a;b\n1;2\n')
+  }, 60_000)
 
   it('never shows the agent what a secret field holds, typed by the agent or the client', async () => {
     const browser = await open('/login')

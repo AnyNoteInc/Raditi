@@ -56,21 +56,19 @@ describe('wordpressMcpPolicy', () => {
     expect(wordpressMcpPolicy.maxChangedObjectsPerTurn).toBe(20)
   })
 
-  it('keeps comments and form entries of site visitors from the agent (spec §11)', () => {
+  it('keeps comments of site visitors from the agent (spec §11)', () => {
     expect(wordpressMcpPolicy.wpCli.deniedCommands).toContain('comment')
-    expect(wordpressMcpPolicy.rest.deniedRoutes).toEqual(
-      expect.arrayContaining(['/wp/v2/comments', '/wp/v2/feedback']),
-    )
-    expect(wordpressMcpPolicy.deniedPostTypes).toEqual(
-      expect.arrayContaining(['flamingo_inbound', 'flamingo_contact', 'feedback']),
-    )
+    expect(wordpressMcpPolicy.rest.deniedRoutes).toContain('/wp/v2/comments')
     expect(wordpressMcpPolicy.admin.deniedPages).toEqual(
-      expect.arrayContaining([
-        'edit-comments.php',
-        'comment.php',
-        'admin.php?page=flamingo*',
-        'admin.php?page=wpforms-entries',
-      ]),
+      expect.arrayContaining(['edit-comments.php', 'comment.php']),
+    )
+  })
+
+  it('opens form entries, the client’s own data (the owner’s decision of 09.11.2026)', () => {
+    expect(wordpressMcpPolicy.rest.deniedRoutes).not.toContain('/wp/v2/feedback')
+    expect(wordpressMcpPolicy.deniedPostTypes).not.toContain('flamingo_inbound')
+    expect(wordpressMcpPolicy.admin.deniedPages.some((page) => page.includes('flamingo'))).toBe(
+      false,
     )
   })
 
@@ -177,10 +175,10 @@ describe('isWpCliCommandDenied', () => {
     expect(isWpCliCommandDenied(wp('post create --post_type=Shop_Order'))).toBe(true)
   })
 
-  it('denies form entries by post type', () => {
-    expect(isWpCliCommandDenied(wp('post list --post_type=flamingo_inbound'))).toBe(true)
-    expect(isWpCliCommandDenied(wp('post list --post_type=page,flamingo_contact'))).toBe(true)
-    expect(isWpCliCommandDenied(wp('post list --post_type=Feedback --format=json'))).toBe(true)
+  it('allows form entries by post type (the owner’s decision of 09.11.2026)', () => {
+    expect(isWpCliCommandDenied(wp('post list --post_type=flamingo_inbound'))).toBe(false)
+    expect(isWpCliCommandDenied(wp('post list --post_type=page,flamingo_contact'))).toBe(false)
+    expect(isWpCliCommandDenied(wp('post list --post_type=Feedback --format=json'))).toBe(false)
   })
 
   it('fails closed on empty, aliased and ambiguous input', () => {
@@ -228,6 +226,9 @@ describe('isRestRequestDenied', () => {
     ['GET', '/wp/v2/menu-items?menus=3'],
     ['GET', '/wc/v3/products/15'],
     ['POST', '/wc/v3/products/15'],
+    // Form entries (Jetpack): the client's own data (the owner's decision of 09.11.2026).
+    ['GET', '/wp-json/wp/v2/feedback'],
+    ['GET', '/wp/v2/feedback/12'],
   ])('allows %s %s', (method, route) => {
     expect(isRestRequestDenied(method, route)).toBe(false)
   })
@@ -252,8 +253,6 @@ describe('isRestRequestDenied', () => {
     ['GET', '/wp/v2/comments'],
     ['GET', '/wp/v2/comments/7?context=edit'],
     ['POST', '/wp/v2/comments'],
-    ['GET', '/wp-json/wp/v2/feedback'],
-    ['GET', '/wp/v2/feedback/12'],
     ['GET', '/wp/v2/pages?rest_route=/wp/v2/comments'],
   ])('denies %s %s', (method, route) => {
     expect(isRestRequestDenied(method, route)).toBe(true)
@@ -308,6 +307,14 @@ describe('isAdminUrlDenied', () => {
     '/wp-admin/admin.php?page=wpforms-builder&view=fields&form_id=4',
     '/wp-admin/admin.php?page=wpforms-overview',
     '/wp-admin/edit.php?post_type=product',
+    // Form entries: the client's own data (the owner's decision of 09.11.2026).
+    '/wp-admin/admin.php?page=flamingo',
+    '/wp-admin/admin.php?page=flamingo_inbound&post=5&action=edit',
+    '/wp-admin/admin.php?page=Flamingo_Outbound',
+    '/wp-admin/admin.php?page=wpforms-entries&view=list&form_id=4',
+    '/wp-admin/edit.php?post_type=feedback',
+    '/wp-admin/edit.php?post_type=flamingo_inbound',
+    '/wp-admin/edit.php?post_type=flamingo_contact',
     '/shop/some-page/',
   ])('allows %s', (url) => {
     expect(isAdminUrlDenied(url)).toBe(false)
@@ -344,13 +351,6 @@ describe('isAdminUrlDenied', () => {
     '/wp-admin/edit-comments.php',
     '/wp-admin/edit-comments.php?comment_status=moderated',
     '/wp-admin/comment.php?action=editcomment&c=3',
-    '/wp-admin/admin.php?page=flamingo',
-    '/wp-admin/admin.php?page=flamingo_inbound&post=5&action=edit',
-    '/wp-admin/admin.php?page=Flamingo_Outbound',
-    '/wp-admin/admin.php?page=wpforms-entries&view=list&form_id=4',
-    '/wp-admin/edit.php?post_type=feedback',
-    '/wp-admin/edit.php?post_type=flamingo_inbound',
-    '/wp-admin/edit.php?post_type=flamingo_contact',
   ])('denies %s', (url) => {
     expect(isAdminUrlDenied(url)).toBe(true)
   })

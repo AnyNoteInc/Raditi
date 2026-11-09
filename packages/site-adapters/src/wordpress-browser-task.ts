@@ -27,16 +27,17 @@ import { adminScriptPath, isAdminUrlDenied, isRestRouteDenied } from './wordpres
  * agent — and the client at the controls — works in the site's own admin pages, signed in as the
  * client, and uploads media there; there is no preview behind it. What stays closed is closed for
  * both (CLAUDE.md rule 4, spec §11): users, plugins, themes and the site's look, settings, tools,
- * comments, orders, form entries, the network admin and every deletion. Pure: no I/O; anything
- * the policy cannot read is denied.
+ * comments, orders and the shop's customers, the network admin and every deletion. Form entries
+ * (заявки), leads and subscribers are the client's own data and open, the export of entries
+ * included (the owner's decision of 09.11.2026). Pure: no I/O; anything the policy cannot read is denied.
  *
  * Known limits, by design of a check that sees one request:
  * - a page's script can send a method in the `X-HTTP-Method-Override` header, which WordPress's
  *   REST server obeys; the request comes here without headers, so a POST to an object of the REST
  *   API without a text body — the block editor's own way of sending DELETE — is refused, and the
  *   browser adapter is to pass the header's method as `method`;
- * - an order or a form entry opened by its number through `post.php` (WooCommerce's legacy order
- *   storage) cannot be told from a post by its address; their lists and screens are closed;
+ * - an order opened by its number through `post.php` (WooCommerce's legacy order storage) cannot
+ *   be told from a post by its address; its lists and screens are closed;
  * - settings pages a plugin adds as `admin.php?page=…` are not known by name; the ones under
  *   Settings, Tools, Appearance, Users and Plugins are closed with their parent;
  * - a plugin whose single screen shows its own lists by the address after `#` (FluentCRM's
@@ -199,7 +200,7 @@ const has = (fields: readonly Field[], name: string) => fields.some(([field]) =>
 
 /**
  * Pages below /wp-admin/ closed besides `wordpressMcpPolicy.admin.deniedPages` (users, plugins,
- * themes, the settings of the core, tools, updates, comments, orders, form entries, the network):
+ * themes, the settings of the core, tools, updates, comments, orders, the network):
  * the rest of Appearance, whose changes reach every page of the site (the Customizer, the site
  * editor, widgets, menus), Site Health, the installer and database upgrade and repair, the
  * multisite screens.
@@ -228,37 +229,37 @@ const CLOSED_POST_TYPES = new Set([
   'wp_global_styles',
   'wp_font_family',
   'wp_font_face',
-  // Form entries of plugins the MCP list does not name: their visitors' data (spec §11).
-  'nf_sub',
 ])
-/** `page=` of form entries the MCP list does not name (Gravity, Formidable, Elementor). */
-const CLOSED_PLUGIN_PAGES = new Set(['gf_entries', 'formidable-entries', 'e-form-submissions'])
 /**
- * Words of a plugin's screen (`page=`, and Fluent Forms' `route=` within it) that list the site's
- * visitors: form entries and submissions, leads, subscribers, messages, CFDB7's saved forms, users,
- * customers, orders. A part of a name is enough, as with actions: a plugin's screen is closed
- * rather than missed (spec §11).
+ * Words of a plugin's screen (`page=`, and Fluent Forms' `route=` within it) that stay closed:
+ * the site's accounts (users — their logins, roles and passwords), its orders and its shop's
+ * customers (CLAUDE.md rule 4, spec §20, «Данные сайта клиента», ДС2). A part of a name is
+ * enough, as with actions: a plugin's screen is closed rather than missed. The form entries
+ * (заявки), leads, subscribers and messages of the site are the client's own data and open to the
+ * agent (the owner's decision of 09.11.2026, ДС1).
  */
-const CLOSED_SCREEN_WORDS = [
-  'entr',
-  'submission',
-  'subscriber',
-  'lead',
-  'inbox',
-  'message',
-  'cfdb',
-  'user',
-  'customer',
-  'order',
-]
-const screenClosed = (value: string) =>
-  CLOSED_PLUGIN_PAGES.has(value) || CLOSED_SCREEN_WORDS.some((word) => value.includes(word))
+const CLOSED_SCREEN_WORDS = ['user', 'order', 'customer']
+const screenClosed = (value: string) => CLOSED_SCREEN_WORDS.some((word) => value.includes(word))
+
+/**
+ * Words of a screen of form entries: an export on such a screen reads the entries into a file
+ * and is open (ДС1); an export anywhere else — a general exporter that reaches orders and users, a
+ * plugin's settings with their keys — stays closed.
+ */
+const ENTRY_SCREEN_WORDS = ['entr', 'submission', 'flamingo', 'cfdb', 'lead', 'subscriber', 'inbox']
+const entryScreen = (value: string) => ENTRY_SCREEN_WORDS.some((word) => value.includes(word))
+/**
+ * Exports of form entries that go to admin-ajax.php without the screen's name: Fluent Forms
+ * (checked on the owner's site on 09.11.2026: «Экспорт» → «Экспортировать как Excel (xlsx)»).
+ */
+const ENTRY_EXPORT_ACTIONS = new Set(['fluentform-form-entries-export'])
 
 /**
  * Words of an `action` (of an admin page, admin-ajax.php or admin-post.php) that delete, install,
  * update, export or erase — or reach a closed part: comments, users and their passwords and
- * sessions, plugins, themes, options and settings, privacy requests, Site Health. A part of a name
- * is enough (`untrash-post`, `wpseo_set_option`): a plugin's action is closed rather than missed.
+ * sessions, orders and customers, plugins, themes, options and settings, privacy requests, Site
+ * Health. A part of a name is enough (`untrash-post`, `wpseo_set_option`): a plugin's action is
+ * closed rather than missed. An export of form entries is the exception (`exportOpen`).
  */
 const CLOSED_ACTION_WORDS = [
   'delete',
@@ -273,6 +274,7 @@ const CLOSED_ACTION_WORDS = [
   'user',
   'password',
   'session',
+  'customer',
   'plugin',
   'theme',
   'option',
@@ -280,6 +282,9 @@ const CLOSED_ACTION_WORDS = [
   'privacy',
   'health',
 ]
+/** «order» as a word of an action (`wc_order_*`, `export-orders`), not the layout of boxes. */
+const ORDER_ACTION = /(?:^|[-_])orders?(?:[-_]|$)/
+const LAYOUT_ACTIONS = new Set(['meta-box-order'])
 /**
  * Whole actions closed besides: the dashboard's Quick Draft makes a post without its editor (no
  * address, so no checkpoint guards it against a duplicate, Б22), and a list's Quick Edit
@@ -297,8 +302,16 @@ const CLOSED_ACTIONS = new Set([
 /** «Empty Trash» and bulk edit of a list: deletions and mass changes (CLAUDE.md rule 4). */
 const CLOSED_FIELDS = ['delete_all', 'delete_all2', 'bulk_edit']
 
-const actionClosed = (action: string) =>
-  CLOSED_ACTIONS.has(action) || CLOSED_ACTION_WORDS.some((word) => action.includes(word))
+/** An export of form entries: a known action, or an export on a screen of entries (ДС1). */
+const exportOpen = (action: string, onEntries: boolean) =>
+  ENTRY_EXPORT_ACTIONS.has(action) || (onEntries && action.includes('export'))
+
+const actionClosed = (action: string, onEntries: boolean) =>
+  CLOSED_ACTIONS.has(action) ||
+  (ORDER_ACTION.test(action) && !LAYOUT_ACTIONS.has(action)) ||
+  CLOSED_ACTION_WORDS.some(
+    (word) => action.includes(word) && !(word === 'export' && exportOpen(action, onEntries)),
+  )
 
 /** A request to /wp-admin/: `rest` are the segments below it. */
 function adminDenied(rest: readonly string[], fields: readonly Field[]): boolean {
@@ -310,12 +323,16 @@ function adminDenied(rest: readonly string[], fields: readonly Field[]): boolean
   // An importer runs as `admin.php?import=…`.
   if (page === 'admin.php' && has(fields, 'import')) return true
   // A plugin's screen opens below any admin script (`admin.php`, `edit.php?post_type=…&page=…`).
-  if ([...valuesOf(fields, 'page'), ...valuesOf(fields, 'route')].some(screenClosed)) return true
+  const screens = [...valuesOf(fields, 'page'), ...valuesOf(fields, 'route')]
+  if (screens.some(screenClosed)) return true
   if (page === 'edit.php' || page === 'post-new.php') {
     if (valuesOf(fields, 'post_type').some((type) => CLOSED_POST_TYPES.has(type))) return true
   }
   if (CLOSED_FIELDS.some((name) => has(fields, name))) return true
-  return [...valuesOf(fields, 'action'), ...valuesOf(fields, 'action2')].some(actionClosed)
+  const onEntries = screens.some(entryScreen)
+  return [...valuesOf(fields, 'action'), ...valuesOf(fields, 'action2')].some((action) =>
+    actionClosed(action, onEntries),
+  )
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -832,6 +849,12 @@ export function wordpressBrowserGuide(): string {
   cannot publish; submit only what the client asked for and tell the client plainly that the post
   waits for review. A page or action refused with \`BROWSER_ACTION_DENIED\` stays closed: tell the
   client, do not look for a way around it.
+- Form entries — «заявки» — are the client's own data (the owner's decision of 09.11.2026): their
+  lists are under each form plugin's menu (Fluent Forms: «Записи» / «Entries»; Contact Form 7
+  with Flamingo: «Входящие»; WPForms, Gravity Forms, Elementor, CFDB7 and the like have their
+  own). When the client asks to collect them, read the list page by page, or click the plugin's
+  export («Экспорт» / «Export», CSV or Excel) and read the file with \`web_download\`; then build
+  what the client asked for in the outbox. Users and orders stay closed.
 - Checkpoint: after any click on Save, Publish, Update or Schedule — and whenever the result of
   one is unclear (a timeout, a reload, an error) — call \`web_verify\` before you click it again.
   While an object of the task exists, never start a second one: open its editor again. If

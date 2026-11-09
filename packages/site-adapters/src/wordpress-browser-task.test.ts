@@ -128,6 +128,24 @@ describe('wordpressAdapter.browserTaskPolicy: pages', () => {
     '/wp-content/uploads/2026/10/photo-1024x768.webp?ver=2',
     '/wp-content/themes/twentytwentyfive/style.css',
     '/blog/wp-admin/post-new.php',
+    // Form entries (заявки), leads and subscribers: the client's own data, and their export
+    // (the owner's decision of 09.11.2026).
+    '/wp-admin/admin.php?page=flamingo',
+    '/wp-admin/admin.php?page=wpforms-entries',
+    '/wp-admin/edit.php?post_type=feedback',
+    '/wp-admin/admin.php?page=gf_entries&id=1',
+    '/wp-admin/admin.php?page=formidable-entries',
+    '/wp-admin/admin.php?page=e-form-submissions',
+    '/wp-admin/edit.php?post_type=nf_sub',
+    '/wp-admin/admin.php?page=mailpoet-subscribers',
+    '/wp-admin/admin.php?page=cfdb7-list.php&fid=12',
+    '/wp-admin/admin.php?page=fluent_forms_all_entries',
+    '/wp-admin/admin.php?page=fluent_forms&route=entries&form_id=1',
+    '/wp-admin/admin.php?page=forminator-entries',
+    '/wp-admin/admin.php?page=evf-entries',
+    '/wp-admin/edit.php?post_type=x&page=forminator-entries',
+    '/wp-admin/admin.php?page=fluent_forms&route=entries&form_id=3&action=export',
+    '/wp-admin/admin.php?page=cfdb7-list.php&fid=12&action=cfdb7_export_csv',
   ])('opens %s', (path) => {
     expect(policy.pageDenied(path)).toBe(false)
     expect(denied(path)).toBe(false)
@@ -187,22 +205,9 @@ describe('wordpressAdapter.browserTaskPolicy: pages', () => {
     '/wp-admin/admin.php?page=wc-settings&tab=checkout',
     '/wp-admin/admin.php?page=wc-admin&path=/customers',
     '/wp-admin/edit.php?post_type=shop_order',
-    // Form entries.
-    '/wp-admin/admin.php?page=flamingo',
-    '/wp-admin/admin.php?page=wpforms-entries',
-    '/wp-admin/edit.php?post_type=feedback',
-    '/wp-admin/admin.php?page=gf_entries&id=1',
-    '/wp-admin/admin.php?page=formidable-entries',
-    '/wp-admin/admin.php?page=e-form-submissions',
-    '/wp-admin/edit.php?post_type=nf_sub',
-    '/wp-admin/admin.php?page=mailpoet-subscribers',
-    '/wp-admin/admin.php?page=cfdb7-list.php&fid=12',
-    '/wp-admin/admin.php?page=fluent_forms_all_entries',
-    '/wp-admin/admin.php?page=fluent_forms&route=entries&form_id=1',
-    '/wp-admin/admin.php?page=forminator-entries',
-    '/wp-admin/admin.php?page=evf-entries',
+    // A plugin's screen of the site's accounts or the shop's customers (ДС2).
     '/wp-admin/admin.php?page=newsletter_users_index',
-    '/wp-admin/edit.php?post_type=x&page=forminator-entries',
+    '/wp-admin/admin.php?page=crm-customers',
     // The network admin and multisite.
     '/wp-admin/network/',
     '/wp-admin/network/plugins.php',
@@ -234,7 +239,15 @@ describe('wordpressAdapter.browserTaskPolicy: pages', () => {
     '/wp-admin/edit.php?action=edit&bulk_edit=Update&post[]=1',
     '/wp-admin/upload.php?action=delete&media[]=5',
     '/wp-admin/edit-tags.php?action=delete&taxonomy=category&tag_ID=3',
+    // An export anywhere but a screen of form entries: a general exporter reaches orders and
+    // users, a plugin's settings export carries its keys (spec §20, ДС1, ДС2).
     '/wp-admin/admin.php?page=some-plugin&action=export_entries',
+    '/wp-admin/admin.php?page=pmxe-admin-export&action=wpallexport',
+    '/wp-admin/admin.php?page=smtp-mailer&action=export_config',
+    // Orders and the shop's customers by an action of their own.
+    '/wp-admin/admin.php?page=reports&action=wc_order_export',
+    '/wp-admin/admin.php?page=crm&action=export-orders',
+    '/wp-admin/admin.php?page=crm&action=sync_customers',
   ])('closes the deletion or mass change %s', (path) => {
     expect(policy.pageDenied(path)).toBe(true)
   })
@@ -530,7 +543,17 @@ describe('wordpressAdapter.browserTaskPolicy: requests', () => {
     )
     expect(denied('/wp-admin/admin-ajax.php', 'POST', 'action%5B%5D=delete-post')).toBe(true)
     expect(denied('/wp-admin/admin-ajax.php/x', 'POST', 'action=delete-post')).toBe(true)
+    // An export of the entries of Fluent Forms is open; any other export without its screen is not
+    // (the owner's decision of 09.11.2026, ДС1).
     expect(denied('/wp-admin/admin-post.php', 'POST', 'action=export_entries')).toBe(true)
+    expect(
+      denied('/wp-admin/admin-ajax.php', 'POST', 'action=fluentform-form-entries-export&form_id=3'),
+    ).toBe(false)
+    expect(denied('/wp-admin/admin-ajax.php', 'POST', 'action=wpallexport&id=1')).toBe(true)
+    // The layout of the editor's boxes is not an order.
+    expect(denied('/wp-admin/admin-ajax.php', 'POST', 'action=meta-box-order&page=post')).toBe(
+      false,
+    )
     expect(denied('/wp-admin/admin-post.php', 'POST', 'action=submit_form&name=x')).toBe(false)
   })
 
