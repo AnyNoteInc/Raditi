@@ -25,10 +25,10 @@ jobs:
     timeout-minutes: 30
 
     # Synthetic CI values only: no real client data on GitHub runners (152-FZ). No database here:
-    # prisma.config.ts reads DATABASE_URL, and generate never connects.
+    # prisma.config.ts reads DATABASE_URL, and generate never connects (as in the Dockerfiles).
     env:
       APP_ENV: test
-      DATABASE_URL: postgresql://raditi:raditi@localhost:5432/raditi
+      DATABASE_URL: postgresql://build@localhost/build
       BETTER_AUTH_SECRET: ci-secret-not-real-0123456789abcdef
       BETTER_AUTH_URL: http://localhost:3000
       APP_URL: http://localhost:3000

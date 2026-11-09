@@ -21,7 +21,7 @@ numbers=$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '.[] | select(.merged_at 
 for number in $numbers; do
   head=$(gh api "repos/$REPO/pulls/$number" --jq .head.sha) || continue
   git fetch --quiet --no-tags origin "refs/pull/$number/head" || continue
-  [ "$(git rev-parse "$head^{tree}")" = "$tree" ] || {
+  [[ "$(git rev-parse "$head^{tree}")" == "$tree" ]] || {
     echo "#$number: the head $head has another tree"
     continue
   }
@@ -31,7 +31,7 @@ for number in $numbers; do
   }
   runs=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$head&event=pull_request&status=success" \
     --jq .total_count) || continue
-  [ "${runs:-0}" -gt 0 ] && verdict true "#$number: CI passed on $head, the tree of $SHA"
+  [[ "${runs:-0}" -gt 0 ]] && verdict true "#$number: CI passed on $head, the tree of $SHA"
   echo "#$number: no successful CI run on $head"
 done
 verdict false "no pull request of $SHA was checked on its tree"
