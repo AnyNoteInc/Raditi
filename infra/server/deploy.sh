@@ -122,7 +122,16 @@ rm -rf "$config"
 "$app/server/preflight.sh"
 
 # 5. Data services, buckets, migrations, seeds; from the migrations on there is no way back by files
+# The S3 identities are this release's renderer's: rendered again (s3 has no AppRole, so no SecretID
+# changes), and SeaweedFS, which reads them at its start, restarted when they changed
+s3_before=$(sha256sum /run/raditi/s3/s3.json 2>/dev/null || true)
+/usr/local/lib/raditi/platform-secrets.mjs render s3 >/dev/null
 compose up -d --wait postgres redis s3
+if [ "$s3_before" != "$(sha256sum /run/raditi/s3/s3.json)" ]; then
+  compose restart s3 >/dev/null
+  compose up -d --wait s3
+  say "S3 identities updated"
+fi
 # The internal CA for the deploy jobs (runner.yaml.in: options and valid_volumes)
 docker volume create raditi-ci-ca >/dev/null
 docker run --rm --network none -v raditi-ci-ca:/ca -v /etc/raditi/ca/ca.pem:/src.pem:ro \

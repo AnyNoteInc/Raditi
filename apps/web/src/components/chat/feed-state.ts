@@ -80,7 +80,13 @@ export function feedReducer(state: FeedState, action: FeedAction): FeedState {
 }
 
 /** How often a dialog is read: while someone works on it, while it waits for the client. */
-export const feedPolling = Object.freeze({ working: 2_000, waiting: 15_000, max: 30_000 })
+export const feedPolling = Object.freeze({
+  working: 2_000,
+  waiting: 15_000,
+  max: 30_000,
+  /** «Ход работы» of a live turn: what the agent is writing now comes about this often. */
+  activity: 1_000,
+})
 
 const WORKING = new Set(['queued', 'preparing', 'running', 'deploying', 'verifying'])
 const BUILDING = new Set(['pending', 'building'])

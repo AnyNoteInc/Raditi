@@ -127,7 +127,11 @@ describe('OpenCode driver: prepared files and argv', () => {
       raditi: {
         npm: '@ai-sdk/openai-compatible',
         name: 'Raditi',
-        options: { baseURL: context.llm.baseUrl, apiKey: `{file:${SANDBOX_SECRETS_DIR}/llm}` },
+        // Through the wrapper's relay of the stream, to the same path of the gateway.
+        options: {
+          baseURL: 'http://127.0.0.1:4180/zai/v4',
+          apiKey: `{file:${SANDBOX_SECRETS_DIR}/llm}`,
+        },
         models: {
           'glm-5.3': {
             name: 'glm-5.3',
@@ -595,8 +599,22 @@ interface Behaviour {
     sessionRewrite?: boolean
     /** Then a trigger in the session database that voids every change of a row. */
     sessionTrigger?: boolean
+    /**
+     * Asks the model once, at the provider address of its configuration, reads the whole stream
+     * and then prints a finished `text` row, as the CLI does at the end of a part.
+     */
+    llm?: boolean
   }
 }
+/** A loopback port nothing listens on now. */
+async function freePort(): Promise<number> {
+  const probe = createServer()
+  await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve))
+  const { port } = probe.address() as AddressInfo
+  await new Promise((resolve) => probe.close(resolve))
+  return port
+}
+
 /** The wrapper with `waits` in place of its limits: each must still be there to replace. */
 function waiting(source: string, waits: NonNullable<Behaviour['serve']>['waits']): string {
   if (!waits || !source.includes('const SERVER_READY_MS')) return source
@@ -664,6 +682,39 @@ describe('OpenCode driver: the launch wrapper', { timeout: 30_000 }, () => {
     }),
   })
 
+  /** The stand-in of the gateway: a stream of chat completions, piece by piece (`gatewayStream`). */
+  let gateway: Server
+  let gatewayUrl: string
+  let gatewayStream: { pieces: string[][]; pauseMs: number } = { pieces: [], pauseMs: 0 }
+  const gatewayRequests: { url?: string; authorization?: string; body: string }[] = []
+  beforeAll(async () => {
+    gateway = createServer((request, response) => {
+      const chunks: Buffer[] = []
+      request.on('data', (chunk: Buffer) => chunks.push(chunk))
+      request.on('end', () => {
+        gatewayRequests.push({
+          url: request.url,
+          authorization: request.headers.authorization,
+          body: Buffer.concat(chunks).toString(),
+        })
+        response.writeHead(200, { 'content-type': 'text/event-stream' })
+        void (async () => {
+          for (const group of gatewayStream.pieces) {
+            for (const piece of group) response.write(piece)
+            await new Promise((resolve) => setTimeout(resolve, gatewayStream.pauseMs))
+          }
+          response.end('data: [DONE]\n\n')
+        })()
+      })
+    })
+    await new Promise<void>((resolve) => gateway.listen(0, '127.0.0.1', resolve))
+    gatewayUrl = `http://127.0.0.1:${(gateway.address() as AddressInfo).port}`
+  })
+  afterAll(async () => {
+    gateway.closeAllConnections()
+    await new Promise((resolve) => gateway.close(resolve))
+  })
+
   beforeAll(async () => {
     server = createServer((request, response) => {
       const chunks: Buffer[] = []
@@ -724,6 +775,7 @@ describe('OpenCode driver: the launch wrapper', { timeout: 30_000 }, () => {
     limitMs = 20_000,
   ): Promise<Launch> {
     mcpRequests.length = 0
+    const relayPort = await freePort()
     const run = await driver.prepare({
       ...context,
       mcp: { ...context.mcp, url: mcpUrl },
@@ -753,6 +805,10 @@ describe('OpenCode driver: the launch wrapper', { timeout: 30_000 }, () => {
           .replaceAll('/workspace/repo', paths.repo)
           // The directory above the working copy, where the wrapper names it by itself.
           .replaceAll('"/workspace"', JSON.stringify(directory))
+          // The relay of the stream on a port of this launch, the gateway in this test.
+          .replaceAll('127.0.0.1:4180', `127.0.0.1:${relayPort}`)
+          .replaceAll('"port":4180', `"port":${relayPort}`)
+          .replaceAll('http://sandbox-gw:8080', gatewayUrl)
       await mkdir(paths.repo, { recursive: true })
       for (const entry of [...run.files, ...run.secrets]) {
         const path = local(entry.path)
@@ -863,6 +919,22 @@ if (step.session) {
   if (step.sessionTrigger) database.exec('CREATE TRIGGER keep BEFORE UPDATE ON part BEGIN SELECT RAISE(IGNORE); END');
   // Not closed: as after the CLI's own exit, the rows are still in the WAL.
   record.wal = fs.statSync(path.join(data, 'opencode.db-wal')).size;
+}
+if (step.llm) {
+  const config = JSON.parse(fs.readFileSync(path.join(configHome, 'opencode/opencode.json'), 'utf8'));
+  const base = new URL(config.provider.raditi.options.baseURL);
+  const sent = require('node:http').request({ host: base.hostname, port: base.port, method: 'POST', path: base.pathname + '/chat/completions', headers: { authorization: 'Bearer turn-key', 'content-type': 'application/json' } }, (response) => {
+    const chunks = [];
+    response.on('data', (chunk) => chunks.push(chunk));
+    response.on('end', () => {
+      record.llm = { status: response.statusCode, body: Buffer.concat(chunks).toString() };
+      save();
+      process.stdout.write(JSON.stringify({ type: 'text', part: { type: 'text', text: 'finished' } }) + '\\n');
+      process.exit(0);
+    });
+  });
+  sent.end('{"stream":true}');
+  return;
 }
 save();
 if (step.stderr) process.stderr.write(step.stderr);
@@ -982,6 +1054,70 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
       .split('\n')
       .filter(Boolean)
       .flatMap((line) => driver.parseEvent(line))
+
+  const chunk = (delta: Record<string, unknown>) =>
+    `data: ${JSON.stringify({ choices: [{ index: 0, delta }] })}\n\n`
+
+  it('relays the model stream as it is and prints what a part holds so far before it ends', async () => {
+    mcpAnswer = accept
+    gatewayRequests.length = 0
+    gatewayStream = {
+      pauseMs: 600,
+      pieces: [
+        [chunk({ role: 'assistant', reasoning_content: 'Let me ' })],
+        [chunk({ reasoning_content: 'open it.' })],
+        // A thought ends where words begin, in the same chunk.
+        [chunk({ content: 'Открываю ' })],
+        [chunk({ content: 'сайт.' }), chunk({}), 'data: {"choices":[],"usage":{}}\n\n'],
+      ],
+    }
+    const result = await launch({}, { run: { llm: true } })
+    expect(result.code).toBe(0)
+    const [cli] = result.records as [CliRecord & { llm: { status: number; body: string } }]
+    // The CLI got every byte of the gateway, and the gateway the CLI's request.
+    expect(cli.llm.status).toBe(200)
+    expect(cli.llm.body).toBe(gatewayStream.pieces.flat().join('') + 'data: [DONE]\n\n')
+    expect(gatewayRequests).toEqual([
+      { url: '/zai/v4/chat/completions', authorization: 'Bearer turn-key', body: '{"stream":true}' },
+    ])
+    const rows = result.stdout
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; kind?: string; text?: string })
+    expect(rows.at(-1)).toMatchObject({ type: 'text' })
+    const drafts = rows.filter((row) => row.type === 'raditi_draft')
+    expect(drafts.map((row) => [row.kind, row.text])).toEqual([
+      ['reasoning', 'Let me '],
+      ['reasoning', 'Let me open it.'],
+      ['text', 'Открываю '],
+      ['text', 'Открываю сайт.'],
+    ])
+    expect(failure(result.stdout).filter((event) => event.type === 'draft')).toEqual([
+      { type: 'draft', kind: 'reasoning', text: 'Let me ' },
+      { type: 'draft', kind: 'reasoning', text: 'Let me open it.' },
+      { type: 'draft', kind: 'text', text: 'Открываю ' },
+      { type: 'draft', kind: 'text', text: 'Открываю сайт.' },
+    ])
+  })
+
+  it('holds back the tail of a draft that could begin a value of the client', async () => {
+    mcpAnswer = accept
+    gatewayStream = {
+      pauseMs: 600,
+      pieces: [[chunk({ content: 'Ключ secretva' })], [chunk({ content: 'lue-1234 задан.' })]],
+    }
+    const result = await launch(
+      { envValues: { API_TOKEN: 'secretvalue-1234' } },
+      { run: { llm: true } },
+    )
+    expect(result.code).toBe(0)
+    const drafts = result.stdout
+      .split('\n')
+      .filter((line) => line.includes('raditi_draft'))
+      .map((line) => (JSON.parse(line) as { text: string }).text)
+    // Never a piece of the value at the end: core masks it only whole.
+    expect(drafts).toEqual(['Ключ ', 'Ключ secretvalue-1234 задан.'])
+  })
 
   it('hands each credential to the CLI once, through a pipe, in an environment built from scratch', async () => {
     mcpAnswer = accept

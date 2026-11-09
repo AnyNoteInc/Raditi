@@ -374,6 +374,9 @@ export const activityText = Object.freeze({
   more: 'Загружаем дальше…',
   /** The model's own words before it acts (`/thinking`): raw, often English. */
   reasoning: 'Размышления агента',
+  /** What the agent is thinking or writing right now, as it comes. */
+  thinkingNow: 'Агент размышляет…',
+  answering: 'Агент пишет ответ…',
   command: 'Команда',
   tool: 'Инструмент',
   question: 'Вопрос',

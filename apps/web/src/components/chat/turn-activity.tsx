@@ -15,8 +15,26 @@ import { useTurnActivity, type ActivityState } from './use-turn-activity'
 // «Ход работы» (owner's decision of 26.10.2026): everything the agent wrote, ran and changed in a
 // turn, in the order it came. What the agent wrote is set as text — never markup; commands,
 // names of tools and paths in the monospace face, as the agent gave them. What the model thought
-// stands here only for a viewer who asked (`/thinking`), set apart from what the agent said: it is
-// raw and often English, and no answer of the agent (docs/plan/61-chats-first.md, К32).
+// is set apart from what the agent said: it is raw and often English, and no answer of the agent.
+// A live turn shows it as it comes, with what the agent is writing now (owner's request of
+// 09.11.2026); a finished one only for a viewer who asked (`/thinking`, docs/plan/61, К32).
+
+const thought = {
+  m: 0,
+  fontSize: 13,
+  lineHeight: 1.55,
+  color: 'text.secondary',
+  whiteSpace: 'pre-wrap',
+  overflowWrap: 'anywhere',
+} as const
+
+const said = {
+  m: 0,
+  fontSize: 14,
+  lineHeight: 1.6,
+  whiteSpace: 'pre-wrap',
+  overflowWrap: 'anywhere',
+} as const
 
 const mono = {
   fontFamily: fontFamilies.mono,
@@ -73,35 +91,23 @@ function Label({
 function ActivityLine({ event }: { event: ActivityEvent }) {
   switch (event.type) {
     case 'message':
-      return (
-        <Typography
-          sx={{
-            m: 0,
-            fontSize: 14,
-            lineHeight: 1.6,
-            whiteSpace: 'pre-wrap',
-            overflowWrap: 'anywhere',
-          }}
-        >
-          {event.text}
-        </Typography>
-      )
+      return <Typography sx={said}>{event.text}</Typography>
     case 'reasoning':
       return (
         <Box sx={{ display: 'grid', gap: 0.5, minWidth: 0 }}>
           <Label icon="brain" text={activityText.reasoning} />
-          <Typography
-            sx={{
-              m: 0,
-              fontSize: 13,
-              lineHeight: 1.55,
-              color: 'text.secondary',
-              whiteSpace: 'pre-wrap',
-              overflowWrap: 'anywhere',
-            }}
-          >
-            {event.text}
-          </Typography>
+          <Typography sx={thought}>{event.text}</Typography>
+        </Box>
+      )
+    case 'draft':
+      if (event.kind === 'text') return <Typography sx={said}>{event.text}</Typography>
+      return (
+        <Box sx={{ display: 'grid', gap: 0.5, minWidth: 0 }} aria-live="polite">
+          <Label
+            icon={event.kind === 'reasoning' ? 'brain' : 'chat'}
+            text={event.kind === 'reasoning' ? activityText.thinkingNow : activityText.answering}
+          />
+          <Typography sx={event.kind === 'reasoning' ? thought : said}>{event.text}</Typography>
         </Box>
       )
     case 'command': {
@@ -181,12 +187,18 @@ export function TurnActivityView({
 }) {
   const scroller = useRef<HTMLDivElement>(null)
   const following = useRef(true)
-  const shown = state.events.filter((event) => thinking || event.type !== 'reasoning')
+  // A draft of a turn that has ended is what it was writing when it stopped: its finished
+  // events say the rest.
+  const shown = state.events.filter(
+    (event) => (thinking || event.type !== 'reasoning') && (live || event.type !== 'draft'),
+  )
   const count = shown.length
+  const last = shown.at(-1)
+  const growing = last?.type === 'draft' ? last.text.length : 0
   useEffect(() => {
     const block = scroller.current
     if (block && live && following.current) block.scrollTop = block.scrollHeight
-  }, [count, live])
+  }, [count, growing, live])
   let status: string | null = null
   if (!state.read) status = state.failed ? activityText.failed : activityText.loading
   else if (state.failed) status = activityText.failed
@@ -241,5 +253,5 @@ export function TurnActivity({
 }) {
   const state = useTurnActivity(taskId, turn, live)
   const { thinking } = useChatThinking()
-  return <TurnActivityView state={state} live={live} thinking={thinking} />
+  return <TurnActivityView state={state} live={live} thinking={live || thinking} />
 }

@@ -314,6 +314,16 @@ export const agentEventSchema = z.discriminatedUnion('type', [
    * never reaches a result; a viewer sees it only by choice (docs/plan/61-chats-first.md, К32).
    */
   z.object({ type: z.literal('reasoning'), text: z.string().max(limits.messageText) }),
+  /**
+   * What the model has written so far of a text or a thought that is not finished yet, whole
+   * from its start: a viewer sees words as they come. The finished `message` or `reasoning`
+   * stands for it; a draft never reaches a result.
+   */
+  z.object({
+    type: z.literal('draft'),
+    kind: z.enum(['text', 'reasoning']),
+    text: z.string().max(limits.messageText),
+  }),
   z.object({
     type: z.literal('command'),
     command: z.string().max(limits.command),

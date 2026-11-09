@@ -29,6 +29,16 @@ const shownEvent = z.discriminatedUnion('type', [
     type: z.literal('reasoning'),
     text: z.string().max(agentOutputLimits.messageText),
   }),
+  /**
+   * What the agent is writing now: a thought, words, or the answer of the turn — the text of
+   * `client_message` of the result it is writing, as far as it goes. Stands only until the next
+   * event of the turn.
+   */
+  z.strictObject({
+    type: z.literal('draft'),
+    kind: z.enum(['text', 'reasoning', 'answer']),
+    text: z.string().max(agentOutputLimits.messageText),
+  }),
   z.strictObject({
     type: z.literal('command'),
     command: z.string().max(agentOutputLimits.command),
@@ -68,6 +78,50 @@ export interface TurnActivity {
 /** The turn's answer: the object the platform reads as its result, not words to show again. */
 const RESULT_KEY = '"client_message"'
 
+const ESCAPES: Readonly<Record<string, string>> = {
+  '"': '"',
+  '\\': '\\',
+  '/': '/',
+  b: '\b',
+  f: '\f',
+  n: '\n',
+  r: '\r',
+  t: '\t',
+}
+
+/**
+ * The words of `client_message` in a result the agent has not finished writing: the JSON string
+ * from its opening quote up to its closing one or to where the text ends so far, unescaped; a
+ * cut escape at the end is left out. null — the text names no answer yet.
+ */
+export function draftAnswer(text: string): string | null {
+  const key = text.indexOf(RESULT_KEY)
+  if (key < 0) return null
+  const open = /^\s*:\s*"/.exec(text.slice(key + RESULT_KEY.length))
+  if (open === null) return null
+  let answer = ''
+  for (let at = key + RESULT_KEY.length + open[0].length; at < text.length; at += 1) {
+    const char = text[at]!
+    if (char === '"') break
+    if (char !== '\\') {
+      answer += char
+      continue
+    }
+    const next = text[at + 1]
+    if (next === undefined) break
+    if (next === 'u') {
+      const hex = text.slice(at + 2, at + 6)
+      if (!/^[0-9a-fA-F]{4}$/.test(hex)) break
+      answer += String.fromCharCode(Number.parseInt(hex, 16))
+      at += 5
+      continue
+    }
+    answer += ESCAPES[next] ?? next
+    at += 1
+  }
+  return answer
+}
+
 /** What of one event the page shows; null — nothing. */
 export function shownActivity(event: AgentEvent): z.output<typeof shownEvent> | null {
   switch (event.type) {
@@ -77,6 +131,18 @@ export function shownActivity(event: AgentEvent): z.output<typeof shownEvent> | 
         : { type: 'message', text: event.text }
     case 'reasoning':
       return { type: 'reasoning', text: event.text }
+    case 'draft': {
+      if (event.kind === 'reasoning') return { type: 'draft', kind: 'reasoning', text: event.text }
+      // The result being written: its words for the client, never the object itself.
+      const head = event.text.trimStart()
+      if (head.startsWith('{') || head.startsWith('```') || event.text.includes(RESULT_KEY)) {
+        const answer = draftAnswer(event.text)
+        return answer === null || answer.trim() === ''
+          ? null
+          : { type: 'draft', kind: 'answer', text: answer }
+      }
+      return { type: 'draft', kind: 'text', text: event.text }
+    }
     case 'command':
       return { type: 'command', command: event.command, exitCode: event.exitCode }
     case 'file_change':
@@ -97,6 +163,7 @@ const textOf = (event: z.output<typeof shownEvent>): number => {
   switch (event.type) {
     case 'message':
     case 'reasoning':
+    case 'draft':
       return event.text.length
     case 'command':
       return event.command.length
@@ -151,6 +218,12 @@ export async function readTurnActivity(
       const parsed = agentEventSchema.safeParse(raw)
       const shown = parsed.success ? shownActivity(parsed.data) : null
       if (shown === null) return
+      // A draft stands only until the next event: the page gets the last one, not each.
+      const last = events.at(-1)
+      if (last?.type === 'draft') {
+        events.pop()
+        text -= textOf(last)
+      }
       events.push({ id: `${row.id}:${index}`, ...shown })
       text += textOf(shown)
     })

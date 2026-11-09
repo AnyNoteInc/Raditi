@@ -1,7 +1,7 @@
 import type { PrismaClient } from '@repo/db'
 import { describe, expect, it, vi } from 'vitest'
 
-import { activityLimits, readTurnActivity, shownActivity } from './activity.ts'
+import { activityLimits, draftAnswer, readTurnActivity, shownActivity } from './activity.ts'
 
 const userId = '0199a3f2-0000-7000-8000-0000000000a1'
 const taskId = '0199a3f2-0000-7000-8000-0000000000b1'
@@ -165,5 +165,50 @@ describe('shownActivity', () => {
       type: 'message',
       text: 'Проверяю.',
     })
+  })
+})
+
+describe('drafts of the agent', () => {
+  it('gives a draft of words and of a thought as it is', () => {
+    expect(shownActivity({ type: 'draft', kind: 'text', text: 'Открываю сайт' })).toEqual({
+      type: 'draft',
+      kind: 'text',
+      text: 'Открываю сайт',
+    })
+    expect(shownActivity({ type: 'draft', kind: 'reasoning', text: 'Let me open' })).toEqual({
+      type: 'draft',
+      kind: 'reasoning',
+      text: 'Let me open',
+    })
+  })
+
+  it('gives of a result being written only the words of its answer so far', () => {
+    const draft = (text: string) => shownActivity({ type: 'draft', kind: 'text', text })
+    expect(draft('{"summary":"Открыл')).toBeNull()
+    expect(draft('```json\n{"summary":"x"')).toBeNull()
+    expect(draft('{"summary":"x","client_message":"Сайт \\"УКК\\" открыт.\\nНа гл')).toEqual({
+      type: 'draft',
+      kind: 'answer',
+      text: 'Сайт "УКК" открыт.\nНа гл',
+    })
+    // A cut escape at the end is left out, a whole \u one is read.
+    expect(draftAnswer('{"client_message":"Готово \\u0410\\')).toBe('Готово А')
+    expect(draftAnswer('{"client_message":"Готово","x":1}')).toBe('Готово')
+    expect(draftAnswer('{"client_message":')).toBeNull()
+  })
+
+  it('keeps of a page only the draft nothing came after', async () => {
+    const { read } = setup([
+      output(1n, [{ type: 'draft', kind: 'reasoning', text: 'Let' }]),
+      output(2n, [{ type: 'draft', kind: 'reasoning', text: 'Let me' }]),
+      output(3n, [{ type: 'reasoning', text: 'Let me open it.' }]),
+      output(4n, [{ type: 'draft', kind: 'text', text: 'Откры' }]),
+    ])
+    const page = await read()
+    expect(page.events).toEqual([
+      { id: '3:0', type: 'reasoning', text: 'Let me open it.' },
+      { id: '4:0', type: 'draft', kind: 'text', text: 'Откры' },
+    ])
+    expect(page.cursor).toBe('4')
   })
 })

@@ -446,6 +446,9 @@ describe.skipIf(!databaseUrl)('the egress of a pass with PostgreSQL', () => {
         guide: null,
       })
       expect(read!.attachments).toEqual(read!.browser!.attachments)
+      // The chat's browser is the platform's: no second one in the sandbox.
+      expect(read!.skills).toEqual(turnSkillsOf([], { platformBrowser: true }))
+      expect(read!.skills?.map((skill) => skill.name)).not.toContain('playwright')
     })
   })
 

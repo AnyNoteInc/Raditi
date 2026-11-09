@@ -26,6 +26,7 @@ import {
   encodeBrowserFrame,
   initialBrowserControl,
   isBrowserInputInViewport,
+  isDomainError,
   redactResultAddresses,
   redactTreeAddresses,
   releaseBrowserControl,
@@ -987,6 +988,10 @@ export class WorkerSession {
           // The first outcome stands: a timeout already answered is not answered again.
           if (outcome.result !== 'ok') return
           outcome.result = browserCodeOf(error)
+          // A failure of the worker's own (storage, the database) reaches the agent as a failed
+          // action like a page's; the operator's log names it, never its message.
+          if (outcome.result === 'BROWSER_ACTION_FAILED' && !isDomainError(error))
+            this.#context.warn('browser_action_failed', error)
           reject(browserTaskError(outcome.result))
         }
         try {
