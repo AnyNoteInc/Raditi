@@ -242,15 +242,10 @@ const CLOSED_SCREEN_WORDS = ['user', 'order', 'customer']
 const screenClosed = (value: string) => CLOSED_SCREEN_WORDS.some((word) => value.includes(word))
 
 /**
- * Words of a screen of form entries: an export on such a screen reads the entries into a file
- * and is open (ДС1); an export anywhere else — a general exporter that reaches orders and users, a
- * plugin's settings with their keys — stays closed.
- */
-const ENTRY_SCREEN_WORDS = ['entr', 'submission', 'flamingo', 'cfdb', 'lead', 'subscriber', 'inbox']
-const entryScreen = (value: string) => ENTRY_SCREEN_WORDS.some((word) => value.includes(word))
-/**
- * Exports of form entries that go to admin-ajax.php without the screen's name: Fluent Forms
- * (checked on the owner's site on 09.11.2026: «Экспорт» → «Экспортировать как Excel (xlsx)»).
+ * Exports of form entries open by their exact action alone (ДС1): Fluent Forms, checked on the
+ * owner's site on 09.11.2026 («Экспорт» → «Экспортировать как Excel (xlsx)»). Nothing is inferred
+ * from the `page` or `route` of a request: a page's script writes those as it likes. Another
+ * plugin's export joins by its exact action once checked; until then the agent reads its list.
  */
 const ENTRY_EXPORT_ACTIONS = new Set(['fluentform-form-entries-export'])
 
@@ -259,7 +254,7 @@ const ENTRY_EXPORT_ACTIONS = new Set(['fluentform-form-entries-export'])
  * update, export or erase — or reach a closed part: comments, users and their passwords and
  * sessions, orders and customers, plugins, themes, options and settings, privacy requests, Site
  * Health. A part of a name is enough (`untrash-post`, `wpseo_set_option`): a plugin's action is
- * closed rather than missed. An export of form entries is the exception (`exportOpen`).
+ * closed rather than missed. An export of form entries is the exception (`ENTRY_EXPORT_ACTIONS`).
  */
 const CLOSED_ACTION_WORDS = [
   'delete',
@@ -302,16 +297,11 @@ const CLOSED_ACTIONS = new Set([
 /** «Empty Trash» and bulk edit of a list: deletions and mass changes (CLAUDE.md rule 4). */
 const CLOSED_FIELDS = ['delete_all', 'delete_all2', 'bulk_edit']
 
-/** An export of form entries: a known action, or an export on a screen of entries (ДС1). */
-const exportOpen = (action: string, onEntries: boolean) =>
-  ENTRY_EXPORT_ACTIONS.has(action) || (onEntries && action.includes('export'))
-
-const actionClosed = (action: string, onEntries: boolean) =>
-  CLOSED_ACTIONS.has(action) ||
-  (ORDER_ACTION.test(action) && !LAYOUT_ACTIONS.has(action)) ||
-  CLOSED_ACTION_WORDS.some(
-    (word) => action.includes(word) && !(word === 'export' && exportOpen(action, onEntries)),
-  )
+const actionClosed = (action: string) =>
+  !ENTRY_EXPORT_ACTIONS.has(action) &&
+  (CLOSED_ACTIONS.has(action) ||
+    (ORDER_ACTION.test(action) && !LAYOUT_ACTIONS.has(action)) ||
+    CLOSED_ACTION_WORDS.some((word) => action.includes(word)))
 
 /** A request to /wp-admin/: `rest` are the segments below it. */
 function adminDenied(rest: readonly string[], fields: readonly Field[]): boolean {
@@ -329,10 +319,7 @@ function adminDenied(rest: readonly string[], fields: readonly Field[]): boolean
     if (valuesOf(fields, 'post_type').some((type) => CLOSED_POST_TYPES.has(type))) return true
   }
   if (CLOSED_FIELDS.some((name) => has(fields, name))) return true
-  const onEntries = screens.some(entryScreen)
-  return [...valuesOf(fields, 'action'), ...valuesOf(fields, 'action2')].some((action) =>
-    actionClosed(action, onEntries),
-  )
+  return [...valuesOf(fields, 'action'), ...valuesOf(fields, 'action2')].some(actionClosed)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -852,9 +839,10 @@ export function wordpressBrowserGuide(): string {
 - Form entries — «заявки» — are the client's own data (the owner's decision of 09.11.2026): their
   lists are under each form plugin's menu (Fluent Forms: «Записи» / «Entries»; Contact Form 7
   with Flamingo: «Входящие»; WPForms, Gravity Forms, Elementor, CFDB7 and the like have their
-  own). When the client asks to collect them, read the list page by page, or click the plugin's
-  export («Экспорт» / «Export», CSV or Excel) and read the file with \`web_download\`; then build
-  what the client asked for in the outbox. Users and orders stay closed.
+  own). When the client asks to collect them, read the list page by page. In Fluent Forms, open
+  the form's entries, click «Экспорт», then «Экспортировать как Excel (xlsx)» and «Экспорт» in the
+  window of fields, and read the file with \`web_download\`; other plugins' exports are closed.
+  Then build what the client asked for in the outbox. Users, orders and customers stay closed.
 - Checkpoint: after any click on Save, Publish, Update or Schedule — and whenever the result of
   one is unclear (a timeout, a reload, an error) — call \`web_verify\` before you click it again.
   While an object of the task exists, never start a second one: open its editor again. If

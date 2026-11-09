@@ -144,8 +144,6 @@ describe('wordpressAdapter.browserTaskPolicy: pages', () => {
     '/wp-admin/admin.php?page=forminator-entries',
     '/wp-admin/admin.php?page=evf-entries',
     '/wp-admin/edit.php?post_type=x&page=forminator-entries',
-    '/wp-admin/admin.php?page=fluent_forms&route=entries&form_id=3&action=export',
-    '/wp-admin/admin.php?page=cfdb7-list.php&fid=12&action=cfdb7_export_csv',
   ])('opens %s', (path) => {
     expect(policy.pageDenied(path)).toBe(false)
     expect(denied(path)).toBe(false)
@@ -243,6 +241,10 @@ describe('wordpressAdapter.browserTaskPolicy: pages', () => {
     // users, a plugin's settings export carries its keys (spec §20, ДС1, ДС2).
     '/wp-admin/admin.php?page=some-plugin&action=export_entries',
     '/wp-admin/admin.php?page=pmxe-admin-export&action=wpallexport',
+    // A screen's name is the page's own word: it opens no export (only the exact action does).
+    '/wp-admin/admin.php?page=fluent_forms&route=entries&form_id=3&action=export',
+    '/wp-admin/admin.php?page=cfdb7-list.php&fid=12&action=cfdb7_export_csv',
+    '/wp-admin/admin-ajax.php?page=leads&action=wpallexport',
     '/wp-admin/admin.php?page=smtp-mailer&action=export_config',
     // Orders and the shop's customers by an action of their own.
     '/wp-admin/admin.php?page=reports&action=wc_order_export',
@@ -550,6 +552,13 @@ describe('wordpressAdapter.browserTaskPolicy: requests', () => {
       denied('/wp-admin/admin-ajax.php', 'POST', 'action=fluentform-form-entries-export&form_id=3'),
     ).toBe(false)
     expect(denied('/wp-admin/admin-ajax.php', 'POST', 'action=wpallexport&id=1')).toBe(true)
+    expect(
+      denied('/wp-admin/admin-ajax.php', 'POST', 'action=wpallexport&page=fluent_forms_entries'),
+    ).toBe(true)
+    // The exact action only: a longer one with the same start is not it.
+    expect(
+      denied('/wp-admin/admin-ajax.php', 'POST', 'action=fluentform-form-entries-export-settings'),
+    ).toBe(true)
     // The layout of the editor's boxes is not an order.
     expect(denied('/wp-admin/admin-ajax.php', 'POST', 'action=meta-box-order&page=post')).toBe(
       false,
