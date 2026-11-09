@@ -559,6 +559,22 @@ describe('wordpressAdapter.browserTaskPolicy: requests', () => {
     expect(denied('/wp-admin/admin-post.php', 'POST', 'action=submit_form&name=x')).toBe(false)
   })
 
+  it('reads the reports, orders and customers of WooCommerce Admin, and writes none of it', () => {
+    for (const path of [
+      '/wp-json/wc-analytics/reports/customers',
+      '/wp-json/wc-analytics/orders?per_page=25',
+      '/wp-json/wc-admin/options?options=woocommerce_default_country',
+    ])
+      expect(denied(path, 'GET'), path).toBe(false)
+    for (const path of [
+      '/wp-json/wc-admin/options',
+      '/wp-json/wc-admin/plugins/install',
+      '/wp-json/wc-analytics/admin/notes/5',
+      '/?rest_route=/wc-admin/onboarding/profile',
+    ])
+      expect(denied(path, 'POST', '{"a":1}'), path).toBe(true)
+  })
+
   it('lets the Classic Editor save its form and closes the Quick Draft', () => {
     const classic =
       'action=editpost&originalaction=editpost&post_ID=12&user_ID=1&post_title=Открытие&publish=Publish'

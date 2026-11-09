@@ -20,7 +20,12 @@ import { z } from 'zod'
 
 import { segmentsOf } from './php/media.ts'
 import { isUploadDenied } from './wordpress-browser.ts'
-import { adminScriptPath, isAdminUrlDenied, isRestRouteDenied } from './wordpress-mcp-policy.ts'
+import {
+  adminScriptPath,
+  isAdminUrlDenied,
+  isReadOnlyRoute,
+  isRestRouteDenied,
+} from './wordpress-mcp-policy.ts'
 
 /**
  * The browser of a task on a WordPress site itself (docs/plan/57-browser-tasks.md, Б21, Б22): the
@@ -396,6 +401,8 @@ function routeDenied(route: string | null, request: SiteRequest): boolean {
   if (isRestRouteDenied(`/${route}`)) return true
   if (CLOSED_ROUTES.some((prefix) => startsWithRoute(route, prefix))) return true
   if (!read && LOOK_ROUTES.some((prefix) => startsWithRoute(route, prefix))) return true
+  // WooCommerce Admin: its reports, orders and customers read (ДС7), its writes closed (ДС8).
+  if (!read && isReadOnlyRoute(`/${route}`)) return true
   // `POST /wp/v2/posts/12` with no text body is how the block editor sends DELETE (in a header
   // this check does not see); an update carries its JSON. A new upload of media may be binary.
   return request.method === 'POST' && request.bodyless && route !== 'wp/v2/media'

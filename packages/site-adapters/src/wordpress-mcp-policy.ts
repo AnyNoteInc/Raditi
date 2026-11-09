@@ -31,6 +31,11 @@ export interface WordpressMcpPolicy {
     /** Route prefixes under /wp-json; `*` is one path segment. */
     readonly deniedRoutes: readonly string[]
     readonly deniedMethods: readonly string[]
+    /**
+     * Routes open to reads only (GET, HEAD): WooCommerce Admin's namespaces hold the shop's
+     * reports and lists, and also writes of its options and the install of plugins.
+     */
+    readonly readOnlyRoutes: readonly string[]
     /** Query parameters that change what WordPress runs. */
     readonly deniedParams: readonly string[]
   }
@@ -136,6 +141,9 @@ export const wordpressMcpPolicy: WordpressMcpPolicy = freezeDeep({
       '/wc/store',
     ],
     deniedMethods: ['DELETE'],
+    // Reports, orders and customers of WooCommerce Admin open to reads (ДС7); its writes — options,
+    // plugins, onboarding, notes — stay closed with the shop's settings and plugins (ДС8).
+    readOnlyRoutes: ['/wc-admin', '/wc-analytics'],
     // `_embed` makes WordPress run the linked routes itself: comments (`replies`) and users
     // (`author`) of a post would come back in spite of the routes denied above.
     deniedParams: ['_method', '_embed'],
@@ -331,7 +339,23 @@ export function isRestRequestDenied(method: string, route: string): boolean {
   for (const key of params.keys()) {
     if (policy.rest.deniedParams.includes(lower(key))) return true
   }
-  return [path, ...params.getAll('rest_route')].some(isRestRouteDenied)
+  const routes = [path, ...params.getAll('rest_route')]
+  if (!READ_METHODS.has(method.trim().toUpperCase()) && routes.some(isReadOnlyRoute)) return true
+  return routes.some(isRestRouteDenied)
+}
+
+const READ_METHODS = new Set(['GET', 'HEAD'])
+
+/** A route of `readOnlyRoutes`, spelt any way `isRestRouteDenied` reads one. */
+export function isReadOnlyRoute(route: string): boolean {
+  const segments = normalizeUrlPath(route)
+  if (segments === null) return true
+  if (segments[0] === 'index.php') segments.shift()
+  if (segments[0] === 'wp-json') segments.shift()
+  return policy.rest.readOnlyRoutes.some((prefix) => {
+    const pattern = prefix.split('/').filter(Boolean)
+    return segments.length >= pattern.length && pattern.every((part, i) => part === segments[i])
+  })
 }
 
 const adminPages = policy.admin.deniedPages.map((entry) => {

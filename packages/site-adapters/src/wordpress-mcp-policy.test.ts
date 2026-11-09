@@ -230,6 +230,7 @@ describe('isRestRequestDenied', () => {
     ['GET', '/wc/v2/orders/15/notes'],
     ['GET', '/wc/v3/customers'],
     ['GET', '/wc-analytics/reports/customers'],
+    ['GET', '/wp-json/wc-admin/options?options=woocommerce_currency'],
     ['GET', '/wp-json/wp/v2/feedback'],
     ['GET', '/wp/v2/feedback/12'],
   ])('allows %s %s', (method, route) => {
@@ -244,6 +245,13 @@ describe('isRestRequestDenied', () => {
     ['POST', '/wp/v2/themes/twentytwentyfive'],
     ['POST', '/wp/v2/settings'],
     ['GET', '/wc/v3/refunds'],
+    // WooCommerce Admin writes: its options, plugin installs, onboarding (ДС8).
+    ['POST', '/wc-admin/options'],
+    ['POST', '/wp-json/wc-admin/plugins/install'],
+    ['PUT', '/wc-admin/onboarding/profile'],
+    ['POST', '/wc-analytics/admin/notes/5'],
+    ['POST', '/wp/v2/pages?rest_route=/wc-admin/options'],
+    ['PATCH', '/index.php/wp-json/wc-admin/options'],
     ['POST', '/wc/v3/payment_gateways/yookassa'],
     ['POST', '/wc/v3/settings/checkout'],
     ['POST', '/wc/v3/webhooks'],
