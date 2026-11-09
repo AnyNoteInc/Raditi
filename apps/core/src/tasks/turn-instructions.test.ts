@@ -319,9 +319,11 @@ describe('browserTaskInstructions (docs/plan/57-browser-tasks.md, Б20–Б24)',
   // text of a task with a repository differs by one word, which it dictates to the client (К26).
   // The line of the web search came on 08.11.2026 (spec §20, «Веб-поиск агента»); the rest stays.
   // The two lines on `database.operations` still null came with the site stacks
-  // (docs/plan/62-site-stacks.md, Т37).
+  // (docs/plan/62-site-stacks.md, Т37), the files for the client with docs/plan/66, В11.
   const withoutSearch = (text: string) =>
     text
+      .replace(/\n## Files for the client\n[\s\S]*?by their names\.\n/, '')
+      .replace(/^- Files for the client go to .*\n/m, '')
       .replace(/^- When `raditi_search_web`.*\n/m, '')
       .replace(/^ {2}While it is null the preview's first build .*\n.*cannot be done\.\n/m, '')
   const beforeTheWord = (text: string) =>
@@ -471,5 +473,23 @@ describe('openTaskInstructions (docs/plan/61-chats-first.md, §5.7)', () => {
     )
     expect(text).toContain('context7 for the current documentation of a library or framework;')
     expect(text).not.toContain('the site is made with')
+  })
+})
+
+describe('files for the client (docs/plan/66-chat-visuals.md, В8–В11)', () => {
+  it('tells every kind of turn where its files for the client go and what builds them', () => {
+    for (const text of [
+      turnInstructions({ state: 'absent' }),
+      browserTaskInstructions('GUIDE\n'),
+      openTaskInstructions({ skills: [] }, { browser: false, inbox: null }),
+    ]) {
+      expect(text).toContain('## Files for the client')
+      expect(text).toContain('mkdir -p /workspace/out')
+      expect(text).toContain('at most 10 files of up to 20 MiB each')
+      expect(text).toContain('`python-docx` and `openpyxl`')
+    }
+    expect(turnInstructions({ state: 'absent' })).toContain(
+      '- Files for the client go to /workspace/out, never into the working copy.',
+    )
   })
 })

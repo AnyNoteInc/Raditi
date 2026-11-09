@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
 
 import {
@@ -982,6 +982,33 @@ describe('SandboxRunner: a turn without a repository (docs/plan/57-browser-tasks
       type: 'sealed',
       sizeBytes: side.archives.home.byteLength,
     })
+  })
+
+  it('uploads the outbox of the agent with a capture of home alone and reports its digest', async () => {
+    const side = quietWorkdir()
+    const core = scriptedCore()
+    const outbox = new Uint8Array([1, 2, 3])
+    side.snapshot.capture.mockResolvedValueOnce({ home: side.archives.home } as never)
+    Object.assign(side.snapshot, {
+      captureOutbox: vi.fn(async () => ({ archive: outbox, files: 1, skipped: 0 })),
+    })
+    startRunner(core.transport, side.executor)
+    await core.send(withoutBundle())
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
+    await core.send(command('capture', { home }))
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared', 'captured']))
+    expect(core.transport.candidate).toHaveBeenCalledTimes(1)
+    expect(core.transport.candidate).toHaveBeenCalledWith(
+      expect.any(String),
+      'outbox',
+      expect.anything(),
+      outbox,
+    )
+    expect(core.reports[2]).toMatchObject({
+      type: 'captured',
+      outbox: { sha256: createHash('sha256').update(outbox).digest('hex'), sizeBytes: 3 },
+    })
+    expect(core.reports[2]).not.toHaveProperty('patch')
   })
 
   it('fails a capture with a base after a prepare without a bundle, uploading nothing', async () => {

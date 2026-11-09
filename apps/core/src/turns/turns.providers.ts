@@ -1,4 +1,4 @@
-import type { Provider } from '@nestjs/common'
+import { Logger, type Provider } from '@nestjs/common'
 import type { AgentDriverRegistry } from '@repo/agent-drivers'
 import type { PrismaClient } from '@repo/db'
 import type {
@@ -42,6 +42,8 @@ export const remoteTurnExecutor: Provider = {
   useExisting: RemoteTurnExecutor,
 }
 
+const outboxLogger = new Logger('TurnOutbox')
+
 /** Core's own Docker (SandboxModule): the PoC and tests, never production. */
 export const localTurnExecutor: Provider = {
   provide: TURN_EXECUTOR,
@@ -56,6 +58,7 @@ export const localTurnExecutor: Provider = {
       transport: new SandboxSnapshotTransport(),
       transfer: fetchPresignedTransfer(),
       ...(warm ? { warm } : {}),
+      log: (line) => outboxLogger.warn(line),
     }),
   inject: [SANDBOX_PROVIDER, AGENT_DRIVERS, { token: WARM_SANDBOXES, optional: true }],
 }

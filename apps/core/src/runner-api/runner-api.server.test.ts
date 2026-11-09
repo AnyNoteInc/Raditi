@@ -528,13 +528,25 @@ describe('RunnerApiServer', () => {
       expect(put.status).toBe(410)
       expect(await put.json()).toEqual({ error: 'COMMAND_CLOSED' })
     }
+    // The agent's files for the client go up with either kind of capture (docs/plan/66, В8).
+    const outbox = Buffer.from('outbox archive')
+    const put = await f.call(runnerCandidatePath(assignment.id, 'outbox'), {
+      method: 'PUT',
+      headers: { ...f.binary(capture!), 'content-type': 'application/octet-stream' },
+      body: outbox,
+    })
+    expect(put.status).toBe(200)
     const answered = await f.report(assignment.id, {
       type: 'captured',
       commandId: capture!.commandId,
       homeBytes: 12,
+      outbox: {
+        sha256: createHash('sha256').update(outbox).digest('hex'),
+        sizeBytes: outbox.byteLength,
+      },
     })
     expect(answered.status).toBe(200)
-    await expect(capturing).resolves.toEqual({ homeBytes: 12 })
+    await expect(capturing).resolves.toEqual({ homeBytes: 12, outbox })
   })
 
   it('logs a failed request by its code only: no URL, key or runner text', async () => {

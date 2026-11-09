@@ -286,6 +286,12 @@ export interface CapturedTurn {
   untracked?: Uint8Array
   /** The sealed home part has exactly this size: AES-GCM adds no padding. */
   homeBytes: number
+  /**
+   * The files the agent left for the client in SANDBOX_OUT (docs/plan/66-chat-visuals.md, В8):
+   * a ustar archive in zstd, checked where it was taken; untrusted until core reads it again.
+   * Absent when the folder was empty or its files were dropped. Never a part of the snapshot.
+   */
+  outbox?: Uint8Array
 }
 
 export interface TurnSealInput {

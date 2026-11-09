@@ -73,7 +73,9 @@ const baseOf = (turn: number): SnapshotSealBase => ({
   home,
 })
 
-async function fixture(options: { workdir?: string } = {}) {
+async function fixture(
+  options: { workdir?: string; outbox?: { listing: string; archive: Uint8Array } } = {},
+) {
   const memory = memoryStorage()
   const priorHome = await tarZst({ [home.include[0]!]: 'prior conversation' })
   const thisHome = await tarZst({ [home.include[0]!]: 'this turn' })
@@ -87,6 +89,8 @@ async function fixture(options: { workdir?: string } = {}) {
       calls.push(spec)
       // No link anywhere: `test -L` answers 1, as for a path that is none.
       if (spec.argv[0] === 'test' && spec.argv[1] === '-L') return handle(undefined, 1)
+      if (spec.argv.includes('--directory=/workspace/out')) return handle(options.outbox?.archive)
+      if (spec.argv.includes('-printf')) return handle(Buffer.from(options.outbox?.listing ?? ''))
       if (spec.argv.includes('--create')) return handle(thisHome)
       if (spec.argv.includes('-mindepth') && options.workdir)
         return handle(Buffer.from(`${options.workdir}\n`))
@@ -113,12 +117,14 @@ async function fixture(options: { workdir?: string } = {}) {
   }
   const transfer = { get: vi.fn(memory.transfer.get), put: vi.fn(memory.transfer.put) }
   const importBundle = vi.fn(async () => {})
+  const log = vi.fn()
   const executor = new LocalTurnExecutor({
     sandboxes,
     parser: () => ({ parseEvent: () => [] }),
     transport: new SandboxSnapshotTransport(),
     transfer,
     importBundle,
+    log,
   })
 
   // Turn 1 of the session, sealed and stored as core stores it: its home part alone.
@@ -200,6 +206,7 @@ async function fixture(options: { workdir?: string } = {}) {
     sandboxes,
     transfer,
     importBundle,
+    log,
     executor,
     manifest,
     restore,
@@ -283,7 +290,11 @@ describe('a turn without a repository on the local executor (plan 57, Б4)', () 
     expect(captured).toEqual({ homeBytes: f.thisHome.byteLength })
     const capture = f.calls.slice(before)
     expect(ranGit(capture)).toBe(false)
-    expect(capture.some((spec) => spec.argv.some((arg) => arg.includes('/workspace')))).toBe(false)
+    // Nothing of the working directory: only the folder of the agent's files, found empty.
+    expect(capture.some((spec) => spec.argv.some((arg) => arg.includes('/workspace/repo')))).toBe(
+      false,
+    )
+    expect(capture.some((spec) => spec.argv.includes('--directory=/workspace/out'))).toBe(false)
 
     const base = baseOf(2)
     const key = `${turnSnapshotPrefix(labels.sessionId, 2)}${snapshotPartFiles.home}`
@@ -464,5 +475,43 @@ describe('files of the client on the local executor', () => {
       ),
     ).rejects.toMatchObject({ code: 'SANDBOX_COMMAND_FAILED' })
     expect(f.writes).toEqual([])
+  })
+})
+
+describe('files of the agent for the client on the local executor (docs/plan/66, В8)', () => {
+  it('hands the outbox over with the capture, never sealed with the home part', async () => {
+    const archive = await tarZst({ 'estimate.txt': 'total 100' })
+    const f = await fixture({ outbox: { listing: 'f 9 estimate.txt\0', archive } })
+    const execution = await f.executor.prepare(f.input(), signal)
+    const captured = await execution.capture({ home })
+    expect(captured).toEqual({ homeBytes: f.thisHome.byteLength, outbox: archive })
+    expect(f.log).not.toHaveBeenCalled()
+  })
+
+  it('drops an outbox that holds a turn credential, and the turn goes on', async () => {
+    const archive = await tarZst({ 'a.txt': `key ${credentials[0]}` })
+    const f = await fixture({ outbox: { listing: 'f 30 a.txt\0', archive } })
+    const execution = await f.executor.prepare(f.input(), signal)
+    const captured = await execution.capture({ home })
+    expect(captured).toEqual({ homeBytes: f.thisHome.byteLength })
+    expect(f.log).toHaveBeenCalledWith(
+      'turn_outbox_dropped container=container2 reason=SNAPSHOT_NOT_WRITTEN',
+    )
+  })
+
+  it('drops more than ten files and says how many entries it left', async () => {
+    const eleven = Array.from({ length: 11 }, (_, i) => `f 1 f${i}.txt\0`).join('')
+    const f = await fixture({ outbox: { listing: eleven, archive: new Uint8Array() } })
+    const execution = await f.executor.prepare(f.input(), signal)
+    expect(await execution.capture({ home })).toEqual({ homeBytes: f.thisHome.byteLength })
+    expect(f.log).toHaveBeenCalledWith(
+      'turn_outbox_dropped container=container2 reason=PUBLICATION_TOO_LARGE',
+    )
+    const skipping = await fixture({
+      outbox: { listing: 'd 4096 nested\0', archive: new Uint8Array() },
+    })
+    const other = await skipping.executor.prepare(skipping.input(), signal)
+    expect(await other.capture({ home })).toEqual({ homeBytes: skipping.thisHome.byteLength })
+    expect(skipping.log).toHaveBeenCalledWith('turn_outbox_skipped container=container2 entries=1')
   })
 })

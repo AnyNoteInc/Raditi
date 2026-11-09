@@ -41,6 +41,7 @@ import { throttledLogger, type ThrottledLog } from '@repo/observability'
 
 import {
   RunnerCallError,
+  type CandidatePart,
   type RunnerCommandFence,
   type RunnerTransport,
 } from '../core-api/core-client.ts'
@@ -766,8 +767,9 @@ export class SandboxRunner {
 
   /**
    * The candidate parts go to core as untrusted data; home stays here until seal. A capture
-   * without `baseSha` — a turn without a repository (plan 57, Б5) — takes home alone: nothing
-   * is uploaded and the report names no part.
+   * without `baseSha` — a turn without a repository (plan 57, Б5) — takes home alone: no
+   * candidate part is uploaded and the report names none. The agent's files for the client
+   * (`outbox`, docs/plan/66-chat-visuals.md, В8) go up the same way with either kind.
    */
   async #capture(held: Held, command: Command<'capture'>): Promise<void> {
     const answer = this.#answer(held, command)
@@ -780,19 +782,17 @@ export class SandboxRunner {
         ...(command.sandboxBaseSha ? { sandboxBaseSha: command.sandboxBaseSha } : {}),
         ...(command.addOnlyPaths ? { addOnlyPaths: command.addOnlyPaths } : {}),
       })
+      const parts: Array<readonly [CandidatePart, Uint8Array]> = []
       if (command.baseSha === undefined) {
         if (captured.patch !== undefined || captured.untracked !== undefined)
           throw new Error('A capture without a base returned candidate parts')
-        held.phase = 'captured'
-        await answer({ type: 'captured', homeBytes: captured.homeBytes })
-        return
+      } else {
+        const { patch, untracked } = captured
+        if (!patch || !untracked) throw new Error('A capture with a base returned no candidate')
+        parts.push(['patch', patch], ['untracked', untracked])
       }
-      const { patch, untracked } = captured
-      if (!patch || !untracked) throw new Error('A capture with a base returned no candidate')
-      for (const [part, bytes] of [
-        ['patch', patch],
-        ['untracked', untracked],
-      ] as const) {
+      if (captured.outbox) parts.push(['outbox', captured.outbox])
+      for (const [part, bytes] of parts) {
         const uploaded = await this.#call(held, () =>
           this.deps.transport.candidate(held.id, part, fence, bytes),
         )
@@ -804,8 +804,7 @@ export class SandboxRunner {
       await answer({
         type: 'captured',
         homeBytes: captured.homeBytes,
-        patch: digest(patch),
-        untracked: digest(untracked),
+        ...Object.fromEntries(parts.map(([part, bytes]) => [part, digest(bytes)])),
       })
     } catch (error) {
       await answer({

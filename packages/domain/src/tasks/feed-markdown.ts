@@ -53,6 +53,7 @@ export const feedExportText = Object.freeze({
   agent: 'Агент',
   files: (count: number) => `Прикреплено файлов: ${count}`,
   screenshot: (number: number) => `Снимок экрана № ${number}`,
+  file: (name: string) => `Файл «${name}»`,
 })
 
 const moment = new Intl.DateTimeFormat('ru-RU', {
@@ -232,6 +233,8 @@ function rowBlock(row: FeedItem, withSite: boolean): string | null {
       ])
     case 'feed.screenshot':
       return block([agent(feedExportText.screenshot(row.number))])
+    case 'feed.file':
+      return block([agent(feedExportText.file(row.name))])
     case 'feed.rewind':
       return feedRewindText(row)
     case 'feed.redo':

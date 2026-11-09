@@ -17,6 +17,7 @@ import {
   preparedRunExposesSecret,
   preparedRunSchema,
   SANDBOX_INBOX,
+  SANDBOX_OUT,
   SANDBOX_SECRETS_DIR,
   turnCredentials,
   turnInputSchema,
@@ -185,11 +186,19 @@ describe('OpenCode driver: prepared files and argv', () => {
       question: 'deny',
       lsp: 'deny',
       doom_loop: 'deny',
-      external_directory: { '*': 'deny', [`${SANDBOX_INBOX}/*`]: 'allow' },
+      external_directory: {
+        '*': 'deny',
+        [`${SANDBOX_INBOX}/*`]: 'allow',
+        [`${SANDBOX_OUT}/*`]: 'allow',
+      },
       'raditi_*': 'allow',
     })
-    // The last matching rule wins: the inbox exception must come after the general denial.
-    expect(Object.keys(value.permission.external_directory)).toEqual(['*', `${SANDBOX_INBOX}/*`])
+    // The last matching rule wins: the inbox and outbox exceptions come after the general denial.
+    expect(Object.keys(value.permission.external_directory)).toEqual([
+      '*',
+      `${SANDBOX_INBOX}/*`,
+      `${SANDBOX_OUT}/*`,
+    ])
     // An `ask` rule is rejected automatically in `run` mode and may end the turn with exit 0.
     const leaves = (node: unknown): unknown[] =>
       node !== null && typeof node === 'object' ? Object.values(node).flatMap(leaves) : [node]
@@ -241,10 +250,11 @@ describe('OpenCode driver: prepared files and argv', () => {
     for (const flag of ['--headless', '--isolated', '--no-sandbox']) expect(command).toContain(flag)
     // The model reads no pixels (N22): a screenshot answers without its image.
     expect(command[command.indexOf('--image-responses') + 1]).toBe('omit')
-    // The snapshots the skill writes are the only files outside the inbox the agent reads.
+    // The snapshots the skill writes are the only files outside the inbox and outbox the agent reads.
     expect(value.permission.external_directory).toEqual({
       '*': 'deny',
       [`${SANDBOX_INBOX}/*`]: 'allow',
+      [`${SANDBOX_OUT}/*`]: 'allow',
       [`${home}/playwright/output/*`]: 'allow',
     })
     expect(command[command.indexOf('--proxy-server') + 1]).toBe(egressProxy)

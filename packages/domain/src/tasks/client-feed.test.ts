@@ -177,6 +177,13 @@ const screenshot = {
   height: 800,
 }
 
+const file = {
+  v: 1,
+  fileId: '0199a3f2-0000-8000-8000-0000000000f1',
+  name: 'Отчёт за ноябрь.docx',
+  sizeBytes: 12_345,
+}
+
 const samples: Record<FeedEventType, Record<string, unknown>[]> = {
   'feed.request': [
     first,
@@ -250,6 +257,7 @@ const samples: Record<FeedEventType, Record<string, unknown>[]> = {
       revision: null,
     },
   ],
+  'feed.file': [file, { ...file, name: 'data.xlsx', sizeBytes: 0 }],
 }
 
 const accepts = (type: FeedEventType, payload: unknown) =>
@@ -261,7 +269,7 @@ const shown = (type: FeedEventType, { v: _v, ...fields }: Record<string, unknown
 })
 
 describe('feed vocabulary', () => {
-  it('lists the six types of the design, the four of a release, the snapshot, `/undo`, `/redo` and the edit of a file, all under the feed prefix', () => {
+  it('lists the six types of the design, the four of a release, the snapshot, `/undo`, `/redo`, the edit of a file and a file of the agent, all under the feed prefix', () => {
     expect(feedEventTypes).toEqual([
       'feed.request',
       'feed.step',
@@ -278,6 +286,7 @@ describe('feed vocabulary', () => {
       'feed.rewind',
       'feed.redo',
       'feed.edit',
+      'feed.file',
     ])
     expect(Object.keys(feedPayloadSchemas)).toEqual([...feedEventTypes])
     expect(isFeedEventType('feed.step')).toBe(true)
@@ -372,6 +381,8 @@ describe('free text is allowed in four fields, the agent words of a browser ques
     expect([...found].sort()).toEqual([
       'feed.cancelled.objects[].title',
       'feed.failure.objects[].title',
+      // The name of a file the agent made, as it had it: shown, never read as markup.
+      'feed.file.name',
       'feed.question.intro',
       'feed.question.message',
       'feed.question.questions[].options[]',
@@ -1175,6 +1186,12 @@ describe('reading stored rows', () => {
           revision: 1,
         },
         { v: 1, editId: '0199a3f2-0000-7000-8000-0000000000e1', path: 'a.php', revision: 1 },
+      ],
+      'feed.file': [
+        { ...file, fileId: 'файл' },
+        { ...file, name: '' },
+        { ...file, sizeBytes: -1 },
+        { ...file, sizeBytes: undefined },
       ],
     }
     for (const type of feedEventTypes)

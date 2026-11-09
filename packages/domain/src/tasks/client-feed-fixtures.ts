@@ -290,6 +290,17 @@ export const feedFixtures: readonly FeedFixture[] = Object.freeze([
       height: 800,
     },
   },
+  // docs/plan/66-chat-visuals.md, В8: a file the agent made for the client.
+  {
+    name: 'file v1',
+    type: 'feed.file',
+    payload: {
+      v: 1,
+      fileId: '018f3b2e-7c4a-8b1c-9d2e-3f4a5b6c7da1',
+      name: 'Смета.xlsx',
+      sizeBytes: 18_432,
+    },
+  },
   {
     name: 'request v1 resume',
     type: 'feed.request',

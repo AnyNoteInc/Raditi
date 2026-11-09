@@ -14,6 +14,7 @@ import {
   runnerLimits,
   runnerTimings,
   type RunnerApiErrorCode,
+  type RunnerCandidatePart,
   type RunnerConflict,
   type RunnerPollRequest,
   type RunnerReport,
@@ -22,7 +23,7 @@ import {
 import type { z } from 'zod'
 
 export type RunnerReconcileRequest = z.infer<typeof runnerReconcileRequestSchema>
-export type CandidatePart = 'patch' | 'untracked'
+export type CandidatePart = RunnerCandidatePart
 export type RunnerRefusal = RunnerConflict | { error: RunnerApiErrorCode }
 
 /** What authorizes a binary request: this runner session, the command's epoch and its id. */

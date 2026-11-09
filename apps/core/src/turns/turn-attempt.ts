@@ -4,6 +4,7 @@ import { Logger } from '@nestjs/common'
 import {
   conflict,
   DomainError,
+  envValueForms,
   isCoreStopping,
   isDomainError,
   isSnapshotCredential,
@@ -39,6 +40,7 @@ import {
   type TurnResult,
   type TurnWorkspace,
 } from '@repo/domain'
+import { readOutboxArchive } from '@repo/snapshots'
 
 import type {
   LoadedSnapshot,
@@ -81,6 +83,12 @@ export interface CompletedTurn {
   result: TurnResult
   /** Without `git` for a turn without a repository: it published nothing (plan 57, Б4). */
   manifest: SnapshotManifest
+  /**
+   * The files the agent left for the client (docs/plan/66-chat-visuals.md, В8), checked here
+   * against the turn's credentials and the values of its variables; absent when there were none
+   * or the check dropped them. Never a part of the snapshot.
+   */
+  outbox?: Uint8Array
 }
 
 /**
@@ -113,6 +121,8 @@ interface Captured {
   homeBytes: number
   publication?: TurnPublication
   git?: NonNullable<SnapshotMetadata['git']>
+  /** The agent's files for the client as the executor took them: untrusted. */
+  outbox?: Uint8Array
 }
 
 /**
@@ -392,6 +402,7 @@ export class TurnAttempt {
       plan.workspace && git
         ? await this.#candidate(ready, home, plan.workspace, git)
         : await this.#homeOnly(ready, home)
+    const outbox = published.outbox ? await this.#checkedOutbox(published.outbox) : undefined
     await guard.assertFence()
     await this.record('checkpointing')
     this.#checkpointStarted = true
@@ -470,7 +481,27 @@ export class TurnAttempt {
     if (!(await this.deps.leases.release(lease)))
       throw leaseLost('Lease was lost before turn completion')
     this.#completed = true
-    return { result, manifest }
+    return { result, manifest, ...(outbox ? { outbox } : {}) }
+  }
+
+  /**
+   * The outbox read again by core before it may reach the chat: an archive the checks refuse is
+   * dropped whole, with a line in the log, and the turn goes on (docs/plan/66, В8).
+   */
+  async #checkedOutbox(outbox: Uint8Array): Promise<Uint8Array | undefined> {
+    const labels = this.init.plan.sandbox.labels
+    try {
+      await readOutboxArchive(outbox, {
+        refused: [...this.credentials, ...envValueForms(this.envValues)],
+      })
+      return outbox
+    } catch (error) {
+      const reason = isDomainError(error) ? error.code : 'unknown'
+      this.#logger.warn(
+        `turn_outbox_dropped task=${labels.taskId} turn=${labels.turn} reason=${reason}`,
+      )
+      return undefined
+    }
   }
 
   /**
@@ -496,6 +527,7 @@ export class TurnAttempt {
     })
     if (!captured.patch || !captured.untracked)
       throw conflict('The capture of a turn with a repository has no candidate parts')
+    const outbox = captured.outbox
     const refusedValues = await this.#refusedValues()
     await guard.assertFence()
     const publication = await guard.interruptibleResource(
@@ -520,6 +552,7 @@ export class TurnAttempt {
     this.#candidateHeadSha = publication.headSha
     return {
       homeBytes: captured.homeBytes,
+      ...(outbox ? { outbox } : {}),
       publication,
       git: {
         provider: workspace.repo.provider,
@@ -541,7 +574,10 @@ export class TurnAttempt {
     const captured = await ready.capture({ home })
     if (captured.patch !== undefined || captured.untracked !== undefined)
       throw conflict('The capture of a turn without a repository has candidate parts')
-    return { homeBytes: captured.homeBytes }
+    return {
+      homeBytes: captured.homeBytes,
+      ...(captured.outbox ? { outbox: captured.outbox } : {}),
+    }
   }
 
   /**

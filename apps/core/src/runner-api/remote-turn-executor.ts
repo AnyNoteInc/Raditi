@@ -418,17 +418,19 @@ class RemoteTurnExecution implements TurnExecution {
           ? 'Capture names a base, but the sandbox got no repository'
           : 'Capture names no base, but the sandbox got a repository',
       )
+    // The agent's files for the client (docs/plan/66, В8) come with either kind of capture.
+    const candidates: CandidateParts = {}
+    const outbox = () => (candidates.outbox ? { outbox: candidates.outbox.bytes } : {})
     if (!withBase) {
       const captured = await this.hub.send(
         this.live,
         { type: 'capture', home: home.data },
-        { answers: ['captured'], replyMs: runnerReplyMs.capture, epoch: this.#epoch },
+        { answers: ['captured'], replyMs: runnerReplyMs.capture, candidates, epoch: this.#epoch },
       )
       this.#homeBytes = captured.homeBytes
       this.#capturedRepository = false
-      return { homeBytes: captured.homeBytes }
+      return { homeBytes: captured.homeBytes, ...outbox() }
     }
-    const candidates: CandidateParts = {}
     const captured = await this.hub.send(
       this.live,
       {
@@ -447,6 +449,7 @@ class RemoteTurnExecution implements TurnExecution {
       patch: candidates.patch!.bytes,
       untracked: candidates.untracked!.bytes,
       homeBytes: captured.homeBytes,
+      ...outbox(),
     }
   }
 
