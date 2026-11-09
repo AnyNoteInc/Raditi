@@ -21,6 +21,27 @@ describe('hosts of a variable', () => {
     expect(egressHostSchema.parse('Api.Example.ru')).toBe('api.example.ru:443')
   })
 
+  it('takes an internationalized name as its punycode', () => {
+    expect(parseEgressHost('укк-жкх.рф')).toEqual({ host: 'xn----ltbkac3ct.xn--p1ai', port: 443 })
+    expect(parseEgressHost('УКК-ЖКХ.РФ:8443')).toEqual({
+      host: 'xn----ltbkac3ct.xn--p1ai',
+      port: 8443,
+    })
+    expect(egressHostSchema.parse('укк-жкх.рф')).toBe('xn----ltbkac3ct.xn--p1ai:443')
+    for (const text of [
+      'сайт',
+      'сайт.local',
+      'сайт.рф/путь',
+      'кто@сайт.рф',
+      'https://сайт.рф',
+      'сайт.рф:0',
+      'сайт.рф.',
+      'сайт рф',
+      '１２７.０.０.１',
+    ])
+      expect(parseEgressHost(text), text).toBeNull()
+  })
+
   it('refuses addresses in every spelling and the names that never leave a machine', () => {
     for (const text of [
       '127.0.0.1',

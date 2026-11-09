@@ -35,14 +35,40 @@ const HOST_PORT = /^([a-z0-9.-]+)(?::([1-9]\d{0,4}))?$/
 /** `127.1`, `0x7f.1`, `2130706433`: the forms a resolver may read as an address. */
 const NUMERIC_LABEL = /^(?:\d+|0x[0-9a-f]*)$/
 
+const NOT_ASCII = /[^\u0020-\u007e]/
+const UNICODE_HOST_PORT = /^([^\s:/?#@[\]\\]+)(:[1-9]\d{0,4})?$/u
+
 /**
- * A host as the client may give it: a public DNS name with an optional port (443 by default).
+ * `host:port` in ASCII and lower case. An internationalized name (`укк-жкх.рф`, as a Russian
+ * client types the address of their own site) becomes its punycode (`xn--j1aabp1a.xn--p1ai`) —
+ * the spelling DNS, the SNI of the proxy's tunnel and the stored hosts use. null when the name
+ * cannot be one.
+ */
+function asciiHostPort(text: string): string | null {
+  if (!NOT_ASCII.test(text)) return text.toLowerCase()
+  const match = UNICODE_HOST_PORT.exec(text)
+  if (!match) return null
+  let host: string
+  try {
+    host = new URL(`http://${match[1] ?? ''}/`).hostname
+  } catch {
+    return null
+  }
+  if (host === '' || NOT_ASCII.test(host)) return null
+  return `${host}${match[2] ?? ''}`
+}
+
+/**
+ * A host as the client may give it: a public DNS name (an internationalized one is taken as its
+ * punycode) with an optional port (443 by default).
  * null for an IP literal in any spelling, a single label, `localhost` and `*.localhost`,
  * `*.internal` (and so `host.docker.internal`), the other local and reserved zones, a trailing
  * dot, a path or credentials. Letter case is ignored; the result is lower case.
  */
 export function parseEgressHost(text: string): EgressHost | null {
-  const match = HOST_PORT.exec(text.toLowerCase())
+  const ascii = asciiHostPort(text)
+  if (ascii === null) return null
+  const match = HOST_PORT.exec(ascii)
   if (!match) return null
   const host = match[1] ?? ''
   const port = match[2] === undefined ? EGRESS_DEFAULT_PORT : Number(match[2])
