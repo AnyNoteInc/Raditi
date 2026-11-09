@@ -7,6 +7,7 @@ import Typography from '@mui/material/Typography'
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 
 import { useChatThinking } from './chat-details'
+import { CommandBlock } from './command-block'
 import { activityText } from './chat-texts'
 import type { ActivityEvent } from './chat-types'
 import { useTurnActivity, type ActivityState } from './use-turn-activity'
@@ -109,25 +110,8 @@ function ActivityLine({ event }: { event: ActivityEvent }) {
           <Typography sx={event.kind === 'reasoning' ? thought : said}>{event.text}</Typography>
         </Box>
       )
-    case 'command': {
-      const failed = event.exitCode !== null && event.exitCode !== 0
-      return (
-        <Box sx={{ display: 'grid', gap: 0.5, minWidth: 0 }}>
-          <Label
-            icon="terminal"
-            text={activityText.command}
-            outcome={activityText.exit(event.exitCode)}
-            failed={failed}
-          />
-          <Box
-            component="pre"
-            sx={{ ...mono, m: 0, px: 1.25, py: 0.75, borderRadius: '8px', bgcolor: 'action.hover' }}
-          >
-            {event.command}
-          </Box>
-        </Box>
-      )
-    }
+    case 'command':
+      return <CommandBlock event={event} />
     case 'tool_call':
       return (
         <Label

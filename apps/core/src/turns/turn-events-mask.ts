@@ -1,5 +1,6 @@
 import {
   agentEventSchema,
+  clipCommandOutput,
   maskEnvValuesDeep,
   turnOutputRejected,
   type AgentEvent,
@@ -19,7 +20,15 @@ export function maskTurnEvents(
 ): AgentEvent[] {
   if (values.length === 0) return [...events]
   return events.map((event) => {
-    const checked = agentEventSchema.safeParse(maskEnvValuesDeep(event, values))
+    const masked = maskEnvValuesDeep(event, values)
+    // A mask may be longer than the value it hides: what a command printed is clipped again,
+    // rather than a turn failing on the output the chat only shows.
+    if (masked.type === 'command' && masked.output !== undefined) {
+      const clipped = clipCommandOutput(masked.output)
+      masked.output = clipped.output
+      if (clipped.outputCut) masked.outputCut = true
+    }
+    const checked = agentEventSchema.safeParse(masked)
     if (!checked.success) throw turnOutputRejected('Agent event failed its schema')
     return checked.data
   })

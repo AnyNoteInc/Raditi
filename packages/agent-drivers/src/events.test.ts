@@ -40,7 +40,13 @@ describe('pinned upstream JSONL fixture', () => {
       { type: 'started', nativeSessionId: 'ses_test' },
       { type: 'reasoning', text: 'Сначала посмотрю, где лежит главная страница.' },
       { type: 'tool_call', tool: 'bash', ok: true },
-      { type: 'command', command: 'pwd', exitCode: 0 },
+      {
+        type: 'command',
+        command: 'pwd',
+        exitCode: 0,
+        output: '/workspace/repo\n',
+        outputCut: false,
+      },
       { type: 'tool_call', tool: 'write', ok: true },
       { type: 'file_change', path: 'index.html', change: 'update' },
       { type: 'tool_call', tool: 'site_info', ok: true },
@@ -58,13 +64,44 @@ describe('pinned upstream JSONL fixture', () => {
     ])
   })
 
-  it('emits only domain events, keeps payloads private and extracts the final result', () => {
+  it('emits only domain events, keeps payloads private but what a command printed, and extracts the final result', () => {
     const result = fixture(opencode)
     for (const event of result) expect(agentEventSchema.safeParse(event).success).toBe(true)
     expect(JSON.stringify(result)).not.toMatch(
       /private tool response|private tool input|cost|tool_calls/,
     )
     expect(opencode.extractResult(result, null)).toEqual(expectedResult)
+  })
+})
+
+describe('what a command printed (owner\'s request of 09.11.2026)', () => {
+  const bash = (state: Record<string, unknown>) => ({
+    type: 'tool_use',
+    sessionID: 'ses_test',
+    part: { type: 'tool', tool: 'bash', state: { input: { command: 'ls' }, ...state } },
+  })
+
+  it('carries the output, and its start and end when it is long', () => {
+    const long = `${'a'.repeat(5000)}КОНЕЦ`
+    const [, command] = parse(opencode, bash({ status: 'completed', output: long, metadata: { exit: 0 } }))
+    expect(command).toMatchObject({ type: 'command', outputCut: true })
+    const output = (command as { output: string }).output
+    expect(output.length).toBeLessThanOrEqual(4000)
+    expect(output.startsWith('aaa')).toBe(true)
+    expect(output.endsWith('КОНЕЦ')).toBe(true)
+    expect(output).toContain('\n…\n')
+    expect(agentEventSchema.safeParse(command).success).toBe(true)
+  })
+
+  it('says the output was cut when OpenCode cut it, and has none when there is none', () => {
+    expect(
+      parse(opencode, bash({ status: 'error', output: 'x', metadata: { exit: 1, truncated: true } }))[1],
+    ).toEqual({ type: 'command', command: 'ls', exitCode: 1, output: 'x', outputCut: true })
+    expect(parse(opencode, bash({ status: 'completed', metadata: { exit: 0 } }))[1]).toEqual({
+      type: 'command',
+      command: 'ls',
+      exitCode: 0,
+    })
   })
 })
 

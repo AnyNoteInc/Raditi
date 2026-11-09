@@ -43,6 +43,8 @@ const shownEvent = z.discriminatedUnion('type', [
     type: z.literal('command'),
     command: z.string().max(agentOutputLimits.command),
     exitCode: z.number().int().nullable(),
+    output: z.string().max(agentOutputLimits.commandOutput).optional(),
+    outputCut: z.boolean().optional(),
   }),
   z.strictObject({
     type: z.literal('file_change'),
@@ -144,7 +146,13 @@ export function shownActivity(event: AgentEvent): z.output<typeof shownEvent> | 
       return { type: 'draft', kind: 'text', text: event.text }
     }
     case 'command':
-      return { type: 'command', command: event.command, exitCode: event.exitCode }
+      return {
+        type: 'command',
+        command: event.command,
+        exitCode: event.exitCode,
+        ...(event.output === undefined ? {} : { output: event.output }),
+        ...(event.outputCut === true ? { outputCut: true } : {}),
+      }
     case 'file_change':
       return { type: 'file_change', path: event.path, change: event.change }
     case 'tool_call':
