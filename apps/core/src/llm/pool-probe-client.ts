@@ -8,7 +8,11 @@ import { ipLiteral, isPrivateAddress } from '@repo/ip-address'
 const loopback = new BlockList()
 loopback.addSubnet('127.0.0.0', 8, 'ipv4')
 loopback.addAddress('::1', 'ipv6')
-const unavailable = () => new Error('Subscription pool probe unavailable')
+// The status of a refusal is the only detail it carries: never the address, token or body.
+const unavailable = (status?: number) =>
+  new Error(`Subscription pool probe unavailable${status === undefined ? '' : ` (HTTP ${status})`}`)
+const refusedStatus = (error: unknown) =>
+  error instanceof Error ? /\(HTTP (\d{3})\)$/.exec(error.message)?.[1] : undefined
 
 /** Origins never resolve arbitrary DNS or carry credentials, queries, fragments or paths. */
 export function poolControlOrigin(value: string): string {
@@ -79,11 +83,11 @@ export function createPoolProbeClient(
         )
         await new Promise<void>((resolve, reject) => {
           let settled = false
-          const finish = (ok: boolean) => {
+          const finish = (ok: boolean, status?: number) => {
             if (settled) return
             settled = true
             if (ok) resolve()
-            else reject(unavailable())
+            else reject(unavailable(status))
             outgoing.destroy()
           }
           const outgoing = transport(
@@ -102,7 +106,7 @@ export function createPoolProbeClient(
             (response) => {
               if (response.statusCode !== 204) {
                 response.destroy()
-                finish(false)
+                finish(false, response.statusCode)
                 return
               }
               let bytes = 0
@@ -123,8 +127,9 @@ export function createPoolProbeClient(
           outgoing.end(body)
         })
       }
-    } catch {
-      throw unavailable()
+    } catch (error) {
+      const status = refusedStatus(error)
+      throw unavailable(status === undefined ? undefined : Number(status))
     } finally {
       clearTimeout(timer)
     }

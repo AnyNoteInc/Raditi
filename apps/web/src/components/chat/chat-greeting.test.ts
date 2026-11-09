@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { dayPartOf, greetingLines, greetingName, greetingOf } from './chat-greeting'
+import {
+  dayPartOf,
+  greetingChoices,
+  greetingLines,
+  greetingName,
+  greetingOf,
+} from './chat-greeting'
 
 describe('greeting of a new chat', () => {
   it('names the part of the day by the hour', () => {
@@ -18,17 +24,16 @@ describe('greeting of a new chat', () => {
   })
 
   it('calls the client by the first name, and greets without one', () => {
-    expect(greetingOf('morning', greetingName('Виктор Луферов'), 0)).toEqual({
-      title: 'Доброе утро, Виктор!',
-      line: 'Готовы, когда вы готовы.',
-    })
-    expect(greetingOf('evening', greetingName('  '), 1).title).toBe('Добрый вечер!')
+    expect(greetingOf('morning', greetingName('Виктор Луферов'), 0)).toBe('Доброе утро, Виктор!')
+    expect(greetingOf('evening', greetingName('  '), 0)).toBe('Добрый вечер!')
     expect(greetingName('client@example.ru')).toBeNull()
-    expect(greetingOf('any', null, 0).title).toBe('Здравствуйте!')
+    expect(greetingOf('any', null, 0)).toBe('Здравствуйте!')
   })
 
-  it('takes any pick as one of the lines', () => {
-    for (const pick of [0, 4, 5, 99, -3, 2.7])
-      expect(greetingLines).toContain(greetingOf('day', null, pick).line)
+  it('opens with either the greeting or one phrase, never both', () => {
+    const seen = new Set<string>()
+    for (let pick = 0; pick < greetingChoices; pick++) seen.add(greetingOf('day', 'Виктор', pick))
+    expect([...seen]).toEqual(['Добрый день, Виктор!', ...greetingLines])
+    for (const pick of [99, -3, 2.7]) expect([...seen]).toContain(greetingOf('day', 'Виктор', pick))
   })
 })

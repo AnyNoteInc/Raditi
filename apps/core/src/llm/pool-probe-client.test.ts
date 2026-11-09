@@ -115,7 +115,7 @@ describe('private pool snapshot control client', () => {
       })
       await expect(
         createPoolProbeClient(origin, 'synthetic-control-token')([randomUUID()]),
-      ).rejects.toThrow('Subscription pool probe unavailable')
+      ).rejects.toThrow(`Subscription pool probe unavailable (HTTP ${status})`)
       expect(requests).toBe(1)
     },
   )
@@ -143,5 +143,20 @@ describe('private pool snapshot control client', () => {
       expect(() => createPoolProbeClient('http://127.0.0.1:1', token)).toThrow(
         'Subscription pool probe unavailable',
       )
+  })
+})
+
+describe('loggedProbe', () => {
+  it('names a refused probe in the log and still refuses', async () => {
+    const warnings: string[] = []
+    const { loggedProbe } = await import('./llm.module.ts')
+    const probe = loggedProbe(
+      () => Promise.reject(new Error('Subscription pool probe unavailable (HTTP 403)')),
+      { warn: (message) => warnings.push(message) },
+    )
+    await expect(probe([randomUUID()], { stale: true })).rejects.toThrow('HTTP 403')
+    expect(warnings).toEqual([
+      'pool_probe_failed accounts=1 stale=true reason=Subscription pool probe unavailable (HTTP 403)',
+    ])
   })
 })
