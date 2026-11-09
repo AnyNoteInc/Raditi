@@ -13,5 +13,6 @@ export {
 // The screenshot of a check of a candidate, for the route of web that serves it (plan 53, Р22).
 export { readCheckScreenshot } from './services/chat/candidates.ts'
 // A snapshot the agent took of a task's browser for the client (`web_screenshot`).
+export { readTaskFile, type ChatFile } from './services/chat/files.ts'
 export { readTaskScreenshot } from './services/chat/screenshots.ts'
 export { readSiteBackupDownload } from './services/site-history.ts'

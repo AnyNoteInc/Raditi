@@ -89,6 +89,7 @@ import {
   type QuestionRow,
   type StepRow,
 } from './feed-model'
+import { FeedFile } from './feed-file'
 import { FeedScreenshot } from './feed-screenshot'
 import type { FeedHeadState } from './feed-state'
 
@@ -1065,6 +1066,9 @@ function RowView({
           height={row.height}
         />
       )
+    // A file the agent made for the client (docs/plan/66-chat-visuals.md, В8).
+    case 'feed.file':
+      return <FeedFile fileId={row.fileId} name={row.name} sizeBytes={row.sizeBytes} />
     case 'feed.rewind':
       return <Note text={feedRewindText(row)} />
     case 'feed.redo':
