@@ -24,7 +24,7 @@ describe('the client variables of a turn in its events (plan 53, Р13)', () => {
     expect(maskTurnEvents(events, [])).toEqual(events)
   })
 
-  it('masks what a command printed, the chat shows it (owner\'s request of 09.11.2026)', () => {
+  it("masks what a command printed, the chat shows it (owner's request of 09.11.2026)", () => {
     const command: AgentEvent = {
       type: 'command',
       command: 'printenv PAY_KEY',
