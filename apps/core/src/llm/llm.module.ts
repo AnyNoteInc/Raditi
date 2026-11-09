@@ -12,7 +12,7 @@ import { backendCapacities } from './backends.ts'
 import { CoreCredentialRuntime } from './credential-runtime.ts'
 import { CredentialSweeper, type CredentialSweepKind } from './credential-sweeper.ts'
 import { TURN_CREDENTIALS } from './llm.tokens.ts'
-import { createPoolProbeClient } from './pool-probe-client.ts'
+import { createPoolProbeClient, type PoolProbeClient } from './pool-probe-client.ts'
 import { GatewayTurnCredentials } from './turn-credentials.ts'
 
 const sweepKinds: readonly CredentialSweepKind[] = [
@@ -24,6 +24,25 @@ const sweepKinds: readonly CredentialSweepKind[] = [
   'retirement',
   'lost',
 ]
+
+/**
+ * A refused probe leaves the windows stale and every turn waiting for agents; the issuer reselects
+ * from what is stored and says nothing, so the refusal is logged here (09.11.2026: an llm that did
+ * not admit core's address held every chat of the server in «queued» without a word).
+ */
+export function loggedProbe(
+  probe: PoolProbeClient,
+  logger: { warn(message: string): void },
+): PoolProbeClient {
+  return (accountIds, options) =>
+    probe(accountIds, options).catch((error: unknown) => {
+      const reason = error instanceof Error ? error.message : 'unknown'
+      logger.warn(
+        `pool_probe_failed accounts=${accountIds.length} stale=${options?.stale === true} reason=${reason}`,
+      )
+      throw error
+    })
+}
 
 /** Core's turn-key lifecycle. Subscription credentials remain exclusive to the llm role. */
 @Module({
@@ -41,7 +60,10 @@ const sweepKinds: readonly CredentialSweepKind[] = [
           ...(config.llmControlUrl === undefined
             ? {}
             : {
-                probeAccounts: createPoolProbeClient(config.llmControlUrl, config.metricsToken),
+                probeAccounts: loggedProbe(
+                  createPoolProbeClient(config.llmControlUrl, config.metricsToken),
+                  new Logger('CoreCredentials'),
+                ),
               }),
         }),
       inject: [PRISMA, SECRET_STORE, CORE_CONFIG],

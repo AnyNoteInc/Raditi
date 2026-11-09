@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { serverRefusal } from '@/components/billing/testing'
 
 import type * as Upload from './attachment-upload'
+import { greetingLines } from './chat-greeting'
 import { taskWayText } from './chat-texts'
 import type { ProjectListItem } from './chat-types'
 import { keepChatDraft } from './chat-draft'
@@ -165,23 +166,23 @@ afterEach(() => {
 })
 
 describe('new chat', () => {
-  it('greets the client by name at their time of day and labels the message field', () => {
+  it('opens with one line — the greeting by name or a phrase — and labels the message field', () => {
     showChat({ userName: 'Виктор Луферов' })
+    const heading = screen.getByRole('heading', { level: 1 })
     expect(
-      screen.getByRole('heading', {
-        level: 1,
-        name: /^(Доброе утро|Добрый день|Добрый вечер|Доброй ночи), Виктор!$/,
-      }),
-    ).toBeTruthy()
+      /^(Доброе утро|Добрый день|Добрый вечер|Доброй ночи), Виктор!$/.test(
+        heading.textContent ?? '',
+      ) || (greetingLines as readonly string[]).includes(heading.textContent ?? ''),
+    ).toBe(true)
+    for (const line of greetingLines)
+      if (line !== heading.textContent) expect(screen.queryByText(line)).toBeNull()
     expect(field().tagName).toBe('TEXTAREA')
     expect(field().getAttribute('placeholder')).toBe('Что нужно сделать?')
   })
 
   it('takes the level below beside a list that heads the page', () => {
     showChat({ beside: true })
-    expect(
-      screen.getByRole('heading', { level: 2, name: /^(Доброе|Добрый|Доброй) .+!$/ }),
-    ).toBeTruthy()
+    expect(screen.getByRole('heading', { level: 2 })).toBeTruthy()
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull()
   })
 
