@@ -3,6 +3,7 @@
 import { fontFamilies } from '@repo/ui/theme/tokens'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
+import { useLayoutEffect, useRef, useState } from 'react'
 
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 
@@ -27,6 +28,76 @@ const thought = {
   whiteSpace: 'pre-wrap',
   overflowWrap: 'anywhere',
 } as const
+
+/** One line of it in sight, three once the viewer opens it; the rest scrolls inside the box. */
+const thoughtBox = (open: boolean) =>
+  ({
+    ...thought,
+    maxHeight: open ? 'calc(3 * 1.55em)' : '1.55em',
+    overflowY: open ? 'auto' : 'hidden',
+    overscrollBehavior: 'contain',
+    cursor: 'pointer',
+    pr: 0.5,
+    borderRadius: 0.5,
+    transition: 'max-height 160ms ease',
+    '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
+    '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: 2 },
+  }) as const
+
+const gentle = (): ScrollBehavior =>
+  typeof window !== 'undefined' &&
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ? 'auto'
+    : 'smooth'
+
+/**
+ * What the model thought: one line that flies on to the newest words as they come, opened by a
+ * click or a key into three lines that scroll. Opened, it follows the end only while the viewer
+ * has not scrolled up to read an earlier part.
+ */
+function Thought({ text, following = false }: { text: string; following?: boolean }) {
+  const box = useRef<HTMLParagraphElement>(null)
+  const atEnd = useRef(true)
+  const [open, setOpen] = useState(false)
+  useLayoutEffect(() => {
+    const node = box.current
+    if (!node || !following || (open && !atEnd.current)) return
+    const top = node.scrollHeight
+    if (typeof node.scrollTo === 'function') node.scrollTo({ top, behavior: gentle() })
+    else node.scrollTop = top
+  }, [text, following, open])
+  const toggle = () => {
+    atEnd.current = true
+    setOpen((was) => !was)
+  }
+  return (
+    <Typography
+      ref={box}
+      sx={thoughtBox(open)}
+      role="button"
+      tabIndex={0}
+      aria-expanded={open}
+      aria-label={open ? activityText.reasoningClose : activityText.reasoningOpen}
+      onClick={() => {
+        // Selecting a part of it to copy is not a click on it.
+        if (window.getSelection()?.toString()) return
+        toggle()
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
+        toggle()
+      }}
+      onScroll={(event) => {
+        const node = event.currentTarget
+        atEnd.current = node.scrollHeight - node.scrollTop - node.clientHeight < 4
+      }}
+    >
+      {text}
+    </Typography>
+  )
+}
 
 const said = {
   m: 0,
@@ -96,7 +167,7 @@ function ActivityLine({ event }: { event: ActivityEvent }) {
       return (
         <Box sx={{ display: 'grid', gap: 0.5, minWidth: 0 }}>
           <Label icon="brain" text={activityText.reasoning} />
-          <Typography sx={thought}>{event.text}</Typography>
+          <Thought text={event.text} />
         </Box>
       )
     case 'draft':
@@ -107,7 +178,11 @@ function ActivityLine({ event }: { event: ActivityEvent }) {
             icon={event.kind === 'reasoning' ? 'brain' : 'chat'}
             text={event.kind === 'reasoning' ? activityText.thinkingNow : activityText.answering}
           />
-          <Typography sx={event.kind === 'reasoning' ? thought : said}>{event.text}</Typography>
+          {event.kind === 'reasoning' ? (
+            <Thought text={event.text} following />
+          ) : (
+            <Typography sx={said}>{event.text}</Typography>
+          )}
         </Box>
       )
     case 'command':
