@@ -353,8 +353,8 @@ export async function settleStackFacts(
  * configuration on the hosting, as `SiteAdapter.databaseSettings(read)` read it through the file
  * source the connection wizard recorded (plan 39; `configured`, from `readSiteRoot`); a site
  * without one, a hosting that cannot be read now, or a configuration that does not state them as
- * constants falls back to the catalog of the production database: the tables of the stack's copy
- * policy under one prefix, and the collation they share is the encoding of the copy
+ * constants falls back to the catalog of the production database: the stack's identifying tables
+ * under one prefix, and the collation they share is the encoding of the copy
  * (database-settings.ts).
  */
 async function databaseSettings(
@@ -369,7 +369,7 @@ async function databaseSettings(
   if (configured) return configured
   let named
   try {
-    // The tables a copy policy names do not depend on the prefix: any settings name them.
+    // Ask the stack which tables identify its site before the prefix is known.
     named = adapter.databaseCopyPolicy(
       previewSiteFacts(site, { tablePrefix: '', charset: 'utf8mb4', collation: null }),
       { previewId },

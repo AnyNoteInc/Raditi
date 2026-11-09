@@ -266,6 +266,8 @@ export const databaseCopyPolicySchema = z.strictObject({
   engine: z.enum(databaseEngines),
   /** Copy rows from tables under the site prefix even when they have no explicit rule. */
   copyUnlistedRows: z.literal(true).optional(),
+  /** Tables that identify the site in the database catalog. Defaults to the explicit rules. */
+  catalogTables: z.array(identifier).min(1).max(128).optional(),
   /** Explicit rules by table name, without the site's prefix. */
   tables: z
     .array(

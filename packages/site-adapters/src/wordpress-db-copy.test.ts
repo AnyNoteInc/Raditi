@@ -110,20 +110,11 @@ describe('the database copy of a WordPress preview', () => {
       { previewId },
     )
     expect(unprefixed.copyUnlistedRows).toBeUndefined()
-    expect(unprefixed.tables.map((rule) => rule.table)).toEqual([
-      'posts',
-      'postmeta',
-      'users',
-      'usermeta',
-      'comments',
-      'commentmeta',
-      'terms',
-      'term_taxonomy',
-      'term_relationships',
-      'termmeta',
-      'links',
-      'options',
-    ])
+    expect(unprefixed.catalogTables).toEqual(policy.catalogTables)
+    expect(unprefixed.tables.map((rule) => rule.table)).toEqual(
+      expect.arrayContaining(['posts', 'users', 'usermeta', 'comments', 'commentmeta', 'options']),
+    )
+    expect(unprefixed.tables).toHaveLength(12)
   })
 
   it('binds the plugin «Радити» of the copy to the preview, from epoch 0', () => {

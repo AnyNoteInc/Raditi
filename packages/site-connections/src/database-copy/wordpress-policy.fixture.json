@@ -1,6 +1,16 @@
 {
   "engine": "mysql",
   "copyUnlistedRows": true,
+  "catalogTables": [
+    "posts",
+    "postmeta",
+    "users",
+    "terms",
+    "term_taxonomy",
+    "term_relationships",
+    "termmeta",
+    "options"
+  ],
   "tables": [
     {
       "table": "options",

@@ -80,20 +80,19 @@ export function wordpressDatabaseOf(site: SiteFacts): SiteDatabaseSettings {
   return site.database
 }
 
-/** With no prefix, the catalog cannot distinguish plugin tables from other applications. */
-const unprefixedCoreTables = [
+const catalogTables = [
   'posts',
   'postmeta',
   'users',
-  'usermeta',
-  'comments',
-  'commentmeta',
   'terms',
   'term_taxonomy',
   'term_relationships',
   'termmeta',
-  'links',
+  'options',
 ]
+
+/** With no prefix, the catalog cannot distinguish plugin tables from other applications. */
+const unprefixedCoreTables = [...catalogTables, 'usermeta', 'comments', 'commentmeta', 'links']
 
 /** Copy the site's rows, keeping the preview's own platform binding and receipts. */
 export function wordpressDatabaseCopyPolicy(
@@ -103,9 +102,14 @@ export function wordpressDatabaseCopyPolicy(
   const { tablePrefix } = wordpressDatabaseOf(site)
   return databaseCopyPolicySchema.parse({
     engine: 'mysql',
+    catalogTables,
     ...(tablePrefix !== '' ? { copyUnlistedRows: true } : {}),
     tables: [
-      ...(tablePrefix === '' ? unprefixedCoreTables.map((table) => ({ table, where: [] })) : []),
+      ...(tablePrefix === ''
+        ? unprefixedCoreTables
+            .filter((table) => table !== 'options')
+            .map((table) => ({ table, where: [] }))
+        : []),
       {
         table: 'options',
         where: [
