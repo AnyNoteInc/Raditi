@@ -1262,11 +1262,10 @@ export function LiveBlock({
           body = (
             <>
               {steps.length > 0 ? <StepList steps={steps} running /> : null}
-              {activity ? (
-                <Disclosure summary={activityText.title} open>
-                  <Box sx={{ pt: 0.5 }}>{activity}</Box>
-                </Disclosure>
-              ) : null}
+              {/* What the agent does stands in the feed as it comes, no folding and no
+                  scrolling of its own (owner's request of 09.11.2026); the finished turn folds it
+                  under «Агент работал …». */}
+              {activity ? <Box sx={{ pt: 0.5 }}>{activity}</Box> : null}
             </>
           )
         }

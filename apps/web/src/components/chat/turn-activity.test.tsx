@@ -26,6 +26,19 @@ const read = (patch: Partial<ActivityState> = {}): ActivityState => ({
 })
 
 describe('«Ход работы»', () => {
+  it('stands in the feed as it comes while the turn is live, and in a block of its own after', () => {
+    const live = render(<TurnActivityView state={read()} live />)
+    const flowing = screen.getByRole('region', { name: 'Ход работы' })
+    expect(flowing.getAttribute('data-activity')).toBe('live')
+    // Nothing of its own to scroll: the feed follows it.
+    expect(flowing.getAttribute('tabindex')).toBeNull()
+    live.unmount()
+    render(<TurnActivityView state={read()} live={false} />)
+    const kept = screen.getByRole('region', { name: 'Ход работы' })
+    expect(kept.getAttribute('data-activity')).toBeNull()
+    expect(kept.getAttribute('tabindex')).toBe('0')
+  })
+
   describe('what the model thought', () => {
     const THOUGHT = 'Maybe <i>the theme</i> first.'
     const thought: ActivityEvent = { id: '6:0', type: 'reasoning', text: THOUGHT }

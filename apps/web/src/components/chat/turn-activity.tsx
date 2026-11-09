@@ -3,7 +3,6 @@
 import { fontFamilies } from '@repo/ui/theme/tokens'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
-import { useEffect, useRef } from 'react'
 
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 
@@ -168,12 +167,11 @@ function ActivityLine({ event }: { event: ActivityEvent }) {
   }
 }
 
-/** Within this many pixels of its end the block follows what arrives. */
-const FOLLOW_SLACK = 32
-
 /**
- * The events of a turn in a block of bounded height that scrolls. While the turn is `live` it
- * keeps to its end as events arrive — unless the client scrolled up to read.
+ * The events of a turn. While the turn is `live` they stand in the feed itself, one after another,
+ * and the feed follows them as a chat does (owner's request of 09.11.2026: «когда идет вывод
+ * выводи не в области, а в области вывода», the way Claude and Codex show it). A finished turn
+ * keeps them in a block of bounded height that scrolls, under «Агент работал …».
  */
 export function TurnActivityView({
   state,
@@ -185,36 +183,44 @@ export function TurnActivityView({
   /** The viewer's choice: what the model thought stands among the events. */
   thinking?: boolean
 }) {
-  const scroller = useRef<HTMLDivElement>(null)
-  const following = useRef(true)
   // A draft of a turn that has ended is what it was writing when it stopped: its finished
   // events say the rest.
   const shown = state.events.filter(
     (event) => (thinking || event.type !== 'reasoning') && (live || event.type !== 'draft'),
   )
   const count = shown.length
-  const last = shown.at(-1)
-  const growing = last?.type === 'draft' ? last.text.length : 0
-  useEffect(() => {
-    const block = scroller.current
-    if (block && live && following.current) block.scrollTop = block.scrollHeight
-  }, [count, growing, live])
   let status: string | null = null
   if (!state.read) status = state.failed ? activityText.failed : activityText.loading
   else if (state.failed) status = activityText.failed
   else if (state.more) status = activityText.more
   else if (count === 0) status = activityText.empty
+  const lines = (
+    <>
+      {shown.map((event) => (
+        <ActivityLine key={event.id} event={event} />
+      ))}
+      {status ? (
+        <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>{status}</Typography>
+      ) : null}
+    </>
+  )
+  if (live)
+    return (
+      <Box
+        role="region"
+        aria-label={activityText.title}
+        data-activity="live"
+        sx={{ display: 'grid', alignContent: 'start', gap: 1.25, color: 'text.primary' }}
+      >
+        {lines}
+      </Box>
+    )
   return (
     <Box
-      ref={scroller}
       role="region"
       aria-label={activityText.title}
       // The block scrolls: it can be reached and scrolled from the keyboard.
       tabIndex={0}
-      onScroll={(event) => {
-        const block = event.currentTarget
-        following.current = block.scrollHeight - block.scrollTop - block.clientHeight < FOLLOW_SLACK
-      }}
       sx={{
         maxHeight: { xs: 320, md: 420 },
         overflowY: 'auto',
@@ -231,12 +237,7 @@ export function TurnActivityView({
         '&:focus-visible': { outline: '2px solid', outlineColor: 'text.primary', outlineOffset: 2 },
       }}
     >
-      {shown.map((event) => (
-        <ActivityLine key={event.id} event={event} />
-      ))}
-      {status ? (
-        <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>{status}</Typography>
-      ) : null}
+      {lines}
     </Box>
   )
 }

@@ -851,7 +851,7 @@ describe('the live block', () => {
     expect(screen.getByText('Сохранение работы')).toBeTruthy()
   })
 
-  it('shows «Ход работы» of the turn at work open under its stages', () => {
+  it('shows what the turn at work does in the feed itself, under its stages, unfolded', () => {
     const head = headOf({
       status: 'running',
       task: { turnNo: 2, runningSince: new Date().toISOString() },
@@ -864,9 +864,9 @@ describe('the live block', () => {
         activity={<p>Команды агента</p>}
       />,
     )
-    const details = screen.getByText('Ход работы').closest('details')!
-    expect(details.open).toBe(true)
-    expect(within(details).getByText('Команды агента')).toBeTruthy()
+    expect(screen.getByText('Команды агента')).toBeTruthy()
+    expect(screen.getByText('Команды агента').closest('details')).toBeNull()
+    expect(screen.queryByText('Ход работы')).toBeNull()
   })
 
   it('shows no «Ход работы» while the client drives the browser or the site is held', () => {
