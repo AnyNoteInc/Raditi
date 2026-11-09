@@ -39,6 +39,7 @@ import { sessionLive } from './browser-pane-model'
 import { callErrorText, sendErrorText } from './call-error'
 import { newChatHref } from './chat-address'
 import { useChatDetails, useChatThinking } from './chat-details'
+import { rememberEffort } from './chat-effort'
 import type { ChatProject } from './chat-types'
 import {
   agentNotesText,
@@ -782,6 +783,8 @@ export function DialogView({
     setEffortChosen({ effort, over: head?.task.effort })
     try {
       await setEffort.mutateAsync({ taskId, effort })
+      // The next new chat starts with it too (owner's request of 09.11.2026).
+      rememberEffort(effort)
       setNote(effortText.changed)
     } catch (failure) {
       setEffortChosen(null)

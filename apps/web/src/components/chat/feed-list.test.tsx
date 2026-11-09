@@ -804,7 +804,7 @@ describe('the live block', () => {
         steps={[]}
       />,
     )
-    expect(screen.getByRole('heading', { name: 'Приняли, начинаем' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Подготовка агента' })).toBeTruthy()
     expect(text(document.body)).toContain(
       'На сайте сейчас идёт другая работа. Начнём, когда она закончится.',
     )

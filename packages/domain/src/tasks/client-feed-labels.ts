@@ -48,8 +48,8 @@ const groupDigits = (count: number): string =>
 
 /** The word of a status in the header of a dialog and in the list — spec §7. */
 export const taskStatusLabel: Readonly<Record<TaskStatus, string>> = Object.freeze({
-  queued: 'Приняли, начинаем',
-  preparing: 'Готовим',
+  queued: 'Подготовка агента',
+  preparing: 'Подготовка агента',
   running: 'Агент работает',
   awaiting_user: 'Нужен ваш ответ',
   awaiting_approval: 'Ждёт вашего решения',

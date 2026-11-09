@@ -9,5 +9,5 @@ export default async function Page() {
   const session = await requireSession()
   // The layout says so for the whole section.
   if (session === UNAVAILABLE) return null
-  return <NewChat userId={session.user.id} />
+  return <NewChat userId={session.user.id} userName={session.user.name} />
 }

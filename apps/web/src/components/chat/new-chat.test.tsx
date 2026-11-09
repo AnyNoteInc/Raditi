@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider, type UseMutationOptions } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { serverRefusal } from '@/components/billing/testing'
@@ -106,7 +106,7 @@ const described = (element: HTMLElement) =>
     .map((id) => document.getElementById(id)?.textContent ?? '')
     .join(' ')
 
-function showChat(props: { beside?: boolean; userId?: string } = {}) {
+function showChat(props: { beside?: boolean; userId?: string; userName?: string | null } = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
@@ -160,20 +160,26 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  window.localStorage.removeItem('raditi-chat-effort')
   vi.unstubAllGlobals()
 })
 
 describe('new chat', () => {
-  it('heads the screen and labels the message field', () => {
-    showChat()
-    expect(screen.getByRole('heading', { level: 1, name: 'Новый чат' })).toBeTruthy()
+  it('greets the client by name at their time of day and labels the message field', () => {
+    showChat({ userName: 'Виктор Луферов' })
+    expect(
+      screen.getByRole('heading', {
+        level: 1,
+        name: /^(Доброе утро|Добрый день|Добрый вечер|Доброй ночи), Виктор!$/,
+      }),
+    ).toBeTruthy()
     expect(field().tagName).toBe('TEXTAREA')
     expect(field().getAttribute('placeholder')).toBe('Что нужно сделать?')
   })
 
   it('takes the level below beside a list that heads the page', () => {
     showChat({ beside: true })
-    expect(screen.getByRole('heading', { level: 2, name: 'Новый чат' })).toBeTruthy()
+    expect(screen.getByRole('heading', { level: 2, name: /^(Доброе|Добрый|Доброй) .+!$/ })).toBeTruthy()
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull()
   })
 
@@ -530,6 +536,17 @@ describe('new chat', () => {
     fireEvent.click(send())
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
     expect(create.mock.calls[0]![0]).toMatchObject({ effort: 'max' })
+  })
+
+  it('remembers the level of thinking after the page is opened anew', () => {
+    const first = showChat()
+    fireEvent.click(screen.getByRole('button', { name: 'Размышление: Высокое' }))
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /Максимальное/ }))
+    first.clear()
+    cleanup()
+    showChat()
+    expect(screen.getByRole('button', { name: 'Размышление: Максимальное' })).toBeTruthy()
+    expect(window.localStorage.getItem('raditi-chat-effort')).toBe('max')
   })
 
   it('has the controls of a chat in their order, the pill before the level of thinking', () => {

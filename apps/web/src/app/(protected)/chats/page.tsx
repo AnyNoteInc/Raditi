@@ -13,7 +13,7 @@ export default async function Page() {
   if (session === UNAVAILABLE) return null
   return (
     <Box sx={{ display: { xs: 'none', md: 'flex' }, flex: '1 0 auto', flexDirection: 'column' }}>
-      <NewChat userId={session.user.id} beside />
+      <NewChat userId={session.user.id} userName={session.user.name} beside />
     </Box>
   )
 }

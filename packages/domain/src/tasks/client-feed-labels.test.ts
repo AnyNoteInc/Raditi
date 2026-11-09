@@ -309,8 +309,8 @@ describe('every text of the catalogue', () => {
 describe('status labels', () => {
   it('reads exactly as the table of spec §7 and of the design', () => {
     expect(taskStatusLabel).toEqual({
-      queued: 'Приняли, начинаем',
-      preparing: 'Готовим',
+      queued: 'Подготовка агента',
+      preparing: 'Подготовка агента',
       running: 'Агент работает',
       awaiting_user: 'Нужен ваш ответ',
       awaiting_approval: 'Ждёт вашего решения',
