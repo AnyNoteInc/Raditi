@@ -33,8 +33,7 @@ describe('wordpressMcpPolicy', () => {
         '/wp/v2/plugins',
         '/wp/v2/themes',
         '/wp/v2/settings',
-        '/wc/*/orders',
-        '/wc/*/customers',
+        '/wc/*/refunds',
         '/wc/*/payment_gateways',
         '/wc/*/settings',
       ]),
@@ -49,8 +48,7 @@ describe('wordpressMcpPolicy', () => {
         'profile.php',
         'options-general.php',
         'admin.php?page=wc-settings',
-        'admin.php?page=wc-orders',
-        'edit.php?post_type=shop_order',
+        'edit.php?post_type=shop_order_refund',
       ]),
     )
     expect(wordpressMcpPolicy.maxChangedObjectsPerTurn).toBe(20)
@@ -168,11 +166,11 @@ describe('isWpCliCommandDenied', () => {
     expect(isWpCliCommandDenied(wp(command))).toBe(true)
   })
 
-  it('denies orders and personal data requests by post type', () => {
-    expect(isWpCliCommandDenied(wp('post list --post_type=shop_order'))).toBe(true)
+  it('denies refunds and personal data requests by post type; orders are open (ДС7)', () => {
+    expect(isWpCliCommandDenied(wp('post list --post_type=shop_order'))).toBe(false)
     expect(isWpCliCommandDenied(wp('post list --post_type=page,shop_order_refund'))).toBe(true)
     expect(isWpCliCommandDenied(wp('post list --post_type=user_request'))).toBe(true)
-    expect(isWpCliCommandDenied(wp('post create --post_type=Shop_Order'))).toBe(true)
+    expect(isWpCliCommandDenied(wp('post list --post_type=Shop_Order_Refund'))).toBe(true)
   })
 
   it('allows form entries by post type (the owner’s decision of 09.11.2026)', () => {
@@ -226,7 +224,12 @@ describe('isRestRequestDenied', () => {
     ['GET', '/wp/v2/menu-items?menus=3'],
     ['GET', '/wc/v3/products/15'],
     ['POST', '/wc/v3/products/15'],
-    // Form entries (Jetpack): the client's own data (the owner's decision of 09.11.2026).
+    // Form entries (Jetpack), orders, customers and reports of the shop: the client's own data
+    // (the owner's decisions of 09.11.2026, ДС1, ДС7).
+    ['GET', '/wc/v3/orders'],
+    ['GET', '/wc/v2/orders/15/notes'],
+    ['GET', '/wc/v3/customers'],
+    ['GET', '/wc-analytics/reports/customers'],
     ['GET', '/wp-json/wp/v2/feedback'],
     ['GET', '/wp/v2/feedback/12'],
   ])('allows %s %s', (method, route) => {
@@ -240,14 +243,11 @@ describe('isRestRequestDenied', () => {
     ['POST', '/wp/v2/plugins'],
     ['POST', '/wp/v2/themes/twentytwentyfive'],
     ['POST', '/wp/v2/settings'],
-    ['GET', '/wc/v3/orders'],
-    ['GET', '/wc/v2/orders/15/notes'],
-    ['GET', '/wc/v3/customers'],
+    ['GET', '/wc/v3/refunds'],
     ['POST', '/wc/v3/payment_gateways/yookassa'],
     ['POST', '/wc/v3/settings/checkout'],
     ['POST', '/wc/v3/webhooks'],
     ['POST', '/wc/store/v1/checkout'],
-    ['GET', '/wc-analytics/reports/customers'],
     ['POST', '/batch/v1'],
     ['GET', '/oembed/1.0/proxy?url=http://169.254.169.254/'],
     ['GET', '/wp/v2/comments'],
@@ -307,7 +307,10 @@ describe('isAdminUrlDenied', () => {
     '/wp-admin/admin.php?page=wpforms-builder&view=fields&form_id=4',
     '/wp-admin/admin.php?page=wpforms-overview',
     '/wp-admin/edit.php?post_type=product',
-    // Form entries: the client's own data (the owner's decision of 09.11.2026).
+    // Form entries, orders and the core's export: the client's own data (09.11.2026, ДС1, ДС7).
+    '/wp-admin/admin.php?page=wc-orders&action=edit&id=5',
+    '/wp-admin/edit.php?post_type=shop_order',
+    '/wp-admin/export.php',
     '/wp-admin/admin.php?page=flamingo',
     '/wp-admin/admin.php?page=flamingo_inbound&post=5&action=edit',
     '/wp-admin/admin.php?page=Flamingo_Outbound',
@@ -332,8 +335,7 @@ describe('isAdminUrlDenied', () => {
     '/wp-admin/options-general.php',
     '/wp-admin/options.php',
     '/wp-admin/admin.php?page=wc-settings&tab=checkout',
-    '/wp-admin/admin.php?page=wc-orders&action=edit&id=5',
-    '/wp-admin/edit.php?post_type=shop_order',
+    '/wp-admin/edit.php?post_type=shop_order_refund',
     '/wp-admin/network/plugins.php',
     '/blog/wp-admin/plugins.php',
     '/WP-ADMIN/Plugins.php',

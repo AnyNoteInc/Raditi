@@ -333,10 +333,10 @@ describe('browserTaskInstructions (docs/plan/57-browser-tasks.md, Б20–Б24)',
   it('keeps the words of a task in the browser and of a task with a repository byte for byte', () => {
     const skills = { skills: ['context7', 'playwright', 'other'] }
     expect(digest(withoutSearch(browserTaskInstructions('GUIDE\n', skills)))).toBe(
-      'd91f6f3b5e5b2f5209a8e3c116314c14385d20af8fb738b775f93423bc318264',
+      '777374024cdeeae232b2a3cd75c2db7cdbd28bb69071a7e37245b6771b8cc4b0',
     )
     expect(digest(withoutSearch(browserTaskInstructions('')))).toBe(
-      '88371e08f8c6538e7e1746327befdd2b5f982abdc3d30a1d3aab921ef4df73f0',
+      '2e4a11f3dcd563bcbcb9050aa41f8d80eba8bed85d517da261a6fb4c0bf362b0',
     )
     expect(
       digest(
@@ -350,13 +350,13 @@ describe('browserTaskInstructions (docs/plan/57-browser-tasks.md, Б20–Б24)',
           ),
         ),
       ),
-    ).toBe('e1f552615b227f8d8cb7562c9a3c8959211869b9a7af9002688296147acb1cb9')
+    ).toBe('c13f9aaef51bd5e09d6e3d274e564fad6b42741b1336db6be7f62cb770f31fb9')
     const origin = 'http://site-a-chat-b.localhost:8090'
     expect(digest(beforeTheWord(turnInstructions({ state: 'serving', origin })))).toBe(
-      'f99679ff0fb3afb2882a7936ac78a675951d716255ed86766676da7a8bbbd71b',
+      '456fc95c7907ffbfa6441cf78d954ed315ba7c090f96ecea30698d7ba8bdbc20',
     )
     expect(digest(beforeTheWord(turnInstructions({ state: 'starting', origin })))).toBe(
-      '4369f5b5edb22190d1b3270371d7e2c4ddc640ab82bcfe2420d5f47a3abea111',
+      '45f7188a791f1a1fce24b4aeecea3d226b4fce5cebce8190504257f577dbc5a8',
     )
     expect(
       digest(
@@ -371,10 +371,10 @@ describe('browserTaskInstructions (docs/plan/57-browser-tasks.md, Б20–Б24)',
           ),
         ),
       ),
-    ).toBe('e7088208f1d37f44bc1731021c300039edc193a65dfa415d68f4ff9ab92d28b9')
+    ).toBe('1b8ba238419efc8a39e54ff42470d1347674e167a242c817962a61ff56db352b')
     expect(
       digest(beforeTheWord(turnInstructions({ state: 'unavailable', reason: 'not_supported' }))),
-    ).toBe('e0f57e0ee5c501ad7e123ad49ab3bcc2164f2a9dd4f82da2919404a023a32309')
+    ).toBe('1e848c9a36e0b73f27ee473c1af58c740cc6aad4a11ec5a2da9f2b39f2c7cd28')
   })
 })
 

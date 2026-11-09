@@ -36,7 +36,7 @@ export interface WordpressMcpPolicy {
   }
   /** Options the agent may neither read nor write; `*` is a wildcard. */
   readonly protectedOptions: readonly string[]
-  /** Orders and personal data requests (spec §11); form entries are open since 09.11.2026. */
+  /** Refunds and personal data requests; orders and form entries are open since 09.11.2026. */
   readonly deniedPostTypes: readonly string[]
   readonly admin: {
     /** Pages under /wp-admin/: `page.php`, `dir/` or `page.php?param=value`; `*` in a value is a wildcard. */
@@ -125,17 +125,15 @@ export const wordpressMcpPolicy: WordpressMcpPolicy = freezeDeep({
       '/wp-abilities',
       // Fetches arbitrary URLs from the site server.
       '/oembed/1.0/proxy',
-      '/wc/*/orders',
+      // Orders, customers and reports of the shop are the client's own data and open (the
+      // owner's decision of 09.11.2026, spec §20, «Данные сайта клиента», ДС7); money and the
+      // shop's settings are not.
       '/wc/*/refunds',
-      '/wc/*/customers',
       '/wc/*/payment_gateways',
       '/wc/*/settings',
       '/wc/*/webhooks',
       '/wc/*/system_status',
-      '/wc/*/reports',
       '/wc/store',
-      '/wc-admin',
-      '/wc-analytics',
     ],
     deniedMethods: ['DELETE'],
     // `_embed` makes WordPress run the linked routes itself: comments (`replies`) and users
@@ -183,10 +181,8 @@ export const wordpressMcpPolicy: WordpressMcpPolicy = freezeDeep({
     '*_salt',
   ],
   deniedPostTypes: [
-    'shop_order',
+    // Orders and subscriptions are open since 09.11.2026 (ДС7); a refund moves money.
     'shop_order_refund',
-    'shop_order_placehold',
-    'shop_subscription',
     'user_request',
   ],
   admin: {
@@ -214,20 +210,16 @@ export const wordpressMcpPolicy: WordpressMcpPolicy = freezeDeep({
       'update.php',
       'tools.php',
       'import.php',
-      'export.php',
+      // The core's export (Tools → Export) is open since 09.11.2026 (ДС7); a request to export a
+      // person's data writes a request and mails that person.
       'export-personal-data.php',
       'erase-personal-data.php',
       'network/',
       'user/',
       'admin.php?page=wc-settings',
-      'admin.php?page=wc-orders',
-      'admin.php?page=wc-admin',
       'admin.php?page=wc-status',
-      'admin.php?page=wc-reports',
       'admin.php?page=wc-addons',
-      'edit.php?post_type=shop_order',
       'edit.php?post_type=shop_order_refund',
-      'edit.php?post_type=shop_subscription',
       'post-new.php?post_type=shop_order',
       'edit-comments.php',
       'comment.php',

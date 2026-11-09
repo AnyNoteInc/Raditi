@@ -27,9 +27,9 @@ import { adminScriptPath, isAdminUrlDenied, isRestRouteDenied } from './wordpres
  * agent — and the client at the controls — works in the site's own admin pages, signed in as the
  * client, and uploads media there; there is no preview behind it. What stays closed is closed for
  * both (CLAUDE.md rule 4, spec §11): users, plugins, themes and the site's look, settings, tools,
- * comments, orders and the shop's customers, the network admin and every deletion. Form entries
- * (заявки), leads and subscribers are the client's own data and open, the export of entries
- * included (the owner's decision of 09.11.2026). Pure: no I/O; anything the policy cannot read is denied.
+ * comments, payment settings and refunds, the network admin and every deletion. Form entries
+ * (заявки), leads, subscribers, orders and the shop's customers are the client's own data and
+ * open, every export included (the owner's decisions of 09.11.2026, ДС1, ДС7). Pure: no I/O; anything the policy cannot read is denied.
  *
  * Known limits, by design of a check that sees one request:
  * - a page's script can send a method in the `X-HTTP-Method-Override` header, which WordPress's
@@ -232,29 +232,21 @@ const CLOSED_POST_TYPES = new Set([
 ])
 /**
  * Words of a plugin's screen (`page=`, and Fluent Forms' `route=` within it) that stay closed:
- * the site's accounts (users — their logins, roles and passwords), its orders and its shop's
- * customers (CLAUDE.md rule 4, spec §20, «Данные сайта клиента», ДС2). A part of a name is
- * enough, as with actions: a plugin's screen is closed rather than missed. The form entries
- * (заявки), leads, subscribers and messages of the site are the client's own data and open to the
- * agent (the owner's decision of 09.11.2026, ДС1).
+ * the site's accounts — users, their logins, roles and passwords. A part of a name is enough, as
+ * with actions: a plugin's screen is closed rather than missed. The rest of the site's data —
+ * form entries (заявки), leads, subscribers, messages, orders and the shop's customers — is the
+ * client's own and open to the agent, with every export of it (the owner's decisions of
+ * 09.11.2026, spec §20, «Данные сайта клиента», ДС1, ДС7).
  */
-const CLOSED_SCREEN_WORDS = ['user', 'order', 'customer']
+const CLOSED_SCREEN_WORDS = ['user']
 const screenClosed = (value: string) => CLOSED_SCREEN_WORDS.some((word) => value.includes(word))
 
 /**
- * Exports of form entries open by their exact action alone (ДС1): Fluent Forms, checked on the
- * owner's site on 09.11.2026 («Экспорт» → «Экспортировать как Excel (xlsx)»). Nothing is inferred
- * from the `page` or `route` of a request: a page's script writes those as it likes. Another
- * plugin's export joins by its exact action once checked; until then the agent reads its list.
- */
-const ENTRY_EXPORT_ACTIONS = new Set(['fluentform-form-entries-export'])
-
-/**
  * Words of an `action` (of an admin page, admin-ajax.php or admin-post.php) that delete, install,
- * update, export or erase — or reach a closed part: comments, users and their passwords and
- * sessions, orders and customers, plugins, themes, options and settings, privacy requests, Site
- * Health. A part of a name is enough (`untrash-post`, `wpseo_set_option`): a plugin's action is
- * closed rather than missed. An export of form entries is the exception (`ENTRY_EXPORT_ACTIONS`).
+ * update or erase, move money (`refund`) — or reach a closed part: comments, users and their
+ * passwords and sessions, plugins, themes, options and settings, privacy requests, Site Health. A
+ * part of a name is enough (`untrash-post`, `wpseo_set_option`): a plugin's action is closed rather
+ * than missed. An export of any kind reads the site into a file and is open (ДС7).
  */
 const CLOSED_ACTION_WORDS = [
   'delete',
@@ -263,13 +255,12 @@ const CLOSED_ACTION_WORDS = [
   'activate',
   'update',
   'upgrade',
-  'export',
   'erase',
+  'refund',
   'comment',
   'user',
   'password',
   'session',
-  'customer',
   'plugin',
   'theme',
   'option',
@@ -277,9 +268,6 @@ const CLOSED_ACTION_WORDS = [
   'privacy',
   'health',
 ]
-/** «order» as a word of an action (`wc_order_*`, `export-orders`), not the layout of boxes. */
-const ORDER_ACTION = /(?:^|[-_])orders?(?:[-_]|$)/
-const LAYOUT_ACTIONS = new Set(['meta-box-order'])
 /**
  * Whole actions closed besides: the dashboard's Quick Draft makes a post without its editor (no
  * address, so no checkpoint guards it against a duplicate, Б22), and a list's Quick Edit
@@ -298,10 +286,7 @@ const CLOSED_ACTIONS = new Set([
 const CLOSED_FIELDS = ['delete_all', 'delete_all2', 'bulk_edit']
 
 const actionClosed = (action: string) =>
-  !ENTRY_EXPORT_ACTIONS.has(action) &&
-  (CLOSED_ACTIONS.has(action) ||
-    (ORDER_ACTION.test(action) && !LAYOUT_ACTIONS.has(action)) ||
-    CLOSED_ACTION_WORDS.some((word) => action.includes(word)))
+  CLOSED_ACTIONS.has(action) || CLOSED_ACTION_WORDS.some((word) => action.includes(word))
 
 /** A request to /wp-admin/: `rest` are the segments below it. */
 function adminDenied(rest: readonly string[], fields: readonly Field[]): boolean {
@@ -839,10 +824,11 @@ export function wordpressBrowserGuide(): string {
 - Form entries — «заявки» — are the client's own data (the owner's decision of 09.11.2026): their
   lists are under each form plugin's menu (Fluent Forms: «Записи» / «Entries»; Contact Form 7
   with Flamingo: «Входящие»; WPForms, Gravity Forms, Elementor, CFDB7 and the like have their
-  own). When the client asks to collect them, read the list page by page. In Fluent Forms, open
-  the form's entries, click «Экспорт», then «Экспортировать как Excel (xlsx)» and «Экспорт» in the
-  window of fields, and read the file with \`web_download\`; other plugins' exports are closed.
-  Then build what the client asked for in the outbox. Users, orders and customers stay closed.
+  own). Orders and customers of the shop (WooCommerce) are the client's own data as well. When
+  the client asks to collect them, read the list page by page, or use the export of the plugin
+  or of the core («Экспорт» / «Export»; in Fluent Forms: «Экспорт», «Экспортировать как Excel
+  (xlsx)», then «Экспорт» in the window of fields) and read the file with \`web_download\`;
+  then build what the client asked for in the outbox. Users of the site stay closed.
 - Checkpoint: after any click on Save, Publish, Update or Schedule — and whenever the result of
   one is unclear (a timeout, a reload, an error) — call \`web_verify\` before you click it again.
   While an object of the task exists, never start a second one: open its editor again. If

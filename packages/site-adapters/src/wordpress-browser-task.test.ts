@@ -144,6 +144,20 @@ describe('wordpressAdapter.browserTaskPolicy: pages', () => {
     '/wp-admin/admin.php?page=forminator-entries',
     '/wp-admin/admin.php?page=evf-entries',
     '/wp-admin/edit.php?post_type=x&page=forminator-entries',
+    // Orders, the shop's customers and every export: the client's own data (09.11.2026, ДС7).
+    '/wp-admin/admin.php?page=wc-orders',
+    '/wp-admin/admin.php?page=wc-orders&action=edit&id=5',
+    '/wp-admin/admin.php?page=wc-admin&path=/customers',
+    '/wp-admin/edit.php?post_type=shop_order',
+    '/wp-admin/admin.php?page=crm-customers',
+    '/wp-admin/export.php',
+    '/wp-admin/export.php?download=true&content=all',
+    '/wp-admin/admin.php?page=some-plugin&action=export_entries',
+    '/wp-admin/admin.php?page=pmxe-admin-export&action=wpallexport',
+    '/wp-admin/admin.php?page=fluent_forms&route=entries&form_id=3&action=export',
+    '/wp-admin/admin.php?page=cfdb7-list.php&fid=12&action=cfdb7_export_csv',
+    '/wp-admin/admin.php?page=reports&action=wc_order_export',
+    '/wp-admin/admin.php?page=crm&action=export-orders',
   ])('opens %s', (path) => {
     expect(policy.pageDenied(path)).toBe(false)
     expect(denied(path)).toBe(false)
@@ -185,7 +199,6 @@ describe('wordpressAdapter.browserTaskPolicy: pages', () => {
     '/wp-admin/tools.php',
     '/wp-admin/import.php',
     '/wp-admin/admin.php?import=wordpress',
-    '/wp-admin/export.php',
     '/wp-admin/export-personal-data.php',
     '/wp-admin/erase-personal-data.php',
     '/wp-admin/site-health.php',
@@ -197,15 +210,11 @@ describe('wordpressAdapter.browserTaskPolicy: pages', () => {
     // Comments.
     '/wp-admin/edit-comments.php',
     '/wp-admin/comment.php?action=editcomment&c=3',
-    // Orders, customers and payments.
-    '/wp-admin/admin.php?page=wc-orders',
-    '/wp-admin/admin.php?page=wc-orders&action=edit&id=5',
+    // Payments and refunds.
     '/wp-admin/admin.php?page=wc-settings&tab=checkout',
-    '/wp-admin/admin.php?page=wc-admin&path=/customers',
-    '/wp-admin/edit.php?post_type=shop_order',
-    // A plugin's screen of the site's accounts or the shop's customers (ДС2).
+    '/wp-admin/edit.php?post_type=shop_order_refund',
+    // A plugin's screen of the site's accounts.
     '/wp-admin/admin.php?page=newsletter_users_index',
-    '/wp-admin/admin.php?page=crm-customers',
     // The network admin and multisite.
     '/wp-admin/network/',
     '/wp-admin/network/plugins.php',
@@ -237,19 +246,8 @@ describe('wordpressAdapter.browserTaskPolicy: pages', () => {
     '/wp-admin/edit.php?action=edit&bulk_edit=Update&post[]=1',
     '/wp-admin/upload.php?action=delete&media[]=5',
     '/wp-admin/edit-tags.php?action=delete&taxonomy=category&tag_ID=3',
-    // An export anywhere but a screen of form entries: a general exporter reaches orders and
-    // users, a plugin's settings export carries its keys (spec §20, ДС1, ДС2).
-    '/wp-admin/admin.php?page=some-plugin&action=export_entries',
-    '/wp-admin/admin.php?page=pmxe-admin-export&action=wpallexport',
-    // A screen's name is the page's own word: it opens no export (only the exact action does).
-    '/wp-admin/admin.php?page=fluent_forms&route=entries&form_id=3&action=export',
-    '/wp-admin/admin.php?page=cfdb7-list.php&fid=12&action=cfdb7_export_csv',
-    '/wp-admin/admin-ajax.php?page=leads&action=wpallexport',
-    '/wp-admin/admin.php?page=smtp-mailer&action=export_config',
-    // Orders and the shop's customers by an action of their own.
-    '/wp-admin/admin.php?page=reports&action=wc_order_export',
-    '/wp-admin/admin.php?page=crm&action=export-orders',
-    '/wp-admin/admin.php?page=crm&action=sync_customers',
+    // Money: a refund by an action of its own.
+    '/wp-admin/admin.php?page=wc-orders&action=woocommerce_refund_line_items',
   ])('closes the deletion or mass change %s', (path) => {
     expect(policy.pageDenied(path)).toBe(true)
   })
@@ -454,7 +452,7 @@ describe('wordpressAdapter.browserTaskPolicy: requests', () => {
     '/wp-json/oembed/1.0/proxy?url=https://example.com',
     '/wp-json/wp-block-editor/v1/url-details?url=https://example.com',
     '/wp-json/wp-site-health/v1/tests/background-updates',
-    '/wp-json/wc/v3/orders',
+    '/wp-json/wc/v3/refunds',
     '/?rest_route=/wp/v2/settings',
     '/?rest_route=%2Fwp%2Fv2%2Fcomments',
   ])('closes the REST route %s whatever the method', (path) => {
@@ -545,19 +543,14 @@ describe('wordpressAdapter.browserTaskPolicy: requests', () => {
     )
     expect(denied('/wp-admin/admin-ajax.php', 'POST', 'action%5B%5D=delete-post')).toBe(true)
     expect(denied('/wp-admin/admin-ajax.php/x', 'POST', 'action=delete-post')).toBe(true)
-    // An export of the entries of Fluent Forms is open; any other export without its screen is not
-    // (the owner's decision of 09.11.2026, ДС1).
-    expect(denied('/wp-admin/admin-post.php', 'POST', 'action=export_entries')).toBe(true)
+    // Every export is open (the owner's decision of 09.11.2026, ДС7); a refund is not.
+    expect(denied('/wp-admin/admin-post.php', 'POST', 'action=export_entries')).toBe(false)
     expect(
       denied('/wp-admin/admin-ajax.php', 'POST', 'action=fluentform-form-entries-export&form_id=3'),
     ).toBe(false)
-    expect(denied('/wp-admin/admin-ajax.php', 'POST', 'action=wpallexport&id=1')).toBe(true)
+    expect(denied('/wp-admin/admin-ajax.php', 'POST', 'action=wpallexport&id=1')).toBe(false)
     expect(
-      denied('/wp-admin/admin-ajax.php', 'POST', 'action=wpallexport&page=fluent_forms_entries'),
-    ).toBe(true)
-    // The exact action only: a longer one with the same start is not it.
-    expect(
-      denied('/wp-admin/admin-ajax.php', 'POST', 'action=fluentform-form-entries-export-settings'),
+      denied('/wp-admin/admin-ajax.php', 'POST', 'action=woocommerce_refund_line_items&order_id=5'),
     ).toBe(true)
     // The layout of the editor's boxes is not an order.
     expect(denied('/wp-admin/admin-ajax.php', 'POST', 'action=meta-box-order&page=post')).toBe(
