@@ -60,6 +60,20 @@ describe('«Ход работы»', () => {
       expect(within(block).getByText(THOUGHT)).toBeTruthy()
     })
 
+    it('stands in one line, and opens into three that scroll on a click or a key', () => {
+      render(<TurnActivityView state={read({ events: [thought] })} live={false} thinking />)
+      const box = screen.getByText(THOUGHT)
+      expect(box.getAttribute('aria-expanded')).toBe('false')
+      expect(box.getAttribute('aria-label')).toBe('Размышления агента — показать три строки')
+      expect(getComputedStyle(box).overflowY).toBe('hidden')
+      fireEvent.click(box)
+      expect(box.getAttribute('aria-expanded')).toBe('true')
+      expect(box.getAttribute('aria-label')).toBe('Размышления агента — свернуть в одну строку')
+      expect(getComputedStyle(box).overflowY).toBe('auto')
+      fireEvent.keyDown(box, { key: 'Enter' })
+      expect(box.getAttribute('aria-expanded')).toBe('false')
+    })
+
     it('is something to read for a viewer who asked, when it is all there is', () => {
       render(<TurnActivityView state={read({ events: [thought] })} live thinking />)
       expect(screen.getByText(THOUGHT)).toBeTruthy()
