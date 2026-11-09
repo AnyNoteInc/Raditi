@@ -57,11 +57,13 @@ describe('withActivity', () => {
 })
 
 describe('drafts in «Ход работы»', () => {
-  const draft = (id: string, text: string) =>
-    ({ id, type: 'draft', kind: 'text', text }) as const
+  const draft = (id: string, text: string) => ({ id, type: 'draft', kind: 'text', text }) as const
 
   it('keeps a draft only while nothing came after it', () => {
-    const first = withActivity(initialActivity, page({ events: [draft('1:0', 'Откр')], cursor: '1' }))
+    const first = withActivity(
+      initialActivity,
+      page({ events: [draft('1:0', 'Откр')], cursor: '1' }),
+    )
     const grown = withActivity(first, page({ events: [draft('2:0', 'Открываю')], cursor: '2' }))
     expect(grown.events).toEqual([draft('2:0', 'Открываю')])
     const done = withActivity(grown, page({ events: [message('3:0')], cursor: '3' }))

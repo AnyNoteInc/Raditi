@@ -1078,7 +1078,11 @@ if (step.hangMs) setTimeout(end, step.hangMs); else end();
     expect(cli.llm.status).toBe(200)
     expect(cli.llm.body).toBe(gatewayStream.pieces.flat().join('') + 'data: [DONE]\n\n')
     expect(gatewayRequests).toEqual([
-      { url: '/zai/v4/chat/completions', authorization: 'Bearer turn-key', body: '{"stream":true}' },
+      {
+        url: '/zai/v4/chat/completions',
+        authorization: 'Bearer turn-key',
+        body: '{"stream":true}',
+      },
     ])
     const rows = result.stdout
       .split('\n')
