@@ -133,12 +133,20 @@ export interface SiteAgentSkillRow {
 /**
  * The skills of a site's turn, in a fixed order: the platform's own first unless a row turns one
  * off, then the added ones that are on, by name. A row that does not parse is left out.
+ *
+ * A turn that has the platform's browser (`web_*`) gets no local one: the skill's Chromium would
+ * run inside the turn's sandbox next to the session's, a second browser of the same chat — its
+ * memory and CPU on every turn, and screenshots no client can see.
  */
-export function turnSkillsOf(rows: readonly SiteAgentSkillRow[]): TurnSkill[] {
+export function turnSkillsOf(
+  rows: readonly SiteAgentSkillRow[],
+  { platformBrowser = false }: { platformBrowser?: boolean } = {},
+): TurnSkill[] {
   const byName = new Map(rows.map((row) => [row.name, row]))
   const skills: TurnSkill[] = []
   for (const builtin of builtinAgentSkills)
-    if (byName.get(builtin.name)?.enabled !== false) skills.push(builtin.turn)
+    if (byName.get(builtin.name)?.enabled !== false)
+      if (!(platformBrowser && builtin.turn.kind === 'local')) skills.push(builtin.turn)
   const added = rows
     .filter((row) => !isBuiltinAgentSkill(row.name) && row.enabled && row.url !== null)
     .sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))

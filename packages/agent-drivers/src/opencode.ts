@@ -2,6 +2,7 @@ import { posix } from 'node:path'
 
 import type { AgentDriver, AgentEvent, RunContext, TurnSkill } from '@repo/domain'
 import {
+  agentOutputLimits,
   badRequest,
   ENV_VALUE_MASK,
   SANDBOX_AGENT_HOME,
@@ -236,6 +237,17 @@ const directHosts = (context: Pick<RunContext, 'llm' | 'mcp'>): string[] => [
   ]),
 ]
 
+/**
+ * The loopback port of the wrapper's relay of the model's stream (opencode-wrapper.ts,
+ * DRAFT_RELAY). Fixed: the configuration names it before the wrapper listens, and nothing else
+ * listens in a new sandbox before the CLI starts.
+ */
+export const OPENCODE_DRAFT_RELAY_PORT = 4180
+
+/** The provider address of a turn's CLI: the same path of the gateway, through the relay. */
+const relayedBaseUrl = (baseUrl: string): string =>
+  `http://127.0.0.1:${OPENCODE_DRAFT_RELAY_PORT}${new URL(baseUrl).pathname.replace(/\/$/, '')}`
+
 /** The platform's provider and the agent every session names, as each configuration has them. */
 function modelSettings(llm: Pick<RunContext['llm'], 'baseUrl' | 'model'>) {
   const model = `${provider}/${llm.model}`
@@ -277,7 +289,7 @@ function configuration(context: RunContext): string {
   const { llm, mcp, egressProxy, internet, skills } = validated(context)
   const direct = directHosts(context)
   return JSON.stringify({
-    ...modelSettings(llm),
+    ...modelSettings({ ...llm, baseUrl: relayedBaseUrl(llm.baseUrl) }),
     permission: permissionOf({ internet, skills }),
     mcp: {
       [mcpServer]: {
@@ -434,6 +446,11 @@ export function createOpencodeDriver(config: AgentDriverConfig): AgentDriver {
                 path: '',
               },
               mcpUrl: mcp.url,
+              llmRelay: {
+                port: OPENCODE_DRAFT_RELAY_PORT,
+                upstream: new URL(llm.baseUrl).origin,
+                draftChars: agentOutputLimits.messageText,
+              },
               mcpServer,
               variables: variables.length ? { paths: variableFiles, names: variables } : null,
               shellEnv,

@@ -16,7 +16,7 @@ import { platformToolName } from './opencode-mcp.ts'
 
 // `opencode run --format json` of the pinned 1.18.34: one row per finished part.
 //   step_start, reasoning (with `--thinking`), text, tool_use (a tool part that is completed or
-//   failed), step_finish, error
+//   failed), step_finish, error — and the wrapper's `raditi_draft` of a part not finished yet
 // The CLI prints no end-of-turn row. A step that ends with `stop` is followed by more steps when
 // the CLI compacts the context, and between them the CLI prints a line of its own as `text`
 // outside any step; a run cut on a rejected permission request exits 0 after a `tool-calls`
@@ -110,6 +110,14 @@ function toolEvents(part: JsonObject): AgentEvent[] {
   return result
 }
 
+/** A draft is never clipped: one longer than a message is not printed by the wrapper at all. */
+function draft(kind: unknown, value: unknown): AgentEvent[] {
+  if (kind !== 'text' && kind !== 'reasoning') return []
+  if (typeof value !== 'string' || value.trim() === '') return []
+  if (value.length > agentOutputLimits.messageText) return []
+  return events({ type: 'draft', kind, text: value })
+}
+
 export function parseOpencodeEvent(line: string): AgentEvent[] {
   const row = parseJsonObject(line)
   if (!row) return []
@@ -121,6 +129,8 @@ export function parseOpencodeEvent(line: string): AgentEvent[] {
   }
   if (row.type === 'text' && part?.type === 'text') return message(part.text)
   if (row.type === 'reasoning' && part?.type === 'reasoning') return reasoningEvents(part.text)
+  // The wrapper's own row (DRAFT_RELAY in opencode-wrapper.ts): what a part holds so far.
+  if (row.type === 'raditi_draft') return draft(row.kind, row.text)
   if (row.type === 'tool_use' && part?.type === 'tool') return toolEvents(part)
   if (row.type !== 'step_finish' || part?.type !== 'step-finish') return []
   const tokens = object(part.tokens)

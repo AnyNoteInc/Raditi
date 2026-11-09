@@ -20,6 +20,17 @@ describe('agent skills', () => {
     ])
   })
 
+  it('gives a turn with the platform browser no local browser of its own', () => {
+    expect(turnSkillsOf([], { platformBrowser: true })).toEqual([
+      { name: 'context7', kind: 'remote', url: CONTEXT7_MCP_URL },
+    ])
+    const added = { name: 'alpha', enabled: true, url: 'https://alpha.example.org/mcp' }
+    expect(turnSkillsOf([added], { platformBrowser: true }).map((skill) => skill.name)).toEqual([
+      'context7',
+      'alpha',
+    ])
+  })
+
   it('adds the remote skills that are on, by name, after the platform ones', () => {
     const skills = turnSkillsOf([
       { name: 'zeta', enabled: true, url: 'https://mcp.zeta.example.com/mcp' },

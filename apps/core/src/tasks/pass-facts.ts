@@ -343,7 +343,7 @@ export async function readPassFacts(
     preview: previewFactsOf(preview, deps.previews),
     egress,
     variables: agentVariables.map((variable) => variable.name),
-    skills: turnSkillsOf(site?.agentSkills ?? []),
+    skills: turnSkillsOf(site?.agentSkills ?? [], { platformBrowser: requirements.browser }),
     ...(stack ? { databaseGuide: stack.adapter.dbPlanGuide(stack.facts) } : {}),
     profile: profile ?? null,
     budget,

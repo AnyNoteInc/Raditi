@@ -94,7 +94,160 @@ export interface OpencodeWrapperSettings {
   sessionFiles: readonly string[]
   /** What a value becomes there (ENV_VALUE_MASK). */
   mask: string
+  /**
+   * The relay of the model's stream (DRAFT_RELAY): the CLI's provider address is loopback at
+   * `port`, the wrapper passes every byte to `upstream` and back, and prints what the model has
+   * written so far as `raditi_draft` rows. null — the CLI talks to the gateway itself.
+   */
+  llmRelay: { port: number; upstream: string; draftChars: number } | null
 }
+
+/**
+ * The model's words as they come (owner's request of 09.11.2026): `opencode run --format json`
+ * prints a text or a thought only once it is finished, and the session database keeps it only
+ * then. The stream the CLI reads from the gateway has every piece, so the wrapper stands between
+ * the two on loopback: it passes the bytes as they are — the turn key in the request included,
+ * which this process holds anyway — and reads the deltas of a stream of chat completions. What a
+ * part holds so far is printed whole, as a `raditi_draft` row, at most every DRAFT_EVERY_MS and
+ * before the bytes that end the part reach the CLI: a draft never comes after its finished row.
+ * The tail of a draft that could be the start of a value of the client's variables waits until
+ * the value is whole or ruled out: core masks values only whole. The CLI's own rows pass through
+ * the wrapper line by line, so that a draft never splits one of them. A command of the turn that
+ * reaches the relay gets what it would get from the gateway, which it reaches anyway.
+ */
+const DRAFT_RELAY = String.raw`
+const DRAFT_EVERY_MS = 400;
+const STREAM_REST_MAX = 1024 * 1024;
+let cliRest = Buffer.alloc(0);
+const queuedRows = [];
+const emitRow = (row) => {
+  const line = JSON.stringify(row) + '\n';
+  if (cliRest.length === 0) process.stdout.write(line);
+  else queuedRows.push(line);
+};
+const forwardCli = (chunk) => {
+  const joined = Buffer.concat([cliRest, chunk]);
+  const cut = joined.lastIndexOf(10) + 1;
+  if (cut > 0) process.stdout.write(joined.subarray(0, cut));
+  cliRest = Buffer.from(joined.subarray(cut));
+  if (cliRest.length === 0) for (const line of queuedRows.splice(0)) process.stdout.write(line);
+};
+const endCli = () => {
+  if (cliRest.length > 0) process.stdout.write(Buffer.concat([cliRest, Buffer.from('\n')]));
+  cliRest = Buffer.alloc(0);
+  for (const line of queuedRows.splice(0)) process.stdout.write(line);
+};
+/** How many characters at the end of a text could begin a value that is masked. */
+const heldTail = (text) => {
+  let keep = 0;
+  for (const [, value] of variables) {
+    if (Buffer.byteLength(value, 'utf8') < MASK_MIN_BYTES) continue;
+    for (let length = Math.min(value.length - 1, text.length); length > keep; length -= 1)
+      if (text.endsWith(value.slice(0, length))) { keep = length; break; }
+  }
+  return keep;
+};
+const draftSink = (limit) => {
+  let kind = null;
+  let text = '';
+  let shown = '';
+  let timer;
+  const flush = () => {
+    clearTimeout(timer);
+    timer = undefined;
+    if (kind === null || text.length > limit) return;
+    const visible = text.slice(0, text.length - heldTail(text));
+    if (visible === shown || visible.trim() === '') return;
+    shown = visible;
+    emitRow({ type: 'raditi_draft', kind, text: visible });
+  };
+  const close = () => {
+    flush();
+    kind = null;
+    text = '';
+    shown = '';
+  };
+  const add = (next, piece) => {
+    if (kind !== next) {
+      close();
+      kind = next;
+    }
+    text += piece;
+    timer ??= setTimeout(flush, DRAFT_EVERY_MS);
+  };
+  return { add, close };
+};
+/** The deltas of a stream of chat completions, line by line, into a sink. */
+const streamReader = (sink) => {
+  const decoder = new TextDecoder();
+  let rest = '';
+  return (chunk, last) => {
+    rest += decoder.decode(chunk, { stream: !last });
+    const lines = rest.split('\n');
+    rest = last ? '' : lines.pop();
+    if (rest.length > STREAM_REST_MAX) rest = '';
+    for (const raw of lines) {
+      const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+      if (!line.startsWith('data:')) continue;
+      let parsed;
+      try { parsed = JSON.parse(line.slice(5)); } catch { continue; }
+      const delta = parsed?.choices?.[0]?.delta;
+      if (delta === null || typeof delta !== 'object') continue;
+      if (typeof delta.reasoning_content === 'string' && delta.reasoning_content !== '') sink.add('reasoning', delta.reasoning_content);
+      if (typeof delta.content === 'string' && delta.content !== '') sink.add('text', delta.content);
+      if (Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0) sink.close();
+    }
+  };
+};
+const startRelay = (relay) => new Promise((resolve, reject) => {
+  const upstream = new URL(relay.upstream);
+  const server = createServer((incoming, reply) => {
+    const headers = { ...incoming.headers, host: upstream.host };
+    delete headers.connection;
+    const sent = request({
+      host: upstream.hostname,
+      port: Number(upstream.port || 80),
+      method: incoming.method,
+      path: incoming.url,
+      headers,
+      agent: false,
+    }, (answer) => {
+      const streamed = String(answer.headers['content-type'] ?? '').includes('text/event-stream');
+      const sink = streamed ? draftSink(relay.draftChars) : null;
+      const read = sink === null ? null : streamReader(sink);
+      const back = { ...answer.headers };
+      delete back.connection;
+      reply.writeHead(answer.statusCode ?? 502, back);
+      answer.on('data', (chunk) => {
+        // Read first: a part the chunk ends is printed before the CLI can print it as finished.
+        read?.(chunk, false);
+        reply.write(chunk);
+      });
+      answer.on('end', () => {
+        read?.(new Uint8Array(0), true);
+        sink?.close();
+        reply.end();
+      });
+      answer.on('error', () => {
+        sink?.close();
+        reply.destroy();
+      });
+    });
+    sent.on('error', () => {
+      if (reply.headersSent) reply.destroy();
+      else reply.writeHead(502).end();
+    });
+    reply.on('close', () => sent.destroy());
+    incoming.pipe(sent);
+  });
+  // A stream of the model lasts as long as the model does; the runtime ends the turn at its limit.
+  server.requestTimeout = 0;
+  server.headersTimeout = 0;
+  server.timeout = 0;
+  server.on('error', reject);
+  server.listen(relay.port, '127.0.0.1', () => resolve(server));
+});
+`
 
 /**
  * The MCP server must accept the turn's token before a provider request is worth making. Runs in
@@ -213,7 +366,7 @@ export function opencodeWrapper(settings: OpencodeWrapperSettings): string {
   return `import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
-import { request } from 'node:http';
+import { createServer, request } from 'node:http';
 import os from 'node:os';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -233,6 +386,7 @@ const SERVER_POLL_MS = 2_000;
 const SERVER_STOP_MS = 5_000;
 const MCP_DOWN = new RegExp('level=WARN[^\\\\n]*message="server unavailable"[^\\\\n]*\\\\bkey=' + settings.mcpServer + '\\\\b');
 
+${DRAFT_RELAY}
 class Refusal extends Error {}
 const refuse = (message) => { throw new Refusal(message); };
 const report = (message) =>
@@ -521,16 +675,22 @@ try {
     // remote shell's, reads ~/.bashrc instead of BASH_ENV and stops there, unless it is nested.
     Object.assign(env, { BASH_ENV: settings.shellEnv, SHELL: '/bin/bash', SHLVL: '1' });
   }
+  // The relay of the model's stream: only for a turn, a compaction prints no words.
+  const relay = compaction === null && settings.llmRelay !== null ? await startRelay(settings.llmRelay) : null;
   let child;
   if (compaction !== null) child = spawn(settings.cli, args, { cwd: settings.workdir, env, stdio: ['ignore', 'pipe', 'pipe'] });
   else {
     const input = openSync(settings.prompt, 'r');
     try {
       // Not detached: the CLI and its commands share the process group the sandbox runtime kills.
-      child = spawn(settings.cli, args, { cwd: settings.workdir, env, stdio: [input, 'inherit', 'pipe'] });
+      child = spawn(settings.cli, args, { cwd: settings.workdir, env, stdio: [input, relay === null ? 'inherit' : 'pipe', 'pipe'] });
     } finally {
       closeSync(input);
     }
+  }
+  if (relay !== null) {
+    child.stdout.on('data', forwardCli);
+    child.stdout.on('end', endCli);
   }
   let failure;
   const stop = (message) => {
@@ -585,6 +745,10 @@ try {
   const end = (code, signal) => {
     if (ended) return;
     ended = true;
+    if (relay !== null) {
+      relay.close();
+      relay.closeAllConnections();
+    }
     clearInterval(feeder);
     clearTimeout(stopping);
     forget();

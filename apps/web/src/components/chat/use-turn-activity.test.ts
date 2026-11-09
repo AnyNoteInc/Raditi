@@ -56,6 +56,21 @@ describe('withActivity', () => {
   })
 })
 
+describe('drafts in «Ход работы»', () => {
+  const draft = (id: string, text: string) => ({ id, type: 'draft', kind: 'text', text }) as const
+
+  it('keeps a draft only while nothing came after it', () => {
+    const first = withActivity(
+      initialActivity,
+      page({ events: [draft('1:0', 'Откр')], cursor: '1' }),
+    )
+    const grown = withActivity(first, page({ events: [draft('2:0', 'Открываю')], cursor: '2' }))
+    expect(grown.events).toEqual([draft('2:0', 'Открываю')])
+    const done = withActivity(grown, page({ events: [message('3:0')], cursor: '3' }))
+    expect(done.events).toEqual([message('3:0')])
+  })
+})
+
 describe('the reader of «Ход работы»', () => {
   it('reads a finished turn page after page and then stops', async () => {
     const { query, state } = reader(
@@ -70,15 +85,15 @@ describe('the reader of «Ход работы»', () => {
     expect(state().events.map((event) => event.id)).toEqual(['3:0', '5:0'])
   })
 
-  it('reads a live turn again every two seconds from its cursor', async () => {
+  it('reads a live turn again every second from its cursor', async () => {
     const { query, stop } = reader([page({ events: [message('4:0')], cursor: '4' })], true)
     await vi.advanceTimersByTimeAsync(0)
     expect(query).toHaveBeenCalledTimes(1)
-    await vi.advanceTimersByTimeAsync(feedPolling.working)
+    await vi.advanceTimersByTimeAsync(feedPolling.activity)
     expect(query).toHaveBeenCalledTimes(2)
     expect(query).toHaveBeenLastCalledWith('4')
     stop()
-    await vi.advanceTimersByTimeAsync(feedPolling.working * 3)
+    await vi.advanceTimersByTimeAsync(feedPolling.activity * 3)
     expect(query).toHaveBeenCalledTimes(2)
   })
 
