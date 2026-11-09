@@ -60,7 +60,7 @@ import MuiLink from '@mui/material/Link'
 import Typography from '@mui/material/Typography'
 import { BrandProgress } from '@repo/ui/brand-progress'
 import Link from 'next/link'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState, type ComponentProps, type ReactNode } from 'react'
 
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 import { nbsp } from '@/lib/nbsp'
@@ -1286,12 +1286,19 @@ export function LiveBlock({
         return null
     }
   // The agent at work has the moving mark of Raditi before its status (owner's request of
-  // 09.11.2026, in place of a pulsing dot); a wait for the client stands still.
+  // 09.11.2026, in place of a pulsing dot); a wait for the client stands still. One stage, one
+  // looped trajectory (owner, 09.11.2026): preparing, work, release.
   const working = !browser?.controlling && !task.held && !stopping
+  const motion: ComponentProps<typeof BrandProgress>['variant'] =
+    undoing || task.status === 'deploying' || task.status === 'verifying'
+      ? 'counterflow'
+      : task.status === 'running'
+        ? 'spiral'
+        : 'orbits'
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, minWidth: 0, ...riseIn }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, minWidth: 0 }}>
-        {working ? <BrandProgress size={22} /> : null}
+        {working ? <BrandProgress size={22} variant={motion} /> : null}
         <Typography component="h2" sx={{ fontSize: 16, fontWeight: 600, lineHeight: 1.5 }}>
           {title}
         </Typography>

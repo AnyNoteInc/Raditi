@@ -96,21 +96,38 @@ describe('BrandProgress', () => {
     expect(bar.getAttribute('aria-valuenow')).toBeNull()
   })
 
-  it('loops without end, through every trajectory', () => {
-    const { container } = render(<BrandProgress />)
+  it('loops one trajectory without end, not a carousel of all four', () => {
+    const { container } = render(<BrandProgress variant="orbits" />)
     const svg = symbol(container)
     observers.at(-1)?.report(true)
     step(16)
     expect(svg.dataset.brandProgress).toBe('playing')
+    const variants = new Set<string>()
     const poses = new Set<string>()
-    const cycles = BRAND_MOTION_VARIANTS.length * 2
-    for (let at = 0; at < cycles * BRAND_PROGRESS_CYCLE_MS; at += 100) {
+    for (let at = 0; at < BRAND_MOTION_VARIANTS.length * 2 * BRAND_PROGRESS_CYCLE_MS; at += 100) {
       step(100)
+      variants.add(svg.dataset.brandVariant ?? '')
       poses.add(rays(svg))
     }
-    expect(svg.dataset.brandProgress).toBe('playing')
+    expect([...variants]).toEqual(['orbits'])
     expect(frames.size).toBe(1)
-    expect(poses.size).toBeGreaterThan(BRAND_MOTION_VARIANTS.length * 10)
+    expect(poses.size).toBeGreaterThan(10)
+  })
+
+  it('takes a new trajectory at the end of the running cycle', () => {
+    const { container, rerender } = render(<BrandProgress variant="orbits" />)
+    const svg = symbol(container)
+    observers.at(-1)?.report(true)
+    step(16)
+    const advance = (ms: number) => {
+      for (let at = 0; at < ms; at += 100) step(100)
+    }
+    advance(BRAND_PROGRESS_CYCLE_MS / 2)
+    rerender(<BrandProgress variant="spiral" />)
+    step(100)
+    expect(svg.dataset.brandVariant).toBe('orbits')
+    advance(BRAND_PROGRESS_CYCLE_MS / 2)
+    expect(svg.dataset.brandVariant).toBe('spiral')
   })
 
   it('stays still under reduced motion and draws nothing while hidden or out of view', () => {

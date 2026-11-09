@@ -5,8 +5,8 @@ import { useEffect, useRef } from 'react'
 import { brandColors } from '../theme/tokens.ts'
 import {
   BRAND_MOTION_DURATION_MS,
-  BRAND_MOTION_VARIANTS,
   getBrandMotionPose,
+  type BrandMotionVariant,
 } from './brand-motion.ts'
 import { BrandSymbol } from './brand-symbol.tsx'
 
@@ -15,9 +15,10 @@ export const BRAND_PROGRESS_CYCLE_MS = Math.round(BRAND_MOTION_DURATION_MS * 0.6
 
 /**
  * The mark as a loading indicator (owner's request of 09.11.2026: «моушен дизайн анимированных
- * картинок raditi, который зациклены на progress»): the four approved trajectories of the logo play
- * one after another, without end. Each starts and ends in the resting pose, so the loop has no
- * seam. The server and reduced-motion mode draw the still mark; a hidden page or one out of view
+ * картинок raditi, который зациклены на progress»): one approved trajectory of the logo, looped
+ * without end — one stage, one animation, not a carousel of all four (owner, 09.11.2026). It starts
+ * and ends in the resting pose, so the loop has no seam; a new `variant` takes over at the end of the
+ * running cycle, so a change of stage does not jerk the rays. The server and reduced-motion mode draw the still mark; a hidden page or one out of view
  * does not draw at all. With `label` it is an indeterminate progress bar of that name; without one —
  * a decoration beside words that say it.
  */
@@ -25,12 +26,18 @@ export function BrandProgress({
   size = 24,
   label,
   className,
+  variant = 'spiral',
 }: {
   size?: number
   label?: string
   className?: string
+  variant?: BrandMotionVariant
 }) {
   const ref = useRef<SVGSVGElement>(null)
+  const wanted = useRef(variant)
+  useEffect(() => {
+    wanted.current = variant
+  }, [variant])
 
   useEffect(() => {
     const svg = ref.current
@@ -57,6 +64,8 @@ export function BrandProgress({
     let frame: number | null = null
     let last: number | null = null
     let elapsed = 0
+    let shown = wanted.current
+    let shownCycle = 0
     let inView = !('IntersectionObserver' in window)
     let observer: IntersectionObserver | undefined
 
@@ -72,9 +81,12 @@ export function BrandProgress({
     }
     const draw = () => {
       const cycle = Math.floor(elapsed / BRAND_PROGRESS_CYCLE_MS)
-      const variant = BRAND_MOTION_VARIANTS[cycle % BRAND_MOTION_VARIANTS.length] ?? 'spiral'
+      if (cycle !== shownCycle) {
+        shownCycle = cycle
+        shown = wanted.current
+      }
       const progress = (elapsed % BRAND_PROGRESS_CYCLE_MS) / BRAND_PROGRESS_CYCLE_MS
-      getBrandMotionPose(variant, progress).forEach((ray, index) => {
+      getBrandMotionPose(shown, progress).forEach((ray, index) => {
         const line = lines[index]
         if (!line) return
         line.setAttribute('x1', String(ray.x1))
@@ -87,6 +99,7 @@ export function BrandProgress({
       resting.setAttribute('visibility', 'hidden')
       group.removeAttribute('visibility')
       svg.dataset.brandProgress = 'playing'
+      svg.dataset.brandVariant = shown
     }
     const tick = (now: number) => {
       frame = null
@@ -134,6 +147,7 @@ export function BrandProgress({
       group.remove()
       resting.removeAttribute('visibility')
       delete svg.dataset.brandProgress
+      delete svg.dataset.brandVariant
     }
   }, [])
 

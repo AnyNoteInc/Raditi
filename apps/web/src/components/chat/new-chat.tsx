@@ -146,10 +146,7 @@ export function NewChat({
             lineHeight: 1.25,
           }}
         >
-          {greeting.title}
-        </Typography>
-        <Typography color="text.secondary" sx={{ mt: 0.75, fontSize: { xs: 15, sm: 16 } }}>
-          {greeting.line}
+          {greeting}
         </Typography>
       </Box>
 
