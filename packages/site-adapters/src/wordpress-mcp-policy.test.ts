@@ -230,7 +230,6 @@ describe('isRestRequestDenied', () => {
     ['GET', '/wc/v2/orders/15/notes'],
     ['GET', '/wc/v3/customers'],
     ['GET', '/wc-analytics/reports/customers'],
-    ['GET', '/wp-json/wc-admin/options?options=woocommerce_currency'],
     ['GET', '/wp-json/wp/v2/feedback'],
     ['GET', '/wp/v2/feedback/12'],
   ])('allows %s %s', (method, route) => {
@@ -247,6 +246,9 @@ describe('isRestRequestDenied', () => {
     ['GET', '/wc/v3/refunds'],
     // WooCommerce Admin writes: its options, plugin installs, onboarding (ДС8).
     ['POST', '/wc-admin/options'],
+    // …and a read of any option by name, a secret's included.
+    ['GET', '/wc-admin/options?options=wp_mail_smtp_password'],
+    ['GET', '/wp-json/wc-admin/plugins/active'],
     ['POST', '/wp-json/wc-admin/plugins/install'],
     ['PUT', '/wc-admin/onboarding/profile'],
     ['POST', '/wc-analytics/admin/notes/5'],

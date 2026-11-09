@@ -563,9 +563,10 @@ describe('wordpressAdapter.browserTaskPolicy: requests', () => {
     for (const path of [
       '/wp-json/wc-analytics/reports/customers',
       '/wp-json/wc-analytics/orders?per_page=25',
-      '/wp-json/wc-admin/options?options=woocommerce_default_country',
     ])
       expect(denied(path, 'GET'), path).toBe(false)
+    // Any option by name, a secret's included, is not a report.
+    expect(denied('/wp-json/wc-admin/options?options=smtp_password', 'GET')).toBe(true)
     for (const path of [
       '/wp-json/wc-admin/options',
       '/wp-json/wc-admin/plugins/install',

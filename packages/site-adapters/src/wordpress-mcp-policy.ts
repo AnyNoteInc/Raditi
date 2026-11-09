@@ -139,6 +139,11 @@ export const wordpressMcpPolicy: WordpressMcpPolicy = freezeDeep({
       '/wc/*/webhooks',
       '/wc/*/system_status',
       '/wc/store',
+      // WooCommerce Admin's options read any option of the site by name — the ones that keep
+      // keys and passwords too (\`protectedOptions\`); its plugins and onboarding install and set up.
+      '/wc-admin/options',
+      '/wc-admin/plugins',
+      '/wc-admin/onboarding',
     ],
     deniedMethods: ['DELETE'],
     // Reports, orders and customers of WooCommerce Admin open to reads (ДС7); its writes — options,
