@@ -1244,8 +1244,20 @@ try {
       output.mcp.filter((record) => record.rpc === 'tools/call').map((record) => record.tool),
       ['site_info'],
     )
+    // The command and what it printed (docs/plan/66-chat-visuals.md, В7).
+    assert.ok(
+      events.some(
+        (event) =>
+          event.type === 'command' &&
+          event.command === toolCheck &&
+          event.exitCode === 0 &&
+          typeof event.output === 'string' &&
+          event.output.includes(SHELL_OK) &&
+          event.outputCut === false,
+      ),
+      `No command event with its output: ${describe()}`,
+    )
     for (const expected of [
-      { type: 'command', command: toolCheck, exitCode: 0 },
       // The tool's own name: the driver takes the CLI's `<server>_` prefix off.
       { type: 'tool_call', tool: 'site_info', ok: true },
       { type: 'file_change', path: 'turn-1.txt', change: 'add' },
