@@ -12,6 +12,7 @@
     "./components": "./src/components/index.ts",
     "./brand-symbol": "./src/components/brand-symbol.tsx",
     "./animated-brand-symbol": "./src/components/animated-brand-symbol.tsx",
+    "./brand-progress": "./src/components/brand-progress.tsx",
     "./widgets/auth": "./src/widgets/auth/index.ts",
     "./captcha": "./src/captcha/index.ts"
   },

@@ -58,6 +58,7 @@ import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import MuiLink from '@mui/material/Link'
 import Typography from '@mui/material/Typography'
+import { BrandProgress } from '@repo/ui/brand-progress'
 import Link from 'next/link'
 import { useEffect, useState, type ReactNode } from 'react'
 
@@ -67,7 +68,7 @@ import { nbsp } from '@/lib/nbsp'
 import { AgentMarkdown } from './agent-markdown'
 import { SentFiles, type SentFile } from './attachment-chips'
 import { dayTime, feedTime } from './chat-format'
-import { pulsing, riseIn } from './chat-motion'
+import { riseIn } from './chat-motion'
 import {
   activityText,
   agentNotesText,
@@ -332,17 +333,18 @@ function StepList({ steps, running }: { steps: readonly StepRow[]; running: bool
             }}
           >
             {current ? (
+              // The mark at the head of the block moves; the stage it is on is a quiet ring.
               <Box
                 component="span"
                 aria-hidden="true"
                 sx={{
-                  width: 8,
-                  height: 8,
-                  mx: '4px',
+                  width: 10,
+                  height: 10,
+                  mx: '3px',
                   flex: 'none',
                   borderRadius: '50%',
-                  bgcolor: 'text.primary',
-                  ...pulsing,
+                  border: 1.5,
+                  borderColor: 'text.primary',
                 }}
               />
             ) : (
@@ -1280,25 +1282,13 @@ export function LiveBlock({
       default:
         return null
     }
-  // The agent at work has a pulsing dot before its status; a wait for the client stands still.
+  // The agent at work has the moving mark of Raditi before its status (owner's request of
+  // 09.11.2026, in place of a pulsing dot); a wait for the client stands still.
   const working = !browser?.controlling && !task.held && !stopping
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, minWidth: 0, ...riseIn }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, minWidth: 0 }}>
-        {working ? (
-          <Box
-            component="span"
-            aria-hidden="true"
-            sx={{
-              width: 10,
-              height: 10,
-              flex: 'none',
-              borderRadius: '50%',
-              bgcolor: 'text.primary',
-              ...pulsing,
-            }}
-          />
-        ) : null}
+        {working ? <BrandProgress size={22} /> : null}
         <Typography component="h2" sx={{ fontSize: 16, fontWeight: 600, lineHeight: 1.5 }}>
           {title}
         </Typography>
