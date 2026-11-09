@@ -74,7 +74,7 @@ describe('pinned upstream JSONL fixture', () => {
   })
 })
 
-describe('what a command printed (owner\'s request of 09.11.2026)', () => {
+describe("what a command printed (owner's request of 09.11.2026)", () => {
   const bash = (state: Record<string, unknown>) => ({
     type: 'tool_use',
     sessionID: 'ses_test',
@@ -83,7 +83,10 @@ describe('what a command printed (owner\'s request of 09.11.2026)', () => {
 
   it('carries the output, and its start and end when it is long', () => {
     const long = `${'a'.repeat(5000)}КОНЕЦ`
-    const [, command] = parse(opencode, bash({ status: 'completed', output: long, metadata: { exit: 0 } }))
+    const [, command] = parse(
+      opencode,
+      bash({ status: 'completed', output: long, metadata: { exit: 0 } }),
+    )
     expect(command).toMatchObject({ type: 'command', outputCut: true })
     const output = (command as { output: string }).output
     expect(output.length).toBeLessThanOrEqual(4000)
@@ -95,7 +98,10 @@ describe('what a command printed (owner\'s request of 09.11.2026)', () => {
 
   it('says the output was cut when OpenCode cut it, and has none when there is none', () => {
     expect(
-      parse(opencode, bash({ status: 'error', output: 'x', metadata: { exit: 1, truncated: true } }))[1],
+      parse(
+        opencode,
+        bash({ status: 'error', output: 'x', metadata: { exit: 1, truncated: true } }),
+      )[1],
     ).toEqual({ type: 'command', command: 'ls', exitCode: 1, output: 'x', outputCut: true })
     expect(parse(opencode, bash({ status: 'completed', metadata: { exit: 0 } }))[1]).toEqual({
       type: 'command',

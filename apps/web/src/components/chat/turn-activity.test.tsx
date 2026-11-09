@@ -112,7 +112,7 @@ describe('«Ход работы»', () => {
     expect(screen.getByText('raditi_wp_rest')).toBeTruthy()
   })
 
-  describe('a command, IN and OUT (owner\'s request of 09.11.2026)', () => {
+  describe("a command, IN and OUT (owner's request of 09.11.2026)", () => {
     const command = (patch: Partial<Extract<ActivityEvent, { type: 'command' }>> = {}) =>
       read({
         events: [
@@ -139,7 +139,9 @@ describe('«Ход работы»', () => {
 
     it('opens the whole output in a window, and says when its middle is left out', async () => {
       render(<TurnActivityView state={command({ outputCut: true })} live={false} />)
-      fireEvent.click(screen.getByRole('button', { name: 'Команда wp plugin list — открыть вывод' }))
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Команда wp plugin list — открыть вывод' }),
+      )
       const window = await screen.findByRole('dialog', { name: /Команда/ })
       expect(within(window).getByText(/wordfence/)).toBeTruthy()
       expect(

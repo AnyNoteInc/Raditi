@@ -140,7 +140,9 @@ function CommandWindow({
             </Box>
           )}
           {event.outputCut ? (
-            <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>{commandText.cut}</Typography>
+            <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>
+              {commandText.cut}
+            </Typography>
           ) : null}
         </Box>
       </DialogContent>
@@ -207,7 +209,10 @@ export function CommandBlock({ event }: { event: CommandEvent }) {
             <Box sx={{ ...mono, color: 'text.secondary', minWidth: 0 }}>
               {shown.join('\n')}
               {rest > 0 || event.outputCut ? (
-                <Box component="span" sx={{ display: 'block', fontFamily: 'inherit', fontSize: 12 }}>
+                <Box
+                  component="span"
+                  sx={{ display: 'block', fontFamily: 'inherit', fontSize: 12 }}
+                >
                   {rest > 0 ? commandText.moreLines(rest) : commandText.cutShort}
                 </Box>
               ) : null}

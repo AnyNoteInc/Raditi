@@ -179,7 +179,9 @@ describe('new chat', () => {
 
   it('takes the level below beside a list that heads the page', () => {
     showChat({ beside: true })
-    expect(screen.getByRole('heading', { level: 2, name: /^(Доброе|Добрый|Доброй) .+!$/ })).toBeTruthy()
+    expect(
+      screen.getByRole('heading', { level: 2, name: /^(Доброе|Добрый|Доброй) .+!$/ }),
+    ).toBeTruthy()
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull()
   })
 

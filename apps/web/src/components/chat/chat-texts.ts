@@ -401,7 +401,8 @@ export const commandText = Object.freeze({
   cutShort: '… вывод длинный',
   cut: 'Вывод длинный: здесь его начало и конец, середина пропущена.',
   noOutput: 'Команда ничего не вывела.',
-  noOutputKnown: 'Вывода этой команды нет: агент выполнял её до того, как чат начал его показывать.',
+  noOutputKnown:
+    'Вывода этой команды нет: агент выполнял её до того, как чат начал его показывать.',
 })
 
 /** Files attached to a message (docs/plan/57-browser-tasks.md, Б26). */
