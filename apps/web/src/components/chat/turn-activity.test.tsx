@@ -74,6 +74,33 @@ describe('«Ход работы»', () => {
       expect(box.getAttribute('aria-expanded')).toBe('false')
     })
 
+    it('stays open, and the same box, while the draft of it grows under a new id', () => {
+      // Each poll brings the draft under the id of a newer journal row (`1:0`, then `2:0`): the
+      // box the viewer opened must not be built again, or it closes and scrolls from its first
+      // word at every update.
+      const draft = (id: string, text: string): ActivityEvent => ({
+        id,
+        type: 'draft',
+        kind: 'reasoning',
+        text,
+      })
+      const { rerender } = render(
+        <TurnActivityView state={read({ events: [draft('1:0', 'Сначала тема')] })} live />,
+      )
+      const box = screen.getByText('Сначала тема')
+      fireEvent.click(box)
+      expect(box.getAttribute('aria-expanded')).toBe('true')
+      rerender(
+        <TurnActivityView
+          state={read({ events: [draft('2:0', 'Сначала тема, потом плагины')] })}
+          live
+        />,
+      )
+      const grown = screen.getByText('Сначала тема, потом плагины')
+      expect(grown).toBe(box)
+      expect(grown.getAttribute('aria-expanded')).toBe('true')
+    })
+
     it('is something to read for a viewer who asked, when it is all there is', () => {
       render(<TurnActivityView state={read({ events: [thought] })} live thinking />)
       expect(screen.getByText(THOUGHT)).toBeTruthy()
