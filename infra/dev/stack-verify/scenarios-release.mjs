@@ -429,15 +429,15 @@ async function releaseOfBuild(rt, ctx, entry) {
   })
   const heldA = sum(await site.holdsOf(dialogA))
   const expectedChargeA = expectedCharge(callsA, heldA)
-  // The turn reports a large usage (editTurn): above the minimum of 5 and below the reserve, the
-  // charge equals the usage — a filter that found no call, or a charge that took the minimum, fails.
+  // The turn reports a large usage (editTurn): the charge is the usage rounded up, above the one
+  // credit of the reserve (КР7) — a filter that found no call, or a charge cut to the reserve,
+  // fails.
   rt.check(
     callsA.length > 0 &&
       expectedChargeA.costRub > 0 &&
-      expectedChargeA.used > 5 &&
-      expectedChargeA.used < heldA &&
+      expectedChargeA.used > heldA &&
       -sum(chargedA) === expectedChargeA.used,
-    `the pass is charged when it ends, by its token usage: ${-sum(chargedA)} credits = ${expectedChargeA.costRub.toFixed(4)} ₽ ÷ 6 ₽ of ${callsA.length} calls, above the minimum of 5, from the ${heldA} it held`,
+    `the pass is charged when it ends, by its token usage: ${-sum(chargedA)} credits = ${expectedChargeA.costRub.toFixed(4)} ₽ ÷ 6 ₽ of ${callsA.length} calls, rounded up, above the ${heldA} it held`,
     { charged: -sum(chargedA), calls: callsA.length, held: heldA, expected: expectedChargeA },
   )
   for (const part of parts)

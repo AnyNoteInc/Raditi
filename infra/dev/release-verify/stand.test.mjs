@@ -436,13 +436,15 @@ test('the charge the stand expects is the usage at its rates, rounded once, betw
   )
   assert.equal(six.credits, 7)
   assert.ok(Math.abs(six.costRub - 41.633664) < 1e-9)
-  assert.equal(expectedCharge([call(100, 0, 10)], 45).credits, 5)
+  // No minimum and no cap of the reserve (КР7): a small call costs one credit, a large run what
+  // it took.
+  assert.equal(expectedCharge([call(100, 0, 10)], 45).credits, 1)
   assert.equal(
     expectedCharge(
       Array.from({ length: 60 }, () => large),
       45,
     ).credits,
-    45,
+    70,
   )
   assert.equal(STAND_RATES.cacheWritePer1m, null)
 })

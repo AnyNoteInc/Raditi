@@ -1381,10 +1381,11 @@ export function standRatesFile() {
 /**
  * What a done task is charged, worked out apart from the product: each model call at the rates of
  * the stand (input without the cache, cache reads, cache writes at the input rate, output with
- * reasoning), the sum in credits at the stand's rate, rounded half up once, at least 5, at most the
- * reserve (spec §17, «Правила списания»).
+ * reasoning), the sum in credits at the stand's rate, rounded up once — no minimum and no cap of
+ * the reserve since 10.11.2026 (spec §20, «Только кредиты», КР7). What the callers still pass
+ * after the calls — the reserve, the minimum — bounds nothing any more.
  */
-export function expectedCharge(calls, reservedCredits, { minimum = true } = {}) {
+export function expectedCharge(calls) {
   const rate = (value) => Number(value)
   let costRub = 0
   for (const call of calls)
@@ -1394,11 +1395,9 @@ export function expectedCharge(calls, reservedCredits, { minimum = true } = {}) 
         call.cacheWriteTokens * rate(STAND_RATES.inputPer1m) +
         call.outputTokens * rate(STAND_RATES.outputPer1m)) /
       1_000_000
-  const used = Math.round(costRub / rate(STAND_RUB_PER_CREDIT))
-  // The minimum is the first charge's of a task: a later pass pays its work, and any work at
-  // all costs a credit (26.10.2026).
-  const due = minimum ? Math.max(5, used) : costRub > 0 ? Math.max(1, used) : used
-  return { costRub, credits: Math.min(reservedCredits, due), used }
+  // Rounded to ten decimals first: binary noise of the sum must not round a whole credit up.
+  const used = Math.ceil(Number((costRub / rate(STAND_RUB_PER_CREDIT)).toFixed(10)))
+  return { costRub, credits: used, used }
 }
 
 /** `vX.Y.Z` above `vA.B.C`. */
