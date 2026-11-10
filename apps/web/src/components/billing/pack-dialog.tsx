@@ -12,14 +12,14 @@ import { PaymentDialog, paymentStartFailure, usePaymentStart } from './payment-d
 import { packPromise } from './plan-format'
 
 /**
- * Whether the customer may buy a pack now: payments are on and their tariff takes tasks. The
- * server refuses a pack checkout by the same rule (`startPackCheckout` of @repo/billing).
+ * Whether the customer may buy a pack now: payments are on. Since 10.11.2026 a pack is sold
+ * without a tariff too, at twice the price (КР9): the server prices it for the customer
+ * (`packOfferFor` of @repo/billing), and the page shows that price.
  */
 export function canBuyPack({
   paymentsEnabled,
-  subscription,
 }: Pick<BillingOverview, 'paymentsEnabled' | 'subscription'>): boolean {
-  return paymentsEnabled && subscription?.status === 'active'
+  return paymentsEnabled
 }
 
 function failureText(error: BillingCallError): string {

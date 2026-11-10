@@ -37,6 +37,7 @@ const pack = {
   name: 'Пакет из 100 кредитов',
   price: '1990.00',
   credits: 100,
+  withoutTariff: false,
 }
 const period = { start: new Date('2026-09-18T09:00:00Z'), end: new Date('2026-10-18T09:00:00Z') }
 const subscription = {

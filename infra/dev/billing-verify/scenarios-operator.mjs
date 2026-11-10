@@ -179,9 +179,7 @@ scenarios['credit-rate'] = async (t) => {
       approved.stdout.includes(
         `Не потраченные кредиты всех рабочих пространств: из пакетов — ${outstanding.pack} (${cost(outstanding.pack)} ₽ учётной стоимости), подарочные — ${outstanding.gift} (${cost(outstanding.gift)} ₽).`,
       ) &&
-      approved.stdout.includes(
-        'light — 20 кредитов, 120.00 ₽; standard — 45 кредитов, 270.00 ₽; heavy — 120 кредитов, 720.00 ₽',
-      ) &&
+      !approved.stdout.includes('предел одного прохода') &&
       approved.stdout.includes('Включённых моделей нет.') &&
       approved.stdout.includes(
         `Записано: курс кредита ${rate?.id} и ставки моделей (0) действуют с `,
@@ -405,9 +403,9 @@ scenarios.refund = async (t) => {
   )
   const overview = await customer.query('billing.overview')
   t.equal(
-    'of the 250 credits that are left a task could spend the 50 of the gift',
+    'a task could spend all 250 credits that are left: the gift and both packs',
     [overview.credits.spendable, overview.credits.totalAvailable],
-    [CREDITS.gift, CREDITS.gift + 2 * CREDITS.pack],
+    [CREDITS.gift + 2 * CREDITS.pack, CREDITS.gift + 2 * CREDITS.pack],
   )
   t.equal(
     '«Тарифы» shows no tariff and says the last one was returned; no «Тариф закончился» letter is sent',

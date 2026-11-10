@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 import { plain, serverRefusal } from '@/components/billing/testing'
+import { REVOKE_AFTER_MS } from '@/lib/download-text'
 
 import type * as Upload from './attachment-upload'
 import { composerText } from './chat-texts'
@@ -771,6 +772,19 @@ describe('a dialog', () => {
       ) {
         clicked.push({ name: this.download, href: this.href })
       })
+      // The address is let go of after `REVOKE_AFTER_MS` (`downloadText`): that one timer is taken
+      // here, so that no real one outlives the test and fires into the stubs the next one removes.
+      const realSetTimeout = globalThis.setTimeout
+      const releases: (() => void)[] = []
+      const timers = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
+        handler: TimerHandler,
+        ms?: number,
+        ...args: unknown[]
+      ) => {
+        if (ms !== REVOKE_AFTER_MS) return realSetTimeout(handler, ms, ...args)
+        releases.push(handler as () => void)
+        return 0
+      }) as typeof setTimeout)
       calls.exported.mockResolvedValue({ fileName: 'Цена капучино.md', markdown: '# Цена\n' })
       showDialog()
       await run(/Скачать переписку/)
@@ -780,8 +794,13 @@ describe('a dialog', () => {
       expect(calls.exported).toHaveBeenCalledWith({ taskId: TASK_ID })
       expect(await blobs[0]!.text()).toBe('# Цена\n')
       expect(blobs[0]!.type).toBe('text/markdown;charset=utf-8')
+      // Not before the save begins, but after it.
+      expect(URL.revokeObjectURL).not.toHaveBeenCalled()
+      expect(releases).toHaveLength(1)
+      releases[0]!()
       expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:chat')
       await screen.findByText('Переписка сохранена')
+      timers.mockRestore()
       click.mockRestore()
     })
 

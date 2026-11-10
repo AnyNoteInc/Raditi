@@ -184,6 +184,8 @@ function fakeDb() {
       }),
     },
     llmModelPrice: { findFirst: vi.fn<() => Promise<unknown>>().mockResolvedValue(null) },
+    // No live tariff unless a test puts one there: the pack is priced for that (КР9).
+    subscription: { findFirst: vi.fn<() => Promise<unknown>>().mockResolvedValue(null) },
   }
   return { db, prisma: db as unknown as PrismaClient }
 }
@@ -223,7 +225,7 @@ const noTariff: UsageSummaryDto = {
   spendable: 0,
   spendableNow: 0,
   setAside: 0,
-  minToStart: 5,
+  minToStart: 1,
   // Without a tariff there is no day: the gift is the bound.
   today: null,
   newTask: { allowed: false, reason: 'gift_spent' },
@@ -276,7 +278,7 @@ const onTariff = (): UsageSummaryDto => ({
   spendable: 55,
   spendableNow: 11,
   setAside: 23,
-  minToStart: 5,
+  minToStart: 1,
   today: busyDay,
   newTask: TAKEN,
 })
@@ -362,7 +364,7 @@ describe('billing.usage', () => {
       spendable: GIFT,
       spendableNow: GIFT,
       setAside: 0,
-      minToStart: 5,
+      minToStart: 1,
       today: null,
       newTask: TAKEN,
     })
@@ -468,12 +470,14 @@ describe('billing.usage', () => {
 
     const usage = await createCaller(context(prisma)).billing.usage()
 
+    // Without a tariff that takes tasks the pack costs twice its price (КР9).
     expect(usage.packOnSale).toEqual({
       id: packId,
       slug: 'pack',
       name: 'Пакет из 100 кредитов',
-      price: '1990.00',
+      price: '3980.00',
       credits: 100,
+      withoutTariff: true,
     })
     // The purchased credits of the customer are another thing than the pack on sale.
     expect(usage.pack).toEqual({ left: 0, held: 0 })
@@ -707,8 +711,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
     return subscription
   }
 
-  /** The pack of the seeds, as every answer of `billing.usage` offers it. */
-  async function packOnSale() {
+  /**
+   * The pack of the seeds, as `billing.usage` offers it: at twice its price to a customer whose
+   * tariff does not take tasks (КР9).
+   */
+  async function packOnSale(withoutTariff = true) {
     const row = await db.plan.findFirst({
       where: { kind: 'pack', isActive: true },
       orderBy: [{ sortOrder: 'asc' }, { slug: 'asc' }],
@@ -718,8 +725,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
       id: row.id,
       slug: row.slug,
       name: row.name,
-      price: row.price.toFixed(2),
+      price: row.price.mul(withoutTariff ? 2 : 1).toFixed(2),
       credits: row.packCredits,
+      withoutTariff,
     }
   }
 
@@ -770,7 +778,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
     expect(await paying.caller.billing.usage()).toEqual({
       paymentsEnabled: true,
       autoRenewalAvailable: true,
-      packOnSale: await packOnSale(),
+      packOnSale: await packOnSale(false),
       subscription,
       tariff: {
         // Read from the ledger: the order of the payment carries the start of its period.
@@ -800,7 +808,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
       // Of the tariff no more than the day gives, if it has a day; the gift is outside the day.
       spendableNow: freshDay.left + GIFT,
       setAside: 0,
-      minToStart: 5,
+      minToStart: 1,
       today: freshDay,
       newTask: NO_RATE,
     })
@@ -846,23 +854,23 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
         carried: 0,
         granted: quota,
         charged: 22,
-        held: 45,
+        held: 1,
         expired: 0,
-        left: quota - 67,
+        left: quota - 23,
         heldEarlier: 0,
         carryLimit: quota,
-        carryNext: quota - 67,
+        carryNext: quota - 23,
         burnNext: 0,
       },
-      // The day took the 22 charged and the 45 still set aside, all of the tariff.
-      today: dayOf(tariff.creditsPerDay, 22, 45, quota - 67),
+      // The day took the 22 charged and the 1 still set aside, all of the tariff.
+      today: dayOf(tariff.creditsPerDay, 22, 1, quota - 23),
       sites: { count: 1, max: tariff.maxSites },
       bySite: [{ siteId: bakery.id, name: 'Пекарня «Добро»', credits: 22 }],
     })
     // The tasks took credits of the tariff; the gift of the registration is untouched.
     expect(usage.gift).toEqual({ left: GIFT, held: 0, granted: true })
-    expect(usage.totalLeft).toBe(quota - 67 + GIFT)
-    expect(usage).toMatchObject({ spendable: quota - 67 + GIFT, setAside: 45 })
+    expect(usage.totalLeft).toBe(quota - 23 + GIFT)
+    expect(usage).toMatchObject({ spendable: quota - 23 + GIFT, setAside: 1 })
     expect(
       usage.history.items.map(({ id, outcome, credits, task }) => [
         id,
@@ -871,7 +879,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
         task.title,
       ]),
     ).toEqual([
-      [taken[0], 'held', 45, 'Правка 3'],
+      [taken[0], 'held', 1, 'Правка 3'],
       [taken[1], 'charged', 17, 'Правка 2'],
       [taken[2], 'charged', 5, 'Правка 1'],
     ])

@@ -398,14 +398,15 @@ scenarios['renewal-declined'] = async (t) => {
       'Недостаточно средств. Пополните счёт или выберите другой способ оплаты.',
     ],
   )
+  const overduePack = (await customer.query('billing.plans')).pack
   t.equal(
-    'a pack is not sold while the tariff is overdue, and auto-renewal cannot be switched meanwhile',
+    'a pack is offered at twice its price while the tariff is overdue, and auto-renewal cannot be switched meanwhile',
     [
-      await customer.refusal('billing.startPackCheckout', {}),
+      { price: overduePack?.price, withoutTariff: overduePack?.withoutTariff },
       await customer.refusal('billing.resumeAutoRenew', {}),
     ],
     [
-      { status: 409, code: 'BILLING_PACK_NEEDS_SUBSCRIPTION' },
+      { price: '2980.00', withoutTariff: true },
       { status: 409, code: 'BILLING_SUBSCRIPTION_PAST_DUE' },
     ],
   )
@@ -422,9 +423,9 @@ scenarios['renewal-declined'] = async (t) => {
   await packIntact(t, workspaceId, pack, CREDITS.start, 'while overdue nothing expires: ')
   overview = await customer.query('billing.overview')
   t.equal(
-    'while overdue a task could spend the gift alone: 50 credits; the quota and the pack wait for the payment',
+    'while overdue a task could spend the gift and the pack: 150 credits; the quota waits for the payment',
     [overview.credits.spendable, overview.credits.tariff.balance, overview.credits.pack.balance],
-    [CREDITS.gift, CREDITS.start, CREDITS.pack],
+    [CREDITS.gift + CREDITS.pack, CREDITS.start, CREDITS.pack],
   )
 
   // «Оплатить сейчас»: the customer pays by hand, with another card.

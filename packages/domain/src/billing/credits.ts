@@ -1,16 +1,10 @@
 import type { Decimal } from 'decimal.js'
 import { z } from 'zod'
 import { badRequest } from '../errors.ts'
-import type { ModelClass } from '../llm/model-class.ts'
 import { decimalStringSchema, Money } from '../money.ts'
 import { normalizeSiteHost } from '../policies/site-address.ts'
 import type { TaskStatus } from '../tasks/task-status.ts'
-import {
-  attemptStepCredits,
-  minStartCredits,
-  minTaskChargeCredits,
-  signupGiftCredits,
-} from './credit-numbers.ts'
+import { minStartCredits, packWithoutTariffPriceFactor } from './credit-numbers.ts'
 import { rubPerCreditSchema } from './credit-rate.ts'
 import type { TaskRefusalReason } from './errors.ts'
 import {
@@ -42,23 +36,6 @@ export const minContinueCredits = 1
  * §20, decision 4 of 11.10.2026), so `tasks.attempt` itself may pass this number.
  */
 export const maxTaskAttempts = 3
-
-/**
- * The share of the monthly credits of a paid tariff that bounds its unpaid work in a period:
- * half — 75, 300 and 1 000 credits on «Старт», «Бизнес» and «Агентство» (the pricing of
- * 06.11.2026, docs/plan/63-new-pricing.md, Ц8; the whole month before). `unpaidWorkLimit`
- * applies it.
- */
-export const unpaidWorkShareOfMonth = 0.5
-
-/**
- * The bound on unpaid work of a workspace without a paid tariff, in credits: the gift of the
- * registration itself, 50 — half the bound before it, twice the gift, as the bound of a tariff
- * became half its month (Ц9 of 06.11.2026). Counted from the end of its last tariff or from its
- * creation. With a paid tariff the bound is `unpaidWorkLimit` of its plan (`unpaidWork`,
- * `newTaskVerdict`).
- */
-export const trialUnpaidWorkCredits = signupGiftCredits
 
 /**
  * A workspace keeps credits on three accounts. Tariff credits are granted anew every period and
@@ -237,8 +214,9 @@ export function tariffDayRoom(day: { limit: Credits | null; used: Credits }): Cr
 }
 
 /**
- * What a task may take from each account now, and the sum: gift credits always, tariff and pack
- * credits only while the tariff is paid (`subscriptionAllowsTasks`). On each account it is what
+ * What a task may take from each account now, and the sum: gift and pack credits always — one
+ * credit is one credit, whoever paid for it (owner's decision of 10.11.2026) —, tariff credits
+ * only while the tariff is paid (`subscriptionAllowsTasks`). On each account it is what
  * is free there, balance minus held; on the tariff no more than `tariffRoom`, what is left of the
  * day (`tariffDayRoom`) — null, the default, when the day sets no limit.
  */
@@ -252,7 +230,12 @@ export function spendableCredits(
   if (!room.success) throw badRequest('Invalid room of the tariff day')
   const free = availableCredits(accounts)
   if (!tariffTakesTasks) {
-    return { tariff: toCredits(0), gift: free.gift, pack: toCredits(0), total: free.gift }
+    return {
+      tariff: toCredits(0),
+      gift: free.gift,
+      pack: free.pack,
+      total: toCredits(free.gift + free.pack),
+    }
   }
   if (room.data === null || room.data >= free.tariff) return free
   const tariff = room.data
@@ -341,17 +324,6 @@ export function returnedTariffCreditsExpire(
 // A reserve is at least one credit and fits an account.
 const positiveCreditsSchema = columnCountSchema.positive()
 
-/**
- * How many credits an attempt of a task sets aside when it is queued: the step of its class
- * (`attemptStepCredits`), or everything that can be spent when that is less. `spendable` is the
- * total of `spendableCredits`; nothing to spend gives zero, and such a placement is refused
- * before it comes to a reserve (`newTaskVerdict`).
- */
-export function attemptReserveCredits(modelClass: ModelClass, spendable: Credits): Credits {
-  if (!Object.hasOwn(attemptStepCredits, modelClass)) throw badRequest('Invalid model class')
-  return toCredits(Math.min(attemptStepCredits[modelClass], toCredits(spendable)))
-}
-
 const reserveSchema = z.strictObject({
   accounts: creditAccountsSchema,
   amount: positiveCreditsSchema,
@@ -362,7 +334,7 @@ const reserveSchema = z.strictObject({
 export interface CreditReserveInput {
   /** The three accounts as they are under their locks. */
   accounts: CreditAccounts
-  /** The whole reserve of the attempt, `attemptReserveCredits`. */
+  /** The whole reserve of the attempt: `attemptReserveCredits`, or less when less is spendable. */
   amount: Credits
   /** Whether the tariff is paid: without it only gift credits are reserved. */
   tariffTakesTasks: boolean
@@ -443,59 +415,33 @@ const unroundedCreditsSchema = z.custom<Decimal>(
   (value) => Money.isDecimal(value) && value.isFinite() && (value.isZero() || value.isPositive()),
 )
 
-/** What a done task is charged, and how the two bounds of the charge came into it. */
+/** What a pass or a done task is charged. */
 export interface TaskCharge {
-  /** Whole credits. */
+  /** Whole credits: the work rounded up. */
   credits: Credits
-  /** The work came to less than the minimum of a done task, and the minimum is what counts. */
-  minimumApplied: boolean
-  /** The charge was cut to the reserve; what the work cost above it is the platform's. */
-  capped: boolean
 }
 
 const chargedWorkSchema = z.strictObject({
   used: unroundedCreditsSchema,
-  reserved: positiveCreditsSchema,
-  minimum: z.boolean().optional(),
 })
 
-/** The work of a task's chain of attempts and what its reserves hold. */
+/** The work of a task's chain of attempts. */
 export interface ChargedWork {
   /** The billable work of the attempts that have an active reserve, `creditsFromCost`. */
   used: Decimal
-  /** Σ amount of the task's active reserve rows. */
-  reserved: Credits
-  /**
-   * The minimum of a task applies (default): the first charge of a task. Its later charges — a
-   * pass of an open dialog is charged when it completes (owner's answer of 26.10.2026, «любой
-   * успешный запрос от LLM должен тарифицироваться») — are their work rounded, and any work at
-   * all costs at least one credit: a request that was answered is never free.
-   */
-  minimum?: boolean
 }
 
 /**
- * What the work of a chain of attempts costs: min(reserved, max(minTaskChargeCredits,
- * round(used))) for the first charge of a task, min(reserved, max(1, round(used))) for a later
- * one with any work (0 without work). The work is rounded once per charge, HALF_UP, to a whole
- * credit; then the minimum, then the cap of the reserve — a chain never costs more than was set
- * aside for it, and an overrun of calls already admitted is the platform's.
+ * What the work of a chain of attempts costs: its work rounded up to a whole credit, once per
+ * charge — no minimum and no cap of the reserve (owner's decision of 10.11.2026, docs/spec.md
+ * §20, «Только кредиты», КР5–КР8). A chain without work costs nothing. What the accounts cannot
+ * pay becomes the workspace's debt (`distributeCharge`).
  */
 export function taskCharge(work: ChargedWork): TaskCharge {
   const result = chargedWorkSchema.safeParse(work)
   if (!result.success) throw badRequest('Invalid work of a task')
-  const { used, reserved, minimum = true } = result.data
-  const rounded = new Money(used).toDecimalPlaces(0, Money.ROUND_HALF_UP)
-  const due = minimum
-    ? Money.max(minTaskChargeCredits, rounded)
-    : new Money(used).gt(0)
-      ? Money.max(1, rounded)
-      : rounded
-  return {
-    credits: toCredits(Money.min(reserved, due).toNumber()),
-    minimumApplied: minimum && rounded.lt(minTaskChargeCredits),
-    capped: due.gt(reserved),
-  }
+  const rounded = new Money(result.data.used).toDecimalPlaces(0, Money.ROUND_UP)
+  return { credits: toCredits(rounded.toNumber()) }
 }
 
 /** How a task ends: its terminal statuses. */
@@ -534,18 +480,16 @@ export type TaskEnding =
 /**
  * What an ending of a task costs the customer. Only a done task is charged, by `taskCharge`; a
  * task that failed, was rolled back or was cancelled costs nothing, whatever work it took and
- * whoever stopped it: every reserve returns, and neither the minimum nor the cap applies.
+ * whoever stopped it: every reserve returns.
  */
 export function chargeForOutcome(ending: TaskEnding): TaskCharge {
   const outcome: unknown = (ending as TaskEnding | null)?.outcome
   if (typeof outcome !== 'string' || !Object.hasOwn(chargedOutcomes, outcome)) {
     throw badRequest('Invalid ending of a task')
   }
-  if (!chargedOutcomes[outcome as TaskOutcome]) {
-    return { credits: toCredits(0), minimumApplied: false, capped: false }
-  }
-  const { used, reserved } = ending as ChargedWork
-  return taskCharge({ used, reserved })
+  if (!chargedOutcomes[outcome as TaskOutcome]) return { credits: toCredits(0) }
+  const { used } = ending as ChargedWork
+  return taskCharge({ used })
 }
 
 const instantSchema = z.date().refine((value) => isInstant(value))
@@ -643,6 +587,11 @@ export interface ChargeDistribution {
    * what `endedRows` says.
    */
   rows: RowCharge[]
+  /**
+   * What the rows and the free credits could not pay: the workspace owes it, and the next grant
+   * pays it first (owner's decision of 10.11.2026, КР7).
+   */
+  debt: Credits
 }
 
 /**
@@ -661,7 +610,8 @@ export interface ChargeDistribution {
  *    credits another task still holds are never taken. The task's own rows always pay, whatever
  *    the day: the work was started on them.
  *
- * The charge never exceeds the rows, so it is always covered. On each account
+ * What is left of the charge after that is the workspace's debt (`debt`): a pass is charged
+ * its work, not its reserve, and may cost more than the accounts have. On each account
  * `paid <= reserved + free`, which keeps `held <= balance` when both leave the account in one
  * statement. A charge of zero settles a task that ends without one: ended rows expire, the
  * other rows return.
@@ -688,9 +638,6 @@ export function distributeCharge(input: ChargeDistributionInput): ChargeDistribu
   if (creditAccountKinds.some((kind) => held[kind] > accounts[kind].held)) {
     throw badRequest('The reserve rows exceed what their account holds')
   }
-  if (charge > held.tariff + held.gift + held.pack) {
-    throw badRequest('The charge exceeds the reserve of the task')
-  }
 
   let rest = charge
   // Array.prototype.sort is stable: rows of one stamp pay in the order they were given.
@@ -709,6 +656,8 @@ export function distributeCharge(input: ChargeDistributionInput): ChargeDistribu
     paidNow[kind] = Math.min(rest, reserved[kind] + free[kind])
     rest -= paidNow[kind]
   }
+  // What no row and no free credit could pay is owed: the next grant pays it first.
+  const debt = rest
 
   // What each row paid: the ended rows by `endedRows`; on an account, what it paid from the
   // task's rows — up to their sum — is spread over them oldest first, each up to its amount.
@@ -742,6 +691,7 @@ export function distributeCharge(input: ChargeDistributionInput): ChargeDistribu
     },
     expired: toCredits(endedRows.reduce((sum, row) => sum + row.expired, 0)),
     rows: rows.map((row) => ({ id: row.id, charged: toCredits(rowCharged.get(row.id) ?? 0) })),
+    debt: toCredits(debt),
   }
 }
 
@@ -777,49 +727,6 @@ export function customerBudgetLeftRub(input: CustomerBudgetInput): string {
     .toDecimalPlaces(10, Money.ROUND_DOWN)
   if (left.gte('100000000')) throw badRequest('The budget of a task exceeds its supported range')
   return left.toFixed(10)
-}
-
-const unpaidWorkSchema = z.strictObject({
-  work: unroundedCreditsSchema,
-  charged: wholeCountSchema,
-})
-
-export interface UnpaidWorkInput {
-  /**
-   * Everything the billable tasks of the workspace spent of the pool since the bound is counted
-   * from, in credits (`creditsFromCost`) — billable calls or not: a lost call spent the pool
-   * too. Work in progress is in it until it is charged.
-   */
-  work: Decimal
-  /** The credits charged to the three accounts of the workspace since the same moment. */
-  charged: Credits
-}
-
-/**
- * The work a workspace got without a charge, in credits, not rounded: max(0, work − charged).
- * Failed, cancelled and rolled-back tasks cost the customer nothing, so this is what bounds
- * them: new tasks and retries stop when it reaches `unpaidWorkLimit` of the paid tariff — half
- * its monthly credits, counted from the start of its current period — or
- * `trialUnpaidWorkCredits` without a paid tariff, counted from the end of the last tariff or
- * from the creation of the workspace (`newTaskVerdict`).
- */
-export function unpaidWork(input: UnpaidWorkInput): Decimal {
-  const result = unpaidWorkSchema.safeParse(input)
-  if (!result.success) throw badRequest('Invalid unpaid work')
-  const { work, charged } = result.data
-  return Money.max(0, new Money(work).minus(charged))
-}
-
-/**
- * The bound on unpaid work of a period of a paid tariff, in whole credits:
- * `unpaidWorkShareOfMonth` of the monthly credits of its plan, rounded down, and never below 1 —
- * 150 → 75, 151 → 75, 1 → 1. At 0 the check `неоплачено ≥ граница` would refuse every new task
- * of a plan of one credit before it did any work; 1 lets the first one in.
- */
-export function unpaidWorkLimit(creditsPerMonth: number): Credits {
-  const result = positiveCreditsSchema.safeParse(creditsPerMonth)
-  if (!result.success) throw badRequest('Invalid monthly credits of a plan')
-  return toCredits(Money.max(1, new Money(result.data).times(unpaidWorkShareOfMonth).floor()))
 }
 
 /**
@@ -902,9 +809,8 @@ const newTaskSchema = z.strictObject({
     })
     .nullable(),
   tariffCreditsToday: tariffCreditsTodaySchema,
-  unpaidWork: unroundedCreditsSchema,
   rateUsable: z.boolean(),
-  giftSiteClaimedElsewhere: z.boolean().default(false),
+  debt: accountCreditsSchema.default(() => toCredits(0)),
 })
 
 /** What the tariff of a workspace gave the Moscow day so far, in whole credits. */
@@ -931,10 +837,7 @@ export interface NewTaskInput {
   /** The live subscription of the workspace with the terms of its plan; null when none is live. */
   subscription: {
     status: SubscriptionStatus
-    /**
-     * `plans.credits_per_month`: half of it bounds the unpaid work of a period
-     * (`unpaidWorkLimit`).
-     */
+    /** `plans.credits_per_month`: the monthly quota of the plan. */
     creditsPerMonth: number
     /** `plans.credits_per_day`: the tariff credits a Moscow day may take; null — no limit. */
     creditsPerDay: number | null
@@ -945,16 +848,13 @@ export interface NewTaskInput {
    * new task and a continuation by it — a retry is outside the day (`placementTariffRoom`).
    */
   tariffCreditsToday: TariffCreditsToday
-  /** `unpaidWork` of the workspace. */
-  unpaidWork: Decimal
   /** Whether a usable credit rate is in force (`creditRateVerdict`). */
   rateUsable: boolean
   /**
-   * The site of the task has spent gift credits in another workspace (`siteHostKey`). Known
-   * only when a reserve is placed: a page of the workspace does not know the site and leaves
-   * it out.
+   * What the workspace owes (`billing_accounts.debt` of its pack account): a pass charged more
+   * than the accounts had. It comes off what can be spent; none when left out.
    */
-  giftSiteClaimedElsewhere?: boolean
+  debt?: Credits
 }
 
 // The subscription of the workspace with the terms of its plan; other fields are not asked about.
@@ -1010,9 +910,11 @@ export type NewTaskVerdict = {
   /**
    * What a task may take now: `spendable` with the tariff part no larger than what is left of
    * the day — for a retry, which the day does not bound, `spendable` itself
-   * (`placementTariffRoom`). The reserve of an attempt is the step or this, whichever is less.
+   * (`placementTariffRoom`). Both come less the debt of the workspace, never below zero.
    */
   spendableNow: Credits
+  /** What the workspace owes: what passes were charged above the credits it had. */
+  debt: Credits
   /**
    * What other tasks in work hold on the accounts a task may spend: the reserve of the task
    * that asks (`heldByTask`) is not in it.
@@ -1035,23 +937,16 @@ export type NewTaskVerdict = {
  *    `minContinueCredits`. Below that:
  *    `held` when the accounts hold that much and other tasks in work have it set aside; with a
  *    paid tariff `empty` or, with a few credits left, `below_start`; without one `past_due` for
- *    an overdue tariff, `ended` when credits of a pack wait for a tariff, otherwise `gift_spent`
- *    or `gift_below_start`;
+ *    an overdue tariff, otherwise `gift_spent` or `gift_below_start`;
  * 3. the day, for every placement but a retry: the tariff credits free within what is left of
  *    the day, with the gift and pack credits, cannot cover what the placement needs although the
  *    accounts can — `daily_limit`. Only a paid tariff whose plan has a daily limit gets here; a
- *    pack bought today lifts it. A retry is never refused by the day (`placementTariffRoom`);
- * 4. unpaid work, for a new task, a retry and the next words: against half the monthly credits
- *    of the plan (`unpaidWorkLimit`) — `unpaid_limit` — or `trialUnpaidWorkCredits` —
- *    `trial_unpaid_limit`;
- * 5. without a paid tariff, the gift of the site: `gift_site_used` when another workspace has
- *    spent gift credits on it.
+ *    pack bought today lifts it. A retry is never refused by the day (`placementTariffRoom`).
  *
- * A continuation is never refused by unpaid work: the work is in progress and will be charged
- * if it is done. It is refused by the day like a new task — it would take tariff credits of
- * the day otherwise — and waits for the next day or a pack. «Попробовать ещё» is the other way
- * round: the daily limit does not apply to it (the owner, 19.10.2026), unpaid work does. What
- * bounds retries in a row is the credits and unpaid work.
+ * Nothing else is asked (owner's decision of 10.11.2026: «зависимость только от кредитов»): no
+ * bound on unpaid work and no rule of one gift per site. A continuation is refused by the day
+ * like a new task — it would take tariff credits of the day otherwise — and waits for the next
+ * day or a pack. «Попробовать ещё» is outside the day (the owner, 19.10.2026).
  *
  * The reserve of the task that asks is not «tasks in work» to wait for: it stays held whatever
  * the answer is. So a continuation — the one placement of a task that has a reserve — says what
@@ -1076,11 +971,16 @@ export function newTaskVerdict(input: NewTaskInput): NewTaskVerdict {
   const free = spendableCredits(accounts, paid)
   const today = paid ? tariffDay(subscription.creditsPerDay, tariffCreditsToday, free.tariff) : null
   const heldByOthers = (kind: CreditAccountKind): number => accounts[kind].held - own[kind]
+  const { debt } = result.data
+  const net = (total: number): Credits => toCredits(Math.max(0, total - debt))
   const numbers = {
-    spendable: free.total,
-    spendableNow: spendableCredits(accounts, paid, placementTariffRoom(placement, today)).total,
+    spendable: net(free.total),
+    spendableNow: net(
+      spendableCredits(accounts, paid, placementTariffRoom(placement, today)).total,
+    ),
+    debt: toCredits(debt),
     held: toCredits(
-      heldByOthers('gift') + (paid ? heldByOthers('tariff') + heldByOthers('pack') : 0),
+      heldByOthers('gift') + heldByOthers('pack') + (paid ? heldByOthers('tariff') : 0),
     ),
     needed: toCredits(goesOn(placement) ? minContinueCredits : minStartCredits),
     today,
@@ -1094,32 +994,22 @@ export function newTaskVerdict(input: NewTaskInput): NewTaskVerdict {
   if (!rateUsable) return refused('rate_missing')
 
   if (numbers.spendable < numbers.needed) {
-    if (numbers.spendable + numbers.held >= numbers.needed) return refused('held')
+    // What other tasks hold comes back when they end; a debt does not.
+    if (free.total + numbers.held - debt >= numbers.needed) return refused('held')
     const nothing = numbers.spendable === 0
     if (paid) return refused(nothing ? 'empty' : 'below_start')
     if (subscription?.status === 'past_due') return refused('past_due')
-    if (accounts.pack.balance > accounts.pack.held) return refused('ended')
     return refused(nothing ? 'gift_spent' : 'gift_below_start')
   }
 
   if (numbers.spendableNow < numbers.needed) return refused('daily_limit')
 
-  if (!goesOn(placement)) {
-    const unpaidLimit = paid
-      ? unpaidWorkLimit(subscription.creditsPerMonth)
-      : trialUnpaidWorkCredits
-    if (new Money(result.data.unpaidWork).gte(unpaidLimit)) {
-      return refused(paid ? 'unpaid_limit' : 'trial_unpaid_limit')
-    }
-  }
-
-  if (!paid && result.data.giftSiteClaimedElsewhere) return refused('gift_site_used')
   return { ...numbers, allowed: true, reason: null }
 }
 
 /**
  * A placement that goes on with work already under way — «Продолжить» with its chain, or after
- * a charged pass (`resume`): it needs `minContinueCredits` and is not asked about unpaid work.
+ * a charged pass (`resume`): it needs `minContinueCredits`.
  */
 const goesOn = (placement: TaskPlacement): boolean =>
   placement === 'continuation' || placement === 'resume'
@@ -1179,4 +1069,22 @@ function parseOrigin(text: string): URL | null {
     url.search === '' &&
     url.hash === ''
   return isOrigin ? url : null
+}
+
+const packPriceSchema = z.strictObject({
+  price: decimalStringSchema(10, 2),
+  tariffTakesTasks: z.boolean(),
+})
+
+/**
+ * What the customer pays for the pack on sale, RUB with two decimals: its price on top of a
+ * tariff that takes tasks (`subscriptionAllowsTasks`), `packWithoutTariffPriceFactor` times it
+ * without one (КР9). The credits of the pack are the same either way.
+ */
+export function packPriceFor(input: { price: string; tariffTakesTasks: boolean }): string {
+  const result = packPriceSchema.safeParse(input)
+  if (!result.success) throw badRequest('Invalid price of a pack')
+  const { price, tariffTakesTasks } = result.data
+  const factor = tariffTakesTasks ? 1 : packWithoutTariffPriceFactor
+  return new Money(price).mul(factor).toFixed(2, Money.ROUND_HALF_UP)
 }

@@ -139,39 +139,40 @@ export interface CeilingFacts {
   reserved: number
   /** The billable work of the chain in credits, not rounded. */
   used: InstanceType<typeof Money> | string | number
-  /** What the reserves still hold for the client, RUB: zero — the client's credits ran out. */
+  /**
+   * What the client can still pay for, RUB (`AttemptCreditBudget.customerLeftRub`): the reserves
+   * and every credit the workspace could spend, less its debt and the work. Zero — the client's
+   * credits ran out.
+   */
   customerLeftRub: string
   /**
-   * What the workspace could set aside for one more attempt now: the tariff part no larger than
-   * what is left of the Moscow day (`AttemptCreditBudget.spendableNow`). A day that is taken
-   * reads as credits that ran out — a pack carries the task on today.
+   * What the workspace could spend now, less its debt: the tariff part no larger than what is
+   * left of the Moscow day (`AttemptCreditBudget.spendableNow`). A day that is taken reads as
+   * credits that ran out — a pack carries the task on today.
    */
   spendableNow: number
 }
 
 /**
- * The platform's question «Продолжить?» (Р8; `feed.question` kind `ceiling`): the attempts of the
- * chain are used up, or the client's credits ran out and none are left to set aside, or the step of the
- * attempt is spent. Its text and buttons come from the catalogue when it is shown.
+ * The platform's question «Продолжить?» (Р8; `feed.question` kind `ceiling`). There is no step of
+ * an attempt since 10.11.2026 (docs/spec.md §20, «Только кредиты», КР5–КР8): a pass goes on while
+ * the client has credits. So the question comes when the attempts of the chain are used up, when
+ * the client's credits ran out (`credits`), or when the pass reached the technical guard of a turn
+ * key (`step`). Its numbers: what the chain spent — rounded up, as it is charged —, what it could
+ * spend in all (that and what the client has left) and what the client has left. Its text and
+ * buttons come from the catalogue when it is shown.
  */
 export function ceilingQuestionOf(
   facts: CeilingFacts,
   turn: number,
 ): Extract<FeedQuestionPayload, { kind: 'ceiling' }> {
-  const spent = new Money(facts.used).toDecimalPlaces(0, Money.ROUND_HALF_UP).toNumber()
+  const spent = new Money(facts.used).toDecimalPlaces(0, Money.ROUND_UP).toNumber()
   const reason: FeedCeilingReason =
     facts.chainAttempts >= maxTaskAttempts
       ? 'attempts'
-      : new Money(facts.customerLeftRub).isZero() && facts.spendableNow < 1
+      : new Money(facts.customerLeftRub).isZero()
         ? 'credits'
         : 'step'
-  return {
-    v: 1,
-    kind: 'ceiling',
-    turn,
-    reason,
-    spent,
-    held: facts.reserved,
-    left: Math.max(0, facts.reserved - spent),
-  }
+  const left = Math.max(0, facts.spendableNow)
+  return { v: 1, kind: 'ceiling', turn, reason, spent, held: spent + left, left }
 }

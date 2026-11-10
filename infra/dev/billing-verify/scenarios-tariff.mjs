@@ -503,8 +503,8 @@ scenarios['past-due-expires'] = async (t) => {
     ],
   )
   // The rule of a tariff that ends unpaid, on the three accounts: what is available of the
-  // tariff expires, and nothing is carried — the tariff ended; the gift stays and can be spent;
-  // the pack stays and waits for a tariff.
+  // tariff expires, and nothing is carried — the tariff ended; the gift and the pack stay and
+  // can be spent (owner's decision of 10.11.2026).
   t.equal(
     'a tariff unpaid for seven days: the rest of its quota expired, the gift and the pack are the one grant each',
     await journalsOf(t, workspaceId),
@@ -569,9 +569,9 @@ scenarios['past-due-expires'] = async (t) => {
     ],
   )
   t.equal(
-    'of those 150 a task could spend the 50 of the gift: the pack waits for a tariff',
+    'a task could spend all 150 of those: the gift and the pack',
     [usage.spendable, overview.credits.spendable],
-    [CREDITS.gift, CREDITS.gift],
+    [CREDITS.gift + CREDITS.pack, CREDITS.gift + CREDITS.pack],
   )
   t.equal(
     'an expired tariff cannot be paid for by hand any more; the declined charge was the only one',

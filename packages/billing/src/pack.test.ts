@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import { createPrismaClient, findPersonalWorkspace, type Prisma, type PrismaClient } from '@repo/db'
-import { Money, type SubscriptionStatus } from '@repo/domain'
+import { Money, signupGiftCredits, type SubscriptionStatus } from '@repo/domain'
 import { YookassaApiError, YookassaError } from '@repo/yookassa'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { ZodError } from 'zod'
@@ -221,18 +221,25 @@ describe.skipIf(!databaseUrl)('PostgreSQL pack', () => {
       })
     })
 
-    it('is refused for a user who has no workspace, and makes none', async () => {
+    // Owner's decision of 10.11.2026 (КР9): a pack is sold without a tariff too, at twice the
+    // price. A user without a workspace gets one with the gift of the registration.
+    it('sells a pack at twice the price to a user who has no workspace, and makes it with the gift', async () => {
       const { shop, deps } = billingTestDeps(db)
-      await packOnSale()
+      const pack = await packOnSale()
       const { userId } = await fixtures.user()
 
-      await expect(startPackCheckout(deps, { userId })).rejects.toMatchObject({
-        code: 'BILLING_PACK_NEEDS_SUBSCRIPTION',
-        httpStatus: 409,
-      })
+      const { orderId } = await startPackCheckout(deps, { userId })
 
-      expect(await findPersonalWorkspace(db, { userId, appEnv: 'test' })).toBeNull()
-      expect(shop.created).toEqual([])
+      const workspace = await findPersonalWorkspace(db, { userId, appEnv: 'test' })
+      expect(workspace).not.toBeNull()
+      const order = await db.order.findUniqueOrThrow({ where: { id: orderId } })
+      expect(order).toMatchObject({ workspaceId: workspace?.id, kind: 'pack', planId: pack.id })
+      expect(order.amount.toFixed(2)).toBe(pack.price.mul(2).toFixed(2))
+      expect(shop.only().amount).toEqual({ value: pack.price.mul(2).toFixed(2), currency: 'RUB' })
+      const gift = await db.billingAccount.findFirstOrThrow({
+        where: { workspaceId: workspace!.id, unit: 'credit_gift' },
+      })
+      expect(gift.balance.toNumber()).toBe(signupGiftCredits)
     })
 
     it.each([
@@ -241,16 +248,15 @@ describe.skipIf(!databaseUrl)('PostgreSQL pack', () => {
       ['is on a trial, which takes no tasks', 'trial'],
       ['had its tariff end with the period', 'cancelled'],
       ['had its tariff end unpaid', 'expired'],
-    ] as const)('is refused for a workspace that %s', async (_case, status) => {
-      const { shop, deps, userId, workspaceId } = await setup(status)
+    ] as const)('sells a pack at twice the price to a workspace that %s', async (_case, status) => {
+      const { shop, deps, userId, workspaceId, pack } = await setup(status)
 
-      await expect(startPackCheckout(deps, { userId })).rejects.toMatchObject({
-        code: 'BILLING_PACK_NEEDS_SUBSCRIPTION',
-        httpStatus: 409,
-      })
+      const { orderId } = await startPackCheckout(deps, { userId })
 
-      expect(await db.order.count({ where: { workspaceId, kind: 'pack' } })).toBe(0)
-      expect(shop.created).toEqual([])
+      const order = await db.order.findUniqueOrThrow({ where: { id: orderId } })
+      expect(order).toMatchObject({ workspaceId, kind: 'pack', planId: pack.id })
+      expect(order.amount.toFixed(2)).toBe(pack.price.mul(2).toFixed(2))
+      expect(shop.only().amount).toEqual({ value: pack.price.mul(2).toFixed(2), currency: 'RUB' })
     })
 
     it('gives every call an order and a payment of its own, and leaves the earlier ones alone', async () => {
@@ -600,7 +606,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL pack', () => {
         await db.subscription.update({ where: { id: subscription?.id }, data: { status } })
         shop.succeed(shop.only().id)
 
-        // The customer paid: the credits are theirs, and wait for the next tariff.
+        // The customer paid: the credits are theirs and are spent without a tariff too.
         expect(await settleOrder(deps, { orderId })).toEqual({
           state: 'paid',
           orderId,
@@ -611,10 +617,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL pack', () => {
         expect(state.balances.pack.available).toBe(pack.credits)
         expect(state.refundEntries).toEqual([])
         expect(state.letters).toHaveLength(1)
-        // A new pack is not sold until the tariff is paid again.
-        await expect(startPackCheckout(deps, { userId })).rejects.toMatchObject({
-          code: 'BILLING_PACK_NEEDS_SUBSCRIPTION',
-        })
+        // A new pack is sold at twice the price while the tariff does not take tasks (КР9).
+        const next = await startPackCheckout(deps, { userId })
+        const order = await db.order.findUniqueOrThrow({ where: { id: next.orderId } })
+        expect(order.amount.toFixed(2)).toBe(pack.price.mul(2).toFixed(2))
       },
     )
 

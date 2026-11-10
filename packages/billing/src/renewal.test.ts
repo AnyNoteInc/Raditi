@@ -1111,7 +1111,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL renewal', () => {
       const state = await written(s)
       expect(state.subscription.status).toBe('past_due')
       // What can be spent, not the balance: 50 granted, 5 of them held by a task. With it the
-      // letter says «принимаются, только пока есть подарочные кредиты», as «Тарифы» does.
+      // letter says «принимаются, только пока есть подарочные кредиты или кредиты из пакета», as «Тарифы» does.
       expect(only(state.letters)).toMatchObject({
         type: 'billing.payment_failed',
         payload: { giftCreditsLeft: 45 },

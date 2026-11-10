@@ -40,6 +40,7 @@ function giftOnly(gift: number, facts: TaskFacts = {}): BillingUsage {
       name: 'Пакет из 100 кредитов',
       credits: 100,
       price: '1490.00',
+      withoutTariff: false,
     },
     subscription: null,
     tariff: null,

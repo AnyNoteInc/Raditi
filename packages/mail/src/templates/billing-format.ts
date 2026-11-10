@@ -106,7 +106,8 @@ export function giftIsEnoughFor(credits: number): string | null {
 }
 
 /**
- * The gift credits that are left can start a task: new tasks are taken without a paid tariff.
+ * The gift and pack credits that are left can start a task: new tasks are taken without a paid
+ * tariff.
  * Mirrors `giftTakesTasks` of the settings pages, so a letter about a tariff that is not paid
  * for or has ended says of new tasks what the page it leads to says.
  */
@@ -119,7 +120,9 @@ export function giftTakesTasks(giftCredits: number): boolean {
  * unless the gift credits that are left can start a task.
  */
 export function tasksWithoutTariff(giftCredits: number, refused: string): string {
-  return giftTakesTasks(giftCredits) ? 'принимаются, только пока есть подарочные кредиты' : refused
+  return giftTakesTasks(giftCredits)
+    ? 'принимаются, только пока есть подарочные кредиты или кредиты из пакета'
+    : refused
 }
 
 /** The «Тарифы» page of the app: every billing letter sends the reader there. */

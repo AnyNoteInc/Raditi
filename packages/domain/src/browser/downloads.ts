@@ -26,6 +26,12 @@ export const browserDownloadLimits = Object.freeze({
   partBytes: 24 * 1024,
   /** A listing waits this long for downloads still under way. */
   settleMs: 10_000,
+  /**
+   * A download is read at most this long, from its start until the file is whole; one that takes
+   * longer is cancelled and listed as `failed`, so that it does not hold one of the `inFlight`
+   * places for the rest of the session.
+   */
+  readMs: 120_000,
   nameChars: 200,
 })
 

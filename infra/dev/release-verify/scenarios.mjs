@@ -532,7 +532,7 @@ export async function runScenarios(stand) {
   const expectedA1 = expectedCharge(callsA1, sum(heldA))
   rt.check(
     -sum(chargedA1) === expectedA1.credits,
-    `the first pass is charged when it ends, by its token usage: ${-sum(chargedA1)} credits = ${expectedA1.costRub.toFixed(4)} ₽ ÷ 6 ₽, the minimum of 5 at least, from the ${sum(heldA)} it held`,
+    `the first pass is charged when it ends, by its token usage: ${-sum(chargedA1)} credits = ${expectedA1.costRub.toFixed(4)} ₽ ÷ 6 ₽, rounded up, from the ${sum(heldA)} it held`,
     { charged: -sum(chargedA1), expected: expectedA1 },
   )
   rt.check(

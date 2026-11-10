@@ -622,10 +622,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         createdById: owner.id,
         alias: created.alias,
       })
-      // The gift of the registration is all the workspace has: the reserve takes a step of it,
-      // 45 of its 50 credits.
+      // The gift of the registration is all the workspace has: the reserve takes one credit of
+      // it — what a pass spends is not bounded by the reserve (КР5–КР8).
       const holds = await activeHolds(taskId)
-      expect(holds.map((hold) => [hold.attempt, hold.amount.toFixed(0)])).toEqual([[1, '45']])
+      expect(holds.map((hold) => [hold.attempt, hold.amount.toFixed(0)])).toEqual([[1, '1']])
       expect(holds[0]!.expiresAt.getTime() - Date.now()).toBeGreaterThan(71 * 3600 * 1000)
       const feed = await feedOf(taskId)
       expect(feed).toEqual([
@@ -1363,9 +1363,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
     )
 
     it('is refused for credits as the next words are, and leaves nothing', async () => {
-      // Tariff credits only: the first chat took 5 of the 48 of the day, the second holds 45.
+      // Tariff credits only: the first chat took 5 of the 6 of the day, the second holds the last.
       const { owner, site, workspaceId } = await siteOwner({ gift: false })
-      await paidTariff(workspaceId, { creditsPerDay: 48 })
+      await paidTariff(workspaceId, { creditsPerDay: 6 })
       const caller = callerOf(owner)
       const { taskId } = await newDialog(caller, site.id)
       await answered(taskId)
@@ -1648,15 +1648,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         attempt: 2,
         modelClass: 'heavy',
       })
-      // The reserve of the failed attempt came back; the retry holds what a step of heavy takes
-      // of the gift: all 50 credits.
+      // The reserve of the failed attempt came back; the retry holds one credit of its own.
       expect(
         (await db.creditHold.findMany({ where: { taskId }, orderBy: { attempt: 'asc' } })).map(
           (hold) => [hold.attempt, hold.status, hold.amount.toFixed(2)],
         ),
       ).toEqual([
         [1, 'released', held[0]!.amount.toFixed(2)],
-        [2, 'active', '50.00'],
+        [2, 'active', '1.00'],
       ])
       expect((await feedOf(taskId)).at(-1)).toMatchObject({
         type: 'feed.request',
@@ -1758,10 +1757,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
     // The owner, 19.10.2026: the daily limit does not apply to «Попробовать ещё». What the retry
     // takes still counts on the day: «Продолжить» and a new dialog after it meet the day.
     it('repeats a pass the day has no credits left for, and holds what comes after to the day', async () => {
-      // Tariff credits only, 48 a day: the failed pass took 45 of yesterday, another dialog 45
-      // of today, so 3 are left of today — too few for anything but the retry.
+      // Tariff credits only, 1 a day: the failed pass holds 1 of yesterday, another dialog the 1
+      // of today, so nothing is left of today — nothing but the retry is taken.
       const { owner, site, workspaceId } = await siteOwner({ database: true, gift: false })
-      await paidTariff(workspaceId, { creditsPerDay: 48, startedDaysAgo: 3 })
+      await paidTariff(workspaceId, { creditsPerDay: 1, startedDaysAgo: 3 })
       const caller = callerOf(owner, { client: underRateAndHeavy(db) })
       const { taskId } = await newDialog(caller, site.id)
       await withCandidate(taskId)
@@ -1769,10 +1768,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       const yesterday = new Date(billingDay(new Date()).start.getTime() - 60_000)
       await db.creditHold.updateMany({ where: { taskId }, data: { placedAt: yesterday } })
       const { taskId: other } = await newDialog(caller, site.id, 'Добавьте баннер на главную')
-      expect((await activeHolds(other)).map((hold) => hold.amount.toFixed(0))).toEqual(['45'])
+      expect((await activeHolds(other)).map((hold) => hold.amount.toFixed(0))).toEqual(['1'])
       expect(await tariffCreditsOfDay(db, { workspaceId, now: new Date() })).toEqual({
         charged: 0,
-        held: 45,
+        held: 1,
       })
 
       const posted = await caller.task.retry({
@@ -1781,7 +1780,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         failureEventId: failureId,
       })
 
-      // The full step of heavy, all of it tariff credits the day did not have.
+      // The reserve of one credit, a tariff credit the day did not have.
       expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
         status: 'queued',
         attempt: 2,
@@ -1792,16 +1791,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
           (hold) => [hold.attempt, hold.unit, hold.status, hold.amount.toFixed(0)],
         ),
       ).toEqual([
-        [1, 'credit_tariff', 'released', '45'],
-        [2, 'credit_tariff', 'active', '120'],
+        [1, 'credit_tariff', 'released', '1'],
+        [2, 'credit_tariff', 'active', '1'],
       ])
       expect((await outboxOf(taskId)).map((row) => row.dedupeKey)).toContain(
         `turn.run:${taskId}:2:${posted.requestEventId}`,
       )
-      // It counts on the day: 165 of 48, nothing left of it.
+      // It counts on the day: 2 of 1, nothing left of it.
       expect(await tariffCreditsOfDay(db, { workspaceId, now: new Date() })).toEqual({
         charged: 0,
-        held: 165,
+        held: 2,
       })
 
       // «Продолжить» of the other dialog is held to the day, and nothing moves.

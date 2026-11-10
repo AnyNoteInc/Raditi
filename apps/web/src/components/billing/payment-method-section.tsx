@@ -276,7 +276,9 @@ export function PaymentMethodSection({ overview }: { overview: BillingOverview }
                   subscription,
                   renewalCharge,
                   oneTimeOnly,
-                  tasksOnGift: giftTakesTasks(overview.credits.gift.available),
+                  tasksOnGift: giftTakesTasks(
+                    overview.credits.gift.available + overview.credits.pack.available,
+                  ),
                   label: method.label,
                   open: true,
                 })

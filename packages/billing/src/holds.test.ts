@@ -38,8 +38,7 @@ const TASK = '0199a000-0000-7000-8000-0000000000d4'
 const MINUTE_MS = 60 * 1000
 const DAY_MS = 24 * 60 * MINUTE_MS
 const PERIOD_MS = 30 * DAY_MS
-/** The period of the fixtures' subscription. */
-const PERIOD_START = new Date('2026-09-18T09:00:00.000Z')
+/** The end of the period of the fixtures' subscription. */
 const PERIOD_END = new Date('2026-10-18T09:00:00.000Z')
 /** 15:00 in Moscow on 4 October 2026, inside that period. */
 const NOW = new Date('2026-10-04T12:00:00.000Z')
@@ -296,6 +295,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
   /** Places a reserve the way the queue will, under a credit rate nobody else sees. */
   const place = (workspaceId: string, taskId: string, options: PlacementOptions = {}) =>
     booked(workspaceId, () => fixtures.reserve(placement(workspaceId, taskId, options)))
+
+  /** A reserve by the step of before 10.11.2026 (`placeReserveByStep` of the fixtures). */
+  const placedBefore = (workspaceId: string, taskId: string, options: PlacementOptions = {}) =>
+    booked(workspaceId, () => fixtures.reserveByStep(placement(workspaceId, taskId, options)))
   const settle = async (taskId: string, credits: number, { now = LATER } = {}) =>
     booked(await workspaceOf(taskId), () =>
       db.$transaction((tx) => settleTaskCharge(tx, { taskId, credits, now }), patient),
@@ -431,6 +434,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     return { tariff: of('tariff'), gift: of('gift'), pack: of('pack') }
   }
 
+  /** What the workspace owes: `billing_accounts.debt` of its pack account. */
+  const debtOf = async (workspaceId: string) =>
+    (
+      await db.billingAccount.findUniqueOrThrow({
+        where: { workspaceId_unit: { workspaceId, unit: creditAccountUnits.pack } },
+      })
+    ).debt.toNumber()
+
   const kindOf = (unit: string) =>
     creditAccountKinds.find((kind) => creditAccountUnits[kind] === unit) ?? unit
   const accountId = async (workspaceId: string, kind: CreditAccountKind) =>
@@ -522,12 +533,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
   ) => ({ name: 'DomainError', code, httpStatus, ...(details === undefined ? {} : { details }) })
   const conflict = refusal('CONFLICT', 409)
   const notFound = refusal('NOT_FOUND', 404)
-  const badRequest = refusal('BAD_REQUEST', 400)
-  const notEnough = (reason: string, spendable: number, held = 0, needed = 5) =>
+  const notEnough = (reason: string, spendable: number, held = 0, needed = 1) =>
     refusal('BILLING_NOT_ENOUGH_CREDITS', 402, { reason, spendable, held, needed })
-  const creditsHeld = (spendable: number, held: number, needed = 5) =>
+  const creditsHeld = (spendable: number, held: number, needed = 1) =>
     refusal('BILLING_CREDITS_HELD', 409, { reason: 'held', spendable, held, needed })
-  const needsTariff = (reason: string, spendable: number, held = 0, needed = 5) =>
+  const needsTariff = (reason: string, spendable: number, held = 0, needed = 1) =>
     refusal('BILLING_TASK_NEEDS_SUBSCRIPTION', 402, { reason, spendable, held, needed })
   /**
    * A refusal by the day: what the accounts hold and what is set aside, what the task could take
@@ -537,7 +547,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     spendable: number,
     held: number,
     day: { limit: number; used: number },
-    { spendableNow = 0, needed = 5 }: { spendableNow?: number; needed?: number } = {},
+    { spendableNow = 0, needed = 1 }: { spendableNow?: number; needed?: number } = {},
   ) =>
     refusal('BILLING_DAILY_LIMIT_REACHED', 409, {
       reason: 'daily_limit',
@@ -547,24 +557,20 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       spendableNow,
       day,
     })
-  const unpaidLimit = (spendable: number, held = 0) =>
-    refusal('BILLING_UNPAID_WORK_LIMIT', 409, {
-      reason: 'unpaid_limit',
-      spendable,
-      held,
-      needed: 5,
-    })
-  const rateMissing = (spendable: number, held = 0, needed = 5) =>
+  const rateMissing = (spendable: number, held = 0, needed = 1) =>
     refusal('BILLING_CREDIT_RATE_MISSING', 503, { reason: 'rate_missing', spendable, held, needed })
 
+  // Owner's decision of 10.11.2026 (docs/spec.md §20, «Только кредиты», КР5–КР8): an attempt sets
+  // one credit aside — the mark that it is in work —, whatever the class of its model; what a pass
+  // spends is not bounded by it.
   describe('a reserve', () => {
-    it('sets the step of a new task aside on the tariff, and moves no balance', async () => {
+    it('sets one credit of a new task aside on the tariff, and moves no balance', async () => {
       const { workspaceId } = await funded()
       const taskId = await task(workspaceId)
 
       const placed = await place(workspaceId, taskId)
 
-      expect(placed).toMatchObject({ applied: true, reserved: 45 })
+      expect(placed).toMatchObject({ applied: true, reserved: 1 })
       expect(placed.holds).toHaveLength(1)
       expect(placed.holds[0]).toMatchObject({
         accountId: await accountId(workspaceId, 'tariff'),
@@ -577,107 +583,70 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
         expiresAt: new Date(NOW.getTime() + DAY_MS),
         settledAt: null,
       })
-      expect(placed.holds[0]?.amount.toFixed(2)).toBe('45.00')
+      expect(placed.holds[0]?.amount.toFixed(2)).toBe('1.00')
       expect(await db.creditHold.findMany({ where: { taskId } })).toEqual(placed.holds)
       expect(await accounts(workspaceId)).toEqual({
-        tariff: account(300, 45),
+        tariff: account(300, 1),
         gift: account(0),
         pack: account(0),
       })
       // A reserve writes no ledger row.
       expect(await ledger(workspaceId)).toEqual(rows('tariff grant 300 → 300'))
-      // Nor a claim of the site: the tariff is paid.
+      // Nor a claim of the site.
       expect(await db.giftSiteClaim.count({ where: { workspaceId } })).toBe(0)
     })
 
+    it.each(['light', 'standard', 'heavy'] as const)(
+      'sets aside the same one credit for the class %s: there is no step of a class',
+      async (modelClass) => {
+        const { workspaceId } = await funded()
+        const taskId = await task(workspaceId, { modelClass })
+
+        expect(await place(workspaceId, taskId)).toMatchObject({ applied: true, reserved: 1 })
+        expect(await reserve(taskId)).toEqual(['#1 tariff 1 active'])
+      },
+    )
+
     it.each([
-      ['light', 20],
-      ['standard', 45],
-      ['heavy', 120],
-    ] as const)('sets aside the step of the class %s: %i credits', async (modelClass, step) => {
-      const { workspaceId } = await funded()
-      const taskId = await task(workspaceId, { modelClass })
-
-      expect(await place(workspaceId, taskId)).toMatchObject({ applied: true, reserved: step })
-      expect(await reserve(taskId)).toEqual([`#1 tariff ${step} active`])
-    })
-
-    it('stands on two accounts when the tariff does not cover the step: the tariff, then the pack', async () => {
-      const { workspaceId } = await funded({ tariff: 5, pack: 100 })
+      ['the tariff', { tariff: 5, gift: 35, pack: 100 }, '#1 tariff 1 active'],
+      [
+        'the gift, when the tariff has nothing free',
+        { tariff: 0, gift: 10, pack: 100 },
+        '#1 gift 1 active',
+      ],
+      [
+        'the pack, when the tariff and the gift have nothing free',
+        { tariff: 0, gift: 0, pack: 100 },
+        '#1 pack 1 active',
+      ],
+    ] as const)('stands on the first account with a free credit: %s', async (_name, funds, row) => {
+      const { workspaceId } = await funded(funds)
       const taskId = await task(workspaceId)
 
-      const placed = await place(workspaceId, taskId)
-
-      expect(placed.reserved).toBe(45)
-      // One row per account, in the order credits are spent, with one moment of placing.
-      expect(placed.holds.map((hold) => [hold.unit, hold.amount.toFixed(0)])).toEqual([
-        ['credit_tariff', '5'],
-        ['credit_pack', '40'],
-      ])
-      expect(new Set(placed.holds.map((hold) => hold.placedAt.getTime()))).toEqual(
-        new Set([NOW.getTime()]),
-      )
-      expect(await reserve(taskId)).toEqual(['#1 tariff 5 active', '#1 pack 40 active'])
-      expect(await accounts(workspaceId)).toEqual({
-        tariff: account(5, 5),
-        gift: account(0),
-        pack: account(100, 40),
-      })
+      expect((await place(workspaceId, taskId)).reserved).toBe(1)
+      expect(await reserve(taskId)).toEqual([row])
     })
 
-    it('stands on three accounts: the tariff, then the gift, then the pack', async () => {
-      const { workspaceId } = await funded({ tariff: 5, gift: 35, pack: 100 })
+    it('sets aside the last credit a workspace has', async () => {
+      const { workspaceId } = await funded({ tariff: 0, gift: 0, pack: 1 })
       const taskId = await task(workspaceId)
 
-      expect((await place(workspaceId, taskId)).reserved).toBe(45)
-
-      expect(await reserve(taskId)).toEqual([
-        '#1 tariff 5 active',
-        '#1 gift 35 active',
-        '#1 pack 5 active',
-      ])
-      expect(await accounts(workspaceId)).toEqual({
-        tariff: account(5, 5),
-        gift: account(35, 35),
-        pack: account(100, 5),
-      })
-    })
-
-    it('skips an account that has nothing free', async () => {
-      const { workspaceId } = await funded({ tariff: 0, gift: 10, pack: 100 })
-      const taskId = await task(workspaceId)
-
-      await place(workspaceId, taskId)
-
-      expect(await reserve(taskId)).toEqual(['#1 gift 10 active', '#1 pack 35 active'])
-    })
-
-    it('sets aside everything that can be spent when that is less than the step', async () => {
-      const { workspaceId } = await funded({ tariff: 4, gift: 2, pack: 6 })
-      const taskId = await task(workspaceId)
-
-      expect(await place(workspaceId, taskId)).toMatchObject({ applied: true, reserved: 12 })
-
-      expect(await reserve(taskId)).toEqual([
-        '#1 tariff 4 active',
-        '#1 gift 2 active',
-        '#1 pack 6 active',
-      ])
+      expect(await place(workspaceId, taskId)).toMatchObject({ applied: true, reserved: 1 })
+      expect(await accounts(workspaceId)).toMatchObject({ pack: account(1, 1) })
     })
 
     it('never takes what another task holds', async () => {
-      const { workspaceId } = await funded({ tariff: 50 })
+      const { workspaceId } = await funded({ tariff: 2 })
       const [first, second, third] = await tasks(workspaceId, 3)
 
-      expect((await place(workspaceId, first!)).reserved).toBe(45)
-      // Five credits are free: a second task starts on them alone.
-      expect((await place(workspaceId, second!)).reserved).toBe(5)
-      expect(await refused(workspaceId, third!)).toMatchObject(creditsHeld(0, 50))
-      expect(await accounts(workspaceId)).toMatchObject({ tariff: account(50, 50) })
+      expect((await place(workspaceId, first!)).reserved).toBe(1)
+      expect((await place(workspaceId, second!)).reserved).toBe(1)
+      expect(await refused(workspaceId, third!)).toMatchObject(creditsHeld(0, 2))
+      expect(await accounts(workspaceId)).toMatchObject({ tariff: account(2, 2) })
     })
 
     it.each(['none', 'past_due', 'cancelled', 'expired', 'trial'] as const)(
-      'stands on gift credits alone while the tariff is not paid: %s',
+      'stands on gift and pack credits while the tariff is not paid: %s',
       async (state) => {
         const { workspaceId } = await funded({
           tariff: 300,
@@ -689,21 +658,27 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
 
         const placed = await place(workspaceId, taskId)
 
-        // The step is 45; the gift is all a task may take without a paid tariff.
-        expect(placed).toMatchObject({ applied: true, reserved: 35 })
-        expect(await reserve(taskId)).toEqual(['#1 gift 35 active'])
+        // The tariff credits wait for the payment; the gift goes first — one credit is one credit.
+        expect(placed).toMatchObject({ applied: true, reserved: 1 })
+        expect(await reserve(taskId)).toEqual(['#1 gift 1 active'])
         expect(placed.holds[0]).toMatchObject({ createdAt: NOW, placedAt: NOW })
         expect(await accounts(workspaceId)).toEqual({
           tariff: account(300),
-          gift: account(35, 35),
+          gift: account(35, 1),
           pack: account(100),
         })
-        // The site spends its gift in this workspace from now on.
-        expect(await db.giftSiteClaim.findMany({ where: { workspaceId } })).toMatchObject([
-          { hostKey: 'gift-only.example.ru', workspaceId },
-        ])
+        // No site claims its gift: nothing but credits bounds a task.
+        expect(await db.giftSiteClaim.findMany({ where: { workspaceId } })).toEqual([])
       },
     )
+
+    it('stands on the pack while the tariff is not paid and the gift is spent', async () => {
+      const { workspaceId } = await funded({ tariff: 300, pack: 100, subscription: null })
+      const taskId = await task(workspaceId)
+
+      expect(await place(workspaceId, taskId)).toMatchObject({ applied: true, reserved: 1 })
+      expect(await reserve(taskId)).toEqual(['#1 pack 1 active'])
+    })
 
     it('places one reserve for an attempt, however often it is asked', async () => {
       const { workspaceId } = await funded({ tariff: 5, pack: 100 })
@@ -713,10 +688,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       const again = await place(workspaceId, taskId, { now: LATER })
 
       expect(again).toEqual({ ...first, applied: false })
-      expect(await reserve(taskId)).toEqual(['#1 tariff 5 active', '#1 pack 40 active'])
+      expect(await reserve(taskId)).toEqual(['#1 tariff 1 active'])
       expect(await accounts(workspaceId)).toMatchObject({
-        tariff: account(5, 5),
-        pack: account(100, 40),
+        tariff: account(5, 1),
+        pack: account(100),
       })
     })
 
@@ -730,8 +705,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
 
       expect(results.filter((result) => result.applied)).toHaveLength(1)
       expect(new Set(results.map((result) => result.holds[0]?.id)).size).toBe(1)
-      expect(await reserve(taskId)).toEqual(['#1 tariff 45 active'])
-      expect(await accounts(workspaceId)).toMatchObject({ tariff: account(300, 45) })
+      expect(await reserve(taskId)).toEqual(['#1 tariff 1 active'])
+      expect(await accounts(workspaceId)).toMatchObject({ tariff: account(300, 1) })
       await expectBooksToBalance(workspaceId)
     })
 
@@ -744,9 +719,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
 
       const again = await place(t.workspaceId, taskId)
 
-      expect(again).toMatchObject({ applied: false, reserved: 45 })
-      expect(again.holds.map((hold) => hold.status)).toEqual(['released', 'released'])
-      expect(await reserve(taskId)).toEqual(['#1 tariff 40 released', '#1 pack 5 released'])
+      expect(again).toMatchObject({ applied: false, reserved: 1 })
+      expect(again.holds.map((hold) => hold.status)).toEqual(['released'])
+      expect(await reserve(taskId)).toEqual(['#1 tariff 1 released'])
     })
 
     it('leaves no trace of a reserve whose transaction is rolled back', async () => {
@@ -763,10 +738,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
         ),
       ).rejects.toThrow('the task could not be queued')
 
-      // Neither the reserve nor the claim of the site.
       expect(await written(workspaceId)).toEqual(before)
       // The attempt is free: the retry places its reserve.
-      expect(await place(workspaceId, taskId)).toMatchObject({ applied: true, reserved: 35 })
+      expect(await place(workspaceId, taskId)).toMatchObject({ applied: true, reserved: 1 })
     })
 
     it('stamps a reserve no earlier than the start of the period it is placed in', async () => {
@@ -789,41 +763,43 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       for (const hold of placed.holds)
         expect(hold).toMatchObject({ createdAt: start, placedAt: start })
       // The day of the moment the reserve was placed at.
-      expect(await today(workspaceId, NOW)).toBe('0 + 5')
+      expect(await today(workspaceId, NOW)).toBe('0 + 1')
       // Rows of this period: their credits come back.
       expect(await release(taskId)).toMatchObject({ applied: true, expiries: [] })
       expect(await accounts(workspaceId)).toMatchObject({ tariff: account(5), pack: account(100) })
     })
 
     it('stamps a tariff row placed after its period ended with that period, and the others with the moment', async () => {
-      const { workspaceId } = await funded({ tariff: 5, gift: 35, pack: 100 })
-      const taskId = await task(workspaceId)
       // The renewal is not settled yet: the tariff is still active, its credits are of the
       // period that ended.
       const late = minutesAfter(2, PERIOD_END)
-
-      const placed = await place(workspaceId, taskId, { now: late })
-
       const lastMoment = new Date(PERIOD_END.getTime() - 1)
+      const onTariff = await funded({ tariff: 5, gift: 35, pack: 100 })
+      const onGift = await funded({ tariff: 0, gift: 35, pack: 100 })
+
+      const tariffRow = await place(onTariff.workspaceId, await task(onTariff.workspaceId), {
+        now: late,
+      })
+      const giftRow = await place(onGift.workspaceId, await task(onGift.workspaceId), { now: late })
+
       expect(
-        placed.holds.map((hold) => [kindOf(hold.unit), hold.createdAt, hold.placedAt]),
-      ).toEqual([
-        ['tariff', lastMoment, late],
-        ['gift', late, late],
-        ['pack', late, late],
-      ])
+        tariffRow.holds.map((hold) => [kindOf(hold.unit), hold.createdAt, hold.placedAt]),
+      ).toEqual([['tariff', lastMoment, late]])
+      expect(
+        giftRow.holds.map((hold) => [kindOf(hold.unit), hold.createdAt, hold.placedAt]),
+      ).toEqual([['gift', late, late]])
     })
   })
 
   describe('a refusal', () => {
     it('needs a usable credit rate before anything else', async () => {
-      const { workspaceId } = await funded({ tariff: 3 })
+      const { workspaceId } = await funded({ tariff: 0 })
       const taskId = await task(workspaceId)
 
       // No rate at all — and no credits either: the rate is what is said.
-      expect(await refused(workspaceId, taskId, { rate: false })).toMatchObject(rateMissing(3))
+      expect(await refused(workspaceId, taskId, { rate: false })).toMatchObject(rateMissing(0))
       // With a rate the same task is told about its credits.
-      expect(await refused(workspaceId, taskId)).toMatchObject(notEnough('below_start', 3))
+      expect(await refused(workspaceId, taskId)).toMatchObject(notEnough('empty', 0))
     })
 
     it('takes no task under a rate that is older than a price of an enabled model, or not in force yet', async () => {
@@ -859,7 +835,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
           await writeCreditRate(tx, { effectiveFrom: rateFrom })
           await writeModelPrice(tx, pool, { effectiveFrom: rateFrom })
         }),
-      ).toBe(45)
+      ).toBe(1)
       // Nothing of the three was committed.
       expect(await reserve(taskId)).toEqual([])
       expect(await accounts(workspaceId)).toMatchObject({ tariff: account(300) })
@@ -883,97 +859,91 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
         return placeCreditHold(tx, placement(workspaceId, taskId))
       })
 
-      expect(placed).toMatchObject({ applied: true, reserved: 45 })
+      expect(placed).toMatchObject({ applied: true, reserved: 1 })
       expect(placed.holds[0]?.placedAt).toEqual(start)
     })
 
-    it('tells a paid tariff that its credits ran out, or that too few are left', async () => {
+    it('tells a paid tariff that its credits ran out, and takes a task on one credit', async () => {
       const empty = await funded({ tariff: 0 })
       expect(await refused(empty.workspaceId, await task(empty.workspaceId))).toMatchObject(
         notEnough('empty', 0),
       )
-
-      const few = await funded({ tariff: 1, gift: 1, pack: 2 })
-      expect(await refused(few.workspaceId, await task(few.workspaceId))).toMatchObject(
-        notEnough('below_start', 4),
-      )
-      // Five that can be spent start a task.
-      await grant(few.workspaceId, 'pack', 1)
-      expect(await place(few.workspaceId, await task(few.workspaceId))).toMatchObject({
+      // One credit that can be spent starts a task (КР5): there is no «too few».
+      await grant(empty.workspaceId, 'pack', 1)
+      expect(await place(empty.workspaceId, await task(empty.workspaceId))).toMatchObject({
         applied: true,
-        reserved: 5,
+        reserved: 1,
       })
     })
 
     it('tells that the credits are held when other tasks in work have them set aside', async () => {
-      const { workspaceId } = await funded({ tariff: 45, pack: 3 })
+      const { workspaceId } = await funded({ tariff: 1 })
       const [working, waiting] = await tasks(workspaceId, 2)
       await place(workspaceId, working!)
 
-      // Three are free, 45 are held: with what comes back there would be enough.
-      expect(await refused(workspaceId, waiting!)).toMatchObject(creditsHeld(3, 45))
+      // Nothing is free, one credit is held: with what comes back there would be enough.
+      expect(await refused(workspaceId, waiting!)).toMatchObject(creditsHeld(0, 1))
 
       // Without a paid tariff the gift is set aside for the task in work.
-      const trial = await funded({ tariff: 0, gift: 35, subscription: null })
+      const trial = await funded({ tariff: 0, gift: 1, subscription: null })
       const [first, second] = await tasks(trial.workspaceId, 2)
       await place(trial.workspaceId, first!)
-      expect(await refused(trial.workspaceId, second!)).toMatchObject(creditsHeld(0, 35))
+      expect(await refused(trial.workspaceId, second!)).toMatchObject(creditsHeld(0, 1))
     })
 
-    it('tells a workspace without a tariff that the gift is spent, or that too little of it is left', async () => {
+    it('tells a workspace without a tariff that the gift is spent, and takes a task on one credit', async () => {
       const spent = await funded({ tariff: 0, subscription: null })
       expect(await refused(spent.workspaceId, await task(spent.workspaceId))).toMatchObject(
         needsTariff('gift_spent', 0),
       )
-
-      const few = await funded({ tariff: 0, gift: 4, subscription: null })
-      expect(await refused(few.workspaceId, await task(few.workspaceId))).toMatchObject(
-        needsTariff('gift_below_start', 4),
-      )
-      await grant(few.workspaceId, 'gift', 1)
-      expect(await place(few.workspaceId, await task(few.workspaceId))).toMatchObject({
+      await grant(spent.workspaceId, 'gift', 1)
+      expect(await place(spent.workspaceId, await task(spent.workspaceId))).toMatchObject({
         applied: true,
-        reserved: 5,
+        reserved: 1,
       })
     })
 
-    it('tells an overdue tariff to be paid, and an ended one that its pack waits for a tariff', async () => {
-      // The quota and the pack are there, and neither is a task's to take.
+    it('tells an overdue tariff to be paid, and spends a pack once the tariff has ended', async () => {
+      // The quota is there, and it is not a task's to take.
       const overdue = await funded({
         tariff: 300,
-        gift: 3,
-        pack: 100,
         subscription: { status: 'past_due', pastDueSince: PERIOD_END },
       })
       expect(await refused(overdue.workspaceId, await task(overdue.workspaceId))).toMatchObject(
-        needsTariff('past_due', 3),
+        needsTariff('past_due', 0),
       )
 
       for (const status of ['cancelled', 'expired'] as const) {
         const ended = await funded({ tariff: 0, pack: 40, subscription: { status } })
-        expect(await refused(ended.workspaceId, await task(ended.workspaceId))).toMatchObject(
-          needsTariff('ended', 0),
-        )
+        const taskId = await task(ended.workspaceId)
+        expect(await place(ended.workspaceId, taskId)).toMatchObject({
+          applied: true,
+          reserved: 1,
+        })
+        expect(await reserve(taskId)).toEqual(['#1 pack 1 active'])
       }
     })
 
     it('holds a paid tariff to the tariff credits of its day, with credits still free', async () => {
       const { workspaceId } = await funded({ plan: startDay })
       const [first, second, third] = await tasks(workspaceId, 3)
-      expect(await place(workspaceId, first!)).toMatchObject({ reserved: 45 })
-      // What is left of the day: five of the fifty.
-      expect(await place(workspaceId, second!)).toMatchObject({ reserved: 5 })
-      expect(await reserve(second!)).toEqual(['#1 tariff 5 active'])
+      expect(await place(workspaceId, first!)).toMatchObject({ reserved: 1 })
+      // The first pass took 49 credits of the day: one is left of the fifty.
+      await settle(first!, 49, { now: minutesAfter(5) })
+      expect(await place(workspaceId, second!, { now: minutesAfter(6) })).toMatchObject({
+        reserved: 1,
+      })
+      expect(await reserve(second!)).toEqual(['#1 tariff 1 active'])
 
-      expect(await refused(workspaceId, third!)).toMatchObject(
-        dailyLimit(250, 50, { limit: 50, used: 50 }),
+      expect(await refused(workspaceId, third!, { now: minutesAfter(7) })).toMatchObject(
+        dailyLimit(250, 1, { limit: 50, used: 50 }),
       )
 
       // The next day in Moscow takes it.
       const tomorrow = new Date('2026-10-04T21:00:00.000Z')
       expect(await place(workspaceId, third!, { now: tomorrow })).toMatchObject({
         applied: true,
-        reserved: 45,
+        reserved: 1,
       })
     })
 
@@ -982,33 +952,34 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       const { workspaceId } = await funded({ plan: startDay })
       const [first, second, third] = await tasks(workspaceId, 3)
       await place(workspaceId, first!)
-      await place(workspaceId, second!)
-      expect(await refused(workspaceId, third!)).toMatchObject(
-        dailyLimit(250, 50, { limit: 50, used: 50 }),
+      await settle(first!, 49, { now: minutesAfter(1) })
+      await place(workspaceId, second!, { now: minutesAfter(2) })
+      expect(await refused(workspaceId, third!, { now: minutesAfter(3) })).toMatchObject(
+        dailyLimit(250, 1, { limit: 50, used: 50 }),
       )
 
       await grant(workspaceId, 'pack', 100)
 
       expect(await place(workspaceId, third!, { now: minutesAfter(5) })).toMatchObject({
-        reserved: 45,
+        reserved: 1,
       })
-      expect(await reserve(third!)).toEqual(['#1 pack 45 active'])
-      expect(await today(workspaceId)).toBe('0 + 50')
+      expect(await reserve(third!)).toEqual(['#1 pack 1 active'])
+      expect(await today(workspaceId)).toBe('49 + 1')
     })
 
     it('has no limit of the day on a plan without one', async () => {
       const { workspaceId } = await funded()
       for (const taskId of await tasks(workspaceId, 6)) {
-        expect(await place(workspaceId, taskId)).toMatchObject({ applied: true, reserved: 45 })
+        expect(await place(workspaceId, taskId)).toMatchObject({ applied: true, reserved: 1 })
       }
       // The day is still counted: there is just nothing to compare it with.
-      expect(await today(workspaceId)).toBe('0 + 270')
+      expect(await today(workspaceId)).toBe('0 + 6')
     })
 
     // Without a tariff there is no day: the gift of the registration is the bound.
     it('lets a workspace without a tariff spend its whole gift in one day, and then not', async () => {
       const { workspaceId } = await funded({ tariff: 0, gift: 35, subscription: null })
-      // The step is larger than the gift, so the tasks go one at a time.
+      // Each pass is charged five credits: seven of them spend the gift.
       for (let index = 0; index < 7; index += 1) {
         const taskId = await task(workspaceId)
         await place(workspaceId, taskId, { now: minutesAfter(index * 10) })
@@ -1022,181 +993,52 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       ).toMatchObject(needsTariff('gift_spent', 0))
     })
 
-    it('stops new tasks of a paid tariff when the work it got without a charge reaches half its monthly credits', async () => {
-      // A tariff of 100 credits a month bounds its unpaid work at 50 (plan 63, Ц8): 300 RUB of
-      // work at 6 RUB a credit.
+    // Owner's decision of 10.11.2026: «удали лимиты пробных задач … зависимость только от
+    // кредитов». Failed work costs the customer nothing and bounds nothing.
+    it('takes new tasks of a paid tariff however much work ended without a charge', async () => {
       const { workspaceId } = await funded({ plan: { creditsPerMonth: 100 } })
       const model = await modelPool()
-      const [failed, working, asked] = await tasks(workspaceId, 3)
+      const [failed, asked] = await tasks(workspaceId, 2)
       await place(workspaceId, failed!)
-      await worked(model, failed!, '299.99')
+      await worked(model, failed!, '5000')
       await release(failed!)
 
-      // A hair below the bound: the next task is taken.
-      expect(await place(workspaceId, working!, { now: minutesAfter(10) })).toMatchObject({
+      expect(await place(workspaceId, asked!, { now: minutesAfter(10) })).toMatchObject({
         applied: true,
-      })
-      // One kopeck of work more and the bound is reached: work in progress is unpaid until the
-      // task is charged.
-      await worked(model, working!, '0.01', { occurredAt: minutesAfter(11) })
-      expect(await refused(workspaceId, asked!, { now: minutesAfter(12) })).toMatchObject(
-        unpaidLimit(255, 45),
-      )
-
-      // What the customer paid is not unpaid: charged five credits, the workspace is five below
-      // its bound, and the task is taken.
-      await settle(working!, 5, { now: minutesAfter(13) })
-      expect(await place(workspaceId, asked!, { now: minutesAfter(14) })).toMatchObject({
-        applied: true,
-        reserved: 45,
+        reserved: 1,
       })
     })
 
-    it('counts the unpaid work of a paid tariff from the start of its period', async () => {
-      const { workspaceId } = await funded({ plan: { creditsPerMonth: 50 } })
-      const model = await modelPool()
-      const [before, taskId] = await tasks(workspaceId, 2)
-      // A lost call of the period before: it spent the pool then, and bounds nothing now.
-      await worked(model, before!, '900', { occurredAt: minutesAfter(-1, PERIOD_START) })
-
-      expect(await place(workspaceId, taskId!)).toMatchObject({ applied: true })
-    })
-
-    it('does not take two tasks charged between the end of a period and its renewal for unpaid work of the new period', async () => {
-      const t = await subscribed({ plan: { creditsPerMonth: 50 } })
-      const model = await modelPool()
-      const [first, second, failed, asked] = await tasks(t.workspaceId, 4)
-      const tariff = await accountId(t.workspaceId, 'tariff')
-      // The period is over and its renewal is not settled yet: the tariff still takes tasks.
-      // Each of the two works for 150 RUB after that end and is charged all of it, 25 credits.
-      for (const [taskId, minute] of [
-        [first!, 2],
-        [second!, 6],
-      ] as const) {
-        await place(t.workspaceId, taskId, { now: minutesAfter(minute, t.periodEnd) })
-        await worked(model, taskId, '150', { occurredAt: minutesAfter(minute + 1, t.periodEnd) })
-        await settle(taskId, 25, { now: minutesAfter(minute + 3, t.periodEnd) })
-        // The stamp of the charge is of the period whose credits paid: before the next one.
-        expect((await entryOf(ledgerKeys.taskCharge(taskId, 1, tariff))).createdAt).toEqual(
-          new Date(t.periodEnd.getTime() - 1),
-        )
-      }
-      // The renewal is settled: the new period starts at that end, before the work of both.
-      await renew({ ...t, planId: t.plan.id }, { credits: 50 })
-
-      // 50 credits of work since the period started, every one of them charged: a task is taken.
-      expect(
-        await place(t.workspaceId, failed!, { now: minutesAfter(20, t.periodEnd) }),
-      ).toMatchObject({ applied: true, reserved: 45 })
-
-      // What nobody paid for still counts: 25 credits of a failed task reach the bound, half the
-      // 50 credits of the month.
-      await worked(model, failed!, '150', { occurredAt: minutesAfter(21, t.periodEnd) })
-      await release(failed!, { now: minutesAfter(22, t.periodEnd) })
-      expect(
-        await refused(t.workspaceId, asked!, { now: minutesAfter(23, t.periodEnd) }),
-      ).toMatchObject(unpaidLimit(50))
-    })
-
-    it.each(['past_due', 'cancelled', 'expired'] as const)(
-      'stops a workspace whose tariff is %s at 50 credits of unpaid work, counted from the end of its paid period',
+    it.each([null, 'past_due', 'cancelled', 'expired'] as const)(
+      'takes new tasks of a workspace without a paid tariff (%s) however much work ended without a charge',
       async (status) => {
-        const ended = new Date('2026-10-01T09:00:00.000Z')
-        const { workspaceId, plan } = await funded({
+        const { workspaceId } = await funded({
           tariff: 0,
           gift: 35,
-          subscription: {
-            status,
-            currentPeriodStart: new Date('2026-09-01T09:00:00.000Z'),
-            currentPeriodEnd: ended,
-          },
-        })
-        // A tariff before that one, which ended in August: the last one is what counts.
-        await fixtures.subscription({
-          workspaceId,
-          planId: plan.id,
-          status: 'expired',
-          currentPeriodStart: new Date('2026-07-01T09:00:00.000Z'),
-          currentPeriodEnd: new Date('2026-08-01T09:00:00.000Z'),
+          subscription: status === null ? null : { status },
         })
         const model = await modelPool()
-        const [old, failed, next, last] = await tasks(workspaceId, 4)
-        // Work of the tariff that ended is not the trial's.
-        await worked(model, old!, '5000', { occurredAt: minutesAfter(-1, ended) })
+        const [failed, next] = await tasks(workspaceId, 2)
         await place(workspaceId, failed!)
-        // 299.99 RUB: a hair below 50 credits, the gift of the registration (plan 63, Ц9).
-        await worked(model, failed!, '299.99')
+        await worked(model, failed!, '5000')
         await release(failed!)
 
         expect(await place(workspaceId, next!, { now: minutesAfter(10) })).toMatchObject({
           applied: true,
-          reserved: 35,
+          reserved: 1,
         })
-        await worked(model, next!, '0.01', { occurredAt: minutesAfter(11) })
-        await release(next!, { now: minutesAfter(12) })
-
-        // The gift is untouched and no longer starts a task: a tariff is needed.
-        expect(await refused(workspaceId, last!, { now: minutesAfter(13) })).toMatchObject(
-          needsTariff('trial_unpaid_limit', 35),
-        )
-        expect(await accounts(workspaceId)).toMatchObject({ gift: account(35) })
       },
     )
 
-    it('counts the unpaid work of a workspace that never had a tariff from its creation', async () => {
-      const { workspaceId } = await funded({ tariff: 0, gift: 35, subscription: null })
-      const created = new Date('2026-10-01T00:00:00.000Z')
-      await db.workspace.update({ where: { id: workspaceId }, data: { createdAt: created } })
-      const model = await modelPool()
-      const [failed, next] = await tasks(workspaceId, 2)
-      await place(workspaceId, failed!)
-      await worked(model, failed!, '300')
-      await release(failed!)
-
-      expect(await refused(workspaceId, next!, { now: minutesAfter(10) })).toMatchObject(
-        needsTariff('trial_unpaid_limit', 35),
-      )
-
-      // Work from before the workspace was made is nobody's unpaid work.
-      await db.workspace.update({
-        where: { id: workspaceId },
-        data: { createdAt: minutesAfter(8) },
-      })
-      expect(await place(workspaceId, next!, { now: minutesAfter(10) })).toMatchObject({
-        applied: true,
-      })
-    })
-
-    it('lets a site spend gift credits in one workspace only', async () => {
+    it('lets one site spend gift credits in any workspace: a site claims nothing', async () => {
       const first = await funded({ tariff: 0, gift: 35, subscription: null })
       const second = await funded({ tariff: 0, gift: 35, subscription: null })
       const mine = await taskOn(first.workspaceId, 'https://shop.example.ru')
-      // The same site by another scheme and with `www.`.
       const theirs = await taskOn(second.workspaceId, 'http://www.shop.example.ru')
-      await place(first.workspaceId, mine)
-      const claim = await db.giftSiteClaim.findUniqueOrThrow({
-        where: { hostKey: 'shop.example.ru' },
-      })
-      expect(claim.workspaceId).toBe(first.workspaceId)
 
-      expect(await refused(second.workspaceId, theirs)).toMatchObject(
-        needsTariff('gift_site_used', 35),
-      )
-      expect(
-        await db.giftSiteClaim.findUniqueOrThrow({ where: { hostKey: 'shop.example.ru' } }),
-      ).toEqual(claim)
-
-      // Another site of the second workspace is its own to claim, and a port is another site.
-      const other = await taskOn(second.workspaceId, 'https://shop.example.ru:8443')
-      expect(await place(second.workspaceId, other)).toMatchObject({ applied: true, reserved: 35 })
-      // The first workspace goes on with its site: the claim is its own.
-      await settle(mine, 5)
-      const again = await taskOn(first.workspaceId, 'http://shop.example.ru')
-      expect(await place(first.workspaceId, again, { now: minutesAfter(30) })).toMatchObject({
-        applied: true,
-        reserved: 30,
-      })
-      expect(await db.giftSiteClaim.count({ where: { hostKey: 'shop.example.ru' } })).toBe(1)
+      expect(await place(first.workspaceId, mine)).toMatchObject({ applied: true, reserved: 1 })
+      expect(await place(second.workspaceId, theirs)).toMatchObject({ applied: true, reserved: 1 })
+      expect(await db.giftSiteClaim.count({ where: { hostKey: 'shop.example.ru' } })).toBe(0)
     })
 
     it('asks nothing about a site of a chat without one: nothing to claim (plan 61, К17)', async () => {
@@ -1221,53 +1063,48 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       const paying = await funded({ tariff: 5, gift: 35 })
       const taskId = await taskOn(paying.workspaceId, 'https://paid.example.ru')
 
-      expect(await place(paying.workspaceId, taskId)).toMatchObject({ applied: true, reserved: 40 })
+      expect(await place(paying.workspaceId, taskId)).toMatchObject({ applied: true, reserved: 1 })
 
-      expect(await reserve(taskId)).toEqual(['#1 tariff 5 active', '#1 gift 35 active'])
+      expect(await reserve(taskId)).toEqual(['#1 tariff 1 active'])
       expect(await db.giftSiteClaim.count({ where: { workspaceId: paying.workspaceId } })).toBe(0)
     })
 
-    it('refuses by the rate, then the credits, then the day, then the unpaid work', async () => {
+    it('refuses by the rate, then the credits, then the day', async () => {
       const { workspaceId } = await funded({
-        tariff: 48,
+        tariff: 45,
         plan: { creditsPerMonth: 50, creditsPerDay: 45 },
       })
       const model = await modelPool()
       const [failed, asked] = await tasks(workspaceId, 2)
-      // A task of the day failed after 300 RUB of work: 50 credits of unpaid work. Its reserve
-      // came back, and with it the day.
+      // A task of the day failed after 300 RUB of work. Its reserve came back, and with it the
+      // day; the failed work bounds nothing.
       await place(workspaceId, failed!)
       await worked(model, failed!, '300')
       await release(failed!)
-      // A task queued earlier today holds all but three credits, and the 45 of the day.
+      // A task queued earlier today holds every credit, and the 45 of the day.
       const inWork = await fixtures.hold(workspaceId, 'tariff', 45)
       await db.creditHold.update({
         where: { id: inWork.id },
         data: { createdAt: NOW, placedAt: NOW },
       })
 
-      expect(await refused(workspaceId, asked!, { rate: false })).toMatchObject(rateMissing(3, 45))
-      expect(await refused(workspaceId, asked!)).toMatchObject(creditsHeld(3, 45))
+      expect(await refused(workspaceId, asked!, { rate: false })).toMatchObject(rateMissing(0, 45))
+      expect(await refused(workspaceId, asked!)).toMatchObject(creditsHeld(0, 45))
       // The credits are there now: the day is what refuses.
       await grant(workspaceId, 'tariff', 10)
       expect(await refused(workspaceId, asked!)).toMatchObject(
-        dailyLimit(13, 45, { limit: 45, used: 45 }),
+        dailyLimit(10, 45, { limit: 45, used: 45 }),
       )
-      // Tomorrow the day is free: the unpaid work is what refuses.
+      // Tomorrow the day is free: the task is taken.
       const tomorrow = new Date('2026-10-04T21:00:00.000Z')
-      expect(await refused(workspaceId, asked!, { now: tomorrow })).toMatchObject(
-        unpaidLimit(13, 45),
-      )
+      expect(await place(workspaceId, asked!, { now: tomorrow })).toMatchObject({
+        applied: true,
+        reserved: 1,
+      })
     })
 
-    it('refuses a workspace without a tariff by its credits, then its unpaid work, then the site — never by a day', async () => {
-      const other = await funded({ tariff: 0, gift: 35, subscription: null })
-      await place(other.workspaceId, await taskOn(other.workspaceId, 'https://taken.example.ru'))
-      const { workspaceId } = await funded({ tariff: 0, gift: 19, subscription: null })
-      await db.workspace.update({
-        where: { id: workspaceId },
-        data: { createdAt: new Date('2026-10-01T00:00:00.000Z') },
-      })
+    it('refuses a workspace without a tariff by its credits alone — never by a day', async () => {
+      const { workspaceId } = await funded({ tariff: 0, gift: 15, subscription: null })
       const model = await modelPool()
       // Three tasks of today, each done for five credits after 170 RUB of work.
       for (const minute of [0, 10, 20]) {
@@ -1276,23 +1113,19 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
         await worked(model, taskId, '170', { occurredAt: minutesAfter(minute + 1) })
         await settle(taskId, 5, { now: minutesAfter(minute + 5) })
       }
-      const asked = await taskOn(workspaceId, 'https://taken.example.ru')
+      const asked = await task(workspaceId)
       const at = minutesAfter(30)
 
-      // Four gift credits are left; 85 credits of work with 15 charged are 70 unpaid, above the
-      // bound of 50; the site is another workspace's. The credits are said first.
+      // The gift is spent.
       expect(await refused(workspaceId, asked, { now: at })).toMatchObject(
-        needsTariff('gift_below_start', 4),
+        needsTariff('gift_spent', 0),
       )
-      await grant(workspaceId, 'gift', 1)
-      expect(await refused(workspaceId, asked, { now: at })).toMatchObject(
-        needsTariff('trial_unpaid_limit', 5),
-      )
-      // Counted from a later moment, the unpaid work is gone: the site is what is left.
-      await db.workspace.update({ where: { id: workspaceId }, data: { createdAt: at } })
-      expect(await refused(workspaceId, asked, { now: at })).toMatchObject(
-        needsTariff('gift_site_used', 5),
-      )
+      // One credit of a pack is enough: the task is taken.
+      await grant(workspaceId, 'pack', 1)
+      expect(await place(workspaceId, asked, { now: at })).toMatchObject({
+        applied: true,
+        reserved: 1,
+      })
     })
 
     it('makes the three empty accounts of a workspace that has none, and nothing else, when it refuses', async () => {
@@ -1418,49 +1251,39 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
   })
 
   describe('an attempt', () => {
-    it('needs five credits that can be spent for a new task and for a retry, one for a continuation', async () => {
-      const { workspaceId } = await funded({ tariff: 49 })
+    it('needs one credit that can be spent for a new task, a retry and a continuation alike', async () => {
+      const { workspaceId } = await funded({ tariff: 1 })
       const [retried, continued, fresh] = await tasks(workspaceId, 3)
       await place(workspaceId, retried!)
       await release(retried!)
       await place(workspaceId, continued!, { now: minutesAfter(1) })
 
-      // Four credits are free: neither a new task nor a retry starts on them…
-      expect(await refused(workspaceId, fresh!)).toMatchObject(creditsHeld(4, 45))
+      // Nothing is free, one credit is held: neither a new task nor a retry starts…
+      expect(await refused(workspaceId, fresh!)).toMatchObject(creditsHeld(0, 1))
       expect(await refused(workspaceId, retried!, { attempt: 2, retry: true })).toMatchObject(
-        creditsHeld(4, 45),
+        creditsHeld(0, 1),
       )
-      // …and the task in work goes on with them: its own reserve is not «tasks in work».
+      // …and the task in work is told that the credits ran out: its own reserve is not «tasks
+      // in work» to wait for.
       expect(
-        await place(workspaceId, continued!, { attempt: 2, now: minutesAfter(30) }),
-      ).toMatchObject({ applied: true, reserved: 4 })
-      expect(await reserve(continued!)).toEqual(['#1 tariff 45 active', '#2 tariff 4 active'])
-
-      // Nothing is free any more: a third attempt has nothing to add, and is told that the
-      // credits ran out — not to wait for tasks in work.
-      expect(
-        await refused(workspaceId, continued!, { attempt: 3, now: minutesAfter(40) }),
+        await refused(workspaceId, continued!, { attempt: 2, now: minutesAfter(30) }),
       ).toMatchObject(notEnough('empty', 0, 0, 1))
       await grant(workspaceId, 'pack', 1)
       expect(
-        await place(workspaceId, continued!, { attempt: 3, now: minutesAfter(40) }),
+        await place(workspaceId, continued!, { attempt: 2, now: minutesAfter(30) }),
       ).toMatchObject({ applied: true, reserved: 1 })
-      expect(await reserve(continued!)).toEqual([
-        '#1 tariff 45 active',
-        '#2 tariff 4 active',
-        '#3 pack 1 active',
-      ])
+      expect(await reserve(continued!)).toEqual(['#1 tariff 1 active', '#2 pack 1 active'])
     })
 
     it('starts a retry on five credits, in the class the task has by then', async () => {
       const { workspaceId } = await funded({ tariff: 50 })
       const taskId = await task(workspaceId)
-      await place(workspaceId, taskId)
+      await placedBefore(workspaceId, taskId)
       await release(taskId)
       // «Попробовать ещё» runs in the stronger mode.
       await db.task.update({ where: { id: taskId }, data: { modelClass: 'heavy', attempt: 2 } })
 
-      const retry = await place(workspaceId, taskId, {
+      const retry = await placedBefore(workspaceId, taskId, {
         attempt: 2,
         now: minutesAfter(30),
         retry: true,
@@ -1474,12 +1297,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('continues a task after a retry: only its rows that are still active are its own reserve', async () => {
       const { workspaceId } = await funded({ tariff: 100 })
       const taskId = await task(workspaceId)
-      await place(workspaceId, taskId)
+      await placedBefore(workspaceId, taskId)
       await release(taskId)
-      await place(workspaceId, taskId, { attempt: 2, now: minutesAfter(30), retry: true })
+      await placedBefore(workspaceId, taskId, { attempt: 2, now: minutesAfter(30), retry: true })
 
       // «Продолжить» at the step of the retry: the rows of the failed attempt hold nothing.
-      const third = await place(workspaceId, taskId, { attempt: 3, now: minutesAfter(60) })
+      const third = await placedBefore(workspaceId, taskId, { attempt: 3, now: minutesAfter(60) })
 
       expect(third).toMatchObject({ applied: true, reserved: 45 })
       expect(await reserve(taskId)).toEqual([
@@ -1493,12 +1316,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('adds the reserve of a continuation to the pool of the task and gives the pool one expiry', async () => {
       const { workspaceId } = await funded({ tariff: 50, gift: 35, pack: 100 })
       const taskId = await task(workspaceId)
-      const first = await place(workspaceId, taskId)
+      const first = await placedBefore(workspaceId, taskId)
       expect(first.holds.map((hold) => hold.expiresAt)).toEqual([new Date(NOW.getTime() + DAY_MS)])
       const later = minutesAfter(120)
       const expiresAt = new Date(later.getTime() + 3 * DAY_MS)
 
-      const second = await place(workspaceId, taskId, { attempt: 2, now: later, expiresAt })
+      const second = await placedBefore(workspaceId, taskId, { attempt: 2, now: later, expiresAt })
 
       expect(second).toMatchObject({ applied: true, reserved: 45 })
       expect(await reserve(taskId)).toEqual([
@@ -1517,11 +1340,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       expect(await accounts(workspaceId)).toEqual(reserved)
 
       // Asked again, each attempt answers with its own rows and with what they hold.
-      expect(await place(workspaceId, taskId, { attempt: 2, now: later, expiresAt })).toEqual({
+      expect(
+        await placedBefore(workspaceId, taskId, { attempt: 2, now: later, expiresAt }),
+      ).toEqual({
         ...second,
         applied: false,
       })
-      const again = await place(workspaceId, taskId)
+      const again = await placedBefore(workspaceId, taskId)
       expect(again).toMatchObject({ applied: false, reserved: 45 })
       expect(again.holds.map((hold) => [hold.id, hold.expiresAt])).toEqual([
         [first.holds[0]?.id, expiresAt],
@@ -1533,7 +1358,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       const { workspaceId } = await funded()
       const taskId = await task(workspaceId)
       for (const attempt of [1, 2, 3]) {
-        expect(await place(workspaceId, taskId, { attempt })).toMatchObject({
+        expect(await placedBefore(workspaceId, taskId, { attempt })).toMatchObject({
           applied: true,
           reserved: 45,
         })
@@ -1548,29 +1373,31 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       // attempt in which the agent failed is not counted (spec §20, decision 4 of 11.10.2026).
       await release(taskId)
       expect(await taskChainAttempts(db, taskId)).toEqual([])
-      expect(await place(workspaceId, taskId, { attempt: 4, retry: true })).toMatchObject({
+      expect(await placedBefore(workspaceId, taskId, { attempt: 4, retry: true })).toMatchObject({
         applied: true,
         reserved: 45,
       })
       expect(await taskChainAttempts(db, taskId)).toEqual([4])
       // And a continuation of it is the second attempt of its chain.
-      expect(await place(workspaceId, taskId, { attempt: 5 })).toMatchObject({ applied: true })
+      expect(await placedBefore(workspaceId, taskId, { attempt: 5 })).toMatchObject({
+        applied: true,
+      })
       expect(await taskChainAttempts(db, taskId)).toEqual([4, 5])
     })
 
     it('takes no reserve for a charged task, nor for an attempt below one that holds a reserve', async () => {
       const { workspaceId } = await funded()
       const [done, skipped] = await tasks(workspaceId, 2)
-      await place(workspaceId, done!)
+      await placedBefore(workspaceId, done!)
       await settle(done!, 17)
       expect(await refused(workspaceId, done!, { attempt: 2 })).toMatchObject(conflict)
       // The attempt that was charged is still answered with its reserve, as it became.
-      const again = await place(workspaceId, done!)
+      const again = await placedBefore(workspaceId, done!)
       expect(again).toMatchObject({ applied: false, reserved: 45 })
       expect(again.holds.map((hold) => hold.status)).toEqual(['captured'])
 
       // The second attempt was placed first: the first cannot come after it.
-      await place(workspaceId, skipped!, { attempt: 2, retry: true })
+      await placedBefore(workspaceId, skipped!, { attempt: 2, retry: true })
       expect(await refused(workspaceId, skipped!, { attempt: 1 })).toMatchObject(conflict)
       expect(await reserve(skipped!)).toEqual(['#2 tariff 45 active'])
     })
@@ -1590,7 +1417,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       }
       // The first attempt is no retry.
       expect(await refused(workspaceId, taskId!, { retry: true })).toMatchObject(notARetry)
-      await place(workspaceId, taskId!)
+      await placedBefore(workspaceId, taskId!)
       // The chain still holds its reserve: the next attempt is «Продолжить».
       expect(await refused(workspaceId, taskId!, { attempt: 2, retry: true })).toMatchObject(
         notARetry,
@@ -1598,12 +1425,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       await release(taskId!)
       // Given back: only a retry places the next attempt.
       expect(await refused(workspaceId, taskId!, { attempt: 2 })).toMatchObject(onlyARetry)
-      expect(await place(workspaceId, taskId!, { attempt: 2, retry: true })).toMatchObject({
+      expect(await placedBefore(workspaceId, taskId!, { attempt: 2, retry: true })).toMatchObject({
         applied: true,
         reserved: 45,
       })
       // A repeat answers with the rows of the first call, whatever it says.
-      expect(await place(workspaceId, taskId!, { attempt: 2 })).toMatchObject({
+      expect(await placedBefore(workspaceId, taskId!, { attempt: 2 })).toMatchObject({
         applied: false,
         reserved: 45,
       })
@@ -1624,18 +1451,22 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
         ...conflict,
         message: 'The chain of the task is not charged: its next words go on with it',
       }
-      await place(workspaceId, taskId!)
+      await placedBefore(workspaceId, taskId!)
       // The chain is active: the words go on with it, no new chain.
       expect(await refused(workspaceId, taskId!, { attempt: 2, follows: 'message' })).toMatchObject(
         goesOn,
       )
       await settle(taskId!, 17)
-      expect(await place(workspaceId, taskId!, { attempt: 2, follows: 'message' })).toMatchObject({
+      expect(
+        await placedBefore(workspaceId, taskId!, { attempt: 2, follows: 'message' }),
+      ).toMatchObject({
         applied: true,
         reserved: 45,
       })
       await settle(taskId!, 6)
-      expect(await place(workspaceId, taskId!, { attempt: 3, follows: 'continue' })).toMatchObject({
+      expect(
+        await placedBefore(workspaceId, taskId!, { attempt: 3, follows: 'continue' }),
+      ).toMatchObject({
         applied: true,
         reserved: 45,
       })
@@ -1646,12 +1477,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       ])
       // A chain given back without a charge before it: «Продолжить» is not a new chain after a
       // charge, but the client's words are — a failure left the dialog open (28.10.2026).
-      await place(workspaceId, given!)
+      await placedBefore(workspaceId, given!)
       await release(given!)
       expect(await refused(workspaceId, given!, { attempt: 2, follows: 'continue' })).toMatchObject(
         notCharged,
       )
-      expect(await place(workspaceId, given!, { attempt: 2, follows: 'message' })).toMatchObject({
+      expect(
+        await placedBefore(workspaceId, given!, { attempt: 2, follows: 'message' }),
+      ).toMatchObject({
         applied: true,
         reserved: 45,
       })
@@ -1684,7 +1517,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       const [late, next, third] = await tasks(workspaceId, 3)
       const afterMidnight = minutesAfter(2, end)
 
-      const placed = await place(workspaceId, late!, { now: afterMidnight })
+      const placed = await placedBefore(workspaceId, late!, { now: afterMidnight })
 
       // The credits are of the period that ended: the row is stamped with its last millisecond,
       // which is still the 17th in Moscow…
@@ -1694,7 +1527,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       expect(await today(workspaceId, minutesAfter(5, end))).toBe('0 + 45')
       expect(await today(workspaceId, lastMoment)).toBe('0 + 0')
       // So the new day has five left of its fifty.
-      expect(await place(workspaceId, next!, { now: minutesAfter(5, end) })).toMatchObject({
+      expect(await placedBefore(workspaceId, next!, { now: minutesAfter(5, end) })).toMatchObject({
         reserved: 5,
       })
       expect(await refused(workspaceId, third!, { now: minutesAfter(6, end) })).toMatchObject(
@@ -1706,22 +1539,22 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       const { workspaceId } = await funded({ plan: startDay })
       const [failed, done, lapsed, next] = await tasks(workspaceId, 4)
 
-      await place(workspaceId, failed!)
-      expect(await place(workspaceId, done!, { now: minutesAfter(1) })).toMatchObject({
+      await placedBefore(workspaceId, failed!)
+      expect(await placedBefore(workspaceId, done!, { now: minutesAfter(1) })).toMatchObject({
         reserved: 5,
       })
       expect(await today(workspaceId)).toBe('0 + 50')
       // Failed: its 45 come back to the day at once.
       await release(failed!, { now: minutesAfter(2) })
       expect(await today(workspaceId)).toBe('0 + 5')
-      expect(await place(workspaceId, lapsed!, { now: minutesAfter(3) })).toMatchObject({
+      expect(await placedBefore(workspaceId, lapsed!, { now: minutesAfter(3) })).toMatchObject({
         reserved: 45,
       })
       // Done for 5: the day keeps 5. Stuck past its expiry: its 45 come back too.
       await settle(done!, 5, { now: minutesAfter(4) })
       await expire(lapsed!, { now: minutesAfter(3 + 24 * 60) })
       expect(await today(workspaceId, NOW)).toBe('5 + 0')
-      expect(await place(workspaceId, next!, { now: minutesAfter(5) })).toMatchObject({
+      expect(await placedBefore(workspaceId, next!, { now: minutesAfter(5) })).toMatchObject({
         reserved: 45,
       })
       expect(await today(workspaceId, NOW)).toBe('5 + 45')
@@ -1735,14 +1568,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       const { workspaceId } = await funded({ plan: startDay })
       const model = await modelPool()
       const [working, failed, fresh] = await tasks(workspaceId, 3)
-      await place(workspaceId, working!)
-      await place(workspaceId, failed!, { now: minutesAfter(1) })
+      await placedBefore(workspaceId, working!)
+      await placedBefore(workspaceId, failed!, { now: minutesAfter(1) })
       await worked(model, failed!, '6')
       await release(failed!, { now: minutesAfter(2) })
       expect(await today(workspaceId)).toBe('0 + 45')
       // «Попробовать ещё» takes its whole step, though the day has five left…
       expect(
-        await place(workspaceId, failed!, { attempt: 2, now: minutesAfter(5), retry: true }),
+        await placedBefore(workspaceId, failed!, { attempt: 2, now: minutesAfter(5), retry: true }),
       ).toMatchObject({ applied: true, reserved: 45 })
       expect(await reserve(failed!)).toEqual(['#1 tariff 5 released', '#2 tariff 45 active'])
       // …and the day counts it: nothing is left for a new task, nor for «Продолжить» of the first.
@@ -1757,7 +1590,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       // One credit of a pack is enough to continue: the attempt sets aside what it can.
       await grant(workspaceId, 'pack', 1)
       expect(
-        await place(workspaceId, working!, { attempt: 2, now: minutesAfter(11) }),
+        await placedBefore(workspaceId, working!, { attempt: 2, now: minutesAfter(11) }),
       ).toMatchObject({ applied: true, reserved: 1 })
       expect(await reserve(working!)).toEqual(['#1 tariff 45 active', '#2 pack 1 active'])
       expect(await today(workspaceId)).toBe('0 + 90')
@@ -1778,9 +1611,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       const model = await modelPool()
       const taskId = await task(workspaceId)
       // A new task and «Продолжить» that both did work: the continuation takes what the day has.
-      await place(workspaceId, taskId)
+      await placedBefore(workspaceId, taskId)
       await worked(model, taskId, '6', { occurredAt: minutesAfter(1) })
-      expect(await place(workspaceId, taskId, { attempt: 2, now: minutesAfter(2) })).toMatchObject({
+      expect(
+        await placedBefore(workspaceId, taskId, { attempt: 2, now: minutesAfter(2) }),
+      ).toMatchObject({
         applied: true,
         reserved: 5,
       })
@@ -1792,14 +1627,14 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       await release(taskId, { now: minutesAfter(4) })
       expect(await today(workspaceId)).toBe('0 + 0')
       expect(
-        await place(workspaceId, taskId, { attempt: 3, now: minutesAfter(4), retry: true }),
+        await placedBefore(workspaceId, taskId, { attempt: 3, now: minutesAfter(4), retry: true }),
       ).toMatchObject({ applied: true, reserved: 45 })
       expect(await today(workspaceId)).toBe('0 + 45')
 
       // The retry fails before any model call and is tried again: still one reserve on the day.
       await release(taskId, { now: minutesAfter(5) })
       expect(
-        await place(workspaceId, taskId, { attempt: 4, now: minutesAfter(6), retry: true }),
+        await placedBefore(workspaceId, taskId, { attempt: 4, now: minutesAfter(6), retry: true }),
       ).toMatchObject({ applied: true, reserved: 45 })
       expect(await today(workspaceId)).toBe('0 + 45')
       expect(await reserve(taskId)).toEqual([
@@ -1815,10 +1650,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       const [night, evening, late] = await tasks(workspaceId, 3)
 
       // 01:00 on 4 October in Moscow is still 3 October in UTC.
-      await place(workspaceId, night!, { now: new Date('2026-10-03T22:00:00.000Z') })
+      await placedBefore(workspaceId, night!, { now: new Date('2026-10-03T22:00:00.000Z') })
       // 23:30 on 4 October in Moscow: five are left of the day.
       expect(
-        await place(workspaceId, evening!, { now: new Date('2026-10-04T20:30:00.000Z') }),
+        await placedBefore(workspaceId, evening!, { now: new Date('2026-10-04T20:30:00.000Z') }),
       ).toMatchObject({ reserved: 5 })
       expect(await today(workspaceId, '2026-10-04T20:59:59.999Z')).toBe('0 + 50')
       expect(
@@ -1829,7 +1664,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       // day, while yesterday's reserves are still active.
       expect(await today(workspaceId, '2026-10-04T21:00:00.000Z')).toBe('0 + 0')
       expect(
-        await place(workspaceId, late!, { now: new Date('2026-10-04T21:00:00.000Z') }),
+        await placedBefore(workspaceId, late!, { now: new Date('2026-10-04T21:00:00.000Z') }),
       ).toMatchObject({ reserved: 45 })
       expect(await today(workspaceId, '2026-10-05T09:00:00.000Z')).toBe('0 + 45')
       expect(await today(workspaceId, '2026-10-04T12:00:00.000Z')).toBe('0 + 50')
@@ -1855,7 +1690,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
         [first!, 45],
         [second!, 5],
       ] as const) {
-        const placed = await place(workspaceId, taskId, { now })
+        const placed = await placedBefore(workspaceId, taskId, { now })
         expect(placed).toMatchObject({ reserved })
         expect(placed.holds[0]).toMatchObject({ createdAt: start, placedAt: start })
       }
@@ -1876,11 +1711,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       })
       const { workspaceId } = subscription
       const [before, after] = await tasks(workspaceId, 2)
-      await place(workspaceId, before!, { now: minutesAfter(-60) })
+      await placedBefore(workspaceId, before!, { now: minutesAfter(-60) })
       await renew({ ...subscription, planId: subscription.plan.id })
 
       // The new period gives 300 credits; the day it began in has five of its fifty left.
-      expect(await place(workspaceId, after!, { now: minutesAfter(60) })).toMatchObject({
+      expect(await placedBefore(workspaceId, after!, { now: minutesAfter(60) })).toMatchObject({
         reserved: 5,
       })
       expect(await today(workspaceId, minutesAfter(60))).toBe('0 + 50')
@@ -1889,15 +1724,15 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('keeps the day of each workspace apart', async () => {
       const one = await funded({ plan: startDay })
       const other = await funded({ plan: startDay })
-      await place(one.workspaceId, await task(one.workspaceId))
-      await place(other.workspaceId, await task(other.workspaceId))
-      expect(await place(other.workspaceId, await task(other.workspaceId))).toMatchObject({
+      await placedBefore(one.workspaceId, await task(one.workspaceId))
+      await placedBefore(other.workspaceId, await task(other.workspaceId))
+      expect(await placedBefore(other.workspaceId, await task(other.workspaceId))).toMatchObject({
         reserved: 5,
       })
       expect(await refused(other.workspaceId, await task(other.workspaceId))).toMatchObject(
         dailyLimit(250, 50, { limit: 50, used: 50 }),
       )
-      expect(await place(one.workspaceId, await task(one.workspaceId))).toMatchObject({
+      expect(await placedBefore(one.workspaceId, await task(one.workspaceId))).toMatchObject({
         reserved: 5,
       })
       expect(await today(one.workspaceId)).toBe('0 + 50')
@@ -1909,10 +1744,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('takes free tariff credits for a charge no more than the day has left', async () => {
       const { workspaceId } = await funded({ tariff: 0, pack: 100, plan: startDay })
       const [onPack, onTariff] = await tasks(workspaceId, 2)
-      await place(workspaceId, onPack!)
+      await placedBefore(workspaceId, onPack!)
       expect(await reserve(onPack!)).toEqual(['#1 pack 45 active'])
       await grant(workspaceId, 'tariff', 300)
-      await place(workspaceId, onTariff!, { now: minutesAfter(1) })
+      await placedBefore(workspaceId, onTariff!, { now: minutesAfter(1) })
       expect(await reserve(onTariff!)).toEqual(['#1 tariff 45 active'])
 
       const settled = await settle(onPack!, 30)
@@ -1929,8 +1764,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('pays a task from its own tariff rows whatever is left of the day', async () => {
       const { workspaceId } = await funded({ plan: startDay })
       const [first, second] = await tasks(workspaceId, 2)
-      await place(workspaceId, first!)
-      await place(workspaceId, second!, { now: minutesAfter(1) })
+      await placedBefore(workspaceId, first!)
+      await placedBefore(workspaceId, second!, { now: minutesAfter(1) })
       expect(await today(workspaceId)).toBe('0 + 50')
 
       const settled = await settle(first!, 45)
@@ -1956,9 +1791,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       const [done, failed] = await tasks(workspaceId, 2)
       expect(await day(workspaceId, NOW)).toBe('0 + 0')
 
-      await place(workspaceId, done!)
+      await placedBefore(workspaceId, done!)
       expect(await day(workspaceId, NOW)).toBe('0 + 45')
-      await place(workspaceId, failed!, { now: minutesAfter(1) })
+      await placedBefore(workspaceId, failed!, { now: minutesAfter(1) })
       expect(await day(workspaceId, NOW)).toBe('0 + 90')
 
       await release(failed!)
@@ -1974,7 +1809,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('leaves a reserve placed late in the evening and charged after midnight on its own day', async () => {
       const { workspaceId } = await funded()
       const taskId = await task(workspaceId)
-      await place(workspaceId, taskId, { now: evening })
+      await placedBefore(workspaceId, taskId, { now: evening })
       expect(await day(workspaceId, evening)).toBe('0 + 45')
       expect(await day(workspaceId, night)).toBe('0 + 0')
 
@@ -1988,8 +1823,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       const { workspaceId } = await funded()
       const [late, early] = await tasks(workspaceId, 2)
       // The last millisecond of 4 October in Moscow, and its midnight.
-      await place(workspaceId, late!, { now: new Date('2026-10-04T20:59:59.999Z') })
-      await place(workspaceId, early!, { now: new Date('2026-10-04T21:00:00.000Z') })
+      await placedBefore(workspaceId, late!, { now: new Date('2026-10-04T20:59:59.999Z') })
+      await placedBefore(workspaceId, early!, { now: new Date('2026-10-04T21:00:00.000Z') })
 
       expect(await day(workspaceId, '2026-10-03T21:00:00.000Z')).toBe('0 + 45')
       expect(await day(workspaceId, '2026-10-04T20:59:59.999Z')).toBe('0 + 45')
@@ -2004,7 +1839,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       // pack. When it is charged the next morning, the tariff has credits again and pays first.
       const { workspaceId } = await funded({ tariff: 0, pack: 100 })
       const taskId = await task(workspaceId)
-      await place(workspaceId, taskId)
+      await placedBefore(workspaceId, taskId)
       expect(await reserve(taskId)).toEqual(['#1 pack 45 active'])
       await grant(workspaceId, 'tariff', 300)
 
@@ -2023,7 +1858,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       // and 25 more come from free tariff credits on the 5th.
       const { workspaceId } = await funded({ tariff: 5, pack: 100 })
       const taskId = await task(workspaceId)
-      await place(workspaceId, taskId)
+      await placedBefore(workspaceId, taskId)
       expect(await reserve(taskId)).toEqual(['#1 tariff 5 active', '#1 pack 40 active'])
       await grant(workspaceId, 'tariff', 300)
 
@@ -2043,12 +1878,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('counts each charge of a task on its own day, the transfer of the first not again', async () => {
       const { workspaceId } = await funded({ tariff: 0, pack: 100 })
       const taskId = await task(workspaceId)
-      await place(workspaceId, taskId)
+      await placedBefore(workspaceId, taskId)
       await grant(workspaceId, 'tariff', 300)
       // The pack row is charged from free tariff credits: 17 on the day of the charge.
       await settle(taskId, 17, { now: morning })
       const evening = new Date(morning.getTime() + DAY_MS)
-      await place(workspaceId, taskId, { attempt: 2, now: evening, follows: 'message' })
+      await placedBefore(workspaceId, taskId, { attempt: 2, now: evening, follows: 'message' })
       await settle(taskId, 9, { now: evening })
 
       expect(await day(workspaceId, morning)).toBe('17 + 0')
@@ -2059,7 +1894,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('counts a charge settled the day it was placed once: the row and the transfer together', async () => {
       const { workspaceId } = await funded({ tariff: 5, pack: 100 })
       const taskId = await task(workspaceId)
-      await place(workspaceId, taskId)
+      await placedBefore(workspaceId, taskId)
       await grant(workspaceId, 'tariff', 300)
       await settle(taskId, 30)
       expect(await day(workspaceId, NOW)).toBe('30 + 0')
@@ -2073,7 +1908,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       const taskId = await task(workspaceId)
       const placedAt = new Date(periodEnd.getTime() - DAY_MS)
       const chargedAt = new Date(periodEnd.getTime() + DAY_MS)
-      await place(workspaceId, taskId, {
+      await placedBefore(workspaceId, taskId, {
         now: placedAt,
         expiresAt: new Date(periodEnd.getTime() + 2 * DAY_MS),
       })
@@ -2091,8 +1926,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('counts only the tariff: gift and pack credits are outside the day', async () => {
       const { workspaceId } = await funded({ tariff: 5, gift: 35, pack: 100 })
       const [first, second] = await tasks(workspaceId, 2)
-      await place(workspaceId, first!)
-      await place(workspaceId, second!, { now: minutesAfter(1) })
+      await placedBefore(workspaceId, first!)
+      await placedBefore(workspaceId, second!, { now: minutesAfter(1) })
       expect(await reserve(first!)).toEqual([
         '#1 tariff 5 active',
         '#1 gift 35 active',
@@ -2110,9 +1945,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('keeps the day of each workspace apart', async () => {
       const one = await funded()
       const other = await funded()
-      await place(one.workspaceId, await task(one.workspaceId))
+      await placedBefore(one.workspaceId, await task(one.workspaceId))
       const settled = await task(other.workspaceId)
-      await place(other.workspaceId, settled)
+      await placedBefore(other.workspaceId, settled)
       await settle(settled, 20)
       expect(await day(one.workspaceId, NOW)).toBe('0 + 45')
       expect(await day(other.workspaceId, NOW)).toBe('20 + 0')
@@ -2122,126 +1957,82 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
 
   describe('at once', () => {
     it('never sets aside more than is free when twenty tasks are queued', async () => {
-      const { workspaceId } = await funded({ tariff: 60, pack: 40 })
+      const { workspaceId } = await funded({ tariff: 2, pack: 1 })
       const queued = await tasks(workspaceId, 20)
 
       const results = await Promise.allSettled(
         queued.map((taskId) => fixtures.reserve(placement(workspaceId, taskId))),
       )
 
+      // One credit each: three tasks start on the three credits there are.
       const placed = fulfilled(results)
-      expect(placed.map((result) => result.reserved).sort((a, b) => b - a)).toEqual([45, 45, 10])
+      expect(placed.map((result) => result.reserved)).toEqual([1, 1, 1])
       expect(placed.every((result) => result.applied)).toBe(true)
-      expect(rejected(results)).toEqual(
-        Array(17).fill(expect.objectContaining(creditsHeld(0, 100))),
-      )
+      expect(rejected(results)).toEqual(Array(17).fill(expect.objectContaining(creditsHeld(0, 3))))
       expect(await accounts(workspaceId)).toMatchObject({
-        tariff: account(60, 60),
-        pack: account(40, 40),
+        tariff: account(2, 2),
+        pack: account(1, 1),
       })
       await expectBooksToBalance(workspaceId)
     })
 
     it('never passes the limit of the day when twenty tasks are queued', async () => {
-      const { workspaceId } = await funded({ plan: startDay })
-      const queued = await tasks(workspaceId, 20)
+      // A day of three credits, two of them spent already by a pass charged today.
+      const { workspaceId } = await funded({ plan: { creditsPerMonth: 300, creditsPerDay: 3 } })
+      const [spent, ...queued] = await tasks(workspaceId, 21)
+      await place(workspaceId, spent!)
+      await settle(spent!, 2)
 
       const results = await Promise.allSettled(
-        queued.map((taskId) => fixtures.reserve(placement(workspaceId, taskId))),
+        queued.map((taskId) =>
+          fixtures.reserve(placement(workspaceId, taskId, { now: minutesAfter(30) })),
+        ),
       )
 
-      // The step of the first, whichever it was, and the five the day had left.
-      expect(
-        fulfilled(results)
-          .map((result) => result.reserved)
-          .sort((a, b) => b - a),
-      ).toEqual([45, 5])
+      // The one credit the day had left goes to one of them.
+      expect(fulfilled(results).map((result) => result.reserved)).toEqual([1])
       expect(rejected(results)).toEqual(
-        Array(18).fill(expect.objectContaining(dailyLimit(250, 50, { limit: 50, used: 50 }))),
+        Array(19).fill(expect.objectContaining(dailyLimit(297, 1, { limit: 3, used: 3 }))),
       )
-      expect(await today(workspaceId)).toBe('0 + 50')
-      expect(await accounts(workspaceId)).toMatchObject({ tariff: account(300, 50) })
+      expect(await today(workspaceId, minutesAfter(30))).toBe('2 + 1')
+      expect(await accounts(workspaceId)).toMatchObject({ tariff: account(298, 1) })
       await expectBooksToBalance(workspaceId)
     })
 
     it('gives the gift of a workspace without a tariff to one of the tasks queued together', async () => {
       // No subscription row to lock first: the accounts are what the placements queue for.
-      const { workspaceId } = await funded({ tariff: 0, gift: 35, subscription: null })
+      const { workspaceId } = await funded({ tariff: 0, gift: 1, subscription: null })
       const queued = await tasks(workspaceId, 10)
 
       const results = await Promise.allSettled(
         queued.map((taskId) => fixtures.reserve(placement(workspaceId, taskId))),
       )
 
-      expect(fulfilled(results)).toMatchObject([{ applied: true, reserved: 35 }])
-      expect(rejected(results)).toEqual(Array(9).fill(expect.objectContaining(creditsHeld(0, 35))))
-      expect(await accounts(workspaceId)).toMatchObject({ gift: account(35, 35) })
-      expect(await db.giftSiteClaim.count({ where: { workspaceId } })).toBe(1)
+      expect(fulfilled(results)).toMatchObject([{ applied: true, reserved: 1 }])
+      expect(rejected(results)).toEqual(Array(9).fill(expect.objectContaining(creditsHeld(0, 1))))
+      expect(await accounts(workspaceId)).toMatchObject({ gift: account(1, 1) })
       await expectBooksToBalance(workspaceId)
     })
 
-    it('gives the gift of a site to one of two workspaces that ask together', async () => {
-      for (let round = 0; round < 6; round += 1) {
-        const host = `race-${randomUUID()}.example.ru`
-        const pair = await Promise.all(
-          [`https://${host}`, `http://www.${host}`].map(async (url) => {
-            const { workspaceId } = await funded({ tariff: 0, gift: 35, subscription: null })
-            return { workspaceId, taskId: await taskOn(workspaceId, url) }
-          }),
-        )
+    it('gives the gift to both of two workspaces that ask together about one site', async () => {
+      const host = `race-${randomUUID()}.example.ru`
+      const pair = await Promise.all(
+        [`https://${host}`, `http://www.${host}`].map(async (url) => {
+          const { workspaceId } = await funded({ tariff: 0, gift: 35, subscription: null })
+          return { workspaceId, taskId: await taskOn(workspaceId, url) }
+        }),
+      )
 
-        const results = await Promise.allSettled(
-          pair.map(({ workspaceId, taskId }) => fixtures.reserve(placement(workspaceId, taskId))),
-        )
+      const results = await Promise.allSettled(
+        pair.map(({ workspaceId, taskId }) => fixtures.reserve(placement(workspaceId, taskId))),
+      )
 
-        expect(results.map((result) => result.status).sort()).toEqual(['fulfilled', 'rejected'])
-        expect(rejected(results)).toEqual([
-          expect.objectContaining(needsTariff('gift_site_used', 35)),
-        ])
-        const winner = pair[results[0]?.status === 'fulfilled' ? 0 : 1]!
-        const loser = pair[results[0]?.status === 'fulfilled' ? 1 : 0]!
-        // One claim, the winner's; the other workspace keeps its gift and holds nothing.
-        expect(await db.giftSiteClaim.findMany({ where: { hostKey: host } })).toMatchObject([
-          { hostKey: host, workspaceId: winner.workspaceId },
-        ])
-        expect(await reserve(winner.taskId)).toEqual(['#1 gift 35 active'])
-        expect(await reserve(loser.taskId)).toEqual([])
-        expect(await accounts(loser.workspaceId)).toMatchObject({ gift: account(35) })
-        expect(await db.giftSiteClaim.count({ where: { workspaceId: loser.workspaceId } })).toBe(0)
-        for (const { workspaceId } of pair) await expectBooksToBalance(workspaceId)
-      }
-    })
-
-    it('refuses the gift of a site that another workspace claims while this one waits for it', async () => {
-      const first = await funded({ tariff: 0, gift: 35, subscription: null })
-      const second = await funded({ tariff: 0, gift: 35, subscription: null })
-      const host = `claimed-${randomUUID()}.example.ru`
-      const taskId = await taskOn(second.workspaceId, `https://${host}`)
-      const order: string[] = []
-      const placing: ReturnType<typeof fixtures.reserve>[] = []
-
-      await db.$transaction(async (tx) => {
-        // The first workspace has written its claim and not committed it yet.
-        await tx.giftSiteClaim.create({ data: { hostKey: host, workspaceId: first.workspaceId } })
-        // The second sees no claim, passes every check and waits at its own.
-        const started = fixtures.reserve(placement(second.workspaceId, taskId))
-        placing.push(started)
-        void started.then(
-          () => order.push('placed'),
-          () => order.push('refused'),
-        )
-        await new Promise((resolve) => setTimeout(resolve, 300))
-        order.push('claimed')
-      }, patient)
-
-      await expect(placing[0]).rejects.toMatchObject(needsTariff('gift_site_used', 35))
-      expect(order).toEqual(['claimed', 'refused'])
-      expect(await db.giftSiteClaim.findMany({ where: { hostKey: host } })).toMatchObject([
-        { workspaceId: first.workspaceId },
+      expect(fulfilled(results)).toMatchObject([
+        { applied: true, reserved: 1 },
+        { applied: true, reserved: 1 },
       ])
-      expect(await reserve(taskId)).toEqual([])
-      expect(await accounts(second.workspaceId)).toMatchObject({ gift: account(35) })
-      await expectBooksToBalance(second.workspaceId)
+      expect(await db.giftSiteClaim.count({ where: { hostKey: host } })).toBe(0)
+      for (const { workspaceId } of pair) await expectBooksToBalance(workspaceId)
     })
 
     it('charges a task once when it is reported done twice at once', async () => {
@@ -2260,7 +2051,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('lets either the charge or the return of a task win, never both', async () => {
       const { workspaceId } = await funded()
       const taskId = await task(workspaceId)
-      await place(workspaceId, taskId)
+      await placedBefore(workspaceId, taskId)
 
       const [charged, released] = await Promise.allSettled([settle(taskId, 17), release(taskId)])
 
@@ -2304,16 +2095,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       )
       const placed = await placing[0]!
       expect(order).toEqual(['renewing', 'placed'])
-      // The reserve waited for the new period, took the step from its quota and is stamped with
-      // it, though the clock that queued the task still showed the old period.
+      // The reserve waited for the new period, took its credit from the new quota and is
+      // stamped with it, though the clock that queued the task still showed the old period.
       expect(NOW.getTime()).toBeLessThan(periodEnd.getTime())
-      expect(placed).toMatchObject({ applied: true, reserved: 45 })
+      expect(placed).toMatchObject({ applied: true, reserved: 1 })
       expect(placed.holds[0]).toMatchObject({
         unit: 'credit_tariff',
         createdAt: periodEnd,
         placedAt: periodEnd,
       })
-      expect(await accounts(workspaceId)).toMatchObject({ tariff: account(300, 45) })
+      expect(await accounts(workspaceId)).toMatchObject({ tariff: account(300, 1) })
 
       // So its credits come back into the new period.
       const at = new Date(periodEnd.getTime() + DAY_MS)
@@ -2324,7 +2115,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('gives a reserve back either wholly before a renewal or wholly after it', async () => {
       const { workspaceId, plan, subscriptionId, periodEnd } = await subscribed()
       const taskId = await task(workspaceId)
-      await place(workspaceId, taskId)
+      await placedBefore(workspaceId, taskId)
       const order: string[] = []
       const releasing: ReturnType<typeof release>[] = []
 
@@ -2368,9 +2159,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('moves the expiry of every active row of a task together', async () => {
       const { workspaceId } = await funded({ tariff: 5, gift: 35, pack: 100 })
       const [waiting, other] = await tasks(workspaceId, 2)
-      await place(workspaceId, waiting!)
+      await placedBefore(workspaceId, waiting!)
       await grant(workspaceId, 'tariff', 45)
-      await place(workspaceId, other!, { now: minutesAfter(1) })
+      await placedBefore(workspaceId, other!, { now: minutesAfter(1) })
       const until = new Date(NOW.getTime() + 3 * DAY_MS)
 
       const extended = await extend(waiting!, until)
@@ -2398,9 +2189,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('has nothing to move for a task whose reserve is charged or given back, and finds no unknown task', async () => {
       const { workspaceId } = await funded()
       const [done, failed, never] = await tasks(workspaceId, 3)
-      await place(workspaceId, done!)
+      await placedBefore(workspaceId, done!)
       await settle(done!, 17)
-      await place(workspaceId, failed!)
+      await placedBefore(workspaceId, failed!)
       await release(failed!)
       const until = new Date(NOW.getTime() + 3 * DAY_MS)
       const before = await written(workspaceId)
@@ -2414,7 +2205,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('gives the reserve of a stuck task back once it is past its expiry', async () => {
       const { workspaceId } = await funded({ tariff: 5, gift: 35, pack: 100 })
       const taskId = await task(workspaceId)
-      await place(workspaceId, taskId)
+      await placedBefore(workspaceId, taskId)
       const expiresAt = new Date(NOW.getTime() + DAY_MS)
 
       // Until the expiry the reserve answers for a task that may still be done.
@@ -2447,10 +2238,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('expires the rows of a chain only together: the first attempt lives as long as the second', async () => {
       const { workspaceId } = await funded()
       const taskId = await task(workspaceId)
-      await place(workspaceId, taskId)
+      await placedBefore(workspaceId, taskId)
       const firstExpiry = new Date(NOW.getTime() + DAY_MS)
       const later = minutesAfter(180)
-      await place(workspaceId, taskId, { attempt: 2, now: later })
+      await placedBefore(workspaceId, taskId, { attempt: 2, now: later })
       const secondExpiry = new Date(later.getTime() + DAY_MS)
 
       // The first attempt would have expired here on its own.
@@ -2465,7 +2256,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('expires no row of a task while one of its rows has not reached its expiry', async () => {
       const { workspaceId } = await funded({ tariff: 5, pack: 100 })
       const taskId = await task(workspaceId)
-      await place(workspaceId, taskId)
+      await placedBefore(workspaceId, taskId)
       const expiresAt = new Date(NOW.getTime() + DAY_MS)
       // Rows written with different expiries, as nothing here writes them.
       const pack = await holdOf(taskId, 'pack')
@@ -2484,7 +2275,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       const t = await subscribed({ tariff: 40, pack: 100 })
       const taskId = await task(t.workspaceId)
       // The task waits for an answer across the renewal.
-      await place(t.workspaceId, taskId, { expiresAt: new Date(t.periodEnd.getTime() + DAY_MS) })
+      await placedBefore(t.workspaceId, taskId, {
+        expiresAt: new Date(t.periodEnd.getTime() + DAY_MS),
+      })
       await renew({ ...t, planId: t.plan.id })
       expect(await accounts(t.workspaceId)).toMatchObject({ tariff: account(340, 40) })
 
@@ -2504,7 +2297,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('returns the credits of a task that failed to the accounts they stood on', async () => {
       const { workspaceId } = await funded({ tariff: 5, gift: 35, pack: 100 })
       const taskId = await task(workspaceId)
-      await place(workspaceId, taskId)
+      await placedBefore(workspaceId, taskId)
 
       const released = await release(taskId)
 
@@ -2529,7 +2322,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('gives the reserve of a task back once, however often and in whatever way it is asked', async () => {
       const { workspaceId } = await funded()
       const taskId = await task(workspaceId)
-      await place(workspaceId, taskId)
+      await placedBefore(workspaceId, taskId)
 
       const [first, second] = await Promise.all([release(taskId), release(taskId)])
 
@@ -2543,8 +2336,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('releases every attempt of a chain together', async () => {
       const { workspaceId } = await funded({ tariff: 50, gift: 35, pack: 100 })
       const taskId = await task(workspaceId)
-      await place(workspaceId, taskId)
-      await place(workspaceId, taskId, { attempt: 2, now: minutesAfter(60) })
+      await placedBefore(workspaceId, taskId)
+      await placedBefore(workspaceId, taskId, { attempt: 2, now: minutesAfter(60) })
 
       expect((await release(taskId)).holds).toHaveLength(4)
 
@@ -2564,7 +2357,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('expires tariff credits that come back after their period was renewed, and returns the others', async () => {
       const t = await subscribed({ tariff: 5, gift: 35, pack: 100 })
       const taskId = await task(t.workspaceId)
-      await place(t.workspaceId, taskId)
+      await placedBefore(t.workspaceId, taskId)
       await renew({ ...t, planId: t.plan.id })
       const tariffRow = await holdOf(taskId, 'tariff')
       const at = new Date(t.periodEnd.getTime() + DAY_MS)
@@ -2599,7 +2392,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('returns tariff credits reserved after their period ended while the renewal is not settled', async () => {
       const t = await subscribed()
       const taskId = await task(t.workspaceId)
-      await place(t.workspaceId, taskId, { now: minutesAfter(2, t.periodEnd) })
+      await placedBefore(t.workspaceId, taskId, { now: minutesAfter(2, t.periodEnd) })
 
       // Still the period the credits are of: they come back.
       expect(await release(taskId, { now: minutesAfter(5, t.periodEnd) })).toMatchObject({
@@ -2612,7 +2405,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('expires tariff credits reserved after their period ended once the renewal is settled', async () => {
       const t = await subscribed()
       const taskId = await task(t.workspaceId)
-      await place(t.workspaceId, taskId, { now: minutesAfter(2, t.periodEnd) })
+      await placedBefore(t.workspaceId, taskId, { now: minutesAfter(2, t.periodEnd) })
       await renew({ ...t, planId: t.plan.id })
 
       const released = await release(taskId, { now: minutesAfter(10, t.periodEnd) })
@@ -2627,7 +2420,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       async (state) => {
         const t = await subscribed({ tariff: 40, gift: 3, pack: 100 })
         const taskId = await task(t.workspaceId)
-        await place(t.workspaceId, taskId)
+        await placedBefore(t.workspaceId, taskId)
         expect(await reserve(taskId)).toEqual([
           '#1 tariff 40 active',
           '#1 gift 3 active',
@@ -2662,11 +2455,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('gives nothing back of a charged chain, nor charges one that was given back', async () => {
       const { workspaceId } = await funded()
       const [done, failed, lapsed] = await tasks(workspaceId, 3)
-      await place(workspaceId, done!)
+      await placedBefore(workspaceId, done!)
       await settle(done!, 17)
-      await place(workspaceId, failed!)
+      await placedBefore(workspaceId, failed!)
       await release(failed!)
-      await place(workspaceId, lapsed!)
+      await placedBefore(workspaceId, lapsed!)
       await expire(lapsed!)
       const before = await written(workspaceId)
 
@@ -2684,7 +2477,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('walks one task through two accounts: 5 of the tariff and 12 of the pack', async () => {
       const { workspaceId } = await funded({ tariff: 5, pack: 100 })
       const taskId = await task(workspaceId)
-      await place(workspaceId, taskId)
+      await placedBefore(workspaceId, taskId)
       const tariffAccount = await accountId(workspaceId, 'tariff')
       const packAccount = await accountId(workspaceId, 'pack')
       const gift = { where: { id: await accountId(workspaceId, 'gift') } }
@@ -2737,8 +2530,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('keeps the order of the owner between two tasks: the tariff pays for the one reserved on the pack', async () => {
       const { workspaceId } = await funded({ tariff: 40, pack: 100 })
       const [a, b] = await tasks(workspaceId, 2)
-      await place(workspaceId, a!)
-      await place(workspaceId, b!, { now: minutesAfter(1) })
+      await placedBefore(workspaceId, a!)
+      await placedBefore(workspaceId, b!, { now: minutesAfter(1) })
       expect(await reserve(a!)).toEqual(['#1 tariff 40 active', '#1 pack 5 active'])
       expect(await reserve(b!)).toEqual(['#1 pack 45 active'])
 
@@ -2768,8 +2561,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('takes from the pack what another task still holds on the tariff: the other order', async () => {
       const { workspaceId } = await funded({ tariff: 40, pack: 100 })
       const [a, b] = await tasks(workspaceId, 2)
-      await place(workspaceId, a!)
-      await place(workspaceId, b!, { now: minutesAfter(1) })
+      await placedBefore(workspaceId, a!)
+      await placedBefore(workspaceId, b!, { now: minutesAfter(1) })
 
       // B is done first: A holds all 40 tariff credits, and they cannot be given away.
       expect(await settle(b!, 17)).toMatchObject({ from: { tariff: 0, gift: 0, pack: 17 } })
@@ -2798,7 +2591,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     ])('spends three accounts in order: a charge of %i', async (credits, from, left) => {
       const { workspaceId } = await funded({ tariff: 5, gift: 35, pack: 100 })
       const taskId = await task(workspaceId)
-      await place(workspaceId, taskId)
+      await placedBefore(workspaceId, taskId)
 
       const charged = await settle(taskId, credits)
 
@@ -2820,7 +2613,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('moves the charge to credits that came free since the reserve, towards the front of the order', async () => {
       const { workspaceId } = await funded({ tariff: 5, gift: 35, pack: 100 })
       const taskId = await task(workspaceId)
-      await place(workspaceId, taskId)
+      await placedBefore(workspaceId, taskId)
       // Tariff credits appear before the task ends.
       await grant(workspaceId, 'tariff', 50)
 
@@ -2838,7 +2631,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       // credits; the task is done on the 19th for 17.
       const t = await subscribed({ tariff: 45 })
       const taskId = await task(t.workspaceId)
-      await place(t.workspaceId, taskId, {
+      await placedBefore(t.workspaceId, taskId, {
         expiresAt: new Date(t.periodEnd.getTime() + 2 * DAY_MS),
       })
       await renew({ ...t, planId: t.plan.id })
@@ -2878,7 +2671,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('pays from the row of an ended period to its last credit, then from the credits of the new one', async () => {
       const t = await subscribed({ tariff: 10, pack: 100 })
       const taskId = await task(t.workspaceId)
-      await place(t.workspaceId, taskId, {
+      await placedBefore(t.workspaceId, taskId, {
         expiresAt: new Date(t.periodEnd.getTime() + 2 * DAY_MS),
       })
       expect(await reserve(taskId)).toEqual(['#1 tariff 10 active', '#1 pack 35 active'])
@@ -2909,9 +2702,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       async (state) => {
         const t = await subscribed({ tariff: 40, gift: 0, pack: 100 })
         const [small, large] = await tasks(t.workspaceId, 2)
-        await place(t.workspaceId, small!)
+        await placedBefore(t.workspaceId, small!)
         await grant(t.workspaceId, 'tariff', 40)
-        await place(t.workspaceId, large!, { now: minutesAfter(1) })
+        await placedBefore(t.workspaceId, large!, { now: minutesAfter(1) })
         for (const taskId of [small!, large!]) {
           expect(await reserve(taskId)).toEqual(['#1 tariff 40 active', '#1 pack 5 active'])
         }
@@ -2939,8 +2732,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('charges the attempts of a chain as one task from one pool', async () => {
       const { workspaceId } = await funded({ tariff: 60, pack: 100 })
       const taskId = await task(workspaceId)
-      await place(workspaceId, taskId)
-      await place(workspaceId, taskId, { attempt: 2, now: minutesAfter(60) })
+      await placedBefore(workspaceId, taskId)
+      await placedBefore(workspaceId, taskId, { attempt: 2, now: minutesAfter(60) })
       expect(await reserve(taskId)).toEqual([
         '#1 tariff 45 active',
         '#2 tariff 15 active',
@@ -2968,10 +2761,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('charges only the retry of a task whose first attempt failed', async () => {
       const { workspaceId } = await funded()
       const taskId = await task(workspaceId)
-      await place(workspaceId, taskId)
+      await placedBefore(workspaceId, taskId)
       await release(taskId)
       await db.task.update({ where: { id: taskId }, data: { modelClass: 'heavy', attempt: 2 } })
-      await place(workspaceId, taskId, { attempt: 2, now: minutesAfter(30), retry: true })
+      await placedBefore(workspaceId, taskId, { attempt: 2, now: minutesAfter(30), retry: true })
 
       const charged = await settle(taskId, 60, { now: minutesAfter(60) })
 
@@ -2988,7 +2781,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('stamps the charge of the tariff inside the period whose credits it takes', async () => {
       const { workspaceId } = await funded({ tariff: 5, pack: 100 })
       const taskId = await task(workspaceId)
-      await place(workspaceId, taskId)
+      await placedBefore(workspaceId, taskId)
       // Done after the period ended, before its renewal is settled: the tariff is still active
       // and its credits are of the period that ended.
       const late = minutesAfter(3, PERIOD_END)
@@ -3009,7 +2802,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('returns what the first call did when it is asked again, and changes nothing', async () => {
       const t = await subscribed({ tariff: 10, gift: 20, pack: 100 })
       const taskId = await task(t.workspaceId)
-      await place(t.workspaceId, taskId, {
+      await placedBefore(t.workspaceId, taskId, {
         expiresAt: new Date(t.periodEnd.getTime() + 2 * DAY_MS),
       })
       expect(await reserve(taskId)).toEqual([
@@ -3042,7 +2835,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('reports again what expired with the charge of an ended period', async () => {
       const t = await subscribed({ tariff: 45 })
       const taskId = await task(t.workspaceId)
-      await place(t.workspaceId, taskId, {
+      await placedBefore(t.workspaceId, taskId, {
         expiresAt: new Date(t.periodEnd.getTime() + 2 * DAY_MS),
       })
       await renew({ ...t, planId: t.plan.id })
@@ -3072,9 +2865,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('charges the next chain of a charged task on its own, under keys of its own', async () => {
       const { workspaceId } = await funded()
       const taskId = await task(workspaceId)
-      await place(workspaceId, taskId)
+      await placedBefore(workspaceId, taskId)
       const first = await settle(taskId, 17)
-      await place(workspaceId, taskId, { attempt: 2, follows: 'message' })
+      await placedBefore(workspaceId, taskId, { attempt: 2, follows: 'message' })
       const tariff = await accountId(workspaceId, 'tariff')
 
       const second = await settle(taskId, 9)
@@ -3093,24 +2886,73 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       await expect(settle(taskId, 17)).rejects.toMatchObject(conflict)
     })
 
-    it('refuses a charge above the reserve of the task and takes one equal to it', async () => {
+    // Owner's decision of 10.11.2026 (docs/spec.md §20, «Только кредиты», КР5–КР8): a pass is
+    // charged its work, not its reserve.
+    it('charges above the reserve from the free credits, in the order credits are spent', async () => {
       const { workspaceId } = await funded({ tariff: 5, pack: 100 })
       const taskId = await task(workspaceId)
       await place(workspaceId, taskId)
-      const before = await written(workspaceId)
 
-      // Free credits of the pack do not raise what a task may be charged.
-      await expect(settle(taskId, 46)).rejects.toMatchObject(badRequest)
-      expect(await written(workspaceId)).toEqual(before)
+      expect(await settle(taskId, 46)).toMatchObject({
+        credits: 46,
+        from: { tariff: 5, gift: 0, pack: 41 },
+        debt: 0,
+      })
+      expect(await accounts(workspaceId)).toMatchObject({ tariff: account(0), pack: account(59) })
+      expect(await debtOf(workspaceId)).toBe(0)
+      await expectBooksToBalance(workspaceId)
+    })
 
-      expect(await settle(taskId, 45)).toMatchObject({ from: { tariff: 5, gift: 0, pack: 40 } })
-      expect(await accounts(workspaceId)).toMatchObject({ tariff: account(0), pack: account(60) })
+    it('makes what the accounts cannot pay the debt of the workspace, on its pack account', async () => {
+      const { workspaceId } = await funded({ tariff: 0, gift: 2, subscription: null })
+      const taskId = await task(workspaceId)
+      await place(workspaceId, taskId)
+
+      const charged = await settle(taskId, 10)
+
+      // Two credits of the gift pay; eight are owed.
+      expect(charged).toMatchObject({ credits: 10, from: { tariff: 0, gift: 2, pack: 0 }, debt: 8 })
+      expect(await accounts(workspaceId)).toMatchObject({ gift: account(0), pack: account(0) })
+      expect(await debtOf(workspaceId)).toBe(8)
+      // The ledger has what was paid; the debt is not a movement of a balance.
+      expect(await ledger(workspaceId)).toEqual(rows('gift grant 2 → 2', 'gift charge -2 → 0'))
+      expect(await reserve(taskId)).toEqual(['#1 gift 1 captured'])
+      await expectBooksToBalance(workspaceId)
+      // A repeat names what was posted: the debt is not in the ledger.
+      expect(await settle(taskId, 2)).toMatchObject({ credits: 2, applied: false, debt: 0 })
+
+      // While the debt is above what can be spent, no task starts.
+      await grant(workspaceId, 'gift', 5)
+      expect(await refused(workspaceId, await task(workspaceId))).toMatchObject(
+        needsTariff('gift_spent', 0),
+      )
+      // A credit more than the debt is one that can be spent.
+      await grant(workspaceId, 'gift', 4)
+      expect(await place(workspaceId, await task(workspaceId))).toMatchObject({
+        applied: true,
+        reserved: 1,
+      })
+    })
+
+    it('adds every debt up, pass by pass', async () => {
+      const { workspaceId } = await funded({ tariff: 1 })
+      const [first, second] = await tasks(workspaceId, 2)
+      await place(workspaceId, first!)
+      await settle(first!, 4)
+      expect(await debtOf(workspaceId)).toBe(3)
+      // The workspace is in debt: nothing can be spent, a new task is refused.
+      expect(await refused(workspaceId, second!)).toMatchObject(notEnough('empty', 0))
+      await grant(workspaceId, 'pack', 10)
+      await place(workspaceId, second!, { now: minutesAfter(5) })
+      await settle(second!, 20, { now: minutesAfter(6) })
+      // Ten of the pack paid; ten more are owed.
+      expect(await debtOf(workspaceId)).toBe(13)
     })
 
     it('keeps credits held through the end of the period and charges them without touching the new quota', async () => {
       const t = await subscribed()
       const taskId = await task(t.workspaceId)
-      await place(t.workspaceId, taskId, {
+      await placedBefore(t.workspaceId, taskId, {
         expiresAt: new Date(t.periodEnd.getTime() + 2 * DAY_MS),
       })
 
@@ -3131,7 +2973,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       const long = { expiresAt: new Date(t.periodEnd.getTime() + 2 * DAY_MS) }
       // 45 + 45 + 10 of the tariff, then the gift, then the pack.
       for (const [index, taskId] of [a, b, c, d, e].entries()) {
-        await place(t.workspaceId, taskId!, { ...long, now: minutesAfter(index) })
+        await placedBefore(t.workspaceId, taskId!, { ...long, now: minutesAfter(index) })
       }
       expect(await accounts(t.workspaceId)).toEqual({
         tariff: account(100, 100),

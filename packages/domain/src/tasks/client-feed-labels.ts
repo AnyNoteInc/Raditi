@@ -312,19 +312,8 @@ export function feedCancelledSentence(
 export const creditsCountText = (count: number): string =>
   `${groupDigits(count)} ${pluralRu(count, 'кредит', 'кредита', 'кредитов')}`
 
-// After «до» and «из»: «до 1 кредита», «до 45 кредитов».
-const creditsUpToText = (count: number): string =>
-  `${groupDigits(count)} ${pluralRu(count, 'кредита', 'кредитов', 'кредитов')}`
 const spentText = (count: number): string =>
   `${pluralRu(count, 'ушёл', 'ушло', 'ушло')} ${creditsCountText(count)}`
-const ofHeldText = (count: number): string =>
-  `${groupDigits(count)} ${pluralRu(count, 'отложенного', 'отложенных', 'отложенных')}`
-const allHeldText = (count: number): string =>
-  `${pluralRu(count, 'ушёл весь', 'ушли все', 'ушли все')} ${groupDigits(count)} ` +
-  `${pluralRu(count, 'отложенный', 'отложенных', 'отложенных')} ` +
-  pluralRu(count, 'кредит', 'кредита', 'кредитов')
-const leftShortText = (count: number): string =>
-  `${pluralRu(count, 'оставшегося', 'оставшихся', 'оставшихся')} ${groupDigits(count)} не хватает на следующий шаг`
 
 /** The three numbers of a `ceiling` row, in credits. */
 export interface FeedCeilingNumbers {
@@ -342,7 +331,7 @@ export interface FeedCeilingNumbers {
  * optional, and a sentence that needs a missing part is left out.
  */
 export interface FeedCeilingOffer {
-  /** `step`: how many credits the next attempt would hold. */
+  /** `step`: how many credits the next attempt would hold. No longer told (КР5–КР8). */
   nextHold?: number
   /** `credits`: the pack on sale; `price` is the amount as shown, without the currency sign. */
   pack?: { credits: number; price: string }
@@ -365,25 +354,22 @@ export function feedCeilingText(
   question: FeedCeilingNumbers,
   offer: FeedCeilingOffer = {},
 ): string {
-  const { spent, held, left } = question
+  // Since 10.11.2026 a reserve is one credit and bounds nothing (КР5–КР8): the question tells
+  // what the task spent, not what was set aside for it. `held` and `left` stay in the row.
+  const { spent } = question
   const sentences: string[] = []
   switch (question.reason) {
     case 'step':
       sentences.push(
-        `Задача оказалась больше обычной: на неё уже ${spentText(spent)} из ${ofHeldText(held)}.`,
+        `Задача оказалась большой: на неё уже ${spentText(spent)}, и проход дошёл до своего технического предела.`,
         'Продолжить?',
+        'Спишем только то, что уйдёт на работу.',
       )
-      if (offer.nextHold !== undefined)
-        sentences.push(
-          `Отложим ещё до ${creditsUpToText(offer.nextHold)} и спишем только то, что уйдёт на работу.`,
-        )
       sentences.push('Если остановиться, больше ничего не спишем.')
       break
     case 'credits':
       sentences.push(
-        left > 0
-          ? `Лимиты закончились посреди задачи: на неё ${spentText(spent)} из ${ofHeldText(held)}, а ${leftShortText(left)}.`
-          : `Лимиты закончились посреди задачи: на неё ${allHeldText(held)}.`,
+        `Кредиты закончились посреди задачи: на неё ${spentText(spent)}.`,
         'Работа сохранена.',
       )
       if (offer.pack)
@@ -398,12 +384,10 @@ export function feedCeilingText(
       break
     case 'gift':
       sentences.push(
-        left > 0
-          ? `Подарочные кредиты закончились посреди задачи: на неё ушло ${groupDigits(spent)} из ${groupDigits(held)}, а ${leftShortText(left)}.`
-          : `Подарочные кредиты закончились посреди задачи: на неё ушли все ${groupDigits(held)}.`,
+        `Кредиты закончились посреди задачи: на неё ${spentText(spent)}.`,
         'Работа сохранена.',
         'Выберите тариф — и продолжим с того же места.',
-        'Если остановить задачу, больше ничего не спишем, а неистраченные подарочные кредиты вернутся.',
+        NOTHING_MORE_IF_STOPPED,
       )
       break
     case 'attempts':

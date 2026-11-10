@@ -209,6 +209,11 @@ function refusedByNetwork(error: unknown): boolean {
   return /net::ERR_/.test(message) && !/net::ERR_ABORTED/.test(message)
 }
 
+/** A navigation that turned into a download: the address answered with a file, not a page. */
+function startsDownload(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('Download is starting')
+}
+
 /** A navigation Chromium's own error page took over (`chrome-error://`), not one of the page. */
 function interruptedByErrorPage(error: unknown): boolean {
   const message = error instanceof Error ? error.message : ''
@@ -681,6 +686,11 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
     // once more only if it never commits — asked at once, it would be interrupted in turn by the
     // one it repeats.
     await go().catch(async (error: unknown) => {
+      // An address that answers with a file does not navigate: Playwright raises «Download is
+      // starting» from `goto`, and the `download` event — `#downloaded` — takes the file. That is
+      // the page's answer, not a failure: the agent would repeat the opening and spend the numbers
+      // of the session's downloads on copies of one file. The page stays where it was.
+      if (startsDownload(error)) return
       if (!interruptedByErrorPage(error)) throw error
       await entry.page
         .waitForURL(url, {
@@ -1489,7 +1499,28 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
     if (this.#downloadsInFlight >= browserDownloadLimits.inFlight) return cancel()
     this.#downloadsInFlight += 1
     entry.done = (async () => {
-      const stream = await download.createReadStream()
+      // Playwright answers `createReadStream` only when the file is whole in the container, so a
+      // download that never ends would keep its place of the two for the rest of the session —
+      // and every later download would be cancelled. Past `readMs` it is cancelled and listed as
+      // `failed`, and its place is free again.
+      const reading = download.createReadStream()
+      reading.catch(() => undefined)
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const stream = await Promise.race([
+        reading,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            cancel()
+            // A stream that arrives after all, the file having ended in the same moment, is
+            // nobody's: its descriptor is closed here, not left to the garbage collector.
+            reading.then(
+              (late) => late.destroy(),
+              () => undefined,
+            )
+            reject(new Error('The download did not end in time'))
+          }, browserDownloadLimits.readMs)
+        }),
+      ]).finally(() => clearTimeout(timer))
       const chunks: Buffer[] = []
       let size = 0
       const room = Math.min(
@@ -1510,6 +1541,15 @@ class PlaywrightCloudBrowser implements CloudBrowserSession {
       const bytes = new Uint8Array(Buffer.concat(chunks))
       entry.sizeBytes = size
       entry.kind = downloadKindOf({ name: entry.name, bytes })
+      // `room` was what was left when this read began: two reads that ran together were each
+      // given the same room, so the session's bytes are counted once more as the file is kept.
+      if (
+        entry.kind !== 'binary' &&
+        this.#downloadBytes() + size > browserDownloadLimits.sessionBytes
+      ) {
+        entry.kind = 'too_large'
+        return
+      }
       // A file that does not read is not kept.
       entry.bytes = entry.kind === 'binary' ? null : bytes
     })()

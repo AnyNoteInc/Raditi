@@ -2,6 +2,7 @@ import { Decimal } from 'decimal.js'
 import { z } from 'zod'
 
 import { badRequest } from '../errors.ts'
+import { turnKeyLimitRub } from '../llm/budget.ts'
 import { modelClassSchema } from '../llm/model-class.ts'
 import { agentDriverIds } from './agent-driver.ts'
 import { llmBackendIdSchema } from './llm-backend.ts'
@@ -24,10 +25,10 @@ export const turnCredentialGrantSchema = z
      */
     budgetRub: z
       .string()
-      .regex(/^(?:0|[1-9]\d{0,2})\.\d{2}$/)
+      .regex(/^(?:0|[1-9]\d{0,7})\.\d{2}$/)
       .refine((value) => {
-        if (!/^(?:0|[1-9]\d{0,2})\.\d{2}$/.test(value)) return false
-        return new Decimal(value).gt(0) && new Decimal(value).lte(750)
+        if (!/^(?:0|[1-9]\d{0,7})\.\d{2}$/.test(value)) return false
+        return new Decimal(value).gt(0) && new Decimal(value).lte(turnKeyLimitRub)
       }),
     /** A runner VM's trusted source address; null is local execution only. */
     boundSource: z.union([z.ipv4(), z.ipv6()]).nullable(),

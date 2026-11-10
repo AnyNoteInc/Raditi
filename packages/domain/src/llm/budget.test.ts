@@ -8,6 +8,7 @@ import {
   estimatedCacheReadTokens,
   firstCallReserveRub,
   turnKeyBudgetVerdict,
+  turnKeyLimitRub,
   type AttemptBudgetInput,
   type TurnKeyBudgetInput,
 } from './budget.ts'
@@ -66,9 +67,23 @@ describe('attemptBudgetRub', () => {
     expect(attemptBudgetRub({ ...quota, spentRub: '0.0000000001' })).toBe('284.99')
   })
 
-  it('caps the remaining budget, after spending, at 750 RUB', () => {
-    expect(attemptBudgetRub({ ...payg, holdRub: '2030' })).toBe('750.00')
-    expect(attemptBudgetRub({ ...payg, holdRub: '2030', spentRub: '300' })).toBe('700.00')
+  // Since 10.11.2026 no key has a limit of its own (КР6): `turnKeyLimitRub` is what the column
+  // of the budget holds, not a limit of a pass.
+  it('keeps the remaining budget within what a key can be written with', () => {
+    expect(turnKeyLimitRub).toBe(99_999_999)
+    expect(attemptBudgetRub({ ...payg, holdRub: '8030' })).toBe('4000.00')
+    expect(attemptBudgetRub({ ...payg, holdRub: '8030', spentRub: '1300' })).toBe('2700.00')
+  })
+
+  // A billable task in credits has no ceiling of its class and no limit of a pass (КР6): what
+  // the customer can pay bounds its key, and its issuer computes that.
+  it('bounds an attempt in credits by nothing but what a key can be written with', () => {
+    const credits = { kind: 'credits', spentRub: '0', openReservedRub: '0' } as const
+    expect(attemptBudgetRub(credits)).toBe('99999999.00')
+    expect(attemptBudgetRub({ ...credits, spentRub: '2500', openReservedRub: '100' })).toBe(
+      '99997399.00',
+    )
+    expect(() => attemptBudgetRub({ ...credits, modelClass: 'standard' } as never)).toThrow()
   })
 
   it('returns zero when spending or the fee exhausts the available ceiling', () => {
@@ -317,7 +332,7 @@ describe('callFitsBudget', () => {
   })
 
   it.each([
-    { budgetRub: '750.01' },
+    { budgetRub: '100000000.00' },
     { budgetRub: '-1' },
     { spentRub: 'NaN' },
     { openReservedRub: 'secret-value' },
@@ -401,10 +416,10 @@ describe('turnKeyBudgetVerdict', () => {
     )
   })
 
-  it('never lets any key exceed 750 RUB and reports it as a verdict, not as invalid input', () => {
-    const attempt = { ...payg, holdRub: '2030' }
-    expect(turnKeyBudgetVerdict(key({ attempt, budgetRub: '750.00' }), prices)).toBe('ok')
-    for (const budgetRub of ['750.01', '751', '99999999'])
+  it('never lets a key exceed what its attempt allows and reports it as a verdict, not as invalid input', () => {
+    const attempt = { ...payg, holdRub: '8030' }
+    expect(turnKeyBudgetVerdict(key({ attempt, budgetRub: '4000.00' }), prices)).toBe('ok')
+    for (const budgetRub of ['4000.01', '4001', '99999999'])
       expect(turnKeyBudgetVerdict(key({ attempt, budgetRub }), prices)).toBe('above_ceiling')
   })
 

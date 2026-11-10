@@ -81,13 +81,14 @@ beforeEach(() => {
 })
 
 describe('who may buy a pack', () => {
-  // Auto-renewal decides nothing here: a pack is sold on top of any tariff that takes tasks.
+  // Since 10.11.2026 a pack is sold to everyone while payments are on (КР9): without a tariff
+  // that takes tasks the server prices it twice as high. Auto-renewal decides nothing here.
   it.each([
     ['an active tariff that renews', true, 'active', true, true],
     ['an active tariff that ends with its period', true, 'active', false, true],
-    ['an overdue tariff that would renew', true, 'past_due', true, false],
-    ['an overdue tariff that does not renew', true, 'past_due', false, false],
-    ['a trial, which takes no tasks', true, 'trial', false, false],
+    ['an overdue tariff that would renew', true, 'past_due', true, true],
+    ['an overdue tariff that does not renew', true, 'past_due', false, true],
+    ['a trial, which takes no tasks', true, 'trial', false, true],
     ['payments switched off, a tariff that renews', false, 'active', true, false],
     ['payments switched off, a tariff that ends', false, 'active', false, false],
   ] as const)('%s', (_case, paymentsEnabled, status, autoRenewal, allowed) => {
@@ -96,8 +97,8 @@ describe('who may buy a pack', () => {
     expect(canBuyPack(overviewOf({ paymentsEnabled, subscription }))).toBe(allowed)
   })
 
-  it('nobody without a tariff', () => {
-    expect(canBuyPack(overviewOf())).toBe(false)
+  it('a customer without a tariff, while payments are on', () => {
+    expect(canBuyPack(overviewOf())).toBe(true)
     expect(canBuyPack(overviewOf({ paymentsEnabled: false }))).toBe(false)
   })
 })

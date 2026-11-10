@@ -1823,9 +1823,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL refund', () => {
         fixtures.task(t.workspaceId),
         fixtures.task(t.workspaceId),
       ])
-      // Each task sets its step of 45 credits aside on the tariff.
+      // Each task sets its step of 45 credits aside on the tariff, as before 10.11.2026.
       for (const { taskId } of [spent, held]) {
-        await fixtures.reserve({
+        await fixtures.reserveByStep({
           workspaceId: t.workspaceId,
           taskId,
           attempt: 1,
@@ -2262,7 +2262,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL refund', () => {
       await fixtures.hold(t.workspaceId, 'gift', 15)
       const tasks = await Promise.all([1, 2, 3].map(() => fixtures.task(t.workspaceId)))
       for (const { taskId } of tasks) {
-        await fixtures.reserve({
+        await fixtures.reserveByStep({
           workspaceId: t.workspaceId,
           taskId,
           attempt: 1,

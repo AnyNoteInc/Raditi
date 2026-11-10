@@ -396,9 +396,10 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
 
     const statuses = async (taskId: string) =>
       (await db.creditHold.findMany({ where: { taskId } })).map((hold) => hold.status)
-    expect(new Set(await statuses(waiting.taskId))).toEqual(new Set(['captured']))
+    // Settled: no recorded work, so nothing is charged and the chain is given back (КР5–КР8).
+    expect(new Set(await statuses(waiting.taskId))).toEqual(new Set(['released']))
     expect(new Set(await statuses(working.taskId))).toEqual(new Set(['active']))
-    // Charged: the next tick finds nothing more to do.
+    // Settled: the next tick finds nothing more to do.
     expect(await sweep().chargeLater()).toBe(0)
   })
 

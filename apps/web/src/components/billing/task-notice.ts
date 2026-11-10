@@ -84,14 +84,6 @@ const packPrice = (pack: { credits: number; price: string }) =>
 const nextGrant = ({ periodEnd, nextPlan }: NoticeTariff) =>
   `${formatMoscowDay(periodEnd)} начислим ${formatCount(nextPlan.creditsPerMonth)} ${creditsWord(nextPlan.creditsPerMonth)} по тарифу «${nextPlan.name}».`
 
-/** «оставшиеся 15 подарочных кредитов сохранятся»: what a tariff keeps of the gift. */
-function giftKept(left: number): string {
-  const remaining = plural(left, 'оставшийся', 'оставшиеся', 'оставшиеся')
-  const gift = plural(left, 'подарочный кредит', 'подарочных кредита', 'подарочных кредитов')
-  const kept = plural(left, 'сохранится', 'сохранятся', 'сохранятся')
-  return `${remaining} ${formatCount(left)} ${gift} ${kept}`
-}
-
 /**
  * The daily limit «завтра» may promise: what the tariff gives when the next Moscow day starts,
  * or null when it will give nothing then and no promise is made. A tariff that is paid and whose
@@ -251,13 +243,6 @@ export function taskNotice(input: TaskNoticeInput): TaskNotice | null {
         way: 'Выберите тариф — подарочные кредиты сохранятся и прибавятся к кредитам тарифа.',
         actions: toTariff,
       }
-    case 'trial_unpaid_limit':
-      return {
-        state:
-          'Пробные задачи закончились: несколько задач остановились без результата, и без тарифа мы больше не можем их принимать.',
-        way: `${overdue ? 'Оплатите' : 'Выберите'} тариф, чтобы продолжить; ${giftKept(input.giftLeft)}.`,
-        actions: toTariff,
-      }
     case 'empty':
     case 'below_start':
       // Both are of a paid tariff: the read model names them for nobody else.
@@ -283,30 +268,6 @@ export function taskNotice(input: TaskNoticeInput): TaskNotice | null {
         way: 'Оплатите тариф — кредиты нового периода начислим сразу.',
         actions: ['pay'],
       }
-    case 'ended': {
-      const { packLeft } = input
-      const kept = plural(
-        packLeft,
-        'он не сгорает и снова будет доступен',
-        'они не сгорают и снова будут доступны',
-        'они не сгорают и снова будут доступны',
-      )
-      return {
-        state: `Тариф закончился. У вас ${formatCount(packLeft)} ${creditsWord(packLeft)} из пакета: ${kept}, когда вы выберете тариф.`,
-        way: null,
-        actions: ['choose_plan'],
-      }
-    }
-    case 'unpaid_limit':
-      return {
-        state:
-          'В этом периоде слишком много задач остановилось без результата, поэтому новые задачи временно не принимаются. Кредиты за них не списаны. Напишите нам — разберёмся, в чём дело.',
-        way: null,
-        actions: [],
-      }
-    case 'gift_site_used':
-      // Known only where the site is: in the chat of that site, not on a page of the account.
-      return null
   }
 }
 
@@ -337,13 +298,18 @@ export function noticeText(notice: TaskNotice, payable = true): string {
 export function plansWithoutTariff(input: {
   gift: GiftCredits
   task: TaskCredits
-  /** Credits of a pack that wait for a tariff. */
+  /** Credits of a pack, spent after the gift. */
   packLeft: number
   hadTariff: boolean
   canChoose: boolean
 }): string {
   const { gift, task, packLeft, hadTariff, canChoose } = input
   const unavailable = 'Оплата пока недоступна.'
+  if (task.newTask.allowed && gift.available === 0) {
+    // A pack alone carries the tasks: it is spent like the gift (owner's decision of 10.11.2026).
+    const text = `У вас ${formatCount(packLeft)} ${creditsWord(packLeft)} из пакета. Когда кредиты закончатся, понадобится тариф.`
+    return canChoose ? text : `${text} ${unavailable}`
+  }
   if (task.newTask.allowed) {
     const enough = giftIsEnoughFor(gift.available)
     const holds =
@@ -352,18 +318,16 @@ export function plansWithoutTariff(input: {
     return canChoose ? text : `${text} ${unavailable}`
   }
   // That a tariff has ended, and what it left, is told by the block of that tariff below.
-  const toldBelow = hadTariff && task.newTask.reason === 'ended'
-  const notice =
-    noGiftToSpeakOf(gift, task) || toldBelow
-      ? null
-      : taskNotice({
-          task,
-          giftLeft: gift.available,
-          packLeft,
-          tariff: null,
-          pack: null,
-          canResume: false,
-        })
+  const notice = noGiftToSpeakOf(gift, task)
+    ? null
+    : taskNotice({
+        task,
+        giftLeft: gift.available,
+        packLeft,
+        tariff: null,
+        pack: null,
+        canResume: false,
+      })
   if (notice === null) {
     if (!canChoose) return unavailable
     return hadTariff

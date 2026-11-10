@@ -122,8 +122,8 @@ const keyColumns = Prisma.sql`
  */
 export class PostgresGatewayStore implements GatewayStore {
   readonly #maxRequestsPerKey: number
-  readonly #maxCallsPerKey30s: number
-  readonly #maxCallsPerKey: number
+  readonly #maxCallsPerKey30s: number | null
+  readonly #maxCallsPerKey: number | null
   readonly #ledger: LlmCallLedger
 
   private readonly db: Database
@@ -132,9 +132,9 @@ export class PostgresGatewayStore implements GatewayStore {
     db: Database,
     options: {
       maxRequestsPerKey?: number
-      /** Calls one key may start within thirty seconds, and at all. */
-      maxCallsPerKey30s?: number
-      maxCallsPerKey?: number
+      /** Calls one key may start within thirty seconds, and at all; null or left out — no limit. */
+      maxCallsPerKey30s?: number | null
+      maxCallsPerKey?: number | null
       lostAfterMs?: number
       logger?: { warn(message: string): void }
     } = {},
@@ -151,13 +151,15 @@ export class PostgresGatewayStore implements GatewayStore {
       .int()
       .min(1)
       .max(1_000)
-      .parse(options.maxCallsPerKey30s ?? 20)
+      .nullable()
+      .parse(options.maxCallsPerKey30s ?? null)
     this.#maxCallsPerKey = z
       .number()
       .int()
       .min(1)
       .max(100_000)
-      .parse(options.maxCallsPerKey ?? 600)
+      .nullable()
+      .parse(options.maxCallsPerKey ?? null)
     this.#ledger = new LlmCallLedger(db, {
       ...(options.lostAfterMs === undefined ? {} : { lostAfterMs: options.lostAfterMs }),
       ...(options.logger ? { logger: options.logger } : {}),
@@ -200,19 +202,26 @@ export class PostgresGatewayStore implements GatewayStore {
       // more often than any turn does, is a CLI repeating itself: each call would spend the
       // account's quota until the money budget ran out. Refused for good, before it waits for
       // a slot; a refusal opens no call and so is not counted.
+      // No limit by default (КР10): only a stand that bounds its own requests sets one.
+      const maxCalls = this.#maxCallsPerKey
+      const maxPace = this.#maxCallsPerKey30s
       const [calls, recentCalls] = await Promise.all([
-        tx.llmCall.count({ where: { keyId: row.keyId } }),
-        tx.llmCall.count({
-          where: {
-            keyId: row.keyId,
-            startedAt: { gt: new Date(row.serverNow.getTime() - callPaceMs) },
-          },
-        }),
+        maxCalls === null ? 0 : tx.llmCall.count({ where: { keyId: row.keyId } }),
+        maxPace === null
+          ? 0
+          : tx.llmCall.count({
+              where: {
+                keyId: row.keyId,
+                startedAt: { gt: new Date(row.serverNow.getTime() - callPaceMs) },
+              },
+            }),
       ])
-      if (calls >= this.#maxCallsPerKey || recentCalls >= this.#maxCallsPerKey30s)
+      const overCalls = maxCalls !== null && calls >= maxCalls
+      const overPace = maxPace !== null && recentCalls >= maxPace
+      if (overCalls || overPace)
         return {
           ...(await this.#refused(tx, row.keyId, 'budget')),
-          limit: calls >= this.#maxCallsPerKey ? 'calls' : 'pace',
+          limit: overCalls ? 'calls' : 'pace',
         }
       const open = await tx.llmCall.count({ where: { keyId: row.keyId, state: 'open' } })
       if (open >= this.#maxRequestsPerKey) return this.#refused(tx, row.keyId, 'transient', 1_000)

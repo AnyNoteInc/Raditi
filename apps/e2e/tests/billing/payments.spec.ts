@@ -201,7 +201,7 @@ test('a customer sees the payment and the saved card, replaces the card and unli
     await expect(dialog).toContainText(
       new RegExp(
         // The gift of the registration is untouched: tasks are taken on it after the tariff.
-        String.raw`Автопродление отключится\. Тариф «Старт» будет работать до\s${DATE}; после этого новые задачи принимаются, только пока есть подарочные кредиты\.`,
+        String.raw`Автопродление отключится\. Тариф «Старт» будет работать до\s${DATE}; после этого новые задачи принимаются, только\sпока\sесть\sподарочные\sкредиты\sили\sкредиты\sиз\sпакета\.`,
       ),
     )
     await dialog.getByRole('button', { name: 'Не отвязывать' }).click()

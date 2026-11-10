@@ -222,7 +222,7 @@ describe('the rows of a dialog', () => {
       question: question.id,
     })
     expect(text(feed)).toContain(
-      'Задача оказалась больше обычной: на неё уже ушло 18 кредитов из 20 отложенных.',
+      'Задача оказалась большой: на неё уже ушло 18 кредитов, и проход дошёл до своего технического предела.',
     )
     fireEvent.click(within(feed).getByRole('button', { name: 'Продолжить' }))
     fireEvent.click(within(feed).getByRole('button', { name: 'Остановиться' }))

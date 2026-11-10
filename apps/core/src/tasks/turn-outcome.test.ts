@@ -127,15 +127,16 @@ describe('agentQuestionOf', () => {
 })
 
 describe('ceilingQuestionOf', () => {
+  // The reserve of an attempt is one credit (КР5–КР8): what bounds a pass is what the client has.
   const facts = {
     chainAttempts: 1,
-    reserved: 45,
-    used: '44.6',
+    reserved: 1,
+    used: '44.2',
     customerLeftRub: '0',
     spendableNow: 0,
   }
 
-  it('says the client credits ran out when nothing is left to set aside', () => {
+  it('says the client credits ran out when nothing is left to pay with, the work rounded up', () => {
     const question = ceilingQuestionOf(facts, 3)
     expect(question).toEqual({
       v: 1,
@@ -147,13 +148,20 @@ describe('ceilingQuestionOf', () => {
       left: 0,
     })
     expect(feedQuestionPayloadSchema.safeParse(question).success).toBe(true)
+    // Credits that look free but are owed or spent already: the client has nothing left.
+    expect(ceilingQuestionOf({ ...facts, spendableNow: 10 }, 1).reason).toBe('credits')
   })
 
-  it('says the step is spent while the client could continue', () => {
-    expect(
-      ceilingQuestionOf({ ...facts, customerLeftRub: '12.50', spendableNow: 30 }, 1),
-    ).toMatchObject({ reason: 'step', spent: 45, left: 0 })
-    expect(ceilingQuestionOf({ ...facts, spendableNow: 10 }, 1).reason).toBe('step')
+  it('says the pass reached the technical guard of a key while the client could continue', () => {
+    expect(ceilingQuestionOf({ ...facts, customerLeftRub: '12.50', spendableNow: 30 }, 1)).toEqual({
+      v: 1,
+      kind: 'ceiling',
+      turn: 1,
+      reason: 'step',
+      spent: 45,
+      held: 75,
+      left: 30,
+    })
   })
 
   it('says the attempts are used up at the third attempt of the chain', () => {

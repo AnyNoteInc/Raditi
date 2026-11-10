@@ -184,11 +184,6 @@ describe('billing:rates report', () => {
       pack: { credits: 1240, costRub: '7440.00' },
       gift: { credits: 385, costRub: '2310.00' },
     },
-    steps: [
-      { modelClass: 'light', credits: 20, costRub: '120.00', aboveKeyLimit: false },
-      { modelClass: 'standard', credits: 45, costRub: '270.00', aboveKeyLimit: false },
-      { modelClass: 'heavy', credits: 120, costRub: '720.00', aboveKeyLimit: false },
-    ],
     models: [
       {
         provider: 'openai-chatgpt',
@@ -203,7 +198,7 @@ describe('billing:rates report', () => {
     ...patch,
   })
 
-  it('prints the first rate: the plans, what is not spent, the steps and the models', () => {
+  it('prints the first rate: the plans, what is not spent, the limit of a pass and the models', () => {
     expect(ratesReport(preview())).toEqual([
       'Начало действия: 11.10.2026 12:00:00 МСК (2026-10-11T09:00:00.000Z).',
       'На момент начала действующего курса нет. Новый курс — 6.000000 ₽ учётной стоимости за кредит.',
@@ -211,7 +206,6 @@ describe('billing:rates report', () => {
       '  start (тариф): 300 кредитов — 1800.00 ₽, 36.7 % цены 4900.00 ₽',
       '  pack (пакет): 100 кредитов — 600.00 ₽, 30.2 % цены 1990.00 ₽',
       'Не потраченные кредиты всех рабочих пространств: из пакетов — 1240 (7440.00 ₽ учётной стоимости), подарочные — 385 (2310.00 ₽).',
-      'Шаги попытки при этом курсе (предел одного ключа хода — 750 ₽): light — 20 кредитов, 120.00 ₽; standard — 45 кредитов, 270.00 ₽; heavy — 120 кредитов, 720.00 ₽.',
       'Кредитов за 1 млн токенов по включённым моделям (вход / кэш / запись в кэш / выход):',
       '  openai-chatgpt/gpt-6-sol-standard (standard): 38.75 / 3.88 / 38.75 / 193.75 — ставки из файла',
     ])
@@ -240,11 +234,6 @@ describe('billing:rates report', () => {
             costRub: '90.00',
             sharePercent: null,
           },
-        ],
-        steps: [
-          { modelClass: 'light', credits: 20, costRub: '180.00', aboveKeyLimit: false },
-          { modelClass: 'standard', credits: 45, costRub: '405.00', aboveKeyLimit: false },
-          { modelClass: 'heavy', credits: 120, costRub: '1080.00', aboveKeyLimit: true },
         ],
         models: [
           {
@@ -278,8 +267,6 @@ describe('billing:rates report', () => {
       '  start (тариф): 300 кредитов — 2700.00 ₽, 55.1 % цены 4900.00 ₽',
       '  free (тариф): 10 кредитов — 90.00 ₽, цена нулевая',
       'Не потраченные кредиты всех рабочих пространств: из пакетов — 1240 (7440.00 ₽ учётной стоимости), подарочные — 385 (2310.00 ₽).',
-      'Шаги попытки при этом курсе (предел одного ключа хода — 750 ₽): light — 20 кредитов, 180.00 ₽; standard — 45 кредитов, 405.00 ₽; heavy — 120 кредитов, 1080.00 ₽.',
-      '  Шаг выше предела ключа: heavy. Такая попытка получит несколько ключей хода подряд.',
       'Кредитов за 1 млн токенов по включённым моделям (вход / кэш / запись в кэш / выход):',
       '  openai-chatgpt/gpt-6-sol-standard (standard): 25.83 / 2.58 / 25.83 / 129.17 — прежние ставки',
       '  kimi-code/k3-256k-standard (standard): ставки нет — модель не сможет работать',

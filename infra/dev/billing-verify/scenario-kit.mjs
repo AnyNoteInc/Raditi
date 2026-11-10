@@ -993,7 +993,7 @@ export const creditAccounts = ({ tariff, gift, pack, totalAvailable }) => ({
 })
 
 /** How many credits a new task needs to start. */
-const MIN_START_CREDITS = 5
+const MIN_START_CREDITS = 1
 
 /**
  * What every customer of the scenario would read on «Тарифы», «Оплата» and «Использование»
@@ -1061,6 +1061,12 @@ function newTaskOf(usable, spendableNow, who) {
   throw new CheckFailed(
     `${who} can spend ${spendableNow} credits now, fewer than a task needs: the stand queues no task and expects nobody without credits`,
   )
+}
+
+/** «1490.00» → «2980.00»: the price of the pack without a tariff, in whole kopecks. */
+const doubledPrice = (price) => {
+  const kopecks = Math.round(Number(price) * 100) * 2
+  return `${Math.floor(kopecks / 100)}.${String(kopecks % 100).padStart(2, '0')}`
 }
 
 /** The tariffs and the pack on sale, as `billing.plans` and the table of plans both tell them. */
@@ -1181,10 +1187,11 @@ export async function pagesShowWhatIsStored(t) {
     const gift = workspace
       ? { ...account('credit_gift'), granted }
       : { balance: promised, held: 0, available: promised, granted: false }
-    // Tariff and pack credits are spent only while the tariff is paid; gift credits always.
+    // Tariff credits are spent only while the tariff is paid; gift and pack credits always
+    // (owner's decision of 10.11.2026: one credit is one credit).
     const paid = live?.status === 'active'
     const tariff = account('credit_tariff')
-    const spent = (pick) => pick(gift) + (paid ? pick(tariff) + pick(pack) : 0)
+    const spent = (pick) => pick(gift) + pick(pack) + (paid ? pick(tariff) : 0)
     // No tariff credit is spent in a day of the stand: no task is ever queued. A paid tariff has
     // its whole limit left, or what its account has free when that is less; without a paid
     // tariff there is no day.
@@ -1193,15 +1200,20 @@ export async function pagesShowWhatIsStored(t) {
     const today = paid ? { limit, charged: 0, held: 0, used: 0, room: limit, left } : null
     const task = {
       spendable: spent(({ available }) => available),
-      spendableNow: gift.available + (paid ? left + pack.available : 0),
+      spendableNow: gift.available + pack.available + (paid ? left : 0),
       setAside: spent(({ held }) => held),
       minToStart: MIN_START_CREDITS,
       today,
     }
     // Without a usable credit rate no task is taken, which is said before anything else.
     task.newTask = newTaskOf(usable, task.spendableNow, customer.email)
+    // The pack is offered at twice its price while the tariff does not take tasks (КР9).
+    const offered =
+      paid || sold.pack === null
+        ? sold
+        : { ...sold, pack: { ...sold.pack, price: doubledPrice(sold.pack.price) } }
     const stored = {
-      sold,
+      sold: offered,
       conversion: null,
       tariff: live && {
         id: live.id,
@@ -1278,7 +1290,9 @@ const missingFrom = (text, sentences) => sentences.filter((sentence) => !text.in
 
 /** What a letter about a tariff that is not paid for or has ended says of new tasks. */
 const tasksOnGift = (gift, refused) =>
-  gift >= MIN_START_CREDITS ? 'принимаются, только пока есть подарочные кредиты' : refused
+  gift >= MIN_START_CREDITS
+    ? 'принимаются, только пока есть подарочные кредиты или кредиты из пакета'
+    : refused
 
 /**
  * What the letter «Оплата прошла» must say of the order it is about: the tariff or the pack
@@ -1340,22 +1354,23 @@ async function endedLetterSays(t, letter) {
   return {
     about: `subscription ${subscriptionId}`,
     expected: [
-      `Тариф «${plan}» закончился ${moscowDate(letter.data.endedAt)}. Новые задачи ${tasksOnGift(gift, 'сейчас не принимаются')}.`,
+      `Тариф «${plan}» закончился ${moscowDate(letter.data.endedAt)}. Новые задачи ${tasksOnGift(gift + pack, 'сейчас не принимаются')}.`,
       `${kept} и история правок сохраняются.${pack > 0 ? ` Кредитов из пакета осталось: ${counted(pack)}.` : ''}`,
     ],
   }
 }
 
 /**
- * What the letter «Оплата не прошла» must say of new tasks, by the gift account of the
- * workspace: they are still taken while five gift credits are free.
+ * What the letter «Оплата не прошла» must say of new tasks, by the gift and pack accounts of
+ * the workspace: they are still taken while five of those credits are free.
  */
 async function failedLetterSays(t, letter) {
   const orderId = letter.key.slice(letter.key.lastIndexOf(':') + 1)
   const row = await t.one(
     `SELECT p.name AS plan, o.amount::text AS amount,
-       COALESCE((SELECT (a.balance - a.held)::int FROM billing_accounts a
-                 WHERE a.workspace_id = o.workspace_id AND a.unit = 'credit_gift'), 0) AS gift
+       COALESCE((SELECT SUM(a.balance - a.held)::int FROM billing_accounts a
+                 WHERE a.workspace_id = o.workspace_id
+                   AND a.unit IN ('credit_gift', 'credit_pack')), 0) AS gift
      FROM orders o JOIN plans p ON p.id = o.plan_id WHERE o.id = $1`,
     [orderId],
   )

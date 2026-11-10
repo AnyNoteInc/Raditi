@@ -38,10 +38,26 @@ if [ -f "$app/.env" ]; then
 fi
 
 # 0b. The dump before anything changes: dump-db.sh names it by the running APP_REVISION
-if compose ps --status running --services 2>/dev/null | grep -qx postgres &&
-  compose exec -T postgres psql -U postgres -d raditi -tAc \
-    "SELECT to_regclass('public._prisma_migrations') IS NOT NULL" 2>/dev/null | grep -qx t; then
-  (cd "$app" && ./dump-db.sh)
+# The dump is the only way back for the database (Prisma has no down migrations), so it is left
+# out only when there is nothing to dump: postgres is not running yet, or its database has no
+# migrations table (a first deploy), and the log says which. A postgres that runs and does not
+# answer — it restarts, the exec fails — stops the deploy: nothing has changed yet, and it can be
+# run again.
+if compose ps --status running --services 2>/dev/null | grep -qx postgres; then
+  migrated=$(compose exec -T postgres psql -U postgres -d raditi -tAc \
+    "SELECT to_regclass('public._prisma_migrations') IS NOT NULL" 2>&1 || true)
+  case $migrated in
+    t) (cd "$app" && ./dump-db.sh) ;;
+    f) say "no dump before the migrations: the database has no migrations table yet" ;;
+    *)
+      # No trap yet: the registry token is removed here
+      rm -f "$token"
+      echo "deploy: postgres runs, but its migrations table could not be read, so no dump can be made: $migrated" >&2
+      exit 1
+      ;;
+  esac
+else
+  say "no dump before the migrations: postgres is not running"
 fi
 
 # Until the migrations the running release stays whole: a failure puts its files and .env back,
@@ -78,7 +94,7 @@ done
 
 # A variable the release added to env.example joins .env with its default (step 1 of «Обычная
 # выкладка»); a value already there is never changed
-grep -E '^[A-Z_]+=' "$app/server/env.example" | while IFS= read -r line; do
+grep -E '^[A-Z][A-Z0-9_]*=' "$app/server/env.example" | while IFS= read -r line; do
   grep -q "^${line%%=*}=" "$app/.env" || { echo "$line" >>"$app/.env"; say "new setting ${line%%=*}"; }
 done
 

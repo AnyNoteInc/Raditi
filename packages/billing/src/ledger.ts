@@ -4,12 +4,14 @@ import {
   billingOrderNotFound,
   carriedTariffCredits,
   conflict,
+  creditAccountKinds,
   creditAccountUnits,
   expiringTariffCredits,
   isLiveSubscription,
   Money,
   notFound,
   signupGiftCredits,
+  tariffHoldCreatedAt,
   toCredits,
   type CreditAccountKind,
   type Credits,
@@ -70,6 +72,11 @@ export const ledgerKeys = {
   holdExpiry: (holdId: string) => `hold:${holdId}:expire`,
   /** The credits an operator took off the account when returning the payment of a pack. */
   refundAdjust: (orderId: string) => `order:${orderId}:refund:adjust`,
+  /**
+   * What a grant paid of the workspace's debt (КР7): a `charge` of the granted account, linked to
+   * the order of the grant and to no task — the passes that ran into debt were charged before.
+   */
+  debtRepay: (grantKey: string) => `${grantKey}:debt`,
   /** The gift of the registration: one per user, on whichever workspace of theirs it stands. */
   signupGift: (userId: string) => `user:${userId}:signup-gift`,
 } as const
@@ -221,7 +228,7 @@ async function grant(
   // whatever ids the caller holds: the two grant keys of one order never both apply.
   const order = await tx.order.findFirst({
     where: { id: orderId, workspaceId, kind: grantingOrderKinds[kind] },
-    select: { id: true },
+    select: { id: true, periodStart: true, periodEnd: true },
   })
   if (order === null) throw billingOrderNotFound()
   await ensureAccounts(tx, workspaceId)
@@ -232,10 +239,76 @@ async function grant(
   const idempotencyKey = key(orderId)
   const entry = await posted(tx, idempotencyKey, { account, kind: 'grant', amount })
   if (entry) return { entry, applied: false }
-  return {
-    entry: await post(tx, { account, kind: 'grant', amount, orderId, idempotencyKey }),
-    applied: true,
-  }
+  const granted = await post(tx, { account, kind: 'grant', amount, orderId, idempotencyKey })
+  await repayDebt(tx, {
+    workspaceId,
+    account,
+    orderId,
+    grantKey: idempotencyKey,
+    period:
+      order.periodStart !== null && order.periodEnd !== null
+        ? { currentPeriodStart: order.periodStart, currentPeriodEnd: order.periodEnd }
+        : null,
+  })
+  return { entry: granted, applied: true }
+}
+
+/**
+ * Pays what the workspace owes from the credits a grant has just brought (owner's decision of
+ * 10.11.2026, docs/spec.md §20, «Только кредиты», КР7): min(debt, what is free on the granted
+ * account), one `charge` row of that account under `ledgerKeys.debtRepay`, and the debt of the
+ * pack account goes down by as much. A grant smaller than the debt pays what it brought; the
+ * rest waits for the next grant. Nothing when nothing is owed.
+ *
+ * Called under the lock of the granted account; the pack account is locked after it — the order
+ * of `creditAccountKinds` —, or is that account.
+ */
+async function repayDebt(
+  tx: BillingTx,
+  input: {
+    workspaceId: string
+    account: LockedCreditAccount
+    orderId: string
+    grantKey: string
+    /** The period the order paid for, when it has one: what a tariff charge is stamped inside. */
+    period: { currentPeriodStart: Date; currentPeriodEnd: Date } | null
+  },
+): Promise<void> {
+  const { workspaceId, orderId, grantKey, period } = input
+  const granted = await lockCreditAccount(tx, workspaceId, kindOf(input.account))
+  const pack =
+    granted?.unit === creditAccountUnits.pack
+      ? granted
+      : await lockCreditAccount(tx, workspaceId, 'pack')
+  if (granted === null || pack === null || pack.debt === 0) return
+  const free = granted.snapshot.balance - granted.snapshot.held
+  const paid = Math.min(pack.debt, free)
+  if (paid <= 0) return
+  // The meter of the tariff tells the period of a charge by its stamp alone, like every other
+  // charge of the tariff account (`tariffHoldCreatedAt`): the period of a first payment starts
+  // when ЮKassa captured it, by ЮKassa's clock, and the clock of this transaction may be behind.
+  const createdAt =
+    period !== null && granted.unit === creditAccountUnits.tariff
+      ? tariffHoldCreatedAt(new Date(), period)
+      : undefined
+  await post(tx, {
+    account: granted,
+    kind: 'charge',
+    amount: new Money(-paid),
+    orderId,
+    idempotencyKey: ledgerKeys.debtRepay(grantKey),
+    ...(createdAt === undefined ? {} : { createdAt }),
+  })
+  await tx.billingAccount.update({
+    where: { id: pack.id },
+    data: { debt: { decrement: new Money(paid) } },
+  })
+}
+
+const kindOf = (account: LockedCreditAccount): CreditAccountKind => {
+  const kind = creditAccountKinds.find((each) => creditAccountUnits[each] === account.unit)
+  if (kind === undefined) throw conflict('The account is not a credit account')
+  return kind
 }
 
 /**

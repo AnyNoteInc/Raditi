@@ -923,7 +923,7 @@ test('the turns of the release are built of the record of the stack, with no too
       )
       assert.match(JSON.stringify(turns.breaking), /RADITI_PREVIEW_ORIGIN/)
       assert.match(JSON.stringify(turns.forbidden), new RegExp(stand.outsideWorkingSet))
-      // R1 reports a usage above the minimum of a task, so its charge is told from the minimum.
+      // R1 reports a large usage, so its charge is told from the one credit of its reserve.
       assert.deepEqual(turns.edit.usage, LARGE_USAGE)
       // R6 changes one file the installed version holds after the undo of R5: never a new one.
       const part = conflictPart(edit)

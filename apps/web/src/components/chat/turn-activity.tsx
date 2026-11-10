@@ -159,6 +159,15 @@ function Label({
   )
 }
 
+/**
+ * What a line is known by across reads. A draft — what the agent is writing now — comes again
+ * under the id of a newer journal row each time it grows, and a line keyed by it would be built
+ * anew at every poll: a thought the viewer opened would close, and scroll from its first word.
+ * The one draft on the screen keeps its place while it is the same kind of draft.
+ */
+const lineKey = (event: ActivityEvent) =>
+  event.type === 'draft' ? `draft:${event.kind}` : event.id
+
 function ActivityLine({ event }: { event: ActivityEvent }) {
   switch (event.type) {
     case 'message':
@@ -256,7 +265,7 @@ export function TurnActivityView({
   const lines = (
     <>
       {shown.map((event) => (
-        <ActivityLine key={event.id} event={event} />
+        <ActivityLine key={lineKey(event)} event={event} />
       ))}
       {status ? (
         <Typography sx={{ fontSize: 13, color: 'text.secondary' }}>{status}</Typography>

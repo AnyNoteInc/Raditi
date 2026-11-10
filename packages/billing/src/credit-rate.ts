@@ -1,15 +1,13 @@
 import {
   badRequest,
   billingCreditRateMissing,
-  creditAccountUnits,
   creditRateCoversPrice,
   creditRateVerdict,
   creditsFromCost,
   Money,
-  toCredits,
+  turnKeyLimitRub,
   type CostAtRate,
   type CreditRateVerdict,
-  type Credits,
 } from '@repo/domain'
 import type { Decimal } from 'decimal.js'
 import { z } from 'zod'
@@ -22,11 +20,8 @@ import type { BillingTx } from './accounts.ts'
 // `credit_rates` and of `llm_model_prices` are written by the operator's `approveCreditRate`.
 // Every function joins the transaction of its caller.
 
-/**
- * The most one turn key may hold, RUB (`llm_keys_budget_check`, `attemptBudgetRub` of
- * @repo/domain). A step of an attempt above it is spent through several keys in a row.
- */
-export const TURN_KEY_LIMIT_RUB = 750
+/** The most a turn key can be written with, RUB: `turnKeyLimitRub` of @repo/domain. */
+export const TURN_KEY_LIMIT_RUB = turnKeyLimitRub
 
 /** A row of `credit_rates`. */
 export interface StoredCreditRate {
@@ -249,112 +244,5 @@ export async function taskRawCredits(
       const sums = converted.get(attempt) ?? []
       return { attempt, costRub: sumCostRub(sums), credits: creditsFromCost(sums) }
     }),
-  }
-}
-
-const workspaceWorkSchema = z.strictObject({ workspaceId: z.uuid(), since: instantSchema })
-
-export interface WorkspaceWorkQuery {
-  workspaceId: string
-  /**
-   * The moment the bound on unpaid work is counted from: the start of the current period of a
-   * paid tariff; without one, the end of the last tariff or the creation of the workspace.
-   */
-  since: Date
-}
-
-/** What a workspace got and what it was charged since a moment: the input of `unpaidWork`. */
-export interface WorkspaceWork {
-  /**
-   * Every model call of the billable tasks of the workspace that started at `since` or later,
-   * in credits, not rounded — billable calls or not: a lost call spent the pool too. Work in
-   * progress is in it until it is charged.
-   */
-  work: Decimal
-  /**
-   * The credits charged to the three credit accounts of the workspace since the same moment:
-   * by the moment each task was charged, whatever period its ledger rows are stamped into.
-   */
-  charged: Credits
-  /**
-   * Calls that started while no credit rate was in force: they have no credits and are not in
-   * `work`. No reserve is placed without a usable rate, so a task of the queue has none.
-   */
-  unrated: { calls: number; costRub: string }
-}
-
-interface WorkspaceWorkRow {
-  rubPerCredit: string | null
-  costRub: string
-  calls: number
-}
-
-/**
- * The work of a workspace in credits and what was charged for it, since `since` (design §3.8):
- * `unpaidWork({ work, charged })` of @repo/domain is what new tasks and retries are bounded by.
- * `work` is Σ cost ÷ K over all `token_usage` rows of the billable tasks (`tasks.billable`) of
- * the workspace with `occurred_at >= since`, each call at the rate in force at its own start;
- * `charged` is the `charge` rows of `credit_ledger` on the three credit accounts of the tasks
- * charged at `since` or later.
- *
- * When a task was charged is told by its reserve — `credit_holds.settled_at` of the rows the
- * charge captured —, not by the stamp of the ledger row alone: the charge of the tariff account
- * is stamped inside the period whose credits it takes (`tariffHoldCreatedAt`), so a task done
- * after a period ended and before its renewal is settled leaves a row stamped with the last
- * millisecond of that period, while its model calls started after it. Counted by the stamp, that
- * work would be unpaid for the whole next period. A `charge` row whose own stamp is not before
- * `since` counts as before, with or without a reserve.
- */
-export async function workspaceWorkCredits(
-  tx: Pick<BillingTx, '$queryRaw' | 'creditLedger'>,
-  query: WorkspaceWorkQuery,
-): Promise<WorkspaceWork> {
-  const parsed = workspaceWorkSchema.safeParse(query)
-  if (!parsed.success) throw badRequest('Invalid workspace work query')
-  const { workspaceId, since } = parsed.data
-  const rows = await tx.$queryRaw<WorkspaceWorkRow[]>`
-    SELECT r.rub_per_credit::text AS "rubPerCredit",
-      SUM(u.cost_rub)::text AS "costRub",
-      COUNT(*)::int AS calls
-    FROM tasks t
-    JOIN token_usage u ON u.task_id = t.id
-    LEFT JOIN LATERAL (
-      SELECT c.rub_per_credit, c.effective_from FROM credit_rates c
-      WHERE c.effective_from <= u.occurred_at
-      ORDER BY c.effective_from DESC LIMIT 1
-    ) r ON true
-    WHERE t.workspace_id = ${workspaceId}::uuid
-      AND t.billable
-      AND u.occurred_at >= ${since}::timestamptz
-    GROUP BY r.rub_per_credit, r.effective_from
-    ORDER BY r.effective_from
-  `
-  const rated: CostAtRate[] = []
-  const unrated: { costRub: string }[] = []
-  let unratedCalls = 0
-  for (const row of rows) {
-    if (row.rubPerCredit === null) {
-      unrated.push(row)
-      unratedCalls += row.calls
-    } else rated.push({ costRub: row.costRub, rubPerCredit: row.rubPerCredit })
-  }
-  const { _sum: sum } = await tx.creditLedger.aggregate({
-    where: {
-      kind: 'charge',
-      account: { workspaceId, unit: { in: Object.values(creditAccountUnits) } },
-      OR: [
-        { createdAt: { gte: since } },
-        // Stamped into a period that ended, charged after it: the rows of a task are captured
-        // together, at the moment of its charge.
-        { task: { creditHolds: { some: { status: 'captured', settledAt: { gte: since } } } } },
-      ],
-    },
-    _sum: { amount: true },
-  })
-  return {
-    work: creditsFromCost(rated),
-    // A charge is a negative amount of the journal.
-    charged: toCredits(new Money(0).minus(sum.amount ?? 0)),
-    unrated: { calls: unratedCalls, costRub: sumCostRub(unrated) },
   }
 }

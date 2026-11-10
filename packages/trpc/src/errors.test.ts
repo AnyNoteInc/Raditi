@@ -22,7 +22,6 @@ import {
   billingSubscriptionExists,
   billingSubscriptionPastDue,
   billingTaskNeedsSubscription,
-  billingUnpaidWorkLimit,
   conflict,
   DomainError,
   forbidden,
@@ -179,19 +178,13 @@ describe('toTRPCError', () => {
       'BILLING_TASK_NEEDS_SUBSCRIPTION',
       billingTaskNeedsSubscription,
       'PAYMENT_REQUIRED',
-      'Чтобы ставить задачи, нужен действующий тариф. Выберите или оплатите его в разделе «Тарифы»',
+      'Кредиты закончились. Чтобы ставить задачи дальше, выберите или оплатите тариф в разделе «Тарифы»',
     ],
     [
       'BILLING_CREDITS_HELD',
       billingCreditsHeld,
       'CONFLICT',
       'Все кредиты отложены под задачи в работе. Дождитесь, пока они закончатся, или купите пакет кредитов',
-    ],
-    [
-      'BILLING_UNPAID_WORK_LIMIT',
-      billingUnpaidWorkLimit,
-      'CONFLICT',
-      'Новые задачи временно не принимаются: слишком много задач остановилось без результата. Напишите нам — разберёмся, в чём дело',
     ],
     [
       'BILLING_CREDIT_RATE_MISSING',
@@ -611,11 +604,9 @@ describe('the text of a refused task, built from the details of its refusal', ()
       'Лимиты закончились: кредитов не хватает, чтобы начать задачу. Купите пакет кредитов или дождитесь начисления по тарифу — подробности в разделе «Использование»',
     held: 'Все кредиты отложены под задачи в работе. Дождитесь, пока они закончатся, или купите пакет кредитов',
     needsTariff:
-      'Чтобы ставить задачи, нужен действующий тариф. Выберите или оплатите его в разделе «Тарифы»',
+      'Кредиты закончились. Чтобы ставить задачи дальше, выберите или оплатите тариф в разделе «Тарифы»',
     dailyLimit:
       'Кредиты по тарифу на сегодня закончились. Завтра их снова можно будет тратить, а продолжить сегодня можно с пакетом кредитов — подробности в разделе «Использование»',
-    unpaidLimit:
-      'Новые задачи временно не принимаются: слишком много задач остановилось без результата. Напишите нам — разберёмся, в чём дело',
     rateMissing:
       'Задачи сейчас не принимаются: мы обновляем расчёт кредитов. Попробуйте ещё раз немного позже',
   }
@@ -668,19 +659,9 @@ describe('the text of a refused task, built from the details of its refusal', ()
   })
 
   it.each([
-    ['gift_spent', 0, 'Подарочные кредиты закончились.'],
-    ['gift_below_start', 1, 'Остался 1 подарочный кредит, а на новую задачу нужно не меньше 5.'],
-    ['gift_below_start', 3, 'Осталось 3 подарочных кредита, а на новую задачу нужно не меньше 5.'],
-    [
-      'trial_unpaid_limit',
-      15,
-      'Пробные задачи закончились: несколько задач остановились без результата, и без тарифа мы больше не можем их принимать.',
-    ],
-    [
-      'gift_site_used',
-      35,
-      'На этом сайте подарочные кредиты уже использовались в другом аккаунте.',
-    ],
+    ['gift_spent', 0, 'Кредиты закончились.'],
+    ['gift_below_start', 1, 'Остался 1 кредит, а на новую задачу нужно не меньше 5.'],
+    ['gift_below_start', 3, 'Осталось 3 кредита, а на новую задачу нужно не меньше 5.'],
   ] as const)(
     'tells why a task needs a tariff, and then the way to one: %s, %i left',
     (reason, spendable, first) => {
@@ -691,7 +672,7 @@ describe('the text of a refused task, built from the details of its refusal', ()
     },
   )
 
-  it.each(['past_due', 'ended'] as const)(
+  it.each(['past_due'] as const)(
     'says «a tariff is needed» in general words for a tariff that is %s',
     (reason) => {
       expect(toTRPCError(refused(reason)).message).toBe(GENERAL.needsTariff)
@@ -773,7 +754,6 @@ describe('the text of a refused task, built from the details of its refusal', ()
   })
 
   it('keeps the general words of the codes whose refusal names no number', () => {
-    expect(toTRPCError(refused('unpaid_limit', 300)).message).toBe(GENERAL.unpaidLimit)
     expect(toTRPCError(refused('rate_missing', 300)).message).toBe(GENERAL.rateMissing)
   })
 

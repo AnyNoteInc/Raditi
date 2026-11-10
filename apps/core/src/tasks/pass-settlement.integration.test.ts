@@ -273,10 +273,11 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       ],
     ])
     // The pass is charged when it ends (owner's answer of 26.10.2026: «любой успешный запрос от
-    // LLM должен тарифицироваться»): the first charge of the task, its minimum; the next words
-    // open a new chain.
-    expect((await holds(task.taskId)).every((hold) => hold.status === 'captured')).toBe(true)
-    expect(await charged(task.taskId)).toBe(5)
+    // LLM должен тарифицироваться»), by its work rounded up and with no minimum (КР5–КР8): this
+    // one recorded no model call, so it costs nothing and its chain is given back; the next
+    // words open a new chain.
+    expect((await holds(task.taskId)).every((hold) => hold.status === 'released')).toBe(true)
+    expect(await charged(task.taskId)).toBe(0)
     // Ended once: the second writer finds the task elsewhere.
     expect(await settlement().settle(ref(task), completed())).toBe('skipped')
   })
@@ -328,9 +329,10 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
         where: { dedupeKey: { startsWith: `preview.sync:${preview.id}:1:` } },
       }),
     ).toBe(1)
-    // The pass that made the candidate is charged now; the release charges nothing more.
-    expect((await holds(task.taskId)).every((hold) => hold.status === 'captured')).toBe(true)
-    expect(await charged(task.taskId)).toBe(5)
+    // The pass that made the candidate is settled now — without recorded work it costs nothing
+    // (КР5–КР8) —; the release charges nothing more.
+    expect((await holds(task.taskId)).every((hold) => hold.status === 'released')).toBe(true)
+    expect(await charged(task.taskId)).toBe(0)
   })
 
   it('asks the agent question and charges the pass that asked', async () => {
@@ -345,7 +347,8 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
         (payload as { kind: string }).kind,
       ]),
     ).toEqual([['feed.question', 'agent']])
-    expect((await holds(task.taskId)).every((hold) => hold.status === 'captured')).toBe(true)
+    // Settled: no recorded work, so nothing is charged and the chain is given back (КР5–КР8).
+    expect((await holds(task.taskId)).every((hold) => hold.status === 'released')).toBe(true)
   })
 
   it('keeps a dialog open while a turn key still counts its usage: the charge waits for the sweep', async () => {
@@ -651,7 +654,8 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
 
       expect(await ends.settle(ref(task), completed({ change_type: 'none' }))).toBe('moved')
       expect(await status(task.taskId)).toBe('awaiting_user')
-      expect((await holds(task.taskId)).every((hold) => hold.status === 'captured')).toBe(true)
+      // Settled without recorded work: nothing charged, the chain given back (КР5–КР8).
+      expect((await holds(task.taskId)).every((hold) => hold.status === 'released')).toBe(true)
     })
 
     it('asks the agent question of a pass that changed nothing', async () => {
@@ -949,7 +953,8 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
           },
         ],
       ])
-      expect((await holds(task.taskId)).every((hold) => hold.status === 'captured')).toBe(true)
+      // Settled without recorded work: nothing charged, the chain given back (КР5–КР8).
+      expect((await holds(task.taskId)).every((hold) => hold.status === 'released')).toBe(true)
       // The browser lives on for the next words, until its idle time ends.
       expect(close).not.toHaveBeenCalled()
     })
@@ -1005,7 +1010,8 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
           },
         ],
       ])
-      expect((await holds(task.taskId)).every((hold) => hold.status === 'captured')).toBe(true)
+      // Settled without recorded work: nothing charged, the chain given back (КР5–КР8).
+      expect((await holds(task.taskId)).every((hold) => hold.status === 'released')).toBe(true)
       expect(close).not.toHaveBeenCalled()
     })
 
@@ -1056,7 +1062,8 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
           objects: [{ kind: 'post', title: null, status: 'unconfirmed', editUrl }],
         }),
       ])
-      expect((await holds(task.taskId)).every((hold) => hold.status === 'captured')).toBe(true)
+      // Settled without recorded work: nothing charged, the chain given back (КР5–КР8).
+      expect((await holds(task.taskId)).every((hold) => hold.status === 'released')).toBe(true)
       expect(close).not.toHaveBeenCalled()
     })
 
@@ -1300,7 +1307,8 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       expect(
         await db.taskCandidate.count({ where: { taskId: chat.taskId, status: 'current' } }),
       ).toBe(1)
-      expect(await charged(chat.taskId)).toBeGreaterThan(0)
+      // The pass recorded no model call: it costs nothing (КР5–КР8).
+      expect(await charged(chat.taskId)).toBe(0)
     })
 
     it('waits for the client who holds the browser, with what the agent said', async () => {
@@ -1576,7 +1584,8 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       const [[type, row] = []] = await feed(task.taskId)
       expect(type).toBe('feed.result')
       expect(row).toMatchObject({ site: 'none', filesChanged: 0, next: 'awaiting_user' })
-      expect((await holds(task.taskId)).every((hold) => hold.status === 'captured')).toBe(true)
+      // Settled without recorded work: nothing charged, the chain given back (КР5–КР8).
+      expect((await holds(task.taskId)).every((hold) => hold.status === 'released')).toBe(true)
     })
 
     it('fails and cancels without a word of a site', async () => {

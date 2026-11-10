@@ -1,5 +1,5 @@
 import { createPrismaClient, type Prisma, type PrismaClient } from '@repo/db'
-import { chargeForOutcome, creditsFromCost, Money, taskCharge, toCredits } from '@repo/domain'
+import { chargeForOutcome, creditsFromCost, Money, taskCharge } from '@repo/domain'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { getCreditConversion } from './credit-conversion.ts'
@@ -77,7 +77,6 @@ describe('the printed table of «Точный расчёт»', () => {
       credits: creditsFromCost([{ costRub: costRub.toFixed(10), rubPerCredit: K }]),
     }
   }
-  const STEP = toCredits(45)
 
   // The worked examples of the design (§1.5) that are given in tokens.
   it.each([
@@ -86,7 +85,7 @@ describe('the printed table of «Точный расчёт»', () => {
       { input: 250_000, output: 5_000 },
       '22.09',
       '3.68',
-      5,
+      4,
     ],
     [
       'a new block: 1.2 million in, 20 thousand out',
@@ -100,47 +99,43 @@ describe('the printed table of «Точный расчёт»', () => {
       { input: 2_000_000, output: 40_000 },
       '176.70',
       '29.46',
-      29,
+      30,
     ],
     [
       'the same block after one clarification, a quarter more work',
       { input: 1_500_000, output: 25_000 },
       '126.71',
       '21.12',
-      21,
+      22,
     ],
-    ['three small edits in one message', { input: 750_000, output: 15_000 }, '66.26', '11.05', 11],
+    ['three small edits in one message', { input: 750_000, output: 15_000 }, '66.26', '11.05', 12],
   ] as const)('gives the charge of %s', (_case, work, costRub, tableCredits, charged) => {
     const exact = byCost(work)
     const table = byTable(work)
     expect(exact.costRub.toFixed(2)).toBe(costRub)
     expect(table.toFixed(2)).toBe(tableCredits)
-    // Counted by hand from the table and counted by the charge, the task costs the same.
-    expect(taskCharge({ used: table, reserved: STEP }).credits).toBe(charged)
-    expect(taskCharge({ used: exact.credits, reserved: STEP }).credits).toBe(charged)
+    // Counted by hand from the table and counted by the charge, the task costs the same: the
+    // work rounded up (КР5).
+    expect(taskCharge({ used: table }).credits).toBe(charged)
+    expect(taskCharge({ used: exact.credits }).credits).toBe(charged)
   })
 
-  it('gives the minimum for a done task whose only calls were the fault of the platform', () => {
-    // Nothing billable: no token of the table is counted.
+  it('gives nothing for a done task whose only calls were the fault of the platform', () => {
+    // Nothing billable: no token of the table is counted, and there is no minimum (КР5).
     const nothing = byTable({ input: 0, output: 0 })
-    expect(taskCharge({ used: nothing, reserved: STEP })).toMatchObject({
-      credits: 5,
-      minimumApplied: true,
-    })
+    expect(taskCharge({ used: nothing })).toEqual({ credits: 0 })
   })
 
   it('gives nothing for a task that failed, whatever the table makes of its tokens', () => {
     const used = byTable({ input: 1_800_000, output: 26_000 })
-    expect(chargeForOutcome({ outcome: 'failed', used, reserved: STEP }).credits).toBe(0)
+    expect(chargeForOutcome({ outcome: 'failed', used }).credits).toBe(0)
   })
 
-  it('never gives more than was set aside, however many tokens were counted', () => {
-    // About 297 RUB of work, 49.5 credits: the charge stops at the 45 of the reserve.
+  it('gives all the work, however many tokens were counted: no reserve caps it', () => {
+    // About 297 RUB of work, 49.5 credits: all of it is charged, rounded up (КР5).
     const used = byTable({ input: 3_400_000, output: 66_000 })
     expect(used.toNumber()).toBeGreaterThan(45)
-    expect(taskCharge({ used, reserved: STEP })).toMatchObject({ credits: 45, capped: true })
-    // And at the 12 a customer with 12 credits had.
-    expect(taskCharge({ used, reserved: toCredits(12) }).credits).toBe(12)
+    expect(taskCharge({ used }).credits).toBe(Math.ceil(used.toNumber()))
   })
 
   it('may differ from the exact count by the rounding of the table, never by more than a credit', () => {

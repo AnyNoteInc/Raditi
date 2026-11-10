@@ -92,12 +92,11 @@ const request = (
 const budget = (patch: Partial<AttemptCreditBudget> = {}): AttemptCreditBudget => ({
   attempt: 1,
   chainAttempts: 1,
-  step: toCredits(45),
-  reserved: toCredits(45),
+  reserved: toCredits(1),
   used: new Money(0),
-  spendableNow: toCredits(30),
+  spendableNow: toCredits(44),
+  debt: toCredits(0),
   customerLeftRub: '270.0000000000',
-  ceilingLeftRub: '270.0000000000',
   finishRub: '12.5000000000',
   openReservedRub: '0.0000000000',
   budgetRub: '270.00',
@@ -648,7 +647,7 @@ describe('planTurn', () => {
     )
     expect(plan).toEqual({
       kind: 'ceiling',
-      question: { v: 1, kind: 'ceiling', turn: 2, reason: 'step', spent: 44, held: 45, left: 1 },
+      question: { v: 1, kind: 'ceiling', turn: 2, reason: 'step', spent: 45, held: 89, left: 44 },
     })
   })
 

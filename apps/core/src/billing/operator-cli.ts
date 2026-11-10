@@ -14,7 +14,6 @@ import {
   settleOrderByPaymentId,
   stopAutoRenewalByOperator,
   stopRenewalRefusals,
-  TURN_KEY_LIMIT_RUB,
   type CreditRatePreview,
   type CreditRateRefusal,
   type CreditRatesProblem,
@@ -94,8 +93,7 @@ import { z } from 'zod'
 //     are written with one start in one transaction: the clock of the database, or a later
 //     instant given by --effective-from. Before it writes, the command prints what the rate
 //     means for the platform: the accounting cost behind every tariff and pack and its share of
-//     the price, the pack and gift credits not spent yet in roubles, the steps of an attempt
-//     against the limit of one turn key and credits per million tokens for every enabled model.
+//     the price, the pack and gift credits not spent yet in roubles and credits per million tokens for every enabled model.
 //     It writes nothing and exits non-zero when the start is in the past or not later than the
 //     newest row there is, when a model is unknown, when the file has prices and no rate, when
 //     a tariff would cost more than half of its price or the rate moves by more than a tenth
@@ -852,17 +850,6 @@ export function ratesReport(preview: CreditRatePreview): string[] {
   lines.push(
     `Не потраченные кредиты всех рабочих пространств: из пакетов — ${pack.credits} (${pack.costRub} ₽ учётной стоимости), подарочные — ${gift.credits} (${gift.costRub} ₽).`,
   )
-  lines.push(
-    `Шаги попытки при этом курсе (предел одного ключа хода — ${TURN_KEY_LIMIT_RUB} ₽): ${preview.steps
-      .map((step) => `${step.modelClass} — ${step.credits} кредитов, ${step.costRub} ₽`)
-      .join('; ')}.`,
-  )
-  const above = preview.steps.filter((step) => step.aboveKeyLimit).map((step) => step.modelClass)
-  if (above.length > 0) {
-    lines.push(
-      `  Шаг выше предела ключа: ${above.join(', ')}. Такая попытка получит несколько ключей хода подряд.`,
-    )
-  }
   if (preview.models.length === 0) lines.push('Включённых моделей нет.')
   else {
     lines.push(

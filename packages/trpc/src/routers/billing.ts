@@ -18,6 +18,7 @@ import {
   isSignupGiftGranted,
   listPayments,
   listPlans,
+  packOfferFor,
   listUsageHistory,
   orderSyncSchema,
   packSchema,
@@ -323,8 +324,10 @@ export const billingRouter = router({
    */
   plans: consentedProcedure.output(plansOutput).query(async ({ ctx }) => {
     const workspaceId = await personalWorkspaceId(ctx)
-    const [{ plans, pack }, { subscription }, siteCount, creditConversion] = await Promise.all([
+    const [{ plans }, pack, { subscription }, siteCount, creditConversion] = await Promise.all([
       listPlans(ctx.prisma),
+      // At the price this customer pays: twice it without a tariff that takes tasks (КР9).
+      packOfferFor(ctx.prisma, workspaceId),
       getPlanOverview(ctx.prisma, workspaceId),
       // The count a checkout compares with the plan (startCheckout of @repo/billing).
       workspaceId === null ? 0 : ctx.prisma.site.count({ where: { workspaceId, deletedAt: null } }),
@@ -351,11 +354,11 @@ export const billingRouter = router({
   usage: consentedProcedure.output(usageOutput).query(async ({ ctx }) => {
     const home = await creditsHome(ctx)
     const now = new Date()
-    const [usage, { pack }] = await Promise.all([
+    const [usage, pack] = await Promise.all([
       home.workspaceId === null
         ? creditsOf(ctx, home, now).then(promisedUsage)
         : getUsageSummary(ctx.prisma, { workspaceId: home.workspaceId, now }),
-      listPlans(ctx.prisma),
+      packOfferFor(ctx.prisma, home.workspaceId),
     ])
     return {
       ...usage,
@@ -404,7 +407,8 @@ export const billingRouter = router({
 
   /**
    * Starts the payment of the credit pack on sale; the customer is sent to `confirmationUrl`.
-   * Nothing is chosen: the pack and its price are the ones `plans` shows.
+   * Nothing is chosen: the pack and its price are the ones `plans` shows — twice the price
+   * without a tariff that takes tasks (КР9).
    */
   startPackCheckout: consentedProcedure
     .input(z.strictObject({}))

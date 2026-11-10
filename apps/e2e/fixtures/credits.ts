@@ -70,6 +70,11 @@ export interface Credits {
   stored(): Promise<Record<CreditAccount, StoredAccount>>
   /** The journal of the three accounts, oldest first. */
   journal(): Promise<JournalRow[]>
+  /**
+   * What the workspace owes (`billing_accounts.debt` of its pack account, КР7): passes charged
+   * above the credits it had. Zero while there is no workspace.
+   */
+  debt(): Promise<number>
   /** The live subscription of the customer. */
   subscription(): Promise<{ id: string; currentPeriodEnd: Date; status: string }>
   /** A site of the workspace, added past the form: the workspace must exist. */
@@ -171,6 +176,16 @@ function creditsOf({ prisma, pool, priceId }: Queue, user: SignedInUser): Credit
       return { balance, held, left: balance - held }
     }
     return { tariff: of('tariff'), gift: of('gift'), pack: of('pack') }
+  }
+
+  const debt = async () => {
+    const id = await workspaceId()
+    if (id === null) return 0
+    const pack = await prisma.billingAccount.findFirst({
+      where: { workspaceId: id, unit: UNIT.pack },
+      select: { debt: true },
+    })
+    return pack?.debt.toNumber() ?? 0
   }
 
   const journal = async () => {
@@ -338,7 +353,17 @@ function creditsOf({ prisma, pool, priceId }: Queue, user: SignedInUser): Credit
     })
   }
 
-  return { workspaceId, stored, journal, subscription, site, task, tariffEnded, periodBegan }
+  return {
+    workspaceId,
+    stored,
+    journal,
+    debt,
+    subscription,
+    site,
+    task,
+    tariffEnded,
+    periodBegan,
+  }
 }
 
 export { expect } from '@playwright/test'

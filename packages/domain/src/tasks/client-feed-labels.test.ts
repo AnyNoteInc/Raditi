@@ -531,58 +531,43 @@ describe('pluralRu', () => {
 })
 
 describe('the platform question about credits', () => {
-  it('B1: the step is reached — both numbers and the next hold', () => {
-    expect(
-      feedCeilingText({ reason: 'step', spent: 37, held: 45, left: 8 }, { nextHold: 45 }),
-    ).toBe(
-      'Задача оказалась больше обычной: на неё уже ушло 37 кредитов из 45 отложенных. Продолжить? Отложим ещё до 45 кредитов и спишем только то, что уйдёт на работу. Если остановиться, больше ничего не спишем.',
+  // Since 10.11.2026 a reserve is one credit and bounds nothing (КР5–КР8): the question tells
+  // what the task spent, never what was set aside for it.
+  it('B1: the technical limit of a pass is reached', () => {
+    const text =
+      'Задача оказалась большой: на неё уже ушло 37 кредитов, и проход дошёл до своего технического предела. Продолжить? Спишем только то, что уйдёт на работу. Если остановиться, больше ничего не спишем.'
+    expect(feedCeilingText({ reason: 'step', spent: 37, held: 1, left: 0 })).toBe(text)
+    // what the next attempt would hold is no longer told
+    expect(feedCeilingText({ reason: 'step', spent: 37, held: 1, left: 0 }, { nextHold: 45 })).toBe(
+      text,
     )
   })
 
-  it('B1 without the next hold leaves that sentence out', () => {
-    expect(feedCeilingText({ reason: 'step', spent: 37, held: 45, left: 8 })).toBe(
-      'Задача оказалась больше обычной: на неё уже ушло 37 кредитов из 45 отложенных. Продолжить? Если остановиться, больше ничего не спишем.',
-    )
-  })
-
-  it('B2: credits ran out, something is left of the hold', () => {
-    expect(feedCeilingText({ reason: 'credits', spent: 10, held: 12, left: 2 }, { pack })).toBe(
-      'Лимиты закончились посреди задачи: на неё ушло 10 кредитов из 12 отложенных, а оставшихся 2 не хватает на следующий шаг. Работа сохранена. Купите пакет — 100 кредитов за 1 990 ₽ — и продолжим с того же места. Если остановить задачу, больше ничего не спишем.',
-    )
-  })
-
-  it('B2б: nothing is left — «все», and only then', () => {
-    const text = feedCeilingText({ reason: 'credits', spent: 12, held: 12, left: 0 }, { pack })
-    expect(text).toBe(
-      'Лимиты закончились посреди задачи: на неё ушли все 12 отложенных кредитов. Работа сохранена. Купите пакет — 100 кредитов за 1 990 ₽ — и продолжим с того же места. Если остановить задачу, больше ничего не спишем.',
-    )
-    expect(feedCeilingText({ reason: 'credits', spent: 10, held: 12, left: 2 })).not.toContain(
-      'все',
+  it('B2: credits ran out — what the task spent, and the pack', () => {
+    expect(feedCeilingText({ reason: 'credits', spent: 10, held: 1, left: 0 }, { pack })).toBe(
+      'Кредиты закончились посреди задачи: на неё ушло 10 кредитов. Работа сохранена. Купите пакет — 100 кредитов за 1\u00a0990 ₽ — и продолжим с того же места. Если остановить задачу, больше ничего не спишем.',
     )
   })
 
   it('B3: the next period is near — the date and the credits of the tariff', () => {
     expect(
-      feedCeilingText({ reason: 'credits', spent: 10, held: 12, left: 2 }, { pack, renewal }),
+      feedCeilingText({ reason: 'credits', spent: 10, held: 1, left: 0 }, { pack, renewal }),
     ).toContain(
       'и продолжим с того же места. Или дождитесь 18 октября: начислим 300 кредитов по тарифу, и задачу можно будет продолжить. Если остановить задачу,',
     )
   })
 
-  it('names no pack and no date that billing did not give', () => {
+  it('names no pack and no date that billing did not give, and no reserve', () => {
     const text = feedCeilingText({ reason: 'credits', spent: 10, held: 12, left: 2 })
     expect(text).toBe(
-      'Лимиты закончились посреди задачи: на неё ушло 10 кредитов из 12 отложенных, а оставшихся 2 не хватает на следующий шаг. Работа сохранена. Если остановить задачу, больше ничего не спишем.',
+      'Кредиты закончились посреди задачи: на неё ушло 10 кредитов. Работа сохранена. Если остановить задачу, больше ничего не спишем.',
     )
-    expect(text).not.toMatch(/₽|пакет|дождитесь/u)
+    expect(text).not.toMatch(/₽|пакет|дождитесь|отложен/u)
   })
 
-  it('B4: the gift ran out', () => {
-    expect(feedCeilingText({ reason: 'gift', spent: 31, held: 35, left: 4 })).toBe(
-      'Подарочные кредиты закончились посреди задачи: на неё ушло 31 из 35, а оставшихся 4 не хватает на следующий шаг. Работа сохранена. Выберите тариф — и продолжим с того же места. Если остановить задачу, больше ничего не спишем, а неистраченные подарочные кредиты вернутся.',
-    )
-    expect(feedCeilingText({ reason: 'gift', spent: 35, held: 35, left: 0 })).toBe(
-      'Подарочные кредиты закончились посреди задачи: на неё ушли все 35. Работа сохранена. Выберите тариф — и продолжим с того же места. Если остановить задачу, больше ничего не спишем, а неистраченные подарочные кредиты вернутся.',
+  it('B4: the credits of a customer without a tariff ran out', () => {
+    expect(feedCeilingText({ reason: 'gift', spent: 31, held: 1, left: 0 })).toBe(
+      'Кредиты закончились посреди задачи: на неё ушёл 31 кредит. Работа сохранена. Выберите тариф — и продолжим с того же места. Если остановить задачу, больше ничего не спишем.',
     )
   })
 
@@ -593,30 +578,27 @@ describe('the platform question about credits', () => {
   })
 
   it('agrees the verb and the nouns with the numbers', () => {
-    expect(feedCeilingText({ reason: 'credits', spent: 1, held: 21, left: 1 })).toContain(
-      'на неё ушёл 1 кредит из 21 отложенного, а оставшегося 1 не хватает на следующий шаг.',
+    expect(feedCeilingText({ reason: 'credits', spent: 1, held: 1, left: 0 })).toContain(
+      'на неё ушёл 1 кредит.',
     )
-    expect(feedCeilingText({ reason: 'credits', spent: 3, held: 4, left: 1 })).toContain(
-      'на неё ушло 3 кредита из 4 отложенных,',
+    expect(feedCeilingText({ reason: 'credits', spent: 3, held: 1, left: 0 })).toContain(
+      'на неё ушло 3 кредита.',
     )
-    expect(feedCeilingText({ reason: 'credits', spent: 21, held: 21, left: 0 })).toContain(
-      'на неё ушёл весь 21 отложенный кредит.',
-    )
-    expect(feedCeilingText({ reason: 'credits', spent: 3, held: 3, left: 0 })).toContain(
-      'на неё ушли все 3 отложенных кредита.',
+    expect(feedCeilingText({ reason: 'credits', spent: 21, held: 1, left: 0 })).toContain(
+      'на неё ушёл 21 кредит.',
     )
     expect(feedCeilingText({ reason: 'attempts', spent: 0, held: 5, left: 5 })).toContain(
       'на неё уже ушло 0 кредитов.',
     )
-    expect(
-      feedCeilingText({ reason: 'step', spent: 2, held: 5, left: 3 }, { nextHold: 21 }),
-    ).toContain('Отложим ещё до 21 кредита и спишем')
+    expect(feedCeilingText({ reason: 'step', spent: 2500, held: 1, left: 0 })).toContain(
+      'на неё уже ушло 2\u00a0500 кредитов,',
+    )
     expect(
       feedCeilingText(
         { reason: 'credits', spent: 5, held: 5, left: 0 },
         { renewal: { date: '1 ноября', credits: 2500 } },
       ),
-    ).toContain('начислим 2 500 кредитов по тарифу')
+    ).toContain('начислим 2\u00a0500 кредитов по тарифу')
   })
 
   it('offers a way on and a way out for every reason', () => {

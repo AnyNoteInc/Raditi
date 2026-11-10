@@ -228,22 +228,9 @@ describe('creditRatePreview', () => {
     })
   })
 
-  it('sets the steps of an attempt against the limit of one turn key', () => {
-    // 120, 270 and 720 RUB at 6.00: inside the 135, 285 and 735 RUB of the owner.
-    expect(creditRatePreview(state()).steps).toEqual([
-      { modelClass: 'light', credits: 20, costRub: '120.00', aboveKeyLimit: false },
-      { modelClass: 'standard', credits: 45, costRub: '270.00', aboveKeyLimit: false },
-      { modelClass: 'heavy', credits: 120, costRub: '720.00', aboveKeyLimit: false },
-    ])
-    // 750 RUB exactly still fits one key; a kopeck more does not.
-    expect(creditRatePreview(state({ rubPerCredit: '6.25' })).steps[2]).toMatchObject({
-      costRub: '750.00',
-      aboveKeyLimit: false,
-    })
-    expect(creditRatePreview(state({ rubPerCredit: '6.3' })).steps[2]).toMatchObject({
-      costRub: '756.00',
-      aboveKeyLimit: true,
-    })
+  it('tells nothing of a limit of a pass: only the credits of the customer bound it (КР6)', () => {
+    expect(creditRatePreview(state())).not.toHaveProperty('keyLimit')
+    expect(creditRatePreview(state())).not.toHaveProperty('steps')
   })
 
   const model = (name: string, modelClass: 'light' | 'standard' | 'heavy', prices: object | null) =>

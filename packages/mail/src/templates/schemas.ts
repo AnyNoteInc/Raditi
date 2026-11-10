@@ -26,8 +26,8 @@ const paymentMethod = oneLine(100)
 // The public origin of the app (APP_URL); the letter links to the «Тарифы» page under it.
 const billingLink = { appUrl: httpUrl }
 /**
- * Gift credits of the workspace that can be spent when the letter is written; may be zero. They
- * are spent without a paid tariff as well, so a letter about a tariff that is not paid for or
+ * Gift credits of the workspace that can be spent when the letter is written — in the letter of
+ * a failed payment, with the pack credits; may be zero. They are spent without a paid tariff, so a letter about a tariff that is not paid for or
  * has ended says of new tasks what the page it leads to says (`giftTakesTasks`).
  */
 const giftCreditsLeft = z.int().nonnegative()

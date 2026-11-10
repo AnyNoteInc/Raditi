@@ -5,8 +5,10 @@ import {
   creditAccountUnits,
   emptyCreditAccount,
   liveSubscriptionStatuses,
+  packPriceFor,
   paymentMethodLabel,
   signupGiftCredits,
+  subscriptionAllowsTasks,
   type CreditAccountKind,
 } from '@repo/domain'
 
@@ -15,6 +17,7 @@ import {
   creditsOverviewSchema,
   endedSubscriptionSchema,
   paymentsPageSchema,
+  packSchema,
   paymentsQuerySchema,
   planListSchema,
   planOverviewSchema,
@@ -22,6 +25,7 @@ import {
   type CreditBalancesDto,
   type CreditsOverviewDto,
   type EndedSubscriptionDto,
+  type PackDto,
   type PaymentsPageDto,
   type PaymentsQuery,
   type PlanListDto,
@@ -226,8 +230,36 @@ export async function listPlans(db: Pick<Reader, 'plan'>): Promise<PlanListDto> 
           name: pack.name,
           price: pack.price.toFixed(2),
           credits: pack.packCredits,
+          withoutTariff: false,
         }
       : null,
+  })
+}
+
+/**
+ * The pack on sale as this workspace would buy it (КР9): at its price while the live tariff of
+ * the workspace takes tasks, at `packPriceFor` of a customer without one otherwise — no
+ * workspace, no live tariff, an overdue one. The same rule as `startPackCheckout`. Null when no
+ * pack is on sale.
+ */
+export async function packOfferFor(
+  db: Pick<Reader, 'plan' | 'subscription'>,
+  workspaceId: string | null,
+): Promise<PackDto | null> {
+  const { pack } = await listPlans(db)
+  if (pack === null) return null
+  const live =
+    workspaceId === null
+      ? null
+      : await db.subscription.findFirst({
+          where: { workspaceId, status: { in: [...liveSubscriptionStatuses] } },
+          select: { status: true },
+        })
+  const tariffTakesTasks = subscriptionAllowsTasks(live?.status ?? null)
+  return packSchema.parse({
+    ...pack,
+    price: packPriceFor({ price: pack.price, tariffTakesTasks }),
+    withoutTariff: !tariffTakesTasks,
   })
 }
 

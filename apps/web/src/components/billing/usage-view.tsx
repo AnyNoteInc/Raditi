@@ -586,8 +586,6 @@ function BySite({ sites }: { sites: TariffUsage['bySite'] }) {
  */
 function NoTariff({ usage }: { usage: BillingUsage }) {
   const { gift, pack } = usage
-  // «Тариф закончился. У вас 40 кредитов из пакета…» has said it already.
-  const namesPack = usage.newTask.reason === 'ended'
   return (
     <Box component="section" aria-labelledby="no-plan-title" sx={{ p: sectionPadding }}>
       <Typography component="h2" id="no-plan-title" sx={sectionHeading}>
@@ -602,7 +600,7 @@ function NoTariff({ usage }: { usage: BillingUsage }) {
           ),
         )}
       </Typography>
-      {pack.left > 0 && !namesPack ? (
+      {pack.left > 0 && gift.left > 0 ? (
         <Typography variant="body2" sx={{ maxWidth: '62ch', mt: 1, lineHeight: 1.5 }}>
           {nbsp(packCredits(pack.left))}
         </Typography>

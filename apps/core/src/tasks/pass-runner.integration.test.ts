@@ -398,6 +398,23 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       await db.llmProvider.update({ where: { id: switched.providerId }, data: { enabled: false } })
     })
     const rate = () => fixtures.creditRate({ effectiveFrom: new Date('2026-01-01T00:00:00.000Z') })
+    /**
+     * One model call of turn 1 of the task, 12 RUB — two credits at the rate of `rate`: a pass is
+     * charged its work, with no minimum (КР5–КР8), so a pass that is to be charged records some.
+     */
+    const worked = async (taskId: string) => {
+      const pool = await fixtures.modelPool()
+      const price = await fixtures.modelPrice(pool, {
+        effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+      })
+      await fixtures.modelCall({
+        taskId,
+        pool,
+        priceId: price.id,
+        costRub: '12.00',
+        occurredAt: NOW,
+      })
+    }
 
     it('plans the turn, runs it under the supervisor and ends the pass', async () => {
       await rate()
@@ -420,6 +437,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
             headSha: HEAD,
           },
         })
+        await worked(dialog.taskId)
         return {
           result: {
             summary: 'Ответил без правок',
@@ -484,6 +502,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
             headSha: HEAD,
           },
         })
+        await worked(taskId)
         return {
           result: {
             summary: 'Изучил код',
@@ -516,9 +535,8 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         const holds = await db.creditHold.findMany({ where: { taskId: dialog.taskId } })
         expect(holds.length).toBeGreaterThan(0)
         expect(holds.every((hold) => hold.status === 'captured')).toBe(true)
-        expect(
-          holds.reduce((sum, hold) => sum + Number(hold.charged ?? 0), 0),
-        ).toBeGreaterThanOrEqual(5)
+        // Two credits of work: one is paid by the reserve row, the other by free credits.
+        expect(holds.reduce((sum, hold) => sum + Number(hold.charged ?? 0), 0)).toBe(1)
       })
 
       it('takes an answer of the longest size the result has', async () => {
@@ -1033,14 +1051,15 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         it('is charged in a chat without a site: the browser was not all it had (plan 61, 61.9)', async () => {
           await rate()
           const dialog = await queued({ reserve: true, chat: true, browser: true })
-          const { passes } = turnThatAsked(dialog, (sessionId) =>
-            closeBrowserSession(db, {
+          const { passes } = turnThatAsked(dialog, async (sessionId) => {
+            await worked(dialog.taskId)
+            await closeBrowserSession(db, {
               sessionId,
               status: 'failed',
               reason: 'crashed',
               errorCode: 'BROWSER_START_FAILED',
-            }),
-          )
+            })
+          })
 
           await passes.run(dialog.job)
 
@@ -1055,6 +1074,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
           await rate()
           const dialog = await queued({ reserve: true, browser: true })
           const { passes } = turnThatAsked(dialog, async (sessionId) => {
+            await worked(dialog.taskId)
             await markBrowserSessionReady(db, { sessionId })
             await closeBrowserSession(db, { sessionId, status: 'lost', reason: 'crashed' })
             const { id } = await openBrowserSession(db, { taskId: dialog.taskId })
@@ -1070,7 +1090,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         it('is charged while the browser only starts: the agent was told to call again', async () => {
           await rate()
           const dialog = await queued({ reserve: true, browser: true })
-          const { passes } = turnThatAsked(dialog, async () => {})
+          const { passes } = turnThatAsked(dialog, () => worked(dialog.taskId))
 
           await passes.run(dialog.job)
 
@@ -1236,7 +1256,11 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       it('runs without git, plans no repository, answers and charges the pass', async () => {
         await rate()
         const dialog = await queued({ reserve: true, chat: true })
-        const run = vi.fn<Run>(completes(dialog.taskId))
+        const run = vi.fn<Run>(async (request) => {
+          const done = await completes(dialog.taskId)(request)
+          await worked(dialog.taskId)
+          return done
+        })
         const { passes } = runner(run, async () => null, { git: null, browser: null })
 
         await passes.run(dialog.job)
