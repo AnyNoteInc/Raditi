@@ -577,6 +577,33 @@ describe.skipIf(!enabled)('the MySQL copier against MariaDB', () => {
     )
   }, 120_000)
 
+  it('copies the rows of an unlisted table, and only the structure of one whose column names a seed cannot spell', async () => {
+    const baseline = (await copy(source, wordpressPolicy)).summary
+    await withTables(
+      ['wp_acme_plain', 'wp_acme_names'],
+      `CREATE TABLE wp_acme_plain (id int NOT NULL, note varchar(40), PRIMARY KEY (id)) ENGINE=InnoDB;
+       INSERT INTO wp_acme_plain VALUES (1, 'plain-row-of-an-extension');
+       CREATE TABLE wp_acme_names (id int NOT NULL, \`Цена\` int, PRIMARY KEY (id)) ENGINE=InnoDB;
+       INSERT INTO wp_acme_names VALUES (1, 987654);`,
+      async () => {
+        // The policy of WordPress copies every table of the prefix (`copyUnlistedRows`): a column
+        // the seed cannot write by name does not fail the preview, as it did not before — that
+        // table goes as its structure.
+        const { summary, seed } = await copy(source, wordpressPolicy)
+        expect(summary).toMatchObject({
+          tables: baseline.tables + 2,
+          structureOnly: baseline.structureOnly + 1,
+          leftOutTables: baseline.leftOutTables + 1,
+        })
+        const text = seed.toString('utf8')
+        expect(text).toContain('plain-row-of-an-extension')
+        expect(text).toContain('wp_acme_names')
+        expect(text).not.toContain('987654')
+        await load(target, seed)
+      },
+    )
+  }, 120_000)
+
   it('refuses a table outside the policy whose definition is over the limit', async () => {
     // 800 columns of long names: SHOW CREATE TABLE is over 64 KiB, a limit and no definition.
     const columns = Array.from(

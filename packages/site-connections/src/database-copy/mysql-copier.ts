@@ -694,9 +694,19 @@ async function copyTables(
     await writer.raw(statement)
     const seen = new Set<number>()
     const rowRule = rule ?? (policy.copyUnlistedRows ? { table, where: [] } : undefined)
-    const tableInfoForRows = rowRule
-      ? (info.get(table) ?? (await tableInfo(connection, name, statement)))
-      : undefined
+    let tableInfoForRows: TableInfo | undefined
+    if (rowRule) {
+      try {
+        tableInfoForRows = info.get(table) ?? (await tableInfo(connection, name, statement))
+      } catch (error) {
+        // A table outside the policy whose column names the seed cannot spell goes as its
+        // structure, like the one whose definition it cannot hold above: no row of it is wanted
+        // enough to lose the preview. A table a rule or an override names is wanted: it fails.
+        const unwanted = !rule && overrides.length === 0
+        if (!unwanted || !isDatabaseCopyError(error) || error.reason !== 'structure_unsupported')
+          throw error
+      }
+    }
     if (
       rowRule &&
       tableInfoForRows &&
