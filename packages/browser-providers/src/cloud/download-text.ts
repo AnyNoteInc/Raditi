@@ -117,21 +117,89 @@ const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"'
 
 function unescapeXml(text: string): string {
   return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, code: string) => {
-    if (code[0] === '#')
-      return String.fromCodePoint(
+    if (code[0] === '#') {
+      const point =
         code[1] === 'x' || code[1] === 'X'
           ? parseInt(code.slice(2), 16)
-          : parseInt(code.slice(1), 10),
-      )
+          : parseInt(code.slice(1), 10)
+      // `String.fromCodePoint` throws past U+10FFFF, and one such reference would turn the whole
+      // workbook into `failed`: what is no character of Unicode (zero, a surrogate, past the
+      // last plane) stays as it was written, as in the readers of the other HTML text here.
+      return point > 0 && point <= 0x10ffff && (point < 0xd800 || point > 0xdfff)
+        ? String.fromCodePoint(point)
+        : whole
+    }
     return ENTITIES[code] ?? whole
   })
 }
 
+/** Whether a character may follow the name of a tag: `<c` is a cell, `<col` and `<cfRule` are not. */
+const endsTagName = (code: number) =>
+  code === 0x3e || code === 0x2f || code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d
+
+/**
+ * The elements `<name …>…</name>` of a text, in order, with their attributes (as written, a space
+ * first) and inner text — a self-closing one has none. An element whose end is missing ends the
+ * scan: what follows it is no element's. No regular expression runs over the contents: a lazy
+ * `[\s\S]*?` looks for its end to the end of the text for every start that has none, and a file of
+ * a kilobyte holds a hundred thousand starts — minutes of the only thread of the worker, for every
+ * session. Each search here begins where the last one ended, so the work is linear in the text.
+ */
+function* elementsOf(
+  xml: string,
+  name: string,
+): Generator<{ attributes: string; inner: string }, undefined, undefined> {
+  const open = `<${name}`
+  const close = `</${name}>`
+  let from = 0
+  for (;;) {
+    const start = xml.indexOf(open, from)
+    if (start < 0) return
+    const nameEnd = start + open.length
+    if (!endsTagName(xml.charCodeAt(nameEnd))) {
+      from = nameEnd
+      continue
+    }
+    const tagEnd = xml.indexOf('>', nameEnd)
+    if (tagEnd < 0) return
+    const attributes = xml.slice(nameEnd, tagEnd)
+    if (attributes.endsWith('/')) {
+      yield { attributes: attributes.slice(0, -1), inner: '' }
+      from = tagEnd + 1
+      continue
+    }
+    const end = xml.indexOf(close, tagEnd + 1)
+    if (end < 0) return
+    yield { attributes, inner: xml.slice(tagEnd + 1, end) }
+    from = end + close.length
+  }
+}
+
+/** The attributes of each start tag `<name …>` of a text, whether it is closed or not; linear. */
+function* startTagsOf(xml: string, name: string): Generator<string, undefined, undefined> {
+  const open = `<${name}`
+  let from = 0
+  for (;;) {
+    const start = xml.indexOf(open, from)
+    if (start < 0) return
+    const nameEnd = start + open.length
+    if (!endsTagName(xml.charCodeAt(nameEnd))) {
+      from = nameEnd
+      continue
+    }
+    const tagEnd = xml.indexOf('>', nameEnd)
+    if (tagEnd < 0) return
+    yield xml.slice(nameEnd, tagEnd)
+    from = tagEnd + 1
+  }
+}
+
 /** The text of the `<t>` runs inside an element (a shared string, an inline string). */
-const runs = (xml: string) =>
-  [...xml.matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)]
-    .map((match) => unescapeXml(match[1]!))
-    .join('')
+const runs = (xml: string) => {
+  let text = ''
+  for (const run of elementsOf(xml, 't')) text += unescapeXml(run.inner)
+  return text
+}
 
 const attribute = (tag: string, name: string) =>
   new RegExp(`\\s${name}="([^"]*)"`).exec(tag)?.[1] ?? null
@@ -157,14 +225,12 @@ export function workbookText(bytes: Uint8Array): string | null {
   }
   const workbook = read('xl/workbook.xml')
   if (workbook === null) return null
-  const relations = new Map(
-    [...(read('xl/_rels/workbook.xml.rels') ?? '').matchAll(/<Relationship\b[^>]*>/g)].map(
-      (match) => [attribute(match[0], 'Id') ?? '', attribute(match[0], 'Target') ?? ''],
-    ),
-  )
-  const shared = [...(read('xl/sharedStrings.xml') ?? '').matchAll(/<si>([\s\S]*?)<\/si>/g)].map(
-    (match) => runs(match[1]!),
-  )
+  const relations = new Map<string, string>()
+  for (const tag of startTagsOf(read('xl/_rels/workbook.xml.rels') ?? '', 'Relationship'))
+    relations.set(attribute(tag, 'Id') ?? '', attribute(tag, 'Target') ?? '')
+  const shared: string[] = []
+  for (const item of elementsOf(read('xl/sharedStrings.xml') ?? '', 'si'))
+    shared.push(runs(item.inner))
   const out: string[] = []
   // What the agent may read of one file at all: the rest of the rows is not even built.
   let length = 0
@@ -173,29 +239,35 @@ export function workbookText(bytes: Uint8Array): string | null {
     length += line.length + 1
     return length < browserDownloadLimits.textChars
   }
-  for (const sheet of workbook.matchAll(/<sheet\b[^>]*>/g)) {
-    const title = unescapeXml(attribute(sheet[0], 'name') ?? 'Лист')
-    const target = relations.get(attribute(sheet[0], 'r:id') ?? '') ?? ''
+  for (const sheet of startTagsOf(workbook, 'sheet')) {
+    const title = unescapeXml(attribute(sheet, 'name') ?? 'Лист')
+    const target = relations.get(attribute(sheet, 'r:id') ?? '') ?? ''
     const path = target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\.\//, '')}`
     const xml = read(path)
     if (xml === null) continue
     if (!push(`## ${title}`)) break
     let full = false
-    for (const row of xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)) {
+    for (const row of elementsOf(xml, 'row')) {
       const cells: string[] = []
-      for (const cell of row[1]!.matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
-        const head = cell[1] ?? ''
-        const body = cell[2] ?? ''
-        const reference = attribute(` ${head}`, 'r')
+      for (const cell of elementsOf(row.inner, 'c')) {
+        const head = cell.attributes
+        const body = cell.inner
+        const reference = attribute(head, 'r')
         const at = reference ? columnOf(reference) : cells.length
-        const type = attribute(` ${head}`, 't')
-        const value = /<v>([\s\S]*?)<\/v>/.exec(body)?.[1]
+        const type = attribute(head, 't')
+        const value = elementsOf(body, 'v').next().value?.inner
         let text = ''
         if (type === 's') text = shared[Number(value)] ?? ''
         else if (type === 'inlineStr') text = runs(body)
         else if (value !== undefined) text = unescapeXml(value)
+        const cellText = flat(text)
+        // An empty cell that names its place adds nothing, and the row is not padded up to it: a
+        // sheet of rows whose only cell is XFD1 would make every row 16 383 pushes, and rows with
+        // nothing in them never reach `textChars` — the shared worker would stand still. (A cell
+        // without a reference takes the next place, so it is kept.)
+        if (cellText === '' && reference) continue
         while (cells.length < at) cells.push('')
-        cells[at] = flat(text)
+        cells[at] = cellText
       }
       if (cells.some((cell) => cell !== '') && !push(cells.join('\t'))) {
         full = true

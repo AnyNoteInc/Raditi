@@ -72,6 +72,86 @@ describe('readDownload', () => {
     expect(readDownload({ name: 'download', bytes }).kind).toBe('workbook')
   })
 
+  it('does not pad rows of empty far cells: such a sheet reads at once, whatever its size', () => {
+    // 50 000 rows of one empty cell at XFD1 used to cost 16 383 pushes each — about 3.6 s of the
+    // shared worker's only thread for a file of a few kilobytes, a minute at the unpack limit.
+    const rows = '<row><c r="XFD1"/></row>'.repeat(50_000)
+    const bytes = zip(workbook(`<worksheet><sheetData>${rows}</sheetData></worksheet>`))
+    const started = performance.now()
+    expect(readDownload({ name: 'a.xlsx', bytes })).toEqual({
+      kind: 'workbook',
+      text: '## Заявки & звонки',
+    })
+    expect(performance.now() - started).toBeLessThan(1000)
+  })
+
+  it('reads elements that never close in linear time: a tiny file cannot hold the worker for minutes', () => {
+    // A lazy `[\s\S]*?` looked for the end of each of these starts to the end of the text:
+    // 40 000 of them took 1.5–2.5 s, and a doubling of the text quadrupled the time.
+    const unclosed = 100_000
+    const shapes: Record<string, Parameters<typeof workbook>[0]> = {
+      rows: `<worksheet><sheetData>${'<row>'.repeat(unclosed)}`,
+      cells: `<worksheet><sheetData><row>${'<c r="A1">'.repeat(unclosed)}</row></sheetData></worksheet>`,
+      values: `<worksheet><sheetData><row><c r="A1">${'<v>'.repeat(unclosed)}</c></row></sheetData></worksheet>`,
+    }
+    for (const sheet of Object.values(shapes)) {
+      const started = performance.now()
+      expect(readDownload({ name: 'a.xlsx', bytes: zip(workbook(sheet)) }).kind).toBe('workbook')
+      expect(performance.now() - started).toBeLessThan(1000)
+    }
+    // Shared strings and runs of text.
+    const strings = zip({
+      ...workbook(
+        '<worksheet><sheetData><row><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>',
+      ),
+      'xl/sharedStrings.xml': `<sst>${'<si><t>'.repeat(unclosed)}`,
+    })
+    const started = performance.now()
+    expect(readDownload({ name: 'a.xlsx', bytes: strings }).kind).toBe('workbook')
+    expect(performance.now() - started).toBeLessThan(1000)
+  })
+
+  it('does not mistake <col>, <cfRule> or <sheets> for a cell or a sheet, and reads an empty row', () => {
+    const bytes = zip(
+      workbook(
+        '<worksheet><cols><col min="1" max="2"/></cols><sheetData>' +
+          '<row r="1"/>' +
+          '<row r="2"><c r="A2" t="inlineStr"><is><t>x</t></is></c></row>' +
+          '</sheetData><conditionalFormatting><cfRule type="x"><formula>1</formula></cfRule></conditionalFormatting></worksheet>',
+      ),
+    )
+    // The empty row does not swallow the row behind it.
+    expect(readDownload({ name: 'a.xlsx', bytes }).text).toBe('## Заявки & звонки\nx')
+  })
+
+  it('keeps the place of a cell behind empty ones and of a cell that names none', () => {
+    const bytes = zip(
+      workbook(
+        '<worksheet><sheetData>' +
+          '<row><c r="A1"/><c r="C1" t="inlineStr"><is><t>c</t></is></c><c r="D1"/></row>' +
+          '<row><c t="inlineStr"><is><t></t></is></c><c t="inlineStr"><is><t>b</t></is></c></row>' +
+          '</sheetData></worksheet>',
+      ),
+    )
+    // Row 1: A and B empty, C filled, D empty (no trailing tab). Row 2: cells with no reference
+    // take the next places in turn, an empty one among them.
+    expect(readDownload({ name: 'a.xlsx', bytes }).text).toBe('## Заявки & звонки\n\t\tc\n\tb')
+  })
+
+  it('keeps a character reference that names no character as written instead of failing the file', () => {
+    const bytes = zip(
+      workbook(
+        '<worksheet><sheetData><row r="1">' +
+          '<c r="A1" t="inlineStr"><is><t>&#1055;&#x420;&#x110000;&#99999999999;&#xD800;&#0;</t></is></c>' +
+          '</row></sheetData></worksheet>',
+      ),
+    )
+    expect(readDownload({ name: 'a.xlsx', bytes })).toEqual({
+      kind: 'workbook',
+      text: '## Заявки & звонки\nПР&#x110000;&#99999999999;&#xD800;&#0;',
+    })
+  })
+
   it('reads a workbook stored without compression', () => {
     const bytes = zip(
       workbook('<worksheet><sheetData><row><c t="s"><v>0</v></c></row></sheetData></worksheet>'),

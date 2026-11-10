@@ -1,4 +1,7 @@
+import { Readable } from 'node:stream'
+
 import {
+  browserDownloadLimits,
   isDomainError,
   isPageBrowserError,
   OPEN_WEB_POLICY,
@@ -526,6 +529,100 @@ describe('the cloud browser session', () => {
     })
     expect(log).not.toContain('p1 goto about:blank')
     expect(page.url()).toBe('https://pay.elsewhere.example/checkout')
+  })
+
+  it('does not call the opening of a file to download a failure: the file is taken, the page stays', async () => {
+    const { session, page, log } = await opened()
+    // What Playwright throws from `goto` of an address that answers with a file; its `download`
+    // event follows and the session keeps the file.
+    page.goto = vi.fn(async (url: string) => {
+      log.push(`p1 goto ${url}`)
+      throw new Error(`page.goto: Download is starting\nCall log:\n  - navigating to "${url}"`)
+    }) as never
+    const shown = page.url()
+    const result = await session.act({ tool: 'web_open', url: `${ORIGIN}/wp-admin/export.php` })
+    expect(result).toEqual({ page: { pageId: 1, url: shown, title: '' } })
+    expect(log).toContain(`p1 goto ${ORIGIN}/wp-admin/export.php`)
+    // Any other aborted navigation is still a failure.
+    page.goto = vi.fn(async () => {
+      throw new Error('page.goto: net::ERR_FAILED at https://x.example/')
+    }) as never
+    await expect(
+      session.act({ tool: 'web_open', url: `${ORIGIN}/wp-admin/edit.php` }),
+    ).rejects.toBeInstanceOf(Error)
+  })
+
+  describe('downloads', () => {
+    /** The part of a Playwright `Download` the session uses. */
+    const download = (name: string, body: Promise<Readable>) => ({
+      suggestedFilename: () => name,
+      cancel: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+      createReadStream: () => body,
+    })
+    const file = (...chunks: Buffer[]) => Promise.resolve(Readable.from(chunks))
+    const never = () => new Promise<Readable>(() => undefined)
+
+    it('cancels a download that never ends and frees its place, so that later ones are read', async () => {
+      const { session, page } = await opened()
+      vi.useFakeTimers()
+      try {
+        let late!: (stream: Readable) => void
+        const hung = [
+          download(
+            'a.csv',
+            new Promise<Readable>((resolve) => {
+              late = resolve
+            }),
+          ),
+          download('b.csv', never()),
+        ]
+        for (const item of hung) page.emit('download', item)
+        // The two places are taken: a third is cancelled at once and listed.
+        const third = download('c.csv', file(Buffer.from('c;1\n')))
+        page.emit('download', third)
+        expect(third.cancel).toHaveBeenCalledTimes(1)
+        for (const item of hung) expect(item.cancel).not.toHaveBeenCalled()
+
+        await vi.advanceTimersByTimeAsync(browserDownloadLimits.readMs + 1)
+        for (const item of hung) expect(item.cancel).toHaveBeenCalledTimes(1)
+        // A stream that comes after the cancelled read is closed, not left open.
+        const straggler = Readable.from([Buffer.from('x')])
+        late(straggler)
+        await vi.advanceTimersByTimeAsync(0)
+        expect(straggler.destroyed).toBe(true)
+
+        page.emit('download', download('d.csv', file(Buffer.from('a;b\n1;2\n'))))
+        const listed = await session.downloads()
+        expect(listed.map(({ number, kind }) => [number, kind])).toEqual([
+          [1, 'failed'],
+          [2, 'failed'],
+          [3, 'failed'],
+          [4, 'text'],
+        ])
+        expect(session.downloadText(4)?.text).toBe('a;b\n1;2\n')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('keeps the bytes of a session within its limit when two files are read together', async () => {
+      const { session, page } = await opened()
+      const megabytes = (count: number) => Buffer.alloc(count * 1024 * 1024, 0x61)
+      const limit = browserDownloadLimits.sessionBytes / 1024 / 1024
+      const size = browserDownloadLimits.fileBytes / 1024 / 1024
+      page.emit('download', download('1.csv', file(megabytes(size))))
+      await session.downloads()
+      // Each of these two was given the room that was left when it began: 20 MiB of 40 MiB.
+      page.emit('download', download('2.csv', file(megabytes(size))))
+      page.emit('download', download('3.csv', file(megabytes(size))))
+      const listed = await session.downloads()
+      expect(listed.map(({ kind }) => kind)).toEqual(['text', 'text', 'too_large'])
+      expect(
+        listed.reduce((sum, item) => sum + (item.kind === 'text' ? item.sizeBytes : 0), 0),
+      ).toBe(limit * 1024 * 1024)
+      expect(session.downloadText(3)).toBeNull()
+    })
   })
 
   it('acts only on references of the shown page’s latest tree', async () => {
