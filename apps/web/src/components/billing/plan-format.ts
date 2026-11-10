@@ -2,7 +2,7 @@ import {
   averageTaskCount,
   giftTaskCounts,
   minStartCredits,
-  minTaskChargeCredits,
+  packWithoutTariffPriceFactor,
   typicalTaskCredits,
   type TypicalCredits,
 } from '@repo/domain/billing/credit-numbers'
@@ -89,12 +89,12 @@ function typicalCredits({ from, to }: TypicalCredits, withWord: boolean): string
 
 /**
  * What a task costs, under the heading of the tariffs. The numbers are the constants of the
- * credits model: the minimum of a task and the first two rows of the orientation list. The page
+ * credits model: the first two rows of the orientation list. The page
  * says here, and only here, that done work alone is paid for (`CHARGED_FOR_DONE_WORK`, Ц14).
  */
 export function taskCostRule(): string {
   const { small, block } = typicalTaskCredits
-  return `Задача стоит столько кредитов, сколько работы она потребовала, но не меньше ${minTaskChargeCredits}: небольшая правка текста, цены или фото — обычно ${typicalCredits(small, true)}, добавить блок или страницу — ${typicalCredits(block, false)}. ${CHARGED_FOR_DONE_WORK} Уточнения и «Изменить» — часть той же задачи: работа над ними добавляется к её стоимости. «Отменить» — бесплатно.`
+  return `Задача стоит столько кредитов, сколько работы она потребовала: небольшая правка текста, цены или фото — обычно ${typicalCredits(small, true)}, добавить блок или страницу — ${typicalCredits(block, false)}. ${CHARGED_FOR_DONE_WORK} Уточнения и «Изменить» — часть той же задачи: работа над ними добавляется к её стоимости. «Отменить» — бесплатно.`
 }
 
 /**
@@ -209,8 +209,8 @@ export function creditsLeft(
 // — has no such answer yet, and goes by the credits alone (`giftTakesTasks`).
 
 /**
- * The gift is enough to start a task: what a sentence about the days after the tariff says of
- * new tasks. The limit of that day and its unpaid work are not known in advance.
+ * The gift and pack credits are enough to start a task — they are spent without a tariff (owner's
+ * decision of 10.11.2026): what a sentence about the days after the tariff says of new tasks. The limit of that day and its unpaid work are not known in advance.
  */
 export function giftTakesTasks(gift: number): boolean {
   return gift >= minStartCredits
@@ -218,7 +218,7 @@ export function giftTakesTasks(gift: number): boolean {
 
 /** What is said of new tasks while no tariff is paid for, after «новые задачи». */
 function tasksOnGift(taken: boolean, refused: string, accepted: string): string {
-  return taken ? `${accepted}, только пока есть подарочные кредиты` : refused
+  return taken ? `${accepted}, только пока есть подарочные кредиты или кредиты из пакета` : refused
 }
 
 /**
@@ -290,7 +290,7 @@ export function endsWithPeriod(periodEnd: Date, left: CreditsLeft): string {
       : `Тариф действует до ${until}.`
   const kept = left.pack > 0 ? `${creditsCount(left.pack)} из пакета, сайты` : 'Сайты'
   const after = tasksOnGift(
-    giftTakesTasks(left.gift),
+    giftTakesTasks(left.gift + left.pack),
     'не принимаются, пока вы снова не выберете тариф',
     'принимаются',
   )
@@ -333,14 +333,21 @@ export function packPromise(credits: number): string {
  * (`dayLimited`): without one, the tariff credits run out only before the period ends.
  */
 export function packOffer(
-  { price, credits }: { price: string; credits: number },
+  { price, credits, withoutTariff }: { price: string; credits: number; withoutTariff: boolean },
   dayLimited: boolean,
 ): string {
   const about = aboutTasks(credits)
   const holds = about === null ? '' : `: это в среднем ${about}`
-  const when = dayLimited ? 'на сегодня или до конца периода' : 'до конца периода'
   const smallEdit = smallEditPrice(price, credits, 'из пакета')
   const edit = smallEdit === null ? '' : ` ${smallEdit}.`
+  if (withoutTariff) {
+    // КР9: without a tariff that takes tasks the pack costs twice its price on a tariff.
+    // In whole kopecks: the price on a tariff is the price divided by the factor.
+    const kopecks = Math.round(Number(price) * 100) / packWithoutTariffPriceFactor
+    const onTariff = formatRubles((Math.round(kopecks) / 100).toFixed(2))
+    return `Без тарифа пакет стоит вдвое дороже — с тарифом он стоит ${onTariff} ₽${holds}.${edit} ${packPromise(credits)}`
+  }
+  const when = dayLimited ? 'на сегодня или до конца периода' : 'до конца периода'
   return `Пригодится, если кредиты по тарифу закончатся ${when}${holds}.${edit} ${packPromise(credits)}`
 }
 
@@ -478,7 +485,7 @@ function renewalCancelOutcome(input: RenewalCancel): string[] {
   const kept = left.pack > 0 ? `${creditsCount(left.pack)} из пакета, сайты` : 'Сайты'
   const after = `${kept} и история правок сохранятся.`
   const tasks = tasksOnGift(
-    giftTakesTasks(left.gift),
+    giftTakesTasks(left.gift + left.pack),
     'не будут приниматься, пока вы снова не выберете тариф',
     'будут приниматься',
   )
@@ -635,30 +642,30 @@ export function pastDueText(input: {
 
 /**
  * The «Кредиты» row of a tariff that is not paid for: what its period did not use is not
- * carried over, and the purchased credits wait for the payment with the tariff. Gift credits
- * wait for nothing: what is left of them is named first. When none of them is free and the task
- * in work has some set aside (`giftSetAside`, what the gift account holds), they are not gone
- * either: «Отложено под задачу в работе: 35 подарочных» — the row then agrees with the notice
- * that says the rest will come back. «Недоступны…» is for a gift with nothing free and nothing
- * set aside.
+ * carried over and waits for the payment. Gift and pack credits wait for nothing — one credit is
+ * one credit (owner's decision of 10.11.2026): what is left of them is named first. When none of
+ * them is free and the task in work has gift credits set aside (`giftSetAside`, what the gift
+ * account holds), they are not gone either: «Отложено под задачу в работе: 35 подарочных» — the
+ * row then agrees with the notice that says the rest will come back. «Недоступны…» is for
+ * nothing free and nothing set aside.
  */
 export function creditsWhileOverdue(
   { gift, pack }: Pick<CreditsLeft, 'gift' | 'pack'>,
   giftSetAside: number,
 ): string {
-  const afterPayment =
-    pack === 0 ? null : `После оплаты — новые кредиты по тарифу и ${formatCount(pack)} из пакета`
-  const onGift =
-    gift > 0
-      ? `${plural(gift, 'Остался', 'Осталось', 'Осталось')} ${formatCount(gift)} ${giftWord(gift)}`
-      : giftSetAside > 0
-        ? `Отложено под задачу в работе: ${formatCount(giftSetAside)} ${giftWord(giftSetAside)}`
-        : null
-  if (onGift !== null) {
-    return `${onGift}. ${afterPayment ?? 'Кредиты по тарифу начислим после оплаты'}`
+  const afterPayment = 'Кредиты по тарифу начислим после оплаты'
+  const parts = [
+    gift > 0 ? `${formatCount(gift)} ${giftWord(gift)}` : null,
+    pack > 0 ? `${formatCount(pack)} из пакета` : null,
+  ].filter((part): part is string => part !== null)
+  if (parts.length > 0) {
+    const first = gift > 0 ? gift : pack
+    return `${plural(first, 'Остался', 'Осталось', 'Осталось')} ${parts.join(' и ')}. ${afterPayment}`
   }
-  const blocked = 'Недоступны, пока тариф не оплачен'
-  return afterPayment === null ? blocked : `${blocked}. ${afterPayment}`
+  if (giftSetAside > 0) {
+    return `Отложено под задачу в работе: ${formatCount(giftSetAside)} ${giftWord(giftSetAside)}. ${afterPayment}`
+  }
+  return 'Недоступны, пока тариф не оплачен'
 }
 
 /**

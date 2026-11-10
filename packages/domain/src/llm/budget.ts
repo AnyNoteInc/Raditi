@@ -17,6 +17,10 @@ const attemptSpend = {
 }
 const attemptBudgetSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('quota'), modelClass: z.enum(modelClasses), ...attemptSpend }),
+  // A billable task in credits: no ceiling of its class and no limit of a pass (owner's decision
+  // of 10.11.2026, docs/spec.md §20, «Только кредиты», КР6) — the key is bounded by what the
+  // customer can pay, computed by its issuer.
+  z.strictObject({ kind: z.literal('credits'), ...attemptSpend }),
   z.strictObject({
     kind: z.literal('payg'),
     holdRub: decimalStringSchema(12, 2),
@@ -29,7 +33,15 @@ const attemptBudgetSchema = z.discriminatedUnion('kind', [
 /** Spent costs and open-call reserves must include every key of this attempt. */
 export type AttemptBudgetInput = z.infer<typeof attemptBudgetSchema>
 
-/** Remaining cost budget of a turn key, capped at 750 RUB and rounded down to kopecks. */
+/**
+ * The most a turn key can be written with, RUB: the whole roubles `llm_keys.budget_rub`
+ * (DECIMAL(18,10)) holds. Not a limit of a pass — a key in credits holds what the customer can
+ * pay, and nothing else bounds it (owner's decision of 10.11.2026, docs/spec.md §20, «Только
+ * кредиты», КР6); 750 RUB was the limit of one key before.
+ */
+export const turnKeyLimitRub = 99_999_999
+
+/** Remaining cost budget of a turn key, within `turnKeyLimitRub`, rounded down to kopecks. */
 export function attemptBudgetRub(input: AttemptBudgetInput): string {
   const result = attemptBudgetSchema.safeParse(input)
   if (!result.success) throw badRequest('Invalid LLM attempt budget')
@@ -40,9 +52,11 @@ export function attemptBudgetRub(input: AttemptBudgetInput): string {
   const ceiling =
     value.kind === 'quota'
       ? new Money(quotaAttemptCeilingsRub[value.modelClass])
-      : new Money(value.holdRub).minus(value.feeRub).div(value.markup)
+      : value.kind === 'credits'
+        ? new Money(turnKeyLimitRub)
+        : new Money(value.holdRub).minus(value.feeRub).div(value.markup)
   const remaining = ceiling.minus(value.spentRub).minus(value.openReservedRub)
-  return Money.max(0, Money.min(750, remaining)).toFixed(2, Money.ROUND_DOWN)
+  return Money.max(0, Money.min(turnKeyLimitRub, remaining)).toFixed(2, Money.ROUND_DOWN)
 }
 
 const callReserveSchema = z.strictObject({
@@ -149,7 +163,7 @@ export function callFitsBudget(input: CallBudgetInput): boolean {
   const result = callBudgetSchema.safeParse(input)
   if (!result.success) throw badRequest('Invalid LLM call budget')
   const { budgetRub, spentRub, openReservedRub, reserveRub } = result.data
-  if (new Money(budgetRub).gt(750)) throw badRequest('Invalid LLM call budget')
+  if (new Money(budgetRub).gt(turnKeyLimitRub)) throw badRequest('Invalid LLM call budget')
   if (new Money(budgetRub).isZero()) return false
   return new Money(spentRub).plus(openReservedRub).plus(reserveRub).lte(budgetRub)
 }

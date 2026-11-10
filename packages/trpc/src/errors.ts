@@ -121,8 +121,8 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   BILLING_SUBSCRIPTION_PAST_DUE:
     'Сначала оплатите тариф: последнее списание не прошло. Откройте «Тарифы» и нажмите «Оплатить сейчас»',
   // A task that is not queued: no credits to reserve, or all of them set aside for tasks in
-  // work, the tariff credits of the day taken, no paid tariff, too much work that ended
-  // without a charge.
+  // work, the tariff credits of the day taken, no paid tariff and nothing left of the gift and
+  // the pack.
   BILLING_NOT_ENOUGH_CREDITS:
     'Лимиты закончились: кредитов не хватает, чтобы начать задачу. Купите пакет кредитов или дождитесь начисления по тарифу — подробности в разделе «Использование»',
   BILLING_CREDITS_HELD:
@@ -130,9 +130,7 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   BILLING_DAILY_LIMIT_REACHED:
     'Кредиты по тарифу на сегодня закончились. Завтра их снова можно будет тратить, а продолжить сегодня можно с пакетом кредитов — подробности в разделе «Использование»',
   BILLING_TASK_NEEDS_SUBSCRIPTION:
-    'Чтобы ставить задачи, нужен действующий тариф. Выберите или оплатите его в разделе «Тарифы»',
-  BILLING_UNPAID_WORK_LIMIT:
-    'Новые задачи временно не принимаются: слишком много задач остановилось без результата. Напишите нам — разберёмся, в чём дело',
+    'Кредиты закончились. Чтобы ставить задачи дальше, выберите или оплатите тариф в разделе «Тарифы»',
   // No usable credit rate: the platform's own state, nothing the customer can pay or change.
   BILLING_CREDIT_RATE_MISSING:
     'Задачи сейчас не принимаются: мы обновляем расчёт кредитов. Попробуйте ещё раз немного позже',
@@ -364,21 +362,12 @@ function commandRefusalOf(details: unknown): ChatCommandRefusal | null {
 function withoutTariff({ reason, spendable, needed }: TaskRefusalDetails): string | null {
   switch (reason) {
     case 'gift_spent':
-      return 'Подарочные кредиты закончились.'
+      return 'Кредиты закончились.'
     case 'gift_below_start': {
       const left = plural(spendable, 'Остался', 'Осталось', 'Осталось')
-      const gift = plural(
-        spendable,
-        'подарочный кредит',
-        'подарочных кредита',
-        'подарочных кредитов',
-      )
+      const gift = plural(spendable, 'кредит', 'кредита', 'кредитов')
       return `${left} ${counted(spendable)} ${gift}, а на новую задачу нужно не меньше ${counted(needed)}.`
     }
-    case 'trial_unpaid_limit':
-      return 'Пробные задачи закончились: несколько задач остановились без результата, и без тарифа мы больше не можем их принимать.'
-    case 'gift_site_used':
-      return 'На этом сайте подарочные кредиты уже использовались в другом аккаунте.'
     default:
       return null
   }

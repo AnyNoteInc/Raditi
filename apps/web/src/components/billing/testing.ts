@@ -1,4 +1,4 @@
-import { Money, newTaskVerdict, toCredits } from '@repo/domain'
+import { newTaskVerdict, toCredits } from '@repo/domain'
 
 import type {
   BillingOverview,
@@ -107,6 +107,7 @@ export function offers({
       slug: 'pack',
       name: 'Пакет из 100 кредитов',
       price: '1490.00',
+      withoutTariff: false,
       credits: 100,
     },
     siteCount,
@@ -137,8 +138,6 @@ export function tariffMeter(patch: Partial<TariffMeter> = {}): TariffMeter {
 export interface TaskFacts {
   /** The tariff credits of today, charged and set aside; nothing unless told. */
   today?: { charged?: number; held?: number }
-  /** Credits of work that ended without a charge; none unless told. */
-  unpaidWork?: number
   /** A credit rate is in force; true unless told. */
   rateUsable?: boolean
 }
@@ -153,7 +152,7 @@ type Account = { balance: number; held: number }
 export function taskCreditsFor(
   accounts: { tariff: Account; gift: Account; pack: Account },
   subscription: Pick<Subscription, 'status' | 'plan'> | null,
-  { today = {}, unpaidWork = 0, rateUsable = true }: TaskFacts = {},
+  { today = {}, rateUsable = true }: TaskFacts = {},
 ): TaskCredits {
   const terms =
     subscription === null
@@ -176,7 +175,6 @@ export function taskCreditsFor(
       charged: toCredits(today.charged ?? 0),
       held: toCredits(today.held ?? 0),
     },
-    unpaidWork: new Money(unpaidWork),
     rateUsable,
   })
   return {

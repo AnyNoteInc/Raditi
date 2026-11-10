@@ -320,7 +320,7 @@ describe('the warning of the unlink dialog', () => {
   it('says that tasks are taken after the tariff while the gift credits can start one', () => {
     const onGift = plain(unlinkWarning(subscriptionTo(), 'none', false, true))
     expect(onGift).toBe(
-      'Автопродление отключится. Тариф «Бизнес» будет работать до 18 октября 2026; после этого новые задачи принимаются, только пока есть подарочные кредиты.',
+      'Автопродление отключится. Тариф «Бизнес» будет работать до 18 октября 2026; после этого новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета.',
     )
     // At a shop that takes one-time payments only the last sentence still follows.
     expect(plain(unlinkWarning(subscriptionTo(), 'none', true, true))).toBe(

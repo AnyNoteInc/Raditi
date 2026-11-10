@@ -53,7 +53,7 @@ const subscriptionEnded: MailData['subscription-ended'] = {
 
 /** The gift of the registration, untouched: enough to start a task without a paid tariff. */
 const GIFT = 35
-const ON_GIFT = 'принимаются, только пока есть подарочные кредиты'
+const ON_GIFT = 'принимаются, только пока есть подарочные кредиты или кредиты из пакета'
 
 const letters: [name: string, render: () => RenderedEmail, button: string][] = [
   ['a paid tariff', () => renderTemplate('payment-succeeded', paidPlan), 'Открыть «Тарифы»'],
@@ -305,11 +305,12 @@ describe('payment-failed', () => {
   })
 
   // Gift credits are spent without a paid tariff: the alert of «Тарифы» the letter leads to
-  // says «принимаются, только пока есть подарочные кредиты», and the letter must not say the
+  // says «принимаются, только пока есть подарочные кредиты или кредиты из пакета», and the letter must not say the
   // opposite.
   it.each([
     ['the whole gift', GIFT],
-    ['exactly what a task needs to start', 5],
+    // One credit starts a task since 10.11.2026 (КР5–КР8).
+    ['exactly what a task needs to start', 1],
   ])('says that tasks are taken on gift credits while %s is left', (_case, giftCreditsLeft) => {
     const out = renderTemplate('payment-failed', { ...paymentFailed, giftCreditsLeft })
     const sentence = `Пока оплата не пройдёт, новые задачи ${ON_GIFT}.`
@@ -321,15 +322,15 @@ describe('payment-failed', () => {
     expect(out.text).toContain(`\n\nОплатить тариф можно на странице «Тарифы».\n${PLANS_URL}`)
   })
 
-  it.each([
-    ['no gift credits are', 0],
-    ['fewer gift credits than a task needs to start are', 4],
-  ])('says that tasks are not taken while %s left', (_case, giftCreditsLeft) => {
-    const out = renderTemplate('payment-failed', { ...paymentFailed, giftCreditsLeft })
+  it.each([['no gift credits are', 0]])(
+    'says that tasks are not taken while %s left',
+    (_case, giftCreditsLeft) => {
+      const out = renderTemplate('payment-failed', { ...paymentFailed, giftCreditsLeft })
 
-    expect(out.text).toContain('\n\nПока оплата не пройдёт, новые задачи не принимаются.\n\n')
-    for (const version of [out.text, out.html]) expect(version).not.toMatch(/подарочн/i)
-  })
+      expect(out.text).toContain('\n\nПока оплата не пройдёт, новые задачи не принимаются.\n\n')
+      for (const version of [out.text, out.html]) expect(version).not.toMatch(/подарочн/i)
+    },
+  )
 })
 
 describe('subscription-ended', () => {
@@ -338,11 +339,12 @@ describe('subscription-ended', () => {
 
     expect(out.subject).toBe('Тариф закончился')
     expect(out.text).toContain('Тариф «Бизнес» закончился 18\u00a0октября 2026.')
-    expect(out.text).toContain('Новые задачи сейчас не принимаются.')
+    // Seven credits of a pack carry the tasks on: one credit is one credit.
+    expect(out.text).toContain(`Новые задачи ${ON_GIFT}.`)
     expect(out.text).toContain(
       'Кредиты из пакета, сайты и история правок сохраняются. Кредитов из пакета осталось: 7.',
     )
-    expect(out.text).toContain(`выберите тариф на странице «Тарифы».\n${PLANS_URL}`)
+    expect(out.text).toContain(`выбрать его можно на странице «Тарифы».\n${PLANS_URL}`)
   })
 
   it('groups the digits of a count of four digits', () => {
@@ -362,16 +364,21 @@ describe('subscription-ended', () => {
   })
 
   // Gift credits are spent without a tariff: the «Тарифы» page the letter leads to says
-  // «Новые задачи принимаются, только пока есть подарочные кредиты», and the letter must not
+  // «Новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета», and the letter must not
   // say the opposite, nor send the reader for a tariff «to set tasks again».
   it.each([
     ['the whole gift', GIFT],
-    ['exactly what a task needs to start', 5],
+    // One credit starts a task since 10.11.2026 (КР5–КР8).
+    ['exactly what a task needs to start', 1],
   ])('says that tasks are taken on gift credits while %s is left', (_case, giftCreditsLeft) => {
-    const out = renderTemplate('subscription-ended', { ...subscriptionEnded, giftCreditsLeft })
+    const out = renderTemplate('subscription-ended', {
+      ...subscriptionEnded,
+      giftCreditsLeft,
+      packCreditsLeft: 0,
+    })
     const ended = `Тариф «Бизнес» закончился 18\u00a0октября 2026. Новые задачи ${ON_GIFT}.`
     const action =
-      'Когда подарочные кредиты закончатся, понадобится тариф: выбрать его можно на странице «Тарифы».'
+      'Когда кредиты закончатся, понадобится тариф: выбрать его можно на странице «Тарифы».'
 
     expect(out.subject).toBe('Тариф закончился')
     expect(out.text).toContain(`\n\n${ended}\n\n`)
@@ -383,20 +390,24 @@ describe('subscription-ended', () => {
     }
   })
 
-  it.each([
-    ['no gift credits are', 0],
-    ['fewer gift credits than a task needs to start are', 4],
-  ])('says that tasks are not taken while %s left', (_case, giftCreditsLeft) => {
-    const out = renderTemplate('subscription-ended', { ...subscriptionEnded, giftCreditsLeft })
+  it.each([['no gift credits are', 0]])(
+    'says that tasks are not taken while %s left',
+    (_case, giftCreditsLeft) => {
+      const out = renderTemplate('subscription-ended', {
+        ...subscriptionEnded,
+        giftCreditsLeft,
+        packCreditsLeft: 0,
+      })
 
-    expect(out.text).toContain(
-      '\n\nТариф «Бизнес» закончился 18\u00a0октября 2026. Новые задачи сейчас не принимаются.\n\n',
-    )
-    expect(out.text).toContain(
-      `\n\nЧтобы снова ставить задачи, выберите тариф на странице «Тарифы».\n${PLANS_URL}`,
-    )
-    for (const version of [out.text, out.html]) expect(version).not.toContain(ON_GIFT)
-  })
+      expect(out.text).toContain(
+        '\n\nТариф «Бизнес» закончился 18\u00a0октября 2026. Новые задачи сейчас не принимаются.\n\n',
+      )
+      expect(out.text).toContain(
+        `\n\nЧтобы снова ставить задачи, выберите тариф на странице «Тарифы».\n${PLANS_URL}`,
+      )
+      for (const version of [out.text, out.html]) expect(version).not.toContain(ON_GIFT)
+    },
+  )
 
   it.each([
     [

@@ -1260,7 +1260,9 @@ export async function enqueueFailureLetter(
   const owner = await findWorkspaceOwner(tx, order.workspaceId)
   const plan = await tx.plan.findUnique({ where: { id: order.planId }, select: { name: true } })
   if (owner === null || plan === null) return false
-  const giftCreditsLeft = (await getCreditBalances(tx, order.workspaceId)).gift.available
+  // Gift and pack credits take tasks while the tariff is not paid: the letter counts both.
+  const balances = await getCreditBalances(tx, order.workspaceId)
+  const giftCreditsLeft = balances.gift.available + balances.pack.available
   const payload = {
     planName: plan.name,
     amount: letter.amount,

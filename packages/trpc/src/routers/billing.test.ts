@@ -249,7 +249,7 @@ const noCredits = {
   spendable: 0,
   spendableNow: 0,
   setAside: 0,
-  minToStart: 5,
+  minToStart: 1,
   // Without a paid tariff there is no day: the gift is the bound.
   today: null,
   newTask: { allowed: false, reason: 'gift_spent' },
@@ -400,7 +400,7 @@ describe('billing.overview', () => {
     db.subscription.findFirst.mockResolvedValue(subscription)
     db.billingAccount.findMany.mockResolvedValue([
       { unit: 'credit_tariff', balance: new Money(80), held: new Money(35) },
-      { unit: 'credit_pack', balance: new Money(10), held: new Money(0) },
+      { unit: 'credit_pack', balance: new Money(10), held: new Money(0), debt: new Money(0) },
     ])
 
     expect(await createCaller(context(prisma)).billing.overview()).toEqual({
@@ -426,7 +426,7 @@ describe('billing.overview', () => {
         spendable: 55,
         spendableNow: 30,
         setAside: 35,
-        minToStart: 5,
+        minToStart: 1,
         today: freshDay(20, 45),
         newTask: TAKEN,
       },
@@ -460,15 +460,15 @@ describe('billing.overview', () => {
     const { prisma, db } = fakeDb()
     db.subscription.findFirst.mockResolvedValue(subscriptionRow(business()))
     db.billingAccount.findMany.mockResolvedValue([
-      { unit: 'credit_tariff', balance: new Money(47), held: new Money(45) },
+      { unit: 'credit_tariff', balance: new Money(45), held: new Money(45) },
     ])
     const credits = async () => (await createCaller(context(prisma)).billing.overview()).credits
 
-    // Two credits are free and 45 are set aside for a task in work.
+    // Nothing is free and 45 are set aside for a task in work: one credit would start a task.
     expect(await credits()).toMatchObject({
-      spendable: 2,
+      spendable: 0,
       setAside: 45,
-      minToStart: 5,
+      minToStart: 1,
       newTask: { allowed: false, reason: 'held' },
     })
 
@@ -502,7 +502,13 @@ describe('billing.overview', () => {
     db.billingAccount.findMany.mockResolvedValue([
       { id: randomUUID(), unit: 'credit_tariff', balance: new Money(0), held: new Money(0) },
       { id: giftAccount, unit: 'credit_gift', balance: new Money(35), held: new Money(5) },
-      { id: randomUUID(), unit: 'credit_pack', balance: new Money(0), held: new Money(0) },
+      {
+        id: randomUUID(),
+        unit: 'credit_pack',
+        balance: new Money(0),
+        held: new Money(0),
+        debt: new Money(0),
+      },
     ])
     db.creditLedger.findFirst.mockResolvedValue({ id: randomUUID() })
 
@@ -517,7 +523,7 @@ describe('billing.overview', () => {
       spendable: 30,
       spendableNow: 30,
       setAside: 5,
-      minToStart: 5,
+      minToStart: 1,
       today: null,
       newTask: TAKEN,
     })
@@ -540,7 +546,13 @@ describe('billing.overview', () => {
     db.billingAccount.findMany.mockResolvedValue([
       { id: randomUUID(), unit: 'credit_tariff', balance: new Money(300), held: new Money(0) },
       { id: randomUUID(), unit: 'credit_gift', balance: new Money(0), held: new Money(0) },
-      { id: randomUUID(), unit: 'credit_pack', balance: new Money(0), held: new Money(0) },
+      {
+        id: randomUUID(),
+        unit: 'credit_pack',
+        balance: new Money(0),
+        held: new Money(0),
+        debt: new Money(0),
+      },
     ])
 
     const { credits } = await createCaller(context(prisma)).billing.overview()
@@ -620,7 +632,13 @@ describe('billing.overview', () => {
     db.billingAccount.findMany.mockResolvedValue([
       { id: randomUUID(), unit: 'credit_tariff', balance: new Money(80), held: new Money(0) },
       { id: giftAccount, unit: 'credit_gift', balance: new Money(GIFT), held: new Money(0) },
-      { id: randomUUID(), unit: 'credit_pack', balance: new Money(0), held: new Money(0) },
+      {
+        id: randomUUID(),
+        unit: 'credit_pack',
+        balance: new Money(0),
+        held: new Money(0),
+        debt: new Money(0),
+      },
     ])
     db.creditLedger.findFirst.mockResolvedValue({ id: randomUUID() })
 
@@ -634,7 +652,7 @@ describe('billing.overview', () => {
       spendable: 80 + GIFT,
       spendableNow: 20 + GIFT,
       setAside: 0,
-      minToStart: 5,
+      minToStart: 1,
       today: freshDay(20, 80),
       newTask: TAKEN,
     })
@@ -830,6 +848,7 @@ describe('billing.plans', () => {
         name: 'Пакет из 100 кредитов',
         price: '1990.00',
         credits: 100,
+        withoutTariff: false,
       },
       siteCount: 3,
       autoRenewalAvailable: true,
@@ -989,8 +1008,6 @@ describe('billing.startPackCheckout', () => {
     orderId: randomUUID(),
     confirmationUrl: 'https://yoomoney.ru/checkout/payments/v2/contract?orderId=2',
   }
-  const NEEDS_TARIFF =
-    'Пакет кредитов можно купить только при действующем тарифе. Сначала оформите или оплатите тариф'
 
   it('starts the pack checkout of the signed-in user through the shop of the context', async () => {
     const { prisma } = fakeDb()
@@ -1057,30 +1074,8 @@ describe('billing.startPackCheckout', () => {
     )
   })
 
-  it.each([
-    ['has no tariff', null],
-    ['is overdue with its tariff', { status: 'past_due' }],
-  ])('refuses a customer who %s in the words of the customer', async (_case, subscription) => {
-    // The checkout of @repo/billing itself: the pack is on sale, the tariff does not take tasks.
-    const { prisma, db } = fakeDb()
-    db.plan.findFirst.mockResolvedValue(pack())
-    db.subscription.findFirst.mockResolvedValue(subscription)
-
-    await expect(createCaller(context(prisma)).billing.startPackCheckout({})).rejects.toMatchObject(
-      {
-        code: 'CONFLICT',
-        message: NEEDS_TARIFF,
-        cause: { code: 'BILLING_PACK_NEEDS_SUBSCRIPTION' },
-      },
-    )
-    // The pack on sale, and the subscription of the personal workspace of this user.
-    expect(db.plan.findFirst).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ where: { kind: 'pack', isActive: true } }),
-    )
-    expect(db.subscription.findFirst).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ where: expect.objectContaining({ workspaceId: WORKSPACE }) }),
-    )
-  })
+  // Since 10.11.2026 a pack is sold without a tariff too, at twice the price (КР9): the checkout
+  // of @repo/billing no longer refuses it, and its pricing is tested there (pack.test.ts).
 
   it('answers that no pack is sold when none is on sale', async () => {
     const { prisma, db } = fakeDb()
@@ -1621,7 +1616,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
         // Of the tariff, no more than the day gives, if it has a day; the gift is outside it.
         spendableNow: freshDay(plan.creditsPerDay, quota).left + GIFT,
         setAside: 0,
-        minToStart: 5,
+        minToStart: 1,
         today: freshDay(plan.creditsPerDay, quota),
         newTask: NO_RATE,
       },
@@ -1685,28 +1680,35 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
   it('sells the pack on top of an active tariff and adds its credits beside the quota', async () => {
     const { user: owner, caller, shop } = await account()
     const plan = await seeded('start')
-    const { pack } = await caller.billing.plans()
-    if (pack === null)
+    const row = await db.plan.findFirst({ where: { kind: 'pack', isActive: true } })
+    if (row === null || row.packCredits === null)
       throw new Error('No credit pack is on sale in this database: apply the seeds')
-    const needsTariff = {
-      code: 'CONFLICT',
-      message:
-        'Пакет кредитов можно купить только при действующем тарифе. Сначала оформите или оплатите тариф',
-      cause: { code: 'BILLING_PACK_NEEDS_SUBSCRIPTION' },
-    }
-
-    // No tariff, no pack: nothing is asked of the shop, and no workspace is made for the try.
-    await expect(caller.billing.startPackCheckout({})).rejects.toMatchObject(needsTariff)
+    const pack = { name: row.name, price: row.price.toFixed(2), credits: row.packCredits }
+    // No tariff: the pack is offered at twice its price (КР9); nothing is asked of the shop, and
+    // no workspace is made for the look.
+    const doubled = new Money(pack.price).mul(2).toFixed(2)
+    expect((await caller.billing.plans()).pack).toMatchObject({
+      price: doubled,
+      withoutTariff: true,
+    })
     expect(shop.payments.size).toBe(0)
     expect(await db.workspace.count({ where: { createdById: owner.id } })).toBe(0)
 
     const tariff = await caller.billing.startCheckout({ planSlug: plan.slug, autoRenew: false })
-    // The tariff is not paid yet: still no pack.
-    await expect(caller.billing.startPackCheckout({})).rejects.toMatchObject(needsTariff)
+    // The tariff is not paid yet: the pack still costs twice.
+    expect((await caller.billing.plans()).pack).toMatchObject({
+      price: doubled,
+      withoutTariff: true,
+    })
     shop.pay([...shop.payments.keys()][0]!)
     const { subscription } = await caller.billing.syncOrder({ orderId: tariff.orderId })
     expect(subscription).toMatchObject({ status: 'active' })
 
+    // A tariff that takes tasks: the pack at its price.
+    expect((await caller.billing.plans()).pack).toMatchObject({
+      price: pack.price,
+      withoutTariff: false,
+    })
     const started = await caller.billing.startPackCheckout({})
 
     const payment = [...shop.payments.values()][1]!
@@ -1751,7 +1753,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
         spendable: quota + GIFT + pack.credits,
         spendableNow: freshDay(plan.creditsPerDay, quota).left + GIFT + pack.credits,
         setAside: 0,
-        minToStart: 5,
+        minToStart: 1,
         today: freshDay(plan.creditsPerDay, quota),
         newTask: NO_RATE,
       },

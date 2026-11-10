@@ -130,7 +130,7 @@ test('a customer picks a tariff, pays for it and sees it active', async ({
     // What a task costs and what a tariff holds, in the numbers of the credits model: the
     // credits come from the seeds, the minimum, the examples and the average from the domain.
     await expect(page.getByRole('main')).toContainText(
-      'Задача стоит столько кредитов, сколько работы она потребовала, но не меньше 5: небольшая правка текста, цены или фото — обычно 5 кредитов, добавить блок или страницу — 15–25. Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит.',
+      'Задача стоит столько кредитов, сколько работы она потребовала: небольшая правка текста, цены или фото — обычно 5 кредитов, добавить блок или страницу — 15–25. Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит.',
     )
     // The terms of 06.11.2026: no tariff has a daily limit, and each card names the price of a
     // small edit in rubles — 5 credits at the price of a credit of the tariff.
@@ -151,7 +151,7 @@ test('a customer picks a tariff, pays for it and sees it active', async ({
       for (const line of lines) await expect(planCard(page, name)).toContainText(line)
       await expect(planCard(page, name)).not.toContainText('в день')
     }
-    await expect(page.getByRole('main')).not.toContainText('один кредит')
+    await expect(page.getByRole('list', { name: 'Тарифы' })).not.toContainText('один кредит')
     await expect(page.getByRole('link', { name: 'Публичная оферта' })).toHaveAttribute(
       'href',
       '/terms/public-offer',
@@ -336,11 +336,14 @@ test('a customer with an active tariff buys a pack and sees its credits beside t
   const buyPack = page.getByRole('button', { name: 'Купить пакет' })
   const packDialog = page.getByRole('dialog', { name: 'Пакет из 100 кредитов' })
 
-  await test.step('no pack is offered before a tariff is on', async () => {
+  await test.step('before a tariff is on, the pack is offered at twice its price', async () => {
     await page.goto('/settings/plans')
     await expect(page.getByRole('heading', { level: 2, name: 'Выберите тариф' })).toBeVisible(SLOW)
-    await expect(buyPack).toHaveCount(0)
-    await expect(page.getByText(/Пакет из/)).toHaveCount(0)
+    // A pack is sold without a tariff too, at twice its price (КР9).
+    await expect(buyPack).toBeVisible()
+    await expect(
+      page.getByRole('heading', { level: 3, name: /^Пакет\sиз\s100\sкредитов\s—\s2\s980\s₽$/ }),
+    ).toBeVisible()
   })
 
   await test.step('the customer pays for «Старт» without auto-renewal', async () => {
@@ -427,7 +430,7 @@ test('a customer with an active tariff buys a pack and sees its credits beside t
     })
     // The gift credits take tasks after the tariff as well; the pack waits for a tariff.
     await expect(block).toContainText(
-      'После этого новые задачи принимаются, только пока есть подарочные кредиты. 100 кредитов из пакета, сайты и история правок сохранятся.',
+      'После этого новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. 100 кредитов из пакета, сайты и история правок сохранятся.',
     )
     // One more pack can be bought.
     await expect(buyPack).toBeVisible()

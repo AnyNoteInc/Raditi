@@ -216,9 +216,7 @@ describe.skipIf(!enabled)('billing:rates with PostgreSQL', () => {
     expect(lines).toContain('  agency (тариф): 2000 кредитов — 12000.00 ₽, 60.0 % цены 19990.00 ₽')
     expect(lines).toContain('  pack (пакет): 100 кредитов — 600.00 ₽, 40.3 % цены 1490.00 ₽')
     expect(lines).toContain('Учётная стоимость выше половины цены у тарифов: business, agency.')
-    expect(lines).toContain(
-      'Шаги попытки при этом курсе (предел одного ключа хода — 750 ₽): light — 20 кредитов, 120.00 ₽; standard — 45 кредитов, 270.00 ₽; heavy — 120 кредитов, 720.00 ₽.',
-    )
+    expect(lines.some((line) => line.includes('предел'))).toBe(false)
     expect(lines).toContain(
       `  ${luna.provider}/${luna.model} (light): 1.94 / 0.19 / 1.94 / 9.69 — ставки из файла`,
     )
@@ -257,10 +255,7 @@ describe.skipIf(!enabled)('billing:rates with PostgreSQL', () => {
     expect(second.printed).toContain(
       `  ${sol.provider}/${sol.model} (standard): 36.90 / 3.69 / 36.90 / 184.52 — прежние ставки\n`,
     )
-    // Above the limit of one turn key: 120 credits at 6.30 are 756 RUB.
-    expect(second.printed).toContain(
-      '  Шаг выше предела ключа: heavy. Такая попытка получит несколько ключей хода подряд.\n',
-    )
+    expect(second.printed).not.toContain('предел одного прохода')
     expect(second.printed).toMatch(/Записано: курс кредита [0-9a-f-]{36} и ставки моделей \(0\) /)
     expect(await creditRateStatus(db, rates[1]!.effectiveFrom)).toMatchObject({
       verdict: 'usable',

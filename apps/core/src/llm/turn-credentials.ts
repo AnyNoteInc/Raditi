@@ -759,10 +759,10 @@ async function revocationRequested(tx: Transaction, ref: TurnCredentialRef): Pro
   return marker !== null
 }
 /**
- * Spec §17: a key never admits more than its attempt may spend (the class ceiling on a quota
- * plan, what the active reserve pays for on pay-as-you-go), nor less than its first call needs.
- * Tasks without a pricing rule follow the quota ceiling, and so do non-billable ones («Отменить»,
- * operator retries): they keep the pinned rule but have no reserve. Attempt spend before this key
+ * Spec §17: a key never admits more than its attempt may spend (the technical guard of one key
+ * for a billable task in credits — КР6 —, what the active reserve pays for on pay-as-you-go),
+ * nor less than its first call needs. Non-billable tasks («Отменить», operator retries) follow
+ * the quota ceiling of their class: they keep the pinned rule but have no reserve. Attempt spend before this key
  * is the caller's to subtract until P12 computes the budget; it is taken as zero here.
  */
 async function requireKeyBudget(
@@ -773,9 +773,16 @@ async function requireKeyBudget(
   price: Price,
 ): Promise<void> {
   const rows = await tx.$queryRaw<
-    { payg: boolean; holdRub: string | null; feeRub: string | null; markup: string | null }[]
+    {
+      payg: boolean
+      credits: boolean
+      holdRub: string | null
+      feeRub: string | null
+      markup: string | null
+    }[]
   >`
-    SELECT (t.pricing_rule_id IS NOT NULL AND t.billable) AS payg, h.amount::text AS "holdRub",
+    SELECT (t.pricing_rule_id IS NOT NULL AND t.billable) AS payg,
+      (t.pricing_rule_id IS NULL AND t.billable) AS credits, h.amount::text AS "holdRub",
       r.fee_per_action::text AS "feeRub", r.markup::text AS markup
     FROM tasks t LEFT JOIN pricing_rules r ON r.id = t.pricing_rule_id
     LEFT JOIN credit_holds h ON h.task_id = t.id AND h.attempt = t.attempt
@@ -795,6 +802,10 @@ async function requireKeyBudget(
       markup: row.markup,
       ...spend,
     }
+  } else if (row.credits) {
+    // In credits the key is bounded by what the customer can pay (`attemptCreditBudget`) and by
+    // the technical guard of one key — no ceiling of the class (КР6).
+    attempt = { kind: 'credits', ...spend }
   } else attempt = { kind: 'quota', modelClass: grant.modelClass, ...spend }
   const verdict = turnKeyBudgetVerdict(
     { budgetRub: grant.budgetRub, attempt, reserveOutputTokens: profile.reserveOutputTokens },

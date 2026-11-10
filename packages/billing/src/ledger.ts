@@ -4,6 +4,7 @@ import {
   billingOrderNotFound,
   carriedTariffCredits,
   conflict,
+  creditAccountKinds,
   creditAccountUnits,
   expiringTariffCredits,
   isLiveSubscription,
@@ -70,6 +71,11 @@ export const ledgerKeys = {
   holdExpiry: (holdId: string) => `hold:${holdId}:expire`,
   /** The credits an operator took off the account when returning the payment of a pack. */
   refundAdjust: (orderId: string) => `order:${orderId}:refund:adjust`,
+  /**
+   * What a grant paid of the workspace's debt (КР7): a `charge` of the granted account, linked to
+   * the order of the grant and to no task — the passes that ran into debt were charged before.
+   */
+  debtRepay: (grantKey: string) => `${grantKey}:debt`,
   /** The gift of the registration: one per user, on whichever workspace of theirs it stands. */
   signupGift: (userId: string) => `user:${userId}:signup-gift`,
 } as const
@@ -232,10 +238,52 @@ async function grant(
   const idempotencyKey = key(orderId)
   const entry = await posted(tx, idempotencyKey, { account, kind: 'grant', amount })
   if (entry) return { entry, applied: false }
-  return {
-    entry: await post(tx, { account, kind: 'grant', amount, orderId, idempotencyKey }),
-    applied: true,
-  }
+  const granted = await post(tx, { account, kind: 'grant', amount, orderId, idempotencyKey })
+  await repayDebt(tx, { workspaceId, account, orderId, grantKey: idempotencyKey })
+  return { entry: granted, applied: true }
+}
+
+/**
+ * Pays what the workspace owes from the credits a grant has just brought (owner's decision of
+ * 10.11.2026, docs/spec.md §20, «Только кредиты», КР7): min(debt, what is free on the granted
+ * account), one `charge` row of that account under `ledgerKeys.debtRepay`, and the debt of the
+ * pack account goes down by as much. A grant smaller than the debt pays what it brought; the
+ * rest waits for the next grant. Nothing when nothing is owed.
+ *
+ * Called under the lock of the granted account; the pack account is locked after it — the order
+ * of `creditAccountKinds` —, or is that account.
+ */
+async function repayDebt(
+  tx: BillingTx,
+  input: { workspaceId: string; account: LockedCreditAccount; orderId: string; grantKey: string },
+): Promise<void> {
+  const { workspaceId, orderId, grantKey } = input
+  const granted = await lockCreditAccount(tx, workspaceId, kindOf(input.account))
+  const pack =
+    granted?.unit === creditAccountUnits.pack
+      ? granted
+      : await lockCreditAccount(tx, workspaceId, 'pack')
+  if (granted === null || pack === null || pack.debt === 0) return
+  const free = granted.snapshot.balance - granted.snapshot.held
+  const paid = Math.min(pack.debt, free)
+  if (paid <= 0) return
+  await post(tx, {
+    account: granted,
+    kind: 'charge',
+    amount: new Money(-paid),
+    orderId,
+    idempotencyKey: ledgerKeys.debtRepay(grantKey),
+  })
+  await tx.billingAccount.update({
+    where: { id: pack.id },
+    data: { debt: { decrement: new Money(paid) } },
+  })
+}
+
+const kindOf = (account: LockedCreditAccount): CreditAccountKind => {
+  const kind = creditAccountKinds.find((each) => creditAccountUnits[each] === account.unit)
+  if (kind === undefined) throw conflict('The account is not a credit account')
+  return kind
 }
 
 /**

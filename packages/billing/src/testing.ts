@@ -7,7 +7,19 @@ import {
   type PrismaClient,
   type TurnStatus,
 } from '@repo/db'
-import { creditAccountUnits, Money, signupGiftCredits, type CreditAccountKind } from '@repo/domain'
+import {
+  creditAccountSnapshot,
+  creditAccountUnits,
+  modelClassSchema,
+  Money,
+  signupGiftCredits,
+  spendableCredits,
+  splitReserve,
+  subscriptionAllowsTasks,
+  tariffHoldCreatedAt,
+  toCredits,
+  type CreditAccountKind,
+} from '@repo/domain'
 import {
   YookassaApiError,
   type CreatePaymentInput,
@@ -19,7 +31,12 @@ import {
 } from '@repo/yookassa'
 
 import type { BillingDeps } from './deps.ts'
-import { placeCreditHold, type CreditHoldPlacement, type PlacedCreditHold } from './holds.ts'
+import {
+  placeCreditHold,
+  tariffCreditsOfDay,
+  type CreditHoldPlacement,
+  type PlacedCreditHold,
+} from './holds.ts'
 import type { PaymentMethodDeps } from './payment-method.ts'
 import type { RefundDeps } from './refund.ts'
 import { paymentLetterKey } from './settlement.ts'
@@ -422,6 +439,101 @@ export function placeReserve(
   )
 }
 
+/** The step of an attempt before 10.11.2026, by the class of the task's model. */
+const STEP_BEFORE = { light: 20, standard: 45, heavy: 120 } as const
+
+/**
+ * A reserve as the queue placed it before 10.11.2026 (docs/spec.md §20, «Только кредиты»,
+ * КР5–КР8): the step of the class of the task — 20, 45 or 120 — split over the accounts in the
+ * order credits are spent, the tariff no further than the day leaves (`placementTariffRoom`).
+ * Such rows stand in the database still, and the charge, the day, the expiry and the return of a
+ * reserve have to settle rows of any size: tests of those take their reserves from here. The
+ * placement itself is the product's — `placeReserve` checks it and places its one credit —, and
+ * then the rows of the attempt are rewritten to the sizes of the step, `held` moved with them.
+ */
+export async function placeReserveByStep(
+  db: PrismaClient,
+  placement: CreditHoldPlacement,
+  rate: Partial<TestCreditRateData> = {},
+): Promise<PlacedCreditHold> {
+  const placed = await placeReserve(db, placement, rate)
+  if (!placed.applied) return placed
+  const [row] = placed.holds
+  if (row === undefined || placed.holds.length !== 1) throw new Error('One reserve row expected')
+  const { workspaceId, taskId } = placement
+  return db.$transaction(
+    async (tx) => {
+      const { modelClass } = await tx.task.findUniqueOrThrow({
+        where: { id: taskId },
+        select: { modelClass: true },
+      })
+      const live = await tx.subscription.findFirst({
+        where: { workspaceId, status: { in: ['trial', 'active', 'past_due'] } },
+        include: { plan: { select: { creditsPerDay: true } } },
+      })
+      const paid = live !== null && subscriptionAllowsTasks(live.status)
+      const accounts = await tx.billingAccount.findMany({ where: { workspaceId } })
+      const accountOf = (kind: CreditAccountKind) =>
+        accounts.find((each) => each.unit === creditAccountUnits[kind])
+      const before = (kind: CreditAccountKind) => {
+        const found = accountOf(kind)
+        const held = (found?.held.toNumber() ?? 0) - (found?.id === row.accountId ? 1 : 0)
+        return creditAccountSnapshot({ balance: found?.balance.toNumber() ?? 0, held })
+      }
+      const snapshot = { tariff: before('tariff'), gift: before('gift'), pack: before('pack') }
+      // The day before this placement: its own row, when it stands on the tariff, is not in it.
+      const day = await tariffCreditsOfDay(tx, { workspaceId, now: row.placedAt })
+      const own = row.unit === creditAccountUnits.tariff ? 1 : 0
+      const limit = paid ? live.plan.creditsPerDay : null
+      const room =
+        limit === null || placement.retry === true
+          ? null
+          : toCredits(Math.max(0, limit - (day.charged + day.held - own)))
+      const step = STEP_BEFORE[modelClassSchema.parse(modelClass)]
+      const amount = toCredits(Math.min(step, spendableCredits(snapshot, paid, room).total))
+      const parts = splitReserve({
+        accounts: snapshot,
+        amount,
+        tariffTakesTasks: paid,
+        tariffRoom: room,
+      })
+      await tx.creditHold.delete({ where: { id: row.id } })
+      await tx.billingAccount.update({
+        where: { id: row.accountId },
+        data: { held: { decrement: 1 } },
+      })
+      const holds = []
+      for (const part of parts) {
+        const target = accountOf(part.account)
+        if (target === undefined) throw new Error('The workspace has no such credit account')
+        holds.push(
+          await tx.creditHold.create({
+            data: {
+              accountId: target.id,
+              unit: target.unit,
+              taskId,
+              attempt: row.attempt,
+              amount: new Money(part.amount),
+              expiresAt: row.expiresAt,
+              createdAt:
+                part.account === 'tariff' && live !== null
+                  ? tariffHoldCreatedAt(row.placedAt, live)
+                  : row.placedAt,
+              placedAt: row.placedAt,
+            },
+          }),
+        )
+        await tx.billingAccount.update({
+          where: { id: target.id },
+          data: { held: { increment: new Money(part.amount) } },
+        })
+      }
+      return { holds, reserved: amount, applied: true }
+    },
+    { maxWait: 15_000, timeout: 30_000 },
+  )
+}
+
 /**
  * Rows for the PostgreSQL tests of this package, and of other packages through
  * `@repo/billing/testing` (test files only: a rule of dependency-cruiser). Every test works in a
@@ -614,6 +726,11 @@ export function billingFixtures(db: PrismaClient) {
     /** `placeReserve` for a task of a fixture workspace: `cleanup` removes what it wrote. */
     reserve(placement: CreditHoldPlacement, rate: Partial<TestCreditRateData> = {}) {
       return placeReserve(db, placement, rate)
+    },
+
+    /** A reserve by the step of before 10.11.2026: `placeReserveByStep`. */
+    reserveByStep(placement: CreditHoldPlacement, rate: Partial<TestCreditRateData> = {}) {
+      return placeReserveByStep(db, placement, rate)
     },
 
     async cleanup(): Promise<void> {

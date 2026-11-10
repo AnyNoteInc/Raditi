@@ -23,7 +23,6 @@ export const billingErrorCodes = [
   'BILLING_NOT_ENOUGH_CREDITS',
   'BILLING_DAILY_LIMIT_REACHED',
   'BILLING_CREDITS_HELD',
-  'BILLING_UNPAID_WORK_LIMIT',
   'BILLING_CREDIT_RATE_MISSING',
 ] as const
 export type BillingErrorCode = (typeof billingErrorCodes)[number]
@@ -31,24 +30,20 @@ export type BillingErrorCode = (typeof billingErrorCodes)[number]
 /**
  * Why a task is not taken, more exactly than the code of the refusal says: the pages choose
  * their text by the reason, and so does the server when it refuses a request all the same.
- * `gift_*` and `trial_*` are of a workspace without a paid tariff, on its gift credits;
- * `past_due` and `ended` are of a tariff that is not paid when the gift cannot carry the task;
- * `empty`, `below_start`, `daily_limit` and `unpaid_limit` are of a paid tariff; `held` and
+ * `gift_*` are of a workspace without a paid tariff, on its gift and pack credits; `past_due`
+ * is of a tariff that is not paid when those cannot carry the task; `empty`, `below_start` and
+ * `daily_limit` are of a paid tariff; `held` and
  * `rate_missing` are of both. `daily_limit`: the accounts could cover the task, but the tariff
  * credits free within what is left of the Moscow day, with the gift and pack credits, cannot.
  */
 export const taskRefusalReasons = [
   'gift_spent',
   'gift_below_start',
-  'trial_unpaid_limit',
-  'gift_site_used',
   'empty',
   'below_start',
   'held',
   'daily_limit',
-  'unpaid_limit',
   'past_due',
-  'ended',
   'rate_missing',
 ] as const
 export type TaskRefusalReason = (typeof taskRefusalReasons)[number]
@@ -57,15 +52,11 @@ export type TaskRefusalReason = (typeof taskRefusalReasons)[number]
 export const taskRefusalCodes = Object.freeze({
   gift_spent: 'BILLING_TASK_NEEDS_SUBSCRIPTION',
   gift_below_start: 'BILLING_TASK_NEEDS_SUBSCRIPTION',
-  trial_unpaid_limit: 'BILLING_TASK_NEEDS_SUBSCRIPTION',
-  gift_site_used: 'BILLING_TASK_NEEDS_SUBSCRIPTION',
   empty: 'BILLING_NOT_ENOUGH_CREDITS',
   below_start: 'BILLING_NOT_ENOUGH_CREDITS',
   held: 'BILLING_CREDITS_HELD',
   daily_limit: 'BILLING_DAILY_LIMIT_REACHED',
-  unpaid_limit: 'BILLING_UNPAID_WORK_LIMIT',
   past_due: 'BILLING_TASK_NEEDS_SUBSCRIPTION',
-  ended: 'BILLING_TASK_NEEDS_SUBSCRIPTION',
   rate_missing: 'BILLING_CREDIT_RATE_MISSING',
 } as const satisfies Record<TaskRefusalReason, BillingErrorCode>)
 
@@ -166,10 +157,8 @@ export const billingAutoRenewalUnavailable = (): DomainError =>
 export const billingPlanSiteLimit = (): DomainError =>
   billingError('BILLING_PLAN_SITE_LIMIT', 'The plan allows fewer sites than the workspace has', 409)
 /**
- * A new task is taken only while the tariff is paid: not without a subscription, not after it
- * ended and not in past_due, which is live. Purchased credits do not replace the tariff. With
- * details it is also the refusal of a workspace whose gift credits cannot carry the task; the
- * reason says which case it is.
+ * A workspace without a paid tariff — no subscription, an ended one or one in past_due — whose
+ * gift and pack credits cannot carry the task; the reason says which case it is.
  */
 export const billingTaskNeedsSubscription = (details?: TaskRefusalDetails): DomainError =>
   billingError(
@@ -204,17 +193,6 @@ export const billingCreditsHeld = (details?: TaskRefusalDetails): DomainError =>
     details,
   )
 /**
- * The work the workspace got without a charge has reached its bound: too many tasks ended
- * without a result. Nothing was charged for them; new tasks wait for an operator to look.
- */
-export const billingUnpaidWorkLimit = (details?: TaskRefusalDetails): DomainError =>
-  billingError(
-    'BILLING_UNPAID_WORK_LIMIT',
-    'The bound on unpaid work of the workspace is reached',
-    409,
-    details,
-  )
-/**
  * No credit rate can convert the work of a task: none is approved yet, or the newest price of a
  * model is younger than the rate. On our side and for now, like LLM_PRICE_MISSING.
  */
@@ -226,7 +204,6 @@ const refusalByCode = {
   BILLING_NOT_ENOUGH_CREDITS: billingNotEnoughCredits,
   BILLING_DAILY_LIMIT_REACHED: billingDailyLimitReached,
   BILLING_CREDITS_HELD: billingCreditsHeld,
-  BILLING_UNPAID_WORK_LIMIT: billingUnpaidWorkLimit,
   BILLING_CREDIT_RATE_MISSING: billingCreditRateMissing,
 } satisfies Record<(typeof taskRefusalCodes)[TaskRefusalReason], unknown>
 

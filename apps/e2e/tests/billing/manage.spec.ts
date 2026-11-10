@@ -129,7 +129,7 @@ test('a customer switches auto-renewal off and on again', async ({ page, signedI
     // The gift of the registration is untouched: tasks are taken on it after the tariff.
     await expect(dialog).toContainText(
       new RegExp(
-        sentence`С ${DAY} новые задачи будут приниматься, только пока есть подарочные кредиты. Сайты и история правок сохранятся.`,
+        sentence`С ${DAY} новые задачи будут приниматься, только пока есть подарочные кредиты или кредиты из пакета. Сайты и история правок сохранятся.`,
       ),
     )
     // The dialog is reached and left from the keyboard: the focus is inside it and comes back.
@@ -151,7 +151,7 @@ test('a customer switches auto-renewal off and on again', async ({ page, signedI
     const said = block.getByRole('status')
     await expect(said).toContainText(
       new RegExp(
-        `^${sentence`Автопродление отключено. Тариф и 150 кредитов по тарифу доступны до ${DATE}. После этого новые задачи принимаются, только пока есть подарочные кредиты. Сайты и история правок сохранятся.`}$`,
+        `^${sentence`Автопродление отключено. Тариф и 150 кредитов по тарифу доступны до ${DATE}. После этого новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. Сайты и история правок сохранятся.`}$`,
       ),
       SLOW,
     )
@@ -424,7 +424,7 @@ test('a customer whose renewal charge failed pays on the page of the shop and th
     await expect(alert).toContainText('Не получилось списать 1 990 ₽')
     await expect(alert).toContainText(
       new RegExp(
-        sentence`Оплатите тариф: пока оплата не пройдёт, новые задачи принимаются, только пока есть подарочные кредиты. ${DATE} тариф закончится, если оплата не пройдёт раньше. Карту для следующих списаний можно заменить.`,
+        sentence`Оплатите тариф: пока оплата не пройдёт, новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. ${DATE} тариф закончится, если оплата не пройдёт раньше. Карту для следующих списаний можно заменить.`,
       ),
     )
     // Replacing the card pays for nothing, and the page does not say that it would.
@@ -437,8 +437,12 @@ test('a customer whose renewal charge failed pays on the page of the shop and th
       'href',
       '/settings/billing',
     )
-    // Nothing is offered that an overdue tariff cannot have.
-    await expect(page.getByRole('button', { name: /^(Перейти на|Купить|Включить)/ })).toHaveCount(0)
+    // Nothing is offered that an overdue tariff cannot have; the pack is sold, at twice its
+    // price while the tariff waits for its payment (КР9).
+    await expect(page.getByRole('button', { name: /^(Перейти на|Включить)/ })).toHaveCount(0)
+    await expect(
+      page.getByRole('heading', { level: 3, name: /^Пакет\sиз\s100\sкредитов\s—\s2\s980\s₽$/ }),
+    ).toBeVisible()
     await expect(renewal(page)).toContainText(
       'Способ оплаты, которым вы оплатите тариф, сохранится',
     )
@@ -528,7 +532,7 @@ test('a customer whose tariff is over sees when it ended and chooses a tariff ag
     await expect(block).toContainText(new RegExp(sentence`Закончился ${DAY}`), SLOW)
     // The gift of the registration outlives the tariff, and tasks are taken on it.
     await expect(block).toContainText(
-      'Новые задачи принимаются, только пока есть подарочные кредиты. Сайты и история правок на месте.',
+      'Новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. Сайты и история правок на месте.',
     )
     // What the gift is enough for is said once — under the heading of the page.
     await expect(block).not.toContainText('Выберите тариф')

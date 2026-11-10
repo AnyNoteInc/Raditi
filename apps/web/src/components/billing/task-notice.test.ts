@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 
-import type { TaskRefusalReason } from './billing-types'
 import { creditsLeft } from './plan-format'
 import {
   giftCarriesTasks,
@@ -26,7 +25,7 @@ const plain = (text: string | null | undefined) =>
 const periodEnd = new Date('2026-10-18T09:00:00Z')
 /** 15:00 in Moscow on 4 October: the next Moscow day starts at 21:00 UTC. */
 const NOW = new Date('2026-10-04T12:00:00Z')
-const PACK = { credits: 100, price: '1490.00' }
+const PACK = { credits: 100, price: '1490.00', withoutTariff: false }
 
 /** «Старт» as the seeds sell it: 150 credits a month and no daily limit, paid and renewing on 18 October. */
 const startPlan = {
@@ -131,34 +130,10 @@ describe('without a tariff', () => {
     })
   })
 
-  it.each([
-    [1, 'Остался 1 подарочный кредит'],
-    [2, 'Осталось 2 подарочных кредита'],
-    [3, 'Осталось 3 подарочных кредита'],
-    [4, 'Осталось 4 подарочных кредита'],
-  ])('says that %i gift credits start no task, and that a tariff keeps them (A3)', (gift, left) => {
-    expect(noTariff({ gift })).toEqual({
-      reason: 'gift_below_start',
-      text: `${left}, а на новую задачу нужно не меньше 5. Выберите тариф — подарочные кредиты сохранятся и прибавятся к кредитам тарифа.`,
-      actions: ['choose_plan'],
-    })
+  // One credit starts a task since 10.11.2026 (КР5–КР8): a few gift credits are no refusal.
+  it.each([1, 2, 4])('takes a task on %i gift credits', (gift) => {
+    expect(noTariff({ gift })).toEqual({ reason: null, text: null, actions: null })
   })
-
-  it.each([
-    [15, 'оставшиеся 15 подарочных кредитов сохранятся'],
-    [35, 'оставшиеся 35 подарочных кредитов сохранятся'],
-    [21, 'оставшийся 21 подарочный кредит сохранится'],
-    [22, 'оставшиеся 22 подарочных кредита сохранятся'],
-  ])(
-    'says that the trial is over, and what a tariff keeps of %i gift credits (A4)',
-    (gift, kept) => {
-      expect(noTariff({ gift, facts: { unpaidWork: 70 } })).toEqual({
-        reason: 'trial_unpaid_limit',
-        text: `Пробные задачи закончились: несколько задач остановились без результата, и без тарифа мы больше не можем их принимать. Выберите тариф, чтобы продолжить; ${kept}.`,
-        actions: ['choose_plan'],
-      })
-    },
-  )
 
   // Without a tariff there is no day: the gift is the bound (decision of 17.10.2026).
   it('never refuses by a day, however much the day took', () => {
@@ -177,17 +152,10 @@ describe('without a tariff', () => {
     })
   })
 
-  it.each([
-    [40, 'У вас 40 кредитов из пакета: они не сгорают и снова будут доступны'],
-    [1, 'У вас 1 кредит из пакета: он не сгорает и снова будет доступен'],
-    [22, 'У вас 22 кредита из пакета: они не сгорают и снова будут доступны'],
-    [1200, 'У вас 1 200 кредитов из пакета: они не сгорают и снова будут доступны'],
-  ])('says that %i credits of a pack wait for a tariff (A13)', (pack, kept) => {
-    expect(noTariff({ pack })).toEqual({
-      reason: 'ended',
-      text: `Тариф закончился. ${kept}, когда вы выберете тариф.`,
-      actions: ['choose_plan'],
-    })
+  // One credit is one credit (owner's decision of 10.11.2026): a pack carries tasks without a
+  // tariff as the gift does.
+  it.each([40, 5, 1200])('takes a task on %i credits of a pack', (pack) => {
+    expect(noTariff({ pack })).toEqual({ reason: null, text: null, actions: null })
   })
 })
 
@@ -210,24 +178,14 @@ describe('on a paid tariff that renews', () => {
     })
   })
 
-  it.each([
-    [1, 'остался 1 кредит'],
-    [2, 'осталось 2 кредита'],
-    [3, 'осталось 3 кредита'],
-    [4, 'осталось 4 кредита'],
-  ])('says that %i credits start no task (A8)', (tariff, left) => {
-    expect(told({ tariff, offer: PACK })).toEqual({
-      reason: 'below_start',
-      text: `Лимиты закончились: ${left}, а на новую задачу нужно не меньше 5. ${grant} Чтобы продолжить сейчас, купите пакет — 100 кредитов за 1 490 ₽.`,
-      actions: ['buy_pack', 'change_plan'],
-    })
-    expect(told({ tariff }).text).toBe(
-      `Лимиты закончились: ${left}, а на новую задачу нужно не меньше 5. ${grant}`,
-    )
+  // One credit starts a task since 10.11.2026 (КР5–КР8): a few credits are no refusal.
+  it.each([1, 2, 4])('takes a task on %i credits of the tariff', (tariff) => {
+    expect(told({ tariff, offer: PACK })).toEqual({ reason: null, text: null, actions: null })
   })
 
-  it('counts every account in what is left: a gift credit is one of them', () => {
-    expect(told({ tariff: 1, gift: 2 }).text).toMatch(/^Лимиты закончились: осталось 3 кредита, /)
+  it('counts every account in what can be spent: a gift credit is one of them', () => {
+    expect(told({ gift: 1 }).reason).toBeNull()
+    expect(told({ pack: 1 }).reason).toBeNull()
   })
 
   it('names the tariff of the next period when a change is scheduled', () => {
@@ -252,7 +210,7 @@ describe('on a paid tariff that renews', () => {
       text: state,
       actions: [],
     })
-    expect(told({ tariff: 2, tariffHeld: 1200 }).text).toContain('под них отложено 1 200.')
+    expect(told({ tariffHeld: 1200 }).text).toContain('под них отложено 1 200.')
   })
 
   // The tariff credits of the day (§6.2 of the design of 17.10.2026): a pack lifts it today. No
@@ -295,24 +253,13 @@ describe('on a paid tariff that renews', () => {
     )
   })
 
-  // Review of M5.33a: the day need not be spent — three of it and one of a pack are four.
-  it('says how much the day still gives when it is too little to start a task', () => {
+  // One credit of the day, or of a pack, starts a task since 10.11.2026 (КР5–КР8).
+  it('takes a task while the day or a pack still gives a credit', () => {
+    const left = { tariff: 255, tariffHeld: 45, facts: { today: { charged: 4, held: 45 } } }
+    expect(onDay(left).reason).toBeNull()
     expect(
-      onDay({
-        tariff: 255,
-        tariffHeld: 45,
-        pack: 1,
-        offer: PACK,
-        facts: { today: { charged: 2, held: 45 } },
-      }),
-    ).toEqual({
-      reason: 'daily_limit',
-      text: `Сегодня можно потратить ещё 4 кредита, а на новую задачу нужно не меньше 5. ${tomorrow} ${packToday}`,
-      actions: ['buy_pack'],
-    })
-    expect(
-      onDay({ tariff: 255, tariffHeld: 45, facts: { today: { charged: 4, held: 45 } } }).text,
-    ).toBe(`Сегодня можно потратить ещё 1 кредит, а на новую задачу нужно не меньше 5. ${tomorrow}`)
+      onDay({ ...left, facts: { today: { charged: 5, held: 45 } }, pack: 1 }).reason,
+    ).toBeNull()
   })
 
   it('names the limit of now when the day took more after a renewal onto a smaller plan', () => {
@@ -423,15 +370,6 @@ describe('on a paid tariff that renews', () => {
       dayLimitTomorrow({ ...later, status: 'past_due', autoRenewal: true }, 50, false, NOW),
     ).toBeNull()
   })
-
-  it('says that too much work ended without a charge, and asks to write (A14)', () => {
-    // Half the 150 credits of «Старт» a month.
-    expect(told({ tariff: 150, offer: PACK, facts: { unpaidWork: 75 } })).toEqual({
-      reason: 'unpaid_limit',
-      text: 'В этом периоде слишком много задач остановилось без результата, поэтому новые задачи временно не принимаются. Кредиты за них не списаны. Напишите нам — разберёмся, в чём дело.',
-      actions: [],
-    })
-  })
 })
 
 describe('on a paid tariff that does not renew (A9)', () => {
@@ -444,10 +382,8 @@ describe('on a paid tariff that does not renew (A9)', () => {
       text: `${state} Купите пакет — 100 кредитов за 1 490 ₽, они не сгорают, — или включите автопродление: тогда 18 октября начислим 150 кредитов.`,
       actions: ['buy_pack', 'resume_renewal'],
     })
-    // The same with a few credits left: fewer than a task needs.
-    expect(told({ ...ending, tariff: 3, offer: PACK }).text).toBe(
-      `${state} Купите пакет — 100 кредитов за 1 490 ₽, они не сгорают, — или включите автопродление: тогда 18 октября начислим 150 кредитов.`,
-    )
+    // A few credits left start a task: no notice then.
+    expect(told({ ...ending, tariff: 3, offer: PACK }).reason).toBeNull()
   })
 
   it('offers only what there is: the pack, auto-renewal, or neither', () => {
@@ -474,7 +410,7 @@ describe('on a tariff that is not paid', () => {
     told({ ...scenario, plan: { status: 'past_due', ...scenario.plan } })
 
   it('says that the tariff is not paid and that the payment brings the credits (A12)', () => {
-    expect(overdue({ tariff: 120, pack: 100 })).toEqual({
+    expect(overdue({ tariff: 120 })).toEqual({
       reason: 'past_due',
       text: 'Тариф «Старт» не оплачен, поэтому новые задачи не принимаются. Оплатите тариф — кредиты нового периода начислим сразу.',
       actions: ['pay'],
@@ -482,11 +418,8 @@ describe('on a tariff that is not paid', () => {
   })
 
   it('sends the customer to pay, not to choose a tariff, when the gift stands in the way', () => {
-    expect(overdue({ gift: 15, facts: { unpaidWork: 70 } })).toEqual({
-      reason: 'trial_unpaid_limit',
-      text: 'Пробные задачи закончились: несколько задач остановились без результата, и без тарифа мы больше не можем их принимать. Оплатите тариф, чтобы продолжить; оставшиеся 15 подарочных кредитов сохранятся.',
-      actions: ['pay'],
-    })
+    expect(overdue({})).toMatchObject({ reason: 'past_due', actions: ['pay'] })
+    expect(overdue({ gift: 4 }).reason).toBeNull()
     expect(overdue({ giftHeld: 35 })).toMatchObject({
       reason: 'held',
       text: expect.stringMatching(
@@ -509,13 +442,15 @@ describe('whether the gift still carries the tasks of a tariff that is not paid'
     expect(carries({ gift: 20, facts: { today: { charged: 500 } } })).toEqual([null, true])
     // The gift waits for the task in work: what it does not use comes back.
     expect(carries({ giftHeld: 35 })).toEqual(['held', true])
-    expect(carries({ gift: 2, giftHeld: 33 })).toEqual(['held', true])
+    expect(carries({ giftHeld: 33 })).toEqual(['held', true])
+    // A few gift or pack credits carry a task: one credit starts it.
+    expect(carries({ gift: 2, giftHeld: 33 })).toEqual([null, true])
+    expect(carries({ pack: 4 })).toEqual([null, true])
   })
 
   it('does not once only the payment brings tasks back', () => {
-    expect(carries({ tariff: 120, pack: 100 })).toEqual(['past_due', false])
-    expect(carries({ gift: 4 })).toEqual(['past_due', false])
-    expect(carries({ gift: 15, facts: { unpaidWork: 70 } })).toEqual(['trial_unpaid_limit', false])
+    expect(carries({ tariff: 120 })).toEqual(['past_due', false])
+    expect(carries({})).toEqual(['past_due', false])
     // The pause is the platform's: no task is taken, with the payment or without it.
     expect(carries({ gift: 35, facts: { rateUsable: false } })).toEqual(['rate_missing', false])
   })
@@ -560,35 +495,15 @@ describe('where nothing can be paid for', () => {
   })
 })
 
-describe('a reason the pages of the account never show', () => {
-  it('has no notice: the gift of a site is known only where the site is', () => {
-    const given = input({ plan: null, gift: 35 })
-    const siteUsed = { allowed: false, reason: 'gift_site_used' as TaskRefusalReason }
-    expect(taskNotice({ ...given, task: { ...given.task, newTask: siteUsed } })).toBeNull()
-  })
-})
-
 describe('every notice', () => {
   const cases: Case[] = [
     { plan: null },
-    { plan: null, gift: 3 },
-    { plan: null, gift: 15, facts: { unpaidWork: 70 } },
     { plan: null, giftHeld: 35 },
-    { plan: null, pack: 40 },
     { offer: PACK },
-    { tariff: 3, offer: PACK },
     { plan: { autoRenewal: false }, offer: PACK },
     { tariffHeld: 90, offer: PACK },
     { terms: dayPlan, tariff: 250, offer: PACK, facts: { today: { charged: 50 } } },
     { terms: dayPlan, tariff: 255, tariffHeld: 45, facts: { today: { charged: 5, held: 45 } } },
-    {
-      terms: dayPlan,
-      tariff: 255,
-      tariffHeld: 45,
-      pack: 1,
-      facts: { today: { charged: 2, held: 45 } },
-    },
-    { tariff: 150, facts: { unpaidWork: 75 } },
     { plan: { status: 'past_due' } },
     { tariff: 150, facts: { rateUsable: false } },
   ]
@@ -606,26 +521,15 @@ describe('every notice', () => {
       // in one block only.
       expect(text).not.toMatch(/оплат[аы] за действие|токен/i)
     }
-    // Every reason a page of the account can be given has its case here.
+    // Every reason a page of the account can be given has its case here: with one credit to
+    // start a task, «below_start» and «gift_below_start» are not given any more (КР5–КР8).
     expect([...reasons].sort()).toEqual(
-      [
-        'below_start',
-        'daily_limit',
-        'empty',
-        'ended',
-        'gift_below_start',
-        'gift_spent',
-        'held',
-        'past_due',
-        'rate_missing',
-        'trial_unpaid_limit',
-        'unpaid_limit',
-      ].sort(),
+      ['daily_limit', 'empty', 'gift_spent', 'held', 'past_due', 'rate_missing'].sort(),
     )
   })
 
   it('says «лимиты закончились» wherever the credits of a paid tariff ran out', () => {
-    for (const scenario of [{}, { tariff: 3 }, { plan: { autoRenewal: false } }] as Case[]) {
+    for (const scenario of [{}, { plan: { autoRenewal: false } }] as Case[]) {
       expect(told(scenario).text).toMatch(/^Лимиты закончились/)
     }
   })
@@ -638,12 +542,12 @@ describe('every notice', () => {
 describe('the row of the credits', () => {
   const task = (scenario: Case) => input(scenario).task
 
-  it('says «Закончились» when fewer credits can be spent than a task needs and none is set aside', () => {
+  it('says «Закончились» when no credit can be spent and none is set aside', () => {
     expect(creditsLeft({ tariff: 0, gift: 0, pack: 0 }, task({}))).toBe('Закончились')
-    expect(creditsLeft({ tariff: 3, gift: 0, pack: 0 }, task({ tariff: 3 }))).toBe('Закончились')
-    expect(
-      creditsLeft({ tariff: 1, gift: 2, pack: 1 }, task({ tariff: 1, gift: 2, pack: 1 })),
-    ).toBe('Закончились')
+    // One credit starts a task since 10.11.2026: three are left, not gone.
+    expect(creditsLeft({ tariff: 3, gift: 0, pack: 0 }, task({ tariff: 3 }))).toBe(
+      'Осталось 3 по тарифу',
+    )
   })
 
   it('names what is left while a task can start on it, or while credits are set aside', () => {
@@ -673,9 +577,9 @@ describe('the row of the credits', () => {
         task({ tariffHeld: 1100, giftHeld: 35, packHeld: 65 }),
       ),
     ).toBe('Отложено под задачи в работе: 1 200')
-    // Fewer are set aside than a task needs: the limits ran out, and the three are still not gone.
+    // A few set aside are worth waiting for: one credit starts a task.
     const fewHeld = task({ tariffHeld: 3 })
-    expect(fewHeld).toMatchObject({ spendable: 0, setAside: 3, newTask: { reason: 'empty' } })
+    expect(fewHeld).toMatchObject({ spendable: 0, setAside: 3, newTask: { reason: 'held' } })
     expect(creditsLeft({ tariff: 0, gift: 0, pack: 0 }, fewHeld)).toBe(
       'Отложено под задачи в работе: 3',
     )
@@ -698,32 +602,22 @@ describe('the line under «Тарифы» of a customer without a tariff', () =>
     )
   }
 
-  it('tells of the trial that is over, by the answer of the server — never of a day', () => {
+  it('never tells of a day, however much the day took', () => {
     expect(lead({ gift: 20, facts: { today: { charged: 500 } } })).not.toMatch(/в день|сегодня/i)
-    expect(lead({ gift: 15, facts: { unpaidWork: 70 } })).toBe(
-      'Пробные задачи закончились: несколько задач остановились без результата, и без тарифа мы больше не можем их принимать. Выберите тариф, чтобы продолжить; оставшиеся 15 подарочных кредитов сохранятся.',
-    )
   })
 
-  it('tells that credits of a pack wait for a tariff, unless the block of the ended tariff says so', () => {
+  it('tells what a pack alone gives: tasks until the credits run out', () => {
     expect(lead({ pack: 40 })).toBe(
-      'Тариф закончился. У вас 40 кредитов из пакета: они не сгорают и снова будут доступны, когда вы выберете тариф.',
+      'У вас 40 кредитов из пакета. Когда кредиты закончатся, понадобится тариф.',
     )
-    // The page shows the tariff that ended, with what it left: the line only leads on.
-    expect(lead({ pack: 40 }, { hadTariff: true })).toBe(
-      'Выберите тариф, чтобы снова ставить задачи.',
-    )
-    expect(lead({ pack: 40 }, { hadTariff: true, canChoose: false })).toBe(
-      'Оплата пока недоступна.',
+    expect(lead({ pack: 40 }, { canChoose: false })).toBe(
+      'У вас 40 кредитов из пакета. Когда кредиты закончатся, понадобится тариф. Оплата пока недоступна.',
     )
   })
 
   it('says «payments are off» in place of the way to a tariff, where a tariff is the way', () => {
     const off = { canChoose: false }
-    expect(lead({ gift: 15, facts: { unpaidWork: 70 } }, off)).toBe(
-      'Пробные задачи закончились: несколько задач остановились без результата, и без тарифа мы больше не можем их принимать. Оплата пока недоступна.',
-    )
-    expect(lead({ pack: 40 }, off)).toMatch(/когда вы выберете тариф\. Оплата пока недоступна\.$/)
+    expect(lead({ gift: 3 }, off)).toMatch(/Оплата пока недоступна\.$/)
   })
 
   it('says what the customer has before the pause of the platform', () => {

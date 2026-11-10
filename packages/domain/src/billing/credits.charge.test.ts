@@ -6,31 +6,24 @@ import {
   chargeForOutcome,
   creditsFromCost,
   customerBudgetLeftRub,
-  minTaskChargeCredits,
   taskCharge,
   taskOutcomes,
   toCredits,
-  unpaidWork,
   type ChargedWork,
   type CostAtRate,
   type CustomerBudgetInput,
   type TaskEnding,
-  type UnpaidWorkInput,
 } from './credits.ts'
 
 // The work of a task in credits and what it is charged. Every number of the tables below was
 // computed by hand from the examples of the model: the credit rate K = 6.00 RUB of accounting
-// cost in a credit, a done task charged at least 5 credits and never more than its reserve.
+// cost in a credit, a pass charged its work rounded up (КР5–КР8).
 
 const badRequest = expect.objectContaining({ name: 'DomainError', code: 'BAD_REQUEST' })
 const K = '6.00'
 const at = (costRub: string, rubPerCredit = K): CostAtRate => ({ costRub, rubPerCredit })
 /** Unrounded credits written out, for a case that is about the charge alone. */
 const used = (credits: string) => new Money(credits)
-const work = (credits: string, reserved: number): ChargedWork => ({
-  used: used(credits),
-  reserved: toCredits(reserved),
-})
 
 describe('creditsFromCost', () => {
   it.each([
@@ -179,204 +172,88 @@ describe('creditsFromCost', () => {
 })
 
 describe('taskCharge', () => {
-  // The worked examples of the model. A new task reserves the step of its class, 45 credits.
+  // The worked examples of the model (owner's decision of 10.11.2026, КР5–КР8): the work of a
+  // pass rounded up to a whole credit — no minimum and no cap of the reserve.
   it.each([
-    ['a small edit', [at('22.09')], 45, 5, true, false],
-    ['a new block', [at('101.37')], 45, 17, false, false],
-    ['a big task', [at('176.70')], 45, 29, false, false],
-    ['the same block after one clarification', [at('126.71')], 45, 21, false, false],
-    ['three small edits in one message', [at('66.26')], 45, 11, false, false],
-    [
-      'done, and its only calls were estimates by the fault of the platform',
-      [],
-      45,
-      5,
-      true,
-      false,
-    ],
-    ['calls already admitted ran to 297 RUB', [at('297.00')], 45, 45, false, true],
-    ['12 credits were all the customer had', [at('80.00')], 12, 12, false, true],
-    ['continued once: two reserves of 45', [at('225.00'), at('72.00')], 90, 50, false, false],
+    ['a small edit', [at('22.09')], 4],
+    ['a new block', [at('101.37')], 17],
+    ['a big task', [at('176.70')], 30],
+    ['the same block after one clarification', [at('126.71')], 22],
+    ['three small edits in one message', [at('66.26')], 12],
+    ['done, and its only calls were estimates by the fault of the platform', [], 0],
+    ['calls already admitted ran to 297 RUB: more than any reserve', [at('297.00')], 50],
+    ['continued once', [at('225.00'), at('72.00')], 50],
     // the rate changed in the middle: 8.33 + 10.27 = 18.61
-    [
-      'work across a change of the rate',
-      [at('50.00', '6.00'), at('51.37', '5.00')],
-      45,
-      19,
-      false,
-      false,
-    ],
-    // three attempts of 14, 14 and 17 RUB: 7.5 credits, a half that must not be lost
-    [
-      'thirds and sixths that make a half',
-      [at('14.00'), at('14.00'), at('17.00')],
-      45,
-      8,
-      false,
-      false,
-    ],
-  ] as const)('%s', (_name, sums, reserved, credits, minimumApplied, capped) => {
-    const charge = taskCharge({ used: creditsFromCost(sums), reserved: toCredits(reserved) })
-    expect(charge).toEqual({ credits, minimumApplied, capped })
+    ['work across a change of the rate', [at('50.00', '6.00'), at('51.37', '5.00')], 19],
+    // three attempts of 14, 14 and 17 RUB: 7.5 credits
+    ['thirds and sixths that make a half', [at('14.00'), at('14.00'), at('17.00')], 8],
+  ] as const)('%s', (_name, sums, credits) => {
+    expect(taskCharge({ used: creditsFromCost(sums) })).toEqual({ credits })
   })
 
   // 110.63 RUB at a rate of 5.98 is exactly 18.5 credits: 5.98 × 18.5 = 110.63. Binary floating
-  // point makes it 18.499999999999996 and rounds it to 18.
-  it('charges 19 credits where arithmetic in Number gives 18', () => {
+  // point makes it 18.499999999999996; rounded up in decimals it is 19 either way, and a hair
+  // above a whole number must not round up by an error of Number.
+  it('rounds up in decimals, not in Number', () => {
     const inDecimal = creditsFromCost([at('110.63', '5.98')])
     expect(inDecimal.toFixed()).toBe('18.5')
-    expect(taskCharge({ used: inDecimal, reserved: toCredits(45) }).credits).toBe(19)
-
-    const inNumber = Number('110.63') / Number('5.98')
-    expect(inNumber).toBe(18.499999999999996)
-    expect(Math.round(inNumber)).toBe(18)
-  })
-
-  // 16.74 + 34.16 + 0.10 = 51.00 RUB, 8.5 credits. Added in Number the cost is
-  // 50.99999999999999 and the credits round to 8.
-  it('charges 9 credits where the cost added in Number gives 8', () => {
-    const costs = ['16.74', '34.16', '0.10']
-    const charge = taskCharge({
-      used: creditsFromCost(costs.map((cost) => at(cost))),
-      reserved: toCredits(45),
-    })
-    expect(charge.credits).toBe(9)
-
-    const inNumber = costs.reduce((sum, cost) => sum + Number(cost), 0) / Number(K)
-    expect(inNumber).toBeLessThan(8.5)
-    expect(Math.round(inNumber)).toBe(8)
+    expect(taskCharge({ used: inDecimal }).credits).toBe(19)
+    // 16.74 + 34.16 + 0.10 = 51.00 RUB, exactly 8.5 credits; 60.00 RUB, exactly 10
+    expect(
+      taskCharge({ used: creditsFromCost(['16.74', '34.16', '0.10'].map((cost) => at(cost))) }),
+    ).toEqual({ credits: 9 })
+    expect(taskCharge({ used: creditsFromCost([at('60.00')]) })).toEqual({ credits: 10 })
   })
 
   it.each([
-    // HALF_UP, once, to a whole credit
-    ['just under a half', '16.4999999999', 45, 16, false, false],
-    // closer to the half than a Number can tell: 16.5 there, and 17 after rounding
-    ['a hair under a half', '16.49999999999999999999', 45, 16, false, false],
-    ['exactly a half', '16.5', 45, 17, false, false],
-    ['just over a half', '16.5000000001', 45, 17, false, false],
-    ['a whole number', '16', 45, 16, false, false],
-    // the minimum of a done task
-    ['no work at all', '0', 45, 5, true, false],
-    ['work under a credit', '0.4', 45, 5, true, false],
-    ['work that rounds to 4', '4.4999999999', 45, 5, true, false],
-    ['work that rounds to the minimum itself', '4.5', 45, 5, false, false],
-    ['work of exactly the minimum', '5', 45, 5, false, false],
-    ['work that rounds down to the minimum', '5.4999999999', 45, 5, false, false],
-    ['work that rounds to one above the minimum', '5.5', 45, 6, false, false],
-    // the cap of the reserve
-    ['work one credit under the reserve', '44', 45, 44, false, false],
-    ['work that rounds down to the reserve', '45.4999999999', 45, 45, false, false],
-    ['work of exactly the reserve', '45', 45, 45, false, false],
-    ['work that rounds to one above the reserve', '45.5', 45, 45, false, true],
-    ['work far above the reserve', '1000000', 45, 45, false, true],
-    ['a reserve of the minimum', '3.2', 5, 5, true, false],
-    // the cap comes after the minimum: a reserve below it is charged whole
-    ['a reserve below the minimum and less work', '1.2', 3, 3, true, true],
-    ['a reserve below the minimum and more work', '9', 3, 3, false, true],
-    ['a reserve of one credit', '0', 1, 1, true, true],
-    [
-      'the largest reserve of the column',
-      '999999999999.5',
-      999_999_999_999,
-      999_999_999_999,
-      false,
-      true,
-    ],
-    [
-      'the largest reserve of the column, not reached',
-      '999999999998.5',
-      999_999_999_999,
-      999_999_999_999,
-      false,
-      false,
-    ],
-  ] as const)(
-    '%s: %s credits of %i reserved',
-    (_name, credits, reserved, charged, minimumApplied, capped) => {
-      expect(taskCharge(work(credits, reserved))).toEqual({
-        credits: charged,
-        minimumApplied,
-        capped,
-      })
-    },
-  )
-
-  it('is min(reserved, max(5, round half up)) for every quarter of a credit', () => {
-    expect(minTaskChargeCredits).toBe(5)
-    for (const reserved of [1, 4, 5, 6, 12, 45, 90]) {
-      for (let quarters = 0; quarters <= 400; quarters++) {
-        // whole arithmetic: a quarter count q rounds half up to floor((q + 2) / 4)
-        const rounded = Math.floor((quarters + 2) / 4)
-        const expected = Math.min(reserved, Math.max(5, rounded))
-        const charge = taskCharge({
-          used: new Money(quarters).div(4),
-          reserved: toCredits(reserved),
-        })
-        expect(charge.credits).toBe(expected)
-        expect(charge.minimumApplied).toBe(rounded < 5)
-        expect(charge.capped).toBe(Math.max(5, rounded) > reserved)
-      }
-    }
+    ['no work at all', '0', 0],
+    ['the smallest work', '0.0000000001', 1],
+    ['work under a credit', '0.4', 1],
+    ['a whole number', '16', 16],
+    ['just over a whole number', '16.0000000001', 17],
+    ['just under a half', '16.4999999999', 17],
+    ['exactly a half', '16.5', 17],
+    ['just under a whole number', '16.9999999999', 17],
+    ['work far above any reserve', '1000000', 1_000_000],
+    ['the largest count of the column', '999999999998.5', 999_999_999_999],
+  ] as const)('%s: %s credits → %i', (_name, credits, charged) => {
+    expect(taskCharge({ used: used(credits) })).toEqual({ credits: charged })
   })
 
-  // A later charge of a task — the next pass of an open dialog (owner's answer of 26.10.2026) —
-  // is its work rounded: the minimum is the first charge's alone, but any work costs a credit.
-  it('is min(reserved, max(1, round half up)) without the minimum, and 0 without work', () => {
-    for (const reserved of [1, 5, 45]) {
-      for (let quarters = 0; quarters <= 200; quarters++) {
-        const rounded = Math.floor((quarters + 2) / 4)
-        const due = quarters === 0 ? 0 : Math.max(1, rounded)
-        const charge = taskCharge({
-          used: new Money(quarters).div(4),
-          reserved: toCredits(reserved),
-          minimum: false,
-        })
-        expect(charge).toEqual({
-          credits: Math.min(reserved, due),
-          minimumApplied: false,
-          capped: due > reserved,
-        })
-      }
+  it('is the work rounded up for every quarter of a credit', () => {
+    for (let quarters = 0; quarters <= 400; quarters++) {
+      const charge = taskCharge({ used: new Money(quarters).div(4) })
+      expect(charge).toEqual({ credits: Math.ceil(quarters / 4) })
     }
   })
 
   it('charges whole credits that pass for a count of credits', () => {
-    const { credits } = taskCharge(work('16.895', 45))
+    const { credits } = taskCharge({ used: used('16.895') })
     expect(Number.isInteger(credits)).toBe(true)
     expect(toCredits(credits)).toBe(17)
   })
 
   it('reads a Decimal of any decimal.js constructor, and a zero with a sign', () => {
-    expect(taskCharge({ used: new Decimal('16.5'), reserved: toCredits(45) }).credits).toBe(17)
-    expect(taskCharge({ used: new Money('-0'), reserved: toCredits(45) }).credits).toBe(5)
+    expect(taskCharge({ used: new Decimal('16.5') }).credits).toBe(17)
+    expect(taskCharge({ used: new Money('-0') }).credits).toBe(0)
   })
 
   it('does not change its input', () => {
-    const input = work('16.895', 45)
+    const input = { used: used('16.895') }
     taskCharge(input)
     expect(input.used.toFixed()).toBe('16.895')
-    expect(input.reserved).toBe(45)
   })
 
   it.each<[string, unknown]>([
-    ['negative work', { used: used('-0.01'), reserved: 45 }],
-    ['work that is not a number', { used: new Money(Number.NaN), reserved: 45 }],
-    ['infinite work', { used: new Money(Number.POSITIVE_INFINITY), reserved: 45 }],
-    ['work as a number', { used: 16.895, reserved: 45 }],
-    ['work as a string', { used: '16.895', reserved: 45 }],
-    [
-      'work as an object that prints a decimal',
-      { used: { toFixed: () => '16.895' }, reserved: 45 },
-    ],
-    ['no work', { reserved: 45 }],
-    ['no reserve', { used: used('16.895') }],
-    ['a reserve of nothing', { used: used('16.895'), reserved: 0 }],
-    ['a negative reserve', { used: used('16.895'), reserved: -45 }],
-    ['a fraction of a reserve', { used: used('16.895'), reserved: 44.5 }],
-    ['a reserve as a string', { used: used('16.895'), reserved: '45' }],
-    ['a reserve as a Decimal', { used: used('16.895'), reserved: new Money(45) }],
-    ['a reserve above the column', { used: used('16.895'), reserved: 1_000_000_000_000 }],
-    ['an unknown field', { used: used('16.895'), reserved: 45, outcome: 'done' }],
+    ['negative work', { used: used('-0.01') }],
+    ['work that is not a number', { used: new Money(Number.NaN) }],
+    ['infinite work', { used: new Money(Number.POSITIVE_INFINITY) }],
+    ['work as a number', { used: 16.895 }],
+    ['work as a string', { used: '16.895' }],
+    ['work as an object that prints a decimal', { used: { toFixed: () => '16.895' } }],
+    ['no work', {}],
+    ['a reserve, which no longer bounds the charge', { used: used('16.895'), reserved: 45 }],
+    ['the minimum, which is gone', { used: used('16.895'), minimum: true }],
     ['null', null],
     ['nothing', undefined],
   ])('refuses %s', (_name, input) => {
@@ -385,7 +262,7 @@ describe('taskCharge', () => {
 })
 
 describe('chargeForOutcome', () => {
-  const free = { credits: 0, minimumApplied: false, capped: false }
+  const free = { credits: 0 }
 
   it('knows the endings of a task: its terminal statuses', () => {
     expect(taskOutcomes).toEqual(['done', 'failed', 'rolled_back', 'cancelled'])
@@ -393,27 +270,21 @@ describe('chargeForOutcome', () => {
   })
 
   it.each([
-    ['a small edit', '3.68', 45, 5, true, false],
-    ['a new block', '16.895', 45, 17, false, false],
-    ['an overrun of admitted calls', '49.5', 45, 45, false, true],
-    ['a task continued once', '49.5', 90, 50, false, false],
-  ] as const)(
-    'charges a done task: %s',
-    (_name, credits, reserved, charged, minimumApplied, capped) => {
-      const ended = { outcome: 'done', ...work(credits, reserved) } as const
-      expect(chargeForOutcome(ended)).toEqual({ credits: charged, minimumApplied, capped })
-      expect(chargeForOutcome(ended)).toEqual(taskCharge(work(credits, reserved)))
-    },
-  )
+    ['a small edit', '3.68', 4],
+    ['a new block', '16.895', 17],
+    ['work above any reserve', '49.5', 50],
+  ] as const)('charges a done task: %s', (_name, credits, charged) => {
+    const ended = { outcome: 'done', used: used(credits) } as const
+    expect(chargeForOutcome(ended)).toEqual({ credits: charged })
+    expect(chargeForOutcome(ended)).toEqual(taskCharge({ used: used(credits) }))
+  })
 
   it.each(['failed', 'rolled_back', 'cancelled'] as const)(
     'charges nothing for a task that ended %s, whatever it spent',
     (outcome) => {
       // failed after 150 RUB of calls: 25 credits of work, none of them charged
-      expect(chargeForOutcome({ outcome, ...work('25', 45) })).toEqual(free)
-      // neither the minimum nor the cap is applied to it
-      expect(chargeForOutcome({ outcome, ...work('0', 45) })).toEqual(free)
-      expect(chargeForOutcome({ outcome, ...work('300', 45) })).toEqual(free)
+      expect(chargeForOutcome({ outcome, used: used('25') })).toEqual(free)
+      expect(chargeForOutcome({ outcome, used: used('300') })).toEqual(free)
       // and its work need not be known at all
       expect(chargeForOutcome({ outcome })).toEqual(free)
     },
@@ -421,35 +292,31 @@ describe('chargeForOutcome', () => {
 
   it('charges exactly one ending', () => {
     const charged = taskOutcomes.filter(
-      (outcome) => chargeForOutcome({ outcome, ...work('16.895', 45) }).credits > 0,
+      (outcome) => chargeForOutcome({ outcome, used: used('16.895') }).credits > 0,
     )
     expect(charged).toEqual(['done'])
   })
 
   it('takes an ending that is known only when it happens', () => {
     for (const outcome of taskOutcomes) {
-      const ended: TaskEnding = { outcome, ...work('16.895', 45) }
+      const ended: TaskEnding = { outcome, used: used('16.895') }
       expect(chargeForOutcome(ended).credits).toBe(outcome === 'done' ? 17 : 0)
     }
   })
 
   it('does not charge a done task whose work is not given', () => {
     expect(() => chargeForOutcome({ outcome: 'done' } as TaskEnding)).toThrow(badRequest)
-    expect(() => chargeForOutcome({ outcome: 'done', used: used('3') } as TaskEnding)).toThrow(
-      badRequest,
-    )
-    expect(() => chargeForOutcome({ outcome: 'done', ...work('3', 0) })).toThrow(badRequest)
   })
 
   it.each<[string, unknown]>([
-    ['a task still running', { outcome: 'running', ...work('16.895', 45) }],
+    ['a task still running', { outcome: 'running', used: used('16.895') }],
     ['a task that waits for an answer', { outcome: 'awaiting_user' }],
     ['a queued task', { outcome: 'queued' }],
     ['a status that does not exist', { outcome: 'refunded' }],
     ['a name every object has', { outcome: 'toString' }],
-    ['an ending in capitals', { outcome: 'DONE', ...work('16.895', 45) }],
+    ['an ending in capitals', { outcome: 'DONE', used: used('16.895') }],
     ['an ending that is not text', { outcome: 1 }],
-    ['no ending', { ...work('16.895', 45) }],
+    ['no ending', { used: used('16.895') }],
     ['null', null],
     ['nothing', undefined],
   ])('refuses %s', (_name, input) => {
@@ -537,60 +404,5 @@ describe('customerBudgetLeftRub', () => {
     ['null', null],
   ])('refuses %s', (_name, input) => {
     expect(() => customerBudgetLeftRub(input as CustomerBudgetInput)).toThrow(badRequest)
-  })
-})
-
-describe('unpaidWork', () => {
-  const unpaid = (credits: string, charged: number) =>
-    unpaidWork({ work: used(credits), charged: toCredits(charged) }).toFixed()
-
-  it.each([
-    // max(0, work − charged), in credits, not rounded
-    ['nothing was done', '0', 0, '0'],
-    ['everything done was charged above its work: the minimum', '3.68', 5, '0'],
-    ['a block done and charged', '16.895', 17, '0'],
-    ['a big task done and charged, rounded down', '29.45', 29, '0.45'],
-    ['a failed attempt of 25 credits', '25', 0, '25'],
-    ['a done block and a failed attempt', '41.895', 17, '24.895'],
-    ['work in progress counts until it is charged', '37.2', 0, '37.2'],
-    ['the bound without a tariff, to the credit', '50', 0, '50'],
-    ['a period of failures on a tariff', '320.5', 40, '280.5'],
-    ['more charged than worked', '10', 300, '0'],
-  ])('%s: %s of work, %i charged → %s', (_name, credits, charged, expected) => {
-    expect(unpaid(credits, charged)).toBe(expected)
-  })
-
-  it('answers in the decimal arithmetic of money and never below zero', () => {
-    const result = unpaidWork({ work: used('3.68'), charged: toCredits(5) })
-    expect(result.constructor).toBe(Money)
-    expect(result.isNegative()).toBe(false)
-    expect(unpaidWork({ work: new Decimal('12.25'), charged: toCredits(2) }).constructor).toBe(
-      Money,
-    )
-    expect(unpaidWork({ work: new Decimal('12.25'), charged: toCredits(2) }).toFixed()).toBe(
-      '10.25',
-    )
-  })
-
-  it('does not change its input', () => {
-    const input = { work: used('41.895'), charged: toCredits(17) }
-    unpaidWork(input)
-    expect(input.work.toFixed()).toBe('41.895')
-    expect(input.charged).toBe(17)
-  })
-
-  it.each<[string, unknown]>([
-    ['negative work', { work: used('-1'), charged: 0 }],
-    ['work as a number', { work: 41.895, charged: 0 }],
-    ['work as a string', { work: '41.895', charged: 0 }],
-    ['infinite work', { work: new Money(Number.POSITIVE_INFINITY), charged: 0 }],
-    ['a negative charge', { work: used('41.895'), charged: -17 }],
-    ['a fraction of a charge', { work: used('41.895'), charged: 16.895 }],
-    ['a charge as a Decimal', { work: used('41.895'), charged: new Money(17) }],
-    ['no charge', { work: used('41.895') }],
-    ['an unknown field', { work: used('41.895'), charged: 17, limit: 300 }],
-    ['null', null],
-  ])('refuses %s', (_name, input) => {
-    expect(() => unpaidWork(input as UnpaidWorkInput)).toThrow(badRequest)
   })
 })

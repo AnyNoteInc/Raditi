@@ -121,6 +121,18 @@ describe.skipIf(!databaseUrl)('migration constraints', () => {
       },
     })
 
+  describe('llm_keys', () => {
+    // A turn key holds what the customer can pay since 10.11.2026 (spec §20, «Только кредиты»,
+    // КР6): the migration that set the limit of 750 is tested as it was, this is the database of
+    // now — a positive budget and no upper limit.
+    it('asks of the budget of a turn key only that it is positive', async () => {
+      const [row] = await db.$queryRaw<{ definition: string }[]>`
+        SELECT pg_get_constraintdef(c.oid) AS definition FROM pg_constraint c
+        WHERE c.conname = 'llm_keys_budget_check' AND c.conrelid = 'llm_keys'::regclass`
+      expect(row?.definition).toBe('CHECK ((budget_rub > (0)::numeric))')
+    })
+  })
+
   describe('billing_accounts', () => {
     it('accepts a balance with a smaller hold', () =>
       expectAccepted((tx) => account(tx, 'rub', '1000.50', '300.00')))
@@ -140,6 +152,23 @@ describe.skipIf(!databaseUrl)('migration constraints', () => {
       expectRejected('billing_accounts_credit_whole_check', (tx) =>
         account(tx, 'credit_tariff', '1.50'),
       ))
+
+    // What a workspace owes (owner's decision of 10.11.2026, spec §20, «Только кредиты», КР7):
+    // whole credits, never below zero, on the pack account only.
+    const owing = async (tx: Tx, unit: BillingUnit, debt: string) =>
+      tx.billingAccount.create({ data: { workspaceId: (await workspace(tx)).id, unit, debt } })
+
+    it('accepts a debt on the pack account, with nothing on its balance', () =>
+      expectAccepted((tx) => owing(tx, 'credit_pack', '25.00')))
+
+    it.each(['credit_tariff', 'credit_gift', 'rub'] as const)(
+      'rejects a debt on the account %s',
+      (unit) => expectRejected('billing_accounts_debt_check', (tx) => owing(tx, unit, '1.00')),
+    )
+
+    it.each(['-1.00', '1.50'])('rejects a debt of %s', (debt) =>
+      expectRejected('billing_accounts_debt_check', (tx) => owing(tx, 'credit_pack', debt)),
+    )
 
     it('keeps the gift account in whole credits as well', async () => {
       await expectAccepted((tx) => account(tx, 'credit_gift', '35.00', '35.00'))

@@ -43,6 +43,8 @@ describe('ledger keys', () => {
     expect(ledgerKeys.holdExpiry(HOLD)).toBe(`hold:${HOLD}:expire`)
     expect(ledgerKeys.refundAdjust(ORDER)).toBe(`order:${ORDER}:refund:adjust`)
     expect(ledgerKeys.signupGift(USER)).toBe(`user:${USER}:signup-gift`)
+    // What a grant paid of the debt of the workspace: named by the grant.
+    expect(ledgerKeys.debtRepay(ledgerKeys.packGrant(ORDER))).toBe(`order:${ORDER}:pack:debt`)
   })
 
   it('names the audit action of the gift', () => {
@@ -63,6 +65,8 @@ describe('ledger keys', () => {
       ledgerKeys.holdExpiry(ORDER),
       ledgerKeys.refundAdjust(ORDER),
       ledgerKeys.signupGift(ORDER),
+      ledgerKeys.debtRepay(ledgerKeys.tariffGrant(ORDER)),
+      ledgerKeys.debtRepay(ledgerKeys.packGrant(ORDER)),
     ]
     expect(new Set(keys).size).toBe(keys.length)
     // credit_ledger.idempotency_key is varchar(255).
@@ -522,6 +526,133 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
     expect(repeat).toEqual({ entry: posting.entry, applied: false })
     expect((await accounts(workspaceId)).pack).toEqual({ balance: '10.00', held: '0.00' })
     await expectBalancesToMatchLedger(workspaceId)
+  })
+
+  // Owner's decision of 10.11.2026 (docs/spec.md §20, «Только кредиты», КР7): what passes were
+  // charged above the credits the workspace had is owed, and the next grant pays it first.
+  describe('the debt of a workspace', () => {
+    const owe = async (workspaceId: string, credits: number) => {
+      await ensureAccountsOf(workspaceId)
+      await db.billingAccount.update({
+        where: { workspaceId_unit: { workspaceId, unit: 'credit_pack' } },
+        data: { debt: credits },
+      })
+    }
+    const ensureAccountsOf = (workspaceId: string) =>
+      db.$transaction((tx) => ensureAccounts(tx, workspaceId))
+    const debtOf = async (workspaceId: string) =>
+      (
+        await db.billingAccount.findUniqueOrThrow({
+          where: { workspaceId_unit: { workspaceId, unit: 'credit_pack' } },
+        })
+      ).debt.toFixed(2)
+
+    it('is paid first from the quota a tariff grants', async () => {
+      const { workspaceId, orderId } = await paid()
+      await owe(workspaceId, 8)
+
+      const posting = await db.$transaction((tx) =>
+        grantTariffCredits(tx, { workspaceId, orderId, credits: 30 }),
+      )
+
+      // The grant itself is the whole quota; then a charge of the tariff pays the debt.
+      expect(posting.entry.amount.toFixed(2)).toBe('30.00')
+      const repay = await db.creditLedger.findUniqueOrThrow({
+        where: { idempotencyKey: ledgerKeys.debtRepay(ledgerKeys.tariffGrant(orderId)) },
+      })
+      expect(repay).toMatchObject({ unit: 'credit_tariff', kind: 'charge', orderId, taskId: null })
+      expect(repay.amount.toFixed(2)).toBe('-8.00')
+      expect(repay.balanceAfter.toFixed(2)).toBe('22.00')
+      expect((await accounts(workspaceId)).tariff).toEqual({ balance: '22.00', held: '0.00' })
+      expect(await debtOf(workspaceId)).toBe('0.00')
+      await expectBalancesToMatchLedger(workspaceId)
+    })
+
+    it('is paid first from the credits of a pack, and only as far as the grant goes', async () => {
+      const { workspaceId, packOrderId } = await paid()
+      await owe(workspaceId, 25)
+
+      await db.$transaction((tx) =>
+        grantPackCredits(tx, { workspaceId, orderId: packOrderId, credits: 10 }),
+      )
+
+      // Ten credits came, ten paid: fifteen are still owed, for the next grant.
+      expect((await accounts(workspaceId)).pack).toEqual({ balance: '0.00', held: '0.00' })
+      expect(await debtOf(workspaceId)).toBe('15.00')
+      const repay = await db.creditLedger.findUniqueOrThrow({
+        where: { idempotencyKey: ledgerKeys.debtRepay(ledgerKeys.packGrant(packOrderId)) },
+      })
+      expect(repay.amount.toFixed(2)).toBe('-10.00')
+      await expectBalancesToMatchLedger(workspaceId)
+    })
+
+    it('is paid once: a repeated grant changes nothing', async () => {
+      const { workspaceId, orderId } = await paid()
+      await owe(workspaceId, 8)
+      await db.$transaction((tx) => grantTariffCredits(tx, { workspaceId, orderId, credits: 30 }))
+      await owe(workspaceId, 3)
+
+      const repeat = await db.$transaction((tx) =>
+        grantTariffCredits(tx, { workspaceId, orderId, credits: 30 }),
+      )
+
+      expect(repeat.applied).toBe(false)
+      expect(await debtOf(workspaceId)).toBe('3.00')
+      expect((await accounts(workspaceId)).tariff).toEqual({ balance: '22.00', held: '0.00' })
+    })
+
+    it('pays nothing from credits a task holds', async () => {
+      const { workspaceId, orderId, packOrderId } = await paid()
+      await db.$transaction((tx) => grantTariffCredits(tx, { workspaceId, orderId, credits: 30 }))
+      await db.billingAccount.update({
+        where: { workspaceId_unit: { workspaceId, unit: 'credit_pack' } },
+        data: { balance: 4, held: 4 },
+      })
+      await db.creditLedger.create({
+        data: {
+          accountId: (
+            await db.billingAccount.findUniqueOrThrow({
+              where: { workspaceId_unit: { workspaceId, unit: 'credit_pack' } },
+            })
+          ).id,
+          unit: 'credit_pack',
+          kind: 'grant',
+          amount: 4,
+          balanceAfter: 4,
+          idempotencyKey: `test:${randomUUID()}:grant`,
+        },
+      })
+      await owe(workspaceId, 20)
+
+      await db.$transaction((tx) =>
+        grantPackCredits(tx, { workspaceId, orderId: packOrderId, credits: 10 }),
+      )
+
+      // The four held stay held; the ten that came pay ten of the twenty.
+      expect((await accounts(workspaceId)).pack).toEqual({ balance: '4.00', held: '4.00' })
+      expect(await debtOf(workspaceId)).toBe('10.00')
+      await expectBalancesToMatchLedger(workspaceId)
+    })
+
+    it('writes nothing more than the grant when nothing is owed', async () => {
+      const { workspaceId, orderId } = await paid()
+      await db.$transaction((tx) => grantTariffCredits(tx, { workspaceId, orderId, credits: 30 }))
+      expect(await entries(workspaceId)).toHaveLength(1)
+      expect(await debtOf(workspaceId)).toBe('0.00')
+    })
+
+    it('stands on the pack account only', async () => {
+      const { workspaceId } = await paid()
+      await ensureAccountsOf(workspaceId)
+      await expect(
+        db.billingAccount.update({
+          where: { workspaceId_unit: { workspaceId, unit: 'credit_tariff' } },
+          data: { debt: 1 },
+        }),
+      ).rejects.toThrow(/billing_accounts_debt_check/)
+      await expect(owe(workspaceId, -1)).rejects.toThrow(/billing_accounts_debt_check/)
+      await expect(owe(workspaceId, 1.5)).rejects.toThrow(/billing_accounts_debt_check/)
+    })
   })
 
   it('expires only what is available when a task holds a credit', async () => {

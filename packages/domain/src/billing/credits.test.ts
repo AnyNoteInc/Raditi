@@ -2,7 +2,6 @@ import { Decimal } from 'decimal.js'
 import { describe, expect, it } from 'vitest'
 import { Money } from '../money.ts'
 import {
-  attemptStepCredits,
   availableCredits,
   creditAccountKinds,
   creditAccountSnapshot,
@@ -17,17 +16,14 @@ import {
   maxTaskAttempts,
   minContinueCredits,
   minStartCredits,
-  minTaskChargeCredits,
+  packPriceFor,
+  packWithoutTariffPriceFactor,
   returnedTariffCreditsExpire,
-  signupGiftCredits,
   spendableCredits,
   splitReserve,
   tariffDayRoom,
   tariffHoldCreatedAt,
   toCredits,
-  trialUnpaidWorkCredits,
-  unpaidWorkLimit,
-  unpaidWorkShareOfMonth,
   type CreditAccounts,
   type CreditAccountSnapshot,
   type CreditAmountValue,
@@ -225,49 +221,13 @@ describe('a count of credits', () => {
 })
 
 describe('the numbers of the model that no text prints', () => {
-  it('asks one credit of a continuation and five of a new task', () => {
+  it('asks one credit of a continuation and of a new task (КР5)', () => {
     expect(minContinueCredits).toBe(1)
-    expect(minStartCredits).toBe(5)
-    expect(minContinueCredits).toBeLessThan(minStartCredits)
+    expect(minStartCredits).toBe(1)
   })
 
   it('gives a task three attempts', () => {
     expect(maxTaskAttempts).toBe(3)
-  })
-
-  // The pricing of 06.11.2026 (docs/plan/63-new-pricing.md, Ц8, Ц9): both bounds are half of
-  // what they were — the month of a tariff and twice the gift before.
-  it('bounds the unpaid work of a workspace without a tariff at the gift itself', () => {
-    expect(trialUnpaidWorkCredits).toBe(50)
-    expect(trialUnpaidWorkCredits).toBe(signupGiftCredits)
-  })
-
-  it('bounds the unpaid work of a paid tariff at half its month, rounded down', () => {
-    expect(unpaidWorkShareOfMonth).toBe(0.5)
-    // «Старт», «Бизнес» and «Агентство» of 06.11.2026.
-    expect([150, 600, 2000].map(unpaidWorkLimit)).toEqual([75, 300, 1000])
-    expect([2, 3, 151, 2501].map(unpaidWorkLimit)).toEqual([1, 1, 75, 1250])
-  })
-
-  it('never bounds the unpaid work of a plan with credits below one', () => {
-    // Half of 1 rounded down is 0, and at 0 not even the first task of the period would start.
-    expect(unpaidWorkLimit(1)).toBe(1)
-  })
-
-  it.each([0, -150, 150.5, Number.NaN, 10 ** 13])(
-    'refuses %s as the monthly credits of a plan',
-    (credits) => {
-      expect(() => unpaidWorkLimit(credits)).toThrow(
-        expect.objectContaining({ name: 'DomainError', code: 'BAD_REQUEST' }),
-      )
-    },
-  )
-
-  // 45 + 120 + 120 credits: a new task, and two retries in the stronger mode.
-  it('lets one task reserve 285 credits at most over its attempts', () => {
-    const { standard, heavy } = attemptStepCredits
-    expect(standard + (maxTaskAttempts - 1) * heavy).toBe(285)
-    expect(minTaskChargeCredits).toBeLessThanOrEqual(attemptStepCredits.light)
   })
 })
 
@@ -284,8 +244,8 @@ describe('spendableCredits', () => {
     expect(spendableCredits(accounts, true)).toEqual(availableCredits(accounts))
   })
 
-  it('counts the gift alone while it is not: tariff and pack credits wait for a tariff', () => {
-    expect(spendableCredits(accounts, false)).toEqual({ tariff: 0, gift: 30, pack: 0, total: 30 })
+  it('counts the gift and the pack while it is not: tariff credits wait for a tariff', () => {
+    expect(spendableCredits(accounts, false)).toEqual({ tariff: 0, gift: 30, pack: 80, total: 110 })
     // what is free is not what can be spent
     expect(availableCredits(accounts).total).toBe(365)
   })
@@ -293,8 +253,9 @@ describe('spendableCredits', () => {
   it.each([
     ['nothing anywhere', account(0), account(0), account(0), 0, 0],
     ['a gift alone', account(0), account(0), account(35), 35, 35],
-    ['a held-out gift', account(300), account(100), account(35, 35), 400, 0],
-    ['a pack that waits for a tariff', account(0), account(40), account(3), 43, 3],
+    ['a held-out gift', account(300), account(100), account(35, 35), 400, 100],
+    ['a pack and a gift without a tariff', account(0), account(40), account(3), 43, 43],
+    ['tariff credits alone', account(300), account(0), account(0), 300, 0],
     ['everything held', account(45, 45), account(45, 45), account(35, 35), 0, 0],
   ])('%s', (_name, tariff, pack, gift, paid, unpaid) => {
     const all = allAccounts(tariff, pack, gift)
@@ -335,8 +296,8 @@ describe('spendableCredits', () => {
         expect(spendableCredits(accounts, false, room(credits))).toEqual({
           tariff: 0,
           gift: 30,
-          pack: 0,
-          total: 30,
+          pack: 80,
+          total: 110,
         })
       }
     })
@@ -857,5 +818,26 @@ describe('tariffHoldCreatedAt', () => {
     for (const currentPeriodEnd of [start, new Date(start.getTime() - 1)]) {
       expect(() => tariffHoldCreatedAt(start, { ...period, currentPeriodEnd })).toThrow(badRequest)
     }
+  })
+})
+
+// Owner's decision of 10.11.2026 (КР9): a pack is sold without a tariff too, at twice the price.
+describe('packPriceFor', () => {
+  it('is the price on a tariff that takes tasks and twice it without one', () => {
+    expect(packWithoutTariffPriceFactor).toBe(2)
+    expect(packPriceFor({ price: '1490.00', tariffTakesTasks: true })).toBe('1490.00')
+    expect(packPriceFor({ price: '1490.00', tariffTakesTasks: false })).toBe('2980.00')
+    expect(packPriceFor({ price: '0.55', tariffTakesTasks: false })).toBe('1.10')
+  })
+
+  it.each<[string, unknown]>([
+    ['a price as a number', { price: 1490, tariffTakesTasks: false }],
+    ['a negative price', { price: '-1.00', tariffTakesTasks: false }],
+    ['no word on the tariff', { price: '1490.00' }],
+    ['an unknown field', { price: '1490.00', tariffTakesTasks: true, factor: 3 }],
+  ])('refuses %s', (_name, input) => {
+    expect(() => packPriceFor(input as { price: string; tariffTakesTasks: boolean })).toThrow(
+      expect.objectContaining({ name: 'DomainError', code: 'BAD_REQUEST' }),
+    )
   })
 })

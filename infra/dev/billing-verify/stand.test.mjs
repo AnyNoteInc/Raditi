@@ -16,7 +16,6 @@ import { fileURLToPath } from 'node:url'
 import { webEnvFromEnv } from '../../../apps/web/src/server/web-env.ts'
 import { authConfigFromEnv } from '../../../packages/auth/src/config.ts'
 import {
-  attemptStepCredits,
   minStartCredits,
   signupGiftCredits,
 } from '../../../packages/domain/src/billing/credit-numbers.ts'
@@ -1482,11 +1481,12 @@ test('the pages are compared with the answer about a new task and with the meter
       'const today = paid ? { limit, charged: 0, held: 0, used: 0, room: limit, left } : null',
     ),
   )
-  assert.ok(pages.includes('spendableNow: gift.available + (paid ? left + pack.available : 0),'))
-  // Gift credits are spent always, the others only while the tariff is paid.
+  assert.ok(pages.includes('spendableNow: gift.available + pack.available + (paid ? left : 0),'))
+  // Gift and pack credits are spent always, tariff credits only while the tariff is paid (owner's
+  // decision of 10.11.2026: one credit is one credit).
   assert.ok(pages.includes("const paid = live?.status === 'active'"))
   assert.ok(
-    pages.includes('const spent = (pick) => pick(gift) + (paid ? pick(tariff) + pick(pack) : 0)'),
+    pages.includes('const spent = (pick) => pick(gift) + pick(pack) + (paid ? pick(tariff) : 0)'),
   )
   // The answer follows from what is stored: the pause of the platform until a credit rate is
   // usable, a task that is taken from then on — five credits can always be spent in the stand,
@@ -1742,25 +1742,11 @@ test('the operator approves the credit rate in the stand, and only there', () =>
   const start = operator.indexOf("scenarios['credit-rate'] = async (t) => {")
   assert.notEqual(start, -1)
   const scenario = operator.slice(start, operator.indexOf('\n}\n', start))
-  // The provisional rate of the credits model: the steps of an attempt stay inside the limit of
-  // one turn key — 120, 270 and 720 RUB.
+  // The provisional rate of the credits model; nothing bounds a pass but the credits of the
+  // customer (КР6): the command tells of no steps of an attempt and no limit of a pass.
   assert.equal(CREDIT_RATE, '6.00')
-  assert.deepEqual(
-    Object.entries(attemptStepCredits).map(
-      ([modelClass, credits]) =>
-        `${modelClass} — ${credits} кредитов, ${(credits * Number(CREDIT_RATE)).toFixed(2)} ₽`,
-    ),
-    [
-      'light — 20 кредитов, 120.00 ₽',
-      'standard — 45 кредитов, 270.00 ₽',
-      'heavy — 120 кредитов, 720.00 ₽',
-    ],
-  )
-  assert.ok(
-    scenario.includes(
-      "'light — 20 кредитов, 120.00 ₽; standard — 45 кредитов, 270.00 ₽; heavy — 120 кредитов, 720.00 ₽'",
-    ),
-  )
+  assert.ok(scenario.includes("!approved.stdout.includes('предел одного прохода')"))
+  assert.doesNotMatch(scenario, /light — 20 кредитов/)
   // Before: no rate, and the pause on every page. Two refusals that write nothing. Then the
   // approval, by the command and by nothing else: no scenario writes the table itself.
   assert.match(

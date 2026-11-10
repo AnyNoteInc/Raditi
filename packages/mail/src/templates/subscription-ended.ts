@@ -26,15 +26,16 @@ export function renderSubscriptionEnded(data: MailData['subscription-ended']): R
   const subject = 'Тариф закончился'
   const url = plansUrl(data.appUrl)
   const gift = data.giftCreditsLeft
-  // Gift credits are spent without a tariff as well: while those that are left can start a
-  // task, the letter says of new tasks what «Тарифы» says, and names the tariff as what comes
-  // after the gift, not as the way to set tasks «again».
+  // Gift and pack credits are spent without a tariff as well (owner's decision of 10.11.2026):
+  // while those that are left can start a task, the letter says of new tasks what «Тарифы»
+  // says, and names the tariff as what comes after them, not as the way to set tasks «again».
+  const spendable = gift + data.packCreditsLeft
   const ended =
     `Тариф «${data.planName}» закончился ${formatMoscowDate(data.endedAt)}. ` +
-    `Новые задачи ${tasksWithoutTariff(gift, 'сейчас не принимаются')}.`
+    `Новые задачи ${tasksWithoutTariff(spendable, 'сейчас не принимаются')}.`
   const kept = keptText(data.packCreditsLeft, gift)
-  const action = giftTakesTasks(gift)
-    ? 'Когда подарочные кредиты закончатся, понадобится тариф: выбрать его можно на странице «Тарифы».'
+  const action = giftTakesTasks(spendable)
+    ? 'Когда кредиты закончатся, понадобится тариф: выбрать его можно на странице «Тарифы».'
     : 'Чтобы снова ставить задачи, выберите тариф на странице «Тарифы».'
 
   return {

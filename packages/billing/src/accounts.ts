@@ -2,7 +2,9 @@ import type { Prisma } from '@repo/db'
 import {
   creditAccountSnapshot,
   creditAccountUnits,
+  toCredits,
   type CreditAccountKind,
+  type Credits,
   type CreditAccountSnapshot,
   type CreditAccountUnit,
 } from '@repo/domain'
@@ -35,6 +37,11 @@ export interface LockedCreditAccount {
   unit: CreditAccountUnit
   /** `balance` and `held` as they are under the lock, in whole credits. */
   snapshot: CreditAccountSnapshot
+  /**
+   * `debt`: what the workspace owes — passes charged above the credits it had. Only the pack
+   * account carries it (billing_accounts_debt_check); zero on the others.
+   */
+  debt: Credits
 }
 
 /**
@@ -53,10 +60,19 @@ export async function lockCreditAccount(
   kind: CreditAccountKind,
 ): Promise<LockedCreditAccount | null> {
   const unit = creditAccountUnits[kind]
-  const [row] = await tx.$queryRaw<{ id: string; balance: Prisma.Decimal; held: Prisma.Decimal }[]>`
-    SELECT id, balance, held FROM billing_accounts
+  const [row] = await tx.$queryRaw<
+    { id: string; balance: Prisma.Decimal; held: Prisma.Decimal; debt: Prisma.Decimal }[]
+  >`
+    SELECT id, balance, held, debt FROM billing_accounts
     WHERE workspace_id = ${workspaceId}::uuid AND unit = ${unit}::"BillingUnit"
     FOR UPDATE
   `
-  return row ? { id: row.id, unit, snapshot: creditAccountSnapshot(row) } : null
+  return row
+    ? {
+        id: row.id,
+        unit,
+        snapshot: creditAccountSnapshot(row),
+        debt: toCredits(row.debt.toFixed()),
+      }
+    : null
 }

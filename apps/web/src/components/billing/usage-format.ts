@@ -1,5 +1,3 @@
-import { minTaskChargeCredits } from '@repo/domain/billing/credit-numbers'
-
 import { formatCount } from '@/lib/count'
 import { formatMoscowDate, formatMoscowDay } from '@/lib/moscow-date'
 import { plural } from '@/lib/plural'
@@ -102,12 +100,9 @@ export function tariffRestEntry(left: number, periodOver: boolean): string {
   return `${periodOver ? 'Не использовано' : 'Осталось'} — ${formatCount(left)}`
 }
 
-/**
- * Under the meter, while credits are set aside for tasks in work: what becomes of them. The
- * number is the minimum of a done task, a constant of the credits model.
- */
+/** Under the meter, while credits are set aside for tasks in work: what becomes of them. */
 export function heldNote(): string {
-  return `Отложенное спишем по факту: сколько уйдёт на работу, но не меньше ${minTaskChargeCredits} ${creditsOf(minTaskChargeCredits)} за выполненную задачу. Остальное вернётся.`
+  return 'Отложенное спишем по факту — сколько уйдёт на работу. Остальное вернётся.'
 }
 
 /**
@@ -196,7 +191,8 @@ export function giftNote(gift: { held: number }): string {
 /**
  * What the customer should know about the credits of their packs: they are spent last, after
  * the credits of the tariff and the gift ones. `takesTasks` is false while the tariff is not
- * paid for: no task spends a pack credit then, whatever is left on the account.
+ * paid for: its credits are not spent then, and the pack goes right after the gift (owner's
+ * decision of 10.11.2026: one credit is one credit).
  */
 export function packNote(
   pack: { left: number; held: number },
@@ -207,7 +203,9 @@ export function packNote(
     return `Кредиты из пакета не сгорают и тратятся последними — после кредитов по тарифу и подарочных.${inWork(pack.held)}`
   }
   const when = !takesTasks
-    ? 'Станут доступны после оплаты тарифа.'
+    ? before.gift > 0
+      ? 'Начнут тратиться, когда закончатся подарочные кредиты.'
+      : 'Сейчас задачи тратят их, пока тариф не оплачен.'
     : before.tariff > 0
       ? before.gift > 0
         ? 'Начнут тратиться, когда закончатся кредиты по тарифу и подарочные.'
@@ -223,7 +221,7 @@ export function packNote(
  * credits, by the answer of the server. When they are not, the notice of the refusal says why.
  */
 export function unpaidWhileTasksTaken(): string {
-  return 'Оплата тарифа не прошла. Пока она не пройдёт, новые задачи принимаются, только пока есть подарочные кредиты.'
+  return 'Оплата тарифа не прошла. Пока она не пройдёт, новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета.'
 }
 
 /**
@@ -290,7 +288,7 @@ export function todayNote(input: {
   const { today, paid, tasksTaken, tomorrow } = input
   if (!paid || today === null) {
     return tasksTaken
-      ? 'Пока тариф не оплачен, новые задачи принимаются, только пока есть подарочные кредиты.'
+      ? 'Пока тариф не оплачен, новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета.'
       : 'Новые задачи не принимаются, пока не оплачен тариф.'
   }
   const { limit, room, left } = today
@@ -333,17 +331,17 @@ export function sitesNote(count: number, max: number): string {
 }
 
 /**
- * «У вас 100 кредитов из пакета. Они не сгорают и снова будут доступны, когда вы выберете тариф.»:
+ * «У вас 100 кредитов из пакета. Они не сгорают и тратятся на задачи после подарочных.»:
  * the pack credits of a customer without a tariff.
  */
 export function packCredits(count: number): string {
   const kept = plural(
     count,
-    'Он не сгорает и снова будет доступен',
-    'Они не сгорают и снова будут доступны',
-    'Они не сгорают и снова будут доступны',
+    'Он не сгорает и тратится',
+    'Они не сгорают и тратятся',
+    'Они не сгорают и тратятся',
   )
-  return `У вас ${formatCount(count)} ${creditsWord(count)} из пакета. ${kept}, когда вы выберете тариф.`
+  return `У вас ${formatCount(count)} ${creditsWord(count)} из пакета. ${kept} на задачи после подарочных.`
 }
 
 /**
@@ -355,8 +353,13 @@ export function packCredits(count: number): string {
  */
 export function usageWithoutTariff(gift: GiftCredits, task: TaskCredits, packLeft: number): string {
   if (task.newTask.allowed) {
-    const kept = plural(gift.available, 'Он не сгорает', 'Они не сгорают', 'Они не сгорают')
-    return `${giftOnHand(gift.available)}. ${kept}, а задачи принимаются, пока подарочные кредиты не закончатся. Здесь видно, сколько кредитов осталось и на что они ушли.`
+    const onHand = gift.available > 0 ? gift.available : packLeft
+    const kept = plural(onHand, 'Он не сгорает', 'Они не сгорают', 'Они не сгорают')
+    const what =
+      gift.available > 0
+        ? giftOnHand(gift.available)
+        : `У вас ${formatCount(packLeft)} ${creditsWord(packLeft)} из пакета`
+    return `${what}. ${kept}, а задачи принимаются, пока кредиты не закончатся. Здесь видно, сколько кредитов осталось и на что они ушли.`
   }
   if (noGiftToSpeakOf(gift, task)) {
     return 'Кредиты входят в тариф. Выберите тариф, чтобы ставить задачи: здесь появится, сколько кредитов осталось и на что они ушли.'

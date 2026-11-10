@@ -168,6 +168,7 @@ describe('read models without a database', () => {
         name: 'Пакет из 100 кредитов',
         price: '1990.00',
         credits: 100,
+        withoutTariff: false,
       },
     })
   })
@@ -492,6 +493,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
             name: 'pack',
             price: '1990.00',
             credits: 10,
+            withoutTariff: false,
           })
           // Whatever else is on sale in this database is a quota tariff too.
           const kinds = await tx.plan.findMany({

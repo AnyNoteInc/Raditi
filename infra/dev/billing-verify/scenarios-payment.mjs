@@ -391,14 +391,16 @@ scenarios.checkout = async (t) => {
       { paymentsEnabled: true, subscription: null, total: CREDITS.gift, ended: null },
     )
     const { plans, pack } = await customer.query('billing.plans')
+    // The customer has no tariff yet: the pack is offered at twice its price (КР9).
     t.equal(
-      `${who}: «Тарифы» sells the seeded tariffs and the pack at their prices`,
+      `${who}: «Тарифы» sells the seeded tariffs at their prices and the pack at twice its price`,
       {
         start: plans.find(({ slug }) => slug === 'start')?.price,
         business: plans.find(({ slug }) => slug === 'business')?.price,
         pack: pack?.price,
+        withoutTariff: pack?.withoutTariff,
       },
-      PRICE,
+      { ...PRICE, pack: '2980.00', withoutTariff: true },
     )
     t.equal(
       `${who}: and in credits — 150, 600 and 2 000 a month, no daily limit, a pack of 100`,
@@ -412,7 +414,7 @@ scenarios.checkout = async (t) => {
         })),
         pack: pack && { slug: pack.slug, price: pack.price, credits: pack.credits },
       },
-      ON_SALE,
+      { ...ON_SALE, pack: { ...ON_SALE.pack, price: '2980.00' } },
     )
 
     const checkout = await customer.mutate('billing.startCheckout', {
@@ -1217,10 +1219,12 @@ scenarios['webhook-forged'] = async (t) => {
 
 scenarios['pack-and-period-end'] = async (t) => {
   const stranger = await t.customer()
+  // A pack is sold without a tariff too, at twice its price (КР9).
+  const offered = (await stranger.query('billing.plans')).pack
   t.equal(
-    'a pack is not sold to a customer without a tariff',
-    await stranger.refusal('billing.startPackCheckout', {}),
-    { status: 409, code: 'BILLING_PACK_NEEDS_SUBSCRIPTION' },
+    'a customer without a tariff is offered the pack at twice its price',
+    { price: offered?.price, credits: offered?.credits, withoutTariff: offered?.withoutTariff },
+    { price: '2980.00', credits: CREDITS.pack, withoutTariff: true },
   )
 
   const {
@@ -1328,8 +1332,8 @@ scenarios['pack-and-period-end'] = async (t) => {
     ],
   )
   // The rule of a tariff that ends, on the three accounts (the expiry rules of the credits
-  // design): what is available of the tariff expires; the gift stays and can be spent; the
-  // pack stays and waits for a tariff.
+  // design): what is available of the tariff expires; the gift and the pack stay and can be
+  // spent (owner's decision of 10.11.2026).
   t.equal(
     'a tariff that is not renewed: the rest of its quota expired and nothing was carried, the gift and the pack are the one grant each',
     await journalsOf(t, workspaceId),
@@ -1348,7 +1352,7 @@ scenarios['pack-and-period-end'] = async (t) => {
     endedLetter.data.packCreditsLeft === 100 &&
       endedLetter.data.giftCreditsLeft === CREDITS.gift &&
       endedLetter.text.includes(
-        `Тариф «Старт» закончился ${moscowDate(dates.end)}. Новые задачи принимаются, только пока есть подарочные кредиты.`,
+        `Тариф «Старт» закончился ${moscowDate(dates.end)}. Новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета.`,
       ) &&
       endedLetter.text.includes(
         'Кредиты из пакета и подарочные, сайты и история правок сохраняются. Кредитов из пакета осталось: 100.',
@@ -1357,9 +1361,9 @@ scenarios['pack-and-period-end'] = async (t) => {
   )
   const overview = await customer.query('billing.overview')
   t.equal(
-    'without a tariff a task could spend the gift alone: 50 of the 150 credits, the pack waits for a tariff',
+    'without a tariff a task could spend the gift and the pack: all 150 credits',
     [overview.credits.spendable, overview.credits.totalAvailable],
-    [CREDITS.gift, CREDITS.gift + CREDITS.pack],
+    [CREDITS.gift + CREDITS.pack, CREDITS.gift + CREDITS.pack],
   )
   t.equal(
     '«Тарифы» shows no tariff, when the last one ended, the gift and the purchased credits',
@@ -1390,10 +1394,11 @@ scenarios['pack-and-period-end'] = async (t) => {
       CREDITS.gift + CREDITS.pack,
     ],
   )
+  const after = (await customer.query('billing.plans')).pack
   t.equal(
-    'another pack is not sold once the tariff is over',
-    await customer.refusal('billing.startPackCheckout', {}),
-    { status: 409, code: 'BILLING_PACK_NEEDS_SUBSCRIPTION' },
+    'another pack is offered at twice its price once the tariff is over',
+    { price: after?.price, credits: after?.credits, withoutTariff: after?.withoutTariff },
+    { price: '2980.00', credits: CREDITS.pack, withoutTariff: true },
   )
   t.equal('nothing was charged by itself', (await t.shop.charges()).length, 0)
 }

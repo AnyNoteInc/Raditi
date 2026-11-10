@@ -1,6 +1,5 @@
 import type { ModelClass } from '@repo/db'
 import {
-  attemptStepCredits,
   creditAccountUnits,
   creditRateCoversPrice,
   decimalStringSchema,
@@ -12,7 +11,7 @@ import { z } from 'zod'
 
 import type { BillingTx } from './accounts.ts'
 import { writeBillingAudit } from './audit.ts'
-import { creditRateAt, TURN_KEY_LIMIT_RUB } from './credit-rate.ts'
+import { creditRateAt } from './credit-rate.ts'
 import type { BillingDeps } from './deps.ts'
 import { operatorActionSchema } from './refund.ts'
 
@@ -166,15 +165,6 @@ export interface OutstandingCredits {
   costRub: string
 }
 
-export interface StepCost {
-  modelClass: keyof typeof attemptStepCredits
-  credits: number
-  /** step × K, RUB, two decimals. */
-  costRub: string
-  /** Above `TURN_KEY_LIMIT_RUB`: one key cannot hold the whole step. */
-  aboveKeyLimit: boolean
-}
-
 export interface ModelCredits {
   provider: string
   model: string
@@ -193,7 +183,6 @@ export interface CreditRatePreview {
   movePercent: string | null
   plans: PlanExposure[]
   outstanding: { pack: OutstandingCredits; gift: OutstandingCredits }
-  steps: StepCost[]
   models: ModelCredits[]
   /**
    * Classes whose enabled models would have different prices in force: the same request would
@@ -276,17 +265,6 @@ export function creditRatePreview(state: CreditRateState): CreditRatePreview {
       pack: { credits: state.outstanding.pack, costRub: rub(costOf(state.outstanding.pack)) },
       gift: { credits: state.outstanding.gift, costRub: rub(costOf(state.outstanding.gift)) },
     },
-    steps: (Object.keys(attemptStepCredits) as (keyof typeof attemptStepCredits)[]).map(
-      (modelClass) => {
-        const cost = costOf(attemptStepCredits[modelClass])
-        return {
-          modelClass,
-          credits: attemptStepCredits[modelClass],
-          costRub: rub(cost),
-          aboveKeyLimit: cost.gt(TURN_KEY_LIMIT_RUB),
-        }
-      },
-    ),
     models,
     mixedClasses: [...pricesByClass].filter(([, seen]) => seen.size > 1).map(([name]) => name),
     exposure: {

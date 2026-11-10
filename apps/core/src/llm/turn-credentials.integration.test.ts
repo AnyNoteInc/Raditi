@@ -687,19 +687,33 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     })
   })
 
+  it.each([['below the first call reserve', '105.53', 'below_first_call']])(
+    'issues no key for a budget %s',
+    async (_name, budgetRub, budget) => {
+      const f = await fixture()
+      await expect(f.credentials.issue(f.ref, { ...f.grant, budgetRub })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        details: { budget },
+      })
+      expect(f.vault.entries.size).toBe(0)
+      expect(await db.llmKey.count({ where: { taskId: f.task.id } })).toBe(0)
+      expect(await db.taskAccountBinding.count({ where: { taskId: f.task.id } })).toBe(0)
+    },
+  )
+
+  // A billable task in credits has no ceiling of its class and no limit of a pass since
+  // 10.11.2026 (КР6): its key holds what the customer can pay, computed by the issuer.
   it.each([
-    ['above the standard quota ceiling', '285.01', 'above_ceiling'],
-    ['at the cap of any key, but above the class ceiling', '750.00', 'above_ceiling'],
-    ['below the first call reserve', '105.53', 'below_first_call'],
-  ])('issues no key for a budget %s', async (_name, budgetRub, budget) => {
+    ['above the standard quota ceiling', '285.01'],
+    ['at the former cap of a key', '750.00'],
+    ['above the former limit of a pass', '3000.01'],
+    ['of a large balance', '61260.00'],
+  ])('issues a key in credits for a budget %s', async (_name, budgetRub) => {
     const f = await fixture()
-    await expect(f.credentials.issue(f.ref, { ...f.grant, budgetRub })).rejects.toMatchObject({
-      code: 'BAD_REQUEST',
-      details: { budget },
-    })
-    expect(f.vault.entries.size).toBe(0)
-    expect(await db.llmKey.count({ where: { taskId: f.task.id } })).toBe(0)
-    expect(await db.taskAccountBinding.count({ where: { taskId: f.task.id } })).toBe(0)
+    await f.credentials.issue(f.ref, { ...f.grant, budgetRub })
+    expect(
+      (await db.llmKey.findFirstOrThrow({ where: { taskId: f.task.id } })).budgetRub.toFixed(2),
+    ).toBe(budgetRub)
   })
 
   it('accepts the whole quota ceiling and the first call reserve exactly', async () => {

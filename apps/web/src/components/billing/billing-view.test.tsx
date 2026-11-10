@@ -598,14 +598,14 @@ describe('unlinking the payment method', () => {
     )
 
     expect(text(await openDialog())).toContain(
-      'Автопродление отключится. Тариф «Бизнес» будет работать до 18 октября 2026; после этого новые задачи принимаются, только пока есть подарочные кредиты.',
+      'Автопродление отключится. Тариф «Бизнес» будет работать до 18 октября 2026; после этого новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета.',
     )
     expect(text(dialog())).not.toContain('не принимаются')
   })
 
   it('keeps the words of the dialog where the gift starts no task', async () => {
     getOverview.mockResolvedValue(
-      overviewOf({ subscription: subscriptionTo(), credits: creditBalances(800, 0, 4) }),
+      overviewOf({ subscription: subscriptionTo(), credits: creditBalances(800, 0, 0) }),
     )
 
     expect(text(await openDialog())).toContain(

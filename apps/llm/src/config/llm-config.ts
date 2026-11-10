@@ -84,10 +84,14 @@ export interface LlmConfig {
   clients: readonly LlmClientRange[]
   hosts: readonly string[]
   maxRequestsPerKey: number
-  /** Calls one turn key may start within thirty seconds; one more is refused for good. */
-  maxCallsPerKey30s: number
-  /** Calls one turn key may start at all. */
-  maxCallsPerKey: number
+  /**
+   * Calls one turn key may start within thirty seconds; one more is refused for good. Null — no
+   * limit, the default since 10.11.2026: only the credits of the customer bound a pass (docs/
+   * spec.md §20, «Только кредиты», КР10). A stand sets it to bound its own requests.
+   */
+  maxCallsPerKey30s: number | null
+  /** Calls one turn key may start at all; null — no limit, as above. */
+  maxCallsPerKey: number | null
   egress: EgressConfig
 }
 
@@ -107,10 +111,11 @@ const schema = egressSchema.extend({
   LLM_GATEWAY_CLIENTS: optional,
   LLM_GATEWAY_HOSTS: optional,
   LLM_MAX_REQUESTS_PER_KEY: envVar(z.coerce.number().int().min(1).max(2).default(2)),
-  // The last line against a CLI that repeats a request without a pause, whatever the cause: a
-  // turn of the pinned CLI is one request per step, and a real model answers in seconds.
-  LLM_MAX_CALLS_PER_KEY_30S: envVar(z.coerce.number().int().min(1).max(1_000).default(20)),
-  LLM_MAX_CALLS_PER_KEY: envVar(z.coerce.number().int().min(1).max(100_000).default(600)),
+  // A limit of the calls of one turn key: none unless given (owner's decision of 10.11.2026,
+  // КР10 — only the credits of the customer bound a pass). The stands of the gateway give it to
+  // bound the requests they send to the provider.
+  LLM_MAX_CALLS_PER_KEY_30S: envVar(z.coerce.number().int().min(1).max(1_000).optional()),
+  LLM_MAX_CALLS_PER_KEY: envVar(z.coerce.number().int().min(1).max(100_000).optional()),
 })
 const invalid = (problems: readonly string[]) =>
   new Error(`[llm] invalid configuration: ${[...new Set(problems)].join('; ')}`)
@@ -206,8 +211,8 @@ export function llmConfigFromEnv(
     clients,
     hosts,
     maxRequestsPerKey: own.LLM_MAX_REQUESTS_PER_KEY,
-    maxCallsPerKey30s: own.LLM_MAX_CALLS_PER_KEY_30S,
-    maxCallsPerKey: own.LLM_MAX_CALLS_PER_KEY,
+    maxCallsPerKey30s: own.LLM_MAX_CALLS_PER_KEY_30S ?? null,
+    maxCallsPerKey: own.LLM_MAX_CALLS_PER_KEY ?? null,
     egress,
   }
 }

@@ -34,9 +34,14 @@ export const packSchema = z.object({
   id: z.uuid(),
   slug: z.string().min(1),
   name: z.string().min(1),
-  /** RUB, paid once. */
+  /**
+   * RUB, paid once: what this customer pays — twice the price of the pack on top of a tariff
+   * while their tariff does not take tasks (`packPriceFor`, КР9).
+   */
   price: amountRubSchema,
   credits: positiveCount,
+  /** The price is that of a customer without a tariff that takes tasks. */
+  withoutTariff: z.boolean(),
 })
 export type PackDto = z.infer<typeof packSchema>
 
@@ -138,8 +143,7 @@ export type CreditBalancesDto = z.infer<typeof creditBalancesSchema>
 /**
  * Whether a new task would be taken now, and why not: the answer the queue itself would give
  * to the first attempt of a task (`newTaskVerdict` of @repo/domain), so a page and the server
- * never disagree. A page chooses by the reason what it tells the customer. What a page cannot
- * know is the site of the task: `gift_site_used` is found only when a reserve is placed.
+ * never disagree. A page chooses by the reason what it tells the customer.
  */
 export const newTaskSchema = z
   .object({
@@ -183,8 +187,8 @@ export type TariffDayDto = z.infer<typeof tariffDaySchema>
 /** The numbers of that answer, beside the answer itself. */
 const taskCreditsShape = {
   /**
-   * What a task may take by the accounts: gift credits always, credits of the tariff and of a
-   * pack only while the tariff is paid.
+   * What a task may take by the accounts: gift and pack credits always, credits of the tariff
+   * only while it is paid (КР2) — less what the workspace owes (КР7), never below zero.
    */
   spendable: wholeCredits,
   /**

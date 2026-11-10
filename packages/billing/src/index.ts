@@ -62,7 +62,6 @@ export {
   type ModelPrices,
   type OutstandingCredits,
   type PlanExposure,
-  type StepCost,
 } from './credit-rate-approval.ts'
 export { getCreditConversion } from './credit-conversion.ts'
 export {
@@ -71,14 +70,11 @@ export {
   requireUsableCreditRate,
   taskRawCredits,
   TURN_KEY_LIMIT_RUB,
-  workspaceWorkCredits,
   type AttemptRawCredits,
   type CreditRateStatus,
   type StoredCreditRate,
   type TaskRawCredits,
   type TaskWorkQuery,
-  type WorkspaceWork,
-  type WorkspaceWorkQuery,
 } from './credit-rate.ts'
 export type { BillingDeps } from './deps.ts'
 export {
@@ -221,6 +217,7 @@ export {
   isSignupGiftGranted,
   listPayments,
   listPlans,
+  packOfferFor,
   promisedCredits,
   type CreditsOverviewInput,
 } from './read-models.ts'

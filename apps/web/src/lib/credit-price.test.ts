@@ -1,4 +1,4 @@
-import { minTaskChargeCredits, typicalTaskCredits } from '@repo/domain/billing/credit-numbers'
+import { typicalTaskCredits } from '@repo/domain/billing/credit-numbers'
 import { Decimal } from 'decimal.js'
 import { describe, expect, it } from 'vitest'
 
@@ -12,12 +12,8 @@ import {
 
 describe('smallEditRubles', () => {
   it('is the charge of a small edit at the price of the credits, half up to a whole ruble', () => {
-    // A small edit usually takes the minimum of a done task.
-    expect(minTaskChargeCredits).toBe(5)
-    expect(typicalTaskCredits.small).toEqual({
-      from: minTaskChargeCredits,
-      to: minTaskChargeCredits,
-    })
+    // A small edit usually takes five credits; there is no minimum of a charge since 10.11.2026.
+    expect(typicalTaskCredits.small).toEqual({ from: 5, to: 5 })
     // The tariffs and the pack of 06.11.2026: 66.33, 58.25, 49.975 and 74.5.
     expect(smallEditRubles('1990.00', 150)).toBe('66.00')
     expect(smallEditRubles('6990.00', 600)).toBe('58.00')

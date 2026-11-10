@@ -3,12 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { parseEnv } from 'node:util'
 
 import { Prisma } from '@repo/db'
-import {
-  attemptStepCredits,
-  legalDocuments,
-  minStartCredits,
-  minTaskChargeCredits,
-} from '@repo/domain'
+import { attemptReserveCredits, legalDocuments, minStartCredits } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
 
 import { webEnvFromEnv } from '@/server/web-env'
@@ -132,25 +127,19 @@ describe('legal documents', () => {
     // Appendix 1 of the offer and clause 13.3 of the agreement repeat constants of the credits
     // model. A constant that moves needs a new edition of the text, and the reverse.
     const offer = text('public-offer')
-    const number = (pattern: RegExp) => Number(pattern.exec(offer)?.[1])
 
-    expect(number(/резервируются Кредиты — не более (\d+) и не более доступного остатка/)).toBe(
-      attemptStepCredits.standard,
+    // Owner's decision of 10.11.2026 (docs/spec.md §20, «Только кредиты», КР5–КР8): one credit
+    // starts a task and is its reserve, a pass is charged its work rounded up, no minimum.
+    expect(minStartCredits).toBe(1)
+    expect(offer).toContain('доступен хотя бы один Кредит')
+    expect(offer).toContain('под нее резервируется один Кредит')
+    expect(attemptReserveCredits).toBe(1)
+    expect(offer).toContain('округленное вверх до целого')
+    expect(offer).not.toMatch(
+      /не (?:более|менее) \d+ Кредит|не менее \d+ и не более зарезервированного/,
     )
-    expect(number(/при продолжении под Задачу дополнительно резервируется не более (\d+) /)).toBe(
-      attemptStepCredits.standard,
-    )
-    expect(
-      number(/в усиленном режиме: под нее и при ее продолжении резервируется не более (\d+) /),
-    ).toBe(attemptStepCredits.heavy)
-    expect(number(/но не менее (\d+) и не более зарезервированного/)).toBe(minTaskChargeCredits)
-    // Clause 1.6: a new task is refused while fewer credits than this are available.
-    expect(number(/Если доступных Кредитов меньше (\d+), новые Задачи не принимаются/)).toBe(
-      minStartCredits,
-    )
-    expect(Number(/но не меньше (\d+) за задачу/.exec(text('user-agreement'))?.[1])).toBe(
-      minTaskChargeCredits,
-    )
+    expect(text('user-agreement')).toContain('доступен хотя бы один кредит')
+    expect(text('user-agreement')).not.toMatch(/не меньше \d+ за задачу/)
   })
 
   it('names in the offer the days the renewal runs by unless it is set otherwise', () => {

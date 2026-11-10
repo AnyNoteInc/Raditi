@@ -1456,9 +1456,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL management of a tariff through the rou
     })
     // Nobody is charged by itself for an overdue tariff.
     expect(await caller.billing.autoRenewal()).toEqual({ renewal: null })
-    await expect(caller.billing.startPackCheckout({})).rejects.toMatchObject({
-      cause: { code: 'BILLING_PACK_NEEDS_SUBSCRIPTION' },
-    })
+    // A pack is still sold, at twice the price while the tariff is overdue (КР9).
+    expect((await caller.billing.plans()).pack).toMatchObject({ withoutTariff: true })
 
     const checkout = await caller.billing.startPastDuePayment({})
     expect(await caller.billing.startPastDuePayment({})).toEqual(checkout)

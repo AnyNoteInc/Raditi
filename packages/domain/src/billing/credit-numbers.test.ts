@@ -1,15 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import * as domain from '../index.ts'
-import { modelClasses, quotaAttemptCeilingsRub } from '../llm/model-class.ts'
-import { Money } from '../money.ts'
 import * as numbers from './credit-numbers.ts'
 import {
-  attemptStepCredits,
+  attemptReserveCredits,
   averageTaskCount,
   averageTaskCredits,
   giftTaskCounts,
   minStartCredits,
-  minTaskChargeCredits,
   signupGiftCredits,
   typicalTaskCredits,
 } from './credit-numbers.ts'
@@ -18,16 +15,17 @@ const badRequest = expect.objectContaining({ name: 'DomainError', code: 'BAD_REQ
 
 describe('the numbers of the credits model', () => {
   it('are the defaults of the design, each written once', () => {
-    expect(minTaskChargeCredits).toBe(5)
     expect(averageTaskCredits).toBe(11)
     expect(typicalTaskCredits).toEqual({
       small: { from: 5, to: 5 },
       block: { from: 15, to: 25 },
       large: { from: 25, to: 40 },
     })
-    expect(attemptStepCredits).toEqual({ light: 20, standard: 45, heavy: 120 })
+    // Only credits bound a task (owner's decision of 10.11.2026, КР5–КР8): one credit starts it
+    // and is its reserve.
+    expect(attemptReserveCredits).toBe(1)
     expect(signupGiftCredits).toBe(50)
-    expect(minStartCredits).toBe(5)
+    expect(minStartCredits).toBe(1)
   })
 
   // 17.10.2026 the daily limit became one of tariff credits: without a tariff there is no day,
@@ -39,7 +37,6 @@ describe('the numbers of the credits model', () => {
   it('cannot be changed by a page that prints them', () => {
     expect(Object.isFrozen(typicalTaskCredits)).toBe(true)
     for (const range of Object.values(typicalTaskCredits)) expect(Object.isFrozen(range)).toBe(true)
-    expect(Object.isFrozen(attemptStepCredits)).toBe(true)
   })
 
   it('reach the rest of the code through the package, under the same names', () => {
@@ -49,8 +46,6 @@ describe('the numbers of the credits model', () => {
   })
 
   it('agree with each other', () => {
-    // A small edit costs the minimum: its tokens are worth less.
-    expect(typicalTaskCredits.small.from).toBe(minTaskChargeCredits)
     // The list goes from the smallest request to the largest, each as a range of whole credits.
     const ranges = [typicalTaskCredits.small, typicalTaskCredits.block, typicalTaskCredits.large]
     for (const [index, range] of ranges.entries()) {
@@ -62,36 +57,15 @@ describe('the numbers of the credits model', () => {
     // No kind of task costs the average: it lies between a small edit and a block.
     expect(averageTaskCredits).toBeGreaterThan(typicalTaskCredits.small.to)
     expect(averageTaskCredits).toBeLessThan(typicalTaskCredits.block.from)
-    // One attempt of a new task — the standard class — holds every task of the list.
-    expect(attemptStepCredits.standard).toBeGreaterThanOrEqual(typicalTaskCredits.large.to)
-    // A step is never below what a task must have to be charged at all.
-    for (const modelClass of modelClasses) {
-      expect(attemptStepCredits[modelClass]).toBeGreaterThanOrEqual(minTaskChargeCredits)
-    }
-    expect(Object.keys(attemptStepCredits)).toEqual([...modelClasses])
-    expect(attemptStepCredits.light).toBeLessThan(attemptStepCredits.standard)
-    expect(attemptStepCredits.standard).toBeLessThan(attemptStepCredits.heavy)
     // The gift is a whole number of credits that holds about five average tasks and every task
-    // of the list at least once. Since 06.11.2026 (plan 63, Ц5) it is more than one attempt of
-    // a new task sets aside: a step of the standard class leaves enough of it to start another.
+    // of the list at least once (plan 63, Ц5).
     expect(Number.isSafeInteger(signupGiftCredits)).toBe(true)
     expect(averageTaskCount(signupGiftCredits)).toBe(5)
     expect(signupGiftCredits).toBeGreaterThanOrEqual(typicalTaskCredits.large.to)
-    expect(signupGiftCredits - attemptStepCredits.standard).toBeGreaterThanOrEqual(minStartCredits)
-    // A task starts on what a done task is charged at least: it can always be charged.
-    expect(minStartCredits).toBe(minTaskChargeCredits)
+    // A reserve is what a task needs to start: no more.
+    expect(attemptReserveCredits).toBe(minStartCredits)
     // The gift starts a task.
     expect(signupGiftCredits).toBeGreaterThanOrEqual(minStartCredits)
-  })
-
-  // 6.00 RUB of accounting cost in a credit is the provisional rate of the design; the table of
-  // rates arrives later. The steps were chosen to stay inside the ceilings of an attempt at it.
-  it('keeps every step inside the rouble ceiling of an attempt at the provisional rate', () => {
-    for (const modelClass of modelClasses) {
-      const stepRub = new Money(attemptStepCredits[modelClass]).times('6.00')
-      expect(stepRub.lte(quotaAttemptCeilingsRub[modelClass]), modelClass).toBe(true)
-    }
-    expect(new Money(attemptStepCredits.standard).times('6.00').toFixed(2)).toBe('270.00')
   })
 })
 

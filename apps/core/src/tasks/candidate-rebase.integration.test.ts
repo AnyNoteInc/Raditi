@@ -828,9 +828,10 @@ describe.skipIf(!databaseUrl)('«Обновить» of a candidate with PostgreS
 
     expect((await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).status).toBe('done')
     expect(await revisions(dialog.taskId)).toEqual([[1, 'superseded', BASE, HEAD]])
+    // Settled: the chain recorded no model call, so it costs nothing and is given back (КР5–КР8).
     expect(
       (await db.creditHold.findMany({ where: { taskId: dialog.taskId } })).every(
-        (hold) => hold.status === 'captured',
+        (hold) => hold.status === 'released',
       ),
     ).toBe(true)
     expect(await outcomes(dialog.taskId)).toEqual(['emptied'])

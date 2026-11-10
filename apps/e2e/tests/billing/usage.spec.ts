@@ -84,7 +84,7 @@ test('a customer who paid for a tariff sees its full quota and an empty history'
     await expect(state).toBeVisible(SLOW)
     // A new user has no workspace yet: the gift of the registration is shown as promised.
     await expect(state).toContainText(
-      'У вас 50 подарочных кредитов. Они не сгорают, а задачи принимаются, пока подарочные кредиты не закончатся. Здесь видно, сколько кредитов осталось и на что они ушли.',
+      'У вас 50 подарочных кредитов. Они не сгорают, а задачи принимаются, пока кредиты не закончатся. Здесь видно, сколько кредитов осталось и на что они ушли.',
     )
     await expect(state).not.toContainText('Кредиты входят в тариф')
     await expect(state.getByRole('link', { name: 'Выбрать тариф' })).toHaveAttribute(
@@ -115,9 +115,14 @@ test('a customer who paid for a tariff sees its full quota and an empty history'
     await explainer.getByText('Как считаются кредиты').click()
     await expect(definition).toBeVisible()
     await expect(explainer).toContainText(/небольшая правка обычно стоит 5\sкредитов/)
+    // Only credits bound a task (КР5–КР8): one credit starts it, every pass pays its work.
     await expect(explainer).toContainText(
-      /За\sвыполненную\sзадачу\sсписывается\sне\sменьше\s5\sкредитов,\sдаже\sесли\sработы\sбыло\sсовсем\sмало\./,
+      /Кредиты\sсписываются\sпосле\sкаждого\sответа\sагента\s—\sровно\sстолько,\sсколько\sушло\sна\sработу,\sс\sокруглением\sвверх\sдо\sцелого\sкредита\./,
     )
+    await expect(explainer).toContainText(
+      /Задача\sначинается,\sесли\sу\sвас\sесть\sхотя\sбы\sодин\sкредит\./,
+    )
+    await expect(explainer).not.toContainText('не меньше 5')
     // The rule of the charge stands once, above the block (Ц14).
     await expect(page.getByRole('main')).toContainText(
       /Списываем\sтолько\sза\sвыполненную\sработу:\sпопытка,\sкоторая\sоборвалась\sиз-за\sсбоя,\sничего\sне\sстоит\./,

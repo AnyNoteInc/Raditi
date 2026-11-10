@@ -1,16 +1,14 @@
 import { randomUUID } from 'node:crypto'
 
 import { createPrismaClient, type Prisma, type PrismaClient } from '@repo/db'
-import { creditAccountUnits, taskCharge, toCredits, unpaidWork } from '@repo/domain'
+import { taskCharge } from '@repo/domain'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { ensureAccounts } from './accounts.ts'
 import {
   creditRateAt,
   creditRateStatus,
   requireUsableCreditRate,
   taskRawCredits,
-  workspaceWorkCredits,
 } from './credit-rate.ts'
 import {
   inRolledBackTransaction,
@@ -236,7 +234,7 @@ describe.skipIf(!databaseUrl)('the credit rate with PostgreSQL', () => {
         ])
         expect(raw.attempts[0]?.credits.toFixed(4)).toBe('22.0000')
         // Not what one rate for the whole attempt would give: 120 ÷ 6 = 20, 120 ÷ 5 = 24.
-        expect(taskCharge({ used: raw.credits, reserved: toCredits(45) }).credits).toBe(22)
+        expect(taskCharge({ used: raw.credits }).credits).toBe(22)
       })
     })
 
@@ -276,9 +274,9 @@ describe.skipIf(!databaseUrl)('the credit rate with PostgreSQL', () => {
         const raw = await taskRawCredits(tx, { taskId, attempts: [1] })
 
         if (!raw.convertible) throw new Error('The calls must be convertible')
-        // Divided one by one they would add up to 7.4999…9 and be charged 7.
+        // Divided one by one they would add up to 7.4999…9; summed first they are 7.5, charged 8.
         expect(raw.credits.eq('7.5')).toBe(true)
-        expect(taskCharge({ used: raw.credits, reserved: toCredits(45) }).credits).toBe(8)
+        expect(taskCharge({ used: raw.credits }).credits).toBe(8)
       })
     })
 
@@ -432,7 +430,7 @@ describe.skipIf(!databaseUrl)('the credit rate with PostgreSQL', () => {
           [1, '225.0000000000', '37.50'],
           [2, '72.0000000000', '12.00'],
         ])
-        expect(taskCharge({ used: chain.credits, reserved: toCredits(90) }).credits).toBe(50)
+        expect(taskCharge({ used: chain.credits }).credits).toBe(50)
 
         // A retry after a failure is charged for itself alone.
         const retry = await taskRawCredits(tx, { taskId, attempts: [2] })
@@ -535,275 +533,6 @@ describe.skipIf(!databaseUrl)('the credit rate with PostgreSQL', () => {
     ])('refuses %s', async (_, patch) => {
       const query = { taskId: randomUUID(), attempts: [1], ...patch }
       await expect(taskRawCredits(db, query)).rejects.toMatchObject({ code: 'BAD_REQUEST' })
-    })
-  })
-
-  describe('workspaceWorkCredits', () => {
-    /** A `charge` row of the journal, or another kind, written directly at a moment. */
-    async function entry(
-      tx: Tx,
-      workspaceId: string,
-      unit: 'credit_tariff' | 'credit_gift' | 'credit_pack' | 'rub',
-      amount: string,
-      createdAt: Date,
-      kind: 'charge' | 'grant' | 'expire' = 'charge',
-      taskId: string | null = null,
-    ) {
-      const account = await tx.billingAccount.upsert({
-        where: { workspaceId_unit: { workspaceId, unit } },
-        create: { workspaceId, unit },
-        update: {},
-      })
-      await tx.creditLedger.create({
-        data: {
-          accountId: account.id,
-          unit,
-          kind,
-          amount,
-          balanceAfter: '0',
-          taskId,
-          idempotencyKey: `verification:${randomUUID()}`,
-          createdAt,
-        },
-      })
-      return account
-    }
-
-    it('sums every call of the billable tasks, billable or not, each at its own rate', async () => {
-      await rolledBack(async (tx) => {
-        const home = await workspaceIn(tx)
-        const done = await taskIn(tx, {}, home)
-        const failed = await taskIn(tx, { status: 'failed' }, home)
-        const { pool, priceId } = await pricedPool(tx, T1)
-        await writeCreditRate(tx, { effectiveFrom: T1, rubPerCredit: '6.000000' })
-        await writeCreditRate(tx, { effectiveFrom: T2, rubPerCredit: '5.000000' })
-        const call = { pool, priceId }
-        await writeModelCall(tx, {
-          ...call,
-          taskId: done.taskId,
-          costRub: '60',
-          occurredAt: after(T1),
-        })
-        // A lost call spent the pool too, and so did the turn that was lost.
-        await writeModelCall(tx, {
-          ...call,
-          taskId: failed.taskId,
-          costRub: '30',
-          occurredAt: after(T1),
-          estimateReason: 'lost',
-        })
-        await writeModelCall(tx, {
-          ...call,
-          taskId: failed.taskId,
-          costRub: '12',
-          occurredAt: after(T1),
-          turnNo: 2,
-          turnStatus: 'lost',
-        })
-        await writeModelCall(tx, {
-          ...call,
-          taskId: failed.taskId,
-          costRub: '60',
-          occurredAt: after(T2),
-          attempt: 2,
-          turnNo: 3,
-        })
-        // A turn whose pass ended in a failure: not the client's to pay, still work.
-        await writeModelCall(tx, {
-          ...call,
-          taskId: failed.taskId,
-          costRub: '18',
-          occurredAt: after(T1),
-          turnNo: 4,
-          turnStatus: 'completed',
-          turnRejected: true,
-        })
-
-        const work = await workspaceWorkCredits(tx, { workspaceId: home.workspaceId, since: T1 })
-
-        // (60 + 30 + 12 + 18) ÷ 6 + 60 ÷ 5.
-        expect(work.work.toFixed(2)).toBe('32.00')
-        expect(work.charged).toBe(0)
-        expect(work.unrated).toEqual({ calls: 0, costRub: '0.0000000000' })
-      })
-    })
-
-    it('gives the call that starts at the instant of a new rate the new rate', async () => {
-      await rolledBack(async (tx) => {
-        const home = await taskIn(tx)
-        const { pool, priceId } = await pricedPool(tx, T1)
-        await writeCreditRate(tx, { effectiveFrom: T1, rubPerCredit: '6.000000' })
-        await writeCreditRate(tx, { effectiveFrom: T2, rubPerCredit: '3.000000' })
-        const call = { taskId: home.taskId, pool, priceId, costRub: '6' }
-        await writeModelCall(tx, { ...call, occurredAt: new Date(T2.getTime() - 1) })
-        await writeModelCall(tx, { ...call, occurredAt: T2 })
-
-        const work = await workspaceWorkCredits(tx, { workspaceId: home.workspaceId, since: T1 })
-
-        // 6 ÷ 6 before the instant, 6 ÷ 3 at it.
-        expect(work.work.toFixed(2)).toBe('3.00')
-      })
-    })
-
-    it('counts neither a task that is not billable nor another workspace', async () => {
-      await rolledBack(async (tx) => {
-        const home = await workspaceIn(tx)
-        const task = await taskIn(tx, {}, home)
-        const undo = await taskIn(tx, { billable: false }, home)
-        const stranger = await taskIn(tx)
-        const { pool, priceId } = await pricedPool(tx, T1)
-        await writeCreditRate(tx, { effectiveFrom: T1 })
-        const call = { pool, priceId, occurredAt: after(T1) }
-        await writeModelCall(tx, { ...call, taskId: task.taskId, costRub: '60' })
-        await writeModelCall(tx, { ...call, taskId: undo.taskId, costRub: '600' })
-        await writeModelCall(tx, { ...call, taskId: stranger.taskId, costRub: '6000' })
-
-        const work = await workspaceWorkCredits(tx, { workspaceId: home.workspaceId, since: T1 })
-
-        expect(work.work.toFixed(2)).toBe('10.00')
-      })
-    })
-
-    it('counts from the moment it is given, that moment included', async () => {
-      await rolledBack(async (tx) => {
-        const home = await taskIn(tx)
-        const { pool, priceId } = await pricedPool(tx, T1)
-        await writeCreditRate(tx, { effectiveFrom: T1 })
-        const call = { taskId: home.taskId, pool, priceId }
-        await writeModelCall(tx, {
-          ...call,
-          costRub: '600',
-          occurredAt: new Date(T2.getTime() - 1),
-        })
-        await writeModelCall(tx, { ...call, costRub: '60', occurredAt: T2 })
-        await writeModelCall(tx, { ...call, costRub: '6', occurredAt: after(T2) })
-
-        const period = await workspaceWorkCredits(tx, { workspaceId: home.workspaceId, since: T2 })
-        expect(period.work.toFixed(2)).toBe('11.00')
-
-        const all = await workspaceWorkCredits(tx, { workspaceId: home.workspaceId, since: T1 })
-        expect(all.work.toFixed(2)).toBe('111.00')
-      })
-    })
-
-    it('reports the charges of the three credit accounts since the same moment', async () => {
-      await rolledBack(async (tx) => {
-        const { workspaceId } = await workspaceIn(tx)
-        const stranger = await workspaceIn(tx)
-        await ensureAccounts(tx, workspaceId)
-        await entry(tx, workspaceId, creditAccountUnits.tariff, '-5', after(T2))
-        await entry(tx, workspaceId, creditAccountUnits.gift, '-12', after(T2))
-        await entry(tx, workspaceId, creditAccountUnits.pack, '-17', T2)
-        // Before the moment; other kinds of entry; roubles; another workspace.
-        await entry(tx, workspaceId, creditAccountUnits.tariff, '-29', new Date(T2.getTime() - 1))
-        await entry(tx, workspaceId, creditAccountUnits.tariff, '300', after(T2), 'grant')
-        await entry(tx, workspaceId, creditAccountUnits.tariff, '-200', after(T2), 'expire')
-        await entry(tx, workspaceId, 'rub', '-99.50', after(T2))
-        await entry(tx, stranger.workspaceId, creditAccountUnits.pack, '-40', after(T2))
-
-        const work = await workspaceWorkCredits(tx, { workspaceId, since: T2 })
-
-        expect(work.charged).toBe(34)
-        expect(work.work.isZero()).toBe(true)
-      })
-    })
-
-    it('counts a charge by the moment its task was charged, whatever period its row is stamped into', async () => {
-      await rolledBack(async (tx) => {
-        const home = await workspaceIn(tx)
-        const unit = creditAccountUnits.tariff
-        // The charge of the tariff account is stamped inside the period whose credits it takes:
-        // for a period that ended at T2, no later than its last millisecond.
-        const stamp = new Date(T2.getTime() - 1)
-        /** A task with such a charge, and its reserve row as the charge left it at `settledAt`. */
-        const charged = async (amount: string, settledAt: Date) => {
-          const { taskId } = await taskIn(tx, {}, home)
-          const account = await entry(tx, home.workspaceId, unit, amount, stamp, 'charge', taskId)
-          await tx.creditHold.create({
-            data: {
-              accountId: account.id,
-              unit,
-              taskId,
-              amount: '45',
-              status: 'captured',
-              // What the row paid: the charge of the task, all from this row.
-              charged: amount.replace('-', ''),
-              expiresAt: T3,
-              createdAt: stamp,
-              placedAt: stamp,
-              settledAt,
-            },
-          })
-        }
-        // Done after the period ended, before its renewal was settled; and at that very end.
-        await charged('-25', after(T2))
-        await charged('-7', T2)
-        // Done while the period lasted: charged before the moment asked about.
-        await charged('-11', stamp)
-
-        const work = await workspaceWorkCredits(tx, { workspaceId: home.workspaceId, since: T2 })
-
-        expect(work.charged).toBe(32)
-      })
-    })
-
-    it('gives the two numbers the bound on unpaid work is counted from', async () => {
-      await rolledBack(async (tx) => {
-        const home = await taskIn(tx)
-        const { pool, priceId } = await pricedPool(tx, T1)
-        await writeCreditRate(tx, { effectiveFrom: T1 })
-        // A done task of 17 credits and a failed attempt of 25 that nobody paid for.
-        await writeModelCall(tx, {
-          taskId: home.taskId,
-          pool,
-          priceId,
-          costRub: '101.37',
-          occurredAt: after(T1),
-        })
-        const failed = await taskIn(tx, { status: 'failed' }, home)
-        await writeModelCall(tx, {
-          taskId: failed.taskId,
-          pool,
-          priceId,
-          costRub: '150',
-          occurredAt: after(T1),
-        })
-        await entry(tx, home.workspaceId, creditAccountUnits.tariff, '-17', after(T1))
-
-        const work = await workspaceWorkCredits(tx, { workspaceId: home.workspaceId, since: T1 })
-
-        expect(work.work.toFixed(3)).toBe('41.895')
-        expect(work.charged).toBe(17)
-        expect(unpaidWork({ work: work.work, charged: work.charged }).toFixed(3)).toBe('24.895')
-      })
-    })
-
-    it('keeps apart the calls that started while no rate was in force', async () => {
-      await rolledBack(async (tx) => {
-        const home = await taskIn(tx)
-        const { pool, priceId } = await pricedPool(tx, BEFORE)
-        await writeCreditRate(tx, { effectiveFrom: T1 })
-        const call = { taskId: home.taskId, pool, priceId }
-        await writeModelCall(tx, { ...call, costRub: '45.5', occurredAt: after(BEFORE) })
-        await writeModelCall(tx, { ...call, costRub: '4.5', occurredAt: after(BEFORE, 2 * HOUR) })
-        await writeModelCall(tx, { ...call, costRub: '60', occurredAt: after(T1) })
-
-        const work = await workspaceWorkCredits(tx, {
-          workspaceId: home.workspaceId,
-          since: BEFORE,
-        })
-
-        expect(work.work.toFixed(2)).toBe('10.00')
-        expect(work.unrated).toEqual({ calls: 2, costRub: '50.0000000000' })
-      })
-    })
-
-    it.each([
-      ['a workspace that is not an id', { workspaceId: 'workspace' }],
-      ['a moment that is not a date', { since: new Date(Number.NaN) }],
-    ])('refuses %s', async (_, patch) => {
-      const query = { workspaceId: randomUUID(), since: T1, ...patch }
-      await expect(workspaceWorkCredits(db, query)).rejects.toMatchObject({ code: 'BAD_REQUEST' })
     })
   })
 

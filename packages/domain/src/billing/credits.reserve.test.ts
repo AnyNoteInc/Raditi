@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   attemptReserveCredits,
-  attemptStepCredits,
   creditAccountKinds,
   creditAccountsSchema,
   creditsFromCost,
@@ -116,45 +115,16 @@ function settled(
 
 const nothing = { paid: 0, reserved: 0 }
 
+/**
+ * A reserve of a given size, as a caller of `splitReserve` may place one: the rules below take any
+ * whole amount the accounts can cover. The queue places `attemptReserveCredits` — one credit —
+ * since 10.11.2026 (КР5); the walks keep a reserve of up to 45 to exercise several accounts.
+ */
+const reserveOf = (spendable: Credits): Credits => toCredits(Math.min(45, spendable))
+
 describe('attemptReserveCredits', () => {
-  it.each([
-    ['a new task on a full tariff', 'standard', 300, 45],
-    ['a new task with 105 credits on two accounts', 'standard', 105, 45],
-    ['a new task with exactly the step', 'standard', 45, 45],
-    ['a new task one credit short of the step', 'standard', 44, 44],
-    ['a customer with 12 credits', 'standard', 12, 12],
-    ['the smallest balance that starts a task', 'standard', 5, 5],
-    ['a continuation on the last credit', 'standard', 1, 1],
-    ['the whole gift: a step is more than it', 'standard', 35, 35],
-    ['a retry in the stronger mode', 'heavy', 300, 120],
-    ['a retry with 50 credits', 'heavy', 50, 50],
-    ['a light task', 'light', 300, 20],
-    ['a light task with 19 credits', 'light', 19, 19],
-    ['nothing to spend', 'standard', 0, 0],
-  ] as const)('%s: %s, %i spendable → %i', (_name, modelClass, spendable, expected) => {
-    expect(attemptReserveCredits(modelClass, toCredits(spendable))).toBe(expected)
-  })
-
-  it('is the step of the class, or everything that can be spent', () => {
-    for (const modelClass of ['light', 'standard', 'heavy'] as const) {
-      const step = attemptStepCredits[modelClass]
-      for (const spendable of [0, 1, step - 1, step, step + 1, 10 * step]) {
-        expect(attemptReserveCredits(modelClass, toCredits(spendable))).toBe(
-          Math.min(step, spendable),
-        )
-      }
-    }
-  })
-
-  it('refuses a class that is not one and a count that is not one', () => {
-    for (const modelClass of ['service', 'STANDARD', '', 'toString', undefined, null]) {
-      const reserve = () => attemptReserveCredits(modelClass as 'standard', toCredits(45))
-      expect(reserve).toThrow(badRequest)
-      expect(reserve).toThrow('Invalid model class')
-    }
-    for (const spendable of [-1, 4.5, Number.NaN, Number.POSITIVE_INFINITY, undefined, null]) {
-      expect(() => attemptReserveCredits('standard', spendable as Credits)).toThrow(badRequest)
-    }
+  it('is one credit: it marks the attempt as in work, its charge is not bounded by it', () => {
+    expect(attemptReserveCredits).toBe(1)
   })
 })
 
@@ -258,12 +228,16 @@ describe('splitReserve', () => {
     )
   })
 
-  it('reserves only gift credits while the tariff is not paid', () => {
-    // an overdue tariff still has its credits, and a pack waits for a tariff
+  it('reserves gift and pack credits while the tariff is not paid', () => {
+    // an overdue tariff still has its credits; the gift and the pack are spent without it
     const accounts = three(account(50), account(35), account(100))
     expect(split(accounts, 35, false)).toEqual([{ account: 'gift', amount: 35 }])
     expect(split(accounts, 5, false)).toEqual([{ account: 'gift', amount: 5 }])
-    expect(() => split(accounts, 36, false)).toThrow(badRequest)
+    expect(split(accounts, 45, false)).toEqual([
+      { account: 'gift', amount: 35 },
+      { account: 'pack', amount: 10 },
+    ])
+    expect(() => split(accounts, 136, false)).toThrow(badRequest)
     // the same accounts with a paid tariff
     expect(split(accounts, 45, true)).toEqual([{ account: 'tariff', amount: 45 }])
   })
@@ -403,7 +377,7 @@ describe('splitReserve', () => {
       const reserveOn = (accounts: CreditAccounts, used: number) => {
         const tariffRoom = tariffDayRoom({ limit: toCredits(50), used: toCredits(used) })
         const spendableNow = spendableCredits(accounts, true, tariffRoom)
-        const amount = attemptReserveCredits('standard', spendableNow.total)
+        const amount = reserveOf(spendableNow.total)
         return {
           spendableNow: spendableNow.total,
           parts: splitReserve({ accounts, amount, tariffTakesTasks: true, tariffRoom }),
@@ -515,7 +489,7 @@ describe('distributeCharge', () => {
     expect(spendable.total).toBe(105)
 
     // queued: 45 = 5 on the tariff + 40 on the pack, two rows
-    const amount = attemptReserveCredits('standard', spendable.total)
+    const amount = reserveOf(spendable.total)
     expect(amount).toBe(45)
     const reserve = placed(before, 'block', amount)
     expect(reserve.parts).toEqual([
@@ -530,8 +504,8 @@ describe('distributeCharge', () => {
 
     // the calls cost 101.37 RUB, all billable: 16.90 credits, charged 17
     const used = creditsFromCost([{ costRub: '101.37', rubPerCredit: '6.00' }])
-    const charge = taskCharge({ used, reserved: amount })
-    expect(charge).toEqual({ credits: 17, minimumApplied: false, capped: false })
+    const charge = taskCharge({ used })
+    expect(charge).toEqual({ credits: 17 })
 
     // the tariff has 5 of its own row and nothing free: it pays 5; the pack pays 12
     const distribution = distributeCharge({
@@ -549,6 +523,7 @@ describe('distributeCharge', () => {
       },
       from: { tariff: 5, gift: 0, pack: 12 },
       expired: 0,
+      debt: 0,
       rows: [
         { id: 'block-tariff', charged: 5 },
         { id: 'block-pack', charged: 12 },
@@ -604,6 +579,7 @@ describe('distributeCharge', () => {
         },
         from: { tariff: 17, gift: 0, pack: 0 },
         expired: 0,
+        debt: 0,
         // the pack row of B paid nothing: the tariff paid for it from free credits
         rows: [{ id: 'b-pack', charged: 0 }],
       })
@@ -641,6 +617,7 @@ describe('distributeCharge', () => {
       accounts: { tariff: nothing, gift: nothing, pack: nothing },
       from: { tariff: 17, gift: 0, pack: 0 },
       expired: 28,
+      debt: 0,
       rows: [{ id: 'old', charged: 17 }],
     })
     // the new period is exactly its quota
@@ -658,6 +635,7 @@ describe('distributeCharge', () => {
       accounts: { tariff: { paid: 17, reserved: 45 }, gift: nothing, pack: nothing },
       from: { tariff: 17, gift: 0, pack: 0 },
       expired: 0,
+      debt: 0,
       rows: [{ id: 'own', charged: 17 }],
     })
     expect(settled(accounts, rows, distribution)).toEqual(
@@ -684,6 +662,7 @@ describe('distributeCharge', () => {
       accounts: { tariff: { paid: 15, reserved: 45 }, gift: nothing, pack: nothing },
       from: { tariff: 60, gift: 0, pack: 0 },
       expired: 0,
+      debt: 0,
       rows: [
         { id: 'second', charged: 15 },
         { id: 'first', charged: 45 },
@@ -744,6 +723,7 @@ describe('distributeCharge', () => {
         accounts: { tariff: nothing, gift: nothing, pack: { paid: 0, reserved: 15 } },
         from: { tariff: 17, gift: 0, pack: 0 },
         expired: 13,
+        debt: 0,
         rows: [
           { id: 't', charged: 17 },
           { id: 'p', charged: 0 },
@@ -792,6 +772,7 @@ describe('distributeCharge', () => {
       },
       from: { tariff: 10, gift: 18, pack: 0 },
       expired: 0,
+      debt: 0,
       rows: [
         { id: 't', charged: 10 },
         { id: 'g', charged: 18 },
@@ -854,6 +835,7 @@ describe('distributeCharge', () => {
       },
       from: { tariff: 0, gift: 0, pack: 0 },
       expired: 45,
+      debt: 0,
       rows: [
         { id: 'old', charged: 0 },
         { id: 'new', charged: 0 },
@@ -866,23 +848,44 @@ describe('distributeCharge', () => {
     )
   })
 
-  it('settles a task without rows only for nothing', () => {
+  it('settles a task without rows for nothing, and pays a charge without rows from free credits', () => {
     const accounts = three(account(300), account(35), account(100))
     expect(charged(0, [], accounts)).toEqual({
       endedRows: [],
       accounts: { tariff: nothing, gift: nothing, pack: nothing },
       from: { tariff: 0, gift: 0, pack: 0 },
       expired: 0,
+      debt: 0,
       rows: [],
     })
-    expect(() => charged(1, [], accounts)).toThrow(badRequest)
+    expect(charged(1, [], accounts)).toMatchObject({
+      from: { tariff: 1, gift: 0, pack: 0 },
+      debt: 0,
+    })
   })
 
-  it('refuses a charge above the rows of the task, however much is free', () => {
+  // Owner's decision of 10.11.2026 (КР7): a pass is charged its work, not its reserve. Above the
+  // rows the free credits pay, in the order of the owner; above those the rest is owed.
+  it('pays a charge above the rows from free credits, and owes what nothing covers', () => {
     const rows = [row('t', 'tariff', 5), row('p', 'pack', 40)]
     const accounts = three(account(300, 5), account(35), account(100, 40))
     expect(charged(45, rows, accounts).from).toEqual({ tariff: 45, gift: 0, pack: 0 })
-    expect(() => charged(46, rows, accounts)).toThrow(badRequest)
+    expect(charged(46, rows, accounts)).toMatchObject({
+      from: { tariff: 46, gift: 0, pack: 0 },
+      debt: 0,
+    })
+    // 300 of the tariff, 35 of the gift and 100 of the pack: 435 pay, 65 are owed
+    const all = charged(500, rows, accounts)
+    expect(all.from).toEqual({ tariff: 300, gift: 35, pack: 100 })
+    expect(all.debt).toBe(65)
+    // the reserve rows pay in full and leave `held` with the payment
+    expect(all.rows).toEqual([
+      { id: 't', charged: 5 },
+      { id: 'p', charged: 40 },
+    ])
+    // a lone reserve of one credit, nothing free: all but that credit is owed
+    const lone = charged(30, [row('g', 'gift', 1)], three(account(0), account(1, 1), account(0)))
+    expect(lone).toMatchObject({ from: { tariff: 0, gift: 1, pack: 0 }, debt: 29 })
   })
 
   it('refuses rows that hold more than their account does', () => {
@@ -948,6 +951,7 @@ describe('distributeCharge', () => {
         },
         from: { tariff: 30, gift: 0, pack: 0 },
         expired: 0,
+        debt: 0,
         rows: [
           { id: 't2-tariff', charged: 5 },
           { id: 't2-pack', charged: 0 },
@@ -1062,14 +1066,7 @@ describe('distributeCharge', () => {
       const room = startDay(45)
       const spendableNow = spendableCredits(before, true, room)
       expect(spendableNow.total).toBe(105)
-      const reserve = placed(
-        before,
-        'block',
-        attemptReserveCredits('standard', spendableNow.total),
-        true,
-        day(1),
-        room,
-      )
+      const reserve = placed(before, 'block', reserveOf(spendableNow.total), true, day(1), room)
       expect(reserve.parts).toEqual([
         { account: 'tariff', amount: 5 },
         { account: 'pack', amount: 40 },

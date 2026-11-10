@@ -181,11 +181,13 @@ describe('the «Тарифы» page of a customer without a tariff', () => {
     expect(pageText()).toContain('Выберите тариф, чтобы начать ставить задачи.')
     // What a task costs, in the numbers of the credits model.
     expect(pageText()).toContain(
-      'Задача стоит столько кредитов, сколько работы она потребовала, но не меньше 5: небольшая правка текста, цены или фото — обычно 5 кредитов, добавить блок или страницу — 15–25. Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит. Уточнения и «Изменить» — часть той же задачи: работа над ними добавляется к её стоимости. «Отменить» — бесплатно.',
+      'Задача стоит столько кредитов, сколько работы она потребовала: небольшая правка текста, цены или фото — обычно 5 кредитов, добавить блок или страницу — 15–25. Списываем только за выполненную работу: попытка, которая оборвалась из-за сбоя, ничего не стоит. Уточнения и «Изменить» — часть той же задачи: работа над ними добавляется к её стоимости. «Отменить» — бесплатно.',
     )
     // The rule of the charge is said once on the page.
     expect(pageText().match(/Списываем только за выполненную работу/g)).toHaveLength(1)
-    expect(pageText()).not.toMatch(/один кредит/)
+    // The unit of before, «правка — один кредит», is not named; «хотя бы один кредит» to start a
+    // task is (КР5–КР8).
+    expect(pageText().replace('хотя бы один кредит', '')).not.toMatch(/один кредит/)
 
     const grid = screen.getByRole('list', { name: 'Тарифы' })
     expect(
@@ -304,15 +306,15 @@ describe('the «Тарифы» page of a customer without a tariff', () => {
     showPlans()
     await screen.findByRole('list', { name: 'Тарифы' })
 
-    // A pack is sold on top of a tariff, and pay-per-action comes with a later slice: no rows
-    // and no dead buttons.
-    expect(pageText()).not.toMatch(/Пакет|Оплата за действие|Купить/)
+    // Pay-per-action comes with a later slice: no row and no dead button. The pack is sold
+    // without a tariff too (КР9).
+    expect(pageText()).not.toMatch(/Оплата за действие/)
     expect(
       screen
         .getAllByRole('button')
         .map((button) => button.textContent)
         .sort(),
-    ).toEqual(['Выбрать «Агентство»', 'Выбрать «Бизнес»', 'Выбрать «Старт»'])
+    ).toEqual(['Выбрать «Агентство»', 'Выбрать «Бизнес»', 'Выбрать «Старт»', 'Купить пакет'])
     expect(screen.getAllByRole('link').map((link) => link.textContent)).toEqual([
       'Публичная оферта',
     ])
@@ -514,7 +516,7 @@ describe('the «Тарифы» page of a customer with a tariff', () => {
       .closest('.MuiChip-root')
     expect(chip?.querySelector('svg')).not.toBeNull()
     expect(plain(block.textContent)).toContain(
-      'Автопродление отключено. Тариф и 45 кредитов по тарифу доступны до 18 октября 2026. После этого новые задачи не принимаются, пока вы снова не выберете тариф. 10 кредитов из пакета, сайты и история правок сохранятся.',
+      'Автопродление отключено. Тариф и 45 кредитов по тарифу доступны до 18 октября 2026. После этого новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. 10 кредитов из пакета, сайты и история правок сохранятся.',
     )
     expect(row('Действует до')).toBe('18 октября 2026')
     expect(row('Способ оплаты')).toBe('Не сохранён')
@@ -698,6 +700,7 @@ describe('buying a pack of credits', () => {
         name: 'Большой пакет',
         price: '3490.00',
         credits: 21,
+        withoutTariff: false,
       },
     })
     showPlans()
@@ -707,10 +710,36 @@ describe('buying a pack of credits', () => {
     expect(plain(row.textContent)).toContain('Добавим 21 кредит сразу после оплаты.')
   })
 
+  // КР9: a pack is sold without a tariff too, at the price the server gives this customer.
   it.each([
     ['has no tariff', () => getOverview.mockResolvedValue(overviewOf())],
     ['is overdue with the tariff', () => subscribed({ status: 'past_due' })],
     ['is on a trial, which takes no tasks', () => subscribed({ status: 'trial' })],
+  ])('offers the pack at twice the price to a customer who %s', async (_case, arrange) => {
+    subscribed()
+    arrange()
+    getOffers.mockResolvedValue({
+      ...offers({ current: 'business' }),
+      pack: {
+        id: '018f0000-0000-7000-8000-000000000005',
+        slug: 'pack',
+        name: 'Пакет из 100 кредитов',
+        price: '2980.00',
+        credits: 100,
+        withoutTariff: true,
+      },
+    })
+    showPlans()
+
+    const row = await packRow()
+    expect(plain(row.textContent)).toContain('Пакет из 100 кредитов — 2 980 ₽')
+    expect(plain(row.textContent)).toContain(
+      'Без тарифа пакет стоит вдвое дороже — с тарифом он стоит 1 490 ₽',
+    )
+    expect(within(row).getByRole('button', { name: 'Купить пакет' })).toBeEnabled()
+  })
+
+  it.each([
     [
       'cannot pay because payments are off',
       () =>
@@ -772,31 +801,27 @@ describe('buying a pack of credits', () => {
     expect(startCheckout).not.toHaveBeenCalled()
   })
 
-  it('keeps the refusal on the screen when the tariff ended meanwhile and the row is gone', async () => {
+  it('keeps the refusal on the screen when the pack was taken off sale meanwhile and the row is gone', async () => {
     startPackCheckout.mockRejectedValue(
-      serverRefusal(
-        'Пакет кредитов можно купить только при действующем тарифе. Сначала оформите или оплатите тариф',
-        'BILLING_PACK_NEEDS_SUBSCRIPTION',
-      ),
+      serverRefusal('Этот тариф сейчас не продаётся', 'BILLING_PLAN_NOT_FOUND'),
     )
     subscribed()
     showPlans()
     fireEvent.click(await buy())
     const dialog = await screen.findByRole('dialog', { name: 'Пакет из 100 кредитов' })
-    // What the page reads after the refusal: no tariff any more.
-    getOverview.mockResolvedValue(overviewOf())
-    getOffers.mockResolvedValue(offers())
+    // What the page reads after the refusal: no pack on sale any more.
+    getOffers.mockResolvedValue({ ...offers({ current: 'business' }), pack: null })
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Перейти к оплате' }))
 
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(
-      /^Пакет кредитов можно купить только при действующем тарифе\. Сначала оформите или оплатите тариф\.$/,
+      /^Пакет сейчас не продаётся\. Обновите страницу\.$/,
     )
-    await waitFor(() => expect(getOverview).toHaveBeenCalledTimes(2))
-    expect(getOffers).toHaveBeenCalledTimes(2)
-    // The page behind shows the tariffs to choose from; the dialog still says why.
-    await screen.findByRole('heading', { level: 2, name: 'Выберите тариф', hidden: true })
-    expect(screen.queryByRole('button', { name: 'Купить пакет', hidden: true })).toBeNull()
+    await waitFor(() => expect(getOffers).toHaveBeenCalledTimes(2))
+    // The page behind no longer offers the pack; the dialog still says why.
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Купить пакет', hidden: true })).toBeNull(),
+    )
     expect(within(dialog).getByRole('alert')).toBeInTheDocument()
     expect(plain(dialog.textContent)).toContain('Пакет из 100 кредитов')
 
@@ -877,7 +902,7 @@ describe('switching auto-renewal off', () => {
       'Тариф «Бизнес» будет действовать до 18 октября 2026. 45 кредитов по тарифу можно использовать до этого дня.',
     )
     expect(dialogText()).toContain(
-      'С 18 октября новые задачи не будут приниматься, пока вы снова не выберете тариф. 10 кредитов из пакета, сайты и история правок сохранятся.',
+      'С 18 октября новые задачи будут приниматься, только пока есть подарочные кредиты или кредиты из пакета. 10 кредитов из пакета, сайты и история правок сохранятся.',
     )
     // The description of the dialog is what it confirms.
     expect(
@@ -916,7 +941,7 @@ describe('switching auto-renewal off', () => {
     expect(cancelAutoRenew).toHaveBeenCalledExactlyOnceWith({}, expect.anything())
     const said = screen.getByRole('status')
     expect(plain(said.textContent)).toBe(
-      'Автопродление отключено. Тариф и 45 кредитов по тарифу доступны до 18 октября 2026. После этого новые задачи не принимаются, пока вы снова не выберете тариф. 10 кредитов из пакета, сайты и история правок сохранятся.',
+      'Автопродление отключено. Тариф и 45 кредитов по тарифу доступны до 18 октября 2026. После этого новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. 10 кредитов из пакета, сайты и история правок сохранятся.',
     )
     await waitFor(() => expect(said).toHaveFocus())
     expect(screen.queryByRole('heading', { name: 'Автопродление' })).not.toBeInTheDocument()
@@ -1422,7 +1447,7 @@ describe('a tariff whose renewal charge failed', () => {
     const alert = await screen.findByRole('alert')
     expect(plain(alert.textContent)).toContain('Не получилось списать 6 990 ₽')
     expect(plain(alert.textContent)).toContain(
-      'Оплатите тариф: пока оплата не пройдёт, новые задачи не принимаются. 25 октября 2026 тариф закончится, если оплата не пройдёт раньше. Карту для следующих списаний можно заменить.',
+      'Оплатите тариф: пока оплата не пройдёт, новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. 25 октября 2026 тариф закончится, если оплата не пройдёт раньше. Карту для следующих списаний можно заменить.',
     )
     // Replacing the card pays for nothing: the sentence does not offer it as a way out.
     expect(plain(alert.textContent)).not.toMatch(/или замените/)
@@ -1430,10 +1455,8 @@ describe('a tariff whose renewal charge failed', () => {
     expect(chip?.querySelector('svg')).not.toBeNull()
     expect(row('Способ оплаты')).toBe('Карта «Мир» •• 4444')
     // 45 credits of the period that ended are not the customer's any more.
-    expect(row('Кредиты')).toBe(
-      'Недоступны, пока тариф не оплачен. После оплаты — новые кредиты по тарифу и 10 из пакета',
-    )
-    expect(pageText()).not.toMatch(/Осталось \d/)
+    expect(row('Кредиты')).toBe('Осталось 10 из пакета. Кредиты по тарифу начислим после оплаты')
+    // Only the pack is named as left: the 45 credits of the tariff are not.
     expect(screen.queryByText('Следующее списание')).not.toBeInTheDocument()
     expect(screen.queryByText('Действует до')).not.toBeInTheDocument()
     expect(plain((await planCard('Бизнес')).textContent)).not.toMatch(/Продлится|Действует до/)
@@ -1512,7 +1535,7 @@ describe('a tariff whose renewal charge failed', () => {
 
     const alert = await screen.findByRole('alert')
     expect(plain(alert.textContent)).toContain(
-      'Оплатите тариф: пока оплата не пройдёт, новые задачи не принимаются.',
+      'Оплатите тариф: пока оплата не пройдёт, новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета.',
     )
     expect(screen.queryByRole('link', { name: 'Заменить карту' })).toBeNull()
     const section = await renewalSection()
@@ -1588,7 +1611,7 @@ describe('a tariff whose renewal charge failed', () => {
 
     const alert = await screen.findByRole('alert')
     expect(plain(alert.textContent)).toContain(
-      'Оплатите тариф: пока оплата не пройдёт, новые задачи не принимаются. 25 октября 2026 тариф закончится, если оплата не пройдёт раньше.',
+      'Оплатите тариф: пока оплата не пройдёт, новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. 25 октября 2026 тариф закончится, если оплата не пройдёт раньше.',
     )
     // No charge is coming to that card: the sentence about the coming charges is not said.
     expect(plain(alert.textContent)).not.toMatch(/Карту|замените/)
@@ -1764,7 +1787,7 @@ describe('a tariff whose renewal charge failed', () => {
 
     const alert = await screen.findByRole('alert')
     expect(plain(alert.textContent)).toContain(
-      'Оплата сейчас недоступна: пока оплата не пройдёт, новые задачи не принимаются.',
+      'Оплата сейчас недоступна: пока оплата не пройдёт, новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета.',
     )
     expect(plain(alert.textContent)).not.toContain('закончится')
     expect(screen.queryByRole('button', { name: 'Оплатить сейчас' })).toBeNull()
@@ -1804,16 +1827,17 @@ describe('the «Тарифы» page of a customer whose tariff is over', () => {
       .closest('.MuiChip-root')
     expect(chip?.querySelector('svg')).not.toBeNull()
     expect(plain(block.textContent)).toContain(
-      'Новые задачи сейчас не принимаются. 10 кредитов из пакета, сайты и история правок на месте.',
+      'Новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. 10 кредитов из пакета, сайты и история правок на месте.',
     )
     const choose = within(block).getByRole('link', { name: 'Выбрать тариф' })
     expect(choose).toHaveAttribute('href', '#plans')
     expect(document.getElementById('plans')).toContainElement(
       screen.getByRole('heading', { level: 2, name: 'Выберите тариф' }),
     )
-    expect(pageText()).toContain('Выберите тариф, чтобы снова ставить задачи.')
+    expect(pageText()).toContain(
+      'У вас 10 кредитов из пакета. Когда кредиты закончатся, понадобится тариф.',
+    )
     // The instruction is given once in a sentence: by the line under the heading of the page.
-    expect(pageText().match(/Выберите тариф, чтобы/g)).toHaveLength(1)
     expect(pageText()).not.toContain('чтобы продолжить')
     // A tariff is chosen as by anybody without one.
     expect(
@@ -1993,7 +2017,7 @@ describe('the «Тарифы» page of a shop that takes one-time payments only'
 
     const alert = await screen.findByRole('alert')
     expect(plain(alert.textContent)).toContain(
-      'Оплатите тариф: пока оплата не пройдёт, новые задачи не принимаются. 25 октября 2026 тариф закончится, если оплата не пройдёт раньше.',
+      'Оплатите тариф: пока оплата не пройдёт, новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. 25 октября 2026 тариф закончится, если оплата не пройдёт раньше.',
     )
     expect(plain(alert.textContent)).not.toContain('Карту для следующих списаний')
     const block = await tariffBlock()
@@ -2186,7 +2210,8 @@ describe('two kinds of dialogs opened on one page', () => {
 describe('the gift of the registration on «Тарифы»', () => {
   const A1 =
     'У вас 35 подарочных кредитов — их хватит на семь небольших правок или на две-три задачи побольше. Когда кредиты закончатся, понадобится тариф.'
-  const offTariff = 'новые задачи принимаются, только пока есть подарочные кредиты'
+  const offTariff =
+    'новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета'
   const noTariff = (gift: number, granted = gift > 0, patch: Partial<BillingOverview> = {}) =>
     getOverview.mockResolvedValue(
       overviewOf({ credits: creditBalances(0, 0, gift, granted), ...patch }),
@@ -2229,10 +2254,11 @@ describe('the gift of the registration on «Тарифы»', () => {
       20,
       'У вас 20 подарочных кредитов — их хватит на четыре небольшие правки или на одну-две задачи побольше. Когда кредиты закончатся, понадобится тариф.',
     ],
+    // One credit starts a task since 10.11.2026 (КР5–КР8): three gift credits carry one.
     [
-      'a gift that starts no task',
+      'a gift of a few credits',
       3,
-      'Осталось 3 подарочных кредита, а на новую задачу нужно не меньше 5. Выберите тариф — подарочные кредиты сохранятся и прибавятся к кредитам тарифа.',
+      'У вас 3 подарочных кредита. Когда кредиты закончатся, понадобится тариф.',
     ],
   ])('counts what is left of %s', async (_case, gift, text) => {
     noTariff(gift)
@@ -2325,7 +2351,7 @@ describe('the gift of the registration on «Тарифы»', () => {
 
     const dialog = await screen.findByRole('dialog', { name: 'Отключить автопродление?' })
     expect(dialogText()).toContain(
-      `С 18 октября новые задачи будут приниматься, только пока есть подарочные кредиты. 100 кредитов из пакета, сайты и история правок сохранятся.`,
+      `С 18 октября новые задачи будут приниматься, только пока есть подарочные кредиты или кредиты из пакета. 100 кредитов из пакета, сайты и история правок сохранятся.`,
     )
     expect(dialogText()).not.toContain('не будут приниматься')
 
@@ -2338,13 +2364,13 @@ describe('the gift of the registration on «Тарифы»', () => {
   })
 
   it('keeps the old words where the gift cannot start a task', async () => {
-    onTariff({ autoRenewal: false, paymentMethod: null }, { gift: 4 })
+    onTariff({ autoRenewal: false, paymentMethod: null }, { gift: 0 })
     showPlans()
 
     expect(plain((await tariffBlock()).textContent)).toContain(
       'После этого новые задачи не принимаются, пока вы снова не выберете тариф.',
     )
-    expect(row('Кредиты')).toBe('Осталось 604: 600 по тарифу и 4 подарочных')
+    expect(row('Кредиты')).toBe('Осталось 600 по тарифу')
   })
 
   it('shows the gift credits of an overdue tariff as left, and the rest as coming with the payment', async () => {
@@ -2359,7 +2385,7 @@ describe('the gift of the registration on «Тарифы»', () => {
       `Оплатите тариф: пока оплата не пройдёт, ${offTariff}. 25 октября 2026 тариф закончится, если оплата не пройдёт раньше.`,
     )
     expect(row('Кредиты')).toBe(
-      'Осталось 35 подарочных. После оплаты — новые кредиты по тарифу и 100 из пакета',
+      'Осталось 35 подарочных и 100 из пакета. Кредиты по тарифу начислим после оплаты',
     )
     // The credits of the period that ended are still not the customer's.
     expect(pageText()).not.toMatch(/600 по тарифу/)
@@ -2380,7 +2406,7 @@ describe('the gift of the registration on «Тарифы»', () => {
 
     const block = await tariffBlock()
     expect(plain(block.textContent)).toContain(
-      'Новые задачи принимаются, только пока есть подарочные кредиты. 100 кредитов из пакета, сайты и история правок на месте.',
+      'Новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. 100 кредитов из пакета, сайты и история правок на месте.',
     )
     expect(await lead()).toBe(A1)
     // The page does not say both that tasks are taken and that they are not.
@@ -2456,29 +2482,28 @@ describe('what stands in the way of a new task on «Тарифы»', () => {
     expect(screen.getAllByRole('button', { name: 'Купить пакет' })).toHaveLength(1)
   })
 
-  it('says «Закончились» in the row of the credits when the few that are left start no task', async () => {
+  it('takes a task on the few credits that are left: one credit starts it (КР5–КР8)', async () => {
     onTariff(creditBalances(3, 0))
     showPlans()
 
-    expect(await noticeOf()).toMatch(
-      /^Лимиты закончились: осталось 3 кредита, а на новую задачу нужно не меньше 5\. /,
-    )
-    expect(row('Кредиты')).toBe('Закончились')
+    expect(await screen.findByText(/Осталось 3 по тарифу/)).toBeInTheDocument()
+    expect(await noticeOf()).toBeNull()
+    expect(row('Кредиты')).toBe('Осталось 3 по тарифу')
   })
 
   it('keeps the credits in the row while they are set aside for tasks in work', async () => {
     onTariff({
-      tariff: { balance: 47, held: 45, available: 2 },
+      tariff: { balance: 45, held: 45, available: 0 },
       gift: { balance: 0, held: 0, available: 0, granted: false },
       pack: { balance: 0, held: 0, available: 0 },
-      totalAvailable: 2,
+      totalAvailable: 0,
     })
     showPlans()
 
     expect(await noticeOf()).toBe(
       'Кредиты заняты задачами в работе: под них отложено 45. Когда задачи закончатся, спишем только то, что ушло на работу, остальное вернётся — и можно будет поставить новую. Чтобы не ждать, купите пакет — 100 кредитов за 1 490 ₽.',
     )
-    expect(row('Кредиты')).toBe('Осталось 2 по тарифу')
+    expect(row('Кредиты')).toBe('Отложено под задачи в работе: 45')
     // Waiting is the other way out: no other tariff is spoken of.
     expect(pageText()).not.toContain('Новый тариф начнёт действовать')
   })
@@ -2520,13 +2545,6 @@ describe('what stands in the way of a new task on «Тарифы»', () => {
       'Кредиты по тарифу на сегодня закончились: потрачено 100 из 100. Завтра снова можно будет потратить до 100 кредитов. Чтобы продолжить сегодня, купите пакет — 100 кредитов за 1 490 ₽. Кредиты из пакета не сгорают и дневным лимитом не ограничены.',
     )
     first.unmount()
-
-    // Half the 600 credits of «Бизнес» a month.
-    onTariff(creditBalances(765, 0), {}, { unpaidWork: 300 })
-    showPlans()
-    expect(await noticeOf()).toBe(
-      'В этом периоде слишком много задач остановилось без результата, поэтому новые задачи временно не принимаются. Кредиты за них не списаны. Напишите нам — разберёмся, в чём дело.',
-    )
   })
 
   it('names no payment while payments are off', async () => {
@@ -2548,24 +2566,15 @@ describe('what stands in the way of a new task on «Тарифы»', () => {
 
   it('leaves the unpaid tariff to the block of its failed charge, and adds what else refuses', async () => {
     // Not paid, and nothing of the gift: the block of the failed charge says it all.
-    onTariff(creditBalances(765, 100), { status: 'past_due' })
-    const first = showPlansOnce()
-    expect(await noticeOf()).toBeNull()
-    expect(pageText()).toContain('пока оплата не пройдёт, новые задачи не принимаются.')
-    first.unmount()
-
-    // The gift is left, and too much work ended without a charge: only the payment helps.
-    onTariff(creditBalances(765, 100, 15), { status: 'past_due' }, { unpaidWork: 70 })
+    onTariff(creditBalances(765, 0), { status: 'past_due' })
     showPlans()
-    expect(await noticeOf()).toBe(
-      'Пробные задачи закончились: несколько задач остановились без результата, и без тарифа мы больше не можем их принимать. Оплатите тариф, чтобы продолжить; оставшиеся 15 подарочных кредитов сохранятся.',
-    )
+    expect(await noticeOf()).toBeNull()
     expect(pageText()).toContain('пока оплата не пройдёт, новые задачи не принимаются.')
   })
 
   it('does not say of an unpaid tariff that no task is taken beside a refusal of the moment', async () => {
     const onGift =
-      'Оплатите тариф: пока оплата не пройдёт, новые задачи принимаются, только пока есть подарочные кредиты.'
+      'Оплатите тариф: пока оплата не пройдёт, новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета.'
     // The gift carries a task whatever the day took: an unpaid tariff has no day.
     onTariff(creditBalances(765, 100, 20), { status: 'past_due' }, { today: { charged: 500 } })
     const first = showPlansOnce()
@@ -2574,7 +2583,7 @@ describe('what stands in the way of a new task on «Тарифы»', () => {
     expect(pageText()).toContain(onGift)
     expect(pageText()).not.toContain('новые задачи не принимаются')
     expect(row('Кредиты')).toBe(
-      'Осталось 20 подарочных. После оплаты — новые кредиты по тарифу и 100 из пакета',
+      'Осталось 20 подарочных и 100 из пакета. Кредиты по тарифу начислим после оплаты',
     )
     first.unmount()
 
@@ -2583,8 +2592,8 @@ describe('what stands in the way of a new task on «Тарифы»', () => {
       {
         tariff: { balance: 765, held: 0, available: 765 },
         gift: { balance: 35, held: 35, available: 0, granted: true },
-        pack: { balance: 100, held: 0, available: 100 },
-        totalAvailable: 865,
+        pack: { balance: 0, held: 0, available: 0 },
+        totalAvailable: 765,
       },
       { status: 'past_due' },
     )
@@ -2596,7 +2605,7 @@ describe('what stands in the way of a new task on «Тарифы»', () => {
     expect(pageText()).not.toContain('новые задачи не принимаются')
     // The row agrees with both: the gift waits for the task in work, it is not out of reach.
     expect(row('Кредиты')).toBe(
-      'Отложено под задачу в работе: 35 подарочных. После оплаты — новые кредиты по тарифу и 100 из пакета',
+      'Отложено под задачу в работе: 35 подарочных. Кредиты по тарифу начислим после оплаты',
     )
     expect(pageText()).not.toContain('Недоступны')
   })
@@ -2607,7 +2616,7 @@ describe('what stands in the way of a new task on «Тарифы»', () => {
 
     expect(await noticeOf()).toBeNull()
     expect(pageText()).toContain(
-      'пока оплата не пройдёт, новые задачи принимаются, только пока есть подарочные кредиты.',
+      'пока оплата не пройдёт, новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета.',
     )
   })
 
@@ -2629,7 +2638,7 @@ describe('what stands in the way of a new task on «Тарифы»', () => {
       )
     }
 
-    it('tells of no day without a tariff, and of the trial that is over', async () => {
+    it('tells of no day without a tariff', async () => {
       getOverview.mockResolvedValue(
         overviewOf({ credits: creditBalances(0, 0, 20) }, { today: { charged: 500 } }),
       )
@@ -2638,14 +2647,6 @@ describe('what stands in the way of a new task on «Тарифы»', () => {
         'У вас 20 подарочных кредитов — их хватит на четыре небольшие правки или на одну-две задачи побольше. Когда кредиты закончатся, понадобится тариф.',
       )
       first.unmount()
-
-      getOverview.mockResolvedValue(
-        overviewOf({ credits: creditBalances(0, 0, 15) }, { unpaidWork: 70 }),
-      )
-      showPlans()
-      expect(await lead()).toBe(
-        'Пробные задачи закончились: несколько задач остановились без результата, и без тарифа мы больше не можем их принимать. Выберите тариф, чтобы продолжить; оставшиеся 15 подарочных кредитов сохранятся.',
-      )
     })
 
     it('says what the customer has before the pause of the platform', async () => {

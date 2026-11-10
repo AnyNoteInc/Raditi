@@ -1,4 +1,4 @@
-import { Money, taskCharge, toCredits } from '@repo/domain'
+import { Money, taskCharge } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
 
 import type { CreditConversion } from './billing-types'
@@ -54,8 +54,8 @@ describe('what a credit is', () => {
 
   it('makes the three promises of the charge', () => {
     expect(creditPromises()).toEqual([
-      'За выполненную задачу списывается не меньше 5 кредитов, даже если работы было совсем мало.',
-      'Больше 45 кредитов без вашего согласия задача не потратит: если она окажется больше, мы спросим, продолжать ли.',
+      'Кредиты списываются после каждого ответа агента — ровно столько, сколько ушло на работу, с округлением вверх до целого кредита.',
+      'Задача начинается, если у вас есть хотя бы один кредит. Если работа обойдётся дороже остатка, разницу спишем из следующего начисления.',
       'Каждое списание видно в «Использовании»: задача, сайт, дата и сколько кредитов.',
     ])
   })
@@ -115,7 +115,7 @@ describe('«Точный расчёт»', () => {
       text: 'Объём работы считается в токенах — так называют единицы текста, которыми оперирует модель: один токен — примерно слог или короткое слово. За 1 млн токенов нового текста — 38,75 кредита, повторно прочитанного — 3,88, написанного — 193,75.',
       table: null,
       rounding:
-        'Итог по задаче округляется до целого кредита; за выполненную задачу списывается не меньше 5. Таблица округлена до сотых, поэтому при пересчёте вручную итог может отличаться на один кредит; точный расчёт — в «Использовании».',
+        'Итог каждого ответа агента округляется вверх до целого кредита. Таблица округлена до сотых, поэтому при пересчёте вручную итог может отличаться на один кредит; точный расчёт — в «Использовании».',
     })
   })
 
@@ -198,26 +198,26 @@ describe('«Точный расчёт»', () => {
         .plus(millions(inputTokens).mul('0.8').mul(table.cacheRead))
         .plus(millions(outputTokens).mul(table.output))
     }
-    const charged = (inputTokens: number, outputTokens: number, reserved = 45) =>
-      taskCharge({ used: byHand(inputTokens, outputTokens), reserved: toCredits(reserved) }).credits
+    const charged = (inputTokens: number, outputTokens: number) =>
+      taskCharge({ used: byHand(inputTokens, outputTokens) }).credits
 
     it.each([
-      ['a small edit: 250 thousand tokens in, 5 thousand out', 250_000, 5_000, '3.68', 5],
+      // The work rounded up: no minimum and no cap of the reserve since 10.11.2026.
+      ['a small edit: 250 thousand tokens in, 5 thousand out', 250_000, 5_000, '3.68', 4],
       ['a new block: 1.2 million in, 20 thousand out', 1_200_000, 20_000, '16.90', 17],
-      ['a big task: 2 million in, 40 thousand out', 2_000_000, 40_000, '29.46', 29],
-      ['the same block after one clarification', 1_500_000, 25_000, '21.12', 21],
-      ['three small edits in one message', 750_000, 15_000, '11.05', 11],
+      ['a big task: 2 million in, 40 thousand out', 2_000_000, 40_000, '29.46', 30],
+      ['the same block after one clarification', 1_500_000, 25_000, '21.12', 22],
+      ['three small edits in one message', 750_000, 15_000, '11.05', 12],
     ])('gives the charge of %s', (_case, input, output, credits, charge) => {
       expect(byHand(input, output).toFixed(2)).toBe(credits)
       expect(charged(input, output)).toBe(charge)
     })
 
-    it('gives the minimum for no billable work, and never more than was set aside', () => {
-      expect(charged(0, 0)).toBe(5)
-      // About 49.7 credits of work against a reserve of 45, and of 12.
-      expect(byHand(3_400_000, 66_000).toNumber()).toBeGreaterThan(45)
-      expect(charged(3_400_000, 66_000)).toBe(45)
-      expect(charged(3_400_000, 66_000, 12)).toBe(12)
+    it('charges nothing for no work, and the whole work however much it is', () => {
+      expect(charged(0, 0)).toBe(0)
+      // About 49.7 credits of work: all of it is charged, whatever was set aside.
+      expect(byHand(3_400_000, 66_000).toNumber()).toBeGreaterThan(49)
+      expect(charged(3_400_000, 66_000)).toBe(50)
     })
   })
 })

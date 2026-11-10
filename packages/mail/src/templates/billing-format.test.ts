@@ -160,15 +160,16 @@ describe('giftIsEnoughFor', () => {
 
 describe('giftTakesTasks', () => {
   it('follows the number of credits a new task needs to start', () => {
-    expect(minStartCredits).toBe(5)
+    // One credit starts a task since 10.11.2026 (КР5–КР8).
+    expect(minStartCredits).toBe(1)
     expect(giftTakesTasks(minStartCredits)).toBe(true)
     expect(giftTakesTasks(minStartCredits - 1)).toBe(false)
   })
 
   it.each([
     [0, false],
-    [1, false],
-    [4, false],
+    [1, true],
+    [4, true],
     [5, true],
     [35, true],
     [300, true],
@@ -178,13 +179,16 @@ describe('giftTakesTasks', () => {
 })
 
 describe('tasksWithoutTariff', () => {
-  it.each([5, 35])('says that tasks are taken on the gift while %i credits are left', (credits) => {
-    expect(tasksWithoutTariff(credits, 'не принимаются')).toBe(
-      'принимаются, только пока есть подарочные кредиты',
-    )
-  })
+  it.each([1, 5, 35])(
+    'says that tasks are taken on the gift while %i credits are left',
+    (credits) => {
+      expect(tasksWithoutTariff(credits, 'не принимаются')).toBe(
+        'принимаются, только пока есть подарочные кредиты или кредиты из пакета',
+      )
+    },
+  )
 
-  it.each([0, 4])('keeps the refusal of the letter while %i credits are left', (credits) => {
+  it.each([0])('keeps the refusal of the letter while %i credits are left', (credits) => {
     expect(tasksWithoutTariff(credits, 'не принимаются')).toBe('не принимаются')
     expect(tasksWithoutTariff(credits, 'сейчас не принимаются')).toBe('сейчас не принимаются')
   })

@@ -69,7 +69,7 @@ describe('turn credential grant', () => {
     }
   })
 
-  it.each(['0.00', '750.01', '-1.00', 'NaN', '1e2', '285', '0.001'])(
+  it.each(['0.00', '100000000.00', '-1.00', 'NaN', '1e2', '285', '0.001'])(
     'rejects invalid key budget %s',
     (budgetRub) => {
       expect(turnCredentialGrantSchema.safeParse({ ...grant(), budgetRub }).success).toBe(false)
@@ -84,7 +84,7 @@ describe('turn credential grant', () => {
     expect(
       turnCredentialGrantSchema.safeParse({
         ...grant(),
-        budgetRub: '750.00',
+        budgetRub: '99999999.00',
         boundSource: 'fd00::1',
       }).success,
     ).toBe(true)

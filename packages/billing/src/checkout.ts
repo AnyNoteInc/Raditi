@@ -6,7 +6,7 @@ import {
   billingNoLiveSubscription,
   billingNothingToChange,
   billingOrderNotFound,
-  billingPackNeedsSubscription,
+  packPriceFor,
   billingPaymentDeclined,
   billingPaymentInProgress,
   billingPaymentsNotConfigured,
@@ -215,10 +215,11 @@ export async function startCheckout(
  * the ЮKassa page to send the customer to. The credits are granted when the payment is settled,
  * to the account of purchased credits, and do not expire with the period.
  *
- * A pack is sold on top of a tariff that takes tasks (default «з» of
- * docs/plan/37-billing-plan.md): refused with BILLING_PACK_NEEDS_SUBSCRIPTION for a user
- * without a workspace or a subscription, and while the tariff is overdue or over. A tariff that
- * ends after this check does not undo the order: a pack that is paid is granted all the same.
+ * A pack is sold to everyone (owner's decision of 10.11.2026, docs/spec.md §20, «Только
+ * кредиты», КР9): at its price on top of a tariff that takes tasks, at twice it without one —
+ * no subscription, an overdue or an ended one (`packPriceFor`). The order keeps the amount it
+ * was started with: a tariff that starts or ends after this does not change it. A user without
+ * a workspace gets one here, with the gift of the registration, as `startCheckout` does.
  * BILLING_PLAN_NOT_FOUND: no pack is on sale. BILLING_PAYMENT_DECLINED and
  * BILLING_PAYMENTS_NOT_CONFIGURED as in `startCheckout`.
  *
@@ -243,26 +244,30 @@ export async function startPackCheckout(
     throw billingPlanNotFound()
   }
 
-  // No workspace is made here: a user without one has no tariff either.
-  const workspace = await findPersonalWorkspace(prisma, { userId, appEnv })
-  if (workspace === null) throw billingPackNeedsSubscription()
-  const live = await prisma.subscription.findFirst({
-    where: { workspaceId: workspace.id, status: { in: [...liveSubscriptionStatuses] } },
-    select: { status: true },
-  })
-  if (!subscriptionAllowsTasks(live?.status ?? null)) throw billingPackNeedsSubscription()
-
-  const order = await prisma.order.create({
-    data: {
-      workspaceId: workspace.id,
-      userId,
-      kind: 'pack',
-      planId: pack.id,
-      amount: pack.price,
-      status: 'pending',
-      idempotenceKey: randomUUID(),
-      savePaymentMethod: false,
-    },
+  const found = await findPersonalWorkspace(prisma, { userId, appEnv })
+  const order = await prisma.$transaction(async (tx) => {
+    // A pack may be the first thing a user buys: the workspace and its gift are made here then.
+    const workspace = found ?? (await ensurePersonalWorkspaceWithGift(tx, { userId, appEnv }))
+    const live = await tx.subscription.findFirst({
+      where: { workspaceId: workspace.id, status: { in: [...liveSubscriptionStatuses] } },
+      select: { status: true },
+    })
+    const amount = packPriceFor({
+      price: pack.price.toFixed(2),
+      tariffTakesTasks: subscriptionAllowsTasks(live?.status ?? null),
+    })
+    return tx.order.create({
+      data: {
+        workspaceId: workspace.id,
+        userId,
+        kind: 'pack',
+        planId: pack.id,
+        amount,
+        status: 'pending',
+        idempotenceKey: randomUUID(),
+        savePaymentMethod: false,
+      },
+    })
   })
   return requestPayment(deps, order, packDescription(pack.name))
 }

@@ -481,6 +481,17 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     await admitted(k.input, new PostgresGatewayStore(db, { maxCallsPerKey: 5 }))
   })
 
+  // КР10: without a limit given only the money budget of the key — the credits of the customer —
+  // bounds its calls, however many and however fast.
+  it('admits a key without a limit of its calls past the pace and the ceiling of before', async () => {
+    const f = await fixture({ budget: '100' })
+    const k = await f.key()
+    const unbounded = new PostgresGatewayStore(db)
+    for (let call = 0; call < 25; call++)
+      await unbounded.finish((await admitted(k.input, unbounded)).id, actual())
+    expect(await db.llmCall.count({ where: { keyId: k.row.id } })).toBe(25)
+  })
+
   it('tells the gateway when the first call of a key meets a window snapshot grown old', async () => {
     const f = await fixture()
     const seen = (minutesAgo: number | null) =>

@@ -1256,7 +1256,7 @@ model LlmKey {
   modelId               String    @map("model_id") @db.Uuid
   subscriptionAccountId String    @map("subscription_account_id") @db.Uuid
   reasoningEffort       String?   @map("reasoning_effort") @db.VarChar(16)
-  /// Positive budget up to 750 RUB; fractional-ruble remainder budgets are valid.
+  /// Positive budget: what the customer can pay (spec §20, «Только кредиты», КР6); fractional-ruble remainder budgets are valid.
   budgetRub             Decimal   @map("budget_rub") @db.Decimal(18, 10)
   /// Runner address; NULL for the local executor.
   boundSource           String?   @map("bound_source") @db.Inet
@@ -1510,6 +1510,10 @@ model BillingAccount {
   unit        BillingUnit
   balance     Decimal     @default(0) @db.Decimal(14, 2)
   held        Decimal     @default(0) @db.Decimal(14, 2)
+  /// What the workspace owes: what passes were charged above the credits it had. Only on the
+  /// pack account (billing_accounts_debt_check); the next grant pays it first (spec §20,
+  /// «Только кредиты», КР7).
+  debt        Decimal     @default(0) @db.Decimal(14, 2)
   createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
 

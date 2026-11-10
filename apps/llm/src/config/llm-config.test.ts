@@ -24,8 +24,9 @@ describe('subscription gateway configuration', () => {
       port: 8084,
       listenHost: '127.0.0.1',
       maxRequestsPerKey: 2,
-      maxCallsPerKey30s: 20,
-      maxCallsPerKey: 600,
+      // No limit of the calls of a key unless one is given (КР10).
+      maxCallsPerKey30s: null,
+      maxCallsPerKey: null,
       egress: { proxyUrl: null, upstreamCaFile: null, backendOrigins: new Map() },
       clients: [
         { address: '127.0.0.1', prefix: 32, family: 'ipv4' },
@@ -141,6 +142,18 @@ describe('subscription gateway configuration', () => {
         'production',
       ),
     ).toMatchObject({ maxCallsPerKey30s: 40, maxCallsPerKey: 300 })
+  })
+
+  it('has no limit of the calls of one turn key when the variables are empty or absent (КР10)', () => {
+    for (const env of [
+      { ...complete, LLM_MAX_CALLS_PER_KEY_30S: '', LLM_MAX_CALLS_PER_KEY: '' },
+      { ...complete },
+    ]) {
+      expect(llmConfigFromEnv(env, 'production')).toMatchObject({
+        maxCallsPerKey30s: null,
+        maxCallsPerKey: null,
+      })
+    }
   })
 
   it('allows only loopback HTTPS fakes outside production', () => {

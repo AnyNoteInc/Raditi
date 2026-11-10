@@ -138,7 +138,7 @@ describe('usage summary DTO', () => {
     spendable: 176,
     spendableNow: 60,
     setAside: 45,
-    minToStart: 5,
+    minToStart: 1,
     today,
     newTask: TAKEN,
   }
@@ -151,7 +151,7 @@ describe('usage summary DTO', () => {
     spendableNow: 0,
     setAside: 0,
     today: null,
-    newTask: { allowed: false, reason: 'ended' },
+    newTask: { allowed: false, reason: 'gift_spent' },
   }
 
   it('accepts a tariff with its period and «no tariff» with the purchased credits', () => {
@@ -371,7 +371,7 @@ describe('promisedUsage', () => {
     pack: { left: 0, held: 0 },
     history: noHistory,
     setAside: 0,
-    minToStart: 5,
+    minToStart: 1,
     today: null,
   }
 
@@ -507,15 +507,16 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
   ) => db.task.create({ data: { workspaceId, siteId, modelClass: 'standard', ...data } })
 
   /**
-   * Sets the step of an attempt aside — 45 credits, or what is free —, as the queue will;
-   * `retry`: «Попробовать ещё» after the chain was given back.
+   * Sets the step of an attempt aside — 45 credits, or what is free —, as the queue did before
+   * 10.11.2026 (`placeReserveByStep`): such rows stand in the database, and the meter has to
+   * count reserves of any size; `retry`: «Попробовать ещё» after the chain was given back.
    */
   const place = (
     workspaceId: string,
     taskId: string,
     { now = NOW, attempt = 1, retry }: { now?: Date; attempt?: number; retry?: true } = {},
   ) =>
-    fixtures.reserve({
+    fixtures.reserveByStep({
       workspaceId,
       taskId,
       attempt,
@@ -683,7 +684,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       spendable: 300,
       spendableNow: 50,
       setAside: 0,
-      minToStart: 5,
+      minToStart: 1,
       today: dayOf(50, 0, 0, 300),
       newTask: TAKEN,
     })
@@ -696,7 +697,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
     const summary = await getUsageSummary(db, { workspaceId, now: NOW })
 
     expect(summary.newTask).toEqual({ allowed: false, reason: 'rate_missing' })
-    expect(summary).toMatchObject({ spendable: 300, setAside: 0, minToStart: 5, totalLeft: 300 })
+    expect(summary).toMatchObject({ spendable: 300, setAside: 0, minToStart: 1, totalLeft: 300 })
     expect(summary.tariff?.credits).toEqual(scale(FULL))
   })
 
@@ -767,8 +768,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
         createdAt: minutesAfter(5),
       })
       await place(workspaceId, done.id, { now: minutesAfter(0) })
-      // A small edit: 22.09 RUB of accounting cost is 3.68 credits, charged the minimum.
-      const smallEdit = await doneFor(done.id, '22.09', { now: minutesAfter(1) })
+      // A small edit: 30 RUB of accounting cost is 5 credits.
+      const smallEdit = await doneFor(done.id, '30', { now: minutesAfter(1) })
       expect(smallEdit.credits).toBe(5)
       await place(workspaceId, failed.id, { now: minutesAfter(1) })
       await release(failed.id, { now: minutesAfter(2) })
@@ -1636,12 +1637,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
         pack: { left: 100, held: 0 },
         totalLeft: 150,
         history: noHistory,
-        // Purchased credits wait for a tariff: a task may take the gift alone.
-        spendable: 50,
-        spendableNow: 50,
+        // Gift and purchased credits are one kind: a task may take both.
+        spendable: 150,
+        spendableNow: 150,
         setAside: 0,
-        minToStart: 5,
-        // Without a tariff there is no day: the gift is the bound.
+        minToStart: 1,
+        // Without a tariff there is no day: the gift and the pack are the bound.
         today: null,
         newTask: TAKEN,
       })
@@ -1667,7 +1668,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
         newTask: TAKEN,
       })
 
-      await doneFor(first.id, '22.09', { now: minutesAfter(10) })
+      // 30 RUB: 5 credits.
+      await doneFor(first.id, '30', { now: minutesAfter(10) })
       const failed = await task(workspaceId, blog.id, { status: 'failed' })
       await place(workspaceId, failed.id, { now: minutesAfter(11) })
       await release(failed.id, { now: minutesAfter(12) })
@@ -1716,9 +1718,9 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
           gift: { left: 0, held: 0, granted: false },
           pack: { left: 100, held: 0 },
           totalLeft: 100,
-          spendable: 0,
-          // Credits of a pack wait for a tariff.
-          newTask: { allowed: false, reason: 'ended' },
+          spendable: 100,
+          // Credits of a pack carry tasks without a tariff.
+          newTask: { allowed: true, reason: null },
         })
         // No period, no lower bound: what the tariff was charged for is still there.
         expect(summary.history.items).toMatchObject([
@@ -1742,7 +1744,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
         spendable: 0,
         spendableNow: 0,
         setAside: 0,
-        minToStart: 5,
+        minToStart: 1,
         today: null,
         newTask: { allowed: false, reason: 'gift_spent' },
       })

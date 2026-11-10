@@ -1,5 +1,4 @@
 import { badRequest } from '../errors.ts'
-import type { ModelClass } from '../llm/model-class.ts'
 
 // The customer's side of the credits model in numbers (docs/plan/37-billing-plan.md, «Числа»):
 // what a task costs at least, on average and typically, how much one attempt may set aside, how
@@ -16,15 +15,21 @@ import type { ModelClass } from '../llm/model-class.ts'
 // take it by its own path, `@repo/domain/billing/credit-numbers`, without the rest of the
 // package. `credits.ts` exports the same names for everything else.
 
-/** A done task is charged at least this many credits, however little work it took. */
-export const minTaskChargeCredits = 5
+/**
+ * A new task is taken while at least this many credits can be spent on it — one: nothing but
+ * credits bounds a task, and a pass is charged what its work took, rounded up, with no minimum
+ * (owner's decision of 10.11.2026, docs/spec.md §20, «Только кредиты», КР5–КР8). A pass may
+ * spend more than the balance; what it could not pay is the workspace's debt, which the next
+ * grant pays first.
+ */
+export const minStartCredits = 1
 
 /**
- * A new task is taken only while this many credits can be spent on it: the minimum charge, so a
- * done task can always be charged it — and the number the customer already knows as the price
- * of a small edit.
+ * The reserve of an attempt: one credit. It says that a task is in work — the chain of its
+ * attempts and the day are told by reserve rows —, not how much it may spend: a pass spends what
+ * the customer has, and its charge is not bounded by the reserve.
  */
-export const minStartCredits = minTaskChargeCredits
+export const attemptReserveCredits = 1
 
 /**
  * What a done task is charged on average, rounded up to a whole credit: 10.76 over the mix of
@@ -48,23 +53,18 @@ const typical = (from: number, to: number): TypicalCredits => Object.freeze({ fr
  * - `large`: «большая задача: несколько страниц, новая форма, сложная логика».
  */
 export const typicalTaskCredits = Object.freeze({
-  small: typical(minTaskChargeCredits, minTaskChargeCredits),
+  small: typical(5, 5),
   block: typical(15, 25),
   large: typical(25, 40),
 } as const satisfies Record<string, TypicalCredits>)
 export type TypicalTask = keyof typeof typicalTaskCredits
 
 /**
- * The step of an attempt: the most one attempt of a task sets aside, by the class of its model.
- * A task that needs more asks the customer whether to go on. At the provisional credit rate of
- * 6.00 RUB these are 120, 270 and 720 RUB of accounting cost — inside the ceilings of an
- * attempt, `quotaAttemptCeilingsRub`.
+ * How many times the price of the pack a customer pays whose tariff does not take tasks — none,
+ * overdue or ended (owner's decision of 10.11.2026, docs/spec.md §20, «Только кредиты», КР9):
+ * the pack is sold to them too, at twice the price of the pack on top of a tariff.
  */
-export const attemptStepCredits = Object.freeze({
-  light: 20,
-  standard: 45,
-  heavy: 120,
-} as const satisfies Record<ModelClass, number>)
+export const packWithoutTariffPriceFactor = 2
 
 /**
  * The gift of the registration: credits a user is given once, to try the service before a

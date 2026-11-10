@@ -165,7 +165,7 @@ describe('the credits of a tariff', () => {
 
   it('says under the meter what becomes of the credits that are set aside', () => {
     expect(heldNote()).toBe(
-      'Отложенное спишем по факту: сколько уйдёт на работу, но не меньше 5 кредитов за выполненную задачу. Остальное вернётся.',
+      'Отложенное спишем по факту — сколько уйдёт на работу. Остальное вернётся.',
     )
   })
 
@@ -415,15 +415,15 @@ describe('the credits of a pack', () => {
     )
   })
 
-  it('ties them to the payment of a tariff that takes no tasks', () => {
-    // Whatever the tariff account holds: nothing is spent until the tariff is paid for.
+  it('spends them while the tariff takes no tasks, after the gift', () => {
+    // Whatever the tariff account holds: its credits wait for the payment, the pack does not.
     for (const tariffLeft of [0, 45]) {
       expect(packNote({ left: 7, held: 0 }, { tariff: tariffLeft, gift: 0 }, false)).toBe(
-        'Кредиты из пакета не сгорают. Станут доступны после оплаты тарифа.',
+        'Кредиты из пакета не сгорают. Сейчас задачи тратят их, пока тариф не оплачен.',
       )
     }
     expect(packNote({ left: 7, held: 1 }, { tariff: 0, gift: 0 }, false)).toBe(
-      'Кредиты из пакета не сгорают. Станут доступны после оплаты тарифа. Ещё 1 отложено под задачи в работе.',
+      'Кредиты из пакета не сгорают. Сейчас задачи тратят их, пока тариф не оплачен. Ещё 1 отложено под задачи в работе.',
     )
     expect(packNote({ left: 0, held: 0 }, { tariff: 45, gift: 0 }, false)).toBe(
       'Кредиты из пакета не сгорают и тратятся последними — после кредитов по тарифу и подарочных.',
@@ -454,8 +454,8 @@ describe('the credits of a pack', () => {
   })
 
   // The sentence after the count speaks of the credits, so it agrees with their number too.
-  const kept = 'Они не сгорают и снова будут доступны, когда вы выберете тариф.'
-  const keptOne = 'Он не сгорает и снова будет доступен, когда вы выберете тариф.'
+  const kept = 'Они не сгорают и тратятся на задачи после подарочных.'
+  const keptOne = 'Он не сгорает и тратится на задачи после подарочных.'
 
   it.each([
     [1, `У вас 1 кредит из пакета. ${keptOne}`],
@@ -603,7 +603,7 @@ describe('the limit of the day', () => {
 
   it('says of an unpaid tariff that tasks are taken on gift credits while the server takes one', () => {
     const onGift =
-      'Пока тариф не оплачен, новые задачи принимаются, только пока есть подарочные кредиты.'
+      'Пока тариф не оплачен, новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета.'
     expect(note({ paid: false, today: null })).toBe(onGift)
     expect(note({ paid: false, tasksTaken: false, today: null })).toBe(
       'Новые задачи не принимаются, пока не оплачен тариф.',
@@ -639,9 +639,9 @@ describe('the gift credits', () => {
     expect(packNote({ left: 100, held: 0 }, { tariff: 0, gift: 0 }, true)).toBe(
       `${kept} Сейчас задачи тратят их: кредиты по тарифу закончились.`,
     )
-    // An unpaid tariff spends no pack credit, whatever the gift holds.
+    // An unpaid tariff spends the pack after the gift.
     expect(packNote({ left: 100, held: 0 }, { tariff: 0, gift: 35 }, false)).toBe(
-      `${kept} Станут доступны после оплаты тарифа.`,
+      `${kept} Начнут тратиться, когда закончатся подарочные кредиты.`,
     )
     // A customer without pack credits is told the order itself, with the gift in it.
     for (const gift of [0, 35]) {
@@ -653,7 +653,7 @@ describe('the gift credits', () => {
 
   it('tells of an unpaid tariff on which tasks are still taken, on gift credits', () => {
     expect(unpaidWhileTasksTaken()).toBe(
-      'Оплата тарифа не прошла. Пока она не пройдёт, новые задачи принимаются, только пока есть подарочные кредиты.',
+      'Оплата тарифа не прошла. Пока она не пройдёт, новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета.',
     )
   })
 
@@ -681,21 +681,21 @@ describe('the gift credits', () => {
 
   it('tells a customer without a tariff of the gift credits: they are the bound, there is no day', () => {
     const text =
-      'У вас 35 подарочных кредитов. Они не сгорают, а задачи принимаются, пока подарочные кредиты не закончатся. Здесь видно, сколько кредитов осталось и на что они ушли.'
+      'У вас 35 подарочных кредитов. Они не сгорают, а задачи принимаются, пока кредиты не закончатся. Здесь видно, сколько кредитов осталось и на что они ушли.'
     expect(block(gift(35))).toBe(text)
     // The same to a user who has no workspace yet: the gift is granted with it.
     expect(block(gift(35, { granted: false }))).toBe(text)
     expect(block(gift(21))).toBe(
-      'У вас 21 подарочный кредит. Он не сгорает, а задачи принимаются, пока подарочные кредиты не закончатся. Здесь видно, сколько кредитов осталось и на что они ушли.',
+      'У вас 21 подарочный кредит. Он не сгорает, а задачи принимаются, пока кредиты не закончатся. Здесь видно, сколько кредитов осталось и на что они ушли.',
     )
     expect(block(gift(5))).toMatch(/^У вас 5 подарочных кредитов\. /)
   })
 
-  it('says that a few gift credits start no task, and that a tariff keeps them', () => {
+  it('takes tasks on a few gift credits: one credit starts a task (КР5–КР8)', () => {
     expect(block(gift(3))).toBe(
-      'Осталось 3 подарочных кредита, а на новую задачу нужно не меньше 5. Выберите тариф — подарочные кредиты сохранятся и прибавятся к кредитам тарифа.',
+      'У вас 3 подарочных кредита. Они не сгорают, а задачи принимаются, пока кредиты не закончатся. Здесь видно, сколько кредитов осталось и на что они ушли.',
     )
-    expect(block(gift(1))).toMatch(/^Остался 1 подарочный кредит, а на новую задачу/)
+    expect(block(gift(1))).toMatch(/^У вас 1 подарочный кредит\. Он не сгорает/)
   })
 
   it('says that the gift is used up, and speaks of none where there was none', () => {
@@ -713,16 +713,13 @@ describe('the gift credits', () => {
     )
   })
 
-  it('tells of the trial that is over, by the answer of the server — never of a day', () => {
+  it('never tells of a day, however much the day took', () => {
     expect(block(gift(20), { today: { charged: 500 } })).toMatch(/^У вас 20 подарочных кредитов\. /)
-    expect(block(gift(15), { unpaidWork: 70 })).toBe(
-      'Пробные задачи закончились: несколько задач остановились без результата, и без тарифа мы больше не можем их принимать. Выберите тариф, чтобы продолжить; оставшиеся 15 подарочных кредитов сохранятся.',
-    )
   })
 
-  it('tells that credits of a pack wait for a tariff once the tariff has ended', () => {
+  it('spends credits of a pack without a tariff, as the gift', () => {
     expect(block(gift(0, { granted: false }), {}, 40)).toBe(
-      'Тариф закончился. У вас 40 кредитов из пакета: они не сгорают и снова будут доступны, когда вы выберете тариф.',
+      'У вас 40 кредитов из пакета. Они не сгорают, а задачи принимаются, пока кредиты не закончатся. Здесь видно, сколько кредитов осталось и на что они ушли.',
     )
   })
 
