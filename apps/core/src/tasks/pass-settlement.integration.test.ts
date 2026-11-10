@@ -833,6 +833,106 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
     })
   })
 
+  // The owner's decision of 10.11.2026: the limits of the model provider are out — tell the client
+  // to ask the administrator, instead of «технический сбой» that invites a press into the wall.
+  describe('a turn whose key the gateway refused for the limits of the subscription', () => {
+    const effectiveFrom = new Date('2026-01-01T00:00:00.000Z')
+
+    /** A dialog whose turn 1 called the model once and was then refused with `refusal`. */
+    async function refusedWith(refusal: string, turnNo = 1) {
+      await fixtures.creditRate({ effectiveFrom })
+      const pool = await fixtures.modelPool({ enabled: true })
+      const price = await fixtures.modelPrice(pool, { effectiveFrom })
+      const task = await dialog()
+      const call = await fixtures.modelCall({
+        taskId: task.taskId,
+        pool,
+        priceId: price.id,
+        costRub: '1.00',
+        occurredAt: NOW,
+      })
+      await db.llmKey.update({
+        where: { id: call.keyId },
+        data: { turnNo, lastRefusal: refusal, lastRefusalAt: NOW },
+      })
+      return task
+    }
+    const execFailed = (turn: number): PassEnding => ({
+      kind: 'failed',
+      turn,
+      errorCode: 'TURN_EXEC_FAILED',
+      journalReason: 'run_failed',
+    })
+    const code = async (taskId: string) =>
+      (await feed(taskId)).map(([type, payload]) => [type, (payload as { code?: string }).code])
+
+    it('tells the client the limits are out, keeps the dialog open and gives the reserve back', async () => {
+      const task = await refusedWith('subscription_limit')
+
+      expect(await settlement().settle(ref(task), execFailed(1))).toBe('moved')
+
+      expect(await status(task.taskId)).toBe('awaiting_user')
+      expect(await feed(task.taskId)).toEqual([
+        [
+          'feed.failure',
+          {
+            v: 1,
+            turn: 1,
+            code: 'agent_limits',
+            site: 'unchanged',
+            credits: 'returned',
+            next: 'awaiting_user',
+          },
+        ],
+      ])
+      expect((await holds(task.taskId)).every((hold) => hold.status === 'released')).toBe(true)
+    })
+
+    it('keeps a failure that names its own cause: the limits did not end this turn', async () => {
+      const task = await refusedWith('subscription_limit')
+
+      await settlement().settle(ref(task), {
+        kind: 'failed',
+        turn: 1,
+        errorCode: 'PUBLICATION_FORBIDDEN',
+        journalReason: 'run_failed',
+      })
+
+      expect(await code(task.taskId)).toEqual([['feed.failure', 'forbidden_change']])
+    })
+
+    it('does not take another refusal of the gateway for the limits', async () => {
+      const task = await refusedWith('transient')
+
+      await settlement().settle(ref(task), execFailed(1))
+
+      expect(await code(task.taskId)).toEqual([['feed.failure', 'technical']])
+    })
+
+    it('does not take the refusal of the key of another turn for the limits', async () => {
+      // The key of turn 3 was refused; the pass that failed is the one of turn 1.
+      const task = await refusedWith('subscription_limit', 3)
+
+      await settlement().settle(ref(task), execFailed(1))
+
+      expect(await code(task.taskId)).toEqual([['feed.failure', 'technical']])
+    })
+
+    it('ends with the same words a pass the pool refused before its turn, with no turn to ask about', async () => {
+      const task = await dialog()
+
+      await settlement().settle(ref(task), {
+        kind: 'failed',
+        turn: null,
+        errorCode: 'SUBSCRIPTION_WAIT',
+        detailReason: 'agent_limits',
+      })
+
+      expect(await status(task.taskId)).toBe('awaiting_user')
+      expect(await code(task.taskId)).toEqual([['feed.failure', 'agent_limits']])
+    })
+  })
+
   describe('of a task in the cloud browser (docs/plan/57-browser-tasks.md, Б23–Б25, Б28)', () => {
     const editUrl = 'https://example.ru/wp-admin/post.php?post=12&action=edit'
     const verified: BrowserVerifiedObject = {

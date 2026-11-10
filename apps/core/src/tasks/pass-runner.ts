@@ -8,6 +8,7 @@ import {
   CANDIDATE_REBASE_JOB,
   candidateRebaseDedupeKey,
   isDomainError,
+  poolWaitIsLimitsOut,
   turnLeaseOf,
   readFeedRow,
   turnEvidenceSchema,
@@ -399,21 +400,38 @@ export class PassRunner {
     const turnNo = await this.#turnNo(ref.taskId)
     // The turn was opened only when the task's number moved: an earlier failure has no turn.
     const turn = turnNo !== null && turnNo >= plannedTurn ? plannedTurn : null
+    let facts = failureFactsOf(error)
     if (isDomainError(error)) {
       if (error.code === 'SITE_BUSY')
         return { ending: { kind: 'busy', waiting: 'site' }, retry: await this.#siteRetry(ref) }
-      if (error.code === 'SUBSCRIPTION_BUSY' || error.code === 'SUBSCRIPTION_WAIT')
-        return {
-          ending: { kind: 'busy', waiting: 'agents' },
-          retry: this.#poolRetry(error.details),
-        }
+      if (error.code === 'SUBSCRIPTION_BUSY' || error.code === 'SUBSCRIPTION_WAIT') {
+        // A pool that names a time further away than a pass waits for has its limits out (a
+        // window of the plan, an empty balance — owner's decision of 10.11.2026): the client is
+        // told so and the dialog stays open, instead of a queue that looks short and lasts hours.
+        // A busy pool names a minute, and a cooldown or a probe stays under the limit: they wait.
+        const retryAt = this.#poolRetryAt(error.details)
+        if (
+          error.code === 'SUBSCRIPTION_WAIT' &&
+          retryAt !== null &&
+          poolWaitIsLimitsOut(retryAt, this.#now())
+        ) {
+          this.#logger.warn(
+            `pass_limits_out task=${ref.taskId} turn=${turn ?? 'none'} retry_at=${retryAt.toISOString()}`,
+          )
+          facts = { ...facts, detailReason: 'agent_limits' }
+        } else
+          return {
+            ending: { kind: 'busy', waiting: 'agents' },
+            retry: this.#poolRetry(error.details),
+          }
+      }
     }
     if (signal.aborted) return { ending: { kind: 'cancelled', turn } }
     return {
       ending: {
         kind: 'failed',
         turn,
-        ...failureFactsOf(error),
+        ...facts,
         ...(turn !== null ? await this.#journalReason(ref.taskId, turn) : {}),
       },
     }
@@ -508,12 +526,18 @@ export class PassRunner {
     return { delayMs: Math.min(RETRY_DELAY_MS.site, clamp(left)) }
   }
 
-  /** The pool names when it may have an account again. */
-  #poolRetry(details: unknown): Retry {
+  /** The time the pool names for when it may have an account again, or null when it names none. */
+  #poolRetryAt(details: unknown): Date | null {
     const retryAt = (details as { retryAt?: unknown } | undefined)?.retryAt
     const at = typeof retryAt === 'string' ? Date.parse(retryAt) : Number.NaN
+    return Number.isFinite(at) ? new Date(at) : null
+  }
+
+  /** The pool names when it may have an account again. */
+  #poolRetry(details: unknown): Retry {
+    const at = this.#poolRetryAt(details)
     return {
-      delayMs: Number.isFinite(at) ? clamp(at - this.#now().getTime()) : RETRY_DELAY_MS.update,
+      delayMs: at ? clamp(at.getTime() - this.#now().getTime()) : RETRY_DELAY_MS.update,
     }
   }
 

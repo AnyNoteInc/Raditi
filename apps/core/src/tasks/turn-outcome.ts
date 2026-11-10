@@ -59,6 +59,8 @@ const errorCodes: Readonly<Record<string, FeedFailureCode>> = Object.freeze({
 const detailCodes: Readonly<Record<string, FeedFailureCode>> = Object.freeze({
   snapshot_credential: 'secret_found',
   timeout: 'timeout',
+  // The pool named a time beyond what a pass waits for (`SUBSCRIPTION_WAIT`, pass-runner).
+  agent_limits: 'agent_limits',
 })
 
 export interface FailureFacts {

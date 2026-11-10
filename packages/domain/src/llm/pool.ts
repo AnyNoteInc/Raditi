@@ -12,9 +12,18 @@ export const poolPolicy = Object.freeze({
   busyRetryMs: 60_000,
   unknownRetryMs: 15 * 60_000,
   boundWaitMs: 45 * 60_000,
+  // A pass waits for the pool no longer than this: a pool that names a later time has its limits
+  // out (a window of the plan, an empty balance), and the client is told so (owner's decision of
+  // 10.11.2026) instead of waiting hours in a queue that looks like a short one.
+  limitsOutWaitMs: 45 * 60_000,
   suspendedHoldMs: 24 * 60 * 60_000,
   maxRebinds: 1,
 })
+
+/** Whether a pool that answers «wait until `retryAt`» has no capacity left for a pass to wait for. */
+export function poolWaitIsLimitsOut(retryAt: Date, now: Date): boolean {
+  return retryAt.getTime() - now.getTime() > poolPolicy.limitsOutWaitMs
+}
 
 /** A snapshot from the issuing transaction, including unavailable bound accounts. */
 export const poolAccountSnapshotSchema = z
