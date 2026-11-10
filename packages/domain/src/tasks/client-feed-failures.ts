@@ -10,6 +10,7 @@ export const feedFailureCodes = [
   'too_large',
   'task_limit',
   'credits_out',
+  'agent_limits',
   'forbidden_change',
   'secret_found',
   'site_files',
@@ -32,6 +33,9 @@ export const feedFailureText: Readonly<Record<FeedFailureCode, string>> = Object
     'Задача оказалась больше, чем получается сделать за один заход. Попробуйте разбить её на несколько небольших.',
   credits_out:
     'Лимиты закончились: кредитов не хватило, чтобы закончить задачу, и работа остановлена. Сколько кредитов осталось и когда начислятся новые — в разделе «Использование».',
+  // The platform's own limit with the model provider (a window of the plan, an empty balance),
+  // not the client's credits: nothing the client can do, so it is told whom to ask.
+  agent_limits: 'Лимиты ИИ-агента закончились, и задача не выполнена. Обратитесь к администратору.',
   forbidden_change:
     'Агент попытался изменить то, что менять нельзя, и мы не сохранили его работу. Попробуйте описать задачу по-другому.',
   secret_found:
@@ -75,6 +79,8 @@ export const feedFailureRetry: Readonly<Record<FeedFailureCode, boolean>> = Obje
   too_large: true,
   task_limit: true,
   credits_out: false,
+  // A repeat meets the same exhausted limit until the administrator acts.
+  agent_limits: false,
   forbidden_change: true,
   secret_found: true,
   site_files: false,

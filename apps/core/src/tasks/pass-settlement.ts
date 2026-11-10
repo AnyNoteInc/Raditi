@@ -618,12 +618,17 @@ export class PassSettlement {
     context: SettleContext,
     ending: Extract<PassEnding, { kind: 'failed' }>,
   ): Promise<SettleAnswer> {
-    const code = feedFailureOf({
+    let code = feedFailureOf({
       ...(ending.errorCode ? { errorCode: ending.errorCode } : {}),
       ...(ending.detailReason ? { detailReason: ending.detailReason } : {}),
       ...(ending.journalReason ? { journalReason: ending.journalReason } : {}),
       policyFlagged: context.policyFlagged,
     })
+    // The provider stopped the turn's key for its limits (a window of the plan, an empty
+    // balance): the agent's process died of it, and «технический сбой» would send the client to
+    // press «продолжи» into the same wall (owner's decision of 10.11.2026).
+    if (code === 'technical' && ending.turn !== null && (await this.#limitsOut(pass, ending.turn)))
+      code = 'agent_limits'
     // The step or the client's credits ran out inside the turn: the platform asks «Продолжить?»
     // instead of failing, and a dialog with a candidate keeps `/release` (Р8). A key the gateway
     // stopped for its pace or its count of calls (`budget` too, П22) still had money: that is
@@ -963,6 +968,19 @@ export class PassSettlement {
    * no key of the turn was refused, the refusal was the gateway's pace or call ceiling, or the
    * budget cannot be read.
    */
+  /**
+   * Whether the gateway refused a key of the turn for the subscription's limits: its last answer
+   * to the key, set by a provider signal (`window_exhausted`, `balance_exhausted`) or by the
+   * account's own pause, never by the client's credits (`budget`).
+   */
+  async #limitsOut(pass: PassRef, turn: number): Promise<boolean> {
+    const key = await this.deps.db.llmKey.findFirst({
+      where: { taskId: pass.taskId, turnNo: turn, lastRefusal: 'subscription_limit' },
+      select: { id: true },
+    })
+    return key !== null
+  }
+
   async #moneyCeiling(pass: PassRef, turn: number): Promise<CeilingQuestion | null> {
     const { db } = this.deps
     const keys = await db.llmKey.findMany({

@@ -6,7 +6,13 @@ import {
   type LlmBackendId,
   type LlmCapacity,
 } from '../ports/llm-backend.ts'
-import { pickAccount, type PickAccountInput, type PoolAccountSnapshot } from './pool.ts'
+import {
+  pickAccount,
+  poolPolicy,
+  poolWaitIsLimitsOut,
+  type PickAccountInput,
+  type PoolAccountSnapshot,
+} from './pool.ts'
 
 const NOW = new Date('2026-09-29T12:00:00.000Z')
 const MINUTE = 60_000
@@ -924,5 +930,50 @@ describe('pickAccount: boundary validation', () => {
     expect(() =>
       pickAccount(input({ accounts: [account(), account('a', { enabled: false })] })),
     ).toThrow(expect.objectContaining({ code: 'BAD_REQUEST' }))
+  })
+})
+
+describe('poolWaitIsLimitsOut: a wait that is no wait', () => {
+  const waitOf = (decision: ReturnType<typeof pickAccount>) => {
+    if (decision.kind !== 'wait' && decision.kind !== 'busy') throw new Error(decision.kind)
+    return decision.retryAt
+  }
+
+  it('names the exhausted five-hour window of the only account, bound or not', () => {
+    const exhausted = [window('5h', 100, 4 * 60), window('week', 49, 5_000)]
+    for (const decision of [
+      pickAccount(input({ accounts: [account('a', { limitWindows: exhausted })] })),
+      pickAccount(bound({ limitWindows: exhausted })),
+    ])
+      expect(poolWaitIsLimitsOut(waitOf(decision), NOW), decision.kind).toBe(true)
+  })
+
+  it('lets a busy pool, an unknown usage and a short cooldown wait', () => {
+    expect(poolWaitIsLimitsOut(waitOf(pickAccount(bound({ activeTurns: 1 }))), NOW), 'busy').toBe(
+      false,
+    )
+    expect(
+      poolWaitIsLimitsOut(waitOf(pickAccount(bound({ limitWindows: [] }))), NOW),
+      'unknown usage',
+    ).toBe(false)
+    expect(
+      poolWaitIsLimitsOut(waitOf(pickAccount(bound({ coolingUntil: at(20) }))), NOW),
+      'cooldown of twenty minutes',
+    ).toBe(false)
+  })
+
+  it('draws the line at the longest wait of the pool: at it a pass waits, past it the limits are out', () => {
+    const limit = poolPolicy.limitsOutWaitMs
+    expect(poolWaitIsLimitsOut(new Date(NOW.getTime() + limit), NOW)).toBe(false)
+    expect(poolWaitIsLimitsOut(new Date(NOW.getTime() + limit + 1), NOW)).toBe(true)
+    expect(poolWaitIsLimitsOut(NOW, NOW)).toBe(false)
+    expect(poolWaitIsLimitsOut(at(-10), NOW)).toBe(false)
+  })
+
+  it('is never shorter than the wait the pool holds a bound account for', () => {
+    // A pause up to `boundWaitMs` keeps the binding and is waited for: reporting it as out of
+    // limits would fail passes the pool itself means to serve.
+    expect(poolPolicy.limitsOutWaitMs).toBeGreaterThanOrEqual(poolPolicy.boundWaitMs)
+    expect(poolPolicy.limitsOutWaitMs).toBeGreaterThan(poolPolicy.unknownRetryMs)
   })
 })

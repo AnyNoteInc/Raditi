@@ -22,6 +22,8 @@ import {
   BROWSER_ONLY,
   siteBusy,
   siteIdOf,
+  subscriptionBusy,
+  subscriptionWait,
   toTurnPlan,
   type AgentDriver,
   type SnapshotManifest,
@@ -1155,6 +1157,81 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         dialog.job,
         expect.objectContaining({ delayMs: 120_000, jobId: expect.stringContaining(':retry:') }),
       )
+    })
+
+    describe('when the pool of agents has nothing for the pass', () => {
+      const minutes = (count: number) => new Date(NOW.getTime() + count * 60_000)
+      const retried = (queue: { enqueue: ReturnType<typeof vi.fn> }) =>
+        queue.enqueue.mock.calls.filter((call) => call[1] === 'turn.run')
+
+      it('puts the pass back within the minute when only a slot of the pool is busy', async () => {
+        await rate()
+        const dialog = await queued({ reserve: true })
+        const { passes, queue } = runner(async () => {
+          throw subscriptionBusy(minutes(1))
+        })
+
+        await passes.run(dialog.job)
+
+        expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
+          status: 'queued',
+          waiting: 'agents',
+        })
+        expect(queue.enqueue).toHaveBeenCalledWith(
+          'agent-turns',
+          'turn.run',
+          dialog.job,
+          expect.objectContaining({ delayMs: 60_000 }),
+        )
+        expect(await failure(dialog.taskId)).toEqual([])
+      })
+
+      it('waits for a pause that ends within the longest wait of the pool, looking again every ten minutes', async () => {
+        await rate()
+        const dialog = await queued({ reserve: true })
+        const { passes, queue } = runner(async () => {
+          throw subscriptionWait(minutes(45))
+        })
+
+        await passes.run(dialog.job)
+
+        expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
+          status: 'queued',
+          waiting: 'agents',
+        })
+        expect(queue.enqueue).toHaveBeenCalledWith(
+          'agent-turns',
+          'turn.run',
+          dialog.job,
+          expect.objectContaining({ delayMs: 600_000 }),
+        )
+        expect(await failure(dialog.taskId)).toEqual([])
+      })
+
+      // The owner's decision of 10.11.2026: a window of the plan that resets in hours is not a
+      // queue. The chat of 10.11.2026 sat «в очереди» for four hours with its credits held.
+      it('tells the client the limits are out when the pool names a later time, and does not wait', async () => {
+        await rate()
+        const dialog = await queued({ reserve: true })
+        const { passes, queue } = runner(async () => {
+          throw subscriptionWait(minutes(4 * 60 + 12))
+        })
+
+        await passes.run(dialog.job)
+
+        expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
+          status: 'awaiting_user',
+          waiting: null,
+        })
+        expect(await failure(dialog.taskId)).toEqual([
+          expect.objectContaining({
+            code: 'agent_limits',
+            next: 'awaiting_user',
+            credits: 'returned',
+          }),
+        ])
+        expect(retried(queue)).toEqual([])
+      })
     })
 
     it('looks again within two minutes when the lease of the site lasts long', async () => {
