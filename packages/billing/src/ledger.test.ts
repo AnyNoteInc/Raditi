@@ -568,6 +568,26 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
       await expectBalancesToMatchLedger(workspaceId)
     })
 
+    it('is paid by a charge stamped inside the period the grant is of, whatever the clocks say', async () => {
+      // The first period starts when ЮKassa captured the payment, by ЮKassa's clock; a clock of
+      // ours behind it would stamp the charge before the period, and the meter of «Использование»,
+      // which tells a charge's period by its stamp alone, would leave it out of the period it
+      // belongs to — and the page would not add up.
+      const { workspaceId, orderId } = await paid()
+      await owe(workspaceId, 8)
+      const periodStart = new Date(Date.now() + 5 * 60_000)
+      const periodEnd = new Date(periodStart.getTime() + PERIOD_MS)
+      await db.order.update({ where: { id: orderId }, data: { periodStart, periodEnd } })
+
+      await db.$transaction((tx) => grantTariffCredits(tx, { workspaceId, orderId, credits: 30 }))
+
+      const repay = await db.creditLedger.findUniqueOrThrow({
+        where: { idempotencyKey: ledgerKeys.debtRepay(ledgerKeys.tariffGrant(orderId)) },
+      })
+      expect(repay.createdAt.getTime()).toBeGreaterThanOrEqual(periodStart.getTime())
+      expect(repay.createdAt.getTime()).toBeLessThan(periodEnd.getTime())
+    })
+
     it('is paid first from the credits of a pack, and only as far as the grant goes', async () => {
       const { workspaceId, packOrderId } = await paid()
       await owe(workspaceId, 25)

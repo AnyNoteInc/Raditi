@@ -11,6 +11,7 @@ import {
   Money,
   notFound,
   signupGiftCredits,
+  tariffHoldCreatedAt,
   toCredits,
   type CreditAccountKind,
   type Credits,
@@ -227,7 +228,7 @@ async function grant(
   // whatever ids the caller holds: the two grant keys of one order never both apply.
   const order = await tx.order.findFirst({
     where: { id: orderId, workspaceId, kind: grantingOrderKinds[kind] },
-    select: { id: true },
+    select: { id: true, periodStart: true, periodEnd: true },
   })
   if (order === null) throw billingOrderNotFound()
   await ensureAccounts(tx, workspaceId)
@@ -239,7 +240,16 @@ async function grant(
   const entry = await posted(tx, idempotencyKey, { account, kind: 'grant', amount })
   if (entry) return { entry, applied: false }
   const granted = await post(tx, { account, kind: 'grant', amount, orderId, idempotencyKey })
-  await repayDebt(tx, { workspaceId, account, orderId, grantKey: idempotencyKey })
+  await repayDebt(tx, {
+    workspaceId,
+    account,
+    orderId,
+    grantKey: idempotencyKey,
+    period:
+      order.periodStart !== null && order.periodEnd !== null
+        ? { currentPeriodStart: order.periodStart, currentPeriodEnd: order.periodEnd }
+        : null,
+  })
   return { entry: granted, applied: true }
 }
 
@@ -255,9 +265,16 @@ async function grant(
  */
 async function repayDebt(
   tx: BillingTx,
-  input: { workspaceId: string; account: LockedCreditAccount; orderId: string; grantKey: string },
+  input: {
+    workspaceId: string
+    account: LockedCreditAccount
+    orderId: string
+    grantKey: string
+    /** The period the order paid for, when it has one: what a tariff charge is stamped inside. */
+    period: { currentPeriodStart: Date; currentPeriodEnd: Date } | null
+  },
 ): Promise<void> {
-  const { workspaceId, orderId, grantKey } = input
+  const { workspaceId, orderId, grantKey, period } = input
   const granted = await lockCreditAccount(tx, workspaceId, kindOf(input.account))
   const pack =
     granted?.unit === creditAccountUnits.pack
@@ -267,12 +284,20 @@ async function repayDebt(
   const free = granted.snapshot.balance - granted.snapshot.held
   const paid = Math.min(pack.debt, free)
   if (paid <= 0) return
+  // The meter of the tariff tells the period of a charge by its stamp alone, like every other
+  // charge of the tariff account (`tariffHoldCreatedAt`): the period of a first payment starts
+  // when ЮKassa captured it, by ЮKassa's clock, and the clock of this transaction may be behind.
+  const createdAt =
+    period !== null && granted.unit === creditAccountUnits.tariff
+      ? tariffHoldCreatedAt(new Date(), period)
+      : undefined
   await post(tx, {
     account: granted,
     kind: 'charge',
     amount: new Money(-paid),
     orderId,
     idempotencyKey: ledgerKeys.debtRepay(grantKey),
+    ...(createdAt === undefined ? {} : { createdAt }),
   })
   await tx.billingAccount.update({
     where: { id: pack.id },
