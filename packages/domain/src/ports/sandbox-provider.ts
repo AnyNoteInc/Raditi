@@ -318,6 +318,14 @@ export const execCursorSchema = z
   })
   .strict()
 
+/** How an exec ended: what the runner reports and what the turn's journal keeps of it. */
+export const execExitSchema = z
+  .object({
+    code: z.number().int().min(-1).max(255).nullable(),
+    reason: z.enum(['exited', 'timeout', 'cancelled', 'oom', 'lost']),
+  })
+  .strict() satisfies z.ZodType<ExecExit>
+
 export const execSpecSchema = z
   .object({
     argv: z

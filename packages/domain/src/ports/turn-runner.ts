@@ -12,7 +12,7 @@ import {
   nativeSessionIdSchema,
   turnResultSchema,
 } from './agent-driver.ts'
-import { execCursorSchema } from './sandbox-provider.ts'
+import { execCursorSchema, execExitSchema } from './sandbox-provider.ts'
 
 export const siteLeaseOperations = ['turn', 'deploy', 'revert'] as const
 export type SiteLeaseOperation = (typeof siteLeaseOperations)[number]
@@ -315,6 +315,11 @@ export const turnEvidenceSchema = z
      * never billed (P12). A pass that finds the update lost closes it the same way.
      */
     outcome: z.enum(['failed', 'lost']).optional(),
+    /**
+     * How the agent's exec ended, on the `failed` entry of a turn whose agent did not finish: a
+     * code and a fixed reason, never its output.
+     */
+    exit: execExitSchema.optional(),
     result: turnResultSchema.optional(),
     reason: z
       .enum([

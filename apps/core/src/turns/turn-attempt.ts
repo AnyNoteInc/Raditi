@@ -17,6 +17,7 @@ import {
   type AgentDriver,
   type AgentEvent,
   type DestroyReason,
+  type ExecExit,
   type PreparedRun,
   type SessionState,
   type SiteLeaseGrant,
@@ -162,6 +163,8 @@ export class TurnAttempt {
   #lastPhase: TurnPhase
   #reason: TurnEvidence['reason'] = 'run_failed'
   #outcome: TurnAssignmentOutcome = 'failed'
+  /** How the agent's exec ended when it did not finish successfully: journaled with `failed`. */
+  #exit: ExecExit | undefined
   #candidateHeadSha: string | undefined
   /** A container of the prepare may exist from now on. */
   #dispatched = false
@@ -357,6 +360,7 @@ export class TurnAttempt {
         exit.code !== 0 ||
         events.some((event) => event.type === 'failed')
       ) {
+        this.#exit = exit
         throw new DomainError(
           'TURN_EXEC_FAILED',
           'The agent process did not finish successfully',
@@ -616,17 +620,21 @@ export class TurnAttempt {
   /** Why the turn failed, from where it stopped. */
   failed(error: unknown): void {
     const { guard } = this.init
+    // The exec's own limit is the turn's deadline less the finalize reserve: the runner (or the
+    // local executor) ends it before the guard's timer, and the turn ran out of time all the same.
     this.#reason = guard.signal.aborted
       ? guard.reason
-      : this.#publishStarted
-        ? 'publication_ambiguous'
-        : this.#checkpointStarted
-          ? 'snapshot_ambiguous'
-          : isSnapshotCredential(error)
-            ? 'snapshot_credential'
-            : isDomainError(error) && error.code === 'LEASE_LOST'
-              ? 'lease_lost'
-              : 'run_failed'
+      : this.#exit?.reason === 'timeout'
+        ? 'timeout'
+        : this.#publishStarted
+          ? 'publication_ambiguous'
+          : this.#checkpointStarted
+            ? 'snapshot_ambiguous'
+            : isSnapshotCredential(error)
+              ? 'snapshot_credential'
+              : isDomainError(error) && error.code === 'LEASE_LOST'
+                ? 'lease_lost'
+                : 'run_failed'
   }
 
   /**
@@ -691,7 +699,11 @@ export class TurnAttempt {
         recovery ? 'recovery' : 'failed',
         recovery
           ? { reason: this.#reason }
-          : { reason: this.#reason, outcome: this.#outcome === 'lost' ? 'lost' : 'failed' },
+          : {
+              reason: this.#reason,
+              outcome: this.#outcome === 'lost' ? 'lost' : 'failed',
+              ...(this.#exit ? { exit: this.#exit } : {}),
+            },
       ).catch(() => {})
       if (!recovery) await this.deps.leases.release(lease).catch(() => false)
     }

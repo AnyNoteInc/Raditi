@@ -38,12 +38,12 @@ import {
 } from '../ports/agent-driver.ts'
 import {
   execCursorSchema,
+  execExitSchema,
   execSpecSchema,
   MAX_SANDBOX_TURN_MS,
   sandboxLabelsSchema,
   sandboxSpecSchema,
   type DestroyReason,
-  type ExecExit,
 } from '../ports/sandbox-provider.ts'
 import { attachmentLimits } from '../attachments/rules.ts'
 import {
@@ -196,13 +196,6 @@ const destroyReasonSchema = z.enum([
   'timeout',
   'gc',
 ]) satisfies z.ZodType<DestroyReason>
-
-export const execExitSchema = z
-  .object({
-    code: z.number().int().min(-1).max(255).nullable(),
-    reason: z.enum(['exited', 'timeout', 'cancelled', 'oom', 'lost']),
-  })
-  .strict() satisfies z.ZodType<ExecExit>
 
 /**
  * What the home part's AAD binds: the manifest without its parts (snapshotAad). Without `git`
