@@ -258,6 +258,10 @@ const samples: Record<FeedEventType, Record<string, unknown>[]> = {
     },
   ],
   'feed.file': [file, { ...file, name: 'data.xlsx', sizeBytes: 0 }],
+  'feed.file_left': [
+    { v: 1, reason: 'skipped', count: 2 },
+    { v: 1, reason: 'refused', count: 0 },
+  ],
 }
 
 const accepts = (type: FeedEventType, payload: unknown) =>
@@ -269,7 +273,7 @@ const shown = (type: FeedEventType, { v: _v, ...fields }: Record<string, unknown
 })
 
 describe('feed vocabulary', () => {
-  it('lists the six types of the design, the four of a release, the snapshot, `/undo`, `/redo`, the edit of a file and a file of the agent, all under the feed prefix', () => {
+  it('lists the six types of the design, the four of a release, the snapshot, `/undo`, `/redo`, the edit of a file and a file of the agent and the note that not all of them came, all under the feed prefix', () => {
     expect(feedEventTypes).toEqual([
       'feed.request',
       'feed.step',
@@ -287,6 +291,7 @@ describe('feed vocabulary', () => {
       'feed.redo',
       'feed.edit',
       'feed.file',
+      'feed.file_left',
     ])
     expect(Object.keys(feedPayloadSchemas)).toEqual([...feedEventTypes])
     expect(isFeedEventType('feed.step')).toBe(true)
@@ -1192,6 +1197,11 @@ describe('reading stored rows', () => {
         { ...file, name: '' },
         { ...file, sizeBytes: -1 },
         { ...file, sizeBytes: undefined },
+      ],
+      'feed.file_left': [
+        { v: 1, reason: 'skipped', count: -1 },
+        { v: 1, reason: 'skipped' },
+        { v: 1, count: 1 },
       ],
     }
     for (const type of feedEventTypes)

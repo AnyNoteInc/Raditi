@@ -24,6 +24,7 @@ import {
   feedEndedSiteText,
   feedFailureKeptText,
   feedFailureOpenText,
+  feedFileLeftText,
   feedFilesChangedText,
   feedLiveText,
   feedMediaAddedText,
@@ -1069,6 +1070,9 @@ function RowView({
     // A file the agent made for the client (docs/plan/66-chat-visuals.md, В8).
     case 'feed.file':
       return <FeedFile fileId={row.fileId} name={row.name} sizeBytes={row.sizeBytes} />
+    // Not all the files of the agent came (docs/plan/66-chat-visuals.md, В8): its message may say they did.
+    case 'feed.file_left':
+      return <Note text={feedFileLeftText(row)} />
     case 'feed.rewind':
       return <Note text={feedRewindText(row)} />
     case 'feed.redo':

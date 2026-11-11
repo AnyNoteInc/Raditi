@@ -15,6 +15,13 @@ import {
 // (`RunContext.instructions`); the result contract is the driver's own. The instructions of the
 // site itself (its AGENTS.md, written at onboarding — P11) are not here yet.
 
+/**
+ * The length of a file name the agent is asked for. The platform takes up to `outboxLimits.nameChars`
+ * characters, but the sandbox's file system holds a name of 255 bytes at most, and a Russian
+ * letter is two of them: a hundred leaves room for any text, and an agent counts characters.
+ */
+const OUTBOX_NAME_ADVICE = 100
+
 /** How the agent talks to the client: the same in every task. */
 const ANSWERING = `## Answering the client
 - Write \`client_message\` and questions in Russian, addressing the client politely as «вы».
@@ -25,10 +32,11 @@ const ANSWERING = `## Answering the client
 ## Files for the client
 - When the client asks for a document, a table or another file to download, write it to
   ${SANDBOX_OUT} (make the folder with \`mkdir -p ${SANDBOX_OUT}\`): files right there, no
-  folders, at most ${outboxLimits.files} files of up to ${outboxLimits.fileBytes / 1024 / 1024} MiB each, each under a short
-  name (up to ${outboxLimits.nameBytes} bytes) that the client will see. After your turn the
-  platform attaches them to the chat for the client to download; nothing else you write reaches
-  the client as a file, and nothing in ${SANDBOX_OUT} reaches the site.
+  folders, at most ${outboxLimits.files} files of up to ${outboxLimits.fileBytes / 1024 / 1024} MiB each, each under a plain
+  name of up to ${OUTBOX_NAME_ADVICE} characters (Russian letters are fine, no slashes) that the client will see:
+  name the file for what it holds, in a few words. After your turn the platform attaches them
+  to the chat for the client to download; nothing else you write reaches the client as a file,
+  and nothing in ${SANDBOX_OUT} reaches the site.
 - \`python3\` with \`python-docx\` and \`openpyxl\` is there to build .docx and .xlsx files.
 - Say in \`client_message\` which files you attached, by their names.
 `

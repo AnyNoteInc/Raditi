@@ -40,7 +40,7 @@ import {
   type TurnResult,
   type TurnWorkspace,
 } from '@repo/domain'
-import { readOutboxArchive } from '@repo/snapshots'
+import { packOutbox, readOutboxArchive } from '@repo/snapshots'
 
 import type {
   LoadedSnapshot,
@@ -486,7 +486,8 @@ export class TurnAttempt {
 
   /**
    * The outbox read again by core before it may reach the chat: an archive the checks refuse is
-   * dropped whole, with a line in the log, and the turn goes on (docs/plan/66, В8).
+   * dropped whole, with a line in the log, and the turn goes on (docs/plan/66, В8). What is left
+   * in its place says the files were refused, so that the client is told they did not come.
    */
   async #checkedOutbox(outbox: Uint8Array): Promise<Uint8Array | undefined> {
     const labels = this.init.plan.sandbox.labels
@@ -500,7 +501,7 @@ export class TurnAttempt {
       this.#logger.warn(
         `turn_outbox_dropped task=${labels.taskId} turn=${labels.turn} reason=${reason}`,
       )
-      return undefined
+      return packOutbox([], { refused: true }).catch(() => undefined)
     }
   }
 

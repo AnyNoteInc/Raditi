@@ -642,6 +642,24 @@ describe('the rows of a dialog', () => {
     expect(text(feed)).toContain('его менять нельзя')
   })
 
+  // docs/plan/66-chat-visuals.md, В8: the agent's message may say a file is attached that never came.
+  it('tells the client that not all the files of the agent came', () => {
+    const left = (id: string, reason: 'skipped' | 'refused', count: number): FeedRow => ({
+      id,
+      at: '2026-10-17T09:50:00.000Z',
+      type: 'feed.file_left',
+      reason,
+      count,
+    })
+    const { feed } = showFeed(
+      [left('14', 'skipped', 2), left('15', 'refused', 0)],
+      headOf({ status: 'awaiting_user' }),
+    )
+    expect(text(feed)).toContain('2 файла из подготовленных агентом не удалось приложить к чату')
+    expect(text(feed)).toContain('Файлы агента не удалось приложить к чату')
+    expect(text(feed)).toContain('Попросите агента сделать файл ещё раз')
+  })
+
   it('says what `/undo` took back, and what stayed by what the chat left', () => {
     const rewind = (id: string, site: 'none' | 'check' | 'elsewhere'): FeedRow => ({
       id,

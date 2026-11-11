@@ -392,6 +392,16 @@ describe('the chat as a Markdown file', () => {
     })
     expect(out([shot])).toContain('Снимок экрана № 2')
   })
+
+  it('says that not all the files of the agent came, and what to ask for', () => {
+    const skipped = row({ type: 'feed.file_left', reason: 'skipped', count: 2 })
+    expect(out([skipped])).toContain('2 файла из подготовленных агентом не удалось приложить')
+    const refused = row({ type: 'feed.file_left', reason: 'refused', count: 0 })
+    expect(out([refused])).toContain('Файлы агента не удалось приложить к чату')
+    // The platform may have lost them itself: the row does not guess why.
+    expect(out([refused])).not.toMatch(/слишком|проверк/)
+    expect(out([refused])).toContain('Попросите агента сделать файл ещё раз')
+  })
 })
 
 describe('the name of the file', () => {

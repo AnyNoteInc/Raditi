@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer'
 
 import { chatFileKey, feedRowSchema } from '@repo/domain'
-import { tarZst } from '@repo/snapshots/testing'
+import { packOutbox } from '@repo/snapshots'
 import { describe, expect, it, vi } from 'vitest'
 
 import { ChatFiles, chatFileId } from './chat-files.ts'
@@ -15,8 +15,15 @@ function side(existing: string[] = []) {
   const db = {
     taskTurn: { findFirst: vi.fn(async () => ({ id: turnId })) },
     taskEvent: {
-      findFirst: vi.fn(async ({ where }: { where: { payload: { equals: string } } }) =>
-        known.has(where.payload.equals) ? { id: 1n } : null,
+      findFirst: vi.fn(
+        async ({ where }: { where: { type: string; payload?: { equals: string } } }) =>
+          where.type === 'feed.file_left'
+            ? rows.some((row) => row.type === 'feed.file_left')
+              ? { id: 1n }
+              : null
+            : known.has(where.payload!.equals)
+              ? { id: 1n }
+              : null,
       ),
       create: vi.fn(
         async ({
@@ -25,7 +32,7 @@ function side(existing: string[] = []) {
           data: { taskId: string; turnId: string | null; type: string; payload: unknown }
         }) => {
           rows.push(data)
-          known.add((data.payload as { fileId: string }).fileId)
+          known.add((data.payload as { fileId?: string }).fileId ?? '')
           return { id: BigInt(rows.length) }
         },
       ),
@@ -55,7 +62,10 @@ describe('ChatFiles', () => {
 
   it('puts every file into the artifacts bucket and writes its row under the turn', async () => {
     const s = side()
-    const outbox = await tarZst({ 'report.docx': 'docx bytes', 'data.xlsx': 'xlsx' })
+    const outbox = await packOutbox([
+      { name: 'report.docx', bytes: 'docx bytes' },
+      { name: 'data.xlsx', bytes: 'xlsx' },
+    ])
     expect(await s.files.deliver({ taskId, turn: 2, outbox })).toBe(2)
     const docx = chatFileId(taskId, 2, 'report.docx')
     expect(s.objects.get(chatFileKey(taskId, docx))?.toString()).toBe('docx bytes')
@@ -87,7 +97,7 @@ describe('ChatFiles', () => {
 
   it('writes no second row when the delivery is repeated', async () => {
     const s = side()
-    const outbox = await tarZst({ 'a.txt': 'x' })
+    const outbox = await packOutbox([{ name: 'a.txt', bytes: 'x' }])
     await s.files.deliver({ taskId, turn: 1, outbox })
     expect(await s.files.deliver({ taskId, turn: 1, outbox })).toBe(0)
     expect(s.rows).toHaveLength(1)
@@ -100,14 +110,77 @@ describe('ChatFiles', () => {
     expect(s.logger.warn).toHaveBeenCalledWith(
       `chat_files_failed task=${taskId} turn=1 delivered=0 reason=BAD_REQUEST`,
     )
+    expect(s.rows.map((row) => row.type)).toEqual(['feed.file_left'])
     const down = side()
     down.storage.put.mockRejectedValueOnce(new Error('s3 down'))
     expect(
-      await down.files.deliver({ taskId, turn: 1, outbox: await tarZst({ 'a.txt': 'x' }) }),
+      await down.files.deliver({
+        taskId,
+        turn: 1,
+        outbox: await packOutbox([{ name: 'a.txt', bytes: 'x' }]),
+      }),
     ).toBe(0)
-    expect(down.rows).toEqual([])
     expect(down.logger.warn).toHaveBeenCalledWith(
       `chat_files_failed task=${taskId} turn=1 delivered=0 reason=unknown`,
     )
+    // The agent's message speaks of the file all the same, so the client is told it did not come.
+    expect(down.rows).toEqual([
+      expect.objectContaining({
+        type: 'feed.file_left',
+        payload: { v: 1, reason: 'refused', count: 0 },
+      }),
+    ])
+  })
+
+  it('delivers a name of more than a hundred bytes (the chat of 11.11.2026)', async () => {
+    const s = side()
+    const name = 'Руководящий_состав_правительства_Смоленской_области.docx'
+    expect(
+      await s.files.deliver({ taskId, turn: 1, outbox: await packOutbox([{ name, bytes: 'd' }]) }),
+    ).toBe(1)
+    expect(s.rows).toEqual([
+      expect.objectContaining({ type: 'feed.file', payload: expect.objectContaining({ name }) }),
+    ])
+  })
+
+  it('tells the client what the capture left, after the files that came', async () => {
+    const s = side()
+    const outbox = await packOutbox([{ name: 'a.txt', bytes: 'x' }], { skipped: 2 })
+    expect(await s.files.deliver({ taskId, turn: 1, outbox })).toBe(1)
+    expect(s.rows.map((row) => row.type)).toEqual(['feed.file', 'feed.file_left'])
+    expect(s.rows[1]).toMatchObject({
+      turnId,
+      clientVisible: true,
+      payload: { v: 1, reason: 'skipped', count: 2 },
+    })
+    for (const row of s.rows)
+      expect(feedRowSchema.safeParse({ type: row.type, payload: row.payload }).success).toBe(true)
+    // Repeated, it adds nothing.
+    await s.files.deliver({ taskId, turn: 1, outbox })
+    expect(s.rows).toHaveLength(2)
+  })
+
+  it('tells the client when the files were refused whole', async () => {
+    const s = side()
+    expect(
+      await s.files.deliver({ taskId, turn: 1, outbox: await packOutbox([], { refused: true }) }),
+    ).toBe(0)
+    expect(s.rows).toEqual([
+      expect.objectContaining({
+        type: 'feed.file_left',
+        payload: { v: 1, reason: 'refused', count: 0 },
+      }),
+    ])
+    expect(s.storage.put).not.toHaveBeenCalled()
+  })
+
+  it('says nothing when the folder was whole and every file came', async () => {
+    const s = side()
+    await s.files.deliver({
+      taskId,
+      turn: 1,
+      outbox: await packOutbox([{ name: 'a.txt', bytes: 'x' }]),
+    })
+    expect(s.rows.map((row) => row.type)).toEqual(['feed.file'])
   })
 })

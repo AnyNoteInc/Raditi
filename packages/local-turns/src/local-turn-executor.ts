@@ -41,7 +41,7 @@ import {
   type TurnWorkingTreeInput,
 } from '@repo/domain'
 import type { PresignedTransfer, SandboxSnapshotTransport, TurnArchives } from '@repo/snapshots'
-import { openSnapshotParts, sealSnapshotPart } from '@repo/snapshots'
+import { openSnapshotParts, packOutbox, sealSnapshotPart } from '@repo/snapshots'
 
 import { bundleBase, importBaseBundle } from './base-bundle.ts'
 import { makeEmptyWorkdir } from './empty-workdir.ts'
@@ -511,7 +511,9 @@ class LocalTurnExecution implements TurnExecution {
 
   /**
    * The files the agent left for the client (docs/plan/66-chat-visuals.md, В8): an outbox the
-   * checks refused is dropped whole and the turn goes on, with a line in the log why.
+   * checks refused is dropped whole and the turn goes on, with a line in the log why. The turn's
+   * answer may speak of the files all the same, so what is left in its place is an archive that
+   * says they were refused: core tells the client.
    */
   async #outbox(): Promise<Uint8Array | undefined> {
     const { transport, log } = this.deps
@@ -524,7 +526,7 @@ class LocalTurnExecution implements TurnExecution {
     } catch (error) {
       const reason = isDomainError(error) ? error.code : 'unknown'
       log?.(`turn_outbox_dropped container=${this.sandbox.id} reason=${reason}`)
-      return undefined
+      return packOutbox([], { refused: true }).catch(() => undefined)
     }
   }
 

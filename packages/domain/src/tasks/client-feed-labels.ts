@@ -11,6 +11,7 @@ import type {
   FeedCreditsState,
   FeedEditPayload,
   FeedFailurePayload,
+  FeedFileLeftPayload,
   FeedObjectKind,
   FeedObjectStatus,
   FeedReleaseOutcome,
@@ -234,6 +235,21 @@ export function feedRewindText(row: Pick<FeedRewindPayload, 'files' | 'site'>): 
 /** The row of `/redo` in the feed. */
 export const feedRedoText = (row: Pick<FeedRedoPayload, 'files'>): string =>
   row.files ? 'Отменённый запрос и его файлы возвращены.' : 'Отменённый запрос возвращён.'
+
+/**
+ * The row after the files of a turn when not all of them came (`feed.file_left`): what the agent
+ * said of its files may not be so. It says what to ask for, and never why — a refusal may be a
+ * secret the agent copied into a file.
+ */
+export function feedFileLeftText(row: Pick<FeedFileLeftPayload, 'reason' | 'count'>): string {
+  const ask = 'Попросите агента сделать файл ещё раз: одним файлом, с обычным названием, без папок.'
+  if (row.reason === 'refused') return `Файлы агента не удалось приложить к чату. ${ask}`
+  const left =
+    row.count > 0
+      ? `${groupDigits(row.count)} ${pluralRu(row.count, 'файл', 'файла', 'файлов')} из подготовленных агентом не удалось приложить к чату.`
+      : 'Часть файлов агента не удалось приложить к чату.'
+  return `${left} ${ask}`
+}
 
 /** The row of the client's edit of a file in «Терминал» (06.11.2026), by its outcome. */
 export function feedEditText(row: Pick<FeedEditPayload, 'path' | 'outcome' | 'revision'>): string {

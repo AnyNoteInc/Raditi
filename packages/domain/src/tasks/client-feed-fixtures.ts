@@ -301,6 +301,17 @@ export const feedFixtures: readonly FeedFixture[] = Object.freeze([
       sizeBytes: 18_432,
     },
   },
+  // docs/plan/66-chat-visuals.md, В8: not all the files of the agent came.
+  {
+    name: 'file_left v1 skipped',
+    type: 'feed.file_left',
+    payload: { v: 1, reason: 'skipped', count: 2 },
+  },
+  {
+    name: 'file_left v1 refused',
+    type: 'feed.file_left',
+    payload: { v: 1, reason: 'refused', count: 0 },
+  },
   {
     name: 'request v1 resume',
     type: 'feed.request',
