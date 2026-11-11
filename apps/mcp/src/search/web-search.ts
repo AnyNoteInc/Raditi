@@ -4,11 +4,12 @@ import { errorMessage } from '@repo/observability'
 import type { McpTurnAccess } from '../access/mcp-access.ts'
 import type { McpWebSearchConfig } from '../config/config.ts'
 import {
-  parallelSearch,
-  type ParallelSearchOptions,
+  RequestPacer,
+  yandexSearch,
+  type WebSearchOptions,
   type WebSearchOutcome,
   type WebSearchResult,
-} from './parallel-search.ts'
+} from './yandex-search.ts'
 import type { WebSearchKey } from '../access/web-search-key.ts'
 import type { WebSearchRefusal, WebSearchStore } from './web-search-store.ts'
 
@@ -51,35 +52,40 @@ export type WebSearchAnswer =
 export interface McpWebSearchDeps {
   store: WebSearchStore
   config: McpWebSearchConfig
-  /** The key in Vault; none — the call is refused before it is counted. */
+  /** The access in Vault; none — the call is refused before it is counted. */
   key: Pick<WebSearchKey, 'read'>
   /** The request to the service; a test passes its own. */
-  search?: (query: string, options: ParallelSearchOptions) => Promise<WebSearchOutcome>
+  search?: (query: string, options: WebSearchOptions) => Promise<WebSearchOutcome>
+  /** Spaces the requests of this process to the quota of the service; a test passes its own. */
+  pacer?: Pick<RequestPacer, 'wait'>
   now?: () => number
   log?: (line: string) => void
 }
 
 /**
  * `raditi_search_web`: the key is read from Vault, the limits are taken before the request leaves
- * (`WebSearchStore.reserve`), then one request to Parallel Search. The log line of a call names its status, how long it took
- * and the counts, never the phrase, the results or the key.
+ * (`WebSearchStore.reserve`), then one request to Yandex Search API, in its turn among the requests
+ * of this process (the folder's quota is one a second). The log line of a call names its status,
+ * how long it took and the counts, never the phrase, the results or the key.
  */
 export class McpWebSearchService {
   readonly #logger = new Logger('McpWebSearch')
   readonly #search: NonNullable<McpWebSearchDeps['search']>
+  readonly #pacer: Pick<RequestPacer, 'wait'>
   readonly #now: () => number
   readonly #log: (line: string) => void
 
   constructor(private readonly deps: McpWebSearchDeps) {
-    this.#search = deps.search ?? parallelSearch
+    this.#search = deps.search ?? yandexSearch
+    this.#pacer = deps.pacer ?? new RequestPacer()
     this.#now = deps.now ?? (() => performance.now())
     this.#log = deps.log ?? ((line) => this.#logger.log(line))
   }
 
   async search(scope: McpTurnAccess, query: string): Promise<WebSearchAnswer> {
     const { config, store } = this.deps
-    const apiKey = await this.deps.key.read()
-    if (apiKey === null) {
+    const credentials = await this.deps.key.read()
+    if (credentials === null) {
       this.#log('web_search status=refused reason=no_key')
       return refusal('SEARCH_UNAVAILABLE')
     }
@@ -92,10 +98,12 @@ export class McpWebSearchService {
       return refusal(code)
     }
     const started = this.#now()
-    const outcome = await this.#search(query, {
-      apiKey,
-      timeoutMs: config.timeoutMs,
-    })
+    // The wait for a turn counts toward the time of the call; one that cannot get a turn in time is
+    // refused as busy, the way the service would refuse it
+    const turn = await this.#pacer.wait(config.timeoutMs / 2)
+    const outcome: WebSearchOutcome = turn
+      ? await this.#search(query, { credentials, timeoutMs: config.timeoutMs })
+      : { status: 'rate_limited' }
     const latencyMs = Math.round(this.#now() - started)
     try {
       await store.finish(reservation.id, outcome.status, latencyMs)

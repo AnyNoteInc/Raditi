@@ -95,7 +95,7 @@ test('every policy grants exactly its scoped privileges and only on its own moun
       'transit/datakey/plaintext/ws-*': ['update'],
       'transit/decrypt/ws-*': ['update'],
       // The key of the agent's web search, beside the keys of the model (spec §20).
-      'subs/data/search/parallel': ['read'],
+      'subs/data/search/yandex': ['read'],
     },
     'core-transit': {
       'transit/datakey/plaintext/ws-*': ['update'],

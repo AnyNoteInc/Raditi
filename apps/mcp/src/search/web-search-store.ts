@@ -4,7 +4,7 @@ import { z } from 'zod'
 
 import { leaseIdOf, type McpTurnAccess } from '../access/mcp-access.ts'
 import type { McpWebSearchConfig } from '../config/config.ts'
-import type { WebSearchStatus } from './parallel-search.ts'
+import type { WebSearchStatus } from './yandex-search.ts'
 
 /**
  * Why a call is refused before it leaves: the limit it would pass, no reserve of credits under the

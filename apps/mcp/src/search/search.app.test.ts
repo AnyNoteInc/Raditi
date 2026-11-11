@@ -15,7 +15,8 @@ import { McpWebSearchService } from './web-search.ts'
 import type { WebSearchStore } from './web-search-store.ts'
 
 const token = `mcp_${'a'.repeat(64)}`
-const apiKey = 'synthetic-parallel-key-0123456789'
+const apiKey = 'synthetic-yandex-key-0123456789'
+const folderId = 'b1gsynthetic000folder'
 const scope = {
   keyId: '01960000-0000-7000-8000-000000000001',
   taskId: '01960000-0000-7000-8000-000000000002',
@@ -37,7 +38,9 @@ function vaultWith(key: string | null) {
   return {
     ...secrets,
     kvRead: vi.fn(async (path: string) =>
-      path === 'subs/search/parallel' && key !== null ? { data: { key }, version: 1 } : null,
+      path === 'subs/search/yandex' && key !== null
+        ? { data: { key, folderId }, version: 1 }
+        : null,
     ),
   }
 }
@@ -110,8 +113,9 @@ function fakeService(outcomeStatus: 'ok' | 'quota_exhausted' = 'ok') {
   const web = new McpWebSearchService({
     store,
     config,
-    key: { read: async () => apiKey },
+    key: { read: async () => ({ apiKey, folderId }) },
     search,
+    pacer: { wait: async () => true },
     log: () => {},
   })
   return { store, search, web }

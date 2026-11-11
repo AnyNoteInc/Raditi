@@ -38,7 +38,7 @@ export interface McpContentTesting extends ContentTesting {
  * no profile: a product path wherever the browser worker is configured (BROWSER_WORKER_URL),
  * production too. The role passes the agent's actions to the worker; the worker holds the
  * browser. The web search (search_web, SearchModule) is the same kind of path: offered while its
- * key is in Vault (`subs/search/parallel`), where the operator command puts it. The modules of the tools come in this order — site_info, content,
+ * access is in Vault (`subs/search/yandex`), where the operator command puts it. The modules of the tools come in this order — site_info, content,
  * browser, web, search — and so do their tools.
  */
 @Module({})

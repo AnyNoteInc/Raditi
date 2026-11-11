@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type { McpTurnAccess } from '../access/mcp-access.ts'
 import type { McpWebSearchConfig } from '../config/config.ts'
-import type { WebSearchOutcome } from './parallel-search.ts'
+import type { WebSearchOutcome } from './yandex-search.ts'
 import { McpWebSearchService } from './web-search.ts'
 import type { WebSearchReservation, WebSearchStore } from './web-search-store.ts'
 
@@ -20,14 +20,16 @@ const scope = {
   preview: null,
   requirements: { repository: false, browser: false },
 } satisfies McpTurnAccess
-const apiKey = 'synthetic-parallel-key-0123456789'
+const apiKey = 'synthetic-yandex-key-0123456789'
+const credentials = { apiKey, folderId: 'b1gsynthetic000folder' }
 const config: McpWebSearchConfig = { timeoutMs: 1000, limits: { turn: 3, serviceMonth: 5000 } }
 const query = 'secret-looking query words'
 
 function service(
   reservation: WebSearchReservation,
   outcome?: WebSearchOutcome,
-  key: string | null = apiKey,
+  key: typeof credentials | null = credentials,
+  turn = true,
 ) {
   const store: WebSearchStore = {
     reserve: vi.fn(async () => reservation),
@@ -42,6 +44,7 @@ function service(
     config,
     key: { read: async () => key },
     search,
+    pacer: { wait: async () => turn },
     log,
     now,
   })
@@ -88,7 +91,7 @@ describe('McpWebSearchService', () => {
     )
     await expect(web.search(scope, query)).resolves.toEqual({ ok: true, results })
     expect(store.reserve).toHaveBeenCalledWith(scope, config.limits)
-    expect(search).toHaveBeenCalledWith(query, { apiKey, timeoutMs: 1000 })
+    expect(search).toHaveBeenCalledWith(query, { credentials, timeoutMs: 1000 })
     expect(store.finish).toHaveBeenCalledWith('call-1', 'ok', 120)
     expect(log).toHaveBeenCalledWith(
       'web_search status=ok latency_ms=120 results=1 turn_calls=2 workspace_month=11 service_month=101',
@@ -109,6 +112,21 @@ describe('McpWebSearchService', () => {
     expect(answer).toMatchObject({ ok: false, code })
     expect(answer.ok || answer.message).toMatch(/without/)
     expect(store.finish).toHaveBeenCalledWith('call-1', status, 120)
+  })
+
+  it('refuses as busy, without a request, a call that gets no turn of the quota in time', async () => {
+    const { web, search, store } = service(
+      { reserved: true, id: 'call-1', usage },
+      undefined,
+      credentials,
+      false,
+    )
+    await expect(web.search(scope, query)).resolves.toMatchObject({
+      ok: false,
+      code: 'SEARCH_RATE_LIMITED',
+    })
+    expect(search).not.toHaveBeenCalled()
+    expect(store.finish).toHaveBeenCalledWith('call-1', 'rate_limited', 120)
   })
 
   it('logs neither the phrase, nor the results, nor the key', async () => {

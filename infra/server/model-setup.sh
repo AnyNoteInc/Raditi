@@ -3,7 +3,8 @@
 # infra/app/README.md, run as root from /opt/raditi/app (README.md, «Модель»).
 #   model-setup.sh key <backend> <plan> [paid until]  the key of Z.ai on stdin: zai-api payg (the API
 #                                                     paid per token) or zai-coding lite|pro|max
-#   model-setup.sh search-key                                   the key of Parallel Search on stdin (subs/search/parallel)
+#   model-setup.sh search-key <folder id>             the key of Yandex Search API on stdin and the folder
+#                                                     of Yandex Cloud (subs/search/yandex)
 #   model-setup.sh enable <backend>                   that provider, its profiles, rates and accounts
 #   model-setup.sh clearance <backend> <countries> <notice22 ref> <notice22 date> <notice12 ref>
 #                            <notice12 date> <transfer allowed from> <documents>
@@ -25,6 +26,9 @@ psql_c() { docker compose exec -T postgres psql -U postgres -d raditi -v ON_ERRO
 
 case "${1:-}" in
 key | search-key)
+  if [ "$1" = search-key ]; then
+    folder=${2:?folder: the id of the Yandex Cloud folder of the search (b1g…)}
+  fi
   if [ "$1" = key ]; then
     backend=${2:?backend: zai-api or zai-coding}
     plan=${3:?plan: payg for zai-api, lite, pro or max for zai-coding}
@@ -38,7 +42,7 @@ key | search-key)
   chown 10008:10008 "$dir" "$dir/token"
   chmod 0400 "$dir/token"
   if [ "$1" = search-key ]; then
-    set -- scripts/subscription-search-key.mjs --vault-token-file /run/writer-token
+    set -- scripts/subscription-search-key.mjs --vault-token-file /run/writer-token --folder-id "$folder"
   else
     set -- scripts/subscription-login.mjs --backend "$backend" --label "$backend-1" \
       --plan "$plan" ${paid:+--paid-until "$paid"} --vault-token-file /run/writer-token

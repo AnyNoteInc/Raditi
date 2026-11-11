@@ -272,13 +272,13 @@ export async function verifyLocalVault({ verifyClient = verifyKvClient } = {}) {
     await expect(llm, 'subs/data/zai-coding/new-account', 403, write({ token: 'synthetic' }, 0))
     // The key of the web search sits in subs/ too: the operator's writer puts it there with CAS,
     // the mcp role reads it (verifyContentAccess), and the gateway never does.
-    const search = 'subs/data/search/parallel'
+    const search = 'subs/data/search/yandex'
     await expect(writer, search, 200, write({ key: 'synthetic-search-v1' }, 0))
     await expect(writer, search, 403)
     await expect(writer, search, 200, write({ key: 'synthetic-search-v2' }, 1))
     await expect(llm, search, 403)
     await expect(llm, 'subs/data/search/other', 403)
-    await expect(llm, 'subs/metadata/search/parallel', 403)
+    await expect(llm, 'subs/metadata/search/yandex', 403)
     for (const path of [
       `subs/metadata/${sub}`,
       'turns/data/unknown',
@@ -653,9 +653,9 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
     [`subs/data/${sub}`, {}],
     [`subs/data/${sub}`, write({ token: 'synthetic' }, 0)],
     [`subs/metadata/${sub}`, {}],
-    ['subs/data/search/parallel', write({ key: 'synthetic-mcp' }, 2)],
-    ['subs/data/search/parallel', { method: 'DELETE' }],
-    ['subs/metadata/search/parallel', {}],
+    ['subs/data/search/yandex', write({ key: 'synthetic-mcp' }, 2)],
+    ['subs/data/search/yandex', { method: 'DELETE' }],
+    ['subs/metadata/search/yandex', {}],
     ['subs/data/search/other', {}],
     ['subs/metadata/search', { method: 'LIST' }],
     ['ops/data/x', {}],
@@ -665,7 +665,7 @@ async function verifyContentAccess({ address, rootToken, scopedTokens, turn, exp
     await expect(mcp, path, 403, options)
   }
   // mcp: the key of the web search, as the operator's writer left it — read-only.
-  const searchKey = await expect(mcp, 'subs/data/search/parallel', 200)
+  const searchKey = await expect(mcp, 'subs/data/search/yandex', 200)
   assert.equal(searchKey?.data?.metadata?.version, 2)
   assert.ok(searchKey?.data?.data?.key === 'synthetic-search-v2', 'Search key differs')
 

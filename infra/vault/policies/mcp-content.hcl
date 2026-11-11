@@ -33,6 +33,6 @@ path "transit/decrypt/ws-*" {
 
 # The key of the agent's web search (raditi_search_web, spec §20, «Веб-поиск агента»): kept where
 # the keys of the model are, put there by the operator command alone. Only this one path of subs/.
-path "subs/data/search/parallel" {
+path "subs/data/search/yandex" {
   capabilities = ["read"]
 }

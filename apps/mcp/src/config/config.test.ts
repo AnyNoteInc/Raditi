@@ -413,13 +413,13 @@ describe('the web search of the mcp role', () => {
     expect(loadMcpConfig(devEnv).webSearch).toEqual(pilot)
     expect(loadMcpConfig(exampleEnv).webSearch).toEqual(pilot)
     expect(loadMcpConfig(prodEnv()).webSearch).toEqual(pilot)
-    // The key lives in Vault where the keys of the model are: PARALLEL_API_KEY is the input of the
+    // The key lives in Vault where the keys of the model are: YANDEX_SEARCH_API_KEY is the input of the
     // operator command alone, and the role reads nothing of it.
     const withKey = loadMcpConfig({
       ...devEnv,
-      PARALLEL_API_KEY: 'synthetic-parallel-key-0123456789',
+      YANDEX_SEARCH_API_KEY: 'synthetic-yandex-key-0123456789',
     })
-    expect(JSON.stringify(withKey)).not.toContain('synthetic-parallel-key')
+    expect(JSON.stringify(withKey)).not.toContain('synthetic-yandex-key')
     expect(Object.keys(exampleEnv)).not.toContain('WEB_SEARCH_WORKSPACE_MONTH_LIMIT')
   })
 

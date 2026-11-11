@@ -9,8 +9,10 @@ import {
   type Env,
   type LlmBackend,
   type TurnCredentialRef,
+  WEB_SEARCH_FOLDER_FIELD,
   WEB_SEARCH_KEY_FIELD,
   WEB_SEARCH_KEY_PATH,
+  webSearchFolderSchema,
   webSearchKeySchema,
 } from '@repo/domain'
 import { llmBackends, zaiApiBackend, zaiCodingBackend } from '@repo/llm-backends'
@@ -83,7 +85,7 @@ const retireSchema = z
         : value.label !== undefined),
   )
 const tokenSchema = z.strictObject({ policy: z.enum(['writer', 'admin']), out: path })
-const searchKeySchema = z.strictObject({ vaultTokenFile: path })
+const searchKeySchema = z.strictObject({ vaultTokenFile: path, folderId: webSearchFolderSchema })
 export type SubscriptionOptions =
   | { command: SubscriptionCommand; help: true }
   | { command: 'login'; help: false; value: z.output<typeof loginSchema> }
@@ -113,6 +115,7 @@ export function parseSubscriptionArguments(
     '--turns-token-file': 'turnsTokenFile',
     '--policy': 'policy',
     '--out': 'out',
+    '--folder-id': 'folderId',
   }
   const booleans = new Set(['compromised', 'finalize', 'consoleRevoked', 'cancel'])
   const value: Record<string, unknown> = {}
@@ -208,7 +211,7 @@ export function subscriptionHelp(command: SubscriptionCommand): string {
     retire:
       'subscriptions:retire -- --account <UUID> --label <метка> [--compromised --turns-token-file <путь>]\nОкончательное удаление: --account <UUID> --label <метка> --finalize --vault-token-file <путь> [--console-revoked].\n--console-revoked подтверждает ручной отзыв ключа в консоли провайдера.\nОтмена запроса, пока ключ не отозван: --account <UUID> --cancel.',
     'search-key':
-      'subscriptions:search-key -- --vault-token-file <абсолютный путь>\nКлюч веб-поиска агента (Parallel Search) поступает через stdin или скрытый ввод и записывается в Vault subs/search/parallel токеном writer, с CAS; обратно команда его не читает. Читает его только роль mcp — инструмент появится у агента в течение 30 секунд. Ключ проверяйте в консоли Parallel: команда к сервису не обращается.',
+      'subscriptions:search-key -- --vault-token-file <абсолютный путь> --folder-id <id каталога Yandex Cloud>\nКлюч API веб-поиска агента (Yandex Search API, сервисный аккаунт с ролью search-api.webSearch.user) поступает через stdin или скрытый ввод и вместе с id каталога записывается в Vault subs/search/yandex токеном writer, с CAS; обратно команда его не читает. Читает его только роль mcp — инструмент появится у агента в течение 30 секунд. Ключ проверяйте в консоли Yandex Cloud: команда к сервису не обращается.',
     token:
       'subscriptions:token -- --policy writer|admin --out <абсолютный путь>\nТокен dev-root поступает через stdin или скрытый ввод. Новый файл создаётся с правами 0400.\nТолько development/test и числовой loopback VAULT_ADDR; срок — 15 минут.',
   }
@@ -340,7 +343,7 @@ export async function runSubscriptionCommand(
         )
       const { version } = await writer.kvWrite(
         WEB_SEARCH_KEY_PATH,
-        { [WEB_SEARCH_KEY_FIELD]: key.data },
+        { [WEB_SEARCH_KEY_FIELD]: key.data, [WEB_SEARCH_FOLDER_FIELD]: options.value.folderId },
         { cas: metadata?.currentVersion ?? 0 },
       )
       process.stdout.write(
