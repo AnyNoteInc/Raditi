@@ -59,8 +59,8 @@ export interface McpBrowserWorkerConfig {
 }
 
 /**
- * The agent's web search (`raditi_search_web`, Parallel Search in its `fast` mode; spec §20,
- * «Веб-поиск агента — 08.11.2026»). Its key is no setting: it is read from Vault
+ * The agent's web search (`raditi_search_web`, Yandex Search API; spec §20, «Веб-поиск агента —
+ * 08.11.2026» and «… — Yandex Search API, 11.11.2026»). Its key is no setting: it is read from Vault
  * (`WEB_SEARCH_KEY_PATH`), where the operator command puts it, and the tool is there while it is.
  */
 export interface McpWebSearchConfig {

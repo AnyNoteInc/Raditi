@@ -13,8 +13,8 @@ import { McpWebSearchService } from './web-search.ts'
 import { PostgresWebSearchStore } from './web-search-store.ts'
 
 /**
- * The agent's web search (`search_web`, Parallel Search in its `fast` mode). No profile: a
- * product path of every composition, offered while its key is in Vault (`subs/search/parallel`,
+ * The agent's web search (`search_web`, Yandex Search API). No profile: a product path of every
+ * composition, offered while its access is in Vault (`subs/search/yandex`,
  * read by AccessModule's WebSearchKey). The key stays in this role: the sandbox, the CLI and the
  * client never get it.
  */

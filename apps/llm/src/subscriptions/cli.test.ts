@@ -559,7 +559,7 @@ describe('operator subscription commands', { timeout: 90_000 }, () => {
           res.writeHead(status, { 'content-type': 'application/json' })
           res.end(JSON.stringify(body))
         }
-        if (req.method === 'GET' && req.url === '/v1/subs/metadata/search/parallel')
+        if (req.method === 'GET' && req.url === '/v1/subs/metadata/search/yandex')
           return current === null
             ? json(404, { errors: [] })
             : json(200, {
@@ -572,7 +572,7 @@ describe('operator subscription commands', { timeout: 90_000 }, () => {
                   },
                 },
               })
-        if (req.method === 'POST' && req.url === '/v1/subs/data/search/parallel')
+        if (req.method === 'POST' && req.url === '/v1/subs/data/search/yandex')
           return json(200, {
             data: {
               version: (current ?? 0) + 1,
@@ -588,7 +588,8 @@ describe('operator subscription commands', { timeout: 90_000 }, () => {
     cleanup.push(() => new Promise<void>((resolve) => server.close(() => resolve())))
     return { requests, address: `http://127.0.0.1:${(server.address() as AddressInfo).port}` }
   }
-  const searchKey = 'private-parallel-key-0123456789'
+  const searchKey = 'private-yandex-key-0123456789'
+  const folderId = 'b1gsynthetic000folder'
   async function writerFile() {
     const file = join(await privateDirectory(), 'writer-token')
     const { writeFile } = await import('node:fs/promises')
@@ -596,13 +597,17 @@ describe('operator subscription commands', { timeout: 90_000 }, () => {
     return file
   }
 
-  it('takes the web search key on stdin into subs/search/parallel with the writer token, CAS from its metadata', async () => {
+  it('takes the web search key on stdin and the folder into subs/search/yandex with the writer token, CAS from its metadata', async () => {
     for (const current of [null, 3]) {
       const vault = await searchKeyVault(current)
-      const result = await command('search-key', ['--vault-token-file', await writerFile()], {
-        env: { APP_ENV: 'test', VAULT_ADDR: vault.address },
-        input: `${searchKey}\n`,
-      })
+      const result = await command(
+        'search-key',
+        ['--vault-token-file', await writerFile(), '--folder-id', folderId],
+        {
+          env: { APP_ENV: 'test', VAULT_ADDR: vault.address },
+          input: `${searchKey}\n`,
+        },
+      )
       expect(result.code).toBe(0)
       expect(result.stdout).toContain(`версия ${(current ?? 0) + 1}`)
       expect(result.stdout + result.stderr).not.toContain('private-')
@@ -610,9 +615,9 @@ describe('operator subscription commands', { timeout: 90_000 }, () => {
       expect(writes).toEqual([
         {
           method: 'POST',
-          path: '/v1/subs/data/search/parallel',
+          path: '/v1/subs/data/search/yandex',
           token: 'private-writer-token',
-          body: { data: { key: searchKey }, options: { cas: current ?? 0 } },
+          body: { data: { key: searchKey, folderId }, options: { cas: current ?? 0 } },
         },
       ])
       // The command never reads the value back.
@@ -626,28 +631,38 @@ describe('operator subscription commands', { timeout: 90_000 }, () => {
 
   it('refuses a malformed web search key before writing anything, without repeating it', async () => {
     const vault = await searchKeyVault(null)
-    const result = await command('search-key', ['--vault-token-file', await writerFile()], {
-      env: { APP_ENV: 'test', VAULT_ADDR: vault.address },
-      input: 'privkey\n',
-    })
+    const result = await command(
+      'search-key',
+      ['--vault-token-file', await writerFile(), '--folder-id', folderId],
+      { env: { APP_ENV: 'test', VAULT_ADDR: vault.address }, input: 'privkey\n' },
+    )
     expect(result.code).toBe(1)
     expect(result.stderr).toContain('16–512 видимых знаков ASCII')
     expect(result.stdout + result.stderr).not.toContain('privkey')
     expect(vault.requests.filter((request) => request.method === 'POST')).toHaveLength(0)
   })
 
-  it('takes nothing but the writer token file and says how in its help', () => {
-    expect(parseSubscriptionArguments('search-key', ['--vault-token-file', '/tmp/t'])).toEqual({
+  it('takes the writer token file and the folder and nothing else, and says how in its help', () => {
+    expect(
+      parseSubscriptionArguments('search-key', [
+        '--vault-token-file',
+        '/tmp/t',
+        '--folder-id',
+        folderId,
+      ]),
+    ).toEqual({
       command: 'search-key',
       help: false,
-      value: { vaultTokenFile: '/tmp/t' },
+      value: { vaultTokenFile: '/tmp/t', folderId },
     })
     for (const args of [
       [],
-      ['--vault-token-file', 'relative'],
-      ['--vault-token-file', '/tmp/t', '--label', 'x'],
+      ['--vault-token-file', '/tmp/t'],
+      ['--vault-token-file', 'relative', '--folder-id', folderId],
+      ['--vault-token-file', '/tmp/t', '--folder-id', 'Not A Folder'],
+      ['--vault-token-file', '/tmp/t', '--folder-id', folderId, '--label', 'x'],
     ])
       expect(() => parseSubscriptionArguments('search-key', args)).toThrow()
-    expect(subscriptionHelp('search-key')).toContain('subs/search/parallel')
+    expect(subscriptionHelp('search-key')).toContain('subs/search/yandex')
   })
 })
