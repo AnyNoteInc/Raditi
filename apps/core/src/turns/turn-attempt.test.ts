@@ -17,6 +17,7 @@ import {
   type TurnExecution,
   type TurnRequest,
 } from '@repo/domain'
+import { packOutbox, readOutboxArchive } from '@repo/snapshots'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { RemoteTurnExecutor } from '../runner-api/remote-turn-executor.ts'
@@ -815,7 +816,12 @@ describe('TurnAttempt without a repository (docs/plan/57-browser-tasks.md, Б4)'
   const { workspace: _workspace, ...withoutWorkspace } = request
 
   async function homeOnly(
-    captured: { homeBytes: number; patch?: Uint8Array; untracked?: Uint8Array } = {
+    captured: {
+      homeBytes: number
+      patch?: Uint8Array
+      untracked?: Uint8Array
+      outbox?: Uint8Array
+    } = {
       homeBytes: 4,
     },
     workspace: { preparePublication: ReturnType<typeof vi.fn> } | null = null,
@@ -896,6 +902,28 @@ describe('TurnAttempt without a repository (docs/plan/57-browser-tasks.md, Б4)'
       expect(entry).not.toHaveProperty('candidateHeadSha')
     }
     expect(r.release).toHaveBeenCalledOnce()
+  })
+
+  // docs/plan/66-chat-visuals.md, В8: the agent's message may speak of files that never came.
+  it('hands over the outbox it read again, as it came', async () => {
+    const outbox = await packOutbox([{ name: 'Смета.xlsx', bytes: 'x' }], { skipped: 1 })
+    const r = await homeOnly({ homeBytes: 4, outbox })
+    const done = await r.attempt.complete([], r.run as never)
+    expect(done.outbox).toBe(outbox)
+  })
+
+  it('puts the notice that the files were refused where an outbox is that fails the second check', async () => {
+    const key = 'synthetic-turn-key-0123456789'
+    const outbox = await packOutbox([{ name: 'a.txt', bytes: `token ${key}` }])
+    const r = await homeOnly({ homeBytes: 4, outbox })
+    r.attempt.credentials = [key]
+    const done = await r.attempt.complete([], r.run as never)
+    expect(done.outbox).not.toBe(outbox)
+    expect(await readOutboxArchive(done.outbox!)).toEqual({
+      entries: [],
+      skipped: 0,
+      refused: true,
+    })
   })
 
   it('refuses a capture that answers parts of a working copy', async () => {

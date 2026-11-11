@@ -18,6 +18,7 @@ import {
   feedEndedSiteText,
   feedFailureKeptText,
   feedFailureOpenText,
+  feedFileLeftText,
   feedFilesChangedText,
   feedMediaAddedText,
   feedObjectKindLabel,
@@ -235,6 +236,8 @@ function rowBlock(row: FeedItem, withSite: boolean): string | null {
       return block([agent(feedExportText.screenshot(row.number))])
     case 'feed.file':
       return block([agent(feedExportText.file(row.name))])
+    case 'feed.file_left':
+      return block([heading(feedExportText.agent, row.at), feedFileLeftText(row)])
     case 'feed.rewind':
       return feedRewindText(row)
     case 'feed.redo':

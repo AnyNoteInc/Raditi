@@ -65,6 +65,8 @@ export const feedEventTypes = [
   'feed.edit',
   // A file the agent made for the client in its turn (docs/plan/66-chat-visuals.md, В8).
   'feed.file',
+  // What the agent left for the client did not all reach the chat (docs/plan/66, В8).
+  'feed.file_left',
 ] as const
 export type FeedEventType = (typeof feedEventTypes)[number]
 
@@ -729,6 +731,28 @@ export const feedFilePayloadSchema = z.strictObject({
 export type FeedFilePayload = z.infer<typeof feedFilePayloadSchema>
 
 /**
+ * How far the files of a turn reached the chat: `skipped` — some entries of the outbox were left
+ * (a folder, a link, a name that cannot reach the client) and the others came, or some of them
+ * did not come; `refused` — none came: the checks took them out (too many, one too large, a
+ * secret in one) or the platform lost them (a command of the sandbox, the bucket). The cause is
+ * not told, a found secret least of all, and the words of the row do not guess it.
+ */
+export const feedFileLeftReasons = ['skipped', 'refused'] as const
+export type FeedFileLeftReason = (typeof feedFileLeftReasons)[number]
+
+/**
+ * `feed.file_left` v1 — the agent's message may speak of a file that never came: this row, after
+ * the files that did, says so (docs/plan/66-chat-visuals.md, В8, «Имена файлов»). `count` is how
+ * many entries were left, and 0 when the files were refused whole. Trusted, no text.
+ */
+export const feedFileLeftPayloadSchema = z.strictObject({
+  v: version,
+  reason: z.enum(feedFileLeftReasons),
+  count: z.number().int().min(0).max(1_000_000),
+})
+export type FeedFileLeftPayload = z.infer<typeof feedFileLeftPayloadSchema>
+
+/**
  * `feed.rewind` v1 — `/undo` took the last turn back: the conversation, and with `files` the
  * changes in the files too. `site` says what stays all the same, by the writes of the whole task:
  * a browser session belongs to the task, not to a turn. Trusted, no text.
@@ -807,6 +831,7 @@ export const feedPayloadSchemas = Object.freeze({
   'feed.redo': feedRedoPayloadSchema,
   'feed.edit': feedEditPayloadSchema,
   'feed.file': feedFilePayloadSchema,
+  'feed.file_left': feedFileLeftPayloadSchema,
 }) satisfies Record<FeedEventType, z.ZodType>
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength
@@ -840,6 +865,7 @@ export const feedRowSchemaWithin = (maxBytes: number) =>
       row('feed.redo', feedRedoPayloadSchema),
       row('feed.edit', feedEditPayloadSchema),
       row('feed.file', feedFilePayloadSchema),
+      row('feed.file_left', feedFileLeftPayloadSchema),
     ])
     .superRefine((value, ctx) => {
       if (feedPayloadBytes(value.payload) > maxBytes)
@@ -1098,6 +1124,12 @@ const readFile = z.object({
   sizeBytes: z.number().int().min(0),
 })
 
+const readFileLeft = z.object({
+  // A reason this code does not know says the less: some of the files did not come.
+  reason: known(feedFileLeftReasons, 'skipped' as const),
+  count: z.number().int().min(0),
+})
+
 const readCancelled = z.object({
   turn: turnNo.nullable(),
   /** null — a way of cancelling added later: the plate is shown without a reason. */
@@ -1148,6 +1180,7 @@ export type FeedEvent =
   | ({ type: 'feed.redo' } & z.infer<typeof readRedo>)
   | ({ type: 'feed.edit' } & z.infer<typeof readEdit>)
   | ({ type: 'feed.file' } & z.infer<typeof readFile>)
+  | ({ type: 'feed.file_left' } & z.infer<typeof readFileLeft>)
   | { type: 'newer' }
   | { type: 'unreadable' }
   | { type: 'skipped' }
@@ -1276,6 +1309,10 @@ const readers: Record<FeedEventType, Record<number, Reader>> = {
   },
   'feed.file': {
     1: (payload) => readWith(readFile, payload, (data) => ({ type: 'feed.file', ...data })),
+  },
+  'feed.file_left': {
+    1: (payload) =>
+      readWith(readFileLeft, payload, (data) => ({ type: 'feed.file_left', ...data })),
   },
 }
 

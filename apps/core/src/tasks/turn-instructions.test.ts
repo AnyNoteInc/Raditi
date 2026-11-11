@@ -494,6 +494,9 @@ describe('files for the client (docs/plan/66-chat-visuals.md, В8–В11)', () =
       expect(text).toContain('## Files for the client')
       expect(text).toContain('mkdir -p /workspace/out')
       expect(text).toContain('at most 10 files of up to 20 MiB each')
+      // A name is told in characters, which an agent counts; a ustar header's bytes it cannot.
+      expect(text).toContain('up to 100 characters (Russian letters are fine')
+      expect(text).not.toMatch(/\bbytes\b.*that the client will see/)
       expect(text).toContain('`python-docx` and `openpyxl`')
     }
     expect(turnInstructions({ state: 'absent' })).toContain(

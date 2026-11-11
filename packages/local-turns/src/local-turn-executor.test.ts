@@ -14,6 +14,8 @@ import {
 } from '@repo/domain'
 import {
   openSnapshotParts,
+  packOutbox,
+  readOutboxArchive,
   sealSnapshotPart,
   SandboxSnapshotTransport,
   type SnapshotSealBase,
@@ -89,7 +91,9 @@ async function fixture(
       calls.push(spec)
       // No link anywhere: `test -L` answers 1, as for a path that is none.
       if (spec.argv[0] === 'test' && spec.argv[1] === '-L') return handle(undefined, 1)
-      if (spec.argv.includes('--directory=/workspace/out')) return handle(options.outbox?.archive)
+      if (spec.argv[0] === 'mktemp') return handle(Buffer.from('/workspace/.outbox.Ab3dE5gH\n'))
+      if (spec.argv.includes('--directory=/workspace/.outbox.Ab3dE5gH'))
+        return handle(options.outbox?.archive)
       if (spec.argv.includes('-printf')) return handle(Buffer.from(options.outbox?.listing ?? ''))
       if (spec.argv.includes('--create')) return handle(thisHome)
       if (spec.argv.includes('-mindepth') && options.workdir)
@@ -480,7 +484,7 @@ describe('files of the client on the local executor', () => {
 
 describe('files of the agent for the client on the local executor (docs/plan/66, В8)', () => {
   it('hands the outbox over with the capture, never sealed with the home part', async () => {
-    const archive = await tarZst({ 'estimate.txt': 'total 100' })
+    const archive = await packOutbox([{ name: 'estimate.txt', bytes: 'total 100' }])
     const f = await fixture({ outbox: { listing: 'f 9 estimate.txt\0', archive } })
     const execution = await f.executor.prepare(f.input(), signal)
     const captured = await execution.capture({ home })
@@ -489,21 +493,28 @@ describe('files of the agent for the client on the local executor (docs/plan/66,
   })
 
   it('drops an outbox that holds a turn credential, and the turn goes on', async () => {
-    const archive = await tarZst({ 'a.txt': `key ${credentials[0]}` })
+    const archive = await packOutbox([{ name: 'a.txt', bytes: `key ${credentials[0]}` }])
     const f = await fixture({ outbox: { listing: 'f 30 a.txt\0', archive } })
     const execution = await f.executor.prepare(f.input(), signal)
     const captured = await execution.capture({ home })
-    expect(captured).toEqual({ homeBytes: f.thisHome.byteLength })
+    // The files are gone, the notice that they were is not: the client is told (В8).
+    expect(captured).toEqual({ homeBytes: f.thisHome.byteLength, outbox: expect.any(Uint8Array) })
+    expect(await readOutboxArchive(captured.outbox!)).toEqual({
+      entries: [],
+      skipped: 0,
+      refused: true,
+    })
     expect(f.log).toHaveBeenCalledWith(
       'turn_outbox_dropped container=container2 reason=SNAPSHOT_NOT_WRITTEN',
     )
   })
 
-  it('drops more than ten files and says how many entries it left', async () => {
+  it('drops more than ten files, and says how many entries it left', async () => {
     const eleven = Array.from({ length: 11 }, (_, i) => `f 1 f${i}.txt\0`).join('')
     const f = await fixture({ outbox: { listing: eleven, archive: new Uint8Array() } })
     const execution = await f.executor.prepare(f.input(), signal)
-    expect(await execution.capture({ home })).toEqual({ homeBytes: f.thisHome.byteLength })
+    const captured = await execution.capture({ home })
+    expect(await readOutboxArchive(captured.outbox!)).toMatchObject({ refused: true })
     expect(f.log).toHaveBeenCalledWith(
       'turn_outbox_dropped container=container2 reason=PUBLICATION_TOO_LARGE',
     )
@@ -511,7 +522,12 @@ describe('files of the agent for the client on the local executor (docs/plan/66,
       outbox: { listing: 'd 4096 nested\0', archive: new Uint8Array() },
     })
     const other = await skipping.executor.prepare(skipping.input(), signal)
-    expect(await other.capture({ home })).toEqual({ homeBytes: skipping.thisHome.byteLength })
+    const left = await other.capture({ home })
+    expect(await readOutboxArchive(left.outbox!)).toEqual({
+      entries: [],
+      skipped: 1,
+      refused: false,
+    })
     expect(skipping.log).toHaveBeenCalledWith('turn_outbox_skipped container=container2 entries=1')
   })
 })
