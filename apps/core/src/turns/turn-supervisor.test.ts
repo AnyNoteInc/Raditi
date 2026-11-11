@@ -1801,6 +1801,26 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     expect(f.snapshots.save).not.toHaveBeenCalled()
     expect(f.publication.publish).not.toHaveBeenCalled()
     expect(f.leases.release).toHaveBeenCalledOnce()
+    expect(f.evidence.at(-1)).toMatchObject({
+      phase: 'failed',
+      reason: 'run_failed',
+      exit: { code: 1, reason: 'exited' },
+    })
+  })
+
+  it('journals the exec limit it ran into as the turn running out of time', async () => {
+    const f = fixture()
+    // The runner ends the agent at the turn's deadline less the finalize reserve, before the
+    // guard's own timer: the turn ran out of time, not into a technical failure.
+    vi.mocked(f.handle.wait).mockResolvedValue({ code: null, reason: 'timeout' })
+    await expect(f.run()).rejects.toMatchObject({ code: 'TURN_EXEC_FAILED' })
+    expect(f.snapshots.save).not.toHaveBeenCalled()
+    expect(f.evidence.at(-1)).toMatchObject({
+      phase: 'failed',
+      reason: 'timeout',
+      outcome: 'failed',
+      exit: { code: null, reason: 'timeout' },
+    })
   })
 
   it('does not accept a result after a failure the agent reported, whatever its exit code', async () => {
