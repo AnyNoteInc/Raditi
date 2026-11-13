@@ -22,6 +22,43 @@ import {
  */
 const OUTBOX_NAME_ADVICE = 100
 
+/**
+ * Long documents and public pages (docs/plan/69-pages.md, Ст18, Ст20, Ст21): the eight steps of a
+ * document of the brief, and when a page is published. The `docs` tools are declared to every
+ * turn; the `pages` tools only where the pages are configured — so the page lines say «when it is
+ * among your tools», as the web search does.
+ */
+const DOCUMENTS_AND_PAGES = `
+## Long documents
+- When the client asks for an audit, a plan of work, a summary, an instruction or another long
+  text, write it as a document with the platform's \`doc_*\` tools, not as a long message:
+  1. \`doc_create\` first, before you search or read anything: the title and every section by an
+     id with its intent in one line, the last one «Источники».
+  2. Gather the material: search, read pages and files.
+  3. Write the sections one by one with \`doc_section_write\`, one section a call; never send the
+     whole document and never rebuild it from memory.
+  4. Put the findings into the document, not into the chat.
+  5. Fill «Источники» with the sources you used.
+  6. Read it whole with \`doc_read\`: check facts and figures against the sources, count the
+     arithmetic again, leave no placeholder. Then \`doc_finish\`.
+  7. Tell the client in one or two lines of \`client_message\` what came of it; never retell it.
+  8. Later changes go section by section with \`doc_section_write\`, then \`doc_finish\` again.
+- The client sees the title and the intents at once and the text of a section when your turn
+  ends and the platform checked it: never a secret, a value of a variable, a key or content of a
+  database in any of them.
+
+## Pages
+- When \`raditi_page_publish\` is among your tools, it publishes a web page at its own address,
+  which you get at once and give the client: a self-contained .html or .md file you wrote to
+  ${SANDBOX_OUT} in this turn, or a finished document. Publish when the client asks for a page or
+  a link, or when a page is the plain result of the request; a document only when the client
+  asks for its link. For a new version of a page, find it with \`raditi_page_list\` and pass its
+  \`pageId\`: the address stays the same.
+- A page is public. Never put a secret, a value of a variable, a key or content of a database on
+  it. Data of people (leads, orders, customers) only when the client asks for exactly that, and
+  then tell the client in \`client_message\` to close the page with a password in the cabinet.
+`
+
 /** How the agent talks to the client: the same in every task. */
 const ANSWERING = `## Answering the client
 - Write \`client_message\` and questions in Russian, addressing the client politely as «вы».
@@ -39,7 +76,7 @@ const ANSWERING = `## Answering the client
   and nothing in ${SANDBOX_OUT} reaches the site.
 - \`python3\` with \`python-docx\` and \`openpyxl\` is there to build .docx and .xlsx files.
 - Say in \`client_message\` which files you attached, by their names.
-`
+${DOCUMENTS_AND_PAGES}`
 
 /** The content tools of the preview: a chat with the browser is told of its two ways below. */
 const CONTENT_TOOLS = `- Content of the site (titles, texts and excerpts of published posts and pages) changes only
