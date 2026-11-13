@@ -48,9 +48,9 @@ describe.skipIf(!databaseUrl)('the usage windows of 13.11.2026', () => {
       credits_per_week: number | null
     }>(`SELECT slug, credits_per_5h, credits_per_week FROM plans ORDER BY sort_order`)
     expect(rows).toEqual([
-      { slug: 'start', credits_per_5h: 20, credits_per_week: 55 },
-      { slug: 'business', credits_per_5h: 70, credits_per_week: 210 },
-      { slug: 'agency', credits_per_5h: 200, credits_per_week: 700 },
+      { slug: 'start', credits_per_5h: null, credits_per_week: 55 },
+      { slug: 'business', credits_per_5h: null, credits_per_week: 210 },
+      { slug: 'agency', credits_per_5h: null, credits_per_week: 700 },
       { slug: 'pack', credits_per_5h: null, credits_per_week: null },
       { slug: 'payg', credits_per_5h: null, credits_per_week: null },
     ])
@@ -119,7 +119,7 @@ describe.skipIf(!databaseUrl)('the usage windows of 13.11.2026', () => {
     const id = await workspace()
     await expect(workspaceUsageTerms(prisma, id)).resolves.toEqual({
       tier: 'none',
-      limits: { '5h': 15, week: 50 },
+      limits: { '5h': null, week: 50 },
     })
   })
 

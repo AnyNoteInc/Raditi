@@ -39,8 +39,8 @@ describe('windows of a workspace', () => {
   })
 
   it('takes the limits of the tariff, else those without a tariff (Л4)', () => {
-    expect(windowLimitsOf(null)).toEqual({ '5h': 15, week: 50 })
-    expect(noTariffWindowCredits).toEqual({ '5h': 15, week: 50 })
+    expect(windowLimitsOf(null)).toEqual({ '5h': null, week: 50 })
+    expect(noTariffWindowCredits).toEqual({ '5h': null, week: 50 })
     expect(windowLimitsOf({ creditsPer5h: 70, creditsPerWeek: 210 })).toEqual({
       '5h': 70,
       week: 210,

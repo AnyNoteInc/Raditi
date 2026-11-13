@@ -775,7 +775,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
       // The workspace is there: the windows without a tariff (plan 71).
       tier: 'none',
       windows: [
-        { kind: '5h', limit: 15, used: 0, left: 15, resetsAt: null },
+        { kind: '5h', limit: null, used: 0, left: null, resetsAt: null },
         { kind: 'week', limit: 50, used: 0, left: 50, resetsAt: null },
       ],
       paymentsEnabled: true,
