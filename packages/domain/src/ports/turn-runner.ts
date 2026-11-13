@@ -61,10 +61,24 @@ export function withSite<T extends { siteId: string | null; site: unknown }>(
 export const TURN_PUBLICATION_GRACE_MS = 90_000
 
 /**
- * The turn limit covers publication too: the agent's exec ends this much earlier, leaving time
- * for quiesce, capture, the candidate commit and its secret scan, the snapshot save and push.
+ * A turn has no time limit (docs/plan/70-turn-without-time-limit.md, ВР1): it lives while its
+ * supervisor renews it. One renewal grants this much — the lease, the assignment's deadline, the
+ * turn's keys and its container's lease — so a turn whose supervisor died is gone this long
+ * after its last renewal. Longer than the publication grace: a push started before the death
+ * still ends under the fence.
  */
-export const TURN_FINALIZE_RESERVE_MS = 3 * 60_000
+export const TURN_LEASE_TTL_MS = 3 * 60_000
+
+/** How often a live supervisor renews its turn (TURN_LEASE_TTL_MS). */
+export const TURN_RENEW_INTERVAL_MS = 30_000
+
+/**
+ * What the steps after the agent may take together — quiesce, capture, the candidate commit and
+ * its secret scan, the snapshot save and push. The agent has no time limit; these platform steps
+ * do (docs/plan/70-turn-without-time-limit.md, ВР7): a save or a push that never answers does not
+ * keep the turn for good.
+ */
+export const TURN_FINALIZE_MS = 3 * 60_000
 
 /** Another operation owns the site. */
 export const siteBusy = (): DomainError =>
@@ -149,8 +163,9 @@ export interface SiteLeaseStore {
    */
   acquire(input: Omit<SiteLeaseFence, 'epoch'> & { ttlMs: number }): Promise<SiteLeaseGrant | null>
   /**
-   * Turns never renew: one grant covers the hard limit plus TURN_PUBLICATION_GRACE_MS. Kept for
-   * long deploy/revert operations (P12, up to 45 minutes), which will renew under their fence.
+   * Moves the expiry of a live lease to `ttlMs` from now, under its whole fence; null when the
+   * fence no longer owns it. Turns renew through TurnAssignmentStore.renewTurn, which moves their
+   * assignment and keys in the same statement (TURN_LEASE_TTL_MS).
    */
   renew(fence: SiteLeaseFence, ttlMs: number): Promise<SiteLeaseGrant | null>
   assert(fence: SiteLeaseFence): Promise<boolean>

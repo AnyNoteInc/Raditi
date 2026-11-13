@@ -20,12 +20,15 @@ import {
   siteWorkspaceRules,
   turnSkillsOf,
   type LlmBackend,
+  type LlmBackendId,
+  type ModelClass,
   type PreviewAddress,
   type SiteAdapter,
   type SiteFacts,
   type SiteStack,
 } from '@repo/domain'
 
+import { poolHasRoom } from '../llm/pool-room.ts'
 import { AGENT_COMMANDS, type PreviewFacts } from './turn-instructions.ts'
 import {
   savedPlanOf,
@@ -259,11 +262,11 @@ export async function readPassFacts(
 
   const modelClass = modelClassSchema.safeParse(task.modelClass ?? 'standard')
   if (!modelClass.success) return null
-  // The same query «Попробовать ещё» asks before it moves a dialog into a class.
-  const chosen = await classProfile(db, {
-    modelClass: modelClass.data,
-    backends: deps.backends.map((backend) => backend.id),
-  })
+  // The same query «Попробовать ещё» asks before it moves a dialog into a class, backend by
+  // backend in the order of the registry: the plan first, the API when the plan has its limits
+  // out (owner's answer of 13.11.2026, docs/plan/70-turn-without-time-limit.md, ВР24). With every
+  // pool out the first stays, and the issue of its key tells the client so (plan 68).
+  const chosen = await profileWithRoom(db, deps.backends, modelClass.data)
   const profile = chosen
     ? {
         backend: chosen.backend,
@@ -420,4 +423,21 @@ async function browserFactsOf(
     saved: checkpoints.flatMap((checkpoint) => savedObjectOf(checkpoint) ?? []),
     guide,
   }
+}
+
+/** The profile of the class on the first backend whose pool has room, or on the first at all. */
+async function profileWithRoom(
+  db: PrismaClient,
+  backends: readonly LlmBackend[],
+  modelClass: ModelClass,
+): Promise<Awaited<ReturnType<typeof classProfile<LlmBackendId>>>> {
+  let first: Awaited<ReturnType<typeof classProfile<LlmBackendId>>> = null
+  for (const backend of backends) {
+    const profile = await classProfile(db, { modelClass, backends: [backend.id] })
+    if (!profile) continue
+    first ??= profile
+    // One backend: no other to go to, and the issue decides under its lock as before.
+    if (backends.length === 1 || (await poolHasRoom(db, backend, new Date()))) return profile
+  }
+  return first
 }

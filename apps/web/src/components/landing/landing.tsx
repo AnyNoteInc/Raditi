@@ -1,10 +1,14 @@
 import { legalDocuments } from '@repo/domain'
-import { typicalTaskCredits } from '@repo/domain/billing/credit-numbers'
+import {
+  giftTaskCounts,
+  signupGiftCredits,
+  typicalTaskCredits,
+} from '@repo/domain/billing/credit-numbers'
 import { AnimatedBrandSymbol } from '@repo/ui/animated-brand-symbol'
 import Link from 'next/link'
 import type { ReactNode } from 'react'
 
-import { CHARGED_FOR_DONE_WORK, TARIFF_CREDITS_CARRY_OVER } from '@/lib/credit-price'
+import { CHARGED_FOR_DONE_WORK } from '@/lib/credit-price'
 import { legalDocumentHref } from '@/lib/legal'
 import { nbsp } from '@/lib/nbsp'
 import type { LandingViewer } from '@/server/landing-viewer'
@@ -14,10 +18,8 @@ import { LandingIcon } from './landing-icons'
 import { LandingLead } from './landing-lead'
 import { LandingMotion } from './landing-motion'
 import { LandingPlatforms } from './landing-platforms'
-import { cafe, story } from './landing-story'
 import { mainAction } from './main-action'
-import { typicalCreditsInWords } from './pricing-calculator'
-import { SafetyDemo } from './safety-demo'
+import { pluralCredits, typicalCreditsInWords } from './pricing-calculator'
 import { SiteDemo } from './site-demo'
 import styles from './landing.module.css'
 
@@ -59,46 +61,30 @@ const capabilities = [
   },
 ]
 
-// The order follows the visitor: does it suit me and what can I do now, how to use it and what
-// counts, what happens to the site and the data.
-const questions = [
+// The order follows the visitor: does it suit me, what does it cost, what if it goes wrong, where
+// the data lives. The page and the FAQPage markup of the search engines read this one list.
+export const questions = [
   {
-    question: 'Для каких сайтов подойдёт Радити?',
+    question: 'Нужно разбираться в сайтах?',
     answer:
-      'Для сайтов малого бизнеса — кафе, студий, локальных магазинов и сервисных компаний — на WordPress, Joomla, OpenCart, MODX и 1С-Битрикс. Не знаете, на чём сделан ваш сайт? Укажите его адрес в заявке на подключение — подскажем.',
+      'Нет. Пишите, как написали бы знакомому: «поменяй цену капучино на 290», «замени фото на главной». Если чего-то не хватит, Радити переспросит.',
   },
   {
-    question: 'Можно уже подключить сайт и оплатить?',
+    question: 'Мой сайт подойдёт?',
     answer:
-      'Подключить — да: оставьте заявку на этой странице, мы свяжемся с вами и подключим сайт сами, бесплатно. Оплата откроется позже. Пример вверху страницы работает только в вашем браузере и ничего не меняет на вашем сайте.',
-  },
-  {
-    question: 'Что понадобится, чтобы подключить сайт?',
-    answer:
-      'Только заявка. Мы свяжемся с вами, скажем, какие доступы понадобятся, и подключим сайт сами. Подключение и настройка бесплатны.',
-  },
-  {
-    question: 'Нужно разбираться в коде?',
-    answer:
-      'Нет. Задачу нужно будет описать обычными словами: какую цену поменять, где заменить фото, что добавить на страницу. Радити уточнит детали и покажет результат. Как это выглядит, можно попробовать уже сейчас — на примере вверху страницы.',
+      'Если он на WordPress, Joomla, OpenCart, MODX или 1С-Битрикс — да. Не знаете, на чём сделан сайт? Оставьте заявку — посмотрим сами.',
   },
   {
     // What the two commonest kinds of request cost: estimates of the credits model, so the answer
     // says «обычно»; the numbers are constants of the domain, as under the calculator. The rule
-    // of the charge is the sentence of the tariffs, word for word (Ц14), and the tariff credits
-    // live one more month (Ц7).
-    question: 'Что такое кредит?',
-    answer: `Кредитами мы считаем работу Радити над вашими задачами: чем больше нужно прочитать и изменить на сайте, тем больше кредитов стоит задача. Поменять цену, текст или фото — обычно ${typicalCreditsInWords(typicalTaskCredits.small)}, добавить блок или страницу — ${typicalCreditsInWords(typicalTaskCredits.block, false)}. ${CHARGED_FOR_DONE_WORK} Кредиты тарифа начисляются каждый месяц. ${TARIFF_CREDITS_CARRY_OVER} Кредиты из пакета не сгорают.`,
+    // of the charge is the sentence of the tariffs, word for word (Ц14).
+    question: 'Сколько стоит одна правка?',
+    answer: `Работу мы считаем в кредитах. Поменять цену, текст или фото — обычно ${typicalCreditsInWords(typicalTaskCredits.small)}, добавить блок или страницу — ${typicalCreditsInWords(typicalTaskCredits.block, false)}. Сколько это в рублях, написано в карточке каждого тарифа. ${CHARGED_FOR_DONE_WORK}`,
   },
   {
-    question: 'Что, если результат не понравится?',
+    question: 'А если результат не понравится?',
     answer:
-      'Так задумано: перед каждой правкой Радити будет сохранять копию, а после — проверять, что получилось. Не понравилось — отмените правку, и мы вернём как было. На примере вверху страницы это уже можно попробовать; для настоящих сайтов — после запуска.',
-  },
-  {
-    question: 'Что Радити не будет делать без вашего подтверждения?',
-    answer:
-      'Удалять страницы, менять оформление сайта, ставить дополнения и править сразу много страниц Радити будет только после вашего отдельного подтверждения.',
+      'До публикации — скажите, что поправить, или отмените правку. После публикации её можно отменить в течение 7 дней: сайт вернётся к прежнему виду.',
   },
   {
     question: 'Где будут храниться данные?',
@@ -139,6 +125,17 @@ export function Landing({
 }) {
   const isGuest = viewer.status === 'guest'
   const action = mainAction(isGuest)
+  // What stands under the main action: the terms in three short facts. The gift is the one of
+  // the sign-up, so only a guest reads of it.
+  const terms = [
+    ...(isGuest
+      ? [
+          `${signupGiftCredits} ${pluralCredits(signupGiftCredits)} в подарок — около ${giftTaskCounts(signupGiftCredits).small} небольших правок`,
+        ]
+      : []),
+    'Подключение бесплатно',
+    'Подключаем сами',
+  ]
   return (
     <div className={styles.page} id="top">
       {/* Tells the elements marked with `data-reveal` when they come into the window. */}
@@ -149,209 +146,71 @@ export function Landing({
       <LandingHeader viewer={viewer} />
       <main id="main-content">
         <section className={styles.hero} aria-labelledby="hero-title">
-          <div className={styles.heroGrid}>
-            <div className={styles.heroCopy}>
-              <h1 id="hero-title" className={styles.heroTitle}>
-                <span>Напишите</span>{' '}
-                <span>
-                  в&nbsp;<em>чат.</em>
-                </span>{' '}
-                <span className={styles.heroLast}>Сайт поправим.</span>
-              </h1>
-              <p className={styles.heroLead}>
-                {nbsp(
-                  'Радити — ИИ-помощник для сайта вашего бизнеса. Обновить цены, заменить фото, добавить акцию — просто напишите, что изменить.',
-                )}
-              </p>
-              <div className={styles.heroActions}>
-                <Link href={action.href} className={styles.primaryButton}>
-                  {action.label} <LandingIcon name="arrow-up-right" {...arrow} />
-                </Link>
-                <a href="#site-demo" className={styles.textLink}>
-                  Попробовать демо <LandingIcon name="arrow-down" size={16} strokeWidth={1.7} />
-                </a>
-              </div>
-              {/* Only a guest is told to register: the action above leads the others to their
-                  projects. */}
-              <p className={styles.heroFootnote}>
-                {nbsp(
-                  isGuest
-                    ? 'Сервис готовится к запуску. Попробуйте пример, зарегистрируйтесь и оставьте заявку — подключим сайт бесплатно. Оплата откроется позже.'
-                    : 'Сервис готовится к запуску. Оставьте заявку — подключим сайт бесплатно. Оплата откроется позже.',
-                )}
-              </p>
-            </div>
-            <div className={styles.heroDemo}>
-              <SiteDemo />
-            </div>
-          </div>
-          <div className={styles.heroBottom}>
-            <a href="#possibilities">
-              Посмотреть возможности <LandingIcon name="arrow-right" {...arrow} />
+          {/* The heading of the page says what the service is, in the words people search by;
+              the slogan under it is the large line of the first screen. */}
+          <h1 id="hero-title" className={styles.heroKey}>
+            {readable('ИИ-помощник для сайта на WordPress, Joomla, OpenCart, MODX и 1С-Битрикс')}
+          </h1>
+          <p className={styles.heroTitle}>
+            <span>Напишите в&nbsp;чат.</span>{' '}
+            <span>
+              <em>Сайт поправим.</em>
+            </span>
+          </p>
+          <p className={styles.heroLead}>
+            {nbsp(
+              'Цены, фото, акции, часы работы. Напишите обычными словами, что поменять, — Радити сделает и покажет до публикации.',
+            )}
+          </p>
+          <div className={styles.heroActions}>
+            <Link href={action.href} className={styles.primaryButton}>
+              {action.label} <LandingIcon name="arrow-right" {...arrow} />
+            </Link>
+            <a href="#demo" className={styles.textLink}>
+              Посмотреть пример <LandingIcon name="arrow-down" size={16} strokeWidth={1.7} />
             </a>
           </div>
-        </section>
-
-        <section className={styles.statement} aria-label="Поддержка сайта одним сообщением">
-          <div className={styles.statementInner}>
-            {/* The chores that one message replaces: a list that is being crossed out. The lines
-                are drawn one after another when the block comes into the window. */}
-            <p className={styles.chores} data-reveal="scene">
-              <span>Надо найти разработчика.</span> <span>Объяснить.</span> <span>Напомнить.</span>{' '}
-              <span>Подождать.</span>
-            </p>
-            <div className={styles.statementAnswer}>
-              <span className={styles.drawnArrow} aria-hidden="true">
-                <LandingIcon name="arrow-right" {...arrow} />
-              </span>
-              <h2>
-                А&nbsp;можно
-                <br />
-                <em>просто написать.</em>
-              </h2>
-            </div>
-          </div>
           {/* The role is written out: without its markers Safari stops reading a list as one. */}
-          <ul className={styles.requestStrip} role="list" aria-label="Примеры задач">
-            <li>Обнови цены</li>
-            <li>Замени фото</li>
-            <li>Добавь акцию</li>
-            <li>Поменяй часы работы</li>
+          <ul className={styles.heroTerms} role="list">
+            {terms.map((term) => (
+              <li key={term}>
+                <LandingIcon
+                  name="check"
+                  size={18}
+                  strokeWidth={2}
+                  linecap="round"
+                  linejoin="round"
+                />
+                {nbsp(term)}
+              </li>
+            ))}
           </ul>
         </section>
 
-        <section id="how" className={styles.section} aria-labelledby="how-title">
-          <div className={styles.sectionHeading} data-reveal>
-            <h2 id="how-title">
-              От&nbsp;«надо поправить»
-              <br />
-              до&nbsp;«уже готово».
-            </h2>
-            <div className={styles.sectionLead}>
-              <span className={styles.launchLabel}>После запуска</span>
-              {/* The second sentence starts with two short words: glued to the third, they
-                  never end a line apart from what they introduce. */}
-              <p>
-                {nbsp(
-                  'Без технических заданий на десять страниц. Вот\u00a0как\u00a0будет устроена работа с Радити.',
-                )}
-              </p>
-            </div>
+        <section
+          id="demo"
+          className={`${styles.section} ${styles.demoSection}`}
+          aria-labelledby="demo-title"
+        >
+          <div className={`${styles.sectionHeading} ${styles.centred}`} data-reveal>
+            <h2 id="demo-title">Попробуйте сами</h2>
+            <p>
+              {nbsp('Сайт кофейни для примера. Выберите просьбу — и посмотрите, что изменится.')}
+            </p>
           </div>
-          <div className={styles.steps}>
-            <article className={styles.step}>
-              <span className={styles.stepNumber}>01</span>
-              <h3>Подключите сайт</h3>
-              <p>
-                {readable(
-                  'Оставьте заявку — подключим сами и бесплатно. WordPress, Joomla, OpenCart, MODX или 1С-Битрикс — подойдёт любой.',
-                )}
-              </p>
-              {/* Frame 1 of one change: the site as it is. No button and no promise of a
-                  connection in one click: a site is connected by a lead, by people. */}
-              <div
-                className={styles.stepExample}
-                role="img"
-                aria-label={`Пример: сайт кофейни, ${story.inWords.field} — ${story.inWords.before}`}
-              >
-                <span className={styles.exampleLabel}>Пример</span>
-                <div className={styles.frame}>
-                  <div className={styles.siteBar}>
-                    <span className={styles.siteDots}>
-                      <i />
-                      <i />
-                      <i />
-                    </span>
-                    <span className={styles.siteAddress}>{cafe.address}</span>
-                  </div>
-                  <div className={styles.siteBody}>
-                    <span className={styles.siteName}>{cafe.name}</span>
-                    <div className={styles.siteRow}>
-                      <span>
-                        {cafe.item} <small>{cafe.volume}</small>
-                      </span>
-                      <strong>{story.before}</strong>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </article>
-            <article className={styles.step}>
-              <span className={styles.stepNumber}>02</span>
-              <h3>Скажите, что изменить</h3>
-              <p>
-                {nbsp(
-                  'Напишите задачу в чате личного кабинета — обычными словами, как написали бы коллеге.',
-                )}
-              </p>
-              {/* Frame 2: the message of the owner. A scene: the message comes in when the
-                  frame enters the window. */}
-              <div
-                className={styles.stepExample}
-                role="img"
-                aria-label={`Пример сообщения в чате: ${story.inWords.request}`}
-                data-reveal="scene"
-              >
-                <span className={styles.exampleLabel}>Пример</span>
-                <div className={`${styles.frame} ${styles.messageFrame}`}>
-                  <span className={styles.messageAuthor}>Вы</span>
-                  <span className={styles.frameMessage}>{story.request}</span>
-                </div>
-              </div>
-            </article>
-            <article className={styles.step}>
-              <span className={styles.stepNumber}>03</span>
-              <h3>Посмотрите результат</h3>
-              <p>
-                {nbsp(
-                  'Посмотрите, что получилось. Последнее слово — за вами: правку можно отменить.',
-                )}
-              </p>
-              {/* Frame 3: the difference, told in words too, with no status of success and
-                  nothing to press. A scene: the new value comes in, then its amber plate. */}
-              <div
-                className={styles.stepExample}
-                role="img"
-                aria-label={`Пример: ${story.inWords.field} — было ${story.inWords.before}, стало ${story.inWords.after}`}
-                data-reveal="scene"
-              >
-                <span className={styles.exampleLabel}>Пример</span>
-                <div className={`${styles.frame} ${styles.diffFrame}`}>
-                  <span className={styles.diffField}>{story.field}</span>
-                  <div className={styles.diffPair}>
-                    <span className={styles.diffValue}>
-                      <small>Было</small>
-                      <s>{story.before}</s>
-                    </span>
-                    <span className={styles.diffValue}>
-                      <small>Стало</small>
-                      <strong>{story.after}</strong>
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </article>
-          </div>
+          <SiteDemo />
         </section>
 
-        <section
-          id="possibilities"
-          className={`${styles.section} ${styles.capabilitiesSection}`}
-          aria-labelledby="can-title"
-        >
+        <LandingPlatforms />
+
+        <section id="possibilities" className={styles.section} aria-labelledby="can-title">
           <div className={styles.sectionHeading} data-reveal>
-            <h2 id="can-title">
-              Маленькие правки.
-              <br />
-              <em className={styles.highlight}>Большая разница.</em>
-            </h2>
-            <div className={styles.sectionLead}>
-              <p>
-                {nbsp(
-                  'То, ради чего обычно приходится искать подрядчика. Эти задачи Радити будет выполнять после запуска.',
-                )}
-              </p>
-            </div>
+            <h2 id="can-title">Что можно поручить</h2>
+            <p>
+              {nbsp(
+                'То, ради чего обычно пишут разработчику: ваша просьба — и что после неё появится на сайте.',
+              )}
+            </p>
           </div>
           {/* A table of «a request, its result» without a table element: the category stays a
               heading, and every row names its two cells. CSS shows the names once, over the
@@ -370,58 +229,51 @@ export function Landing({
           </div>
         </section>
 
-        <LandingPlatforms />
-
         <section id="safety" className={styles.safety} aria-labelledby="safety-title">
           <div className={styles.safetyInner}>
-            <div className={styles.safetyCopy} data-reveal>
-              <h2 id="safety-title">
-                Смело меняйте.
-                <br />
-                <em className={styles.highlight}>Есть отмена.</em>
-              </h2>
-              <p>
-                {nbsp(
-                  'Хорошая забота — это когда спокойно. Поэтому сначала сохраним копию, а решение оставим за вами.',
-                )}
-              </p>
-              <ul className={styles.safetyList}>
-                <li>
-                  <span>Сначала&nbsp;— копия</span>
-                  <p>Сохраним то, что предстоит изменить.</p>
-                </li>
-                <li>
-                  <span>Затем&nbsp;— посмотрим сами</span>
-                  <p>Откроем страницу после правки и&nbsp;проверим, что получилось.</p>
-                </li>
-                <li>
-                  <span>Не&nbsp;понравилось&nbsp;— отмените</span>
-                  <p>Вернём как было.</p>
-                </li>
-              </ul>
+            <div className={styles.sectionHeading} data-reveal>
+              <h2 id="safety-title">Без&nbsp;вашего «да» сайт не&nbsp;меняется</h2>
+              <p>{nbsp('Правка сначала появляется в черновике. На сайт её выпускаете вы.')}</p>
             </div>
-            {/* The card and, after it, the note: both are children of this grid. */}
-            <SafetyDemo />
+            <ol className={styles.safetyList} role="list">
+              <li>
+                <span aria-hidden="true">01</span>
+                <h3>Сначала черновик</h3>
+                <p>
+                  {nbsp(
+                    'Радити показывает правку на копии сайта. Посетители её не видят, пока вы не опубликуете.',
+                  )}
+                </p>
+              </li>
+              <li>
+                <span aria-hidden="true">02</span>
+                <h3>Отмена за&nbsp;7&nbsp;дней</h3>
+                <p>
+                  {nbsp(
+                    'Опубликовали и передумали — отмените в чате. Сайт вернётся к прежнему виду.',
+                  )}
+                </p>
+              </li>
+              <li>
+                <span aria-hidden="true">03</span>
+                <h3>Опасное&nbsp;— только с&nbsp;подтверждением</h3>
+                <p>
+                  {nbsp(
+                    'Удалить страницы, сменить оформление, поставить дополнения Радити без вашего отдельного согласия не станет.',
+                  )}
+                </p>
+              </li>
+            </ol>
           </div>
         </section>
 
         <section id="pricing" className={styles.section} aria-labelledby="pricing-title">
           <div className={styles.sectionHeading} data-reveal>
-            <h2 id="pricing-title">
-              Забота по&nbsp;размеру
-              <br />
-              вашего бизнеса.
-            </h2>
-            <div className={styles.sectionLead}>
-              <p>
-                Один сайт или несколько.
-                <br />
-                Подберите тариф под&nbsp;свои задачи.
-              </p>
-              <p className={styles.sectionNote}>
-                {nbsp('Оплату пока не принимаем: сервис готовится к запуску.')}
-              </p>
-            </div>
+            <h2 id="pricing-title">Тарифы</h2>
+            <p>{nbsp('Подвиньте ползунок — подберём тариф под число ваших задач.')}</p>
+            <p className={styles.sectionNote}>
+              {nbsp('Оплату пока не принимаем: сервис готовится к запуску.')}
+            </p>
           </div>
           {pricing}
         </section>
@@ -433,17 +285,10 @@ export function Landing({
           className={`${styles.section} ${styles.faqSection}`}
           aria-labelledby="faq-title"
         >
-          <div className={styles.faqIntro} data-reveal>
-            <h2 id="faq-title">Хороший вопрос.</h2>
-            <p>
-              Всё, что стоит знать <br />
-              до&nbsp;знакомства с&nbsp;Радити.
-            </p>
-            <div className={styles.faqSymbol} aria-hidden="true">
-              ?
-            </div>
+          <div className={`${styles.sectionHeading} ${styles.centred}`} data-reveal>
+            <h2 id="faq-title">Вопросы</h2>
           </div>
-          <div>
+          <div className={styles.questions}>
             {questions.map(({ question, answer }) => (
               // Until React takes the page over, `open` belongs to the browser: a link to a text
               // of an answer, a search on the page or an early press opens the question, and the
@@ -457,34 +302,6 @@ export function Landing({
                 <p>{readable(answer)}</p>
               </details>
             ))}
-          </div>
-        </section>
-
-        <section className={styles.finalCta} aria-labelledby="start-title">
-          <div className={styles.finalInner}>
-            <div>
-              <h2 id="start-title" data-reveal>
-                У&nbsp;вас есть дело.
-                <br />
-                У&nbsp;сайта есть Радити.
-              </h2>
-              <p>
-                {isGuest
-                  ? nbsp('Зарегистрируйтесь и оставьте заявку — подключим сайт бесплатно.')
-                  : nbsp('Оставьте заявку — подключим сайт бесплатно.')}
-              </p>
-            </div>
-            <Link href={action.href} className={`${styles.primaryButton} ${styles.finalButton}`}>
-              {action.label}
-              <LandingIcon name="arrow-up-right" {...arrow} />
-            </Link>
-          </div>
-          <div className={styles.finalMeta}>
-            <span>
-              {readable(
-                'Поддерживаемые платформы · WordPress, Joomla, OpenCart, MODX и 1С-Битрикс',
-              )}
-            </span>
           </div>
         </section>
       </main>
@@ -502,12 +319,14 @@ export function Landing({
             {isGuest ? 'Войти' : 'Открыть чаты'} <LandingIcon name="arrow-up-right" {...arrow} />
           </Link>
         </div>
-        <nav aria-label="Юридические документы" className={styles.legalLinks}>
+        <nav aria-label="Документы" className={styles.legalLinks}>
           {legalDocuments.map((document) => (
             <Link key={document.slug} href={legalDocumentHref(document.slug)}>
               {document.title}
             </Link>
           ))}
+          {/* For the search engines and for whoever looks for a page by its name. */}
+          <a href="/sitemap.xml">Карта сайта</a>
         </nav>
         <div className={styles.footerBottom}>
           <span>© {new Date().getFullYear()} Радити</span>

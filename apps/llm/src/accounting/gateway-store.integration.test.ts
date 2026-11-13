@@ -427,6 +427,83 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     }
   }, 15_000)
 
+  it('carries a key whose own window is out to its fallback account, and only there', async () => {
+    // Owner's answer of 13.11.2026 (docs/plan/70-turn-without-time-limit.md, ВР25).
+    const f = await fixture()
+    const api = await db.llmProvider.findUniqueOrThrow({ where: { slug: 'zai-api' } })
+    await db.llmProvider.update({ where: { id: api.id }, data: { enabled: true } })
+    const credential = await db.credentialRef.create({
+      data: { kind: 'subscription', vaultPath: `subs/zai-api/${randomUUID().replaceAll('-', '')}` },
+    })
+    const fallback = await db.subscriptionAccount.create({
+      data: {
+        providerId: api.id,
+        driverId: f.account.driverId,
+        label: `store-fallback-${randomUUID()}`,
+        credentialRefId: credential.id,
+        plan: 'payg',
+        enabled: true,
+        status: 'active',
+        health: 'ok',
+        credentialVersion: 1,
+        maxConcurrentTurns: 2,
+        maxConcurrentRequests: 8,
+        limitWindows: [],
+      },
+    })
+    try {
+      const k = await f.key({ fallbackAccountId: fallback.id })
+      expect(k.input.profile).toMatchObject({
+        fallback: { accountId: fallback.id, backendId: 'zai-api' },
+      })
+      // The plan's window is out: the key is not refused, it is sent on.
+      await db.subscriptionAccount.update({
+        where: { id: f.account.id },
+        data: { coolingUntil: new Date(Date.now() + 3_600_000) },
+      })
+      expect(await store.admit(k.input)).toMatchObject({
+        kind: 'refused',
+        reason: 'subscription_limit',
+        fallBack: true,
+      })
+      expect(
+        (await db.llmKey.findUniqueOrThrow({ where: { id: k.row.id } })).lastRefusal,
+      ).toBeNull()
+      const onApi = { ...k.input, backendId: 'zai-api' as const, capacity: 'none' as const }
+      // Only over the route of the fallback's backend.
+      expect(await store.admit({ ...k.input, fallback: true })).toMatchObject({
+        kind: 'refused',
+        reason: 'backend',
+      })
+      const carried = await admitted({ ...onApi, fallback: true })
+      expect(carried).toMatchObject({ accountId: fallback.id, modelId: f.model.id })
+      expect(await db.llmCall.findUniqueOrThrow({ where: { id: carried.id } })).toMatchObject({
+        subscriptionAccountId: fallback.id,
+        modelId: f.model.id,
+      })
+      await store.finish(carried.id, actual())
+      // A key without a fallback still ends on its window, as before.
+      const plain = await f.key()
+      expect(await store.admit(plain.input)).toMatchObject({
+        kind: 'refused',
+        reason: 'subscription_limit',
+      })
+      expect((await db.llmKey.findUniqueOrThrow({ where: { id: plain.row.id } })).lastRefusal).toBe(
+        'subscription_limit',
+      )
+    } finally {
+      await db.tokenUsage.deleteMany({ where: { subscriptionAccountId: fallback.id } })
+      await db.llmCall.deleteMany({ where: { subscriptionAccountId: fallback.id } })
+      await db.llmKey.updateMany({
+        where: { fallbackAccountId: fallback.id },
+        data: { fallbackAccountId: null },
+      })
+      await db.subscriptionAccount.delete({ where: { id: fallback.id } })
+      await db.credentialRef.delete({ where: { id: credential.id } })
+      await db.llmProvider.update({ where: { id: api.id }, data: { enabled: api.enabled } })
+    }
+  })
+
   it('serializes concurrent requests per key and respects the configured one-request limit', async () => {
     const f = await fixture()
     const k = await f.key()

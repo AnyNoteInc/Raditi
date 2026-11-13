@@ -467,7 +467,7 @@
   `DOC_LIMIT`, `PAGE_CONTENT_REFUSED { reason }`, `DOC_PENDING_SECTIONS`, `DOC_SECTION_UNKNOWN`,
   `DOC_SECTION_INVALID`.
 
-### База — миграция `20261113100000_pages`
+### База — миграция `20261113120000_pages`
 
 Только новые таблицы; хранилище — `packages/db/src/pages.ts`.
 
@@ -727,7 +727,7 @@ wildcard-сертификатом; корень → web (план 67).
 
 ### 69.2 — база (13.11.2026)
 
-Миграция `20261113100000_pages` (восемь таблиц, только новые, CHECK на каждую), модели Prisma, хранилище
+Миграция `20261113120000_pages` (восемь таблиц, только новые, CHECK на каждую), модели Prisma, хранилище
 `packages/db/src/pages.ts`:
 
 - `reservePagePublication`, `pendingPageReservations`, `applyPageVersion`, `settlePageReservation` — резерв хода и

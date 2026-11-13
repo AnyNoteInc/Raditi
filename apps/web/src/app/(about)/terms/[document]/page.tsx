@@ -31,6 +31,7 @@ export async function generateMetadata({
   const { document } = found
   return {
     title: document.title,
+    alternates: { canonical: `/terms/${document.slug}` },
     description: `${document.title} сервиса «Радити», редакция от ${formatEditionDate(document.version)}.`,
   }
 }

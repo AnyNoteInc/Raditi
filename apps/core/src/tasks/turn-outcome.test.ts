@@ -69,7 +69,8 @@ describe('feedFailureOf', () => {
         policyFlagged: false,
       }),
     ).toBe('secret_found')
-    expect(feedFailureOf({ journalReason: 'timeout', policyFlagged: false })).toBe('timeout')
+    // No turn runs out of time any more (plan 70, ВР1): a step after the agent that did is ours.
+    expect(feedFailureOf({ journalReason: 'timeout', policyFlagged: false })).toBe('technical')
     expect(feedFailureOf({ journalReason: 'publication_ambiguous', policyFlagged: false })).toBe(
       'site_held',
     )

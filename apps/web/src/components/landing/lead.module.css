@@ -32,6 +32,11 @@
   font-size: 13px;
   font-weight: 500;
 }
+/* On the ink plate the pair of a selection is turned over, as on every dark surface. */
+.free::selection {
+  color: var(--raditi-ink);
+  background: var(--raditi-marker);
+}
 .free i {
   width: 7px;
   height: 7px;
@@ -76,6 +81,14 @@
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+.direct {
+  font-size: 15px;
+}
+.direct a {
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 .lede {
   max-width: 480px;

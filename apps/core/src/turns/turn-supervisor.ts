@@ -1,5 +1,7 @@
 import { performance } from 'node:perf_hooks'
 
+import { Logger } from '@nestjs/common'
+
 import {
   assertSandboxSpec,
   badRequest,
@@ -19,8 +21,7 @@ import {
   snapshotPlanSchema,
   snapshotReferenceSchema,
   toTurnPlan,
-  TURN_FINALIZE_RESERVE_MS,
-  TURN_PUBLICATION_GRACE_MS,
+  TURN_FINALIZE_MS,
   turnCredentials,
   turnCredentialPolicySchema,
   withTurnCredentials,
@@ -39,7 +40,7 @@ import {
 } from '@repo/domain'
 
 import { newTurnKeys } from '@repo/turn-keys'
-import { LeaseGuard } from './lease-guard.ts'
+import { LeaseGuard, TURN_LEASE_MS, turnRenewal } from './lease-guard.ts'
 import type { LiveTurns } from './live-turns.ts'
 import type { TurnInbox } from './turn-inbox.ts'
 import {
@@ -66,6 +67,8 @@ export interface TurnSupervisorDependencies extends TurnAttemptDependencies {
 
 /** A presigned URL never outlives the lease that allowed it (spec §14). */
 const presignTtlMs = (guard: LeaseGuard) => Math.min(MAX_PRESIGN_TTL_MS, guard.leaseRemainingMs)
+
+const renewLogger = new Logger('TurnLease')
 
 /** PoC execution only: task billing, queue dispatch and product task transitions belong to P12. */
 export class TurnSupervisor {
@@ -101,7 +104,7 @@ export class TurnSupervisor {
       siteId: labels.siteId,
       taskId: labels.taskId,
       operation: 'turn',
-      ttlMs: request.sandbox.hardTimeoutMs + TURN_PUBLICATION_GRACE_MS,
+      ttlMs: TURN_LEASE_MS,
     })
     if (!lease) {
       // Only to tell the client why; a failed lookup is still just a busy site. A release the
@@ -113,14 +116,22 @@ export class TurnSupervisor {
     }
     // Before the assignment exists: recovery never takes over a turn this process drives.
     this.deps.live.enter(lease)
+    // No time limit (ВР1): the turn lives while this process renews it.
     const guard = new LeaseGuard(
       lease,
       this.deps.leases,
-      request.sandbox.hardTimeoutMs,
+      turnRenewal(this.deps.assignments, lease, labels.turn),
       signal,
       performance.now() - acquiredAt,
     )
     const attempt = new TurnAttempt(this.deps, { lease, guard, plan, driver: this.deps.driver })
+    // Each renewal moves the container's deadline and its gateway's with it (ВР4, ВР5). A failed
+    // extension is retried by the next renewal; the container ends at its last one otherwise.
+    guard.onRenewed((remainingMs) => {
+      void attempt.execution
+        ?.extend(remainingMs)
+        .catch(() => renewLogger.warn('turn_extend_failed'))
+    })
     try {
       await guard.assertFence()
       await attempt.record('leased')
@@ -159,10 +170,7 @@ export class TurnSupervisor {
       const values = await guard.interruptible(
         this.deps.credentials.issue(attempt.credentialRef, {
           ...parsed.data,
-          ttlMs: Math.min(
-            parsed.data.ttlMs,
-            guard.remainingBeforeReserveMs(TURN_FINALIZE_RESERVE_MS),
-          ),
+          ttlMs: Math.min(parsed.data.ttlMs, guard.remainingMs),
           deadlineAt: opened.deadlineAt,
           boundSource,
         }),
@@ -275,14 +283,17 @@ export class TurnSupervisor {
         context.nativeSessionId ? { nativeSessionId: context.nativeSessionId } : {},
       )
       await guard.assertFence()
-      // The turn limit includes publication: the agent's exec ends the reserve early, while the
-      // container keeps the whole limit and outlives the agent for capture, save and push.
-      const agent = await ready.launch(guard.remainingBeforeReserveMs(TURN_FINALIZE_RESERVE_MS))
+      // The agent has no time limit (ВР1): it ends itself, is cancelled or runs out of credits,
+      // or the turn is lost with its lease.
+      const agent = await ready.launch()
       attempt.execId = agent.execId
       await attempt.record('running')
       const events = await attempt.follow(agent)
+      // The agent ended: the platform's steps after it have their own limit (ВР7).
+      guard.finalize(TURN_FINALIZE_MS)
       return await attempt.complete(events, prepared)
     } catch (error) {
+      guard.finalize(TURN_FINALIZE_MS)
       attempt.failed(error)
       throw error
     } finally {
@@ -364,8 +375,6 @@ export class TurnSupervisor {
       throw badRequest('Turn secrets are installed only after restore')
     if ('apiKey' in request.context.llm || 'token' in request.context.mcp)
       throw badRequest('Turn credentials must be issued by the supervisor')
-    if (request.sandbox.hardTimeoutMs <= TURN_FINALIZE_RESERVE_MS)
-      throw badRequest('Turn limit leaves no time for the agent')
     if (
       request.context.taskId !== labels.taskId ||
       request.context.sessionId !== labels.sessionId ||
@@ -382,7 +391,7 @@ export class TurnSupervisor {
       })
       if (!publication.success) throw badRequest('Invalid trusted publication metadata')
     }
-    // The manifest's own rules: a 20-minute turn must not end with a checkpoint save() refuses.
+    // The manifest's own rules: a turn must not end with a checkpoint save() refuses.
     // Without a repository the checkpoint has no `git` (plan 57, Б4).
     const plan = snapshotPlanSchema.safeParse({
       workspaceId: labels.workspaceId,

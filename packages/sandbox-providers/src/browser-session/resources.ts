@@ -17,6 +17,11 @@ export const browserSessionRoles = [
   'forwarder',
   'browser',
   'firewall',
+  /**
+   * A later deadline of a session whose turn goes on (docs/plan/70-turn-without-time-limit.md,
+   * ВР20): created, never started; the watchdog keeps the session while its latest is ahead.
+   */
+  'lease',
 ] as const
 export type BrowserSessionRole = (typeof browserSessionRoles)[number]
 

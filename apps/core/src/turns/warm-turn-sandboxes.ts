@@ -38,10 +38,13 @@ export class CoreWarmSandboxes extends WarmSandboxes implements OnModuleDestroy 
     sandboxes: Pick<SandboxProvider, 'get'>,
     prisma: Pick<PrismaClient, 'task'>,
     warmMs: number,
+    /** At most this many wait (WARM_MAX_WAITING by default). */
+    maxWaiting?: number,
   ) {
     super({
       sandboxes,
       warmMs,
+      ...(maxWaiting === undefined ? {} : { maxWaiting }),
       wanted: (taskIds) => openTasks(prisma, taskIds),
       logger: new Logger('WarmSandboxes'),
     })

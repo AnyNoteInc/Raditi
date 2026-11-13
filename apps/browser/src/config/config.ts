@@ -35,7 +35,12 @@ export { ConfigError }
 export const DEFAULT_BROWSER_WORKER_PORT = 8086
 
 /** Sessions one worker holds at most; each is a Chromium of its own. */
-export const browserMaxSessionsBounds = Object.freeze({ min: 1, max: 64, default: 8 })
+/**
+ * Sessions one worker holds: by default as many as the turns of the platform (owner's request of
+ * 13.11.2026, docs/plan/70-turn-without-time-limit.md, ВР26) — a browser of a turn is no limit
+ * of turns. The eight of a workspace bound them per client (`browserSessionLimits.perWorkspace`).
+ */
+export const browserMaxSessionsBounds = Object.freeze({ min: 1, max: 1024, default: 1024 })
 /** JPEG quality of the screencast. */
 export const browserStreamQualityBounds = Object.freeze({ min: 10, max: 100 })
 

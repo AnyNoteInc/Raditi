@@ -1204,6 +1204,7 @@ model SubscriptionAccount {
   credentialRef CredentialRef        @relation(fields: [credentialRefId], references: [id], onDelete: Restrict)
   taskBindings  TaskAccountBinding[]
   llmKeys       LlmKey[]
+  fallbackKeys  LlmKey[]             @relation("LlmKeyFallback")
   llmCalls      LlmCall[]
   tokenUsage    TokenUsage[]
 
@@ -1259,6 +1260,9 @@ model LlmKey {
   driverId              String    @map("driver_id") @db.VarChar(32)
   modelId               String    @map("model_id") @db.Uuid
   subscriptionAccountId String    @map("subscription_account_id") @db.Uuid
+  /// An account of the API the gateway carries the key's calls to once the plan's window is out
+  /// (docs/plan/70-turn-without-time-limit.md, ВР25); NULL — none.
+  fallbackAccountId     String?   @map("fallback_account_id") @db.Uuid
   reasoningEffort       String?   @map("reasoning_effort") @db.VarChar(16)
   /// Positive budget: what the customer can pay (spec §20, «Только кредиты», КР6); fractional-ruble remainder budgets are valid.
   budgetRub             Decimal   @map("budget_rub") @db.Decimal(18, 10)
@@ -1278,6 +1282,7 @@ model LlmKey {
   driver              AgentDriver         @relation(fields: [driverId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   model               LlmModel            @relation(fields: [modelId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   subscriptionAccount SubscriptionAccount @relation(fields: [subscriptionAccountId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  fallbackAccount     SubscriptionAccount? @relation("LlmKeyFallback", fields: [fallbackAccountId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   calls               LlmCall[]
   tokenUsage          TokenUsage[]
 
@@ -1768,13 +1773,16 @@ model Lead {
   id                String    @id @default(uuid(7)) @db.Uuid
   /// «Заявка №N» in the group.
   number            Int       @unique @default(autoincrement())
-  name              String    @db.VarChar(100)
-  /// `+<digits>`, normalised by leadInputSchema of @repo/domain.
-  phone             String    @db.VarChar(16)
-  email             String    @db.VarChar(254)
+  /// The form asked for the name, the mail and the description until 13.11.2026
+  /// (20261113100000_leads_two_fields): only the leads before it have them.
+  name              String?   @db.VarChar(100)
+  /// How to reach the visitor: a phone number as `+<digits>` or a Telegram username as `@name`,
+  /// normalised by leadInputSchema of @repo/domain. The column keeps its first name.
+  phone             String    @db.VarChar(34)
+  email             String?   @db.VarChar(254)
   /// The host of the site, lower-cased.
   site              String    @db.VarChar(253)
-  about             String    @db.Text
+  about             String?   @db.Text
   /// The edition of «Согласие на обработку персональных данных» the visitor agreed to.
   consentVersion    String    @map("consent_version") @db.VarChar(32)
   /// Where the form stood: `landing`.

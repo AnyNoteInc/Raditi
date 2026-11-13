@@ -5,6 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import {
   assertExecSpec,
   badRequest,
+  MAX_SANDBOX_LEASE_MS,
   notFound,
   type DestroyReason,
   type ExecChunk,
@@ -127,7 +128,12 @@ const checkedNumber = (value: number | undefined, fallback: number, max: number)
 
 export interface SandboxLifecycle {
   assertOwned(): Promise<void>
-  /** Releases the network resources verified when this sandbox was adopted. */
+  /**
+   * Leaves a lease of the turn until `deadline` for the host's watchdog and drops the earlier
+   * ones (docs/plan/70-turn-without-time-limit.md, ВР5): Docker labels never change.
+   */
+  lease(deadline: number): Promise<void>
+  /** Releases the network resources verified when this sandbox was adopted, and its leases. */
   release(): Promise<void>
 }
 
@@ -141,7 +147,7 @@ export class DockerSandbox implements Sandbox {
   #quiescing = false
   #handles = new Map<string, DockerExecHandle>()
   readonly container: Docker.Container
-  readonly deadline: number
+  #deadline: number
   private readonly docker: Docker
   private readonly lifecycle: SandboxLifecycle
   constructor(
@@ -153,17 +159,11 @@ export class DockerSandbox implements Sandbox {
   ) {
     this.container = container
     this.docker = docker
-    this.deadline = deadline
+    this.#deadline = deadline
     this.lifecycle = lifecycle
     this.id = container.id
     this.labels = Object.freeze({ ...labels })
-    this.#timer = setTimeout(
-      () => {
-        void this.destroy('timeout').catch(() => {})
-      },
-      Math.max(1, deadline - Date.now()),
-    )
-    this.#timer.unref()
+    this.#timer = this.#expiry()
     this.fs = {
       read: async (path, opts) => {
         this.#available()
@@ -228,6 +228,32 @@ export class DockerSandbox implements Sandbox {
       },
     }
   }
+  /** The container's current deadline, epoch ms: a live turn moves it on (extend). */
+  get deadline(): number {
+    return this.#deadline
+  }
+  #expiry(): ReturnType<typeof setTimeout> {
+    const timer = setTimeout(
+      () => {
+        void this.destroy('timeout').catch(() => {})
+      },
+      Math.max(1, this.#deadline - Date.now()),
+    )
+    timer.unref()
+    return timer
+  }
+  async extend(deadline: number): Promise<void> {
+    if (!Number.isSafeInteger(deadline) || deadline > Date.now() + MAX_SANDBOX_LEASE_MS)
+      throw badRequest('Invalid sandbox deadline')
+    this.#available()
+    if (deadline <= this.#deadline) return
+    // The lease first: a deadline the watchdog does not know would let it remove a live turn.
+    await this.lifecycle.lease(deadline)
+    if (this.#destroyed || this.#destroying || deadline <= this.#deadline) return
+    this.#deadline = deadline
+    clearTimeout(this.#timer)
+    this.#timer = this.#expiry()
+  }
   #available(): void {
     if (this.#destroyed || this.#destroying || this.#quiescing || Date.now() >= this.deadline)
       throw commandError()
@@ -239,7 +265,10 @@ export class DockerSandbox implements Sandbox {
     this.#available()
     const spec = assertExecSpec(value)
     if (spec.signal?.aborted) throw commandError()
-    const timeoutMs = Math.min(spec.timeoutMs, this.deadline - Date.now())
+    // Without a timeout the command has none of its own (the agent's run, plan 70, ВР1): the
+    // helper is told 0, and it ends with its signal or with the container.
+    const unbounded = spec.timeoutMs === undefined
+    const timeoutMs = unbounded ? 0 : Math.min(spec.timeoutMs!, this.#deadline - Date.now())
     const encoded = Buffer.from(
       JSON.stringify({ argv: spec.argv, cwd: spec.cwd, env: spec.env, timeoutMs }),
     )
@@ -254,10 +283,10 @@ export class DockerSandbox implements Sandbox {
     await helperCommand(this.container, ['stage', id], {
       stdin: stdin(),
       signal: spec.signal,
-      timeoutMs: Math.min(timeoutMs, 30_000),
+      timeoutMs: unbounded ? 30_000 : Math.min(timeoutMs, 30_000),
     })
     this.#available()
-    const execDeadline = Math.min(this.deadline, Date.now() + timeoutMs)
+    const execDeadline = unbounded ? 0 : Math.min(this.#deadline, Date.now() + timeoutMs)
     const exec = await bounded(
       this.container.exec({
         Cmd: [NODE, HELPER, 'run', id, String(execDeadline)],
@@ -284,7 +313,7 @@ export class DockerSandbox implements Sandbox {
       exec,
       id,
       { stdout: 0, stderr: 0 },
-      Math.max(1, execDeadline - Date.now()),
+      unbounded ? null : Math.max(1, execDeadline - Date.now()),
       spec.signal,
     )
     this.#handles.set(handle.id, handle)
@@ -313,8 +342,8 @@ export class DockerSandbox implements Sandbox {
       args[1] !== 'run' ||
       args[2] !== logical ||
       !Number.isSafeInteger(execDeadline) ||
-      execDeadline <= 0 ||
-      execDeadline > this.deadline ||
+      execDeadline < 0 ||
+      execDeadline > this.#deadline ||
       info.ProcessConfig.privileged
     )
       throw badRequest('Exec does not belong to this sandbox')
@@ -323,7 +352,7 @@ export class DockerSandbox implements Sandbox {
       exec,
       logical,
       cursor.data,
-      Math.max(1, execDeadline - Date.now()),
+      execDeadline === 0 ? null : Math.max(1, execDeadline - Date.now()),
     )
     // The handle this one replaces stops reading the exec, and its timer no longer fires.
     this.#handles.get(execId)?.close()
@@ -404,7 +433,7 @@ export class DockerSandbox implements Sandbox {
 
 class DockerExecHandle implements ExecHandle {
   readonly id: string
-  #timer: ReturnType<typeof setTimeout>
+  #timer: ReturnType<typeof setTimeout> | undefined
   #abort: (() => void) | undefined
   #done: ExecExit | undefined
   #reason: ExecExit['reason'] | undefined
@@ -420,7 +449,8 @@ class DockerExecHandle implements ExecHandle {
     exec: Docker.Exec,
     logicalId: string,
     initial: ExecCursor,
-    timeoutMs: number,
+    /** null — the exec has no time limit of its own; it still ends with its container. */
+    timeoutMs: number | null,
     signal?: AbortSignal,
   ) {
     this.sandbox = sandbox
@@ -429,10 +459,12 @@ class DockerExecHandle implements ExecHandle {
     this.initial = initial
     this.signal = signal
     this.id = `${logicalId}.${exec.id}`
-    this.#timer = setTimeout(() => {
-      void this.#stop('timeout', 'SIGKILL').catch(() => {})
-    }, timeoutMs)
-    this.#timer.unref()
+    if (timeoutMs !== null) {
+      this.#timer = setTimeout(() => {
+        void this.#stop('timeout', 'SIGKILL').catch(() => {})
+      }, timeoutMs)
+      this.#timer.unref()
+    }
     this.#abort = () => {
       void this.#stop('cancelled', 'SIGTERM').catch(() => {})
     }

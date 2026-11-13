@@ -12,11 +12,8 @@ const SECRET = 'x'.repeat(48)
 const NOW = new Date('2026-11-08T10:00:00Z')
 
 const lead = {
-  name: 'Анна',
-  phone: '+7 900 000-00-00',
-  email: 'anna@example.ru',
   site: 'kofeinya.ru',
-  about: 'Обновлять цены в меню',
+  phone: '+7 900 000-00-00',
   consent: true,
 }
 
@@ -76,11 +73,8 @@ describe('handleLeadRequest', () => {
     expect(await res.json()).toEqual({ ok: true })
     expect(s.created).toEqual([
       {
-        name: 'Анна',
         phone: '+79000000000',
-        email: 'anna@example.ru',
         site: 'kofeinya.ru',
-        about: 'Обновлять цены в меню',
         consentVersion: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
         source: 'landing',
         ipHash: leadAddressHash(SECRET, '203.0.113.7'),
@@ -97,6 +91,13 @@ describe('handleLeadRequest', () => {
     ])
     // The log names the number of the lead, never what it says.
     expect(s.lines).toEqual(['lead_created number=12'])
+  })
+
+  it('stores a Telegram username as the contact', async () => {
+    const s = stand()
+    const res = await handleLeadRequest(request({ ...lead, phone: 't.me/Anna_Kofe' }), s.deps)
+    expect(res.status).toBe(200)
+    expect(s.created).toEqual([expect.objectContaining({ phone: '@anna_kofe' })])
   })
 
   it('keeps no address: the hash depends on the secret', () => {
@@ -124,7 +125,10 @@ describe('handleLeadRequest', () => {
     expect(res.status).toBe(400)
     expect(await res.json()).toEqual({
       message: 'Проверьте поля заявки.',
-      fields: { phone: 'Нужен номер из 10–15 цифр', consent: 'Без согласия мы не сможем ответить' },
+      fields: {
+        phone: 'Нужен номер телефона или ник в Telegram',
+        consent: 'Без согласия мы не сможем ответить',
+      },
     })
   })
 

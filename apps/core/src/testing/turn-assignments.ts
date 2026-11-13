@@ -17,7 +17,7 @@ import type {
 /** The site lease store of a test, with the lease half of a takeover (MemorySiteLeases). */
 export type TakeOverLeases = {
   takeOverHeld(fence: SiteLeaseFence, ttlMs: number): Promise<SiteLeaseGrant | null>
-} & Partial<Pick<SiteLeaseStore, 'inspect' | 'free'>>
+} & Partial<Pick<SiteLeaseStore, 'inspect' | 'free' | 'renew'>>
 
 export class MemoryTurnAssignments implements TurnAssignmentStore {
   readonly rows = new Map<string, TurnAssignment>()
@@ -46,6 +46,29 @@ export class MemoryTurnAssignments implements TurnAssignmentStore {
     }
     this.rows.set(row.id, row)
     return this.#copy(row)
+  }
+
+  /** The lease through the lease store it was given, then the turn's own deadline (ВР2). */
+  async renewTurn(input: {
+    fence: SiteLeaseFence
+    turn: number
+    turnMs: number
+    leaseMs: number
+  }): Promise<SiteLeaseGrant | null> {
+    if (!this.leases?.renew) throw new Error('This store renews turns through its lease store')
+    const grant = await this.leases.renew(input.fence, input.leaseMs)
+    if (!grant) return null
+    const until = Date.now() + input.turnMs
+    for (const row of this.rows.values())
+      if (
+        row.fence.taskId === input.fence.taskId &&
+        row.turn === input.turn &&
+        row.fence.epoch === input.fence.epoch &&
+        !row.outcome &&
+        row.deadlineAt.getTime() < until
+      )
+        row.deadlineAt = new Date(until)
+    return grant
   }
 
   async get(id: string): Promise<TurnAssignment | null> {

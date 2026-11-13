@@ -1,7 +1,13 @@
 import { Logger, type Provider } from '@nestjs/common'
 import type { AgentDriverRegistry } from '@repo/agent-drivers'
 import type { PrismaClient } from '@repo/db'
-import type { JobQueue, ObjectStorage, SecretStore, SiteLeaseStore } from '@repo/domain'
+import type {
+  JobQueue,
+  ObjectStorage,
+  SecretStore,
+  SiteLeaseStore,
+  TurnExecutor,
+} from '@repo/domain'
 import { llmBackends } from '@repo/llm-backends'
 import { getSiteAdapter } from '@repo/site-adapters'
 import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
@@ -19,6 +25,7 @@ import { PLAN_VALUES } from '../site-content/site-content.tokens.ts'
 import { TaskEventTurnJournal } from '../turns/turn-journal.ts'
 import { turnRuntimeOf } from '../turns/turn-runtime.ts'
 import { TurnSupervisor } from '../turns/turn-supervisor.ts'
+import { TURN_EXECUTOR } from '../turns/turns.tokens.ts'
 import { CandidateBuilder } from './candidate-builder.ts'
 import { candidateClientValues } from './candidate-client-values.ts'
 import { candidateGitOf, type CandidateGit } from './candidate-git.ts'
@@ -32,6 +39,7 @@ import { LivePasses } from './live-passes.ts'
 import { PassRunner } from './pass-runner.ts'
 import { PassSettlement } from './pass-settlement.ts'
 import { TaskSweep, TaskSweepRuntime } from './task-sweep.ts'
+import { TurnCapacity } from './turn-capacity.ts'
 import { CANDIDATE_GIT } from './tasks.tokens.ts'
 import { TurnsProcessor } from './turns.processor.ts'
 
@@ -89,6 +97,7 @@ export const taskProviders: Provider[] = [
       queue: JobQueue,
       browser: BrowserSessions | null,
       storage: ObjectStorage,
+      executor: TurnExecutor | null,
     ) =>
       new PassRunner({
         db: prisma,
@@ -111,6 +120,9 @@ export const taskProviders: Provider[] = [
           pages: new PagePublications({ db: prisma, logger: new Logger('Pages') }),
         }),
         docs: new DocSections({ db: prisma, logger: new Logger('DocSections') }),
+        // Docs/plan/70-turn-without-time-limit.md, ВР13 and ВР17.
+        workspaceTurnLimit: config.workspaceTurnLimit,
+        capacity: new TurnCapacity(executor),
       }),
     inject: [
       PRISMA,
@@ -124,6 +136,7 @@ export const taskProviders: Provider[] = [
       JOB_QUEUE,
       BrowserSessions,
       OBJECT_STORAGE,
+      { token: TURN_EXECUTOR, optional: true },
     ],
   },
   {

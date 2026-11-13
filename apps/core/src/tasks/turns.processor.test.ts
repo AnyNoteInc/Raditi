@@ -4,8 +4,6 @@ import {
   CANDIDATE_EDIT_JOB,
   CANDIDATE_REBASE_JOB,
   CANDIDATE_REWIND_JOB,
-  MAX_SANDBOX_TURN_MS,
-  TURN_PUBLICATION_GRACE_MS,
 } from '@repo/domain'
 import { UnrecoverableError, type Job } from 'bullmq'
 import { describe, expect, it, vi } from 'vitest'
@@ -62,7 +60,8 @@ describe('TurnsProcessor', () => {
     expect(passes.run).not.toHaveBeenCalled()
   })
 
-  it('holds the lock of a job past the longest turn and its publication', () => {
-    expect(AGENT_TURN_LOCK_MS).toBeGreaterThan(MAX_SANDBOX_TURN_MS + TURN_PUBLICATION_GRACE_MS)
+  it('keeps a lock BullMQ renews while the worker lives, whatever the length of the pass', () => {
+    // A pass has no time limit (plan 70, ВР8): the lock is not sized after one.
+    expect(AGENT_TURN_LOCK_MS).toBe(5 * 60_000)
   })
 })

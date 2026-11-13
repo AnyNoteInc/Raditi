@@ -8,7 +8,7 @@ import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
 import type { CoreConfig } from '../config/config.ts'
 import { BACKGROUND_JOBS, CORE_CONFIG } from '../config/config.tokens.ts'
 import { METRICS_REGISTRY } from '../metrics/metrics.tokens.ts'
-import { backendCapacities } from './backends.ts'
+import { backendCapacities, backendFallbacks } from './backends.ts'
 import { CoreCredentialRuntime } from './credential-runtime.ts'
 import { CredentialSweeper, type CredentialSweepKind } from './credential-sweeper.ts'
 import { TURN_CREDENTIALS } from './llm.tokens.ts'
@@ -57,6 +57,8 @@ export function loggedProbe(
           minTurnHeadroomPct: config.minTurnHeadroomPct ?? 5,
           // The adapters' own word; core never sends a request with them.
           capacityOf: backendCapacities(llmBackends),
+          // The API after the plan (docs/plan/70-turn-without-time-limit.md, ВР25).
+          fallbackOf: backendFallbacks(llmBackends),
           ...(config.llmControlUrl === undefined
             ? {}
             : {

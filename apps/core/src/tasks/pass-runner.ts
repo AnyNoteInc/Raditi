@@ -1,6 +1,11 @@
 import { Logger } from '@nestjs/common'
 import type { AgentDriverRegistry } from '@repo/agent-drivers'
-import { claimQueuedTask, enqueueSiteWaitingPasses, type PrismaClient } from '@repo/db'
+import {
+  claimQueuedPass,
+  enqueueAgentWaitingPasses,
+  enqueueSiteWaitingPasses,
+  type PrismaClient,
+} from '@repo/db'
 import {
   AGENT_TURN_JOB,
   AGENT_TURN_QUEUE,
@@ -31,6 +36,7 @@ import type { ChatFiles } from './chat-files.ts'
 import type { DocSections } from './doc-sections.ts'
 import type { LivePasses } from './live-passes.ts'
 import { readPassFacts } from './pass-facts.ts'
+import type { TurnCapacity } from './turn-capacity.ts'
 import type { PassEnding, PassRef, PassSettlement, SettleAnswer } from './pass-settlement.ts'
 import { causeOf, failureFactsOf, feedFailureOf } from './turn-outcome.ts'
 import { planTurn, type PassPlan } from './turn-planner.ts'
@@ -53,11 +59,16 @@ const RETRY_DELAY_MS = Object.freeze({
 })
 
 /**
- * Passes of one workspace that run at a time (owner's request of 06.11.2026: «расширь количество
- * параллельных агентов на одного пользователя до 8»): the next one waits as for a busy pool. The
- * pool and the worker of `agent-turns` bound all the workspaces together.
+ * Passes of one workspace that run at a time by default (owner's requests of 06.11.2026: «расширь
+ * количество параллельных агентов на одного пользователя до 8», and of 12.11.2026: «на одного
+ * клиента запускать до 8 сендбоксов»; WORKSPACE_TURN_LIMIT): the next one waits for the agents.
+ * The places of the platform (TurnCapacity) and the pool bound all the workspaces together.
  */
-export const WORKSPACE_PASS_LIMIT = 8
+export const DEFAULT_WORKSPACE_TURN_LIMIT = 8
+
+/** How many waiting passes the end of a pass wakes: of its workspace, and of the platform. */
+const WAKE_WORKSPACE = 8
+const WAKE_PLATFORM = 2
 
 const clamp = (value: number) =>
   Math.min(RETRY_DELAY_MS.max, Math.max(RETRY_DELAY_MS.min, Math.round(value)))
@@ -94,6 +105,10 @@ export interface PassRunnerDependencies {
   chatFiles?: Pick<ChatFiles, 'deliver' | 'failPages'>
   /** The documents of the chat (docs/plan/69-pages.md, Ст19); absent — not settled here. */
   docs?: Pick<DocSections, 'settle'>
+  /** WORKSPACE_TURN_LIMIT (plan 70, ВР13); DEFAULT_WORKSPACE_TURN_LIMIT when absent. */
+  workspaceTurnLimit?: number
+  /** The places for turns of the platform (plan 70, ВР17); absent — no bound but the pool's. */
+  capacity?: Pick<TurnCapacity, 'tryAcquire'>
   now?: () => Date
   cancelPollMs?: number
 }
@@ -120,10 +135,21 @@ export class PassRunner {
   }
 
   async run(job: AgentTurnJob): Promise<void> {
-    const claimed = await claimQueuedTask(this.deps.db, {
+    // Of nine passes of one workspace that claim at once, exactly its limit go (plan 70, ВР13).
+    const claimed = await claimQueuedPass(this.deps.db, {
       taskId: job.taskId,
       attempt: job.attempt,
+      workspaceLimit: this.deps.workspaceTurnLimit ?? DEFAULT_WORKSPACE_TURN_LIMIT,
     })
+    if (claimed === 'full') {
+      // It waits for the agents, holding no worker: the end of a pass of its workspace wakes it.
+      const answer = await this.deps.settlement.waitForAgents(job)
+      this.#logger.log(
+        `pass_settled task=${job.taskId} ending=busy answer=${answer} cause=WORKSPACE_FULL`,
+      )
+      if (answer === 'moved') await this.#requeue(job, { delayMs: RETRY_DELAY_MS.update })
+      return
+    }
     if (!claimed) {
       this.#logger.log(`pass_skipped task=${job.taskId} attempt=${job.attempt}`)
       return
@@ -182,16 +208,32 @@ export class PassRunner {
       await settlement.settle(ref, { kind: 'refused', code: 'unavailable' })
       return
     }
-    // The claim above moved this task to `preparing` before it counts the others: passes that
-    // claim at once count each other, so the workspace never runs more than its limit.
-    if (await this.#workspaceFull(job.taskId)) {
+    // A place for the turn on the platform (plan 70, ВР17): without one the pass waits for the
+    // agents and gives its worker up; the end of any pass wakes it.
+    const release = this.deps.capacity ? this.deps.capacity.tryAcquire() : () => {}
+    if (!release) {
       const answer = await settlement.settle(ref, { kind: 'busy', waiting: 'agents' })
       this.#logger.log(
-        `pass_settled task=${job.taskId} ending=busy answer=${answer} cause=WORKSPACE_FULL`,
+        `pass_settled task=${job.taskId} ending=busy answer=${answer} cause=CAPACITY_FULL`,
       )
       if (answer === 'moved') await this.#requeue(job, { delayMs: RETRY_DELAY_MS.update })
       return
     }
+    try {
+      await this.#turnOf(job, ref, billable, controller)
+    } finally {
+      release()
+      await this.#wakeAgents(job, ref.turnNo)
+    }
+  }
+
+  async #turnOf(
+    job: AgentTurnJob,
+    ref: PassRef,
+    billable: boolean,
+    controller: AbortController,
+  ): Promise<void> {
+    const { settlement } = this.deps
     const supervisor = this.deps.supervisor
     if (!supervisor) {
       await settlement.settle(ref, { kind: 'refused', code: 'unavailable' })
@@ -480,13 +522,28 @@ export class PassRunner {
     return task?.turnNo ?? null
   }
 
-  /** The workspace of the task runs `WORKSPACE_PASS_LIMIT` passes of its other tasks. */
-  async #workspaceFull(taskId: string): Promise<boolean> {
-    const [row] = await this.deps.db.$queryRaw<Array<{ busy: number }>>`
-      SELECT count(*)::int AS busy
-      FROM tasks t JOIN tasks o ON o.workspace_id = t.workspace_id AND o.id <> t.id
-      WHERE t.id = ${taskId}::uuid AND o.status IN ('preparing', 'running')`
-    return (row?.busy ?? 0) >= WORKSPACE_PASS_LIMIT
+  /**
+   * The pass gave its place back: the passes that waited for the agents go now, not at their
+   * retry (plan 70, ВР15) — those of its workspace, whose limit it freed, then the oldest of the
+   * platform. A wake that is not written leaves them their retry.
+   */
+  async #wakeAgents(job: AgentTurnJob, turnNo: number): Promise<void> {
+    try {
+      const task = await this.deps.db.task.findUnique({
+        where: { id: job.taskId },
+        select: { workspaceId: true },
+      })
+      const tag = `pass-${job.taskId}-${job.attempt}-${turnNo}`
+      if (task)
+        await enqueueAgentWaitingPasses(this.deps.db, {
+          workspaceId: task.workspaceId,
+          limit: WAKE_WORKSPACE,
+          tag,
+        })
+      await enqueueAgentWaitingPasses(this.deps.db, { limit: WAKE_PLATFORM, tag })
+    } catch {
+      this.#logger.warn(`pass_wake_failed task=${job.taskId}`)
+    }
   }
 
   async #holdsReserve(job: AgentTurnJob): Promise<boolean> {

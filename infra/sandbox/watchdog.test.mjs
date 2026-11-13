@@ -76,6 +76,89 @@ test('one removal failure preserves its gateway without starving other expired t
   ])
 })
 
+const lease = 'io.raditi.turnlease.'
+const leaseItem = (deadline, id, extra = {}, name = `/raditi-turn-task-1-lease-${deadline}`) => ({
+  Id: id.repeat(64),
+  Names: [name],
+  Labels: {
+    [`${lease}owner`]: 'raditi',
+    [`${lease}protocol`]: '1',
+    [`${lease}deadline`]: String(deadline),
+    [`${lease}taskId`]: 'task',
+    [`${lease}turn`]: '1',
+    ...extra,
+  },
+})
+/** A host with one turn whose own labels expired at 99, its attempt gateway and `leases`. */
+const leasedHost = (leases, calls) => {
+  const resource = '01234567-1234-1234-1234-0123456789ab'
+  return async (method, path) => {
+    if (method === 'DELETE') {
+      calls.push(path)
+      return null
+    }
+    if (path.includes('turnlease.')) return leases(resource)
+    if (path.includes('sandbox.')) return [item(main, 99, 'a', { [`${main}gatewayId`]: resource })]
+    return [
+      item(gateway, 99, path.startsWith('/networks') ? 'e' : 'f', {
+        [`${gateway}resourceId`]: resource,
+        [`${gateway}role`]: path.startsWith('/networks') ? 'network' : 'guard',
+      }),
+    ]
+  }
+}
+
+test('a later lease keeps a turn and its attempt gateway, however old their own labels', async () => {
+  // A turn without a time limit (plan 70, ВР5): its supervisor renewed it after the first deadline.
+  const calls = []
+  const host = leasedHost(
+    (resource) => [leaseItem(150, '1', { [`${lease}gatewayId`]: resource })],
+    calls,
+  )
+  assert.equal(await reapExpired(host, 100), 0)
+  assert.deepEqual(calls, [])
+})
+
+test('a turn whose last lease passed goes whole, its leases last', async () => {
+  // The supervisor died: nothing renews the turn, and everything of it goes at the last deadline.
+  const calls = []
+  const host = leasedHost(
+    (resource) => [
+      leaseItem(120, '1', { [`${lease}gatewayId`]: resource }),
+      leaseItem(130, '2', { [`${lease}gatewayId`]: resource }),
+    ],
+    calls,
+  )
+  assert.equal(await reapExpired(host, 131), 5)
+  assert.deepEqual(calls, [
+    `/containers/${'a'.repeat(64)}?force=1&v=1`,
+    `/containers/${'f'.repeat(64)}?force=1&v=1`,
+    `/networks/${'e'.repeat(64)}`,
+    `/containers/${'1'.repeat(64)}?force=1&v=1`,
+    `/containers/${'2'.repeat(64)}?force=1&v=1`,
+  ])
+})
+
+test('a lease of a foreign name, owner, turn or deadline keeps nothing', async () => {
+  for (const foreign of [
+    leaseItem(150, '1', {}, '/raditi-turn-task-1-lease-151'),
+    leaseItem(150, '1', {}, '/raditi-turn-other-1-lease-150'),
+    leaseItem(150, '1', { [`${lease}owner`]: 'foreign' }),
+    leaseItem(150, '1', { [`${lease}protocol`]: '2' }),
+    leaseItem(150, '1', { [`${lease}turn`]: '2' }),
+    leaseItem('soon', '1'),
+  ]) {
+    const calls = []
+    await reapExpired(
+      leasedHost(() => [foreign], calls),
+      100,
+    )
+    assert.ok(calls.includes(`/containers/${'a'.repeat(64)}?force=1&v=1`))
+    // Only a lease named and labelled as the provider writes it is ever removed.
+    assert.ok(!calls.includes(`/containers/${'1'.repeat(64)}?force=1&v=1`))
+  }
+})
+
 test('failed discovery does not guess whether resources exist', async () => {
   let calls = 0
   await assert.rejects(

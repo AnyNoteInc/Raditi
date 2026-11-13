@@ -255,6 +255,83 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn assignments', () => {
     expect(await store.open({ ...input, turn: 2 })).toBeNull()
   })
 
+  it('renews a live turn: its lease and its assignment together, never back, only under its fence', async () => {
+    // docs/plan/70-turn-without-time-limit.md, ВР2–ВР4.
+    const { lease, input, siteId, taskId } = await fixture()
+    // Before the assignment exists, the lease alone moves.
+    const early = await store.renewTurn({
+      fence: lease,
+      turn: 1,
+      turnMs: 120_000,
+      leaseMs: 200_000,
+    })
+    expect(early).toMatchObject({ siteId, taskId, operation: 'turn', epoch: lease.epoch })
+    expect(early!.expiresAt.getTime() - early!.serverNow.getTime()).toBe(200_000)
+    const opened = (await store.open(input))!
+    const { workspaceId } = await db.task.findUniqueOrThrow({ where: { id: taskId } })
+    const soon = new Date(Date.now() + 60_000)
+    const live = await db.browserSession.create({
+      data: { taskId, siteId, workspaceId, status: 'ready', readyAt: new Date(), expiresAt: soon },
+    })
+    const closed = await db.browserSession.create({
+      data: {
+        taskId,
+        siteId,
+        workspaceId,
+        status: 'closed',
+        closedAt: new Date(),
+        closeReason: 'idle',
+        expiresAt: soon,
+      },
+    })
+    const renewed = await store.renewTurn({
+      fence: lease,
+      turn: 1,
+      turnMs: 120_000,
+      leaseMs: 200_000,
+    })
+    // The browser of the task lives while its turn does (ВР20); a closed one stays closed.
+    const hours = (row: { expiresAt: Date }) => (row.expiresAt.getTime() - Date.now()) / 3_600_000
+    expect(
+      hours(await db.browserSession.findUniqueOrThrow({ where: { id: live.id } })),
+    ).toBeGreaterThan(3.9)
+    expect(
+      (await db.browserSession.findUniqueOrThrow({ where: { id: closed.id } })).expiresAt,
+    ).toEqual(soon)
+    await db.browserSession.deleteMany({ where: { taskId } })
+    expect(renewed!.expiresAt.getTime() - renewed!.serverNow.getTime()).toBeGreaterThan(199_000)
+    const row = (await store.get(opened.id))!
+    expect(row.deadlineAt.getTime() - row.serverNow.getTime()).toBeGreaterThan(119_000)
+    // A shorter renewal moves nothing back.
+    await store.renewTurn({ fence: lease, turn: 1, turnMs: 1_000, leaseMs: 2_000 })
+    expect((await store.get(opened.id))!.deadlineAt.getTime()).toBe(row.deadlineAt.getTime())
+    expect((await leases.inspect(siteId))!.expiresAt!.getTime()).toBeGreaterThanOrEqual(
+      renewed!.expiresAt.getTime(),
+    )
+    // Another epoch, or a lease held for recovery: nothing moves, and the owner learns it lost.
+    expect(
+      await store.renewTurn({
+        fence: { ...lease, epoch: lease.epoch + 1 },
+        turn: 1,
+        turnMs: 120_000,
+        leaseMs: 200_000,
+      }),
+    ).toBeNull()
+    await leases.holdForRecovery(lease)
+    const held = (await store.get(opened.id))!.deadlineAt.getTime()
+    expect(
+      await store.renewTurn({ fence: lease, turn: 1, turnMs: 600_000, leaseMs: 700_000 }),
+    ).toBeNull()
+    expect((await store.get(opened.id))!.deadlineAt.getTime()).toBe(held)
+    // A turn never outlives its lease, nor is it renewed past one lease at a time.
+    await expect(
+      store.renewTurn({ fence: lease, turn: 1, turnMs: 200_000, leaseMs: 100_000 }),
+    ).rejects.toThrow()
+    await expect(
+      store.renewTurn({ fence: lease, turn: 1, turnMs: 60_000, leaseMs: 21 * 60_000 }),
+    ).rejects.toThrow()
+  })
+
   it('keeps one unfinished assignment per turn between two contenders', async () => {
     const { input } = await fixture()
     const opened = await Promise.all([store.open(input), store.open(input)])

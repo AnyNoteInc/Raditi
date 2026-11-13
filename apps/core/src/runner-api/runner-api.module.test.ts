@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import { Global, Module } from '@nestjs/common'
 import { Test, type TestingModule } from '@nestjs/testing'
-import { MAX_SANDBOX_TURN_MS, type TurnPlan } from '@repo/domain'
+import { MAX_SANDBOX_LEASE_MS, type TurnPlan } from '@repo/domain'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { parseRunnerTokens } from '../config/runner-tokens.ts'
@@ -49,7 +49,7 @@ async function runnerApi(entries: string) {
       turn: 1,
       executor: 'runner',
       plan: {} as TurnPlan,
-      remainingMs: MAX_SANDBOX_TURN_MS,
+      remainingMs: MAX_SANDBOX_LEASE_MS,
     }))!
     const address = executor
       .credentialAddress(assignment.id, new AbortController().signal)
