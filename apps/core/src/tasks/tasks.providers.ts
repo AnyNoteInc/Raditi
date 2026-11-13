@@ -74,7 +74,7 @@ export const taskProviders: Provider[] = [
       browser: BrowserSessions | null,
       registry: Registry,
     ) => {
-      // A pass a window of its workspace stopped (plan 70, §4.4); no id in a label.
+      // A pass a window of its workspace stopped (plan 71, §4.4); no id in a label.
       const refusals = new Counter({
         name: 'raditi_workspace_window_refusals_total',
         help: 'Passes and calls refused by a usage window of their workspace',
@@ -106,7 +106,7 @@ export const taskProviders: Provider[] = [
       storage: ObjectStorage,
       registry: Registry,
     ) => {
-      // What the pool told a pass (plan 70, §4.4): the limits of the agent out, the reserve of
+      // What the pool told a pass (plan 71, §4.4): the limits of the agent out, the reserve of
       // the higher tiers waited for.
       const limitsOut = new Counter({
         name: 'raditi_pass_limits_out_total',

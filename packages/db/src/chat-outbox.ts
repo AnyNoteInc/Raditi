@@ -44,7 +44,7 @@ const lower = (id: string): string => id.toLowerCase()
 
 /**
  * The place of a pass of the task in the queue: the tier of the live paid tariff of its
- * workspace (plan 70, §2.3) — a repeat after the pool waited comes back in the same order.
+ * workspace (plan 71, §2.3) — a repeat after the pool waited comes back in the same order.
  */
 export async function agentTurnPriority(
   tx: Pick<Prisma.TransactionClient, '$queryRaw'>,

@@ -417,7 +417,6 @@ describe.skipIf(!databaseUrl)('seedReferenceData plan terms on PostgreSQL', () =
       creditsPerDay: 10,
       creditsPer5h: 10,
       creditsPerWeek: 20,
-      maxConcurrentTurns: 1,
       packCredits: null,
       maxSites: 1,
       sortOrder: 990,

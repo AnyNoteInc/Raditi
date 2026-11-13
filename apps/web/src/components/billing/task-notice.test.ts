@@ -634,7 +634,7 @@ describe('the line under «Тарифы» of a customer without a tariff', () =>
   })
 })
 
-// Plan 70: a spent window of 5 hours or of the week — credits do not lift it, the reset does.
+// Plan 71: a spent window of 5 hours or of the week — credits do not lift it, the reset does.
 describe('a spent window of the workspace', () => {
   const resetsAt = new Date('2026-11-16T15:40:00.000Z')
 

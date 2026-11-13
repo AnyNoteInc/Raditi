@@ -142,7 +142,7 @@ function fixture(
       })),
     },
     crossBorderClearance: { findFirst: vi.fn(async () => null) },
-    // No measured cost of a turn: 5 % of a window (plan 70, Л12).
+    // No measured cost of a turn: 5 % of a window (plan 71, Л12).
     llmTurnCost: { findUnique: vi.fn(async () => null) },
     taskAccountBinding: {
       findUnique: vi.fn(async () => null),

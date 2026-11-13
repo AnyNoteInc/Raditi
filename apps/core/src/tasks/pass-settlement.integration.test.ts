@@ -918,7 +918,7 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       expect(await code(task.taskId)).toEqual([['feed.failure', 'technical']])
     })
 
-    // Plan 70 (scenario 1): a window of the workspace stopped the key — the work is charged, the
+    // Plan 71 (scenario 1): a window of the workspace stopped the key — the work is charged, the
     // row names the window and its reset, and the dialog waits for the client after the reset.
     it('names the window of the workspace and its reset, and charges the work done', async () => {
       const task = await refusedWith('workspace_limit')

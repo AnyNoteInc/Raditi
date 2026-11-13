@@ -37,7 +37,7 @@ export const feedFailureText: Readonly<Record<FeedFailureCode, string>> = Object
   // The platform's own limit with the model provider (a window of the plan, an empty balance),
   // not the client's credits: nothing the client can do, so it is told whom to ask.
   agent_limits: 'Лимиты ИИ-агента закончились, и задача не выполнена. Обратитесь к администратору.',
-  // A window of 5 hours or of the week of the workspace (plan 70): the row names which and when
+  // A window of 5 hours or of the week of the workspace (plan 71): the row names which and when
   // it resets (`usageLimitText`); these words are for a row without them.
   usage_limit:
     'Лимит работы агента исчерпан. Продолжить можно после его сброса — когда он, сказано в разделе «Использование».',
@@ -126,7 +126,7 @@ export function usageWindowResetText(kind: '5h' | 'week', resetsAt: Date): strin
   return `${weekdayRu[moscowWeekday.format(resetsAt)] ?? ''}, ${time}`
 }
 
-/** The words of a refusal by a window of the workspace, with its reset (plan 70, §4.5). */
+/** The words of a refusal by a window of the workspace, with its reset (plan 71, §4.5). */
 export function usageLimitText(kind: '5h' | 'week', resetsAt: Date | null): string {
   if (resetsAt === null) return feedFailureText.usage_limit
   const time = moscowTime.format(resetsAt)

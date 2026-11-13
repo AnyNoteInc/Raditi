@@ -28,7 +28,7 @@ export const planSchema = z.object({
   creditsPerMonth: positiveCount,
   /** Tariff credits a Moscow day may take; null: the plan has no daily limit. */
   creditsPerDay: positiveCount.nullable(),
-  /** Credits the work may take in 5 hours and in a week (plan 70); null: no such limit. */
+  /** Credits the work may take in 5 hours and in a week (plan 71); null: no such limit. */
   creditsPer5h: positiveCount.nullable(),
   creditsPerWeek: positiveCount.nullable(),
   maxSites: positiveCount,
@@ -191,7 +191,7 @@ export const tariffDaySchema = z
 export type TariffDayDto = z.infer<typeof tariffDaySchema>
 
 /**
- * A window of 5 hours or of the week of the workspace (docs/plan/70-usage-limits.md, §4.5): its
+ * A window of 5 hours or of the week of the workspace (docs/plan/71-usage-limits.md, §4.5): its
  * limit, what the work took (whole credits, rounded up) and what is left (rounded down), and when
  * it resets; `resetsAt` null — it starts with the first task. `limit` null — no limit.
  */
@@ -235,9 +235,9 @@ const taskCreditsShape = {
   minToStart: positiveCount,
   /** The tariff credits of the Moscow day; null without a paid tariff — there is no day then. */
   today: tariffDaySchema.nullable(),
-  /** The windows of 5 hours and of the week (plan 70); none for a user without a workspace. */
+  /** The windows of 5 hours and of the week (plan 71); none for a user without a workspace. */
   windows: z.array(usageWindowDtoSchema).max(2),
-  /** The tier of the workspace (plan 70): whether a bigger tariff with bigger windows exists. */
+  /** The tier of the workspace (plan 71): whether a bigger tariff with bigger windows exists. */
   tier: z.enum(workspaceTiers),
   newTask: newTaskSchema,
 }

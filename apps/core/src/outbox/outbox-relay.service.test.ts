@@ -102,7 +102,7 @@ describe('OutboxRelayService.tick', () => {
     expect(relay.relayId.length).toBeLessThanOrEqual(64)
   })
 
-  // Plan 70, §2.3: a pass carries the place of its workspace's tier in the queue.
+  // Plan 71, §2.3: a pass carries the place of its workspace's tier in the queue.
   it('hands the priority of a payload to the queue, and nothing that is not one', async () => {
     const pass = row({
       topic: 'agent-turns',

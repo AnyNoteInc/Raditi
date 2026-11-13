@@ -972,7 +972,7 @@ test('the quota follows the requests the way the records show', async (t) => {
     status: 'ok',
     plan: null,
     windows: [
-      // The size and the use in plan credits come with the share (plan 70).
+      // The size and the use in plan credits come with the share (plan 71).
       { name: '5h', usedPct: 0, resetsAt: null, limitCredits: 2_000, usedCredits: 0 },
       {
         name: 'week',
@@ -1543,7 +1543,7 @@ test('every fixture of the adapter is a sanitised copy of a record of the resear
   )
 })
 
-// Plan 70, scenario 7: the quota of Lite, Pro and Max names its size and its use in credits.
+// Plan 71, scenario 7: the quota of Lite, Pro and Max names its size and its use in credits.
 test('answers the quota of Lite, Pro and Max with their own sizes', async (t) => {
   const target = await plain(t)
   for (const [plan, fiveHour, week] of [

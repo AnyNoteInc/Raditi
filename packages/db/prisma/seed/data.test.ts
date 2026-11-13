@@ -31,7 +31,6 @@ describe('plans (docs/business.md §6)', () => {
         creditsPerDay: null,
         creditsPer5h: 20,
         creditsPerWeek: 55,
-        maxConcurrentTurns: 1,
         packCredits: null,
         maxSites: 1,
       },
@@ -44,7 +43,6 @@ describe('plans (docs/business.md §6)', () => {
         creditsPerDay: null,
         creditsPer5h: 70,
         creditsPerWeek: 210,
-        maxConcurrentTurns: 2,
         packCredits: null,
         maxSites: 3,
       },
@@ -57,7 +55,6 @@ describe('plans (docs/business.md §6)', () => {
         creditsPerDay: null,
         creditsPer5h: 200,
         creditsPerWeek: 700,
-        maxConcurrentTurns: 3,
         packCredits: null,
         maxSites: 15,
       },
@@ -70,7 +67,6 @@ describe('plans (docs/business.md §6)', () => {
         creditsPerDay: null,
         creditsPer5h: null,
         creditsPerWeek: null,
-        maxConcurrentTurns: null,
         packCredits: 100,
         maxSites: null,
       },
@@ -83,7 +79,6 @@ describe('plans (docs/business.md §6)', () => {
         creditsPerDay: null,
         creditsPer5h: null,
         creditsPerWeek: null,
-        maxConcurrentTurns: null,
         packCredits: null,
         maxSites: 1,
       },
@@ -130,7 +125,7 @@ describe('Appendix 1 of the public offer', () => {
     price: new RegExp(`^${whole} ₽ в месяц$`),
     terms: new RegExp(
       `^${whole} Кредит(?:|а|ов) в месяц(?:, из них не более ${whole} Кредит(?:|а|ов) в день)?; ` +
-        // The windows of the work (plan 70): «до 20 Кредитов за 5 часов и 55 в неделю».
+        // The windows of the work (plan 71): «до 20 Кредитов за 5 часов и 55 в неделю».
         `(?:до ${whole} Кредит(?:|а|ов) за 5 часов и ${whole} в неделю; )?` +
         String.raw`(?:до )?(\d+) Сайт(?:|а|ов) Заказчика$`,
     ),

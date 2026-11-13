@@ -172,7 +172,7 @@ function parseLimit(raw: unknown, name: LimitWindow['name'], now: Date): LimitWi
   // A started window shows one credit less in `remaining` than `currentValue` accounts for,
   // from its first request on; the larger count is taken. The provider's own `percentage` is
   // rounded up to a whole percent and is not read.
-  // The absolute numbers stay with the share (plan 70): a Max holds fourteen times a Lite.
+  // The absolute numbers stay with the share (plan 71): a Max holds fourteen times a Lite.
   const used = Math.max(spent, size - remaining)
   if (remaining <= 0 || used >= size)
     return { name, usedPct: 100, resetsAt, limitCredits: size, usedCredits: Math.max(used, size) }

@@ -93,7 +93,7 @@ export interface PassRunnerDependencies {
   chatFiles?: Pick<ChatFiles, 'deliver'>
   now?: () => Date
   cancelPollMs?: number
-  /** Counts what the pool told a pass (plan 70, §4.4): metrics without ids. */
+  /** Counts what the pool told a pass (plan 71, §4.4): metrics without ids. */
   pool?: { limitsOut(): void; tierWait(tier: string): void }
 }
 
@@ -560,7 +560,7 @@ export class PassRunner {
       .enqueue(AGENT_TURN_QUEUE, AGENT_TURN_JOB, job, {
         jobId: agentTurnRetryJobId(job, String(this.#now().getTime())),
         delayMs: retry.delayMs,
-        // After a wait of the pool the passes come back in the order of their tiers (plan 70).
+        // After a wait of the pool the passes come back in the order of their tiers (plan 71).
         ...(job.priority === undefined ? {} : { priority: job.priority }),
       })
       .catch(() => this.#logger.warn(`pass_requeue_failed task=${job.taskId}`))

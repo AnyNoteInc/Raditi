@@ -63,7 +63,7 @@ vi.mock('@/trpc/client', () => ({
     billing: {
       usage: {
         queryKey: () => ['billing', 'usage'],
-        // The hint of the windows (plan 70) reads nothing in these cases.
+        // The hint of the windows (plan 71) reads nothing in these cases.
         queryOptions: () => ({ queryKey: ['billing', 'usage'], queryFn: async () => null }),
       },
     },

@@ -571,7 +571,7 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     await admitted(waitingKey.input)
   })
 
-  // The windows of a workspace (docs/plan/70-usage-limits.md, §2.2; scenarios 1 and 6): a credit
+  // The windows of a workspace (docs/plan/71-usage-limits.md, §2.2; scenarios 1 and 6): a credit
   // rate of 6 ₽ is written for these cases and removed after them — the rate belongs to the whole
   // database, which is why the suite runs on a disposable one only.
   describe('the windows of 5 hours and of the week of a workspace', () => {

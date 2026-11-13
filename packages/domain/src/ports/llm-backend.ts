@@ -193,7 +193,7 @@ export const gatewayRefusalSchema = z.enum([
   'policy_flagged',
   'profile',
   'request_rejected',
-  // The workspace of the key spent its window of 5 hours or of the week (docs/plan/70): not the
+  // The workspace of the key spent its window of 5 hours or of the week (docs/plan/71): not the
   // pool's limit and not the client's credits — the work goes on after the reset.
   'workspace_limit',
 ])

@@ -34,12 +34,10 @@ export interface PlanSeed {
    */
   creditsPerDay: number | null
   /**
-   * Credits the work of a workspace may take in 5 hours and in a week, and how many of its turns
-   * run at once (plan 70, Л4, Л10); NULL on a pack and on pay-per-action, which tier nobody.
+   * Credits the work of a workspace may take in 5 hours and in a week, (plan 71, Л4); NULL on a pack and on pay-per-action, which tier nobody.
    */
   creditsPer5h: number | null
   creditsPerWeek: number | null
-  maxConcurrentTurns: number | null
   packCredits: number | null
   maxSites: number | null
   sortOrder: number
@@ -55,7 +53,6 @@ export const planSeeds = [
     creditsPerDay: null,
     creditsPer5h: 20,
     creditsPerWeek: 55,
-    maxConcurrentTurns: 1,
     packCredits: null,
     maxSites: 1,
     sortOrder: 10,
@@ -69,7 +66,6 @@ export const planSeeds = [
     creditsPerDay: null,
     creditsPer5h: 70,
     creditsPerWeek: 210,
-    maxConcurrentTurns: 2,
     packCredits: null,
     maxSites: 3,
     sortOrder: 20,
@@ -83,7 +79,6 @@ export const planSeeds = [
     creditsPerDay: null,
     creditsPer5h: 200,
     creditsPerWeek: 700,
-    maxConcurrentTurns: 3,
     packCredits: null,
     maxSites: 15,
     sortOrder: 30,
@@ -100,7 +95,6 @@ export const planSeeds = [
     creditsPerDay: null,
     creditsPer5h: null,
     creditsPerWeek: null,
-    maxConcurrentTurns: null,
     packCredits: 100,
     maxSites: null,
     sortOrder: 40,
@@ -116,7 +110,6 @@ export const planSeeds = [
     creditsPerDay: null,
     creditsPer5h: null,
     creditsPerWeek: null,
-    maxConcurrentTurns: null,
     packCredits: null,
     maxSites: 1,
     sortOrder: 50,

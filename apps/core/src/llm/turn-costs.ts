@@ -1,7 +1,7 @@
 import { Logger, type OnApplicationBootstrap, type OnModuleDestroy } from '@nestjs/common'
 import type { PrismaClient } from '@repo/db'
 
-// What a turn of a model profile takes of the windows of the plan (docs/plan/70-usage-limits.md,
+// What a turn of a model profile takes of the windows of the plan (docs/plan/71-usage-limits.md,
 // Л12): p50 and p95 of the plan credits of each turn over 14 days, written as a snapshot the pool
 // reads at every issue (`llm_turn_costs`) instead of counting it there. A profile with fewer than
 // `minTurns` turns gets no row: a turn is then 5 % of a window, as before.

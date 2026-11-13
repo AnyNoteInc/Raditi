@@ -1,11 +1,11 @@
 -- The windows of 5 hours and of the week (owner's decision of 11.11.2026, docs/spec.md §20,
--- «Лимиты 5 часов и недели»; docs/plan/70-usage-limits.md):
+-- «Лимиты 5 часов и недели»; docs/plan/71-usage-limits.md):
 -- - token_usage.plan_credits and llm_calls.reserved_plan_credits: the credits of the provider's
 --   plan a call took and was estimated at — NULL where the provider has no plan rates (zai-api);
 -- - llm_plan_rates: the multipliers and the peak of the plan, rows only added by an operator;
 -- - llm_turn_costs: the cost of a turn of a profile, a snapshot core recomputes;
--- - plans.credits_per_5h, credits_per_week, max_concurrent_turns and their values for the three
---   tariffs (Л4, Л10), changed in place as billing_pricing_2026_11 did: only plans that still
+-- - plans.credits_per_5h, credits_per_week and their values for the three
+--   tariffs (Л4), changed in place as billing_pricing_2026_11 did: only plans that still
 --   hold the terms published on 06.11.2026 and no value of their own;
 -- - workspace_usage_windows: the windows a workspace opened with its first call.
 -- New columns and tables only: code without this file keeps working on a database with it.
@@ -70,27 +70,25 @@ CREATE TABLE "llm_turn_costs" (
 
 ALTER TABLE "plans" ADD COLUMN "credits_per_5h" INTEGER;
 ALTER TABLE "plans" ADD COLUMN "credits_per_week" INTEGER;
-ALTER TABLE "plans" ADD COLUMN "max_concurrent_turns" SMALLINT;
 ALTER TABLE "plans"
   ADD CONSTRAINT "plans_usage_windows_check" CHECK (
     ("credits_per_5h" IS NULL OR "credits_per_5h" > 0)
     AND ("credits_per_week" IS NULL OR "credits_per_week" > 0)
     AND ("credits_per_5h" IS NULL OR "credits_per_week" IS NULL
-         OR "credits_per_5h" <= "credits_per_week")
-    AND ("max_concurrent_turns" IS NULL OR "max_concurrent_turns" > 0));
+         OR "credits_per_5h" <= "credits_per_week"));
 
 UPDATE "plans"
-  SET "credits_per_5h" = 20, "credits_per_week" = 55, "max_concurrent_turns" = 1,
+  SET "credits_per_5h" = 20, "credits_per_week" = 55,
       "updated_at" = CURRENT_TIMESTAMP
   WHERE "slug" = 'start' AND "kind" = 'quota' AND "price" = 1990.00
     AND "credits_per_month" = 150 AND "credits_per_5h" IS NULL;
 UPDATE "plans"
-  SET "credits_per_5h" = 70, "credits_per_week" = 210, "max_concurrent_turns" = 2,
+  SET "credits_per_5h" = 70, "credits_per_week" = 210,
       "updated_at" = CURRENT_TIMESTAMP
   WHERE "slug" = 'business' AND "kind" = 'quota' AND "price" = 6990.00
     AND "credits_per_month" = 600 AND "credits_per_5h" IS NULL;
 UPDATE "plans"
-  SET "credits_per_5h" = 200, "credits_per_week" = 700, "max_concurrent_turns" = 3,
+  SET "credits_per_5h" = 200, "credits_per_week" = 700,
       "updated_at" = CURRENT_TIMESTAMP
   WHERE "slug" = 'agency' AND "kind" = 'quota' AND "price" = 19990.00
     AND "credits_per_month" = 2000 AND "credits_per_5h" IS NULL;

@@ -26,7 +26,7 @@ groups:
       - alert: LlmUsageNotPersisted
         expr: sum(increase(raditi_llm_persistence_failed_total[15m])) > 0
         annotations: { summary: 'Шлюз подписок не записал расход' }
-      # Окна пула ИИ-агента и лимиты пространств (docs/plan/70-usage-limits.md, §4.4).
+      # Окна пула ИИ-агента и лимиты пространств (docs/plan/71-usage-limits.md, §4.4).
       - alert: LlmPoolFiveHoursLow
         expr: min(raditi_llm_pool_window_remaining_ratio{window="5h"}) < 0.2
         for: 10m

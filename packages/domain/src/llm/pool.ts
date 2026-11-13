@@ -138,7 +138,7 @@ interface Readiness {
   ready: boolean
   headroom: number
   /**
-   * The order of the pool in absolute plan credits (§2.3 of plan 70): min(left of 5 hours, left
+   * The order of the pool in absolute plan credits (§2.3 of plan 71): min(left of 5 hours, left
    * of the week × pace) − the cost of a turn. null — a window without absolute numbers: the
    * account is ordered by `headroom` in percents.
    */

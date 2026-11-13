@@ -134,7 +134,7 @@ const WINDOWS = Object.freeze([
 
 /**
  * The sizes of the windows of GLM Coding Plan, in plan credits (docs.z.ai/devpack/overview,
- * 11.11.2026; docs/plan/70-usage-limits.md): `setQuota({ plan })` answers with those of Lite, Pro
+ * 11.11.2026; docs/plan/71-usage-limits.md): `setQuota({ plan })` answers with those of Lite, Pro
  * or Max, so a stand sees the absolute numbers of each.
  */
 const PLAN_SIZES = Object.freeze({

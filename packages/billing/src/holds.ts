@@ -624,7 +624,7 @@ async function placementFacts(
   const rate = await creditRateStatus(tx, placedAt)
   const tariff = await tariffTerms(tx, subscription)
   const tariffCreditsToday = await tariffCreditsOfDay(tx, { workspaceId, now: placedAt })
-  // The windows of 5 hours and of the week bound every placement, a retry too (plan 70, Л5).
+  // The windows of 5 hours and of the week bound every placement, a retry too (plan 71, Л5).
   const terms = await workspaceUsageTerms(tx, workspaceId)
   const windows = await workspaceWindowUsage(tx, {
     workspaceId,
@@ -664,7 +664,7 @@ async function placementFacts(
  * 3. the tariff credits of the Moscow day, for every placement but a retry: what is left of
  *    the day on the tariff, with the gift and pack credits, cannot cover the start although the
  *    accounts can — BILLING_DAILY_LIMIT_REACHED;
- * 4. the windows of 5 hours and of the week of the workspace, for every placement (plan 70):
+ * 4. the windows of 5 hours and of the week of the workspace, for every placement (plan 71):
  *    a window has less room than the placement needs — BILLING_WINDOW_LIMIT_REACHED, with the
  *    window, its limit, what it took and its reset. The daily limit does not apply to a retry (the
  *    owner, 19.10.2026): its tariff part is bounded by the free tariff credits alone, and what it

@@ -1757,7 +1757,7 @@ describe('what stands in the way of a new task on «Использование»
   })
 })
 
-// Plan 70, §4.5: the windows of 5 hours and of the week, what each took and when it resets.
+// Plan 71, §4.5: the windows of 5 hours and of the week, what each took and when it resets.
 describe('the «Лимиты» of the windows of the workspace', () => {
   const opened = new Date('2026-11-16T10:40:00.000Z')
 

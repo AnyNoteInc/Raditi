@@ -232,7 +232,7 @@ export class LlmCallLedger {
       })
       if (updated.count !== 1) return false
       const inputUncachedTokens = value.usage.input - value.usage.cacheRead - value.usage.cacheWrite
-      // What the call took of the windows of the plan (plan 70): an estimate for an estimated
+      // What the call took of the windows of the plan (plan 71): an estimate for an estimated
       // call, as its cost is; NULL where the provider has no plan rates.
       const planCredits = await callPlanCredits(tx, {
         providerId: call.model.providerId,

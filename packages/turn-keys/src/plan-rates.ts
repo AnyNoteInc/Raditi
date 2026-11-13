@@ -6,7 +6,7 @@ import {
   type PlanRates,
 } from '@repo/domain'
 
-// The rates of a provider's subscription plan a call is counted in (docs/plan/70-usage-limits.md,
+// The rates of a provider's subscription plan a call is counted in (docs/plan/71-usage-limits.md,
 // §2.1): the gateway estimates an open call with them, the ledger counts a closed one.
 
 type Db = Pick<Prisma.TransactionClient, 'llmPlanRate'>

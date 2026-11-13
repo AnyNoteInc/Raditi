@@ -192,7 +192,7 @@ export class PostgresGatewayStore implements GatewayStore {
   async admit(input: GatewayAdmitInput): Promise<GatewayAdmission> {
     const value = admitSchema.parse(input)
     return gatewayTransaction(this.db, async (tx) => {
-      // The windows of the workspace first (plan 70; docs/spec.md §9): its advisory lock comes
+      // The windows of the workspace first (plan 71; docs/spec.md §9): its advisory lock comes
       // before the key, the account and the call, and no holder of a billing lock waits for it.
       // The workspace of a key never changes, so it is read before any lock.
       const [owner] = await tx.$queryRaw<{ workspaceId: string; billable: boolean }[]>`

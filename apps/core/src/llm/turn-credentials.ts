@@ -139,7 +139,7 @@ interface OwnedTask {
   needsRepository: boolean
   /** `tasks.needs_browser`: the task drives the live site through the `web` tools (plan 57, Б2). */
   needsBrowser: boolean
-  /** The workspace of the task: its tier, its windows and its turns at once (plan 70). */
+  /** The workspace of the task: its tier, its windows and its turns at once (plan 71). */
   workspaceId: string
   now: Date
   modelClass?: string | null
@@ -157,7 +157,7 @@ interface Selection {
   decision: PoolDecision
   /** Admission only: the decision over the whole pool, free of the account pinned in Vault. */
   unpinned?: PoolDecision
-  /** The tier of the task's workspace (plan 70): what a wait for the reserve of the pool names. */
+  /** The tier of the task's workspace (plan 71): what a wait for the reserve of the pool names. */
   tier: WorkspaceTier
   /**
    * The selected account, when its window snapshot is older than the pool keeps one for. Never
@@ -520,17 +520,9 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
     const binding = await tx.taskAccountBinding.findUnique({ where: { taskId: ref.taskId } })
     if (binding && binding.driverId !== grant.driverId)
       throw conflict('The task binding uses another driver')
-    // The tier of the workspace and how many of its turns run at once (plan 70, Л10): a turn
-    // past that number waits like one for a busy pool (`waiting = agents`).
+    // The tier of the workspace: the reserve of the pool its new task leaves (plan 71, Л8). Its
+    // turns run at once as many as the pool takes (owner's answer of 13.11.2026: Л10 removed).
     const terms = await workspaceUsageTerms(tx, task.workspaceId)
-    const [running] = await tx.$queryRaw<{ turns: bigint }[]>`
-      SELECT count(DISTINCT k.task_id) AS turns FROM llm_keys k
-      JOIN tasks t ON t.id = k.task_id
-      WHERE t.workspace_id = ${task.workspaceId}::uuid AND k.task_id <> ${ref.taskId}::uuid
-        AND k.revoke_requested_at IS NULL AND k.revoked_at IS NULL
-        AND k.expires_at > clock_timestamp()`
-    if (Number(running?.turns ?? 0) >= terms.maxConcurrentTurns)
-      throw subscriptionBusy(new Date(task.now.getTime() + poolPolicy.busyRetryMs))
     // What a turn of the profile takes of the windows, measured (Л12); none — 5 % of a window.
     const turnCost = await tx.llmTurnCost.findUnique({
       where: { modelId: profile.modelId },
@@ -577,7 +569,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
         ...a,
         backend: grant.backend,
         activeTurns: Number(a.activeTurns),
-        // Between probes the pool reads the forecast (plan 70, §2.1): the probe's use plus what
+        // Between probes the pool reads the forecast (plan 71, §2.1): the probe's use plus what
         // the calls of the account took since and what its open calls hold.
         limitWindows: forecastWindows(decodeLimitWindows(a.limitWindows), {
           closedSinceProbe: closedPlanCredits,

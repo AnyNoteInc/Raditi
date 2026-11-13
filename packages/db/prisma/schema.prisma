@@ -1363,32 +1363,30 @@ model CrossBorderClearance {
 
 /// Tariffs (docs/business.md §6). Prices in RUB without VAT: the seller is self-employed.
 model Plan {
-  id                 String   @id @default(uuid(7)) @db.Uuid
-  slug               String   @unique @db.VarChar(50)
-  name               String   @db.VarChar(100)
-  kind               PlanKind
+  id              String   @id @default(uuid(7)) @db.Uuid
+  slug            String   @unique @db.VarChar(50)
+  name            String   @db.VarChar(100)
+  kind            PlanKind
   /// Monthly price (quota), one-off price (pack), 0 for pay-per-action.
-  price              Decimal  @db.Decimal(12, 2)
-  creditsPerMonth    Int?     @map("credits_per_month")
+  price           Decimal  @db.Decimal(12, 2)
+  creditsPerMonth Int?     @map("credits_per_month")
   /// Unused since 17.10.2026 (the daily limit is in credits, `creditsPerDay`); dropped in M5.18.
-  tasksPerDay        Int?     @map("tasks_per_day")
+  tasksPerDay     Int?     @map("tasks_per_day")
   /// Tariff credits a quota plan gives a Moscow day, never more than its month; NULL: no daily
   /// cap. Gift and pack credits are outside it.
-  creditsPerDay      Int?     @map("credits_per_day")
+  creditsPerDay   Int?     @map("credits_per_day")
   /// Credits a pack adds to the account of purchased credits (unit = credit_pack).
-  packCredits        Int?     @map("pack_credits")
-  /// Credits the work of a workspace may take in its window of 5 hours and of the week (plan 70);
+  packCredits     Int?     @map("pack_credits")
+  /// Credits the work of a workspace may take in its window of 5 hours and of the week (plan 71);
   /// NULL: no limit. Without a paid tariff the constants of @repo/domain apply.
-  creditsPer5h       Int?     @map("credits_per_5h")
-  creditsPerWeek     Int?     @map("credits_per_week")
-  /// Turns of one workspace that run at once; NULL: the constant without a tariff.
-  maxConcurrentTurns Int?     @map("max_concurrent_turns") @db.SmallInt
+  creditsPer5h    Int?     @map("credits_per_5h")
+  creditsPerWeek  Int?     @map("credits_per_week")
   /// NULL for packs: they add credits, not sites.
-  maxSites           Int?     @map("max_sites")
-  isActive           Boolean  @default(true) @map("is_active")
-  sortOrder          Int      @default(0) @map("sort_order")
-  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  maxSites        Int?     @map("max_sites")
+  isActive        Boolean  @default(true) @map("is_active")
+  sortOrder       Int      @default(0) @map("sort_order")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   pricingRules         PricingRule[]
   subscriptions        Subscription[]
@@ -2723,7 +2721,7 @@ model WebSearchCall {
   @@map("web_search_calls")
 }
 
-/// The window of 5 hours or of the week a workspace opened with its first call (plan 70): what
+/// The window of 5 hours or of the week a workspace opened with its first call (plan 71): what
 /// its work takes in it is counted from token_usage of its tasks. Windows of one kind never
 /// overlap — a new one opens under the advisory lock of the workspace, after the last one ended.
 model WorkspaceUsageWindow {
@@ -2742,7 +2740,7 @@ model WorkspaceUsageWindow {
 }
 
 /// The plan credits of a model of a provider's subscription plan per 10 000 tokens and its peak
-/// (docs/plan/70-usage-limits.md, §2.1). Rows are only added, by `llm:plan-rates`.
+/// (docs/plan/71-usage-limits.md, §2.1). Rows are only added, by `llm:plan-rates`.
 model LlmPlanRate {
   id                  String   @id @default(uuid(7)) @db.Uuid
   providerId          String   @map("provider_id") @db.Uuid

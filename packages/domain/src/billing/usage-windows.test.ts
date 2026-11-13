@@ -16,7 +16,7 @@ import {
   type UsageWindowState,
 } from './usage-windows.ts'
 
-// The windows of 5 hours and of the week of a workspace (owner's decision of 11.11.2026, plan 70).
+// The windows of 5 hours and of the week of a workspace (owner's decision of 11.11.2026, plan 71).
 
 const reset = new Date('2026-11-16T15:40:00.000Z')
 const fiveHours = (used: string, limit: number | null = 20): UsageWindowState => ({

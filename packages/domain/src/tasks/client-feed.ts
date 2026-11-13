@@ -541,7 +541,7 @@ export const feedFailurePayloadSchema = z.strictObject({
   objects,
   /**
    * Only with `usage_limit`: the window of the workspace that stopped the pass and its reset
-   * (plan 70), so the row says when the work goes on.
+   * (plan 71), so the row says when the work goes on.
    */
   window: z.strictObject({ kind: z.enum(['5h', 'week']), resetsAt: z.iso.datetime() }).optional(),
 })
@@ -1043,7 +1043,7 @@ const readFailure = z.object({
   // the candidate.
   next: z.enum(feedFailureNexts).optional().catch(undefined),
   objects: readObjects,
-  // A window this code cannot read: the row keeps its general words (plan 70).
+  // A window this code cannot read: the row keeps its general words (plan 71).
   window: z
     .object({ kind: z.enum(['5h', 'week']), resetsAt: z.iso.datetime() })
     .optional()

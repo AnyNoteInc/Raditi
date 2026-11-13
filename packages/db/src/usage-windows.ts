@@ -1,5 +1,4 @@
 import {
-  noTariffConcurrentTurns,
   subscriptionAllowsTasks,
   usageWindowKinds,
   usageWindowLengthMs,
@@ -15,7 +14,7 @@ import {
 import { Prisma } from './generated/prisma/client.ts'
 import { uuidv7 } from './uuidv7.ts'
 
-// The windows of 5 hours and of the week of a workspace in SQL (docs/plan/70-usage-limits.md,
+// The windows of 5 hours and of the week of a workspace in SQL (docs/plan/71-usage-limits.md,
 // §2.2): one place that reads them for the gateway `llm` (admission of a call), `@repo/billing`
 // (a placement and the pages) and core (the pool and the operator) — `llm` may not reach
 // `@repo/billing`, so the queries live here.
@@ -27,17 +26,16 @@ type Db = Pick<Prisma.TransactionClient, '$queryRaw' | '$executeRaw'>
  * (`llm_plan_rates`). A call through an API paid by the token (`zai-api`) is not one: the
  * windows of a workspace share the plan, and a call of the API is bounded by credits alone
  * (owner's answer of 13.11.2026). Without plan rates no call counts — the gateway logs
- * `llm_plan_rates_missing` then (docs/plan/70-usage-limits.md).
+ * `llm_plan_rates_missing` then (docs/plan/71-usage-limits.md).
  */
 const PLAN_CALL = Prisma.sql`EXISTS (SELECT 1 FROM subscription_accounts a
   JOIN llm_plan_rates r ON r.provider_id = a.provider_id
   WHERE a.id = u.subscription_account_id)`
 
-/** What a workspace is bounded by: the tier of its live paid tariff, its windows, its turns. */
+/** What a workspace is bounded by: the tier of its live paid tariff and its windows. */
 export interface WorkspaceUsageTerms {
   tier: WorkspaceTier
   limits: Record<UsageWindowKind, number | null>
-  maxConcurrentTurns: number
 }
 
 /**
@@ -55,11 +53,10 @@ export async function workspaceUsageTerms(
       slug: string
       creditsPer5h: number | null
       creditsPerWeek: number | null
-      maxConcurrentTurns: number | null
     }>
   >`
     SELECT s.status::text AS status, p.slug, p.credits_per_5h AS "creditsPer5h",
-      p.credits_per_week AS "creditsPerWeek", p.max_concurrent_turns AS "maxConcurrentTurns"
+      p.credits_per_week AS "creditsPerWeek"
     FROM subscriptions s JOIN plans p ON p.id = s.plan_id
     WHERE s.workspace_id = ${workspaceId}::uuid
       AND s.status IN ('trial', 'active', 'past_due')
@@ -69,7 +66,6 @@ export async function workspaceUsageTerms(
     return {
       tier: 'none',
       limits: windowLimitsOf(null),
-      maxConcurrentTurns: noTariffConcurrentTurns,
     }
   }
   return {
@@ -78,7 +74,6 @@ export async function workspaceUsageTerms(
       creditsPer5h: live.creditsPer5h,
       creditsPerWeek: live.creditsPerWeek,
     }),
-    maxConcurrentTurns: live.maxConcurrentTurns ?? noTariffConcurrentTurns,
   }
 }
 

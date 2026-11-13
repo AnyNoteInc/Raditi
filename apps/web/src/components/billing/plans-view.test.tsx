@@ -76,7 +76,7 @@ vi.mock('@/trpc/client', () => ({
       },
       usage: {
         queryKey: () => ['billing', 'usage'],
-        // The hint of the windows (plan 70) reads nothing in these cases.
+        // The hint of the windows (plan 71) reads nothing in these cases.
         queryOptions: () => ({ queryKey: ['billing', 'usage'], queryFn: async () => null }),
       },
       startCheckout: { mutationOptions: mutation(startCheckout) },
@@ -210,7 +210,7 @@ describe('the «Тарифы» page of a customer without a tariff', () => {
     ).toEqual([
       '600 кредитов в месяц',
       'В среднем около 55 задач',
-      // The windows of the work (plan 70, Л14).
+      // The windows of the work (plan 71, Л14).
       'До 70 кредитов за 5 часов и 210 в неделю',
       'Небольшая правка — около 58 ₽',
       'До 3 сайтов на WordPress',

@@ -980,7 +980,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       expect(await outboxOf(taskId)).toContainEqual(
         expect.objectContaining({
           type: 'turn.run',
-          // No tariff: the last place in the queue (plan 70, §2.3).
+          // No tariff: the last place in the queue (plan 71, §2.3).
           payload: { taskId, attempt: 2, requestEventId: posted.requestEventId, priority: 4 },
         }),
       )
@@ -1066,7 +1066,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       expect(await outboxOf(taskId)).toContainEqual(
         expect.objectContaining({
           type: 'turn.run',
-          // No tariff: the last place in the queue (plan 70, §2.3).
+          // No tariff: the last place in the queue (plan 71, §2.3).
           payload: { taskId, attempt: 2, requestEventId: posted.requestEventId, priority: 4 },
         }),
       )

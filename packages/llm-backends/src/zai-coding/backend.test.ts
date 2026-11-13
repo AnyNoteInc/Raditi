@@ -29,7 +29,7 @@ import {
   sample,
 } from './fixtures/samples.ts'
 
-// A window as the pool reads it; its absolute credits are checked on their own below (plan 70).
+// A window as the pool reads it; its absolute credits are checked on their own below (plan 71).
 const win = (window: Record<string, unknown>) => expect.objectContaining(window) as unknown
 
 const route = { method: 'POST', path: '/zai/v4/chat/completions' } as const
@@ -256,7 +256,7 @@ describe('the quota of the plan as the windows of the pool', () => {
       ],
     })
     expect(probeResultSchema.safeParse(result).success).toBe(true)
-    // The size and the use in plan credits come with the share (plan 70, §2.1).
+    // The size and the use in plan credits come with the share (plan 71, §2.1).
     if (result.status !== 'ok') throw new Error('The probe should read the quota')
     for (const window of result.windows ?? []) {
       expect(window.limitCredits).toBeGreaterThan(0)

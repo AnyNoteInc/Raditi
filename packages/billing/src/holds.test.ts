@@ -791,7 +791,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     })
   })
 
-  // The windows of 5 hours and of the week (docs/plan/70-usage-limits.md, scenarios 5 and 6): the
+  // The windows of 5 hours and of the week (docs/plan/71-usage-limits.md, scenarios 5 and 6): the
   // gateway opens a window with the first call; here the window and the calls are written as it
   // leaves them, and the placement reads what they took at the private rate of 6 ₽.
   describe('the windows of the workspace', () => {

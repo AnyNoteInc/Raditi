@@ -135,7 +135,7 @@ export interface SettlementDependencies {
   browser?: Pick<BrowserSessions, 'close'> | null
   logger?: { warn(message: string): void; error(message: string): void }
   now?: () => Date
-  /** Counts a pass a window of its workspace stopped (plan 70, a metric without ids). */
+  /** Counts a pass a window of its workspace stopped (plan 71, a metric without ids). */
   onUsageLimit?: (refusal: { window: '5h' | 'week'; tier: string }) => void
 }
 
@@ -634,7 +634,7 @@ export class PassSettlement {
     // press «продолжи» into the same wall (owner's decision of 10.11.2026).
     if (code === 'technical' && ending.turn !== null && (await this.#limitsOut(pass, ending.turn)))
       code = 'agent_limits'
-    // The gateway stopped a key of the turn for a window of the workspace (plan 70, Л6): the work
+    // The gateway stopped a key of the turn for a window of the workspace (plan 71, Л6): the work
     // up to it is charged, the row names the window and its reset, the dialog stays open and the
     // client goes on after the reset (КР8, case `window`; Л15 — no automatic continuation).
     if (code === 'technical' && ending.turn !== null) {
@@ -1031,7 +1031,7 @@ export class PassSettlement {
   }
 
   /**
-   * A pass a window of the workspace stopped (plan 70): what it did is charged, as after a ceiling
+   * A pass a window of the workspace stopped (plan 71): what it did is charged, as after a ceiling
    * of money (`#ceiling`); the row is a failure `usage_limit` with the window and its reset, so it
    * says when the work goes on. A dialog with a candidate keeps it (`awaiting_approval`).
    */

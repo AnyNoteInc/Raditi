@@ -44,7 +44,7 @@ test('the gateway health is probed apart from the required endpoints', () => {
 
 test('the gateway has an alert and a panel, and both name metrics the gateway exports', () => {
   const server = read('../../../apps/llm/src/gateway/server.ts')
-  // The windows of the pool and of the workspaces register on the same registry (plan 70).
+  // The windows of the pool and of the workspaces register on the same registry (plan 71).
   const usage = read('../../../apps/llm/src/accounting/usage-metrics.ts')
   const [, counters] = /#counters = \{\n([^}]+)\}/.exec(server) ?? []
   assert.ok(counters, 'the counters of the gateway are found in server.ts')

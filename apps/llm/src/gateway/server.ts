@@ -96,7 +96,7 @@ export interface LlmGatewayOptions {
   health?: () => Promise<boolean>
   metricsToken?: string
   lifecycle?: GatewayLifecycle
-  /** The metrics of the windows of the pool and of workspaces (plan 70), on this registry. */
+  /** The metrics of the windows of the pool and of workspaces (plan 71), on this registry. */
   usageMetrics?: { register(registry: Registry): void }
 }
 

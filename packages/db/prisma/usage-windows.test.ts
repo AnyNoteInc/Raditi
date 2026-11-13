@@ -1,4 +1,4 @@
-// The windows of 5 hours and of the week in the database (docs/plan/70-usage-limits.md, §2.2):
+// The windows of 5 hours and of the week in the database (docs/plan/71-usage-limits.md, §2.2):
 // the migration usage_windows gives the three tariffs their windows and their turns at once, the
 // checks of the new columns and tables hold, the seed agrees with the migration, and two first
 // calls of a workspace at once open one window of each kind. The sums of a window over the calls
@@ -41,21 +41,18 @@ describe.skipIf(!databaseUrl)('the usage windows of 13.11.2026', () => {
   const failsWith = async (sql: string, values: unknown[], code: string) =>
     expect(schema.db.query(sql, values)).rejects.toMatchObject({ code })
 
-  it('gives the tariffs their windows and turns, and the seed agrees (Л4, Л10)', async () => {
+  it('gives the tariffs their windows, and the seed agrees (Л4)', async () => {
     const { rows } = await schema.db.query<{
       slug: string
       credits_per_5h: number | null
       credits_per_week: number | null
-      max_concurrent_turns: number | null
-    }>(
-      `SELECT slug, credits_per_5h, credits_per_week, max_concurrent_turns FROM plans ORDER BY sort_order`,
-    )
+    }>(`SELECT slug, credits_per_5h, credits_per_week FROM plans ORDER BY sort_order`)
     expect(rows).toEqual([
-      { slug: 'start', credits_per_5h: 20, credits_per_week: 55, max_concurrent_turns: 1 },
-      { slug: 'business', credits_per_5h: 70, credits_per_week: 210, max_concurrent_turns: 2 },
-      { slug: 'agency', credits_per_5h: 200, credits_per_week: 700, max_concurrent_turns: 3 },
-      { slug: 'pack', credits_per_5h: null, credits_per_week: null, max_concurrent_turns: null },
-      { slug: 'payg', credits_per_5h: null, credits_per_week: null, max_concurrent_turns: null },
+      { slug: 'start', credits_per_5h: 20, credits_per_week: 55 },
+      { slug: 'business', credits_per_5h: 70, credits_per_week: 210 },
+      { slug: 'agency', credits_per_5h: 200, credits_per_week: 700 },
+      { slug: 'pack', credits_per_5h: null, credits_per_week: null },
+      { slug: 'payg', credits_per_5h: null, credits_per_week: null },
     ])
     // A second run of the seed finds the terms it carries.
     const report = await seedReferenceData(prisma)
@@ -66,11 +63,6 @@ describe.skipIf(!databaseUrl)('the usage windows of 13.11.2026', () => {
     const plan = `UPDATE plans SET credits_per_5h = $1, credits_per_week = $2 WHERE slug = 'start'`
     await failsWith(plan, [0, 55], CHECK_VIOLATION)
     await failsWith(plan, [60, 55], CHECK_VIOLATION)
-    await failsWith(
-      `UPDATE plans SET max_concurrent_turns = 0 WHERE slug = 'start'`,
-      [],
-      CHECK_VIOLATION,
-    )
   })
 
   it('keeps a window as long as its kind', async () => {
@@ -128,7 +120,6 @@ describe.skipIf(!databaseUrl)('the usage windows of 13.11.2026', () => {
     await expect(workspaceUsageTerms(prisma, id)).resolves.toEqual({
       tier: 'none',
       limits: { '5h': 15, week: 50 },
-      maxConcurrentTurns: 1,
     })
   })
 

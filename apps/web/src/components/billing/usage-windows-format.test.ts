@@ -12,7 +12,7 @@ import {
 const fiveHoursReset = new Date('2026-11-16T15:40:00.000Z')
 const weekReset = new Date('2026-11-16T07:15:00.000Z')
 
-describe('the words of the windows (plan 70)', () => {
+describe('the words of the windows (plan 71)', () => {
   it('names the reset by the Moscow clock, or that the window has not started', () => {
     expect(usageWindowNote({ kind: '5h', resetsAt: fiveHoursReset })).toBe('Сбросится в 18:40.')
     expect(usageWindowNote({ kind: 'week', resetsAt: weekReset })).toBe('Сбросится в пн, 10:15.')

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { usageReport, usageReportText, type UsageFacts } from './usage-cli.ts'
 
-// The report of `llm:usage` (docs/plan/70-usage-limits.md, §4.4) from what was read.
+// The report of `llm:usage` (docs/plan/71-usage-limits.md, §4.4) from what was read.
 const now = new Date('2026-11-16T09:00:00.000Z')
 const peak = { timeZone: 'Asia/Singapore', days: [1, 2, 3, 4, 5], fromHour: 14, toHour: 18 }
 const facts = (change: Partial<UsageFacts> = {}): UsageFacts => ({

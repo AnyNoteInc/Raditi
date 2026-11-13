@@ -256,13 +256,13 @@ const noCredits = {
   minToStart: 1,
   // Without a paid tariff there is no day: the gift is the bound.
   today: null,
-  // A user without a workspace has no windows yet (plan 70).
+  // A user without a workspace has no windows yet (plan 71).
   tier: 'none',
   windows: [],
   newTask: { allowed: false, reason: 'gift_spent' },
 }
 /**
- * The windows of 5 hours and of the week as the fake answers them (plan 70): no live tariff is
+ * The windows of 5 hours and of the week as the fake answers them (plan 71): no live tariff is
  * read from its raw queries, so the limits without a tariff, none of the windows started.
  */
 /** The windows of the seeded «Старт» (Л4), none of them started. */
@@ -1517,7 +1517,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
       ...promisedCredits,
       gift: giftGranted,
       newTask: NO_RATE,
-      // The workspace is there: the windows without a tariff (plan 70).
+      // The workspace is there: the windows without a tariff (plan 71).
       tier: 'none',
       windows: FAKE_WINDOWS,
     }
@@ -1870,7 +1870,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
     )
     expect((await caller.billing.overview()).credits).toEqual({
       ...promisedCredits,
-      // The workspace is there now: its windows are those without a tariff (plan 70).
+      // The workspace is there now: its windows are those without a tariff (plan 71).
       tier: 'none',
       windows: FAKE_WINDOWS,
       gift: giftGranted,

@@ -310,7 +310,7 @@ export class OutboxRelayService implements OnApplicationBootstrap, OnModuleDestr
 
 /**
  * The place of a job in its queue when its payload names one (`priority` of a pass, by the tier
- * of its workspace — docs/plan/70-usage-limits.md, §2.3): a whole number 1…4; anything else is
+ * of its workspace — docs/plan/71-usage-limits.md, §2.3): a whole number 1…4; anything else is
  * not a priority, and the job takes the default place.
  */
 function priorityOf(payload: unknown): { priority?: number } {

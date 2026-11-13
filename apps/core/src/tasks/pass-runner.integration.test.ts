@@ -1233,7 +1233,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         expect(retried(queue)).toEqual([])
       })
 
-      // Plan 70, Л17: the reserve of the higher tiers is capacity that exists — a new task of a
+      // Plan 71, Л17: the reserve of the higher tiers is capacity that exists — a new task of a
       // lower tier waits in the queue for the reset however far it is, and keeps its priority.
       it('keeps a pass the reserve of the higher tiers holds back in the queue, with its priority', async () => {
         await rate()

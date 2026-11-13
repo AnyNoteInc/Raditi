@@ -96,7 +96,7 @@ function mergeConcurrentWindows(
       ...next,
       usedPct: Math.max(previous.usedPct, next.usedPct),
       resetsAt: previous.resetsAt ?? next.resetsAt,
-      // The larger use in credits too, as the share above (plan 70).
+      // The larger use in credits too, as the share above (plan 71).
       ...(next.usedCredits === undefined
         ? {}
         : { usedCredits: Math.max(next.usedCredits, previous.usedCredits ?? 0) }),
@@ -106,7 +106,7 @@ function mergeConcurrentWindows(
 }
 
 /**
- * What an applied probe tells the operator (plan 70, §4.4): each window in plan credits as the
+ * What an applied probe tells the operator (plan 71, §4.4): each window in plan credits as the
  * provider names it, and how far the forecast it replaced missed.
  */
 export interface ProbeObserver {

@@ -21,7 +21,7 @@ import {
 import { decodeLimitWindows } from '@repo/turn-keys'
 import { z } from 'zod'
 
-// The operator's commands of the pool of the agent (docs/plan/70-usage-limits.md, §4.4). No Nest
+// The operator's commands of the pool of the agent (docs/plan/71-usage-limits.md, §4.4). No Nest
 // application, no queue, no `.env` discovery: APP_ENV and DATABASE_URL come from the command.
 // They run from their TypeScript sources: no decorators, no parameter properties, no enum.
 //

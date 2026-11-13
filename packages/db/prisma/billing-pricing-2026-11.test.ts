@@ -311,7 +311,6 @@ describe.skipIf(!databaseUrl)('the migration of the pricing of 06.11.2026', () =
             creditsPerDay: plan.creditsPerDay,
             creditsPer5h: plan.creditsPer5h,
             creditsPerWeek: plan.creditsPerWeek,
-            maxConcurrentTurns: plan.maxConcurrentTurns,
             packCredits: plan.packCredits,
             maxSites: plan.maxSites,
             sortOrder: plan.sortOrder,

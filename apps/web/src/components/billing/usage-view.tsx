@@ -537,7 +537,7 @@ function Limits({
 }
 
 /**
- * «Лимиты»: the windows of 5 hours and of the week of the workspace (plan 70) — what each took,
+ * «Лимиты»: the windows of 5 hours and of the week of the workspace (plan 71) — what each took,
  * of how many, and when it resets; one sentence says why they exist. Nothing without a limit.
  */
 function WindowLimits({ windows }: { windows: readonly UsageWindow[] }) {

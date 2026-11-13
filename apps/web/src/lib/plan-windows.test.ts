@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { planWindowLimits } from './plan-windows'
 
-describe('the windows of a tariff in one line (plan 70)', () => {
+describe('the windows of a tariff in one line (plan 71)', () => {
   it('says both windows, one alone, or nothing', () => {
     expect(planWindowLimits(20, 55)).toBe('До 20 кредитов за 5 часов и 55 в неделю')
     expect(planWindowLimits(21, 700)).toBe('До 21 кредита за 5 часов и 700 в неделю')

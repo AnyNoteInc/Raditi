@@ -82,7 +82,7 @@ export type GatewayAdmission =
        * llm_keys.last_refusal say `budget` for all three; only the log of the role names it.
        */
       limit?: GatewayKeyLimit
-      /** With `workspace_limit`: the window of the workspace that refused and its reset (plan 70). */
+      /** With `workspace_limit`: the window of the workspace that refused and its reset (plan 71). */
       window?: { kind: '5h' | 'week'; resetsAt: Date | null }
     }
 

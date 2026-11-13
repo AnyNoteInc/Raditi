@@ -68,7 +68,7 @@ export interface SubscriptionPoolHealthOptions {
   channelHealthy: () => boolean
   onRegion: (accountId: string) => void
   logger?: { warn(message: string): void }
-  /** The metrics of the windows of the pool (plan 70); none in tests that do not ask. */
+  /** The metrics of the windows of the pool (plan 71); none in tests that do not ask. */
   usage?: UsageMetrics
   /** In-memory clock only; durable facts and decisions use PostgreSQL's clock. */
   now?: () => number

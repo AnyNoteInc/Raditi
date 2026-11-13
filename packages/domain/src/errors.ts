@@ -24,7 +24,7 @@ export const notImplemented = (what: string): DomainError =>
 /** Pool decisions become retriable failures before a sandbox is created (P3, P12). */
 /**
  * `reason`: what the pool waits for (`PoolDecision.reason`), kept in the details for the queue —
- * `tier_reserve` is capacity left to the higher tiers, not the limits of the agent (plan 70, Л17).
+ * `tier_reserve` is capacity left to the higher tiers, not the limits of the agent (plan 71, Л17).
  */
 export function subscriptionWait(retryAt: Date, reason?: string): DomainError {
   const error = subscriptionRetry(

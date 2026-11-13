@@ -318,7 +318,7 @@ describe('the rows of a dialog', () => {
       objects: [],
     })
 
-    // Plan 70: a window of the workspace stopped the pass — the row says when the work goes on.
+    // Plan 71: a window of the workspace stopped the pass — the row says when the work goes on.
     it('names the window of the workspace and its reset by the Moscow clock', () => {
       const feed = chatFeed(
         {

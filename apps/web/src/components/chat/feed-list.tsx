@@ -945,7 +945,7 @@ function RowView({
         >
           <Sentences
             parts={[
-              // A window of the workspace names when the work goes on (plan 70).
+              // A window of the workspace names when the work goes on (plan 71).
               row.code === 'usage_limit' && row.window
                 ? usageLimitText(row.window.kind, new Date(row.window.resetsAt))
                 : feedFailureTextOf(row.code, siteUrl !== null),

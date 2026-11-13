@@ -1,6 +1,6 @@
 import { Counter, Gauge, type Registry } from '@prometheus-io/client'
 
-// What the windows of the pool and of the workspaces look like to the operator (plan 70, §4.4):
+// What the windows of the pool and of the workspaces look like to the operator (plan 71, §4.4):
 // gauges of each account's windows after every probe, the error of the forecast a probe replaced,
 // refusals by the windows of a workspace. No id of a workspace, a task or a user in a label; the
 // label `account` is the operator's label of a pool account, not a customer's id.

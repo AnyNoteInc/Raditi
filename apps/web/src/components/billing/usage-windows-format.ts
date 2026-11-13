@@ -6,7 +6,7 @@ import type { UsageWindow } from './billing-types'
 import { creditsOf } from './plan-format'
 
 // The words of the block «Лимиты» of «Использование» and of the hint of the chat
-// (docs/plan/70-usage-limits.md, §4.5): what a window of 5 hours or of the week took, when it
+// (docs/plan/71-usage-limits.md, §4.5): what a window of 5 hours or of the week took, when it
 // resets by the Moscow clock, and why there are such limits at all.
 
 /** The one sentence that says why the windows exist. */

@@ -156,7 +156,7 @@ export interface TaskFacts {
   today?: { charged?: number; held?: number }
   /** A credit rate is in force; true unless told. */
   rateUsable?: boolean
-  /** The windows of 5 hours and of the week (plan 70); none unless told. */
+  /** The windows of 5 hours and of the week (plan 71); none unless told. */
   windows?: UsageWindowState[]
   /** The tier of the workspace; `none` unless told. */
   tier?: WorkspaceTier
