@@ -3,6 +3,8 @@ import { formatMoscowDay, nextMoscowMidnight } from '@/lib/moscow-date'
 import { plural } from '@/lib/plural'
 import { formatRubles } from '@/lib/rubles'
 
+import { usageLimitText } from '@repo/domain/tasks/client-feed-failures'
+
 import type { TaskCredits } from './billing-types'
 import {
   creditsOf,
@@ -262,12 +264,29 @@ export function taskNotice(input: TaskNoticeInput): TaskNotice | null {
       }
     case 'daily_limit':
       return dayTaken(input)
+    case 'window_limit':
+      return windowTaken(input)
     case 'past_due':
       return {
         state: `Тариф «${tariff?.name ?? ''}» не оплачен, поэтому новые задачи не принимаются.`,
         way: 'Оплатите тариф — кредиты нового периода начислим сразу.',
         actions: ['pay'],
       }
+  }
+}
+
+/**
+ * A window of 5 hours or of the week is spent (plan 69): credits do not lift it, the reset does,
+ * and a bigger tariff has bigger windows.
+ */
+function windowTaken(input: TaskNoticeInput): TaskNotice {
+  return {
+    state: `${usageLimitText('5h', null)} Кредиты от этого не сгорают.`,
+    way:
+      input.tariff?.name === 'Агентство'
+        ? null
+        : 'На старших тарифах лимиты больше — их можно сменить в разделе «Тарифы».',
+    actions: input.tariff?.name === 'Агентство' ? [] : ['change_plan'],
   }
 }
 

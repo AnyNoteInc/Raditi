@@ -75,8 +75,18 @@ export const limitWindowSchema = z
     name: z.enum(['5h', 'week', 'month']),
     usedPct: z.number().min(0).max(100),
     resetsAt: nullableDate,
+    /**
+     * The size of the window and what it has used, in plan credits, when the provider names them
+     * (`usage`, `currentValue`/`remaining` of Z.ai). Absent in snapshots of before 11.11.2026 and
+     * from a provider that names a share only: the pool reads such a window in percents.
+     */
+    limitCredits: z.number().positive().max(1e9).optional(),
+    usedCredits: z.number().nonnegative().max(1e9).optional(),
   })
   .strict()
+  .refine((window) => (window.limitCredits === undefined) === (window.usedCredits === undefined), {
+    message: 'A window names both of its credits or neither',
+  })
 export type LimitWindow = z.infer<typeof limitWindowSchema>
 
 export const limitWindowsSchema = z
@@ -183,6 +193,9 @@ export const gatewayRefusalSchema = z.enum([
   'policy_flagged',
   'profile',
   'request_rejected',
+  // The workspace of the key spent its window of 5 hours or of the week (docs/plan/69): not the
+  // pool's limit and not the client's credits — the work goes on after the reset.
+  'workspace_limit',
 ])
 export type GatewayRefusal = z.infer<typeof gatewayRefusalSchema>
 

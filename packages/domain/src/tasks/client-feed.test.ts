@@ -1504,7 +1504,7 @@ describe('task head', () => {
 })
 
 describe('failure catalogue', () => {
-  it('lists the thirteen codes of the design', () => {
+  it('lists the fourteen codes of the design', () => {
     expect(feedFailureCodes).toEqual([
       'technical',
       'timeout',
@@ -1512,6 +1512,7 @@ describe('failure catalogue', () => {
       'task_limit',
       'credits_out',
       'agent_limits',
+      'usage_limit',
       'forbidden_change',
       'secret_found',
       'site_files',
@@ -1539,6 +1540,7 @@ describe('failure catalogue', () => {
     expect(feedFailureCodes.filter((code) => !feedFailureRetry[code])).toEqual([
       'credits_out',
       'agent_limits',
+      'usage_limit',
       'site_files',
       'site_held',
       'content_refused',

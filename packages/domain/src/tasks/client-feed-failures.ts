@@ -11,6 +11,7 @@ export const feedFailureCodes = [
   'task_limit',
   'credits_out',
   'agent_limits',
+  'usage_limit',
   'forbidden_change',
   'secret_found',
   'site_files',
@@ -36,6 +37,10 @@ export const feedFailureText: Readonly<Record<FeedFailureCode, string>> = Object
   // The platform's own limit with the model provider (a window of the plan, an empty balance),
   // not the client's credits: nothing the client can do, so it is told whom to ask.
   agent_limits: 'Лимиты ИИ-агента закончились, и задача не выполнена. Обратитесь к администратору.',
+  // A window of 5 hours or of the week of the workspace (plan 69): the row names which and when
+  // it resets (`usageLimitText`); these words are for a row without them.
+  usage_limit:
+    'Лимит работы агента по вашему тарифу исчерпан — продолжим после сброса. Подробности — в разделе «Использование».',
   forbidden_change:
     'Агент попытался изменить то, что менять нельзя, и мы не сохранили его работу. Попробуйте описать задачу по-другому.',
   secret_found:
@@ -81,6 +86,8 @@ export const feedFailureRetry: Readonly<Record<FeedFailureCode, boolean>> = Obje
   credits_out: false,
   // A repeat meets the same exhausted limit until the administrator acts.
   agent_limits: false,
+  // The same window refuses until its reset; «Продолжить» after it (Л15).
+  usage_limit: false,
   forbidden_change: true,
   secret_found: true,
   site_files: false,
@@ -89,3 +96,41 @@ export const feedFailureRetry: Readonly<Record<FeedFailureCode, boolean>> = Obje
   unavailable: true,
   not_accepted: false,
 })
+
+const moscowTime = new Intl.DateTimeFormat('ru-RU', {
+  timeZone: 'Europe/Moscow',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+})
+const moscowWeekday = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'Europe/Moscow',
+  weekday: 'short',
+})
+const weekdayRu: Readonly<Record<string, string>> = Object.freeze({
+  Mon: 'пн',
+  Tue: 'вт',
+  Wed: 'ср',
+  Thu: 'чт',
+  Fri: 'пт',
+  Sat: 'сб',
+  Sun: 'вс',
+})
+
+/**
+ * When a window resets, by the Moscow clock: «18:40» for the 5 hours, «пн, 10:15» for the week.
+ */
+export function usageWindowResetText(kind: '5h' | 'week', resetsAt: Date): string {
+  const time = moscowTime.format(resetsAt)
+  if (kind === '5h') return time
+  return `${weekdayRu[moscowWeekday.format(resetsAt)] ?? ''}, ${time}`
+}
+
+/** The words of a refusal by a window of the workspace, with its reset (plan 69, §4.5). */
+export function usageLimitText(kind: '5h' | 'week', resetsAt: Date | null): string {
+  if (resetsAt === null) return feedFailureText.usage_limit
+  const time = moscowTime.format(resetsAt)
+  if (kind === '5h') return `Лимит на 5 часов исчерпан — продолжим после ${time}.`
+  const day = weekdayRu[moscowWeekday.format(resetsAt)] ?? ''
+  return `Недельный лимит исчерпан — продолжим в ${day} после ${time}.`
+}

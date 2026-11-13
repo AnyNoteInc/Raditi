@@ -129,6 +129,9 @@ const messages: Record<GatewayRefusal, string> = {
   policy_flagged: 'The request was declined by the content policy.',
   profile: 'The request does not fit the model profile of this turn.',
   request_rejected: 'The provider declined this request.',
+  // Final for the turn: the workspace's window of 5 hours or of the week (plan 69). No word of
+  // the CLI's retry list, so the turn ends at once instead of repeating into the same window.
+  workspace_limit: 'The workspace of this turn has spent its share for now.',
 }
 const badRequests = new Set<GatewayRefusal>([
   'policy',
