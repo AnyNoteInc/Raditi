@@ -26,7 +26,7 @@ export const pageLimits = Object.freeze({
   passwordMaxChars: 128,
   /** The body of the password form, bytes. */
   passwordFormBytes: 1024,
-  /** Wrong passwords: per page and address in 15 minutes, and per page in an hour. */
+  /** Password attempts: per page and address in 15 minutes, and per page in an hour. */
   passwordAttemptsPerAddress: 10,
   passwordAttemptsPerAddressWindowSeconds: 15 * 60,
   passwordAttemptsPerPage: 100,

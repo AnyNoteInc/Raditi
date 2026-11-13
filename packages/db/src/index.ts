@@ -98,11 +98,19 @@ export {
   type PagePublication,
   type PagePublicationInput,
   type PagePublicationTarget,
+  type PageTakeDown,
   type PageVersionInput,
   type ReadDocSection,
   type ServedPage,
+  type SettledDocument,
   type TurnSectionsVerdict,
 } from './pages.ts'
+export {
+  admitInWindow,
+  hashPagePassword,
+  pagePasswordProblem,
+  verifyPagePassword,
+} from './page-passwords.ts'
 export {
   ensurePersonalWorkspace,
   findPersonalWorkspace,

@@ -6,6 +6,7 @@ import { AppModule } from './app.module.ts'
 import { BrowserStreamListener } from './browser-stream/browser-stream.ts'
 import type { PreviewGatewayConfig } from './config/config.ts'
 import { PreviewGatewayServer } from './gateway/preview-gateway.server.ts'
+import { PagesServer } from './pages/pages-server.ts'
 
 const logger = new Logger('preview')
 
@@ -13,7 +14,8 @@ const logger = new Logger('preview')
  * The gateway of previews: its own port, on PREVIEW_GATEWAY_HOST — loopback outside production
  * unless a stand names the Docker bridge (docs/plan/53-chat-preview-release.md, Р19, Р21). With
  * the browser worker configured, also the stream of a task's browser on BROWSER_STREAM_PORT
- * (docs/plan/57-browser-tasks.md, Б12); health stays on the preview port.
+ * (docs/plan/57-browser-tasks.md, Б12) and, with PAGES_BASE_DOMAIN, the published pages on PAGES_PORT
+ * (docs/plan/69-pages.md, Ст4); health stays on the preview port.
  */
 export async function startPreview(config: PreviewGatewayConfig) {
   const app = await NestFactory.createApplicationContext(AppModule.forRoot(config), {
@@ -29,6 +31,11 @@ export async function startPreview(config: PreviewGatewayConfig) {
     if (stream !== null) {
       const streamAddress = await app.get(BrowserStreamListener).listen(stream.port, stream.host)
       logger.log(`browser stream listening on ${stream.host ?? '*'}:${streamAddress.port}`)
+    }
+    const pages = config.pages
+    if (pages !== null) {
+      const pagesAddress = await app.get(PagesServer).listen(pages.port, pages.host)
+      logger.log(`pages listening on ${pages.host ?? '*'}:${pagesAddress.port}`)
     }
   } catch (err) {
     await app.close()

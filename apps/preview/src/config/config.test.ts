@@ -1,7 +1,12 @@
 import type { Env } from '@repo/domain'
 import { describe, expect, it } from 'vitest'
 
-import { ConfigError, DEV_PREVIEW_SESSION_SECRET, loadPreviewConfig } from './config.ts'
+import {
+  ConfigError,
+  DEV_PAGES_COOKIE_SECRET,
+  DEV_PREVIEW_SESSION_SECRET,
+  loadPreviewConfig,
+} from './config.ts'
 
 const WORKER_TOKEN = 'worker-token-0123456789abcdef0123456789abcdef'
 
@@ -50,6 +55,7 @@ describe('loadPreviewConfig', () => {
       ],
       host: '127.0.0.1',
       browserStream: null,
+      pages: null,
     })
     expect(problemsOf(devEnv({ PREVIEW_BASE_DOMAIN: '' }))).toEqual([
       'PREVIEW_BASE_DOMAIN: required for the preview role',
@@ -178,6 +184,72 @@ describe('loadPreviewConfig', () => {
     expect(problemsOf(devEnv({ BROWSER_STREAM_HOST: 'localhost' }))).toEqual([
       'BROWSER_STREAM_HOST: must be an IP address',
     ])
+  })
+
+  it('opens the pages only with PAGES_BASE_DOMAIN, on their own port', () => {
+    expect(loadPreviewConfig(devEnv()).pages).toBeNull()
+    expect(
+      loadPreviewConfig(devEnv({ PAGES_BASE_DOMAIN: 'pages.localhost', PAGES_PUBLIC_PORT: '8092' }))
+        .pages,
+    ).toEqual({
+      baseDomain: 'pages.localhost',
+      publicPort: 8092,
+      cookieSecret: DEV_PAGES_COOKIE_SECRET,
+      abuseEmail: null,
+      port: 8092,
+      host: '127.0.0.1',
+    })
+    const production = loadPreviewConfig(
+      prodEnv({
+        PAGES_BASE_DOMAIN: 'pages.raditi.ru',
+        PAGES_COOKIE_SECRET: 'c'.repeat(32),
+        PAGES_ABUSE_EMAIL: 'abuse@raditi.ru',
+      }),
+    ).pages
+    expect(production).toMatchObject({
+      baseDomain: 'pages.raditi.ru',
+      host: undefined,
+      abuseEmail: 'abuse@raditi.ru',
+    })
+    expect(production).not.toHaveProperty('publicPort')
+  })
+
+  it('refuses pages that would share a host with the cabinet or the previews, or run open in production', () => {
+    expect(problemsOf(prodEnv({ PAGES_BASE_DOMAIN: 'pages.raditi.ru' }))).toContain(
+      'PAGES_COOKIE_SECRET: at least 32 characters in production',
+    )
+    expect(
+      problemsOf(
+        prodEnv({
+          PAGES_BASE_DOMAIN: 'pages.raditi.ru',
+          PAGES_COOKIE_SECRET: 'c'.repeat(32),
+          PAGES_PUBLIC_PORT: '8092',
+        }),
+      ),
+    ).toContain('PAGES_PUBLIC_PORT: not in production (a page host carries no port there)')
+    expect(
+      problemsOf(prodEnv({ PAGES_BASE_DOMAIN: 'raditi.ru', PAGES_COOKIE_SECRET: 'c'.repeat(32) })),
+    ).toContain('PAGES_BASE_DOMAIN: must not be the host of APP_URL or above it')
+    expect(
+      problemsOf(
+        prodEnv({ PAGES_BASE_DOMAIN: 'raditi-sites.ru', PAGES_COOKIE_SECRET: 'c'.repeat(32) }),
+      ),
+    ).toContain('PAGES_BASE_DOMAIN: must not be PREVIEW_BASE_DOMAIN or above it')
+    expect(
+      problemsOf(devEnv({ PAGES_BASE_DOMAIN: 'pages.localhost', PAGES_PORT: '8090' })),
+    ).toContain('PAGES_PORT: must differ from PREVIEW_GATEWAY_PORT')
+    for (const secret of [DEV_PAGES_COOKIE_SECRET, 's'.repeat(32)])
+      expect(
+        problemsOf(prodEnv({ PAGES_BASE_DOMAIN: 'pages.raditi.ru', PAGES_COOKIE_SECRET: secret })),
+      ).toContain(
+        'PAGES_COOKIE_SECRET: a secret of its own in production, not the dev value or the preview one',
+      )
+    expect(problemsOf(devEnv({ PAGES_COOKIE_SECRET: 'x'.repeat(40) }))).toContain(
+      'PAGES_COOKIE_SECRET: needs PAGES_BASE_DOMAIN',
+    )
+    expect(problemsOf(devEnv({ PAGES_BASE_DOMAIN: 'Pages.Localhost' }))[0]).toMatch(
+      /^PAGES_BASE_DOMAIN/,
+    )
   })
 
   it('reads none of the settings of core', () => {

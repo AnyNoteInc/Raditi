@@ -465,6 +465,22 @@ module.exports = {
       },
     },
     {
+      name: 'pages-request-path',
+      comment:
+        'A published page (docs/plan/69-pages.md, Ст4) is served to anyone from the database alone: the page server of the preview app reaches domain, db, the address helpers and the Prisma token of service-runtime (its subpath ./tokens), not even transitively — no storage, runtime, observability or app-bootstrap.',
+      severity: 'error',
+      from: { path: '^apps/preview/src/pages/', pathNot: '\\.test\\.ts$' },
+      to: {
+        path: '^packages/',
+        pathNot: [
+          '^packages/(domain|db|ip-address)/',
+          '^packages/service-runtime/src/tokens\\.ts$',
+          TOOLING,
+        ],
+        reachable: true,
+      },
+    },
+    {
       name: 'browser-minimal-packages',
       comment:
         'The browser worker (docs/plan/57-browser-tasks.md, Б10) holds the sessions’ Chromium, where the client signs in: it composes the database, the inbox bucket, the containers, the browser and the stacks’ policies — no Vault, git, agent, model, payments, mail or turn code, not even transitively.',
