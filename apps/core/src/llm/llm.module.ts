@@ -13,6 +13,7 @@ import { CoreCredentialRuntime } from './credential-runtime.ts'
 import { CredentialSweeper, type CredentialSweepKind } from './credential-sweeper.ts'
 import { TURN_CREDENTIALS } from './llm.tokens.ts'
 import { createPoolProbeClient, type PoolProbeClient } from './pool-probe-client.ts'
+import { TurnCostRuntime } from './turn-costs.ts'
 import { GatewayTurnCredentials } from './turn-credentials.ts'
 
 const sweepKinds: readonly CredentialSweepKind[] = [
@@ -69,6 +70,12 @@ export function loggedProbe(
       inject: [PRISMA, SECRET_STORE, CORE_CONFIG],
     },
     { provide: GatewayTurnCredentials, useExisting: TURN_CREDENTIALS },
+    {
+      provide: TurnCostRuntime,
+      useFactory: (prisma: PrismaClient, background: boolean) =>
+        new TurnCostRuntime(prisma, background),
+      inject: [PRISMA, BACKGROUND_JOBS],
+    },
     {
       provide: CredentialSweeper,
       useFactory: (

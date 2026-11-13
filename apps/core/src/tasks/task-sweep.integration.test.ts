@@ -577,7 +577,8 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     })
     await db.outboxEvent.deleteMany({ where: { id: { in: jobs.map(({ id }) => id) } } })
     expect(jobs.map(({ payload }) => payload)).toEqual([
-      { taskId, attempt: 1, requestEventId: init.toString() },
+      // No tariff: the last place in the queue (plan 70, §2.3).
+      { taskId, attempt: 1, requestEventId: init.toString(), priority: 4 },
     ])
   })
 

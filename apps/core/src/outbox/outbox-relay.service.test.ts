@@ -102,6 +102,30 @@ describe('OutboxRelayService.tick', () => {
     expect(relay.relayId.length).toBeLessThanOrEqual(64)
   })
 
+  // Plan 70, §2.3: a pass carries the place of its workspace's tier in the queue.
+  it('hands the priority of a payload to the queue, and nothing that is not one', async () => {
+    const pass = row({
+      topic: 'agent-turns',
+      type: 'turn.run',
+      payload: { taskId: rowId(9), attempt: 1, requestEventId: '7', priority: 1 },
+    })
+    const odd = row({
+      id: rowId(3),
+      topic: 'agent-turns',
+      type: 'turn.run',
+      payload: { taskId: rowId(8), attempt: 1, requestEventId: '8', priority: 9 },
+      created_at: new Date('2026-09-26T11:00:01Z'),
+    })
+    const { relay, queue } = setup([pass, odd])
+
+    await relay.tick()
+
+    expect(queue.enqueue.mock.calls.map((call) => call[3])).toEqual([
+      { jobId: pass.id, priority: 1 },
+      { jobId: odd.id },
+    ])
+  })
+
   it('publishes claimed rows oldest first, then marks each one published and unclaimed, without its payload', async () => {
     const first = row()
     const second = row({

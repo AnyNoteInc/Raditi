@@ -22,6 +22,8 @@ import {
   type Prisma,
   type PrismaClient,
   type SettledTaskStatus,
+  workspaceUsageTerms,
+  workspaceWindowUsage,
 } from '@repo/db'
 import {
   candidateFactsSchema,
@@ -43,6 +45,7 @@ import {
   type TaskWaitingReason,
   type TurnEvidence,
   type TurnResult,
+  refusingWindow,
 } from '@repo/domain'
 
 import {
@@ -132,6 +135,8 @@ export interface SettlementDependencies {
   browser?: Pick<BrowserSessions, 'close'> | null
   logger?: { warn(message: string): void; error(message: string): void }
   now?: () => Date
+  /** Counts a pass a window of its workspace stopped (plan 70, a metric without ids). */
+  onUsageLimit?: (window: '5h' | 'week') => void
 }
 
 export interface SettleOptions {
@@ -629,6 +634,13 @@ export class PassSettlement {
     // press «продолжи» into the same wall (owner's decision of 10.11.2026).
     if (code === 'technical' && ending.turn !== null && (await this.#limitsOut(pass, ending.turn)))
       code = 'agent_limits'
+    // The gateway stopped a key of the turn for a window of the workspace (plan 70, Л6): the work
+    // up to it is charged, the row names the window and its reset, the dialog stays open and the
+    // client goes on after the reset (КР8, case `window`; Л15 — no automatic continuation).
+    if (code === 'technical' && ending.turn !== null) {
+      const window = await this.#windowOut(pass, context, ending.turn)
+      if (window) return this.#usageLimit(pass, context, ending.turn, window)
+    }
     // The step or the client's credits ran out inside the turn: the platform asks «Продолжить?»
     // instead of failing, and a dialog with a candidate keeps `/release` (Р8). A key the gateway
     // stopped for its pace or its count of calls (`budget` too, П22) still had money: that is
@@ -979,6 +991,87 @@ export class PassSettlement {
       select: { id: true },
     })
     return key !== null
+  }
+
+  /**
+   * The window of the workspace that stopped a key of the turn (`last_refusal =
+   * 'workspace_limit'`), with its reset; null — no key of the turn was stopped for it.
+   */
+  async #windowOut(
+    pass: PassRef,
+    context: SettleContext,
+    turn: number,
+  ): Promise<{ kind: '5h' | 'week'; resetsAt: Date } | null> {
+    const { db } = this.deps
+    const key = await db.llmKey.findFirst({
+      where: { taskId: pass.taskId, turnNo: turn, lastRefusal: 'workspace_limit' },
+      select: { id: true },
+    })
+    if (key === null) return null
+    const workspaceId = context.task.workspaceId
+    const terms = await workspaceUsageTerms(db, workspaceId)
+    const windows = await workspaceWindowUsage(db, {
+      workspaceId,
+      now: this.#now(),
+      limits: terms.limits,
+    })
+    // The window that is spent, else the open one that resets last: the row always names a time.
+    const spent = refusingWindow(windows, 1) ?? null
+    const named =
+      spent ??
+      windows
+        .filter((window) => window.resetsAt !== null)
+        .sort((a, b) => b.resetsAt!.getTime() - a.resetsAt!.getTime())[0] ??
+      null
+    return named?.resetsAt ? { kind: named.kind, resetsAt: named.resetsAt } : null
+  }
+
+  /**
+   * A pass a window of the workspace stopped (plan 70): what it did is charged, as after a ceiling
+   * of money (`#ceiling`); the row is a failure `usage_limit` with the window and its reset, so it
+   * says when the work goes on. A dialog with a candidate keeps it (`awaiting_approval`).
+   */
+  async #usageLimit(
+    pass: PassRef,
+    context: SettleContext,
+    turn: number,
+    window: { kind: '5h' | 'week'; resetsAt: Date },
+  ): Promise<SettleAnswer> {
+    const next = context.standing ? 'awaiting_approval' : 'awaiting_user'
+    this.deps.onUsageLimit?.(window.kind)
+    return this.#transaction(async (tx, now) => {
+      const moved = await settleTurn(tx, {
+        taskId: pass.taskId,
+        attempt: pass.attempt,
+        expectedTurnNo: pass.turnNo,
+        from: ['preparing', 'running'],
+        to: next,
+        turn,
+        feed: [
+          {
+            type: 'feed.failure',
+            payload: {
+              v: 1,
+              turn,
+              code: 'usage_limit',
+              site: failureSiteOf(context),
+              credits: null,
+              next,
+              window: { kind: window.kind, resetsAt: window.resetsAt.toISOString() },
+              ...passObjectsOf(context),
+            },
+          },
+        ],
+      })
+      if (!moved.moved) throw new NotMoved()
+      await this.#assertNotCancelled(tx, pass.taskId)
+      await excludeTurnDbOperations(tx, { taskId: pass.taskId, turnNo: turn })
+      await requestPreviewSync(tx, {
+        taskId: pass.taskId,
+        revision: context.standing?.revision ?? 0,
+      })
+      if (context.task.billable) await this.#chargePass(tx, pass, now)
+    })
   }
 
   async #moneyCeiling(pass: PassRef, turn: number): Promise<CeilingQuestion | null> {

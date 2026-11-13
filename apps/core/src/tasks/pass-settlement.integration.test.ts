@@ -918,6 +918,43 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       expect(await code(task.taskId)).toEqual([['feed.failure', 'technical']])
     })
 
+    // Plan 70 (scenario 1): a window of the workspace stopped the key — the work is charged, the
+    // row names the window and its reset, and the dialog waits for the client after the reset.
+    it('names the window of the workspace and its reset, and charges the work done', async () => {
+      const task = await refusedWith('workspace_limit')
+      const workspaceId = (await db.task.findUniqueOrThrow({ where: { id: task.taskId } }))
+        .workspaceId
+      const startedAt = new Date(NOW.getTime() - 3_600_000)
+      await db.workspaceUsageWindow.create({
+        data: {
+          workspaceId,
+          kind: '5h',
+          startedAt,
+          endsAt: new Date(startedAt.getTime() + 5 * 3_600_000),
+        },
+      })
+
+      expect(await settlement().settle(ref(task), execFailed(1))).toBe('moved')
+
+      expect(await status(task.taskId)).toBe('awaiting_user')
+      expect(await feed(task.taskId)).toEqual([
+        [
+          'feed.failure',
+          {
+            v: 1,
+            turn: 1,
+            code: 'usage_limit',
+            site: 'unchanged',
+            credits: null,
+            next: 'awaiting_user',
+            window: { kind: '5h', resetsAt: '2026-10-17T14:00:00.000Z' },
+          },
+        ],
+      ])
+      // The pass was charged, not given back as a failure is.
+      expect((await holds(task.taskId)).some((hold) => hold.status === 'captured')).toBe(true)
+    })
+
     it('ends with the same words a pass the pool refused before its turn, with no turn to ask about', async () => {
       const task = await dialog()
 

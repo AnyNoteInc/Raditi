@@ -410,8 +410,13 @@ export class PassRunner {
         // told so and the dialog stays open, instead of a queue that looks short and lasts hours.
         // A busy pool names a minute, and a cooldown or a probe stays under the limit: they wait.
         const retryAt = this.#poolRetryAt(error.details)
+        // The reserve of the higher tiers (Л8) is capacity that exists: the pass waits in the
+        // queue however long, and is never told that the limits of the agent are out (Л17).
+        const reserved =
+          (error.details as { reason?: unknown } | undefined)?.reason === 'tier_reserve'
         if (
           error.code === 'SUBSCRIPTION_WAIT' &&
+          !reserved &&
           retryAt !== null &&
           poolWaitIsLimitsOut(retryAt, this.#now())
         ) {
@@ -551,6 +556,8 @@ export class PassRunner {
       .enqueue(AGENT_TURN_QUEUE, AGENT_TURN_JOB, job, {
         jobId: agentTurnRetryJobId(job, String(this.#now().getTime())),
         delayMs: retry.delayMs,
+        // After a wait of the pool the passes come back in the order of their tiers (plan 70).
+        ...(job.priority === undefined ? {} : { priority: job.priority }),
       })
       .catch(() => this.#logger.warn(`pass_requeue_failed task=${job.taskId}`))
   }

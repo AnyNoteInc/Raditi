@@ -247,7 +247,10 @@ export class OutboxRelayService implements OnApplicationBootstrap, OnModuleDestr
 
     try {
       await withTimeout(
-        this.#queue.enqueue(row.topic, row.type, row.payload, { jobId: row.dedupe_key ?? row.id }),
+        this.#queue.enqueue(row.topic, row.type, row.payload, {
+          jobId: row.dedupe_key ?? row.id,
+          ...priorityOf(row.payload),
+        }),
         OUTBOX_ENQUEUE_TIMEOUT_MS,
         `Enqueue to "${row.topic}" timed out`,
       )
@@ -303,4 +306,19 @@ export class OutboxRelayService implements OnApplicationBootstrap, OnModuleDestr
       data: { lockedAt: null, lockedBy: null },
     })
   }
+}
+
+/**
+ * The place of a job in its queue when its payload names one (`priority` of a pass, by the tier
+ * of its workspace — docs/plan/70-usage-limits.md, §2.3): a whole number 1…4; anything else is
+ * not a priority, and the job takes the default place.
+ */
+function priorityOf(payload: unknown): { priority?: number } {
+  const priority = (payload as { priority?: unknown } | null)?.priority
+  return typeof priority === 'number' &&
+    Number.isInteger(priority) &&
+    priority >= 1 &&
+    priority <= 4
+    ? { priority }
+    : {}
 }

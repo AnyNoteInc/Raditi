@@ -215,6 +215,12 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
       })
       await db.task.deleteMany({ where: { workspaceId: row.workspaceId } })
       await db.site.deleteMany({ where: { workspaceId: row.workspaceId } })
+      const subscriptions = await db.subscription.findMany({
+        where: { workspaceId: row.workspaceId },
+        select: { planId: true },
+      })
+      await db.subscription.deleteMany({ where: { workspaceId: row.workspaceId } })
+      await db.plan.deleteMany({ where: { id: { in: subscriptions.map(({ planId }) => planId) } } })
       await db.workspace.delete({ where: { id: row.workspaceId } })
       await db.llmModelPrice.deleteMany({ where: { modelId: row.modelId } })
       await db.llmModel.delete({ where: { id: row.modelId } })
@@ -252,6 +258,11 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
       slots?: number
       /** The backend of the pool: the sample one, or one whose provider the test switches on. */
       backend?: LlmBackendId
+      /**
+       * Turns the workspace runs at once (plan 70, Л10): a tariff of its own with this many,
+       * 8 unless given; null — no tariff, the constant of 1.
+       */
+      turns?: number | null
     } = {},
   ) {
     const backend = options.backend ?? sampleBackendId
@@ -263,6 +274,31 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
         dataClass: options.client ? 'client' : 'synthetic',
       },
     })
+    const turns = options.turns === undefined ? 8 : options.turns
+    if (turns !== null) {
+      const plan = await db.plan.create({
+        data: {
+          slug: `turns-${suffix}`,
+          name: 'Synthetic',
+          kind: 'quota',
+          price: '1.00',
+          creditsPerMonth: 600,
+          maxSites: 3,
+          maxConcurrentTurns: turns,
+        },
+      })
+      const periodStart = new Date(Date.now() - 86_400_000)
+      await db.subscription.create({
+        data: {
+          workspaceId: workspace.id,
+          planId: plan.id,
+          status: 'active',
+          currentPeriodStart: periodStart,
+          currentPeriodEnd: new Date(periodStart.getTime() + 30 * 86_400_000),
+          periodAnchor: periodStart,
+        },
+      })
+    }
     const model = await db.llmModel.create({
       data: {
         providerId: provider,
@@ -942,6 +978,17 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     expect(
       await db.taskAccountBinding.count({ where: { subscriptionAccountId: f.mainAccount.id } }),
     ).toBe(1)
+  })
+
+  it('keeps a second turn of a workspace without a tariff waiting for agents (plan 70, Л10)', async () => {
+    const f = await fixture({ turns: null })
+    await f.account({ usedPct: 10 })
+    const second = await f.taskFixture()
+    await f.credentials.issue(f.ref, f.grant)
+    await expect(f.credentials.issue(second.ref, f.grant)).rejects.toMatchObject({
+      code: 'SUBSCRIPTION_BUSY',
+    })
+    expect(await db.llmKey.count({ where: { taskId: second.task.id } })).toBe(0)
   })
 
   it('answers at once when a racing task took the account pinned in Vault and another is free', async () => {

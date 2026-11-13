@@ -791,6 +791,97 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     })
   })
 
+  // The windows of 5 hours and of the week (docs/plan/70-usage-limits.md, scenarios 5 and 6): the
+  // gateway opens a window with the first call; here the window and the calls are written as it
+  // leaves them, and the placement reads what they took at the private rate of 6 ₽.
+  describe('the windows of the workspace', () => {
+    const window = (workspaceId: string, kind: '5h' | 'week', startedAt: Date) =>
+      db.workspaceUsageWindow.create({
+        data: {
+          workspaceId,
+          kind,
+          startedAt,
+          endsAt: new Date(startedAt.getTime() + (kind === '5h' ? 5 : 7 * 24) * 3_600_000),
+        },
+      })
+
+    it('refuses a new task, and a retry, of «Бизнес» whose week took 210 credits (scenario 5)', async () => {
+      const { workspaceId } = await funded({
+        plan: { creditsPer5h: 70, creditsPerWeek: 210 },
+      })
+      const started = minutesAfter(-3 * 24 * 60)
+      await window(workspaceId, 'week', started)
+      const model = await modelPool()
+      const busy = await task(workspaceId)
+      // 1 260 ₽ at 6 ₽ a credit: 210 credits two days ago, outside every window of 5 hours.
+      await worked(model, busy, '1260', { occurredAt: minutesAfter(-2 * 24 * 60) })
+      const taskId = await task(workspaceId)
+
+      const error = await refused(workspaceId, taskId)
+      expect(error).toMatchObject({
+        code: 'BILLING_WINDOW_LIMIT_REACHED',
+        httpStatus: 429,
+        details: {
+          reason: 'window_limit',
+          window: {
+            kind: 'week',
+            limit: 210,
+            used: 210,
+            resetsAt: new Date(started.getTime() + 7 * 24 * 3_600_000).toISOString(),
+          },
+        },
+      })
+    })
+
+    it('takes a task while the window has room, and refuses it by the 5 hours once it is spent', async () => {
+      const { workspaceId } = await funded({ plan: { creditsPer5h: 20, creditsPerWeek: 55 } })
+      await window(workspaceId, '5h', minutesAfter(-60))
+      await window(workspaceId, 'week', minutesAfter(-60))
+      const model = await modelPool()
+      const busy = await task(workspaceId)
+      await worked(model, busy, '60', { occurredAt: minutesAfter(-30) })
+      expect(await place(workspaceId, await task(workspaceId))).toMatchObject({ applied: true })
+      await worked(model, busy, '60', { occurredAt: minutesAfter(-20), attempt: 2 })
+      expect(await refused(workspaceId, await task(workspaceId))).toMatchObject({
+        details: { reason: 'window_limit', window: { kind: '5h', limit: 20, used: 20 } },
+      })
+    })
+
+    it('reads the limit of the tariff at once when it changes, inside the open window (scenario 6)', async () => {
+      const { workspaceId } = await funded({ plan: { creditsPer5h: 20, creditsPerWeek: 55 } })
+      await window(workspaceId, '5h', minutesAfter(-60))
+      const model = await modelPool()
+      const busy = await task(workspaceId)
+      await worked(model, busy, '150', { occurredAt: minutesAfter(-30) })
+      const taskId = await task(workspaceId)
+      expect(await refused(workspaceId, taskId)).toMatchObject({
+        details: { reason: 'window_limit' },
+      })
+      const subscription = await db.subscription.findFirstOrThrow({ where: { workspaceId } })
+      await db.plan.update({
+        where: { id: subscription.planId },
+        data: { creditsPer5h: 70, creditsPerWeek: 210 },
+      })
+      expect(await place(workspaceId, taskId)).toMatchObject({ applied: true })
+    })
+
+    it('counts nothing the platform failed (Л7)', async () => {
+      const { workspaceId } = await funded({ plan: { creditsPer5h: 20, creditsPerWeek: 55 } })
+      await window(workspaceId, '5h', minutesAfter(-60))
+      const model = await modelPool()
+      const busy = await task(workspaceId)
+      await fixtures.modelCall({
+        taskId: busy,
+        pool: model.pool,
+        priceId: model.priceId,
+        costRub: '600',
+        occurredAt: minutesAfter(-30),
+        estimateReason: 'aborted_platform',
+      })
+      expect(await place(workspaceId, await task(workspaceId))).toMatchObject({ applied: true })
+    })
+  })
+
   describe('a refusal', () => {
     it('needs a usable credit rate before anything else', async () => {
       const { workspaceId } = await funded({ tariff: 0 })

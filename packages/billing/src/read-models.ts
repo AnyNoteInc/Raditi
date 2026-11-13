@@ -33,6 +33,7 @@ import {
   type SubscriptionEndReason,
   type SubscriptionWaitsDto,
   type TaskCreditsDto,
+  usageWindowsDto,
 } from './dto.ts'
 import { paymentFailureText } from './failure-text.ts'
 import { firstTaskCheck, newTaskCheck, type NewTaskAnswer } from './holds.ts'
@@ -350,6 +351,7 @@ const taskCredits = (answer: NewTaskAnswer): TaskCreditsDto => ({
   setAside: answer.held,
   minToStart: answer.needed,
   today: answer.today,
+  windows: usageWindowsDto(answer.windows),
   newTask: { allowed: answer.allowed, reason: answer.reason },
 })
 
