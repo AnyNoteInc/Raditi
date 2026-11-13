@@ -149,17 +149,17 @@ test('a customer who paid for a tariff sees its full quota and an empty history'
     // The quota of the tariff and the gift, which the checkout granted with the workspace: what
     // the accounts hold.
     const accounts = await stored.stored()
-    expect([accounts.tariff.left, accounts.gift.left, accounts.pack.left]).toEqual([600, 50, 0])
+    expect([accounts.tariff.left, accounts.gift.left, accounts.pack.left]).toEqual([1000, 50, 0])
     await expect(leftHeadlineOf(credits)).toHaveText(leftHeadline(totalLeft(accounts)))
     await expect(credits.getByRole('heading', { level: 3, name: /^По тарифу/ })).toHaveText(
-      /^По тарифу\s—\s600\sиз\s600$/,
+      /^По тарифу\s—\s1\s000\sиз\s1\s000$/,
     )
     await expect(
       credits.getByRole('img', {
-        name: 'Из 600 кредитов по тарифу: 0 списано, 0 отложено под задачи в работе, 600 осталось',
+        name: /^Из 1\s000 кредитов по тарифу: 0 списано, 0 отложено под задачи в работе, 1\s000 осталось$/,
       }),
     ).toBeVisible()
-    for (const entry of [/^Списано\s—\s0$/, /^Отложено\s—\s0$/, /^Осталось\s—\s600$/]) {
+    for (const entry of [/^Списано\s—\s0$/, /^Отложено\s—\s0$/, /^Осталось\s—\s1\s000$/]) {
       await expect(credits.getByRole('listitem').filter({ hasText: entry })).toHaveCount(1)
     }
     // The consent to auto-renewal was not given: no new quota is promised.
@@ -168,7 +168,7 @@ test('a customer who paid for a tariff sees its full quota and an empty history'
     )
     // The three accounts, in the order their credits are spent in.
     await expect(credits.getByRole('heading', { level: 3 })).toHaveText([
-      /^По тарифу\s—\s600\sиз\s600$/,
+      /^По тарифу\s—\s1\s000\sиз\s1\s000$/,
       /^Подарочные\s—\s50$/,
       /^Из пакета\s—\s0$/,
     ])

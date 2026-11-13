@@ -14,11 +14,13 @@ export function moscowMidnight(isoDate: string): Date {
 
 // ─── Plans (docs/business.md §6) ──────────────────────────────────────────────
 //
-// The terms are those of the pricing of 06.11.2026 (docs/plan/63-new-pricing.md, Ц1–Ц6): lower
-// prices and credits, and no tariff limits the credits of a day. A database seeded with the
-// terms of before gets them by migrations that run before this seed: billing_credit_amounts
-// (the credits of the credits model), billing_daily_credits (the day of 17.10.2026) and
-// billing_pricing_2026_11 (these terms).
+// The terms are those of the pricing of 06.11.2026 (docs/plan/63-new-pricing.md, Ц1–Ц6) with
+// the credits of 13.11.2026 (docs/plan/72-pricing-api-margin.md, ЦА1–ЦА4): «Старт» 200 credits,
+// «Бизнес» 9 990 ₽ and 1 000, priced for a margin of 10 % on the Z.ai API; no tariff limits the
+// credits of a day. A database seeded with the terms of before gets them by migrations that run
+// before this seed: billing_credit_amounts (the credits of the credits model),
+// billing_daily_credits (the day of 17.10.2026), billing_pricing_2026_11 (06.11.2026),
+// usage_windows (the windows of plan 71) and billing_pricing_api_margin (13.11.2026).
 
 /** Everything except name and sortOrder is a plan term: the seed creates it but never changes it. */
 export interface PlanSeed {
@@ -49,10 +51,10 @@ export const planSeeds = [
     name: 'Старт',
     kind: 'quota',
     price: '1990.00',
-    creditsPerMonth: 150,
+    creditsPerMonth: 200,
     creditsPerDay: null,
     creditsPer5h: null,
-    creditsPerWeek: 55,
+    creditsPerWeek: 73,
     packCredits: null,
     maxSites: 1,
     sortOrder: 10,
@@ -61,11 +63,11 @@ export const planSeeds = [
     slug: 'business',
     name: 'Бизнес',
     kind: 'quota',
-    price: '6990.00',
-    creditsPerMonth: 600,
+    price: '9990.00',
+    creditsPerMonth: 1000,
     creditsPerDay: null,
     creditsPer5h: null,
-    creditsPerWeek: 210,
+    creditsPerWeek: 350,
     packCredits: null,
     maxSites: 3,
     sortOrder: 20,

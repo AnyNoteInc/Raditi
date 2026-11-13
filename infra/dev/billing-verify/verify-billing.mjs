@@ -699,8 +699,8 @@ async function main(options, owned) {
   assert.deepEqual(
     plans.filter(({ slug }) => ['start', 'business', 'pack'].includes(slug)),
     [
-      { slug: 'start', price: '1990.00', credits: 150 },
-      { slug: 'business', price: '6990.00', credits: 600 },
+      { slug: 'start', price: '1990.00', credits: 200 },
+      { slug: 'business', price: '9990.00', credits: 1000 },
       { slug: 'pack', price: '1490.00', credits: 100 },
     ],
     'The seeds of the stand are not the tariffs the scenarios pay for',

@@ -1864,12 +1864,12 @@ test.describe('pricing', () => {
       await openAt(page, width)
       const slider = page.getByRole('slider', { name: 'Сколько задач в месяц вы планируете?' })
       await hydrated(slider)
-      await slider.fill('120')
+      await slider.fill('140')
       // The sentence of the result; the name of the plan is an element of its own inside it.
       const result = page.locator('#pricing p').filter({ hasText: /^Тариф «Бизнес»/ })
-      // 120 tasks at eleven credits each: the 600 of «Бизнес» and eight packs of a hundred.
-      await expect(result).toContainText('и 8 дополнительных пакетов по 100 кредитов')
-      await expect(page.locator('#pricing').getByText(/6.990.₽ \+ 8 × 1.490.₽/)).toBeVisible()
+      // 140 tasks at eleven credits each: the 1 000 of «Бизнес» and six packs of a hundred.
+      await expect(result).toContainText('и 6 дополнительных пакетов по 100 кредитов')
+      await expect(page.locator('#pricing').getByText(/9.990.₽ \+ 6 × 1.490.₽/)).toBeVisible()
       const edges = await result.evaluate((element) => {
         const range = document.createRange()
         range.selectNodeContents(element)
@@ -1910,11 +1910,11 @@ test.describe('pricing', () => {
 
     await hydrated(slider)
     await slider.focus()
-    for (let step = 0; step < 3; step++) await page.keyboard.press('ArrowRight')
-    await expect(pricing.locator('output')).toHaveText('45')
-    // 45 tasks are 495 credits: «Бизнес» alone is cheaper than «Старт» with four packs.
+    for (let step = 0; step < 7; step++) await page.keyboard.press('ArrowRight')
+    await expect(pricing.locator('output')).toHaveText('65')
+    // 65 tasks are 715 credits: «Бизнес» alone is cheaper than «Старт» with six packs.
     await expect(announcement).toHaveText(
-      /^Тариф «Бизнес», 6.990 ₽ в месяц, в среднем около 155 ₽ за задачу\. Небольшая правка — около 58 ₽$/,
+      /^Тариф «Бизнес», 9.990 ₽ в месяц, в среднем около 154 ₽ за задачу\. Небольшая правка — около 50 ₽$/,
     )
     // Heard, not seen: the region takes no room on the page.
     const box = await announcement.boundingBox()

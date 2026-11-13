@@ -202,17 +202,17 @@ describe('the «Тарифы» page of a customer without a tariff', () => {
 
     const card = await planCard('Бизнес')
     expect(plain(card.textContent)).toContain('Когда задач становится больше')
-    expect(plain(card.textContent)).toContain('6 990 ₽/ месяц')
+    expect(plain(card.textContent)).toContain('9 990 ₽/ месяц')
     expect(
       within(card)
         .getAllByRole('listitem')
         .map((item) => plain(item.textContent)),
     ).toEqual([
-      '600 кредитов в месяц',
-      'В среднем около 55 задач',
+      '1 000 кредитов в месяц',
+      'В среднем около 91 задачи',
       // The windows of the work (plan 71, Л14).
-      'До 210 кредитов в неделю',
-      'Небольшая правка — около 58 ₽',
+      'До 350 кредитов в неделю',
+      'Небольшая правка — около 50 ₽',
       'До 3 сайтов на WordPress',
     ])
     expect(
@@ -220,10 +220,10 @@ describe('the «Тарифы» page of a customer without a tariff', () => {
         .getAllByRole('listitem')
         .map((item) => plain(item.textContent)),
     ).toEqual([
-      '150 кредитов в месяц',
-      'В среднем около 14 задач',
-      'До 55 кредитов в неделю',
-      'Небольшая правка — около 66 ₽',
+      '200 кредитов в месяц',
+      'В среднем около 18 задач',
+      'До 73 кредитов в неделю',
+      'Небольшая правка — около 50 ₽',
       'Один сайт на WordPress',
     ])
     // A count of four digits is grouped, and a line never parts its groups.
@@ -347,7 +347,7 @@ describe('the «Тарифы» page while payments are switched off', () => {
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
     expect(screen.getByRole('heading', { level: 2, name: 'Все тарифы' })).toBeInTheDocument()
     expect(pageText()).not.toContain('Выберите тариф')
-    expect(pageText()).toContain('6 990 ₽')
+    expect(pageText()).toContain('9 990 ₽')
   })
 })
 
@@ -370,13 +370,13 @@ describe('the «Тарифы» page of a customer with a tariff', () => {
       await screen.findByRole('heading', { level: 2, name: 'Тариф «Бизнес»' })
     ).closest('section')
     if (!block) throw new Error('the tariff has no section')
-    expect(plain(block.textContent)).toContain('600 кредитов в месяц · до 3 сайтов на WordPress')
-    expect(plain(block.textContent)).toContain('6 990 ₽ в месяц')
+    expect(plain(block.textContent)).toContain('1 000 кредитов в месяц · до 3 сайтов на WordPress')
+    expect(plain(block.textContent)).toContain('9 990 ₽ в месяц')
     // The status is words and an icon, never a colour alone.
     const chip = within(block).getByText('Активен').closest('.MuiChip-root')
     expect(chip?.querySelector('svg')).not.toBeNull()
 
-    expect(row('Следующее списание')).toBe('18 октября 2026 — 6 990 ₽')
+    expect(row('Следующее списание')).toBe('18 октября 2026 — 9 990 ₽')
     expect(row('Способ оплаты')).toBe('Карта «Мир» •• 4444')
     expect(row('Кредиты')).toBe('Осталось 55: 45 по тарифу и 10 из пакета')
     expect(screen.queryByText('Действует до')).not.toBeInTheDocument()
@@ -390,7 +390,7 @@ describe('the «Тарифы» page of a customer with a tariff', () => {
     const section = (await screen.findByRole('heading', { level: 2, name: 'Автопродление' }))
       .parentElement
     expect(plain(section?.textContent)).toContain(
-      'Включено. 18 октября спишем 6 990 ₽ сохранённым способом оплаты и начислим 600 кредитов на новый период. Перед списанием пришлём письмо на anna@example.ru.',
+      'Включено. 18 октября спишем 9 990 ₽ сохранённым способом оплаты и начислим 1 000 кредитов на новый период. Перед списанием пришлём письмо на anna@example.ru.',
     )
   })
 
@@ -566,7 +566,7 @@ describe('choosing a tariff', () => {
     fireEvent.click(opener)
 
     const dialog = await screen.findByRole('dialog', { name: 'Тариф «Бизнес»' })
-    expect(plain(dialog.textContent)).toContain('6 990 ₽')
+    expect(plain(dialog.textContent)).toContain('9 990 ₽')
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Отмена' }))
 
@@ -1071,7 +1071,7 @@ describe('switching auto-renewal on', () => {
 
     expect(within(block).getByRole('button', { name: 'Включить автопродление' })).toBeEnabled()
     expect(plain(block.textContent)).toContain(
-      'Если включите, 18 октября и дальше каждый месяц будем списывать 6 990 ₽ сохранённым способом оплаты — Карта «Мир» •• 4444. Перед списанием пришлём письмо.',
+      'Если включите, 18 октября и дальше каждый месяц будем списывать 9 990 ₽ сохранённым способом оплаты — Карта «Мир» •• 4444. Перед списанием пришлём письмо.',
     )
   })
 
@@ -1092,7 +1092,7 @@ describe('switching auto-renewal on', () => {
     await waitFor(() => expect(said).toHaveFocus())
     expect(resumeAutoRenew).toHaveBeenCalledExactlyOnceWith({}, expect.anything())
     expect(hardNavigate).not.toHaveBeenCalled()
-    expect(row('Следующее списание')).toBe('18 октября 2026 — 6 990 ₽')
+    expect(row('Следующее списание')).toBe('18 октября 2026 — 9 990 ₽')
     expect(within(await renewalSection()).getByRole('button')).toHaveTextContent(
       'Отключить автопродление',
     )
@@ -1108,7 +1108,7 @@ describe('switching auto-renewal on', () => {
     showPlans()
     const block = await tariffBlock()
     expect(plain(block.textContent)).toContain(
-      'Сначала привяжем карту на странице ЮKassa: деньги при этом не спишутся. Когда карта сохранится, автопродление включится: 18 октября и дальше каждый месяц будем списывать 6 990 ₽ с этой карты. Перед списанием пришлём письмо.',
+      'Сначала привяжем карту на странице ЮKassa: деньги при этом не спишутся. Когда карта сохранится, автопродление включится: 18 октября и дальше каждый месяц будем списывать 9 990 ₽ с этой карты. Перед списанием пришлём письмо.',
     )
     const button = within(block).getByRole('button', { name: 'Включить автопродление' })
 
@@ -1142,7 +1142,7 @@ describe('switching auto-renewal on', () => {
     expect(text).toContain(
       'Автопродление отключено. Списание за следующий период уже отправлено в банк: если оно пройдёт, тариф продлится ещё на месяц. Других списаний не будет.',
     )
-    expect(text).toContain('Если включите, каждый месяц будем списывать 6 990 ₽')
+    expect(text).toContain('Если включите, каждый месяц будем списывать 9 990 ₽')
     expect(text).not.toContain('18 октября и дальше')
   })
 
@@ -1379,7 +1379,7 @@ describe('a change of tariff that is scheduled', () => {
     await waitFor(() => expect(said).toHaveFocus())
     expect(cancelPlanChange).toHaveBeenCalledExactlyOnceWith({}, expect.anything())
     expect(screen.queryByRole('group', { name: /тариф «Агентство»/ })).toBeNull()
-    expect(row('Следующее списание')).toBe('18 октября 2026 — 6 990 ₽')
+    expect(row('Следующее списание')).toBe('18 октября 2026 — 9 990 ₽')
     // The tariff can be chosen again.
     expect(within(await planCard('Агентство')).getByRole('button')).toHaveAccessibleName(
       'Перейти на тариф «Агентство»',
@@ -1453,7 +1453,7 @@ describe('a tariff whose renewal charge failed', () => {
     showPlans()
 
     const alert = await screen.findByRole('alert')
-    expect(plain(alert.textContent)).toContain('Не получилось списать 6 990 ₽')
+    expect(plain(alert.textContent)).toContain('Не получилось списать 9 990 ₽')
     expect(plain(alert.textContent)).toContain(
       'Оплатите тариф: пока оплата не пройдёт, новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. 25 октября 2026 тариф закончится, если оплата не пройдёт раньше. Карту для следующих списаний можно заменить.',
     )
@@ -1499,9 +1499,9 @@ describe('a tariff whose renewal charge failed', () => {
 
     const dialog = await screen.findByRole('dialog', { name: 'Тариф «Бизнес»' })
     expect(dialogText()).toContain('ПериодС сегодняшнего дня на месяц')
-    expect(dialogText()).toContain('К оплате сегодня6 990 ₽')
+    expect(dialogText()).toContain('К оплате сегодня9 990 ₽')
     expect(dialogText()).toContain(
-      'Автопродление включено: сохраним способ оплаты, которым вы заплатите сейчас, и каждый месяц будем списывать 6 990 ₽ тем же способом. Перед списанием пришлём письмо. Отключить можно в настройках в любой день.',
+      'Автопродление включено: сохраним способ оплаты, которым вы заплатите сейчас, и каждый месяц будем списывать 9 990 ₽ тем же способом. Перед списанием пришлём письмо. Отключить можно в настройках в любой день.',
     )
     expect(dialogText()).toContain('Оплата принимается только с личной карты')
     expect(startPastDuePayment).not.toHaveBeenCalled()
@@ -1666,7 +1666,7 @@ describe('a tariff whose renewal charge failed', () => {
 
     const dialog = await screen.findByRole('dialog', { name: 'Тариф «Бизнес»' })
     // What the page showed stays on the screen while the answer is on its way.
-    expect(dialogText()).toContain('К оплате сегодня6 990 ₽')
+    expect(dialogText()).toContain('К оплате сегодня9 990 ₽')
     await waitFor(() => expect(getOverview).toHaveBeenCalledTimes(2))
     const pay = within(dialog).getByRole('button', { name: /Перейти к оплате/ })
     expect(pay).toBeDisabled()
@@ -1681,7 +1681,7 @@ describe('a tariff whose renewal charge failed', () => {
     fresh.answer(overdueOverview())
 
     await waitFor(() => expect(pay).toBeEnabled())
-    expect(dialogText()).toContain('К оплате сегодня6 990 ₽')
+    expect(dialogText()).toContain('К оплате сегодня9 990 ₽')
     fireEvent.click(pay)
     await waitFor(() =>
       expect(hardNavigate).toHaveBeenCalledExactlyOnceWith('https://yookassa.example/pay/1'),
@@ -1707,9 +1707,9 @@ describe('a tariff whose renewal charge failed', () => {
 
     // The same dialog, now with what the payment will be started for.
     await waitFor(() => expect(dialog).toHaveAccessibleName('Тариф «Бизнес»'))
-    expect(dialogText()).toContain('600 кредитов в месяц · до 3 сайтов на WordPress')
-    expect(dialogText()).toContain('К оплате сегодня6 990 ₽')
-    expect(dialogText()).toContain('каждый месяц будем списывать 6 990 ₽ тем же способом')
+    expect(dialogText()).toContain('1 000 кредитов в месяц · до 3 сайтов на WordPress')
+    expect(dialogText()).toContain('К оплате сегодня9 990 ₽')
+    expect(dialogText()).toContain('каждый месяц будем списывать 9 990 ₽ тем же способом')
     expect(dialogText()).not.toMatch(/Агентство|19 990/)
     await waitFor(() => expect(pay).toBeEnabled())
     // The page behind the dialog got the same answer.
@@ -1994,9 +1994,9 @@ describe('the «Тарифы» page of a shop that takes one-time payments only'
     showPlans()
 
     expect(plain((await renewalSection()).textContent)).toContain(
-      'Включено. 18 октября спишем 6 990 ₽ сохранённым способом оплаты и начислим 600 кредитов на новый период.',
+      'Включено. 18 октября спишем 9 990 ₽ сохранённым способом оплаты и начислим 1 000 кредитов на новый период.',
     )
-    expect(row('Следующее списание')).toBe('18 октября 2026 — 6 990 ₽')
+    expect(row('Следующее списание')).toBe('18 октября 2026 — 9 990 ₽')
     expect(screen.getAllByRole('button').map(buttonName)).toEqual([
       'Перейти на тариф «Агентство»',
       'Купить пакет',
@@ -2041,7 +2041,7 @@ describe('the «Тарифы» page of a shop that takes one-time payments only'
     [
       'auto-renewal is on',
       {},
-      'Способ оплаты, которым вы заплатите сейчас, мы не сохраним. Автопродление включено: каждый месяц будем списывать 6 990 ₽ способом оплаты, сохранённым раньше. Перед списанием пришлём письмо. Отключить можно в настройках в любой день.',
+      'Способ оплаты, которым вы заплатите сейчас, мы не сохраним. Автопродление включено: каждый месяц будем списывать 9 990 ₽ способом оплаты, сохранённым раньше. Перед списанием пришлём письмо. Отключить можно в настройках в любой день.',
     ],
     [
       'auto-renewal is off',
@@ -2292,7 +2292,7 @@ describe('the gift of the registration on «Тарифы»', () => {
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
 
-  /** «Бизнес» with 600 credits of the tariff, the gift and, when told, a pack. */
+  /** «Бизнес» with 1 000 credits of the tariff, the gift and, when told, a pack. */
   function onTariff(
     patch: Parameters<typeof subscriptionTo>[0] = {},
     {
@@ -2304,7 +2304,7 @@ describe('the gift of the registration on «Тарифы»', () => {
     getOverview.mockResolvedValue(
       overviewOf({
         subscription: subscriptionTo(patch),
-        credits: creditBalances(600, pack, gift, true),
+        credits: creditBalances(1000, pack, gift, true),
         ...overview,
       }),
     )
@@ -2316,7 +2316,7 @@ describe('the gift of the registration on «Тарифы»', () => {
     showPlans()
     await tariffBlock()
 
-    expect(row('Кредиты')).toBe('Осталось 635: 600 по тарифу и 35 подарочных')
+    expect(row('Кредиты')).toBe('Осталось 1 035: 1 000 по тарифу и 35 подарочных')
     expect(await lead()).toBe('Ваш тариф и автопродление.')
   })
 
@@ -2325,7 +2325,7 @@ describe('the gift of the registration on «Тарифы»', () => {
     showPlans()
     await tariffBlock()
 
-    expect(row('Кредиты')).toBe('Осталось 735: 600 по тарифу, 35 подарочных и 100 из пакета')
+    expect(row('Кредиты')).toBe('Осталось 1 135: 1 000 по тарифу, 35 подарочных и 100 из пакета')
   })
 
   it('does not name a gift that is used up as a part of what is left', async () => {
@@ -2333,7 +2333,7 @@ describe('the gift of the registration on «Тарифы»', () => {
     showPlans()
     await tariffBlock()
 
-    expect(row('Кредиты')).toBe('Осталось 700: 600 по тарифу и 100 из пакета')
+    expect(row('Кредиты')).toBe('Осталось 1 100: 1 000 по тарифу и 100 из пакета')
   })
 
   it('says of a tariff that does not renew that tasks are taken after it on gift credits', async () => {
@@ -2341,7 +2341,7 @@ describe('the gift of the registration on «Тарифы»', () => {
     showPlans()
 
     expect(plain((await tariffBlock()).textContent)).toContain(
-      `Автопродление отключено. Тариф и 600 кредитов по тарифу доступны до 18 октября 2026. После этого ${offTariff}. 100 кредитов из пакета, сайты и история правок сохранятся.`,
+      `Автопродление отключено. Тариф и 1 000 кредитов по тарифу доступны до 18 октября 2026. После этого ${offTariff}. 100 кредитов из пакета, сайты и история правок сохранятся.`,
     )
     expect(pageText()).not.toContain('новые задачи не принимаются')
   })
@@ -2378,7 +2378,7 @@ describe('the gift of the registration on «Тарифы»', () => {
     expect(plain((await tariffBlock()).textContent)).toContain(
       'После этого новые задачи не принимаются, пока вы снова не выберете тариф.',
     )
-    expect(row('Кредиты')).toBe('Осталось 600 по тарифу')
+    expect(row('Кредиты')).toBe('Осталось 1 000 по тарифу')
   })
 
   it('shows the gift credits of an overdue tariff as left, and the rest as coming with the payment', async () => {
@@ -2396,7 +2396,7 @@ describe('the gift of the registration on «Тарифы»', () => {
       'Осталось 35 подарочных и 100 из пакета. Кредиты по тарифу начислим после оплаты',
     )
     // The credits of the period that ended are still not the customer's.
-    expect(pageText()).not.toMatch(/600 по тарифу/)
+    expect(pageText()).not.toMatch(/1 000 по тарифу/)
   })
 
   it('tells a customer whose tariff is over what the gift is still enough for', async () => {
@@ -2481,7 +2481,7 @@ describe('what stands in the way of a new task on «Тарифы»', () => {
     showPlans()
 
     expect(await noticeOf()).toBe(
-      'Лимиты закончились: кредиты по тарифу и из пакета израсходованы. 18 октября начислим 600 кредитов по тарифу «Бизнес». Чтобы продолжить сейчас, купите пакет — 100 кредитов за 1 490 ₽. Кредиты из пакета не сгорают.',
+      'Лимиты закончились: кредиты по тарифу и из пакета израсходованы. 18 октября начислим 1 000 кредитов по тарифу «Бизнес». Чтобы продолжить сейчас, купите пакет — 100 кредитов за 1 490 ₽. Кредиты из пакета не сгорают.',
     )
     expect(row('Кредиты')).toBe('Закончились')
     // Another tariff does not help today, and the page says so.
@@ -2538,7 +2538,7 @@ describe('what stands in the way of a new task on «Тарифы»', () => {
     showPlans()
 
     expect(await noticeOf()).toBe(
-      'Лимиты закончились, а тариф «Бизнес» действует до 18 октября и не продлится. Купите пакет — 100 кредитов за 1 490 ₽, они не сгорают, — или включите автопродление: тогда 18 октября начислим 600 кредитов.',
+      'Лимиты закончились, а тариф «Бизнес» действует до 18 октября и не продлится. Купите пакет — 100 кредитов за 1 490 ₽, они не сгорают, — или включите автопродление: тогда 18 октября начислим 1 000 кредитов.',
     )
     // The switch is in the same block.
     expect(screen.getByRole('button', { name: 'Включить автопродление' })).toBeVisible()
@@ -2567,7 +2567,7 @@ describe('what stands in the way of a new task on «Тарифы»', () => {
     showPlans()
 
     expect(await noticeOf()).toBe(
-      'Лимиты закончились: кредиты по тарифу и из пакета израсходованы. 18 октября начислим 600 кредитов по тарифу «Бизнес».',
+      'Лимиты закончились: кредиты по тарифу и из пакета израсходованы. 18 октября начислим 1 000 кредитов по тарифу «Бизнес».',
     )
     expect(pageText()).not.toContain('Новый тариф начнёт действовать')
   })

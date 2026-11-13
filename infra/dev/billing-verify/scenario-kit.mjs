@@ -29,13 +29,16 @@ import {
 export const MINUTE = 60_000
 export const HOUR = 60 * MINUTE
 export const DAY = 24 * HOUR
-/** The prices of the pricing of 06.11.2026 (docs/plan/63-new-pricing.md, Ц1–Ц4). */
-export const PRICE = { start: '1990.00', business: '6990.00', pack: '1490.00' }
+/**
+ * The prices of the pricing of 13.11.2026 (docs/plan/72-pricing-api-margin.md, ЦА1–ЦА3; the pack
+ * is that of 06.11.2026, docs/plan/63-new-pricing.md, Ц4).
+ */
+export const PRICE = { start: '1990.00', business: '9990.00', pack: '1490.00' }
 /**
  * The credits a month of the two tariffs the scenarios buy, the credits of the pack, and the
  * gift of the registration, which every workspace the product makes is granted once.
  */
-export const CREDITS = { start: 150, business: 600, pack: 100, gift: 50 }
+export const CREDITS = { start: 200, business: 1000, pack: 100, gift: 50 }
 /**
  * What «Тарифы» sells, as the stand expects it of the seeds: the credits a month, the tariff
  * credits a day — none since 06.11.2026 (Ц6) — and the sites of each tariff, and the credits of
@@ -43,23 +46,24 @@ export const CREDITS = { start: 150, business: 600, pack: 100, gift: 50 }
  */
 export const ON_SALE = Object.freeze({
   plans: [
-    // With the windows of 5 hours and of the week (docs/plan/71-usage-limits.md, Л4).
+    // With the windows of 5 hours and of the week (docs/plan/71-usage-limits.md, Л4; those of
+    // «Старт» and «Бизнес» since 13.11.2026, docs/plan/72-pricing-api-margin.md, ЦА4).
     {
       slug: 'start',
       price: '1990.00',
-      creditsPerMonth: 150,
+      creditsPerMonth: 200,
       creditsPerDay: null,
       creditsPer5h: null,
-      creditsPerWeek: 55,
+      creditsPerWeek: 73,
       maxSites: 1,
     },
     {
       slug: 'business',
-      price: '6990.00',
-      creditsPerMonth: 600,
+      price: '9990.00',
+      creditsPerMonth: 1000,
       creditsPerDay: null,
       creditsPer5h: null,
-      creditsPerWeek: 210,
+      creditsPerWeek: 350,
       maxSites: 3,
     },
     {
@@ -1146,7 +1150,7 @@ export async function pagesShowWhatIsStored(t) {
     pack: listed.find(({ kind }) => kind === 'pack') ?? null,
   })
   t.equal(
-    'the table of plans holds the terms the stand expects: 150, 600 and 2 000 credits a month, no daily limit, weekly limits of 55, 210 and 700, a pack of 100',
+    'the table of plans holds the terms the stand expects: 200, 1 000 and 2 000 credits a month, no daily limit, weekly limits of 73, 350 and 700, a pack of 100',
     sold,
     ON_SALE,
   )

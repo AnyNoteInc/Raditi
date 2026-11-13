@@ -15,7 +15,8 @@ import { formatRubles, Money } from './rubles'
  * lower end of `typicalTaskCredits.small`, the number «небольшая правка — обычно …» says, so the
  * rubles and the credits never part (the minimum of a done task today) — times the price, divided
  * by the credits it buys, rounded half up to a whole ruble once, from the exact quotient. 1 990 ₽
- * for 150 credits → 66, 6 990 ₽ for 600 → 58, 19 990 ₽ for 2 000 → 50, 1 490 ₽ for 100 → 75.
+ * for 200 credits → 50, 9 990 ₽ for 1 000 → 50, 19 990 ₽ for 2 000 → 50, 1 490 ₽ for 100 → 75
+ * (the tariffs of 13.11.2026, docs/plan/72-pricing-api-margin.md).
  * null when the credits are not a positive whole number: nothing is bought, and no price is
  * promised.
  */
@@ -29,7 +30,7 @@ export function smallEditRubles(price: string, credits: number): string | null {
 }
 
 /**
- * «Небольшая правка — около 66 ₽»: a price of `smallEditRubles` in words; with `from`,
+ * «Небольшая правка — около 50 ₽»: a price of `smallEditRubles` in words; with `from`,
  * «Небольшая правка из пакета — около 75 ₽». «около»: a small edit is usually charged the
  * minimum, and some take more.
  */

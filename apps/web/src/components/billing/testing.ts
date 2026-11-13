@@ -17,7 +17,7 @@ import type {
 } from './billing-types'
 
 // Answers of the billing router for the component tests: the three tariffs of the seeds — the
-// terms of 06.11.2026, without a daily limit — and a subscription to «Бизнес» for the month that
+// terms of 13.11.2026, without a daily limit — and a subscription to «Бизнес» for the month that
 // ends on 18 October 2026. A test of the daily limit, which stays in the code for a plan that
 // sets one, gives a tariff its day itself (`withDay`).
 
@@ -41,10 +41,10 @@ export const start = offer({
   slug: 'start',
   name: 'Старт',
   price: '1990.00',
-  creditsPerMonth: 150,
+  creditsPerMonth: 200,
   creditsPerDay: null,
   creditsPer5h: null,
-  creditsPerWeek: 55,
+  creditsPerWeek: 73,
   maxSites: 1,
 })
 
@@ -52,11 +52,11 @@ export const business = offer({
   id: '018f0000-0000-7000-8000-000000000002',
   slug: 'business',
   name: 'Бизнес',
-  price: '6990.00',
-  creditsPerMonth: 600,
+  price: '9990.00',
+  creditsPerMonth: 1000,
   creditsPerDay: null,
   creditsPer5h: null,
-  creditsPerWeek: 210,
+  creditsPerWeek: 350,
   maxSites: 3,
 })
 

@@ -125,7 +125,7 @@ test('a customer switches auto-renewal off and on again', async ({ page, signedI
     await expect(dialog).toContainText(
       new RegExp(sentence`Тариф «Старт» будет действовать до ${DATE}.`),
     )
-    await expect(dialog).toContainText('150 кредитов по тарифу можно использовать до этого дня.')
+    await expect(dialog).toContainText('200 кредитов по тарифу можно использовать до этого дня.')
     // The gift of the registration is untouched: tasks are taken on it after the tariff.
     await expect(dialog).toContainText(
       new RegExp(
@@ -151,7 +151,7 @@ test('a customer switches auto-renewal off and on again', async ({ page, signedI
     const said = block.getByRole('status')
     await expect(said).toContainText(
       new RegExp(
-        `^${sentence`Автопродление отключено. Тариф и 150 кредитов по тарифу доступны до ${DATE}. После этого новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. Сайты и история правок сохранятся.`}$`,
+        `^${sentence`Автопродление отключено. Тариф и 200 кредитов по тарифу доступны до ${DATE}. После этого новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. Сайты и история правок сохранятся.`}$`,
       ),
       SLOW,
     )
@@ -281,8 +281,8 @@ test('a customer schedules another tariff for the next period and takes the choi
     await expect(dialog).toContainText(
       'Неистраченные кредиты тарифа переходят на следующий месяц, один раз.',
     )
-    await expect(dialog).toContainText('600 кредитов в месяц · до 3 сайтов на WordPress')
-    await expect(dialog).toContainText('6 990 ₽ сохранённым способом оплаты — Карта «Мир» •• 4444')
+    await expect(dialog).toContainText('1 000 кредитов в месяц · до 3 сайтов на WordPress')
+    await expect(dialog).toContainText('9 990 ₽ сохранённым способом оплаты — Карта «Мир» •• 4444')
     await dialog.getByRole('button', { name: 'Не менять' }).click()
     await expect(dialog).toBeHidden()
     await expect(opener).toBeFocused()
@@ -344,16 +344,16 @@ test('a customer schedules another tariff for the next period and takes the choi
     await expect(said).toBeFocused()
     const coming = block.getByRole('group', { name: /тариф «Бизнес»$/ })
     await expect(coming).toContainText(
-      new RegExp(sentence`${DAY} спишем 6 990 ₽ сохранённым способом оплаты.`),
+      new RegExp(sentence`${DAY} спишем 9 990 ₽ сохранённым способом оплаты.`),
     )
     await expect(row(page, 'Следующее списание')).toHaveText(
-      new RegExp(String.raw`^${DATE}\s—\s6\s990\s₽$`),
+      new RegExp(String.raw`^${DATE}\s—\s9\s990\s₽$`),
     )
     // Today the tariff, its price and its credits are what they were: the accounts hold the
     // quota of «Старт» and the gift.
     await expect(block).toContainText('1 990 ₽ в месяц')
     const accounts = await credits.stored()
-    expect([accounts.tariff.left, accounts.gift.left]).toEqual([150, 50])
+    expect([accounts.tariff.left, accounts.gift.left]).toEqual([200, 50])
     await expect(row(page, 'Кредиты')).toHaveText(creditsRow(accounts))
     await expect(planCard(page, 'Старт')).toContainText('Ваш тариф')
     await expect(planCard(page, 'Бизнес')).toContainText(
@@ -487,7 +487,7 @@ test('a customer whose renewal charge failed pays on the page of the shop and th
     await expect(block.getByRole('alert')).toHaveCount(0)
     // The quota of the new period, granted anew, beside the gift.
     const accounts = await credits.stored()
-    expect([accounts.tariff.left, accounts.gift.left]).toEqual([150, 50])
+    expect([accounts.tariff.left, accounts.gift.left]).toEqual([200, 50])
     await expect(row(page, 'Кредиты')).toHaveText(creditsRow(accounts))
     await expect(row(page, 'Способ оплаты')).toHaveText('Карта Visa •• 1234')
     await expect(row(page, 'Следующее списание')).toHaveText(

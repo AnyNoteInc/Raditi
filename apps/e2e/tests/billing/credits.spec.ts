@@ -75,7 +75,7 @@ const NO_DAILY_LIMIT = 'Дневного лимита на вашем тариф
 const giftUsedUp = 'Подарочные кредиты закончились. Чтобы ставить новые задачи, выберите тариф.'
 /** Nothing is left on a tariff that renews (A7), with the pack on sale. */
 const limitsRanOut = (nextGrant: Date) =>
-  `Лимиты закончились: кредиты по тарифу и из пакета израсходованы. ${day(nextGrant)} начислим 150 кредитов по тарифу «Старт». Чтобы продолжить сейчас, купите пакет — 100 кредитов за 1 490 ₽. Кредиты из пакета не сгорают.`
+  `Лимиты закончились: кредиты по тарифу и из пакета израсходованы. ${day(nextGrant)} начислим 200 кредитов по тарифу «Старт». Чтобы продолжить сейчас, купите пакет — 100 кредитов за 1 490 ₽. Кредиты из пакета не сгорают.`
 /** The tariff ended and credits of a pack carry the tasks on, as the gift does (A13). */
 const packWaits = (pack: number) =>
   `У вас ${credits(pack)} из пакета. Они не сгорают, а задачи принимаются, пока кредиты не закончатся.`
@@ -266,7 +266,7 @@ test('a new user gets the gift with the first site and spends it on tasks withou
   await test.step('the customer chooses a tariff: its credits pay the debt first', async () => {
     await payForStart(page, { autoRenew: false })
     const stored = await queue.stored()
-    expect(stored.tariff.left).toBe(144)
+    expect(stored.tariff.left).toBe(194)
     expect(stored.gift.left).toBe(0)
     expect(await queue.debt()).toBe(0)
     // The debt is paid by a charge of the tariff account, linked to the order and to no task.
@@ -391,19 +391,19 @@ test('the credits of a tariff run out: «Лимиты закончились», 
     await payForStart(page, { autoRenew: true })
     await queue.site('Кофейня')
     const stored = await queue.stored()
-    expect([stored.tariff.left, stored.gift.left, stored.pack.left]).toEqual([150, 50, 0])
+    expect([stored.tariff.left, stored.gift.left, stored.pack.left]).toEqual([200, 50, 0])
   })
 
-  // No daily limit (Ц6): two large tasks of today use up the 150 of «Старт» and the 50 of the
-  // gift. Each sets aside one credit of the tariff; the first takes 120, the next the 30 left of
+  // No daily limit (Ц6): two large tasks of today use up the 200 of «Старт» and the 50 of the
+  // gift. Each sets aside one credit of the tariff; the first takes 120, the next the 80 left of
   // the tariff and the gift.
   await test.step('two large tasks use up the tariff and the gift', async () => {
     const first = await large(queue, 'Собрать страницу «О нас»', '720.00')
     expect(first.reserved).toEqual({ tariff: 1, gift: 0, pack: 0 })
     expect(first.charged.from).toEqual({ tariff: 120, gift: 0, pack: 0 })
-    const next = await large(queue, 'Добавить форму заявки', '480.00')
+    const next = await large(queue, 'Добавить форму заявки', '780.00')
     expect(next.reserved).toEqual({ tariff: 1, gift: 0, pack: 0 })
-    expect(next.charged.from).toEqual({ tariff: 30, gift: 50, pack: 0 })
+    expect(next.charged.from).toEqual({ tariff: 80, gift: 50, pack: 0 })
     expect(await queue.stored()).toEqual({
       tariff: { balance: 0, held: 0, left: 0 },
       gift: { balance: 0, held: 0, left: 0 },
@@ -429,26 +429,26 @@ test('the credits of a tariff run out: «Лимиты закончились», 
     await expect(leftHeadlineOf(creditsSection)).toHaveText(leftHeadline(0))
     await expect(
       creditsSection.getByRole('img', {
-        name: 'Из 150 кредитов по тарифу: 150 списано, 0 отложено под задачи в работе, 0 осталось',
+        name: 'Из 200 кредитов по тарифу: 200 списано, 0 отложено под задачи в работе, 0 осталось',
       }),
     ).toBeVisible()
     // A gift that is used up is not shown as an account with nothing on it.
     await expect(creditsSection.getByRole('heading', { level: 3 })).toHaveText([
-      /^По тарифу\s—\s0\sиз\s150$/,
+      /^По тарифу\s—\s0\sиз\s200$/,
       /^Из пакета\s—\s0$/,
     ])
-    // The day: today took all 150 of the tariff, and no daily limit stands beside them.
+    // The day: today took all 200 of the tariff, and no daily limit stands beside them.
     const limits = section(page, 'Лимиты тарифа')
-    await expect(limits).toContainText(/Сегодня\s*150\s+кредитов/)
+    await expect(limits).toContainText(/Сегодня\s*200\s+кредитов/)
     await expect(limits).toContainText(said(NO_DAILY_LIMIT))
     await expect(limits).not.toContainText('Сегодня можно потратить')
     await expect(limits.getByRole('img', { name: /^Сегодня/ })).toHaveCount(0)
-    // All 200 credits went to the one site; the last task took them from two accounts.
+    // All 250 credits went to the one site; the last task took them from two accounts.
     await expect(section(page, 'По проектам').getByRole('listitem')).toHaveText([
-      said(`Кофейня200 кредитов`),
+      said(`Кофейня250 кредитов`),
     ])
     await expect(historyLines(page)).toHaveText([
-      said(`Добавить форму заявкиКофейня${credits(80)}30 по тарифу и 50 подарочных`),
+      said(`Добавить форму заявкиКофейня${credits(130)}80 по тарифу и 50 подарочных`),
       said(`Собрать страницу «О нас»Кофейня${credits(120)}`),
     ])
   })
@@ -479,7 +479,7 @@ test('the credits of a tariff run out: «Лимиты закончились», 
     // Nothing stands in the way of a task any more.
     await expect(notice).toHaveCount(0)
     await expect(creditsSection.getByRole('heading', { level: 3 })).toHaveText([
-      /^По тарифу\s—\s0\sиз\s150$/,
+      /^По тарифу\s—\s0\sиз\s200$/,
       /^Из пакета\s—\s100$/,
     ])
     await expect(creditsSection).toContainText(
@@ -505,8 +505,8 @@ test('the credits of a tariff run out: «Лимиты закончились», 
     await expect(historyLines(page).first()).toHaveText(
       said(`Добавить баннер акцииКофейня${credits(17)}`),
     )
-    // Work paid by the pack is not work of the tariff: today's 150 stay as they were.
-    await expect(section(page, 'Лимиты тарифа')).toContainText(/Сегодня\s*150\s+кредитов/)
+    // Work paid by the pack is not work of the tariff: today's 200 stay as they were.
+    await expect(section(page, 'Лимиты тарифа')).toContainText(/Сегодня\s*200\s+кредитов/)
   })
 })
 
@@ -525,7 +525,7 @@ test('a task takes the gift before the pack, and a pack carries tasks after the 
     await fake('settle', {})
     await queue.site('Кофейня')
     const stored = await queue.stored()
-    expect([stored.tariff.left, stored.gift.left, stored.pack.left]).toEqual([150, 50, 100])
+    expect([stored.tariff.left, stored.gift.left, stored.pack.left]).toEqual([200, 50, 100])
     // The fixture ends a tariff by its row alone: with credits on the tariff account it would
     // leave what the product never does, and it refuses.
     await expect(queue.tariffEnded()).rejects.toThrow(/does not expire a remainder/)
@@ -533,9 +533,9 @@ test('a task takes the gift before the pack, and a pack carries tasks after the 
   })
 
   await test.step('a large task sets aside one credit of the tariff, and the tariff pays it', async () => {
-    const about = await large(queue, 'Собрать страницу «О нас»', '600.00')
+    const about = await large(queue, 'Собрать страницу «О нас»', '900.00')
     expect(about.reserved).toEqual({ tariff: 1, gift: 0, pack: 0 })
-    expect(about.charged.from).toEqual({ tariff: 100, gift: 0, pack: 0 })
+    expect(about.charged.from).toEqual({ tariff: 150, gift: 0, pack: 0 })
     const stored = await queue.stored()
     expect([stored.tariff.left, stored.gift.left, stored.pack.left]).toEqual([50, 50, 100])
   })
@@ -570,7 +570,7 @@ test('a task takes the gift before the pack, and a pack carries tasks after the 
     await expect(leftHeadlineOf(creditsSection)).toHaveText(leftHeadline(totalLeft(stored)), SLOW)
     // The accounts stand in the order their credits are spent in.
     await expect(creditsSection.getByRole('heading', { level: 3 })).toHaveText([
-      /^По тарифу\s—\s0\sиз\s150$/,
+      /^По тарифу\s—\s0\sиз\s200$/,
       /^Подарочные\s—\s20$/,
       /^Из пакета\s—\s100$/,
     ])
@@ -606,8 +606,11 @@ test('a task takes the gift before the pack, and a pack carries tasks after the 
       'href',
       '/settings/plans',
     )
-    // Nothing is measured without a tariff, and the history is whole.
-    await expect(page.getByRole('main').getByRole('img')).toHaveCount(0)
+    // No credits are measured without a tariff, and the history is whole: the only meter is that
+    // of the week of the work, which a workspace has without a tariff too (plan 71; no window of
+    // 5 hours since weekly_limits_only).
+    await expect(page.getByRole('main').getByRole('img')).toHaveCount(1)
+    await expect(section(page, 'Лимиты').getByRole('img')).toHaveCount(1)
     await expect(historyLines(page)).toHaveCount(3)
 
     await page.goto('/settings/plans')
