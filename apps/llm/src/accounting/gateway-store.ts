@@ -1,9 +1,18 @@
 import { isIP } from 'node:net'
 
-import { Prisma, type PrismaClient } from '@repo/db'
+import {
+  lockUsageWindows,
+  openReservedWindowCredits,
+  openUsageWindows,
+  Prisma,
+  workspaceUsageTerms,
+  workspaceWindowUsage,
+  type PrismaClient,
+} from '@repo/db'
 import {
   callFitsBudget,
   callReserveRub,
+  windowAdmitsCall,
   estimatedCacheReadTokens,
   gatewayRefusalSchema,
   llmBackendIdSchema,
@@ -13,6 +22,7 @@ import {
   type LlmCapacity,
 } from '@repo/domain'
 import {
+  callPlanCredits,
   decodeLimitWindows,
   gatewayTransaction,
   lastCompletedUsage,
@@ -125,6 +135,7 @@ export class PostgresGatewayStore implements GatewayStore {
   readonly #maxCallsPerKey30s: number | null
   readonly #maxCallsPerKey: number | null
   readonly #ledger: LlmCallLedger
+  readonly #onWindowRefusal: ((refusal: { tier: string; window: string }) => void) | undefined
 
   private readonly db: Database
 
@@ -137,9 +148,12 @@ export class PostgresGatewayStore implements GatewayStore {
       maxCallsPerKey?: number | null
       lostAfterMs?: number
       logger?: { warn(message: string): void }
+      /** Counts a refusal by a window of a workspace (a metric without ids). */
+      onWindowRefusal?: (refusal: { tier: string; window: string }) => void
     } = {},
   ) {
     this.db = db
+    this.#onWindowRefusal = options.onWindowRefusal
     this.#maxRequestsPerKey = z
       .number()
       .int()
@@ -176,6 +190,14 @@ export class PostgresGatewayStore implements GatewayStore {
   async admit(input: GatewayAdmitInput): Promise<GatewayAdmission> {
     const value = admitSchema.parse(input)
     return gatewayTransaction(this.db, async (tx) => {
+      // The windows of the workspace first (plan 70; docs/spec.md §9): its advisory lock comes
+      // before the key, the account and the call, and no holder of a billing lock waits for it.
+      // The workspace of a key never changes, so it is read before any lock.
+      const [owner] = await tx.$queryRaw<{ workspaceId: string; billable: boolean }[]>`
+        SELECT t.workspace_id AS "workspaceId", t.billable FROM llm_keys k
+        JOIN tasks t ON t.id = k.task_id WHERE k.key_hash = ${value.keyHash}`
+      if (!owner) return { kind: 'refused', reason: 'unauthorized' }
+      await lockUsageWindows(tx, owner.workspaceId)
       const locked = await tx.$queryRaw<{ id: string; accountId: string }[]>`
         SELECT id, subscription_account_id AS "accountId" FROM llm_keys
         WHERE key_hash = ${value.keyHash} FOR UPDATE`
@@ -261,6 +283,35 @@ export class PostgresGatewayStore implements GatewayStore {
         return { ...refused, probeAccount: true, limitsSeenAt: row.limitsSeenAt }
       }
       if (blocked) return this.#refused(tx, row.keyId, blocked)
+      // The windows of 5 hours and of the week of the workspace (Л1, Л6): a call is admitted
+      // while what the window took, with the reserves of the open calls, is below its limit; the
+      // last one may take it over by itself. A task that is not billable is not counted (Л7).
+      if (owner.billable) {
+        const terms = await workspaceUsageTerms(tx, owner.workspaceId)
+        const [windows, openReserved] = await Promise.all([
+          workspaceWindowUsage(tx, {
+            workspaceId: owner.workspaceId,
+            now: row.serverNow,
+            limits: terms.limits,
+          }),
+          openReservedWindowCredits(tx, { workspaceId: owner.workspaceId, now: row.serverNow }),
+        ])
+        const spent = windows.find(
+          (window) =>
+            !windowAdmitsCall({
+              limit: window.limit,
+              usedCredits: window.used,
+              openReservedCredits: openReserved,
+            }),
+        )
+        if (spent) {
+          this.#onWindowRefusal?.({ tier: terms.tier, window: spent.kind })
+          return {
+            ...(await this.#refused(tx, row.keyId, 'workspace_limit')),
+            window: { kind: spent.kind, resetsAt: spent.resetsAt },
+          }
+        }
+      }
       const accountOpen = await tx.llmCall.count({
         where: { subscriptionAccountId: row.accountId, state: 'open' },
       })
@@ -280,6 +331,21 @@ export class PostgresGatewayStore implements GatewayStore {
           data: { breakerOpenUntil: new Date(finalClock!.instant.getTime() + USAGE_BREAKER_MS) },
         })
       }
+      // The first admitted call opens the windows of the workspace that are not open (Л3).
+      if (owner.billable)
+        await openUsageWindows(tx, { workspaceId: owner.workspaceId, now: row.serverNow })
+      const cacheRead = estimatedCacheReadTokens(estimate, rates)
+      const reservedPlanCredits = await callPlanCredits(tx, {
+        providerId: row.providerId,
+        model: row.model,
+        at: row.serverNow,
+        tokens: {
+          inputUncachedTokens: Math.max(0, value.estimatedInputTokens - cacheRead),
+          cacheReadTokens: cacheRead,
+          cacheWriteTokens: 0,
+          outputTokens: row.reserveOutputTokens,
+        },
+      })
       const call = await tx.llmCall.create({
         data: {
           keyId: row.keyId,
@@ -287,6 +353,7 @@ export class PostgresGatewayStore implements GatewayStore {
           modelId: row.modelId,
           route: value.route.path,
           reservedRub,
+          reservedPlanCredits,
           requestBytes: value.requestBytes,
           estimatedInputTokens: value.estimatedInputTokens,
           startedAt: row.serverNow,

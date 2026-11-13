@@ -4,7 +4,7 @@ import { badRequest } from '../errors.ts'
 import { decimalStringSchema, Money } from '../money.ts'
 
 // The windows of a workspace: how many credits its work may take in 5 hours and in a week
-// (owner's decision of 11.11.2026, docs/spec.md §20, «Лимиты 5 часов и недели»; plan 69). They
+// (owner's decision of 11.11.2026, docs/spec.md §20, «Лимиты 5 часов и недели»; plan 70). They
 // share the power of the agent between the customers; the credits themselves do not burn by them.
 // A window starts with the first call of the workspace when none of its kind is open and lasts
 // its length, as the windows of GLM Coding Plan do (Л3).

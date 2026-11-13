@@ -19,6 +19,7 @@ import {
   policyFlaggedEvent,
   type GatewayFinish,
 } from './gateway-types.ts'
+import { callPlanCredits } from './plan-rates.ts'
 
 type Transaction = Prisma.TransactionClient
 type Database = Pick<PrismaClient, '$transaction' | '$queryRaw'>
@@ -230,6 +231,20 @@ export class LlmCallLedger {
         },
       })
       if (updated.count !== 1) return false
+      const inputUncachedTokens = value.usage.input - value.usage.cacheRead - value.usage.cacheWrite
+      // What the call took of the windows of the plan (plan 70): an estimate for an estimated
+      // call, as its cost is; NULL where the provider has no plan rates.
+      const planCredits = await callPlanCredits(tx, {
+        providerId: call.model.providerId,
+        model: call.model.providerModelId,
+        at: call.startedAt,
+        tokens: {
+          inputUncachedTokens,
+          cacheReadTokens: value.usage.cacheRead,
+          cacheWriteTokens: value.usage.cacheWrite,
+          outputTokens: value.usage.output,
+        },
+      })
       await tx.tokenUsage.create({
         data: {
           gatewayCallId: callId,
@@ -240,7 +255,7 @@ export class LlmCallLedger {
           driverId: call.key.driverId,
           modelId: call.modelId,
           priceId: price.id,
-          inputUncachedTokens: value.usage.input - value.usage.cacheRead - value.usage.cacheWrite,
+          inputUncachedTokens,
           cacheReadTokens: value.usage.cacheRead,
           cacheWriteTokens: value.usage.cacheWrite,
           outputTokens: value.usage.output,
@@ -249,6 +264,7 @@ export class LlmCallLedger {
           estimated: value.estimated,
           billable: value.billable,
           estimateReason: value.estimateReason,
+          planCredits,
           occurredAt: call.startedAt,
         },
       })

@@ -5,7 +5,7 @@ import { decimalStringSchema, Money } from '../money.ts'
 import type { LimitWindow } from '../ports/llm-backend.ts'
 
 // The credits of a subscription plan of a model provider (GLM Coding Plan on Z.ai): what a call
-// takes from the windows of the account it went through (docs/plan/69-usage-limits.md, §2.1).
+// takes from the windows of the account it went through (docs/plan/70-usage-limits.md, §2.1).
 // They are the provider's unit, not the customer's credit (CLAUDE.md, «Слова»: «кредиты плана»).
 // The multipliers and the peak are data — rows of `llm_plan_rates` an operator approves —, never
 // code: the provider changes them, and a row is added with its moment.

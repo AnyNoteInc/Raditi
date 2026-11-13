@@ -978,7 +978,7 @@ describe('poolWaitIsLimitsOut: a wait that is no wait', () => {
   })
 })
 
-// Pool v2 (plan 69, §2.3): absolute plan credits, the reserve of the tiers, the pace of the week.
+// Pool v2 (plan 70, §2.3): absolute plan credits, the reserve of the tiers, the pace of the week.
 describe('pickAccount in absolute plan credits', () => {
   const credits = (
     name: '5h' | 'week',

@@ -96,6 +96,8 @@ export interface LlmGatewayOptions {
   health?: () => Promise<boolean>
   metricsToken?: string
   lifecycle?: GatewayLifecycle
+  /** The metrics of the windows of the pool and of workspaces (plan 70), on this registry. */
+  usageMetrics?: { register(registry: Registry): void }
 }
 
 class Rejected extends Error {
@@ -331,6 +333,7 @@ export class LlmGateway {
         this.set(active())
       },
     })
+    options.usageMetrics?.register(this.#registry)
     for (const client of options.config.clients)
       this.#clients.addSubnet(client.address, client.prefix, client.family)
     for (const backend of options.backends)

@@ -2,7 +2,8 @@ import { Module, type Logger } from '@nestjs/common'
 import type { LlmBackend } from '@repo/domain'
 
 import { AccountingModule } from '../accounting/accounting.module.ts'
-import { GATEWAY_STORE } from '../accounting/accounting.tokens.ts'
+import { GATEWAY_STORE, USAGE_METRICS } from '../accounting/accounting.tokens.ts'
+import type { UsageMetrics } from '../accounting/usage-metrics.ts'
 import type { GatewayStore } from '../accounting/gateway-types.ts'
 import type { LlmRoleConfig } from '../config/config.ts'
 import { LLM_CONFIG } from '../config/config.module.ts'
@@ -41,6 +42,7 @@ import { createLlmGateway } from './server.ts'
         pool: SubscriptionPoolHealth,
         readiness: GatewayReadiness,
         logger: Logger,
+        usage: UsageMetrics,
       ) =>
         createLlmGateway({
           config,
@@ -63,6 +65,7 @@ import { createLlmGateway } from './server.ts'
             },
           },
           metricsToken: config.metricsToken,
+          usageMetrics: usage,
           ready: () => readiness.ready(),
           health: () => readiness.health(),
           logger,
@@ -76,6 +79,7 @@ import { createLlmGateway } from './server.ts'
         SubscriptionPoolHealth,
         GatewayReadiness,
         LLM_LOGGER,
+        USAGE_METRICS,
       ],
     },
     LlmRuntime,

@@ -571,6 +571,124 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     await admitted(waitingKey.input)
   })
 
+  // The windows of a workspace (docs/plan/70-usage-limits.md, §2.2; scenarios 1 and 6): a credit
+  // rate of 6 ₽ is written for these cases and removed after them — the rate belongs to the whole
+  // database, which is why the suite runs on a disposable one only.
+  describe('the windows of 5 hours and of the week of a workspace', () => {
+    let rateId: string | null = null
+    let planRateId: string | null = null
+    beforeAll(async () => {
+      rateId = (
+        await db.creditRate.create({
+          data: {
+            effectiveFrom: new Date(Date.now() - 7_200_000),
+            rubPerCredit: '6',
+            basis: 'gateway-store windows',
+          },
+        })
+      ).id
+      planRateId = (
+        await db.llmPlanRate.create({
+          data: {
+            providerId: provider.id,
+            model: 'synthetic-model',
+            effectiveFrom: new Date(Date.now() - 7_200_000),
+            inputUncachedPer10k: '6.9',
+            cacheReadPer10k: '1.7',
+            outputPer10k: '24',
+            offPeakShare: '0.5',
+            // Every hour of every day is the peak here: the count does not depend on the clock.
+            peak: { timeZone: 'UTC', days: [1, 2, 3, 4, 5, 6, 7], fromHour: 0, toHour: 24 },
+            sourceUrl: 'https://rates.invalid/plan',
+          },
+        })
+      ).id
+    })
+    afterAll(async () => {
+      if (rateId) await db.creditRate.delete({ where: { id: rateId } })
+      if (planRateId) await db.llmPlanRate.delete({ where: { id: planRateId } })
+    })
+
+    /** A call of 1 000 000 uncached input tokens: 100 ₽, 16.7 credits — past the 15 of no tariff. */
+    const heavy = (): GatewayFinish => ({
+      ...actual(),
+      usage: { input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 },
+    })
+
+    it('opens the windows with the first call and counts plan credits of the reserve and of the call', async () => {
+      const f = await fixture({ budget: '500' })
+      const k = await f.key()
+      const call = await admitted(k.input)
+      const windows = await db.workspaceUsageWindow.findMany({
+        where: { workspaceId: f.task.workspaceId },
+        orderBy: { kind: 'asc' },
+      })
+      expect(windows.map((window) => window.kind)).toEqual(['5h', 'week'])
+      expect(windows[0]!.endsAt.getTime() - windows[0]!.startedAt.getTime()).toBe(5 * 3_600_000)
+      const open = await db.llmCall.findUniqueOrThrow({ where: { id: call.id } })
+      expect(open.reservedPlanCredits).not.toBeNull()
+      expect(await store.finish(call.id, actual())).toBe(true)
+      const usage = await db.tokenUsage.findUniqueOrThrow({ where: { gatewayCallId: call.id } })
+      // (700 + 100 cache writes) × 6.9 + 200 × 1.7 + 50 × 24, / 10 000
+      expect(usage.planCredits?.toFixed(4)).toBe('0.7060')
+    })
+
+    it('refuses the next call of a spent window with its reset, and another workspace goes on (scenario 1)', async () => {
+      const f = await fixture({ budget: '500' })
+      const k = await f.key()
+      const call = await admitted(k.input)
+      expect(await store.finish(call.id, heavy())).toBe(true)
+      const refused = await store.admit(k.input)
+      expect(refused).toMatchObject({ kind: 'refused', reason: 'workspace_limit' })
+      if (refused.kind !== 'refused') throw new Error('The window should refuse')
+      expect(refused.window?.kind).toBe('5h')
+      expect(refused.window?.resetsAt).toBeInstanceOf(Date)
+      const key = await db.llmKey.findUniqueOrThrow({ where: { id: k.row.id } })
+      expect(key.lastRefusal).toBe('workspace_limit')
+      // The other workspace, on the same account, is not touched.
+      const other = await fixture({ budget: '500' })
+      await admitted((await other.key()).input)
+    })
+
+    it('counts nothing of a task that is not billable, nor a call the platform failed (Л7)', async () => {
+      const f = await fixture({ budget: '500' })
+      const k = await f.key()
+      const call = await admitted(k.input)
+      expect(
+        await store.finish(call.id, {
+          ...heavy(),
+          state: 'aborted',
+          estimated: true,
+          billable: false,
+          estimateReason: 'aborted_platform',
+        }),
+      ).toBe(true)
+      await admitted(k.input)
+      const spent = await fixture({ budget: '500' })
+      const first = await spent.key()
+      const paid = await admitted(first.input)
+      expect(await store.finish(paid.id, heavy())).toBe(true)
+      await db.task.update({ where: { id: spent.task.id }, data: { billable: false } })
+      await admitted(first.input)
+    })
+
+    it('admits the last call below the limit and refuses one more: one call over at most (Л6)', async () => {
+      const f = await fixture({ budget: '500' })
+      const k = await f.key()
+      // 14 credits: below the limit of 15, so one more call goes, whatever it costs.
+      const call = await admitted(k.input)
+      expect(
+        await store.finish(call.id, {
+          ...actual(),
+          usage: { input: 840_000, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 },
+        }),
+      ).toBe(true)
+      const last = await admitted(k.input)
+      expect(await store.finish(last.id, heavy())).toBe(true)
+      expect(await store.admit(k.input)).toMatchObject({ reason: 'workspace_limit' })
+    })
+  })
+
   it('reserves atomically, then replaces the reserve with exact spent cost', async () => {
     const f = await fixture({ budget: '0.3' })
     const k = await f.key()

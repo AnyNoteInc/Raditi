@@ -541,7 +541,7 @@ export const feedFailurePayloadSchema = z.strictObject({
   objects,
   /**
    * Only with `usage_limit`: the window of the workspace that stopped the pass and its reset
-   * (plan 69), so the row says when the work goes on.
+   * (plan 70), so the row says when the work goes on.
    */
   window: z.strictObject({ kind: z.enum(['5h', 'week']), resetsAt: z.iso.datetime() }).optional(),
 })

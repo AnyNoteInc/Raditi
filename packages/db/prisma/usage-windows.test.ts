@@ -1,4 +1,4 @@
-// The windows of 5 hours and of the week in the database (docs/plan/69-usage-limits.md, §2.2):
+// The windows of 5 hours and of the week in the database (docs/plan/70-usage-limits.md, §2.2):
 // the migration usage_windows gives the three tariffs their windows and their turns at once, the
 // checks of the new columns and tables hold, the seed agrees with the migration, and two first
 // calls of a workspace at once open one window of each kind. The sums of a window over the calls

@@ -206,7 +206,7 @@ export const billingDailyLimitReached = (details?: TaskRefusalDetails): DomainEr
     details,
   )
 /**
- * A window of 5 hours or of the week of the workspace is spent (plan 69): credits do not lift
+ * A window of 5 hours or of the week of the workspace is spent (plan 70): credits do not lift
  * it, its reset does.
  */
 export const billingWindowLimitReached = (details?: TaskRefusalDetails): DomainError =>

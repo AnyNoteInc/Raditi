@@ -1,6 +1,9 @@
 import type { Prisma, PrismaClient } from '@repo/db'
 import {
+  absoluteWindow,
+  forecastErrorRatio,
   limitResetPlausible,
+  nominalWindowCredits,
   llmBackendIdSchema,
   probeResultSchema,
   type LimitWindow,
@@ -94,14 +97,38 @@ function mergeConcurrentWindows(
       ...next,
       usedPct: Math.max(previous.usedPct, next.usedPct),
       resetsAt: previous.resetsAt ?? next.resetsAt,
+      // The larger use in credits too, as the share above (plan 70).
+      ...(next.usedCredits === undefined
+        ? {}
+        : { usedCredits: Math.max(next.usedCredits, previous.usedCredits ?? 0) }),
     })
   }
   return [...merged.values()]
 }
 
+/**
+ * What an applied probe tells the operator (plan 70, §4.4): each window in plan credits, how far
+ * the forecast it replaced missed, and whether the size differs from the plan's published one.
+ */
+export interface ProbeObserver {
+  window(input: {
+    backend: string
+    account: string
+    plan: string
+    window: '5h' | 'week'
+    used: number
+    limit: number
+    forecastError: number | null
+    nominalMismatch: boolean
+  }): void
+}
+
 /** Small, bounded transactions; no subscription secret or network operation enters SQL. */
 export class PostgresPoolHealthStore implements PoolHealthStore {
-  constructor(private readonly prisma: Database) {}
+  constructor(
+    private readonly prisma: Database,
+    private readonly observer?: ProbeObserver,
+  ) {}
 
   #transaction<T>(operation: (tx: Transaction) => Promise<T>): Promise<T> {
     return this.prisma.$transaction(
@@ -164,6 +191,7 @@ export class PostgresPoolHealthStore implements PoolHealthStore {
               ? result.windows
               : mergeConcurrentWindows(account.limitWindows, result.windows, snapshot.windowsKnown)
         if (windows !== null) {
+          await this.#observe(tx, account, snapshot.backendId, windows)
           Object.assign(data, limitWindowColumns(windows, now))
           limitsSeenAt = now
           const exhausted = windows.filter((window) => window.usedPct >= 100)
@@ -202,6 +230,67 @@ export class PostgresPoolHealthStore implements PoolHealthStore {
         await tx.subscriptionAccount.update({ where: { id: snapshot.accountId }, data })
       return { applied: true, alert, limitsSeenAt }
     })
+  }
+
+  /**
+   * The forecast the probe replaces: the windows of the last probe in credits plus the plan
+   * credits of the calls of the account since, open ones by their reserve (accountWindowForecast).
+   */
+  async #observe(
+    tx: Transaction,
+    account: {
+      id: string
+      label: string
+      plan: string
+      limitWindows: unknown
+      limitsSeenAt: Date | null
+    },
+    backend: string,
+    windows: readonly LimitWindow[],
+  ): Promise<void> {
+    if (!this.observer) return
+    const previous = decodeLimitWindows(account.limitWindows) ?? []
+    let added = 0
+    if (account.limitsSeenAt !== null) {
+      const [sums] = await tx.$queryRaw<{ closed: string; open: string }[]>`
+        SELECT
+          COALESCE((SELECT SUM(u.plan_credits) FROM token_usage u
+            WHERE u.subscription_account_id = ${account.id}::uuid
+              AND u.occurred_at >= ${account.limitsSeenAt}), 0)::text AS closed,
+          COALESCE((SELECT SUM(c.reserved_plan_credits) FROM llm_calls c
+            WHERE c.subscription_account_id = ${account.id}::uuid AND c.state = 'open'), 0)::text AS open`
+      added = Number(sums?.closed ?? 0) + Number(sums?.open ?? 0)
+    }
+    for (const window of windows) {
+      if (window.name === 'month') continue
+      const absolute = absoluteWindow(window, account.plan)
+      if (absolute === null) continue
+      const before = previous.find((item) => item.name === window.name)
+      const beforeAbsolute = before ? absoluteWindow(before, account.plan) : null
+      // Only a forecast of the same period is compared: a reset in between restarts the count.
+      const samePeriod =
+        before !== undefined &&
+        beforeAbsolute !== null &&
+        before.resetsAt?.getTime() === window.resetsAt?.getTime()
+      const nominal = nominalWindowCredits(account.plan, window.name)
+      this.observer.window({
+        backend,
+        account: account.label,
+        plan: account.plan,
+        window: window.name,
+        used: absolute.usedCredits,
+        limit: absolute.limitCredits,
+        forecastError: samePeriod
+          ? forecastErrorRatio(
+              beforeAbsolute.usedCredits + added,
+              absolute.usedCredits,
+              absolute.limitCredits,
+            )
+          : null,
+        nominalMismatch:
+          nominal !== null && window.limitCredits !== undefined && window.limitCredits !== nominal,
+      })
+    }
   }
 
   cool(accountId: string, until: Date | null, window?: LimitWindow['name']): Promise<void> {

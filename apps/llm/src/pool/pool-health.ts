@@ -17,6 +17,7 @@ import {
   PostgresPoolHealthStore,
   type PoolHealthStore,
 } from './pool-health-store.ts'
+import type { UsageMetrics } from '../accounting/usage-metrics.ts'
 
 const probeIntervalMs = 5 * 60_000
 // A turn held for unknown windows retries every 30 s: a probe that left them unknown, or
@@ -67,6 +68,8 @@ export interface SubscriptionPoolHealthOptions {
   channelHealthy: () => boolean
   onRegion: (accountId: string) => void
   logger?: { warn(message: string): void }
+  /** The metrics of the windows of the pool (plan 70); none in tests that do not ask. */
+  usage?: UsageMetrics
   /** In-memory clock only; durable facts and decisions use PostgreSQL's clock. */
   now?: () => number
   store?: PoolHealthStore
@@ -95,7 +98,27 @@ export class SubscriptionPoolHealth {
   #closing = false
 
   constructor(private readonly options: SubscriptionPoolHealthOptions) {
-    this.#store = options.store ?? new PostgresPoolHealthStore(options.prisma)
+    this.#store =
+      options.store ??
+      new PostgresPoolHealthStore(options.prisma, {
+        window: (window) => {
+          const usage = options.usage
+          usage?.account(window)
+          if (window.forecastError !== null) usage?.forecastError(window.forecastError)
+          if (window.nominalMismatch) {
+            usage?.nominalMismatch()
+            this.options.logger?.warn(
+              JSON.stringify({
+                event: 'llm_plan_window_mismatch',
+                account: window.account,
+                plan: window.plan,
+                window: window.window,
+                limit: window.limit,
+              }),
+            )
+          }
+        },
+      })
     this.#backends = new Map(options.backends.map((backend) => [backend.id, backend]))
     this.#now = options.now ?? Date.now
   }

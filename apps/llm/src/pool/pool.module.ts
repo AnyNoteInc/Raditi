@@ -3,6 +3,9 @@ import type { PrismaClient } from '@repo/db'
 import type { EgressHttp, LlmBackend, SecretStore } from '@repo/domain'
 import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
 
+import { USAGE_METRICS } from '../accounting/accounting.tokens.ts'
+import { AccountingModule } from '../accounting/accounting.module.ts'
+import type { UsageMetrics } from '../accounting/usage-metrics.ts'
 import { EgressHealth } from '../egress/egress-probe.ts'
 import { EgressModule } from '../egress/egress.module.ts'
 import { CONTROL_HTTP, REGION_HTTP } from '../egress/egress.tokens.ts'
@@ -13,7 +16,7 @@ import { CREDENTIAL_SOURCE } from './pool.tokens.ts'
 
 /** The accounts of the pool: their keys and their health, probed through the gates of egress. */
 @Module({
-  imports: [EgressModule],
+  imports: [EgressModule, AccountingModule],
   providers: [
     {
       provide: CREDENTIAL_SOURCE,
@@ -30,6 +33,7 @@ import { CREDENTIAL_SOURCE } from './pool.tokens.ts'
         regionHttp: EgressHttp,
         channel: EgressHealth,
         logger: Logger,
+        usage: UsageMetrics,
       ) =>
         new SubscriptionPoolHealth({
           prisma,
@@ -40,6 +44,7 @@ import { CREDENTIAL_SOURCE } from './pool.tokens.ts'
           channelHealthy: () => channel.healthy(),
           onRegion: (accountId) => channel.blockRegion(accountId),
           logger,
+          usage,
         }),
       inject: [
         PRISMA,
@@ -49,6 +54,7 @@ import { CREDENTIAL_SOURCE } from './pool.tokens.ts'
         REGION_HTTP,
         EgressHealth,
         LLM_LOGGER,
+        USAGE_METRICS,
       ],
     },
   ],

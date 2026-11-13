@@ -859,7 +859,7 @@ export interface NewTaskInput {
   debt?: Credits
   /**
    * The windows of 5 hours and of the week of the workspace (`workspaceWindowUsage` of @repo/db
-   * with the limits of its tariff, plan 69): every placement is bounded by them, a retry too
+   * with the limits of its tariff, plan 70): every placement is bounded by them, a retry too
    * (Л5). None when left out.
    */
   windows?: UsageWindowState[]
@@ -954,7 +954,7 @@ export type NewTaskVerdict = {
  *    pack bought today lifts it. A retry is never refused by the day (`placementTariffRoom`);
  * 4. the windows of the workspace, for every placement, a retry too (Л5): a window of 5 hours or
  *    of the week has less room than the placement needs — `window_limit`. Credits do not lift
- *    it; the reset does (owner's decision of 11.11.2026, plan 69).
+ *    it; the reset does (owner's decision of 11.11.2026, plan 70).
  *
  * Nothing else is asked (owner's decision of 10.11.2026: «зависимость только от кредитов»): no
  * bound on unpaid work and no rule of one gift per site. A continuation is refused by the day

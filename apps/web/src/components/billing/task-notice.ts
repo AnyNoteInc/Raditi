@@ -276,7 +276,7 @@ export function taskNotice(input: TaskNoticeInput): TaskNotice | null {
 }
 
 /**
- * A window of 5 hours or of the week is spent (plan 69): credits do not lift it, the reset does,
+ * A window of 5 hours or of the week is spent (plan 70): credits do not lift it, the reset does,
  * and a bigger tariff has bigger windows.
  */
 function windowTaken(input: TaskNoticeInput): TaskNotice {

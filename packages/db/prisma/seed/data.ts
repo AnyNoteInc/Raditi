@@ -35,7 +35,7 @@ export interface PlanSeed {
   creditsPerDay: number | null
   /**
    * Credits the work of a workspace may take in 5 hours and in a week, and how many of its turns
-   * run at once (plan 69, Л4, Л10); NULL on a pack and on pay-per-action, which tier nobody.
+   * run at once (plan 70, Л4, Л10); NULL on a pack and on pay-per-action, which tier nobody.
    */
   creditsPer5h: number | null
   creditsPerWeek: number | null

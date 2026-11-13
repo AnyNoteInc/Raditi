@@ -1,5 +1,5 @@
 -- The windows of 5 hours and of the week (owner's decision of 11.11.2026, docs/spec.md §20,
--- «Лимиты 5 часов и недели»; docs/plan/69-usage-limits.md):
+-- «Лимиты 5 часов и недели»; docs/plan/70-usage-limits.md):
 -- - token_usage.plan_credits and llm_calls.reserved_plan_credits: the credits of the provider's
 --   plan a call took and was estimated at — NULL where the provider has no plan rates (zai-api);
 -- - llm_plan_rates: the multipliers and the peak of the plan, rows only added by an operator;

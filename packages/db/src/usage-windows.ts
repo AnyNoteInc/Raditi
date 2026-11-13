@@ -15,7 +15,7 @@ import {
 import type { Prisma } from './generated/prisma/client.ts'
 import { uuidv7 } from './uuidv7.ts'
 
-// The windows of 5 hours and of the week of a workspace in SQL (docs/plan/69-usage-limits.md,
+// The windows of 5 hours and of the week of a workspace in SQL (docs/plan/70-usage-limits.md,
 // §2.2): one place that reads them for the gateway `llm` (admission of a call), `@repo/billing`
 // (a placement and the pages) and core (the pool and the operator) — `llm` may not reach
 // `@repo/billing`, so the queries live here.
