@@ -157,7 +157,7 @@ describe('the status of a payment', () => {
 describe('the note under a saved payment method', () => {
   it('names the day, the amount and the tariff of the next charge', () => {
     expect(plain(methodNote(subscriptionTo(), 'none'))).toBe(
-      '18 октября спишем этим способом 6 990 ₽ за тариф «Бизнес». Если его отвязать, автопродление отключится.',
+      '18 октября спишем этим способом 9 990 ₽ за тариф «Бизнес». Если его отвязать, автопродление отключится.',
     )
   })
 
@@ -449,7 +449,7 @@ describe('the return page of a binding', () => {
   it('names the bound card and what happens to it next', () => {
     expect(boundText(binding()).map(plain)).toEqual([
       'Способ оплаты — Карта «Мир» •• 4444.',
-      '18 октября спишем этим способом 6 990 ₽ за тариф «Бизнес». Если его отвязать, автопродление отключится.',
+      '18 октября спишем этим способом 9 990 ₽ за тариф «Бизнес». Если его отвязать, автопродление отключится.',
     ])
   })
 

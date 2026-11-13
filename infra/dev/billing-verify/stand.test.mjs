@@ -1766,16 +1766,18 @@ test('the operator approves the credit rate in the stand, and only there', () =>
     /\[both\(TAKEN, CREDITS\.gift\), both\(TAKEN, CREDITS\.gift\), both\(TAKEN, ALL\)\],/,
   )
   assert.ok(scenario.includes('const ALL = CREDITS.start + CREDITS.pack + CREDITS.gift'))
-  // At the prices of 06.11.2026 the provisional rate puts more than half of the price of
-  // «Бизнес» and «Агентство» behind their credits: refused without the confirmation, written
-  // with it, and the warning is printed either way.
+  // At the prices of 13.11.2026 the provisional rate puts more than half of the price of every
+  // tariff behind its credits: refused without the confirmation, written with it, and the
+  // warning is printed either way.
   assert.match(
     scenario,
     /'--file',\n\s+file,\n\s+'--confirm-exposure',\n\s+\.\.\.signed\('первый курс'\),/,
   )
   assert.equal(
-    scenario.match(/'Учётная стоимость выше половины цены у тарифов: business, agency\.'/g)?.length,
-    2,
+    scenario.match(/'Учётная стоимость выше половины цены у тарифов: start, business, agency\.'/g)
+      ?.length,
+    // The refusal of 9.00, the refusal of 6.00 and its approval.
+    3,
   )
   assert.doesNotMatch(
     scenarioSource,
@@ -1856,7 +1858,7 @@ test('each rule of expiry of the credits model is a check of a scenario, on the 
   assert.deepEqual(
     [
       journalRow.quota(order),
-      journalRow.quota(order, 600),
+      journalRow.quota(order, 1000),
       journalRow.expired(subscription, end),
       journalRow.carried(subscription, end),
       journalRow.pack(order),
@@ -1864,10 +1866,10 @@ test('each rule of expiry of the credits model is a check of a scenario, on the 
       giftGrant('0199a000-0000-7000-8000-0000000000d4'),
     ],
     [
-      { kind: 'grant', amount: '150.00', key: `order:${order.id}:grant` },
-      { kind: 'grant', amount: '600.00', key: `order:${order.id}:grant` },
-      { kind: 'expire', amount: '-150.00', key: `sub:${subscription.id}:${end.getTime()}:expire` },
-      { kind: 'grant', amount: '150.00', key: `sub:${subscription.id}:${end.getTime()}:carry` },
+      { kind: 'grant', amount: '200.00', key: `order:${order.id}:grant` },
+      { kind: 'grant', amount: '1000.00', key: `order:${order.id}:grant` },
+      { kind: 'expire', amount: '-200.00', key: `sub:${subscription.id}:${end.getTime()}:expire` },
+      { kind: 'grant', amount: '200.00', key: `sub:${subscription.id}:${end.getTime()}:carry` },
       { kind: 'grant', amount: '100.00', key: `order:${order.id}:pack` },
       { kind: 'adjust', amount: '-100.00', key: `order:${order.id}:refund:adjust` },
       {

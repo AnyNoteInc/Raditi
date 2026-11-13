@@ -19,7 +19,8 @@ const money12x2 = /^\d{1,10}\.\d{2}$/
 const markup8x4 = /^\d{1,4}\.\d{4}$/
 
 describe('plans (docs/business.md §6)', () => {
-  // The pricing of 06.11.2026 (docs/plan/63-new-pricing.md, Ц1–Ц6).
+  // The pricing of 06.11.2026 (docs/plan/63-new-pricing.md, Ц1–Ц6) with the credits of
+  // 13.11.2026 (docs/plan/72-pricing-api-margin.md, ЦА1–ЦА4).
   it('match the tariff table exactly', () => {
     expect(planSeeds.map(({ sortOrder: _, ...plan }) => plan)).toEqual([
       {
@@ -27,10 +28,10 @@ describe('plans (docs/business.md §6)', () => {
         name: 'Старт',
         kind: 'quota',
         price: '1990.00',
-        creditsPerMonth: 150,
+        creditsPerMonth: 200,
         creditsPerDay: null,
         creditsPer5h: null,
-        creditsPerWeek: 55,
+        creditsPerWeek: 73,
         packCredits: null,
         maxSites: 1,
       },
@@ -38,11 +39,11 @@ describe('plans (docs/business.md §6)', () => {
         slug: 'business',
         name: 'Бизнес',
         kind: 'quota',
-        price: '6990.00',
-        creditsPerMonth: 600,
+        price: '9990.00',
+        creditsPerMonth: 1000,
         creditsPerDay: null,
         creditsPer5h: null,
-        creditsPerWeek: 210,
+        creditsPerWeek: 350,
         packCredits: null,
         maxSites: 3,
       },

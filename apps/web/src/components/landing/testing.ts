@@ -5,7 +5,7 @@ import type { LandingViewer } from '@/server/landing-viewer'
 
 import type { LandingPricingData } from './pricing-calculator'
 
-// What the tests of the landing share: the plans of the seeds (the terms of 06.11.2026, without a
+// What the tests of the landing share: the plans of the seeds (the terms of 13.11.2026, without a
 // daily limit), the two visitors, the reading of a text with non-breaking spaces, the passing of
 // time and a stub of IntersectionObserver.
 
@@ -15,7 +15,7 @@ export const pricing: LandingPricingData = {
       slug: 'start',
       name: 'Старт',
       price: '1990.00',
-      creditsPerMonth: 150,
+      creditsPerMonth: 200,
       creditsPerDay: null,
       creditsPer5h: null,
       creditsPerWeek: null,
@@ -24,8 +24,8 @@ export const pricing: LandingPricingData = {
     {
       slug: 'business',
       name: 'Бизнес',
-      price: '6990.00',
-      creditsPerMonth: 600,
+      price: '9990.00',
+      creditsPerMonth: 1000,
       creditsPerDay: null,
       creditsPer5h: null,
       creditsPerWeek: null,

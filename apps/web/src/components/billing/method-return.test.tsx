@@ -164,7 +164,7 @@ describe('the return page of a binding that ended', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Карта привязана')
     expect(pageText()).toContain('Способ оплаты — Карта Visa •• 1234.')
     expect(pageText()).toContain(
-      '18 октября спишем этим способом 6 990 ₽ за тариф «Бизнес». Если его отвязать, автопродление отключится.',
+      '18 октября спишем этим способом 9 990 ₽ за тариф «Бизнес». Если его отвязать, автопродление отключится.',
     )
     expect(toBilling('В раздел «Оплата»')).toHaveAttribute('href', '/settings/billing')
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()

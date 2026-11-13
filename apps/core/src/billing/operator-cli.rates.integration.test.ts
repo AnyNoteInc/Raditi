@@ -48,9 +48,10 @@ describe.skipIf(!enabled)('billing:rates with PostgreSQL', () => {
     expect(await db.creditRate.count()).toBe(0)
   })
 
-  // The tariffs of the seed since 06.11.2026 (docs/plan/63-new-pricing.md, Ц1–Ц3): at 6.00 the
-  // credits of «Бизнес» and «Агентство» cost 51.5 and 60.0% of their price, so every rate of 6.00
-  // and more asks for --confirm-exposure; the cases that are not about it give it.
+  // The tariffs of the seed since 13.11.2026 (docs/plan/72-pricing-api-margin.md, ЦА1–ЦА3): at
+  // 6.00 the credits of «Старт», «Бизнес» and «Агентство» cost 60.3, 60.1 and 60.0% of their
+  // price, so every rate of 6.00 and more asks for --confirm-exposure; the cases that are not
+  // about it give it.
   const CONFIRM = '--confirm-exposure'
   afterEach(async () => {
     await db.creditRate.deleteMany({ where: { basis: { startsWith: mark } } })
@@ -210,12 +211,14 @@ describe.skipIf(!enabled)('billing:rates with PostgreSQL', () => {
       'На момент начала действующего курса нет. Новый курс — 6.000000 ₽ учётной стоимости за кредит.',
     ])
     expect(lines[3]).toContain(at)
-    // The plans of the seed at their shares, and the two above half of their price.
-    expect(lines).toContain('  start (тариф): 150 кредитов — 900.00 ₽, 45.2 % цены 1990.00 ₽')
-    expect(lines).toContain('  business (тариф): 600 кредитов — 3600.00 ₽, 51.5 % цены 6990.00 ₽')
+    // The plans of the seed at their shares, and the three above half of their price.
+    expect(lines).toContain('  start (тариф): 200 кредитов — 1200.00 ₽, 60.3 % цены 1990.00 ₽')
+    expect(lines).toContain('  business (тариф): 1000 кредитов — 6000.00 ₽, 60.1 % цены 9990.00 ₽')
     expect(lines).toContain('  agency (тариф): 2000 кредитов — 12000.00 ₽, 60.0 % цены 19990.00 ₽')
     expect(lines).toContain('  pack (пакет): 100 кредитов — 600.00 ₽, 40.3 % цены 1490.00 ₽')
-    expect(lines).toContain('Учётная стоимость выше половины цены у тарифов: business, agency.')
+    expect(lines).toContain(
+      'Учётная стоимость выше половины цены у тарифов: start, business, agency.',
+    )
     expect(lines.some((line) => line.includes('предел'))).toBe(false)
     expect(lines).toContain(
       `  ${luna.provider}/${luna.model} (light): 1.94 / 0.19 / 1.94 / 9.69 — ставки из файла`,
@@ -288,7 +291,7 @@ describe.skipIf(!enabled)('billing:rates with PostgreSQL', () => {
     // The numbers were printed before the refusal: what «строки выше» points at.
     expect(result.stdout).toContain(`Начало действия: ${moscow(new Date(yesterday))} `)
     expect(result.stdout).toContain(
-      '  start (тариф): 150 кредитов — 1350.00 ₽, 67.8 % цены 1990.00 ₽\n',
+      '  start (тариф): 200 кредитов — 1800.00 ₽, 90.5 % цены 1990.00 ₽\n',
     )
     expect(result.stdout).toContain(
       'Разные ставки у включённых моделей одного класса: standard. Одна и та же задача будет стоить разное число кредитов в зависимости от аккаунта пула.\n',
@@ -464,7 +467,7 @@ describe.skipIf(!enabled)('billing:rates with PostgreSQL', () => {
     )
     // Beside the tariffs of the seed that are above half at 6.50 as well.
     expect(next.printed).toContain(
-      `Учётная стоимость выше половины цены у тарифов: ${plan.slug}, business, agency.\n`,
+      `Учётная стоимость выше половины цены у тарифов: ${plan.slug}, start, business, agency.\n`,
     )
     const after = outstanding(next.printed)
     expect(after.pack - before.pack).toBe(240)

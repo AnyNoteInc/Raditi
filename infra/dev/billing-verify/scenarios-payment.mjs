@@ -403,7 +403,7 @@ scenarios.checkout = async (t) => {
       { ...PRICE, pack: '2980.00', withoutTariff: true },
     )
     t.equal(
-      `${who}: and in credits — 150, 600 and 2 000 a month, no daily limit, weekly limits of 55, 210 and 700, a pack of 100`,
+      `${who}: and in credits — 200, 1 000 and 2 000 a month, no daily limit, weekly limits of 73, 350 and 700, a pack of 100`,
       {
         plans: plans.map(
           ({
@@ -570,7 +570,7 @@ scenarios.checkout = async (t) => {
     )
     const [letter, ...otherLetters] = await customer.mail('billing.payment_succeeded')
     t.equal(
-      `${who}: the letter is made of what was paid for: the tariff, the money, the end of the period and the 150 credits granted`,
+      `${who}: the letter is made of what was paid for: the tariff, the money, the end of the period and the 200 credits granted`,
       [letter?.data, otherLetters.length],
       [
         {
@@ -587,10 +587,10 @@ scenarios.checkout = async (t) => {
     )
     const until = moscowDate(subscription.current_period_end)
     t.check(
-      `${who}: and says so to the customer: «Тариф действует до ${until}. Начислили 150 кредитов на этот период.»`,
+      `${who}: and says so to the customer: «Тариф действует до ${until}. Начислили 200 кредитов на этот период.»`,
       letter.text.includes('Оплата прошла: тариф «Старт» — 1 990 ₽.') &&
         letter.text.includes(
-          `Тариф действует до ${until}. Начислили 150 кредитов на этот период.`,
+          `Тариф действует до ${until}. Начислили 200 кредитов на этот период.`,
         ) &&
         letter.text.includes(`${t.webUrl}/settings/plans`),
       letter.text,
@@ -1299,7 +1299,7 @@ scenarios['pack-and-period-end'] = async (t) => {
   )
   const withPack = await customer.query('billing.usage')
   t.equal(
-    '«Использование» counts the three accounts: 150 of the tariff, the gift of 50 and 100 purchased',
+    '«Использование» counts the three accounts: 200 of the tariff, the gift of 50 and 100 purchased',
     [withPack.tariff.credits.left, withPack.gift, withPack.pack, withPack.totalLeft],
     [
       CREDITS.start,

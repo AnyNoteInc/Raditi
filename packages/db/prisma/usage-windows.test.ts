@@ -48,8 +48,9 @@ describe.skipIf(!databaseUrl)('the usage windows of 13.11.2026', () => {
       credits_per_week: number | null
     }>(`SELECT slug, credits_per_5h, credits_per_week FROM plans ORDER BY sort_order`)
     expect(rows).toEqual([
-      { slug: 'start', credits_per_5h: null, credits_per_week: 55 },
-      { slug: 'business', credits_per_5h: null, credits_per_week: 210 },
+      // «Старт» and «Бизнес» since 13.11.2026 (billing_pricing_api_margin, plan 72, ЦА4).
+      { slug: 'start', credits_per_5h: null, credits_per_week: 73 },
+      { slug: 'business', credits_per_5h: null, credits_per_week: 350 },
       { slug: 'agency', credits_per_5h: null, credits_per_week: 700 },
       { slug: 'pack', credits_per_5h: null, credits_per_week: null },
       { slug: 'payg', credits_per_5h: null, credits_per_week: null },
