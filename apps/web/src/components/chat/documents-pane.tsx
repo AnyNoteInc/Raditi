@@ -31,7 +31,7 @@ import { DocumentMarkdown } from './document-markdown'
 import { markdownTitleOf } from './document-rules'
 import { taskFileHref } from './feed-file'
 
-// «Документы» beside the chat (docs/plan/67-agent-documents.md, Д4–Д7): the pages and the text
+// «Страницы» beside the chat (docs/plan/67-agent-documents.md, Д4–Д7): the pages and the text
 // documents the agent made, as a browser shows them — «Назад» and «Вперёд» over what the client
 // opened here, the list of the documents of the chat, the title where a browser has its address,
 // the version, and on the right «Обновить», «На весь экран», a new tab, «Скачать», «Поделиться». A

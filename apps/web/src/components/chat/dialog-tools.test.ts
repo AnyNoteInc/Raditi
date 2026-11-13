@@ -467,7 +467,7 @@ describe('the names, icons and ids of the tools', () => {
       database: 'База данных',
       checks: 'Проверки',
       terminal: 'Изменения',
-      documents: 'Документы',
+      documents: 'Страницы',
     })
     expect(toolTabNames).toEqual({ ...toolMenuNames, files: 'Файлы' })
     expect(Object.keys(toolIcons)).toEqual([...dialogTools])

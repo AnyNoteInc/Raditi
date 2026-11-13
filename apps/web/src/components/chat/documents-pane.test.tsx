@@ -84,7 +84,7 @@ const rows = [
   file(5, 'Отчёт.html'),
 ]
 
-describe('«Документы» (docs/plan/67-agent-documents.md, Д4–Д7)', () => {
+describe('«Страницы» (docs/plan/67-agent-documents.md, Д4–Д7)', () => {
   it('opens the table of contents of a set and follows its links, back and forth', async () => {
     render(wrap(<DocumentsPane taskId={TASK_ID} rows={rows} target={null} />))
     expect(await screen.findByRole('heading', { level: 1, name: 'Оглавление' })).toBeTruthy()
@@ -155,7 +155,7 @@ describe('the documents in the feed (Д4)', () => {
   it('shows one card for a turn, each document with its version, «Открыть» and «Скачать»', () => {
     const onOpen = vi.fn()
     render(<FeedDocuments fileIds={[uuid(4), uuid(5)]} documents={documents} onOpen={onOpen} />)
-    expect(screen.getByText('Документы · 2')).toBeTruthy()
+    expect(screen.getByText('Страницы · 2')).toBeTruthy()
     expect(screen.getByText('Документ · версия 2')).toBeTruthy()
     expect(screen.getByText('Страница · версия 1')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Открыть документ «Отчёт»' }))

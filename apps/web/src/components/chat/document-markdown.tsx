@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm'
 
 import { rehypeDocumentRules, type DocumentRules } from './document-rules'
 
-// A text document of the chat in the tab «Документы» (docs/plan/67-agent-documents.md, Д6): the
+// A text document of the chat in the tab «Страницы» (docs/plan/67-agent-documents.md, Д6): the
 // Markdown of the agent as React elements, bound by `rehypeDocumentRules` — the same rules the
 // server draws a shared link by. No hook and no style here: the tab dresses it (`documentSx`), so
 // the very elements are what the tests read. Raw HTML is skipped, never parsed.

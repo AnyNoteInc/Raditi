@@ -128,7 +128,7 @@ export interface FeedActions {
   /** The rows that answer `/init` (`initAnswerIds`). */
   notesRows?: ReadonlySet<string>
   /**
-   * «Открыть» of a document of the agent: the tab «Документы» on that version
+   * «Открыть» of a document of the agent: the tab «Страницы» on that version
    * (docs/plan/67-agent-documents.md, Д4); absent — the document opens in a window of its own.
    */
   onOpenDocument?: (fileId: string) => void

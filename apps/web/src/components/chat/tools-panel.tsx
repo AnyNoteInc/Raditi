@@ -38,7 +38,7 @@ import { PaneResizer } from './pane-resizer'
  * browser keeps its last picture, its stream going only while its tab is shown. A tab of the
  * changes reads them only while it is on the screen; what it read stays in the cache.
  */
-// «Документы» keep their place and their frame between the tabs (docs/plan/67, Д4).
+// «Страницы» keep their place and their frame between the tabs (docs/plan/67, Д4).
 const keepsMounted = (tool: DialogTool): boolean =>
   tool === 'browser' || tool === 'preview' || tool === 'documents'
 
