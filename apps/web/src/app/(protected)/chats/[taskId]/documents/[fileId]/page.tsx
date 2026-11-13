@@ -11,11 +11,11 @@ type Params = Promise<{ taskId: string; fileId: string }>
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-export const metadata: Metadata = { title: 'Страницы' }
+export const metadata: Metadata = { title: 'Документы' }
 
 /**
  * «Открыть в новой вкладке» of a document of the agent (docs/plan/67-agent-documents.md, Д4): the
- * tab «Страницы» over the whole window, on this version, for a member of the chat. The address of
+ * tab «Документы» over the whole window, on this version, for a member of the chat. The address of
  * the page in its frame lives five minutes and never leaves the cabinet; this one does.
  */
 export default async function Page({ params }: { params: Params }) {

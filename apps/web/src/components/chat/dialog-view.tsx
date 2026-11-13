@@ -521,7 +521,7 @@ export function DialogView({
       document.getElementById(TOOLS_BUTTON_ID)?.focus()
   }, [shown])
   // The pages and text documents of the agent (docs/plan/67-agent-documents.md, Д4): one that comes
-  // while the client looks at the chat opens «Страницы» on it — beside the dialog from `lg`, never
+  // while the client looks at the chat opens «Документы» on it — beside the dialog from `lg`, never
   // in its place below: there only «+» says so.
   const chatDocuments = useMemo(() => chatDocumentsOf(rows), [rows])
   const [documentTarget, setDocumentTarget] = useState<DocumentTarget | null>(null)

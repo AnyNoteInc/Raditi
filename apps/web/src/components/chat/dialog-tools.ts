@@ -233,11 +233,11 @@ export interface ToolsState {
    */
   seenChanges: string | null
   /**
-   * The client closed «Страницы» (or the whole panel) after they opened by themselves: a new
+   * The client closed «Документы» (or the whole panel) after they opened by themselves: a new
    * document does not open them again in this showing (docs/plan/67-agent-documents.md, Д4).
    */
   documentsSpent: boolean
-  /** A document came while «Страницы» were not on the screen and did not open: the dot on «+». */
+  /** A document came while «Документы» were not on the screen and did not open: the dot on «+». */
   documentsUnseen: boolean
 }
 
@@ -275,7 +275,7 @@ export type ToolsAction =
   | { type: 'seen'; changes: string }
   /**
    * A document of the agent came while the client looks at the chat (docs/plan/67, Д4): from `lg`
-   * («opens») «Страницы» open on it, or join the tabs of a panel on the screen beside the tool the
+   * («opens») «Документы» open on it, or join the tabs of a panel on the screen beside the tool the
    * client reads; below `lg` only the dot of «+» says so.
    */
   | { type: 'documentArrived'; opens: boolean }

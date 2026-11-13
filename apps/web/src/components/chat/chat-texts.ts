@@ -656,7 +656,7 @@ export const toolText = Object.freeze({
   dot: Object.freeze({
     browser: 'браузер ждёт вас',
     changes: 'есть новые изменения',
-    documents: 'есть новая страница',
+    documents: 'есть новый документ',
   }),
   /** The landmark beside the dialog (И20). */
   panel: 'Инструменты чата',
@@ -680,7 +680,7 @@ export const toolText = Object.freeze({
     database: previewPanelText.database,
     checks: previewPanelText.checks,
     terminal: 'Изменения',
-    documents: 'Страницы',
+    documents: 'Документы',
   }),
   /** The name of a tool in the menu. */
   item: Object.freeze({
@@ -690,7 +690,7 @@ export const toolText = Object.freeze({
     database: previewPanelText.database,
     checks: previewPanelText.checks,
     terminal: 'Изменения',
-    documents: 'Страницы',
+    documents: 'Документы',
   }),
   /** The marks on the right of the tiles (И5); a browser that holds a session says who drives it. */
   mark: Object.freeze({
@@ -726,8 +726,7 @@ export const toolText = Object.freeze({
 
 /**
  * The words of the documents the agent made (docs/plan/67-agent-documents.md, Д4–Д8): the tab
- * «Страницы» (named so since the owner's answer of 13.11.2026, as the section of plan 69), the
- * cards of the feed. Never «HTML» or «Markdown»: a
+ * «Документы», the cards of the feed and the window «Поделиться». Never «HTML» or «Markdown»: a
  * page is «страница», a text document is «документ» (rule 10).
  */
 export const documentText = Object.freeze({
@@ -738,10 +737,10 @@ export const documentText = Object.freeze({
   openLabel: (title: string) => `Открыть документ «${title}»`,
   download: 'Скачать',
   downloadLabel: (title: string) => `Скачать документ «${title}»`,
-  group: (count: number) => `Страницы · ${count}`,
-  all: (count: number) => `Все страницы (${count})`,
-  list: 'Страницы чата',
-  search: 'Найти страницу',
+  group: (count: number) => `Документы · ${count}`,
+  all: (count: number) => `Все документы (${count})`,
+  list: 'Документы чата',
+  search: 'Найти документ',
   nothingFound: 'Ничего не нашлось.',
   fresh: 'новое',
   versions: (count: number) => `${count} ${plural(count, 'версия', 'версии', 'версий')}`,
@@ -766,6 +765,6 @@ export const documentText = Object.freeze({
   large: 'Документ большой для просмотра: здесь только его начало, текстом. Целиком — в файле.',
   pagesOff: 'Страницы здесь сейчас не открываются. Страницу можно скачать.',
   missing: MISSING_DOCUMENT,
-  empty: 'Страниц пока нет. Они появятся здесь, когда агент их подготовит.',
+  empty: 'Документов пока нет. Они появятся здесь, когда агент их подготовит.',
   noContents: 'В документе нет разделов.',
 })

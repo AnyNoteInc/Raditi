@@ -18,7 +18,7 @@ import { documentWindowHref } from './documents-pane'
 import { taskFileHref } from './feed-file'
 
 // A page or a text document the agent made, in the feed (docs/plan/67-agent-documents.md, Д4): a
-// card with its title, its kind and version, «Открыть» — the tab «Страницы» on this version, or
+// card with its title, its kind and version, «Открыть» — the tab «Документы» on this version, or
 // without the tab a window of its own — and «Скачать». Several documents of one turn are one card.
 
 const cardSx = {

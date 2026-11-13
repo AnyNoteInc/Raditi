@@ -10,7 +10,7 @@ import { documentText } from './chat-texts'
 import { DocumentsPane } from './documents-pane'
 import { useDialogFeed } from './use-dialog-feed'
 
-/** «Страницы» of a chat over the whole window, opened on one version (Д4). */
+/** «Документы» of a chat over the whole window, opened on one version (Д4). */
 export function DocumentWindow({ taskId, fileId }: { taskId: string; fileId: string }) {
   const { state } = useDialogFeed(taskId)
   const document = useMemo(
