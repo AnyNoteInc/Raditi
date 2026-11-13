@@ -63,10 +63,12 @@ export const tierPoolReservePct: Readonly<Record<WorkspaceTier, number>> = Objec
  * each tariff. How many turns of a workspace run at once is not bounded: only credits bound the
  * work (owner's answer of 13.11.2026, Л10 removed).
  */
-export const noTariffWindowCredits: Readonly<Record<UsageWindowKind, number>> = Object.freeze({
-  '5h': 15,
-  week: 50,
-})
+export const noTariffWindowCredits: Readonly<Record<UsageWindowKind, number | null>> =
+  Object.freeze({
+    // Only the weekly limits stay (owner's answer of 13.11.2026): no limit of 5 hours.
+    '5h': null,
+    week: 50,
+  })
 
 /** Credits of the customer used in a window: fractional, as the calls take them (Л1). */
 export const windowCreditsSchema = decimalStringSchema(10, 4)

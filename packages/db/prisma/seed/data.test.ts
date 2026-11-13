@@ -29,7 +29,7 @@ describe('plans (docs/business.md §6)', () => {
         price: '1990.00',
         creditsPerMonth: 150,
         creditsPerDay: null,
-        creditsPer5h: 20,
+        creditsPer5h: null,
         creditsPerWeek: 55,
         packCredits: null,
         maxSites: 1,
@@ -41,7 +41,7 @@ describe('plans (docs/business.md §6)', () => {
         price: '6990.00',
         creditsPerMonth: 600,
         creditsPerDay: null,
-        creditsPer5h: 70,
+        creditsPer5h: null,
         creditsPerWeek: 210,
         packCredits: null,
         maxSites: 3,
@@ -53,7 +53,7 @@ describe('plans (docs/business.md §6)', () => {
         price: '19990.00',
         creditsPerMonth: 2000,
         creditsPerDay: null,
-        creditsPer5h: 200,
+        creditsPer5h: null,
         creditsPerWeek: 700,
         packCredits: null,
         maxSites: 15,
@@ -126,7 +126,8 @@ describe('Appendix 1 of the public offer', () => {
     terms: new RegExp(
       `^${whole} Кредит(?:|а|ов) в месяц(?:, из них не более ${whole} Кредит(?:|а|ов) в день)?; ` +
         // The windows of the work (plan 71): «до 20 Кредитов за 5 часов и 55 в неделю».
-        `(?:до ${whole} Кредит(?:|а|ов) за 5 часов и ${whole} в неделю; )?` +
+        // Only the week since the owner's answer of 13.11.2026: «до 55 Кредитов в неделю».
+        `(?:до (?:${whole} Кредит(?:|а|ов) за 5 часов и )?${whole}(?: Кредит(?:|а|ов))? в неделю; )?` +
         String.raw`(?:до )?(\d+) Сайт(?:|а|ов) Заказчика$`,
     ),
   }

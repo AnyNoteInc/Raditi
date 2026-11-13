@@ -1659,7 +1659,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
         today: null,
         tier: 'none',
         windows: [
-          { kind: '5h', limit: 15, used: 0, left: 15, resetsAt: null },
+          { kind: '5h', limit: null, used: 0, left: null, resetsAt: null },
           { kind: 'week', limit: 50, used: 0, left: 50, resetsAt: null },
         ],
         newTask: TAKEN,
@@ -1766,7 +1766,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
         today: null,
         tier: 'none',
         windows: [
-          { kind: '5h', limit: 15, used: 0, left: 15, resetsAt: null },
+          { kind: '5h', limit: null, used: 0, left: null, resetsAt: null },
           { kind: 'week', limit: 50, used: 0, left: 50, resetsAt: null },
         ],
         newTask: { allowed: false, reason: 'gift_spent' },

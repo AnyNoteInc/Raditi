@@ -43,7 +43,7 @@ export const start = offer({
   price: '1990.00',
   creditsPerMonth: 150,
   creditsPerDay: null,
-  creditsPer5h: 20,
+  creditsPer5h: null,
   creditsPerWeek: 55,
   maxSites: 1,
 })
@@ -55,7 +55,7 @@ export const business = offer({
   price: '6990.00',
   creditsPerMonth: 600,
   creditsPerDay: null,
-  creditsPer5h: 70,
+  creditsPer5h: null,
   creditsPerWeek: 210,
   maxSites: 3,
 })
@@ -67,7 +67,7 @@ export const agency = offer({
   price: '19990.00',
   creditsPerMonth: 2000,
   creditsPerDay: null,
-  creditsPer5h: 200,
+  creditsPer5h: null,
   creditsPerWeek: 700,
   maxSites: 15,
 })

@@ -49,7 +49,7 @@ export const ON_SALE = Object.freeze({
       price: '1990.00',
       creditsPerMonth: 150,
       creditsPerDay: null,
-      creditsPer5h: 20,
+      creditsPer5h: null,
       creditsPerWeek: 55,
       maxSites: 1,
     },
@@ -58,7 +58,7 @@ export const ON_SALE = Object.freeze({
       price: '6990.00',
       creditsPerMonth: 600,
       creditsPerDay: null,
-      creditsPer5h: 70,
+      creditsPer5h: null,
       creditsPerWeek: 210,
       maxSites: 3,
     },
@@ -67,7 +67,7 @@ export const ON_SALE = Object.freeze({
       price: '19990.00',
       creditsPerMonth: 2000,
       creditsPerDay: null,
-      creditsPer5h: 200,
+      creditsPer5h: null,
       creditsPerWeek: 700,
       maxSites: 15,
     },
@@ -1090,7 +1090,7 @@ const doubledPrice = (price) => {
 
 /** The tariffs and the pack on sale, as `billing.plans` and the table of plans both tell them. */
 /** The windows without a paid tariff (`noTariffWindowCredits`, Л4). */
-export const NO_TARIFF_WINDOWS = Object.freeze({ '5h': 15, week: 50 })
+export const NO_TARIFF_WINDOWS = Object.freeze({ '5h': null, week: 50 })
 /** The tier of a paid plan by its slug (Л18): any other paid plan is «Старт». */
 const tierOf = (slug) => (slug === 'business' || slug === 'agency' ? slug : 'start')
 
@@ -1146,7 +1146,7 @@ export async function pagesShowWhatIsStored(t) {
     pack: listed.find(({ kind }) => kind === 'pack') ?? null,
   })
   t.equal(
-    'the table of plans holds the terms the stand expects: 150, 600 and 2 000 credits a month, no daily limit, windows of 20/55, 70/210 and 200/700, a pack of 100',
+    'the table of plans holds the terms the stand expects: 150, 600 and 2 000 credits a month, no daily limit, weekly limits of 55, 210 and 700, a pack of 100',
     sold,
     ON_SALE,
   )
