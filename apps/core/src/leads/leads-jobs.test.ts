@@ -79,8 +79,32 @@ describe('leadMessage', () => {
     const text = leadMessage(lead())
     expect(text).toContain('<b>Заявка №12</b> · главная, 08.11.2026, 10:41 МСК')
     expect(text).toContain('<b>Имя:</b> Анна &lt;b&gt;')
+    expect(text).toContain('<b>Контакт:</b> +79000000000')
+    expect(text).not.toContain('Телефон')
     expect(text).toContain('Цены &amp; новости')
     expect(text).toContain('Согласие на обработку данных: да, редакция 2026-10-11')
+  })
+
+  it('prints a lead of the two fields without the parts it does not have', () => {
+    const text = leadMessage(lead({ name: null, email: null, about: null, phone: '@anna_kofe' }))
+    expect(text).toBe(
+      [
+        '<b>Заявка №12</b> · главная, 08.11.2026, 10:41 МСК',
+        '',
+        '<b>Контакт:</b> @anna_kofe',
+        '<b>Сайт:</b> kofeinya.ru',
+        '',
+        'Согласие на обработку данных: да, редакция 2026-10-11',
+        'Нажмите «Обработано», когда свяжетесь: сообщение удалится из Telegram.',
+      ].join('\n'),
+    )
+  })
+
+  it('keeps every part of a lead written before the form shrank', () => {
+    const text = leadMessage(lead())
+    expect(text).toContain('<b>Почта:</b> anna@example.ru')
+    expect(text).toContain('\n\n<b>Что хочет менять:</b>\nЦены &amp; новости\n\nСогласие')
+    expect(text).not.toContain('\n\n\n')
   })
 
   it('stays within the limit of Telegram for the longest lead', () => {

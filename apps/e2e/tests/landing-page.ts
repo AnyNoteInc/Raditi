@@ -23,10 +23,15 @@ export function hydrated(element: Locator): Promise<void> {
   )
 }
 
+/** The keyframes of the running line of the systems, as the source names them. */
+export const RUNNING_LINE = 'marqueeRun'
+
 /** Waits until no animation or transition is running: a reveal moves a section from under the
- *  pointer, and a colour read on the way belongs to neither state. */
+ *  pointer, and a colour read on the way belongs to neither state. The running line of the
+ *  systems is the one thing of the page that never rests (the owner, 13.11.2026): it is not
+ *  waited for. */
 export function settled(page: Page): Promise<void> {
-  return page.evaluate(async () => {
+  return page.evaluate(async (runningLine) => {
     const frame = () => new Promise<void>((done) => requestAnimationFrame(() => done()))
     await document.fonts.ready
     // Two quiet passes in a row: an observer may start an animation a frame after the last ended.
@@ -37,22 +42,34 @@ export function settled(page: Page): Promise<void> {
       await frame()
       const running = document
         .getAnimations()
+        .filter(
+          (animation) =>
+            !(animation instanceof CSSAnimation && animation.animationName.includes(runningLine)),
+        )
         .some((animation) => animation.pending || animation.playState === 'running')
       quiet = running ? 0 : quiet + 1
     }
-  })
+  }, RUNNING_LINE)
 }
 
-/** The main action of the first screen: the registration. */
-export const heroAction = (page: Page) =>
-  page.locator('section[aria-labelledby="hero-title"] a[href="/sign-up"]')
+/** The first screen of the page. */
+export const firstScreen = (page: Page) => page.locator('section[aria-labelledby="hero-title"]')
 
-/** The registration under the plans. */
-export const pricingAction = (page: Page) => page.locator('#pricing a[href="/sign-up"]')
+/** The slogan of the first screen: the large line under the heading of the page. */
+export const slogan = (page: Page) => page.locator('#hero-title + p')
 
-/** The main action of the final block. */
-export const finalAction = (page: Page) =>
-  page.locator('section[aria-labelledby="start-title"] a[href="/sign-up"]')
+/** The main action of the first screen: a guest is led to the form of a lead. */
+export const heroAction = (page: Page) => firstScreen(page).locator('a[href="#lead"]')
+
+/** The same action under the plans. */
+export const pricingAction = (page: Page) => page.locator('#pricing a[href="#lead"]')
+
+/** The same action under the running line of the systems: ink on the orange field. */
+export const platformsAction = (page: Page) => page.locator('#platforms a[href="#lead"]')
+
+/** The short form of the action in the row of the header, shown from 1100px. */
+export const headerAction = (page: Page) =>
+  page.locator('#top > header > div:first-child a[href="#lead"]')
 
 /** The button of the mobile menu in the header. */
 export const menuToggle = (page: Page) => page.locator('#top > header button[aria-controls]')
