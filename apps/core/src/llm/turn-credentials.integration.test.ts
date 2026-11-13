@@ -1457,6 +1457,28 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     expect(await f.credentials.recover(f.ref)).toBeNull()
   })
 
+  it('moves a task bound to the plan onto the API when it plans a turn there, and back', async () => {
+    // Owner's answer of 13.11.2026 (docs/plan/70-turn-without-time-limit.md, ВР24): the API is
+    // the insurance of the plan. A binding of the other backend is no binding on this one.
+    const plan = await fixture()
+    const api = await fixture({ backend: 'zai-api' })
+    await db.taskAccountBinding.create({
+      data: {
+        taskId: api.task.id,
+        driverId: sampleDriverId,
+        subscriptionAccountId: plan.mainAccount.id,
+        rebinds: 0,
+      },
+    })
+    await api.credentials.issue(api.ref, api.grant)
+    expect(
+      await db.taskAccountBinding.findUniqueOrThrow({ where: { taskId: api.task.id } }),
+    ).toMatchObject({ subscriptionAccountId: api.mainAccount.id, rebinds: 0 })
+    expect(await db.llmKey.findFirstOrThrow({ where: { taskId: api.task.id } })).toMatchObject({
+      subscriptionAccountId: api.mainAccount.id,
+    })
+  })
+
   it('keeps a renewed key past the first expiry its Vault record names', async () => {
     // docs/plan/70-turn-without-time-limit.md, ВР3: a live turn moves its key's row and its
     // assignment on; the write-once Vault record keeps the first values, which have passed.

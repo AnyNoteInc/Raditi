@@ -424,7 +424,8 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       }
       const binding = await tx.taskAccountBinding.findUnique({ where: { taskId: ref.taskId } })
       if (binding) {
-        if (selected.decision.binding === 'rebind')
+        // `initial` beside a binding: one of the other backend, moved to this one (ВР24).
+        if (selected.decision.binding !== 'keep')
           await tx.taskAccountBinding.update({
             where: { taskId: ref.taskId },
             data: { subscriptionAccountId: stored.accountId, rebinds: selected.decision.rebinds },
@@ -552,6 +553,17 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       select: { id: true },
     })
     const capacity = this.#capacityOf(grant.backend)
+    // Bound to an account of the other backend: the task went from the plan to the API or back
+    // (owner's answer of 13.11.2026, docs/plan/70-turn-without-time-limit.md, ВР24). On this
+    // backend it is unbound; the issue binds it to the account it takes here.
+    const bound =
+      binding && !snapshots.some((a) => a.id === binding.subscriptionAccountId)
+        ? await tx.subscriptionAccount.findUnique({
+            where: { id: binding.subscriptionAccountId },
+            select: { providerId: true },
+          })
+        : null
+    const crossed = bound !== null && bound.providerId !== profile.providerId
     // A durable Vault record fixes the selected account. A racing issue cannot select another
     // secret or bind a task without the matching key. Keep the pure selector's new-task gates.
     const pick = (accounts: typeof snapshots) =>
@@ -560,8 +572,8 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
         capacity,
         providerEnabled: profile.enabled,
         now: task.now,
-        boundAccountId: binding?.subscriptionAccountId ?? null,
-        rebinds: binding?.rebinds ?? 0,
+        boundAccountId: crossed ? null : (binding?.subscriptionAccountId ?? null),
+        rebinds: crossed ? 0 : (binding?.rebinds ?? 0),
         policyFlagged: policyFlagged !== null,
         minTurnHeadroomPct: this.#minHeadroom,
         accounts,
