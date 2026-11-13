@@ -668,7 +668,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
         : null
     const crossed = bound !== null && bound.providerId !== profile.providerId
     // A durable Vault record fixes the selected account. A racing issue cannot select another
-    // secret or bind a task without the matching key. Keep the pure selector's new-task gates.
+    // secret or bind a task without the matching key. The pure selector decides the rest.
     const pick = (accounts: typeof snapshots) =>
       pickAccount({
         backend: grant.backend,
