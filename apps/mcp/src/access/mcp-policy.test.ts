@@ -441,5 +441,27 @@ describe('MCP request policy', () => {
       { query: ['wordpress'] },
     ])
       expect(mcpBodyAllowed(call(args), ['search'])).toBe(false)
+
+    // The pages of the workspace (docs/plan/69-pages.md, Ст20): any turn, where they are configured.
+    expect(mcpToolFamiliesOf(chat, { ...base, searchTools: true, pagesTools: true })).toEqual([
+      'search',
+      'pages',
+    ])
+    const page = (name: string, args: unknown) => ({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: { name, arguments: args },
+    })
+    expect(mcpBodyAllowed(page('page_publish', { file: 'p.html', title: 'П' }), ['pages'])).toBe(
+      true,
+    )
+    expect(mcpBodyAllowed(page('page_list', {}), ['pages'])).toBe(true)
+    expect(mcpBodyAllowed(page('page_list', {}), ['search'])).toBe(false)
+    expect(
+      mcpBodyAllowed(page('page_publish', { file: 'p.html', title: 'П', docId: access.taskId }), [
+        'pages',
+      ]),
+    ).toBe(false)
   })
 })

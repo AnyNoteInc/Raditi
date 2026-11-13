@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto'
 
 import {
   assembleDocMarkdown,
+  DomainError,
   docLimitReached,
   docNotFound,
   docPendingSections,
@@ -73,6 +74,22 @@ async function lockWorkspaceOfChat(
   if (rows.length === 0) throw missing()
 }
 
+/** The client took the page down: a new version waits for them to put it back. */
+const pageTakenDown = () =>
+  new DomainError(
+    'PAGE_TAKEN_DOWN',
+    'The client took this page down: only they can put it back, in the cabinet. Tell them so, or publish a new page.',
+    409,
+  )
+
+/** The file of this turn is reserved for another page already. */
+const pageReservedOtherwise = () =>
+  new DomainError(
+    'PAGE_RESERVED',
+    'This file is already published as another page in this turn: use another file name.',
+    409,
+  )
+
 const isUniqueViolation = (error: unknown) =>
   error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002'
 
@@ -131,6 +148,8 @@ async function reserveOnce(
     })
     if (known) {
       if (known.page.workspaceId !== workspaceId) throw pageNotFound()
+      // The same call again is the same reservation; the same file for another page is not.
+      if (input.pageId !== undefined && input.pageId !== known.pageId) throw pageReservedOtherwise()
       return { pageId: known.pageId, slug: known.page.slug, version: known.page.currentVersion + 1 }
     }
     // Two turns cannot both take the last place.
@@ -142,6 +161,10 @@ async function reserveOnce(
     if (lastHour >= pageLimits.publishesPerHour) throw pageLimitReached('publishesPerHour')
 
     let page = input.pageId ? await lockPage(tx, input.pageId, workspaceId) : null
+    // A version of a page taken down would answer 410: the client puts it back, not the agent;
+    // one the operator took down is gone for the workspace (Ст15, Ст31).
+    if (page?.state === 'taken_down')
+      throw page.takenDownBy === 'operator' ? pageNotFound() : pageTakenDown()
     // A page of a document gets its versions from the document, a page of a file from files.
     if (page !== null && (page.documentId === null) !== (documentId === null)) throw pageNotFound()
     if (page !== null && documentId !== null && page.documentId !== documentId) throw pageNotFound()

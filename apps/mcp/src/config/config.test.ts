@@ -406,6 +406,23 @@ describe('loadMcpConfig — production', () => {
   })
 })
 
+describe('the pages of the mcp role (plan 69)', () => {
+  it('gives the agent no pages without PAGES_BASE_DOMAIN, and the address with it', () => {
+    expect(loadMcpConfig(devEnv).pages).toBeNull()
+    expect(
+      loadMcpConfig({ ...devEnv, PAGES_BASE_DOMAIN: 'pages.localhost', PAGES_PUBLIC_PORT: '8092' })
+        .pages,
+    ).toEqual({ baseDomain: 'pages.localhost', scheme: 'http', port: 8092 })
+    expect(loadMcpConfig(prodEnv({ PAGES_BASE_DOMAIN: 'pages.raditi.ru' })).pages).toEqual({
+      baseDomain: 'pages.raditi.ru',
+      scheme: 'https',
+    })
+    expect(
+      problemsOf(prodEnv({ PAGES_BASE_DOMAIN: 'pages.raditi.ru', PAGES_PUBLIC_PORT: '443' })),
+    ).toContain('PAGES_PUBLIC_PORT: not in production (a page host carries no port there)')
+  })
+})
+
 describe('the web search of the mcp role', () => {
   const pilot = { timeoutMs: 10_000, limits: { turn: 3, serviceMonth: 5000 } }
 

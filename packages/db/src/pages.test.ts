@@ -316,6 +316,60 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
       void one
     })
 
+    it('takes no version of a page the client or the operator took down, nor one file for two pages', async () => {
+      const { workspaceId, taskId } = await chat()
+      const page = await reservePagePublication(db, {
+        workspaceId,
+        taskId,
+        turnNo: 1,
+        title: 'С',
+        target: { fileName: 's.html' },
+      })
+      await applyPageVersion(db, { pageId: page.pageId, bytes: bytes('x'), source: 'outbox' })
+      await takeDownPage(db, { pageId: page.pageId, by: 'client', workspaceId })
+      const next = {
+        workspaceId,
+        taskId,
+        turnNo: 2,
+        title: 'С',
+        target: { fileName: 's.html' },
+        pageId: page.pageId,
+      }
+      await expect(reservePagePublication(db, next)).rejects.toMatchObject({
+        code: 'PAGE_TAKEN_DOWN',
+      })
+      await takeDownPage(db, { pageId: page.pageId, by: 'operator' })
+      await expect(reservePagePublication(db, next)).rejects.toMatchObject({
+        code: 'PAGE_NOT_FOUND',
+      })
+
+      const other = await reservePagePublication(db, {
+        workspaceId,
+        taskId,
+        turnNo: 3,
+        title: 'Д',
+        target: { fileName: 'd.html' },
+      })
+      await applyPageVersion(db, { pageId: other.pageId, bytes: bytes('x'), source: 'outbox' })
+      await reservePagePublication(db, {
+        workspaceId,
+        taskId,
+        turnNo: 4,
+        title: 'Е',
+        target: { fileName: 'e.html' },
+      })
+      await expect(
+        reservePagePublication(db, {
+          workspaceId,
+          taskId,
+          turnNo: 4,
+          title: 'Е',
+          target: { fileName: 'e.html' },
+          pageId: other.pageId,
+        }),
+      ).rejects.toMatchObject({ code: 'PAGE_RESERVED' })
+    })
+
     it('answers the same reservation to two racing calls of one turn', async () => {
       const { workspaceId, taskId } = await chat()
       const input = {

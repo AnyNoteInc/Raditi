@@ -1,4 +1,5 @@
 // Pages, documents and publications (docs/plan/69-pages.md).
+export * from './address.ts'
 export * from './content-check.ts'
 export * from './doc.ts'
 export * from './errors.ts'

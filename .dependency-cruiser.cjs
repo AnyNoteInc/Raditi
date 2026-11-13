@@ -381,10 +381,13 @@ module.exports = {
     {
       name: 'mcp-profiles-apart',
       comment:
-        'The content and the browser tools of the mcp app are two profiles, the web tools of a browser task the module of the browser worker (docs/plan/57-browser-tasks.md, Б20) and the web search its own family (spec §20, «Веб-поиск агента»), each its own module: no folder of them imports another (plan 56, §4.3).',
+        'The content and the browser tools of the mcp app are two profiles, the web tools of a browser task the module of the browser worker (docs/plan/57-browser-tasks.md, Б20) the web search its own family (spec §20, «Веб-поиск агента») and the pages of the workspace theirs (docs/plan/69-pages.md, Ст20), each its own module: no folder of them imports another (plan 56, §4.3).',
       severity: 'error',
-      from: { path: '^apps/mcp/src/(content|browser|web|search)/', pathNot: '\\.test\\.ts$' },
-      to: { path: '^apps/mcp/src/(content|browser|web|search)/', pathNot: '^apps/mcp/src/$1/' },
+      from: { path: '^apps/mcp/src/(content|browser|web|search|pages)/', pathNot: '\\.test\\.ts$' },
+      to: {
+        path: '^apps/mcp/src/(content|browser|web|search|pages)/',
+        pathNot: '^apps/mcp/src/$1/',
+      },
     },
     {
       name: 'mcp-base-no-profiles',
@@ -396,9 +399,9 @@ module.exports = {
         pathNot: '\\.test\\.ts$',
       },
       to: {
-        path: '^apps/mcp/src/(content|browser|web|search)/',
+        path: '^apps/mcp/src/(content|browser|web|search|pages)/',
         pathNot:
-          '^apps/mcp/src/(content/content-arguments|browser/browser-arguments|search/search-arguments)\\.ts$',
+          '^apps/mcp/src/(content/content-arguments|browser/browser-arguments|search/search-arguments|pages/pages-arguments)\\.ts$',
       },
     },
     {
@@ -409,7 +412,7 @@ module.exports = {
       from: {
         path: [
           '^apps/mcp/src/common/',
-          '^apps/mcp/src/(content/content-arguments|browser/browser-arguments|search/search-arguments)\\.ts$',
+          '^apps/mcp/src/(content/content-arguments|browser/browser-arguments|search/search-arguments|pages/pages-arguments)\\.ts$',
         ],
         pathNot: '\\.test\\.ts$',
       },

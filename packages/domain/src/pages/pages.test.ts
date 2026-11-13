@@ -349,3 +349,31 @@ describe('feed rows', () => {
     expect(feedPagePayloadSchema.safeParse({ ...row, url: 'https://x' }).success).toBe(false)
   })
 })
+
+describe('the address of the pages', () => {
+  it('is https in production and carries a port elsewhere only', async () => {
+    const { pagesAddressFromEnv, pageAddressUrl } = await import('./address.ts')
+    const problems: string[] = []
+    const production = pagesAddressFromEnv({ PAGES_BASE_DOMAIN: 'pages.raditi.ru' }, true, problems)
+    expect(production).toEqual({ baseDomain: 'pages.raditi.ru', scheme: 'https' })
+    expect(pageAddressUrl(slug, production!)).toBe(`https://${slug}.pages.raditi.ru/`)
+    const dev = pagesAddressFromEnv(
+      { PAGES_BASE_DOMAIN: 'pages.localhost', PAGES_PUBLIC_PORT: 8092 },
+      false,
+      problems,
+    )
+    expect(pageAddressUrl(slug, dev!)).toBe(`http://${slug}.pages.localhost:8092/`)
+    expect(problems).toEqual([])
+    expect(pagesAddressFromEnv({}, false, problems)).toBeNull()
+    pagesAddressFromEnv(
+      { PAGES_BASE_DOMAIN: 'pages.raditi.ru', PAGES_PUBLIC_PORT: 443 },
+      true,
+      problems,
+    )
+    pagesAddressFromEnv({ PAGES_PUBLIC_PORT: 8092 }, false, problems)
+    expect(problems).toEqual([
+      'PAGES_PUBLIC_PORT: not in production (a page host carries no port there)',
+      'PAGES_PUBLIC_PORT: needs PAGES_BASE_DOMAIN',
+    ])
+  })
+})
