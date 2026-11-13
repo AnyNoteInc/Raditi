@@ -191,19 +191,16 @@ export async function verifyProtocol(group) {
           independent[index].ref.taskId,
           group.keep(independent[index], admissions[index].value),
         )
+    // An account runs any number of turns at once (plan 70, ВР26): both get their keys, under
+    // the same pool lock, and neither waits for a database deadlock.
     assert.equal(
       admissions.filter((result) => result.status === 'fulfilled').length,
-      1,
-      'A capacity of one turn must fence concurrent distinct turns',
-    )
-    const rejected = admissions.find((result) => result.status === 'rejected')
-    assert.ok(
-      ['SUBSCRIPTION_BUSY', 'SUBSCRIPTION_WAIT'].includes(rejected.reason.code),
-      'Capacity contention must be a domain refusal, never a deadlock',
+      2,
+      'Distinct turns of one account are issued side by side',
     )
     for (const turn of [...owned.values()]) await release(turn)
     passed(
-      'parallel identical issue returns one key; distinct turns of a one-turn account serialize without a database deadlock',
+      'parallel identical issue returns one key; distinct turns of one account go side by side without a database deadlock',
     )
   } finally {
     const cleanup = await Promise.allSettled([...owned.values()].map(release))

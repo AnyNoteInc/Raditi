@@ -929,24 +929,23 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     }
   })
 
-  it('two different site owners share one account slot under the provider advisory lock', async () => {
+  it('two different site owners get keys side by side on one account under the pool lock', async () => {
+    // An account runs any number of turns at once (docs/plan/70-turn-without-time-limit.md, ВР26).
     const f = await fixture()
     const second = await f.taskFixture()
     const results = await Promise.allSettled([
       f.credentials.issue(f.ref, f.grant),
       f.credentials.issue(second.ref, f.grant),
     ])
-    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
-    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1)
-    expect(await db.llmKey.count({ where: { subscriptionAccountId: f.mainAccount.id } })).toBe(1)
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(2)
+    expect(await db.llmKey.count({ where: { subscriptionAccountId: f.mainAccount.id } })).toBe(2)
     expect(
       await db.taskAccountBinding.count({ where: { subscriptionAccountId: f.mainAccount.id } }),
-    ).toBe(1)
+    ).toBe(2)
   })
 
-  it('answers at once when a racing task took the account pinned in Vault and another is free', async () => {
+  it('admits a task whose Vault write waited on the account it pinned, beside the one that raced it', async () => {
     const f = await fixture()
-    const spare = await f.account({ usedPct: 50 })
     const second = await f.taskFixture()
     const entered = Promise.withResolvers<void>()
     const release = Promise.withResolvers<void>()
@@ -956,42 +955,15 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
       await release.promise
       return write(...args)
     })
-    const late = f.credentials.issue(second.ref, f.grant).catch((caught: unknown) => caught)
+    const late = f.credentials.issue(second.ref, f.grant)
     await entered.promise
-    // Both selected the account with the most headroom; this one is admitted first.
     await f.credentials.issue(f.ref, f.grant)
     release.resolve()
-    const error = (await late) as { code: string; details: { retryAt: string } }
-    expect(error).toMatchObject({ code: 'SUBSCRIPTION_BUSY' })
-    expect(Date.parse(error.details.retryAt) - Date.now()).toBeLessThan(5_000)
-    expect(await db.llmKey.count({ where: { taskId: second.task.id } })).toBe(0)
-    // The next attempt of that task, under a new lease epoch, takes the free account.
-    await db.siteLease.update({ where: { siteId: second.site.id }, data: { epoch: 2 } })
-    await f.credentials.issue({ ...second.ref, epoch: 2 }, f.grant)
+    await late
     expect(
       (await db.llmKey.findFirstOrThrow({ where: { taskId: second.task.id } }))
         .subscriptionAccountId,
-    ).toBe(spare.id)
-  })
-
-  it('keeps the pool wait when the pinned account was taken and no other account is free', async () => {
-    const f = await fixture()
-    const second = await f.taskFixture()
-    const entered = Promise.withResolvers<void>()
-    const release = Promise.withResolvers<void>()
-    const write = f.vault.kvCreateOnce.getMockImplementation()!
-    f.vault.kvCreateOnce.mockImplementationOnce(async (...args) => {
-      entered.resolve()
-      await release.promise
-      return write(...args)
-    })
-    const late = f.credentials.issue(second.ref, f.grant).catch((caught: unknown) => caught)
-    await entered.promise
-    await f.credentials.issue(f.ref, f.grant)
-    release.resolve()
-    const error = (await late) as { code: string; details: { retryAt: string } }
-    expect(error).toMatchObject({ code: 'SUBSCRIPTION_BUSY' })
-    expect(Date.parse(error.details.retryAt) - Date.now()).toBeGreaterThan(50_000)
+    ).toBe(f.mainAccount.id)
   })
 
   it('concurrent repeated issuance of one turn creates one binding/key and returns one pair', async () => {
