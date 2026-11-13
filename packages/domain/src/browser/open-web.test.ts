@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { browserForeignPageAllowed } from './hosts.ts'
 import {
   browserAddressOpens,
+  browserPageHost,
   browserPlatformHost,
   OPEN_WEB_OBJECTS,
   OPEN_WEB_POLICY,
@@ -10,12 +11,19 @@ import {
 import { browserSessionLimits } from './session.ts'
 
 const PLATFORM = ['raditi.ru', 'raditi-preview.ru']
-const openWeb = { openWeb: true, allowedHosts: [], localSites: [], platformHosts: PLATFORM }
+const openWeb = {
+  openWeb: true,
+  allowedHosts: [],
+  localSites: [],
+  platformHosts: PLATFORM,
+  pageDomain: null,
+}
 const site = {
   openWeb: false,
   allowedHosts: ['news.example.ru:443', 'www.news.example.ru:443'],
   localSites: ['http://wordpress.local:8080'],
   platformHosts: PLATFORM,
+  pageDomain: null,
 }
 
 describe('browserAddressOpens without a site', () => {
@@ -144,5 +152,51 @@ describe('a chat without a site', () => {
     expect(() =>
       OPEN_WEB_OBJECTS.browserVerification({ kind: 'post', objectId: '1', editUrl: 'x' }),
     ).toThrow()
+  })
+})
+
+describe('a published page of the agent (plan 69, Ст26)', () => {
+  const PAGE = 'https://abcdefghijklmnopqrstuvwxyz.pages.raditi.ru/'
+  const pages = 'pages.raditi.ru'
+
+  it('is one base32 label of 26 letters right under the domain of the pages', () => {
+    expect(browserPageHost('abcdefghijklmnopqrstuvwxyz.pages.raditi.ru', pages)).toBe(true)
+    expect(browserPageHost('ABCDEFGHIJKLMNOPQRSTUVWXYZ.Pages.Raditi.Ru', pages)).toBe(true)
+    expect(browserPageHost('abcdefghijklmnopqrstuvwxyz.pages.raditi.ru.', pages)).toBe(false)
+    for (const host of [
+      'pages.raditi.ru',
+      'raditi.ru',
+      'x.abcdefghijklmnopqrstuvwxyz.pages.raditi.ru',
+      'abcdefghijklmnopqrstuvwxy.pages.raditi.ru',
+      'abcdefghijklmnopqrstuvwxy1.pages.raditi.ru',
+      'abcdefghijklmnopqrstuvwxyz.pages.raditi.ru.evil.ru',
+      'abcdefghijklmnopqrstuvwxyz.raditi-preview.ru',
+    ])
+      expect(browserPageHost(host, pages), host).toBe(false)
+    expect(browserPageHost('abcdefghijklmnopqrstuvwxyz.pages.raditi.ru', null)).toBe(false)
+  })
+
+  it('opens by its address in either session, though raditi.ru is the platform’s', () => {
+    for (const reach of [openWeb, site]) {
+      expect(browserAddressOpens(PAGE, { ...reach, pageDomain: pages })).toBe(true)
+      expect(browserAddressOpens(`${PAGE}a?b`, { ...reach, pageDomain: pages })).toBe(true)
+      // Without the domain of the pages, it is the platform's like the rest.
+      expect(browserAddressOpens(PAGE, reach)).toBe(false)
+      for (const closed of [
+        'https://pages.raditi.ru/',
+        'https://pages.raditi.ru/v/token',
+        'https://raditi.ru/chats',
+        'http://abcdefghijklmnopqrstuvwxyz.pages.raditi.ru/',
+        'https://abcdefghijklmnopqrstuvwxyz.pages.raditi.ru:8443/',
+        'https://user@abcdefghijklmnopqrstuvwxyz.pages.raditi.ru/',
+        'https://x.abcdefghijklmnopqrstuvwxyz.pages.raditi.ru/',
+      ])
+        expect(browserAddressOpens(closed, { ...reach, pageDomain: pages }), closed).toBe(false)
+    }
+  })
+
+  it('is still a name of the platform by its host alone: only its whole address opens', () => {
+    expect(browserPlatformHost('abcdefghijklmnopqrstuvwxyz.pages.raditi.ru', PLATFORM)).toBe(true)
+    expect(browserPlatformHost('pages.raditi.ru', PLATFORM)).toBe(true)
   })
 })

@@ -37,8 +37,8 @@ x-preview-address: &preview-address
   PREVIEW_BASE_DOMAIN: ${PREVIEW_BASE_DOMAIN:?Set PREVIEW_BASE_DOMAIN}
   PREVIEW_SCHEME: https
 
-# Published pages on this machine (docs/plan/69-pages.md, Ст3): one domain for web, mcp and the
-# pages listener of preview — core names no page address; the wildcard of PAGES_BASE_DOMAIN comes by DNS-01 (reg.ru)
+# Published pages on this machine (docs/plan/69-pages.md, Ст3, Ст26): one domain for web, mcp, the
+# pages listener of preview and the browser of chats — core names no page address; the wildcard of PAGES_BASE_DOMAIN comes by DNS-01 (reg.ru)
 x-pages-address: &pages-address
   PAGES_BASE_DOMAIN: ${PAGES_BASE_DOMAIN:?Set PAGES_BASE_DOMAIN}
 
@@ -289,7 +289,8 @@ services:
       postgres: { condition: service_healthy }
       s3: { condition: service_healthy }
     environment:
-      <<: *s3
+      # The agent's pages open in the browser of a chat, their address on this machine too (Ст26)
+      <<: [*s3, *pages-address]
       NODE_ENV: production
       APP_ENV: production
       NODE_EXTRA_CA_CERTS: /run/raditi/vault-ca.pem
@@ -298,6 +299,8 @@ services:
       BROWSER_WORKER_PORT: '8086'
       BROWSER_RUNTIME: runsc
       BROWSER_DOCKER_SOCKET: /var/run/docker.sock
+      # The address of the agent's pages on this machine, the one REFUSED_SUBNETS entry their names pass
+      BROWSER_PAGE_ADDRESSES: ${BROWSER_PAGE_ADDRESSES:?Set BROWSER_PAGE_ADDRESSES, this server's public address}
       BROWSER_IMAGE: ${BROWSER_IMAGE:?Set the digest-pinned browser session image}
       BROWSER_FORWARDER_IMAGE: ${BROWSER_FORWARDER_IMAGE:?Set the digest-pinned forwarder image}
       BROWSER_EGRESS_IMAGE: ${BROWSER_EGRESS_IMAGE:?Set the digest-pinned client egress image}

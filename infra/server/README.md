@@ -83,7 +83,7 @@ Gitea 1.27.3 — `https://git.raditi.internal:3443` (опубликован то
 
 - **Сертификат** `*.pages.raditi.ru` — резолвер `pages`, DNS-01 через тот же аккаунт API reg.ru, что у `*.raditi-preview.ru` (`PREVIEW_DNS_PROVIDER=regru`, `kv/platform/app/traefik`). Зона `raditi.ru` должна лежать в этом же аккаунте reg.ru. Сертификаты резолвера — в своём файле `pages-acme.json` тома `acme`. Запись DNS `*.pages.raditi.ru` → `45.8.250.117`.
 - **Секрет** cookie пароля страницы `PAGES_COOKIE_SECRET` — свой, не `PREVIEW_SESSION_SECRET`: поле `app/preview` в Vault, `seed` создаёт его, `render preview` кладёт в `/run/raditi/preview/app.env`. `deploy.sh` делает оба шага на каждой выкладке; `seed` значение не переписывает.
-- **Переменные** `.env`: `PAGES_BASE_DOMAIN=pages.raditi.ru` выкладка добавит сама. `BROWSER_PLATFORM_HOSTS` закрывает имя вместе со всем, что под ним, поэтому `raditi.ru` в этой строке закрывает браузеру задачи и страницы (план 69, Ст26 — вопрос владельцу).
+- **Переменные** `.env`: `PAGES_BASE_DOMAIN=pages.raditi.ru` выкладка добавит сама. `BROWSER_PLATFORM_HOSTS` не меняется: `raditi.ru` в нём закрывает браузеру чата всё под собой, кроме страниц агента. Их открывает исключение по `PAGES_BASE_DOMAIN` у `browser`, а прокси выхода сессии пускает к адресу сервера (`BROWSER_PAGE_ADDRESSES=45.8.250.117`, выкладка добавит строку сама) только имя страницы на 443 (план 69, Ст26). После выкладки проверьте: страница открывается в браузере чата.
 
 ## Telegram
 

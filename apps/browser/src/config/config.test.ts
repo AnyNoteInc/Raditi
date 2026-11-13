@@ -36,6 +36,36 @@ function problemsOf(env: Env): readonly string[] {
   throw new Error('expected a ConfigError')
 }
 
+describe('PAGES_BASE_DOMAIN (plan 69, Ст26)', () => {
+  it('opens the agent’s pages in the rules and tells the egress proxy of every session', () => {
+    const config = loadBrowserConfig(devEnv({ PAGES_BASE_DOMAIN: 'pages.localhost' }))
+    expect(config.pageDomain).toBe('pages.localhost')
+    expect(config.runtime).toMatchObject({ pageDomain: 'pages.localhost' })
+    expect(loadBrowserConfig(devEnv()).runtime).not.toHaveProperty('pageDomain')
+  })
+
+  it('names the addresses of the machine of the pages to the proxy, only with the domain', () => {
+    const config = loadBrowserConfig(
+      devEnv({ PAGES_BASE_DOMAIN: 'pages.localhost', BROWSER_PAGE_ADDRESSES: '45.8.250.117' }),
+    )
+    expect(config.runtime).toMatchObject({ pageAddresses: ['45.8.250.117'] })
+    expect(problemsOf(devEnv({ BROWSER_PAGE_ADDRESSES: '45.8.250.117' }))).toEqual([
+      'BROWSER_PAGE_ADDRESSES: needs PAGES_BASE_DOMAIN',
+    ])
+    expect(
+      problemsOf(
+        devEnv({ PAGES_BASE_DOMAIN: 'pages.localhost', BROWSER_PAGE_ADDRESSES: 'server' }),
+      ),
+    ).toEqual(['BROWSER_PAGE_ADDRESSES: at most 8 IP addresses, comma-separated'])
+  })
+
+  it('refuses a domain that is not a lower-case name', () => {
+    expect(problemsOf(devEnv({ PAGES_BASE_DOMAIN: 'Pages.Localhost' })).join('\n')).toMatch(
+      /PAGES_BASE_DOMAIN/,
+    )
+  })
+})
+
 describe('BROWSER_PLATFORM_HOSTS (plan 61, К37)', () => {
   it('reads public names without a port, each once', () => {
     expect(
@@ -79,6 +109,7 @@ describe('loadBrowserConfig', () => {
       extraHosts: [],
       localSites: [],
       platformHosts: [],
+      pageDomain: null,
       session: { idleMinutes: 30, maxHours: 4, maxSessions: 1024 },
       stream: { maxFps: 12, quality: 70, window: 2 },
       runtime: { appEnv: 'development', runtime: 'runc', refusedSubnets: [] },
