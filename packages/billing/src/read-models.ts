@@ -54,6 +54,8 @@ const planSelect = {
   price: true,
   creditsPerMonth: true,
   creditsPerDay: true,
+  creditsPer5h: true,
+  creditsPerWeek: true,
   maxSites: true,
   packCredits: true,
 } satisfies Prisma.PlanSelect
@@ -67,6 +69,8 @@ const planDto = (row: PlanRow) => ({
   price: row.price.toFixed(2),
   creditsPerMonth: row.creditsPerMonth,
   creditsPerDay: row.creditsPerDay,
+  creditsPer5h: row.creditsPer5h,
+  creditsPerWeek: row.creditsPerWeek,
   maxSites: row.maxSites,
 })
 

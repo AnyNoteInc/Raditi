@@ -195,6 +195,8 @@ const planRow = (data: Record<string, unknown> = {}) => ({
   price: new Money('4900'),
   creditsPerMonth: 30,
   creditsPerDay: 10,
+  creditsPer5h: null,
+  creditsPerWeek: null,
   maxSites: 1,
   packCredits: null,
   ...data,
@@ -206,6 +208,8 @@ const business = () =>
     price: new Money('12900'),
     creditsPerMonth: 80,
     creditsPerDay: 20,
+    creditsPer5h: null,
+    creditsPerWeek: null,
     maxSites: 3,
   })
 const planDto = ({
@@ -252,8 +256,23 @@ const noCredits = {
   minToStart: 1,
   // Without a paid tariff there is no day: the gift is the bound.
   today: null,
+  // A user without a workspace has no windows yet (plan 70).
+  windows: [],
   newTask: { allowed: false, reason: 'gift_spent' },
 }
+/**
+ * The windows of 5 hours and of the week as the fake answers them (plan 70): no live tariff is
+ * read from its raw queries, so the limits without a tariff, none of the windows started.
+ */
+/** The windows of the seeded «Старт» (Л4), none of them started. */
+const START_WINDOWS = [
+  { kind: '5h', limit: 20, used: 0, left: 20, resetsAt: null },
+  { kind: 'week', limit: 55, used: 0, left: 55, resetsAt: null },
+]
+const FAKE_WINDOWS = [
+  { kind: '5h', limit: 15, used: 0, left: 15, resetsAt: null },
+  { kind: 'week', limit: 50, used: 0, left: 50, resetsAt: null },
+]
 /**
  * The tariff credits of a day that took nothing yet: its limit — null for a plan without one,
  * as every tariff of the seeds since 06.11.2026 (plan 63, Ц6) —, and what the tariff has free.
@@ -428,6 +447,7 @@ describe('billing.overview', () => {
         setAside: 35,
         minToStart: 1,
         today: freshDay(20, 45),
+        windows: FAKE_WINDOWS,
         newTask: TAKEN,
       },
       ...noWaits,
@@ -481,6 +501,7 @@ describe('billing.overview', () => {
       spendable: 80,
       spendableNow: 0,
       today: { limit: 20, charged: 20, held: 0, used: 20, room: 0, left: 0 },
+      windows: FAKE_WINDOWS,
       newTask: { allowed: false, reason: 'daily_limit' },
     })
 
@@ -525,6 +546,7 @@ describe('billing.overview', () => {
       setAside: 5,
       minToStart: 1,
       today: null,
+      windows: FAKE_WINDOWS,
       newTask: TAKEN,
     })
     expect(db.billingAccount.findMany).toHaveBeenCalledWith({
@@ -654,6 +676,7 @@ describe('billing.overview', () => {
       setAside: 0,
       minToStart: 1,
       today: freshDay(20, 80),
+      windows: FAKE_WINDOWS,
       newTask: TAKEN,
     })
     expect(overview.subscription).toMatchObject({ id: subscription.id, status: 'active' })
@@ -683,7 +706,10 @@ describe('billing.overview', () => {
   it('does not ask for a promise once the user has a workspace: its accounts are read', async () => {
     const { prisma, db } = fakeDb()
 
-    expect((await createCaller(context(prisma)).billing.overview()).credits).toEqual(noCredits)
+    expect((await createCaller(context(prisma)).billing.overview()).credits).toEqual({
+      ...noCredits,
+      windows: FAKE_WINDOWS,
+    })
     expect(db.creditLedger.findUnique).not.toHaveBeenCalled()
     expect(db.billingAccount.findMany).toHaveBeenCalledTimes(2)
   })
@@ -721,6 +747,7 @@ describe('billing.overview', () => {
       credits: {
         ...noCredits,
         today: freshDay(20, 0),
+        windows: FAKE_WINDOWS,
         newTask: { allowed: false, reason: 'empty' },
       },
     })
@@ -813,6 +840,8 @@ const pack = () =>
     price: new Money('1990'),
     creditsPerMonth: null,
     creditsPerDay: null,
+    creditsPer5h: null,
+    creditsPerWeek: null,
     maxSites: null,
     packCredits: 100,
   })
@@ -825,6 +854,8 @@ describe('billing.plans', () => {
       price: new Money('39900'),
       creditsPerMonth: 250,
       creditsPerDay: 30,
+      creditsPer5h: null,
+      creditsPerWeek: null,
       maxSites: 15,
     })
 
@@ -1431,6 +1462,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
       price: plan.price.toFixed(2),
       creditsPerMonth,
       creditsPerDay: plan.creditsPerDay,
+      creditsPer5h: plan.creditsPer5h,
+      creditsPerWeek: plan.creditsPerWeek,
       maxSites,
     }
     return { ...plan, maxSites, creditsPerMonth, dto }
@@ -1473,7 +1506,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
 
     await caller.project.create(site('Первый'))
     // The first site made the workspace and kept the promise: the same credits, now granted.
-    const granted = { ...promisedCredits, gift: giftGranted, newTask: NO_RATE }
+    const granted = {
+      ...promisedCredits,
+      gift: giftGranted,
+      newTask: NO_RATE,
+      // The workspace is there: the windows without a tariff (plan 70).
+      windows: FAKE_WINDOWS,
+    }
     expect((await caller.billing.overview()).credits).toEqual(granted)
     await caller.project.create(site('Второй'))
     expect((await caller.billing.overview()).credits).toEqual(granted)
@@ -1618,6 +1657,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
         setAside: 0,
         minToStart: 1,
         today: freshDay(plan.creditsPerDay, quota),
+        windows: START_WINDOWS,
         newTask: NO_RATE,
       },
       ...noWaits,
@@ -1755,6 +1795,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
         setAside: 0,
         minToStart: 1,
         today: freshDay(plan.creditsPerDay, quota),
+        windows: START_WINDOWS,
         newTask: NO_RATE,
       },
       ...noWaits,
@@ -1819,6 +1860,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
     )
     expect((await caller.billing.overview()).credits).toEqual({
       ...promisedCredits,
+      // The workspace is there now: its windows are those without a tariff (plan 70).
+      windows: FAKE_WINDOWS,
       gift: giftGranted,
       newTask: NO_RATE,
     })

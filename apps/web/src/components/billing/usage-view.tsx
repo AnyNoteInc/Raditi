@@ -16,7 +16,14 @@ import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
 
 import { pageHeading, sectionHeading, sectionPadding, surface } from './billing-surface'
-import type { BillingUsage, PackOffer, Subscription, TariffDay, TariffUsage } from './billing-types'
+import type {
+  BillingUsage,
+  PackOffer,
+  Subscription,
+  TariffDay,
+  TariffUsage,
+  UsageWindow,
+} from './billing-types'
 import { canBuyPack, PackDialog } from './pack-dialog'
 import { creditsWord } from './plan-format'
 import {
@@ -55,6 +62,13 @@ import {
 } from './usage-format'
 import { UsageHistory } from './usage-history'
 import { Bar, Meter, Swatch, type MeterPart, type MeterTone } from './usage-meter'
+import {
+  ofWindowLimit,
+  usageWindowMeterLabel,
+  usageWindowNote,
+  usageWindowsExplained,
+  usageWindowTitle,
+} from './usage-windows-format'
 
 const PLANS_PATH = '/settings/plans'
 
@@ -523,6 +537,49 @@ function Limits({
 }
 
 /**
+ * «Лимиты»: the windows of 5 hours and of the week of the workspace (plan 70) — what each took,
+ * of how many, and when it resets; one sentence says why they exist. Nothing without a limit.
+ */
+function WindowLimits({ windows }: { windows: readonly UsageWindow[] }) {
+  const bounded = windows.filter(
+    (window): window is UsageWindow & { limit: number } => window.limit !== null,
+  )
+  if (bounded.length === 0) return null
+  return (
+    <Box component="section" aria-label="Лимиты" sx={{ p: sectionPadding }}>
+      <Typography component="h2" sx={{ fontWeight: 600 }}>
+        Лимиты
+      </Typography>
+      <Typography variant="body2" color="textSecondary" sx={{ mt: 0.5 }}>
+        {nbsp(usageWindowsExplained)}
+      </Typography>
+      <Box
+        sx={{
+          mt: 3,
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px, 100%), 1fr))',
+          gap: 4,
+        }}
+      >
+        {bounded.map((window) => (
+          <Tile
+            key={window.kind}
+            title={usageWindowTitle[window.kind]}
+            figure={{ value: window.used, unit: ofWindowLimit(window.limit) }}
+            meter={{
+              label: usageWindowMeterLabel(window),
+              parts: taken(window.used, window.limit),
+              total: window.limit,
+            }}
+            note={usageWindowNote(window)}
+          />
+        ))}
+      </Box>
+    </Box>
+  )
+}
+
+/**
  * The credits charged in the period, project by project, and what chats without one took; one
  * line while nothing is charged.
  */
@@ -673,6 +730,7 @@ export function UsageView() {
         ) : data.subscription === null || data.tariff === null ? (
           <Stack divider={<Divider />} sx={{ ...surface, mt: 4 }}>
             <NoTariff usage={data} />
+            <WindowLimits windows={data.windows} />
             {/* No tariff, no period: the history is whole, and its dates name their year. */}
             <UsageHistory first={data.history} readAt={usage.dataUpdatedAt} whole />
           </Stack>
@@ -692,6 +750,7 @@ export function UsageView() {
               }
             />
             <Limits usage={data} subscription={data.subscription} tariff={data.tariff} />
+            <WindowLimits windows={data.windows} />
             <BySite sites={data.tariff.bySite} />
             <UsageHistory first={data.history} readAt={usage.dataUpdatedAt} />
           </Stack>

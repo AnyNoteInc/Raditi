@@ -1043,6 +1043,11 @@ const readFailure = z.object({
   // the candidate.
   next: z.enum(feedFailureNexts).optional().catch(undefined),
   objects: readObjects,
+  // A window this code cannot read: the row keeps its general words (plan 70).
+  window: z
+    .object({ kind: z.enum(['5h', 'week']), resetsAt: z.iso.datetime() })
+    .optional()
+    .catch(undefined),
 })
 
 const readCandidate = z.object({

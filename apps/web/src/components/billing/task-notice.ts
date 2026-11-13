@@ -280,8 +280,12 @@ export function taskNotice(input: TaskNoticeInput): TaskNotice | null {
  * and a bigger tariff has bigger windows.
  */
 function windowTaken(input: TaskNoticeInput): TaskNotice {
+  // The 5 hours are asked first, as the server refuses (`refusingWindow`).
+  const window =
+    input.task.windows.find((item) => item.kind === '5h' && item.left === 0) ??
+    input.task.windows.find((item) => item.left === 0)
   return {
-    state: `${usageLimitText('5h', null)} Кредиты от этого не сгорают.`,
+    state: `${usageLimitText(window?.kind ?? '5h', window?.resetsAt ?? null)} Кредиты от этого не сгорают.`,
     way:
       input.tariff?.name === 'Агентство'
         ? null

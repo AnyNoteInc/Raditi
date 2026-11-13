@@ -43,7 +43,11 @@ const { getOverview, getPayments, startChange, unlinkMethod, syncMethod, hardNav
             queryOptions: () => ({ queryKey: ['billing', 'overview'], queryFn: getOverview }),
           },
           plans: { queryKey: () => ['billing', 'plans'] },
-          usage: { queryKey: () => ['billing', 'usage'] },
+          usage: {
+            queryKey: () => ['billing', 'usage'],
+            // The hint of the windows (plan 70) reads nothing in these cases.
+            queryOptions: () => ({ queryKey: ['billing', 'usage'], queryFn: async () => null }),
+          },
           startPaymentMethodChange: {
             mutationOptions: (options: UseMutationOptions<Started, Error, Nothing>) => ({
               ...options,

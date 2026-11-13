@@ -8,6 +8,7 @@ import { formatCount } from '@/lib/count'
 import { CHARGED_FOR_DONE_WORK, smallEditPrice, smallEditSentence } from '@/lib/credit-price'
 import { nbsp } from '@/lib/nbsp'
 import { planDescription } from '@/lib/plan-description'
+import { planWindowLimits } from '@/lib/plan-windows'
 import { plural } from '@/lib/plural'
 import { formatRubles } from '@/lib/rubles'
 
@@ -235,6 +236,9 @@ export function Pricing({
                   {nbsp(`\u00a0${planInWords(plan.creditsPerMonth, plan.creditsPerDay)}`)}
                 </li>
                 {smallEdit && <li>{nbsp(smallEdit)}</li>}
+                {planWindowLimits(plan.creditsPer5h, plan.creditsPerWeek) && (
+                  <li>{nbsp(planWindowLimits(plan.creditsPer5h, plan.creditsPerWeek)!)}</li>
+                )}
                 <li>
                   {plan.maxSites === 1
                     ? 'Один сайт'

@@ -1756,3 +1756,57 @@ describe('what stands in the way of a new task on «Использование»
     })
   })
 })
+
+// Plan 70, §4.5: the windows of 5 hours and of the week, what each took and when it resets.
+describe('the «Лимиты» of the windows of the workspace', () => {
+  const opened = new Date('2026-11-16T10:40:00.000Z')
+
+  it('shows two meters with what each window took, of how many, and the reset by the Moscow clock', async () => {
+    getUsage.mockResolvedValue(
+      usageOf(
+        {},
+        {
+          windows: [
+            {
+              kind: '5h',
+              limit: 20,
+              used: '12.4',
+              resetsAt: new Date(opened.getTime() + 5 * 3_600_000),
+            },
+            { kind: 'week', limit: 55, used: '0', resetsAt: null },
+          ],
+        },
+      ),
+    )
+    showUsage()
+
+    const limits = await section('Лимиты')
+    const text = plain(limits.textContent)
+    expect(text).toContain('5 часов')
+    expect(text).toContain('13 из 20 кредитов')
+    expect(text).toContain('Сбросится в 18:40.')
+    expect(text).toContain('Неделя')
+    expect(text).toContain('0 из 55 кредитов')
+    expect(text).toContain('Начнётся с первой задачи.')
+    expect(text).toContain('кредиты от этого не сгорают')
+  })
+
+  it('shows the windows without a tariff too, and no block without limits', async () => {
+    getUsage.mockResolvedValue(
+      noTariff(10, noGift, noHistory, {
+        windows: [
+          { kind: '5h', limit: 15, used: '1', resetsAt: null },
+          { kind: 'week', limit: 50, used: '1', resetsAt: null },
+        ],
+      }),
+    )
+    const { unmount } = showUsage()
+    expect(plain((await section('Лимиты')).textContent)).toContain('1 из 15 кредитов')
+    unmount()
+
+    getUsage.mockResolvedValue(usageOf())
+    showUsage()
+    await section('Кредиты')
+    expect(screen.queryByRole('region', { name: 'Лимиты' })).not.toBeInTheDocument()
+  })
+})

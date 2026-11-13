@@ -197,6 +197,8 @@ const plan = {
   price: '12900.00',
   creditsPerMonth: 80,
   creditsPerDay: 20,
+  creditsPer5h: null,
+  creditsPerWeek: null,
   maxSites: 3,
 }
 const noPage: UsageHistoryPageDto = { items: [], nextCursor: null }
@@ -228,6 +230,7 @@ const noTariff: UsageSummaryDto = {
   minToStart: 1,
   // Without a tariff there is no day: the gift is the bound.
   today: null,
+  windows: [],
   newTask: { allowed: false, reason: 'gift_spent' },
 }
 /** What a user without a workspace reads: no tariff and the gift they are promised. */
@@ -280,6 +283,7 @@ const onTariff = (): UsageSummaryDto => ({
   setAside: 23,
   minToStart: 1,
   today: busyDay,
+  windows: [],
   newTask: TAKEN,
 })
 
@@ -366,6 +370,7 @@ describe('billing.usage', () => {
       setAside: 0,
       minToStart: 1,
       today: null,
+      windows: [],
       newTask: TAKEN,
     })
     // Whether the gift is still to come is asked of the ledger, by the key of this user.
@@ -462,6 +467,8 @@ describe('billing.usage', () => {
         price: new Money('1990'),
         creditsPerMonth: null,
         creditsPerDay: null,
+        creditsPer5h: null,
+        creditsPerWeek: null,
         maxSites: null,
         packCredits: 100,
       },
@@ -762,6 +769,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
       ...promised,
       gift: { ...promised.gift, granted: true },
       newTask: NO_RATE,
+      // The workspace is there: the windows without a tariff (plan 70).
+      windows: [
+        { kind: '5h', limit: 15, used: 0, left: 15, resetsAt: null },
+        { kind: 'week', limit: 50, used: 0, left: 50, resetsAt: null },
+      ],
       paymentsEnabled: true,
       autoRenewalAvailable: true,
       packOnSale: await packOnSale(),
@@ -810,6 +822,23 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
       setAside: 0,
       minToStart: 1,
       today: freshDay,
+      // The windows of «Бизнес» (Л4), none of them started.
+      windows: [
+        {
+          kind: '5h',
+          limit: tariff.creditsPer5h,
+          used: 0,
+          left: tariff.creditsPer5h,
+          resetsAt: null,
+        },
+        {
+          kind: 'week',
+          limit: tariff.creditsPerWeek,
+          used: 0,
+          left: tariff.creditsPerWeek,
+          resetsAt: null,
+        },
+      ],
       newTask: NO_RATE,
     })
     expect(await paying.caller.billing.usageHistory({})).toEqual(noPage)

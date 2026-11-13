@@ -318,6 +318,18 @@ describe('the rows of a dialog', () => {
       objects: [],
     })
 
+    // Plan 70: a window of the workspace stopped the pass — the row says when the work goes on.
+    it('names the window of the workspace and its reset by the Moscow clock', () => {
+      const feed = chatFeed(
+        {
+          ...failure('usage_limit', 'none'),
+          window: { kind: '5h', resetsAt: '2026-10-17T15:40:00.000Z' },
+        } as FeedRow,
+        headOf({ status: 'awaiting_user' }),
+      )
+      expect(text(feed)).toContain('Лимит на 5 часов исчерпан — продолжим после 18:40.')
+    })
+
     // `site_files` is of a repository, which such a chat has not.
     it.each(feedFailureCodes.filter((code) => code !== 'site_files'))(
       'fails with %s and no word of a site or of files',

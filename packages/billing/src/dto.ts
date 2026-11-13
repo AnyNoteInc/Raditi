@@ -27,6 +27,9 @@ export const planSchema = z.object({
   creditsPerMonth: positiveCount,
   /** Tariff credits a Moscow day may take; null: the plan has no daily limit. */
   creditsPerDay: positiveCount.nullable(),
+  /** Credits the work may take in 5 hours and in a week (plan 70); null: no such limit. */
+  creditsPer5h: positiveCount.nullable(),
+  creditsPerWeek: positiveCount.nullable(),
   maxSites: positiveCount,
 })
 export type PlanDto = z.infer<typeof planSchema>
