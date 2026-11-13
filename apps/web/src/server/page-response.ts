@@ -1,34 +1,13 @@
 import 'server-only'
 
-import { documentKindOf, PAGE_SANDBOX } from '@repo/domain'
+import { documentKindOf, pageContentSecurityPolicy } from '@repo/domain'
+
+export { pageContentSecurityPolicy }
 
 // What the domain of pages answers (docs/plan/67-agent-documents.md, Д3, Д8): the bytes of a page
 // the agent made, sandboxed by its CSP into an opaque origin that reaches nothing — no network, no
 // form, no frame — framed only by the cabinet. The same headers serve a shared link, whose text
 // documents are drawn without any script at all.
-
-/** The CSP of a page: the sandbox of its frame, its own inline code, data images and fonts only. */
-export function pageContentSecurityPolicy(
-  appOrigin: string,
-  { scripts }: { scripts: boolean },
-): string {
-  return [
-    `sandbox ${scripts ? PAGE_SANDBOX : PAGE_SANDBOX.replace('allow-scripts ', '')}`,
-    "default-src 'none'",
-    scripts ? "script-src 'unsafe-inline'" : "script-src 'none'",
-    "style-src 'unsafe-inline'",
-    'img-src data: blob:',
-    'font-src data:',
-    'media-src data: blob:',
-    "connect-src 'none'",
-    "form-action 'none'",
-    "base-uri 'none'",
-    "object-src 'none'",
-    "frame-src 'none'",
-    "worker-src 'none'",
-    `frame-ancestors ${appOrigin}`,
-  ].join('; ')
-}
 
 const PERMISSIONS = [
   'camera',

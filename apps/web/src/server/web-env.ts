@@ -3,6 +3,7 @@ import {
   BROWSER_STREAM_PATH,
   envVar,
   isProduction,
+  pagesOriginOf,
   parseEnv,
   previewAddressEnvShape,
   previewAddressFromEnv,
@@ -14,8 +15,6 @@ import {
 import { DEV_METRICS_TOKEN, metricsTokenProblem } from '@repo/observability'
 import { getDomain } from 'tldts'
 import { z } from 'zod'
-
-import { pagesOriginOf } from '@/lib/pages-origin'
 
 export interface WebEnv {
   appEnv: AppEnv

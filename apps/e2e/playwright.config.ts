@@ -22,6 +22,8 @@ export default defineConfig({
     'tests/billing/**',
     'tests/site/**',
     'tests/site-import/**',
+    // Its own two hosts, no web (playwright.documents.config.ts).
+    'tests/documents/**',
   ],
   timeout: 60_000,
   reporter: 'list',

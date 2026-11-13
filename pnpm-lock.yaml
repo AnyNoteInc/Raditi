@@ -804,6 +804,9 @@ importers:
       '@repo/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@repo/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       '@repo/eslint-config':
         specifier: workspace:*
         version: link:../../packages/eslint-config

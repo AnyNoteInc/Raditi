@@ -56,6 +56,8 @@ services:
       # its mount point inside the read-only bind of traefik/dynamic.
       DASHBOARD_HOST: ${DASHBOARD_HOST:?Set DASHBOARD_HOST}
       PREVIEW_APEX_HOST: ${PREVIEW_APEX_HOST:-}
+      # The root of the domain of pages (docs/plan/67-agent-documents.md, Д3); empty — no router
+      PAGES_HOST: ${PAGES_HOST:-}
       BROWSER_STREAM_HOST: ${APP_DOMAIN}
       # The wildcard of previews (traefik/dynamic/preview.yml): DNS-01 through the reg.ru API
       PREVIEW_BASE_DOMAIN: ${PREVIEW_BASE_DOMAIN:?Set PREVIEW_BASE_DOMAIN}
@@ -74,6 +76,8 @@ services:
       <<: [*s3, *gitea-url, *preview-address]
       # The panel of the cloud browser: Traefik routes this path of the apex to the stream gateway
       BROWSER_STREAM_PUBLIC_URL: wss://${APP_DOMAIN}/v1/browser/stream
+      # The pages the agent makes, framed from a host of their own (docs/plan/67, Д3)
+      PAGES_ORIGIN: ${PAGES_ORIGIN:-}
     extra_hosts: *internal-hosts
 
   core:

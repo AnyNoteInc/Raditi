@@ -10,17 +10,19 @@
     "test:billing": "playwright test -c playwright.billing.config.ts",
     "test:site": "playwright test -c playwright.site.config.ts",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint . --max-warnings 0"
+    "lint": "eslint . --max-warnings 0",
+    "test:documents": "playwright test -c playwright.documents.config.ts"
   },
   "devDependencies": {
+    "@axe-core/playwright": "catalog:",
+    "@playwright/test": "catalog:",
     "@repo/auth": "workspace:*",
     "@repo/billing": "workspace:*",
     "@repo/db": "workspace:*",
+    "@repo/domain": "workspace:*",
     "@repo/eslint-config": "workspace:*",
     "@repo/site-connections": "workspace:*",
     "@repo/typescript-config": "workspace:*",
-    "@axe-core/playwright": "catalog:",
-    "@playwright/test": "catalog:",
     "@types/node": "catalog:",
     "@typescript/native": "catalog:",
     "eslint": "catalog:",

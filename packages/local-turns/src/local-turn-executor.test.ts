@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer'
 
 import {
   snapshotPartFiles,
+  outboxLimits,
   turnSnapshotPrefix,
   workspaceTransitKey,
   type ExecHandle,
@@ -509,9 +510,12 @@ describe('files of the agent for the client on the local executor (docs/plan/66,
     )
   })
 
-  it('drops more than ten files, and says how many entries it left', async () => {
-    const eleven = Array.from({ length: 11 }, (_, i) => `f 1 f${i}.txt\0`).join('')
-    const f = await fixture({ outbox: { listing: eleven, archive: new Uint8Array() } })
+  it('drops more files than the limit, and says how many entries it left', async () => {
+    const tooMany = Array.from(
+      { length: outboxLimits.files + 1 },
+      (_, i) => `f 1 f${i}.txt\0`,
+    ).join('')
+    const f = await fixture({ outbox: { listing: tooMany, archive: new Uint8Array() } })
     const execution = await f.executor.prepare(f.input(), signal)
     const captured = await execution.capture({ home })
     expect(await readOutboxArchive(captured.outbox!)).toMatchObject({ refused: true })

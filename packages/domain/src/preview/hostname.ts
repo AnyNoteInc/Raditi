@@ -151,6 +151,46 @@ export const PREVIEW_SANDBOX =
 export const PAGE_SANDBOX =
   'allow-scripts allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads'
 
+/**
+ * The origin of the domain of the pages the agent makes (PAGES_ORIGIN,
+ * docs/plan/67-agent-documents.md, Д3): `<scheme>://<host>[:port]` and nothing else. The proxy reads
+ * it on every request to split the two hosts and the CSP of the cabinet frames it; both must never
+ * throw, so anything that is not exactly an http(s) origin is null — no page is framed or served.
+ */
+export function pagesOriginOf(env: Record<string, string | undefined>): string | null {
+  const value = env.PAGES_ORIGIN?.trim() ?? ''
+  if (value === '') return null
+  const url = URL.parse(value)
+  if (url === null || (url.protocol !== 'http:' && url.protocol !== 'https:')) return null
+  return url.origin === value ? value : null
+}
+
+/**
+ * The CSP of a page the agent made (docs/plan/67, Д3), as the domain of pages sends it: the
+ * sandbox of its frame, its own inline code, data images and fonts only; `scripts: false` — none.
+ */
+export function pageContentSecurityPolicy(
+  appOrigin: string,
+  { scripts }: { scripts: boolean },
+): string {
+  return [
+    `sandbox ${scripts ? PAGE_SANDBOX : PAGE_SANDBOX.replace('allow-scripts ', '')}`,
+    "default-src 'none'",
+    scripts ? "script-src 'unsafe-inline'" : "script-src 'none'",
+    "style-src 'unsafe-inline'",
+    'img-src data: blob:',
+    'font-src data:',
+    'media-src data: blob:',
+    "connect-src 'none'",
+    "form-action 'none'",
+    "base-uri 'none'",
+    "object-src 'none'",
+    "frame-src 'none'",
+    "worker-src 'none'",
+    `frame-ancestors ${appOrigin}`,
+  ].join('; ')
+}
+
 /** The cabinet's route that issues a fresh ticket for a preview and a path (apps/web, Р19). */
 export const PREVIEW_OPEN_PATH = '/preview/open'
 
