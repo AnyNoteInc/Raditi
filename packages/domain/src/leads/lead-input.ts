@@ -1,23 +1,21 @@
 import { z } from 'zod'
 
-/** Limits of a lead from the landing (docs/plan/65-landing-platforms-leads.md, Л5). */
+/**
+ * Limits of a lead from the landing (docs/plan/65-landing-platforms-leads.md, Л5; two fields
+ * since 13.11.2026).
+ */
 export const leadLimits = {
-  nameChars: 100,
-  emailChars: 254,
   siteChars: 253,
-  aboutMinChars: 10,
-  aboutMaxChars: 2000,
   phoneMinDigits: 10,
   phoneMaxDigits: 15,
+  telegramMinChars: 5,
+  telegramMaxChars: 32,
 } as const
 
 /** The words the form shows under a field; the server answers with the same ones. */
 export const leadFieldErrors = {
-  name: 'Напишите, как к вам обращаться',
-  phone: 'Нужен номер из 10–15 цифр',
-  email: 'Проверьте адрес почты',
   site: 'Например, kofeinya.ru',
-  about: 'Расскажите хотя бы в одном предложении',
+  phone: 'Нужен номер телефона или ник в Telegram',
   consent: 'Без согласия мы не сможем ответить',
 } as const
 
@@ -41,6 +39,29 @@ export function normalizeLeadPhone(value: string): string | null {
   return `+${digits}`
 }
 
+const TELEGRAM_NAME = `[a-z][a-z0-9_]{${leadLimits.telegramMinChars - 1},${leadLimits.telegramMaxChars - 1}}`
+const TELEGRAM_AT = new RegExp(`^@(${TELEGRAM_NAME})$`, 'i')
+const TELEGRAM_LINK = new RegExp(`^(?:https?://)?(?:t|telegram)\\.me/(${TELEGRAM_NAME})/?$`, 'i')
+
+/**
+ * `@name`, lower-cased, from a Telegram username as a visitor types it — `@name`, `t.me/name`,
+ * `https://t.me/name`, `telegram.me/name`; null for anything else. A bare word is not a username:
+ * without `@` or a link nothing tells it from a name or a typo.
+ */
+export function normalizeLeadTelegram(value: string): string | null {
+  const trimmed = value.trim()
+  const name = (TELEGRAM_AT.exec(trimmed) ?? TELEGRAM_LINK.exec(trimmed))?.[1]
+  return name === undefined ? null : `@${name.toLowerCase()}`
+}
+
+/**
+ * How to reach the visitor, as the lead stores it: a phone number as `+<digits>` or a Telegram
+ * username as `@name`; null when the value is neither.
+ */
+export function normalizeLeadContact(value: string): string | null {
+  return normalizeLeadPhone(value) ?? normalizeLeadTelegram(value)
+}
+
 const LABEL = /^(?!-)[a-z0-9а-яё-]{1,63}(?<!-)$/
 
 /**
@@ -60,47 +81,23 @@ export function normalizeLeadSite(value: string): string | null {
   return host
 }
 
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-
-/** Characters as PostgreSQL counts them: code points, an emoji is one. */
-const characters = (text: string) => [...text].length
-
 /**
- * A lead from the landing, as the form sends it and the server stores it. `check` is the trap
- * field: hidden from people and named like no field a browser fills in, so a filled one marks a
- * robot and the server drops the lead quietly. Lengths are counted in characters, as PostgreSQL
- * counts them (`char_length`), not in UTF-16 units.
+ * A lead from the landing, as the form sends it and the server stores it: the site and a contact.
+ * The contact keeps the name of its column, `phone`, and holds a phone number or a Telegram
+ * username (`normalizeLeadContact`). `check` is the trap field: hidden from people and named like
+ * no field a browser fills in, so a filled one marks a robot and the server drops the lead quietly.
  */
 export const leadInputSchema = z.object({
-  name: z
-    .string()
-    .trim()
-    .min(1, leadFieldErrors.name)
-    .refine((name) => characters(name) <= leadLimits.nameChars, leadFieldErrors.name),
-  phone: z.string().transform((value, ctx) => {
-    const phone = normalizeLeadPhone(value)
-    if (phone === null) ctx.addIssue({ code: 'custom', message: leadFieldErrors.phone })
-    return phone ?? ''
-  }),
-  email: z
-    .string()
-    .trim()
-    .toLowerCase()
-    .max(leadLimits.emailChars, leadFieldErrors.email)
-    .regex(EMAIL, leadFieldErrors.email),
   site: z.string().transform((value, ctx) => {
     const site = normalizeLeadSite(value)
     if (site === null) ctx.addIssue({ code: 'custom', message: leadFieldErrors.site })
     return site ?? ''
   }),
-  about: z
-    .string()
-    .trim()
-    .refine((about) => characters(about) >= leadLimits.aboutMinChars, leadFieldErrors.about)
-    .refine(
-      (about) => characters(about) <= leadLimits.aboutMaxChars,
-      `Не больше ${leadLimits.aboutMaxChars} знаков`,
-    ),
+  phone: z.string().transform((value, ctx) => {
+    const contact = normalizeLeadContact(value)
+    if (contact === null) ctx.addIssue({ code: 'custom', message: leadFieldErrors.phone })
+    return contact ?? ''
+  }),
   consent: z.literal(true, { error: leadFieldErrors.consent }),
   check: z.string().max(200).optional(),
 })

@@ -10,7 +10,7 @@ import {
 import { enqueueOutbox, type PrismaClient } from '@repo/db'
 import { leadFieldIssues, leadInputSchema, legalDocumentFor } from '@repo/domain'
 
-/** A lead is a few hundred bytes; the description is at most 2 000 characters. */
+/** A lead is a few hundred bytes: the address of a site and a contact. */
 export const MAX_LEAD_BODY_BYTES = 16 * 1024
 /** Leads one address may send in an hour (docs/plan/65-landing-platforms-leads.md, Л7). */
 export const LEADS_PER_ADDRESS_PER_HOUR = 5
@@ -111,11 +111,8 @@ export async function handleLeadRequest(request: Request, deps: LeadDeps): Promi
   const created = await deps.prisma.$transaction(async (tx) => {
     const row = await tx.lead.create({
       data: {
-        name: lead.name,
         phone: lead.phone,
-        email: lead.email,
         site: lead.site,
-        about: lead.about,
         consentVersion: legalDocumentFor('pii_processing').version,
         source: 'landing',
         ipHash,

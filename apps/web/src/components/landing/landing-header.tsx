@@ -5,14 +5,15 @@ import Link from 'next/link'
 import { useEffect, useRef, useState } from 'react'
 
 import { UserMenu } from '@/components/application/user-menu'
+import { SITE_PHONE } from '@/lib/contacts'
 import type { LandingViewer } from '@/server/landing-viewer'
 
 import { LandingIcon } from './landing-icons'
 import styles from './landing.module.css'
-import { mainAction } from './main-action'
+import { MAIN_ACTION_SHORT, mainAction } from './main-action'
 
 const navigation = [
-  { href: '#how', label: 'Как это работает' },
+  { href: '#demo', label: 'Пример' },
   { href: '#possibilities', label: 'Возможности' },
   { href: '#pricing', label: 'Тарифы' },
   { href: '#faq', label: 'Вопросы' },
@@ -93,6 +94,11 @@ export function LandingHeader({ viewer }: { viewer: LandingViewer }) {
           ))}
         </nav>
         <div className={styles.headerActions}>
+          {/* The number is a text where the row has room and in the mobile menu: a search engine
+              reads it on the page, a visitor presses it to call. */}
+          <a href={`tel:${SITE_PHONE.tel}`} className={styles.headerPhone}>
+            {SITE_PHONE.text}
+          </a>
           {viewer.status === 'authenticated' ? (
             <div className={styles.headerIdentity}>
               <UserMenu user={viewer.user} />
@@ -107,11 +113,11 @@ export function LandingHeader({ viewer }: { viewer: LandingViewer }) {
             </Link>
           )}
           {/* CSS shows it from 1100px, where the row still keeps one line. Up to 800px the
-              registration is in the mobile menu; between the two the header has neither, and the
-              registration is the main action of the first screen. */}
+              action is in the mobile menu; between the two the header has neither, and it is the
+              main action of the first screen. */}
           {viewer.status === 'guest' && (
             <Link href={action.href} className={styles.signUp}>
-              {action.label}
+              {MAIN_ACTION_SHORT}
             </Link>
           )}
           <button
@@ -146,7 +152,12 @@ export function LandingHeader({ viewer }: { viewer: LandingViewer }) {
             {label}
           </a>
         ))}
-        {viewer.status !== 'authenticated' && <Link href={action.href}>{action.label}</Link>}
+        {viewer.status !== 'authenticated' && (
+          <Link href={action.href} onClick={() => setOpen(false)}>
+            {viewer.status === 'guest' ? MAIN_ACTION_SHORT : action.label}
+          </Link>
+        )}
+        <a href={`tel:${SITE_PHONE.tel}`}>{SITE_PHONE.text}</a>
       </nav>
     </header>
   )

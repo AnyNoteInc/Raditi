@@ -1781,13 +1781,16 @@ model Lead {
   id                String    @id @default(uuid(7)) @db.Uuid
   /// «Заявка №N» in the group.
   number            Int       @unique @default(autoincrement())
-  name              String    @db.VarChar(100)
-  /// `+<digits>`, normalised by leadInputSchema of @repo/domain.
-  phone             String    @db.VarChar(16)
-  email             String    @db.VarChar(254)
+  /// The form asked for the name, the mail and the description until 13.11.2026
+  /// (20261113100000_leads_two_fields): only the leads before it have them.
+  name              String?   @db.VarChar(100)
+  /// How to reach the visitor: a phone number as `+<digits>` or a Telegram username as `@name`,
+  /// normalised by leadInputSchema of @repo/domain. The column keeps its first name.
+  phone             String    @db.VarChar(34)
+  email             String?   @db.VarChar(254)
   /// The host of the site, lower-cased.
   site              String    @db.VarChar(253)
-  about             String    @db.Text
+  about             String?   @db.Text
   /// The edition of «Согласие на обработку персональных данных» the visitor agreed to.
   consentVersion    String    @map("consent_version") @db.VarChar(32)
   /// Where the form stood: `landing`.

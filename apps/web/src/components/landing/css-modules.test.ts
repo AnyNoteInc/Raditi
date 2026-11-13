@@ -78,7 +78,6 @@ describe('landing CSS modules', () => {
     expect(modules).toEqual([
       'landing.module.css',
       'lead.module.css',
-      'platforms.module.css',
       'pricing.module.css',
       'site-demo.module.css',
     ])
