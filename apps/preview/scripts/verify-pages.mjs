@@ -8,6 +8,8 @@
 // or a key: a synthetic workspace with synthetic pages.
 //
 //   pnpm verify:pages [-- --no-build] [--keep]
+import { Buffer } from 'node:buffer'
+import console from 'node:console'
 import { randomBytes } from 'node:crypto'
 import { createServer, request as httpRequest } from 'node:http'
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
@@ -15,7 +17,8 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import process from 'node:process'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL, URL, URLSearchParams } from 'node:url'
+import { TextEncoder } from 'node:util'
 
 import {
   CheckFailed,
@@ -23,9 +26,15 @@ import {
   createRuntime,
   freeLoopbackPort,
   startProcess,
-} from '../release-verify/runtime.mjs'
-import { POSTGRES_IMAGE, PULLED_TAGS } from '../release-verify/stand.mjs'
-import { FIRST, PROBE_MARK, SECOND, framingPage, probePage } from './fixtures.mjs'
+} from '../../../infra/dev/release-verify/runtime.mjs'
+import { POSTGRES_IMAGE, PULLED_TAGS } from '../../../infra/dev/release-verify/stand.mjs'
+import {
+  FIRST,
+  PROBE_MARK,
+  SECOND,
+  framingPage,
+  probePage,
+} from '../../../infra/dev/pages-verify/fixtures.mjs'
 
 const here = fileURLToPath(new URL('./', import.meta.url))
 const root = resolve(here, '../../..')
@@ -430,7 +439,7 @@ async function protections(stand, page) {
     const reader = await context.newPage()
     await reader.goto(`${neighbour}/plain`)
     rt.check(
-      (await reader.evaluate(() => document.cookie)).includes('cabinet=synthetic'),
+      (await reader.evaluate('document.cookie')).includes('cabinet=synthetic'),
       'control: an ordinary page of a neighbouring subdomain reads that cookie',
     )
     await reader.close()
