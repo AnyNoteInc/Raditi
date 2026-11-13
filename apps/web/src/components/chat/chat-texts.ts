@@ -726,11 +726,13 @@ export const toolText = Object.freeze({
 
 /**
  * The words of the documents the agent made (docs/plan/67-agent-documents.md, Д4–Д8): the tab
- * «Документы», the cards of the feed and the window «Поделиться». Never «HTML» or «Markdown»: a
- * page is «страница», a text document is «документ» (rule 10).
+ * «Документы» and the cards of the feed. Never «HTML» or «Markdown» (rule 10), and never «страница»:
+ * a document of the chat is a document, both kinds alike; a page is what the client may publish
+ * one as (plan 69, owner's answer of 13.11.2026).
  */
 export const documentText = Object.freeze({
-  kind: Object.freeze({ page: 'Страница', markdown: 'Документ' }),
+  // A document is a document, whichever kind: a page is what the client publishes (plan 69).
+  kind: Object.freeze({ page: 'Документ', markdown: 'Документ' }),
   version: (number: number) => `версия ${number}`,
   versionOf: (number: number, all: number) => `Версия ${number} из ${all}`,
   open: 'Открыть',
@@ -750,20 +752,20 @@ export const documentText = Object.freeze({
   fullscreen: 'На весь экран',
   leaveFullscreen: 'Выйти из полноэкранного режима',
   newTab: 'Открыть в новой вкладке',
-  share: 'Поделиться',
+  publish: 'Опубликовать как страницу',
   contents: 'Оглавление',
   source: 'Текст',
   rendered: 'Оформление',
   copy: 'Скопировать текст',
   copied: 'Текст скопирован.',
   title: 'Название документа',
-  frame: (title: string) => `Страница «${title}»`,
+  frame: (title: string) => `Документ «${title}»`,
   loading: 'Открываем документ…',
   failed: 'Не удалось открыть документ.',
   retry: 'Повторить',
   unreadable: 'Не удалось прочитать документ. Его можно скачать.',
   large: 'Документ большой для просмотра: здесь только его начало, текстом. Целиком — в файле.',
-  pagesOff: 'Страницы здесь сейчас не открываются. Страницу можно скачать.',
+  pagesOff: 'Этот документ здесь сейчас не открывается. Его можно скачать.',
   missing: MISSING_DOCUMENT,
   empty: 'Документов пока нет. Они появятся здесь, когда агент их подготовит.',
   noContents: 'В документе нет разделов.',

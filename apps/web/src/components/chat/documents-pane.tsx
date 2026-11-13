@@ -163,7 +163,7 @@ export function DocumentsPane({
   target,
   fullscreen = false,
   onFullscreen,
-  onShare,
+  onPublish,
   standalone = false,
 }: {
   taskId: string
@@ -172,8 +172,11 @@ export function DocumentsPane({
   target: DocumentTarget | null
   fullscreen?: boolean
   onFullscreen?: (on: boolean) => void
-  /** «Поделиться» of a version (Д8); absent — not offered here. */
-  onShare?: (document: ChatDocument, fileId: string) => void
+  /**
+   * «Опубликовать как страницу» of a version, at the client's wish (owner's answer of
+   * 13.11.2026): the publishing is plan 69's; absent — not offered here.
+   */
+  onPublish?: (document: ChatDocument, fileId: string) => void
   /** The window of a new tab: no new tab of it, the list beside it always. */
   standalone?: boolean
 }) {
@@ -327,11 +330,11 @@ export function DocumentsPane({
           href={taskFileHref(taskId, fileId)}
           download={document.name}
         />
-        {onShare ? (
+        {onPublish ? (
           <HeadButton
             icon="share"
-            label={documentText.share}
-            onClick={() => onShare(document, fileId)}
+            label={documentText.publish}
+            onClick={() => onPublish(document, fileId)}
           />
         ) : null}
       </Box>

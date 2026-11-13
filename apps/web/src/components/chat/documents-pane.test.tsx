@@ -128,7 +128,7 @@ describe('«Документы» (docs/plan/67-agent-documents.md, Д4–Д7)', 
         />,
       ),
     )
-    const frame = (await screen.findByTitle('Страница «Отчёт»')) as HTMLIFrameElement
+    const frame = (await screen.findByTitle('Документ «Отчёт»')) as HTMLIFrameElement
     expect(frame.getAttribute('src')).toBe('http://pages.localhost:3000/v/a.b')
     expect(frame.getAttribute('sandbox')).toBe(PAGE_SANDBOX)
     expect(frame.getAttribute('sandbox')).not.toContain('allow-same-origin')
@@ -157,7 +157,7 @@ describe('the documents in the feed (Д4)', () => {
     render(<FeedDocuments fileIds={[uuid(4), uuid(5)]} documents={documents} onOpen={onOpen} />)
     expect(screen.getByText('Документы · 2')).toBeTruthy()
     expect(screen.getByText('Документ · версия 2')).toBeTruthy()
-    expect(screen.getByText('Страница · версия 1')).toBeTruthy()
+    expect(screen.getByText('Документ · версия 1')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Открыть документ «Отчёт»' }))
     expect(onOpen).toHaveBeenCalledWith(uuid(5))
     const download = screen.getByRole('link', { name: 'Скачать документ «02-цены»' })
