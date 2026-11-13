@@ -1381,17 +1381,21 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
             },
           })
         const before = await wakes()
+        const job = { ...dialog.job, priority: 3 }
         const { passes, queue } = runner(async () => {
           throw refusal()
         })
 
-        await passes.run(dialog.job)
+        await passes.run(job)
 
         expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
           status: 'queued',
         })
         expect(await wakes()).toBe(before)
-        expect(retried(queue)).toHaveLength(1)
+        // Its own retry, in the place of its tier (plan 71: the queue orders the tiers).
+        expect(retried(queue)).toEqual([
+          ['agent-turns', 'turn.run', job, expect.objectContaining({ priority: 3 })],
+        ])
       })
     })
 

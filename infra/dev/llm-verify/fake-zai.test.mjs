@@ -1053,7 +1053,7 @@ test('an exhausted window refuses generation and reads as full; a passed reset a
     limitCredits: 2_000,
     usedCredits: 0,
   })
-  // 91 % of the window: a new task is refused by the pool without any refusal of the provider.
+  // 91 % of the window: the probe names the share; what the pool does with it is the stand's.
   target.state.setQuota({ fiveHour: { currentValue: 1820, remaining: 179, resetInMs: 3_600_000 } })
   assert.equal((await probe(target)).windows[0].usedPct, 91.05)
 })

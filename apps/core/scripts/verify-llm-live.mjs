@@ -283,8 +283,8 @@ export async function runLiveGateway(mode) {
     const workspace = await db.workspace.create({
       data: { name: 'Live synthetic workspace', dataClass: 'synthetic' },
     })
-    // The top tier: the reserve the pool leaves to higher tiers is 5 % (docs/plan/71-usage-limits.md,
-    // Л8), so the refusals of the windows below are the stand's own, not a wait for the reserve.
+    // The top tier: the widest windows of a workspace (docs/plan/71-usage-limits.md, Л4), so the
+    // refusals below are the stand's own limits, not the windows of the workspace.
     const agency = await db.plan.findUniqueOrThrow({ where: { slug: 'agency' } })
     const periodStart = new Date(Date.now() - 86_400_000)
     await db.subscription.create({

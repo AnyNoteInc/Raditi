@@ -232,9 +232,10 @@ export class PassRunner {
       ended = await this.#turnOf(job, ref, billable, controller)
     } finally {
       release()
-      // Only a pass that ended its turn freed a place for the others. One the pool or the site
-      // sent back took none of theirs and is itself among those waiting: waking them ran it again
-      // at once, a new turn every second (the chat of 13.11.2026). Its retry is its only one.
+      // Only a pass that ended frees a place for good. One the pool or the site sent back held
+      // its place for a moment and waits again — after the pool, among those it would wake:
+      // waking them ran it again at once, a new turn every second (the chat of 13.11.2026). Its
+      // retry is its only one; a pass refused while it held the place keeps its own retry too.
       if (ended === 'ended') await this.#wakeAgents(job, ref.turnNo)
     }
   }
@@ -269,10 +270,7 @@ export class PassRunner {
       await settlement.settle(ref, { kind: 'ceiling', question: plan.question })
       return 'ended'
     }
-    if (plan.kind === 'branch_moved') {
-      await this.#branchMoved(job, ref, plan.update)
-      return 'sent_back'
-    }
+    if (plan.kind === 'branch_moved') return this.#branchMoved(job, ref, plan.update)
     const browser = plan.requirements.browser
     if (await this.#cancelRequested(job)) controller.abort()
     if (controller.signal.aborted) {
@@ -347,7 +345,9 @@ export class PassRunner {
         outbox: outbox ?? null,
       })
     if (ending.kind === 'busy') {
-      if (answer === 'moved' && retry) await this.#requeue(job, retry)
+      // Another end of the task came first (a cancel, which wakes nobody): this one ended it.
+      if (answer !== 'moved') return 'ended'
+      if (retry) await this.#requeue(job, retry)
       return 'sent_back'
     }
     await this.#wakeSite(job, turnNo)
@@ -445,14 +445,15 @@ export class PassRunner {
    * finishes from the branch as it stands (CandidateRebase); otherwise nothing can publish, and
    * the pass fails before a turn spends money.
    */
-  async #branchMoved(job: AgentTurnJob, ref: PassRef, update: string | null): Promise<void> {
+  async #branchMoved(job: AgentTurnJob, ref: PassRef, update: string | null): Promise<PassEnd> {
     this.#logger.warn(`pass_branch_moved task=${job.taskId} update=${update ?? 'none'}`)
     if (update === null) {
       await this.deps.settlement.settle(ref, { kind: 'refused', code: 'technical' })
-      return
+      return 'ended'
     }
     const answer = await this.deps.settlement.settle(ref, { kind: 'busy', waiting: 'site' })
-    if (answer !== 'moved') return
+    // Another end of the task came first (a cancel): nothing waits for this pass any more.
+    if (answer !== 'moved') return 'ended'
     const rebase = { taskId: job.taskId, requestEventId: update }
     await this.deps.queue
       .enqueue(AGENT_TURN_QUEUE, CANDIDATE_REBASE_JOB, rebase, {
@@ -460,6 +461,7 @@ export class PassRunner {
       })
       .catch(() => this.#logger.warn(`pass_update_requeue_failed task=${job.taskId}`))
     await this.#requeue(job, { delayMs: RETRY_DELAY_MS.update })
+    return 'sent_back'
   }
 
   /**
