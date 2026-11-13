@@ -77,6 +77,8 @@ const planRow = (data: Record<string, unknown>) => ({
   price: new Money('4900'),
   creditsPerMonth: 30,
   creditsPerDay: 10,
+  creditsPer5h: null,
+  creditsPerWeek: null,
   maxSites: 1,
   packCredits: null,
   ...data,
@@ -127,6 +129,8 @@ describe('read models without a database', () => {
         price: new Money('1990'),
         creditsPerMonth: null,
         creditsPerDay: null,
+        creditsPer5h: null,
+        creditsPerWeek: null,
         maxSites: null,
         packCredits: 100,
       }),
@@ -136,6 +140,8 @@ describe('read models without a database', () => {
         price: new Money('12900'),
         creditsPerMonth: 80,
         creditsPerDay: null,
+        creditsPer5h: null,
+        creditsPerWeek: null,
         maxSites: 3,
       }),
       planRow({ slug: 'pack-50', kind: 'pack', packCredits: 50 }),
@@ -150,6 +156,8 @@ describe('read models without a database', () => {
           price: '4900.00',
           creditsPerMonth: 30,
           creditsPerDay: 10,
+          creditsPer5h: null,
+          creditsPerWeek: null,
           maxSites: 1,
         },
         {
@@ -159,6 +167,8 @@ describe('read models without a database', () => {
           price: '12900.00',
           creditsPerMonth: 80,
           creditsPerDay: null,
+          creditsPer5h: null,
+          creditsPerWeek: null,
           maxSites: 3,
         },
       ],
@@ -208,6 +218,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
       price: '12900.00',
       creditsPerMonth: 80,
       creditsPerDay: 10,
+      creditsPer5h: null,
+      creditsPerWeek: null,
       maxSites: 3,
     })
 
@@ -240,6 +252,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
             price: '12900.00',
             creditsPerMonth: 80,
             creditsPerDay: 10,
+            creditsPer5h: null,
+            creditsPerWeek: null,
             maxSites: 3,
           },
           period: {
@@ -287,6 +301,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
         price: '39900.00',
         creditsPerMonth: 250,
         creditsPerDay: 30,
+        creditsPer5h: null,
+        creditsPerWeek: null,
         maxSites: 15,
       })
       await fixtures.subscription({
@@ -305,6 +321,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
           price: '39900.00',
           creditsPerMonth: 250,
           creditsPerDay: 30,
+          creditsPer5h: null,
+          creditsPerWeek: null,
           maxSites: 15,
         },
         autoRenewal: true,
@@ -446,6 +464,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
         price: '4900.00',
         creditsPerMonth: 30,
         creditsPerDay: 10,
+        creditsPer5h: null,
+        creditsPerWeek: null,
         maxSites: 1,
         sortOrder,
         ...data,
@@ -485,6 +505,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
             price: '12900.00',
             creditsPerMonth: 30,
             creditsPerDay: null,
+            creditsPer5h: null,
+            creditsPerWeek: null,
             maxSites: 1,
           })
           expect(pack).toEqual({
@@ -535,6 +557,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
         price: '1990.00',
         creditsPerMonth: null,
         creditsPerDay: null,
+        creditsPer5h: null,
+        creditsPerWeek: null,
         maxSites: null,
         packCredits: 10,
       })
@@ -647,6 +671,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
         price: '1990.00',
         creditsPerMonth: null,
         creditsPerDay: null,
+        creditsPer5h: null,
+        creditsPerWeek: null,
         maxSites: null,
         packCredits: 10,
       })
@@ -734,6 +760,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
         price: '1990.00',
         creditsPerMonth: null,
         creditsPerDay: null,
+        creditsPer5h: null,
+        creditsPerWeek: null,
         maxSites: null,
         packCredits: 100,
       })

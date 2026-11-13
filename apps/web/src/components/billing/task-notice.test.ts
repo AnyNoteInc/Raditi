@@ -35,6 +35,8 @@ const startPlan = {
   price: start.price,
   creditsPerMonth: start.creditsPerMonth,
   creditsPerDay: start.creditsPerDay,
+  creditsPer5h: null,
+  creditsPerWeek: null,
   maxSites: start.maxSites,
 }
 type Terms = typeof startPlan
@@ -347,6 +349,8 @@ describe('on a paid tariff that renews', () => {
       name: agency.name,
       creditsPerMonth: agency.creditsPerMonth,
       creditsPerDay: 300,
+      creditsPer5h: null,
+      creditsPerWeek: null,
     }
     // Ending at that midnight without a renewal: nothing.
     expect(dayLimitTomorrow(tariff, 50, false, NOW)).toBeNull()
@@ -627,5 +631,42 @@ describe('the line under «Тарифы» of a customer without a tariff', () =>
     expect(lead({ facts: { rateUsable: false } })).toBe(RATE_PAUSE)
     // The pause is no matter of payments: nothing is added while they are off.
     expect(lead({ facts: { rateUsable: false } }, { canChoose: false })).toBe(RATE_PAUSE)
+  })
+})
+
+// Plan 71: a spent window of 5 hours or of the week — credits do not lift it, the reset does.
+describe('a spent window of the workspace', () => {
+  const resetsAt = new Date('2026-11-16T15:40:00.000Z')
+
+  it('names the window and its reset by the Moscow clock, and the bigger tariffs', () => {
+    expect(
+      told({
+        tariff: 150,
+        facts: {
+          windows: [
+            { kind: '5h', limit: 20, used: '20.3', resetsAt },
+            { kind: 'week', limit: 55, used: '30', resetsAt: null },
+          ],
+        },
+      }),
+    ).toEqual({
+      reason: 'window_limit',
+      text: 'Лимит на 5 часов исчерпан: новые задачи — после 18:40. Кредиты от этого не сгорают. На старших тарифах лимиты больше — тариф можно сменить в разделе «Тарифы».',
+      actions: ['change_plan'],
+    })
+  })
+
+  it('names the week when it is the one spent', () => {
+    expect(
+      told({
+        tariff: 150,
+        facts: {
+          windows: [
+            { kind: '5h', limit: 20, used: '2', resetsAt },
+            { kind: 'week', limit: 55, used: '55', resetsAt: new Date('2026-11-23T07:15:00.000Z') },
+          ],
+        },
+      }).text,
+    ).toMatch(/^Недельный лимит исчерпан: новые задачи — в пн после 10:15\./)
   })
 })

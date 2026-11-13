@@ -1,5 +1,11 @@
 import { z } from 'zod'
 import { badRequest, DomainError } from '../errors.ts'
+import {
+  refusingWindow,
+  usageWindowKindSchema,
+  windowCreditsSchema,
+  type UsageWindowState,
+} from './usage-windows.ts'
 
 /**
  * Billing failures the customer may meet. The codes are stable: the client text of each one is
@@ -22,6 +28,7 @@ export const billingErrorCodes = [
   'BILLING_TASK_NEEDS_SUBSCRIPTION',
   'BILLING_NOT_ENOUGH_CREDITS',
   'BILLING_DAILY_LIMIT_REACHED',
+  'BILLING_WINDOW_LIMIT_REACHED',
   'BILLING_CREDITS_HELD',
   'BILLING_CREDIT_RATE_MISSING',
 ] as const
@@ -43,6 +50,7 @@ export const taskRefusalReasons = [
   'below_start',
   'held',
   'daily_limit',
+  'window_limit',
   'past_due',
   'rate_missing',
 ] as const
@@ -56,6 +64,7 @@ export const taskRefusalCodes = Object.freeze({
   below_start: 'BILLING_NOT_ENOUGH_CREDITS',
   held: 'BILLING_CREDITS_HELD',
   daily_limit: 'BILLING_DAILY_LIMIT_REACHED',
+  window_limit: 'BILLING_WINDOW_LIMIT_REACHED',
   past_due: 'BILLING_TASK_NEEDS_SUBSCRIPTION',
   rate_missing: 'BILLING_CREDIT_RATE_MISSING',
 } as const satisfies Record<TaskRefusalReason, BillingErrorCode>)
@@ -89,12 +98,27 @@ export const taskRefusalDetailsSchema = z
     day: z
       .strictObject({ limit: refusalCreditsSchema.positive(), used: refusalCreditsSchema })
       .optional(),
+    /**
+     * Only with `window_limit`: the window that refused — its kind, limit, what it took (whole
+     * credits, rounded up) and its reset, an ISO moment; null — it starts with the first call.
+     */
+    window: z
+      .strictObject({
+        kind: usageWindowKindSchema,
+        limit: refusalCreditsSchema.positive(),
+        used: refusalCreditsSchema,
+        resetsAt: z.iso.datetime().nullable(),
+      })
+      .optional(),
   })
   .refine(
     ({ reason, spendableNow, day }) =>
       reason === 'daily_limit' || (spendableNow === undefined && day === undefined),
     { message: 'Only a refusal by the day carries the numbers of the day' },
   )
+  .refine(({ reason, window }) => reason === 'window_limit' || window === undefined, {
+    message: 'Only a refusal by a window carries its numbers',
+  })
 export type TaskRefusalDetails = z.infer<typeof taskRefusalDetailsSchema>
 
 const billingError = (
@@ -182,6 +206,17 @@ export const billingDailyLimitReached = (details?: TaskRefusalDetails): DomainEr
     details,
   )
 /**
+ * A window of 5 hours or of the week of the workspace is spent (plan 71): credits do not lift
+ * it, its reset does.
+ */
+export const billingWindowLimitReached = (details?: TaskRefusalDetails): DomainError =>
+  billingError(
+    'BILLING_WINDOW_LIMIT_REACHED',
+    'A usage window of the workspace is spent until its reset',
+    429,
+    details,
+  )
+/**
  * The credits a task could spend are there, and all of them are set aside for tasks in work:
  * what those tasks do not use comes back when they end. Paying lifts it at once.
  */
@@ -203,6 +238,7 @@ const refusalByCode = {
   BILLING_TASK_NEEDS_SUBSCRIPTION: billingTaskNeedsSubscription,
   BILLING_NOT_ENOUGH_CREDITS: billingNotEnoughCredits,
   BILLING_DAILY_LIMIT_REACHED: billingDailyLimitReached,
+  BILLING_WINDOW_LIMIT_REACHED: billingWindowLimitReached,
   BILLING_CREDITS_HELD: billingCreditsHeld,
   BILLING_CREDIT_RATE_MISSING: billingCreditRateMissing,
 } satisfies Record<(typeof taskRefusalCodes)[TaskRefusalReason], unknown>
@@ -215,11 +251,22 @@ const givenRefusalSchema = z.object({
     .object({ limit: refusalCreditsSchema.positive().nullable(), used: refusalCreditsSchema })
     .nullable()
     .optional(),
+  windows: z
+    .array(
+      z.object({
+        kind: usageWindowKindSchema,
+        limit: z.number().int().positive().nullable(),
+        used: windowCreditsSchema,
+        resetsAt: z.date().nullable(),
+      }),
+    )
+    .optional(),
 })
 
 /** A refusal as `taskRefusal` takes it: its details, or a refused verdict as it is. */
 export type GivenTaskRefusal = TaskRefusalDetails & {
   today?: { limit: number | null; used: number } | null
+  windows?: UsageWindowState[]
 }
 
 /**
@@ -240,5 +287,24 @@ export function taskRefusal(refusal: GivenTaskRefusal): DomainError {
       (today?.limit == null ? undefined : { limit: today.limit, used: today.used })
     if (day !== undefined) details.day = day
   }
+  if (reason === 'window_limit') {
+    const window = result.data.window ?? windowDetails(result.data.windows ?? [], needed)
+    if (window !== undefined) details.window = window
+  }
   return refusalByCode[taskRefusalCodes[reason]](details)
+}
+
+/** The numbers of the window of a verdict that refused it. */
+function windowDetails(
+  windows: readonly UsageWindowState[],
+  needed: number,
+): TaskRefusalDetails['window'] {
+  const window = refusingWindow(windows, needed)
+  if (window === null || window.limit === null) return undefined
+  return {
+    kind: window.kind,
+    limit: window.limit,
+    used: Math.ceil(Number(window.used)),
+    resetsAt: window.resetsAt?.toISOString() ?? null,
+  }
 }

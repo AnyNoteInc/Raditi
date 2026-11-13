@@ -1,3 +1,4 @@
+import { Counter, type Registry } from '@prometheus-io/client'
 import { Logger, type Provider } from '@nestjs/common'
 import type { AgentDriverRegistry } from '@repo/agent-drivers'
 import type { PrismaClient } from '@repo/db'
@@ -40,6 +41,7 @@ import { TaskSweep, TaskSweepRuntime } from './task-sweep.ts'
 import { TurnCapacity } from './turn-capacity.ts'
 import { CANDIDATE_GIT } from './tasks.tokens.ts'
 import { TurnsProcessor } from './turns.processor.ts'
+import { METRICS_REGISTRY } from '../metrics/metrics.tokens.ts'
 
 /**
  * The passes of dialogs, their candidates, the worker of `agent-turns` and the sweep of dialogs,
@@ -78,8 +80,23 @@ export const taskProviders: Provider[] = [
       prisma: PrismaClient,
       candidates: CandidateBuilder | null,
       browser: BrowserSessions | null,
-    ) => new PassSettlement({ db: prisma, candidates, browser }),
-    inject: [PRISMA, CandidateBuilder, BrowserSessions],
+      registry: Registry,
+    ) => {
+      // A pass a window of its workspace stopped (plan 71, §4.4); no id in a label.
+      const refusals = new Counter({
+        name: 'raditi_workspace_window_refusals_total',
+        help: 'Passes and calls refused by a usage window of their workspace',
+        labelNames: ['tier', 'window', 'point'],
+        registers: [registry],
+      })
+      return new PassSettlement({
+        db: prisma,
+        candidates,
+        browser,
+        onUsageLimit: ({ window, tier }) => refusals.inc({ tier, window, point: 'pass' }),
+      })
+    },
+    inject: [PRISMA, CandidateBuilder, BrowserSessions, METRICS_REGISTRY],
   },
   {
     provide: PassRunner,
@@ -95,9 +112,24 @@ export const taskProviders: Provider[] = [
       queue: JobQueue,
       browser: BrowserSessions | null,
       storage: ObjectStorage,
+      registry: Registry,
       executor: TurnExecutor | null,
-    ) =>
-      new PassRunner({
+    ) => {
+      // What the pool told a pass (plan 71, §4.4): the limits of the agent out, the reserve of
+      // the higher tiers waited for.
+      const limitsOut = new Counter({
+        name: 'raditi_pass_limits_out_total',
+        help: 'Passes the pool ended because its limits are out',
+        registers: [registry],
+      })
+      const tierWaits = new Counter({
+        name: 'raditi_pool_tier_wait_total',
+        help: 'Passes that wait for the reserve of the higher tiers of the pool',
+        labelNames: ['tier'],
+        registers: [registry],
+      })
+      return new PassRunner({
+        pool: { limitsOut: () => limitsOut.inc(), tierWait: (tier) => tierWaits.inc({ tier }) },
         db: prisma,
         supervisor,
         git,
@@ -119,7 +151,8 @@ export const taskProviders: Provider[] = [
         // Docs/plan/70-turn-without-time-limit.md, ВР13 and ВР17.
         workspaceTurnLimit: config.workspaceTurnLimit,
         capacity: new TurnCapacity(executor),
-      }),
+      })
+    },
     inject: [
       PRISMA,
       TurnSupervisor,
@@ -132,6 +165,7 @@ export const taskProviders: Provider[] = [
       JOB_QUEUE,
       BrowserSessions,
       OBJECT_STORAGE,
+      METRICS_REGISTRY,
       { token: TURN_EXECUTOR, optional: true },
     ],
   },

@@ -415,6 +415,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         price: '4900.00',
         creditsPerMonth: 300,
         creditsPerDay: options.creditsPerDay ?? null,
+        creditsPer5h: null,
+        creditsPerWeek: null,
         maxSites: 3,
         isActive: false,
       },
@@ -655,7 +657,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         {
           topic: 'agent-turns',
           type: 'turn.run',
-          payload: { taskId, attempt: 1, requestEventId: String(feed[0]!.id) },
+          payload: { taskId, attempt: 1, requestEventId: String(feed[0]!.id), priority: 4 },
           dedupeKey: `turn.run:${taskId}:1:${feed[0]!.id}`,
         },
       ])
@@ -978,7 +980,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       expect(await outboxOf(taskId)).toContainEqual(
         expect.objectContaining({
           type: 'turn.run',
-          payload: { taskId, attempt: 2, requestEventId: posted.requestEventId },
+          // No tariff: the last place in the queue (plan 71, §2.3).
+          payload: { taskId, attempt: 2, requestEventId: posted.requestEventId, priority: 4 },
         }),
       )
     })
@@ -1063,7 +1066,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       expect(await outboxOf(taskId)).toContainEqual(
         expect.objectContaining({
           type: 'turn.run',
-          payload: { taskId, attempt: 2, requestEventId: posted.requestEventId },
+          // No tariff: the last place in the queue (plan 71, §2.3).
+          payload: { taskId, attempt: 2, requestEventId: posted.requestEventId, priority: 4 },
         }),
       )
     })

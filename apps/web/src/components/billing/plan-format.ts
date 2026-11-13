@@ -137,6 +137,8 @@ export function planDailyLimit(creditsPerDay: number | null): string | null {
   return `${line.charAt(0).toLocaleUpperCase('ru')}${line.slice(1)}`
 }
 
+export { planWindowLimits } from '@/lib/plan-windows'
+
 /**
  * A tariff in one line: «800 кредитов в месяц, до 100 кредитов в день · до 3 сайтов на
  * WordPress».

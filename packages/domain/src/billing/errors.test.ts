@@ -6,6 +6,7 @@ import {
   billingCreditRateMissing,
   billingCreditsHeld,
   billingDailyLimitReached,
+  billingWindowLimitReached,
   billingErrorCodes,
   billingNotEnoughCredits,
   billingNoLiveSubscription,
@@ -45,6 +46,7 @@ const factories = [
   ['BILLING_TASK_NEEDS_SUBSCRIPTION', 402, billingTaskNeedsSubscription],
   ['BILLING_NOT_ENOUGH_CREDITS', 402, billingNotEnoughCredits],
   ['BILLING_DAILY_LIMIT_REACHED', 409, billingDailyLimitReached],
+  ['BILLING_WINDOW_LIMIT_REACHED', 429, billingWindowLimitReached],
   ['BILLING_CREDITS_HELD', 409, billingCreditsHeld],
   ['BILLING_CREDIT_RATE_MISSING', 503, billingCreditRateMissing],
 ] as const
@@ -62,7 +64,7 @@ describe('billing errors', () => {
     const produced = factories.map(([, , factory]) => factory().code)
     expect(produced).toEqual([...billingErrorCodes])
     expect(new Set(billingErrorCodes).size).toBe(billingErrorCodes.length)
-    expect(billingErrorCodes).toHaveLength(18)
+    expect(billingErrorCodes).toHaveLength(19)
   })
 
   it('prefixes every code with BILLING_ and writes it in upper snake case', () => {
@@ -104,10 +106,11 @@ describe('the refusal of a task', () => {
       'below_start',
       'held',
       'daily_limit',
+      'window_limit',
       'past_due',
       'rate_missing',
     ])
-    expect(new Set(taskRefusalReasons).size).toBe(8)
+    expect(new Set(taskRefusalReasons).size).toBe(9)
     // 17.10.2026: the day counts tariff credits; without a tariff there is no day to refuse by.
     expect(taskRefusalReasons).not.toContain('trial_daily_limit')
   })
@@ -120,6 +123,7 @@ describe('the refusal of a task', () => {
     ['below_start', 'BILLING_NOT_ENOUGH_CREDITS', 402],
     ['held', 'BILLING_CREDITS_HELD', 409],
     ['daily_limit', 'BILLING_DAILY_LIMIT_REACHED', 409],
+    ['window_limit', 'BILLING_WINDOW_LIMIT_REACHED', 429],
     ['past_due', 'BILLING_TASK_NEEDS_SUBSCRIPTION', 402],
     ['rate_missing', 'BILLING_CREDIT_RATE_MISSING', 503],
   ] as const)('%s is refused with %s (%i)', (reason, code, httpStatus) => {
@@ -139,6 +143,7 @@ describe('the refusal of a task', () => {
         'BILLING_TASK_NEEDS_SUBSCRIPTION',
         'BILLING_NOT_ENOUGH_CREDITS',
         'BILLING_DAILY_LIMIT_REACHED',
+        'BILLING_WINDOW_LIMIT_REACHED',
         'BILLING_CREDITS_HELD',
         'BILLING_CREDIT_RATE_MISSING',
       ]),
@@ -230,6 +235,7 @@ describe('the refusal of a task', () => {
       'needed',
       'spendableNow',
       'day',
+      'window',
     ])
     for (const bad of [
       { ...details('past_due'), allowed: false },

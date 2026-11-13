@@ -1,4 +1,10 @@
-import { newTaskVerdict, toCredits } from '@repo/domain'
+import {
+  newTaskVerdict,
+  toCredits,
+  usageWindowRoom,
+  type UsageWindowState,
+  type WorkspaceTier,
+} from '@repo/domain'
 
 import type {
   BillingOverview,
@@ -37,6 +43,8 @@ export const start = offer({
   price: '1990.00',
   creditsPerMonth: 150,
   creditsPerDay: null,
+  creditsPer5h: 20,
+  creditsPerWeek: 55,
   maxSites: 1,
 })
 
@@ -47,6 +55,8 @@ export const business = offer({
   price: '6990.00',
   creditsPerMonth: 600,
   creditsPerDay: null,
+  creditsPer5h: 70,
+  creditsPerWeek: 210,
   maxSites: 3,
 })
 
@@ -57,6 +67,8 @@ export const agency = offer({
   price: '19990.00',
   creditsPerMonth: 2000,
   creditsPerDay: null,
+  creditsPer5h: 200,
+  creditsPerWeek: 700,
   maxSites: 15,
 })
 
@@ -76,6 +88,8 @@ const planOf = ({
   price,
   creditsPerMonth,
   creditsPerDay,
+  creditsPer5h,
+  creditsPerWeek,
   maxSites,
 }: PlanOffer) => ({
   id,
@@ -84,6 +98,8 @@ const planOf = ({
   price,
   creditsPerMonth,
   creditsPerDay,
+  creditsPer5h,
+  creditsPerWeek,
   maxSites,
 })
 
@@ -140,6 +156,10 @@ export interface TaskFacts {
   today?: { charged?: number; held?: number }
   /** A credit rate is in force; true unless told. */
   rateUsable?: boolean
+  /** The windows of 5 hours and of the week (plan 71); none unless told. */
+  windows?: UsageWindowState[]
+  /** The tier of the workspace; `none` unless told. */
+  tier?: WorkspaceTier
 }
 
 type Account = { balance: number; held: number }
@@ -152,7 +172,7 @@ type Account = { balance: number; held: number }
 export function taskCreditsFor(
   accounts: { tariff: Account; gift: Account; pack: Account },
   subscription: Pick<Subscription, 'status' | 'plan'> | null,
-  { today = {}, rateUsable = true }: TaskFacts = {},
+  { today = {}, rateUsable = true, windows = [], tier = 'none' }: TaskFacts = {},
 ): TaskCredits {
   const terms =
     subscription === null
@@ -176,6 +196,8 @@ export function taskCreditsFor(
       held: toCredits(today.held ?? 0),
     },
     rateUsable,
+    windows,
+    tier,
   })
   return {
     spendable: verdict.spendable,
@@ -183,6 +205,15 @@ export function taskCreditsFor(
     setAside: verdict.held,
     minToStart: verdict.needed,
     today: verdict.today,
+    // As `usageWindowsDto` of @repo/billing sends them.
+    windows: verdict.windows.map((window) => ({
+      kind: window.kind,
+      limit: window.limit,
+      used: Math.ceil(Number(window.used)),
+      left: usageWindowRoom(window),
+      resetsAt: window.resetsAt,
+    })),
+    tier: verdict.tier,
     newTask: { allowed: verdict.allowed, reason: verdict.reason },
   }
 }

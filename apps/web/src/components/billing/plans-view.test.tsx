@@ -74,7 +74,11 @@ vi.mock('@/trpc/client', () => ({
         queryKey: () => ['billing', 'plans'],
         queryOptions: () => ({ queryKey: ['billing', 'plans'], queryFn: getOffers }),
       },
-      usage: { queryKey: () => ['billing', 'usage'] },
+      usage: {
+        queryKey: () => ['billing', 'usage'],
+        // The hint of the windows (plan 71) reads nothing in these cases.
+        queryOptions: () => ({ queryKey: ['billing', 'usage'], queryFn: async () => null }),
+      },
       startCheckout: { mutationOptions: mutation(startCheckout) },
       startPackCheckout: { mutationOptions: mutation(startPackCheckout) },
       startPastDuePayment: { mutationOptions: mutation(startPastDuePayment) },
@@ -206,6 +210,8 @@ describe('the «Тарифы» page of a customer without a tariff', () => {
     ).toEqual([
       '600 кредитов в месяц',
       'В среднем около 55 задач',
+      // The windows of the work (plan 71, Л14).
+      'До 70 кредитов за 5 часов и 210 в неделю',
       'Небольшая правка — около 58 ₽',
       'До 3 сайтов на WordPress',
     ])
@@ -216,6 +222,7 @@ describe('the «Тарифы» page of a customer without a tariff', () => {
     ).toEqual([
       '150 кредитов в месяц',
       'В среднем около 14 задач',
+      'До 20 кредитов за 5 часов и 55 в неделю',
       'Небольшая правка — около 66 ₽',
       'Один сайт на WordPress',
     ])
@@ -224,6 +231,7 @@ describe('the «Тарифы» page of a customer without a tariff', () => {
     expect(largest.map((item) => plain(item.textContent))).toEqual([
       '2 000 кредитов в месяц',
       'В среднем около 180 задач',
+      'До 200 кредитов за 5 часов и 700 в неделю',
       'Небольшая правка — около 50 ₽',
       'До 15 сайтов на WordPress',
     ])

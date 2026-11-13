@@ -672,6 +672,8 @@ export const EXTRA_ROWS = Object.freeze([
   'Списание без ответа, затем отвязка',
   'Два платежа за одну подписку',
   'Магазин без одобренных автоплатежей',
+  // The windows of 5 hours and of the week (docs/plan/71-usage-limits.md): no row of plan 37.
+  'Лимиты на 5 часов и неделю',
 ])
 
 /**
@@ -813,6 +815,12 @@ export const SCENARIOS = Object.freeze([
     row: EXTRA_ROWS[3],
     title:
       'the shop has no right to autopayments: the tick is refused, the tariff is sold without it',
+  },
+  {
+    id: 'usage-windows',
+    row: 'Лимиты на 5 часов и неделю',
+    title:
+      'the windows of 5 hours and of the week: those without a tariff, of the tariff once paid, on the cards of the tariffs',
   },
 ])
 

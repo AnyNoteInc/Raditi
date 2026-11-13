@@ -29,6 +29,9 @@ import {
   sample,
 } from './fixtures/samples.ts'
 
+// A window as the pool reads it; its absolute credits are checked on their own below (plan 71).
+const win = (window: Record<string, unknown>) => expect.objectContaining(window) as unknown
+
 const route = { method: 'POST', path: '/zai/v4/chat/completions' } as const
 const credential = { v: '1', kind: 'zai_api_key', apiKey: 'synthetic-zai-plan-key' }
 const quotaUrl = 'https://api.z.ai/api/monitor/usage/quota/limit'
@@ -248,11 +251,19 @@ describe('the quota of the plan as the windows of the pool', () => {
       status: 'ok',
       plan: null,
       windows: [
-        { name: '5h', usedPct: fiveHour, resetsAt: fiveHourReset },
-        { name: 'week', usedPct: weekly, resetsAt: weekReset },
+        win({ name: '5h', usedPct: fiveHour, resetsAt: fiveHourReset }),
+        win({ name: 'week', usedPct: weekly, resetsAt: weekReset }),
       ],
     })
     expect(probeResultSchema.safeParse(result).success).toBe(true)
+    // The size and the use in plan credits come with the share (plan 71, §2.1).
+    if (result.status !== 'ok') throw new Error('The probe should read the quota')
+    for (const window of result.windows ?? []) {
+      expect(window.limitCredits).toBeGreaterThan(0)
+      expect(((window.usedCredits ?? -1) * 100) / (window.limitCredits ?? 1)).toBeCloseTo(
+        window.usedPct,
+      )
+    }
   })
 
   it('reads a window nobody has started as known and free, not as unknown', async () => {
@@ -261,8 +272,8 @@ describe('the quota of the plan as the windows of the pool', () => {
       status: 'ok',
       plan: null,
       windows: [
-        { name: '5h', usedPct: 0, resetsAt: null },
-        { name: 'week', usedPct: 26 / 100, resetsAt: weekReset },
+        win({ name: '5h', usedPct: 0, resetsAt: null }),
+        win({ name: 'week', usedPct: 26 / 100, resetsAt: weekReset }),
       ],
     })
   })
@@ -271,8 +282,8 @@ describe('the quota of the plan as the windows of the pool', () => {
     const record = at('62-quota-idle-after.json')
     expect((await probe(record.response.status, record.response.body)).windows).toEqual([
       // currentValue is still 0, remaining already 1999.
-      { name: '5h', usedPct: 1 / 20, resetsAt: new Date(1791198895596) },
-      { name: 'week', usedPct: 26 / 100, resetsAt: weekReset },
+      win({ name: '5h', usedPct: 1 / 20, resetsAt: new Date(1791198895596) }),
+      win({ name: 'week', usedPct: 26 / 100, resetsAt: weekReset }),
     ])
   })
 
@@ -290,7 +301,7 @@ describe('the quota of the plan as the windows of the pool', () => {
       { currentValue: 0, remaining: -1 },
     ])
       expect(await windowsOf([limit({ ...patch, nextResetTime: reset })])).toEqual([
-        { name: '5h', usedPct: 100, resetsAt: new Date(reset) },
+        win({ name: '5h', usedPct: 100, resetsAt: new Date(reset) }),
       ])
   })
 
@@ -298,16 +309,16 @@ describe('the quota of the plan as the windows of the pool', () => {
     const reset = Date.now() + 60_000
     expect(
       await windowsOf([limit({ currentValue: 500, remaining: 1900, nextResetTime: reset })]),
-    ).toEqual([{ name: '5h', usedPct: 25, resetsAt: new Date(reset) }])
+    ).toEqual([win({ name: '5h', usedPct: 25, resetsAt: new Date(reset) })])
     expect(
       await windowsOf([limit({ currentValue: 0, remaining: 1000, nextResetTime: reset })]),
-    ).toEqual([{ name: '5h', usedPct: 50, resetsAt: new Date(reset) }])
+    ).toEqual([win({ name: '5h', usedPct: 50, resetsAt: new Date(reset) })])
     // `percentage` is rounded up by the provider and is not read.
     expect(
       await windowsOf([
         limit({ currentValue: 1, remaining: 1999, percentage: 99, nextResetTime: reset }),
       ]),
-    ).toEqual([{ name: '5h', usedPct: 0.05, resetsAt: new Date(reset) }])
+    ).toEqual([win({ name: '5h', usedPct: 0.05, resetsAt: new Date(reset) })])
   })
 
   it('takes a window whose reset has passed for one that waits for its next request', async () => {
@@ -315,12 +326,12 @@ describe('the quota of the plan as the windows of the pool', () => {
     // The window of the records ended at 22:47 UTC the evening before.
     expect(
       await windowsOf([limit({ currentValue: 1900, remaining: 99, nextResetTime: 1791154059203 })]),
-    ).toEqual([{ name: '5h', usedPct: 0, resetsAt: null }])
+    ).toEqual([win({ name: '5h', usedPct: 0, resetsAt: null })])
   })
 
   it('reports only the windows the plan has', async () => {
     expect(await windowsOf([week()])).toEqual([
-      { name: 'week', usedPct: 0.21, resetsAt: expect.any(Date) as Date },
+      win({ name: 'week', usedPct: 0.21, resetsAt: expect.any(Date) as Date }),
     ])
   })
 
@@ -507,7 +518,7 @@ describe('a Z.ai offer is data', () => {
       quota([limit({ unit: 9, number: 2, nextResetTime: Date.now() + 86_400_000 })]),
     )
     expect((await other.probe(credential, http)).windows).toEqual([
-      { name: 'month', usedPct: 1.05, resetsAt: expect.any(Date) as Date },
+      win({ name: 'month', usedPct: 1.05, resetsAt: expect.any(Date) as Date }),
     ])
     expect(http.request.mock.calls[0]![0].url).toBe(
       'https://api.z.ai/api/monitor/usage/quota/other',

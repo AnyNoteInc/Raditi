@@ -247,6 +247,8 @@ const planRow = (data: Record<string, unknown> = {}) => ({
   price: new Money('12900'),
   creditsPerMonth: 80,
   creditsPerDay: 20,
+  creditsPer5h: null,
+  creditsPerWeek: null,
   maxSites: 3,
   packCredits: null,
   ...data,
@@ -258,6 +260,8 @@ const agencyRow = () =>
     price: new Money('39900'),
     creditsPerMonth: 250,
     creditsPerDay: 30,
+    creditsPer5h: null,
+    creditsPerWeek: null,
     maxSites: 15,
   })
 
@@ -326,6 +330,8 @@ const overviewDto = (patch: Partial<SubscriptionOverviewDto> = {}): Subscription
     price: '12900.00',
     creditsPerMonth: 80,
     creditsPerDay: 20,
+    creditsPer5h: null,
+    creditsPerWeek: null,
     maxSites: 3,
   },
   period: { start: new Date('2026-09-18T09:00:00Z'), end: PERIOD_END },

@@ -108,6 +108,8 @@ export interface PassRunnerDependencies {
   capacity?: Pick<TurnCapacity, 'tryAcquire'>
   now?: () => Date
   cancelPollMs?: number
+  /** Counts what the pool told a pass (plan 71, §4.4): metrics without ids. */
+  pool?: { limitsOut(): void; tierWait(tier: string): void }
 }
 
 /** A retry of the pass a busy site or pool sent back, and when. */
@@ -452,14 +454,21 @@ export class PassRunner {
         // told so and the dialog stays open, instead of a queue that looks short and lasts hours.
         // A busy pool names a minute, and a cooldown or a probe stays under the limit: they wait.
         const retryAt = this.#poolRetryAt(error.details)
+        // The reserve of the higher tiers (Л8) is capacity that exists: the pass waits in the
+        // queue however long, and is never told that the limits of the agent are out (Л17).
+        const waitReason = (error.details as { reason?: unknown } | undefined)?.reason
+        const reserved = typeof waitReason === 'string' && waitReason.startsWith('tier_reserve')
+        if (reserved) this.deps.pool?.tierWait(waitReason.split(':')[1] ?? 'none')
         if (
           error.code === 'SUBSCRIPTION_WAIT' &&
+          !reserved &&
           retryAt !== null &&
           poolWaitIsLimitsOut(retryAt, this.#now())
         ) {
           this.#logger.warn(
             `pass_limits_out task=${ref.taskId} turn=${turn ?? 'none'} retry_at=${retryAt.toISOString()}`,
           )
+          this.deps.pool?.limitsOut()
           facts = { ...facts, detailReason: 'agent_limits' }
         } else
           return {
@@ -608,6 +617,8 @@ export class PassRunner {
       .enqueue(AGENT_TURN_QUEUE, AGENT_TURN_JOB, job, {
         jobId: agentTurnRetryJobId(job, String(this.#now().getTime())),
         delayMs: retry.delayMs,
+        // After a wait of the pool the passes come back in the order of their tiers (plan 71).
+        ...(job.priority === undefined ? {} : { priority: job.priority }),
       })
       .catch(() => this.#logger.warn(`pass_requeue_failed task=${job.taskId}`))
   }

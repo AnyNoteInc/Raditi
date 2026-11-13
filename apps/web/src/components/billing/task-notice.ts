@@ -3,6 +3,8 @@ import { formatMoscowDay, nextMoscowMidnight } from '@/lib/moscow-date'
 import { plural } from '@/lib/plural'
 import { formatRubles } from '@/lib/rubles'
 
+import { usageLimitPageText } from '@repo/domain/tasks/client-feed-failures'
+
 import type { TaskCredits } from './billing-types'
 import {
   creditsOf,
@@ -262,12 +264,34 @@ export function taskNotice(input: TaskNoticeInput): TaskNotice | null {
       }
     case 'daily_limit':
       return dayTaken(input)
+    case 'window_limit':
+      return windowTaken(input)
     case 'past_due':
       return {
         state: `Тариф «${tariff?.name ?? ''}» не оплачен, поэтому новые задачи не принимаются.`,
         way: 'Оплатите тариф — кредиты нового периода начислим сразу.',
         actions: ['pay'],
       }
+  }
+}
+
+/**
+ * A window of 5 hours or of the week is spent (plan 71): credits do not lift it, the reset does,
+ * and a bigger tariff has bigger windows.
+ */
+function windowTaken(input: TaskNoticeInput): TaskNotice {
+  // The 5 hours are asked first, as the server refuses (`refusingWindow`).
+  const window =
+    input.task.windows.find((item) => item.kind === '5h' && item.left === 0) ??
+    input.task.windows.find((item) => item.left === 0)
+  // The server says the tier: only «Агентство» has no bigger tariff above it.
+  const bigger = input.task.tier !== 'agency'
+  return {
+    state: `${usageLimitPageText(window?.kind ?? '5h', window?.resetsAt ?? null)} Кредиты от этого не сгорают.`,
+    way: bigger
+      ? 'На старших тарифах лимиты больше — тариф можно сменить в разделе «Тарифы».'
+      : null,
+    actions: bigger ? ['change_plan'] : [],
   }
 }
 

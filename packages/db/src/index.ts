@@ -11,6 +11,15 @@ export {
 } from './client.ts'
 export { enqueueOutbox, type OutboxMessage, type OutboxWriter } from './outbox.ts'
 export {
+  lockUsageWindows,
+  openReservedWindowCredits,
+  openUsageWindows,
+  workspaceUsageTerms,
+  workspaceWindowUsage,
+  type WorkspaceUsageTerms,
+} from './usage-windows.ts'
+export {
+  agentTurnPriority,
   enqueueAgentTurn,
   enqueueBrowserEnsure,
   enqueuePreviewBrowser,

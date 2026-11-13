@@ -24,11 +24,13 @@ import {
   type PreviewBrowserJob,
   type PreviewSyncJob,
   type ReleaseAdvanceJob,
+  tierQueuePriority,
 } from '@repo/domain'
 import { z } from 'zod'
 
 import type { Prisma } from './generated/prisma/client.ts'
 import { enqueueOutbox, type OutboxWriter } from './outbox.ts'
+import { workspaceUsageTerms } from './usage-windows.ts'
 
 // The jobs of the chat → preview → /release path (docs/plan/53-chat-preview-release.md,
 // «Очереди и задания»). Each helper writes its outbox row in the caller's transaction, so a job
@@ -40,13 +42,34 @@ import { enqueueOutbox, type OutboxWriter } from './outbox.ts'
 /** Ids are written as PostgreSQL prints them, so one row is one key whatever case it came in. */
 const lower = (id: string): string => id.toLowerCase()
 
+/**
+ * The place of a pass of the task in the queue: the tier of the live paid tariff of its
+ * workspace (plan 71, §2.3) — a repeat after the pool waited comes back in the same order.
+ */
+export async function agentTurnPriority(
+  tx: Pick<Prisma.TransactionClient, '$queryRaw'>,
+  taskId: string,
+): Promise<number> {
+  const rows = await tx.$queryRaw<{ workspaceId: string }[]>`
+    SELECT workspace_id AS "workspaceId" FROM tasks WHERE id = ${taskId}::uuid`
+  const workspaceId = rows[0]?.workspaceId
+  // The tier the limits of the workspace are read by, so a pass and its windows never disagree.
+  const tier =
+    workspaceId === undefined ? 'none' : (await workspaceUsageTerms(tx, workspaceId)).tier
+  return tierQueuePriority[tier]
+}
+
 export async function enqueueAgentTurn(
-  tx: OutboxWriter,
+  tx: OutboxWriter & Pick<Prisma.TransactionClient, '$queryRaw'>,
   job: AgentTurnJob,
   options: { availableAt?: Date } = {},
 ): Promise<boolean> {
   const parsed = agentTurnJobSchema.parse(job)
-  const payload: AgentTurnJob = { ...parsed, taskId: lower(parsed.taskId) }
+  const payload: AgentTurnJob = {
+    ...parsed,
+    taskId: lower(parsed.taskId),
+    priority: parsed.priority ?? (await agentTurnPriority(tx, parsed.taskId)),
+  }
   return enqueueOutbox(tx, {
     topic: AGENT_TURN_QUEUE,
     type: AGENT_TURN_JOB,
@@ -93,6 +116,7 @@ export async function enqueueSiteWaitingPasses(
       taskId: lower(row.id),
       attempt: row.attempt,
       requestEventId: row.request_id.toString(),
+      priority: await agentTurnPriority(tx, row.id),
     })
     if (
       await enqueueOutbox(tx, {

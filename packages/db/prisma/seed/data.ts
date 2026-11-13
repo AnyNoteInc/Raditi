@@ -33,6 +33,11 @@ export interface PlanSeed {
    * since 06.11.2026 (Ц6). The limit stays in the code for a plan that sets one.
    */
   creditsPerDay: number | null
+  /**
+   * Credits the work of a workspace may take in 5 hours and in a week, (plan 71, Л4); NULL on a pack and on pay-per-action, which tier nobody.
+   */
+  creditsPer5h: number | null
+  creditsPerWeek: number | null
   packCredits: number | null
   maxSites: number | null
   sortOrder: number
@@ -46,6 +51,8 @@ export const planSeeds = [
     price: '1990.00',
     creditsPerMonth: 150,
     creditsPerDay: null,
+    creditsPer5h: 20,
+    creditsPerWeek: 55,
     packCredits: null,
     maxSites: 1,
     sortOrder: 10,
@@ -57,6 +64,8 @@ export const planSeeds = [
     price: '6990.00',
     creditsPerMonth: 600,
     creditsPerDay: null,
+    creditsPer5h: 70,
+    creditsPerWeek: 210,
     packCredits: null,
     maxSites: 3,
     sortOrder: 20,
@@ -68,6 +77,8 @@ export const planSeeds = [
     price: '19990.00',
     creditsPerMonth: 2000,
     creditsPerDay: null,
+    creditsPer5h: 200,
+    creditsPerWeek: 700,
     packCredits: null,
     maxSites: 15,
     sortOrder: 30,
@@ -82,6 +93,8 @@ export const planSeeds = [
     price: '1490.00',
     creditsPerMonth: null,
     creditsPerDay: null,
+    creditsPer5h: null,
+    creditsPerWeek: null,
     packCredits: 100,
     maxSites: null,
     sortOrder: 40,
@@ -95,6 +108,8 @@ export const planSeeds = [
     price: '0.00',
     creditsPerMonth: null,
     creditsPerDay: null,
+    creditsPer5h: null,
+    creditsPerWeek: null,
     packCredits: null,
     maxSites: 1,
     sortOrder: 50,

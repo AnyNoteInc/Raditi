@@ -1,0 +1,21 @@
+{
+  "rows": [
+    {
+      "model": "glm-5.3",
+      "effectiveFrom": "2026-11-11T00:00:00+03:00",
+      "sourceUrl": "https://docs.z.ai/devpack/overview",
+      "rates": {
+        "inputUncachedPer10k": "6.9",
+        "cacheReadPer10k": "1.7",
+        "outputPer10k": "24",
+        "offPeakShare": "0.5",
+        "peak": {
+          "timeZone": "Asia/Singapore",
+          "days": [1, 2, 3, 4, 5],
+          "fromHour": 14,
+          "toHour": 18
+        }
+      }
+    }
+  ]
+}

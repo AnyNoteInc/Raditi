@@ -29,6 +29,8 @@ describe('plans (docs/business.md §6)', () => {
         price: '1990.00',
         creditsPerMonth: 150,
         creditsPerDay: null,
+        creditsPer5h: 20,
+        creditsPerWeek: 55,
         packCredits: null,
         maxSites: 1,
       },
@@ -39,6 +41,8 @@ describe('plans (docs/business.md §6)', () => {
         price: '6990.00',
         creditsPerMonth: 600,
         creditsPerDay: null,
+        creditsPer5h: 70,
+        creditsPerWeek: 210,
         packCredits: null,
         maxSites: 3,
       },
@@ -49,6 +53,8 @@ describe('plans (docs/business.md §6)', () => {
         price: '19990.00',
         creditsPerMonth: 2000,
         creditsPerDay: null,
+        creditsPer5h: 200,
+        creditsPerWeek: 700,
         packCredits: null,
         maxSites: 15,
       },
@@ -59,6 +65,8 @@ describe('plans (docs/business.md §6)', () => {
         price: '1490.00',
         creditsPerMonth: null,
         creditsPerDay: null,
+        creditsPer5h: null,
+        creditsPerWeek: null,
         packCredits: 100,
         maxSites: null,
       },
@@ -69,6 +77,8 @@ describe('plans (docs/business.md §6)', () => {
         price: '0.00',
         creditsPerMonth: null,
         creditsPerDay: null,
+        creditsPer5h: null,
+        creditsPerWeek: null,
         packCredits: null,
         maxSites: 1,
       },
@@ -115,6 +125,8 @@ describe('Appendix 1 of the public offer', () => {
     price: new RegExp(`^${whole} ₽ в месяц$`),
     terms: new RegExp(
       `^${whole} Кредит(?:|а|ов) в месяц(?:, из них не более ${whole} Кредит(?:|а|ов) в день)?; ` +
+        // The windows of the work (plan 71): «до 20 Кредитов за 5 часов и 55 в неделю».
+        `(?:до ${whole} Кредит(?:|а|ов) за 5 часов и ${whole} в неделю; )?` +
         String.raw`(?:до )?(\d+) Сайт(?:|а|ов) Заказчика$`,
     ),
   }
@@ -129,13 +141,15 @@ describe('Appendix 1 of the public offer', () => {
   function promised(cells: string[]) {
     const [name = '', price = '', terms = ''] = cells.map((cell) => cell.trim())
     const month = tariff.price.exec(price)
-    const [, credits, creditsPerDay, maxSites] = tariff.terms.exec(terms) ?? []
+    const [, credits, creditsPerDay, per5h, perWeek, maxSites] = tariff.terms.exec(terms) ?? []
     if (month && credits !== undefined)
       return {
         name,
         price: roubles(month[1]),
         creditsPerMonth: count(credits),
         creditsPerDay: creditsPerDay === undefined ? null : count(creditsPerDay),
+        creditsPer5h: per5h === undefined ? null : count(per5h),
+        creditsPerWeek: perWeek === undefined ? null : count(perWeek),
         maxSites: count(maxSites),
       }
     const once = pack.price.exec(price)
@@ -157,6 +171,8 @@ describe('Appendix 1 of the public offer', () => {
               price: plan.price,
               creditsPerMonth: plan.creditsPerMonth,
               creditsPerDay: plan.creditsPerDay,
+              creditsPer5h: plan.creditsPer5h,
+              creditsPerWeek: plan.creditsPerWeek,
               maxSites: plan.maxSites,
             },
       ),

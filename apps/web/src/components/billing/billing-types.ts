@@ -17,8 +17,17 @@ export type CreditBalances = BillingOverview['credits']
  */
 export type TaskCredits = Pick<
   CreditBalances,
-  'spendable' | 'spendableNow' | 'setAside' | 'minToStart' | 'today' | 'newTask'
+  | 'spendable'
+  | 'spendableNow'
+  | 'setAside'
+  | 'minToStart'
+  | 'today'
+  | 'windows'
+  | 'tier'
+  | 'newTask'
 >
+/** A window of 5 hours or of the week of the workspace (plan 71). */
+export type UsageWindow = TaskCredits['windows'][number]
 /** The tariff credits of the Moscow day of a paid tariff: its limit, what it took, what is left. */
 export type TariffDay = NonNullable<TaskCredits['today']>
 /** Why a new task would not be taken. */

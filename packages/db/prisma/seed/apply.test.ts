@@ -415,6 +415,8 @@ describe.skipIf(!databaseUrl)('seedReferenceData plan terms on PostgreSQL', () =
       price: '4900.00',
       creditsPerMonth: 30,
       creditsPerDay: 10,
+      creditsPer5h: 10,
+      creditsPerWeek: 20,
       packCredits: null,
       maxSites: 1,
       sortOrder: 990,

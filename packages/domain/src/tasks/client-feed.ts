@@ -539,6 +539,11 @@ export const feedFailurePayloadSchema = z.strictObject({
   next: z.enum(feedFailureNexts).optional(),
   /** What a task in the browser had saved on the site, as the platform found it there (Б24). */
   objects,
+  /**
+   * Only with `usage_limit`: the window of the workspace that stopped the pass and its reset
+   * (plan 71), so the row says when the work goes on.
+   */
+  window: z.strictObject({ kind: z.enum(['5h', 'week']), resetsAt: z.iso.datetime() }).optional(),
 })
 export type FeedFailurePayload = z.infer<typeof feedFailurePayloadSchema>
 
@@ -1038,6 +1043,11 @@ const readFailure = z.object({
   // the candidate.
   next: z.enum(feedFailureNexts).optional().catch(undefined),
   objects: readObjects,
+  // A window this code cannot read: the row keeps its general words (plan 71).
+  window: z
+    .object({ kind: z.enum(['5h', 'week']), resetsAt: z.iso.datetime() })
+    .optional()
+    .catch(undefined),
 })
 
 const readCandidate = z.object({

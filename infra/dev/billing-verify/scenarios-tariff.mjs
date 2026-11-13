@@ -815,3 +815,38 @@ scenarios['unanswered-then-unlink'] = async (t) => {
     { returned, done },
   )
 }
+
+// The windows of 5 hours and of the week (docs/plan/71-usage-limits.md, Л4, Л18): a customer
+// without a tariff has 15 / 50, a paid «Старт» 20 / 55, and the cards of the tariffs name each.
+// The stand calls no model, so no window starts: each says «начнётся с первой задачи».
+scenarios['usage-windows'] = async (t) => {
+  const plans = await (await t.customer()).query('billing.plans')
+  t.equal(
+    'the cards of the tariffs carry their windows',
+    plans.plans.map(({ slug, creditsPer5h, creditsPerWeek }) => [
+      slug,
+      creditsPer5h,
+      creditsPerWeek,
+    ]),
+    [
+      ['start', 20, 55],
+      ['business', 70, 210],
+      ['agency', 200, 700],
+    ],
+  )
+  const paying = await subscribed(t)
+  const usage = await paying.customer.query('billing.usage')
+  t.equal(
+    'a paid «Старт» has its windows, none of them started, and its tier',
+    [usage.windows, usage.tier],
+    [
+      [
+        { kind: '5h', limit: 20, used: 0, left: 20, resetsAt: null },
+        { kind: 'week', limit: 55, used: 0, left: 55, resetsAt: null },
+      ],
+      'start',
+    ],
+  )
+  const overview = await paying.customer.query('billing.overview')
+  t.equal('«Тарифы» tells the same windows', overview.credits.windows, usage.windows)
+}

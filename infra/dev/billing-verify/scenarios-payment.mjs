@@ -403,15 +403,27 @@ scenarios.checkout = async (t) => {
       { ...PRICE, pack: '2980.00', withoutTariff: true },
     )
     t.equal(
-      `${who}: and in credits — 150, 600 and 2 000 a month, no daily limit, a pack of 100`,
+      `${who}: and in credits — 150, 600 and 2 000 a month, no daily limit, windows of 20/55, 70/210 and 200/700, a pack of 100`,
       {
-        plans: plans.map(({ slug, price, creditsPerMonth, creditsPerDay, maxSites }) => ({
-          slug,
-          price,
-          creditsPerMonth,
-          creditsPerDay,
-          maxSites,
-        })),
+        plans: plans.map(
+          ({
+            slug,
+            price,
+            creditsPerMonth,
+            creditsPerDay,
+            creditsPer5h,
+            creditsPerWeek,
+            maxSites,
+          }) => ({
+            slug,
+            price,
+            creditsPerMonth,
+            creditsPerDay,
+            creditsPer5h,
+            creditsPerWeek,
+            maxSites,
+          }),
+        ),
         pack: pack && { slug: pack.slug, price: pack.price, credits: pack.credits },
       },
       { ...ON_SALE, pack: { ...ON_SALE.pack, price: '2980.00' } },
@@ -850,7 +862,15 @@ scenarios['autopayments-not-approved'] = async (t) => {
     ],
     [
       null,
-      { ...before.credits, gift: { ...before.credits.gift, granted: true } },
+      {
+        ...before.credits,
+        gift: { ...before.credits.gift, granted: true },
+        // The workspace is there now: the windows without a tariff, none started (plan 71).
+        windows: [
+          { kind: '5h', limit: 15, used: 0, left: 15, resetsAt: null },
+          { kind: 'week', limit: 50, used: 0, left: 50, resetsAt: null },
+        ],
+      },
       [],
       lettersBefore,
     ],

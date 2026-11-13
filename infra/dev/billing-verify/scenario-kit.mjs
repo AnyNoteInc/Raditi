@@ -43,13 +43,32 @@ export const CREDITS = { start: 150, business: 600, pack: 100, gift: 50 }
  */
 export const ON_SALE = Object.freeze({
   plans: [
-    { slug: 'start', price: '1990.00', creditsPerMonth: 150, creditsPerDay: null, maxSites: 1 },
-    { slug: 'business', price: '6990.00', creditsPerMonth: 600, creditsPerDay: null, maxSites: 3 },
+    // With the windows of 5 hours and of the week (docs/plan/71-usage-limits.md, Л4).
+    {
+      slug: 'start',
+      price: '1990.00',
+      creditsPerMonth: 150,
+      creditsPerDay: null,
+      creditsPer5h: 20,
+      creditsPerWeek: 55,
+      maxSites: 1,
+    },
+    {
+      slug: 'business',
+      price: '6990.00',
+      creditsPerMonth: 600,
+      creditsPerDay: null,
+      creditsPer5h: 70,
+      creditsPerWeek: 210,
+      maxSites: 3,
+    },
     {
       slug: 'agency',
       price: '19990.00',
       creditsPerMonth: 2000,
       creditsPerDay: null,
+      creditsPer5h: 200,
+      creditsPerWeek: 700,
       maxSites: 15,
     },
   ],
@@ -1070,14 +1089,46 @@ const doubledPrice = (price) => {
 }
 
 /** The tariffs and the pack on sale, as `billing.plans` and the table of plans both tell them. */
+/** The windows without a paid tariff (`noTariffWindowCredits`, Л4). */
+export const NO_TARIFF_WINDOWS = Object.freeze({ '5h': 15, week: 50 })
+/** The tier of a paid plan by its slug (Л18): any other paid plan is «Старт». */
+const tierOf = (slug) => (slug === 'business' || slug === 'agency' ? slug : 'start')
+
+/**
+ * The windows of a workspace as «Использование» shows them, from `workspace_usage_windows`: an
+ * open window resets at its end; nothing is used, for the stand calls no model.
+ */
+export async function windowsOf(t, workspaceId, limits) {
+  const open = await t.rows(
+    `SELECT kind, ends_at FROM workspace_usage_windows
+     WHERE workspace_id = $1 AND started_at <= now() AND ends_at > now()`,
+    [workspaceId],
+  )
+  return ['5h', 'week'].map((kind) => {
+    const window = open.find((row) => row.kind === kind)
+    const limit = limits[kind]
+    return {
+      kind,
+      limit,
+      used: 0,
+      left: limit,
+      resetsAt: window ? iso(window.ends_at) : null,
+    }
+  })
+}
+
 const onSale = ({ plans, pack }) => ({
-  plans: plans.map(({ slug, price, creditsPerMonth, creditsPerDay, maxSites }) => ({
-    slug,
-    price,
-    creditsPerMonth,
-    creditsPerDay,
-    maxSites,
-  })),
+  plans: plans.map(
+    ({ slug, price, creditsPerMonth, creditsPerDay, creditsPer5h, creditsPerWeek, maxSites }) => ({
+      slug,
+      price,
+      creditsPerMonth,
+      creditsPerDay,
+      creditsPer5h,
+      creditsPerWeek,
+      maxSites,
+    }),
+  ),
   pack: pack && { slug: pack.slug, price: pack.price, credits: pack.credits },
 })
 
@@ -1086,7 +1137,8 @@ export async function pagesShowWhatIsStored(t) {
   const usable = await creditRateUsable(t)
   const listed = await t.rows(
     `SELECT slug, kind::text AS kind, price::text AS price, credits_per_month AS "creditsPerMonth",
-       credits_per_day AS "creditsPerDay", max_sites AS "maxSites", pack_credits AS credits
+       credits_per_day AS "creditsPerDay", credits_per_5h AS "creditsPer5h",
+       credits_per_week AS "creditsPerWeek", max_sites AS "maxSites", pack_credits AS credits
      FROM plans WHERE is_active AND kind IN ('quota', 'pack') ORDER BY sort_order, slug`,
   )
   const sold = onSale({
@@ -1094,7 +1146,7 @@ export async function pagesShowWhatIsStored(t) {
     pack: listed.find(({ kind }) => kind === 'pack') ?? null,
   })
   t.equal(
-    'the table of plans holds the terms the stand expects: 150, 600 and 2 000 credits a month, no daily limit, a pack of 100',
+    'the table of plans holds the terms the stand expects: 150, 600 and 2 000 credits a month, no daily limit, windows of 20/55, 70/210 and 200/700, a pack of 100',
     sold,
     ON_SALE,
   )
@@ -1108,7 +1160,8 @@ export async function pagesShowWhatIsStored(t) {
     const live = workspace
       ? await t.one(
           `SELECT s.id, s.status::text AS status, p.slug AS plan, n.slug AS next_plan,
-             p.credits_per_day, s.current_period_start, s.current_period_end,
+             p.credits_per_day, p.credits_per_5h, p.credits_per_week,
+             s.current_period_start, s.current_period_end,
              (s.payment_method_id IS NOT NULL AND NOT s.cancel_at_period_end) AS auto_renewal
            FROM subscriptions s JOIN plans p ON p.id = s.plan_id
              LEFT JOIN plans n ON n.id = s.next_plan_id
@@ -1204,6 +1257,16 @@ export async function pagesShowWhatIsStored(t) {
       setAside: spent(({ held }) => held),
       minToStart: MIN_START_CREDITS,
       today,
+      // The windows of 5 hours and of the week: those of the paid tariff, else those without a
+      // tariff; the stand queues no task, so no window is ever started (plan 71). A user without
+      // a workspace has none yet.
+      windows: workspace
+        ? await windowsOf(t, workspace.id, {
+            '5h': paid ? live.credits_per_5h : NO_TARIFF_WINDOWS['5h'],
+            week: paid ? live.credits_per_week : NO_TARIFF_WINDOWS.week,
+          })
+        : [],
+      tier: paid ? tierOf(live.plan) : 'none',
     }
     // Without a usable credit rate no task is taken, which is said before anything else.
     task.newTask = newTaskOf(usable, task.spendableNow, customer.email)

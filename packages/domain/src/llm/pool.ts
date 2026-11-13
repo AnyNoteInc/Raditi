@@ -1,7 +1,14 @@
 import { z } from 'zod'
 
+import { tierPoolReservePct, workspaceTierSchema } from '../billing/usage-windows.ts'
 import { badRequest } from '../errors.ts'
-import { limitWindowsSchema, llmBackendIdSchema, llmCapacitySchema } from '../ports/llm-backend.ts'
+import {
+  limitWindowsSchema,
+  llmBackendIdSchema,
+  llmCapacitySchema,
+  type LimitWindow,
+} from '../ports/llm-backend.ts'
+import { absoluteWindow } from './plan-credits.ts'
 
 export const poolPolicy = Object.freeze({
   minTurnHeadroomPct: 5,
@@ -18,7 +25,13 @@ export const poolPolicy = Object.freeze({
   limitsOutWaitMs: 45 * 60_000,
   suspendedHoldMs: 24 * 60 * 60_000,
   maxRebinds: 1,
+  // How much faster than its even pace an account may spend its week before the order of the
+  // pool prefers another one (Л9): it only orders, never refuses.
+  pacingBurst: 3,
 })
+
+const fiveHoursMs = 5 * 3_600_000
+const weekMs = 7 * 24 * 3_600_000
 
 /** Whether a pool that answers «wait until `retryAt`» has no capacity left for a pass to wait for. */
 export function poolWaitIsLimitsOut(retryAt: Date, now: Date): boolean {
@@ -57,6 +70,13 @@ export const pickAccountInputSchema = z
     rebinds: z.number().int().min(0).max(poolPolicy.maxRebinds),
     policyFlagged: z.boolean(),
     minTurnHeadroomPct: z.number().positive().max(100).default(poolPolicy.minTurnHeadroomPct),
+    /**
+     * What a turn of the profile takes, in plan credits (p95 of `llm_turn_costs`, Л12); null —
+     * too few turns measured: a turn is `minTurnHeadroomPct` of each window.
+     */
+    turnCostCredits: z.number().positive().max(1e9).nullable().default(null),
+    /** The tier of the task's workspace: the reserve of the pool a new task leaves (Л8). */
+    tier: workspaceTierSchema.default('none'),
     accounts: z.array(poolAccountSnapshotSchema).readonly(),
   })
   .strict()
@@ -83,7 +103,11 @@ export type PoolDecision =
       kind: 'wait'
       retryAt: Date
       /** `cooling`: the bound account is paused by a window, a cooldown or the usage breaker. */
-      reason: 'cooling' | 'limits_unknown' | 'pool_empty' | 'provider_disabled'
+      /**
+       * `tier_reserve`: the pool has capacity, but less of it is free than a new task of this
+       * tier leaves to the higher ones (Л8); it waits in the queue for the nearest reset (Л17).
+       */
+      reason: 'cooling' | 'limits_unknown' | 'pool_empty' | 'provider_disabled' | 'tier_reserve'
       /** Refresh usage once through the gateway outside the issue transaction, then reselect. */
       probeAccountIds: readonly string[]
     }
@@ -113,6 +137,12 @@ function eligible(account: PoolAccountSnapshot, input: ParsedInput): boolean {
 interface Readiness {
   ready: boolean
   headroom: number
+  /**
+   * The order of the pool in absolute plan credits (§2.3 of plan 71): min(left of 5 hours, left
+   * of the week × pace) − the cost of a turn. null — a window without absolute numbers: the
+   * account is ordered by `headroom` in percents.
+   */
+  score: number | null
   needsProbe: boolean
   /** Latest known blocking reset for this account, never the earliest window. */
   retryAt: number | null
@@ -134,14 +164,22 @@ function pausedUntil(account: PoolAccountSnapshot, now: number): number | null {
 }
 
 /** The headroom a window must leave for this turn: a new task asks more of the five hours. */
-function headroomThreshold(
-  window: NonNullable<PoolAccountSnapshot['limitWindows']>[number],
-  input: ParsedInput,
-  newTask: boolean,
-): number {
+function headroomThreshold(window: LimitWindow, input: ParsedInput, newTask: boolean): number {
   return newTask && window.name === '5h'
     ? Math.max(input.minTurnHeadroomPct, poolPolicy.newTaskFiveHourHeadroomPct)
     : input.minTurnHeadroomPct
+}
+
+/**
+ * The week's credits as the order of the pool counts them: what is left, slowed when the account
+ * spends faster than `pacingBurst` times its even pace — a week far from its reset counts for
+ * less, so the pool turns to the account whose week ends sooner (Л9).
+ */
+export function pacedWeekCredits(left: number, resetsAt: Date | null, now: Date): number {
+  const untilReset = resetsAt === null ? weekMs : Math.max(0, resetsAt.getTime() - now.getTime())
+  return (
+    left * Math.min(1, (poolPolicy.pacingBurst * fiveHoursMs) / Math.max(fiveHoursMs, untilReset))
+  )
 }
 
 function readiness(account: PoolAccountSnapshot, input: ParsedInput, newTask: boolean): Readiness {
@@ -154,15 +192,33 @@ function readiness(account: PoolAccountSnapshot, input: ParsedInput, newTask: bo
   let unknown = !windowless && windows.length === 0
   let headroom = 100
   let retryAt = pausedUntil(account, now)
+  let score: number | null = windowless ? null : Infinity
+  let cost: number | null = null
 
   for (const window of windows) {
     headroom = Math.min(headroom, 100 - window.usedPct)
     if (window.resetsAt !== null && window.resetsAt.getTime() <= now) {
       // A passed reset needs fresh usage, not a guessed zero usage or a reset in the past.
       unknown = true
+      score = null
       continue
     }
-    if (window.usedPct <= 100 - headroomThreshold(window, input, newTask)) continue
+    const absolute = absoluteWindow(window)
+    if (absolute === null) {
+      score = null
+      if (window.usedPct <= 100 - headroomThreshold(window, input, newTask)) continue
+    } else {
+      // A turn takes its measured cost, else the share of the window it always took (Л12).
+      const turn = input.turnCostCredits ?? (absolute.limitCredits * input.minTurnHeadroomPct) / 100
+      const left = absolute.limitCredits - absolute.usedCredits
+      cost = Math.max(cost ?? 0, turn)
+      if (score !== null) {
+        const counted =
+          window.name === 'week' ? pacedWeekCredits(left, window.resetsAt, input.now) : left
+        score = Math.min(score, counted)
+      }
+      if (left >= turn) continue
+    }
     if (window.resetsAt === null) {
       // Known ample headroom needs no reset time; a blocking window does, to schedule a retry.
       unknown = true
@@ -171,7 +227,44 @@ function readiness(account: PoolAccountSnapshot, input: ParsedInput, newTask: bo
     retryAt = later(retryAt, window.resetsAt.getTime())
   }
 
-  return { ready: !unknown && retryAt === null, headroom, retryAt, needsProbe: unknown }
+  return {
+    ready: !unknown && retryAt === null,
+    headroom,
+    score: score === null || score === Infinity ? null : score - (cost ?? 0),
+    retryAt,
+    needsProbe: unknown,
+  }
+}
+
+/**
+ * Whether a new task of the tier may start on the pool (Л8): in each window, the free share of
+ * the pool — Σ left ÷ Σ size over the eligible accounts with absolute numbers that are not paused
+ * — must be greater than the reserve of the tier. null — it may; else the nearest reset of a
+ * window that would free the pool. Without absolute numbers nothing is reserved.
+ */
+function tierReserveWait(input: ParsedInput): number | null | 'none' {
+  if (input.capacity === 'none') return null
+  const reserve = tierPoolReservePct[input.tier]
+  const now = input.now.getTime()
+  const sums = { '5h': { left: 0, size: 0 }, week: { left: 0, size: 0 } }
+  const resets: number[] = []
+  for (const account of input.accounts) {
+    if (!eligible(account, input) || pausedUntil(account, now) !== null) continue
+    for (const window of account.limitWindows ?? []) {
+      if (window.name === 'month') continue
+      if (window.resetsAt !== null && window.resetsAt.getTime() <= now) continue
+      const absolute = absoluteWindow(window)
+      if (absolute === null) continue
+      sums[window.name].left += Math.max(0, absolute.limitCredits - absolute.usedCredits)
+      sums[window.name].size += absolute.limitCredits
+      if (window.resetsAt !== null) resets.push(window.resetsAt.getTime())
+    }
+  }
+  const short = (['5h', 'week'] as const).some(
+    (name) => sums[name].size > 0 && (sums[name].left * 100) / sums[name].size <= reserve,
+  )
+  if (!short) return null
+  return resets.length > 0 ? Math.min(...resets) : 'none'
 }
 
 function wait(
@@ -189,7 +282,7 @@ function wait(
 }
 
 function pickUnbound(input: ParsedInput, binding: 'initial' | 'rebind'): PoolDecision {
-  const candidates: { account: PoolAccountSnapshot; headroom: number }[] = []
+  const candidates: { account: PoolAccountSnapshot; headroom: number; score: number | null }[] = []
   const resets: number[] = []
   const probeAccountIds: string[] = []
   // An account runs any number of turns at once (owner's request of 13.11.2026: «сними все
@@ -205,10 +298,14 @@ function pickUnbound(input: ParsedInput, binding: 'initial' | 'rebind'): PoolDec
     }
     // If no replacement is ready, waiting may still make the current binding usable again.
     if (account.id === input.boundAccountId) continue
-    if (state.ready) candidates.push({ account, headroom: state.headroom })
+    if (state.ready) candidates.push({ account, headroom: state.headroom, score: state.score })
   }
+  // Absolute credits when every candidate has them (a Max holds 14 times a Lite), else percents.
+  const absolute = candidates.every((candidate) => candidate.score !== null)
   candidates.sort((left, right) => {
-    const headroom = right.headroom - left.headroom
+    const headroom = absolute
+      ? (right.score ?? 0) - (left.score ?? 0)
+      : right.headroom - left.headroom
     if (headroom !== 0) return headroom
     const leftUsed = left.account.lastUsedAt?.getTime() ?? -Infinity
     const rightUsed = right.account.lastUsedAt?.getTime() ?? -Infinity
@@ -217,6 +314,19 @@ function pickUnbound(input: ParsedInput, binding: 'initial' | 'rebind'): PoolDec
     return left.account.id < right.account.id ? -1 : left.account.id > right.account.id ? 1 : 0
   })
   const selected = candidates[0]
+  if (selected && binding === 'initial') {
+    // A started task is never left for the reserve: only a new one waits for it (Л8).
+    const reserveWait = tierReserveWait(input)
+    if (reserveWait !== null)
+      return {
+        kind: 'wait',
+        reason: 'tier_reserve',
+        retryAt: new Date(
+          reserveWait === 'none' ? input.now.getTime() + poolPolicy.unknownRetryMs : reserveWait,
+        ),
+        probeAccountIds: [],
+      }
+  }
   if (selected)
     return {
       kind: 'selected',

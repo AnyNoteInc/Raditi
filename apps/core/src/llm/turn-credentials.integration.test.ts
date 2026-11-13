@@ -215,6 +215,12 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
       })
       await db.task.deleteMany({ where: { workspaceId: row.workspaceId } })
       await db.site.deleteMany({ where: { workspaceId: row.workspaceId } })
+      const subscriptions = await db.subscription.findMany({
+        where: { workspaceId: row.workspaceId },
+        select: { planId: true },
+      })
+      await db.subscription.deleteMany({ where: { workspaceId: row.workspaceId } })
+      await db.plan.deleteMany({ where: { id: { in: subscriptions.map(({ planId }) => planId) } } })
       await db.workspace.delete({ where: { id: row.workspaceId } })
       await db.llmModelPrice.deleteMany({ where: { modelId: row.modelId } })
       await db.llmModel.delete({ where: { id: row.modelId } })

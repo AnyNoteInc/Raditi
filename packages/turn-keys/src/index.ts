@@ -5,5 +5,6 @@
 // side's own half stay in the apps.
 export * from './call-ledger.ts'
 export * from './gateway-types.ts'
+export * from './plan-rates.ts'
 export * from './turn-key.ts'
 export * from './turn-revocation.ts'

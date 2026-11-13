@@ -863,3 +863,123 @@ describe('poolWaitIsLimitsOut: a wait that is no wait', () => {
     expect(poolPolicy.limitsOutWaitMs).toBeGreaterThan(poolPolicy.unknownRetryMs)
   })
 })
+
+// Pool v2 (plan 71, §2.3): absolute plan credits, the reserve of the tiers, the pace of the week.
+describe('pickAccount in absolute plan credits', () => {
+  const credits = (
+    name: '5h' | 'week',
+    limitCredits: number,
+    usedCredits: number,
+    minutes: number,
+  ): LimitWindow => ({
+    name,
+    usedPct: (usedCredits * 100) / limitCredits,
+    resetsAt: at(minutes),
+    limitCredits,
+    usedCredits,
+  })
+  const lite = (
+    id: string,
+    used5h: number,
+    usedWeek = 0,
+    overrides: Partial<PoolAccountSnapshot> = {},
+  ) =>
+    account(id, {
+      limitWindows: [credits('5h', 2_000, used5h, 120), credits('week', 10_000, usedWeek, 5_000)],
+      ...overrides,
+    })
+  const max = (
+    id: string,
+    used5h: number,
+    usedWeek = 0,
+    overrides: Partial<PoolAccountSnapshot> = {},
+  ) =>
+    account(id, {
+      limitWindows: [credits('5h', 28_000, used5h, 120), credits('week', 140_000, usedWeek, 5_000)],
+      ...overrides,
+    })
+
+  it('sends a new task to the Max at 60 % rather than the Lite at 50 % (scenario 2)', () => {
+    const decision = pickAccount(
+      input({ tier: 'agency', accounts: [lite('lite', 1_000), max('max', 16_800)] }),
+    )
+    expect(decision).toMatchObject({ kind: 'selected', accountId: 'max' })
+  })
+
+  it('orders by percents when a probe names no credits (owner, 13.11.2026: no sizes in the code)', () => {
+    const decision = pickAccount(
+      input({
+        tier: 'agency',
+        accounts: [
+          account('small', { limitWindows: [window('5h', 50), window('week', 10, 5_000)] }),
+          account('large', { limitWindows: [window('5h', 60), window('week', 10, 5_000)] }),
+        ],
+      }),
+    )
+    // Without the sizes the larger share free wins: the Lite at 50 %, not the Max at 60 %.
+    expect(decision).toMatchObject({ kind: 'selected', accountId: 'small' })
+  })
+
+  it('needs the measured cost of a turn left in both windows', () => {
+    const decision = pickAccount(
+      input({ tier: 'agency', turnCostCredits: 300, accounts: [lite('lite', 1_800)] }),
+    )
+    expect(decision).toMatchObject({ kind: 'wait', reason: 'pool_empty', retryAt: at(120) })
+    expect(
+      pickAccount(input({ tier: 'agency', turnCostCredits: 150, accounts: [lite('lite', 1_800)] })),
+    ).toMatchObject({ kind: 'selected', accountId: 'lite' })
+  })
+
+  it('prefers the week that resets sooner when the remainder is the same (Л9)', () => {
+    const soon = account('soon', {
+      limitWindows: [credits('5h', 12_000, 0, 120), credits('week', 60_000, 55_000, 60 * 10)],
+    })
+    const far = account('far', {
+      limitWindows: [credits('5h', 12_000, 0, 120), credits('week', 60_000, 55_000, 60 * 24 * 6)],
+    })
+    expect(pickAccount(input({ tier: 'agency', accounts: [far, soon] }))).toMatchObject({
+      kind: 'selected',
+      accountId: 'soon',
+    })
+  })
+
+  describe('leaves the reserve of the pool to the higher tiers (scenario 3)', () => {
+    // 20 % of the five hours free over the pool.
+    const pool = [lite('a', 1_600), lite('b', 1_600)]
+    it.each([
+      ['agency', 'selected'],
+      ['business', 'selected'],
+      ['start', 'wait'],
+      ['none', 'wait'],
+    ] as const)('a new task of %s: %s', (tier, kind) => {
+      const decision = pickAccount(input({ tier, accounts: pool }))
+      expect(decision.kind).toBe(kind)
+      if (decision.kind === 'wait') {
+        expect(decision.reason).toBe('tier_reserve')
+        expect(decision.retryAt).toEqual(at(120))
+        expect(decision.probeAccountIds).toEqual([])
+      }
+    })
+
+    it('lets a bound task of «Старт» go on', () => {
+      const decision = pickAccount(input({ tier: 'start', boundAccountId: 'a', accounts: pool }))
+      expect(decision).toMatchObject({ kind: 'selected', accountId: 'a', binding: 'keep' })
+    })
+
+    it('counts the week as well', () => {
+      const weekShort = [lite('a', 0, 9_000), lite('b', 0, 9_000)]
+      expect(pickAccount(input({ tier: 'business', accounts: weekShort }))).toMatchObject({
+        kind: 'wait',
+        reason: 'tier_reserve',
+      })
+      expect(pickAccount(input({ tier: 'agency', accounts: weekShort })).kind).toBe('selected')
+    })
+
+    it('reserves nothing on a backend without windows (Л13)', () => {
+      const decision = pickAccount(
+        input({ backend: 'zai-coding', capacity: 'none', tier: 'none', accounts: pool }),
+      )
+      expect(decision.kind).toBe('selected')
+    })
+  })
+})

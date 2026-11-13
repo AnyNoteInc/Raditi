@@ -29,6 +29,8 @@ const plan = {
   price: '12900.00',
   creditsPerMonth: 80,
   creditsPerDay: 10,
+  creditsPer5h: null,
+  creditsPerWeek: null,
   maxSites: 3,
 }
 const pack = {
