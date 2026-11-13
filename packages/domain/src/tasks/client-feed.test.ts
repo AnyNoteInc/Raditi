@@ -273,6 +273,11 @@ const samples: Record<FeedEventType, Record<string, unknown>[]> = {
     },
   ],
   'feed.page_left': [{ v: 1, pageId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7db1', reason: 'refused' }],
+  'feed.doc': [{ v: 1, docId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dc1' }],
+  'feed.doc_touch': [{ v: 1, docId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dc1', revision: 2 }],
+  'feed.doc_left': [
+    { v: 1, docId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dc1', sections: 2, reason: 'refused' },
+  ],
 }
 
 const accepts = (type: FeedEventType, payload: unknown) =>
@@ -305,6 +310,9 @@ describe('feed vocabulary', () => {
       'feed.file_left',
       'feed.page',
       'feed.page_left',
+      'feed.doc',
+      'feed.doc_touch',
+      'feed.doc_left',
     ])
     expect(Object.keys(feedPayloadSchemas)).toEqual([...feedEventTypes])
     expect(isFeedEventType('feed.step')).toBe(true)
@@ -1245,6 +1253,9 @@ describe('reading stored rows', () => {
         },
       ],
       'feed.page_left': [{ v: 1, pageId: 'страница', reason: 'missing' }],
+      'feed.doc': [{ v: 1, docId: 'документ' }],
+      'feed.doc_touch': [{ v: 1, docId: 'документ', revision: 1 }],
+      'feed.doc_left': [{ v: 1, docId: 'документ', sections: 1, reason: 'refused' }],
     }
     for (const type of feedEventTypes)
       for (const payload of broken[type])

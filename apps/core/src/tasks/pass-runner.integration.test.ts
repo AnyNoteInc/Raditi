@@ -201,6 +201,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     options: {
       git?: CandidateGit | null
       browser?: { reclaim: ReturnType<typeof vi.fn>; verify: ReturnType<typeof vi.fn> } | null
+      docs?: { settle: ReturnType<typeof vi.fn> }
     } = {},
   ) {
     const queue = { enqueue: vi.fn(async () => {}) }
@@ -219,6 +220,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       supervisor,
       git: options.git === undefined ? git : options.git,
       ...(options.browser !== undefined ? { browser: options.browser as never } : {}),
+      ...(options.docs ? { docs: options.docs as never } : {}),
       drivers,
       backends: llmBackends,
       adapter: getSiteAdapter,
@@ -417,6 +419,71 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         occurredAt: NOW,
       })
     }
+
+    it('checks the sections of documents with the turn’s own check before the answer (plan 69, Ст19)', async () => {
+      await rate()
+      const dialog = await queued({ reserve: true })
+      const refusesText = () => null
+      const seen: string[] = []
+      const docs = {
+        settle: vi.fn(async (taskId: string) => {
+          // Before the pass ends: the client reads the answer after the sections are settled.
+          seen.push((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status)
+        }),
+      }
+      const { passes } = runner(
+        async () => {
+          await db.task.update({
+            where: { id: dialog.taskId },
+            data: { status: 'running', turnNo: 1 },
+          })
+          await db.taskTurn.create({
+            data: {
+              taskId: dialog.taskId,
+              turnNo: 1,
+              status: 'completed',
+              driverId: sampleDriverId,
+              image,
+              headSha: HEAD,
+            },
+          })
+          await worked(dialog.taskId)
+          return {
+            result: {
+              summary: 'Готово',
+              change_type: 'none',
+              client_message: 'Документ готов.',
+              files_changed: [],
+              questions: [],
+              needs_approval: false,
+              risk: 'low',
+            },
+            manifest: { git: { headSha: HEAD } } as SnapshotManifest,
+            refusesText,
+          }
+        },
+        undefined,
+        { docs },
+      )
+      await passes.run(dialog.job)
+      expect(docs.settle).toHaveBeenCalledWith(dialog.taskId, 1, refusesText)
+      expect(seen).toEqual(['running'])
+    })
+
+    it('checks no sections after a turn that failed: they wait for the next end of a turn', async () => {
+      await rate()
+      const dialog = await queued({ reserve: true })
+      const docs = { settle: vi.fn(async () => {}) }
+      const { passes } = runner(
+        async () => {
+          throw new Error('the sandbox is gone')
+        },
+        undefined,
+        { docs },
+      )
+      await passes.run(dialog.job)
+      expect(docs.settle).not.toHaveBeenCalled()
+    })
 
     it('plans the turn, runs it under the supervisor and ends the pass', async () => {
       await rate()

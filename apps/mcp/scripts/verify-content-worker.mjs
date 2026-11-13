@@ -309,11 +309,14 @@ try {
   const route = `/wp/v2/pages/${fixture.pageId}`
   const listed = await rpc('tools/list', {})
   // Exactly the content profile: no browser_* tool without the browser profile and a preview.
-  assert.deepEqual(listed.tools.map((item) => item.name).sort(), [
-    'restore',
-    'site_info',
-    'wp_rest',
-  ])
+  // The documents (doc_*, docs/plan/69-pages.md, Ст21) are offered to every turn: left out here.
+  assert.deepEqual(
+    listed.tools
+      .map((item) => item.name)
+      .filter((name) => !name.startsWith('doc_'))
+      .sort(),
+    ['restore', 'site_info', 'wp_rest'],
+  )
   // A strict MCP client refuses a whole tool list in which one tool has no object input schema.
   assert(ListToolsResultSchema.safeParse(listed).success, 'tools/list must match the MCP schema')
   assert(listed.tools.every((item) => item.inputSchema?.type === 'object'))

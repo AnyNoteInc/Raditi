@@ -261,6 +261,21 @@ export function feedPageLeftText(row: { reason: 'missing' | 'refused' | 'failed'
   return 'Страницу не удалось опубликовать. Попросите агента опубликовать её ещё раз.'
 }
 
+/** A document the agent set up (`feed.doc`, Ст22), until the card of slice 69.9. */
+export const feedDocText = (): string => 'Агент пишет документ'
+
+/**
+ * Sections the end of a turn sent back to placeholders (`feed.doc_left`, Ст19): the agent writes
+ * them again. Never why: a refusal may be a secret.
+ */
+export function feedDocLeftText(row: { sections: number }): string {
+  const one = pluralRu(row.sections, 'one', 'few', 'many') === 'one'
+  const count = `${row.sections} ${pluralRu(row.sections, 'раздел', 'раздела', 'разделов')}`
+  return one
+    ? `${count} документа не прошёл проверку и снова пуст. Попросите агента написать его ещё раз.`
+    : `${count} документа не прошли проверку и снова пусты. Попросите агента написать их ещё раз.`
+}
+
 /** A page the agent published (`feed.page`): its title and version. */
 export const feedPageText = (row: { title: string; version: number }): string =>
   `Страница «${row.title}», версия v${row.version}`

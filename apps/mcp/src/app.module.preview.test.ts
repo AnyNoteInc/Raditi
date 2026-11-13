@@ -8,7 +8,7 @@ import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
 import { memoryStorage } from '@repo/snapshots/testing'
 
 import type { McpConfig } from './config/config.ts'
-import { fakeInfra, testMcpConfig } from './testing/fakes.ts'
+import { fakeInfra, notDocTool, testMcpConfig } from './testing/fakes.ts'
 import { MCP_CONTENT_STORAGE } from './storage/content-storage.ts'
 import { MCP_ACCESS, type McpAccess } from './access/mcp-access.ts'
 import { AppModule } from './app.module.ts'
@@ -131,6 +131,7 @@ async function start(scope: McpAccess, fakes = stubs(), roleConfig = config()) {
       }>
     )
       .map((tool) => tool.name)
+      .filter(notDocTool)
       .sort()
   const call = (name: string, args: object = {}) =>
     post({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } })

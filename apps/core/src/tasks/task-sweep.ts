@@ -3,6 +3,7 @@ import type { AgentDriverRegistry } from '@repo/agent-drivers'
 import { chargeTask, expireTaskHolds, extendTaskHolds } from '@repo/billing'
 import {
   cancelWaitingTask,
+  clearStaleUncheckedSections,
   dropAbandonedPages,
   insertFeedEvent,
   requestPreviewSync,
@@ -505,8 +506,12 @@ export class TaskSweep {
     for (const reservation of stale)
       await pages.left(reservation, 'failed', { taskId: reservation.taskId, turnId: null })
     const dropped = await dropAbandonedPages(db, before)
-    if (stale.length > 0 || dropped > 0)
-      this.#logger.log(`task_sweep_pages failed=${stale.length} dropped=${dropped}`)
+    // Text of documents no end of a turn checked: it may hold a value of the client (Ст19).
+    const cleared = await clearStaleUncheckedSections(db, before)
+    if (stale.length > 0 || dropped > 0 || cleared > 0)
+      this.#logger.log(
+        `task_sweep_pages failed=${stale.length} dropped=${dropped} sections_cleared=${cleared}`,
+      )
     return stale.length
   }
 

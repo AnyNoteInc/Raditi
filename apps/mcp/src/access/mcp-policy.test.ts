@@ -463,5 +463,17 @@ describe('MCP request policy', () => {
         'pages',
       ]),
     ).toBe(false)
+
+    // The documents (Ст21): every turn; each call by its own strict schema.
+    expect(mcpToolFamiliesOf(chat, { ...base, docsTools: true })).toEqual(['docs'])
+    const docId = access.taskId
+    expect(mcpBodyAllowed(page('doc_read', { docId }), ['docs'])).toBe(true)
+    expect(mcpBodyAllowed(page('doc_read', { docId }), ['pages'])).toBe(false)
+    expect(mcpBodyAllowed(page('doc_read', { docId, extra: 1 }), ['docs'])).toBe(false)
+    expect(
+      mcpBodyAllowed(page('doc_section_move', { docId, id: 'a', after: null }), ['docs']),
+    ).toBe(true)
+    expect(mcpBodyAllowed(page('doc_section_move', { docId, id: 'a' }), ['docs'])).toBe(false)
+    expect(mcpBodyAllowed(page('doc_delete', { docId }), ['docs'])).toBe(false)
   })
 })

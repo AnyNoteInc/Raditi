@@ -377,3 +377,17 @@ describe('the address of the pages', () => {
     ])
   })
 })
+
+describe('the words of the documents in the feed', () => {
+  it('agree with the number of sections sent back', async () => {
+    const { feedDocLeftText } = await import('../tasks/client-feed-labels.ts')
+    expect(feedDocLeftText({ sections: 1 })).toBe(
+      '1 раздел документа не прошёл проверку и снова пуст. Попросите агента написать его ещё раз.',
+    )
+    expect(feedDocLeftText({ sections: 21 })).toMatch(/^21 раздел документа не прошёл/)
+    expect(feedDocLeftText({ sections: 2 })).toBe(
+      '2 раздела документа не прошли проверку и снова пусты. Попросите агента написать их ещё раз.',
+    )
+    expect(feedDocLeftText({ sections: 5 })).toMatch(/^5 разделов документа не прошли/)
+  })
+})

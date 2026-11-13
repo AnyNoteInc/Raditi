@@ -111,7 +111,9 @@ export function feedEntries(rows: readonly FeedRow[], head: FeedHeadState | null
   const entries: FeedEntry[] = []
   const placed = new Set<number>()
   rows.forEach((row, index) => {
-    if (row.type === 'skipped') return
+    // A signal for the card of a document (docs/plan/69-pages.md, Ст22): no entry of its own, and
+    // never the end of a turn's work.
+    if (row.type === 'skipped' || row.type === 'feed.doc_touch') return
     if (!isStep(row)) {
       entries.push({ kind: 'row', key: row.id, row })
       return
@@ -123,7 +125,10 @@ export function feedEntries(rows: readonly FeedRow[], head: FeedHeadState | null
     const lastIndex = rows.indexOf(last)
     const ending = rows
       .slice(Math.max(lastIndex, index) + 1)
-      .find((later) => !isStep(later) && later.type !== 'feed.request')
+      .find(
+        (later) =>
+          !isStep(later) && later.type !== 'feed.request' && later.type !== 'feed.doc_touch',
+      )
     const start = Date.parse(row.at)
     const end = Date.parse(ending?.at ?? last.at)
     entries.push({

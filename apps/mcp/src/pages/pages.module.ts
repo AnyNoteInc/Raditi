@@ -18,7 +18,7 @@ export function postgresPagesStore(db: PrismaClient): McpPagesStore {
   return {
     reserve: (input) => reservePagePublication(db, input),
     documentTitle: async (workspaceId, documentId) =>
-      (await readChatDocument(db, { workspaceId, documentId, reader: 'agent' })).title,
+      (await readChatDocument(db, { workspaceId, documentId, reader: 'client' })).title,
     list: (workspaceId) => listWorkspacePages(db, workspaceId),
   }
 }

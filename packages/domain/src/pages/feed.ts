@@ -46,12 +46,12 @@ export const feedPageLeftPayloadSchema = z.strictObject({
 })
 export type FeedPageLeftPayload = z.infer<typeof feedPageLeftPayloadSchema>
 
-/** `feed.doc` v1 — the agent set up a document: the card shows it from now on. */
-export const feedDocPayloadSchema = z.strictObject({
-  v: version,
-  docId: id,
-  title: pageTitleSchema,
-})
+/**
+ * `feed.doc` v1 — the agent set up a document: the card shows it from now on and reads its title
+ * by tRPC. The row carries no title: what the agent typed is checked only at the end of the turn
+ * (Ст19), and a row of the feed is never rewritten.
+ */
+export const feedDocPayloadSchema = z.strictObject({ v: version, docId: id })
 export type FeedDocPayload = z.infer<typeof feedDocPayloadSchema>
 
 /**

@@ -25,6 +25,8 @@ import {
   feedFailureKeptText,
   feedFailureOpenText,
   feedFileLeftText,
+  feedDocLeftText,
+  feedDocText,
   feedPageLeftText,
   feedFilesChangedText,
   feedLiveText,
@@ -1082,6 +1084,14 @@ function RowView({
       )
     case 'feed.page_left':
       return <Note text={feedPageLeftText(row)} />
+    // A document the agent writes (docs/plan/69-pages.md, Ст22): a line until the live card of 69.9;
+    // a change of it is a signal for that card, nothing to show by itself.
+    case 'feed.doc':
+      return <Note text={feedDocText()} />
+    case 'feed.doc_touch':
+      return null
+    case 'feed.doc_left':
+      return <Note text={feedDocLeftText(row)} />
     case 'feed.rewind':
       return <Note text={feedRewindText(row)} />
     case 'feed.redo':

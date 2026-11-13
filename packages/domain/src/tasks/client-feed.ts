@@ -1,6 +1,9 @@
 import { z } from 'zod'
 
 import {
+  feedDocLeftPayloadSchema,
+  feedDocPayloadSchema,
+  feedDocTouchPayloadSchema,
   feedPageLeftPayloadSchema,
   feedPagePayloadSchema,
   pageKinds,
@@ -79,6 +82,10 @@ export const feedEventTypes = [
   'feed.page',
   // A publication of the turn did not come true (docs/plan/69-pages.md, Ст6).
   'feed.page_left',
+  // A document the agent set up, a change of it, sections the end of a turn sent back (Ст22, Ст19).
+  'feed.doc',
+  'feed.doc_touch',
+  'feed.doc_left',
 ] as const
 export type FeedEventType = (typeof feedEventTypes)[number]
 
@@ -846,6 +853,9 @@ export const feedPayloadSchemas = Object.freeze({
   'feed.file_left': feedFileLeftPayloadSchema,
   'feed.page': feedPagePayloadSchema,
   'feed.page_left': feedPageLeftPayloadSchema,
+  'feed.doc': feedDocPayloadSchema,
+  'feed.doc_touch': feedDocTouchPayloadSchema,
+  'feed.doc_left': feedDocLeftPayloadSchema,
 }) satisfies Record<FeedEventType, z.ZodType>
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength
@@ -882,6 +892,9 @@ export const feedRowSchemaWithin = (maxBytes: number) =>
       row('feed.file_left', feedFileLeftPayloadSchema),
       row('feed.page', feedPagePayloadSchema),
       row('feed.page_left', feedPageLeftPayloadSchema),
+      row('feed.doc', feedDocPayloadSchema),
+      row('feed.doc_touch', feedDocTouchPayloadSchema),
+      row('feed.doc_left', feedDocLeftPayloadSchema),
     ])
     .superRefine((value, ctx) => {
       if (feedPayloadBytes(value.payload) > maxBytes)
@@ -1161,6 +1174,15 @@ const readPageLeft = z.object({
   reason: known(pageLeftReasons, 'failed' as const),
 })
 
+const readDoc = z.object({ docId: z.uuid() })
+const readDocTouch = z.object({ docId: z.uuid(), revision: z.number().int().min(1) })
+const readDocLeft = z.object({
+  docId: z.uuid(),
+  sections: z.number().int().min(1),
+  // The one reason there is; a newer one reads as it.
+  reason: known(['refused'] as const, 'refused' as const),
+})
+
 const readCancelled = z.object({
   turn: turnNo.nullable(),
   /** null — a way of cancelling added later: the plate is shown without a reason. */
@@ -1214,6 +1236,9 @@ export type FeedEvent =
   | ({ type: 'feed.file_left' } & z.infer<typeof readFileLeft>)
   | ({ type: 'feed.page' } & z.infer<typeof readPage>)
   | ({ type: 'feed.page_left' } & z.infer<typeof readPageLeft>)
+  | ({ type: 'feed.doc' } & z.infer<typeof readDoc>)
+  | ({ type: 'feed.doc_touch' } & z.infer<typeof readDocTouch>)
+  | ({ type: 'feed.doc_left' } & z.infer<typeof readDocLeft>)
   | { type: 'newer' }
   | { type: 'unreadable' }
   | { type: 'skipped' }
@@ -1353,6 +1378,16 @@ const readers: Record<FeedEventType, Record<number, Reader>> = {
   'feed.page_left': {
     1: (payload) =>
       readWith(readPageLeft, payload, (data) => ({ type: 'feed.page_left', ...data })),
+  },
+  'feed.doc': {
+    1: (payload) => readWith(readDoc, payload, (data) => ({ type: 'feed.doc', ...data })),
+  },
+  'feed.doc_touch': {
+    1: (payload) =>
+      readWith(readDocTouch, payload, (data) => ({ type: 'feed.doc_touch', ...data })),
+  },
+  'feed.doc_left': {
+    1: (payload) => readWith(readDocLeft, payload, (data) => ({ type: 'feed.doc_left', ...data })),
   },
 }
 

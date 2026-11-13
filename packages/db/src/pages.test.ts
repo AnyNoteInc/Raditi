@@ -9,6 +9,7 @@ import {
 import type { PrismaClient } from './generated/prisma/client.ts'
 import {
   applyPageVersion,
+  clearStaleUncheckedSections,
   createChatDocument,
   currentDocMarkdown,
   listWorkspacePages,
@@ -529,6 +530,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
         workspaceId: ids.workspaceId,
         documentId: ids.documentId,
         reader: 'agent',
+        taskId: ids.taskId,
       })
       expect(forAgent.sections[0]).toMatchObject({
         heading: 'Раздел summary',
@@ -601,6 +603,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
         workspaceId: ids.workspaceId,
         documentId: ids.documentId,
         reader: 'agent',
+        taskId: ids.taskId,
       })
       expect(read.sections[0]).toMatchObject({
         key: 'extra',
@@ -645,6 +648,89 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
       expect(settled?.version).toBeNull()
       const document = await db.chatDocument.findUniqueOrThrow({ where: { id: ids.documentId } })
       expect(document).toMatchObject({ currentVersion: 0, finishTaskId: null, finishTurnNo: null })
+    })
+
+    it('lets no other chat read a section before core checked it', async () => {
+      const ids = await skeleton()
+      await write(ids, 'summary', 'значение сайта А')
+      const other = await db.task.create({
+        data: {
+          id: uuidv7(),
+          workspaceId: ids.workspaceId,
+          siteId: null,
+          needsRepository: false,
+          needsBrowser: false,
+        },
+      })
+      const fromOther = await readChatDocument(db, {
+        workspaceId: ids.workspaceId,
+        documentId: ids.documentId,
+        reader: 'agent',
+        taskId: other.id,
+      })
+      expect(fromOther.sections[0]).toMatchObject({
+        state: 'written',
+        checked: false,
+        heading: null,
+        markdown: null,
+      })
+      await endOfTurn(ids.taskId, 1)
+      const after = await readChatDocument(db, {
+        workspaceId: ids.workspaceId,
+        documentId: ids.documentId,
+        reader: 'agent',
+        taskId: other.id,
+      })
+      expect(after.sections[0]?.markdown).toBe('значение сайта А')
+    })
+
+    it('makes neutral a title and intents the end of the turn refused, counted as sent back', async () => {
+      const ids = await skeleton()
+      const sections = await db.chatDocumentSection.findMany({
+        where: { documentId: ids.documentId },
+      })
+      const [settled] = await settleTurnSections(db, {
+        taskId: ids.taskId,
+        turnNo: 1,
+        sections: [],
+        labels: [{ documentId: ids.documentId, title: true, intents: [sections[0]!.id] }],
+      })
+      expect(settled?.refused).toBe(2)
+      const read = await readChatDocument(db, {
+        workspaceId: ids.workspaceId,
+        documentId: ids.documentId,
+        reader: 'client',
+      })
+      expect(read.title).toBe('Документ')
+      // The first section (ordered by position) was named: its intent is neutral now.
+      expect(read.sections.map((each) => each.intent).sort()).toContain('Раздел')
+      expect(read.sections).toHaveLength(2)
+    })
+
+    it('does not let the end of a turn make the version a later turn of the chat asked for', async () => {
+      const ids = await skeleton()
+      await write(ids, 'summary', 'а', 1)
+      await write(ids, 'sources', 'б', 1)
+      await requestDocFinish(db, { ...ids, turnNo: 2 })
+      const [settled] = await endOfTurn(ids.taskId, 1)
+      expect(settled?.version).toBeNull()
+      expect(
+        (await db.chatDocument.findUniqueOrThrow({ where: { id: ids.documentId } })).finishTurnNo,
+      ).toBe(2)
+    })
+
+    it('clears text no end of a turn checked, once its document is left a day', async () => {
+      const ids = await skeleton()
+      await write(ids, 'summary', 'непроверенное')
+      await db.chatDocument.update({
+        where: { id: ids.documentId },
+        data: { updatedAt: new Date('2020-01-01') },
+      })
+      expect(await clearStaleUncheckedSections(db, new Date('2021-01-01'))).toBe(1)
+      const row = await db.chatDocumentSection.findFirstOrThrow({
+        where: { documentId: ids.documentId, sectionKey: 'summary' },
+      })
+      expect(row).toMatchObject({ state: 'pending', markdown: null, intent: 'Итог: три причины' })
     })
 
     it('lets a doc_finish wait for the end of the turn of the chat that wrote a section', async () => {
@@ -695,6 +781,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
             workspaceId: ids.workspaceId,
             documentId: ids.documentId,
             reader: 'agent',
+            taskId: ids.taskId,
           })
         ).sections.map((each) => each.key)
       expect(await keys()).toEqual(['summary', 'method', 'sources'])
@@ -734,7 +821,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
       const { documentId } = await skeleton()
       const other = await chat()
       await expect(
-        readChatDocument(db, { workspaceId: other.workspaceId, documentId, reader: 'agent' }),
+        readChatDocument(db, {
+          workspaceId: other.workspaceId,
+          documentId,
+          reader: 'agent',
+          taskId: other.taskId,
+        }),
       ).rejects.toMatchObject({ code: 'DOC_NOT_FOUND' })
     })
   })

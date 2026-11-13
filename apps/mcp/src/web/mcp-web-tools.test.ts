@@ -14,7 +14,7 @@ import { MCP_ENDPOINT } from '../server/mcp-runtime.ts'
 import { mountMcp } from '../server/mount-mcp.ts'
 import type { McpBrowserTasks } from '../site-info/browser-tasks.ts'
 import { MCP_BROWSER_TASKS } from '../site-info/site-info.tokens.ts'
-import { fakeInfra, testMcpConfig } from '../testing/fakes.ts'
+import { fakeInfra, notDocTool, testMcpConfig } from '../testing/fakes.ts'
 import type { McpWebService } from './mcp-web.ts'
 import { MCP_WEB, WEB_MASK_SWEEP } from './web.tokens.ts'
 import { WebMaskSweep } from './web-mask-sweep.ts'
@@ -84,7 +84,10 @@ async function start(scope: McpAccess, roleConfig = config(), doubles = fakes())
       .send(body)
   const list = () => post({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
   const names = async () =>
-    ((await list()).body.result.tools as Array<{ name: string }>).map((tool) => tool.name).sort()
+    ((await list()).body.result.tools as Array<{ name: string }>)
+      .map((tool) => tool.name)
+      .filter(notDocTool)
+      .sort()
   const call = (name: string, args?: object) =>
     post({
       jsonrpc: '2.0',

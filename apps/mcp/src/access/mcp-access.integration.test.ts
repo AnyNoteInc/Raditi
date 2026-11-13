@@ -25,7 +25,7 @@ import {
 import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
 import { getSiteAdapter } from '@repo/site-adapters'
 import { memoryStorage, memoryTransit } from '@repo/snapshots/testing'
-import { fakeInfra, testMcpConfig } from '../testing/fakes.ts'
+import { fakeInfra, notDocTool, testMcpConfig } from '../testing/fakes.ts'
 import { PostgresMcpAccess, siteAccessOf } from './mcp-access.ts'
 import { AppModule } from '../app.module.ts'
 import { ContentSnapshotStorage, CONTENT_SNAPSHOT_TTL_MS } from '../content/content-snapshots.ts'
@@ -2339,9 +2339,9 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
       try {
         const list = await post({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
         expect(list.status).toBe(200)
-        expect(list.body.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
-          'site_info',
-        ])
+        expect(
+          list.body.result.tools.map((tool: { name: string }) => tool.name).filter(notDocTool),
+        ).toEqual(['site_info'])
         const info = await post({
           jsonrpc: '2.0',
           id: 2,

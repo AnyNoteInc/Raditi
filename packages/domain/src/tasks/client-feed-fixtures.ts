@@ -330,6 +330,27 @@ export const feedFixtures: readonly FeedFixture[] = Object.freeze([
     type: 'feed.page_left',
     payload: { v: 1, pageId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7db1', reason: 'missing' },
   },
+  // docs/plan/69-pages.md, Ст19, Ст22: a document, a change of it, sections sent back.
+  {
+    name: 'doc v1',
+    type: 'feed.doc',
+    payload: { v: 1, docId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dc1' },
+  },
+  {
+    name: 'doc_touch v1',
+    type: 'feed.doc_touch',
+    payload: { v: 1, docId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dc1', revision: 4 },
+  },
+  {
+    name: 'doc_left v1',
+    type: 'feed.doc_left',
+    payload: {
+      v: 1,
+      docId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dc1',
+      sections: 1,
+      reason: 'refused',
+    },
+  },
   {
     name: 'request v1 resume',
     type: 'feed.request',

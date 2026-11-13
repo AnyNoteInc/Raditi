@@ -76,10 +76,13 @@ export { markStaleCandidates } from './preview-staleness.ts'
 export { insertFeedEvent, type FeedEventInput, type FeedWriter } from './feed-events.ts'
 export {
   applyPageVersion,
+  clearStaleUncheckedSections,
   createChatDocument,
   dropAbandonedPages,
   currentDocMarkdown,
   listWorkspacePages,
+  NEUTRAL_INTENT,
+  NEUTRAL_TITLE,
   moveDocSection,
   pendingPageReservations,
   readChatDocument,

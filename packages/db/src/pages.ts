@@ -31,6 +31,26 @@ type Tx = Prisma.TransactionClient
 const sha256 = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).digest('hex')
 const utf8 = (text: string) => Buffer.byteLength(text, 'utf8')
 
+/** What a refused title and intent of a document become (Ст19): nothing of the agent's text. */
+export const NEUTRAL_TITLE = 'Документ'
+export const NEUTRAL_INTENT = 'Раздел'
+
+/** The workspace of a chat, as a list for `in`: none — the chat is gone. */
+async function workspacesOf(tx: Tx, taskId: string): Promise<string[]> {
+  const task = await tx.task.findUnique({ where: { id: taskId }, select: { workspaceId: true } })
+  return task ? [task.workspaceId] : []
+}
+
+/** Whether a turn of a chat ended: the chat is past it, or no pass of it is running. */
+async function turnEnded(tx: Tx, taskId: string, turnNo: number): Promise<boolean> {
+  const task = await tx.task.findUnique({
+    where: { id: taskId },
+    select: { turnNo: true, status: true },
+  })
+  if (!task) return true
+  return task.turnNo > turnNo || !['preparing', 'running'].includes(task.status)
+}
+
 /** The placeholder of a section the agent inserted without saying what it is for. */
 export const INSERTED_SECTION_INTENT = 'Новый раздел'
 
@@ -594,7 +614,9 @@ export interface ReadDocSection {
  */
 export async function readChatDocument(
   db: Pick<PrismaClient, 'chatDocument'>,
-  input: { workspaceId: string; documentId: string; reader: 'agent' | 'client' },
+  input:
+    | { workspaceId: string; documentId: string; reader: 'client' }
+    | { workspaceId: string; documentId: string; reader: 'agent'; taskId: string },
 ) {
   const document = await db.chatDocument.findUnique({
     where: { id: input.documentId },
@@ -612,7 +634,11 @@ export async function readChatDocument(
     taskId: document.taskId,
     page: document.page,
     sections: document.sections.map((section): ReadDocSection => {
-      const shown = input.reader === 'agent' || section.checkedTurn !== null
+      // The agent reads what its own chat wrote before the check; what another chat wrote — only
+      // once core checked it: it may hold a value of another site (Ст19, Ст20).
+      const shown =
+        section.checkedTurn !== null ||
+        (input.reader === 'agent' && section.writtenTaskId === input.taskId)
       return {
         key: section.sectionKey,
         heading: shown ? section.heading : null,
@@ -673,6 +699,11 @@ export interface TurnSectionsVerdict {
   taskId: string
   turnNo: number
   /**
+   * The title and the intents of documents of the chat that hold what the turn must not let out:
+   * they become neutral («Документ», «Раздел»), each counted as a section sent back (Ст19).
+   */
+  labels?: readonly { documentId: string; title: boolean; intents: readonly string[] }[]
+  /**
    * Every section core scanned, by the digest it scanned: `refusal` null — it passed. A section
    * not named here, or written again since its scan, stays unchecked.
    */
@@ -705,11 +736,18 @@ export async function settleTurnSections(
       select: { documentId: true },
     })
     const finishing = await tx.chatDocument.findMany({
-      where: { finishTaskId: verdict.taskId },
+      where: {
+        finishTaskId: { not: null },
+        workspaceId: { in: await workspacesOf(tx, verdict.taskId) },
+      },
       select: { id: true },
     })
     const documentIds = [
-      ...new Set([...scanned.map((each) => each.documentId), ...finishing.map((each) => each.id)]),
+      ...new Set([
+        ...scanned.map((each) => each.documentId),
+        ...finishing.map((each) => each.id),
+        ...(verdict.labels ?? []).map((each) => each.documentId),
+      ]),
     ].sort()
     const verdictOf = new Map(verdict.sections.map((each) => [each.sectionId, each]))
     const out: SettledDocument[] = []
@@ -752,7 +790,30 @@ export async function settleTurnSections(
       }
       let version: number | null = null
       let dropFinish = false
-      if (document.finishTaskId !== null) {
+      // The titles the turn could not see the values in: what is refused becomes neutral (Ст19).
+      const labels = verdict.labels?.find((each) => each.documentId === documentId)
+      if (labels?.title) {
+        refused += 1
+        changed = true
+        await tx.chatDocument.update({ where: { id: documentId }, data: { title: NEUTRAL_TITLE } })
+        document.title = NEUTRAL_TITLE
+      }
+      for (const sectionId of labels?.intents ?? []) {
+        refused += 1
+        changed = true
+        await tx.chatDocumentSection.updateMany({
+          where: { id: sectionId, documentId },
+          data: { intent: NEUTRAL_INTENT },
+        })
+      }
+      // A `doc_finish` comes true at the end of its own turn or later — never in the middle of a
+      // later turn of its chat, nor before its turn ended (a turn of another chat settles).
+      const finishReady =
+        document.finishTaskId !== null &&
+        (document.finishTaskId === verdict.taskId
+          ? (document.finishTurnNo ?? 0) <= verdict.turnNo
+          : await turnEnded(tx, document.finishTaskId, document.finishTurnNo ?? 0))
+      if (finishReady) {
         const all = await orderedSections(tx, documentId)
         if (all.every((each) => each.state === 'written' && each.checkedTurn !== null)) {
           const markdown = assembleDocMarkdown({
@@ -859,4 +920,27 @@ export async function dropAbandonedPages(
     },
   })
   return dropped.count
+}
+
+/**
+ * Text of sections no end of a turn checked — the turn failed and its chat took no other — in
+ * documents untouched since `before`: it may hold a value of the client, and the client never saw
+ * it, so it goes; the sections are placeholders again with their intents (owner's answer of
+ * 13.11.2026, Ст19: unchecked text waits for the end of a turn, not for ever). Returns how many.
+ */
+export async function clearStaleUncheckedSections(
+  db: Pick<PrismaClient, 'chatDocumentSection'>,
+  before: Date,
+): Promise<number> {
+  const cleared = await db.chatDocumentSection.updateMany({
+    where: { state: 'written', checkedTurn: null, document: { updatedAt: { lt: before } } },
+    data: {
+      state: 'pending',
+      heading: null,
+      markdown: null,
+      writtenTaskId: null,
+      writtenTurn: null,
+    },
+  })
+  return cleared.count
 }
