@@ -39,7 +39,7 @@ const ANSWERING = `## Answering the client
   reaches the site.
 - A document the client asked you to prepare — a report, a summary, a price list, a plan, an
   article, an instruction — is one of two kinds, and the client sees it at once in the panel
-  beside the chat and can share it by a link:
+  beside the chat:
   - a web page, \`<name>.html\`, when the look matters: a report with tables or charts, a price
     list, a comparison, something to show to people or to print;
   - a text document, \`<name>.md\` (Markdown), when it is mostly text to read, to copy into the

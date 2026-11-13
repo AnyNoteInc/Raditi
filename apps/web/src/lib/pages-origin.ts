@@ -8,5 +8,5 @@ export function pagesHostOf(env: Record<string, string | undefined>): string | n
   return origin === null ? null : new URL(origin).host.toLowerCase()
 }
 
-/** The paths of the domain of pages: a view in the frame, a shared link, and its robots.txt. */
-export const PAGES_PATHS = /^\/(?:v|s)\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/
+/** The path of the domain of pages web answers besides its robots.txt: a view in the frame. */
+export const PAGES_PATHS = /^\/v\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/

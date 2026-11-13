@@ -53,9 +53,8 @@ describe('proxy', () => {
       expect(pass.status).toBe(200)
       expect(pass.headers.get('x-middleware-next')).toBe('1')
       expect(pass.headers.get('content-security-policy')).toBeNull()
-      expect(proxy(at('pages.localhost:3000', '/s/abc.def')).headers.get('x-middleware-next')).toBe(
-        '1',
-      )
+      // A shared link is plan 69's: no path of this domain yet.
+      expect(proxy(at('pages.localhost:3000', '/s/abc.def')).status).toBe(404)
       for (const path of [
         '/',
         '/chats',
@@ -95,6 +94,12 @@ describe('proxy', () => {
       const api = proxy(at('localhost:3000', '/api/health'))
       expect(api.headers.get('x-middleware-next')).toBe('1')
       expect(api.headers.get('content-security-policy')).toBeNull()
+    })
+
+    it('takes a default port in the header for the same host', () => {
+      vi.stubEnv('PAGES_ORIGIN', 'https://pages.raditi.ru')
+      expect(proxy(at('pages.raditi.ru:443', token)).headers.get('x-middleware-next')).toBe('1')
+      expect(proxy(at('pages.raditi.ru:443', '/chats')).status).toBe(404)
     })
 
     it('takes only an exact origin', () => {

@@ -4,10 +4,10 @@ import { documentKindOf, pageContentSecurityPolicy } from '@repo/domain'
 
 export { pageContentSecurityPolicy }
 
-// What the domain of pages answers (docs/plan/67-agent-documents.md, Д3, Д8): the bytes of a page
-// the agent made, sandboxed by its CSP into an opaque origin that reaches nothing — no network, no
-// form, no frame — framed only by the cabinet. The same headers serve a shared link, whose text
-// documents are drawn without any script at all.
+// What the domain of pages answers (docs/plan/67-agent-documents.md, Д3): the bytes of a page the
+// agent made, sandboxed by its CSP into an opaque origin that reaches nothing — no network, no
+// form, no frame — framed only by the cabinet. next.config.ts sends none of its own headers on
+// /v/, so these are the ones the browser gets.
 
 const PERMISSIONS = [
   'camera',
@@ -80,8 +80,8 @@ export async function getPageView(
   try {
     const pages = deps.pages()
     // The proxy splits the hosts; a route that is reached some other way checks again.
-    if (pages === null || request.headers.get('host')?.toLowerCase() !== pages.host)
-      return pageAnswer(404, 'Не найдено')
+    const host = (request.headers.get('host')?.toLowerCase() ?? '').replace(/:(?:443|80)$/, '')
+    if (pages === null || host !== pages.host) return pageAnswer(404, 'Не найдено')
     const view = deps.readView(pages.viewKey, token, (deps.now ?? Date.now)())
     if (view === 'expired') return pageAnswer(410, 'Адрес устарел. Обновите документ.')
     if (view === null) return pageAnswer(404, 'Не найдено')

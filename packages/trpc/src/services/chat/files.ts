@@ -34,8 +34,9 @@ export async function readTaskFile(
 }
 
 /**
- * The file of a `feed.file` row of a task the caller has already found — for a member, or for a
- * share that names it (docs/plan/67-agent-documents.md, Д8). The same answers as `readTaskFile`.
+ * The file of a `feed.file` row of a task the caller has already found for a member: it checks no
+ * member itself, so it stays inside this package (docs/plan/67, Д5). The same answers as
+ * `readTaskFile`.
  */
 export async function readChatFile(
   db: Pick<PrismaClient, 'taskEvent'>,

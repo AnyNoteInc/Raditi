@@ -21,9 +21,9 @@ const notFound = () =>
 
 /**
  * Splits the two hosts web answers on (docs/plan/67-agent-documents.md, Д3). On the domain of the
- * pages the agent makes there is a view in the frame (`/v/<token>`), a shared link (`/s/<token>`)
- * and its robots.txt, nothing else — no page, API route or asset of the cabinet; on the cabinet's
- * host those two paths are not found. For the cabinet it passes the requested path to layouts
+ * pages the agent makes there is a view in the frame (`/v/<token>`) and its robots.txt, nothing
+ * else — no page, API route or asset of the cabinet; on the cabinet's
+ * host /v/ (and /s/, kept for plan 69) is not found. For the cabinet it passes the requested path to layouts
  * (see REQUEST_PATH_HEADER) and sends the page's Content-Security-Policy with the previews of
  * dialogs and the pages of this environment, read when the request comes, not when the image was
  * built (plan 53, Р20); it replaces the policy of next.config.ts, which frames neither.
@@ -31,7 +31,8 @@ const notFound = () =>
 export function proxy(request: NextRequest) {
   const path = request.nextUrl.pathname
   const pages = pagesHostOf(process.env)
-  const host = request.headers.get('host')?.toLowerCase() ?? ''
+  // A default port in the header is the same host: Traefik routes `pages.raditi.ru:443` there too.
+  const host = (request.headers.get('host')?.toLowerCase() ?? '').replace(/:(?:443|80)$/, '')
   if (pages !== null && host === pages) {
     if (path === '/robots.txt')
       return new NextResponse('User-agent: *\nDisallow: /\n', {

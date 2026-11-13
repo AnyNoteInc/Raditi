@@ -7,10 +7,11 @@ import {
 } from '@repo/domain/tasks/chat-documents'
 import type { Element, ElementContent, Properties, Root, RootContent } from 'hast'
 
-// The rules of a text document of a chat (docs/plan/67-agent-documents.md, Д6, Д8): one rehype
-// plugin the cabinet runs under react-markdown and the server of shared links runs before
-// rehype-stringify, so the two can never drift apart. Raw HTML never reaches it — react-markdown
-// skips it, remark-rehype without `allowDangerousHtml` drops it — and what is left is bound here:
+// The rules of a text document of a chat (docs/plan/67-agent-documents.md, Д6): one rehype plugin
+// the cabinet runs under react-markdown. It knows no React, so a server that draws a document
+// (plan 69) can run the very same rules before rehype-stringify. Raw HTML never reaches it —
+// react-markdown skips it, remark-rehype without `allowDangerousHtml` drops it — and what is left
+// is bound here:
 // only the elements Markdown makes, only their own attributes, no class or style of the text, ids
 // under a prefix, links and pictures by `documentLinkOf` and `documentImageOf`.
 
@@ -19,7 +20,10 @@ export interface DocumentRules {
   documents: ReadonlySet<string>
   /** The address of a picture of the chat by its name, as this version knew it; null — none. */
   imageSrc: (name: string) => string | null
-  /** Whether a link to another document stays one (the cabinet) or becomes its words (a share). */
+  /**
+   * Whether a link to another document stays one (the cabinet's tab) or becomes its words — for a
+   * document shown alone, apart from its chat (plan 69).
+   */
   documentLinks: boolean
 }
 
