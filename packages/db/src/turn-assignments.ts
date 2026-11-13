@@ -1,5 +1,6 @@
 import {
   badRequest,
+  browserSessionTimings,
   MAX_SANDBOX_LEASE_MS,
   runnerIdSchema,
   runnerLimits,
@@ -66,6 +67,7 @@ const renewedSchema = z
       expires_at: z.coerce.date(),
       server_now: z.coerce.date(),
       keys: z.number().int().nonnegative(),
+      browsers: z.number().int().nonnegative(),
     }),
   )
   .max(1)
@@ -228,9 +230,19 @@ export class PostgresTurnAssignmentStore implements TurnAssignmentStore {
           AND k.first_epoch = turn.first_epoch
           AND k.revoke_requested_at IS NULL AND k.revoked_at IS NULL
         RETURNING k.id
+      ), browsers AS (
+        -- The browser of the turn's task lives while the turn does (ВР20): its worker extends it
+        -- once its row moves past the deadline it holds.
+        UPDATE browser_sessions b SET
+          expires_at = GREATEST(b.expires_at,
+            c.instant + ${browserSessionTimings.maxHours}::int * interval '1 hour')
+        FROM lease, c
+        WHERE b.task_id = lease.holder_task_id AND b.status IN ('starting', 'ready')
+        RETURNING b.id
       )
       SELECT lease.site_id, lease.holder_task_id, lease.epoch, lease.expires_at,
-        c.instant AS server_now, (SELECT count(*) FROM keys)::int AS keys
+        c.instant AS server_now, (SELECT count(*) FROM keys)::int AS keys,
+        (SELECT count(*) FROM browsers)::int AS browsers
       FROM lease, c`
     const [row] = renewedSchema.parse(raw)
     if (!row) return null

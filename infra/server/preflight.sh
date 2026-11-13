@@ -22,6 +22,10 @@ server=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo 0)
 grep -Eq '"userland-proxy"[[:space:]]*:[[:space:]]*false' /etc/docker/daemon.json 2>/dev/null ||
   fail "/etc/docker/daemon.json must set \"userland-proxy\": false"
 [ "$(docker info --format '{{.LiveRestoreEnabled}}' 2>/dev/null)" = true ] || fail "live-restore must be on"
+# A bridge per preview and browser (plan 70, ВР21): the default pools run out at some 15–25.
+grep -Eq '"default-address-pools"[[:space:]]*:[[:space:]]*\[[[:space:]]*\{[^]]*"size"[[:space:]]*:[[:space:]]*28' \
+  /etc/docker/daemon.json 2>/dev/null ||
+  fail "/etc/docker/daemon.json must set \"default-address-pools\" with networks of size 28"
 docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"runsc"' || fail "the runsc runtime is not registered"
 
 # The private address, the host firewall and the host's OpenBao

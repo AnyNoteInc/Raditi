@@ -1466,6 +1466,28 @@ describe('the end of a session', () => {
     expect(runtime.stopped.sort()).toEqual([idle.row.id, watched.row.id].sort())
   })
 
+  it('keeps a watched session past its hours while core moves its row on, then lets it expire', async () => {
+    // docs/plan/70-turn-without-time-limit.md, ВР20: the turn of the session goes on.
+    const { store, runtime, manager, clock, ensured } = setup()
+    const { row, session } = await ensured()
+    session.attach(new ViewerProbe())
+    const first = session.deadline
+    // Its turn renews it: the row moves on before the deadline comes.
+    store.sessions.get(row.id)!.expiresAt = new Date(first + 3 * 3_600_000)
+    clock.skew += first - Date.now() - 5 * 60_000
+    await manager.sweep()
+    expect(runtime.extended).toEqual([{ sessionId: row.id, deadline: first + 3 * 3_600_000 }])
+    expect(session.deadline).toBe(first + 3 * 3_600_000)
+    // Its first deadline passes: it lives on.
+    clock.skew += 10 * 60_000
+    await manager.sweep()
+    expect(manager.session(row.id)).not.toBeNull()
+    // The turn ended and the row stopped moving: the session goes at its last deadline.
+    clock.skew += 3 * 3_600_000
+    await manager.sweep()
+    expect(store.sessions.get(row.id)).toMatchObject({ status: 'closed', closeReason: 'expired' })
+  })
+
   // The chat of the task counts as watching its browser (docs/plan/59, И18; owner's answer of
   // 30.10.2026): the cabinet records the client looking at the dialog in the session's row.
   it('keeps a session whose dialog the client looks at, and closes it once nobody does', async () => {
