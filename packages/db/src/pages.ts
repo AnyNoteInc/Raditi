@@ -818,3 +818,45 @@ export async function currentDocMarkdown(
     ? { version: document.content.versionNo, markdown: document.content.markdown }
     : null
 }
+
+// ———————————————————————————————————————— the sweep
+
+/**
+ * Publications a turn reserved and no end of turn settled — the turn failed, its pass was lost —
+ * older than `before`: the sweep of core settles them and tells the client (`feed.page_left`).
+ */
+export function stalePageReservations(
+  db: Pick<PrismaClient, 'pageReservation'>,
+  before: Date,
+  limit = 100,
+) {
+  return db.pageReservation.findMany({
+    // A publication of a document waits for the document (slice 69.8), however long it is written.
+    where: { outcome: null, createdAt: { lt: before }, fileName: { not: null } },
+    orderBy: { createdAt: 'asc' },
+    take: limit,
+    select: { id: true, pageId: true, taskId: true, outcome: true },
+  })
+}
+
+/**
+ * Pages of files that never got a version and wait for nothing, older than `before`: never
+ * published — their address answered 404 — so removing them deletes no page anyone saw (Ст14).
+ * Pages of documents stay: they answer «Документ ещё пишется» (Ст25).
+ */
+export async function dropAbandonedPages(
+  db: Pick<PrismaClient, 'page'>,
+  before: Date,
+): Promise<number> {
+  const dropped = await db.page.deleteMany({
+    where: {
+      state: 'pending',
+      currentVersion: 0,
+      // The page of a document answers «Документ ещё пишется» to a viewer: its address stays.
+      documentId: null,
+      createdAt: { lt: before },
+      reservations: { none: { outcome: null } },
+    },
+  })
+  return dropped.count
+}

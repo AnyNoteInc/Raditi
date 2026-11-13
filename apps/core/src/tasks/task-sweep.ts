@@ -3,8 +3,10 @@ import type { AgentDriverRegistry } from '@repo/agent-drivers'
 import { chargeTask, expireTaskHolds, extendTaskHolds } from '@repo/billing'
 import {
   cancelWaitingTask,
+  dropAbandonedPages,
   insertFeedEvent,
   requestPreviewSync,
+  stalePageReservations,
   taskHasProductionWrites,
   type PrismaClient,
   type waitingTaskStatuses,
@@ -35,6 +37,7 @@ import {
 } from '../turns/turn-journal.ts'
 import { collectExpiredAttachments, expiredAttachmentsIn } from './attachment-collector.ts'
 import type { LivePasses } from './live-passes.ts'
+import type { PagePublications } from './page-publications.ts'
 import {
   CHARGE_LATER_EVENT,
   type PassEnding,
@@ -63,6 +66,8 @@ export const LOST_TURN_JOB_MS = 5 * 60_000
 export const LOST_REWIND_MS = 2 * 60_000
 /** A pass that could not be ended yet (`later`) is not looked at again before this. */
 export const LATER_PAUSE_MS = 5 * 60_000
+/** A publication of a turn that no end of turn settled is failed this long after it was made. */
+export const PAGE_SWEEP_AFTER_MS = 24 * 60 * 60_000
 const BATCH = 50
 
 type Waiting = (typeof waitingTaskStatuses)[number]
@@ -85,6 +90,11 @@ export interface TaskSweepDependencies {
    * (docs/plan/57, Б26). Absent — they are not collected.
    */
   inbox?: Pick<ObjectStorage, 'delete'> | null
+  /**
+   * The pages of turns (docs/plan/69-pages.md, Ст6): a publication no end of turn settled is told
+   * to have failed, a page that never got a version is removed. Absent — not swept.
+   */
+  pages?: Pick<PagePublications, 'left'> | null
   logger?: { log(message: string): void; warn(message: string): void }
   now?: () => Date
 }
@@ -121,6 +131,7 @@ export class TaskSweep {
       ['rewinds', () => this.rewinds()],
       ['browsers', () => this.sweepBrowsers()],
       ['attachments', () => this.collectAttachments()],
+      ['pages', () => this.sweepPages()],
     ] as const) {
       try {
         await pass()
@@ -480,6 +491,23 @@ export class TaskSweep {
     })
     if (removed > 0) this.#logger.log(`task_sweep_attachments count=${removed}`)
     return removed
+  }
+
+  /**
+   * Publications of turns that never ended, a day on (PAGE_SWEEP_AFTER_MS): settled as failed and
+   * told; then pages that never got a version and wait for nothing are removed.
+   */
+  async sweepPages(): Promise<number> {
+    const { pages, db } = this.deps
+    if (!pages) return 0
+    const before = new Date(this.#now().getTime() - PAGE_SWEEP_AFTER_MS)
+    const stale = await stalePageReservations(db, before, BATCH)
+    for (const reservation of stale)
+      await pages.left(reservation, 'failed', { taskId: reservation.taskId, turnId: null })
+    const dropped = await dropAbandonedPages(db, before)
+    if (stale.length > 0 || dropped > 0)
+      this.#logger.log(`task_sweep_pages failed=${stale.length} dropped=${dropped}`)
+    return stale.length
   }
 
   /**

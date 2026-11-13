@@ -25,6 +25,8 @@ import {
   feedFailureKeptText,
   feedFailureOpenText,
   feedFileLeftText,
+  feedPageLeftText,
+  feedPageText,
   feedFilesChangedText,
   feedLiveText,
   feedMediaAddedText,
@@ -1073,6 +1075,11 @@ function RowView({
     // Not all the files of the agent came (docs/plan/66-chat-visuals.md, В8): its message may say they did.
     case 'feed.file_left':
       return <Note text={feedFileLeftText(row)} />
+    // A page the agent published (docs/plan/69-pages.md, Ст23): a line until the card of 69.7.
+    case 'feed.page':
+      return <Note text={feedPageText(row)} />
+    case 'feed.page_left':
+      return <Note text={feedPageLeftText(row)} />
     case 'feed.rewind':
       return <Note text={feedRewindText(row)} />
     case 'feed.redo':

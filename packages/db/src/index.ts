@@ -77,6 +77,7 @@ export { insertFeedEvent, type FeedEventInput, type FeedWriter } from './feed-ev
 export {
   applyPageVersion,
   createChatDocument,
+  dropAbandonedPages,
   currentDocMarkdown,
   listWorkspacePages,
   moveDocSection,
@@ -88,6 +89,7 @@ export {
   restorePage,
   servedPage,
   setPagePassword,
+  stalePageReservations,
   settlePageReservation,
   settleTurnSections,
   takeDownPage,

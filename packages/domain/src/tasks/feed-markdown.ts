@@ -19,6 +19,8 @@ import {
   feedFailureKeptText,
   feedFailureOpenText,
   feedFileLeftText,
+  feedPageLeftText,
+  feedPageText,
   feedFilesChangedText,
   feedMediaAddedText,
   feedObjectKindLabel,
@@ -238,6 +240,10 @@ function rowBlock(row: FeedItem, withSite: boolean): string | null {
       return block([agent(feedExportText.file(row.name))])
     case 'feed.file_left':
       return block([heading(feedExportText.agent, row.at), feedFileLeftText(row)])
+    case 'feed.page':
+      return block([agent(feedPageText(row))])
+    case 'feed.page_left':
+      return block([heading(feedExportText.agent, row.at), feedPageLeftText(row)])
     case 'feed.rewind':
       return feedRewindText(row)
     case 'feed.redo':

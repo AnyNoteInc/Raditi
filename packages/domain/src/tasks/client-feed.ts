@@ -1,5 +1,13 @@
 import { z } from 'zod'
 
+import {
+  feedPageLeftPayloadSchema,
+  feedPagePayloadSchema,
+  pageKinds,
+  pageLeftReasons,
+} from '../pages/feed.ts'
+import { pageSlugSchema } from '../pages/slug.ts'
+
 import { attachmentLimits } from '../attachments/rules.ts'
 import {
   browserHelpReasons,
@@ -67,6 +75,10 @@ export const feedEventTypes = [
   'feed.file',
   // What the agent left for the client did not all reach the chat (docs/plan/66, В8).
   'feed.file_left',
+  // A page the agent published got its version (docs/plan/69-pages.md, Ст23).
+  'feed.page',
+  // A publication of the turn did not come true (docs/plan/69-pages.md, Ст6).
+  'feed.page_left',
 ] as const
 export type FeedEventType = (typeof feedEventTypes)[number]
 
@@ -832,6 +844,8 @@ export const feedPayloadSchemas = Object.freeze({
   'feed.edit': feedEditPayloadSchema,
   'feed.file': feedFilePayloadSchema,
   'feed.file_left': feedFileLeftPayloadSchema,
+  'feed.page': feedPagePayloadSchema,
+  'feed.page_left': feedPageLeftPayloadSchema,
 }) satisfies Record<FeedEventType, z.ZodType>
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength
@@ -866,6 +880,8 @@ export const feedRowSchemaWithin = (maxBytes: number) =>
       row('feed.edit', feedEditPayloadSchema),
       row('feed.file', feedFilePayloadSchema),
       row('feed.file_left', feedFileLeftPayloadSchema),
+      row('feed.page', feedPagePayloadSchema),
+      row('feed.page_left', feedPageLeftPayloadSchema),
     ])
     .superRefine((value, ctx) => {
       if (feedPayloadBytes(value.payload) > maxBytes)
@@ -1130,6 +1146,21 @@ const readFileLeft = z.object({
   count: z.number().int().min(0),
 })
 
+const readPage = z.object({
+  pageId: z.uuid(),
+  slug: pageSlugSchema,
+  title: z.string().min(1).max(500),
+  version: z.number().int().min(1),
+  // A kind this code does not know is shown as a page.
+  kind: known(pageKinds, 'html' as const),
+})
+
+const readPageLeft = z.object({
+  pageId: z.uuid(),
+  // A reason this code does not know says the less: the page did not come.
+  reason: known(pageLeftReasons, 'failed' as const),
+})
+
 const readCancelled = z.object({
   turn: turnNo.nullable(),
   /** null — a way of cancelling added later: the plate is shown without a reason. */
@@ -1181,6 +1212,8 @@ export type FeedEvent =
   | ({ type: 'feed.edit' } & z.infer<typeof readEdit>)
   | ({ type: 'feed.file' } & z.infer<typeof readFile>)
   | ({ type: 'feed.file_left' } & z.infer<typeof readFileLeft>)
+  | ({ type: 'feed.page' } & z.infer<typeof readPage>)
+  | ({ type: 'feed.page_left' } & z.infer<typeof readPageLeft>)
   | { type: 'newer' }
   | { type: 'unreadable' }
   | { type: 'skipped' }
@@ -1313,6 +1346,13 @@ const readers: Record<FeedEventType, Record<number, Reader>> = {
   'feed.file_left': {
     1: (payload) =>
       readWith(readFileLeft, payload, (data) => ({ type: 'feed.file_left', ...data })),
+  },
+  'feed.page': {
+    1: (payload) => readWith(readPage, payload, (data) => ({ type: 'feed.page', ...data })),
+  },
+  'feed.page_left': {
+    1: (payload) =>
+      readWith(readPageLeft, payload, (data) => ({ type: 'feed.page_left', ...data })),
   },
 }
 

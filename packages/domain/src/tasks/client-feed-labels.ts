@@ -251,6 +251,20 @@ export function feedFileLeftText(row: Pick<FeedFileLeftPayload, 'reason' | 'coun
   return `${left} ${ask}`
 }
 
+/**
+ * A page the agent named did not get its version (`feed.page_left`, docs/plan/69-pages.md, Ст6):
+ * the address the agent gave answers nothing new. Never why: a refusal may be a secret.
+ */
+export function feedPageLeftText(row: { reason: 'missing' | 'refused' | 'failed' }): string {
+  if (row.reason === 'missing')
+    return 'Страницу не удалось опубликовать: её файла не оказалось среди файлов агента. Попросите его опубликовать страницу ещё раз.'
+  return 'Страницу не удалось опубликовать. Попросите агента опубликовать её ещё раз.'
+}
+
+/** A page the agent published (`feed.page`): its title and version. */
+export const feedPageText = (row: { title: string; version: number }): string =>
+  `Страница «${row.title}», версия v${row.version}`
+
 /** The row of the client's edit of a file in «Терминал» (06.11.2026), by its outcome. */
 export function feedEditText(row: Pick<FeedEditPayload, 'path' | 'outcome' | 'revision'>): string {
   switch (row.outcome) {

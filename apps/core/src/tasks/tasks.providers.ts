@@ -26,6 +26,7 @@ import { CandidateEdit } from './candidate-edit.ts'
 import { CandidateRebase } from './candidate-rebase.ts'
 import { CandidateRewind } from './candidate-rewind.ts'
 import { ChatFiles } from './chat-files.ts'
+import { PagePublications } from './page-publications.ts'
 import { LivePasses } from './live-passes.ts'
 import { PassRunner } from './pass-runner.ts'
 import { PassSettlement } from './pass-settlement.ts'
@@ -106,6 +107,7 @@ export const taskProviders: Provider[] = [
           db: prisma,
           storage,
           logger: new Logger('ChatFiles'),
+          pages: new PagePublications({ db: prisma, logger: new Logger('Pages') }),
         }),
       }),
     inject: [
@@ -185,7 +187,18 @@ export const taskProviders: Provider[] = [
       queue: JobQueue,
       browser: BrowserSessions | null,
       inbox: ObjectStorage,
-    ) => new TaskSweep({ db: prisma, settlement, live, journal, drivers, queue, browser, inbox }),
+    ) =>
+      new TaskSweep({
+        db: prisma,
+        settlement,
+        live,
+        journal,
+        drivers,
+        queue,
+        browser,
+        inbox,
+        pages: new PagePublications({ db: prisma, logger: new Logger('Pages') }),
+      }),
     inject: [
       PRISMA,
       PassSettlement,

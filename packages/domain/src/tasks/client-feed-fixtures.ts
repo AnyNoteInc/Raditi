@@ -312,6 +312,24 @@ export const feedFixtures: readonly FeedFixture[] = Object.freeze([
     type: 'feed.file_left',
     payload: { v: 1, reason: 'refused', count: 0 },
   },
+  // docs/plan/69-pages.md, Ст23: a page got its version, or did not.
+  {
+    name: 'page v1',
+    type: 'feed.page',
+    payload: {
+      v: 1,
+      pageId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7db1',
+      slug: 'aaaaaaaaaaaaaaaaaaaaaaaaaa',
+      title: 'Прайс на ноябрь',
+      version: 2,
+      kind: 'html',
+    },
+  },
+  {
+    name: 'page_left v1 missing',
+    type: 'feed.page_left',
+    payload: { v: 1, pageId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7db1', reason: 'missing' },
+  },
   {
     name: 'request v1 resume',
     type: 'feed.request',

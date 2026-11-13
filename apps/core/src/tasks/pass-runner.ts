@@ -90,7 +90,7 @@ export interface PassRunnerDependencies {
    * Brings the files the agent made for the client into the chat after a completed pass
    * (docs/plan/66-chat-visuals.md, В8); absent — they stay with the turn's container.
    */
-  chatFiles?: Pick<ChatFiles, 'deliver'>
+  chatFiles?: Pick<ChatFiles, 'deliver' | 'failPages'>
   now?: () => Date
   cancelPollMs?: number
 }
@@ -269,8 +269,20 @@ export class PassRunner {
       `pass_settled task=${job.taskId} ending=${ending.kind} answer=${answer}${cause ? ` cause=${cause}` : ''}`,
     )
     // After the answer of the turn, so that its files stand below it in the chat.
-    if (ending.kind === 'completed' && answer === 'moved' && outbox)
-      await this.deps.chatFiles?.deliver({ taskId: job.taskId, turn: ending.turn, outbox })
+    // The pages a failed or cancelled turn named are told at once (docs/plan/69-pages.md, Ст6).
+    if (
+      (ending.kind === 'failed' || ending.kind === 'cancelled') &&
+      answer === 'moved' &&
+      ending.turn !== null
+    )
+      await this.deps.chatFiles?.failPages(job.taskId, ending.turn)
+    // A turn without files still settles the pages it named (docs/plan/69-pages.md, Ст6).
+    if (ending.kind === 'completed' && answer === 'moved')
+      await this.deps.chatFiles?.deliver({
+        taskId: job.taskId,
+        turn: ending.turn,
+        outbox: outbox ?? null,
+      })
     if (ending.kind === 'busy') {
       if (answer === 'moved' && retry) await this.#requeue(job, retry)
     } else await this.#wakeSite(job, turnNo)
