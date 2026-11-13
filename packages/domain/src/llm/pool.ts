@@ -1,17 +1,11 @@
 import { z } from 'zod'
 
 import { badRequest } from '../errors.ts'
-import {
-  limitWindowsSchema,
-  llmBackendIdSchema,
-  llmCapacitySchema,
-  type LimitWindow,
-} from '../ports/llm-backend.ts'
+import { limitWindowsSchema, llmBackendIdSchema, llmCapacitySchema } from '../ports/llm-backend.ts'
 import { absoluteWindow } from './plan-credits.ts'
 
 export const poolPolicy = Object.freeze({
   minTurnHeadroomPct: 5,
-  newTaskFiveHourHeadroomPct: 10,
   // A window snapshot older than this is refreshed by one probe before a key is issued and
   // before the first call of a key. Its age alone closes nothing.
   windowsFreshMs: 10 * 60_000,
@@ -156,13 +150,6 @@ function pausedUntil(account: PoolAccountSnapshot, now: number): number | null {
   return retryAt
 }
 
-/** The headroom a window must leave for this turn: a new task asks more of the five hours. */
-function headroomThreshold(window: LimitWindow, input: ParsedInput, newTask: boolean): number {
-  return newTask && window.name === '5h'
-    ? Math.max(input.minTurnHeadroomPct, poolPolicy.newTaskFiveHourHeadroomPct)
-    : input.minTurnHeadroomPct
-}
-
 /**
  * The week's credits as the order of the pool counts them: what is left, slowed when the account
  * spends faster than `pacingBurst` times its even pace — a week far from its reset counts for
@@ -175,7 +162,7 @@ export function pacedWeekCredits(left: number, resetsAt: Date | null, now: Date)
   )
 }
 
-function readiness(account: PoolAccountSnapshot, input: ParsedInput, newTask: boolean): Readiness {
+function readiness(account: PoolAccountSnapshot, input: ParsedInput): Readiness {
   const now = input.now.getTime()
   // A backend without windows has no usage to know: whatever the columns hold is no report.
   const windowless = input.capacity === 'none'
@@ -199,7 +186,9 @@ function readiness(account: PoolAccountSnapshot, input: ParsedInput, newTask: bo
     const absolute = absoluteWindow(window)
     if (absolute === null) {
       score = null
-      if (window.usedPct <= 100 - headroomThreshold(window, input, newTask)) continue
+      // A new task asks of a window in percents what a bound one does (owner's answer of
+      // 13.11.2026: «пока есть кредиты из подписки или тарифа нужно запускать агента»).
+      if (window.usedPct <= 100 - input.minTurnHeadroomPct) continue
     } else {
       // A turn takes its measured cost, else the share of the window it always took (Л12).
       const turn = input.turnCostCredits ?? (absolute.limitCredits * input.minTurnHeadroomPct) / 100
@@ -252,7 +241,7 @@ function pickUnbound(input: ParsedInput, binding: 'initial' | 'rebind'): PoolDec
   // without-time-limit.md, ВР26): `maxConcurrentTurns` is history, its windows and pauses stay.
   for (const account of input.accounts) {
     if (!eligible(account, input)) continue
-    const state = readiness(account, input, binding === 'initial')
+    const state = readiness(account, input)
     if (state.retryAt !== null) resets.push(state.retryAt)
     if (state.needsProbe) {
       probeAccountIds.push(account.id)
@@ -327,7 +316,7 @@ export function pickAccount(snapshot: PickAccountInput): PoolDecision {
     return { kind: 'operator', reason: 'account_suspended' }
 
   if (eligible(bound, input)) {
-    const state = readiness(bound, input, false)
+    const state = readiness(bound, input)
     if (state.ready)
       return { kind: 'selected', accountId: bound.id, binding: 'keep', rebinds: input.rebinds }
     if (state.retryAt === null) return wait(input, 'limits_unknown', undefined, [bound.id])

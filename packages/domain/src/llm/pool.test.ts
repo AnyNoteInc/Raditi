@@ -142,12 +142,14 @@ describe('pickAccount: new tasks', () => {
     })
   })
 
-  it('admits exactly 10% five-hour headroom for a new task, but not just below it', () => {
+  // Owner's answer of 13.11.2026: «пока есть кредиты из подписки или тарифа нужно запускать
+  // агента» — a new task asks of the five hours no more than a turn, as a bound one does.
+  it('admits a new task while the five hours leave a turn (5 %), but not just below it', () => {
     expect(
-      pickAccount(input({ accounts: [account('a', { limitWindows: [window('5h', 90)] })] })),
+      pickAccount(input({ accounts: [account('a', { limitWindows: [window('5h', 95)] })] })),
     ).toEqual(selected())
     expect(
-      pickAccount(input({ accounts: [account('a', { limitWindows: [window('5h', 90.001)] })] })),
+      pickAccount(input({ accounts: [account('a', { limitWindows: [window('5h', 95.001)] })] })),
     ).toEqual({
       kind: 'wait',
       probeAccountIds: [],
@@ -210,7 +212,7 @@ describe('pickAccount: new tasks', () => {
     },
   )
 
-  it('supports a larger configured turn reserve and retains the new-task 10% floor', () => {
+  it('supports a larger configured turn reserve, and a new task has no floor of its own', () => {
     expect(
       pickAccount(
         input({
@@ -234,7 +236,7 @@ describe('pickAccount: new tasks', () => {
           accounts: [account('a', { limitWindows: [window('5h', 91)] })],
         }),
       ).kind,
-    ).toBe('wait')
+    ).toBe('selected')
   })
 })
 
@@ -359,7 +361,7 @@ describe('pickAccount: bound tasks', () => {
       })
   })
 
-  it('does not apply the new-task 10% filter to an existing task rebind', () => {
+  it('rebinds an existing task to an account that leaves a turn', () => {
     expect(
       pickAccount(bound({ enabled: false }, [account('b', { limitWindows: [window('5h', 95)] })])),
     ).toEqual(selected('b', 'rebind'))
@@ -473,10 +475,12 @@ describe('pickAccount: unknown usage and exhausted pools', () => {
     expect(pickAccount(bound({ limitWindows }))).toEqual(selected('a', 'keep'))
   })
 
-  it('needs an unknown reset only below the applicable new-task or turn headroom threshold', () => {
+  it('needs an unknown reset only below the turn headroom, for a new task as for a bound one', () => {
     const limitWindows = [{ ...window('5h', 95), resetsAt: null }]
     expect(pickAccount(bound({ limitWindows }))).toEqual(selected('a', 'keep'))
-    expect(pickAccount(input({ accounts: [account('a', { limitWindows })] }))).toEqual({
+    expect(pickAccount(input({ accounts: [account('a', { limitWindows })] }))).toEqual(selected())
+    const short = [{ ...window('5h', 95.001), resetsAt: null }]
+    expect(pickAccount(input({ accounts: [account('a', { limitWindows: short })] }))).toEqual({
       kind: 'wait',
       reason: 'limits_unknown',
       retryAt: at(15),
