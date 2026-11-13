@@ -436,6 +436,40 @@ describe('planTurn', () => {
     expect(env().mainHead).not.toHaveBeenCalled()
   })
 
+  it('tells the agent the format the new words ask for, and none the older words asked for', async () => {
+    const plain = await planTurn(
+      facts({ requests: [request(10, 'first', 'Подготовьте отчёт о продажах', 0)] }),
+      env(),
+    )
+    if (plain.kind !== 'turn') throw new Error(`expected a turn, got ${plain.kind}`)
+    expect(plain.request.context.instructions).not.toContain('## The format the client asked for')
+    const word = await planTurn(
+      facts({ requests: [request(10, 'first', 'Сделайте отчёт в Word', 0)] }),
+      env(),
+    )
+    if (word.kind !== 'turn') throw new Error(`expected a turn, got ${word.kind}`)
+    expect(word.request.context.instructions).toMatch(
+      /\n## The format the client asked for\n- The client asked for a Word file \(\.docx\) in this message\.\n- Make the document in that format, as «Files for the client» says\.\n$/,
+    )
+    // The session saw the Word of the first message: the next one asks for nothing of it.
+    const last = finished(1, 'completed', { headSha: HEAD1 })
+    const next = await planTurn(
+      facts({
+        task: { ...facts().task, turnNo: 1 },
+        turns: new Map([[1, last]]),
+        writtenHead: HEAD1,
+        requests: [
+          request(10, 'first', 'Сделайте отчёт в Word', 0),
+          request(12, 'answer', 'А теперь статью в маркдауне', 20),
+        ],
+      }),
+      env({}, HEAD1),
+    )
+    if (next.kind !== 'turn') throw new Error(`expected a turn, got ${next.kind}`)
+    expect(next.request.context.instructions).toContain('a text document in Markdown (.md)')
+    expect(next.request.context.instructions).not.toContain('a Word file (.docx) in this message')
+  })
+
   it('replaces an unsuccessful turn from the checkpoint it started with', async () => {
     const first = finished(1, 'completed', { headSha: HEAD1 })
     const previous = {

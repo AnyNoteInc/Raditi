@@ -179,7 +179,7 @@ describe('readOutboxArchive', () => {
       manifestOf(['a.txt'], { refused: true }),
       manifestOf(['a.txt'], { skipped: -1 }),
       manifestOf(['a.txt'], { extra: 1 }),
-      manifestOf(Array.from({ length: 11 }, (_, i) => `f${i}.txt`)),
+      manifestOf(Array.from({ length: outboxLimits.files + 1 }, (_, i) => `f${i}.txt`)),
     ])
       await expect(
         readOutboxArchive(await archive([{ name: 'manifest.json', body: manifest }, ...files])),
@@ -327,9 +327,11 @@ describe('SandboxSnapshotTransport.captureOutbox', () => {
     expect(fake.calls.some(({ argv }) => ['tar', 'mktemp'].includes(argv[0]!))).toBe(false)
   })
 
-  it('refuses more than ten files and a file above 20 MiB before archiving', async () => {
-    const eleven = records(...Array.from({ length: 11 }, (_, i) => `f 1 f${i}.txt`))
-    const many = sandboxWith(eleven)
+  it('refuses more files than the limit and a file above 20 MiB before archiving', async () => {
+    const tooMany = records(
+      ...Array.from({ length: outboxLimits.files + 1 }, (_, i) => `f 1 f${i}.txt`),
+    )
+    const many = sandboxWith(tooMany)
     await expect(transport.captureOutbox(many.sandbox)).rejects.toMatchObject({ httpStatus: 413 })
     const big = sandboxWith(records(`f ${outboxLimits.fileBytes + 1} big.bin`))
     await expect(transport.captureOutbox(big.sandbox)).rejects.toMatchObject({ httpStatus: 413 })

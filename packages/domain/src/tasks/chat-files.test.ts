@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   chatFileKey,
+  OUTBOX_MANIFEST_BYTES,
   outboxFileNameSchema,
   outboxLimits,
   outboxManifestSchema,
@@ -13,7 +14,7 @@ const ok = (name: string) => outboxFileNameSchema.safeParse(name).success
 describe('files of the agent for the client', () => {
   it('keeps the limits of the plan', () => {
     expect(outboxLimits).toEqual({
-      files: 10,
+      files: 30,
       fileBytes: 20 * 1024 * 1024,
       archiveBytes: 16 * 1024 * 1024,
       nameChars: 200,
@@ -40,7 +41,7 @@ describe('files of the agent for the client', () => {
     expect(manifest({ ...base, refused: true })).toBe(false)
     expect(manifest({ ...base, names: ['a.txt', 'a.txt'] })).toBe(false)
     expect(manifest({ ...base, names: ['../a.txt'] })).toBe(false)
-    expect(manifest({ ...base, names: Array.from({ length: 11 }, (_, i) => `${i}.txt`) })).toBe(
+    expect(manifest({ ...base, names: Array.from({ length: 31 }, (_, i) => `${i}.txt`) })).toBe(
       false,
     )
     expect(manifest({ ...base, skipped: -1 })).toBe(false)
@@ -66,5 +67,15 @@ describe('files of the agent for the client', () => {
       chatFileKey('0199A3F2-0000-7000-8000-000000000001', '0199a3f2-0000-8000-8000-0000000000f1'),
     ).toBe('chat-files/0199a3f2-0000-7000-8000-000000000001/0199a3f2-0000-8000-8000-0000000000f1')
     expect(() => chatFileKey('../x', '0199a3f2-0000-8000-8000-0000000000f1')).toThrow()
+  })
+
+  it('holds the longest manifest of the limit in its bytes (docs/plan/67, Д7)', () => {
+    const names = Array.from(
+      { length: outboxLimits.files },
+      (_, i) => `${String(i).padStart(2, '0')}${'я'.repeat(outboxLimits.nameChars - 2)}`,
+    )
+    const manifest = { v: 1, names, skipped: 1_000_000, refused: false }
+    expect(outboxManifestSchema.safeParse(manifest).success).toBe(true)
+    expect(Buffer.byteLength(JSON.stringify(manifest))).toBeLessThan(OUTBOX_MANIFEST_BYTES)
   })
 })

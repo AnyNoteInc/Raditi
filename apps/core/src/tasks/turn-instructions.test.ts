@@ -8,6 +8,7 @@ import {
   INIT_ANSWER_MAX_CHARS,
   INIT_PROMPT,
   openTaskInstructions,
+  requestedFormatsSection,
   turnInstructions,
 } from './turn-instructions.ts'
 
@@ -484,23 +485,57 @@ describe('openTaskInstructions (docs/plan/61-chats-first.md, §5.7)', () => {
   })
 })
 
-describe('files for the client (docs/plan/66-chat-visuals.md, В8–В11)', () => {
+describe('files for the client (docs/plan/66-chat-visuals.md, В8–В11; docs/plan/67, Д1)', () => {
+  const kinds = () => [
+    turnInstructions({ state: 'absent' }),
+    browserTaskInstructions('GUIDE\n'),
+    openTaskInstructions({ skills: [] }, { browser: false, inbox: null }),
+  ]
+
   it('tells every kind of turn where its files for the client go and what builds them', () => {
-    for (const text of [
-      turnInstructions({ state: 'absent' }),
-      browserTaskInstructions('GUIDE\n'),
-      openTaskInstructions({ skills: [] }, { browser: false, inbox: null }),
-    ]) {
+    for (const text of kinds()) {
       expect(text).toContain('## Files for the client')
       expect(text).toContain('mkdir -p /workspace/out')
-      expect(text).toContain('at most 10 files of up to 20 MiB each')
+      expect(text).toContain('at most 30 files of up to 20 MiB each')
       // A name is told in characters, which an agent counts; a ustar header's bytes it cannot.
       expect(text).toContain('up to 100 characters (Russian letters are fine')
       expect(text).not.toMatch(/\bbytes\b.*that the client will see/)
-      expect(text).toContain('`python-docx` and `openpyxl`')
+      expect(text).toContain('`python-docx` or `openpyxl`')
     }
     expect(turnInstructions({ state: 'absent' })).toContain(
       '- Files for the client go to /workspace/out, never into the working copy.',
+    )
+  })
+
+  it('asks every kind of turn for a page or a text document, and Word only when asked', () => {
+    for (const text of kinds()) {
+      expect(text).toContain('a web page, `<name>.html`')
+      expect(text).toContain('a text document, `<name>.md` (Markdown)')
+      expect(text).toContain('Make a Word file (.docx) only when the client asked for Word')
+      expect(text).toContain('Nothing from the network')
+      expect(text).toContain('No HTML inside: the viewer drops it.')
+      expect(text).toContain('never SVG')
+      expect(text).toContain('`00-оглавление.md`')
+      expect(text).toContain('write it again under the same file name')
+      expect(text).toContain("never\n  paste a document's content into the message")
+      // The old rule made every document a Word file.
+      expect(text).not.toContain('is there to build .docx and .xlsx files')
+    }
+  })
+})
+
+describe('requestedFormatsSection (docs/plan/67, Д1)', () => {
+  it('names the formats the client asked for, and nothing without them', () => {
+    expect(requestedFormatsSection({ word: false, excel: false, markdown: false })).toBe('')
+    const text = requestedFormatsSection({ word: true, excel: true, markdown: false })
+    expect(text).toBe(
+      '\n## The format the client asked for\n' +
+        '- The client asked for a Word file (.docx) in this message.\n' +
+        '- The client asked for an Excel file (.xlsx) in this message.\n' +
+        '- Make the document in that format, as «Files for the client» says.\n',
+    )
+    expect(requestedFormatsSection({ word: false, excel: false, markdown: true })).toContain(
+      'a text document in Markdown (.md)',
     )
   })
 })

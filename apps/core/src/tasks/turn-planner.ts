@@ -11,6 +11,7 @@ import {
   turnInboxPath,
   turnPlanLimits,
   turnPlanSchema,
+  requestedFileFormats,
   withTurnCredentials,
   type AgentDriver,
   type AgentWorkingSet,
@@ -41,6 +42,7 @@ import {
   browserTaskInstructions,
   CONTINUE_PROMPT,
   openTaskInstructions,
+  requestedFormatsSection,
   turnInstructions,
   type PreviewFacts,
 } from './turn-instructions.ts'
@@ -617,6 +619,14 @@ function promptWith(facts: PassFacts, context: string, since: Date | null): stri
   return `${words}\n\n${context}`
 }
 
+/**
+ * The client's own words of the pass, as the prompt carries them and nothing the platform adds:
+ * the format the client asks for is read from them (docs/plan/67-agent-documents.md, Д1).
+ */
+function clientWordsOf(facts: PassFacts, since: Date | null): string {
+  return promptOf(requestsNotUndone(facts), since)
+}
+
 /** The prompt of a pass in the cloud browser. */
 function browserPromptOf(
   facts: PassFacts,
@@ -823,19 +833,21 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
       },
       mcp: { url: `${SANDBOX_GATEWAY_URL}/mcp` },
       // Rule 8: by what the task needs, never by its stack — the adapter's guide says the rest.
-      instructions: !sited
-        ? openTaskInstructions(internet, { browser: browser !== undefined, inbox: inboxFacts })
-        : browser?.guide && !workspace
-          ? browserTaskInstructions(browser.guide, internet)
-          : turnInstructions(
-              facts.preview,
-              { names: facts.variables ?? [], hosts: egress },
-              facts.databaseGuide,
-              facts.rules,
-              internet,
-              inboxFacts,
-              browser?.guide ? { guide: browser.guide } : null,
-            ),
+      instructions: `${
+        !sited
+          ? openTaskInstructions(internet, { browser: browser !== undefined, inbox: inboxFacts })
+          : browser?.guide && !workspace
+            ? browserTaskInstructions(browser.guide, internet)
+            : turnInstructions(
+                facts.preview,
+                { names: facts.variables ?? [], hosts: egress },
+                facts.databaseGuide,
+                facts.rules,
+                internet,
+                inboxFacts,
+                browser?.guide ? { guide: browser.guide } : null,
+              )
+      }${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}`,
       egressProxy: SANDBOX_EGRESS_PROXY_URL,
       internet: true,
       ...(skills.length ? { skills: [...skills] } : {}),
