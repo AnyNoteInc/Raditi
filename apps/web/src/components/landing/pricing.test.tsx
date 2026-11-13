@@ -7,12 +7,13 @@ import {
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { mainAction } from './main-action'
 import { ANNOUNCE_DELAY_MS, Pricing } from './pricing'
 import { pass, plain, pricing } from './testing'
 
 const { plans, pack } = pricing
 
-// The line under the slider and the one under the registration, as they read.
+// The line under the slider and the one under the main action, as they read.
 const TASK_HINT =
   'Задача — одна ваша просьба. В расчёте берём 11 кредитов на задачу — это среднее: поменять цену или фото стоит обычно 5 кредитов, добавить блок или страницу — 15–25.'
 const GIFT_NOTE =
@@ -307,24 +308,28 @@ describe('landing pricing', () => {
     }
   })
 
-  it('offers one registration under the plans and none inside a plan', () => {
+  it('offers one action under the plans and none inside a plan', () => {
     render(<Pricing plans={plans} pack={pack} />)
 
-    const action = screen.getByRole('link', { name: 'Зарегистрироваться' })
+    // The main action of a guest, by its whole name: the way to the form of a lead.
+    const action = screen.getByRole('link', { name: 'Подключить сайт бесплатно' })
+    expect(mainAction(true).label).toBe('Подключить сайт бесплатно')
     // The plan is chosen later, so the link carries no plan.
-    expect(action).toHaveAttribute('href', '/sign-up')
+    expect(action).toHaveAttribute('href', '#lead')
     expect(screen.getAllByRole('link')).toEqual([action])
     for (const name of ['Старт', 'Бизнес', 'Агентство']) {
       expect(planCard(name).contains(action)).toBe(false)
     }
   })
 
-  it('tells a guest by the registration of the gift, and of no day without a tariff', () => {
+  it('tells a guest by the action of the gift of the registration, and of no day without a tariff', () => {
     render(<Pricing plans={plans} pack={pack} />)
 
     const note = screen.getByText(GIFT_NOTE)
     // Beside the action, under the plans: one paragraph after the link.
-    expect(screen.getByRole('link', { name: 'Зарегистрироваться' }).nextElementSibling).toBe(note)
+    expect(screen.getByRole('link', { name: 'Подключить сайт бесплатно' }).nextElementSibling).toBe(
+      note,
+    )
     for (const name of ['Старт', 'Бизнес', 'Агентство']) {
       expect(planCard(name).contains(note)).toBe(false)
     }
@@ -354,15 +359,19 @@ describe('landing pricing', () => {
     expect(screen.queryByText(/в подарок/)).toBeNull()
   })
 
-  it('shows no prices and keeps the way to the account when the plans are unavailable', () => {
+  it('shows no prices and keeps the way to the lead when the plans are unavailable', () => {
     render(<Pricing plans={[]} pack={null} />)
 
     expect(screen.getByText('Сейчас не удалось загрузить тарифы.')).toBeInTheDocument()
     expect(screen.queryByRole('slider')).not.toBeInTheDocument()
-    expect(screen.getByText(/Зарегистрироваться можно уже сейчас\./)).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Зарегистрироваться' })).toHaveAttribute(
+    // The sentence names what the link under it does, and no registration.
+    const way = screen.getByText(/Оставить заявку на\s+подключение можно уже сейчас\./)
+    expect(way.textContent).toContain('на\u00a0подключение можно')
+    expect(screen.queryByText(/Зарегистр/)).not.toBeInTheDocument()
+    expect(screen.getAllByRole('link')).toHaveLength(1)
+    expect(screen.getByRole('link', { name: 'Подключить сайт бесплатно' })).toHaveAttribute(
       'href',
-      '/sign-up',
+      '#lead',
     )
   })
 
@@ -372,7 +381,7 @@ describe('landing pricing', () => {
     const way = screen.getByText(/Перейти к чатам можно по ссылке ниже\./)
     // The prepositions stay with their words.
     expect(way.textContent).toContain('к\u00a0чатам можно по\u00a0ссылке')
-    expect(screen.queryByText(/Зарегистрироваться/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Зарегистр|заявку/)).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Открыть чаты' })).toHaveAttribute('href', '/chats')
   })
 })

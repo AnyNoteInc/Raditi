@@ -109,9 +109,11 @@ export function Pricing({
         <p>Сейчас не удалось загрузить тарифы.</p>
         <p>
           Обновите страницу чуть позже.{' '}
-          {isGuest
-            ? 'Зарегистрироваться можно уже сейчас.'
-            : nbsp('Перейти к чатам можно по ссылке ниже.')}
+          {nbsp(
+            isGuest
+              ? 'Оставить заявку на подключение можно уже сейчас.'
+              : 'Перейти к чатам можно по ссылке ниже.',
+          )}
         </p>
         <Link className={styles.action} href={action.href}>
           {action.label} <LandingIcon name="arrow-right-pricing" size={20} strokeWidth={1.6} />

@@ -5,13 +5,20 @@ import { signupGiftCredits } from '@repo/domain/billing/credit-numbers'
 import { pluralCredits } from './pricing-calculator'
 
 /**
- * The main action of the landing, wherever it stands: a guest is led to the registration, a
- * visitor with an account to the chats. Written once, so every place calls it by one name.
+ * The main action of the landing, wherever it stands: a guest is led to the form of a lead (one
+ * way in, the owner, 13.11.2026: we connect the site, the registration comes after), a visitor
+ * with an account to the chats. Written once, so every place calls it by one name.
  */
 export const mainAction = (isGuest: boolean) =>
   isGuest
-    ? ({ href: '/sign-up', label: 'Зарегистрироваться' } as const)
+    ? ({ href: '#lead', label: 'Подключить сайт бесплатно' } as const)
     : ({ href: '/chats', label: 'Открыть чаты' } as const)
+
+/**
+ * The same action where a row has no room for the whole name — the header — and where the words
+ * around it have said «бесплатно» already: the section of the systems.
+ */
+export const MAIN_ACTION_SHORT = 'Подключить сайт'
 
 /** When a tariff is chosen: the last words under the action, whoever reads them. */
 const PLAN_LATER = 'Тариф выберете позже.'

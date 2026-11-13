@@ -1,12 +1,19 @@
 import { giftTaskCounts, signupGiftCredits } from '@repo/domain/billing/credit-numbers'
 import { describe, expect, it } from 'vitest'
 
-import { mainAction, mainActionNote } from './main-action'
+import { MAIN_ACTION_SHORT, mainAction, mainActionNote } from './main-action'
 
 describe('main action of the landing', () => {
-  it('leads a guest to the registration and a visitor with an account to the chats', () => {
-    expect(mainAction(true)).toEqual({ href: '/sign-up', label: 'Зарегистрироваться' })
+  it('leads a guest to the form of a lead and a visitor with an account to the chats', () => {
+    // One way in (the owner, 13.11.2026): the landing leads a guest to the lead, not to the
+    // registration.
+    expect(mainAction(true)).toEqual({ href: '#lead', label: 'Подключить сайт бесплатно' })
     expect(mainAction(false)).toEqual({ href: '/chats', label: 'Открыть чаты' })
+  })
+
+  it('shortens the name of the action of a guest without changing its words', () => {
+    expect(MAIN_ACTION_SHORT).toBe('Подключить сайт')
+    expect(mainAction(true).label).toBe(`${MAIN_ACTION_SHORT} бесплатно`)
   })
 
   it('tells a guest of the gift of the registration, and of no day without a tariff', () => {
