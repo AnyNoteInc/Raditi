@@ -817,7 +817,8 @@ scenarios['unanswered-then-unlink'] = async (t) => {
 }
 
 // The windows of 5 hours and of the week (docs/plan/71-usage-limits.md, Л4, Л18): a customer
-// without a tariff has 15 / 50, a paid «Старт» 20 / 55, and the cards of the tariffs name each.
+// without a tariff has a week of 50, a paid «Старт» 55 — no window of 5 hours since the owner's
+// answer of 13.11.2026 —, and the cards of the tariffs name each.
 // The stand calls no model, so no window starts: each says «начнётся с первой задачи».
 scenarios['usage-windows'] = async (t) => {
   const plans = await (await t.customer()).query('billing.plans')
@@ -829,9 +830,9 @@ scenarios['usage-windows'] = async (t) => {
       creditsPerWeek,
     ]),
     [
-      ['start', 20, 55],
-      ['business', 70, 210],
-      ['agency', 200, 700],
+      ['start', null, 55],
+      ['business', null, 210],
+      ['agency', null, 700],
     ],
   )
   const paying = await subscribed(t)
@@ -841,7 +842,7 @@ scenarios['usage-windows'] = async (t) => {
     [usage.windows, usage.tier],
     [
       [
-        { kind: '5h', limit: 20, used: 0, left: 20, resetsAt: null },
+        { kind: '5h', limit: null, used: 0, left: null, resetsAt: null },
         { kind: 'week', limit: 55, used: 0, left: 55, resetsAt: null },
       ],
       'start',

@@ -301,7 +301,7 @@ async function readFacts(prisma: PrismaClient, now: Date): Promise<UsageFacts> {
       tier,
       workspaces: rows.length,
       weeklyLimits: rows.reduce(
-        (total, row) => total + (row.terms.limits.week ?? noTariffWindowCredits.week),
+        (total, row) => total + (row.terms.limits.week ?? noTariffWindowCredits.week ?? 0),
         0,
       ),
       spent7d: rows.reduce((total, row) => total + row.spent7d, 0),

@@ -267,11 +267,11 @@ const noCredits = {
  */
 /** The windows of the seeded «Старт» (Л4), none of them started. */
 const START_WINDOWS = [
-  { kind: '5h', limit: 20, used: 0, left: 20, resetsAt: null },
+  { kind: '5h', limit: null, used: 0, left: null, resetsAt: null },
   { kind: 'week', limit: 55, used: 0, left: 55, resetsAt: null },
 ]
 const FAKE_WINDOWS = [
-  { kind: '5h', limit: 15, used: 0, left: 15, resetsAt: null },
+  { kind: '5h', limit: null, used: 0, left: null, resetsAt: null },
   { kind: 'week', limit: 50, used: 0, left: 50, resetsAt: null },
 ]
 /**

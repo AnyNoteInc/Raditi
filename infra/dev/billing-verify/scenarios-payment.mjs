@@ -403,7 +403,7 @@ scenarios.checkout = async (t) => {
       { ...PRICE, pack: '2980.00', withoutTariff: true },
     )
     t.equal(
-      `${who}: and in credits — 150, 600 and 2 000 a month, no daily limit, windows of 20/55, 70/210 and 200/700, a pack of 100`,
+      `${who}: and in credits — 150, 600 and 2 000 a month, no daily limit, weekly limits of 55, 210 and 700, a pack of 100`,
       {
         plans: plans.map(
           ({
@@ -867,7 +867,7 @@ scenarios['autopayments-not-approved'] = async (t) => {
         gift: { ...before.credits.gift, granted: true },
         // The workspace is there now: the windows without a tariff, none started (plan 71).
         windows: [
-          { kind: '5h', limit: 15, used: 0, left: 15, resetsAt: null },
+          { kind: '5h', limit: null, used: 0, left: null, resetsAt: null },
           { kind: 'week', limit: 50, used: 0, left: 50, resetsAt: null },
         ],
       },

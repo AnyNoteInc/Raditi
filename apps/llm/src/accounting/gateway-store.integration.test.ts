@@ -651,7 +651,7 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
   // The windows of a workspace (docs/plan/71-usage-limits.md, §2.2; scenarios 1 and 6): a credit
   // rate of 6 ₽ is written for these cases and removed after them — the rate belongs to the whole
   // database, which is why the suite runs on a disposable one only.
-  describe('the windows of 5 hours and of the week of a workspace', () => {
+  describe('the windows of a workspace (only the week has a limit since 13.11.2026)', () => {
     let rateId: string | null = null
     let planRateId: string | null = null
     beforeAll(async () => {
@@ -686,14 +686,14 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
       if (planRateId) await db.llmPlanRate.delete({ where: { id: planRateId } })
     })
 
-    /** A call of 1 000 000 uncached input tokens: 100 ₽, 16.7 credits — past the 15 of no tariff. */
+    /** A call of 3 100 000 uncached input tokens: 310 ₽, 51.7 credits — past the 50 a week of no tariff. */
     const heavy = (): GatewayFinish => ({
       ...actual(),
-      usage: { input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 },
+      usage: { input: 3_100_000, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 },
     })
 
     it('opens the windows with the first call and counts plan credits of the reserve and of the call', async () => {
-      const f = await fixture({ budget: '500' })
+      const f = await fixture({ budget: '5000' })
       const k = await f.key()
       const call = await admitted(k.input)
       const windows = await db.workspaceUsageWindow.findMany({
@@ -711,24 +711,24 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     })
 
     it('refuses the next call of a spent window with its reset, and another workspace goes on (scenario 1)', async () => {
-      const f = await fixture({ budget: '500' })
+      const f = await fixture({ budget: '5000' })
       const k = await f.key()
       const call = await admitted(k.input)
       expect(await store.finish(call.id, heavy())).toBe(true)
       const refused = await store.admit(k.input)
       expect(refused).toMatchObject({ kind: 'refused', reason: 'workspace_limit' })
       if (refused.kind !== 'refused') throw new Error('The window should refuse')
-      expect(refused.window?.kind).toBe('5h')
+      expect(refused.window?.kind).toBe('week')
       expect(refused.window?.resetsAt).toBeInstanceOf(Date)
       const key = await db.llmKey.findUniqueOrThrow({ where: { id: k.row.id } })
       expect(key.lastRefusal).toBe('workspace_limit')
       // The other workspace, on the same account, is not touched.
-      const other = await fixture({ budget: '500' })
+      const other = await fixture({ budget: '5000' })
       await admitted((await other.key()).input)
     })
 
     it('counts nothing of a task that is not billable, nor a call the platform failed (Л7)', async () => {
-      const f = await fixture({ budget: '500' })
+      const f = await fixture({ budget: '5000' })
       const k = await f.key()
       const call = await admitted(k.input)
       expect(
@@ -741,7 +741,7 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
         }),
       ).toBe(true)
       await admitted(k.input)
-      const spent = await fixture({ budget: '500' })
+      const spent = await fixture({ budget: '5000' })
       const first = await spent.key()
       const paid = await admitted(first.input)
       expect(await store.finish(paid.id, heavy())).toBe(true)
@@ -750,17 +750,17 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     })
 
     it('keeps the window and the reset that refused on the key', async () => {
-      const f = await fixture({ budget: '500' })
+      const f = await fixture({ budget: '5000' })
       const k = await f.key()
       expect(await store.finish((await admitted(k.input)).id, heavy())).toBe(true)
       expect(await store.admit(k.input)).toMatchObject({ reason: 'workspace_limit' })
       const key = await db.llmKey.findUniqueOrThrow({ where: { id: k.row.id } })
-      expect(key.lastRefusalWindow).toBe('5h')
+      expect(key.lastRefusalWindow).toBe('week')
       expect(key.lastRefusalResetsAt).toBeInstanceOf(Date)
     })
 
     it('bounds a call of an API paid by the token by credits alone (owner, 13.11.2026)', async () => {
-      const f = await fixture({ budget: '500' })
+      const f = await fixture({ budget: '5000' })
       const k = await f.key()
       expect(await store.finish((await admitted(k.input)).id, heavy())).toBe(true)
       // The same spent window: a call of the plan is refused, a call of the API is not.
@@ -769,7 +769,7 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     })
 
     it('does not let a task that is not billable fill the window of the workspace (Л7)', async () => {
-      const f = await fixture({ budget: '500' })
+      const f = await fixture({ budget: '5000' })
       const operator = await f.key()
       const call = await admitted(operator.input)
       expect(await store.finish(call.id, heavy())).toBe(true)
@@ -787,14 +787,14 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
     })
 
     it('admits the last call below the limit and refuses one more: one call over at most (Л6)', async () => {
-      const f = await fixture({ budget: '500' })
+      const f = await fixture({ budget: '5000' })
       const k = await f.key()
-      // 14 credits: below the limit of 15, so one more call goes, whatever it costs.
+      // 49 credits: below the weekly limit of 50, so one more call goes, whatever it costs.
       const call = await admitted(k.input)
       expect(
         await store.finish(call.id, {
           ...actual(),
-          usage: { input: 840_000, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 },
+          usage: { input: 2_940_000, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 },
         }),
       ).toBe(true)
       const last = await admitted(k.input)
