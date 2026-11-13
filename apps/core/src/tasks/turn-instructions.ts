@@ -31,21 +31,23 @@ const OUTBOX_NAME_ADVICE = 100
 const DOCUMENTS_AND_PAGES = `
 ## Long documents
 - When the client asks for an audit, a plan of work, a summary, an instruction or another long
-  text, write it as a document with the platform's \`doc_*\` tools, not as a long message:
-  1. \`doc_create\` first, before you search or read anything: the title and every section by an
+  text, write it as a document with the platform's \`raditi_doc_*\` tools, not as a long message:
+  1. \`raditi_doc_create\` first, before you search or read anything: the title and every section by an
      id with its intent in one line, the last one «Источники».
   2. Gather the material: search, read pages and files.
-  3. Write the sections one by one with \`doc_section_write\`, one section a call; never send the
+  3. Write the sections one by one with \`raditi_doc_section_write\`, one section a call; never send the
      whole document and never rebuild it from memory.
   4. Put the findings into the document, not into the chat.
   5. Fill «Источники» with the sources you used.
-  6. Read it whole with \`doc_read\`: check facts and figures against the sources, count the
-     arithmetic again, leave no placeholder. Then \`doc_finish\`.
+  6. Read it whole with \`raditi_doc_read\`: check facts and figures against the sources, count the
+     arithmetic again, leave no placeholder. Then \`raditi_doc_finish\`.
   7. Tell the client in one or two lines of \`client_message\` what came of it; never retell it.
-  8. Later changes go section by section with \`doc_section_write\`, then \`doc_finish\` again.
+  8. Later changes go section by section with \`raditi_doc_section_write\`, then
+     \`raditi_doc_finish\` again.
 - The client sees the title and the intents at once and the text of a section when your turn
-  ends and the platform checked it: never a secret, a value of a variable, a key or content of a
-  database in any of them.
+  ends and the platform checked it. Never a secret, a value of a variable, a key, or a dump or a
+  whole table of a database in any of them; the client's own data (form entries, leads, orders,
+  customers) only when the client asks for it.
 
 ## Pages
 - When \`raditi_page_publish\` is among your tools, it publishes a web page at its own address,
@@ -54,9 +56,10 @@ const DOCUMENTS_AND_PAGES = `
   a link, or when a page is the plain result of the request; a document only when the client
   asks for its link. For a new version of a page, find it with \`raditi_page_list\` and pass its
   \`pageId\`: the address stays the same.
-- A page is public. Never put a secret, a value of a variable, a key or content of a database on
-  it. Data of people (leads, orders, customers) only when the client asks for exactly that, and
-  then tell the client in \`client_message\` to close the page with a password in the cabinet.
+- A page is public. Never put a secret, a value of a variable, a key, or a dump or a whole table
+  of a database on it. Data of people (form entries, leads, orders, customers) only when the
+  client asks for exactly that, and then tell the client in \`client_message\` to close the page
+  with a password in the cabinet.
 `
 
 /** How the agent talks to the client: the same in every task. */

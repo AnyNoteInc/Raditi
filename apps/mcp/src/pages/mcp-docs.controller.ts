@@ -69,7 +69,7 @@ export class McpDocsController {
   @Tool({
     name: 'doc_section_write',
     description:
-      'Write one section of a document by its id: its heading and its Markdown, headings inside it from ### down, lists only where the content is a list, tables for comparisons, no raw HTML. It replaces the section whole; with after it adds a new section after that id (null — first). One section a call: never send the whole document, never rebuild it from memory. Put findings here, not in the chat. Never a secret, a value of a variable, a key or content of a database; data of people (leads, orders, customers) only when the client asks for them. The client sees the text once this turn ends and the platform checked it.',
+      'Write one section of a document by its id: its heading and its Markdown, headings inside it from ### down, lists only where the content is a list, tables for comparisons, no raw HTML. It replaces the section whole; with after it adds a new section after that id (null — first). One section a call: never send the whole document, never rebuild it from memory. Put findings here, not in the chat. Never a secret, a value of a variable, a key, or a dump or a whole table of a database; data of people (form entries, leads, orders, customers) only when the client asks for them. The client sees the text once this turn ends and the platform checked it.',
     parameters: docSectionWriteArgumentsSchema,
     annotations: writes,
   })

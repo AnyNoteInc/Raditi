@@ -728,6 +728,8 @@ test('web gets the stand’s database and the fake, a synthetic HOME, and nothin
     preview: null,
     // Nor a browser stream: browser tasks are off there too.
     browserStreamUrl: null,
+    // Nor published pages (docs/plan/69-pages.md): «Страницы» are off there.
+    pages: null,
   })
   // No captcha: a customer of the stand signs up over HTTP.
   assert.equal(authConfigFromEnv(env).captcha, null)

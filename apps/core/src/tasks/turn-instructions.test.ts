@@ -493,13 +493,14 @@ describe('documents and pages (docs/plan/69-pages.md, Ст18, Ст20, Ст21)', 
     ]) {
       expect(text).toContain('## Long documents')
       for (const step of [
-        '1. `doc_create` first',
-        '6. Read it whole with `doc_read`',
+        '1. `raditi_doc_create` first',
+        '6. Read it whole with `raditi_doc_read`',
         '8. Later changes',
       ])
         expect(text).toContain(step)
       expect(text).toContain('When `raditi_page_publish` is among your tools')
-      expect(text).toContain('close the page with a password in the cabinet')
+      expect(text).toContain('close the page\n  with a password in the cabinet')
+      expect(text).not.toMatch(/`doc_[a-z_]+`/)
     }
   })
 })

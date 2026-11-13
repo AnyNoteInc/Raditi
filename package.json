@@ -40,6 +40,7 @@
     "verify:release": "exec node infra/dev/release-verify/verify-release.mjs",
     "verify:stack": "exec node infra/dev/stack-verify/verify-stack.mjs",
     "verify:browser-task": "exec node infra/dev/browser-task-verify/verify-browser-task.mjs",
+    "verify:pages": "exec node infra/dev/pages-verify/verify-pages.mjs",
     "verify:llm-gateway": "pnpm --filter core verify:llm-gateway",
     "verify:llm-app": "node infra/app/verify-llm-app.mjs",
     "verify:llm-firewall": "node infra/app/verify-llm-firewall.mjs",
