@@ -29,6 +29,7 @@ describe('webEnvFromEnv', () => {
       pastDueDays: 7,
       preview: null,
       browserStreamUrl: null,
+      pages: null,
     })
     expect(webEnvFromEnv({ ...devEnv, METRICS_TOKEN: ' ', REDIS_URL: '' })).toMatchObject({
       metricsToken: DEV_METRICS_TOKEN,
@@ -193,5 +194,24 @@ describe('the stream of the browser of tasks', () => {
     expect(() =>
       webEnvFromEnv({ ...prodEnv, BROWSER_STREAM_PUBLIC_URL: 'ws://raditi.ru/v1/browser/stream' }),
     ).toThrow('[web] invalid configuration: BROWSER_STREAM_PUBLIC_URL: must use wss in production')
+  })
+})
+
+describe('the pages in the cabinet (plan 69)', () => {
+  it('names their address with PAGES_BASE_DOMAIN, and refuses a port in production', () => {
+    const dev = { APP_ENV: 'development', APP_URL: 'http://localhost:3000' }
+    expect(
+      webEnvFromEnv({ ...dev, PAGES_BASE_DOMAIN: 'pages.localhost', PAGES_PUBLIC_PORT: '8092' })
+        .pages,
+    ).toEqual({ baseDomain: 'pages.localhost', scheme: 'http', port: 8092 })
+    expect(() =>
+      webEnvFromEnv({
+        APP_ENV: 'production',
+        APP_URL: 'https://raditi.ru',
+        METRICS_TOKEN: 'm'.repeat(40),
+        PAGES_BASE_DOMAIN: 'pages.raditi.ru',
+        PAGES_PUBLIC_PORT: '443',
+      }),
+    ).toThrow(/PAGES_PUBLIC_PORT/)
   })
 })

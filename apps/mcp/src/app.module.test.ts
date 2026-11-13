@@ -13,7 +13,13 @@ import { newTurnKeys } from '@repo/turn-keys'
 import { memoryStorage } from '@repo/snapshots/testing'
 
 import type { McpConfig } from './config/config.ts'
-import { fakeInfra, TEST_METRICS_TOKEN, testMcpConfig, type FakeInfra } from './testing/fakes.ts'
+import {
+  fakeInfra,
+  notDocTool,
+  TEST_METRICS_TOKEN,
+  testMcpConfig,
+  type FakeInfra,
+} from './testing/fakes.ts'
 import { MCP_CONTENT_RESOLVER } from './content/content.tokens.ts'
 import { MCP_CONTENT_STORAGE, type ContentStorage } from './storage/content-storage.ts'
 import { AppModule } from './app.module.ts'
@@ -137,13 +143,14 @@ describe('AppModule', () => {
         .send(body)
     const list = await post({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
     expect(list.status).toBe(200)
-    expect(list.body.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual([
-      'restore',
-      'site_info',
-      'wp_rest',
-    ])
+    expect(
+      list.body.result.tools
+        .map((tool: { name: string }) => tool.name)
+        .filter(notDocTool)
+        .sort(),
+    ).toEqual(['restore', 'site_info', 'wp_rest'])
     for (const tool of list.body.result.tools.filter(
-      (tool: { name: string }) => tool.name !== 'site_info',
+      (tool: { name: string }) => tool.name !== 'site_info' && notDocTool(tool.name),
     ))
       expect(tool.annotations).toMatchObject({
         readOnlyHint: false,
@@ -584,7 +591,9 @@ describe('AppModule', () => {
       .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
 
     expect(res.status).toBe(200)
-    expect(res.body.result.tools.map((tool: { name: string }) => tool.name)).toEqual(['site_info'])
+    expect(
+      res.body.result.tools.map((tool: { name: string }) => tool.name).filter(notDocTool),
+    ).toEqual(['site_info'])
     expect(res.body.result.tools[0].annotations).toMatchObject({ readOnlyHint: true })
   })
 

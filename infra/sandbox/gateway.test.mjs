@@ -1207,6 +1207,16 @@ test('the client egress of a turn is a listener of its own, configured only by i
   assert.equal(egress.clientIp, '10.200.0.3')
   assert.deepEqual([...egress.allow], ['api.example.ru:443'])
   assert.deepEqual(egress.refused[0], { address: '84.201.128.0', prefix: 18, family: 4 })
+  // The pages of the agent are the browser session's (plan 69, Ст26), never the turn's.
+  const told = gatewayEgressConfig({
+    ...env,
+    EGRESS_PORT: '3128',
+    EGRESS_OPEN: '1',
+    PAGE_DOMAIN: 'pages.raditi.ru',
+    PAGE_ADDRESSES: '45.8.250.117',
+  })
+  assert.equal(told.pageDomain, null)
+  assert.deepEqual(told.pageAddresses, [])
   for (const bad of [
     { EGRESS_PORT: '8080' },
     { EGRESS_PORT: '' },

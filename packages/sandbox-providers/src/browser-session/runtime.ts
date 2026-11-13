@@ -493,6 +493,9 @@ export function createDockerBrowserSessionRuntime(
         allowedHosts: spec.allowedHosts,
         localRoutes: spec.localRoutes,
         refusedSubnets: config.refusedSubnets,
+        ...(config.pageDomain
+          ? { pageDomain: config.pageDomain, pageAddresses: config.pageAddresses }
+          : {}),
         maxTunnels: config.maxTunnels,
       }),
       { network, address: addresses.egress },

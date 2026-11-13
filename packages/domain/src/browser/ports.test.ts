@@ -97,6 +97,7 @@ describe('ports of the cloud browser', () => {
       localSites: [],
       openWeb: false,
       platformHosts: [],
+      pageDomain: null,
       startUrl: 'https://news.example.ru/wp-admin/',
       viewport: BROWSER_DEFAULT_VIEWPORT,
       policy,

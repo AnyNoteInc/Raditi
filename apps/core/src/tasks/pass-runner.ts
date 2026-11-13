@@ -33,9 +33,10 @@ import { wakeStoppedPreview } from '../previews/preview-wake.ts'
 import type { TurnSupervisor } from '../turns/turn-supervisor.ts'
 import type { CandidateGit } from './candidate-git.ts'
 import type { ChatFiles } from './chat-files.ts'
-import type { TurnCapacity } from './turn-capacity.ts'
+import type { DocSections } from './doc-sections.ts'
 import type { LivePasses } from './live-passes.ts'
 import { readPassFacts } from './pass-facts.ts'
+import type { TurnCapacity } from './turn-capacity.ts'
 import type { PassEnding, PassRef, PassSettlement, SettleAnswer } from './pass-settlement.ts'
 import { causeOf, failureFactsOf, feedFailureOf } from './turn-outcome.ts'
 import { planTurn, type PassPlan } from './turn-planner.ts'
@@ -101,7 +102,9 @@ export interface PassRunnerDependencies {
    * Brings the files the agent made for the client into the chat after a completed pass
    * (docs/plan/66-chat-visuals.md, В8); absent — they stay with the turn's container.
    */
-  chatFiles?: Pick<ChatFiles, 'deliver'>
+  chatFiles?: Pick<ChatFiles, 'deliver' | 'failPages'>
+  /** The documents of the chat (docs/plan/69-pages.md, Ст19); absent — not settled here. */
+  docs?: Pick<DocSections, 'settle'>
   /** WORKSPACE_TURN_LIMIT (plan 70, ВР13); DEFAULT_WORKSPACE_TURN_LIMIT when absent. */
   workspaceTurnLimit?: number
   /** The places for turns of the platform (plan 70, ВР17); absent — no bound but the pool's. */
@@ -281,9 +284,11 @@ export class PassRunner {
     let retry: Retry | null = null
     let cause: string | null = null
     let outbox: Uint8Array | undefined
+    let refusesText: ((text: string) => 'turn_key' | 'client_value' | null) | null = null
     try {
       const completed = await supervisor.run(plan.request, plan.policy, controller.signal)
       outbox = completed.outbox
+      refusesText = completed.refusesText
       const git = completed.manifest.git
       ending = {
         kind: 'completed',
@@ -308,13 +313,29 @@ export class PassRunner {
     }
     const turnNo = await this.#turnNo(job.taskId)
     if (turnNo === null) return
+    // The sections of documents the chat wrote are checked with what only the turn knew (Ст19),
+    // before the answer reaches the client: a document the answer speaks of shows what passed.
+    if (ending.kind === 'completed' && refusesText)
+      await this.deps.docs?.settle(job.taskId, ending.turn, refusesText)
     const answer = await this.#settle({ ...ref, turnNo }, ending, browser)
     this.#logger.log(
       `pass_settled task=${job.taskId} ending=${ending.kind} answer=${answer}${cause ? ` cause=${cause}` : ''}`,
     )
-    // After the answer of the turn, so that its files stand below it in the chat.
-    if (ending.kind === 'completed' && answer === 'moved' && outbox)
-      await this.deps.chatFiles?.deliver({ taskId: job.taskId, turn: ending.turn, outbox })
+    // The pages a failed or cancelled turn named are told at once (docs/plan/69-pages.md, Ст6).
+    if (
+      (ending.kind === 'failed' || ending.kind === 'cancelled') &&
+      answer === 'moved' &&
+      ending.turn !== null
+    )
+      await this.deps.chatFiles?.failPages(job.taskId, ending.turn)
+    // After the answer of the turn, so that its files stand below it in the chat. A turn without
+    // files still settles the pages it named (docs/plan/69-pages.md, Ст6).
+    if (ending.kind === 'completed' && answer === 'moved')
+      await this.deps.chatFiles?.deliver({
+        taskId: job.taskId,
+        turn: ending.turn,
+        outbox: outbox ?? null,
+      })
     if (ending.kind === 'busy') {
       if (answer === 'moved' && retry) await this.#requeue(job, retry)
     } else await this.#wakeSite(job, turnNo)

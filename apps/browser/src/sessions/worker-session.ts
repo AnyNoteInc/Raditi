@@ -155,6 +155,8 @@ export interface SessionSpec {
   localSites: readonly { origin: string; target: string }[]
   /** Names of the platform (`BROWSER_PLATFORM_HOSTS`), closed in every session (К37). */
   platformHosts: readonly string[]
+  /** PAGES_BASE_DOMAIN: the agent's published pages open by address (Ст26); null — none. */
+  pageDomain: string | null
   /** The first page; null — an empty one, in a chat without a site. */
   startUrl: string | null
   /** Milliseconds since the epoch: the session ends there whatever happens in it. */
@@ -357,6 +359,7 @@ export class WorkerSession {
         localSites: spec.localOrigins,
         openWeb: spec.openWeb,
         platformHosts: spec.platformHosts,
+        pageDomain: spec.pageDomain,
         startUrl: spec.startUrl,
         viewport: this.#viewport,
         policy: spec.policy,
@@ -920,12 +923,13 @@ export class WorkerSession {
 
   /** Whether an address opens in this session at all (К12, К37). */
   #opens(url: string): boolean {
-    const { openWeb, allowedHosts, localOrigins, platformHosts } = this.#spec
+    const { openWeb, allowedHosts, localOrigins, platformHosts, pageDomain } = this.#spec
     return browserAddressOpens(url, {
       openWeb,
       allowedHosts,
       localSites: localOrigins,
       platformHosts,
+      pageDomain,
     })
   }
 

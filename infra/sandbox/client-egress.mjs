@@ -56,6 +56,14 @@ import { clearTimeout, setTimeout } from 'node:timers'
 // that host, the tunnel goes to an address of that host only, and the name a real ECH could hide
 // reaches no more than a Host header inside TLS already does. Everywhere else ECH is refused. The
 // draft ESNI, which names nothing, is always refused.
+//
+// The agent's published pages (PAGE_DOMAIN, docs/plan/69-pages.md, Ст26) live on the platform's own
+// machine, whose address REFUSED_SUBNETS closes. A CONNECT to a page host — one label of 26 base32
+// letters right under PAGE_DOMAIN, port 443 — may reach an address of PAGE_ADDRESSES although
+// REFUSED_SUBNETS holds it: every address it resolves to is public unicast, of none of this
+// container's own subnets, and either outside REFUSED_SUBNETS or listed; TLS named so. Nothing
+// else of REFUSED_SUBNETS opens to it, and nothing at all to any other name. The edge there
+// answers that name with the page alone.
 
 export const clientEgressLimits = Object.freeze({
   /** `host:port` of one proxy (a preview's take up to 256, PreviewRuntimeSpec.egress). */
@@ -283,6 +291,50 @@ export function parseLocalRoutes(json) {
   return map
 }
 
+const PAGE_PORT = 443
+const PAGE_LABEL = /^[a-z2-7]{26}$/
+
+/** PAGE_DOMAIN: a lower-case DNS name of two labels or more; unset or empty — no page passes. */
+export function parsePageDomain(text) {
+  if (text === undefined || text === '') return null
+  if (
+    !/^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(
+      text,
+    )
+  )
+    throw new Error('PAGE_DOMAIN must be a lower-case DNS name')
+  // Never an IP literal: the last label names a zone, with a letter in it.
+  if (!/[a-z]/.test(text.slice(text.lastIndexOf('.') + 1)))
+    throw new Error('PAGE_DOMAIN must be a lower-case DNS name')
+  return text
+}
+
+/** PAGE_ADDRESSES: IP literals of the machine of the pages, comma-separated, at most 8; needs PAGE_DOMAIN. */
+export function parsePageAddresses(text, pageDomain) {
+  const addresses = (text ?? '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+  if (addresses.length > 8 || addresses.some((address) => isIP(address) === 0))
+    throw new Error('PAGE_ADDRESSES must be at most 8 IP addresses')
+  if (addresses.length > 0 && pageDomain === null)
+    throw new Error('PAGE_ADDRESSES needs PAGE_DOMAIN')
+  return addresses
+}
+
+/** Whether a parsed `host:port` is a page host of `pageDomain` on 443 (Ст26). */
+export function pageTargetOf(pageDomain) {
+  return (target) => {
+    if (pageDomain === null || target === null || target.port !== PAGE_PORT) return false
+    const dot = target.host.indexOf('.')
+    return (
+      dot > 0 &&
+      target.host.slice(dot + 1) === pageDomain &&
+      PAGE_LABEL.test(target.host.slice(0, dot))
+    )
+  }
+}
+
 /** REFUSED_SUBNETS: the platform's own subnets, comma-separated CIDR; empty — none. */
 export function parseSubnets(text) {
   const subnets = []
@@ -444,11 +496,16 @@ const logJson = (entry) => console.log(JSON.stringify(entry))
  * `anyPublic` — the open internet of the agent (ALLOW_PUBLIC, see the head of this file);
  * `publicHttp` — its plain HTTP too (off with PUBLIC_TLS_ONLY).
  * `echOuterName` — an ECH ClientHello whose outer name is the listed host passes (ECH_OUTER_NAME;
- * always so with `anyPublic`). `lookup` and `dial` are replaced only by tests.
+ * always so with `anyPublic`). `pageDomain` — the agent's pages: their addresses of `pageAddresses`
+ * pass `refused`, checked against `pageRefused` alone (this container's subnets; PAGE_DOMAIN,
+ * PAGE_ADDRESSES). `lookup` and `dial` are replaced only by tests.
  */
 export function createClientEgressProxy({
   allow,
   refused = [],
+  pageDomain = null,
+  pageRefused = [],
+  pageAddresses = [],
   clientIp = null,
   localRoutes = new Map(),
   anyPublic = false,
@@ -464,6 +521,10 @@ export function createClientEgressProxy({
   log = logJson,
 }) {
   const allowed = addressCheck(refused)
+  const pageListed = new Set(pageAddresses)
+  const pageOwn = addressCheck(pageRefused)
+  const pageAllowed = (address) => allowed(address) || (pageListed.has(address) && pageOwn(address))
+  const pageTarget = pageTargetOf(pageDomain)
   let tunnels = 0
 
   const refuse = (socket, status, reason, result) => {
@@ -807,7 +868,8 @@ export function createClientEgressProxy({
       return fail(502, 'Bad Gateway', 'resolve')
     // Any address that is not public refuses the name: a resolver that answers with a public and
     // a private one at once must not get the choice.
-    if (!addresses.every((address) => allowed(address)))
+    const check = pageTarget(parsed) ? pageAllowed : allowed
+    if (!addresses.every((address) => check(address)))
       return fail(403, 'Forbidden', 'forbidden_address')
     // IPv4 first: the containers of the platform have no IPv6 route.
     const candidates = [
@@ -953,6 +1015,9 @@ export function clientEgressConfig(env) {
         ? new Set()
         : parseAllowedHosts(env.ALLOWED_HOSTS, { empty: anyPublic || localRoutes.size > 0 }),
     refused: [...parseSubnets(env.REFUSED_SUBNETS), ...interfaceSubnets()],
+    pageDomain: parsePageDomain(env.PAGE_DOMAIN),
+    pageAddresses: parsePageAddresses(env.PAGE_ADDRESSES, parsePageDomain(env.PAGE_DOMAIN)),
+    pageRefused: interfaceSubnets(),
     clientIp,
     maxTunnels: maxTunnelsOf(env.MAX_TUNNELS),
     localRoutes,
@@ -974,6 +1039,9 @@ export function listenClientEgress(config, options = {}) {
   const server = createClientEgressProxy({
     allow: config.allow,
     refused: config.refused,
+    pageDomain: config.pageDomain ?? null,
+    pageRefused: config.pageRefused ?? [],
+    pageAddresses: config.pageAddresses ?? [],
     clientIp: config.clientIp,
     maxTunnels: config.maxTunnels ?? clientEgressLimits.tunnels,
     localRoutes: config.localRoutes ?? new Map(),

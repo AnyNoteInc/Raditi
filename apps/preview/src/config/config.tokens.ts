@@ -44,6 +44,31 @@ export interface PreviewGatewayConfig {
    * own listener; null — BROWSER_WORKER_URL and BROWSER_WORKER_TOKEN are unset: no listener.
    */
   browserStream: BrowserStreamConfig | null
+  /**
+   * The server of published pages (docs/plan/69-pages.md, Ст4) on its own listener; null —
+   * PAGES_BASE_DOMAIN is unset: no listener.
+   */
+  pages: PagesListenerConfig | null
+}
+
+/** What the server of the pages reads (docs/plan/69-pages.md, Ст4, Ст13, Ст28). */
+export interface PagesServerConfig {
+  /** PAGES_BASE_DOMAIN. */
+  baseDomain: string
+  /** The port a page host carries in `Host` outside production (dev, stands); never in production. */
+  publicPort?: number
+  /** PAGES_COOKIE_SECRET: signs the cookie of a right password. */
+  cookieSecret: string
+  /** PAGES_ABUSE_EMAIL: the address the stubs name for complaints (Ст28); null — none named. */
+  abuseEmail: string | null
+}
+
+/** The listener of the pages and what the server reads. Holds the cookie secret: never log it. */
+export interface PagesListenerConfig extends PagesServerConfig {
+  /** PAGES_PORT. */
+  port: number
+  /** PAGES_HOST, like PREVIEW_GATEWAY_HOST: loopback outside production unless set. */
+  host: string | undefined
 }
 
 /** The stream gateway's listener and the worker it relays to. Holds the worker's token. */

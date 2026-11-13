@@ -109,6 +109,29 @@ describe('browser session containers', () => {
       ]),
     )
     expect(egress.Labels).toMatchObject({ 'io.raditi.browser.site': place.identity.taskId })
+    expect(egress.Env?.some((line) => line.startsWith('PAGE_DOMAIN='))).toBe(false)
+  })
+
+  it('tells the proxy the domain of the agent’s pages, which pass the platform’s subnets (plan 69, Ст26)', () => {
+    const egress = egressContainer({
+      place,
+      appEnv: 'production',
+      image: image('egress'),
+      limits: browserSessionDefaultLimits.service,
+      allowedHosts: [],
+      localRoutes: {},
+      refusedSubnets: ['45.8.250.117/32'],
+      pageDomain: 'pages.raditi.ru',
+      pageAddresses: ['45.8.250.117'],
+      maxTunnels: 48,
+    })
+    expect(egress.Env).toEqual(
+      expect.arrayContaining([
+        'REFUSED_SUBNETS=45.8.250.117/32',
+        'PAGE_DOMAIN=pages.raditi.ru',
+        'PAGE_ADDRESSES=45.8.250.117',
+      ]),
+    )
   })
 
   it('names local sites only with their guard, and the host as host-gateway names it', () => {

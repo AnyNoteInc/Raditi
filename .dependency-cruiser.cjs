@@ -381,10 +381,13 @@ module.exports = {
     {
       name: 'mcp-profiles-apart',
       comment:
-        'The content and the browser tools of the mcp app are two profiles, the web tools of a browser task the module of the browser worker (docs/plan/57-browser-tasks.md, Б20) and the web search its own family (spec §20, «Веб-поиск агента»), each its own module: no folder of them imports another (plan 56, §4.3).',
+        'The content and the browser tools of the mcp app are two profiles, the web tools of a browser task the module of the browser worker (docs/plan/57-browser-tasks.md, Б20) the web search its own family (spec §20, «Веб-поиск агента») and the pages of the workspace theirs (docs/plan/69-pages.md, Ст20), each its own module: no folder of them imports another (plan 56, §4.3).',
       severity: 'error',
-      from: { path: '^apps/mcp/src/(content|browser|web|search)/', pathNot: '\\.test\\.ts$' },
-      to: { path: '^apps/mcp/src/(content|browser|web|search)/', pathNot: '^apps/mcp/src/$1/' },
+      from: { path: '^apps/mcp/src/(content|browser|web|search|pages)/', pathNot: '\\.test\\.ts$' },
+      to: {
+        path: '^apps/mcp/src/(content|browser|web|search|pages)/',
+        pathNot: '^apps/mcp/src/$1/',
+      },
     },
     {
       name: 'mcp-base-no-profiles',
@@ -396,9 +399,9 @@ module.exports = {
         pathNot: '\\.test\\.ts$',
       },
       to: {
-        path: '^apps/mcp/src/(content|browser|web|search)/',
+        path: '^apps/mcp/src/(content|browser|web|search|pages)/',
         pathNot:
-          '^apps/mcp/src/(content/content-arguments|browser/browser-arguments|search/search-arguments)\\.ts$',
+          '^apps/mcp/src/(content/content-arguments|browser/browser-arguments|search/search-arguments|pages/pages-arguments)\\.ts$',
       },
     },
     {
@@ -409,7 +412,7 @@ module.exports = {
       from: {
         path: [
           '^apps/mcp/src/common/',
-          '^apps/mcp/src/(content/content-arguments|browser/browser-arguments|search/search-arguments)\\.ts$',
+          '^apps/mcp/src/(content/content-arguments|browser/browser-arguments|search/search-arguments|pages/pages-arguments)\\.ts$',
         ],
         pathNot: '\\.test\\.ts$',
       },
@@ -454,6 +457,22 @@ module.exports = {
         'A request through the preview gateway (its server, the access checks, the cookie) is served from the database alone: domain, db, the address helpers and the Prisma token of service-runtime (its subpath ./tokens), not even transitively — no runtime, observability or app-bootstrap.',
       severity: 'error',
       from: { path: '^apps/preview/src/(gateway|access|cookie)/', pathNot: '\\.test\\.ts$' },
+      to: {
+        path: '^packages/',
+        pathNot: [
+          '^packages/(domain|db|ip-address)/',
+          '^packages/service-runtime/src/tokens\\.ts$',
+          TOOLING,
+        ],
+        reachable: true,
+      },
+    },
+    {
+      name: 'pages-request-path',
+      comment:
+        'A published page (docs/plan/69-pages.md, Ст4) is served to anyone from the database alone: the page server of the preview app reaches domain, db, the address helpers and the Prisma token of service-runtime (its subpath ./tokens), not even transitively — no storage, runtime, observability or app-bootstrap.',
+      severity: 'error',
+      from: { path: '^apps/preview/src/pages/', pathNot: '\\.test\\.ts$' },
       to: {
         path: '^packages/',
         pathNot: [

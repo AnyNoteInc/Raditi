@@ -6,7 +6,17 @@ import {
   ListToolsRequestSchema,
   PingRequestSchema,
 } from '@modelcontextprotocol/core'
-import { browserToolArgumentSchemas, browserToolNames, requirementsOf } from '@repo/domain'
+import {
+  browserToolArgumentSchemas,
+  browserToolNames,
+  docCreateArgumentsSchema,
+  docFinishArgumentsSchema,
+  docReadArgumentsSchema,
+  docSectionMoveArgumentsSchema,
+  docSectionRemoveArgumentsSchema,
+  docSectionWriteArgumentsSchema,
+  requirementsOf,
+} from '@repo/domain'
 import { z } from 'zod'
 
 import {
@@ -24,6 +34,10 @@ import {
   restoreArgumentsSchema,
   wpRestArgumentsSchema,
 } from '../content/content-arguments.ts'
+import {
+  pageListArgumentsSchema,
+  pagePublishToolArgumentsSchema,
+} from '../pages/pages-arguments.ts'
 import { webSearchArgumentsSchema } from '../search/search-arguments.ts'
 import { closedPreviewStatuses, type McpTurnAccess } from './mcp-access.ts'
 
@@ -85,6 +99,18 @@ const webCall = z
       browserToolArgumentSchemas[request.name].safeParse(request.arguments ?? {}).success,
   )
 const searchCall = call('search_web', webSearchArgumentsSchema)
+const docsCall = z.discriminatedUnion('name', [
+  call('doc_create', docCreateArgumentsSchema),
+  call('doc_section_write', docSectionWriteArgumentsSchema),
+  call('doc_section_remove', docSectionRemoveArgumentsSchema),
+  call('doc_section_move', docSectionMoveArgumentsSchema),
+  call('doc_read', docReadArgumentsSchema),
+  call('doc_finish', docFinishArgumentsSchema),
+])
+const pagesCall = z.discriminatedUnion('name', [
+  call('page_publish', pagePublishToolArgumentsSchema),
+  call('page_list', pageListArgumentsSchema.optional()),
+])
 const envelope = z.strictObject({
   jsonrpc: z.literal('2.0'),
   id: rpcId.optional(),
@@ -130,6 +156,13 @@ export interface McpSecurity {
    * like the worker's. The guard drops it while the key of the search is not in Vault.
    */
   searchTools?: boolean
+  /**
+   * The pages of a workspace (docs/plan/69-pages.md, Ст20): every turn, with a site or without,
+   * where the pages are configured (PAGES_BASE_DOMAIN).
+   */
+  pagesTools?: boolean
+  /** The documents of a workspace (docs/plan/69-pages.md, Ст21): every turn, every composition. */
+  docsTools?: boolean
 }
 
 /** The security of the role's MCP endpoint, as the profiles of its configuration make it. */
@@ -142,6 +175,8 @@ export function mcpSecurityOf(config: McpConfig): McpSecurity {
     ...(browser ? { browserTools: true } : {}),
     ...(worker ? { webTools: true } : {}),
     searchTools: true,
+    docsTools: true,
+    ...(config.pages ? { pagesTools: true } : {}),
   }
 }
 
@@ -154,9 +189,19 @@ export function mcpSecurityOf(config: McpConfig): McpSecurity {
  * while its preview is still being built. Each call checks the kinds of the preview as built
  * then (`DB_OPERATION_NOT_ALLOWED`). `web` — the cloud browser of a task on the site itself
  * (docs/plan/57-browser-tasks.md, Б20); `browser` is the preview's. `search` — the web search of
- * any turn, with a site or without, while its key is in Vault.
+ * any turn, with a site or without, while its key is in Vault. `pages` — the pages and documents of
+ * the workspace, any turn, while the pages are configured (docs/plan/69-pages.md, Ст20); `docs` — its
+ * documents, any turn (Ст21).
  */
-export const mcpToolFamilies = ['content', 'browser', 'schema', 'web', 'search'] as const
+export const mcpToolFamilies = [
+  'content',
+  'browser',
+  'schema',
+  'web',
+  'search',
+  'docs',
+  'pages',
+] as const
 export type McpToolFamily = (typeof mcpToolFamilies)[number]
 
 /** A preview that is gone for the dialog, or never was there to work on (Р4, Р16). */
@@ -198,6 +243,8 @@ export function mcpToolFamiliesOf(access: McpTurnAccess, security: McpSecurity):
   if (security.browserTools && open) families.push('browser')
   if (security.webTools && requirements.browser) families.push('web')
   if (security.searchTools) families.push('search')
+  if (security.docsTools) families.push('docs')
+  if (security.pagesTools) families.push('pages')
   return families
 }
 
@@ -255,7 +302,9 @@ export function mcpBodyAllowed(body: unknown, families: readonly McpToolFamily[]
       (families.includes('schema') && schemaCall.safeParse(request.params).success) ||
       (families.includes('browser') && browserCall.safeParse(request.params).success) ||
       (families.includes('web') && webCall.safeParse(request.params).success) ||
-      (families.includes('search') && searchCall.safeParse(request.params).success)
+      (families.includes('search') && searchCall.safeParse(request.params).success) ||
+      (families.includes('docs') && docsCall.safeParse(request.params).success) ||
+      (families.includes('pages') && pagesCall.safeParse(request.params).success)
     )
   return true
 }

@@ -50,6 +50,7 @@ import type {
 } from '../sessions/snapshot.service.ts'
 import { holdForRecovery, type LeaseGuard } from './lease-guard.ts'
 import { maskTurnEvents } from './turn-events-mask.ts'
+import { textRefusal } from './text-refusal.ts'
 import { readTurnResult } from './turn-result.ts'
 
 export interface TurnSnapshotStore {
@@ -90,6 +91,14 @@ export interface CompletedTurn {
    * or the check dropped them. Never a part of the snapshot.
    */
   outbox?: Uint8Array
+  /**
+   * Whether a text holds a key of this turn or a value of the client's variables (docs/plan/69-
+   * pages.md, Ст19): the end of the turn checks the sections of documents by it. A closure over
+   * what the attempt holds in memory — the values its commands got and those the site holds now,
+   * as the candidate is checked — : the values never leave it. null — Vault did not answer: the
+   * sections wait unchecked for the next end of a turn.
+   */
+  refusesText: ((text: string) => 'turn_key' | 'client_value' | null) | null
 }
 
 /**
@@ -485,7 +494,11 @@ export class TurnAttempt {
     if (!(await this.deps.leases.release(lease)))
       throw leaseLost('Lease was lost before turn completion')
     this.#completed = true
-    return { result, manifest, ...(outbox ? { outbox } : {}) }
+    const refusesText = await this.#refusedValues().then(
+      (values) => textRefusal(this.credentials, values),
+      () => null,
+    )
+    return { result, manifest, refusesText, ...(outbox ? { outbox } : {}) }
   }
 
   /**

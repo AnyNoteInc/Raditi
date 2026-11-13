@@ -4,6 +4,8 @@ const paths = {
   projects:
     'M3 7h6l2 2h10v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Zm0 0V5a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v2',
   profile: 'M20 21v-2a6 6 0 0 0-6-6h-4a6 6 0 0 0-6 6v2M16 5a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z',
+  /** «Страницы»: a sheet with its lines (docs/plan/69-pages.md, Ст30). */
+  pages: 'M6 3h8l4 4v14H6V3ZM14 3v4h4M9 12h6M9 16h6',
   settings: 'M4 7h16M4 17h16M8 4v6M16 14v6',
   plans: 'M3 11V4a1 1 0 0 1 1-1h7l10 10-8 8L3 11ZM7.5 7.5h.01',
   payment: 'M5 5h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2ZM3 10h18M7 15h3',

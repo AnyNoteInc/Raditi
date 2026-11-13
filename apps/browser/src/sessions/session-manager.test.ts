@@ -246,6 +246,7 @@ describe('SessionManager.ensure', () => {
         extraHosts: [],
         localSites: [],
         platformHosts: [],
+        pageDomain: null,
         stream: { maxFps: 12, quality: 70 },
       },
     })

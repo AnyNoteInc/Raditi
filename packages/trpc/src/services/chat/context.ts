@@ -4,6 +4,7 @@ import {
   DomainError,
   type AppEnv,
   type ObjectStorage,
+  type PagesAddress,
   type PreviewAddress,
   type SecretStore,
   type SiteStack,
@@ -34,6 +35,11 @@ export interface ChatContext {
    * adapter, the app that builds this context does. Absent — every stack is taken for one.
    */
   browserSupported?: (stack: SiteStack) => boolean
+  /**
+   * Where published pages answer (docs/plan/69-pages.md, Ст3): the cabinet names their address.
+   * Absent or null — no pages here: the section «Страницы» says so.
+   */
+  pages?: PagesAddress | null
   /** The HMAC key of release confirmations: `releaseConfirmKey(BETTER_AUTH_SECRET)`. */
   releaseConfirmKey: Uint8Array
   /** `raditi-artifacts`: the diff of a candidate (`candidate.fileDiff`). */

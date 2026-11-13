@@ -42,6 +42,8 @@ export interface SessionManagerSettings extends SessionSettings {
   localSites: readonly BrowserLocalSite[]
   /** BROWSER_PLATFORM_HOSTS: names of the platform no page of any session reaches (К37). */
   platformHosts: readonly string[]
+  /** PAGES_BASE_DOMAIN: the agent's published pages open in every session (Ст26). */
+  pageDomain: string | null
 }
 
 /** Defaults of the timings a session needs besides the configuration. */
@@ -215,6 +217,7 @@ export class SessionManager {
         taskId: row.taskId,
         siteId: row.siteId,
         platformHosts: settings.platformHosts,
+        pageDomain: settings.pageDomain,
         deadline,
         checkpoints: await store.checkpoints(row.taskId),
         signIn: request.signIn,

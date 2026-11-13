@@ -14,6 +14,8 @@ import { UserMenu } from './user-menu'
 /** The sections of the cabinet, in the order of the rail (docs/plan/61-chats-first.md, К3). */
 const sections: readonly { href: string; label: string; icon: AppIconName }[] = [
   { href: '/chats', label: 'Чаты', icon: 'chat' },
+  // Between «Чаты» and «Проекты» (owner's answer of 13.11.2026, docs/plan/69-pages.md, Ст30).
+  { href: '/pages', label: 'Страницы', icon: 'pages' },
   { href: '/projects', label: 'Проекты', icon: 'projects' },
 ]
 
@@ -21,7 +23,7 @@ const within = (pathname: string, href: string) =>
   pathname === href || pathname.startsWith(`${href}/`)
 
 /**
- * The rail of the cabinet: the mark, «Чаты» and «Проекты», the credits over the account menu. Its
+ * The rail of the cabinet: the mark, «Чаты», «Страницы» and «Проекты», the credits over the account menu. Its
  * width is `--app-rail-width` of the shell, which stands it in. The current section follows the
  * address.
  */

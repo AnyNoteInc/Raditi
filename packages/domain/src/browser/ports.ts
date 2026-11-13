@@ -116,6 +116,8 @@ export interface CloudBrowserConnection {
   openWeb: boolean
   /** `BROWSER_PLATFORM_HOSTS`: names no page of any session reaches (К37). */
   platformHosts: readonly string[]
+  /** `PAGES_BASE_DOMAIN`: the agent's published pages under it open (docs/plan/69-pages.md, Ст26). */
+  pageDomain: string | null
   /** The first page: the site's origin and the stack's `startPath`; null — an empty page. */
   startUrl: string | null
   viewport: BrowserViewport

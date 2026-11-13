@@ -328,7 +328,7 @@ describe('browserTaskInstructions (docs/plan/57-browser-tasks.md, Б20–Б24)',
   // the remaining WordPress-specific restrictions.
   const withoutSearch = (text: string) =>
     text
-      .replace(/\n## Files for the client\n[\s\S]*?by their names\.\n/, '')
+      .replace(/\n## Files for the client\n[\s\S]*?in the cabinet\.\n/, '')
       .replace(/^- Files for the client go to .*\n/m, '')
       .replace(/^- When `raditi_search_web`.*\n/m, '')
       .replace(/^ {2}While it is null the preview's first build .*\n.*cannot be done\.\n/m, '')
@@ -481,6 +481,27 @@ describe('openTaskInstructions (docs/plan/61-chats-first.md, §5.7)', () => {
     )
     expect(text).toContain('context7 for the current documentation of a library or framework;')
     expect(text).not.toContain('the site is made with')
+  })
+})
+
+describe('documents and pages (docs/plan/69-pages.md, Ст18, Ст20, Ст21)', () => {
+  it('tells every kind of turn the eight steps of a document and when a page is published', () => {
+    for (const text of [
+      turnInstructions({ state: 'absent' }),
+      browserTaskInstructions('GUIDE\n'),
+      openTaskInstructions({ skills: [] }, { browser: false, inbox: null }),
+    ]) {
+      expect(text).toContain('## Long documents')
+      for (const step of [
+        '1. `raditi_doc_create` first',
+        '6. Read it whole with `raditi_doc_read`',
+        '8. Later changes',
+      ])
+        expect(text).toContain(step)
+      expect(text).toContain('When `raditi_page_publish` is among your tools')
+      expect(text).toContain('close the page\n  with a password in the cabinet')
+      expect(text).not.toMatch(/`doc_[a-z_]+`/)
+    }
   })
 })
 

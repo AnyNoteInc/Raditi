@@ -83,6 +83,7 @@ export function chatServices(): ChatContext | null {
           : { address: web.preview, ttlHours: previewTtlHours(process.env) },
       browser: web.browserStreamUrl === null ? null : { streamUrl: web.browserStreamUrl },
       browserSupported,
+      pages: web.pages,
       releaseConfirmKey: releaseConfirmKey(env.auth().secret),
       storage: () => (storage ??= createS3ObjectStorage(env.storage())),
       secrets: () => (secrets ??= writerOf(createVaultSecretStore(env.vault()))),
