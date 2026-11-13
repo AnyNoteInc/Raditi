@@ -84,6 +84,10 @@ services:
     environment:
       <<: [*s3, *gitea-url, *preview-address]
       SINGLE_SERVER: 'on'
+      # Eight turns of a workspace at once, and no other bound of this core on the platform's
+      # (owner's request of 13.11.2026, plan 70, ВР13, ВР17); the runner's places bound it too
+      WORKSPACE_TURN_LIMIT: '8'
+      AGENT_TURN_CAPACITY: '64'
       PREVIEW_EXECUTOR: local
       PREVIEW_RUNTIME: runsc
       SANDBOX_DOCKER_SOCKET: /var/run/docker.sock
@@ -287,6 +291,8 @@ services:
       BROWSER_WORKER_HOST: 10.10.0.10
       BROWSER_WORKER_PORT: '8086'
       BROWSER_RUNTIME: runsc
+      # A browser for each turn that runs (plan 70, ВР20): as many as the turns of the platform
+      BROWSER_MAX_SESSIONS: '64'
       BROWSER_DOCKER_SOCKET: /var/run/docker.sock
       BROWSER_IMAGE: ${BROWSER_IMAGE:?Set the digest-pinned browser session image}
       BROWSER_FORWARDER_IMAGE: ${BROWSER_FORWARDER_IMAGE:?Set the digest-pinned forwarder image}
@@ -472,7 +478,9 @@ services:
       RUNNER_TOKEN_FILE: /etc/raditi/runner-token
       RUNNER_S3_ORIGIN: https://s3.raditi.internal:8333/raditi-sessions
       RUNNER_S3_CA_FILE: /etc/raditi/ca.pem
-      RUNNER_MAX_TURNS: '1'
+      # As many turns at once as the protocol carries: the only limit of a client is its eight
+      # (owner's request of 13.11.2026, docs/plan/70-turn-without-time-limit.md, ВР18)
+      RUNNER_MAX_TURNS: '64'
       SANDBOX_RUNTIME: runsc
       SANDBOX_DOCKER_SOCKET: /var/run/docker.sock
       SANDBOX_GATEWAY_IMAGE: ${SANDBOX_GATEWAY_IMAGE:?Set the digest-pinned sandbox gateway image}
