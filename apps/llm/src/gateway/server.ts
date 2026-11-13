@@ -38,8 +38,11 @@ import {
 } from '../egress/egress.ts'
 
 const limits = Object.freeze({
-  requests: 64,
-  requestsPerSource: 16,
+  // Requests of the whole role, and of one runner: a guard of the process, not a limit of turns —
+  // a runner may hold every turn of the platform (owner's request of 13.11.2026, docs/plan/70-
+  // turn-without-time-limit.md, ВР26). An account's own slots still bound its calls to Z.ai.
+  requests: 4096,
+  requestsPerSource: 4096,
   requestMs: 600_000,
   stallMs: 60_000,
   // A provider or channel silent this long has stalled. The pinned CLI gives a silent stream

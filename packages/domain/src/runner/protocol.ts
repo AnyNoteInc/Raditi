@@ -124,10 +124,15 @@ export const runnerLimits = Object.freeze({
   /** A JSON request body: an output batch plus its envelope. */
   bodyBytes: 1024 * 1024 + 64 * 1024,
   commands: 64,
-  capacity: 64,
+  /**
+   * The turns one runner may hold: not a limit of turns but of the protocol's lists (owner's
+   * request of 13.11.2026, docs/plan/70-turn-without-time-limit.md, ВР26).
+   */
+  capacity: 1024,
   /** Waiting assignments one claim offers the store, oldest first. */
   claimIds: 256,
-  inventory: 256,
+  /** A container per turn the runner holds. */
+  inventory: 1024,
   /** turnCredentials(): the LLM key, the MCP token and every secret file. */
   credentials: preparedRunLimits.secretFiles + 2,
   /** The values of the client's variables of one turn (plan 53, Р13): a site has up to 64. */

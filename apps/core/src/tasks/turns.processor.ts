@@ -12,6 +12,7 @@ import {
   candidateEditJobSchema,
   candidateRebaseJobSchema,
   candidateRewindJobSchema,
+  runnerLimits,
 } from '@repo/domain'
 import { throttledLogger } from '@repo/observability'
 import { UnrecoverableError, type Job } from 'bullmq'
@@ -23,13 +24,12 @@ import { CandidateRewind } from './candidate-rewind.ts'
 import { PassRunner } from './pass-runner.ts'
 
 /**
- * How many jobs of `agent-turns` one core works on at once. Not the number of turns: those are
- * bounded by TurnCapacity (AGENT_TURN_CAPACITY, at most 64) and a pass without a place gives its
- * worker up at once (docs/plan/70-turn-without-time-limit.md, ВР16, ВР17). So turns without a
- * time limit hold at most the capacity of these, and a cancel, an update or an edit always finds
- * one free.
+ * How many jobs of `agent-turns` one core works on at once: every turn a runner can hold
+ * (`runnerLimits.capacity`, TurnCapacity) and 32 more, so a cancel, an update or an edit always
+ * finds one free while every turn runs (docs/plan/70-turn-without-time-limit.md, ВР16, ВР26). A
+ * pass without a place gives its worker up at once.
  */
-export const AGENT_TURN_CONCURRENCY = 80
+export const AGENT_TURN_CONCURRENCY = runnerLimits.capacity + 32
 
 /**
  * The lock of a job. A pass has no time limit (docs/plan/70-turn-without-time-limit.md, ВР8):

@@ -7,6 +7,7 @@ import {
   isProduction,
   type AppEnv,
   type Env,
+  runnerLimits,
 } from '@repo/domain'
 import { isPrivateAddress } from '@repo/ip-address'
 import { sandboxConfigFromEnv, type SandboxConfig } from '@repo/sandbox-providers'
@@ -64,9 +65,11 @@ const ownEnvSchema = z.object({
   RUNNER_S3_ORIGIN: envVar(
     z.url({ protocol: /^https?$/, error: 'must be an http(s):// URL' }).optional(),
   ),
-  // As many turns as the VM holds at 2 vCPU and 4 GiB each (rule 5); core counts them as places
-  // of the platform (docs/plan/70-turn-without-time-limit.md, ВР18). At most the protocol's 64.
-  RUNNER_MAX_TURNS: envVar(z.coerce.number().int().min(1).max(64).default(1)),
+  // The turns this runner takes at once; core counts them as places of the platform
+  // (docs/plan/70-turn-without-time-limit.md, ВР18, ВР26). At most what the protocol carries.
+  RUNNER_MAX_TURNS: envVar(
+    z.coerce.number().int().min(1).max(runnerLimits.capacity).default(runnerLimits.capacity),
+  ),
 })
 
 /** Set by the OS, Docker or the Node image: never a platform setting. */

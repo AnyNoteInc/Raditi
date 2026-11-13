@@ -273,7 +273,7 @@ export class PostgresTurnAssignmentStore implements TurnAssignmentStore {
   }): Promise<TurnAssignment[]> {
     const ids = idsSchema.parse(input.ids)
     const { runnerId, runnerSession } = runnerSchema.parse(input)
-    const limit = z.number().int().nonnegative().max(64).parse(input.limit)
+    const limit = z.number().int().nonnegative().max(runnerLimits.capacity).parse(input.limit)
     if (ids.length === 0 || limit === 0) return []
     return assignments(
       await this.db.$queryRaw`

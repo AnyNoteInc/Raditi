@@ -44,7 +44,7 @@ describe('loadRunnerConfig', () => {
       caFile: null,
       s3Origin: null,
       s3CaFile: null,
-      maxTurns: 1,
+      maxTurns: 1024,
       sandbox: { runtime: 'runc', socketPath: '/var/run/docker.sock' },
     })
   })
@@ -104,7 +104,7 @@ describe('loadRunnerConfig', () => {
         line.startsWith('RUNNER_MAX_TURNS'),
       ),
     ).toEqual([])
-    expect(problemsOf({ APP_ENV: 'development', RUNNER_MAX_TURNS: '65' })[0]).toMatch(
+    expect(problemsOf({ APP_ENV: 'development', RUNNER_MAX_TURNS: '1025' })[0]).toMatch(
       /^RUNNER_MAX_TURNS:/,
     )
   })

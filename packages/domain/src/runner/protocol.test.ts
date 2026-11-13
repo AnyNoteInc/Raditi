@@ -663,8 +663,8 @@ describe('runner poll and answers', () => {
     }
     expect(runnerPollRequestSchema.safeParse(poll).success).toBe(true)
     expect(runnerPollRequestSchema.safeParse({ ...poll, runnerSession: 'r1' }).success).toBe(false)
-    expect(runnerPollRequestSchema.safeParse({ ...poll, capacity: 65 }).success).toBe(false)
-    expect(runnerLimits.capacity).toBe(64)
+    expect(runnerPollRequestSchema.safeParse({ ...poll, capacity: 1025 }).success).toBe(false)
+    expect(runnerLimits.capacity).toBe(1024)
     // What the runner can do beyond the first protocol (plan 70, ВР4); absent — nothing.
     expect(runnerPollRequestSchema.safeParse({ ...poll, features: ['extend'] }).success).toBe(true)
     expect(runnerPollRequestSchema.safeParse({ ...poll, features: ['other'] }).success).toBe(false)

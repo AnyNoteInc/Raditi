@@ -1540,15 +1540,13 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
     expect(store.admit).not.toHaveBeenCalled()
   })
 
-  it('limits a source to sixteen concurrent admitted requests', async () => {
+  it('admits the requests of every turn of one runner at once (plan 70, ВР26)', async () => {
+    // A runner may hold every turn of the platform: the role no longer caps one source at
+    // sixteen; an account's own slots bound its calls to the provider.
     const { gateway, store } = await setup((req) => req.resume())
-    const pending = Array.from({ length: 16 }, () => call(gateway).catch(() => undefined))
-    await vi.waitFor(() => expect(store.admit).toHaveBeenCalledTimes(16))
-    const busy = await call(gateway)
-    expect(busy.status).toBe(503)
-    // A request slot frees within seconds: a short retry suits this momentary local limit.
-    expect(busy.headers['retry-after']).toBe('1')
-    expect(store.admit).toHaveBeenCalledTimes(16)
+    const pending = Array.from({ length: 64 }, () => call(gateway).catch(() => undefined))
+    await vi.waitFor(() => expect(store.admit).toHaveBeenCalledTimes(64))
+    expect(gateway.stats().activeRequests).toBe(64)
     await gateway.close()
     await Promise.all(pending)
     expect(gateway.stats().activeRequests).toBe(0)

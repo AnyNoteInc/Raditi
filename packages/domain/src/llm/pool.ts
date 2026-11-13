@@ -192,21 +192,20 @@ function pickUnbound(input: ParsedInput, binding: 'initial' | 'rebind'): PoolDec
   const candidates: { account: PoolAccountSnapshot; headroom: number }[] = []
   const resets: number[] = []
   const probeAccountIds: string[] = []
-  let slotsBusy = false
+  // An account runs any number of turns at once (owner's request of 13.11.2026: «сними все
+  // ограничения по ходам, оставь только количество ходов на клиента — 8»; docs/plan/70-turn-
+  // without-time-limit.md, ВР26): `maxConcurrentTurns` is history, its windows and pauses stay.
   for (const account of input.accounts) {
     if (!eligible(account, input)) continue
     const state = readiness(account, input, binding === 'initial')
-    const freeSlot = account.activeTurns < account.maxConcurrentTurns
     if (state.retryAt !== null) resets.push(state.retryAt)
-    if (state.needsProbe && freeSlot) {
+    if (state.needsProbe) {
       probeAccountIds.push(account.id)
       if (state.retryAt === null) resets.push(input.now.getTime() + poolPolicy.unknownRetryMs)
     }
     // If no replacement is ready, waiting may still make the current binding usable again.
     if (account.id === input.boundAccountId) continue
-    if (state.ready && freeSlot) candidates.push({ account, headroom: state.headroom })
-    // The slot is the only known obstacle: unknown usage is probed once the slot is free.
-    else if (!freeSlot && state.retryAt === null) slotsBusy = true
+    if (state.ready) candidates.push({ account, headroom: state.headroom })
   }
   candidates.sort((left, right) => {
     const headroom = right.headroom - left.headroom
@@ -225,13 +224,6 @@ function pickUnbound(input: ParsedInput, binding: 'initial' | 'rebind'): PoolDec
       binding,
       rebinds: input.rebinds + (binding === 'rebind' ? 1 : 0),
     }
-  if (slotsBusy) {
-    // A slot frees without any window reset: never wait for another account's reset instead.
-    // A pending probe still goes first, or a free account with unknown usage would stay idle.
-    const retryAt = input.now.getTime() + poolPolicy.busyRetryMs
-    if (probeAccountIds.length === 0) return { kind: 'busy', retryAt: new Date(retryAt) }
-    resets.push(retryAt)
-  }
   return wait(
     input,
     'pool_empty',
@@ -272,8 +264,6 @@ export function pickAccount(snapshot: PickAccountInput): PoolDecision {
     return { kind: 'operator', reason: 'account_suspended' }
 
   if (eligible(bound, input)) {
-    if (bound.activeTurns >= bound.maxConcurrentTurns)
-      return { kind: 'busy', retryAt: new Date(input.now.getTime() + poolPolicy.busyRetryMs) }
     const state = readiness(bound, input, false)
     if (state.ready)
       return { kind: 'selected', accountId: bound.id, binding: 'keep', rebinds: input.rebinds }

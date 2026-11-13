@@ -38,7 +38,7 @@ export class CoreWarmSandboxes extends WarmSandboxes implements OnModuleDestroy 
     sandboxes: Pick<SandboxProvider, 'get'>,
     prisma: Pick<PrismaClient, 'task'>,
     warmMs: number,
-    /** As many waiting as core runs turns at once (AGENT_TURN_CAPACITY, plan 70, ВР17). */
+    /** At most this many wait (WARM_MAX_WAITING by default). */
     maxWaiting?: number,
   ) {
     super({

@@ -81,7 +81,7 @@ export const turnEngineProviders: Provider[] = [
       prisma: PrismaClient,
     ): CoreWarmSandboxes | null =>
       config.turnExecutor === 'local' && sandboxes && config.sandboxWarmMs > 0
-        ? new CoreWarmSandboxes(sandboxes, prisma, config.sandboxWarmMs, config.turnCapacity)
+        ? new CoreWarmSandboxes(sandboxes, prisma, config.sandboxWarmMs)
         : null,
     inject: [CORE_CONFIG, { token: SANDBOX_PROVIDER, optional: true }, PRISMA],
   },

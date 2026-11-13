@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest'
 
 import { TurnCapacity } from './turn-capacity.ts'
 
-describe('the places for turns of the platform (plan 70, ВР17)', () => {
-  it('gives out no more places than its limit, and each back once', () => {
-    const capacity = new TurnCapacity(2)
+describe('the places for turns of the platform (plan 70, ВР17, ВР26)', () => {
+  it('gives out no more places than the runners report, and each back once', () => {
+    let slots = 2
+    const capacity = new TurnCapacity({ slots: () => slots })
     const first = capacity.tryAcquire()!
     const second = capacity.tryAcquire()!
     expect(capacity.tryAcquire()).toBeNull()
@@ -13,29 +14,26 @@ describe('the places for turns of the platform (plan 70, ВР17)', () => {
     expect(capacity.held).toBe(1)
     expect(capacity.tryAcquire()).not.toBeNull()
     second()
+    // No runner polls: no place to run a container in.
+    slots = 0
+    expect(capacity.size).toBe(0)
   })
 
-  it('gives no more than the places the runners report, and none without a runner', () => {
-    let slots = 0
-    const capacity = new TurnCapacity(8, { slots: () => slots })
-    expect(capacity.tryAcquire()).toBeNull()
-    slots = 1
-    const one = capacity.tryAcquire()!
-    expect(capacity.tryAcquire()).toBeNull()
-    slots = 20
-    expect(capacity.size).toBe(8)
-    one()
+  it('has no limit of its own: without runners to count, any number of turns', () => {
+    const capacity = new TurnCapacity()
+    for (let turn = 0; turn < 1_000; turn++) expect(capacity.tryAcquire()).not.toBeNull()
+    expect(capacity.held).toBe(1_000)
   })
 
   it.each([
-    [16, 16],
+    [16, 13],
     [10, 10],
   ])(
-    'runs two clients of eight on %i places as %i turns, the second never behind the first',
+    'runs two clients on %i places as %i turns, the second never behind the first',
     (places, running) => {
       // The limit of a workspace keeps the ninth pass of a client from its claim; only passes
       // within it ask for a place, so one client never takes the places of another beyond eight.
-      const capacity = new TurnCapacity(places)
+      const capacity = new TurnCapacity({ slots: () => places })
       const workspaceLimit = 8
       const runningOf = new Map<string, number>([
         ['a', 0],
@@ -47,14 +45,9 @@ describe('the places for turns of the platform (plan 70, ВР17)', () => {
         if (!capacity.tryAcquire()) continue
         runningOf.set(client, runningOf.get(client)! + 1)
       }
-      expect(runningOf.get('a')! + runningOf.get('b')!).toBe(Math.min(running, 13))
-      expect(runningOf.get('a')).toBeLessThanOrEqual(workspaceLimit)
-      // With 10 places the first client takes its eight; the second still gets the other two.
+      expect(runningOf.get('a')! + runningOf.get('b')!).toBe(running)
+      expect(runningOf.get('a')).toBe(workspaceLimit)
       expect(runningOf.get('b')).toBe(Math.min(5, places - 8))
     },
   )
-
-  it('refuses a limit that is no number of places', () => {
-    expect(() => new TurnCapacity(0)).toThrow()
-  })
 })

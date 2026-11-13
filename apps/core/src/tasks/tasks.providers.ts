@@ -118,7 +118,7 @@ export const taskProviders: Provider[] = [
         }),
         // Docs/plan/70-turn-without-time-limit.md, ВР13 and ВР17.
         workspaceTurnLimit: config.workspaceTurnLimit,
-        capacity: new TurnCapacity(config.turnCapacity, executor),
+        capacity: new TurnCapacity(executor),
       }),
     inject: [
       PRISMA,

@@ -59,8 +59,7 @@ export interface TurnExecutor {
   forgetCredentialAddress?(assignmentId: string): void
   /**
    * How many turns it can run at once now, the running ones included: for runner VMs the places
-   * their runners report (docs/plan/70-turn-without-time-limit.md, ВР17). Absent — as many as
-   * core gives it (AGENT_TURN_CAPACITY).
+   * their runners report (docs/plan/70-turn-without-time-limit.md, ВР17). Absent — any number.
    */
   slots?(): number
   /**

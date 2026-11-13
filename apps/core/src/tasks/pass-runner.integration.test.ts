@@ -312,7 +312,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
 
   it('lets a pass wait for a place of the platform, and wakes it when a pass ends', async () => {
     // Plan 70, ВР17: the places of the platform are taken; the pass gives its worker up at once.
-    const capacity = new TurnCapacity(1)
+    const capacity = new TurnCapacity({ slots: () => 1 })
     const held = capacity.tryAcquire()!
     const dialog = await queued({ reserve: true, chat: true })
     const run = vi.fn<Run>()

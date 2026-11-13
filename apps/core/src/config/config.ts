@@ -105,11 +105,6 @@ export interface CoreConfig {
   /** WORKSPACE_TURN_LIMIT: the passes of one workspace that run at once (plan 70, ВР13). */
   workspaceTurnLimit: number
   /**
-   * AGENT_TURN_CAPACITY: the turns this core runs at once; with runner VMs no more than the places
-   * their runners report either (plan 70, ВР17). A pass beyond it waits for the agents.
-   */
-  turnCapacity: number
-  /**
    * With runner VMs: the runtime they run turns under (SANDBOX_RUNTIME, one set of variables
    * with the runners at MVP; only runsc in production). A runner refuses a turn spec of another
    * runtime. Absent with the local executor, whose `sandbox` names it.
@@ -335,9 +330,6 @@ const ownEnvSchema = z.object({
   // How many passes of one workspace run at once (owner's requests of 06.11 and 12.11.2026,
   // plan 70, ВР13): the next one waits for the agents.
   WORKSPACE_TURN_LIMIT: envVar(z.coerce.number().int().min(1).max(64).default(8)),
-  // How many turns this core runs at once on the whole platform (plan 70, ВР17); with runner VMs
-  // also no more than the places their runners report.
-  AGENT_TURN_CAPACITY: envVar(z.coerce.number().int().min(1).max(64).default(8)),
   // The deployment label of core's own turn containers with TURN_EXECUTOR=local: core lists and
   // collects only those, so two trees or a stand on one Docker daemon never remove each other's
   // turns. It is the provider's runner label, so it takes the form of a runner id.
@@ -418,7 +410,6 @@ export function loadConfig(env: Env): CoreConfig {
         'SANDBOX_EGRESS_REFUSED_SUBNETS',
         'SANDBOX_WARM_MINUTES',
         'WORKSPACE_TURN_LIMIT',
-        'AGENT_TURN_CAPACITY',
         'RELEASE_API_PORT',
         'RELEASE_API_HOST',
         'RELEASE_API_PUBLIC_URL',
@@ -742,7 +733,6 @@ export function loadConfig(env: Env): CoreConfig {
     turnExecutor,
     sandboxWarmMs: turnExecutor === 'local' ? own.SANDBOX_WARM_MINUTES * 60_000 : 0,
     workspaceTurnLimit: own.WORKSPACE_TURN_LIMIT,
-    turnCapacity: own.AGENT_TURN_CAPACITY,
     ...(runnerRuntime ? { runnerRuntime } : {}),
     runnerApi,
     git,
