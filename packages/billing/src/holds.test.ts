@@ -795,6 +795,34 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
   // gateway opens a window with the first call; here the window and the calls are written as it
   // leaves them, and the placement reads what they took at the private rate of 6 ₽.
   describe('the windows of the workspace', () => {
+    // Only the calls of a plan fill the windows: the provider of the model has plan rates
+    // (owner's answer of 13.11.2026 — a call of the API is bounded by credits alone).
+    const planRates: string[] = []
+    afterEach(async () => {
+      await db.llmPlanRate.deleteMany({ where: { id: { in: planRates.splice(0) } } })
+    })
+    const planModelPool = async () => {
+      const model = await modelPool()
+      const { providerId, providerModelId } = await db.llmModel.findUniqueOrThrow({
+        where: { id: model.pool.modelId },
+        select: { providerId: true, providerModelId: true },
+      })
+      const rate = await db.llmPlanRate.create({
+        data: {
+          providerId,
+          model: providerModelId ?? 'synthetic',
+          effectiveFrom: new Date('2026-01-01T00:00:00Z'),
+          inputUncachedPer10k: '6.9',
+          cacheReadPer10k: '1.7',
+          outputPer10k: '24',
+          offPeakShare: '0.5',
+          peak: { timeZone: 'UTC', days: [1, 2, 3, 4, 5, 6, 7], fromHour: 0, toHour: 24 },
+          sourceUrl: 'https://rates.invalid/plan',
+        },
+      })
+      planRates.push(rate.id)
+      return model
+    }
     const window = (workspaceId: string, kind: '5h' | 'week', startedAt: Date) =>
       db.workspaceUsageWindow.create({
         data: {
@@ -811,7 +839,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       })
       const started = minutesAfter(-3 * 24 * 60)
       await window(workspaceId, 'week', started)
-      const model = await modelPool()
+      const model = await planModelPool()
       const busy = await task(workspaceId)
       // 1 260 ₽ at 6 ₽ a credit: 210 credits two days ago, outside every window of 5 hours.
       await worked(model, busy, '1260', { occurredAt: minutesAfter(-2 * 24 * 60) })
@@ -837,7 +865,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       const { workspaceId } = await funded({ plan: { creditsPer5h: 20, creditsPerWeek: 55 } })
       await window(workspaceId, '5h', minutesAfter(-60))
       await window(workspaceId, 'week', minutesAfter(-60))
-      const model = await modelPool()
+      const model = await planModelPool()
       const busy = await task(workspaceId)
       await worked(model, busy, '60', { occurredAt: minutesAfter(-30) })
       expect(await place(workspaceId, await task(workspaceId))).toMatchObject({ applied: true })
@@ -850,7 +878,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     it('reads the limit of the tariff at once when it changes, inside the open window (scenario 6)', async () => {
       const { workspaceId } = await funded({ plan: { creditsPer5h: 20, creditsPerWeek: 55 } })
       await window(workspaceId, '5h', minutesAfter(-60))
-      const model = await modelPool()
+      const model = await planModelPool()
       const busy = await task(workspaceId)
       await worked(model, busy, '150', { occurredAt: minutesAfter(-30) })
       const taskId = await task(workspaceId)
@@ -865,10 +893,19 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       expect(await place(workspaceId, taskId)).toMatchObject({ applied: true })
     })
 
+    it('counts nothing of a call through the API paid by the token (owner, 13.11.2026)', async () => {
+      const { workspaceId } = await funded({ plan: { creditsPer5h: 20, creditsPerWeek: 55 } })
+      await window(workspaceId, '5h', minutesAfter(-60))
+      // A provider without plan rates: the API, bounded by the credits alone.
+      const model = await modelPool()
+      await worked(model, await task(workspaceId), '600', { occurredAt: minutesAfter(-30) })
+      expect(await place(workspaceId, await task(workspaceId))).toMatchObject({ applied: true })
+    })
+
     it('counts nothing the platform failed (Л7)', async () => {
       const { workspaceId } = await funded({ plan: { creditsPer5h: 20, creditsPerWeek: 55 } })
       await window(workspaceId, '5h', minutesAfter(-60))
-      const model = await modelPool()
+      const model = await planModelPool()
       const busy = await task(workspaceId)
       await fixtures.modelCall({
         taskId: busy,

@@ -71,7 +71,7 @@ export {
   taskAttachments,
   type ExpiredAttachment,
 } from './attachments.ts'
-export { classProfile, type ClassProfile } from './class-profile.ts'
+export { classProfile, classProfiles, type ClassProfile } from './class-profile.ts'
 export {
   BROWSER_CHECKS_EVENT,
   BROWSER_SCREENSHOT_EVENT,

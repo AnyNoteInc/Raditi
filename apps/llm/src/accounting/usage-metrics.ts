@@ -14,7 +14,6 @@ export class UsageMetrics {
   >()
   readonly #refusals = new Map<string, number>()
   #forecastErrors: number[] = []
-  #mismatches = 0
 
   /** The window of an account after a probe, in plan credits. */
   account(input: {
@@ -25,7 +24,9 @@ export class UsageMetrics {
     used: number
     limit: number
   }): void {
-    this.#windows.set(`${input.account}\u0000${input.window}`, input)
+    // A label of the operator is free text (an e-mail, perhaps): only a slug goes to a metric.
+    const account = /^[a-z0-9][a-z0-9-]{0,31}$/.test(input.account) ? input.account : 'other'
+    this.#windows.set(`${account}\u0000${input.window}`, input)
   }
 
   /**
@@ -51,11 +52,6 @@ export class UsageMetrics {
     if (this.#forecastErrors.length > 1_000) this.#forecastErrors = this.#forecastErrors.slice(-500)
   }
 
-  /** A probe named another size of a window than the plan of the account publishes. */
-  nominalMismatch(): void {
-    this.#mismatches += 1
-  }
-
   /** A call refused by a window of its workspace (point `call`). */
   windowRefusal(input: { tier: string; window: string }): void {
     const key = `${input.tier}\u0000${input.window}`
@@ -67,7 +63,6 @@ export class UsageMetrics {
     const remaining = () => this.#poolRemaining()
     const refusals = this.#refusals
     const errors = () => this.#forecastErrors
-    const mismatches = () => this.#mismatches
     new Gauge({
       name: 'raditi_llm_account_window_used_credits',
       help: 'Plan credits a window of a pool account has used, by its last probe',
@@ -98,7 +93,7 @@ export class UsageMetrics {
     })
     new Gauge({
       name: 'raditi_llm_pool_window_remaining_ratio',
-      help: 'Free share of a window over the eligible accounts of a backend',
+      help: 'Free share of a window over the probed accounts of a backend, paused ones included',
       labelNames: ['backend', 'window'],
       registers: [registry],
       collect() {
@@ -116,15 +111,6 @@ export class UsageMetrics {
       collect() {
         const values = errors()
         this.set(values.length === 0 ? 0 : values.reduce((a, b) => a + b, 0) / values.length)
-      },
-    })
-    new Counter({
-      name: 'raditi_llm_window_nominal_mismatch_total',
-      help: 'Probes that named another window size than the plan publishes',
-      registers: [registry],
-      collect() {
-        this.reset()
-        this.inc(mismatches())
       },
     })
     new Counter({

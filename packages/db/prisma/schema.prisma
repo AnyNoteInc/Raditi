@@ -1276,6 +1276,9 @@ model LlmKey {
   lastCallAt            DateTime? @map("last_call_at") @db.Timestamptz(6)
   lastRefusal           String?   @map("last_refusal") @db.VarChar(32)
   lastRefusalAt         DateTime? @map("last_refusal_at") @db.Timestamptz(6)
+  /// With `workspace_limit`: the window of the workspace that refused (`5h`, `week`) and its reset.
+  lastRefusalWindow     String?   @map("last_refusal_window") @db.VarChar(8)
+  lastRefusalResetsAt   DateTime? @map("last_refusal_resets_at") @db.Timestamptz(6)
 
   task                Task                @relation(fields: [taskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   driver              AgentDriver         @relation(fields: [driverId], references: [id], onDelete: Restrict, onUpdate: Restrict)

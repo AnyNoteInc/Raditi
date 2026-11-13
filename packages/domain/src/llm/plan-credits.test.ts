@@ -5,10 +5,8 @@ import {
   accountWindowForecast,
   forecastErrorRatio,
   isPlanPeak,
-  nominalWindowCredits,
   planCreditsOfCall,
   planRatesSchema,
-  planWindowCredits,
   type PlanRates,
 } from './plan-credits.ts'
 
@@ -85,15 +83,7 @@ describe('plan credits of a call', () => {
 })
 
 describe('windows in plan credits', () => {
-  it('knows the published sizes of Lite, Pro and Max', () => {
-    expect(planWindowCredits.lite).toEqual({ '5h': 2_000, week: 10_000 })
-    expect(planWindowCredits.pro).toEqual({ '5h': 12_000, week: 60_000 })
-    expect(planWindowCredits.max).toEqual({ '5h': 28_000, week: 140_000 })
-    expect(nominalWindowCredits('team', '5h')).toBeNull()
-    expect(nominalWindowCredits('max', 'month')).toBeNull()
-  })
-
-  it('believes the probe over the nominal size, and falls back to it', () => {
+  it('reads the size of a window from the probe only (owner, 13.11.2026)', () => {
     const probed = {
       name: '5h' as const,
       usedPct: 50,
@@ -101,12 +91,9 @@ describe('windows in plan credits', () => {
       limitCredits: 2_400,
       usedCredits: 1_200,
     }
-    expect(absoluteWindow(probed, 'lite')).toEqual({ limitCredits: 2_400, usedCredits: 1_200 })
-    expect(absoluteWindow({ name: '5h', usedPct: 50, resetsAt: null }, 'lite')).toEqual({
-      limitCredits: 2_000,
-      usedCredits: 1_000,
-    })
-    expect(absoluteWindow({ name: '5h', usedPct: 50, resetsAt: null }, 'unknown')).toBeNull()
+    expect(absoluteWindow(probed)).toEqual({ limitCredits: 2_400, usedCredits: 1_200 })
+    // A share alone is no size: the pool keeps percents.
+    expect(absoluteWindow({ name: '5h', usedPct: 50, resetsAt: null })).toBeNull()
   })
 
   it('forecasts between probes from the closed and the open calls', () => {

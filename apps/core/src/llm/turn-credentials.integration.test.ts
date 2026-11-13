@@ -1683,6 +1683,27 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     ).toMatchObject({ subscriptionAccountId: f.mainAccount.id, rebinds: 0 })
   })
 
+  // Owner's answer of 13.11.2026: the quota of the plan is out and the pass goes through the API;
+  // the binding to the account of the plan is kept for the passes that come back to it.
+  it('issues on its own backend without a binding to an account of another backend, and keeps it', async () => {
+    const f = await fixture()
+    const other = await fixture({ backend: 'zai-api' })
+    await db.taskAccountBinding.create({
+      data: {
+        taskId: f.task.id,
+        driverId: sampleDriverId,
+        subscriptionAccountId: other.mainAccount.id,
+      },
+    })
+    await f.credentials.issue(f.ref, f.grant)
+    expect(await db.llmKey.findFirstOrThrow({ where: { taskId: f.task.id } })).toMatchObject({
+      subscriptionAccountId: f.mainAccount.id,
+    })
+    expect(
+      await db.taskAccountBinding.findUniqueOrThrow({ where: { taskId: f.task.id } }),
+    ).toMatchObject({ subscriptionAccountId: other.mainAccount.id, rebinds: 0 })
+  })
+
   it('waits for a bound account that is cooling instead of moving the task, while a new task takes another account', async () => {
     const f = await fixture()
     await db.taskAccountBinding.create({

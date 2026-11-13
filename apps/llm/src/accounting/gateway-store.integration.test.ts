@@ -672,6 +672,43 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
       await admitted(first.input)
     })
 
+    it('keeps the window and the reset that refused on the key', async () => {
+      const f = await fixture({ budget: '500' })
+      const k = await f.key()
+      expect(await store.finish((await admitted(k.input)).id, heavy())).toBe(true)
+      expect(await store.admit(k.input)).toMatchObject({ reason: 'workspace_limit' })
+      const key = await db.llmKey.findUniqueOrThrow({ where: { id: k.row.id } })
+      expect(key.lastRefusalWindow).toBe('5h')
+      expect(key.lastRefusalResetsAt).toBeInstanceOf(Date)
+    })
+
+    it('bounds a call of an API paid by the token by credits alone (owner, 13.11.2026)', async () => {
+      const f = await fixture({ budget: '500' })
+      const k = await f.key()
+      expect(await store.finish((await admitted(k.input)).id, heavy())).toBe(true)
+      // The same spent window: a call of the plan is refused, a call of the API is not.
+      expect(await store.admit(k.input)).toMatchObject({ reason: 'workspace_limit' })
+      await admitted({ ...k.input, capacity: 'none' })
+    })
+
+    it('does not let a task that is not billable fill the window of the workspace (Л7)', async () => {
+      const f = await fixture({ budget: '500' })
+      const operator = await f.key()
+      const call = await admitted(operator.input)
+      expect(await store.finish(call.id, heavy())).toBe(true)
+      await db.task.update({ where: { id: f.task.id }, data: { billable: false } })
+      const paying = await db.task.create({
+        data: {
+          workspaceId: f.task.workspaceId,
+          siteId: f.task.siteId,
+          status: 'running',
+          modelClass: 'standard',
+        },
+      })
+      const k = await f.key({ taskId: paying.id })
+      await admitted(k.input)
+    })
+
     it('admits the last call below the limit and refuses one more: one call over at most (Л6)', async () => {
       const f = await fixture({ budget: '500' })
       const k = await f.key()

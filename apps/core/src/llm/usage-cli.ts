@@ -1,16 +1,20 @@
 import { readFileSync, statSync } from 'node:fs'
 
-import { createPrismaClient, dbConfigFromEnv, type PrismaClient } from '@repo/db'
+import {
+  createPrismaClient,
+  dbConfigFromEnv,
+  workspaceUsageTerms,
+  type PrismaClient,
+} from '@repo/db'
 import {
   absoluteWindow,
   appEnvSchema,
   isPlanPeak,
   planRatesSchema,
-  planWindowCredits,
+  noTariffWindowCredits,
   tierPoolReservePct,
   workspaceTiers,
   type Env,
-  type KnownAccountPlan,
   type PlanRates,
   type WorkspaceTier,
 } from '@repo/domain'
@@ -104,7 +108,7 @@ export function usageReport(facts: UsageFacts): UsageReport {
     const windows = (decodeLimitWindows(account.limitWindows) ?? [])
       .filter((window) => window.name !== 'month')
       .flatMap((window) => {
-        const absolute = absoluteWindow(window, account.plan)
+        const absolute = absoluteWindow(window)
         if (absolute === null || window.name === 'month') return []
         const forecast = absolute.usedCredits + account.sinceProbe
         if (account.enabled && account.health === 'ok') {
@@ -171,7 +175,11 @@ export function usageReport(facts: UsageFacts): UsageReport {
 const freePct = ({ used, limit }: { used: number; limit: number }) =>
   limit === 0 ? 0 : round(((limit - used) * 100) / limit)
 
-/** What to add for the promised weeks: the plan of the cheapest credit first (Max, Pro, Lite). */
+/**
+ * What the pool lacks for the promised weeks, in credits of the customer and in credits of the
+ * plan: the sizes of the plans are the provider's (owner's answer of 13.11.2026), not the code's,
+ * so the operator chooses what to add — the largest plan gives the cheapest credit.
+ */
 function adviceOf(input: {
   weeklyPowerCredits: number | null
   weeklyDemand: number
@@ -181,10 +189,8 @@ function adviceOf(input: {
     return 'Мощность пула ещё не измерена: нет вызовов со ставками плана за 7 дней.'
   const deficit = input.weeklyDemand - input.weeklyPowerCredits
   if (deficit <= 0) return 'Мощности пула хватает на недельные лимиты всех пространств.'
-  const plans: KnownAccountPlan[] = ['max', 'pro', 'lite']
-  const max = planWindowCredits.max.week / input.ratio
-  const accounts = Math.ceil(deficit / max)
-  return `Не хватает ${Math.ceil(deficit)} кредитов в неделю: добавьте ${accounts} × Max (по ${Math.floor(max)} кредитов клиента в неделю; дешевле всего кредит у ${plans.join(', затем ')}).`
+  const plan = Math.ceil(deficit * input.ratio)
+  return `Не хватает ${Math.ceil(deficit)} кредитов клиента в неделю — около ${plan} кредитов плана в неделю: добавьте аккаунт с такой недельной квотой (у старшего плана кредит дешевле).`
 }
 
 /** The report as an operator reads it in a terminal. */
@@ -236,9 +242,14 @@ async function readFacts(prisma: PrismaClient, now: Date): Promise<UsageFacts> {
       WHERE c.effective_from <= u.occurred_at ORDER BY c.effective_from DESC LIMIT 1) r
     WHERE u.occurred_at >= ${new Date(now.getTime() - 7 * 86_400_000)}
       AND u.plan_credits IS NOT NULL AND u.billable
+      AND EXISTS (SELECT 1 FROM tasks t WHERE t.id = u.task_id AND t.billable)
     GROUP BY 1 ORDER BY 1`
+  // The peak of the plans whose accounts are in the pool (one plan provider today).
   const rate = await prisma.llmPlanRate.findFirst({
-    where: { effectiveFrom: { lte: now } },
+    where: {
+      effectiveFrom: { lte: now },
+      provider: { subscriptionAccounts: { some: { status: { not: 'retired' } } } },
+    },
     orderBy: { effectiveFrom: 'desc' },
   })
   const peakRates =
@@ -251,57 +262,47 @@ async function readFacts(prisma: PrismaClient, now: Date): Promise<UsageFacts> {
           offPeakShare: rate.offPeakShare.toFixed(),
           peak: rate.peak,
         })
-  const demandRows = await prisma.$queryRaw<
-    {
-      slug: string | null
-      workspaces: number
-      weeklyLimits: number
-      spent7d: number
-      p95: number
-    }[]
-  >`
+  // The workspaces that worked in 30 days, each with the terms of its tier as a placement reads
+  // them (`workspaceUsageTerms`), its spend of 7 days and the largest of its windows of 5 hours.
+  const since7d = new Date(now.getTime() - 7 * 86_400_000)
+  const spaces = await prisma.$queryRaw<{ id: string; spent7d: number; p95: number }[]>`
     WITH spaces AS (
-      SELECT w.id, (SELECT p.slug FROM subscriptions s JOIN plans p ON p.id = s.plan_id
-          WHERE s.workspace_id = w.id AND s.status = 'active' LIMIT 1) AS slug,
-        (SELECT p.credits_per_week FROM subscriptions s JOIN plans p ON p.id = s.plan_id
-          WHERE s.workspace_id = w.id AND s.status = 'active' LIMIT 1) AS week
-      FROM workspaces w
+      SELECT w.id FROM workspaces w
       WHERE EXISTS (SELECT 1 FROM tasks t WHERE t.workspace_id = w.id
         AND t.created_at >= ${new Date(now.getTime() - 30 * 86_400_000)})
-    ), spent AS (
-      SELECT t.workspace_id, SUM(u.cost_rub / r.rub_per_credit) AS credits
-      FROM token_usage u JOIN tasks t ON t.id = u.task_id
+    ), plan_usage AS (
+      SELECT t.workspace_id, u.occurred_at, u.cost_rub / r.rub_per_credit AS credits
+      FROM token_usage u JOIN tasks t ON t.id = u.task_id AND t.billable
       CROSS JOIN LATERAL (SELECT c.rub_per_credit FROM credit_rates c
         WHERE c.effective_from <= u.occurred_at ORDER BY c.effective_from DESC LIMIT 1) r
-      WHERE u.billable AND u.occurred_at >= ${new Date(now.getTime() - 7 * 86_400_000)}
-      GROUP BY t.workspace_id
+      WHERE u.billable AND u.occurred_at >= ${since7d}
+        AND EXISTS (SELECT 1 FROM subscription_accounts a
+          JOIN llm_plan_rates pr ON pr.provider_id = a.provider_id
+          WHERE a.id = u.subscription_account_id)
     ), windows AS (
-      SELECT w.workspace_id, SUM(u.cost_rub / r.rub_per_credit) AS credits
+      SELECT w.workspace_id, SUM(x.credits) AS credits
       FROM workspace_usage_windows w
-      JOIN tasks t ON t.workspace_id = w.workspace_id
-      JOIN token_usage u ON u.task_id = t.id AND u.billable
-        AND u.occurred_at >= w.started_at AND u.occurred_at < w.ends_at
-      CROSS JOIN LATERAL (SELECT c.rub_per_credit FROM credit_rates c
-        WHERE c.effective_from <= u.occurred_at ORDER BY c.effective_from DESC LIMIT 1) r
-      WHERE w.kind = '5h' AND w.started_at >= ${new Date(now.getTime() - 7 * 86_400_000)}
+      JOIN plan_usage x ON x.workspace_id = w.workspace_id
+        AND x.occurred_at >= w.started_at AND x.occurred_at < w.ends_at
+      WHERE w.kind = '5h' AND w.started_at >= ${since7d}
       GROUP BY w.id, w.workspace_id
     )
-    SELECT s.slug, count(DISTINCT s.id)::int AS workspaces,
-      COALESCE(SUM(s.week), 0)::int AS "weeklyLimits",
-      COALESCE((SELECT SUM(x.credits) FROM spent x WHERE x.workspace_id IN
-        (SELECT id FROM spaces y WHERE y.slug IS NOT DISTINCT FROM s.slug)), 0)::float8 AS "spent7d",
-      COALESCE((SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY x.credits) FROM windows x
-        WHERE x.workspace_id IN (SELECT id FROM spaces y WHERE y.slug IS NOT DISTINCT FROM s.slug)),
-        0)::float8 AS p95
-    FROM spaces s GROUP BY s.slug`
+    SELECT s.id,
+      COALESCE((SELECT SUM(x.credits) FROM plan_usage x WHERE x.workspace_id = s.id), 0)::float8
+        AS "spent7d",
+      COALESCE((SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY w.credits) FROM windows w
+        WHERE w.workspace_id = s.id), 0)::float8 AS p95
+    FROM spaces s`
+  const tiers = await Promise.all(
+    spaces.map(async (space) => ({ ...space, terms: await workspaceUsageTerms(prisma, space.id) })),
+  )
   const demand = workspaceTiers.map((tier) => {
-    const rows = demandRows.filter((row) => tierOfSlug(row.slug) === tier)
+    const rows = tiers.filter((row) => row.terms.tier === tier)
     return {
       tier,
-      workspaces: rows.reduce((total, row) => total + row.workspaces, 0),
-      // A workspace without a tariff has the weekly limit of the constants.
+      workspaces: rows.length,
       weeklyLimits: rows.reduce(
-        (total, row) => total + (row.slug === null ? row.workspaces * 50 : row.weeklyLimits),
+        (total, row) => total + (row.terms.limits.week ?? noTariffWindowCredits.week),
         0,
       ),
       spent7d: rows.reduce((total, row) => total + row.spent7d, 0),
@@ -310,9 +311,6 @@ async function readFacts(prisma: PrismaClient, now: Date): Promise<UsageFacts> {
   })
   return { now, accounts, hours, peakRates, demand }
 }
-
-const tierOfSlug = (slug: string | null): WorkspaceTier =>
-  slug === null ? 'none' : slug === 'business' || slug === 'agency' ? slug : 'start'
 
 const planRatesFileSchema = z.strictObject({
   rows: z

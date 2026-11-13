@@ -134,7 +134,11 @@ describe.skipIf(!databaseUrl)('the usage windows of 13.11.2026', () => {
 
   it('keeps plan credits of a call not negative', async () => {
     const { rows } = await schema.db.query<{ def: string }>(
-      `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'token_usage_plan_credits_check'`,
+      // Of this schema only: suites that run beside it drop schemas of their own meanwhile.
+      `SELECT pg_get_constraintdef(c.oid) AS def FROM pg_constraint c
+        JOIN pg_namespace n ON n.oid = c.connamespace
+        WHERE c.conname = 'token_usage_plan_credits_check' AND n.nspname = $1`,
+      [schema.name],
     )
     expect(rows[0]?.def).toContain('plan_credits >=')
   })

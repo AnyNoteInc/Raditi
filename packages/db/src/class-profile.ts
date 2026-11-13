@@ -21,6 +21,18 @@ export async function classProfile<Backend extends string>(
   db: Pick<Prisma.TransactionClient, 'llmModel'>,
   input: { modelClass: ModelClass; backends: readonly Backend[] },
 ): Promise<ClassProfile<Backend> | null> {
+  return (await classProfiles(db, input))[0] ?? null
+}
+
+/**
+ * Every enabled profile of the class, in the order of `backends` and then by slug, one per
+ * backend: the first is `classProfile`; the next ones are where a pass goes when the quota of the
+ * one before is out (owner's answer of 13.11.2026: the plan, then the API paid by the token).
+ */
+export async function classProfiles<Backend extends string>(
+  db: Pick<Prisma.TransactionClient, 'llmModel'>,
+  input: { modelClass: ModelClass; backends: readonly Backend[] },
+): Promise<ClassProfile<Backend>[]> {
   const { modelClass, backends } = input
   const models = await db.llmModel.findMany({
     where: {
@@ -32,17 +44,22 @@ export async function classProfile<Backend extends string>(
     select: { id: true, slug: true, providerModelId: true, provider: { select: { slug: true } } },
   })
   const rank = (slug: string) => backends.findIndex((backend) => backend === slug)
-  const [first] = models.sort(
+  const sorted = models.sort(
     (a, b) =>
       rank(a.provider.slug) - rank(b.provider.slug) ||
       (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0),
   )
-  const backend = backends.find((id) => id === first?.provider.slug)
-  if (first === undefined || first.providerModelId === null || backend === undefined) return null
-  return {
-    backend,
-    modelId: first.id,
-    modelSlug: first.slug,
-    providerModelId: first.providerModelId,
+  const profiles: ClassProfile<Backend>[] = []
+  for (const model of sorted) {
+    const backend = backends.find((id) => id === model.provider.slug)
+    if (backend === undefined || model.providerModelId === null) continue
+    if (profiles.some((profile) => profile.backend === backend)) continue
+    profiles.push({
+      backend,
+      modelId: model.id,
+      modelSlug: model.slug,
+      providerModelId: model.providerModelId,
+    })
   }
+  return profiles
 }

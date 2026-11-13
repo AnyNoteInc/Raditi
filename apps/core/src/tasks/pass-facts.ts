@@ -1,6 +1,6 @@
 import { attemptCreditBudget } from '@repo/billing'
 import {
-  classProfile,
+  classProfiles,
   taskAttachments,
   taskBrowserCheckpoints,
   type BrowserCheckpointRecord,
@@ -14,6 +14,7 @@ import {
   envVarReachesTask,
   isDomainError,
   modelClassSchema,
+  poolQuotaOut,
   previewOrigin,
   previewUnavailableReasons,
   readFeedRow,
@@ -25,6 +26,8 @@ import {
   type SiteFacts,
   type SiteStack,
 } from '@repo/domain'
+
+import { decodeLimitWindows } from '@repo/turn-keys'
 
 import { AGENT_COMMANDS, type PreviewFacts } from './turn-instructions.ts'
 import {
@@ -259,11 +262,17 @@ export async function readPassFacts(
 
   const modelClass = modelClassSchema.safeParse(task.modelClass ?? 'standard')
   if (!modelClass.success) return null
-  // The same query «Попробовать ещё» asks before it moves a dialog into a class.
-  const chosen = await classProfile(db, {
-    modelClass: modelClass.data,
-    backends: deps.backends.map((backend) => backend.id),
-  })
+  // The same query «Попробовать ещё» asks before it moves a dialog into a class; of its
+  // profiles, the first whose pool still has quota (owner's answer of 13.11.2026).
+  const chosen = await profileWithQuota(
+    db,
+    deps.backends,
+    await classProfiles(db, {
+      modelClass: modelClass.data,
+      backends: deps.backends.map((backend) => backend.id),
+    }),
+    input.now,
+  )
   const profile = chosen
     ? {
         backend: chosen.backend,
@@ -420,4 +429,53 @@ async function browserFactsOf(
     saved: checkpoints.flatMap((checkpoint) => savedObjectOf(checkpoint) ?? []),
     guide,
   }
+}
+
+/**
+ * The profile a pass runs on: the first of `profiles` (the order of the backends — the plan,
+ * then the API paid by the token) whose pool has quota for it; when every pool is out, the first,
+ * and the pool tells the client that the limits of the agent are out (plan 68). The quota of a
+ * pool with windows is out when no eligible account can take a turn within the longest wait
+ * (`poolQuotaOut`); a pool without windows is bounded by the credits of the customer alone
+ * (owner's answer of 13.11.2026). A pass of a task bound to an account of another backend goes on
+ * without that binding (`GatewayTurnCredentials`).
+ */
+export async function profileWithQuota<P extends { backend: string }>(
+  db: Pick<PrismaClient, '$queryRaw'>,
+  backends: readonly Pick<LlmBackend, 'id' | 'capacity'>[],
+  profiles: readonly P[],
+  now: Date,
+): Promise<P | null> {
+  for (const profile of profiles) {
+    const capacity = backends.find((backend) => backend.id === profile.backend)?.capacity
+    if (capacity === undefined) continue
+    if (capacity === 'none') return profile
+    const accounts = await db.$queryRaw<
+      Array<{
+        enabled: boolean
+        status: 'active' | 'banned' | 'retired'
+        health: 'ok' | 'needs_relogin' | 'suspended'
+        retireRequestedAt: Date | null
+        coolingUntil: Date | null
+        breakerOpenUntil: Date | null
+        limitWindows: unknown
+      }>
+    >`
+      SELECT (a.enabled AND a.credential_version > 0 AND a.credentials_revoked_at IS NULL) AS enabled,
+        a.status::text AS status, a.health::text AS health,
+        a.retire_requested_at AS "retireRequestedAt", a.cooling_until AS "coolingUntil",
+        a.breaker_open_until AS "breakerOpenUntil", a.limit_windows AS "limitWindows"
+      FROM subscription_accounts a JOIN llm_providers p ON p.id = a.provider_id
+      WHERE p.slug = ${profile.backend}`
+    const out = poolQuotaOut({
+      capacity,
+      now,
+      accounts: accounts.map((account) => ({
+        ...account,
+        limitWindows: decodeLimitWindows(account.limitWindows),
+      })),
+    })
+    if (!out) return profile
+  }
+  return profiles[0] ?? null
 }

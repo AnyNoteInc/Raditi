@@ -77,9 +77,9 @@ describe('llm:usage', () => {
         { name: 'week', used: 1_000, limit: 10_000, forecast: 1_100 },
       ],
     })
-    // The Max without its own numbers stands at the nominal size of its plan.
-    expect(report.accounts[1]?.windows[0]).toMatchObject({ limit: 28_000, used: 0 })
-    expect(report.pool['5h']).toEqual({ used: 1_100, limit: 30_000, freePct: 96.3 })
+    // An account whose probe named a share only has no size: the code knows none (13.11.2026).
+    expect(report.accounts[1]?.windows).toEqual([])
+    expect(report.pool['5h']).toEqual({ used: 1_100, limit: 2_000, freePct: 45 })
   })
 
   it('measures plan credits per credit of the customer at the peak and outside it', () => {
@@ -87,7 +87,9 @@ describe('llm:usage', () => {
     expect(report.ratio).toEqual({ peak: 32.6, offPeak: 16.3, all: 24.45 })
     expect(report.weeklyPowerCredits).toBe(Math.floor(10_000 / 24.45))
     expect(report.coverage).toBe(0.63)
-    expect(report.advice).toMatch(/добавьте 1 × Max/)
+    expect(report.advice).toMatch(
+      /Не хватает 242 кредитов клиента в неделю — около 5917 кредитов плана/,
+    )
     expect(usageReportText(report).join('\n')).toContain('Покрытие: 0.63')
   })
 

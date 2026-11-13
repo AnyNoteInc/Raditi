@@ -20,12 +20,25 @@ function fakeWriter(count = 1) {
   const createMany = vi.fn().mockResolvedValue({ count })
   const writer = {
     outboxEvent: { createMany },
-    // The tier of the task's workspace: «Бизнес».
-    $queryRaw: vi.fn(async () => [{ slug: 'business' }]),
+    // The workspace of the task is on «Бизнес».
+    $queryRaw: vi.fn(tierAnswers('business')),
   } as unknown as OutboxWriter & Pick<Prisma.TransactionClient, '$queryRaw'>
   const rows = () => createMany.mock.calls.map(([args]) => args.data[0])
   return { writer, rows }
 }
+
+/** What the queries of the tier answer (`agentTurnPriority`): the task's workspace on `slug`. */
+const tierAnswers =
+  (slug: string) =>
+  async (query: TemplateStringsArray, ..._values: unknown[]): Promise<unknown[]> => {
+    const sql = query.join('?')
+    if (sql.includes('FROM tasks WHERE id')) return [{ workspaceId: taskId }]
+    if (sql.includes('FROM subscriptions s JOIN plans p'))
+      return [
+        { status: 'active', slug, creditsPer5h: 70, creditsPerWeek: 210, maxConcurrentTurns: 2 },
+      ]
+    return []
+  }
 
 describe('enqueueAgentTurn', () => {
   it('writes the pass of a request to agent-turns with ids only', async () => {
@@ -158,8 +171,8 @@ describe('enqueueSiteWaitingPasses', () => {
 
   it('puts the passes that wait for the site back, keyed by what let it go', async () => {
     const { writer, rows } = fakeWriter()
-    const $queryRaw = vi.fn().mockResolvedValue([
-      { id: taskId.toUpperCase(), attempt: 1, request_id: 41n, slug: 'agency' },
+    const $queryRaw = vi.fn(tierAnswers('agency')).mockResolvedValueOnce([
+      { id: taskId.toUpperCase(), attempt: 1, request_id: 41n },
       // A task whose only requests are commands has nothing to answer.
       { id: other, attempt: 2, request_id: null },
     ])
@@ -178,7 +191,7 @@ describe('enqueueSiteWaitingPasses', () => {
       },
     ])
     // Only queued tasks of the site that wait for it.
-    const sql = ($queryRaw.mock.calls[0]![0] as string[]).join('?')
+    const sql = ($queryRaw.mock.calls[0]![0] as unknown as string[]).join('?')
     expect(sql).toContain("t.status = 'queued' AND t.waiting = 'site'")
     expect($queryRaw.mock.calls[0]![1]).toBe(siteId)
   })

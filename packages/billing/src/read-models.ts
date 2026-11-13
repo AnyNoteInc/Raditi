@@ -356,6 +356,7 @@ const taskCredits = (answer: NewTaskAnswer): TaskCreditsDto => ({
   minToStart: answer.needed,
   today: answer.today,
   windows: usageWindowsDto(answer.windows),
+  tier: answer.tier,
   newTask: { allowed: answer.allowed, reason: answer.reason },
 })
 

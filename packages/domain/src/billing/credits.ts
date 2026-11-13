@@ -12,7 +12,13 @@ import {
   subscriptionStatusSchema,
   type SubscriptionStatus,
 } from './subscription.ts'
-import { refusingWindow, usageWindowStatesSchema, type UsageWindowState } from './usage-windows.ts'
+import {
+  refusingWindow,
+  usageWindowStatesSchema,
+  workspaceTierSchema,
+  type UsageWindowState,
+  type WorkspaceTier,
+} from './usage-windows.ts'
 
 // The numbers of the model that the customer is told — the minimum of a task, the average, the
 // typical examples, the steps — are written in a module of their own, which the pages of the
@@ -813,6 +819,7 @@ const newTaskSchema = z.strictObject({
   rateUsable: z.boolean(),
   debt: accountCreditsSchema.default(() => toCredits(0)),
   windows: usageWindowStatesSchema.default(() => []),
+  tier: workspaceTierSchema.default('none'),
 })
 
 /** What the tariff of a workspace gave the Moscow day so far, in whole credits. */
@@ -863,6 +870,8 @@ export interface NewTaskInput {
    * (Л5). None when left out.
    */
   windows?: UsageWindowState[]
+  /** The tier of the workspace (`workspaceUsageTerms`): a page tells by it whether a bigger tariff exists. */
+  tier?: WorkspaceTier
 }
 
 // The subscription of the workspace with the terms of its plan; other fields are not asked about.
@@ -934,6 +943,8 @@ export type NewTaskVerdict = {
   today: TariffDay | null
   /** The windows of the workspace as they were asked about; the first that refuses is named. */
   windows: UsageWindowState[]
+  /** The tier of the workspace, as given. */
+  tier: WorkspaceTier
 } & ({ allowed: true; reason: null } | { allowed: false; reason: TaskRefusalReason })
 
 /**
@@ -998,6 +1009,7 @@ export function newTaskVerdict(input: NewTaskInput): NewTaskVerdict {
     needed: toCredits(goesOn(placement) ? minContinueCredits : minStartCredits),
     today,
     windows: result.data.windows,
+    tier: result.data.tier,
   }
   const refused = (reason: TaskRefusalReason): NewTaskVerdict => ({
     ...numbers,

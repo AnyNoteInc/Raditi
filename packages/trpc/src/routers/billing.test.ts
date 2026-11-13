@@ -257,6 +257,7 @@ const noCredits = {
   // Without a paid tariff there is no day: the gift is the bound.
   today: null,
   // A user without a workspace has no windows yet (plan 70).
+  tier: 'none',
   windows: [],
   newTask: { allowed: false, reason: 'gift_spent' },
 }
@@ -447,6 +448,7 @@ describe('billing.overview', () => {
         setAside: 35,
         minToStart: 1,
         today: freshDay(20, 45),
+        tier: 'none',
         windows: FAKE_WINDOWS,
         newTask: TAKEN,
       },
@@ -501,6 +503,7 @@ describe('billing.overview', () => {
       spendable: 80,
       spendableNow: 0,
       today: { limit: 20, charged: 20, held: 0, used: 20, room: 0, left: 0 },
+      tier: 'none',
       windows: FAKE_WINDOWS,
       newTask: { allowed: false, reason: 'daily_limit' },
     })
@@ -546,6 +549,7 @@ describe('billing.overview', () => {
       setAside: 5,
       minToStart: 1,
       today: null,
+      tier: 'none',
       windows: FAKE_WINDOWS,
       newTask: TAKEN,
     })
@@ -676,6 +680,7 @@ describe('billing.overview', () => {
       setAside: 0,
       minToStart: 1,
       today: freshDay(20, 80),
+      tier: 'none',
       windows: FAKE_WINDOWS,
       newTask: TAKEN,
     })
@@ -708,6 +713,7 @@ describe('billing.overview', () => {
 
     expect((await createCaller(context(prisma)).billing.overview()).credits).toEqual({
       ...noCredits,
+      tier: 'none',
       windows: FAKE_WINDOWS,
     })
     expect(db.creditLedger.findUnique).not.toHaveBeenCalled()
@@ -747,6 +753,7 @@ describe('billing.overview', () => {
       credits: {
         ...noCredits,
         today: freshDay(20, 0),
+        tier: 'none',
         windows: FAKE_WINDOWS,
         newTask: { allowed: false, reason: 'empty' },
       },
@@ -1511,6 +1518,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
       gift: giftGranted,
       newTask: NO_RATE,
       // The workspace is there: the windows without a tariff (plan 70).
+      tier: 'none',
       windows: FAKE_WINDOWS,
     }
     expect((await caller.billing.overview()).credits).toEqual(granted)
@@ -1657,6 +1665,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
         setAside: 0,
         minToStart: 1,
         today: freshDay(plan.creditsPerDay, quota),
+        tier: 'start',
         windows: START_WINDOWS,
         newTask: NO_RATE,
       },
@@ -1795,6 +1804,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
         setAside: 0,
         minToStart: 1,
         today: freshDay(plan.creditsPerDay, quota),
+        tier: 'start',
         windows: START_WINDOWS,
         newTask: NO_RATE,
       },
@@ -1861,6 +1871,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
     expect((await caller.billing.overview()).credits).toEqual({
       ...promisedCredits,
       // The workspace is there now: its windows are those without a tariff (plan 70).
+      tier: 'none',
       windows: FAKE_WINDOWS,
       gift: giftGranted,
       newTask: NO_RATE,

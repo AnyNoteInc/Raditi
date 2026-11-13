@@ -17,7 +17,14 @@ export type CreditBalances = BillingOverview['credits']
  */
 export type TaskCredits = Pick<
   CreditBalances,
-  'spendable' | 'spendableNow' | 'setAside' | 'minToStart' | 'today' | 'windows' | 'newTask'
+  | 'spendable'
+  | 'spendableNow'
+  | 'setAside'
+  | 'minToStart'
+  | 'today'
+  | 'windows'
+  | 'tier'
+  | 'newTask'
 >
 /** A window of 5 hours or of the week of the workspace (plan 70). */
 export type UsageWindow = TaskCredits['windows'][number]

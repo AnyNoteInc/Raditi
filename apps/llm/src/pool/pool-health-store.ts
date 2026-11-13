@@ -3,7 +3,6 @@ import {
   absoluteWindow,
   forecastErrorRatio,
   limitResetPlausible,
-  nominalWindowCredits,
   llmBackendIdSchema,
   probeResultSchema,
   type LimitWindow,
@@ -107,8 +106,8 @@ function mergeConcurrentWindows(
 }
 
 /**
- * What an applied probe tells the operator (plan 70, §4.4): each window in plan credits, how far
- * the forecast it replaced missed, and whether the size differs from the plan's published one.
+ * What an applied probe tells the operator (plan 70, §4.4): each window in plan credits as the
+ * provider names it, and how far the forecast it replaced missed.
  */
 export interface ProbeObserver {
   window(input: {
@@ -119,7 +118,6 @@ export interface ProbeObserver {
     used: number
     limit: number
     forecastError: number | null
-    nominalMismatch: boolean
   }): void
 }
 
@@ -263,16 +261,15 @@ export class PostgresPoolHealthStore implements PoolHealthStore {
     }
     for (const window of windows) {
       if (window.name === 'month') continue
-      const absolute = absoluteWindow(window, account.plan)
+      const absolute = absoluteWindow(window)
       if (absolute === null) continue
       const before = previous.find((item) => item.name === window.name)
-      const beforeAbsolute = before ? absoluteWindow(before, account.plan) : null
+      const beforeAbsolute = before ? absoluteWindow(before) : null
       // Only a forecast of the same period is compared: a reset in between restarts the count.
       const samePeriod =
         before !== undefined &&
         beforeAbsolute !== null &&
         before.resetsAt?.getTime() === window.resetsAt?.getTime()
-      const nominal = nominalWindowCredits(account.plan, window.name)
       this.observer.window({
         backend,
         account: account.label,
@@ -287,8 +284,6 @@ export class PostgresPoolHealthStore implements PoolHealthStore {
               absolute.limitCredits,
             )
           : null,
-        nominalMismatch:
-          nominal !== null && window.limitCredits !== undefined && window.limitCredits !== nominal,
       })
     }
   }

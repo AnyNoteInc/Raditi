@@ -230,6 +230,7 @@ const noTariff: UsageSummaryDto = {
   minToStart: 1,
   // Without a tariff there is no day: the gift is the bound.
   today: null,
+  tier: 'none',
   windows: [],
   newTask: { allowed: false, reason: 'gift_spent' },
 }
@@ -283,6 +284,7 @@ const onTariff = (): UsageSummaryDto => ({
   setAside: 23,
   minToStart: 1,
   today: busyDay,
+  tier: 'none',
   windows: [],
   newTask: TAKEN,
 })
@@ -370,6 +372,7 @@ describe('billing.usage', () => {
       setAside: 0,
       minToStart: 1,
       today: null,
+      tier: 'none',
       windows: [],
       newTask: TAKEN,
     })
@@ -770,6 +773,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
       gift: { ...promised.gift, granted: true },
       newTask: NO_RATE,
       // The workspace is there: the windows without a tariff (plan 70).
+      tier: 'none',
       windows: [
         { kind: '5h', limit: 15, used: 0, left: 15, resetsAt: null },
         { kind: 'week', limit: 50, used: 0, left: 50, resetsAt: null },
@@ -823,6 +827,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
       minToStart: 1,
       today: freshDay,
       // The windows of «Бизнес» (Л4), none of them started.
+      tier: 'business',
       windows: [
         {
           kind: '5h',

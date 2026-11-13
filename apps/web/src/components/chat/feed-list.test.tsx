@@ -327,7 +327,9 @@ describe('the rows of a dialog', () => {
         } as FeedRow,
         headOf({ status: 'awaiting_user' }),
       )
-      expect(text(feed)).toContain('Лимит на 5 часов исчерпан — продолжим после 18:40.')
+      expect(text(feed)).toContain(
+        'Лимит на 5 часов исчерпан. Продолжить можно после 18:40 — напишите «продолжи» или нажмите «Продолжить».',
+      )
     })
 
     // `site_files` is of a repository, which such a chat has not.

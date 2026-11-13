@@ -25,12 +25,12 @@ import {
   type PreviewSyncJob,
   type ReleaseAdvanceJob,
   tierQueuePriority,
-  workspaceTierOfPlan,
 } from '@repo/domain'
 import { z } from 'zod'
 
 import type { Prisma } from './generated/prisma/client.ts'
 import { enqueueOutbox, type OutboxWriter } from './outbox.ts'
+import { workspaceUsageTerms } from './usage-windows.ts'
 
 // The jobs of the chat → preview → /release path (docs/plan/53-chat-preview-release.md,
 // «Очереди и задания»). Each helper writes its outbox row in the caller's transaction, so a job
@@ -50,13 +50,13 @@ export async function agentTurnPriority(
   tx: Pick<Prisma.TransactionClient, '$queryRaw'>,
   taskId: string,
 ): Promise<number> {
-  const rows = await tx.$queryRaw<{ slug: string | null }[]>`
-    SELECT p.slug FROM tasks t
-    LEFT JOIN subscriptions s ON s.workspace_id = t.workspace_id AND s.status = 'active'
-    LEFT JOIN plans p ON p.id = s.plan_id
-    WHERE t.id = ${taskId}::uuid
-    LIMIT 1`
-  return tierQueuePriority[workspaceTierOfPlan(rows[0]?.slug ?? null)]
+  const rows = await tx.$queryRaw<{ workspaceId: string }[]>`
+    SELECT workspace_id AS "workspaceId" FROM tasks WHERE id = ${taskId}::uuid`
+  const workspaceId = rows[0]?.workspaceId
+  // The tier the limits of the workspace are read by, so a pass and its windows never disagree.
+  const tier =
+    workspaceId === undefined ? 'none' : (await workspaceUsageTerms(tx, workspaceId)).tier
+  return tierQueuePriority[tier]
 }
 
 export async function enqueueAgentTurn(
@@ -99,10 +99,9 @@ export async function enqueueSiteWaitingPasses(
   const siteId = z.uuid().parse(input.siteId)
   const tag = wakeTagSchema.parse(input.tag.toLowerCase())
   const rows = await tx.$queryRaw<
-    Array<{ id: string; attempt: number; request_id: bigint | null; slug?: string | null }>
+    Array<{ id: string; attempt: number; request_id: bigint | null }>
   >`
-    SELECT t.id, t.attempt, (SELECT p.slug FROM subscriptions s JOIN plans p ON p.id = s.plan_id
-        WHERE s.workspace_id = t.workspace_id AND s.status = 'active' LIMIT 1) AS slug,
+    SELECT t.id, t.attempt,
       (SELECT max(e.id) FROM task_events e
         WHERE e.task_id = t.id AND e.type = 'feed.request'
           AND e.payload->>'kind' IS DISTINCT FROM 'command') AS request_id
@@ -117,7 +116,7 @@ export async function enqueueSiteWaitingPasses(
       taskId: lower(row.id),
       attempt: row.attempt,
       requestEventId: row.request_id.toString(),
-      priority: tierQueuePriority[workspaceTierOfPlan(row.slug ?? null)],
+      priority: await agentTurnPriority(tx, row.id),
     })
     if (
       await enqueueOutbox(tx, {

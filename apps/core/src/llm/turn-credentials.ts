@@ -551,7 +551,6 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
         limitsSeenAt: Date | null
         activeTurns: bigint
         maxConcurrentTurns: number
-        plan: string
         closedPlanCredits: string
         openPlanCredits: string
         lastUsedAt: Date | null
@@ -562,7 +561,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
         a.health_changed_at AS "healthChangedAt", a.retire_requested_at AS "retireRequestedAt",
         a.cooling_until AS "coolingUntil", a.breaker_open_until AS "breakerOpenUntil",
         a.limit_windows AS "limitWindows", a.limits_seen_at AS "limitsSeenAt",
-        a.max_concurrent_turns AS "maxConcurrentTurns", a.plan,
+        a.max_concurrent_turns AS "maxConcurrentTurns",
         COALESCE((SELECT SUM(u.plan_credits) FROM token_usage u
           WHERE u.subscription_account_id = a.id AND a.limits_seen_at IS NOT NULL
             AND u.occurred_at >= a.limits_seen_at), 0)::text AS "closedPlanCredits",
@@ -580,7 +579,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
         activeTurns: Number(a.activeTurns),
         // Between probes the pool reads the forecast (plan 70, §2.1): the probe's use plus what
         // the calls of the account took since and what its open calls hold.
-        limitWindows: forecastWindows(decodeLimitWindows(a.limitWindows), a.plan, {
+        limitWindows: forecastWindows(decodeLimitWindows(a.limitWindows), {
           closedSinceProbe: closedPlanCredits,
           openReserved: openPlanCredits,
         }),
@@ -591,6 +590,13 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       where: { taskId: ref.taskId, type: policyFlaggedEvent },
       select: { id: true },
     })
+    // A task bound to an account of another backend — the plan, while this pass goes through the
+    // API because the quota of the plan is out (owner's answer of 13.11.2026) — goes on without
+    // that binding here; it is kept for the passes that come back to the plan.
+    const ownBinding =
+      binding && accounts.some((account) => account.id === binding.subscriptionAccountId)
+        ? binding
+        : null
     const capacity = this.#capacityOf(grant.backend)
     // A durable Vault record fixes the selected account. A racing issue cannot select another
     // secret or bind a task without the matching key. Keep the pure selector's new-task gates.
@@ -600,8 +606,8 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
         capacity,
         providerEnabled: profile.enabled,
         now: task.now,
-        boundAccountId: binding?.subscriptionAccountId ?? null,
-        rebinds: binding?.rebinds ?? 0,
+        boundAccountId: ownBinding?.subscriptionAccountId ?? null,
+        rebinds: ownBinding?.rebinds ?? 0,
         policyFlagged: policyFlagged !== null,
         minTurnHeadroomPct: this.#minHeadroom,
         turnCostCredits:
@@ -614,7 +620,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
     const decision = pick(
       requiredAccount
         ? snapshots.filter(
-            (a) => a.id === requiredAccount || a.id === binding?.subscriptionAccountId,
+            (a) => a.id === requiredAccount || a.id === ownBinding?.subscriptionAccountId,
           )
         : snapshots,
     )
@@ -728,12 +734,11 @@ function requireSelection(
 /** The windows of an account with their use forecast between probes, in plan credits. */
 function forecastWindows(
   windows: LimitWindow[] | null,
-  plan: string,
   since: { closedSinceProbe: string; openReserved: string },
 ): LimitWindow[] | null {
   if (windows === null) return null
   return windows.map((window) => {
-    const absolute = absoluteWindow(window, plan)
+    const absolute = absoluteWindow(window)
     if (absolute === null) return window
     const used = accountWindowForecast({ probedUsedCredits: absolute.usedCredits, ...since })
     return {

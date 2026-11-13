@@ -636,6 +636,7 @@ async function placementFacts(
     tariffCreditsToday,
     rateUsable: rate.verdict === 'usable',
     windows,
+    tier: terms.tier,
   }
 }
 

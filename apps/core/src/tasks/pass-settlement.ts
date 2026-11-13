@@ -1005,11 +1005,15 @@ export class PassSettlement {
     const { db } = this.deps
     const key = await db.llmKey.findFirst({
       where: { taskId: pass.taskId, turnNo: turn, lastRefusal: 'workspace_limit' },
-      select: { id: true },
+      select: { lastRefusalWindow: true, lastRefusalResetsAt: true },
     })
     if (key === null) return null
     const workspaceId = context.task.workspaceId
     const terms = await workspaceUsageTerms(db, workspaceId)
+    // The window the gateway refused with, as it counted it with the reserves of open calls.
+    const refusedWith = key.lastRefusalWindow
+    if ((refusedWith === '5h' || refusedWith === 'week') && key.lastRefusalResetsAt !== null)
+      return { kind: refusedWith, resetsAt: key.lastRefusalResetsAt, tier: terms.tier }
     const windows = await workspaceWindowUsage(db, {
       workspaceId,
       now: this.#now(),
@@ -1038,8 +1042,7 @@ export class PassSettlement {
     window: { kind: '5h' | 'week'; resetsAt: Date; tier: string },
   ): Promise<SettleAnswer> {
     const next = context.standing ? 'awaiting_approval' : 'awaiting_user'
-    this.deps.onUsageLimit?.({ window: window.kind, tier: window.tier })
-    return this.#transaction(async (tx, now) => {
+    const answer = await this.#transaction(async (tx, now) => {
       const moved = await settleTurn(tx, {
         taskId: pass.taskId,
         attempt: pass.attempt,
@@ -1072,6 +1075,9 @@ export class PassSettlement {
       })
       if (context.task.billable) await this.#chargePass(tx, pass, now)
     })
+    // Counted once the pass moved: a pass another settlement already moved is not counted again.
+    this.deps.onUsageLimit?.({ window: window.kind, tier: window.tier })
+    return answer
   }
 
   async #moneyCeiling(pass: PassRef, turn: number): Promise<CeilingQuestion | null> {

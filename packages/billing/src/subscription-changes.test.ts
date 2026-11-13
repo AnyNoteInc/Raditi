@@ -1120,6 +1120,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL changes of a tariff', () => {
         price: '12900.00',
         creditsPerMonth: 80,
         creditsPerDay: 10,
+        creditsPer5h: null,
+        creditsPerWeek: null,
         maxSites: 3,
         ...data,
       })
@@ -1231,6 +1233,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL changes of a tariff', () => {
               kind: 'pack',
               creditsPerMonth: null,
               creditsPerDay: null,
+              creditsPer5h: null,
+              creditsPerWeek: null,
               maxSites: null,
               packCredits: 10,
               isActive: false,

@@ -32,9 +32,8 @@ groups:
         for: 10m
         annotations: { summary: 'В окне 5 часов пула свободно меньше 20 %' }
       - alert: LlmAccountWeekHigh
-        # Неделя аккаунта занята больше чем на 85 %, а до сброса больше 48 часов: пул
-        # израсходует неделю раньше сброса. Срок сброса шлюз не отдаёт метрикой — его видно в
-        # `pnpm --filter core llm:usage`; правило срабатывает по занятости.
+        # Неделя аккаунта занята больше чем на 85 %. Время до сброса шлюз метрикой не отдаёт:
+        # правило смотрит только на занятость, а сброс оператор видит в `llm:usage`.
         expr: >-
           max by (account) (raditi_llm_account_window_used_credits{window="week"}
             / raditi_llm_account_window_limit_credits{window="week"}) > 0.85

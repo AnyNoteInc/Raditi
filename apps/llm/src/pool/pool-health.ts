@@ -105,18 +105,6 @@ export class SubscriptionPoolHealth {
           const usage = options.usage
           usage?.account(window)
           if (window.forecastError !== null) usage?.forecastError(window.forecastError)
-          if (window.nominalMismatch) {
-            usage?.nominalMismatch()
-            this.options.logger?.warn(
-              JSON.stringify({
-                event: 'llm_plan_window_mismatch',
-                account: window.account,
-                plan: window.plan,
-                window: window.window,
-                limit: window.limit,
-              }),
-            )
-          }
         },
       })
     this.#backends = new Map(options.backends.map((backend) => [backend.id, backend]))

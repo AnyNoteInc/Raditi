@@ -136,6 +136,7 @@ export class PostgresGatewayStore implements GatewayStore {
   readonly #maxCallsPerKey: number | null
   readonly #ledger: LlmCallLedger
   readonly #onWindowRefusal: ((refusal: { tier: string; window: string }) => void) | undefined
+  readonly #logger: { warn(message: string): void } | undefined
 
   private readonly db: Database
 
@@ -154,6 +155,7 @@ export class PostgresGatewayStore implements GatewayStore {
   ) {
     this.db = db
     this.#onWindowRefusal = options.onWindowRefusal
+    this.#logger = options.logger
     this.#maxRequestsPerKey = z
       .number()
       .int()
@@ -286,7 +288,10 @@ export class PostgresGatewayStore implements GatewayStore {
       // The windows of 5 hours and of the week of the workspace (Л1, Л6): a call is admitted
       // while what the window took, with the reserves of the open calls, is below its limit; the
       // last one may take it over by itself. A task that is not billable is not counted (Л7).
-      if (owner.billable) {
+      // Only a call of a plan with windows: a call of the API paid by the token is bounded by the
+      // credits of the customer alone (owner's answer of 13.11.2026).
+      const windowed = owner.billable && value.capacity === 'windows'
+      if (windowed) {
         const terms = await workspaceUsageTerms(tx, owner.workspaceId)
         const [windows, openReserved] = await Promise.all([
           workspaceWindowUsage(tx, {
@@ -306,10 +311,13 @@ export class PostgresGatewayStore implements GatewayStore {
         )
         if (spent) {
           this.#onWindowRefusal?.({ tier: terms.tier, window: spent.kind })
-          return {
-            ...(await this.#refused(tx, row.keyId, 'workspace_limit')),
-            window: { kind: spent.kind, resetsAt: spent.resetsAt },
-          }
+          const refused = await this.#refused(tx, row.keyId, 'workspace_limit')
+          // The feed names this window and its reset, not one counted again later.
+          await tx.llmKey.update({
+            where: { id: row.keyId },
+            data: { lastRefusalWindow: spent.kind, lastRefusalResetsAt: spent.resetsAt },
+          })
+          return { ...refused, window: { kind: spent.kind, resetsAt: spent.resetsAt } }
         }
       }
       const accountOpen = await tx.llmCall.count({
@@ -332,7 +340,7 @@ export class PostgresGatewayStore implements GatewayStore {
         })
       }
       // The first admitted call opens the windows of the workspace that are not open (Л3).
-      if (owner.billable)
+      if (windowed)
         await openUsageWindows(tx, { workspaceId: owner.workspaceId, now: row.serverNow })
       const cacheRead = estimatedCacheReadTokens(estimate, rates)
       const reservedPlanCredits = await callPlanCredits(tx, {
@@ -346,6 +354,9 @@ export class PostgresGatewayStore implements GatewayStore {
           outputTokens: row.reserveOutputTokens,
         },
       })
+      // A plan without its rates counts nothing in the windows of a workspace: the operator is told.
+      if (windowed && reservedPlanCredits === null)
+        this.#logger?.warn(`llm_plan_rates_missing provider=${row.backendId} model=${row.model}`)
       const call = await tx.llmCall.create({
         data: {
           keyId: row.keyId,

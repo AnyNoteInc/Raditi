@@ -3,7 +3,7 @@ import { formatMoscowDay, nextMoscowMidnight } from '@/lib/moscow-date'
 import { plural } from '@/lib/plural'
 import { formatRubles } from '@/lib/rubles'
 
-import { usageLimitText } from '@repo/domain/tasks/client-feed-failures'
+import { usageLimitPageText } from '@repo/domain/tasks/client-feed-failures'
 
 import type { TaskCredits } from './billing-types'
 import {
@@ -284,13 +284,14 @@ function windowTaken(input: TaskNoticeInput): TaskNotice {
   const window =
     input.task.windows.find((item) => item.kind === '5h' && item.left === 0) ??
     input.task.windows.find((item) => item.left === 0)
+  // The server says the tier: only «Агентство» has no bigger tariff above it.
+  const bigger = input.task.tier !== 'agency'
   return {
-    state: `${usageLimitText(window?.kind ?? '5h', window?.resetsAt ?? null)} Кредиты от этого не сгорают.`,
-    way:
-      input.tariff?.name === 'Агентство'
-        ? null
-        : 'На старших тарифах лимиты больше — их можно сменить в разделе «Тарифы».',
-    actions: input.tariff?.name === 'Агентство' ? [] : ['change_plan'],
+    state: `${usageLimitPageText(window?.kind ?? '5h', window?.resetsAt ?? null)} Кредиты от этого не сгорают.`,
+    way: bigger
+      ? 'На старших тарифах лимиты больше — тариф можно сменить в разделе «Тарифы».'
+      : null,
+    actions: bigger ? ['change_plan'] : [],
   }
 }
 

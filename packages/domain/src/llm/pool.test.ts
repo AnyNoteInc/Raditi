@@ -9,6 +9,7 @@ import {
 import {
   pickAccount,
   poolPolicy,
+  poolQuotaOut,
   poolWaitIsLimitsOut,
   type PickAccountInput,
   type PoolAccountSnapshot,
@@ -999,7 +1000,6 @@ describe('pickAccount in absolute plan credits', () => {
     overrides: Partial<PoolAccountSnapshot> = {},
   ) =>
     account(id, {
-      plan: 'lite',
       limitWindows: [credits('5h', 2_000, used5h, 120), credits('week', 10_000, usedWeek, 5_000)],
       ...overrides,
     })
@@ -1010,7 +1010,6 @@ describe('pickAccount in absolute plan credits', () => {
     overrides: Partial<PoolAccountSnapshot> = {},
   ) =>
     account(id, {
-      plan: 'max',
       limitWindows: [credits('5h', 28_000, used5h, 120), credits('week', 140_000, usedWeek, 5_000)],
       ...overrides,
     })
@@ -1022,23 +1021,18 @@ describe('pickAccount in absolute plan credits', () => {
     expect(decision).toMatchObject({ kind: 'selected', accountId: 'max' })
   })
 
-  it('falls back to the nominal size of the plan when the probe names no credits', () => {
+  it('orders by percents when a probe names no credits (owner, 13.11.2026: no sizes in the code)', () => {
     const decision = pickAccount(
       input({
         tier: 'agency',
         accounts: [
-          account('lite', {
-            plan: 'lite',
-            limitWindows: [window('5h', 50), window('week', 10, 5_000)],
-          }),
-          account('max', {
-            plan: 'max',
-            limitWindows: [window('5h', 60), window('week', 10, 5_000)],
-          }),
+          account('small', { limitWindows: [window('5h', 50), window('week', 10, 5_000)] }),
+          account('large', { limitWindows: [window('5h', 60), window('week', 10, 5_000)] }),
         ],
       }),
     )
-    expect(decision).toMatchObject({ kind: 'selected', accountId: 'max' })
+    // Without the sizes the larger share free wins: the Lite at 50 %, not the Max at 60 %.
+    expect(decision).toMatchObject({ kind: 'selected', accountId: 'small' })
   })
 
   it('needs the measured cost of a turn left in both windows', () => {
@@ -1053,11 +1047,9 @@ describe('pickAccount in absolute plan credits', () => {
 
   it('prefers the week that resets sooner when the remainder is the same (Л9)', () => {
     const soon = account('soon', {
-      plan: 'pro',
       limitWindows: [credits('5h', 12_000, 0, 120), credits('week', 60_000, 55_000, 60 * 10)],
     })
     const far = account('far', {
-      plan: 'pro',
       limitWindows: [credits('5h', 12_000, 0, 120), credits('week', 60_000, 55_000, 60 * 24 * 6)],
     })
     expect(pickAccount(input({ tier: 'agency', accounts: [far, soon] }))).toMatchObject({
@@ -1104,5 +1096,34 @@ describe('pickAccount in absolute plan credits', () => {
       )
       expect(decision.kind).toBe('selected')
     })
+  })
+})
+
+// Owner's answer of 13.11.2026: the quota of the plan is out — the pass goes through the API.
+describe('poolQuotaOut', () => {
+  const spent = (minutes: number): LimitWindow => ({
+    name: '5h',
+    usedPct: 100,
+    resetsAt: at(minutes),
+    limitCredits: 2_000,
+    usedCredits: 2_000,
+  })
+  const out = (accounts: PoolAccountSnapshot[], capacity: LlmCapacity = 'windows') =>
+    poolQuotaOut({ capacity, now: NOW, accounts })
+
+  it('is out when every account has a window spent past the longest wait', () => {
+    expect(out([account('a', { limitWindows: [spent(4 * 60)] })])).toBe(true)
+    expect(out([account('a', { coolingUntil: at(3 * 60) })])).toBe(true)
+  })
+
+  it('is not out while one account has room, resets soon or is unknown', () => {
+    expect(out([account('a', { limitWindows: [spent(4 * 60)] }), account('b')])).toBe(false)
+    expect(out([account('a', { limitWindows: [spent(30)] })])).toBe(false)
+    expect(out([account('a', { limitWindows: [] })])).toBe(false)
+  })
+
+  it('is out without eligible accounts, and never for a backend without windows', () => {
+    expect(out([account('a', { enabled: false })])).toBe(true)
+    expect(out([account('a', { limitWindows: [spent(4 * 60)] })], 'none')).toBe(false)
   })
 })

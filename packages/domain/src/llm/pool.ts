@@ -55,11 +55,6 @@ export const poolAccountSnapshotSchema = z
     activeTurns: z.number().int().nonnegative(),
     maxConcurrentTurns: z.number().int().positive(),
     lastUsedAt: z.date().nullable(),
-    /**
-     * `subscription_accounts.plan`: the nominal size of its windows when the probe names none
-     * (`planWindowCredits`). Left out — unknown: the windows are read by their own numbers only.
-     */
-    plan: z.string().max(32).optional(),
   })
   .strict()
 export type PoolAccountSnapshot = z.infer<typeof poolAccountSnapshotSchema>
@@ -208,7 +203,7 @@ function readiness(account: PoolAccountSnapshot, input: ParsedInput, newTask: bo
       score = null
       continue
     }
-    const absolute = absoluteWindow(window, account.plan ?? '')
+    const absolute = absoluteWindow(window)
     if (absolute === null) {
       score = null
       if (window.usedPct <= 100 - headroomThreshold(window, input, newTask)) continue
@@ -258,7 +253,7 @@ function tierReserveWait(input: ParsedInput): number | null | 'none' {
     for (const window of account.limitWindows ?? []) {
       if (window.name === 'month') continue
       if (window.resetsAt !== null && window.resetsAt.getTime() <= now) continue
-      const absolute = absoluteWindow(window, account.plan ?? '')
+      const absolute = absoluteWindow(window)
       if (absolute === null) continue
       sums[window.name].left += Math.max(0, absolute.limitCredits - absolute.usedCredits)
       sums[window.name].size += absolute.limitCredits
@@ -399,4 +394,50 @@ export function pickAccount(snapshot: PickAccountInput): PoolDecision {
   }
   if (input.rebinds >= poolPolicy.maxRebinds) return { kind: 'operator', reason: 'rebind_limit' }
   return pickUnbound(input, 'rebind')
+}
+
+/**
+ * Whether the quota of a pool with windows is out for a pass to wait for (owner's answer of
+ * 13.11.2026: «если квота закончилась … переходи на API»): no eligible account can take a turn
+ * within `limitsOutWaitMs` — each one is paused, or a window it reported is spent and resets
+ * later than that. An account whose windows are unknown is not out: the probe tells. A pool
+ * without eligible accounts is out. A backend without windows is never out by its quota.
+ */
+export function poolQuotaOut(input: {
+  capacity: PickAccountInput['capacity']
+  now: Date
+  accounts: readonly Pick<
+    PoolAccountSnapshot,
+    | 'enabled'
+    | 'status'
+    | 'health'
+    | 'retireRequestedAt'
+    | 'coolingUntil'
+    | 'breakerOpenUntil'
+    | 'limitWindows'
+  >[]
+}): boolean {
+  if (input.capacity === 'none') return false
+  const now = input.now.getTime()
+  const horizon = now + poolPolicy.limitsOutWaitMs
+  const eligibleAccounts = input.accounts.filter(
+    (account) =>
+      account.enabled &&
+      account.status === 'active' &&
+      account.health === 'ok' &&
+      account.retireRequestedAt === null,
+  )
+  return eligibleAccounts.every((account) => {
+    for (const until of [account.coolingUntil, account.breakerOpenUntil])
+      if (until !== null && until.getTime() > horizon) return true
+    const windows = account.limitWindows ?? []
+    return windows.some((window) => {
+      const spent =
+        window.usedPct >= 100 ||
+        (window.limitCredits !== undefined &&
+          window.usedCredits !== undefined &&
+          window.usedCredits >= window.limitCredits)
+      return spent && window.resetsAt !== null && window.resetsAt.getTime() > horizon
+    })
+  })
 }

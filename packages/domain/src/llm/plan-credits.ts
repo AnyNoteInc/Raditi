@@ -114,48 +114,21 @@ export function planCreditsOfCall(tokens: PlanCallTokens, rates: PlanRates, at: 
   return planCreditsSchema.parse(credits.toDecimalPlaces(4, Money.ROUND_HALF_UP).toFixed(4))
 }
 
-/** The plans of an account (`subscription_accounts.plan`) whose windows the domain knows. */
-export const knownAccountPlans = ['lite', 'pro', 'max'] as const
-export type KnownAccountPlan = (typeof knownAccountPlans)[number]
-
 /**
- * The published sizes of the windows of GLM Coding Plan, in plan credits (docs.z.ai/devpack/
- * overview, checked 11.11.2026). A fallback and a check: a probe that names another size is
- * believed, and its difference is logged.
- */
-export const planWindowCredits: Readonly<
-  Record<KnownAccountPlan, Readonly<Record<'5h' | 'week', number>>>
-> = Object.freeze({
-  lite: Object.freeze({ '5h': 2_000, week: 10_000 }),
-  pro: Object.freeze({ '5h': 12_000, week: 60_000 }),
-  max: Object.freeze({ '5h': 28_000, week: 140_000 }),
-})
-
-/** The nominal size of a window of an account's plan; null for a plan or window it does not know. */
-export function nominalWindowCredits(plan: string, window: LimitWindow['name']): number | null {
-  if (window === 'month' || !(knownAccountPlans as readonly string[]).includes(plan)) return null
-  return planWindowCredits[plan as KnownAccountPlan][window]
-}
-
-/**
- * A window of the probe with its absolute numbers: the probe's own size, else the nominal size of
- * the plan with the used share of the probe. null — neither is known: the pool keeps percents.
+ * A window of the probe with its absolute numbers, as the provider names them (owner's answer of
+ * 13.11.2026: the limits are asked of Z.ai, not written in the code). null — the probe named a
+ * share only: the pool reads the window in percents.
  */
 export function absoluteWindow(
   window: LimitWindow,
-  plan: string,
 ): { limitCredits: number; usedCredits: number } | null {
-  if (window.limitCredits !== undefined && window.limitCredits > 0) {
-    return {
-      limitCredits: window.limitCredits,
-      usedCredits:
-        window.usedCredits ??
-        Math.min(window.limitCredits, (window.usedPct * window.limitCredits) / 100),
-    }
+  if (window.limitCredits === undefined || window.limitCredits <= 0) return null
+  return {
+    limitCredits: window.limitCredits,
+    usedCredits:
+      window.usedCredits ??
+      Math.min(window.limitCredits, (window.usedPct * window.limitCredits) / 100),
   }
-  const nominal = nominalWindowCredits(plan, window.name)
-  if (nominal === null) return null
-  return { limitCredits: nominal, usedCredits: (window.usedPct * nominal) / 100 }
 }
 
 /**

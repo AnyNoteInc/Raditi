@@ -7,6 +7,7 @@ import {
   taskStatuses,
   type CreditAccountKind,
   usageWindowRoom,
+  workspaceTiers,
   type UsageWindowState,
 } from '@repo/domain'
 import { z } from 'zod'
@@ -236,6 +237,8 @@ const taskCreditsShape = {
   today: tariffDaySchema.nullable(),
   /** The windows of 5 hours and of the week (plan 70); none for a user without a workspace. */
   windows: z.array(usageWindowDtoSchema).max(2),
+  /** The tier of the workspace (plan 70): whether a bigger tariff with bigger windows exists. */
+  tier: z.enum(workspaceTiers),
   newTask: newTaskSchema,
 }
 

@@ -40,7 +40,7 @@ export const feedFailureText: Readonly<Record<FeedFailureCode, string>> = Object
   // A window of 5 hours or of the week of the workspace (plan 70): the row names which and when
   // it resets (`usageLimitText`); these words are for a row without them.
   usage_limit:
-    'Лимит работы агента по вашему тарифу исчерпан — продолжим после сброса. Подробности — в разделе «Использование».',
+    'Лимит работы агента исчерпан. Продолжить можно после его сброса — когда он, сказано в разделе «Использование».',
   forbidden_change:
     'Агент попытался изменить то, что менять нельзя, и мы не сохранили его работу. Попробуйте описать задачу по-другому.',
   secret_found:
@@ -130,7 +130,21 @@ export function usageWindowResetText(kind: '5h' | 'week', resetsAt: Date): strin
 export function usageLimitText(kind: '5h' | 'week', resetsAt: Date | null): string {
   if (resetsAt === null) return feedFailureText.usage_limit
   const time = moscowTime.format(resetsAt)
-  if (kind === '5h') return `Лимит на 5 часов исчерпан — продолжим после ${time}.`
+  // Nothing goes on by itself (Л15): the client writes «продолжи» or presses «Продолжить».
+  if (kind === '5h')
+    return `Лимит на 5 часов исчерпан. Продолжить можно после ${time} — напишите «продолжи» или нажмите «Продолжить».`
   const day = weekdayRu[moscowWeekday.format(resetsAt)] ?? ''
-  return `Недельный лимит исчерпан — продолжим в ${day} после ${time}.`
+  return `Недельный лимит исчерпан. Продолжить можно в ${day} после ${time} — напишите «продолжи» или нажмите «Продолжить».`
+}
+
+/**
+ * The words of a page («Тарифы», «Использование») when a window refuses a new task: when new
+ * tasks are taken again, by the Moscow clock.
+ */
+export function usageLimitPageText(kind: '5h' | 'week', resetsAt: Date | null): string {
+  if (resetsAt === null) return 'Лимит работы агента исчерпан: новые задачи — после его сброса.'
+  const time = moscowTime.format(resetsAt)
+  if (kind === '5h') return `Лимит на 5 часов исчерпан: новые задачи — после ${time}.`
+  const day = weekdayRu[moscowWeekday.format(resetsAt)] ?? ''
+  return `Недельный лимит исчерпан: новые задачи — в ${day} после ${time}.`
 }

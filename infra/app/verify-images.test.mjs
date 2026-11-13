@@ -179,6 +179,9 @@ test('.dockerignore leaves out exactly the stands, never an operator command of 
       'billing-refunds-needed.mjs',
       'billing-settle-payment.mjs',
       'billing-stop-renewal.mjs',
+      // The pool and the windows of the workspaces (docs/plan/70-usage-limits.md, §4.4).
+      'llm-plan-rates.mjs',
+      'llm-usage.mjs',
       'releases-resolve.mjs',
     ],
   }

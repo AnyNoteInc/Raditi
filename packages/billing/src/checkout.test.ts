@@ -175,6 +175,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL checkout', () => {
           packCredits: 10,
           creditsPerMonth: null,
           creditsPerDay: null,
+          creditsPer5h: null,
+          creditsPerWeek: null,
           maxSites: null,
         },
         undefined,
@@ -943,6 +945,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL checkout', () => {
             price: '4900.00',
             creditsPerMonth: 30,
             creditsPerDay: null,
+            creditsPer5h: null,
+            creditsPerWeek: null,
             maxSites: 1,
           },
           period: {

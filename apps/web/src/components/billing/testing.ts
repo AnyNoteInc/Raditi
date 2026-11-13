@@ -1,4 +1,10 @@
-import { newTaskVerdict, toCredits, usageWindowRoom, type UsageWindowState } from '@repo/domain'
+import {
+  newTaskVerdict,
+  toCredits,
+  usageWindowRoom,
+  type UsageWindowState,
+  type WorkspaceTier,
+} from '@repo/domain'
 
 import type {
   BillingOverview,
@@ -152,6 +158,8 @@ export interface TaskFacts {
   rateUsable?: boolean
   /** The windows of 5 hours and of the week (plan 70); none unless told. */
   windows?: UsageWindowState[]
+  /** The tier of the workspace; `none` unless told. */
+  tier?: WorkspaceTier
 }
 
 type Account = { balance: number; held: number }
@@ -164,7 +172,7 @@ type Account = { balance: number; held: number }
 export function taskCreditsFor(
   accounts: { tariff: Account; gift: Account; pack: Account },
   subscription: Pick<Subscription, 'status' | 'plan'> | null,
-  { today = {}, rateUsable = true, windows = [] }: TaskFacts = {},
+  { today = {}, rateUsable = true, windows = [], tier = 'none' }: TaskFacts = {},
 ): TaskCredits {
   const terms =
     subscription === null
@@ -189,6 +197,7 @@ export function taskCreditsFor(
     },
     rateUsable,
     windows,
+    tier,
   })
   return {
     spendable: verdict.spendable,
@@ -204,6 +213,7 @@ export function taskCreditsFor(
       left: usageWindowRoom(window),
       resetsAt: window.resetsAt,
     })),
+    tier: verdict.tier,
     newTask: { allowed: verdict.allowed, reason: verdict.reason },
   }
 }

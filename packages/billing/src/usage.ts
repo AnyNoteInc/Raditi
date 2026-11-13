@@ -370,6 +370,7 @@ const taskCreditsOf = (overview: CreditsOverviewDto) => ({
   minToStart: overview.minToStart,
   today: overview.today,
   windows: overview.windows,
+  tier: overview.tier,
   newTask: overview.newTask,
 })
 

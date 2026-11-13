@@ -24,6 +24,14 @@ ALTER TABLE "llm_calls"
   ADD CONSTRAINT "llm_calls_reserved_plan_credits_check"
   CHECK ("reserved_plan_credits" IS NULL OR "reserved_plan_credits" >= 0);
 
+-- The window of a workspace that refused a key (`last_refusal = 'workspace_limit'`) and its reset:
+-- the feed names this one, not a window counted again later.
+ALTER TABLE "llm_keys" ADD COLUMN "last_refusal_window" VARCHAR(8);
+ALTER TABLE "llm_keys" ADD COLUMN "last_refusal_resets_at" TIMESTAMPTZ(6);
+ALTER TABLE "llm_keys"
+  ADD CONSTRAINT "llm_keys_refusal_window_check" CHECK (
+    "last_refusal_window" IS NULL OR "last_refusal_window" IN ('5h', 'week'));
+
 CREATE TABLE "llm_plan_rates" (
   "id" UUID NOT NULL,
   "provider_id" UUID NOT NULL,

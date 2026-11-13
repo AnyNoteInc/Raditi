@@ -12,7 +12,7 @@ import {
   type WorkspaceTier,
 } from '@repo/domain'
 
-import type { Prisma } from './generated/prisma/client.ts'
+import { Prisma } from './generated/prisma/client.ts'
 import { uuidv7 } from './uuidv7.ts'
 
 // The windows of 5 hours and of the week of a workspace in SQL (docs/plan/70-usage-limits.md,
@@ -21,6 +21,17 @@ import { uuidv7 } from './uuidv7.ts'
 // `@repo/billing`, so the queries live here.
 
 type Db = Pick<Prisma.TransactionClient, '$queryRaw' | '$executeRaw'>
+
+/**
+ * A call that took the quota of a subscription plan: its account's provider has plan rates
+ * (`llm_plan_rates`). A call through an API paid by the token (`zai-api`) is not one: the
+ * windows of a workspace share the plan, and a call of the API is bounded by credits alone
+ * (owner's answer of 13.11.2026). Without plan rates no call counts — the gateway logs
+ * `llm_plan_rates_missing` then (docs/plan/70-usage-limits.md).
+ */
+const PLAN_CALL = Prisma.sql`EXISTS (SELECT 1 FROM subscription_accounts a
+  JOIN llm_plan_rates r ON r.provider_id = a.provider_id
+  WHERE a.id = u.subscription_account_id)`
 
 /** What a workspace is bounded by: the tier of its live paid tariff, its windows, its turns. */
 export interface WorkspaceUsageTerms {
@@ -35,7 +46,7 @@ export interface WorkspaceUsageTerms {
  * open window.
  */
 export async function workspaceUsageTerms(
-  db: Db,
+  db: Pick<Prisma.TransactionClient, '$queryRaw'>,
   workspaceId: string,
 ): Promise<WorkspaceUsageTerms> {
   const rows = await db.$queryRaw<
@@ -107,8 +118,9 @@ export async function workspaceWindowUsage(
           SELECT c.rub_per_credit FROM credit_rates c
           WHERE c.effective_from <= u.occurred_at ORDER BY c.effective_from DESC LIMIT 1
         ) r
-        WHERE t.workspace_id = w.workspace_id AND u.billable
+        WHERE t.workspace_id = w.workspace_id AND u.billable AND t.billable
           AND u.occurred_at >= w.started_at AND u.occurred_at < w.ends_at
+          AND ${PLAN_CALL}
       ), 0)::numeric(14,4)::text AS used
     FROM workspace_usage_windows w
     WHERE w.workspace_id = ${input.workspaceId}::uuid
@@ -140,7 +152,10 @@ export async function openReservedWindowCredits(
     FROM llm_calls c
     JOIN llm_keys k ON k.id = c.key_id
     JOIN tasks t ON t.id = k.task_id
-    WHERE t.workspace_id = ${input.workspaceId}::uuid AND c.state = 'open'`
+    WHERE t.workspace_id = ${input.workspaceId}::uuid AND c.state = 'open' AND t.billable
+      AND EXISTS (SELECT 1 FROM subscription_accounts a
+        JOIN llm_plan_rates r ON r.provider_id = a.provider_id
+        WHERE a.id = c.subscription_account_id)`
   return windowCreditsSchema.parse(row?.credits ?? '0')
 }
 
