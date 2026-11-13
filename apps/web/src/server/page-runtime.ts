@@ -19,8 +19,6 @@ export function pagesOfProcess() {
     host: new URL(pages.origin).host.toLowerCase(),
     appOrigin: new URL(pages.appUrl).origin,
     viewKey: pages.keys.view,
-    shareKey: pages.keys.share,
-    sharing: pages.sharing,
   }
 }
 

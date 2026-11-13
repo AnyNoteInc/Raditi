@@ -15,14 +15,14 @@ const html = new TextEncoder().encode('<!doctype html><title>Отчёт</title>'
 
 function deps(overrides: Partial<Parameters<typeof getPageView>[2]> = {}) {
   return {
-    pages: () => ({ host: 'raditi-pages.ru', appOrigin: APP, viewKey: new Uint8Array(32) }),
+    pages: () => ({ host: 'pages.raditi.ru', appOrigin: APP, viewKey: new Uint8Array(32) }),
     readView: vi.fn(() => view),
     read: vi.fn(async () => ({ name: 'Отчёт.html', bytes: html })),
     ...overrides,
   }
 }
-const get = (host = 'raditi-pages.ru') =>
-  new Request('https://raditi-pages.ru/v/a.b', { headers: { host } })
+const get = (host = 'pages.raditi.ru') =>
+  new Request('https://pages.raditi.ru/v/a.b', { headers: { host } })
 
 describe('the headers of a page (docs/plan/67-agent-documents.md, Д3)', () => {
   it('are these, byte for byte', () => {

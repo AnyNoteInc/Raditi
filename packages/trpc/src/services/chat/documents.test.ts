@@ -30,7 +30,7 @@ function setup(name: string, body: Uint8Array, task = true) {
 
 const keys = pageKeys('a-secret-of-the-pages-that-is-long-enough')
 const chat = {
-  pages: { origin: 'https://pages.example', appUrl: 'https://app.example', keys, sharing: true },
+  pages: { origin: 'https://pages.example', appUrl: 'https://app.example', keys },
 } as unknown as ChatContext
 
 describe('issuePageView (docs/plan/67, Д3)', () => {

@@ -32,7 +32,7 @@ const GENERATED = {
     BETTER_AUTH_SECRET: b64url(48),
     METRICS_TOKEN: hex(32),
     // The tokens of the domain of pages (docs/plan/67-agent-documents.md, Д3): a new value voids
-    // every address of a page and every shared link
+    // every address of a page given out
     PAGES_SIGNING_SECRET: b64url(48),
     S3_ACCESS_KEY_ID: s3Key,
     S3_SECRET_ACCESS_KEY: b64url(30),

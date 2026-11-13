@@ -21,6 +21,7 @@ export const dialogTools = [
   'checks',
   'terminal',
   'browser',
+  'documents',
 ] as const
 export type DialogTool = (typeof dialogTools)[number]
 /** The tools of the changes: what the candidate of the dialog holds. */
@@ -44,6 +45,7 @@ export const toolIcons: Readonly<Record<DialogTool, AppIconName>> = Object.freez
   checks: 'check',
   terminal: 'terminal',
   browser: 'globe',
+  documents: 'document',
 })
 
 /** The name of a tool on its tab, and in the menu «Инструменты» (И7). */
@@ -88,10 +90,14 @@ const offersPreview = (preview: PreviewHead | null): boolean =>
  * no changes not a word of them (К19); a chat with a browser has it, whatever its state, ended too.
  * A chat of one kind has none of the other's, whatever its head says: the requirements decide.
  */
-export function dialogToolsOf(head: FeedHeadState): DialogTool[] {
+export function dialogToolsOf(head: FeedHeadState, documents = 0): DialogTool[] {
   const { repository, browser } = head.task.requirements
   return dialogTools.filter((tool) => {
     switch (tool) {
+      // The pages and text documents the agent made (docs/plan/67-agent-documents.md, Д4): in a
+      // chat of any kind, once there is one.
+      case 'documents':
+        return documents > 0
       case 'browser':
         return browser
       case 'preview':
@@ -152,9 +158,11 @@ export function toolMark(
     open,
     answered = false,
     rewound = false,
-  }: { open: boolean; answered?: boolean; rewound?: boolean },
+    documents = 0,
+  }: { open: boolean; answered?: boolean; rewound?: boolean; documents?: number },
 ): string | null {
   if (open) return toolText.mark.open
+  if (tool === 'documents') return String(documents)
   if (tool === 'preview' || tool === 'terminal') return null
   if (tool === 'browser') return browserMark(head.browser, head, { answered, rewound })
   const count = candidateCount(tool, head.candidate)
@@ -224,6 +232,13 @@ export interface ToolsState {
    * this showing (И13).
    */
   seenChanges: string | null
+  /**
+   * The client closed «Документы» (or the whole panel) after they opened by themselves: a new
+   * document does not open them again in this showing (docs/plan/67-agent-documents.md, Д4).
+   */
+  documentsSpent: boolean
+  /** A document came while «Документы» were not on the screen and did not open: the dot on «+». */
+  documentsUnseen: boolean
 }
 
 /** Every showing of a dialog starts with the panel closed (И1): nothing of it is kept elsewhere. */
@@ -233,6 +248,8 @@ export const closedTools: ToolsState = Object.freeze({
   away: false,
   launchSpent: false,
   seenChanges: null,
+  documentsSpent: false,
+  documentsUnseen: false,
 }) as ToolsState
 
 /** The panel, or below `lg` the area in place of the dialog, is on the screen. */
@@ -256,14 +273,27 @@ export type ToolsAction =
   | { type: 'launch' }
   /** A tab of the changes is on the screen at these changes (`changesMark`). */
   | { type: 'seen'; changes: string }
+  /**
+   * A document of the agent came while the client looks at the chat (docs/plan/67, Д4): from `lg`
+   * («opens») «Документы» open on it, or join the tabs of a panel on the screen beside the tool the
+   * client reads; below `lg` only the dot of «+» says so.
+   */
+  | { type: 'documentArrived'; opens: boolean }
 
 const withTool = (open: readonly DialogTool[], tool: DialogTool): readonly DialogTool[] =>
   open.includes(tool) ? open : [...open, tool]
 
 /** `tool` on the screen among the tabs `open`; the same state when nothing changes. */
 function shown(state: ToolsState, open: readonly DialogTool[], tool: DialogTool): ToolsState {
-  if (open === state.open && state.active === tool && !state.away) return state
-  return { ...state, open, active: tool, away: false }
+  const unseen = state.documentsUnseen && tool !== 'documents'
+  if (
+    open === state.open &&
+    state.active === tool &&
+    !state.away &&
+    unseen === state.documentsUnseen
+  )
+    return state
+  return { ...state, open, active: tool, away: false, documentsUnseen: unseen }
 }
 
 /** `tool` closed: the tab beside it, on the right, else on the left, is the active one. */
@@ -278,6 +308,7 @@ function closed(state: ToolsState, tool: DialogTool): ToolsState {
     away: state.away && open.length > 0,
     // The browser closed, or with the last tab the whole panel.
     launchSpent: state.launchSpent || tool === 'browser' || open.length === 0,
+    documentsSpent: state.documentsSpent || tool === 'documents' || open.length === 0,
   }
 }
 
@@ -297,7 +328,14 @@ export function toolsReducer(state: ToolsState, action: ToolsAction): ToolsState
       return state.open.includes(action.tool) ? closed(state, action.tool) : state
     case 'closeAll':
       if (state.open.length === 0) return state
-      return { ...state, open: [], active: null, away: false, launchSpent: true }
+      return {
+        ...state,
+        open: [],
+        active: null,
+        away: false,
+        launchSpent: true,
+        documentsSpent: true,
+      }
     case 'back': {
       if (state.active === null || state.away) return state
       const after = closed(state, state.active)
@@ -319,6 +357,17 @@ export function toolsReducer(state: ToolsState, action: ToolsAction): ToolsState
     case 'seen':
       if (state.seenChanges === action.changes) return state
       return { ...state, seenChanges: action.changes }
+    case 'documentArrived': {
+      if (toolsShown(state) && state.active === 'documents') return state
+      if (!action.opens || state.documentsSpent)
+        return state.documentsUnseen ? state : { ...state, documentsUnseen: true }
+      // Another tool on the screen keeps it and the focus: the documents join beside it.
+      if (toolsShown(state))
+        return state.open.includes('documents')
+          ? state
+          : { ...state, open: withTool(state.open, 'documents') }
+      return shown(state, withTool(state.open, 'documents'), 'documents')
+    }
   }
 }
 
@@ -333,11 +382,15 @@ export interface ToolTile {
 export const toolTilesOf = (
   head: FeedHeadState,
   tools: ToolsState,
-  { answered = false, rewound = false }: { answered?: boolean; rewound?: boolean } = {},
+  {
+    answered = false,
+    rewound = false,
+    documents = 0,
+  }: { answered?: boolean; rewound?: boolean; documents?: number } = {},
 ): ToolTile[] =>
-  dialogToolsOf(head).map((tool) => {
+  dialogToolsOf(head, documents).map((tool) => {
     const open = tools.open.includes(tool)
-    return { tool, open, mark: toolMark(tool, head, { open, answered, rewound }) }
+    return { tool, open, mark: toolMark(tool, head, { open, answered, rewound, documents }) }
   })
 
 /** Why «+» bears its dot (И13), the most pressing first. */
@@ -356,7 +409,8 @@ export function toolsDot(head: FeedHeadState, tools: ToolsState): ToolsDot | nul
   if (toolsShown(tools)) return null
   if (browserWaits(head.browser)) return 'browser'
   const changes = changesMark(head.candidate)
-  return changes !== null && changes !== tools.seenChanges ? 'changes' : null
+  if (changes !== null && changes !== tools.seenChanges) return 'changes'
+  return tools.documentsUnseen ? 'documents' : null
 }
 
 /** The name of «+»: with what its dot says, when it has one. */

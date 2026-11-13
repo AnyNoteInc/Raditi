@@ -19,8 +19,6 @@ export { readChatImage } from './services/chat/documents.ts'
 export {
   pageKeys,
   readPageView,
-  shareIdOf,
-  shareToken,
   type PageKeys,
   type PageView,
 } from './services/chat/page-tokens.ts'

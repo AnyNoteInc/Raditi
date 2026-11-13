@@ -37,12 +37,11 @@ export interface ChatContext {
    */
   browserSupported?: (stack: SiteStack) => boolean
   /**
-   * The domain of the pages the agent makes (docs/plan/67-agent-documents.md, Д3, Д8): its origin
-   * (PAGES_ORIGIN), the keys of its tokens (PAGES_SIGNING_SECRET), the cabinet's origin a shared
-   * link opens on (APP_URL) and whether documents may be shared (PAGES_SHARING). Absent or null —
-   * no page is shown here: the cabinet only downloads one, and no document is shared.
+   * The domain of the pages the agent makes (docs/plan/67-agent-documents.md, Д3): its origin
+   * (PAGES_ORIGIN), the key of its tokens (PAGES_SIGNING_SECRET) and the cabinet's origin that
+   * frames it (APP_URL). Absent or null — no page is shown here: the cabinet only downloads one.
    */
-  pages?: { origin: string; appUrl: string; keys: PageKeys; sharing: boolean } | null
+  pages?: { origin: string; appUrl: string; keys: PageKeys } | null
   /** The HMAC key of release confirmations: `releaseConfirmKey(BETTER_AUTH_SECRET)`. */
   releaseConfirmKey: Uint8Array
   /** `raditi-artifacts`: the diff of a candidate (`candidate.fileDiff`). */

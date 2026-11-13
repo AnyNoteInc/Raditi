@@ -199,12 +199,11 @@ describe('the stream of the browser of tasks', () => {
 
 describe('the domain of pages (docs/plan/67-agent-documents.md, Д3)', () => {
   const secret = 'a-secret-of-the-pages-that-is-long-enough-x'
-  it('takes an origin, a development secret and sharing on outside production', () => {
+  it('takes an origin and a development secret outside production', () => {
     expect(webEnvFromEnv({ ...devEnv, PAGES_ORIGIN: 'http://pages.localhost:3000' }).pages).toEqual(
       {
         origin: 'http://pages.localhost:3000',
         secret: DEV_PAGES_SECRET,
-        sharing: true,
       },
     )
     expect(webEnvFromEnv({ ...devEnv, PAGES_ORIGIN: '' }).pages).toBeNull()
@@ -213,23 +212,19 @@ describe('the domain of pages (docs/plan/67-agent-documents.md, Д3)', () => {
     )
   })
 
-  it('in production needs https, a domain of its own and a long secret, and keeps sharing off', () => {
+  it('in production needs https, a host apart from the cabinet and the previews, and a long secret', () => {
     const prod = {
       ...prodEnv,
-      PAGES_ORIGIN: 'https://raditi-pages.ru',
+      PAGES_ORIGIN: 'https://pages.raditi.ru',
       PAGES_SIGNING_SECRET: secret,
     }
-    expect(webEnvFromEnv(prod).pages).toEqual({
-      origin: 'https://raditi-pages.ru',
-      secret,
-      sharing: false,
-    })
-    expect(webEnvFromEnv({ ...prod, PAGES_SHARING: 'on' }).pages?.sharing).toBe(true)
+    // A subdomain of the cabinet's domain (owner's answer of 13.11.2026).
+    expect(webEnvFromEnv(prod).pages).toEqual({ origin: 'https://pages.raditi.ru', secret })
     // Without its secret the pages are off, never open with a known key.
     expect(webEnvFromEnv({ ...prod, PAGES_SIGNING_SECRET: '' }).pages).toBeNull()
     for (const [name, value] of [
-      ['PAGES_ORIGIN', 'http://raditi-pages.ru'],
-      ['PAGES_ORIGIN', 'https://pages.raditi.ru'],
+      ['PAGES_ORIGIN', 'http://pages.raditi.ru'],
+      ['PAGES_ORIGIN', 'https://raditi.ru'],
       ['PAGES_ORIGIN', 'https://docs.raditi-preview.ru'],
       ['PAGES_SIGNING_SECRET', 'short'],
     ] as const)

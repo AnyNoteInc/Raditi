@@ -100,8 +100,8 @@ describe('proxy', () => {
     it('takes only an exact origin', () => {
       for (const value of ['pages.localhost', 'http://pages.localhost/', 'ftp://x', 'http://a:b@c'])
         expect(pagesOriginOf({ PAGES_ORIGIN: value }), value).toBeNull()
-      expect(pagesOriginOf({ PAGES_ORIGIN: 'https://raditi-pages.ru' })).toBe(
-        'https://raditi-pages.ru',
+      expect(pagesOriginOf({ PAGES_ORIGIN: 'https://pages.raditi.ru' })).toBe(
+        'https://pages.raditi.ru',
       )
     })
   })

@@ -143,6 +143,8 @@ catalog:
   remark-gfm: ^4.0.1
   # The agent's words in a dialog: Markdown drawn as React, never as HTML
   react-markdown: ^10.1.0
+  # The tree of a text document the agent made, bound by its rules (docs/plan/67, Д6)
+  '@types/hast': ^3.0.5
   server-only: ^0.0.1
   '@playwright/test': ^1.63.0
   # The agent's browser on a preview (packages/browser-providers); the version of @playwright/test

@@ -39,6 +39,14 @@ const paths = {
   slash: 'M15.5 4 8.5 20',
   eye: 'M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12ZM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z',
   file: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5ZM14 3v5h5',
+  // A sheet with lines of text: a page or a document the agent made (docs/plan/67, Д4).
+  document:
+    'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5ZM14 3v5h5M9 13h6M9 17h6M9 9h1',
+  forward: 'm12 5 7 7-7 7M19 12H4',
+  share:
+    'M18 8a3 3 0 1 0-2.9-3.7L8.9 7.4a3 3 0 1 0 0 4.2l6.2 3.1A3 3 0 1 0 16 13l-6.2-3.1a3 3 0 0 0 0-.8l6.2-3.1A3 3 0 0 0 18 8Z',
+  copy: 'M9 9h10v12H9V9ZM5 15V3h10',
+  contents: 'M4 6h16M4 12h10M4 18h13',
   stop: 'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM9 9h6v6H9V9Z',
   /** SSH: a window with a prompt. */
   terminal:

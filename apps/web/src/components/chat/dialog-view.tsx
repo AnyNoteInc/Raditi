@@ -14,6 +14,11 @@ import {
   taskRewoundLabel,
   taskStatusLabel,
 } from '@repo/domain/tasks/client-feed-labels'
+import {
+  chatDocumentsOf,
+  documentOfFile,
+  openingDocumentOf,
+} from '@repo/domain/tasks/chat-documents'
 import { terminalTaskStatuses } from '@repo/domain/tasks/task-status'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
@@ -23,7 +28,15 @@ import { useTheme } from '@mui/material/styles'
 import useMediaQuery from '@mui/material/useMediaQuery'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import Link from 'next/link'
-import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { ConfirmDialog } from '@/components/billing/confirm-dialog'
@@ -101,6 +114,8 @@ import { TurnActivity } from './turn-activity'
 import { UndoDialog } from './undo-dialog'
 import { useAttachments } from './use-attachments'
 import { useBrowserLaunch } from './use-browser-launch'
+import { useDocumentArrivals } from './use-document-arrivals'
+import { DocumentsPane, type DocumentTarget } from './documents-pane'
 import { useBrowserStream } from './use-browser-stream'
 import { useBrowserWatching } from './use-browser-watching'
 import { useFeedFollow } from './use-feed-follow'
@@ -505,6 +520,21 @@ export function DialogView({
     if (!held.isConnected || held.getClientRects().length === 0)
       document.getElementById(TOOLS_BUTTON_ID)?.focus()
   }, [shown])
+  // The pages and text documents of the agent (docs/plan/67-agent-documents.md, Д4): one that comes
+  // while the client looks at the chat opens «Документы» on it — beside the dialog from `lg`, never
+  // in its place below: there only «+» says so.
+  const chatDocuments = useMemo(() => chatDocumentsOf(rows), [rows])
+  const [documentTarget, setDocumentTarget] = useState<DocumentTarget | null>(null)
+  const openDocument = useCallback((name: string, fileId: string | null) => {
+    setDocumentTarget((before) => ({ name, fileId, seq: (before?.seq ?? 0) + 1 }))
+  }, [])
+  useDocumentArrivals(rows, head !== null, (names) => {
+    const name = openingDocumentOf(names)
+    if (name === null) return
+    // The tab shows what came, whether it opens now or later; its history keeps what was before.
+    openDocument(name, null)
+    dispatchTools({ type: 'documentArrived', opens: wide })
+  })
   useBrowserLaunch(head, {
     taskId,
     enabled: withBrowser && browserStreamUrl !== null,
@@ -731,9 +761,9 @@ export function DialogView({
     if (movesFocus(by, { covers })) focusSoon(toolTabId(tool))
   }
 
-  /** Only the browser goes over the content: its button back is not there on any other tab. */
+  /** The browser and the documents go over the content: no other tab has its button back. */
   function leaveFullscreenFor(tool: DialogTool) {
-    if (tool !== 'browser') setFullscreen(false)
+    if (tool !== 'browser' && tool !== 'documents') setFullscreen(false)
   }
 
   /** A tab chosen on the strip of the panel. */
@@ -1056,6 +1086,12 @@ export function DialogView({
     onShowChanges: () => {
       if (head !== null) openTool(changesToolOf(head), { by: 'changes' })
     },
+    onOpenDocument: (fileId) => {
+      const document = documentOfFile(chatDocuments, fileId)
+      if (document === null) return
+      openDocument(document.name, fileId)
+      openTool('documents', { by: 'menu' })
+    },
     // A closed project is read: nothing that carries the work on is offered (К39), «Остановить» is.
     ...(closedProject
       ? {}
@@ -1214,7 +1250,10 @@ export function DialogView({
   // «+» of the tools: in the head while their panel is closed, at the end of its tabs while open.
   // Its dot says what is new behind it, never while the panel is open (И13); below `lg` its menu
   // comes up from the bottom of the screen (И14). A chat with no tool has no «+» at all (К19).
-  const tiles = head === null ? [] : toolTilesOf(head, tools, { answered, rewound })
+  const tiles =
+    head === null
+      ? []
+      : toolTilesOf(head, tools, { answered, rewound, documents: chatDocuments.length })
   const menu =
     head === null || tiles.length === 0 ? null : (
       <ToolsMenu
@@ -1271,6 +1310,16 @@ export function DialogView({
             canReset={resetVerdict?.available === true}
             onReset={() => runCommand('reset')}
             resetting={reset.isPending}
+          />
+        )
+      case 'documents':
+        return (
+          <DocumentsPane
+            taskId={taskId}
+            rows={rows}
+            target={documentTarget}
+            fullscreen={fullscreen}
+            onFullscreen={setFullscreen}
           />
         )
       case 'terminal':

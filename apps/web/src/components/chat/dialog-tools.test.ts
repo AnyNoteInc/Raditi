@@ -71,7 +71,15 @@ const launch: ToolsAction = { type: 'launch' }
 
 describe('the tools a dialog has (И6)', () => {
   it('lists them in the order of the menu, and names every opener of И9', () => {
-    expect(dialogTools).toEqual(['preview', 'files', 'database', 'checks', 'terminal', 'browser'])
+    expect(dialogTools).toEqual([
+      'preview',
+      'files',
+      'database',
+      'checks',
+      'terminal',
+      'browser',
+      'documents',
+    ])
     // The launch of the browser is an action of its own, and the feed has no buttons of the browser
     // but «Взять управление» (owner's answers of 30.10.2026).
     expect(toolOpeners).toEqual(['menu', 'changes', 'command', 'take'])
@@ -459,6 +467,7 @@ describe('the names, icons and ids of the tools', () => {
       database: 'База данных',
       checks: 'Проверки',
       terminal: 'Изменения',
+      documents: 'Документы',
     })
     expect(toolTabNames).toEqual({ ...toolMenuNames, files: 'Файлы' })
     expect(Object.keys(toolIcons)).toEqual([...dialogTools])
@@ -472,6 +481,7 @@ describe('the names, icons and ids of the tools', () => {
       'dialog-pane-tab-checks',
       'dialog-pane-tab-terminal',
       'dialog-pane-tab-browser',
+      'dialog-pane-tab-documents',
     ])
     expect(toolPanelId('preview')).toBe('dialog-pane-panel-preview')
     expect(toolPanelId('browser')).toBe('dialog-pane-panel-browser')
@@ -499,6 +509,8 @@ describe('the tabs of the open tools', () => {
       away: false,
       launchSpent: false,
       seenChanges: null,
+      documentsSpent: false,
+      documentsUnseen: false,
     })
     expect(toolsShown(closedTools)).toBe(false)
     expect(Object.isFrozen(closedTools)).toBe(true)
@@ -644,6 +656,8 @@ describe('the launch of the browser (И2, И3)', () => {
       away: false,
       launchSpent: true,
       seenChanges: null,
+      documentsSpent: false,
+      documentsUnseen: false,
     })
     expect(toolsShown(launched)).toBe(true)
     expect(toolsReducer(launched, launch)).toBe(launched)
@@ -749,7 +763,7 @@ describe('the dot on «+» (И13)', () => {
     // Closed by the client after it opened: no news either.
     expect(toolsDot(browserAnswer(), after(launch, close('browser')))).toBeNull()
     expect(toolsDot(browserAnswer({ browser: { status: 'starting' } }), closedTools)).toBeNull()
-    expect(Object.keys(toolText.dot)).toEqual(['browser', 'changes'])
+    expect(Object.keys(toolText.dot)).toEqual(['browser', 'changes', 'documents'])
   })
 
   it('says the most pressing first', () => {
@@ -827,5 +841,46 @@ describe('toolsReducer, whatever the client does', () => {
       launched += launches
     }
     expect(launched).toBeGreaterThan(0)
+  })
+})
+
+describe('the documents of the agent (docs/plan/67-agent-documents.md, Д4)', () => {
+  const arrived = (opens = true): ToolsAction => ({ type: 'documentArrived', opens })
+
+  it('are a tool of any chat once there is a document, with their number on the tile', () => {
+    expect(dialogToolsOf(browserAnswer())).not.toContain('documents')
+    expect(dialogToolsOf(browserAnswer(), 3)).toEqual(['browser', 'documents'])
+    expect(toolMark('documents', browserAnswer(), { open: false, documents: 3 })).toBe('3')
+    expect(toolIcons.documents).toBe('document')
+  })
+
+  it('open by themselves from lg, again for the next one, until the client closes them', () => {
+    const opened = after(arrived())
+    expect(opened).toMatchObject({ open: ['documents'], active: 'documents' })
+    expect(toolsReducer(opened, arrived())).toBe(opened)
+    const closedByClient = after(arrived(), close('documents'))
+    expect(closedByClient.documentsSpent).toBe(true)
+    expect(toolsReducer(closedByClient, arrived())).toMatchObject({
+      open: [],
+      documentsUnseen: true,
+    })
+    expect(after(arrived(), { type: 'closeAll' }).documentsSpent).toBe(true)
+  })
+
+  it('join a panel on the screen beside the tool the client reads, without the focus', () => {
+    const reading = after(launch)
+    expect(toolsReducer(reading, arrived())).toMatchObject({
+      open: ['browser', 'documents'],
+      active: 'browser',
+    })
+  })
+
+  it('below lg only mark «+», until the client opens them', () => {
+    const marked = after(arrived(false))
+    expect(marked).toMatchObject({ open: [], documentsUnseen: true })
+    expect(toolsDot(browserAnswer(), marked)).toBe('documents')
+    const seen = toolsReducer(marked, { type: 'open', tool: 'documents', by: 'menu' })
+    expect(seen.documentsUnseen).toBe(false)
+    expect(toolsDot(browserAnswer(), toolsReducer(seen, close('documents')))).toBeNull()
   })
 })

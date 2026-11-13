@@ -85,13 +85,12 @@ export function chatServices(): ChatContext | null {
       browserSupported,
       // The domain of the pages the agent makes (docs/plan/67-agent-documents.md, Д3, Д8).
       pages:
-        web.pages === null
+        web.pages == null
           ? null
           : {
               origin: web.pages.origin,
               appUrl: web.appUrl,
               keys: pageKeys(web.pages.secret),
-              sharing: web.pages.sharing,
             },
       releaseConfirmKey: releaseConfirmKey(env.auth().secret),
       storage: () => (storage ??= createS3ObjectStorage(env.storage())),

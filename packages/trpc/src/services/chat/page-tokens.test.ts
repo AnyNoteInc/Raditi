@@ -1,13 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import {
-  pageKeys,
-  PAGE_VIEW_TTL_MS,
-  readPageView,
-  shareIdOf,
-  shareToken,
-  signPageView,
-} from './page-tokens.ts'
+import { pageKeys, PAGE_VIEW_TTL_MS, readPageView, signPageView } from './page-tokens.ts'
 
 const keys = pageKeys('a-secret-of-the-pages-that-is-long-enough')
 const view = {
@@ -35,9 +28,6 @@ describe('page tokens (docs/plan/67, Д3, Д8)', () => {
       `${forged}.${mac}`,
       `${data}.${mac.slice(0, -2)}AA`,
       signPageView(other.view, view),
-      // A view token signed with the share key, and a share token read as a view.
-      signPageView(keys.share, view),
-      shareToken(keys.share, view.taskId),
       `${data}`,
       `${data}.${mac}.x`,
       'a.b',
@@ -45,17 +35,6 @@ describe('page tokens (docs/plan/67, Д3, Д8)', () => {
       'не.токен',
     ])
       expect(readPageView(keys.view, bad, 0)).toBeNull()
-  })
-
-  it('gives the same link of a share every time and reads its id back', () => {
-    const id = '0199a3f2-0000-7000-8000-0000000000c1'
-    expect(shareToken(keys.share, id)).toBe(shareToken(keys.share, id.toUpperCase()))
-    expect(shareIdOf(keys.share, shareToken(keys.share, id))).toBe(id)
-    expect(shareIdOf(keys.view, shareToken(keys.share, id))).toBeNull()
-    expect(shareIdOf(keys.share, signPageView(keys.view, view))).toBeNull()
-    expect(
-      shareIdOf(pageKeys('a-third-secret-long-enough-for-this').share, shareToken(keys.share, id)),
-    ).toBeNull()
   })
 
   it('needs a secret', () => {

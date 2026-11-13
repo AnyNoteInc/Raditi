@@ -43,13 +43,12 @@ export interface WebEnv {
    */
   browserStreamUrl: string | null
   /**
-   * The domain of the pages the agent makes (docs/plan/67-agent-documents.md, Д3, Д8): PAGES_ORIGIN,
+   * The domain of the pages the agent makes (docs/plan/67-agent-documents.md, Д3): PAGES_ORIGIN and
    * the secret its tokens are signed with (PAGES_SIGNING_SECRET; outside production an empty one
-   * is a value for development) and whether documents may be shared (PAGES_SHARING, off in
-   * production unless set). null — PAGES_ORIGIN is empty, or in production its secret is: pages
-   * are downloaded only.
+   * is a value for development). null — PAGES_ORIGIN is empty, or in production its secret is:
+   * pages are downloaded only.
    */
-  pages: { origin: string; secret: string; sharing: boolean } | null
+  pages: { origin: string; secret: string } | null
 }
 
 /** The secret of the pages outside production when none is set: never a secret of a server. */
@@ -94,7 +93,6 @@ const webEnvSchema = z
     BROWSER_STREAM_PUBLIC_URL: envVar(browserStreamUrl.optional()),
     PAGES_ORIGIN: envVar(z.string().optional()),
     PAGES_SIGNING_SECRET: envVar(z.string().optional()),
-    PAGES_SHARING: envVar(z.enum(['on', 'off']).optional()),
     // Read for the check of the preview domain only.
     GITEA_URL: envVar(z.string().optional()),
   })
@@ -134,9 +132,10 @@ const webEnvSchema = z
   })
 
 /**
- * PAGES_ORIGIN is an origin and nothing more; in production it is https, its registrable domain is
- * neither the cabinet's nor the previews' (Д3: Site Isolation parts sites, not subdomains), and
- * a secret given is at least 32 bytes.
+ * PAGES_ORIGIN is an origin and nothing more; in production it is https, never the cabinet's own
+ * host and never under the previews' domain, and a secret given is at least 32 bytes. A subdomain
+ * of the cabinet's domain is allowed — `pages.raditi.ru`, owner's answer of 13.11.2026: the page is
+ * an opaque origin by its sandbox, and the cookies of the cabinet are of its own host.
  */
 function pagesProblems(
   env: {
@@ -167,14 +166,20 @@ function pagesProblems(
       message: 'must use https in production',
     })
   const domain = (host: string) => getDomain(host, { allowPrivateDomains: true }) ?? host
-  const pages = domain(new URL(origin).hostname)
+  const pages = new URL(origin).hostname
   const app = URL.parse(env.APP_URL)
   const preview = env.PREVIEW_BASE_DOMAIN?.trim()
-  if ((app !== null && domain(app.hostname) === pages) || (preview && domain(preview) === pages))
+  if (app !== null && app.hostname === pages)
     ctx.addIssue({
       code: 'custom',
       path: ['PAGES_ORIGIN'],
-      message: 'must be a registrable domain of its own, apart from the cabinet and the previews',
+      message: 'must not be the host of the cabinet',
+    })
+  if (preview && domain(preview) === domain(pages))
+    ctx.addIssue({
+      code: 'custom',
+      path: ['PAGES_ORIGIN'],
+      message: 'must not share its registrable domain with the previews (a preview runs site code)',
     })
   // An empty secret leaves the pages off (`pagesOf`); a short one is a mistake to tell.
   const secret = env.PAGES_SIGNING_SECRET?.trim() ?? ''
@@ -205,7 +210,6 @@ function pagesOf(e: {
   APP_ENV: AppEnv
   PAGES_ORIGIN?: string | undefined
   PAGES_SIGNING_SECRET?: string | undefined
-  PAGES_SHARING?: 'on' | 'off' | undefined
 }): WebEnv['pages'] {
   const origin = pagesOriginOf({ PAGES_ORIGIN: e.PAGES_ORIGIN })
   if (origin === null) return null
@@ -213,5 +217,5 @@ function pagesOf(e: {
   const secret = e.PAGES_SIGNING_SECRET?.trim() || (production ? '' : DEV_PAGES_SECRET)
   // Without its secret the function is off, never open with a known key.
   if (secret === '') return null
-  return { origin, secret, sharing: (e.PAGES_SHARING ?? (production ? 'off' : 'on')) === 'on' }
+  return { origin, secret }
 }
