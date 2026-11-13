@@ -181,6 +181,8 @@ model Workspace {
   attachments     Attachment[]
   browserSessions BrowserSession[]
   webSearchCalls  WebSearchCall[]
+  pages           Page[]
+  chatDocuments   ChatDocument[]
 
   @@index([createdById])
   @@map("workspaces")
@@ -604,6 +606,8 @@ model Task {
   dbOperations       PreviewDbOperation[]
   browserSessions    BrowserSession[]
   browserCheckpoints BrowserCheckpoint[]
+  pages              Page[]
+  chatDocuments      ChatDocument[]
 
   @@unique([siteId, alias])
   @@index([siteId, updatedAt(sort: Desc)], map: "tasks_site_updated_idx")
@@ -2702,4 +2706,196 @@ model WebSearchCall {
   @@index([workspaceId, createdAt])
   @@index([createdAt])
   @@map("web_search_calls")
+}
+
+/// A published page of a workspace (docs/plan/69-pages.md): one address `<slug>.<PAGES_BASE_DOMAIN>`,
+/// whatever its version (Ст16); never deleted by the platform (Ст14). `pending` — reserved by the
+/// agent, no version yet; `live` — served; `taken_down` — 410 until the client puts it back.
+model Page {
+  id             String    @id @default(uuid(7)) @db.Uuid
+  workspaceId    String    @map("workspace_id") @db.Uuid
+  /// The chat it was made in; a page outlives its chat.
+  taskId         String?   @map("task_id") @db.Uuid
+  turnNo         Int?      @map("turn_no")
+  /// pageKinds of @repo/domain: html, markdown, doc.
+  kind           String    @db.VarChar(16)
+  slug           String    @unique @db.Char(26)
+  title          String    @db.VarChar(200)
+  /// pageStates: pending, live, taken_down.
+  state          String    @default("pending") @db.VarChar(16)
+  /// v1, v2, …: 0 while pending; only grows.
+  currentVersion Int       @default(0) @map("current_version")
+  /// scrypt of the password the client set (Ст13); NULL — open.
+  passwordHash   String?   @map("password_hash") @db.VarChar(255)
+  /// Grows with every change of the password: the cookies of the former one stop.
+  passwordEpoch  Int       @default(0) @map("password_epoch")
+  takenDownAt    DateTime? @map("taken_down_at") @db.Timestamptz(6)
+  /// client or operator.
+  takenDownBy    String?   @map("taken_down_by") @db.VarChar(16)
+  /// The document the page is drawn from (Ст7), one page a document.
+  documentId     String?   @unique @map("document_id") @db.Uuid
+  /// The file of the chat it was published from (Ст6, Ст32).
+  sourceFileName String?   @map("source_file_name") @db.VarChar(200)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  workspace    Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  task         Task?             @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  document     ChatDocument?     @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  versions     PageVersion[]
+  content      PageContent?
+  reservations PageReservation[]
+
+  @@index([workspaceId, createdAt])
+  @@index([taskId])
+  @@map("pages")
+}
+
+/// The history of the versions of a page: numbers, sizes, sums. The bytes of the current one alone
+/// are kept, in `page_contents` (Ст16).
+model PageVersion {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  pageId    String   @map("page_id") @db.Uuid
+  no        Int
+  sizeBytes Int      @map("size_bytes")
+  sha256    String   @db.Char(64)
+  /// outbox, doc or file.
+  source    String   @db.VarChar(16)
+  taskId    String?  @map("task_id") @db.Uuid
+  turnNo    Int?     @map("turn_no")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  page    Page         @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  content PageContent?
+
+  @@unique([pageId, no])
+  @@index([createdAt])
+  @@map("page_versions")
+}
+
+/// The bytes the page server answers with: the current version only.
+model PageContent {
+  pageId    String   @id @map("page_id") @db.Uuid
+  versionNo Int      @map("version_no")
+  bytes     Bytes
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  page    Page        @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  /// The bytes are of a version the history names: the number cannot drift from it.
+  version PageVersion @relation(fields: [pageId, versionNo], references: [pageId, no])
+
+  @@unique([pageId, versionNo])
+  @@map("page_contents")
+}
+
+/// A publication the turn asked for, done at the end of the turn (Ст6, Ст7, Ст19): a file of the
+/// outbox or a finished document becomes the next version of the page.
+model PageReservation {
+  id         String    @id @default(uuid(7)) @db.Uuid
+  pageId     String    @map("page_id") @db.Uuid
+  taskId     String    @map("task_id") @db.Uuid
+  turnNo     Int       @map("turn_no")
+  fileName   String?   @map("file_name") @db.VarChar(200)
+  documentId String?   @map("document_id") @db.Uuid
+  title      String    @db.VarChar(200)
+  /// NULL while it waits for the end of the turn; then done, missing, refused or failed.
+  outcome    String?   @db.VarChar(16)
+  versionNo  Int?      @map("version_no")
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  settledAt  DateTime? @map("settled_at") @db.Timestamptz(6)
+
+  page Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, turnNo, fileName])
+  @@unique([taskId, turnNo, documentId])
+  @@index([outcome, createdAt])
+  @@map("page_reservations")
+}
+
+/// A document the agent writes section by section (Ст7, Ст21). The sections' text is shown to the
+/// client only once core checked it at the end of its turn (Ст19).
+model ChatDocument {
+  id             String   @id @default(uuid(7)) @db.Uuid
+  workspaceId    String   @map("workspace_id") @db.Uuid
+  taskId         String?  @map("task_id") @db.Uuid
+  title          String   @db.VarChar(200)
+  /// Grows with every change: the card reads the document again (`feed.doc_touch`).
+  revision       Int      @default(1)
+  /// v1, v2, …: 0 before the first `doc_finish` came true.
+  currentVersion Int      @default(0) @map("current_version")
+  /// The chat and turn whose `doc_finish` waits for the end of that turn: a document belongs to
+  /// the workspace, any chat of it may write it.
+  finishTaskId   String?  @map("finish_task_id") @db.Uuid
+  finishTurnNo   Int?     @map("finish_turn_no")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  workspace Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  task      Task?                 @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  sections  ChatDocumentSection[]
+  versions  ChatDocumentVersion[]
+  content   ChatDocumentContent?
+  page      Page?
+
+  @@index([workspaceId, createdAt])
+  @@index([taskId])
+  @@map("chat_documents")
+}
+
+model ChatDocumentSection {
+  id            String  @id @default(uuid(7)) @db.Uuid
+  documentId    String  @map("document_id") @db.Uuid
+  /// The id the agent gave it.
+  sectionKey    String  @map("section_key") @db.VarChar(40)
+  position      Int
+  heading       String? @db.VarChar(200)
+  markdown      String? @db.Text
+  intent        String  @db.VarChar(200)
+  /// docSectionStates: pending, written.
+  state         String  @default("pending") @db.VarChar(16)
+  /// The chat and turn that wrote it; core checks the sections of a turn at its end.
+  writtenTaskId String? @map("written_task_id") @db.Uuid
+  writtenTurn   Int?    @map("written_turn")
+  /// Set once core found nothing in it: until then the cabinet gets no text.
+  checkedTurn   Int?    @map("checked_turn")
+  /// Why core sent it back to pending (pageRefusalReasons).
+  refusal       String? @db.VarChar(24)
+
+  document ChatDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, sectionKey])
+  @@index([documentId, position])
+  @@index([writtenTaskId, writtenTurn])
+  @@map("chat_document_sections")
+}
+
+/// The history of the versions of a document; the Markdown of the current one is in `chat_document_contents`.
+model ChatDocumentVersion {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  documentId String   @map("document_id") @db.Uuid
+  no         Int
+  sizeBytes  Int      @map("size_bytes")
+  sha256     String   @db.Char(64)
+  taskId     String?  @map("task_id") @db.Uuid
+  turnNo     Int?     @map("turn_no")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  document ChatDocument         @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  content  ChatDocumentContent?
+
+  @@unique([documentId, no])
+  @@map("chat_document_versions")
+}
+
+model ChatDocumentContent {
+  documentId String   @id @map("document_id") @db.Uuid
+  versionNo  Int      @map("version_no")
+  markdown   String   @db.Text
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  document ChatDocument        @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  version  ChatDocumentVersion @relation(fields: [documentId, versionNo], references: [documentId, no])
+
+  @@unique([documentId, versionNo])
+  @@map("chat_document_contents")
 }
