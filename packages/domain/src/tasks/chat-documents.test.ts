@@ -4,6 +4,9 @@ import {
   chatDocumentsOf,
   chatImageAt,
   documentImageOf,
+  documentImageTypeOf,
+  documentTextOf,
+  documentViewLimits,
   documentKindOf,
   documentLinkOf,
   documentSlug,
@@ -193,5 +196,38 @@ describe('requestedFileFormats', () => {
       const formats = requestedFileFormats(text)
       expect([formats.word, formats.excel, formats.markdown]).toEqual([false, false, false])
     }
+  })
+})
+
+describe('documentImageTypeOf', () => {
+  it('knows the four kinds by their bytes and nothing else', () => {
+    expect(
+      documentImageTypeOf(Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1])),
+    ).toBe('image/png')
+    expect(documentImageTypeOf(Uint8Array.from([0xff, 0xd8, 0xff, 0xe0]))).toBe('image/jpeg')
+    expect(documentImageTypeOf(new TextEncoder().encode('RIFF\0\0\0\0WEBPVP8'))).toBe('image/webp')
+    expect(documentImageTypeOf(new TextEncoder().encode('GIF89a...'))).toBe('image/gif')
+    // An SVG named .png, HTML, nothing.
+    expect(documentImageTypeOf(new TextEncoder().encode('<svg onload="alert(1)">'))).toBeNull()
+    expect(documentImageTypeOf(new TextEncoder().encode('<html>'))).toBeNull()
+    expect(documentImageTypeOf(new Uint8Array(0))).toBeNull()
+  })
+})
+
+describe('documentTextOf', () => {
+  it('reads strict UTF-8, drops a BOM and refuses other bytes', () => {
+    expect(documentTextOf(new TextEncoder().encode('﻿# Привет'))).toEqual({
+      text: '# Привет',
+      truncated: false,
+    })
+    expect(documentTextOf(Uint8Array.from([0xc3, 0x28]))).toBeNull()
+    expect(documentTextOf(Uint8Array.from([0xcf, 0xf0, 0xe8]))).toBeNull()
+  })
+
+  it('cuts a long text at a whole character', () => {
+    const text = 'я'.repeat(documentViewLimits.markdownBytes)
+    const read = documentTextOf(new TextEncoder().encode(text))!
+    expect(read.truncated).toBe(true)
+    expect(new TextEncoder().encode(read.text).length).toBe(documentViewLimits.markdownBytes)
   })
 })

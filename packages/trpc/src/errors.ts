@@ -171,6 +171,8 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
     'Не удалось получить или сохранить файлы сайта. Попробуйте ещё раз немного позже',
   // A dialog, its preview and the release of its changes (docs/plan/53-chat-preview-release.md).
   CHAT_NOT_CONFIGURED: 'Чаты сейчас недоступны. Попробуйте ещё раз немного позже',
+  // The domain of pages is not set up here (docs/plan/67-agent-documents.md, Д3).
+  PAGES_UNAVAILABLE: 'Страницы сейчас не открываются. Скачайте файл',
   // The Transit key of the workspace was not made before the task (docs/plan/57, Б32).
   WORKSPACE_KEY_UNAVAILABLE:
     'Не удалось начать задание из-за технического сбоя. Попробуйте ещё раз немного позже',

@@ -1,7 +1,7 @@
 import { DEV_METRICS_TOKEN } from '@repo/observability'
 import { describe, expect, it } from 'vitest'
 
-import { webEnvFromEnv } from './web-env'
+import { DEV_PAGES_SECRET, webEnvFromEnv } from './web-env'
 
 const devEnv = {
   APP_ENV: 'development',
@@ -29,6 +29,7 @@ describe('webEnvFromEnv', () => {
       pastDueDays: 7,
       preview: null,
       browserStreamUrl: null,
+      pages: null,
     })
     expect(webEnvFromEnv({ ...devEnv, METRICS_TOKEN: ' ', REDIS_URL: '' })).toMatchObject({
       metricsToken: DEV_METRICS_TOKEN,
@@ -193,5 +194,47 @@ describe('the stream of the browser of tasks', () => {
     expect(() =>
       webEnvFromEnv({ ...prodEnv, BROWSER_STREAM_PUBLIC_URL: 'ws://raditi.ru/v1/browser/stream' }),
     ).toThrow('[web] invalid configuration: BROWSER_STREAM_PUBLIC_URL: must use wss in production')
+  })
+})
+
+describe('the domain of pages (docs/plan/67-agent-documents.md, Д3)', () => {
+  const secret = 'a-secret-of-the-pages-that-is-long-enough-x'
+  it('takes an origin, a development secret and sharing on outside production', () => {
+    expect(webEnvFromEnv({ ...devEnv, PAGES_ORIGIN: 'http://pages.localhost:3000' }).pages).toEqual(
+      {
+        origin: 'http://pages.localhost:3000',
+        secret: DEV_PAGES_SECRET,
+        sharing: true,
+      },
+    )
+    expect(webEnvFromEnv({ ...devEnv, PAGES_ORIGIN: '' }).pages).toBeNull()
+    expect(() => webEnvFromEnv({ ...devEnv, PAGES_ORIGIN: 'http://pages.localhost/x' })).toThrow(
+      /PAGES_ORIGIN/,
+    )
+  })
+
+  it('in production needs https, a domain of its own and a long secret, and keeps sharing off', () => {
+    const prod = {
+      ...prodEnv,
+      PAGES_ORIGIN: 'https://raditi-pages.ru',
+      PAGES_SIGNING_SECRET: secret,
+    }
+    expect(webEnvFromEnv(prod).pages).toEqual({
+      origin: 'https://raditi-pages.ru',
+      secret,
+      sharing: false,
+    })
+    expect(webEnvFromEnv({ ...prod, PAGES_SHARING: 'on' }).pages?.sharing).toBe(true)
+    // Without its secret the pages are off, never open with a known key.
+    expect(webEnvFromEnv({ ...prod, PAGES_SIGNING_SECRET: '' }).pages).toBeNull()
+    for (const [name, value] of [
+      ['PAGES_ORIGIN', 'http://raditi-pages.ru'],
+      ['PAGES_ORIGIN', 'https://pages.raditi.ru'],
+      ['PAGES_ORIGIN', 'https://docs.raditi-preview.ru'],
+      ['PAGES_SIGNING_SECRET', 'short'],
+    ] as const)
+      expect(() =>
+        webEnvFromEnv({ ...prod, PREVIEW_BASE_DOMAIN: 'raditi-preview.ru', [name]: value }),
+      ).toThrow(new RegExp(name))
   })
 })

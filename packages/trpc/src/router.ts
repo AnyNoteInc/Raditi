@@ -3,6 +3,7 @@ import { billingRouter } from './routers/billing.ts'
 import { browserRouter } from './routers/browser.ts'
 import { candidateRouter } from './routers/candidate.ts'
 import { consentRouter } from './routers/consent.ts'
+import { documentRouter } from './routers/document.ts'
 import { healthRouter } from './routers/health.ts'
 import { previewRouter } from './routers/preview.ts'
 import { projectRouter } from './routers/project.ts'
@@ -41,6 +42,8 @@ export const appRouter = router({
   // A task in the cloud browser and the files of messages (docs/plan/57-browser-tasks.md).
   browser: browserRouter,
   attachment: attachmentRouter,
+  // The pages and text documents the agent makes in a chat (docs/plan/67-agent-documents.md).
+  document: documentRouter,
 })
 
 export type AppRouter = typeof appRouter

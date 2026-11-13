@@ -285,3 +285,52 @@ export function requestedFileFormats(text: string): RequestedFileFormats {
     markdown: mentions(text, MARKDOWN),
   }
 }
+
+// ---------------------------------------------------------------------------------------------
+// The pictures of a text document (Д5)
+// ---------------------------------------------------------------------------------------------
+
+export type DocumentImageType = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
+
+/**
+ * The type of a picture by its bytes, never by its name: PNG, JPEG, WebP or GIF. SVG and anything
+ * else — null: a browser told an SVG is an image may still run what it holds elsewhere.
+ */
+export function documentImageTypeOf(bytes: Uint8Array): DocumentImageType | null {
+  const startsWith = (prefix: readonly number[], offset = 0) =>
+    bytes.length >= offset + prefix.length && prefix.every((byte, i) => bytes[offset + i] === byte)
+  if (startsWith([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return 'image/png'
+  if (startsWith([0xff, 0xd8, 0xff])) return 'image/jpeg'
+  if (startsWith([0x52, 0x49, 0x46, 0x46]) && startsWith([0x57, 0x45, 0x42, 0x50], 8))
+    return 'image/webp'
+  if (
+    startsWith([0x47, 0x49, 0x46, 0x38, 0x37, 0x61]) ||
+    startsWith([0x47, 0x49, 0x46, 0x38, 0x39, 0x61])
+  )
+    return 'image/gif'
+  return null
+}
+
+/**
+ * The text of a document as the cabinet shows it (Д5): strict UTF-8, a BOM dropped; null — the
+ * bytes are not UTF-8. A text above `documentViewLimits.markdownBytes` is cut there, at the
+ * last whole character, and said to be cut.
+ */
+export function documentTextOf(bytes: Uint8Array): { text: string; truncated: boolean } | null {
+  const limit = documentViewLimits.markdownBytes
+  let body = bytes
+  if (body.length >= 3 && body[0] === 0xef && body[1] === 0xbb && body[2] === 0xbf)
+    body = body.subarray(3)
+  const truncated = body.length > limit
+  if (truncated) {
+    let end = limit
+    // Back to the first byte of a character: never cut one in two.
+    while (end > 0 && (body[end]! & 0xc0) === 0x80) end--
+    body = body.subarray(0, end)
+  }
+  try {
+    return { text: new TextDecoder('utf-8', { fatal: true }).decode(body), truncated }
+  } catch {
+    return null
+  }
+}

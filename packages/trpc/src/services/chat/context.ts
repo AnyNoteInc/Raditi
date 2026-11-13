@@ -9,6 +9,8 @@ import {
   type SiteStack,
 } from '@repo/domain'
 
+import type { PageKeys } from './page-tokens.ts'
+
 /**
  * What the procedures of a dialog reach outside the database (docs/plan/53-chat-preview-release.md).
  * The app builds it once per process; the adapters behind `storage` and `secrets` are made on
@@ -34,6 +36,13 @@ export interface ChatContext {
    * adapter, the app that builds this context does. Absent — every stack is taken for one.
    */
   browserSupported?: (stack: SiteStack) => boolean
+  /**
+   * The domain of the pages the agent makes (docs/plan/67-agent-documents.md, Д3, Д8): its origin
+   * (PAGES_ORIGIN), the keys of its tokens (PAGES_SIGNING_SECRET), the cabinet's origin a shared
+   * link opens on (APP_URL) and whether documents may be shared (PAGES_SHARING). Absent or null —
+   * no page is shown here: the cabinet only downloads one, and no document is shared.
+   */
+  pages?: { origin: string; appUrl: string; keys: PageKeys; sharing: boolean } | null
   /** The HMAC key of release confirmations: `releaseConfirmKey(BETTER_AUTH_SECRET)`. */
   releaseConfirmKey: Uint8Array
   /** `raditi-artifacts`: the diff of a candidate (`candidate.fileDiff`). */

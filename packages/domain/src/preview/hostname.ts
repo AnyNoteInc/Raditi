@@ -142,6 +142,15 @@ export function previewEnterUrl(origin: string, ticket: string, to = '/'): strin
 export const PREVIEW_SANDBOX =
   'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox'
 
+/**
+ * What the frame of a page the agent made is allowed (docs/plan/67-agent-documents.md, Д3): its own
+ * scripts, windows, dialogs and downloads — never the origin it is served from (`allow-same-origin`),
+ * a form or the navigation of the cabinet. The page's server sends the same set in the `sandbox`
+ * directive of its CSP, so the page is sandboxed opened outside the frame too.
+ */
+export const PAGE_SANDBOX =
+  'allow-scripts allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads'
+
 /** The cabinet's route that issues a fresh ticket for a preview and a path (apps/web, Р19). */
 export const PREVIEW_OPEN_PATH = '/preview/open'
 
