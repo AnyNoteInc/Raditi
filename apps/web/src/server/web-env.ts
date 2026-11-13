@@ -3,12 +3,14 @@ import {
   BROWSER_STREAM_PATH,
   envVar,
   isProduction,
+  pagesAddressFromEnv,
   parseEnv,
   previewAddressEnvShape,
   previewAddressFromEnv,
   previewAddressProblems,
   type AppEnv,
   type Env,
+  type PagesAddress,
   type PreviewAddress,
 } from '@repo/domain'
 import { DEV_METRICS_TOKEN, metricsTokenProblem } from '@repo/observability'
@@ -40,6 +42,11 @@ export interface WebEnv {
    * null — the platform has no browser here: no site offers tasks in it. `wss://` in production.
    */
   browserStreamUrl: string | null
+  /**
+   * Where published pages answer (docs/plan/69-pages.md, Ст3): the cabinet names their address.
+   * null — PAGES_BASE_DOMAIN is unset: no pages here. The same variables as mcp and preview read.
+   */
+  pages: PagesAddress | null
 }
 
 // The address of the stream gateway: a WebSocket URL with nothing a browser would send elsewhere —
@@ -81,6 +88,8 @@ const webEnvSchema = z
     BROWSER_STREAM_PUBLIC_URL: envVar(browserStreamUrl.optional()),
     // Read for the check of the preview domain only.
     GITEA_URL: envVar(z.string().optional()),
+    PAGES_BASE_DOMAIN: envVar(z.string().optional()),
+    PAGES_PUBLIC_PORT: envVar(z.coerce.number().int().min(1).max(65_535).optional()),
   })
   .superRefine((env, ctx) => {
     const tokenProblem = metricsTokenProblem(env.METRICS_TOKEN, env.APP_ENV)
@@ -110,7 +119,9 @@ const webEnvSchema = z
       },
       (host) => getDomain(host, { allowPrivateDomains: true }),
     )
-    for (const problem of problems) {
+    const pageProblems: string[] = []
+    pagesAddressFromEnv(env, isProduction(env.APP_ENV), pageProblems)
+    for (const problem of [...problems, ...pageProblems]) {
       const [name, ...message] = problem.split(': ')
       ctx.addIssue({ code: 'custom', path: [name ?? ''], message: message.join(': ') })
     }
@@ -127,5 +138,6 @@ export function webEnvFromEnv(env: Env): WebEnv {
     pastDueDays: e.BILLING_PAST_DUE_DAYS,
     preview: previewAddressFromEnv(e, e.APP_ENV),
     browserStreamUrl: e.BROWSER_STREAM_PUBLIC_URL ?? null,
+    pages: pagesAddressFromEnv(e, isProduction(e.APP_ENV), []),
   }
 }

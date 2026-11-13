@@ -28,10 +28,13 @@ beforeEach(() => {
 })
 
 describe('the rail of the cabinet', () => {
-  it('stands «Чаты» before «Проекты», and the mark leads to the chats', () => {
-    const [chats, projects] = links()
+  it('stands «Чаты», «Страницы», «Проекты», and the mark leads to the chats', () => {
+    const [chats, pages, projects] = links()
     expect(chats).toHaveAccessibleName('Чаты')
     expect(chats).toHaveAttribute('href', '/chats')
+    // Between the chats and the projects (owner's answer of 13.11.2026, plan 69, Ст30).
+    expect(pages).toHaveAccessibleName('Страницы')
+    expect(pages).toHaveAttribute('href', '/pages')
     expect(projects).toHaveAccessibleName('Проекты')
     expect(projects).toHaveAttribute('href', '/projects')
     expect(screen.getByRole('link', { name: 'Радити — главная страница' })).toHaveAttribute(
@@ -44,8 +47,9 @@ describe('the rail of the cabinet', () => {
     ['/chats', 0],
     ['/chats/new', 0],
     ['/chats/0199a3f2-0000-7000-8000-000000000001', 0],
-    ['/projects', 1],
-    ['/projects/new', 1],
+    ['/pages', 1],
+    ['/projects', 2],
+    ['/projects/new', 2],
   ])('marks the section of %s, and only it', (pathname, current) => {
     mocks.pathname = pathname
     const all = links()

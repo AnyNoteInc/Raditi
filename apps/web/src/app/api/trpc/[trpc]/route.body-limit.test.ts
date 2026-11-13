@@ -2,6 +2,7 @@ import { legalDocuments } from '@repo/domain'
 import type * as TrpcModule from '@repo/trpc'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type * as EnvModule from '@/env'
 import { MAX_TRPC_BODY_BYTES } from '@/server/body-limit'
 import { MAX_BATCH_SIZE } from '@/trpc/batch'
 
@@ -12,6 +13,19 @@ const USER_ID = '0199a000-0000-7000-8000-000000000001'
 const { state } = vi.hoisted(() => ({
   state: { signedIn: true, updates: [] as { name: string; lastName: string | null }[] },
 }))
+// The origin check of the route reads APP_URL (plan 69, Ст3): the cabinet of these requests.
+vi.mock('@/env', async (importOriginal) => {
+  const original = await importOriginal<typeof EnvModule>()
+  return { env: { ...original.env, web: () => ({ ...safeWeb(original.env), appUrl: ORIGIN }) } }
+})
+function safeWeb(env: { web: () => object }): object {
+  try {
+    return env.web()
+  } catch {
+    return {}
+  }
+}
+
 vi.mock('@repo/trpc', async (importOriginal) => {
   const original = await importOriginal<typeof TrpcModule>()
   const { legalDocuments: documents } = await import('@repo/domain')

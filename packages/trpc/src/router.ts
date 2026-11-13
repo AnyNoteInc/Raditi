@@ -4,6 +4,7 @@ import { browserRouter } from './routers/browser.ts'
 import { candidateRouter } from './routers/candidate.ts'
 import { consentRouter } from './routers/consent.ts'
 import { healthRouter } from './routers/health.ts'
+import { pagesRouter } from './routers/pages.ts'
 import { previewRouter } from './routers/preview.ts'
 import { projectRouter } from './routers/project.ts'
 import { releaseRouter } from './routers/release.ts'
@@ -41,6 +42,8 @@ export const appRouter = router({
   // A task in the cloud browser and the files of messages (docs/plan/57-browser-tasks.md).
   browser: browserRouter,
   attachment: attachmentRouter,
+  // «Страницы»: the published pages of the user's workspaces (docs/plan/69-pages.md).
+  pages: pagesRouter,
 })
 
 export type AppRouter = typeof appRouter
