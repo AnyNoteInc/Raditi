@@ -937,9 +937,7 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
 
     // A turn lives a lease past its last renewal (plan 70, ВР2): less than the recovery's own
     // six minutes, which the new epoch gets with the publication grace.
-    expect(takeOver.mock.calls[0]![0].ttlMs).toBe(
-      RECOVERY_TIMEOUT_MS + TURN_PUBLICATION_GRACE_MS,
-    )
+    expect(takeOver.mock.calls[0]![0].ttlMs).toBe(RECOVERY_TIMEOUT_MS + TURN_PUBLICATION_GRACE_MS)
     expect(w.publish).toHaveBeenCalledOnce()
   })
 

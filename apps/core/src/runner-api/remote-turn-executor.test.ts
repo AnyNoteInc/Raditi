@@ -683,7 +683,11 @@ describe('RemoteTurnExecutor over the runner hub', () => {
       remainingMs: MAX_SANDBOX_LEASE_MS,
       sandbox: { hardTimeoutMs: MAX_SANDBOX_LEASE_MS },
     })
-    await old.report(other.id, { type: 'created', commandId: prepare!.commandId, containerId: 'c2' })
+    await old.report(other.id, {
+      type: 'created',
+      commandId: prepare!.commandId,
+      containerId: 'c2',
+    })
     await old.report(other.id, {
       type: 'prepared',
       commandId: prepare!.commandId,

@@ -949,9 +949,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
       expect.objectContaining({ secrets: [], labels: expect.objectContaining({ leaseEpoch: 1 }) }),
       expect.any(AbortSignal),
     )
-    expect(f.leases.acquire).toHaveBeenCalledWith(
-      expect.objectContaining({ ttlMs: TURN_LEASE_MS }),
-    )
+    expect(f.leases.acquire).toHaveBeenCalledWith(expect.objectContaining({ ttlMs: TURN_LEASE_MS }))
     // The capture refuses the turn's own credentials: the LLM key, the MCP token, secret files.
     expect(f.transport.capture).toHaveBeenCalledWith(
       f.sandbox,
@@ -1114,7 +1112,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
       expect.objectContaining({ hardTimeoutMs: expect.any(Number) }),
       expect.any(AbortSignal),
     )
-    const [created] = (f.sandboxes.create.mock.calls as unknown as [[{ hardTimeoutMs: number }]])
+    const [created] = f.sandboxes.create.mock.calls as unknown as [[{ hardTimeoutMs: number }]]
     expect(created[0].hardTimeoutMs).toBeLessThanOrEqual(TURN_LEASE_TTL_MS)
     expect(vi.mocked(f.sandbox.extend).mock.calls.length).toBeGreaterThan(200)
     expect(f.leases.renew.mock.calls.length).toBeGreaterThan(200)

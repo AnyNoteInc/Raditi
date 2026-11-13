@@ -90,7 +90,9 @@ function leaseOf(item) {
  */
 export async function reapExpired(client, now = Date.now()) {
   const leaseRows = await client('GET', listPath('containers/json', leasePrefix))
-  const leases = leaseRows.map((item) => ({ item, lease: leaseOf(item) })).filter((row) => row.lease)
+  const leases = leaseRows
+    .map((item) => ({ item, lease: leaseOf(item) }))
+    .filter((row) => row.lease)
   const turnUntil = new Map()
   const gatewayUntil = new Map()
   for (const { lease } of leases) {

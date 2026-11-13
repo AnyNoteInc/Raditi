@@ -382,7 +382,9 @@ export function createDockerSandboxProvider(
    * takes the container over with the time the dead supervisor last granted it.
    */
   const withLeases = async <T extends { labels: SandboxLabels; deadline: number }>(meta: T) => {
-    const rows = await bounded(docker.listContainers({ all: true, filters: leaseFilter(meta.labels) }))
+    const rows = await bounded(
+      docker.listContainers({ all: true, filters: leaseFilter(meta.labels) }),
+    )
     const latest = Math.max(
       meta.deadline,
       ...rows.map((row) => leaseDeadline(row, meta.labels) ?? 0),

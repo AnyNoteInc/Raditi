@@ -387,9 +387,7 @@ export class TurnExecRecovery {
     attempt.assignment = advanced
     attempt.credentialRef = credentialRef(assignment)
     guard.onRenewed((left) => {
-      void attempt.execution
-        ?.extend(left)
-        .catch(() => this.#logger.warn('turn_extend_failed'))
+      void attempt.execution?.extend(left).catch(() => this.#logger.warn('turn_extend_failed'))
     })
     return { grant, guard, attempt, remainingMs }
   }

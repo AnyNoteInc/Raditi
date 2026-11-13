@@ -93,6 +93,36 @@ describe.skipIf(!image)('real Docker sandbox provider', () => {
     ])
   }, 30_000)
 
+  it('extends a turn with a lease the daemon holds, and drops it with the sandbox (plan 70, ВР5)', async () => {
+    const sandbox = await spawn()
+    const leases = async () =>
+      client.listContainers({
+        all: true,
+        filters: { label: [`io.raditi.turnlease.taskId=${sandbox.labels.taskId}`] },
+      })
+    const deadline = sandbox.deadline + 120_000
+    await sandbox.extend(deadline)
+    const [lease] = await leases()
+    expect(lease?.Names).toEqual([
+      `/raditi-turn-${sandbox.labels.taskId}-${sandbox.labels.turn}-lease-${deadline}`,
+    ])
+    expect(lease?.State).toBe('created')
+    expect(lease?.Labels['io.raditi.turnlease.deadline']).toBe(String(deadline))
+    // Adopted again, the turn has the deadline of its lease; a later one replaces it.
+    expect((await provider().get(sandbox.id))!.deadline).toBe(deadline)
+    await sandbox.extend(deadline + 60_000)
+    expect((await leases()).map((row) => row.Labels['io.raditi.turnlease.deadline'])).toEqual([
+      String(deadline + 60_000),
+    ])
+    // An agent without a time limit runs past what a timeout would have given it.
+    const exec = await sandbox.exec({
+      argv: ['/usr/local/bin/node', '-e', 'setTimeout(()=>{},1500)'],
+    })
+    expect(await exec.wait()).toEqual({ code: 0, reason: 'exited' })
+    await sandbox.destroy('completed')
+    expect(await leases()).toEqual([])
+  }, 30_000)
+
   it('roundtrips binary files through stdin and refuses symlink traversal and hostile paths', async () => {
     const sandbox = await spawn({
       secrets: [{ path: '/run/raditi/secrets/synthetic', value: 'synthetic-test-value' }],
