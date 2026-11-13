@@ -185,7 +185,14 @@ export async function verifyZai(ctx) {
   // selects on what the probe stored. The five-hour window is one nobody has started.
   assert.equal((await account()).limitWindows?.length ?? 0, 0)
   const proxied = await issued()
-  assert.deepEqual((await windows())['5h'], { name: '5h', usedPct: 0, resetsAt: null })
+  // The size and the use in plan credits come with the share (docs/plan/71-usage-limits.md).
+  assert.deepEqual((await windows())['5h'], {
+    name: '5h',
+    usedPct: 0,
+    resetsAt: null,
+    limitCredits: 2000,
+    usedCredits: 0,
+  })
   assert.ok((await windows()).week.usedPct > 0 && (await windows()).week.usedPct < 1)
   // The key is durable: recovered and issued again it is the same one. The only account is
   // healthy but holds its one turn: occupied slots, not missing capacity.
@@ -818,6 +825,29 @@ export async function verifyZai(ctx) {
   passed(
     'a new task is refused at 91 % of the five-hour window without a provider refusal; a bound task goes on',
   )
+
+  // The windows in plan credits as Z.ai names them (plan 71): the same account on a plan of
+  // another size is read by its own numbers, and a new task goes on at once.
+  setStage('absolute windows')
+  await zai({ quota: { plan: 'pro' } })
+  // Unknown windows: issue asks the quota before it selects (the 91 % above would hold a new
+  // task of a workspace without a tariff for the reserve of the higher tiers, with no probe).
+  await db.subscriptionAccount.update({
+    where: { id: accountId },
+    data: { limitWindows: [], headroomPct: null, limitsSeenAt: null },
+  })
+  await direct()
+  const large = await issued()
+  const five = (await windows())['5h']
+  assert.deepEqual([five.limitCredits, five.usedCredits], [12000, 0])
+  assert.equal((await windows()).week.limitCredits, 60000)
+  await revoke(large)
+  await zai({ quota: { plan: 'lite' } })
+  await db.subscriptionAccount.update({
+    where: { id: accountId },
+    data: { coolingUntil: null, limitWindows: [], headroomPct: null, limitsSeenAt: null },
+  })
+  passed('the windows carry the size Z.ai names: a Pro account is read as 12 000 / 60 000 credits')
 
   // A quota answer that cannot be read is no capacity: admission closes until one that can.
   await zai({ quota: { mode: 'broken' } })

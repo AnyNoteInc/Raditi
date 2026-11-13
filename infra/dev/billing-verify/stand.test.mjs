@@ -1301,12 +1301,12 @@ test('every row of the plan’s table is proved by a scenario, «Возврат�
   assert.ok(rows.includes('Курс кредита: команда оператора'))
   const proved = new Set(SCENARIOS.map(({ row }) => row))
   for (const row of rows) assert.ok(proved.has(row), `no scenario proves «${row}»`)
-  // And nothing claims a row the plan does not have: the rest are the four named extras.
+  // And nothing claims a row the plan does not have: the rest are the five named extras.
   assert.deepEqual(
     [...proved].filter((row) => !rows.includes(row)),
     [...EXTRA_ROWS],
   )
-  assert.equal(EXTRA_ROWS.length, 4)
+  assert.equal(EXTRA_ROWS.length, 5)
 })
 
 test('the scenarios that are listed are the scenarios that are written', () => {
@@ -1340,7 +1340,7 @@ test('the scenarios that are listed are the scenarios that are written', () => {
       'renewal-in-real-time',
     ],
   )
-  assert.equal(SCENARIOS.length, 26)
+  assert.equal(SCENARIOS.length, 27)
   // A customer starts with the gift of the registration: its scenario runs first. The credit
   // rate is approved right after it, so that one scenario ends with the pause of the platform
   // on its pages and every later one with the answer the balances give.
