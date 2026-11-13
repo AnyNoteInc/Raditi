@@ -5,7 +5,7 @@ import { once } from 'node:events'
 import { setTimeout as realDelay } from 'node:timers/promises'
 
 import { badRequest, llmJsonLimits, type LlmBackend, type LlmBackendId } from '@repo/domain'
-import { zaiCodingBackend } from '@repo/llm-backends'
+import { zaiApiBackend, zaiCodingBackend } from '@repo/llm-backends'
 import {
   turnKeyHash,
   gatewayFinishSchema,
@@ -38,6 +38,7 @@ const key: GatewayKey = {
   credentialVersion: 1,
   maxConcurrentRequests: 2,
   staleWindows: false,
+  fallback: null,
 }
 const makeCall = (estimatedInputTokens = 10, estimatedCacheReadTokens = 0): GatewayCall => ({
   ...key,
@@ -1891,6 +1892,80 @@ describe.each(wires)('subscription HTTP gateway on the $name adapter', (wire) =>
 
 // The pinned OpenCode CLI answers these with the same request again, at once and without a limit
 // (docs/plan/40-opencode-spike.md, section 4): the sandbox must read one error object instead.
+describe('a key whose plan has its window out goes on on the API (plan 70, ВР25)', () => {
+  const withFallback: GatewayKey = {
+    ...key,
+    fallback: { accountId: 'synthetic-api-account', backendId: 'zai-api' },
+  }
+  const fallbackWire = { ...defaultWire, key: withFallback }
+
+  it('sends the call on to the fallback account over the route of its backend', async () => {
+    const paths: string[] = []
+    const { gateway, store, credentials, logger } = await setup(
+      (req, res) => {
+        paths.push(req.url ?? '')
+        res.writeHead(200, { 'content-type': 'text/event-stream' })
+        res.end(defaultWire.delta + defaultWire.completed())
+      },
+      {},
+      { backends: [zaiCodingBackend, zaiApiBackend] },
+      fallbackWire,
+    )
+    store.admit
+      .mockResolvedValueOnce({
+        kind: 'refused',
+        keyId: key.keyId,
+        reason: 'subscription_limit',
+        fallBack: true,
+      })
+      .mockImplementationOnce(async (input) => ({
+        kind: 'admitted',
+        call: {
+          ...makeCall(input.estimatedInputTokens),
+          ...withFallback,
+          accountId: 'synthetic-api-account',
+          backendId: 'zai-api',
+          fallback: null,
+        },
+      }))
+    const answer = await call(gateway, {}, fallbackWire)
+    expect(answer.status).toBe(200)
+    expect(store.admit.mock.calls[1]![0]).toMatchObject({ backendId: 'zai-api', fallback: true })
+    // The same call, on the API's path, with the API account's credential; the key unrefused.
+    expect(paths).toEqual(['/api/paas/v4/chat/completions'])
+    expect(credentials.get.mock.calls[0]![1]).toBe(zaiApiBackend)
+    expect(store.refuse).not.toHaveBeenCalled()
+    expect(logger.log.mock.calls.flat().join('\n')).toContain('"event":"llm_fallback"')
+  })
+
+  it('asks the CLI to try again in a second when the window runs out under the call', async () => {
+    const { gateway } = await setup(
+      (_req, res) => {
+        res.writeHead(429, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: { code: '1308', message: 'synthetic window out' } }))
+      },
+      {},
+      { backends: [zaiCodingBackend, zaiApiBackend] },
+      fallbackWire,
+    )
+    const answer = await call(gateway, {}, fallbackWire)
+    expect(answer.status).toBe(503)
+    expect(answer.headers['retry-after']).toBe('1')
+  })
+
+  it('ends the turn as before without a fallback', async () => {
+    const { gateway } = await setup(
+      (_req, res) => {
+        res.writeHead(429, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: { code: '1308', message: 'synthetic window out' } }))
+      },
+      {},
+      { backends: [zaiCodingBackend, zaiApiBackend] },
+    )
+    expect((await call(gateway)).status).not.toBe(503)
+  })
+})
+
 describe('Z.ai streams the CLI cannot stop on', () => {
   const userAgent = zaiUserAgent
   async function zai(

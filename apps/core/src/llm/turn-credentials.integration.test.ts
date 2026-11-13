@@ -21,7 +21,7 @@ import {
   sampleProviderSlug,
   sampleRoutePath,
 } from '../testing/ids.ts'
-import { backendCapacities } from './backends.ts'
+import { backendCapacities, backendFallbacks } from './backends.ts'
 import { CredentialSweeper } from './credential-sweeper.ts'
 import { GatewayTurnCredentials } from './turn-credentials.ts'
 
@@ -1477,6 +1477,40 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     expect(await db.llmKey.findFirstOrThrow({ where: { taskId: api.task.id } })).toMatchObject({
       subscriptionAccountId: api.mainAccount.id,
     })
+  })
+
+  it('gives a key of the plan an account of the API to fall back on, when there is one', async () => {
+    // Owner's answer of 13.11.2026 (docs/plan/70-turn-without-time-limit.md, ВР25).
+    const plan = await fixture({ slots: 2 })
+    const withFallback = new GatewayTurnCredentials({
+      prisma: db,
+      secrets: plan.vault.port,
+      capacityOf,
+      fallbackOf: backendFallbacks(llmBackends),
+    })
+    // The API is switched off: nowhere to fall back on.
+    await withFallback.issue(plan.ref, plan.grant)
+    expect(
+      (await db.llmKey.findFirstOrThrow({ where: { taskId: plan.task.id } })).fallbackAccountId,
+    ).toBeNull()
+    // The operator switches the API on with an account of it.
+    const api = await fixture({ backend: 'zai-api' })
+    const next = await plan.taskFixture()
+    await withFallback.issue(next.ref, plan.grant)
+    expect(
+      (await db.llmKey.findFirstOrThrow({ where: { taskId: next.task.id } })).fallbackAccountId,
+    ).toBe(api.mainAccount.id)
+    // A key of the API, the last of the registry, has none.
+    const onApi = new GatewayTurnCredentials({
+      prisma: db,
+      secrets: api.vault.port,
+      capacityOf,
+      fallbackOf: backendFallbacks(llmBackends),
+    })
+    await onApi.issue(api.ref, api.grant)
+    expect(
+      (await db.llmKey.findFirstOrThrow({ where: { taskId: api.task.id } })).fallbackAccountId,
+    ).toBeNull()
   })
 
   it('keeps a renewed key past the first expiry its Vault record names', async () => {

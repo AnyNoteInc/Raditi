@@ -35,6 +35,11 @@ export interface GatewayKey extends GatewayProfile {
    * admission, unless the backend of the route has no windows. Never a reason to refuse.
    */
   staleWindows: boolean
+  /**
+   * The account of another backend the key's calls go to once its own account's window is out
+   * (docs/plan/70-turn-without-time-limit.md, ВР25); null — none.
+   */
+  fallback: { accountId: string; backendId: LlmBackendId } | null
 }
 
 export interface GatewayCall extends GatewayKey {
@@ -61,6 +66,11 @@ export interface GatewayAdmitInput {
   profile: GatewayProfile
   requestBytes: number
   estimatedInputTokens: number
+  /**
+   * The call goes to the key's fallback account, on the route of its backend (`backendId`), not
+   * to the key's own account (ВР25). The key's model, budget and price stay.
+   */
+  fallback?: boolean
 }
 
 export type GatewayAdmission =
@@ -82,6 +92,11 @@ export type GatewayAdmission =
        * llm_keys.last_refusal say `budget` for all three; only the log of the role names it.
        */
       limit?: GatewayKeyLimit
+      /**
+       * The key's own account has its window out and the key has a fallback (docs/plan/70-turn-
+       * without-time-limit.md, ВР25): admit it there instead. Nothing of it was recorded on the key.
+       */
+      fallBack?: boolean
     }
 
 export type GatewayKeyLimit = 'money' | 'pace' | 'calls'

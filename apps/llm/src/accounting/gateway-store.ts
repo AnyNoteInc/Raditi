@@ -56,6 +56,7 @@ const admitSchema = z.strictObject({
   backendId: llmBackendIdSchema,
   capacity: llmCapacitySchema,
   route: z.strictObject({ method: z.enum(['POST', 'GET']), path: z.string().min(1).max(64) }),
+  fallback: z.boolean().optional(),
   profile: profileSchema,
   requestBytes: int.max(16 * 1024 * 1024),
   estimatedInputTokens: int,
@@ -74,6 +75,10 @@ interface KeyRow {
   expiresAt: Date
   lastCallAt: Date | null
   backendId: string
+  /** The backend of the account the row was read with: the key's own, or its fallback's. */
+  accountBackendId: string
+  fallbackAccountId: string | null
+  fallbackBackendId: string | null
   providerId: string
   providerEnabled: boolean
   providerKind: string
@@ -97,7 +102,10 @@ interface KeyRow {
 
 const keyColumns = Prisma.sql`
   k.id AS "keyId", k.task_id AS "taskId", k.task_attempt AS "taskAttempt",
-  k.driver_id AS "driverId", k.model_id AS "modelId", k.subscription_account_id AS "accountId",
+  k.driver_id AS "driverId", k.model_id AS "modelId", a.id AS "accountId",
+  ap.slug AS "accountBackendId", k.fallback_account_id AS "fallbackAccountId",
+  (SELECT fp.slug FROM subscription_accounts fa JOIN llm_providers fp ON fp.id = fa.provider_id
+    WHERE fa.id = k.fallback_account_id) AS "fallbackBackendId",
   k.reasoning_effort AS "reasoningEffort", k.budget_rub AS "budgetRub", k.expires_at AS "expiresAt",
   k.last_call_at AS "lastCallAt",
   m.provider_model_id AS model, m.slug AS "modelSlug", m.enabled AS "modelEnabled",
@@ -176,19 +184,23 @@ export class PostgresGatewayStore implements GatewayStore {
   async admit(input: GatewayAdmitInput): Promise<GatewayAdmission> {
     const value = admitSchema.parse(input)
     return gatewayTransaction(this.db, async (tx) => {
-      const locked = await tx.$queryRaw<{ id: string; accountId: string }[]>`
-        SELECT id, subscription_account_id AS "accountId" FROM llm_keys
-        WHERE key_hash = ${value.keyHash} FOR UPDATE`
+      const fallback = value.fallback === true
+      const locked = await tx.$queryRaw<{ id: string; accountId: string | null }[]>`
+        SELECT id, ${fallback ? Prisma.sql`fallback_account_id` : Prisma.sql`subscription_account_id`} AS "accountId"
+        FROM llm_keys WHERE key_hash = ${value.keyHash} FOR UPDATE`
       const key = locked[0]
       if (!key) return { kind: 'refused', reason: 'unauthorized' }
+      // A key without a fallback has nowhere else to go: what its own account says stands.
+      if (key.accountId === null) return this.#refused(tx, key.id, 'subscription_limit')
       // The shared account row serializes slots across different keys and processes.
       await tx.$queryRaw`SELECT id FROM subscription_accounts WHERE id = ${key.accountId}::uuid FOR UPDATE`
       // Fresh statement/clock after both waits: a pre-lock timestamp must never revive a key.
-      const row = await this.#readKey(tx, value.keyHash, value.source, true)
+      const row = await this.#readKey(tx, value.keyHash, value.source, true, fallback)
       if (!row) return { kind: 'refused', reason: 'unauthorized' }
       const current = toKey(row)
       if (!current) return this.#refused(tx, row.keyId, 'profile')
-      if (current.backendId !== value.backendId) {
+      // On its fallback the call takes the route of that account's backend (ВР25).
+      if ((fallback ? row.accountBackendId : current.backendId) !== value.backendId) {
         await this.#refused(tx, row.keyId, 'profile')
         return { kind: 'refused', keyId: row.keyId, reason: 'backend' }
       }
@@ -260,7 +272,12 @@ export class PostgresGatewayStore implements GatewayStore {
         const refused = await this.#refused(tx, row.keyId, 'transient', unknownWindowsRetryMs)
         return { ...refused, probeAccount: true, limitsSeenAt: row.limitsSeenAt }
       }
-      if (blocked) return this.#refused(tx, row.keyId, blocked)
+      if (blocked) {
+        // Out on its own account, with somewhere to go: not a refusal of the key (ВР25).
+        if (blocked === 'subscription_limit' && !fallback && row.fallbackAccountId !== null)
+          return { kind: 'refused', keyId: row.keyId, reason: blocked, fallBack: true }
+        return this.#refused(tx, row.keyId, blocked)
+      }
       const accountOpen = await tx.llmCall.count({
         where: { subscriptionAccountId: row.accountId, state: 'open' },
       })
@@ -323,11 +340,16 @@ export class PostgresGatewayStore implements GatewayStore {
     return this.#ledger.collectLost()
   }
 
+  /**
+   * `fallback`: the key read with its fallback account (ВР25) — an account of another, enabled
+   * provider — instead of its own, which is of the provider of its model.
+   */
   async #readKey(
     db: Pick<Transaction, '$queryRaw'>,
     hash: string,
     source: string,
     lock = false,
+    fallback = false,
   ): Promise<KeyRow | null> {
     if (lock)
       await db.$queryRaw`SELECT m.id FROM llm_keys k
@@ -336,12 +358,18 @@ export class PostgresGatewayStore implements GatewayStore {
     // All locks have already returned. clock_timestamp() and flags belong to this fresh statement.
     const rows = await db.$queryRaw<KeyRow[]>(Prisma.sql`SELECT ${keyColumns} FROM llm_keys k
       JOIN llm_models m ON m.id = k.model_id JOIN llm_providers p ON p.id = m.provider_id
-      JOIN subscription_accounts a ON a.id = k.subscription_account_id
+      JOIN subscription_accounts a ON a.id = ${fallback ? Prisma.sql`k.fallback_account_id` : Prisma.sql`k.subscription_account_id`}
+      JOIN llm_providers ap ON ap.id = a.provider_id
       JOIN credential_refs ref ON ref.id = a.credential_ref_id
       WHERE k.key_hash = ${hash} AND k.revoke_requested_at IS NULL AND k.revoked_at IS NULL
         AND k.usage_closed_at IS NULL AND clock_timestamp() < k.expires_at
         AND (k.bound_source IS NULL OR k.bound_source = ${source}::inet)
-        AND a.provider_id = p.id AND a.driver_id = k.driver_id`)
+        AND a.driver_id = k.driver_id
+        AND ${
+          fallback
+            ? Prisma.sql`ap.id <> p.id AND ap.enabled AND ap.kind = 'subscription'`
+            : Prisma.sql`a.provider_id = p.id`
+        }`)
     return rows[0] ?? null
   }
 
@@ -381,6 +409,7 @@ function toKey(row: KeyRow): GatewayKey | null {
     credentialRef: row.credentialRef,
     credentialVersion: row.credentialVersion,
     maxConcurrentRequests: row.maxConcurrentRequests,
+    fallback: fallbackOf(row),
     // Windows nobody has dated are unknown ones: admission asks for their probe itself. A key
     // that admission is going to refuse for a stop flag asks for nothing: a provider, a model
     // or an account that is switched off gets no request on its behalf, a quota request neither.
@@ -393,6 +422,13 @@ function toKey(row: KeyRow): GatewayKey | null {
       row.modelEnabled &&
       !accountOff(row),
   }
+}
+
+function fallbackOf(row: KeyRow): GatewayKey['fallback'] {
+  const backend = llmBackendIdSchema.safeParse(row.fallbackBackendId)
+  return row.fallbackAccountId !== null && backend.success
+    ? { accountId: row.fallbackAccountId, backendId: backend.data }
+    : null
 }
 
 /** Switched off by the operator, out of the pool, unhealthy, or without live credentials. */

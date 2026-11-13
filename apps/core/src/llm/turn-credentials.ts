@@ -172,6 +172,11 @@ export interface GatewayTurnCredentialsOptions {
    */
   capacityOf: (backend: LlmBackendId) => LlmCapacity
   /**
+   * The backend the calls of a key fall back on once its pool has its limits out
+   * (`backendFallbacks`, docs/plan/70-turn-without-time-limit.md, ВР25); absent — none.
+   */
+  fallbackOf?: (backend: LlmBackendId) => LlmBackendId | null
+  /**
    * Calls the content-free gateway control probe after all SQL locks were released. `stale`:
    * the snapshot has only grown old, and the gateway probes at most once in five minutes.
    */
@@ -190,6 +195,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
   readonly #secrets: SecretStore
   readonly #minHeadroom: number
   readonly #capacityOf: (backend: LlmBackendId) => LlmCapacity
+  readonly #fallbackOf: (backend: LlmBackendId) => LlmBackendId | null
   readonly #probeAccounts: GatewayTurnCredentialsOptions['probeAccounts']
   readonly #requireAssignment: boolean
 
@@ -208,6 +214,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
     if (typeof options.capacityOf !== 'function')
       throw new TypeError('GatewayTurnCredentials needs the capacity of each backend')
     this.#capacityOf = options.capacityOf
+    this.#fallbackOf = options.fallbackOf ?? (() => null)
   }
 
   async issue(
@@ -445,8 +452,10 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       const now = await clock(tx)
       await assertCurrentFence(tx, ref)
       if (expiresAt <= now) throw conflict('Turn credentials have expired')
+      const fallbackAccountId = await this.#fallbackAccount(tx, grant, task, stored.accountId)
       const key = await tx.llmKey.create({
         data: {
+          ...(fallbackAccountId ? { fallbackAccountId } : {}),
           keyHash: turnKeyHash(stored.llmApiKey),
           mcpTokenHash: turnKeyHash(stored.mcpToken),
           taskId: ref.taskId,
@@ -470,6 +479,78 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       })
       return { key, now }
     })
+  }
+
+  /**
+   * An account of the fallback backend the gateway may carry this key's calls to once the
+   * window of its own is out (ВР25): of an enabled provider, cleared for the class of data of the
+   * task's workspace, and one the pool would pick for a new turn. Read without its pool's lock —
+   * it is only where a call may go; the gateway admits each call on it under that account's lock.
+   * null when there is none: the key falls back on nothing.
+   */
+  async #fallbackAccount(
+    tx: Transaction,
+    grant: TurnCredentialGrant,
+    task: OwnedTask,
+    own: string,
+  ): Promise<string | null> {
+    const backend = this.#fallbackOf(grant.backend)
+    if (backend === null) return null
+    const [provider] = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM llm_providers
+      WHERE slug = ${backend} AND kind = 'subscription' AND enabled`
+    if (!provider) return null
+    if (task.dataClass === 'client') {
+      const [clearance] = await tx.$queryRaw<{ id: string }[]>`
+        SELECT c.id FROM cross_border_clearances c
+        WHERE c.provider_id = ${provider.id}::uuid AND c.revoked_at IS NULL
+          AND c.transfer_allowed_from <= (clock_timestamp() AT TIME ZONE 'Europe/Moscow')::date`
+      if (!clearance) return null
+    }
+    const accounts = await tx.$queryRaw<
+      Array<{
+        id: string
+        enabled: boolean
+        status: PoolAccountSnapshot['status']
+        health: PoolAccountSnapshot['health']
+        healthReason: string | null
+        healthChangedAt: Date | null
+        retireRequestedAt: Date | null
+        coolingUntil: Date | null
+        breakerOpenUntil: Date | null
+        limitWindows: unknown
+        activeTurns: bigint
+        maxConcurrentTurns: number
+        lastUsedAt: Date | null
+      }>
+    >`
+      SELECT a.id, (a.enabled AND a.credential_version > 0 AND a.credentials_revoked_at IS NULL) AS enabled,
+        a.status::text AS status, a.health::text AS health, a.health_reason AS "healthReason",
+        a.health_changed_at AS "healthChangedAt", a.retire_requested_at AS "retireRequestedAt",
+        a.cooling_until AS "coolingUntil", a.breaker_open_until AS "breakerOpenUntil",
+        a.limit_windows AS "limitWindows", a.max_concurrent_turns AS "maxConcurrentTurns",
+        a.last_used_at AS "lastUsedAt", 0::bigint AS "activeTurns"
+      FROM subscription_accounts a
+      WHERE a.provider_id = ${provider.id}::uuid AND a.driver_id = ${grant.driverId}
+        AND a.id <> ${own}::uuid`
+    // Its slots are the gateway's to keep, per call: a turn here takes none.
+    const decision = pickAccount({
+      backend,
+      capacity: this.#capacityOf(backend),
+      providerEnabled: true,
+      now: task.now,
+      boundAccountId: null,
+      rebinds: 0,
+      policyFlagged: false,
+      minTurnHeadroomPct: this.#minHeadroom,
+      accounts: accounts.map((account) => ({
+        ...account,
+        backend,
+        activeTurns: Number(account.activeTurns),
+        limitWindows: decodeLimitWindows(account.limitWindows),
+      })),
+    })
+    return decision.kind === 'selected' ? decision.accountId : null
   }
 
   async #select(
