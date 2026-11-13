@@ -82,6 +82,8 @@ interface RunnerSession {
   gone: boolean
   /** What its latest poll named beyond the first protocol (runnerFeatures). */
   features: ReadonlySet<RunnerFeature>
+  /** The turns its latest poll said it can run at once: its free places and its active turns. */
+  slots: number
 }
 
 interface OpenCommand {
@@ -514,6 +516,16 @@ export class RunnerHub implements OnApplicationShutdown {
     if (extendable) this.post(live, { type: 'extend', remainingMs: clampMs(remainingMs) }, epoch)
   }
 
+  /**
+   * The turns the connected runners can run at once (plan 70, ВР17): what each one's latest poll
+   * reported. A runner that stopped polling counts for nothing once core gives its session up.
+   */
+  turnSlots(): number {
+    let slots = 0
+    for (const session of this.#sessions.values()) if (!session.gone) slots += session.slots
+    return slots
+  }
+
   /** Whether the runner session of the turn extends its turns (`extend` among its features). */
   extendable(live: LiveAssignment): boolean {
     return this.#connected(live)?.features.has('extend') ?? false
@@ -594,6 +606,7 @@ export class RunnerHub implements OnApplicationShutdown {
     session.inventory = request.inventory
     session.inventoryAt = performance.now()
     session.features = new Set(request.features ?? [])
+    session.slots = request.capacity + request.active.length
     session.lastSeen = performance.now()
     session.polling += 1
     const generation = ++session.generation
@@ -1020,6 +1033,7 @@ export class RunnerHub implements OnApplicationShutdown {
       wake: undefined,
       gone: false,
       features: new Set(),
+      slots: 0,
     }
     this.#sessions.set(runnerId, session)
     this.#ensureSweep()

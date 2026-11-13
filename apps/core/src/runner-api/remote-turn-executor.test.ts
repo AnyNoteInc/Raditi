@@ -651,6 +651,15 @@ describe('RemoteTurnExecutor over the runner hub', () => {
     })
   })
 
+  it('counts the places its runners report as the turns it can run (plan 70, ВР17)', async () => {
+    const f = fixture()
+    expect(f.executor.slots()).toBe(0)
+    await f.runner('sandbox-1').poll({ capacity: 2 })
+    await f.runner('sandbox-2').poll({ capacity: 1, active: [randomUUID()] })
+    // Free places and active turns alike: what each runner can run at once.
+    expect(f.executor.slots()).toBe(4)
+  })
+
   it('extends a turn on a runner that can, and gives one that cannot the old fixed turn', async () => {
     // docs/plan/70-turn-without-time-limit.md, ВР4: deploys put core first, then the runners.
     const f = fixture()

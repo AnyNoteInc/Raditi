@@ -58,6 +58,12 @@ export interface TurnExecutor {
   /** Clear any local claim cache when issuance or prepare ends. Does not release the site. */
   forgetCredentialAddress?(assignmentId: string): void
   /**
+   * How many turns it can run at once now, the running ones included: for runner VMs the places
+   * their runners report (docs/plan/70-turn-without-time-limit.md, ВР17). Absent — as many as
+   * core gives it (AGENT_TURN_CAPACITY).
+   */
+  slots?(): number
+  /**
    * Create the container, import the base bundle — without one an empty working directory
    * (docs/plan/57-browser-tasks.md, Б4) — restore turn n−1, write the driver files.
    */

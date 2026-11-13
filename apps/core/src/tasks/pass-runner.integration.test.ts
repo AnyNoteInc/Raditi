@@ -39,7 +39,8 @@ import type { TurnSupervisor } from '../turns/turn-supervisor.ts'
 import type { CandidateBuilder } from './candidate-builder.ts'
 import type { CandidateGit } from './candidate-git.ts'
 import { LivePasses } from './live-passes.ts'
-import { PassRunner, WORKSPACE_PASS_LIMIT } from './pass-runner.ts'
+import { DEFAULT_WORKSPACE_TURN_LIMIT, PassRunner } from './pass-runner.ts'
+import { TurnCapacity } from './turn-capacity.ts'
 import { PassSettlement } from './pass-settlement.ts'
 import { INIT_PROMPT } from './turn-instructions.ts'
 
@@ -201,6 +202,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     options: {
       git?: CandidateGit | null
       browser?: { reclaim: ReturnType<typeof vi.fn>; verify: ReturnType<typeof vi.fn> } | null
+      capacity?: TurnCapacity
     } = {},
   ) {
     const queue = { enqueue: vi.fn(async () => {}) }
@@ -229,6 +231,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       live,
       queue,
       logger: quiet,
+      ...(options.capacity ? { capacity: options.capacity } : {}),
       now: () => NOW,
     })
     return { passes, queue, supervisor, close, live }
@@ -284,11 +287,11 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     expect(holds.every((hold) => hold.status === 'released')).toBe(true)
   })
 
-  // The owner, 06.11.2026: «расширь количество параллельных агентов на одного пользователя до 8».
+  // The owner, 06.11 and 12.11.2026: «до 8 сендбоксов на одного клиента» (plan 70, ВР13).
   it('lets a pass wait while its workspace runs eight others, as for a busy pool', async () => {
     const dialog = await queued({ reserve: true, chat: true })
     const { workspaceId } = await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })
-    for (let i = 0; i < WORKSPACE_PASS_LIMIT; i++)
+    for (let i = 0; i < DEFAULT_WORKSPACE_TURN_LIMIT; i++)
       await fixtures.task(workspaceId, { status: i % 2 === 0 ? 'running' : 'preparing' })
     const run = vi.fn<Run>()
     const { passes, queue } = runner(run)
@@ -305,6 +308,45 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     expect(
       (await db.creditHold.findMany({ where: { taskId: dialog.taskId } })).map((h) => h.status),
     ).toEqual(['active'])
+  })
+
+  it('lets a pass wait for a place of the platform, and wakes it when a pass ends', async () => {
+    // Plan 70, ВР17: the places of the platform are taken; the pass gives its worker up at once.
+    const capacity = new TurnCapacity(1)
+    const held = capacity.tryAcquire()!
+    const dialog = await queued({ reserve: true, chat: true })
+    const run = vi.fn<Run>()
+    const { passes, queue } = runner(run, async () => null, { capacity })
+
+    await passes.run(dialog.job)
+
+    expect(run).not.toHaveBeenCalled()
+    expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
+      status: 'queued',
+      waiting: 'agents',
+    })
+    expect(queue.enqueue).toHaveBeenCalledTimes(1)
+    expect(
+      (await db.creditHold.findMany({ where: { taskId: dialog.taskId } })).map((h) => h.status),
+    ).toEqual(['active'])
+    held()
+    expect(capacity.held).toBe(0)
+
+    // Another pass of its workspace takes the place and ends: the waiting pass is woken. The
+    // waiting chat joins the workspace of the other one; nothing settles it afterwards.
+    const other = await queued({ reserve: true, chat: true })
+    const { workspaceId } = await db.task.findUniqueOrThrow({ where: { id: other.taskId } })
+    await db.task.update({ where: { id: dialog.taskId }, data: { workspaceId } })
+    const wakes = await db.outboxEvent.count({
+      where: { payload: { path: ['taskId'], equals: dialog.taskId } },
+    })
+    await runner(vi.fn<Run>(), async () => null, { capacity }).passes.run(other.job)
+    expect(capacity.held).toBe(0)
+    expect(
+      await db.outboxEvent.count({
+        where: { payload: { path: ['taskId'], equals: dialog.taskId } },
+      }),
+    ).toBeGreaterThan(wakes)
   })
 
   it('takes no pass of another attempt', async () => {

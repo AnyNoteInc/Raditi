@@ -41,7 +41,7 @@ export interface RunnerConfig {
    * infra/server/README.md), added to the trusted roots at start; null — the built-in roots only.
    */
   s3CaFile: string | null
-  /** RUNNER_MAX_TURNS: turns at once; one until several runners are supported (stage 2). */
+  /** RUNNER_MAX_TURNS: turns at once on this VM (plan 70, ВР18). */
   maxTurns: number
   sandbox: SandboxConfig
 }
@@ -64,14 +64,9 @@ const ownEnvSchema = z.object({
   RUNNER_S3_ORIGIN: envVar(
     z.url({ protocol: /^https?$/, error: 'must be an http(s):// URL' }).optional(),
   ),
-  RUNNER_MAX_TURNS: envVar(
-    z.coerce
-      .number()
-      .int()
-      .min(1)
-      .max(1, 'one turn per runner until several runners are supported (stage 2)')
-      .default(1),
-  ),
+  // As many turns as the VM holds at 2 vCPU and 4 GiB each (rule 5); core counts them as places
+  // of the platform (docs/plan/70-turn-without-time-limit.md, ВР18). At most the protocol's 64.
+  RUNNER_MAX_TURNS: envVar(z.coerce.number().int().min(1).max(64).default(1)),
 })
 
 /** Set by the OS, Docker or the Node image: never a platform setting. */

@@ -23,11 +23,13 @@ import { CandidateRewind } from './candidate-rewind.ts'
 import { PassRunner } from './pass-runner.ts'
 
 /**
- * How many jobs of `agent-turns` one core works on at once: passes of different chats run side by
- * side (one chat, one turn — its lease, `turnLeaseOf`), and a cancel, an update or an edit is not
- * kept waiting behind them for long.
+ * How many jobs of `agent-turns` one core works on at once. Not the number of turns: those are
+ * bounded by TurnCapacity (AGENT_TURN_CAPACITY, at most 64) and a pass without a place gives its
+ * worker up at once (docs/plan/70-turn-without-time-limit.md, ВР16, ВР17). So turns without a
+ * time limit hold at most the capacity of these, and a cancel, an update or an edit always finds
+ * one free.
  */
-export const AGENT_TURN_CONCURRENCY = 8
+export const AGENT_TURN_CONCURRENCY = 80
 
 /**
  * The lock of a job. A pass has no time limit (docs/plan/70-turn-without-time-limit.md, ВР8):

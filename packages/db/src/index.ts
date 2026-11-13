@@ -16,6 +16,7 @@ export {
   enqueuePreviewBrowser,
   enqueuePreviewSync,
   enqueueReleaseAdvance,
+  enqueueAgentWaitingPasses,
   enqueueSiteWaitingPasses,
 } from './chat-outbox.ts'
 export {
@@ -133,6 +134,7 @@ export { PostgresTurnAssignmentStore } from './turn-assignments.ts'
 export { PostgresTaskTurnAssignmentStore } from './task-turn-assignments.ts'
 export {
   cancelWaitingTask,
+  claimQueuedPass,
   claimQueuedTask,
   excludeTurnDbOperations,
   includeTurnDbOperations,

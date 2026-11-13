@@ -105,6 +105,10 @@ export class RemoteTurnExecutor implements TurnExecutor {
    * Reserves a slot of a runner VM for the turn and names that VM's trusted address. Nothing
    * durable binds the turn to the runner yet: that is prepare's, when the command goes out.
    */
+  slots(): number {
+    return this.hub.turnSlots()
+  }
+
   async credentialAddress(assignmentId: string, signal: AbortSignal): Promise<string> {
     try {
       const runner = await this.hub.reserve(assignmentId, signal)

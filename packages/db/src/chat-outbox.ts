@@ -107,6 +107,54 @@ export async function enqueueSiteWaitingPasses(
   return put
 }
 
+/**
+ * The passes that wait for the agents (`queued`, `waiting = agents`) go back on the queue now,
+ * oldest first (docs/plan/70-turn-without-time-limit.md, ВР15): a pass ended and freed a place —
+ * of its workspace (`workspaceId`), or of the platform. A pass of a workspace at its limit is
+ * refused again at its claim, cheaply, and holds no place meanwhile. Each job answers the last
+ * request that queued its pass, under the key of `tag`, as enqueueSiteWaitingPasses. In the
+ * caller's transaction; returns how many were put.
+ */
+export async function enqueueAgentWaitingPasses(
+  tx: OutboxWriter & Pick<Prisma.TransactionClient, '$queryRaw'>,
+  input: { workspaceId?: string; limit: number; tag: string },
+): Promise<number> {
+  const workspaceId = input.workspaceId === undefined ? null : z.uuid().parse(input.workspaceId)
+  const limit = z.number().int().min(1).max(WAKE_BATCH).parse(input.limit)
+  const tag = wakeTagSchema.parse(input.tag.toLowerCase())
+  const rows = await tx.$queryRaw<
+    Array<{ id: string; attempt: number; request_id: bigint | null }>
+  >`
+    SELECT t.id, t.attempt,
+      (SELECT max(e.id) FROM task_events e
+        WHERE e.task_id = t.id AND e.type = 'feed.request'
+          AND e.payload->>'kind' IS DISTINCT FROM 'command') AS request_id
+    FROM tasks t
+    WHERE t.status = 'queued' AND t.waiting = 'agents'
+      AND (${workspaceId}::uuid IS NULL OR t.workspace_id = ${workspaceId}::uuid)
+    ORDER BY t.updated_at, t.id
+    LIMIT ${limit}`
+  let put = 0
+  for (const row of rows) {
+    if (row.request_id === null) continue
+    const job = agentTurnJobSchema.parse({
+      taskId: lower(row.id),
+      attempt: row.attempt,
+      requestEventId: row.request_id.toString(),
+    })
+    if (
+      await enqueueOutbox(tx, {
+        topic: AGENT_TURN_QUEUE,
+        type: AGENT_TURN_JOB,
+        payload: job,
+        dedupeKey: agentTurnRetryJobId(job, tag),
+      })
+    )
+      put += 1
+  }
+  return put
+}
+
 export async function enqueuePreviewSync(
   tx: OutboxWriter,
   job: PreviewSyncJob,
