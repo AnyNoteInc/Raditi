@@ -192,9 +192,9 @@ export async function verifyZai(ctx) {
   // its key beside the first, on the same account.
   assert.deepEqual(await core.call('recover', { ref: proxied.ref }), proxied.values)
   assert.deepEqual(await issue(proxied), proxied.values)
-  const beside = await issued()
-  assert.equal((await keyRow(beside)).subscriptionAccountId, accountId)
-  await revoke(beside)
+  const alongside = await issued()
+  assert.equal((await keyRow(alongside)).subscriptionAccountId, accountId)
+  await revoke(alongside)
   passed('durable issuance, recovery and turns side by side on one account')
   const proxiedResult = resultFor('B13 OpenCode through the proxy')
   await zai({ scenario: { scenario: 'text', text: JSON.stringify(proxiedResult) } })
