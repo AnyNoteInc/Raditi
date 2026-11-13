@@ -38,8 +38,11 @@ import {
 } from '../egress/egress.ts'
 
 const limits = Object.freeze({
-  requests: 64,
-  requestsPerSource: 16,
+  // Requests of the whole role, and of one runner: a guard of the process, not a limit of turns —
+  // a runner may hold every turn of the platform (owner's request of 13.11.2026, docs/plan/70-
+  // turn-without-time-limit.md, ВР26). An account's own slots still bound its calls to Z.ai.
+  requests: 4096,
+  requestsPerSource: 4096,
   requestMs: 600_000,
   stallMs: 60_000,
   // A provider or channel silent this long has stalled. The pinned CLI gives a silent stream
@@ -291,6 +294,8 @@ function sendError(
 export class LlmGateway {
   readonly server: Server
   readonly #routes = new Map<string, { backend: LlmBackend; route: LlmRoute }>()
+  /** By id: where the calls of a key go once its own account's window is out (ВР25). */
+  readonly #backends = new Map<string, LlmBackend>()
   readonly #clients = new BlockList()
   readonly #tasks = new Set<Promise<void>>()
   readonly #controllers = new Set<AbortController>()
@@ -336,6 +341,7 @@ export class LlmGateway {
     options.usageMetrics?.register(this.#registry)
     for (const client of options.config.clients)
       this.#clients.addSubnet(client.address, client.prefix, client.family)
+    for (const backend of options.backends) this.#backends.set(backend.id, backend)
     for (const backend of options.backends)
       for (const route of backend.routes) {
         const name = `${route.method} ${route.path}`
@@ -479,7 +485,8 @@ export class LlmGateway {
   }
 
   async #handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    const selected = this.#routes.get(`${request.method ?? ''} ${request.url ?? ''}`)
+    // `let`: a key whose own account has its window out goes on on its fallback's route (ВР25).
+    let selected = this.#routes.get(`${request.method ?? ''} ${request.url ?? ''}`)
     const monitor = request.method === 'GET' && ['/health', '/metrics'].includes(request.url ?? '')
     const control = request.method === 'POST' && request.url === '/internal/subscriptions/probe'
     const source = sourceAddress(request.socket.remoteAddress)
@@ -700,8 +707,37 @@ export class LlmGateway {
       let probed = false
       // A backend without windows has no snapshot to refresh: only its account's pauses hold.
       let refreshed = !key.staleWindows || selected.backend.capacity === 'none'
+      // The owner, 13.11.2026 (docs/plan/70-turn-without-time-limit.md, ВР25): the API is the
+      // insurance of the plan. A key whose own account has its window out sends this call, the
+      // same body under the same budget and price, to its fallback account over that account's
+      // backend — once; what that account says then stands.
+      let fellBack = false
+      const fallBack = (): boolean => {
+        const target = key?.fallback
+        const from = selected
+        if (fellBack || !target || !from || !key) return false
+        const backend = this.#backends.get(target.backendId)
+        const route = backend?.routes.find((candidate) => candidate.method === from.route.method)
+        if (!backend || !route) return false
+        let body2
+        try {
+          body2 = backend.normalizeBody(route, body, key)
+        } catch {
+          return false
+        }
+        fellBack = true
+        selected = { backend, route }
+        normalized = body2
+        key = { ...key, accountId: target.accountId, backendId: backend.id, fallback: null }
+        refreshed = true
+        this.#logger.log(
+          JSON.stringify({ event: 'llm_fallback', from: from.backend.id, to: backend.id }),
+        )
+        return true
+      }
       while (true) {
         const pause = this.options.lifecycle?.pause(key)
+        if (pause?.reason === 'subscription_limit' && fallBack()) continue
         if (pause) {
           await this.#refuse(key, selected.backend, response, pause.reason, pause.retryAfterMs)
           return
@@ -735,6 +771,7 @@ export class LlmGateway {
           profile: key,
           requestBytes: body.byteLength,
           estimatedInputTokens: normalized.estInputTokens,
+          ...(fellBack ? { fallback: true } : {}),
         })
         if (admission.kind === 'admitted') {
           call = admission.call
@@ -742,6 +779,7 @@ export class LlmGateway {
           break
         }
         controller.signal.throwIfAborted()
+        if (admission.fallBack && fallBack()) continue
         if (admission.reason === 'unauthorized') throw new Rejected(401, 'raditi_key')
         if (admission.reason === 'backend') throw new Rejected(403, 'raditi_backend')
         if (admission.waitForSlot && Date.now() < waitUntil) {
@@ -822,11 +860,18 @@ export class LlmGateway {
           upstream.headers,
           await errorJson(upstream, controller.signal),
         )
+        const refusal = refusalForSignal(signal)
+        // The window ran out under this very call, before any byte of it: the account cools with
+        // this call's end, and the CLI's next try in a second goes to the fallback (ВР25).
+        if (refusal === 'subscription_limit' && !fellBack && key.fallback) {
+          await this.#refuse(key, selected.backend, response, 'transient', 1_000)
+          return
+        }
         await this.#refuse(
           key,
           selected.backend,
           response,
-          refusalForSignal(signal),
+          refusal,
           signal.kind === 'transient' ? signal.retryAfterMs : undefined,
         )
         return

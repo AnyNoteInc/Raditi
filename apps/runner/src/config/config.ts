@@ -7,6 +7,7 @@ import {
   isProduction,
   type AppEnv,
   type Env,
+  runnerLimits,
 } from '@repo/domain'
 import { isPrivateAddress } from '@repo/ip-address'
 import { sandboxConfigFromEnv, type SandboxConfig } from '@repo/sandbox-providers'
@@ -41,7 +42,7 @@ export interface RunnerConfig {
    * infra/server/README.md), added to the trusted roots at start; null — the built-in roots only.
    */
   s3CaFile: string | null
-  /** RUNNER_MAX_TURNS: turns at once; one until several runners are supported (stage 2). */
+  /** RUNNER_MAX_TURNS: turns at once on this VM (plan 70, ВР18). */
   maxTurns: number
   sandbox: SandboxConfig
 }
@@ -64,13 +65,10 @@ const ownEnvSchema = z.object({
   RUNNER_S3_ORIGIN: envVar(
     z.url({ protocol: /^https?$/, error: 'must be an http(s):// URL' }).optional(),
   ),
+  // The turns this runner takes at once; core counts them as places of the platform
+  // (docs/plan/70-turn-without-time-limit.md, ВР18, ВР26). At most what the protocol carries.
   RUNNER_MAX_TURNS: envVar(
-    z.coerce
-      .number()
-      .int()
-      .min(1)
-      .max(1, 'one turn per runner until several runners are supported (stage 2)')
-      .default(1),
+    z.coerce.number().int().min(1).max(runnerLimits.capacity).default(runnerLimits.capacity),
   ),
 })
 

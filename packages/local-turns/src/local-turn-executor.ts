@@ -47,7 +47,7 @@ import { bundleBase, importBaseBundle } from './base-bundle.ts'
 import { makeEmptyWorkdir } from './empty-workdir.ts'
 import { placeInbox } from './inbox.ts'
 import { readTurnOutput, type TurnOutputStart } from './turn-output.ts'
-import { WARM_MIN_LEFT_MS, type WarmSandboxes } from './warm-sandboxes.ts'
+import type { WarmSandboxes } from './warm-sandboxes.ts'
 import { exportSandboxWorkingTree } from './working-tree-export.ts'
 
 export interface LocalTurnExecutorDependencies {
@@ -122,14 +122,19 @@ export class LocalTurnExecutor implements TurnExecutor {
     const { warm } = this.deps
     const key = warm ? warmKeyOf(input) : undefined
     // The container an earlier turn of this task left (spec §8, «Тёплая песочница»), if it is
-    // still there and leaves this turn enough of its own deadline.
-    const taken =
-      warm && key && !signal.aborted
-        ? await warm.take(key, Math.min(hardTimeoutMs, WARM_MIN_LEFT_MS))
-        : null
+    // still there: extended to this turn's deadline, as a new one would be created with it.
+    let taken = warm && key && !signal.aborted ? await warm.take(key) : null
+    if (taken)
+      taken = await taken.extend(startedAt + hardTimeoutMs).then(
+        () => taken,
+        async () => {
+          warm!.forget(taken!.id)
+          await taken!.destroy('failed').catch(() => {})
+          return null
+        },
+      )
     let sandbox: Sandbox
-    let deadline: number
-    if (taken) ({ sandbox, deadline } = taken)
+    if (taken) sandbox = taken
     else {
       try {
         sandbox = await this.deps.sandboxes.create(
@@ -141,7 +146,6 @@ export class LocalTurnExecutor implements TurnExecutor {
         if (createLeftNothing(error)) input.vacated()
         throw error
       }
-      deadline = startedAt + hardTimeoutMs
     }
     const execution = new LocalTurnExecution(
       sandbox,
@@ -155,14 +159,7 @@ export class LocalTurnExecutor implements TurnExecutor {
         env,
       },
     )
-    if (warm && key)
-      execution.warm = {
-        pool: warm,
-        key,
-        deadline,
-        // A taken container may end before the turn would: the agent ends that much earlier.
-        shortfall: Math.max(0, startedAt + hardTimeoutMs - deadline),
-      }
+    if (warm && key) execution.warm = { pool: warm, key }
     await input.created(execution)
     signal.throwIfAborted()
     if (input.bundle) {
@@ -366,6 +363,10 @@ class RemovalExecution implements TurnExecution {
     return Promise.reject(removalOnly())
   }
 
+  extend(): Promise<void> {
+    return Promise.reject(removalOnly())
+  }
+
   attach(): Promise<TurnAgentExec | null> {
     return Promise.reject(removalOnly())
   }
@@ -400,15 +401,8 @@ class LocalTurnExecution implements TurnExecution {
   importedBase: string | null | undefined
   /** Called once the container is removed. */
   removed: (() => void) | undefined
-  /** Where a completed turn leaves its container, and that container's deadline. */
-  warm:
-    | {
-        pool: Pick<WarmSandboxes, 'park' | 'forget'>
-        key: string
-        deadline: number
-        shortfall: number
-      }
-    | undefined
+  /** Where a completed turn leaves its container. */
+  warm: { pool: Pick<WarmSandboxes, 'park' | 'forget'>; key: string } | undefined
   /** Left to the next turn of the task: nothing of this execution may touch it any more. */
   #handedOver = false
 
@@ -444,20 +438,28 @@ class LocalTurnExecution implements TurnExecution {
     return this.sandbox.id
   }
 
-  async launch(timeoutMs: number): Promise<TurnAgentExec> {
+  /**
+   * `timeoutMs` only for a core that runs this on a runner without `extend` (runnerFeatures):
+   * otherwise the agent has no time limit (docs/plan/70-turn-without-time-limit.md, ВР1).
+   */
+  async launch(timeoutMs?: number): Promise<TurnAgentExec> {
     this.#allow('turn')
     if (!this.command) throw conflict('The turn has no agent command')
     const handle = await this.sandbox.exec({
       argv: this.command.argv,
       cwd: SANDBOX_WORKDIR,
       env: this.command.env,
-      // The turn limit includes publication: the agent's exec ends before the container does.
-      timeoutMs: Math.max(1, timeoutMs - (this.warm?.shortfall ?? 0)),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
     })
     return new LocalAgentExec(handle, this.parser, this.credentials, this.envValues, {
       cursor: { stdout: 0, stderr: 0 },
       eventCount: 0,
     })
+  }
+
+  async extend(remainingMs: number): Promise<void> {
+    this.#allow('turn', 'work')
+    await this.sandbox.extend(Date.now() + remainingMs)
   }
 
   async attach(from: TurnAttachState): Promise<TurnAgentExec | null> {
@@ -581,7 +583,7 @@ class LocalTurnExecution implements TurnExecution {
       warm &&
       reason === 'completed' &&
       this.purpose === 'turn' &&
-      (await warm.pool.park(this.sandbox, warm.key, warm.deadline))
+      (await warm.pool.park(this.sandbox, warm.key))
     ) {
       this.#handedOver = true
       this.removed?.()

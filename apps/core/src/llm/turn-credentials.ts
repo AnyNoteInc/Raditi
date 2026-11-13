@@ -23,7 +23,6 @@ import {
   turnCredentialExpiresAt,
   turnCredentialGrantSchema,
   turnKeyBudgetVerdict,
-  TURN_FINALIZE_RESERVE_MS,
   TURN_PUBLICATION_GRACE_MS,
   type AttemptBudgetInput,
   type LimitWindow,
@@ -73,7 +72,7 @@ const storedGrantSchema = turnCredentialGrantSchema
     const validUntil = new Date(grant.validUntil).getTime()
     const deadline = new Date(grant.deadlineAt).getTime()
     return (
-      expiresAt <= deadline - TURN_FINALIZE_RESERVE_MS &&
+      expiresAt <= deadline &&
       validUntil >= expiresAt &&
       validUntil <= deadline + TURN_PUBLICATION_GRACE_MS
     )
@@ -181,6 +180,11 @@ export interface GatewayTurnCredentialsOptions {
    */
   capacityOf: (backend: LlmBackendId) => LlmCapacity
   /**
+   * The backend the calls of a key fall back on once its pool has its limits out
+   * (`backendFallbacks`, docs/plan/70-turn-without-time-limit.md, ВР25); absent — none.
+   */
+  fallbackOf?: (backend: LlmBackendId) => LlmBackendId | null
+  /**
    * Calls the content-free gateway control probe after all SQL locks were released. `stale`:
    * the snapshot has only grown old, and the gateway probes at most once in five minutes.
    */
@@ -199,6 +203,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
   readonly #secrets: SecretStore
   readonly #minHeadroom: number
   readonly #capacityOf: (backend: LlmBackendId) => LlmCapacity
+  readonly #fallbackOf: (backend: LlmBackendId) => LlmBackendId | null
   readonly #probeAccounts: GatewayTurnCredentialsOptions['probeAccounts']
   readonly #requireAssignment: boolean
 
@@ -217,6 +222,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
     if (typeof options.capacityOf !== 'function')
       throw new TypeError('GatewayTurnCredentials needs the capacity of each backend')
     this.#capacityOf = options.capacityOf
+    this.#fallbackOf = options.fallbackOf ?? (() => null)
   }
 
   async issue(
@@ -433,7 +439,8 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       }
       const binding = await tx.taskAccountBinding.findUnique({ where: { taskId: ref.taskId } })
       if (binding) {
-        if (selected.decision.binding === 'rebind')
+        // `initial` beside a binding: one of the other backend, moved to this one (ВР24).
+        if (selected.decision.binding !== 'keep')
           await tx.taskAccountBinding.update({
             where: { taskId: ref.taskId },
             data: { subscriptionAccountId: stored.accountId, rebinds: selected.decision.rebinds },
@@ -453,8 +460,10 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       const now = await clock(tx)
       await assertCurrentFence(tx, ref)
       if (expiresAt <= now) throw conflict('Turn credentials have expired')
+      const fallbackAccountId = await this.#fallbackAccount(tx, grant, task, stored.accountId)
       const key = await tx.llmKey.create({
         data: {
+          ...(fallbackAccountId ? { fallbackAccountId } : {}),
           keyHash: turnKeyHash(stored.llmApiKey),
           mcpTokenHash: turnKeyHash(stored.mcpToken),
           taskId: ref.taskId,
@@ -478,6 +487,78 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       })
       return { key, now }
     })
+  }
+
+  /**
+   * An account of the fallback backend the gateway may carry this key's calls to once the
+   * window of its own is out (ВР25): of an enabled provider, cleared for the class of data of the
+   * task's workspace, and one the pool would pick for a new turn. Read without its pool's lock —
+   * it is only where a call may go; the gateway admits each call on it under that account's lock.
+   * null when there is none: the key falls back on nothing.
+   */
+  async #fallbackAccount(
+    tx: Transaction,
+    grant: TurnCredentialGrant,
+    task: OwnedTask,
+    own: string,
+  ): Promise<string | null> {
+    const backend = this.#fallbackOf(grant.backend)
+    if (backend === null) return null
+    const [provider] = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM llm_providers
+      WHERE slug = ${backend} AND kind = 'subscription' AND enabled`
+    if (!provider) return null
+    if (task.dataClass === 'client') {
+      const [clearance] = await tx.$queryRaw<{ id: string }[]>`
+        SELECT c.id FROM cross_border_clearances c
+        WHERE c.provider_id = ${provider.id}::uuid AND c.revoked_at IS NULL
+          AND c.transfer_allowed_from <= (clock_timestamp() AT TIME ZONE 'Europe/Moscow')::date`
+      if (!clearance) return null
+    }
+    const accounts = await tx.$queryRaw<
+      Array<{
+        id: string
+        enabled: boolean
+        status: PoolAccountSnapshot['status']
+        health: PoolAccountSnapshot['health']
+        healthReason: string | null
+        healthChangedAt: Date | null
+        retireRequestedAt: Date | null
+        coolingUntil: Date | null
+        breakerOpenUntil: Date | null
+        limitWindows: unknown
+        activeTurns: bigint
+        maxConcurrentTurns: number
+        lastUsedAt: Date | null
+      }>
+    >`
+      SELECT a.id, (a.enabled AND a.credential_version > 0 AND a.credentials_revoked_at IS NULL) AS enabled,
+        a.status::text AS status, a.health::text AS health, a.health_reason AS "healthReason",
+        a.health_changed_at AS "healthChangedAt", a.retire_requested_at AS "retireRequestedAt",
+        a.cooling_until AS "coolingUntil", a.breaker_open_until AS "breakerOpenUntil",
+        a.limit_windows AS "limitWindows", a.max_concurrent_turns AS "maxConcurrentTurns",
+        a.last_used_at AS "lastUsedAt", 0::bigint AS "activeTurns"
+      FROM subscription_accounts a
+      WHERE a.provider_id = ${provider.id}::uuid AND a.driver_id = ${grant.driverId}
+        AND a.id <> ${own}::uuid`
+    // Its slots are the gateway's to keep, per call: a turn here takes none.
+    const decision = pickAccount({
+      backend,
+      capacity: this.#capacityOf(backend),
+      providerEnabled: true,
+      now: task.now,
+      boundAccountId: null,
+      rebinds: 0,
+      policyFlagged: false,
+      minTurnHeadroomPct: this.#minHeadroom,
+      accounts: accounts.map((account) => ({
+        ...account,
+        backend,
+        activeTurns: Number(account.activeTurns),
+        limitWindows: decodeLimitWindows(account.limitWindows),
+      })),
+    })
+    return decision.kind === 'selected' ? decision.accountId : null
   }
 
   async #select(
@@ -582,14 +663,18 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       where: { taskId: ref.taskId, type: policyFlaggedEvent },
       select: { id: true },
     })
-    // A task bound to an account of another backend — the plan, while this pass goes through the
-    // API because the quota of the plan is out (owner's answer of 13.11.2026) — goes on without
-    // that binding here; it is kept for the passes that come back to the plan.
-    const ownBinding =
-      binding && accounts.some((account) => account.id === binding.subscriptionAccountId)
-        ? binding
-        : null
     const capacity = this.#capacityOf(grant.backend)
+    // Bound to an account of the other backend: the task went from the plan to the API or back
+    // (owner's answer of 13.11.2026, docs/plan/70-turn-without-time-limit.md, ВР24). On this
+    // backend it is unbound; the issue binds it to the account it takes here.
+    const bound =
+      binding && !snapshots.some((a) => a.id === binding.subscriptionAccountId)
+        ? await tx.subscriptionAccount.findUnique({
+            where: { id: binding.subscriptionAccountId },
+            select: { providerId: true },
+          })
+        : null
+    const crossed = bound !== null && bound.providerId !== profile.providerId
     // A durable Vault record fixes the selected account. A racing issue cannot select another
     // secret or bind a task without the matching key. Keep the pure selector's new-task gates.
     const pick = (accounts: typeof snapshots) =>
@@ -598,8 +683,8 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
         capacity,
         providerEnabled: profile.enabled,
         now: task.now,
-        boundAccountId: ownBinding?.subscriptionAccountId ?? null,
-        rebinds: ownBinding?.rebinds ?? 0,
+        boundAccountId: crossed ? null : (binding?.subscriptionAccountId ?? null),
+        rebinds: crossed ? 0 : (binding?.rebinds ?? 0),
         policyFlagged: policyFlagged !== null,
         minTurnHeadroomPct: this.#minHeadroom,
         turnCostCredits:
@@ -612,7 +697,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
     const decision = pick(
       requiredAccount
         ? snapshots.filter(
-            (a) => a.id === requiredAccount || a.id === ownBinding?.subscriptionAccountId,
+            (a) => a.id === requiredAccount || a.id === binding?.subscriptionAccountId,
           )
         : snapshots,
     )
@@ -695,6 +780,11 @@ const values = (stored: StoredSecret): TurnCredentialValues => ({
     ? {}
     : { envValues: envValuesSchema.parse(JSON.parse(stored.env) as unknown) }),
 })
+/**
+ * The key row is the authority on time once it exists: a live turn moves its `expires_at` and
+ * `valid_until` with every renewal (docs/plan/70-turn-without-time-limit.md, ВР3), while the
+ * grant in Vault keeps the first ones it was written with.
+ */
 function matches(key: KeyRow, stored: StoredSecret, now: Date, active = true): boolean {
   return (
     key.sessionId === stored.sessionId &&
@@ -703,9 +793,8 @@ function matches(key: KeyRow, stored: StoredSecret, now: Date, active = true): b
     key.subscriptionAccountId === stored.accountId &&
     !key.revokeRequestedAt &&
     !key.revokedAt &&
-    (!active || (now < key.expiresAt && now < new Date(stored.grant.expiresAt))) &&
-    now < key.validUntil &&
-    now < new Date(stored.grant.validUntil)
+    (!active || now < key.expiresAt) &&
+    now < key.validUntil
   )
 }
 function requireSelection(
@@ -910,7 +999,9 @@ async function validateAssignment(
     (assignment.sessionId !== ref.sessionId ||
       assignment.firstEpoch !== ref.epoch ||
       assignment.leaseEpoch !== ref.epoch ||
-      assignment.deadlineAt.getTime() !== grant.deadlineAt.getTime())
+      // A live turn moves its assignment's deadline on with every renewal (docs/plan/70-turn-
+      // without-time-limit.md, ВР3): the grant names the one it was given, never a later one.
+      grant.deadlineAt.getTime() > assignment.deadlineAt.getTime())
   )
     throw conflict('Turn credential policy does not match its assignment')
   if (assignment?.executor === 'runner' && grant.boundSource === null)

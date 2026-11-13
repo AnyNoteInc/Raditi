@@ -58,6 +58,20 @@ export interface TurnAssignmentStore {
   open(input: OpenTurnAssignment): Promise<TurnAssignment | null>
   get(id: string): Promise<TurnAssignment | null>
   /**
+   * Renews a live turn (docs/plan/70-turn-without-time-limit.md, ВР2–ВР4): under the whole fence,
+   * in one statement, the lease moves to `leaseMs` from now, and the unfinished assignment of
+   * turn `turn` at the fence's epoch and the keys of that turn move to `turnMs` from now — the
+   * keys' retention for finalization (`valid_until`) to `leaseMs`. A deadline already later stays.
+   * The assignment and the keys may not exist yet: the lease alone moves then. null when the
+   * fence no longer owns the lease.
+   */
+  renewTurn(input: {
+    fence: SiteLeaseFence
+    turn: number
+    turnMs: number
+    leaseMs: number
+  }): Promise<SiteLeaseGrant | null>
+  /**
    * Binds unclaimed runner assignments among `ids` (at most runnerLimits.claimIds) to a runner
    * session, oldest first and at most `limit`. Rows another claimant holds are skipped, never
    * waited for.

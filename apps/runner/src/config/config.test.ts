@@ -44,7 +44,7 @@ describe('loadRunnerConfig', () => {
       caFile: null,
       s3Origin: null,
       s3CaFile: null,
-      maxTurns: 1,
+      maxTurns: 1024,
       sandbox: { runtime: 'runc', socketPath: '/var/run/docker.sock' },
     })
   })
@@ -74,7 +74,7 @@ describe('loadRunnerConfig', () => {
     ).toEqual(['RUNNER_S3_CA_FILE: only with RUNNER_S3_ORIGIN, the S3 it is for'])
   })
 
-  it('refuses a runner without core, its token file or with more than one turn', () => {
+  it('refuses a runner without core or its token file, and more turns than the protocol carries', () => {
     expect(problemsOf({ APP_ENV: 'development' })).toEqual([
       'RUNNER_CORE_URL: required for the runner role',
       'RUNNER_TOKEN_FILE: required for the runner role (the token is never an env value)',
@@ -98,12 +98,15 @@ describe('loadRunnerConfig', () => {
         RUNNER_TOKEN_FILE: '/etc/raditi/runner-token',
       }).join('\n'),
     ).not.toContain('secret')
+    // Several turns on one VM (plan 70, ВР18), within the protocol's 64.
     expect(
-      problemsOf({
-        APP_ENV: 'development',
-        RUNNER_MAX_TURNS: '2',
-      })[0],
-    ).toBe('RUNNER_MAX_TURNS: one turn per runner until several runners are supported (stage 2)')
+      problemsOf({ APP_ENV: 'development', RUNNER_MAX_TURNS: '2' }).filter((line) =>
+        line.startsWith('RUNNER_MAX_TURNS'),
+      ),
+    ).toEqual([])
+    expect(problemsOf({ APP_ENV: 'development', RUNNER_MAX_TURNS: '1025' })[0]).toMatch(
+      /^RUNNER_MAX_TURNS:/,
+    )
   })
 
   it('runs a runner over https under gVisor, with nothing of the platform', () => {

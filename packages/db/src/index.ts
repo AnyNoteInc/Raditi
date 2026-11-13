@@ -25,6 +25,7 @@ export {
   enqueuePreviewBrowser,
   enqueuePreviewSync,
   enqueueReleaseAdvance,
+  enqueueAgentWaitingPasses,
   enqueueSiteWaitingPasses,
 } from './chat-outbox.ts'
 export {
@@ -71,7 +72,7 @@ export {
   taskAttachments,
   type ExpiredAttachment,
 } from './attachments.ts'
-export { classProfile, classProfiles, type ClassProfile } from './class-profile.ts'
+export { classProfile, type ClassProfile } from './class-profile.ts'
 export {
   BROWSER_CHECKS_EVENT,
   BROWSER_SCREENSHOT_EVENT,
@@ -142,6 +143,7 @@ export { PostgresTurnAssignmentStore } from './turn-assignments.ts'
 export { PostgresTaskTurnAssignmentStore } from './task-turn-assignments.ts'
 export {
   cancelWaitingTask,
+  claimQueuedPass,
   claimQueuedTask,
   excludeTurnDbOperations,
   includeTurnDbOperations,

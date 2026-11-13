@@ -234,10 +234,21 @@ export class CredentialSweeper {
                 turnNo: true,
                 firstEpoch: true,
                 revokedAt: true,
+                revokeRequestedAt: true,
+                validUntil: true,
               },
             }),
           ),
         )
+        // A live turn renews its key past the first retention its Vault record names (plan 70,
+        // ВР3): the row decides, and a renewed key is no orphan.
+        if (
+          key &&
+          key.revokedAt === null &&
+          key.revokeRequestedAt === null &&
+          key.validUntil.getTime() > clock!.now.getTime()
+        )
+          continue
         if (key && key.revokedAt === null)
           await this.#wait(this.#options.credentials.revoke(refFromKey(key)))
         else await this.#wait(this.#options.secrets.kvDestroyAll(path))

@@ -285,22 +285,20 @@ function pickUnbound(input: ParsedInput, binding: 'initial' | 'rebind'): PoolDec
   const candidates: { account: PoolAccountSnapshot; headroom: number; score: number | null }[] = []
   const resets: number[] = []
   const probeAccountIds: string[] = []
-  let slotsBusy = false
+  // An account runs any number of turns at once (owner's request of 13.11.2026: «сними все
+  // ограничения по ходам, оставь только количество ходов на клиента — 8»; docs/plan/70-turn-
+  // without-time-limit.md, ВР26): `maxConcurrentTurns` is history, its windows and pauses stay.
   for (const account of input.accounts) {
     if (!eligible(account, input)) continue
     const state = readiness(account, input, binding === 'initial')
-    const freeSlot = account.activeTurns < account.maxConcurrentTurns
     if (state.retryAt !== null) resets.push(state.retryAt)
-    if (state.needsProbe && freeSlot) {
+    if (state.needsProbe) {
       probeAccountIds.push(account.id)
       if (state.retryAt === null) resets.push(input.now.getTime() + poolPolicy.unknownRetryMs)
     }
     // If no replacement is ready, waiting may still make the current binding usable again.
     if (account.id === input.boundAccountId) continue
-    if (state.ready && freeSlot)
-      candidates.push({ account, headroom: state.headroom, score: state.score })
-    // The slot is the only known obstacle: unknown usage is probed once the slot is free.
-    else if (!freeSlot && state.retryAt === null) slotsBusy = true
+    if (state.ready) candidates.push({ account, headroom: state.headroom, score: state.score })
   }
   // Absolute credits when every candidate has them (a Max holds 14 times a Lite), else percents.
   const absolute = candidates.every((candidate) => candidate.score !== null)
@@ -336,13 +334,6 @@ function pickUnbound(input: ParsedInput, binding: 'initial' | 'rebind'): PoolDec
       binding,
       rebinds: input.rebinds + (binding === 'rebind' ? 1 : 0),
     }
-  if (slotsBusy) {
-    // A slot frees without any window reset: never wait for another account's reset instead.
-    // A pending probe still goes first, or a free account with unknown usage would stay idle.
-    const retryAt = input.now.getTime() + poolPolicy.busyRetryMs
-    if (probeAccountIds.length === 0) return { kind: 'busy', retryAt: new Date(retryAt) }
-    resets.push(retryAt)
-  }
   return wait(
     input,
     'pool_empty',
@@ -383,8 +374,6 @@ export function pickAccount(snapshot: PickAccountInput): PoolDecision {
     return { kind: 'operator', reason: 'account_suspended' }
 
   if (eligible(bound, input)) {
-    if (bound.activeTurns >= bound.maxConcurrentTurns)
-      return { kind: 'busy', retryAt: new Date(input.now.getTime() + poolPolicy.busyRetryMs) }
     const state = readiness(bound, input, false)
     if (state.ready)
       return { kind: 'selected', accountId: bound.id, binding: 'keep', rebinds: input.rebinds }
@@ -394,50 +383,4 @@ export function pickAccount(snapshot: PickAccountInput): PoolDecision {
   }
   if (input.rebinds >= poolPolicy.maxRebinds) return { kind: 'operator', reason: 'rebind_limit' }
   return pickUnbound(input, 'rebind')
-}
-
-/**
- * Whether the quota of a pool with windows is out for a pass to wait for (owner's answer of
- * 13.11.2026: «если квота закончилась … переходи на API»): no eligible account can take a turn
- * within `limitsOutWaitMs` — each one is paused, or a window it reported is spent and resets
- * later than that. An account whose windows are unknown is not out: the probe tells. A pool
- * without eligible accounts is out. A backend without windows is never out by its quota.
- */
-export function poolQuotaOut(input: {
-  capacity: PickAccountInput['capacity']
-  now: Date
-  accounts: readonly Pick<
-    PoolAccountSnapshot,
-    | 'enabled'
-    | 'status'
-    | 'health'
-    | 'retireRequestedAt'
-    | 'coolingUntil'
-    | 'breakerOpenUntil'
-    | 'limitWindows'
-  >[]
-}): boolean {
-  if (input.capacity === 'none') return false
-  const now = input.now.getTime()
-  const horizon = now + poolPolicy.limitsOutWaitMs
-  const eligibleAccounts = input.accounts.filter(
-    (account) =>
-      account.enabled &&
-      account.status === 'active' &&
-      account.health === 'ok' &&
-      account.retireRequestedAt === null,
-  )
-  return eligibleAccounts.every((account) => {
-    for (const until of [account.coolingUntil, account.breakerOpenUntil])
-      if (until !== null && until.getTime() > horizon) return true
-    const windows = account.limitWindows ?? []
-    return windows.some((window) => {
-      const spent =
-        window.usedPct >= 100 ||
-        (window.limitCredits !== undefined &&
-          window.usedCredits !== undefined &&
-          window.usedCredits >= window.limitCredits)
-      return spent && window.resetsAt !== null && window.resetsAt.getTime() > horizon
-    })
-  })
 }

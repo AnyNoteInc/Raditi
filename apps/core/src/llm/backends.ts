@@ -52,3 +52,18 @@ function withoutTrailingSlashes(path: string): string {
   while (end > 0 && path[end - 1] === '/') end--
   return path.slice(0, end)
 }
+
+/**
+ * The backend the calls of a key fall back on once its own pool has its limits out: the next of
+ * the registry, whose order is the order of preference (docs/plan/70-turn-without-time-limit.md,
+ * ВР25 — the API after the plan). null for the last one.
+ */
+export function backendFallbacks(
+  backends: readonly Pick<LlmBackend, 'id'>[],
+): (backend: LlmBackendId) => LlmBackendId | null {
+  const order = backends.map((backend) => backend.id)
+  return (backend) => {
+    const at = order.indexOf(backend)
+    return at >= 0 && at + 1 < order.length ? order[at + 1]! : null
+  }
+}

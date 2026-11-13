@@ -102,6 +102,8 @@ export interface CoreConfig {
    * песочница»). 0 — every turn gets a new container, as always with runner VMs.
    */
   sandboxWarmMs: number
+  /** WORKSPACE_TURN_LIMIT: the passes of one workspace that run at once (plan 70, ВР13). */
+  workspaceTurnLimit: number
   /**
    * With runner VMs: the runtime they run turns under (SANDBOX_RUNTIME, one set of variables
    * with the runners at MVP; only runsc in production). A runner refuses a turn spec of another
@@ -323,9 +325,11 @@ const ownEnvSchema = z.object({
   ),
   // The platform's own subnets the egress proxy of a preview never connects to (R10, Р13).
   SANDBOX_EGRESS_REFUSED_SUBNETS: egressRefusedSubnetsVar,
-  // A container never outlives the deadline of its first turn, and waits only while it leaves
-  // the next turn half of one (WARM_MIN_LEFT_MS): more than 10 minutes would never be waited.
+  // A waiting container is leased for its wait (docs/plan/70-turn-without-time-limit.md, ВР10).
   SANDBOX_WARM_MINUTES: envVar(z.coerce.number().int().min(0).max(10).default(10)),
+  // How many passes of one workspace run at once (owner's requests of 06.11 and 12.11.2026,
+  // plan 70, ВР13): the next one waits for the agents.
+  WORKSPACE_TURN_LIMIT: envVar(z.coerce.number().int().min(1).max(64).default(8)),
   // The deployment label of core's own turn containers with TURN_EXECUTOR=local: core lists and
   // collects only those, so two trees or a stand on one Docker daemon never remove each other's
   // turns. It is the provider's runner label, so it takes the form of a runner id.
@@ -405,6 +409,7 @@ export function loadConfig(env: Env): CoreConfig {
         ...Object.values(previewImageVariables),
         'SANDBOX_EGRESS_REFUSED_SUBNETS',
         'SANDBOX_WARM_MINUTES',
+        'WORKSPACE_TURN_LIMIT',
         'RELEASE_API_PORT',
         'RELEASE_API_HOST',
         'RELEASE_API_PUBLIC_URL',
@@ -727,6 +732,7 @@ export function loadConfig(env: Env): CoreConfig {
     leads: leads ?? null,
     turnExecutor,
     sandboxWarmMs: turnExecutor === 'local' ? own.SANDBOX_WARM_MINUTES * 60_000 : 0,
+    workspaceTurnLimit: own.WORKSPACE_TURN_LIMIT,
     ...(runnerRuntime ? { runnerRuntime } : {}),
     runnerApi,
     git,

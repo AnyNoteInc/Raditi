@@ -6,7 +6,7 @@ import {
   conflict,
   coreStopping,
   leaseLost,
-  MAX_SANDBOX_TURN_MS,
+  MAX_SANDBOX_LEASE_MS,
   runnerReportSchema,
   runnerUnavailable,
   SANDBOX_SECRETS_DIR,
@@ -49,7 +49,7 @@ const request: TurnRequest & { workspace: PublicationSource } = {
     env: {},
     secrets: [],
     network: { mode: 'none' },
-    hardTimeoutMs: MAX_SANDBOX_TURN_MS,
+    hardTimeoutMs: MAX_SANDBOX_LEASE_MS,
   },
   context: {
     taskId: labels.taskId,
@@ -91,10 +91,10 @@ async function given({ executor = 'runner' }: { executor?: 'runner' | 'local' } 
     siteId: labels.siteId,
     taskId: labels.taskId,
     operation: 'turn',
-    ttlMs: MAX_SANDBOX_TURN_MS + TURN_PUBLICATION_GRACE_MS,
+    ttlMs: MAX_SANDBOX_LEASE_MS + TURN_PUBLICATION_GRACE_MS,
   }))!
   const cancel = new AbortController()
-  const guard = new LeaseGuard(lease, leases, MAX_SANDBOX_TURN_MS, cancel.signal)
+  const guard = new LeaseGuard(lease, leases, MAX_SANDBOX_LEASE_MS, cancel.signal)
   guards.push(guard)
   const plan = toTurnPlan(request, sampleDriverId)
   const attempt = new TurnAttempt(
@@ -116,7 +116,7 @@ async function given({ executor = 'runner' }: { executor?: 'runner' | 'local' } 
     turn: 1,
     executor,
     plan,
-    remainingMs: MAX_SANDBOX_TURN_MS,
+    remainingMs: MAX_SANDBOX_LEASE_MS,
   }))!
   attempt.credentialRef = {
     taskId: labels.taskId,
@@ -591,7 +591,7 @@ describe('TurnAttempt over a runner: delivery against giving up (spec §8)', () 
   it('frees the site at once when its turn ran out before a poll took the prepare', async () => {
     const t = await onRunner()
     const now = performance.now.bind(performance)
-    vi.spyOn(performance, 'now').mockImplementation(() => now() + MAX_SANDBOX_TURN_MS + 1_000)
+    vi.spyOn(performance, 'now').mockImplementation(() => now() + MAX_SANDBOX_LEASE_MS + 1_000)
     expect(await t.poll()).toEqual([])
     expect(await t.settled).toBe('released')
     expect(t.dispatched).not.toHaveBeenCalled()
@@ -603,7 +603,7 @@ describe('TurnAttempt over a runner: delivery against giving up (spec §8)', () 
     const [prepare] = await t.poll()
     t.hub.requeue('sandbox-1', t.runnerSession, [prepare!])
     const now = performance.now.bind(performance)
-    vi.spyOn(performance, 'now').mockImplementation(() => now() + MAX_SANDBOX_TURN_MS + 1_000)
+    vi.spyOn(performance, 'now').mockImplementation(() => now() + MAX_SANDBOX_LEASE_MS + 1_000)
     expect(await t.poll()).toEqual([])
     // The first delivery went out: a container may exist, so nothing is freed early.
     expect(await t.settled).toBe('vacating')
@@ -694,9 +694,9 @@ describe('TurnAttempt with a working set (plan 53, Р11)', () => {
       siteId: labels.siteId,
       taskId: labels.taskId,
       operation: 'turn',
-      ttlMs: MAX_SANDBOX_TURN_MS + TURN_PUBLICATION_GRACE_MS,
+      ttlMs: MAX_SANDBOX_LEASE_MS + TURN_PUBLICATION_GRACE_MS,
     }))!
-    const guard = new LeaseGuard(lease, leases, MAX_SANDBOX_TURN_MS)
+    const guard = new LeaseGuard(lease, leases, MAX_SANDBOX_LEASE_MS)
     guards.push(guard)
     const plan = toTurnPlan(
       {
@@ -833,10 +833,10 @@ describe('TurnAttempt without a repository (docs/plan/57-browser-tasks.md, Б4)'
       siteId: labels.siteId,
       taskId: labels.taskId,
       operation: 'turn',
-      ttlMs: MAX_SANDBOX_TURN_MS + TURN_PUBLICATION_GRACE_MS,
+      ttlMs: MAX_SANDBOX_LEASE_MS + TURN_PUBLICATION_GRACE_MS,
     }))!
     const release = vi.spyOn(leases, 'release')
-    const guard = new LeaseGuard(lease, leases, MAX_SANDBOX_TURN_MS)
+    const guard = new LeaseGuard(lease, leases, MAX_SANDBOX_LEASE_MS)
     guards.push(guard)
     const plan = toTurnPlan({ ...withoutWorkspace, requirements: BROWSER_ONLY }, sampleDriverId)
     const save = vi.fn(async (metadata: object) => ({
@@ -946,9 +946,9 @@ describe('TurnAttempt without a repository (docs/plan/57-browser-tasks.md, Б4)'
       siteId: labels.siteId,
       taskId: labels.taskId,
       operation: 'turn',
-      ttlMs: MAX_SANDBOX_TURN_MS + TURN_PUBLICATION_GRACE_MS,
+      ttlMs: MAX_SANDBOX_LEASE_MS + TURN_PUBLICATION_GRACE_MS,
     }))!
-    const guard = new LeaseGuard(lease, leases, MAX_SANDBOX_TURN_MS)
+    const guard = new LeaseGuard(lease, leases, MAX_SANDBOX_LEASE_MS)
     guards.push(guard)
     const quiesce = vi.fn(async () => {})
     const attempt = new TurnAttempt(

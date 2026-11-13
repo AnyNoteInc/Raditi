@@ -84,6 +84,9 @@ services:
     environment:
       <<: [*s3, *gitea-url, *preview-address]
       SINGLE_SERVER: 'on'
+      # Eight turns of a workspace at once, and no other limit of turns (owner's request of
+      # 13.11.2026, docs/plan/70-turn-without-time-limit.md, ВР13, ВР26)
+      WORKSPACE_TURN_LIMIT: '8'
       PREVIEW_EXECUTOR: local
       PREVIEW_RUNTIME: runsc
       SANDBOX_DOCKER_SOCKET: /var/run/docker.sock
@@ -472,7 +475,9 @@ services:
       RUNNER_TOKEN_FILE: /etc/raditi/runner-token
       RUNNER_S3_ORIGIN: https://s3.raditi.internal:8333/raditi-sessions
       RUNNER_S3_CA_FILE: /etc/raditi/ca.pem
-      RUNNER_MAX_TURNS: '1'
+      # As many turns at once as the protocol carries: the only limit of turns is the eight of a
+      # workspace (owner's request of 13.11.2026, docs/plan/70-turn-without-time-limit.md, ВР26)
+      RUNNER_MAX_TURNS: '1024'
       SANDBOX_RUNTIME: runsc
       SANDBOX_DOCKER_SOCKET: /var/run/docker.sock
       SANDBOX_GATEWAY_IMAGE: ${SANDBOX_GATEWAY_IMAGE:?Set the digest-pinned sandbox gateway image}

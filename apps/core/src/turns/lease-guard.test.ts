@@ -39,16 +39,7 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-describe('turn lease watchdog', () => {
-  it('leaves the reserve for the steps after the agent, and times out when none is left', async () => {
-    const f = fixture(200_000, 120_000)
-    expect(f.guard.remainingBeforeReserveMs(30_000)).toBe(90_000)
-    await vi.advanceTimersByTimeAsync(90_000)
-    expect(() => f.guard.remainingBeforeReserveMs(30_000)).toThrow('timeout')
-    expect(f.guard.reason).toBe('timeout')
-    f.guard.close()
-  })
-
+describe('turn lease watchdog of a step with a fixed limit', () => {
   it('fails closed before lease expiry even while every DB assertion is stuck', async () => {
     const f = fixture()
     vi.mocked(f.store.assert).mockImplementation(() => new Promise(() => {}))
@@ -186,5 +177,114 @@ describe('turn lease watchdog', () => {
     await vi.advanceTimersByTimeAsync(120_000)
     expect(f.store.assert).not.toHaveBeenCalled()
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+/** A turn of the agent: it renews itself (TurnRenewal) and has no time limit (plan 70, ВР1). */
+function renewing(acquireElapsedMs = 0) {
+  vi.useFakeTimers()
+  vi.spyOn(performance, 'now').mockImplementation(() => Date.now())
+  const grant = (): SiteLeaseGrant => ({
+    siteId: 'site',
+    taskId: 'task',
+    operation: 'turn',
+    epoch: 1,
+    serverNow: new Date(),
+    expiresAt: new Date(Date.now() + 270_000),
+  })
+  const renew = vi.fn(async (): Promise<SiteLeaseGrant | null> => grant())
+  const store = { assert: vi.fn(async () => true), renew: vi.fn() } as unknown as SiteLeaseStore
+  const logger = { warn: vi.fn() }
+  const external = new AbortController()
+  const guard = new LeaseGuard(
+    grant(),
+    store,
+    { renew, turnMs: 180_000, intervalMs: 30_000 },
+    external.signal,
+    acquireElapsedMs,
+    logger,
+  )
+  const renewed: number[] = []
+  guard.onRenewed((remainingMs) => renewed.push(remainingMs))
+  return { guard, store, renew, logger, renewed, external }
+}
+
+describe('turn lease watchdog of a turn without a time limit', () => {
+  it('lives for hours while every renewal goes through, and never times out', async () => {
+    const f = renewing()
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60_000)
+    expect(f.guard.signal.aborted).toBe(false)
+    expect(f.guard.remainingMs).toBeGreaterThan(150_000)
+    expect(f.renew).toHaveBeenCalledTimes(240)
+    // Each renewal gives the container the whole lease again (ВР4).
+    expect(new Set(f.renewed)).toEqual(new Set([180_000]))
+    // The renewal proves the fence: no separate check runs beside it.
+    expect(f.store.assert).not.toHaveBeenCalled()
+    f.guard.close()
+  })
+
+  it('ends as lease_lost as soon as a renewal finds the fence gone', async () => {
+    const f = renewing()
+    f.renew.mockResolvedValueOnce(null)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(f.guard.signal.aborted).toBe(true)
+    expect(f.guard.reason).toBe('lease_lost')
+    expect(f.renewed).toEqual([])
+    f.guard.close()
+  })
+
+  it('rides out failed renewals, and is lost — not timed out — when they last a lease', async () => {
+    const f = renewing()
+    f.renew.mockRejectedValue(new Error('database down'))
+    await vi.advanceTimersByTimeAsync(179_999)
+    expect(f.guard.signal.aborted).toBe(false)
+    // Warned at most once a minute, then the database comes back in time.
+    expect(f.logger.warn.mock.calls.length).toBeLessThanOrEqual(3)
+    expect(f.logger.warn.mock.calls[0]![0]).toContain('turn renewal failed')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(f.guard.signal.aborted).toBe(true)
+    expect(f.guard.reason).toBe('lease_lost')
+    f.guard.close()
+  })
+
+  it('goes on after a renewal that was late but went through', async () => {
+    const f = renewing()
+    f.renew.mockRejectedValueOnce(new Error('connection reset'))
+    f.renew.mockRejectedValueOnce(new Error('connection reset'))
+    await vi.advanceTimersByTimeAsync(170_000)
+    expect(f.guard.signal.aborted).toBe(false)
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    expect(f.guard.signal.aborted).toBe(false)
+    f.guard.close()
+  })
+
+  it('renews at once when asked, and a failing listener stops nothing', async () => {
+    const f = renewing()
+    f.guard.onRenewed(() => {
+      throw new Error('extension failed')
+    })
+    await f.guard.renewNow()
+    expect(f.renew).toHaveBeenCalledOnce()
+    expect(f.renewed).toEqual([180_000])
+    expect(f.guard.signal.aborted).toBe(false)
+    f.guard.close()
+    // Closed: nothing renews any more, and no timer is left.
+    await f.guard.renewNow()
+    expect(f.renew).toHaveBeenCalledOnce()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('is lost at once when its acquisition already used the whole first lease', () => {
+    const f = renewing(180_000)
+    expect(f.guard.signal.aborted).toBe(true)
+    expect(f.guard.reason).toBe('lease_lost')
+    f.guard.close()
+  })
+
+  it('is cancelled from outside like any turn', () => {
+    const f = renewing()
+    f.external.abort()
+    expect(f.guard.reason).toBe('cancelled')
+    f.guard.close()
   })
 })

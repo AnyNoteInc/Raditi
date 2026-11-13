@@ -1,4 +1,4 @@
-import { MAX_SANDBOX_TURN_MS, type TurnPrepareInput } from '@repo/domain'
+import { MAX_SANDBOX_LEASE_MS, type TurnPrepareInput } from '@repo/domain'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { LocalTurnExecutor } from './local-turn-executor.ts'
@@ -42,7 +42,7 @@ function turnInput(turn: number, epoch: number, patch: Partial<TurnPrepareInput[
     sandbox: {
       ...input.sandbox,
       labels: { ...labels, turn, leaseEpoch: epoch },
-      hardTimeoutMs: MAX_SANDBOX_TURN_MS,
+      hardTimeoutMs: MAX_SANDBOX_LEASE_MS,
       ...patch,
     },
   }
@@ -79,9 +79,11 @@ describe('warm containers of the local executor', () => {
     // The base and the files of the turn are laid out again, its own secret among them.
     expect(side.importBundle).toHaveBeenCalledTimes(2)
     expect(vi.mocked(side.sandbox.fs.write).mock.calls.length - writes).toBe(2)
-    // The container keeps the deadline it was created with: the agent ends four minutes earlier.
-    await execution.launch(17 * MINUTE)
-    expect(vi.mocked(side.sandbox.exec).mock.lastCall![0].timeoutMs).toBe(13 * MINUTE)
+    // Taken, it is extended to the deadline of turn 2, as a new container would be created with
+    // it, and its agent has no time limit (docs/plan/70-turn-without-time-limit.md, ВР10).
+    expect(side.sandbox.extend).toHaveBeenLastCalledWith(Date.now() + MAX_SANDBOX_LEASE_MS)
+    await execution.launch()
+    expect(vi.mocked(side.sandbox.exec).mock.lastCall![0].timeoutMs).toBeUndefined()
 
     // The preview and recovery of turn 2 find it by the id the assignment names, under the
     // labels of turn 1 it was created with.
@@ -124,6 +126,23 @@ describe('warm containers of the local executor', () => {
         signal,
       ),
     ).rejects.toMatchObject({ code: 'CONFLICT' })
+    await side.warm.close()
+  })
+
+  it('creates a new container when the waiting one cannot be extended to the turn', async () => {
+    const side = warmSide()
+    const first = await side.executor.prepare(turnInput(1, 1), signal)
+    await first.destroy('completed')
+    expect(side.warm.holds(side.sandbox.id)).toBe(true)
+    vi.mocked(side.sandbox.extend).mockRejectedValueOnce(new Error('daemon unavailable'))
+    const second = await side.executor.prepare(turnInput(2, 2), signal)
+    // The waiting container went; the turn got one created for it.
+    expect(side.sandbox.destroy).toHaveBeenCalledWith('failed')
+    expect(side.sandboxes.create).toHaveBeenCalledTimes(2)
+    expect(side.warm.holds(side.sandbox.id)).toBe(false)
+    // A live turn extends its container through its execution (plan 70, ВР4).
+    await second.extend(4 * MINUTE)
+    expect(side.sandbox.extend).toHaveBeenLastCalledWith(Date.now() + 4 * MINUTE)
     await side.warm.close()
   })
 

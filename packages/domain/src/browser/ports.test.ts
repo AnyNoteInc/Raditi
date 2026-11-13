@@ -74,6 +74,7 @@ describe('ports of the cloud browser', () => {
       start: async () => ({ endpoint: 'ws://127.0.0.1:39001/secret-path' }),
       stop: async () => undefined,
       list: async () => [],
+      extend: async () => undefined,
     }
     const policy: BrowserTaskPolicy = {
       startPath: '/wp-admin/',

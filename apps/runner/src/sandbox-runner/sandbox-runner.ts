@@ -390,6 +390,8 @@ export class SandboxRunner {
     }
     return {
       runnerSession: this.session,
+      // Its turns live while core renews them (docs/plan/70-turn-without-time-limit.md, ВР4).
+      features: ['extend'],
       capacity: Math.max(0, this.deps.maxTurns - this.#held.size),
       inventory: this.#inventory,
       active: [...this.#held.values()]
@@ -450,6 +452,8 @@ export class SandboxRunner {
     if (performance.now() > expiresAt) return
     if (command.type === 'adopt') return this.#adopt(command, sentAt)
     const held = this.#held.get(command.assignmentId)
+    // An extension asks nothing back: one for a turn this session no longer holds is dropped.
+    if (!held && command.type === 'extend') return
     if (!held) return this.#unknown(command)
     // A stale owner's command, or another turn's fence: dropped.
     if (
@@ -472,6 +476,8 @@ export class SandboxRunner {
         return this.#seal(held, command)
       case 'abort':
         return this.#abortAgent(held)
+      case 'extend':
+        return this.#extend(held, command, sentAt)
       case 'destroy':
         return this.#destroy(held, command)
     }
@@ -697,6 +703,19 @@ export class SandboxRunner {
     }
   }
 
+  /**
+   * Core renewed the turn (ВР4): its container and the gateway of its attempt live on, counted
+   * from the poll's sending as the first deadline is. Never earlier than before; a failure waits
+   * for the next renewal, and the container ends at its last lease otherwise.
+   */
+  async #extend(held: Held, command: Command<'extend'>, sentAt: number): Promise<void> {
+    const deadline = sentAt + command.remainingMs
+    if (held.destroying || deadline <= held.deadline) return
+    held.deadline = deadline
+    const left = Math.floor(deadline - performance.now())
+    if (held.execution && left > 0) await held.execution.extend(left)
+  }
+
   async #launch(held: Held, command: Command<'launch'>): Promise<void> {
     const answer = this.#answer(held, command)
     if (!held.execution || held.pump) {
@@ -705,9 +724,9 @@ export class SandboxRunner {
     }
     let agent: TurnAgentExec
     try {
-      // Core's limit, never past the container's own deadline.
-      const timeoutMs = Math.min(command.timeoutMs, Math.floor(held.deadline - performance.now()))
-      agent = await held.execution.launch(Math.max(1, timeoutMs))
+      // No time limit of its own (ВР1): the agent ends with its container, which core renews. A
+      // core that still names one gets no other end than the container's deadline.
+      agent = await held.execution.launch()
     } catch (error) {
       await answer({ type: 'failed', code: runnerFailureCode(error, 'SANDBOX_COMMAND_FAILED') })
       return

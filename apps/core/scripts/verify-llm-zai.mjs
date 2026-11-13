@@ -194,12 +194,15 @@ export async function verifyZai(ctx) {
     usedCredits: 0,
   })
   assert.ok((await windows()).week.usedPct > 0 && (await windows()).week.usedPct < 1)
-  // The key is durable: recovered and issued again it is the same one. The only account is
-  // healthy but holds its one turn: occupied slots, not missing capacity.
+  // The key is durable: recovered and issued again it is the same one. An account runs any
+  // number of turns at once (docs/plan/70-turn-without-time-limit.md, ВР26): a second task gets
+  // its key beside the first, on the same account.
   assert.deepEqual(await core.call('recover', { ref: proxied.ref }), proxied.values)
   assert.deepEqual(await issue(proxied), proxied.values)
-  await assert.rejects(issue(await task()), (error) => error.code === 'SUBSCRIPTION_BUSY')
-  passed('durable issuance, recovery and one-turn capacity of the account')
+  const alongside = await issued()
+  assert.equal((await keyRow(alongside)).subscriptionAccountId, accountId)
+  await revoke(alongside)
+  passed('durable issuance, recovery and turns side by side on one account')
   const proxiedResult = resultFor('B13 OpenCode through the proxy')
   await zai({ scenario: { scenario: 'text', text: JSON.stringify(proxiedResult) } })
   const throughProxy = await runTurn({ turn: proxied, prompt: `${promptMarker}. Answer.` })

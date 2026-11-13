@@ -1,6 +1,6 @@
 import { attemptCreditBudget } from '@repo/billing'
 import {
-  classProfiles,
+  classProfile,
   taskAttachments,
   taskBrowserCheckpoints,
   type BrowserCheckpointRecord,
@@ -14,21 +14,21 @@ import {
   envVarReachesTask,
   isDomainError,
   modelClassSchema,
-  poolQuotaOut,
   previewOrigin,
   previewUnavailableReasons,
   readFeedRow,
   siteWorkspaceRules,
   turnSkillsOf,
   type LlmBackend,
+  type LlmBackendId,
+  type ModelClass,
   type PreviewAddress,
   type SiteAdapter,
   type SiteFacts,
   type SiteStack,
 } from '@repo/domain'
 
-import { decodeLimitWindows } from '@repo/turn-keys'
-
+import { poolHasRoom } from '../llm/pool-room.ts'
 import { AGENT_COMMANDS, type PreviewFacts } from './turn-instructions.ts'
 import {
   savedPlanOf,
@@ -262,17 +262,11 @@ export async function readPassFacts(
 
   const modelClass = modelClassSchema.safeParse(task.modelClass ?? 'standard')
   if (!modelClass.success) return null
-  // The same query «Попробовать ещё» asks before it moves a dialog into a class; of its
-  // profiles, the first whose pool still has quota (owner's answer of 13.11.2026).
-  const chosen = await profileWithQuota(
-    db,
-    deps.backends,
-    await classProfiles(db, {
-      modelClass: modelClass.data,
-      backends: deps.backends.map((backend) => backend.id),
-    }),
-    input.now,
-  )
+  // The same query «Попробовать ещё» asks before it moves a dialog into a class, backend by
+  // backend in the order of the registry: the plan first, the API when the plan has its limits
+  // out (owner's answer of 13.11.2026, docs/plan/70-turn-without-time-limit.md, ВР24). With every
+  // pool out the first stays, and the issue of its key tells the client so (plan 68).
+  const chosen = await profileWithRoom(db, deps.backends, modelClass.data)
   const profile = chosen
     ? {
         backend: chosen.backend,
@@ -431,51 +425,19 @@ async function browserFactsOf(
   }
 }
 
-/**
- * The profile a pass runs on: the first of `profiles` (the order of the backends — the plan,
- * then the API paid by the token) whose pool has quota for it; when every pool is out, the first,
- * and the pool tells the client that the limits of the agent are out (plan 68). The quota of a
- * pool with windows is out when no eligible account can take a turn within the longest wait
- * (`poolQuotaOut`); a pool without windows is bounded by the credits of the customer alone
- * (owner's answer of 13.11.2026). A pass of a task bound to an account of another backend goes on
- * without that binding (`GatewayTurnCredentials`).
- */
-export async function profileWithQuota<P extends { backend: string }>(
-  db: Pick<PrismaClient, '$queryRaw'>,
-  backends: readonly Pick<LlmBackend, 'id' | 'capacity'>[],
-  profiles: readonly P[],
-  now: Date,
-): Promise<P | null> {
-  for (const profile of profiles) {
-    const capacity = backends.find((backend) => backend.id === profile.backend)?.capacity
-    if (capacity === undefined) continue
-    if (capacity === 'none') return profile
-    const accounts = await db.$queryRaw<
-      Array<{
-        enabled: boolean
-        status: 'active' | 'banned' | 'retired'
-        health: 'ok' | 'needs_relogin' | 'suspended'
-        retireRequestedAt: Date | null
-        coolingUntil: Date | null
-        breakerOpenUntil: Date | null
-        limitWindows: unknown
-      }>
-    >`
-      SELECT (a.enabled AND a.credential_version > 0 AND a.credentials_revoked_at IS NULL) AS enabled,
-        a.status::text AS status, a.health::text AS health,
-        a.retire_requested_at AS "retireRequestedAt", a.cooling_until AS "coolingUntil",
-        a.breaker_open_until AS "breakerOpenUntil", a.limit_windows AS "limitWindows"
-      FROM subscription_accounts a JOIN llm_providers p ON p.id = a.provider_id
-      WHERE p.slug = ${profile.backend}`
-    const out = poolQuotaOut({
-      capacity,
-      now,
-      accounts: accounts.map((account) => ({
-        ...account,
-        limitWindows: decodeLimitWindows(account.limitWindows),
-      })),
-    })
-    if (!out) return profile
+/** The profile of the class on the first backend whose pool has room, or on the first at all. */
+async function profileWithRoom(
+  db: PrismaClient,
+  backends: readonly LlmBackend[],
+  modelClass: ModelClass,
+): Promise<Awaited<ReturnType<typeof classProfile<LlmBackendId>>>> {
+  let first: Awaited<ReturnType<typeof classProfile<LlmBackendId>>> = null
+  for (const backend of backends) {
+    const profile = await classProfile(db, { modelClass, backends: [backend.id] })
+    if (!profile) continue
+    first ??= profile
+    // One backend: no other to go to, and the issue decides under its lock as before.
+    if (backends.length === 1 || (await poolHasRoom(db, backend, new Date()))) return profile
   }
-  return profiles[0] ?? null
+  return first
 }

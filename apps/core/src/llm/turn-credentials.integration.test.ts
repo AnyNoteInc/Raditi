@@ -21,7 +21,7 @@ import {
   sampleProviderSlug,
   sampleRoutePath,
 } from '../testing/ids.ts'
-import { backendCapacities } from './backends.ts'
+import { backendCapacities, backendFallbacks } from './backends.ts'
 import { CredentialSweeper } from './credential-sweeper.ts'
 import { GatewayTurnCredentials } from './turn-credentials.ts'
 
@@ -935,24 +935,23 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     }
   })
 
-  it('two different site owners share one account slot under the provider advisory lock', async () => {
+  it('two different site owners get keys side by side on one account under the pool lock', async () => {
+    // An account runs any number of turns at once (docs/plan/70-turn-without-time-limit.md, ВР26).
     const f = await fixture()
     const second = await f.taskFixture()
     const results = await Promise.allSettled([
       f.credentials.issue(f.ref, f.grant),
       f.credentials.issue(second.ref, f.grant),
     ])
-    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
-    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1)
-    expect(await db.llmKey.count({ where: { subscriptionAccountId: f.mainAccount.id } })).toBe(1)
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(2)
+    expect(await db.llmKey.count({ where: { subscriptionAccountId: f.mainAccount.id } })).toBe(2)
     expect(
       await db.taskAccountBinding.count({ where: { subscriptionAccountId: f.mainAccount.id } }),
-    ).toBe(1)
+    ).toBe(2)
   })
 
-  it('answers at once when a racing task took the account pinned in Vault and another is free', async () => {
+  it('admits a task whose Vault write waited on the account it pinned, beside the one that raced it', async () => {
     const f = await fixture()
-    const spare = await f.account({ usedPct: 50 })
     const second = await f.taskFixture()
     const entered = Promise.withResolvers<void>()
     const release = Promise.withResolvers<void>()
@@ -962,42 +961,15 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
       await release.promise
       return write(...args)
     })
-    const late = f.credentials.issue(second.ref, f.grant).catch((caught: unknown) => caught)
+    const late = f.credentials.issue(second.ref, f.grant)
     await entered.promise
-    // Both selected the account with the most headroom; this one is admitted first.
     await f.credentials.issue(f.ref, f.grant)
     release.resolve()
-    const error = (await late) as { code: string; details: { retryAt: string } }
-    expect(error).toMatchObject({ code: 'SUBSCRIPTION_BUSY' })
-    expect(Date.parse(error.details.retryAt) - Date.now()).toBeLessThan(5_000)
-    expect(await db.llmKey.count({ where: { taskId: second.task.id } })).toBe(0)
-    // The next attempt of that task, under a new lease epoch, takes the free account.
-    await db.siteLease.update({ where: { siteId: second.site.id }, data: { epoch: 2 } })
-    await f.credentials.issue({ ...second.ref, epoch: 2 }, f.grant)
+    await late
     expect(
       (await db.llmKey.findFirstOrThrow({ where: { taskId: second.task.id } }))
         .subscriptionAccountId,
-    ).toBe(spare.id)
-  })
-
-  it('keeps the pool wait when the pinned account was taken and no other account is free', async () => {
-    const f = await fixture()
-    const second = await f.taskFixture()
-    const entered = Promise.withResolvers<void>()
-    const release = Promise.withResolvers<void>()
-    const write = f.vault.kvCreateOnce.getMockImplementation()!
-    f.vault.kvCreateOnce.mockImplementationOnce(async (...args) => {
-      entered.resolve()
-      await release.promise
-      return write(...args)
-    })
-    const late = f.credentials.issue(second.ref, f.grant).catch((caught: unknown) => caught)
-    await entered.promise
-    await f.credentials.issue(f.ref, f.grant)
-    release.resolve()
-    const error = (await late) as { code: string; details: { retryAt: string } }
-    expect(error).toMatchObject({ code: 'SUBSCRIPTION_BUSY' })
-    expect(Date.parse(error.details.retryAt) - Date.now()).toBeGreaterThan(50_000)
+    ).toBe(f.mainAccount.id)
   })
 
   it('concurrent repeated issuance of one turn creates one binding/key and returns one pair', async () => {
@@ -1463,6 +1435,96 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     expect(await f.credentials.recover(f.ref)).toBeNull()
   })
 
+  it('moves a task bound to the plan onto the API when it plans a turn there, and back', async () => {
+    // Owner's answer of 13.11.2026 (docs/plan/70-turn-without-time-limit.md, ВР24): the API is
+    // the insurance of the plan. A binding of the other backend is no binding on this one.
+    const plan = await fixture()
+    const api = await fixture({ backend: 'zai-api' })
+    await db.taskAccountBinding.create({
+      data: {
+        taskId: api.task.id,
+        driverId: sampleDriverId,
+        subscriptionAccountId: plan.mainAccount.id,
+        rebinds: 0,
+      },
+    })
+    await api.credentials.issue(api.ref, api.grant)
+    expect(
+      await db.taskAccountBinding.findUniqueOrThrow({ where: { taskId: api.task.id } }),
+    ).toMatchObject({ subscriptionAccountId: api.mainAccount.id, rebinds: 0 })
+    expect(await db.llmKey.findFirstOrThrow({ where: { taskId: api.task.id } })).toMatchObject({
+      subscriptionAccountId: api.mainAccount.id,
+    })
+  })
+
+  it('gives a key of the plan an account of the API to fall back on, when there is one', async () => {
+    // Owner's answer of 13.11.2026 (docs/plan/70-turn-without-time-limit.md, ВР25).
+    const plan = await fixture({ slots: 2 })
+    const withFallback = new GatewayTurnCredentials({
+      prisma: db,
+      secrets: plan.vault.port,
+      capacityOf,
+      fallbackOf: backendFallbacks(llmBackends),
+    })
+    // The API is switched off: nowhere to fall back on.
+    await withFallback.issue(plan.ref, plan.grant)
+    expect(
+      (await db.llmKey.findFirstOrThrow({ where: { taskId: plan.task.id } })).fallbackAccountId,
+    ).toBeNull()
+    // The operator switches the API on with an account of it.
+    const api = await fixture({ backend: 'zai-api' })
+    const next = await plan.taskFixture()
+    await withFallback.issue(next.ref, plan.grant)
+    expect(
+      (await db.llmKey.findFirstOrThrow({ where: { taskId: next.task.id } })).fallbackAccountId,
+    ).toBe(api.mainAccount.id)
+    // A key of the API, the last of the registry, has none.
+    const onApi = new GatewayTurnCredentials({
+      prisma: db,
+      secrets: api.vault.port,
+      capacityOf,
+      fallbackOf: backendFallbacks(llmBackends),
+    })
+    await onApi.issue(api.ref, api.grant)
+    expect(
+      (await db.llmKey.findFirstOrThrow({ where: { taskId: api.task.id } })).fallbackAccountId,
+    ).toBeNull()
+  })
+
+  it('keeps a renewed key past the first expiry its Vault record names', async () => {
+    // docs/plan/70-turn-without-time-limit.md, ВР3: a live turn moves its key's row and its
+    // assignment on; the write-once Vault record keeps the first values, which have passed.
+    const f = await fixture()
+    const issued = await f.credentials.issue(f.ref, f.grant)
+    const key = await db.llmKey.findFirstOrThrow({ where: { taskId: f.task.id } })
+    await db.$executeRaw`UPDATE llm_keys SET issued_at = clock_timestamp() - interval '2 hours',
+      expires_at = clock_timestamp() + interval '3 minutes',
+      valid_until = clock_timestamp() + interval '270 seconds' WHERE id = ${key.id}::uuid`
+    await db.$executeRaw`UPDATE turn_assignments SET deadline_at = clock_timestamp() + interval '3 minutes'
+      WHERE task_id = ${f.task.id}::uuid AND finished_at IS NULL`
+    const [, entry] = [...f.vault.entries].find(([path]) => path.startsWith('turns/'))!
+    const past = new Date(Date.now() - 60 * 60_000).toISOString()
+    entry.custom.validUntil = past
+    // Recovery, the same issue again and the sweeper all go by the row.
+    expect(await f.credentials.recover(f.ref)).toEqual(issued)
+    expect(await f.credentials.issue(f.ref, f.grant)).toEqual(issued)
+    const sweeper = new CredentialSweeper({
+      prisma: db,
+      secrets: f.vault.port,
+      credentials: f.credentials,
+    })
+    try {
+      await sweeper.tick()
+    } finally {
+      await sweeper.close()
+    }
+    expect(await db.llmKey.findUniqueOrThrow({ where: { id: key.id } })).toMatchObject({
+      revokeRequestedAt: null,
+      revokedAt: null,
+    })
+    expect(await f.credentials.recover(f.ref)).toEqual(issued)
+  })
+
   it('revocation blocks admission first and keeps usage open until the last call closes', async () => {
     const f = await fixture()
     const issued = await f.credentials.issue(f.ref, f.grant)
@@ -1642,8 +1704,6 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     ).toMatchObject({ subscriptionAccountId: f.mainAccount.id, rebinds: 0 })
   })
 
-  // Owner's answer of 13.11.2026: the quota of the plan is out and the pass goes through the API;
-  // the binding to the account of the plan is kept for the passes that come back to it.
   it('issues on its own backend without a binding to an account of another backend, and keeps it', async () => {
     const f = await fixture()
     const other = await fixture({ backend: 'zai-api' })
