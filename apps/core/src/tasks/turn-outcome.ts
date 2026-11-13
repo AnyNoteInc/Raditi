@@ -25,7 +25,10 @@ type JournalReason = NonNullable<TurnEvidence['reason']>
  */
 const journalCodes = {
   cancelled: null,
-  timeout: 'timeout',
+  // A turn has no time limit (docs/plan/70-turn-without-time-limit.md, ВР1): a `timeout` now is
+  // a platform step after the agent that did not end in its time — a technical failure, never
+  // «the agent ran out of time». The feed's `timeout` stays for the rows written before.
+  timeout: 'technical',
   lease_lost: 'technical',
   run_failed: 'technical',
   snapshot_ambiguous: 'site_held',
@@ -58,7 +61,7 @@ const errorCodes: Readonly<Record<string, FeedFailureCode>> = Object.freeze({
 /** Reasons in `DomainError.details.reason` that name the failure better than its code. */
 const detailCodes: Readonly<Record<string, FeedFailureCode>> = Object.freeze({
   snapshot_credential: 'secret_found',
-  timeout: 'timeout',
+  timeout: 'technical',
   // The pool named a time beyond what a pass waits for (`SUBSCRIPTION_WAIT`, pass-runner).
   agent_limits: 'agent_limits',
 })

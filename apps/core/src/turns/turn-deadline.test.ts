@@ -3,9 +3,8 @@ import { performance } from 'node:perf_hooks'
 
 import {
   SANDBOX_SECRETS_DIR,
-  TURN_FINALIZE_RESERVE_MS,
   TURN_PUBLICATION_GRACE_MS,
-  MAX_SANDBOX_TURN_MS,
+  MAX_SANDBOX_LEASE_MS,
   withoutTurnCredentials,
   type AgentDriver,
   type AgentEvent,
@@ -247,10 +246,9 @@ describe('turn deadline chain (spec §8 «Срок контейнера и ар�
         },
         snapshots: { save: vi.fn(), load: vi.fn(), restoreSource: vi.fn() },
       })
-      const hardTimeoutMs =
-        TURN_FINALIZE_RESERVE_MS +
-        1_000 +
-        Math.floor(random() * (MAX_SANDBOX_TURN_MS - TURN_FINALIZE_RESERVE_MS - 1_000))
+      // What the plan asks is the first lease only: the supervisor gives the container what its
+      // own lease leaves (plan 70, ВР2), however long the plan's.
+      const hardTimeoutMs = 1_000 + Math.floor(random() * (MAX_SANDBOX_LEASE_MS - 1_000))
       let settled = false
       const running = supervisor
         .run(withoutTurnCredentials(request(hardTimeoutMs)), testTurnCredentialPolicy)

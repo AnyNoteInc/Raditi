@@ -133,7 +133,10 @@ export interface TurnPrepareInput {
   fence: SiteLeaseFence
   /** Without secrets: turn secrets are written only after restore (`prepared.secrets`). */
   sandbox: SandboxSpec
-  /** What remains of the whole turn when the step is issued; the container never outlives it. */
+  /**
+   * The first lease of the container when the step is issued; the turn extends it while it lives
+   * (TurnExecution.extend), and the container never outlives its last lease.
+   */
   remainingMs: number
   /**
    * The repository of the turn. Absent for a turn without one (plan 57, Б4): the executor makes
@@ -224,8 +227,17 @@ export type TurnAdoptInput = {
 
 export interface TurnExecution {
   readonly containerId: string
-  /** Start the agent; the caller asserted its fence right before. */
-  launch(timeoutMs: number): Promise<TurnAgentExec>
+  /**
+   * Start the agent; the caller asserted its fence right before. The agent has no time limit
+   * (docs/plan/70-turn-without-time-limit.md, ВР1): it runs until it ends, is killed or loses
+   * its container.
+   */
+  launch(): Promise<TurnAgentExec>
+  /**
+   * The turn was renewed: its container and the gateway of its attempt live `remainingMs` from
+   * now (TURN_LEASE_TTL_MS plus the publication grace), never less than before (ВР4, ВР5).
+   */
+  extend(remainingMs: number): Promise<void>
   /** Re-attach to the agent's exec from the journal state; null when the exec is lost. */
   attach(from: TurnAttachState): Promise<TurnAgentExec | null>
   /** Stop the agent's processes; idempotent. */

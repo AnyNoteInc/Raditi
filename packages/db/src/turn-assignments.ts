@@ -1,6 +1,6 @@
 import {
   badRequest,
-  MAX_SANDBOX_TURN_MS,
+  MAX_SANDBOX_LEASE_MS,
   runnerIdSchema,
   runnerLimits,
   turnAssignmentOutcomes,
@@ -43,13 +43,32 @@ const openSchema = z.object({
   turn: z.number().int().positive().max(999_999),
   executor: z.enum(turnExecutorKinds),
   plan: turnPlanSchema,
-  remainingMs: z.number().int().positive().max(MAX_SANDBOX_TURN_MS),
+  remainingMs: z.number().int().positive().max(MAX_SANDBOX_LEASE_MS),
 })
 const idsSchema = z.array(id).max(runnerLimits.claimIds)
 /** Shared admission validation for the operational and product assignment adapters. */
 export const validateOpenTurnAssignment = (input: OpenTurnAssignment) => openSchema.parse(input)
 const runnerSchema = z.object({ runnerId: runnerIdSchema, runnerSession: id })
 const takenSchema = z.array(z.object({ lease_expires_at: z.coerce.date() })).length(1)
+/** One renewal of a live turn grants at most this much at once (TURN_LEASE_TTL_MS and grace). */
+const renewSchema = z.object({
+  fence: fenceSchema,
+  turn: z.number().int().positive().max(999_999),
+  turnMs: z.number().int().positive().max(MAX_SANDBOX_LEASE_MS),
+  leaseMs: z.number().int().positive().max(MAX_SANDBOX_LEASE_MS),
+})
+const renewedSchema = z
+  .array(
+    z.object({
+      site_id: id,
+      holder_task_id: id,
+      epoch,
+      expires_at: z.coerce.date(),
+      server_now: z.coerce.date(),
+      keys: z.number().int().nonnegative(),
+    }),
+  )
+  .max(1)
 /** Rows per query of unfinished(), which reads them all. */
 export const UNFINISHED_PAGE = 1000
 
@@ -167,6 +186,62 @@ export class PostgresTurnAssignmentStore implements TurnAssignmentStore {
       RETURNING ${columns('a')}`,
     )
     return rows[0] ?? null
+  }
+
+  async renewTurn(input: {
+    fence: SiteLeaseFence
+    turn: number
+    turnMs: number
+    leaseMs: number
+  }): Promise<SiteLeaseGrant | null> {
+    const checked = renewSchema.parse(input)
+    const { fence } = checked
+    if (checked.leaseMs < checked.turnMs) throw badRequest('A turn outlives its lease')
+    // One statement (docs/plan/70-turn-without-time-limit.md, ВР2–ВР4): the assignment and the
+    // keys move only with the lease, and a deadline already later never moves back.
+    const raw = await this.db.$queryRaw`
+      WITH c AS MATERIALIZED (SELECT clock_timestamp() AS instant), lease AS (
+        UPDATE site_leases l SET updated_at = c.instant,
+          expires_at = GREATEST(l.expires_at,
+            c.instant + ${checked.leaseMs}::int * interval '1 millisecond')
+        FROM c
+        WHERE l.site_id = ${fence.siteId}::uuid AND l.holder_task_id = ${fence.taskId}::uuid
+          AND l.epoch = ${fence.epoch} AND l.operation = 'turn'::"LeaseOperation"
+          AND NOT l.held_for_operator AND l.expires_at > c.instant
+        RETURNING l.site_id, l.holder_task_id, l.epoch, l.expires_at
+      ), turn AS (
+        UPDATE turn_assignments a SET updated_at = c.instant,
+          deadline_at = GREATEST(a.deadline_at,
+            c.instant + ${checked.turnMs}::int * interval '1 millisecond')
+        FROM lease, c
+        WHERE a.site_id = lease.site_id AND a.task_id = lease.holder_task_id
+          AND a.turn_no = ${checked.turn} AND a.lease_epoch = lease.epoch AND a.finished_at IS NULL
+        RETURNING a.task_id, a.turn_no, a.first_epoch
+      ), keys AS (
+        UPDATE llm_keys k SET
+          expires_at = GREATEST(k.expires_at,
+            c.instant + ${checked.turnMs}::int * interval '1 millisecond'),
+          valid_until = GREATEST(k.valid_until,
+            c.instant + ${checked.leaseMs}::int * interval '1 millisecond')
+        FROM turn, c
+        WHERE k.task_id = turn.task_id AND k.turn_no = turn.turn_no
+          AND k.first_epoch = turn.first_epoch
+          AND k.revoke_requested_at IS NULL AND k.revoked_at IS NULL
+        RETURNING k.id
+      )
+      SELECT lease.site_id, lease.holder_task_id, lease.epoch, lease.expires_at,
+        c.instant AS server_now, (SELECT count(*) FROM keys)::int AS keys
+      FROM lease, c`
+    const [row] = renewedSchema.parse(raw)
+    if (!row) return null
+    return {
+      siteId: row.site_id,
+      taskId: row.holder_task_id,
+      operation: 'turn',
+      epoch: row.epoch,
+      expiresAt: row.expires_at,
+      serverNow: row.server_now,
+    }
   }
 
   async get(assignmentId: string): Promise<TurnAssignment | null> {

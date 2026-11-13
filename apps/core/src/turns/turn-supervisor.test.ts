@@ -11,14 +11,15 @@ import {
   leftNothing,
   MAX_PRESIGN_TTL_MS,
   ENV_VALUE_MASK,
-  MAX_SANDBOX_TURN_MS,
+  MAX_SANDBOX_LEASE_MS,
   notFound,
   preparedRunLimits,
   SANDBOX_SECRETS_DIR,
   sandboxCommandFailed,
   snapshotHasCredential,
   TimeoutError,
-  TURN_FINALIZE_RESERVE_MS,
+  TURN_FINALIZE_MS,
+  TURN_LEASE_TTL_MS,
   toTurnPlan,
   TURN_PUBLICATION_GRACE_MS,
   type AgentDriver,
@@ -76,6 +77,7 @@ import {
   type TurnRequest,
   type TurnSupervisorDependencies,
 } from './turn-supervisor.ts'
+import { TURN_LEASE_MS } from './lease-guard.ts'
 
 /** Every pair turn-key.ts of @repo/turn-keys made: the one owner of the two key formats. */
 const madeTurnKeys = vi.hoisted(() => [] as Array<{ llmApiKey: string; mcpToken: string }>)
@@ -181,7 +183,7 @@ function turnFixture(kind: string) {
       env: {},
       secrets: [],
       network: { mode: 'none' },
-      hardTimeoutMs: MAX_SANDBOX_TURN_MS,
+      hardTimeoutMs: MAX_SANDBOX_LEASE_MS,
     },
     context: {
       taskId: labels.taskId,
@@ -230,6 +232,8 @@ function turnFixture(kind: string) {
   const sandbox: Sandbox = {
     id: 'container1',
     labels: { ...labels, leaseEpoch: 1 },
+    deadline: Date.now() + 20 * 60_000,
+    extend: vi.fn(async () => {}),
     exec: vi.fn(async () => {
       order.push('exec')
       return handle
@@ -527,7 +531,43 @@ function expectSiteFree(f: Fixture): void {
   expect(f.leases.holdForRecovery).not.toHaveBeenCalled()
 }
 
-async function expectLeaseCoversLatePush(
+/**
+ * A push that starts at the end of the steps after the agent and never answers: the turn keeps
+ * renewing its lease while it waits (plan 70, ВР2), and the site is held for recovery when the
+ * finalization runs out, never left leased or freed.
+ */
+async function expectLeaseCoversLatePush(f: Fixture, run: () => Promise<unknown>): Promise<void> {
+  useFakeClock()
+  const pushStarted = Promise.withResolvers<void>()
+  f.journal.record.mockImplementation(async (entry) => {
+    f.evidence.push(structuredClone(entry))
+    // Push at the last moment the steps after the agent have.
+    if (entry.phase === 'publishing') await vi.advanceTimersByTimeAsync(TURN_FINALIZE_MS - 1_000)
+  })
+  f.publication.publish.mockImplementation(async (assertFence) => {
+    await assertFence()
+    pushStarted.resolve()
+    await new Promise<void>((_resolve, reject) => {
+      setTimeout(() => reject(new Error('push reply lost')), 60_000)
+    })
+  })
+  const rejected = expect(run()).rejects.toThrow()
+  await pushStarted.promise
+  expect(f.leases.acquire.mock.calls[0]![0].ttlMs).toBe(TURN_LEASE_MS)
+  await vi.advanceTimersByTimeAsync(60_000)
+  await rejected
+  // Renewed meanwhile: the lease outlived the push in flight.
+  expect(f.leases.renew).toHaveBeenCalled()
+  expect(f.leases.holdForRecovery).toHaveBeenCalledOnce()
+  expect(f.leases.release).not.toHaveBeenCalled()
+  expect(f.evidence.at(-1)?.phase).toBe('recovery')
+}
+
+/**
+ * The same late push in a step of recovery with a fixed limit (RECOVERY_TIMEOUT_MS): its one
+ * grant covers the push in flight, nothing renews it.
+ */
+async function expectFixedLeaseCoversLatePush(
   f: Fixture,
   run: () => Promise<unknown>,
   hardTimeoutMs: number,
@@ -910,7 +950,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
       expect.any(AbortSignal),
     )
     expect(f.leases.acquire).toHaveBeenCalledWith(
-      expect.objectContaining({ ttlMs: MAX_SANDBOX_TURN_MS + TURN_PUBLICATION_GRACE_MS }),
+      expect.objectContaining({ ttlMs: TURN_LEASE_MS }),
     )
     // The capture refuses the turn's own credentials: the LLM key, the MCP token, secret files.
     expect(f.transport.capture).toHaveBeenCalledWith(
@@ -1042,36 +1082,25 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     })
   })
 
-  it('keeps lease authority beyond a late 60-second push without a heartbeat', async () => {
+  it('keeps lease authority through a late 60-second push by renewing it', async () => {
     const f = fixture()
-    await expectLeaseCoversLatePush(
-      f,
-      () => f.run(),
-      f.request.sandbox.hardTimeoutMs,
-      () => f.leases.acquire.mock.calls[0]![0].ttlMs,
-    )
+    await expectLeaseCoversLatePush(f, () => f.run())
   })
 
-  it('keeps the same late-push margin when the lease grant arrives 40 seconds late', async () => {
+  it('keeps it the same when the lease grant arrives 40 seconds late', async () => {
     const f = fixture()
     delayGrant(f.leases.acquire, 40_000)
-    await expectLeaseCoversLatePush(
-      f,
-      () => f.run(),
-      f.request.sandbox.hardTimeoutMs,
-      () => f.leases.acquire.mock.calls[0]![0].ttlMs,
-    )
+    await expectLeaseCoversLatePush(f, () => f.run())
   })
 
-  it('keeps the finalize reserve: an agent that ends just before its deadline is still saved and pushed', async () => {
+  it('runs an agent for hours: no time limit, its container extended, the steps after it saved and pushed', async () => {
+    // docs/plan/70-turn-without-time-limit.md, ВР1: only the agent, its credits, «Остановить» or a
+    // lost platform end a turn.
     const f = fixture()
     useFakeClock()
     const startedAt = Date.now()
-    // The agent works until 10 s before the deadline it gets. With the whole limit as its
-    // deadline that was 19:50, and the steps after it could not fit into the 20 minutes.
     vi.mocked(f.handle.wait).mockImplementation(async () => {
-      const { timeoutMs } = vi.mocked(f.sandbox.exec).mock.calls[0]![0]
-      await vi.advanceTimersByTimeAsync(timeoutMs! - 10_000)
+      await vi.advanceTimersByTimeAsync(2 * 60 * 60_000)
       return { code: 0, reason: 'exited' }
     })
     takes(f.transport.capture, 30_000)
@@ -1079,36 +1108,36 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     takes(f.snapshots.save, 30_000)
     takes(f.publication.publish, 30_000)
     await expect(f.run()).resolves.toMatchObject({ result })
-    expect(vi.mocked(f.sandbox.exec).mock.calls[0]![0].timeoutMs).toBe(
-      MAX_SANDBOX_TURN_MS - TURN_FINALIZE_RESERVE_MS,
-    )
-    // The container keeps the whole limit and outlives the agent for capture, save and push.
+    expect(vi.mocked(f.sandbox.exec).mock.calls[0]![0].timeoutMs).toBeUndefined()
+    // The container starts with one lease and is extended with every renewal of the turn.
     expect(f.sandboxes.create).toHaveBeenCalledWith(
-      expect.objectContaining({ hardTimeoutMs: MAX_SANDBOX_TURN_MS }),
+      expect.objectContaining({ hardTimeoutMs: expect.any(Number) }),
       expect.any(AbortSignal),
     )
+    const [created] = (f.sandboxes.create.mock.calls as unknown as [[{ hardTimeoutMs: number }]])
+    expect(created[0].hardTimeoutMs).toBeLessThanOrEqual(TURN_LEASE_TTL_MS)
+    expect(vi.mocked(f.sandbox.extend).mock.calls.length).toBeGreaterThan(200)
+    expect(f.leases.renew.mock.calls.length).toBeGreaterThan(200)
     expect(f.order).toEqual(expect.arrayContaining(['capture', 'candidate', 'save', 'publish']))
     expect(f.evidence.at(-1)?.phase).toBe('completed')
-    expect(Date.now() - startedAt).toBeLessThan(MAX_SANDBOX_TURN_MS)
+    expect(Date.now() - startedAt).toBeGreaterThan(2 * 60 * 60_000)
   })
 
-  it('does not start the agent when less than the finalize reserve is left', async () => {
+  it('is lost, not timed out, when its renewals stop for longer than a lease', async () => {
     const f = fixture()
     useFakeClock()
-    takes(f.importBundle, MAX_SANDBOX_TURN_MS - TURN_FINALIZE_RESERVE_MS)
-    await expect(f.run()).rejects.toMatchObject({ code: 'TURN_INTERRUPTED', message: 'timeout' })
-    expect(f.sandbox.exec).not.toHaveBeenCalled()
-    expect(f.sandbox.destroy).toHaveBeenCalledWith('timeout')
-    expect(f.leases.holdForRecovery).not.toHaveBeenCalled()
-    expect(f.leases.release).toHaveBeenCalledOnce()
-    expect(f.evidence.at(-1)).toMatchObject({ phase: 'failed', reason: 'timeout' })
-  })
-
-  it('rejects a turn limit that leaves no time for the agent, before the lease', async () => {
-    const f = fixture()
-    f.request.sandbox.hardTimeoutMs = TURN_FINALIZE_RESERVE_MS
-    await expect(f.run()).rejects.toThrow('no time for the agent')
-    expect(f.leases.acquire).not.toHaveBeenCalled()
+    let killed = false
+    vi.mocked(f.handle.kill).mockImplementation(async () => {
+      killed = true
+    })
+    vi.mocked(f.handle.wait).mockImplementation(async () => {
+      for (let waited = 0; !killed && waited < 30 * 60_000; waited += 1_000)
+        await vi.advanceTimersByTimeAsync(1_000)
+      return { code: null, reason: killed ? 'cancelled' : 'exited' }
+    })
+    f.leases.renew.mockRejectedValue(new Error('database down'))
+    await expect(f.run()).rejects.toMatchObject({ code: 'TURN_INTERRUPTED', message: 'lease_lost' })
+    expect(f.evidence.some((entry) => entry.reason === 'timeout')).toBe(false)
   })
 
   it('holds the site when a snapshot save never answers', async () => {
@@ -1121,7 +1150,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
         settled = true
       }),
     ).rejects.toMatchObject({ code: 'TURN_INTERRUPTED' })
-    await vi.advanceTimersByTimeAsync(f.request.sandbox.hardTimeoutMs)
+    await vi.advanceTimersByTimeAsync(TURN_FINALIZE_MS)
     // It may still be before its reservation: the supervisor waits for its answer a while.
     expect(settled).toBe(false)
     expect(f.leases.holdForRecovery).not.toHaveBeenCalled()
@@ -1161,7 +1190,7 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
         code: 'TURN_INTERRUPTED',
         message: reason,
       })
-      if (!cancellation) await vi.advanceTimersByTimeAsync(f.request.sandbox.hardTimeoutMs)
+      if (!cancellation) await vi.advanceTimersByTimeAsync(TURN_FINALIZE_MS)
       await vi.advanceTimersByTimeAsync(10_000)
       await rejected
       expect(f.snapshots.save).toHaveBeenCalledOnce()
@@ -2791,7 +2820,7 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
 
   it('retains the new epoch beyond a late 60-second recovery push without a heartbeat', async () => {
     const f = await recoveryFixture()
-    await expectLeaseCoversLatePush(
+    await expectFixedLeaseCoversLatePush(
       f,
       () => f.recover(),
       RECOVERY_TIMEOUT_MS,
@@ -2802,7 +2831,7 @@ describe.each(['local'])('committed checkpoint publication recovery (%s executor
   it('keeps the same recovery push margin when the reclaim arrives 40 seconds late', async () => {
     const f = await recoveryFixture()
     delayGrant(f.leases.takeOverHeld, 40_000)
-    await expectLeaseCoversLatePush(
+    await expectFixedLeaseCoversLatePush(
       f,
       () => f.recover(),
       RECOVERY_TIMEOUT_MS,

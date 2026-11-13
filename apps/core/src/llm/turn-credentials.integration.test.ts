@@ -1457,6 +1457,40 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     expect(await f.credentials.recover(f.ref)).toBeNull()
   })
 
+  it('keeps a renewed key past the first expiry its Vault record names', async () => {
+    // docs/plan/70-turn-without-time-limit.md, ВР3: a live turn moves its key's row and its
+    // assignment on; the write-once Vault record keeps the first values, which have passed.
+    const f = await fixture()
+    const issued = await f.credentials.issue(f.ref, f.grant)
+    const key = await db.llmKey.findFirstOrThrow({ where: { taskId: f.task.id } })
+    await db.$executeRaw`UPDATE llm_keys SET issued_at = clock_timestamp() - interval '2 hours',
+      expires_at = clock_timestamp() + interval '3 minutes',
+      valid_until = clock_timestamp() + interval '270 seconds' WHERE id = ${key.id}::uuid`
+    await db.$executeRaw`UPDATE turn_assignments SET deadline_at = clock_timestamp() + interval '3 minutes'
+      WHERE task_id = ${f.task.id}::uuid AND finished_at IS NULL`
+    const [, entry] = [...f.vault.entries].find(([path]) => path.startsWith('turns/'))!
+    const past = new Date(Date.now() - 60 * 60_000).toISOString()
+    entry.custom.validUntil = past
+    // Recovery, the same issue again and the sweeper all go by the row.
+    expect(await f.credentials.recover(f.ref)).toEqual(issued)
+    expect(await f.credentials.issue(f.ref, f.grant)).toEqual(issued)
+    const sweeper = new CredentialSweeper({
+      prisma: db,
+      secrets: f.vault.port,
+      credentials: f.credentials,
+    })
+    try {
+      await sweeper.tick()
+    } finally {
+      await sweeper.close()
+    }
+    expect(await db.llmKey.findUniqueOrThrow({ where: { id: key.id } })).toMatchObject({
+      revokeRequestedAt: null,
+      revokedAt: null,
+    })
+    expect(await f.credentials.recover(f.ref)).toEqual(issued)
+  })
+
   it('revocation blocks admission first and keeps usage open until the last call closes', async () => {
     const f = await fixture()
     const issued = await f.credentials.issue(f.ref, f.grant)

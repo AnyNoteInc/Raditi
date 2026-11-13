@@ -9,6 +9,7 @@ import {
   leaseLost,
   presignedGetSchema,
   presignedPutSchema,
+  MAX_SANDBOX_LEASE_MS,
   runnerTimings,
   runnerUnavailable,
   sandboxSpecSchema,
@@ -357,17 +358,26 @@ class RemoteTurnExecution implements TurnExecution {
     return id
   }
 
-  async launch(timeoutMs: number): Promise<TurnAgentExec> {
+  async launch(): Promise<TurnAgentExec> {
     this.#allow('turn')
     // Strict: the agent starts only under a confirmed fence; a failed read counts as lost.
     if (!(await this.leases.assert(this.live.fence).catch(() => false)))
       throw leaseLost('Site lease is no longer owned before the agent starts')
+    // No time limit (plan 70, ВР1); a runner that cannot extend its turns gets the old one, and
+    // its container's deadline ends the agent first.
     await this.hub.send(
       this.live,
-      { type: 'launch', timeoutMs },
+      this.hub.extendable(this.live)
+        ? { type: 'launch' }
+        : { type: 'launch', timeoutMs: MAX_SANDBOX_LEASE_MS },
       { answers: ['running'], replyMs: runnerReplyMs.launch, epoch: this.#epoch },
     )
     return this.#agent()
+  }
+
+  async extend(remainingMs: number): Promise<void> {
+    this.#allow('turn', 'work')
+    this.hub.extend(this.live, remainingMs, this.#epoch)
   }
 
   async attach(from: TurnAttachState): Promise<TurnAgentExec | null> {

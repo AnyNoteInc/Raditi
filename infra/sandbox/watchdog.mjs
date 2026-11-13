@@ -2,6 +2,8 @@
 import { request } from 'node:http'
 
 const mainPrefix = 'io.raditi.sandbox.'
+/** Leases of a turn (docs/plan/70-turn-without-time-limit.md, ВР5): created, never started. */
+const leasePrefix = 'io.raditi.turnlease.'
 const gatewayPrefix = 'io.raditi.gateway.'
 const previewPrefix = 'io.raditi.preview.'
 const browserPrefix = 'io.raditi.browser.'
@@ -61,8 +63,44 @@ function expired(labels, prefix, now) {
   )
 }
 
-/** Independent from the core/runner process: hard deadline cleanup only, never lease guessing. */
+const turnKey = (task, turn) =>
+  /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(task ?? '') && /^[1-9]\d*$/.test(turn ?? '')
+    ? `${task}:${turn}`
+    : null
+
+/** A lease row as the sandbox provider writes it: its turn, deadline and attempt gateway. */
+function leaseOf(item) {
+  const labels = item.Labels
+  if (labels?.[`${leasePrefix}owner`] !== 'raditi' || labels[`${leasePrefix}protocol`] !== '1')
+    return null
+  const task = labels[`${leasePrefix}taskId`]
+  const turn = labels[`${leasePrefix}turn`]
+  const key = turnKey(task, turn)
+  const deadline = Number(labels[`${leasePrefix}deadline`])
+  if (!key || !Number.isSafeInteger(deadline) || deadline <= 0) return null
+  if (!item.Names?.includes(`/raditi-turn-${task}-${turn}-lease-${deadline}`)) return null
+  const gatewayId = labels[`${leasePrefix}gatewayId`]
+  return { key, deadline, gatewayId: resourcePattern.test(gatewayId ?? '') ? gatewayId : null }
+}
+
+/**
+ * Independent from the core/runner process: deadline cleanup only, never lease guessing. A turn
+ * without a time limit renews its container with leases: a turn's container and the gateway of
+ * its attempt stay while the latest of their own deadline and their leases is ahead (ВР5).
+ */
 export async function reapExpired(client, now = Date.now()) {
+  const leaseRows = await client('GET', listPath('containers/json', leasePrefix))
+  const leases = leaseRows.map((item) => ({ item, lease: leaseOf(item) })).filter((row) => row.lease)
+  const turnUntil = new Map()
+  const gatewayUntil = new Map()
+  for (const { lease } of leases) {
+    turnUntil.set(lease.key, Math.max(turnUntil.get(lease.key) ?? 0, lease.deadline))
+    if (lease.gatewayId)
+      gatewayUntil.set(
+        lease.gatewayId,
+        Math.max(gatewayUntil.get(lease.gatewayId) ?? 0, lease.deadline),
+      )
+  }
   const mains = await client('GET', listPath('containers/json', mainPrefix))
   let removed = 0
   let failed = false
@@ -72,6 +110,7 @@ export async function reapExpired(client, now = Date.now()) {
     if (!expired(labels, mainPrefix, now) || !idPattern.test(item.Id)) continue
     const task = labels[`${mainPrefix}taskId`]
     const turn = labels[`${mainPrefix}turn`]
+    if ((turnUntil.get(turnKey(task, turn)) ?? 0) > now) continue
     if (
       !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(task ?? '') ||
       !/^[1-9]\d*$/.test(turn ?? '') ||
@@ -95,7 +134,8 @@ export async function reapExpired(client, now = Date.now()) {
       !idPattern.test(item.Id) ||
       !resourcePattern.test(item.Labels[`${gatewayPrefix}resourceId`] ?? '') ||
       !['guard', 'proxy', 'firewall'].includes(item.Labels[`${gatewayPrefix}role`]) ||
-      blocked.has(item.Labels[`${gatewayPrefix}resourceId`])
+      blocked.has(item.Labels[`${gatewayPrefix}resourceId`]) ||
+      (gatewayUntil.get(item.Labels[`${gatewayPrefix}resourceId`]) ?? 0) > now
     )
       continue
     try {
@@ -113,11 +153,22 @@ export async function reapExpired(client, now = Date.now()) {
       !idPattern.test(item.Id) ||
       !resourcePattern.test(item.Labels[`${gatewayPrefix}resourceId`] ?? '') ||
       item.Labels[`${gatewayPrefix}role`] !== 'network' ||
-      blocked.has(item.Labels[`${gatewayPrefix}resourceId`])
+      blocked.has(item.Labels[`${gatewayPrefix}resourceId`]) ||
+      (gatewayUntil.get(item.Labels[`${gatewayPrefix}resourceId`]) ?? 0) > now
     )
       continue
     try {
       await client('DELETE', `/networks/${item.Id}`)
+      removed++
+    } catch {
+      failed = true
+    }
+  }
+  // A lease past the latest deadline of its turn has nothing left to keep.
+  for (const { item, lease } of leases) {
+    if ((turnUntil.get(lease.key) ?? 0) > now || !idPattern.test(item.Id)) continue
+    try {
+      await client('DELETE', `/containers/${item.Id}?force=1&v=1`)
       removed++
     } catch {
       failed = true

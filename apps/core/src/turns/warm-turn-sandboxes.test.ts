@@ -29,10 +29,11 @@ describe('warm containers of core', () => {
       id: 'c1',
       labels: { workspaceId: 'w', siteId: 's', taskId: 'task1', sessionId: 'x', turn: 1 },
       reset: vi.fn(async () => {}),
+      extend: vi.fn(async () => {}),
       destroy: vi.fn(async () => {}),
     } as unknown as Sandbox
     const warm = new CoreWarmSandboxes({ get: async () => sandbox }, prisma, 10 * 60_000)
-    expect(await warm.park(sandbox, 'k', Date.now() + 19 * 60_000)).toBe(true)
+    expect(await warm.park(sandbox, 'k')).toBe(true)
     await warm.onModuleDestroy()
     expect(sandbox.destroy).toHaveBeenCalledOnce()
     expect(warm.holds('c1')).toBe(false)

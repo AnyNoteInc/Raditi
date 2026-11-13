@@ -5,7 +5,7 @@ import type * as Timers from 'node:timers/promises'
 import {
   createLeftNothing,
   MAX_SANDBOX_RESOURCES,
-  MAX_SANDBOX_TURN_MS,
+  MAX_SANDBOX_LEASE_MS,
   preparedRunLimits,
   SANDBOX_GID,
   SANDBOX_SECRETS_DIR,
@@ -35,7 +35,7 @@ const spec = (patch: Partial<SandboxSpec> = {}): SandboxSpec => ({
   env: { LANG: 'C.UTF-8' },
   secrets: [],
   network: { mode: 'none' },
-  hardTimeoutMs: MAX_SANDBOX_TURN_MS,
+  hardTimeoutMs: MAX_SANDBOX_LEASE_MS,
   ...patch,
 })
 const frame = (value: Uint8Array, stream = 1) => {
@@ -208,6 +208,71 @@ describe('Docker sandbox provider', () => {
     ).toThrow(/socket/)
   })
 
+  it('extends a turn with leases the watchdog honours, and drops them with the sandbox', async () => {
+    // docs/plan/70-turn-without-time-limit.md, ВР5: labels never change, so a later deadline is
+    // a new lease container — created, never started — and the earlier ones go.
+    const fake = daemon()
+    const provider = createDockerSandboxProvider(config, { client: fake.client })
+    const sandbox = await provider.create({ ...spec(), hardTimeoutMs: 60_000 })
+    const first = sandbox.deadline
+    const leases: Docker.ContainerCreateOptions[] = []
+    const removed: string[] = []
+    const original = fake.raw.createContainer.getMockImplementation()!
+    fake.raw.createContainer.mockImplementation(async (options) => {
+      if (!options.name?.includes('-lease-')) return original(options)
+      leases.push(options)
+      return { id: `lease-${leases.length}`, remove: vi.fn() } as unknown as ReturnType<
+        typeof original
+      > extends Promise<infer C>
+        ? C
+        : never
+    })
+    fake.raw.listContainers.mockImplementation(async (query?: { filters?: unknown }) =>
+      JSON.stringify(query?.filters ?? '').includes('turnlease')
+        ? leases.map((options, index) => ({
+            Id: `lease-${index + 1}`,
+            Names: [`/${options.name}`],
+            Labels: options.Labels,
+          }))
+        : [{ Id: fake.info().Id }],
+    )
+    fake.raw.getContainer.mockImplementation(((leaseId: string) =>
+      leaseId?.startsWith?.('lease-')
+        ? { remove: vi.fn(async () => void removed.push(leaseId)) }
+        : fake.container) as never)
+
+    await sandbox.extend(first + 60_000)
+    await sandbox.extend(first + 120_000)
+    expect(sandbox.deadline).toBe(first + 120_000)
+    expect(leases.map((options) => options.name)).toEqual([
+      `raditi-turn-${spec().labels.taskId}-${spec().labels.turn}-lease-${first + 60_000}`,
+      `raditi-turn-${spec().labels.taskId}-${spec().labels.turn}-lease-${first + 120_000}`,
+    ])
+    expect(leases[1]).toMatchObject({
+      Entrypoint: ['/bin/false'],
+      User: '10001:10001',
+      HostConfig: { NetworkMode: 'none', ReadonlyRootfs: true, CapDrop: ['ALL'] },
+      Labels: {
+        'io.raditi.turnlease.owner': 'raditi',
+        'io.raditi.turnlease.protocol': '1',
+        'io.raditi.turnlease.taskId': spec().labels.taskId,
+        'io.raditi.turnlease.turn': String(spec().labels.turn),
+        'io.raditi.turnlease.deadline': String(first + 120_000),
+      },
+    })
+    // The earlier lease went once the later one was written.
+    expect(removed).toEqual(['lease-1'])
+    // Never earlier, never further than one lease at a time.
+    await sandbox.extend(first)
+    expect(sandbox.deadline).toBe(first + 120_000)
+    expect(leases).toHaveLength(2)
+    await expect(sandbox.extend(Date.now() + MAX_SANDBOX_LEASE_MS + 60_000)).rejects.toThrow()
+    // Adopted again, the turn lives until its latest lease.
+    expect((await provider.get(sandbox.id))!.deadline).toBe(first + 120_000)
+    await sandbox.destroy('completed')
+    expect(removed).toEqual(['lease-1', 'lease-1', 'lease-2'])
+  })
+
   it('labels turn containers with their runner and lists only that runner’s', async () => {
     const fake = daemon()
     const provider = createDockerSandboxProvider(
@@ -284,6 +349,22 @@ describe('Docker sandbox provider', () => {
     expect(JSON.parse(staged.subarray(4, 4 + staged.readUInt32BE(0)).toString())).toMatchObject({
       env: { NODE_OPTIONS: value },
     })
+    await sandbox.destroy('completed')
+  })
+
+  it('runs a command without a timeout with no deadline of its own (the agent, plan 70, ВР1)', async () => {
+    const fake = daemon()
+    const provider = createDockerSandboxProvider(config, { client: fake.client })
+    const sandbox = await provider.create(spec())
+    const run = await sandbox.exec({ argv: ['agent'] })
+    const staged = fake.files.get(`stage:${run.id.split('.')[0]}`)!
+    expect(JSON.parse(staged.subarray(4, 4 + staged.readUInt32BE(0)).toString())).toMatchObject({
+      timeoutMs: 0,
+    })
+    const started = fake.commands.find((options) => options.Cmd![2] === 'run')!
+    expect(started.Cmd!.slice(2)).toEqual(['run', run.id.split('.')[0], '0'])
+    // Re-attached after a restart, the exec is still the sandbox's own.
+    expect((await sandbox.attach(run.id)).id).toBe(run.id)
     await sandbox.destroy('completed')
   })
 

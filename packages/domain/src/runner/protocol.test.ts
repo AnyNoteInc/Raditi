@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { isDomainError, isTooLarge } from '../errors.ts'
 import { agentOutputLimits, preparedRunLimits } from '../ports/agent-driver.ts'
-import { SANDBOX_SECRETS_DIR } from '../ports/sandbox-provider.ts'
+import { MAX_SANDBOX_LEASE_MS, SANDBOX_SECRETS_DIR } from '../ports/sandbox-provider.ts'
 import { turnInboxPath } from '../ports/turn-executor.ts'
 import { isSnapshotCredential } from '../ports/turn-runner.ts'
 import {
@@ -176,6 +176,9 @@ describe('runner commands', () => {
     ).toBe(false)
     for (const cmd of [
       { ...envelope, type: 'launch', timeoutMs: 420_000 },
+      // A runner that extends its turns launches the agent without a time limit (plan 70, ВР1).
+      { ...envelope, type: 'launch' },
+      { ...envelope, type: 'extend', remainingMs: 270_000 },
       {
         ...envelope,
         type: 'resume',
@@ -662,6 +665,16 @@ describe('runner poll and answers', () => {
     expect(runnerPollRequestSchema.safeParse({ ...poll, runnerSession: 'r1' }).success).toBe(false)
     expect(runnerPollRequestSchema.safeParse({ ...poll, capacity: 65 }).success).toBe(false)
     expect(runnerLimits.capacity).toBe(64)
+    // What the runner can do beyond the first protocol (plan 70, ВР4); absent — nothing.
+    expect(runnerPollRequestSchema.safeParse({ ...poll, features: ['extend'] }).success).toBe(true)
+    expect(runnerPollRequestSchema.safeParse({ ...poll, features: ['other'] }).success).toBe(false)
+  })
+
+  it('bounds an extension like any lease of a container', () => {
+    for (const remainingMs of [0, MAX_SANDBOX_LEASE_MS + 1])
+      expect(
+        runnerCommandSchema.safeParse({ ...envelope, type: 'extend', remainingMs }).success,
+      ).toBe(false)
   })
 
   it('bounds an answer and leaves each command to its own check', () => {

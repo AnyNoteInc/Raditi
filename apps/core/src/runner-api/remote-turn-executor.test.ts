@@ -2,12 +2,13 @@ import { Buffer } from 'node:buffer'
 import { createHash, randomUUID } from 'node:crypto'
 
 import {
-  MAX_SANDBOX_TURN_MS,
+  MAX_SANDBOX_LEASE_MS,
   runnerReportSchema,
   runnerTimings,
   SANDBOX_SECRETS_DIR,
   type PresignedRequest,
   type RunnerCommand,
+  type RunnerFeature,
   type TurnExecution,
   type TurnPlan,
   type TurnPrepareInput,
@@ -58,7 +59,12 @@ function fixture() {
   const dispatched = vi.fn()
   const vacated = vi.fn()
 
-  const runner = (runnerId = 'sandbox-1', runnerSession = randomUUID()) => ({
+  const runner = (
+    runnerId = 'sandbox-1',
+    runnerSession = randomUUID(),
+    /** A runner of this release extends its turns (plan 70, ВР4); `[]` — one from before it. */
+    features: RunnerFeature[] = ['extend'],
+  ) => ({
     runnerId,
     runnerSession,
     /** One poll; it gives up after 200 ms instead of the 25-second hold. */
@@ -67,6 +73,7 @@ function fixture() {
         runnerId,
         {
           runnerSession,
+          ...(features.length ? { features } : {}),
           capacity: overrides.capacity ?? 1,
           inventory: [],
           active: (overrides.active ?? []).map((assignmentId) => ({
@@ -97,7 +104,7 @@ function fixture() {
       turn: 1,
       executor: 'runner',
       plan: {} as TurnPlan,
-      remainingMs: MAX_SANDBOX_TURN_MS,
+      remainingMs: MAX_SANDBOX_LEASE_MS,
     }))!
 
   const input = (
@@ -115,9 +122,9 @@ function fixture() {
       env: {},
       secrets: [],
       network: { mode: 'none' },
-      hardTimeoutMs: MAX_SANDBOX_TURN_MS,
+      hardTimeoutMs: MAX_SANDBOX_LEASE_MS,
     },
-    remainingMs: MAX_SANDBOX_TURN_MS,
+    remainingMs: MAX_SANDBOX_LEASE_MS,
     bundle: {
       baseSha,
       branch: `agent/${taskId}`,
@@ -644,18 +651,58 @@ describe('RemoteTurnExecutor over the runner hub', () => {
     })
   })
 
+  it('extends a turn on a runner that can, and gives one that cannot the old fixed turn', async () => {
+    // docs/plan/70-turn-without-time-limit.md, ВР4: deploys put core first, then the runners.
+    const f = fixture()
+    const { execution, vm } = await f.prepared()
+    await execution.extend(180_000)
+    const [extension] = await vm.poll()
+    expect(extension).toMatchObject({ type: 'extend', remainingMs: 180_000 })
+    // A runner of the release before never learns a later deadline: its turn keeps the old one.
+    const g = fixture()
+    const old = g.runner('sandbox-1', randomUUID(), [])
+    const shortInput = (id: string) =>
+      g.input(id, {
+        remainingMs: 180_000,
+        sandbox: { ...g.input(id).sandbox, hardTimeoutMs: 180_000 },
+      })
+    const other = await g.open()
+    const preparing = g.executor.prepare(shortInput(other.id), new AbortController().signal)
+    const [prepare] = await old.poll()
+    expect(prepare).toMatchObject({
+      type: 'prepare',
+      remainingMs: MAX_SANDBOX_LEASE_MS,
+      sandbox: { hardTimeoutMs: MAX_SANDBOX_LEASE_MS },
+    })
+    await old.report(other.id, { type: 'created', commandId: prepare!.commandId, containerId: 'c2' })
+    await old.report(other.id, {
+      type: 'prepared',
+      commandId: prepare!.commandId,
+      containerId: 'c2',
+    })
+    const legacy = await preparing
+    await legacy.extend(180_000)
+    const launching = legacy.launch()
+    const commands = await old.poll()
+    expect(commands.map((command) => command.type)).toEqual(['launch'])
+    expect(commands[0]).toMatchObject({ timeoutMs: MAX_SANDBOX_LEASE_MS })
+    void launching.catch(() => {})
+  })
+
   it('launches only under a confirmed fence and journals output from its cursor', async () => {
     const f = fixture()
     const { assignment, execution, vm } = await f.prepared()
     f.leases.assert.mockResolvedValueOnce(false)
-    await expect(execution.launch(60_000)).rejects.toMatchObject({ code: 'LEASE_LOST' })
+    await expect(execution.launch()).rejects.toMatchObject({ code: 'LEASE_LOST' })
     f.leases.assert.mockRejectedValueOnce(new Error('database unavailable'))
-    await expect(execution.launch(60_000)).rejects.toMatchObject({ code: 'LEASE_LOST' })
+    await expect(execution.launch()).rejects.toMatchObject({ code: 'LEASE_LOST' })
     expect(await vm.poll()).toEqual([])
 
-    const launching = execution.launch(60_000)
+    const launching = execution.launch()
     const [launch] = await vm.poll()
-    expect(launch).toMatchObject({ type: 'launch', timeoutMs: 60_000 })
+    // No time limit for the agent (plan 70, ВР1).
+    expect(launch).toMatchObject({ type: 'launch' })
+    expect(launch).not.toHaveProperty('timeoutMs')
     await vm.report(assignment.id, {
       type: 'running',
       commandId: launch!.commandId,
@@ -852,7 +899,7 @@ describe('RemoteTurnExecutor over the runner hub', () => {
     )
     const adopted = (await adopting)!
     expect(adopted.containerId).toBe('container1')
-    await expect(adopted.launch(1_000)).rejects.toMatchObject({ code: 'CONFLICT' })
+    await expect(adopted.launch()).rejects.toMatchObject({ code: 'CONFLICT' })
   })
 
   it("sends the values of the client's variables with the credentials, and only with them (Р13)", async () => {
@@ -1352,7 +1399,7 @@ describe('RemoteTurnExecutor: a prepare the wire lost', () => {
     const preparing = f.executor.prepare(f.input(assignment.id), new AbortController().signal)
     // Core wrote the answer, so it counts the prepare delivered; the wire lost it after that.
     const [lost] = await vm.poll()
-    expect(lost).toMatchObject({ type: 'prepare', remainingMs: MAX_SANDBOX_TURN_MS })
+    expect(lost).toMatchObject({ type: 'prepare', remainingMs: MAX_SANDBOX_LEASE_MS })
     await vi.advanceTimersByTimeAsync(25_000)
     // One poll may have left before the answer arrived: it proves nothing yet.
     expect(await vm.poll()).toEqual([])
@@ -1361,7 +1408,7 @@ describe('RemoteTurnExecutor: a prepare the wire lost', () => {
     expect(again).toMatchObject({
       type: 'prepare',
       commandId: lost!.commandId,
-      remainingMs: MAX_SANDBOX_TURN_MS - 50_000,
+      remainingMs: MAX_SANDBOX_LEASE_MS - 50_000,
     })
     // Handed out once as far as the turn knows: the runner drops a copy it already took.
     expect(f.dispatched).toHaveBeenCalledOnce()
@@ -1424,7 +1471,7 @@ describe('RemoteTurnExecutor: a prepare the wire lost', () => {
       turn: 1,
       executor: 'runner',
       plan: {} as TurnPlan,
-      remainingMs: MAX_SANDBOX_TURN_MS,
+      remainingMs: MAX_SANDBOX_LEASE_MS,
     }))!
     const base = f.input(second.id)
     const next = f.executor.prepare(

@@ -8,7 +8,8 @@ import {
   execLost,
   isDomainError,
   leaseLost,
-  MAX_SANDBOX_TURN_MS,
+  MAX_SANDBOX_LEASE_MS,
+  type RunnerFeature,
   runnerCommandSchema,
   runnerFailure,
   runnerLimits,
@@ -79,6 +80,8 @@ interface RunnerSession {
   queue: RunnerCommand[]
   wake: (() => void) | undefined
   gone: boolean
+  /** What its latest poll named beyond the first protocol (runnerFeatures). */
+  features: ReadonlySet<RunnerFeature>
 }
 
 interface OpenCommand {
@@ -174,7 +177,7 @@ export class LiveAssignment {
 }
 
 const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
-const clampMs = (ms: number) => Math.max(1, Math.min(MAX_SANDBOX_TURN_MS, Math.floor(ms)))
+const clampMs = (ms: number) => Math.max(1, Math.min(MAX_SANDBOX_LEASE_MS, Math.floor(ms)))
 const superseded = () => conflict('The turn was taken over under a newer fence')
 /** A capture with a base: its turn has a repository, and the runner uploads its candidate. */
 const capturesCandidate = (command: RunnerCommand): boolean =>
@@ -185,8 +188,17 @@ function wakeSession(session: RunnerSession): void {
   session.wake?.()
 }
 
-/** The command with what is left of its turn when a poll takes it. */
-function withRemaining(command: RunnerCommand, remainingMs: number): RunnerCommand {
+/**
+ * The command with what is left of its turn when a poll takes it. A runner that cannot extend
+ * its turns (`extend` not among its features) gets the whole old turn instead: it never learns a
+ * later deadline, and the turn ends with this one (docs/plan/70-turn-without-time-limit.md, ВР4).
+ */
+function withRemaining(
+  command: RunnerCommand,
+  remainingMs: number,
+  extendable: boolean,
+): RunnerCommand {
+  if (!extendable) remainingMs = Math.max(remainingMs, MAX_SANDBOX_LEASE_MS)
   if (command.type === 'prepare')
     return {
       ...command,
@@ -194,7 +206,9 @@ function withRemaining(command: RunnerCommand, remainingMs: number): RunnerComma
       ttlMs: Math.min(COMMAND_TTL_MS, remainingMs),
       sandbox: {
         ...command.sandbox,
-        hardTimeoutMs: Math.min(command.sandbox.hardTimeoutMs, remainingMs),
+        hardTimeoutMs: extendable
+          ? Math.min(command.sandbox.hardTimeoutMs, remainingMs)
+          : remainingMs,
       },
     }
   if (command.type === 'adopt' && command.work)
@@ -485,6 +499,27 @@ export class RunnerHub implements OnApplicationShutdown {
   }
 
   /**
+   * The turn was renewed (docs/plan/70-turn-without-time-limit.md, ВР4): core keeps it
+   * `remainingMs` more, and a runner that can extends its container with it. One lost on the
+   * way is made up by the next renewal; a runner without `extend` keeps its first deadline.
+   */
+  extend(live: LiveAssignment, remainingMs: number, epoch = live.fence.epoch): void {
+    if (epoch !== live.fence.epoch || live.gone) return
+    const extendable = this.extendable(live)
+    if (extendable)
+      live.expiresAt = Math.max(
+        live.expiresAt,
+        performance.now() + remainingMs + TURN_PUBLICATION_GRACE_MS,
+      )
+    if (extendable) this.post(live, { type: 'extend', remainingMs: clampMs(remainingMs) }, epoch)
+  }
+
+  /** Whether the runner session of the turn extends its turns (`extend` among its features). */
+  extendable(live: LiveAssignment): boolean {
+    return this.#connected(live)?.features.has('extend') ?? false
+  }
+
+  /**
    * Forgets the assignment once its container is gone or core gave it up, only while `epoch`
    * still drives it: an older owner never drops what recovery took over under a newer one.
    */
@@ -558,6 +593,7 @@ export class RunnerHub implements OnApplicationShutdown {
     const session = this.#session(runnerId, request.runnerSession)
     session.inventory = request.inventory
     session.inventoryAt = performance.now()
+    session.features = new Set(request.features ?? [])
     session.lastSeen = performance.now()
     session.polling += 1
     const generation = ++session.generation
@@ -603,7 +639,8 @@ export class RunnerHub implements OnApplicationShutdown {
       const live = this.#live.get(command.assignmentId)
       if (!live) return false
       const open = live.commands.get(command.commandId)
-      return open ? !open.settled : command.type === 'abort'
+      // Fire-and-forget commands have no open entry; an extension lost here is the next one's.
+      return open ? !open.settled : command.type === 'abort' || command.type === 'extend'
     })
     session.queue.unshift(...undelivered)
   }
@@ -903,7 +940,9 @@ export class RunnerHub implements OnApplicationShutdown {
           this.#reject(open, runnerUnavailable('The turn ran out of time before a runner took it'))
           continue
         }
-        queued = runnerCommandSchema.parse(withRemaining(queued, remainingMs))
+        queued = runnerCommandSchema.parse(
+          withRemaining(queued, remainingMs, session.features.has('extend')),
+        )
         open.command = queued
       }
       if (live && open && !open.delivered) {
@@ -980,6 +1019,7 @@ export class RunnerHub implements OnApplicationShutdown {
       queue: [],
       wake: undefined,
       gone: false,
+      features: new Set(),
     }
     this.#sessions.set(runnerId, session)
     this.#ensureSweep()

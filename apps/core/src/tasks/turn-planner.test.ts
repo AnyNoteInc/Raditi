@@ -180,7 +180,7 @@ function finished(
         env: {},
         secrets: [],
         network: { mode: 'gateway', routes: ['llm', 'mcp'] },
-        hardTimeoutMs: 1_200_000,
+        hardTimeoutMs: 180_000,
       },
       context: {
         taskId: TASK,
@@ -233,7 +233,7 @@ describe('planTurn', () => {
       modelSlug: sampleModelSlug,
       modelClass: 'standard',
       reasoningEffort: 'high',
-      ttlMs: 1_200_000,
+      ttlMs: 180_000,
       budgetRub: '270.00',
     })
     expect(turn.sandbox).toMatchObject({
@@ -244,7 +244,7 @@ describe('planTurn', () => {
       resources: { cpu: 2, memoryMiB: 4096, pids: 512 },
       user: { uid: 10001, gid: 10001 },
       network: { mode: 'gateway', routes: ['llm', 'mcp'] },
-      hardTimeoutMs: 1_200_000,
+      hardTimeoutMs: 180_000,
       env: {},
       secrets: [],
     })

@@ -21,7 +21,6 @@ import {
   turnCredentialExpiresAt,
   turnCredentialGrantSchema,
   turnKeyBudgetVerdict,
-  TURN_FINALIZE_RESERVE_MS,
   TURN_PUBLICATION_GRACE_MS,
   type AttemptBudgetInput,
   type LlmBackendId,
@@ -69,7 +68,7 @@ const storedGrantSchema = turnCredentialGrantSchema
     const validUntil = new Date(grant.validUntil).getTime()
     const deadline = new Date(grant.deadlineAt).getTime()
     return (
-      expiresAt <= deadline - TURN_FINALIZE_RESERVE_MS &&
+      expiresAt <= deadline &&
       validUntil >= expiresAt &&
       validUntil <= deadline + TURN_PUBLICATION_GRACE_MS
     )
@@ -652,6 +651,11 @@ const values = (stored: StoredSecret): TurnCredentialValues => ({
     ? {}
     : { envValues: envValuesSchema.parse(JSON.parse(stored.env) as unknown) }),
 })
+/**
+ * The key row is the authority on time once it exists: a live turn moves its `expires_at` and
+ * `valid_until` with every renewal (docs/plan/70-turn-without-time-limit.md, ВР3), while the
+ * grant in Vault keeps the first ones it was written with.
+ */
 function matches(key: KeyRow, stored: StoredSecret, now: Date, active = true): boolean {
   return (
     key.sessionId === stored.sessionId &&
@@ -660,9 +664,8 @@ function matches(key: KeyRow, stored: StoredSecret, now: Date, active = true): b
     key.subscriptionAccountId === stored.accountId &&
     !key.revokeRequestedAt &&
     !key.revokedAt &&
-    (!active || (now < key.expiresAt && now < new Date(stored.grant.expiresAt))) &&
-    now < key.validUntil &&
-    now < new Date(stored.grant.validUntil)
+    (!active || now < key.expiresAt) &&
+    now < key.validUntil
   )
 }
 function requireSelection(
@@ -843,7 +846,9 @@ async function validateAssignment(
     (assignment.sessionId !== ref.sessionId ||
       assignment.firstEpoch !== ref.epoch ||
       assignment.leaseEpoch !== ref.epoch ||
-      assignment.deadlineAt.getTime() !== grant.deadlineAt.getTime())
+      // A live turn moves its assignment's deadline on with every renewal (docs/plan/70-turn-
+      // without-time-limit.md, ВР3): the grant names the one it was given, never a later one.
+      grant.deadlineAt.getTime() > assignment.deadlineAt.getTime())
   )
     throw conflict('Turn credential policy does not match its assignment')
   if (assignment?.executor === 'runner' && grant.boundSource === null)

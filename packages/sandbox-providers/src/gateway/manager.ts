@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 
 import {
-  MAX_SANDBOX_TURN_MS,
+  MAX_SANDBOX_LEASE_MS,
   SANDBOX_EGRESS_PORT,
   type NetworkPolicy,
   type SandboxLabels,
@@ -306,7 +306,7 @@ export function createDockerGatewayManager(
         if (
           signal?.aborted ||
           input.deadline <= Date.now() ||
-          input.deadline > Date.now() + MAX_SANDBOX_TURN_MS
+          input.deadline > Date.now() + MAX_SANDBOX_LEASE_MS
         )
           throw commandError()
         for (const image of [config.image, config.guardImage]) {
