@@ -136,7 +136,7 @@ export interface SettlementDependencies {
   logger?: { warn(message: string): void; error(message: string): void }
   now?: () => Date
   /** Counts a pass a window of its workspace stopped (plan 70, a metric without ids). */
-  onUsageLimit?: (window: '5h' | 'week') => void
+  onUsageLimit?: (refusal: { window: '5h' | 'week'; tier: string }) => void
 }
 
 export interface SettleOptions {
@@ -1001,7 +1001,7 @@ export class PassSettlement {
     pass: PassRef,
     context: SettleContext,
     turn: number,
-  ): Promise<{ kind: '5h' | 'week'; resetsAt: Date } | null> {
+  ): Promise<{ kind: '5h' | 'week'; resetsAt: Date; tier: string } | null> {
     const { db } = this.deps
     const key = await db.llmKey.findFirst({
       where: { taskId: pass.taskId, turnNo: turn, lastRefusal: 'workspace_limit' },
@@ -1023,7 +1023,7 @@ export class PassSettlement {
         .filter((window) => window.resetsAt !== null)
         .sort((a, b) => b.resetsAt!.getTime() - a.resetsAt!.getTime())[0] ??
       null
-    return named?.resetsAt ? { kind: named.kind, resetsAt: named.resetsAt } : null
+    return named?.resetsAt ? { kind: named.kind, resetsAt: named.resetsAt, tier: terms.tier } : null
   }
 
   /**
@@ -1035,10 +1035,10 @@ export class PassSettlement {
     pass: PassRef,
     context: SettleContext,
     turn: number,
-    window: { kind: '5h' | 'week'; resetsAt: Date },
+    window: { kind: '5h' | 'week'; resetsAt: Date; tier: string },
   ): Promise<SettleAnswer> {
     const next = context.standing ? 'awaiting_approval' : 'awaiting_user'
-    this.deps.onUsageLimit?.(window.kind)
+    this.deps.onUsageLimit?.({ window: window.kind, tier: window.tier })
     return this.#transaction(async (tx, now) => {
       const moved = await settleTurn(tx, {
         taskId: pass.taskId,

@@ -22,6 +22,8 @@
     "billing:settle-payment": "node scripts/billing-settle-payment.mjs",
     "billing:rates": "node scripts/billing-rates.mjs",
     "releases:resolve": "node scripts/releases-resolve.mjs",
+    "llm:usage": "node scripts/llm-usage.mjs",
+    "llm:plan-rates": "node scripts/llm-plan-rates.mjs",
     "verify:llm-gateway": "exec node scripts/verify-llm-gateway.mjs",
     "verify:opencode-supervisor": "pnpm build && pnpm --filter runner build && exec node scripts/verify-opencode-supervisor.mjs"
   },

@@ -36,6 +36,7 @@ import {
   type TurnCredentialRef,
   type TurnCredentialSource,
   type TurnCredentialValues,
+  type WorkspaceTier,
 } from '@repo/domain'
 import {
   decodeLimitWindows,
@@ -156,6 +157,8 @@ interface Selection {
   decision: PoolDecision
   /** Admission only: the decision over the whole pool, free of the account pinned in Vault. */
   unpinned?: PoolDecision
+  /** The tier of the task's workspace (plan 70): what a wait for the reserve of the pool names. */
+  tier: WorkspaceTier
   /**
    * The selected account, when its window snapshot is older than the pool keeps one for. Never
    * for a backend without windows: there is nothing to refresh.
@@ -275,7 +278,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
         throw conflict('Turn credentials are no longer valid')
       return values(stored)
     }
-    requireSelection(prepared.decision)
+    requireSelection(prepared.decision, prepared.tier)
     if (!stored) {
       if (await this.#secrets.kvMetadata(path))
         throw conflict('Turn credentials were already removed')
@@ -425,7 +428,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       ) {
         // Vault pins this turn to its account, but the caller's next attempt (a new lease epoch)
         // selects again: answer what the whole pool offers it, at once if an account is free.
-        requireSelection(selected.unpinned ?? selected.decision)
+        requireSelection(selected.unpinned ?? selected.decision, selected.tier)
         throw subscriptionBusy(selected.task.now)
       }
       const binding = await tx.taskAccountBinding.findUnique({ where: { taskId: ref.taskId } })
@@ -625,6 +628,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       task,
       profile,
       decision,
+      tier: terms.tier,
       staleAccountId:
         decision.kind === 'selected' &&
         capacity === 'windows' &&
@@ -708,9 +712,14 @@ function matches(key: KeyRow, stored: StoredSecret, now: Date, active = true): b
 }
 function requireSelection(
   decision: PoolDecision,
+  tier: WorkspaceTier,
 ): asserts decision is Extract<PoolDecision, { kind: 'selected' }> {
   if (decision.kind === 'busy') throw subscriptionBusy(decision.retryAt)
-  if (decision.kind === 'wait') throw subscriptionWait(decision.retryAt, decision.reason)
+  if (decision.kind === 'wait')
+    throw subscriptionWait(
+      decision.retryAt,
+      decision.reason === 'tier_reserve' ? `tier_reserve:${tier}` : decision.reason,
+    )
   if (decision.kind === 'operator')
     throw new DomainError('SUBSCRIPTION_OPERATOR_REQUIRED', 'The task requires an operator', 409, {
       reason: decision.reason,

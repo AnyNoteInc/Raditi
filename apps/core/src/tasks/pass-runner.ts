@@ -93,6 +93,8 @@ export interface PassRunnerDependencies {
   chatFiles?: Pick<ChatFiles, 'deliver'>
   now?: () => Date
   cancelPollMs?: number
+  /** Counts what the pool told a pass (plan 70, §4.4): metrics without ids. */
+  pool?: { limitsOut(): void; tierWait(tier: string): void }
 }
 
 /** A retry of the pass a busy site or pool sent back, and when. */
@@ -412,8 +414,9 @@ export class PassRunner {
         const retryAt = this.#poolRetryAt(error.details)
         // The reserve of the higher tiers (Л8) is capacity that exists: the pass waits in the
         // queue however long, and is never told that the limits of the agent are out (Л17).
-        const reserved =
-          (error.details as { reason?: unknown } | undefined)?.reason === 'tier_reserve'
+        const waitReason = (error.details as { reason?: unknown } | undefined)?.reason
+        const reserved = typeof waitReason === 'string' && waitReason.startsWith('tier_reserve')
+        if (reserved) this.deps.pool?.tierWait(waitReason.split(':')[1] ?? 'none')
         if (
           error.code === 'SUBSCRIPTION_WAIT' &&
           !reserved &&
@@ -423,6 +426,7 @@ export class PassRunner {
           this.#logger.warn(
             `pass_limits_out task=${ref.taskId} turn=${turn ?? 'none'} retry_at=${retryAt.toISOString()}`,
           )
+          this.deps.pool?.limitsOut()
           facts = { ...facts, detailReason: 'agent_limits' }
         } else
           return {

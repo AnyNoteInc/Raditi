@@ -972,8 +972,15 @@ test('the quota follows the requests the way the records show', async (t) => {
     status: 'ok',
     plan: null,
     windows: [
-      { name: '5h', usedPct: 0, resetsAt: null },
-      { name: 'week', usedPct: 0.26, resetsAt: (await probe(target)).windows[1].resetsAt },
+      // The size and the use in plan credits come with the share (plan 70).
+      { name: '5h', usedPct: 0, resetsAt: null, limitCredits: 2_000, usedCredits: 0 },
+      {
+        name: 'week',
+        usedPct: 0.26,
+        resetsAt: (await probe(target)).windows[1].resetsAt,
+        limitCredits: 10_000,
+        usedCredits: 26,
+      },
     ],
   })
   // The first request starts the five-hour window: sample 62.
@@ -989,6 +996,8 @@ test('the quota follows the requests the way the records show', async (t) => {
     name: '5h',
     usedPct: 0.05,
     resetsAt: new Date(nextResetTime),
+    limitCredits: 2_000,
+    usedCredits: 1,
   })
   // Every further request is one credit in both counters of both windows.
   for (let i = 0; i < 3; i++) await chat(target)
@@ -1024,14 +1033,26 @@ test('an exhausted window refuses generation and reads as full; a passed reset a
   // The reset has passed and nobody has asked since: the adapter takes the window for free,
   // and the next request starts it.
   target.state.setQuota({ fiveHour: { resetInMs: -60_000 } })
-  assert.deepEqual((await probe(target)).windows[0], { name: '5h', usedPct: 0, resetsAt: null })
+  assert.deepEqual((await probe(target)).windows[0], {
+    name: '5h',
+    usedPct: 0,
+    resetsAt: null,
+    limitCredits: 2_000,
+    usedCredits: 0,
+  })
   assert.equal((await chat(target)).status, 200)
   assert.deepEqual(
     [target.state.quota.fiveHour.currentValue, target.state.quota.fiveHour.remaining],
     [0, 1999],
   )
   target.state.setQuota({ fiveHour: { idle: true } })
-  assert.deepEqual((await probe(target)).windows[0], { name: '5h', usedPct: 0, resetsAt: null })
+  assert.deepEqual((await probe(target)).windows[0], {
+    name: '5h',
+    usedPct: 0,
+    resetsAt: null,
+    limitCredits: 2_000,
+    usedCredits: 0,
+  })
   // 91 % of the window: a new task is refused by the pool without any refusal of the provider.
   target.state.setQuota({ fiveHour: { currentValue: 1820, remaining: 179, resetInMs: 3_600_000 } })
   assert.equal((await probe(target)).windows[0].usedPct, 91.05)
@@ -1520,4 +1541,26 @@ test('every fixture of the adapter is a sanitised copy of a record of the resear
       .map((file) => relative(fixtures, file)),
     ['opencode-cli.ts', 'samples.ts'],
   )
+})
+
+// Plan 70, scenario 7: the quota of Lite, Pro and Max names its size and its use in credits.
+test('answers the quota of Lite, Pro and Max with their own sizes', async (t) => {
+  const target = await plain(t)
+  for (const [plan, fiveHour, week] of [
+    ['pro', 12_000, 60_000],
+    ['max', 28_000, 140_000],
+    ['lite', 2_000, 10_000],
+  ]) {
+    target.state.setQuota({ plan })
+    await chat(target)
+    const { windows } = await probe(target)
+    assert.deepEqual(
+      windows.map(({ name, limitCredits, usedCredits }) => [name, limitCredits, usedCredits]),
+      [
+        ['5h', fiveHour, 1],
+        ['week', week, 1],
+      ],
+    )
+  }
+  assert.throws(() => target.state.setQuota({ plan: 'team' }))
 })
