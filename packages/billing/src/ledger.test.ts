@@ -177,6 +177,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL accounts and ledger', () => {
       price: '1990.00',
       creditsPerMonth: null,
       creditsPerDay: null,
+      creditsPer5h: null,
+      creditsPerWeek: null,
       maxSites: null,
       packCredits: 10,
     })

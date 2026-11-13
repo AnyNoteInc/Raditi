@@ -92,6 +92,8 @@ export type GatewayAdmission =
        * llm_keys.last_refusal say `budget` for all three; only the log of the role names it.
        */
       limit?: GatewayKeyLimit
+      /** With `workspace_limit`: the window of the workspace that refused and its reset (plan 71). */
+      window?: { kind: '5h' | 'week'; resetsAt: Date | null }
       /**
        * The key's own account has its window out and the key has a fallback (docs/plan/70-turn-
        * without-time-limit.md, ВР25): admit it there instead. Nothing of it was recorded on the key.

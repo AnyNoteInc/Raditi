@@ -1,5 +1,7 @@
-import type { Prisma, PrismaClient } from '@repo/db'
+import { workspaceUsageTerms, type Prisma, type PrismaClient } from '@repo/db'
 import {
+  absoluteWindow,
+  accountWindowForecast,
   badRequest,
   conflict,
   crossBorderNotCleared,
@@ -23,6 +25,7 @@ import {
   turnKeyBudgetVerdict,
   TURN_PUBLICATION_GRACE_MS,
   type AttemptBudgetInput,
+  type LimitWindow,
   type LlmBackendId,
   type LlmCapacity,
   type PoolAccountSnapshot,
@@ -32,6 +35,7 @@ import {
   type TurnCredentialRef,
   type TurnCredentialSource,
   type TurnCredentialValues,
+  type WorkspaceTier,
 } from '@repo/domain'
 import {
   decodeLimitWindows,
@@ -134,6 +138,8 @@ interface OwnedTask {
   needsRepository: boolean
   /** `tasks.needs_browser`: the task drives the live site through the `web` tools (plan 57, Б2). */
   needsBrowser: boolean
+  /** The workspace of the task: its tier, its windows and its turns at once (plan 71). */
+  workspaceId: string
   now: Date
   modelClass?: string | null
 }
@@ -150,6 +156,8 @@ interface Selection {
   decision: PoolDecision
   /** Admission only: the decision over the whole pool, free of the account pinned in Vault. */
   unpinned?: PoolDecision
+  /** The tier of the task's workspace (plan 71): what a wait for the reserve of the pool names. */
+  tier: WorkspaceTier
   /**
    * The selected account, when its window snapshot is older than the pool keeps one for. Never
    * for a backend without windows: there is nothing to refresh.
@@ -276,7 +284,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
         throw conflict('Turn credentials are no longer valid')
       return values(stored)
     }
-    requireSelection(prepared.decision)
+    requireSelection(prepared.decision, prepared.tier)
     if (!stored) {
       if (await this.#secrets.kvMetadata(path))
         throw conflict('Turn credentials were already removed')
@@ -426,7 +434,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       ) {
         // Vault pins this turn to its account, but the caller's next attempt (a new lease epoch)
         // selects again: answer what the whole pool offers it, at once if an account is free.
-        requireSelection(selected.unpinned ?? selected.decision)
+        requireSelection(selected.unpinned ?? selected.decision, selected.tier)
         throw subscriptionBusy(selected.task.now)
       }
       const binding = await tx.taskAccountBinding.findUnique({ where: { taskId: ref.taskId } })
@@ -593,6 +601,14 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
     const binding = await tx.taskAccountBinding.findUnique({ where: { taskId: ref.taskId } })
     if (binding && binding.driverId !== grant.driverId)
       throw conflict('The task binding uses another driver')
+    // The tier of the workspace: the reserve of the pool its new task leaves (plan 71, Л8). Its
+    // turns run at once as many as the pool takes (owner's answer of 13.11.2026: Л10 removed).
+    const terms = await workspaceUsageTerms(tx, task.workspaceId)
+    // What a turn of the profile takes of the windows, measured (Л12); none — 5 % of a window.
+    const turnCost = await tx.llmTurnCost.findUnique({
+      where: { modelId: profile.modelId },
+      select: { p95PlanCredits: true },
+    })
     const accounts = await tx.$queryRaw<
       Array<{
         id: string
@@ -608,6 +624,8 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
         limitsSeenAt: Date | null
         activeTurns: bigint
         maxConcurrentTurns: number
+        closedPlanCredits: string
+        openPlanCredits: string
         lastUsedAt: Date | null
       }>
     >`
@@ -617,17 +635,29 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
         a.cooling_until AS "coolingUntil", a.breaker_open_until AS "breakerOpenUntil",
         a.limit_windows AS "limitWindows", a.limits_seen_at AS "limitsSeenAt",
         a.max_concurrent_turns AS "maxConcurrentTurns",
+        COALESCE((SELECT SUM(u.plan_credits) FROM token_usage u
+          WHERE u.subscription_account_id = a.id AND a.limits_seen_at IS NOT NULL
+            AND u.occurred_at >= a.limits_seen_at), 0)::text AS "closedPlanCredits",
+        COALESCE((SELECT SUM(c.reserved_plan_credits) FROM llm_calls c
+          WHERE c.subscription_account_id = a.id AND c.state = 'open'), 0)::text AS "openPlanCredits",
         a.last_used_at AS "lastUsedAt", (SELECT count(*) FROM llm_keys k
           WHERE k.subscription_account_id = a.id AND k.revoke_requested_at IS NULL
             AND k.revoked_at IS NULL AND k.expires_at > clock_timestamp()) AS "activeTurns"
       FROM subscription_accounts a WHERE a.provider_id = ${profile.providerId}::uuid
         AND a.driver_id = ${grant.driverId}`
-    const snapshots = accounts.map(({ limitsSeenAt: _seen, ...a }) => ({
-      ...a,
-      backend: grant.backend,
-      activeTurns: Number(a.activeTurns),
-      limitWindows: decodeLimitWindows(a.limitWindows),
-    }))
+    const snapshots = accounts.map(
+      ({ limitsSeenAt: _seen, closedPlanCredits, openPlanCredits, ...a }) => ({
+        ...a,
+        backend: grant.backend,
+        activeTurns: Number(a.activeTurns),
+        // Between probes the pool reads the forecast (plan 71, §2.1): the probe's use plus what
+        // the calls of the account took since and what its open calls hold.
+        limitWindows: forecastWindows(decodeLimitWindows(a.limitWindows), {
+          closedSinceProbe: closedPlanCredits,
+          openReserved: openPlanCredits,
+        }),
+      }),
+    )
     // Not llm_keys.last_refusal: any later refusal of the same key overwrites that one.
     const policyFlagged = await tx.taskEvent.findFirst({
       where: { taskId: ref.taskId, type: policyFlaggedEvent },
@@ -657,6 +687,11 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
         rebinds: crossed ? 0 : (binding?.rebinds ?? 0),
         policyFlagged: policyFlagged !== null,
         minTurnHeadroomPct: this.#minHeadroom,
+        turnCostCredits:
+          turnCost === null || turnCost.p95PlanCredits.lte(0)
+            ? null
+            : turnCost.p95PlanCredits.toNumber(),
+        tier: terms.tier,
         accounts,
       })
     const decision = pick(
@@ -676,6 +711,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       task,
       profile,
       decision,
+      tier: terms.tier,
       staleAccountId:
         decision.kind === 'selected' &&
         capacity === 'windows' &&
@@ -763,14 +799,38 @@ function matches(key: KeyRow, stored: StoredSecret, now: Date, active = true): b
 }
 function requireSelection(
   decision: PoolDecision,
+  tier: WorkspaceTier,
 ): asserts decision is Extract<PoolDecision, { kind: 'selected' }> {
   if (decision.kind === 'busy') throw subscriptionBusy(decision.retryAt)
-  if (decision.kind === 'wait') throw subscriptionWait(decision.retryAt)
+  if (decision.kind === 'wait')
+    throw subscriptionWait(
+      decision.retryAt,
+      decision.reason === 'tier_reserve' ? `tier_reserve:${tier}` : decision.reason,
+    )
   if (decision.kind === 'operator')
     throw new DomainError('SUBSCRIPTION_OPERATOR_REQUIRED', 'The task requires an operator', 409, {
       reason: decision.reason,
     })
 }
+/** The windows of an account with their use forecast between probes, in plan credits. */
+function forecastWindows(
+  windows: LimitWindow[] | null,
+  since: { closedSinceProbe: string; openReserved: string },
+): LimitWindow[] | null {
+  if (windows === null) return null
+  return windows.map((window) => {
+    const absolute = absoluteWindow(window)
+    if (absolute === null) return window
+    const used = accountWindowForecast({ probedUsedCredits: absolute.usedCredits, ...since })
+    return {
+      ...window,
+      limitCredits: absolute.limitCredits,
+      usedCredits: Math.min(used, 1e9),
+      usedPct: Math.min(100, (used * 100) / absolute.limitCredits),
+    }
+  })
+}
+
 async function clock(tx: Transaction): Promise<Date> {
   const rows = await tx.$queryRaw<{ now: Date }[]>`SELECT clock_timestamp() AS now`
   return rows[0]!.now
@@ -782,7 +842,7 @@ async function ownedTask(tx: Transaction, ref: TurnCredentialRef): Promise<Owned
   const rows = await tx.$queryRaw<OwnedTask[]>`
     SELECT t.id, t.attempt, t.site_id AS "siteId", t.model_class::text AS "modelClass",
       t.needs_repository AS "needsRepository", t.needs_browser AS "needsBrowser",
-      w.data_class::text AS "dataClass",
+      w.data_class::text AS "dataClass", t.workspace_id AS "workspaceId",
       clock_timestamp() AS now
     FROM tasks t
     JOIN workspaces w ON w.id = t.workspace_id

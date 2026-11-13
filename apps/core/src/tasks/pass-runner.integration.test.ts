@@ -1341,6 +1341,31 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         ])
         expect(retried(queue)).toEqual([])
       })
+
+      // Plan 71, Л17: the reserve of the higher tiers is capacity that exists — a new task of a
+      // lower tier waits in the queue for the reset however far it is, and keeps its priority.
+      it('keeps a pass the reserve of the higher tiers holds back in the queue, with its priority', async () => {
+        await rate()
+        const dialog = await queued({ reserve: true })
+        const job = { ...dialog.job, priority: 3 }
+        const { passes, queue } = runner(async () => {
+          throw subscriptionWait(minutes(4 * 60 + 12), 'tier_reserve')
+        })
+
+        await passes.run(job)
+
+        expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
+          status: 'queued',
+          waiting: 'agents',
+        })
+        expect(queue.enqueue).toHaveBeenCalledWith(
+          'agent-turns',
+          'turn.run',
+          job,
+          expect.objectContaining({ delayMs: 600_000, priority: 3 }),
+        )
+        expect(await failure(dialog.taskId)).toEqual([])
+      })
     })
 
     it('looks again within two minutes when the lease of the site lasts long', async () => {

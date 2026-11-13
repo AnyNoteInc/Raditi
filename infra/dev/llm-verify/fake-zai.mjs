@@ -132,6 +132,19 @@ const WINDOWS = Object.freeze([
   Object.freeze({ name: 'week', unit: 6, number: 1, usage: 10_000, lengthMs: 7 * 86_400_000 }),
 ])
 
+/**
+ * The sizes of the windows of GLM Coding Plan, in plan credits (docs.z.ai/devpack/overview,
+ * 11.11.2026; docs/plan/71-usage-limits.md): `setQuota({ plan })` answers with those of Lite, Pro
+ * or Max, so a stand sees the absolute numbers of each.
+ */
+const PLAN_SIZES = Object.freeze({
+  lite: Object.freeze({ fiveHour: 2_000, week: 10_000 }),
+  pro: Object.freeze({ fiveHour: 12_000, week: 60_000 }),
+  max: Object.freeze({ fiveHour: 28_000, week: 140_000 }),
+})
+/** The size of a window of the quota now: of its plan, else of Lite. */
+const sizeOf = (quota, name, usage) => quota[name]?.usage ?? usage
+
 const invalid = (what) => new Error(`Invalid ${what}`)
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 const whole = (value, max) => Number.isSafeInteger(value) && value >= 0 && value <= max
@@ -270,7 +283,7 @@ function usageOption(value) {
 function quotaOptions(value = {}) {
   if (!isRecord(value)) throw invalid('quota')
   for (const name of Object.keys(value))
-    if (!['mode', 'code', 'level', 'credits', 'fiveHour', 'week'].includes(name))
+    if (!['mode', 'code', 'level', 'credits', 'plan', 'fiveHour', 'week'].includes(name))
       throw invalid('quota')
   // live: the windows follow the chat requests. broken: an answer that cannot be read.
   // envelope: `{code, msg, success: false}` with HTTP 200.
@@ -281,6 +294,8 @@ function quotaOptions(value = {}) {
   if (value.level !== undefined && !/^[a-z0-9_-]{1,32}$/.test(String(value.level)))
     throw invalid('quota level')
   if (value.credits !== undefined && !whole(value.credits, 10_000)) throw invalid('quota credits')
+  if (value.plan !== undefined && !Object.hasOwn(PLAN_SIZES, value.plan))
+    throw invalid('quota plan')
   for (const name of ['fiveHour', 'week']) {
     const window = value[name]
     if (window === undefined) continue
@@ -332,10 +347,19 @@ export function createFakeZaiState(initial = {}) {
       quota.code = parsed.mode === 'envelope' ? parsed.code : undefined
       if (parsed.level !== undefined) quota.level = String(parsed.level)
       if (parsed.credits !== undefined) quota.credits = parsed.credits
-      for (const { name, usage, lengthMs } of WINDOWS) {
+      if (parsed.plan !== undefined) {
+        // A plan of another size: both windows start over, nobody has used them.
+        quota.level = parsed.plan
+        for (const { name } of WINDOWS) {
+          const usage = PLAN_SIZES[parsed.plan][name]
+          Object.assign(quota[name], { usage, currentValue: 0, remaining: usage, reset: null })
+        }
+      }
+      for (const { name, usage: lite, lengthMs } of WINDOWS) {
         const given = parsed[name]
         if (!given) continue
         const window = quota[name]
+        const usage = sizeOf(quota, name, lite)
         if (given.idle) Object.assign(window, { currentValue: 0, remaining: usage, reset: null })
         if (given.exhausted)
           Object.assign(window, {
@@ -414,8 +438,9 @@ function configurationOptions(options) {
 /** A generation was counted by the provider: the windows move as the records show. */
 function spend(state) {
   const quota = state.quota
-  for (const { name, usage, lengthMs } of WINDOWS) {
+  for (const { name, usage: lite, lengthMs } of WINDOWS) {
     const window = quota[name]
+    const usage = sizeOf(quota, name, lite)
     if (window.reset === null || window.reset <= Date.now()) {
       // The first request starts the window: `remaining` drops by one, `currentValue` stays 0
       // (samples 60 and 62).
@@ -883,8 +908,9 @@ function answerQuota(req, res, state, record) {
       code: 200,
       msg: 'Operation successful',
       data: {
-        limits: WINDOWS.map(({ name, unit, number, usage }) => {
+        limits: WINDOWS.map(({ name, unit, number, usage: lite }) => {
           const window = quota[name]
+          const usage = sizeOf(quota, name, lite)
           const spent = usage - window.remaining
           return {
             type: 'CREDIT_LIMIT',

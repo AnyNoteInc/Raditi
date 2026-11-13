@@ -2,7 +2,7 @@
 
 import type { ChatCommandId, FeedReleaseOutcome, FeedUpdateOutcome } from '@repo/domain'
 import { chatCommandRefusalText, type ChatCommandRefusal } from '@repo/domain/release/chat-commands'
-import { feedFailureTextOf } from '@repo/domain/tasks/client-feed-failures'
+import { feedFailureTextOf, usageLimitText } from '@repo/domain/tasks/client-feed-failures'
 import {
   feedApprovalSiteText,
   feedBrowserButtons,
@@ -949,7 +949,10 @@ function RowView({
         >
           <Sentences
             parts={[
-              feedFailureTextOf(row.code, siteUrl !== null),
+              // A window of the workspace names when the work goes on (plan 71).
+              row.code === 'usage_limit' && row.window
+                ? usageLimitText(row.window.kind, new Date(row.window.resetsAt))
+                : feedFailureTextOf(row.code, siteUrl !== null),
               feedEndedSiteText[row.site],
               feedCreditsSentence(row.credits),
               // The dialog kept its candidate: the card of the changes above says what to do.

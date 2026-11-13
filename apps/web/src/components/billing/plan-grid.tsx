@@ -17,6 +17,7 @@ import {
   currentPlanNote,
   planAverageTasks,
   planDailyLimit,
+  planWindowLimits,
   planSites,
   planTooSmall,
   scheduledPlanNote,
@@ -91,6 +92,7 @@ export function PlanGrid({
         const marked = current || plan === suggested
         const averageTasks = planAverageTasks(plan.creditsPerMonth)
         const dailyLimit = planDailyLimit(plan.creditsPerDay)
+        const windowLimits = planWindowLimits(plan.creditsPer5h, plan.creditsPerWeek)
         const smallEdit = smallEditPrice(plan.price, plan.creditsPerMonth)
         const note = current
           ? overdue
@@ -209,6 +211,7 @@ export function PlanGrid({
               </li>
               {averageTasks ? <li>{nbsp(averageTasks)}</li> : null}
               {dailyLimit ? <li>{nbsp(dailyLimit)}</li> : null}
+              {windowLimits ? <li>{nbsp(windowLimits)}</li> : null}
               {smallEdit ? <li>{nbsp(smallEdit)}</li> : null}
               <li>{nbsp(planSites(plan.maxSites))}</li>
             </Box>

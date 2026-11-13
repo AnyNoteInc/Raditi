@@ -17,6 +17,8 @@ export const pricing: LandingPricingData = {
       price: '1990.00',
       creditsPerMonth: 150,
       creditsPerDay: null,
+      creditsPer5h: null,
+      creditsPerWeek: null,
       maxSites: 1,
     },
     {
@@ -25,6 +27,8 @@ export const pricing: LandingPricingData = {
       price: '6990.00',
       creditsPerMonth: 600,
       creditsPerDay: null,
+      creditsPer5h: null,
+      creditsPerWeek: null,
       maxSites: 3,
     },
     {
@@ -33,6 +37,8 @@ export const pricing: LandingPricingData = {
       price: '19990.00',
       creditsPerMonth: 2000,
       creditsPerDay: null,
+      creditsPer5h: null,
+      creditsPerWeek: null,
       maxSites: 15,
     },
   ],

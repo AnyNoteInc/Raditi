@@ -60,7 +60,13 @@ vi.mock('@/trpc/client', () => ({
     project: {
       list: { queryOptions: () => ({ queryKey: ['project.list'], queryFn: projectList }) },
     },
-    billing: { usage: { queryKey: () => ['billing', 'usage'] } },
+    billing: {
+      usage: {
+        queryKey: () => ['billing', 'usage'],
+        // The hint of the windows (plan 71) reads nothing in these cases.
+        queryOptions: () => ({ queryKey: ['billing', 'usage'], queryFn: async () => null }),
+      },
+    },
   }),
   useTRPCClient: () => ({
     attachment: {

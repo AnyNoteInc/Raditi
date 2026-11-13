@@ -44,6 +44,8 @@ test('the gateway health is probed apart from the required endpoints', () => {
 
 test('the gateway has an alert and a panel, and both name metrics the gateway exports', () => {
   const server = read('../../../apps/llm/src/gateway/server.ts')
+  // The windows of the pool and of the workspaces register on the same registry (plan 71).
+  const usage = read('../../../apps/llm/src/accounting/usage-metrics.ts')
   const [, counters] = /#counters = \{\n([^}]+)\}/.exec(server) ?? []
   assert.ok(counters, 'the counters of the gateway are found in server.ts')
   const exported = new Set([
@@ -52,6 +54,7 @@ test('the gateway has an alert and a panel, and both name metrics the gateway ex
         `raditi_llm_${key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)}_total`,
     ),
     ...[...server.matchAll(/name: '(raditi_llm_[a-z_]+)'/g)].map(([, name]) => name),
+    ...[...usage.matchAll(/name: '(raditi_llm_[a-z_]+)'/g)].map(([, name]) => name),
   ])
   assert.ok(exported.has('raditi_llm_requests_total') && exported.has('raditi_llm_active_requests'))
   const used = (text) => [...text.matchAll(/raditi_llm_[a-z_]+/g)].map(([name]) => name)

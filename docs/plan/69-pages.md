@@ -483,7 +483,7 @@
   `DOC_LIMIT`, `PAGE_CONTENT_REFUSED { reason }`, `DOC_PENDING_SECTIONS`, `DOC_SECTION_UNKNOWN`,
   `DOC_SECTION_INVALID`.
 
-### База — миграция `20261113120000_pages`
+### База — миграция `20261113130000_pages`
 
 Только новые таблицы; хранилище — `packages/db/src/pages.ts`.
 
@@ -749,7 +749,7 @@ wildcard-сертификатом; корень → web (план 67).
 
 ### 69.2 — база (13.11.2026)
 
-Миграция `20261113120000_pages` (восемь таблиц, только новые, CHECK на каждую), модели Prisma, хранилище
+Миграция `20261113130000_pages` (восемь таблиц, только новые, CHECK на каждую), модели Prisma, хранилище
 `packages/db/src/pages.ts`:
 
 - `reservePagePublication`, `pendingPageReservations`, `applyPageVersion`, `settlePageReservation` — резерв хода и
@@ -1130,7 +1130,7 @@ p = 1, только эти параметры, и окно попыток. Пе�
   (план 70);
 - roadmap — P18 и P19 оба.
 
-Миграция страниц переименована в `20261113120000_pages`: у двух миграций `main` та же метка `20261113100000`, а
+Миграция страниц переименована в `20261113130000_pages`: у двух миграций `main` та же метка `20261113100000`, а
 эта нигде не применена. Проверки после слияния:
 - чистая PostgreSQL 17 — `migrate deploy`, сверка схемы без расхождений, сиды;
 - `pnpm turbo run typecheck lint test` по семи пакетам — 22 задачи;

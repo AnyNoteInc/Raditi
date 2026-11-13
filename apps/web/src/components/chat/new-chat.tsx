@@ -26,6 +26,7 @@ import { markNewDialog } from './new-dialog-hint'
 import { ProjectPicker, projectChoosable } from './project-picker'
 import { useAttachments } from './use-attachments'
 import { uuidv7 } from './uuid'
+import { UsageWindowHint } from '@/components/billing/usage-window-hint'
 
 /**
  * The screen a chat starts from (docs/plan/53-chat-preview-release.md, R9; docs/plan/61-chats-
@@ -191,6 +192,7 @@ export function NewChat({
         }
         effort={<EffortMenu value={effort} onChange={setEffort} handle={effortMenu} />}
       />
+      <UsageWindowHint />
       {clientCommands.menu}
     </Box>
   )
