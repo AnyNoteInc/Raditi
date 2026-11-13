@@ -48,17 +48,6 @@ export const tierQueuePriority: Readonly<Record<WorkspaceTier, number>> = Object
 })
 
 /**
- * The share of the pool, in percent, a new task of the tier leaves to the higher tiers (Л8): it
- * starts only while more of the pool is free than this, in both windows.
- */
-export const tierPoolReservePct: Readonly<Record<WorkspaceTier, number>> = Object.freeze({
-  none: 40,
-  start: 25,
-  business: 15,
-  agency: 5,
-})
-
-/**
  * The windows of a workspace without a paid tariff (Л4): the rows of `plans` hold the numbers of
  * each tariff. How many turns of a workspace run at once is not bounded: only credits bound the
  * work (owner's answer of 13.11.2026, Л10 removed).

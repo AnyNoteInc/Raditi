@@ -12,7 +12,6 @@ import {
   isPlanPeak,
   planRatesSchema,
   noTariffWindowCredits,
-  tierPoolReservePct,
   workspaceTiers,
   type Env,
   type PlanRates,
@@ -215,7 +214,7 @@ export function usageReportText(report: UsageReport): string[] {
   )
   for (const tier of report.demand)
     lines.push(
-      `  ${tier.tier}: пространств ${tier.workspaces}, недельные лимиты ${tier.weeklyLimits}, за 7 дней ${round(tier.spent7d)}, p95 окна 5 часов ${round(tier.p95FiveHours)} (запас пула ${tierPoolReservePct[tier.tier]} %)`,
+      `  ${tier.tier}: пространств ${tier.workspaces}, недельные лимиты ${tier.weeklyLimits}, за 7 дней ${round(tier.spent7d)}, p95 окна 5 часов ${round(tier.p95FiveHours)}`,
     )
   lines.push(`Покрытие: ${report.coverage ?? '—'}`, report.advice)
   return lines

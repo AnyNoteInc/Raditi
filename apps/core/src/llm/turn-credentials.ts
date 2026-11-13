@@ -1,4 +1,4 @@
-import { workspaceUsageTerms, type Prisma, type PrismaClient } from '@repo/db'
+import type { Prisma, PrismaClient } from '@repo/db'
 import {
   absoluteWindow,
   accountWindowForecast,
@@ -35,7 +35,6 @@ import {
   type TurnCredentialRef,
   type TurnCredentialSource,
   type TurnCredentialValues,
-  type WorkspaceTier,
 } from '@repo/domain'
 import {
   decodeLimitWindows,
@@ -138,8 +137,6 @@ interface OwnedTask {
   needsRepository: boolean
   /** `tasks.needs_browser`: the task drives the live site through the `web` tools (plan 57, Б2). */
   needsBrowser: boolean
-  /** The workspace of the task: its tier, its windows and its turns at once (plan 71). */
-  workspaceId: string
   now: Date
   modelClass?: string | null
 }
@@ -156,8 +153,6 @@ interface Selection {
   decision: PoolDecision
   /** Admission only: the decision over the whole pool, free of the account pinned in Vault. */
   unpinned?: PoolDecision
-  /** The tier of the task's workspace (plan 71): what a wait for the reserve of the pool names. */
-  tier: WorkspaceTier
   /**
    * The selected account, when its window snapshot is older than the pool keeps one for. Never
    * for a backend without windows: there is nothing to refresh.
@@ -284,7 +279,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
         throw conflict('Turn credentials are no longer valid')
       return values(stored)
     }
-    requireSelection(prepared.decision, prepared.tier)
+    requireSelection(prepared.decision)
     if (!stored) {
       if (await this.#secrets.kvMetadata(path))
         throw conflict('Turn credentials were already removed')
@@ -434,7 +429,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       ) {
         // Vault pins this turn to its account, but the caller's next attempt (a new lease epoch)
         // selects again: answer what the whole pool offers it, at once if an account is free.
-        requireSelection(selected.unpinned ?? selected.decision, selected.tier)
+        requireSelection(selected.unpinned ?? selected.decision)
         throw subscriptionBusy(selected.task.now)
       }
       const binding = await tx.taskAccountBinding.findUnique({ where: { taskId: ref.taskId } })
@@ -601,9 +596,6 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
     const binding = await tx.taskAccountBinding.findUnique({ where: { taskId: ref.taskId } })
     if (binding && binding.driverId !== grant.driverId)
       throw conflict('The task binding uses another driver')
-    // The tier of the workspace: the reserve of the pool its new task leaves (plan 71, Л8). Its
-    // turns run at once as many as the pool takes (owner's answer of 13.11.2026: Л10 removed).
-    const terms = await workspaceUsageTerms(tx, task.workspaceId)
     // What a turn of the profile takes of the windows, measured (Л12); none — 5 % of a window.
     const turnCost = await tx.llmTurnCost.findUnique({
       where: { modelId: profile.modelId },
@@ -691,7 +683,6 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
           turnCost === null || turnCost.p95PlanCredits.lte(0)
             ? null
             : turnCost.p95PlanCredits.toNumber(),
-        tier: terms.tier,
         accounts,
       })
     const decision = pick(
@@ -711,7 +702,6 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       task,
       profile,
       decision,
-      tier: terms.tier,
       staleAccountId:
         decision.kind === 'selected' &&
         capacity === 'windows' &&
@@ -799,14 +789,9 @@ function matches(key: KeyRow, stored: StoredSecret, now: Date, active = true): b
 }
 function requireSelection(
   decision: PoolDecision,
-  tier: WorkspaceTier,
 ): asserts decision is Extract<PoolDecision, { kind: 'selected' }> {
   if (decision.kind === 'busy') throw subscriptionBusy(decision.retryAt)
-  if (decision.kind === 'wait')
-    throw subscriptionWait(
-      decision.retryAt,
-      decision.reason === 'tier_reserve' ? `tier_reserve:${tier}` : decision.reason,
-    )
+  if (decision.kind === 'wait') throw subscriptionWait(decision.retryAt, decision.reason)
   if (decision.kind === 'operator')
     throw new DomainError('SUBSCRIPTION_OPERATOR_REQUIRED', 'The task requires an operator', 409, {
       reason: decision.reason,
@@ -842,8 +827,7 @@ async function ownedTask(tx: Transaction, ref: TurnCredentialRef): Promise<Owned
   const rows = await tx.$queryRaw<OwnedTask[]>`
     SELECT t.id, t.attempt, t.site_id AS "siteId", t.model_class::text AS "modelClass",
       t.needs_repository AS "needsRepository", t.needs_browser AS "needsBrowser",
-      w.data_class::text AS "dataClass", t.workspace_id AS "workspaceId",
-      clock_timestamp() AS now
+      w.data_class::text AS "dataClass", clock_timestamp() AS now
     FROM tasks t
     JOIN workspaces w ON w.id = t.workspace_id
     LEFT JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id

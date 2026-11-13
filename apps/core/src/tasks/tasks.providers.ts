@@ -117,21 +117,14 @@ export const taskProviders: Provider[] = [
       registry: Registry,
       executor: TurnExecutor | null,
     ) => {
-      // What the pool told a pass (plan 71, §4.4): the limits of the agent out, the reserve of
-      // the higher tiers waited for.
+      // What the pool told a pass (plan 71, §4.4): the limits of the agent out.
       const limitsOut = new Counter({
         name: 'raditi_pass_limits_out_total',
         help: 'Passes the pool ended because its limits are out',
         registers: [registry],
       })
-      const tierWaits = new Counter({
-        name: 'raditi_pool_tier_wait_total',
-        help: 'Passes that wait for the reserve of the higher tiers of the pool',
-        labelNames: ['tier'],
-        registers: [registry],
-      })
       return new PassRunner({
-        pool: { limitsOut: () => limitsOut.inc(), tierWait: (tier) => tierWaits.inc({ tier }) },
+        pool: { limitsOut: () => limitsOut.inc() },
         db: prisma,
         supervisor,
         git,

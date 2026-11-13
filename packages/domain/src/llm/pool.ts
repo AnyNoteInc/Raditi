@@ -1,6 +1,5 @@
 import { z } from 'zod'
 
-import { tierPoolReservePct, workspaceTierSchema } from '../billing/usage-windows.ts'
 import { badRequest } from '../errors.ts'
 import {
   limitWindowsSchema,
@@ -75,8 +74,6 @@ export const pickAccountInputSchema = z
      * too few turns measured: a turn is `minTurnHeadroomPct` of each window.
      */
     turnCostCredits: z.number().positive().max(1e9).nullable().default(null),
-    /** The tier of the task's workspace: the reserve of the pool a new task leaves (Л8). */
-    tier: workspaceTierSchema.default('none'),
     accounts: z.array(poolAccountSnapshotSchema).readonly(),
   })
   .strict()
@@ -103,11 +100,7 @@ export type PoolDecision =
       kind: 'wait'
       retryAt: Date
       /** `cooling`: the bound account is paused by a window, a cooldown or the usage breaker. */
-      /**
-       * `tier_reserve`: the pool has capacity, but less of it is free than a new task of this
-       * tier leaves to the higher ones (Л8); it waits in the queue for the nearest reset (Л17).
-       */
-      reason: 'cooling' | 'limits_unknown' | 'pool_empty' | 'provider_disabled' | 'tier_reserve'
+      reason: 'cooling' | 'limits_unknown' | 'pool_empty' | 'provider_disabled'
       /** Refresh usage once through the gateway outside the issue transaction, then reselect. */
       probeAccountIds: readonly string[]
     }
@@ -236,37 +229,6 @@ function readiness(account: PoolAccountSnapshot, input: ParsedInput, newTask: bo
   }
 }
 
-/**
- * Whether a new task of the tier may start on the pool (Л8): in each window, the free share of
- * the pool — Σ left ÷ Σ size over the eligible accounts with absolute numbers that are not paused
- * — must be greater than the reserve of the tier. null — it may; else the nearest reset of a
- * window that would free the pool. Without absolute numbers nothing is reserved.
- */
-function tierReserveWait(input: ParsedInput): number | null | 'none' {
-  if (input.capacity === 'none') return null
-  const reserve = tierPoolReservePct[input.tier]
-  const now = input.now.getTime()
-  const sums = { '5h': { left: 0, size: 0 }, week: { left: 0, size: 0 } }
-  const resets: number[] = []
-  for (const account of input.accounts) {
-    if (!eligible(account, input) || pausedUntil(account, now) !== null) continue
-    for (const window of account.limitWindows ?? []) {
-      if (window.name === 'month') continue
-      if (window.resetsAt !== null && window.resetsAt.getTime() <= now) continue
-      const absolute = absoluteWindow(window)
-      if (absolute === null) continue
-      sums[window.name].left += Math.max(0, absolute.limitCredits - absolute.usedCredits)
-      sums[window.name].size += absolute.limitCredits
-      if (window.resetsAt !== null) resets.push(window.resetsAt.getTime())
-    }
-  }
-  const short = (['5h', 'week'] as const).some(
-    (name) => sums[name].size > 0 && (sums[name].left * 100) / sums[name].size <= reserve,
-  )
-  if (!short) return null
-  return resets.length > 0 ? Math.min(...resets) : 'none'
-}
-
 function wait(
   input: ParsedInput,
   reason: Extract<PoolDecision, { kind: 'wait' }>['reason'],
@@ -313,20 +275,11 @@ function pickUnbound(input: ParsedInput, binding: 'initial' | 'rebind'): PoolDec
     // Stable even when database row order changes; never depend on machine locale.
     return left.account.id < right.account.id ? -1 : left.account.id > right.account.id ? 1 : 0
   })
+  // A new task starts while an account has a turn's cost left, whatever the tariff of its
+  // workspace (owner's answer of 13.11.2026: «пока есть кредиты из подписки или тарифа нужно
+  // запускать агента»): no share of the pool is kept for the higher tiers, they only go first in
+  // the queue (`tierQueuePriority`).
   const selected = candidates[0]
-  if (selected && binding === 'initial') {
-    // A started task is never left for the reserve: only a new one waits for it (Л8).
-    const reserveWait = tierReserveWait(input)
-    if (reserveWait !== null)
-      return {
-        kind: 'wait',
-        reason: 'tier_reserve',
-        retryAt: new Date(
-          reserveWait === 'none' ? input.now.getTime() + poolPolicy.unknownRetryMs : reserveWait,
-        ),
-        probeAccountIds: [],
-      }
-  }
   if (selected)
     return {
       kind: 'selected',
