@@ -8,6 +8,7 @@ import {
   enqueueReleaseAdvance,
   enqueueSiteWaitingPasses,
 } from './chat-outbox.ts'
+import type { Prisma } from './generated/prisma/client.ts'
 import type { OutboxWriter } from './outbox.ts'
 
 const taskId = '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a60'
@@ -17,7 +18,11 @@ const releaseId = '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a63'
 
 function fakeWriter(count = 1) {
   const createMany = vi.fn().mockResolvedValue({ count })
-  const writer = { outboxEvent: { createMany } } as unknown as OutboxWriter
+  const writer = {
+    outboxEvent: { createMany },
+    // The tier of the task's workspace: «Бизнес».
+    $queryRaw: vi.fn(async () => [{ slug: 'business' }]),
+  } as unknown as OutboxWriter & Pick<Prisma.TransactionClient, '$queryRaw'>
   const rows = () => createMany.mock.calls.map(([args]) => args.data[0])
   return { writer, rows }
 }
@@ -37,11 +42,17 @@ describe('enqueueAgentTurn', () => {
       {
         topic: 'agent-turns',
         type: 'turn.run',
-        payload: { taskId, attempt: 2, requestEventId: '41' },
+        payload: { taskId, attempt: 2, requestEventId: '41', priority: 2 },
         dedupeKey: `turn.run:${taskId}:2:41`,
         availableAt: undefined,
       },
     ])
+  })
+
+  it('keeps a priority the job already carries, a repeat after a wait of the pool', async () => {
+    const { writer, rows } = fakeWriter()
+    await enqueueAgentTurn(writer, { taskId, attempt: 1, requestEventId: '8', priority: 1 })
+    expect(rows()[0]?.payload).toMatchObject({ priority: 1 })
   })
 
   it('says false when the key already exists', async () => {
@@ -148,7 +159,7 @@ describe('enqueueSiteWaitingPasses', () => {
   it('puts the passes that wait for the site back, keyed by what let it go', async () => {
     const { writer, rows } = fakeWriter()
     const $queryRaw = vi.fn().mockResolvedValue([
-      { id: taskId.toUpperCase(), attempt: 1, request_id: 41n },
+      { id: taskId.toUpperCase(), attempt: 1, request_id: 41n, slug: 'agency' },
       // A task whose only requests are commands has nothing to answer.
       { id: other, attempt: 2, request_id: null },
     ])
@@ -161,7 +172,7 @@ describe('enqueueSiteWaitingPasses', () => {
       {
         topic: 'agent-turns',
         type: 'turn.run',
-        payload: { taskId, attempt: 1, requestEventId: '41' },
+        payload: { taskId, attempt: 1, requestEventId: '41', priority: 1 },
         dedupeKey: `turn.run:${taskId}:1:41:retry:release-${releaseId}`,
         availableAt: undefined,
       },

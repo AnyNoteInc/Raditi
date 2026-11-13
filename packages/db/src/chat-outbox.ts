@@ -24,6 +24,8 @@ import {
   type PreviewBrowserJob,
   type PreviewSyncJob,
   type ReleaseAdvanceJob,
+  tierQueuePriority,
+  workspaceTierOfPlan,
 } from '@repo/domain'
 import { z } from 'zod'
 
@@ -40,13 +42,34 @@ import { enqueueOutbox, type OutboxWriter } from './outbox.ts'
 /** Ids are written as PostgreSQL prints them, so one row is one key whatever case it came in. */
 const lower = (id: string): string => id.toLowerCase()
 
+/**
+ * The place of a pass of the task in the queue: the tier of the live paid tariff of its
+ * workspace (plan 69, §2.3) — a repeat after the pool waited comes back in the same order.
+ */
+export async function agentTurnPriority(
+  tx: Pick<Prisma.TransactionClient, '$queryRaw'>,
+  taskId: string,
+): Promise<number> {
+  const rows = await tx.$queryRaw<{ slug: string | null }[]>`
+    SELECT p.slug FROM tasks t
+    LEFT JOIN subscriptions s ON s.workspace_id = t.workspace_id AND s.status = 'active'
+    LEFT JOIN plans p ON p.id = s.plan_id
+    WHERE t.id = ${taskId}::uuid
+    LIMIT 1`
+  return tierQueuePriority[workspaceTierOfPlan(rows[0]?.slug ?? null)]
+}
+
 export async function enqueueAgentTurn(
-  tx: OutboxWriter,
+  tx: OutboxWriter & Pick<Prisma.TransactionClient, '$queryRaw'>,
   job: AgentTurnJob,
   options: { availableAt?: Date } = {},
 ): Promise<boolean> {
   const parsed = agentTurnJobSchema.parse(job)
-  const payload: AgentTurnJob = { ...parsed, taskId: lower(parsed.taskId) }
+  const payload: AgentTurnJob = {
+    ...parsed,
+    taskId: lower(parsed.taskId),
+    priority: parsed.priority ?? (await agentTurnPriority(tx, parsed.taskId)),
+  }
   return enqueueOutbox(tx, {
     topic: AGENT_TURN_QUEUE,
     type: AGENT_TURN_JOB,
@@ -76,9 +99,10 @@ export async function enqueueSiteWaitingPasses(
   const siteId = z.uuid().parse(input.siteId)
   const tag = wakeTagSchema.parse(input.tag.toLowerCase())
   const rows = await tx.$queryRaw<
-    Array<{ id: string; attempt: number; request_id: bigint | null }>
+    Array<{ id: string; attempt: number; request_id: bigint | null; slug?: string | null }>
   >`
-    SELECT t.id, t.attempt,
+    SELECT t.id, t.attempt, (SELECT p.slug FROM subscriptions s JOIN plans p ON p.id = s.plan_id
+        WHERE s.workspace_id = t.workspace_id AND s.status = 'active' LIMIT 1) AS slug,
       (SELECT max(e.id) FROM task_events e
         WHERE e.task_id = t.id AND e.type = 'feed.request'
           AND e.payload->>'kind' IS DISTINCT FROM 'command') AS request_id
@@ -93,6 +117,7 @@ export async function enqueueSiteWaitingPasses(
       taskId: lower(row.id),
       attempt: row.attempt,
       requestEventId: row.request_id.toString(),
+      priority: tierQueuePriority[workspaceTierOfPlan(row.slug ?? null)],
     })
     if (
       await enqueueOutbox(tx, {

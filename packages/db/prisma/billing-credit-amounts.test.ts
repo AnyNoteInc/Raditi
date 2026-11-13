@@ -186,6 +186,9 @@ describe.skipIf(!databaseUrl)('the migration of the numbers of credits', () => {
             // The migrations after this one give the day its credits (billing_daily_credits) and
             // then the terms of 06.11.2026 (billing_pricing_2026_11).
             creditsPerDay: plan.creditsPerDay,
+            creditsPer5h: plan.creditsPer5h,
+            creditsPerWeek: plan.creditsPerWeek,
+            maxConcurrentTurns: plan.maxConcurrentTurns,
             packCredits: plan.packCredits,
             maxSites: plan.maxSites,
             sortOrder: plan.sortOrder,

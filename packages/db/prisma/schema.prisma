@@ -168,7 +168,7 @@ model Workspace {
   createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  createdBy       User?            @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy       User?                  @relation(fields: [createdById], references: [id], onDelete: SetNull)
   members         Member[]
   sites           Site[]
   credentialRefs  CredentialRef[]
@@ -181,6 +181,7 @@ model Workspace {
   attachments     Attachment[]
   browserSessions BrowserSession[]
   webSearchCalls  WebSearchCall[]
+  usageWindows    WorkspaceUsageWindow[]
 
   @@index([createdById])
   @@map("workspaces")
@@ -1032,6 +1033,7 @@ model LlmProvider {
   credentialRef         CredentialRef?         @relation(fields: [credentialRefId], references: [id], onDelete: Restrict)
   models                LlmModel[]
   subscriptionAccounts  SubscriptionAccount[]
+  planRates             LlmPlanRate[]
   crossBorderClearances CrossBorderClearance[]
 
   @@index([credentialRefId])
@@ -1063,6 +1065,7 @@ model LlmModel {
   prices     LlmModelPrice[]
   turns      TaskTurn[]
   tokenUsage TokenUsage[]
+  turnCost   LlmTurnCost?
   llmKeys    LlmKey[]
   llmCalls   LlmCall[]
 
@@ -1123,6 +1126,9 @@ model TokenUsage {
   estimateReason        String?  @map("estimate_reason") @db.VarChar(16)
   /// Platform-caused estimates still consume budget but are not charged to the client.
   billable              Boolean  @default(true)
+  /// Credits of the provider's plan the call took (llm_plan_rates at occurred_at; an estimate
+  /// for an estimated call). NULL: the provider has no plan rates (zai-api) or the row is older.
+  planCredits           Decimal? @map("plan_credits") @db.Decimal(14, 4)
   occurredAt            DateTime @map("occurred_at") @db.Timestamptz(6)
   createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
@@ -1141,6 +1147,7 @@ model TokenUsage {
   @@index([occurredAt])
   @@index([keyId])
   @@index([taskId, taskAttempt], map: "token_usage_task_attempt_idx")
+  @@index([subscriptionAccountId, occurredAt], map: "token_usage_account_occurred_idx")
   @@map("token_usage")
 }
 
@@ -1294,6 +1301,9 @@ model LlmCall {
   route                 String       @db.VarChar(64)
   state                 LlmCallState @default(open)
   reservedRub           Decimal      @map("reserved_rub") @db.Decimal(18, 10)
+  /// The reserve in credits of the provider's plan, counted by the forecast of the account's
+  /// windows while the call is open. NULL: no plan rates.
+  reservedPlanCredits   Decimal?     @map("reserved_plan_credits") @db.Decimal(14, 4)
   requestBytes          Int          @map("request_bytes")
   /// est_in the reserve was priced with; a lost call is estimated from it. NULL: opened before it was kept.
   estimatedInputTokens  Int?         @map("estimated_input_tokens")
@@ -1350,26 +1360,32 @@ model CrossBorderClearance {
 
 /// Tariffs (docs/business.md §6). Prices in RUB without VAT: the seller is self-employed.
 model Plan {
-  id              String   @id @default(uuid(7)) @db.Uuid
-  slug            String   @unique @db.VarChar(50)
-  name            String   @db.VarChar(100)
-  kind            PlanKind
+  id                 String   @id @default(uuid(7)) @db.Uuid
+  slug               String   @unique @db.VarChar(50)
+  name               String   @db.VarChar(100)
+  kind               PlanKind
   /// Monthly price (quota), one-off price (pack), 0 for pay-per-action.
-  price           Decimal  @db.Decimal(12, 2)
-  creditsPerMonth Int?     @map("credits_per_month")
+  price              Decimal  @db.Decimal(12, 2)
+  creditsPerMonth    Int?     @map("credits_per_month")
   /// Unused since 17.10.2026 (the daily limit is in credits, `creditsPerDay`); dropped in M5.18.
-  tasksPerDay     Int?     @map("tasks_per_day")
+  tasksPerDay        Int?     @map("tasks_per_day")
   /// Tariff credits a quota plan gives a Moscow day, never more than its month; NULL: no daily
   /// cap. Gift and pack credits are outside it.
-  creditsPerDay   Int?     @map("credits_per_day")
+  creditsPerDay      Int?     @map("credits_per_day")
   /// Credits a pack adds to the account of purchased credits (unit = credit_pack).
-  packCredits     Int?     @map("pack_credits")
+  packCredits        Int?     @map("pack_credits")
+  /// Credits the work of a workspace may take in its window of 5 hours and of the week (plan 69);
+  /// NULL: no limit. Without a paid tariff the constants of @repo/domain apply.
+  creditsPer5h       Int?     @map("credits_per_5h")
+  creditsPerWeek     Int?     @map("credits_per_week")
+  /// Turns of one workspace that run at once; NULL: the constant without a tariff.
+  maxConcurrentTurns Int?     @map("max_concurrent_turns") @db.SmallInt
   /// NULL for packs: they add credits, not sites.
-  maxSites        Int?     @map("max_sites")
-  isActive        Boolean  @default(true) @map("is_active")
-  sortOrder       Int      @default(0) @map("sort_order")
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  maxSites           Int?     @map("max_sites")
+  isActive           Boolean  @default(true) @map("is_active")
+  sortOrder          Int      @default(0) @map("sort_order")
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   pricingRules         PricingRule[]
   subscriptions        Subscription[]
@@ -2702,4 +2718,59 @@ model WebSearchCall {
   @@index([workspaceId, createdAt])
   @@index([createdAt])
   @@map("web_search_calls")
+}
+
+/// The window of 5 hours or of the week a workspace opened with its first call (plan 69): what
+/// its work takes in it is counted from token_usage of its tasks. Windows of one kind never
+/// overlap — a new one opens under the advisory lock of the workspace, after the last one ended.
+model WorkspaceUsageWindow {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  workspaceId String   @map("workspace_id") @db.Uuid
+  /// `5h` or `week`.
+  kind        String   @db.VarChar(8)
+  startedAt   DateTime @map("started_at") @db.Timestamptz(6)
+  endsAt      DateTime @map("ends_at") @db.Timestamptz(6)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade, map: "workspace_usage_windows_workspace_fkey")
+
+  @@unique([workspaceId, kind, startedAt], map: "workspace_usage_windows_workspace_kind_started_key")
+  @@index([workspaceId, kind, endsAt], map: "workspace_usage_windows_workspace_kind_ends_idx")
+  @@map("workspace_usage_windows")
+}
+
+/// The plan credits of a model of a provider's subscription plan per 10 000 tokens and its peak
+/// (docs/plan/69-usage-limits.md, §2.1). Rows are only added, by `llm:plan-rates`.
+model LlmPlanRate {
+  id                  String   @id @default(uuid(7)) @db.Uuid
+  providerId          String   @map("provider_id") @db.Uuid
+  /// llm_models.provider_model_id the rates are of.
+  model               String   @db.VarChar(255)
+  effectiveFrom       DateTime @map("effective_from") @db.Timestamptz(6)
+  inputUncachedPer10k Decimal  @map("input_uncached_per_10k") @db.Decimal(12, 6)
+  cacheReadPer10k     Decimal  @map("cache_read_per_10k") @db.Decimal(12, 6)
+  outputPer10k        Decimal  @map("output_per_10k") @db.Decimal(12, 6)
+  offPeakShare        Decimal  @map("off_peak_share") @db.Decimal(5, 4)
+  /// `{ timeZone, days, fromHour, toHour }` (planPeakSchema of @repo/domain).
+  peak                Json
+  sourceUrl           String   @map("source_url") @db.VarChar(1024)
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  provider LlmProvider @relation(fields: [providerId], references: [id], onDelete: Restrict, map: "llm_plan_rates_provider_fkey")
+
+  @@unique([providerId, model, effectiveFrom], map: "llm_plan_rates_provider_model_effective_from_key")
+  @@map("llm_plan_rates")
+}
+
+/// What a turn of a model profile takes of the windows of the plan, p50 and p95 over 14 days
+/// (Л12): a snapshot core recomputes; the pool reads p95 as the cost of a turn.
+model LlmTurnCost {
+  modelId        String   @id @map("model_id") @db.Uuid
+  turns          Int
+  p50PlanCredits Decimal  @map("p50_plan_credits") @db.Decimal(14, 4)
+  p95PlanCredits Decimal  @map("p95_plan_credits") @db.Decimal(14, 4)
+  computedAt     DateTime @map("computed_at") @db.Timestamptz(6)
+
+  model LlmModel @relation(fields: [modelId], references: [id], onDelete: Cascade, map: "llm_turn_costs_model_fkey")
+
+  @@map("llm_turn_costs")
 }
