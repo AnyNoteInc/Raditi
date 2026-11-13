@@ -12,8 +12,7 @@ import {
   candidateEditJobSchema,
   candidateRebaseJobSchema,
   candidateRewindJobSchema,
-  MAX_SANDBOX_TURN_MS,
-  TURN_PUBLICATION_GRACE_MS,
+  runnerLimits,
 } from '@repo/domain'
 import { throttledLogger } from '@repo/observability'
 import { UnrecoverableError, type Job } from 'bullmq'
@@ -25,18 +24,20 @@ import { CandidateRewind } from './candidate-rewind.ts'
 import { PassRunner } from './pass-runner.ts'
 
 /**
- * How many jobs of `agent-turns` one core works on at once: passes of different chats run side by
- * side (one chat, one turn — its lease, `turnLeaseOf`), and a cancel, an update or an edit is not
- * kept waiting behind them for long.
+ * How many jobs of `agent-turns` one core works on at once: every turn a runner can hold
+ * (`runnerLimits.capacity`, TurnCapacity) and 32 more, so a cancel, an update or an edit always
+ * finds one free while every turn runs (docs/plan/70-turn-without-time-limit.md, ВР16, ВР26). A
+ * pass without a place gives its worker up at once.
  */
-export const AGENT_TURN_CONCURRENCY = 8
+export const AGENT_TURN_CONCURRENCY = runnerLimits.capacity + 32
 
 /**
- * The lock of a job outlives the longest pass: a turn of 20 minutes, its publication grace and
- * the settlement after it. BullMQ renews it while the worker lives; a job whose worker died is
- * not run again (`maxStalledCount` 0): recovery owns the turn it may have started (spec §8).
+ * The lock of a job. A pass has no time limit (docs/plan/70-turn-without-time-limit.md, ВР8):
+ * BullMQ renews the lock every half of it while the worker lives, so a pass of any length keeps
+ * its job, and a job whose worker died is not run again (`maxStalledCount` 0): recovery owns the
+ * turn it may have started (spec §8).
  */
-export const AGENT_TURN_LOCK_MS = MAX_SANDBOX_TURN_MS + TURN_PUBLICATION_GRACE_MS + 5 * 60_000
+export const AGENT_TURN_LOCK_MS = 5 * 60_000
 
 /** A payload that does not pass its schema never will: no retry. */
 function parsed<T>(schema: z.ZodType<T>, job: Job): T {

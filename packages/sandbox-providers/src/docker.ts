@@ -7,7 +7,7 @@ import {
   isDomainError,
   leftNothing,
   MAX_SANDBOX_RESOURCES,
-  MAX_SANDBOX_TURN_MS,
+  MAX_SANDBOX_LEASE_MS,
   networkPolicySchema,
   notImplemented,
   runnerIdSchema,
@@ -39,6 +39,13 @@ import type { DockerGatewayManager, GatewayAttachment } from './gateway-types.ts
 import { createDockerGatewayManager } from './gateway/manager.ts'
 
 const PREFIX = 'io.raditi.sandbox.'
+/**
+ * The leases of a turn (docs/plan/70-turn-without-time-limit.md, ВР5): containers created and
+ * never started, one per later deadline, named `raditi-turn-<taskId>-<turn>-lease-<deadline>`.
+ * The watchdog keeps a turn's container and the gateway of its attempt while the latest of them
+ * is ahead; only the trusted side that holds the Docker socket writes them.
+ */
+const LEASE_PREFIX = 'io.raditi.turnlease.'
 const OWNER = 'raditi'
 /** Outside the sandbox identity: a container adopted by its id need not be this runner's. */
 const RUNNER = 'io.raditi.runner'
@@ -78,6 +85,31 @@ const labelsOf = (
   [`${PREFIX}network`]: JSON.stringify(policy),
   ...(gatewayId ? { [`${PREFIX}gatewayId`]: gatewayId } : {}),
 })
+
+const leaseLabels = (labels: SandboxLabels, deadline: number, gatewayId?: string) => ({
+  [`${LEASE_PREFIX}owner`]: OWNER,
+  [`${LEASE_PREFIX}protocol`]: PROTOCOL,
+  [`${LEASE_PREFIX}taskId`]: labels.taskId,
+  [`${LEASE_PREFIX}turn`]: String(labels.turn),
+  [`${LEASE_PREFIX}deadline`]: String(deadline),
+  ...(gatewayId ? { [`${LEASE_PREFIX}gatewayId`]: gatewayId } : {}),
+})
+const leaseName = (labels: SandboxLabels, deadline: number) =>
+  `raditi-turn-${labels.taskId}-${labels.turn}-lease-${deadline}`
+const leaseFilter = (labels: SandboxLabels) => ({
+  label: [
+    `${LEASE_PREFIX}owner=${OWNER}`,
+    `${LEASE_PREFIX}protocol=${PROTOCOL}`,
+    `${LEASE_PREFIX}taskId=${labels.taskId}`,
+    `${LEASE_PREFIX}turn=${labels.turn}`,
+  ],
+})
+/** The deadline of a lease row named and labelled as this provider writes them; null otherwise. */
+function leaseDeadline(row: Docker.ContainerInfo, labels: SandboxLabels): number | null {
+  const deadline = Number(row.Labels?.[`${LEASE_PREFIX}deadline`])
+  if (!Number.isSafeInteger(deadline) || deadline < 1) return null
+  return row.Names?.includes(`/${leaseName(labels, deadline)}`) ? deadline : null
+}
 
 /**
  * Daemon flags for runsc (spec §8): gVisor keeps its own netstack (`network=sandbox`), refuses
@@ -178,7 +210,7 @@ export function createDockerSandboxProvider(
     const createdAt = new Date(info.Created)
     if (
       !Number.isFinite(createdAt.getTime()) ||
-      meta.deadline > createdAt.getTime() + MAX_SANDBOX_TURN_MS ||
+      meta.deadline > createdAt.getTime() + MAX_SANDBOX_LEASE_MS ||
       meta.deadline < createdAt.getTime() - 30_000
     )
       return null
@@ -286,7 +318,49 @@ export function createDockerSandboxProvider(
     const originalLabels = info.Config.Labels
     // Verified above: present exactly for gateway policies, and immutable with the labels.
     const { gatewayId } = meta
+    const image = info.Config.Image
+    const leases = () =>
+      bounded(docker.listContainers({ all: true, filters: leaseFilter(meta.labels) }))
+    const dropLeases = async (keep: (deadline: number) => boolean) => {
+      for (const row of await leases()) {
+        const deadline = leaseDeadline(row, meta.labels)
+        if (deadline === null || keep(deadline)) continue
+        await bounded(docker.getContainer(row.Id).remove({ force: true, v: true })).catch(
+          (error: unknown) => {
+            if (!isMissing(error)) throw commandError()
+          },
+        )
+      }
+    }
     return new DockerSandbox(container, docker, meta.labels, meta.deadline, {
+      lease: async (deadline) => {
+        await createOwned(
+          docker.createContainer({
+            name: leaseName(meta.labels, deadline),
+            Image: image,
+            User: SANDBOX_USER,
+            Entrypoint: ['/bin/false'],
+            Cmd: [],
+            Env: [],
+            Labels: { ...leaseLabels(meta.labels, deadline, gatewayId), ...runnerLabel },
+            HostConfig: {
+              ReadonlyRootfs: true,
+              Privileged: false,
+              CapDrop: ['ALL'],
+              SecurityOpt: ['no-new-privileges'],
+              NetworkMode: 'none',
+              RestartPolicy: { Name: 'no' },
+              AutoRemove: false,
+            },
+          }),
+          (created) => created.remove({ force: true, v: true }),
+        ).catch((error: unknown) => {
+          // The same deadline written twice: that lease is there already.
+          if (!hasStatus(error, 409)) throw commandError()
+        })
+        // Earlier leases only: a later one a racing renewal wrote stays.
+        await dropLeases((other) => other >= deadline)
+      },
       assertOwned: async () => {
         const current = await bounded(container.inspect())
         if (
@@ -298,8 +372,24 @@ export function createDockerSandboxProvider(
       },
       release: async () => {
         if (gatewayId !== undefined) await gateway!.release(gatewayId)
+        await dropLeases(() => false)
       },
     })
+  }
+
+  /**
+   * An adopted turn lives until the latest of its own deadline and its leases (ВР6): recovery
+   * takes the container over with the time the dead supervisor last granted it.
+   */
+  const withLeases = async <T extends { labels: SandboxLabels; deadline: number }>(meta: T) => {
+    const rows = await bounded(
+      docker.listContainers({ all: true, filters: leaseFilter(meta.labels) }),
+    )
+    const latest = Math.max(
+      meta.deadline,
+      ...rows.map((row) => leaseDeadline(row, meta.labels) ?? 0),
+    )
+    return { ...meta, deadline: latest }
   }
 
   return {
@@ -459,7 +549,7 @@ export function createDockerSandboxProvider(
       const found = await inspectById(id)
       if (!found) return null
       const meta = await inspectSafe(found.info)
-      return meta ? wrap(found.container, found.info, meta) : null
+      return meta ? wrap(found.container, found.info, await withLeases(meta)) : null
     },
     async getForRemoval(id) {
       const found = await inspectById(id)

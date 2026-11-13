@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import { zstdCompressSync } from 'node:zlib'
 
 import {
-  MAX_SANDBOX_TURN_MS,
+  MAX_SANDBOX_LEASE_MS,
   SANDBOX_SECRETS_DIR,
   type AgentDriverId,
   type AgentEvent,
@@ -84,6 +84,10 @@ export function sandboxSide() {
   const sandbox: Sandbox = {
     id: 'container1',
     labels: { ...labels, leaseEpoch: 1 },
+    deadline: Date.now() + 20 * 60_000,
+    extend: vi.fn(async (deadline: number) => {
+      ;(sandbox as { deadline: number }).deadline = Math.max(sandbox.deadline, deadline)
+    }),
     exec: vi.fn(async () => handle(0)),
     attach: vi.fn(async (_execId: string, cursor?: ExecCursor) => handle(cursor?.stdout ?? 0)),
     fs: { write: vi.fn(async () => {}), read: vi.fn(), list: vi.fn(), remove: vi.fn() },
@@ -157,7 +161,7 @@ export const prepareInput = (assignmentId: string): TurnPrepareInput => ({
   assignmentId,
   fence,
   sandbox: sandboxSpec(),
-  remainingMs: MAX_SANDBOX_TURN_MS,
+  remainingMs: MAX_SANDBOX_LEASE_MS,
   bundle: {
     baseSha,
     branch,

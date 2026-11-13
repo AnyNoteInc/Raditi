@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer'
 import { createHash, randomUUID } from 'node:crypto'
 
 import {
-  MAX_SANDBOX_TURN_MS,
+  MAX_SANDBOX_LEASE_MS,
   runnerReportSchema,
   SANDBOX_SECRETS_DIR,
   withoutTurnCredentials,
@@ -204,7 +204,7 @@ describe('TurnSupervisor on a runner', () => {
         env: {},
         secrets: [],
         network: { mode: 'none' },
-        hardTimeoutMs: MAX_SANDBOX_TURN_MS,
+        hardTimeoutMs: MAX_SANDBOX_LEASE_MS,
       },
       context: {
         taskId: labels.taskId,

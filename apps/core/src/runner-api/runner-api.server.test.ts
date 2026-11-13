@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer'
 import { createHash, randomUUID } from 'node:crypto'
 
 import {
-  MAX_SANDBOX_TURN_MS,
+  MAX_SANDBOX_LEASE_MS,
   runnerApiPaths,
   runnerBundlePath,
   runnerInboxPath,
@@ -99,7 +99,7 @@ async function start(binding = '') {
       turn: 1,
       executor: 'runner',
       plan: {} as TurnPlan,
-      remainingMs: MAX_SANDBOX_TURN_MS,
+      remainingMs: MAX_SANDBOX_LEASE_MS,
     }))!
     const bundle = Buffer.from('synthetic bundle bytes')
     const preparing = executor.prepare(
@@ -115,9 +115,9 @@ async function start(binding = '') {
           env: {},
           secrets: [],
           network: { mode: 'none' },
-          hardTimeoutMs: MAX_SANDBOX_TURN_MS,
+          hardTimeoutMs: MAX_SANDBOX_LEASE_MS,
         },
-        remainingMs: MAX_SANDBOX_TURN_MS,
+        remainingMs: MAX_SANDBOX_LEASE_MS,
         ...(repository
           ? {
               bundle: {
@@ -322,7 +322,7 @@ describe('RunnerApiServer', () => {
       containerId: 'container1',
     })
     const execution = await preparing
-    const launching = execution.launch(60_000)
+    const launching = execution.launch()
     const [launch] = await f.poll()
     await f.report(assignment.id, {
       type: 'running',

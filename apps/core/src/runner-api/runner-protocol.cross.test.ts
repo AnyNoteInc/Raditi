@@ -6,7 +6,7 @@ import { Buffer } from 'node:buffer'
 import { createHash, randomBytes } from 'node:crypto'
 
 import {
-  MAX_SANDBOX_TURN_MS,
+  MAX_SANDBOX_LEASE_MS,
   type SiteLeaseFence,
   type TurnOutputBatch,
   type TurnPlan,
@@ -96,7 +96,7 @@ const open = async (assignments: MemoryTurnAssignments) =>
     turn: 1,
     executor: 'runner',
     plan: {} as TurnPlan,
-    remainingMs: MAX_SANDBOX_TURN_MS,
+    remainingMs: MAX_SANDBOX_LEASE_MS,
   }))!
 
 /** Core's runner API over real HTTP, with the VM token of runner `sandbox-1`. */
@@ -133,7 +133,7 @@ describe('SandboxRunner with core', () => {
     startRunner(transport, side.executor)
     const assignment = await open(assignments)
     const execution = await before.executor.prepare(prepareInput(assignment.id), signal)
-    const agent = await execution.launch(60_000)
+    const agent = await execution.launch()
     const journal: TurnOutputBatch[] = []
     void agent.output(async (batch) => void journal.push(batch)).catch(() => {})
     await vi.waitFor(() => expect(journal).toHaveLength(1))
@@ -265,7 +265,7 @@ describe('A chat without a site on the runner (docs/plan/61-chats-first.md, К16
       turn: 1,
       executor: 'runner',
       plan: {} as TurnPlan,
-      remainingMs: MAX_SANDBOX_TURN_MS,
+      remainingMs: MAX_SANDBOX_LEASE_MS,
     }))!
     const path = '/workspace/inbox/0199a3f2-0000-7000-8000-0000000000f1/Смета.pdf'
     const body = Buffer.from('%PDF synthetic estimate')
@@ -323,14 +323,14 @@ describe('HttpRunnerTransport', () => {
       turn: 1,
       executor: 'runner',
       plan: {} as TurnPlan,
-      remainingMs: MAX_SANDBOX_TURN_MS,
+      remainingMs: MAX_SANDBOX_LEASE_MS,
     }))!
 
     const execution = await c.executor.prepare(
       prepareInput(assignment.id),
       new AbortController().signal,
     )
-    const agent = await execution.launch(60_000)
+    const agent = await execution.launch()
     const journal: TurnOutputBatch[] = []
     await agent.output(async (batch) => void journal.push(batch))
     await execution.quiesce()

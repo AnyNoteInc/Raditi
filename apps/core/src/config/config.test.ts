@@ -156,6 +156,17 @@ describe('loadConfig — development', () => {
     expect(runner.sandbox).toBeNull()
   })
 
+  it('bounds the passes of a workspace, and only them (plan 70, ВР13, ВР26)', () => {
+    expect(loadConfig(devEnv)).toMatchObject({ workspaceTurnLimit: 8 })
+    expect(loadConfig({ ...devEnv, WORKSPACE_TURN_LIMIT: '4' })).toMatchObject({
+      workspaceTurnLimit: 4,
+    })
+    for (const value of ['0', '65', 'many'])
+      expect(problemsOf({ ...devEnv, WORKSPACE_TURN_LIMIT: value })[0]).toMatch(
+        /^WORKSPACE_TURN_LIMIT:/,
+      )
+  })
+
   it('keeps the container of a completed turn warm for SANDBOX_WARM_MINUTES, only in core', () => {
     expect(loadConfig(devEnv).sandboxWarmMs).toBe(10 * 60_000)
     expect(loadConfig({ ...devEnv, SANDBOX_WARM_MINUTES: '3' }).sandboxWarmMs).toBe(3 * 60_000)

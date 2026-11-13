@@ -69,6 +69,11 @@ export interface SessionManagerDeps extends Omit<
 }
 
 const HOUR_MS = 3_600_000
+/**
+ * How long before its deadline a session looks whether its turn moved its row on (plan 70, ВР20):
+ * enough sweeps for a lease to be written before the watchdog's deadline.
+ */
+const EXTEND_AHEAD_MS = 10 * 60_000
 
 /** Where a session's browser may go and what it knows about its pages. */
 /** `ensure` as this worker reads it: the sign-in it takes, null when there is none or no site. */
@@ -338,7 +343,7 @@ export class SessionManager {
     for (const session of [...this.#sessions.values()]) {
       if (!session.live) continue
       session.keepAliveWhileWatched()
-      if (now() >= session.deadline) ends.push(session.close('expired'))
+      if (now() >= session.deadline - EXTEND_AHEAD_MS) ends.push(this.#extendOrExpire(session))
       else if (!session.connected()) ends.push(session.close('crashed'))
       else if (session.status === 'ready' && now() - session.lastActivity >= idleMs)
         ends.push(this.#closeIfIdle(session, idleMs))
@@ -369,6 +374,29 @@ export class SessionManager {
     }
     if (session.status !== 'ready' || now() - session.lastActivity < idleMs) return
     return session.close('idle')
+  }
+
+  /**
+   * A session near its deadline lives on while its turn does: core moves the row's `expires_at`
+   * with every renewal of the turn (plan 70, ВР20). At most `maxHours` from now at a time; past
+   * the deadline without a later row, or when the extension fails then, it is closed `expired`.
+   */
+  async #extendOrExpire(session: WorkerSession): Promise<unknown> {
+    const { now, store, warn, settings } = this.#deps
+    try {
+      const row = await withTimeout(
+        store.session(session.id),
+        settings.activityReadMs,
+        'the deadline of a browser session was not read in time',
+      )
+      if (row !== null && isBrowserSessionLive(row.status)) {
+        const until = Math.min(row.expiresAt.getTime(), now() + settings.maxHours * HOUR_MS)
+        if (until > session.deadline) await session.extend(until)
+      }
+    } catch (error) {
+      warn('browser_deadline_not_extended', error)
+    }
+    if (now() >= session.deadline) return session.close('expired')
   }
 
   /** At start: no session survives a restart, so what an earlier process left goes. */

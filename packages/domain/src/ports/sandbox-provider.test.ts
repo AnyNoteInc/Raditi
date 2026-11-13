@@ -7,7 +7,7 @@ import {
   leftNothing,
   MAX_SANDBOX_EGRESS_HOSTS,
   MAX_SANDBOX_RESOURCES,
-  MAX_SANDBOX_TURN_MS,
+  MAX_SANDBOX_LEASE_MS,
   SANDBOX_EGRESS_PORT,
   sandboxSpecSchema,
 } from './sandbox-provider.ts'
@@ -29,7 +29,7 @@ const valid = (): SandboxSpec => ({
   env: { HOME: '/agent-home/opencode', OPENCODE_DISABLE_AUTOUPDATE: '1', LANG: 'C.UTF-8' },
   secrets: [{ path: '/run/raditi/secrets/llm-key', value: 'sk-turn-key-0123456789abcdef' }],
   network: { mode: 'gateway', routes: ['llm', 'mcp'] },
-  hardTimeoutMs: MAX_SANDBOX_TURN_MS,
+  hardTimeoutMs: MAX_SANDBOX_LEASE_MS,
 })
 
 const rejects = (patch: Partial<SandboxSpec>) =>
@@ -39,7 +39,7 @@ describe('sandboxSpecSchema', () => {
   it('accepts a spec at the limits of CLAUDE.md rule 5', () => {
     expect(sandboxSpecSchema.parse(valid())).toEqual(valid())
     expect(MAX_SANDBOX_RESOURCES).toEqual({ cpu: 2, memoryMiB: 4096, pids: 512 })
-    expect(MAX_SANDBOX_TURN_MS).toBe(1_200_000)
+    expect(MAX_SANDBOX_LEASE_MS).toBe(1_200_000)
   })
 
   it('accepts less than the limits and no network at all', () => {
@@ -79,7 +79,7 @@ describe('sandboxSpecSchema', () => {
     rejects({ resources: { cpu: 2, memoryMiB: 4097, pids: 512 } })
     rejects({ resources: { cpu: 2, memoryMiB: 4096, pids: 513 } })
     rejects({ resources: { cpu: 0, memoryMiB: 4096, pids: 512 } })
-    rejects({ hardTimeoutMs: MAX_SANDBOX_TURN_MS + 1 })
+    rejects({ hardTimeoutMs: MAX_SANDBOX_LEASE_MS + 1 })
     rejects({ hardTimeoutMs: 0 })
   })
 

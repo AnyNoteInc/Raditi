@@ -245,6 +245,11 @@ export interface BrowserSessionRuntime {
   start(spec: BrowserSessionRuntimeSpec, signal?: AbortSignal): Promise<{ endpoint: string }>
   /** Removes the containers, the networks and their files; stopping twice is no error. */
   stop(sessionId: string): Promise<void>
+  /**
+   * Keeps the session past its deadline: a lease the host's watchdog honours, until `deadline`
+   * (epoch ms; docs/plan/70-turn-without-time-limit.md, ВР20). Never earlier than before.
+   */
+  extend(sessionId: string, deadline: number): Promise<void>
   /** Sessions this runtime holds anything of, for the collector. */
   list(): Promise<string[]>
 }

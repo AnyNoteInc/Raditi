@@ -99,6 +99,12 @@ export class FakeRuntime implements BrowserSessionRuntime {
   async list(): Promise<string[]> {
     return [...this.held]
   }
+
+  readonly extended: Array<{ sessionId: string; deadline: number }> = []
+
+  async extend(sessionId: string, deadline: number): Promise<void> {
+    this.extended.push({ sessionId, deadline })
+  }
 }
 
 // -----------------------------------------------------------------------------------------------

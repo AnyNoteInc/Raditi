@@ -233,7 +233,7 @@ export class WorkerSession {
   readonly id: string
   readonly taskId: string
   readonly siteId: string | null
-  readonly #spec: SessionSpec
+  #spec: SessionSpec
   readonly #context: SessionContext
   #status: BrowserSessionStatus = 'starting'
   #browser: CloudBrowserSession | null = null
@@ -309,6 +309,17 @@ export class WorkerSession {
 
   get deadline(): number {
     return this.#spec.deadline
+  }
+
+  /**
+   * Keeps the session past its deadline: its turn goes on and core moved its row on
+   * (docs/plan/70-turn-without-time-limit.md, ВР20). The containers first, with a lease the
+   * watchdog honours; never earlier than before.
+   */
+  async extend(deadline: number): Promise<void> {
+    if (!this.live || deadline <= this.#spec.deadline) return
+    await this.#context.runtime.extend(this.#spec.id, deadline)
+    if (deadline > this.#spec.deadline) this.#spec = { ...this.#spec, deadline }
   }
 
   get lastActivity(): number {

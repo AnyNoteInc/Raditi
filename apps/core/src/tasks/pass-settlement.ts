@@ -327,6 +327,27 @@ export class PassSettlement {
    * given back, `feed.cancelled` by its author, the preview taken down. Never with a release in
    * work (cancelWaitingTask).
    */
+  /**
+   * A pass the limit of its workspace kept from its claim (docs/plan/70-turn-without-time-limit
+   * .md, ВР13): the task stays `queued` for the attempt and waits for the agents, as a pass the
+   * pool sent back, and its reserve waits with it. `skipped` — it is no longer queued there.
+   */
+  async waitForAgents(pass: { taskId: string; attempt: number }): Promise<SettleAnswer> {
+    return this.#transaction(async (tx, now) => {
+      const rows = await tx.$queryRaw<Array<{ billable: boolean }>>`
+        UPDATE tasks SET waiting = 'agents', updated_at = now()
+        WHERE id = ${pass.taskId}::uuid AND status = 'queued' AND attempt = ${pass.attempt}
+        RETURNING billable`
+      const row = rows[0]
+      if (!row) throw new NotMoved()
+      if (row.billable)
+        await extendTaskHolds(tx, {
+          taskId: pass.taskId,
+          expiresAt: taskHoldExpiry(now, 'waiting'),
+        })
+    })
+  }
+
   async cancelWaiting(taskId: string): Promise<SettleAnswer> {
     const context = await this.#context(taskId)
     const cancel = context?.cancel

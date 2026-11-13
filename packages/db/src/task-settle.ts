@@ -89,6 +89,45 @@ export async function claimQueuedTask(
   return { turnNo: row.turn_no, modelClass, billable: row.billable }
 }
 
+const passClaimSchema = claimSchema.extend({
+  /** At most this many passes of one workspace at once (WORKSPACE_TURN_LIMIT). */
+  workspaceLimit: z.number().int().min(1).max(64),
+})
+
+/**
+ * As claimQueuedTask, while the workspace of the task runs fewer than `workspaceLimit` passes
+ * (docs/plan/70-turn-without-time-limit.md, ВР13): the count and the claim run under one lock
+ * of the workspace, so of nine passes that claim at once exactly eight go and none gives way for
+ * nothing. `full` — the task stays `queued` for the attempt, waiting for the agents; nothing is
+ * written then. null — as claimQueuedTask.
+ */
+export async function claimQueuedPass(
+  db: Pick<Prisma.TransactionClient, '$queryRaw'> & {
+    $transaction<T>(work: (tx: Tx) => Promise<T>): Promise<T>
+  },
+  input: TaskClaimInput & { workspaceLimit: number },
+): Promise<ClaimedTask | 'full' | null> {
+  const parsed = passClaimSchema.safeParse(input)
+  if (!parsed.success) throw badRequest('Invalid task claim')
+  const { taskId, attempt, workspaceLimit } = parsed.data
+  return db.$transaction(async (tx) => {
+    const [task] = await tx.$queryRaw<Array<{ workspace_id: string }>>`
+      SELECT workspace_id FROM tasks
+      WHERE id = ${taskId}::uuid AND status = 'queued' AND attempt = ${attempt}`
+    if (!task) return null
+    // Held to the commit: a claim after this one counts it, never both the other's old state.
+    await tx.$queryRaw`
+      SELECT 1 AS locked FROM pg_advisory_xact_lock(
+        hashtextextended(${`raditi:workspace-passes:${task.workspace_id}`}, 0))`
+    const [busy] = await tx.$queryRaw<Array<{ n: number }>>`
+      SELECT count(*)::int AS n FROM tasks
+      WHERE workspace_id = ${task.workspace_id}::uuid AND id <> ${taskId}::uuid
+        AND status IN ('preparing', 'running')`
+    if ((busy?.n ?? 0) >= workspaceLimit) return 'full' as const
+    return claimQueuedTask(tx, { taskId, attempt })
+  })
+}
+
 // ---------------------------------------------------------------------------------------------
 // The end of a pass: preparing / running → its outcome
 // ---------------------------------------------------------------------------------------------

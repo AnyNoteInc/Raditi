@@ -79,7 +79,7 @@ describe('loadBrowserConfig', () => {
       extraHosts: [],
       localSites: [],
       platformHosts: [],
-      session: { idleMinutes: 30, maxHours: 4, maxSessions: 8 },
+      session: { idleMinutes: 30, maxHours: 4, maxSessions: 1024 },
       stream: { maxFps: 12, quality: 70, window: 2 },
       runtime: { appEnv: 'development', runtime: 'runc', refusedSubnets: [] },
     })
@@ -209,7 +209,7 @@ describe('loadBrowserConfig', () => {
       'BROWSER_STREAM_QUALITY',
       'BROWSER_STREAM_WINDOW',
     ])
-      expect(problemsOf(devEnv({ [name]: '1000' }))[0]).toMatch(new RegExp(`^${name}: `))
+      expect(problemsOf(devEnv({ [name]: '100000' }))[0]).toMatch(new RegExp(`^${name}: `))
     expect(problemsOf(devEnv({ BROWSER_WORKER_HOST: 'localhost' }))).toEqual([
       'BROWSER_WORKER_HOST: must be an IP address',
     ])

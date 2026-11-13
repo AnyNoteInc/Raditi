@@ -429,13 +429,15 @@ describe('durable turn credentials', () => {
     expect(f.tx.llmKey.create).not.toHaveBeenCalled()
   })
 
-  it('requires the persisted assignment deadline and identity', async () => {
+  it('requires the persisted assignment identity and a grant no later than its deadline', async () => {
+    // A live turn moves its assignment's deadline on (plan 70, ВР3): the grant names the one it
+    // was given, which may be earlier, never later.
     const f = fixture()
     f.tx.turnAssignment.findFirst.mockResolvedValue({
       sessionId: f.ref.sessionId,
       firstEpoch: 1,
       leaseEpoch: 1,
-      deadlineAt: new Date(f.grant.deadlineAt.getTime() + 1),
+      deadlineAt: new Date(f.grant.deadlineAt.getTime() - 1),
     } as never)
     await expect(f.credentials.issue(f.ref, f.grant)).rejects.toMatchObject({ code: 'CONFLICT' })
     expect(f.secrets.kvCreateOnce).not.toHaveBeenCalled()

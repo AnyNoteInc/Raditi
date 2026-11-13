@@ -6,6 +6,7 @@ import {
   execLost,
   isDomainError,
   runEnvValues,
+  TURN_FINALIZE_MS,
   TURN_PUBLICATION_GRACE_MS,
   withTimeout,
   withTurnCredentials,
@@ -33,7 +34,7 @@ import {
 } from '@repo/domain'
 import { throttledLogger, type ThrottledLog } from '@repo/observability'
 
-import { holdForRecovery, LeaseGuard } from './lease-guard.ts'
+import { holdForRecovery, LeaseGuard, TURN_LEASE_MS, turnRenewal } from './lease-guard.ts'
 import type { LiveTurns } from './live-turns.ts'
 import { TurnAttempt } from './turn-attempt.ts'
 import {
@@ -301,7 +302,8 @@ export class TurnExecRecovery {
     if (!takeover) return this.#expireAfterGrace(assignment, turn, remainingMs())
     const owner = await this.#takeOver(assignment, turn, driver, takeover, remainingMs())
     if (!owner) return
-    if (owner.remainingMs <= 0) return this.#giveUp(assignment, turn, owner, 'timeout')
+    // Its last renewal ran out before this takeover: its container went with it (plan 70, ВР6).
+    if (owner.remainingMs <= 0) return this.#giveUp(assignment, turn, owner, 'lease_lost')
     // Held by its owner before any checkpoint: it already gave the agent up.
     const resumable =
       turn.lastPhase !== 'recovery' && (agentSteps.includes(step) || step === 'quiesced')
@@ -344,7 +346,7 @@ export class TurnExecRecovery {
       .takeOver({
         id: assignment.id,
         fence: assignment.fence,
-        ttlMs: Math.max(0, remainingMs) + TURN_PUBLICATION_GRACE_MS,
+        ttlMs: TURN_LEASE_MS,
         ...(takeover.runnerSession ? { runnerSession: takeover.runnerSession } : {}),
         countAttempt,
       })
@@ -354,10 +356,12 @@ export class TurnExecRecovery {
       return null
     }
     const { assignment: advanced, grant } = taken
+    // The turn has no time limit (plan 70, ВР6): recovery renews it like the supervisor did, and
+    // a resumed agent runs on. A turn past its last renewal is given up below.
     const guard = new LeaseGuard(
       grant,
       this.deps.leases,
-      Math.max(0, remainingMs),
+      remainingMs > 0 ? turnRenewal(this.deps.assignments, grant, assignment.turn) : 0,
       undefined,
       performance.now() - started,
     )
@@ -382,6 +386,9 @@ export class TurnExecRecovery {
     )
     attempt.assignment = advanced
     attempt.credentialRef = credentialRef(assignment)
+    guard.onRenewed((left) => {
+      void attempt.execution?.extend(left).catch(() => this.#logger.warn('turn_extend_failed'))
+    })
     return { grant, guard, attempt, remainingMs }
   }
 
@@ -455,6 +462,8 @@ export class TurnExecRecovery {
       )
       if (!execution) throw execLost('The turn container is gone')
       attempt.execution = execution
+      // At once, not at the next tick: the container has only what its last renewal left it.
+      await guard.renewNow()
       attempt.execId = turn.execId
       let events = turn.events
       if (turn.step !== 'quiesced') {
@@ -471,9 +480,12 @@ export class TurnExecRecovery {
         events = await attempt.follow(agent, turn.events)
       }
       resumed = true
+      // The agent ended: the steps after it have their own limit (plan 70, ВР7).
+      guard.finalize(TURN_FINALIZE_MS)
       // Quiesce and capture are idempotent: a quiesced turn repeats them.
       await attempt.complete(events, run.prepared)
     } catch (error) {
+      guard.finalize(TURN_FINALIZE_MS)
       if (resumed) attempt.failed(error)
       else if (guard.signal.aborted && guard.reason === 'timeout') attempt.giveUp('timeout')
       else if (isDomainError(error) && ['EXEC_LOST', 'CONFLICT'].includes(error.code))
@@ -559,7 +571,9 @@ export class TurnExecRecovery {
    */
   async #expire(assignment: TurnAssignment, turn: ReplayedTurn): Promise<void> {
     await this.#revoke(assignment)
-    const reason = turn.vacating ? (turn.reason ?? 'timeout') : 'timeout'
+    // Its renewals stopped longer than a lease ago: the platform lost it, it did not run out of
+    // time (plan 70, ВР1). `timeout` stays only on turns journaled so before.
+    const reason = turn.vacating ? (turn.reason ?? 'lease_lost') : 'lease_lost'
     const outcome = turn.vacating ? 'failed' : 'lost'
     await this.#journal(assignment, turn, 'failed', reason, outcome).catch(() => {})
     await this.#free(assignment)

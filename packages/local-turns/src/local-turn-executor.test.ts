@@ -86,6 +86,10 @@ async function fixture(
   const sandbox: Sandbox = {
     id: 'container2',
     labels,
+    deadline: Date.now() + 20 * 60_000,
+    extend: vi.fn(async (deadline: number) => {
+      ;(sandbox as { deadline: number }).deadline = Math.max(sandbox.deadline, deadline)
+    }),
     exec: vi.fn(async (spec: ExecSpec) => {
       if (spec.stdin) for await (const chunk of spec.stdin) void chunk
       calls.push(spec)

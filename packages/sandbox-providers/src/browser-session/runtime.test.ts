@@ -407,6 +407,34 @@ describe('Docker browser session runtime', () => {
     ).toBe(true)
   })
 
+  it('extends a session whose turn goes on with leases, and starting it again rebuilds nothing', async () => {
+    // docs/plan/70-turn-without-time-limit.md, ВР20: labels never change; a later deadline is a
+    // lease the watchdog honours, and the session itself stays as it was built.
+    const fake = daemon()
+    const runtime = createDockerBrowserSessionRuntime(config(), { client: fake.client })
+    const first = await runtime.start(spec())
+    await runtime.extend(sessionId, deadline + 3_600_000)
+    await runtime.extend(sessionId, deadline + 7_200_000)
+    // Never earlier than the latest one.
+    await runtime.extend(sessionId, deadline + 60_000)
+    const leases = fake.byRole('lease')
+    expect(leases).toHaveLength(1)
+    expect(leases[0]!.options).toMatchObject({
+      name: `raditi-browser-${sessionId}-lease-${deadline + 7_200_000}`,
+      Entrypoint: ['/bin/false'],
+      HostConfig: { NetworkMode: 'none', ReadonlyRootfs: true, CapDrop: ['ALL'] },
+      Labels: { 'io.raditi.browser.deadline': String(deadline + 7_200_000) },
+    })
+    const before = fake.events.length
+    expect(await runtime.start(spec())).toEqual(first)
+    expect(fake.events.slice(before).filter((event) => !event.startsWith('start'))).toEqual([])
+    await runtime.stop(sessionId)
+    expect(fake.containers.size).toBe(0)
+    await expect(runtime.extend(sessionId, deadline + 9_000_000)).rejects.toMatchObject({
+      code: 'CONFLICT',
+    })
+  })
+
   it('stops whole and twice, and lists nothing after', async () => {
     const fake = daemon()
     const runtime = createDockerBrowserSessionRuntime(config(), { client: fake.client })
