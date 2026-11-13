@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   enqueueAgentTurn,
+  enqueueAgentWaitingPasses,
   enqueueBrowserEnsure,
   enqueuePreviewBrowser,
   enqueuePreviewSync,
@@ -203,5 +204,36 @@ describe('enqueueSiteWaitingPasses', () => {
       enqueueSiteWaitingPasses({ ...writer, $queryRaw } as never, { siteId, tag: 'x:y' }),
     ).rejects.toThrow()
     expect($queryRaw).not.toHaveBeenCalled()
+  })
+})
+
+describe('enqueueAgentWaitingPasses', () => {
+  const workspaceId = '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a66'
+
+  // The tier is the only thing that sets the tariffs apart in the pool now (owner's answer of
+  // 13.11.2026, Л8 removed): a woken pass keeps its place among the tiers, and BullMQ takes a job
+  // without a priority before every one with it.
+  it('puts the passes that wait for the agents back with the priority of their tier', async () => {
+    const { writer, rows } = fakeWriter()
+    const $queryRaw = vi
+      .fn(tierAnswers('agency'))
+      .mockResolvedValueOnce([{ id: taskId.toUpperCase(), attempt: 3, request_id: 41n }])
+    const put = await enqueueAgentWaitingPasses({ ...writer, $queryRaw } as never, {
+      workspaceId,
+      limit: 8,
+      tag: `pass-${taskId}-1-4`,
+    })
+    expect(put).toBe(1)
+    expect(rows()).toEqual([
+      {
+        topic: 'agent-turns',
+        type: 'turn.run',
+        payload: { taskId, attempt: 3, requestEventId: '41', priority: 1 },
+        dedupeKey: `turn.run:${taskId}:3:41:retry:pass-${taskId}-1-4`,
+        availableAt: undefined,
+      },
+    ])
+    const sql = ($queryRaw.mock.calls[0]![0] as unknown as string[]).join('?')
+    expect(sql).toContain("t.status = 'queued' AND t.waiting = 'agents'")
   })
 })

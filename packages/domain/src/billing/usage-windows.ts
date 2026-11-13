@@ -21,9 +21,8 @@ export const usageWindowLengthMs: Readonly<Record<UsageWindowKind, number>> = Ob
 })
 
 /**
- * The tier of a workspace for the shared pool: what its live tariff is — the reserve of the pool
- * it starts in, its place in the queue, how many of its turns run at once. `none` — no paid
- * tariff (the gift, a pack).
+ * The tier of a workspace for the shared pool: what its live tariff is — its place in the queue
+ * and the windows of its work. `none` — no paid tariff (the gift, a pack).
  */
 export const workspaceTiers = ['none', 'start', 'business', 'agency'] as const
 export type WorkspaceTier = (typeof workspaceTiers)[number]
@@ -45,17 +44,6 @@ export const tierQueuePriority: Readonly<Record<WorkspaceTier, number>> = Object
   business: 2,
   start: 3,
   none: 4,
-})
-
-/**
- * The share of the pool, in percent, a new task of the tier leaves to the higher tiers (Л8): it
- * starts only while more of the pool is free than this, in both windows.
- */
-export const tierPoolReservePct: Readonly<Record<WorkspaceTier, number>> = Object.freeze({
-  none: 40,
-  start: 25,
-  business: 15,
-  agency: 5,
 })
 
 /**

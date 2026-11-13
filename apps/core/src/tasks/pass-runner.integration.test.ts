@@ -1342,29 +1342,60 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         expect(retried(queue)).toEqual([])
       })
 
-      // Plan 71, Л17: the reserve of the higher tiers is capacity that exists — a new task of a
-      // lower tier waits in the queue for the reset however far it is, and keeps its priority.
-      it('keeps a pass the reserve of the higher tiers holds back in the queue, with its priority', async () => {
+      // The chat of 13.11.2026: a pass the pool sent back woke the passes that wait for the
+      // agents as it ended — itself among them —, and ran again within a second, a new turn each
+      // time, for minutes. A pass that waited freed no place; its retry is the only one.
+      it.each([
+        ['a busy slot', () => subscriptionBusy(minutes(1))],
+        ['a pause', () => subscriptionWait(minutes(45), 'cooling')],
+        ['a busy site', () => siteBusy()],
+      ])('wakes nobody, itself included, when %s sends the pass back', async (_name, refusal) => {
         await rate()
         const dialog = await queued({ reserve: true })
+        // Another dialog of the same workspace waits for the agents as well.
+        const { workspaceId } = await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })
+        const other = await fixtures.task(workspaceId, { status: 'queued' })
+        await db.task.update({ where: { id: other.taskId }, data: { waiting: 'agents' } })
+        await insertFeedEvent(db, {
+          taskId: other.taskId,
+          row: {
+            type: 'feed.request',
+            payload: {
+              v: 1,
+              kind: 'first',
+              authorId: dialog.userId,
+              requestId: randomUUID(),
+              text: 'Поменяйте адрес в подвале',
+            },
+          },
+        })
+        const wakes = () =>
+          db.outboxEvent.count({
+            where: {
+              topic: 'agent-turns',
+              type: 'turn.run',
+              OR: [
+                { payload: { path: ['taskId'], equals: dialog.taskId } },
+                { payload: { path: ['taskId'], equals: other.taskId } },
+              ],
+            },
+          })
+        const before = await wakes()
         const job = { ...dialog.job, priority: 3 }
         const { passes, queue } = runner(async () => {
-          throw subscriptionWait(minutes(4 * 60 + 12), 'tier_reserve')
+          throw refusal()
         })
 
         await passes.run(job)
 
         expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
           status: 'queued',
-          waiting: 'agents',
         })
-        expect(queue.enqueue).toHaveBeenCalledWith(
-          'agent-turns',
-          'turn.run',
-          job,
-          expect.objectContaining({ delayMs: 600_000, priority: 3 }),
-        )
-        expect(await failure(dialog.taskId)).toEqual([])
+        expect(await wakes()).toBe(before)
+        // Its own retry, in the place of its tier (plan 71: the queue orders the tiers).
+        expect(retried(queue)).toEqual([
+          ['agent-turns', 'turn.run', job, expect.objectContaining({ priority: 3 })],
+        ])
       })
     })
 

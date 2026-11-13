@@ -112,8 +112,14 @@ export interface PassRunnerDependencies {
   now?: () => Date
   cancelPollMs?: number
   /** Counts what the pool told a pass (plan 71, §4.4): metrics without ids. */
-  pool?: { limitsOut(): void; tierWait(tier: string): void }
+  pool?: { limitsOut(): void }
 }
+
+/**
+ * How a pass that held a place left it: `ended` — its turn ran, or it was refused, cancelled or
+ * left to recovery; `sent_back` — the pool or the site sent it back to the queue before its turn.
+ */
+type PassEnd = 'ended' | 'sent_back'
 
 /** A retry of the pass a busy site or pool sent back, and when. */
 interface Retry {
@@ -221,11 +227,16 @@ export class PassRunner {
       if (answer === 'moved') await this.#requeue(job, { delayMs: RETRY_DELAY_MS.update })
       return
     }
+    let ended: PassEnd = 'ended'
     try {
-      await this.#turnOf(job, ref, billable, controller)
+      ended = await this.#turnOf(job, ref, billable, controller)
     } finally {
       release()
-      await this.#wakeAgents(job, ref.turnNo)
+      // Only a pass that ended frees a place for good. One the pool or the site sent back held
+      // its place for a moment and waits again — after the pool, among those it would wake:
+      // waking them ran it again at once, a new turn every second (the chat of 13.11.2026). Its
+      // retry is its only one; a pass refused while it held the place keeps its own retry too.
+      if (ended === 'ended') await this.#wakeAgents(job, ref.turnNo)
     }
   }
 
@@ -234,12 +245,12 @@ export class PassRunner {
     ref: PassRef,
     billable: boolean,
     controller: AbortController,
-  ): Promise<void> {
+  ): Promise<PassEnd> {
     const { settlement } = this.deps
     const supervisor = this.deps.supervisor
     if (!supervisor) {
       await settlement.settle(ref, { kind: 'refused', code: 'unavailable' })
-      return
+      return 'ended'
     }
 
     let plan: PassPlan
@@ -249,25 +260,22 @@ export class PassRunner {
       const code = feedFailureOf({ ...failureFactsOf(error), policyFlagged: false })
       this.#logger.warn(`pass_unplanned task=${job.taskId} code=${code} cause=${causeOf(error)}`)
       await settlement.settle(ref, { kind: 'refused', code })
-      return
+      return 'ended'
     }
     if (plan.kind === 'refused') {
       await settlement.settle(ref, { kind: 'refused', code: plan.code })
-      return
+      return 'ended'
     }
     if (plan.kind === 'ceiling') {
       await settlement.settle(ref, { kind: 'ceiling', question: plan.question })
-      return
+      return 'ended'
     }
-    if (plan.kind === 'branch_moved') {
-      await this.#branchMoved(job, ref, plan.update)
-      return
-    }
+    if (plan.kind === 'branch_moved') return this.#branchMoved(job, ref, plan.update)
     const browser = plan.requirements.browser
     if (await this.#cancelRequested(job)) controller.abort()
     if (controller.signal.aborted) {
       await this.#settle(ref, { kind: 'cancelled', turn: null }, browser)
-      return
+      return 'ended'
     }
     // The browser lives with the task, not with the turn (Б18), and starts with the agent's first
     // `web_*` call (docs/plan/61, К11): a live one only comes back to the agent here.
@@ -275,7 +283,7 @@ export class PassRunner {
       await this.deps.browser?.reclaim(job.taskId, controller.signal)
       if (controller.signal.aborted) {
         await this.#settle(ref, { kind: 'cancelled', turn: null }, true)
-        return
+        return 'ended'
       }
     }
 
@@ -309,10 +317,10 @@ export class PassRunner {
       this.#logger.warn(
         `pass_left_to_recovery task=${job.taskId} turn=${plan.turn} cause=${cause ?? 'unknown'}`,
       )
-      return
+      return 'ended'
     }
     const turnNo = await this.#turnNo(job.taskId)
-    if (turnNo === null) return
+    if (turnNo === null) return 'ended'
     // The sections of documents the chat wrote are checked with what only the turn knew (Ст19),
     // before the answer reaches the client: a document the answer speaks of shows what passed.
     if (ending.kind === 'completed' && refusesText)
@@ -337,8 +345,13 @@ export class PassRunner {
         outbox: outbox ?? null,
       })
     if (ending.kind === 'busy') {
-      if (answer === 'moved' && retry) await this.#requeue(job, retry)
-    } else await this.#wakeSite(job, turnNo)
+      // Another end of the task came first (a cancel, which wakes nobody): this one ended it.
+      if (answer !== 'moved') return 'ended'
+      if (retry) await this.#requeue(job, retry)
+      return 'sent_back'
+    }
+    await this.#wakeSite(job, turnNo)
+    return 'ended'
   }
 
   /**
@@ -432,14 +445,15 @@ export class PassRunner {
    * finishes from the branch as it stands (CandidateRebase); otherwise nothing can publish, and
    * the pass fails before a turn spends money.
    */
-  async #branchMoved(job: AgentTurnJob, ref: PassRef, update: string | null): Promise<void> {
+  async #branchMoved(job: AgentTurnJob, ref: PassRef, update: string | null): Promise<PassEnd> {
     this.#logger.warn(`pass_branch_moved task=${job.taskId} update=${update ?? 'none'}`)
     if (update === null) {
       await this.deps.settlement.settle(ref, { kind: 'refused', code: 'technical' })
-      return
+      return 'ended'
     }
     const answer = await this.deps.settlement.settle(ref, { kind: 'busy', waiting: 'site' })
-    if (answer !== 'moved') return
+    // Another end of the task came first (a cancel): nothing waits for this pass any more.
+    if (answer !== 'moved') return 'ended'
     const rebase = { taskId: job.taskId, requestEventId: update }
     await this.deps.queue
       .enqueue(AGENT_TURN_QUEUE, CANDIDATE_REBASE_JOB, rebase, {
@@ -447,6 +461,7 @@ export class PassRunner {
       })
       .catch(() => this.#logger.warn(`pass_update_requeue_failed task=${job.taskId}`))
     await this.#requeue(job, { delayMs: RETRY_DELAY_MS.update })
+    return 'sent_back'
   }
 
   /**
@@ -475,14 +490,8 @@ export class PassRunner {
         // told so and the dialog stays open, instead of a queue that looks short and lasts hours.
         // A busy pool names a minute, and a cooldown or a probe stays under the limit: they wait.
         const retryAt = this.#poolRetryAt(error.details)
-        // The reserve of the higher tiers (Л8) is capacity that exists: the pass waits in the
-        // queue however long, and is never told that the limits of the agent are out (Л17).
-        const waitReason = (error.details as { reason?: unknown } | undefined)?.reason
-        const reserved = typeof waitReason === 'string' && waitReason.startsWith('tier_reserve')
-        if (reserved) this.deps.pool?.tierWait(waitReason.split(':')[1] ?? 'none')
         if (
           error.code === 'SUBSCRIPTION_WAIT' &&
-          !reserved &&
           retryAt !== null &&
           poolWaitIsLimitsOut(retryAt, this.#now())
         ) {

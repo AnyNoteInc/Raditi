@@ -5,7 +5,6 @@ import { taskRefusal } from './errors.ts'
 import {
   noTariffWindowCredits,
   refusingWindow,
-  tierPoolReservePct,
   tierQueuePriority,
   usageWindowLengthMs,
   usageWindowRoom,
@@ -78,13 +77,12 @@ describe('windows of a workspace', () => {
     expect(() => refusingWindow([fiveHours('1'), fiveHours('2')], 1)).toThrow()
   })
 
-  it('names the tiers of the tariffs, their reserve and their place in the queue', () => {
+  it('names the tiers of the tariffs and their place in the queue', () => {
     expect(workspaceTierOfPlan(null)).toBe('none')
     expect(workspaceTierOfPlan('start')).toBe('start')
     expect(workspaceTierOfPlan('business')).toBe('business')
     expect(workspaceTierOfPlan('agency')).toBe('agency')
     expect(workspaceTierOfPlan('legacy-plan')).toBe('start')
-    expect(tierPoolReservePct).toEqual({ none: 40, start: 25, business: 15, agency: 5 })
     expect(tierQueuePriority).toEqual({ agency: 1, business: 2, start: 3, none: 4 })
   })
 })

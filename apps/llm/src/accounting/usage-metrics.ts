@@ -31,8 +31,8 @@ export class UsageMetrics {
 
   /**
    * The free share of each window over the accounts of a backend that were probed, 0…1: every
-   * account the role has seen, a paused one too — the pool's own reserve (core, pickAccount)
-   * counts only the eligible ones.
+   * account the role has seen, a paused one too — the selection of the pool (core, pickAccount)
+   * reads only the eligible ones.
    */
   #poolRemaining(): Map<string, number> {
     const sums = new Map<string, { left: number; size: number }>()

@@ -206,8 +206,8 @@
     {
       "id": 16,
       "type": "timeseries",
-      "title": "Лимиты пространств и ожидание запаса",
-      "description": "Отказы по окнам пространств (вызов и проход), ожидание запаса старших тарифов и проходы, кончившиеся «лимиты ИИ-агента закончились» (план 71).",
+      "title": "Лимиты пространств и пула",
+      "description": "Отказы по окнам пространств (вызов и проход) и проходы, кончившиеся «лимиты ИИ-агента закончились» (план 71).",
       "gridPos": { "x": 12, "y": 34, "w": 12, "h": 7 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -218,11 +218,6 @@
         },
         {
           "refId": "B",
-          "expr": "sum by (tier) (increase(raditi_pool_tier_wait_total[1h]))",
-          "legendFormat": "ждёт запаса {{tier}}"
-        },
-        {
-          "refId": "C",
           "expr": "sum(increase(raditi_pass_limits_out_total[1h]))",
           "legendFormat": "лимиты агента закончились"
         }

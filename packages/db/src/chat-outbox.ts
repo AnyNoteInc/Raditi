@@ -165,6 +165,8 @@ export async function enqueueAgentWaitingPasses(
       taskId: lower(row.id),
       attempt: row.attempt,
       requestEventId: row.request_id.toString(),
+      // A woken pass keeps the place of its tier: BullMQ takes a job without a priority first.
+      priority: await agentTurnPriority(tx, row.id),
     })
     if (
       await enqueueOutbox(tx, {
