@@ -84,6 +84,14 @@ done
 systemctl show docker.service -p After --value 2>/dev/null | grep -qw time-sync.target ||
   fail "docker.service must start after time-sync.target"
 
+# Published pages (docs/plan/69-pages.md, Ст3): their domain and the cookie secret of their
+# passwords rendered for preview
+pages=$(setting PAGES_BASE_DOMAIN)
+printf '%s\n' "$pages" | grep -Eqx '[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}' ||
+  fail "PAGES_BASE_DOMAIN must be the domain of published pages"
+grep -q '^PAGES_COOKIE_SECRET=..*' "$secrets/preview/app.env" 2>/dev/null ||
+  fail "$secrets/preview/app.env has no PAGES_COOKIE_SECRET: run host/platform-secrets.mjs seed and render"
+
 domain=$(setting APP_DOMAIN)
 if [ -n "$domain" ] && getent ahostsv6 "$domain" 2>/dev/null | grep -qv '^::ffff:'; then
   fail "$domain has an AAAA record"

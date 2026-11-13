@@ -135,6 +135,15 @@ for name in SANDBOX_IMAGE SANDBOX_GATEWAY_IMAGE SANDBOX_NETWORK_GUARD_IMAGE BROW
 done
 rm -rf "$config"
 
+# OpenBao must answer before the secrets are seeded: a sealed one is named here, not as a login error
+[ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8200/v1/sys/health)" = 200 ] ||
+  { echo "deploy: OpenBao is not unsealed and active" >&2; exit 1; }
+# A generated secret this release added to platform-secrets.mjs (PAGES_COOKIE_SECRET, 13.11.2026):
+# seed only adds what is missing and never rewrites a value. preview gets no SecretID, so its
+# files are rendered again with nothing revoked; up -d recreates it when its compose changed.
+/usr/local/lib/raditi/platform-secrets.mjs seed >/dev/null
+/usr/local/lib/raditi/platform-secrets.mjs render preview >/dev/null
+
 "$app/server/preflight.sh"
 
 # 5. Data services, buckets, migrations, seeds; from the migrations on there is no way back by files

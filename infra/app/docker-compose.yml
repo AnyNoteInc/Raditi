@@ -162,6 +162,15 @@ services:
       - --certificatesresolvers.preview.acme.certificatesduration=${ACME_CERT_HOURS:-2160}
       # The DNS of the preview domain: Yandex Cloud DNS here, reg.ru on the single server (infra/server)
       - --certificatesresolvers.preview.acme.dnschallenge.provider=${PREVIEW_DNS_PROVIDER:-yandexcloud}
+      # The wildcard of published pages (traefik/dynamic/pages.yml, docs/plan/69-pages.md, Ст3):
+      # DNS-01 by the same DNS provider account, its certificates in a store of their own. Nothing
+      # uses it until Traefik is given PAGES_BASE_DOMAIN.
+      - --certificatesresolvers.pages.acme.email=${ACME_EMAIL:?Set ACME_EMAIL}
+      - --certificatesresolvers.pages.acme.caserver=${ACME_CA_SERVER:-https://acme-v02.api.letsencrypt.org/directory}
+      - --certificatesresolvers.pages.acme.storage=/acme/pages-${ACME_STORAGE_FILE:-acme.json}
+      - --certificatesresolvers.pages.acme.keytype=EC256
+      - --certificatesresolvers.pages.acme.certificatesduration=${ACME_CERT_HOURS:-2160}
+      - --certificatesresolvers.pages.acme.dnschallenge.provider=${PREVIEW_DNS_PROVIDER:-yandexcloud}
     environment:
       APP_DOMAIN: ${APP_DOMAIN:?Set APP_DOMAIN}
     ports:

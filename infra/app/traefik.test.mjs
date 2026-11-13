@@ -136,9 +136,9 @@ function rendered(baseDomain) {
     .replaceAll('{{ env "PREVIEW_BASE_DOMAIN" }}', baseDomain)
 }
 
-test('the edge has two route files: the cabinet (web only) and previews', () => {
+test('the edge has three route files: the cabinet (web only), previews and published pages', () => {
   const files = readdirSync(new URL('./traefik/dynamic/', import.meta.url)).sort()
-  assert.deepEqual(files, ['preview.yml', 'raditi.yml'])
+  assert.deepEqual(files, ['pages.yml', 'preview.yml', 'raditi.yml'])
   assert.doesNotMatch(code, /preview|8090|HostRegexp/i)
 })
 
@@ -175,4 +175,77 @@ test('previews: exactly their hosts, one label under the base, to the gateway ro
     'site-abcd1234-chat-ef5678.raditi.ru',
   ])
     assert.doesNotMatch(name, host, name)
+})
+
+// --- Published pages: traefik/dynamic/pages.yml (docs/plan/69-pages.md, Ст3, Ст4) ---------------
+
+const pageRoutes = readFileSync(new URL('./traefik/dynamic/pages.yml', import.meta.url), 'utf8')
+
+function renderedPages(baseDomain) {
+  const guarded = /^# \{\{ if env "PAGES_BASE_DOMAIN" \}\}\n([\s\S]*)^# \{\{ end \}\}\n$/m.exec(
+    pageRoutes,
+  )
+  assert.ok(guarded, 'the whole file is guarded by PAGES_BASE_DOMAIN')
+  const outside = pageRoutes.replace(guarded[0], '')
+  assert.ok(outside.split('\n').every((line) => line === '' || line.startsWith('# ')))
+  assert.doesNotMatch(outside, /\{\{/)
+  if (!baseDomain) return ''
+  return guarded[1]
+    .replaceAll(
+      '{{ env "PAGES_BASE_DOMAIN" | replace "." "\\\\." }}',
+      baseDomain.replaceAll('.', '\\.'),
+    )
+    .replaceAll('{{ env "PAGES_BASE_DOMAIN" }}', baseDomain)
+}
+
+test('without PAGES_BASE_DOMAIN the pages file routes nothing and orders no certificate', () => {
+  assert.equal(renderedPages(''), '')
+})
+
+test('pages: exactly their hosts, one label of 26 base32 letters, to the pages listener alone', () => {
+  const yaml = renderedPages('pages.raditi.ru')
+  assert.doesNotMatch(yaml, /\{\{|\}\}/)
+  assert.deepEqual(
+    [...yaml.matchAll(/url: '([^']+)'/g)].map(([, url]) => url),
+    ['http://preview:8092'],
+  )
+  assert.doesNotMatch(yaml, /web:3000|core|8081|8083|mcp|8082|llm|8084|8090|middlewares/i)
+  assert.match(yaml, /entryPoints: \[websecure\]/)
+  assert.match(yaml, /certResolver: pages$/m)
+  assert.match(yaml, /domains: \[\{ main: '\*\.pages\.raditi\.ru' \}\]/)
+  const rule = /rule: 'HostRegexp\(`([^`]+)`\)'/.exec(yaml)?.[1]
+  assert.ok(rule)
+  const host = new RegExp(rule)
+  assert.match('abcdefghijklmnopqrstuvwxyz.pages.raditi.ru', host)
+  assert.match('a2345672345672345672345672.pages.raditi.ru', host)
+  for (const name of [
+    'pages.raditi.ru',
+    'raditi.ru',
+    'www.pages.raditi.ru',
+    'abcdefghijklmnopqrstuvwxy.pages.raditi.ru',
+    'abcdefghijklmnopqrstuvwxyz0.pages.raditi.ru',
+    'abcdefghijklmnopqrstuvwxy1.pages.raditi.ru',
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZ.pages.raditi.ru',
+    'x.abcdefghijklmnopqrstuvwxyz.pages.raditi.ru',
+    'abcdefghijklmnopqrstuvwxyz.pages.raditi.ru.evil.ru',
+    'abcdefghijklmnopqrstuvwxyzxpagesxraditi.ru',
+    'site-abcd1234-chat-ef5678.raditi-preview.ru',
+  ])
+    assert.doesNotMatch(name, host, name)
+})
+
+test('the resolver of pages issues their wildcard by DNS-01 into a store of its own', () => {
+  const compose = readFileSync(new URL('./docker-compose.yml', import.meta.url), 'utf8')
+  const flags = [...compose.matchAll(/--certificatesresolvers\.pages\.acme\.([a-z.]+)=(\S+)/g)].map(
+    ([, key, value]) => [key, value],
+  )
+  assert.deepEqual(Object.fromEntries(flags), {
+    email: '${ACME_EMAIL:?Set',
+    caserver: '${ACME_CA_SERVER:-https://acme-v02.api.letsencrypt.org/directory}',
+    storage: '/acme/pages-${ACME_STORAGE_FILE:-acme.json}',
+    keytype: 'EC256',
+    certificatesduration: '${ACME_CERT_HOURS:-2160}',
+    'dnschallenge.provider': '${PREVIEW_DNS_PROVIDER:-yandexcloud}',
+  })
+  assert.doesNotMatch(compose, /certificatesresolvers\.pages\.acme\.httpchallenge/)
 })
