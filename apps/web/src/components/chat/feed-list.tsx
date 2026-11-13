@@ -26,7 +26,6 @@ import {
   feedFailureOpenText,
   feedFileLeftText,
   feedDocLeftText,
-  feedDocText,
   feedPageLeftText,
   feedFilesChangedText,
   feedLiveText,
@@ -93,6 +92,7 @@ import {
   type QuestionRow,
   type StepRow,
 } from './feed-model'
+import { DocRevisions, docRevisionsOf, FeedDoc } from './feed-doc'
 import { FeedFile } from './feed-file'
 import { FeedPage } from './feed-page'
 import { FeedScreenshot } from './feed-screenshot'
@@ -1084,10 +1084,10 @@ function RowView({
       )
     case 'feed.page_left':
       return <Note text={feedPageLeftText(row)} />
-    // A document the agent writes (docs/plan/69-pages.md, Ст22): a line until the live card of 69.9;
-    // a change of it is a signal for that card, nothing to show by itself.
+    // A document the agent writes (docs/plan/69-pages.md, Ст22): its live card; a change of it is a
+    // signal the card keeps up with, nothing to show by itself.
     case 'feed.doc':
-      return <Note text={feedDocText()} />
+      return <FeedDoc docId={row.docId} />
     case 'feed.doc_touch':
       return null
     case 'feed.doc_left':
@@ -1145,57 +1145,63 @@ export function FeedList({
   // The rows of the first paint stay still; a row that arrives later rises into its place. The
   // animation plays once, when its element mounts: later renders do not start it again.
   const [initial] = useState(() => new Set(entries.map((entry) => entry.key)))
+  // The documents of the chat read themselves again when a change of them comes (Ст22).
+  const revisions = docRevisionsOf(
+    rows as readonly { type: string; docId?: string; revision?: number }[],
+  )
   return (
-    <Box
-      component="ol"
-      aria-label="Сообщения чата"
-      sx={{
-        m: 0,
-        p: 0,
-        listStyle: 'none',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: { xs: 3, md: 4 },
-      }}
-    >
-      {entries.map((entry) => (
-        <Box
-          component="li"
-          key={entry.key}
-          // Where the dialog keeps its place when the area around the rows changes (docs/plan/59,
-          // И19): the row at the top of the screen stays there.
-          data-feed-row=""
-          sx={{
-            display: 'flex',
-            flexDirection: 'column',
-            minWidth: 0,
-            ...(initial.has(entry.key) ? {} : riseIn),
-          }}
-        >
-          {entry.kind === 'worked' ? (
-            <Worked
-              steps={entry.steps}
-              seconds={entry.seconds}
-              activity={activityOf ? () => activityOf(entry.turn) : undefined}
-              details={details}
-            />
-          ) : (
-            <RowView
-              row={entry.row}
-              now={now}
-              siteUrl={siteUrl}
-              openQuestionId={openQuestionId}
-              liveCandidateId={liveCandidateId}
-              retryId={retryId}
-              commands={commands}
-              undo={undo}
-              actions={actions}
-              filesOf={filesOf}
-            />
-          )}
-        </Box>
-      ))}
-    </Box>
+    <DocRevisions.Provider value={revisions}>
+      <Box
+        component="ol"
+        aria-label="Сообщения чата"
+        sx={{
+          m: 0,
+          p: 0,
+          listStyle: 'none',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: { xs: 3, md: 4 },
+        }}
+      >
+        {entries.map((entry) => (
+          <Box
+            component="li"
+            key={entry.key}
+            // Where the dialog keeps its place when the area around the rows changes (docs/plan/59,
+            // И19): the row at the top of the screen stays there.
+            data-feed-row=""
+            sx={{
+              display: 'flex',
+              flexDirection: 'column',
+              minWidth: 0,
+              ...(initial.has(entry.key) ? {} : riseIn),
+            }}
+          >
+            {entry.kind === 'worked' ? (
+              <Worked
+                steps={entry.steps}
+                seconds={entry.seconds}
+                activity={activityOf ? () => activityOf(entry.turn) : undefined}
+                details={details}
+              />
+            ) : (
+              <RowView
+                row={entry.row}
+                now={now}
+                siteUrl={siteUrl}
+                openQuestionId={openQuestionId}
+                liveCandidateId={liveCandidateId}
+                retryId={retryId}
+                commands={commands}
+                undo={undo}
+                actions={actions}
+                filesOf={filesOf}
+              />
+            )}
+          </Box>
+        ))}
+      </Box>
+    </DocRevisions.Provider>
   )
 }
 

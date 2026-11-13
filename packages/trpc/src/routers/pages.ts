@@ -2,6 +2,7 @@ import { pageKinds, pageLimits, pageTitleSchema } from '@repo/domain'
 import { z } from 'zod'
 
 import {
+  cabinetDocument,
   listCabinetPages,
   restoreCabinetPage,
   setCabinetPagePassword,
@@ -38,6 +39,37 @@ export const pagesRouter = router({
       if (address === null) return { enabled: false, pages: [] }
       return { enabled: true, pages: await listCabinetPages(ctx.prisma, address, ctx.user.id) }
     }),
+
+  /** A document for its live card and its full view: checked text only (Ст19, Ст22). */
+  doc: consentedProcedure
+    .input(z.strictObject({ docId: z.uuid() }))
+    .output(
+      z.strictObject({
+        docId: z.uuid(),
+        title: z.string(),
+        version: z.number().int().min(0),
+        revision: z.number().int().min(1),
+        progress: z.strictObject({
+          written: z.number().int().min(0),
+          total: z.number().int().min(0),
+        }),
+        sections: z.array(
+          z.strictObject({
+            key: z.string(),
+            intent: z.string(),
+            state: z.enum(['pending', 'unchecked', 'shown']),
+            heading: z.string().nullable(),
+            markdown: z.string().nullable(),
+          }),
+        ),
+        page: z
+          .strictObject({ pageId: z.uuid(), state: z.string(), version: z.number().int().min(0) })
+          .nullable(),
+      }),
+    )
+    .query(({ ctx, input }) =>
+      cabinetDocument(ctx.prisma, { documentId: input.docId, userId: ctx.user.id }),
+    ),
 
   /** The password of a page; null clears it. A new one stops the viewers' former cookies. */
   setPassword: consentedProcedure

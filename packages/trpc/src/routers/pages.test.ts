@@ -12,6 +12,7 @@ import { legalDocuments } from '@repo/domain'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { createCaller } from '../router.ts'
+import { cabinetDocMarkdown } from '../services/pages.ts'
 import type { ChatContext } from '../services/chat/context.ts'
 import type { Context } from '../trpc.ts'
 
@@ -201,5 +202,79 @@ describe.skipIf(!databaseUrl)('pages router with PostgreSQL', () => {
       code: 'NOT_FOUND',
     })
     expect((await servedPage(db, page.slug))?.state).toBe('taken_down')
+  })
+
+  it('reads a document for its card: checked text only, nothing for a stranger', async () => {
+    const { owner, workspace, task } = await workspaceWithPage()
+    const document = await db.chatDocument.create({
+      data: {
+        workspaceId: workspace.id,
+        taskId: task.id,
+        title: 'Аудит',
+        sections: {
+          create: [
+            {
+              sectionKey: 'a',
+              intent: 'Итог',
+              position: 0,
+              state: 'written',
+              heading: 'Итог',
+              markdown: 'проверено',
+              writtenTaskId: task.id,
+              writtenTurn: 1,
+              checkedTurn: 1,
+            },
+            {
+              sectionKey: 'b',
+              intent: 'Метод',
+              position: 1,
+              state: 'written',
+              heading: 'Метод',
+              markdown: 'не проверено',
+              writtenTaskId: task.id,
+              writtenTurn: 2,
+            },
+            { sectionKey: 'c', intent: 'Источники', position: 2 },
+          ],
+        },
+      },
+    })
+    const read = await callerOf(owner).pages.doc({ docId: document.id })
+    expect(read.progress).toEqual({ written: 1, total: 3 })
+    expect(read.sections.map((each) => [each.key, each.state, each.markdown])).toEqual([
+      ['a', 'shown', 'проверено'],
+      ['b', 'unchecked', null],
+      ['c', 'pending', null],
+    ])
+    expect(JSON.stringify(read)).not.toContain('не проверено')
+    await expect(callerOf(await person()).pages.doc({ docId: document.id })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    })
+    await db.chatDocument.delete({ where: { id: document.id } })
+  })
+
+  it('names the downloaded Markdown by the title, without direction marks or leading dots', async () => {
+    const { owner, workspace, task } = await workspaceWithPage()
+    const document = await db.chatDocument.create({
+      data: {
+        workspaceId: workspace.id,
+        taskId: task.id,
+        title: '..Отчёт\u202Egpj.exe',
+        currentVersion: 1,
+      },
+    })
+    await db.chatDocumentVersion.create({
+      data: { documentId: document.id, no: 1, sizeBytes: 9, sha256: 'a'.repeat(64) },
+    })
+    await db.chatDocumentContent.create({
+      data: { documentId: document.id, versionNo: 1, markdown: '# Отчёт\n' },
+    })
+    const markdown = await cabinetDocMarkdown(db, { documentId: document.id, userId: owner.id })
+    expect(markdown).toMatchObject({ markdown: '# Отчёт\n', version: 1 })
+    expect(markdown!.name).toBe('Отчёт gpj.exe.md')
+    expect(
+      await cabinetDocMarkdown(db, { documentId: document.id, userId: (await person()).id }),
+    ).toBeNull()
+    await db.chatDocument.delete({ where: { id: document.id } })
   })
 })
