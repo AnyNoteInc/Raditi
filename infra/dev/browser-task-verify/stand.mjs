@@ -65,6 +65,7 @@ export const SCENARIO_IDS = Object.freeze([
   'N',
   'O',
   'P',
+  'Q',
   'K',
   'L',
   'M',
@@ -83,6 +84,7 @@ const NEEDS = Object.freeze({
   N: ['A'],
   O: ['A'],
   P: ['A'],
+  Q: ['A'],
   K: ['A'],
   L: ['A'],
   M: ['A'],
@@ -374,6 +376,16 @@ const workerOf = (ports, secrets) => ({
   BROWSER_WORKER_TOKEN: secrets.workerToken,
 })
 
+/**
+ * The domain of the agent's pages on the stand (docs/plan/69-pages.md, Ст3): `<slug>.pages.localhost`
+ * on the loopback port of the pages listener, which mcp names to the agent and web to the client.
+ */
+export const PAGES_DOMAIN = 'pages.localhost'
+const pagesOf = (ports) => ({
+  PAGES_BASE_DOMAIN: PAGES_DOMAIN,
+  PAGES_PUBLIC_PORT: String(loopbackPort(ports.pages)),
+})
+
 /** The name of the platform: the refusal comes before the name is ever looked up. */
 export const PLATFORM_HOST = 'raditi.ru'
 
@@ -422,6 +434,7 @@ export function appEnvironment(app, context) {
         ...base,
         ...vaultOf(vault, roles.mcp),
         ...workerOf(ports, secrets),
+        ...pagesOf(ports),
         MCP_PORT: String(loopbackPort(ports.mcp)),
         // What sandbox-gw rewrites Host to: the role accepts nothing else.
         MCP_ALLOWED_HOSTS: 'host.docker.internal',
@@ -441,6 +454,11 @@ export function appEnvironment(app, context) {
         APP_URL: origin(ports.web),
         BROWSER_STREAM_PORT: String(loopbackPort(ports.stream)),
         BROWSER_STREAM_HOST: '127.0.0.1',
+        // The third listener: the agent's pages, from the database (scenario Q).
+        ...pagesOf(ports),
+        PAGES_PORT: String(loopbackPort(ports.pages)),
+        PAGES_HOST: '127.0.0.1',
+        PAGES_COOKIE_SECRET: secrets.pagesCookie,
       }
     case 'browser':
       return {
@@ -518,6 +536,8 @@ export function webEnvironment(context, { dev = false } = {}) {
     REDIS_URL: context.redisUrl,
     METRICS_TOKEN: secrets.metrics,
     BROWSER_STREAM_PUBLIC_URL: `ws://127.0.0.1:${loopbackPort(ports.stream)}/v1/browser/stream`,
+    ...pagesOf(ports),
+    PAGES_SIGNING_SECRET: secrets.pagesSigning,
     ...s3Of(s3, ['inbox', 'artifacts']),
     ...vaultOf(vault, roles.web),
   }
