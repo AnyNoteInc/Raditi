@@ -9,7 +9,7 @@ import MenuItem from '@mui/material/MenuItem'
 import Popover from '@mui/material/Popover'
 import Select from '@mui/material/Select'
 import Typography from '@mui/material/Typography'
-import { PAGE_SANDBOX } from '@repo/domain/preview/hostname'
+import { PAGE_SANDBOX } from '@repo/domain/pages'
 import {
   chatDocumentsOf,
   chatImageAt,

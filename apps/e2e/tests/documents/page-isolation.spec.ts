@@ -2,7 +2,7 @@ import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 
 import { expect, test } from '@playwright/test'
-import { PAGE_SANDBOX, pageContentSecurityPolicy } from '@repo/domain/preview/hostname'
+import { PAGE_SANDBOX, pageResponseHeaders } from '@repo/domain/pages'
 
 // A page the agent made, framed by the cabinet from the domain of pages (docs/plan/67-agent-
 // documents.md, Д3), in a real browser: the frame and the very CSP web sends (page-response.ts),
@@ -11,7 +11,7 @@ import { PAGE_SANDBOX, pageContentSecurityPolicy } from '@repo/domain/preview/ho
 // nothing. Only Chromium and a free port: no database or web of the stand.
 
 const HOSTILE = `<!doctype html><html lang="ru"><meta charset="utf-8"><title>Отчёт</title>
-<h1>Отчёт</h1><img src="https://example.com/track.png"><form id="f" action="/steal" method="post"><input name="p" value="1"></form>
+<h1>Отчёт</h1><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><form id="f" action="/steal" method="post"><input name="p" value="1"></form>
 <script>
 const tried = {}
 try { tried.parent = String(parent.document.cookie) } catch (e) { tried.parent = 'blocked' }
@@ -33,13 +33,7 @@ test.beforeAll(async () => {
     hits.push(`${request.headers.host} ${request.method} ${request.url}`)
     const cabinet = `http://localhost:${port}`
     if (request.headers.host === `pages.localhost:${port}` && request.url === '/v/token') {
-      response.writeHead(200, {
-        'content-type': 'text/html; charset=utf-8',
-        'x-content-type-options': 'nosniff',
-        'content-security-policy': pageContentSecurityPolicy(cabinet, { scripts: true }),
-        'referrer-policy': 'no-referrer',
-        'cross-origin-opener-policy': 'same-origin',
-      })
+      response.writeHead(200, pageResponseHeaders('html', { framedBy: cabinet }))
       response.end(HOSTILE)
       return
     }

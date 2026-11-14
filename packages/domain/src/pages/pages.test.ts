@@ -17,7 +17,9 @@ import {
   pageHostOf,
   pageLimits,
   pagePublishArgumentsSchema,
+  pagePolicy,
   pageResponseHeaders,
+  PAGE_SANDBOX,
   pageSlugSchema,
   pageUrlOf,
   sectionMarkdownProblem,
@@ -126,6 +128,15 @@ describe('page headers', () => {
       expect(Object.keys(headers).map((name) => name.toLowerCase())).not.toContain('set-cookie')
     }
     expect(pageResponseHeaders('platform')['Cache-Control']).toBe('no-store')
+    // A page of a chat framed by the cabinet (plan 67, /v/): the same policy, framed by that
+    // origin alone and never stored.
+    const framed = pageResponseHeaders('html', { framedBy: 'https://raditi.ru' })
+    expect(framed['Content-Security-Policy']).toBe(
+      PAGE_CSP.replace("frame-ancestors 'none'", 'frame-ancestors https://raditi.ru'),
+    )
+    expect(framed['Cache-Control']).toBe('no-store')
+    expect(PAGE_CSP).toBe(pagePolicy('html'))
+    expect(PAGE_CSP.split('; ')[0]).toBe(`sandbox ${PAGE_SANDBOX}`)
     expect(PAGE_ROBOTS_TXT).toBe('User-agent: *\nDisallow: /\n')
   })
 })
