@@ -6,6 +6,8 @@ import {
 } from '@repo/db'
 import { checkSectionText, isDomainError, type PageRefusalReason } from '@repo/domain'
 
+import type { PagePublications } from './page-publications.ts'
+
 // The end of a turn for the documents of its chat (docs/plan/69-pages.md, Ст19, Ст22): every section
 // the chat wrote and core has not checked yet — this turn's and those a failed turn left — is read
 // against the keys of the turn and the values of the client's variables, which only the turn holds
@@ -13,13 +15,15 @@ import { checkSectionText, isDomainError, type PageRefusalReason } from '@repo/d
 // intents of the chat's documents, which the client sees at once. A passed section becomes
 // visible, a refused one a placeholder again, a refused title or intent neutral, a `doc_finish`
 // waiting becomes the next version; the card is told by `feed.doc_touch`, what was sent back by
-// `feed.doc_left` — never why.
+// `feed.doc_left` — never why. Then the chat's publications of documents (`page_publish({ docId })`)
+// come true or are told, by `PagePublications.publishDocuments`.
 
 export interface DocSectionsDependencies {
   db: Pick<
     PrismaClient,
     '$transaction' | 'chatDocument' | 'chatDocumentSection' | 'taskEvent' | 'taskTurn'
   >
+  pages?: Pick<PagePublications, 'publishDocuments'>
   logger?: { log(message: string): void; warn(message: string): void }
 }
 
@@ -73,12 +77,18 @@ export class DocSections {
           refusal: refusalOf(refusesText, [section.heading ?? '', section.markdown ?? '']),
         })),
       })
-      if (settled.length === 0) return
       const turnRow = await db.taskTurn.findFirst({
         where: { taskId, turnNo: turn },
         select: { id: true },
       })
       const turnId = turnRow?.id ?? null
+      const refusedDocuments = new Set(
+        settled.filter((document) => document.refused > 0).map((document) => document.documentId),
+      )
+      if (settled.length === 0) {
+        await this.#deps.pages?.publishDocuments(taskId, turnId, refusedDocuments)
+        return
+      }
       for (const document of settled) {
         await insertFeedEvent(db, {
           taskId,
@@ -108,6 +118,7 @@ export class DocSections {
       logger?.log(
         `doc_sections_settled task=${taskId} turn=${turn} documents=${settled.length} refused=${refused} versions=${versions}`,
       )
+      await this.#deps.pages?.publishDocuments(taskId, turnId, refusedDocuments)
     } catch (error) {
       logger?.warn(
         `doc_sections_failed task=${taskId} turn=${turn} reason=${isDomainError(error) ? error.code : 'unknown'}`,

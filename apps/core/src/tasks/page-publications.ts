@@ -1,4 +1,5 @@
 import { applyPageVersion, insertFeedEvent, type PrismaClient } from '@repo/db'
+import { markdownTitleOf, readingPage } from '@repo/doc-render'
 import { checkPageContent, isDomainError, type PageLeftReason } from '@repo/domain'
 
 // The pages a turn published (docs/plan/69-pages.md, Ст6, Ст8, Ст23): `page_publish` reserved
@@ -7,10 +8,12 @@ import { checkPageContent, isDomainError, type PageLeftReason } from '@repo/doma
 // the file never came or did not pass. The outbox was scanned for the keys of the turn and the
 // values of the client's variables before it got here (`readOutboxArchive({ refused })`).
 // A reservation is closed and its row written in one transaction: whoever closes it tells it,
-// once, and a reservation already closed is never told again.
+// once, and a reservation already closed is never told again. A `.md` file and a document are
+// drawn into a page for reading by @repo/doc-render (Ст11) once, here: the page server only
+// serves its bytes.
 
 export interface PagePublicationsDependencies {
-  db: Pick<PrismaClient, '$transaction' | 'pageReservation' | 'taskEvent'>
+  db: Pick<PrismaClient, '$transaction' | 'chatDocument' | 'pageReservation' | 'taskEvent'>
   logger?: { log(message: string): void; warn(message: string): void }
 }
 
@@ -20,7 +23,7 @@ export interface FileReservation {
   slug: string
   kind: string
   title: string
-  fileName: string
+  fileName: string | null
   outcome: string | null
   versionNo: number | null
 }
@@ -62,8 +65,9 @@ export class PagePublications {
 
   /**
    * The file of a reservation: its next version, or a refusal. Never throws. Returns whether the
-   * file was taken: one the pages cannot draw yet goes on as a file of the chat. A reservation
-   * done before (a delivery repeated after a crash) only gets the row it may lack.
+   * file was taken: one the pages cannot draw goes on as a file of the chat. A reservation done
+   * before (a delivery repeated after a crash) only gets the row it may lack. A `.md` file is
+   * checked as the agent wrote it, then drawn into a page for reading.
    */
   async publish(
     reservation: FileReservation,
@@ -76,9 +80,8 @@ export class PagePublications {
       return true
     }
     if (reservation.outcome !== null) return true
-    // Markdown and documents are drawn to a reading page by @repo/doc-render (slice 69.5): until
-    // then the file reaches the chat as a file, and the page is told not to have come.
-    if (reservation.kind !== 'html') {
+    // A file is HTML or Markdown; a page of a document gets no file.
+    if (reservation.kind !== 'html' && reservation.kind !== 'markdown') {
       await this.left(reservation, 'failed', context)
       return false
     }
@@ -90,11 +93,27 @@ export class PagePublications {
       await this.left(reservation, 'refused', context)
       return true
     }
+    // The heading of a `.md` page is the file's own, which the outbox scan read — never the title
+    // of the reservation, which no scan of the turn's keys and the client's values read. What is
+    // drawn is checked once more: it is what the viewer gets.
+    let content = bytes
+    if (reservation.kind === 'markdown') {
+      const markdown = new TextDecoder().decode(bytes)
+      content = drawn(markdownTitleOf(markdown) ?? 'Документ', markdown)
+      const own = checkPageContent(content)
+      if (!own.ok) {
+        logger?.warn(
+          `page_refused task=${context.taskId} turn=${context.turn} reason=${own.reason}`,
+        )
+        await this.left(reservation, 'refused', context)
+        return true
+      }
+    }
     let version: number
     try {
       ;({ version } = await applyPageVersion(db, {
         pageId: reservation.pageId,
-        bytes,
+        bytes: content,
         source: 'outbox',
         title: reservation.title,
         taskId: context.taskId,
@@ -114,6 +133,82 @@ export class PagePublications {
       logger?.warn(`page_row_failed task=${context.taskId} turn=${context.turn}`),
     )
     return true
+  }
+
+  /**
+   * The publications of documents of a chat (`page_publish({ docId })`, Ст7, Ст8), at the end of its
+   * turn, after its sections settled: an open one whose document has a version gets it drawn as
+   * the next version of its page; one whose document this end of turn sent sections back for
+   * (`refusedDocuments`) is told `refused`; the rest stays open — the page answers «Документ ещё
+   * пишется» — for an end of a turn that makes the version. Never throws.
+   */
+  async publishDocuments(
+    taskId: string,
+    turnId: string | null,
+    refusedDocuments: ReadonlySet<string>,
+  ): Promise<void> {
+    const { db, logger } = this.#deps
+    try {
+      const open = await db.pageReservation.findMany({
+        where: { taskId, documentId: { not: null }, outcome: null },
+        orderBy: { createdAt: 'asc' },
+        include: { page: { select: { slug: true, kind: true } } },
+      })
+      for (const row of open) {
+        const reservation: FileReservation = {
+          id: row.id,
+          pageId: row.pageId,
+          slug: row.page.slug,
+          kind: row.page.kind,
+          title: row.title,
+          fileName: null,
+          outcome: row.outcome,
+          versionNo: row.versionNo,
+        }
+        const where = { taskId, turnId }
+        if (refusedDocuments.has(row.documentId!)) {
+          await this.left(reservation, 'refused', where)
+          continue
+        }
+        const document = await db.chatDocument.findUnique({
+          where: { id: row.documentId! },
+          select: { title: true, content: { select: { markdown: true } } },
+        })
+        if (!document?.content) continue
+        // Its title and sections passed the end of a turn; the page drawn of them is checked too.
+        const bytes = drawn(document.title, document.content.markdown)
+        const verdict = checkPageContent(bytes)
+        if (!verdict.ok) {
+          logger?.warn(`page_refused task=${taskId} turn=${row.turnNo} reason=${verdict.reason}`)
+          await this.left(reservation, 'refused', where)
+          continue
+        }
+        let version: number
+        try {
+          ;({ version } = await applyPageVersion(db, {
+            pageId: row.pageId,
+            bytes,
+            source: 'doc',
+            title: row.title,
+            taskId,
+            turnNo: row.turnNo,
+            reservationId: row.id,
+          }))
+        } catch (error) {
+          logger?.warn(
+            `page_publish_failed task=${taskId} turn=${row.turnNo} reason=${isDomainError(error) ? error.code : 'unknown'}`,
+          )
+          await this.left(reservation, 'failed', where)
+          continue
+        }
+        logger?.log(`page_published task=${taskId} turn=${row.turnNo} version=${version}`)
+        await this.#row(reservation, version, where).catch(() =>
+          logger?.warn(`page_row_failed task=${taskId} turn=${row.turnNo}`),
+        )
+      }
+    } catch {
+      logger?.warn(`page_documents_failed task=${taskId}`)
+    }
   }
 
   /**
@@ -190,4 +285,9 @@ export class PagePublications {
       },
     })
   }
+}
+
+/** The page for reading of a text: drawn by the very rules of the cabinet's tab (Ст11). */
+function drawn(title: string, markdown: string): Uint8Array {
+  return new TextEncoder().encode(readingPage({ title, markdown }))
 }

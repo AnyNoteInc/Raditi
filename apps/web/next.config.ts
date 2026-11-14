@@ -67,6 +67,7 @@ const nextConfig: NextConfig = {
     '@repo/auth',
     '@repo/billing',
     '@repo/db',
+    '@repo/doc-render',
     '@repo/domain',
     '@repo/mail',
     '@repo/notifications',

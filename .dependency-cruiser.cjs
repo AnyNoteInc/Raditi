@@ -11,7 +11,8 @@ const ADAPTERS =
 // A leaf: imports nothing of the repository. The apps import it; no tier rule of a package
 // allows it.
 const LEAVES = 'ip-address'
-const SERVICES = 'auth|notifications|billing|local-turns|turn-keys|site-content|browser-link'
+const SERVICES =
+  'auth|notifications|billing|local-turns|turn-keys|site-content|browser-link|doc-render'
 // The frame and runtime of the apps (process start and stop, Nest wiring, health):
 // app-side code that lives in a package, so it may use observability, which no library package may.
 const RUNTIME = 'app-bootstrap|service-runtime'
@@ -204,6 +205,39 @@ module.exports = {
       },
     },
     {
+      name: 'doc-render-tier',
+      comment:
+        'doc-render draws the Markdown of the agent into HTML by one set of rules (docs/plan/69-pages.md, Ст11): it builds on the document rules of domain alone (the network guard of its tests is test support).',
+      severity: 'error',
+      from: { path: '^packages/doc-render/' },
+      to: {
+        path: '^packages/',
+        pathNot: [
+          '^packages/(domain|doc-render)/',
+          '^packages/app-bootstrap/src/testing/',
+          TOOLING,
+        ],
+      },
+    },
+    {
+      name: 'doc-render-npm',
+      comment:
+        'doc-render is React, its server renderer, react-markdown and remark-gfm (Ст11): no MUI, no input or output, no unified pipeline of its own.',
+      severity: 'error',
+      from: { path: '^packages/doc-render/src/', pathNot: '\\.test\\.ts$' },
+      to: {
+        dependencyTypesNot: ['local', 'core'],
+        pathNot: [
+          '^packages/(domain|doc-render)/',
+          ...npm(
+            'react|react-dom|react-markdown|remark-gfm|@types/hast|@types/react|@types/react-dom',
+          ),
+          // The types of the hast tree: a module of @types/hast alone, which the cruiser leaves unresolved.
+          '^hast$',
+        ],
+      },
+    },
+    {
       name: 'browser-link-tier',
       comment:
         'browser-link is the network link to the browser worker (docs/plan/57-browser-tasks.md): its client for core and mcp and the stream gateway of preview build on the contracts of domain alone (the network guard of its tests is test support).',
@@ -280,10 +314,10 @@ module.exports = {
     {
       name: 'runner-minimal-packages',
       comment:
-        'The runner app holds no platform credentials: it composes its engine, the sandbox settings and the frame of a process (app-bootstrap), never the runtime of the apps with a database, not even transitively — its tests neither (rule 5, spec §19).',
+        'The runner app holds no platform credentials: it composes its engine, the sandbox settings and the frame of a process (app-bootstrap), never the runtime of the apps with a database nor the Markdown renderer with React (doc-render), not even transitively — its tests neither (rule 5, spec §19).',
       severity: 'error',
       from: { path: '^(apps/runner|packages/(snapshots|local-turns))/' },
-      to: { path: '^packages/(service-runtime|db)/', reachable: true },
+      to: { path: '^packages/(service-runtime|db|doc-render)/', reachable: true },
     },
     {
       name: 'runner-engine-speaks-the-protocol-only',
@@ -374,7 +408,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^apps/mcp/', pathNot: '\\.test\\.ts$' },
       to: {
-        path: '^packages/(git-providers|sandbox-providers|agent-drivers|llm-backends|site-connections|yookassa|mail|telegram|auth|notifications|billing|local-turns|trpc|ui)/',
+        path: '^packages/(git-providers|sandbox-providers|agent-drivers|llm-backends|site-connections|yookassa|mail|telegram|auth|notifications|billing|local-turns|doc-render|trpc|ui)/',
         reachable: true,
       },
     },
@@ -425,7 +459,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^apps/llm/', pathNot: '\\.test\\.ts$' },
       to: {
-        path: '^packages/(storage|git-providers|sandbox-providers|browser-providers|browser-link|agent-drivers|site-adapters|site-connections|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|site-content)/',
+        path: '^packages/(storage|git-providers|sandbox-providers|browser-providers|browser-link|agent-drivers|site-adapters|site-connections|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|site-content|doc-render)/',
         reachable: true,
       },
     },
@@ -447,7 +481,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^apps/preview/', pathNot: '\\.test\\.ts$' },
       to: {
-        path: '^packages/(storage|vault|git-providers|sandbox-providers|browser-providers|agent-drivers|llm-backends|site-adapters|site-connections|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|turn-keys|site-content|trpc|ui)/',
+        path: '^packages/(storage|vault|git-providers|sandbox-providers|browser-providers|agent-drivers|llm-backends|site-adapters|site-connections|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|turn-keys|site-content|doc-render|trpc|ui)/',
         reachable: true,
       },
     },
@@ -490,7 +524,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^apps/browser/', pathNot: '\\.test\\.ts$' },
       to: {
-        path: '^packages/(vault|git-providers|agent-drivers|llm-backends|site-connections|snapshots|yookassa|mail|telegram|auth|notifications|billing|local-turns|turn-keys|site-content|browser-link|trpc|ui)/',
+        path: '^packages/(vault|git-providers|agent-drivers|llm-backends|site-connections|snapshots|yookassa|mail|telegram|auth|notifications|billing|local-turns|turn-keys|site-content|browser-link|doc-render|trpc|ui)/',
         reachable: true,
       },
     },

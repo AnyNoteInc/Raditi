@@ -144,7 +144,11 @@ export const taskProviders: Provider[] = [
           logger: new Logger('ChatFiles'),
           pages: new PagePublications({ db: prisma, logger: new Logger('Pages') }),
         }),
-        docs: new DocSections({ db: prisma, logger: new Logger('DocSections') }),
+        docs: new DocSections({
+          db: prisma,
+          logger: new Logger('DocSections'),
+          pages: new PagePublications({ db: prisma, logger: new Logger('Pages') }),
+        }),
         // Docs/plan/70-turn-without-time-limit.md, ВР13 and ВР17.
         workspaceTurnLimit: config.workspaceTurnLimit,
         capacity: new TurnCapacity(executor),
