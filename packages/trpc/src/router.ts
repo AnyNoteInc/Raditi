@@ -5,6 +5,7 @@ import { candidateRouter } from './routers/candidate.ts'
 import { consentRouter } from './routers/consent.ts'
 import { documentRouter } from './routers/document.ts'
 import { healthRouter } from './routers/health.ts'
+import { pagesRouter } from './routers/pages.ts'
 import { previewRouter } from './routers/preview.ts'
 import { projectRouter } from './routers/project.ts'
 import { releaseRouter } from './routers/release.ts'
@@ -44,6 +45,8 @@ export const appRouter = router({
   attachment: attachmentRouter,
   // The pages and text documents the agent makes in a chat (docs/plan/67-agent-documents.md).
   document: documentRouter,
+  // «Страницы»: the published pages of the user's workspaces (docs/plan/69-pages.md).
+  pages: pagesRouter,
 })
 
 export type AppRouter = typeof appRouter

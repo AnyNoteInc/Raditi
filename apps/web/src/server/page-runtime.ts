@@ -13,7 +13,7 @@ const unavailable = () => {
 
 /** The domain of pages of this process, as the routes of its host read it. */
 export function pagesOfProcess() {
-  const pages = chatServices()?.pages ?? null
+  const pages = chatServices()?.pageViews ?? null
   if (pages === null) return null
   return {
     host: new URL(pages.origin).host.toLowerCase(),

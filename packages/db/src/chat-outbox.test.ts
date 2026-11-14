@@ -2,12 +2,14 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   enqueueAgentTurn,
+  enqueueAgentWaitingPasses,
   enqueueBrowserEnsure,
   enqueuePreviewBrowser,
   enqueuePreviewSync,
   enqueueReleaseAdvance,
   enqueueSiteWaitingPasses,
 } from './chat-outbox.ts'
+import type { Prisma } from './generated/prisma/client.ts'
 import type { OutboxWriter } from './outbox.ts'
 
 const taskId = '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a60'
@@ -17,10 +19,27 @@ const releaseId = '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a63'
 
 function fakeWriter(count = 1) {
   const createMany = vi.fn().mockResolvedValue({ count })
-  const writer = { outboxEvent: { createMany } } as unknown as OutboxWriter
+  const writer = {
+    outboxEvent: { createMany },
+    // The workspace of the task is on «Бизнес».
+    $queryRaw: vi.fn(tierAnswers('business')),
+  } as unknown as OutboxWriter & Pick<Prisma.TransactionClient, '$queryRaw'>
   const rows = () => createMany.mock.calls.map(([args]) => args.data[0])
   return { writer, rows }
 }
+
+/** What the queries of the tier answer (`agentTurnPriority`): the task's workspace on `slug`. */
+const tierAnswers =
+  (slug: string) =>
+  async (query: TemplateStringsArray, ..._values: unknown[]): Promise<unknown[]> => {
+    const sql = query.join('?')
+    if (sql.includes('FROM tasks WHERE id')) return [{ workspaceId: taskId }]
+    if (sql.includes('FROM subscriptions s JOIN plans p'))
+      return [
+        { status: 'active', slug, creditsPer5h: 70, creditsPerWeek: 210, maxConcurrentTurns: 2 },
+      ]
+    return []
+  }
 
 describe('enqueueAgentTurn', () => {
   it('writes the pass of a request to agent-turns with ids only', async () => {
@@ -37,11 +56,17 @@ describe('enqueueAgentTurn', () => {
       {
         topic: 'agent-turns',
         type: 'turn.run',
-        payload: { taskId, attempt: 2, requestEventId: '41' },
+        payload: { taskId, attempt: 2, requestEventId: '41', priority: 2 },
         dedupeKey: `turn.run:${taskId}:2:41`,
         availableAt: undefined,
       },
     ])
+  })
+
+  it('keeps a priority the job already carries, a repeat after a wait of the pool', async () => {
+    const { writer, rows } = fakeWriter()
+    await enqueueAgentTurn(writer, { taskId, attempt: 1, requestEventId: '8', priority: 1 })
+    expect(rows()[0]?.payload).toMatchObject({ priority: 1 })
   })
 
   it('says false when the key already exists', async () => {
@@ -147,7 +172,7 @@ describe('enqueueSiteWaitingPasses', () => {
 
   it('puts the passes that wait for the site back, keyed by what let it go', async () => {
     const { writer, rows } = fakeWriter()
-    const $queryRaw = vi.fn().mockResolvedValue([
+    const $queryRaw = vi.fn(tierAnswers('agency')).mockResolvedValueOnce([
       { id: taskId.toUpperCase(), attempt: 1, request_id: 41n },
       // A task whose only requests are commands has nothing to answer.
       { id: other, attempt: 2, request_id: null },
@@ -161,13 +186,13 @@ describe('enqueueSiteWaitingPasses', () => {
       {
         topic: 'agent-turns',
         type: 'turn.run',
-        payload: { taskId, attempt: 1, requestEventId: '41' },
+        payload: { taskId, attempt: 1, requestEventId: '41', priority: 1 },
         dedupeKey: `turn.run:${taskId}:1:41:retry:release-${releaseId}`,
         availableAt: undefined,
       },
     ])
     // Only queued tasks of the site that wait for it.
-    const sql = ($queryRaw.mock.calls[0]![0] as string[]).join('?')
+    const sql = ($queryRaw.mock.calls[0]![0] as unknown as string[]).join('?')
     expect(sql).toContain("t.status = 'queued' AND t.waiting = 'site'")
     expect($queryRaw.mock.calls[0]![1]).toBe(siteId)
   })
@@ -179,5 +204,36 @@ describe('enqueueSiteWaitingPasses', () => {
       enqueueSiteWaitingPasses({ ...writer, $queryRaw } as never, { siteId, tag: 'x:y' }),
     ).rejects.toThrow()
     expect($queryRaw).not.toHaveBeenCalled()
+  })
+})
+
+describe('enqueueAgentWaitingPasses', () => {
+  const workspaceId = '0199b2f4-6c1e-7a52-9f3d-2b8e4c7d1a66'
+
+  // The tier is the only thing that sets the tariffs apart in the pool now (owner's answer of
+  // 13.11.2026, Л8 removed): a woken pass keeps its place among the tiers, and BullMQ takes a job
+  // without a priority before every one with it.
+  it('puts the passes that wait for the agents back with the priority of their tier', async () => {
+    const { writer, rows } = fakeWriter()
+    const $queryRaw = vi
+      .fn(tierAnswers('agency'))
+      .mockResolvedValueOnce([{ id: taskId.toUpperCase(), attempt: 3, request_id: 41n }])
+    const put = await enqueueAgentWaitingPasses({ ...writer, $queryRaw } as never, {
+      workspaceId,
+      limit: 8,
+      tag: `pass-${taskId}-1-4`,
+    })
+    expect(put).toBe(1)
+    expect(rows()).toEqual([
+      {
+        topic: 'agent-turns',
+        type: 'turn.run',
+        payload: { taskId, attempt: 3, requestEventId: '41', priority: 1 },
+        dedupeKey: `turn.run:${taskId}:3:41:retry:pass-${taskId}-1-4`,
+        availableAt: undefined,
+      },
+    ])
+    const sql = ($queryRaw.mock.calls[0]![0] as unknown as string[]).join('?')
+    expect(sql).toContain("t.status = 'queued' AND t.waiting = 'agents'")
   })
 })

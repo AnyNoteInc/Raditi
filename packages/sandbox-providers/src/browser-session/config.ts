@@ -2,6 +2,7 @@ import {
   appEnvSchema,
   DIGEST_PINNED_IMAGE,
   isProduction,
+  pagesBaseDomainSchema,
   parseIpSubnet,
   previewImageSchema,
   previewRuntimes,
@@ -102,6 +103,18 @@ export const dockerBrowserSessionConfigSchema = z
      * sets it in production; without it a spec with a local site is refused.
      */
     localSites: z.boolean().default(false),
+    /**
+     * PAGES_BASE_DOMAIN (docs/plan/69-pages.md, Ст26): the agent's published pages live on the
+     * platform's machine, at an address `refusedSubnets` closes. The egress proxy reaches that
+     * address for a page host alone — `<slug>.<domain>:443`, its TLS named so — and nothing else of
+     * the platform. Unset — no page is reached.
+     */
+    pageDomain: pagesBaseDomainSchema.optional(),
+    /**
+     * BROWSER_PAGE_ADDRESSES: the addresses of the machine of the pages that `refusedSubnets` holds;
+     * the proxy opens these alone of them, and to a page host alone. Empty — none.
+     */
+    pageAddresses: z.array(z.ipv4().or(z.ipv6())).max(8).default([]),
   })
   .refine((config) => config.runtime !== 'runsc' || config.firewallImage !== undefined, {
     message: 'runsc browser sessions need the host firewall image (SANDBOX_NETWORK_GUARD_IMAGE)',

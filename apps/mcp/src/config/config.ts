@@ -9,6 +9,8 @@ import {
   isProduction,
   previewAddressEnvShape,
   previewAddressFromEnv,
+  pagesAddressFromEnv,
+  type PagesAddress,
   previewDefaults,
   type AppEnv,
   type Env,
@@ -120,6 +122,11 @@ export interface McpConfig {
    * the content profile keeps the P6 path of a dialog without a preview (the local stands).
    */
   preview: PreviewAddress | null
+  /**
+   * Where published pages answer (docs/plan/69-pages.md, Ст3): the address `page_publish` gives
+   * the agent. null — no pages: the family `pages` is not offered.
+   */
+  pages: PagesAddress | null
 }
 
 /**
@@ -195,6 +202,9 @@ const ownEnvSchema = z.object({
   ),
   WEB_SEARCH_TURN_LIMIT: count(webSearchDefaults.turn, 100),
   WEB_SEARCH_SERVICE_MONTH_LIMIT: count(webSearchDefaults.serviceMonth, 10_000_000),
+  // Published pages (docs/plan/69-pages.md): the address the agent is given.
+  PAGES_BASE_DOMAIN: envVar(z.string().optional()),
+  PAGES_PUBLIC_PORT: envVar(z.coerce.number().int().min(1).max(65_535).optional()),
   BROWSER_SESSION_MAX_HOURS: envVar(
     z.coerce
       .number()
@@ -288,6 +298,7 @@ export function loadMcpConfig(env: Env): McpConfig {
       'PREVIEW_UPSTREAM_HOST: must be a private or loopback IP address in production (spec §19)',
     )
   const preview = previewAddressFromEnv(own, appEnv)
+  const pages = pagesAddressFromEnv(own, production, problems)
   // Where the agent's content goes is said, never inferred (Р3): `local` — the preview of the
   // dialog; `local-site` — the site itself, the P6 path of the stands, never beside previews.
   if (previewsOpen && own.MCP_CONTENT_PROFILE === 'local' && preview === null)
@@ -340,5 +351,6 @@ export function loadMcpConfig(env: Env): McpConfig {
     },
     previewUpstreamHost: own.PREVIEW_UPSTREAM_HOST,
     preview,
+    pages,
   }
 }

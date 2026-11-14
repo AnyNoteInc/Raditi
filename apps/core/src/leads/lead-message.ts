@@ -2,11 +2,13 @@
 export interface LeadForMessage {
   id: string
   number: number
-  name: string
+  /** A phone number as `+<digits>` or a Telegram username as `@name`. */
   phone: string
-  email: string
   site: string
-  about: string
+  /** The form asked for these three until 13.11.2026: only the leads before it have them. */
+  name: string | null
+  email: string | null
+  about: string | null
   consentVersion: string
   createdAt: Date
 }
@@ -33,22 +35,23 @@ const moscow = new Intl.DateTimeFormat('ru-RU', {
 })
 
 /**
- * The message of a lead in the group, HTML. Every value is escaped; the longest a lead can be
- * (2 000 characters of the description and the limits of the fields) stays under the 4 096 of
- * Telegram.
+ * The message of a lead in the group, HTML. Every value is escaped; a part the lead does not have
+ * (the name, the mail and the description, which the form asked for until 13.11.2026) is left out
+ * with its line. The longest a lead can be (2 000 characters of an old description and the limits
+ * of the fields) stays under the 4 096 of Telegram.
  */
 export function leadMessage(lead: LeadForMessage): string {
+  const line = (label: string, value: string | null) =>
+    value === null ? [] : [`<b>${label}:</b> ${escapeHtml(value)}`]
   return [
     `<b>Заявка №${lead.number}</b> · главная, ${moscow.format(lead.createdAt)} МСК`,
     '',
-    `<b>Имя:</b> ${escapeHtml(lead.name)}`,
-    `<b>Телефон:</b> ${escapeHtml(lead.phone)}`,
-    `<b>Почта:</b> ${escapeHtml(lead.email)}`,
-    `<b>Сайт:</b> ${escapeHtml(lead.site)}`,
+    ...line('Имя', lead.name),
+    ...line('Контакт', lead.phone),
+    ...line('Почта', lead.email),
+    ...line('Сайт', lead.site),
     '',
-    '<b>Что хочет менять:</b>',
-    escapeHtml(lead.about),
-    '',
+    ...(lead.about === null ? [] : ['<b>Что хочет менять:</b>', escapeHtml(lead.about), '']),
     `Согласие на обработку данных: да, редакция ${escapeHtml(lead.consentVersion)}`,
     'Нажмите «Обработано», когда свяжетесь: сообщение удалится из Telegram.',
   ].join('\n')

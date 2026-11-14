@@ -165,6 +165,20 @@ describe('feedEntries', () => {
     expect(feedEntries(rows, null).map((entry) => entry.key)).toEqual(['1', '3', '2'])
   })
 
+  it('gives a change of a document no entry of its own (plan 69, Ст22)', () => {
+    const rows: FeedRow[] = [
+      requestRow('1'),
+      {
+        id: '2',
+        at: '2026-10-17T09:00:00.000Z',
+        type: 'feed.doc_touch',
+        docId: '0199a3f2-0000-7000-8000-0000000000d1',
+        revision: 3,
+      },
+    ]
+    expect(feedEntries(rows, null).map((entry) => entry.key)).toEqual(['1'])
+  })
+
   it('never shows a stage the page does not know', () => {
     const rows: FeedRow[] = [
       requestRow('1'),

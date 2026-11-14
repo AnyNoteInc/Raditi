@@ -114,7 +114,6 @@ describe('pickAccount: new tasks', () => {
     ['suspended', { health: 'suspended', healthChangedAt: at(-2_000) }],
     ['breaker open', { breakerOpenUntil: at(1) }],
     ['cooling', { coolingUntil: at(1) }],
-    ['busy', { activeTurns: 1 }],
   ] satisfies [string, Partial<PoolAccountSnapshot>][])(
     'skips %s accounts',
     (_label, overrides) => {
@@ -143,12 +142,14 @@ describe('pickAccount: new tasks', () => {
     })
   })
 
-  it('admits exactly 10% five-hour headroom for a new task, but not just below it', () => {
+  // Owner's answer of 13.11.2026: «пока есть кредиты из подписки или тарифа нужно запускать
+  // агента» — a new task asks of the five hours no more than a turn, as a bound one does.
+  it('admits a new task while the five hours leave a turn (5 %), but not just below it', () => {
     expect(
-      pickAccount(input({ accounts: [account('a', { limitWindows: [window('5h', 90)] })] })),
+      pickAccount(input({ accounts: [account('a', { limitWindows: [window('5h', 95)] })] })),
     ).toEqual(selected())
     expect(
-      pickAccount(input({ accounts: [account('a', { limitWindows: [window('5h', 90.001)] })] })),
+      pickAccount(input({ accounts: [account('a', { limitWindows: [window('5h', 95.001)] })] })),
     ).toEqual({
       kind: 'wait',
       probeAccountIds: [],
@@ -211,7 +212,7 @@ describe('pickAccount: new tasks', () => {
     },
   )
 
-  it('supports a larger configured turn reserve and retains the new-task 10% floor', () => {
+  it('supports a larger configured turn reserve, and a new task has no floor of its own', () => {
     expect(
       pickAccount(
         input({
@@ -235,7 +236,7 @@ describe('pickAccount: new tasks', () => {
           accounts: [account('a', { limitWindows: [window('5h', 91)] })],
         }),
       ).kind,
-    ).toBe('wait')
+    ).toBe('selected')
   })
 })
 
@@ -258,25 +259,13 @@ describe('pickAccount: bound tasks', () => {
     })
   })
 
-  it('returns busy for 60 seconds without switching accounts or consuming a rebind', () => {
-    const snapshot = { ...bound({ activeTurns: 1 }, [account('b')]), rebinds: 1 }
-    expect(pickAccount(snapshot)).toEqual({ kind: 'busy', retryAt: at(1) })
-    expect(snapshot.boundAccountId).toBe('a')
-    expect(snapshot.rebinds).toBe(1)
-    expect(pickAccount(bound({ activeTurns: 1, coolingUntil: at(120) }, [account('b')]))).toEqual({
-      kind: 'busy',
-      retryAt: at(1),
-    })
-  })
-
-  it('uses account concurrency instead of a provider-specific constant', () => {
-    expect(pickAccount(bound({ activeTurns: 1, maxConcurrentTurns: 2 }))).toEqual(
-      selected('a', 'keep'),
-    )
-    expect(pickAccount(bound({ activeTurns: 2, maxConcurrentTurns: 2 }))).toEqual({
-      kind: 'busy',
-      retryAt: at(1),
-    })
+  it('keeps a binding whatever number of turns its account runs (plan 70, ВР26)', () => {
+    // Owner's request of 13.11.2026: only the eight turns of a client are a limit of turns.
+    const snapshot = {
+      ...bound({ activeTurns: 64, maxConcurrentTurns: 1 }, [account('b')]),
+      rebinds: 1,
+    }
+    expect(pickAccount(snapshot)).toEqual({ ...selected('a', 'keep'), rebinds: 1 })
   })
 
   it('waits through exactly 45 minutes, then permits a rebind', () => {
@@ -370,12 +359,9 @@ describe('pickAccount: bound tasks', () => {
         reason: 'cooling',
         retryAt: at(12),
       })
-    expect(
-      pickAccount(bound({ breakerOpenUntil: at(15), activeTurns: 1 }, [account('b')])),
-    ).toEqual({ kind: 'busy', retryAt: at(1) })
   })
 
-  it('does not apply the new-task 10% filter to an existing task rebind', () => {
+  it('rebinds an existing task to an account that leaves a turn', () => {
     expect(
       pickAccount(bound({ enabled: false }, [account('b', { limitWindows: [window('5h', 95)] })])),
     ).toEqual(selected('b', 'rebind'))
@@ -489,10 +475,12 @@ describe('pickAccount: unknown usage and exhausted pools', () => {
     expect(pickAccount(bound({ limitWindows }))).toEqual(selected('a', 'keep'))
   })
 
-  it('needs an unknown reset only below the applicable new-task or turn headroom threshold', () => {
+  it('needs an unknown reset only below the turn headroom, for a new task as for a bound one', () => {
     const limitWindows = [{ ...window('5h', 95), resetsAt: null }]
     expect(pickAccount(bound({ limitWindows }))).toEqual(selected('a', 'keep'))
-    expect(pickAccount(input({ accounts: [account('a', { limitWindows })] }))).toEqual({
+    expect(pickAccount(input({ accounts: [account('a', { limitWindows })] }))).toEqual(selected())
+    const short = [{ ...window('5h', 95.001), resetsAt: null }]
+    expect(pickAccount(input({ accounts: [account('a', { limitWindows: short })] }))).toEqual({
       kind: 'wait',
       reason: 'limits_unknown',
       retryAt: at(15),
@@ -524,7 +512,7 @@ describe('pickAccount: unknown usage and exhausted pools', () => {
     ).toEqual(selected('b'))
   })
 
-  it('requests only account ids for eligible candidates with unknown limits and a free slot', () => {
+  it('requests only account ids for eligible candidates with unknown limits', () => {
     const unknown = { limitWindows: null }
     const snapshot = input({
       accounts: [
@@ -535,24 +523,16 @@ describe('pickAccount: unknown usage and exhausted pools', () => {
         account('retired', { ...unknown, status: 'retired' }),
         account('retiring', { ...unknown, retireRequestedAt: NOW }),
         account('relogin', { ...unknown, health: 'needs_relogin' }),
-        account('busy', { ...unknown, activeTurns: 1 }),
+        // Its turns are no obstacle (plan 70, ВР26): it is probed like any other.
+        account('running', { ...unknown, activeTurns: 9 }),
         account('a', unknown),
       ],
     })
-    // The busy account is not probed, but its slot may free long before the 15-minute fallback.
     expect(pickAccount(snapshot)).toEqual({
       kind: 'wait',
       reason: 'limits_unknown',
-      retryAt: at(1),
-      probeAccountIds: ['a', 'z'],
-    })
-    expect(
-      pickAccount({ ...snapshot, accounts: snapshot.accounts.filter(({ id }) => id !== 'busy') }),
-    ).toEqual({
-      kind: 'wait',
-      reason: 'limits_unknown',
       retryAt: at(15),
-      probeAccountIds: ['a', 'z'],
+      probeAccountIds: ['a', 'running', 'z'],
     })
     expect(pickAccount({ ...snapshot, providerEnabled: false })).toEqual({
       kind: 'wait',
@@ -622,92 +602,6 @@ describe('pickAccount: unknown usage and exhausted pools', () => {
         reason: 'pool_empty',
         retryAt: at(15),
       })
-  })
-
-  it('returns busy for 60 seconds when the only obstacle of an unbound task is occupied slots', () => {
-    const busy = { kind: 'busy', retryAt: at(1) }
-    expect(pickAccount(input({ accounts: [account('a', { activeTurns: 1 })] }))).toEqual(busy)
-    expect(
-      pickAccount(
-        input({
-          accounts: [
-            account('a', { activeTurns: 1 }),
-            account('b', { activeTurns: 2, maxConcurrentTurns: 2 }),
-          ],
-        }),
-      ),
-    ).toEqual(busy)
-  })
-
-  it.each([[null], [[]], [[window('5h', 20, 0), window('week', 40, 5_000)]]])(
-    'treats a busy account with unknown usage %j as busy: it is probed once its slot is free',
-    (limitWindows) => {
-      const occupied = account('a', { activeTurns: 1, limitWindows })
-      expect(pickAccount(input({ accounts: [occupied] }))).toEqual({
-        kind: 'busy',
-        retryAt: at(1),
-      })
-      expect(
-        pickAccount(
-          input({ accounts: [occupied, account('b', { coolingUntil: at(4 * 24 * 60) })] }),
-        ),
-      ).toEqual({ kind: 'busy', retryAt: at(1) })
-      expect(pickAccount(input({ accounts: [{ ...occupied, activeTurns: 0 }] }))).toEqual({
-        kind: 'wait',
-        probeAccountIds: ['a'],
-        reason: 'limits_unknown',
-        retryAt: at(15),
-      })
-    },
-  )
-
-  it('never waits for another account distant reset while a ready account is only busy', () => {
-    const weekly = {
-      coolingUntil: at(4 * 24 * 60 + 1),
-      limitWindows: [window('week', 100, 4 * 24 * 60)],
-    }
-    expect(
-      pickAccount(input({ accounts: [account('a', { activeTurns: 1 }), account('b', weekly)] })),
-    ).toEqual({ kind: 'busy', retryAt: at(1) })
-    const rebinding = bound({ enabled: false }, [
-      account('b', { activeTurns: 1 }),
-      account('c', weekly),
-    ])
-    const original = structuredClone(rebinding)
-    expect(pickAccount(rebinding)).toEqual({ kind: 'busy', retryAt: at(1) })
-    expect(rebinding).toEqual(original)
-    expect(
-      pickAccount({ ...rebinding, accounts: [account('a', { enabled: false }), account('b')] }),
-    ).toEqual(selected('b', 'rebind'))
-  })
-
-  it('does not report busy for an account that stays blocked after its slot frees', () => {
-    expect(
-      pickAccount(input({ accounts: [account('a', { activeTurns: 1, coolingUntil: at(120) })] })),
-    ).toEqual({ kind: 'wait', probeAccountIds: [], reason: 'pool_empty', retryAt: at(120) })
-    // A new task skips accounts below the 10% five-hour reserve even when their slot frees.
-    expect(
-      pickAccount(
-        input({ accounts: [account('a', { activeTurns: 1, limitWindows: [window('5h', 95)] })] }),
-      ),
-    ).toEqual({ kind: 'wait', probeAccountIds: [], reason: 'pool_empty', retryAt: at(120) })
-    expect(
-      pickAccount(
-        input({
-          accounts: [account('a', { activeTurns: 1, limitWindows: null, breakerOpenUntil: at(9) })],
-        }),
-      ),
-    ).toEqual({ kind: 'wait', probeAccountIds: [], reason: 'pool_empty', retryAt: at(9) })
-  })
-
-  it('still probes an unknown free account next to a busy one, with the short retry as fallback', () => {
-    expect(
-      pickAccount(
-        input({
-          accounts: [account('a', { activeTurns: 1 }), account('b', { limitWindows: null })],
-        }),
-      ),
-    ).toEqual({ kind: 'wait', probeAccountIds: ['b'], reason: 'limits_unknown', retryAt: at(1) })
   })
 
   it('retries an unbound task when the usage breaker closes, not after the 15-minute fallback', () => {
@@ -839,12 +733,11 @@ describe('pickAccount: a backend without windows', () => {
     ).toEqual(selected('b', 'rebind'))
   })
 
-  it('takes the least recently used free account and keeps slots and health as they are', () => {
+  it('takes the least recently used account and keeps health as it is', () => {
     expect(
       pickAccount(
         windowless({
           accounts: [
-            apiAccount('busy', { activeTurns: 1 }),
             apiAccount('relogin', { health: 'needs_relogin' }),
             apiAccount('newer', { lastUsedAt: at(-1) }),
             apiAccount('older', { lastUsedAt: at(-60) }),
@@ -852,10 +745,10 @@ describe('pickAccount: a backend without windows', () => {
         }),
       ),
     ).toEqual(selected('older'))
-    expect(pickAccount(windowless({ accounts: [apiAccount('a', { activeTurns: 1 })] }))).toEqual({
-      kind: 'busy',
-      retryAt: at(1),
-    })
+    // However many turns it runs (plan 70, ВР26).
+    expect(pickAccount(windowless({ accounts: [apiAccount('a', { activeTurns: 9 })] }))).toEqual(
+      selected('a'),
+    )
   })
 
   it('never takes an account of another backend', () => {
@@ -948,10 +841,7 @@ describe('poolWaitIsLimitsOut: a wait that is no wait', () => {
       expect(poolWaitIsLimitsOut(waitOf(decision), NOW), decision.kind).toBe(true)
   })
 
-  it('lets a busy pool, an unknown usage and a short cooldown wait', () => {
-    expect(poolWaitIsLimitsOut(waitOf(pickAccount(bound({ activeTurns: 1 }))), NOW), 'busy').toBe(
-      false,
-    )
+  it('lets an unknown usage and a short cooldown wait', () => {
     expect(
       poolWaitIsLimitsOut(waitOf(pickAccount(bound({ limitWindows: [] }))), NOW),
       'unknown usage',
@@ -975,5 +865,100 @@ describe('poolWaitIsLimitsOut: a wait that is no wait', () => {
     // limits would fail passes the pool itself means to serve.
     expect(poolPolicy.limitsOutWaitMs).toBeGreaterThanOrEqual(poolPolicy.boundWaitMs)
     expect(poolPolicy.limitsOutWaitMs).toBeGreaterThan(poolPolicy.unknownRetryMs)
+  })
+})
+
+// Pool v2 (plan 71, §2.3): absolute plan credits and the pace of the week.
+describe('pickAccount in absolute plan credits', () => {
+  const credits = (
+    name: '5h' | 'week',
+    limitCredits: number,
+    usedCredits: number,
+    minutes: number,
+  ): LimitWindow => ({
+    name,
+    usedPct: (usedCredits * 100) / limitCredits,
+    resetsAt: at(minutes),
+    limitCredits,
+    usedCredits,
+  })
+  const lite = (
+    id: string,
+    used5h: number,
+    usedWeek = 0,
+    overrides: Partial<PoolAccountSnapshot> = {},
+  ) =>
+    account(id, {
+      limitWindows: [credits('5h', 2_000, used5h, 120), credits('week', 10_000, usedWeek, 5_000)],
+      ...overrides,
+    })
+  const max = (
+    id: string,
+    used5h: number,
+    usedWeek = 0,
+    overrides: Partial<PoolAccountSnapshot> = {},
+  ) =>
+    account(id, {
+      limitWindows: [credits('5h', 28_000, used5h, 120), credits('week', 140_000, usedWeek, 5_000)],
+      ...overrides,
+    })
+
+  it('sends a new task to the Max at 60 % rather than the Lite at 50 % (scenario 2)', () => {
+    const decision = pickAccount(input({ accounts: [lite('lite', 1_000), max('max', 16_800)] }))
+    expect(decision).toMatchObject({ kind: 'selected', accountId: 'max' })
+  })
+
+  it('orders by percents when a probe names no credits (owner, 13.11.2026: no sizes in the code)', () => {
+    const decision = pickAccount(
+      input({
+        accounts: [
+          account('small', { limitWindows: [window('5h', 50), window('week', 10, 5_000)] }),
+          account('large', { limitWindows: [window('5h', 60), window('week', 10, 5_000)] }),
+        ],
+      }),
+    )
+    // Without the sizes the larger share free wins: the Lite at 50 %, not the Max at 60 %.
+    expect(decision).toMatchObject({ kind: 'selected', accountId: 'small' })
+  })
+
+  it('needs the measured cost of a turn left in both windows', () => {
+    const decision = pickAccount(input({ turnCostCredits: 300, accounts: [lite('lite', 1_800)] }))
+    expect(decision).toMatchObject({ kind: 'wait', reason: 'pool_empty', retryAt: at(120) })
+    expect(
+      pickAccount(input({ turnCostCredits: 150, accounts: [lite('lite', 1_800)] })),
+    ).toMatchObject({ kind: 'selected', accountId: 'lite' })
+  })
+
+  it('prefers the week that resets sooner when the remainder is the same (Л9)', () => {
+    const soon = account('soon', {
+      limitWindows: [credits('5h', 12_000, 0, 120), credits('week', 60_000, 55_000, 60 * 10)],
+    })
+    const far = account('far', {
+      limitWindows: [credits('5h', 12_000, 0, 120), credits('week', 60_000, 55_000, 60 * 24 * 6)],
+    })
+    expect(pickAccount(input({ accounts: [far, soon] }))).toMatchObject({
+      kind: 'selected',
+      accountId: 'soon',
+    })
+  })
+
+  // Owner's answer of 13.11.2026: «пока есть кредиты из подписки или тарифа нужно запускать
+  // агента». The chat of 13.11.2026 waited for the reserve of the higher tiers with a week of the
+  // Lite 84.75 % used: nothing of the pool is held back from a tier any more.
+  it('starts a new task of any tier while the pool has a turn left (no reserve of the tiers)', () => {
+    const weekLeft = [lite('a', 70, 8_475)]
+    const fiveHoursLeft = [lite('a', 1_600), lite('b', 1_600)]
+    for (const accounts of [weekLeft, fiveHoursLeft])
+      expect(pickAccount(input({ accounts }))).toMatchObject({
+        kind: 'selected',
+        binding: 'initial',
+      })
+  })
+
+  it('makes a new task wait only when no account has a turn left', () => {
+    const decision = pickAccount(
+      input({ turnCostCredits: 1_600, accounts: [lite('a', 70, 8_475)] }),
+    )
+    expect(decision).toMatchObject({ kind: 'wait', reason: 'pool_empty', retryAt: at(5_000) })
   })
 })

@@ -90,6 +90,10 @@ export function egressContainer(input: {
   /** `host:port` of a local site's origin → its fixed `host:port`. */
   localRoutes: Readonly<Record<string, string>>
   refusedSubnets: readonly string[]
+  /** PAGES_BASE_DOMAIN: a page host of the agent passes `refusedSubnets` on 443 (Ст26). */
+  pageDomain?: string
+  /** BROWSER_PAGE_ADDRESSES: the only addresses of `refusedSubnets` a page host reaches. */
+  pageAddresses?: readonly string[]
   maxTunnels: number
 }): Docker.ContainerCreateOptions {
   const addresses = sessionAddresses(input.place.network)
@@ -116,6 +120,11 @@ export function egressContainer(input: {
         `MAX_TUNNELS=${input.maxTunnels}`,
         ...(input.refusedSubnets.length
           ? [`REFUSED_SUBNETS=${input.refusedSubnets.join(',')}`]
+          : []),
+        // The agent's published pages, on the platform's machine (docs/plan/69-pages.md, Ст26).
+        ...(input.pageDomain ? [`PAGE_DOMAIN=${input.pageDomain}`] : []),
+        ...(input.pageDomain && input.pageAddresses?.length
+          ? [`PAGE_ADDRESSES=${input.pageAddresses.join(',')}`]
           : []),
         ...(local
           ? [`LOCAL_HTTP_ROUTES=${JSON.stringify(input.localRoutes)}`, `${LOCAL_ROUTES_GUARD}=1`]

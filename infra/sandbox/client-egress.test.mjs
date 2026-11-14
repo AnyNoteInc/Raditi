@@ -21,6 +21,8 @@ import {
   localTunnelHeadAllowed,
   parseAllowedHosts,
   parseLocalRoutes,
+  parsePageAddresses,
+  parsePageDomain,
   parseSubnets,
   parseTarget,
 } from './client-egress.mjs'
@@ -257,6 +259,119 @@ test('the platform’s own subnets and those of the proxy’s interfaces are ref
   assert.equal(check('84.201.130.200'), false)
   assert.equal(check('2a02:6b8:c00::9'), false)
   assert.equal(check('84.201.192.7'), true)
+})
+
+test('a page host of the agent passes the platform’s subnets on 443, nothing else of them (Ст26)', async () => {
+  const page = 'abcdefghijklmnopqrstuvwxyz.pages.raditi.ru'
+  const server = ['45.8.250.117']
+  const p = await proxy({
+    names: {
+      [page]: server,
+      'pages.raditi.ru': server,
+      'raditi.ru': server,
+      [`x.${page}`]: server,
+      'abcdefghijklmnopqrstuvwxy1.pages.raditi.ru': server,
+      'qwertyuiopasdfghjklzxcvbnm.pages.raditi.ru': ['10.10.0.10'],
+      'zyxwvutsrqponmlkjihgfedcba.pages.raditi.ru': ['172.29.90.5'],
+      // Another public address of the platform, refused and not one of the pages'.
+      'mnbvcxzlkjhgfdsapoiuytrewq.pages.raditi.ru': ['45.8.250.118'],
+      // A public address of no platform: it opens as it always did.
+      'aaaaaaaaaaaaaaaaaaaaaaaaaa.pages.raditi.ru': ['93.184.216.34'],
+    },
+    allow: [],
+    anyPublic: true,
+    publicHttp: false,
+    refused: parseSubnets('45.8.250.0/24, 10.10.0.0/24'),
+    pageDomain: 'pages.raditi.ru',
+    pageAddresses: ['45.8.250.117'],
+    pageRefused: parseSubnets('172.29.90.0/24'),
+  })
+  const opened = await tunnel(p.port, `${page}:443`)
+  assert.equal(opened.status, 200)
+  opened.socket.destroy()
+  assert.deepEqual(p.dialed, [{ address: '45.8.250.117', port: 443 }])
+  const elsewhere = await tunnel(p.port, 'aaaaaaaaaaaaaaaaaaaaaaaaaa.pages.raditi.ru:443')
+  assert.equal(elsewhere.status, 200)
+  elsewhere.socket.destroy()
+  p.dialed.length = 1
+  for (const target of [
+    // Another port of the page host, the root, the platform, a second label, not a slug.
+    `${page}:8443`,
+    'pages.raditi.ru:443',
+    'raditi.ru:443',
+    `x.${page}:443`,
+    'abcdefghijklmnopqrstuvwxy1.pages.raditi.ru:443',
+    // A page host that resolves to a private address or to the proxy's own subnet.
+    'qwertyuiopasdfghjklzxcvbnm.pages.raditi.ru:443',
+    'zyxwvutsrqponmlkjihgfedcba.pages.raditi.ru:443',
+    // REFUSED_SUBNETS opens for the listed address alone, never the rest of its subnet.
+    'mnbvcxzlkjhgfdsapoiuytrewq.pages.raditi.ru:443',
+  ]) {
+    const answer = await tunnel(p.port, target)
+    assert.equal(answer.refusal, 'forbidden_address', target)
+  }
+  assert.equal(p.dialed.length, 1)
+
+  // Without the list of the pages' addresses the page host is refused like the rest of the platform.
+  const unlisted = await proxy({
+    names: { [page]: server },
+    allow: [],
+    anyPublic: true,
+    publicHttp: false,
+    refused: parseSubnets('45.8.250.117/32'),
+    pageDomain: 'pages.raditi.ru',
+  })
+  assert.equal((await tunnel(unlisted.port, `${page}:443`)).refusal, 'forbidden_address')
+
+  // Without PAGE_DOMAIN the page host is refused like the rest of the platform.
+  const closed = await proxy({
+    names: { [page]: server },
+    allow: [],
+    anyPublic: true,
+    publicHttp: false,
+    refused: parseSubnets('45.8.250.117/32'),
+  })
+  assert.equal((await tunnel(closed.port, `${page}:443`)).refusal, 'forbidden_address')
+})
+
+test('PAGE_ADDRESSES: at most 8 IP addresses, and only with PAGE_DOMAIN', () => {
+  assert.deepEqual(parsePageAddresses(undefined, null), [])
+  assert.deepEqual(parsePageAddresses(' 45.8.250.117 ,2a00::1', 'pages.raditi.ru'), [
+    '45.8.250.117',
+    '2a00::1',
+  ])
+  assert.throws(() => parsePageAddresses('45.8.250.117', null), /PAGE_DOMAIN/)
+  assert.throws(() => parsePageAddresses('pages.raditi.ru', 'pages.raditi.ru'), /PAGE_ADDRESSES/)
+  assert.throws(
+    () => parsePageAddresses(Array(9).fill('45.8.250.117').join(','), 'pages.raditi.ru'),
+    /PAGE_ADDRESSES/,
+  )
+})
+
+test('the label of a page host is the length of the domain’s slug (packages/domain)', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const slug = await readFile(
+    new URL('../../packages/domain/src/pages/slug.ts', import.meta.url),
+    'utf8',
+  )
+  const length = Number(/export const PAGE_SLUG_LENGTH = (\d+)/.exec(slug)?.[1])
+  const proxy = await readFile(new URL('./client-egress.mjs', import.meta.url), 'utf8')
+  assert.equal(length, 26)
+  assert.match(proxy, new RegExp(`const PAGE_LABEL = /\\^\\[a-z2-7\\]\\{${length}\\}\\$/`))
+})
+
+test('PAGE_DOMAIN is a lower-case DNS name, or none', () => {
+  assert.equal(parsePageDomain(undefined), null)
+  assert.equal(parsePageDomain(''), null)
+  assert.equal(parsePageDomain('pages.raditi.ru'), 'pages.raditi.ru')
+  for (const wrong of [
+    'Pages.raditi.ru',
+    'pages',
+    '*.pages.raditi.ru',
+    'pages.raditi.ru.',
+    '10.0.0.1',
+  ])
+    assert.throws(() => parsePageDomain(wrong), /PAGE_DOMAIN/, wrong)
 })
 
 test('the address rule refuses everything the domain rule refuses, the same corpus', () => {

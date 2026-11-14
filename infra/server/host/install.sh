@@ -27,13 +27,16 @@ command -v docker >/dev/null || { echo "install: Docker is not installed (docker
 ip link show eth0 >/dev/null 2>&1 || { echo "install: no eth0: fix raditi-host.nft first" >&2; exit 1; }
 ss -ltn | grep -q ':2222 ' || { echo "install: sshd does not listen on 2222: fix raditi-host.nft first" >&2; exit 1; }
 
-# Docker: no userland proxy, live-restore, journald, runsc; wait for the clock; keep every log line
+# Docker: no userland proxy, live-restore, journald, runsc; wait for the clock; keep every log line.
+# Small networks (docs/plan/70-turn-without-time-limit.md, ВР21): every preview and browser of a
+# turn has its own bridge; the default pools end at some 15–25 of them, /28 out of 10.200/16 at 4096.
 daemon_before=$(cat /etc/docker/daemon.json 2>/dev/null || true)
 cat >/etc/docker/daemon.json <<'EOF'
 {
   "userland-proxy": false,
   "live-restore": true,
   "log-driver": "journald",
+  "default-address-pools": [{ "base": "10.200.0.0/16", "size": 28 }],
   "runtimes": { "runsc": { "path": "/usr/bin/runsc", "runtimeArgs": ["--platform=systrap"] } }
 }
 EOF

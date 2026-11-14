@@ -33,6 +33,7 @@ import {
   type SubscriptionEndReason,
   type SubscriptionWaitsDto,
   type TaskCreditsDto,
+  usageWindowsDto,
 } from './dto.ts'
 import { paymentFailureText } from './failure-text.ts'
 import { firstTaskCheck, newTaskCheck, type NewTaskAnswer } from './holds.ts'
@@ -53,6 +54,8 @@ const planSelect = {
   price: true,
   creditsPerMonth: true,
   creditsPerDay: true,
+  creditsPer5h: true,
+  creditsPerWeek: true,
   maxSites: true,
   packCredits: true,
 } satisfies Prisma.PlanSelect
@@ -66,6 +69,8 @@ const planDto = (row: PlanRow) => ({
   price: row.price.toFixed(2),
   creditsPerMonth: row.creditsPerMonth,
   creditsPerDay: row.creditsPerDay,
+  creditsPer5h: row.creditsPer5h,
+  creditsPerWeek: row.creditsPerWeek,
   maxSites: row.maxSites,
 })
 
@@ -350,6 +355,8 @@ const taskCredits = (answer: NewTaskAnswer): TaskCreditsDto => ({
   setAside: answer.held,
   minToStart: answer.needed,
   today: answer.today,
+  windows: usageWindowsDto(answer.windows),
+  tier: answer.tier,
   newTask: { allowed: answer.allowed, reason: answer.reason },
 })
 

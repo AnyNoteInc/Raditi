@@ -1,7 +1,14 @@
+import { Counter, type Registry } from '@prometheus-io/client'
 import { Logger, type Provider } from '@nestjs/common'
 import type { AgentDriverRegistry } from '@repo/agent-drivers'
 import type { PrismaClient } from '@repo/db'
-import type { JobQueue, ObjectStorage, SecretStore, SiteLeaseStore } from '@repo/domain'
+import type {
+  JobQueue,
+  ObjectStorage,
+  SecretStore,
+  SiteLeaseStore,
+  TurnExecutor,
+} from '@repo/domain'
 import { llmBackends } from '@repo/llm-backends'
 import { getSiteAdapter } from '@repo/site-adapters'
 import { PRISMA, SECRET_STORE } from '@repo/service-runtime'
@@ -19,6 +26,7 @@ import { PLAN_VALUES } from '../site-content/site-content.tokens.ts'
 import { TaskEventTurnJournal } from '../turns/turn-journal.ts'
 import { turnRuntimeOf } from '../turns/turn-runtime.ts'
 import { TurnSupervisor } from '../turns/turn-supervisor.ts'
+import { TURN_EXECUTOR } from '../turns/turns.tokens.ts'
 import { CandidateBuilder } from './candidate-builder.ts'
 import { candidateClientValues } from './candidate-client-values.ts'
 import { candidateGitOf, type CandidateGit } from './candidate-git.ts'
@@ -26,12 +34,16 @@ import { CandidateEdit } from './candidate-edit.ts'
 import { CandidateRebase } from './candidate-rebase.ts'
 import { CandidateRewind } from './candidate-rewind.ts'
 import { ChatFiles } from './chat-files.ts'
+import { DocSections } from './doc-sections.ts'
+import { PagePublications } from './page-publications.ts'
 import { LivePasses } from './live-passes.ts'
 import { PassRunner } from './pass-runner.ts'
 import { PassSettlement } from './pass-settlement.ts'
 import { TaskSweep, TaskSweepRuntime } from './task-sweep.ts'
+import { TurnCapacity } from './turn-capacity.ts'
 import { CANDIDATE_GIT } from './tasks.tokens.ts'
 import { TurnsProcessor } from './turns.processor.ts'
+import { METRICS_REGISTRY } from '../metrics/metrics.tokens.ts'
 
 /**
  * The passes of dialogs, their candidates, the worker of `agent-turns` and the sweep of dialogs,
@@ -70,8 +82,23 @@ export const taskProviders: Provider[] = [
       prisma: PrismaClient,
       candidates: CandidateBuilder | null,
       browser: BrowserSessions | null,
-    ) => new PassSettlement({ db: prisma, candidates, browser }),
-    inject: [PRISMA, CandidateBuilder, BrowserSessions],
+      registry: Registry,
+    ) => {
+      // A pass a window of its workspace stopped (plan 71, §4.4); no id in a label.
+      const refusals = new Counter({
+        name: 'raditi_workspace_window_refusals_total',
+        help: 'Passes and calls refused by a usage window of their workspace',
+        labelNames: ['tier', 'window', 'point'],
+        registers: [registry],
+      })
+      return new PassSettlement({
+        db: prisma,
+        candidates,
+        browser,
+        onUsageLimit: ({ window, tier }) => refusals.inc({ tier, window, point: 'pass' }),
+      })
+    },
+    inject: [PRISMA, CandidateBuilder, BrowserSessions, METRICS_REGISTRY],
   },
   {
     provide: PassRunner,
@@ -87,8 +114,17 @@ export const taskProviders: Provider[] = [
       queue: JobQueue,
       browser: BrowserSessions | null,
       storage: ObjectStorage,
-    ) =>
-      new PassRunner({
+      registry: Registry,
+      executor: TurnExecutor | null,
+    ) => {
+      // What the pool told a pass (plan 71, §4.4): the limits of the agent out.
+      const limitsOut = new Counter({
+        name: 'raditi_pass_limits_out_total',
+        help: 'Passes the pool ended because its limits are out',
+        registers: [registry],
+      })
+      return new PassRunner({
+        pool: { limitsOut: () => limitsOut.inc() },
         db: prisma,
         supervisor,
         git,
@@ -106,8 +142,14 @@ export const taskProviders: Provider[] = [
           db: prisma,
           storage,
           logger: new Logger('ChatFiles'),
+          pages: new PagePublications({ db: prisma, logger: new Logger('Pages') }),
         }),
-      }),
+        docs: new DocSections({ db: prisma, logger: new Logger('DocSections') }),
+        // Docs/plan/70-turn-without-time-limit.md, ВР13 and ВР17.
+        workspaceTurnLimit: config.workspaceTurnLimit,
+        capacity: new TurnCapacity(executor),
+      })
+    },
     inject: [
       PRISMA,
       TurnSupervisor,
@@ -120,6 +162,8 @@ export const taskProviders: Provider[] = [
       JOB_QUEUE,
       BrowserSessions,
       OBJECT_STORAGE,
+      METRICS_REGISTRY,
+      { token: TURN_EXECUTOR, optional: true },
     ],
   },
   {
@@ -185,7 +229,18 @@ export const taskProviders: Provider[] = [
       queue: JobQueue,
       browser: BrowserSessions | null,
       inbox: ObjectStorage,
-    ) => new TaskSweep({ db: prisma, settlement, live, journal, drivers, queue, browser, inbox }),
+    ) =>
+      new TaskSweep({
+        db: prisma,
+        settlement,
+        live,
+        journal,
+        drivers,
+        queue,
+        browser,
+        inbox,
+        pages: new PagePublications({ db: prisma, logger: new Logger('Pages') }),
+      }),
     inject: [
       PRISMA,
       PassSettlement,

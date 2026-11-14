@@ -40,7 +40,7 @@ import {
   execCursorSchema,
   execExitSchema,
   execSpecSchema,
-  MAX_SANDBOX_TURN_MS,
+  MAX_SANDBOX_LEASE_MS,
   sandboxLabelsSchema,
   sandboxSpecSchema,
   type DestroyReason,
@@ -124,10 +124,15 @@ export const runnerLimits = Object.freeze({
   /** A JSON request body: an output batch plus its envelope. */
   bodyBytes: 1024 * 1024 + 64 * 1024,
   commands: 64,
-  capacity: 64,
+  /**
+   * The turns one runner may hold: not a limit of turns but of the protocol's lists (owner's
+   * request of 13.11.2026, docs/plan/70-turn-without-time-limit.md, ВР26).
+   */
+  capacity: 1024,
   /** Waiting assignments one claim offers the store, oldest first. */
   claimIds: 256,
-  inventory: 256,
+  /** A container per turn the runner holds. */
+  inventory: 1024,
   /** turnCredentials(): the LLM key, the MCP token and every secret file. */
   credentials: preparedRunLimits.secretFiles + 2,
   /** The values of the client's variables of one turn (plan 53, Р13): a site has up to 64. */
@@ -160,7 +165,7 @@ const sandboxRef = z
   .max(200)
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/)
 const sha256Hex = z.string().regex(/^[0-9a-f]{64}$/)
-const turnMs = z.number().int().positive().max(MAX_SANDBOX_TURN_MS)
+const turnMs = z.number().int().positive().max(MAX_SANDBOX_LEASE_MS)
 const fence = siteLeaseFenceSchema.strict()
 
 /**
@@ -323,8 +328,17 @@ const adoptCommand = command('adopt', {
 export const runnerCommandSchema = z
   .discriminatedUnion('type', [
     prepareCommand,
-    /** Only after core asserted its fence. */
-    command('launch', { timeoutMs: turnMs }),
+    /**
+     * Only after core asserted its fence. Without `timeoutMs` the agent has no time limit
+     * (docs/plan/70-turn-without-time-limit.md, ВР1); core sends one only to a runner that
+     * cannot extend its turns (`runnerFeatures`).
+     */
+    command('launch', { timeoutMs: turnMs.optional() }),
+    /**
+     * The turn was renewed: its container and the gateway of its attempt live `remainingMs` from
+     * the receipt, never less than before (ВР4). Only to a runner that names `extend`.
+     */
+    command('extend', { remainingMs: turnMs }),
     adoptCommand,
     /** Re-attach to the agent after a restart, from the journal cursor. */
     command('resume', {
@@ -432,10 +446,19 @@ const runnerContainerSchema = z
   })
   .strict()
 
+/**
+ * What a runner can do beyond the first protocol. `extend` — it extends a turn's container on the
+ * command `extend` (docs/plan/70-turn-without-time-limit.md, ВР4): a runner without it gets the
+ * old fixed deadline of a turn, MAX_SANDBOX_LEASE_MS, until it is replaced.
+ */
+export const runnerFeatures = ['extend'] as const
+export type RunnerFeature = (typeof runnerFeatures)[number]
+
 export const runnerPollRequestSchema = z
   .object({
     /** A fresh uuid per process start: a restarted runner is a new session. */
     runnerSession: uuid,
+    features: z.array(z.enum(runnerFeatures)).max(runnerFeatures.length).optional(),
     capacity: z.number().int().nonnegative().max(runnerLimits.capacity),
     inventory: z.array(runnerContainerSchema).max(runnerLimits.inventory),
     active: z

@@ -6,9 +6,9 @@
 #   - PREVIEW_APEX_HOST: the apex of the preview domain answers with a redirect to the cabinet;
 #     previews themselves (one label under it) need the wildcard of traefik/dynamic/preview.yml;
 #   - the stream of the cloud browser on the cabinet's host goes to the stream gateway (preview);
-#   - PAGES_HOST: the root of the domain of the pages the agent makes (docs/plan/67, Д3; owner's
+#   - PAGES_ROOT_HOST: the root of the domain of pages (PAGES_BASE_DOMAIN; docs/plan/67, Д3; owner's
 #     answer of 13.11.2026: pages.raditi.ru) is web: its proxy answers /v/<token> and robots.txt
-#     there and 404 to everything else. Its subdomains are plan 69's, not this router's.
+#     there and 404 to everything else. Its subdomains are plan 69's (traefik/dynamic/pages.yml).
 http:
   routers:
     dashboard:
@@ -29,14 +29,14 @@ http:
         certResolver: le
         domains: [{ main: '{{ env "PREVIEW_APEX_HOST" }}' }]
     # {{ end }}
-    # {{ if env "PAGES_HOST" }}
-    pages:
+    # {{ if env "PAGES_ROOT_HOST" }}
+    pages-root:
       entryPoints: [websecure]
-      rule: 'Host(`{{ env "PAGES_HOST" }}`) && (Method(`GET`) || Method(`HEAD`))'
+      rule: 'Host(`{{ env "PAGES_ROOT_HOST" }}`) && (Method(`GET`) || Method(`HEAD`))'
       service: web
       tls:
         certResolver: le
-        domains: [{ main: '{{ env "PAGES_HOST" }}' }]
+        domains: [{ main: '{{ env "PAGES_ROOT_HOST" }}' }]
     # {{ end }}
     browser-stream:
       entryPoints: [websecure]

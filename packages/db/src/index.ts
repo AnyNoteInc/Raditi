@@ -11,11 +11,21 @@ export {
 } from './client.ts'
 export { enqueueOutbox, type OutboxMessage, type OutboxWriter } from './outbox.ts'
 export {
+  lockUsageWindows,
+  openReservedWindowCredits,
+  openUsageWindows,
+  workspaceUsageTerms,
+  workspaceWindowUsage,
+  type WorkspaceUsageTerms,
+} from './usage-windows.ts'
+export {
+  agentTurnPriority,
   enqueueAgentTurn,
   enqueueBrowserEnsure,
   enqueuePreviewBrowser,
   enqueuePreviewSync,
   enqueueReleaseAdvance,
+  enqueueAgentWaitingPasses,
   enqueueSiteWaitingPasses,
 } from './chat-outbox.ts'
 export {
@@ -75,6 +85,48 @@ export {
 export { markStaleCandidates } from './preview-staleness.ts'
 export { insertFeedEvent, type FeedEventInput, type FeedWriter } from './feed-events.ts'
 export {
+  applyPageVersion,
+  clearStaleUncheckedSections,
+  createChatDocument,
+  dropAbandonedPages,
+  currentDocMarkdown,
+  listWorkspacePages,
+  NEUTRAL_INTENT,
+  NEUTRAL_TITLE,
+  moveDocSection,
+  pendingPageReservations,
+  readChatDocument,
+  removeDocSection,
+  requestDocFinish,
+  reservePagePublication,
+  restorePage,
+  servedPage,
+  setPagePassword,
+  stalePageReservations,
+  settlePageReservation,
+  settleTurnSections,
+  takeDownPage,
+  uncheckedSectionsOfTurn,
+  writeDocSection,
+  type ChatDocumentSkeleton,
+  type DocSectionWrite,
+  type PagePublication,
+  type PagePublicationInput,
+  type PagePublicationTarget,
+  type PageTakeDown,
+  type PageVersionInput,
+  type ReadDocSection,
+  type ServedPage,
+  type SettledDocument,
+  type TurnSectionsVerdict,
+} from './pages.ts'
+export {
+  admitInWindow,
+  hashPagePassword,
+  pagePasswordProblem,
+  verifyPagePassword,
+} from './page-passwords.ts'
+export {
   ensurePersonalWorkspace,
   findPersonalWorkspace,
   lockUserRow,
@@ -133,6 +185,7 @@ export { PostgresTurnAssignmentStore } from './turn-assignments.ts'
 export { PostgresTaskTurnAssignmentStore } from './task-turn-assignments.ts'
 export {
   cancelWaitingTask,
+  claimQueuedPass,
   claimQueuedTask,
   excludeTurnDbOperations,
   includeTurnDbOperations,

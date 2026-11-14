@@ -19,6 +19,7 @@
     "./release/chat-commands": "./src/release/chat-commands.ts",
     "./release/db-objects": "./src/release/db-objects.ts",
     "./preview/hostname": "./src/preview/hostname.ts",
+    "./pages": "./src/pages/index.ts",
     "./release/env-vars": "./src/release/env-vars.ts",
     "./site-connection/database-dump": "./src/site-connection/database-dump.ts",
     "./site-stack/limit-texts": "./src/site-stack/limit-texts.ts",

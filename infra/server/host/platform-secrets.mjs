@@ -49,7 +49,8 @@ const GENERATED = {
     S3_ACCESS_KEY_ID: s3Key,
     S3_SECRET_ACCESS_KEY: b64url(30),
   },
-  'app/preview': { PREVIEW_SESSION_SECRET: b64url(48) },
+  // PAGES_COOKIE_SECRET: the cookie of a page's password (docs/plan/69-pages.md, Ст13), its own
+  'app/preview': { PREVIEW_SESSION_SECRET: b64url(48), PAGES_COOKIE_SECRET: b64url(48) },
   // mcp writes the content snapshots of previews into raditi-artifacts, its only bucket (spec §14)
   'app/mcp': { S3_ACCESS_KEY_ID: s3Key, S3_SECRET_ACCESS_KEY: b64url(30) },
   'app/traefik': { dashboard_user: () => 'admin', dashboard_password: b64url(18) },
@@ -231,6 +232,7 @@ function serviceFiles(kv, roles) {
         'app.env': env({
           DATABASE_URL: db,
           PREVIEW_SESSION_SECRET: preview.PREVIEW_SESSION_SECRET,
+          PAGES_COOKIE_SECRET: preview.PAGES_COOKIE_SECRET,
           BROWSER_WORKER_TOKEN: core.BROWSER_WORKER_TOKEN,
         }),
       },

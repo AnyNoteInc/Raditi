@@ -14,3 +14,9 @@ const testEnv = {
 export function testMcpConfig(): McpConfig {
   return loadMcpConfig(testEnv)
 }
+
+/**
+ * A tool of another family than the documents (docs/plan/69-pages.md, Ст21): `doc_*` is offered to
+ * every turn, so a test of another family's list leaves them out; the documents test their own.
+ */
+export const notDocTool = (name: string): boolean => !name.startsWith('doc_')

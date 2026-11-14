@@ -78,6 +78,7 @@ on:
       - apps/core/scripts/verify-agent-content-role.mjs
       - apps/core/scripts/verify-agent-supervisor.mjs
       - packages/domain/src/errors.ts
+      - packages/domain/src/pages/slug.ts
       - packages/sandbox-providers/src/*.ts
       - packages/sandbox-providers/src/gateway/**
   # tasks and mcp change in almost every pull request and the job stand runs an hour: once a week.

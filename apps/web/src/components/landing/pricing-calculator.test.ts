@@ -17,7 +17,7 @@ import {
 import { pricing } from './testing'
 
 // The slider counts tasks; a tariff is sold in credits. The tariffs of the fixture — the terms
-// of 06.11.2026 — give 150, 600 and 2 000 credits a month for 1 990, 6 990 and 19 990 ₽, the pack
+// of 13.11.2026 — give 200, 1 000 and 2 000 credits a month for 1 990, 9 990 and 19 990 ₽, the pack
 // 100 for 1 490 ₽, and a task is counted at the average charge of 11.
 describe('the credits a number of tasks needs', () => {
   it('counts every task at the average charge of the credits model', () => {
@@ -30,28 +30,28 @@ describe('the credits a number of tasks needs', () => {
 
 describe('landing plan recommendation', () => {
   it('keeps the truly cheapest option when a larger plan costs only a little more', () => {
-    // 440 credits: «Старт» with three packs is 530 ₽ cheaper than «Бизнес».
-    expect(recommendPlan(pricing, 40)).toMatchObject({
+    // 605 credits: «Старт» with five packs is 550 ₽ cheaper than «Бизнес».
+    expect(recommendPlan(pricing, 55)).toMatchObject({
       plan: { slug: 'start' },
-      packs: 3,
-      total: '6460.00',
+      packs: 5,
+      total: '9440.00',
     })
-    // 1 397 credits: «Бизнес» with eight packs is 1 080 ₽ cheaper than «Агентство».
-    expect(recommendPlan(pricing, 127)).toMatchObject({
+    // 1 507 credits: «Бизнес» with six packs is 1 060 ₽ cheaper than «Агентство».
+    expect(recommendPlan(pricing, 137)).toMatchObject({
       plan: { slug: 'business' },
-      packs: 8,
-      total: '18910.00',
+      packs: 6,
+      total: '18930.00',
     })
   })
 
   it('charges for whole packs and switches to a cheaper quota plan at the boundary', () => {
-    // 143 credits fit the 150 of «Старт»; 154 do not.
-    expect(recommendPlan(pricing, 13)).toMatchObject({
+    // 198 credits fit the 200 of «Старт»; 209 do not.
+    expect(recommendPlan(pricing, 18)).toMatchObject({
       plan: { slug: 'start' },
       packs: 0,
       total: '1990.00',
     })
-    expect(recommendPlan(pricing, 14)).toMatchObject({
+    expect(recommendPlan(pricing, 19)).toMatchObject({
       plan: { slug: 'start' },
       packs: 1,
       total: '3480.00',
@@ -62,25 +62,25 @@ describe('landing plan recommendation', () => {
       packs: 2,
       total: '4970.00',
     })
-    // 451 credits: a fourth pack would make «Старт» dearer than «Бизнес».
-    expect(recommendPlan(pricing, 41)).toMatchObject({
+    // 704 credits: a sixth pack would make «Старт» dearer than «Бизнес».
+    expect(recommendPlan(pricing, 64)).toMatchObject({
       plan: { slug: 'business' },
       packs: 0,
-      total: '6990.00',
+      total: '9990.00',
     })
-    // 594 credits fit the 600 of «Бизнес»; 605 need a pack.
-    expect(recommendPlan(pricing, 54)).toMatchObject({
+    // 990 credits fit the 1 000 of «Бизнес»; 1 001 need a pack.
+    expect(recommendPlan(pricing, 90)).toMatchObject({
       plan: { slug: 'business' },
       packs: 0,
-      total: '6990.00',
+      total: '9990.00',
     })
-    expect(recommendPlan(pricing, 55)).toMatchObject({
+    expect(recommendPlan(pricing, 91)).toMatchObject({
       plan: { slug: 'business' },
       packs: 1,
-      total: '8480.00',
+      total: '11480.00',
     })
-    // 1 408 credits: a ninth pack would make «Бизнес» dearer than «Агентство».
-    expect(recommendPlan(pricing, 128)).toMatchObject({
+    // 1 606 credits: a seventh pack would make «Бизнес» dearer than «Агентство».
+    expect(recommendPlan(pricing, 146)).toMatchObject({
       plan: { slug: 'agency' },
       packs: 0,
       total: '19990.00',
@@ -109,7 +109,7 @@ describe('landing plan recommendation', () => {
     expect(recommendPlan(withoutPacks, 35)).toMatchObject({
       plan: { slug: 'business' },
       packs: 0,
-      total: '6990.00',
+      total: '9990.00',
     })
     expect(recommendPlan(withoutPacks, 300)).toBeNull()
     expect(recommendPlan({ plans: [], pack: null }, 30)).toBeNull()
@@ -132,7 +132,7 @@ describe('landing plan recommendation', () => {
     try {
       Decimal.set({ precision: 2, rounding: Decimal.ROUND_DOWN })
       expect(recommendPlan(pricing, 40)?.total).toBe('6460.00')
-      expect(recommendPlan(pricing, 40)?.smallEditRounded).toBe('72.00')
+      expect(recommendPlan(pricing, 40)?.smallEditRounded).toBe('65.00')
     } finally {
       Decimal.set(previous)
     }
@@ -167,11 +167,11 @@ describe('estimate of one task', () => {
       total: '6460.00',
       perTaskRounded: '162.00',
     })
-    expect(recommendPlan(pricing, 54)).toMatchObject({
-      total: '6990.00',
-      perTaskRounded: '129.00',
+    expect(recommendPlan(pricing, 64)).toMatchObject({
+      total: '9990.00',
+      perTaskRounded: '156.00',
     })
-    expect(recommendPlan(pricing, 127)).toMatchObject({ perTaskRounded: '149.00' })
+    expect(recommendPlan(pricing, 127)).toMatchObject({ perTaskRounded: '126.00' })
     expect(estimate('347.00', 2)?.perTaskRounded).toBe('174.00')
     expect(estimate('346.98', 2)?.perTaskRounded).toBe('173.00')
     expect(estimate('1.00', 2)?.perTaskRounded).toBe('1.00')
@@ -203,16 +203,16 @@ describe('estimate of one task', () => {
 
 describe('the price of a small edit in the result', () => {
   it('is that of the card while the plan alone covers the tasks', () => {
-    // 1 990 ₽ for 150 credits, 6 990 ₽ for 600, 19 990 ₽ for 2 000: 66.33, 58.25, 49.975.
-    expect(recommendPlan(pricing, 13)?.smallEditRounded).toBe('66.00')
-    expect(recommendPlan(pricing, 54)?.smallEditRounded).toBe('58.00')
+    // 1 990 ₽ for 200 credits, 9 990 ₽ for 1 000, 19 990 ₽ for 2 000: 49.75, 49.95, 49.975.
+    expect(recommendPlan(pricing, 13)?.smallEditRounded).toBe('50.00')
+    expect(recommendPlan(pricing, 64)?.smallEditRounded).toBe('50.00')
     expect(recommendPlan(pricing, 181)?.smallEditRounded).toBe('50.00')
   })
 
   it('counts the packs in: what is paid over the credits the plan and its packs give', () => {
-    // 4 970 ₽ for 350 credits, 8 480 ₽ for 700, 39 360 ₽ for 3 300.
-    expect(recommendPlan(pricing, 30)?.smallEditRounded).toBe('71.00')
-    expect(recommendPlan(pricing, 55)?.smallEditRounded).toBe('61.00')
+    // 4 970 ₽ for 400 credits, 11 480 ₽ for 1 100, 39 360 ₽ for 3 300.
+    expect(recommendPlan(pricing, 30)?.smallEditRounded).toBe('62.00')
+    expect(recommendPlan(pricing, 91)?.smallEditRounded).toBe('52.00')
     expect(recommendPlan(pricing, 300)?.smallEditRounded).toBe('60.00')
   })
 })
@@ -258,9 +258,9 @@ describe('words for counts', () => {
   })
 
   it.each([
-    // The tariffs of 06.11.2026: no daily limit.
-    [150, null, 'кредитов в месяц — в среднем около 14 задач'],
-    [600, null, 'кредитов в месяц — в среднем около 55 задач'],
+    // The tariffs of 13.11.2026: no daily limit.
+    [200, null, 'кредитов в месяц — в среднем около 18 задач'],
+    [1000, null, 'кредитов в месяц — в среднем около 91 задачи'],
     [2000, null, 'кредитов в месяц — в среднем около 180 задач'],
     [5, null, 'кредитов в месяц'],
     // A tariff that sets a daily limit says it.

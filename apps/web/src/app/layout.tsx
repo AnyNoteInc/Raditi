@@ -8,14 +8,19 @@ import type { Metadata } from 'next'
 import { cookies } from 'next/headers'
 import type { ReactNode } from 'react'
 
+import { env } from '@/env'
+
 import { Providers } from './providers'
 
-export const metadata: Metadata = {
+// Relative addresses of the metadata — the canonical one, the pictures of a preview — are
+// resolved against the public address of the service, read when a page is rendered.
+export const generateMetadata = (): Metadata => ({
+  metadataBase: new URL(env.web().appUrl),
   title: { default: 'Радити', template: '%s — Радити' },
   description:
     'Радити — поддержка сайтов для малого бизнеса: напишите в чат, что поменять на сайте. Сервис готовится к запуску.',
   applicationName: 'Радити',
-}
+})
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
   // The colour mode comes from the `theme` cookie only, so the first paint is already right.

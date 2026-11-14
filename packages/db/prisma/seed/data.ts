@@ -14,11 +14,13 @@ export function moscowMidnight(isoDate: string): Date {
 
 // ─── Plans (docs/business.md §6) ──────────────────────────────────────────────
 //
-// The terms are those of the pricing of 06.11.2026 (docs/plan/63-new-pricing.md, Ц1–Ц6): lower
-// prices and credits, and no tariff limits the credits of a day. A database seeded with the
-// terms of before gets them by migrations that run before this seed: billing_credit_amounts
-// (the credits of the credits model), billing_daily_credits (the day of 17.10.2026) and
-// billing_pricing_2026_11 (these terms).
+// The terms are those of the pricing of 06.11.2026 (docs/plan/63-new-pricing.md, Ц1–Ц6) with
+// the credits of 13.11.2026 (docs/plan/72-pricing-api-margin.md, ЦА1–ЦА4): «Старт» 200 credits,
+// «Бизнес» 9 990 ₽ and 1 000, priced for a margin of 10 % on the Z.ai API; no tariff limits the
+// credits of a day. A database seeded with the terms of before gets them by migrations that run
+// before this seed: billing_credit_amounts (the credits of the credits model),
+// billing_daily_credits (the day of 17.10.2026), billing_pricing_2026_11 (06.11.2026),
+// usage_windows (the windows of plan 71) and billing_pricing_api_margin (13.11.2026).
 
 /** Everything except name and sortOrder is a plan term: the seed creates it but never changes it. */
 export interface PlanSeed {
@@ -33,6 +35,11 @@ export interface PlanSeed {
    * since 06.11.2026 (Ц6). The limit stays in the code for a plan that sets one.
    */
   creditsPerDay: number | null
+  /**
+   * Credits the work of a workspace may take in 5 hours and in a week, (plan 71, Л4); NULL on a pack and on pay-per-action, which tier nobody.
+   */
+  creditsPer5h: number | null
+  creditsPerWeek: number | null
   packCredits: number | null
   maxSites: number | null
   sortOrder: number
@@ -44,8 +51,10 @@ export const planSeeds = [
     name: 'Старт',
     kind: 'quota',
     price: '1990.00',
-    creditsPerMonth: 150,
+    creditsPerMonth: 200,
     creditsPerDay: null,
+    creditsPer5h: null,
+    creditsPerWeek: 73,
     packCredits: null,
     maxSites: 1,
     sortOrder: 10,
@@ -54,9 +63,11 @@ export const planSeeds = [
     slug: 'business',
     name: 'Бизнес',
     kind: 'quota',
-    price: '6990.00',
-    creditsPerMonth: 600,
+    price: '9990.00',
+    creditsPerMonth: 1000,
     creditsPerDay: null,
+    creditsPer5h: null,
+    creditsPerWeek: 350,
     packCredits: null,
     maxSites: 3,
     sortOrder: 20,
@@ -68,6 +79,8 @@ export const planSeeds = [
     price: '19990.00',
     creditsPerMonth: 2000,
     creditsPerDay: null,
+    creditsPer5h: null,
+    creditsPerWeek: 700,
     packCredits: null,
     maxSites: 15,
     sortOrder: 30,
@@ -82,6 +95,8 @@ export const planSeeds = [
     price: '1490.00',
     creditsPerMonth: null,
     creditsPerDay: null,
+    creditsPer5h: null,
+    creditsPerWeek: null,
     packCredits: 100,
     maxSites: null,
     sortOrder: 40,
@@ -95,6 +110,8 @@ export const planSeeds = [
     price: '0.00',
     creditsPerMonth: null,
     creditsPerDay: null,
+    creditsPer5h: null,
+    creditsPerWeek: null,
     packCredits: null,
     maxSites: 1,
     sortOrder: 50,

@@ -1,15 +1,11 @@
 'use client'
 
 import { signupGiftCredits } from '@repo/domain/billing/credit-numbers'
-import {
-  leadFieldIssues,
-  leadInputSchema,
-  leadLimits,
-  type LeadField,
-} from '@repo/domain/leads/lead-input'
+import { leadFieldIssues, leadInputSchema, type LeadField } from '@repo/domain/leads/lead-input'
 import { captchaErrorMessage, useSmartCaptcha } from '@repo/ui/captcha'
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
 
+import { SITE_PHONE } from '@/lib/contacts'
 import { legalDocumentHref } from '@/lib/legal'
 import { nbsp } from '@/lib/nbsp'
 
@@ -21,33 +17,11 @@ const CAPTCHA_HEADER = 'x-captcha-response'
 
 type Values = Record<Exclude<LeadField, 'consent'>, string> & { consent: boolean; check: string }
 
-const empty: Values = {
-  name: '',
-  phone: '',
-  email: '',
-  site: '',
-  about: '',
-  consent: false,
-  check: '',
-}
+const empty: Values = { site: '', phone: '', consent: false, check: '' }
 
+// Two fields (the owner, 13.11.2026): the fewer a form asks, the more people finish it. The name
+// and the task are asked when we get in touch.
 const fields = [
-  { key: 'name', label: 'Имя', type: 'text', autoComplete: 'name', placeholder: 'Анна' },
-  {
-    key: 'phone',
-    label: 'Телефон',
-    type: 'tel',
-    autoComplete: 'tel',
-    inputMode: 'tel',
-    placeholder: '+7 900 000-00-00',
-  },
-  {
-    key: 'email',
-    label: 'Электронная почта',
-    type: 'email',
-    autoComplete: 'email',
-    placeholder: 'anna@example.ru',
-  },
   {
     key: 'site',
     label: 'Адрес сайта',
@@ -56,9 +30,17 @@ const fields = [
     inputMode: 'url',
     placeholder: 'kofeinya.ru',
   },
+  {
+    key: 'phone',
+    label: 'Телефон или Telegram',
+    type: 'text',
+    autoComplete: 'tel',
+    inputMode: 'text',
+    placeholder: '+7 900 000-00-00',
+  },
 ] as const
 
-type Sent = { name: string; site: string }
+type Sent = { site: string }
 
 /** What the server said, read without trusting its shape. */
 function serverAnswer(body: unknown): {
@@ -152,7 +134,7 @@ export function LandingLead({
         setFailure(answer.message ?? 'Не удалось отправить заявку. Попробуйте ещё раз.')
         return
       }
-      setSent({ name: values.name.trim().split(/\s+/)[0] ?? '', site: values.site.trim() })
+      setSent({ site: values.site.trim() })
       setValues(empty)
       setTried(false)
       setErrors({})
@@ -202,15 +184,15 @@ export function LandingLead({
           <p className={styles.lede}>
             {nbsp(
               isGuest
-                ? `Оставьте заявку — мы сами подключим ваш сайт, настроим Радити под вашу систему, а ${signupGiftCredits} кредитов на первые задачи придут вместе с регистрацией.`
-                : 'Оставьте заявку — мы сами подключим ваш сайт и настроим Радити под вашу систему.',
+                ? `Оставьте адрес сайта и телефон — мы сами подключим ваш сайт, настроим Радити под вашу систему, а ${signupGiftCredits} кредитов на первые задачи придут вместе с регистрацией.`
+                : 'Оставьте адрес сайта и телефон — мы сами подключим ваш сайт и настроим Радити под вашу систему.',
             )}
           </p>
           <ol className={styles.steps} role="list">
             <li>
               <span>01</span>
               <strong>Заявка</strong>
-              <p>{nbsp('Две минуты, без договоров')}</p>
+              <p>{nbsp('Два поля, одна минута')}</p>
             </li>
             <li>
               <span>02</span>
@@ -229,6 +211,9 @@ export function LandingLead({
               </p>
             </li>
           </ol>
+          <p className={styles.direct}>
+            Или позвоните: <a href={`tel:${SITE_PHONE.tel}`}>{SITE_PHONE.text}</a>
+          </p>
         </div>
 
         <div className={styles.card}>
@@ -244,7 +229,7 @@ export function LandingLead({
                 <path d="M30 17.5v25M19.175 23.75l21.65 12.5M19.175 36.25l21.65-12.5" />
               </svg>
               <h3 ref={doneRef} tabIndex={-1}>
-                Заявка у&nbsp;нас{sent.name ? `, ${sent.name}` : ''}.
+                Заявка у&nbsp;нас.
               </h3>
               <p>
                 {nbsp(
@@ -267,7 +252,7 @@ export function LandingLead({
             >
               <div className={styles.formHead}>
                 <h3 id={`${id}-title`}>Заявка на&nbsp;подключение</h3>
-                <span>Все поля обязательны</span>
+                <span>Оба поля обязательны</span>
               </div>
               <div className={styles.pair}>
                 {fields.map((field) => (
@@ -293,26 +278,6 @@ export function LandingLead({
                     )}
                   </div>
                 ))}
-              </div>
-              <div className={styles.field}>
-                <label htmlFor={fieldId('about')}>Что хотите менять на&nbsp;сайте</label>
-                <textarea
-                  id={fieldId('about')}
-                  name="about"
-                  rows={4}
-                  maxLength={leadLimits.aboutMaxChars}
-                  placeholder="Например: обновлять цены в меню и публиковать новости о мероприятиях"
-                  value={values.about}
-                  onChange={(event) => set('about', event.target.value)}
-                  aria-invalid={errors.about ? true : undefined}
-                  aria-describedby={described('about')}
-                  required
-                />
-                {errors.about && (
-                  <span id={errorId('about')} className={styles.error}>
-                    {errors.about}
-                  </span>
-                )}
               </div>
               {/* The trap: hidden from people and from the keyboard, filled only by robots. Its name
                   and label are like no field a browser fills in by itself. */}

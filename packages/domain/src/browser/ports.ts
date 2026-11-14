@@ -116,6 +116,8 @@ export interface CloudBrowserConnection {
   openWeb: boolean
   /** `BROWSER_PLATFORM_HOSTS`: names no page of any session reaches (К37). */
   platformHosts: readonly string[]
+  /** `PAGES_BASE_DOMAIN`: the agent's published pages under it open (docs/plan/69-pages.md, Ст26). */
+  pageDomain: string | null
   /** The first page: the site's origin and the stack's `startPath`; null — an empty page. */
   startUrl: string | null
   viewport: BrowserViewport
@@ -245,6 +247,11 @@ export interface BrowserSessionRuntime {
   start(spec: BrowserSessionRuntimeSpec, signal?: AbortSignal): Promise<{ endpoint: string }>
   /** Removes the containers, the networks and their files; stopping twice is no error. */
   stop(sessionId: string): Promise<void>
+  /**
+   * Keeps the session past its deadline: a lease the host's watchdog honours, until `deadline`
+   * (epoch ms; docs/plan/70-turn-without-time-limit.md, ВР20). Never earlier than before.
+   */
+  extend(sessionId: string, deadline: number): Promise<void>
   /** Sessions this runtime holds anything of, for the collector. */
   list(): Promise<string[]>
 }

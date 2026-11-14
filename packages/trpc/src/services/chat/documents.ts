@@ -46,7 +46,7 @@ async function chatFileRow(
 }
 
 /**
- * The address the frame of the cabinet opens a page of the chat at: `<PAGES_ORIGIN>/v/<token>`,
+ * The address the frame of the cabinet opens a page of the chat at: `<root of PAGES_BASE_DOMAIN>/v/<token>`,
  * for this user, five minutes. Someone else's chat, a file of another chat and a file that is no
  * page answer NOT_FOUND alike.
  */
@@ -56,17 +56,20 @@ export async function issuePageView(
   input: { userId: string; taskId: string; fileId: string },
   now = Date.now(),
 ): Promise<{ url: string; expiresAt: string }> {
-  if (chat.pages == null) throw pagesUnavailable()
+  if (chat.pageViews == null) throw pagesUnavailable()
   const row = await chatFileRow(db, input)
   if (row === null || documentKindOf(row.name) !== 'page') throw taskNotFound()
   const expiresAt = now + PAGE_VIEW_TTL_MS
-  const token = signPageView(chat.pages.keys.view, {
+  const token = signPageView(chat.pageViews.keys.view, {
     taskId: row.taskId,
     fileId: row.fileId,
     userId: input.userId,
     expiresAt,
   })
-  return { url: `${chat.pages.origin}/v/${token}`, expiresAt: new Date(expiresAt).toISOString() }
+  return {
+    url: `${chat.pageViews.origin}/v/${token}`,
+    expiresAt: new Date(expiresAt).toISOString(),
+  }
 }
 
 export type DocumentText =

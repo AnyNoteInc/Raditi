@@ -30,7 +30,7 @@ function setup(name: string, body: Uint8Array, task = true) {
 
 const keys = pageKeys('a-secret-of-the-pages-that-is-long-enough')
 const chat = {
-  pages: { origin: 'https://pages.example', appUrl: 'https://app.example', keys },
+  pageViews: { origin: 'https://pages.example', appUrl: 'https://app.example', keys },
 } as unknown as ChatContext
 
 describe('issuePageView (docs/plan/67, Д3)', () => {
@@ -57,7 +57,7 @@ describe('issuePageView (docs/plan/67, Д3)', () => {
     await expect(
       issuePageView(
         setup('a.html', new Uint8Array(1)).db,
-        { ...chat, pages: null },
+        { ...chat, pageViews: null },
         {
           userId,
           taskId,

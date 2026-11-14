@@ -2,7 +2,10 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { SITE_PHONE } from '@/lib/contacts'
+
 import { LandingHeader } from './landing-header'
+import { MAIN_ACTION_SHORT, mainAction } from './main-action'
 import { guest, member, stubIntersectionObserver, type ObserverStub } from './testing'
 
 vi.mock('@/app/(protected)/app/actions', () => ({ signOut: vi.fn() }))
@@ -15,21 +18,45 @@ function openMenu(): HTMLElement {
 }
 
 describe('landing account navigation', () => {
-  it('offers sign-in and registration to a guest, in the header and in the mobile menu', () => {
+  it('offers a guest the sign-in and the way to the lead, in the header and in the mobile menu', () => {
     render(<LandingHeader viewer={guest} />)
 
     expect(screen.getByRole('link', { name: 'Войти' })).toHaveAttribute('href', '/sign-in')
-    // The mobile menu is closed, so this is the button of the header itself.
-    expect(screen.getByRole('link', { name: 'Зарегистрироваться' })).toHaveAttribute(
+    // The mobile menu is closed, so this is the button of the header itself: the main action
+    // of a guest by its short name.
+    expect(mainAction(true).label.startsWith(MAIN_ACTION_SHORT)).toBe(true)
+    expect(screen.getByRole('link', { name: MAIN_ACTION_SHORT })).toHaveAttribute(
       'href',
-      '/sign-up',
+      mainAction(true).href,
     )
     expect(screen.queryByRole('button', { name: 'Меню пользователя' })).not.toBeInTheDocument()
     const mobile = openMenu()
-    expect(within(mobile).getByRole('link', { name: 'Зарегистрироваться' })).toHaveAttribute(
+    expect(within(mobile).getByRole('link', { name: MAIN_ACTION_SHORT })).toHaveAttribute(
       'href',
-      '/sign-up',
+      '#lead',
     )
+    // The landing leads a guest to the lead alone: the registration comes after it.
+    const links = screen.getAllByRole('link').map((link) => link.getAttribute('href'))
+    expect(links).not.toContain('/sign-up')
+    expect(screen.queryByRole('link', { name: /Зарегистр/ })).not.toBeInTheDocument()
+  })
+
+  it('shows the phone as a link to call, in the header and in the mobile menu', () => {
+    for (const viewer of [guest, member]) {
+      const { unmount } = render(<LandingHeader viewer={viewer} />)
+
+      const inHeader = screen.getByRole('link', { name: SITE_PHONE.text })
+      expect(inHeader).toHaveAttribute('href', `tel:${SITE_PHONE.tel}`)
+      const mobile = openMenu()
+      const inMenu = within(mobile).getByRole('link', { name: SITE_PHONE.text })
+      expect(inMenu).toHaveAttribute('href', `tel:${SITE_PHONE.tel}`)
+      expect(inMenu).not.toBe(inHeader)
+      // The last link of the menu, after the sections and the action.
+      expect(within(mobile).getAllByRole('link').at(-1)).toBe(inMenu)
+      unmount()
+    }
+    // The number a visitor reads is the number the link calls.
+    expect(SITE_PHONE.text.replace(/[^+\d]/g, '')).toBe(SITE_PHONE.tel)
   })
 
   it('keeps only the account avatar in the authenticated header and puts chats and projects in its menu', () => {
@@ -44,9 +71,14 @@ describe('landing account navigation', () => {
     expect(screen.queryByRole('link', { name: 'Войти' })).not.toBeInTheDocument()
     const mobile = openMenu()
     expect(within(mobile).queryByRole('link', { name: 'Открыть чаты' })).not.toBeInTheDocument()
-    expect(within(mobile).getAllByRole('link')).toHaveLength(4)
+    // The four sections and the phone: no action of a guest.
+    expect(
+      within(mobile)
+        .getAllByRole('link')
+        .map((link) => link.getAttribute('href')),
+    ).toEqual(['#demo', '#possibilities', '#pricing', '#faq', `tel:${SITE_PHONE.tel}`])
     // Neither in the open mobile menu nor in the header itself.
-    expect(screen.queryByRole('link', { name: 'Зарегистрироваться' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /Зарегистр|Подключить/ })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Закрыть меню' }))
     fireEvent.click(screen.getByRole('button', { name: 'Меню пользователя' }))
     const menu = screen.getByRole('menu')
@@ -86,11 +118,12 @@ describe('landing account navigation', () => {
       'href',
       '/chats',
     )
-    // Neither in the open mobile menu nor in the header itself.
-    expect(screen.queryByRole('link', { name: 'Зарегистрироваться' })).not.toBeInTheDocument()
+    // Neither in the open mobile menu nor in the header itself: a visitor who may have an account
+    // is not offered the way of a guest.
+    expect(screen.queryByRole('link', { name: /Зарегистр|Подключить/ })).not.toBeInTheDocument()
   })
 
-  it('leads to the questions from both navigations', () => {
+  it('leads to the example and to the questions from both navigations', () => {
     render(<LandingHeader viewer={guest} />)
 
     const desktop = screen.getByRole('navigation', { name: 'Основная навигация' })
@@ -99,13 +132,23 @@ describe('landing account navigation', () => {
         .getAllByRole('link')
         .map((link) => [link.textContent, link.getAttribute('href')]),
     ).toEqual([
-      ['Как это работает', '#how'],
+      ['Пример', '#demo'],
       ['Возможности', '#possibilities'],
       ['Тарифы', '#pricing'],
       ['Вопросы', '#faq'],
     ])
     const mobile = openMenu()
-    expect(within(mobile).getByRole('link', { name: 'Вопросы' })).toHaveAttribute('href', '#faq')
+    expect(
+      within(mobile)
+        .getAllByRole('link')
+        .slice(0, 4)
+        .map((link) => [link.textContent, link.getAttribute('href')]),
+    ).toEqual([
+      ['Пример', '#demo'],
+      ['Возможности', '#possibilities'],
+      ['Тарифы', '#pricing'],
+      ['Вопросы', '#faq'],
+    ])
   })
 
   it('keeps the links of the closed menu out of reach while it is leaving', () => {
@@ -140,7 +183,7 @@ describe('landing account navigation', () => {
     }
 
     beforeEach(() => {
-      for (const id of ['how', 'possibilities', 'safety', 'pricing', 'faq']) {
+      for (const id of ['demo', 'platforms', 'possibilities', 'safety', 'pricing', 'lead', 'faq']) {
         const section = document.createElement('section')
         section.id = id
         document.body.append(section)
@@ -188,8 +231,10 @@ describe('landing account navigation', () => {
     it('watches only the sections of the navigation', () => {
       render(<LandingHeader viewer={guest} />)
 
-      expect(() => report('how', false)).not.toThrow()
-      expect(() => report('safety', true)).toThrow('safety is not observed')
+      expect(() => report('demo', false)).not.toThrow()
+      for (const id of ['platforms', 'safety', 'lead']) {
+        expect(() => report(id, true)).toThrow(`${id} is not observed`)
+      }
       expect(current()).toEqual([])
     })
   })
@@ -237,7 +282,7 @@ describe('landing account navigation', () => {
       </>,
     )
     const menu = openMenu()
-    const last = within(menu).getByRole('link', { name: 'Зарегистрироваться' })
+    const last = within(menu).getByRole('link', { name: SITE_PHONE.text })
 
     act(() => last.focus())
     act(() => screen.getByRole('button', { name: 'Закрыть меню' }).focus())

@@ -46,9 +46,15 @@ describe('proxy', () => {
     const at = (host: string, path: string, method = 'GET') =>
       new NextRequest(`http://${host}${path}`, { method, headers: { host } })
     const token = '/v/eyJ0IjoiMSJ9.c2lnbmF0dXJl'
+    // The root of PAGES_BASE_DOMAIN with web's port (docs/plan/69-pages.md, Ст3).
+    const pagesAt = (domain: string, appEnv = 'development', appUrl = 'http://localhost:3000') => {
+      vi.stubEnv('APP_ENV', appEnv)
+      vi.stubEnv('APP_URL', appUrl)
+      vi.stubEnv('PAGES_BASE_DOMAIN', domain)
+    }
 
     it('answers its own paths on its host and nothing of the cabinet', () => {
-      vi.stubEnv('PAGES_ORIGIN', 'http://pages.localhost:3000')
+      pagesAt('pages.localhost')
       const pass = proxy(at('pages.localhost:3000', token))
       expect(pass.status).toBe(200)
       expect(pass.headers.get('x-middleware-next')).toBe('1')
@@ -77,17 +83,17 @@ describe('proxy', () => {
     })
 
     it('does not serve the views and links on the cabinet host', () => {
-      vi.stubEnv('PAGES_ORIGIN', 'http://pages.localhost:3000')
+      pagesAt('pages.localhost')
       expect(proxy(at('localhost:3000', token)).status).toBe(404)
       expect(proxy(at('localhost:3000', '/s/abc.def')).status).toBe(404)
       // Without the domain of pages they are no path of the cabinet either.
-      vi.stubEnv('PAGES_ORIGIN', '')
+      pagesAt('')
       expect(proxy(at('localhost:3000', token)).status).toBe(404)
     })
 
     it('frames the pages in the cabinet and leaves its API routes as they were', () => {
       vi.stubEnv('PREVIEW_BASE_DOMAIN', '')
-      vi.stubEnv('PAGES_ORIGIN', 'http://pages.localhost:3000')
+      pagesAt('pages.localhost')
       expect(proxy(at('localhost:3000', '/chats/1')).headers.get('content-security-policy')).toBe(
         contentSecurityPolicy(null, 'http://pages.localhost:3000'),
       )
@@ -97,17 +103,26 @@ describe('proxy', () => {
     })
 
     it('takes a default port in the header for the same host', () => {
-      vi.stubEnv('PAGES_ORIGIN', 'https://pages.raditi.ru')
+      pagesAt('pages.raditi.ru', 'production', 'https://raditi.ru')
       expect(proxy(at('pages.raditi.ru:443', token)).headers.get('x-middleware-next')).toBe('1')
       expect(proxy(at('pages.raditi.ru:443', '/chats')).status).toBe(404)
     })
 
-    it('takes only an exact origin', () => {
-      for (const value of ['pages.localhost', 'http://pages.localhost/', 'ftp://x', 'http://a:b@c'])
-        expect(pagesOriginOf({ PAGES_ORIGIN: value }), value).toBeNull()
-      expect(pagesOriginOf({ PAGES_ORIGIN: 'https://pages.raditi.ru' })).toBe(
-        'https://pages.raditi.ru',
-      )
+    it('derives the origin of the root from PAGES_BASE_DOMAIN', () => {
+      const dev = { APP_ENV: 'development', APP_URL: 'http://localhost:3000' }
+      for (const value of ['', 'Pages.Localhost', 'pages.localhost.', 'http://pages.localhost'])
+        expect(pagesOriginOf({ ...dev, PAGES_BASE_DOMAIN: value }), value).toBeNull()
+      // Outside production the root is web's, so it carries web's port, never the pages' own.
+      expect(
+        pagesOriginOf({ ...dev, PAGES_BASE_DOMAIN: 'pages.localhost', PAGES_PUBLIC_PORT: '8092' }),
+      ).toBe('http://pages.localhost:3000')
+      expect(
+        pagesOriginOf({
+          APP_ENV: 'production',
+          APP_URL: 'https://raditi.ru',
+          PAGES_BASE_DOMAIN: 'pages.raditi.ru',
+        }),
+      ).toBe('https://pages.raditi.ru')
     })
   })
 })

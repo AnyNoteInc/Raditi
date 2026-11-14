@@ -116,12 +116,12 @@ const noHistory: HistoryPage = { items: [], nextCursor: null }
 const meterOf = tariffMeter
 
 /**
- * «Бизнес» in the middle of its period: 565 of its 600 credits are left. Its day is the one the
+ * «Бизнес» in the middle of its period: 965 of its 1 000 credits are left. Its day is the one the
  * answer about a new task tells (`usageOf`).
  */
 function tariffOf(patch: Partial<Omit<TariffUsage, 'today'>> = {}): TariffUsage {
   return {
-    credits: meterOf({ charged: 34, held: 1, left: 565 }),
+    credits: meterOf({ charged: 34, held: 1, left: 965 }),
     today: null,
     sites: { count: 2, max: 3 },
     bySite: [
@@ -152,7 +152,7 @@ type UsagePatch = Partial<
 >
 
 /**
- * «Бизнес» with 100 credits of a pack beside it: 665 credits left; today 4 of the tariff were
+ * «Бизнес» with 100 credits of a pack beside it: 1 065 credits left; today 4 of the tariff were
  * charged and 1 is set aside. Whether a new task would be taken is what the server answers for
  * these accounts, this tariff and this day (`taskCreditsFor`); `facts` add another day, the
  * unpaid work and the credit rate.
@@ -198,7 +198,7 @@ function usageOf(patch: UsagePatch = {}, facts: TaskFacts = {}): BillingUsage {
 const outOfCredits = (patch: UsagePatch = {}, facts: TaskFacts = {}) =>
   usageOf(
     {
-      tariff: tariffOf({ credits: meterOf({ charged: 600 }) }),
+      tariff: tariffOf({ credits: meterOf({ charged: 1000 }) }),
       pack: { left: 0, held: 0 },
       ...patch,
     },
@@ -312,13 +312,13 @@ describe('the «Использование» page while its data is on the way',
 
     // No placeholder: the numbers of the last visit are on the screen at once.
     expect(plain(screen.getByRole('region', { name: 'Кредиты' }).textContent)).toContain(
-      '665кредитов осталось',
+      '1 065кредитов осталось',
     )
     await waitFor(() => expect(getUsage).toHaveBeenCalledTimes(2))
     answer(usageOf({ pack: { left: 20, held: 0 } }))
     await waitFor(() =>
       expect(plain(screen.getByRole('region', { name: 'Кредиты' }).textContent)).toContain(
-        '585кредитов осталось',
+        '985кредитов осталось',
       ),
     )
   })
@@ -437,10 +437,10 @@ describe('the credits of a customer on a tariff', () => {
 
     const credits = await section('Кредиты')
     expect(plain(credits.textContent)).toContain('Тариф «Бизнес» · 18 сентября — 18 октября 2026')
-    expect(plain(within(credits).getByText('665').parentElement?.textContent)).toBe(
-      '665кредитов осталось',
+    expect(plain(within(credits).getByText('1 065').parentElement?.textContent)).toBe(
+      '1 065кредитов осталось',
     )
-    expect(within(credits).getByText('665')).toHaveStyle({
+    expect(within(credits).getByText('1 065')).toHaveStyle({
       fontVariantNumeric: 'proportional-nums',
     })
   })
@@ -451,56 +451,56 @@ describe('the credits of a customer on a tariff', () => {
     const credits = await section('Кредиты')
     expect(
       plain(within(credits).getByRole('heading', { level: 3, name: /По тарифу/ }).textContent),
-    ).toBe('По тарифу — 565 из 600')
+    ).toBe('По тарифу — 965 из 1 000')
     const meter = within(credits).getByRole('img', {
-      name: 'Из 600 кредитов по тарифу: 34 списано, 1 отложено под задачи в работе, 565 осталось',
+      name: 'Из 1 000 кредитов по тарифу: 34 списано, 1 отложено под задачи в работе, 965 осталось',
     })
     expect(tones(meter)).toEqual(['spent', 'held', 'left'])
     // The parts are as wide as their numbers.
     expect(
       [...meter.querySelectorAll('[data-tone]')].map((part) => getComputedStyle(part).flexGrow),
-    ).toEqual(['34', '1', '565'])
+    ).toEqual(['34', '1', '965'])
     const legend = meter.parentElement?.nextElementSibling as HTMLElement
     expect(texts(within(legend).getAllByRole('listitem'))).toEqual([
       'Списано — 34',
       'Отложено — 1',
-      'Осталось — 565',
+      'Осталось — 965',
     ])
     // What becomes of the credits that are set aside is said under the meter.
     expect(plain(credits.textContent)).toContain(
       'Отложенное спишем по факту — сколько уйдёт на работу. Остальное вернётся.',
     )
     expect(plain(credits.textContent)).toContain(
-      '18 октября начислим новые 600. Неистраченные кредиты тарифа перейдут на новый месяц — до 600.',
+      '18 октября начислим новые 1 000. Неистраченные кредиты тарифа перейдут на новый месяц — до 1 000.',
     )
     // Nothing was carried into this period: no line says so.
     expect(plain(credits.textContent)).not.toContain('Перенесено')
   })
 
   it('shows what the renewal carried into the period, and what of it the next one lets expire', async () => {
-    // 120 carried from September and 600 granted for October: 34 charged, 1 set aside, 685
-    // left — 600 of them would pass into November, the other 85 are the rest of the carry.
+    // 120 carried from September and 1 000 granted for October: 34 charged, 1 set aside, 1 085
+    // left — 1 000 of them would pass into November, the other 85 are the rest of the carry.
     getUsage.mockResolvedValue(
       usageOf({
-        tariff: tariffOf({ credits: meterOf({ carried: 120, charged: 34, held: 1, left: 685 }) }),
+        tariff: tariffOf({ credits: meterOf({ carried: 120, charged: 34, held: 1, left: 1085 }) }),
       }),
     )
     showUsage()
 
     const credits = await section('Кредиты')
-    expect(plain(within(credits).getByText('785').parentElement?.textContent)).toBe(
-      '785кредитов осталось',
+    expect(plain(within(credits).getByText('1 185').parentElement?.textContent)).toBe(
+      '1 185кредитов осталось',
     )
     expect(
       plain(within(credits).getByRole('heading', { level: 3, name: /По тарифу/ }).textContent),
-    ).toBe('По тарифу — 685 из 720')
+    ).toBe('По тарифу — 1 085 из 1 120')
     expect(plain(credits.textContent)).toContain('Перенесено с прошлого месяца — 120')
     const meter = within(credits).getByRole('img', {
-      name: 'Из 720 кредитов по тарифу (в том числе 120 с прошлого месяца): 34 списано, 1 отложено под задачи в работе, 685 осталось',
+      name: 'Из 1 120 кредитов по тарифу (в том числе 120 с прошлого месяца): 34 списано, 1 отложено под задачи в работе, 1 085 осталось',
     })
     expect(tones(meter)).toEqual(['spent', 'held', 'left'])
     expect(plain(credits.textContent)).toContain(
-      '18 октября начислим новые 600. Неистраченные кредиты тарифа перейдут на новый месяц — до 600. Из перенесённых с прошлого месяца сгорят 85 кредитов, если не потратить их до 18 октября.',
+      '18 октября начислим новые 1 000. Неистраченные кредиты тарифа перейдут на новый месяц — до 1 000. Из перенесённых с прошлого месяца сгорят 85 кредитов, если не потратить их до 18 октября.',
     )
   })
 
@@ -508,7 +508,7 @@ describe('the credits of a customer on a tariff', () => {
     getUsage.mockResolvedValue(
       usageOf({
         subscription: subscriptionTo({ autoRenewal: false }),
-        tariff: tariffOf({ credits: meterOf({ carried: 120, charged: 34, held: 1, left: 685 }) }),
+        tariff: tariffOf({ credits: meterOf({ carried: 120, charged: 34, held: 1, left: 1085 }) }),
       }),
     )
     showUsage()
@@ -522,11 +522,11 @@ describe('the credits of a customer on a tariff', () => {
   })
 
   it('draws no part for a number that is zero', async () => {
-    getUsage.mockResolvedValue(usageOf({ tariff: tariffOf({ credits: meterOf({ left: 600 }) }) }))
+    getUsage.mockResolvedValue(usageOf({ tariff: tariffOf({ credits: meterOf({ left: 1000 }) }) }))
     showUsage()
 
     const meter = await screen.findByRole('img', {
-      name: 'Из 600 кредитов по тарифу: 0 списано, 0 отложено под задачи в работе, 600 осталось',
+      name: 'Из 1 000 кредитов по тарифу: 0 списано, 0 отложено под задачи в работе, 1 000 осталось',
     })
     expect(tones(meter)).toEqual(['left'])
     // The legend still names the three, and nothing that did not happen.
@@ -566,7 +566,7 @@ describe('the credits of a customer on a tariff', () => {
     // The period was renewed while a task was in work: 45 credits of the old one wait for it.
     getUsage.mockResolvedValue(
       usageOf({
-        tariff: tariffOf({ credits: meterOf({ left: 600, heldEarlier: 45 }) }),
+        tariff: tariffOf({ credits: meterOf({ left: 1000, heldEarlier: 45 }) }),
         pack: { left: 0, held: 0 },
       }),
     )
@@ -576,15 +576,15 @@ describe('the credits of a customer on a tariff', () => {
     // They are not of this period: the meter adds up without them.
     expect(
       within(credits).getByRole('img', {
-        name: 'Из 600 кредитов по тарифу: 0 списано, 0 отложено под задачи в работе, 600 осталось',
+        name: 'Из 1 000 кредитов по тарифу: 0 списано, 0 отложено под задачи в работе, 1 000 осталось',
       }),
     ).toBeVisible()
     expect(plain(credits.textContent)).toContain(
       'Ещё 45 кредитов прошлого периода отложено под задачу в работе. Что не уйдёт на неё, в новый период не перейдёт.',
     )
     expect(plain(credits.textContent)).toContain('Отложенное спишем по факту')
-    expect(plain(within(credits).getByText('600').parentElement?.textContent)).toBe(
-      '600кредитов осталось',
+    expect(plain(within(credits).getByText('1 000').parentElement?.textContent)).toBe(
+      '1 000кредитов осталось',
     )
   })
 
@@ -740,12 +740,12 @@ describe('a customer whose credits are used up', () => {
       '0кредитов осталось',
     )
     const meter = within(credits).getByRole('img', {
-      name: 'Из 600 кредитов по тарифу: 600 списано, 0 отложено под задачи в работе, 0 осталось',
+      name: 'Из 1 000 кредитов по тарифу: 1 000 списано, 0 отложено под задачи в работе, 0 осталось',
     })
     expect(tones(meter)).toEqual(['out'])
     const notice = within(credits).getByRole('status')
     expect(plain(notice.textContent)).toBe(
-      'Лимиты закончились: кредиты по тарифу и из пакета израсходованы. 18 октября начислим 600 кредитов по тарифу «Бизнес». Чтобы продолжить сейчас, купите пакет — 100 кредитов за 1 490 ₽. Кредиты из пакета не сгорают.',
+      'Лимиты закончились: кредиты по тарифу и из пакета израсходованы. 18 октября начислим 1 000 кредитов по тарифу «Бизнес». Чтобы продолжить сейчас, купите пакет — 100 кредитов за 1 490 ₽. Кредиты из пакета не сгорают.',
     )
     // The notice stands above the meter: what stands in the way is read first.
     expect(notice.compareDocumentPosition(meter) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
@@ -776,7 +776,7 @@ describe('a customer whose credits are used up', () => {
 
     const credits = await section('Кредиты')
     expect(plain(within(credits).getByRole('status').textContent)).toBe(
-      'Лимиты закончились: кредиты по тарифу и из пакета израсходованы. 18 октября начислим 600 кредитов по тарифу «Бизнес».',
+      'Лимиты закончились: кредиты по тарифу и из пакета израсходованы. 18 октября начислим 1 000 кредитов по тарифу «Бизнес».',
     )
     expect(within(credits).queryByRole('button')).not.toBeInTheDocument()
     expect(within(credits).queryByRole('link')).not.toBeInTheDocument()
@@ -788,7 +788,7 @@ describe('a customer whose credits are used up', () => {
 
     const credits = await section('Кредиты')
     expect(plain(within(credits).getByRole('status').textContent)).toBe(
-      'Лимиты закончились: кредиты по тарифу и из пакета израсходованы. 18 октября начислим 600 кредитов по тарифу «Бизнес».',
+      'Лимиты закончились: кредиты по тарифу и из пакета израсходованы. 18 октября начислим 1 000 кредитов по тарифу «Бизнес».',
     )
     expect(within(credits).queryByRole('button')).not.toBeInTheDocument()
     expect(within(credits).getByRole('link', { name: 'Сменить тариф' })).toBeVisible()
@@ -816,7 +816,7 @@ describe('a customer whose credits are used up', () => {
 
     const credits = await section('Кредиты')
     expect(plain(within(credits).getByRole('status').textContent)).toBe(
-      'Лимиты закончились, а тариф «Бизнес» действует до 18 октября и не продлится. Купите пакет — 100 кредитов за 1 490 ₽, они не сгорают, — или включите автопродление: тогда 18 октября начислим 600 кредитов.',
+      'Лимиты закончились, а тариф «Бизнес» действует до 18 октября и не продлится. Купите пакет — 100 кредитов за 1 490 ₽, они не сгорают, — или включите автопродление: тогда 18 октября начислим 1 000 кредитов.',
     )
     expect(within(credits).getByRole('button', { name: 'Купить пакет' })).toBeVisible()
     expect(within(credits).getByRole('link', { name: 'Включить автопродление' })).toHaveAttribute(
@@ -828,12 +828,12 @@ describe('a customer whose credits are used up', () => {
 
   it('keeps the credits in work in the meter', async () => {
     getUsage.mockResolvedValue(
-      outOfCredits({ tariff: tariffOf({ credits: meterOf({ charged: 598, held: 2 }) }) }),
+      outOfCredits({ tariff: tariffOf({ credits: meterOf({ charged: 998, held: 2 }) }) }),
     )
     showUsage()
 
     const meter = await screen.findByRole('img', {
-      name: 'Из 600 кредитов по тарифу: 598 списано, 2 отложено под задачи в работе, 0 осталось',
+      name: 'Из 1 000 кредитов по тарифу: 998 списано, 2 отложено под задачи в работе, 0 осталось',
     })
     // Two set aside are worth waiting for: one credit starts a task (КР5–КР8).
     expect(tones(meter)).toEqual(['spent', 'held'])
@@ -850,7 +850,7 @@ describe('a customer whose credits are used up', () => {
     expect(
       tones(
         within(credits).getByRole('img', {
-          name: 'Из 600 кредитов по тарифу: 600 списано, 0 отложено под задачи в работе, 0 осталось',
+          name: 'Из 1 000 кредитов по тарифу: 1 000 списано, 0 отложено под задачи в работе, 0 осталось',
         }),
       ),
     ).toEqual(['spent'])
@@ -894,7 +894,7 @@ describe('a customer whose tariff is not paid', () => {
   })
 
   it('does not count the rest of the period that ended as credits the customer has', async () => {
-    // 565 of 600 credits of the tariff were not used, nothing was bought.
+    // 965 of 1 000 credits of the tariff were not used, nothing was bought.
     getUsage.mockResolvedValue(
       usageOf({
         subscription: subscriptionTo({ status: 'past_due' }),
@@ -911,7 +911,7 @@ describe('a customer whose tariff is not paid', () => {
       plain(within(credits).getByRole('heading', { level: 3, name: /По тарифу/ }).textContent),
     ).toBe('По тарифу — период закончился')
     const meter = within(credits).getByRole('img', {
-      name: 'Из 600 кредитов по тарифу: 34 списано, 1 отложено под задачи в работе, 565 не использовано',
+      name: 'Из 1 000 кредитов по тарифу: 34 списано, 1 отложено под задачи в работе, 965 не использовано',
     })
     // The meter still shows what the period went to.
     expect(tones(meter)).toEqual(['spent', 'held', 'left'])
@@ -919,14 +919,14 @@ describe('a customer whose tariff is not paid', () => {
     expect(texts(within(legend).getAllByRole('listitem'))).toEqual([
       'Списано — 34',
       'Отложено — 1',
-      'Не использовано — 565',
+      'Не использовано — 965',
     ])
     // What was not used is no credit the customer has now: it waits for the payment, which
-    // carries it on — all 565, within the 600 of the period.
+    // carries it on — all 965, within the 1 000 of the period.
     expect(plain(credits.textContent)).toContain(
-      'Период тарифа закончился 18 октября. После оплаты начислим новые кредиты, а 565 неиспользованных кредитов тарифа перейдут на новый месяц.',
+      'Период тарифа закончился 18 октября. После оплаты начислим новые кредиты, а 965 неиспользованных кредитов тарифа перейдут на новый месяц.',
     )
-    expect(plain(credits.textContent)).not.toMatch(/Осталось|565 из 600|565\s?кредитов осталось/)
+    expect(plain(credits.textContent)).not.toMatch(/Осталось|965 из 1 000|965\s?кредитов осталось/)
   })
 
   it('keeps the purchased credits for the customer and ties them to the payment', async () => {
@@ -958,11 +958,11 @@ describe('a customer whose tariff is not paid', () => {
     showUsage()
 
     const credits = await section('Кредиты')
-    // 565 of the tariff and 100 from a pack: only those of the pack outlive the period.
+    // 965 of the tariff and 100 from a pack: only those of the pack outlive the period.
     expect(plain(within(credits).getByText('100').parentElement?.textContent)).toBe(
       '100кредитов осталось',
     )
-    expect(plain(credits.textContent)).not.toContain('665')
+    expect(plain(credits.textContent)).not.toContain('1 065')
   })
 })
 
@@ -1446,12 +1446,12 @@ describe('the gift credits on «Использование»', () => {
     showUsage()
 
     const credits = await section('Кредиты')
-    // 565 of the tariff, 35 of the gift and 100 from a pack.
-    expect(plain(within(credits).getByText('700').parentElement?.textContent)).toBe(
-      '700кредитов осталось',
+    // 965 of the tariff, 35 of the gift and 100 from a pack.
+    expect(plain(within(credits).getByText('1 100').parentElement?.textContent)).toBe(
+      '1 100кредитов осталось',
     )
     expect(headings(credits)).toEqual([
-      'По тарифу — 565 из 600',
+      'По тарифу — 965 из 1 000',
       'Подарочные — 35',
       'Из пакета — 100',
     ])
@@ -1466,7 +1466,7 @@ describe('the gift credits on «Использование»', () => {
     // The gift is no part of the quota of the period.
     expect(
       within(credits).getByRole('img', {
-        name: 'Из 600 кредитов по тарифу: 34 списано, 1 отложено под задачи в работе, 565 осталось',
+        name: 'Из 1 000 кредитов по тарифу: 34 списано, 1 отложено под задачи в работе, 965 осталось',
       }),
     ).toBeVisible()
   })
@@ -1494,7 +1494,7 @@ describe('the gift credits on «Использование»', () => {
       getUsage.mockResolvedValue(usageOf({ gift }))
       const view = showUsage()
       const credits = await section('Кредиты')
-      expect(headings(credits)).toEqual(['По тарифу — 565 из 600', 'Из пакета — 100'])
+      expect(headings(credits)).toEqual(['По тарифу — 965 из 1 000', 'Из пакета — 100'])
       expect(plain(credits.textContent)).not.toMatch(/[Пп]одарочн/)
       view.unmount()
     }
@@ -1520,7 +1520,7 @@ describe('the gift credits on «Использование»', () => {
     showUsage()
 
     const credits = await section('Кредиты')
-    // 565 of the tariff are over with its period; the gift and the pack outlive it.
+    // 965 of the tariff are over with its period; the gift and the pack outlive it.
     expect(plain(within(credits).getByText('135').parentElement?.textContent)).toBe(
       '135кредитов осталось',
     )
@@ -1657,7 +1657,7 @@ describe('what stands in the way of a new task on «Использование»
   it('counts credits of the period before among those that are set aside', async () => {
     getUsage.mockResolvedValue(
       usageOf({
-        tariff: tariffOf({ credits: meterOf({ charged: 600, left: 0, heldEarlier: 45 }) }),
+        tariff: tariffOf({ credits: meterOf({ charged: 1000, left: 0, heldEarlier: 45 }) }),
         pack: { left: 0, held: 0 },
       }),
     )
@@ -1676,8 +1676,8 @@ describe('what stands in the way of a new task on «Использование»
     // Nothing the customer pays for lifts it; the credits are shown as they are.
     const credits = await section('Кредиты')
     expect(within(credits).queryByRole('link')).not.toBeInTheDocument()
-    expect(plain(within(credits).getByText('665').parentElement?.textContent)).toBe(
-      '665кредитов осталось',
+    expect(plain(within(credits).getByText('1 065').parentElement?.textContent)).toBe(
+      '1 065кредитов осталось',
     )
   })
 
@@ -1754,5 +1754,59 @@ describe('what stands in the way of a new task on «Использование»
       )
       expect(await state()).not.toContain('Без тарифа можно поставить')
     })
+  })
+})
+
+// Plan 71, §4.5: the windows of 5 hours and of the week, what each took and when it resets.
+describe('the «Лимиты» of the windows of the workspace', () => {
+  const opened = new Date('2026-11-16T10:40:00.000Z')
+
+  it('shows two meters with what each window took, of how many, and the reset by the Moscow clock', async () => {
+    getUsage.mockResolvedValue(
+      usageOf(
+        {},
+        {
+          windows: [
+            {
+              kind: '5h',
+              limit: 20,
+              used: '12.4',
+              resetsAt: new Date(opened.getTime() + 5 * 3_600_000),
+            },
+            { kind: 'week', limit: 55, used: '0', resetsAt: null },
+          ],
+        },
+      ),
+    )
+    showUsage()
+
+    const limits = await section('Лимиты')
+    const text = plain(limits.textContent)
+    expect(text).toContain('5 часов')
+    expect(text).toContain('13 из 20 кредитов')
+    expect(text).toContain('Сбросится в 18:40.')
+    expect(text).toContain('Неделя')
+    expect(text).toContain('0 из 55 кредитов')
+    expect(text).toContain('Начнётся с первой задачи.')
+    expect(text).toContain('кредиты от этого не сгорают')
+  })
+
+  it('shows the windows without a tariff too, and no block without limits', async () => {
+    getUsage.mockResolvedValue(
+      noTariff(10, noGift, noHistory, {
+        windows: [
+          { kind: '5h', limit: 15, used: '1', resetsAt: null },
+          { kind: 'week', limit: 50, used: '1', resetsAt: null },
+        ],
+      }),
+    )
+    const { unmount } = showUsage()
+    expect(plain((await section('Лимиты')).textContent)).toContain('1 из 15 кредитов')
+    unmount()
+
+    getUsage.mockResolvedValue(usageOf())
+    showUsage()
+    await section('Кредиты')
+    expect(screen.queryByRole('region', { name: 'Лимиты' })).not.toBeInTheDocument()
   })
 })

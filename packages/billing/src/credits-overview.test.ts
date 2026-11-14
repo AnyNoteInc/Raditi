@@ -31,9 +31,19 @@ const overview = {
   setAside: 45,
   minToStart: 1,
   today: { limit: 50, charged: 0, held: 45, used: 45, room: 5, left: 5 },
+  tier: 'start',
+  windows: [
+    { kind: '5h', limit: 20, used: 12, left: 8, resetsAt: new Date('2026-10-04T15:40:00.000Z') },
+    { kind: 'week', limit: 55, used: 12, left: 43, resetsAt: new Date('2026-10-10T10:15:00.000Z') },
+  ],
   newTask: { allowed: true, reason: null },
 }
 const DAY = overview.today
+/** The windows of a plan without limits of its own (the fixtures' plan), none of them started. */
+const OPEN_WINDOWS = [
+  { kind: '5h', limit: null, used: 0, left: null, resetsAt: null },
+  { kind: 'week', limit: null, used: 0, left: null, resetsAt: null },
+]
 
 describe('credits overview DTO', () => {
   it('accepts the three accounts with the answer about a new task', () => {
@@ -287,6 +297,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
         minToStart: 1,
         // a plan without a daily limit: the day is counted, and nothing caps it
         today: { limit: null, charged: 0, held: 0, used: 0, room: null, left: 300 },
+        tier: 'start',
+        windows: OPEN_WINDOWS,
         newTask: { allowed: true, reason: null },
       })
     })
@@ -530,6 +542,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
         allowed: false,
         reason: 'rate_missing',
         today: { limit: null, charged: 0, held: 0, used: 0, room: null, left: 300 },
+        tier: 'start',
+        windows: [
+          { kind: '5h', limit: null, used: '0', resetsAt: null },
+          { kind: 'week', limit: null, used: '0', resetsAt: null },
+        ],
       })
     })
 
@@ -563,6 +580,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL credits overview', () => {
         setAside: 0,
         minToStart: 1,
         today: null,
+        tier: 'none',
+        windows: [],
         newTask: { allowed: true, reason: null },
       })
     })

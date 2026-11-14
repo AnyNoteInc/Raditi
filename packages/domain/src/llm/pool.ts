@@ -2,10 +2,10 @@ import { z } from 'zod'
 
 import { badRequest } from '../errors.ts'
 import { limitWindowsSchema, llmBackendIdSchema, llmCapacitySchema } from '../ports/llm-backend.ts'
+import { absoluteWindow } from './plan-credits.ts'
 
 export const poolPolicy = Object.freeze({
   minTurnHeadroomPct: 5,
-  newTaskFiveHourHeadroomPct: 10,
   // A window snapshot older than this is refreshed by one probe before a key is issued and
   // before the first call of a key. Its age alone closes nothing.
   windowsFreshMs: 10 * 60_000,
@@ -18,7 +18,13 @@ export const poolPolicy = Object.freeze({
   limitsOutWaitMs: 45 * 60_000,
   suspendedHoldMs: 24 * 60 * 60_000,
   maxRebinds: 1,
+  // How much faster than its even pace an account may spend its week before the order of the
+  // pool prefers another one (Л9): it only orders, never refuses.
+  pacingBurst: 3,
 })
+
+const fiveHoursMs = 5 * 3_600_000
+const weekMs = 7 * 24 * 3_600_000
 
 /** Whether a pool that answers «wait until `retryAt`» has no capacity left for a pass to wait for. */
 export function poolWaitIsLimitsOut(retryAt: Date, now: Date): boolean {
@@ -57,6 +63,11 @@ export const pickAccountInputSchema = z
     rebinds: z.number().int().min(0).max(poolPolicy.maxRebinds),
     policyFlagged: z.boolean(),
     minTurnHeadroomPct: z.number().positive().max(100).default(poolPolicy.minTurnHeadroomPct),
+    /**
+     * What a turn of the profile takes, in plan credits (p95 of `llm_turn_costs`, Л12); null —
+     * too few turns measured: a turn is `minTurnHeadroomPct` of each window.
+     */
+    turnCostCredits: z.number().positive().max(1e9).nullable().default(null),
     accounts: z.array(poolAccountSnapshotSchema).readonly(),
   })
   .strict()
@@ -113,6 +124,12 @@ function eligible(account: PoolAccountSnapshot, input: ParsedInput): boolean {
 interface Readiness {
   ready: boolean
   headroom: number
+  /**
+   * The order of the pool in absolute plan credits (§2.3 of plan 71): min(left of 5 hours, left
+   * of the week × pace) − the cost of a turn. null — a window without absolute numbers: the
+   * account is ordered by `headroom` in percents.
+   */
+  score: number | null
   needsProbe: boolean
   /** Latest known blocking reset for this account, never the earliest window. */
   retryAt: number | null
@@ -133,18 +150,19 @@ function pausedUntil(account: PoolAccountSnapshot, now: number): number | null {
   return retryAt
 }
 
-/** The headroom a window must leave for this turn: a new task asks more of the five hours. */
-function headroomThreshold(
-  window: NonNullable<PoolAccountSnapshot['limitWindows']>[number],
-  input: ParsedInput,
-  newTask: boolean,
-): number {
-  return newTask && window.name === '5h'
-    ? Math.max(input.minTurnHeadroomPct, poolPolicy.newTaskFiveHourHeadroomPct)
-    : input.minTurnHeadroomPct
+/**
+ * The week's credits as the order of the pool counts them: what is left, slowed when the account
+ * spends faster than `pacingBurst` times its even pace — a week far from its reset counts for
+ * less, so the pool turns to the account whose week ends sooner (Л9).
+ */
+export function pacedWeekCredits(left: number, resetsAt: Date | null, now: Date): number {
+  const untilReset = resetsAt === null ? weekMs : Math.max(0, resetsAt.getTime() - now.getTime())
+  return (
+    left * Math.min(1, (poolPolicy.pacingBurst * fiveHoursMs) / Math.max(fiveHoursMs, untilReset))
+  )
 }
 
-function readiness(account: PoolAccountSnapshot, input: ParsedInput, newTask: boolean): Readiness {
+function readiness(account: PoolAccountSnapshot, input: ParsedInput): Readiness {
   const now = input.now.getTime()
   // A backend without windows has no usage to know: whatever the columns hold is no report.
   const windowless = input.capacity === 'none'
@@ -154,15 +172,35 @@ function readiness(account: PoolAccountSnapshot, input: ParsedInput, newTask: bo
   let unknown = !windowless && windows.length === 0
   let headroom = 100
   let retryAt = pausedUntil(account, now)
+  let score: number | null = windowless ? null : Infinity
+  let cost: number | null = null
 
   for (const window of windows) {
     headroom = Math.min(headroom, 100 - window.usedPct)
     if (window.resetsAt !== null && window.resetsAt.getTime() <= now) {
       // A passed reset needs fresh usage, not a guessed zero usage or a reset in the past.
       unknown = true
+      score = null
       continue
     }
-    if (window.usedPct <= 100 - headroomThreshold(window, input, newTask)) continue
+    const absolute = absoluteWindow(window)
+    if (absolute === null) {
+      score = null
+      // A new task asks of a window in percents what a bound one does (owner's answer of
+      // 13.11.2026: «пока есть кредиты из подписки или тарифа нужно запускать агента»).
+      if (window.usedPct <= 100 - input.minTurnHeadroomPct) continue
+    } else {
+      // A turn takes its measured cost, else the share of the window it always took (Л12).
+      const turn = input.turnCostCredits ?? (absolute.limitCredits * input.minTurnHeadroomPct) / 100
+      const left = absolute.limitCredits - absolute.usedCredits
+      cost = Math.max(cost ?? 0, turn)
+      if (score !== null) {
+        const counted =
+          window.name === 'week' ? pacedWeekCredits(left, window.resetsAt, input.now) : left
+        score = Math.min(score, counted)
+      }
+      if (left >= turn) continue
+    }
     if (window.resetsAt === null) {
       // Known ample headroom needs no reset time; a blocking window does, to schedule a retry.
       unknown = true
@@ -171,7 +209,13 @@ function readiness(account: PoolAccountSnapshot, input: ParsedInput, newTask: bo
     retryAt = later(retryAt, window.resetsAt.getTime())
   }
 
-  return { ready: !unknown && retryAt === null, headroom, retryAt, needsProbe: unknown }
+  return {
+    ready: !unknown && retryAt === null,
+    headroom,
+    score: score === null || score === Infinity ? null : score - (cost ?? 0),
+    retryAt,
+    needsProbe: unknown,
+  }
 }
 
 function wait(
@@ -189,27 +233,30 @@ function wait(
 }
 
 function pickUnbound(input: ParsedInput, binding: 'initial' | 'rebind'): PoolDecision {
-  const candidates: { account: PoolAccountSnapshot; headroom: number }[] = []
+  const candidates: { account: PoolAccountSnapshot; headroom: number; score: number | null }[] = []
   const resets: number[] = []
   const probeAccountIds: string[] = []
-  let slotsBusy = false
+  // An account runs any number of turns at once (owner's request of 13.11.2026: «сними все
+  // ограничения по ходам, оставь только количество ходов на клиента — 8»; docs/plan/70-turn-
+  // without-time-limit.md, ВР26): `maxConcurrentTurns` is history, its windows and pauses stay.
   for (const account of input.accounts) {
     if (!eligible(account, input)) continue
-    const state = readiness(account, input, binding === 'initial')
-    const freeSlot = account.activeTurns < account.maxConcurrentTurns
+    const state = readiness(account, input)
     if (state.retryAt !== null) resets.push(state.retryAt)
-    if (state.needsProbe && freeSlot) {
+    if (state.needsProbe) {
       probeAccountIds.push(account.id)
       if (state.retryAt === null) resets.push(input.now.getTime() + poolPolicy.unknownRetryMs)
     }
     // If no replacement is ready, waiting may still make the current binding usable again.
     if (account.id === input.boundAccountId) continue
-    if (state.ready && freeSlot) candidates.push({ account, headroom: state.headroom })
-    // The slot is the only known obstacle: unknown usage is probed once the slot is free.
-    else if (!freeSlot && state.retryAt === null) slotsBusy = true
+    if (state.ready) candidates.push({ account, headroom: state.headroom, score: state.score })
   }
+  // Absolute credits when every candidate has them (a Max holds 14 times a Lite), else percents.
+  const absolute = candidates.every((candidate) => candidate.score !== null)
   candidates.sort((left, right) => {
-    const headroom = right.headroom - left.headroom
+    const headroom = absolute
+      ? (right.score ?? 0) - (left.score ?? 0)
+      : right.headroom - left.headroom
     if (headroom !== 0) return headroom
     const leftUsed = left.account.lastUsedAt?.getTime() ?? -Infinity
     const rightUsed = right.account.lastUsedAt?.getTime() ?? -Infinity
@@ -217,6 +264,10 @@ function pickUnbound(input: ParsedInput, binding: 'initial' | 'rebind'): PoolDec
     // Stable even when database row order changes; never depend on machine locale.
     return left.account.id < right.account.id ? -1 : left.account.id > right.account.id ? 1 : 0
   })
+  // A new task starts while an account has a turn's cost left, whatever the tariff of its
+  // workspace (owner's answer of 13.11.2026: «пока есть кредиты из подписки или тарифа нужно
+  // запускать агента»): no share of the pool is kept for the higher tiers, they only go first in
+  // the queue (`tierQueuePriority`).
   const selected = candidates[0]
   if (selected)
     return {
@@ -225,13 +276,6 @@ function pickUnbound(input: ParsedInput, binding: 'initial' | 'rebind'): PoolDec
       binding,
       rebinds: input.rebinds + (binding === 'rebind' ? 1 : 0),
     }
-  if (slotsBusy) {
-    // A slot frees without any window reset: never wait for another account's reset instead.
-    // A pending probe still goes first, or a free account with unknown usage would stay idle.
-    const retryAt = input.now.getTime() + poolPolicy.busyRetryMs
-    if (probeAccountIds.length === 0) return { kind: 'busy', retryAt: new Date(retryAt) }
-    resets.push(retryAt)
-  }
   return wait(
     input,
     'pool_empty',
@@ -272,9 +316,7 @@ export function pickAccount(snapshot: PickAccountInput): PoolDecision {
     return { kind: 'operator', reason: 'account_suspended' }
 
   if (eligible(bound, input)) {
-    if (bound.activeTurns >= bound.maxConcurrentTurns)
-      return { kind: 'busy', retryAt: new Date(input.now.getTime() + poolPolicy.busyRetryMs) }
-    const state = readiness(bound, input, false)
+    const state = readiness(bound, input)
     if (state.ready)
       return { kind: 'selected', accountId: bound.id, binding: 'keep', rebinds: input.rebinds }
     if (state.retryAt === null) return wait(input, 'limits_unknown', undefined, [bound.id])

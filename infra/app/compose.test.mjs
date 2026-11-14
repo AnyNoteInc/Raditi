@@ -748,12 +748,15 @@ test('the single server routes the root of the domain of pages to web, reads onl
   const routes = readFileSync(new URL('../server/traefik/server.yml', import.meta.url), 'utf8')
   assert.match(
     routes,
-    /pages:\n {6}entryPoints: \[websecure\]\n {6}rule: 'Host\(`\{\{ env "PAGES_HOST" \}\}`\) && \(Method\(`GET`\) \|\| Method\(`HEAD`\)\)'\n {6}service: web\n/,
+    /pages-root:\n {6}entryPoints: \[websecure\]\n {6}rule: 'Host\(`\{\{ env "PAGES_ROOT_HOST" \}\}`\) && \(Method\(`GET`\) \|\| Method\(`HEAD`\)\)'\n {6}service: web\n/,
   )
+  // Its own name: the router `pages` of traefik/dynamic/pages.yml is the wildcard's (plan 69).
+  assert.doesNotMatch(routes, /^ {4}pages:$/m)
   const server = readFileSync(
     new URL('../server/docker-compose.server.yml', import.meta.url),
     'utf8',
   )
-  assert.match(server, /PAGES_HOST: \$\{PAGES_HOST:-\}/)
-  assert.match(server, /PAGES_ORIGIN: \$\{PAGES_ORIGIN:-\}/)
+  assert.match(server, /PAGES_ROOT_HOST: \$\{PAGES_ROOT_HOST:-\}/)
+  // The origin of the root is PAGES_BASE_DOMAIN's (docs/plan/69-pages.md, Ст3), never a variable.
+  assert.doesNotMatch(server, /PAGES_ORIGIN/)
 })

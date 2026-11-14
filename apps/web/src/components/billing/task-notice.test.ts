@@ -27,7 +27,7 @@ const periodEnd = new Date('2026-10-18T09:00:00Z')
 const NOW = new Date('2026-10-04T12:00:00Z')
 const PACK = { credits: 100, price: '1490.00', withoutTariff: false }
 
-/** «Старт» as the seeds sell it: 150 credits a month and no daily limit, paid and renewing on 18 October. */
+/** «Старт» as the seeds sell it: 200 credits a month and no daily limit, paid and renewing on 18 October. */
 const startPlan = {
   id: start.id,
   slug: start.slug,
@@ -35,6 +35,8 @@ const startPlan = {
   price: start.price,
   creditsPerMonth: start.creditsPerMonth,
   creditsPerDay: start.creditsPerDay,
+  creditsPer5h: null,
+  creditsPerWeek: null,
   maxSites: start.maxSites,
 }
 type Terms = typeof startPlan
@@ -110,7 +112,7 @@ function told(scenario: Case = {}, payable = true) {
 
 describe('a task that would be taken', () => {
   it.each([
-    ['on a paid tariff', { tariff: 150 }],
+    ['on a paid tariff', { tariff: 200 }],
     ['on the gift, without a tariff', { gift: 35, plan: null }],
     ['on the gift, while the tariff is overdue', { gift: 35, plan: { status: 'past_due' } }],
     ['on a pack, when the quota is used up', { pack: 100 }],
@@ -160,7 +162,7 @@ describe('without a tariff', () => {
 })
 
 describe('on a paid tariff that renews', () => {
-  const grant = '18 октября начислим 150 кредитов по тарифу «Старт».'
+  const grant = '18 октября начислим 200 кредитов по тарифу «Старт».'
 
   it('says that the limits ran out, when the next credits come and that a pack helps now (A7)', () => {
     expect(told({ offer: PACK })).toEqual({
@@ -347,6 +349,8 @@ describe('on a paid tariff that renews', () => {
       name: agency.name,
       creditsPerMonth: agency.creditsPerMonth,
       creditsPerDay: 300,
+      creditsPer5h: null,
+      creditsPerWeek: null,
     }
     // Ending at that midnight without a renewal: nothing.
     expect(dayLimitTomorrow(tariff, 50, false, NOW)).toBeNull()
@@ -379,7 +383,7 @@ describe('on a paid tariff that does not renew (A9)', () => {
   it('offers the pack and auto-renewal', () => {
     expect(told({ ...ending, offer: PACK })).toEqual({
       reason: 'empty',
-      text: `${state} Купите пакет — 100 кредитов за 1 490 ₽, они не сгорают, — или включите автопродление: тогда 18 октября начислим 150 кредитов.`,
+      text: `${state} Купите пакет — 100 кредитов за 1 490 ₽, они не сгорают, — или включите автопродление: тогда 18 октября начислим 200 кредитов.`,
       actions: ['buy_pack', 'resume_renewal'],
     })
     // A few credits left start a task: no notice then.
@@ -394,7 +398,7 @@ describe('on a paid tariff that does not renew (A9)', () => {
     })
     expect(told(ending)).toEqual({
       reason: 'empty',
-      text: `${state} Включите автопродление: тогда 18 октября начислим 150 кредитов.`,
+      text: `${state} Включите автопродление: тогда 18 октября начислим 200 кредитов.`,
       actions: ['resume_renewal'],
     })
     expect(told({ ...ending, canResume: false })).toEqual({
@@ -459,7 +463,7 @@ describe('whether the gift still carries the tasks of a tariff that is not paid'
 describe('the pause of the platform', () => {
   it('says that no task is taken while the calculation is being updated, whatever the credits are', () => {
     for (const scenario of [
-      { tariff: 150 },
+      { tariff: 200 },
       { plan: null, gift: 50 },
       { plan: null },
       { plan: { status: 'past_due' } },
@@ -479,7 +483,7 @@ describe('the pause of the platform', () => {
 describe('where nothing can be paid for', () => {
   it('leaves out the sentence that takes a payment, and keeps what ran out and when credits come', () => {
     expect(told({ offer: PACK }, false).text).toBe(
-      'Лимиты закончились: кредиты по тарифу и из пакета израсходованы. 18 октября начислим 150 кредитов по тарифу «Старт».',
+      'Лимиты закончились: кредиты по тарифу и из пакета израсходованы. 18 октября начислим 200 кредитов по тарифу «Старт».',
     )
     expect(told({ plan: { status: 'past_due' } }, false).text).toBe(
       'Тариф «Старт» не оплачен, поэтому новые задачи не принимаются.',
@@ -505,7 +509,7 @@ describe('every notice', () => {
     { terms: dayPlan, tariff: 250, offer: PACK, facts: { today: { charged: 50 } } },
     { terms: dayPlan, tariff: 255, tariffHeld: 45, facts: { today: { charged: 5, held: 45 } } },
     { plan: { status: 'past_due' } },
-    { tariff: 150, facts: { rateUsable: false } },
+    { tariff: 200, facts: { rateUsable: false } },
   ]
 
   it('says «вы», names no receipt and no VAT, and ends every sentence', () => {
@@ -627,5 +631,42 @@ describe('the line under «Тарифы» of a customer without a tariff', () =>
     expect(lead({ facts: { rateUsable: false } })).toBe(RATE_PAUSE)
     // The pause is no matter of payments: nothing is added while they are off.
     expect(lead({ facts: { rateUsable: false } }, { canChoose: false })).toBe(RATE_PAUSE)
+  })
+})
+
+// Plan 71: a spent window of 5 hours or of the week — credits do not lift it, the reset does.
+describe('a spent window of the workspace', () => {
+  const resetsAt = new Date('2026-11-16T15:40:00.000Z')
+
+  it('names the window and its reset by the Moscow clock, and the bigger tariffs', () => {
+    expect(
+      told({
+        tariff: 200,
+        facts: {
+          windows: [
+            { kind: '5h', limit: 20, used: '20.3', resetsAt },
+            { kind: 'week', limit: 55, used: '30', resetsAt: null },
+          ],
+        },
+      }),
+    ).toEqual({
+      reason: 'window_limit',
+      text: 'Лимит на 5 часов исчерпан: новые задачи — после 18:40. Кредиты от этого не сгорают. На старших тарифах лимиты больше — тариф можно сменить в разделе «Тарифы».',
+      actions: ['change_plan'],
+    })
+  })
+
+  it('names the week when it is the one spent', () => {
+    expect(
+      told({
+        tariff: 200,
+        facts: {
+          windows: [
+            { kind: '5h', limit: 20, used: '2', resetsAt },
+            { kind: 'week', limit: 55, used: '55', resetsAt: new Date('2026-11-23T07:15:00.000Z') },
+          ],
+        },
+      }).text,
+    ).toMatch(/^Недельный лимит исчерпан: новые задачи — в пн после 10:15\./)
   })
 })

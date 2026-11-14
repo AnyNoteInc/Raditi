@@ -241,7 +241,9 @@ async function stage(id) {
     spec.argv.some((v) => typeof v !== 'string' || v.includes('\0'))
   )
     fail()
-  if (!Number.isSafeInteger(spec.timeoutMs) || spec.timeoutMs < 1 || spec.timeoutMs > 1200000)
+  // 0 — the command has no time limit of its own: the agent's run (docs/plan/70-turn-without-
+  // time-limit.md, ВР1). It still ends with its container, which the host keeps on a lease.
+  if (!Number.isSafeInteger(spec.timeoutMs) || spec.timeoutMs < 0 || spec.timeoutMs > 1200000)
     fail()
   await fs.mkdir(path, { mode: 0o700 }) // Exclusive logical id; retry must not run twice.
   await fs.writeFile(`${path}/spec.json`, JSON.stringify(spec), { flag: 'wx', mode: 0o600 })
@@ -299,14 +301,15 @@ async function run(id, deadlineValue) {
   const lock = await fs.open(`${path}/started`, 'wx', 0o600)
   await lock.close()
   const spec = await readJson(`${path}/spec.json`)
-  // The deadline is also retained in immutable Docker exec arguments for host recovery.
-  const remaining = number(deadlineValue) - Date.now()
+  // The deadline is also retained in immutable Docker exec arguments for host recovery; 0 — none.
+  const unbounded = deadlineValue === '0' && spec.timeoutMs === 0
+  const remaining = unbounded ? Infinity : number(deadlineValue) - Date.now()
   if (remaining <= 0) {
     await writeJson(`${path}/exit.json`, { code: null, reason: 'timeout' })
     process.exitCode = 125
     return
   }
-  if (remaining > 1200000) fail()
+  if (!unbounded && (remaining > 1200000 || spec.timeoutMs === 0)) fail()
   const stdin = await fs.open(`${path}/stdin`, constants.O_RDONLY | noFollow)
   const out = await fs.open(`${path}/stdout`, constants.O_WRONLY | constants.O_APPEND | noFollow)
   const err = await fs.open(`${path}/stderr`, constants.O_WRONLY | constants.O_APPEND | noFollow)
@@ -338,12 +341,13 @@ async function run(id, deadlineValue) {
         void signalGroup(path, 'SIGKILL', reason).catch(() => {})
       }, 300)
     }
-    timer = setTimeout(
-      () => {
-        void stop('timeout')
-      },
-      Math.min(spec.timeoutMs, remaining),
-    )
+    if (!unbounded)
+      timer = setTimeout(
+        () => {
+          void stop('timeout')
+        },
+        Math.min(spec.timeoutMs, remaining),
+      )
     const copy = async (stream, file) => {
       try {
         for await (const chunk of stream) {

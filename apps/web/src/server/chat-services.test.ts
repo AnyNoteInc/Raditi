@@ -172,10 +172,17 @@ describe('the dialog services of the process', () => {
       appUrl: 'http://localhost:3000',
       preview: null,
       browserStreamUrl: null,
-      pages: { origin: 'http://pages.localhost:3000', secret: 'b'.repeat(48) },
+      pages: { baseDomain: 'pages.localhost', scheme: 'http', port: 8092 },
+      pageViews: { origin: 'http://pages.localhost:3000', secret: 'b'.repeat(48) },
     })
     const { chatServices } = await import('./chat-services')
-    const pages = chatServices()?.pages
+    // The pages of plan 69 and the views of plan 67 side by side, one domain (docs/plan/69, Ст3).
+    expect(chatServices()?.pages).toEqual({
+      baseDomain: 'pages.localhost',
+      scheme: 'http',
+      port: 8092,
+    })
+    const pages = chatServices()?.pageViews
     expect(pages).toMatchObject({
       origin: 'http://pages.localhost:3000',
       appUrl: 'http://localhost:3000',

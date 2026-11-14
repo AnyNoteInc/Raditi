@@ -121,6 +121,7 @@ import { useBrowserWatching } from './use-browser-watching'
 import { useFeedFollow } from './use-feed-follow'
 import { useDialogFeed } from './use-dialog-feed'
 import { uuidv7 } from './uuid'
+import { UsageWindowHint } from '@/components/billing/usage-window-hint'
 
 // One chat (docs/plan/53-chat-preview-release.md, R9; feed design, «Экраны, которых нет на
 // макетах»): its head, its rows, the live block and the field. How it works follows from the
@@ -1530,6 +1531,7 @@ export function DialogView({
             }}
           >
             {composer}
+            {composer === null ? null : <UsageWindowHint />}
           </Box>
         </Box>
       </Box>

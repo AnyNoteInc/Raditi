@@ -83,14 +83,15 @@ export function chatServices(): ChatContext | null {
           : { address: web.preview, ttlHours: previewTtlHours(process.env) },
       browser: web.browserStreamUrl === null ? null : { streamUrl: web.browserStreamUrl },
       browserSupported,
+      pages: web.pages,
       // The domain of the pages the agent makes (docs/plan/67-agent-documents.md, Д3, Д8).
-      pages:
-        web.pages == null
+      pageViews:
+        web.pageViews == null
           ? null
           : {
-              origin: web.pages.origin,
+              origin: web.pageViews.origin,
               appUrl: web.appUrl,
-              keys: pageKeys(web.pages.secret),
+              keys: pageKeys(web.pageViews.secret),
             },
       releaseConfirmKey: releaseConfirmKey(env.auth().secret),
       storage: () => (storage ??= createS3ObjectStorage(env.storage())),

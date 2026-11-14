@@ -37,6 +37,11 @@ x-preview-address: &preview-address
   PREVIEW_BASE_DOMAIN: ${PREVIEW_BASE_DOMAIN:?Set PREVIEW_BASE_DOMAIN}
   PREVIEW_SCHEME: https
 
+# Published pages on this machine (docs/plan/69-pages.md, Ст3, Ст26): one domain for web, mcp, the
+# pages listener of preview and the browser of chats — core names no page address; the wildcard of PAGES_BASE_DOMAIN comes by DNS-01 (reg.ru)
+x-pages-address: &pages-address
+  PAGES_BASE_DOMAIN: ${PAGES_BASE_DOMAIN:?Set PAGES_BASE_DOMAIN}
+
 x-s3: &s3
   S3_ENDPOINT: https://s3.raditi.internal:8333
   S3_REGION: ru-msk
@@ -56,11 +61,14 @@ services:
       # its mount point inside the read-only bind of traefik/dynamic.
       DASHBOARD_HOST: ${DASHBOARD_HOST:?Set DASHBOARD_HOST}
       PREVIEW_APEX_HOST: ${PREVIEW_APEX_HOST:-}
-      # The root of the domain of pages (docs/plan/67-agent-documents.md, Д3); empty — no router
-      PAGES_HOST: ${PAGES_HOST:-}
+      # The root of the domain of pages, served by web (docs/plan/67-agent-documents.md, Д3); empty — no
+      # router: it waits for the A record of the root (the wildcard of pages.yml does not cover it)
+      PAGES_ROOT_HOST: ${PAGES_ROOT_HOST:-}
       BROWSER_STREAM_HOST: ${APP_DOMAIN}
       # The wildcard of previews (traefik/dynamic/preview.yml): DNS-01 through the reg.ru API
       PREVIEW_BASE_DOMAIN: ${PREVIEW_BASE_DOMAIN:?Set PREVIEW_BASE_DOMAIN}
+      # The wildcard of published pages (traefik/dynamic/pages.yml): the same reg.ru account
+      PAGES_BASE_DOMAIN: ${PAGES_BASE_DOMAIN:?Set PAGES_BASE_DOMAIN}
       REGRU_USERNAME_FILE: /run/raditi/regru-username
       REGRU_PASSWORD_FILE: /run/raditi/regru-password
       # reg.ru serves a new TXT record from its name servers after minutes, not seconds
@@ -73,11 +81,9 @@ services:
 
   web:
     environment:
-      <<: [*s3, *gitea-url, *preview-address]
+      <<: [*s3, *gitea-url, *preview-address, *pages-address]
       # The panel of the cloud browser: Traefik routes this path of the apex to the stream gateway
       BROWSER_STREAM_PUBLIC_URL: wss://${APP_DOMAIN}/v1/browser/stream
-      # The pages the agent makes, framed from a host of their own (docs/plan/67, Д3)
-      PAGES_ORIGIN: ${PAGES_ORIGIN:-}
     extra_hosts: *internal-hosts
 
   core:
@@ -88,6 +94,9 @@ services:
     environment:
       <<: [*s3, *gitea-url, *preview-address]
       SINGLE_SERVER: 'on'
+      # Eight turns of a workspace at once, and no other limit of turns (owner's request of
+      # 13.11.2026, docs/plan/70-turn-without-time-limit.md, ВР13, ВР26)
+      WORKSPACE_TURN_LIMIT: '8'
       PREVIEW_EXECUTOR: local
       PREVIEW_RUNTIME: runsc
       SANDBOX_DOCKER_SOCKET: /var/run/docker.sock
@@ -234,7 +243,7 @@ services:
       postgres: { condition: service_healthy }
       s3: { condition: service_healthy }
     environment:
-      <<: [*s3, *preview-address]
+      <<: [*s3, *preview-address, *pages-address]
       NODE_ENV: production
       APP_ENV: production
       VAULT_ADDR: https://vault.raditi.internal:8200
@@ -283,7 +292,8 @@ services:
       postgres: { condition: service_healthy }
       s3: { condition: service_healthy }
     environment:
-      <<: *s3
+      # The agent's pages open in the browser of a chat, their address on this machine too (Ст26)
+      <<: [*s3, *pages-address]
       NODE_ENV: production
       APP_ENV: production
       NODE_EXTRA_CA_CERTS: /run/raditi/vault-ca.pem
@@ -292,6 +302,8 @@ services:
       BROWSER_WORKER_PORT: '8086'
       BROWSER_RUNTIME: runsc
       BROWSER_DOCKER_SOCKET: /var/run/docker.sock
+      # The address of the agent's pages on this machine, the one REFUSED_SUBNETS entry their names pass
+      BROWSER_PAGE_ADDRESSES: ${BROWSER_PAGE_ADDRESSES:?Set BROWSER_PAGE_ADDRESSES, this server's public address}
       BROWSER_IMAGE: ${BROWSER_IMAGE:?Set the digest-pinned browser session image}
       BROWSER_FORWARDER_IMAGE: ${BROWSER_FORWARDER_IMAGE:?Set the digest-pinned forwarder image}
       BROWSER_EGRESS_IMAGE: ${BROWSER_EGRESS_IMAGE:?Set the digest-pinned client egress image}
@@ -334,9 +346,11 @@ services:
     environment:
       NODE_ENV: production
       APP_ENV: production
-      <<: [*preview-address, *gitea-url]
+      <<: [*preview-address, *gitea-url, *pages-address]
       APP_URL: https://${APP_DOMAIN}
       PREVIEW_GATEWAY_PORT: '8090'
+      # The pages listener (traefik/dynamic/pages.yml); PAGES_COOKIE_SECRET is in app.env
+      PAGES_PORT: '8092'
       PREVIEW_BROWSER_RELAYS: 172.29.90.1/32
       BROWSER_WORKER_URL: http://10.10.0.10:8086
       BROWSER_STREAM_PORT: '8091'
@@ -476,7 +490,9 @@ services:
       RUNNER_TOKEN_FILE: /etc/raditi/runner-token
       RUNNER_S3_ORIGIN: https://s3.raditi.internal:8333/raditi-sessions
       RUNNER_S3_CA_FILE: /etc/raditi/ca.pem
-      RUNNER_MAX_TURNS: '1'
+      # As many turns at once as the protocol carries: the only limit of turns is the eight of a
+      # workspace (owner's request of 13.11.2026, docs/plan/70-turn-without-time-limit.md, ВР26)
+      RUNNER_MAX_TURNS: '1024'
       SANDBOX_RUNTIME: runsc
       SANDBOX_DOCKER_SOCKET: /var/run/docker.sock
       SANDBOX_GATEWAY_IMAGE: ${SANDBOX_GATEWAY_IMAGE:?Set the digest-pinned sandbox gateway image}

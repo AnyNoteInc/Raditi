@@ -9,6 +9,8 @@ import { ContentModule, type ContentTesting } from './content/content.module.ts'
 import { McpHealthModule } from './health/health.module.ts'
 import { InfraModule } from './infra/infra.module.ts'
 import { assertMcpNestToolAuthorization } from './server/mcp-runtime.ts'
+import { DocsModule } from './pages/docs.module.ts'
+import { PagesModule } from './pages/pages.module.ts'
 import { SearchModule } from './search/search.module.ts'
 import { ServerModule } from './server/server.module.ts'
 import { SiteInfoModule } from './site-info/site-info.module.ts'
@@ -38,8 +40,10 @@ export interface McpContentTesting extends ContentTesting {
  * no profile: a product path wherever the browser worker is configured (BROWSER_WORKER_URL),
  * production too. The role passes the agent's actions to the worker; the worker holds the
  * browser. The web search (search_web, SearchModule) is the same kind of path: offered while its
- * access is in Vault (`subs/search/yandex`), where the operator command puts it. The modules of the tools come in this order — site_info, content,
- * browser, web, search — and so do their tools.
+ * access is in Vault (`subs/search/yandex`), where the operator command puts it. The pages of the
+ * workspace (page_publish, PagesModule, docs/plan/69-pages.md) — where PAGES_BASE_DOMAIN is set;
+ * its documents (doc_*, DocsModule) — always. The modules of the tools come in this order —
+ * site_info, content, browser, web, search, docs, pages — and so do their tools.
  */
 @Module({})
 export class AppModule {
@@ -93,6 +97,8 @@ export class AppModule {
         ...(browser ? [BrowserModule.forRoot({ browserFactory: testing?.browserFactory })] : []),
         ...(worker ? [WebModule] : []),
         SearchModule,
+        DocsModule,
+        ...(config.pages ? [PagesModule] : []),
       ],
     }
   }

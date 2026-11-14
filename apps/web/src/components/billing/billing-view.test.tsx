@@ -43,7 +43,11 @@ const { getOverview, getPayments, startChange, unlinkMethod, syncMethod, hardNav
             queryOptions: () => ({ queryKey: ['billing', 'overview'], queryFn: getOverview }),
           },
           plans: { queryKey: () => ['billing', 'plans'] },
-          usage: { queryKey: () => ['billing', 'usage'] },
+          usage: {
+            queryKey: () => ['billing', 'usage'],
+            // The hint of the windows (plan 71) reads nothing in these cases.
+            queryOptions: () => ({ queryKey: ['billing', 'usage'], queryFn: async () => null }),
+          },
           startPaymentMethodChange: {
             mutationOptions: (options: UseMutationOptions<Started, Error, Nothing>) => ({
               ...options,
@@ -252,7 +256,7 @@ describe('the saved payment method', () => {
     const block = await method()
     expect(text(block)).toContain('Карта «Мир» •• 4444')
     expect(text(block)).toContain(
-      '18 октября спишем этим способом 6 990 ₽ за тариф «Бизнес». Если его отвязать, автопродление отключится.',
+      '18 октября спишем этим способом 9 990 ₽ за тариф «Бизнес». Если его отвязать, автопродление отключится.',
     )
     expect(text(block)).toContain(
       'Данные карты хранит ЮKassa. У нас — только идентификатор сохранённого способа оплаты и последние четыре цифры карты.',
@@ -502,7 +506,7 @@ describe('«Оплата» of a shop that takes one-time payments only', () => {
     // The card is still the one the tariff is renewed with: the charge is named as it is.
     expect(text(block)).toContain('Карта «Мир» •• 4444')
     expect(text(block)).toContain(
-      '18 октября спишем этим способом 6 990 ₽ за тариф «Бизнес». Если его отвязать, автопродление отключится.',
+      '18 октября спишем этим способом 9 990 ₽ за тариф «Бизнес». Если его отвязать, автопродление отключится.',
     )
     expect(
       within(block)

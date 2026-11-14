@@ -3,6 +3,7 @@ import {
   BROWSER_STREAM_PATH,
   envVar,
   isProduction,
+  pagesAddressFromEnv,
   pagesOriginOf,
   parseEnv,
   previewAddressEnvShape,
@@ -10,6 +11,7 @@ import {
   previewAddressProblems,
   type AppEnv,
   type Env,
+  type PagesAddress,
   type PreviewAddress,
 } from '@repo/domain'
 import { DEV_METRICS_TOKEN, metricsTokenProblem } from '@repo/observability'
@@ -42,12 +44,18 @@ export interface WebEnv {
    */
   browserStreamUrl: string | null
   /**
-   * The domain of the pages the agent makes (docs/plan/67-agent-documents.md, Д3): PAGES_ORIGIN and
-   * the secret its tokens are signed with (PAGES_SIGNING_SECRET; outside production an empty one
-   * is a value for development). null — PAGES_ORIGIN is empty, or in production its secret is:
-   * pages are downloaded only.
+   * Where published pages answer (docs/plan/69-pages.md, Ст3): the cabinet names their address.
+   * null — PAGES_BASE_DOMAIN is unset: no pages here. The same variables as mcp and preview read.
    */
-  pages: { origin: string; secret: string } | null
+  pages: PagesAddress | null
+  /**
+   * The root of the domain of pages, where the frame of the cabinet opens a page of a chat
+   * (docs/plan/67-agent-documents.md, Д3): its origin, from PAGES_BASE_DOMAIN (`pagesOriginOf`),
+   * and the secret its tokens are signed with (PAGES_SIGNING_SECRET; outside production an empty
+   * one is a value for development). null — no pages here, or in production no secret: pages of a
+   * chat are downloaded only.
+   */
+  pageViews: { origin: string; secret: string } | null
 }
 
 /** The secret of the pages outside production when none is set: never a secret of a server. */
@@ -90,10 +98,11 @@ const webEnvSchema = z
     BILLING_PAST_DUE_DAYS: envVar(z.coerce.number().int().min(1).max(90).default(7)),
     ...previewAddressEnvShape,
     BROWSER_STREAM_PUBLIC_URL: envVar(browserStreamUrl.optional()),
-    PAGES_ORIGIN: envVar(z.string().optional()),
     PAGES_SIGNING_SECRET: envVar(z.string().optional()),
     // Read for the check of the preview domain only.
     GITEA_URL: envVar(z.string().optional()),
+    PAGES_BASE_DOMAIN: envVar(z.string().optional()),
+    PAGES_PUBLIC_PORT: envVar(z.coerce.number().int().min(1).max(65_535).optional()),
   })
   .superRefine((env, ctx) => {
     const tokenProblem = metricsTokenProblem(env.METRICS_TOKEN, env.APP_ENV)
@@ -124,46 +133,37 @@ const webEnvSchema = z
       },
       (host) => getDomain(host, { allowPrivateDomains: true }),
     )
-    for (const problem of problems) {
+    const pageProblems: string[] = []
+    pagesAddressFromEnv(env, isProduction(env.APP_ENV), pageProblems)
+    for (const problem of [...problems, ...pageProblems]) {
       const [name, ...message] = problem.split(': ')
       ctx.addIssue({ code: 'custom', path: [name ?? ''], message: message.join(': ') })
     }
   })
 
 /**
- * PAGES_ORIGIN is an origin and nothing more; in production it is https, never the cabinet's own
- * host and never under the previews' domain, and a secret given is at least 32 bytes. A subdomain
- * of the cabinet's domain is allowed — `pages.raditi.ru`, owner's answer of 13.11.2026: the page is
- * an opaque origin by its sandbox, and the cookies of the cabinet are of its own host.
+ * The root of the domain of pages (`pagesOriginOf`) in production: never the cabinet's own host
+ * and never under the previews' domain, and a secret given is at least 32 bytes. A subdomain of
+ * the cabinet's domain is allowed — `pages.raditi.ru`, owner's answer of 13.11.2026: the page is an
+ * opaque origin by its sandbox, and the cookies of the cabinet are of its own host.
  */
 function pagesProblems(
   env: {
     APP_ENV: AppEnv
     APP_URL: string
-    PAGES_ORIGIN?: string | undefined
+    PAGES_BASE_DOMAIN?: string | undefined
     PAGES_SIGNING_SECRET?: string | undefined
     PREVIEW_BASE_DOMAIN?: string | undefined
   },
   ctx: z.RefinementCtx,
 ): void {
-  const value = env.PAGES_ORIGIN?.trim() ?? ''
-  if (value === '') return
-  const origin = pagesOriginOf({ PAGES_ORIGIN: value })
-  if (origin === null) {
-    ctx.addIssue({
-      code: 'custom',
-      path: ['PAGES_ORIGIN'],
-      message: 'must be an http(s) origin: a scheme, a host and a port, nothing else',
-    })
-    return
-  }
   if (!isProduction(env.APP_ENV)) return
-  if (!origin.startsWith('https://'))
-    ctx.addIssue({
-      code: 'custom',
-      path: ['PAGES_ORIGIN'],
-      message: 'must use https in production',
-    })
+  const origin = pagesOriginOf({
+    APP_ENV: env.APP_ENV,
+    APP_URL: env.APP_URL,
+    PAGES_BASE_DOMAIN: env.PAGES_BASE_DOMAIN,
+  })
+  if (origin === null) return
   const domain = (host: string) => getDomain(host, { allowPrivateDomains: true }) ?? host
   const pages = new URL(origin).hostname
   const app = URL.parse(env.APP_URL)
@@ -171,16 +171,16 @@ function pagesProblems(
   if (app !== null && app.hostname === pages)
     ctx.addIssue({
       code: 'custom',
-      path: ['PAGES_ORIGIN'],
+      path: ['PAGES_BASE_DOMAIN'],
       message: 'must not be the host of the cabinet',
     })
   if (preview && domain(preview) === domain(pages))
     ctx.addIssue({
       code: 'custom',
-      path: ['PAGES_ORIGIN'],
+      path: ['PAGES_BASE_DOMAIN'],
       message: 'must not share its registrable domain with the previews (a preview runs site code)',
     })
-  // An empty secret leaves the pages off (`pagesOf`); a short one is a mistake to tell.
+  // An empty secret leaves the pages of chats off (`pageViewsOf`); a short one is a mistake to tell.
   const secret = env.PAGES_SIGNING_SECRET?.trim() ?? ''
   if (secret !== '' && Buffer.byteLength(secret) < 32)
     ctx.addIssue({
@@ -201,16 +201,22 @@ export function webEnvFromEnv(env: Env): WebEnv {
     pastDueDays: e.BILLING_PAST_DUE_DAYS,
     preview: previewAddressFromEnv(e, e.APP_ENV),
     browserStreamUrl: e.BROWSER_STREAM_PUBLIC_URL ?? null,
-    pages: pagesOf(e),
+    pages: pagesAddressFromEnv(e, isProduction(e.APP_ENV), []),
+    pageViews: pageViewsOf(e),
   }
 }
 
-function pagesOf(e: {
+function pageViewsOf(e: {
   APP_ENV: AppEnv
-  PAGES_ORIGIN?: string | undefined
+  APP_URL: string
+  PAGES_BASE_DOMAIN?: string | undefined
   PAGES_SIGNING_SECRET?: string | undefined
-}): WebEnv['pages'] {
-  const origin = pagesOriginOf({ PAGES_ORIGIN: e.PAGES_ORIGIN })
+}): WebEnv['pageViews'] {
+  const origin = pagesOriginOf({
+    APP_ENV: e.APP_ENV,
+    APP_URL: e.APP_URL,
+    PAGES_BASE_DOMAIN: e.PAGES_BASE_DOMAIN,
+  })
   if (origin === null) return null
   const production = isProduction(e.APP_ENV)
   const secret = e.PAGES_SIGNING_SECRET?.trim() || (production ? '' : DEV_PAGES_SECRET)

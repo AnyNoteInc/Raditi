@@ -87,6 +87,8 @@ async function fixture() {
   const sandbox: Sandbox = {
     id: 'container2',
     labels,
+    deadline: Date.now() + 20 * 60_000,
+    extend: vi.fn(async () => {}),
     exec: vi.fn(async () => handle('exec1', [])),
     attach: vi.fn(async () => handle('exec1', [])),
     fs: {
@@ -362,12 +364,11 @@ describe('LocalTurnExecutor', () => {
       ]),
     )
     const execution = await f.executor.prepare(f.input(), f.signal)
-    const agent = await execution.launch(300_000)
+    const agent = await execution.launch()
     expect(f.sandbox.exec).toHaveBeenCalledWith({
       argv: ['opencode', 'run', '--format', 'json'],
       cwd: '/workspace/repo',
       env: { HOME: `/agent-home/${sampleDriverId}` },
-      timeoutMs: 300_000,
     })
     const batches: TurnOutputBatch[] = []
     await agent.output(async (batch) => {
@@ -400,7 +401,7 @@ describe('LocalTurnExecutor', () => {
       ]),
     )
     const execution = await f.executor.prepare(f.input(), f.signal)
-    const agent = await execution.launch(300_000)
+    const agent = await execution.launch()
     const record = vi.fn(async () => {})
     await expect(agent.output(record)).rejects.toMatchObject({ code: 'TURN_OUTPUT_REJECTED' })
     expect(record).not.toHaveBeenCalled()
@@ -644,7 +645,7 @@ describe('LocalTurnExecutor', () => {
     it('re-attaches an adopted turn but never launches its agent again', async () => {
       const f = await fixture()
       const execution: TurnExecution = (await f.executor.adopt(adopt('work'), f.signal))!
-      await expect(execution.launch(60_000)).rejects.toMatchObject({ code: 'CONFLICT' })
+      await expect(execution.launch()).rejects.toMatchObject({ code: 'CONFLICT' })
       expect(f.sandbox.exec).not.toHaveBeenCalled()
       await execution.attach({ execId: 'exec1', cursor: { stdout: 0, stderr: 0 }, eventCount: 0 })
       await execution.quiesce()

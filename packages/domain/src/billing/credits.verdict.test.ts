@@ -265,9 +265,14 @@ describe('newTaskVerdict', () => {
           subscription: tariff('past_due'),
         },
         { rateUsable: false },
+        {
+          windows: [
+            { kind: '5h', limit: 20, used: '20.0000', resetsAt: new Date(Date.now() + 60_000) },
+          ],
+        },
       ]
-      expect(cases.map((change) => ask(change).reason)).toEqual(
-        taskRefusalReasons.filter((reason) => !reason.endsWith('below_start')),
+      expect(cases.map((change) => ask(change).reason).sort()).toEqual(
+        taskRefusalReasons.filter((reason) => !reason.endsWith('below_start')).sort(),
       )
     })
   })
@@ -449,6 +454,8 @@ describe('newTaskVerdict', () => {
         needed: 1,
         debt: 0,
         today: today(50, 0, 0, 50, 50),
+        windows: [],
+        tier: 'none',
       })
     })
 
@@ -468,6 +475,8 @@ describe('newTaskVerdict', () => {
         needed: 1,
         debt: 0,
         today: today(50, 0, 45, 5, 5),
+        windows: [],
+        tier: 'none',
       })
     })
 
@@ -573,6 +582,8 @@ describe('newTaskVerdict', () => {
         needed: 1,
         debt: 0,
         today: today(null, 400, 45, null, 255),
+        windows: [],
+        tier: 'none',
       })
     })
 
@@ -595,6 +606,8 @@ describe('newTaskVerdict', () => {
           needed: 1,
           debt: 0,
           today: null,
+          windows: [],
+          tier: 'none',
         })
       },
     )

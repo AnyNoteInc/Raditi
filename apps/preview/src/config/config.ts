@@ -1,5 +1,6 @@
 import {
   appEnvSchema,
+  pagesBaseDomainSchema,
   browserWorkerTokenSchema,
   envProblems,
   envVar,
@@ -19,10 +20,14 @@ import { getDomain } from 'tldts'
 import { z } from 'zod'
 
 import { parsePreviewRelays } from './browser-relays.ts'
-import type { BrowserStreamConfig, PreviewGatewayConfig } from './config.tokens.ts'
+import type {
+  BrowserStreamConfig,
+  PagesListenerConfig,
+  PreviewGatewayConfig,
+} from './config.tokens.ts'
 
 export { ConfigError }
-export type { BrowserStreamConfig, PreviewGatewayConfig }
+export type { BrowserStreamConfig, PagesListenerConfig, PreviewGatewayConfig }
 
 export const DEFAULT_PREVIEW_GATEWAY_PORT = previewDefaults.gatewayPort
 /** The listener of the stream of a task's browser (docs/plan/57-browser-tasks.md, Б12). */
@@ -32,6 +37,14 @@ export const DEFAULT_BROWSER_STREAM_PORT = 8091
  * it. Production refuses to start the role without a secret of its own.
  */
 export const DEV_PREVIEW_SESSION_SECRET = 'raditi-dev-preview-session-secret-not-for-production'
+
+/** The listener of published pages (docs/plan/69-pages.md, Ст4). */
+export const DEFAULT_PAGES_PORT = 8092
+/**
+ * PAGES_COOKIE_SECRET outside production when it is unset; production refuses to start the
+ * pages without one of its own.
+ */
+export const DEV_PAGES_COOKIE_SECRET = 'raditi-dev-pages-cookie-secret-not-for-production'
 
 /** An IP literal to listen on. */
 const listenHost = () =>
@@ -79,6 +92,13 @@ const ownEnvSchema = z.object({
   ),
   // The rule every app reads the worker's token by (32 to 4096 visible ASCII characters).
   BROWSER_WORKER_TOKEN: envVar(browserWorkerTokenSchema.optional()),
+  // Published pages (docs/plan/69-pages.md): unset — no listener.
+  PAGES_BASE_DOMAIN: envVar(pagesBaseDomainSchema.optional()),
+  PAGES_PORT: envVar(z.coerce.number().int().min(1).max(65_535).default(DEFAULT_PAGES_PORT)),
+  PAGES_HOST: listenHost(),
+  PAGES_PUBLIC_PORT: envVar(z.coerce.number().int().min(1).max(65_535).optional()),
+  PAGES_COOKIE_SECRET: envVar(z.string().optional()),
+  PAGES_ABUSE_EMAIL: envVar(z.email().optional()),
 })
 
 /** The registrable domain of a host by the Public Suffix List; null for an address or a local name. */
@@ -145,6 +165,22 @@ export function loadPreviewConfig(env: Env): PreviewGatewayConfig {
         }
   if (browserStream !== null && browserStream.port === own.PREVIEW_GATEWAY_PORT)
     problems.push('BROWSER_STREAM_PORT: must differ from PREVIEW_GATEWAY_PORT')
+  const pages = pagesListenerOf(own, production, problems)
+  if (pages !== null) {
+    if (pages.port === own.PREVIEW_GATEWAY_PORT)
+      problems.push('PAGES_PORT: must differ from PREVIEW_GATEWAY_PORT')
+    if (browserStream !== null && pages.port === browserStream.port)
+      problems.push('PAGES_PORT: must differ from BROWSER_STREAM_PORT')
+    const base = pages.baseDomain
+    const under = (host: string, parent: string) => host === parent || host.endsWith(`.${parent}`)
+    // A page host must never be the cabinet's or a preview's, nor hold them (Ст3).
+    if (own.APP_URL !== undefined && under(new URL(own.APP_URL).hostname, base))
+      problems.push('PAGES_BASE_DOMAIN: must not be the host of APP_URL or above it')
+    // A preview host is one `site-…-chat-…` label under its base, never `<slug>.<pages base>`: the
+    // pages may sit under the previews' base (dev: pages.localhost under localhost), not the reverse.
+    if (address !== null && under(address.baseDomain, base))
+      problems.push('PAGES_BASE_DOMAIN: must not be PREVIEW_BASE_DOMAIN or above it')
+  }
   if (problems.length > 0 || address === null || own.APP_URL === undefined || db === undefined)
     throw new ConfigError(problems, 'preview')
 
@@ -158,5 +194,43 @@ export function loadPreviewConfig(env: Env): PreviewGatewayConfig {
     browserRelays: relays.ranges,
     host: own.PREVIEW_GATEWAY_HOST ?? (production ? undefined : '127.0.0.1'),
     browserStream,
+    pages,
+  }
+}
+
+/** The pages' listener, or null without PAGES_BASE_DOMAIN; its problems go to `problems`. */
+function pagesListenerOf(
+  own: z.infer<typeof ownEnvSchema>,
+  production: boolean,
+  problems: string[],
+): PagesListenerConfig | null {
+  if (own.PAGES_BASE_DOMAIN === undefined) {
+    for (const name of [
+      'PAGES_HOST',
+      'PAGES_PUBLIC_PORT',
+      'PAGES_COOKIE_SECRET',
+      'PAGES_ABUSE_EMAIL',
+    ] as const)
+      if (own[name] !== undefined) problems.push(`${name}: needs PAGES_BASE_DOMAIN`)
+    return null
+  }
+  const secret = own.PAGES_COOKIE_SECRET
+  if (production && (secret === undefined || secret.length < 32))
+    problems.push('PAGES_COOKIE_SECRET: at least 32 characters in production')
+  if (production && (secret === DEV_PAGES_COOKIE_SECRET || secret === own.PREVIEW_SESSION_SECRET))
+    problems.push(
+      'PAGES_COOKIE_SECRET: a secret of its own in production, not the dev value or the preview one',
+    )
+  if (secret !== undefined && !/^[\x21-\x7e]+$/.test(secret))
+    problems.push('PAGES_COOKIE_SECRET: visible ASCII characters only')
+  if (production && own.PAGES_PUBLIC_PORT !== undefined)
+    problems.push('PAGES_PUBLIC_PORT: not in production (a page host carries no port there)')
+  return {
+    baseDomain: own.PAGES_BASE_DOMAIN,
+    ...(own.PAGES_PUBLIC_PORT === undefined ? {} : { publicPort: own.PAGES_PUBLIC_PORT }),
+    cookieSecret: secret ?? DEV_PAGES_COOKIE_SECRET,
+    abuseEmail: own.PAGES_ABUSE_EMAIL ?? null,
+    port: own.PAGES_PORT,
+    host: own.PAGES_HOST ?? (production ? undefined : '127.0.0.1'),
   }
 }

@@ -1,6 +1,11 @@
 import { Logger } from '@nestjs/common'
 import type { AgentDriverRegistry } from '@repo/agent-drivers'
-import { claimQueuedTask, enqueueSiteWaitingPasses, type PrismaClient } from '@repo/db'
+import {
+  claimQueuedPass,
+  enqueueAgentWaitingPasses,
+  enqueueSiteWaitingPasses,
+  type PrismaClient,
+} from '@repo/db'
 import {
   AGENT_TURN_JOB,
   AGENT_TURN_QUEUE,
@@ -28,8 +33,10 @@ import { wakeStoppedPreview } from '../previews/preview-wake.ts'
 import type { TurnSupervisor } from '../turns/turn-supervisor.ts'
 import type { CandidateGit } from './candidate-git.ts'
 import type { ChatFiles } from './chat-files.ts'
+import type { DocSections } from './doc-sections.ts'
 import type { LivePasses } from './live-passes.ts'
 import { readPassFacts } from './pass-facts.ts'
+import type { TurnCapacity } from './turn-capacity.ts'
 import type { PassEnding, PassRef, PassSettlement, SettleAnswer } from './pass-settlement.ts'
 import { causeOf, failureFactsOf, feedFailureOf } from './turn-outcome.ts'
 import { planTurn, type PassPlan } from './turn-planner.ts'
@@ -52,11 +59,16 @@ const RETRY_DELAY_MS = Object.freeze({
 })
 
 /**
- * Passes of one workspace that run at a time (owner's request of 06.11.2026: «расширь количество
- * параллельных агентов на одного пользователя до 8»): the next one waits as for a busy pool. The
- * pool and the worker of `agent-turns` bound all the workspaces together.
+ * Passes of one workspace that run at a time by default (owner's requests of 06.11.2026: «расширь
+ * количество параллельных агентов на одного пользователя до 8», and of 12.11.2026: «на одного
+ * клиента запускать до 8 сендбоксов»; WORKSPACE_TURN_LIMIT): the next one waits for the agents.
+ * The places of the platform (TurnCapacity) and the pool bound all the workspaces together.
  */
-export const WORKSPACE_PASS_LIMIT = 8
+export const DEFAULT_WORKSPACE_TURN_LIMIT = 8
+
+/** How many waiting passes the end of a pass wakes: of its workspace, and of the platform. */
+const WAKE_WORKSPACE = 8
+const WAKE_PLATFORM = 2
 
 const clamp = (value: number) =>
   Math.min(RETRY_DELAY_MS.max, Math.max(RETRY_DELAY_MS.min, Math.round(value)))
@@ -90,10 +102,24 @@ export interface PassRunnerDependencies {
    * Brings the files the agent made for the client into the chat after a completed pass
    * (docs/plan/66-chat-visuals.md, В8); absent — they stay with the turn's container.
    */
-  chatFiles?: Pick<ChatFiles, 'deliver'>
+  chatFiles?: Pick<ChatFiles, 'deliver' | 'failPages'>
+  /** The documents of the chat (docs/plan/69-pages.md, Ст19); absent — not settled here. */
+  docs?: Pick<DocSections, 'settle'>
+  /** WORKSPACE_TURN_LIMIT (plan 70, ВР13); DEFAULT_WORKSPACE_TURN_LIMIT when absent. */
+  workspaceTurnLimit?: number
+  /** The places for turns of the platform (plan 70, ВР17); absent — no bound but the pool's. */
+  capacity?: Pick<TurnCapacity, 'tryAcquire'>
   now?: () => Date
   cancelPollMs?: number
+  /** Counts what the pool told a pass (plan 71, §4.4): metrics without ids. */
+  pool?: { limitsOut(): void }
 }
+
+/**
+ * How a pass that held a place left it: `ended` — its turn ran, or it was refused, cancelled or
+ * left to recovery; `sent_back` — the pool or the site sent it back to the queue before its turn.
+ */
+type PassEnd = 'ended' | 'sent_back'
 
 /** A retry of the pass a busy site or pool sent back, and when. */
 interface Retry {
@@ -117,10 +143,21 @@ export class PassRunner {
   }
 
   async run(job: AgentTurnJob): Promise<void> {
-    const claimed = await claimQueuedTask(this.deps.db, {
+    // Of nine passes of one workspace that claim at once, exactly its limit go (plan 70, ВР13).
+    const claimed = await claimQueuedPass(this.deps.db, {
       taskId: job.taskId,
       attempt: job.attempt,
+      workspaceLimit: this.deps.workspaceTurnLimit ?? DEFAULT_WORKSPACE_TURN_LIMIT,
     })
+    if (claimed === 'full') {
+      // It waits for the agents, holding no worker: the end of a pass of its workspace wakes it.
+      const answer = await this.deps.settlement.waitForAgents(job)
+      this.#logger.log(
+        `pass_settled task=${job.taskId} ending=busy answer=${answer} cause=WORKSPACE_FULL`,
+      )
+      if (answer === 'moved') await this.#requeue(job, { delayMs: RETRY_DELAY_MS.update })
+      return
+    }
     if (!claimed) {
       this.#logger.log(`pass_skipped task=${job.taskId} attempt=${job.attempt}`)
       return
@@ -179,20 +216,41 @@ export class PassRunner {
       await settlement.settle(ref, { kind: 'refused', code: 'unavailable' })
       return
     }
-    // The claim above moved this task to `preparing` before it counts the others: passes that
-    // claim at once count each other, so the workspace never runs more than its limit.
-    if (await this.#workspaceFull(job.taskId)) {
+    // A place for the turn on the platform (plan 70, ВР17): without one the pass waits for the
+    // agents and gives its worker up; the end of any pass wakes it.
+    const release = this.deps.capacity ? this.deps.capacity.tryAcquire() : () => {}
+    if (!release) {
       const answer = await settlement.settle(ref, { kind: 'busy', waiting: 'agents' })
       this.#logger.log(
-        `pass_settled task=${job.taskId} ending=busy answer=${answer} cause=WORKSPACE_FULL`,
+        `pass_settled task=${job.taskId} ending=busy answer=${answer} cause=CAPACITY_FULL`,
       )
       if (answer === 'moved') await this.#requeue(job, { delayMs: RETRY_DELAY_MS.update })
       return
     }
+    let ended: PassEnd = 'ended'
+    try {
+      ended = await this.#turnOf(job, ref, billable, controller)
+    } finally {
+      release()
+      // Only a pass that ended frees a place for good. One the pool or the site sent back held
+      // its place for a moment and waits again — after the pool, among those it would wake:
+      // waking them ran it again at once, a new turn every second (the chat of 13.11.2026). Its
+      // retry is its only one; a pass refused while it held the place keeps its own retry too.
+      if (ended === 'ended') await this.#wakeAgents(job, ref.turnNo)
+    }
+  }
+
+  async #turnOf(
+    job: AgentTurnJob,
+    ref: PassRef,
+    billable: boolean,
+    controller: AbortController,
+  ): Promise<PassEnd> {
+    const { settlement } = this.deps
     const supervisor = this.deps.supervisor
     if (!supervisor) {
       await settlement.settle(ref, { kind: 'refused', code: 'unavailable' })
-      return
+      return 'ended'
     }
 
     let plan: PassPlan
@@ -202,25 +260,22 @@ export class PassRunner {
       const code = feedFailureOf({ ...failureFactsOf(error), policyFlagged: false })
       this.#logger.warn(`pass_unplanned task=${job.taskId} code=${code} cause=${causeOf(error)}`)
       await settlement.settle(ref, { kind: 'refused', code })
-      return
+      return 'ended'
     }
     if (plan.kind === 'refused') {
       await settlement.settle(ref, { kind: 'refused', code: plan.code })
-      return
+      return 'ended'
     }
     if (plan.kind === 'ceiling') {
       await settlement.settle(ref, { kind: 'ceiling', question: plan.question })
-      return
+      return 'ended'
     }
-    if (plan.kind === 'branch_moved') {
-      await this.#branchMoved(job, ref, plan.update)
-      return
-    }
+    if (plan.kind === 'branch_moved') return this.#branchMoved(job, ref, plan.update)
     const browser = plan.requirements.browser
     if (await this.#cancelRequested(job)) controller.abort()
     if (controller.signal.aborted) {
       await this.#settle(ref, { kind: 'cancelled', turn: null }, browser)
-      return
+      return 'ended'
     }
     // The browser lives with the task, not with the turn (Б18), and starts with the agent's first
     // `web_*` call (docs/plan/61, К11): a live one only comes back to the agent here.
@@ -228,7 +283,7 @@ export class PassRunner {
       await this.deps.browser?.reclaim(job.taskId, controller.signal)
       if (controller.signal.aborted) {
         await this.#settle(ref, { kind: 'cancelled', turn: null }, true)
-        return
+        return 'ended'
       }
     }
 
@@ -237,9 +292,11 @@ export class PassRunner {
     let retry: Retry | null = null
     let cause: string | null = null
     let outbox: Uint8Array | undefined
+    let refusesText: ((text: string) => 'turn_key' | 'client_value' | null) | null = null
     try {
       const completed = await supervisor.run(plan.request, plan.policy, controller.signal)
       outbox = completed.outbox
+      refusesText = completed.refusesText
       const git = completed.manifest.git
       ending = {
         kind: 'completed',
@@ -260,20 +317,41 @@ export class PassRunner {
       this.#logger.warn(
         `pass_left_to_recovery task=${job.taskId} turn=${plan.turn} cause=${cause ?? 'unknown'}`,
       )
-      return
+      return 'ended'
     }
     const turnNo = await this.#turnNo(job.taskId)
-    if (turnNo === null) return
+    if (turnNo === null) return 'ended'
+    // The sections of documents the chat wrote are checked with what only the turn knew (Ст19),
+    // before the answer reaches the client: a document the answer speaks of shows what passed.
+    if (ending.kind === 'completed' && refusesText)
+      await this.deps.docs?.settle(job.taskId, ending.turn, refusesText)
     const answer = await this.#settle({ ...ref, turnNo }, ending, browser)
     this.#logger.log(
       `pass_settled task=${job.taskId} ending=${ending.kind} answer=${answer}${cause ? ` cause=${cause}` : ''}`,
     )
-    // After the answer of the turn, so that its files stand below it in the chat.
-    if (ending.kind === 'completed' && answer === 'moved' && outbox)
-      await this.deps.chatFiles?.deliver({ taskId: job.taskId, turn: ending.turn, outbox })
+    // The pages a failed or cancelled turn named are told at once (docs/plan/69-pages.md, Ст6).
+    if (
+      (ending.kind === 'failed' || ending.kind === 'cancelled') &&
+      answer === 'moved' &&
+      ending.turn !== null
+    )
+      await this.deps.chatFiles?.failPages(job.taskId, ending.turn)
+    // After the answer of the turn, so that its files stand below it in the chat. A turn without
+    // files still settles the pages it named (docs/plan/69-pages.md, Ст6).
+    if (ending.kind === 'completed' && answer === 'moved')
+      await this.deps.chatFiles?.deliver({
+        taskId: job.taskId,
+        turn: ending.turn,
+        outbox: outbox ?? null,
+      })
     if (ending.kind === 'busy') {
-      if (answer === 'moved' && retry) await this.#requeue(job, retry)
-    } else await this.#wakeSite(job, turnNo)
+      // Another end of the task came first (a cancel, which wakes nobody): this one ended it.
+      if (answer !== 'moved') return 'ended'
+      if (retry) await this.#requeue(job, retry)
+      return 'sent_back'
+    }
+    await this.#wakeSite(job, turnNo)
+    return 'ended'
   }
 
   /**
@@ -367,14 +445,15 @@ export class PassRunner {
    * finishes from the branch as it stands (CandidateRebase); otherwise nothing can publish, and
    * the pass fails before a turn spends money.
    */
-  async #branchMoved(job: AgentTurnJob, ref: PassRef, update: string | null): Promise<void> {
+  async #branchMoved(job: AgentTurnJob, ref: PassRef, update: string | null): Promise<PassEnd> {
     this.#logger.warn(`pass_branch_moved task=${job.taskId} update=${update ?? 'none'}`)
     if (update === null) {
       await this.deps.settlement.settle(ref, { kind: 'refused', code: 'technical' })
-      return
+      return 'ended'
     }
     const answer = await this.deps.settlement.settle(ref, { kind: 'busy', waiting: 'site' })
-    if (answer !== 'moved') return
+    // Another end of the task came first (a cancel): nothing waits for this pass any more.
+    if (answer !== 'moved') return 'ended'
     const rebase = { taskId: job.taskId, requestEventId: update }
     await this.deps.queue
       .enqueue(AGENT_TURN_QUEUE, CANDIDATE_REBASE_JOB, rebase, {
@@ -382,6 +461,7 @@ export class PassRunner {
       })
       .catch(() => this.#logger.warn(`pass_update_requeue_failed task=${job.taskId}`))
     await this.#requeue(job, { delayMs: RETRY_DELAY_MS.update })
+    return 'sent_back'
   }
 
   /**
@@ -418,6 +498,7 @@ export class PassRunner {
           this.#logger.warn(
             `pass_limits_out task=${ref.taskId} turn=${turn ?? 'none'} retry_at=${retryAt.toISOString()}`,
           )
+          this.deps.pool?.limitsOut()
           facts = { ...facts, detailReason: 'agent_limits' }
         } else
           return {
@@ -459,13 +540,28 @@ export class PassRunner {
     return task?.turnNo ?? null
   }
 
-  /** The workspace of the task runs `WORKSPACE_PASS_LIMIT` passes of its other tasks. */
-  async #workspaceFull(taskId: string): Promise<boolean> {
-    const [row] = await this.deps.db.$queryRaw<Array<{ busy: number }>>`
-      SELECT count(*)::int AS busy
-      FROM tasks t JOIN tasks o ON o.workspace_id = t.workspace_id AND o.id <> t.id
-      WHERE t.id = ${taskId}::uuid AND o.status IN ('preparing', 'running')`
-    return (row?.busy ?? 0) >= WORKSPACE_PASS_LIMIT
+  /**
+   * The pass gave its place back: the passes that waited for the agents go now, not at their
+   * retry (plan 70, ВР15) — those of its workspace, whose limit it freed, then the oldest of the
+   * platform. A wake that is not written leaves them their retry.
+   */
+  async #wakeAgents(job: AgentTurnJob, turnNo: number): Promise<void> {
+    try {
+      const task = await this.deps.db.task.findUnique({
+        where: { id: job.taskId },
+        select: { workspaceId: true },
+      })
+      const tag = `pass-${job.taskId}-${job.attempt}-${turnNo}`
+      if (task)
+        await enqueueAgentWaitingPasses(this.deps.db, {
+          workspaceId: task.workspaceId,
+          limit: WAKE_WORKSPACE,
+          tag,
+        })
+      await enqueueAgentWaitingPasses(this.deps.db, { limit: WAKE_PLATFORM, tag })
+    } catch {
+      this.#logger.warn(`pass_wake_failed task=${job.taskId}`)
+    }
   }
 
   async #holdsReserve(job: AgentTurnJob): Promise<boolean> {
@@ -551,6 +647,8 @@ export class PassRunner {
       .enqueue(AGENT_TURN_QUEUE, AGENT_TURN_JOB, job, {
         jobId: agentTurnRetryJobId(job, String(this.#now().getTime())),
         delayMs: retry.delayMs,
+        // After a wait of the pool the passes come back in the order of their tiers (plan 71).
+        ...(job.priority === undefined ? {} : { priority: job.priority }),
       })
       .catch(() => this.#logger.warn(`pass_requeue_failed task=${job.taskId}`))
   }

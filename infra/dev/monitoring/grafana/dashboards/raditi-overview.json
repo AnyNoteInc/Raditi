@@ -186,6 +186,42 @@
         }
       },
       "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Пул ИИ-агента: свободно в окнах",
+      "description": "Доля свободного места окон 5 часов и недели по пулу (план 71). Алерт — меньше 20 % в окне 5 часов дольше 10 минут.",
+      "gridPos": { "x": 0, "y": 34, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "raditi_llm_pool_window_remaining_ratio",
+          "legendFormat": "{{backend}} {{window}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } }
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Лимиты пространств и пула",
+      "description": "Отказы по окнам пространств (вызов и проход) и проходы, кончившиеся «лимиты ИИ-агента закончились» (план 71).",
+      "gridPos": { "x": 12, "y": 34, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tier, window, point) (increase(raditi_workspace_window_refusals_total[1h]))",
+          "legendFormat": "отказ {{point}} {{tier}} {{window}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(increase(raditi_pass_limits_out_total[1h]))",
+          "legendFormat": "лимиты агента закончились"
+        }
+      ]
     }
   ]
 }

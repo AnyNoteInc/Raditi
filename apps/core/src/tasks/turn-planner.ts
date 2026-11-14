@@ -3,7 +3,7 @@ import {
   attemptBudgetRub,
   turnLeaseOf,
   MAX_SANDBOX_EGRESS_HOSTS,
-  MAX_SANDBOX_TURN_MS,
+  TURN_LEASE_TTL_MS,
   Money,
   SANDBOX_EGRESS_PORT,
   turnInboxAttachmentId,
@@ -820,7 +820,9 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
         ...(egress.length ? { egress: [...egress] } : {}),
         internet: true,
       },
-      hardTimeoutMs: MAX_SANDBOX_TURN_MS,
+      // The first lease of the container, not a limit of the work: the turn renews it
+      // (docs/plan/70-turn-without-time-limit.md, ВР1).
+      hardTimeoutMs: TURN_LEASE_TTL_MS,
     },
     context: {
       taskId: task.id,
@@ -885,7 +887,8 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
     modelSlug: facts.profile.modelSlug,
     modelClass: task.modelClass,
     reasoningEffort,
-    ttlMs: MAX_SANDBOX_TURN_MS,
+    // The first expiry of the key; every renewal of the turn moves it on (ВР3).
+    ttlMs: TURN_LEASE_TTL_MS,
     budgetRub,
   }
   return { kind: 'turn', request, policy, turn, requirements: { ...requirements } }

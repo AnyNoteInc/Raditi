@@ -262,6 +262,22 @@ const samples: Record<FeedEventType, Record<string, unknown>[]> = {
     { v: 1, reason: 'skipped', count: 2 },
     { v: 1, reason: 'refused', count: 0 },
   ],
+  'feed.page': [
+    {
+      v: 1,
+      pageId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7db1',
+      slug: 'abcdefghijklmnopqrstuvwxyz',
+      title: 'Аудит',
+      version: 1,
+      kind: 'doc',
+    },
+  ],
+  'feed.page_left': [{ v: 1, pageId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7db1', reason: 'refused' }],
+  'feed.doc': [{ v: 1, docId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dc1' }],
+  'feed.doc_touch': [{ v: 1, docId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dc1', revision: 2 }],
+  'feed.doc_left': [
+    { v: 1, docId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dc1', sections: 2, reason: 'refused' },
+  ],
 }
 
 const accepts = (type: FeedEventType, payload: unknown) =>
@@ -292,6 +308,11 @@ describe('feed vocabulary', () => {
       'feed.edit',
       'feed.file',
       'feed.file_left',
+      'feed.page',
+      'feed.page_left',
+      'feed.doc',
+      'feed.doc_touch',
+      'feed.doc_left',
     ])
     expect(Object.keys(feedPayloadSchemas)).toEqual([...feedEventTypes])
     expect(isFeedEventType('feed.step')).toBe(true)
@@ -388,6 +409,8 @@ describe('free text is allowed in four fields, the agent words of a browser ques
       'feed.failure.objects[].title',
       // The name of a file the agent made, as it had it: shown, never read as markup.
       'feed.file.name',
+      // The title the agent gave its page: shown as text.
+      'feed.page.title',
       'feed.question.intro',
       'feed.question.message',
       'feed.question.questions[].options[]',
@@ -1203,6 +1226,36 @@ describe('reading stored rows', () => {
         { v: 1, reason: 'skipped' },
         { v: 1, count: 1 },
       ],
+      'feed.page': [
+        {
+          v: 1,
+          pageId: 'страница',
+          slug: 'abcdefghijklmnopqrstuvwxyz',
+          title: 'А',
+          version: 1,
+          kind: 'html',
+        },
+        {
+          v: 1,
+          pageId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7db1',
+          slug: 'short',
+          title: 'А',
+          version: 1,
+          kind: 'html',
+        },
+        {
+          v: 1,
+          pageId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7db1',
+          slug: 'abcdefghijklmnopqrstuvwxyz',
+          title: 'А',
+          version: 0,
+          kind: 'html',
+        },
+      ],
+      'feed.page_left': [{ v: 1, pageId: 'страница', reason: 'missing' }],
+      'feed.doc': [{ v: 1, docId: 'документ' }],
+      'feed.doc_touch': [{ v: 1, docId: 'документ', revision: 1 }],
+      'feed.doc_left': [{ v: 1, docId: 'документ', sections: 1, reason: 'refused' }],
     }
     for (const type of feedEventTypes)
       for (const payload of broken[type])
@@ -1504,7 +1557,7 @@ describe('task head', () => {
 })
 
 describe('failure catalogue', () => {
-  it('lists the thirteen codes of the design', () => {
+  it('lists the fourteen codes of the design', () => {
     expect(feedFailureCodes).toEqual([
       'technical',
       'timeout',
@@ -1512,6 +1565,7 @@ describe('failure catalogue', () => {
       'task_limit',
       'credits_out',
       'agent_limits',
+      'usage_limit',
       'forbidden_change',
       'secret_found',
       'site_files',
@@ -1539,6 +1593,7 @@ describe('failure catalogue', () => {
     expect(feedFailureCodes.filter((code) => !feedFailureRetry[code])).toEqual([
       'credits_out',
       'agent_limits',
+      'usage_limit',
       'site_files',
       'site_held',
       'content_refused',

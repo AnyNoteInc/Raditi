@@ -19,6 +19,10 @@ import {
   feedFailureKeptText,
   feedFailureOpenText,
   feedFileLeftText,
+  feedDocLeftText,
+  feedDocText,
+  feedPageLeftText,
+  feedPageText,
   feedFilesChangedText,
   feedMediaAddedText,
   feedObjectKindLabel,
@@ -238,6 +242,17 @@ function rowBlock(row: FeedItem, withSite: boolean): string | null {
       return block([agent(feedExportText.file(row.name))])
     case 'feed.file_left':
       return block([heading(feedExportText.agent, row.at), feedFileLeftText(row)])
+    case 'feed.page':
+      return block([agent(feedPageText(row))])
+    case 'feed.doc':
+      return block([agent(feedDocText())])
+    // A signal for the card: the export says nothing of it.
+    case 'feed.doc_touch':
+      return null
+    case 'feed.doc_left':
+      return block([heading(feedExportText.agent, row.at), feedDocLeftText(row)])
+    case 'feed.page_left':
+      return block([heading(feedExportText.agent, row.at), feedPageLeftText(row)])
     case 'feed.rewind':
       return feedRewindText(row)
     case 'feed.redo':

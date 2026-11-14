@@ -4,6 +4,7 @@ import {
   DomainError,
   type AppEnv,
   type ObjectStorage,
+  type PagesAddress,
   type PreviewAddress,
   type SecretStore,
   type SiteStack,
@@ -37,11 +38,17 @@ export interface ChatContext {
    */
   browserSupported?: (stack: SiteStack) => boolean
   /**
-   * The domain of the pages the agent makes (docs/plan/67-agent-documents.md, Д3): its origin
-   * (PAGES_ORIGIN), the key of its tokens (PAGES_SIGNING_SECRET) and the cabinet's origin that
-   * frames it (APP_URL). Absent or null — no page is shown here: the cabinet only downloads one.
+   * Where published pages answer (docs/plan/69-pages.md, Ст3): the cabinet names their address.
+   * Absent or null — no pages here: the section «Страницы» says so.
    */
-  pages?: { origin: string; appUrl: string; keys: PageKeys } | null
+  pages?: PagesAddress | null
+  /**
+   * The root of the domain of pages, where the frame of the cabinet opens a page of a chat
+   * (docs/plan/67-agent-documents.md, Д3): its origin (from PAGES_BASE_DOMAIN, docs/plan/69-pages.md,
+   * Ст3), the key of its tokens (PAGES_SIGNING_SECRET) and the cabinet's origin that frames it
+   * (APP_URL). Absent or null — no page is shown here: the cabinet only downloads one.
+   */
+  pageViews?: { origin: string; appUrl: string; keys: PageKeys } | null
   /** The HMAC key of release confirmations: `releaseConfirmKey(BETTER_AUTH_SECRET)`. */
   releaseConfirmKey: Uint8Array
   /** `raditi-artifacts`: the diff of a candidate (`candidate.fileDiff`). */

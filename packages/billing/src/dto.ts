@@ -6,6 +6,9 @@ import {
   taskRefusalReasons,
   taskStatuses,
   type CreditAccountKind,
+  usageWindowRoom,
+  workspaceTiers,
+  type UsageWindowState,
 } from '@repo/domain'
 import { z } from 'zod'
 
@@ -25,6 +28,9 @@ export const planSchema = z.object({
   creditsPerMonth: positiveCount,
   /** Tariff credits a Moscow day may take; null: the plan has no daily limit. */
   creditsPerDay: positiveCount.nullable(),
+  /** Credits the work may take in 5 hours and in a week (plan 71); null: no such limit. */
+  creditsPer5h: positiveCount.nullable(),
+  creditsPerWeek: positiveCount.nullable(),
   maxSites: positiveCount,
 })
 export type PlanDto = z.infer<typeof planSchema>
@@ -184,6 +190,33 @@ export const tariffDaySchema = z
   .refine(({ room, left }) => room === null || left <= room)
 export type TariffDayDto = z.infer<typeof tariffDaySchema>
 
+/**
+ * A window of 5 hours or of the week of the workspace (docs/plan/71-usage-limits.md, §4.5): its
+ * limit, what the work took (whole credits, rounded up) and what is left (rounded down), and when
+ * it resets; `resetsAt` null — it starts with the first task. `limit` null — no limit.
+ */
+export const usageWindowDtoSchema = z
+  .object({
+    kind: z.enum(['5h', 'week']),
+    limit: positiveCount.nullable(),
+    used: wholeCredits,
+    left: wholeCredits.nullable(),
+    resetsAt: z.date().nullable(),
+  })
+  .refine(({ limit, left }) => (limit === null) === (left === null))
+export type UsageWindowDto = z.infer<typeof usageWindowDtoSchema>
+
+/** The windows of a verdict as the pages read them. */
+export function usageWindowsDto(windows: readonly UsageWindowState[]): UsageWindowDto[] {
+  return windows.map((window) => ({
+    kind: window.kind,
+    limit: window.limit,
+    used: Math.ceil(Number(window.used)),
+    left: usageWindowRoom(window),
+    resetsAt: window.resetsAt,
+  }))
+}
+
 /** The numbers of that answer, beside the answer itself. */
 const taskCreditsShape = {
   /**
@@ -202,6 +235,10 @@ const taskCreditsShape = {
   minToStart: positiveCount,
   /** The tariff credits of the Moscow day; null without a paid tariff — there is no day then. */
   today: tariffDaySchema.nullable(),
+  /** The windows of 5 hours and of the week (plan 71); none for a user without a workspace. */
+  windows: z.array(usageWindowDtoSchema).max(2),
+  /** The tier of the workspace (plan 71): whether a bigger tariff with bigger windows exists. */
+  tier: z.enum(workspaceTiers),
   newTask: newTaskSchema,
 }
 
@@ -215,7 +252,7 @@ export const creditsOverviewSchema = z
 export type CreditsOverviewDto = z.infer<typeof creditsOverviewSchema>
 
 /**
- * `spendable`, `spendableNow`, `setAside`, `minToStart`, `today` and `newTask` of a credits
+ * `spendable`, `spendableNow`, `setAside`, `minToStart`, `today`, `windows` and `newTask` of a credits
  * overview.
  */
 export type TaskCreditsDto = Pick<CreditsOverviewDto, keyof typeof taskCreditsShape>

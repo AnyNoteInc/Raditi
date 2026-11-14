@@ -282,6 +282,7 @@ function connectionWith(events: CloudBrowserEvent[] = []): CloudBrowserConnectio
     localSites: [],
     openWeb: false,
     platformHosts: [],
+    pageDomain: null,
     startUrl: `${ORIGIN}/wp-admin/`,
     viewport: { width: 1280, height: 800 },
     policy,
@@ -378,6 +379,7 @@ describe('the cloud browser session', () => {
       allowedHosts: [],
       openWeb: true,
       platformHosts: ['raditi.ru'],
+      pageDomain: null,
       startUrl: null,
       policy: OPEN_WEB_POLICY,
     })

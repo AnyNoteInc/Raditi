@@ -153,7 +153,9 @@ function parseLimit(raw: unknown, name: LimitWindow['name'], now: Date): LimitWi
     // A window nobody has started has no reset time, and only a request can start it: it is
     // known and free, or the pool would wait for it for good. With anything spent it is a
     // report that cannot be read.
-    return spent === 0 && remaining === size ? { name, usedPct: 0, resetsAt: null } : null
+    return spent === 0 && remaining === size
+      ? { name, usedPct: 0, resetsAt: null, limitCredits: size, usedCredits: 0 }
+      : null
   }
   if (typeof reset !== 'number' || !Number.isSafeInteger(reset) || reset <= 0) return null
   const resetsAt = new Date(reset)
@@ -162,15 +164,19 @@ function parseLimit(raw: unknown, name: LimitWindow['name'], now: Date): LimitWi
     // The window has ended and the next request starts a new one. Not observed: the provider
     // stops naming the reset of an ended window. A reset further back than a window is long
     // is a broken report (seconds read as milliseconds), not a free window.
-    return -ahead <= limitResetHorizonMs[name] ? { name, usedPct: 0, resetsAt: null } : null
+    return -ahead <= limitResetHorizonMs[name]
+      ? { name, usedPct: 0, resetsAt: null, limitCredits: size, usedCredits: 0 }
+      : null
   }
   if (!limitResetPlausible(resetsAt, now, name)) return null
   // A started window shows one credit less in `remaining` than `currentValue` accounts for,
   // from its first request on; the larger count is taken. The provider's own `percentage` is
   // rounded up to a whole percent and is not read.
+  // The absolute numbers stay with the share (plan 71): a Max holds fourteen times a Lite.
   const used = Math.max(spent, size - remaining)
-  if (remaining <= 0 || used >= size) return { name, usedPct: 100, resetsAt }
-  return { name, usedPct: (used * 100) / size, resetsAt }
+  if (remaining <= 0 || used >= size)
+    return { name, usedPct: 100, resetsAt, limitCredits: size, usedCredits: Math.max(used, size) }
+  return { name, usedPct: (used * 100) / size, resetsAt, limitCredits: size, usedCredits: used }
 }
 
 type WindowsCapacity = Extract<ZaiOffer['capacity'], { kind: 'windows' }>

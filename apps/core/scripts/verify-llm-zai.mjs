@@ -185,14 +185,24 @@ export async function verifyZai(ctx) {
   // selects on what the probe stored. The five-hour window is one nobody has started.
   assert.equal((await account()).limitWindows?.length ?? 0, 0)
   const proxied = await issued()
-  assert.deepEqual((await windows())['5h'], { name: '5h', usedPct: 0, resetsAt: null })
+  // The size and the use in plan credits come with the share (docs/plan/71-usage-limits.md).
+  assert.deepEqual((await windows())['5h'], {
+    name: '5h',
+    usedPct: 0,
+    resetsAt: null,
+    limitCredits: 2000,
+    usedCredits: 0,
+  })
   assert.ok((await windows()).week.usedPct > 0 && (await windows()).week.usedPct < 1)
-  // The key is durable: recovered and issued again it is the same one. The only account is
-  // healthy but holds its one turn: occupied slots, not missing capacity.
+  // The key is durable: recovered and issued again it is the same one. An account runs any
+  // number of turns at once (docs/plan/70-turn-without-time-limit.md, ВР26): a second task gets
+  // its key beside the first, on the same account.
   assert.deepEqual(await core.call('recover', { ref: proxied.ref }), proxied.values)
   assert.deepEqual(await issue(proxied), proxied.values)
-  await assert.rejects(issue(await task()), (error) => error.code === 'SUBSCRIPTION_BUSY')
-  passed('durable issuance, recovery and one-turn capacity of the account')
+  const alongside = await issued()
+  assert.equal((await keyRow(alongside)).subscriptionAccountId, accountId)
+  await revoke(alongside)
+  passed('durable issuance, recovery and turns side by side on one account')
   const proxiedResult = resultFor('B13 OpenCode through the proxy')
   await zai({ scenario: { scenario: 'text', text: JSON.stringify(proxiedResult) } })
   const throughProxy = await runTurn({ turn: proxied, prompt: `${promptMarker}. Answer.` })
@@ -802,22 +812,57 @@ export async function verifyZai(ctx) {
     'a window snapshot older than ten minutes catches up with the quota at issue and at the first call of a key',
   )
 
-  // 91 % of the five-hour window: a new task waits, without one refusal of the provider; a
-  // task already bound to the account still gets the key of its next turn.
+  // 91 % of the five-hour window, 180 credits left — more than a turn takes (5 % of the window
+  // while no turn is measured): a new task of a workspace without a tariff starts, and a task
+  // bound to the account gets the key of its next turn (owner's answer of 13.11.2026: «пока есть
+  // кредиты из подписки или тарифа нужно запускать агента» — no reserve of the tiers).
   await zai({
     quota: { fiveHour: { currentValue: 1820, remaining: 180, resetInMs: 3 * 3_600_000 } },
   })
   await age()
   await direct()
-  const asked = (await zai()).counters.chat
-  await waiting(await task())
+  const started = await issued()
   assert.equal((await windows())['5h'].usedPct, 91)
-  assert.equal((await zai()).counters.chat, asked)
+  await revoke(started)
   const bound = await issued(undefined, caught)
   await revoke(bound)
+  // 96 %, 80 credits left — less than a turn: a new task waits, without one refusal of the
+  // provider.
+  await zai({
+    quota: { fiveHour: { currentValue: 1920, remaining: 80, resetInMs: 3 * 3_600_000 } },
+  })
+  await age()
+  await direct()
+  const asked = (await zai()).counters.chat
+  await waiting(await task())
+  assert.equal((await windows())['5h'].usedPct, 96)
+  assert.equal((await zai()).counters.chat, asked)
   passed(
-    'a new task is refused at 91 % of the five-hour window without a provider refusal; a bound task goes on',
+    'a new task starts at 91 % of the five-hour window while a turn is left, a bound task goes on, and a new task waits at 96 % without a provider refusal',
   )
+
+  // The windows in plan credits as Z.ai names them (plan 71): the same account on a plan of
+  // another size is read by its own numbers, and a new task goes on at once.
+  setStage('absolute windows')
+  await zai({ quota: { plan: 'pro' } })
+  // Unknown windows: issue asks the quota before it selects (the 96 % above, fresh, would hold
+  // a new task with no probe).
+  await db.subscriptionAccount.update({
+    where: { id: accountId },
+    data: { limitWindows: [], headroomPct: null, limitsSeenAt: null },
+  })
+  await direct()
+  const large = await issued()
+  const five = (await windows())['5h']
+  assert.deepEqual([five.limitCredits, five.usedCredits], [12000, 0])
+  assert.equal((await windows()).week.limitCredits, 60000)
+  await revoke(large)
+  await zai({ quota: { plan: 'lite' } })
+  await db.subscriptionAccount.update({
+    where: { id: accountId },
+    data: { coolingUntil: null, limitWindows: [], headroomPct: null, limitsSeenAt: null },
+  })
+  passed('the windows carry the size Z.ai names: a Pro account is read as 12 000 / 60 000 credits')
 
   // A quota answer that cannot be read is no capacity: admission closes until one that can.
   await zai({ quota: { mode: 'broken' } })

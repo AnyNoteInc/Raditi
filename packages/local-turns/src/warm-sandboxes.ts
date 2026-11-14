@@ -2,18 +2,21 @@ import type { Sandbox, SandboxProvider } from '@repo/domain'
 
 // The warm containers of turns (owner's decision of 26.10.2026; spec §8, «Тёплая песочница»):
 // the container of a completed turn waits a few minutes for the next turn of its task instead
-// of being removed, and that turn takes it instead of creating one. A container never outlives
-// the deadline it was created with — the watchdog's, the lease's and recovery's — so it is
-// offered only while it leaves a turn `WARM_MIN_LEFT_MS`. While it waits nothing runs in it: it
-// was reset (Sandbox.reset), its turn's credentials are revoked, no lease covers it.
+// of being removed, and that turn takes it instead of creating one. A turn has no time limit
+// (docs/plan/70-turn-without-time-limit.md, ВР10): a waiting container is leased for its wait
+// (Sandbox.extend) and the turn that takes it extends it again to its own deadline. While it
+// waits nothing runs in it: it was reset (Sandbox.reset), its turn's credentials are revoked,
+// no lease of the site covers it.
 
-/** What a waiting container must still leave the turn that takes it: half of a turn. */
-export const WARM_MIN_LEFT_MS = 10 * 60_000
+/** How much longer than its wait a waiting container is leased: time for a turn to take it. */
+export const WARM_LEASE_MARGIN_MS = 60_000
+/** A waiting container with less left than this is not taken: its turn could not extend it. */
+export const WARM_TAKE_MIN_LEFT_MS = 30_000
 /** How often the tasks of waiting containers are checked. */
 export const WARM_SWEEP_MS = 10_000
 /**
- * At most as many waiting containers as core runs turns at once (AGENT_TURN_CONCURRENCY): one
- * more waits in the place of the one whose wait ends first.
+ * By default at most this many containers wait at once; core gives the number of turns it runs at
+ * once (`maxWaiting`). One more waits in the place of the one whose wait ends first.
  */
 export const WARM_MAX_WAITING = 8
 
@@ -35,7 +38,6 @@ export interface WarmSandboxesOptions {
 interface Waiting {
   sandbox: Sandbox
   key: string
-  deadline: number
   until: number
   timer: NodeJS.Timeout
 }
@@ -65,45 +67,44 @@ export class WarmSandboxes {
   }
 
   /**
-   * The waiting container of `key` for a turn that holds its lease, when it leaves the turn
-   * `needMs`: checked again by its provider — unchanged, with its network intact — and held as
-   * taken until the turn removes it or it waits again. null — none: the turn creates one.
+   * The waiting container of `key` for a turn that holds its lease: checked again by its
+   * provider — unchanged, with its network intact, and with WARM_TAKE_MIN_LEFT_MS of its lease
+   * left — and held as taken until the turn removes it or it waits again. The turn extends it
+   * to its own deadline. null — none: the turn creates one.
    */
-  async take(key: string, needMs: number): Promise<{ sandbox: Sandbox; deadline: number } | null> {
+  async take(key: string): Promise<Sandbox | null> {
     for (;;) {
       if (this.#closed) return null
       const found = [...this.#waiting.values()].find((waiting) => waiting.key === key)
       if (!found) return null
-      const { sandbox, deadline } = found
+      const { sandbox } = found
       this.#unwait(sandbox.id)
-      if (deadline - this.#now() < needMs) {
-        void this.#remove(sandbox)
-        continue
-      }
       this.#taken.add(sandbox.id)
       const fresh = await this.#options.sandboxes.get(sandbox.id).catch(() => null)
       if (
         fresh?.id === sandbox.id &&
-        JSON.stringify(fresh.labels) === JSON.stringify(sandbox.labels)
+        JSON.stringify(fresh.labels) === JSON.stringify(sandbox.labels) &&
+        fresh.deadline - this.#now() >= WARM_TAKE_MIN_LEFT_MS
       )
-        return { sandbox: fresh, deadline }
+        return fresh
       this.#taken.delete(sandbox.id)
       void this.#remove(sandbox)
     }
   }
 
   /**
-   * After a completed turn: the container waits for the next turn of its task, reset, until
-   * `warmMs` pass or it would leave a turn less than WARM_MIN_LEFT_MS. false — it does not wait,
-   * and the caller removes it as before.
+   * After a completed turn: the container waits for the next turn of its task, reset and leased
+   * for `warmMs` (WARM_LEASE_MARGIN_MS more), until they pass. false — it does not wait, and the
+   * caller removes it as before.
    */
-  async park(sandbox: Sandbox, key: string, deadline: number): Promise<boolean> {
+  async park(sandbox: Sandbox, key: string): Promise<boolean> {
     const { warmMs, wanted } = this.#options
-    const until = Math.min(this.#now() + warmMs, deadline - WARM_MIN_LEFT_MS)
-    if (this.#closed || !sandbox.reset || until <= this.#now()) return false
+    const until = this.#now() + warmMs
+    if (this.#closed || !sandbox.reset || warmMs <= 0) return false
     try {
       await sandbox.reset()
       if (!(await wanted([sandbox.labels.taskId])).has(sandbox.labels.taskId)) return false
+      await sandbox.extend(until + WARM_LEASE_MARGIN_MS)
     } catch {
       return false
     }
@@ -115,7 +116,7 @@ export class WarmSandboxes {
     }
     const timer = setTimeout(() => this.#expire(sandbox.id), until - this.#now())
     timer.unref()
-    this.#waiting.set(sandbox.id, { sandbox, key, deadline, until, timer })
+    this.#waiting.set(sandbox.id, { sandbox, key, until, timer })
     this.#sweeper ??= setInterval(() => void this.sweep(), this.#options.sweepMs ?? WARM_SWEEP_MS)
     this.#sweeper.unref()
     return true

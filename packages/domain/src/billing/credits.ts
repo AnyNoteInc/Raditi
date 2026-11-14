@@ -12,6 +12,13 @@ import {
   subscriptionStatusSchema,
   type SubscriptionStatus,
 } from './subscription.ts'
+import {
+  refusingWindow,
+  usageWindowStatesSchema,
+  workspaceTierSchema,
+  type UsageWindowState,
+  type WorkspaceTier,
+} from './usage-windows.ts'
 
 // The numbers of the model that the customer is told — the minimum of a task, the average, the
 // typical examples, the steps — are written in a module of their own, which the pages of the
@@ -811,6 +818,8 @@ const newTaskSchema = z.strictObject({
   tariffCreditsToday: tariffCreditsTodaySchema,
   rateUsable: z.boolean(),
   debt: accountCreditsSchema.default(() => toCredits(0)),
+  windows: usageWindowStatesSchema.default(() => []),
+  tier: workspaceTierSchema.default('none'),
 })
 
 /** What the tariff of a workspace gave the Moscow day so far, in whole credits. */
@@ -855,6 +864,14 @@ export interface NewTaskInput {
    * than the accounts had. It comes off what can be spent; none when left out.
    */
   debt?: Credits
+  /**
+   * The windows of 5 hours and of the week of the workspace (`workspaceWindowUsage` of @repo/db
+   * with the limits of its tariff, plan 71): every placement is bounded by them, a retry too
+   * (Л5). None when left out.
+   */
+  windows?: UsageWindowState[]
+  /** The tier of the workspace (`workspaceUsageTerms`): a page tells by it whether a bigger tariff exists. */
+  tier?: WorkspaceTier
 }
 
 // The subscription of the workspace with the terms of its plan; other fields are not asked about.
@@ -924,6 +941,10 @@ export type NewTaskVerdict = {
   needed: Credits
   /** The tariff credits of the day; null without a paid tariff — there is no day then. */
   today: TariffDay | null
+  /** The windows of the workspace as they were asked about; the first that refuses is named. */
+  windows: UsageWindowState[]
+  /** The tier of the workspace, as given. */
+  tier: WorkspaceTier
 } & ({ allowed: true; reason: null } | { allowed: false; reason: TaskRefusalReason })
 
 /**
@@ -941,7 +962,10 @@ export type NewTaskVerdict = {
  * 3. the day, for every placement but a retry: the tariff credits free within what is left of
  *    the day, with the gift and pack credits, cannot cover what the placement needs although the
  *    accounts can — `daily_limit`. Only a paid tariff whose plan has a daily limit gets here; a
- *    pack bought today lifts it. A retry is never refused by the day (`placementTariffRoom`).
+ *    pack bought today lifts it. A retry is never refused by the day (`placementTariffRoom`);
+ * 4. the windows of the workspace, for every placement, a retry too (Л5): a window of 5 hours or
+ *    of the week has less room than the placement needs — `window_limit`. Credits do not lift
+ *    it; the reset does (owner's decision of 11.11.2026, plan 71).
  *
  * Nothing else is asked (owner's decision of 10.11.2026: «зависимость только от кредитов»): no
  * bound on unpaid work and no rule of one gift per site. A continuation is refused by the day
@@ -984,6 +1008,8 @@ export function newTaskVerdict(input: NewTaskInput): NewTaskVerdict {
     ),
     needed: toCredits(goesOn(placement) ? minContinueCredits : minStartCredits),
     today,
+    windows: result.data.windows,
+    tier: result.data.tier,
   }
   const refused = (reason: TaskRefusalReason): NewTaskVerdict => ({
     ...numbers,
@@ -1003,6 +1029,8 @@ export function newTaskVerdict(input: NewTaskInput): NewTaskVerdict {
   }
 
   if (numbers.spendableNow < numbers.needed) return refused('daily_limit')
+
+  if (refusingWindow(numbers.windows, numbers.needed) !== null) return refused('window_limit')
 
   return { ...numbers, allowed: true, reason: null }
 }

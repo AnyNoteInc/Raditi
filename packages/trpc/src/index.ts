@@ -22,5 +22,6 @@ export {
   type PageKeys,
   type PageView,
 } from './services/chat/page-tokens.ts'
+export { cabinetDocMarkdown } from './services/pages.ts'
 export { readTaskScreenshot } from './services/chat/screenshots.ts'
 export { readSiteBackupDownload } from './services/site-history.ts'

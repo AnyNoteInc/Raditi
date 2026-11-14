@@ -18,6 +18,12 @@ export const agentTurnJobSchema = z.strictObject({
   attempt: z.number().int().min(1),
   /** `task_events.id` of the `feed.request` this pass answers. */
   requestEventId: feedEventIdSchema,
+  /**
+   * The place of the pass in the queue by the tier of its workspace (`tierQueuePriority`, plan
+   * 69): 1 — «Агентство» … 4 — no tariff; the relay hands it to the queue, a repeat keeps it.
+   * Absent in jobs of before 13.11.2026.
+   */
+  priority: z.number().int().min(1).max(4).optional(),
 })
 export type AgentTurnJob = z.infer<typeof agentTurnJobSchema>
 

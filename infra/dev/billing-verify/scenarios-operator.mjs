@@ -72,7 +72,7 @@ scenarios['credit-rate'] = async (t) => {
   const withSite = await t.customer()
   await addSite(t, withSite, { name: 'Кофейня', url: `https://rate-${withSite.id}.example.ru` })
   t.equal(
-    'without a rate nobody’s task is taken, whatever they could spend: the gift promised, the gift granted, 300 credits of three accounts',
+    'without a rate nobody’s task is taken, whatever they could spend: the gift promised, the gift granted, 350 credits of three accounts',
     [await told(onlooker), await told(withSite), await told(paying.customer)],
     [both(PAUSED, CREDITS.gift), both(PAUSED, CREDITS.gift), both(PAUSED, ALL)],
   )
@@ -90,7 +90,7 @@ scenarios['credit-rate'] = async (t) => {
   t.check(
     'billing:rates refuses 9.00 ₽ a credit without --confirm-exposure: every tariff would cost more than half of its price',
     refused.code === 1 &&
-      refused.stdout.includes('  start (тариф): 150 кредитов — 1350.00 ₽, 67.8 % цены 1990.00 ₽') &&
+      refused.stdout.includes('  start (тариф): 200 кредитов — 1800.00 ₽, 90.5 % цены 1990.00 ₽') &&
       refused.stdout.includes(
         'Учётная стоимость выше половины цены у тарифов: start, business, agency.',
       ) &&
@@ -120,20 +120,20 @@ scenarios['credit-rate'] = async (t) => {
   )
 
   // The provisional rate of the credits model, 6.00 ₽, puts more than half of the prices of
-  // 06.11.2026 behind «Бизнес» and «Агентство» (docs/plan/63-new-pricing.md): it is refused as
-  // well until the operator confirms what was printed.
+  // 13.11.2026 behind every tariff (docs/plan/72-pricing-api-margin.md): it is refused as well
+  // until the operator confirms what was printed.
   const unconfirmed = await t.operator('billing-rates', ['--file', file, ...signed('первый курс')])
   t.check(
-    'billing:rates refuses 6.00 ₽ a credit without --confirm-exposure as well: «Бизнес» and «Агентство» would cost more than half of their prices',
+    'billing:rates refuses 6.00 ₽ a credit without --confirm-exposure as well: «Старт», «Бизнес» and «Агентство» would cost more than half of their prices',
     unconfirmed.code === 1 &&
       unconfirmed.stdout.includes(
-        '  business (тариф): 600 кредитов — 3600.00 ₽, 51.5 % цены 6990.00 ₽',
+        '  business (тариф): 1000 кредитов — 6000.00 ₽, 60.1 % цены 9990.00 ₽',
       ) &&
       unconfirmed.stdout.includes(
         '  agency (тариф): 2000 кредитов — 12000.00 ₽, 60.0 % цены 19990.00 ₽',
       ) &&
       unconfirmed.stdout.includes(
-        'Учётная стоимость выше половины цены у тарифов: business, agency.',
+        'Учётная стоимость выше половины цены у тарифов: start, business, agency.',
       ) &&
       unconfirmed.stderr.includes('Нужно подтверждение --confirm-exposure') &&
       (await rates()).length === 0,
@@ -165,16 +165,18 @@ scenarios['credit-rate'] = async (t) => {
       approved.stdout.includes(
         'На момент начала действующего курса нет. Новый курс — 6.000000 ₽ учётной стоимости за кредит.',
       ) &&
-      approved.stdout.includes('  start (тариф): 150 кредитов — 900.00 ₽, 45.2 % цены 1990.00 ₽') &&
       approved.stdout.includes(
-        '  business (тариф): 600 кредитов — 3600.00 ₽, 51.5 % цены 6990.00 ₽',
+        '  start (тариф): 200 кредитов — 1200.00 ₽, 60.3 % цены 1990.00 ₽',
+      ) &&
+      approved.stdout.includes(
+        '  business (тариф): 1000 кредитов — 6000.00 ₽, 60.1 % цены 9990.00 ₽',
       ) &&
       approved.stdout.includes(
         '  agency (тариф): 2000 кредитов — 12000.00 ₽, 60.0 % цены 19990.00 ₽',
       ) &&
       approved.stdout.includes('  pack (пакет): 100 кредитов — 600.00 ₽, 40.3 % цены 1490.00 ₽') &&
       approved.stdout.includes(
-        'Учётная стоимость выше половины цены у тарифов: business, agency.',
+        'Учётная стоимость выше половины цены у тарифов: start, business, agency.',
       ) &&
       approved.stdout.includes(
         `Не потраченные кредиты всех рабочих пространств: из пакетов — ${outstanding.pack} (${cost(outstanding.pack)} ₽ учётной стоимости), подарочные — ${outstanding.gift} (${cost(outstanding.gift)} ₽).`,
@@ -357,7 +359,7 @@ scenarios.refund = async (t) => {
   t.check(
     'billing:refund --end-subscription ends the tariff at once without another refund',
     ending.code === 0 &&
-      /Тариф завершён \d{2}\.\d{2}\.\d{4} \d{2}:\d{2} МСК; сгорело кредитов тарифа: 150\./.test(
+      /Тариф завершён \d{2}\.\d{2}\.\d{4} \d{2}:\d{2} МСК; сгорело кредитов тарифа: 200\./.test(
         ending.stdout,
       ) &&
       (await refundRequests(t)).length === 1,

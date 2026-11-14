@@ -5,7 +5,7 @@ import {
   badRequest,
   BROWSER_ONLY,
   DomainError,
-  MAX_SANDBOX_TURN_MS,
+  MAX_SANDBOX_LEASE_MS,
   notFound,
   runnerReportSchema,
   SANDBOX_SECRETS_DIR,
@@ -43,6 +43,7 @@ import { MemoryTurnCredentials, testTurnCredentialPolicy } from '../testing/turn
 import { MemoryTurnJournal } from '../testing/turn-journal.ts'
 import { LiveTurns } from './live-turns.ts'
 import { TurnExecRecovery } from './turn-exec-recovery.ts'
+import { RECOVERY_TIMEOUT_MS } from './turn-recovery.ts'
 import { TurnSupervisor, type TurnRequest } from './turn-supervisor.ts'
 
 const labels = {
@@ -96,7 +97,7 @@ const repositoryRequest = (): TurnRequest => ({
     env: {},
     secrets: [],
     network: { mode: 'none' },
-    hardTimeoutMs: MAX_SANDBOX_TURN_MS,
+    hardTimeoutMs: MAX_SANDBOX_LEASE_MS,
   },
   context: {
     taskId: labels.taskId,
@@ -155,6 +156,8 @@ function docker() {
   const sandbox: Sandbox = {
     id: 'container1',
     labels: { ...labels, leaseEpoch: 1 },
+    deadline: Date.now() + 20 * 60_000,
+    extend: vi.fn(async () => {}),
     // The commands that make an empty working directory print nothing (plan 57, Б4).
     exec: vi.fn(async (spec: ExecSpec) =>
       ['test', 'mkdir', 'find'].includes(spec.argv[0]!) ? quiet : handle(0),
@@ -734,7 +737,7 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
     await w.recover(recovery)
     expect(w.journal.entries.at(-1)).toMatchObject({
       phase: 'failed',
-      reason: 'timeout',
+      reason: 'lease_lost',
       fence: { epoch: 1 },
     })
     expect(w.assignment()).toMatchObject({ outcome: 'lost', fence: { epoch: 1 } })
@@ -932,11 +935,9 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
     const takeOver = vi.spyOn(w.assignments, 'takeOver')
     await w.recover(after.recovery)
 
-    // Nearly the whole limit is left, more than the recovery's own six minutes: the container
-    // may live that long, so the new epoch does too.
-    expect(takeOver.mock.calls[0]![0].ttlMs).toBeGreaterThan(
-      MAX_SANDBOX_TURN_MS - 60_000 + TURN_PUBLICATION_GRACE_MS,
-    )
+    // A turn lives a lease past its last renewal (plan 70, ВР2): less than the recovery's own
+    // six minutes, which the new epoch gets with the publication grace.
+    expect(takeOver.mock.calls[0]![0].ttlMs).toBe(RECOVERY_TIMEOUT_MS + TURN_PUBLICATION_GRACE_MS)
     expect(w.publish).toHaveBeenCalledOnce()
   })
 
@@ -1138,13 +1139,13 @@ describe.each(['local', 'runner'])('turn exec recovery (%s executor)', (kind) =>
     expectGivenUp(w, 'exec_lost')
   })
 
-  it('gives the turn up as a timeout once its deadline passed', async () => {
+  it('gives the turn up as lost, not timed out, once its last renewal passed', async () => {
     const w = world(kind)
     w.credentials.keep(reference, values)
     const { after } = await w.crashAt('output')
     w.assignments.rows.get(w.assignment().id)!.deadlineAt = new Date(Date.now() - 1_000)
     await w.recover(after.recovery)
-    expectGivenUp(w, 'timeout')
+    expectGivenUp(w, 'lease_lost')
     expect(w.vm.sandbox.attach).not.toHaveBeenCalled()
   })
 
@@ -1857,7 +1858,7 @@ describe('turn exec recovery of a turn given up before its container was reporte
     await w.recover(recovery)
     expect(w.journal.entries.at(-1)).toMatchObject({
       phase: 'failed',
-      reason: 'timeout',
+      reason: 'lease_lost',
       fence: { epoch: 1 },
     })
     expect(w.assignment()).toMatchObject({ outcome: 'lost', fence: { epoch: 1 } })
@@ -1963,7 +1964,7 @@ describe('turn exec recovery on a runner VM', () => {
     expect(w.assignment().outcome).toBeNull()
     expect(w.journal.entries.at(-1)).toMatchObject({
       phase: 'failed',
-      reason: 'timeout',
+      reason: 'lease_lost',
       outcome: 'lost',
       fence: { epoch: 1 },
     })
@@ -2239,7 +2240,7 @@ describe('turn exec recovery on a runner VM', () => {
     await w.recover(after.recovery)
     expect(w.journal.entries.at(-1)).toMatchObject({
       phase: 'failed',
-      reason: 'timeout',
+      reason: 'lease_lost',
       fence: { epoch: 2 },
     })
     expect(w.assignment()).toMatchObject({ outcome: 'lost', fence: { epoch: 2 } })

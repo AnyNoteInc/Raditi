@@ -728,7 +728,8 @@ test('web gets the stand’s database and the fake, a synthetic HOME, and nothin
     preview: null,
     // Nor a browser stream: browser tasks are off there too.
     browserStreamUrl: null,
-    // Nor the domain of pages (docs/plan/67): the agent's pages are only downloaded there.
+    // Nor published pages (docs/plan/69-pages.md) nor the pages of chats (docs/plan/67): off there.
+    pageViews: null,
     pages: null,
   })
   // No captcha: a customer of the stand signs up over HTTP.
@@ -1303,12 +1304,12 @@ test('every row of the plan’s table is proved by a scenario, «Возврат�
   assert.ok(rows.includes('Курс кредита: команда оператора'))
   const proved = new Set(SCENARIOS.map(({ row }) => row))
   for (const row of rows) assert.ok(proved.has(row), `no scenario proves «${row}»`)
-  // And nothing claims a row the plan does not have: the rest are the four named extras.
+  // And nothing claims a row the plan does not have: the rest are the five named extras.
   assert.deepEqual(
     [...proved].filter((row) => !rows.includes(row)),
     [...EXTRA_ROWS],
   )
-  assert.equal(EXTRA_ROWS.length, 4)
+  assert.equal(EXTRA_ROWS.length, 5)
 })
 
 test('the scenarios that are listed are the scenarios that are written', () => {
@@ -1342,7 +1343,7 @@ test('the scenarios that are listed are the scenarios that are written', () => {
       'renewal-in-real-time',
     ],
   )
-  assert.equal(SCENARIOS.length, 26)
+  assert.equal(SCENARIOS.length, 27)
   // A customer starts with the gift of the registration: its scenario runs first. The credit
   // rate is approved right after it, so that one scenario ends with the pause of the platform
   // on its pages and every later one with the answer the balances give.
@@ -1766,16 +1767,18 @@ test('the operator approves the credit rate in the stand, and only there', () =>
     /\[both\(TAKEN, CREDITS\.gift\), both\(TAKEN, CREDITS\.gift\), both\(TAKEN, ALL\)\],/,
   )
   assert.ok(scenario.includes('const ALL = CREDITS.start + CREDITS.pack + CREDITS.gift'))
-  // At the prices of 06.11.2026 the provisional rate puts more than half of the price of
-  // «Бизнес» and «Агентство» behind their credits: refused without the confirmation, written
-  // with it, and the warning is printed either way.
+  // At the prices of 13.11.2026 the provisional rate puts more than half of the price of every
+  // tariff behind its credits: refused without the confirmation, written with it, and the
+  // warning is printed either way.
   assert.match(
     scenario,
     /'--file',\n\s+file,\n\s+'--confirm-exposure',\n\s+\.\.\.signed\('первый курс'\),/,
   )
   assert.equal(
-    scenario.match(/'Учётная стоимость выше половины цены у тарифов: business, agency\.'/g)?.length,
-    2,
+    scenario.match(/'Учётная стоимость выше половины цены у тарифов: start, business, agency\.'/g)
+      ?.length,
+    // The refusal of 9.00, the refusal of 6.00 and its approval.
+    3,
   )
   assert.doesNotMatch(
     scenarioSource,
@@ -1856,7 +1859,7 @@ test('each rule of expiry of the credits model is a check of a scenario, on the 
   assert.deepEqual(
     [
       journalRow.quota(order),
-      journalRow.quota(order, 600),
+      journalRow.quota(order, 1000),
       journalRow.expired(subscription, end),
       journalRow.carried(subscription, end),
       journalRow.pack(order),
@@ -1864,10 +1867,10 @@ test('each rule of expiry of the credits model is a check of a scenario, on the 
       giftGrant('0199a000-0000-7000-8000-0000000000d4'),
     ],
     [
-      { kind: 'grant', amount: '150.00', key: `order:${order.id}:grant` },
-      { kind: 'grant', amount: '600.00', key: `order:${order.id}:grant` },
-      { kind: 'expire', amount: '-150.00', key: `sub:${subscription.id}:${end.getTime()}:expire` },
-      { kind: 'grant', amount: '150.00', key: `sub:${subscription.id}:${end.getTime()}:carry` },
+      { kind: 'grant', amount: '200.00', key: `order:${order.id}:grant` },
+      { kind: 'grant', amount: '1000.00', key: `order:${order.id}:grant` },
+      { kind: 'expire', amount: '-200.00', key: `sub:${subscription.id}:${end.getTime()}:expire` },
+      { kind: 'grant', amount: '200.00', key: `sub:${subscription.id}:${end.getTime()}:carry` },
       { kind: 'grant', amount: '100.00', key: `order:${order.id}:pack` },
       { kind: 'adjust', amount: '-100.00', key: `order:${order.id}:refund:adjust` },
       {

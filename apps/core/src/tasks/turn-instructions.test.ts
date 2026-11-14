@@ -329,7 +329,7 @@ describe('browserTaskInstructions (docs/plan/57-browser-tasks.md, Б20–Б24)',
   // the remaining WordPress-specific restrictions.
   const withoutSearch = (text: string) =>
     text
-      .replace(/\n## Files for the client\n[\s\S]*?by their names\.\n/, '')
+      .replace(/\n## Files for the client\n[\s\S]*?in the cabinet\.\n/, '')
       .replace(/^- Files for the client go to .*\n/m, '')
       .replace(/^- When `raditi_search_web`.*\n/m, '')
       .replace(/^ {2}While it is null the preview's first build .*\n.*cannot be done\.\n/m, '')
@@ -485,6 +485,27 @@ describe('openTaskInstructions (docs/plan/61-chats-first.md, §5.7)', () => {
   })
 })
 
+describe('documents and pages (docs/plan/69-pages.md, Ст18, Ст20, Ст21)', () => {
+  it('tells every kind of turn the eight steps of a document and when a page is published', () => {
+    for (const text of [
+      turnInstructions({ state: 'absent' }),
+      browserTaskInstructions('GUIDE\n'),
+      openTaskInstructions({ skills: [] }, { browser: false, inbox: null }),
+    ]) {
+      expect(text).toContain('## Long documents')
+      for (const step of [
+        '1. `raditi_doc_create` first',
+        '6. Read it whole with `raditi_doc_read`',
+        '8. Later changes',
+      ])
+        expect(text).toContain(step)
+      expect(text).toContain('When `raditi_page_publish` is among your tools')
+      expect(text).toContain('close the page\n  with a password in the cabinet')
+      expect(text).not.toMatch(/`doc_[a-z_]+`/)
+    }
+  })
+})
+
 describe('files for the client (docs/plan/66-chat-visuals.md, В8–В11; docs/plan/67, Д1)', () => {
   const kinds = () => [
     turnInstructions({ state: 'absent' }),
@@ -518,6 +539,8 @@ describe('files for the client (docs/plan/66-chat-visuals.md, В8–В11; docs/p
       expect(text).toContain('`00-оглавление.md`')
       expect(text).toContain('write it again under the same file name')
       expect(text).toContain("never\n  paste a document's content into the message")
+      // A long text to read is a document of the doc tools (docs/plan/69-pages.md), not a file.
+      expect(text).toContain('is a long\n  document of the `raditi_doc_*` tools below, not a file')
       // The old rule made every document a Word file.
       expect(text).not.toContain('is there to build .docx and .xlsx files')
     }

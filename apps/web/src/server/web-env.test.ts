@@ -30,6 +30,7 @@ describe('webEnvFromEnv', () => {
       preview: null,
       browserStreamUrl: null,
       pages: null,
+      pageViews: null,
     })
     expect(webEnvFromEnv({ ...devEnv, METRICS_TOKEN: ' ', REDIS_URL: '' })).toMatchObject({
       metricsToken: DEV_METRICS_TOKEN,
@@ -197,35 +198,44 @@ describe('the stream of the browser of tasks', () => {
   })
 })
 
-describe('the domain of pages (docs/plan/67-agent-documents.md, Д3)', () => {
+describe('the pages in the cabinet (plan 69)', () => {
+  it('names their address with PAGES_BASE_DOMAIN, and refuses a port in production', () => {
+    const dev = { APP_ENV: 'development', APP_URL: 'http://localhost:3000' }
+    expect(
+      webEnvFromEnv({ ...dev, PAGES_BASE_DOMAIN: 'pages.localhost', PAGES_PUBLIC_PORT: '8092' })
+        .pages,
+    ).toEqual({ baseDomain: 'pages.localhost', scheme: 'http', port: 8092 })
+    expect(() =>
+      webEnvFromEnv({
+        APP_ENV: 'production',
+        APP_URL: 'https://raditi.ru',
+        METRICS_TOKEN: 'm'.repeat(40),
+        PAGES_BASE_DOMAIN: 'pages.raditi.ru',
+        PAGES_PUBLIC_PORT: '443',
+      }),
+    ).toThrow(/PAGES_PUBLIC_PORT/)
+  })
+})
+
+describe('the root of the domain of pages (docs/plan/67-agent-documents.md, Д3)', () => {
   const secret = 'a-secret-of-the-pages-that-is-long-enough-x'
-  it('takes an origin and a development secret outside production', () => {
-    expect(webEnvFromEnv({ ...devEnv, PAGES_ORIGIN: 'http://pages.localhost:3000' }).pages).toEqual(
-      {
-        origin: 'http://pages.localhost:3000',
-        secret: DEV_PAGES_SECRET,
-      },
-    )
-    expect(webEnvFromEnv({ ...devEnv, PAGES_ORIGIN: '' }).pages).toBeNull()
-    expect(() => webEnvFromEnv({ ...devEnv, PAGES_ORIGIN: 'http://pages.localhost/x' })).toThrow(
-      /PAGES_ORIGIN/,
-    )
+  it('is PAGES_BASE_DOMAIN with the port of web and a development secret outside production', () => {
+    expect(
+      webEnvFromEnv({ ...devEnv, PAGES_BASE_DOMAIN: 'pages.localhost', PAGES_PUBLIC_PORT: '8092' })
+        .pageViews,
+    ).toEqual({ origin: 'http://pages.localhost:3000', secret: DEV_PAGES_SECRET })
+    expect(webEnvFromEnv(devEnv).pageViews).toBeNull()
   })
 
-  it('in production needs https, a host apart from the cabinet and the previews, and a long secret', () => {
-    const prod = {
-      ...prodEnv,
-      PAGES_ORIGIN: 'https://pages.raditi.ru',
-      PAGES_SIGNING_SECRET: secret,
-    }
+  it('in production is https, a host apart from the cabinet and the previews, with a long secret', () => {
+    const prod = { ...prodEnv, PAGES_BASE_DOMAIN: 'pages.raditi.ru', PAGES_SIGNING_SECRET: secret }
     // A subdomain of the cabinet's domain (owner's answer of 13.11.2026).
-    expect(webEnvFromEnv(prod).pages).toEqual({ origin: 'https://pages.raditi.ru', secret })
-    // Without its secret the pages are off, never open with a known key.
-    expect(webEnvFromEnv({ ...prod, PAGES_SIGNING_SECRET: '' }).pages).toBeNull()
+    expect(webEnvFromEnv(prod).pageViews).toEqual({ origin: 'https://pages.raditi.ru', secret })
+    // Without its secret the pages of chats are off, never open with a known key.
+    expect(webEnvFromEnv({ ...prod, PAGES_SIGNING_SECRET: '' }).pageViews).toBeNull()
     for (const [name, value] of [
-      ['PAGES_ORIGIN', 'http://pages.raditi.ru'],
-      ['PAGES_ORIGIN', 'https://raditi.ru'],
-      ['PAGES_ORIGIN', 'https://docs.raditi-preview.ru'],
+      ['PAGES_BASE_DOMAIN', 'raditi.ru'],
+      ['PAGES_BASE_DOMAIN', 'docs.raditi-preview.ru'],
       ['PAGES_SIGNING_SECRET', 'short'],
     ] as const)
       expect(() =>

@@ -44,6 +44,7 @@ export function sessionHarness(settings: Partial<SessionManagerSettings> = {}) {
       extraHosts: [],
       localSites: [],
       platformHosts: [],
+      pageDomain: null,
       stream: { maxFps: 30, quality: 70 },
       ...settings,
     },

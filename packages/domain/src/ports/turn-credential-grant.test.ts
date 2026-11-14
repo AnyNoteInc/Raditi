@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
 import { DomainError } from '../errors.ts'
-import { TURN_FINALIZE_RESERVE_MS } from './turn-runner.ts'
 import {
   turnCredentialExpiresAt,
   turnCredentialGrantSchema,
@@ -52,17 +51,16 @@ describe('turn credential grant', () => {
       turnCredentialExpiresAt({ ...grant(), [field]: id } as TurnCredentialGrant, now),
     ).toThrow(DomainError)
   })
-  it('reserves publication time and never extends a shorter TTL', () => {
-    expect(turnCredentialExpiresAt(grant(), now).getTime()).toBe(
-      now.getTime() + 20 * 60_000 - TURN_FINALIZE_RESERVE_MS,
-    )
+  it('expires with the current deadline of the turn and never extends a shorter TTL', () => {
+    // No time is kept back for publication: the turn renews its keys while it lives (ВР3).
+    expect(turnCredentialExpiresAt(grant(), now).getTime()).toBe(now.getTime() + 20 * 60_000)
     expect(turnCredentialExpiresAt({ ...grant(), ttlMs: 1000 }, now).getTime()).toBe(
       now.getTime() + 1000,
     )
   })
 
-  it('rejects issuance when no agent time remains', () => {
-    for (const offset of [0, TURN_FINALIZE_RESERVE_MS - 1, TURN_FINALIZE_RESERVE_MS]) {
+  it('rejects issuance past the deadline of the turn', () => {
+    for (const offset of [-1, 0]) {
       expect(() =>
         turnCredentialExpiresAt({ ...grant(), deadlineAt: new Date(now.getTime() + offset) }, now),
       ).toThrow(DomainError)

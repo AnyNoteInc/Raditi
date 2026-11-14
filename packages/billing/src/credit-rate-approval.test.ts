@@ -113,10 +113,13 @@ describe('a file of rates', () => {
 
 describe('creditRatePreview', () => {
   const START = new Date('2026-10-11T09:00:00.000Z')
-  /** The tariffs and the pack of the seed: the pricing of 06.11.2026 (plan 63, Ц1–Ц4). */
+  /**
+   * The tariffs and the pack of the seed: the pricing of 13.11.2026 (plan 72, ЦА1–ЦА3), the pack
+   * of 06.11.2026 (plan 63, Ц4).
+   */
   const PLANS = [
-    { slug: 'start', kind: 'quota', price: '1990.00', credits: 150 },
-    { slug: 'business', kind: 'quota', price: '6990.00', credits: 600 },
+    { slug: 'start', kind: 'quota', price: '1990.00', credits: 200 },
+    { slug: 'business', kind: 'quota', price: '9990.00', credits: 1000 },
     { slug: 'agency', kind: 'quota', price: '19990.00', credits: 2000 },
     { slug: 'pack', kind: 'pack', price: '1490.00', credits: 100 },
   ] as const
@@ -135,11 +138,11 @@ describe('creditRatePreview', () => {
   it('counts the accounting cost behind every plan and its share of the price', () => {
     const preview = creditRatePreview(state())
 
-    // At 6.00: 900, 3 600 and 12 000 RUB; 45.2, 51.5 and 60.0%; the pack 40.3%. The credits of
-    // «Бизнес» and «Агентство» of 06.11.2026 cost more than half of their price at this rate.
+    // At 6.00: 1 200, 6 000 and 12 000 RUB; 60.3, 60.1 and 60.0%; the pack 40.3%. The credits of
+    // every tariff of 13.11.2026 cost more than half of its price at this rate.
     expect(shares(preview)).toEqual([
-      ['start', '900.00', '45.2'],
-      ['business', '3600.00', '51.5'],
+      ['start', '1200.00', '60.3'],
+      ['business', '6000.00', '60.1'],
       ['agency', '12000.00', '60.0'],
       ['pack', '600.00', '40.3'],
     ])
@@ -148,19 +151,19 @@ describe('creditRatePreview', () => {
       rubPerCredit: '6.000000',
       previous: null,
       movePercent: null,
-      exposure: { plans: ['business', 'agency'], move: false, confirmationNeeded: true },
+      exposure: { plans: ['start', 'business', 'agency'], move: false, confirmationNeeded: true },
     })
   })
 
   it.each([
-    // Half of the price is reached at 4.9975 for «Агентство», 5.825 for «Бизнес», 6.6(3) for
-    // «Старт».
-    ['4.9975', []],
-    ['4.997501', ['agency']],
-    ['5.825', ['agency']],
-    ['5.825001', ['business', 'agency']],
-    ['6.633333', ['business', 'agency']],
-    ['6.633334', ['start', 'business', 'agency']],
+    // Half of the price is reached at 4.975 for «Старт», 4.995 for «Бизнес», 4.9975 for
+    // «Агентство».
+    ['4.975', []],
+    ['4.975001', ['start']],
+    ['4.995', ['start']],
+    ['4.995001', ['start', 'business']],
+    ['4.9975', ['start', 'business']],
+    ['4.997501', ['start', 'business', 'agency']],
   ])('asks for a confirmation above half of a tariff price: K = %s', (rubPerCredit, over) => {
     const { exposure } = creditRatePreview(state({ rubPerCredit }))
     expect(exposure).toEqual({ plans: over, move: false, confirmationNeeded: over.length > 0 })
@@ -344,8 +347,8 @@ describe.skipIf(!disposable)('approving a credit rate with PostgreSQL', () => {
     await db.$disconnect()
   })
 
-  // At 6.00 the credits of «Бизнес» and «Агентство» of 06.11.2026 cost more than half of their
-  // price — 51.5 and 60.0% —, so on sale they ask every approval at that rate for a
+  // At 6.00 the credits of «Старт», «Бизнес» and «Агентство» of 13.11.2026 cost more than half of
+  // their price — 60.3, 60.1 and 60.0% —, so on sale they ask every approval at that rate for a
   // confirmation. A case sees them off sale, in its own transaction, unless it is about them
   // (`asSeeded`).
   const rolledBack = <T>(work: (tx: Tx) => Promise<T>) =>
@@ -783,8 +786,8 @@ describe.skipIf(!disposable)('approving a credit rate with PostgreSQL', () => {
       })
     })
 
-    // The pricing of 06.11.2026 (plan 63): at 6.00 the operator confirms the exposure of
-    // «Бизнес» and «Агентство».
+    // The pricing of 13.11.2026 (plan 72): at 6.00 the operator confirms the exposure of every
+    // tariff.
     it('shows the plans of the seed at their shares and asks a confirmation for those above half', async () => {
       await asSeeded(async (tx) => {
         const refused = await approveCreditRateIn(tx, request())
@@ -792,11 +795,11 @@ describe.skipIf(!disposable)('approving a credit rate with PostgreSQL', () => {
         expect(refused).toMatchObject({
           approved: false,
           refusals: [{ reason: 'exposure_unconfirmed' }],
-          preview: { exposure: { plans: ['business', 'agency'], move: false } },
+          preview: { exposure: { plans: ['start', 'business', 'agency'], move: false } },
         })
         const seeded = new Map(refused.preview?.plans.map((plan) => [plan.slug, plan]))
-        expect(seeded.get('start')).toMatchObject({ costRub: '900.00', sharePercent: '45.2' })
-        expect(seeded.get('business')).toMatchObject({ costRub: '3600.00', sharePercent: '51.5' })
+        expect(seeded.get('start')).toMatchObject({ costRub: '1200.00', sharePercent: '60.3' })
+        expect(seeded.get('business')).toMatchObject({ costRub: '6000.00', sharePercent: '60.1' })
         expect(seeded.get('agency')).toMatchObject({ costRub: '12000.00', sharePercent: '60.0' })
         expect(seeded.get('pack')).toMatchObject({ kind: 'pack', sharePercent: '40.3' })
         // «Оплата за действие» has no credits and is not a plan of this table.

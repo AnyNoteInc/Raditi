@@ -39,7 +39,8 @@ import type { TurnSupervisor } from '../turns/turn-supervisor.ts'
 import type { CandidateBuilder } from './candidate-builder.ts'
 import type { CandidateGit } from './candidate-git.ts'
 import { LivePasses } from './live-passes.ts'
-import { PassRunner, WORKSPACE_PASS_LIMIT } from './pass-runner.ts'
+import { DEFAULT_WORKSPACE_TURN_LIMIT, PassRunner } from './pass-runner.ts'
+import { TurnCapacity } from './turn-capacity.ts'
 import { PassSettlement } from './pass-settlement.ts'
 import { INIT_PROMPT } from './turn-instructions.ts'
 
@@ -201,6 +202,8 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     options: {
       git?: CandidateGit | null
       browser?: { reclaim: ReturnType<typeof vi.fn>; verify: ReturnType<typeof vi.fn> } | null
+      docs?: { settle: ReturnType<typeof vi.fn> }
+      capacity?: TurnCapacity
     } = {},
   ) {
     const queue = { enqueue: vi.fn(async () => {}) }
@@ -219,6 +222,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       supervisor,
       git: options.git === undefined ? git : options.git,
       ...(options.browser !== undefined ? { browser: options.browser as never } : {}),
+      ...(options.docs ? { docs: options.docs as never } : {}),
       drivers,
       backends: llmBackends,
       adapter: getSiteAdapter,
@@ -229,6 +233,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       live,
       queue,
       logger: quiet,
+      ...(options.capacity ? { capacity: options.capacity } : {}),
       now: () => NOW,
     })
     return { passes, queue, supervisor, close, live }
@@ -284,11 +289,11 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     expect(holds.every((hold) => hold.status === 'released')).toBe(true)
   })
 
-  // The owner, 06.11.2026: «расширь количество параллельных агентов на одного пользователя до 8».
+  // The owner, 06.11 and 12.11.2026: «до 8 сендбоксов на одного клиента» (plan 70, ВР13).
   it('lets a pass wait while its workspace runs eight others, as for a busy pool', async () => {
     const dialog = await queued({ reserve: true, chat: true })
     const { workspaceId } = await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })
-    for (let i = 0; i < WORKSPACE_PASS_LIMIT; i++)
+    for (let i = 0; i < DEFAULT_WORKSPACE_TURN_LIMIT; i++)
       await fixtures.task(workspaceId, { status: i % 2 === 0 ? 'running' : 'preparing' })
     const run = vi.fn<Run>()
     const { passes, queue } = runner(run)
@@ -305,6 +310,45 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     expect(
       (await db.creditHold.findMany({ where: { taskId: dialog.taskId } })).map((h) => h.status),
     ).toEqual(['active'])
+  })
+
+  it('lets a pass wait for a place of the platform, and wakes it when a pass ends', async () => {
+    // Plan 70, ВР17: the places of the platform are taken; the pass gives its worker up at once.
+    const capacity = new TurnCapacity({ slots: () => 1 })
+    const held = capacity.tryAcquire()!
+    const dialog = await queued({ reserve: true, chat: true })
+    const run = vi.fn<Run>()
+    const { passes, queue } = runner(run, async () => null, { capacity })
+
+    await passes.run(dialog.job)
+
+    expect(run).not.toHaveBeenCalled()
+    expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
+      status: 'queued',
+      waiting: 'agents',
+    })
+    expect(queue.enqueue).toHaveBeenCalledTimes(1)
+    expect(
+      (await db.creditHold.findMany({ where: { taskId: dialog.taskId } })).map((h) => h.status),
+    ).toEqual(['active'])
+    held()
+    expect(capacity.held).toBe(0)
+
+    // Another pass of its workspace takes the place and ends: the waiting pass is woken. The
+    // waiting chat joins the workspace of the other one; nothing settles it afterwards.
+    const other = await queued({ reserve: true, chat: true })
+    const { workspaceId } = await db.task.findUniqueOrThrow({ where: { id: other.taskId } })
+    await db.task.update({ where: { id: dialog.taskId }, data: { workspaceId } })
+    const wakes = await db.outboxEvent.count({
+      where: { payload: { path: ['taskId'], equals: dialog.taskId } },
+    })
+    await runner(vi.fn<Run>(), async () => null, { capacity }).passes.run(other.job)
+    expect(capacity.held).toBe(0)
+    expect(
+      await db.outboxEvent.count({
+        where: { payload: { path: ['taskId'], equals: dialog.taskId } },
+      }),
+    ).toBeGreaterThan(wakes)
   })
 
   it('takes no pass of another attempt', async () => {
@@ -417,6 +461,71 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         occurredAt: NOW,
       })
     }
+
+    it('checks the sections of documents with the turn’s own check before the answer (plan 69, Ст19)', async () => {
+      await rate()
+      const dialog = await queued({ reserve: true })
+      const refusesText = () => null
+      const seen: string[] = []
+      const docs = {
+        settle: vi.fn(async (taskId: string) => {
+          // Before the pass ends: the client reads the answer after the sections are settled.
+          seen.push((await db.task.findUniqueOrThrow({ where: { id: taskId } })).status)
+        }),
+      }
+      const { passes } = runner(
+        async () => {
+          await db.task.update({
+            where: { id: dialog.taskId },
+            data: { status: 'running', turnNo: 1 },
+          })
+          await db.taskTurn.create({
+            data: {
+              taskId: dialog.taskId,
+              turnNo: 1,
+              status: 'completed',
+              driverId: sampleDriverId,
+              image,
+              headSha: HEAD,
+            },
+          })
+          await worked(dialog.taskId)
+          return {
+            result: {
+              summary: 'Готово',
+              change_type: 'none',
+              client_message: 'Документ готов.',
+              files_changed: [],
+              questions: [],
+              needs_approval: false,
+              risk: 'low',
+            },
+            manifest: { git: { headSha: HEAD } } as SnapshotManifest,
+            refusesText,
+          }
+        },
+        undefined,
+        { docs },
+      )
+      await passes.run(dialog.job)
+      expect(docs.settle).toHaveBeenCalledWith(dialog.taskId, 1, refusesText)
+      expect(seen).toEqual(['running'])
+    })
+
+    it('checks no sections after a turn that failed: they wait for the next end of a turn', async () => {
+      await rate()
+      const dialog = await queued({ reserve: true })
+      const docs = { settle: vi.fn(async () => {}) }
+      const { passes } = runner(
+        async () => {
+          throw new Error('the sandbox is gone')
+        },
+        undefined,
+        { docs },
+      )
+      await passes.run(dialog.job)
+      expect(docs.settle).not.toHaveBeenCalled()
+    })
 
     it('plans the turn, runs it under the supervisor and ends the pass', async () => {
       await rate()
@@ -1231,6 +1340,62 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
           }),
         ])
         expect(retried(queue)).toEqual([])
+      })
+
+      // The chat of 13.11.2026: a pass the pool sent back woke the passes that wait for the
+      // agents as it ended — itself among them —, and ran again within a second, a new turn each
+      // time, for minutes. A pass that waited freed no place; its retry is the only one.
+      it.each([
+        ['a busy slot', () => subscriptionBusy(minutes(1))],
+        ['a pause', () => subscriptionWait(minutes(45), 'cooling')],
+        ['a busy site', () => siteBusy()],
+      ])('wakes nobody, itself included, when %s sends the pass back', async (_name, refusal) => {
+        await rate()
+        const dialog = await queued({ reserve: true })
+        // Another dialog of the same workspace waits for the agents as well.
+        const { workspaceId } = await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })
+        const other = await fixtures.task(workspaceId, { status: 'queued' })
+        await db.task.update({ where: { id: other.taskId }, data: { waiting: 'agents' } })
+        await insertFeedEvent(db, {
+          taskId: other.taskId,
+          row: {
+            type: 'feed.request',
+            payload: {
+              v: 1,
+              kind: 'first',
+              authorId: dialog.userId,
+              requestId: randomUUID(),
+              text: 'Поменяйте адрес в подвале',
+            },
+          },
+        })
+        const wakes = () =>
+          db.outboxEvent.count({
+            where: {
+              topic: 'agent-turns',
+              type: 'turn.run',
+              OR: [
+                { payload: { path: ['taskId'], equals: dialog.taskId } },
+                { payload: { path: ['taskId'], equals: other.taskId } },
+              ],
+            },
+          })
+        const before = await wakes()
+        const job = { ...dialog.job, priority: 3 }
+        const { passes, queue } = runner(async () => {
+          throw refusal()
+        })
+
+        await passes.run(job)
+
+        expect(await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })).toMatchObject({
+          status: 'queued',
+        })
+        expect(await wakes()).toBe(before)
+        // Its own retry, in the place of its tier (plan 71: the queue orders the tiers).
+        expect(retried(queue)).toEqual([
+          ['agent-turns', 'turn.run', job, expect.objectContaining({ priority: 3 })],
+        ])
       })
     })
 

@@ -120,6 +120,8 @@ describe('usage summary DTO', () => {
       price: '12900.00',
       creditsPerMonth: 300,
       creditsPerDay: 100,
+      creditsPer5h: null,
+      creditsPerWeek: null,
       maxSites: 3,
     },
     period: { start: PERIOD_START, end: PERIOD_END },
@@ -140,6 +142,8 @@ describe('usage summary DTO', () => {
     setAside: 45,
     minToStart: 1,
     today,
+    tier: 'none',
+    windows: [],
     newTask: TAKEN,
   }
   const withoutTariff = {
@@ -373,6 +377,8 @@ describe('promisedUsage', () => {
     setAside: 0,
     minToStart: 1,
     today: null,
+    tier: 'none',
+    windows: [],
   }
 
   it('shows a user without a workspace the gift they are promised, and that a task would be taken', async () => {
@@ -663,6 +669,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
           price: '4900.00',
           creditsPerMonth: 300,
           creditsPerDay: 50,
+          creditsPer5h: null,
+          creditsPerWeek: null,
           maxSites: 2,
         },
         period: { start: PERIOD_START, end: PERIOD_END },
@@ -686,6 +694,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       setAside: 0,
       minToStart: 1,
       today: dayOf(50, 0, 0, 300),
+      tier: 'start',
+      windows: [
+        { kind: '5h', limit: null, used: 0, left: null, resetsAt: null },
+        { kind: 'week', limit: null, used: 0, left: null, resetsAt: null },
+      ],
       newTask: TAKEN,
     })
   })
@@ -1644,6 +1657,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
         minToStart: 1,
         // Without a tariff there is no day: the gift and the pack are the bound.
         today: null,
+        tier: 'none',
+        windows: [
+          { kind: '5h', limit: null, used: 0, left: null, resetsAt: null },
+          { kind: 'week', limit: 50, used: 0, left: 50, resetsAt: null },
+        ],
         newTask: TAKEN,
       })
     })
@@ -1746,6 +1764,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
         setAside: 0,
         minToStart: 1,
         today: null,
+        tier: 'none',
+        windows: [
+          { kind: '5h', limit: null, used: 0, left: null, resetsAt: null },
+          { kind: 'week', limit: 50, used: 0, left: 50, resetsAt: null },
+        ],
         newTask: { allowed: false, reason: 'gift_spent' },
       })
     })

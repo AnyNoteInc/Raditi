@@ -270,6 +270,7 @@ function checkedConnection(connection: CloudBrowserConnection): PageRules {
     localSites: connection.localSites,
     openWeb: connection.openWeb,
     platformHosts: connection.platformHosts,
+    pageDomain: connection.pageDomain,
     policy: connection.policy,
   }
   const { startUrl } = connection

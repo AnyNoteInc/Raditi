@@ -17,7 +17,14 @@ import {
 } from '@repo/domain'
 import type Docker from 'dockerode'
 
-import { bounded, commandError, createOwned, isMissing, localDocker } from '../docker-api.ts'
+import {
+  bounded,
+  commandError,
+  createOwned,
+  hasStatus,
+  isMissing,
+  localDocker,
+} from '../docker-api.ts'
 import { safeRunscRuntime } from '../docker.ts'
 import {
   BROWSER_CONTROL_PORT,
@@ -486,6 +493,9 @@ export function createDockerBrowserSessionRuntime(
         allowedHosts: spec.allowedHosts,
         localRoutes: spec.localRoutes,
         refusedSubnets: config.refusedSubnets,
+        ...(config.pageDomain
+          ? { pageDomain: config.pageDomain, pageAddresses: config.pageAddresses }
+          : {}),
         maxTunnels: config.maxTunnels,
       }),
       { network, address: addresses.egress },
@@ -540,9 +550,10 @@ export function createDockerBrowserSessionRuntime(
       const { sessionId } = spec.identity
       await checkRuntime(signal)
       for (const image of Object.values(config.images)) await checkImage(image, signal)
+      // Leases only ever move the deadline on (`extend`): the session itself is what was built.
       const existing = [...(await listContainers(sessionId)), ...(await listNetworks(sessionId))]
         .map((row) => ownedBrowserResource(row.Labels)!)
-        .filter((owned) => owned.role !== 'firewall')
+        .filter((owned) => owned.role !== 'firewall' && owned.role !== 'lease')
       if (existing.some((owned) => owned.taskId !== spec.identity.taskId))
         throw conflict('The browser session belongs to another task')
       if (existing.some((owned) => owned.siteId !== spec.identity.siteId))
@@ -573,6 +584,46 @@ export function createDockerBrowserSessionRuntime(
     async stop(sessionId) {
       if (!isSessionUuid(sessionId)) throw badRequest('Invalid browser session id')
       await removeSession(sessionId)
+    },
+
+    async extend(sessionId, deadline) {
+      if (!isSessionUuid(sessionId)) throw badRequest('Invalid browser session id')
+      if (!Number.isSafeInteger(deadline) || deadline <= Date.now())
+        throw badRequest('Invalid browser session deadline')
+      const [browser] = await listContainers(sessionId, 'browser')
+      const owned = browser ? ownedBrowserResource(browser.Labels) : null
+      if (!owned) throw conflict('The browser session is not here')
+      const leases = await listContainers(sessionId, 'lease')
+      const latest = Math.max(
+        owned.deadline,
+        ...leases.map((row) => ownedBrowserResource(row.Labels)!.deadline),
+      )
+      if (deadline <= latest) return
+      const identity = { sessionId, taskId: owned.taskId, siteId: owned.siteId }
+      await createOwned(
+        docker.createContainer({
+          name: browserSessionNames(sessionId).container('lease', String(deadline)),
+          Image: config.images.forwarder,
+          User: SERVICE_USER,
+          Entrypoint: ['/bin/false'],
+          Cmd: [],
+          Env: [],
+          Labels: browserSessionLabels(identity, 'lease', deadline),
+          HostConfig: {
+            ReadonlyRootfs: true,
+            Privileged: false,
+            CapDrop: ['ALL'],
+            SecurityOpt: ['no-new-privileges'],
+            NetworkMode: 'none',
+            RestartPolicy: { Name: 'no' },
+            AutoRemove: false,
+          },
+        }),
+        (created) => created.remove({ force: true, v: true }),
+      ).catch((error: unknown) => {
+        if (!hasStatus(error, 409)) throw commandError()
+      })
+      for (const row of leases) await removeContainer(row.Id)
     },
 
     async list() {

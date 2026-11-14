@@ -24,6 +24,7 @@ const rules: PageRules = {
   localSites: ['http://wordpress.local:8080'],
   openWeb: false,
   platformHosts: [],
+  pageDomain: null,
   policy,
 }
 const ask = (
@@ -252,6 +253,7 @@ describe('the browser of a chat without a site (plan 61, К12)', () => {
     localSites: [],
     openWeb: true,
     platformHosts: ['raditi.ru', 'raditi-preview.ru'],
+    pageDomain: null,
     policy: OPEN_WEB_POLICY,
   }
   const blank: PagePlace = { main: true, document: 'about:blank' }
@@ -309,6 +311,67 @@ describe('the browser of a chat without a site (plan 61, К12)', () => {
     expect(ask('https://shop.example.com/wp-admin/users.php', { navigation: true }, page)).toBe(
       'continue',
     )
+  })
+})
+
+describe('a published page of the agent (plan 69, Ст26)', () => {
+  const PAGE = 'https://abcdefghijklmnopqrstuvwxyz.pages.raditi.ru/'
+  const withPages: PageRules = {
+    ...rules,
+    platformHosts: ['raditi.ru'],
+    pageDomain: 'pages.raditi.ru',
+  }
+  const onThePage: PagePlace = { main: true, document: PAGE }
+  const ask = (url: string, place: PagePlace, navigation: boolean, method = 'GET') =>
+    requestVerdict(withPages, { url, method, postData: null, navigation }, 'agent', place)
+
+  it('opens by its address in a session with a site, the stack’s policy not asked', () => {
+    const denyAll: PageRules = {
+      ...withPages,
+      policy: { ...withPages.policy, pageDenied: () => true },
+    }
+    expect(openAllowed(denyAll, PAGE)).toBe(true)
+    expect(openAllowed(withPages, 'https://pages.raditi.ru/')).toBe(false)
+    expect(openAllowed(withPages, 'https://app.raditi.ru/')).toBe(false)
+    expect(openAllowed({ ...withPages, pageDomain: null }, PAGE)).toBe(false)
+  })
+
+  it('shows as another site: its main frame commits, the rest of the platform stays out', () => {
+    expect(ask(PAGE, ON_THE_SITE, true)).toBe('continue')
+    expect(committedAllowed(withPages, PAGE, 'agent', { main: true, document: null })).toBe(true)
+    expect(ask('https://app.raditi.ru/api/trpc', onThePage, false, 'POST')).toBe('blockedbyclient')
+    expect(ask('https://pages.raditi.ru/v/token', onThePage, true)).toBe('blockedbyclient')
+  })
+
+  it('takes the browser nowhere but itself in a session with a site', () => {
+    // A link, a redirect or a script of the page to any other site.
+    expect(ask('https://pay.elsewhere.example/', onThePage, true)).toBe('blockedbyclient')
+    expect(ask('https://cdn.elsewhere.example/x.png', onThePage, false)).toBe('blockedbyclient')
+    expect(committedAllowed(withPages, 'https://pay.elsewhere.example/', 'agent', onThePage)).toBe(
+      false,
+    )
+    // Its own host it may ask again; in a chat without a site any public site stays open.
+    expect(ask(`${PAGE}?again`, onThePage, true)).toBe('continue')
+    const open: PageRules = { ...withPages, openWeb: true, allowedHosts: [] }
+    expect(
+      requestVerdict(
+        open,
+        { url: 'https://pay.elsewhere.example/', method: 'GET', postData: null, navigation: true },
+        'agent',
+        onThePage,
+      ),
+    ).toBe('continue')
+  })
+
+  it('writes nothing to the site, loads nothing into it, and stays out while a sign-in is typed', () => {
+    // A write of the page to the client's site (Ч6).
+    expect(ask('https://example.ru/wp-admin/post.php', onThePage, false, 'POST')).toBe(
+      'accessdenied',
+    )
+    // A page of the site loads nothing of the agent's page.
+    expect(ask(`${PAGE}x.js`, ON_THE_SITE, false)).toBe('blockedbyclient')
+    // The saved sign-in is typed: nothing leaves for another site, the page neither (Ч7).
+    expect(ask(PAGE, { ...ON_THE_SITE, siteOnly: true }, true)).toBe('blockedbyclient')
   })
 })
 

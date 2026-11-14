@@ -18,6 +18,7 @@ import {
 import type { PrismaClient } from './generated/prisma/client.ts'
 import {
   cancelWaitingTask,
+  claimQueuedPass,
   claimQueuedTask,
   excludeTurnDbOperations,
   finishEmptiedDialog,
@@ -424,6 +425,43 @@ describe.skipIf(!databaseUrl)('PostgreSQL turn settlement', () => {
     await expect(redoTurn(db, { taskId: row.id, turnNo: 0 })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
     })
+  })
+
+  it('claims exactly as many passes of a workspace as its limit, of nine at once', async () => {
+    // docs/plan/70-turn-without-time-limit.md, ВР13: none goes past the limit, none gives way
+    // for nothing.
+    const first = await task()
+    const { workspaceId } = await db.task.findUniqueOrThrow({ where: { id: first.id } })
+    const others = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        db.task.create({
+          data: { workspaceId, siteId: null, needsRepository: false, modelClass: 'standard' },
+        }),
+      ),
+    )
+    const ids = [first.id, ...others.map((row) => row.id)]
+    const claims = await Promise.all(
+      ids.map((taskId) => claimQueuedPass(db, { taskId, attempt: 1, workspaceLimit: 8 })),
+    )
+    expect(claims.filter((claim) => claim === 'full')).toHaveLength(1)
+    expect(claims.filter((claim) => claim !== null && claim !== 'full')).toHaveLength(8)
+    expect(await db.task.count({ where: { workspaceId, status: 'preparing' } })).toBe(8)
+    // The one kept back stays queued under its attempt, untouched.
+    const kept = ids[claims.indexOf('full')]!
+    expect(await db.task.findUniqueOrThrow({ where: { id: kept } })).toMatchObject({
+      status: 'queued',
+      attempt: 1,
+    })
+    // A pass of another attempt, or one already taken, is no claim at all.
+    expect(await claimQueuedPass(db, { taskId: kept, attempt: 2, workspaceLimit: 8 })).toBeNull()
+    // One ends: the kept one goes.
+    await db.task.update({
+      where: { id: ids.find((id) => id !== kept)! },
+      data: { status: 'done' },
+    })
+    expect(
+      await claimQueuedPass(db, { taskId: kept, attempt: 1, workspaceLimit: 8 }),
+    ).toMatchObject({ turnNo: 0 })
   })
 
   it('claims a queued pass of its attempt once, and clears why it waited', async () => {

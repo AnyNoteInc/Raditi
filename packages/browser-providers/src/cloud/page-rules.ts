@@ -2,6 +2,7 @@ import {
   browserAddressOpens,
   browserForeignPageAllowed,
   browserNavigationAllowed,
+  browserPageAddress,
   browserPlatformHost,
   type BrowserController,
   type BrowserTaskPolicy,
@@ -30,6 +31,8 @@ export interface PageRules {
   openWeb: boolean
   /** `BROWSER_PLATFORM_HOSTS`: names of the platform, closed in every session. */
   platformHosts: readonly string[]
+  /** `PAGES_BASE_DOMAIN`: a published page of the agent under it opens (docs/plan/69-pages.md, Ст26). */
+  pageDomain: string | null
   policy: BrowserTaskPolicy
 }
 
@@ -65,6 +68,8 @@ export function originAllowed(url: URL, rules: PageRules): boolean {
  * name of the platform (К37).
  */
 function foreignOrigin(url: URL, rules: PageRules): boolean {
+  // A published page of the agent is another site, though its domain is the platform's (Ст26).
+  if (browserPageAddress(url, rules.pageDomain)) return true
   if (browserPlatformHost(url.hostname, rules.platformHosts)) return false
   return browserForeignPageAllowed(url.href, rules.allowedHosts, rules.localSites)
 }
@@ -97,7 +102,20 @@ function onAnotherSite(place: PagePlace, rules: PageRules): boolean {
  */
 function reaches(url: URL, rules: PageRules, place: PagePlace, navigates: boolean): boolean {
   if (place.siteOnly === true || !foreignOrigin(url, rules)) return false
+  if (fromAgentPage(url, rules, place)) return false
   return navigates || onAnotherSite(place, rules)
+}
+
+/**
+ * Whether a place is a published page of the agent in a session with a site and `url` another
+ * host (docs/plan/69-pages.md, Ст26): the page opens by its address there, where by address only the
+ * site opens (Ч2), so it takes the browser nowhere but itself — no link, script or redirect of it
+ * goes on to any other site.
+ */
+function fromAgentPage(url: URL, rules: PageRules, place: PagePlace): boolean {
+  if (rules.openWeb || place.document === null) return false
+  const shown = URL.parse(place.document)
+  return shown !== null && browserPageAddress(shown, rules.pageDomain) && url.host !== shown.host
 }
 
 /** Methods that only read: what a page of another site may ask of the site (Ч6). */
@@ -181,7 +199,8 @@ export function committedAllowed(
 /**
  * Whether the agent's `web_open` or the client's `navigate` may go to an address at all: a page
  * of the site only — another site is reached from a page of the site, never by address (Ч2) —;
- * without a site, any public https site (К12).
+ * without a site, any public https site (К12). A published page of the agent opens in both
+ * (docs/plan/69-pages.md, Ст26), and the stack's policy does not judge it: it is no page of the site.
  */
 export function openAllowed(
   rules: PageRules,
@@ -190,5 +209,6 @@ export function openAllowed(
 ): boolean {
   if (!browserAddressOpens(address, rules)) return false
   const url = URL.parse(address)
+  if (url !== null && browserPageAddress(url, rules.pageDomain)) return true
   return url !== null && !denies(() => rules.policy.pageDenied(pathOf(url), by))
 }

@@ -371,6 +371,50 @@ describe('SandboxRunner commands', () => {
     expect(core.reports.at(-1)).not.toHaveProperty('commandId')
   })
 
+  it('lives on while core extends the turn, and drops an extension of a turn it does not hold', async () => {
+    // docs/plan/70-turn-without-time-limit.md, ВР4: a turn has no time limit; core renews it.
+    const side = sandboxSide()
+    const core = scriptedCore()
+    const now = performance.now.bind(performance)
+    let later = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => now() + later)
+    startRunner(core.transport, side.executor)
+    await vi.waitFor(() => expect(core.polls).toHaveLength(1))
+    // A runner of this release says it extends its turns.
+    expect(core.polls[0]).toMatchObject({ features: ['extend'] })
+
+    await core.send(prepareCommand())
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
+    // Long past the first deadline and its grace, every extension keeps the container.
+    for (let step = 1; step <= 4; step++) {
+      later = step * 50_000
+      // Counted from the sending of the poll that brings it: a poll sent at this time.
+      const polls = core.polls.length
+      await core.send()
+      await vi.waitFor(() => expect(core.polls.length).toBeGreaterThan(polls))
+      await core.send(command('extend', { remainingMs: 60_000 }))
+      await vi.waitFor(() => expect(side.sandbox.extend).toHaveBeenCalledTimes(step))
+    }
+    later = 4 * 50_000 + 60_000 + TURN_PUBLICATION_GRACE_MS - 1_000
+    await core.send()
+    await vi.waitFor(() => expect(core.polls.length).toBeGreaterThan(5))
+    expect(core.types()).toEqual(['created', 'prepared'])
+    expect(side.sandbox.destroy).not.toHaveBeenCalled()
+    // An extension for a turn this session does not hold is dropped unanswered.
+    await core.send({
+      ...command('extend', { remainingMs: 60_000 }),
+      assignmentId: '00000000-0000-4000-8000-0000000000ff',
+    })
+    await core.send()
+    await vi.waitFor(() => expect(core.polls.length).toBeGreaterThan(8))
+    expect(side.sandbox.extend).toHaveBeenCalledTimes(4)
+    expect(core.types()).toEqual(['created', 'prepared'])
+    // Its extensions stopped: it goes at the last one and its grace.
+    later = 4 * 50_000 + 60_000 + TURN_PUBLICATION_GRACE_MS + 1_000
+    await core.send()
+    await vi.waitFor(() => expect(core.types().at(-1)).toBe('destroyed'))
+  })
+
   it('drops its turns without touching their containers once core retired its session', async () => {
     const side = sandboxSide()
     const core = scriptedCore()

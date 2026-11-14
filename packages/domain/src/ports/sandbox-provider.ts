@@ -86,7 +86,10 @@ export interface SandboxSpec {
   /** Per-turn credentials (LLM virtual key, MCP token): tmpfs files, never in a snapshot. */
   secrets: SandboxSecretFile[]
   network: NetworkPolicy
-  /** Hard limit for the whole turn, at most 20 minutes. */
+  /**
+   * The first deadline of the container, at most MAX_SANDBOX_LEASE_MS: not a limit of the work
+   * (docs/plan/70-turn-without-time-limit.md, ВР1). A live turn moves it later (Sandbox.extend).
+   */
   hardTimeoutMs: number
 }
 
@@ -95,7 +98,11 @@ export interface ExecSpec {
   cwd?: string
   env?: Record<string, string>
   stdin?: AsyncIterable<Uint8Array>
-  timeoutMs: number
+  /**
+   * At most MAX_SANDBOX_LEASE_MS. Absent — the command has no time limit of its own: it ends with
+   * itself, its signal or its container (the agent's run, ВР1).
+   */
+  timeoutMs?: number
   signal?: AbortSignal
 }
 
@@ -154,6 +161,14 @@ export interface Sandbox {
    * a container reused.
    */
   reset?(): Promise<void>
+  /**
+   * Moves the container's deadline (epoch ms) later — never earlier, at most MAX_SANDBOX_LEASE_MS
+   * ahead — and leaves a lease the host's watchdog honours (docs/plan/70-turn-without-time-
+   * limit.md, ВР5). Only the trusted side calls it; the sandbox itself has no way to.
+   */
+  extend(deadline: number): Promise<void>
+  /** The container's current deadline, epoch ms. */
+  readonly deadline: number
   readonly fs: SandboxFs
   destroy(reason: DestroyReason): Promise<void>
 }
@@ -223,7 +238,11 @@ export const MAX_SANDBOX_RESOURCES: Readonly<SandboxResources> = Object.freeze({
   memoryMiB: 4096,
   pids: 512,
 })
-export const MAX_SANDBOX_TURN_MS = 20 * 60 * 1000
+/**
+ * The longest single deadline a container or a command is given at once. A turn is not bounded by
+ * it: its supervisor extends the container lease by lease (docs/plan/70-turn-without-time-limit.md).
+ */
+export const MAX_SANDBOX_LEASE_MS = 20 * 60 * 1000
 
 const imageRepository = String.raw`[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+(?=\/))?(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*`
 /** A repository without tag or digest, optionally with a registry host and port. */
@@ -365,7 +384,7 @@ export const execSpecSchema = z
           typeof value[Symbol.asyncIterator] === 'function',
       )
       .optional(),
-    timeoutMs: z.number().int().positive().max(MAX_SANDBOX_TURN_MS),
+    timeoutMs: z.number().int().positive().max(MAX_SANDBOX_LEASE_MS).optional(),
     signal: z
       .custom<AbortSignal>(
         (value) =>
@@ -458,7 +477,7 @@ export const sandboxSpecSchema = z
         'duplicate secret path',
       ),
     network: networkPolicySchema,
-    hardTimeoutMs: z.number().int().positive().max(MAX_SANDBOX_TURN_MS),
+    hardTimeoutMs: z.number().int().positive().max(MAX_SANDBOX_LEASE_MS),
   })
   .strict() satisfies z.ZodType<SandboxSpec>
 

@@ -9,7 +9,7 @@ import { AppModule } from '../app.module.ts'
 import type { McpConfig } from '../config/config.ts'
 import { MCP_ENDPOINT } from '../server/mcp-runtime.ts'
 import { mountMcp } from '../server/mount-mcp.ts'
-import { fakeInfra, testMcpConfig } from '../testing/fakes.ts'
+import { fakeInfra, notDocTool, testMcpConfig } from '../testing/fakes.ts'
 import { MCP_WEB_SEARCH } from './search.tokens.ts'
 import { McpWebSearchService } from './web-search.ts'
 import type { WebSearchStore } from './web-search-store.ts'
@@ -125,7 +125,9 @@ describe('search_web through the gateway', () => {
   it('is not offered, and not callable, while its key is not in Vault', async () => {
     const server = await start(null)
     const list = await post(server, { jsonrpc: '2.0', id: 2, method: 'tools/list' })
-    expect(list.body.result.tools.map((tool: { name: string }) => tool.name)).toEqual(['site_info'])
+    expect(
+      list.body.result.tools.map((tool: { name: string }) => tool.name).filter(notDocTool),
+    ).toEqual(['site_info'])
     const call = await post(server, callSearch('wordpress register_post_type'))
     expect(call.status).toBe(400)
   })
@@ -138,7 +140,7 @@ describe('search_web through the gateway', () => {
       inputSchema: unknown
       annotations: unknown
     }[]
-    expect(tools.map((tool) => tool.name)).toEqual(['site_info', 'search_web'])
+    expect(tools.map((tool) => tool.name).filter(notDocTool)).toEqual(['site_info', 'search_web'])
     const search = tools.find((tool) => tool.name === 'search_web')!
     expect(search.annotations).toMatchObject({ readOnlyHint: true, openWorldHint: true })
     expect(search.inputSchema).toMatchObject({

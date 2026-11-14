@@ -10,6 +10,7 @@ import {
   envVar,
   formatEgressHost,
   isProduction,
+  pagesBaseDomainSchema,
   parseEgressHost,
   previewImageSchema,
   previewRuntimes,
@@ -35,7 +36,12 @@ export { ConfigError }
 export const DEFAULT_BROWSER_WORKER_PORT = 8086
 
 /** Sessions one worker holds at most; each is a Chromium of its own. */
-export const browserMaxSessionsBounds = Object.freeze({ min: 1, max: 64, default: 8 })
+/**
+ * Sessions one worker holds: by default as many as the turns of the platform (owner's request of
+ * 13.11.2026, docs/plan/70-turn-without-time-limit.md, ВР26) — a browser of a turn is no limit
+ * of turns. The eight of a workspace bound them per client (`browserSessionLimits.perWorkspace`).
+ */
+export const browserMaxSessionsBounds = Object.freeze({ min: 1, max: 1024, default: 1024 })
 /** JPEG quality of the screencast. */
 export const browserStreamQualityBounds = Object.freeze({ min: 10, max: 100 })
 
@@ -77,6 +83,12 @@ export interface BrowserWorkerConfig {
    * everything under it, which no page of any session reaches (docs/plan/61-chats-first.md, К37).
    */
   platformHosts: readonly string[]
+  /**
+   * PAGES_BASE_DOMAIN: the agent's published pages under it (`<slug>.<domain>`) open in every
+   * session, though the domain is the platform's (docs/plan/69-pages.md, Ст26); null — none. The
+   * egress proxy is told the same, to reach their address on the platform's machine.
+   */
+  pageDomain: string | null
   session: {
     idleMinutes: number
     maxHours: number
@@ -136,6 +148,8 @@ const ownEnvSchema = z.object({
   BROWSER_EXTRA_HOSTS: envVar(z.string().optional()),
   BROWSER_LOCAL_SITES: envVar(z.string().optional()),
   BROWSER_PLATFORM_HOSTS: envVar(z.string().optional()),
+  PAGES_BASE_DOMAIN: envVar(pagesBaseDomainSchema.optional()),
+  BROWSER_PAGE_ADDRESSES: envVar(z.string().optional()),
   BROWSER_SESSION_IDLE_MINUTES: bounded(
     browserSettingBounds.idleMinutes,
     browserSessionTimings.idleMinutes,
@@ -294,6 +308,15 @@ export function loadBrowserConfig(env: Env): BrowserWorkerConfig {
     problems.push(
       'SANDBOX_EGRESS_REFUSED_SUBNETS: required in production (the platform subnets the browser never reaches)',
     )
+  // The addresses of the machine of the pages (Ст26): the proxy lifts REFUSED_SUBNETS for these alone.
+  const pageAddresses = (own.BROWSER_PAGE_ADDRESSES ?? '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+  if (pageAddresses.length > 8 || pageAddresses.some((address) => ipLiteral(address) !== address))
+    problems.push('BROWSER_PAGE_ADDRESSES: at most 8 IP addresses, comma-separated')
+  if (pageAddresses.length > 0 && own.PAGES_BASE_DOMAIN === undefined)
+    problems.push('BROWSER_PAGE_ADDRESSES: needs PAGES_BASE_DOMAIN')
   const images = [own.BROWSER_IMAGE, own.BROWSER_FORWARDER_IMAGE, own.BROWSER_EGRESS_IMAGE]
   const imageCount = images.filter((value) => value !== undefined).length
   let runtime: DockerBrowserSessionConfig | null = null
@@ -324,6 +347,9 @@ export function loadBrowserConfig(env: Env): BrowserWorkerConfig {
         ? { firewallImage: own.SANDBOX_NETWORK_GUARD_IMAGE }
         : {}),
       refusedSubnets,
+      ...(own.PAGES_BASE_DOMAIN
+        ? { pageDomain: own.PAGES_BASE_DOMAIN, pageAddresses: [...pageAddresses] }
+        : {}),
     }
   }
   const extraHosts = parseExtraHosts(own.BROWSER_EXTRA_HOSTS, problems)
@@ -345,6 +371,7 @@ export function loadBrowserConfig(env: Env): BrowserWorkerConfig {
     extraHosts,
     localSites,
     platformHosts,
+    pageDomain: own.PAGES_BASE_DOMAIN ?? null,
     session: {
       idleMinutes: own.BROWSER_SESSION_IDLE_MINUTES,
       maxHours: own.BROWSER_SESSION_MAX_HOURS,

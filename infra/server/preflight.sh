@@ -22,6 +22,11 @@ server=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo 0)
 grep -Eq '"userland-proxy"[[:space:]]*:[[:space:]]*false' /etc/docker/daemon.json 2>/dev/null ||
   fail "/etc/docker/daemon.json must set \"userland-proxy\": false"
 [ "$(docker info --format '{{.LiveRestoreEnabled}}' 2>/dev/null)" = true ] || fail "live-restore must be on"
+# A bridge per preview and browser (plan 70, ВР21): the default pools run out at some 15–25.
+# A warning, not a refusal: only install.sh writes daemon.json, and a deploy never restarts Docker.
+grep -Eq '"default-address-pools"[[:space:]]*:[[:space:]]*\[[[:space:]]*\{[^]]*"size"[[:space:]]*:[[:space:]]*28' \
+  /etc/docker/daemon.json 2>/dev/null ||
+  echo "preflight: warning: /etc/docker/daemon.json sets no \"default-address-pools\" of size 28; run host/install.sh" >&2
 docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"runsc"' || fail "the runsc runtime is not registered"
 
 # The private address, the host firewall and the host's OpenBao
@@ -78,6 +83,14 @@ done
 [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = yes ] || fail "the clock is not NTP-synchronized"
 systemctl show docker.service -p After --value 2>/dev/null | grep -qw time-sync.target ||
   fail "docker.service must start after time-sync.target"
+
+# Published pages (docs/plan/69-pages.md, Ст3): their domain and the cookie secret of their
+# passwords rendered for preview
+pages=$(setting PAGES_BASE_DOMAIN)
+printf '%s\n' "$pages" | grep -Eqx '[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}' ||
+  fail "PAGES_BASE_DOMAIN must be the domain of published pages"
+grep -q '^PAGES_COOKIE_SECRET=..*' "$secrets/preview/app.env" 2>/dev/null ||
+  fail "$secrets/preview/app.env has no PAGES_COOKIE_SECRET: run host/platform-secrets.mjs seed and render"
 
 domain=$(setting APP_DOMAIN)
 if [ -n "$domain" ] && getent ahostsv6 "$domain" 2>/dev/null | grep -qv '^::ffff:'; then
