@@ -9,7 +9,8 @@ import MenuItem from '@mui/material/MenuItem'
 import Popover from '@mui/material/Popover'
 import Select from '@mui/material/Select'
 import Typography from '@mui/material/Typography'
-import { PAGE_SANDBOX } from '@repo/domain/preview/hostname'
+import { DocumentMarkdown, markdownTitleOf } from '@repo/doc-render/markdown'
+import { PAGE_SANDBOX } from '@repo/domain/pages'
 import {
   chatDocumentsOf,
   chatImageAt,
@@ -27,8 +28,6 @@ import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 import { useTRPC } from '@/trpc/client'
 
 import { documentText } from './chat-texts'
-import { DocumentMarkdown } from './document-markdown'
-import { markdownTitleOf } from './document-rules'
 import { taskFileHref } from './feed-file'
 
 // «Документы» beside the chat (docs/plan/67-agent-documents.md, Д4–Д7): the pages and the text

@@ -258,9 +258,10 @@
   - Только `GET` и `HEAD` и `POST /` формы пароля, остальное — 405 (`PAGE_METHODS`).
   - `Set-Cookie` — только cookie пароля.
   - `robots.txt` — `Disallow: /` (`PAGE_ROBOTS_TXT`).
-  - План 67 держит свою политику `/v/` (`PAGE_SANDBOX` в `@repo/domain/preview/hostname`,
-    `pageContentSecurityPolicy` в `apps/web/src/server/page-response.ts`). Первый срез после слияния плана 67
-    переводит `/v/` на эти константы: две CSP для одного и того же в репозитории не остаются.
+  - План 67 держал свою политику `/v/` (`PAGE_SANDBOX` в `@repo/domain/preview/hostname`,
+    `pageContentSecurityPolicy`). С 14.11.2026 `/v/` идёт на этих константах: `pagePolicy('html', framedBy)` —
+    та же `PAGE_CSP`, только `frame-ancestors` — origin кабинета, а картинки, шрифты и медиа — без `https:`; `PAGE_SANDBOX` — в `@repo/domain/pages`, его же
+    несёт атрибут `sandbox` фрейма вкладки «Документы» (§9, «Ст9 после слияния плана 67»).
 - **Ст10. Slug** — 16 случайных байт, base32 в нижнем регистре без выравнивания: 26 знаков, метка DNS до 63
   (`pageSlugSchema`, `newPageSlug`). Хост страницы — ровно `<slug>.<PAGES_BASE_DOMAIN>`, одна метка. Другие уровни,
   IP и `Host` с точкой в конце — 404 без тела страницы.
@@ -1377,3 +1378,84 @@ p = 1, только эти параметры, и окно попыток. Пе�
   138 и 20 пропущены, `infra/sandbox/client-egress.test.mjs` и `gateway.test.mjs` — 72, `pnpm test:infra` — 808,
   `pnpm check-env` — 163 переменные.
 
+### Ст9 после слияния плана 67 (14.11.2026)
+
+План 67 слит в `main` (#71). Просмотр страницы чата `/v/<token>` переведён на политику опубликованной страницы:
+в репозитории одна семья CSP страниц.
+
+- `@repo/domain/pages`: `pagePolicy(kind, framedBy?)` строит `PAGE_CSP` и `PAGE_READING_CSP`; строки этих констант
+  не изменились. `framedBy` ставит origin кабинета в `frame-ancestors` вместо `'none'`, убирает `https:` из
+  `img-src`, `font-src` и `media-src`, и
+  `pageResponseHeaders(kind, { framedBy })` отдаёт такой странице `Cache-Control: no-store` (адрес живёт 5 минут).
+  `PAGE_SANDBOX` (`allow-scripts allow-popups allow-popups-to-escape-sandbox`) переехал сюда из
+  `@repo/domain/preview/hostname`; `pageContentSecurityPolicy` удалён.
+- `apps/web/src/server/page-response.ts`: `pageHeaders(appOrigin, length)` — `pageResponseHeaders('html', {
+  framedBy })` и `Content-Length`; фрейм вкладки «Документы» несёт тот же `PAGE_SANDBOX`.
+- `Permissions-Policy` страниц плана 69 получила запреты плана 67 — `bluetooth`, `clipboard-read`,
+  `cross-origin-isolated`: строже, ничего не открывает.
+
+Что изменилось для страницы чата (значение по умолчанию по указанию от 09.10.2026 — верна политика, которую владелец
+принял 13.11.2026 «согласен»; Ст9):
+- нет `allow-modals` и `allow-downloads`: `alert()` и скачивание из страницы не работают (скачать файл — кнопка
+  вкладки);
+- картинки, шрифты и медиа по `https:` не грузятся, как и прежде: страница чата может держать то, что клиент не
+  собирался публиковать, а утечку адресом картинки владелец принял только для опубликованной страницы (Ст9).
+  Сначала срез открыл `https:` и здесь; автоматическое ревью безопасности указало на это, и правило плана 67
+  вернулось;
+- добавились `Cross-Origin-Resource-Policy: same-origin` и `manifest-src 'none'`.
+
+Проверки: `pnpm turbo run typecheck lint test` пакетов `@repo/domain`, `web`, `preview` и `e2e` — 12 задач;
+`pnpm --filter e2e test:documents` — 1 из 1 (враждебная страница во фрейме кабинета в Chromium; внешняя картинка
+теста перехватывается маршрутом Playwright: тест видит запрос, только если CSP его пропустила, и в интернет не
+ходит; контроль — с `https:` в политике фрейма тест падает на `https://example.com/track.png`).
+
+### 69.5 — `@repo/doc-render` (14.11.2026)
+
+План 67 слит в `main` (#71), срез сделан на нём.
+
+- **Пакет `packages/doc-render`** — слой сервисов (правила `doc-render-tier`: из пакетов только `domain`;
+  `doc-render-npm`: из npm только `react`, `react-dom`, `react-markdown`, `remark-gfm` и типы `hast`). Его не
+  достигают `llm`, `mcp`, `preview`, `browser` и раннер (их правила `*-minimal-packages`).
+  - `rules.ts` — правила плана 67 (`rehypeDocumentRules`, `markdownTitleOf`, `MISSING_DOCUMENT`), перенесены из
+    `apps/web/src/components/chat/document-rules.ts` без изменений, кроме одного: документ отдельно от чата
+    (`documentLinks: false`) не говорит «Такого документа в чате нет.» — ссылка на файл становится словами.
+  - `document-markdown.ts` — дерево `DocumentMarkdown` вкладки, теперь с `documentLinks` (по умолчанию `true`).
+    Без JSX: `core` берёт пакет из исходников type stripping'ом, а JSX он не снимает.
+  - `reading-page.ts` — `readingPage({ title, markdown })`: `<!doctype html>`, `lang="ru"`, `noindex`, встроенный
+    стиль (`READING_PAGE_CSS`: бумага и чернила кабинета, системные шрифты, колонка 46rem, светлая и тёмная схемы,
+    ни одного адреса) и то же дерево `renderToStaticMarkup`. Картинки чата по имени и ссылки на другие документы —
+    словами, `data:`-картинка — рисуется.
+- **web** берёт `DocumentMarkdown`, `markdownTitleOf` и `MISSING_DOCUMENT` из пакета (`transpilePackages`); тест
+  правил переехал в пакет.
+- **core** (`PagePublications`):
+  - `.md` резерва проверяется `checkPageContent` в том виде, как его написал агент, рисуется `readingPage` и
+    становится версией страницы (`source: 'outbox'`) — больше не уходит файлом чата с `feed.page_left`. `<title>` —
+    первый `# …` самого файла (`markdownTitleOf`, иначе «Документ»): его прочитал сканер outbox, а название резерва
+    никто ключами хода и значениями клиента не проверял, оно остаётся кабинету. Нарисованный HTML проверяется
+    `checkPageContent` ещё раз — это то, что получит зритель; не прошёл — `refused`;
+  - `publishDocuments` в конце хода, после разделов (`DocSections.settle`): открытый резерв документа, у которого
+    есть версия, получает её страницей для чтения (`source: 'doc'`, `feed.page` с `kind: 'doc'`); документ, чьи
+    разделы этот конец хода вернул, — `feed.page_left` `refused`; остальные ждут версии, страница отвечает
+    «Документ ещё пишется» (Ст25). Резерв не только этого хода: `doc_finish` может сбыться концом хода позже.
+    Нарисованная страница документа тоже проходит `checkPageContent`.
+- **`page.render` нет.** Таблица §6 называла задание `page.render` очереди `pages`; страница рисуется прямо в конце
+  хода, где версия и делается: отдельной очереди и повторов ей не нужно, ошибка — `feed.page_left` `failed`.
+- **Образы.** `FORBIDDEN_PACKAGES` стенда `verify:images` получил `doc-render` у `llm`, `mcp`, `preview`, `browser`
+  и раннера — как правила `*-minimal-packages`.
+
+Правило резерва документа (ревью `/spec-check`, выбрано одно на оба случая): конец хода, который вернул раздел
+документа, закрывает его открытые резервы `refused` (Ст8: «только если все разделы прошли»), даже если у документа
+есть прежняя готовая версия; иначе резерв получает последнюю готовую версию документа (Ст25: публична только
+готовая), а если её нет — ждёт. Поэтому `page_publish({ docId })` без нового `doc_finish` публикует прежнюю версию.
+
+Ревью среза (`/spec-check`, 14.11.2026), исправлено: название резерва в `<title>` страницы `.md` (выше), проверка
+нарисованного HTML, `verify:images`, фраза spec §20 о том, что ждёт плана 67, комментарий правила раннера.
+
+Не сделано здесь: «Опубликовать по ссылке» и «Опубликовать как страницу» (Ст32, срез 69.9) и путь агента в стенде
+`verify:pages` (69.10).
+
+Проверки: `@repo/doc-render` — 5 (правила плана 67 на вредных входах и страница для чтения байт в байт);
+`pnpm turbo run typecheck lint test` пакетов `web`, `core`, `@repo/doc-render`; интеграционные наборы `core`
+`page-publications` и `doc-sections` на одноразовой PostgreSQL — 13 из 13 (новые: `.md` — страница для чтения;
+версия документа — его страница в конце хода, повтор ничего не пишет; возвращённый раздел — `refused`);
+`pnpm check-architecture` — нарушений нет.

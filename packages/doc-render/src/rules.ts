@@ -8,8 +8,8 @@ import {
 import type { Element, ElementContent, Properties, Root, RootContent } from 'hast'
 
 // The rules of a text document of a chat (docs/plan/67-agent-documents.md, Д6): one rehype plugin
-// the cabinet runs under react-markdown. It knows no React, so a server that draws a document
-// (plan 69) can run the very same rules before rehype-stringify. Raw HTML never reaches it —
+// that react-markdown runs — in the cabinet's tab and in the page for reading the platform draws on
+// a server (docs/plan/69-pages.md, Ст11), one set for both. Raw HTML never reaches it —
 // react-markdown skips it, remark-rehype without `allowDangerousHtml` drops it — and what is left
 // is bound here:
 // only the elements Markdown makes, only their own attributes, no class or style of the text, ids
@@ -142,7 +142,8 @@ function link(node: Element, rules: DocumentRules): Element {
           )
         : words(node.children)
     case 'none':
-      return namesDocument(href)
+      // Alone, apart from its chat, a document has no others to miss: the link is its words.
+      return rules.documentLinks && namesDocument(href)
         ? element('span', { dataMissingDocument: '', title: MISSING_DOCUMENT }, node.children)
         : words(node.children)
   }

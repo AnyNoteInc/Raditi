@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { PAGE_SANDBOX } from '@repo/domain/preview/hostname'
+import { PAGE_SANDBOX } from '@repo/domain/pages'
 
 import { TASK_ID } from './testing'
 

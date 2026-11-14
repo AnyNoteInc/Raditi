@@ -1,7 +1,7 @@
-import { PAGE_SANDBOX } from '@repo/domain'
+import { PAGE_CSP, PAGE_SANDBOX } from '@repo/domain'
 import { describe, expect, it, vi } from 'vitest'
 
-import { getPageView, pageContentSecurityPolicy, pageHeaders } from './page-response'
+import { getPageView, pageHeaders } from './page-response'
 
 vi.mock('server-only', () => ({}))
 
@@ -24,32 +24,38 @@ function deps(overrides: Partial<Parameters<typeof getPageView>[2]> = {}) {
 const get = (host = 'pages.raditi.ru') =>
   new Request('https://pages.raditi.ru/v/a.b', { headers: { host } })
 
-describe('the headers of a page (docs/plan/67-agent-documents.md, Д3)', () => {
+describe('the headers of a page (docs/plan/67-agent-documents.md, Д3; docs/plan/69-pages.md, Ст9)', () => {
   it('are these, byte for byte', () => {
-    expect(pageHeaders(APP, { scripts: true, length: 7 })).toEqual({
-      'content-type': 'text/html; charset=utf-8',
-      'content-length': '7',
-      'x-content-type-options': 'nosniff',
-      'content-security-policy':
-        "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; frame-ancestors https://raditi.ru",
-      'permissions-policy':
+    expect(pageHeaders(APP, 7)).toEqual({
+      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Length': '7',
+      'Content-Security-Policy':
+        "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; script-src 'unsafe-inline'; default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data: blob:; media-src data: blob:; connect-src 'none'; form-action 'none'; frame-src 'none'; frame-ancestors https://raditi.ru; object-src 'none'; worker-src 'none'; manifest-src 'none'; base-uri 'none'",
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'no-referrer',
+      'X-Robots-Tag': 'noindex, nofollow, noarchive',
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Resource-Policy': 'same-origin',
+      'Permissions-Policy':
         'camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), clipboard-read=(), cross-origin-isolated=()',
-      'referrer-policy': 'no-referrer',
-      'cross-origin-opener-policy': 'same-origin',
-      'x-robots-tag': 'noindex, nofollow, noarchive',
-      'cache-control': 'private, no-store',
     })
   })
 
-  it('sandbox the page with the very set its frame has, and a shared text with no script', () => {
-    const sandbox = (policy: string) => policy.split('; ')[0]!.replace(/^sandbox /, '')
-    expect(sandbox(pageContentSecurityPolicy(APP, { scripts: true }))).toBe(PAGE_SANDBOX)
-    expect(PAGE_SANDBOX.split(' ')).not.toEqual(expect.arrayContaining(['allow-same-origin']))
+  it('are the policy of a published page but for its framing: one CSP for both plans', () => {
+    const policy = pageHeaders(APP, 7)['Content-Security-Policy']!
+    expect(policy).toBe(
+      PAGE_CSP.replace("frame-ancestors 'none'", 'frame-ancestors https://raditi.ru').replaceAll(
+        ' https:;',
+        ';',
+      ),
+    )
+    // A page of a chat loads nothing by https: (Д3), unlike a published one (Ст9).
+    expect(policy).not.toContain('https:;')
+    // The frame of the cabinet carries the very sandbox of the policy.
+    expect(policy.split('; ')[0]).toBe(`sandbox ${PAGE_SANDBOX}`)
     for (const forbidden of ['allow-same-origin', 'allow-forms', 'allow-top-navigation'])
       expect(PAGE_SANDBOX).not.toContain(forbidden)
-    const text = pageContentSecurityPolicy(APP, { scripts: false })
-    expect(sandbox(text)).not.toContain('allow-scripts')
-    expect(text).toContain("script-src 'none'")
   })
 })
 

@@ -4,7 +4,7 @@ import { previewPanelText, taskRewoundLabel } from '@repo/domain/tasks/client-fe
 
 import { plural } from '@/lib/plural'
 
-import { MISSING_DOCUMENT } from './document-rules'
+import { MISSING_DOCUMENT } from '@repo/doc-render/markdown'
 
 // What the screens of a dialog say beyond the catalogue of the feed
 // (packages/domain/src/tasks/client-feed-labels.ts): the words of the controls, the panel beside

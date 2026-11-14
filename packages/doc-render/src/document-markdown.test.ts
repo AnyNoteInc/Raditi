@@ -1,7 +1,8 @@
+import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
-import { DocumentMarkdown } from './document-markdown'
+import { DocumentMarkdown } from './document-markdown.ts'
 
 const rules = {
   documents: new Set(['02-цены.md', 'Сводка.html']),
@@ -9,7 +10,8 @@ const rules = {
 }
 
 /** What the tab draws, as HTML. */
-const drawn = (text: string) => renderToStaticMarkup(<DocumentMarkdown text={text} {...rules} />)
+const drawn = (text: string) =>
+  renderToStaticMarkup(createElement(DocumentMarkdown, { text, ...rules }))
 
 const HARMFUL = [
   '<script>alert(1)</script>',

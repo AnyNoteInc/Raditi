@@ -43,6 +43,7 @@ export const FORBIDDEN_PACKAGES = {
     'billing',
     'trpc',
     'ui',
+    'doc-render',
   ],
   mcp: [
     'git-providers',
@@ -59,6 +60,7 @@ export const FORBIDDEN_PACKAGES = {
     'billing',
     'trpc',
     'ui',
+    'doc-render',
   ],
   preview: [
     'storage',
@@ -82,6 +84,7 @@ export const FORBIDDEN_PACKAGES = {
     'billing',
     'trpc',
     'ui',
+    'doc-render',
   ],
   browser: [
     'vault',
@@ -101,6 +104,7 @@ export const FORBIDDEN_PACKAGES = {
     'billing',
     'trpc',
     'ui',
+    'doc-render',
   ],
   runner: [
     'db',
@@ -114,6 +118,7 @@ export const FORBIDDEN_PACKAGES = {
     'browser-link',
     'trpc',
     'ui',
+    'doc-render',
   ],
 }
 

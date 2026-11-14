@@ -1,43 +1,18 @@
 import 'server-only'
 
-import { documentKindOf, pageContentSecurityPolicy } from '@repo/domain'
-
-export { pageContentSecurityPolicy }
+import { documentKindOf, pageResponseHeaders } from '@repo/domain'
 
 // What the domain of pages answers (docs/plan/67-agent-documents.md, Д3): the bytes of a page the
-// agent made, sandboxed by its CSP into an opaque origin that reaches nothing — no network, no
-// form, no frame — framed only by the cabinet. next.config.ts sends none of its own headers on
-// /v/, so these are the ones the browser gets.
+// agent made, sandboxed by its CSP into an opaque origin that reaches no network, form or frame,
+// framed only by the cabinet. The policy and the headers are those of a published page
+// (docs/plan/69-pages.md, Ст9) — one family for both plans — but framed by the cabinet and never
+// stored. next.config.ts sends none of its own headers on /v/, so these are the ones the browser gets.
 
-const PERMISSIONS = [
-  'camera',
-  'microphone',
-  'geolocation',
-  'payment',
-  'usb',
-  'serial',
-  'bluetooth',
-  'clipboard-read',
-  'cross-origin-isolated',
-]
-  .map((feature) => `${feature}=()`)
-  .join(', ')
-
-/** The headers of a page and of a shared document. */
-export function pageHeaders(
-  appOrigin: string,
-  { scripts, length }: { scripts: boolean; length: number },
-): Record<string, string> {
+/** The headers of a page of a chat, framed by the cabinet. */
+export function pageHeaders(appOrigin: string, length: number): Record<string, string> {
   return {
-    'content-type': 'text/html; charset=utf-8',
-    'content-length': String(length),
-    'x-content-type-options': 'nosniff',
-    'content-security-policy': pageContentSecurityPolicy(appOrigin, { scripts }),
-    'permissions-policy': PERMISSIONS,
-    'referrer-policy': 'no-referrer',
-    'cross-origin-opener-policy': 'same-origin',
-    'x-robots-tag': 'noindex, nofollow, noarchive',
-    'cache-control': 'private, no-store',
+    ...pageResponseHeaders('html', { framedBy: appOrigin }),
+    'Content-Length': String(length),
   }
 }
 
@@ -88,7 +63,7 @@ export async function getPageView(
     const file = await deps.read(view)
     if (file === null || documentKindOf(file.name) !== 'page') return pageAnswer(404, 'Не найдено')
     return new Response(new Uint8Array(file.bytes), {
-      headers: pageHeaders(pages.appOrigin, { scripts: true, length: file.bytes.byteLength }),
+      headers: pageHeaders(pages.appOrigin, file.bytes.byteLength),
     })
   } catch (error) {
     deps.onFailure?.('page view failed', error)

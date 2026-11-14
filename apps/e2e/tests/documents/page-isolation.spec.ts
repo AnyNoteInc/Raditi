@@ -2,7 +2,7 @@ import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 
 import { expect, test } from '@playwright/test'
-import { PAGE_SANDBOX, pageContentSecurityPolicy } from '@repo/domain/preview/hostname'
+import { PAGE_SANDBOX, pageResponseHeaders } from '@repo/domain/pages'
 
 // A page the agent made, framed by the cabinet from the domain of pages (docs/plan/67-agent-
 // documents.md, Д3), in a real browser: the frame and the very CSP web sends (page-response.ts),
@@ -33,13 +33,7 @@ test.beforeAll(async () => {
     hits.push(`${request.headers.host} ${request.method} ${request.url}`)
     const cabinet = `http://localhost:${port}`
     if (request.headers.host === `pages.localhost:${port}` && request.url === '/v/token') {
-      response.writeHead(200, {
-        'content-type': 'text/html; charset=utf-8',
-        'x-content-type-options': 'nosniff',
-        'content-security-policy': pageContentSecurityPolicy(cabinet, { scripts: true }),
-        'referrer-policy': 'no-referrer',
-        'cross-origin-opener-policy': 'same-origin',
-      })
+      response.writeHead(200, pageResponseHeaders('html', { framedBy: cabinet }))
       response.end(HOSTILE)
       return
     }
@@ -66,6 +60,13 @@ test.afterAll(async () => {
 })
 
 test('a page of the agent reaches neither the cabinet nor the network', async ({ page }) => {
+  // What would leave for the outside world: the route sees a request only past the CSP, and
+  // answers it itself, so the test never reaches the internet either way.
+  const outside: string[] = []
+  await page.route('https://example.com/**', async (route) => {
+    outside.push(route.request().url())
+    await route.fulfill({ status: 204 })
+  })
   await page.goto(`http://localhost:${port}/chat`)
   await expect
     .poll(() => page.evaluate(() => (window as unknown as { reports: unknown[] }).reports.length))
@@ -83,6 +84,8 @@ test('a page of the agent reaches neither the cabinet nor the network', async ({
   expect(tried.fetch).toBe('blocked')
   // The cabinet stays where it was, and nothing but the page itself was asked for.
   expect(page.url()).toBe(`http://localhost:${port}/chat`)
+  // Not even a picture by https: leaves — a page of a chat loads its own data only.
+  expect(outside).toEqual([])
   expect(hits.filter((hit) => hit.startsWith('pages.'))).toEqual([
     `pages.localhost:${port} GET /v/token`,
   ])

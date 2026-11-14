@@ -1,4 +1,5 @@
 import { createPrismaClient, reservePagePublication, servedPage, type PrismaClient } from '@repo/db'
+import { readingPage } from '@repo/doc-render'
 import { packOutbox } from '@repo/snapshots'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
@@ -169,16 +170,24 @@ describe.skipIf(!enabled)('the pages of a turn with PostgreSQL', () => {
     })
   })
 
-  it('sends a Markdown file on as a file of the chat until the pages can draw it', async () => {
+  it('draws a Markdown file into a page for reading, not a file of the chat (Ст11)', async () => {
     const task = await chat()
     const page = await reserve(task.id, 'отчёт.md')
+    const markdown = '# Отчёт\n\n[сайт](https://example.ru/)\n\n<script>alert(1)</script>'
     await files().deliver({
       taskId: task.id,
       turn: 1,
-      outbox: await packOutbox([{ name: 'отчёт.md', bytes: '# Отчёт' }]),
+      outbox: await packOutbox([{ name: 'отчёт.md', bytes: markdown }]),
     })
-    expect((await rows(task.id)).map((row) => row.type)).toEqual(['feed.page_left', 'feed.file'])
-    expect((await servedPage(db, page.slug))?.state).toBe('pending')
+    expect((await rows(task.id)).map((row) => row.type)).toEqual(['feed.page'])
+    expect((await rows(task.id))[0]!.payload).toMatchObject({ version: 1, kind: 'markdown' })
+    const served = await servedPage(db, page.slug)
+    expect(served).toMatchObject({ state: 'live', content: { version: 1 } })
+    expect(Buffer.from(served!.content!.bytes).toString()).toBe(
+      readingPage({ title: 'Отчёт', markdown }),
+    )
+    // The title of the reservation, which no scan of the turn read, is not on the page.
+    expect(Buffer.from(served!.content!.bytes).toString()).not.toContain('Прайс')
   })
 
   it('tells the pages of a failed turn at once, and each closing once', async () => {
