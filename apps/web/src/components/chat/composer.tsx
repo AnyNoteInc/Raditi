@@ -572,6 +572,57 @@ export function Composer({
           },
         }}
       >
+        {speech ? (
+          <Box
+            sx={{
+              position: 'absolute',
+              top: 6,
+              right: 6,
+              zIndex: 1,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+            }}
+          >
+            {dictation.state === 'recording' ? (
+              <Box
+                aria-hidden
+                data-testid="dictation-wave"
+                sx={{ display: 'flex', alignItems: 'center', gap: '2px', height: 28 }}
+              >
+                {dictation.levels.map((level, index) => (
+                  <Box
+                    key={index}
+                    sx={{
+                      width: 3,
+                      borderRadius: '2px',
+                      bgcolor: 'error.main',
+                      height: `${Math.max(3, Math.round(level * 26))}px`,
+                      transition: 'height 80ms linear',
+                    }}
+                  />
+                ))}
+              </Box>
+            ) : null}
+            <IconButton
+              aria-label={
+                dictation.state === 'recording' ? dictationText.stop : dictationText.start
+              }
+              aria-pressed={dictation.state === 'recording'}
+              disabled={disabled || dictation.state === 'recognizing'}
+              onClick={dictation.toggle}
+              sx={{
+                ...toolButton,
+                ...(dictation.state === 'recording' && {
+                  color: 'error.main',
+                  '&:hover': { color: 'error.main' },
+                }),
+              }}
+            >
+              <AppIcon name="microphone" size={18} />
+            </IconButton>
+          </Box>
+        ) : null}
         {dragging ? (
           <Box
             aria-hidden
@@ -634,6 +685,8 @@ export function Composer({
             maxHeight: { xs: '30dvh', md: '40dvh' },
             overflowY: 'auto',
             px: 1.25,
+            // The microphone stands in the top right corner of the field (owner's request).
+            pr: speech ? (dictation.state === 'recording' ? 22 : 7) : 1.25,
             py: 1,
             border: 0,
             borderRadius: 0,
@@ -743,25 +796,6 @@ export function Composer({
               </Box>
             ) : null}
             {effort}
-            {speech ? (
-              <IconButton
-                aria-label={
-                  dictation.state === 'recording' ? dictationText.stop : dictationText.start
-                }
-                aria-pressed={dictation.state === 'recording'}
-                disabled={disabled || dictation.state === 'recognizing'}
-                onClick={dictation.toggle}
-                sx={{
-                  ...toolButton,
-                  ...(dictation.state === 'recording' && {
-                    color: 'error.main',
-                    '&:hover': { color: 'error.main' },
-                  }),
-                }}
-              >
-                <AppIcon name="microphone" size={18} />
-              </IconButton>
-            ) : null}
           </Box>
           {filesWait !== null ? (
             <Typography

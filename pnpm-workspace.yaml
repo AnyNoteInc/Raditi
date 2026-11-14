@@ -141,6 +141,8 @@ catalog:
   '@mdx-js/react': ^3.1.1
   '@types/mdx': ^2.0.14
   remark-gfm: ^4.0.1
+  rehype-highlight: ^7.0.2
+  highlight.js: ^11.12.0
   # The agent's words in a dialog: Markdown drawn as React, never as HTML
   react-markdown: ^10.1.0
   # The tree of a text document the agent made, bound by its rules (docs/plan/67, Д6)

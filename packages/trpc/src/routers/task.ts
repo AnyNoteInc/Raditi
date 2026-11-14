@@ -198,8 +198,6 @@ export const taskRouter = router({
         attachments: attachmentIdsSchema.optional(),
         /** How hard the model thinks: `low`, `high` (the default) or `max`. */
         effort: reasoningEffortSchema.optional(),
-        /** «Сначала план» (docs/plan/75-chat-input-output.md, ВВ12). */
-        plan: z.boolean().optional(),
       }),
     )
     .output(z.strictObject({ taskId: z.uuid(), alias: z.string(), created: z.boolean() }))
@@ -211,7 +209,6 @@ export const taskRouter = router({
         text: input.text,
         ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
         ...(input.effort === undefined ? {} : { effort: input.effort }),
-        ...(input.plan ? { plan: true } : {}),
         now: new Date(),
       }),
     ),
@@ -224,8 +221,6 @@ export const taskRouter = router({
         requestId: browserId,
         text: words,
         attachments: attachmentIdsSchema.optional(),
-        /** «Сначала план» (docs/plan/75, ВВ12). */
-        plan: z.boolean().optional(),
       }),
     )
     .output(postedOutput)
@@ -236,7 +231,6 @@ export const taskRouter = router({
         requestId: input.requestId,
         text: input.text,
         ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
-        ...(input.plan ? { plan: true } : {}),
         now: new Date(),
       }),
     ),
@@ -368,7 +362,6 @@ export const taskRouter = router({
         requestId: z.uuid(),
         text: z.string().max(20_000),
         attachments: z.array(z.uuid()).max(10).optional(),
-        plan: z.boolean().optional(),
       }),
     )
     .output(z.strictObject({ id: z.uuid().nullable(), repeated: z.boolean() }))
@@ -512,10 +505,20 @@ export const taskRouter = router({
 
   /** «Поиск по чатам» (ВВ21): by the name and by the client's words, in «Архив» too. */
   search: consentedProcedure
-    .input(z.strictObject({ query: z.string().min(1).max(DIALOG_SEARCH_TEXT) }))
+    .input(
+      z.strictObject({
+        query: z.string().min(1).max(DIALOG_SEARCH_TEXT),
+        /** The window «Архив» searches its own chats only. */
+        archive: z.boolean().optional(),
+      }),
+    )
     .output(z.strictObject({ items: z.array(dialogListItemOutput) }))
     .query(async ({ ctx, input }) => ({
-      items: await searchDialogs(ctx.prisma, { userId: ctx.user.id, query: input.query }),
+      items: await searchDialogs(ctx.prisma, {
+        userId: ctx.user.id,
+        query: input.query,
+        archiveOnly: input.archive === true,
+      }),
     })),
 
   /** «По проектам»: the folders of the user's chats, counted on the server over all of them. */

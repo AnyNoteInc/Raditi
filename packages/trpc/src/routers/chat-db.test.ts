@@ -2038,6 +2038,26 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
     })
   })
 
+  describe("the client's own instructions to the agent (docs/plan/76, И1, И3)", () => {
+    it('are written, read back, refused with a password, and removed by empty words', async () => {
+      const { owner } = await siteOwner()
+      const caller = callerOf(owner)
+      expect(await caller.user.agentInstructions()).toEqual({ text: '' })
+      expect(await caller.user.setAgentInstructions({ text: '  Мы — кофейня у метро  ' })).toEqual({
+        text: 'Мы — кофейня у метро',
+      })
+      expect(await caller.user.agentInstructions()).toEqual({ text: 'Мы — кофейня у метро' })
+      await expect(
+        caller.user.setAgentInstructions({ text: 'пароль: Qwerty12345!' }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+      await expect(
+        caller.user.setAgentInstructions({ text: 'я'.repeat(2001) }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+      expect(await caller.user.setAgentInstructions({ text: ' ' })).toEqual({ text: '' })
+      expect(await db.agentInstructions.count({ where: { userId: owner.id } })).toBe(0)
+    })
+  })
+
   describe('task.rename, task.remove, task.setEffort', () => {
     const updatedAt = async (taskId: string) =>
       (await db.task.findUniqueOrThrow({ where: { id: taskId } })).updatedAt.getTime()

@@ -129,8 +129,6 @@ export interface CreateDialogInput {
   attachments?: readonly string[]
   /** How hard the model thinks (owner's request of 26.10.2026); absent — `high`, as before. */
   effort?: ReasoningEffort
-  /** «Сначала план» (docs/plan/75-chat-input-output.md, ВВ12): the first pass only plans. */
-  plan?: boolean
   now: Date
 }
 
@@ -277,7 +275,6 @@ export async function createDialog(
     requestId: taskId,
     text,
     ...requestAttachments(attachments),
-    ...(input.plan ? { plan: true as const } : {}),
   })
   if (siteId === null && !UUID_V7.safeParse(taskId).success) throw taskIdInvalid()
 
@@ -391,8 +388,6 @@ export interface DialogMessageInput {
   text: string
   /** Files of the message (docs/plan/57, Б26), lowercase: bound to the task with the words. */
   attachments?: readonly string[]
-  /** «Сначала план» (docs/plan/75, ВВ12): the pass of these words only plans. */
-  plan?: boolean
   now: Date
 }
 
@@ -475,10 +470,7 @@ export async function postDialogMessage(
   const { userId, now } = input
   const requestId = input.requestId.toLowerCase()
   const text = requestText(input.text)
-  const attachments = {
-    ...requestAttachments(input.attachments ?? []),
-    ...(input.plan ? { plan: true as const } : {}),
-  }
+  const attachments = requestAttachments(input.attachments ?? [])
   // Checked before the transaction, so the words are refused in the client's terms.
   requestPayload({ v: 1, kind: 'first', authorId: userId, requestId, text, ...attachments })
 

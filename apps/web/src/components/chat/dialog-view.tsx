@@ -131,7 +131,6 @@ import { useBrowserWatching } from './use-browser-watching'
 import { useFeedFollow } from './use-feed-follow'
 import { requestHistoryOf } from './prompt-history'
 import { QueueCards, useChatQueue } from './queue-cards'
-import { PlanToggle, planText, useRememberedPlan } from './plan-toggle'
 import { useWaitingTitle } from './use-waiting-title'
 import { useDialogFeed } from './use-dialog-feed'
 import { uuidv7 } from './uuid'
@@ -481,8 +480,6 @@ export function DialogView({
   // The tab says the chat waits while it is hidden (docs/plan/75, ВВ11).
   useWaitingTitle(head?.task.status ?? null)
   const queued = chatQueue.data?.items ?? []
-  // «Сначала план» (docs/plan/75, ВВ12): the next words ask for a plan only.
-  const [plan, setPlan] = useRememberedPlan()
   const proceed = useMutation(trpc.task.continue.mutationOptions())
   const cancel = useMutation(trpc.task.cancel.mutationOptions())
   // «Опубликовать как страницу» of a document of the chat (docs/plan/69-pages.md, Ст32): to its
@@ -877,13 +874,8 @@ export function DialogView({
 
   // A repeat that the server answers `repeated` is the same words written before (the id is of
   // these very words): they are in the dialog, and the field is cleared like after a first send.
-  async function send(
-    text: string,
-    attachmentIds: readonly string[] = [],
-    options: { plan?: boolean } = {},
-  ): Promise<boolean> {
+  async function send(text: string, attachmentIds: readonly string[] = []): Promise<boolean> {
     setFieldError(null)
-    const planned = options.plan ?? plan
     // Files go with the messages of any chat: to the browser's pages, or into the copy of the
     // site the agent works on.
     const files = [...attachmentIds]
@@ -896,7 +888,6 @@ export function DialogView({
           requestId: pressId('message', `${text}\u0000${files.join(',')}`),
           text,
           ...(files.length > 0 ? { attachments: files } : {}),
-          ...(planned ? { plan: true } : {}),
         })
         pressed('message')
         void chatQueue.refetch()
@@ -916,7 +907,6 @@ export function DialogView({
         requestId: pressId('message', `${text}\u0000${files.join(',')}`),
         text,
         ...(files.length > 0 ? { attachments: files } : {}),
-        ...(planned ? { plan: true } : {}),
       })
       pressed('message')
       refresh()
@@ -1189,9 +1179,6 @@ export function DialogView({
           onResumeAgent: resumeWork,
           // «Изменить» is `/undo`: its words come back to the field (ВВ25).
           onEditLast: () => runCommand('turn_undo'),
-          // «Выполнить план» (docs/plan/75, ВВ15): words to the same session, not a plan again.
-          onExecutePlan: () => void send(planText.executeWords, [], { plan: false }),
-          onRevisePlan: () => field.current?.querySelector('textarea')?.focus(),
         }),
     // A press the server would refuse is not drawn: an owner or an admin, of a project that is open.
     ...(!closedProject && project?.closed !== true && agentNotes.data?.canManage
@@ -1228,17 +1215,14 @@ export function DialogView({
   // the agent's next turn.
   const settings =
     head === null ? null : (
-      <>
-        <EffortMenu
-          value={effort}
-          onChange={(next) => void changeEffort(next)}
-          // The level holds from the agent's next turn: it is changed while the dialog waits.
-          disabled={!awaitingClient || setEffort.isPending}
-          lockedText={terminal ? effortText.ended : effortText.locked}
-          handle={effortMenu}
-        />
-        {terminal ? null : <PlanToggle on={plan} onChange={setPlan} />}
-      </>
+      <EffortMenu
+        value={effort}
+        onChange={(next) => void changeEffort(next)}
+        // The level holds from the agent's next turn: it is changed while the dialog waits.
+        disabled={!awaitingClient || setEffort.isPending}
+        lockedText={terminal ? effortText.ended : effortText.locked}
+        handle={effortMenu}
+      />
     )
   const composerCommands = {
     verdicts: commands,

@@ -276,7 +276,7 @@ export function likePattern(words: string): string {
  */
 export async function searchDialogs(
   db: Pick<PrismaClient, '$queryRaw'>,
-  input: { userId: string; query: string },
+  input: { userId: string; query: string; archiveOnly?: boolean },
 ): Promise<DialogListItem[]> {
   const words = input.query.replace(/\s+/gu, ' ').trim()
   if (words === '') return []
@@ -285,6 +285,7 @@ export async function searchDialogs(
     SELECT ${ITEM}
     FROM tasks t LEFT JOIN sites s ON s.id = t.site_id
     WHERE ${OF_USER(input.userId)} AND ${SHOWN}
+      ${input.archiveOnly ? Prisma.sql`AND t.archived_at IS NOT NULL` : Prisma.empty}
       AND (t.title ILIKE ${pattern}
         OR EXISTS (SELECT 1 FROM task_events e
           WHERE e.task_id = t.id AND e.client_visible AND e.type = 'feed.request'

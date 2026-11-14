@@ -69,7 +69,6 @@ import { useEffect, useMemo, useState, type ComponentProps, type ReactNode } fro
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 import { nbsp } from '@/lib/nbsp'
 
-import { planText } from './plan-toggle'
 import { AgentMarkdown } from './agent-markdown'
 import { SentFiles, type SentFile } from './attachment-chips'
 import { dayTime, feedTime } from './chat-format'
@@ -147,9 +146,6 @@ export interface FeedActions {
    * client sends them changed (docs/plan/75-chat-input-output.md, ВВ25); absent — not offered.
    */
   onEditLast?: () => void
-  /** «Выполнить план» and «Поправить план» under a plan (docs/plan/75, ВВ14, ВВ15). */
-  onExecutePlan?: () => void
-  onRevisePlan?: () => void
   /** The client controls the task's browser now. */
   controlling?: boolean
   /** The task's browser is open: the control can be taken. */
@@ -856,7 +852,6 @@ function RowView({
   actions,
   filesOf,
   editable = false,
-  planActive = false,
 }: {
   row: FeedRow
   now: Date
@@ -872,8 +867,6 @@ function RowView({
   filesOf: (ids: readonly string[]) => SentFile[]
   /** The client's last message, while `/undo` can take it back: «Изменить» under it (ВВ25). */
   editable?: boolean
-  /** The newest plan, no words after it: «Выполнить план» under it (docs/plan/75, ВВ14). */
-  planActive?: boolean
 }) {
   switch (row.type) {
     case 'feed.request':
@@ -932,32 +925,10 @@ function RowView({
       return (
         <AgentMessage
           title={
-            row.plan
-              ? planText.title
-              : approval
-                ? feedCardTitle.approval
-                : open
-                  ? feedCardTitle.answer
-                  : feedCardTitle.result
+            approval ? feedCardTitle.approval : open ? feedCardTitle.answer : feedCardTitle.result
           }
           actions={
-            row.plan && planActive && actions.onExecutePlan ? (
-              <>
-                <Button
-                  variant="contained"
-                  disableElevation
-                  disabled={actions.busy}
-                  onClick={actions.onExecutePlan}
-                >
-                  {planText.execute}
-                </Button>
-                {actions.onRevisePlan ? (
-                  <Button variant="outlined" onClick={actions.onRevisePlan}>
-                    {planText.revise}
-                  </Button>
-                ) : null}
-              </>
-            ) : onSaveNotes && actions.notesRows?.has(row.id) ? (
+            onSaveNotes && actions.notesRows?.has(row.id) ? (
               <Button variant="outlined" onClick={() => onSaveNotes(row.message)}>
                 {agentNotesText.button}
               </Button>
@@ -1223,8 +1194,6 @@ export function FeedList({
   const documents = useMemo(() => chatDocumentsOf(rows), [rows])
   const commands = head?.commands ?? []
   const undo = head?.undo ?? null
-  // «Выполнить план» stands under the newest plan the client has not answered (docs/plan/75).
-  const activePlanId = activePlanOf(rows)
   // «Изменить» stands under the client's last message while `/undo` can take its turn back.
   const editableId =
     commands.find((command) => command.id === 'turn_undo')?.available === true
@@ -1291,7 +1260,6 @@ export function FeedList({
                 actions={actions}
                 filesOf={filesOf}
                 editable={entry.row.id === editableId}
-                planActive={entry.row.id === activePlanId}
               />
             )}
           </Box>
@@ -1299,16 +1267,6 @@ export function FeedList({
       </Box>
     </DocRevisions.Provider>
   )
-}
-
-/** The newest result of a pass of «Сначала план» with no request after it (ВВ14); null — none. */
-export function activePlanOf(rows: readonly FeedRow[]): string | null {
-  for (let index = rows.length - 1; index >= 0; index--) {
-    const row = rows[index]
-    if (row?.type === 'feed.request') return null
-    if (row?.type === 'feed.result') return row.plan ? row.id : null
-  }
-  return null
 }
 
 /** The id of the client's last message with words — not a press — in the feed; null — none. */

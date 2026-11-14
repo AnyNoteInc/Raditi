@@ -494,7 +494,7 @@ describe('pinned, archived and found chats (docs/plan/75, ВВ21)', () => {
     )
   })
 
-  it('open «Архив» on press and read it only then', async () => {
+  it('open «Архив» from the bottom in a window, read it only then, and restore a chat', async () => {
     listPage.mockImplementation(async (input) =>
       (input as { view?: string }).view === 'archive'
         ? {
@@ -504,11 +504,17 @@ describe('pinned, archived and found chats (docs/plan/75, ВВ21)', () => {
           }
         : { pinned: [], items: [dialog('1')], nextCursor: null },
     )
+    archive.mockResolvedValue({ archived: false })
     showList()
     await screen.findByText('Поменять цену капучино')
     expect(listPage).not.toHaveBeenCalledWith(expect.objectContaining({ view: 'archive' }))
-    fireEvent.click(screen.getByRole('button', { name: /Архив/ }))
-    expect(await screen.findByText('Старый чат')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Архив' }))
+    const window_ = await screen.findByRole('dialog', { name: 'Архив чатов' })
+    expect(await within(window_).findByText('Старый чат')).toBeTruthy()
+    fireEvent.click(within(window_).getByRole('button', { name: 'Восстановить' }))
+    await waitFor(() => expect(archive).toHaveBeenCalled())
+    expect(archive.mock.calls[0]![0]).toEqual({ taskId: dialog('5').id, archived: false })
+    expect(await within(window_).findByText('Чат вернулся в список.')).toBeTruthy()
   })
 
   it('search by the words once they rest, and say when nothing is found', async () => {

@@ -22,6 +22,7 @@ import { dialogGroups, listTime } from './chat-format'
 import { chatsText, listText, undoText } from './chat-texts'
 import type { ChatFolder, DialogListItem } from './chat-types'
 import { offScreen } from './composer'
+import { ArchiveDialog, archiveText } from './archive-dialog'
 import {
   DialogMenuButton,
   dialogListKey,
@@ -610,17 +611,31 @@ function Folders({ asked, currentId }: { asked: string | null; currentId: string
   )
 }
 
-/** «Архив» at the end of the list (ВВ21): read only once it is opened. */
-function ArchiveSection({ currentId }: { currentId: string | null }) {
+/**
+ * «Архив» pinned at the very bottom of the list (owner's request of 14.11.2026,
+ * docs/plan/76-agent-instructions.md, И9): it opens the window of the archive.
+ */
+function ArchiveButton() {
   const [open, setOpen] = useState(false)
-  const labelId = useId()
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mx: { md: -1.5 } }}>
+    <Box
+      sx={{
+        position: 'sticky',
+        bottom: 0,
+        mt: 'auto',
+        mx: { md: -1.5 },
+        pt: 1,
+        pb: 1,
+        bgcolor: 'var(--mui-palette-background-paper)',
+        zIndex: 1,
+      }}
+    >
       <ButtonBase
-        aria-expanded={open}
+        aria-haspopup="dialog"
         data-archive=""
-        onClick={() => setOpen(!open)}
+        onClick={() => setOpen(true)}
         sx={{
+          width: '100%',
           minHeight: 44,
           display: 'flex',
           justifyContent: 'flex-start',
@@ -633,41 +648,10 @@ function ArchiveSection({ currentId }: { currentId: string | null }) {
         }}
       >
         <AppIcon name="archive" size={16} />
-        <Box component="span" id={labelId}>
-          {listText.archive}
-        </Box>
-        <Box component="span" sx={offScreen}>
-          {open ? listText.archiveClose : listText.archiveOpen}
-        </Box>
+        {archiveText.open}
       </ButtonBase>
-      {open ? <ArchiveChats labelledBy={labelId} currentId={currentId} /> : null}
+      <ArchiveDialog open={open} onClose={() => setOpen(false)} />
     </Box>
-  )
-}
-
-function ArchiveChats({ labelledBy, currentId }: { labelledBy: string; currentId: string | null }) {
-  const list = useChatPages(null, 'archive')
-  if (list.isPending) return <ListLoading />
-  if (list.isError)
-    return <ListFailed retrying={list.isFetching} onRetry={() => void list.refetch()} />
-  const items = list.data.pages.flatMap((page) => page.items)
-  if (items.length === 0)
-    return (
-      <Typography variant="body2" color="text.secondary" sx={{ px: 1.25 }}>
-        {listText.archiveEmpty}
-      </Typography>
-    )
-  return (
-    <>
-      <DialogRows items={items} labelledBy={labelledBy} currentId={currentId} now={new Date()} />
-      {list.hasNextPage ? (
-        <ShowMore
-          inset={1.5}
-          loading={list.isFetchingNextPage}
-          onMore={() => void list.fetchNextPage()}
-        />
-      ) : null}
-    </>
   )
 }
 
@@ -776,7 +760,7 @@ export function DialogList({
   const [words, setWords] = useState('')
   const query = useRestedWords(words).replace(/\s+/gu, ' ').trim()
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, minHeight: '100%' }}>
       <SearchField value={words} onChange={setWords} />
       {query !== '' ? (
         <SearchResults query={query} currentId={currentId} />
@@ -787,9 +771,9 @@ export function DialogList({
           ) : (
             <OneList currentId={currentId} />
           )}
-          <ArchiveSection currentId={currentId} />
         </>
       )}
+      <ArchiveButton />
     </Box>
   )
 }

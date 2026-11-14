@@ -1,4 +1,5 @@
 import type { AttemptCreditBudget } from '@repo/billing'
+import { clientInstructionsSection } from '@repo/domain'
 import {
   attemptBudgetRub,
   turnLeaseOf,
@@ -42,7 +43,6 @@ import {
   browserTaskInstructions,
   CONTINUE_PROMPT,
   openTaskInstructions,
-  PLAN_SECTION,
   requestedFormatsSection,
   turnInstructions,
   type PreviewFacts,
@@ -109,8 +109,6 @@ export interface ClientRequest {
   command: string | null
   /** The ids of the files sent with these words. */
   attachments?: readonly string[]
-  /** «Сначала план» (docs/plan/75-chat-input-output.md, ВВ12): these words ask for a plan only. */
-  plan?: true
   createdAt: Date
 }
 
@@ -208,6 +206,8 @@ export interface PassFacts {
    * (`browserContextOf`), and they are not said twice (docs/plan/61-chats-first.md, §5.7).
    */
   agentNotes?: string | null
+  /** The author's own instructions to the agent (docs/plan/76-agent-instructions.md, И2). */
+  clientInstructions?: string | null
   /**
    * The files bound to a task with a repository or to a chat without a site, in the order they
    * were sent: the latest go into the sandbox of its turn (turnInboxOf). Absent or empty — none.
@@ -319,17 +319,6 @@ export function promptOf(
     length += added
   }
   return kept.length > 0 ? kept.join('\n\n') : CONTINUE_PROMPT
-}
-
-/**
- * The newest words of the client ask for «Сначала план» (docs/plan/75-chat-input-output.md, ВВ12):
- * the client's own words, not the platform's of a command.
- */
-export function planRequested(requests: readonly ClientRequest[]): boolean {
-  const newest = requests.findLast(
-    (request) => request.text !== null && request.kind !== 'agent_command',
-  )
-  return newest?.plan === true
 }
 
 /** A turn with an action reads no words, and a plan has them: no model is told this. */
@@ -811,8 +800,6 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
   const inboxFacts = inbox?.paths.length
     ? { files: inbox.paths.length, omitted: inbox.omitted }
     : null
-  // «Сначала план» (docs/plan/75, ВВ12): the newest words of the client ask for a plan only.
-  const planning = !action && planRequested(facts.requests)
   const request: UnkeyedTurnRequest = {
     sandbox: {
       image: env.driver.image,
@@ -865,14 +852,10 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
                 inboxFacts,
                 browser?.guide ? { guide: browser.guide } : null,
               )
-      }${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${
-        planning ? PLAN_SECTION : ''
-      }`,
+      }${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${clientInstructionsSection(facts.clientInstructions)}`,
       egressProxy: SANDBOX_EGRESS_PROXY_URL,
       internet: true,
-      // A pass of «Сначала план» has no skills: it reads, it does not act (docs/plan/75, ВВ13).
-      ...(skills.length && !planning ? { skills: [...skills] } : {}),
-      ...(planning ? { plan: true as const } : {}),
+      ...(skills.length ? { skills: [...skills] } : {}),
     },
     input: action
       ? { prompt: ACTION_PROMPT, attachments: [], action }
