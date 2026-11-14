@@ -38,7 +38,11 @@ import {
   type SandboxSpec,
 } from './sandbox-provider.ts'
 import type { SiteLeaseFence, TurnBundleSource } from './turn-runner.ts'
-import { turnCredentialGrantSchema, type TurnCredentialGrant } from './turn-credential-grant.ts'
+import {
+  turnCredentialGrantSchema,
+  type TurnCredentialGrant,
+  type TurnCredentialPolicy,
+} from './turn-credential-grant.ts'
 
 /** Where a turn's container runs: core's own Docker (PoC, tests) or a runner VM. */
 export const turnExecutorKinds = ['local', 'runner'] as const
@@ -352,6 +356,13 @@ export interface TurnCredentialValues {
  */
 export interface TurnCredentialSource {
   issue(turn: TurnCredentialRef, grant: TurnCredentialGrant): Promise<TurnCredentialValues>
+  /**
+   * Whether the pool would give the task's next turn a key, asked before the turn holds a lease
+   * or an assignment: it writes nothing and throws only the pool's refusals (SUBSCRIPTION_BUSY,
+   * SUBSCRIPTION_WAIT, SUBSCRIPTION_OPERATOR_REQUIRED). `issue` still decides under the lease.
+   * Absent — the source has no pool to ask.
+   */
+  admit?(taskId: string, policy: TurnCredentialPolicy): Promise<void>
   /** null: the running agent's credentials cannot be recovered and the turn is given up. */
   recover(turn: TurnCredentialRef): Promise<TurnCredentialValues | null>
   /** Idempotent; after the turn ends or is given up. */

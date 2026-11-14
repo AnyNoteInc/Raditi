@@ -1242,6 +1242,31 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
     expect(probeAccounts).not.toHaveBeenCalled()
   })
 
+  it('answers for the pool before the turn is opened, and writes nothing either way', async () => {
+    const f = await fixture({ windows: false })
+    const credentials = new GatewayTurnCredentials({
+      prisma: db,
+      secrets: f.vault.port,
+      capacityOf: () => 'none',
+    })
+    const { deadlineAt: _deadline, boundSource: _source, ...policy } = f.grant
+    await expect(credentials.admit(f.task.id, policy)).resolves.toBeUndefined()
+    await db.subscriptionAccount.update({
+      where: { id: f.mainAccount.id },
+      data: { coolingUntil: new Date(Date.now() + 15 * 60_000) },
+    })
+    await expect(credentials.admit(f.task.id, policy)).rejects.toMatchObject({
+      code: 'SUBSCRIPTION_WAIT',
+    })
+    expect(await db.llmKey.count({ where: { taskId: f.task.id } })).toBe(0)
+    expect(await db.taskAccountBinding.count({ where: { taskId: f.task.id } })).toBe(0)
+    expect(f.vault.entries.has(turnCredentialPath(f.ref))).toBe(false)
+    // A task that is not there leaves the answer to the issue.
+    await expect(
+      credentials.admit('00000000-0000-7000-8000-000000000000', policy),
+    ).resolves.toBeUndefined()
+  })
+
   it('keeps the original Vault policy when the process crashed before SQL admission', async () => {
     const f = await fixture()
     const write = f.vault.kvCreateOnce.getMockImplementation()!

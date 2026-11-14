@@ -22,6 +22,7 @@ import {
   subscriptionWait,
   turnCredentialExpiresAt,
   turnCredentialGrantSchema,
+  turnCredentialPolicySchema,
   turnKeyBudgetVerdict,
   TURN_PUBLICATION_GRACE_MS,
   type AttemptBudgetInput,
@@ -32,6 +33,7 @@ import {
   type PoolDecision,
   type SecretStore,
   type TurnCredentialGrant,
+  type TurnCredentialPolicy,
   type TurnCredentialRef,
   type TurnCredentialSource,
   type TurnCredentialValues,
@@ -218,6 +220,29 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
       throw new TypeError('GatewayTurnCredentials needs the capacity of each backend')
     this.#capacityOf = options.capacityOf
     this.#fallbackOf = options.fallbackOf ?? (() => null)
+  }
+
+  /**
+   * The pool's answer before a turn is opened: the same selection the issue makes, read in a
+   * transaction that writes nothing, so a pool that sends the pass back leaves no lease, turn
+   * number, assignment or `task_turns` row behind. Throws only the pool's refusals; whatever
+   * else would refuse — and windows that need a probe — the issue decides under the lease.
+   */
+  async admit(taskId: string, policy: TurnCredentialPolicy): Promise<void> {
+    const grant = turnCredentialPolicySchema.parse(policy)
+    let decision: PoolDecision
+    try {
+      const selected = await this.#transaction(async (tx) => {
+        const task = await unfencedTask(tx, taskId)
+        return task === null ? null : this.#select(tx, null, grant, task)
+      })
+      if (selected === null) return
+      decision = selected.decision
+    } catch {
+      return
+    }
+    if (decision.kind === 'wait' && decision.probeAccountIds.length > 0) return
+    requireSelection(decision)
   }
 
   async issue(
@@ -556,10 +581,14 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
     return decision.kind === 'selected' ? decision.accountId : null
   }
 
+  /**
+   * `ref` null — the pool asked before the turn holds its lease (`admit`): no fence to check,
+   * nothing written; the issue selects again under the lease.
+   */
   async #select(
     tx: Transaction,
-    ref: TurnCredentialRef,
-    grant: TurnCredentialGrant,
+    ref: TurnCredentialRef | null,
+    grant: TurnCredentialPolicy,
     task: OwnedTask,
     requiredAccount?: string,
   ): Promise<Selection> {
@@ -593,7 +622,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
     // Never acquire account rows in an arbitrary order: lease fence → one provider pool lock.
     await lockSubscriptionPool(tx, grant.backend)
     task = { ...task, now: await clock(tx) }
-    const binding = await tx.taskAccountBinding.findUnique({ where: { taskId: ref.taskId } })
+    const binding = await tx.taskAccountBinding.findUnique({ where: { taskId: task.id } })
     if (binding && binding.driverId !== grant.driverId)
       throw conflict('The task binding uses another driver')
     // What a turn of the profile takes of the windows, measured (Л12); none — 5 % of a window.
@@ -652,7 +681,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
     )
     // Not llm_keys.last_refusal: any later refusal of the same key overwrites that one.
     const policyFlagged = await tx.taskEvent.findFirst({
-      where: { taskId: ref.taskId, type: policyFlaggedEvent },
+      where: { taskId: task.id, type: policyFlaggedEvent },
       select: { id: true },
     })
     const capacity = this.#capacityOf(grant.backend)
@@ -692,7 +721,7 @@ export class GatewayTurnCredentials implements TurnCredentialSource {
           )
         : snapshots,
     )
-    await assertCurrentFence(tx, ref)
+    if (ref !== null) await assertCurrentFence(tx, ref)
     // Windows nobody has dated are unknown ones, which the selection sends to a probe itself.
     const seenAt =
       decision.kind === 'selected'
@@ -820,6 +849,18 @@ async function clock(tx: Transaction): Promise<Date> {
   const rows = await tx.$queryRaw<{ now: Date }[]>`SELECT clock_timestamp() AS now`
   return rows[0]!.now
 }
+/** The task as `admit` reads it: without a lease, and without locking anything. */
+async function unfencedTask(tx: Transaction, taskId: string): Promise<OwnedTask | null> {
+  const rows = await tx.$queryRaw<OwnedTask[]>`
+    SELECT t.id, t.attempt, t.site_id AS "siteId", t.model_class::text AS "modelClass",
+      t.needs_repository AS "needsRepository", t.needs_browser AS "needsBrowser",
+      w.data_class::text AS "dataClass", clock_timestamp() AS now
+    FROM tasks t
+    JOIN workspaces w ON w.id = t.workspace_id
+    LEFT JOIN sites s ON s.id = t.site_id AND s.workspace_id = t.workspace_id
+    WHERE t.id = ${taskId}::uuid AND (t.site_id IS NULL OR s.id IS NOT NULL)`
+  return rows[0] ?? null
+}
 async function ownedTask(tx: Transaction, ref: TurnCredentialRef): Promise<OwnedTask> {
   // The turn sends what the client gave, so the 152-FZ gate reads the data class of the task's
   // workspace, with or without a site. A task row whose site is of another workspace owns
@@ -908,7 +949,7 @@ async function revocationRequested(tx: Transaction, ref: TurnCredentialRef): Pro
 async function requireKeyBudget(
   tx: Transaction,
   task: OwnedTask,
-  grant: TurnCredentialGrant,
+  grant: TurnCredentialPolicy,
   profile: Profile,
   price: Price,
 ): Promise<void> {
