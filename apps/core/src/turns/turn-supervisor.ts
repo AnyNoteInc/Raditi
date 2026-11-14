@@ -99,6 +99,9 @@ export class TurnSupervisor {
     plan.context.llm.reasoningEffort = parsed.data.reasoningEffort
     await this.assertLaunchable(plan)
     const labels = request.sandbox.labels
+    // A pool that would send the pass back does so before anything of the turn is written: no
+    // lease, no lifecycle entry, no assignment, the task's turn number unmoved.
+    await this.deps.credentials.admit?.(labels.taskId, parsed.data)
     const acquiredAt = performance.now()
     const lease = await this.deps.leases.acquire({
       siteId: labels.siteId,

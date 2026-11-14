@@ -17,6 +17,7 @@ import {
   SANDBOX_SECRETS_DIR,
   sandboxCommandFailed,
   snapshotHasCredential,
+  subscriptionBusy,
   TimeoutError,
   TURN_FINALIZE_MS,
   TURN_LEASE_TTL_MS,
@@ -38,6 +39,7 @@ import {
   type SnapshotMetadata,
   type SnapshotReference,
   type TurnBundleSource,
+  type TurnCredentialSource,
   type TurnEvidence,
   type TurnExecutor,
   type TurnRestoreSource,
@@ -707,6 +709,24 @@ describe.each(executorKinds)('PoC TurnSupervisor (%s executor)', (kind) => {
     f.request.workspace = { ...f.request.workspace, expectedBranchSha: null }
     await expect(f.run()).rejects.toThrow('requires content rollback')
     expect(f.leases.acquire).not.toHaveBeenCalled()
+    expect(f.credentials.issue).not.toHaveBeenCalled()
+    expect(f.sandboxes.create).not.toHaveBeenCalled()
+  })
+
+  it('asks the pool before the lease and leaves nothing of the turn when it sends the pass back', async () => {
+    const f = fixture()
+    const admit = vi.fn<NonNullable<TurnCredentialSource['admit']>>(async () => {
+      throw subscriptionBusy(new Date(Date.now() + 60_000))
+    })
+    f.credentials.admit = admit
+    const open = vi.spyOn(f.assignments, 'open')
+    await expect(f.run()).rejects.toMatchObject({ code: 'SUBSCRIPTION_BUSY' })
+    expect(admit).toHaveBeenCalledWith(
+      labels.taskId,
+      expect.objectContaining({ backend: expect.any(String) }),
+    )
+    expect(f.leases.acquire).not.toHaveBeenCalled()
+    expect(open).not.toHaveBeenCalled()
     expect(f.credentials.issue).not.toHaveBeenCalled()
     expect(f.sandboxes.create).not.toHaveBeenCalled()
   })
