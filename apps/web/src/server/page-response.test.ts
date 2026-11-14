@@ -30,7 +30,7 @@ describe('the headers of a page (docs/plan/67-agent-documents.md, Д3; docs/plan
       'Content-Type': 'text/html; charset=utf-8',
       'Content-Length': '7',
       'Content-Security-Policy':
-        "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; script-src 'unsafe-inline'; default-src 'none'; style-src 'unsafe-inline'; img-src data: blob: https:; font-src data: blob: https:; media-src data: blob: https:; connect-src 'none'; form-action 'none'; frame-src 'none'; frame-ancestors https://raditi.ru; object-src 'none'; worker-src 'none'; manifest-src 'none'; base-uri 'none'",
+        "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; script-src 'unsafe-inline'; default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data: blob:; media-src data: blob:; connect-src 'none'; form-action 'none'; frame-src 'none'; frame-ancestors https://raditi.ru; object-src 'none'; worker-src 'none'; manifest-src 'none'; base-uri 'none'",
       'Cache-Control': 'no-store',
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'no-referrer',
@@ -45,8 +45,13 @@ describe('the headers of a page (docs/plan/67-agent-documents.md, Д3; docs/plan
   it('are the policy of a published page but for its framing: one CSP for both plans', () => {
     const policy = pageHeaders(APP, 7)['Content-Security-Policy']!
     expect(policy).toBe(
-      PAGE_CSP.replace("frame-ancestors 'none'", 'frame-ancestors https://raditi.ru'),
+      PAGE_CSP.replace("frame-ancestors 'none'", 'frame-ancestors https://raditi.ru').replaceAll(
+        ' https:;',
+        ';',
+      ),
     )
+    // A page of a chat loads nothing by https: (Д3), unlike a published one (Ст9).
+    expect(policy).not.toContain('https:;')
     // The frame of the cabinet carries the very sandbox of the policy.
     expect(policy.split('; ')[0]).toBe(`sandbox ${PAGE_SANDBOX}`)
     for (const forbidden of ['allow-same-origin', 'allow-forms', 'allow-top-navigation'])

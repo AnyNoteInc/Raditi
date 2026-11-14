@@ -260,7 +260,7 @@
   - `robots.txt` — `Disallow: /` (`PAGE_ROBOTS_TXT`).
   - План 67 держал свою политику `/v/` (`PAGE_SANDBOX` в `@repo/domain/preview/hostname`,
     `pageContentSecurityPolicy`). С 14.11.2026 `/v/` идёт на этих константах: `pagePolicy('html', framedBy)` —
-    та же `PAGE_CSP`, только `frame-ancestors` — origin кабинета; `PAGE_SANDBOX` — в `@repo/domain/pages`, его же
+    та же `PAGE_CSP`, только `frame-ancestors` — origin кабинета, а картинки, шрифты и медиа — без `https:`; `PAGE_SANDBOX` — в `@repo/domain/pages`, его же
     несёт атрибут `sandbox` фрейма вкладки «Документы» (§9, «Ст9 после слияния плана 67»).
 - **Ст10. Slug** — 16 случайных байт, base32 в нижнем регистре без выравнивания: 26 знаков, метка DNS до 63
   (`pageSlugSchema`, `newPageSlug`). Хост страницы — ровно `<slug>.<PAGES_BASE_DOMAIN>`, одна метка. Другие уровни,
@@ -1384,7 +1384,8 @@ p = 1, только эти параметры, и окно попыток. Пе�
 в репозитории одна семья CSP страниц.
 
 - `@repo/domain/pages`: `pagePolicy(kind, framedBy?)` строит `PAGE_CSP` и `PAGE_READING_CSP`; строки этих констант
-  не изменились. `framedBy` ставит origin кабинета в `frame-ancestors` вместо `'none'`, и
+  не изменились. `framedBy` ставит origin кабинета в `frame-ancestors` вместо `'none'`, убирает `https:` из
+  `img-src`, `font-src` и `media-src`, и
   `pageResponseHeaders(kind, { framedBy })` отдаёт такой странице `Cache-Control: no-store` (адрес живёт 5 минут).
   `PAGE_SANDBOX` (`allow-scripts allow-popups allow-popups-to-escape-sandbox`) переехал сюда из
   `@repo/domain/preview/hostname`; `pageContentSecurityPolicy` удалён.
@@ -1397,10 +1398,13 @@ p = 1, только эти параметры, и окно попыток. Пе�
 принял 13.11.2026 «согласен»; Ст9):
 - нет `allow-modals` и `allow-downloads`: `alert()` и скачивание из страницы не работают (скачать файл — кнопка
   вкладки);
-- картинки, шрифты и медиа по `https:` грузятся, как у опубликованной страницы, — та же принятая утечка адресом
-  картинки (Ст9);
+- картинки, шрифты и медиа по `https:` не грузятся, как и прежде: страница чата может держать то, что клиент не
+  собирался публиковать, а утечку адресом картинки владелец принял только для опубликованной страницы (Ст9).
+  Сначала срез открыл `https:` и здесь; автоматическое ревью безопасности указало на это, и правило плана 67
+  вернулось;
 - добавились `Cross-Origin-Resource-Policy: same-origin` и `manifest-src 'none'`.
 
 Проверки: `pnpm turbo run typecheck lint test` пакетов `@repo/domain`, `web`, `preview` и `e2e` — 12 задач;
 `pnpm --filter e2e test:documents` — 1 из 1 (враждебная страница во фрейме кабинета в Chromium; внешняя картинка
-теста заменена на `data:`, чтобы тест не ходил в интернет).
+теста перехватывается маршрутом Playwright: тест видит запрос, только если CSP его пропустила, и в интернет не
+ходит; контроль — с `https:` в политике фрейма тест падает на `https://example.com/track.png`).

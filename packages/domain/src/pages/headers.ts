@@ -9,17 +9,22 @@
  * a page is the platform's form, never the page's.
  */
 
-/** The directives of a page after its script, up to its framing. */
-const PAGE_POLICY_TAIL = [
-  "default-src 'none'",
-  "style-src 'unsafe-inline'",
+/** What a published page loads: its own data and anything by `https:` (the leak Ст9 accepted). */
+const PUBLISHED_RESOURCES = [
   'img-src data: blob: https:',
   'font-src data: blob: https:',
   'media-src data: blob: https:',
-  "connect-src 'none'",
-  "form-action 'none'",
-  "frame-src 'none'",
 ]
+
+/**
+ * What a page of a chat framed by the cabinet loads: its own data only. It may hold what the client
+ * never meant to publish, and the leak by the address of a picture was accepted for a published
+ * page alone (Ст9) — the frame keeps the narrower rule of plan 67 (Д3).
+ */
+const FRAMED_RESOURCES = ['img-src data: blob:', 'font-src data: blob:', 'media-src data: blob:']
+
+/** The directives of a page after what it loads, up to its framing. */
+const PAGE_POLICY_TAIL = ["connect-src 'none'", "form-action 'none'", "frame-src 'none'"]
 
 /** The directives of a page after its framing. */
 const PAGE_POLICY_END = [
@@ -44,13 +49,16 @@ const PAGE_READING_SANDBOX = 'sandbox allow-popups allow-popups-to-escape-sandbo
 /**
  * The policy of a page: `html` — the agent wrote it, its inline scripts run; `reading` — the
  * platform drew it from Markdown (a document, Ст11), no script at all. `framedBy` — the origin of
- * the cabinet, the only one that may frame it (a page of a chat on `/v/`, plan 67); none — the
- * page is never framed (a published page, plan 69).
+ * the cabinet, the only one that may frame it (a page of a chat on `/v/`, plan 67), and the page
+ * loads nothing by `https:`; none — the page is never framed (a published page, plan 69).
  */
 export function pagePolicy(kind: 'html' | 'reading', framedBy?: string): string {
   return [
     kind === 'html' ? PAGE_CSP_SANDBOX : PAGE_READING_SANDBOX,
     kind === 'html' ? "script-src 'unsafe-inline'" : "script-src 'none'",
+    "default-src 'none'",
+    "style-src 'unsafe-inline'",
+    ...(framedBy ? FRAMED_RESOURCES : PUBLISHED_RESOURCES),
     ...PAGE_POLICY_TAIL,
     `frame-ancestors ${framedBy ?? "'none'"}`,
     ...PAGE_POLICY_END,

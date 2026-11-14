@@ -132,7 +132,10 @@ describe('page headers', () => {
     // origin alone and never stored.
     const framed = pageResponseHeaders('html', { framedBy: 'https://raditi.ru' })
     expect(framed['Content-Security-Policy']).toBe(
-      PAGE_CSP.replace("frame-ancestors 'none'", 'frame-ancestors https://raditi.ru'),
+      PAGE_CSP.replace("frame-ancestors 'none'", 'frame-ancestors https://raditi.ru').replaceAll(
+        ' https:;',
+        ';',
+      ),
     )
     expect(framed['Cache-Control']).toBe('no-store')
     expect(PAGE_CSP).toBe(pagePolicy('html'))

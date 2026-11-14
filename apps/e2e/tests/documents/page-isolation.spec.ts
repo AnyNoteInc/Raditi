@@ -11,7 +11,7 @@ import { PAGE_SANDBOX, pageResponseHeaders } from '@repo/domain/pages'
 // nothing. Only Chromium and a free port: no database or web of the stand.
 
 const HOSTILE = `<!doctype html><html lang="ru"><meta charset="utf-8"><title>Отчёт</title>
-<h1>Отчёт</h1><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><form id="f" action="/steal" method="post"><input name="p" value="1"></form>
+<h1>Отчёт</h1><img src="https://example.com/track.png"><form id="f" action="/steal" method="post"><input name="p" value="1"></form>
 <script>
 const tried = {}
 try { tried.parent = String(parent.document.cookie) } catch (e) { tried.parent = 'blocked' }
@@ -60,6 +60,13 @@ test.afterAll(async () => {
 })
 
 test('a page of the agent reaches neither the cabinet nor the network', async ({ page }) => {
+  // What would leave for the outside world: the route sees a request only past the CSP, and
+  // answers it itself, so the test never reaches the internet either way.
+  const outside: string[] = []
+  await page.route('https://example.com/**', async (route) => {
+    outside.push(route.request().url())
+    await route.fulfill({ status: 204 })
+  })
   await page.goto(`http://localhost:${port}/chat`)
   await expect
     .poll(() => page.evaluate(() => (window as unknown as { reports: unknown[] }).reports.length))
@@ -77,6 +84,8 @@ test('a page of the agent reaches neither the cabinet nor the network', async ({
   expect(tried.fetch).toBe('blocked')
   // The cabinet stays where it was, and nothing but the page itself was asked for.
   expect(page.url()).toBe(`http://localhost:${port}/chat`)
+  // Not even a picture by https: leaves — a page of a chat loads its own data only.
+  expect(outside).toEqual([])
   expect(hits.filter((hit) => hit.startsWith('pages.'))).toEqual([
     `pages.localhost:${port} GET /v/token`,
   ])
