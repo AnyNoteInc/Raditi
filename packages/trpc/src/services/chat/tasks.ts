@@ -129,6 +129,8 @@ export interface CreateDialogInput {
   attachments?: readonly string[]
   /** How hard the model thinks (owner's request of 26.10.2026); absent — `high`, as before. */
   effort?: ReasoningEffort
+  /** «Сначала план» (docs/plan/75-chat-input-output.md, ВВ12): the first pass only plans. */
+  plan?: boolean
   now: Date
 }
 
@@ -275,6 +277,7 @@ export async function createDialog(
     requestId: taskId,
     text,
     ...requestAttachments(attachments),
+    ...(input.plan ? { plan: true as const } : {}),
   })
   if (siteId === null && !UUID_V7.safeParse(taskId).success) throw taskIdInvalid()
 
@@ -388,6 +391,8 @@ export interface DialogMessageInput {
   text: string
   /** Files of the message (docs/plan/57, Б26), lowercase: bound to the task with the words. */
   attachments?: readonly string[]
+  /** «Сначала план» (docs/plan/75, ВВ12): the pass of these words only plans. */
+  plan?: boolean
   now: Date
 }
 
@@ -470,7 +475,10 @@ export async function postDialogMessage(
   const { userId, now } = input
   const requestId = input.requestId.toLowerCase()
   const text = requestText(input.text)
-  const attachments = requestAttachments(input.attachments ?? [])
+  const attachments = {
+    ...requestAttachments(input.attachments ?? []),
+    ...(input.plan ? { plan: true as const } : {}),
+  }
   // Checked before the transaction, so the words are refused in the client's terms.
   requestPayload({ v: 1, kind: 'first', authorId: userId, requestId, text, ...attachments })
 
@@ -542,6 +550,9 @@ export async function postDialogMessage(
       siteId: task.siteId,
     })
     const requestEventId = await writeRequest(tx, task.id, payload)
+    // A message to an archived chat brings it back to the list (docs/plan/75, ВВ21).
+    await tx.$executeRaw`
+      UPDATE tasks SET archived_at = NULL WHERE id = ${task.id}::uuid AND archived_at IS NOT NULL`
     await enqueueAgentTurn(tx, { taskId: task.id, attempt, requestEventId })
     return { requestEventId, repeated: false }
   })
@@ -988,6 +999,8 @@ export async function stopDialog(
   input: { userId: string; requestId: string; now: Date },
 ): Promise<{ requestEventId: string; state: 'cancelled' | 'stopping' }> {
   const { userId, requestId, now } = input
+  // A chat that stops keeps no words for a next pass (docs/plan/75, ВВ5).
+  await tx.taskQueuedMessage.deleteMany({ where: { taskId: task.id } })
   const requestEventId = await writeRequest(tx, task.id, {
     v: 1,
     kind: 'command',

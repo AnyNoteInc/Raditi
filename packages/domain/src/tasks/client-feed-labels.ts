@@ -472,6 +472,8 @@ export const feedRowText = Object.freeze({
   continue: 'Вы попросили продолжить работу',
   /** `feed.request` of the kind `resume`: «Продолжить работу агента» in the browser. */
   resume: 'Вы вернули управление агенту',
+  /** `feed.request` of the kind `interrupt`: «Отправить сейчас» (docs/plan/75, ВВ4). */
+  interrupt: 'Вы прервали агента, чтобы отправить новое сообщение',
   /** `feed.request` of a kind added later, when it carries no text. */
   otherRequest: 'Вы продолжили задачу.',
 })

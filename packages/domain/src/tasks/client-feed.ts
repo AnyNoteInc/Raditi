@@ -129,7 +129,10 @@ const limits = feedLimits
 // `continue` — «Продолжить» after a question of the platform about credits (Р8), the kind the
 // design reserved for it; `resume` — «Продолжить работу агента» of a task in the browser
 // (docs/plan/57-browser-tasks.md, Б16); `agent_command` — a command that is a pass of the agent on
-// the platform's words: paid and moving the dialog on, unlike `command` (docs/plan/61, §5.2).
+// the platform's words: paid and moving the dialog on, unlike `command` (docs/plan/61, §5.2);
+// `queued` — words the client wrote while the agent worked, sent by core when the pass ended
+// (docs/plan/75-chat-input-output.md, ВВ1, ВВ2); `interrupt` — «Отправить сейчас» of them: the
+// pass under way stops and the next one starts with them (ВВ4).
 export const feedRequestKinds = [
   'first',
   'answer',
@@ -139,6 +142,8 @@ export const feedRequestKinds = [
   'continue',
   'resume',
   'agent_command',
+  'queued',
+  'interrupt',
 ] as const
 export type FeedRequestKind = (typeof feedRequestKinds)[number]
 
@@ -413,15 +418,24 @@ const requestBase = {
 }
 // Files come with words. Design reading: a retry is a press, so it carries none.
 const attachments = z.array(z.uuid()).max(limits.attachments).optional()
+// «Сначала план» (docs/plan/75-chat-input-output.md, ВВ12): the pass of these words only plans.
+const plan = z.literal(true).optional()
 
 /** `feed.request` v1 — what the customer wrote or pressed. */
 export const feedRequestPayloadSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ ...requestBase, kind: z.literal('first'), text: requestText, attachments }),
+  z.strictObject({
+    ...requestBase,
+    kind: z.literal('first'),
+    text: requestText,
+    attachments,
+    plan,
+  }),
   z.strictObject({
     ...requestBase,
     kind: z.literal('answer'),
     text: requestText,
     attachments,
+    plan,
     /**
      * The `feed.question` row this answers, or the `feed.result` or `feed.failure` that left the
      * dialog open (`next: 'awaiting_user'`, owner's decisions of 26.10.2026 and 28.10.2026), or
@@ -446,6 +460,7 @@ export const feedRequestPayloadSchema = z.discriminatedUnion('kind', [
     kind: z.literal('revision'),
     text: requestText,
     attachments,
+    plan,
     /** The candidate revision the words are about. */
     candidateRevision: z.number().int().min(1).max(limits.turn),
   }),
@@ -467,6 +482,18 @@ export const feedRequestPayloadSchema = z.discriminatedUnion('kind', [
     kind: z.literal('agent_command'),
     command: z.enum(feedAgentCommandIds),
   }),
+  // Words of the queue of the chat, written by core when the pass they waited for ended (ВВ2):
+  // they answer whatever that pass came to, so they name no row. `requestId` — the id the
+  // browser gave the words when it queued them.
+  z.strictObject({
+    ...requestBase,
+    kind: z.literal('queued'),
+    text: requestText,
+    attachments,
+    plan,
+  }),
+  // «Отправить сейчас» (ВВ4): a press, the words follow as `queued` once the pass has stopped.
+  z.strictObject({ ...requestBase, kind: z.literal('interrupt') }),
 ])
 export type FeedRequestPayload = z.infer<typeof feedRequestPayloadSchema>
 
@@ -543,6 +570,8 @@ export const feedResultPayloadSchema = z.strictObject({
   risk: z.enum(risks),
   /** What a task in the browser left on the site, as the platform confirmed it there (Б23). */
   objects,
+  /** The answer of a pass of «Сначала план» (docs/plan/75, ВВ14): «Выполнить план» under it. */
+  plan: z.literal(true).optional(),
 })
 export type FeedResultPayload = z.infer<typeof feedResultPayloadSchema>
 
@@ -953,6 +982,7 @@ const readRequest = {
   first: z.object({
     kind: z.literal('first'),
     text: z.string().min(1).max(limits.requestText),
+    plan: z.literal(true).optional().catch(undefined),
     authorId: z.uuid(),
     requestId: z.uuid(),
     attachments,
@@ -960,6 +990,7 @@ const readRequest = {
   answer: z.object({
     kind: z.literal('answer'),
     text: z.string().min(1).max(limits.requestText),
+    plan: z.literal(true).optional().catch(undefined),
     authorId: z.uuid(),
     requestId: z.uuid(),
     answersEventId: feedEventIdSchema,
@@ -974,6 +1005,7 @@ const readRequest = {
   revision: z.object({
     kind: z.literal('revision'),
     text: z.string().min(1).max(limits.requestText),
+    plan: z.literal(true).optional().catch(undefined),
     authorId: z.uuid(),
     requestId: z.uuid(),
     candidateRevision: revisionNo,
@@ -1003,6 +1035,19 @@ const readRequest = {
     authorId: z.uuid(),
     requestId: z.uuid(),
     command: known(feedAgentCommandIds, null),
+  }),
+  queued: z.object({
+    kind: z.literal('queued'),
+    text: z.string().min(1).max(limits.requestText),
+    plan: z.literal(true).optional().catch(undefined),
+    authorId: z.uuid(),
+    requestId: z.uuid(),
+    attachments,
+  }),
+  interrupt: z.object({
+    kind: z.literal('interrupt'),
+    authorId: z.uuid(),
+    requestId: z.uuid(),
   }),
 } satisfies Record<FeedRequestKind, z.ZodType>
 // A kind added later: the text is shown when there is one.
@@ -1061,6 +1106,7 @@ const readResult = z.object({
   needsApproval: z.boolean(),
   risk: known(risks, null),
   objects: readObjects,
+  plan: z.literal(true).optional().catch(undefined),
 })
 
 const readFailure = z.object({
@@ -1222,6 +1268,8 @@ export type FeedEvent =
       | z.infer<typeof readRequest.continue>
       | z.infer<typeof readRequest.resume>
       | z.infer<typeof readRequest.agent_command>
+      | z.infer<typeof readRequest.queued>
+      | z.infer<typeof readRequest.interrupt>
       | ({ kind: 'other' } & z.infer<typeof readOtherRequest>)
     ))
   | { type: 'feed.step'; turn: number; attempt: number; step: FeedStep }

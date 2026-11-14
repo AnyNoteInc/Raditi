@@ -55,6 +55,12 @@ export const notificationCatalog = {
     payload: mailDataSchemas['payment-failed'].extend(recipient),
     deliver: ({ to, ...data }, { mailer }) => mailer.sendMail({ kind: 'payment-failed', to, data }),
   }),
+  // The agent of a chat waits for its client, who is not looking (docs/plan/75, ВВ9).
+  'chat.waiting': defineNotification({
+    channel: 'email',
+    payload: mailDataSchemas['chat-waiting'].extend(recipient),
+    deliver: ({ to, ...data }, { mailer }) => mailer.sendMail({ kind: 'chat-waiting', to, data }),
+  }),
   'billing.subscription_ended': defineNotification({
     channel: 'email',
     payload: mailDataSchemas['subscription-ended'].extend(recipient),

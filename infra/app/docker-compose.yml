@@ -42,6 +42,10 @@ x-platform-env: &platform-env
   # Vault serves TLS from the internal CA (spec §19). Node reads this variable at process start
   # only, never from --env-file; the CA is rendered into the service's own secret directory.
   NODE_EXTRA_CA_CERTS: /run/raditi/vault-ca.pem
+  # The public VAPID key of Web Push (docs/plan/75-chat-input-output.md, ВВ8): not a secret; web
+  # subscribes browsers with it, core signs with it and the private key of its app.env. Empty —
+  # no notifications in browsers.
+  WEB_PUSH_VAPID_PUBLIC: ${WEB_PUSH_VAPID_PUBLIC:-}
 
 # Vault by its pinned TLS name for every service that talks to it: no resolver is involved, and
 # core writes the turn keys to the very host llm reads them from.
@@ -212,6 +216,9 @@ services:
       BETTER_AUTH_URL: https://${APP_DOMAIN}
       HOSTNAME: 0.0.0.0
       PORT: '3000'
+      # Dictation (docs/plan/75-chat-input-output.md, ВВ18): the folder of the SpeechKit key; not a
+      # secret, the key itself is in app.env
+      YANDEX_SPEECHKIT_FOLDER_ID: ${YANDEX_SPEECHKIT_FOLDER_ID:-}
     extra_hosts: *vault-host
     # No `ports:` and no network shared with core: only Traefik reaches web, so X-Forwarded-For
     # is always the single address Traefik set.

@@ -9,14 +9,20 @@ import type { DialogListItem, DialogListPage } from './chat-types'
 import { DialogList } from './dialog-list'
 import { declared } from './testing'
 
-const { listPage, folders, chatGet, segment, rename, remove } = vi.hoisted(() => ({
-  listPage: vi.fn<(input: { folder?: string; cursor?: string }) => Promise<DialogListPage>>(),
-  folders: vi.fn<() => Promise<{ folders: unknown[] }>>(),
-  chatGet: vi.fn(),
-  segment: { current: null as string | null },
-  rename: vi.fn<(input: { taskId: string; title: string }) => Promise<{ title: string }>>(),
-  remove: vi.fn<(input: { taskId: string }) => Promise<{ removed: true }>>(),
-}))
+const { listPage, folders, chatGet, segment, rename, remove, pin, archive, search } = vi.hoisted(
+  () => ({
+    listPage: vi.fn<(input: { folder?: string; cursor?: string }) => Promise<DialogListPage>>(),
+    folders: vi.fn<() => Promise<{ folders: unknown[] }>>(),
+    chatGet: vi.fn(),
+    segment: { current: null as string | null },
+    rename: vi.fn<(input: { taskId: string; title: string }) => Promise<{ title: string }>>(),
+    remove: vi.fn<(input: { taskId: string }) => Promise<{ removed: true }>>(),
+    pin: vi.fn<(input: { taskId: string; pinned: boolean }) => Promise<{ pinned: boolean }>>(),
+    archive:
+      vi.fn<(input: { taskId: string; archived: boolean }) => Promise<{ archived: boolean }>>(),
+    search: vi.fn<(input: { query: string }) => Promise<{ items: DialogListItem[] }>>(),
+  }),
+)
 
 const mutation = <I, O>(fn: (input: I) => Promise<O>) => ({
   mutationOptions: () => ({ mutationFn: fn }),
@@ -29,10 +35,20 @@ vi.mock('next/navigation', () => ({
 }))
 vi.mock('@/trpc/client', () => ({
   useTRPCClient: () => ({
-    task: { list: { query: listPage }, folders: { query: folders }, get: { query: chatGet } },
+    task: {
+      list: { query: listPage },
+      folders: { query: folders },
+      get: { query: chatGet },
+      search: { query: search },
+    },
   }),
   useTRPC: () => ({
-    task: { rename: mutation(rename), remove: mutation(remove) },
+    task: {
+      rename: mutation(rename),
+      remove: mutation(remove),
+      pin: mutation(pin),
+      archive: mutation(archive),
+    },
     billing: { usage: { queryKey: () => ['billing.usage'] } },
   }),
 }))
@@ -53,6 +69,8 @@ function dialog(id: string, patch: Partial<DialogListItem> = {}): DialogListItem
     createdAt: now,
     updatedAt: now,
     project: null,
+    pinned: false,
+    archived: false,
     ...patch,
   }
 }
@@ -80,6 +98,7 @@ beforeEach(() => {
 describe('the list of dialogs', () => {
   it('puts the dialogs that wait for the client first, each with its status in words', async () => {
     listPage.mockResolvedValue({
+      pinned: [],
       items: [
         dialog('1', { title: 'Новый баннер', status: 'running' }),
         dialog('2', { title: 'Цена латте', status: 'awaiting_approval' }),
@@ -106,6 +125,7 @@ describe('the list of dialogs', () => {
   // nothing — the dialog is not among those that wait, and says so.
   it('says «Агент ответил» of a dialog that waits for nothing, with no hint and not as waiting', async () => {
     listPage.mockResolvedValue({
+      pinned: [],
       items: [dialog('4', { title: 'Про сайт', status: 'awaiting_user', answered: true })],
       nextCursor: null,
     })
@@ -118,6 +138,7 @@ describe('the list of dialogs', () => {
 
   it('says that the request is undone of a chat `/undo` left waiting for nothing', async () => {
     listPage.mockResolvedValue({
+      pinned: [],
       items: [
         dialog('4', { title: 'Про сайт', status: 'awaiting_user', answered: true, rewound: true }),
       ],
@@ -133,6 +154,7 @@ describe('the list of dialogs', () => {
   // The owner, 06.11.2026: «просто помечай, что упало с ошибкой» — nothing to confirm or answer.
   it('says «Ошибка» of a chat whose last pass failed, with no hint and not as waiting', async () => {
     listPage.mockResolvedValue({
+      pinned: [],
       items: [dialog('4', { title: 'Про сайт', status: 'awaiting_user', failed: true })],
       nextCursor: null,
     })
@@ -146,6 +168,7 @@ describe('the list of dialogs', () => {
 
   it('renames a dialog in place from the menu of its row, and deletes one after asking', async () => {
     listPage.mockResolvedValue({
+      pinned: [],
       items: [dialog('1'), dialog('2', { title: 'Цена латте' })],
       nextCursor: null,
     })
@@ -173,6 +196,7 @@ describe('the list of dialogs', () => {
 
   it('speaks of the site in the window of deleting only for a chat with a project', async () => {
     listPage.mockResolvedValue({
+      pinned: [],
       items: [
         dialog('1', { title: 'Без проекта' }),
         dialog('2', {
@@ -199,7 +223,7 @@ describe('the list of dialogs', () => {
   // MUI lets a menu item shrink to its content from `sm` up by a media query of its own, which wins
   // over a plain height: the pressing area of a finger (DESIGN.md) has to hold on every width.
   it('keeps the items of the menu of a row 44px high on every width', async () => {
-    listPage.mockResolvedValue({ items: [dialog('1')], nextCursor: null })
+    listPage.mockResolvedValue({ pinned: [], items: [dialog('1')], nextCursor: null })
     showList()
     fireEvent.click(
       await screen.findByRole('button', { name: 'Действия с чатом: Поменять цену капучино' }),
@@ -214,7 +238,7 @@ describe('the list of dialogs', () => {
   })
 
   it('keeps the old name on Escape', async () => {
-    listPage.mockResolvedValue({ items: [dialog('1')], nextCursor: null })
+    listPage.mockResolvedValue({ pinned: [], items: [dialog('1')], nextCursor: null })
     showList()
     fireEvent.click(
       await screen.findByRole('button', { name: 'Действия с чатом: Поменять цену капучино' }),
@@ -228,7 +252,7 @@ describe('the list of dialogs', () => {
   })
 
   it('marks the open dialog as the current page', async () => {
-    listPage.mockResolvedValue({ items: [dialog('1'), dialog('2')], nextCursor: null })
+    listPage.mockResolvedValue({ pinned: [], items: [dialog('1'), dialog('2')], nextCursor: null })
     segment.current = dialog('2').id.toUpperCase()
     showList()
     const links = await screen.findAllByRole('link')
@@ -237,8 +261,12 @@ describe('the list of dialogs', () => {
 
   it('reads the next page on request', async () => {
     listPage
-      .mockResolvedValueOnce({ items: [dialog('1')], nextCursor: 'c1' })
-      .mockResolvedValueOnce({ items: [dialog('2', { title: 'Второй' })], nextCursor: null })
+      .mockResolvedValueOnce({ pinned: [], items: [dialog('1')], nextCursor: 'c1' })
+      .mockResolvedValueOnce({
+        pinned: [],
+        items: [dialog('2', { title: 'Второй' })],
+        nextCursor: null,
+      })
     showList()
     fireEvent.click(await screen.findByRole('button', { name: 'Показать ещё' }))
     expect(await screen.findByText('Второй')).toBeTruthy()
@@ -247,13 +275,17 @@ describe('the list of dialogs', () => {
   })
 
   it('names a dialog without a title and says when there are none', async () => {
-    listPage.mockResolvedValueOnce({ items: [dialog('1', { title: null })], nextCursor: null })
+    listPage.mockResolvedValueOnce({
+      pinned: [],
+      items: [dialog('1', { title: null })],
+      nextCursor: null,
+    })
     showList()
     expect(await screen.findByText('Чат без названия')).toBeTruthy()
   })
 
   it('says there are no dialogs yet', async () => {
-    listPage.mockResolvedValue({ items: [], nextCursor: null })
+    listPage.mockResolvedValue({ pinned: [], items: [], nextCursor: null })
     showList()
     expect(
       await screen.findByText('Чатов пока нет. Напишите, что нужно сделать, — чат появится здесь.'),
@@ -262,7 +294,7 @@ describe('the list of dialogs', () => {
 
   it('offers to read the list again when it failed', async () => {
     listPage.mockRejectedValueOnce(new Error('offline'))
-    listPage.mockResolvedValue({ items: [dialog('1')], nextCursor: null })
+    listPage.mockResolvedValue({ pinned: [], items: [dialog('1')], nextCursor: null })
     showList()
     expect(await screen.findByText('Не удалось загрузить чаты.')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Повторить' }))
@@ -273,6 +305,7 @@ describe('the list of dialogs', () => {
 describe('the row of a chat', () => {
   it('names the project of a chat in one list, and nothing for a chat without one', async () => {
     listPage.mockResolvedValue({
+      pinned: [],
       items: [
         dialog('1', {
           title: 'С проектом',
@@ -306,6 +339,7 @@ describe('the chats by projects (docs/plan/61-chats-first.md, К23)', () => {
       ],
     })
     listPage.mockImplementation(async ({ folder: asked }) => ({
+      pinned: [],
       items:
         asked === OTHER_ID
           ? [dialog('7', { title: 'Цены на диагностику', project: grand })]
@@ -318,9 +352,14 @@ describe('the chats by projects (docs/plan/61-chats-first.md, К23)', () => {
 
   it('stands the folders as the server counted them, read only once one is open', async () => {
     showList({ grouped: true })
-    const names = (await screen.findAllByRole('button')).filter((button) =>
-      button.hasAttribute('aria-expanded'),
-    )
+    await screen.findByRole('button', { name: /Кофейня/ })
+    // «Архив» under the folders opens too, and is not a folder (docs/plan/75, ВВ21).
+    const names = screen
+      .getAllByRole('button')
+      .filter(
+        (button) =>
+          button.hasAttribute('aria-expanded') && !plain(button.textContent).startsWith('Архив'),
+      )
     expect(names.map((button) => plain(button.textContent))).toEqual([
       expect.stringContaining('Кофейня «Крошка»'),
       expect.stringContaining('Автосервис «Гранд»'),
@@ -425,5 +464,63 @@ describe('the chats by projects (docs/plan/61-chats-first.md, К23)', () => {
     expect(
       await screen.findByText('Чатов пока нет. Напишите, что нужно сделать, — чат появится здесь.'),
     ).toBeTruthy()
+  })
+})
+
+describe('pinned, archived and found chats (docs/plan/75, ВВ21)', () => {
+  it('stand the pinned at the head of the list, under their own heading', async () => {
+    listPage.mockResolvedValue({
+      pinned: [dialog('9', { title: 'Закреплённый чат', pinned: true })],
+      items: [dialog('1')],
+      nextCursor: null,
+    })
+    showList()
+    const heading = await screen.findByText('Закреплённые')
+    const group = heading.parentElement as HTMLElement
+    expect(within(group).getByText('Закреплённый чат')).toBeTruthy()
+  })
+
+  it('pin a chat from its menu', async () => {
+    listPage.mockResolvedValue({ pinned: [], items: [dialog('1')], nextCursor: null })
+    pin.mockResolvedValue({ pinned: true })
+    showList()
+    fireEvent.click(await screen.findByRole('button', { name: /Действия с чатом/ }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Закрепить' }))
+    await waitFor(() =>
+      expect(pin).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: dialog('1').id, pinned: true }),
+        expect.anything(),
+      ),
+    )
+  })
+
+  it('open «Архив» on press and read it only then', async () => {
+    listPage.mockImplementation(async (input) =>
+      (input as { view?: string }).view === 'archive'
+        ? {
+            pinned: [],
+            items: [dialog('5', { title: 'Старый чат', archived: true })],
+            nextCursor: null,
+          }
+        : { pinned: [], items: [dialog('1')], nextCursor: null },
+    )
+    showList()
+    await screen.findByText('Поменять цену капучино')
+    expect(listPage).not.toHaveBeenCalledWith(expect.objectContaining({ view: 'archive' }))
+    fireEvent.click(screen.getByRole('button', { name: /Архив/ }))
+    expect(await screen.findByText('Старый чат')).toBeTruthy()
+  })
+
+  it('search by the words once they rest, and say when nothing is found', async () => {
+    listPage.mockResolvedValue({ pinned: [], items: [dialog('1')], nextCursor: null })
+    search.mockResolvedValue({ items: [] })
+    showList()
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Найти чат' }), {
+      target: { value: 'капучино' },
+    })
+    await waitFor(() => expect(search).toHaveBeenCalledWith({ query: 'капучино' }), {
+      timeout: 2000,
+    })
+    expect(await screen.findByText(/Ничего не нашлось/)).toBeTruthy()
   })
 })

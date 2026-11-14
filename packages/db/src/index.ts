@@ -31,6 +31,8 @@ export {
 export {
   enqueueCandidateRebase,
   enqueueCandidateRewind,
+  enqueueChatNotify,
+  enqueueQueueDrain,
   enqueueTurnCancel,
 } from './task-commands-outbox.ts'
 export { taskHasProductionWrites } from './task-production-writes.ts'

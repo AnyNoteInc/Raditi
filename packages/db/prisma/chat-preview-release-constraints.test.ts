@@ -320,7 +320,8 @@ describe.skipIf(!databaseUrl)('chat preview release constraints', () => {
         expect(String(row.alias)).toMatch(pattern)
       }
       // The requirements of a task (20261022100000_browser_tasks) come later, with their defaults;
-      // so does the mark of «Удалить диалог» (20261026150000_task_deleted_at), empty for them.
+      // so does the mark of «Удалить диалог» (20261026150000_task_deleted_at), empty for them, and
+      // «Закрепить» and «В архив» (20261114120000_chat_pin_archive, docs/plan/75).
       expect(
         tasks.map(
           ({
@@ -331,6 +332,8 @@ describe.skipIf(!databaseUrl)('chat preview release constraints', () => {
             needs_browser,
             deleted_at,
             web_masks_purged_at,
+            pinned_at,
+            archived_at,
             ...rest
           }) => ({
             ...rest,
@@ -339,6 +342,7 @@ describe.skipIf(!databaseUrl)('chat preview release constraints', () => {
             needs: [needs_repository, needs_browser],
             deleted: deleted_at,
             webMasksPurged: web_masks_purged_at,
+            kept: [pinned_at, archived_at],
           }),
         ),
       ).toEqual(
@@ -349,6 +353,7 @@ describe.skipIf(!databaseUrl)('chat preview release constraints', () => {
           needs: [true, false],
           deleted: null,
           webMasksPurged: null,
+          kept: [null, null],
         })),
       )
       expect(

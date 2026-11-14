@@ -573,6 +573,8 @@ export const turnPlanSchema = z
         egressProxy: httpUrl.optional(),
         internet: z.literal(true).optional(),
         skills: turnSkillsSchema.optional(),
+        // «Сначала план» (docs/plan/75, ВВ13).
+        plan: z.literal(true).optional(),
       })
       .strict()
       .refine(

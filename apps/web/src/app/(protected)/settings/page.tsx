@@ -27,7 +27,7 @@ export default async function SettingsPage() {
         Общее
       </Typography>
       <Typography color="text.secondary" sx={{ mt: 1 }}>
-        Внешний вид и письма от Радити.
+        Внешний вид, уведомления и письма от Радити.
       </Typography>
       <SettingsPanel email={session.user.email} />
     </Box>

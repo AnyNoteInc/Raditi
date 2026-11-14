@@ -69,6 +69,7 @@ import { useEffect, useMemo, useState, type ComponentProps, type ReactNode } fro
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 import { nbsp } from '@/lib/nbsp'
 
+import { planText } from './plan-toggle'
 import { AgentMarkdown } from './agent-markdown'
 import { SentFiles, type SentFile } from './attachment-chips'
 import { dayTime, feedTime } from './chat-format'
@@ -78,6 +79,7 @@ import {
   agentNotesText,
   browserText,
   dialogText,
+  messageEditText,
   objectLinkText,
   ownText,
   releaseStatusText,
@@ -140,6 +142,14 @@ export interface FeedActions {
   onOpenAgentDocument?: (docId: string) => void
   /** The document of the agent the tab shows now, on the screen; null — none. */
   shownAgentDocument?: string | null
+  /**
+   * «Изменить» of the client's last message: `/undo` puts its words back into the field, and the
+   * client sends them changed (docs/plan/75-chat-input-output.md, ВВ25); absent — not offered.
+   */
+  onEditLast?: () => void
+  /** «Выполнить план» and «Поправить план» under a plan (docs/plan/75, ВВ14, ВВ15). */
+  onExecutePlan?: () => void
+  onRevisePlan?: () => void
   /** The client controls the task's browser now. */
   controlling?: boolean
   /** The task's browser is open: the control can be taken. */
@@ -240,11 +250,14 @@ function Bubble({
   at,
   now,
   files = [],
+  onEdit,
 }: {
   text: string
   at: string
   now: Date
   files?: readonly SentFile[]
+  /** «Изменить»: the words go back to the field to be sent again (ВВ25). */
+  onEdit?: () => void
 }) {
   return (
     <Box
@@ -291,6 +304,16 @@ function Bubble({
       >
         {feedTime(new Date(at), now)}
       </Typography>
+      {onEdit ? (
+        <Button
+          size="small"
+          onClick={onEdit}
+          startIcon={<AppIcon name="pencil" size={16} />}
+          sx={{ minHeight: 44, color: 'text.secondary', fontSize: 13, mt: -1 }}
+        >
+          {messageEditText.edit}
+        </Button>
+      ) : null}
     </Box>
   )
 }
@@ -832,6 +855,8 @@ function RowView({
   undo,
   actions,
   filesOf,
+  editable = false,
+  planActive = false,
 }: {
   row: FeedRow
   now: Date
@@ -845,6 +870,10 @@ function RowView({
   undo: UndoHead | null
   actions: FeedActions
   filesOf: (ids: readonly string[]) => SentFile[]
+  /** The client's last message, while `/undo` can take it back: «Изменить» under it (ВВ25). */
+  editable?: boolean
+  /** The newest plan, no words after it: «Выполнить план» under it (docs/plan/75, ВВ14). */
+  planActive?: boolean
 }) {
   switch (row.type) {
     case 'feed.request':
@@ -852,8 +881,15 @@ function RowView({
         case 'first':
         case 'answer':
         case 'revision':
+        case 'queued':
           return (
-            <Bubble text={row.text} at={row.at} now={now} files={filesOf(row.attachments ?? [])} />
+            <Bubble
+              text={row.text}
+              at={row.at}
+              now={now}
+              files={filesOf(row.attachments ?? [])}
+              {...(editable && actions.onEditLast ? { onEdit: actions.onEditLast } : {})}
+            />
           )
         case 'retry':
           return <Press text={feedRowText.retry} icon="back" />
@@ -861,6 +897,8 @@ function RowView({
           return <Press text={feedRowText.continue} icon="back" />
         case 'resume':
           return <Press text={feedRowText.resume} icon="back" />
+        case 'interrupt':
+          return <Press text={feedRowText.interrupt} icon="back" />
         case 'command':
         case 'agent_command':
           return (
@@ -894,10 +932,32 @@ function RowView({
       return (
         <AgentMessage
           title={
-            approval ? feedCardTitle.approval : open ? feedCardTitle.answer : feedCardTitle.result
+            row.plan
+              ? planText.title
+              : approval
+                ? feedCardTitle.approval
+                : open
+                  ? feedCardTitle.answer
+                  : feedCardTitle.result
           }
           actions={
-            onSaveNotes && actions.notesRows?.has(row.id) ? (
+            row.plan && planActive && actions.onExecutePlan ? (
+              <>
+                <Button
+                  variant="contained"
+                  disableElevation
+                  disabled={actions.busy}
+                  onClick={actions.onExecutePlan}
+                >
+                  {planText.execute}
+                </Button>
+                {actions.onRevisePlan ? (
+                  <Button variant="outlined" onClick={actions.onRevisePlan}>
+                    {planText.revise}
+                  </Button>
+                ) : null}
+              </>
+            ) : onSaveNotes && actions.notesRows?.has(row.id) ? (
               <Button variant="outlined" onClick={() => onSaveNotes(row.message)}>
                 {agentNotesText.button}
               </Button>
@@ -1163,6 +1223,13 @@ export function FeedList({
   const documents = useMemo(() => chatDocumentsOf(rows), [rows])
   const commands = head?.commands ?? []
   const undo = head?.undo ?? null
+  // «Выполнить план» stands under the newest plan the client has not answered (docs/plan/75).
+  const activePlanId = activePlanOf(rows)
+  // «Изменить» stands under the client's last message while `/undo` can take its turn back.
+  const editableId =
+    commands.find((command) => command.id === 'turn_undo')?.available === true
+      ? lastMessageId(rows)
+      : null
   // The rows of the first paint stay still; a row that arrives later rises into its place. The
   // animation plays once, when its element mounts: later renders do not start it again.
   const [initial] = useState(() => new Set(entries.map((entry) => entry.key)))
@@ -1223,6 +1290,8 @@ export function FeedList({
                 undo={undo}
                 actions={actions}
                 filesOf={filesOf}
+                editable={entry.row.id === editableId}
+                planActive={entry.row.id === activePlanId}
               />
             )}
           </Box>
@@ -1230,6 +1299,32 @@ export function FeedList({
       </Box>
     </DocRevisions.Provider>
   )
+}
+
+/** The newest result of a pass of «Сначала план» with no request after it (ВВ14); null — none. */
+export function activePlanOf(rows: readonly FeedRow[]): string | null {
+  for (let index = rows.length - 1; index >= 0; index--) {
+    const row = rows[index]
+    if (row?.type === 'feed.request') return null
+    if (row?.type === 'feed.result') return row.plan ? row.id : null
+  }
+  return null
+}
+
+/** The id of the client's last message with words — not a press — in the feed; null — none. */
+export function lastMessageId(rows: readonly FeedRow[]): string | null {
+  for (let index = rows.length - 1; index >= 0; index--) {
+    const row = rows[index]
+    if (row?.type !== 'feed.request') continue
+    if (
+      row.kind === 'first' ||
+      row.kind === 'answer' ||
+      row.kind === 'revision' ||
+      row.kind === 'queued'
+    )
+      return row.id
+  }
+  return null
 }
 
 /** Files of a message whose names are not read: a chip each, nameless. */

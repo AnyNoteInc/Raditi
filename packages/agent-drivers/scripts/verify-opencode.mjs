@@ -876,6 +876,7 @@ async function turn({
   envValues,
   egressProxy,
   action,
+  plan = false,
 }) {
   const keys = newKeys()
   const context = {
@@ -895,6 +896,8 @@ async function turn({
     ...(nativeSessionId ? { nativeSessionId } : {}),
     ...(envValues ? { envValues } : {}),
     ...(egressProxy ? { egressProxy } : {}),
+    // «Сначала план» (docs/plan/75-chat-input-output.md, ВВ13): the planning agent.
+    ...(plan ? { plan: true } : {}),
   }
   const prepared = preparedRunSchema.parse(await driver.prepare(context))
   const argv = driver.command(prepared, { prompt, attachments, ...(action ? { action } : {}) })
@@ -1273,6 +1276,50 @@ try {
       `exec — 4 provider requests in ${seconds(output.ms)}, the first after ${seconds(output.llm[0].at)}; kernel ${output.after.tool.kernel}; real driver, platform agent and instructions, tools ${TOOLS.length}, MCP bearer, the repository's own OpenCode files ignored, credentials in no file, environment, argv or output; session files ${output.snapshot.map((file) => `${file.path.split('/').at(-1)} ${file.bytes} B`).join(', ')}, archive ${output.archiveBytes} B`,
     )
   }
+  // 1a. A pass of «Сначала план» (docs/plan/75-chat-input-output.md, ВВ13): the planning agent
+  // reads and asks the site, and the CLI itself refuses it a file, a command and a tool that
+  // writes — the working copy stays as it was.
+  {
+    const planned = await turn({
+      label: 'plan only',
+      plan: true,
+      steps: [
+        {
+          calls: [
+            {
+              name: 'write',
+              arguments: { content: 'plan\n', filePath: '/workspace/repo/plan.txt' },
+            },
+          ],
+        },
+        { calls: [bash('echo plan-marker > /workspace/repo/plan-bash.txt')] },
+        { calls: [{ name: 'raditi_wp_rest', arguments: {} }] },
+        { calls: [{ name: 'raditi_site_info', arguments: {} }] },
+        { text: JSON.stringify(result('План из трёх шагов')) },
+      ],
+    })
+    const { output, events, describe } = planned
+    assert.equal(output.code, 0, describe())
+    assert.deepEqual(
+      output.after.workingTree,
+      [],
+      `The plan changed the working copy: ${describe()}`,
+    )
+    const called = output.mcp
+      .filter((record) => record.rpc === 'tools/call')
+      .map((record) => record.tool)
+    assert.deepEqual(called, ['site_info'], describe())
+    assert.ok(
+      !events.some(
+        (event) => event.type === 'command' && String(event.command).includes('plan-marker'),
+      ),
+      `A command ran in a plan: ${describe()}`,
+    )
+    pass(
+      `plan only — the agent raditi-plan read and asked the site; the CLI refused it a written file, a command and a tool of the platform that writes (${output.llm.length} provider requests, working copy unchanged)`,
+    )
+  }
+
   const sessionFiles = first.output.snapshot.map(({ path, mode, base64 }) => ({
     path,
     mode,

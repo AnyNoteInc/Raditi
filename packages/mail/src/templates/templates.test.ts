@@ -46,6 +46,11 @@ const samples: MailData = {
     giftCreditsLeft: 35,
     appUrl: 'https://raditi.ru',
   },
+  'chat-waiting': {
+    kind: 'question',
+    url: 'https://raditi.ru/chats/0199a3f2-0000-7000-8000-000000000001',
+    settingsUrl: 'https://raditi.ru/settings',
+  },
 }
 
 function linkOf(kind: MailKind): string {
@@ -228,5 +233,17 @@ describe('escaping', () => {
   it('rejects links that are not http(s)', () => {
     expect(() => renderTemplate('verify-email', { url: 'javascript:alert(1)' })).toThrow()
     expect(() => renderTemplate('welcome', { name: 'Анна', appUrl: 'data:text/html,hi' })).toThrow()
+  })
+})
+
+describe('the letter of a chat that waits (docs/plan/75, ВВ9)', () => {
+  it('says what happened in our own words for each kind, and links to the chat and the settings', () => {
+    for (const kind of ['answered', 'question', 'ready', 'failed', 'limit'] as const) {
+      const out = renderTemplate('chat-waiting', { ...samples['chat-waiting'], kind })
+      expect(out.subject.length).toBeGreaterThan(0)
+      expect(out.text).toContain(samples['chat-waiting'].url)
+      expect(out.text).toContain('https://raditi.ru/settings')
+      expect(out.html).toContain('Открыть чат')
+    }
   })
 })

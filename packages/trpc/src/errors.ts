@@ -196,6 +196,10 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   TASK_REWINDING: 'Подождите: последний запрос ещё отменяется. Написать можно будет через минуту',
   TASK_REDOING: 'Подождите: отменённый запрос ещё возвращается. Написать можно будет через минуту',
   TASK_FINISHED: 'Чат завершён. Чтобы попросить что-то ещё, начните новый',
+  // The queue of a chat (docs/plan/75-chat-input-output.md, ВВ1–ВВ4).
+  TASK_NOT_BUSY: 'Агент уже закончил — отправьте сообщение ещё раз',
+  TASK_QUEUE_FULL: 'В очереди уже 10 сообщений. Дождитесь, пока агент возьмёт их',
+  TASK_QUEUE_GONE: 'Это сообщение уже ушло агенту',
   // «Терминал»: the client's edit of a file of a chat (06.11.2026).
   SITE_FILE_EDIT_CLOSED: 'Чат закрыт: правку файла в него сохранить нельзя',
   SITE_FILE_EDIT_NO_TURN: 'Сохранить файл можно после первого ответа агента в этом чате',

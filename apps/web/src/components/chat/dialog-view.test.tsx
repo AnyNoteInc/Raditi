@@ -55,6 +55,19 @@ const calls = vi.hoisted(() => ({
   feed: vi.fn<(input: { taskId: string; after: string }) => Promise<DialogFeed>>(),
   activity: vi.fn<(input: { after: string }) => Promise<TurnActivityPage>>(),
   message: vi.fn<(input: Press & { text: string }) => Promise<Posted>>(),
+  // The queue of the chat (docs/plan/75, ВВ1): empty unless a test fills it.
+  queueAdd:
+    vi.fn<(input: Press & { text: string }) => Promise<{ id: string | null; repeated: boolean }>>(),
+  queueList: vi.fn(async (_input: { taskId: string }) => ({
+    items: [] as {
+      id: string
+      requestId: string
+      text: string
+      attachments: string[]
+      createdAt: Date
+    }[],
+  })),
+  queueSendNow: vi.fn(async (_input: Press) => ({ requestEventId: '99' as string | null })),
   proceed: vi.fn<(input: Press) => Promise<Posted>>(),
   retry: vi.fn<(input: Press & { failureEventId: string }) => Promise<Posted>>(),
   cancel: vi.fn<(input: Press) => Promise<Posted & { state: 'cancelled' | 'stopping' }>>(),
@@ -143,6 +156,11 @@ vi.mock('@/trpc/client', () => ({
   useTRPC: () => ({
     task: {
       message: mutation(calls.message),
+      queueAdd: mutation(calls.queueAdd),
+      queueList: query('task.queueList', calls.queueList),
+      queueEdit: mutation(async (input: { text: string }) => ({ text: input.text })),
+      queueRemove: mutation(async () => ({ removed: true as const })),
+      queueSendNow: mutation(calls.queueSendNow),
       continue: mutation(calls.proceed),
       retry: mutation(calls.retry),
       cancel: mutation(calls.cancel),
@@ -4318,5 +4336,56 @@ describe('the browser kept from its idle end while the client looks at the dialo
     showPage(true)
     await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
     expect(calls.watch).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('the queue of the chat while the agent works (docs/plan/75, ВВ1, ВВ4)', () => {
+  const running = () =>
+    feedAnswer({
+      status: 'running',
+      task: { turnNo: 1, runningSince: '2026-10-17T09:01:00.000Z' },
+      events: [requestRow('1')],
+      cursor: '1',
+    })
+
+  it('keeps the field open, puts the words into the queue and stops by the same button when empty', async () => {
+    calls.queueAdd.mockResolvedValueOnce({
+      id: '0199a3f2-0000-7000-8000-0000000000c1',
+      repeated: false,
+    })
+    showDialog(running())
+    const stop = await screen.findByRole<HTMLButtonElement>('button', { name: 'Остановить' })
+    await waitFor(() => expect(field().disabled).toBe(false))
+    expect(stop).toBeTruthy()
+    type('И ещё добавьте телефон')
+    const queue = screen.getByRole<HTMLButtonElement>('button', { name: 'Поставить в очередь' })
+    fireEvent.click(queue)
+    await waitFor(() => expect(calls.queueAdd).toHaveBeenCalledTimes(1))
+    expect(calls.queueAdd.mock.calls[0]![0]).toMatchObject({
+      taskId: TASK_ID,
+      text: 'И ещё добавьте телефон',
+    })
+    expect(calls.message).not.toHaveBeenCalled()
+  })
+
+  it('shows the queued words with «Отправить сейчас», which stops the pass for them', async () => {
+    calls.queueList.mockResolvedValue({
+      items: [
+        {
+          id: '0199a3f2-0000-7000-8000-0000000000c2',
+          requestId: '0199a3f2-0000-7000-8000-0000000000c3',
+          text: 'Поменяйте и цену латте',
+          attachments: [],
+          createdAt: new Date(),
+        },
+      ],
+    })
+    showDialog(running())
+    const words = await screen.findByText('Поменяйте и цену латте')
+    const section = words.closest('section') as HTMLElement
+    fireEvent.click(within(section).getByRole('button', { name: 'Отправить сейчас' }))
+    await waitFor(() => expect(calls.queueSendNow).toHaveBeenCalledTimes(1))
+    expect(calls.queueSendNow.mock.calls[0]![0]).toMatchObject({ taskId: TASK_ID })
+    calls.queueList.mockResolvedValue({ items: [] })
   })
 })

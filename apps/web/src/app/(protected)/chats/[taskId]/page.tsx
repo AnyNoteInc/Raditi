@@ -4,6 +4,7 @@ import { DialogView } from '@/components/chat/dialog-view'
 import { ServiceUnavailable } from '@/components/layout/service-unavailable'
 import { UNAVAILABLE } from '@/lib/access'
 import { chatServices } from '@/server/chat-services'
+import { speechAvailable } from '@/server/speech-runtime'
 
 import { loadChat } from './load-chat'
 
@@ -26,6 +27,8 @@ export default async function Page({ params }: { params: Params }) {
       title={chat.title}
       // Where the stream of a task's browser is opened (docs/plan/57-browser-tasks.md, Б12).
       browserStreamUrl={chatServices()?.browser?.streamUrl ?? null}
+      // Dictation into the field (docs/plan/75-chat-input-output.md, ВВ16).
+      speech={speechAvailable()}
     />
   )
 }

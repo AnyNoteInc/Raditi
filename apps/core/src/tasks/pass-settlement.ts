@@ -24,6 +24,8 @@ import {
   type SettledTaskStatus,
   workspaceUsageTerms,
   workspaceWindowUsage,
+  enqueueQueueDrain,
+  enqueueChatNotify,
 } from '@repo/db'
 import {
   candidateFactsSchema,
@@ -45,6 +47,7 @@ import {
   type TaskWaitingReason,
   type TurnEvidence,
   type TurnResult,
+  type ChatNotifyKind,
   refusingWindow,
 } from '@repo/domain'
 
@@ -175,6 +178,13 @@ interface SettleContext {
   browser: BrowserTaskFacts | null
   /** The author of a `cancel` command written after the last request of the dialog. */
   cancel: { authorId: string } | null
+  /**
+   * «Отправить сейчас» (docs/plan/75, ВВ4) is the newest request: a pass stopped for it ends
+   * `#interrupted`, the dialog stays open, and its queue goes next.
+   */
+  interrupt: boolean
+  /** The newest words asked for «Сначала план» (docs/plan/75, ВВ12): the answer is a plan. */
+  planned: boolean
   policyFlagged: boolean
   /**
    * The task wrote the production site and the write was not undone (legacy content path), or
@@ -292,6 +302,38 @@ export async function pressedCancel(
   return null
 }
 
+/**
+ * «Отправить сейчас» is the newest request of the dialog (docs/plan/75, ВВ4): the words it stopped
+ * the pass for are still in the queue, so nothing came after it.
+ */
+export async function pressedInterrupt(db: Reader, taskId: string): Promise<boolean> {
+  const newest = await db.taskEvent.findFirst({
+    where: { taskId, type: 'feed.request' },
+    orderBy: { id: 'desc' },
+    select: { payload: true },
+  })
+  if (!newest) return false
+  const event = readFeedRow('feed.request', newest.payload)
+  return event.type === 'feed.request' && event.kind === 'interrupt'
+}
+
+/** The newest words of the client ask for «Сначала план» (docs/plan/75, ВВ12). */
+export async function wordsPlanned(db: Reader, taskId: string): Promise<boolean> {
+  const rows = await db.taskEvent.findMany({
+    where: { taskId, type: 'feed.request' },
+    orderBy: { id: 'desc' },
+    take: 50,
+    select: { payload: true },
+  })
+  for (const row of rows) {
+    const event = readFeedRow('feed.request', row.payload)
+    if (event.type !== 'feed.request' || !('text' in event) || typeof event.text !== 'string')
+      continue
+    return 'plan' in event && event.plan === true
+  }
+  return false
+}
+
 export class PassSettlement {
   readonly #logger: { warn(message: string): void; error(message: string): void }
   readonly #now: () => Date
@@ -311,6 +353,10 @@ export class PassSettlement {
     const turn = 'turn' in ending ? ending.turn : null
     // The client's «Отменить» wins over whatever the pass came to (spec §7).
     if (context.cancel) return this.#cancelled(pass, context, turn, ending)
+    // A pass stopped for «Отправить сейчас» keeps the dialog open (docs/plan/75, ВВ4); a pass that
+    // came to its own ending first ends so, and the queue follows it.
+    if (context.interrupt && ending.kind === 'cancelled')
+      return this.#interrupted(pass, context, turn)
     try {
       return await this.#end(pass, context, ending, options)
     } catch (error) {
@@ -355,6 +401,9 @@ export class PassSettlement {
 
   async cancelWaiting(taskId: string): Promise<SettleAnswer> {
     const context = await this.#context(taskId)
+    // «Отправить сейчас» that came after its pass had ended (docs/plan/75, ВВ4): there is nothing
+    // to stop, the queue goes now.
+    if (context && !context.cancel && context.interrupt) return this.#drainNow(taskId)
     const cancel = context?.cancel
     if (!context || !cancel) return 'skipped'
     const task = await this.deps.db.task.findUnique({
@@ -390,6 +439,26 @@ export class PassSettlement {
       })
       await requestPreviewSync(tx, { taskId, revision: 0 })
     }).then((answer) => this.#closeBrowser(context, answer, 'task_cancelled'))
+  }
+
+  /** The client is told the dialog waits, unless they look at it (docs/plan/75, ВВ6, ВВ7). */
+  #notify(tx: Prisma.TransactionClient, pass: PassRef, kind: ChatNotifyKind, now: Date) {
+    return enqueueChatNotify(
+      tx,
+      { taskId: pass.taskId, kind, attempt: pass.attempt, turnNo: pass.turnNo },
+      now,
+    )
+  }
+
+  /** The queue of a dialog that waits goes now: «Отправить сейчас» found no pass to stop. */
+  #drainNow(taskId: string): Promise<SettleAnswer> {
+    return this.#transaction(async (tx) => {
+      const task = await tx.task.findUniqueOrThrow({
+        where: { id: taskId },
+        select: { attempt: true, turnNo: true },
+      })
+      await enqueueQueueDrain(tx, { taskId, attempt: task.attempt, turnNo: task.turnNo })
+    })
   }
 
   #end(
@@ -519,6 +588,7 @@ export class PassSettlement {
               needsApproval: result.needs_approval,
               risk: result.risk,
               ...passObjectsOf(context),
+              ...(context.planned ? { plan: true as const } : {}),
             },
           },
     )
@@ -564,6 +634,18 @@ export class PassSettlement {
       // changes or the next words (owner's answer of 26.10.2026, «любой успешный запрос от LLM
       // должен тарифицироваться»): the next words open a new chain.
       if (context.task.billable) await this.#chargePass(tx, pass, now)
+      // The words the client queued while it worked go next (docs/plan/75, ВВ2).
+      await enqueueQueueDrain(tx, {
+        taskId: pass.taskId,
+        attempt: pass.attempt,
+        turnNo: pass.turnNo,
+      })
+      await this.#notify(
+        tx,
+        pass,
+        question ? 'question' : build.kind === 'candidate' ? 'ready' : 'answered',
+        now,
+      )
     })
   }
 
@@ -618,6 +700,7 @@ export class PassSettlement {
             needsApproval: result.needs_approval,
             risk: result.risk,
             ...objectsOf(context),
+            ...(context.planned ? { plan: true as const } : {}),
           },
         }
     return this.#transaction(async (tx, now) => {
@@ -636,6 +719,13 @@ export class PassSettlement {
       await this.#assertNotCancelled(tx, pass.taskId)
       // The help, the control, the answer and the next words all follow a charged pass (Б25).
       if (context.task.billable) await this.#chargePass(tx, pass, now)
+      // The words the client queued while it worked go next (docs/plan/75, ВВ2).
+      await enqueueQueueDrain(tx, {
+        taskId: pass.taskId,
+        attempt: pass.attempt,
+        turnNo: pass.turnNo,
+      })
+      await this.#notify(tx, pass, row.type === 'feed.question' ? 'question' : 'answered', now)
     })
   }
 
@@ -735,6 +825,7 @@ export class PassSettlement {
             taskId: pass.taskId,
             expiresAt: taskHoldExpiry(now, 'waiting'),
           })
+        await this.#notify(tx, pass, 'failed', now)
       })
     return this.#transaction(async (tx, now) => {
       const moved = await settleTurn(tx, {
@@ -767,6 +858,48 @@ export class PassSettlement {
         },
       })
       await this.#syncPreview(tx, pass.taskId, turn)
+      await this.#notify(tx, pass, 'failed', now)
+    })
+  }
+
+  /**
+   * A pass stopped for «Отправить сейчас» (docs/plan/75-chat-input-output.md, ВВ4): the dialog
+   * stays open — with its candidate as it stood, or waiting for words — and the words the client
+   * queued go next (`queue.drain`). The turn is not rejected: the client stopped it, the platform
+   * did not fail, so what the model did is charged like a pass that completed (rule 7; the owner's
+   * answer of 26.10.2026). Nothing of it is published: the next pass replaces the turn from the
+   * checkpoint it started with, so its words and the queued ones go to the agent together. The
+   * press stands in the feed; no other row is written.
+   */
+  async #interrupted(
+    pass: PassRef,
+    context: SettleContext,
+    turn: number | null,
+  ): Promise<SettleAnswer> {
+    const { standing } = context
+    return this.#transaction(async (tx, now) => {
+      const moved = await settleTurn(tx, {
+        taskId: pass.taskId,
+        attempt: pass.attempt,
+        expectedTurnNo: pass.turnNo,
+        from: ['preparing', 'running'],
+        to: standing ? 'awaiting_approval' : 'awaiting_user',
+        turn,
+        feed: [],
+      })
+      if (!moved.moved) throw new NotMoved()
+      await this.#assertNotCancelled(tx, pass.taskId)
+      if (turn !== null && standing) {
+        // The preview goes back to the candidate: the database writes of the turn leave the plan.
+        await excludeTurnDbOperations(tx, { taskId: pass.taskId, turnNo: turn })
+        await requestPreviewSync(tx, { taskId: pass.taskId, revision: standing.revision })
+      }
+      if (context.task.billable) await this.#chargePass(tx, pass, now)
+      await enqueueQueueDrain(tx, {
+        taskId: pass.taskId,
+        attempt: pass.attempt,
+        turnNo: pass.turnNo,
+      })
     })
   }
 
@@ -832,6 +965,7 @@ export class PassSettlement {
       })
       if (!moved.moved) throw new NotMoved()
       await this.#assertNotCancelled(tx, pass.taskId)
+      await this.#notify(tx, pass, 'limit', now)
       // The preview goes back to the last candidate, or to the base: the database writes of
       // the turn leave the plan (Р22).
       if (turn !== null) {
@@ -1095,6 +1229,7 @@ export class PassSettlement {
         revision: context.standing?.revision ?? 0,
       })
       if (context.task.billable) await this.#chargePass(tx, pass, now)
+      await this.#notify(tx, pass, 'limit', now)
     })
     // Counted once the pass moved: a pass another settlement already moved is not counted again.
     this.deps.onUsageLimit?.({ window: window.kind, tier: window.tier })
@@ -1192,8 +1327,10 @@ export class PassSettlement {
     // Only a chat with the code goes on past what its browser did (docs/plan/61, §5.8).
     const window =
       needsRepository && needsBrowser ? { since: await this.#untoldSince(taskId) } : null
-    const [cancel, flagged, writes, standing, browser] = await Promise.all([
+    const [cancel, interrupt, planned, flagged, writes, standing, browser] = await Promise.all([
       pressedCancel(db, taskId),
+      pressedInterrupt(db, taskId),
+      wordsPlanned(db, taskId),
       db.taskEvent.count({ where: { taskId, type: 'llm.policy_flagged' } }),
       taskHasProductionWrites(db, taskId),
       db.taskCandidate.findFirst({
@@ -1216,6 +1353,8 @@ export class PassSettlement {
       requirements: { repository: needsRepository, browser: needsBrowser },
       browser,
       cancel,
+      interrupt,
+      planned,
       policyFlagged: flagged > 0,
       productionWrites: writes,
       standing:

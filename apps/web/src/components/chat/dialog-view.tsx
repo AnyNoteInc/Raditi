@@ -49,7 +49,7 @@ import { useTRPC } from '@/trpc/client'
 import type { SentFile } from './attachment-chips'
 import { BrowserPane } from './browser-pane'
 import { sessionLive } from './browser-pane-model'
-import { callErrorText, sendErrorText } from './call-error'
+import { callErrorCode, callErrorText, sendErrorText } from './call-error'
 import { newChatHref } from './chat-address'
 import { useChatDetails, useChatThinking } from './chat-details'
 import { rememberEffort } from './chat-effort'
@@ -60,6 +60,7 @@ import {
   chatsText,
   clientCommandText,
   composerText,
+  queueText,
   dialogText,
   effortText,
   listText,
@@ -128,6 +129,10 @@ import { usePagePublish } from './page-publish'
 import { useBrowserStream } from './use-browser-stream'
 import { useBrowserWatching } from './use-browser-watching'
 import { useFeedFollow } from './use-feed-follow'
+import { requestHistoryOf } from './prompt-history'
+import { QueueCards, useChatQueue } from './queue-cards'
+import { PlanToggle, planText, useRememberedPlan } from './plan-toggle'
+import { useWaitingTitle } from './use-waiting-title'
 import { useDialogFeed } from './use-dialog-feed'
 import { uuidv7 } from './uuid'
 import { UsageWindowHint } from '@/components/billing/usage-window-hint'
@@ -365,6 +370,7 @@ export function DialogView({
   taskId,
   title,
   browserStreamUrl = null,
+  speech = false,
 }: {
   /** The project of the chat, from `task.get`; null — a chat without one. */
   project: ChatProject | null
@@ -375,6 +381,8 @@ export function DialogView({
    * docs/plan/57-browser-tasks.md, Б12); null — the platform has no browser here.
    */
   browserStreamUrl?: string | null
+  /** Dictation is set up here (docs/plan/75-chat-input-output.md, ВВ16). */
+  speech?: boolean
 }) {
   const siteId = project?.id ?? null
   const siteUrl = project?.url ?? null
@@ -383,6 +391,8 @@ export function DialogView({
   const { state, refresh } = useDialogFeed(taskId)
   const head = state.head
   const rows = state.rows
+  // The client's earlier requests of this chat: the arrows of the field bring them back (ВВ23).
+  const requestHistory = useMemo(() => requestHistoryOf(rows), [rows])
 
   // The tools beside the dialog, as the client opened them (docs/plan/59, И1): every showing of a
   // dialog starts with them closed — with changes ready and with a browser at work too — and
@@ -461,6 +471,18 @@ export function DialogView({
   }, [])
 
   const message = useMutation(trpc.task.message.mutationOptions())
+  // The queue of the chat (docs/plan/75-chat-input-output.md, ВВ1): words written while it works.
+  const queueAdd = useMutation(trpc.task.queueAdd.mutationOptions())
+  const agentWorks =
+    head?.task.status === 'queued' ||
+    head?.task.status === 'preparing' ||
+    head?.task.status === 'running'
+  const chatQueue = useChatQueue(taskId, agentWorks)
+  // The tab says the chat waits while it is hidden (docs/plan/75, ВВ11).
+  useWaitingTitle(head?.task.status ?? null)
+  const queued = chatQueue.data?.items ?? []
+  // «Сначала план» (docs/plan/75, ВВ12): the next words ask for a plan only.
+  const [plan, setPlan] = useRememberedPlan()
   const proceed = useMutation(trpc.task.continue.mutationOptions())
   const cancel = useMutation(trpc.task.cancel.mutationOptions())
   // «Опубликовать как страницу» of a document of the chat (docs/plan/69-pages.md, Ст32): to its
@@ -855,11 +877,38 @@ export function DialogView({
 
   // A repeat that the server answers `repeated` is the same words written before (the id is of
   // these very words): they are in the dialog, and the field is cleared like after a first send.
-  async function send(text: string, attachmentIds: readonly string[] = []): Promise<boolean> {
+  async function send(
+    text: string,
+    attachmentIds: readonly string[] = [],
+    options: { plan?: boolean } = {},
+  ): Promise<boolean> {
     setFieldError(null)
+    const planned = options.plan ?? plan
     // Files go with the messages of any chat: to the browser's pages, or into the copy of the
     // site the agent works on.
     const files = [...attachmentIds]
+    // While the agent works the words wait in the queue (ВВ1); a pass that ended meanwhile takes
+    // them as a message.
+    if (agentWorks) {
+      try {
+        await queueAdd.mutateAsync({
+          taskId,
+          requestId: pressId('message', `${text}\u0000${files.join(',')}`),
+          text,
+          ...(files.length > 0 ? { attachments: files } : {}),
+          ...(planned ? { plan: true } : {}),
+        })
+        pressed('message')
+        void chatQueue.refetch()
+        return true
+      } catch (failure) {
+        if (callErrorCode(failure) !== 'TASK_NOT_BUSY') {
+          setFieldError(sendErrorText(failure, { withProject: project !== null }))
+          refresh()
+          return false
+        }
+      }
+    }
     try {
       await message.mutateAsync({
         taskId,
@@ -867,6 +916,7 @@ export function DialogView({
         requestId: pressId('message', `${text}\u0000${files.join(',')}`),
         text,
         ...(files.length > 0 ? { attachments: files } : {}),
+        ...(planned ? { plan: true } : {}),
       })
       pressed('message')
       refresh()
@@ -1137,6 +1187,11 @@ export function DialogView({
           onContinue: () => void press('continue', proceed.mutateAsync),
           onTakeControl: takeControl,
           onResumeAgent: resumeWork,
+          // «Изменить» is `/undo`: its words come back to the field (ВВ25).
+          onEditLast: () => runCommand('turn_undo'),
+          // «Выполнить план» (docs/plan/75, ВВ15): words to the same session, not a plan again.
+          onExecutePlan: () => void send(planText.executeWords, [], { plan: false }),
+          onRevisePlan: () => field.current?.querySelector('textarea')?.focus(),
         }),
     // A press the server would refuse is not drawn: an owner or an admin, of a project that is open.
     ...(!closedProject && project?.closed !== true && agentNotes.data?.canManage
@@ -1173,14 +1228,17 @@ export function DialogView({
   // the agent's next turn.
   const settings =
     head === null ? null : (
-      <EffortMenu
-        value={effort}
-        onChange={(next) => void changeEffort(next)}
-        // The level holds from the agent's next turn: it is changed while the dialog waits.
-        disabled={!awaitingClient || setEffort.isPending}
-        lockedText={terminal ? effortText.ended : effortText.locked}
-        handle={effortMenu}
-      />
+      <>
+        <EffortMenu
+          value={effort}
+          onChange={(next) => void changeEffort(next)}
+          // The level holds from the agent's next turn: it is changed while the dialog waits.
+          disabled={!awaitingClient || setEffort.isPending}
+          lockedText={terminal ? effortText.ended : effortText.locked}
+          handle={effortMenu}
+        />
+        {terminal ? null : <PlanToggle on={plan} onChange={setPlan} />}
+      </>
     )
   const composerCommands = {
     verdicts: commands,
@@ -1237,34 +1295,44 @@ export function DialogView({
     // К39). The field stays closed rather than gone: a turn already under way can still be stopped.
     // The feed says it live; the word of the page is as of its load, before the first feed.
     const closedField = closedProject || project?.closed === true
+    // While the agent works the field stays open: the words wait in the queue (ВВ1).
+    const working = status === 'queued' || status === 'preparing' || status === 'running'
     const disabledReason = stopping
       ? composerText.stopping
       : closedField
         ? chatsText.closedProject
-        : answering || revising
+        : answering || revising || working
           ? null
           : releasing
             ? composerText.releasing
             : feedInputText.disabled
-    // While the agent works «Остановить» stands in place of «Отправить» (`/cancel`).
-    const working = status === 'queued' || status === 'preparing' || status === 'running'
+    // While the agent works «Остановить» stands in place of «Отправить» (`/cancel`) — until words
+    // are written: then the button puts them in the queue.
     const cancelVerdict = commands.find((command) => command.id === 'cancel')
     composer = (
       <Composer
         placeholder={
           closedField
             ? chatsText.closedProject
-            : answering && !answered
-              ? feedQuestionText.placeholder
-              : revising
-                ? composerText.revisionPlaceholder
-                : composerText.newPlaceholder
+            : working
+              ? queueText.placeholder
+              : answering && !answered
+                ? feedQuestionText.placeholder
+                : revising
+                  ? composerText.revisionPlaceholder
+                  : composerText.newPlaceholder
         }
         // An answer of the agent asks nothing: the field is the field of a new message.
-        sendLabel={answering && !answered ? feedQuestionText.send : composerText.send}
+        sendLabel={
+          working
+            ? queueText.queue
+            : answering && !answered
+              ? feedQuestionText.send
+              : composerText.send
+        }
         disabledReason={disabledReason}
         error={fieldError}
-        busy={message.isPending}
+        busy={message.isPending || queueAdd.isPending}
         onSend={send}
         effort={settings}
         commands={composerCommands}
@@ -1273,6 +1341,8 @@ export function DialogView({
         restored={undoneWords}
         restoredTaken={wordsTaken}
         onTextChange={fieldTextChanged}
+        history={requestHistory}
+        speech={speech}
         {...(working
           ? {
               stop: {
@@ -1543,6 +1613,21 @@ export function DialogView({
                     }
                   : undefined
               }
+            />
+          ) : null}
+          {head ? (
+            <QueueCards
+              taskId={taskId}
+              items={queued}
+              canInterrupt={
+                (head.task.status === 'preparing' || head.task.status === 'running') && !stopping
+              }
+              waiting={
+                !agentWorks &&
+                (head.task.status === 'awaiting_user' || head.task.status === 'awaiting_approval')
+              }
+              onSendAll={(text, files) => send(text, files)}
+              onChanged={refresh}
             />
           ) : null}
           {state.failures > 0 ? (

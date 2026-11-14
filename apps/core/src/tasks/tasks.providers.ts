@@ -39,6 +39,8 @@ import { PagePublications } from './page-publications.ts'
 import { LivePasses } from './live-passes.ts'
 import { PassRunner } from './pass-runner.ts'
 import { PassSettlement } from './pass-settlement.ts'
+import { QueueDrain } from './queue-drain.ts'
+import { ChatNotify, webPushSender } from './chat-notify.ts'
 import { TaskSweep, TaskSweepRuntime } from './task-sweep.ts'
 import { TurnCapacity } from './turn-capacity.ts'
 import { CANDIDATE_GIT } from './tasks.tokens.ts'
@@ -220,6 +222,25 @@ export const taskProviders: Provider[] = [
         adapter: getSiteAdapter,
       }),
     inject: [PRISMA, CANDIDATE_GIT, CandidateBuilder, SITE_LEASES, JOB_QUEUE, OBJECT_STORAGE],
+  },
+  {
+    // A chat that waits for its client who is not looking (docs/plan/75-chat-input-output.md, ВВ6).
+    provide: ChatNotify,
+    useFactory: async (prisma: PrismaClient, config: CoreConfig) =>
+      new ChatNotify({
+        db: prisma,
+        appUrl: config.billing.appUrl,
+        push: config.webPush
+          ? await webPushSender({ ...config.webPush, subject: config.billing.appUrl })
+          : null,
+      }),
+    inject: [PRISMA, CORE_CONFIG],
+  },
+  {
+    // The queue of a chat after its pass ended (docs/plan/75-chat-input-output.md, ВВ2).
+    provide: QueueDrain,
+    useFactory: (prisma: PrismaClient) => new QueueDrain({ db: prisma }),
+    inject: [PRISMA],
   },
   TurnsProcessor,
   {

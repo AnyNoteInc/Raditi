@@ -65,6 +65,7 @@
     "rxjs": "catalog:",
     "tar-stream": "catalog:",
     "tldts": "catalog:",
+    "web-push": "4.0.0",
     "zod": "catalog:"
   },
   "devDependencies": {
@@ -78,6 +79,7 @@
     "@types/express": "catalog:",
     "@types/node": "catalog:",
     "@types/supertest": "catalog:",
+    "@types/web-push": "3.6.4",
     "@typescript/native": "catalog:",
     "eslint": "catalog:",
     "playwright-core": "catalog:",

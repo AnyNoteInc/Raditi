@@ -417,6 +417,36 @@ describe('OpenCode driver: prepared files and argv', () => {
     },
   )
 
+  it('runs a pass of «Сначала план» with an agent that only reads (docs/plan/75, ВВ13)', async () => {
+    const run = await driver.prepare({ ...context, plan: true })
+    driver.command(run, input)
+    expect(args(run)).toContain('raditi-plan')
+    expect(args(run)).not.toContain('raditi')
+    const config = JSON.parse(file(run, '.config/opencode/opencode.json')) as {
+      permission: Record<string, unknown>
+      agent: Record<string, { permission?: Record<string, unknown> }>
+    }
+    const planning = config.agent['raditi-plan']?.permission
+    for (const permission of [config.permission, planning]) {
+      expect(permission).toMatchObject({ edit: 'deny', bash: 'deny', todowrite: 'deny' })
+      const keys = Object.keys(permission!)
+      // Everything of the platform is closed first, then the reading tools opened: the last wins.
+      expect(keys.indexOf('raditi_*')).toBeLessThan(keys.indexOf('raditi_site_info'))
+      expect(permission).toMatchObject({
+        'raditi_*': 'deny',
+        raditi_site_info: 'allow',
+        raditi_web_observe: 'allow',
+      })
+      expect(permission).not.toHaveProperty('raditi_web_click')
+      expect(permission).not.toHaveProperty('raditi_wp_rest')
+    }
+    // The session row the wrapper builds names the planning agent too.
+    expect(file(run, 'run.mjs')).toContain('"agent":"raditi-plan"')
+    // An ordinary pass knows no planning agent.
+    const ordinary = await driver.prepare(context)
+    expect(file(ordinary, '.config/opencode/opencode.json')).not.toContain('raditi-plan')
+  })
+
   it('starts a session with the platform agent and resumes the recorded one', async () => {
     const fresh = await driver.prepare(context)
     driver.command(fresh, input)

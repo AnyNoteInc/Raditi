@@ -3,6 +3,7 @@ import type { Metadata } from 'next'
 
 import { NewChat } from '@/components/chat/new-chat'
 import { requireSession, UNAVAILABLE } from '@/lib/access'
+import { speechAvailable } from '@/server/speech-runtime'
 
 export const metadata: Metadata = { title: 'Чаты' }
 
@@ -13,7 +14,12 @@ export default async function Page() {
   if (session === UNAVAILABLE) return null
   return (
     <Box sx={{ display: { xs: 'none', md: 'flex' }, flex: '1 0 auto', flexDirection: 'column' }}>
-      <NewChat userId={session.user.id} userName={session.user.name} beside />
+      <NewChat
+        userId={session.user.id}
+        userName={session.user.name}
+        speech={speechAvailable()}
+        beside
+      />
     </Box>
   )
 }
