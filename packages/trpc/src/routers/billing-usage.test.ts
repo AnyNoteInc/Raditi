@@ -776,7 +776,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
       tier: 'none',
       windows: [
         { kind: '5h', limit: null, used: 0, left: null, resetsAt: null },
-        { kind: 'week', limit: 50, used: 0, left: 50, resetsAt: null },
+        { kind: 'week', limit: null, used: 0, left: null, resetsAt: null },
       ],
       paymentsEnabled: true,
       autoRenewalAvailable: true,
@@ -822,7 +822,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
       history: noPage,
       spendable: tariff.creditsPerMonth + GIFT,
       // Of the tariff no more than the day gives, if it has a day; the gift is outside the day.
-      spendableNow: freshDay.left + GIFT,
+      // The week of the tariff bounds its credits (owner's answer of 14.11.2026).
+      spendableNow: Math.min(freshDay.left, tariff.creditsPerWeek ?? Infinity) + GIFT,
       setAside: 0,
       minToStart: 1,
       today: freshDay,

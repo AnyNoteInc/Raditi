@@ -266,6 +266,7 @@ describe('newTaskVerdict', () => {
         },
         { rateUsable: false },
         {
+          accounts: three(account(250), empty, empty),
           windows: [
             { kind: '5h', limit: 20, used: '20.0000', resetsAt: new Date(Date.now() + 60_000) },
           ],

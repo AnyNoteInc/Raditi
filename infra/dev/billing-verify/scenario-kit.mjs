@@ -1093,8 +1093,8 @@ const doubledPrice = (price) => {
 }
 
 /** The tariffs and the pack on sale, as `billing.plans` and the table of plans both tell them. */
-/** The windows without a paid tariff (`noTariffWindowCredits`, Л4). */
-export const NO_TARIFF_WINDOWS = Object.freeze({ '5h': null, week: 50 })
+/** The windows without a paid tariff: none, they bound tariff credits only (owner, 14.11.2026). */
+export const NO_TARIFF_WINDOWS = Object.freeze({ '5h': null, week: null })
 /** The tier of a paid plan by its slug (Л18): any other paid plan is «Старт». */
 const tierOf = (slug) => (slug === 'business' || slug === 'agency' ? slug : 'start')
 
@@ -1249,6 +1249,20 @@ export async function pagesShowWhatIsStored(t) {
     const paid = live?.status === 'active'
     const tariff = account('credit_tariff')
     const spent = (pick) => pick(gift) + pick(pack) + (paid ? pick(tariff) : 0)
+    // The windows of 5 hours and of the week: those of the paid tariff, none without one (owner's
+    // answer of 14.11.2026); the stand queues no task, so no window is ever started (plan 71). A
+    // user without a workspace has none yet.
+    const windows = workspace
+      ? await windowsOf(t, workspace.id, {
+          '5h': paid ? live.credits_per_5h : NO_TARIFF_WINDOWS['5h'],
+          week: paid ? live.credits_per_week : NO_TARIFF_WINDOWS.week,
+        })
+      : []
+    // The windows bound the tariff credits only: what is left of the least of them.
+    const windowLeft = windows.reduce(
+      (least, window) => (window.left === null ? least : Math.min(least, window.left)),
+      Infinity,
+    )
     // No tariff credit is spent in a day of the stand: no task is ever queued. A paid tariff has
     // its whole limit left, or what its account has free when that is less; without a paid
     // tariff there is no day.
@@ -1257,19 +1271,11 @@ export async function pagesShowWhatIsStored(t) {
     const today = paid ? { limit, charged: 0, held: 0, used: 0, room: limit, left } : null
     const task = {
       spendable: spent(({ available }) => available),
-      spendableNow: gift.available + pack.available + (paid ? left : 0),
+      spendableNow: gift.available + pack.available + (paid ? Math.min(left, windowLeft) : 0),
       setAside: spent(({ held }) => held),
       minToStart: MIN_START_CREDITS,
       today,
-      // The windows of 5 hours and of the week: those of the paid tariff, else those without a
-      // tariff; the stand queues no task, so no window is ever started (plan 71). A user without
-      // a workspace has none yet.
-      windows: workspace
-        ? await windowsOf(t, workspace.id, {
-            '5h': paid ? live.credits_per_5h : NO_TARIFF_WINDOWS['5h'],
-            week: paid ? live.credits_per_week : NO_TARIFF_WINDOWS.week,
-          })
-        : [],
+      windows,
       tier: paid ? tierOf(live.plan) : 'none',
     }
     // Without a usable credit rate no task is taken, which is said before anything else.

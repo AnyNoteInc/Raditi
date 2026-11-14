@@ -203,9 +203,15 @@ export class PostgresGatewayStore implements GatewayStore {
       // The windows of the workspace first (plan 71; docs/spec.md §9): its advisory lock comes
       // before the key, the account and the call, and no holder of a billing lock waits for it.
       // The workspace of a key never changes, so it is read before any lock.
-      const [owner] = await tx.$queryRaw<{ workspaceId: string; billable: boolean }[]>`
-        SELECT t.workspace_id AS "workspaceId", t.billable FROM llm_keys k
-        JOIN tasks t ON t.id = k.task_id WHERE k.key_hash = ${value.keyHash}`
+      // `onTariff`: an active reserve of the task stands on tariff credits. The windows bound those
+      // only (owner's answer of 14.11.2026): a pass reserved on the gift or a pack goes on.
+      const [owner] = await tx.$queryRaw<
+        { workspaceId: string; billable: boolean; onTariff: boolean }[]
+      >`
+        SELECT t.workspace_id AS "workspaceId", t.billable,
+          EXISTS (SELECT 1 FROM credit_holds h WHERE h.task_id = t.id AND h.status = 'active'
+            AND h.unit = 'credit_tariff') AS "onTariff"
+        FROM llm_keys k JOIN tasks t ON t.id = k.task_id WHERE k.key_hash = ${value.keyHash}`
       if (!owner) return { kind: 'refused', reason: 'unauthorized' }
       await lockUsageWindows(tx, owner.workspaceId)
       const fallback = value.fallback === true
@@ -306,8 +312,10 @@ export class PostgresGatewayStore implements GatewayStore {
       // while what the window took, with the reserves of the open calls, is below its limit; the
       // last one may take it over by itself. A task that is not billable is not counted (Л7).
       // Only a call of a plan with windows: a call of the API paid by the token is bounded by the
-      // credits of the customer alone (owner's answer of 13.11.2026).
-      const windowed = owner.billable && value.capacity === 'windows' && !fallback
+      // credits of the customer alone (owner's answer of 13.11.2026). Only a pass whose reserve
+      // stands on tariff credits: the windows do not bound the gift and the packs (owner's answer
+      // of 14.11.2026).
+      const windowed = owner.billable && owner.onTariff && value.capacity === 'windows' && !fallback
       if (windowed) {
         const terms = await workspaceUsageTerms(tx, owner.workspaceId)
         const [windows, openReserved] = await Promise.all([

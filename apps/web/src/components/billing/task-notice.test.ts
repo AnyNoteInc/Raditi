@@ -634,7 +634,7 @@ describe('the line under «Тарифы» of a customer without a tariff', () =>
   })
 })
 
-// Plan 71: a spent window of 5 hours or of the week — credits do not lift it, the reset does.
+// Plan 71: a spent window of 5 hours or of the week bounds the tariff credits only (14.11.2026).
 describe('a spent window of the workspace', () => {
   const resetsAt = new Date('2026-11-16T15:40:00.000Z')
 
@@ -651,9 +651,20 @@ describe('a spent window of the workspace', () => {
       }),
     ).toEqual({
       reason: 'window_limit',
-      text: 'Лимит на 5 часов исчерпан: новые задачи — после 18:40. Кредиты от этого не сгорают. На старших тарифах лимиты больше — тариф можно сменить в разделе «Тарифы».',
+      text: 'Лимит тарифа на 5 часов исчерпан: кредиты тарифа — снова после 18:40. Кредиты от этого не сгорают. На старших тарифах лимиты больше — тариф можно сменить в разделе «Тарифы».',
       actions: ['change_plan'],
     })
+  })
+
+  it('offers a pack, which the windows do not bound (owner, 14.11.2026)', () => {
+    const notice = told({
+      tariff: 200,
+      offer: PACK,
+      facts: { windows: [{ kind: 'week', limit: 55, used: '55', resetsAt }] },
+    })
+    expect(notice.actions).toEqual(['buy_pack', 'change_plan'])
+    expect(notice.text).toContain('Чтобы продолжить сейчас, купите пакет')
+    expect(notice.text).toContain('кредиты из пакета лимитом не ограничены')
   })
 
   it('names the week when it is the one spent', () => {
@@ -667,6 +678,6 @@ describe('a spent window of the workspace', () => {
           ],
         },
       }).text,
-    ).toMatch(/^Недельный лимит исчерпан: новые задачи — в пн после 10:15\./)
+    ).toMatch(/^Недельный лимит тарифа исчерпан: кредиты тарифа — снова в пн после 10:15\./)
   })
 })

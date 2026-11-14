@@ -11,7 +11,6 @@ import {
   appEnvSchema,
   isPlanPeak,
   planRatesSchema,
-  noTariffWindowCredits,
   workspaceTiers,
   type Env,
   type PlanRates,
@@ -300,10 +299,7 @@ async function readFacts(prisma: PrismaClient, now: Date): Promise<UsageFacts> {
     return {
       tier,
       workspaces: rows.length,
-      weeklyLimits: rows.reduce(
-        (total, row) => total + (row.terms.limits.week ?? noTariffWindowCredits.week ?? 0),
-        0,
-      ),
+      weeklyLimits: rows.reduce((total, row) => total + (row.terms.limits.week ?? 0), 0),
       spent7d: rows.reduce((total, row) => total + row.spent7d, 0),
       p95FiveHours: Math.max(0, ...rows.map((row) => row.p95)),
     }

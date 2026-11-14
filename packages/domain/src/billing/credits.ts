@@ -13,7 +13,7 @@ import {
   type SubscriptionStatus,
 } from './subscription.ts'
 import {
-  refusingWindow,
+  windowTariffRoom,
   usageWindowStatesSchema,
   workspaceTierSchema,
   type UsageWindowState,
@@ -777,14 +777,22 @@ const dayBoundPlacements = Object.freeze({
 export function placementTariffRoom(
   placement: TaskPlacement,
   today: Pick<TariffDay, 'room'> | null,
+  windows: readonly UsageWindowState[] = [],
 ): Credits | null {
   if (typeof placement !== 'string' || !Object.hasOwn(dayBoundPlacements, placement)) {
     throw badRequest('Invalid placement of a task')
   }
-  if (!dayBoundPlacements[placement] || today === null) return null
-  const room = tariffRoomSchema.safeParse(today.room)
-  if (!room.success) throw badRequest('Invalid room of the tariff day')
-  return room.data
+  // The windows bound the tariff part of every placement, a retry too (Л5), and nothing else:
+  // a spent window leaves the gift and the packs (owner's answer of 14.11.2026).
+  const window = windowTariffRoom(windows)
+  let day: Credits | null = null
+  if (dayBoundPlacements[placement] && today !== null) {
+    const room = tariffRoomSchema.safeParse(today.room)
+    if (!room.success) throw badRequest('Invalid room of the tariff day')
+    day = room.data
+  }
+  if (window === null) return day
+  return toCredits(day === null ? window : Math.min(day, window))
 }
 
 // What the active reserve rows of one task hold on each account.
@@ -963,9 +971,10 @@ export type NewTaskVerdict = {
  *    the day, with the gift and pack credits, cannot cover what the placement needs although the
  *    accounts can — `daily_limit`. Only a paid tariff whose plan has a daily limit gets here; a
  *    pack bought today lifts it. A retry is never refused by the day (`placementTariffRoom`);
- * 4. the windows of the workspace, for every placement, a retry too (Л5): a window of 5 hours or
- *    of the week has less room than the placement needs — `window_limit`. Credits do not lift
- *    it; the reset does (owner's decision of 11.11.2026, plan 71).
+ * 4. the windows of the workspace, for every placement, a retry too (Л5): they bound the tariff
+ *    credits only (owner's answer of 14.11.2026), so a spent window leaves the gift and the packs;
+ *    when those cannot cover what the placement needs either — `window_limit`. A pack lifts it,
+ *    and so does the reset.
  *
  * Nothing else is asked (owner's decision of 10.11.2026: «зависимость только от кредитов»): no
  * bound on unpaid work and no rule of one gift per site. A continuation is refused by the day
@@ -1000,7 +1009,8 @@ export function newTaskVerdict(input: NewTaskInput): NewTaskVerdict {
   const numbers = {
     spendable: net(free.total),
     spendableNow: net(
-      spendableCredits(accounts, paid, placementTariffRoom(placement, today)).total,
+      spendableCredits(accounts, paid, placementTariffRoom(placement, today, result.data.windows))
+        .total,
     ),
     debt: toCredits(debt),
     held: toCredits(
@@ -1028,9 +1038,11 @@ export function newTaskVerdict(input: NewTaskInput): NewTaskVerdict {
     return refused(nothing ? 'gift_spent' : 'gift_below_start')
   }
 
-  if (numbers.spendableNow < numbers.needed) return refused('daily_limit')
-
-  if (refusingWindow(numbers.windows, numbers.needed) !== null) return refused('window_limit')
+  if (numbers.spendableNow < numbers.needed) {
+    // The day alone would leave enough: a window took the rest of the tariff credits.
+    const byDay = net(spendableCredits(accounts, paid, placementTariffRoom(placement, today)).total)
+    return refused(byDay >= numbers.needed ? 'window_limit' : 'daily_limit')
+  }
 
   return { ...numbers, allowed: true, reason: null }
 }

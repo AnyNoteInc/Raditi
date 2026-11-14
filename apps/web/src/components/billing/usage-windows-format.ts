@@ -11,7 +11,7 @@ import { creditsOf } from './plan-format'
 
 /** The one sentence that says why the windows exist. */
 export const usageWindowsExplained =
-  'Лимиты делят мощность ИИ-агента между клиентами — кредиты от этого не сгорают.'
+  'Лимиты делят мощность ИИ-агента между клиентами и ограничивают только кредиты тарифа: кредиты из пакета и подарка тратятся без них. Кредиты от лимитов не сгорают.'
 
 /** «5 часов», «Неделя». */
 export const usageWindowTitle: Readonly<Record<UsageWindow['kind'], string>> = Object.freeze({

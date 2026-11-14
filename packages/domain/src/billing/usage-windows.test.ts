@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest'
 import { minContinueCredits, minStartCredits, newTaskVerdict, toCredits } from './credits.ts'
 import { taskRefusal } from './errors.ts'
 import {
-  noTariffWindowCredits,
   refusingWindow,
   tierQueuePriority,
   usageWindowLengthMs,
@@ -11,6 +10,7 @@ import {
   usageWindowShare,
   windowAdmitsCall,
   windowLimitsOf,
+  windowTariffRoom,
   workspaceTierOfPlan,
   type UsageWindowState,
 } from './usage-windows.ts'
@@ -37,9 +37,8 @@ describe('windows of a workspace', () => {
     expect(usageWindowLengthMs.week).toBe(7 * 24 * 3_600_000)
   })
 
-  it('takes the limits of the tariff, else those without a tariff (Л4)', () => {
-    expect(windowLimitsOf(null)).toEqual({ '5h': null, week: 50 })
-    expect(noTariffWindowCredits).toEqual({ '5h': null, week: 50 })
+  it('takes the limits of the tariff, and none without one (owner, 14.11.2026)', () => {
+    expect(windowLimitsOf(null)).toEqual({ '5h': null, week: null })
     expect(windowLimitsOf({ creditsPer5h: 70, creditsPerWeek: 210 })).toEqual({
       '5h': 70,
       week: 210,
@@ -48,6 +47,13 @@ describe('windows of a workspace', () => {
       '5h': null,
       week: null,
     })
+  })
+
+  it('leaves the tariff the least room of its windows', () => {
+    expect(windowTariffRoom([fiveHours('12.4'), week('50')])).toBe(5)
+    expect(windowTariffRoom([fiveHours('0', null), week('60')])).toBe(0)
+    expect(windowTariffRoom([fiveHours('0', null), week('0', null)])).toBeNull()
+    expect(windowTariffRoom([])).toBeNull()
   })
 
   it('leaves whole credits of room, never below zero', () => {
@@ -131,6 +137,31 @@ describe('newTaskVerdict with the windows', () => {
       held: 0,
       needed: minStartCredits,
       window: { kind: '5h', limit: 20, used: 21, resetsAt: reset.toISOString() },
+    })
+  })
+
+  it('bounds the tariff credits only: a spent window leaves the pack and the gift (owner, 14.11.2026)', () => {
+    const withPack = (windows: UsageWindowState[], placement: 'new' | 'retry' = 'new') =>
+      newTaskVerdict({
+        placement,
+        accounts: {
+          tariff: { balance: toCredits(100), held: toCredits(0) },
+          gift: { balance: toCredits(3), held: toCredits(0) },
+          pack: { balance: toCredits(40), held: toCredits(0) },
+        },
+        subscription: { status: 'active', creditsPerMonth: 600, creditsPerDay: null },
+        tariffCreditsToday: { charged: toCredits(0), held: toCredits(0) },
+        rateUsable: true,
+        windows,
+      })
+    expect(withPack([fiveHours('0', null), week('60')])).toMatchObject({
+      allowed: true,
+      spendable: 143,
+      spendableNow: 43,
+    })
+    expect(withPack([fiveHours('0', null), week('50')], 'retry')).toMatchObject({
+      allowed: true,
+      spendableNow: 48,
     })
   })
 

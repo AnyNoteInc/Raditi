@@ -270,9 +270,10 @@ const START_WINDOWS = [
   { kind: '5h', limit: null, used: 0, left: null, resetsAt: null },
   { kind: 'week', limit: 73, used: 0, left: 73, resetsAt: null },
 ]
+/** The windows of a workspace without a tariff: none since 14.11.2026 (owner's answer). */
 const FAKE_WINDOWS = [
   { kind: '5h', limit: null, used: 0, left: null, resetsAt: null },
-  { kind: 'week', limit: 50, used: 0, left: 50, resetsAt: null },
+  { kind: 'week', limit: null, used: 0, left: null, resetsAt: null },
 ]
 /**
  * The tariff credits of a day that took nothing yet: its limit — null for a plan without one,
@@ -1661,7 +1662,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
         totalAvailable: quota + GIFT,
         spendable: quota + GIFT,
         // Of the tariff, no more than the day gives, if it has a day; the gift is outside it.
-        spendableNow: freshDay(plan.creditsPerDay, quota).left + GIFT,
+        // The week of the tariff bounds its credits (owner's answer of 14.11.2026).
+        spendableNow:
+          Math.min(freshDay(plan.creditsPerDay, quota).left, plan.creditsPerWeek ?? Infinity) +
+          GIFT,
         setAside: 0,
         minToStart: 1,
         today: freshDay(plan.creditsPerDay, quota),
@@ -1800,7 +1804,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
         pack: { balance: pack.credits, held: 0, available: pack.credits },
         totalAvailable: quota + GIFT + pack.credits,
         spendable: quota + GIFT + pack.credits,
-        spendableNow: freshDay(plan.creditsPerDay, quota).left + GIFT + pack.credits,
+        spendableNow:
+          Math.min(freshDay(plan.creditsPerDay, quota).left, plan.creditsPerWeek ?? Infinity) +
+          GIFT +
+          pack.credits,
         setAside: 0,
         minToStart: 1,
         today: freshDay(plan.creditsPerDay, quota),
