@@ -687,7 +687,136 @@ export function* holdTheBrowser(ctx, facts) {
   })
 }
 
+// ─── Q: pages and documents of the agent ──────────────────────────────────────
+
+/** Any refusal of a platform tool, by its code: the pages and documents refuse in their own. */
+const codeOf = (answer) =>
+  answer && typeof answer.code === 'string' && typeof answer.message === 'string'
+    ? answer.code
+    : null
+
+/** The page scenario Q publishes: a file of the outbox, self-contained (docs/plan/69-pages.md, Ст6). */
+export const STAND_PAGE = Object.freeze({
+  file: 'prais.html',
+  title: 'Прайс цветочной лавки',
+  html: '<!doctype html><html lang="ru"><meta charset="utf-8"><title>Прайс</title><style>h1{color:#a63d12}</style><h1>Прайс</h1><p>Букет — 1 500 ₽</p><script>document.body.dataset.ready = "1"</script></html>',
+})
+
+/** The document scenario Q writes by sections (Ст7, Ст21), and its second words of a section. */
+export const STAND_DOC = Object.freeze({
+  title: 'Аудит скорости сайта',
+  sections: [
+    { id: 'summary', intent: 'Итог' },
+    { id: 'steps', intent: 'Что сделать' },
+  ],
+  summary: 'Три причины медленной загрузки: большие картинки, лишние скрипты, нет кеша.',
+  steps: '### По порядку\n\n1. Сжать картинки.\n2. Убрать лишние скрипты.',
+  edited: 'Две причины медленной загрузки: большие картинки и нет кеша.',
+  // The form of a JWT: the role refuses a section that carries one before anyone sees it.
+  token:
+    'Ключ доступа: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzdGFuZCIsImlhdCI6MTc5MDAwMDAwMH0.c3RhbmQtc2lnbmF0dXJlLW9mLXRoZS1ydW4',
+})
+
+/** Scenario Q: a page of the outbox, published by its file — its address comes at once. */
+export function* publishPage(ctx, facts) {
+  // The file of the outbox, by the CLI's own shell: the one tool of files every turn declares.
+  yield call('bash', {
+    command: `cat > /workspace/out/${STAND_PAGE.file} <<'RADITI_PAGE'\n${STAND_PAGE.html}\nRADITI_PAGE`,
+    description: 'Write the page',
+  })
+  const answer = yield call('page_publish', { file: STAND_PAGE.file, title: STAND_PAGE.title })
+  facts.code = codeOf(answer)
+  facts.url = typeof answer?.url === 'string' ? answer.url : null
+  facts.version = answer?.version ?? null
+  facts.live = answer?.live ?? null
+  return final({
+    summary: 'Published a page',
+    changeType: 'none',
+    message: facts.url ? `Страница готова: ${facts.url}` : 'Страницу опубликовать не получилось.',
+  })
+}
+
+/**
+ * Scenario Q: the skeleton of a document, a section written, a section the role refuses (a JWT),
+ * and `doc_finish` while a placeholder stands — refused.
+ */
+export function* writeDocument(ctx, facts) {
+  const created = yield call('doc_create', { title: STAND_DOC.title, sections: STAND_DOC.sections })
+  facts.docId = typeof created?.docId === 'string' ? created.docId : null
+  if (!facts.docId) throw new ScriptBroken(`doc_create made no document: ${codeOf(created)}`)
+  const docId = facts.docId
+  facts.written = codeOf(
+    yield call('doc_section_write', {
+      docId,
+      id: 'summary',
+      heading: 'Итог',
+      markdown: STAND_DOC.summary,
+    }),
+  )
+  facts.token = codeOf(
+    yield call('doc_section_write', {
+      docId,
+      id: 'steps',
+      heading: 'Что сделать',
+      markdown: STAND_DOC.token,
+    }),
+  )
+  facts.early = codeOf(yield call('doc_finish', { docId }))
+  return final({
+    summary: 'Started a document',
+    changeType: 'none',
+    message: 'Пишу документ: готов первый раздел.',
+  })
+}
+
+/** Scenario Q: the last section, `doc_finish`, and the link of the document (`page_publish`). */
+export function* finishDocument(ctx, facts) {
+  const docId = ctx.docId
+  if (!docId) throw new ScriptBroken('the turn names no document')
+  facts.written = codeOf(
+    yield call('doc_section_write', {
+      docId,
+      id: 'steps',
+      heading: 'Что сделать',
+      markdown: STAND_DOC.steps,
+    }),
+  )
+  facts.finish = codeOf(yield call('doc_finish', { docId }))
+  const published = yield call('page_publish', { docId })
+  facts.code = codeOf(published)
+  facts.url = typeof published?.url === 'string' ? published.url : null
+  return final({
+    summary: 'Finished the document',
+    changeType: 'none',
+    message: facts.url ? `Документ готов: ${facts.url}` : 'Документ готов.',
+  })
+}
+
+/** Scenario Q: a section written again and the next version of the document. */
+export function* editDocument(ctx, facts) {
+  const docId = ctx.docId
+  if (!docId) throw new ScriptBroken('the turn names no document')
+  facts.written = codeOf(
+    yield call('doc_section_write', {
+      docId,
+      id: 'summary',
+      heading: 'Итог',
+      markdown: STAND_DOC.edited,
+    }),
+  )
+  facts.finish = codeOf(yield call('doc_finish', { docId }))
+  return final({
+    summary: 'Edited the document',
+    changeType: 'none',
+    message: 'Поправил итог документа.',
+  })
+}
+
 export const PROGRAMS = Object.freeze({
+  publishPage,
+  writeDocument,
+  finishDocument,
+  editDocument,
   publishPlainNews,
   retitlePage,
   plainAnswer,

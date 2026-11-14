@@ -100,6 +100,7 @@ async function copyModules(copy) {
     db: await load('packages/db/src/index.ts'),
     billing: await load('packages/billing/src/index.ts'),
     domain: await load('packages/domain/src/index.ts'),
+    docRender: await load('packages/doc-render/src/index.ts'),
     snapshots: await load('packages/snapshots/src/index.ts'),
     ids: await load('packages/db/src/uuidv7.ts'),
   }
@@ -137,6 +138,7 @@ async function main(options, owned) {
     'llm',
     'preview',
     'stream',
+    'pages',
     'browser',
     'zai',
   ])
@@ -194,6 +196,8 @@ async function main(options, owned) {
     auth: rt.secret(randomBytes(36).toString('base64url')),
     previewSession: rt.secret(randomBytes(36).toString('base64url')),
     workerToken: rt.secret(randomBytes(36).toString('base64url')),
+    pagesCookie: rt.secret(randomBytes(36).toString('base64url')),
+    pagesSigning: rt.secret(randomBytes(36).toString('base64url')),
   }
   const context = {
     run: names.run,

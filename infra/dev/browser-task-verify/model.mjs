@@ -83,7 +83,9 @@ export function turnOf(body) {
 
 const sameArgs = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 /** A tool of the platform goes by `raditi_<tool>`, one of the CLI (`read`, `bash`) by its own. */
-const sameTool = (name, tool) => name === tool || name.endsWith(`_${tool}`)
+// Exact names only: a suffix would take `raditi_doc_read` for the CLI's `read` and
+// `raditi_doc_section_write` for its `write` (the `docs` family is declared to every turn, plan 69).
+const sameTool = (name, tool) => name === tool || name === `raditi_${tool}`
 
 /**
  * The next move of a program over the calls already made: `{ call }`, `{ final }` or
@@ -179,7 +181,10 @@ export function programAnswer(current, body, onMove = () => {}) {
   }
   const name = declaredName(body, move.call.tool)
   if (name === null) {
-    current.broken = `the request declares no ${move.call.tool}`
+    const declared = (Array.isArray(body?.tools) ? body.tools : [])
+      .map((item) => item?.function?.name)
+      .filter((name) => typeof name === 'string' && !name.startsWith('raditi_'))
+    current.broken = `the request declares no ${move.call.tool} (the CLI's own: ${declared.join(', ') || 'none'})`
     return { ...config, scenario: 'text', text: 'Синтетическая модель: инструмент не объявлен.' }
   }
   return {
