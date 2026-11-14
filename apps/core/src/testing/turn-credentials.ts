@@ -12,7 +12,7 @@ export class MemoryTurnCredentials implements TurnCredentialSource {
   readonly revoked: TurnCredentialRef[] = []
   recovered = 0
   /** Absent unless a test asks the pool before the lease. */
-  admit?: TurnCredentialSource["admit"]
+  admit?: TurnCredentialSource['admit']
 
   async issue(turn: TurnCredentialRef): Promise<TurnCredentialValues> {
     const values = this.values.get(key(turn)) ??
