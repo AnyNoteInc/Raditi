@@ -3,10 +3,13 @@
 // this network, and the owner asked for a free proxy (08.11.2026). Free public HTTP proxies live for
 // hours, so core never names one: it uses TELEGRAM_PROXY_URL=http://10.10.0.10:3129, this process.
 // It accepts only `CONNECT api.telegram.org:443`, and chains it through a pool of public proxies
-// it checked itself (a CONNECT that answered 200), refreshed every 20 minutes and when it runs low;
+// it checked itself — a CONNECT that answered 200 and, through it, a TLS handshake with Telegram
+// whose certificate verifies: many free proxies intercept TLS, and core refuses them anyway
+// (14.11.2026) —, refreshed every 20 minutes and when it runs low;
 // a proxy that fails is dropped and the next one tried. TLS stays end to end between core and
 // Telegram: a public proxy sees the host name only, never the bot's token or a lead.
 import { connect } from 'node:net'
+import { connect as connectTls } from 'node:tls'
 import { createServer } from 'node:http'
 import process from 'node:process'
 
@@ -55,6 +58,32 @@ function tunnel(proxy, timeoutMs = 8000) {
   })
 }
 
+/**
+ * Whether `proxy` reaches the real Telegram: a tunnel, then a TLS handshake through it with the
+ * certificate of api.telegram.org verified against the system's roots. A proxy that answers with
+ * a certificate of its own intercepts the traffic, and is never taken.
+ */
+async function verified(proxy, timeoutMs = 8000) {
+  const { socket } = await tunnel(proxy, timeoutMs)
+  return new Promise((resolve, reject) => {
+    const tls = connectTls({ socket, servername: TARGET.split(':')[0] })
+    const timer = setTimeout(() => {
+      tls.destroy()
+      reject(new Error('tls timeout'))
+    }, timeoutMs)
+    tls.once('secureConnect', () => {
+      clearTimeout(timer)
+      tls.destroy()
+      resolve()
+    })
+    tls.once('error', (error) => {
+      clearTimeout(timer)
+      tls.destroy()
+      reject(error)
+    })
+  })
+}
+
 async function refresh() {
   if (refreshing) return refreshing
   refreshing = (async () => {
@@ -67,11 +96,9 @@ async function refresh() {
       // A few at a time: the list is long and most of it is dead
       for (let index = 0; index < candidates.length && good.length < POOL_SIZE; index += 20) {
         const batch = candidates.slice(index, index + 20)
-        const results = await Promise.allSettled(batch.map((proxy) => tunnel(proxy)))
+        const results = await Promise.allSettled(batch.map((proxy) => verified(proxy)))
         results.forEach((result, at) => {
-          if (result.status !== 'fulfilled') return
-          result.value.socket.destroy()
-          if (good.length < POOL_SIZE) good.push(batch[at])
+          if (result.status === 'fulfilled' && good.length < POOL_SIZE) good.push(batch[at])
         })
       }
       pool = good
