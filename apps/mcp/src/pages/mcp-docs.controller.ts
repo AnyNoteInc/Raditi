@@ -9,6 +9,7 @@ import {
   docSectionRemoveArgumentsSchema,
   docSectionWriteArgumentsSchema,
   type DocCreateArguments,
+  type DocFinishArguments,
   type DocSectionWriteArguments,
 } from '@repo/domain'
 
@@ -56,7 +57,7 @@ export class McpDocsController {
   @Tool({
     name: 'doc_create',
     description:
-      'Start a long document for the client — an audit, a plan of work, a summary, an instruction — as its skeleton: the title and every section by an id with its intent in one line (e.g. "Итог: три главные причины медленной загрузки"). Call it first, before searching or reading anything, so the client sees the document appear. The last section is «Источники». Write in the language of the client, Russian and «вы» by default. The client sees the title and the intents at once: never a secret, a value of a variable or data of people in them.',
+      'Start a long document for the client — an audit, a plan of work, a summary, an instruction — as its skeleton: the title and every section by an id with its intent in one line (e.g. "Итог: три главные причины медленной загрузки"). Call it first, before searching or reading anything, so the client sees the document appear. The last section is «Источники». Choose view by what the client will do with it: page — a page to read and share (a reference, a report, a summary for people; downloaded as .html); text — plain text to edit or paste elsewhere (notes, a plan, a draft, an instruction; downloaded as .md). Write in the language of the client, Russian and «вы» by default. The client sees the title and the intents at once: never a secret, a value of a variable or data of people in them.',
     parameters: docCreateArgumentsSchema,
     annotations: writes,
   })
@@ -69,7 +70,7 @@ export class McpDocsController {
   @Tool({
     name: 'doc_section_write',
     description:
-      'Write one section of a document by its id: its heading and its Markdown, headings inside it from ### down, lists only where the content is a list, tables for comparisons, no raw HTML. It replaces the section whole; with after it adds a new section after that id (null — first). One section a call: never send the whole document, never rebuild it from memory. Put findings here, not in the chat. Never a secret, a value of a variable, a key, or a dump or a whole table of a database; data of people (form entries, leads, orders, customers) only when the client asks for them. The client sees the text once this turn ends and the platform checked it.',
+      'Write one section of a document by its id: its heading and its Markdown, headings inside it from ### down, lists only where the content is a list, tables for comparisons, no raw HTML. It replaces the section whole; with after it adds a new section after that id (null — first). One section a call: never send the whole document, never rebuild it from memory. Put findings here, not in the chat. Never a secret, a value of a variable, a key, or a dump or a whole table of a database; data of people (form entries, leads, orders, customers) only when the client asks for them. The client sees the section beside the chat a moment after you write it, once the platform checked it.',
     parameters: docSectionWriteArgumentsSchema,
     annotations: writes,
   })
@@ -127,11 +128,11 @@ export class McpDocsController {
   @Tool({
     name: 'doc_finish',
     description:
-      'Finish a document: refused while a section is a placeholder. The version is made when this turn ends. Then tell the client in one or two lines what came of it — never retell the document.',
+      'Finish a document: refused while a section is a placeholder. The version is made when this turn ends and opens beside the chat; view changes how it is shown (page or text) when the content asks for the other. Then tell the client in one or two lines what came of it — never retell the document.',
     parameters: docFinishArgumentsSchema,
     annotations: writes,
   })
-  async finish(@Payload() args: { docId: string }, @Ctx() context: McpContext) {
+  async finish(@Payload() args: DocFinishArguments, @Ctx() context: McpContext) {
     const scope = this.#scope(context)
     return scope ? answerOf(await this.docs.finish(scope, args)) : unauthorized
   }

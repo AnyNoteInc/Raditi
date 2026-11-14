@@ -35,7 +35,7 @@ import { getSiteAdapter } from '@repo/site-adapters'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { sampleBackendId, sampleDriverId, sampleModelSlug } from '../testing/ids.ts'
-import type { TurnSupervisor } from '../turns/turn-supervisor.ts'
+import type { TurnRunHooks, TurnSupervisor } from '../turns/turn-supervisor.ts'
 import type { CandidateBuilder } from './candidate-builder.ts'
 import type { CandidateGit } from './candidate-git.ts'
 import { LivePasses } from './live-passes.ts'
@@ -106,6 +106,7 @@ type Run = (
   request: UnkeyedTurnRequest,
   policy: TurnCredentialPolicy,
   signal?: AbortSignal,
+  hooks?: TurnRunHooks,
 ) => Promise<unknown>
 
 describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
@@ -202,7 +203,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     options: {
       git?: CandidateGit | null
       browser?: { reclaim: ReturnType<typeof vi.fn>; verify: ReturnType<typeof vi.fn> } | null
-      docs?: { settle: ReturnType<typeof vi.fn> }
+      docs?: { settle: ReturnType<typeof vi.fn>; checkLive?: ReturnType<typeof vi.fn> }
       capacity?: TurnCapacity
     } = {},
   ) {
@@ -234,6 +235,7 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       queue,
       logger: quiet,
       ...(options.capacity ? { capacity: options.capacity } : {}),
+      liveDocCheckMs: 5,
       now: () => NOW,
     })
     return { passes, queue, supervisor, close, live }
@@ -510,6 +512,50 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
       await passes.run(dialog.job)
       expect(docs.settle).toHaveBeenCalledWith(dialog.taskId, 1, refusesText)
       expect(seen).toEqual(['running'])
+    })
+
+    it('checks the sections while the turn runs once it holds its keys, and stops with it (plan 74, Д2)', async () => {
+      await rate()
+      const dialog = await queued({ reserve: true })
+      const refuses = () => null
+      const docs = { settle: vi.fn(async () => {}), checkLive: vi.fn(async () => {}) }
+      const { passes } = runner(
+        async (_request, _policy, _signal, hooks) => {
+          await new Promise((resolve) => setTimeout(resolve, 30))
+          // Not armed yet: nothing is checked before the turn holds what it checks with.
+          expect(docs.checkLive).not.toHaveBeenCalled()
+          hooks?.onArmed?.(async () => refuses)
+          await vi.waitFor(() => expect(docs.checkLive).toHaveBeenCalled())
+          throw new Error('the sandbox is gone')
+        },
+        undefined,
+        { docs },
+      )
+      await passes.run(dialog.job)
+      expect(docs.checkLive).toHaveBeenCalledWith(dialog.taskId, 1, refuses)
+      const calls = docs.checkLive.mock.calls.length
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      expect(docs.checkLive.mock.calls.length).toBe(calls)
+    })
+
+    it('checks nothing while the values of the variables cannot be read (plan 74, Д2)', async () => {
+      await rate()
+      const dialog = await queued({ reserve: true })
+      const docs = { settle: vi.fn(async () => {}), checkLive: vi.fn(async () => {}) }
+      const refusal = vi.fn(async () => {
+        throw new Error('vault is down')
+      })
+      const { passes } = runner(
+        async (_request, _policy, _signal, hooks) => {
+          hooks?.onArmed?.(refusal)
+          await vi.waitFor(() => expect(refusal.mock.calls.length).toBeGreaterThan(1))
+          throw new Error('the sandbox is gone')
+        },
+        undefined,
+        { docs },
+      )
+      await passes.run(dialog.job)
+      expect(docs.checkLive).not.toHaveBeenCalled()
     })
 
     it('checks no sections after a turn that failed: they wait for the next end of a turn', async () => {

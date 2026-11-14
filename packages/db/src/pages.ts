@@ -12,6 +12,7 @@ import {
   pageLimitReached,
   pageNotFound,
   type DocSectionState,
+  type DocView,
   type PageKind,
   type PageRefusalReason,
 } from '@repo/domain'
@@ -552,6 +553,8 @@ export interface ChatDocumentSkeleton {
   workspaceId: string
   taskId: string
   title: string
+  /** How the finished document is shown, the agent's choice (docs/plan/74, Д1). */
+  view: DocView
   sections: readonly { key: string; intent: string }[]
 }
 
@@ -567,6 +570,7 @@ export async function createChatDocument(db: Db, input: ChatDocumentSkeleton) {
         workspaceId: input.workspaceId,
         taskId: input.taskId,
         title: input.title,
+        view: input.view,
         sections: {
           create: input.sections.map((section, position) => ({
             sectionKey: section.key,
@@ -748,6 +752,7 @@ export async function readChatDocument(
   return {
     id: document.id,
     title: document.title,
+    view: document.view as DocView,
     revision: document.revision,
     version: document.currentVersion,
     taskId: document.taskId,
@@ -774,7 +779,14 @@ export async function readChatDocument(
 /** `doc_finish` (Ст19, Ст21): refused while a section is pending; done at the end of the turn. */
 export async function requestDocFinish(
   db: Db,
-  input: { workspaceId: string; documentId: string; taskId: string; turnNo: number },
+  input: {
+    workspaceId: string
+    documentId: string
+    taskId: string
+    turnNo: number
+    /** A new view of the finished document (docs/plan/74, Д1); absent — as it was. */
+    view?: DocView
+  },
 ): Promise<void> {
   await db.$transaction(async (tx) => {
     const document = await lockDocument(tx, input.documentId, input.workspaceId)
@@ -784,7 +796,11 @@ export async function requestDocFinish(
     if (pending > 0) throw docPendingSections(pending)
     await tx.chatDocument.update({
       where: { id: document.id },
-      data: { finishTaskId: input.taskId, finishTurnNo: input.turnNo },
+      data: {
+        finishTaskId: input.taskId,
+        finishTurnNo: input.turnNo,
+        ...(input.view ? { view: input.view } : {}),
+      },
     })
   })
 }
@@ -827,6 +843,11 @@ export interface TurnSectionsVerdict {
    * not named here, or written again since its scan, stays unchecked.
    */
   sections: readonly { sectionId: string; digest: string; refusal: PageRefusalReason | null }[]
+  /**
+   * `false` — a check while the turn runs (docs/plan/74, Д2): sections only, no `doc_finish`
+   * comes true and none is dropped; those wait for the end of the turn. Default `true`.
+   */
+  final?: boolean
 }
 
 export interface SettledDocument {
@@ -854,13 +875,16 @@ export async function settleTurnSections(
       where: { id: { in: verdict.sections.map((each) => each.sectionId) } },
       select: { documentId: true },
     })
-    const finishing = await tx.chatDocument.findMany({
-      where: {
-        finishTaskId: { not: null },
-        workspaceId: { in: await workspacesOf(tx, verdict.taskId) },
-      },
-      select: { id: true },
-    })
+    const final = verdict.final !== false
+    const finishing = final
+      ? await tx.chatDocument.findMany({
+          where: {
+            finishTaskId: { not: null },
+            workspaceId: { in: await workspacesOf(tx, verdict.taskId) },
+          },
+          select: { id: true },
+        })
+      : []
     const documentIds = [
       ...new Set([
         ...scanned.map((each) => each.documentId),
@@ -928,6 +952,7 @@ export async function settleTurnSections(
       // A `doc_finish` comes true at the end of its own turn or later — never in the middle of a
       // later turn of its chat, nor before its turn ended (a turn of another chat settles).
       const finishReady =
+        final &&
         document.finishTaskId !== null &&
         (document.finishTaskId === verdict.taskId
           ? (document.finishTurnNo ?? 0) <= verdict.turnNo

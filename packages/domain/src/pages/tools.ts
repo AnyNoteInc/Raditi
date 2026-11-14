@@ -6,6 +6,7 @@ import {
   docIntentSchema,
   docSectionKeySchema,
   docSectionMarkdownSchema,
+  docViewSchema,
   pageTitleSchema,
 } from './doc.ts'
 import { pageLimits } from './limits.ts'
@@ -31,6 +32,7 @@ export const pageListArgumentsSchema = z.strictObject({})
 
 export const docCreateArgumentsSchema = z.strictObject({
   title: pageTitleSchema,
+  view: docViewSchema,
   sections: z
     .array(z.strictObject({ id: docSectionKeySchema, intent: docIntentSchema }))
     .min(1)
@@ -65,7 +67,12 @@ export const docSectionMoveArgumentsSchema = z.strictObject({
 })
 
 export const docReadArgumentsSchema = z.strictObject({ docId: id })
-export const docFinishArgumentsSchema = z.strictObject({ docId: id })
+/** `view` changes how the finished document is shown (docs/plan/74, Д1); absent — as it was. */
+export const docFinishArgumentsSchema = z.strictObject({
+  docId: id,
+  view: docViewSchema.optional(),
+})
+export type DocFinishArguments = z.infer<typeof docFinishArgumentsSchema>
 
 /** The names of the tools as the role declares them (the model sees `raditi_<name>`). */
 export const pagesToolNames = [

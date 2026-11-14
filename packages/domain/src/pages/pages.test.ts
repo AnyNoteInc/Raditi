@@ -323,15 +323,28 @@ describe('tool arguments', () => {
 
   it('creates a skeleton of unique sections', () => {
     const sections = [{ id: 'summary', intent: 'Итог: три причины' }]
-    expect(docCreateArgumentsSchema.safeParse({ title: 'Отчёт', sections }).success).toBe(true)
     expect(
-      docCreateArgumentsSchema.safeParse({ title: 'Отчёт', sections: [...sections, ...sections] })
-        .success,
+      docCreateArgumentsSchema.safeParse({ title: 'Отчёт', view: 'page', sections }).success,
+    ).toBe(true)
+    // The view is the agent's choice, never a guess (plan 74, Д1).
+    expect(docCreateArgumentsSchema.safeParse({ title: 'Отчёт', sections }).success).toBe(false)
+    expect(
+      docCreateArgumentsSchema.safeParse({ title: 'Отчёт', view: 'word', sections }).success,
     ).toBe(false)
-    expect(docCreateArgumentsSchema.safeParse({ title: 'Отчёт', sections: [] }).success).toBe(false)
     expect(
       docCreateArgumentsSchema.safeParse({
         title: 'Отчёт',
+        view: 'text',
+        sections: [...sections, ...sections],
+      }).success,
+    ).toBe(false)
+    expect(
+      docCreateArgumentsSchema.safeParse({ title: 'Отчёт', view: 'text', sections: [] }).success,
+    ).toBe(false)
+    expect(
+      docCreateArgumentsSchema.safeParse({
+        title: 'Отчёт',
+        view: 'text',
         sections: [{ id: 'Bad Id', intent: 'x' }],
       }).success,
     ).toBe(false)

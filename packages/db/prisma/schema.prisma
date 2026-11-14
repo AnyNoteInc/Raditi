@@ -2844,6 +2844,8 @@ model ChatDocument {
   workspaceId    String   @map("workspace_id") @db.Uuid
   taskId         String?  @map("task_id") @db.Uuid
   title          String   @db.VarChar(200)
+  /// docViews: `page` — a page to read (.html), `text` — plain text (.md); the agent's choice.
+  view           String   @default("text") @db.VarChar(8)
   /// Grows with every change: the card reads the document again (`feed.doc_touch`).
   revision       Int      @default(1)
   /// v1, v2, …: 0 before the first `doc_finish` came true.
@@ -2878,7 +2880,7 @@ model ChatDocumentSection {
   intent        String  @db.VarChar(200)
   /// docSectionStates: pending, written.
   state         String  @default("pending") @db.VarChar(16)
-  /// The chat and turn that wrote it; core checks the sections of a turn at its end.
+  /// The chat and turn that wrote it; core checks a section while its turn runs, and at its end.
   writtenTaskId String? @map("written_task_id") @db.Uuid
   writtenTurn   Int?    @map("written_turn")
   /// Set once core found nothing in it: until then the cabinet gets no text.

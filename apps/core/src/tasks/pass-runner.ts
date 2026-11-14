@@ -43,6 +43,10 @@ import { planTurn, type PassPlan } from './turn-planner.ts'
 
 /** How often a running pass looks for the client's «Отменить» in the feed. */
 export const CANCEL_POLL_MS = 5_000
+/** How often a running turn checks the sections of documents it wrote (docs/plan/74, Д2). */
+export const LIVE_DOC_CHECK_MS = 1_500
+/** How long a live check trusts the values of the variables it read from Vault. */
+export const LIVE_DOC_VALUES_MS = 15_000
 
 /**
  * Back to the queue: the retry of a busy site or pool waits at least this much and at most that.
@@ -104,13 +108,15 @@ export interface PassRunnerDependencies {
    */
   chatFiles?: Pick<ChatFiles, 'deliver' | 'failPages'>
   /** The documents of the chat (docs/plan/69-pages.md, Ст19); absent — not settled here. */
-  docs?: Pick<DocSections, 'settle'>
+  docs?: Pick<DocSections, 'settle'> & Partial<Pick<DocSections, 'checkLive'>>
   /** WORKSPACE_TURN_LIMIT (plan 70, ВР13); DEFAULT_WORKSPACE_TURN_LIMIT when absent. */
   workspaceTurnLimit?: number
   /** The places for turns of the platform (plan 70, ВР17); absent — no bound but the pool's. */
   capacity?: Pick<TurnCapacity, 'tryAcquire'>
   now?: () => Date
   cancelPollMs?: number
+  /** LIVE_DOC_CHECK_MS when absent (docs/plan/74, Д2). */
+  liveDocCheckMs?: number
   /** Counts what the pool told a pass (plan 71, §4.4): metrics without ids. */
   pool?: { limitsOut(): void }
 }
@@ -240,6 +246,51 @@ export class PassRunner {
     }
   }
 
+  /**
+   * The sections of documents the turn writes, checked while it runs (docs/plan/74, Д2): every
+   * `LIVE_DOC_CHECK_MS` once the turn holds its keys and values, one check at a time; a section
+   * that passed is shown at once. The end of the turn checks what is left, as before.
+   */
+  #liveDocs(taskId: string, turn: number) {
+    type Refuses = (text: string) => 'turn_key' | 'client_value' | null
+    const check = this.deps.docs?.checkLive?.bind(this.deps.docs)
+    let timer: ReturnType<typeof setInterval> | null = null
+    let running: Promise<void> | null = null
+    let stopped = false
+    let refusal: (() => Promise<Refuses>) | null = null
+    // The values the client may change while the turn runs are read again every so often; a
+    // Vault that does not answer skips the tick — the end of the turn checks what is left.
+    let held: { refuses: Refuses; at: number } | null = null
+    const fresh = async (): Promise<Refuses> => {
+      if (held && Date.now() - held.at < LIVE_DOC_VALUES_MS) return held.refuses
+      const refuses = await refusal!()
+      held = { refuses, at: Date.now() }
+      return refuses
+    }
+    const tick = () => {
+      if (running || stopped || !check || !refusal) return
+      running = fresh()
+        .then((refuses) => (stopped ? undefined : check(taskId, turn, refuses)))
+        .catch(() => undefined)
+        .finally(() => {
+          running = null
+        })
+    }
+    return {
+      arm: (armed: () => Promise<Refuses>) => {
+        if (stopped || !check || timer) return
+        refusal = armed
+        timer = setInterval(tick, this.deps.liveDocCheckMs ?? LIVE_DOC_CHECK_MS)
+        timer.unref?.()
+      },
+      stop: async () => {
+        stopped = true
+        if (timer) clearInterval(timer)
+        await running
+      },
+    }
+  }
+
   async #turnOf(
     job: AgentTurnJob,
     ref: PassRef,
@@ -288,13 +339,16 @@ export class PassRunner {
     }
 
     const watch = this.#watchCancel(job, controller)
+    const live = this.#liveDocs(job.taskId, plan.turn)
     let ending: PassEnding | null
     let retry: Retry | null = null
     let cause: string | null = null
     let outbox: Uint8Array | undefined
     let refusesText: ((text: string) => 'turn_key' | 'client_value' | null) | null = null
     try {
-      const completed = await supervisor.run(plan.request, plan.policy, controller.signal)
+      const completed = await supervisor.run(plan.request, plan.policy, controller.signal, {
+        onArmed: live.arm,
+      })
       outbox = completed.outbox
       refusesText = completed.refusesText
       const git = completed.manifest.git
@@ -312,6 +366,7 @@ export class PassRunner {
       retry = outcome?.retry ?? null
     } finally {
       clearInterval(watch)
+      await live.stop()
     }
     if (!ending) {
       this.#logger.warn(

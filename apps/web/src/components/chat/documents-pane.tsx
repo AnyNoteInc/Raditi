@@ -27,6 +27,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 import { useTRPC } from '@/trpc/client'
 
+import {
+  agentDocEntry,
+  agentDocOfEntry,
+  AgentDocStatus,
+  AgentDocTitle,
+  AgentDocumentView,
+} from './agent-document'
 import { documentText } from './chat-texts'
 import { taskFileHref } from './feed-file'
 
@@ -159,6 +166,7 @@ function HeadButton({
 export function DocumentsPane({
   taskId,
   rows,
+  agentDocs = [],
   target,
   fullscreen = false,
   onFullscreen,
@@ -168,6 +176,11 @@ export function DocumentsPane({
   taskId: string
   /** The rows of the chat: the documents, their versions and the pictures come from them. */
   rows: readonly ChatFileRow[]
+  /**
+   * The documents the agent writes section by section, oldest first (docs/plan/74): in the list
+   * with the files, each as `agentDocEntry(docId)` in the tab's history.
+   */
+  agentDocs?: readonly string[]
   target: DocumentTarget | null
   fullscreen?: boolean
   onFullscreen?: (on: boolean) => void
@@ -181,7 +194,10 @@ export function DocumentsPane({
 }) {
   const documents = useMemo(() => chatDocumentsOf(rows), [rows])
   const names = useMemo(() => new Set(documents.map((document) => document.name)), [documents])
-  const fallback = openingDocumentOf(documents.map((document) => document.name))
+  const latestAgentDoc = agentDocs.at(-1)
+  const fallback =
+    openingDocumentOf(documents.map((document) => document.name)) ??
+    (latestAgentDoc === undefined ? null : agentDocEntry(latestAgentDoc))
   const { current, go, back, forward } = useDocumentHistory(target, fallback)
   const [root, setRoot] = useState<HTMLElement | null>(null)
   const wide = useWide(root, 600) || fullscreen || standalone
@@ -203,13 +219,82 @@ export function DocumentsPane({
     go({ name, fileId: null, anchor })
   }
 
+  const currentAgentDoc = current ? agentDocOfEntry(current.name) : null
   const list = (
     <DocumentList
       documents={documents}
-      current={document?.name ?? null}
+      agentDocs={agentDocs}
+      current={current?.name ?? null}
       onOpen={(name) => open(name)}
     />
   )
+
+  if (currentAgentDoc !== null && agentDocs.includes(currentAgentDoc))
+    return (
+      <Box ref={setRoot} sx={{ height: '100%', minHeight: 0, minWidth: 0 }}>
+        <AgentDocumentView
+          key={currentAgentDoc}
+          docId={currentAgentDoc}
+          fullscreen={fullscreen}
+          {...(onFullscreen ? { onFullscreen } : {})}
+          lead={
+            <>
+              <HeadButton
+                icon="back"
+                label={documentText.back}
+                onClick={back ?? undefined}
+                disabled={!back}
+              />
+              <HeadButton
+                icon="forward"
+                label={documentText.forward}
+                onClick={forward ?? undefined}
+                disabled={!forward}
+              />
+              {wide ? null : (
+                <Button
+                  size="small"
+                  onClick={(event) => setListAnchor(event.currentTarget)}
+                  aria-haspopup="dialog"
+                  aria-expanded={listAnchor !== null}
+                  sx={{ flexShrink: 0, minHeight: 44, whiteSpace: 'nowrap' }}
+                >
+                  {documentText.all(documents.length + agentDocs.length)}
+                </Button>
+              )}
+            </>
+          }
+          aside={
+            wide ? (
+              <Box
+                component="nav"
+                aria-label={documentText.list}
+                sx={{
+                  width: 240,
+                  flexShrink: 0,
+                  borderRight: 1,
+                  borderColor: 'divider',
+                  overflowY: 'auto',
+                }}
+              >
+                {list}
+              </Box>
+            ) : null
+          }
+        />
+        <Popover
+          open={listAnchor !== null}
+          anchorEl={listAnchor}
+          onClose={() => setListAnchor(null)}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+          slotProps={{ paper: { sx: { width: 300, maxHeight: '70vh' } } }}
+        >
+          <Box component="nav" aria-label={documentText.list}>
+            {list}
+          </Box>
+        </Popover>
+      </Box>
+    )
 
   if (documents.length === 0 || document === null || version === null)
     return (
@@ -256,7 +341,7 @@ export function DocumentsPane({
             aria-expanded={listAnchor !== null}
             sx={{ flexShrink: 0, minHeight: 44, whiteSpace: 'nowrap' }}
           >
-            {documentText.all(documents.length)}
+            {documentText.all(documents.length + agentDocs.length)}
           </Button>
         )}
         <Box
@@ -448,10 +533,12 @@ function DocumentTitle({
 /** The list of the documents of the chat: pages and texts together, by name, with a search. */
 function DocumentList({
   documents,
+  agentDocs,
   current,
   onOpen,
 }: {
   documents: readonly ChatDocument[]
+  agentDocs: readonly string[]
   current: string | null
   onOpen: (name: string) => void
 }) {
@@ -461,7 +548,7 @@ function DocumentList({
   )
   return (
     <Box sx={{ p: 1 }}>
-      {documents.length > 5 ? (
+      {documents.length + agentDocs.length > 5 ? (
         <InputBase
           value={query}
           onChange={(event) => setQuery(event.target.value)}
@@ -478,10 +565,50 @@ function DocumentList({
           }}
         />
       ) : null}
+      {agentDocs.length > 0 && query.trim() === '' ? (
+        <Box component="ul" sx={{ m: 0, p: 0, listStyle: 'none' }}>
+          {[...agentDocs].reverse().map((docId) => {
+            const name = agentDocEntry(docId)
+            const here = name === current
+            return (
+              <li key={name}>
+                <Button
+                  fullWidth
+                  onClick={() => onOpen(name)}
+                  aria-current={here ? 'page' : undefined}
+                  sx={{
+                    justifyContent: 'flex-start',
+                    textAlign: 'left',
+                    minHeight: 44,
+                    px: 1,
+                    gap: 1,
+                    color: 'text.primary',
+                    fontWeight: here ? 600 : 400,
+                    bgcolor: here ? 'var(--mui-palette-action-selected)' : undefined,
+                  }}
+                >
+                  <AppIcon name="pages" size={16} />
+                  <Box component="span" sx={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>
+                    <AgentDocTitle docId={docId} />
+                    <Box
+                      component="span"
+                      sx={{ display: 'block', fontSize: 12, color: 'text.secondary' }}
+                    >
+                      <AgentDocStatus docId={docId} />
+                    </Box>
+                  </Box>
+                </Button>
+              </li>
+            )
+          })}
+        </Box>
+      ) : null}
       {found.length === 0 ? (
-        <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>
-          {documentText.nothingFound}
-        </Typography>
+        documents.length === 0 ? null : (
+          <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>
+            {documentText.nothingFound}
+          </Typography>
+        )
       ) : (
         <Box component="ul" sx={{ m: 0, p: 0, listStyle: 'none' }}>
           {found.map((document) => (

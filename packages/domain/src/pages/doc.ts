@@ -66,6 +66,15 @@ export const docSectionMarkdownSchema = z.string().superRefine((markdown, contex
     })
 })
 
+/**
+ * How the client sees a document once it is finished, the agent's choice (docs/plan/74, Д1):
+ * `page` — a page to read, drawn by `@repo/doc-render` and downloaded as `.html`; `text` — plain
+ * text drawn by the cabinet and downloaded as `.md`. The sections are Markdown either way.
+ */
+export const docViews = ['page', 'text'] as const
+export type DocView = (typeof docViews)[number]
+export const docViewSchema = z.enum(docViews)
+
 export const docSectionStates = ['pending', 'written'] as const
 export type DocSectionState = (typeof docSectionStates)[number]
 

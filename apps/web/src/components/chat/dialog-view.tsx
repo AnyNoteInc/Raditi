@@ -115,6 +115,14 @@ import { UndoDialog } from './undo-dialog'
 import { useAttachments } from './use-attachments'
 import { useBrowserLaunch } from './use-browser-launch'
 import { useDocumentArrivals } from './use-document-arrivals'
+import {
+  agentDocEntry,
+  agentDocOfEntry,
+  agentDocumentIdsOf,
+  DocRevisions,
+  docRevisionsOf,
+  useAgentDocumentArrivals,
+} from './agent-document'
 import { DocumentsPane, type DocumentTarget } from './documents-pane'
 import { usePagePublish } from './page-publish'
 import { useBrowserStream } from './use-browser-stream'
@@ -542,6 +550,21 @@ export function DialogView({
     openDocument(name, null)
     dispatchTools({ type: 'documentArrived', opens: wide })
   })
+  // The documents the agent writes section by section (docs/plan/74, Д5): one it begins while the
+  // client looks at the chat opens the tab on it, as a file does, and fills there as it is written.
+  const agentDocs = useMemo(
+    () => agentDocumentIdsOf(rows as readonly { type: string; docId?: string }[]),
+    [rows],
+  )
+  const docRevisions = useMemo(
+    () => docRevisionsOf(rows as readonly { type: string; docId?: string; revision?: number }[]),
+    [rows],
+  )
+  useAgentDocumentArrivals(agentDocs, head !== null, (docId) => {
+    openDocument(agentDocEntry(docId), null)
+    dispatchTools({ type: 'documentArrived', opens: wide })
+  })
+  const documentCount = chatDocuments.length + agentDocs.length
   useBrowserLaunch(head, {
     taskId,
     enabled: withBrowser && browserStreamUrl !== null,
@@ -1099,6 +1122,14 @@ export function DialogView({
       openDocument(document.name, fileId)
       openTool('documents', { by: 'menu' })
     },
+    onOpenAgentDocument: (docId) => {
+      openDocument(agentDocEntry(docId), null)
+      openTool('documents', { by: 'menu' })
+    },
+    shownAgentDocument:
+      shown && tools.active === 'documents' && documentTarget
+        ? agentDocOfEntry(documentTarget.name)
+        : null,
     // A closed project is read: nothing that carries the work on is offered (К39), «Остановить» is.
     ...(closedProject
       ? {}
@@ -1258,9 +1289,7 @@ export function DialogView({
   // Its dot says what is new behind it, never while the panel is open (И13); below `lg` its menu
   // comes up from the bottom of the screen (И14). A chat with no tool has no «+» at all (К19).
   const tiles =
-    head === null
-      ? []
-      : toolTilesOf(head, tools, { answered, rewound, documents: chatDocuments.length })
+    head === null ? [] : toolTilesOf(head, tools, { answered, rewound, documents: documentCount })
   const menu =
     head === null || tiles.length === 0 ? null : (
       <ToolsMenu
@@ -1321,10 +1350,11 @@ export function DialogView({
         )
       case 'documents':
         return (
-          <>
+          <DocRevisions.Provider value={docRevisions}>
             <DocumentsPane
               taskId={taskId}
               rows={rows}
+              agentDocs={agentDocs}
               target={documentTarget}
               fullscreen={fullscreen}
               onFullscreen={setFullscreen}
@@ -1336,7 +1366,7 @@ export function DialogView({
                 : {})}
             />
             {publication.dialog}
-          </>
+          </DocRevisions.Provider>
         )
       case 'terminal':
         // The files of the agent's working copy, and the client's edit of one (06.11.2026).
