@@ -99,7 +99,7 @@ export class PagePublications {
     let content = bytes
     if (reservation.kind === 'markdown') {
       const markdown = new TextDecoder().decode(bytes)
-      content = drawn(markdownTitleOf(markdown) ?? 'Документ', markdown)
+      content = await drawn(markdownTitleOf(markdown) ?? 'Документ', markdown)
       const own = checkPageContent(content)
       if (!own.ok) {
         logger?.warn(
@@ -176,7 +176,7 @@ export class PagePublications {
         })
         if (!document?.content) continue
         // Its title and sections passed the end of a turn; the page drawn of them is checked too.
-        const bytes = drawn(document.title, document.content.markdown)
+        const bytes = await drawn(document.title, document.content.markdown)
         const verdict = checkPageContent(bytes)
         if (!verdict.ok) {
           logger?.warn(`page_refused task=${taskId} turn=${row.turnNo} reason=${verdict.reason}`)
@@ -288,6 +288,6 @@ export class PagePublications {
 }
 
 /** The page for reading of a text: drawn by the very rules of the cabinet's tab (Ст11). */
-function drawn(title: string, markdown: string): Uint8Array {
-  return new TextEncoder().encode(readingPage({ title, markdown }))
+async function drawn(title: string, markdown: string): Promise<Uint8Array> {
+  return new TextEncoder().encode(await readingPage({ title, markdown }))
 }

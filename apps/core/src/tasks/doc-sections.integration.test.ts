@@ -173,7 +173,7 @@ describe.skipIf(!databaseUrl)(
       const served = await servedPage(db, page.slug)
       expect(served).toMatchObject({ state: 'live', content: { version: 1 } })
       expect(Buffer.from(served!.content!.bytes).toString()).toBe(
-        readingPage({ title: 'Аудит', markdown }),
+        await readingPage({ title: 'Аудит', markdown }),
       )
       const feed = (await rows(task.id)).filter((row) => row.type === 'feed.page')
       expect(feed.map((row) => row.payload)).toEqual([

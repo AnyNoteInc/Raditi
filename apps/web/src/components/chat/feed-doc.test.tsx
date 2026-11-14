@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { DocRevisions, docRevisionsOf, FeedDoc } from './feed-doc'
 
-const { readDoc } = vi.hoisted(() => ({ readDoc: vi.fn() }))
+const { readDoc, publishDoc } = vi.hoisted(() => ({ readDoc: vi.fn(), publishDoc: vi.fn() }))
 
 vi.mock('@/trpc/client', () => ({
   useTRPC: () => ({
@@ -17,6 +17,10 @@ vi.mock('@/trpc/client', () => ({
           queryFn: () => readDoc(input),
         }),
       },
+      publishDoc: {
+        mutationOptions: () => ({ mutationFn: (input: { docId: string }) => publishDoc(input) }),
+      },
+      list: { queryKey: () => ['pages', 'list'] },
     },
   }),
 }))
@@ -40,6 +44,7 @@ const doc = (version: number) => ({
     { key: 'sources', intent: 'Источники', state: 'pending', heading: null, markdown: null },
   ],
   page: null,
+  canPublish: false,
 })
 
 function show(revision?: number) {
@@ -80,6 +85,40 @@ describe('the live card of a document (plan 69, Ст19, Ст22)', () => {
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByText('Аудит скорости сайта')).toBeTruthy()
     expect(within(dialog).getByText('Как мерили')).toBeTruthy()
+  })
+
+  it('publishes a version by link to its owner, and shows the address (Ст25)', async () => {
+    readDoc.mockResolvedValue({ ...doc(2), canPublish: true })
+    publishDoc.mockResolvedValue({
+      pageId: '0199a3f2-0000-7000-8000-0000000000e1',
+      url: 'https://abcdefghijklmnopqrstuvwxyz.pages.raditi.ru/',
+      version: 1,
+    })
+    show()
+    fireEvent.click(await screen.findByRole('button', { name: 'Опубликовать по ссылке' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Страница опубликована' })
+    expect(publishDoc).toHaveBeenCalledWith({ docId })
+    expect(
+      within(dialog).getByRole('link', {
+        name: 'https://abcdefghijklmnopqrstuvwxyz.pages.raditi.ru/',
+      }),
+    ).toBeTruthy()
+  })
+
+  it('offers no publication to a member, nor of a document still written', async () => {
+    readDoc.mockResolvedValue(doc(2))
+    show()
+    await screen.findByRole('link', { name: 'Скачать .md' })
+    expect(screen.queryByRole('button', { name: 'Опубликовать по ссылке' })).toBeNull()
+  })
+
+  it('says why a publication was refused, in the server’s words', async () => {
+    readDoc.mockResolvedValue({ ...doc(1), canPublish: true })
+    publishDoc.mockRejectedValue(new Error('Эта страница снята. Верните её в разделе «Страницы»'))
+    show()
+    fireEvent.click(await screen.findByRole('button', { name: 'Опубликовать по ссылке' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Не удалось опубликовать' })
+    expect(within(dialog).getByRole('alert').textContent).toContain('Эта страница снята')
   })
 
   it('reads the document again when a newer change of it comes in the feed', async () => {

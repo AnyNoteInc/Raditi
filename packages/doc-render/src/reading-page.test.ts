@@ -22,8 +22,8 @@ const MARKDOWN = [
 ].join('\n')
 
 describe('the page for reading (docs/plan/69-pages.md, Ст11)', () => {
-  it('is the tree of the tab, standing alone, in its own style', () => {
-    const html = readingPage({ title: 'Аудит <сайта>', markdown: MARKDOWN })
+  it('is the tree of the tab, standing alone, in its own style', async () => {
+    const html = await readingPage({ title: 'Аудит <сайта>', markdown: MARKDOWN })
     const body = renderToStaticMarkup(
       createElement(DocumentMarkdown, {
         text: MARKDOWN,
@@ -40,8 +40,8 @@ describe('the page for reading (docs/plan/69-pages.md, Ст11)', () => {
     )
   })
 
-  it('draws what a document holds and nothing it should not', () => {
-    const html = readingPage({ title: 'Аудит', markdown: MARKDOWN })
+  it('draws what a document holds and nothing it should not', async () => {
+    const html = await readingPage({ title: 'Аудит', markdown: MARKDOWN })
     expect(html).toContain('<h1 id="doc-аудит-сайта">')
     expect(html).toContain('<h2 id="doc-цены">Цены</h2>')
     expect(html).toContain('<a href="#doc-цены">раздел</a>')

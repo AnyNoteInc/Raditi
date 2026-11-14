@@ -1,11 +1,12 @@
 import { createElement } from 'react'
-import { renderToStaticMarkup } from 'react-dom/server'
 
 import { DocumentMarkdown } from './document-markdown.ts'
 
 // The page for reading (docs/plan/69-pages.md, Ст11): a text document drawn once into HTML by the
 // very tree and rules of the cabinet's tab, dressed in Raditi's own style, nothing loaded from
-// anywhere. It is served under PAGE_READING_CSP — no script at all — so it carries none.
+// anywhere. It is served under PAGE_READING_CSP — no script at all — so it carries none. The server
+// renderer is imported when a page is drawn: Next refuses a static import of react-dom/server in
+// its server graph, which reaches this package through @repo/trpc.
 
 /**
  * The style of a page for reading: the paper and ink of the cabinet (`@repo/ui` tokens), the fonts
@@ -52,7 +53,8 @@ export interface ReadingPageInput {
  * chat becomes its words, a picture of the chat by name becomes its words too — only a `data:`
  * picture inside the text is drawn.
  */
-export function readingPage({ title, markdown }: ReadingPageInput): string {
+export async function readingPage({ title, markdown }: ReadingPageInput): Promise<string> {
+  const { renderToStaticMarkup } = await import('react-dom/server')
   const article = createElement(DocumentMarkdown, {
     text: markdown,
     documents: new Set<string>(),

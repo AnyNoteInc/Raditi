@@ -116,6 +116,7 @@ import { useAttachments } from './use-attachments'
 import { useBrowserLaunch } from './use-browser-launch'
 import { useDocumentArrivals } from './use-document-arrivals'
 import { DocumentsPane, type DocumentTarget } from './documents-pane'
+import { usePagePublish } from './page-publish'
 import { useBrowserStream } from './use-browser-stream'
 import { useBrowserWatching } from './use-browser-watching'
 import { useFeedFollow } from './use-feed-follow'
@@ -454,6 +455,11 @@ export function DialogView({
   const message = useMutation(trpc.task.message.mutationOptions())
   const proceed = useMutation(trpc.task.continue.mutationOptions())
   const cancel = useMutation(trpc.task.cancel.mutationOptions())
+  // «Опубликовать как страницу» of a document of the chat (docs/plan/69-pages.md, Ст32): to its
+  // owner or an administrator, where pages are set up.
+  const canPublishPages = useQuery(trpc.pages.canPublish.queryOptions({ taskId }))
+  const publishFile = useMutation(trpc.pages.publishFile.mutationOptions())
+  const publication = usePagePublish()
   const reset = useMutation(trpc.preview.reset.mutationOptions())
   const update = useMutation(trpc.candidate.update.mutationOptions())
   const retry = useMutation(trpc.task.retry.mutationOptions())
@@ -1315,13 +1321,22 @@ export function DialogView({
         )
       case 'documents':
         return (
-          <DocumentsPane
-            taskId={taskId}
-            rows={rows}
-            target={documentTarget}
-            fullscreen={fullscreen}
-            onFullscreen={setFullscreen}
-          />
+          <>
+            <DocumentsPane
+              taskId={taskId}
+              rows={rows}
+              target={documentTarget}
+              fullscreen={fullscreen}
+              onFullscreen={setFullscreen}
+              {...(canPublishPages.data === true
+                ? {
+                    onPublish: (_document: unknown, fileId: string) =>
+                      void publication.publish(() => publishFile.mutateAsync({ taskId, fileId })),
+                  }
+                : {})}
+            />
+            {publication.dialog}
+          </>
         )
       case 'terminal':
         // The files of the agent's working copy, and the client's edit of one (06.11.2026).

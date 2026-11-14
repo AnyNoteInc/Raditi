@@ -172,6 +172,12 @@ vi.mock('@/trpc/client', () => ({
     },
     browser: { watch: mutation(calls.watch) },
     billing: { usage: query('billing.usage', async () => null) },
+    // «Опубликовать как страницу» (docs/plan/69-pages.md, Ст32): not offered in these tests.
+    pages: {
+      canPublish: query('pages.canPublish', async () => false),
+      publishFile: mutation(async () => ({ pageId: '', url: '', version: 1 })),
+      list: query('pages.list', async () => ({ enabled: false, pages: [] })),
+    },
     // «Терминал» of the chat (06.11.2026): its files are read while it is open.
     siteFiles: {
       list: query('siteFiles.list', async () => ({ state: 'preparing' as const })),

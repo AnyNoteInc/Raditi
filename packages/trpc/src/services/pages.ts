@@ -3,22 +3,30 @@ import {
   hashPagePassword,
   listWorkspacePages,
   pagePasswordProblem,
+  publishClientPage,
   readChatDocument,
   restorePage,
   setPagePassword,
   takeDownPage,
   type PrismaClient,
 } from '@repo/db'
+import { markdownTitleOf, readingPage } from '@repo/doc-render'
 import {
+  checkPageContent,
   docNotFound,
+  documentKindOf,
   DomainError,
   isDomainError,
   pageAddressUrl,
+  pageContentRefused,
+  pageLimits,
   pageNotFound,
+  type ObjectStorage,
   type PagesAddress,
 } from '@repo/domain'
 
-import { isManagerRole, memberRole } from './chat/access.ts'
+import { accessibleTask, isManagerRole, memberRole, taskNotFound } from './chat/access.ts'
+import { readChatFile } from './chat/files.ts'
 
 // The section «Страницы» of the cabinet and the card of a page in the chat (docs/plan/69-pages.md,
 // Ст13–Ст15, Ст30): the pages of every workspace the user is a member of; a member reads them, the
@@ -148,6 +156,8 @@ export interface CabinetDocument {
   }[]
   /** The page it is published as, if it is. */
   page: { pageId: string; state: string; version: number } | null
+  /** The owner or an administrator: may publish it (Ст25). */
+  canManage: boolean
 }
 
 /**
@@ -189,6 +199,7 @@ export async function cabinetDocument(
     page: read.page
       ? { pageId: read.page.id, state: read.page.state, version: read.page.currentVersion }
       : null,
+    canManage: isManagerRole(await memberRole(db, workspaceId, input.userId)),
   }
 }
 
@@ -217,4 +228,127 @@ export async function cabinetDocMarkdown(
       .trim()
       .slice(0, 120) || 'Документ'
   return { name: `${base}.md`, markdown: current.markdown, version: current.version }
+}
+
+// ———————————————————————————————— the client's own publications (Ст25, Ст32)
+
+export interface ClientPublication {
+  pageId: string
+  url: string
+  version: number
+}
+
+const managerOnly = () =>
+  new DomainError('FORBIDDEN', 'Only the owner or an administrator publishes a page', 403)
+
+const encode = (text: string) => new TextEncoder().encode(text)
+
+/** What a viewer gets is checked as such: a page drawn of checked text too. */
+function checked(bytes: Uint8Array): Uint8Array {
+  const verdict = checkPageContent(bytes)
+  if (!verdict.ok) throw pageContentRefused(verdict.reason)
+  return bytes
+}
+
+/**
+ * «Опубликовать по ссылке» of a document (Ст25): its current version — checked section by section
+ * at the end of the turns that wrote it — drawn into its page for reading, a new version of the
+ * page every time. A document with no version yet is not published.
+ */
+export async function publishDocumentPage(
+  db: PrismaClient,
+  address: PagesAddress,
+  input: { documentId: string; userId: string },
+): Promise<ClientPublication> {
+  const document = await db.chatDocument.findFirst({
+    where: {
+      id: input.documentId,
+      workspace: { members: { some: { userId: input.userId } } },
+      // A document of a removed chat, or of a chat of a removed project, is not published.
+      OR: [
+        { taskId: null },
+        { task: { deletedAt: null, OR: [{ siteId: null }, { site: { deletedAt: null } }] } },
+      ],
+    },
+    select: { workspaceId: true, taskId: true, title: true },
+  })
+  if (!document) throw docNotFound()
+  if (!isManagerRole(await memberRole(db, document.workspaceId, input.userId))) throw managerOnly()
+  const current = await currentDocMarkdown(db, {
+    workspaceId: document.workspaceId,
+    documentId: input.documentId,
+  })
+  if (current === null)
+    throw new DomainError('DOC_NOT_READY', 'The document has no version yet', 409)
+  const page = await publishClientPage(db, {
+    workspaceId: document.workspaceId,
+    taskId: document.taskId,
+    title: document.title,
+    target: { documentId: input.documentId },
+    bytes: checked(
+      encode(await readingPage({ title: document.title, markdown: current.markdown })),
+    ),
+  })
+  return { pageId: page.pageId, url: pageAddressUrl(page.slug, address), version: page.version }
+}
+
+/** The name of a file without its extension, as the title of its page in the cabinet. */
+function titleOfFile(name: string): string {
+  const stem = name.replace(/\.[^.]+$/, '').trim() || name
+  return [...stem].slice(0, pageLimits.titleChars).join('')
+}
+
+/**
+ * «Опубликовать как страницу» of a document of the chat (Ст32): a `.html` as the agent made it, a
+ * `.md` drawn into a page for reading, after the very check of a page of a turn. The file passed
+ * the scan of its turn's outbox for the keys of the turn and the values of the client (Ст6), so
+ * no second scan of values here. The same file of the same chat again is a new version of the
+ * same page; a new version of the file in the tab changes no page by itself.
+ */
+export async function publishChatFilePage(
+  db: PrismaClient,
+  storage: Pick<ObjectStorage, 'get'>,
+  address: PagesAddress,
+  input: { taskId: string; fileId: string; userId: string },
+): Promise<ClientPublication> {
+  const task = await db.task.findFirst({
+    where: accessibleTask(input.userId, input.taskId.toLowerCase()),
+    select: { id: true, workspaceId: true },
+  })
+  if (task === null) throw taskNotFound()
+  if (!isManagerRole(await memberRole(db, task.workspaceId, input.userId))) throw managerOnly()
+  const file = await readChatFile(db, storage, { taskId: task.id, fileId: input.fileId })
+  if (file === null) throw taskNotFound()
+  const kind = documentKindOf(file.name)
+  if (kind === null)
+    throw new DomainError('PAGE_NOT_PUBLISHABLE', 'Only a .html or .md document is a page', 400)
+  const bytes = checked(new Uint8Array(file.bytes))
+  let served = bytes
+  if (kind === 'markdown') {
+    const markdown = new TextDecoder().decode(bytes)
+    // The heading is the file's own, which its turn's scan read (as core draws a `.md`, Ст11).
+    served = checked(
+      encode(await readingPage({ title: markdownTitleOf(markdown) ?? 'Документ', markdown })),
+    )
+  }
+  const page = await publishClientPage(db, {
+    workspaceId: task.workspaceId,
+    taskId: task.id,
+    title: titleOfFile(file.name),
+    target: { fileName: file.name },
+    bytes: served,
+  })
+  return { pageId: page.pageId, url: pageAddressUrl(page.slug, address), version: page.version }
+}
+
+/** Whether the user may publish the documents of this chat as pages: its owner or an administrator. */
+export async function canPublishOfChat(
+  db: PrismaClient,
+  input: { taskId: string; userId: string },
+): Promise<boolean> {
+  const task = await db.task.findFirst({
+    where: accessibleTask(input.userId, input.taskId.toLowerCase()),
+    select: { workspaceId: true },
+  })
+  return task !== null && isManagerRole(await memberRole(db, task.workspaceId, input.userId))
 }
