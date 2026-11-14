@@ -43,6 +43,7 @@ describe.skipIf(!enabled)('postgresDocsStore', () => {
       workspaceId,
       taskId: task.id,
       title: 'Аудит',
+      view: 'text',
       sections: [{ key: 'summary', intent: 'Итог' }],
     })
     await store.feed(task.id, 1, { type: 'feed.doc', payload: { v: 1, docId: document.id } })

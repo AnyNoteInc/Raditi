@@ -12,6 +12,7 @@ import {
 } from '@repo/db'
 import { markdownTitleOf, readingPage } from '@repo/doc-render'
 import {
+  assembleDocMarkdown,
   checkPageContent,
   docNotFound,
   documentKindOf,
@@ -21,6 +22,7 @@ import {
   pageContentRefused,
   pageLimits,
   pageNotFound,
+  type DocView,
   type ObjectStorage,
   type PagesAddress,
 } from '@repo/domain'
@@ -133,7 +135,7 @@ export async function restoreCabinetPage(
 async function readableDocument(db: PrismaClient, documentId: string, userId: string) {
   const document = await db.chatDocument.findFirst({
     where: { id: documentId, workspace: { members: { some: { userId } } } },
-    select: { workspaceId: true, title: true },
+    select: { workspaceId: true, title: true, view: true },
   })
   if (!document) throw docNotFound()
   return document
@@ -142,14 +144,25 @@ async function readableDocument(db: PrismaClient, documentId: string, userId: st
 export interface CabinetDocument {
   docId: string
   title: string
+  /** How the finished document is shown: the agent's choice (docs/plan/74, Д1). */
+  view: DocView
   version: number
   revision: number
-  /** Written and checked of all: «Разделы: N из M». */
+  /**
+   * Written of all: «Разделы: N из M» and its bar (docs/plan/74, Д3) — a section counts once the
+   * agent wrote it, checked or not: the bar moves with the agent.
+   */
   progress: { written: number; total: number }
+  /**
+   * The sections differ from the current version (docs/plan/74, Д4): none yet, a section is not
+   * written or not checked, or the agent changed one since. The tab shows the sections as they
+   * come while it is true, the finished version once it is false.
+   */
+  draft: boolean
   sections: {
     key: string
     intent: string
-    /** `pending` — a placeholder; `unchecked` — written, shown once the turn ends; `shown`. */
+    /** `pending` — a placeholder; `unchecked` — written, shown a moment later, once checked; `shown`. */
     state: 'pending' | 'unchecked' | 'shown'
     heading: string | null
     markdown: string | null
@@ -186,13 +199,17 @@ export async function cabinetDocument(
     heading: section.heading,
     markdown: section.markdown,
   }))
+  const current =
+    read.version > 0 ? await currentDocMarkdown(db, { workspaceId, documentId: read.id }) : null
   return {
     docId: read.id,
     title: read.title,
+    view: read.view,
+    draft: current === null || assembledOf(read) !== current.markdown,
     version: read.version,
     revision: read.revision,
     progress: {
-      written: sections.filter((section) => section.state === 'shown').length,
+      written: sections.filter((section) => section.state !== 'pending').length,
       total: sections.length,
     },
     sections,
@@ -203,11 +220,40 @@ export async function cabinetDocument(
   }
 }
 
-/** «Скачать .md» (Ст12): the Markdown of the current version, named by the title; null — none yet. */
+/** The Markdown the sections make now, as a version would; null — a section is not ready. */
+function assembledOf(read: Awaited<ReturnType<typeof readChatDocument>>): string | null {
+  if (read.sections.some((section) => !section.checked)) return null
+  try {
+    return assembleDocMarkdown({
+      title: read.title,
+      sections: read.sections.map((section) => ({
+        key: section.key,
+        heading: section.heading,
+        markdown: section.markdown,
+        intent: section.intent,
+        state: section.state,
+      })),
+    })
+  } catch {
+    return null
+  }
+}
+
+/**
+ * «Скачать» (Ст12; docs/plan/74, Д1): the current version, named by the title — a document of the
+ * view `text` as its Markdown, one of the view `page` as its page to read; null — none yet.
+ */
 export async function cabinetDocMarkdown(
   db: PrismaClient,
   input: { documentId: string; userId: string },
-): Promise<{ name: string; markdown: string; version: number } | null> {
+): Promise<{
+  name: string
+  markdown: string
+  version: number
+  view: DocView
+  /** The page to read of a `page` document; null for `text`. */
+  html: string | null
+} | null> {
   // Not there, another workspace's, or gone between the two reads: one answer, 404. Any other
   // failure goes up: the route says 503 and logs it.
   const notFound = (error: unknown) => {
@@ -227,7 +273,39 @@ export async function cabinetDocMarkdown(
       .replace(/^[.\s]+/u, '')
       .trim()
       .slice(0, 120) || 'Документ'
-  return { name: `${base}.md`, markdown: current.markdown, version: current.version }
+  const view = document.view as DocView
+  return {
+    name: `${base}.${view === 'page' ? 'html' : 'md'}`,
+    markdown: current.markdown,
+    version: current.version,
+    view,
+    html:
+      view === 'page'
+        ? await readingPage({ title: document.title, markdown: current.markdown })
+        : null,
+  }
+}
+
+/**
+ * The finished document of the view `page` as the tab beside the chat shows it (docs/plan/74, Д1):
+ * the page to read of its current version, drawn by `@repo/doc-render` from text core checked —
+ * the same page «Опубликовать по ссылке» gives. null — no version yet, or the view is `text`.
+ */
+export async function cabinetDocPage(
+  db: PrismaClient,
+  input: { documentId: string; userId: string },
+): Promise<{ html: string; version: number } | null> {
+  const document = await readableDocument(db, input.documentId, input.userId)
+  if (document.view !== 'page') return null
+  const current = await currentDocMarkdown(db, {
+    workspaceId: document.workspaceId,
+    documentId: input.documentId,
+  })
+  if (current === null) return null
+  return {
+    html: await readingPage({ title: document.title, markdown: current.markdown }),
+    version: current.version,
+  }
 }
 
 // ———————————————————————————————— the client's own publications (Ст25, Ст32)

@@ -599,6 +599,15 @@ export class TurnAttempt {
   }
 
   /**
+   * What a text of the turn must not hold, while it runs (docs/plan/74, Д2): its keys and the
+   * values of the client's variables — the same check its end makes, for the sections of documents
+   * the client sees a moment after the agent wrote them. Rejects when Vault does not answer.
+   */
+  async liveRefusal(): Promise<(text: string) => 'turn_key' | 'client_value' | null> {
+    return textRefusal(this.credentials, await this.#refusedValues())
+  }
+
+  /**
    * The values the candidate must not hold (plan 53, Р13): the ones the turn's commands got and
    * the ones the site's variables hold now — the preview may have shown the agent a value the
    * client changed after the turn's key was issued. Vault that does not answer fails the turn.

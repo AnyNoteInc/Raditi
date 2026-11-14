@@ -257,7 +257,9 @@ describe.skipIf(!databaseUrl)('pages router with PostgreSQL', () => {
       },
     })
     const read = await callerOf(owner).pages.doc({ docId: document.id })
-    expect(read.progress).toEqual({ written: 1, total: 3 })
+    // The bar counts what the agent wrote, checked or not (plan 74, Д3).
+    expect(read.progress).toEqual({ written: 2, total: 3 })
+    expect(read).toMatchObject({ view: 'text', draft: true })
     expect(read.sections.map((each) => [each.key, each.state, each.markdown])).toEqual([
       ['a', 'shown', 'проверено'],
       ['b', 'unchecked', null],
@@ -292,6 +294,63 @@ describe.skipIf(!databaseUrl)('pages router with PostgreSQL', () => {
     expect(
       await cabinetDocMarkdown(db, { documentId: document.id, userId: (await person()).id }),
     ).toBeNull()
+    await db.chatDocument.delete({ where: { id: document.id } })
+  })
+
+  it('shows a page document as its page to read, downloads it as .html, and tells a draft (plan 74)', async () => {
+    const { owner, workspace, task } = await workspaceWithPage()
+    const markdown = '# Аудит\n\n## Итог\n\nТри причины.\n'
+    const document = await db.chatDocument.create({
+      data: {
+        workspaceId: workspace.id,
+        taskId: task.id,
+        title: 'Аудит',
+        view: 'page',
+        currentVersion: 1,
+        sections: {
+          create: [
+            {
+              sectionKey: 'a',
+              intent: 'Итог',
+              position: 0,
+              state: 'written',
+              heading: 'Итог',
+              markdown: 'Три причины.',
+              writtenTaskId: task.id,
+              writtenTurn: 1,
+              checkedTurn: 1,
+            },
+          ],
+        },
+      },
+    })
+    await db.chatDocumentVersion.create({
+      data: { documentId: document.id, no: 1, sizeBytes: 9, sha256: 'a'.repeat(64) },
+    })
+    await db.chatDocumentContent.create({
+      data: { documentId: document.id, versionNo: 1, markdown },
+    })
+    const caller = callerOf(owner)
+    expect(await caller.pages.doc({ docId: document.id })).toMatchObject({
+      view: 'page',
+      draft: false,
+      progress: { written: 1, total: 1 },
+    })
+    const page = await caller.pages.docPage({ docId: document.id, version: 1 })
+    expect(page?.version).toBe(1)
+    expect(page?.html).toContain('Три причины.')
+    expect(page?.html).not.toContain('<script')
+    const download = await cabinetDocMarkdown(db, { documentId: document.id, userId: owner.id })
+    expect(download).toMatchObject({ name: 'Аудит.html', view: 'page' })
+    expect(download?.html).toContain('Три причины.')
+    // The agent changes the section again: the tab shows the sections until the next version.
+    await db.chatDocumentSection.updateMany({
+      where: { documentId: document.id },
+      data: { markdown: 'Четыре причины.', checkedTurn: 2, writtenTurn: 2 },
+    })
+    expect((await caller.pages.doc({ docId: document.id })).draft).toBe(true)
+    await db.chatDocument.update({ where: { id: document.id }, data: { view: 'text' } })
+    expect(await caller.pages.docPage({ docId: document.id, version: 1 })).toBeNull()
     await db.chatDocument.delete({ where: { id: document.id } })
   })
 

@@ -136,6 +136,10 @@ export interface FeedActions {
    * (docs/plan/67-agent-documents.md, Д4); absent — the document opens in a window of its own.
    */
   onOpenDocument?: (fileId: string) => void
+  /** «Открыть» of a document the agent writes: the tab «Документы» on it (docs/plan/74). */
+  onOpenAgentDocument?: (docId: string) => void
+  /** The document of the agent the tab shows now, on the screen; null — none. */
+  shownAgentDocument?: string | null
   /** The client controls the task's browser now. */
   controlling?: boolean
   /** The task's browser is open: the control can be taken. */
@@ -1097,7 +1101,13 @@ function RowView({
     // A document the agent writes (docs/plan/69-pages.md, Ст22): its live card; a change of it is a
     // signal the card keeps up with, nothing to show by itself.
     case 'feed.doc':
-      return <FeedDoc docId={row.docId} />
+      return (
+        <FeedDoc
+          docId={row.docId}
+          open={actions.shownAgentDocument === row.docId}
+          {...(actions.onOpenAgentDocument ? { onOpen: actions.onOpenAgentDocument } : {})}
+        />
+      )
     case 'feed.doc_touch':
       return null
     case 'feed.doc_left':

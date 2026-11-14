@@ -11,7 +11,8 @@ import { TASK_ID } from './testing'
 const params: { taskId?: string } = { taskId: TASK_ID }
 vi.mock('next/navigation', () => ({ useParams: () => params }))
 
-const { pageView, text } = vi.hoisted(() => ({
+const { pageView, text, readDoc } = vi.hoisted(() => ({
+  readDoc: vi.fn(),
   pageView:
     vi.fn<
       (input: { taskId: string; fileId: string }) => Promise<{ url: string; expiresAt: string }>
@@ -34,6 +35,23 @@ vi.mock('@/trpc/client', () => ({
           queryFn: () => text(input),
         }),
       },
+    },
+    pages: {
+      doc: {
+        queryKey: (input: { docId: string }) => ['pages', 'doc', input.docId],
+        queryOptions: (input: { docId: string }) => ({
+          queryKey: ['pages', 'doc', input.docId],
+          queryFn: () => readDoc(input),
+        }),
+      },
+      docPage: {
+        queryOptions: (input: { docId: string }) => ({
+          queryKey: ['pages', 'docPage', input.docId],
+          queryFn: () => null,
+        }),
+      },
+      publishDoc: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
+      list: { queryKey: () => ['pages', 'list'] },
     },
   }),
 }))
@@ -146,6 +164,40 @@ describe('«Документы» (docs/plan/67-agent-documents.md, Д4–Д7)', 
     render(wrap(<DocumentsPane taskId={TASK_ID} rows={rows} target={null} />))
     expect(
       await screen.findByText('Не удалось прочитать документ. Его можно скачать.'),
+    ).toBeTruthy()
+  })
+})
+
+describe('a document the agent writes, in the same tab (docs/plan/74)', () => {
+  it('opens on it, lists it with the files, and steps back to a file', async () => {
+    const { docId, sampleDoc } = await import('./doc-test-fixtures')
+    readDoc.mockResolvedValue(sampleDoc(0))
+    const { agentDocEntry } = await import('./agent-document')
+    const view = render(
+      wrap(<DocumentsPane taskId={TASK_ID} rows={rows} agentDocs={[docId]} target={null} />),
+    )
+    expect(await screen.findByRole('heading', { level: 1, name: 'Оглавление' })).toBeTruthy()
+    view.rerender(
+      wrap(
+        <DocumentsPane
+          taskId={TASK_ID}
+          rows={rows}
+          agentDocs={[docId]}
+          target={{ name: agentDocEntry(docId), fileId: null, seq: 1 }}
+        />,
+      ),
+    )
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Аудит скорости сайта' }),
+    ).toBeTruthy()
+    expect(screen.getByRole('progressbar', { name: 'Разделы: 2 из 3' })).toBeTruthy()
+    // The list holds it with the three files of the chat; a file opens from there.
+    fireEvent.click(screen.getByRole('button', { name: 'Все документы (4)' }))
+    fireEvent.click(await screen.findByRole('button', { name: /Оглавление|00-оглавление/ }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'Оглавление' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Назад' }))
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Аудит скорости сайта' }),
     ).toBeTruthy()
   })
 })

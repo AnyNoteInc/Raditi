@@ -1,4 +1,5 @@
 import {
+  docViews,
   DomainError,
   pageKinds,
   pageLimits,
@@ -9,6 +10,7 @@ import { z } from 'zod'
 
 import { chatContextOf } from '../services/chat/context.ts'
 import {
+  cabinetDocPage,
   cabinetDocument,
   canPublishOfChat,
   listCabinetPages,
@@ -62,12 +64,14 @@ export const pagesRouter = router({
       z.strictObject({
         docId: z.uuid(),
         title: z.string(),
+        view: z.enum(docViews),
         version: z.number().int().min(0),
         revision: z.number().int().min(1),
         progress: z.strictObject({
           written: z.number().int().min(0),
           total: z.number().int().min(0),
         }),
+        draft: z.boolean(),
         sections: z.array(
           z.strictObject({
             key: z.string(),
@@ -91,6 +95,18 @@ export const pagesRouter = router({
       })
       return { ...document, canPublish: canManage && (ctx.chat?.pages ?? null) !== null }
     }),
+
+  /**
+   * The finished document of the view `page` as the tab beside the chat shows it (docs/plan/74,
+   * Д1): its page to read; null — no version yet, or the view is `text`.
+   */
+  docPage: consentedProcedure
+    // The version names what the tab shows: every version is read once, never an older page.
+    .input(z.strictObject({ docId: z.uuid(), version: z.number().int().min(1) }))
+    .output(z.strictObject({ html: z.string(), version: z.number().int().min(1) }).nullable())
+    .query(({ ctx, input }) =>
+      cabinetDocPage(ctx.prisma, { documentId: input.docId, userId: ctx.user.id }),
+    ),
 
   /** Whether «Опубликовать как страницу» shows in the tab of this chat (Ст32). */
   canPublish: consentedProcedure

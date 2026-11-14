@@ -430,6 +430,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
         workspaceId,
         taskId,
         title: 'Д',
+        view: 'text',
         sections: [{ key: 'a', intent: 'А' }],
       })
       await expect(
@@ -473,6 +474,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
       const document = await createChatDocument(db, {
         ...ids,
         title: 'Аудит скорости',
+        view: 'text',
         sections: [
           { key: 'summary', intent: 'Итог: три причины' },
           { key: 'sources', intent: 'Источники' },

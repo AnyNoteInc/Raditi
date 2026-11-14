@@ -53,6 +53,7 @@ describe.skipIf(!databaseUrl)(
         workspaceId,
         taskId: task.id,
         title: 'Аудит',
+        view: 'text',
         sections: [
           { key: 'summary', intent: 'Итог' },
           { key: 'sources', intent: 'Источники' },
@@ -132,6 +133,82 @@ describe.skipIf(!databaseUrl)(
       expect(
         await currentDocMarkdown(db, { workspaceId, documentId: ids.documentId }),
       ).toMatchObject({ version: 1 })
+    })
+
+    it('checks a section while the turn runs, and leaves doc_finish to its end (plan 74, Д2)', async () => {
+      const { task, ids } = await documentOfChat()
+      const docs = new DocSections({ db, logger: quiet })
+      await writeDocSection(db, {
+        ...ids,
+        key: 'summary',
+        heading: 'Итог',
+        markdown: 'Текст',
+        turnNo: 1,
+      })
+      await docs.checkLive(task.id, 1, refusesText)
+      const first = await readChatDocument(db, {
+        workspaceId,
+        documentId: ids.documentId,
+        reader: 'client',
+      })
+      expect(first.sections.map((each) => [each.key, each.checked, each.markdown])).toEqual([
+        ['summary', true, 'Текст'],
+        ['sources', false, null],
+      ])
+      expect((await rows(task.id)).map((row) => row.type)).toEqual(['feed.doc_touch'])
+      // Nothing new to check: no row, no change.
+      await docs.checkLive(task.id, 1, refusesText)
+      expect(await rows(task.id)).toHaveLength(1)
+      await writeDocSection(db, {
+        ...ids,
+        key: 'sources',
+        heading: 'Источники',
+        markdown: `ключ ${VALUE}`,
+        turnNo: 1,
+      })
+      await writeDocSection(db, {
+        ...ids,
+        key: 'sources',
+        heading: 'Источники',
+        markdown: '- https://example.ru/',
+        turnNo: 1,
+      })
+      await requestDocFinish(db, { ...ids, turnNo: 1, view: 'page' })
+      await docs.checkLive(task.id, 1, refusesText)
+      // Both sections checked, but no version while the turn runs; the finish still waits.
+      expect(await currentDocMarkdown(db, { workspaceId, documentId: ids.documentId })).toBeNull()
+      expect(
+        await db.chatDocument.findUniqueOrThrow({
+          where: { id: ids.documentId },
+          select: { finishTurnNo: true, view: true },
+        }),
+      ).toEqual({ finishTurnNo: 1, view: 'page' })
+      await docs.settle(task.id, 1, refusesText)
+      expect(
+        await currentDocMarkdown(db, { workspaceId, documentId: ids.documentId }),
+      ).toMatchObject({ version: 1 })
+    })
+
+    it('sends back a section with a value of the client while the turn runs', async () => {
+      const { task, ids } = await documentOfChat()
+      await writeDocSection(db, {
+        ...ids,
+        key: 'summary',
+        heading: 'Итог',
+        markdown: `ключ ${VALUE}`,
+        turnNo: 1,
+      })
+      await new DocSections({ db, logger: quiet }).checkLive(task.id, 1, refusesText)
+      const read = await readChatDocument(db, {
+        workspaceId,
+        documentId: ids.documentId,
+        reader: 'client',
+      })
+      expect(read.sections[0]).toMatchObject({ state: 'pending', checked: false, markdown: null })
+      expect((await rows(task.id)).map((row) => row.type)).toEqual([
+        'feed.doc_touch',
+        'feed.doc_left',
+      ])
     })
 
     const sections = (pages: PagePublications) => new DocSections({ db, logger: quiet, pages })

@@ -3,6 +3,7 @@ import {
   settleTurnSections,
   uncheckedSectionsOfTurn,
   type PrismaClient,
+  type SettledDocument,
 } from '@repo/db'
 import { checkSectionText, isDomainError, type PageRefusalReason } from '@repo/domain'
 
@@ -17,6 +18,10 @@ import type { PagePublications } from './page-publications.ts'
 // waiting becomes the next version; the card is told by `feed.doc_touch`, what was sent back by
 // `feed.doc_left` — never why. Then the chat's publications of documents (`page_publish({ docId })`)
 // come true or are told, by `PagePublications.publishDocuments`.
+//
+// While the turn runs, `checkLive` does the same for its sections alone (docs/plan/74, Д2): the
+// client sees a section a moment after the agent wrote it. Titles, intents, `doc_finish` and the
+// publications stay for the end of the turn.
 
 export interface DocSectionsDependencies {
   db: Pick<
@@ -77,11 +82,7 @@ export class DocSections {
           refusal: refusalOf(refusesText, [section.heading ?? '', section.markdown ?? '']),
         })),
       })
-      const turnRow = await db.taskTurn.findFirst({
-        where: { taskId, turnNo: turn },
-        select: { id: true },
-      })
-      const turnId = turnRow?.id ?? null
+      const turnId = await this.#turnId(taskId, turn)
       const refusedDocuments = new Set(
         settled.filter((document) => document.refused > 0).map((document) => document.documentId),
       )
@@ -89,30 +90,7 @@ export class DocSections {
         await this.#deps.pages?.publishDocuments(taskId, turnId, refusedDocuments)
         return
       }
-      for (const document of settled) {
-        await insertFeedEvent(db, {
-          taskId,
-          turnId,
-          row: {
-            type: 'feed.doc_touch',
-            payload: { v: 1, docId: document.documentId, revision: document.revision },
-          },
-        })
-        if (document.refused > 0)
-          await insertFeedEvent(db, {
-            taskId,
-            turnId,
-            row: {
-              type: 'feed.doc_left',
-              payload: {
-                v: 1,
-                docId: document.documentId,
-                sections: document.refused,
-                reason: 'refused',
-              },
-            },
-          })
-      }
+      await this.#tell(taskId, turnId, settled)
       const refused = settled.reduce((sum, document) => sum + document.refused, 0)
       const versions = settled.filter((document) => document.version !== null).length
       logger?.log(
@@ -123,6 +101,71 @@ export class DocSections {
       logger?.warn(
         `doc_sections_failed task=${taskId} turn=${turn} reason=${isDomainError(error) ? error.code : 'unknown'}`,
       )
+    }
+  }
+
+  /**
+   * The sections the chat wrote and core has not checked, while the turn runs (docs/plan/74, Д2).
+   * Never throws: what is not checked now is checked by the next call or the end of the turn.
+   */
+  async checkLive(taskId: string, turn: number, refusesText: Refuses): Promise<void> {
+    const { db, logger } = this.#deps
+    try {
+      const sections = await uncheckedSectionsOfTurn(db, taskId, turn)
+      if (sections.length === 0) return
+      const settled = await settleTurnSections(db, {
+        taskId,
+        turnNo: turn,
+        final: false,
+        sections: sections.map((section) => ({
+          sectionId: section.id,
+          digest: section.digest,
+          refusal: refusalOf(refusesText, [section.heading ?? '', section.markdown ?? '']),
+        })),
+      })
+      if (settled.length === 0) return
+      await this.#tell(taskId, await this.#turnId(taskId, turn), settled)
+    } catch (error) {
+      logger?.warn(
+        `doc_sections_live_failed task=${taskId} turn=${turn} reason=${isDomainError(error) ? error.code : 'unknown'}`,
+      )
+    }
+  }
+
+  async #turnId(taskId: string, turn: number): Promise<string | null> {
+    const row = await this.#deps.db.taskTurn.findFirst({
+      where: { taskId, turnNo: turn },
+      select: { id: true },
+    })
+    return row?.id ?? null
+  }
+
+  /** The card reads the documents again; what was sent back is told, never why. */
+  async #tell(taskId: string, turnId: string | null, settled: readonly SettledDocument[]) {
+    const { db } = this.#deps
+    for (const document of settled) {
+      await insertFeedEvent(db, {
+        taskId,
+        turnId,
+        row: {
+          type: 'feed.doc_touch',
+          payload: { v: 1, docId: document.documentId, revision: document.revision },
+        },
+      })
+      if (document.refused > 0)
+        await insertFeedEvent(db, {
+          taskId,
+          turnId,
+          row: {
+            type: 'feed.doc_left',
+            payload: {
+              v: 1,
+              docId: document.documentId,
+              sections: document.refused,
+              reason: 'refused',
+            },
+          },
+        })
     }
   }
 }
