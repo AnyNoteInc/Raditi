@@ -868,7 +868,7 @@ scenarios['autopayments-not-approved'] = async (t) => {
         // The workspace is there now: the windows without a tariff, none started (plan 71).
         windows: [
           { kind: '5h', limit: null, used: 0, left: null, resetsAt: null },
-          { kind: 'week', limit: 50, used: 0, left: 50, resetsAt: null },
+          { kind: 'week', limit: null, used: 0, left: null, resetsAt: null },
         ],
       },
       [],
