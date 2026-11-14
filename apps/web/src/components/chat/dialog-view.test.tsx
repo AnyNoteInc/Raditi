@@ -2607,11 +2607,17 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
   })
 
   it('steps aside with the cross of its last tab: no panel, no edge, the focus back on «+»', async () => {
+    // The shell of the chats leaves the panel its room by its mark, not by `:has()` (plan 74).
+    const shell = document.createElement('div')
+    shell.setAttribute('data-chat-shell', '')
+    document.body.append(shell)
     wideLayout()
     showDialog()
     await screen.findByText('Изменения готовы')
+    expect(shell.hasAttribute('data-chat-pane-open')).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: 'Посмотреть изменения' }))
     const files = await screen.findByRole('tab', { name: 'Файлы', selected: true })
+    expect(shell.hasAttribute('data-chat-pane-open')).toBe(true)
     expect(screen.getByRole('separator', { name: 'Ширина панели' })).toBeTruthy()
     // The cross is the pointer's way, hidden from a screen reader: the tab is one control.
     const cross = within(files).getByTitle('Закрыть вкладку «Файлы»')
@@ -2621,8 +2627,10 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     expect(screen.queryByRole('separator')).toBeNull()
     // The shell gives the dialog the room back: nothing of the panel is left to keep it.
     expect(document.querySelector('[data-chat-pane]')).toBeNull()
+    expect(shell.hasAttribute('data-chat-pane-open')).toBe(false)
     await waitFor(() => expect(document.activeElement).toBe(plus()))
     expect(plus().id).toBe('dialog-tools')
+    shell.remove()
   })
 
   it('closes every tab by «Скрыть панель», a tab behind by its cross', async () => {

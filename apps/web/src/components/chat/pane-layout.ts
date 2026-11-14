@@ -6,6 +6,16 @@ import { CABINET_GAP, CABINET_RAIL_WIDTH } from '@/lib/cabinet-panel'
 
 export const SITE_PANE_DEFAULT_WIDTH = 'clamp(440px, 46vw, 760px)'
 export const SITE_PANE_WIDTH_VAR = '--site-pane-width'
+/**
+ * The mark the shell of the chats carries while the panel of a chat's tools is drawn: the panel
+ * sets it and takes it away (`usePaneMark`), and the shell leaves the panel its room by it. Not
+ * `:has([data-chat-pane])`: a browser left that true after the panel went, and the room with it
+ * (owner's report of 14.11.2026, docs/plan/74).
+ */
+export const PANE_OPEN_MARK = 'data-chat-pane-open'
+/** Under the shell of the chats while the panel is drawn: `${PANE_DRAWN}` as a selector of `&`. */
+export const PANE_DRAWN = `[data-chat-shell][${PANE_OPEN_MARK}] &`
+
 export const SITE_PANE_WIDTH = `var(${SITE_PANE_WIDTH_VAR}, ${SITE_PANE_DEFAULT_WIDTH})`
 
 /** The narrowest panel, and the narrowest the chat beside it may become. */
