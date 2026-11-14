@@ -1,9 +1,19 @@
-import { pageKinds, pageLimits, pageTitleSchema } from '@repo/domain'
+import {
+  DomainError,
+  pageKinds,
+  pageLimits,
+  pageTitleSchema,
+  type PagesAddress,
+} from '@repo/domain'
 import { z } from 'zod'
 
+import { chatContextOf } from '../services/chat/context.ts'
 import {
   cabinetDocument,
+  canPublishOfChat,
   listCabinetPages,
+  publishChatFilePage,
+  publishDocumentPage,
   restoreCabinetPage,
   setCabinetPagePassword,
   takeDownCabinetPage,
@@ -29,6 +39,11 @@ const pageOutput = z.strictObject({
   updatedAt: z.iso.datetime(),
 })
 const pageInput = z.strictObject({ pageId: z.uuid() })
+const publicationOutput = z.strictObject({
+  pageId: z.uuid(),
+  url: z.url(),
+  version: z.number().int().min(1),
+})
 
 export const pagesRouter = router({
   /** `enabled` false — PAGES_BASE_DOMAIN is unset here: no pages. */
@@ -65,10 +80,26 @@ export const pagesRouter = router({
         page: z
           .strictObject({ pageId: z.uuid(), state: z.string(), version: z.number().int().min(0) })
           .nullable(),
+        // The owner or an administrator, and pages set up here: «Опубликовать по ссылке» shows.
+        canPublish: z.boolean(),
       }),
     )
-    .query(({ ctx, input }) =>
-      cabinetDocument(ctx.prisma, { documentId: input.docId, userId: ctx.user.id }),
+    .query(async ({ ctx, input }) => {
+      const { canManage, ...document } = await cabinetDocument(ctx.prisma, {
+        documentId: input.docId,
+        userId: ctx.user.id,
+      })
+      return { ...document, canPublish: canManage && (ctx.chat?.pages ?? null) !== null }
+    }),
+
+  /** Whether «Опубликовать как страницу» shows in the tab of this chat (Ст32). */
+  canPublish: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid() }))
+    .output(z.boolean())
+    .query(async ({ ctx, input }) =>
+      (ctx.chat?.pages ?? null) === null
+        ? false
+        : canPublishOfChat(ctx.prisma, { taskId: input.taskId, userId: ctx.user.id }),
     ),
 
   /** The password of a page; null clears it. A new one stops the viewers' former cookies. */
@@ -93,9 +124,38 @@ export const pagesRouter = router({
       takeDownCabinetPage(ctx.prisma, { ...input, userId: ctx.user.id }),
     ),
 
+  /** «Опубликовать по ссылке» of a document: its current version, now (Ст25). */
+  publishDoc: consentedProcedure
+    .input(z.strictObject({ docId: z.uuid() }))
+    .output(publicationOutput)
+    .mutation(({ ctx, input }) =>
+      publishDocumentPage(ctx.prisma, pagesAddressOf(ctx), {
+        documentId: input.docId,
+        userId: ctx.user.id,
+      }),
+    ),
+
+  /** «Опубликовать как страницу» of a `.html` or `.md` of the chat (Ст32). */
+  publishFile: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid(), fileId: z.uuid() }))
+    .output(publicationOutput)
+    .mutation(({ ctx, input }) =>
+      publishChatFilePage(ctx.prisma, chatContextOf(ctx).storage(), pagesAddressOf(ctx), {
+        ...input,
+        userId: ctx.user.id,
+      }),
+    ),
+
   restore: consentedProcedure
     .input(pageInput)
     .mutation(({ ctx, input }) =>
       restoreCabinetPage(ctx.prisma, { ...input, userId: ctx.user.id }),
     ),
 })
+
+/** The address of the pages here; none — publications are off (PAGES_BASE_DOMAIN unset). */
+function pagesAddressOf(ctx: { chat?: { pages?: PagesAddress | null } | null }): PagesAddress {
+  const address = ctx.chat?.pages ?? null
+  if (address === null) throw new DomainError('PAGES_OFF', 'Pages are not set up here', 409)
+  return address
+}

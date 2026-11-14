@@ -8,7 +8,7 @@ import DialogTitle from '@mui/material/DialogTitle'
 import IconButton from '@mui/material/IconButton'
 import LinearProgress from '@mui/material/LinearProgress'
 import Typography from '@mui/material/Typography'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createContext, useContext, useEffect, useState } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
@@ -18,6 +18,7 @@ import type { inferRouterOutputs } from '@trpc/server'
 import { useTRPC } from '@/trpc/client'
 
 import { AgentMarkdown } from './agent-markdown'
+import { publishTexts, usePagePublish } from './page-publish'
 
 /** The words of a document of the agent (docs/plan/69-pages.md, Ст22): Russian, «вы». */
 export const feedDocTexts = Object.freeze({
@@ -83,7 +84,7 @@ function Section({ section }: { section: Document['sections'][number] }) {
  * title, «Разделы: N из M», the sections written and checked by core in full, the others as
  * quiet lines with their intent. A change of it comes as `feed.doc_touch`, which shows nothing by
  * itself: the card reads the document again then. «Открыть» shows it whole; «Скачать .md» once
- * it has a version.
+ * it has a version, and «Опубликовать по ссылке» (Ст25) to its owner or an administrator.
  */
 export function FeedDoc({ docId }: { docId: string }) {
   const trpc = useTRPC()
@@ -91,6 +92,8 @@ export function FeedDoc({ docId }: { docId: string }) {
   const queryClient = useQueryClient()
   const revision = useContext(DocRevisions).get(docId) ?? 0
   const doc = useQuery(trpc.pages.doc.queryOptions({ docId }))
+  const publishDoc = useMutation(trpc.pages.publishDoc.mutationOptions())
+  const publication = usePagePublish()
   // A newer change in the feed than the card read: read it again.
   useEffect(() => {
     if (revision > (doc.data?.revision ?? 0))
@@ -165,6 +168,25 @@ export function FeedDoc({ docId }: { docId: string }) {
               {feedDocTexts.download}
             </Button>
           )}
+          {data.version > 0 && data.canPublish && (
+            <Button
+              size="small"
+              variant="outlined"
+              disabled={publication.pending}
+              onClick={() =>
+                void publication.publish(async () => {
+                  const published = await publishDoc.mutateAsync({ docId })
+                  void queryClient.invalidateQueries({
+                    queryKey: trpc.pages.doc.queryKey({ docId }),
+                  })
+                  return published
+                })
+              }
+              sx={{ minHeight: 40 }}
+            >
+              {publication.pending ? publishTexts.publishing : publishTexts.byLink}
+            </Button>
+          )}
         </Box>
       </Box>
       <LinearProgress
@@ -201,6 +223,7 @@ export function FeedDoc({ docId }: { docId: string }) {
           ))}
         </DialogContent>
       </Dialog>
+      {publication.dialog}
     </Box>
   )
 }

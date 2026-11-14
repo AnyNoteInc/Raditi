@@ -2318,6 +2318,9 @@ importers:
       '@repo/db':
         specifier: workspace:*
         version: link:../db
+      '@repo/doc-render':
+        specifier: workspace:*
+        version: link:../doc-render
       '@repo/domain':
         specifier: workspace:*
         version: link:../domain

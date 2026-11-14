@@ -94,6 +94,27 @@ async function lockWorkspaceOfChat(
   if (rows.length === 0) throw missing()
 }
 
+/**
+ * The publications of a workspace in the hour before `now` (`publishesPerHour`): the turns'
+ * reservations and the client's own versions (`turn_no` NULL — a version of a turn is counted by
+ * its reservation). The agent and the client share the one budget.
+ */
+async function publishesOfLastHour(tx: Tx, workspaceId: string, now: Date): Promise<number> {
+  const hourAgo = new Date(now.getTime() - 60 * 60 * 1000)
+  const reserved = await tx.pageReservation.count({
+    where: { createdAt: { gt: hourAgo }, page: { workspaceId } },
+  })
+  const own = await tx.pageVersion.count({
+    where: {
+      createdAt: { gt: hourAgo },
+      turnNo: null,
+      source: { in: ['file', 'doc'] },
+      page: { workspaceId },
+    },
+  })
+  return reserved + own
+}
+
 /** The client took the page down: a new version waits for them to put it back. */
 const pageTakenDown = () =>
   new DomainError(
@@ -174,11 +195,8 @@ async function reserveOnce(
     }
     // Two turns cannot both take the last place.
     await lockWorkspaceOfChat(tx, workspaceId, taskId, pageNotFound)
-    const hourAgo = new Date(now.getTime() - 60 * 60 * 1000)
-    const lastHour = await tx.pageReservation.count({
-      where: { createdAt: { gt: hourAgo }, page: { workspaceId } },
-    })
-    if (lastHour >= pageLimits.publishesPerHour) throw pageLimitReached('publishesPerHour')
+    if ((await publishesOfLastHour(tx, workspaceId, now)) >= pageLimits.publishesPerHour)
+      throw pageLimitReached('publishesPerHour')
 
     let page = input.pageId ? await lockPage(tx, input.pageId, workspaceId) : null
     // A version of a page taken down would answer 410: the client puts it back, not the agent;
@@ -254,42 +272,143 @@ export async function applyPageVersion(
   input: PageVersionInput,
 ): Promise<{ version: number }> {
   if (input.bytes.byteLength > pageLimits.contentBytes) throw pageLimitReached('contentBytes')
+  return db.$transaction(async (tx) =>
+    writeVersion(tx, await lockPage(tx, input.pageId, input.workspaceId), input),
+  )
+}
+
+/** The next version of a locked page, in the caller's transaction. */
+async function writeVersion(
+  tx: Tx,
+  page: Awaited<ReturnType<typeof lockPage>>,
+  input: PageVersionInput,
+): Promise<{ version: number }> {
+  const no = page.currentVersion + 1
+  if (input.reservationId) {
+    const closed = await tx.pageReservation.updateMany({
+      where: { id: input.reservationId, pageId: page.id, outcome: null },
+      data: { outcome: 'done', versionNo: no, settledAt: new Date() },
+    })
+    if (closed.count !== 1) throw pageNotFound()
+  }
+  await tx.pageVersion.create({
+    data: {
+      pageId: page.id,
+      no,
+      sizeBytes: input.bytes.byteLength,
+      sha256: sha256(input.bytes),
+      source: input.source,
+      taskId: input.taskId ?? null,
+      turnNo: input.turnNo ?? null,
+    },
+  })
+  const bytes = new Uint8Array(input.bytes)
+  await tx.pageContent.upsert({
+    where: { pageId: page.id },
+    create: { pageId: page.id, versionNo: no, bytes },
+    update: { versionNo: no, bytes },
+  })
+  await tx.page.update({
+    where: { id: page.id },
+    data: {
+      currentVersion: no,
+      ...(page.state === 'pending' ? { state: 'live' } : {}),
+      ...(input.title ? { title: input.title } : {}),
+    },
+  })
+  return { version: no }
+}
+
+export interface ClientPublicationInput {
+  workspaceId: string
+  /** The chat the file or the document comes from: its page belongs to that chat. */
+  taskId: string | null
+  title: string
+  target: PagePublicationTarget
+  /** What the page serves: HTML of the agent, or drawn by the platform (@repo/doc-render). */
+  bytes: Uint8Array
+}
+
+/**
+ * «Опубликовать по ссылке» of a document and «Опубликовать как страницу» of a file of a chat
+ * (docs/plan/69-pages.md, Ст25, Ст32): the client's own publication, at once, without a turn. The
+ * page of the document, or the page this chat made of a file of that name, gets the next version;
+ * none yet — a new page. One transaction: a page that got no version is never left behind.
+ */
+export async function publishClientPage(
+  db: Db,
+  input: ClientPublicationInput,
+  now: Date = new Date(),
+): Promise<PagePublication> {
+  if (input.bytes.byteLength > pageLimits.contentBytes) throw pageLimitReached('contentBytes')
+  const fileName = 'fileName' in input.target ? input.target.fileName : null
+  const documentId = 'documentId' in input.target ? input.target.documentId : null
   return db.$transaction(async (tx) => {
-    const page = await lockPage(tx, input.pageId, input.workspaceId)
-    const no = page.currentVersion + 1
-    if (input.reservationId) {
-      const closed = await tx.pageReservation.updateMany({
-        where: { id: input.reservationId, pageId: page.id, outcome: null },
-        data: { outcome: 'done', versionNo: no, settledAt: new Date() },
-      })
-      if (closed.count !== 1) throw pageNotFound()
+    // The workspace's row for its counts — two publications cannot both take the last place —
+    // and, for a page of a chat, that the chat is the workspace's own.
+    if (input.taskId !== null)
+      await lockWorkspaceOfChat(tx, input.workspaceId, input.taskId, pageNotFound)
+    else {
+      const rows = await tx.$queryRaw<{ id: string }[]>`
+        SELECT id FROM workspaces WHERE id = ${input.workspaceId}::uuid FOR NO KEY UPDATE`
+      if (rows.length === 0) throw pageNotFound()
     }
-    await tx.pageVersion.create({
-      data: {
-        pageId: page.id,
-        no,
-        sizeBytes: input.bytes.byteLength,
-        sha256: sha256(input.bytes),
-        source: input.source,
-        taskId: input.taskId ?? null,
-        turnNo: input.turnNo ?? null,
-      },
+    if ((await publishesOfLastHour(tx, input.workspaceId, now)) >= pageLimits.publishesPerHour)
+      throw pageLimitReached('publishesPerHour')
+
+    const known =
+      documentId !== null
+        ? await tx.page.findUnique({ where: { documentId } })
+        : await tx.page.findFirst({
+            where: {
+              workspaceId: input.workspaceId,
+              taskId: input.taskId,
+              sourceFileName: fileName,
+              documentId: null,
+            },
+            orderBy: { createdAt: 'desc' },
+          })
+    let page = known ? await lockPage(tx, known.id, input.workspaceId) : null
+    // Taken down by the client: they put it back in «Страницы»; by the operator: gone (Ст15, Ст31).
+    if (page?.state === 'taken_down')
+      throw page.takenDownBy === 'operator' ? pageNotFound() : pageTakenDown()
+    // A turn under way reserved it and told the agent the number of its version: that number is
+    // the turn's, the client publishes once the answer ends.
+    if (
+      page !== null &&
+      (await tx.pageReservation.count({ where: { pageId: page.id, outcome: null } })) > 0
+    )
+      throw new DomainError('PAGE_BUSY', 'A turn is publishing this page now', 409)
+    if (page === null) {
+      if (documentId !== null) await lockDocument(tx, documentId, input.workspaceId)
+      const pages = await tx.page.count({
+        where: { workspaceId: input.workspaceId, state: { not: 'pending' } },
+      })
+      if (pages >= pageLimits.pagesPerWorkspace) throw pageLimitReached('pagesPerWorkspace')
+      const kind: PageKind =
+        documentId !== null ? 'doc' : /\.(md|markdown)$/i.test(fileName ?? '') ? 'markdown' : 'html'
+      const created = await tx.page.create({
+        data: {
+          workspaceId: input.workspaceId,
+          taskId: input.taskId,
+          kind,
+          slug: newPageSlug((size) => randomBytes(size)),
+          title: input.title,
+          documentId,
+          sourceFileName: fileName,
+        },
+      })
+      page = await lockPage(tx, created.id, input.workspaceId)
+    }
+    const { version } = await writeVersion(tx, page, {
+      pageId: page.id,
+      bytes: input.bytes,
+      source: documentId !== null ? 'doc' : 'file',
+      title: input.title,
+      taskId: input.taskId,
+      turnNo: null,
     })
-    const bytes = new Uint8Array(input.bytes)
-    await tx.pageContent.upsert({
-      where: { pageId: page.id },
-      create: { pageId: page.id, versionNo: no, bytes },
-      update: { versionNo: no, bytes },
-    })
-    await tx.page.update({
-      where: { id: page.id },
-      data: {
-        currentVersion: no,
-        ...(page.state === 'pending' ? { state: 'live' } : {}),
-        ...(input.title ? { title: input.title } : {}),
-      },
-    })
-    return { version: no }
+    return { pageId: page.id, slug: page.slug, version }
   })
 }
 

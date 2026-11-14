@@ -173,6 +173,14 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   CHAT_NOT_CONFIGURED: 'Чаты сейчас недоступны. Попробуйте ещё раз немного позже',
   // The domain of pages is not set up here (docs/plan/67-agent-documents.md, Д3).
   PAGES_UNAVAILABLE: 'Этот документ сейчас не открывается. Скачайте файл',
+  // «Опубликовать по ссылке» and «Опубликовать как страницу» (docs/plan/69-pages.md, Ст25, Ст32).
+  PAGES_OFF: 'Публикация страниц сейчас недоступна',
+  DOC_NOT_READY: 'Документ ещё пишется: опубликовать можно, когда агент его допишет',
+  PAGE_NOT_PUBLISHABLE: 'Опубликовать страницей можно только документ .html или .md',
+  PAGE_CONTENT_REFUSED: 'Эту страницу опубликовать нельзя. Попросите агента её исправить',
+  PAGE_TAKEN_DOWN: 'Эта страница снята. Верните её в разделе «Страницы», чтобы опубликовать снова',
+  PAGE_LIMIT: 'Достигнут предел публикаций страниц. Попробуйте позже',
+  PAGE_BUSY: 'Агент сейчас публикует эту страницу. Опубликуйте её, когда он закончит ответ',
   // The Transit key of the workspace was not made before the task (docs/plan/57, Б32).
   WORKSPACE_KEY_UNAVAILABLE:
     'Не удалось начать задание из-за технического сбоя. Попробуйте ещё раз немного позже',
@@ -379,7 +387,41 @@ function withoutTariff({ reason, spendable, needed }: TaskRefusalDetails): strin
  * Client texts that name a number from the details of their DomainError. The text never
  * depends on the details being there: without the number it says the same in general words.
  */
+const PAGE_REFUSAL_TEXT: Readonly<Record<string, string>> = {
+  too_large: 'Эта страница слишком большая, чтобы её опубликовать. Попросите агента её сократить',
+  not_utf8: 'Это не текстовый документ: страницей его опубликовать нельзя',
+  password_form:
+    'В странице есть поле пароля, которое отправляет его на другой адрес: такую страницу опубликовать нельзя. Попросите агента это исправить',
+  embedded_token:
+    'В странице есть то, что похоже на ключ или пароль: показывать это всем нельзя. Попросите агента убрать это',
+  turn_key:
+    'В странице есть то, что похоже на ключ или пароль: показывать это всем нельзя. Попросите агента убрать это',
+  client_value:
+    'В странице есть значение одной из ваших переменных: показывать его всем нельзя. Попросите агента убрать это',
+}
+
+const PAGE_LIMIT_TEXT: Readonly<Record<string, string>> = {
+  publishesPerHour: 'За последний час опубликовано слишком много страниц. Попробуйте через час',
+  pagesPerWorkspace:
+    'Достигнут предел страниц в рабочем пространстве. Снятые страницы тоже считаются: напишите нам, если нужно больше',
+  contentBytes: PAGE_REFUSAL_TEXT.too_large!,
+}
+
+/** The value of one string field of the details of a refusal; null — none. */
+const detail = (details: unknown, field: string): string | null => {
+  if (typeof details !== 'object' || details === null) return null
+  const value = (details as Record<string, unknown>)[field]
+  return typeof value === 'string' ? value : null
+}
+
 const MESSAGE_FROM_DETAILS: Readonly<Record<string, (details: unknown) => string>> = {
+  // A publication of the client (docs/plan/69-pages.md, Ст25, Ст32): why, in words that say
+  // what to do — never the content itself.
+  PAGE_CONTENT_REFUSED: (details) =>
+    PAGE_REFUSAL_TEXT[detail(details, 'reason') ?? ''] ??
+    MESSAGE_BY_DOMAIN_CODE.PAGE_CONTENT_REFUSED!,
+  PAGE_LIMIT: (details) =>
+    PAGE_LIMIT_TEXT[detail(details, 'limit') ?? ''] ?? MESSAGE_BY_DOMAIN_CODE.PAGE_LIMIT!,
   // A task that was refused although the page offered it: the page was out of date. The page
   // itself tells these cases from its read model; here the sentence is built from the details
   // of the refusal, with the numbers the customer can check.

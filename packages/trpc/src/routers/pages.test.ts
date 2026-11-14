@@ -3,12 +3,14 @@ import { randomUUID } from 'node:crypto'
 import {
   applyPageVersion,
   createPrismaClient,
+  insertFeedEvent,
   reservePagePublication,
   servedPage,
   verifyPagePassword,
   type PrismaClient,
 } from '@repo/db'
-import { legalDocuments } from '@repo/domain'
+import { readingPage } from '@repo/doc-render'
+import { chatFileKey, legalDocuments } from '@repo/domain'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { createCaller } from '../router.ts'
@@ -60,6 +62,19 @@ describe.skipIf(!databaseUrl)('pages router with PostgreSQL', () => {
     return user
   }
 
+  /** The bucket of the chat's files: what `storage.get` returns, by key. */
+  const objects = new Map<string, Uint8Array>()
+  const storage = {
+    get: async (_bucket: string, key: string) => {
+      const bytes = objects.get(key)
+      return bytes === undefined
+        ? null
+        : (async function* () {
+            yield bytes
+          })()
+    },
+  }
+
   function callerOf(user: { id: string; name: string; email: string }, pages = true) {
     const now = new Date()
     const context: Context = {
@@ -82,7 +97,9 @@ describe.skipIf(!databaseUrl)('pages router with PostgreSQL', () => {
         updatedAt: now,
       } as never,
       billing: null,
-      chat: (pages ? { pages: address } : { pages: null }) as ChatContext,
+      chat: (pages
+        ? { pages: address, storage: () => storage }
+        : { pages: null, storage: () => storage }) as unknown as ChatContext,
     }
     return createCaller(context)
   }
@@ -276,5 +293,180 @@ describe.skipIf(!databaseUrl)('pages router with PostgreSQL', () => {
       await cabinetDocMarkdown(db, { documentId: document.id, userId: (await person()).id }),
     ).toBeNull()
     await db.chatDocument.delete({ where: { id: document.id } })
+  })
+
+  /** A document of the chat with one version of `markdown`. */
+  async function documentWithVersion(workspaceId: string, taskId: string, markdown: string) {
+    const document = await db.chatDocument.create({
+      data: { workspaceId, taskId, title: 'Аудит', currentVersion: 1 },
+    })
+    await db.chatDocumentVersion.create({
+      data: { documentId: document.id, no: 1, sizeBytes: 9, sha256: 'a'.repeat(64) },
+    })
+    await db.chatDocumentContent.create({
+      data: { documentId: document.id, versionNo: 1, markdown },
+    })
+    return document
+  }
+
+  it('publishes a document by link: its version drawn for reading, the owner only (Ст25)', async () => {
+    const { owner, member, workspace, task } = await workspaceWithPage()
+    const markdown = '# Аудит\n\nТри причины.'
+    const document = await documentWithVersion(workspace.id, task.id, markdown)
+    await expect(callerOf(member).pages.publishDoc({ docId: document.id })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    })
+    const first = await callerOf(owner).pages.publishDoc({ docId: document.id })
+    expect(first.version).toBe(1)
+    expect(first.url).toMatch(/^http:\/\/[a-z2-7]{26}\.pages\.localhost:8092\/$/)
+    const slug = new URL(first.url).hostname.split('.')[0]!
+    const served = await servedPage(db, slug)
+    expect(served).toMatchObject({ state: 'live', content: { version: 1 } })
+    expect(Buffer.from(served!.content!.bytes).toString()).toBe(
+      await readingPage({ title: 'Аудит', markdown }),
+    )
+    // Again: the next version of the same page.
+    const again = await callerOf(owner).pages.publishDoc({ docId: document.id })
+    expect(again).toMatchObject({ pageId: first.pageId, url: first.url, version: 2 })
+    expect((await callerOf(owner).pages.doc({ docId: document.id })).page).toMatchObject({
+      pageId: first.pageId,
+      version: 2,
+    })
+    expect((await callerOf(owner).pages.doc({ docId: document.id })).canPublish).toBe(true)
+    expect((await callerOf(member).pages.doc({ docId: document.id })).canPublish).toBe(false)
+    // Pages not set up here: nothing is published.
+    await expect(
+      callerOf(owner, false).pages.publishDoc({ docId: document.id }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' })
+  })
+
+  it('publishes no document still written, nor one with a key in it', async () => {
+    const { owner, workspace, task } = await workspaceWithPage()
+    const written = await db.chatDocument.create({
+      data: { workspaceId: workspace.id, taskId: task.id, title: 'Пишется' },
+    })
+    await expect(callerOf(owner).pages.publishDoc({ docId: written.id })).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: 'Документ ещё пишется: опубликовать можно, когда агент его допишет',
+    })
+    const keyed = await documentWithVersion(
+      workspace.id,
+      task.id,
+      `# Ключ\n\nsk-rdt-${'x'.repeat(43)}`,
+    )
+    await expect(callerOf(owner).pages.publishDoc({ docId: keyed.id })).rejects.toMatchObject({
+      code: 'UNPROCESSABLE_CONTENT',
+      message:
+        'В странице есть то, что похоже на ключ или пароль: показывать это всем нельзя. Попросите агента убрать это',
+    })
+    expect(await db.page.count({ where: { documentId: keyed.id } })).toBe(0)
+  })
+
+  it('publishes no document of a removed chat, nor one the agent is publishing now', async () => {
+    const { owner, workspace, task } = await workspaceWithPage()
+    const busy = await documentWithVersion(workspace.id, task.id, '# Аудит\n\nТекст')
+    // A turn under way reserved it: the number of the version is the turn's.
+    await reservePagePublication(db, {
+      workspaceId: workspace.id,
+      taskId: task.id,
+      turnNo: 7,
+      title: 'Аудит',
+      target: { documentId: busy.id },
+    })
+    await expect(callerOf(owner).pages.publishDoc({ docId: busy.id })).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: 'Агент сейчас публикует эту страницу. Опубликуйте её, когда он закончит ответ',
+    })
+    const removed = await db.task.create({
+      data: {
+        workspaceId: workspace.id,
+        siteId: null,
+        needsRepository: false,
+        needsBrowser: false,
+        deletedAt: new Date(),
+      },
+    })
+    const orphan = await documentWithVersion(workspace.id, removed.id, '# Старое\n\nТекст')
+    await expect(callerOf(owner).pages.publishDoc({ docId: orphan.id })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    })
+  })
+
+  /** A file of the chat, as `ChatFiles.deliver` leaves it: a `feed.file` row and its object. */
+  async function chatFile(taskId: string, name: string, text: string) {
+    const fileId = randomUUID()
+    const bytes = new TextEncoder().encode(text)
+    await insertFeedEvent(db, {
+      taskId,
+      turnId: null,
+      row: { type: 'feed.file', payload: { v: 1, fileId, name, sizeBytes: bytes.byteLength } },
+    })
+    objects.set(chatFileKey(taskId, fileId), bytes)
+    return fileId
+  }
+
+  it('publishes a page of the chat as it is, and a .md drawn for reading (Ст32)', async () => {
+    const { owner, member, task } = await workspaceWithPage()
+    const html = await chatFile(task.id, 'Прайс.html', '<!doctype html><p>Цены</p>')
+    await expect(callerOf(member).pages.canPublish({ taskId: task.id })).resolves.toBe(false)
+    await expect(callerOf(owner).pages.canPublish({ taskId: task.id })).resolves.toBe(true)
+    await expect(callerOf(owner, false).pages.canPublish({ taskId: task.id })).resolves.toBe(false)
+    await expect(
+      callerOf(member).pages.publishFile({ taskId: task.id, fileId: html }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    const page = await callerOf(owner).pages.publishFile({ taskId: task.id, fileId: html })
+    const slug = new URL(page.url).hostname.split('.')[0]!
+    expect(Buffer.from((await servedPage(db, slug))!.content!.bytes).toString()).toBe(
+      '<!doctype html><p>Цены</p>',
+    )
+    // The same file again: the next version of the same page.
+    await expect(
+      callerOf(owner).pages.publishFile({ taskId: task.id, fileId: html }),
+    ).resolves.toMatchObject({ pageId: page.pageId, version: 2 })
+
+    const markdown = '# Отчёт\n\n<script>alert(1)</script>Текст'
+    const md = await chatFile(task.id, 'отчёт.md', markdown)
+    const drawn = await callerOf(owner).pages.publishFile({ taskId: task.id, fileId: md })
+    expect(drawn.pageId).not.toBe(page.pageId)
+    const served = await servedPage(db, new URL(drawn.url).hostname.split('.')[0]!)
+    expect(Buffer.from(served!.content!.bytes).toString()).toBe(
+      await readingPage({ title: 'Отчёт', markdown }),
+    )
+    expect(
+      await db.page.findUniqueOrThrow({ where: { id: drawn.pageId }, select: { kind: true } }),
+    ).toEqual({ kind: 'markdown' })
+  })
+
+  it('refuses a file that is no page, one with a key, and a page the client took down', async () => {
+    const { owner, task } = await workspaceWithPage()
+    const sheet = await chatFile(task.id, 'смета.csv', 'a;b')
+    await expect(
+      callerOf(owner).pages.publishFile({ taskId: task.id, fileId: sheet }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    const binary = await chatFile(task.id, 'b.html', '\uFFFD')
+    objects.set(chatFileKey(task.id, binary), new Uint8Array([0xff, 0xfe, 0xfd]))
+    await db.taskEvent.updateMany({
+      where: { taskId: task.id, type: 'feed.file', payload: { path: ['fileId'], equals: binary } },
+      data: { payload: { v: 1, fileId: binary, name: 'b.html', sizeBytes: 3 } },
+    })
+    await expect(
+      callerOf(owner).pages.publishFile({ taskId: task.id, fileId: binary }),
+    ).rejects.toMatchObject({
+      message: 'Это не текстовый документ: страницей его опубликовать нельзя',
+    })
+    const keyed = await chatFile(task.id, 'k.html', `<p>sk-rdt-${'x'.repeat(43)}</p>`)
+    await expect(
+      callerOf(owner).pages.publishFile({ taskId: task.id, fileId: keyed }),
+    ).rejects.toMatchObject({ code: 'UNPROCESSABLE_CONTENT' })
+    const html = await chatFile(task.id, 'a.html', '<p>a</p>')
+    const page = await callerOf(owner).pages.publishFile({ taskId: task.id, fileId: html })
+    await callerOf(owner).pages.takeDown({ pageId: page.pageId })
+    await expect(
+      callerOf(owner).pages.publishFile({ taskId: task.id, fileId: html }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' })
+    // Someone else's chat: not found.
+    await expect(
+      callerOf(await person()).pages.publishFile({ taskId: task.id, fileId: html }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
 })

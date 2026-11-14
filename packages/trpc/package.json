@@ -16,6 +16,7 @@
     "@repo/auth": "workspace:*",
     "@repo/billing": "workspace:*",
     "@repo/db": "workspace:*",
+    "@repo/doc-render": "workspace:*",
     "@repo/domain": "workspace:*",
     "@repo/yookassa": "workspace:*",
     "@trpc/server": "catalog:",

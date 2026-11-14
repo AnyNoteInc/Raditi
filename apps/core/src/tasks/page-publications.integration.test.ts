@@ -184,7 +184,7 @@ describe.skipIf(!enabled)('the pages of a turn with PostgreSQL', () => {
     const served = await servedPage(db, page.slug)
     expect(served).toMatchObject({ state: 'live', content: { version: 1 } })
     expect(Buffer.from(served!.content!.bytes).toString()).toBe(
-      readingPage({ title: 'Отчёт', markdown }),
+      await readingPage({ title: 'Отчёт', markdown }),
     )
     // The title of the reservation, which no scan of the turn read, is not on the page.
     expect(Buffer.from(served!.content!.bytes).toString()).not.toContain('Прайс')
