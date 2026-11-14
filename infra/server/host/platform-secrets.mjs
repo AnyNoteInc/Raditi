@@ -60,10 +60,11 @@ const GENERATED = {
 const PROVIDED = {
   // reg.ru API (an alternative password, the server's IP allowed): DNS-01 of *.raditi-preview.ru
   'app/traefik': ['regru_username', 'regru_password'],
-  'app/web': ['SMARTCAPTCHA_CLIENT_KEY', 'SMARTCAPTCHA_SERVER_KEY'],
+  'app/web': ['SMARTCAPTCHA_CLIENT_KEY', 'SMARTCAPTCHA_SERVER_KEY', 'YANDEX_SPEECHKIT_API_KEY'],
   'app/core': [
     'SENDSAY_API_KEY',
     'LEADS_TELEGRAM_BOT_TOKEN',
+    'WEB_PUSH_PRIVATE_KEY',
     'GITEA_TOKEN',
     'GITEA_PROVISIONER_TOKEN',
   ],
@@ -168,6 +169,7 @@ function serviceFiles(kv, roles) {
           BETTER_AUTH_SECRET: web.BETTER_AUTH_SECRET,
           SMARTCAPTCHA_CLIENT_KEY: web.SMARTCAPTCHA_CLIENT_KEY,
           SMARTCAPTCHA_SERVER_KEY: web.SMARTCAPTCHA_SERVER_KEY,
+          YANDEX_SPEECHKIT_API_KEY: web.YANDEX_SPEECHKIT_API_KEY,
           METRICS_TOKEN: web.METRICS_TOKEN,
           PAGES_SIGNING_SECRET: web.PAGES_SIGNING_SECRET,
           ...s3(web),
@@ -185,6 +187,7 @@ function serviceFiles(kv, roles) {
           METRICS_TOKEN: core.METRICS_TOKEN,
           SENDSAY_API_KEY: core.SENDSAY_API_KEY,
           LEADS_TELEGRAM_BOT_TOKEN: core.LEADS_TELEGRAM_BOT_TOKEN,
+          WEB_PUSH_PRIVATE_KEY: core.WEB_PUSH_PRIVATE_KEY,
           GITEA_TOKEN: core.GITEA_TOKEN,
           GITEA_PROVISIONER_TOKEN: core.GITEA_PROVISIONER_TOKEN,
           BROWSER_WORKER_TOKEN: core.BROWSER_WORKER_TOKEN,

@@ -50,7 +50,8 @@ const securityHeaders = [
   { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
   { key: 'X-Frame-Options', value: 'DENY' },
   { key: 'Content-Security-Policy', value: contentSecurityPolicy },
-  { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
+  // The microphone of the cabinet itself: dictation into the field (docs/plan/75, ВВ16).
+  { key: 'Permissions-Policy', value: 'camera=(), microphone=(self), geolocation=()' },
   // Production is served over https only (APP_URL is checked); browsers ignore it on plain http.
   ...(process.env.NODE_ENV === 'production'
     ? [{ key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains' }]

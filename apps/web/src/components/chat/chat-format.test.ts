@@ -18,6 +18,8 @@ function dialog(id: string, status: DialogListItem['status'], createdAt: string)
     createdAt: new Date(createdAt),
     updatedAt: new Date(createdAt),
     project: null,
+    pinned: false,
+    archived: false,
   }
 }
 

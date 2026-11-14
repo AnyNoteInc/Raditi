@@ -53,6 +53,11 @@ model User {
   undoPlansAsked     ReleaseUndoPlan[]
   envVarsConsented   SiteEnvVar[]          @relation("SiteEnvVarConsent")
   envVarsCreated     SiteEnvVar[]          @relation("SiteEnvVarCreator")
+  notificationSetting NotificationSetting?
+  pushSubscriptions  PushSubscription[]
+  taskPresence       TaskPresence[]
+  chatNotifications  ChatNotification[]
+  speechCalls        SpeechCall[]
 
   @@map("users")
 }
@@ -570,6 +575,10 @@ model Task {
   /// «Удалить диалог» (`task.remove`, owner's request of 26.10.2026): the cabinet no longer finds
   /// the dialog; the row and everything that points at it stay.
   deletedAt       DateTime?    @map("deleted_at") @db.Timestamptz(6)
+  /// «Закрепить» (docs/plan/75-chat-input-output.md, ВВ21): the chat stands at the head of the list.
+  pinnedAt        DateTime?    @map("pinned_at") @db.Timestamptz(6)
+  /// «В архив»: the chat leaves the list for «Архив»; a new message brings it back.
+  archivedAt      DateTime?    @map("archived_at") @db.Timestamptz(6)
 
   /// First bounded content access, including GET-only privacy maps.
   contentAccessedAt    DateTime? @map("content_accessed_at") @db.Timestamptz(6)
@@ -590,6 +599,9 @@ model Task {
   deployments        Deployment[]         @relation("TaskDeployments")
   turns              TaskTurn[]
   events             TaskEvent[]
+  queuedMessages     TaskQueuedMessage[]
+  presence           TaskPresence[]
+  notifications      ChatNotification[]
   attachments        Attachment[]
   snapshots          Snapshot[]
   tokenUsage         TokenUsage[]
@@ -614,6 +626,7 @@ model Task {
   @@index([siteId, updatedAt(sort: Desc)], map: "tasks_site_updated_idx")
   @@index([workspaceId, createdAt(sort: Desc)])
   @@index([workspaceId, updatedAt(sort: Desc), id(sort: Desc)], map: "tasks_workspace_updated_idx")
+  @@index([workspaceId, pinnedAt(sort: Desc)], map: "tasks_workspace_pinned_idx", where: raw("pinned_at IS NOT NULL"))
   @@index([siteId, status])
   @@index([status, updatedAt])
   @@index([chatSessionId])
@@ -790,6 +803,110 @@ model TaskEvent {
   // What a reader of the feed reads (CHECK task_events_feed_visible_check: visible = `feed.*`).
   @@index([taskId, id], map: "task_events_feed_idx", where: raw("client_visible"))
   @@map("task_events")
+}
+
+/// The queue of a chat (docs/plan/75-chat-input-output.md, ВВ1–ВВ5): what the client wrote while the
+/// agent worked. core takes it into the feed as `feed.request` of the kind `queued` when the pass
+/// ended and starts the next one; until then the client may change or remove it.
+model TaskQueuedMessage {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  taskId      String   @map("task_id") @db.Uuid
+  /// The user who wrote the words; they become the author of the `feed.request`.
+  authorId    String   @map("author_id") @db.Uuid
+  /// Invented by the browser: a repeat of the same words finds the same row.
+  requestId   String   @map("request_id") @db.Uuid
+  /// 1–4000 characters (CHECK task_queued_messages_text_check).
+  text        String
+  /// Files of the words, bound to the task when they were queued; at most ten (CHECK).
+  attachments String[] @default([]) @db.Uuid
+  /// «Сначала план» (docs/plan/75, ВВ12): the pass of these words only plans.
+  plan        Boolean  @default(false)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, requestId])
+  @@index([taskId, createdAt])
+  @@map("task_queued_messages")
+}
+
+/// «Уведомления» of the settings (docs/plan/75-chat-input-output.md, ВВ10); no row — the defaults.
+model NotificationSetting {
+  userId    String   @id @map("user_id") @db.Uuid
+  /// Web Push to the browsers the client turned it on in.
+  push      Boolean  @default(false)
+  /// Letters about the work of the agent.
+  email     Boolean  @default(true)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notification_settings")
+}
+
+/// A browser that takes Web Push (ВВ8): `https://` endpoint, the keys of RFC 8291 (CHECK).
+model PushSubscription {
+  id         String    @id @default(uuid(7)) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  endpoint   String    @unique
+  p256dh     String
+  auth       String
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  lastUsedAt DateTime? @map("last_used_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("push_subscriptions")
+}
+
+/// The client looks at the chat (ВВ7): marked by the feed as it reads, at most every 30 seconds.
+model TaskPresence {
+  userId String   @map("user_id") @db.Uuid
+  taskId String   @map("task_id") @db.Uuid
+  seenAt DateTime @map("seen_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@id([userId, taskId])
+  @@map("task_presence")
+}
+
+/// A notification of a chat that waits (ВВ8, ВВ9); `kind` — answered, question, ready, failed or
+/// limit (CHECK chat_notifications_kind_check).
+model ChatNotification {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  taskId    String   @map("task_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  kind      String
+  emailed   Boolean  @default(false)
+  pushed    Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, userId, createdAt])
+  @@map("chat_notifications")
+}
+
+/// A recognition of dictation (docs/plan/75-chat-input-output.md, ВВ17, ВВ19): its length and
+/// outcome, for the limit per user and hour. The sound is never kept.
+model SpeechCall {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  /// 0–30 (CHECK speech_calls_seconds_check).
+  seconds   Int
+  /// recognized, empty or failed (CHECK speech_calls_outcome_check).
+  outcome   String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("speech_calls")
 }
 
 /// Journal of site-changing MCP calls (spec §11): a retry with the same idempotency key is not

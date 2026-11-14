@@ -1973,6 +1973,71 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
 
   // The owner's request of 26.10.2026: a dialog is renamed, deleted, and its level of thinking
   // changed while it goes on; none of it moves the dialog in the list.
+  describe('the queue of a chat (docs/plan/75-chat-input-output.md, ВВ1–ВВ5)', () => {
+    it('keeps words written while the agent works, changes and removes them, and refuses a dialog that waits', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+      const requestId = randomUUID()
+
+      const added = await caller.task.queueAdd({ taskId, requestId, text: '  И поменяйте адрес ' })
+      expect(added.repeated).toBe(false)
+      // A repeat of the same press finds the same row.
+      expect(await caller.task.queueAdd({ taskId, requestId, text: 'И поменяйте адрес' })).toEqual({
+        id: added.id,
+        repeated: true,
+      })
+      const listed = (await caller.task.queueList({ taskId })).items
+      expect(listed.map((item) => item.text)).toEqual(['И поменяйте адрес'])
+
+      expect(await caller.task.queueEdit({ taskId, id: added.id!, text: 'И часы работы' })).toEqual(
+        {
+          text: 'И часы работы',
+        },
+      )
+      expect((await caller.task.queueList({ taskId })).items[0]?.text).toBe('И часы работы')
+      await expect(
+        caller.task.queueAdd({ taskId, requestId: randomUUID(), text: 'пароль: Qwerty12345!' }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+      await expect(callerOf(await person()).task.queueList({ taskId })).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+
+      // A pass that is only planned has nothing to stop: «Отправить сейчас» writes no press.
+      expect(await caller.task.queueSendNow({ taskId, requestId: randomUUID() })).toEqual({
+        requestEventId: null,
+      })
+      await db.task.update({ where: { id: taskId }, data: { status: 'running', turnNo: 1 } })
+      const pressed = await caller.task.queueSendNow({ taskId, requestId: randomUUID() })
+      expect(pressed.requestEventId).not.toBeNull()
+      expect(await outboxOf(`turn.cancel:${taskId}:${pressed.requestEventId}`)).toHaveLength(1)
+
+      expect(await caller.task.queueRemove({ taskId, id: added.id! })).toEqual({ removed: true })
+      expect((await caller.task.queueList({ taskId })).items).toEqual([])
+      await expect(
+        caller.task.queueEdit({ taskId, id: added.id!, text: 'Поздно' }),
+      ).rejects.toMatchObject({ code: 'CONFLICT' })
+
+      await db.task.update({ where: { id: taskId }, data: { status: 'awaiting_user' } })
+      await expect(
+        caller.task.queueAdd({ taskId, requestId: randomUUID(), text: 'Уже ждёт' }),
+      ).rejects.toMatchObject({ code: 'CONFLICT' })
+    })
+
+    it('takes at most ten words, and «Остановить» takes the queue away', async () => {
+      const { owner, site } = await siteOwner()
+      const caller = callerOf(owner)
+      const { taskId } = await newDialog(caller, site.id)
+      for (let index = 0; index < 10; index++)
+        await caller.task.queueAdd({ taskId, requestId: randomUUID(), text: `Слова ${index}` })
+      await expect(
+        caller.task.queueAdd({ taskId, requestId: randomUUID(), text: 'Одиннадцатые' }),
+      ).rejects.toMatchObject({ code: 'CONFLICT' })
+      await caller.task.cancel({ taskId, requestId: randomUUID() })
+      expect(await db.taskQueuedMessage.count({ where: { taskId } })).toBe(0)
+    })
+  })
+
   describe('task.rename, task.remove, task.setEffort', () => {
     const updatedAt = async (taskId: string) =>
       (await db.task.findUniqueOrThrow({ where: { id: taskId } })).updatedAt.getTime()
@@ -6020,6 +6085,70 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       await expect(callerOf(await person()).task.list({ folder: site.id })).rejects.toMatchObject({
         code: 'NOT_FOUND',
       })
+    })
+
+    it('pins and archives a chat without moving it, finds it by its name and words (docs/plan/75, ВВ21)', async () => {
+      const { owner, site, workspaceId } = await siteOwner()
+      const caller = callerOf(owner)
+      const [first, second, third] = await chats(workspaceId, site.id, [{}, {}, {}])
+      const moved = async (id: string) =>
+        (await db.task.findUniqueOrThrow({ where: { id } })).updatedAt.getTime()
+      const before = await moved(first!.id)
+
+      expect(await caller.task.pin({ taskId: first!.id, pinned: true })).toEqual({ pinned: true })
+      expect(await moved(first!.id)).toBe(before)
+      const page = await caller.task.list({})
+      expect(page.pinned.map((item) => item.id)).toEqual([first!.id])
+      expect(page.pinned[0]?.pinned).toBe(true)
+      expect(page.items.map((item) => item.id)).not.toContain(first!.id)
+      // A folder shows its pinned chat at its head too, the later pages never.
+      expect((await caller.task.list({ folder: site.id })).pinned.map((item) => item.id)).toEqual([
+        first!.id,
+      ])
+
+      expect(await caller.task.archive({ taskId: second!.id, archived: true })).toEqual({
+        archived: true,
+      })
+      expect((await caller.task.list({})).items.map((item) => item.id)).toEqual([third!.id])
+      const archive = await caller.task.list({ view: 'archive' })
+      expect(archive.items.map((item) => item.id)).toEqual([second!.id])
+      expect(archive.pinned).toEqual([])
+      expect((await caller.task.folders({})).folders[0]?.count).toBe(2)
+
+      // An archived chat is unpinned, and cannot be pinned until it leaves «Архив».
+      await caller.task.archive({ taskId: first!.id, archived: true })
+      expect((await caller.task.list({})).pinned).toEqual([])
+      expect(await caller.task.pin({ taskId: first!.id, pinned: true })).toEqual({ pinned: false })
+      await caller.task.archive({ taskId: first!.id, archived: false })
+      expect((await caller.task.list({})).items.map((item) => item.id)).toContain(first!.id)
+
+      await caller.task.rename({ taskId: third!.id, title: 'Скидки на капучино 50%' })
+      await insertFeedEvent(db, {
+        taskId: second!.id,
+        row: {
+          type: 'feed.request',
+          payload: {
+            v: 1,
+            kind: 'first',
+            authorId: owner.id,
+            requestId: randomUUID(),
+            text: 'Поменяйте телефон в подвале',
+          },
+        },
+      })
+      const byName = await caller.task.search({ query: '50%' })
+      expect(byName.items.map((item) => item.id)).toEqual([third!.id])
+      // `%` is a letter of the search, not a pattern.
+      expect((await caller.task.search({ query: '%' })).items.map((item) => item.id)).toEqual([
+        third!.id,
+      ])
+      const byWords = await caller.task.search({ query: '  ТЕЛЕФОН  в ' })
+      expect(byWords.items.map((item) => item.id)).toEqual([second!.id])
+      expect(byWords.items[0]?.archived).toBe(true)
+      expect((await callerOf(await person()).task.search({ query: 'телефон' })).items).toEqual([])
+      await expect(
+        callerOf(await person()).task.pin({ taskId: first!.id, pinned: true }),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' })
     })
 
     it('hides the chats of a deleted project, its folder and a deleted chat', async () => {

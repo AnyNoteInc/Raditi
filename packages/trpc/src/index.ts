@@ -25,3 +25,5 @@ export {
 export { cabinetDocMarkdown } from './services/pages.ts'
 export { readTaskScreenshot } from './services/chat/screenshots.ts'
 export { readSiteBackupDownload } from './services/site-history.ts'
+
+export { readChatNotification } from './services/notifications.ts'

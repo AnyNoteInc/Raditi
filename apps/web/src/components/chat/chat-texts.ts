@@ -320,6 +320,31 @@ export const composerText = Object.freeze({
   stop: 'Остановить',
   /** The field of a dialog that has ended. */
   finished: 'Чат завершён',
+  /** The ready requests under the greeting of «Новый чат» (docs/plan/75, ВВ24). */
+  suggestions: 'Примеры просьб',
+})
+
+/** The queue of a chat (docs/plan/75-chat-input-output.md, ВВ1–ВВ4). */
+export const queueText = Object.freeze({
+  title: 'Сообщения в очереди',
+  /** The field while the agent works: what is written waits for it. */
+  placeholder: 'Напишите ещё — агент прочитает, когда закончит',
+  /** The send button while the agent works and the field has words. */
+  queue: 'Поставить в очередь',
+  hint: 'В очереди — агент прочитает, когда закончит',
+  waitingHint: 'Эти сообщения не ушли агенту',
+  edit: 'Изменить',
+  editLabel: 'Сообщение в очереди',
+  save: 'Сохранить',
+  cancel: 'Отмена',
+  remove: 'Убрать',
+  sendNow: 'Отправить сейчас',
+  send: 'Отправить',
+})
+
+/** «Изменить» under the client's last message (docs/plan/75-chat-input-output.md, ВВ25). */
+export const messageEditText = Object.freeze({
+  edit: 'Изменить',
 })
 
 /** The section «Чаты» and its screens (docs/plan/61-chats-first.md, §5.13). */
@@ -347,6 +372,18 @@ export const chatsText = Object.freeze({
 
 export const listText = Object.freeze({
   empty: 'Чатов пока нет. Напишите, что нужно сделать, — чат появится здесь.',
+  /** The head of the list and «Архив» (docs/plan/75-chat-input-output.md, ВВ21). */
+  pinned: 'Закреплённые',
+  archive: 'Архив',
+  archiveOpen: 'Показать архив',
+  archiveClose: 'Скрыть архив',
+  archiveEmpty: 'В архиве пока нет чатов.',
+  search: 'Найти чат',
+  searchClear: 'Очистить поиск',
+  searchEmpty: 'Ничего не нашлось. Ищем по названиям чатов и по вашим сообщениям.',
+  searchLoading: 'Ищем',
+  /** A chat of the search that is in «Архив». */
+  inArchive: 'в архиве',
   more: 'Показать ещё',
   untitled: 'Чат без названия',
   loading: 'Загружаем чаты',
@@ -414,7 +451,9 @@ export const attachmentText = Object.freeze({
   /** The item of «Прикрепить файлы» that opens the dialog of the system. */
   upload: 'Загрузить файл',
   /** Under it: a file can be pasted into the field as well. */
-  pasteHint: (keys: string) => `Или вставьте его в поле: ${keys}`,
+  pasteHint: (keys: string) => `Или вставьте его в поле: ${keys} — или перетащите сюда`,
+  /** Over the field while a file is dragged onto it (docs/plan/75-chat-input-output.md, ВВ22). */
+  drop: 'Отпустите, чтобы прикрепить',
   /** «Прикрепить файлы» of a field that takes no files: in a dialog that has ended. */
   none: 'К этому сообщению файлы не прикрепить.',
   list: 'Файлы к сообщению',
@@ -490,6 +529,11 @@ export const agentNotesText = Object.freeze({
  */
 export const dialogMenuText = Object.freeze({
   open: 'Действия с чатом',
+  /** docs/plan/75-chat-input-output.md, ВВ21. */
+  pin: 'Закрепить',
+  unpin: 'Открепить',
+  archive: 'В архив',
+  unarchive: 'Из архива',
   rename: 'Переименовать',
   remove: 'Удалить',
   name: 'Название чата',

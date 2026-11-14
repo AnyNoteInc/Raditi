@@ -167,7 +167,11 @@ rm -rf "$prev"
 COMPOSE_PROFILES=$profiles compose run --rm migrate
 COMPOSE_PROFILES=$profiles compose run --rm seed || say "seed failed: web and core keep running (infra/app/README.md, step 7)"
 
-# 6. Everything else; the runner reads its labels only at start
+# 6. Everything else; the runner reads its labels only at start. web and core are rendered again
+# first, so a key the owner set (SpeechKit, Web Push: docs/plan/75-chat-input-output.md, ВВ8, ВВ18)
+# reaches their app.env; the render replaces their SecretIDs, so both are recreated at once
+/usr/local/lib/raditi/platform-secrets.mjs render web core >/dev/null
+compose up -d --wait --no-deps --force-recreate web core
 compose up -d --wait --remove-orphans
 compose restart gitea-runner >/dev/null
 

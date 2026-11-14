@@ -124,6 +124,21 @@ ${DOCUMENTS_AND_PAGES}`
  * the end of the instructions, so that the texts of the three kinds of chat stay as they are.
  * Empty when no format is asked for: the agent chooses by the rules of «Files for the client».
  */
+/**
+ * «Сначала план» (docs/plan/75-chat-input-output.md, ВВ14): the pass only reads and plans. Its
+ * agent may not change anything — the platform closes the tools that write — and the client
+ * reads the plan before the work: steps in Russian for the owner of the site, not for a developer.
+ */
+export const PLAN_SECTION = `
+## Plan only, do not change anything
+The client asked for a plan before any change. In this turn:
+- Read what you need: the files, the site, the pages. Do not change files, do not run commands, do not save anything on the site or in the preview, do not write documents. The tools that write are closed in this turn.
+- Answer in \`client_message\` with the plan, in Russian, for the owner of the site: numbered steps — what you will change and where, what the client will see after it, how to check it, and what you are not sure of. No code unless the client asked for it.
+- Ask in \`questions\` only what the plan cannot be made without.
+- End with one line: «Если план подходит, нажмите «Выполнить план» или напишите, что поправить.».
+- \`files_changed\` is empty: nothing changed.
+`
+
 export function requestedFormatsSection(formats: RequestedFileFormats): string {
   const lines = [
     formats.word ? '- The client asked for a Word file (.docx) in this message.' : null,

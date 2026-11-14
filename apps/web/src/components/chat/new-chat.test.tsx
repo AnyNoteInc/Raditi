@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider, type UseMutationOptions } from '@tans
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { chatSuggestions } from '@repo/domain/tasks/chat-suggestions'
 import { serverRefusal } from '@/components/billing/testing'
 
 import type * as Upload from './attachment-upload'
@@ -561,14 +562,30 @@ describe('new chat', () => {
   it('has the controls of a chat in their order, the pill before the level of thinking', () => {
     showChat()
     expect(
-      screen.getAllByRole('button').map((button) => button.getAttribute('aria-label')),
+      screen
+        .getAllByRole('button')
+        .map((button) => button.getAttribute('aria-label'))
+        // The suggestions under the greeting are named by their words (docs/plan/75, ВВ24).
+        .filter((label) => label !== null),
     ).toEqual([
       'Команды',
       'Прикрепить файлы',
       'Проект для этого чата: Без проекта',
       'Размышление: Высокое',
+      // «Сначала план» (docs/plan/75, ВВ12).
+      'Сначала план: выключено',
       'Отправить',
     ])
+  })
+
+  it('offers ready requests that go into the field, not to the agent, and step aside', () => {
+    showChat()
+    const suggestions = screen.getByRole('list', { name: 'Примеры просьб' })
+    const first = within(suggestions).getAllByRole('button')[0]
+    expect(first).toBeTruthy()
+    fireEvent.click(first!)
+    expect(field().value).toBe(chatSuggestions.plain[0])
+    expect(screen.queryByRole('list', { name: 'Примеры просьб' })).toBeNull()
   })
 
   it('reminds of the sign-in only where the project has a browser', async () => {
@@ -701,5 +718,16 @@ describe('«Добавить проект» from a new chat', () => {
     showChat()
     await waitFor(() => expect(sessionStorage.getItem('raditi-new-chat-draft')).toBeNull())
     expect(field().value).toBe('')
+  })
+})
+
+describe('«Сначала план» on a new chat (docs/plan/75, ВВ12)', () => {
+  it('sends the first words as a plan, and remembers the choice', async () => {
+    window.localStorage.removeItem('raditi-chat-plan')
+    showChat()
+    fireEvent.click(screen.getByRole('button', { name: 'Сначала план: выключено' }))
+    expect(screen.getByRole('button', { name: /Сначала план: включено/ })).toBeTruthy()
+    expect(window.localStorage.getItem('raditi-chat-plan')).toBe('1')
+    window.localStorage.removeItem('raditi-chat-plan')
   })
 })

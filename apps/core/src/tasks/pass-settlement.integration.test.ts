@@ -32,6 +32,8 @@ import {
   PassSettlement,
   type PassEnding,
 } from './pass-settlement.ts'
+import { QueueDrain } from './queue-drain.ts'
+import { ChatNotify } from './chat-notify.ts'
 
 // The end of a pass on PostgreSQL with the credits of @repo/billing: the move, its feed rows,
 // the candidate and the money in one transaction. Only on a disposable database
@@ -1790,5 +1792,239 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       expect((await feed(answering.taskId))[0]![1]).toMatchObject({ site: 'none' })
       expect((await feed(untouched.taskId))[0]![1]).toMatchObject({ site: 'none' })
     })
+  })
+
+  describe('the queue of the chat (docs/plan/75-chat-input-output.md, ВВ1–ВВ4)', () => {
+    const queue = (task: { taskId: string; userId: string }, text: string) =>
+      db.taskQueuedMessage.create({
+        data: { taskId: task.taskId, authorId: task.userId, requestId: randomUUID(), text },
+      })
+    const drains = (taskId: string) =>
+      db.outboxEvent.findMany({ where: { dedupeKey: { startsWith: `queue.drain:${taskId}` } } })
+    const requests = async (taskId: string) =>
+      (
+        await db.taskEvent.findMany({
+          where: { taskId, type: 'feed.request' },
+          orderBy: { id: 'asc' },
+        })
+      ).map((row) => row.payload as { kind: string; text?: string })
+    afterEach(async () => {
+      await db.outboxEvent.deleteMany({
+        where: {
+          OR: [
+            { dedupeKey: { startsWith: 'queue.drain:' } },
+            { dedupeKey: { startsWith: 'turn.run:' } },
+          ],
+        },
+      })
+    })
+
+    it('goes after a pass that completed: one row per words, a new reserve, the next pass queued', async () => {
+      // The next reserve is placed under the rate of the credit, as `task.message` places it.
+      await fixtures.creditRate({ effectiveFrom: new Date('2026-01-01T00:00:00.000Z') })
+      const task = await dialog()
+      await queue(task, 'И поменяйте адрес')
+      await queue(task, 'И часы работы')
+      expect(await settlement().settle(ref(task), completed({ change_type: 'none' }))).toBe('moved')
+      expect(await status(task.taskId)).toBe('awaiting_user')
+      expect(await drains(task.taskId)).toHaveLength(1)
+
+      const drain = new QueueDrain({ db, logger: { log: vi.fn(), warn: vi.fn() }, now: () => NOW })
+      expect(await drain.run({ taskId: task.taskId, attempt: 1, turnNo: 1 })).toBe('moved')
+      const row = await db.task.findUniqueOrThrow({ where: { id: task.taskId } })
+      expect(row.status).toBe('queued')
+      expect(row.attempt).toBe(2)
+      expect((await requests(task.taskId)).slice(-2)).toMatchObject([
+        { kind: 'queued', text: 'И поменяйте адрес' },
+        { kind: 'queued', text: 'И часы работы' },
+      ])
+      expect(await db.taskQueuedMessage.count({ where: { taskId: task.taskId } })).toBe(0)
+      expect((await holds(task.taskId)).map((hold) => hold.status)).toContain('active')
+      // A second run finds nothing to take.
+      expect(await drain.run({ taskId: task.taskId, attempt: 1, turnNo: 1 })).toBe('skipped')
+    })
+
+    it('waits for the client after a failure: a failure must not go round in a circle (ВВ3)', async () => {
+      const task = await dialog()
+      await queue(task, 'Попробуйте ещё раз')
+      expect(await settlement().settle(ref(task), { kind: 'failed', turn: 1 })).toBe('moved')
+      expect(await drains(task.taskId)).toHaveLength(0)
+      const drain = new QueueDrain({ db, logger: { log: vi.fn(), warn: vi.fn() }, now: () => NOW })
+      expect(await drain.run({ taskId: task.taskId, attempt: 1, turnNo: 1 })).toBe('skipped')
+      expect(await db.taskQueuedMessage.count({ where: { taskId: task.taskId } })).toBe(1)
+    })
+
+    it('keeps the dialog open when «Отправить сейчас» stopped the pass, and the queue goes next (ВВ4)', async () => {
+      await fixtures.creditRate({ effectiveFrom: new Date('2026-01-01T00:00:00.000Z') })
+      const task = await dialog()
+      await queue(task, 'Стоп, лучше синим цветом')
+      await insertFeedEvent(db, {
+        taskId: task.taskId,
+        row: {
+          type: 'feed.request',
+          payload: { v: 1, kind: 'interrupt', authorId: task.userId, requestId: randomUUID() },
+        },
+      })
+      expect(await settlement().settle(ref(task), { kind: 'cancelled', turn: 1 })).toBe('moved')
+      expect(await status(task.taskId)).toBe('awaiting_user')
+      // No failure and no «отменено» for the client: the press is the row.
+      expect((await feed(task.taskId)).map(([type]) => type)).not.toContain('feed.cancelled')
+      expect(await drains(task.taskId)).toHaveLength(1)
+      const drain = new QueueDrain({ db, logger: { log: vi.fn(), warn: vi.fn() }, now: () => NOW })
+      expect(await drain.run({ taskId: task.taskId, attempt: 1, turnNo: 1 })).toBe('moved')
+      expect(await status(task.taskId)).toBe('queued')
+    })
+
+    it('still lets «Остановить» end the chat, the queue with it', async () => {
+      const task = await dialog()
+      await queue(task, 'Ещё одно')
+      await cancelPress(task)
+      expect(await settlement().settle(ref(task), { kind: 'cancelled', turn: 1 })).toBe('moved')
+      expect(await status(task.taskId)).toBe('cancelled')
+      expect(await drains(task.taskId)).toHaveLength(0)
+    })
+  })
+
+  describe('the notifications of a chat that waits (docs/plan/75-chat-input-output.md, ВВ6–ВВ9)', () => {
+    const notices = (taskId: string) =>
+      db.outboxEvent.findMany({ where: { dedupeKey: { startsWith: `chat.notify:${taskId}` } } })
+    const letters = (id: string) =>
+      db.outboxEvent.findMany({
+        where: {
+          dedupeKey: { startsWith: `chat.waiting:` },
+          payload: { path: ['url'], string_contains: id },
+        },
+      })
+    afterEach(async () => {
+      await db.outboxEvent.deleteMany({
+        where: {
+          OR: [
+            { dedupeKey: { startsWith: 'chat.notify:' } },
+            { dedupeKey: { startsWith: 'chat.waiting:' } },
+          ],
+        },
+      })
+    })
+    const pushes: { endpoint: string; payload: string }[] = []
+    const sender = (answer: 'sent' | 'gone' = 'sent') => ({
+      send: vi.fn(async (target: { endpoint: string }, payload: string) => {
+        pushes.push({ endpoint: target.endpoint, payload })
+        return answer
+      }),
+    })
+    const notify = (push: ReturnType<typeof sender> | null, now = NOW) =>
+      new ChatNotify({
+        db,
+        appUrl: 'https://raditi.example',
+        push,
+        logger: { log: vi.fn(), warn: vi.fn() },
+        now: () => now,
+      })
+
+    it('is due 45 seconds after the ending, then tells the author by a letter and a push with no words', async () => {
+      const task = await dialog()
+      expect(await settlement().settle(ref(task), completed({ change_type: 'none' }))).toBe('moved')
+      const [due] = await notices(task.taskId)
+      expect(due?.availableAt.getTime()).toBe(NOW.getTime() + 45_000)
+      expect(due?.payload).toMatchObject({ kind: 'answered', attempt: 1, turnNo: 1 })
+
+      await db.task.update({ where: { id: task.taskId }, data: { createdById: task.userId } })
+      await db.user.update({ where: { id: task.userId }, data: { emailVerified: true } })
+      await db.notificationSetting.create({ data: { userId: task.userId, push: true } })
+      await db.pushSubscription.create({
+        data: {
+          userId: task.userId,
+          endpoint: `https://fcm.googleapis.com/fcm/send/${task.taskId}`,
+          p256dh: 'p'.repeat(87),
+          auth: 'a'.repeat(22),
+        },
+      })
+      const push = sender()
+      const job = { taskId: task.taskId, kind: 'answered' as const, attempt: 1, turnNo: 1 }
+      expect(await notify(push).run(job)).toBe('sent')
+      const sent = pushes.find((one) => one.endpoint.endsWith(task.taskId))
+      // The push names the notification and nothing of the chat (rule 1).
+      expect(Object.keys(JSON.parse(sent!.payload))).toEqual(['id'])
+      expect(await letters(task.taskId)).toHaveLength(1)
+      // A second ending in the same half hour: the push again, no second letter.
+      expect(await notify(push, new Date(NOW.getTime() + 60_000)).run(job)).toBe('sent')
+      expect(await letters(task.taskId)).toHaveLength(1)
+    })
+
+    it('says nothing to a client who looks at the chat, nor of a chat that went on', async () => {
+      const task = await dialog()
+      await settlement().settle(ref(task), completed({ change_type: 'none' }))
+      await db.task.update({ where: { id: task.taskId }, data: { createdById: task.userId } })
+      await db.taskPresence.create({
+        data: {
+          userId: task.userId,
+          taskId: task.taskId,
+          seenAt: new Date(NOW.getTime() - 10_000),
+        },
+      })
+      const job = { taskId: task.taskId, kind: 'answered' as const, attempt: 1, turnNo: 1 }
+      expect(await notify(sender()).run(job)).toBe('seen')
+      expect(await notify(sender()).run({ ...job, attempt: 2 })).toBe('moved_on')
+      expect(await db.chatNotification.count({ where: { taskId: task.taskId } })).toBe(0)
+    })
+
+    it('never sends to an endpoint that is not a push service, and forgets it (ВВ8)', async () => {
+      const task = await dialog()
+      await settlement().settle(ref(task), completed({ change_type: 'none' }))
+      await db.task.update({ where: { id: task.taskId }, data: { createdById: task.userId } })
+      await db.notificationSetting.create({
+        data: { userId: task.userId, push: true, email: false },
+      })
+      await db.pushSubscription.create({
+        data: {
+          userId: task.userId,
+          endpoint: `https://10.10.0.10:8200/v1/${task.taskId}`,
+          p256dh: 'p'.repeat(87),
+          auth: 'a'.repeat(22),
+        },
+      })
+      const push = sender()
+      const job = { taskId: task.taskId, kind: 'answered' as const, attempt: 1, turnNo: 1 }
+      expect(await notify(push).run(job)).toBe('skipped')
+      expect(push.send).not.toHaveBeenCalled()
+      expect(await db.pushSubscription.count({ where: { userId: task.userId } })).toBe(0)
+    })
+
+    it('forgets a browser that dropped its subscription', async () => {
+      const task = await dialog()
+      await settlement().settle(ref(task), completed({ change_type: 'none' }))
+      await db.task.update({ where: { id: task.taskId }, data: { createdById: task.userId } })
+      await db.notificationSetting.create({
+        data: { userId: task.userId, push: true, email: false },
+      })
+      await db.pushSubscription.create({
+        data: {
+          userId: task.userId,
+          endpoint: `https://updates.push.services.mozilla.com/wpush/v2/${task.taskId}`,
+          p256dh: 'p'.repeat(87),
+          auth: 'a'.repeat(22),
+        },
+      })
+      const job = { taskId: task.taskId, kind: 'answered' as const, attempt: 1, turnNo: 1 }
+      expect(await notify(sender('gone')).run(job)).toBe('skipped')
+      expect(await db.pushSubscription.count({ where: { userId: task.userId } })).toBe(0)
+    })
+  })
+
+  it('marks the answer of a pass of «Сначала план» as a plan (docs/plan/75, ВВ14)', async () => {
+    const task = await dialog()
+    const first = await db.taskEvent.findFirstOrThrow({
+      where: { taskId: task.taskId, type: 'feed.request' },
+    })
+    await db.taskEvent.update({
+      where: { id: first.id },
+      data: { payload: { ...(first.payload as object), plan: true } },
+    })
+    expect(await settlement().settle(ref(task), completed({ change_type: 'none' }))).toBe('moved')
+    const result = await db.taskEvent.findFirstOrThrow({
+      where: { taskId: task.taskId, type: 'feed.result' },
+    })
+    expect(result.payload).toMatchObject({ plan: true, next: 'awaiting_user' })
+    expect(await db.taskCandidate.count({ where: { taskId: task.taskId } })).toBe(0)
   })
 })

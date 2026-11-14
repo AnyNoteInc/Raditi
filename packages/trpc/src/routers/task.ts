@@ -20,11 +20,27 @@ import { feedBrowserOutput } from '../services/chat/browser.ts'
 import { chatContextOf } from '../services/chat/context.ts'
 import {
   DIALOG_CURSOR_PATTERN,
+  DIALOG_SEARCH_TEXT,
   listDialogFolders,
   listDialogs,
+  searchDialogs,
 } from '../services/chat/dialog-list.ts'
 import { readDialogExport, readDialogFeed, readDialogHead } from '../services/chat/feed.ts'
-import { removeDialog, renameDialog, setDialogEffort } from '../services/chat/dialog-manage.ts'
+import { markPresence } from '../services/notifications.ts'
+import {
+  editQueuedWords,
+  listQueuedWords,
+  queueDialogWords,
+  removeQueuedWords,
+  sendQueuedNow,
+} from '../services/chat/queue.ts'
+import {
+  archiveDialog,
+  pinDialog,
+  removeDialog,
+  renameDialog,
+  setDialogEffort,
+} from '../services/chat/dialog-manage.ts'
 import { dialogCommands, dialogFacts } from '../services/chat/dialog-facts.ts'
 import { accessibleTask, taskNotFound } from '../services/chat/access.ts'
 import {
@@ -143,6 +159,28 @@ const feedOutput = z.strictObject({
 /** The project of a chat as a row of the list shows it. */
 const projectOutput = z.strictObject({ id: z.uuid(), name: z.string() })
 
+/** A chat of the list, of its head of pinned chats and of a search. */
+const dialogListItemOutput = z.strictObject({
+  id: z.uuid(),
+  title: z.string().nullable(),
+  status: z.enum(taskStatuses),
+  /** «Отменить выпуск» of the dialog's release: under way, or installed. */
+  undo: z.enum(['running', 'installed']).nullable(),
+  /** The agent answered and asked nothing: the dialog waits for no one (26.10.2026). */
+  answered: z.boolean(),
+  /** `/undo` left it so: the answer it would name was just taken back. */
+  rewound: z.boolean(),
+  /** The last pass failed: nothing to confirm, the list says «Ошибка» (06.11.2026). */
+  failed: z.boolean(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+  project: projectOutput.nullable(),
+  /** «Закрепить» (ВВ21). */
+  pinned: z.boolean(),
+  /** «В архив» (ВВ21). */
+  archived: z.boolean(),
+})
+
 export const taskRouter = router({
   /**
    * A new dialog with the client's first words: the task, its reserve, the files, the row, the
@@ -160,6 +198,8 @@ export const taskRouter = router({
         attachments: attachmentIdsSchema.optional(),
         /** How hard the model thinks: `low`, `high` (the default) or `max`. */
         effort: reasoningEffortSchema.optional(),
+        /** «Сначала план» (docs/plan/75-chat-input-output.md, ВВ12). */
+        plan: z.boolean().optional(),
       }),
     )
     .output(z.strictObject({ taskId: z.uuid(), alias: z.string(), created: z.boolean() }))
@@ -171,6 +211,7 @@ export const taskRouter = router({
         text: input.text,
         ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
         ...(input.effort === undefined ? {} : { effort: input.effort }),
+        ...(input.plan ? { plan: true } : {}),
         now: new Date(),
       }),
     ),
@@ -183,6 +224,8 @@ export const taskRouter = router({
         requestId: browserId,
         text: words,
         attachments: attachmentIdsSchema.optional(),
+        /** «Сначала план» (docs/plan/75, ВВ12). */
+        plan: z.boolean().optional(),
       }),
     )
     .output(postedOutput)
@@ -193,6 +236,7 @@ export const taskRouter = router({
         requestId: input.requestId,
         text: input.text,
         ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
+        ...(input.plan ? { plan: true } : {}),
         now: new Date(),
       }),
     ),
@@ -312,6 +356,78 @@ export const taskRouter = router({
       removeDialog(ctx.prisma, { ...input, userId: ctx.user.id, now: new Date() }),
     ),
 
+  /**
+   * Words written while the agent works (docs/plan/75-chat-input-output.md, ВВ1): they wait in
+   * the queue of the chat and go when the pass ends. A dialog that waits answers TASK_NOT_BUSY:
+   * the words go by `task.message`.
+   */
+  queueAdd: consentedProcedure
+    .input(
+      z.strictObject({
+        taskId: z.uuid(),
+        requestId: z.uuid(),
+        text: z.string().max(20_000),
+        attachments: z.array(z.uuid()).max(10).optional(),
+        plan: z.boolean().optional(),
+      }),
+    )
+    .output(z.strictObject({ id: z.uuid().nullable(), repeated: z.boolean() }))
+    .mutation(({ ctx, input }) => queueDialogWords(ctx.prisma, { ...input, userId: ctx.user.id })),
+
+  /** The words of the queue, oldest first (ВВ1). */
+  queueList: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid() }))
+    .output(
+      z.strictObject({
+        items: z.array(
+          z.strictObject({
+            id: z.uuid(),
+            requestId: z.uuid(),
+            text: z.string(),
+            attachments: z.array(z.uuid()),
+            createdAt: z.date(),
+          }),
+        ),
+      }),
+    )
+    .query(async ({ ctx, input }) => ({
+      items: await listQueuedWords(ctx.prisma, { ...input, userId: ctx.user.id }),
+    })),
+
+  /** «Изменить» of queued words, until the agent took them. */
+  queueEdit: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid(), id: z.uuid(), text: z.string().max(20_000) }))
+    .output(z.strictObject({ text: z.string() }))
+    .mutation(({ ctx, input }) => editQueuedWords(ctx.prisma, { ...input, userId: ctx.user.id })),
+
+  /** «Убрать» of queued words. */
+  queueRemove: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid(), id: z.uuid() }))
+    .output(z.strictObject({ removed: z.literal(true) }))
+    .mutation(({ ctx, input }) => removeQueuedWords(ctx.prisma, { ...input, userId: ctx.user.id })),
+
+  /** «Отправить сейчас» (ВВ4): the pass stops, and the queue goes next. */
+  queueSendNow: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid(), requestId: z.uuid() }))
+    .output(z.strictObject({ requestEventId: z.string().nullable() }))
+    .mutation(({ ctx, input }) => sendQueuedNow(ctx.prisma, { ...input, userId: ctx.user.id })),
+
+  /** «Закрепить» / «Открепить» (docs/plan/75-chat-input-output.md, ВВ21). */
+  pin: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid(), pinned: z.boolean() }))
+    .output(z.strictObject({ pinned: z.boolean() }))
+    .mutation(({ ctx, input }) =>
+      pinDialog(ctx.prisma, { ...input, userId: ctx.user.id, now: new Date() }),
+    ),
+
+  /** «В архив» / «Из архива» (ВВ21): a new message brings the chat back as well. */
+  archive: consentedProcedure
+    .input(z.strictObject({ taskId: z.uuid(), archived: z.boolean() }))
+    .output(z.strictObject({ archived: z.boolean() }))
+    .mutation(({ ctx, input }) =>
+      archiveDialog(ctx.prisma, { ...input, userId: ctx.user.id, now: new Date() }),
+    ),
+
   /** «Размышление» of a dialog that goes on: the level from its next turn (owner, 26.10.2026). */
   setEffort: consentedProcedure
     .input(z.strictObject({ taskId: z.uuid(), effort: reasoningEffortSchema }))
@@ -324,14 +440,17 @@ export const taskRouter = router({
   feed: consentedProcedure
     .input(z.strictObject({ taskId: z.uuid(), after: feedCursorSchema.optional() }))
     .output(feedOutput)
-    .query(({ ctx, input }) =>
-      readDialogFeed(ctx.prisma, {
+    .query(async ({ ctx, input }) => {
+      const feed = await readDialogFeed(ctx.prisma, {
         userId: ctx.user.id,
         taskId: input.taskId,
         after: input.after ?? '0',
         address: ctx.chat?.preview?.address ?? null,
-      }),
-    ),
+      })
+      // The client looks at the chat: it is not notified of it (docs/plan/75, ВВ7).
+      await markPresence(ctx.prisma, ctx.user.id, feed.task.id)
+      return feed
+    }),
 
   /**
    * The agent's work in one turn — its messages, commands, tool calls, changed files and
@@ -370,28 +489,15 @@ export const taskRouter = router({
       z.strictObject({
         folder: z.union([z.uuid(), z.literal('none')]).optional(),
         cursor: z.string().regex(DIALOG_CURSOR_PATTERN).optional(),
+        /** «Архив» (docs/plan/75-chat-input-output.md, ВВ21); the list itself by default. */
+        view: z.enum(['active', 'archive']).optional(),
       }),
     )
     .output(
       z.strictObject({
-        items: z.array(
-          z.strictObject({
-            id: z.uuid(),
-            title: z.string().nullable(),
-            status: z.enum(taskStatuses),
-            /** «Отменить выпуск» of the dialog's release: under way, or installed. */
-            undo: z.enum(['running', 'installed']).nullable(),
-            /** The agent answered and asked nothing: the dialog waits for no one (26.10.2026). */
-            answered: z.boolean(),
-            /** `/undo` left it so: the answer it would name was just taken back. */
-            rewound: z.boolean(),
-            /** The last pass failed: nothing to confirm, the list says «Ошибка» (06.11.2026). */
-            failed: z.boolean(),
-            createdAt: z.date(),
-            updatedAt: z.date(),
-            project: projectOutput.nullable(),
-          }),
-        ),
+        /** The pinned chats: on the first page of the list alone. */
+        pinned: z.array(dialogListItemOutput),
+        items: z.array(dialogListItemOutput),
         nextCursor: z.string().nullable(),
       }),
     )
@@ -400,8 +506,17 @@ export const taskRouter = router({
         userId: ctx.user.id,
         folder: input.folder,
         cursor: input.cursor,
+        view: input.view,
       }),
     ),
+
+  /** «Поиск по чатам» (ВВ21): by the name and by the client's words, in «Архив» too. */
+  search: consentedProcedure
+    .input(z.strictObject({ query: z.string().min(1).max(DIALOG_SEARCH_TEXT) }))
+    .output(z.strictObject({ items: z.array(dialogListItemOutput) }))
+    .query(async ({ ctx, input }) => ({
+      items: await searchDialogs(ctx.prisma, { userId: ctx.user.id, query: input.query }),
+    })),
 
   /** «По проектам»: the folders of the user's chats, counted on the server over all of them. */
   folders: consentedProcedure

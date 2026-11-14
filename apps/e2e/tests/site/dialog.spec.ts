@@ -246,11 +246,14 @@ test('a dialog starts from the first words and waits in the queue, on a desktop'
     await expect(page.getByRole('main').getByText(QUEUED).filter({ visible: true })).toHaveCount(3)
     await expect(dialogs(page).getByText(QUEUED).filter({ visible: true })).toHaveCount(1)
     await expect(page.getByText(QUEUED_TEXT)).toBeVisible()
-    // The agent is at work: the field says why it is closed, read with the field, and nothing
-    // stands under it; «Остановить» stands in place of «Отправить».
-    await expect(message(page)).toBeDisabled()
-    await expect(message(page)).toHaveAccessibleDescription(new RegExp(FIELD_OFF))
-    await expectOffScreen(page.getByText(FIELD_OFF))
+    // The agent is at work: the field stays open, words wait in the queue of the chat
+    // (docs/plan/75-chat-input-output.md, ВВ1), and nothing stands under it; while it is empty
+    // «Остановить» stands in place of «Отправить».
+    await expect(message(page)).toBeEnabled()
+    await expect(message(page)).toHaveAttribute(
+      'placeholder',
+      'Напишите ещё — агент прочитает, когда закончит',
+    )
     await expect(page.getByText('ИИ может допускать ошибки. Проверяйте важное.')).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Остановить' })).toBeEnabled()
     await expect(send(page)).toHaveCount(0)

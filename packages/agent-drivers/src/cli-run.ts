@@ -64,6 +64,7 @@ export const runContextSchema = <Effort extends z.ZodType>(effort: Effort) =>
     egressProxy: endpoint.optional(),
     internet: z.literal(true).optional(),
     skills: turnSkillsSchema.optional(),
+    plan: z.literal(true).optional(),
   })
 
 /** Secret files the variables may take: the LLM key and the MCP token have one each. */

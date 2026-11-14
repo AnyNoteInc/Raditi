@@ -33,6 +33,11 @@ export interface ChatContext {
    */
   browser?: { streamUrl: string } | null
   /**
+   * The public VAPID key of Web Push (WEB_PUSH_VAPID_PUBLIC, docs/plan/75-chat-input-output.md, ВВ8):
+   * the cabinet subscribes a browser with it. Absent or null — no notifications in browsers.
+   */
+  webPushPublicKey?: string | null
+  /**
    * Whether the adapter of this stack works in the site's admin pages: `@repo/trpc` knows no
    * adapter, the app that builds this context does. Absent — every stack is taken for one.
    */

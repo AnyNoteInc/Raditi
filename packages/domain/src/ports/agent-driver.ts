@@ -80,6 +80,12 @@ export interface RunContext {
   internet?: true
   /** The skills of the site's agent (MCP servers besides the platform's), with `internet` only. */
   skills?: readonly TurnSkill[]
+  /**
+   * «Сначала план» (docs/plan/75-chat-input-output.md, ВВ13): the pass only reads and writes a
+   * plan — the driver runs it with an agent that may not change files, run commands or call a
+   * tool that writes. Absent — an ordinary pass.
+   */
+  plan?: true
 }
 
 /** The values of the client's variables of a run: what the platform masks and refuses (Р13). */

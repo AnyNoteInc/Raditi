@@ -167,6 +167,9 @@ describe('API routes', () => {
     // attachment-upload.ts streams the file to the inbox after the session, the origin, the
     // consents and the announced size, never more than announced: 20 MiB at most.
     'attachments/[id]': /uploadAttachment\(request, await params, attachmentUploadDependencies\)/,
+    // speech.ts reads the sound after the session, the origin, the consents and a declared length
+    // of at most 30 seconds of PCM (docs/plan/75-chat-input-output.md, ВВ17).
+    speech: /recognizeSpeech\(request, speechDependencies\)/,
   }
 
   // Every way a route file exports a method that carries a body.

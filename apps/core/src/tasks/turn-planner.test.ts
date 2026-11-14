@@ -25,8 +25,14 @@ import {
   sampleProviderModelId,
   sampleRoutePath,
 } from '../testing/ids.ts'
-import { CONTINUE_PROMPT, INIT_ANSWER_MAX_CHARS, INIT_PROMPT } from './turn-instructions.ts'
 import {
+  CONTINUE_PROMPT,
+  INIT_ANSWER_MAX_CHARS,
+  INIT_PROMPT,
+  PLAN_SECTION,
+} from './turn-instructions.ts'
+import {
+  planRequested,
   planTurn,
   promptOf,
   turnInboxOf,
@@ -1866,5 +1872,32 @@ describe('`/init` and the notes of a project', () => {
     if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
     expect(plan.request.input.prompt.length).toBeLessThanOrEqual(turnPlanLimits.prompt)
     expect(plan.request.input.prompt).toContain('Вход по адресу /login')
+  })
+})
+
+describe('«Сначала план» (docs/plan/75-chat-input-output.md, ВВ12, ВВ13)', () => {
+  it('plans a pass whose newest words ask for a plan: the planning agent, its section, no skills', async () => {
+    const planned = facts({
+      requests: [{ ...request(10, 'first', 'Добавьте отзывы на главную', 0), plan: true }],
+    })
+    const plan = await planTurn(planned, env())
+    if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+    expect(plan.request.context.plan).toBe(true)
+    expect(plan.request.context.instructions.endsWith(PLAN_SECTION)).toBe(true)
+    expect(plan.request.context.skills).toBeUndefined()
+    // The plan of an assignment keeps the flag through its strict schema.
+    expect(() => toTurnPlan(plan.request, sampleDriverId)).not.toThrow()
+
+    const ordinary = await planTurn(facts(), env())
+    if (ordinary.kind !== 'turn') throw new Error('expected a turn')
+    expect(ordinary.request.context.plan).toBeUndefined()
+    expect(ordinary.request.context.instructions).not.toContain('Plan only')
+  })
+
+  it('takes the newest words of the client, not an older plan nor a command of the platform', () => {
+    const asked = { ...request(10, 'first', 'План, пожалуйста', 0), plan: true as const }
+    expect(planRequested([asked])).toBe(true)
+    expect(planRequested([asked, request(11, 'answer', 'Выполните этот план.', 1)])).toBe(false)
+    expect(planRequested([asked, request(12, 'command', null, 1, 'reset')])).toBe(true)
   })
 })

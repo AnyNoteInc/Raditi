@@ -1,6 +1,8 @@
 'use client'
 
+import { chatSuggestionsFor } from '@repo/domain/tasks/chat-suggestions'
 import Box from '@mui/material/Box'
+import ButtonBase from '@mui/material/ButtonBase'
 import Typography from '@mui/material/Typography'
 import { useTheme } from '@mui/material/styles'
 import useMediaQuery from '@mui/material/useMediaQuery'
@@ -23,7 +25,9 @@ import { Composer } from './composer'
 import { dialogListKey } from './dialog-list'
 import { EffortMenu, type EffortMenuHandle } from './effort-menu'
 import { markNewDialog } from './new-dialog-hint'
+import { PlanToggle, useRememberedPlan } from './plan-toggle'
 import { ProjectPicker, projectChoosable } from './project-picker'
+import { readPromptHistory, rememberPrompt } from './prompt-history'
 import { useAttachments } from './use-attachments'
 import { uuidv7 } from './uuid'
 import { UsageWindowHint } from '@/components/billing/usage-window-hint'
@@ -44,11 +48,14 @@ export function NewChat({
   userId,
   userName = null,
   beside = false,
+  speech = false,
 }: {
   userId: string
   /** The client's name: the greeting calls them by it (owner's request of 09.11.2026). */
   userName?: string | null
   beside?: boolean
+  /** Dictation is set up here (docs/plan/75-chat-input-output.md, ВВ16). */
+  speech?: boolean
 }) {
   const trpc = useTRPC()
   const queryClient = useQueryClient()
@@ -69,6 +76,8 @@ export function NewChat({
   const siteId = held !== null ? held.siteId : (project?.id ?? null)
   // The level chosen last in this browser (owner's request of 09.11.2026).
   const [effort, setEffort] = useRememberedEffort()
+  // «Сначала план» (docs/plan/75, ВВ12), remembered as the level is.
+  const [plan, setPlan] = useRememberedPlan()
   const greeting = useGreeting(userName)
   const attachments = useAttachments(siteId)
   const attached = attachments.items.length > 0
@@ -82,6 +91,10 @@ export function NewChat({
   // The words kept while the client added a project come back here.
   const written = useRef('')
   const [draft, setDraft] = useState<string | null>(null)
+  // Something is written: the suggestions step aside (ВВ24).
+  const [typed, setTyped] = useState(false)
+  // The requests this browser sent before: the arrows of the field bring them back (ВВ23).
+  const [history, setHistory] = useState<readonly string[]>([])
   const wide = useMediaQuery(useTheme().breakpoints.up('md'))
   const shown = !beside || wide
   const field = useRef<HTMLTextAreaElement>(null)
@@ -90,7 +103,10 @@ export function NewChat({
   // After the first paint: the server draws the field empty, and Strict Mode mounts this twice.
   useEffect(() => {
     if (!shown) return
-    const later = setTimeout(() => setDraft(takeChatDraft(userId)), 0)
+    const later = setTimeout(() => {
+      setDraft(takeChatDraft(userId))
+      setHistory(readPromptHistory(userId))
+    }, 0)
     return () => clearTimeout(later)
   }, [shown, userId])
 
@@ -104,8 +120,10 @@ export function NewChat({
         text,
         ...(attachmentIds.length > 0 ? { attachments: [...attachmentIds] } : {}),
         effort,
+        ...(plan ? { plan: true } : {}),
       })
       pending.current = null
+      rememberPrompt(userId, text)
       void queryClient.invalidateQueries({ queryKey: dialogListKey })
       // The new chat set credits aside: the ring of the credits reads them again.
       void queryClient.invalidateQueries({ queryKey: trpc.billing.usage.queryKey() })
@@ -180,7 +198,10 @@ export function NewChat({
         restored={draft}
         onTextChange={(text) => {
           written.current = text
+          setTyped(text.trim() !== '')
         }}
+        history={history}
+        speech={speech}
         project={
           <ProjectPicker
             projects={projects}
@@ -190,8 +211,53 @@ export function NewChat({
             onAddProject={() => keepChatDraft(userId, written.current)}
           />
         }
-        effort={<EffortMenu value={effort} onChange={setEffort} handle={effortMenu} />}
+        effort={
+          <>
+            <EffortMenu value={effort} onChange={setEffort} handle={effortMenu} />
+            <PlanToggle on={plan} onChange={setPlan} />
+          </>
+        }
       />
+      {typed ? null : (
+        <Box
+          component="ul"
+          aria-label={composerText.suggestions}
+          sx={{
+            listStyle: 'none',
+            m: 0,
+            p: 0,
+            display: 'flex',
+            flexWrap: 'wrap',
+            justifyContent: 'center',
+            gap: 1,
+          }}
+        >
+          {chatSuggestionsFor(project?.chat.requirements ?? null).map((words) => (
+            <Box component="li" key={words} sx={{ display: 'flex' }}>
+              <ButtonBase
+                onClick={() => {
+                  setDraft(words)
+                  field.current?.focus()
+                }}
+                sx={{
+                  minHeight: 44,
+                  px: 2,
+                  borderRadius: '999px',
+                  border: '1px solid',
+                  borderColor: 'divider',
+                  color: 'text.secondary',
+                  fontSize: 14,
+                  textAlign: 'left',
+                  '&:hover': { color: 'text.primary', bgcolor: 'action.hover' },
+                  '&.Mui-focusVisible': { outline: '2px solid', outlineColor: 'primary.main' },
+                }}
+              >
+                {words.replace(/[: ]+$/, '')}
+              </ButtonBase>
+            </Box>
+          ))}
+        </Box>
+      )}
       <UsageWindowHint />
       {clientCommands.menu}
     </Box>

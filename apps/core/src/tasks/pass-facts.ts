@@ -175,6 +175,9 @@ export async function readPassFacts(
       command,
       attachments:
         event.type === 'feed.request' && 'attachments' in event ? (event.attachments ?? []) : [],
+      ...(event.type === 'feed.request' && 'plan' in event && event.plan === true
+        ? { plan: true as const }
+        : {}),
       createdAt: row.createdAt,
     }
   })

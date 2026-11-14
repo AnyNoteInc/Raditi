@@ -34,9 +34,11 @@ http:
     # 5 MiB only after the session check, here they would sit in memory for any sender. So do the
     # files attached to messages (up to 20 MiB, docs/plan/57-browser-tasks.md, Б26): web streams
     # them to the inbox after the session, Origin, consent and size checks, never whole in memory.
+    # And dictation (docs/plan/75-chat-input-output.md, ВВ17): up to 30 seconds of PCM, 960 000
+    # bytes, which web reads only after the session, Origin, consent and declared-length checks.
     web-api-body:
       entryPoints: [websecure]
-      rule: 'Host(`{{ env "APP_DOMAIN" }}`) && PathPrefix(`/api/`) && !Path(`/api/profile/avatar`) && !PathPrefix(`/api/attachments/`) && !Method(`GET`) && !Method(`HEAD`)'
+      rule: 'Host(`{{ env "APP_DOMAIN" }}`) && PathPrefix(`/api/`) && !Path(`/api/profile/avatar`) && !PathPrefix(`/api/attachments/`) && !Path(`/api/speech`) && !Method(`GET`) && !Method(`HEAD`)'
       priority: 900
       middlewares: [api-body-limit]
       service: web

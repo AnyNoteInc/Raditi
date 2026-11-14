@@ -18,6 +18,12 @@ const paths = {
   logout: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M14 8l4 4-4 4M8 12h13',
   plus: 'M12 5v14M5 12h14',
   search: 'm21 21-5-5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z',
+  /** «Надиктовать» in the field (docs/plan/75-chat-input-output.md, ВВ16). */
+  microphone: 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3ZM5 11a7 7 0 0 0 14 0M12 18v3',
+  /** «Закрепить» of a chat (docs/plan/75-chat-input-output.md, ВВ21). */
+  pin: 'M12 17v5M9 3h6l-1 5 4 4v2H6v-2l4-4-1-5Z',
+  /** «В архив» of a chat (ВВ21): a box with its lid. */
+  archive: 'M3 4h18v4H3V4Zm2 4v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4',
   sort: 'M7 4v16M4 7l3-3 3 3M17 20V4m-3 13 3 3 3-3',
   globe: 'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM3 12h18M12 3a17 17 0 0 1 0 18 17 17 0 0 1 0-18Z',
   arrow: 'M7 17 17 7M7 7h10v10',

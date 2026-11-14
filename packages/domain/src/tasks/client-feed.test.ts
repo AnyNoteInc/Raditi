@@ -782,7 +782,7 @@ describe('feed.request', () => {
     expect(accepts('feed.request', { ...retry, attachments: [] })).toBe(false)
   })
 
-  it('lists the eight kinds written today', () => {
+  it('lists the ten kinds written today', () => {
     expect(feedRequestKinds).toEqual([
       'first',
       'answer',
@@ -792,7 +792,22 @@ describe('feed.request', () => {
       'continue',
       'resume',
       'agent_command',
+      // The queue of a chat and «Отправить сейчас» (docs/plan/75-chat-input-output.md, ВВ2, ВВ4).
+      'queued',
+      'interrupt',
     ])
+  })
+
+  it('takes queued words with their files, and «Отправить сейчас» without words (docs/plan/75)', () => {
+    const base = {
+      v: 1,
+      authorId: '0199a3f2-0000-7000-8000-000000000001',
+      requestId: '0199a3f2-0000-7000-8000-000000000002',
+    }
+    expect(accepts('feed.request', { ...base, kind: 'queued', text: 'И ещё телефон' })).toBe(true)
+    expect(accepts('feed.request', { ...base, kind: 'queued', text: '' })).toBe(false)
+    expect(accepts('feed.request', { ...base, kind: 'interrupt' })).toBe(true)
+    expect(accepts('feed.request', { ...base, kind: 'interrupt', text: 'Слова' })).toBe(false)
   })
 
   it('takes a command the agent carries out without words of its own (docs/plan/61, §5.2)', () => {

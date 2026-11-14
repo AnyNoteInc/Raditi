@@ -39,6 +39,19 @@ vi.mock('@/trpc/client', () => ({
         }),
       },
     },
+    // «Уведомления» of the settings (docs/plan/75, ВВ10): its own test covers it.
+    notification: {
+      settings: {
+        queryOptions: () => ({
+          queryKey: ['notification', 'settings'],
+          queryFn: async () => ({ push: false, email: true, browsers: 0, publicKey: null }),
+        }),
+        queryKey: () => ['notification', 'settings'],
+      },
+      setSettings: { mutationOptions: () => ({ mutationFn: async () => ({}) }) },
+      subscribe: { mutationOptions: () => ({ mutationFn: async () => ({}) }) },
+      unsubscribe: { mutationOptions: () => ({ mutationFn: async () => ({}) }) },
+    },
   }),
 }))
 

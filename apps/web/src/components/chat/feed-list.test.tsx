@@ -9,7 +9,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { describe, expect, it, vi } from 'vitest'
 
 import type { FeedRow } from './chat-types'
-import { FeedList, LiveBlock, type FeedActions } from './feed-list'
+import { activePlanOf, FeedList, LiveBlock, lastMessageId, type FeedActions } from './feed-list'
 import type { ResultRow } from './feed-model'
 import { feedReducer, initialFeedState, type FeedHeadState } from './feed-state'
 import {
@@ -1069,5 +1069,36 @@ describe('«Отменить выпуск»', () => {
     )
     expect(screen.getByRole('heading', { name: 'Отменяем выпуск 1.4.0' })).toBeTruthy()
     expect(text(document.body)).toContain('Устанавливаем на сайт. Устанавливаем файлы.')
+  })
+})
+
+describe('«Изменить» of the last message (docs/plan/75, ВВ25)', () => {
+  it('belongs to the client’s last words, not to a press after them', () => {
+    const rows = [
+      { type: 'feed.request', kind: 'first', id: 'a', text: 'Раз' },
+      { type: 'feed.result', id: 'b' },
+      { type: 'feed.request', kind: 'answer', id: 'c', text: 'Два' },
+      { type: 'feed.request', kind: 'command', id: 'd', command: 'release' },
+    ] as unknown as Parameters<typeof lastMessageId>[0]
+    expect(lastMessageId(rows)).toBe('c')
+    expect(lastMessageId([])).toBeNull()
+  })
+})
+
+describe('the plan of «Сначала план» (docs/plan/75, ВВ14)', () => {
+  it('is active while nothing was written after it', () => {
+    const plan = { type: 'feed.result', id: 'p', plan: true }
+    const rows = [
+      { type: 'feed.request', kind: 'first', id: 'a', text: 'Раз' },
+      plan,
+    ] as unknown as Parameters<typeof activePlanOf>[0]
+    expect(activePlanOf(rows)).toBe('p')
+    expect(
+      activePlanOf([
+        ...rows,
+        { type: 'feed.request', kind: 'answer', id: 'b', text: 'Да' },
+      ] as never),
+    ).toBeNull()
+    expect(activePlanOf([{ type: 'feed.result', id: 'r' }] as never)).toBeNull()
   })
 })

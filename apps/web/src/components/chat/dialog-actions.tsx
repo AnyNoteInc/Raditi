@@ -31,17 +31,40 @@ const TITLE_LIMIT = 120
  */
 export const dialogListKey = ['chat', 'dialogs'] as const
 
-/** «⋯» of a dialog: «Переименовать» and «Удалить». */
+/**
+ * «Закрепить» and «В архив» of a chat (ВВ21): the press, then every read of the list again. A
+ * refusal is the list's own: it reads again and shows the chat as the server has it.
+ */
+export function usePinArchive() {
+  const trpc = useTRPC()
+  const queryClient = useQueryClient()
+  const pin = useMutation(trpc.task.pin.mutationOptions())
+  const archive = useMutation(trpc.task.archive.mutationOptions())
+  const settle = () => void queryClient.invalidateQueries({ queryKey: dialogListKey })
+  return {
+    pin: (taskId: string, pinned: boolean) => pin.mutate({ taskId, pinned }, { onSettled: settle }),
+    archive: (taskId: string, archived: boolean) =>
+      archive.mutate({ taskId, archived }, { onSettled: settle }),
+  }
+}
+
+/** «⋯» of a dialog: «Закрепить», «В архив», «Переименовать» and «Удалить». */
 export function DialogMenuButton({
   title,
   onRename,
   onRemove,
   quiet = false,
+  pin,
+  archive,
 }: {
   /** The name of the dialog, so the button says whose actions it opens. */
   title: string
   onRename: () => void
   onRemove: () => void
+  /** «Закрепить» / «Открепить» (docs/plan/75, ВВ21); absent — not offered here. */
+  pin?: { pinned: boolean; onToggle: () => void }
+  /** «В архив» / «Из архива» (ВВ21); absent — not offered here. */
+  archive?: { archived: boolean; onToggle: () => void }
   /** In a row of the list: seen on hover and focus of the row, or while the menu is open. */
   quiet?: boolean
 }) {
@@ -91,6 +114,34 @@ export function DialogMenuButton({
         {/* The height of an item is given by breakpoint: MUI lets a menu item shrink to its
             content from `sm` up by a media query of its own, which wins over a plain value — an
             item stays 44px high, a finger's (DESIGN.md), on every width. */}
+        {pin && !archive?.archived ? (
+          <MenuItem
+            onClick={() => {
+              setAnchor(null)
+              pin.onToggle()
+            }}
+            sx={{ minHeight: { xs: 44 }, fontSize: 14 }}
+          >
+            <ListItemIcon>
+              <AppIcon name="pin" size={18} />
+            </ListItemIcon>
+            {pin.pinned ? dialogMenuText.unpin : dialogMenuText.pin}
+          </MenuItem>
+        ) : null}
+        {archive ? (
+          <MenuItem
+            onClick={() => {
+              setAnchor(null)
+              archive.onToggle()
+            }}
+            sx={{ minHeight: { xs: 44 }, fontSize: 14 }}
+          >
+            <ListItemIcon>
+              <AppIcon name="archive" size={18} />
+            </ListItemIcon>
+            {archive.archived ? dialogMenuText.unarchive : dialogMenuText.archive}
+          </MenuItem>
+        ) : null}
         <MenuItem
           onClick={() => {
             setAnchor(null)

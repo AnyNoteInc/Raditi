@@ -10,6 +10,10 @@ import {
   CANDIDATE_REBASE_JOB,
   CANDIDATE_REWIND_JOB,
   candidateEditJobSchema,
+  CHAT_NOTIFY_JOB,
+  chatNotifyJobSchema,
+  QUEUE_DRAIN_JOB,
+  queueDrainJobSchema,
   candidateRebaseJobSchema,
   candidateRewindJobSchema,
   runnerLimits,
@@ -22,6 +26,8 @@ import { CandidateEdit } from './candidate-edit.ts'
 import { CandidateRebase } from './candidate-rebase.ts'
 import { CandidateRewind } from './candidate-rewind.ts'
 import { PassRunner } from './pass-runner.ts'
+import { ChatNotify } from './chat-notify.ts'
+import { QueueDrain } from './queue-drain.ts'
 
 /**
  * How many jobs of `agent-turns` one core works on at once: every turn a runner can hold
@@ -66,6 +72,8 @@ export class TurnsProcessor extends WorkerHost {
     @Inject(CandidateRebase) private readonly rebase: Pick<CandidateRebase, 'run'>,
     @Inject(CandidateRewind) private readonly rewind: Pick<CandidateRewind, 'run'>,
     @Inject(CandidateEdit) private readonly edit: Pick<CandidateEdit, 'run'>,
+    @Inject(QueueDrain) private readonly queue: Pick<QueueDrain, 'run'>,
+    @Inject(ChatNotify) private readonly notify: Pick<ChatNotify, 'run'>,
   ) {
     super()
   }
@@ -84,6 +92,12 @@ export class TurnsProcessor extends WorkerHost {
         return
       case CANDIDATE_EDIT_JOB:
         await this.edit.run(parsed(candidateEditJobSchema, job))
+        return
+      case QUEUE_DRAIN_JOB:
+        await this.queue.run(parsed(queueDrainJobSchema, job))
+        return
+      case CHAT_NOTIFY_JOB:
+        await this.notify.run(parsed(chatNotifyJobSchema, job))
         return
       default:
         // A job this build does not know (left by another version) cannot succeed later.
