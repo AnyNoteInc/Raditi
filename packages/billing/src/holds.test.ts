@@ -861,6 +861,25 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       })
     })
 
+    it('places the reserve on the pack and the gift once the week is spent (owner, 14.11.2026)', async () => {
+      const { workspaceId } = await funded({
+        tariff: 300,
+        gift: 3,
+        pack: 40,
+        plan: { creditsPer5h: null, creditsPerWeek: 210 },
+      })
+      await window(workspaceId, 'week', minutesAfter(-3 * 24 * 60))
+      const model = await planModelPool()
+      await worked(model, await task(workspaceId), '1260', {
+        occurredAt: minutesAfter(-2 * 24 * 60),
+      })
+      const placed = await place(workspaceId, await task(workspaceId))
+      expect(placed).toMatchObject({ applied: true })
+      // Gift, then pack, in the order credits are spent; never the tariff.
+      expect(placed.holds.map((hold) => kindOf(hold.unit))).not.toContain('tariff')
+      expect(placed.holds.length).toBeGreaterThan(0)
+    })
+
     it('takes a task while the window has room, and refuses it by the 5 hours once it is spent', async () => {
       const { workspaceId } = await funded({ plan: { creditsPer5h: 20, creditsPerWeek: 55 } })
       await window(workspaceId, '5h', minutesAfter(-60))

@@ -203,9 +203,15 @@ export class PostgresGatewayStore implements GatewayStore {
       // The windows of the workspace first (plan 71; docs/spec.md §9): its advisory lock comes
       // before the key, the account and the call, and no holder of a billing lock waits for it.
       // The workspace of a key never changes, so it is read before any lock.
-      const [owner] = await tx.$queryRaw<{ workspaceId: string; billable: boolean }[]>`
-        SELECT t.workspace_id AS "workspaceId", t.billable FROM llm_keys k
-        JOIN tasks t ON t.id = k.task_id WHERE k.key_hash = ${value.keyHash}`
+      // `onTariff`: an active reserve of the task stands on tariff credits. The windows bound those
+      // only (owner's answer of 14.11.2026): a pass reserved on the gift or a pack goes on.
+      const [owner] = await tx.$queryRaw<
+        { workspaceId: string; billable: boolean; onTariff: boolean }[]
+      >`
+        SELECT t.workspace_id AS "workspaceId", t.billable,
+          EXISTS (SELECT 1 FROM credit_holds h WHERE h.task_id = t.id AND h.status = 'active'
+            AND h.unit = 'credit_tariff') AS "onTariff"
+        FROM llm_keys k JOIN tasks t ON t.id = k.task_id WHERE k.key_hash = ${value.keyHash}`
       if (!owner) return { kind: 'refused', reason: 'unauthorized' }
       await lockUsageWindows(tx, owner.workspaceId)
       const fallback = value.fallback === true
@@ -306,36 +312,13 @@ export class PostgresGatewayStore implements GatewayStore {
       // while what the window took, with the reserves of the open calls, is below its limit; the
       // last one may take it over by itself. A task that is not billable is not counted (Л7).
       // Only a call of a plan with windows: a call of the API paid by the token is bounded by the
-      // credits of the customer alone (owner's answer of 13.11.2026).
-      const windowed = owner.billable && value.capacity === 'windows' && !fallback
+      // credits of the customer alone (owner's answer of 13.11.2026). Only a pass whose reserve
+      // stands on tariff credits: the windows do not bound the gift and the packs (owner's answer
+      // of 14.11.2026).
+      const windowed = owner.billable && owner.onTariff && value.capacity === 'windows' && !fallback
       if (windowed) {
-        const terms = await workspaceUsageTerms(tx, owner.workspaceId)
-        const [windows, openReserved] = await Promise.all([
-          workspaceWindowUsage(tx, {
-            workspaceId: owner.workspaceId,
-            now: row.serverNow,
-            limits: terms.limits,
-          }),
-          openReservedWindowCredits(tx, { workspaceId: owner.workspaceId, now: row.serverNow }),
-        ])
-        const spent = windows.find(
-          (window) =>
-            !windowAdmitsCall({
-              limit: window.limit,
-              usedCredits: window.used,
-              openReservedCredits: openReserved,
-            }),
-        )
-        if (spent) {
-          this.#onWindowRefusal?.({ tier: terms.tier, window: spent.kind })
-          const refused = await this.#refused(tx, row.keyId, 'workspace_limit')
-          // The feed names this window and its reset, not one counted again later.
-          await tx.llmKey.update({
-            where: { id: row.keyId },
-            data: { lastRefusalWindow: spent.kind, lastRefusalResetsAt: spent.resetsAt },
-          })
-          return { ...refused, window: { kind: spent.kind, resetsAt: spent.resetsAt } }
-        }
+        const spent = await this.#windowRefusal(tx, row.keyId, owner.workspaceId, row.serverNow)
+        if (spent) return spent
       }
       const accountOpen = await tx.llmCall.count({
         where: { subscriptionAccountId: row.accountId, state: 'open' },
@@ -449,6 +432,40 @@ export class PostgresGatewayStore implements GatewayStore {
             : Prisma.sql`a.provider_id = p.id`
         }`)
     return rows[0] ?? null
+  }
+
+  /**
+   * The refusal of a call by a spent window of the workspace (Л1, Л6), or null while every window
+   * admits it with the reserves of the open calls. The key keeps the window and its reset.
+   */
+  async #windowRefusal(
+    tx: Transaction,
+    keyId: string,
+    workspaceId: string,
+    now: Date,
+  ): Promise<Extract<GatewayAdmission, { kind: 'refused' }> | null> {
+    const terms = await workspaceUsageTerms(tx, workspaceId)
+    const [windows, openReserved] = await Promise.all([
+      workspaceWindowUsage(tx, { workspaceId, now, limits: terms.limits }),
+      openReservedWindowCredits(tx, { workspaceId, now }),
+    ])
+    const spent = windows.find(
+      (window) =>
+        !windowAdmitsCall({
+          limit: window.limit,
+          usedCredits: window.used,
+          openReservedCredits: openReserved,
+        }),
+    )
+    if (!spent) return null
+    this.#onWindowRefusal?.({ tier: terms.tier, window: spent.kind })
+    const refused = await this.#refused(tx, keyId, 'workspace_limit')
+    // The feed names this window and its reset, not one counted again later.
+    await tx.llmKey.update({
+      where: { id: keyId },
+      data: { lastRefusalWindow: spent.kind, lastRefusalResetsAt: spent.resetsAt },
+    })
+    return { ...refused, window: { kind: spent.kind, resetsAt: spent.resetsAt } }
   }
 
   async #refused(

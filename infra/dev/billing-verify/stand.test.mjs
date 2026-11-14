@@ -1484,7 +1484,17 @@ test('the pages are compared with the answer about a new task and with the meter
       'const today = paid ? { limit, charged: 0, held: 0, used: 0, room: limit, left } : null',
     ),
   )
-  assert.ok(pages.includes('spendableNow: gift.available + pack.available + (paid ? left : 0),'))
+  // The windows bound the tariff credits only (owner's answer of 14.11.2026): the least of them.
+  assert.ok(
+    pages.includes(
+      'spendableNow: gift.available + pack.available + (paid ? Math.min(left, windowLeft) : 0),',
+    ),
+  )
+  assert.ok(pages.includes('week: paid ? live.credits_per_week : NO_TARIFF_WINDOWS.week,'))
+  assert.match(
+    kit,
+    /export const NO_TARIFF_WINDOWS = Object\.freeze\(\{ '5h': null, week: null \}\)/,
+  )
   // Gift and pack credits are spent always, tariff credits only while the tariff is paid (owner's
   // decision of 10.11.2026: one credit is one credit).
   assert.ok(pages.includes("const paid = live?.status === 'active'"))

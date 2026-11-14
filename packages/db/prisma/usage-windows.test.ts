@@ -116,11 +116,11 @@ describe.skipIf(!databaseUrl)('the usage windows of 13.11.2026', () => {
     ])
   })
 
-  it('reads the terms without a tariff as the constants of the domain', async () => {
+  it('reads no windows without a tariff (owner, 14.11.2026)', async () => {
     const id = await workspace()
     await expect(workspaceUsageTerms(prisma, id)).resolves.toEqual({
       tier: 'none',
-      limits: { '5h': null, week: 50 },
+      limits: { '5h': null, week: null },
     })
   })
 

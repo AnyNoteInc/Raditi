@@ -40,7 +40,7 @@ export const feedFailureText: Readonly<Record<FeedFailureCode, string>> = Object
   // A window of 5 hours or of the week of the workspace (plan 71): the row names which and when
   // it resets (`usageLimitText`); these words are for a row without them.
   usage_limit:
-    'Лимит работы агента исчерпан. Продолжить можно после его сброса — когда он, сказано в разделе «Использование».',
+    'Лимит тарифа исчерпан: когда он сбросится, сказано в разделе «Использование». С кредитами из пакета или подарка можно продолжить сразу.',
   forbidden_change:
     'Агент попытался изменить то, что менять нельзя, и мы не сохранили его работу. Попробуйте описать задачу по-другому.',
   secret_found:
@@ -131,10 +131,13 @@ export function usageLimitText(kind: '5h' | 'week', resetsAt: Date | null): stri
   if (resetsAt === null) return feedFailureText.usage_limit
   const time = moscowTime.format(resetsAt)
   // Nothing goes on by itself (Л15): the client writes «продолжи» or presses «Продолжить».
-  if (kind === '5h')
-    return `Лимит на 5 часов исчерпан. Продолжить можно после ${time} — напишите «продолжи» или нажмите «Продолжить».`
+  // The windows bound the tariff credits only (owner's answer of 14.11.2026): with a pack or the
+  // gift the work goes on now.
+  const now =
+    'С кредитами из пакета или подарка можно продолжить сразу — напишите «продолжи» или нажмите «Продолжить».'
+  if (kind === '5h') return `Лимит тарифа на 5 часов исчерпан до ${time}. ${now}`
   const day = weekdayRu[moscowWeekday.format(resetsAt)] ?? ''
-  return `Недельный лимит исчерпан. Продолжить можно в ${day} после ${time} — напишите «продолжи» или нажмите «Продолжить».`
+  return `Недельный лимит тарифа исчерпан до ${day}, ${time}. ${now}`
 }
 
 /**
@@ -142,9 +145,11 @@ export function usageLimitText(kind: '5h' | 'week', resetsAt: Date | null): stri
  * tasks are taken again, by the Moscow clock.
  */
 export function usageLimitPageText(kind: '5h' | 'week', resetsAt: Date | null): string {
-  if (resetsAt === null) return 'Лимит работы агента исчерпан: новые задачи — после его сброса.'
+  if (resetsAt === null)
+    return 'Лимит тарифа исчерпан: кредиты тарифа снова можно тратить после его сброса.'
   const time = moscowTime.format(resetsAt)
-  if (kind === '5h') return `Лимит на 5 часов исчерпан: новые задачи — после ${time}.`
+  if (kind === '5h')
+    return `Лимит тарифа на 5 часов исчерпан: кредиты тарифа — снова после ${time}.`
   const day = weekdayRu[moscowWeekday.format(resetsAt)] ?? ''
-  return `Недельный лимит исчерпан: новые задачи — в ${day} после ${time}.`
+  return `Недельный лимит тарифа исчерпан: кредиты тарифа — снова в ${day} после ${time}.`
 }

@@ -46,18 +46,6 @@ export const tierQueuePriority: Readonly<Record<WorkspaceTier, number>> = Object
   none: 4,
 })
 
-/**
- * The windows of a workspace without a paid tariff (Л4): the rows of `plans` hold the numbers of
- * each tariff. How many turns of a workspace run at once is not bounded: only credits bound the
- * work (owner's answer of 13.11.2026, Л10 removed).
- */
-export const noTariffWindowCredits: Readonly<Record<UsageWindowKind, number | null>> =
-  Object.freeze({
-    // Only the weekly limits stay (owner's answer of 13.11.2026): no limit of 5 hours.
-    '5h': null,
-    week: 50,
-  })
-
 /** Credits of the customer used in a window: fractional, as the calls take them (Л1). */
 export const windowCreditsSchema = decimalStringSchema(10, 4)
 
@@ -78,12 +66,31 @@ export const usageWindowStatesSchema = z
     message: 'One window of each kind',
   })
 
-/** The limits of a workspace: its tariff's, else those without a tariff. */
+/**
+ * The limits of a workspace: its tariff's. Without a paid tariff there are none: the windows
+ * bound the credits of a tariff only, never the gift or a pack (owner's answer of 14.11.2026).
+ */
 export function windowLimitsOf(
   terms: { creditsPer5h: number | null; creditsPerWeek: number | null } | null,
 ): Record<UsageWindowKind, number | null> {
-  if (terms === null) return { ...noTariffWindowCredits }
+  if (terms === null) return { '5h': null, week: null }
   return { '5h': terms.creditsPer5h, week: terms.creditsPerWeek }
+}
+
+/**
+ * How many tariff credits the windows leave a workspace now, in whole credits: the least room of
+ * its windows; null — no window bounds it. The windows bound the tariff credits only (owner's
+ * answer of 14.11.2026): when one is spent, the work goes on on the gift and the packs.
+ */
+export function windowTariffRoom(windows: readonly UsageWindowState[]): number | null {
+  const parsed = usageWindowStatesSchema.safeParse(windows)
+  if (!parsed.success) throw badRequest('Invalid windows of a workspace')
+  let least: number | null = null
+  for (const window of parsed.data) {
+    const room = usageWindowRoom(window)
+    if (room !== null && (least === null || room < least)) least = room
+  }
+  return least
 }
 
 /**

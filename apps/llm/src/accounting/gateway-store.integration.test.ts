@@ -70,8 +70,11 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
       await db.tokenUsage.deleteMany({ where: tasks })
       await db.llmCall.deleteMany({ where: { key: tasks } })
       await db.llmKey.deleteMany({ where: tasks })
+      await db.creditHold.deleteMany({ where: tasks })
       await db.task.deleteMany({ where: { workspaceId: f.workspaceId } })
       await db.site.deleteMany({ where: { workspaceId: f.workspaceId } })
+      await db.subscription.deleteMany({ where: { workspaceId: f.workspaceId } })
+      await db.billingAccount.deleteMany({ where: { workspaceId: f.workspaceId } })
       await db.workspace.delete({ where: { id: f.workspaceId } })
       if (f.modelId) {
         await db.llmModelPrice.deleteMany({ where: { modelId: f.modelId } })
@@ -654,7 +657,14 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
   describe('the windows of a workspace (only the week has a limit since 13.11.2026)', () => {
     let rateId: string | null = null
     let planRateId: string | null = null
+    let startPlanId = ''
+    let weekly = 0
     beforeAll(async () => {
+      const start = await db.plan.findFirstOrThrow({
+        where: { slug: 'start', creditsPerWeek: { not: null } },
+      })
+      startPlanId = start.id
+      weekly = start.creditsPerWeek!
       rateId = (
         await db.creditRate.create({
           data: {
@@ -686,14 +696,55 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
       if (planRateId) await db.llmPlanRate.delete({ where: { id: planRateId } })
     })
 
-    /** A call of 3 100 000 uncached input tokens: 310 ₽, 51.7 credits — past the 50 a week of no tariff. */
+    /** Uncached input tokens of a call that takes `credits`: 100 ₽ for 1 M at 6 ₽ a credit. */
+    const tokensFor = (credits: number) => credits * 60_000
+    /** A call that takes the whole weekly limit of «Старт» and two credits over it. */
     const heavy = (): GatewayFinish => ({
       ...actual(),
-      usage: { input: 3_100_000, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 },
+      usage: { input: tokensFor(weekly + 2), cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 },
     })
+
+    /**
+     * The task's workspace on «Старт», and the task's reserve on its tariff credits: the windows
+     * bound the tariff credits only (owner's answer of 14.11.2026).
+     */
+    const onTariff = async (task: { id: string; workspaceId: string }) => {
+      const now = Date.now()
+      const { workspaceId } = task
+      if ((await db.subscription.count({ where: { workspaceId } })) === 0)
+        await db.subscription.create({
+          data: {
+            workspaceId,
+            planId: startPlanId,
+            status: 'active',
+            currentPeriodStart: new Date(now - 86_400_000),
+            currentPeriodEnd: new Date(now + 29 * 86_400_000),
+            periodAnchor: new Date(now - 86_400_000),
+          },
+        })
+      const account = await db.billingAccount.upsert({
+        where: { workspaceId_unit: { workspaceId, unit: 'credit_tariff' } },
+        create: { workspaceId, unit: 'credit_tariff', balance: '200', held: '0' },
+        update: {},
+      })
+      await db.billingAccount.update({
+        where: { id: account.id },
+        data: { held: { increment: 10 } },
+      })
+      await db.creditHold.create({
+        data: {
+          accountId: account.id,
+          unit: 'credit_tariff',
+          taskId: task.id,
+          amount: '10',
+          expiresAt: new Date(now + 3_600_000),
+        },
+      })
+    }
 
     it('opens the windows with the first call and counts plan credits of the reserve and of the call', async () => {
       const f = await fixture({ budget: '5000' })
+      await onTariff(f.task)
       const k = await f.key()
       const call = await admitted(k.input)
       const windows = await db.workspaceUsageWindow.findMany({
@@ -712,6 +763,7 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
 
     it('refuses the next call of a spent window with its reset, and another workspace goes on (scenario 1)', async () => {
       const f = await fixture({ budget: '5000' })
+      await onTariff(f.task)
       const k = await f.key()
       const call = await admitted(k.input)
       expect(await store.finish(call.id, heavy())).toBe(true)
@@ -724,11 +776,13 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
       expect(key.lastRefusal).toBe('workspace_limit')
       // The other workspace, on the same account, is not touched.
       const other = await fixture({ budget: '5000' })
+      await onTariff(other.task)
       await admitted((await other.key()).input)
     })
 
     it('counts nothing of a task that is not billable, nor a call the platform failed (Л7)', async () => {
       const f = await fixture({ budget: '5000' })
+      await onTariff(f.task)
       const k = await f.key()
       const call = await admitted(k.input)
       expect(
@@ -742,6 +796,7 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
       ).toBe(true)
       await admitted(k.input)
       const spent = await fixture({ budget: '5000' })
+      await onTariff(spent.task)
       const first = await spent.key()
       const paid = await admitted(first.input)
       expect(await store.finish(paid.id, heavy())).toBe(true)
@@ -751,6 +806,7 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
 
     it('keeps the window and the reset that refused on the key', async () => {
       const f = await fixture({ budget: '5000' })
+      await onTariff(f.task)
       const k = await f.key()
       expect(await store.finish((await admitted(k.input)).id, heavy())).toBe(true)
       expect(await store.admit(k.input)).toMatchObject({ reason: 'workspace_limit' })
@@ -761,6 +817,7 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
 
     it('bounds a call of an API paid by the token by credits alone (owner, 13.11.2026)', async () => {
       const f = await fixture({ budget: '5000' })
+      await onTariff(f.task)
       const k = await f.key()
       expect(await store.finish((await admitted(k.input)).id, heavy())).toBe(true)
       // The same spent window: a call of the plan is refused, a call of the API is not.
@@ -770,6 +827,7 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
 
     it('does not let a task that is not billable fill the window of the workspace (Л7)', async () => {
       const f = await fixture({ budget: '5000' })
+      await onTariff(f.task)
       const operator = await f.key()
       const call = await admitted(operator.input)
       expect(await store.finish(call.id, heavy())).toBe(true)
@@ -782,24 +840,55 @@ describe.skipIf(!enabled)('transactional subscription gateway accounting', () =>
           modelClass: 'standard',
         },
       })
+      await onTariff(paying)
       const k = await f.key({ taskId: paying.id })
       await admitted(k.input)
     })
 
     it('admits the last call below the limit and refuses one more: one call over at most (Л6)', async () => {
       const f = await fixture({ budget: '5000' })
+      await onTariff(f.task)
       const k = await f.key()
-      // 49 credits: below the weekly limit of 50, so one more call goes, whatever it costs.
+      // One credit below the weekly limit, so one more call goes, whatever it costs.
       const call = await admitted(k.input)
       expect(
         await store.finish(call.id, {
           ...actual(),
-          usage: { input: 2_940_000, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 },
+          usage: {
+            input: tokensFor(weekly - 1),
+            cacheRead: 0,
+            cacheWrite: 0,
+            output: 0,
+            reasoning: 0,
+          },
         }),
       ).toBe(true)
       const last = await admitted(k.input)
       expect(await store.finish(last.id, heavy())).toBe(true)
       expect(await store.admit(k.input)).toMatchObject({ reason: 'workspace_limit' })
+    })
+
+    it('does not bound a pass reserved on the gift or a pack, nor a workspace without a tariff (owner, 14.11.2026)', async () => {
+      const f = await fixture({ budget: '5000' })
+      await onTariff(f.task)
+      const k = await f.key()
+      expect(await store.finish((await admitted(k.input)).id, heavy())).toBe(true)
+      expect(await store.admit(k.input)).toMatchObject({ reason: 'workspace_limit' })
+      // The next chain of the workspace stands on a pack: the spent window lets it go on.
+      const onPack = await db.task.create({
+        data: {
+          workspaceId: f.task.workspaceId,
+          siteId: f.task.siteId,
+          status: 'running',
+          modelClass: 'standard',
+        },
+      })
+      await admitted((await f.key({ taskId: onPack.id })).input)
+      // Without a tariff there is no window at all.
+      const free = await fixture({ budget: '5000' })
+      const fk = await free.key()
+      expect(await store.finish((await admitted(fk.input)).id, heavy())).toBe(true)
+      await admitted(fk.input)
     })
   })
 

@@ -26,6 +26,7 @@ import {
   newTaskVerdict,
   notFound,
   placementTariffRoom,
+  windowTariffRoom,
   spendableCredits,
   splitReserve,
   subscriptionAllowsTasks,
@@ -581,13 +582,27 @@ async function tariffRoomNow(
     now: Date
   },
 ): Promise<Credits | null> {
+  // The windows bound the free tariff credits a charge may move to as well (owner's answer of
+  // 14.11.2026): a pass that worked on a pack while a window was spent is not paid by the tariff.
+  const terms = await workspaceUsageTerms(tx, input.workspaceId)
+  const window = windowTariffRoom(
+    await workspaceWindowUsage(tx, {
+      workspaceId: input.workspaceId,
+      now: input.now,
+      limits: terms.limits,
+    }),
+  )
   const limit = dailyTariffCredits(await tariffTerms(tx, input.subscription))
-  if (limit === null) return null
-  const { charged, held } = await tariffCreditsOfDay(tx, {
-    workspaceId: input.workspaceId,
-    now: input.now,
-  })
-  return tariffDayRoom({ limit, used: toCredits(charged + held) })
+  let day: Credits | null = null
+  if (limit !== null) {
+    const { charged, held } = await tariffCreditsOfDay(tx, {
+      workspaceId: input.workspaceId,
+      now: input.now,
+    })
+    day = tariffDayRoom({ limit, used: toCredits(charged + held) })
+  }
+  if (window === null) return day
+  return toCredits(day === null ? window : Math.min(day, window))
 }
 
 /**
@@ -782,8 +797,9 @@ export async function placeCreditHold(
     accounts: balances,
     amount: reserved,
     tariffTakesTasks: paid,
-    // The room the verdict counted `spendableNow` by: none for a retry.
-    tariffRoom: placementTariffRoom(placement, verdict.today),
+    // The room the verdict counted `spendableNow` by: the day's, none for a retry, and the
+    // windows' for every placement (owner's answer of 14.11.2026).
+    tariffRoom: placementTariffRoom(placement, verdict.today, verdict.windows),
   })
   const holds: CreditHold[] = []
   for (const part of parts) {

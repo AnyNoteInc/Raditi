@@ -276,8 +276,9 @@ export function taskNotice(input: TaskNoticeInput): TaskNotice | null {
 }
 
 /**
- * A window of 5 hours or of the week is spent (plan 71): credits do not lift it, the reset does,
- * and a bigger tariff has bigger windows.
+ * A window of 5 hours or of the week is spent (plan 71), and no gift or pack credits are left to go
+ * on with: the windows bound the tariff credits only (owner's answer of 14.11.2026), so a pack
+ * lifts it now, the reset gives the tariff credits back, and a bigger tariff has bigger windows.
  */
 function windowTaken(input: TaskNoticeInput): TaskNotice {
   // The 5 hours are asked first, as the server refuses (`refusingWindow`).
@@ -286,12 +287,24 @@ function windowTaken(input: TaskNoticeInput): TaskNotice {
     input.task.windows.find((item) => item.left === 0)
   // The server says the tier: only «Агентство» has no bigger tariff above it.
   const bigger = input.task.tier !== 'agency'
+  const { pack } = input
+  const ways = [
+    ...(pack === null
+      ? []
+      : [
+          `Чтобы продолжить сейчас, купите пакет — ${packPrice(pack)}: кредиты из пакета лимитом не ограничены.`,
+        ]),
+    ...(bigger
+      ? ['На старших тарифах лимиты больше — тариф можно сменить в разделе «Тарифы».']
+      : []),
+  ]
   return {
     state: `${usageLimitPageText(window?.kind ?? '5h', window?.resetsAt ?? null)} Кредиты от этого не сгорают.`,
-    way: bigger
-      ? 'На старших тарифах лимиты больше — тариф можно сменить в разделе «Тарифы».'
-      : null,
-    actions: bigger ? ['change_plan'] : [],
+    way: ways.length === 0 ? null : ways.join(' '),
+    actions: [
+      ...(pack ? (['buy_pack'] as const) : []),
+      ...(bigger ? (['change_plan'] as const) : []),
+    ],
   }
 }
 

@@ -1788,7 +1788,7 @@ describe('the «Лимиты» of the windows of the workspace', () => {
     expect(text).toContain('Неделя')
     expect(text).toContain('0 из 55 кредитов')
     expect(text).toContain('Начнётся с первой задачи.')
-    expect(text).toContain('кредиты от этого не сгорают')
+    expect(text).toContain('ограничивают только кредиты тарифа')
   })
 
   it('shows the windows without a tariff too, and no block without limits', async () => {
