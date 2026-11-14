@@ -134,4 +134,14 @@ describe('packages', () => {
       expect.arrayContaining(['pg', 'ssh2', 'basic-ftp', 'mysql2']),
     )
   })
+
+  it('sends none of its headers on a page of the agent (docs/plan/67, Д3)', async () => {
+    const [rule] = await config.headers!()
+    // Next never lets a route replace a header the config set: /v/ answers with its own.
+    expect(rule!.source).toBe('/((?!v/).*)')
+    const matches = (path: string) => new RegExp(`^${rule!.source}$`).test(path)
+    for (const path of ['/', '/chats/1', '/api/health', '/v', '/vacancies'])
+      expect(matches(path), path).toBe(true)
+    expect(matches('/v/a.b')).toBe(false)
+  })
 })

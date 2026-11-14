@@ -1,7 +1,7 @@
 import { DEV_METRICS_TOKEN } from '@repo/observability'
 import { describe, expect, it } from 'vitest'
 
-import { webEnvFromEnv } from './web-env'
+import { DEV_PAGES_SECRET, webEnvFromEnv } from './web-env'
 
 const devEnv = {
   APP_ENV: 'development',
@@ -30,6 +30,7 @@ describe('webEnvFromEnv', () => {
       preview: null,
       browserStreamUrl: null,
       pages: null,
+      pageViews: null,
     })
     expect(webEnvFromEnv({ ...devEnv, METRICS_TOKEN: ' ', REDIS_URL: '' })).toMatchObject({
       metricsToken: DEV_METRICS_TOKEN,
@@ -213,5 +214,32 @@ describe('the pages in the cabinet (plan 69)', () => {
         PAGES_PUBLIC_PORT: '443',
       }),
     ).toThrow(/PAGES_PUBLIC_PORT/)
+  })
+})
+
+describe('the root of the domain of pages (docs/plan/67-agent-documents.md, Д3)', () => {
+  const secret = 'a-secret-of-the-pages-that-is-long-enough-x'
+  it('is PAGES_BASE_DOMAIN with the port of web and a development secret outside production', () => {
+    expect(
+      webEnvFromEnv({ ...devEnv, PAGES_BASE_DOMAIN: 'pages.localhost', PAGES_PUBLIC_PORT: '8092' })
+        .pageViews,
+    ).toEqual({ origin: 'http://pages.localhost:3000', secret: DEV_PAGES_SECRET })
+    expect(webEnvFromEnv(devEnv).pageViews).toBeNull()
+  })
+
+  it('in production is https, a host apart from the cabinet and the previews, with a long secret', () => {
+    const prod = { ...prodEnv, PAGES_BASE_DOMAIN: 'pages.raditi.ru', PAGES_SIGNING_SECRET: secret }
+    // A subdomain of the cabinet's domain (owner's answer of 13.11.2026).
+    expect(webEnvFromEnv(prod).pageViews).toEqual({ origin: 'https://pages.raditi.ru', secret })
+    // Without its secret the pages of chats are off, never open with a known key.
+    expect(webEnvFromEnv({ ...prod, PAGES_SIGNING_SECRET: '' }).pageViews).toBeNull()
+    for (const [name, value] of [
+      ['PAGES_BASE_DOMAIN', 'raditi.ru'],
+      ['PAGES_BASE_DOMAIN', 'docs.raditi-preview.ru'],
+      ['PAGES_SIGNING_SECRET', 'short'],
+    ] as const)
+      expect(() =>
+        webEnvFromEnv({ ...prod, PREVIEW_BASE_DOMAIN: 'raditi-preview.ru', [name]: value }),
+      ).toThrow(new RegExp(name))
   })
 })

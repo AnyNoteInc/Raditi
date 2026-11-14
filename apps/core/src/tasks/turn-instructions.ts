@@ -1,5 +1,6 @@
 import {
   outboxLimits,
+  type RequestedFileFormats,
   SANDBOX_INBOX,
   SANDBOX_OUT,
   type AgentWorkingSet,
@@ -70,16 +71,69 @@ const ANSWERING = `## Answering the client
 - Never put passwords, keys, tokens or other secrets into files, messages or the result.
 
 ## Files for the client
-- When the client asks for a document, a table or another file to download, write it to
-  ${SANDBOX_OUT} (make the folder with \`mkdir -p ${SANDBOX_OUT}\`): files right there, no
-  folders, at most ${outboxLimits.files} files of up to ${outboxLimits.fileBytes / 1024 / 1024} MiB each, each under a plain
-  name of up to ${OUTBOX_NAME_ADVICE} characters (Russian letters are fine, no slashes) that the client will see:
-  name the file for what it holds, in a few words. After your turn the platform attaches them
-  to the chat for the client to download; nothing else you write reaches the client as a file,
-  and nothing in ${SANDBOX_OUT} reaches the site.
-- \`python3\` with \`python-docx\` and \`openpyxl\` is there to build .docx and .xlsx files.
-- Say in \`client_message\` which files you attached, by their names.
+- Files for the client go to ${SANDBOX_OUT} (make the folder with \`mkdir -p ${SANDBOX_OUT}\`): files
+  right there, no folders, at most ${outboxLimits.files} files of up to ${outboxLimits.fileBytes / 1024 / 1024} MiB each, each under a plain name of
+  up to ${OUTBOX_NAME_ADVICE} characters (Russian letters are fine, no slashes) that the client will see:
+  name the file for what it holds, in a few words. After your turn the platform attaches them to
+  the chat; nothing else you write reaches the client as a file, and nothing in ${SANDBOX_OUT}
+  reaches the site.
+- A document the client asked you to prepare as a file — a report, a price list, an article, a
+  post, a description — is one of two kinds, and the client sees it at once in the panel beside
+  the chat (a long text to read and check — an audit, a plan of work, a summary — is a long
+  document of the \`raditi_doc_*\` tools below, not a file):
+  - a web page, \`<name>.html\`, when the look matters: a report with tables or charts, a price
+    list, a comparison, something to show to people or to print;
+  - a text document, \`<name>.md\` (Markdown), when it is mostly text to read, to copy into the
+    site or to keep editing: an article, a post, an instruction, rules, an FAQ, a description, a
+    brief, a set of documents that link to each other; and whenever the client asks for «md»,
+    «markdown», «маркдаун» or a text file.
+  - Not sure: mostly text — \`.md\`, mostly layout — \`.html\`.
+- Make a Word file (.docx) only when the client asked for Word or .docx in so many words («в
+  Word», «вордовский», «docx», «файл Word»), and an Excel file (.xlsx) only when they asked for
+  Excel or .xlsx: then make that file, with \`python3\` and \`python-docx\` or \`openpyxl\`, and no
+  page or text document, unless they asked for both.
+- The page: \`<!doctype html>\`, \`<html lang="ru">\`, \`<meta charset="utf-8">\`, \`<meta
+  name="viewport" content="width=device-width, initial-scale=1">\` and a \`<title>\` in Russian.
+  Everything inside the one file: styles in \`<style>\`, scripts in \`<script>\`, images and fonts
+  as \`data:\` addresses. Nothing from the network — no CDN, no web fonts, no images of other
+  sites, no \`fetch\`: the viewer blocks it and the page breaks. No forms that send anything.
+  Links to other sites with \`target="_blank" rel="noopener noreferrer"\`. Readable 440 px wide
+  and on a phone, good at full width, printable (\`@media print\`).
+- The text document: UTF-8 Markdown (headings, lists, tables, task lists, code blocks, quotes)
+  that starts with one \`# Title\`. No HTML inside: the viewer drops it. A picture is a file of
+  its own in ${SANDBOX_OUT} (PNG, JPEG, WebP or GIF, never SVG), named in the text by its file name:
+  \`![Схема](scheme.png)\`; pictures of other sites are not shown. Links to sites — full
+  \`https://\` addresses.
+- Several documents (a guide, a set of instructions, a knowledge base): one \`.md\` for each,
+  names that sort in reading order (\`01-…\`, \`02-…\`), and with three or more a
+  \`00-оглавление.md\` that links to the others by file name: \`[Цены](02-цены.md)\`,
+  \`[Оплата](03-оплата.md#способы)\`. Documents link to each other the same way. When they do
+  not fit the files of one turn, say so in \`client_message\` and offer to go on in the next
+  message.
+- To change a document you made before, write it again under the same file name: the client
+  sees a new version of the same document. A new name is a new document.
+- In \`client_message\` name the documents and files you made, by their titles or names; never
+  paste a document's content into the message. Say which files you attached by their names.
 ${DOCUMENTS_AND_PAGES}`
+
+/**
+ * The formats the client's words of this turn ask for in so many words
+ * (`requestedFileFormats`, docs/plan/67-agent-documents.md, Д1): the planner adds this section at
+ * the end of the instructions, so that the texts of the three kinds of chat stay as they are.
+ * Empty when no format is asked for: the agent chooses by the rules of «Files for the client».
+ */
+export function requestedFormatsSection(formats: RequestedFileFormats): string {
+  const lines = [
+    formats.word ? '- The client asked for a Word file (.docx) in this message.' : null,
+    formats.excel ? '- The client asked for an Excel file (.xlsx) in this message.' : null,
+    formats.markdown
+      ? '- The client asked for a text document in Markdown (.md) in this message.'
+      : null,
+  ].filter((line): line is string => line !== null)
+  return lines.length === 0
+    ? ''
+    : `\n## The format the client asked for\n${lines.join('\n')}\n- Make the document in that format, as «Files for the client» says.\n`
+}
 
 /** The content tools of the preview: a chat with the browser is told of its two ways below. */
 const CONTENT_TOOLS = `- Content of the site (titles, texts and excerpts of published posts and pages) changes only

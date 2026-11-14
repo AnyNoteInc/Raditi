@@ -12,7 +12,7 @@ import {
 import { throttledLogger } from '@repo/observability'
 import { getSiteAdapter } from '@repo/site-adapters'
 import { createS3ObjectStorage } from '@repo/storage'
-import { releaseConfirmKey, type ChatContext, type SiteSecretWriter } from '@repo/trpc'
+import { pageKeys, releaseConfirmKey, type ChatContext, type SiteSecretWriter } from '@repo/trpc'
 import { createVaultSecretStore } from '@repo/vault'
 import { z } from 'zod'
 
@@ -84,6 +84,15 @@ export function chatServices(): ChatContext | null {
       browser: web.browserStreamUrl === null ? null : { streamUrl: web.browserStreamUrl },
       browserSupported,
       pages: web.pages,
+      // The domain of the pages the agent makes (docs/plan/67-agent-documents.md, Д3, Д8).
+      pageViews:
+        web.pageViews == null
+          ? null
+          : {
+              origin: web.pageViews.origin,
+              appUrl: web.appUrl,
+              keys: pageKeys(web.pageViews.secret),
+            },
       releaseConfirmKey: releaseConfirmKey(env.auth().secret),
       storage: () => (storage ??= createS3ObjectStorage(env.storage())),
       secrets: () => (secrets ??= writerOf(createVaultSecretStore(env.vault()))),

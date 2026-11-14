@@ -25,20 +25,35 @@ export async function readTaskFile(
 ): Promise<ChatFile | null> {
   if (!z.uuid().safeParse(input.taskId).success || !z.uuid().safeParse(input.fileId).success)
     return null
-  const taskId = input.taskId.toLowerCase()
-  const fileId = input.fileId.toLowerCase()
   const task = await db.task.findFirst({
-    where: accessibleTask(input.userId, taskId),
+    where: accessibleTask(input.userId, input.taskId.toLowerCase()),
     select: { id: true },
   })
   if (task === null) return null
+  return readChatFile(db, storage, { taskId: task.id, fileId: input.fileId })
+}
+
+/**
+ * The file of a `feed.file` row of a task the caller has already found for a member: it checks no
+ * member itself, so it stays inside this package (docs/plan/67, Д5). The same answers as
+ * `readTaskFile`.
+ */
+export async function readChatFile(
+  db: Pick<PrismaClient, 'taskEvent'>,
+  storage: Pick<ObjectStorage, 'get'>,
+  input: { taskId: string; fileId: string },
+): Promise<ChatFile | null> {
+  if (!z.uuid().safeParse(input.taskId).success || !z.uuid().safeParse(input.fileId).success)
+    return null
+  const taskId = input.taskId.toLowerCase()
+  const fileId = input.fileId.toLowerCase()
   const row = await db.taskEvent.findFirst({
-    where: { taskId: task.id, type: 'feed.file', payload: { path: ['fileId'], equals: fileId } },
+    where: { taskId, type: 'feed.file', payload: { path: ['fileId'], equals: fileId } },
     select: { payload: true },
   })
   const payload = feedFilePayloadSchema.safeParse(row?.payload)
   if (!payload.success) return null
-  const object = await storage.get('artifacts', chatFileKey(task.id, fileId))
+  const object = await storage.get('artifacts', chatFileKey(taskId, fileId))
   if (!object) return null
   const chunks: Uint8Array[] = []
   let length = 0

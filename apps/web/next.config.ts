@@ -99,7 +99,10 @@ const nextConfig: NextConfig = {
     proxyClientMaxBodySize: '1mb',
   },
   async headers() {
-    return [{ source: '/:path*', headers: securityHeaders }]
+    // Every path but a page of the agent (`/v/<token>`, docs/plan/67-agent-documents.md, Д3): Next
+    // sets these before a route answers and never lets the route replace them, and a page needs
+    // its own sandboxed policy. On the cabinet's host /v/ is not found (proxy.ts).
+    return [{ source: '/((?!v/).*)', headers: securityHeaders }]
   },
 }
 

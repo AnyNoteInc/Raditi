@@ -1,3 +1,4 @@
+import { documentKindOf } from '@repo/domain/tasks/chat-documents'
 import type { TaskStatus } from '@repo/domain'
 import {
   agentCommandAnswerIds,
@@ -19,6 +20,11 @@ export type FailureRow = Extract<FeedRow, { type: 'feed.failure' }>
 
 export type FeedEntry =
   | { kind: 'row'; key: string; row: FeedRow }
+  /**
+   * The documents of one turn — `feed.file` rows of pages and text documents, one after another —
+   * folded into one card (docs/plan/67-agent-documents.md, Д4); a single one too.
+   */
+  | { kind: 'documents'; key: string; fileIds: string[] }
   /** The stages of a finished turn, folded into «Агент работал …». */
   | { kind: 'worked'; key: string; turn: number; steps: StepRow[]; seconds: number }
 
@@ -139,6 +145,23 @@ export function feedEntries(rows: readonly FeedRow[], head: FeedHeadState | null
       seconds: Number.isFinite(end - start) ? Math.max(0, (end - start) / 1000) : 0,
     })
   })
+  // The documents of a turn, one after another, as one card.
+  for (let index = 0; index < entries.length; index += 1) {
+    const fileIds: string[] = []
+    let end = index
+    for (; end < entries.length; end += 1) {
+      const entry = entries[end]!
+      if (entry.kind !== 'row' || entry.row.type !== 'feed.file') break
+      if (documentKindOf(entry.row.name) === null) break
+      fileIds.push(entry.row.fileId)
+    }
+    if (fileIds.length === 0) continue
+    entries.splice(index, end - index, {
+      kind: 'documents',
+      key: `documents-${(entries[index] as { key: string }).key}`,
+      fileIds,
+    })
+  }
   // The agent's answer first, then the card of the changes it made — as a chat shows an answer
   // and what it produced (owner's request of 26.10.2026); the platform writes the candidate of a
   // pass just before its result.

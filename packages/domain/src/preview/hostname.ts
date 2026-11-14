@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { badRequest } from '../errors.ts'
+import { pagesBaseDomainSchema } from '../pages/slug.ts'
 import { isAlias } from './alias.ts'
 
 /**
@@ -141,6 +142,58 @@ export function previewEnterUrl(origin: string, ticket: string, to = '/'): strin
 /** What the iframe is allowed: the site's own scripts, forms and windows, nothing of the cabinet. */
 export const PREVIEW_SANDBOX =
   'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox'
+
+/**
+ * What the frame of a page the agent made is allowed (docs/plan/67-agent-documents.md, Д3): its own
+ * scripts, windows, dialogs and downloads — never the origin it is served from (`allow-same-origin`),
+ * a form or the navigation of the cabinet. The page's server sends the same set in the `sandbox`
+ * directive of its CSP, so the page is sandboxed opened outside the frame too.
+ */
+export const PAGE_SANDBOX =
+  'allow-scripts allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads'
+
+/**
+ * The origin of the root of the domain of pages, where web serves the pages of a chat to the frame
+ * of the cabinet (docs/plan/67-agent-documents.md, Д3): one variable of the domain for both plans,
+ * PAGES_BASE_DOMAIN (docs/plan/69-pages.md, Ст3) — `https://<domain>` in production; elsewhere
+ * `http://<domain>` with the port of APP_URL, since the root is web's and web answers it itself
+ * (the pages of plan 69 are the preview app's, on PAGES_PUBLIC_PORT). The proxy reads it on every
+ * request to split the hosts and the CSP of the cabinet frames it; both must never throw, so
+ * anything else is null — no page is framed or served.
+ */
+export function pagesOriginOf(env: Record<string, string | undefined>): string | null {
+  const base = pagesBaseDomainSchema.safeParse(env.PAGES_BASE_DOMAIN?.trim() ?? '')
+  if (!base.success) return null
+  if (env.APP_ENV?.trim() === 'production') return `https://${base.data}`
+  const app = URL.parse(env.APP_URL?.trim() ?? '')
+  return `http://${base.data}${app?.port ? `:${app.port}` : ''}`
+}
+
+/**
+ * The CSP of a page the agent made (docs/plan/67, Д3), as the domain of pages sends it: the
+ * sandbox of its frame, its own inline code, data images and fonts only; `scripts: false` — none.
+ */
+export function pageContentSecurityPolicy(
+  appOrigin: string,
+  { scripts }: { scripts: boolean },
+): string {
+  return [
+    `sandbox ${scripts ? PAGE_SANDBOX : PAGE_SANDBOX.replace('allow-scripts ', '')}`,
+    "default-src 'none'",
+    scripts ? "script-src 'unsafe-inline'" : "script-src 'none'",
+    "style-src 'unsafe-inline'",
+    'img-src data: blob:',
+    'font-src data:',
+    'media-src data: blob:',
+    "connect-src 'none'",
+    "form-action 'none'",
+    "base-uri 'none'",
+    "object-src 'none'",
+    "frame-src 'none'",
+    "worker-src 'none'",
+    `frame-ancestors ${appOrigin}`,
+  ].join('; ')
+}
 
 /** The cabinet's route that issues a fresh ticket for a preview and a path (apps/web, Р19). */
 export const PREVIEW_OPEN_PATH = '/preview/open'

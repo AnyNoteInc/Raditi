@@ -10,8 +10,12 @@ import { DomainError } from '../errors.ts'
  * the snapshot.
  */
 export const outboxLimits = Object.freeze({
-  /** Files of one turn. */
-  files: 10,
+  /**
+   * Files of one turn: thirty since a set of text documents came (docs/plan/67-agent-documents.md,
+   * Д7). The runner and core read it from the same release: the manifest of a newer runner would
+   * not pass the schema of an older core.
+   */
+  files: 30,
   /** One file. */
   fileBytes: 20 * 1024 * 1024,
   /** The compressed archive. */
@@ -46,7 +50,10 @@ export const outboxFileNameSchema = z
 /** The first entry of an outbox archive: the manifest, a file of this name. */
 export const OUTBOX_MANIFEST_ENTRY = 'manifest.json'
 
-/** The most a manifest takes: ten names of 200 characters, four bytes each, with their quotes. */
+/**
+ * The most a manifest takes: thirty names of 200 characters, four bytes each, with their quotes,
+ * are 24.3 KiB.
+ */
 export const OUTBOX_MANIFEST_BYTES = 32 * 1024
 
 /**

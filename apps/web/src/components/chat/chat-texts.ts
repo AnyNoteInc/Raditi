@@ -4,6 +4,8 @@ import { previewPanelText, taskRewoundLabel } from '@repo/domain/tasks/client-fe
 
 import { plural } from '@/lib/plural'
 
+import { MISSING_DOCUMENT } from './document-rules'
+
 // What the screens of a dialog say beyond the catalogue of the feed
 // (packages/domain/src/tasks/client-feed-labels.ts): the words of the controls, the panel beside
 // the dialog, the list and the release. Russian, on «вы», without the platform's own terms
@@ -654,6 +656,7 @@ export const toolText = Object.freeze({
   dot: Object.freeze({
     browser: 'браузер ждёт вас',
     changes: 'есть новые изменения',
+    documents: 'есть новый документ',
   }),
   /** The landmark beside the dialog (И20). */
   panel: 'Инструменты чата',
@@ -677,6 +680,7 @@ export const toolText = Object.freeze({
     database: previewPanelText.database,
     checks: previewPanelText.checks,
     terminal: 'Изменения',
+    documents: 'Документы',
   }),
   /** The name of a tool in the menu. */
   item: Object.freeze({
@@ -686,6 +690,7 @@ export const toolText = Object.freeze({
     database: previewPanelText.database,
     checks: previewPanelText.checks,
     terminal: 'Изменения',
+    documents: 'Документы',
   }),
   /** The marks on the right of the tiles (И5); a browser that holds a session says who drives it. */
   mark: Object.freeze({
@@ -717,4 +722,51 @@ export const toolText = Object.freeze({
     database: Object.freeze({ title: 'Чат закрыт: изменений в базе данных нет.', note: null }),
     checks: Object.freeze({ title: 'Чат закрыт: проверок нет.', note: null }),
   }),
+})
+
+/**
+ * The words of the documents the agent made (docs/plan/67-agent-documents.md, Д4–Д8): the tab
+ * «Документы» and the cards of the feed. Never «HTML» or «Markdown» (rule 10), and never «страница»:
+ * a document of the chat is a document, both kinds alike; a page is what the client may publish
+ * one as (plan 69, owner's answer of 13.11.2026).
+ */
+export const documentText = Object.freeze({
+  // A document is a document, whichever kind: a page is what the client publishes (plan 69).
+  kind: Object.freeze({ page: 'Документ', markdown: 'Документ' }),
+  version: (number: number) => `версия ${number}`,
+  versionOf: (number: number, all: number) => `Версия ${number} из ${all}`,
+  open: 'Открыть',
+  openLabel: (title: string) => `Открыть документ «${title}»`,
+  download: 'Скачать',
+  downloadLabel: (title: string) => `Скачать документ «${title}»`,
+  group: (count: number) => `Документы · ${count}`,
+  all: (count: number) => `Все документы (${count})`,
+  list: 'Документы чата',
+  search: 'Найти документ',
+  nothingFound: 'Ничего не нашлось.',
+  fresh: 'новое',
+  versions: (count: number) => `${count} ${plural(count, 'версия', 'версии', 'версий')}`,
+  back: 'Назад',
+  forward: 'Вперёд',
+  refresh: 'Обновить',
+  fullscreen: 'На весь экран',
+  leaveFullscreen: 'Выйти из полноэкранного режима',
+  newTab: 'Открыть в новой вкладке',
+  publish: 'Опубликовать как страницу',
+  contents: 'Оглавление',
+  source: 'Текст',
+  rendered: 'Оформление',
+  copy: 'Скопировать текст',
+  copied: 'Текст скопирован.',
+  title: 'Название документа',
+  frame: (title: string) => `Документ «${title}»`,
+  loading: 'Открываем документ…',
+  failed: 'Не удалось открыть документ.',
+  retry: 'Повторить',
+  unreadable: 'Не удалось прочитать документ. Его можно скачать.',
+  large: 'Документ большой для просмотра: здесь только его начало, текстом. Целиком — в файле.',
+  pagesOff: 'Этот документ здесь сейчас не открывается. Его можно скачать.',
+  missing: MISSING_DOCUMENT,
+  empty: 'Документов пока нет. Они появятся здесь, когда агент их подготовит.',
+  noContents: 'В документе нет разделов.',
 })

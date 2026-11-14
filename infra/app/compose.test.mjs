@@ -741,3 +741,22 @@ test('every variable the preview file substitutes is in env.example, and preflig
   )
   assert.match(preflight, /check_secrets preview 10009 app\.env/)
 })
+
+// The root of the domain of pages (docs/plan/67-agent-documents.md, Д3): web on the single server,
+// reads only — web's proxy answers /v/<token> and robots.txt there and 404 to anything else.
+test('the single server routes the root of the domain of pages to web, reads only', () => {
+  const routes = readFileSync(new URL('../server/traefik/server.yml', import.meta.url), 'utf8')
+  assert.match(
+    routes,
+    /pages-root:\n {6}entryPoints: \[websecure\]\n {6}rule: 'Host\(`\{\{ env "PAGES_ROOT_HOST" \}\}`\) && \(Method\(`GET`\) \|\| Method\(`HEAD`\)\)'\n {6}service: web\n/,
+  )
+  // Its own name: the router `pages` of traefik/dynamic/pages.yml is the wildcard's (plan 69).
+  assert.doesNotMatch(routes, /^ {4}pages:$/m)
+  const server = readFileSync(
+    new URL('../server/docker-compose.server.yml', import.meta.url),
+    'utf8',
+  )
+  assert.match(server, /PAGES_ROOT_HOST: \$\{PAGES_ROOT_HOST:-\}/)
+  // The origin of the root is PAGES_BASE_DOMAIN's (docs/plan/69-pages.md, Ст3), never a variable.
+  assert.doesNotMatch(server, /PAGES_ORIGIN/)
+})

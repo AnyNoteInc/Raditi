@@ -2,6 +2,7 @@
 
 import type { ChatCommandId, FeedReleaseOutcome, FeedUpdateOutcome } from '@repo/domain'
 import { chatCommandRefusalText, type ChatCommandRefusal } from '@repo/domain/release/chat-commands'
+import { chatDocumentsOf } from '@repo/domain/tasks/chat-documents'
 import { feedFailureTextOf, usageLimitText } from '@repo/domain/tasks/client-feed-failures'
 import {
   feedApprovalSiteText,
@@ -63,7 +64,7 @@ import MuiLink from '@mui/material/Link'
 import Typography from '@mui/material/Typography'
 import { BrandProgress } from '@repo/ui/brand-progress'
 import Link from 'next/link'
-import { useEffect, useState, type ComponentProps, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ComponentProps, type ReactNode } from 'react'
 
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 import { nbsp } from '@/lib/nbsp'
@@ -92,6 +93,7 @@ import {
   type QuestionRow,
   type StepRow,
 } from './feed-model'
+import { FeedDocuments } from './feed-document'
 import { DocRevisions, docRevisionsOf, FeedDoc } from './feed-doc'
 import { FeedFile } from './feed-file'
 import { FeedPage } from './feed-page'
@@ -129,6 +131,11 @@ export interface FeedActions {
   onSaveNotes?: (text: string) => void
   /** The rows that answer `/init` (`initAnswerIds`). */
   notesRows?: ReadonlySet<string>
+  /**
+   * «Открыть» of a document of the agent: the tab «Документы» on that version
+   * (docs/plan/67-agent-documents.md, Д4); absent — the document opens in a window of its own.
+   */
+  onOpenDocument?: (fileId: string) => void
   /** The client controls the task's browser now. */
   controlling?: boolean
   /** The task's browser is open: the control can be taken. */
@@ -1143,6 +1150,7 @@ export function FeedList({
 }) {
   const now = new Date()
   const entries: FeedEntry[] = feedEntries(rows, head)
+  const documents = useMemo(() => chatDocumentsOf(rows), [rows])
   const commands = head?.commands ?? []
   const undo = head?.undo ?? null
   // The rows of the first paint stay still; a row that arrives later rises into its place. The
@@ -1180,7 +1188,13 @@ export function FeedList({
               ...(initial.has(entry.key) ? {} : riseIn),
             }}
           >
-            {entry.kind === 'worked' ? (
+            {entry.kind === 'documents' ? (
+              <FeedDocuments
+                fileIds={entry.fileIds}
+                documents={documents}
+                {...(actions.onOpenDocument ? { onOpen: actions.onOpenDocument } : {})}
+              />
+            ) : entry.kind === 'worked' ? (
               <Worked
                 steps={entry.steps}
                 seconds={entry.seconds}

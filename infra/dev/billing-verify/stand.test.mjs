@@ -728,7 +728,8 @@ test('web gets the stand’s database and the fake, a synthetic HOME, and nothin
     preview: null,
     // Nor a browser stream: browser tasks are off there too.
     browserStreamUrl: null,
-    // Nor published pages (docs/plan/69-pages.md): «Страницы» are off there.
+    // Nor published pages (docs/plan/69-pages.md) nor the pages of chats (docs/plan/67): off there.
+    pageViews: null,
     pages: null,
   })
   // No captcha: a customer of the stand signs up over HTTP.

@@ -165,4 +165,28 @@ describe('the dialog services of the process', () => {
     expect(chatServices()).not.toBeNull()
     log.mockRestore()
   })
+
+  it('carries the domain of pages with the key of its views (docs/plan/67, Д3)', async () => {
+    stand.webEnv.mockReturnValue({
+      appEnv: 'development',
+      appUrl: 'http://localhost:3000',
+      preview: null,
+      browserStreamUrl: null,
+      pages: { baseDomain: 'pages.localhost', scheme: 'http', port: 8092 },
+      pageViews: { origin: 'http://pages.localhost:3000', secret: 'b'.repeat(48) },
+    })
+    const { chatServices } = await import('./chat-services')
+    // The pages of plan 69 and the views of plan 67 side by side, one domain (docs/plan/69, Ст3).
+    expect(chatServices()?.pages).toEqual({
+      baseDomain: 'pages.localhost',
+      scheme: 'http',
+      port: 8092,
+    })
+    const pages = chatServices()?.pageViews
+    expect(pages).toMatchObject({
+      origin: 'http://pages.localhost:3000',
+      appUrl: 'http://localhost:3000',
+    })
+    expect(pages?.keys.view).toHaveLength(32)
+  })
 })

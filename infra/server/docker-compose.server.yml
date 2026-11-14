@@ -61,6 +61,9 @@ services:
       # its mount point inside the read-only bind of traefik/dynamic.
       DASHBOARD_HOST: ${DASHBOARD_HOST:?Set DASHBOARD_HOST}
       PREVIEW_APEX_HOST: ${PREVIEW_APEX_HOST:-}
+      # The root of the domain of pages, served by web (docs/plan/67-agent-documents.md, Д3); empty — no
+      # router: it waits for the A record of the root (the wildcard of pages.yml does not cover it)
+      PAGES_ROOT_HOST: ${PAGES_ROOT_HOST:-}
       BROWSER_STREAM_HOST: ${APP_DOMAIN}
       # The wildcard of previews (traefik/dynamic/preview.yml): DNS-01 through the reg.ru API
       PREVIEW_BASE_DOMAIN: ${PREVIEW_BASE_DOMAIN:?Set PREVIEW_BASE_DOMAIN}

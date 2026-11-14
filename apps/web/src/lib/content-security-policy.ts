@@ -26,18 +26,22 @@ export function previewFrameSource(env: Record<string, string | undefined>): str
 /**
  * Directives that need no allowlist of scripts. Images come only from the site itself (the
  * avatar route, a chosen photo's preview as blob:) and the captcha, so a stored external
- * address can never make the browser call another host. Frames: the captcha and the previews
- * of dialogs only; the cabinet itself is never framed.
+ * address can never make the browser call another host. Frames: the captcha, the previews of
+ * dialogs and the pages the agent makes (`pagesOriginOf`, docs/plan/67, Д3) only; the cabinet
+ * itself is never framed.
  * TODO(M8): full CSP (script-src with per-request nonces from the proxy, plus
  * smartcaptcha.cloud.yandex.ru for the captcha script).
  */
-export function contentSecurityPolicy(previews: string | null): string {
+export function contentSecurityPolicy(
+  previews: string | null,
+  pages: string | null = null,
+): string {
   return [
     "frame-ancestors 'none'",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
     "img-src 'self' data: blob: https://smartcaptcha.cloud.yandex.ru",
-    `frame-src 'self' https://smartcaptcha.cloud.yandex.ru${previews ? ` ${previews}` : ''}`,
+    `frame-src 'self' https://smartcaptcha.cloud.yandex.ru${previews ? ` ${previews}` : ''}${pages ? ` ${pages}` : ''}`,
   ].join('; ')
 }

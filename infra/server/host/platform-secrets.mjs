@@ -31,6 +31,9 @@ const GENERATED = {
   'app/web': {
     BETTER_AUTH_SECRET: b64url(48),
     METRICS_TOKEN: hex(32),
+    // The tokens of the domain of pages (docs/plan/67-agent-documents.md, Д3): a new value voids
+    // every address of a page given out
+    PAGES_SIGNING_SECRET: b64url(48),
     S3_ACCESS_KEY_ID: s3Key,
     S3_SECRET_ACCESS_KEY: b64url(30),
   },
@@ -166,6 +169,7 @@ function serviceFiles(kv, roles) {
           SMARTCAPTCHA_CLIENT_KEY: web.SMARTCAPTCHA_CLIENT_KEY,
           SMARTCAPTCHA_SERVER_KEY: web.SMARTCAPTCHA_SERVER_KEY,
           METRICS_TOKEN: web.METRICS_TOKEN,
+          PAGES_SIGNING_SECRET: web.PAGES_SIGNING_SECRET,
           ...s3(web),
           ...approle('web'),
         }),
