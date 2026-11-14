@@ -47,7 +47,6 @@ const FIRST_WORDS = 'Поменяйте цену капучино на 290 ₽'
 const QUEUED = 'Подготовка агента'
 const QUEUED_TEXT =
   'Агент скоро возьмётся за работу. Страницу можно закрыть — результат появится в этом чате.'
-const FIELD_OFF = 'Написать можно будет, когда агент закончит или задаст вопрос.'
 const DRAFT = 'Черновик: проверьте ещё цены в разделе «Десерты»'
 
 const message = (page: Page) => page.getByRole('textbox', { name: 'Сообщение' })
@@ -79,12 +78,6 @@ const cross = (page: Page, name: string) =>
  * a space before the comma, which is hidden on the screen: a screen reader reads both alike.
  */
 const tile = (name: string, mark: string) => new RegExp(`^${name}\\s*,\\s*${mark}$`)
-
-/** Read aloud, not shown: the box of the words is the 1px of `offScreen`. */
-async function expectOffScreen(target: Locator) {
-  const found = await target.boundingBox()
-  expect(found === null || (found.width <= 1 && found.height <= 1)).toBe(true)
-}
 
 async function box(target: Locator) {
   const found = await target.boundingBox()
