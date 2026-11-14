@@ -5,7 +5,7 @@ import Button from '@mui/material/Button'
 import IconButton from '@mui/material/IconButton'
 import Tab from '@mui/material/Tab'
 import Tabs from '@mui/material/Tabs'
-import type { ReactNode, RefObject } from 'react'
+import { useLayoutEffect, type ReactNode, type RefObject } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { toolText } from './chat-texts'
@@ -19,7 +19,7 @@ import {
   type DialogTool,
   type ToolsState,
 } from './dialog-tools'
-import { SITE_PANE_WIDTH } from './pane-layout'
+import { PANE_OPEN_MARK, SITE_PANE_WIDTH } from './pane-layout'
 import { CABINET_GAP, CABINET_RADIUS } from '@/components/application/cabinet-shell'
 import { PaneResizer } from './pane-resizer'
 
@@ -60,6 +60,16 @@ const tabSx = {
   '&.Mui-selected': { color: 'text.primary', bgcolor: 'action.selected', fontWeight: 500 },
 } as const
 
+/** The shell of the chats knows the panel is drawn, from its first paint to its last. */
+function usePaneMark(drawn: boolean) {
+  useLayoutEffect(() => {
+    if (!drawn) return
+    const shell = document.querySelector('[data-chat-shell]')
+    shell?.setAttribute(PANE_OPEN_MARK, '')
+    return () => shell?.removeAttribute(PANE_OPEN_MARK)
+  }, [drawn])
+}
+
 export function ToolsPanel({
   tools,
   pane,
@@ -92,7 +102,9 @@ export function ToolsPanel({
   /** What the panel of a tool holds. */
   content: (tool: DialogTool) => ReactNode
 }) {
-  if (!toolsShown(tools)) return null
+  const drawn = toolsShown(tools)
+  usePaneMark(drawn)
+  if (!drawn) return null
   return (
     <Box
       component="aside"

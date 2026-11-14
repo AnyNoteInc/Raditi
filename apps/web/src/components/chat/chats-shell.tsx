@@ -9,10 +9,15 @@ import type { ApplicationUser } from '@/components/application/user-avatar'
 import type { CabinetPanelState } from '@/lib/cabinet-panel'
 
 import { NEW_CHAT_SEGMENT } from './chat-address'
-import { paneWidthCss, SITE_PANE_WIDTH, SITE_PANE_WIDTH_VAR } from './pane-layout'
+import {
+  PANE_DRAWN,
+  PANE_OPEN_MARK,
+  paneWidthCss,
+  SITE_PANE_WIDTH,
+  SITE_PANE_WIDTH_VAR,
+} from './pane-layout'
 
 /** The page draws the card of the tools beside a chat. */
-const PANE_DRAWN = '[data-chat-shell]:has([data-chat-pane]) &'
 /** The room the card of the tools takes at the right edge from `lg`, with the gaps around it. */
 const PANE_ROOM = `calc(${SITE_PANE_WIDTH} + ${2 * CABINET_GAP}px)`
 
@@ -60,7 +65,7 @@ export function ChatsShell({
           : ({ [SITE_PANE_WIDTH_VAR]: paneWidthCss(paneWidth) } as CSSProperties)
       }
       sx={
-        chat ? { '&:has([data-chat-pane])': { '--cabinet-panel-space': { lg: '0px' } } } : undefined
+        chat ? { [`&[${PANE_OPEN_MARK}]`]: { '--cabinet-panel-space': { lg: '0px' } } } : undefined
       }
       contentSx={
         chat
@@ -92,7 +97,7 @@ export function ChatsShell({
           ...(chat && {
             flex: { lg: '1 1 0' },
             minHeight: { lg: 0 },
-            '&:has([data-chat-pane])': { flex: { xs: '1 0 auto', lg: '1 1 0' } },
+            [PANE_DRAWN]: { flex: { xs: '1 0 auto', lg: '1 1 0' } },
           }),
         }}
       >

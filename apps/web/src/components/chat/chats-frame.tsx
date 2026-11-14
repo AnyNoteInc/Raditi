@@ -24,12 +24,12 @@ import {
 } from '@/components/application/cabinet-shell'
 
 import { CHATS_HREF, NEW_CHAT_HREF, NEW_CHAT_SEGMENT } from './chat-address'
+import { PANE_DRAWN } from './pane-layout'
 import { chatsText } from './chat-texts'
 import { rememberChatsGroup, type ChatsGroup } from './chats-group'
 import { DialogList, useChatsKnownEmpty } from './dialog-list'
 
 /** The page draws the panel of the tools beside a chat: the list gives the chat its room. */
-const PANE_DRAWN = '[data-chat-shell]:has([data-chat-pane]) &'
 
 const groupNames: Readonly<Record<ChatsGroup, string>> = {
   list: chatsText.groupList,
