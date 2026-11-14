@@ -159,7 +159,7 @@ export function createTelegramBotApi(options: TelegramBotApiOptions): TelegramBo
     try {
       res = await transport.fetch(`${baseUrl}/bot${token}/${method}`, init)
     } catch (err) {
-      return { ok: false, description: err instanceof Error ? err.name : 'FetchError' }
+      return { ok: false, description: fetchFailure(err) }
     }
 
     let json: unknown
@@ -279,4 +279,17 @@ export function createTelegramBotApi(options: TelegramBotApiOptions): TelegramBo
       return call('answerCallbackQuery', body, z.boolean())
     },
   }
+}
+
+/**
+ * What a failed fetch says in a log: the error's name and the code of its cause — a timeout, a
+ * refused connection, a certificate that does not verify (`SELF_SIGNED_CERT_IN_CHAIN` from a proxy
+ * that intercepts TLS). Never the message: the URL in it carries the bot's token.
+ */
+export function fetchFailure(err: unknown): string {
+  if (!(err instanceof Error)) return 'FetchError'
+  const cause: unknown = err.cause
+  const code =
+    cause !== null && typeof cause === 'object' && 'code' in cause ? String(cause.code) : null
+  return code !== null && /^[A-Z0-9_]{1,64}$/.test(code) ? `${err.name} ${code}` : err.name
 }

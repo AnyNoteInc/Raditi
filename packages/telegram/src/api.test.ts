@@ -8,7 +8,7 @@ const { proxyAgentConstructor, undiciFetch } = vi.hoisted(() => ({
 
 vi.mock('undici', () => ({ ProxyAgent: proxyAgentConstructor, fetch: undiciFetch }))
 
-import { createTelegramBotApi } from './api.ts'
+import { createTelegramBotApi, fetchFailure } from './api.ts'
 import type { TelegramFetch } from './proxy.ts'
 
 const TOKEN = '123456789:AAFakeTokenForTests_abcdefghij'
@@ -397,5 +397,21 @@ describe('error handling', () => {
     const { fetchFn } = capturingFetch({ ok: true, result: { id: 'not-a-number' } })
     const res = await createTelegramBotApi({ token: TOKEN, fetch: fetchFn }).getMe()
     expect(res).toEqual({ ok: false, description: 'Unexpected Telegram response' })
+  })
+})
+
+describe('fetchFailure', () => {
+  it('names the cause of a failed fetch, never its message', () => {
+    const intercepted = new TypeError(`fetch failed https://api.telegram.org/bot${'1:secret'}/x`, {
+      cause: Object.assign(new Error('self-signed certificate'), {
+        code: 'SELF_SIGNED_CERT_IN_CHAIN',
+      }),
+    })
+    expect(fetchFailure(intercepted)).toBe('TypeError SELF_SIGNED_CERT_IN_CHAIN')
+    expect(fetchFailure(new TypeError('fetch failed'))).toBe('TypeError')
+    expect(fetchFailure(new TypeError('x', { cause: { code: 'not a code: 1:secret' } }))).toBe(
+      'TypeError',
+    )
+    expect(fetchFailure('nothing')).toBe('FetchError')
   })
 })
