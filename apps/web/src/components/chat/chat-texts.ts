@@ -746,8 +746,6 @@ export const documentText = Object.freeze({
   nothingFound: 'Ничего не нашлось.',
   fresh: 'новое',
   versions: (count: number) => `${count} ${plural(count, 'версия', 'версии', 'версий')}`,
-  back: 'Назад',
-  forward: 'Вперёд',
   refresh: 'Обновить',
   fullscreen: 'На весь экран',
   leaveFullscreen: 'Выйти из полноэкранного режима',

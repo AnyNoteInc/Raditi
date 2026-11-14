@@ -8,6 +8,7 @@ import Link from '@mui/material/Link'
 import MenuItem from '@mui/material/MenuItem'
 import Popover from '@mui/material/Popover'
 import Select from '@mui/material/Select'
+import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import { DocumentMarkdown, markdownTitleOf } from '@repo/doc-render/markdown'
 import { PAGE_SANDBOX } from '@repo/domain/pages'
@@ -97,17 +98,7 @@ function useDocumentHistory(target: DocumentTarget | null, fallback: string | nu
     history.entries[history.index] ??
     (fallback ? { name: fallback, fileId: null, anchor: null } : null)
   const go = useCallback((entry: Entry) => setHistory((state) => pushed(state, entry)), [pushed])
-  const step = (by: -1 | 1) =>
-    setHistory((state) => ({
-      ...state,
-      index: Math.min(Math.max(0, state.index + by), state.entries.length - 1),
-    }))
-  return {
-    current,
-    go,
-    back: history.index > 0 ? () => step(-1) : null,
-    forward: history.index < history.entries.length - 1 ? () => step(1) : null,
-  }
+  return { current, go }
 }
 
 /** The width of the tab: the list stands beside the document from about 600 px. */
@@ -141,25 +132,30 @@ function HeadButton({
 }) {
   const common = {
     'aria-label': label,
-    title: label,
     disabled,
     sx: { width: 44, height: 44, flexShrink: 0 },
   }
-  if (href)
-    return (
-      <IconButton
-        {...common}
-        component="a"
-        href={href}
-        {...(download ? { download } : { target: '_blank', rel: 'noopener' })}
-      >
-        <AppIcon name={icon} size={18} />
-      </IconButton>
-    )
-  return (
+  const button = href ? (
+    <IconButton
+      {...common}
+      component="a"
+      href={href}
+      {...(download ? { download } : { target: '_blank', rel: 'noopener' })}
+    >
+      <AppIcon name={icon} size={18} />
+    </IconButton>
+  ) : (
     <IconButton {...common} onClick={onClick} aria-pressed={pressed}>
       <AppIcon name={icon} size={18} />
     </IconButton>
+  )
+  // What the button does, on hover and focus; a disabled one still says it.
+  return (
+    <Tooltip title={label}>
+      <Box component="span" sx={{ display: 'inline-flex', flexShrink: 0 }}>
+        {button}
+      </Box>
+    </Tooltip>
   )
 }
 
@@ -198,7 +194,7 @@ export function DocumentsPane({
   const fallback =
     openingDocumentOf(documents.map((document) => document.name)) ??
     (latestAgentDoc === undefined ? null : agentDocEntry(latestAgentDoc))
-  const { current, go, back, forward } = useDocumentHistory(target, fallback)
+  const { current, go } = useDocumentHistory(target, fallback)
   const [root, setRoot] = useState<HTMLElement | null>(null)
   const wide = useWide(root, 600) || fullscreen || standalone
   const [listAnchor, setListAnchor] = useState<HTMLElement | null>(null)
@@ -239,18 +235,6 @@ export function DocumentsPane({
           {...(onFullscreen ? { onFullscreen } : {})}
           lead={
             <>
-              <HeadButton
-                icon="back"
-                label={documentText.back}
-                onClick={back ?? undefined}
-                disabled={!back}
-              />
-              <HeadButton
-                icon="forward"
-                label={documentText.forward}
-                onClick={forward ?? undefined}
-                disabled={!forward}
-              />
               {wide ? null : (
                 <Button
                   size="small"
@@ -321,18 +305,6 @@ export function DocumentsPane({
           minWidth: 0,
         }}
       >
-        <HeadButton
-          icon="back"
-          label={documentText.back}
-          onClick={back ?? undefined}
-          disabled={!back}
-        />
-        <HeadButton
-          icon="forward"
-          label={documentText.forward}
-          onClick={forward ?? undefined}
-          disabled={!forward}
-        />
         {wide ? null : (
           <Button
             size="small"
@@ -409,7 +381,7 @@ export function DocumentsPane({
           />
         )}
         <HeadButton
-          icon="down"
+          icon="download"
           label={documentText.downloadLabel(document.title)}
           href={taskFileHref(taskId, fileId)}
           download={document.name}
@@ -582,6 +554,7 @@ function DocumentList({
                     minHeight: 44,
                     px: 1,
                     gap: 1,
+                    borderRadius: '8px',
                     color: 'text.primary',
                     fontWeight: here ? 600 : 400,
                     bgcolor: here ? 'var(--mui-palette-action-selected)' : undefined,
@@ -623,6 +596,7 @@ function DocumentList({
                   minHeight: 44,
                   px: 1,
                   gap: 1,
+                  borderRadius: '8px',
                   color: 'text.primary',
                   fontWeight: document.name === current ? 600 : 400,
                   bgcolor:

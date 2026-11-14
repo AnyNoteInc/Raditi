@@ -47,9 +47,7 @@ export function FeedDoc({
       component="article"
       aria-label={`${agentDocTexts.kind} «${data.title}»`}
       sx={{
-        alignSelf: 'flex-start',
-        width: '100%',
-        maxWidth: 560,
+        alignSelf: 'stretch',
         display: 'flex',
         alignItems: 'center',
         gap: 1.5,

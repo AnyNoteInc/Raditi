@@ -23,6 +23,8 @@ const paths = {
   arrow: 'M7 17 17 7M7 7h10v10',
   chevron: 'm9 5 7 7-7 7',
   down: 'm8 10 4 4 4-4',
+  /** «Скачать»: an arrow down onto a line. */
+  download: 'M12 4v11M7 10l5 5 5-5M5 20h14',
   close: 'm6 6 12 12M6 18 18 6',
   back: 'm12 5-7 7 7 7M5 12h15',
   send: 'M12 19V5M5 12l7-7 7 7',

@@ -3,6 +3,7 @@
 import Box from '@mui/material/Box'
 import IconButton from '@mui/material/IconButton'
 import LinearProgress from '@mui/material/LinearProgress'
+import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import { DocumentMarkdown } from '@repo/doc-render/markdown'
 import { BrandProgress } from '@repo/ui/brand-progress'
@@ -129,15 +130,22 @@ function HeadButton({
   pressed?: boolean
   disabled?: boolean
 }) {
-  const common = { 'aria-label': label, title: label, disabled, sx: { width: 44, height: 44 } }
-  return href ? (
-    <IconButton {...common} component="a" href={href} download>
-      <AppIcon name={icon} size={18} />
-    </IconButton>
-  ) : (
-    <IconButton {...common} onClick={onClick} aria-pressed={pressed}>
-      <AppIcon name={icon} size={18} />
-    </IconButton>
+  const common = { 'aria-label': label, disabled, sx: { width: 44, height: 44 } }
+  // What the button does, on hover and focus; a disabled one still says it.
+  return (
+    <Tooltip title={label}>
+      <Box component="span" sx={{ display: 'inline-flex', flexShrink: 0 }}>
+        {href ? (
+          <IconButton {...common} component="a" href={href} download>
+            <AppIcon name={icon} size={18} />
+          </IconButton>
+        ) : (
+          <IconButton {...common} onClick={onClick} aria-pressed={pressed}>
+            <AppIcon name={icon} size={18} />
+          </IconButton>
+        )}
+      </Box>
+    </Tooltip>
   )
 }
 
@@ -412,7 +420,7 @@ export function AgentDocumentView({
         </Box>
         {data.version > 0 ? (
           <HeadButton
-            icon="down"
+            icon="download"
             label={agentDocTexts.download(data.view)}
             href={documentDownloadHref(docId)}
           />
