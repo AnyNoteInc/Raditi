@@ -202,7 +202,7 @@ test('without PAGES_BASE_DOMAIN the pages file routes nothing and orders no cert
   assert.equal(renderedPages(''), '')
 })
 
-test('pages: exactly their hosts, one label of 26 base32 letters, to the pages listener alone', () => {
+test('pages: exactly their hosts, one label — a slug or the own name of a site — to the pages listener alone', () => {
   const yaml = renderedPages('pages.raditi.ru')
   assert.doesNotMatch(yaml, /\{\{|\}\}/)
   assert.deepEqual(
@@ -218,13 +218,15 @@ test('pages: exactly their hosts, one label of 26 base32 letters, to the pages l
   const host = new RegExp(rule)
   assert.match('abcdefghijklmnopqrstuvwxyz.pages.raditi.ru', host)
   assert.match('a2345672345672345672345672.pages.raditi.ru', host)
+  // The own name of a site (docs/plan/73-pages-sites.md, Дер33): 3 to 25 characters. A reserved
+  // word such as www passes Traefik and gets 404 of the listener, which reads the name itself.
+  for (const name of ['moya-firma', 'abc', 'abcdefghijklmnopqrstuvwxy'])
+    assert.match(`${name}.pages.raditi.ru`, host, name)
   for (const name of [
     'pages.raditi.ru',
     'raditi.ru',
-    'www.pages.raditi.ru',
-    'abcdefghijklmnopqrstuvwxy.pages.raditi.ru',
+    'ab.pages.raditi.ru',
     'abcdefghijklmnopqrstuvwxyz0.pages.raditi.ru',
-    'abcdefghijklmnopqrstuvwxy1.pages.raditi.ru',
     'ABCDEFGHIJKLMNOPQRSTUVWXYZ.pages.raditi.ru',
     'x.abcdefghijklmnopqrstuvwxyz.pages.raditi.ru',
     'abcdefghijklmnopqrstuvwxyz.pages.raditi.ru.evil.ru',

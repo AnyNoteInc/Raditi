@@ -175,6 +175,7 @@ vi.mock('@/trpc/client', () => ({
     // «Опубликовать как страницу» (docs/plan/69-pages.md, Ст32): not offered in these tests.
     pages: {
       canPublish: query('pages.canPublish', async () => false),
+      targets: query('pages.targets', async () => []),
       publishFile: mutation(async () => ({ pageId: '', url: '', version: 1 })),
       list: query('pages.list', async () => ({ enabled: false, pages: [] })),
     },

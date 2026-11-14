@@ -16,7 +16,7 @@ export default async function PagesPage() {
   if (session === UNAVAILABLE) return <ServiceUnavailable />
   return (
     <ApplicationShell user={session.user} toolbar={false}>
-      <PagesView />
+      <PagesView userId={session.user.id} />
     </ApplicationShell>
   )
 }

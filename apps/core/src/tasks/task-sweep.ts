@@ -6,6 +6,7 @@ import {
   clearStaleUncheckedSections,
   dropAbandonedPages,
   insertFeedEvent,
+  purgeExpiredPages,
   requestPreviewSync,
   stalePageReservations,
   taskHasProductionWrites,
@@ -508,9 +509,11 @@ export class TaskSweep {
     const dropped = await dropAbandonedPages(db, before)
     // Text of documents no end of a turn checked: it may hold a value of the client (Ст19).
     const cleared = await clearStaleUncheckedSections(db, before)
-    if (stale.length > 0 || dropped > 0 || cleared > 0)
+    // Pages whose 30 days in the trash are over (docs/plan/73-pages-sites.md, Дер2).
+    const purged = await purgeExpiredPages(db, this.#now(), BATCH)
+    if (stale.length > 0 || dropped > 0 || cleared > 0 || purged > 0)
       this.#logger.log(
-        `task_sweep_pages failed=${stale.length} dropped=${dropped} sections_cleared=${cleared}`,
+        `task_sweep_pages failed=${stale.length} dropped=${dropped} sections_cleared=${cleared} purged=${purged}`,
       )
     return stale.length
   }

@@ -34,6 +34,7 @@ import type { TurnSupervisor } from '../turns/turn-supervisor.ts'
 import type { CandidateGit } from './candidate-git.ts'
 import type { ChatFiles } from './chat-files.ts'
 import type { DocSections } from './doc-sections.ts'
+import type { PageChanges } from './page-changes.ts'
 import type { LivePasses } from './live-passes.ts'
 import { readPassFacts } from './pass-facts.ts'
 import type { TurnCapacity } from './turn-capacity.ts'
@@ -105,6 +106,8 @@ export interface PassRunnerDependencies {
   chatFiles?: Pick<ChatFiles, 'deliver' | 'failPages'>
   /** The documents of the chat (docs/plan/69-pages.md, Ст19); absent — not settled here. */
   docs?: Pick<DocSections, 'settle'>
+  /** What the turn asked of the pages besides versions (docs/plan/73-pages-sites.md, Дер23). */
+  pageChanges?: Pick<PageChanges, 'apply'>
   /** WORKSPACE_TURN_LIMIT (plan 70, ВР13); DEFAULT_WORKSPACE_TURN_LIMIT when absent. */
   workspaceTurnLimit?: number
   /** The places for turns of the platform (plan 70, ВР17); absent — no bound but the pool's. */
@@ -344,6 +347,10 @@ export class PassRunner {
         turn: ending.turn,
         outbox: outbox ?? null,
       })
+    // Then the changes the turn asked of its pages, after their versions: a page renamed or moved
+    // in the turn keeps the version the turn gave it (Дер23).
+    if (ending.kind === 'completed' && answer === 'moved' && refusesText)
+      await this.deps.pageChanges?.apply(job.taskId, ending.turn, refusesText)
     if (ending.kind === 'busy') {
       // Another end of the task came first (a cancel, which wakes nobody): this one ended it.
       if (answer !== 'moved') return 'ended'

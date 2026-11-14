@@ -5,6 +5,7 @@ import {
   documentLinkOf,
   documentSlug,
 } from '@repo/domain/tasks/chat-documents'
+import { pagePathSchema } from '@repo/domain/pages/path'
 import type { Element, ElementContent, Properties, Root, RootContent } from 'hast'
 
 // The rules of a text document of a chat (docs/plan/67-agent-documents.md, Д6): one rehype plugin
@@ -25,6 +26,12 @@ export interface DocumentRules {
    * document shown alone, apart from its chat (plan 69).
    */
   documentLinks: boolean
+  /**
+   * Whether a link from the root of its site — `/uslugi/remont`, a canonical page path — stays a
+   * link in the same window (docs/plan/73-pages-sites.md, Дер20): a page of a site of pages.
+   * The cabinet's tab has no site, and the link stays its words there.
+   */
+  treeLinks?: boolean
 }
 
 /** The elements GitHub-flavoured Markdown makes; any other one is left as its children. */
@@ -141,11 +148,16 @@ function link(node: Element, rules: DocumentRules): Element {
             node.children,
           )
         : words(node.children)
-    case 'none':
+    case 'none': {
+      // A page of a site links to the pages of its site by their paths, in the same window.
+      const path = href.split('#')[0] ?? ''
+      if (rules.treeLinks && pagePathSchema.safeParse(path).success)
+        return element('a', { href: href.trim() }, node.children)
       // Alone, apart from its chat, a document has no others to miss: the link is its words.
       return rules.documentLinks && namesDocument(href)
         ? element('span', { dataMissingDocument: '', title: MISSING_DOCUMENT }, node.children)
         : words(node.children)
+    }
   }
 }
 

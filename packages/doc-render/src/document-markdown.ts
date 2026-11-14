@@ -17,6 +17,8 @@ export interface DocumentMarkdownProps extends Omit<DocumentRules, 'documentLink
    * words (a document shown alone, apart from its chat).
    */
   documentLinks?: boolean
+  /** Links from the root of a site of pages stay links (Дер20); off in the cabinet's tab. */
+  treeLinks?: boolean
   /** A link to another document of the chat was followed: opened in the tab. */
   onDocument?: (name: string, anchor: string | null) => void
   /** A link to a heading of this document: scrolled to it in the tab, not by the page's address. */
@@ -31,6 +33,7 @@ export function DocumentMarkdown({
   documents,
   imageSrc,
   documentLinks = true,
+  treeLinks = false,
   onDocument,
   onAnchor,
 }: DocumentMarkdownProps): ReactElement {
@@ -71,7 +74,7 @@ export function DocumentMarkdown({
   }
   return createElement(Markdown, {
     remarkPlugins: [remarkGfm],
-    rehypePlugins: [[rehypeDocumentRules, { documents, imageSrc, documentLinks }]],
+    rehypePlugins: [[rehypeDocumentRules, { documents, imageSrc, documentLinks, treeLinks }]],
     // The rules read every address themselves: nothing is rewritten before them.
     urlTransform: (url: string) => url,
     components,

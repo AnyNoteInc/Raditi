@@ -182,6 +182,9 @@ test('.dockerignore leaves out exactly the stands, never an operator command of 
       // The pool and the windows of the workspaces (docs/plan/71-usage-limits.md, §4.4).
       'llm-plan-rates.mjs',
       'llm-usage.mjs',
+      // The support's take-down and return of a site of pages (docs/plan/73-pages-sites.md, Дер18).
+      'pages-return.mjs',
+      'pages-take-down.mjs',
       'releases-resolve.mjs',
     ],
   }

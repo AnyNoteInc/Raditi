@@ -27,6 +27,7 @@ import {
   feedFailureOpenText,
   feedFileLeftText,
   feedDocLeftText,
+  feedPageChangeText,
   feedPageLeftText,
   feedFilesChangedText,
   feedLiveText,
@@ -96,7 +97,7 @@ import {
 import { FeedDocuments } from './feed-document'
 import { DocRevisions, docRevisionsOf, FeedDoc } from './feed-doc'
 import { FeedFile } from './feed-file'
-import { FeedPage } from './feed-page'
+import { FeedPage, FeedPageChange, FeedPageWarnings } from './feed-page'
 import { FeedScreenshot } from './feed-screenshot'
 import type { FeedHeadState } from './feed-state'
 
@@ -1090,10 +1091,18 @@ function RowView({
     // A page the agent published (docs/plan/69-pages.md, Ст23): its card.
     case 'feed.page':
       return (
-        <FeedPage pageId={row.pageId} title={row.title} version={row.version} kind={row.kind} />
+        <>
+          <FeedPage pageId={row.pageId} title={row.title} version={row.version} kind={row.kind} />
+          {row.warnings ? <FeedPageWarnings warnings={row.warnings} /> : null}
+        </>
       )
     case 'feed.page_left':
       return <Note text={feedPageLeftText(row)} />
+    // The agent changed a page of a site (docs/plan/73-pages-sites.md, Дер27).
+    case 'feed.page_change':
+      return (
+        <FeedPageChange pageId={row.pageId} text={feedPageChangeText(row)} change={row.change} />
+      )
     // A document the agent writes (docs/plan/69-pages.md, Ст22): its live card; a change of it is a
     // signal the card keeps up with, nothing to show by itself.
     case 'feed.doc':

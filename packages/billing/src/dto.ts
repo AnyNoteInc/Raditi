@@ -32,6 +32,13 @@ export const planSchema = z.object({
   creditsPer5h: positiveCount.nullable(),
   creditsPerWeek: positiveCount.nullable(),
   maxSites: positiveCount,
+  /**
+   * Sites of pages the tariff gives (docs/plan/73-pages-sites.md, Дер36, Дер37); null — none of
+   * its own. Shown beside the credits.
+   */
+  pageSites: z.number().int().min(0).nullable().optional(),
+  /** The own name of a site of pages, <name>.pages.raditi.ru (Дер32); none — no. */
+  pageCustomNames: z.boolean().optional(),
 })
 export type PlanDto = z.infer<typeof planSchema>
 

@@ -255,6 +255,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
             creditsPer5h: null,
             creditsPerWeek: null,
             maxSites: 3,
+            pageSites: null,
+            pageCustomNames: false,
           },
           period: {
             start: new Date('2026-09-18T09:00:00Z'),
@@ -508,6 +510,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL read models', () => {
             creditsPer5h: null,
             creditsPerWeek: null,
             maxSites: 1,
+            pageSites: null,
+            pageCustomNames: false,
           })
           expect(pack).toEqual({
             id: expect.any(String),

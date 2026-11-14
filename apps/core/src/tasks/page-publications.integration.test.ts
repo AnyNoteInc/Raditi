@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { createPrismaClient, reservePagePublication, servedPage, type PrismaClient } from '@repo/db'
 import { readingPage } from '@repo/doc-render'
 import { packOutbox } from '@repo/snapshots'
@@ -6,6 +7,59 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { ChatFiles } from './chat-files.ts'
 import { PagePublications } from './page-publications.ts'
 import { PAGE_SWEEP_AFTER_MS, TaskSweep } from './task-sweep.ts'
+
+/**
+ * A tariff of the test with as many sites as a test makes (docs/plan/73-pages-sites.md, Дер36):
+ * without a paid tariff a workspace has one site. Returns what to remove at the end.
+ */
+async function onTariff(db: PrismaClient, workspaceId: string) {
+  const plan = await db.plan.create({
+    data: {
+      slug: `sites-${randomUUID()}`,
+      name: 'Тест',
+      kind: 'quota',
+      price: '0.00',
+      creditsPerMonth: 1,
+      maxSites: 1,
+      pageSites: 1000,
+      isActive: false,
+    },
+  })
+  const now = new Date()
+  await db.subscription.create({
+    data: {
+      workspaceId,
+      planId: plan.id,
+      currentPeriodStart: now,
+      currentPeriodEnd: new Date(now.getTime() + 30 * 86_400_000),
+      periodAnchor: now,
+    },
+  })
+  return async () => {
+    await db.pageTree.deleteMany({ where: { workspaceId } })
+    await db.subscription.deleteMany({ where: { workspaceId } })
+    await db.plan.delete({ where: { id: plan.id } })
+  }
+}
+
+/**
+ * The page at a path as these tests read it before sites (docs/plan/73-pages-sites.md, Дер11):
+ * the take-down and the trash of the site are the home page's, the password the site's.
+ */
+async function servedFlat(...args: Parameters<typeof servedPage>) {
+  const site = await servedPage(...args)
+  if (site === null) return null
+  return {
+    id: site.page?.id ?? site.treeId,
+    treeId: site.treeId,
+    state: site.gone === 'taken_down' ? ('taken_down' as const) : (site.page?.state ?? 'pending'),
+    deleted: site.gone === 'deleted' || (site.page?.deleted ?? false),
+    kind: site.page?.kind,
+    passwordHash: site.passwordHash,
+    passwordEpoch: site.passwordEpoch,
+    content: site.page?.content ?? null,
+  }
+}
 
 // The pages of a turn on PostgreSQL (docs/plan/69-pages.md, Ст6, Ст8, Ст23): the file a reservation
 // names becomes the version of its page, not a file of the chat; a missing file, a refused page and a
@@ -21,6 +75,7 @@ const enabled = Boolean(databaseUrl && process.env.RADITI_GATEWAY_DB_TESTS === '
 describe.skipIf(!enabled)('the pages of a turn with PostgreSQL', () => {
   let db: PrismaClient
   let workspaceId: string
+  let releaseTariff: (() => Promise<void>) | undefined
   const put = vi.fn(async () => undefined)
 
   beforeAll(async () => {
@@ -28,12 +83,14 @@ describe.skipIf(!enabled)('the pages of a turn with PostgreSQL', () => {
     workspaceId = (
       await db.workspace.create({ data: { name: 'Synthetic pages', dataClass: 'synthetic' } })
     ).id
+    releaseTariff = await onTariff(db, workspaceId)
   })
   afterAll(async () => {
     if (!db) return
     await db.page.deleteMany({ where: { workspaceId } })
     await db.taskEvent.deleteMany({ where: { task: { workspaceId } } })
     await db.task.deleteMany({ where: { workspaceId } })
+    await releaseTariff?.()
     await db.workspace.delete({ where: { id: workspaceId } })
     await db.$disconnect()
   })
@@ -81,7 +138,7 @@ describe.skipIf(!enabled)('the pages of a turn with PostgreSQL', () => {
     })
     expect(written).toBe(1)
     expect(put).toHaveBeenCalledTimes(1)
-    const served = await servedPage(db, page.slug)
+    const served = await servedFlat(db, page.slug)
     expect(served).toMatchObject({ state: 'live', content: { version: 1 } })
     expect(Buffer.from(served!.content!.bytes).toString()).toBe('<!doctype html><p>Цены</p>')
     expect((await rows(task.id)).map((row) => row.type)).toEqual(['feed.page', 'feed.file'])
@@ -103,7 +160,7 @@ describe.skipIf(!enabled)('the pages of a turn with PostgreSQL', () => {
       ]),
     })
     expect(await rows(task.id)).toHaveLength(2)
-    expect((await servedPage(db, page.slug))!.content!.version).toBe(1)
+    expect((await servedFlat(db, page.slug))!.content!.version).toBe(1)
 
     // The next turn: the next version at the same address.
     await reserve(task.id, 'прайс.html', 2, page.pageId)
@@ -112,7 +169,7 @@ describe.skipIf(!enabled)('the pages of a turn with PostgreSQL', () => {
       turn: 2,
       outbox: await packOutbox([{ name: 'прайс.html', bytes: '<p>v2' }]),
     })
-    expect((await servedPage(db, page.slug))!.content!.version).toBe(2)
+    expect((await servedFlat(db, page.slug))!.content!.version).toBe(2)
   })
 
   it('tells the client of a page whose file never came, also when the turn left no files', async () => {
@@ -130,7 +187,7 @@ describe.skipIf(!enabled)('the pages of a turn with PostgreSQL', () => {
       { v: 1, pageId: lost.pageId, reason: 'missing' },
       { v: 1, pageId: none.pageId, reason: 'missing' },
     ])
-    expect((await servedPage(db, lost.slug))?.state).toBe('pending')
+    expect((await servedFlat(db, lost.slug))?.state).toBe('pending')
   })
 
   it('refuses a page that asks for a password for another address, without saying why', async () => {
@@ -149,7 +206,7 @@ describe.skipIf(!enabled)('the pages of a turn with PostgreSQL', () => {
     expect((await rows(task.id)).map((row) => row.payload)).toEqual([
       { v: 1, pageId: page.pageId, reason: 'refused' },
     ])
-    expect((await servedPage(db, page.slug))?.state).toBe('pending')
+    expect((await servedFlat(db, page.slug))?.state).toBe('pending')
   })
 
   it('tells of every page of a turn whose outbox was refused whole', async () => {
@@ -181,7 +238,7 @@ describe.skipIf(!enabled)('the pages of a turn with PostgreSQL', () => {
     })
     expect((await rows(task.id)).map((row) => row.type)).toEqual(['feed.page'])
     expect((await rows(task.id))[0]!.payload).toMatchObject({ version: 1, kind: 'markdown' })
-    const served = await servedPage(db, page.slug)
+    const served = await servedFlat(db, page.slug)
     expect(served).toMatchObject({ state: 'live', content: { version: 1 } })
     expect(Buffer.from(served!.content!.bytes).toString()).toBe(
       await readingPage({ title: 'Отчёт', markdown }),

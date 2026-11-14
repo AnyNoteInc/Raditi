@@ -182,6 +182,7 @@ model Workspace {
   browserSessions BrowserSession[]
   webSearchCalls  WebSearchCall[]
   pages           Page[]
+  pageTrees       PageTree[]
   chatDocuments   ChatDocument[]
   usageWindows    WorkspaceUsageWindow[]
 
@@ -608,6 +609,8 @@ model Task {
   browserSessions    BrowserSession[]
   browserCheckpoints BrowserCheckpoint[]
   pages              Page[]
+  pageTrees          PageTree[]
+  pageFiles          PageFile[]
   chatDocuments      ChatDocument[]
 
   @@unique([siteId, alias])
@@ -1392,6 +1395,11 @@ model Plan {
   creditsPerWeek  Int?     @map("credits_per_week")
   /// NULL for packs: they add credits, not sites.
   maxSites        Int?     @map("max_sites")
+  /// Sites of pages a workspace on this tariff may have (docs/plan/73-pages-sites.md, Дер36);
+  /// NULL for packs and pay-per-action — without a tariff `sitesWithoutTariff` of @repo/domain.
+  pageSites       Int?     @map("page_sites")
+  /// The own name of a site, <name>.pages.raditi.ru, on this tariff (Дер32).
+  pageCustomNames Boolean  @default(false) @map("page_custom_names")
   isActive        Boolean  @default(true) @map("is_active")
   sortOrder       Int      @default(0) @map("sort_order")
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -2736,15 +2744,104 @@ model WebSearchCall {
 /// A published page of a workspace (docs/plan/69-pages.md): one address `<slug>.<PAGES_BASE_DOMAIN>`,
 /// whatever its version (Ст16); never deleted by the platform (Ст14). `pending` — reserved by the
 /// agent, no version yet; `live` — served; `taken_down` — 410 until the client puts it back.
+/// A site of pages (docs/plan/73-pages-sites.md, Дер11): a host — its slug, its password and the
+/// take-down of the host. In the trash when its home page is; its row stays after a purge as the
+/// tombstone of its slug (410). Called a tree in code: `site` is the CMS site of the client.
+model PageTree {
+  id            String    @id @default(uuid(7)) @db.Uuid
+  workspaceId   String    @map("workspace_id") @db.Uuid
+  slug          String    @unique @db.Char(26)
+  /// Its own name, <name>.pages.raditi.ru, on «Бизнес» and above (Дер32); NULL — the slug alone.
+  name          String?   @unique @db.VarChar(25)
+  /// scrypt of the password the client set (Ст13, Дер17): one for the whole site.
+  passwordHash  String?   @map("password_hash") @db.VarChar(255)
+  passwordEpoch Int       @default(0) @map("password_epoch")
+  takenDownAt   DateTime? @map("taken_down_at") @db.Timestamptz(6)
+  /// client or operator: 410 on every path of the site.
+  takenDownBy   String?   @map("taken_down_by") @db.VarChar(16)
+  /// The chat it was made in: history, no key (Дер8).
+  createdTaskId String?   @map("created_task_id") @db.Uuid
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  workspace   Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdTask Task?          @relation(fields: [createdTaskId], references: [id], onDelete: SetNull)
+  pages       Page[]
+  redirects   PageRedirect[]
+  names       PageTreeName[]
+  files       PageFile[]
+
+  @@index([workspaceId, createdAt])
+  @@map("page_trees")
+}
+
+/// A shared file of a site at /_files/… of its host (Дер34): what its pages load.
+model PageFile {
+  treeId      String   @map("tree_id") @db.Uuid
+  path        String   @db.VarChar(300)
+  contentType String   @map("content_type") @db.VarChar(64)
+  bytes       Bytes
+  sha256      String   @db.Char(64)
+  /// The chat whose turn put it; none — the client's.
+  taskId      String?  @map("task_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tree PageTree @relation(fields: [treeId], references: [id], onDelete: Cascade)
+  task Task?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@id([treeId, path])
+  @@map("page_files")
+}
+
+/// Every name a site was ever given (Дер32): it leads to that site for ever, no other gets it.
+model PageTreeName {
+  name      String   @id @db.VarChar(25)
+  /// The site the name is of; null — the site is gone, the name stays taken for ever (Дер32).
+  treeId    String?  @map("tree_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tree PageTree? @relation(fields: [treeId], references: [id], onDelete: SetNull)
+
+  @@index([treeId])
+  @@map("page_tree_names")
+}
+
+/// A former path of a page that sends on to where it is now (Дер19).
+model PageRedirect {
+  treeId    String   @map("tree_id") @db.Uuid
+  fromPath  String   @map("from_path") @db.VarChar(512)
+  pageId    String   @map("page_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tree PageTree @relation(fields: [treeId], references: [id], onDelete: Cascade)
+  page Page     @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@id([treeId, fromPath])
+  @@index([pageId])
+  @@map("page_redirects")
+}
+
 model Page {
   id             String    @id @default(uuid(7)) @db.Uuid
   workspaceId    String    @map("workspace_id") @db.Uuid
+  /// The site it is a node of (Дер12).
+  treeId         String    @map("tree_id") @db.Uuid
+  /// NULL — the home page of its site.
+  parentId       String?   @map("parent_id") @db.Uuid
+  /// Its label in the path; NULL at the home page.
+  segment        String?   @db.VarChar(63)
+  /// The canonical path: `/` at the home page, `/uslugi/remont` below (Дер15).
+  path           String    @default("/") @db.VarChar(512)
+  /// Its order among the pages of its parent.
+  position       Int       @default(0)
   /// The chat it was made in; a page outlives its chat.
   taskId         String?   @map("task_id") @db.Uuid
   turnNo         Int?      @map("turn_no")
   /// pageKinds of @repo/domain: html, markdown, doc.
   kind           String    @db.VarChar(16)
-  slug           String    @unique @db.Char(26)
+  /// The host of a page before sites (plan 69); read by nothing since 73.6, dropped in 73.12.
+  slug           String?   @unique @db.Char(26)
   title          String    @db.VarChar(200)
   /// pageStates: pending, live, taken_down.
   state          String    @default("pending") @db.VarChar(16)
@@ -2761,18 +2858,32 @@ model Page {
   documentId     String?   @unique @map("document_id") @db.Uuid
   /// The file of the chat it was published from (Ст6, Ст32).
   sourceFileName String?   @map("source_file_name") @db.VarChar(200)
+  /// In the trash since (docs/plan/73-pages-sites.md, Дер2): 410 to a viewer until returned or purged.
+  deletedAt      DateTime? @map("deleted_at") @db.Timestamptz(6)
+  /// client or agent.
+  deletedBy      String?   @map("deleted_by") @db.VarChar(16)
+  /// When the sweep of core purges it; set with deleted_at.
+  purgeAfter     DateTime? @map("purge_after") @db.Timestamptz(6)
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   workspace    Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tree         PageTree          @relation(fields: [treeId], references: [id], onDelete: Cascade)
+  parent       Page?             @relation("PageChildren", fields: [parentId], references: [id], onDelete: NoAction)
+  children     Page[]            @relation("PageChildren")
+  redirects    PageRedirect[]
   task         Task?             @relation(fields: [taskId], references: [id], onDelete: SetNull)
   document     ChatDocument?     @relation(fields: [documentId], references: [id], onDelete: SetNull)
   versions     PageVersion[]
   content      PageContent?
   reservations PageReservation[]
 
+  @@unique([treeId, path], map: "pages_tree_path_key", where: raw("deleted_at IS NULL"))
+  @@unique([treeId], map: "pages_tree_home_key", where: raw("(parent_id IS NULL) AND (deleted_at IS NULL)"))
   @@index([workspaceId, createdAt])
   @@index([taskId])
+  @@index([purgeAfter], map: "pages_purge_idx", where: raw("purge_after IS NOT NULL"))
+  @@index([treeId, parentId, position])
   @@map("pages")
 }
 
@@ -2803,6 +2914,8 @@ model PageContent {
   pageId    String   @id @map("page_id") @db.Uuid
   versionNo Int      @map("version_no")
   bytes     Bytes
+  /// The Markdown a page of a `.md` was drawn from (Дер26); NULL for HTML and before 73.6.
+  source    Bytes?
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   page    Page        @relation(fields: [pageId], references: [id], onDelete: Cascade)
@@ -2823,6 +2936,10 @@ model PageReservation {
   fileName   String?   @map("file_name") @db.VarChar(200)
   documentId String?   @map("document_id") @db.Uuid
   title      String    @db.VarChar(200)
+  /// version (a file or a document), edit, update, delete or restore (docs/plan/73-pages-sites.md, Дер23).
+  kind       String    @default("version") @db.VarChar(16)
+  /// What a change asks: the edits, the new title or address, the pages to delete.
+  payload    Json?
   /// NULL while it waits for the end of the turn; then done, missing, refused or failed.
   outcome    String?   @db.VarChar(16)
   versionNo  Int?      @map("version_no")

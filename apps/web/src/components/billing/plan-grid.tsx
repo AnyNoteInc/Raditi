@@ -18,6 +18,8 @@ import {
   planAverageTasks,
   planDailyLimit,
   planWindowLimits,
+  planCustomNames,
+  planPageSites,
   planSites,
   planTooSmall,
   scheduledPlanNote,
@@ -214,6 +216,10 @@ export function PlanGrid({
               {windowLimits ? <li>{nbsp(windowLimits)}</li> : null}
               {smallEdit ? <li>{nbsp(smallEdit)}</li> : null}
               <li>{nbsp(planSites(plan.maxSites))}</li>
+              {planPageSites(plan.pageSites ?? null) ? (
+                <li>{nbsp(planPageSites(plan.pageSites ?? null)!)}</li>
+              ) : null}
+              {plan.pageCustomNames ? <li>{nbsp(planCustomNames)}</li> : null}
             </Box>
             {note ? (
               <Typography variant="body2" color="textSecondary" sx={{ mt: 'auto', pt: 3 }}>

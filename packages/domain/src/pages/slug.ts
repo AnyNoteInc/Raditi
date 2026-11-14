@@ -44,9 +44,97 @@ export const pagesBaseDomainSchema = z
     'must be a lower-case domain name',
   )
 
-/** The host of a page. */
-export function pageHostOf(slug: string, baseDomain: string): string {
-  return `${pageSlugSchema.parse(slug)}.${pagesBaseDomainSchema.parse(baseDomain)}`
+/**
+ * The words no site may take as its own name (docs/plan/73-pages-sites.md, Дер32): the names of
+ * the platform and of what a reader takes for one. Checked whatever the tariff.
+ */
+export const RESERVED_PAGE_NAMES: ReadonlySet<string> = new Set([
+  'www',
+  'api',
+  'app',
+  'admin',
+  'administrator',
+  'root',
+  'mail',
+  'smtp',
+  'imap',
+  'pop',
+  'ftp',
+  'ssh',
+  'vpn',
+  'ns1',
+  'ns2',
+  'dns',
+  'cdn',
+  'static',
+  'assets',
+  'files',
+  'media',
+  'img',
+  'pages',
+  'page',
+  'raditi',
+  'radit',
+  'help',
+  'support',
+  'docs',
+  'status',
+  'login',
+  'logout',
+  'signin',
+  'signup',
+  'auth',
+  'oauth',
+  'account',
+  'accounts',
+  'billing',
+  'pay',
+  'payment',
+  'payments',
+  'checkout',
+  'cabinet',
+  'dashboard',
+  'console',
+  'preview',
+  'previews',
+  'test',
+  'dev',
+  'stage',
+  'staging',
+  'prod',
+  'production',
+  'security',
+  'abuse',
+  'postmaster',
+  'webmaster',
+  'hostmaster',
+  'noreply',
+  'no-reply',
+  'yandex',
+  'google',
+  'sberbank',
+  'gosuslugi',
+])
+
+/**
+ * The own name of a site (Дер32; «Бизнес» and above): 3 to 25 lower-case Latin letters, digits and
+ * hyphens, a letter or a digit at each end and no two hyphens together — never 26 characters, so
+ * a name and a random slug are told apart by their length alone. Not a reserved word.
+ */
+export const pageNameSchema = z
+  .string()
+  .regex(
+    /^[a-z0-9](?:[a-z0-9]|-(?!-)){1,23}[a-z0-9]$/,
+    'a name is 3 to 25 letters, digits and hyphens',
+  )
+  .refine((name) => !RESERVED_PAGE_NAMES.has(name), 'this name is not given to a site')
+
+/** The label of a page host: a random slug, or the own name of its site. */
+export const pageHostLabelSchema = z.union([pageSlugSchema, pageNameSchema])
+
+/** The host of a page: its site's slug or name under the base domain. */
+export function pageHostOf(label: string, baseDomain: string): string {
+  return `${pageHostLabelSchema.parse(label)}.${pagesBaseDomainSchema.parse(baseDomain)}`
 }
 
 /** The address of a page as the client and the viewer get it. */
@@ -59,7 +147,7 @@ export function pageUrlOf(
 }
 
 /**
- * The slug a `Host` header names, or null: exactly one slug label right under the base domain,
+ * The label a `Host` header names — a slug or the own name of a site —, or null: exactly one label right under the base domain,
  * in any letter case. Another level, a dot at the end, an address, user info or a port — null,
  * except `port` when it is the public port the server is configured with: dev and the stands
  * pass it, production never does (Ст10). The base domain is the configured one and must pass
@@ -79,5 +167,6 @@ export function slugOfPageHost(
   const suffix = `.${pagesBaseDomainSchema.parse(options.baseDomain)}`
   if (!name.endsWith(suffix)) return null
   const label = name.slice(0, -suffix.length)
-  return pageSlugSchema.safeParse(label).success ? label : null
+  // The label is the site's random slug or its own name (docs/plan/73-pages-sites.md, Дер33).
+  return pageHostLabelSchema.safeParse(label).success ? label : null
 }

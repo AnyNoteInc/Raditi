@@ -45,13 +45,14 @@ describe('the headers of a page (docs/plan/67-agent-documents.md, Д3; docs/plan
   it('are the policy of a published page but for its framing: one CSP for both plans', () => {
     const policy = pageHeaders(APP, 7)['Content-Security-Policy']!
     expect(policy).toBe(
-      PAGE_CSP.replace("frame-ancestors 'none'", 'frame-ancestors https://raditi.ru').replaceAll(
-        ' https:;',
-        ';',
-      ),
+      PAGE_CSP.replace("frame-ancestors 'none'", 'frame-ancestors https://raditi.ru')
+        .replaceAll(' https:;', ';')
+        .replaceAll("'self' ", ''),
     )
-    // A page of a chat loads nothing by https: (Д3), unlike a published one (Ст9).
+    // A page of a chat loads nothing by https: (Д3), unlike a published one (Ст9), nor from the
+    // host of the cabinet: the shared files are a site's (docs/plan/73-pages-sites.md, Дер34).
     expect(policy).not.toContain('https:;')
+    expect(policy).not.toContain("'self'")
     // The frame of the cabinet carries the very sandbox of the policy.
     expect(policy.split('; ')[0]).toBe(`sandbox ${PAGE_SANDBOX}`)
     for (const forbidden of ['allow-same-origin', 'allow-forms', 'allow-top-navigation'])

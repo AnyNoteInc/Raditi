@@ -58,8 +58,8 @@ import { clearTimeout, setTimeout } from 'node:timers'
 // draft ESNI, which names nothing, is always refused.
 //
 // The agent's published pages (PAGE_DOMAIN, docs/plan/69-pages.md, Ст26) live on the platform's own
-// machine, whose address REFUSED_SUBNETS closes. A CONNECT to a page host — one label of 26 base32
-// letters right under PAGE_DOMAIN, port 443 — may reach an address of PAGE_ADDRESSES although
+// machine, whose address REFUSED_SUBNETS closes. A CONNECT to a page host — one label right under
+// PAGE_DOMAIN, a slug of 26 base32 letters or a site's own name, port 443 — may reach an address of PAGE_ADDRESSES although
 // REFUSED_SUBNETS holds it: every address it resolves to is public unicast, of none of this
 // container's own subnets, and either outside REFUSED_SUBNETS or listed; TLS named so. Nothing
 // else of REFUSED_SUBNETS opens to it, and nothing at all to any other name. The edge there
@@ -292,7 +292,9 @@ export function parseLocalRoutes(json) {
 }
 
 const PAGE_PORT = 443
-const PAGE_LABEL = /^[a-z2-7]{26}$/
+// A random slug of 26 base32 letters, or the own name of a site of 3 to 25 characters
+// (docs/plan/73-pages-sites.md, Дер33): the rule of browserPageHost in @repo/domain.
+const PAGE_LABEL = /^(?:[a-z2-7]{26}|[a-z0-9](?:[a-z0-9]|-(?!-)){1,23}[a-z0-9])$/
 
 /** PAGE_DOMAIN: a lower-case DNS name of two labels or more; unset or empty — no page passes. */
 export function parsePageDomain(text) {

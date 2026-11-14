@@ -757,3 +757,18 @@ describe('the word of a chat (docs/plan/61-chats-first.md, К26)', () => {
     expect(texts.filter((text) => /диалог/i.test(text))).toEqual([])
   })
 })
+
+describe('feedPageLeftText (docs/plan/73-pages-sites.md, Дер23, Дер34)', () => {
+  it('tells a shared file and a change as what they are, not as a page that did not come', () => {
+    expect(labels.feedPageLeftText({ reason: 'missing', of: 'file' })).toMatch(/^Общий файл сайта/)
+    expect(labels.feedPageLeftText({ reason: 'refused', of: 'change' })).toMatch(
+      /не смог изменить страницу/,
+    )
+    expect(labels.feedPageLeftText({ reason: 'changed', of: 'change' })).toMatch(
+      /^Страница изменилась/,
+    )
+    expect(labels.feedPageLeftText({ reason: 'refused' })).toMatch(
+      /^Страницу не удалось опубликовать/,
+    )
+  })
+})

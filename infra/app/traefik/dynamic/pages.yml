@@ -1,7 +1,8 @@
 # Published pages (docs/plan/69-pages.md, Ст3, Ст4). Only where Traefik is given PAGES_BASE_DOMAIN
 # (the single server, infra/server/docker-compose.server.yml); without it this file holds no route
-# and orders no certificate. Exactly the hosts of pages — one label of 26 base32 letters under the
-# base — go to the pages listener of the role `preview` (8092); it finds the page by that Host and
+# and orders no certificate. Exactly the hosts of pages — one label under the base: 26 base32
+# letters, or the own name of a site of 3 to 25 letters, digits and hyphens (docs/plan/73-pages-sites.md,
+# Дер33) — go to the pages listener of the role `preview` (8092); it finds the page by that Host and
 # by nothing a client sends. The root of the base (the token links of plan 67) is web's and is
 # not routed here. The wildcard certificate is the resolver `pages` (DNS-01): HTTP-01 cannot issue
 # a wildcard. The guard sits in comments, so the file stays YAML before Traefik renders it.
@@ -10,7 +11,7 @@ http:
   routers:
     pages:
       entryPoints: [websecure]
-      rule: 'HostRegexp(`^[a-z2-7]{26}\.{{ env "PAGES_BASE_DOMAIN" | replace "." "\\." }}$`)'
+      rule: 'HostRegexp(`^[a-z0-9-]{3,26}\.{{ env "PAGES_BASE_DOMAIN" | replace "." "\\." }}$`)'
       service: pages
       tls:
         certResolver: pages

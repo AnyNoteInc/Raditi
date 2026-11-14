@@ -330,6 +330,18 @@ export const feedFixtures: readonly FeedFixture[] = Object.freeze([
     type: 'feed.page_left',
     payload: { v: 1, pageId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7db1', reason: 'missing' },
   },
+  // docs/plan/73-pages-sites.md, Дер27: a page the agent moved to the trash with its branch.
+  {
+    name: 'page_change v1 trashed',
+    type: 'feed.page_change',
+    payload: {
+      v: 1,
+      pageId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7db1',
+      title: 'Цены',
+      change: 'trashed',
+      pages: 4,
+    },
+  },
   // docs/plan/69-pages.md, Ст19, Ст22: a document, a change of it, sections sent back.
   {
     name: 'doc v1',

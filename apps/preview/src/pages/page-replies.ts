@@ -37,10 +37,18 @@ const FORM_NOTE: Record<PasswordFormState, string> = {
     '<p class="error" role="alert">Пароль слишком длинный. Проверьте, что вставили только его.</p>',
 }
 
-export function passwordFormPage(state: PasswordFormState, abuseEmail: string | null): string {
+/**
+ * The password form of a site, posted to the canonical path it was asked at (`path` passed the
+ * schema of a page path: letters, digits, hyphens and slashes only) — 303 back there after it.
+ */
+export function passwordFormPage(
+  state: PasswordFormState,
+  path: string,
+  abuseEmail: string | null,
+): string {
   return shell(
     'Страница закрыта паролем',
-    `<h1>Страница закрыта паролем</h1>${FORM_NOTE[state]}<form method="post" action="/"><label for="password">Пароль</label><input id="password" name="password" type="password" autocomplete="current-password" required autofocus><button type="submit">Открыть</button></form>`,
+    `<h1>Страница закрыта паролем</h1>${FORM_NOTE[state]}<form method="post" action="${escape(path)}"><label for="password">Пароль</label><input id="password" name="password" type="password" autocomplete="current-password" required autofocus><button type="submit">Открыть</button></form>`,
     abuseEmail,
   )
 }
@@ -57,6 +65,15 @@ export function takenDownPage(abuseEmail: string | null): string {
   return shell(
     'Страница снята с публикации',
     '<h1>Страница снята с публикации</h1><p>Если она вам нужна, напишите тому, кто прислал ссылку.</p>',
+    abuseEmail,
+  )
+}
+
+/** In the trash of its workspace (docs/plan/73-pages-sites.md, Дер2): 410, like a page taken down. */
+export function deletedPage(abuseEmail: string | null): string {
+  return shell(
+    'Страница удалена',
+    '<h1>Страница удалена</h1><p>Её удалил тот, кто её опубликовал. Если она вам нужна, напишите ему.</p>',
     abuseEmail,
   )
 }

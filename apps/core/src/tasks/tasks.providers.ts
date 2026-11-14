@@ -35,6 +35,7 @@ import { CandidateRebase } from './candidate-rebase.ts'
 import { CandidateRewind } from './candidate-rewind.ts'
 import { ChatFiles } from './chat-files.ts'
 import { DocSections } from './doc-sections.ts'
+import { PageChanges } from './page-changes.ts'
 import { PagePublications } from './page-publications.ts'
 import { LivePasses } from './live-passes.ts'
 import { PassRunner } from './pass-runner.ts'
@@ -149,6 +150,8 @@ export const taskProviders: Provider[] = [
           logger: new Logger('DocSections'),
           pages: new PagePublications({ db: prisma, logger: new Logger('Pages') }),
         }),
+        // What a turn asked of its pages besides versions (docs/plan/73-pages-sites.md, Дер23).
+        pageChanges: new PageChanges({ db: prisma, logger: new Logger('PageChanges') }),
         // Docs/plan/70-turn-without-time-limit.md, ВР13 and ВР17.
         workspaceTurnLimit: config.workspaceTurnLimit,
         capacity: new TurnCapacity(executor),

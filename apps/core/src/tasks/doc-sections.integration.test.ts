@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import {
   createChatDocument,
   createPrismaClient,
@@ -15,6 +16,59 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { DocSections } from './doc-sections.ts'
 import { PagePublications } from './page-publications.ts'
 
+/**
+ * A tariff of the test with as many sites as a test makes (docs/plan/73-pages-sites.md, Дер36):
+ * without a paid tariff a workspace has one site. Returns what to remove at the end.
+ */
+async function onTariff(db: PrismaClient, workspaceId: string) {
+  const plan = await db.plan.create({
+    data: {
+      slug: `sites-${randomUUID()}`,
+      name: 'Тест',
+      kind: 'quota',
+      price: '0.00',
+      creditsPerMonth: 1,
+      maxSites: 1,
+      pageSites: 1000,
+      isActive: false,
+    },
+  })
+  const now = new Date()
+  await db.subscription.create({
+    data: {
+      workspaceId,
+      planId: plan.id,
+      currentPeriodStart: now,
+      currentPeriodEnd: new Date(now.getTime() + 30 * 86_400_000),
+      periodAnchor: now,
+    },
+  })
+  return async () => {
+    await db.pageTree.deleteMany({ where: { workspaceId } })
+    await db.subscription.deleteMany({ where: { workspaceId } })
+    await db.plan.delete({ where: { id: plan.id } })
+  }
+}
+
+/**
+ * The page at a path as these tests read it before sites (docs/plan/73-pages-sites.md, Дер11):
+ * the take-down and the trash of the site are the home page's, the password the site's.
+ */
+async function servedFlat(...args: Parameters<typeof servedPage>) {
+  const site = await servedPage(...args)
+  if (site === null) return null
+  return {
+    id: site.page?.id ?? site.treeId,
+    treeId: site.treeId,
+    state: site.gone === 'taken_down' ? ('taken_down' as const) : (site.page?.state ?? 'pending'),
+    deleted: site.gone === 'deleted' || (site.page?.deleted ?? false),
+    kind: site.page?.kind,
+    passwordHash: site.passwordHash,
+    passwordEpoch: site.passwordEpoch,
+    content: site.page?.content ?? null,
+  }
+}
+
 // The end of a turn for the documents of a chat on PostgreSQL (docs/plan/69-pages.md, Ст19, Ст22):
 // rows of its own, removed at the end.
 
@@ -28,12 +82,14 @@ describe.skipIf(!databaseUrl)(
   () => {
     let db: PrismaClient
     let workspaceId: string
+    let releaseTariff: (() => Promise<void>) | undefined
 
     beforeAll(async () => {
       db = createPrismaClient({ databaseUrl: databaseUrl ?? '', log: [] })
       workspaceId = (
         await db.workspace.create({ data: { name: 'Synthetic docs', dataClass: 'synthetic' } })
       ).id
+      releaseTariff = await onTariff(db, workspaceId)
     })
     afterAll(async () => {
       if (!db) return
@@ -41,6 +97,7 @@ describe.skipIf(!databaseUrl)(
       await db.chatDocument.deleteMany({ where: { workspaceId } })
       await db.taskEvent.deleteMany({ where: { task: { workspaceId } } })
       await db.task.deleteMany({ where: { workspaceId } })
+      await releaseTariff?.()
       await db.workspace.delete({ where: { id: workspaceId } })
       await db.$disconnect()
     })
@@ -155,7 +212,7 @@ describe.skipIf(!databaseUrl)(
         turnNo: 1,
       })
       await sections(pages).settle(task.id, 1, refusesText)
-      expect((await servedPage(db, page.slug))?.content ?? null).toBeNull()
+      expect((await servedFlat(db, page.slug))?.content ?? null).toBeNull()
 
       await writeDocSection(db, {
         ...ids,
@@ -170,7 +227,7 @@ describe.skipIf(!databaseUrl)(
         workspaceId,
         documentId: ids.documentId,
       }))!
-      const served = await servedPage(db, page.slug)
+      const served = await servedFlat(db, page.slug)
       expect(served).toMatchObject({ state: 'live', content: { version: 1 } })
       expect(Buffer.from(served!.content!.bytes).toString()).toBe(
         await readingPage({ title: 'Аудит', markdown }),
@@ -181,7 +238,7 @@ describe.skipIf(!databaseUrl)(
       ])
       // Another end of a turn publishes nothing again.
       await sections(pages).settle(task.id, 3, refusesText)
-      expect((await servedPage(db, page.slug))!.content!.version).toBe(1)
+      expect((await servedFlat(db, page.slug))!.content!.version).toBe(1)
     })
 
     it('tells a publication of a document whose section was sent back, without a version', async () => {
@@ -210,7 +267,7 @@ describe.skipIf(!databaseUrl)(
       })
       await requestDocFinish(db, { ...ids, turnNo: 1 })
       await sections(pages).settle(task.id, 1, refusesText)
-      expect((await servedPage(db, page.slug))?.content ?? null).toBeNull()
+      expect((await servedFlat(db, page.slug))?.content ?? null).toBeNull()
       expect(
         (await rows(task.id))
           .filter((row) => row.type === 'feed.page_left')
