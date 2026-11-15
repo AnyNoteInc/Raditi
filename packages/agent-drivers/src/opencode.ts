@@ -10,6 +10,7 @@ import {
   SANDBOX_OUT,
   SANDBOX_SECRETS_DIR,
   SANDBOX_WORKDIR,
+  skillRelayPath,
 } from '@repo/domain'
 import { z } from 'zod'
 import {
@@ -18,6 +19,7 @@ import {
   envKey,
   llmKey,
   mcpKey,
+  mcpSkillKey,
   runContextSchema,
   stageFiles,
   turnSecrets,
@@ -175,9 +177,37 @@ function permissionOf(context: Pick<RunContext, 'internet' | 'skills'>) {
   }
 }
 
-function skillServer(skill: TurnSkill, proxy: string, direct: readonly string[]) {
+/**
+ * The skills the relay of the role mcp serves (docs/plan/80-mcp-server-credentials.md), in the
+ * order of the turn, each with the pipe of its copy of the MCP token.
+ */
+function relayedKeys(skills: readonly TurnSkill[] | undefined): Map<string, string> {
+  const relayed = (skills ?? []).filter((skill) => skill.kind === 'relayed')
+  return new Map(relayed.map((skill, index) => [skill.name, mcpSkillKey(index)]))
+}
+
+function skillServer(
+  skill: TurnSkill,
+  {
+    proxy,
+    direct,
+    mcpUrl,
+    keys,
+  }: { proxy: string; direct: readonly string[]; mcpUrl: string; keys: Map<string, string> },
+) {
   if (skill.kind === 'remote')
     return { type: 'remote', url: skill.url, enabled: true, oauth: false, timeout: MCP_TIMEOUT_MS }
+  // The relay's path on the gateway of the sandbox, with the turn's MCP token: the header of the
+  // server and where it goes stay on the trusted side.
+  if (skill.kind === 'relayed')
+    return {
+      type: 'remote',
+      url: new URL(skillRelayPath(skill.name), mcpUrl).href,
+      enabled: true,
+      oauth: false,
+      timeout: MCP_TIMEOUT_MS,
+      headers: { Authorization: `Bearer {file:${keys.get(skill.name)}}` },
+    }
   return {
     type: 'local',
     command: [
@@ -291,6 +321,7 @@ function modelSettings(llm: Pick<RunContext['llm'], 'baseUrl' | 'model'>) {
 function configuration(context: RunContext): string {
   const { llm, mcp, egressProxy, internet, skills } = validated(context)
   const direct = directHosts(context)
+  const keys = relayedKeys(skills)
   return JSON.stringify({
     ...modelSettings({ ...llm, baseUrl: relayedBaseUrl(llm.baseUrl) }),
     permission: permissionOf({ internet, skills }),
@@ -305,7 +336,10 @@ function configuration(context: RunContext): string {
       },
       ...(internet && egressProxy
         ? Object.fromEntries(
-            (skills ?? []).map((skill) => [skill.name, skillServer(skill, egressProxy, direct)]),
+            (skills ?? []).map((skill) => [
+              skill.name,
+              skillServer(skill, { proxy: egressProxy, direct, mcpUrl: mcp.url, keys }),
+            ]),
           )
         : {}),
     },
@@ -404,6 +438,7 @@ export function createOpencodeDriver(config: AgentDriverConfig): AgentDriver {
               args: argumentsPath,
               prompt: promptPath,
               secrets: [llmKey, mcpKey],
+              mcpCopies: [...relayedKeys(skills).values()],
               env: cliEnvironment,
               readOnly: [
                 configDirectory,

@@ -7,9 +7,10 @@ import { parseEgressHost } from '../preview/egress-hosts.ts'
 // a turn connects to besides the platform's own, over the open internet of the sandbox. Two come
 // with the platform and are on unless the owner of the site turns one off: Context7 — the current
 // documentation of libraries — and Playwright — a headless browser inside the sandbox for pages
-// of the internet. The owner adds others by the https address of a remote MCP server. A skill
-// keeps nothing secret: no header, no query string, no credentials in its address — a server
-// that wants a key is not taken yet.
+// of the internet. The owner adds others by the https address of a remote MCP server. Its address
+// keeps nothing secret: no query string, no credentials in it. A server that wants a key or a
+// sign-in (docs/plan/80-mcp-server-credentials.md) is reached through the relay of the role mcp,
+// which adds the header from Vault: the turn's CLI knows only the relay's path and its MCP token.
 
 export const agentSkillLimits = Object.freeze({
   /** Skills an owner adds to one site; the platform's own come on top. */
@@ -33,9 +34,86 @@ export const agentSkillNameSchema = z
 export const builtinAgentSkillNames = ['context7', 'playwright'] as const
 export type BuiltinAgentSkillName = (typeof builtinAgentSkillNames)[number]
 
-/** What one skill of a turn is: a remote MCP server, or a server the sandbox image carries. */
+/**
+ * What one skill of a turn is: a remote MCP server the CLI reaches over the open internet, one it
+ * reaches through the relay of the role mcp (a server with authorization, plan 80), or a server
+ * the sandbox image carries.
+ */
 export type TurnSkill =
-  { name: string; kind: 'remote'; url: string } | { name: BuiltinAgentSkillName; kind: 'local' }
+  | { name: string; kind: 'remote'; url: string }
+  | { name: string; kind: 'relayed' }
+  | { name: BuiltinAgentSkillName; kind: 'local' }
+
+/**
+ * How an added server is authorized (plan 80, §3.3): nothing, a header of the owner's whose value
+ * is in Vault, or tokens of an OAuth sign-in in Vault.
+ */
+export const agentSkillAuthKinds = ['none', 'header', 'oauth'] as const
+export type AgentSkillAuthKind = (typeof agentSkillAuthKinds)[number]
+
+/** Whether its authorization works, as the last check or relayed call found it. */
+export const agentSkillAuthStates = ['ok', 'needs_login', 'failed'] as const
+export type AgentSkillAuthState = (typeof agentSkillAuthStates)[number]
+
+/** The path of the relay of one server, under the role mcp's own endpoint (`/mcp`). */
+export const skillRelayPath = (name: string): string => `/mcp/skill/${name}`
+/** A path the relay serves: one name of a skill, nothing after it. */
+export const SKILL_RELAY_PATH = /^\/mcp\/skill\/([a-z](?:[a-z0-9-]{0,30}[a-z0-9])?)$/
+
+export const agentSkillHeaderLimits = Object.freeze({
+  nameChars: 64,
+  /** The least that is masked in what the server answers (plan 80, §3.2, п. 6). */
+  valueMinChars: 8,
+  valueMaxChars: 4096,
+})
+
+/**
+ * Headers the relay sets or the protocol owns: the owner's header is never one of them. The relay
+ * also refuses any name the CLI sends on (`mcp-*`, `last-event-id`).
+ */
+const reservedHeaderNames = new Set([
+  'host',
+  'content-length',
+  'content-type',
+  'transfer-encoding',
+  'connection',
+  'keep-alive',
+  'proxy-authorization',
+  'proxy-connection',
+  'te',
+  'trailer',
+  'upgrade',
+  'cookie',
+  'accept',
+  'accept-encoding',
+  'last-event-id',
+  'origin',
+  'forwarded',
+  'via',
+])
+
+/** The name of the owner's header: an HTTP token, not one of the relay's own. */
+export const agentSkillHeaderNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(agentSkillHeaderLimits.nameChars)
+  .regex(/^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/, 'expected an HTTP header name')
+  .refine((name) => {
+    const lower = name.toLowerCase()
+    return (
+      !reservedHeaderNames.has(lower) &&
+      !lower.startsWith('mcp-') &&
+      !lower.startsWith('x-forwarded-')
+    )
+  }, 'a header the relay owns')
+
+/** Its value: visible ASCII and spaces, one line, long enough to be masked in an answer. */
+export const agentSkillHeaderValueSchema = z
+  .string()
+  .min(agentSkillHeaderLimits.valueMinChars)
+  .max(agentSkillHeaderLimits.valueMaxChars)
+  .regex(/^[\x21-\x7e](?:[\x20-\x7e]*[\x21-\x7e])?$/, 'expected one line of visible characters')
 
 export interface BuiltinAgentSkill {
   name: BuiltinAgentSkillName
@@ -110,6 +188,7 @@ export const turnSkillSchema = z.discriminatedUnion('kind', [
       url: z.string().refine((url) => parseAgentSkillUrl(url) === url, 'a kept skill address'),
     })
     .strict(),
+  z.object({ name: agentSkillNameSchema, kind: z.literal('relayed') }).strict(),
   z.object({ name: z.enum(builtinAgentSkillNames), kind: z.literal('local') }).strict(),
 ]) satisfies z.ZodType<TurnSkill>
 
@@ -128,6 +207,10 @@ export interface SiteAgentSkillRow {
   enabled: boolean
   /** An added skill's address; null for one of the platform's own. */
   url: string | null
+  /** How an added skill is authorized; absent — `none` (a row read without the column). */
+  authKind?: AgentSkillAuthKind
+  /** Whether that works; absent — `ok`. */
+  authState?: AgentSkillAuthState
 }
 
 /**
@@ -137,6 +220,9 @@ export interface SiteAgentSkillRow {
  * A turn that has the platform's browser (`web_*`) gets no local one: the skill's Chromium would
  * run inside the turn's sandbox next to the session's, a second browser of the same chat — its
  * memory and CPU on every turn, and screenshots no client can see.
+ *
+ * An added skill with authorization goes through the relay (`relayed`, plan 80); one whose
+ * authorization does not work now — the owner has to sign in again — is left out.
  */
 export function turnSkillsOf(
   rows: readonly SiteAgentSkillRow[],
@@ -151,7 +237,13 @@ export function turnSkillsOf(
     .filter((row) => !isBuiltinAgentSkill(row.name) && row.enabled && row.url !== null)
     .sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))
   for (const row of added.slice(0, agentSkillLimits.added)) {
-    const skill = turnSkillSchema.safeParse({ name: row.name, kind: 'remote', url: row.url })
+    const authorized = (row.authKind ?? 'none') !== 'none'
+    if (authorized && (row.authState ?? 'ok') !== 'ok') continue
+    const skill = turnSkillSchema.safeParse(
+      authorized
+        ? { name: row.name, kind: 'relayed' }
+        : { name: row.name, kind: 'remote', url: row.url },
+    )
     if (skill.success) skills.push(skill.data)
   }
   return skills
