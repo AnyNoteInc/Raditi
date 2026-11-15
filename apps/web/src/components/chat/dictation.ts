@@ -4,10 +4,16 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 // Dictation into the field of a chat (docs/plan/75-chat-input-output.md, ВВ16–ВВ19). The browser
 // records the microphone itself — no recognition of the browser: Chrome would send the sound to
-// Google (rule 1) — as PCM, 16 kHz, mono, 16 bits, at most 30 seconds, and the cabinet's route
-// gives it to SpeechKit. The words go into the field; the client changes and sends them.
+// Google (rule 1) — as PCM, 16 kHz, mono, 16 bits, and the cabinet's route gives it to SpeechKit.
+// A recording has no limit of its own (owner's request of 15.11.2026, docs/plan/77, Р3): SpeechKit
+// takes 30 seconds at a time, so the recording is cut into pieces of `DICTATION_PIECE_SECONDS`,
+// each recognised while the client goes on speaking, and the words are joined in their order.
+// «Стоп» puts the words into the field; «Отправить» during a recording sends them at once (Р4).
 
+/** The longest piece SpeechKit recognises at a time. */
 export const DICTATION_MAX_SECONDS = 30
+/** Where a recording is cut: a little under the limit of a piece. */
+export const DICTATION_PIECE_SECONDS = 28
 const RATE = 16_000
 
 export const dictationText = Object.freeze({
@@ -17,7 +23,7 @@ export const dictationText = Object.freeze({
   denied: 'Браузер не дал доступ к микрофону. Разрешите его в настройках сайта в браузере.',
   unsupported: 'Этот браузер не умеет записывать звук.',
   failed: 'Не удалось распознать речь. Попробуйте ещё раз.',
-  recording: (seconds: number) => `Идёт запись, ${seconds} с из ${DICTATION_MAX_SECONDS}`,
+  recording: (seconds: number) => `Идёт запись, ${seconds} с`,
 })
 
 /** The worklet that hands the samples of the microphone to the page, as they come. */
@@ -57,7 +63,12 @@ interface Recording {
   stream: MediaStream
   context: AudioContext
   node: AudioWorkletNode
+  /** The samples of the piece being recorded. */
   chunks: Float32Array[]
+  /** Its length, in samples of the context. */
+  length: number
+  /** The words of the pieces sent so far, in their order. */
+  pieces: Promise<string>[]
   timer: number
   /** The frame of the wave: its levels are read again on every frame while recording. */
   frame: number
@@ -81,17 +92,49 @@ export function waveLevels(samples: Uint8Array, bars: number = WAVE_BARS): numbe
 
 export type DictationState = 'idle' | 'recording' | 'recognizing'
 
-/** Records, sends and gives back the words; `notice` says why it did not. */
-export function useDictation(onText: (text: string) => void) {
+/** The words of one piece by the cabinet's route; empty when nothing was heard. */
+async function recognize(
+  sound: ArrayBuffer,
+  onRefusal: (message: string) => void,
+): Promise<string> {
+  try {
+    const response = await fetch('/api/speech', {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: sound,
+    })
+    const answer = (await response.json().catch(() => ({}))) as { text?: string; message?: string }
+    if (response.ok && answer.text) return answer.text
+    // Silence in a piece of a longer recording is no failure of the whole.
+    if (response.status !== 422 && response.status !== 400)
+      onRefusal(answer.message ?? dictationText.failed)
+    return ''
+  } catch {
+    onRefusal(dictationText.failed)
+    return ''
+  }
+}
+
+/** Records and recognises; `finish` stops and gives back all the words, `null` — none. */
+export function useDictation() {
   const [state, setState] = useState<DictationState>('idle')
   const [seconds, setSeconds] = useState(0)
   const [notice, setNotice] = useState<string | null>(null)
   const [levels, setLevels] = useState<number[]>(() => Array(WAVE_BARS).fill(0))
   const recording = useRef<Recording | null>(null)
 
-  const finish = useCallback(async () => {
+  /** The piece recorded so far goes to recognition; the recording goes on. */
+  const cut = useCallback((current: Recording) => {
+    if (current.length === 0) return
+    const sound = toPcm16(current.chunks, current.context.sampleRate)
+    current.chunks = []
+    current.length = 0
+    current.pieces.push(recognize(sound, setNotice))
+  }, [])
+
+  const finish = useCallback(async (): Promise<string | null> => {
     const current = recording.current
-    if (!current) return
+    if (!current) return null
     recording.current = null
     window.clearInterval(current.timer)
     window.cancelAnimationFrame(current.frame)
@@ -99,28 +142,21 @@ export function useDictation(onText: (text: string) => void) {
     current.node.port.onmessage = null
     current.node.disconnect()
     for (const track of current.stream.getTracks()) track.stop()
-    const sound = toPcm16(current.chunks, current.context.sampleRate)
+    cut(current)
     await current.context.close().catch(() => {})
     setState('recognizing')
     try {
-      const response = await fetch('/api/speech', {
-        method: 'POST',
-        headers: { 'content-type': 'application/octet-stream' },
-        body: sound,
-      })
-      const answer = (await response.json().catch(() => ({}))) as {
-        text?: string
-        message?: string
+      const words = (await Promise.all(current.pieces)).map((piece) => piece.trim()).filter(Boolean)
+      if (words.length === 0) {
+        setNotice((said) => said ?? dictationText.failed)
+        return null
       }
-      if (response.ok && answer.text) onText(answer.text)
-      else setNotice(answer.message ?? dictationText.failed)
-    } catch {
-      setNotice(dictationText.failed)
+      return words.join(' ')
     } finally {
       setState('idle')
       setSeconds(0)
     }
-  }, [onText])
+  }, [cut])
 
   const start = useCallback(async () => {
     setNotice(null)
@@ -155,8 +191,14 @@ export function useDictation(onText: (text: string) => void) {
       URL.revokeObjectURL(workletUrl)
     }
     const node = new AudioWorkletNode(context, 'raditi-collector')
-    const chunks: Float32Array[] = []
-    node.port.onmessage = (event: MessageEvent<Float32Array>) => chunks.push(event.data)
+    const piece = context.sampleRate * DICTATION_PIECE_SECONDS
+    node.port.onmessage = (event: MessageEvent<Float32Array>) => {
+      const current = recording.current
+      if (!current) return
+      current.chunks.push(event.data)
+      current.length += event.data.length
+      if (current.length >= piece) cut(current)
+    }
     const source = context.createMediaStreamSource(stream)
     source.connect(node)
     // The wave of the recording: the loudness of the microphone, frame by frame.
@@ -170,15 +212,20 @@ export function useDictation(onText: (text: string) => void) {
       if (recording.current) recording.current.frame = window.requestAnimationFrame(draw)
     }
     const began = Date.now()
-    const timer = window.setInterval(() => {
-      const passed = Math.floor((Date.now() - began) / 1000)
-      setSeconds(passed)
-      if (passed >= DICTATION_MAX_SECONDS) void finish()
-    }, 250)
-    recording.current = { stream, context, node, chunks, timer, frame: 0 }
+    const timer = window.setInterval(() => setSeconds(Math.floor((Date.now() - began) / 1000)), 250)
+    recording.current = {
+      stream,
+      context,
+      node,
+      chunks: [],
+      length: 0,
+      pieces: [],
+      timer,
+      frame: 0,
+    }
     recording.current.frame = window.requestAnimationFrame(draw)
     setState('recording')
-  }, [finish])
+  }, [cut])
 
   // A page that goes away stops the microphone with it.
   useEffect(
@@ -198,7 +245,7 @@ export function useDictation(onText: (text: string) => void) {
     seconds,
     notice,
     levels,
-    toggle: () =>
-      state === 'recording' ? void finish() : state === 'idle' ? void start() : undefined,
+    start,
+    finish,
   }
 }

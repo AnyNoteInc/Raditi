@@ -395,6 +395,7 @@ export const listText = Object.freeze({
   archiveEmpty: 'В архиве пока нет чатов.',
   search: 'Найти чат',
   searchClear: 'Очистить поиск',
+  searchClose: 'Закрыть поиск',
   searchEmpty: 'Ничего не нашлось. Ищем по названиям чатов и по вашим сообщениям.',
   searchLoading: 'Ищем',
   /** A chat of the search that is in «Архив». */

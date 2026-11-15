@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { plain } from '@/components/billing/testing'
 
 import type { DialogListItem, DialogListPage } from './chat-types'
-import { DialogList } from './dialog-list'
+import { ArchiveButton, DialogList } from './dialog-list'
 import { declared } from './testing'
 
 const { listPage, folders, chatGet, segment, rename, remove, pin, archive, search } = vi.hoisted(
@@ -75,11 +75,13 @@ function dialog(id: string, patch: Partial<DialogListItem> = {}): DialogListItem
   }
 }
 
-function showList(props: { grouped?: boolean; folder?: string | null } = {}) {
+function showList(props: { grouped?: boolean; folder?: string | null; searching?: boolean } = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const list = () => (
     <QueryClientProvider client={queryClient}>
       <DialogList {...props} />
+      {/* The frame pins «Архив» at the bottom of the column (docs/plan/77, Р1). */}
+      <ArchiveButton />
     </QueryClientProvider>
   )
   const { rerender } = render(list())
@@ -520,7 +522,8 @@ describe('pinned, archived and found chats (docs/plan/75, ВВ21)', () => {
   it('search by the words once they rest, and say when nothing is found', async () => {
     listPage.mockResolvedValue({ pinned: [], items: [dialog('1')], nextCursor: null })
     search.mockResolvedValue({ items: [] })
-    showList()
+    // The loupe of the head opened the field (docs/plan/77, Р2).
+    showList({ searching: true })
     fireEvent.change(screen.getByRole('searchbox', { name: 'Найти чат' }), {
       target: { value: 'капучино' },
     })
