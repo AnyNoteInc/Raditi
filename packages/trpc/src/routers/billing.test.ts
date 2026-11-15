@@ -1573,9 +1573,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
       ...noWaits,
     })
     const { plans } = await caller.billing.plans()
-    expect(plans.filter(({ current }) => current)).toEqual([
-      { ...plan.dto, fitsSites: true, current: true },
-    ])
+    expect(plans.filter(({ current }) => current)).toEqual([{ ...plan.dto, current: true }])
 
     // Asking again changes nothing: one subscription, one grant of the quota — and the one
     // grant of the gift, which the checkout made with the workspace.

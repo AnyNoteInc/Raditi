@@ -108,19 +108,17 @@ describe.skipIf(!enabled)('the sweep of contact maps with PostgreSQL', () => {
   /** A chat with a browser that reached a final status longer ago than the window. */
   async function task(
     data: {
-      needsRepository?: boolean
       needsBrowser?: boolean
       status?: 'done' | 'failed' | 'cancelled' | 'rolled_back' | 'awaiting_user'
       finishedAgoMs?: number
       purgedByContent?: boolean
     } = {},
   ) {
-    const { needsRepository = false, needsBrowser = true } = data
+    const { needsBrowser = true } = data
     const row = await db.task.create({
       data: {
         workspaceId: f.workspaceId,
         status: data.status ?? 'done',
-        needsRepository,
         needsBrowser,
         finishedAt: new Date(Date.now() - (data.finishedAgoMs ?? CONTENT_SNAPSHOT_TTL_MS + HOUR)),
         ...(data.purgedByContent

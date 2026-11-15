@@ -669,7 +669,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       tariff: {
         credits: scale(FULL),
         today: dayOf(50, 0, 0, 300),
-        sites: { count: 0, max: 2 },
       },
       gift: { left: 0, held: 0, granted: false },
       pack: { left: 0, held: 0 },
@@ -793,7 +792,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
         // What the day took of the tariff: the 5 charged and the 45 set aside; the reserves that
         // came back took nothing. This plan has no daily limit.
         today: dayOf(null, 5, 45, 250),
-        sites: { count: 2, max: 3 },
       })
       const from = (tariff: number) => ({ tariff, gift: 0, pack: 0 })
       const nothing = { credits: null, from: null }
@@ -1094,7 +1092,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
         credits: scale({ ...FULL, carried: 255, left: 555, heldEarlier: 45, carryLimit: 300 }),
         // The reserve of the 17th takes nothing of the 18th.
         today: dayOf(50, 0, 0, 555),
-        sites: { count: 1, max: 2 },
       })
       expect(renewed.history).toEqual(noHistory)
       expect(renewed).toMatchObject({ totalLeft: 555, spendable: 555, setAside: 45 })
@@ -1697,7 +1694,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       tariff: {
         credits: FULL,
         today: dayOf(null, 0, 0, 300),
-        sites: { count: 0, max: 2 },
       },
       pack: { left: 0, held: 0 },
       totalLeft: 300,

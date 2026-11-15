@@ -698,7 +698,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       expect(feed.at(-1)?.payload).toMatchObject({ by: 'customer', site: 'none', credits: null })
     })
 
-    it('asks core to stop a pass that runs, and refuses a release in work', async () => {
+    it('asks core to stop a pass that runs', async () => {
       const { owner } = await chatOwner()
       const caller = callerOf(owner)
       const { taskId } = await newDialog(caller)
@@ -716,11 +716,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
           dedupeKey: `turn.cancel:${taskId}:${stopping.requestEventId}`,
         },
       ])
-
-      await db.task.update({ where: { id: taskId }, data: { status: 'deploying' } })
-      await expect(caller.task.cancel({ taskId, requestId: randomUUID() })).rejects.toMatchObject({
-        cause: { code: 'CHAT_COMMAND_UNAVAILABLE', details: { refusal: 'release_in_progress' } },
-      })
     })
   })
 
@@ -904,30 +899,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
 
       expect(markdown).not.toContain('слова журнала')
       expect(markdown).not.toContain(feedRowText.unreadable)
-    })
-
-    it('speaks of the site in a chat of a project', async () => {
-      const { owner } = await chatOwner()
-      const caller = callerOf(owner)
-      const { taskId } = await newDialog(caller)
-      await insertFeedEvent(db, {
-        taskId,
-        row: {
-          type: 'feed.failure',
-          payload: {
-            v: 1,
-            turn: null,
-            code: 'site_held',
-            site: 'unchanged',
-            credits: null,
-            next: 'awaiting_user',
-          },
-        } as never,
-      })
-
-      expect((await caller.task.export({ taskId })).markdown).toContain(
-        'При работе с сайтом произошёл сбой',
-      )
     })
 
     it('reads a chat longer than a page of the feed, in order, and all of it', async () => {
@@ -1894,19 +1865,17 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
     /** Chats of a workspace as rows: the list and the folders read nothing else of them. */
     async function chats(
       workspaceId: string,
-      siteId: string | null,
-      rows: ReadonlyArray<{ status?: 'done' | 'awaiting_user' | 'awaiting_approval' }>,
+      rows: ReadonlyArray<{ status?: 'done' | 'awaiting_user' }>,
     ) {
       const made = []
       for (const row of rows) {
-        const id = siteId === null ? chatId() : randomUUID()
+        const id = chatId()
         taskIds.push(id)
         made.push(
           await db.task.create({
             data: {
               id,
               workspaceId,
-              siteId,
               status: row.status ?? 'done',
               needsBrowser: true,
               title: 'Чат',
@@ -1928,7 +1897,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       const caller = callerOf(owner)
       const rows = await chats(
         workspaceId,
-        null,
         Array.from({ length: 53 }, () => ({})),
       )
 
@@ -1945,7 +1913,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       const { owner, workspaceId } = await chatOwner()
       const rows = await chats(
         workspaceId,
-        null,
         Array.from({ length: 60 }, () => ({})),
       )
       const [plain, paged] = await db.$transaction(async (tx) => {
