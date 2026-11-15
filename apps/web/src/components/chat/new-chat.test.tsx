@@ -271,7 +271,26 @@ describe('new chat', () => {
         </QueryClientProvider>,
       )
       await waitFor(() => expect(projects).toHaveBeenCalled())
-      expect(screen.getByRole('button', { name: 'Без проекта' })).toBeTruthy()
+      expect(await screen.findByRole('button', { name: 'Без проекта' })).toBeTruthy()
+    })
+
+    it('starts the chat in the project of `?project=` before the list has come (84.7)', async () => {
+      // The list is on its way the whole time: the id of the address stands for the project.
+      projects.mockImplementation(() => new Promise<never>(() => {}))
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      render(
+        <QueryClientProvider client={queryClient}>
+          <NewChat userId={USER_ID} projectId={TEA.toUpperCase()} />
+        </QueryClientProvider>,
+      )
+      expect(screen.getByRole('button', { name: 'Загружаем проект…' })).toBeTruthy()
+      expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Новый чат в проекте')
+      expect(screen.queryByRole('button', { name: 'Без проекта' })).toBeNull()
+      expect(screen.queryByText(/Агент учтёт/)).toBeNull()
+      write('Сверь цены в прайсе с сайтом')
+      fireEvent.click(send())
+      await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+      expect(create.mock.calls[0]![0]).toMatchObject({ projectId: TEA })
     })
   })
 

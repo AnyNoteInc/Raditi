@@ -14,6 +14,11 @@ export interface PickedProject {
   name: string
   goal: string | null
   hasInstructions: boolean
+  /**
+   * The project of the address before the list of projects has come: its id is sent as it is,
+   * and the server decides whose it is; what it is called the field does not know yet.
+   */
+  pending?: true
 }
 
 export const pickedOf = (

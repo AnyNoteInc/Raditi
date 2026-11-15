@@ -11,7 +11,11 @@ import { useEffect, useRef, useState } from 'react'
 import { UsageWindowHint } from '@/components/billing/usage-window-hint'
 import { ProjectPicker, useProjectChoices } from '@/components/projects/project-picker'
 import { projectHref, projectPickerText } from '@/components/projects/project-texts'
-import { pickedOf, type PickedProject } from '@/components/projects/project-types'
+import {
+  pickedOf,
+  type PickedProject,
+  type ProjectListItem,
+} from '@/components/projects/project-types'
 
 import { takeChatDraft } from './chat-draft'
 import { useRememberedEffort } from './chat-effort'
@@ -61,10 +65,9 @@ export function NewChat({
   const [chosen, setChosen] = useState<PickedProject | null | undefined>(
     projectId === null ? null : undefined,
   )
-  const { choices } = useProjectChoices(chosen === undefined)
-  const fromAddress = choices.find((each) => each.id === projectId?.toLowerCase())
-  // Not one of the user's live projects (or not read yet): the chat starts without one.
-  const project = chosen !== undefined ? chosen : fromAddress ? pickedOf(fromAddress) : null
+  const { choices, loaded } = useProjectChoices(chosen === undefined)
+  const project =
+    chosen !== undefined ? chosen : projectOfAddress(projectId, loaded ? choices : null)
   // The words kept for a new chat come back here.
   const [draft, setDraft] = useState<string | null>(null)
   // The requests this browser sent before: the arrows of the field bring them back (ВВ23).
@@ -120,7 +123,11 @@ export function NewChat({
             overflowWrap: 'anywhere',
           }}
         >
-          {project === null ? greeting : projectPickerText.heading(project.name)}
+          {project === null
+            ? greeting
+            : project.pending
+              ? projectPickerText.headingLoading
+              : projectPickerText.heading(project.name)}
         </Typography>
         {project?.goal ? (
           <Typography sx={{ mt: 1, color: 'text.secondary', fontSize: 15 }}>
@@ -161,7 +168,7 @@ export function NewChat({
           color="text.secondary"
           sx={{ display: 'flex', flexWrap: 'wrap', gap: '0 12px', mt: -1.5, px: 1 }}
         >
-          {projectPickerText.applies(project.hasInstructions)}
+          {project.pending ? null : projectPickerText.applies(project.hasInstructions)}
           <Link component={NextLink} href={projectHref(project.id)} sx={{ fontWeight: 500 }}>
             {projectPickerText.openProject}
           </Link>
@@ -171,4 +178,28 @@ export function NewChat({
       {clientCommands.menu}
     </Box>
   )
+}
+
+/**
+ * The project the address chose (ПР30). Until the list of projects comes (`choices` null) the id
+ * of the address stands, so words sent in that moment start the chat in it — the server decides
+ * whose project it is. Once the list is read, a project that is not one of the user's live ones
+ * is none.
+ */
+export function projectOfAddress(
+  projectId: string | null,
+  choices: readonly ProjectListItem[] | null,
+): PickedProject | null {
+  if (projectId === null) return null
+  const id = projectId.toLowerCase()
+  if (choices === null)
+    return {
+      id,
+      name: projectPickerText.loading,
+      goal: null,
+      hasInstructions: false,
+      pending: true,
+    }
+  const found = choices.find((each) => each.id === id)
+  return found ? pickedOf(found) : null
 }

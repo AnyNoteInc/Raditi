@@ -136,6 +136,9 @@ export const projectPickerText = Object.freeze({
   newProject: 'Новый проект',
   nothingFound: 'Ничего не нашлось',
   heading: (name: string) => `Новый чат в проекте «${name}»`,
+  /** The project of the address while the list of projects is on its way. */
+  loading: 'Загружаем проект…',
+  headingLoading: 'Новый чат в проекте',
   placeholder: 'Сообщение в новый чат проекта',
   applies: (instructions: boolean) =>
     instructions ? 'Агент учтёт инструкции и цель проекта' : 'Агент учтёт цель проекта',

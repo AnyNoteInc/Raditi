@@ -203,7 +203,13 @@ export function ProjectPicker({
   return (
     <>
       <ButtonBase
-        aria-label={value === null ? projectPickerText.none : projectPickerText.pill(value.name)}
+        aria-label={
+          value === null
+            ? projectPickerText.none
+            : value.pending
+              ? projectPickerText.loading
+              : projectPickerText.pill(value.name)
+        }
         aria-haspopup={phone ? 'dialog' : 'menu'}
         aria-expanded={open}
         disabled={disabled}
