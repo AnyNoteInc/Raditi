@@ -750,3 +750,51 @@ describe('dictation in the field (docs/plan/75, ВВ16)', () => {
     expect(await screen.findByText('Этот браузер не умеет записывать звук.')).toBeTruthy()
   })
 })
+
+describe('a file named by «@» (docs/plan/78-file-mentions.md)', () => {
+  const files = ['wp-content/themes/shop/style.css', 'wp-content/themes/shop/header.php']
+  function showWithFiles(paths: readonly string[] | null = files) {
+    const onOpen = vi.fn()
+    const onSend = vi.fn(async () => true)
+    render(
+      <Composer
+        placeholder="Что поправить?"
+        onSend={onSend}
+        mentions={{ paths, state: paths ? 'ready' : 'preparing', onOpen }}
+      />,
+    )
+    return { onOpen, onSend }
+  }
+  const typeAt = (text: string) =>
+    fireEvent.change(field(), { target: { value: text, selectionStart: text.length } })
+  const files_ = () => screen.getByRole('listbox', { name: 'Файлы проекта' })
+
+  it('opens the list on «@», reads the files then, and puts the chosen path in the words', () => {
+    const { onOpen, onSend } = showWithFiles()
+    typeAt('Поправь @head')
+    expect(onOpen).toHaveBeenCalled()
+    expect(within(files_()).getAllByRole('option')[0]).toHaveAccessibleName(
+      'wp-content/themes/shop/header.php',
+    )
+    press('Enter')
+    expect(field().value).toBe('Поправь @wp-content/themes/shop/header.php ')
+    expect(onSend).not.toHaveBeenCalled()
+    expect(screen.queryByRole('listbox', { name: 'Файлы проекта' })).toBeNull()
+  })
+
+  it('says the files are being read, closes on Escape, and is no mention in an address', () => {
+    showWithFiles(null)
+    typeAt('@')
+    expect(within(files_()).getByRole('status')).toHaveTextContent('Готовим список файлов…')
+    press('Escape')
+    expect(screen.queryByRole('listbox', { name: 'Файлы проекта' })).toBeNull()
+    typeAt('name@site.ru')
+    expect(screen.queryByRole('listbox', { name: 'Файлы проекта' })).toBeNull()
+  })
+
+  it('is not in a chat without the files of a project', () => {
+    showComposer()
+    typeAt('@style')
+    expect(screen.queryByRole('listbox', { name: 'Файлы проекта' })).toBeNull()
+  })
+})

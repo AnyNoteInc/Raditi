@@ -23,6 +23,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
   type RefObject,
+  type SyntheticEvent,
 } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
@@ -30,6 +31,15 @@ import { plural } from '@/lib/plural'
 
 import { AttachmentChips } from './attachment-chips'
 import { dictationText, useDictation } from './dictation'
+import {
+  MentionList,
+  mentionAt,
+  mentionKey,
+  mentionMatches,
+  mentionOptionId,
+  withMention,
+  type MentionOption,
+} from './file-mentions'
 import { attachmentText, composerText, paletteText } from './chat-texts'
 import type { CommandVerdict } from './chat-types'
 import {
@@ -154,6 +164,15 @@ function pasteKeys(): string {
   return /Mac|iPhone|iPad/.test(agent) ? '⌘V' : 'Ctrl+V'
 }
 
+/** The files `@` names in the field (docs/plan/78-file-mentions.md). */
+export interface ComposerMentions {
+  /** The paths of the files of the working copy; null — not read yet. */
+  paths: readonly string[] | null
+  state: 'ready' | 'preparing' | 'none'
+  /** `@` was typed: the files are read now, not before. */
+  onOpen: () => void
+}
+
 export interface ComposerCommands {
   verdicts: readonly CommandVerdict[]
   /**
@@ -199,6 +218,7 @@ export function Composer({
   onTextChange,
   history = [],
   speech = false,
+  mentions,
 }: {
   label?: string
   placeholder: string
@@ -244,6 +264,8 @@ export function Composer({
   history?: readonly string[]
   /** Dictation is set up here (SpeechKit, docs/plan/75, ВВ16): the microphone in the row. */
   speech?: boolean
+  /** A chat with the files of a project: `@` names one of them (docs/plan/78). */
+  mentions?: ComposerMentions
 }) {
   const fieldId = useId()
   const reasonId = useId()
@@ -255,6 +277,12 @@ export function Composer({
   const noFilesId = useId()
   const secretsId = useId()
   const [text, setText] = useState('')
+  // Where the caret stands: a `@` before it opens the list of files.
+  const [caret, setCaret] = useState(0)
+  const [mentionActive, setMentionActive] = useState(0)
+  // The list closed by Escape stays closed for this `@`.
+  const [mentionClosedAt, setMentionClosedAt] = useState<number | null>(null)
+  const mentionListId = useId()
   // Which earlier request the arrows put in the field: −1 — none, the words are the client's.
   const [historyIndex, setHistoryIndex] = useState(-1)
   // A file is dragged over the field: the field says it will take it.
@@ -328,11 +356,21 @@ export function Composer({
   const options = forced ? optionsFor(null) : typed && !disabled ? optionsFor(text) : []
   const open = options.length > 0
   const activeIndex = Math.min(active, Math.max(0, options.length - 1))
+  const mention = mentions !== undefined && !open && !disabled ? mentionAt(text, caret) : null
+  const mentionOpen = mention !== null && mention.start !== mentionClosedAt
+  const mentionOptions =
+    mentionOpen && mentions?.paths ? mentionMatches(mentions.paths, mention.query) : []
+  const mentionIndex = Math.min(mentionActive, Math.max(0, mentionOptions.length - 1))
+  const mentionStarted = mentionOpen ? mention.start : null
+  const askFiles = mentions?.onOpen
+  useEffect(() => {
+    if (mentionStarted !== null) askFiles?.()
+  }, [mentionStarted, askFiles])
 
   // The list opens upwards from the field: its height is what stands above the field, measured
   // once the field has taken its height for this text.
   useLayoutEffect(() => {
-    if (!open) return
+    if (!open && !mentionOpen) return
     function fit() {
       const holder = listRef.current
       if (!holder) return
@@ -342,7 +380,17 @@ export function Composer({
     fit()
     window.addEventListener('resize', fit)
     return () => window.removeEventListener('resize', fit)
-  }, [open, text])
+  }, [open, mentionOpen, text])
+
+  function chooseMention(option: MentionOption) {
+    if (mention === null) return
+    const next = withMention(text, mention, option.path)
+    setText(next.text)
+    setCaret(next.caret)
+    setMentionActive(0)
+    setHistoryIndex(-1)
+    window.setTimeout(() => field.current?.setSelectionRange(next.caret, next.caret), 0)
+  }
 
   function announceOpened(count: number) {
     setAnnouncement(paletteText.opened(count, plural(count, 'команда', 'команды', 'команд')))
@@ -397,7 +445,11 @@ export function Composer({
     if (said) setAnnouncement(said)
   }
 
-  function changeText(next: string) {
+  function changeText(next: string, at: number = next.length) {
+    setCaret(at)
+    setMentionActive(0)
+    if (mentionClosedAt !== null && mentionAt(next, at)?.start !== mentionClosedAt)
+      setMentionClosedAt(null)
     const wasClosed = !open
     setNotice(null)
     setText(next)
@@ -447,6 +499,21 @@ export function Composer({
   }
 
   function keyDown(event: KeyboardEvent<HTMLElement>) {
+    if (
+      mentionOpen &&
+      mentionKey(event, mentionOptions.length, {
+        move: (step) =>
+          setMentionActive(
+            (mentionIndex + step + mentionOptions.length) % Math.max(1, mentionOptions.length),
+          ),
+        choose: () => {
+          const option = mentionOptions[mentionIndex]
+          if (option) chooseMention(option)
+        },
+        close: () => setMentionClosedAt(mention.start),
+      })
+    )
+      return
     if (
       open &&
       paletteKey(
@@ -529,6 +596,21 @@ export function Composer({
 
   return (
     <Box sx={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+      {mentionOpen ? (
+        <Box
+          ref={listRef}
+          sx={{ position: 'absolute', left: 0, right: 0, bottom: 'calc(100% + 8px)', zIndex: 3 }}
+        >
+          <MentionList
+            listId={mentionListId}
+            options={mentionOptions}
+            active={mentionIndex}
+            state={mentions?.paths ? 'ready' : (mentions?.state ?? 'preparing')}
+            onChoose={chooseMention}
+            onHover={setMentionActive}
+          />
+        </Box>
+      ) : null}
       {open ? (
         <Box
           ref={listRef}
@@ -689,12 +771,21 @@ export function Composer({
           disabled={disabled}
           aria-describedby={fieldDescribedBy}
           aria-invalid={tooLong || shownError !== null ? true : undefined}
-          aria-autocomplete={commands ? 'list' : undefined}
-          aria-controls={open && !forced ? listId : undefined}
+          aria-autocomplete={commands || mentions ? 'list' : undefined}
+          aria-controls={mentionOpen ? mentionListId : open && !forced ? listId : undefined}
           aria-activedescendant={
-            open && !forced && current !== undefined ? optionId(listId, current.id) : undefined
+            mentionOpen && mentionOptions.length > 0
+              ? mentionOptionId(mentionListId, mentionIndex)
+              : open && !forced && current !== undefined
+                ? optionId(listId, current.id)
+                : undefined
           }
-          onChange={(event) => changeText(event.target.value)}
+          onChange={(event) =>
+            changeText(event.target.value, event.target.selectionStart ?? event.target.value.length)
+          }
+          onSelect={(event: SyntheticEvent<HTMLTextAreaElement>) =>
+            setCaret(event.currentTarget.selectionStart ?? 0)
+          }
           onKeyDown={keyDown}
           onPaste={(event: ClipboardEvent<HTMLTextAreaElement>) => {
             if (!attachments) return

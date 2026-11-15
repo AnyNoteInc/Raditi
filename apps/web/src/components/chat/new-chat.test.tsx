@@ -60,6 +60,10 @@ vi.mock('@/trpc/client', () => ({
     project: {
       list: { queryOptions: () => ({ queryKey: ['project.list'], queryFn: projectList }) },
     },
+    siteFiles: {
+      // `@` reads the files only when typed: these cases never type it.
+      list: { queryOptions: () => ({ queryKey: ['siteFiles.list'], queryFn: async () => null }) },
+    },
     billing: {
       usage: {
         queryKey: () => ['billing', 'usage'],
