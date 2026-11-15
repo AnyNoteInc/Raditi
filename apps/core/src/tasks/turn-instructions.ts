@@ -385,6 +385,10 @@ function filesSection({ workingSet, addOnlyPaths = [], media }: WorkingCopyFacts
       'is lost with it. When the request needs one, do not make it: tell the client in ' +
       '`client_message`, plainly, that the platform cannot change this file of the site yet, ' +
       'and what you did instead, if anything.',
+    // docs/plan/78-file-mentions.md, У3: the field of the chat puts `@<path>` for a chosen file.
+    "- In the client's words `@` before a path names a file or a folder of the repository, the " +
+      'path from its root. Read it first; when it is outside the parts above, say so instead ' +
+      'of changing it.',
   ]
   if (addOnlyPaths.length && media) {
     const types = Object.keys(media.extensions).join(', ')
