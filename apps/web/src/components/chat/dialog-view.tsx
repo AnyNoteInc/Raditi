@@ -1590,10 +1590,9 @@ export function DialogView({
           '@media (max-height: 420px)': { position: 'static' },
           bgcolor: 'background.paper',
           // From `lg` the head stands over the area of the feed, which scrolls under it, from edge
-          // to edge of the dialog. While the panel is closed it stands at the top of the window,
-          // «+» in the corner the strip of the panel's tabs takes when it opens (docs/plan/59, И4);
-          // while it is open, under «К чатам» of the list that gave the dialog its room.
-          mt: { lg: shown ? 0 : -3.5 },
+          // to edge of the dialog, at the top of the window — level with the strip of the panel's
+          // tabs while the panel is open, «+» in its corner while it is closed (docs/plan/59, И4).
+          mt: { lg: -3.5 },
           mx: { xs: -2, sm: -2.5, md: -4 },
           pl: { xs: 2, sm: 2.5, md: 4, lg: 3 },
           pr: { xs: 2, sm: 2.5, md: 4, lg: 0.75 },
