@@ -93,10 +93,12 @@ describe('page slug and host', () => {
 
 describe('page headers', () => {
   it('sandboxes a page word for word as the brief says', () => {
+    // A page of a site loads the shared files of its own host ('self', docs/plan/73-pages-sites.md,
+    // Дер34); the sandbox and every other directive stay as Ст9 has them.
     expect(PAGE_CSP).toBe(
-      "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; script-src 'unsafe-inline'; " +
-        "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob: https:; " +
-        "font-src data: blob: https:; media-src data: blob: https:; connect-src 'none'; " +
+      "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; script-src 'self' 'unsafe-inline'; " +
+        "default-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; " +
+        "font-src 'self' data: blob: https:; media-src 'self' data: blob: https:; connect-src 'none'; " +
         "form-action 'none'; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; " +
         "worker-src 'none'; manifest-src 'none'; base-uri 'none'",
     )
@@ -131,11 +133,11 @@ describe('page headers', () => {
     // A page of a chat framed by the cabinet (plan 67, /v/): the same policy, framed by that
     // origin alone and never stored.
     const framed = pageResponseHeaders('html', { framedBy: 'https://raditi.ru' })
+    // It has no site: it loads nothing of its host either.
     expect(framed['Content-Security-Policy']).toBe(
-      PAGE_CSP.replace("frame-ancestors 'none'", 'frame-ancestors https://raditi.ru').replaceAll(
-        ' https:;',
-        ';',
-      ),
+      PAGE_CSP.replace("frame-ancestors 'none'", 'frame-ancestors https://raditi.ru')
+        .replaceAll(' https:;', ';')
+        .replaceAll("'self' ", ''),
     )
     expect(framed['Cache-Control']).toBe('no-store')
     expect(PAGE_CSP).toBe(pagePolicy('html'))

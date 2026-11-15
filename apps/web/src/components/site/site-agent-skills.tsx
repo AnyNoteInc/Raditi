@@ -25,7 +25,7 @@ import { SiteCard } from './site-cards'
 // скилы и сделай возможность добавлять — context7, playwright»): the MCP servers the site's agent
 // connects to besides Радити's own tools. The platform's two are on until an owner or an admin
 // turns one off; they add a remote server by its full https address. A server may want a key in
-// a header (docs/plan/80-mcp-server-credentials.md): the key is checked against the server, kept in
+// a header (docs/plan/81-mcp-server-credentials.md): the key is checked against the server, kept in
 // Vault and never shown again; the agent never sees it — Радити adds it to the server's requests.
 // The server checks every change again (`siteAgentSkills`).
 

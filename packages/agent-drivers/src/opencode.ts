@@ -178,7 +178,7 @@ function permissionOf(context: Pick<RunContext, 'internet' | 'skills'>) {
 }
 
 /**
- * The skills the relay of the role mcp serves (docs/plan/80-mcp-server-credentials.md), in the
+ * The skills the relay of the role mcp serves (docs/plan/81-mcp-server-credentials.md), in the
  * order of the turn, each with the pipe of its copy of the MCP token.
  */
 function relayedKeys(skills: readonly TurnSkill[] | undefined): Map<string, string> {

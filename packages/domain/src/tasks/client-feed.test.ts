@@ -272,7 +272,20 @@ const samples: Record<FeedEventType, Record<string, unknown>[]> = {
       kind: 'doc',
     },
   ],
-  'feed.page_left': [{ v: 1, pageId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7db1', reason: 'refused' }],
+  'feed.page_left': [
+    { v: 1, pageId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7db1', reason: 'refused' },
+    { v: 1, pageId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7db1', reason: 'missing', of: 'file' },
+    { v: 1, pageId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7db1', reason: 'refused', of: 'change' },
+  ],
+  'feed.page_change': [
+    {
+      v: 1,
+      pageId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7db1',
+      title: 'Цены',
+      change: 'trashed',
+      pages: 4,
+    },
+  ],
   'feed.doc': [{ v: 1, docId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dc1' }],
   'feed.doc_touch': [{ v: 1, docId: '018f3b2e-7c4a-7b1c-9d2e-3f4a5b6c7dc1', revision: 2 }],
   'feed.doc_left': [
@@ -310,6 +323,7 @@ describe('feed vocabulary', () => {
       'feed.file_left',
       'feed.page',
       'feed.page_left',
+      'feed.page_change',
       'feed.doc',
       'feed.doc_touch',
       'feed.doc_left',
@@ -411,6 +425,8 @@ describe('free text is allowed in four fields, the agent words of a browser ques
       'feed.file.name',
       // The title the agent gave its page: shown as text.
       'feed.page.title',
+      // The title of a page the agent changed (docs/plan/73-pages-sites.md, Дер27): as text.
+      'feed.page_change.title',
       'feed.question.intro',
       'feed.question.message',
       'feed.question.questions[].options[]',
@@ -1268,6 +1284,7 @@ describe('reading stored rows', () => {
         },
       ],
       'feed.page_left': [{ v: 1, pageId: 'страница', reason: 'missing' }],
+      'feed.page_change': [{ v: 1, pageId: 'страница', title: '', change: 'trashed', pages: 0 }],
       'feed.doc': [{ v: 1, docId: 'документ' }],
       'feed.doc_touch': [{ v: 1, docId: 'документ', revision: 1 }],
       'feed.doc_left': [{ v: 1, docId: 'документ', sections: 1, reason: 'refused' }],

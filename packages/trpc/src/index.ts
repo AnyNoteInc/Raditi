@@ -33,3 +33,12 @@ export type {
   McpServerServices,
 } from './services/mcp-server-auth.ts'
 export { checkSkillSignIn, connectSignedInServer } from './services/site-agent-skills.ts'
+// The updates of the bot of the chat in Telegram, handed by core to web (docs/plan/80-telegram.md).
+export {
+  handleTelegramUpdate,
+  type IntakeAnswer,
+  type TelegramIntakeDeps,
+  type TelegramMedia,
+} from './services/telegram/intake.ts'
+export { startAttachmentForTelegram } from './services/chat/attachments.ts'
+export { toTRPCError } from './errors.ts'

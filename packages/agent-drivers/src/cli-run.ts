@@ -20,7 +20,7 @@ import { z } from 'zod'
 export const llmKey = `${SANDBOX_SECRETS_DIR}/llm`
 export const mcpKey = `${SANDBOX_SECRETS_DIR}/mcp`
 /**
- * A pipe of its own for each skill the relay of the role mcp serves (docs/plan/80-mcp-server-
+ * A pipe of its own for each skill the relay of the role mcp serves (docs/plan/81-mcp-server-
  * credentials.md): the same MCP token, since a named pipe gives its value to one reader once.
  * The wrapper makes these from the MCP token; no file is staged at these paths.
  */

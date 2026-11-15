@@ -3,6 +3,7 @@ import { billingRouter } from './routers/billing.ts'
 import { browserRouter } from './routers/browser.ts'
 import { candidateRouter } from './routers/candidate.ts'
 import { notificationRouter } from './routers/notification.ts'
+import { telegramRouter } from './routers/telegram.ts'
 import { consentRouter } from './routers/consent.ts'
 import { documentRouter } from './routers/document.ts'
 import { healthRouter } from './routers/health.ts'
@@ -25,6 +26,7 @@ export const appRouter = router({
   user: userRouter,
   consent: consentRouter,
   notification: notificationRouter,
+  telegram: telegramRouter,
   project: projectRouter,
   siteConnection: siteConnectionRouter,
   billing: billingRouter,

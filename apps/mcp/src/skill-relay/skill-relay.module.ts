@@ -16,7 +16,7 @@ import { TokenRenewer } from './token-renewal.ts'
 import { upstreamResolver } from './upstream.ts'
 
 /**
- * The relay of MCP servers with authorization (docs/plan/80-mcp-server-credentials.md): no
+ * The relay of MCP servers with authorization (docs/plan/81-mcp-server-credentials.md): no
  * profile, a product path of every composition. It has nothing to relay until an owner adds a
  * server with a key or a sign-in; the key stays in this role, the sandbox gets only the relay's
  * path and the turn's MCP token.

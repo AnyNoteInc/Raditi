@@ -103,7 +103,7 @@ const passed = (name) => {
   console.log(`PASS ${name}`)
 }
 let interrupted = false
-/** The stand's server with a key (plan 80): closed with the rest. */
+/** The stand's server with a key (plan 81): closed with the rest. */
 let relayedServer = null
 const interrupt = () => {
   if (interrupted) return
@@ -284,7 +284,7 @@ async function bridgeGateway() {
 }
 
 /**
- * A server the owner added with a key (docs/plan/80-mcp-server-credentials.md): HTTPS on loopback
+ * A server the owner added with a key (docs/plan/81-mcp-server-credentials.md): HTTPS on loopback
  * under a name the stand's CA certifies, which the role mcp reaches through MCP_SKILL_RELAY_HOSTS.
  * It records who called it with what key, and repeats the key in its answer: the relay must take
  * it out before the model sees it.

@@ -600,7 +600,7 @@ export async function verifyAgentContentTurns(ctx) {
     })
   }
 
-  // A server with a key (docs/plan/80-mcp-server-credentials.md): the CLI calls it through the
+  // A server with a key (docs/plan/81-mcp-server-credentials.md): the CLI calls it through the
   // relay of the role mcp, which adds the owner's header from Vault. No journal, no snapshot.
   if (ctx.relayed) await relayedTurn(ctx.relayed)
 

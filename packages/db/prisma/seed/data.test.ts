@@ -34,6 +34,8 @@ describe('plans (docs/business.md §6)', () => {
         creditsPerWeek: 73,
         packCredits: null,
         maxSites: 1,
+        pageSites: 2,
+        pageCustomNames: false,
       },
       {
         slug: 'business',
@@ -46,6 +48,8 @@ describe('plans (docs/business.md §6)', () => {
         creditsPerWeek: 350,
         packCredits: null,
         maxSites: 3,
+        pageSites: 10,
+        pageCustomNames: true,
       },
       {
         slug: 'agency',
@@ -58,6 +62,8 @@ describe('plans (docs/business.md §6)', () => {
         creditsPerWeek: 700,
         packCredits: null,
         maxSites: 15,
+        pageSites: 20,
+        pageCustomNames: true,
       },
       {
         slug: 'pack',
@@ -70,6 +76,8 @@ describe('plans (docs/business.md §6)', () => {
         creditsPerWeek: null,
         packCredits: 100,
         maxSites: null,
+        pageSites: null,
+        pageCustomNames: false,
       },
       {
         slug: 'payg',
@@ -82,6 +90,8 @@ describe('plans (docs/business.md §6)', () => {
         creditsPerWeek: null,
         packCredits: null,
         maxSites: 1,
+        pageSites: null,
+        pageCustomNames: false,
       },
     ])
   })
@@ -129,7 +139,9 @@ describe('Appendix 1 of the public offer', () => {
         // The windows of the work (plan 71): «до 20 Кредитов за 5 часов и 55 в неделю».
         // Only the week since the owner's answer of 13.11.2026: «до 55 Кредитов в неделю».
         `(?:до (?:${whole} Кредит(?:|а|ов) за 5 часов и )?${whole}(?: Кредит(?:|а|ов))? в неделю; )?` +
-        String.raw`(?:до )?(\d+) Сайт(?:|а|ов) Заказчика$`,
+        String.raw`(?:до )?(\d+) Сайт(?:|а|ов) Заказчика` +
+        // Sites of pages (docs/plan/73-pages-sites.md, Дер37): «до 10 сайтов из страниц со своим именем».
+        String.raw`(?:; (?:до )?(\d+) сайт(?:|а|ов) из страниц( со своим именем)?)?$`,
     ),
   }
   const pack = {
@@ -143,7 +155,8 @@ describe('Appendix 1 of the public offer', () => {
   function promised(cells: string[]) {
     const [name = '', price = '', terms = ''] = cells.map((cell) => cell.trim())
     const month = tariff.price.exec(price)
-    const [, credits, creditsPerDay, per5h, perWeek, maxSites] = tariff.terms.exec(terms) ?? []
+    const [, credits, creditsPerDay, per5h, perWeek, maxSites, pageSites, ownNames] =
+      tariff.terms.exec(terms) ?? []
     if (month && credits !== undefined)
       return {
         name,
@@ -153,6 +166,8 @@ describe('Appendix 1 of the public offer', () => {
         creditsPer5h: per5h === undefined ? null : count(per5h),
         creditsPerWeek: perWeek === undefined ? null : count(perWeek),
         maxSites: count(maxSites),
+        pageSites: pageSites === undefined ? null : count(pageSites),
+        pageCustomNames: ownNames !== undefined,
       }
     const once = pack.price.exec(price)
     const [, packCredits] = pack.terms.exec(terms) ?? []
@@ -176,6 +191,8 @@ describe('Appendix 1 of the public offer', () => {
               creditsPer5h: plan.creditsPer5h,
               creditsPerWeek: plan.creditsPerWeek,
               maxSites: plan.maxSites,
+              pageSites: plan.pageSites,
+              pageCustomNames: plan.pageCustomNames,
             },
       ),
     )

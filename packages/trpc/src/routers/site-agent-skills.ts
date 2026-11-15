@@ -93,7 +93,7 @@ export const siteAgentSkillsRouter = router({
     ),
 
   /**
-   * Whether this site may sign in to a server by this name (plan 80, §3.4): web asks it before it
+   * Whether this site may sign in to a server by this name (plan 81, §3.4): web asks it before it
    * starts the sign-in, and connects the server after the owner comes back.
    */
   signInCheck: consentedProcedure

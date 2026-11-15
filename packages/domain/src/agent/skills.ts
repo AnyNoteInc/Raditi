@@ -9,7 +9,7 @@ import { parseEgressHost } from '../preview/egress-hosts.ts'
 // documentation of libraries — and Playwright — a headless browser inside the sandbox for pages
 // of the internet. The owner adds others by the https address of a remote MCP server. Its address
 // keeps nothing secret: no query string, no credentials in it. A server that wants a key or a
-// sign-in (docs/plan/80-mcp-server-credentials.md) is reached through the relay of the role mcp,
+// sign-in (docs/plan/81-mcp-server-credentials.md) is reached through the relay of the role mcp,
 // which adds the header from Vault: the turn's CLI knows only the relay's path and its MCP token.
 
 export const agentSkillLimits = Object.freeze({
@@ -36,7 +36,7 @@ export type BuiltinAgentSkillName = (typeof builtinAgentSkillNames)[number]
 
 /**
  * What one skill of a turn is: a remote MCP server the CLI reaches over the open internet, one it
- * reaches through the relay of the role mcp (a server with authorization, plan 80), or a server
+ * reaches through the relay of the role mcp (a server with authorization, plan 81), or a server
  * the sandbox image carries.
  */
 export type TurnSkill =
@@ -45,7 +45,7 @@ export type TurnSkill =
   | { name: BuiltinAgentSkillName; kind: 'local' }
 
 /**
- * How an added server is authorized (plan 80, §3.3): nothing, a header of the owner's whose value
+ * How an added server is authorized (plan 81, §3.3): nothing, a header of the owner's whose value
  * is in Vault, or tokens of an OAuth sign-in in Vault.
  */
 export const agentSkillAuthKinds = ['none', 'header', 'oauth'] as const
@@ -62,7 +62,7 @@ export const SKILL_RELAY_PATH = /^\/mcp\/skill\/([a-z](?:[a-z0-9-]{0,30}[a-z0-9]
 
 export const agentSkillHeaderLimits = Object.freeze({
   nameChars: 64,
-  /** The least that is masked in what the server answers (plan 80, §3.2, п. 6). */
+  /** The least that is masked in what the server answers (plan 81, §3.2, п. 6). */
   valueMinChars: 8,
   valueMaxChars: 4096,
 })
@@ -221,7 +221,7 @@ export interface SiteAgentSkillRow {
  * run inside the turn's sandbox next to the session's, a second browser of the same chat — its
  * memory and CPU on every turn, and screenshots no client can see.
  *
- * An added skill with authorization goes through the relay (`relayed`, plan 80); one whose
+ * An added skill with authorization goes through the relay (`relayed`, plan 81); one whose
  * authorization does not work now — the owner has to sign in again — is left out.
  */
 export function turnSkillsOf(
@@ -250,7 +250,7 @@ export function turnSkillsOf(
 }
 
 /**
- * Where the secret of an added server lives (plan 80, §3.3): beside the site's accesses, so that
+ * Where the secret of an added server lives (plan 81, §3.3): beside the site's accesses, so that
  * «Удалить проект» erases it with them. One version, written by CAS.
  */
 export const agentSkillSecretPath = (siteId: string, name: string): string =>
@@ -287,7 +287,7 @@ const httpsAddress = z
   )
 
 /**
- * What of an OAuth sign-in to a server is not secret (`site_agent_skills.oauth`, plan 80, §3.4):
+ * What of an OAuth sign-in to a server is not secret (`site_agent_skills.oauth`, plan 81, §3.4):
  * where tokens are renewed, the client the platform registered there, the resource the tokens are
  * for and when the access token runs out. The tokens themselves are in Vault.
  */

@@ -13,7 +13,7 @@ import type { SkillSecretRead, SkillSecrets } from './skill-secrets.ts'
 import type { upstreamResolver } from './upstream.ts'
 
 // The renewal of the access token of a server signed in with OAuth
-// (docs/plan/80-mcp-server-credentials.md, §3.4): under an advisory lock of the server, so that the
+// (docs/plan/81-mcp-server-credentials.md, §3.4): under an advisory lock of the server, so that the
 // turns that need it at once renew it once; Vault is read again under the lock — another turn may
 // have renewed it already —, the refresh token is spent at the token endpoint of the sign-in (a
 // public address, no redirect), and the new tokens are written back by CAS with the expiry in the row.

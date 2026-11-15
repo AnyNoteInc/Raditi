@@ -9,7 +9,7 @@ import {
   type PublicRequestOptions,
 } from '@/server/public-request'
 
-// The check of an MCP server, before its key or its sign-in is kept (docs/plan/80-mcp-server-
+// The check of an MCP server, before its key or its sign-in is kept (docs/plan/81-mcp-server-
 // credentials.md, §3.4): `initialize` and `tools/list` with the owner's header or the access token
 // of the sign-in, over a public request (public-request.ts). The key goes nowhere but this server.
 

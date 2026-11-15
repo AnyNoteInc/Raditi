@@ -34,7 +34,7 @@ export interface SkillServerStore {
 }
 
 /**
- * The servers of `site_agent_skills` (docs/plan/80-mcp-server-credentials.md). The site comes from
+ * The servers of `site_agent_skills` (docs/plan/81-mcp-server-credentials.md). The site comes from
  * the admission of the turn, never from the request: a turn reaches only its own site's servers.
  */
 export class PostgresSkillServers implements SkillServerStore {

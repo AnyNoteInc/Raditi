@@ -195,6 +195,8 @@ async function main(options, owned) {
     metrics: rt.secret(randomBytes(24).toString('hex')),
     auth: rt.secret(randomBytes(36).toString('base64url')),
     previewSession: rt.secret(randomBytes(36).toString('base64url')),
+    pagesCookie: rt.secret(randomBytes(32).toString('hex')),
+    pagesSigning: rt.secret(randomBytes(32).toString('hex')),
     workerToken: rt.secret(randomBytes(36).toString('base64url')),
     pagesCookie: rt.secret(randomBytes(36).toString('base64url')),
     pagesSigning: rt.secret(randomBytes(36).toString('base64url')),

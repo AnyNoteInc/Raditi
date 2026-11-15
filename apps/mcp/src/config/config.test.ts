@@ -462,7 +462,7 @@ describe('the web search of the mcp role', () => {
     expect(problems).toMatch(/WEB_SEARCH_TIMEOUT_SECONDS/)
   })
 
-  it('needs the platform subnets in production and keeps a loopback relay out of it (plan 80)', () => {
+  it('needs the platform subnets in production and keeps a loopback relay out of it (plan 81)', () => {
     expect(problemsOf(prodEnv({ SANDBOX_EGRESS_REFUSED_SUBNETS: '' }))).toContain(
       'SANDBOX_EGRESS_REFUSED_SUBNETS: required in production (the platform subnets the relay of MCP servers never reaches)',
     )

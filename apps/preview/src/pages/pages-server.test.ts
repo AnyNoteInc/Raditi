@@ -1,7 +1,7 @@
 import { request as httpRequest } from 'node:http'
 import type { AddressInfo } from 'node:net'
 
-import type { ServedPage } from '@repo/db'
+import type { ServedNode, ServedSite } from '@repo/db'
 import {
   newPageSlug,
   PAGE_CSP,
@@ -25,11 +25,53 @@ const writing = slugOf(4)
 const pending = slugOf(5)
 const reading = slugOf(6)
 
+/**
+ * A site of the test as one flat row (docs/plan/73-pages-sites.md, Дер11): its home page and the
+ * site in one — taken down or in the trash is the site's —, with the pages below it and the
+ * former paths that send on.
+ */
+interface FlatSite {
+  id: string
+  state: 'pending' | 'live' | 'taken_down'
+  deleted: boolean
+  kind: ServedNode['kind']
+  passwordHash: string | null
+  passwordEpoch: number
+  content: ServedNode['content']
+  nodes?: Record<string, ServedNode>
+  redirects?: Record<string, string>
+  /** The label to send on to: its own name, asked by another label (Дер32). */
+  host?: string | null
+}
+
 class MemoryStore implements PagesStore {
-  pages = new Map<string, ServedPage>()
+  pages = new Map<string, FlatSite>()
+  files = new Map<string, { type: string; bytes: Uint8Array; sha256: string }>()
+  file(treeId: string, path: string) {
+    return Promise.resolve(this.files.get(`${treeId}${path}`) ?? null)
+  }
   counts = new Map<string, number>()
-  served(slug: string) {
-    return Promise.resolve(this.pages.get(slug) ?? null)
+  asked: string[] = []
+  served(slug: string, path: string): Promise<ServedSite | null> {
+    this.asked.push(path)
+    const site = this.pages.get(slug)
+    if (!site) return Promise.resolve(null)
+    const home: ServedNode = {
+      id: site.id,
+      state: site.state === 'taken_down' ? 'live' : site.state,
+      deleted: false,
+      kind: site.kind,
+      content: site.content,
+    }
+    return Promise.resolve({
+      treeId: site.id,
+      host: site.host ?? null,
+      gone: site.state === 'taken_down' ? 'taken_down' : site.deleted ? 'deleted' : null,
+      passwordHash: site.passwordHash,
+      passwordEpoch: site.passwordEpoch,
+      page: path === '/' ? home : (site.nodes?.[path] ?? null),
+      redirect: site.redirects?.[path] ?? null,
+    })
   }
   admit(key: string, limit: number) {
     const count = (this.counts.get(key) ?? 0) + 1
@@ -41,9 +83,10 @@ class MemoryStore implements PagesStore {
   }
 }
 
-const page = (id: string, extra: Partial<ServedPage> = {}): ServedPage => ({
+const page = (id: string, extra: Partial<FlatSite> = {}): FlatSite => ({
   id,
   state: 'live',
+  deleted: false,
   kind: 'html',
   passwordHash: null,
   passwordEpoch: 0,
@@ -203,6 +246,24 @@ describe('the server of published pages', () => {
     expect((await call(hostOf(slugOf(9)))).status).toBe(404)
   })
 
+  it('answers 410 «Страница удалена» for a page in the trash, before its password (plan 73, Дер2)', async () => {
+    const trashed = slugOf(10)
+    store.pages.set(
+      trashed,
+      page('00000000-0000-7000-8000-00000000000a', {
+        deleted: true,
+        passwordHash: 'hash:секрет-1',
+        content: null,
+      }),
+    )
+    const gone = await call(hostOf(trashed))
+    expect(gone.status).toBe(410)
+    expect(gone.body).toContain('Страница удалена')
+    expect(gone.body).not.toContain('Пароль')
+    expect(gone.headers['content-security-policy']).toBe(PAGE_PLATFORM_CSP)
+    expect((await call(hostOf(trashed), form('секрет-1'))).status).toBe(410)
+  })
+
   it('says a document is still being written', async () => {
     const answer = await call(hostOf(writing))
     expect(answer.status).toBe(200)
@@ -226,7 +287,7 @@ describe('the server of published pages', () => {
     expect(right.headers.location).toBe('/')
     const cookie = String(right.headers['set-cookie'])
     expect(cookie).toMatch(
-      /^raditi_page=4\.\d{13}\.[A-Za-z0-9_-]{43}; Max-Age=43200; HttpOnly; Secure; SameSite=Lax; Path=\/$/,
+      /^raditi_page=4\.\d{13}\.[A-Za-z0-9_-]{43}; Max-Age=43200; HttpOnly; Secure; SameSite=None; Path=\/$/,
     )
     expect(cookie).not.toMatch(/Domain=/i)
 
@@ -339,6 +400,221 @@ describe('the server of published pages', () => {
     })
     expect(answer.status).toBe(413)
     expect(answer.body).toContain('Пароль слишком длинный')
+  })
+  // ——————————————————— a site of pages (docs/plan/73-pages-sites.md, Дер15–Дер19, §5.2)
+
+  describe('a site of pages', () => {
+    const site = slugOf(20)
+    const node = (id: number, extra: Partial<ServedNode> = {}): ServedNode => ({
+      id: `00000000-0000-7000-8000-0000000002${String(id).padStart(2, '0')}`,
+      state: 'live',
+      deleted: false,
+      kind: 'html',
+      content: { version: 1, bytes: new TextEncoder().encode(`<p>node ${id}</p>`) },
+      ...extra,
+    })
+    beforeEach(() => {
+      store.pages.set(
+        site,
+        page('00000000-0000-7000-8000-000000000200', {
+          nodes: {
+            '/uslugi': node(1),
+            '/uslugi/remont': node(2, {
+              content: { version: 4, bytes: new TextEncoder().encode('<p>remont</p>') },
+            }),
+            '/staroe': node(3, { deleted: true, content: null }),
+            '/snyato': node(4, { state: 'taken_down' }),
+            '/chernovik': node(5, { state: 'pending', content: null }),
+          },
+          redirects: { '/ceny': '/uslugi/remont', '/staroe': '/uslugi' },
+        }),
+      )
+    })
+
+    it('serves a page at its path under the policy of a page', async () => {
+      const answer = await call(hostOf(site), { path: '/uslugi/remont' })
+      expect(answer.status).toBe(200)
+      expect(answer.body).toBe('<p>remont</p>')
+      expect(answer.headers['content-security-policy']).toBe(PAGE_CSP)
+      expect(store.asked.at(-1)).toBe('/uslugi/remont')
+    })
+
+    it('sends a slash at the end and capital letters on to the canon, the request never as it came', async () => {
+      for (const [path, location] of [
+        ['/uslugi/', '/uslugi'],
+        ['/USLUGI/Remont', '/uslugi/remont'],
+      ] as const) {
+        const answer = await call(hostOf(site), { path })
+        expect(answer.status, path).toBe(308)
+        expect(answer.headers.location).toBe(location)
+        expect(answer.body).toBe('')
+      }
+    })
+
+    it('answers 404 without a lookup for a path that is no path', async () => {
+      for (const path of ['/%2e%2e/x', '/a//b', '/index.html', '/v2.html', '/a;b', '/-a']) {
+        store.asked = []
+        const answer = await call(hostOf(site), { path })
+        expect(answer.status, path).toBe(404)
+        expect(store.asked).toEqual(['/'])
+      }
+    })
+
+    it('sends a former path on to where its page is now, 308 with no chain (Дер19)', async () => {
+      const moved = await call(hostOf(site), { path: '/ceny' })
+      expect(moved.status).toBe(308)
+      expect(moved.headers.location).toBe('/uslugi/remont')
+    })
+
+    it('answers 410 at a page in the trash, a redirect taking a path its page left first', async () => {
+      // /staroe is in the trash, and a redirect now sends it on: the redirect wins.
+      const sent = await call(hostOf(site), { path: '/staroe' })
+      expect(sent.status).toBe(308)
+      store.pages.get(site)!.redirects = {}
+      const gone = await call(hostOf(site), { path: '/staroe' })
+      expect(gone.status).toBe(410)
+      expect(gone.body).toContain('Страница удалена')
+    })
+
+    it('answers 410 at a page taken down alone, 404 at a page never published', async () => {
+      expect((await call(hostOf(site), { path: '/snyato' })).status).toBe(410)
+      expect((await call(hostOf(site), { path: '/chernovik' })).status).toBe(404)
+      expect((await call(hostOf(site), { path: '/net-takoy' })).status).toBe(404)
+    })
+
+    it('answers 410 on every path of a site taken down or in the trash', async () => {
+      store.pages.get(site)!.state = 'taken_down'
+      for (const path of ['/', '/uslugi', '/net-takoy'])
+        expect((await call(hostOf(site), { path })).status, path).toBe(410)
+      store.pages.get(site)!.state = 'live'
+      store.pages.get(site)!.deleted = true
+      const gone = await call(hostOf(site), { path: '/uslugi' })
+      expect(gone.status).toBe(410)
+      expect(gone.body).toContain('Страница удалена')
+    })
+
+    it('asks the password of the site before any page, a path that is not there too (Дер16)', async () => {
+      Object.assign(store.pages.get(site)!, { passwordHash: 'hash:секрет-1', passwordEpoch: 2 })
+      for (const path of ['/uslugi', '/net-takoy', '/staroe', '/USLUGI', '/%2e%2e']) {
+        const answer = await call(hostOf(site), { path })
+        expect(answer.status, path).toBe(200)
+        expect(answer.body).toContain('Страница закрыта паролем')
+      }
+      // The form posts to the canonical path it was asked at, 303 back there with the cookie.
+      expect((await call(hostOf(site), { path: '/uslugi/remont' })).body).toContain(
+        'action="/uslugi/remont"',
+      )
+      expect((await call(hostOf(site), { path: '/%2e%2e' })).body).toContain('action="/"')
+      const right = await call(hostOf(site), { ...form('секрет-1'), path: '/uslugi/remont' })
+      expect(right.status).toBe(303)
+      expect(right.headers.location).toBe('/uslugi/remont')
+      const cookie = String(right.headers['set-cookie']).split(';')[0]!
+      const opened = await call(hostOf(site), { path: '/uslugi/remont', headers: { cookie } })
+      expect(opened.body).toBe('<p>remont</p>')
+      // One password for the site: the same cookie opens its other pages.
+      expect((await call(hostOf(site), { path: '/uslugi', headers: { cookie } })).status).toBe(200)
+      expect((await call(hostOf(site), { path: '/net-takoy', headers: { cookie } })).status).toBe(
+        404,
+      )
+    })
+
+    it('opens a site with the cookie a viewer got before sites — its id is the page’s (Дер13)', async () => {
+      Object.assign(store.pages.get(site)!, { passwordHash: 'hash:секрет-1', passwordEpoch: 7 })
+      const cookie = pageSetCookie(
+        SECRET,
+        { id: '00000000-0000-7000-8000-000000000200', passwordEpoch: 7 },
+        1_800_000_000_000,
+        pageLimits.passwordCookieSeconds,
+      ).split(';')[0]!
+      expect((await call(hostOf(site), { headers: { cookie } })).status).toBe(200)
+    })
+
+    it('says a version was seen with 304, and names it by its ETag (Дер22)', async () => {
+      const first = await call(hostOf(site), { path: '/uslugi/remont' })
+      const etag = String(first.headers.etag)
+      expect(etag).toBe('"00000000-0000-7000-8000-000000000202.4"')
+      const again = await call(hostOf(site), {
+        path: '/uslugi/remont',
+        headers: { 'if-none-match': etag },
+      })
+      expect(again.status).toBe(304)
+      expect(again.body).toBe('')
+      expect(again.headers['content-security-policy']).toBe(PAGE_CSP)
+    })
+
+    it('takes no form at a page without a password, and tells nothing at a path that is not there', async () => {
+      expect((await call(hostOf(site), { ...form('x'), path: '/uslugi' })).status).toBe(405)
+      expect((await call(hostOf(site), { ...form('x'), path: '/net-takoy' })).status).toBe(404)
+      expect((await call(hostOf(site), { ...form('x'), path: '/chernovik' })).status).toBe(404)
+    })
+  })
+
+  it('sends a site asked by its slug or a former name on to its own name, at the same path (Дер32)', async () => {
+    store.pages.set(open, { ...store.pages.get(open)!, host: 'moya-firma' })
+    const moved = await call(hostOf(open), { path: '/Uslugi/' })
+    expect(moved.status).toBe(308)
+    expect(moved.headers.location).toBe(`//moya-firma.${BASE}:${PORT_IN_HOST}/uslugi`)
+    const odd = await call(hostOf(open), { path: '/%2e%2e' })
+    expect(odd.headers.location).toBe(`//moya-firma.${BASE}:${PORT_IN_HOST}/`)
+  })
+
+  // ——————————————————— shared files of a site (docs/plan/73-pages-sites.md, Дер34, Дер35)
+
+  describe('shared files of a site', () => {
+    const id = '00000000-0000-7000-8000-000000000001'
+    const css = {
+      type: 'text/css; charset=utf-8',
+      bytes: new TextEncoder().encode('a{}'),
+      sha256: 'c'.repeat(64),
+    }
+    beforeEach(() => {
+      store.files.set(`${id}/_files/style.css`, css)
+    })
+
+    it('serves a file with its own type, loadable by any page, running nothing alone', async () => {
+      const answer = await call(hostOf(open), { path: '/_files/style.css' })
+      expect(answer.status).toBe(200)
+      expect(answer.body).toBe('a{}')
+      expect(answer.headers).toMatchObject({
+        'content-type': 'text/css; charset=utf-8',
+        'x-content-type-options': 'nosniff',
+        'cross-origin-resource-policy': 'cross-origin',
+        etag: `"${'c'.repeat(64)}"`,
+      })
+      expect(answer.headers['content-security-policy']).toContain('sandbox')
+      const again = await call(hostOf(open), {
+        path: '/_files/style.css',
+        headers: { 'if-none-match': `"${'c'.repeat(64)}"` },
+      })
+      expect(again.status).toBe(304)
+    })
+
+    it('answers 404 for no file, a path that is none and a page of HTML; 405 for a form', async () => {
+      for (const path of [
+        '/_files/net.css',
+        '/_files/index.html',
+        '/_files/../x.css',
+        '/_files/A.css',
+      ])
+        expect((await call(hostOf(open), { path })).status, path).toBe(404)
+      expect((await call(hostOf(open), { ...form('x'), path: '/_files/style.css' })).status).toBe(
+        405,
+      )
+    })
+
+    it('gives a file of a site with a password only with its cookie, and none of a site gone', async () => {
+      const lockedId = '00000000-0000-7000-8000-000000000002'
+      store.files.set(`${lockedId}/_files/style.css`, css)
+      expect((await call(hostOf(locked), { path: '/_files/style.css' })).status).toBe(404)
+      const right = await call(hostOf(locked), form('секрет-1'))
+      const cookie = String(right.headers['set-cookie']).split(';')[0]!
+      expect(
+        (await call(hostOf(locked), { path: '/_files/style.css', headers: { cookie } })).status,
+      ).toBe(200)
+      const downId = '00000000-0000-7000-8000-000000000003'
+      store.files.set(`${downId}/_files/style.css`, css)
+      expect((await call(hostOf(down), { path: '/_files/style.css' })).status).toBe(410)
+    })
   })
 })
 

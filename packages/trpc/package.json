@@ -18,6 +18,7 @@
     "@repo/db": "workspace:*",
     "@repo/doc-render": "workspace:*",
     "@repo/domain": "workspace:*",
+    "@repo/telegram": "workspace:*",
     "@repo/yookassa": "workspace:*",
     "@trpc/server": "catalog:",
     "superjson": "catalog:",

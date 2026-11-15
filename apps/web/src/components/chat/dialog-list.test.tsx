@@ -72,6 +72,7 @@ function dialog(id: string, patch: Partial<DialogListItem> = {}): DialogListItem
     project: null,
     pinned: false,
     archived: false,
+    telegram: false,
     ...patch,
   }
 }

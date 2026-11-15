@@ -446,7 +446,7 @@ async function inside() {
         .writeHead(status, { 'content-type': 'application/json', ...headers })
         .end(JSON.stringify(value))
     try {
-      // The relay of the role mcp for a server with a key (docs/plan/80-mcp-server-credentials.md):
+      // The relay of the role mcp for a server with a key (docs/plan/81-mcp-server-credentials.md):
       // the CLI reaches it with the turn's MCP token from a pipe of the server's own.
       const relayed = /^\/mcp\/skill\/([a-z0-9-]+)$/.exec(request.url ?? '')
       if (relayed) {
@@ -2262,7 +2262,7 @@ try {
     )
   }
   {
-    // A server with a key goes through the relay of the role mcp (docs/plan/80-mcp-server-
+    // A server with a key goes through the relay of the role mcp (docs/plan/81-mcp-server-
     // credentials.md): the CLI reads a pipe of its own for each such server and calls the relay's
     // path with the turn's MCP token; the address and the key of the server are nowhere here.
     const relayed = await turn({

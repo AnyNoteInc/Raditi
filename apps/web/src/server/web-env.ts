@@ -60,7 +60,7 @@ export interface WebEnv {
    */
   pageViews: { origin: string; secret: string } | null
   /**
-   * What the check of an MCP server with a key connects to (docs/plan/80-mcp-server-credentials.md):
+   * What the check of an MCP server with a key connects to (docs/plan/81-mcp-server-credentials.md):
    * public addresses outside the platform's subnets (SANDBOX_EGRESS_REFUSED_SUBNETS, the same as
    * the relay of mcp reads) and, outside production for tests and stands alone, loopback
    * (MCP_SKILL_RELAY_LOOPBACK).

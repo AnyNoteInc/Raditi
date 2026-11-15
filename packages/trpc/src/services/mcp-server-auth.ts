@@ -1,7 +1,7 @@
 import type { SecretStore } from '@repo/domain'
 
 // The authorization of an MCP server of a site's agent, on the side of the cabinet
-// (docs/plan/80-mcp-server-credentials.md, §3.4): the key the owner types is checked against the
+// (docs/plan/81-mcp-server-credentials.md, §3.4): the key the owner types is checked against the
 // server itself, written to Vault and never read back. The check needs the network and the
 // address rules of an app (@repo/ip-address), so web makes it and hands it in.
 

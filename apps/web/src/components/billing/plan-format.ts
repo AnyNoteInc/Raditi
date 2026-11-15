@@ -113,6 +113,19 @@ export function planAverageTasks(creditsPerMonth: number): string | null {
 }
 
 /** «Один сайт на WordPress», «До 3 сайтов на WordPress». */
+/**
+ * The sites of pages of a tariff, beside its credits (docs/plan/73-pages-sites.md, Дер37):
+ * «До 2 сайтов из страниц»; null — the tariff gives none of its own.
+ */
+export function planPageSites(pageSites: number | null): string | null {
+  if (pageSites === null || pageSites <= 0) return null
+  if (pageSites === 1) return 'Один сайт из страниц'
+  return `До ${pageSites} ${plural(pageSites, 'сайта', 'сайтов', 'сайтов')} из страниц`
+}
+
+/** The own name of a site of pages (Дер32): «Бизнес» and above. */
+export const planCustomNames = 'Своё имя сайта: имя.pages.raditi.ru'
+
 export function planSites(maxSites: number): string {
   if (maxSites === 1) return 'Один сайт на WordPress'
   return `До ${maxSites} ${plural(maxSites, 'сайта', 'сайтов', 'сайтов')} на WordPress`

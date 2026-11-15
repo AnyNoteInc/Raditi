@@ -32,7 +32,7 @@ export interface UpstreamPolicy {
 }
 
 /**
- * Where the relay connects for a server's address (docs/plan/80, §3.2, п. 4): the name is resolved
+ * Where the relay connects for a server's address (docs/plan/81, §3.2, п. 4): the name is resolved
  * once per request and every address it has must be public — a name with one private address is
  * refused whole —, and the connection goes to the address that was checked, with the name as SNI
  * and as the name of the certificate. A resolver that answers differently on the next lookup

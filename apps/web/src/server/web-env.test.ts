@@ -42,7 +42,7 @@ describe('webEnvFromEnv', () => {
     })
   })
 
-  it('reads what the check of an MCP server may connect to, and keeps loopback out of production (plan 80)', () => {
+  it('reads what the check of an MCP server may connect to, and keeps loopback out of production (plan 81)', () => {
     expect(
       webEnvFromEnv({
         ...devEnv,

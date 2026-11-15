@@ -5,8 +5,8 @@ import type { PrismaClient } from './generated/prisma/client.ts'
 
 const databaseUrl = process.env.DATABASE_URL
 
-// The authorization of an MCP server of a site's agent (docs/plan/80-mcp-server-credentials.md):
-// the CHECKs of migration 20261115110100_site_agent_skill_auth.
+// The authorization of an MCP server of a site's agent (docs/plan/81-mcp-server-credentials.md):
+// the CHECKs of migration 20261116100100_site_agent_skill_auth.
 describe.skipIf(!databaseUrl)('PostgreSQL authorization of MCP servers', () => {
   let db: PrismaClient
   const workspaces: string[] = []

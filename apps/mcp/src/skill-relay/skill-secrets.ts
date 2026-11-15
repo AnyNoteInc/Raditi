@@ -10,12 +10,12 @@ export const SKILL_SECRET_TTL_MS = 60_000
 
 export interface SkillSecretRead {
   secret: AgentSkillSecret
-  /** The version of the key: the CAS of a renewed token (docs/plan/80, §3.4). */
+  /** The version of the key: the CAS of a renewed token (docs/plan/81, §3.4). */
   version: number
 }
 
 /**
- * The secrets of MCP servers in Vault (`kv/sites/<site>/mcp/<name>`, docs/plan/80-mcp-server-
+ * The secrets of MCP servers in Vault (`kv/sites/<site>/mcp/<name>`, docs/plan/81-mcp-server-
  * credentials.md), read under the role's AppRole and kept in this process for a minute. A key
  * that is gone or erased — a version without a value — is no secret. The value goes nowhere but
  * the header of the server's request; it is never logged.

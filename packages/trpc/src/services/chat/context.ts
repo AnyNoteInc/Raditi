@@ -54,6 +54,11 @@ export interface ChatContext {
    * (APP_URL). Absent or null — no page is shown here: the cabinet only downloads one.
    */
   pageViews?: { origin: string; appUrl: string; keys: PageKeys } | null
+  /**
+   * The username of the bot of the chat in Telegram (TELEGRAM_BOT_USERNAME, docs/plan/80-telegram.md):
+   * the cabinet links Telegram through `t.me/<bot>`. Absent or null — no Telegram here.
+   */
+  telegramBot?: string | null
   /** The HMAC key of release confirmations: `releaseConfirmKey(BETTER_AUTH_SECRET)`. */
   releaseConfirmKey: Uint8Array
   /** `raditi-artifacts`: the diff of a candidate (`candidate.fileDiff`). */

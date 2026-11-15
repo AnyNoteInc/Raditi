@@ -13,7 +13,7 @@ import {
 } from '@repo/ip-address'
 
 // A request of web to a server an owner named — an MCP server, its server of sign-in
-// (docs/plan/80-mcp-server-credentials.md): the name is resolved once and every address it has must
+// (docs/plan/81-mcp-server-credentials.md): the name is resolved once and every address it has must
 // be public and outside the platform's subnets; the connection goes to the address that was
 // checked, with the name as SNI and Host; no redirect is followed; the answer is bounded in bytes
 // and in time.

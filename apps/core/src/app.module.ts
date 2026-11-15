@@ -3,6 +3,7 @@ import { DatabaseModule } from '@repo/service-runtime'
 
 import { BillingModule } from './billing/billing.module.ts'
 import { LeadsModule } from './leads/leads.module.ts'
+import { TelegramModule } from './telegram/telegram.module.ts'
 import { CoreConfigModule, type AppModuleOptions } from './config/config.module.ts'
 import { CoreHealthModule } from './health/health.module.ts'
 import { InfraModule } from './infra/infra.module.ts'
@@ -53,6 +54,8 @@ export class AppModule {
         BillingModule,
         // The leads of the landing go to Telegram only with the bot of leads configured.
         ...(config.leads ? [LeadsModule] : []),
+        // The bot of the chat in Telegram only when it is configured (docs/plan/80-telegram.md).
+        ...(config.telegram ? [TelegramModule] : []),
         SiteProvisioningModule,
         // The files of a project for its section «Терминал» (06.11.2026).
         SiteFilesModule,

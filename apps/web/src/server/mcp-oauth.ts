@@ -8,7 +8,7 @@ import {
   type PublicRequester,
 } from '@/server/public-request'
 
-// The sign-in of an MCP server that wants OAuth (docs/plan/80-mcp-server-credentials.md, §3.4;
+// The sign-in of an MCP server that wants OAuth (docs/plan/81-mcp-server-credentials.md, §3.4;
 // the authorization of the MCP specification): the server names its metadata (RFC 9728), that
 // names the server of sign-in and its metadata (RFC 8414); the platform registers a public client
 // there (RFC 7591), sends the owner to sign in with PKCE (S256) and the resource (RFC 8707), and

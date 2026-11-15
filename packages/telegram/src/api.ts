@@ -36,6 +36,8 @@ export interface SendMessageOptions {
   linkPreview?: boolean
   inlineKeyboard?: InlineKeyboardButton[][]
   replyToMessageId?: number
+  /** A topic of a private chat with topics (Bot API 9.3) or of a forum. */
+  threadId?: number
 }
 
 export const DEFAULT_ALLOWED_UPDATES = ['message', 'callback_query', 'my_chat_member'] as const
@@ -45,6 +47,8 @@ const botUserSchema = z.object({
   is_bot: z.boolean(),
   first_name: z.string(),
   username: z.string().optional(),
+  /** Topics in private chats are on for the bot (Bot API 9.3, set in @BotFather). */
+  has_topics_enabled: z.boolean().optional(),
 })
 export type TelegramBotUser = z.infer<typeof botUserSchema>
 
@@ -66,6 +70,15 @@ const updateSchema = z.object({
 })
 export type TelegramUpdate = z.infer<typeof updateSchema>
 
+const forumTopicSchema = z.object({ message_thread_id: z.number().int(), name: z.string() })
+export type TelegramForumTopic = z.infer<typeof forumTopicSchema>
+
+const fileInfoSchema = z.object({
+  file_id: z.string(),
+  file_size: z.number().int().nonnegative().optional(),
+  file_path: z.string().optional(),
+})
+
 const webhookInfoSchema = z.object({
   url: z.string(),
   pending_update_count: z.number(),
@@ -86,6 +99,9 @@ const envelopeSchema = z.object({
 const TOKEN_PATTERN = /^\d+:[A-Za-z0-9_-]+$/
 const METHOD_PATTERN = /^[A-Za-z]+$/
 const DEFAULT_TIMEOUT_MS = 10_000
+const DOWNLOAD_TIMEOUT_MS = 120_000
+/** `file_path` of getFile: `voice/file_3.oga` — nothing that could leave the file URL. */
+const FILE_PATH_PATTERN = /^[A-Za-z0-9_-]{1,64}\/[A-Za-z0-9_.-]{1,128}$/
 
 export interface TelegramBotApi {
   /** Any Bot API method; the result is validated with `schema`. */
@@ -127,6 +143,19 @@ export interface TelegramBotApi {
   ): Promise<TelegramApiResult<unknown>>
   /** Stops the spinner of a pressed button, with a short notice when `text` is set. */
   answerCallbackQuery(id: string, text?: string): Promise<TelegramApiResult<boolean>>
+  /** A topic in a private chat with a user (Bot API 9.4) or in a forum. */
+  createForumTopic(
+    chatId: number | string,
+    name: string,
+  ): Promise<TelegramApiResult<TelegramForumTopic>>
+  /**
+   * The bytes of a file a user sent, at most `maxBytes` (Telegram gives a bot at most 20 MB):
+   * `getFile`, then the download through the same proxy. A larger file is refused unread.
+   */
+  downloadFile(
+    fileId: string,
+    maxBytes?: number,
+  ): Promise<TelegramApiResult<{ bytes: Uint8Array; path: string }>>
 }
 
 /**
@@ -239,6 +268,7 @@ export function createTelegramBotApi(options: TelegramBotApiOptions): TelegramBo
       if (opts.replyToMessageId !== undefined) {
         body.reply_parameters = { message_id: opts.replyToMessageId }
       }
+      if (opts.threadId !== undefined) body.message_thread_id = opts.threadId
       return call('sendMessage', body, sentMessageSchema)
     },
 
@@ -277,6 +307,64 @@ export function createTelegramBotApi(options: TelegramBotApiOptions): TelegramBo
       const body: Record<string, unknown> = { callback_query_id: id }
       if (text !== undefined) body.text = text
       return call('answerCallbackQuery', body, z.boolean())
+    },
+
+    createForumTopic(chatId, name) {
+      const title = Array.from(name.replace(/\s+/g, ' ').trim()).slice(0, 128).join('')
+      return call(
+        'createForumTopic',
+        { chat_id: chatId, name: title === '' ? '…' : title },
+        forumTopicSchema,
+      )
+    },
+
+    async downloadFile(fileId, maxBytes = TELEGRAM_LIMITS.downloadMaxBytes) {
+      const info = await call('getFile', { file_id: fileId }, fileInfoSchema)
+      if (!info.ok) return info
+      const { file_path: path, file_size: size } = info.result
+      if (path === undefined || !FILE_PATH_PATTERN.test(path))
+        return { ok: false, description: 'File is not downloadable' }
+      if (size !== undefined && size > maxBytes)
+        return { ok: false, description: 'File is too large' }
+      const init: TelegramRequestInit = {
+        method: 'GET',
+        signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+      }
+      if (transport.dispatcher) init.dispatcher = transport.dispatcher
+      let res: Response
+      try {
+        res = await transport.fetch(`${baseUrl}/file/bot${token}/${path}`, init)
+      } catch (err) {
+        return { ok: false, description: fetchFailure(err) }
+      }
+      if (!res.ok || res.body === null) {
+        await res.body?.cancel().catch(() => undefined)
+        return { ok: false, description: `HTTP ${res.status}`, errorCode: res.status }
+      }
+      const chunks: Uint8Array[] = []
+      let total = 0
+      const reader = res.body.getReader()
+      try {
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          total += value.byteLength
+          if (total > maxBytes) {
+            await reader.cancel().catch(() => undefined)
+            return { ok: false, description: 'File is too large' }
+          }
+          chunks.push(value)
+        }
+      } catch (err) {
+        return { ok: false, description: fetchFailure(err) }
+      }
+      const bytes = new Uint8Array(total)
+      let at = 0
+      for (const chunk of chunks) {
+        bytes.set(chunk, at)
+        at += chunk.byteLength
+      }
+      return { ok: true, result: { bytes, path } }
     },
   }
 }

@@ -572,7 +572,7 @@ try {
       COMPOSE_PROFILES: '',
       WEB_IMAGE: LOCAL.web,
       CORE_IMAGE: LOCAL.core,
-      // web in production needs the platform's subnets (docs/plan/80-mcp-server-credentials.md).
+      // web in production needs the platform's subnets (docs/plan/81-mcp-server-credentials.md).
       SANDBOX_EGRESS_REFUSED_SUBNETS: '203.0.113.10/32',
       // The compose file interpolates every service, the llm profile's too: the stack of this
       // stand never starts it, so the image is a placeholder that is never pulled.

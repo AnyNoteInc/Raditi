@@ -30,6 +30,7 @@ describe('the page for reading (docs/plan/69-pages.md, Ст11)', () => {
         documents: new Set<string>(),
         imageSrc: () => null,
         documentLinks: false,
+        treeLinks: true,
       }),
     )
     expect(html).toBe(
@@ -60,5 +61,24 @@ describe('the page for reading (docs/plan/69-pages.md, Ст11)', () => {
 
   it('loads nothing: no address in its style', () => {
     expect(READING_PAGE_CSS).not.toMatch(/url\(|@import|https?:/)
+  })
+
+  // docs/plan/73-pages-sites.md, Дер20: a page of a site links to the pages of its site.
+  it('keeps a link from the root of its site a link in the same window, and the tab does not', async () => {
+    const markdown =
+      '[Услуги](/uslugi) [Ремонт](/uslugi/remont#cena) [не путь](/Uslugi) [наружу](https://example.ru/)'
+    const page = await readingPage({ title: 'Главная', markdown })
+    expect(page).toContain('<a href="/uslugi">Услуги</a>')
+    expect(page).toContain('<a href="/uslugi/remont#cena">Ремонт</a>')
+    expect(page).not.toContain('href="/Uslugi"')
+    expect(page).toContain('target="_blank"')
+    const tab = renderToStaticMarkup(
+      createElement(DocumentMarkdown, {
+        text: markdown,
+        documents: new Set<string>(),
+        imageSrc: () => null,
+      }),
+    )
+    expect(tab).not.toContain('href="/uslugi"')
   })
 })

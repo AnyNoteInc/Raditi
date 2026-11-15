@@ -134,7 +134,7 @@ export interface McpConfig {
    */
   pages: PagesAddress | null
   /**
-   * The relay of MCP servers with authorization (docs/plan/80-mcp-server-credentials.md): the
+   * The relay of MCP servers with authorization (docs/plan/81-mcp-server-credentials.md): the
    * platform's subnets it never connects to besides the non-public ones, and — outside
    * production, for tests and stands alone — whether a loopback server is taken. A configuration
    * a stand builds by hand may leave it out: no extra subnets, no loopback.
@@ -223,7 +223,7 @@ const ownEnvSchema = z.object({
   // Published pages (docs/plan/69-pages.md): the address the agent is given.
   PAGES_BASE_DOMAIN: envVar(z.string().optional()),
   PAGES_PUBLIC_PORT: envVar(z.coerce.number().int().min(1).max(65_535).optional()),
-  // The relay of MCP servers (plan 80): the platform's subnets, as the egress proxies read them.
+  // The relay of MCP servers (plan 81): the platform's subnets, as the egress proxies read them.
   SANDBOX_EGRESS_REFUSED_SUBNETS: envVar(
     z
       .string()
@@ -378,7 +378,7 @@ export function loadMcpConfig(env: Env): McpConfig {
         'BROWSER_WORKER_URL: plain http only to a private or loopback IP address in production (spec §19)',
       )
   }
-  // The relay of MCP servers must know the platform's own public addresses (plan 80): without
+  // The relay of MCP servers must know the platform's own public addresses (plan 81): without
   // them a server named by an owner could be the platform itself.
   if (production && (own.SANDBOX_EGRESS_REFUSED_SUBNETS ?? '').trim() === '')
     problems.push(

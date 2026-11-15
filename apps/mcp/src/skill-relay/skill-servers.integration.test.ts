@@ -8,7 +8,7 @@ const enabled = Boolean(databaseUrl && process.env.RADITI_GATEWAY_DB_TESTS === '
 const url = 'https://mcp.example.com/v1/mcp'
 
 /**
- * The servers the relay serves, on PostgreSQL (docs/plan/80-mcp-server-credentials.md): only one
+ * The servers the relay serves, on PostgreSQL (docs/plan/81-mcp-server-credentials.md): only one
  * that is on, has authorization that works and belongs to the turn's site; its state is written
  * back and a server turned to no authorization meanwhile is left alone.
  */

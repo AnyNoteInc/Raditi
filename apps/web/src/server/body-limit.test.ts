@@ -164,13 +164,16 @@ describe('API routes', () => {
     // avatar.ts reads the file after the session, the origin and the upload limit: 5 MiB.
     'profile/avatar': /uploadAvatar\(request, avatarDependencies\)/,
     'webhooks/yookassa': /handleYookassaWebhook\(request,/,
+    // An update of the bot of the chat, posted by core: telegram-intake.ts reads at most 256 KiB
+    // after the secret (docs/plan/80-telegram.md).
+    'webhooks/telegram': /handleTelegramIntake\(request,/,
     // attachment-upload.ts streams the file to the inbox after the session, the origin, the
     // consents and the announced size, never more than announced: 20 MiB at most.
     'attachments/[id]': /uploadAttachment\(request, await params, attachmentUploadDependencies\)/,
     // speech.ts reads the sound after the session, the origin, the consents and a declared length
     // of at most 30 seconds of PCM (docs/plan/75-chat-input-output.md, ВВ17).
     speech: /recognizeSpeech\(request, speechDependencies\)/,
-    // A site, a name and an address of an MCP server (docs/plan/80-mcp-server-credentials.md).
+    // A site, a name and an address of an MCP server (docs/plan/81-mcp-server-credentials.md).
     'mcp-oauth/start': /withBodyLimit\(MAX_MCP_SIGN_IN_BODY_BYTES,/,
   }
 

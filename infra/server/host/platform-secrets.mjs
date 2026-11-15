@@ -43,6 +43,8 @@ const GENERATED = {
     S3_ACCESS_KEY_ID: s3Key,
     S3_SECRET_ACCESS_KEY: b64url(30),
     BROWSER_WORKER_TOKEN: hex(32),
+    // The bot of the chat (docs/plan/80-telegram.md): core posts its updates to web with it
+    TELEGRAM_WEBHOOK_SECRET: b64url(32),
   },
   'app/browser': {
     METRICS_TOKEN: hex(32),
@@ -71,6 +73,8 @@ const PROVIDED = {
   'app/core': [
     'SENDSAY_API_KEY',
     'LEADS_TELEGRAM_BOT_TOKEN',
+    // The bot of the chat @raditi_bot (docs/plan/80-telegram.md): web and core both get it
+    'TELEGRAM_BOT_TOKEN',
     'WEB_PUSH_PRIVATE_KEY',
     'GITEA_TOKEN',
     'GITEA_PROVISIONER_TOKEN',
@@ -181,6 +185,11 @@ function serviceFiles(kv, roles) {
           YANDEX_CLIENT_SECRET: web.YANDEX_CLIENT_SECRET,
           METRICS_TOKEN: web.METRICS_TOKEN,
           PAGES_SIGNING_SECRET: web.PAGES_SIGNING_SECRET,
+          // web takes the updates core hands it and the files of messages (docs/plan/80-telegram.md)
+          TELEGRAM_BOT_TOKEN: core.TELEGRAM_BOT_TOKEN,
+          TELEGRAM_WEBHOOK_SECRET: core.TELEGRAM_BOT_TOKEN
+            ? core.TELEGRAM_WEBHOOK_SECRET
+            : undefined,
           ...s3(web),
           ...approle('web'),
         }),
@@ -196,6 +205,10 @@ function serviceFiles(kv, roles) {
           METRICS_TOKEN: core.METRICS_TOKEN,
           SENDSAY_API_KEY: core.SENDSAY_API_KEY,
           LEADS_TELEGRAM_BOT_TOKEN: core.LEADS_TELEGRAM_BOT_TOKEN,
+          TELEGRAM_BOT_TOKEN: core.TELEGRAM_BOT_TOKEN,
+          TELEGRAM_WEBHOOK_SECRET: core.TELEGRAM_BOT_TOKEN
+            ? core.TELEGRAM_WEBHOOK_SECRET
+            : undefined,
           WEB_PUSH_PRIVATE_KEY: core.WEB_PUSH_PRIVATE_KEY,
           GITEA_TOKEN: core.GITEA_TOKEN,
           GITEA_PROVISIONER_TOKEN: core.GITEA_PROVISIONER_TOKEN,

@@ -18,7 +18,7 @@ import type { RelayedServer, SkillServerStore } from './skill-servers.ts'
 import type { TokenRenewer } from './token-renewal.ts'
 import { RelayRefusal, type upstreamResolver } from './upstream.ts'
 
-// The relay of MCP servers with authorization (docs/plan/80-mcp-server-credentials.md, §3.2): the
+// The relay of MCP servers with authorization (docs/plan/81-mcp-server-credentials.md, §3.2): the
 // turn's CLI calls /mcp/skill/<name> on the gateway of its sandbox with its MCP token; the relay
 // admits the token as /mcp does, finds the server of the turn's site by its name, reads its secret
 // from Vault and makes the server's request itself, over its own TLS, with the owner's header.

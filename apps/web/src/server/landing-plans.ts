@@ -62,6 +62,8 @@ async function readLandingPlans(): Promise<LandingPricingData> {
         creditsPer5h: true,
         creditsPerWeek: true,
         maxSites: true,
+        pageSites: true,
+        pageCustomNames: true,
         packCredits: true,
       },
     }))().finally(() => {
@@ -93,6 +95,8 @@ async function readLandingPlans(): Promise<LandingPricingData> {
       creditsPer5h: row.creditsPer5h,
       creditsPerWeek: row.creditsPerWeek,
       maxSites: row.maxSites,
+      pageSites: row.pageSites,
+      pageCustomNames: row.pageCustomNames,
     })
   }
   const pack = rows.find(

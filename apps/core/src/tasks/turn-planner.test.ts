@@ -370,7 +370,7 @@ describe('planTurn', () => {
     const skills: TurnSkill[] = [
       { name: 'context7', kind: 'remote', url: 'https://mcp.context7.com/mcp' },
       { name: 'playwright', kind: 'local' },
-      // A server with a key goes through the relay of the role mcp (plan 80): no address here.
+      // A server with a key goes through the relay of the role mcp (plan 81): no address here.
       { name: 'menu', kind: 'relayed' },
     ]
     const plan = await planTurn(

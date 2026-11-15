@@ -9,7 +9,7 @@ import { createMcpServerProbe } from '@/server/mcp-server-probe'
 let services: { value: McpServerServices | null } | undefined
 
 /**
- * What an MCP server with a key is checked and written through (docs/plan/80-mcp-server-
+ * What an MCP server with a key is checked and written through (docs/plan/81-mcp-server-
  * credentials.md): the check of the server and a Vault store of which only `kvWrite` and
  * `kvMetadata` are reachable — the `sites-writer` policy reads nothing back either. Built on
  * first use and kept for the process. null — the vault or web settings do not parse: servers with

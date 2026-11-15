@@ -29,6 +29,8 @@ export default defineConfig({
             PREVIEW_BASE_DOMAIN: '',
             PREVIEW_PUBLIC_PORT: '',
             BROWSER_STREAM_PUBLIC_URL: '',
+            // «Страницы» (docs/plan/73-pages-sites.md): pages are set up, nothing serves them.
+            PAGES_BASE_DOMAIN: 'pages.localhost',
           },
         }
       : server,

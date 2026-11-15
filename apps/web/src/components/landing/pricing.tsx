@@ -248,6 +248,17 @@ export function Pricing({
                         `До ${plan.maxSites} ${plural(plan.maxSites, 'сайта', 'сайтов', 'сайтов')}`,
                       )}
                 </li>
+                {/* Sites of pages beside the credits (docs/plan/73-pages-sites.md, Дер37). */}
+                {plan.pageSites != null && plan.pageSites > 0 && (
+                  <li>
+                    {nbsp(
+                      plan.pageSites === 1
+                        ? 'Один сайт из страниц'
+                        : `До ${plan.pageSites} ${plural(plan.pageSites, 'сайта', 'сайтов', 'сайтов')} из страниц`,
+                    )}
+                  </li>
+                )}
+                {plan.pageCustomNames && <li>{nbsp('Своё имя сайта страниц')}</li>}
               </ul>
             </article>
           )

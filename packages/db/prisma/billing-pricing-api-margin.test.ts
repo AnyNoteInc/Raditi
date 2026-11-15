@@ -202,6 +202,8 @@ describe.skipIf(!databaseUrl)('the migration of the tariffs of 13.11.2026', () =
             creditsPerWeek: plan.creditsPerWeek,
             packCredits: plan.packCredits,
             maxSites: plan.maxSites,
+            pageSites: plan.pageSites,
+            pageCustomNames: plan.pageCustomNames,
             sortOrder: plan.sortOrder,
           })),
         ).toEqual(planSeeds.map((plan) => ({ ...plan })))

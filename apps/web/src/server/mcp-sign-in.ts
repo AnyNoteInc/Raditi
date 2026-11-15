@@ -14,7 +14,7 @@ import {
 } from '@/server/mcp-sign-in-cookie'
 import { refusedCrossOriginPost } from '@/server/trpc-origin'
 
-// The two steps of a sign-in to an MCP server (docs/plan/80-mcp-server-credentials.md, §3.4):
+// The two steps of a sign-in to an MCP server (docs/plan/81-mcp-server-credentials.md, §3.4):
 // `POST /api/mcp-oauth/start` — the cabinet asks it, the procedure checks the site and the name,
 // web finds where the server signs in and answers the address the owner's browser goes to;
 // `GET /api/mcp-oauth/callback` — the server of sign-in sends the owner back with a code, web

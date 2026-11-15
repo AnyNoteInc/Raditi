@@ -30,7 +30,7 @@ const mcpResponseHeaders = ['content-type', 'mcp-session-id', 'mcp-protocol-vers
 
 /**
  * The relay of the role mcp for an MCP server with authorization
- * (docs/plan/80-mcp-server-credentials.md): one name of a skill under /mcp/skill/, nothing after
+ * (docs/plan/81-mcp-server-credentials.md): one name of a skill under /mcp/skill/, nothing after
  * it — as SKILL_RELAY_PATH of @repo/domain. Which names a turn may use is the relay's to decide,
  * by the turn's admission and the server's row.
  */

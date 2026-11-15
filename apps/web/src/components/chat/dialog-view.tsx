@@ -127,7 +127,7 @@ import {
   useAgentDocumentArrivals,
 } from './agent-document'
 import { DocumentsPane, type DocumentTarget } from './documents-pane'
-import { usePagePublish } from './page-publish'
+import { PublishTargetDialog, usePagePublish, type PublishTarget } from './page-publish'
 import { useBrowserStream } from './use-browser-stream'
 import { useBrowserWatching } from './use-browser-watching'
 import { useFeedFollow } from './use-feed-follow'
@@ -506,6 +506,27 @@ export function DialogView({
   const canPublishPages = useQuery(trpc.pages.canPublish.queryOptions({ taskId }))
   const publishFile = useMutation(trpc.pages.publishFile.mutationOptions())
   const publication = usePagePublish()
+  // The file whose target the client is choosing (docs/plan/73-pages-sites.md, Дер9): a new page,
+  // or the next version of a page of the workspace.
+  const [publishing, setPublishing] = useState<{
+    fileId: string
+    name: string
+    title: string
+  } | null>(null)
+  // Read afresh each time the window opens: a page published a moment ago is a target too.
+  const targets = useQuery({
+    ...trpc.pages.targets.queryOptions({ taskId }),
+    enabled: publishing !== null,
+    staleTime: 0,
+  })
+  function publishTo(target: PublishTarget) {
+    if (publishing === null || publication.pending) return
+    const { fileId } = publishing
+    // The window waits for the publication («Публикуем…»), then gives way to its outcome.
+    void publication
+      .publish(() => publishFile.mutateAsync({ taskId, fileId, target }))
+      .finally(() => setPublishing(null))
+  }
   const reset = useMutation(trpc.preview.reset.mutationOptions())
   const update = useMutation(trpc.candidate.update.mutationOptions())
   const retry = useMutation(trpc.task.retry.mutationOptions())
@@ -1439,12 +1460,26 @@ export function DialogView({
               onFullscreen={setFullscreen}
               {...(canPublishPages.data === true
                 ? {
-                    onPublish: (_document: unknown, fileId: string) =>
-                      void publication.publish(() => publishFile.mutateAsync({ taskId, fileId })),
+                    onPublish: (document: { name: string; title: string }, fileId: string) =>
+                      setPublishing({ fileId, name: document.name, title: document.title }),
                   }
                 : {})}
             />
             {publication.dialog}
+            {publishing !== null && (
+              <PublishTargetDialog
+                key={publishing.fileId}
+                open
+                fileName={publishing.name}
+                defaultTitle={publishing.title}
+                pages={targets.data ?? null}
+                loading={targets.isPending}
+                failed={targets.isError}
+                pending={publication.pending}
+                onPublish={publishTo}
+                onClose={() => setPublishing(null)}
+              />
+            )}
           </DocRevisions.Provider>
         )
       case 'terminal':

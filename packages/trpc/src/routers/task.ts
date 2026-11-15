@@ -179,6 +179,8 @@ const dialogListItemOutput = z.strictObject({
   pinned: z.boolean(),
   /** «В архив» (ВВ21). */
   archived: z.boolean(),
+  /** The chat goes on in Telegram too (docs/plan/80-telegram.md, 80.6). */
+  telegram: z.boolean(),
 })
 
 export const taskRouter = router({

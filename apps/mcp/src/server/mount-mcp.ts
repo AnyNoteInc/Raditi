@@ -12,7 +12,7 @@ import { MCP_SKILL_RELAY } from '../skill-relay/skill-relay.tokens.ts'
  * its not-found handler on init, and routes mounted after it would never be reached.
  */
 export async function mountMcp(app: INestApplication): Promise<void> {
-  // The relay streams the body of a request as it came (docs/plan/80-mcp-server-credentials.md):
+  // The relay streams the body of a request as it came (docs/plan/81-mcp-server-credentials.md):
   // before the JSON parser of /mcp, which would read it whole and under its own limit.
   const relay = app.get<SkillRelay>(MCP_SKILL_RELAY)
   app.use('/mcp/skill', (req: Request, res: Response, next: NextFunction) => {

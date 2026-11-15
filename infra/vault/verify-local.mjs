@@ -930,7 +930,7 @@ async function verifyReleaseAccess({ rootToken, scopedTokens, expect, siteId, co
   await expect(rootToken, `kv/data/${deleted}?version=2`, 404)
   await expect(sitesWriter, `kv/data/${deleted}`, 403)
 
-  // The secret of an MCP server of the site's agent (docs/plan/80-mcp-server-credentials.md):
+  // The secret of an MCP server of the site's agent (docs/plan/81-mcp-server-credentials.md):
   // web writes it and never reads it; mcp reads it, writes renewed tokens by CAS, creates no key
   // and reaches no other key of the site through it.
   const server = `sites/${siteId}/mcp/menu`

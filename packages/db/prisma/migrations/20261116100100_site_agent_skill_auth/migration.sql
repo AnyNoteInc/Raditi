@@ -1,5 +1,5 @@
 -- Authorization of an added MCP server of a site's agent (owner's request of 15.11.2026,
--- docs/plan/80-mcp-server-credentials.md): none, a header whose value is in Vault, or an OAuth
+-- docs/plan/81-mcp-server-credentials.md): none, a header whose value is in Vault, or an OAuth
 -- sign-in whose tokens are in Vault. The secret lives at `kv/sites/<site>/mcp/<name>` with a
 -- `credential_refs` row of kind `mcp_server`; this table keeps the header's name, the state of the
 -- authorization and what of an OAuth sign-in is not secret. Expand only: every row stays `none`

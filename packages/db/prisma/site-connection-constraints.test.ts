@@ -379,7 +379,7 @@ describe.skipIf(!databaseUrl)('site connection migrations', () => {
       // The new value is the last one, as ALTER TYPE … ADD VALUE puts it.
       [
         'CredentialKind',
-        // mcp_server — the secret of an MCP server of a site's agent (docs/plan/80).
+        // mcp_server — the secret of an MCP server of a site's agent (docs/plan/81).
         ['ssh', 'ftp', 'wp', 'browser', 'git', 'llm_provider', 'subscription', 'db', 'mcp_server'],
       ],
     ])('create the type %s with the values of the domain, in its order', async (type, values) => {

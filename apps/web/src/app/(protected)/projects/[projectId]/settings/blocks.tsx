@@ -13,7 +13,7 @@ import { loadSiteHistory, loadSiteSection } from '@/lib/site'
 
 /**
  * «Сайт»: what the site is, how its files reach Радити when that could be read, and the agent's
- * skills — the MCP servers it calls, some with a key (docs/plan/80-mcp-server-credentials.md).
+ * skills — the MCP servers it calls, some with a key (docs/plan/81-mcp-server-credentials.md).
  */
 export async function siteBlock(
   projectId: string,

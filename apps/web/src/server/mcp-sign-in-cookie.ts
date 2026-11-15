@@ -5,7 +5,7 @@ import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from 'node:cr
 import { z } from 'zod'
 
 // A sign-in to an MCP server between its start and the owner's return
-// (docs/plan/80-mcp-server-credentials.md, §3.4): the PKCE verifier, the state, the client the
+// (docs/plan/81-mcp-server-credentials.md, §3.4): the PKCE verifier, the state, the client the
 // platform registered — sealed in a cookie of the callback's path for ten minutes, never kept in the
 // base. AES-256-GCM under a key of its own derived from BETTER_AUTH_SECRET.
 

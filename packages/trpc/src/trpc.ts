@@ -59,7 +59,7 @@ export interface Context {
    */
   siteConnections?: SiteConnectionServices | null
   /**
-   * What an MCP server with a key is checked and written through (docs/plan/80-mcp-server-
+   * What an MCP server with a key is checked and written through (docs/plan/81-mcp-server-
    * credentials.md): a check of the server and a Vault store that can only write. Absent or null:
    * a server with a key cannot be added here; servers without one work as before.
    */

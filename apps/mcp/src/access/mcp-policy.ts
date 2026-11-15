@@ -35,8 +35,17 @@ import {
   wpRestArgumentsSchema,
 } from '../content/content-arguments.ts'
 import {
+  pageDeleteArgumentsSchema,
+  pageEditArgumentsSchema,
+  pageFileDeleteArgumentsSchema,
+  pageFilePutArgumentsSchema,
+  pageFilesArgumentsSchema,
   pageListArgumentsSchema,
   pagePublishToolArgumentsSchema,
+  pageReadArgumentsSchema,
+  pageRestoreArgumentsSchema,
+  pageTreeArgumentsSchema,
+  pageUpdateArgumentsSchema,
 } from '../pages/pages-arguments.ts'
 import { webSearchArgumentsSchema } from '../search/search-arguments.ts'
 import { closedPreviewStatuses, type McpTurnAccess } from './mcp-access.ts'
@@ -107,9 +116,20 @@ const docsCall = z.discriminatedUnion('name', [
   call('doc_read', docReadArgumentsSchema),
   call('doc_finish', docFinishArgumentsSchema),
 ])
+// The pages of the workspace (docs/plan/69-pages.md, Ст20; docs/plan/73-pages-sites.md, Дер23):
+// each tool its own branch, or the body is refused.
 const pagesCall = z.discriminatedUnion('name', [
   call('page_publish', pagePublishToolArgumentsSchema),
   call('page_list', pageListArgumentsSchema.optional()),
+  call('page_tree', pageTreeArgumentsSchema),
+  call('page_read', pageReadArgumentsSchema),
+  call('page_edit', pageEditArgumentsSchema),
+  call('page_update', pageUpdateArgumentsSchema),
+  call('page_delete', pageDeleteArgumentsSchema),
+  call('page_restore', pageRestoreArgumentsSchema),
+  call('page_file_put', pageFilePutArgumentsSchema),
+  call('page_file_delete', pageFileDeleteArgumentsSchema),
+  call('page_files', pageFilesArgumentsSchema),
 ])
 const envelope = z.strictObject({
   jsonrpc: z.literal('2.0'),

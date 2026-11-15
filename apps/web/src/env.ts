@@ -2,6 +2,7 @@ import 'server-only'
 
 import { authConfigFromEnv, type AuthConfig } from '@repo/auth'
 import { storageConfigFromEnv, type StorageConfig } from '@repo/storage'
+import { telegramConfigFromEnv, type TelegramConfig } from '@repo/telegram'
 import { vaultConfigFromEnv, type VaultConfig } from '@repo/vault'
 import { yookassaConfigFromEnv, type YookassaConfig } from '@repo/yookassa'
 
@@ -30,4 +31,6 @@ export const env = {
   vault: lazy((): VaultConfig => vaultConfigFromEnv(process.env)),
   /** null — payments are off: both shop credentials are empty. */
   yookassa: lazy((): YookassaConfig | null => yookassaConfigFromEnv(process.env)),
+  /** null — the bot of the chat is off: TELEGRAM_BOT_TOKEN is empty (docs/plan/80-telegram.md). */
+  telegram: lazy((): TelegramConfig | null => telegramConfigFromEnv(process.env)),
 }

@@ -3,7 +3,7 @@ import { Transform } from 'node:stream'
 import { ENV_VALUE_MASK } from '@repo/domain'
 
 /**
- * Takes the secret values out of what a server answers (docs/plan/80, §3.2, п. 6): every whole
+ * Takes the secret values out of what a server answers (docs/plan/81, §3.2, п. 6): every whole
  * occurrence becomes the mask the platform shows for a client's variable. A value that a chunk
  * cuts in two is found across the cut: the stream holds back only the end that could be the start
  * of a value, so an event of a stream is never held for longer than that.

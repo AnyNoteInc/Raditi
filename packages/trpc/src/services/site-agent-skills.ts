@@ -26,7 +26,7 @@ import { eraseSiteSecret } from './site-delete.ts'
 // to besides the platform's own, over the open internet of a turn. The platform's two are on
 // until an owner or an admin turns one off; they add remote servers by an https address. Core
 // reads the rows for every pass (`turnSkillsOf`). A server may have a key in a header
-// (docs/plan/80-mcp-server-credentials.md): the key is checked against the server, goes to Vault
+// (docs/plan/81-mcp-server-credentials.md): the key is checked against the server, goes to Vault
 // and is never read back; the row keeps the header's name and whether the key works.
 
 export interface SiteAgentSkillView {
@@ -173,7 +173,7 @@ function headerOf(input: SkillHeaderInput) {
 }
 
 /**
- * Checks the key against the server and writes it to Vault, before any row names it (plan 80,
+ * Checks the key against the server and writes it to Vault, before any row names it (plan 81,
  * §3.4): a row never names a key Vault does not have, and a key the server refuses is never kept.
  * Returns the version that holds it.
  */
@@ -350,7 +350,7 @@ export interface SkillSignInInput {
 
 /**
  * Whether an owner or an admin may sign this site in to a server by this name: a new server, or
- * one already signed in that needs a sign-in again (plan 80, §3.4). Returns the kept name and
+ * one already signed in that needs a sign-in again (plan 81, §3.4). Returns the kept name and
  * address; web starts the sign-in only after it.
  */
 export async function checkSkillSignIn(
@@ -376,7 +376,7 @@ export async function checkSkillSignIn(
 }
 
 /**
- * Connects a server the owner has signed in to (plan 80, §3.4): checks it with the access token,
+ * Connects a server the owner has signed in to (plan 81, §3.4): checks it with the access token,
  * writes the tokens to Vault, then the row with what of the sign-in is not secret, its
  * `credential_refs` entry and the audit, in one transaction. The tokens are in no row, log or audit.
  */

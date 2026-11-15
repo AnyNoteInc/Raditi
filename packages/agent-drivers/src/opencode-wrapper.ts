@@ -12,7 +12,7 @@ export interface OpencodeWrapperSettings {
   secrets: readonly [llm: string, mcp: string]
   /**
    * More pipes of the MCP token, one for each skill the relay of the role mcp serves
-   * (docs/plan/80-mcp-server-credentials.md): a pipe gives its value to one reader once, and the
+   * (docs/plan/81-mcp-server-credentials.md): a pipe gives its value to one reader once, and the
    * CLI reads each \`{file:…}\` of its configuration by itself. Nothing is staged at these paths.
    */
   mcpCopies: readonly string[]
