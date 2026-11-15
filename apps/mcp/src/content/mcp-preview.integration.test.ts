@@ -858,6 +858,32 @@ describe.skipIf(!enabled)('MCP on the preview of a dialog with PostgreSQL', () =
     expect(await db.mcpCall.count({ where: { turn: { taskId: fixture.taskId } } })).toBe(0)
   })
 
+  it('asks core to build a stopped preview the content tools need (docs/plan/82, Зп18)', async () => {
+    const f = await previewFixture()
+    // Never built, as a chat of a scheduled task writes it: core builds it on this demand.
+    await db.previewEnvironment.update({
+      where: { id: fixture.previewId },
+      data: { status: 'expired', upstreamHost: null, upstreamPort: null, lastViewedAt: null },
+    })
+    const jobs = () =>
+      db.outboxEvent.count({
+        where: { dedupeKey: { startsWith: `preview.sync:${fixture.previewId}:` } },
+      })
+    const before = await jobs()
+    await expect(
+      f.service.wpRest(f.scope, { method: 'GET', route: '/wp/v2/posts/42' }),
+    ).rejects.toMatchObject({ code: 'CONTENT_PREVIEW_NOT_READY' })
+    await expect(f.edit('stopped')).rejects.toMatchObject({ code: 'CONTENT_PREVIEW_NOT_READY' })
+    // One job while the demand is fresh, the row marked for the manager of previews.
+    expect(await jobs()).toBe(before + 1)
+    const row = await db.previewEnvironment.findUniqueOrThrow({ where: { id: fixture.previewId } })
+    expect(row.lastViewedAt).not.toBeNull()
+    expect(await db.mcpCall.count({ where: { turn: { taskId: fixture.taskId } } })).toBe(0)
+    await db.outboxEvent.deleteMany({
+      where: { dedupeKey: { startsWith: `preview.sync:${fixture.previewId}:` } },
+    })
+  })
+
   it('keeps a write of unknown outcome open and the preview dirty until a reset replaces its database', async () => {
     const f = await previewFixture()
     f.loseAcknowledgement()

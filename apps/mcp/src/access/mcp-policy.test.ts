@@ -6,7 +6,9 @@ import { testMcpConfig } from '../testing/fakes.ts'
 import type { McpAccess } from './mcp-access.ts'
 import {
   mcpBodyAllowed,
+  mcpCallNeedsClient,
   mcpHeadersAllowed,
+  mcpSecurityOf,
   mcpToolFamiliesOf,
   type McpSecurity,
 } from './mcp-policy.ts'
@@ -475,5 +477,157 @@ describe('MCP request policy', () => {
     ).toBe(true)
     expect(mcpBodyAllowed(page('doc_section_move', { docId, id: 'a' }), ['docs'])).toBe(false)
     expect(mcpBodyAllowed(page('doc_delete', { docId }), ['docs'])).toBe(false)
+  })
+})
+
+describe('the scheduled tasks of the chat’s author (plan 82, Зп31, Зп32)', () => {
+  const access: McpAccess = {
+    keyId: '01960000-0000-7000-8000-000000000001',
+    taskId: '01960000-0000-7000-8000-000000000002',
+    workspaceId: '01960000-0000-7000-8000-000000000003',
+    siteId: '01960000-0000-7000-8000-000000000004',
+    sessionId: 'synthetic',
+    turn: 1,
+    firstEpoch: 1,
+    epoch: 1,
+    stack: 'wordpress',
+    url: 'https://site.example.test',
+    preview: null,
+    requirements: { repository: true, browser: true },
+  }
+  const base = { allowedHosts: ['mcp'], allowLocalOrigin: false }
+  const call = (name: string, args?: unknown) => ({
+    jsonrpc: '2.0',
+    id: 7,
+    method: 'tools/call',
+    params: { name, ...(args === undefined ? {} : { arguments: args }) },
+  })
+  const create = {
+    name: 'Проверка сайта',
+    instructions: 'Откройте сайт и пройдите главную.',
+    project: 'this_chat',
+    triggers: [{ kind: 'weekdays', time: '09:00' }],
+    confirmedByClient: true,
+  }
+
+  it('are offered to every turn, and changed only by a turn the client watches', () => {
+    expect(mcpSecurityOf(testMcpConfig()).scheduleTools).toBe(true)
+    const security: McpSecurity = { ...base, scheduleTools: true }
+    expect(mcpToolFamiliesOf(access, security)).toEqual(['schedule', 'schedule_changes'])
+    expect(mcpToolFamiliesOf({ ...access, unattended: false }, security)).toEqual([
+      'schedule',
+      'schedule_changes',
+    ])
+    // A pass of a scheduled run without its client: the list alone.
+    expect(mcpToolFamiliesOf({ ...access, unattended: true }, security)).toEqual(['schedule'])
+    // A chat without a project has its tasks without one.
+    const chat = {
+      ...access,
+      siteId: null,
+      stack: null,
+      url: null,
+      requirements: { repository: false, browser: false },
+    }
+    expect(mcpToolFamiliesOf(chat, security)).toEqual(['schedule', 'schedule_changes'])
+    expect(mcpToolFamiliesOf(access, base)).toEqual([])
+  })
+
+  it('admits the list to the family schedule and the changes to schedule_changes alone', () => {
+    expect(mcpBodyAllowed(call('schedule_list'), ['schedule'])).toBe(true)
+    expect(mcpBodyAllowed(call('schedule_list', {}), ['schedule'])).toBe(true)
+    expect(mcpBodyAllowed(call('schedule_list', { siteId: access.siteId }), ['schedule'])).toBe(
+      false,
+    )
+    expect(mcpBodyAllowed(call('schedule_list', {}), ['pages'])).toBe(false)
+    const changes = [
+      call('schedule_create', create),
+      call('schedule_create', {
+        ...create,
+        project: 'none',
+        effort: 'low',
+        timezone: 'Asia/Novosibirsk',
+        notify: false,
+        triggers: [{ kind: 'once', inMinutes: 30 }],
+      }),
+      call('schedule_update', {
+        scheduleId: access.taskId,
+        enabled: false,
+        confirmedByClient: true,
+      }),
+      call('schedule_update', {
+        reservedId: access.taskId,
+        triggers: [{ kind: 'weekly', time: '16:00', days: [1, 5] }],
+        confirmedByClient: true,
+      }),
+      call('schedule_delete', { scheduleId: access.taskId, confirmedByClient: true }),
+      call('schedule_delete', { reservedId: access.taskId, confirmedByClient: true }),
+    ]
+    for (const body of changes) {
+      expect(mcpBodyAllowed(body, ['schedule_changes']), JSON.stringify(body)).toBe(true)
+      // The list's family never calls a change: a pass without the client has only that.
+      expect(mcpBodyAllowed(body, ['schedule', 'pages', 'web'])).toBe(false)
+    }
+    // Runs closer than an hour are the tool's own refusal, not a request refused as a whole.
+    expect(
+      mcpBodyAllowed(
+        call('schedule_create', {
+          ...create,
+          triggers: [
+            { kind: 'daily', time: '09:00' },
+            { kind: 'daily', time: '09:30' },
+          ],
+        }),
+        ['schedule_changes'],
+      ),
+    ).toBe(true)
+    const refused = [
+      // Who, where and of what project are never arguments.
+      call('schedule_create', { ...create, workspaceId: access.workspaceId }),
+      call('schedule_create', { ...create, project: access.siteId }),
+      call('schedule_create', { ...create, confirmedByClient: false }),
+      call('schedule_create', { ...create, confirmedByClient: undefined }),
+      call('schedule_create', { ...create, name: ' Проверка' }),
+      call('schedule_create', { ...create, triggers: [{ kind: 'daily', time: '9:00' }] }),
+      call('schedule_create', { ...create, triggers: [{ kind: 'cron', expression: '* * * * *' }] }),
+      call('schedule_create', { ...create, triggers: [{ kind: 'once', inMinutes: 1 }] }),
+      call('schedule_create', { ...create, timezone: 'Mars/Olympus' }),
+      call('schedule_create'),
+      call('schedule_update', { scheduleId: access.taskId, confirmedByClient: true }),
+      call('schedule_update', {
+        scheduleId: access.taskId,
+        reservedId: access.taskId,
+        enabled: true,
+        confirmedByClient: true,
+      }),
+      call('schedule_delete', { confirmedByClient: true }),
+      call('schedule_delete', { scheduleId: access.taskId }),
+    ]
+    for (const body of refused)
+      expect(mcpBodyAllowed(body, ['schedule', 'schedule_changes']), JSON.stringify(body)).toBe(
+        false,
+      )
+  })
+
+  it('names a well-formed call that needs the client’s word, of any tool', () => {
+    expect(mcpCallNeedsClient(call('schedule_create', create))).toBe(true)
+    expect(
+      mcpCallNeedsClient(
+        call('page_delete', { pageIds: [access.taskId], confirmedByClient: true }),
+      ),
+    ).toBe(true)
+    // However it says it: the key is the question, not its value.
+    expect(mcpCallNeedsClient(call('page_delete', { confirmedByClient: false }))).toBe(true)
+    for (const body of [
+      call('schedule_list', {}),
+      call('schedule_list'),
+      call('page_delete', { pageIds: [access.taskId] }),
+      { ...call('page_delete', { confirmedByClient: true }), id: undefined },
+      { ...call('page_delete', { confirmedByClient: true }), method: 'tools/list' },
+      { jsonrpc: '2.0', method: 'notifications/initialized' },
+      { ...call('page_delete', JSON.parse('{"__proto__":{},"confirmedByClient":true}')) },
+      null,
+      'tools/call',
+    ])
+      expect(mcpCallNeedsClient(body), JSON.stringify(body)).toBe(false)
   })
 })

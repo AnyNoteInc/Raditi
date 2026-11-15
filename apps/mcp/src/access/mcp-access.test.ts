@@ -46,15 +46,34 @@ const row = (
   previewHostname: of?.hostname ?? null,
 })
 
+/**
+ * The database of the store: the admission query, and what `passUnattended` reads — whether the
+ * chat is a run of a scheduled task (`scheduled_runs`) and how many requests its feed holds.
+ */
+function dbOf($queryRaw: unknown, chat: { run?: boolean; requests?: number } = {}) {
+  return {
+    $queryRaw,
+    scheduledRun: {
+      findUnique: vi.fn(async () => (chat.run ? { id: randomUUID() } : null)),
+    },
+    taskEvent: {
+      findMany: vi.fn(async () =>
+        Array.from({ length: chat.requests ?? 1 }, (_, at) => ({ id: BigInt(at + 1) })),
+      ),
+    },
+  } as unknown as PrismaClient
+}
+
 describe('MCP token access', () => {
   it('passes only the token hash to SQL and validates returned scope', async () => {
     const base = scope()
     const $queryRaw = vi.fn(async () => [row(base)])
-    const store = new PostgresMcpAccess({ $queryRaw } as unknown as PrismaClient)
+    const store = new PostgresMcpAccess(dbOf($queryRaw))
     expect(await store.authenticate(token)).toEqual({
       ...base,
       preview: null,
       requirements: { repository: true, browser: false },
+      unattended: false,
     })
     expect(JSON.stringify($queryRaw.mock.calls)).not.toContain(token)
     expect(JSON.stringify($queryRaw.mock.calls)).toContain(
@@ -65,11 +84,12 @@ describe('MCP token access', () => {
   it('carries the preview of the dialog, never one named by the request', async () => {
     const base = scope()
     const $queryRaw = vi.fn(async () => [row(base, preview)])
-    const store = new PostgresMcpAccess({ $queryRaw } as unknown as PrismaClient)
+    const store = new PostgresMcpAccess(dbOf($queryRaw))
     expect(await store.authenticate(token)).toEqual({
       ...base,
       preview,
       requirements: { repository: true, browser: false },
+      unattended: false,
     })
     const sql = ($queryRaw.mock.calls[0] as unknown as [string[]])[0].join('$').replace(/\s+/g, ' ')
     expect(sql).toContain(
@@ -87,11 +107,12 @@ describe('MCP token access', () => {
     const $queryRaw = vi.fn(async () => [
       row(base, null, { needsRepository: false, needsBrowser: true }),
     ])
-    const store = new PostgresMcpAccess({ $queryRaw } as unknown as PrismaClient)
+    const store = new PostgresMcpAccess(dbOf($queryRaw))
     expect(await store.authenticate(token)).toEqual({
       ...base,
       preview: null,
       requirements: { repository: false, browser: true },
+      unattended: false,
     })
     // Needs nobody has (a broken row) or columns the query no longer reads: closed, never guessed.
     for (const needs of [
@@ -112,12 +133,13 @@ describe('MCP token access', () => {
       { needsRepository: false, needsBrowser: true },
     ]) {
       const $queryRaw = vi.fn(async () => [row(chat as never, null, needs)])
-      const store = new PostgresMcpAccess({ $queryRaw } as unknown as PrismaClient)
+      const store = new PostgresMcpAccess(dbOf($queryRaw))
       const access = await store.authenticate(token)
       expect(access).toEqual({
         ...chat,
         preview: null,
         requirements: { repository: needs.needsRepository, browser: needs.needsBrowser },
+        unattended: false,
       })
       // No tool of a site takes it.
       expect(siteAccessOf(access!)).toBeNull()
@@ -127,7 +149,7 @@ describe('MCP token access', () => {
   it('gives the tools of a site the same access a turn on a site was admitted with', async () => {
     const base = scope()
     const $queryRaw = vi.fn(async () => [row(base)])
-    const store = new PostgresMcpAccess({ $queryRaw } as unknown as PrismaClient)
+    const store = new PostgresMcpAccess(dbOf($queryRaw))
     const access = await store.authenticate(token)
     expect(siteAccessOf(access!)).toEqual(access)
   })
@@ -146,7 +168,7 @@ describe('MCP token access', () => {
     ]) {
       const $queryRaw = vi.fn(async () => [broken])
       await expect(
-        new PostgresMcpAccess({ $queryRaw } as unknown as PrismaClient).authenticate(token),
+        new PostgresMcpAccess(dbOf($queryRaw)).authenticate(token),
       ).rejects.toMatchObject({ code: 'MCP_ACCESS_SCOPE_INVALID' })
     }
     // A scope without requirements is older than them: a repository task, so it has a site.
@@ -155,10 +177,46 @@ describe('MCP token access', () => {
     ).toBe(false)
   })
 
+  it('tells a pass of a scheduled run before its client wrote by passUnattended (plan 82, Зп27)', async () => {
+    const base = scope()
+    const $queryRaw = vi.fn(async () => [row(base)])
+    const cases = [
+      // The run's chat, its feed only the instructions: nobody watches.
+      [{ run: true, requests: 1 }, true],
+      // The client answered: an ordinary chat from now on.
+      [{ run: true, requests: 2 }, false],
+      // A chat no schedule started.
+      [{ run: false, requests: 1 }, false],
+    ] as const
+    for (const [chat, unattended] of cases) {
+      const db = dbOf($queryRaw, chat)
+      const access = await new PostgresMcpAccess(db).authenticate(token)
+      expect(access?.unattended, JSON.stringify(chat)).toBe(unattended)
+      expect(mcpTurnAccessSchema.safeParse(access).success).toBe(true)
+      // Asked of the admitted task, never of anything the request names.
+      expect(db.scheduledRun.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { taskId: base.taskId } }),
+      )
+    }
+    // A database that cannot say fails the admission: an outage, never an attended guess.
+    const broken = dbOf($queryRaw, { run: true })
+    vi.mocked(broken.taskEvent.findMany).mockRejectedValueOnce(new Error('connection lost'))
+    await expect(new PostgresMcpAccess(broken).authenticate(token)).rejects.toThrow(
+      'connection lost',
+    )
+    // No row, no question: an unknown token reads nothing more.
+    const none = dbOf(
+      vi.fn(async () => []),
+      { run: true },
+    )
+    expect(await new PostgresMcpAccess(none).authenticate(token)).toBeNull()
+    expect(none.scheduledRun.findUnique).not.toHaveBeenCalled()
+  })
+
   it('looks up the token its issuer generates, by the hash its issuer stores', async () => {
     const issued = newTurnKeys()
     const $queryRaw = vi.fn(async (..._: unknown[]) => [])
-    const store = new PostgresMcpAccess({ $queryRaw } as unknown as PrismaClient)
+    const store = new PostgresMcpAccess(dbOf($queryRaw))
     expect(await store.authenticate(issued.mcpToken)).toBeNull()
     // The first parameter is the list of closed preview statuses; the hash comes second.
     expect($queryRaw.mock.calls[0]![2]).toBe(turnKeyHash(issued.mcpToken))
@@ -173,7 +231,7 @@ describe('MCP token access', () => {
     // mcp-access.integration.test.ts proves each one on PostgreSQL; this keeps a silently
     // dropped condition from passing where that suite does not run.
     const $queryRaw = vi.fn(async (..._: unknown[]) => [])
-    await new PostgresMcpAccess({ $queryRaw } as unknown as PrismaClient).authenticate(token)
+    await new PostgresMcpAccess(dbOf($queryRaw)).authenticate(token)
     const sql = ($queryRaw.mock.calls[0]![0] as string[]).join('$').replace(/\s+/g, ' ')
     for (const condition of [
       'JOIN tasks t ON t.id = k.task_id',
@@ -220,7 +278,7 @@ describe('MCP token access', () => {
 
   it('refuses malformed tokens before the database and admits nobody without a row', async () => {
     const $queryRaw = vi.fn().mockResolvedValue([])
-    const store = new PostgresMcpAccess({ $queryRaw } as unknown as PrismaClient)
+    const store = new PostgresMcpAccess(dbOf($queryRaw))
     for (const value of ['', token.toUpperCase(), token + '\n', 'sk-rdt-other-key'])
       expect(await store.authenticate(value)).toBeNull()
     expect($queryRaw).not.toHaveBeenCalled()
@@ -229,7 +287,7 @@ describe('MCP token access', () => {
 
   it('fails closed with a fixed, content-free invariant error on ambiguous or invalid rows', async () => {
     const $queryRaw = vi.fn()
-    const store = new PostgresMcpAccess({ $queryRaw } as unknown as PrismaClient)
+    const store = new PostgresMcpAccess(dbOf($queryRaw))
     for (const rows of [
       [row(), row()],
       [row({ ...scope(), url: 'https://password:secret@site.example.test' })],

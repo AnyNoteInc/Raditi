@@ -201,6 +201,36 @@ describe('the web tools of a browser task', () => {
     expect(answer).toEqual({ tool: 'web_click', page: PAGE })
   })
 
+  it('asks the worker to only read in a pass of a scheduled run without its client (plan 82, Зп28)', async () => {
+    const { scope, service, worker, sessionId, assignmentId } = fixture({
+      scope: { ...scopeOf(), unattended: true },
+    })
+    worker.action.mockRejectedValueOnce(browserTaskError('BROWSER_READ_ONLY'))
+    // The worker's refusal of a save reaches the agent with its fixed code and text.
+    await expect(
+      service.call(scope, 'web_click', { observation: 'o1', ref: 'e5' }),
+    ).rejects.toMatchObject({
+      code: 'BROWSER_READ_ONLY',
+      message: browserTaskCodes.BROWSER_READ_ONLY.message,
+    })
+    // Every action of the pass says so, a read too.
+    await service.call(scope, 'web_observe', {})
+    expect(worker.action.mock.calls.map((call) => call[1])).toEqual([
+      {
+        taskId: scope.taskId,
+        assignmentId,
+        action: { tool: 'web_click', observation: 'o1', ref: 'e5' },
+        readOnly: true,
+      },
+      { taskId: scope.taskId, assignmentId, action: { tool: 'web_observe' }, readOnly: true },
+    ])
+    expect(worker.action.mock.calls.every((call) => call[0] === sessionId)).toBe(true)
+    // Once the client wrote, the pass is an ordinary chat's: no flag at all.
+    const attended = fixture({ scope: { ...scopeOf(), unattended: false } })
+    await attended.service.call(attended.scope, 'web_observe', {})
+    expect(attended.worker.action.mock.calls[0]?.[1]).not.toHaveProperty('readOnly')
+  })
+
   it('asks the worker for a snapshot for the client and gives the model only its number', async () => {
     const { scope, service, worker } = fixture()
     const answer = await service.call(scope, 'web_screenshot', {})

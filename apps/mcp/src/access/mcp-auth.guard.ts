@@ -5,11 +5,13 @@ import type { Response } from 'express'
 
 import { MCP_TOKEN_PATTERN } from '@repo/turn-keys'
 import { mcpErrorId } from '../common/json-rpc.ts'
-import { McpHttpError, mcpErrorSummary } from '../common/mcp-http-error.ts'
+import { McpHttpError, McpToolRefusal, mcpErrorSummary } from '../common/mcp-http-error.ts'
 import { MCP_ACCESS, type McpAccessStore, type McpTurnAccess } from './mcp-access.ts'
 import {
   MCP_SECURITY,
+  MCP_UNATTENDED_REFUSAL,
   mcpBodyAllowed,
+  mcpCallNeedsClient,
   mcpHeadersAllowed,
   mcpToolFamiliesOf,
   type McpSecurity,
@@ -74,6 +76,11 @@ export class McpAuthGuard implements CanActivate {
     // The web search is offered while its key is in Vault (spec §20, «Веб-поиск агента»).
     if (families.includes('search') && !(await this.searchKey.available()))
       families = families.filter((family) => family !== 'search')
+    // A pass of a scheduled run without its client (docs/plan/82-scheduled-tasks.md, Зп32): a
+    // call that needs the client's word is answered as a refusal of its tool — `schedule_*` the
+    // pass is not offered, `page_delete` it is — before the body is judged by its family.
+    if (req.method === 'POST' && authorized.unattended && mcpCallNeedsClient(req.body))
+      throw new McpToolRefusal(mcpErrorId(req.body), MCP_UNATTENDED_REFUSAL)
     if (req.method === 'POST' && !mcpBodyAllowed(req.body, families))
       fail(400, 'Invalid MCP request')
     // The SDK's Node/Web adapter rejects noncanonical IPv6 spellings when constructing a

@@ -993,9 +993,12 @@ export class WorkerSession {
   /**
    * One action of the agent (`POST …/actions`): in its turn after the ones before it, refused
    * when the client controls the browser. The answer comes within `actionBudgetMs`; the next
-   * action waits until this one has really finished in the page.
+   * action waits until this one has really finished in the page. `readOnly` — a pass of a
+   * scheduled run without its client (docs/plan/82-scheduled-tasks.md, Зп28): a save or a publish
+   * on the site, and a file sent to a page, are refused (`BROWSER_READ_ONLY`).
    */
-  act(action: BrowserAction): Promise<BrowserToolResult> {
+  act(action: BrowserAction, options: { readOnly?: boolean } = {}): Promise<BrowserToolResult> {
+    const readOnly = options.readOnly === true
     const queuedAt = this.#context.now()
     return new Promise<BrowserToolResult>((resolve, reject) => {
       const run = async () => {
@@ -1026,7 +1029,7 @@ export class WorkerSession {
           try {
             // Signed out meanwhile (a session that expired on the site): the saved sign-in first.
             if (action.tool !== 'web_help') await this.#signInIfAsked(browser)
-            resolve(await this.#perform(browser, action))
+            resolve(await this.#perform(browser, action, readOnly))
           } catch (error) {
             settle(error)
           } finally {
@@ -1063,7 +1066,11 @@ export class WorkerSession {
     })
   }
 
-  async #perform(browser: CloudBrowserSession, action: BrowserAction): Promise<BrowserToolResult> {
+  async #perform(
+    browser: CloudBrowserSession,
+    action: BrowserAction,
+    readOnly: boolean,
+  ): Promise<BrowserToolResult> {
     switch (action.tool) {
       case 'web_observe': {
         if (action.ref !== undefined && !this.#observation?.refs.has(action.ref))
@@ -1114,14 +1121,14 @@ export class WorkerSession {
       case 'web_click': {
         const { observation, ...rest } = action
         const ref = this.#ref(observation, rest.ref)
-        return this.#commitOr('web_click', browser, this.#commitOf(ref), rest)
+        return this.#commitOr('web_click', browser, this.#commitOf(ref), rest, readOnly)
       }
       case 'web_press': {
         const { observation, ref: named, ...rest } = action
         const ref = named === undefined ? undefined : this.#ref(observation, named)
         const press: CloudBrowserAction = ref === undefined ? rest : { ...rest, ref }
         const commit = await this.#pressCommit(browser, action.key, ref)
-        return this.#commitOr('web_press', browser, commit, press)
+        return this.#commitOr('web_press', browser, commit, press, readOnly)
       }
       case 'web_fill': {
         const { observation, ...rest } = action
@@ -1141,6 +1148,8 @@ export class WorkerSession {
         )
       }
       case 'web_upload': {
+        // A file reaches the site — or another one — the moment a page takes it: nobody to ask.
+        if (readOnly) throw browserTaskError('BROWSER_READ_ONLY')
         const ref = action.ref === undefined ? undefined : this.#ref(action.observation, action.ref)
         const files = await this.#context.files.read({
           taskId: this.taskId,
@@ -1293,22 +1302,25 @@ export class WorkerSession {
   }
 
   /**
-   * An action that may save or publish an object (Б22): refused while another save is
-   * unconfirmed or when the task has changed as many objects as it may (Б34); after it —
-   * whatever came of it, a timeout included — the object is unconfirmed until a check reads it,
-   * so an unclear outcome leaves no duplicate. With `asked` null — or on another site, which
-   * saves nothing of the site (Ч6) — it is an ordinary action.
+   * An action that may save or publish an object (Б22): refused in a pass without the client
+   * (`readOnly`, docs/plan/82-scheduled-tasks.md, Зп28), while another save is unconfirmed or when
+   * the task has changed as many objects as it may (Б34); after it — whatever came of it, a
+   * timeout included — the object is unconfirmed until a check reads it, so an unclear outcome
+   * leaves no duplicate. With `asked` null — or on another site, which saves nothing of the site
+   * (Ч6) — it is an ordinary action.
    */
   async #commitOr(
     tool: 'web_click' | 'web_press',
     browser: CloudBrowserSession,
     asked: BrowserCommitAction | null,
     action: CloudBrowserAction,
+    readOnly: boolean,
   ): Promise<BrowserToolResult> {
     const pageId = this.#control.pageId
     const before = this.#tabs.find((tab) => tab.pageId === pageId)?.url ?? ''
     const commit = this.#elsewhere(before) ? null : asked
     if (commit !== null) {
+      if (readOnly) throw browserTaskError('BROWSER_READ_ONLY')
       if (this.#blocked(pageId)) throw browserTaskError('BROWSER_CHECKPOINT_UNVERIFIED')
       if (this.#overChangeLimit(this.#checkpointRef(before)))
         throw browserTaskError('BROWSER_ACTION_DENIED')

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 
-import { Prisma, type PrismaClient } from '@repo/db'
+import { demandStoppedPreview, Prisma, type PrismaClient } from '@repo/db'
 import {
   badRequest,
   conflict,
@@ -165,6 +165,17 @@ const previewUnavailable = () =>
     'The preview of the dialog does not take content',
     409,
   )
+/**
+ * The preview is stopped — after its time, or never built for a chat of a scheduled task
+ * (docs/plan/82-scheduled-tasks.md, Зп18) — and a tool of the agent needs it: thrown inside a
+ * transaction, it asks core to build it after the transaction (`#transaction`) and the call is
+ * answered «not ready», as a preview being built answers.
+ */
+class PreviewStopped extends Error {
+  constructor(readonly previewId: string) {
+    super('The preview of the dialog is stopped')
+  }
+}
 /** The preview was rebuilt since the call was admitted: its database is another one. */
 const previewReset = () =>
   new DomainError('CONTENT_PREVIEW_RESET', 'The preview was rebuilt after the call', 409)
@@ -252,7 +263,7 @@ export class PostgresMcpJournal {
     if (!scope.preview) throw previewUnavailable()
     return this.#transaction(async (tx) => {
       await this.#active(tx, scope)
-      return this.#target(scope, await this.#previewRow(tx, scope, false))
+      return this.#target(scope, await this.#previewRow(tx, scope, false), { demand: true })
     })
   }
 
@@ -347,7 +358,7 @@ export class PostgresMcpJournal {
       const owned = await this.#active(tx, scope)
       // Locked after the lease, as every writer of a preview row takes them.
       const preview = scope.preview
-        ? this.#target(scope, await this.#previewRow(tx, scope, true))
+        ? this.#target(scope, await this.#previewRow(tx, scope, true), { demand: true })
         : undefined
       const idempotencyKey = hash(
         JSON.stringify([owned.assignmentId, scope.keyId, command.idempotencyKey]),
@@ -1458,9 +1469,11 @@ export class PostgresMcpJournal {
    * A preview that takes content now (Р4, Р24): built, with its own database and an upstream.
    * A build moves the write epoch to 1 and on before it loads the seed: 0 means none ran yet.
    */
-  #target(scope: McpAccess, row: PreviewRow): McpPreviewTarget {
+  #target(scope: McpAccess, row: PreviewRow, use: { demand?: boolean } = {}): McpPreviewTarget {
     if (row.dbMode !== 'copy') throw previewUnavailable()
     if (row.status === 'pending' || row.status === 'building') throw previewNotReady()
+    // A new call needs a stopped preview: core is asked to build it (`#transaction`).
+    if (row.status === 'expired' && use.demand === true) throw new PreviewStopped(row.id)
     if (row.status !== 'ready') throw previewUnavailable()
     if (row.upstreamHost === null || row.upstreamPort === null || row.writeEpoch < 1)
       throw previewNotReady()
@@ -1500,6 +1513,11 @@ export class PostgresMcpJournal {
     try {
       return await this.db.$transaction(work)
     } catch (error) {
+      if (error instanceof PreviewStopped) {
+        // Best effort: the call is «not ready» either way, and the agent asks again.
+        await demandStoppedPreview(this.db, error.previewId).catch(() => false)
+        throw previewNotReady()
+      }
       if (isDomainError(error)) throw error
       throw unavailable()
     }

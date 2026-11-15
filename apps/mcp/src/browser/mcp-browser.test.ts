@@ -121,6 +121,7 @@ function fixture(
     recordChecks: vi.fn<McpBrowserStore['recordChecks']>(async () => undefined),
     recordScreenshot: vi.fn<McpBrowserStore['recordScreenshot']>(async () => undefined),
     liveAssignments: vi.fn<McpBrowserStore['liveAssignments']>(async (ids) => new Set(ids)),
+    demand: vi.fn<NonNullable<McpBrowserStore['demand']>>(async () => undefined),
   } satisfies McpBrowserStore
   // A test replaces a method with a spy of its own.
   const store = { ...base, ...options.store } as typeof base
@@ -307,6 +308,20 @@ describe('the browser of the agent on its preview', () => {
     const { scope, service, store } = fixture({ status })
     await expect(service.navigate(scope, { path: '/' })).rejects.toEqual(refused(code))
     expect(store.requestSync).not.toHaveBeenCalled()
+    // A stopped preview — never built for a chat of a scheduled task too (docs/plan/82, Зп18) —
+    // is asked to be built by the call that needs it; no other is.
+    expect(store.demand).toHaveBeenCalledTimes(status === 'expired' ? 1 : 0)
+  })
+
+  it('answers «not ready» for a stopped preview even when asking core to build it failed', async () => {
+    const { scope, service, store } = fixture({
+      status: 'expired',
+      store: { demand: vi.fn(async () => Promise.reject(new Error('database away'))) },
+    })
+    await expect(service.navigate(scope, { path: '/' })).rejects.toEqual(
+      refused('BROWSER_PREVIEW_NOT_READY'),
+    )
+    expect(store.demand).toHaveBeenCalledOnce()
   })
 
   it('waits for the browser a bounded time', async () => {

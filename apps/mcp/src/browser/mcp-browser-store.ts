@@ -1,6 +1,7 @@
 import {
   BROWSER_SCREENSHOT_EVENT,
   browserScreenshotEventSchema,
+  demandStoppedPreview,
   enqueuePreviewBrowser,
   recordBrowserChecks,
   type Prisma,
@@ -88,6 +89,11 @@ export interface McpBrowserStore {
   ): Promise<void>
   /** Which of the assignments still hold their turn: the others' browsers are closed. */
   liveAssignments(ids: readonly string[]): Promise<Set<string>>
+  /**
+   * The preview of the call is stopped — after its time, or never built (docs/plan/82, Зп18) — and
+   * this call needs it: core is asked to build it. Absent — nothing is asked here.
+   */
+  demand?(admission: McpBrowserAdmission): Promise<void>
 }
 
 const admissionRowSchema = z.object({
@@ -116,6 +122,10 @@ export { browserScreenshotKey }
 
 export class PostgresMcpBrowserStore implements McpBrowserStore {
   constructor(private readonly db: Pick<PrismaClient, '$transaction'>) {}
+
+  async demand(admission: McpBrowserAdmission): Promise<void> {
+    await demandStoppedPreview(this.db, admission.preview.id)
+  }
 
   /**
    * The admission of the agent (spec §8) once more, for this call: its key, its assignment and

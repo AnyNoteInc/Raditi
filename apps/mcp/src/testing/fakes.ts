@@ -16,7 +16,9 @@ export function testMcpConfig(): McpConfig {
 }
 
 /**
- * A tool of another family than the documents (docs/plan/69-pages.md, Ст21): `doc_*` is offered to
- * every turn, so a test of another family's list leaves them out; the documents test their own.
+ * A tool of another family than those every turn is offered — the documents (docs/plan/69-pages.md,
+ * Ст21) and the scheduled tasks (docs/plan/82-scheduled-tasks.md, Зп31): a test of another family's
+ * list leaves `doc_*` and `schedule_*` out; the documents and the schedules test their own.
  */
-export const notDocTool = (name: string): boolean => !name.startsWith('doc_')
+export const notDocTool = (name: string): boolean =>
+  !name.startsWith('doc_') && !name.startsWith('schedule_')

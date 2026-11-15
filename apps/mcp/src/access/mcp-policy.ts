@@ -47,6 +47,13 @@ import {
   pageTreeArgumentsSchema,
   pageUpdateArgumentsSchema,
 } from '../pages/pages-arguments.ts'
+import {
+  scheduleArgumentsAdmitted,
+  scheduleCreateArgumentsSchema,
+  scheduleDeleteArgumentsSchema,
+  scheduleListArgumentsSchema,
+  scheduleUpdateArgumentsSchema,
+} from '../schedule/schedule-arguments.ts'
 import { webSearchArgumentsSchema } from '../search/search-arguments.ts'
 import { closedPreviewStatuses, type McpTurnAccess } from './mcp-access.ts'
 
@@ -131,6 +138,17 @@ const pagesCall = z.discriminatedUnion('name', [
   call('page_file_delete', pageFileDeleteArgumentsSchema),
   call('page_files', pageFilesArgumentsSchema),
 ])
+// The scheduled tasks (docs/plan/82-scheduled-tasks.md, Зп31, Зп32): the list for every turn, the
+// changes only for a turn its client watches. A schedule with runs closer than an hour is the
+// tool's own refusal (`SCHEDULE_TOO_OFTEN`), not a request refused as a whole.
+const admittedBy = (schema: z.ZodType) =>
+  z.record(z.string(), z.unknown()).refine((args) => scheduleArgumentsAdmitted(schema, args))
+const scheduleCall = call('schedule_list', scheduleListArgumentsSchema.optional())
+const scheduleChangeCall = z.discriminatedUnion('name', [
+  call('schedule_create', admittedBy(scheduleCreateArgumentsSchema)),
+  call('schedule_update', admittedBy(scheduleUpdateArgumentsSchema)),
+  call('schedule_delete', admittedBy(scheduleDeleteArgumentsSchema)),
+])
 const envelope = z.strictObject({
   jsonrpc: z.literal('2.0'),
   id: rpcId.optional(),
@@ -183,6 +201,11 @@ export interface McpSecurity {
   pagesTools?: boolean
   /** The documents of a workspace (docs/plan/69-pages.md, Ст21): every turn, every composition. */
   docsTools?: boolean
+  /**
+   * The scheduled tasks of the chat's author (docs/plan/82-scheduled-tasks.md, Зп31): every turn,
+   * every composition; their changes only where the client watches (Зп32).
+   */
+  scheduleTools?: boolean
 }
 
 /** The security of the role's MCP endpoint, as the profiles of its configuration make it. */
@@ -197,6 +220,7 @@ export function mcpSecurityOf(config: McpConfig): McpSecurity {
     searchTools: true,
     docsTools: true,
     ...(config.pages ? { pagesTools: true } : {}),
+    scheduleTools: true,
   }
 }
 
@@ -211,7 +235,10 @@ export function mcpSecurityOf(config: McpConfig): McpSecurity {
  * (docs/plan/57-browser-tasks.md, Б20); `browser` is the preview's. `search` — the web search of
  * any turn, with a site or without, while its key is in Vault. `pages` — the pages and documents of
  * the workspace, any turn, while the pages are configured (docs/plan/69-pages.md, Ст20); `docs` — its
- * documents, any turn (Ст21).
+ * documents, any turn (Ст21). `schedule` — the scheduled tasks of the chat's author, read by any
+ * turn; `schedule_changes` — their creation, change and deletion, only by a turn the client
+ * watches: a pass of a scheduled run without its client sees the list alone
+ * (docs/plan/82-scheduled-tasks.md, Зп31, Зп32).
  */
 export const mcpToolFamilies = [
   'content',
@@ -221,6 +248,8 @@ export const mcpToolFamilies = [
   'search',
   'docs',
   'pages',
+  'schedule',
+  'schedule_changes',
 ] as const
 export type McpToolFamily = (typeof mcpToolFamilies)[number]
 
@@ -265,6 +294,10 @@ export function mcpToolFamiliesOf(access: McpTurnAccess, security: McpSecurity):
   if (security.searchTools) families.push('search')
   if (security.docsTools) families.push('docs')
   if (security.pagesTools) families.push('pages')
+  if (security.scheduleTools) {
+    families.push('schedule')
+    if (!access.unattended) families.push('schedule_changes')
+  }
   return families
 }
 
@@ -293,8 +326,8 @@ export function mcpHeadersAllowed(
   }
 }
 
-/** Bound the parsed request before the SDK recurses; no source values enter error messages. */
-export function mcpBodyAllowed(body: unknown, families: readonly McpToolFamily[] = []): boolean {
+/** The parsed request within its bounds, before the SDK recurses: no prototype keys. */
+function bounded(body: unknown): boolean {
   const pending = [{ value: body, depth: 1 }]
   let nodes = 0
   while (pending.length) {
@@ -306,6 +339,12 @@ export function mcpBodyAllowed(body: unknown, families: readonly McpToolFamily[]
       pending.push({ value: child, depth: depth + 1 })
     }
   }
+  return true
+}
+
+/** Bound the parsed request before the SDK recurses; no source values enter error messages. */
+export function mcpBodyAllowed(body: unknown, families: readonly McpToolFamily[] = []): boolean {
+  if (!bounded(body)) return false
   const parsed = envelope.safeParse(body)
   if (!parsed.success) return false
   const request = parsed.data
@@ -324,7 +363,41 @@ export function mcpBodyAllowed(body: unknown, families: readonly McpToolFamily[]
       (families.includes('web') && webCall.safeParse(request.params).success) ||
       (families.includes('search') && searchCall.safeParse(request.params).success) ||
       (families.includes('docs') && docsCall.safeParse(request.params).success) ||
-      (families.includes('pages') && pagesCall.safeParse(request.params).success)
+      (families.includes('pages') && pagesCall.safeParse(request.params).success) ||
+      (families.includes('schedule') && scheduleCall.safeParse(request.params).success) ||
+      (families.includes('schedule_changes') &&
+        scheduleChangeCall.safeParse(request.params).success)
     )
   return true
+}
+
+/**
+ * What a call that needs the client's word answers in a pass without the client (docs/plan/82-
+ * scheduled-tasks.md, Зп32): nobody is there to have given it — whatever the instructions of the run
+ * say, they are no consent (Зп28). The agent reads the code and these words as the result of its
+ * tool.
+ */
+export const MCP_UNATTENDED_REFUSAL = Object.freeze({
+  code: 'SCHEDULE_FORBIDDEN',
+  message:
+    'This pass runs on a schedule without the client: nobody can confirm a change now. Change no scheduled task and delete nothing; prepare it and ask the client once at the end of your answer.',
+})
+
+const confirmingCall = z.object({
+  jsonrpc: z.literal('2.0'),
+  id: rpcId,
+  method: z.literal('tools/call'),
+  params: z.object({
+    name: z.string(),
+    arguments: z.record(z.string(), z.unknown()).refine((args) => 'confirmedByClient' in args),
+  }),
+})
+
+/**
+ * A well-formed call of any tool whose arguments carry `confirmedByClient` — `schedule_*`,
+ * `page_delete`, `page_file_delete` — however they say it (Зп32): in a pass without the client
+ * the guard answers it with `MCP_UNATTENDED_REFUSAL` before any tool sees it.
+ */
+export function mcpCallNeedsClient(body: unknown): boolean {
+  return bounded(body) && confirmingCall.safeParse(body).success
 }

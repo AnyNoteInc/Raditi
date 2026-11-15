@@ -2174,6 +2174,8 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
           url: null,
           preview: null,
           requirements: { repository: false, browser },
+          // No scheduled run started this chat (docs/plan/82-scheduled-tasks.md, Зп27).
+          unattended: false,
         })
       } finally {
         await turn.cleanup()

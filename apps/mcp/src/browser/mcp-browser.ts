@@ -465,6 +465,7 @@ export class McpBrowserService implements OnModuleDestroy {
     const key = admission.assignmentId
     return this.#serial(key, async () => {
       const call: Call = { admission, deadline: started + this.#options.callBudgetMs }
+      await this.#demandStopped(admission)
       this.#ready(admission)
       if (needs.sync) {
         call.syncRequestId = await this.#sync(call)
@@ -493,6 +494,20 @@ export class McpBrowserService implements OnModuleDestroy {
       return await current
     } finally {
       if (this.#locks.get(key) === settled) this.#locks.delete(key)
+    }
+  }
+
+  /**
+   * A stopped preview — after its time, or never built for a chat of a scheduled task
+   * (docs/plan/82-scheduled-tasks.md, Зп18) — is asked to be built: this call needs it. Best
+   * effort: the call is «not ready» either way, and the agent asks again.
+   */
+  async #demandStopped(admission: McpBrowserAdmission): Promise<void> {
+    if (admission.preview.status !== 'expired') return
+    try {
+      await this.#deps.store.demand?.(admission)
+    } catch {
+      // Nothing more to do here: the sweep of core and the agent's next call ask again.
     }
   }
 

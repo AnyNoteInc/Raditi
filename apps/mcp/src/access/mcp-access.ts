@@ -1,4 +1,4 @@
-import type { PrismaClient } from '@repo/db'
+import { passUnattended, type PrismaClient } from '@repo/db'
 import {
   contentUndoFenceSchema,
   dbOperationKinds,
@@ -74,6 +74,13 @@ export const mcpAccessSchema = z.strictObject({
    * before the field, which is a repository task (`requirementsOf`).
    */
   requirements: siteTaskRequirementsSchema.optional(),
+  /**
+   * A pass of a scheduled run before the first words of its client (docs/plan/82-scheduled-
+   * tasks.md, Зп27, `passUnattended`): nobody confirms anything, so the tasks are not changed, a
+   * call with `confirmedByClient` is refused and the browser only reads the site (Зп28, Зп32).
+   * Absent — false: a scope made before the field.
+   */
+  unattended: z.boolean().optional(),
 })
 export type McpAccess = z.infer<typeof mcpAccessSchema>
 
@@ -169,7 +176,9 @@ export const MCP_ACCESS_PROBE_TOKEN = `mcp_${'0'.repeat(64)}`
  * workspace: `LEFT JOIN` finds no site for it, and it must stay as written.
  */
 export class PostgresMcpAccess implements McpAccessStore {
-  constructor(private readonly prisma: Pick<PrismaClient, '$queryRaw'>) {}
+  constructor(
+    private readonly prisma: Pick<PrismaClient, '$queryRaw' | 'scheduledRun' | 'taskEvent'>,
+  ) {}
 
   async authenticate(token: string): Promise<McpTurnAccess | null> {
     if (!MCP_TOKEN_PATTERN.test(token)) return null
@@ -209,7 +218,9 @@ export class PostgresMcpAccess implements McpAccessStore {
     const parsed = rows.length === 1 ? mcpTurnAccessSchema.safeParse(accessOf(rows[0])) : undefined
     if (!parsed?.success)
       throw new DomainError('MCP_ACCESS_SCOPE_INVALID', 'MCP admission row is invalid', 503)
-    return parsed.data
+    // Whether the client is there is one rule of the platform (Зп27): its own function, read for
+    // each request — the client's first words make the next call an ordinary chat's.
+    return { ...parsed.data, unattended: await passUnattended(this.prisma, parsed.data.taskId) }
   }
 }
 

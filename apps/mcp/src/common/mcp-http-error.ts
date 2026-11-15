@@ -12,6 +12,32 @@ export class McpHttpError extends HttpException {
   }
 }
 
+/**
+ * A tool call the role refuses before any tool runs, answered as that tool's own refusal — the
+ * result the agent reads (`isError`, `{ code, message }`) — rather than a refused request: a fixed
+ * code and fixed words, nothing of the call.
+ */
+export class McpToolRefusal extends HttpException {
+  constructor(id: string | number | null, refusal: Readonly<{ code: string; message: string }>) {
+    super(
+      {
+        jsonrpc: '2.0',
+        id,
+        result: {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ ok: false, code: refusal.code, message: refusal.message }),
+            },
+          ],
+        },
+      },
+      200,
+    )
+  }
+}
+
 @Catch()
 export class McpHttpExceptionFilter extends BaseExceptionFilter {
   readonly #logger = new Logger('McpHttp')
@@ -25,7 +51,7 @@ export class McpHttpExceptionFilter extends BaseExceptionFilter {
     const res = http.getResponse<Response>()
     if (res.headersSent) return
     res.setHeader('Cache-Control', 'no-store')
-    if (error instanceof McpHttpError) {
+    if (error instanceof McpHttpError || error instanceof McpToolRefusal) {
       res.status(error.getStatus()).json(error.getResponse())
       return
     }

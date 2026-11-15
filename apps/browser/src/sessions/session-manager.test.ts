@@ -1286,6 +1286,77 @@ describe('the agent’s actions', () => {
     ])
   })
 
+  it('only reads the site in a pass of a scheduled run without its client (plan 82, Зп28)', async () => {
+    const { store, ensured, act, counts } = setup()
+    const { row, browser } = await ensured()
+    const readOnly = { readOnly: true }
+    browser.go(EDIT_12)
+    await act(row, { tool: 'web_observe' }, readOnly)
+    // «Опубликовать» by its button, by Enter on it, by the save shortcut, by Enter on the button
+    // the agent reached with Tab: nothing is pressed.
+    expect(
+      await codeOf(act(row, { tool: 'web_click', observation: 'o1', ref: 'e5' }, readOnly)),
+    ).toBe('BROWSER_READ_ONLY')
+    expect(
+      await codeOf(
+        act(row, { tool: 'web_press', observation: 'o1', ref: 'e5', key: 'Enter' }, readOnly),
+      ),
+    ).toBe('BROWSER_READ_ONLY')
+    expect(await codeOf(act(row, { tool: 'web_press', key: 'Control+s' }, readOnly))).toBe(
+      'BROWSER_READ_ONLY',
+    )
+    browser.onFocused = async () => ({ role: 'button', name: 'Опубликовать' })
+    expect(await codeOf(act(row, { tool: 'web_press', key: 'Enter' }, readOnly))).toBe(
+      'BROWSER_READ_ONLY',
+    )
+    browser.onFocused = async () => null
+    // No file reaches a page: it would be on the site the moment the page takes it.
+    expect(
+      await codeOf(
+        act(
+          row,
+          { tool: 'web_upload', observation: 'o1', ref: 'e6', attachmentIds: [randomUUID()] },
+          readOnly,
+        ),
+      ),
+    ).toBe('BROWSER_READ_ONLY')
+    // Reading, following a link and typing into a field go on.
+    await act(row, { tool: 'web_click', observation: 'o1', ref: 'e7' }, readOnly)
+    await act(row, { tool: 'web_fill', observation: 'o1', ref: 'e6', text: 'Черновик' }, readOnly)
+    await act(row, { tool: 'web_press', key: 'Tab' }, readOnly)
+    await act(row, { tool: 'web_verify' }, readOnly)
+    expect(browser.acted).toEqual([
+      { tool: 'web_click', ref: 'e7' },
+      { tool: 'web_fill', ref: 'e6', text: 'Черновик' },
+      { tool: 'web_press', key: 'Tab' },
+    ])
+    await settle()
+    // Nothing is held for a check: the object is only seen.
+    expect([...store.checkpointRows.values()].map((record) => record.state)).toEqual(['seen'])
+    expect(counts.actions.filter((action) => action.endsWith('BROWSER_READ_ONLY'))).toEqual([
+      'web_click:BROWSER_READ_ONLY',
+      'web_press:BROWSER_READ_ONLY',
+      'web_press:BROWSER_READ_ONLY',
+      'web_press:BROWSER_READ_ONLY',
+      'web_upload:BROWSER_READ_ONLY',
+    ])
+    // Once the client answered, the next pass saves as ever.
+    await act(row, { tool: 'web_observe' })
+    expect(await act(row, { tool: 'web_click', observation: 'o2', ref: 'e5' })).toMatchObject({
+      checkpoint: { objectId: '12', state: 'unverified' },
+    })
+  })
+
+  it('takes a press on another site of a read-only pass for a press: nothing of the site (Ч6)', async () => {
+    const { ensured, act } = setup()
+    const { row, browser } = await ensured()
+    browser.go('https://editor.elsewhere.example/wp-admin/post.php?post=12&action=edit')
+    await act(row, { tool: 'web_observe' }, { readOnly: true })
+    // The site's saves are judged on the site alone; the instructions of the pass hold elsewhere.
+    await act(row, { tool: 'web_click', observation: 'o1', ref: 'e5' }, { readOnly: true })
+    expect(browser.acted).toEqual([{ tool: 'web_click', ref: 'e5' }])
+  })
+
   it('uploads only attachments bound to the session’s task, read from the inbox', async () => {
     const { store, inbox, ensured, act } = setup()
     const { row, browser } = await ensured()
