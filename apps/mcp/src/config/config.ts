@@ -139,7 +139,12 @@ export interface McpConfig {
    * production, for tests and stands alone — whether a loopback server is taken. A configuration
    * a stand builds by hand may leave it out: no extra subnets, no loopback.
    */
-  skillRelay?: { refusedSubnets: RefusedSubnet[]; allowLoopback: boolean }
+  skillRelay?: {
+    refusedSubnets: RefusedSubnet[]
+    allowLoopback: boolean
+    /** MCP_SKILL_RELAY_HOSTS: names of stands' servers on loopback, never in production. */
+    hosts?: Record<string, { address: string; port: number }>
+  }
 }
 
 /**
@@ -230,6 +235,29 @@ const ownEnvSchema = z.object({
   ),
   MCP_SKILL_RELAY_LOOPBACK: envVar(
     z.enum(['on', 'off'], { error: 'must be on or off' }).default('off'),
+  ),
+  // Stands alone: {"name": "127.0.0.1:port"} — a server of the stand without DNS.
+  MCP_SKILL_RELAY_HOSTS: envVar(
+    z
+      .string()
+      .transform((text, ctx) => {
+        try {
+          const parsed: unknown = JSON.parse(text)
+          const entries = Object.entries(parsed as Record<string, unknown>)
+          const hosts: Record<string, { address: string; port: number }> = {}
+          for (const [name, value] of entries) {
+            const match =
+              typeof value === 'string' ? /^(127\.0\.0\.1|\[::1\]):(\d{1,5})$/.exec(value) : null
+            if (!/^[a-z0-9.-]{1,253}$/.test(name) || !match) throw new Error('entry')
+            hosts[name] = { address: match[1]!.replace(/^\[(.*)\]$/, '$1'), port: Number(match[2]) }
+          }
+          return hosts
+        } catch {
+          ctx.addIssue({ code: 'custom', message: 'must be JSON of names to 127.0.0.1:<port>' })
+          return z.NEVER
+        }
+      })
+      .optional(),
   ),
   BROWSER_SESSION_MAX_HOURS: envVar(
     z.coerce
@@ -359,6 +387,13 @@ export function loadMcpConfig(env: Env): McpConfig {
   // A loopback MCP server is a test's or a stand's: production relays to the internet alone.
   if (production && own.MCP_SKILL_RELAY_LOOPBACK === 'on')
     problems.push('MCP_SKILL_RELAY_LOOPBACK: only off is allowed in production')
+  if (
+    own.MCP_SKILL_RELAY_HOSTS !== undefined &&
+    (production || own.MCP_SKILL_RELAY_LOOPBACK !== 'on')
+  )
+    problems.push(
+      'MCP_SKILL_RELAY_HOSTS: only outside production, with MCP_SKILL_RELAY_LOOPBACK=on',
+    )
   if (problems.length > 0 || db === undefined || vault === undefined || allowedHosts === undefined)
     throw new ConfigError(problems, 'mcp')
 
@@ -390,6 +425,7 @@ export function loadMcpConfig(env: Env): McpConfig {
     skillRelay: {
       refusedSubnets: parseRefusedSubnets(own.SANDBOX_EGRESS_REFUSED_SUBNETS ?? '') ?? [],
       allowLoopback: own.MCP_SKILL_RELAY_LOOPBACK === 'on',
+      ...(own.MCP_SKILL_RELAY_HOSTS ? { hosts: own.MCP_SKILL_RELAY_HOSTS } : {}),
     },
   }
 }

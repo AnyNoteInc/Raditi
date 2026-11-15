@@ -236,7 +236,7 @@ export class SkillRelay {
     const options: RequestOptions = {
       host: target.address,
       family: target.family,
-      port: url.port === '' ? (secure ? 443 : 80) : Number(url.port),
+      port: target.port ?? (url.port === '' ? (secure ? 443 : 80) : Number(url.port)),
       path: url.pathname,
       method: req.method,
       headers,

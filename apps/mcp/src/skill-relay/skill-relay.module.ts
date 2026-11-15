@@ -38,6 +38,7 @@ import { upstreamResolver } from './upstream.ts'
         const resolve = upstreamResolver({
           refusedSubnets: config.skillRelay?.refusedSubnets ?? [],
           allowLoopback: config.skillRelay?.allowLoopback ?? false,
+          ...(config.skillRelay?.hosts ? { hosts: config.skillRelay.hosts } : {}),
         })
         return new SkillRelay({
           access,

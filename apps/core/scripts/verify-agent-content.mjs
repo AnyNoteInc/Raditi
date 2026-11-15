@@ -8,7 +8,9 @@
 // (verify-agent-content-live.mjs; rules and limits in infra/dev/llm-verify/README.md);
 // --rehearsal runs that flow on the synthetic Z.ai.
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
+import { createServer as createHttpsServer } from 'node:https'
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -19,7 +21,7 @@ import {
   PostgresSiteLeaseStore,
   PostgresTaskTurnAssignmentStore,
 } from '@repo/db'
-import { siteAccessPath, workspaceTransitKey } from '@repo/domain'
+import { agentSkillSecretPath, siteAccessPath, workspaceTransitKey } from '@repo/domain'
 import { createS3Client, createS3ObjectStorage, storageConfigFromEnv } from '@repo/storage'
 import { createVaultSecretStore } from '@repo/vault'
 
@@ -101,6 +103,8 @@ const passed = (name) => {
   console.log(`PASS ${name}`)
 }
 let interrupted = false
+/** The stand's server with a key (plan 80): closed with the rest. */
+let relayedServer = null
 const interrupt = () => {
   if (interrupted) return
   interrupted = true
@@ -279,6 +283,108 @@ async function bridgeGateway() {
   return bridgeGatewayAddress(inspected.stdout)
 }
 
+/**
+ * A server the owner added with a key (docs/plan/80-mcp-server-credentials.md): HTTPS on loopback
+ * under a name the stand's CA certifies, which the role mcp reaches through MCP_SKILL_RELAY_HOSTS.
+ * It records who called it with what key, and repeats the key in its answer: the relay must take
+ * it out before the model sees it.
+ */
+const RELAYED_HOST = 'mcp.relay-stand.example'
+async function startRelayedServer(stack) {
+  const authority = join(stack.certificates.authority)
+  execFileSync(
+    'sh',
+    [join(repository, 'infra/egress/make-ca.sh'), 'server', authority, RELAYED_HOST],
+    {
+      stdio: 'pipe',
+      timeout: 30_000,
+    },
+  )
+  const secret = `relay-${randomBytes(16).toString('hex')}`
+  const marker = `RELAYED_MENU_${randomBytes(4).toString('hex')}`
+  const requests = []
+  const server = createHttpsServer(
+    {
+      cert: await readFile(join(authority, `server/${RELAYED_HOST}.pem`)),
+      key: await readFile(join(authority, `server/${RELAYED_HOST}-key.pem`)),
+    },
+    (req, res) => {
+      const chunks = []
+      req.on('data', (chunk) => chunks.push(chunk))
+      req.on('end', () => {
+        let rpc = null
+        try {
+          rpc = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+        } catch {
+          /* GET and DELETE carry no body. */
+        }
+        requests.push({
+          method: req.method,
+          rpc: rpc?.method ?? null,
+          tool: rpc?.params?.name ?? null,
+          key: req.headers['x-api-key'],
+          authorization: req.headers.authorization,
+        })
+        const json = (value) =>
+          res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(value))
+        if (req.method === 'GET') return res.writeHead(405).end()
+        if (req.method === 'DELETE') return res.writeHead(204).end()
+        if (req.headers['x-api-key'] !== secret) return res.writeHead(401).end()
+        if (rpc?.id === undefined) return res.writeHead(202).end()
+        if (rpc.method === 'initialize')
+          return json({
+            jsonrpc: '2.0',
+            id: rpc.id,
+            result: {
+              protocolVersion: rpc.params.protocolVersion,
+              capabilities: { tools: {} },
+              serverInfo: { name: 'relayed-stand', version: '1' },
+            },
+          })
+        if (rpc.method === 'tools/list')
+          return json({
+            jsonrpc: '2.0',
+            id: rpc.id,
+            result: {
+              tools: [
+                {
+                  name: 'get_menu',
+                  description: 'Returns the synthetic menu.',
+                  inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+                },
+              ],
+            },
+          })
+        return json({
+          jsonrpc: '2.0',
+          id: rpc.id,
+          result: { content: [{ type: 'text', text: `${marker} key ${secret}` }], isError: false },
+        })
+      })
+    },
+  )
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  return {
+    name: 'menu',
+    url: `https://${RELAYED_HOST}:8443/v1/mcp`,
+    secret,
+    marker,
+    requests: () => requests.slice(),
+    env: {
+      MCP_SKILL_RELAY_LOOPBACK: 'on',
+      MCP_SKILL_RELAY_HOSTS: JSON.stringify({
+        [RELAYED_HOST]: `127.0.0.1:${server.address().port}`,
+      }),
+      NODE_EXTRA_CA_CERTS: join(authority, 'root.pem'),
+    },
+    close: () =>
+      new Promise((resolve) => {
+        server.closeAllConnections()
+        server.close(resolve)
+      }),
+  }
+}
+
 async function stand(site) {
   stage = 'disposable stack'
   stack = await startVerificationStack({
@@ -442,6 +548,30 @@ async function stand(site) {
     },
   })
   await connectSite(workspace.id, site, observers.siteOrigin)
+  // The server with a key, its key in Vault as web writes it and its row (a live run has none).
+  const relayed = live ? null : await startRelayedServer(stack)
+  relayedServer = relayed
+  if (relayed) {
+    const writer = createVaultSecretStore({
+      addr: stack.vaultAddress,
+      token: stack.tokens['sites-writer'],
+    })
+    await writer.kvWrite(
+      agentSkillSecretPath(site.siteId, relayed.name),
+      { value: relayed.secret },
+      { cas: 0, maxVersions: 1 },
+    )
+    await db.siteAgentSkill.create({
+      data: {
+        siteId: site.siteId,
+        name: relayed.name,
+        url: relayed.url,
+        authKind: 'header',
+        headerName: 'X-Api-Key',
+      },
+    })
+    secretMarkers.add(relayed.secret)
+  }
   stage = 'separate llm and mcp role processes'
   // One way to the provider per role process, as in the product: without an egress proxy the
   // role connects only to the provider that needs no egress node.
@@ -489,16 +619,19 @@ async function stand(site) {
   // and the admission query all answer.
   const mcp = await startRegularRole({
     port: rolePort,
-    env: roleEnvironment({
-      path: process.env.PATH,
-      home: roleHome(stack.directory),
-      port: rolePort,
-      // What sandbox-gw rewrites Host to: the role accepts nothing else, loopback included.
-      allowedHosts: ['host.docker.internal'],
-      databaseUrl: stack.databaseUrl,
-      vault: { address: stack.vaultAddress, ...stack.roles.mcp },
-      s3: stack.s3,
-    }),
+    env: {
+      ...(relayed?.env ?? {}),
+      ...roleEnvironment({
+        path: process.env.PATH,
+        home: roleHome(stack.directory),
+        port: rolePort,
+        // What sandbox-gw rewrites Host to: the role accepts nothing else, loopback included.
+        allowedHosts: ['host.docker.internal'],
+        databaseUrl: stack.databaseUrl,
+        vault: { address: stack.vaultAddress, ...stack.roles.mcp },
+        s3: stack.s3,
+      }),
+    },
   })
   workers.push(mcp)
   // Its own line, read from the pipe: loopback only, and the profile the configuration named.
@@ -639,6 +772,7 @@ async function stand(site) {
     s3Client,
     bucket: stack.s3.buckets.artifacts,
     secretMarkers,
+    ...(relayed ? { relayed } : {}),
     passed,
     rolePath,
     setStage: (name) => {
@@ -770,6 +904,7 @@ try {
           () => cli?.close(),
           () => guard && run('docker', ['rm', '-f', guard], { allowFailure: true, cleanup: true }),
           () => observers?.close(),
+          () => relayedServer?.close(),
           ...workers
             .slice()
             .reverse()

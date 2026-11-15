@@ -23,6 +23,11 @@ export interface UpstreamPolicy {
   refusedSubnets: readonly RefusedSubnet[]
   /** Outside production, for tests and stands: a loopback server is taken. */
   allowLoopback: boolean
+  /**
+   * Outside production, for stands alone: a name answered by a loopback `address:port` without
+   * DNS (MCP_SKILL_RELAY_HOSTS) — the server of a stand under a name its certificate carries.
+   */
+  hosts?: Readonly<Record<string, { address: string; port: number }>>
   resolve?: ResolveName
 }
 
@@ -38,8 +43,17 @@ export function upstreamResolver(policy: UpstreamPolicy) {
   const allowed = (address: string) =>
     isPublic(address) || (policy.allowLoopback && isLoopbackAddress(address))
   const resolve = policy.resolve ?? resolveAll
-  return async (url: URL): Promise<{ address: string; family: 4 | 6 }> => {
+  return async (url: URL): Promise<{ address: string; family: 4 | 6; port?: number }> => {
     const host = url.hostname.replace(/^\[(.*)\]$/, '$1')
+    const mapped = policy.hosts?.[host]
+    if (mapped !== undefined) {
+      if (!allowed(mapped.address)) throw new RelayRefusal('address_refused')
+      return {
+        address: mapped.address,
+        family: mapped.address.includes(':') ? 6 : 4,
+        port: mapped.port,
+      }
+    }
     let addresses: readonly LookupAddress[]
     if (ipLiteral(host) !== undefined)
       addresses = [{ address: host, family: host.includes(':') ? 6 : 4 }]

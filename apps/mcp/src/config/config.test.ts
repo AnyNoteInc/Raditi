@@ -477,4 +477,25 @@ describe('the web search of the mcp role', () => {
       allowLoopback: false,
     })
   })
+
+  it('takes the hosts of a stand only outside production and with loopback on', () => {
+    const hosts = JSON.stringify({ 'mcp.relay-stand.example': '127.0.0.1:45123' })
+    expect(
+      loadMcpConfig({ ...devEnv, MCP_SKILL_RELAY_LOOPBACK: 'on', MCP_SKILL_RELAY_HOSTS: hosts })
+        .skillRelay?.hosts,
+    ).toEqual({ 'mcp.relay-stand.example': { address: '127.0.0.1', port: 45123 } })
+    expect(problemsOf({ ...devEnv, MCP_SKILL_RELAY_HOSTS: hosts })).toContain(
+      'MCP_SKILL_RELAY_HOSTS: only outside production, with MCP_SKILL_RELAY_LOOPBACK=on',
+    )
+    expect(problemsOf(prodEnv({ MCP_SKILL_RELAY_HOSTS: hosts }))).toContain(
+      'MCP_SKILL_RELAY_HOSTS: only outside production, with MCP_SKILL_RELAY_LOOPBACK=on',
+    )
+    expect(
+      problemsOf({
+        ...devEnv,
+        MCP_SKILL_RELAY_LOOPBACK: 'on',
+        MCP_SKILL_RELAY_HOSTS: '{"x.example":"10.0.0.1:1"}',
+      })[0],
+    ).toMatch(/MCP_SKILL_RELAY_HOSTS/)
+  })
 })

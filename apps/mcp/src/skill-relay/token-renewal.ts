@@ -45,7 +45,7 @@ async function postForm(
       {
         host: target.address,
         family: target.family,
-        port: url.port === '' ? (secure ? 443 : 80) : Number(url.port),
+        port: target.port ?? (url.port === '' ? (secure ? 443 : 80) : Number(url.port)),
         path: `${url.pathname}${url.search}`,
         method: 'POST',
         headers: {

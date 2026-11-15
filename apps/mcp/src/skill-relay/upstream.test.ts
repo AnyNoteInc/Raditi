@@ -51,6 +51,24 @@ describe('upstreamResolver', () => {
   })
 })
 
+describe('the hosts of a stand', () => {
+  it('answers a name of a stand by its loopback address and port, without DNS', async () => {
+    const resolve = upstreamResolver({
+      refusedSubnets: [],
+      allowLoopback: true,
+      hosts: { 'mcp.relay-stand.example': { address: '127.0.0.1', port: 45123 } },
+      resolve: async () => {
+        throw new Error('no DNS for a stand')
+      },
+    })
+    expect(await resolve(new URL('https://mcp.relay-stand.example:8443/mcp'))).toEqual({
+      address: '127.0.0.1',
+      family: 4,
+      port: 45123,
+    })
+  })
+})
+
 describe('the path of the relay', () => {
   it('is the same on the gateway of a sandbox as in the domain', () => {
     const gateway = readFileSync(
