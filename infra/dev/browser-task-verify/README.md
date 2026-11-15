@@ -46,4 +46,6 @@ Docker Desktop с хранилищем образов containerd (ссылки �
 - `web_upload` файла чата на страницу: на публичных сайтах стенда поля файла нет, а локальных сайтов у браузера больше нет (`BROWSER_LOCAL_SITES` удалён с планом 83); путь закрывают тесты `apps/browser` и `@repo/browser-providers`.
 - Узкий экран (ниже `lg`), сроки простоя и жизни сессии, потеря процесса `browser` — тесты `apps/browser`, `@repo/browser-providers` и компонентов web.
 
+15.11.2026 на дереве плана 83 (Docker Desktop, `runc`, со свежей сборкой): 7 сценариев, 82 проверки в сценариях (S — 9, P — 22, K — 11, L — 11, Q — 16, R — 8, M — 5), 307 с, код 0.
+
 Файлы: `verify-browser-task.mjs` — сборки, порядок запуска и уборка; `build.mjs` — приватная копия и образы; `runtime.mjs` — процессы, Docker, ожидания, HTTP, клиент web; `services.mjs` — сертификаты, PostgreSQL, Redis, S3 и OpenBao; `stand.mjs` и `stand.test.mjs` — параметры, аргументы контейнеров, окружения процессов, файлы задачи (`pnpm test:infra`); `setup.mjs` — регистрация, модель, файлы, тариф; `model.mjs` и `programs.mjs` — сценарная модель; `stream.mjs` — зритель потока; `cabinet.mjs` — кабинет в Chromium; `scenarios.mjs` — сценарии.

@@ -236,7 +236,7 @@ async function main(options, owned) {
     ['dist/main.js'],
     app('preview'),
     appEnvironment('preview', context),
-    `http://127.0.0.1:${ports.preview}/__raditi/health`,
+    `http://127.0.0.1:${ports.pages}/__raditi/health`,
   )
   processes.core = await start(
     'core',

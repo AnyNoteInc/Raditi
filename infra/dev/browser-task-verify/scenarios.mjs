@@ -218,11 +218,12 @@ export async function streamOperatorOf(stand, client, taskId) {
 // ─── S: the clients of the run and their files ────────────────────────────────
 
 async function readObject(storage, bucket, key) {
-  try {
-    return await storage.get(bucket, key)
-  } catch {
-    return null
-  }
+  if (!key) return null
+  const body = await storage.get(bucket, key)
+  if (body === null) return null
+  const chunks = []
+  for await (const chunk of body) chunks.push(Buffer.from(chunk))
+  return Buffer.concat(chunks)
 }
 
 /**
@@ -504,9 +505,19 @@ async function networkProbes(stand, sessionId) {
   const containers = await sessionContainers(rt, sessionId)
   if (!containers.browser || !containers.egress)
     throw new CheckFailed('the session has no browser or egress container')
-  const hosts = (await rt.docker(['exec', containers.egress, 'cat', '/etc/hosts'])).output
-  const gateway = /^(\d+\.\d+\.\d+\.\d+)\s+host\.docker\.internal/m.exec(hosts)?.[1]
-  if (!gateway) throw new CheckFailed('the egress container has no host.docker.internal')
+  // The address of the host as Docker names it (`host-gateway`): the egress container has no name
+  // for it since BROWSER_EXTRA_HOSTS left with the sites (plan 83), so a throwaway container of the
+  // tools image is asked.
+  const hosts = (
+    await rt.docker([
+      ...['run', '--rm', '--pull', 'never', '--network', 'none', '--label', stand.names.label],
+      ...['--add-host', 'stand-host:host-gateway', '--entrypoint', 'cat'],
+      stand.context.images.tools,
+      '/etc/hosts',
+    ])
+  ).output
+  const gateway = /^(\d+\.\d+\.\d+\.\d+)\s+stand-host/m.exec(hosts)?.[1]
+  if (!gateway) throw new CheckFailed('Docker names no address of the host (host-gateway)')
   const probe = (container, host, port) =>
     rt
       .docker(['exec', container, 'node', '-e', NODE_ERRNO_PROBE, host, String(port)], {
