@@ -106,6 +106,8 @@ test('every policy grants exactly its scoped privileges and only on its own moun
     'sites-writer': {
       'kv/data/sites/*': ['create', 'update'],
       'kv/metadata/sites/+/*': ['create', 'update', 'read'],
+      'kv/data/workspaces/+/env/*': ['create', 'update'],
+      'kv/metadata/workspaces/+/env/*': ['create', 'update', 'read'],
     },
     // The key itself, never a path under it (rotate, config, trim, soft-delete-restore).
     'workspace-provisioner': { 'transit/keys/+': ['update'] },
@@ -129,6 +131,8 @@ test('every policy grants exactly its scoped privileges and only on its own moun
       'sys/wrapping/lookup': ['update'],
       'auth/token/revoke-accessor': ['update'],
     },
+    // Variables of a workspace, read-only (plan 83, БП4).
+    'core-workspace-env': { 'kv/data/workspaces/+/env/*': ['read'] },
   }
   // A policy that names a mount outside its list fails here, whatever the path under it.
   const allowedMounts = {
@@ -142,6 +146,7 @@ test('every policy grants exactly its scoped privileges and only on its own moun
     'workspace-provisioner': ['transit'],
     'core-site-import': ['kv'],
     'core-release': ['kv', 'sys', 'auth'],
+    'core-workspace-env': ['kv'],
   }
   // The only system and auth endpoints a policy may name.
   const systemPaths = {
@@ -191,7 +196,7 @@ test('every policy grants exactly its scoped privileges and only on its own moun
     writer,
     /path "kv\/metadata\/sites\/\+\/\*" {\s*capabilities = \[[^\]]+\]\s*allowed_parameters\s*=\s*{\s*"max_versions"\s*=\s*\["1"\]\s*}/,
   )
-  assert.equal([...writer.matchAll(/allowed_parameters/g)].length, 1)
+  assert.equal([...writer.matchAll(/allowed_parameters/g)].length, 2)
   // core may attach recovery metadata to a secret of a preview, never weaken its retention.
   const release = await readFile(new URL('./policies/core-release.hcl', import.meta.url), 'utf8')
   assert.match(
@@ -225,7 +230,7 @@ test('a new local bootstrap creates the four mounts and all the policies', async
     configWrites.map(({ path, body }) => [path, body]),
     Object.entries(mounts).map(([name, config]) => [`${name}/config`, config]),
   )
-  assert.equal(policyNames.length, 10)
+  assert.equal(policyNames.length, 11)
   assert.deepEqual(
     mock.calls.filter(({ path }) => path.startsWith('sys/policies/acl/')).map(({ path }) => path),
     policyNames.map((name) => `sys/policies/acl/${name}`),
@@ -395,7 +400,7 @@ test('a mount that failed to enable stops the run and is enabled by the next one
 test('the summary names the mounts, counts the policies and says what a new mount has lost', () => {
   const all = ['turns', 'subs', 'kv', 'transit']
   assert.deepEqual(bootstrapSummary({ mounts: all, policies: [...policyNames], created: [] }), [
-    'Local OpenBao ready: turns/, subs/, kv/, transit/; 10 policies',
+    'Local OpenBao ready: turns/, subs/, kv/, transit/; 11 policies',
   ])
   const [, fresh] = bootstrapSummary({ mounts: all, policies: [...policyNames], created: all })
   assert.match(fresh, /^Created now: turns\/, subs\/, kv\/, transit\/\. /)
