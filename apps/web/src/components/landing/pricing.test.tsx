@@ -1,21 +1,15 @@
 // @vitest-environment jsdom
-import {
-  averageTaskCredits,
-  signupGiftCredits,
-  typicalTaskCredits,
-} from '@repo/domain/billing/credit-numbers'
-import { fireEvent, render, screen, within } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { signupGiftCredits } from '@repo/domain/billing/credit-numbers'
+import { render, screen, within } from '@testing-library/react'
+import { describe, expect, it } from 'vitest'
 
 import { mainAction } from './main-action'
-import { ANNOUNCE_DELAY_MS, Pricing } from './pricing'
-import { pass, plain, pricing } from './testing'
+import { Pricing } from './pricing'
+import { plain, pricing } from './testing'
 
 const { plans, pack } = pricing
 
-// The line under the slider and the one under the main action, as they read.
-const TASK_HINT =
-  'Задача — одна ваша просьба. В расчёте берём 11 кредитов на задачу — это среднее: поменять цену или фото стоит обычно 5 кредитов, добавить блок или страницу — 15–25.'
+// The line under the main action, as it reads.
 const GIFT_NOTE =
   'При регистрации — 50 кредитов в подарок: хватит на несколько небольших правок. Тариф выберете позже.'
 
@@ -26,198 +20,37 @@ function planCard(name: string): HTMLElement {
 }
 
 describe('landing pricing', () => {
-  it('names the slider value in words and marks the cheapest plan for it', () => {
+  it('shows the three plans without a calculator', () => {
     render(<Pricing plans={plans} pack={pack} />)
 
-    const slider = screen.getByRole('slider', { name: 'Сколько задач в месяц вы планируете?' })
-    expect(slider).toHaveAttribute('aria-valuetext', '30 задач в месяц')
-    expect(within(planCard('Старт')).getByText('Ваш вариант')).toBeInTheDocument()
-    expect(within(planCard('Бизнес')).queryByText('Ваш вариант')).not.toBeInTheDocument()
-  })
-
-  it('moves the mark to another plan when more tasks are asked for', () => {
-    render(<Pricing plans={plans} pack={pack} />)
-
-    const slider = screen.getByRole('slider', { name: 'Сколько задач в месяц вы планируете?' })
-    fireEvent.change(slider, { target: { value: '120' } })
-
-    expect(slider).toHaveAttribute('aria-valuetext', '120 задач в месяц')
-    expect(within(planCard('Бизнес')).getByText('Ваш вариант')).toBeInTheDocument()
-    expect(within(planCard('Старт')).queryByText('Ваш вариант')).not.toBeInTheDocument()
-  })
-
-  it('draws the name of the plan anew when the plan changes, not when a pack is added', () => {
-    render(<Pricing plans={plans} pack={pack} />)
-    const slider = screen.getByRole('slider', { name: 'Сколько задач в месяц вы планируете?' })
-    // A new node plays its move; the same node stands still.
-    const name = () => screen.getByText(/^Тариф «/)
-    const start = name()
-    expect(start).toHaveTextContent('Тариф «Старт»')
-    // Seen, not heard: the announcement of the result has its own region.
-    expect(start.closest('[aria-live]')).toBeNull()
-
-    expect(plain(name().parentElement?.textContent ?? '')).toBe(
-      'Тариф «Старт» и 2 дополнительных пакета по 100 кредитов',
-    )
-
-    fireEvent.change(slider, { target: { value: '40' } })
-    expect(name()).toBe(start)
-    expect(plain(name().parentElement?.textContent ?? '')).toBe(
-      'Тариф «Старт» и 3 дополнительных пакета по 100 кредитов',
-    )
-
-    fireEvent.change(slider, { target: { value: '80' } })
-    const business = name()
-    expect(business).toHaveTextContent('Тариф «Бизнес»')
-    expect(business).not.toBe(start)
-
-    fireEvent.change(slider, { target: { value: '100' } })
-    expect(name()).toBe(business)
-  })
-
-  it('tells the result in words and rounds the price of one task to rubles', () => {
-    render(<Pricing plans={plans} pack={pack} />)
-
-    // The slider counts tasks, and nothing on it says that a task is one credit.
-    const hint = screen.getByText(TASK_HINT)
-    expect(screen.queryByText(/Один кредит/)).not.toBeInTheDocument()
-    expect(screen.getByText('Самый выгодный вариант для такого числа задач')).toBeInTheDocument()
-    // Thirty tasks at eleven credits each are more than the 200 of «Старт»: two packs are added.
-    const start = screen.getByText('Тариф «Старт»').parentElement
-    expect(start).toHaveTextContent('Тариф «Старт» и 2 дополнительных пакета по 100 кредитов')
-    expect(screen.getByText('1 990 ₽ + 2 × 1 490 ₽')).toBeInTheDocument()
     expect(
-      screen.getByText('В среднем около 166 ₽ за задачу при 30 задачах в месяц'),
-    ).toBeInTheDocument()
-    // A small edit on what is paid: 4 970 ₽ for 400 credits.
-    expect(screen.getByText('Небольшая правка — около 62 ₽')).toBeInTheDocument()
-
-    const slider = screen.getByRole('slider', { name: 'Сколько задач в месяц вы планируете?' })
-    expect(slider).toHaveAttribute('aria-describedby', hint.id)
-    // Ten tasks fit the tariff: no pack, no sum of two parts, and the small edit of the card.
-    fireEvent.change(slider, { target: { value: '10' } })
-    expect(screen.getByText('Тариф «Старт»')).toBeInTheDocument()
-    expect(screen.queryByText(/дополнительн/)).not.toBeInTheDocument()
-    expect(screen.queryByText(/ × /)).not.toBeInTheDocument()
-    expect(
-      screen.getByText('В среднем около 199 ₽ за задачу при 10 задачах в месяц'),
-    ).toBeInTheDocument()
-    const result10 = screen.getByText('Самый выгодный вариант для такого числа задач').parentElement
-    expect(within(result10!).getByText('Небольшая правка — около 50 ₽')).toBeInTheDocument()
-
-    fireEvent.change(slider, { target: { value: '120' } })
-
-    // The name of the plan is an element of its own inside the sentence of the result.
-    const result = screen.getByText(/^Тариф «Бизнес»/).parentElement
-    expect(result).toHaveTextContent('Тариф «Бизнес» и 4 дополнительных пакета по 100 кредитов')
-    expect(screen.getByText('9 990 ₽ + 4 × 1 490 ₽')).toBeInTheDocument()
-    expect(
-      screen.getByText('В среднем около 133 ₽ за задачу при 120 задачах в месяц'),
-    ).toBeInTheDocument()
-    expect(screen.getByText('Небольшая правка — около 57 ₽')).toBeInTheDocument()
-    expect(
-      screen.getByText('Если сайтов больше одного — смотрите число сайтов в тарифе.'),
-    ).toBeInTheDocument()
+      screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent),
+    ).toEqual(['Старт', 'Бизнес', 'Агентство'])
+    // No slider, no count of tasks to move, no result to announce.
+    expect(screen.queryByRole('slider')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Сколько задач в месяц/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Самый выгодный вариант/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Ваш вариант/)).not.toBeInTheDocument()
+    expect(document.querySelector('[aria-live]')).toBeNull()
+    expect(document.querySelector('input')).toBeNull()
   })
 
-  it('says under the slider what a task is and how many credits the calculator counts for one', () => {
+  it('marks the plan in the middle for the visitor, and only it', () => {
     render(<Pricing plans={plans} pack={pack} />)
 
-    const hint = screen.getByText(TASK_HINT)
-    // The numbers are those of the credits model: the average charge the calculator multiplies
-    // by, and the first two rows of the orientation list — said as an average and as usual.
-    expect(TASK_HINT).toContain(`берём ${averageTaskCredits} кредитов на задачу — это среднее`)
-    expect(TASK_HINT).toContain(`обычно ${typicalTaskCredits.small.to} кредитов`)
-    expect(TASK_HINT).toContain(
-      `— ${typicalTaskCredits.block.from}–${typicalTaskCredits.block.to}.`,
-    )
-    // The sentence of before the credits model is gone, and so is its promise of one unit a task.
-    expect(screen.queryByText(/поменять цены, заменить фото, добавить акцию/)).toBeNull()
-    // A number stays with its word and a dash with the word before it.
-    expect(hint.textContent).toContain('Задача\u00a0— одна ваша просьба.')
-    expect(hint.textContent).toContain('11\u00a0кредитов на\u00a0задачу\u00a0— это среднее')
-    expect(hint.textContent).toContain('обычно 5\u00a0кредитов')
-    expect(hint.textContent).toContain('страницу\u00a0— 15–25.')
-    // The average of the hint is the one the result divides by: thirty tasks need 330 credits,
-    // more than the 200 of «Старт», so two packs are added.
-    expect(screen.getByText('Тариф «Старт»').parentElement).toHaveTextContent(
-      '2 дополнительных пакета',
-    )
+    expect(within(planCard('Бизнес')).getByText('Для вас')).toBeInTheDocument()
+    expect(within(planCard('Старт')).queryByText('Для вас')).not.toBeInTheDocument()
+    expect(within(planCard('Агентство')).queryByText('Для вас')).not.toBeInTheDocument()
+    expect(screen.getAllByText('Для вас')).toHaveLength(1)
   })
 
-  describe('for a screen reader', () => {
-    afterEach(() => {
-      vi.useRealTimers()
-    })
+  it('marks no plan when there is no middle one', () => {
+    const { unmount } = render(<Pricing plans={plans.slice(0, 2)} pack={pack} />)
+    expect(screen.queryByText('Для вас')).not.toBeInTheDocument()
+    unmount()
 
-    it('announces the result once, when the slider comes to rest', () => {
-      vi.useFakeTimers()
-      const { container } = render(<Pricing plans={plans} pack={pack} />)
-
-      // One live region instead of three: the count above the slider is for the eye only, and
-      // the visible result is plain text.
-      const regions = container.querySelectorAll('[aria-live]')
-      expect(regions).toHaveLength(1)
-      const [announcement] = regions
-      if (!announcement) throw new Error('no live region')
-      expect(announcement).toHaveAttribute('aria-live', 'polite')
-      expect(announcement).toHaveAttribute('aria-atomic', 'true')
-      expect(screen.queryByRole('status')).not.toBeInTheDocument()
-      expect(container.querySelector('output')?.closest('[aria-hidden="true"]')).not.toBeNull()
-      expect(screen.getByText(/^Тариф «Старт»/).closest('[aria-live]')).toBeNull()
-
-      // Nothing is said until the visitor moves the slider.
-      pass(ANNOUNCE_DELAY_MS * 2)
-      expect(announcement).toBeEmptyDOMElement()
-
-      // A drag passes several values: only the one it stops on is announced.
-      const slider = screen.getByRole('slider', { name: 'Сколько задач в месяц вы планируете?' })
-      for (const value of ['35', '80', '120']) {
-        fireEvent.change(slider, { target: { value } })
-        pass(ANNOUNCE_DELAY_MS - 1)
-        expect(announcement).toBeEmptyDOMElement()
-      }
-      pass(1)
-      const business =
-        'Тариф «Бизнес» и 4 дополнительных пакета по 100 кредитов, 15 950 ₽ в месяц, в среднем около 133 ₽ за задачу. Небольшая правка — около 57 ₽'
-      expect(plain(announcement.textContent)).toBe(business)
-
-      // The next step keeps the last words until it rests too; then the plan alone is named,
-      // as no pack is needed.
-      fireEvent.change(slider, { target: { value: '10' } })
-      pass(ANNOUNCE_DELAY_MS - 1)
-      expect(plain(announcement.textContent)).toBe(business)
-      pass(1)
-      expect(plain(announcement.textContent)).toBe(
-        'Тариф «Старт», 1 990 ₽ в месяц, в среднем около 199 ₽ за задачу. Небольшая правка — около 50 ₽',
-      )
-
-      // And with a pack: the words of the visible result, the amounts and the estimates.
-      fireEvent.change(slider, { target: { value: '20' } })
-      pass(ANNOUNCE_DELAY_MS)
-      expect(plain(announcement.textContent)).toBe(
-        'Тариф «Старт» и 1 дополнительный пакет по 100 кредитов, 3 480 ₽ в месяц, в среднем около 174 ₽ за задачу. Небольшая правка — около 58 ₽',
-      )
-    })
-
-    it('announces that no pack fits the number of tasks', () => {
-      vi.useFakeTimers()
-      const { container } = render(<Pricing plans={plans.slice(0, 1)} pack={null} />)
-
-      fireEvent.change(screen.getByRole('slider'), { target: { value: '120' } })
-      pass(ANNOUNCE_DELAY_MS)
-      const message = 'Для такого числа задач пока нет доступного пакета. Выберите меньше задач.'
-      const announcement = container.querySelector('[aria-live]')
-      expect(announcement).toHaveTextContent(message)
-      // The same words as the visible result.
-      const [visible, ...others] = screen
-        .getAllByText(message)
-        .filter((element) => element !== announcement)
-      expect(others).toHaveLength(0)
-      // On the screen a line does not end with a preposition; a screen reader takes plain spaces.
-      expect(visible?.textContent).toContain('Для\u00a0такого числа')
-      expect(announcement?.textContent).toBe(message)
-    })
+    render(<Pricing plans={plans.slice(0, 1)} pack={null} />)
+    expect(screen.queryByText('Для вас')).not.toBeInTheDocument()
   })
 
   it('offers the packs in the future tense, and not at all when there are none', () => {
@@ -363,7 +196,6 @@ describe('landing pricing', () => {
     render(<Pricing plans={[]} pack={null} />)
 
     expect(screen.getByText('Сейчас не удалось загрузить тарифы.')).toBeInTheDocument()
-    expect(screen.queryByRole('slider')).not.toBeInTheDocument()
     // The sentence names what the link under it does, and no registration.
     const way = screen.getByText(/Оставить заявку на\s+подключение можно уже сейчас\./)
     expect(way.textContent).toContain('на\u00a0подключение можно')

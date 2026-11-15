@@ -557,6 +557,10 @@ model ChatSession {
   externalChatId  String?  @map("external_chat_id") @db.VarChar(64)
   /// Telegram forum topic (message_thread_id).
   telegramTopicId Int?     @map("telegram_topic_id")
+  /// The message of the work of the agent in Telegram while a pass goes on (docs/plan/80-telegram.md);
+  /// `telegramProgressChain` — the run that edits it: a newer run takes over, an older one stops.
+  telegramProgressId    Int?    @map("telegram_progress_id")
+  telegramProgressChain String? @map("telegram_progress_chain") @db.Uuid
   agentDriverId   String?  @map("agent_driver_id") @db.VarChar(32)
   lastTurnId      String?  @map("last_turn_id") @db.Uuid
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)

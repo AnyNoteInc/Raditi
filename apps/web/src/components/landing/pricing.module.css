@@ -5,173 +5,8 @@
   color: var(--raditi-ink);
 }
 
-.calculator {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: clamp(32px, 6vw, 88px);
-  align-items: center;
-  padding: 0 0 48px;
-}
-
-.input label {
-  display: block;
-  font-size: 17px;
-  font-weight: 500;
-}
-
-.hint {
-  max-width: 44ch;
-  margin: 8px 0 0;
-  color: var(--raditi-graphite);
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.taskCount {
-  display: flex;
-  align-items: baseline;
-  gap: 16px;
-  margin: 18px 0 14px;
-}
-
-/* The number of edits is the question of the calculator, the sum is its answer: at every width
-   the count is a step smaller than the sum beside it. */
-.taskCount output {
-  color: var(--raditi-accent-text);
-  font-family: var(--font-unbounded), sans-serif;
-  font-size: clamp(28px, 3.1vw, 48px);
-  font-weight: 500;
-  line-height: 1.1;
-  letter-spacing: -0.04em;
-  font-variant-numeric: tabular-nums;
-}
-
-.taskCount span {
-  color: var(--raditi-graphite);
-  font-size: 17px;
-}
-
-.range {
-  display: block;
-  width: 100%;
-  height: 44px;
-  margin: 0;
-  border-radius: 0;
-  appearance: none;
-  /* The filled part is 3px thick; under it a 1px line of the control outline runs the whole
-     width. Painted in that colour, the empty part would merge with the filled one. */
-  background:
-    linear-gradient(
-        to right,
-        var(--raditi-accent-text) 0 var(--range-progress),
-        transparent var(--range-progress) 100%
-      )
-      center / 100% 3px no-repeat,
-    linear-gradient(var(--raditi-rule-strong), var(--raditi-rule-strong)) center / 100% 1px
-      no-repeat;
-  cursor: pointer;
-  touch-action: pan-y;
-}
-
-/* The track is that line once more, as a border: a forced palette paints no author background
-   and would leave the thumb alone, but it keeps a border and gives it a colour of its own. The
-   border is transparent, so the page looks the same: a painted one would lie over the filled
-   part, which is the background of the control under the track. The track is the border alone,
-   1px high, and stands on the middle of the control, where the line of the background runs. */
-.range::-webkit-slider-runnable-track {
-  box-sizing: content-box;
-  height: 0;
-  border-top: 1px solid transparent;
-  background: transparent;
-}
-
-.range::-webkit-slider-thumb {
-  width: 24px;
-  height: 24px;
-  /* From the box under the border up to the middle of the line: half of the thumb and half
-     of the border. */
-  margin-top: -12.5px;
-  border: 5px solid var(--raditi-accent-text);
-  border-radius: 50%;
-  appearance: none;
-  background: var(--raditi-accent);
-  transition: transform var(--raditi-motion-fast) var(--raditi-ease-out);
-}
-
-/* The same border for Firefox, which centres the thumb on the control itself. */
-.range::-moz-range-track {
-  box-sizing: content-box;
-  height: 0;
-  border-top: 1px solid transparent;
-  background: transparent;
-}
-
-.range::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
-  border: 5px solid var(--raditi-accent-text);
-  border-radius: 50%;
-  background: var(--raditi-accent);
-  transition: transform var(--raditi-motion-fast) var(--raditi-ease-out);
-}
-
-.scale {
-  display: flex;
-  justify-content: space-between;
-  color: var(--raditi-graphite);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-}
-
-.result {
-  padding-left: clamp(28px, 4vw, 60px);
-  border-left: 1px solid var(--raditi-rule);
-}
-
-.resultLabel,
-.resultSum,
-.perTask,
-.sitesHint {
-  color: var(--raditi-graphite);
-  font-size: 14px;
-}
-
-.resultPlan {
-  margin: 12px 0 0;
-  font-size: 22px;
-  font-weight: 600;
-  line-height: 1.4;
-}
-
-.resultSum {
-  margin: 4px 0 0;
-}
-
-/* Another plan is told by a move, the same as a changed value in the demo: the name rises into
-   its place. A pack more or less changes the words beside it and moves nothing. The times and
-   the distance are of the scale of the page. */
-.resultName {
-  display: inline-block;
-  animation: valueRise var(--motion-swap) var(--raditi-ease-out) backwards;
-}
-
-.resultPacks {
-  font-size: 17px;
-  font-weight: 400;
-}
-
-.resultPrice {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 12px;
-  margin: 8px 0;
-}
-
-/* A price is the answer of the section, so it is set as the expressive numbers of the page are:
-   the sum of the calculator and the prices of the plans alike. Digits of one width keep the sum
-   from shifting as the slider moves. */
-.resultPrice strong,
+/* A price is the answer of the section, so it is set as the expressive numbers of the page are.
+   Digits of one width keep the figure from shifting. */
 .price strong {
   font-family: var(--font-unbounded), sans-serif;
   font-size: clamp(30px, 3.4vw, 52px);
@@ -183,25 +18,11 @@
 }
 
 /* The ruble sign is small and in the text face, as on the card of the saved version. */
-.resultPrice strong small,
 .price strong small {
   font-family: var(--font-golos), sans-serif;
   font-size: 0.46em;
   font-weight: 400;
   letter-spacing: 0;
-}
-
-.resultPrice span {
-  color: var(--raditi-graphite);
-  font-size: 15px;
-}
-
-.perTask {
-  margin: 0;
-}
-
-.sitesHint {
-  margin: 12px 0 0;
 }
 
 .plans {
@@ -224,7 +45,7 @@
   border-left: 1px solid var(--raditi-rule);
 }
 
-.recommended {
+.featured {
   background: var(--raditi-accent-soft);
 }
 
@@ -244,7 +65,7 @@
   letter-spacing: -0.02em;
 }
 
-.recommendedLabel {
+.featuredLabel {
   padding: 5px 9px;
   border-radius: 3px;
   color: var(--raditi-ink);
@@ -355,26 +176,10 @@
     transform: scale(0.98);
     transition-duration: var(--raditi-motion-press);
   }
-
-  /* The thumb answers a grip in both engines. A rule for each: a browser drops a list of
-     selectors that names a pseudo-element of the other one. */
-  .range:active::-webkit-slider-thumb {
-    transform: scale(1.12);
-  }
-
-  .range:active::-moz-range-thumb {
-    transform: scale(1.12);
-  }
 }
 
-.recommended .features {
+.featured .features {
   border-color: var(--raditi-accent-border);
-}
-
-@keyframes valueRise {
-  from {
-    transform: translateY(var(--motion-shift));
-  }
 }
 
 .signup {
@@ -480,21 +285,9 @@
     --plan-inset: 0px;
   }
 
-  .calculator,
   .plans,
   .notes {
     grid-template-columns: 1fr;
-  }
-
-  .calculator {
-    gap: 28px;
-    padding-bottom: 32px;
-  }
-
-  .result {
-    padding: 24px 0 0;
-    border-top: 1px solid var(--raditi-rule);
-    border-left: 0;
   }
 
   .plan {
@@ -509,14 +302,6 @@
   .description {
     min-height: 0;
     margin-bottom: 26px;
-  }
-
-  .taskCount output {
-    font-size: 34px;
-  }
-
-  .resultPrice strong {
-    font-size: 36px;
   }
 
   .price strong {

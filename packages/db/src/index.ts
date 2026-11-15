@@ -38,8 +38,10 @@ export {
 export { taskHasProductionWrites } from './task-production-writes.ts'
 export {
   enqueueTelegramDeliver,
+  enqueueTelegramProgress,
   enqueueTelegramSend,
   enqueueTelegramTopic,
+  forgetTelegramChat,
 } from './telegram-outbox.ts'
 export {
   browserClosedSiteStatuses,
