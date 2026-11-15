@@ -248,3 +248,30 @@ export function turnSkillsOf(
   }
   return skills
 }
+
+/**
+ * Where the secret of an added server lives (plan 80, §3.3): beside the site's accesses, so that
+ * «Удалить проект» erases it with them. One version, written by CAS.
+ */
+export const agentSkillSecretPath = (siteId: string, name: string): string =>
+  `kv/sites/${siteId}/mcp/${name}`
+
+const oauthTokenSchema = z
+  .string()
+  .min(1)
+  .max(8192)
+  .regex(/^[\x21-\x7e]+$/)
+
+/**
+ * The secret of an added server in Vault: the value of its header, or the tokens of its OAuth
+ * sign-in. Anything else — a version without a value that erased it — is no secret.
+ */
+export const agentSkillSecretSchema = z.union([
+  z.strictObject({ value: agentSkillHeaderValueSchema }),
+  z.strictObject({
+    accessToken: oauthTokenSchema,
+    refreshToken: oauthTokenSchema.optional(),
+    clientSecret: oauthTokenSchema.optional(),
+  }),
+])
+export type AgentSkillSecret = z.infer<typeof agentSkillSecretSchema>

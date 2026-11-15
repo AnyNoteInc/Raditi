@@ -219,6 +219,8 @@ export {
 
 export { Prisma, PrismaClient } from './generated/prisma/client.ts'
 export {
+  AgentSkillAuthKind,
+  AgentSkillAuthState,
   AttachmentStatus,
   AuditActorType,
   BillingUnit,
