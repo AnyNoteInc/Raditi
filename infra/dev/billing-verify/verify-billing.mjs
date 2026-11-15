@@ -1,7 +1,7 @@
 // The whole money path on built applications (docs/plan/37-billing-plan.md, «Проверочный
 // стенд»): web and the `core` role of the orchestrator from their builds, a disposable
-// PostgreSQL, Redis and OpenBao, the fake ЮKassa of this directory, and a synthetic WordPress on
-// an SFTP server of the stand, which a customer's first site is added from. The scenarios
+// PostgreSQL and Redis and the fake ЮKassa of this directory; a customer's workspace and its gift
+// come with a first file of a chat (plan 83: no sites). The scenarios
 // (scenarios*.mjs) drive the product as a customer, as ЮKassa and as an operator: over HTTP,
 // through the pay page and the control API of the fake, and with the operator's scripts. Time
 // moves by editing dates in the stand's own database; the scheduler of core ticks every second.
@@ -48,7 +48,6 @@ import { fileURLToPath } from 'node:url'
 
 import { run } from '../db-verify/command.mjs'
 import { startFakeYookassa } from './fake-yookassa.mjs'
-import { kvVersion, openbaoReady, prepareSitesWriter } from './openbao.mjs'
 import { runScenarios } from './scenarios.mjs'
 import {
   BUILD_OUTPUT,
@@ -58,16 +57,12 @@ import {
   COPY_MARKER,
   LETTER_MIRROR_SQL,
   LETTER_READER,
-  OPENBAO_IMAGE,
   POSTGRES_IMAGE,
   REDIS_IMAGE,
   RUN_RECORD,
   RUN_STAGING_PREFIX,
   SCENARIOS,
   SHOP_ID,
-  SITE_FILES,
-  SITE_ROOT,
-  SITE_USER,
   STAND_LABEL,
   TICK_SECONDS,
   buildDirectory,
@@ -101,8 +96,6 @@ import {
   sweepLine,
   sweepOf,
   treeEntry,
-  vaultContainerArgs,
-  vaultEnvFile,
   webEnvironment,
 } from './stand.mjs'
 
@@ -116,10 +109,6 @@ const secrets = {
   metrics: randomBytes(24).toString('base64url'),
   shopKey: `test_${randomBytes(18).toString('base64url')}`,
   unused: randomBytes(18).toString('base64url'),
-  vaultRoot: randomBytes(24).toString('hex'),
-  sitePassword: randomBytes(18).toString('base64url'),
-  // The secret id of web's AppRole: made by OpenBao once it runs (`prepareSitesWriter`).
-  vaultSecretId: undefined,
 }
 const redact = (text) =>
   Object.values(secrets)
@@ -568,7 +557,7 @@ async function main(options, owned) {
     /^(unix|npipe):\/\//,
     'This stand needs a local Docker socket; remote Docker endpoints are refused',
   )
-  for (const image of [POSTGRES_IMAGE, REDIS_IMAGE, OPENBAO_IMAGE])
+  for (const image of [POSTGRES_IMAGE, REDIS_IMAGE])
     assert.equal(
       (await docker(['image', 'inspect', image, '--format', '{{.Id}}'], { allowFailure: true }))
         .code,
@@ -620,17 +609,14 @@ async function main(options, owned) {
     mode: 0o600,
   })
   await writeFile(join(directory, 'redis.env'), redisEnvFile(secrets.redis), { mode: 0o600 })
-  await writeFile(join(directory, 'vault.env'), vaultEnvFile(secrets.vaultRoot), { mode: 0o600 })
 
-  stage = 'starting the disposable PostgreSQL, Redis and OpenBao'
+  stage = 'starting the disposable PostgreSQL and Redis'
   // Set before the run: Docker may create a container before its client reports a failure.
   owned.containers = true
   await docker(postgresContainerArgs({ run: runId, envFile: join(directory, 'postgres.env') }))
   await docker(redisContainerArgs({ run: runId, envFile: join(directory, 'redis.env') }))
-  await docker(vaultContainerArgs({ run: runId, envFile: join(directory, 'vault.env') }))
   const postgres = containerName(runId, 'postgres')
   const redis = containerName(runId, 'redis')
-  const vault = containerName(runId, 'vault')
   await until('PostgreSQL to accept connections', async () => {
     const probe = await docker(
       ['exec', postgres, 'pg_isready', '-h', '127.0.0.1', '-U', 'raditi', '-d', 'raditi'],
@@ -648,7 +634,6 @@ async function main(options, owned) {
   const ports = {
     postgres: publishedPort((await docker(['port', postgres, '5432/tcp'])).output),
     redis: publishedPort((await docker(['port', redis, '6379/tcp'])).output),
-    vault: publishedPort((await docker(['port', vault, '8200/tcp'])).output),
     web: await availableLoopbackPort(),
     core: await availableLoopbackPort(),
     secondCore: await availableLoopbackPort(),
@@ -657,16 +642,6 @@ async function main(options, owned) {
   const redisUrl = `redis://default:${secrets.redis}@127.0.0.1:${ports.redis}`
   passed(
     `disposable PostgreSQL 17 on 127.0.0.1:${ports.postgres} and Redis 8 on 127.0.0.1:${ports.redis}`,
-  )
-  // The Vault of web: the mounts and policies of infra/vault, and web's AppRole with the policies
-  // `sites-writer` and `workspace-provisioner`. The root token stays with the stand: it reads a
-  // version, never a value.
-  const vaultAddress = `http://127.0.0.1:${ports.vault}`
-  await openbaoReady(vaultAddress, { signal: controller.signal })
-  const sitesWriter = await prepareSitesWriter({ address: vaultAddress, token: secrets.vaultRoot })
-  secrets.vaultSecretId = sitesWriter.secretId
-  passed(
-    `disposable OpenBao (dev mode) on ${vaultAddress}: kv/ and the policies of infra/vault; web logs in by the AppRole sites-writer`,
   )
 
   stage = 'migrations and seeds'
@@ -709,19 +684,7 @@ async function main(options, owned) {
   for (const statement of LETTER_MIRROR_SQL) await db.query(statement)
   passed('all migrations applied and reference data seeded in the database of the stand')
 
-  stage = 'starting the site, the fake ЮKassa, web and core'
-  // The site customers add: the test SFTP server of @repo/site-connections, in this process.
-  const { startTestSftpServer } = await import(
-    new URL('../../../packages/site-connections/src/testing/sftp-server.ts', import.meta.url).href
-  )
-  const siteServer = await startTestSftpServer({
-    files: SITE_FILES,
-    users: [{ username: SITE_USER, password: secrets.sitePassword }],
-  })
-  owned.siteServer = siteServer
-  passed(
-    `a synthetic WordPress on SFTP at 127.0.0.1:${siteServer.port} (${SITE_ROOT}), host key ${siteServer.hostKey}`,
-  )
+  stage = 'starting the fake ЮKassa, web and core'
   const fake = await startFakeYookassa({
     shopId: SHOP_ID,
     secretKey: secrets.shopKey,
@@ -737,7 +700,6 @@ async function main(options, owned) {
     redisUrl,
     fakeApiUrl: fake.apiUrl,
     secrets,
-    vault: { address: vaultAddress, ...sitesWriter },
   }
   const webUrl = `http://127.0.0.1:${ports.web}`
   const web = await start('web', join(copy, BUILD_OUTPUT.web), {
@@ -886,21 +848,6 @@ async function main(options, owned) {
     fake,
     db,
     shop: { shopId: SHOP_ID, secretKey: secrets.shopKey },
-    /**
-     * The files of the site a customer adds, as the wizard asks for them, and how many times
-     * anyone has tried to log in to that server so far.
-     */
-    site: {
-      host: siteServer.host,
-      port: siteServer.port,
-      hostKey: siteServer.hostKey,
-      username: SITE_USER,
-      password: secrets.sitePassword,
-      rootPath: SITE_ROOT,
-      logins: () => siteServer.authAttempts.length,
-    },
-    /** The current version of a secret in the Vault of web, by its path; null for none. */
-    vaultVersion: (path) => kvVersion({ address: vaultAddress, token: secrets.vaultRoot }, path),
     metricsToken: secrets.metrics,
     /** Every letter the mailers of the core processes logged so far, in the order of each log. */
     letters: () => cores.flatMap((service) => lettersOf(service.log())),
@@ -999,7 +946,6 @@ async function main(options, owned) {
         `  web            ${webUrl}  (sign-up form, settings; letters are in the log of core)`,
         `  core           http://127.0.0.1:${ports.core}/health`,
         `  fake ЮKassa    ${fake.controlUrl}/state  and  ${fake.controlUrl}/requests`,
-        `  site (SFTP)    127.0.0.1:${siteServer.port}, folder ${SITE_ROOT}, user ${SITE_USER}; host key ${siteServer.hostKey}`,
         `  database       docker exec -it ${postgres} psql -U raditi raditi`,
         `  logs           ${join(directory, 'logs')}`,
         `Stop it with Ctrl-C (or kill -TERM ${process.pid}): the containers, the processes and the`,
@@ -1034,10 +980,8 @@ async function cleanup(owned) {
     core: () => owned.core?.stop(),
     web: () => owned.web?.stop(),
     fake: () => owned.fake?.close(),
-    'site server': () => owned.siteServer?.close(),
     'database client': () => owned.db?.end(),
     'queue client': () => owned.queue?.close(),
-    'vault container': () => container('vault'),
     'redis container': () => container('redis'),
     'postgres container': () => container('postgres'),
     'logs of a failed run': async () => {

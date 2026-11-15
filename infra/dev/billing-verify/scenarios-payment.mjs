@@ -11,7 +11,7 @@ import {
   PRICE,
   CREDITS,
   actionsOf,
-  addSite,
+  firstFile,
   auditOf,
   creditAccounts,
   creditsCount,
@@ -66,7 +66,7 @@ scenarios['signup-gift'] = async (t) => {
       [giftKey(customer.id)],
     )
 
-  // Registered, no site yet: there is no workspace and so no account to hold the gift.
+  // Registered, no file yet: there is no workspace and so no account to hold the gift.
   t.equal(
     'a new customer reads the gift of the registration as promised: 50 credits, not granted yet',
     await shown(),
@@ -85,13 +85,9 @@ scenarios['signup-gift'] = async (t) => {
     [[], []],
   )
 
-  // The first site makes the workspace, and the gift is granted with it. A site is added the one
-  // way the product has: the wizard checks its files, and the access goes to Vault.
-  const address = `https://gift-${randomUUID()}.example.ru`
-  const { project: site, request } = await addSite(t, customer, {
-    name: 'Кофейня',
-    url: address,
-  })
+  // The first file of a chat makes the workspace, and the gift is granted with it (plan 61,
+  // К15): the one way a customer without a payment comes to have one since plan 83.
+  const attachment = await firstFile(t, customer)
   const workspaceId = await customer.workspaceId()
   const granted = [
     {
@@ -103,20 +99,20 @@ scenarios['signup-gift'] = async (t) => {
       unit: 'credit_gift',
     },
   ]
-  let accounts = await ledgerHolds(t, workspaceId, { tariff: 0, pack: 0 }, 'the first site: ')
+  let accounts = await ledgerHolds(t, workspaceId, { tariff: 0, pack: 0 }, 'the first file: ')
   t.equal(
-    'the first site: the gift is granted once, to the gift account of the workspace, under the key of the user and paid for by no order',
+    'the first file: the gift is granted once, to the gift account of the workspace, under the key of the user and paid for by no order',
     await giftRows(),
     granted,
   )
   t.equal(
-    'the first site: the accounts of the tariff and of the pack are made empty beside it',
+    'the first file: the accounts of the tariff and of the pack are made empty beside it',
     [journal(accounts.credit_tariff), journal(accounts.credit_pack)],
     [[], []],
   )
   const entries = await auditOf(t, workspaceId, 'billing.gift.grant')
   t.equal(
-    'the first site: the audit holds the grant — by the platform, for the gift account, with the user and the credits',
+    'the first file: the audit holds the grant — by the platform, for the gift account, with the user and the credits',
     entries.map(({ actor_type: actor, target_type: target, meta }) => ({ actor, target, meta })),
     [
       {
@@ -136,7 +132,7 @@ scenarios['signup-gift'] = async (t) => {
     { silent: true },
   )
   t.check(
-    'the first site: the welcome letter promised what was granted — «Мы дарим вам 50 кредитов, чтобы попробовать…»',
+    'the first file: the welcome letter promised what was granted — «Мы дарим вам 50 кредитов, чтобы попробовать…»',
     otherWelcomes.length === 0 &&
       welcome?.text.includes(
         `Мы дарим вам ${creditsCount(Number(granted[0].amount))}, чтобы попробовать: их хватит на десять небольших правок или на три-пять задач побольше.`,
@@ -144,7 +140,7 @@ scenarios['signup-gift'] = async (t) => {
     welcome,
   )
   t.equal(
-    'the first site: the promise is kept to the credit — the same 50, now granted',
+    'the first file: the promise is kept to the credit — the same 50, now granted',
     await shown(),
     {
       tariff: null,
@@ -152,64 +148,13 @@ scenarios['signup-gift'] = async (t) => {
       usage: [{ left: CREDITS.gift, held: 0, granted: true }, { left: 0, held: 0 }, CREDITS.gift],
     },
   )
-  // What the site was made with: the access is in Vault, the database names where it is, and
-  // the first import of the files is queued with it — a stage of the site, not a task.
+  // The file is no task and spends nothing: it waits to be sent, in the workspace it made.
   t.equal(
-    'the first site: the access to its files is in Vault, and the database holds only where — kv/sites/<site>/ssh, version 1',
+    'the first file is no task and takes nothing: one unsent file, no task, nothing set aside, the gift whole',
     [
-      await t.rows(
-        `SELECT kind::text AS kind, vault_path, key_version, workspace_id FROM credential_refs
-         WHERE site_id = $1`,
-        [site.id],
-      ),
-      await t.vaultVersion(`kv/sites/${site.id}/ssh`),
-      await t.rows(
-        `SELECT kind::text AS kind, host, port, root_path, host_key FROM site_code_sources
-         WHERE site_id = $1`,
-        [site.id],
-      ),
-    ],
-    [
-      [
-        {
-          kind: 'ssh',
-          vault_path: `kv/sites/${site.id}/ssh`,
-          key_version: 1,
-          workspace_id: workspaceId,
-        },
-      ],
-      1,
-      [
-        {
-          kind: 'sftp',
-          host: t.site.host,
-          port: t.site.port,
-          root_path: t.site.rootPath,
-          host_key: t.site.hostKey,
-        },
-      ],
-    ],
-  )
-  // Core takes the import and ends it at once: the stand gives it no git to keep a repository
-  // in. Whatever becomes of the import, it is no task and spends nothing.
-  await t.until(
-    'the first import of the files ends without a repository: core has no git in the stand',
-    async () => {
-      const stage = await t.one(
-        `SELECT stage::text AS stage, status::text AS status, error_code
-         FROM site_provisioning_stages WHERE site_id = $1`,
-        [site.id],
-      )
-      return stage?.status === 'failed' &&
-        stage.stage === 'code_import' &&
-        stage.error_code === 'repository_not_configured'
-        ? stage
-        : notYet(stage)
-    },
-  )
-  t.equal(
-    'the import of the site is no task and takes nothing: no task, nothing set aside, the gift whole',
-    [
+      await t.rows(`SELECT id, status::text AS status FROM attachments WHERE workspace_id = $1`, [
+        workspaceId,
+      ]),
       await t.rows(`SELECT id FROM tasks WHERE workspace_id = $1`, [workspaceId]),
       await t.rows(
         `SELECT h.id FROM credit_holds h JOIN billing_accounts a ON a.id = h.account_id
@@ -218,39 +163,20 @@ scenarios['signup-gift'] = async (t) => {
       ),
       await giftRows(),
     ],
-    [[], [], granted],
+    [[{ id: attachment, status: 'uploading' }], [], [], granted],
   )
-  const sites = async () =>
-    (await t.rows(`SELECT id FROM sites WHERE workspace_id = $1`, [workspaceId])).map(
-      ({ id }) => id,
-    )
-  // The answer of «Добавить проект» was lost, and the wizard sends the same request again.
+  // A second file finds the same workspace and grants nothing more.
+  const second = await firstFile(t, customer, 'a second file: ')
   t.equal(
-    'the same request again — its answer lost — finds the same site and grants nothing more',
-    [await customer.mutate('project.create', request), await giftRows(), await sites()],
-    [{ outcome: 'created', project: site }, granted, [site.id]],
-  )
-  const logins = t.site.logins()
-  t.equal(
-    'a site that is refused — the same address again — grants nothing more: «Далее» and «Добавить проект» say it is there, and nobody logs in to its server',
+    'a second file goes to the same workspace and grants nothing more',
     [
-      await customer.refusal('siteConnection.checkBasics', {
-        name: 'Кофейня',
-        url: address,
-        stack: 'wordpress',
-      }),
-      await customer.refusal('project.create', { ...request, requestKey: randomUUID() }),
-      t.site.logins() - logins,
+      await t.rows(`SELECT id FROM attachments WHERE workspace_id = $1 ORDER BY created_at, id`, [
+        workspaceId,
+      ]),
+      await t.rows(`SELECT id FROM workspaces WHERE created_by_id = $1`, [customer.id]),
       await giftRows(),
-      await sites(),
     ],
-    [
-      { status: 409, code: 'PROJECT_ALREADY_EXISTS' },
-      { status: 409, code: 'PROJECT_ALREADY_EXISTS' },
-      0,
-      granted,
-      [site.id],
-    ],
+    [[{ id: attachment }, { id: second }], [{ id: workspaceId }], granted],
   )
 
   // A tariff is paid for: the checkout finds the workspace and its gift, and adds nothing to it.
@@ -285,9 +211,9 @@ scenarios['signup-gift'] = async (t) => {
     [[journalRow.quota(order)], granted],
   )
   t.equal(
-    'with a tariff: the audit holds one grant of the gift beside the site and the start of the tariff',
+    'with a tariff: the audit holds one grant of the gift beside the start of the tariff',
     await actionsOf(t, workspaceId),
-    ['billing.gift.grant', 'billing.subscription.start', 'site.create'],
+    ['billing.gift.grant', 'billing.subscription.start'],
   )
   t.equal(
     'with a tariff: «Тарифы» and «Использование» count the gift beside the quota — 200 credits',
@@ -342,7 +268,7 @@ scenarios['signup-gift'] = async (t) => {
     },
   )
 
-  // Another customer, who pays first and adds no site: the checkout makes the workspace, and
+  // Another customer, who pays first and sends no file: the checkout makes the workspace, and
   // the gift is granted with it whatever becomes of the payment.
   const payer = await t.customer()
   const refused = await payer.mutate('billing.startCheckout', {
@@ -406,22 +332,13 @@ scenarios.checkout = async (t) => {
       `${who}: and in credits — 200, 1 000 and 2 000 a month, no daily limit, weekly limits of 73, 350 and 700, a pack of 100`,
       {
         plans: plans.map(
-          ({
+          ({ slug, price, creditsPerMonth, creditsPerDay, creditsPer5h, creditsPerWeek }) => ({
             slug,
             price,
             creditsPerMonth,
             creditsPerDay,
             creditsPer5h,
             creditsPerWeek,
-            maxSites,
-          }) => ({
-            slug,
-            price,
-            creditsPerMonth,
-            creditsPerDay,
-            creditsPer5h,
-            creditsPerWeek,
-            maxSites,
           }),
         ),
         pack: pack && { slug: pack.slug, price: pack.price, credits: pack.credits },
@@ -674,7 +591,6 @@ scenarios.checkout = async (t) => {
       {
         credits: usage.tariff.credits,
         today: usage.tariff.today,
-        sites: usage.tariff.sites,
         gift: usage.gift,
         pack: usage.pack,
         total: usage.totalLeft,
@@ -703,7 +619,6 @@ scenarios.checkout = async (t) => {
           room: null,
           left: CREDITS.start,
         },
-        sites: { count: 0, max: 1 },
         gift: { left: CREDITS.gift, held: 0, granted: true },
         pack: { left: 0, held: 0 },
         total: CREDITS.start + CREDITS.gift,
