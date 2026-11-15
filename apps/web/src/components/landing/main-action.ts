@@ -2,7 +2,7 @@
 
 import { signupGiftCredits } from '@repo/domain/billing/credit-numbers'
 
-import { pluralCredits } from './pricing-calculator'
+import { pluralCredits } from './pricing-data'
 
 /**
  * The main action of the landing, wherever it stands: a guest is led to the form of a lead (one

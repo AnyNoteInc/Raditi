@@ -6,6 +6,7 @@ import Typography from '@mui/material/Typography'
 
 import { formatCount } from '@/lib/count'
 import { smallEditPrice } from '@/lib/credit-price'
+import { FEATURED_PLAN_LABEL, featuredPlan } from '@/lib/featured-plan'
 import { nbsp } from '@/lib/nbsp'
 import { planDescription } from '@/lib/plan-description'
 import { formatRubles } from '@/lib/rubles'
@@ -58,9 +59,15 @@ export function PlanGrid({
   canChange: boolean
   onChange: (plan: PlanOffer) => void
 }) {
-  // The cheapest tariff that holds the customer's sites; with a tariff of their own nothing
-  // else is suggested.
-  const suggested = subscription ? undefined : plans.find((plan) => plan.fitsSites)
+  // What a customer without a tariff is pointed to: the tariff in the middle of three, as on the
+  // landing, while it holds their sites; when it does not, the cheapest one that does. With a
+  // tariff of their own nothing else is suggested.
+  const featured = featuredPlan(plans)
+  const suggested = subscription
+    ? undefined
+    : featured?.fitsSites
+      ? featured
+      : plans.find((plan) => plan.fitsSites)
 
   return (
     <Box
@@ -161,7 +168,11 @@ export function PlanGrid({
                     lineHeight: 1.2,
                   }}
                 >
-                  {current ? 'Ваш тариф' : 'Подходит вам'}
+                  {current
+                    ? 'Ваш тариф'
+                    : plan === featured
+                      ? nbsp(FEATURED_PLAN_LABEL)
+                      : 'Подходит вам'}
                 </Box>
               ) : null}
             </Box>
