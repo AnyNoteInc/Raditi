@@ -230,6 +230,8 @@ export interface LlmModelSeed {
   providerModelId: string | null
   modelClass: Exclude<ModelClass, 'service'>
   reserveOutputTokens: number
+  /** Tokens one request holds (`/context`); the catalogue of the pinned OpenCode CLI. */
+  contextTokens: number
   enabled: false
 }
 
@@ -247,6 +249,7 @@ export const llmModelSeeds: readonly LlmModelSeed[] = (['zai-coding', 'zai-api']
       providerModelId: 'glm-5.3',
       modelClass,
       reserveOutputTokens: 32_000,
+      contextTokens: 1_000_000,
       enabled: false,
     })),
 )

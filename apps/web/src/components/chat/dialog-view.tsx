@@ -479,7 +479,7 @@ export function DialogView({
     observer.observe(box)
     return () => observer.disconnect()
   }, [])
-  const clientCommands = useClientCommands({ projectId: siteId, anchor: field })
+  const clientCommands = useClientCommands({ projectId: siteId, taskId, anchor: field })
   // The words `/undo` gave back, and what the field holds now: a draft is never written over.
   const [undoneWords, setUndoneWords] = useState<string | null>(null)
   // The press that gave them, and how many times a press that failed took its words away: they
@@ -1224,6 +1224,9 @@ export function DialogView({
         return
       case 'new':
       case 'sessions':
+      case 'usage':
+      case 'status':
+      case 'context':
       case 'details':
       case 'thinking':
       case 'themes':
