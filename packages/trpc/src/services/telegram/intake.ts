@@ -448,7 +448,6 @@ class Intake {
     }
   }
 
-
   /**
    * Binds the chat to this Telegram chat (and topic): what the agent says goes here (Т7). A chat
    * of the cabinet chosen in `/chats` is bound too, a topic stays its own.
