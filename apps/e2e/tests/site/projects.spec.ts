@@ -2,7 +2,18 @@ import type { Page } from '@playwright/test'
 
 import { expect, test } from '../../fixtures/signed-in.ts'
 
-import { addAnsweredChat, addProject, hideDevIndicator, priceDialogClass } from './site.ts'
+import { createPrismaClient } from '@repo/db'
+
+import { databaseUrl } from '../../fixtures/billing-stand.ts'
+
+import {
+  acceptProjectUploads,
+  addAnsweredChat,
+  addProject,
+  hideDevIndicator,
+  priceDialogClass,
+  standInProjectFileStore,
+} from './site.ts'
 
 // «Проекты» in the cabinet (docs/plan/84-projects.md, 84.6): the empty list, a new project, the
 // list with its tabs and the trash, a chat moved into a project and out of it, the page of a
@@ -226,4 +237,179 @@ test('an address of no project of the user is «not found»', async ({ page, sig
     expect(response?.status()).toBe(404)
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Такого проекта нет')
   }
+})
+
+/** The rows of the context of the user's projects, by name: what the database says. */
+async function contextRows(userId: string) {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    return await prisma.projectFile.findMany({
+      where: { uploadedById: userId },
+      select: { name: true, kind: true, status: true, projectId: true, expiresAt: true },
+      orderBy: { name: 'asc' },
+    })
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+const pdf = (name: string) => ({
+  name,
+  mimeType: 'application/pdf',
+  buffer: Buffer.from('%PDF-1.7\n1 0 obj << >> endobj\n%%EOF\n'),
+})
+
+test('«Контекст» of a new project: files uploaded before it are taken with it at its creation', async ({
+  page,
+  signedInUser,
+}) => {
+  await hideDevIndicator(page)
+  await acceptProjectUploads(page)
+  await standInProjectFileStore(page, signedInUser.id)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/projects')
+  await page.getByRole('button', { name: 'Новый проект' }).first().click()
+  const window_ = page.getByRole('dialog', { name: 'Создание проекта' })
+  const context = window_.getByRole('group', { name: 'Контекст' })
+
+  await test.step('«Добавить контекст» → «Загрузить с устройства» → «Файлы…»', async () => {
+    await context.getByRole('button', { name: 'Добавить контекст' }).click()
+    const menu = page.getByRole('menu', { name: 'Добавить в контекст' })
+    await expect(menu.getByRole('menuitem', { name: /Подключить GitLab/ })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    )
+    await expect(menu).toContainText('Файлы до 20 МБ, всего до 100 МБ на проект')
+    await menu.getByRole('menuitem', { name: 'Загрузить с устройства' }).click()
+    const chooser = page.waitForEvent('filechooser')
+    await page.getByRole('menuitem', { name: 'Файлы…' }).click()
+    await (await chooser).setFiles(pdf('Брендбук.pdf'))
+    await expect(context.getByText(/^PDF · \d+ байт$/)).toBeVisible()
+  })
+
+  await test.step('«Добавить текстовое содержимое»', async () => {
+    await context.getByRole('button', { name: 'Добавить контекст' }).click()
+    await page.getByRole('menuitem', { name: 'Добавить текстовое содержимое' }).click()
+    const text = page.getByRole('dialog', { name: 'Добавить текстовое содержимое' })
+    await text.getByRole('textbox', { name: /Название/ }).fill('Тексты о нас')
+    await text
+      .getByRole('textbox', { name: /Текст/ })
+      .fill('Пекарня «Колос» печёт хлеб с 1998 года.')
+    await expect(text).toContainText('39 из 100 000')
+    await text.getByRole('button', { name: 'Добавить' }).click()
+    await expect(text).toBeHidden()
+    await expect(context.getByText('Тексты о нас')).toBeVisible()
+  })
+
+  // Nothing is the project's yet: the two files wait for it, each for a day.
+  const before = await contextRows(signedInUser.id)
+  expect(before.map((row) => [row.name, row.status, row.projectId])).toEqual([
+    ['Брендбук.pdf', 'ready', null],
+    ['Тексты о нас.md', 'ready', null],
+  ])
+
+  await window_.getByRole('textbox', { name: /Над чем вы работаете/ }).fill('Сайт пекарни')
+  await window_.getByRole('button', { name: 'Создать проект' }).click()
+  await expect(page).toHaveURL(/\/projects\/[0-9a-f-]{36}$/)
+  const projectId = new URL(page.url()).pathname.split('/').at(-1)!
+
+  // One transaction: the project and its two files, without their day any more.
+  const after = await contextRows(signedInUser.id)
+  expect(after.map((row) => [row.name, row.projectId, row.expiresAt])).toEqual([
+    ['Брендбук.pdf', projectId, null],
+    ['Тексты о нас.md', projectId, null],
+  ])
+  const row = page.getByRole('region', { name: 'Контекст' })
+  await expect(row).toContainText('Брендбук.pdf')
+  await expect(row).toContainText('Тексты о нас')
+  await expect(row).toContainText('Занято 1 % места')
+})
+
+test('«Контекст» of a project: a file and a text, the window, «Убрать», and «@» in the field', async ({
+  page,
+  signedInUser,
+}) => {
+  const { projectId } = await addProject(signedInUser.id, { name: 'Колос' })
+  await hideDevIndicator(page)
+  await acceptProjectUploads(page)
+  await standInProjectFileStore(page, signedInUser.id)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto(`/projects/${projectId}`)
+  const row = page.getByRole('region', { name: 'Контекст' })
+  await expect(row).toContainText('Файлы и тексты, которые агент читает в каждом чате проекта')
+
+  await test.step("a file is the project's as soon as it is in", async () => {
+    await row.getByRole('button', { name: 'Добавить в контекст проекта' }).click()
+    await page.getByRole('menuitem', { name: 'Загрузить с устройства' }).click()
+    const chooser = page.waitForEvent('filechooser')
+    await page.getByRole('menuitem', { name: 'Файлы…' }).click()
+    await (await chooser).setFiles(pdf('Прайс.pdf'))
+    // The chip of the file on its way goes once the project took it, and the row names it.
+    await expect(row.locator('[data-context-upload]')).toHaveCount(0)
+    await expect(row.getByText('Прайс.pdf')).toBeVisible()
+    expect((await contextRows(signedInUser.id)).map((r) => [r.name, r.projectId])).toEqual([
+      ['Прайс.pdf', projectId],
+    ])
+  })
+
+  await test.step('a text goes to the project at once', async () => {
+    await row.getByRole('button', { name: 'Добавить в контекст проекта' }).click()
+    await page.getByRole('menuitem', { name: 'Добавить текстовое содержимое' }).click()
+    const text = page.getByRole('dialog', { name: 'Добавить текстовое содержимое' })
+    await text.getByRole('textbox', { name: /Название/ }).fill('Ответы на отзывы')
+    await text.getByRole('textbox', { name: /Текст/ }).fill('Отвечаем в течение суток.')
+    await text.getByRole('button', { name: 'Добавить' }).click()
+    await expect(text).toBeHidden()
+    await expect(row.getByText('Ответы на отзывы')).toBeVisible()
+  })
+
+  await test.step('«@» in the field names the files where the agent finds them', async () => {
+    const field = page.getByRole('textbox', { name: 'Сообщение' })
+    await field.fill('Сверь цены с @Пра')
+    const list = page.getByRole('listbox', { name: 'Файлы контекста проекта' })
+    await expect(list.getByRole('option', { name: 'Прайс.pdf' })).toBeVisible()
+    await field.press('Enter')
+    await expect(field).toHaveValue('Сверь цены с @/workspace/project/Прайс.pdf ')
+  })
+
+  await test.step('the window lists them, downloads one, and «Убрать» takes one out', async () => {
+    await row.getByRole('button', { name: 'Открыть контекст проекта' }).click()
+    const window_ = page.getByRole('dialog', { name: 'Контекст' })
+    await expect(window_).toContainText('Картинки он не видит')
+    await expect(window_.getByRole('heading', { name: /Файлы и тексты/ })).toContainText('2')
+    const download = window_.getByRole('link', { name: 'Скачать «Прайс.pdf»' })
+    await expect(download).toHaveAttribute('href', /^\/api\/project-files\/[0-9a-f-]{36}$/)
+    await window_.getByRole('button', { name: 'Убрать «Ответы на отзывы»' }).click()
+    await expect(window_.getByText('Ответы на отзывы')).toBeHidden()
+    await window_.getByRole('button', { name: 'Готово' }).click()
+    await expect(row.getByText('Ответы на отзывы')).toBeHidden()
+    expect((await contextRows(signedInUser.id)).map((r) => r.name)).toEqual(['Прайс.pdf'])
+  })
+})
+
+test('«Контекст» on a phone: the window over the whole screen, «Добавить» from the bottom', async ({
+  page,
+  signedInUser,
+}) => {
+  const { projectId } = await addProject(signedInUser.id, { name: 'Колос' })
+  await hideDevIndicator(page)
+  await acceptProjectUploads(page)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto(`/projects/${projectId}`)
+  const row = page.getByRole('region', { name: 'Контекст' })
+  await row.getByRole('button', { name: 'Добавить в контекст проекта' }).click()
+  const sheet = page.getByRole('dialog', { name: 'Добавить в контекст' })
+  await expect(sheet).toContainText('Документы, таблицы, фото и код')
+  const chooser = page.waitForEvent('filechooser')
+  await sheet.getByRole('menuitem', { name: /Загрузить с устройства/ }).click()
+  await (await chooser).setFiles(pdf('Брендбук.pdf'))
+  await expect(row.locator('[data-context-upload]')).toHaveCount(0)
+  await expect(row.getByText('Брендбук.pdf')).toBeVisible()
+  await row.getByRole('button', { name: 'Открыть контекст проекта' }).click()
+  const window_ = page.getByRole('dialog', { name: 'Контекст' })
+  const box = await window_.boundingBox()
+  expect(box!.width).toBeGreaterThanOrEqual(389)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  )
 })
