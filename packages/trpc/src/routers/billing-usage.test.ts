@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import type * as BillingModule from '@repo/billing'
 import {
+  getUsageActivity,
   getUsageSummary,
   listUsageHistory,
   paymentLetterKey,
@@ -31,12 +32,14 @@ vi.mock('@repo/billing', async (importOriginal) => {
   const original = await importOriginal<typeof BillingModule>()
   return {
     ...original,
+    getUsageActivity: vi.fn(original.getUsageActivity),
     getUsageSummary: vi.fn(original.getUsageSummary),
     listUsageHistory: vi.fn(original.listUsageHistory),
   }
 })
 const summary = vi.mocked(getUsageSummary)
 const history = vi.mocked(listUsageHistory)
+const activity = vi.mocked(getUsageActivity)
 
 /** 15:00 in Moscow on 4 October 2026: the clock of every test here. */
 const NOW = new Date('2026-10-04T12:00:00.000Z')
@@ -315,6 +318,47 @@ describe('usage access', () => {
     expect(db.workspace.findFirst).not.toHaveBeenCalled()
     expect(summary).not.toHaveBeenCalled()
     expect(history).not.toHaveBeenCalled()
+  })
+})
+
+describe('billing.usageActivity', () => {
+  it('reads the days of the personal workspace as of now', async () => {
+    const { prisma } = fakeDb()
+    const days = [{ date: '2026-10-04', actions: 3, credits: { tariff: 10, gift: 2, pack: 0 } }]
+    activity.mockResolvedValueOnce({ days })
+
+    expect(await createCaller(context(prisma)).billing.usageActivity({ days: 7 })).toEqual({ days })
+    expect(activity).toHaveBeenCalledExactlyOnceWith(prisma, {
+      workspaceId: WORKSPACE,
+      days: 7,
+      now: NOW,
+    })
+  })
+
+  it('answers days of zeros in Moscow for a user without a workspace', async () => {
+    const { prisma, db } = fakeDb()
+    db.workspace.findFirst.mockResolvedValue(null)
+    // 01:00 of 5 October in Moscow, still 4 October by UTC.
+    vi.setSystemTime(new Date('2026-10-04T22:00:00.000Z'))
+
+    const { days } = await createCaller(context(prisma)).billing.usageActivity({ days: 30 })
+    expect(days).toHaveLength(30)
+    expect(days[0]).toEqual({
+      date: '2026-09-06',
+      actions: 0,
+      credits: { tariff: 0, gift: 0, pack: 0 },
+    })
+    expect(days.at(-1)?.date).toBe('2026-10-05')
+    expect(activity).not.toHaveBeenCalled()
+  })
+
+  it('refuses a span the page does not offer', async () => {
+    const { prisma } = fakeDb()
+    const call = createCaller(context(prisma)).billing.usageActivity as (
+      input: unknown,
+    ) => Promise<unknown>
+    await expect(call({ days: 14 })).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(activity).not.toHaveBeenCalled()
   })
 })
 

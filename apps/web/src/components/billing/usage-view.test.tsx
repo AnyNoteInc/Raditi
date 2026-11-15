@@ -3,7 +3,13 @@ import { QueryClient, QueryClientProvider, type UseMutationOptions } from '@tans
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { BillingUsage, Checkout, TariffUsage, UsageEntry } from './billing-types'
+import type {
+  BillingUsage,
+  Checkout,
+  TariffUsage,
+  UsageActivity,
+  UsageEntry,
+} from './billing-types'
 import {
   plain,
   serverRefusal,
@@ -18,8 +24,9 @@ import { UsageView } from './usage-view'
 
 type HistoryPage = BillingUsage['history']
 
-const { getUsage, getHistory, startPackCheckout, hardNavigate } = vi.hoisted(() => ({
+const { getUsage, getActivity, getHistory, startPackCheckout, hardNavigate } = vi.hoisted(() => ({
   getUsage: vi.fn<() => Promise<BillingUsage>>(),
+  getActivity: vi.fn<() => Promise<UsageActivity>>(),
   getHistory: vi.fn<(input: { cursor: string }) => Promise<HistoryPage>>(),
   startPackCheckout: vi.fn<(input: Record<string, never>) => Promise<Checkout>>(),
   hardNavigate: vi.fn<(path: string) => void>(),
@@ -33,6 +40,12 @@ vi.mock('@/trpc/client', () => ({
       usage: {
         queryKey: () => ['billing', 'usage'],
         queryOptions: () => ({ queryKey: ['billing', 'usage'], queryFn: getUsage }),
+      },
+      usageActivity: {
+        queryOptions: (input: { days: number }) => ({
+          queryKey: ['billing', 'usageActivity', input],
+          queryFn: getActivity,
+        }),
       },
       overview: { queryKey: () => ['billing', 'overview'] },
       plans: { queryKey: () => ['billing', 'plans'] },
@@ -241,6 +254,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   nextEntry = 0
   getUsage.mockResolvedValue(usageOf())
+  getActivity.mockResolvedValue({ days: [] })
 })
 
 describe('the «Использование» page while its data is on the way', () => {
@@ -255,7 +269,9 @@ describe('the «Использование» page while its data is on the way',
     showUsage()
 
     expect(screen.getByRole('heading', { level: 1, name: 'Использование' })).toBeInTheDocument()
-    expect(pageText()).toContain('Сколько кредитов осталось и на какие задачи они ушли.')
+    expect(pageText()).toContain(
+      'Сколько кредитов осталось, на какие задачи они ушли и как шла работа по дням.',
+    )
     expect(screen.getByRole('status', { name: 'Загрузка использования' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { level: 2 })).not.toBeInTheDocument()
 
@@ -340,16 +356,18 @@ describe('the «Использование» page of a customer without a tariff
     expect(plain(state.textContent)).not.toContain('из пакета')
     // Nothing is measured without a tariff, and nothing is offered but the tariffs.
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button')).not.toBeInTheDocument()
+    // The span of «Активность» is the only choice besides.
+    expect(texts(screen.queryAllByRole('button'))).toEqual(['7 дней', '30 дней'])
     // The history stands below: of a customer without a tariff it has no period.
     expect(texts(screen.getAllByRole('heading', { level: 2 }))).toEqual([
       'Тариф не выбран',
+      'Активность',
       'История списаний',
     ])
     expect(plain((await section('История списаний')).textContent)).toContain(
       'Списаний пока нет. Здесь появятся задачи и сколько кредитов ушло на каждую.',
     )
-    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+    expect(within(await section('История списаний')).queryByRole('table')).not.toBeInTheDocument()
   })
 
   it('tells the customer whose tariff has ended that the credits they bought carry tasks', async () => {
@@ -837,7 +855,9 @@ describe('a customer whose credits are used up', () => {
     })
     // Two set aside are worth waiting for: one credit starts a task (КР5–КР8).
     expect(tones(meter)).toEqual(['spent', 'held'])
-    expect(screen.getByRole('status')).toHaveTextContent('Кредиты заняты задачами в работе')
+    expect(within(await section('Кредиты')).getByRole('status')).toHaveTextContent(
+      'Кредиты заняты задачами в работе',
+    )
   })
 
   it('gives no notice while purchased credits are left', async () => {
@@ -1583,6 +1603,7 @@ describe('the gift credits on «Использование»', () => {
       expect(screen.queryByRole('img')).not.toBeInTheDocument()
       expect(texts(screen.getAllByRole('heading', { level: 2 }))).toEqual([
         'Тариф не выбран',
+        'Активность',
         'История списаний',
       ])
     })

@@ -60,6 +60,7 @@ import {
   usageWithoutTariff,
   type TariffState,
 } from './usage-format'
+import { UsageActivity } from './usage-activity'
 import { UsageHistory } from './usage-history'
 import { Bar, Meter, Swatch, type MeterPart, type MeterTone } from './usage-meter'
 import {
@@ -701,7 +702,7 @@ export function UsageView() {
         Использование
       </Typography>
       <Typography color="textSecondary" sx={{ mt: 1 }}>
-        {nbsp('Сколько кредитов осталось и на какие задачи они ушли.')}
+        {nbsp('Сколько кредитов осталось, на какие задачи они ушли и как шла работа по дням.')}
       </Typography>
 
       {
@@ -731,6 +732,7 @@ export function UsageView() {
           <Stack divider={<Divider />} sx={{ ...surface, mt: 4 }}>
             <NoTariff usage={data} />
             <WindowLimits windows={data.windows} />
+            <UsageActivity />
             {/* No tariff, no period: the history is whole, and its dates name their year. */}
             <UsageHistory first={data.history} readAt={usage.dataUpdatedAt} whole />
           </Stack>
@@ -751,6 +753,7 @@ export function UsageView() {
             />
             <Limits usage={data} subscription={data.subscription} tariff={data.tariff} />
             <WindowLimits windows={data.windows} />
+            <UsageActivity />
             <BySite sites={data.tariff.bySite} />
             <UsageHistory first={data.history} readAt={usage.dataUpdatedAt} />
           </Stack>
