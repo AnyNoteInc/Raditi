@@ -96,6 +96,7 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
   afterEach(async () => {
     await app?.close()
     app = undefined
+    await db.attachment.deleteMany({ where: { workspaceId: fixture.workspaceId } })
     await db.workspace.delete({ where: { id: fixture.workspaceId } })
     await db.subscriptionAccount.delete({ where: { id: fixture.accountId } })
     await db.credentialRef.delete({ where: { id: fixture.credentialId } })
