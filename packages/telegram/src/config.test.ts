@@ -23,7 +23,22 @@ describe('telegramConfigFromEnv', () => {
         TELEGRAM_WEBHOOK_SECRET: SECRET,
         TELEGRAM_PROXY_URL: 'http://egress.internal:3128',
       }),
-    ).toEqual({ botToken: TOKEN, webhookSecret: SECRET, proxyUrl: 'http://egress.internal:3128' })
+    ).toEqual({
+      botToken: TOKEN,
+      webhookSecret: SECRET,
+      proxyUrl: 'http://egress.internal:3128',
+      botUsername: null,
+    })
+  })
+
+  it('reads the username of the bot and refuses one that is not a bot', () => {
+    const env = { TELEGRAM_BOT_TOKEN: TOKEN, TELEGRAM_WEBHOOK_SECRET: SECRET }
+    expect(
+      telegramConfigFromEnv({ ...env, TELEGRAM_BOT_USERNAME: 'raditi_bot' })?.botUsername,
+    ).toBe('raditi_bot')
+    expect(() => telegramConfigFromEnv({ ...env, TELEGRAM_BOT_USERNAME: '@raditi' })).toThrow(
+      /TELEGRAM_BOT_USERNAME/,
+    )
   })
 
   it('leaves the proxy undefined when unset', () => {
