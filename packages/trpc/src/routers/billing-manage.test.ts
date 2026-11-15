@@ -784,11 +784,6 @@ describe('billing.schedulePlanChange and billing.cancelPlanChange', () => {
       'Этот тариф у вас уже есть или уже выбран на следующий период. Обновите страницу, чтобы увидеть изменения',
     ],
     [
-      'more sites than the tariff takes',
-          'CONFLICT',
-      'У вас больше сайтов, чем входит в этот тариф. Выберите тариф, в который они помещаются',
-    ],
-    [
       'a renewal charge that is under way',
       billingPaymentInProgress,
       'CONFLICT',
@@ -1030,7 +1025,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL management of a tariff through the rou
     })
     await db.creditLedger.deleteMany({ where: { account: owned } })
     await db.billingAccount.deleteMany({ where: owned })
-    await db.site.deleteMany({ where: owned })
     await db.order.deleteMany({ where: owned })
     await db.subscription.deleteMany({ where: owned })
     await db.auditLog.deleteMany({ where: owned })

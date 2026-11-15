@@ -132,7 +132,7 @@ export const taskRouter = router({
         effort: reasoningEffortSchema.optional(),
       }),
     )
-    .output(z.strictObject({ taskId: z.uuid(), alias: z.string(), created: z.boolean() }))
+    .output(z.strictObject({ taskId: z.uuid(), created: z.boolean() }))
     .mutation(({ ctx, input }) =>
       createDialog(ctx.prisma, chatContextOf(ctx), {
         userId: ctx.user.id,
@@ -419,7 +419,6 @@ export const taskRouter = router({
     .input(z.strictObject({ taskId: z.uuid() }))
     .output(
       feedTaskHeadSchema.extend({
-        alias: z.string(),
         createdAt: z.date(),
         updatedAt: z.date(),
       }),

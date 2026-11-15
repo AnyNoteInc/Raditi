@@ -201,7 +201,6 @@ const entry = (patch: Partial<UsageHistoryPageDto['items'][number]> = {}) => ({
   credits: 17,
   from: { tariff: 5, gift: 0, pack: 12 },
   task: { id: randomUUID(), title: 'Заменил фото на главной', status: 'done' as const },
-  site: { id: randomUUID(), name: 'Кофейня на Лесной' },
   ...patch,
 })
 const TAKEN = { allowed: true, reason: null } as const
@@ -264,8 +263,6 @@ const onTariff = (): UsageSummaryDto => ({
       burnNext: 0,
     },
     today: busyDay,
-    sites: { count: 2, max: 3 },
-    bySite: [{ siteId: randomUUID(), name: 'Пекарня «Добро»', credits: 21 }],
   },
   gift: { left: 0, held: 0, granted: false },
   pack: { left: 10, held: 0 },
@@ -713,7 +710,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
     await db.creditHold.deleteMany({ where: { account: owned } })
     await db.billingAccount.deleteMany({ where: owned })
     await db.task.deleteMany({ where: owned })
-    await db.site.deleteMany({ where: owned })
     await db.order.deleteMany({ where: owned })
     await db.subscription.deleteMany({ where: owned })
     await db.auditLog.deleteMany({ where: owned })
@@ -749,7 +745,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
    */
   async function seeded(slug: 'start' | 'business') {
     const row = await db.plan.findFirst({ where: { slug, kind: 'quota', isActive: true } })
-    if (row === null || row.maxSites === null || row.creditsPerMonth === null) {
+    if (row === null || row.creditsPerMonth === null) {
       throw new Error(`The tariff «${slug}» is not on sale in this database: apply the seeds`)
     }
     return { ...row, creditsPerMonth: row.creditsPerMonth }
@@ -841,8 +837,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
           burnNext: 0,
         },
         today: freshDay,
-        sites: { count: 0, max: tariff.maxSites },
-        bySite: [],
       },
       // The gift the checkout granted with the workspace, beside the quota.
       gift: { left: GIFT, held: 0, granted: true },

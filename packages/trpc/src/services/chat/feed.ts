@@ -206,11 +206,11 @@ export async function readDialogExport(
   )
 }
 
-/** The head of one chat with its alias, for `task.get`. */
+/** The head of one chat, for `task.get`. */
 export async function readDialogHead(
   db: PrismaClient,
   input: { userId: string; taskId: string },
-): Promise<FeedTaskHead & { alias: string; createdAt: Date; updatedAt: Date }> {
+): Promise<FeedTaskHead & { createdAt: Date; updatedAt: Date }> {
   return db.$transaction(
     async (tx) => {
       await tx.$executeRaw`SET TRANSACTION READ ONLY`
@@ -218,7 +218,6 @@ export async function readDialogHead(
         where: accessibleTask(input.userId, input.taskId),
         select: {
           id: true,
-          alias: true,
           title: true,
           status: true,
           attempt: true,
@@ -232,7 +231,7 @@ export async function readDialogHead(
       })
       if (task === null) throw taskNotFound()
       const head = await feedHead(tx, task)
-      return { ...head, alias: task.alias, createdAt: task.createdAt, updatedAt: task.updatedAt }
+      return { ...head, createdAt: task.createdAt, updatedAt: task.updatedAt }
     },
     { isolationLevel: 'RepeatableRead' },
   )

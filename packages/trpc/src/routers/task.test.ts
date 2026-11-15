@@ -119,7 +119,7 @@ describe('the id of a new chat', () => {
   it('takes no project: a chat has none (docs/plan/83-remove-projects.md)', async () => {
     const { db, prisma } = emptyDb()
     await expect(
-      callerOf(prisma).task.create({ ...ids, text: 'Вопрос' } as never),
+      callerOf(prisma).task.create({ ...ids, siteId: null, text: 'Вопрос' } as never),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
     expect(db.task.findUnique).not.toHaveBeenCalled()
   })
@@ -215,7 +215,7 @@ describe('the key of the workspace of a new dialog (docs/plan/57, Б32)', () => 
 
   it('is made before the transaction that writes the task, once, under the name of the workspace', async () => {
     const { db, prisma } = emptyDb()
-    const created = { taskId: ids.taskId, alias: 'zakaz', created: true }
+    const created = { taskId: ids.taskId, created: true }
     // The personal workspace first, in its own transaction; then the task.
     db.$transaction.mockResolvedValueOnce({ id: workspaceId } as never)
     db.$transaction.mockResolvedValueOnce(created as never)
@@ -289,7 +289,6 @@ describe('the key of the workspace of a new dialog (docs/plan/57, Б32)', () => 
     const repeated = emptyDb()
     repeated.db.task.findUnique.mockResolvedValue({
       createdById: user.id,
-      alias: 'zakaz',
       deletedAt: null,
     })
     await expect(
@@ -297,7 +296,7 @@ describe('the key of the workspace of a new dialog (docs/plan/57, Б32)', () => 
         ...ids,
         text: 'Добавьте новость',
       }),
-    ).resolves.toEqual({ taskId: ids.taskId, alias: 'zakaz', created: false })
+    ).resolves.toEqual({ taskId: ids.taskId, created: false })
 
     expect(ensure).not.toHaveBeenCalled()
   })

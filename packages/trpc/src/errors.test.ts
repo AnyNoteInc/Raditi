@@ -26,7 +26,6 @@ import {
   forbidden,
   notFound,
   notImplemented,
-  siteConnectionLimits,
   taskRefusal,
   taskRefusalReasons,
   type TaskRefusalReason,
@@ -235,12 +234,6 @@ describe('toTRPCError', () => {
       expect(text.split('. ').length).toBeGreaterThanOrEqual(2)
     },
   )
-
-  it('names in its words the very limits of the wizard that the texts promise', () => {
-    // The texts spell the numbers out; a changed limit must change its sentence too.
-    expect(siteConnectionLimits.connectionsInProgressPerUser).toBe(3)
-    expect(siteConnectionLimits.retriesPerHour).toBe(6)
-  })
 
   it('falls back by status class', () => {
     expect(trpcCodeForStatus(451)).toBe('BAD_REQUEST')
@@ -668,10 +661,14 @@ describe('the refusals of a chat and of its variables', () => {
   it('says of a refused command what the list of commands says of it', () => {
     const text = (details: unknown) =>
       toTRPCError(new DomainError('CHAT_COMMAND_UNAVAILABLE', 'Refused', 409, details)).message
-    expect(text({ command: 'release', refusal: 'not_allowed' })).toBe(
-      'Выпускать и отменять версии могут владелец и администраторы',
+    expect(text({ command: 'compact', refusal: 'nothing_to_compact' })).toBe(
+      'Сжимать пока нечего',
     )
-    expect(text({ command: 'reset', refusal: 'busy' })).toBe('Подождите: агент ещё работает')
+    expect(text({ command: 'turn_undo', refusal: 'busy' })).toBe('Подождите: агент ещё работает')
+    // A refusal of a command of a site that went with projects says the general words.
+    expect(text({ command: 'release', refusal: 'not_allowed' })).toBe(
+      'Эта команда сейчас недоступна. Обновите страницу, чтобы увидеть, что изменилось',
+    )
     expect(text({ refusal: 'launch' })).toBe(
       'Эта команда сейчас недоступна. Обновите страницу, чтобы увидеть, что изменилось',
     )
@@ -686,15 +683,14 @@ describe('the refusals of a chat and of its variables', () => {
       formatError(shape, toTRPCError(new DomainError(code, 'Refused', 409, details)), false)
 
     expect(
-      formatted('CHAT_COMMAND_UNAVAILABLE', { command: 'preview', refusal: 'preview_failed' }),
+      formatted('CHAT_COMMAND_UNAVAILABLE', { command: 'compact', refusal: 'busy' }),
     ).toEqual({
       ...shape,
-      message:
-        'Предпросмотр не удалось подготовить. Сбросьте данные предпросмотра — мы соберём его заново',
+      message: 'Подождите: агент ещё работает',
       data: {
         ...shape.data,
         domainCode: 'CHAT_COMMAND_UNAVAILABLE',
-        refusal: 'preview_failed',
+        refusal: 'busy',
       },
     })
     // An unknown refusal, or the details of another code, are not passed on.

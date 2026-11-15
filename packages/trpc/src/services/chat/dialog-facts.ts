@@ -61,24 +61,10 @@ export async function dialogFacts(
     role,
     commands: {
       taskStatus: task.status,
-      repository: false,
       role: role ?? 'member',
-      candidate: null,
-      preview: null,
-      releaseInProgress: false,
-      undo: null,
-      retry: 'nothing_to_retry',
       cancelPending: withBrowser && (await cancelPending(db, task.id)),
-      browserWrote:
-        withBrowser &&
-        (await db.browserSession.count({
-          where: { taskId: task.id, wroteAt: { not: null } },
-        })) > 0,
-      projectClosed: false,
       turnUndo: await turnUndoRefusal(db, { taskId: task.id, status: task.status, turnNo }),
-      turnRewinding: false,
       turnRedo: await turnRedoRefusal(db, { taskId: task.id, status: task.status, turnNo }),
-      turnRedoing: false,
       compaction: await driverCompacts(db),
       agentBrowser,
       compactRefusal: await compactRefusal(db, { taskId: task.id, turnNo }, agentBrowser),

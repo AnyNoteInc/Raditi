@@ -854,19 +854,17 @@ describe('billing.plans', () => {
       creditsPerWeek: null,
     })
 
-  it('marks the tariffs the sites do not fit and the tariff of the subscription', async () => {
+  it('marks the tariff of the subscription', async () => {
     const { prisma, db } = fakeDb()
     const rows = [planRow(), business(), agency(), pack()]
     db.plan.findMany.mockResolvedValue(rows)
-    db.site.count.mockResolvedValue(3)
     db.subscription.findFirst.mockResolvedValue(subscriptionRow(rows[1]!))
 
     expect(await createCaller(context(prisma)).billing.plans()).toEqual({
       plans: [
-        { ...planDto(rows[0]!), fitsSites: false, current: false },
-        // As many sites as the plan allows still fit.
-        { ...planDto(rows[1]!), fitsSites: true, current: true },
-        { ...planDto(rows[2]!), fitsSites: true, current: false },
+        { ...planDto(rows[0]!), current: false },
+        { ...planDto(rows[1]!), current: true },
+        { ...planDto(rows[2]!), current: false },
       ],
       pack: {
         id: rows[3]!.id,
@@ -876,32 +874,24 @@ describe('billing.plans', () => {
         credits: 100,
         withoutTariff: false,
       },
-      siteCount: 3,
       autoRenewalAvailable: true,
       // No enabled model has a price in force: there is no table to print.
       creditConversion: null,
     })
-    // Every site of the workspace that is not deleted, whatever its status: the count a checkout
-    // refuses by.
-    expect(db.site.count).toHaveBeenCalledExactlyOnceWith({
-      where: { workspaceId: WORKSPACE, deletedAt: null },
-    })
   })
 
-  it('counts no sites and marks no tariff for a user without a workspace', async () => {
+  it('marks no tariff for a user without a workspace', async () => {
     const { prisma, db } = fakeDb()
     const rows = [planRow(), business()]
     db.plan.findMany.mockResolvedValue(rows)
     db.workspace.findFirst.mockResolvedValue(null)
 
     expect(await createCaller(context(prisma)).billing.plans()).toEqual({
-      plans: rows.map((row) => ({ ...planDto(row), fitsSites: true, current: false })),
+      plans: rows.map((row) => ({ ...planDto(row), current: false })),
       pack: null,
-      siteCount: 0,
       autoRenewalAvailable: true,
       creditConversion: null,
     })
-    expect(db.site.count).not.toHaveBeenCalled()
     expect(db.subscription.findFirst).not.toHaveBeenCalled()
   })
 
@@ -1262,12 +1252,6 @@ describe('billing over HTTP', () => {
       'Тариф уже оформлен. Обновите страницу, чтобы увидеть его',
     ],
     [
-      'more sites than the tariff allows',
-          409,
-      'CONFLICT',
-      'У вас больше сайтов, чем входит в этот тариф. Выберите тариф, в который они помещаются',
-    ],
-    [
       'a payment declined at once',
       billingPaymentDeclined,
       402,
@@ -1408,7 +1392,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
     })
     await db.creditLedger.deleteMany({ where: { account: owned } })
     await db.billingAccount.deleteMany({ where: owned })
-    await db.site.deleteMany({ where: owned })
     await db.order.deleteMany({ where: owned })
     await db.subscription.deleteMany({ where: owned })
     await db.auditLog.deleteMany({ where: owned })
@@ -1444,10 +1427,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
    */
   async function seeded(slug: 'start' | 'business') {
     const plan = await db.plan.findFirst({ where: { slug, kind: 'quota', isActive: true } })
-    if (plan === null || plan.maxSites === null || plan.creditsPerMonth === null) {
+    if (plan === null || plan.creditsPerMonth === null) {
       throw new Error(`The tariff «${slug}» is not on sale in this database: apply the seeds`)
     }
-    const { maxSites, creditsPerMonth } = plan
+    const { creditsPerMonth } = plan
     const dto = {
       id: plan.id,
       slug,
@@ -1457,12 +1440,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL billing through the router', () => {
       creditsPerDay: plan.creditsPerDay,
       creditsPer5h: plan.creditsPer5h,
       creditsPerWeek: plan.creditsPerWeek,
-      maxSites,
       // The sites of pages by the tariff (docs/plan/73-pages-sites.md, Дер36, Дер37).
       pageSites: plan.pageSites,
       pageCustomNames: plan.pageCustomNames,
     }
-    return { ...plan, maxSites, creditsPerMonth, dto }
+    return { ...plan, creditsPerMonth, dto }
   }
 
   it('at a shop that takes one-time payments only, refuses the consent and sells the tariff without it', async () => {

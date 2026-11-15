@@ -9,7 +9,6 @@ import {
   enqueueAgentTurn,
   enqueueTurnCancel,
   insertFeedEvent,
-  taskHasProductionWrites,
   redoTurn,
   undoTurn,
   type Prisma,
@@ -24,7 +23,6 @@ import {
   taskHoldExpiry,
   terminalTaskStatuses,
   workspaceTransitKey,
-  type FeedAgentCommandId,
   type FeedRequestPayload,
   type ReasoningEffort,
   type TaskStatus,
@@ -104,8 +102,6 @@ export interface CreateDialogInput {
 
 export interface CreatedDialog {
   taskId: string
-  /** The short name of the chat. */
-  alias: string
   /** false — the same request was delivered before, nothing was written now. */
   created: boolean
 }
@@ -196,8 +192,6 @@ export async function createDialog(
       if (raced === null) throw taskNotFound()
       return raced
     }
-    const task = await tx.task.findUniqueOrThrow({ where: { id: taskId }, select: { alias: true } })
-
     await placeCreditHold(tx, {
       workspaceId,
       taskId,
@@ -216,7 +210,7 @@ export async function createDialog(
       row: { type: 'feed.request', payload },
     })
     await enqueueAgentTurn(tx, { taskId, attempt: 1, requestEventId: String(requestEventId) })
-    return { taskId, alias: task.alias, created: true }
+    return { taskId, created: true }
   }, WRITE)
 }
 
@@ -230,12 +224,12 @@ async function sameDialog(
 ): Promise<CreatedDialog | null> {
   const task = await db.task.findUnique({
     where: { id: ids.taskId },
-    select: { createdById: true, alias: true, deletedAt: true },
+    select: { createdById: true, deletedAt: true },
   })
   if (task === null) return null
   // A dialog deleted since is not found again by a late repeat of the request that made it.
   if (task.createdById !== ids.userId || task.deletedAt !== null) throw taskNotFound()
-  return { taskId: ids.taskId, alias: task.alias, created: false }
+  return { taskId: ids.taskId, created: false }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -516,7 +510,8 @@ export async function agentCommandDialog(
     userId: string
     taskId: string
     requestId: string
-    command: FeedAgentCommandId
+    /** The one command of the agent a chat has since `/init` went (plan 83). */
+    command: 'compact'
     now: Date
   },
 ): Promise<PostedRequest> {
@@ -591,7 +586,7 @@ export async function undoDialogTurn(
           v: 1,
           turn: task.turnNo,
           files: false,
-          site: feedEndedSiteOf(NO_SITE, await taskHasProductionWrites(tx, task.id)),
+          site: feedEndedSiteOf(NO_SITE, await browserWrote(tx, task.id)),
         },
       },
     })
@@ -661,7 +656,7 @@ export interface CancelledDialog extends PostedRequest {
  * `cancelled`, the reserve given back (`releaseTask`), `feed.cancelled` by the client. A pass that
  * is preparing or running is stopped by core: `turn.cancel` on `agent-turns`. When the agent wrote
  * on a site in the browser the client is asked to check it, as the sweep says of the same chat
- * (`taskHasProductionWrites`). The press is a `feed.request` of the command `cancel`, by which a repeat is recognised.
+ * (`browserWrote`). The press is a `feed.request` of the command `cancel`, by which a repeat is recognised.
  *
  * A task in the browser (docs/plan/57, Б24) is stopped by core in any status it has not ended
  * in: core reads on the site what the task saved there, writes `feed.cancelled` with it, gives
@@ -724,10 +719,18 @@ export async function stopDialog(
         turn: task.turnNo >= 1 ? task.turnNo : null,
         by: 'customer',
         authorId: userId,
-        site: feedEndedSiteOf(NO_SITE, await taskHasProductionWrites(tx, task.id)),
+        site: feedEndedSiteOf(NO_SITE, await browserWrote(tx, task.id)),
         credits: creditsAfterReturn(returned),
       },
     },
   })
   return { requestEventId, state: 'cancelled' }
+}
+
+/**
+ * Whether anyone acted in the browser of the chat (`browser_sessions.wrote_at`): what was done
+ * there stays on the site it was done on, and the feed says to check it.
+ */
+async function browserWrote(db: Pick<Tx, 'browserSession'>, taskId: string): Promise<boolean> {
+  return (await db.browserSession.count({ where: { taskId, wroteAt: { not: null } } })) > 0
 }

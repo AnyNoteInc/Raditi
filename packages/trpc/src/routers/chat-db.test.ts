@@ -1149,7 +1149,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
           select: { createdAt: true },
         })
         const startedAt = new Date(Math.max(Date.now(), newest!.createdAt.getTime() + 1))
-        const { siteId } = await db.task.findUniqueOrThrow({ where: { id: taskId } })
         await db.taskTurn.create({
           data: {
             taskId,
@@ -1165,7 +1164,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         await db.turnAssignment.create({
           data: {
             taskId,
-            siteId: siteId ?? taskId,
+            siteId: taskId,
             sessionId: 'synthetic-session',
             turnNo,
             executor: 'local',
@@ -1287,49 +1286,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         })
       })
 
-      describe('in a chat with the repository', () => {
-        /** A chat of a site whose last turn stands on `head`, with a candidate on `candidate`. */
-        async function siteChat(head: string, candidate: string) {
-          const { owner } = await chatOwner()
-          const caller = callerOf(owner)
-          const { taskId } = await newDialog(caller)
-          await turnEnded(taskId, 1)
-          await db.taskTurn.updateMany({ where: { taskId }, data: { headSha: head } })
-          await db.taskCandidate.create({
-            data: {
-              taskId,
-              revision: 1,
-              turnNo: 1,
-              baseSha: 'a'.repeat(40),
-              baseTree: 'd'.repeat(40),
-              headSha: candidate,
-              dbPlanSha256: '0'.repeat(64),
-              proposedBump: 'minor',
-              proposedVersion: 'v0.1.0',
-              facts: {},
-            },
-          })
-          await db.task.update({ where: { id: taskId }, data: { status: 'awaiting_approval' } })
-          return { caller, taskId }
-        }
-
-        it('takes it while the candidate stands on the last turn', async () => {
-          const { caller, taskId } = await siteChat('b'.repeat(40), 'b'.repeat(40))
-          expect(await verdictOf(caller, taskId)).toBeNull()
-        })
-
-        it('has nothing to compact once «Обновить» moved the candidate: a new session is next', async () => {
-          const { caller, taskId } = await siteChat('b'.repeat(40), 'c'.repeat(40))
-          expect(await verdictOf(caller, taskId)).toBe('nothing_to_compact')
-        })
-
-        it('has nothing to compact from the press of «Обновить»: the session may be going', async () => {
-          const { caller, taskId } = await siteChat('b'.repeat(40), 'b'.repeat(40))
-          await unanswered(taskId, { kind: 'command', command: 'update' })
-          await db.task.update({ where: { id: taskId }, data: { status: 'awaiting_approval' } })
-          expect(await verdictOf(caller, taskId)).toBe('nothing_to_compact')
-        })
-      })
 
       it('says when the driver has no compaction, and the command goes nowhere', async () => {
         const owner = await person()
@@ -1651,120 +1607,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         expect(await verdictOf(caller, taskId)).toBe('awaiting_answer')
       })
 
-      describe('in a chat with the repository (61.22)', () => {
-        /** A chat of a site whose last turn left `head` (`candidate` — and that candidate). */
-        async function codeChat(options: { candidate?: { turnNo: number; head: string } } = {}) {
-          const { owner } = await chatOwner()
-          const caller = callerOf(owner)
-          const { taskId } = await newDialog(caller)
-          await answered(taskId)
-          await db.taskTurn.updateMany({ where: { taskId }, data: { headSha: 'b'.repeat(40) } })
-          if (options.candidate) {
-            await db.taskCandidate.create({
-              data: {
-                taskId,
-                revision: 1,
-                turnNo: options.candidate.turnNo,
-                baseSha: 'a'.repeat(40),
-                baseTree: 'd'.repeat(40),
-                headSha: options.candidate.head,
-                dbPlanSha256: '0'.repeat(64),
-                proposedBump: 'minor',
-                proposedVersion: 'v0.1.0',
-                facts: {},
-              },
-            })
-            await db.task.update({ where: { id: taskId }, data: { status: 'awaiting_approval' } })
-          }
-          return { caller, taskId }
-        }
-        const rewinds = (taskId: string) =>
-          db.outboxEvent.findMany({
-            where: { type: 'candidate.rewind', dedupeKey: { contains: taskId } },
-          })
-        /** core's answer to the press, as `candidate.rewind` writes it. */
-        const coreAnswers = (taskId: string, requestEventId: string) =>
-          db.taskEvent.create({
-            data: {
-              taskId,
-              type: 'candidate.rewind',
-              payload: { v: 1, requestEventId, outcome: 'refused' },
-            },
-          })
-
-        it('leaves the turn to core: the press and its job, the words at once', async () => {
-          const { caller, taskId } = await codeChat()
-          expect(await verdictOf(caller, taskId)).toBeNull()
-          const requestId = randomUUID()
-          const undone = await caller.task.undoTurn({ taskId, requestId })
-          expect(undone).toMatchObject({
-            repeated: false,
-            words: 'Поменяйте телефон в шапке сайта',
-          })
-
-          const jobs = await rewinds(taskId)
-          expect(jobs).toHaveLength(1)
-          expect(jobs[0]?.payload).toEqual({ taskId, requestEventId: undone.requestEventId })
-          // core writes the undo with the branch: nothing of it yet.
-          expect(await db.taskTurn.count({ where: { taskId, undoneAt: { not: null } } })).toBe(0)
-          expect(await db.taskEvent.count({ where: { taskId, type: 'feed.rewind' } })).toBe(0)
-
-          // A page that never got the answer gets the words again.
-          expect(await caller.task.undoTurn({ taskId, requestId })).toEqual({
-            ...undone,
-            repeated: true,
-          })
-          expect(await rewinds(taskId)).toHaveLength(1)
-        })
-
-        it('starts nothing while core takes the turn back, and goes on once it answered', async () => {
-          const { caller, taskId } = await codeChat()
-          const { requestEventId } = await caller.task.undoTurn({ taskId, requestId: randomUUID() })
-          expect(await verdictOf(caller, taskId)).toBe('turn_rewinding')
-          await expect(
-            caller.task.message({ taskId, requestId: randomUUID(), text: 'Ещё слова' }),
-          ).rejects.toMatchObject({ cause: { code: 'TASK_REWINDING' } })
-          await expect(
-            caller.task.undoTurn({ taskId, requestId: randomUUID() }),
-          ).rejects.toMatchObject({ cause: { details: { refusal: 'turn_rewinding' } } })
-
-          await coreAnswers(taskId, requestEventId)
-          expect(await verdictOf(caller, taskId)).toBeNull()
-          await expect(
-            caller.task.message({ taskId, requestId: randomUUID(), text: 'Ещё слова' }),
-          ).resolves.toMatchObject({ repeated: false })
-        })
-
-        it('takes a chat that waits with its candidate', async () => {
-          const { caller, taskId } = await codeChat({
-            candidate: { turnNo: 1, head: 'b'.repeat(40) },
-          })
-          expect(await verdictOf(caller, taskId)).toBeNull()
-        })
-
-        it('takes a turn that asked while the candidate of the turn before stands', async () => {
-          const { caller, taskId } = await codeChat({
-            candidate: { turnNo: 1, head: 'e'.repeat(40) },
-          })
-          await answered(taskId, 2)
-          await db.taskTurn.updateMany({
-            where: { taskId, turnNo: 2 },
-            data: { headSha: 'c'.repeat(40) },
-          })
-          // The candidate has its own head, and no «Обновить» moved this turn's.
-          expect(await verdictOf(caller, taskId)).toBeNull()
-        })
-
-        it('refuses past «Обновить»: the candidate no longer stands on the head of the turn', async () => {
-          const { caller, taskId } = await codeChat({
-            candidate: { turnNo: 1, head: 'e'.repeat(40) },
-          })
-          expect(await verdictOf(caller, taskId)).toBe('undo_past_update')
-          await expect(
-            caller.task.undoTurn({ taskId, requestId: randomUUID() }),
-          ).rejects.toMatchObject({ cause: { details: { refusal: 'undo_past_update' } } })
-        })
-      })
 
       describe('`/redo` (docs/plan/61-chats-first.md, §5.14)', () => {
         const redoVerdict = async (caller: ReturnType<typeof callerOf>, taskId: string) =>
@@ -1900,158 +1742,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
           expect(await redoVerdict(caller, taskId)).toBe('finished')
         })
 
-        describe('in a chat with the repository', () => {
-          const revisionRow = {
-            type: 'feed.candidate',
-            payload: {
-              v: 1,
-              turn: 1,
-              revision: 2,
-              version: 'v0.1.0',
-              bump: 'minor',
-              files: { added: 1, modified: 0, deleted: 0 },
-              media: 0,
-              records: 0,
-            },
-          } as const
-          /** A chat whose last turn core took back, as `candidate.rewind` leaves it. */
-          async function undoneCodeChat(
-            options: {
-              revision?: boolean
-              status?: 'awaiting_user' | 'awaiting_approval'
-            } = {},
-          ) {
-            const { owner } = await chatOwner()
-            const caller = callerOf(owner)
-            const { taskId } = await newDialog(caller)
-            await answered(taskId)
-            await db.taskTurn.updateMany({
-              where: { taskId },
-              data: { headSha: 'b'.repeat(40) },
-            })
-            const { requestEventId } = await caller.task.undoTurn({
-              taskId,
-              requestId: randomUUID(),
-            })
-            await db.taskTurn.updateMany({ where: { taskId }, data: { undoneAt: new Date() } })
-            await db.$transaction(async (tx) => {
-              await tx.task.update({
-                where: { id: taskId },
-                data: { status: options.status ?? 'awaiting_user' },
-              })
-              if (options.revision) await insertFeedEvent(tx, { taskId, row: revisionRow })
-              await insertFeedEvent(tx, {
-                taskId,
-                row: {
-                  type: 'feed.rewind',
-                  payload: { v: 1, turn: 1, files: true, site: 'unchanged' },
-                },
-              })
-              await tx.taskEvent.create({
-                data: {
-                  taskId,
-                  type: 'candidate.rewind',
-                  payload: {
-                    v: 1,
-                    requestEventId,
-                    outcome: 'rewound',
-                    before: 'awaiting_user',
-                  },
-                },
-              })
-            })
-            return { caller, taskId }
-          }
-          const jobs = (taskId: string) =>
-            db.outboxEvent.findMany({
-              where: { type: 'candidate.rewind', dedupeKey: { contains: taskId } },
-              orderBy: { id: 'asc' },
-            })
-
-          it('leaves the turn to core: the press and its job, the words at once', async () => {
-            const { caller, taskId } = await undoneCodeChat()
-            expect(await redoVerdict(caller, taskId)).toBeNull()
-            const requestId = randomUUID()
-            const redone = await caller.task.redoTurn({ taskId, requestId })
-            expect(redone).toMatchObject({
-              repeated: false,
-              words: 'Поменяйте телефон в шапке сайта',
-            })
-            expect((await jobs(taskId)).at(-1)?.payload).toEqual({
-              taskId,
-              requestEventId: redone.requestEventId,
-            })
-            // core writes it with the branch: nothing of it yet.
-            expect(await db.taskTurn.count({ where: { taskId, undoneAt: null } })).toBe(0)
-            expect(await db.taskEvent.count({ where: { taskId, type: 'feed.redo' } })).toBe(0)
-            expect(await caller.task.redoTurn({ taskId, requestId })).toEqual({
-              ...redone,
-              repeated: true,
-            })
-            expect(await jobs(taskId)).toHaveLength(2)
-          })
-
-          it('brings back nothing past «Обновить»: the press, then the revision it wrote', async () => {
-            const pressed = await undoneCodeChat()
-            await db.$transaction((tx) =>
-              insertFeedEvent(tx, {
-                taskId: pressed.taskId,
-                row: {
-                  type: 'feed.request',
-                  payload: {
-                    v: 1,
-                    kind: 'command',
-                    command: 'update',
-                    authorId: randomUUID(),
-                    requestId: randomUUID(),
-                  },
-                },
-              }),
-            )
-            expect(await redoVerdict(pressed.caller, pressed.taskId)).toBe('nothing_to_redo')
-            // No job: the branch stays on the head «Обновить» wrote.
-            const before = await jobs(pressed.taskId)
-            await expect(
-              pressed.caller.task.redoTurn({ taskId: pressed.taskId, requestId: randomUUID() }),
-            ).rejects.toMatchObject({ cause: { details: { refusal: 'nothing_to_redo' } } })
-            expect(await jobs(pressed.taskId)).toEqual(before)
-
-            const moved = await undoneCodeChat()
-            await db.$transaction((tx) =>
-              insertFeedEvent(tx, { taskId: moved.taskId, row: revisionRow }),
-            )
-            expect(await redoVerdict(moved.caller, moved.taskId)).toBe('nothing_to_redo')
-          })
-
-          it('counts no revision of the undo itself: it stands before its row', async () => {
-            const { caller, taskId } = await undoneCodeChat({ revision: true })
-            expect(await redoVerdict(caller, taskId)).toBeNull()
-          })
-
-          it('brings the turn back to a chat that waits with the candidate before it', async () => {
-            const { caller, taskId } = await undoneCodeChat({ status: 'awaiting_approval' })
-            expect(await redoVerdict(caller, taskId)).toBeNull()
-          })
-
-          it('brings back nothing past the row of a release that failed', async () => {
-            const { caller, taskId } = await undoneCodeChat({ status: 'awaiting_approval' })
-            await insertFeedEvent(db, {
-              taskId,
-              row: {
-                type: 'feed.release',
-                payload: {
-                  v: 1,
-                  releaseId: randomUUID(),
-                  version: 'v0.1.0',
-                  outcome: 'failed',
-                  reason: null,
-                  credits: null,
-                },
-              },
-            })
-            expect(await redoVerdict(caller, taskId)).toBe('nothing_to_redo')
-          })
-        })
       })
     })
 
@@ -2187,9 +1877,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       await caller.task.message({ taskId, requestId: randomUUID(), text: 'И ещё' })
       expect((await activeHolds(taskId)).map((hold) => hold.attempt)).toEqual([3])
 
-      // No site: nothing to claim the gift of.
-      const { workspaceId } = await db.task.findUniqueOrThrow({ where: { id: taskId } })
-      expect(await db.giftSiteClaim.count({ where: { workspaceId } })).toBe(0)
     })
 
     it('takes «Продолжить» after a charged pass, in a chain of its own', async () => {
