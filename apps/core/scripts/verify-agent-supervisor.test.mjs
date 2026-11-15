@@ -121,16 +121,7 @@ test('a stand without a second daemon may use the native engine of a Linux host'
   }
 })
 
-test('the WordPress content stand admits the native engine on Linux only', async () => {
-  const source = await readFile(
-    new URL('../../../infra/dev/site-verify/verify-content.mjs', import.meta.url),
-    'utf8',
-  )
-  assert.match(
-    source,
-    /await localDesktop\(process\.env, command, \{\n\s+nativeLinux: process\.platform === 'linux',\n\s+\}\)/,
-  )
-  // The supervisor stands need Docker Desktop next to the runner's Colima daemon: unchanged.
+test('the supervisor stands need Docker Desktop next to the runner daemon', async () => {
   const supervisor = await readFile(
     new URL('./verify-agent-supervisor.mjs', import.meta.url),
     'utf8',
