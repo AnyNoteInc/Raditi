@@ -8,7 +8,7 @@ import {
 } from '@repo/db'
 import { PRISMA } from '@repo/service-runtime/tokens'
 
-import { PREVIEW_CONFIG, type PreviewGatewayConfig } from '../config/config.tokens.ts'
+import { PREVIEW_CONFIG, type PreviewConfig } from '../config/config.tokens.ts'
 import { PagesServer, type PagesStore } from './pages-server.ts'
 
 /** The store of the page server: one read of the page, the counters of the password form. */
@@ -45,7 +45,7 @@ export class PostgresPagesStore implements PagesStore {
   providers: [
     {
       provide: PagesServer,
-      useFactory: (config: PreviewGatewayConfig, prisma: PrismaClient) => {
+      useFactory: (config: PreviewConfig, prisma: PrismaClient) => {
         if (config.pages === null) throw new Error('The pages need PAGES_BASE_DOMAIN')
         const logger = new Logger('Pages')
         return new PagesServer({

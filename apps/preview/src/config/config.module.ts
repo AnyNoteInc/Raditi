@@ -1,6 +1,6 @@
 import { Global, Module, type DynamicModule } from '@nestjs/common'
 
-import type { PreviewGatewayConfig } from './config.ts'
+import type { PreviewConfig } from './config.ts'
 import { PREVIEW_CLOCK, PREVIEW_CONFIG, type PreviewClock } from './config.tokens.ts'
 
 /**
@@ -11,7 +11,7 @@ import { PREVIEW_CLOCK, PREVIEW_CONFIG, type PreviewClock } from './config.token
 @Global()
 @Module({})
 export class PreviewConfigModule {
-  static forRoot(config: PreviewGatewayConfig): DynamicModule {
+  static forRoot(config: PreviewConfig): DynamicModule {
     const clock: PreviewClock = Date.now
     return {
       module: PreviewConfigModule,

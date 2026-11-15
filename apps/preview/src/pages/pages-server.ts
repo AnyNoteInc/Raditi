@@ -44,6 +44,9 @@ import {
 
 export type { PagesServerConfig }
 
+/** The health of the role on the pages listener: any host that is not a page's. */
+export const PAGES_HEALTH_PATH = '/__raditi/health'
+
 export interface PagesStore {
   /** The site of a host and what it holds at a canonical path (docs/plan/73-pages-sites.md, Дер16). */
   served(slug: string, path: string): Promise<ServedSite | null>
@@ -159,6 +162,11 @@ export class PagesServer {
     return this.#server.address() as AddressInfo
   }
 
+  /** Where it listens; null before listen() and after close(). */
+  address(): AddressInfo | null {
+    return this.#server.listening ? (this.#server.address() as AddressInfo) : null
+  }
+
   /** Nest's shutdown hook: the database pool closes after this listener. */
   async onApplicationShutdown(): Promise<void> {
     await this.close()
@@ -178,8 +186,13 @@ export class PagesServer {
       baseDomain: config.baseDomain,
       ...(config.publicPort === undefined ? {} : { port: config.publicPort }),
     })
-    // Not a page host: no stub, nothing that looks like the platform (Ст3).
-    if (slug === null) return sendText(response, head, 404, 'Not found')
+    // Not a page host: no stub, nothing that looks like the platform (Ст3) — but the health of
+    // the role, which a compose healthcheck asks on 127.0.0.1 (no page is ever there).
+    if (slug === null) {
+      if (method === 'GET' && (request.url ?? '').split('?')[0] === PAGES_HEALTH_PATH)
+        return sendText(response, false, 200, 'ok')
+      return sendText(response, head, 404, 'Not found')
+    }
     if (!(PAGE_METHODS as readonly string[]).includes(method))
       return sendText(response, false, 405, 'Method not allowed', {
         Allow: PAGE_METHODS.join(', '),
