@@ -133,6 +133,7 @@ describe.skipIf(!databaseUrl)('removing projects: the migration', () => {
       site_id: ids.site,
       workspace_id: ids.workspace,
       status: 'closed',
+      created_at: at,
       expires_at: new Date(at.getTime() + 60_000),
       closed_at: at,
       close_reason: 'idle',

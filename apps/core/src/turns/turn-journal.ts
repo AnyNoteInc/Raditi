@@ -29,7 +29,7 @@ const workPhases: readonly TurnPhase[] = ['running', 'resumed']
  * that writes the rows knows the task. `site` and `files` wait for their trusted sources.
  */
 export function feedStepsOf(phase: TurnPhase): FeedStep[] {
-  if (workPhases.includes(phase)) return ['code', 'work']
+  if (workPhases.includes(phase)) return ['work']
   if (phase === 'quiesced') return ['save']
   return []
 }
@@ -130,7 +130,6 @@ export class TaskEventTurnJournal implements TurnJournal {
         JOIN tasks task ON task.id = ${fence.taskId}::uuid
         CROSS JOIN unnest(${steps}::text[]) WITH ORDINALITY AS stage(step, ordinal)
         WHERE inserted.turn_id IS NOT NULL
-          AND stage.step <> 'code'
           AND NOT EXISTS (
             SELECT 1 FROM task_events e
             WHERE e.turn_id = inserted.turn_id AND e.type = 'feed.step'

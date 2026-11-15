@@ -59,8 +59,8 @@ describe('turn journal boundary', () => {
 
 describe('feedStepsOf', () => {
   it('tells the client of the work and of saving it, by the phase alone', () => {
-    expect(feedStepsOf('running')).toEqual(['code', 'work'])
-    expect(feedStepsOf('resumed')).toEqual(['code', 'work'])
+    expect(feedStepsOf('running')).toEqual(['work'])
+    expect(feedStepsOf('resumed')).toEqual(['work'])
     expect(feedStepsOf('quiesced')).toEqual(['save'])
     for (const phase of ['leased', 'output', 'checkpointed', 'completed', 'failed'] as const)
       expect(feedStepsOf(phase)).toEqual([])
@@ -325,7 +325,6 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
     expect(await db.taskTurn.findUniqueOrThrow({ where: { id: turn.id } })).toMatchObject({
       status: 'running',
       nativeSessionId: 'synthetic-native-session',
-      headSha: 'c'.repeat(40),
       snapshotPrefix: 'sessions/synthetic/turns/0001/',
       finishedAt: null,
     })
@@ -343,7 +342,6 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
     ).rejects.toMatchObject({ code: 'LEASE_LOST' })
     expect(await db.taskTurn.findUniqueOrThrow({ where: { id: turn.id } })).toMatchObject({
       nativeSessionId: 'synthetic-native-session',
-      headSha: 'c'.repeat(40),
     })
     await f.leases.free(next)
   })
@@ -377,7 +375,6 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
       orderBy: { id: 'asc' },
     })
     expect(stages.map((row) => [row.clientVisible, row.turnId, row.payload])).toEqual([
-      [true, turn.id, { v: 1, turn: 1, attempt: 1, step: 'code' }],
       [true, turn.id, { v: 1, turn: 1, attempt: 1, step: 'work' }],
       [true, turn.id, { v: 1, turn: 1, attempt: 1, step: 'save' }],
     ])
@@ -445,7 +442,7 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
         where: { taskId: f.task.id, type: 'feed.step' },
         orderBy: { id: 'asc' },
       })
-      expect(stages.map((row) => (row.payload as { step: string }).step)).toEqual(['code', 'work'])
+      expect(stages.map((row) => (row.payload as { step: string }).step)).toEqual(['work'])
     }
     // Thirteen fixtures and ANALYZE of a table the suites running beside it fill: seconds under load.
   }, 30_000)
