@@ -466,8 +466,8 @@ test('a task in the browser: its window on a desktop', async ({ page, context, s
     // Open, nothing is new behind «+».
     await expect(plus(page)).toHaveAccessibleName('Инструменты')
     await expect(separator(page)).toBeVisible()
-    await expect(dialogs(page)).toBeHidden()
-    await expect(back(page)).toBeVisible()
+    await expect(dialogs(page)).toBeVisible()
+    await expect(back(page)).toBeHidden()
     const paneBox = await box(pane(page))
     const fieldBox = await box(message(page))
     expect(paneBox.x + paneBox.width).toBeLessThanOrEqual(1280)

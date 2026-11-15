@@ -16,8 +16,6 @@ export const PANE_OPEN_MARK = 'data-chat-pane-open'
 /** Under the shell of the chats while the panel is drawn: `${PANE_DRAWN}` as a selector of `&`. */
 export const PANE_DRAWN = `[data-chat-shell][${PANE_OPEN_MARK}] &`
 
-export const SITE_PANE_WIDTH = `var(${SITE_PANE_WIDTH_VAR}, ${SITE_PANE_DEFAULT_WIDTH})`
-
 /** The narrowest panel, and the narrowest the chat beside it may become. */
 export const SITE_PANE_MIN = 440
 export const SITE_DIALOG_MIN = 360
@@ -26,6 +24,13 @@ export const SITE_DIALOG_MIN = 360
  * of the content (32 px each side from `md`) and the chat column.
  */
 const PANE_RESERVED = CABINET_RAIL_WIDTH + 3 * CABINET_GAP + 2 * 32 + SITE_DIALOG_MIN
+
+/**
+ * The width the panel is drawn at: the viewer's or the default one, narrowed while the list of
+ * chats stands open beside the rail (`--cabinet-panel-space`), so the chat keeps its column — the
+ * list stays where the viewer left it, as on every page of the cabinet.
+ */
+export const SITE_PANE_WIDTH = `max(${SITE_PANE_MIN}px, min(var(${SITE_PANE_WIDTH_VAR}, ${SITE_PANE_DEFAULT_WIDTH}), calc(100vw - ${PANE_RESERVED}px - var(--cabinet-panel-space, 0px))))`
 
 /** The cookie a viewer's width of the panel is kept in: the page is drawn with it at once. */
 export const SITE_PANE_COOKIE = 'raditi-pane-width'
