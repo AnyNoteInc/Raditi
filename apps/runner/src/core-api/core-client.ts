@@ -4,7 +4,7 @@ import { Agent as HttpsAgent, request as httpsRequest } from 'node:https'
 
 import {
   runnerApiPaths,
-  runnerInboxPath,
+  runnerFilePath,
   runnerCandidatePath,
   runnerConflictSchema,
   runnerErrorSchema,
@@ -18,6 +18,7 @@ import {
   type RunnerPollRequest,
   type RunnerReport,
   type runnerReconcileRequestSchema,
+  type TurnFileRoot,
 } from '@repo/domain'
 import type { z } from 'zod'
 
@@ -40,12 +41,16 @@ export interface RunnerTransport {
   poll(request: RunnerPollRequest, signal: AbortSignal): Promise<unknown>
   report(report: RunnerReport): Promise<void>
   reconcile(request: RunnerReconcileRequest): Promise<unknown>
-  /** A file of the client of an open prepare, by its place in the command; exactly `sizeBytes`. */
+  /**
+   * A file of an open prepare, by its place in the command — of the client (`inbox`), or of the
+   * chat's project (`project`, docs/plan/84-projects.md, ПР8); exactly `sizeBytes`.
+   */
   inbox(
     assignmentId: string,
     index: number,
     fence: RunnerCommandFence,
     sizeBytes: number,
+    root?: TurnFileRoot,
   ): AsyncIterable<Uint8Array>
   /** Exactly 32 bytes; the caller zeroes them right after use. */
   key(
@@ -174,8 +179,9 @@ export class HttpRunnerTransport implements RunnerTransport {
     index: number,
     fence: RunnerCommandFence,
     sizeBytes: number,
+    root: TurnFileRoot = 'inbox',
   ): AsyncIterable<Uint8Array> {
-    const response = await this.#answer('inbox', 'GET', runnerInboxPath(assignmentId, index), {
+    const response = await this.#answer('inbox', 'GET', runnerFilePath(assignmentId, root, index), {
       headers: fenceHeaders(fence),
       timeoutMs: TRANSFER_MS,
     })

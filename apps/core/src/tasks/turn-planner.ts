@@ -1,5 +1,12 @@
 import type { AttemptCreditBudget } from '@repo/billing'
-import { clientInstructionsSection, projectSection, type ProjectSectionFacts } from '@repo/domain'
+import {
+  clientInstructionsSection,
+  projectContextSection,
+  projectSection,
+  turnProjectPath,
+  type ProjectContextFile,
+  type ProjectSectionFacts,
+} from '@repo/domain'
 import {
   attemptBudgetRub,
   TURN_LEASE_TTL_MS,
@@ -137,6 +144,12 @@ export interface PassFacts {
    * absent or null — a chat without a project, or one whose project is in the trash.
    */
   project?: ProjectSectionFacts | null
+  /**
+   * The ready files of the context of the chat's project (docs/plan/84-projects.md, ПР8), in the
+   * order of their paths: every turn gets them all under /workspace/project, and the instructions
+   * list them. Absent or empty — none.
+   */
+  projectFiles?: readonly ProjectContextFile[]
   /**
    * The files bound to the chat, in the order they were sent: the latest go into the sandbox of
    * its turn (turnInboxOf). Absent or empty — none.
@@ -457,6 +470,8 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
   const inboxFacts = inbox?.paths.length
     ? { files: inbox.paths.length, omitted: inbox.omitted }
     : null
+  // The files of the project, with the project: an action (a compaction) reads no file.
+  const projectFiles = action || !facts.project ? [] : projectFilesOf(facts.projectFiles ?? [])
   const request: UnkeyedTurnRequest = {
     sandbox: {
       image: env.driver.image,
@@ -492,7 +507,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
         browser,
         inbox: inboxFacts,
         variables: facts.variables ?? [],
-      })}${facts.task.turnNo === 0 ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${clientInstructionsSection(facts.clientInstructions)}${projectSection(facts.project)}`,
+      })}${facts.task.turnNo === 0 ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${clientInstructionsSection(facts.clientInstructions)}${projectSection(facts.project)}${projectContextSection(projectFiles.map((file) => file.facts))}`,
       egressProxy: SANDBOX_EGRESS_PROXY_URL,
       internet: true,
       ...(skills.length ? { skills: [...skills] } : {}),
@@ -512,6 +527,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
           ),
           // Their paths only: core puts the files there when the sandbox is prepared.
           attachments: inbox?.paths ?? [],
+          ...(projectFiles.length ? { projectFiles: projectFiles.map((file) => file.path) } : {}),
         },
     driverVersion: env.driver.cliVersion,
     requirements: { ...requirements },
@@ -536,4 +552,14 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
 export function savedPlanOf(value: unknown): TurnPlan | null {
   const parsed = turnPlanSchema.safeParse(value)
   return parsed.success ? parsed.data : null
+}
+
+/** The files of the project a turn holds: each at its path; a name that is not one is left out. */
+function projectFilesOf(
+  files: readonly ProjectContextFile[],
+): { path: string; facts: ProjectContextFile }[] {
+  return files.flatMap((facts) => {
+    const path = turnProjectPath(facts.name)
+    return path === null ? [] : [{ path, facts }]
+  })
 }

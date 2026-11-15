@@ -95,10 +95,10 @@ export function loopbackTransport(hub: RunnerHub, runnerId = 'sandbox-1'): Loopb
           ),
         )
       }),
-    async *inbox(assignmentId, index, fence, sizeBytes) {
+    async *inbox(assignmentId, index, fence, sizeBytes, root) {
       const file = await answer('inbox', async () => {
         transport.intercept?.('inbox')
-        return transport.hub.inboxFile(runnerId, assignmentId, index, headers(fence))
+        return transport.hub.inboxFile(runnerId, assignmentId, index, headers(fence), root)
       })
       let sent = 0
       for await (const chunk of file.read()) {

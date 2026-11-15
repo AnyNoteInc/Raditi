@@ -13,6 +13,7 @@ import {
   runnerReconcileRequestSchema,
   runnerReportSchema,
   outboxLimits,
+  type TurnFileRoot,
 } from '@repo/domain'
 import { throttledLogger, type ThrottledLog } from '@repo/observability'
 import { ZodError } from 'zod'
@@ -23,7 +24,7 @@ import type { RunnerAuthenticator } from './runner-auth.ts'
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 const ASSIGNMENT = new RegExp(
-  `^${RUNNER_API_PREFIX}/assignments/(${UUID})/(keys/(restore|seal)|candidate/(outbox)|inbox/(0|[1-9][0-9]?))$`,
+  `^${RUNNER_API_PREFIX}/assignments/(${UUID})/(keys/(restore|seal)|candidate/(outbox)|(inbox|project)/(0|[1-9][0-9]?))$`,
 )
 const candidateLimits: Record<CandidatePart, number> = {
   outbox: outboxLimits.archiveBytes,
@@ -223,20 +224,23 @@ export class RunnerApiServer implements OnApplicationShutdown {
     }
     const match = ASSIGNMENT.exec(path)
     if (!match) throw RunnerApiError.of('NOT_FOUND')
-    const [, assignmentId, , purpose, part, place] = match as unknown as [
+    const [, assignmentId, , purpose, part, root, place] = match as unknown as [
       string,
       string,
       string,
       'restore' | 'seal' | undefined,
       CandidatePart | undefined,
+      TurnFileRoot | undefined,
       string | undefined,
     ]
-    if (method === 'GET' && place !== undefined) {
+    if (method === 'GET' && place !== undefined && root !== undefined) {
+      // A file of the client (`inbox`) or of the chat's project (`project`, docs/plan/84, ПР8).
       const file = await this.hub.inboxFile(
         runnerId,
         assignmentId,
         Number(place),
         binaryHeaders(request),
+        root,
       )
       await sendSized(response, file)
       return

@@ -427,6 +427,76 @@ describe('files of the client on the local executor', () => {
   })
 })
 
+describe('files of the project on the local executor (docs/plan/84-projects.md, ПР8)', () => {
+  const inboxPath = '/workspace/inbox/0199a3f2-0000-7000-8000-0000000000f1/Смета.pdf'
+  const file = (path: string, bytes: Uint8Array, sizeBytes = bytes.byteLength) => ({
+    path,
+    sizeBytes,
+    read: async function* () {
+      yield bytes
+    },
+  })
+  const inChat = (input: TurnPrepareInput): TurnPrepareInput => ({
+    ...input,
+    fence: { ...input.fence, siteId: labels.taskId },
+    sandbox: { ...input.sandbox, labels: { ...labels, siteId: labels.taskId } },
+  })
+
+  it('writes them read-only under /workspace/project after the files of the chat, before the driver', async () => {
+    const f = await fixture()
+    await f.executor.prepare(
+      inChat(
+        f.input({
+          inbox: [file(inboxPath, Buffer.from('%PDF chat'))],
+          projectFiles: [
+            file('/workspace/project/Фото/витрина.jpg', Buffer.from([0xff, 0xd8, 0xff])),
+            file('/workspace/project/Прайс.csv', Buffer.from('a;b')),
+          ],
+        }),
+      ),
+      signal,
+    )
+    expect(f.writes).toEqual([
+      inboxPath,
+      '/workspace/project/Фото/витрина.jpg',
+      '/workspace/project/Прайс.csv',
+      '/agent-home/opencode/.config/opencode/opencode.json',
+    ])
+    for (const call of vi.mocked(f.sandbox.fs.write).mock.calls.slice(0, 3))
+      expect(call[2]).toEqual({ mode: 0o444 })
+  })
+
+  it('refuses them for a turn under another lease, and a path out of the project, before any container', async () => {
+    const f = await fixture()
+    await expect(
+      f.executor.prepare(
+        f.input({ projectFiles: [file('/workspace/project/a.pdf', Buffer.from('abc'))] }),
+        signal,
+      ),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    await expect(
+      f.executor.prepare(
+        inChat(f.input({ projectFiles: [file('/workspace/project/../a.pdf', Buffer.from('a'))] })),
+        signal,
+      ),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+    expect(f.sandboxes.create).not.toHaveBeenCalled()
+  })
+
+  it('writes no file of the project whose body is not of its size', async () => {
+    const f = await fixture()
+    await expect(
+      f.executor.prepare(
+        inChat(
+          f.input({ projectFiles: [file('/workspace/project/a.pdf', Buffer.from('abc'), 5)] }),
+        ),
+        signal,
+      ),
+    ).rejects.toMatchObject({ code: 'SANDBOX_COMMAND_FAILED' })
+    expect(f.writes).toEqual([])
+  })
+})
+
 describe('files of the agent for the client on the local executor (docs/plan/66, В8)', () => {
   it('hands the outbox over with the capture, never sealed with the home part', async () => {
     const archive = await packOutbox([{ name: 'estimate.txt', bytes: 'total 100' }])

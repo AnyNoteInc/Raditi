@@ -9,6 +9,11 @@ import {
 } from '../tasks/task-requirements.ts'
 import {
   assertTurnInbox,
+  assertTurnProjectFiles,
+  turnProjectFileName,
+  turnProjectFilesLimits,
+  turnProjectPath,
+  turnWorkspaceBudget,
   turnMayHoldInbox,
   toTurnPlan,
   turnInboxAttachmentId,
@@ -405,5 +410,83 @@ describe('files of the client in a turn', () => {
     ],
   ])('refuses %s', (_label, files, mayHold) => {
     expect(refusal(() => assertTurnInbox(files, mayHold))).toBe('BAD_REQUEST')
+  })
+})
+
+describe('files of the project in a turn (docs/plan/84-projects.md, ПР8)', () => {
+  const MIB = 1024 * 1024
+  const file = (name: string, sizeBytes = 1024) => ({ path: turnProjectPath(name)!, sizeBytes })
+  const refusal = (run: () => void) => {
+    try {
+      run()
+    } catch (error) {
+      return isDomainError(error) ? error.code : 'other'
+    }
+    return null
+  }
+
+  it('puts each file at its path under /workspace/project, folders kept', () => {
+    expect(turnProjectPath('Фото/витрина.jpg')).toBe('/workspace/project/Фото/витрина.jpg')
+    expect(turnProjectFileName('/workspace/project/Фото/витрина.jpg')).toBe('Фото/витрина.jpg')
+    expect(turnInputSchema.shape.projectFiles.safeParse(['/workspace/project/a.pdf']).success).toBe(
+      true,
+    )
+    for (const path of [
+      '/workspace/project/../inbox/a.pdf',
+      '/workspace/project/.hidden',
+      '/workspace/project/',
+      '/workspace/projectx/a.pdf',
+      '/workspace/inbox/a.pdf',
+    ])
+      expect(turnProjectFileName(path), path).toBeNull()
+    expect(turnProjectPath('../a.pdf')).toBeNull()
+  })
+
+  it('keeps a plan of before the files valid: `projectFiles` is optional', () => {
+    expect(turnInputSchema.safeParse({ prompt: 'x', attachments: [] }).success).toBe(true)
+  })
+
+  it('takes a full project — 100 files of 1 MiB — for the turn of its chat', () => {
+    const full = Array.from({ length: turnProjectFilesLimits.files }, (_, i) =>
+      file(`f${i}.pdf`, MIB),
+    )
+    expect(refusal(() => assertTurnProjectFiles(full, true))).toBeNull()
+    expect(refusal(() => assertTurnProjectFiles([], false))).toBeNull()
+  })
+
+  it.each([
+    ['a turn of another lease', [file('a.pdf')], false],
+    ['a path twice', [file('a.pdf'), file('a.pdf')], true],
+    ['a file and a folder of one path', [file('Фото'), file('Фото/a.jpg')], true],
+    ['a path outside the project', [{ path: '/workspace/inbox/a.pdf', sizeBytes: 1 }], true],
+    ['an empty file', [file('a.pdf', 0)], true],
+    ['a file over 20 MiB', [file('a.pdf', 20 * MIB + 1)], true],
+    [
+      'more files than a project holds',
+      Array.from({ length: 101 }, (_, i) => file(`f${i}.pdf`, 1)),
+      true,
+    ],
+    ['more than 100 MiB', Array.from({ length: 6 }, (_, i) => file(`f${i}.pdf`, 20 * MIB)), true],
+  ])('refuses %s', (_label, files, mayHold) => {
+    expect(refusal(() => assertTurnProjectFiles(files, mayHold))).toBe('BAD_REQUEST')
+  })
+
+  it('shares /workspace so the agent keeps at least 120 MiB (§4.7)', () => {
+    const plain = turnWorkspaceBudget({ repository: false })
+    expect(plain).toEqual({
+      workspace: 512 * MIB,
+      repository: 0,
+      inbox: 200 * MIB,
+      project: 100 * MIB,
+      agent: 212 * MIB,
+    })
+    expect(plain.inbox).toBe(turnInboxLimits.bytes)
+    const repo = turnWorkspaceBudget({ repository: true })
+    expect(repo).toMatchObject({ repository: 192 * MIB, inbox: 100 * MIB, project: 100 * MIB })
+    expect(repo.agent).toBe(120 * MIB)
+    for (const budget of [plain, repo])
+      expect(budget.repository + budget.inbox + budget.project + budget.agent).toBe(
+        budget.workspace,
+      )
   })
 })

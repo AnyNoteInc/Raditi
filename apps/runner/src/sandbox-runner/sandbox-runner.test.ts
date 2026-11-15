@@ -1062,3 +1062,48 @@ describe('SandboxRunner files of the client', () => {
     expect(core.inboxReads).toEqual([])
   })
 })
+
+describe('SandboxRunner files of the project (docs/plan/84-projects.md, ПР8)', () => {
+  const chat = [Buffer.from('%PDF-1.7 synthetic menu')]
+  const project = [Buffer.from('%PDF-1.7 synthetic brief'), Buffer.from('a;b')]
+  const inbox = [
+    {
+      path: '/workspace/inbox/0199a3f2-0000-7000-8000-000000000001/Меню.pdf',
+      sizeBytes: chat[0]!.byteLength,
+    },
+  ]
+  const projectFiles = [
+    { path: '/workspace/project/Бриф.pdf', sizeBytes: project[0]!.byteLength },
+    { path: '/workspace/project/Таблицы/Прайс.csv', sizeBytes: project[1]!.byteLength },
+  ]
+
+  it('fetches them from core at their own place and writes them after the files of the chat', async () => {
+    const side = sandboxSide()
+    const core = scriptedCore({ inbox: chat, project })
+    startRunner(core.transport, side.executor)
+
+    await core.send(prepareCommand({ inbox, projectFiles }))
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'prepared']))
+    expect(core.inboxReads).toEqual([0])
+    expect(core.projectReads).toEqual([0, 1])
+    const written = vi
+      .mocked(side.sandbox.fs.write)
+      .mock.calls.filter(([path]) => path.startsWith('/workspace/'))
+    expect(
+      written.map(([path, data, options]) => [path, Buffer.from(data).toString(), options]),
+    ).toEqual([
+      [inbox[0]!.path, chat[0]!.toString(), { mode: 0o444 }],
+      [projectFiles[0]!.path, project[0]!.toString(), { mode: 0o444 }],
+      [projectFiles[1]!.path, project[1]!.toString(), { mode: 0o444 }],
+    ])
+  })
+
+  it('fails the prepare when core does not give a file of the project', async () => {
+    const side = sandboxSide()
+    const core = scriptedCore({ project: project.slice(0, 1) })
+    startRunner(core.transport, side.executor)
+
+    await core.send(prepareCommand({ projectFiles }))
+    await vi.waitFor(() => expect(core.types()).toEqual(['created', 'failed']))
+  })
+})

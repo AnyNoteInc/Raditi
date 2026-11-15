@@ -36,10 +36,14 @@ import {
 import { attachmentLimits } from '../attachments/rules.ts'
 import {
   assertTurnInbox,
+  assertTurnProjectFiles,
   turnInboxLimits,
   turnInboxPathSchema,
   turnMayHoldInbox,
+  turnProjectFilesLimits,
+  turnProjectPathSchema,
 } from '../ports/turn-executor.ts'
+import { projectLimits } from '../projects/limits.ts'
 import { execLost, siteLeaseFenceSchema, snapshotHasCredential } from '../ports/turn-runner.ts'
 import { envVarValueSchema } from '../release/env-vars.ts'
 
@@ -62,11 +66,22 @@ const assignmentPath = (assignmentId: string) =>
  * the client), never more than its `sizeBytes`.
  */
 export const runnerInboxPath = (assignmentId: string, index: number) =>
-  `${assignmentPath(assignmentId)}/inbox/${z
+  runnerFilePath(assignmentId, 'inbox', index)
+
+/**
+ * Where a runner fetches the files a prepare puts into the sandbox: `inbox` — of the chat,
+ * `project` — of the chat's project (docs/plan/84-projects.md, ПР8), by their place in the command.
+ */
+export const turnFileRoots = ['inbox', 'project'] as const
+export type TurnFileRoot = (typeof turnFileRoots)[number]
+
+/** GET: the file of an open prepare at this place of its `inbox` or `projectFiles`. */
+export const runnerFilePath = (assignmentId: string, root: TurnFileRoot, index: number) =>
+  `${assignmentPath(assignmentId)}/${root}/${z
     .number()
     .int()
     .nonnegative()
-    .lt(turnInboxLimits.files)
+    .lt(root === 'inbox' ? turnInboxLimits.files : turnProjectFilesLimits.files)
     .parse(index)}`
 /** GET: 32 bytes of the data key, `no-store`; only for an open restore or seal command. */
 export const runnerKeyPath = (assignmentId: string, purpose: 'restore' | 'seal') =>
@@ -249,6 +264,22 @@ const prepareCommand = command('prepare', {
     .min(1)
     .max(turnInboxLimits.files)
     .optional(),
+  /**
+   * The files of the chat's project the runner fetches from runnerFilePath(…, 'project', n) and
+   * writes at their paths after the inbox (TurnPrepareInput.projectFiles).
+   */
+  projectFiles: z
+    .array(
+      z
+        .object({
+          path: turnProjectPathSchema,
+          sizeBytes: z.number().int().positive().max(projectLimits.fileBytes),
+        })
+        .strict(),
+    )
+    .min(1)
+    .max(turnProjectFilesLimits.files)
+    .optional(),
   driverId: z.enum(agentDriverIds),
   /** Checked by core (preparedRunSchema, preparedRunExposesSecret) and again by the runner. */
   prepared: preparedFilesSchema,
@@ -340,6 +371,17 @@ export const runnerCommandSchema = z
           assertTurnInbox(cmd.inbox, turnMayHoldInbox(cmd.sandbox.labels))
         } catch {
           ctx.addIssue({ code: 'custom', path: ['inbox'], message: 'invalid files of the client' })
+        }
+      }
+      if (cmd.projectFiles) {
+        try {
+          assertTurnProjectFiles(cmd.projectFiles, turnMayHoldInbox(cmd.sandbox.labels))
+        } catch {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['projectFiles'],
+            message: 'invalid files of the project',
+          })
         }
       }
     }

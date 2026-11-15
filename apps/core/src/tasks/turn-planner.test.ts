@@ -3,6 +3,7 @@ import {
   BROWSER_ONLY,
   Money,
   PLAIN_CHAT,
+  projectContextSection,
   projectSection,
   toCredits,
   toTurnPlan,
@@ -481,6 +482,39 @@ describe('the sections of the instructions of a pass (docs/plan/84-projects.md, 
       /\n## The project\nThis chat belongs to the client's project «Сайт»\.\n$/u,
     )
     expect(plan.request.context.instructions).not.toContain('client-instructions')
+  })
+})
+
+describe('the files of the project in a pass (docs/plan/84-projects.md, ПР8)', () => {
+  const project = { name: 'Пекарня', goal: null, instructions: null }
+  const files = [
+    { name: 'Прайс зима 2026.xlsx', mediaType: 'application/x', sizeBytes: 86_016 },
+    { name: 'Фото/витрина.jpg', mediaType: 'image/jpeg', sizeBytes: 2048 },
+  ]
+
+  it('lists them after the project and gives the turn their paths under /workspace/project', async () => {
+    const plan = await planned(facts({ project, projectFiles: files }))
+    const instructions = plan.request.context.instructions
+    expect(instructions.endsWith(`${projectSection(project)}${projectContextSection(files)}`)).toBe(
+      true,
+    )
+    expect(instructions.indexOf('## The project')).toBeLessThan(
+      instructions.indexOf('## Project files'),
+    )
+    expect(plan.request.input.projectFiles).toEqual([
+      '/workspace/project/Прайс зима 2026.xlsx',
+      '/workspace/project/Фото/витрина.jpg',
+    ])
+    expect(plan.request.input.attachments).toEqual([])
+  })
+
+  it('gives none without a project, and a chat without files keeps its plan byte for byte', async () => {
+    const without = await planned(facts({ project: null, projectFiles: files }))
+    expect(without.request.input.projectFiles).toBeUndefined()
+    expect(without.request.context.instructions).not.toContain('## Project files')
+    const bare = await planned(facts({ project }))
+    expect((await planned(facts({ project, projectFiles: [] }))).request).toEqual(bare.request)
+    expect(bare.request.input).not.toHaveProperty('projectFiles')
   })
 })
 

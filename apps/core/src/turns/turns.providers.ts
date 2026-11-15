@@ -25,6 +25,7 @@ import { SnapshotService } from '../sessions/snapshot.service.ts'
 import { LiveTurns } from './live-turns.ts'
 import { TurnExecRecovery } from './turn-exec-recovery.ts'
 import { TaskInboxFiles } from './turn-inbox.ts'
+import { TaskProjectFiles } from './turn-project-files.ts'
 import { TaskEventTurnJournal } from './turn-journal.ts'
 import { TurnReconciler } from './turn-reconciler.ts'
 import { TurnRuntime } from './turn-runtime.ts'
@@ -113,6 +114,7 @@ export const turnEngineProviders: Provider[] = [
         live,
         credentials,
         inbox: new TaskInboxFiles(prisma, storage),
+        projectFiles: new TaskProjectFiles(prisma, storage),
       })
     },
     inject: [

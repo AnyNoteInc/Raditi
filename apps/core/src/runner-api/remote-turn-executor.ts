@@ -2,6 +2,7 @@ import { performance } from 'node:perf_hooks'
 
 import {
   assertTurnInbox,
+  assertTurnProjectFiles,
   badRequest,
   conflict,
   isDomainError,
@@ -135,6 +136,7 @@ export class RemoteTurnExecutor implements TurnExecutor {
       throw badRequest('Turn secrets are installed only after restore')
     // Refused here as the runner's schema refuses it, before a runner is reserved.
     assertTurnInbox(input.inbox ?? [], turnMayHoldInbox(input.sandbox.labels))
+    assertTurnProjectFiles(input.projectFiles ?? [], turnMayHoldInbox(input.sandbox.labels))
     const restore = input.restore
       ? { manifest: input.restore.manifest, parts: restoreParts(input.restore) }
       : undefined
@@ -178,6 +180,11 @@ export class RemoteTurnExecutor implements TurnExecutor {
         ...(input.inbox?.length
           ? { inbox: input.inbox.map(({ path, sizeBytes }) => ({ path, sizeBytes })) }
           : {}),
+        ...(input.projectFiles?.length
+          ? {
+              projectFiles: input.projectFiles.map(({ path, sizeBytes }) => ({ path, sizeBytes })),
+            }
+          : {}),
         driverId: input.driverId,
         prepared: input.prepared,
         argv: input.argv,
@@ -192,6 +199,8 @@ export class RemoteTurnExecutor implements TurnExecutor {
         deadline: started + input.remainingMs,
         // Served at runnerInboxPath() while the prepare is open.
         ...(input.inbox?.length ? { inbox: input.inbox } : {}),
+        // …and those of the project at runnerFilePath(…, 'project', n).
+        ...(input.projectFiles?.length ? { projectFiles: input.projectFiles } : {}),
         ...(input.restore ? { dataKey: input.restore.dataKey } : {}),
         // These run even after the supervisor gave up: a late container is removed, and a
         // prepare that left none frees the site.

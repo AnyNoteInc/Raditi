@@ -30,6 +30,7 @@ import {
   type SiteLeaseFence,
   type SnapshotPartName,
   type TurnAgentExec,
+  type TurnFileRoot,
   type TurnInboxFile,
   type TurnExecution,
   type TurnExecutor,
@@ -507,6 +508,10 @@ export class SandboxRunner {
           remainingMs: Math.max(1, Math.floor(held.deadline - performance.now())),
           ...(restore ? { restore } : {}),
           ...(command.inbox ? { inbox: this.#inboxFiles(held, fence, command.inbox) } : {}),
+          // The files of the chat's project, fetched the same way (docs/plan/84-projects.md, ПР8).
+          ...(command.projectFiles
+            ? { projectFiles: this.#inboxFiles(held, fence, command.projectFiles, 'project') }
+            : {}),
           driverId: command.driverId,
           prepared: command.prepared,
           argv: command.argv,
@@ -556,15 +561,19 @@ export class SandboxRunner {
     }
   }
 
-  /** The files of the client of a turn, each fetched from core when the executor writes it. */
+  /**
+   * The files of the client of a turn — or of its project (`root: 'project'`) — each fetched from
+   * core when the executor writes it.
+   */
   #inboxFiles(
     held: Held,
     fence: RunnerCommandFence,
-    inbox: NonNullable<Command<'prepare'>['inbox']>,
+    inbox: readonly { path: string; sizeBytes: number }[],
+    root: TurnFileRoot = 'inbox',
   ): TurnInboxFile[] {
     return inbox.map((file, index) => ({
       ...file,
-      read: () => this.#inboxFile(held, fence, index, file.sizeBytes),
+      read: () => this.#inboxFile(held, fence, index, file.sizeBytes, root),
     }))
   }
 
@@ -1036,12 +1045,13 @@ export class SandboxRunner {
     fence: RunnerCommandFence,
     index: number,
     sizeBytes: number,
+    root: TurnFileRoot,
   ): AsyncIterable<Uint8Array> {
     const read = await this.#call(
       held,
       async () => {
         const chunks: Uint8Array[] = []
-        for await (const chunk of this.deps.transport.inbox(held.id, index, fence, sizeBytes))
+        for await (const chunk of this.deps.transport.inbox(held.id, index, fence, sizeBytes, root))
           chunks.push(chunk)
         return chunks.reverse()
       },

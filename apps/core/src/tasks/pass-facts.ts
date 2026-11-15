@@ -1,5 +1,5 @@
 import { attemptCreditBudget } from '@repo/billing'
-import { classProfile, taskAttachments, type PrismaClient } from '@repo/db'
+import { classProfile, readyProjectFiles, taskAttachments, type PrismaClient } from '@repo/db'
 import {
   modelClassSchema,
   readFeedRow,
@@ -72,7 +72,9 @@ export async function readPassFacts(
       // The author's own instructions to the agent (docs/plan/76-agent-instructions.md, И2).
       createdBy: { select: { agentInstructions: { select: { text: true } } } },
       // The project of the chat (docs/plan/84-projects.md, ПР7): its goal and instructions.
-      project: { select: { name: true, goal: true, instructions: true, deletedAt: true } },
+      project: {
+        select: { id: true, name: true, goal: true, instructions: true, deletedAt: true },
+      },
     },
   })
   if (!task) return null
@@ -182,6 +184,11 @@ export async function readPassFacts(
     : { kind: 'quota' }
 
   const attachments = attachmentFactsOf(await taskAttachments(deps.db, task.id))
+  // The files of the context of the project (docs/plan/84-projects.md, ПР8): what is ready now.
+  const projectFiles =
+    task.project && task.project.deletedAt === null
+      ? await readyProjectFiles(deps.db, task.project.id)
+      : []
   return {
     task: {
       id: task.id,
@@ -193,6 +200,7 @@ export async function readPassFacts(
     requirements,
     clientInstructions: task.createdBy?.agentInstructions?.text ?? null,
     project: projectFactsOf(task.project),
+    ...(projectFiles.length ? { projectFiles } : {}),
     ...(attachments.length ? { attachments } : {}),
     requests,
     committedAt: answered.createdAt,

@@ -17,6 +17,7 @@ import {
   runnerFailure,
   runnerFailureCodes,
   runnerIdSchema,
+  runnerFilePath,
   runnerInboxPath,
   runnerKeyPath,
   runnerLimits,
@@ -627,6 +628,10 @@ describe('runner poll and answers', () => {
     expect(() => runnerKeyPath('../poll', 'seal')).toThrow()
     expect(() => runnerInboxPath(ids.assignment, -1)).toThrow()
     expect(() => runnerInboxPath(ids.assignment, 50)).toThrow()
+    expect(runnerFilePath(ids.assignment, 'project', 99)).toBe(
+      `/runner/v1/assignments/${ids.assignment}/project/99`,
+    )
+    expect(() => runnerFilePath(ids.assignment, 'project', 100)).toThrow()
   })
 })
 
@@ -714,6 +719,55 @@ describe('runner commands with files of the client', () => {
       ),
     ],
     ['an unknown field', withInbox([{ path: path(1), sizeBytes: 1, key: 'inbox/ws/x' }])],
+  ])('refuses %s', (_label, value) => {
+    expect(runnerCommandSchema.safeParse(value).success).toBe(false)
+  })
+})
+
+describe('runner commands with files of the project (docs/plan/84-projects.md, ПР8)', () => {
+  const inChat = (command: Record<string, unknown>) => {
+    const sandbox = command.sandbox as { labels: Record<string, unknown> }
+    const fence = command.fence as { taskId: string }
+    return {
+      ...command,
+      fence: { ...fence, siteId: fence.taskId },
+      sandbox: { ...sandbox, labels: { ...sandbox.labels, siteId: fence.taskId } },
+    }
+  }
+  const withFiles = (projectFiles: unknown) => ({ ...prepare(), projectFiles })
+
+  it('carries the files of the project of the chat by path and size', () => {
+    const projectFiles = [
+      { path: '/workspace/project/Бриф.pdf', sizeBytes: 1024 },
+      { path: '/workspace/project/Фото/витрина.jpg', sizeBytes: 20 * 1024 * 1024 },
+    ]
+    expect(runnerCommandSchema.parse(inChat(withFiles(projectFiles)))).toMatchObject({
+      projectFiles,
+    })
+  })
+
+  it.each([
+    [
+      'of a turn under another lease',
+      withFiles([{ path: '/workspace/project/a.pdf', sizeBytes: 1 }]),
+    ],
+    ['an empty list', inChat(withFiles([]))],
+    [
+      'a path outside the project',
+      inChat(withFiles([{ path: '/workspace/inbox/a.pdf', sizeBytes: 1 }])),
+    ],
+    [
+      'a parent segment',
+      inChat(withFiles([{ path: '/workspace/project/../a.pdf', sizeBytes: 1 }])),
+    ],
+    [
+      'a file over its limit',
+      inChat(withFiles([{ path: '/workspace/project/a.pdf', sizeBytes: 20 * 1024 * 1024 + 1 }])),
+    ],
+    [
+      'an unknown field',
+      inChat(withFiles([{ path: '/workspace/project/a.pdf', sizeBytes: 1, key: 'projects/x' }])),
+    ],
   ])('refuses %s', (_label, value) => {
     expect(runnerCommandSchema.safeParse(value).success).toBe(false)
   })

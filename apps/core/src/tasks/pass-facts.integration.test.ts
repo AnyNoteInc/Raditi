@@ -232,6 +232,27 @@ describe.skipIf(!databaseUrl)('the facts of a pass with PostgreSQL', () => {
       instructions: 'Пишите тепло.',
     }
     expect((await facts())?.project).toEqual(project)
+    expect((await facts())?.projectFiles).toBeUndefined()
+    // Its ready files of the context (ПР8), by path; one still uploading is not given.
+    const file = (name: string, status: string) => {
+      const id = uuidv7()
+      return db.$executeRaw`
+        INSERT INTO project_files (id, workspace_id, project_id, uploaded_by_id, kind, name,
+          media_type, size_bytes, status, s3_key, expires_at, updated_at)
+        VALUES (${id}::uuid, ${workspaceId}::uuid,
+          ${status === 'ready' ? projectId : null}::uuid, ${userId}::uuid, 'file', ${name},
+          'application/pdf', 10, ${status}, ${`projects/${workspaceId}/${id}`},
+          ${status === 'ready' ? null : new Date(Date.now() + 86_400_000)}, now())`
+    }
+    await file('Фото/b.pdf', 'ready')
+    await file('a.pdf', 'ready')
+    await file('c.pdf', 'uploading')
+    expect((await facts())?.projectFiles).toEqual(
+      [
+        { name: 'Фото/b.pdf', mediaType: 'application/pdf', sizeBytes: 10 },
+        { name: 'a.pdf', mediaType: 'application/pdf', sizeBytes: 10 },
+      ].sort((x, y) => (x.name < y.name ? -1 : 1)),
+    )
     // A project in the archive keeps its chats, and so the section of their passes.
     await db.project.update({ where: { id: projectId }, data: { archivedAt: new Date() } })
     expect((await facts())?.project).toEqual(project)
@@ -242,5 +263,7 @@ describe.skipIf(!databaseUrl)('the facts of a pass with PostgreSQL', () => {
       data: { deletedAt: now, purgeAfter: new Date(now.getTime() + 30 * 86_400_000) },
     })
     expect((await facts())?.project).toBeNull()
+    expect((await facts())?.projectFiles).toBeUndefined()
+    await db.projectFile.deleteMany({ where: { workspaceId } })
   })
 })

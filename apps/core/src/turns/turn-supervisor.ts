@@ -40,6 +40,7 @@ import { newTurnKeys } from '@repo/turn-keys'
 import { LeaseGuard, TURN_LEASE_MS, turnRenewal } from './lease-guard.ts'
 import type { LiveTurns } from './live-turns.ts'
 import type { TurnInbox } from './turn-inbox.ts'
+import type { TurnProjectFiles } from './turn-project-files.ts'
 import {
   TurnAttempt,
   type CompletedTurn,
@@ -57,6 +58,8 @@ export interface TurnSupervisorDependencies extends TurnAttemptDependencies {
   live: LiveTurns
   /** Required for a plan that names files of the client (`input.attachments`). */
   inbox?: TurnInbox
+  /** Required for a plan that names files of the chat's project (`input.projectFiles`). */
+  projectFiles?: TurnProjectFiles
 }
 
 /** A presigned URL never outlives the lease that allowed it (spec §14). */
@@ -204,6 +207,12 @@ export class TurnSupervisor {
             this.deps.inbox!.files(labels.taskId, request.input.attachments),
           )
         : []
+      // The files of the chat's project (docs/plan/84-projects.md, ПР8): checked the same way,
+      // against the project the chat is in now.
+      const projectPaths = request.input.projectFiles ?? []
+      const projectFiles = projectPaths.length
+        ? await guard.interruptible(this.deps.projectFiles!.files(labels.taskId, projectPaths))
+        : []
       const context = {
         ...keyed.context,
         ...(restore?.manifest.driver.nativeSessionId
@@ -233,6 +242,7 @@ export class TurnSupervisor {
             remainingMs: guard.remainingMs,
             ...(restore ? { restore } : {}),
             ...(inbox.length ? { inbox } : {}),
+            ...(projectFiles.length ? { projectFiles } : {}),
             driverId: this.deps.driver.id,
             prepared: files,
             argv,
@@ -305,6 +315,11 @@ export class TurnSupervisor {
       throw badRequest('Files of the client go only to the turn of their chat')
     if (request.input.attachments.length && !this.deps.inbox)
       throw badRequest('Files of the client need the inbox of core')
+    // The files of a project go to the turn of its chat only (docs/plan/84-projects.md, ПР8).
+    if (request.input.projectFiles?.length && !turnMayHoldInbox(labels))
+      throw badRequest('Files of a project go only to the turn of its chat')
+    if (request.input.projectFiles?.length && !this.deps.projectFiles)
+      throw badRequest('Files of a project need the inbox of core')
     // A compaction shortens a session: only a checkpoint brings one (docs/plan/61, §5.14).
     if (request.input.action !== undefined && !request.previous)
       throw badRequest('An action of a turn needs the checkpoint of an earlier turn')

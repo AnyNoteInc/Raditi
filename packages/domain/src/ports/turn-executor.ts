@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { turnSkillsSchema } from '../agent/skills.ts'
 import { attachmentLimits } from '../attachments/rules.ts'
 import { badRequest } from '../errors.ts'
+import { projectFilePath } from '../projects/files.ts'
+import { projectLimits } from '../projects/limits.ts'
 import { snapshotIdSchema, snapshotReferenceSchema } from '../sessions/snapshot-manifest.ts'
 import type { SnapshotManifest, SnapshotReference } from '../sessions/snapshot-manifest.ts'
 import { taskRequirementsSchema, type TaskRequirements } from '../tasks/task-requirements.ts'
@@ -10,6 +12,7 @@ import {
   agentDriverIds,
   nativeSessionIdSchema,
   SANDBOX_INBOX,
+  SANDBOX_PROJECT,
   turnActions,
   type AgentDriverId,
   type AgentEvent,
@@ -115,6 +118,12 @@ export interface TurnPrepareInput {
    * assertTurnInbox); absent — none.
    */
   inbox?: readonly TurnInboxFile[]
+  /**
+   * The files of the context of the chat's project (`input.projectFiles`, docs/plan/84-projects.md,
+   * ПР8): written like `inbox`, read-only, after it, under SANDBOX_PROJECT (assertTurnProjectFiles).
+   * They are put again by every turn and never captured. Absent — none.
+   */
+  projectFiles?: readonly TurnInboxFile[]
   /** Selects the stateless event parser on the executor side. */
   driverId: AgentDriverId
   /** Already checked by core (preparedRunSchema, preparedRunExposesSecret). */
@@ -384,10 +393,44 @@ export const turnInboxPathSchema = z
     `expected a normalized path under ${SANDBOX_INBOX}`,
   )
 
+/**
+ * What one turn gets of the files of its project (docs/plan/84-projects.md, ПР8, §4.7): all the
+ * ready ones — a project holds at most this many and this many bytes.
+ */
+export const turnProjectFilesLimits = Object.freeze({
+  files: projectLimits.filesPerProject,
+  bytes: projectLimits.projectBytes,
+})
+
+/**
+ * A path of the plan's `input.projectFiles`: a clean path of a file of a project
+ * (projectFilePath) under SANDBOX_PROJECT.
+ */
+export const turnProjectPathSchema = z
+  .string()
+  .max(1024)
+  .refine(
+    (path) => turnProjectFileName(path) !== null,
+    `expected a clean path of a project file under ${SANDBOX_PROJECT}`,
+  )
+
+/** Where the host puts a file of the project: under its own path. null — not a clean path. */
+export function turnProjectPath(name: string): string | null {
+  return projectFilePath(name) === name ? `${SANDBOX_PROJECT}/${name}` : null
+}
+
+/** The path in the project a path of turnProjectPath() names; null for any other path. */
+export function turnProjectFileName(path: string): string | null {
+  if (!path.startsWith(`${SANDBOX_PROJECT}/`)) return null
+  const name = path.slice(SANDBOX_PROJECT.length + 1)
+  return projectFilePath(name) === name ? name : null
+}
+
 export const turnInputSchema = z
   .object({
     prompt: z.string().min(1).max(turnPlanLimits.prompt),
     attachments: z.array(turnInboxPathSchema).max(turnPlanLimits.attachments),
+    projectFiles: z.array(turnProjectPathSchema).max(turnProjectFilesLimits.files).optional(),
     action: z.enum(turnActions).optional(),
   })
   .strict() satisfies z.ZodType<TurnInput>
@@ -459,6 +502,63 @@ export function assertTurnInbox(
     bytes += file.sizeBytes
   }
   if (bytes > turnInboxLimits.bytes) throw badRequest('Files of the client too large for one turn')
+}
+
+/**
+ * The files of the project of a prepare, as both executors and the runner protocol take them:
+ * only for the turn of a chat (turnMayHoldInbox — a project's files belong to its chats), each at a
+ * path of turnProjectPath() once, each of a file's size, all within turnProjectFilesLimits.
+ */
+export function assertTurnProjectFiles(
+  files: readonly Pick<TurnInboxFile, 'path' | 'sizeBytes'>[],
+  mayHold: boolean,
+): void {
+  if (files.length === 0) return
+  if (!mayHold) throw badRequest('Files of a project go only to the turn of its chat')
+  if (files.length > turnProjectFilesLimits.files)
+    throw badRequest('Too many files of the project for one turn')
+  let bytes = 0
+  const paths = new Set<string>()
+  for (const file of files) {
+    if (turnProjectFileName(file.path) === null || paths.has(file.path))
+      throw badRequest('Invalid path of a file of the project')
+    // A file and a folder of the same path cannot both be written.
+    for (const other of paths)
+      if (other.startsWith(`${file.path}/`) || file.path.startsWith(`${other}/`))
+        throw badRequest('Invalid path of a file of the project')
+    if (
+      !Number.isSafeInteger(file.sizeBytes) ||
+      file.sizeBytes < 1 ||
+      file.sizeBytes > projectLimits.fileBytes
+    )
+      throw badRequest('Invalid size of a file of the project')
+    paths.add(file.path)
+    bytes += file.sizeBytes
+  }
+  if (bytes > turnProjectFilesLimits.bytes)
+    throw badRequest('Files of the project too large for one turn')
+}
+
+const MIB = 1024 * 1024
+
+/**
+ * How the 512 MiB of `/workspace` are shared in a turn (docs/plan/84-projects.md, §4.7): without a
+ * repository — the files of the chat up to 200 MiB and of the project up to 100; with one (Э6) —
+ * the tree with `.git` up to 192 MiB, the files of the project up to 100, of the chat up to 100.
+ * What is left — at least 120 MiB — is the agent's: `/workspace/out`, new files, dependencies.
+ */
+export function turnWorkspaceBudget(requirements: Pick<TaskRequirements, 'repository'>): {
+  workspace: number
+  repository: number
+  inbox: number
+  project: number
+  agent: number
+} {
+  const workspace = 512 * MIB
+  const repository = requirements.repository ? 192 * MIB : 0
+  const inbox = requirements.repository ? 100 * MIB : turnInboxLimits.bytes
+  const project = turnProjectFilesLimits.bytes
+  return { workspace, repository, inbox, project, agent: workspace - repository - inbox - project }
 }
 
 /**

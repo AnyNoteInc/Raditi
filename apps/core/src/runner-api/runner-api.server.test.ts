@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import {
   MAX_SANDBOX_LEASE_MS,
   runnerApiPaths,
+  runnerFilePath,
   runnerInboxPath,
   runnerCandidatePath,
   runnerHeaders,
@@ -86,7 +87,10 @@ async function start(binding = '') {
   })
 
   /** A turn prepared over HTTP; `restoreKey` is served for the prepare's restore. */
-  const prepare = async (restoreKey?: Uint8Array, { inbox = [] as TurnInboxFile[] } = {}) => {
+  const prepare = async (
+    restoreKey?: Uint8Array,
+    { inbox = [] as TurnInboxFile[], projectFiles = [] as TurnInboxFile[] } = {},
+  ) => {
     const assignment = (await assignments.open({
       fence,
       sessionId: labels.sessionId,
@@ -152,6 +156,7 @@ async function start(binding = '') {
             }
           : {}),
         ...(inbox.length ? { inbox } : {}),
+        ...(projectFiles.length ? { projectFiles } : {}),
         driverId: sampleDriverId,
         prepared: {
           files: [],
@@ -455,6 +460,37 @@ describe('RunnerApiServer', () => {
     expect(beyond.status).toBe(410)
     expect(await beyond.json()).toEqual({ error: 'COMMAND_CLOSED' })
     // The prepare is never answered: closing core ends it.
+    f.hub.close()
+    await expect(preparing).rejects.toMatchObject({ code: 'CORE_STOPPING' })
+  })
+
+  it('serves the files of the project of a prepare at their own place (docs/plan/84, ПР8)', async () => {
+    const f = await start()
+    const menu = Buffer.from('%PDF-1.7 synthetic menu')
+    const brief = Buffer.from('%PDF-1.7 synthetic brief')
+    const inboxPath = '/workspace/inbox/0199a3f2-0000-7000-8000-0000000000f1/Меню.pdf'
+    const path = '/workspace/project/Фото/Бриф.pdf'
+    const file = (at: string, bytes: Buffer) => ({
+      path: at,
+      sizeBytes: bytes.byteLength,
+      read: async function* () {
+        yield bytes
+      },
+    })
+    const { assignment, preparing, command } = await f.prepare(undefined, {
+      inbox: [file(inboxPath, menu)],
+      projectFiles: [file(path, brief)],
+    })
+    expect(command).toMatchObject({ projectFiles: [{ path, sizeBytes: brief.byteLength }] })
+    const at = (index: number) => runnerFilePath(assignment.id, 'project', index)
+    expect((await f.call(at(0))).status).toBe(400)
+    const served = await f.call(at(0), { headers: f.binary(command) })
+    expect(served.status).toBe(200)
+    expect(Buffer.from(await served.arrayBuffer())).toEqual(brief)
+    // The place of a file of the project is not that of a file of the chat.
+    const chat = await f.call(runnerInboxPath(assignment.id, 0), { headers: f.binary(command) })
+    expect(Buffer.from(await chat.arrayBuffer())).toEqual(menu)
+    expect((await f.call(at(1), { headers: f.binary(command) })).status).toBe(410)
     f.hub.close()
     await expect(preparing).rejects.toMatchObject({ code: 'CORE_STOPPING' })
   })

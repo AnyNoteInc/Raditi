@@ -26,6 +26,7 @@ import {
   type SiteLeaseStore,
   type TurnAssignmentOutcome,
   type TurnAssignmentStore,
+  type TurnFileRoot,
   type TurnInboxFile,
   type TurnEvidence,
   type runnerReconcileRequestSchema,
@@ -100,6 +101,7 @@ interface OpenCommand {
   reject(error: unknown): void
   cleanup(): void
   readonly inbox?: readonly TurnInboxFile[]
+  readonly projectFiles?: readonly TurnInboxFile[]
   readonly dataKey?: () => Promise<Uint8Array>
   readonly candidates?: CandidateParts
   readonly onCreated?: (containerId: string) => Promise<void>
@@ -130,6 +132,8 @@ export interface SendOptions<T extends RunnerReportType> {
   deadline?: number
   /** Served at runnerInboxPath() while a prepare is open, by their place in its command. */
   inbox?: readonly TurnInboxFile[]
+  /** Served at runnerFilePath(…, 'project', n) while a prepare is open (docs/plan/84, ПР8). */
+  projectFiles?: readonly TurnInboxFile[]
   /** Served at runnerKeyPath() while a prepare with restore or a seal is open. */
   dataKey?: () => Promise<Uint8Array>
   /** Filled by runnerCandidatePath() uploads while a capture is open. */
@@ -462,6 +466,7 @@ export class RunnerHub implements OnApplicationShutdown {
         if (index >= 0) session.queue.splice(index, 1)
       },
       ...(options.inbox ? { inbox: options.inbox } : {}),
+      ...(options.projectFiles ? { projectFiles: options.projectFiles } : {}),
       ...(options.dataKey ? { dataKey: options.dataKey } : {}),
       ...(options.candidates ? { candidates: options.candidates } : {}),
       ...(options.onCreated ? { onCreated: options.onCreated } : {}),
@@ -810,17 +815,18 @@ export class RunnerHub implements OnApplicationShutdown {
   }
 
   /**
-   * A file of the client of an open prepare, by its place in the command's `inbox`, after a
-   * strict lease check.
+   * A file of an open prepare, by its place in the command's `inbox` — or, for `root: 'project'`,
+   * its `projectFiles` (docs/plan/84-projects.md, ПР8) — after a strict lease check.
    */
   async inboxFile(
     runnerId: string,
     assignmentId: string,
     index: number,
     headers: RunnerBinaryHeaders,
+    root: TurnFileRoot = 'inbox',
   ): Promise<TurnInboxFile> {
     const { live, open } = await this.#binary(runnerId, assignmentId, headers, 'prepare')
-    const file = open.inbox?.[index]
+    const file = (root === 'project' ? open.projectFiles : open.inbox)?.[index]
     if (!file) throw RunnerApiError.of('COMMAND_CLOSED')
     await this.#assertLease(live)
     return file

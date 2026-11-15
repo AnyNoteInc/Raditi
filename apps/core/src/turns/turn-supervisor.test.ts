@@ -2023,3 +2023,66 @@ describe.each(executorKinds)('TurnSupervisor with files of the client (%s execut
     expect([...f.assignments.rows.values()][0]!.outcome).toBe('completed')
   })
 })
+
+describe.each(executorKinds)(
+  'TurnSupervisor with files of the project (%s executor, docs/plan/84-projects.md, ПР8)',
+  (kind) => {
+    const inboxPath = '/workspace/inbox/0199a3f2-0000-7000-8000-0000000000f1/Меню.pdf'
+    const path = '/workspace/project/Фото/Бриф.pdf'
+    const brief = Buffer.from('%PDF-1.7 synthetic brief')
+    const reader = (bytes: Buffer) => async (_taskId: string, paths: readonly string[]) =>
+      paths.map((at) => ({
+        path: at,
+        sizeBytes: bytes.byteLength,
+        read: async function* () {
+          yield bytes
+        },
+      }))
+
+    function withProjectFiles(f: Fixture) {
+      f.request.input = {
+        ...f.request.input,
+        attachments: [inboxPath],
+        projectFiles: [path],
+      }
+      f.deps.inbox = { files: vi.fn(reader(Buffer.from('%PDF menu'))) }
+      const files = vi.fn(reader(brief))
+      f.deps.projectFiles = { files }
+      return files
+    }
+
+    it('reads them under the lease and writes them read-only after the files of the chat', async () => {
+      const f = turnFixture(kind)
+      const files = withProjectFiles(f)
+      await f.run()
+      expect(files).toHaveBeenCalledExactlyOnceWith(labels.taskId, [path])
+      const at = (step: string) => f.order.indexOf(step)
+      expect(at(`write:${path}`)).toBeGreaterThan(at(`write:${inboxPath}`))
+      expect(at(`write:${path}`)).toBeLessThan(at(`write:${f.prepared.files[0]!.path}`))
+      const written = vi.mocked(f.sandbox.fs.write).mock.calls.find(([to]) => to === path)!
+      expect(Buffer.from(written[1]).equals(brief)).toBe(true)
+      expect(written[2]).toEqual({ mode: 0o444 })
+      // The plan recovery keeps names the paths the agent was told of, nothing of the store.
+      expect([...f.assignments.rows.values()][0]!.plan.input.projectFiles).toEqual([path])
+    })
+
+    it('fails the turn when a file is no longer of the project of the chat', async () => {
+      const f = turnFixture(kind)
+      withProjectFiles(f).mockRejectedValue(
+        conflict('A file of the turn is not a file of the project of its chat'),
+      )
+      await expect(f.run()).rejects.toThrow('not a file of the project of its chat')
+      expect(f.sandboxes.create).not.toHaveBeenCalled()
+    })
+
+    it('refuses files of a project without the store of core, before the lease', async () => {
+      const plain = turnFixture(kind)
+      plain.request.input = { ...plain.request.input, projectFiles: [path] }
+      await expect(plain.run()).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'Files of a project need the inbox of core',
+      })
+      expect(plain.leases.acquire).not.toHaveBeenCalled()
+    })
+  },
+)
