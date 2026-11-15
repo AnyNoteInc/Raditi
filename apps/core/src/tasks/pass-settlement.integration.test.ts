@@ -1293,6 +1293,35 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       expect(await db.browserCheckpoint.count({ where: { taskId: running.taskId } })).toBe(1)
     })
 
+    it('names the chat with the title of its first pass, never over a name the client chose', async () => {
+      // The owner's request of 15.11.2026: the model names the chat, paid with the pass.
+      const named = await dialog()
+      const renamed = await dialog()
+      await db.task.update({
+        where: { id: renamed.taskId },
+        data: { title: 'Моё название', titleSource: 'client' },
+      })
+      for (const task of [named, renamed])
+        await settlement().settle(ref(task), {
+          kind: 'completed',
+          turn: 1,
+          result: result({ chat_title: '«Телефон в шапке сайта».' }),
+        })
+
+      const titles = await db.task.findMany({
+        where: { id: { in: [named.taskId, renamed.taskId] } },
+        select: { id: true, title: true, titleSource: true },
+      })
+      expect(titles.find((task) => task.id === named.taskId)).toMatchObject({
+        title: 'Телефон в шапке сайта',
+        titleSource: 'agent',
+      })
+      expect(titles.find((task) => task.id === renamed.taskId)).toMatchObject({
+        title: 'Моё название',
+        titleSource: 'client',
+      })
+    })
+
     it('fails a completed pass of a task with a repository that names no head', async () => {
       const task = await dialog()
 

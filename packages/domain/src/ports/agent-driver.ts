@@ -299,6 +299,11 @@ export const agentOutputLimits = Object.freeze({
   filesChanged: 500,
   questions: 5,
   question: 500,
+  /**
+   * The title the agent gives a chat on its first pass (owner, 15.11.2026). Generous on purpose:
+   * a longer one is cut by the platform rather than losing the result of the turn.
+   */
+  chatTitle: 200,
   /** Events of one turn across reconnects, on both executors. */
   turnEvents: 10_000,
 })
@@ -402,6 +407,12 @@ export const turnResultSchema = z
     questions: z.array(z.string().min(1).max(limits.question)).max(limits.questions),
     needs_approval: z.boolean(),
     risk: z.enum(['low', 'medium', 'high']),
+    /**
+     * Only when the instructions ask for it — the first pass of a chat: a short Russian name of
+     * what the client asked (owner's request of 15.11.2026, in place of the first words of the
+     * request). Paid as part of the pass; the platform cuts and checks it before showing it.
+     */
+    chat_title: z.string().max(limits.chatTitle).optional(),
   })
   .strict()
 export type TurnResult = z.infer<typeof turnResultSchema>
