@@ -59,6 +59,24 @@ interface Recording {
   node: AudioWorkletNode
   chunks: Float32Array[]
   timer: number
+  /** The frame of the wave: its levels are read again on every frame while recording. */
+  frame: number
+}
+
+/** How many bars the wave of a recording has. */
+export const WAVE_BARS = 24
+
+/** The loudness of each part of the samples, 0–1: what the bars of the wave show. */
+export function waveLevels(samples: Uint8Array, bars: number = WAVE_BARS): number[] {
+  const size = Math.max(1, Math.floor(samples.length / bars))
+  const levels: number[] = []
+  for (let bar = 0; bar < bars; bar++) {
+    let peak = 0
+    for (let index = bar * size; index < Math.min(samples.length, (bar + 1) * size); index++)
+      peak = Math.max(peak, Math.abs((samples[index] ?? 128) - 128) / 128)
+    levels.push(Math.min(1, peak * 1.6))
+  }
+  return levels
 }
 
 export type DictationState = 'idle' | 'recording' | 'recognizing'
@@ -68,6 +86,7 @@ export function useDictation(onText: (text: string) => void) {
   const [state, setState] = useState<DictationState>('idle')
   const [seconds, setSeconds] = useState(0)
   const [notice, setNotice] = useState<string | null>(null)
+  const [levels, setLevels] = useState<number[]>(() => Array(WAVE_BARS).fill(0))
   const recording = useRef<Recording | null>(null)
 
   const finish = useCallback(async () => {
@@ -75,6 +94,8 @@ export function useDictation(onText: (text: string) => void) {
     if (!current) return
     recording.current = null
     window.clearInterval(current.timer)
+    window.cancelAnimationFrame(current.frame)
+    setLevels(Array(WAVE_BARS).fill(0))
     current.node.port.onmessage = null
     current.node.disconnect()
     for (const track of current.stream.getTracks()) track.stop()
@@ -136,14 +157,26 @@ export function useDictation(onText: (text: string) => void) {
     const node = new AudioWorkletNode(context, 'raditi-collector')
     const chunks: Float32Array[] = []
     node.port.onmessage = (event: MessageEvent<Float32Array>) => chunks.push(event.data)
-    context.createMediaStreamSource(stream).connect(node)
+    const source = context.createMediaStreamSource(stream)
+    source.connect(node)
+    // The wave of the recording: the loudness of the microphone, frame by frame.
+    const analyser = context.createAnalyser()
+    analyser.fftSize = 512
+    source.connect(analyser)
+    const samples = new Uint8Array(analyser.fftSize)
+    const draw = () => {
+      analyser.getByteTimeDomainData(samples)
+      setLevels(waveLevels(samples))
+      if (recording.current) recording.current.frame = window.requestAnimationFrame(draw)
+    }
     const began = Date.now()
     const timer = window.setInterval(() => {
       const passed = Math.floor((Date.now() - began) / 1000)
       setSeconds(passed)
       if (passed >= DICTATION_MAX_SECONDS) void finish()
     }, 250)
-    recording.current = { stream, context, node, chunks, timer }
+    recording.current = { stream, context, node, chunks, timer, frame: 0 }
+    recording.current.frame = window.requestAnimationFrame(draw)
     setState('recording')
   }, [finish])
 
@@ -153,6 +186,7 @@ export function useDictation(onText: (text: string) => void) {
       const current = recording.current
       if (!current) return
       window.clearInterval(current.timer)
+      window.cancelAnimationFrame(current.frame)
       for (const track of current.stream.getTracks()) track.stop()
       void current.context.close().catch(() => {})
     },
@@ -163,6 +197,7 @@ export function useDictation(onText: (text: string) => void) {
     state,
     seconds,
     notice,
+    levels,
     toggle: () =>
       state === 'recording' ? void finish() : state === 'idle' ? void start() : undefined,
   }

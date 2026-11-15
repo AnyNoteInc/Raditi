@@ -96,7 +96,6 @@ export class QueueDrain {
         requestId: words.requestId,
         text: words.text,
         ...(words.attachments.length > 0 ? { attachments: words.attachments } : {}),
-        ...(words.plan ? { plan: true as const } : {}),
       }
       last = await insertFeedEvent(tx, { taskId, row: { type: 'feed.request', payload } })
     }

@@ -39,6 +39,17 @@ vi.mock('@/trpc/client', () => ({
         }),
       },
     },
+    // «Инструкции агенту» (docs/plan/76, И1).
+    user: {
+      agentInstructions: {
+        queryOptions: () => ({
+          queryKey: ['user', 'agentInstructions'],
+          queryFn: async () => ({ text: '' }),
+        }),
+        queryKey: () => ['user', 'agentInstructions'],
+      },
+      setAgentInstructions: { mutationOptions: () => ({ mutationFn: async () => ({ text: '' }) }) },
+    },
     // «Уведомления» of the settings (docs/plan/75, ВВ10): its own test covers it.
     notification: {
       settings: {

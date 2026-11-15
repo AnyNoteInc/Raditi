@@ -183,8 +183,6 @@ interface SettleContext {
    * `#interrupted`, the dialog stays open, and its queue goes next.
    */
   interrupt: boolean
-  /** The newest words asked for «Сначала план» (docs/plan/75, ВВ12): the answer is a plan. */
-  planned: boolean
   policyFlagged: boolean
   /**
    * The task wrote the production site and the write was not undone (legacy content path), or
@@ -315,23 +313,6 @@ export async function pressedInterrupt(db: Reader, taskId: string): Promise<bool
   if (!newest) return false
   const event = readFeedRow('feed.request', newest.payload)
   return event.type === 'feed.request' && event.kind === 'interrupt'
-}
-
-/** The newest words of the client ask for «Сначала план» (docs/plan/75, ВВ12). */
-export async function wordsPlanned(db: Reader, taskId: string): Promise<boolean> {
-  const rows = await db.taskEvent.findMany({
-    where: { taskId, type: 'feed.request' },
-    orderBy: { id: 'desc' },
-    take: 50,
-    select: { payload: true },
-  })
-  for (const row of rows) {
-    const event = readFeedRow('feed.request', row.payload)
-    if (event.type !== 'feed.request' || !('text' in event) || typeof event.text !== 'string')
-      continue
-    return 'plan' in event && event.plan === true
-  }
-  return false
 }
 
 export class PassSettlement {
@@ -588,7 +569,6 @@ export class PassSettlement {
               needsApproval: result.needs_approval,
               risk: result.risk,
               ...passObjectsOf(context),
-              ...(context.planned ? { plan: true as const } : {}),
             },
           },
     )
@@ -700,7 +680,6 @@ export class PassSettlement {
             needsApproval: result.needs_approval,
             risk: result.risk,
             ...objectsOf(context),
-            ...(context.planned ? { plan: true as const } : {}),
           },
         }
     return this.#transaction(async (tx, now) => {
@@ -1327,10 +1306,9 @@ export class PassSettlement {
     // Only a chat with the code goes on past what its browser did (docs/plan/61, §5.8).
     const window =
       needsRepository && needsBrowser ? { since: await this.#untoldSince(taskId) } : null
-    const [cancel, interrupt, planned, flagged, writes, standing, browser] = await Promise.all([
+    const [cancel, interrupt, flagged, writes, standing, browser] = await Promise.all([
       pressedCancel(db, taskId),
       pressedInterrupt(db, taskId),
-      wordsPlanned(db, taskId),
       db.taskEvent.count({ where: { taskId, type: 'llm.policy_flagged' } }),
       taskHasProductionWrites(db, taskId),
       db.taskCandidate.findFirst({
@@ -1354,7 +1332,6 @@ export class PassSettlement {
       browser,
       cancel,
       interrupt,
-      planned,
       policyFlagged: flagged > 0,
       productionWrites: writes,
       standing:

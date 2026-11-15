@@ -58,6 +58,7 @@ model User {
   taskPresence       TaskPresence[]
   chatNotifications  ChatNotification[]
   speechCalls        SpeechCall[]
+  agentInstructions  AgentInstructions?
 
   @@map("users")
 }
@@ -819,8 +820,6 @@ model TaskQueuedMessage {
   text        String
   /// Files of the words, bound to the task when they were queued; at most ten (CHECK).
   attachments String[] @default([]) @db.Uuid
-  /// «Сначала план» (docs/plan/75, ВВ12): the pass of these words only plans.
-  plan        Boolean  @default(false)
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -907,6 +906,18 @@ model SpeechCall {
 
   @@index([userId, createdAt])
   @@map("speech_calls")
+}
+
+/// The client's own instructions to the agent in every chat (docs/plan/76-agent-instructions.md,
+/// И1): 1–2000 characters (CHECK agent_instructions_text_check); no row — none.
+model AgentInstructions {
+  userId    String   @id @map("user_id") @db.Uuid
+  text      String
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("agent_instructions")
 }
 
 /// Journal of site-changing MCP calls (spec §11): a retry with the same idempotency key is not

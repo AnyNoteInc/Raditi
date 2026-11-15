@@ -320,8 +320,6 @@ export const composerText = Object.freeze({
   stop: 'Остановить',
   /** The field of a dialog that has ended. */
   finished: 'Чат завершён',
-  /** The ready requests under the greeting of «Новый чат» (docs/plan/75, ВВ24). */
-  suggestions: 'Примеры просьб',
 })
 
 /** The queue of a chat (docs/plan/75-chat-input-output.md, ВВ1–ВВ4). */

@@ -68,8 +68,6 @@ export async function queueDialogWords(
     requestId: string
     text: string
     attachments?: readonly string[]
-    /** «Сначала план» (ВВ12): the pass of these words only plans. */
-    plan?: boolean
   },
 ): Promise<{ id: string | null; repeated: boolean }> {
   const requestId = input.requestId.toLowerCase()
@@ -101,7 +99,6 @@ export async function queueDialogWords(
         requestId,
         text,
         attachments: attachments.attachments ?? [],
-        plan: input.plan === true,
       },
       select: { id: true },
     })

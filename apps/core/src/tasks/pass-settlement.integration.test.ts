@@ -2010,21 +2010,4 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       expect(await db.pushSubscription.count({ where: { userId: task.userId } })).toBe(0)
     })
   })
-
-  it('marks the answer of a pass of «Сначала план» as a plan (docs/plan/75, ВВ14)', async () => {
-    const task = await dialog()
-    const first = await db.taskEvent.findFirstOrThrow({
-      where: { taskId: task.taskId, type: 'feed.request' },
-    })
-    await db.taskEvent.update({
-      where: { id: first.id },
-      data: { payload: { ...(first.payload as object), plan: true } },
-    })
-    expect(await settlement().settle(ref(task), completed({ change_type: 'none' }))).toBe('moved')
-    const result = await db.taskEvent.findFirstOrThrow({
-      where: { taskId: task.taskId, type: 'feed.result' },
-    })
-    expect(result.payload).toMatchObject({ plan: true, next: 'awaiting_user' })
-    expect(await db.taskCandidate.count({ where: { taskId: task.taskId } })).toBe(0)
-  })
 })
