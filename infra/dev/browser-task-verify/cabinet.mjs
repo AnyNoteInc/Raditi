@@ -12,7 +12,7 @@ import { access } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 
-import { trpcProcedures } from '../release-verify/stand.mjs'
+import { trpcProcedures } from './stand.mjs'
 
 const TEXT = Object.freeze({
   canvas: 'Страница сайта в браузере задачи',
@@ -36,9 +36,6 @@ const TEXT = Object.freeze({
   /** The field of «Новый чат» and its button. */
   field: 'Сообщение',
   send: 'Отправить',
-  /** The pill at the field: «Проект для этого чата: <name of the project chosen>» (К6). */
-  project: /^Проект для этого чата: /,
-  noProject: 'Без проекта',
   /** The rows of the dialog: the card of the browser's request is one of them. */
   feed: 'Сообщения чата',
 })
@@ -278,30 +275,17 @@ async function loadTab(stand, context, taskId) {
 }
 
 /**
- * «Новый чат» of the stand's project in a new tab, as a link with `?project=` opens it: the client
- * writes `words` and sends them; the page starts the chat itself (`task.create` with the id it
- * invented) and moves to it, watching it from before its browser was there (И3). What the tab
- * counts starts with the screen of «Новый чат».
+ * «Новый чат» in a new tab: the client writes `words` and sends them; the page starts the chat
+ * itself (`task.create` with the id it invented, no project — plan 83) and moves to it, watching it
+ * from before its browser was there (И3). What the tab counts starts with the screen of «Новый чат».
  */
 async function startDialog(stand, context, words) {
   const tab = await newTab(stand, context)
   const { page } = tab
-  await page.goto(`${stand.webUrl}/chats/new?project=${stand.state.siteId}`, {
+  await page.goto(`${stand.webUrl}/chats/new`, {
     waitUntil: 'domcontentloaded',
     timeout: 180_000,
   })
-  // The pill speaks once the list of projects is in; words sent before that start a chat without
-  // a project, and nothing closes sending there (К6).
-  await stand.rt.until(
-    'the pill at the field to name the project of the address',
-    async () => {
-      const name = await page
-        .getByRole('button', { name: TEXT.project })
-        .getAttribute('aria-label', { timeout: 10_000 })
-      return name !== null && !name.endsWith(`: ${TEXT.noProject}`)
-    },
-    { timeoutMs: 120_000, intervalMs: 500 },
-  )
   // The screen comes drawn by the server: words written before React took the field over may be
   // lost, and «Отправить» stays closed until the field holds them — written again until it opens.
   const field = page.getByRole('textbox', { name: TEXT.field, exact: true })

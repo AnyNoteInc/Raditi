@@ -4,7 +4,7 @@
 // turn (programs.mjs): the program runs again from the start over the tool calls and answers this
 // request carries, and its next call — or its final answer — is streamed back as Z.ai streams.
 // Every chat request is kept whole (`requests`): the stand looks there for what must never reach
-// a model — the password of the site and its cookies (scenario D, L).
+// a model — the secrets of the platform (scenario L).
 import { appendFileSync } from 'node:fs'
 import { createServer as createHttpsServer } from 'node:https'
 

@@ -1,13 +1,14 @@
-// A task in the cloud browser end to end on this machine (docs/plan/57-browser-tasks.md, §5): a site
-// added without access to its files, a task with two images and a PDF, the agent in the site's
-// own admin pages through the `web` tools, the client signing in in the same browser — over the
-// stream of the gateway and in the cabinet —, the post published once and checked on the site.
-// The real apps core (without git), llm, mcp, preview (the stream gateway), browser (the worker)
-// and web, the real OpenCode CLI in its sandbox on a scripted synthetic Z.ai, real Chromium in its
-// containers, a synthetic WordPress 7.x. Disposable services only; never the repository .env,
-// the dev infrastructure, a real model or a real key. The scenarios are in scenarios.mjs.
+// The browser of chats end to end on this machine (docs/plan/57-browser-tasks.md, §5; since
+// docs/plan/83-remove-projects.md the chats without a project only): the clients and their files,
+// a chat that opens no browser until `web_*`, the open internet and its refusals, the client at the
+// address bar of the same browser — over the stream of the gateway and in the cabinet —, eight
+// browsers of a workspace, isolation, no secret of the platform anywhere, pages and documents of
+// the agent and a site of pages. The real apps core, llm, mcp, preview (the stream gateway and the
+// pages listener), browser (the worker) and web, the real OpenCode CLI in its sandbox on a scripted
+// synthetic Z.ai, real Chromium in its containers. Disposable services only; never the repository
+// .env, the dev infrastructure, a real model or a real key. The scenarios are in scenarios.mjs.
 //
-//   pnpm verify:browser-task [-- --no-build] [--keep] [--web-dev] [--only A,F]
+//   pnpm verify:browser-task [-- --no-build] [--keep] [--web-dev] [--only P,Q]
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
@@ -17,36 +18,24 @@ import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { lockCopy } from '../billing-verify/verify-billing.mjs'
-import {
-  callerEnv,
-  createRuntime,
-  exchange,
-  freeLoopbackPort,
-  startProcess,
-} from '../release-verify/runtime.mjs'
+import { buildCopy, buildImages, copyDirectory } from './build.mjs'
+import { startModel } from './model.mjs'
+import { callerEnv, createRuntime, exchange, freeLoopbackPort, startProcess } from './runtime.mjs'
+import { runScenarios } from './scenarios.mjs'
 import {
   createCertificates,
   startOpenbao,
   startPostgres,
   startRedis,
   startS3,
-} from '../release-verify/services.mjs'
+} from './services.mjs'
 import {
+  CORE_WITHOUT,
   OPENBAO_IMAGE,
   POSTGRES_IMAGE,
   PULLED_TAGS,
   REDIS_IMAGE,
   S3_IMAGE,
-} from '../release-verify/stand.mjs'
-import { buildCopy, buildImages, copyDirectory } from './build.mjs'
-import { startModel } from './model.mjs'
-import { runScenarios } from './scenarios.mjs'
-import { installSite, startSite } from './site.mjs'
-import {
-  CORE_WITHOUT,
-  MARIADB_IMAGE,
-  WORDPRESS_IMAGE,
-  WPCLI_IMAGE,
   appEnvironment,
   scenariosToRun,
   standNames,
@@ -76,15 +65,7 @@ async function preflight() {
   const info = await rt.docker(['info', '--format', '{{.OperatingSystem}}'])
   if (!/Docker Desktop/.test(info.output))
     throw new Error('This stand runs on Docker Desktop (macOS): see README, «Что не проверено»')
-  for (const image of [
-    POSTGRES_IMAGE,
-    REDIS_IMAGE,
-    S3_IMAGE,
-    OPENBAO_IMAGE,
-    WORDPRESS_IMAGE,
-    MARIADB_IMAGE,
-    WPCLI_IMAGE,
-  ])
+  for (const image of [POSTGRES_IMAGE, REDIS_IMAGE, S3_IMAGE, OPENBAO_IMAGE])
     if ((await rt.docker(['image', 'inspect', image], { allowFailure: true })).code !== 0)
       throw new Error(
         `The pinned image ${image} is missing locally; pull it first (docker pull ${PULLED_TAGS[image] ?? image})`,
@@ -131,7 +112,6 @@ async function main(options, owned) {
   for (const name of [
     'vault',
     's3',
-    'site',
     'web',
     'core',
     'mcp',
@@ -175,13 +155,6 @@ async function main(options, owned) {
     'PASS migrations and seeds of the tree on the stand database (target printed as the environment)',
   )
 
-  rt.setStage('the synthetic site')
-  const site = await startSite(rt, names, { directory, port: ports.site })
-  const installed = await installSite(rt, site)
-  console.log(
-    `PASS synthetic site: WordPress ${installed.version} with MariaDB at ${site.origin} (published on a loopback port), an editor and a contributor of the run, the stand's must-use plugins ${installed.plugins.join(', ')}`,
-  )
-
   rt.setStage('the synthetic Z.ai')
   const model = await startModel({
     key: certificates.key,
@@ -194,9 +167,6 @@ async function main(options, owned) {
   const secrets = {
     metrics: rt.secret(randomBytes(24).toString('hex')),
     auth: rt.secret(randomBytes(36).toString('base64url')),
-    previewSession: rt.secret(randomBytes(36).toString('base64url')),
-    pagesCookie: rt.secret(randomBytes(32).toString('hex')),
-    pagesSigning: rt.secret(randomBytes(32).toString('hex')),
     workerToken: rt.secret(randomBytes(36).toString('base64url')),
     pagesCookie: rt.secret(randomBytes(36).toString('base64url')),
     pagesSigning: rt.secret(randomBytes(36).toString('base64url')),
@@ -215,7 +185,6 @@ async function main(options, owned) {
     caFile: certificates.caFile,
     socket,
     images,
-    siteTarget: site.target,
   }
 
   rt.setStage('the platform processes')
@@ -310,7 +279,6 @@ async function main(options, owned) {
     modules,
     names,
     ports,
-    site,
     model,
     vault,
     processes,
@@ -416,16 +384,16 @@ const lines = (output) =>
 /**
  * Everything of the run: the processes of the platform (the worker closes its sessions as it
  * stops), the synthetic Z.ai, then every container, network and volume — the stand's by its label,
- * the sandboxes of the turns by the site of the run, the browser sessions by the label of the
- * worker — and the check that nothing is left. What the platform should have removed itself is
+ * the sandboxes of the turns and the browser sessions by the id of each chat of the run — and the
+ * check that nothing is left. What the platform should have removed itself is
  * named apart: a passed run must have none of it.
  */
 async function cleanup(owned) {
   const quiet = { allowFailure: true, cleanup: true }
   // What core and the worker leave of the run before they stop: they must leave nothing.
   const filters = [`label=${names.label}`]
-  // A chat without a project goes by its own id wherever a task on a site goes by the site's.
-  for (const scope of [owned.siteId, ...owned.chats].filter(Boolean))
+  // A chat goes by its own id: the label `siteId` of the sandboxes names the key of its lease.
+  for (const scope of owned.chats)
     for (const label of [
       'io.raditi.sandbox.siteId',
       'io.raditi.gateway.siteId',
