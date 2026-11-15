@@ -1,0 +1,138 @@
+name: Browser
+
+# The cloud browser of chats (docs/plan/57-browser-tasks.md; plan 83 left only it of the previews'
+# workflow) on a real daemon, under runc: the containers of a browser session behind its egress
+# proxy, the browser worker with Playwright, the cloud browser on a local Chromium. Local fixtures
+# only: no repository secrets, no real site.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/browser.yml
+      - .github/actions/setup/**
+      - .nvmrc
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - packages/domain/**
+      - packages/sandbox-providers/**
+      - packages/browser-providers/**
+      - apps/browser/**
+      - packages/browser-link/**
+      - infra/preview/**
+      - infra/sandbox/watchdog.mjs
+      - infra/sandbox/host-firewall.mjs
+      # The egress proxy of a chat's browser session (docs/plan/57-browser-tasks.md, Б11).
+      - infra/sandbox/client-egress.mjs
+      - infra/sandbox/Dockerfile
+      - packages/observability/**
+      - packages/service-runtime/**
+      - packages/app-bootstrap/**
+      - packages/ip-address/**
+      - packages/db/**
+  workflow_dispatch:
+
+concurrency:
+  group: browser-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  browser-docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # The engine of the sandbox VM (spec §8): fixed addresses on a subnet Docker picks need
+      # Docker Engine 29.1, and the runner image ships 28.0.4 (agent-driver.yml).
+      SANDBOX_DOCKER_VERSION: 29.5.2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup toolchain
+        uses: ./.github/actions/setup
+      - name: Docker Engine of the sandbox VM
+        run: |
+          key=$(mktemp)
+          curl -fsSL --retry 3 https://download.docker.com/linux/ubuntu/gpg -o "$key"
+          fingerprint=$(gpg --show-keys --with-colons "$key" | awk -F: '$1 == "fpr" { print $10; exit }')
+          if [ "$fingerprint" != 9DC858229FC7DD38854AE2D88D81803C0EBFCD88 ]; then
+            echo "Unexpected fingerprint of the key of Docker's repository: $fingerprint" >&2
+            exit 1
+          fi
+          sudo install -D -m 0644 "$key" /etc/apt/keyrings/docker.asc
+          codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $codename stable" \
+            | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+          sudo apt-get -q -o Acquire::Retries=3 update
+          package=$(apt-cache madison docker-ce | awk '{ print $3 }' \
+            | grep -F ":$SANDBOX_DOCKER_VERSION-" | head -n 1)
+          if [ -z "$package" ]; then
+            echo "Docker's repository has no docker-ce $SANDBOX_DOCKER_VERSION for $codename" >&2
+            exit 1
+          fi
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get -q -y -o Acquire::Retries=3 install \
+            --no-install-recommends --allow-downgrades --allow-change-held-packages \
+            "docker-ce=$package" "docker-ce-cli=$package"
+      # The runtime takes images pinned by digest only, and a local build has a repository digest
+      # only in the containerd image store.
+      - name: Docker with the containerd image store
+        run: |
+          daemon=/etc/docker/daemon.json
+          current=$(sudo cat "$daemon" 2>/dev/null || echo '{}')
+          printf '%s' "$current" \
+            | jq '.features = ((.features // {}) + {"containerd-snapshotter": true})' \
+            | sudo tee "$daemon" >/dev/null
+          sudo systemctl restart docker
+          docker info --format '{{.DriverStatus}}' | grep -q io.containerd.snapshotter
+          test "$(docker version --format '{{.Server.Version}}')" = "$SANDBOX_DOCKER_VERSION"
+      - name: Build the images of the browser session
+        run: |
+          for target in tools browser; do
+            docker build -q -f infra/preview/Dockerfile --target "$target" \
+              -t "raditi-preview-$target:local" infra/preview
+          done
+          docker build -q -f infra/sandbox/Dockerfile --target network-guard \
+            -t raditi-network-guard:local .
+          # The egress proxy of a chat's browser session.
+          docker build -q -f infra/sandbox/Dockerfile --target client-egress \
+            -t raditi-client-egress:local .
+      # The files of the platform on a real file system, as the helper runs them: root with CHOWN
+      # only (packages/sandbox-providers/src/preview/containers.ts). `pnpm test:infra` skips these
+      # tests without root and off Linux, so this step fails when one of them is skipped here.
+      - name: Files of the platform as the helper runs them
+        run: |
+          set -o pipefail
+          docker run --rm --network none --user 0:0 --cap-drop ALL --cap-add CHOWN \
+            --read-only --tmpfs /tmp -v "$PWD/infra:/w/infra:ro" -w /w \
+            --entrypoint node raditi-preview-tools:local \
+            --test --test-reporter=tap infra/preview/files.test.mjs | tee "$RUNNER_TEMP/files.tap"
+          if grep -E '# SKIP needs' "$RUNNER_TEMP/files.tap"; then exit 1; fi
+      # The containers of a task's browser session (docs/plan/57-browser-tasks.md, Б10, Б11):
+      # Chromium behind its egress proxy, a local site of the host and the refusals around it.
+      - name: Browser session runtime against the real daemon
+        env:
+          RADITI_BROWSER_DOCKER_TESTS: '1'
+        run: |
+          pnpm --filter @repo/sandbox-providers exec vitest run \
+            src/browser-session/runtime.integration.test.ts
+      # The browser worker (apps/browser, Б10–Б17) with that runtime and Playwright: a local site
+      # through the stream, a click of the client, the agent's observation, a clean close. The worker
+      # imports @repo/db, whose client is generated here (offline, no database).
+      - name: Browser worker against the real daemon
+        env:
+          RADITI_BROWSER_DOCKER_TESTS: '1'
+        run: |
+          pnpm db:generate
+          pnpm --filter browser exec vitest run src/browser-worker.docker.test.ts
+      # The cloud browser of a task (docs/plan/57-browser-tasks.md, Б13–Б22) on a Chromium of the
+      # runner itself, no Docker: tabs, screencast, secret fields, uploads, dialogs, the policy.
+      - name: Cloud browser session on a local Chromium
+        env:
+          RADITI_BROWSER_LOCAL_TESTS: '1'
+        run: |
+          pnpm --filter e2e exec playwright install --with-deps chromium
+          pnpm --filter @repo/browser-providers exec vitest run \
+            src/cloud/cloud-browser.integration.test.ts
