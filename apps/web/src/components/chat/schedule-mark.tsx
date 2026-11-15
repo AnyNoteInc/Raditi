@@ -13,12 +13,32 @@ export const scheduleLabelText = (schedule: ChatScheduleLabel): string =>
   `${scheduleChatText.trigger[schedule.trigger]} · ${schedule.name}`
 
 /**
- * The line under the name of a chat of a run (Зп43): how the run began and the name of its task,
- * a link to the task while it is there; a deleted task leaves its name without one (Зп23). One
- * quiet line of 13 px: under the name it keeps the head within its 44 px.
+ * What the line under the name of a chat shows: «По расписанию» alone when the chat is named as
+ * its task — the name stands right above it —, the name of the task too when the chat was renamed.
  */
-export function ScheduleMark({ schedule }: { schedule: ChatScheduleLabel }) {
-  const text = scheduleLabelText(schedule)
+export function scheduleMarkShown(schedule: ChatScheduleLabel, chatTitle?: string): string {
+  return chatTitle !== undefined && chatTitle.trim() === schedule.name.trim()
+    ? scheduleChatText.trigger[schedule.trigger]
+    : scheduleLabelText(schedule)
+}
+
+/**
+ * The line under the name of a chat of a run (Зп43): how the run began and the name of its task,
+ * a link to the task while it is there; a deleted task leaves its name without one (Зп23). The
+ * name of the task is not said twice: under a chat named as its task the line is «По расписанию»
+ * or «Запуск вручную» alone, and the link keeps the whole label for a screen reader. One quiet
+ * line of 13 px: under the name it keeps the head within its 44 px.
+ */
+export function ScheduleMark({
+  schedule,
+  chatTitle,
+}: {
+  schedule: ChatScheduleLabel
+  /** The name of the chat above the line. */
+  chatTitle?: string
+}) {
+  const text = scheduleMarkShown(schedule, chatTitle)
+  const whole = scheduleLabelText(schedule)
   const common = {
     display: 'inline-flex',
     alignItems: 'center',
@@ -47,6 +67,8 @@ export function ScheduleMark({ schedule }: { schedule: ChatScheduleLabel }) {
     <Box
       component={Link}
       href={scheduledTaskHref(schedule.id)}
+      // The words shown start the name (WCAG 2.5.3); the task is named even when not shown.
+      {...(text === whole ? {} : { 'aria-label': whole })}
       data-schedule-mark=""
       sx={{
         ...common,

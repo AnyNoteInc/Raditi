@@ -52,3 +52,67 @@ export function scheduleDetail(
 ): ScheduleDetail {
   return { ...scheduleItem(patch), runs, ...patch }
 }
+
+// ---------------------------------------------------------------------------------------------
+// The width of a screen in jsdom
+// ---------------------------------------------------------------------------------------------
+
+/** The media of a phone and of a wide screen, as MUI writes `down('sm')` and `up('md')`. */
+export const PHONE_MEDIA = '(max-width:599.95px)'
+export const WIDE_MEDIA = '(min-width:900px)'
+
+/**
+ * What the styles in the page say of an element under a media — or outside any, with `null`:
+ * jsdom lays nothing out, reads no media query and knows no grid placement, so a test of what a
+ * phone or a wide screen shows reads the rules themselves. The declarations of every rule whose
+ * selector is a class of the element, joined.
+ */
+export function mediaStyleOf(element: Element, media: string | null): string {
+  const css = [...document.querySelectorAll('style')].map((style) => style.textContent).join('\n')
+  // Each `@media …{…}` cut out of the text, with its own body: `.a{…}.b{…}`.
+  const blocks: { media: string; body: string }[] = []
+  let rest = ''
+  let at = 0
+  for (const found of css.matchAll(/@media ([^{]+)\{/g)) {
+    const start = found.index
+    if (start < at) continue
+    rest += css.slice(at, start)
+    let depth = 1
+    let end = start + found[0].length
+    while (depth > 0 && end < css.length) {
+      if (css[end] === '{') depth += 1
+      else if (css[end] === '}') depth -= 1
+      end += 1
+    }
+    blocks.push({ media: found[1] ?? '', body: css.slice(start + found[0].length, end - 1) })
+    at = end
+  }
+  rest += css.slice(at)
+  const bodies =
+    media === null ? [rest] : blocks.filter((block) => block.media === media).map((b) => b.body)
+  const declarations: string[] = []
+  for (const body of bodies)
+    for (const rule of body.matchAll(/\.([\w-]+)\{([^}]*)\}/g)) {
+      const [, className, text] = rule
+      if (className !== undefined && element.classList.contains(className))
+        declarations.push(text ?? '')
+    }
+  return declarations.join(';')
+}
+
+/**
+ * Makes `useMediaQuery` answer as a phone does: the queries of MUI's `down('sm')` match, the
+ * others do not. Undone by `vi.unstubAllGlobals()`.
+ */
+export function phoneMatchMedia(query: string): MediaQueryList {
+  return {
+    matches: query.includes('max-width:599.95px'),
+    media: query,
+    onchange: null,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    addListener: () => undefined,
+    removeListener: () => undefined,
+    dispatchEvent: () => false,
+  }
+}

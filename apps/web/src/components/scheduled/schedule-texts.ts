@@ -92,6 +92,7 @@ export const schedulePageTexts = Object.freeze({
   notifyOff: 'О выполнении не сообщаем — только о вопросах и сбоях',
   cost: 'Стоимость',
   runs: 'Запуски',
+  /** Said only when the page shows as many runs as it keeps: fewer are all there are. */
   runsNote: 'Последние 50 запусков.',
   noRuns: 'Задача ещё не запускалась.',
   bySchedule: 'по расписанию',
@@ -106,6 +107,11 @@ export const schedulePageTexts = Object.freeze({
    */
   missedSince: (count: number, from: string) =>
     `${plural(count, 'Пропущен', 'Пропущены', 'Пропущено')} ${count} ${plural(count, 'запуск', 'запуска', 'запусков')}, начиная с ${from}`,
+  /** The visible label of the switch of the page, beside the state of the task (Зп6). */
+  switchOn: 'Включена',
+  switchPaused: 'На паузе',
+  /** Off for a reason the state line names: completed, or stopped by the platform. */
+  switchOff: 'Выключена',
   notFound: 'Задачи уже нет.',
   notFoundLead: 'Её удалили, или она не ваша.',
   toList: 'К запланированным задачам',
@@ -139,7 +145,7 @@ export const scheduleDialogTexts = Object.freeze({
   leaveKeep: 'Остаться',
   leaveGo: 'Перейти',
   warning:
-    'Задача выполняется без вас: агент не будет спрашивать подтверждения, пока работает. В админке сайта он только читает, страницы из раздела «Страницы» не публикует и не меняет, навыки агента с ключом не вызывает, а файлы сайта меняет в предпросмотре — на сайт изменения попадут после вашего выпуска. Каждый запуск тратит кредиты.',
+    'Задача выполняется без вас: агент не будет спрашивать подтверждения, пока работает. В админке сайта он только читает, страницы из раздела «Страницы» не публикует и не меняет, к подключённым сервисам, которым нужен ваш ключ доступа, не обращается, а файлы сайта меняет в предпросмотре — на сайт изменения попадут после вашего выпуска. Каждый запуск тратит кредиты.',
   when: 'Когда запускать',
   schedule: (index: number) => `Время запуска ${index}`,
   frequency: 'Как часто',

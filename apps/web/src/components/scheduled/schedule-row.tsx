@@ -36,7 +36,10 @@ const runSign: Readonly<Record<ScheduledRunState['kind'], { icon: AppIconName; t
     skipped: { icon: 'forward', tone: 'text.secondary' },
   })
 
-/** What came of a run: a sign and its words — the word is never the colour alone. */
+/**
+ * What came of a run: a sign and its words — the word is never the colour alone. Words that wrap
+ * keep the sign at their first line: it stands in a box one line high.
+ */
 export function RunStateMark({ state, text }: { state: ScheduledRunState; text?: string }) {
   const sign = runSign[state.kind]
   return (
@@ -44,13 +47,18 @@ export function RunStateMark({ state, text }: { state: ScheduledRunState; text?:
       component="span"
       sx={{
         display: 'inline-flex',
-        alignItems: 'center',
+        alignItems: 'flex-start',
         gap: 0.75,
         color: sign.tone,
         minWidth: 0,
       }}
     >
-      <Box component="span" aria-hidden sx={{ display: 'flex', flexShrink: 0 }}>
+      <Box
+        component="span"
+        aria-hidden
+        data-run-sign=""
+        sx={{ display: 'flex', alignItems: 'center', height: '1lh', flexShrink: 0 }}
+      >
         <AppIcon name={sign.icon} size={15} />
       </Box>
       <Box component="span" sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
@@ -142,9 +150,9 @@ export function ScheduleRow({
           gridRow: 1,
           display: 'flex',
           alignItems: 'center',
-          gap: 0.25,
+          gap: 0.5,
+          // Out of the height of the first line; the frame of «⋯» on the right edge of the row.
           my: -0.75,
-          mr: -1,
         }}
       >
         <ScheduleSwitch task={item} actions={actions} />

@@ -212,7 +212,8 @@ function AgentMessage({
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 0.5 }}>{actions}</Box>
       ) : null}
       {copy ? (
-        <Box sx={{ display: 'flex', ml: -1, mt: -0.5 }}>
+        // The icon of the 44 px button on the edge of the words, where it stood at 36 px.
+        <Box sx={{ display: 'flex', ml: -1.5, mt: -1 }}>
           <CopyButton text={copy} />
         </Box>
       ) : null}
@@ -426,7 +427,8 @@ function BubbleView({
           {text}
         </Typography>
       </Box>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: -0.5 }}>
+      {/* Its buttons are 44 px for a finger: the row moves up by the half of what they grew. */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: -1 }}>
         <Typography
           component="time"
           dateTime={at}
@@ -442,7 +444,7 @@ function BubbleView({
             size="small"
             onClick={onEdit}
             startIcon={<AppIcon name="pencil" size={16} />}
-            sx={{ minHeight: 36, color: 'text.secondary', fontSize: 13 }}
+            sx={{ minHeight: 44, color: 'text.secondary', fontSize: 13 }}
           >
             {messageEditText.edit}
           </Button>

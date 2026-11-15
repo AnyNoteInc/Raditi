@@ -192,14 +192,17 @@ export function ScheduleMoreMenu({
         aria-expanded={anchor !== null}
         onClick={(event) => setAnchor(event.currentTarget)}
         sx={{
-          width: 44,
-          height: 44,
-          borderRadius: '12px',
-          color: 'text.secondary',
-          '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
+          // Framed as «⋯» of a page on «Страницы»: three dots alone read as a disabled control.
+          width: 40,
+          height: 40,
+          borderRadius: '10px',
+          border: 1,
+          borderColor: 'divider',
+          // A target of 44 px for a finger, drawn at 40.
+          '&::before': { content: '""', position: 'absolute', inset: -2 },
         }}
       >
-        <AppIcon name="more" size={20} />
+        <AppIcon name="more" size={18} />
       </IconButton>
       <Menu
         anchorEl={anchor}

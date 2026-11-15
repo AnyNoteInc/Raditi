@@ -320,7 +320,7 @@ function DialogHead({
               ) : null}
             </Box>
             {/* A run of a scheduled task: how it began and its task, under the name (Зп43). */}
-            {schedule !== null ? <ScheduleMark schedule={schedule} /> : null}
+            {schedule !== null ? <ScheduleMark schedule={schedule} chatTitle={title} /> : null}
           </Box>
         )}
       </Box>

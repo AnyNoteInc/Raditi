@@ -206,12 +206,15 @@ test('«Новый чат» stays within reach under a long list on a phone', as
   await page.goto('/chats')
   await expect(chats(page).getByText(EMPTY_LIST)).toBeVisible()
 
-  // The run has no chats: the list is made long here, inside its own body.
-  await chats(page).evaluate((list) => {
-    const filler = document.createElement('div')
-    filler.style.height = '3000px'
-    list.lastElementChild?.append(filler)
-  })
+  // The run has no chats: the list is made long here, inside its own body — after the words of
+  // the empty list. Not at the end of the column: «Архив» stands there, after the action.
+  await chats(page)
+    .getByText(EMPTY_LIST)
+    .evaluate((words) => {
+      const filler = document.createElement('div')
+      filler.style.height = '3000px'
+      words.after(filler)
+    })
   const scrollable = await page.evaluate(
     () => document.documentElement.scrollHeight - window.innerHeight,
   )

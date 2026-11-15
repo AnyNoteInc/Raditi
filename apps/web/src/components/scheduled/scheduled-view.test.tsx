@@ -2,11 +2,20 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ScheduleItem } from './schedule-model'
 import { ScheduledView } from './scheduled-view'
-import { CHAT_ID, scheduleItem, scheduleRun, SCHEDULE_ID, SITE_ID } from './testing'
+import {
+  CHAT_ID,
+  mediaStyleOf,
+  PHONE_MEDIA,
+  phoneMatchMedia,
+  scheduleItem,
+  scheduleRun,
+  SCHEDULE_ID,
+  SITE_ID,
+} from './testing'
 
 const { listSchedules, listProjects, setEnabled, runNow, remove, costHint, push, pathname } =
   vi.hoisted(() => ({
@@ -80,6 +89,16 @@ beforeEach(() => {
   pathname.current = '/scheduled'
   list([])
 })
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+/** The box of «Новая задача ▾» under the tabs. */
+const newTaskBox = () => {
+  const box = screen.getByRole('button', { name: 'Новая задача' }).closest('[data-new-task]')
+  if (!(box instanceof HTMLElement)) throw new Error('no box of «Новая задача»')
+  return box
+}
 
 describe('«Запланированные задачи» (plan 82, Зп2)', () => {
   it('names the section with what it is, and has «Ваши» and «Шаблоны»', async () => {
@@ -96,6 +115,12 @@ describe('«Запланированные задачи» (plan 82, Зп2)', () 
     )
     expect(await screen.findByRole('tooltip')).toHaveTextContent(
       'Агент выполняет их сам по расписанию',
+    )
+    // «i» beside the title says there is something to read at rest, and leads to it by keyboard.
+    expect(screen.getByRole('heading', { level: 1 })).toHaveAccessibleName('Запланированные задачи')
+    expect(screen.getByRole('button', { name: 'Что это за раздел' })).toHaveAttribute(
+      'aria-describedby',
+      screen.getByRole('tooltip').id,
     )
   })
 
@@ -139,6 +164,34 @@ describe('before the first task (Зп4)', () => {
     // No tools over an empty list.
     expect(screen.queryByRole('button', { name: 'Фильтр задач' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Порядок задач' })).toBeNull()
+    // On a phone the list's own «Настроить вручную» stands for «Новая задача», right under it:
+    // no second orange button of the whole width. A wide screen keeps it in the corner.
+    expect(mediaStyleOf(newTaskBox(), PHONE_MEDIA)).toContain('display:none')
+  })
+
+  it('keeps «Новая задача» on a phone once there is a task', async () => {
+    list([scheduleItem()])
+    show(<ScheduledView userId={USER} tab="yours" />)
+    await screen.findByRole('list', { name: 'Ваши запланированные задачи' })
+    expect(mediaStyleOf(newTaskBox(), PHONE_MEDIA)).not.toContain('display:none')
+  })
+
+  it('gives the focus to «Настроить вручную» on a phone when the last task is deleted', async () => {
+    vi.stubGlobal('matchMedia', phoneMatchMedia)
+    list([scheduleItem({ name: 'Последняя' })])
+    show(<ScheduledView userId={USER} tab="yours" />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Действия с задачей «Последняя»' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Удалить' }))
+    list([])
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Удалить задачу «Последняя»?' })).getByRole(
+        'button',
+        { name: 'Удалить' },
+      ),
+    )
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Настроить вручную' })).toHaveFocus(),
+    )
   })
 
   it('opens the window of a template filled in, nothing made before «Создать» (Зп9)', async () => {
@@ -342,12 +395,33 @@ describe('the tools of «Ваши» (Зп3)', () => {
         .getAllByRole('button')
         .map((each) => each.textContent),
     ).toEqual(['Все7', 'Включены4', 'На паузе3', 'Завершены0', 'С ошибкой1'])
+    const projects = screen.getByRole('group', { name: 'Проект' })
+    // On a phone each row is one line that scrolls sideways, its chips of their own width.
+    for (const group of [states, projects]) {
+      const phone = mediaStyleOf(group, PHONE_MEDIA)
+      expect(phone).toContain('flex-wrap:nowrap')
+      expect(phone).toContain('overflow-x:auto')
+      expect(phone).toContain('scrollbar-width:none')
+      for (const chip of within(group).getAllByRole('button'))
+        expect(getComputedStyle(chip).flexShrink).toBe('0')
+    }
+    // The two rows are one control: a chip of a project is drawn as a chip of a state is.
+    const look = (button: HTMLElement) =>
+      [...button.classList].filter((each) => /^MuiButton-(color\w+|outlined|contained)$/.test(each))
+    const chosen = within(states).getByRole('button', { name: 'Все7' })
+    const other = within(states).getByRole('button', { name: 'Включены4' })
+    expect(look(within(projects).getByRole('button', { name: /^Все проекты/ }))).toEqual(
+      look(chosen),
+    )
+    expect(look(within(projects).getByRole('button', { name: /^Без проекта/ }))).toEqual(
+      look(other),
+    )
+    expect(look(chosen)).not.toEqual(look(other))
     fireEvent.click(within(states).getByRole('button', { name: 'На паузе3' }))
     const rows = within(
       screen.getByRole('list', { name: 'Ваши запланированные задачи' }),
     ).getAllByRole('listitem')
     expect(rows).toHaveLength(3)
-    const projects = screen.getByRole('group', { name: 'Проект' })
     // The counts of the projects follow the state chosen: the task without one is not paused.
     fireEvent.click(within(projects).getByRole('button', { name: 'Без проекта0' }))
     expect(screen.getByText('Ничего не нашлось.')).toBeInTheDocument()

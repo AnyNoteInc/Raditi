@@ -110,7 +110,7 @@ describe('the card of a scheduled task the agent created (docs/plan/82, Зп35)'
     expect(shown.getByText('Следующий запуск: завтра в 8:00')).toBeTruthy()
     expect(
       shown.getByText(
-        'Проект «Кофейня «Крошка»» · Размышление: низкое · Уведомит, когда выполнится',
+        'Проект: Кофейня «Крошка» · Размышление: низкое · Уведомит, когда выполнится',
       ),
     ).toBeTruthy()
     // Short instructions stand in the card as written.

@@ -141,6 +141,22 @@ describe('the choice of a project', () => {
     }
   })
 
+  it('stands its sheet over the window it is opened from, as a menu does', async () => {
+    // The window of a scheduled task is a dialog the whole screen on a phone (z-index 1300): a
+    // sheet at the drawer's 1200 opened under it, unseen and out of reach.
+    narrow.value = true
+    try {
+      show([project(1, 'Кофейня', 'ready')])
+      open()
+      const sheet = await screen.findByRole('dialog', { name: 'Проект для этого чата' })
+      const layer = sheet.closest<HTMLElement>('.MuiModal-root')
+      expect(layer).not.toBeNull()
+      expect(getComputedStyle(layer!).zIndex).toBe('1300')
+    } finally {
+      narrow.value = false
+    }
+  })
+
   it('says a press on what is shown too: «Без проекта» is a choice of the client', async () => {
     const onChange = show([project(1, 'Кофейня', 'ready')])
     open()

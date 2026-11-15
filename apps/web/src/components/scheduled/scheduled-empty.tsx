@@ -4,6 +4,7 @@ import type { ScheduleTemplate } from '@repo/domain/schedule'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Typography from '@mui/material/Typography'
+import type { Ref } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { nbsp } from '@/lib/nbsp'
@@ -23,10 +24,13 @@ export function ScheduledEmpty({
   onByHand,
   onInChat,
   onTemplate,
+  byHandRef,
 }: {
   onByHand: (opener: HTMLElement) => void
   onInChat: () => void
   onTemplate: (template: ScheduleTemplate, opener: HTMLElement) => void
+  /** «Настроить вручную», for the focus of a list that has just lost its last task. */
+  byHandRef?: Ref<HTMLButtonElement>
 }) {
   return (
     <Box
@@ -75,6 +79,7 @@ export function ScheduledEmpty({
         }}
       >
         <Button
+          ref={byHandRef}
           variant="contained"
           onClick={(event) => onByHand(event.currentTarget)}
           startIcon={<AppIcon name="plus" size={16} />}

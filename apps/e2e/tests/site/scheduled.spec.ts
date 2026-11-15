@@ -103,10 +103,14 @@ for (const [name, width, height] of [
     await expect(page.getByRole('button', { name: 'Порядок задач' })).toHaveCount(0)
     await expectNoSidewaysScroll(page)
     if (width < 600) {
-      // «Новая задача» the whole width under the tabs on a phone (Зп2).
-      const button = await newTask(page).boundingBox()
+      // On a phone the empty list's own «Настроить вручную» takes the whole width, and stands
+      // for «Новая задача»: no second orange button of the whole width for the same (Зп4).
+      await expect(newTask(page)).toBeHidden()
+      const button = await page.getByRole('button', { name: 'Настроить вручную' }).boundingBox()
       const main = await page.locator('#application-content').boundingBox()
       expect(button && main && button.width).toBeGreaterThan((main?.width ?? 0) - 48)
+    } else {
+      await expect(newTask(page)).toBeVisible()
     }
 
     await test.step('the heading says what the section is', async () => {
@@ -132,7 +136,8 @@ test('a task by hand: every day at a time, paused and resumed, run now, its page
     await dialog
       .getByRole('textbox', { name: 'Что сделать агенту' })
       .fill('Посмотрите, что нового появилось на сайте, и коротко перечислите.')
-    await expect(dialog.getByText(/Задача выполняется без вас/)).toBeVisible()
+    // A regular expression meets the text as it is: the warning keeps «без» to its word.
+    await expect(dialog.getByText(/Задача выполняется без\sвас/)).toBeVisible()
     const block = dialog.getByRole('group', { name: 'Время запуска 1' })
     await expect(block.getByRole('combobox', { name: 'Как часто' })).toHaveText('Ежедневно')
     await block.getByLabel('Время').fill('10:30')
@@ -176,7 +181,9 @@ test('a task by hand: every day at a time, paused and resumed, run now, its page
   await test.step('the page of the task names its run by hand and leads to its chat', async () => {
     await page.goto('/scheduled')
     await row.getByRole('link', { name: 'Сводка дня' }).click()
-    await expect(page).toHaveURL(/\/scheduled\/[0-9a-f-]{36}$/)
+    // The first visit of a task's page in the run: `next dev` compiles the route before it
+    // answers the navigation, which takes longer than an expectation waits on a busy machine.
+    await expect(page).toHaveURL(/\/scheduled\/[0-9a-f-]{36}$/, { timeout: 30_000 })
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Сводка дня')
     await expect(page.getByText('Посмотрите, что нового появилось на сайте')).toBeVisible()
     const runs = page.getByRole('list', { name: 'Запуски' }).getByRole('listitem')
@@ -266,8 +273,10 @@ test('the window on a phone takes the whole screen, its buttons at the bottom (�
   await hideDevIndicator(page)
   await page.setViewportSize({ width: 375, height: 812 })
   await page.goto('/scheduled')
-  await openByHand(page)
+  // The list is empty: on a phone its own «Настроить вручную» opens the window (Зп4).
+  await page.getByRole('button', { name: 'Настроить вручную' }).click()
   const dialog = windowOf(page)
+  await expect(dialog).toBeVisible()
   const box = await dialog.boundingBox()
   expect(box?.width).toBe(375)
   expect(box?.height).toBe(812)

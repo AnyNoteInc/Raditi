@@ -12,6 +12,8 @@ import MenuItem from '@mui/material/MenuItem'
 import Skeleton from '@mui/material/Skeleton'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
+import { useTheme, type Theme } from '@mui/material/styles'
+import useMediaQuery from '@mui/material/useMediaQuery'
 import { useQuery } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import { useEffect, useRef, useState, type RefObject } from 'react'
@@ -68,9 +70,32 @@ const iconButtonSx = {
   '&[aria-pressed="true"]': { color: 'text.primary', bgcolor: 'action.selected' },
 } as const
 
-const pillSx = { borderRadius: 999, minHeight: 36, px: 1.75 } as const
+// A chip keeps its width: on a phone its row scrolls instead (`chipRowSx`).
+const pillSx = { borderRadius: 999, minHeight: 36, px: 1.75, flexShrink: 0 } as const
+
+/**
+ * A row of filter chips: wraps from `sm`; on a phone one line that scrolls sideways, without a
+ * scrollbar drawn, so the list stays in sight. A chip that gets the focus is scrolled to by the
+ * browser; the padding keeps its focus ring inside the row.
+ */
+const chipRowSx = (theme: Theme) => ({
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 1,
+  [theme.breakpoints.down('sm')]: {
+    flexWrap: 'nowrap',
+    overflowX: 'auto',
+    scrollbarWidth: 'none',
+    '&::-webkit-scrollbar': { display: 'none' },
+    p: 0.5,
+    m: -0.5,
+  },
+})
 
 const LINE = '1px solid var(--mui-palette-divider)'
+
+/** Out of sight on a phone, by the width alone: at first paint, before any script. */
+const offOnPhone = (theme: Theme) => ({ [theme.breakpoints.down('sm')]: { display: 'none' } })
 
 /** «Новая задача ▾» (Зп2): «Настроить вручную» or «Настроить в чате». */
 function NewTaskButton({
@@ -219,6 +244,10 @@ export function ScheduledView({ userId, tab }: { userId: string; tab: 'yours' | 
   const [filterOpen, setFilterOpen] = useState(false)
   const searchInput = useRef<HTMLInputElement>(null)
   const newTaskButton = useRef<HTMLButtonElement>(null)
+  // «Настроить вручную» of the empty list, which stands for «Новая задача» on a phone (Зп4).
+  const byHandButton = useRef<HTMLButtonElement>(null)
+  const theme = useTheme()
+  const phone = useMediaQuery(theme.breakpoints.down('sm'))
   // «⋯» of each row by its task, and the row whose «⋯» takes the focus after a deletion: the row
   // the focus was in is gone (null — «Новая задача»).
   const moreButtons = useRef(new Map<string, HTMLButtonElement>())
@@ -243,6 +272,13 @@ export function ScheduledView({ userId, tab }: { userId: string; tab: 'yours' | 
 
   const all: readonly ScheduleItem[] = list.data?.schedules ?? []
   const empty = list.isSuccess && all.length === 0
+
+  // The last task deleted on a phone: «Новая задача» under the tabs goes with the list, so the
+  // focus it had goes to «Настроить вручную» of the empty list.
+  useEffect(() => {
+    if (!empty || !phone || document.activeElement !== newTaskButton.current) return
+    byHandButton.current?.focus()
+  }, [empty, phone])
   const searchable = all.length > SEARCH_ABOVE
   const query = searchable && searchOpen ? search : ''
   const projects = projectsOfSchedules(all)
@@ -354,15 +390,23 @@ export function ScheduledView({ userId, tab }: { userId: string; tab: 'yours' | 
             </>
           ) : null}
         </Box>
+        {/*
+          On a phone the empty «Ваши» has its own «Настроить вручную» and «Настроить в чате» right
+          under it: no second orange button of the whole width for the same thing.
+        */}
         <Box
-          sx={{
-            display: 'flex',
-            flex: { xs: '1 1 100%', sm: 'none' },
-            alignSelf: 'center',
-            mt: { xs: 1.5, sm: 0 },
-            py: { sm: 0.5 },
-            pl: { sm: 1 },
-          }}
+          data-new-task=""
+          sx={[
+            {
+              display: 'flex',
+              flex: { xs: '1 1 100%', sm: 'none' },
+              alignSelf: 'center',
+              mt: { xs: 1.5, sm: 0 },
+              py: { sm: 0.5 },
+              pl: { sm: 1 },
+            },
+            ...(yours && empty ? [offOnPhone] : []),
+          ]}
         >
           <NewTaskButton
             buttonRef={newTaskButton}
@@ -412,11 +456,7 @@ export function ScheduledView({ userId, tab }: { userId: string; tab: 'yours' | 
 
       {tools && filterOpen ? (
         <Box sx={{ mt: 2, display: 'flex', flexDirection: 'column', gap: 1.25 }}>
-          <Box
-            role="group"
-            aria-label={scheduledTexts.showGroup}
-            sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}
-          >
+          <Box role="group" aria-label={scheduledTexts.showGroup} sx={chipRowSx}>
             {scheduleTags.map((each) => (
               <Button
                 key={each}
@@ -437,11 +477,7 @@ export function ScheduledView({ userId, tab }: { userId: string; tab: 'yours' | 
             ))}
           </Box>
           {projects.length > 1 ? (
-            <Box
-              role="group"
-              aria-label={scheduledTexts.projectGroup}
-              sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}
-            >
+            <Box role="group" aria-label={scheduledTexts.projectGroup} sx={chipRowSx}>
               {[{ id: 'all' as const, name: scheduledTexts.allProjects }, ...projects].map(
                 (each) => {
                   const pressed = project === each.id
@@ -457,9 +493,8 @@ export function ScheduledView({ userId, tab }: { userId: string; tab: 'yours' | 
                       aria-pressed={pressed}
                       onClick={() => setProject(each.id)}
                       variant={pressed ? 'contained' : 'outlined'}
-                      color={pressed ? 'primary' : 'inherit'}
                       size="small"
-                      sx={{ ...pillSx, borderColor: pressed ? undefined : 'divider' }}
+                      sx={pillSx}
                     >
                       {each.name ?? scheduledTexts.noProject}
                       <Box
@@ -503,6 +538,7 @@ export function ScheduledView({ userId, tab }: { userId: string; tab: 'yours' | 
           <ScheduleTemplateGrid used={used} onOpen={openTemplate} wide />
         ) : empty ? (
           <ScheduledEmpty
+            byHandRef={byHandButton}
             onByHand={(from) => open({ kind: 'new' }, from)}
             onInChat={inChat}
             onTemplate={openTemplate}

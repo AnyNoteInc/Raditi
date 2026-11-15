@@ -185,6 +185,9 @@ async function chooseTool(page: Page, name: RegExp) {
   await expect(toolsMenu(page)).toBeVisible()
   await toolsMenu(page).getByRole('menuitem', { name }).click()
   await expect(toolsMenu(page)).toHaveCount(0)
+  // The card leaves the tree of roles at once, the page as it fades: gone, it cannot lie half
+  // transparent over what axe reads next (its title of 3.66:1 under a slow machine).
+  await expect(page.locator('[data-tools-menu]')).toHaveCount(0)
 }
 
 /**

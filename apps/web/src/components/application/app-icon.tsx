@@ -98,6 +98,8 @@ const paths = {
   /** Binoculars: looking at others. */
   binoculars:
     'M10 16a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Zm11 0a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0ZM10 16h4M3.3 14.6l2.2-8.1a1.5 1.5 0 0 1 3 0v6M20.7 14.6l-2.2-8.1a1.5 1.5 0 0 0-3 0v6',
+  /** «Что это за раздел» beside the title of a section: a circle with «i». */
+  info: 'M12 16v-5M12 8h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z',
   /** A funnel: the filters of a list. */
   filter: 'M3 5h18l-7 8v6l-4 2v-8L3 5Z',
   /** «Размышление»: how hard the model thinks (owner's request of 29.10.2026); Lucide «brain», ISC. */

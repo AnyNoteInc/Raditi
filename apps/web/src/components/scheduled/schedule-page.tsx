@@ -4,9 +4,12 @@ import { runMomentText, timezoneLabel, timezoneSuffix } from '@repo/domain/sched
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
+import FormControlLabel from '@mui/material/FormControlLabel'
 import Link from '@mui/material/Link'
 import Skeleton from '@mui/material/Skeleton'
 import Typography from '@mui/material/Typography'
+import { useTheme, type Theme } from '@mui/material/styles'
+import useMediaQuery from '@mui/material/useMediaQuery'
 import { useQuery, useQueryClient, type QueryKey } from '@tanstack/react-query'
 import NextLink from 'next/link'
 import { useRouter } from 'next/navigation'
@@ -16,6 +19,7 @@ import { AppIcon } from '@/components/application/app-icon'
 import { isNotFound } from '@/components/chat/call-error'
 import { effortText } from '@/components/chat/chat-texts'
 import { BrowserPushControl } from '@/components/notifications/browser-push-control'
+import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
 
 import {
@@ -47,6 +51,18 @@ import {
 } from './schedule-texts'
 import { useNow } from './use-now'
 
+/** As many runs as the server gives with a task (Зп6): fewer are all the task has had. */
+const RUNS_KEPT = 50
+
+/** Out of sight on a phone, by the width alone: at first paint, before any script. */
+const offOnPhone = (theme: Theme) => ({ [theme.breakpoints.down('sm')]: { display: 'none' } })
+
+/** The visible label of the switch of a task: on, paused, or off for a reason its state names. */
+function switchWords(task: ScheduleDetail): string {
+  if (task.enabled) return schedulePageTexts.switchOn
+  return task.pausedReason === null ? schedulePageTexts.switchPaused : schedulePageTexts.switchOff
+}
+
 /** One fact of the task: its name on the left on a wide screen, above it on a phone. */
 function Fact({ term, children }: { term: string; children: ReactNode }) {
   return (
@@ -69,21 +85,24 @@ function Fact({ term, children }: { term: string; children: ReactNode }) {
   )
 }
 
-/** A line of the runs (Зп6): when, by the schedule or by hand, what came of it, and its chat. */
+/**
+ * A line of the runs (Зп6): when, by the schedule or by hand, what came of it, and its chat. From
+ * `md` a line is a row of the list's columns (a subgrid): the date as wide as the longest one, on
+ * one line. On a phone the date takes a line of its own, with how the run began after it; what
+ * came of it and «Открыть чат» go under it.
+ */
 function RunRow({ line, task, now }: { line: RunLine; task: ScheduleDetail; now: Date }) {
   const run = line.kind === 'run' ? line.run : line.runs[0]
   if (run === undefined) return null
   const when = runMomentText(line.kind === 'run' ? run.dueAt : line.from, task.timezone, now)
+  const how = run.trigger === 'manual' ? schedulePageTexts.byHand : schedulePageTexts.bySchedule
   return (
     <Box
       component="li"
       sx={{
         display: 'grid',
-        gridTemplateColumns: {
-          xs: 'minmax(0, 1fr) auto',
-          // The same columns on every line: each line is a grid of its own.
-          md: '210px 110px minmax(0, 1fr) auto',
-        },
+        gridColumn: { md: '1 / -1' },
+        gridTemplateColumns: { xs: 'minmax(0, 1fr) auto', md: 'subgrid' },
         alignItems: 'center',
         columnGap: 2,
         rowGap: 0.5,
@@ -93,33 +112,43 @@ function RunRow({ line, task, now }: { line: RunLine; task: ScheduleDetail; now:
         '& + &': { borderTop: 1, borderColor: 'divider' },
       }}
     >
-      <Box sx={{ fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>
+      <Box
+        data-run-when=""
+        sx={{
+          gridColumn: { xs: '1 / -1', md: 'auto' },
+          fontWeight: 500,
+          fontVariantNumeric: 'tabular-nums',
+          whiteSpace: { md: 'nowrap' },
+        }}
+      >
         {when}
-        {/* On a phone how it was started follows the time; from `md` it has a column. */}
+        {/*
+          On a phone how it was started follows the time; from `md` it has a column. A line that
+          wraps keeps «·» after the time and «по расписанию» whole (nbsp).
+        */}
         <Box
           component="span"
           sx={{ display: { xs: 'inline', md: 'none' }, fontWeight: 400, color: 'text.secondary' }}
         >
-          {` · ${run.trigger === 'manual' ? schedulePageTexts.byHand : schedulePageTexts.bySchedule}`}
+          {nbsp(` · ${how}`)}
         </Box>
       </Box>
-      <Box sx={{ color: 'text.secondary', display: { xs: 'none', md: 'block' } }}>
-        {run.trigger === 'manual' ? schedulePageTexts.byHand : schedulePageTexts.bySchedule}
-      </Box>
-      <Box sx={{ gridColumn: { xs: '1 / 2', md: 'auto' }, gridRow: { xs: 2, md: 'auto' } }}>
+      <Box sx={{ color: 'text.secondary', display: { xs: 'none', md: 'block' } }}>{how}</Box>
+      <Box sx={{ gridColumn: { xs: 1, md: 'auto' }, gridRow: { xs: 2, md: 'auto' }, minWidth: 0 }}>
         <RunStateMark
           state={run.state}
           {...(line.kind === 'missed' ? { text: missedText(line, task.timezone, now) } : {})}
         />
       </Box>
-      <Box
-        sx={{
-          gridColumn: { xs: '2 / 3', md: 'auto' },
-          gridRow: { xs: '1 / 3', md: 'auto' },
-          justifySelf: 'end',
-        }}
-      >
-        {line.kind === 'run' && run.chat !== null ? (
+      {line.kind === 'run' && run.chat !== null ? (
+        <Box
+          sx={{
+            gridColumn: { xs: 2, md: 'auto' },
+            gridRow: { xs: 2, md: 'auto' },
+            justifySelf: 'end',
+            alignSelf: { xs: 'start', md: 'center' },
+          }}
+        >
           <Link
             component={NextLink}
             href={`/chats/${run.chat.id}`}
@@ -128,8 +157,8 @@ function RunRow({ line, task, now }: { line: RunLine; task: ScheduleDetail; now:
           >
             {schedulePageTexts.openChat}
           </Link>
-        ) : null}
-      </Box>
+        </Box>
+      ) : null}
     </Box>
   )
 }
@@ -146,6 +175,9 @@ export function SchedulePage({ scheduleId, userId }: { scheduleId: string; userI
   const queryClient = useQueryClient()
   const router = useRouter()
   const now = useNow()
+  const theme = useTheme()
+  // On a phone «Изменить» goes into «⋯»: «Запустить сейчас» takes the line with it alone.
+  const phone = useMediaQuery(theme.breakpoints.down('sm'))
   const task = useQuery(trpc.schedule.get.queryOptions({ scheduleId }))
   const [notice, setNotice] = useState<ScheduleNotice>(null)
   const actions = useScheduleActions(setNotice)
@@ -226,6 +258,8 @@ export function SchedulePage({ scheduleId, userId }: { scheduleId: string; userI
   else {
     const data = task.data
     const lines = runLines(data.runs)
+    const state = scheduleStateText(data, now)
+    const switchLabel = switchWords(data)
     content = (
       <>
         {task.isError && !gone ? (
@@ -260,26 +294,51 @@ export function SchedulePage({ scheduleId, userId }: { scheduleId: string; userI
             >
               {data.name}
             </Typography>
-            <Typography sx={{ mt: 1, color: data.enabled ? 'text.primary' : 'text.secondary' }}>
-              {scheduleStateText(data, now)}
-            </Typography>
+            {/*
+              The state of the task and its switch, labelled with what it is set to; the state is
+              not said twice when it is the label itself — «На паузе».
+            */}
+            <Box
+              sx={{
+                mt: 0.5,
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                columnGap: 2,
+                rowGap: 0,
+              }}
+            >
+              {state === switchLabel ? null : (
+                <Typography sx={{ color: data.enabled ? 'text.primary' : 'text.secondary' }}>
+                  {state}
+                </Typography>
+              )}
+              <FormControlLabel
+                control={<ScheduleSwitch task={data} actions={actions} />}
+                label={switchLabel}
+                sx={{
+                  ml: -1,
+                  mr: 0,
+                  '& .MuiFormControlLabel-label': { fontSize: 15, color: 'text.secondary' },
+                }}
+              />
+            </Box>
           </Box>
           <Box
             sx={{
               display: 'flex',
-              flexWrap: 'wrap',
+              flexWrap: { xs: 'nowrap', sm: 'wrap' },
               alignItems: 'center',
               gap: 1,
               width: { xs: '100%', sm: 'auto' },
             }}
           >
-            <ScheduleSwitch task={data} actions={actions} />
             <Button
               variant="contained"
               onClick={() => actions.start(data)}
               loading={actions.runNow.isPending}
               startIcon={<AppIcon name="send" size={16} />}
-              sx={{ minHeight: 40 }}
+              sx={{ minHeight: 40, flex: { xs: '1 1 auto', sm: 'none' } }}
             >
               {scheduleRowTexts.runNow}
             </Button>
@@ -292,14 +351,18 @@ export function SchedulePage({ scheduleId, userId }: { scheduleId: string; userI
                 setOpening({ kind: 'edit', schedule: data })
               }}
               startIcon={<AppIcon name="pencil" size={16} />}
-              sx={{ minHeight: 40, borderColor: 'divider' }}
+              sx={[{ minHeight: 40, borderColor: 'divider' }, offOnPhone]}
             >
               {scheduleRowTexts.edit}
             </Button>
             <ScheduleMoreMenu
               task={data}
               actions={actions}
-              items={['delete']}
+              items={phone ? ['edit', 'delete'] : ['delete']}
+              onEdit={(from) => {
+                opener.current = from
+                setOpening({ kind: 'edit', schedule: data })
+              }}
               label={schedulePageTexts.more}
               onDeleted={() => {
                 dropOnLeave.current = trpc.schedule.get.queryKey({ scheduleId })
@@ -357,6 +420,7 @@ export function SchedulePage({ scheduleId, userId }: { scheduleId: string; userI
               siteId={liveProjectId(data)}
               triggers={data.triggers}
               timezone={data.timezone}
+              tone="value"
             />
           </Fact>
         </Box>
@@ -366,7 +430,7 @@ export function SchedulePage({ scheduleId, userId }: { scheduleId: string; userI
             <Typography id="schedule-runs" component="h2" sx={{ fontSize: 18, fontWeight: 600 }}>
               {schedulePageTexts.runs}
             </Typography>
-            {data.runs.length > 0 ? (
+            {data.runs.length >= RUNS_KEPT ? (
               <Typography variant="body2" sx={{ color: 'text.secondary' }}>
                 {schedulePageTexts.runsNote}
               </Typography>
@@ -390,6 +454,10 @@ export function SchedulePage({ scheduleId, userId }: { scheduleId: string; userI
                 borderRadius: '14px',
                 bgcolor: 'background.paper',
                 overflow: 'hidden',
+                // The columns of every line from `md`: each line is a subgrid of them (RunRow).
+                display: { md: 'grid' },
+                gridTemplateColumns: { md: 'max-content max-content minmax(0, 1fr) auto' },
+                columnGap: 2,
               }}
             >
               {lines.map((line) => (

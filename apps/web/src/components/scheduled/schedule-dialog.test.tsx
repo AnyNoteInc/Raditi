@@ -102,6 +102,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   vi.useRealTimers()
+  vi.unstubAllGlobals()
 })
 
 describe('«Новая запланированная задача» (plan 82, Зп7, Зп8)', () => {
@@ -147,9 +148,18 @@ describe('«Новая запланированная задача» (plan 82, �
     const { dialog } = show({ kind: 'new' })
     expect(dialog).toHaveTextContent(/Задача выполняется без вас/)
     expect(dialog).toHaveTextContent(/В админке сайта он только читает/)
-    // What the platform refuses in such a run (Зп28, Зп32): pages and the keyed skills too.
+    // What the platform refuses in such a run (Зп28, Зп32): pages and the keyed skills too, the
+    // skills in plain words.
     expect(dialog).toHaveTextContent(/страницы из раздела «Страницы» не публикует и не меняет/)
-    expect(dialog).toHaveTextContent(/навыки агента с ключом не вызывает/)
+    expect(dialog).toHaveTextContent(
+      /к подключённым сервисам, которым нужен ваш ключ доступа, не обращается/,
+    )
+    expect(dialog).not.toHaveTextContent(/навык/)
+    // A note drawn apart from the filled box of the instructions: outlined on the paper.
+    const note = within(dialog).getByRole('note')
+    expect(note).toHaveTextContent(/Задача выполняется без вас/)
+    expect(note).toHaveClass('MuiAlert-outlined')
+    expect(getComputedStyle(note).backgroundColor).toBe('rgba(0, 0, 0, 0)')
     expect(
       await within(dialog).findByText(
         /Каждый запуск тратит кредиты, как обычный чат, — в среднем около 11\. Так выйдет примерно 77 в неделю; ваш недельный лимит — 73\. Остальным чатам останется меньше\./,
@@ -322,9 +332,24 @@ describe('«Новая запланированная задача» (plan 82, �
   it('turns the notice off, and offers the push of this browser while it is on (Зп36)', async () => {
     const { dialog } = show({ kind: 'new' })
     expect(within(dialog).getByTestId('browser-push')).toBeInTheDocument()
-    fireEvent.click(
-      within(dialog).getByRole('switch', { name: 'Уведомлять, когда задача выполнится' }),
+    const toggle = within(dialog).getByRole('switch', {
+      name: 'Уведомлять, когда задача выполнится',
+    })
+    // The hint keeps its short words to the next ones (nbsp): `\s` meets them.
+    expect(toggle).toHaveAccessibleDescription(
+      /^О\sвопросах агента и\sсбоях сообщим в\sлюбом случае\.$/,
     )
+    // The hint and the push stand under the label, in its column, in one quiet style.
+    const notes = dialog.querySelector('[data-notify-notes]')
+    if (!(notes instanceof HTMLElement)) throw new Error('no notes')
+    const hint = within(notes).getByText('О вопросах агента и сбоях сообщим в любом случае.')
+    expect(hint).toHaveClass('MuiTypography-body2')
+    expect(notes).toContainElement(within(dialog).getByTestId('browser-push'))
+    const label = within(dialog).getByText('Уведомлять, когда задача выполнится')
+    expect(notes.parentElement).toBe(label.parentElement)
+    expect(notes.parentElement).toContainElement(toggle)
+    fireEvent.click(label)
+    expect(toggle).not.toBeChecked()
     expect(within(dialog).queryByTestId('browser-push')).toBeNull()
   })
 
@@ -356,6 +381,48 @@ describe('«Новая запланированная задача» (plan 82, �
     expect(within(dialog).getByText(/^Следующий запуск:/)).toHaveTextContent(
       '(по времени Новосибирска)',
     )
+  })
+
+  it('draws a line under the title once scrolled, and a shadow over the buttons while more is below', () => {
+    // jsdom lays nothing out: the body tells its sizes here, and the observer reports on demand.
+    let report = () => {}
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: () => void) {
+          report = callback
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    )
+    const { dialog } = show({ kind: 'new' })
+    const header = within(dialog).getByRole('heading', { name: 'Новая запланированная задача' })
+      .parentElement as HTMLElement
+    const body = header.nextElementSibling as HTMLElement
+    const footer = within(dialog).getByRole('button', { name: 'Создать' })
+      .parentElement as HTMLElement
+    expect(body).toContainElement(within(dialog).getByRole('textbox', { name: 'Название' }))
+    let scrollTop = 0
+    Object.defineProperties(body, {
+      clientHeight: { configurable: true, get: () => 400 },
+      scrollHeight: { configurable: true, get: () => 900 },
+      scrollTop: { configurable: true, get: () => scrollTop },
+    })
+
+    // Opened: the start of the form, more of it below.
+    act(() => report())
+    // Transparent, as jsdom computes it.
+    const clear = 'rgba(0, 0, 0, 0)'
+    expect(getComputedStyle(header).borderBottomColor).toBe(clear)
+    expect(getComputedStyle(footer).boxShadow).toContain('rgba(0, 0, 0, 0.12)')
+
+    // Scrolled to the end: the title is ruled off, nothing more below.
+    scrollTop = 500
+    fireEvent.scroll(body)
+    expect(getComputedStyle(header).borderBottomColor).not.toBe(clear)
+    expect(getComputedStyle(footer).boxShadow).toBe('none')
   })
 })
 

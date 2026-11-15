@@ -167,6 +167,20 @@ describe('project list', () => {
   })
 })
 
+describe('the head of the list', () => {
+  // The title of «Проекты» stands where the titles of «Запланированные задачи» and «Страницы» do:
+  // the buttons of 44 px beside it do not make its line taller.
+  it('keeps the buttons beside the title out of the height of its line', async () => {
+    listProjects.mockResolvedValue([project(), ...others(6)])
+    showProjects()
+    await screen.findByRole('list', { name: 'Сайты' })
+    for (const name of ['Найти проект', 'Порядок проектов']) {
+      const style = getComputedStyle(screen.getByRole('button', { name }))
+      expect([style.height, style.marginTop, style.marginBottom]).toEqual(['44px', '-8px', '-8px'])
+    }
+  })
+})
+
 describe('adding a project', () => {
   it('leads from the empty list to the wizard of a new project', async () => {
     showProjects()

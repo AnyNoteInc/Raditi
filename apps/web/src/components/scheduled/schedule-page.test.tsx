@@ -5,7 +5,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ScheduleDetail } from './schedule-model'
 import { SchedulePage } from './schedule-page'
-import { CHAT_ID, NOW, scheduleDetail, scheduleRun, SCHEDULE_ID } from './testing'
+import {
+  CHAT_ID,
+  mediaStyleOf,
+  NOW,
+  PHONE_MEDIA,
+  phoneMatchMedia,
+  scheduleDetail,
+  scheduleRun,
+  SCHEDULE_ID,
+  WIDE_MEDIA,
+} from './testing'
 
 const { getSchedule, costHint, runNow, remove, push } = vi.hoisted(() => ({
   getSchedule: vi.fn<() => Promise<ScheduleDetail>>(),
@@ -95,6 +105,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   vi.useRealTimers()
+  vi.unstubAllGlobals()
 })
 
 describe('the page of a scheduled task (plan 82, Зп6)', () => {
@@ -121,6 +132,89 @@ describe('the page of a scheduled task (plan 82, Зп6)', () => {
     ).toBeInTheDocument()
     expect(screen.getByRole('switch', { name: 'Включить задачу «Проверка сайта»' })).toBeChecked()
     expect(screen.getByText('Задача ещё не запускалась.')).toBeInTheDocument()
+  })
+
+  it('labels its switch with what it is set to, beside the state of the task', async () => {
+    getSchedule.mockResolvedValue(scheduleDetail())
+    show()
+    const toggle = await screen.findByRole('switch', { name: 'Включить задачу «Проверка сайта»' })
+    // The words shown are the label of the switch: a press on them turns it.
+    const label = toggle.closest('label')
+    expect(label).toHaveTextContent('Включена')
+    const state = screen.getByText('Следующий запуск: завтра в 9:00')
+    expect(state.parentElement).toBe(label?.parentElement)
+    // Not among the buttons of the actions any more.
+    expect(
+      screen.getByRole('button', { name: 'Запустить сейчас' }).parentElement,
+    ).not.toContainElement(toggle)
+  })
+
+  it('says «На паузе» once for a paused task, and «Выключена» beside a reason', async () => {
+    getSchedule.mockResolvedValue(scheduleDetail({ enabled: false, nextRunAt: null }))
+    const { unmount } = show()
+    await screen.findByRole('heading', { level: 1, name: 'Проверка сайта' })
+    expect(screen.getAllByText('На паузе')).toHaveLength(1)
+    expect(screen.getByText('На паузе').closest('label')).toContainElement(
+      screen.getByRole('switch'),
+    )
+    unmount()
+
+    getSchedule.mockResolvedValue(
+      scheduleDetail({
+        enabled: false,
+        nextRunAt: null,
+        pausedReason: 'completed',
+        lastRunAt: new Date('2026-11-14T09:00:00.000Z'),
+      }),
+    )
+    show()
+    expect(await screen.findByText('Завершена 14 ноября')).toBeInTheDocument()
+    expect(screen.getByText('Выключена').closest('label')).toContainElement(
+      screen.getByRole('switch'),
+    )
+    expect(screen.queryByText('На паузе')).toBeNull()
+  })
+
+  it('has «Изменить» in «⋯» on a phone, where «Запустить сейчас» takes the line', async () => {
+    vi.stubGlobal('matchMedia', phoneMatchMedia)
+    getSchedule.mockResolvedValue(scheduleDetail())
+    show()
+    await screen.findByRole('heading', { level: 1, name: 'Проверка сайта' })
+    // The button of the wide screen is out of sight on a phone from the first paint.
+    const edit = screen.getByRole('button', { name: 'Изменить' })
+    expect(mediaStyleOf(edit, PHONE_MEDIA)).toContain('display:none')
+    expect(
+      mediaStyleOf(screen.getByRole('button', { name: 'Запустить сейчас' }), PHONE_MEDIA),
+    ).toBe('')
+    fireEvent.click(screen.getByRole('button', { name: 'Ещё действия' }))
+    const menu = screen.getByRole('menu')
+    expect(
+      within(menu)
+        .getAllByRole('menuitem')
+        .map((item) => item.textContent),
+    ).toEqual(['Изменить', 'Удалить'])
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Изменить' }))
+    expect(await screen.findByRole('dialog', { name: 'Изменить задачу' })).toBeInTheDocument()
+  })
+
+  it('keeps «⋯» to «Удалить» on a wide screen, with «Изменить» beside it', async () => {
+    getSchedule.mockResolvedValue(scheduleDetail())
+    show()
+    fireEvent.click(await screen.findByRole('button', { name: 'Ещё действия' }))
+    expect(
+      within(screen.getByRole('menu'))
+        .getAllByRole('menuitem')
+        .map((item) => item.textContent),
+    ).toEqual(['Удалить'])
+  })
+
+  it('says the cost as a value of the page, not as a hint', async () => {
+    getSchedule.mockResolvedValue(scheduleDetail())
+    show()
+    const cost = await screen.findByText(/в среднем около 11\. Так выйдет примерно 55 в неделю/)
+    expect(cost.closest('[data-cost-tone]')).toHaveAttribute('data-cost-tone', 'value')
+    // As the other values of the facts: 15 px.
+    expect(getComputedStyle(cost).fontSize).toBe('15px')
   })
 
   // F9: the project of the task was deleted (Зп22): no name, no link, a cost without a project.
@@ -173,6 +267,65 @@ describe('the page of a scheduled task (plan 82, Зп6)', () => {
     expect(lines[1]).toHaveTextContent('Пропущены запуски с 8:00 по 10:00')
     expect(lines[2]).toHaveTextContent('Чат удалён')
     expect(within(lines[2]!).queryByRole('link')).toBeNull()
+    // Five runs are all there are: no word of the last fifty.
+    expect(screen.queryByText('Последние 50 запусков.')).toBeNull()
+  })
+
+  it('draws the runs in the columns of the list: the date on one line, a line of its own on a phone', async () => {
+    getSchedule.mockResolvedValue(
+      scheduleDetail({ triggers: hourly }, [
+        scheduleRun({ id: 'a', dueAt: new Date('2026-11-09T11:20:00.000Z'), trigger: 'manual' }),
+      ]),
+    )
+    show()
+    const runs = await screen.findByRole('list', { name: 'Запуски' })
+    const [line] = within(runs).getAllByRole('listitem')
+    if (line === undefined) throw new Error('no line')
+    // From `md` every line is a row of the columns of the list, the date as wide as the longest.
+    expect(mediaStyleOf(runs, WIDE_MEDIA)).toContain(
+      'grid-template-columns:max-content max-content minmax(0, 1fr) auto',
+    )
+    expect(mediaStyleOf(line, WIDE_MEDIA)).toContain('grid-template-columns:subgrid')
+    const when = line.querySelector('[data-run-when]')
+    if (!(when instanceof HTMLElement)) throw new Error('no date')
+    expect(when).toHaveTextContent('понедельник, 9 ноября, в 14:20 · вручную')
+    // «·» stays after the time when the line wraps: never at the start of the next one.
+    expect(when.textContent).toContain('14:20\u00a0· вручную')
+    expect(mediaStyleOf(when, WIDE_MEDIA)).toContain('white-space:nowrap')
+    // On a phone the date takes the whole first line; what came of it and the chat — under it.
+    // MUI writes the values of `xs` under `(min-width:0px)`.
+    expect(mediaStyleOf(when, '(min-width:0px)')).toMatch(/grid-column:1 ?\/ ?-1/)
+    const link = within(line).getByRole('link', { name: /^Открыть чат запуска/ })
+    expect(when.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // A state that wraps keeps its sign at the first line.
+    const sign = line.querySelector('[data-run-sign]')
+    if (!(sign instanceof HTMLElement) || sign.parentElement === null) throw new Error('no sign')
+    expect(getComputedStyle(sign.parentElement).alignItems).toBe('flex-start')
+    expect(getComputedStyle(sign).height).not.toBe('')
+  })
+
+  it('keeps «по расписанию» whole when the line of a run wraps on a phone', async () => {
+    getSchedule.mockResolvedValue(
+      scheduleDetail({ triggers: hourly }, [
+        scheduleRun({ id: 'a', dueAt: new Date('2026-11-13T05:00:00.000Z') }),
+      ]),
+    )
+    show()
+    const runs = await screen.findByRole('list', { name: 'Запуски' })
+    const when = runs.querySelector('[data-run-when]')
+    expect(when?.textContent).toBe('пятница, 13 ноября, в 8:00\u00a0· по\u00a0расписанию')
+  })
+
+  it('says «Последние 50 запусков» when the page shows as many as it keeps', async () => {
+    const fifty = Array.from({ length: 50 }, (_, index) =>
+      scheduleRun({
+        id: `run-${index}`,
+        dueAt: new Date(Date.UTC(2026, 10, 15, 8) - index * 3_600_000),
+      }),
+    )
+    getSchedule.mockResolvedValue(scheduleDetail({ triggers: hourly }, fifty))
+    show()
+    expect(await screen.findByText('Последние 50 запусков.')).toBeInTheDocument()
   })
 
   it('runs the task now and opens its chat', async () => {

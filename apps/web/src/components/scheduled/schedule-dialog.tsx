@@ -14,7 +14,6 @@ import Button from '@mui/material/Button'
 import ButtonBase from '@mui/material/ButtonBase'
 import Collapse from '@mui/material/Collapse'
 import Dialog from '@mui/material/Dialog'
-import FormControlLabel from '@mui/material/FormControlLabel'
 import FormHelperText from '@mui/material/FormHelperText'
 import Link from '@mui/material/Link'
 import MenuItem from '@mui/material/MenuItem'
@@ -27,7 +26,15 @@ import useMediaQuery from '@mui/material/useMediaQuery'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import NextLink from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useEffect, useId, useRef, useState, type FormEvent, type RefObject } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+  type RefObject,
+} from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { ConfirmDialog } from '@/components/billing/confirm-dialog'
@@ -207,6 +214,9 @@ function ScheduleFormBody({
   const whenId = useId()
   const scheduleErrorId = useId()
   const moreId = useId()
+  const notifyId = useId()
+  const notifyHintId = useId()
+  const { setScrollBox, setScrollContent, measureScroll, scrolled, moreBelow } = useScrollEdges()
 
   // The zone of the browser came after the window opened: a new task takes it — and the next one
   // the list answers, once the cabinet remembered the browser's — until the client picks a zone.
@@ -354,6 +364,10 @@ function ScheduleFormBody({
           px: { xs: 2, sm: 3 },
           pt: phone ? 'max(16px, env(safe-area-inset-top))' : 3,
           pb: 1.5,
+          // A line once the body is scrolled: what scrolls up goes under it, not into the title.
+          borderBottom: 1,
+          borderColor: scrolled ? 'divider' : 'transparent',
+          transition: 'border-color var(--raditi-motion-fast) var(--raditi-ease-out)',
         }}
       >
         <Typography
@@ -378,305 +392,352 @@ function ScheduleFormBody({
       </Box>
 
       <Box
-        sx={{
-          flex: '1 1 auto',
-          minHeight: 0,
-          overflowY: 'auto',
-          px: { xs: 2, sm: 3 },
-          pb: 2,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 2.5,
-        }}
+        ref={setScrollBox}
+        onScroll={measureScroll}
+        sx={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }}
       >
-        {topError ? <Alert severity="error">{topError}</Alert> : null}
+        <Box
+          ref={setScrollContent}
+          sx={{
+            px: { xs: 2, sm: 3 },
+            pb: 2,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2.5,
+          }}
+        >
+          {topError ? <Alert severity="error">{topError}</Alert> : null}
 
-        <TextField
-          inputRef={nameRef}
-          // A new task by hand starts at its name; a template or a change is read first.
-          autoFocus={opening.kind === 'new' && opening.template === undefined}
-          label={scheduleDialogTexts.name}
-          placeholder={scheduleDialogTexts.namePlaceholder}
-          value={form.name}
-          onChange={(event) => change({ name: event.target.value.replace(/[\r\n]/g, ' ') })}
-          error={nameError !== undefined}
-          helperText={nameError}
-          slotProps={{ htmlInput: { maxLength: 80, autoComplete: 'off' } }}
-          sx={{ mt: 0.75 }}
-          fullWidth
-        />
+          <TextField
+            inputRef={nameRef}
+            // A new task by hand starts at its name; a template or a change is read first.
+            autoFocus={opening.kind === 'new' && opening.template === undefined}
+            label={scheduleDialogTexts.name}
+            placeholder={scheduleDialogTexts.namePlaceholder}
+            value={form.name}
+            onChange={(event) => change({ name: event.target.value.replace(/[\r\n]/g, ' ') })}
+            error={nameError !== undefined}
+            helperText={nameError}
+            slotProps={{ htmlInput: { maxLength: 80, autoComplete: 'off' } }}
+            sx={{ mt: 0.75 }}
+            fullWidth
+          />
 
-        <Box>
-          <Typography
-            component="label"
-            htmlFor={instructionsId}
-            variant="body2"
-            sx={{ display: 'block', mb: 0.75, fontWeight: 500 }}
-          >
-            {scheduleDialogTexts.instructions}
-          </Typography>
-          <Box
-            sx={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 0.5,
-              p: 1,
-              borderRadius: '20px',
-              bgcolor: 'var(--mui-palette-action-hover)',
-              boxShadow: instructionsError
-                ? 'inset 0 0 0 1px var(--mui-palette-error-main)'
-                : 'none',
-              transition: 'box-shadow var(--raditi-motion-fast) var(--raditi-ease-out)',
-              '&:has(textarea:focus-visible)': {
-                boxShadow: instructionsError
-                  ? 'inset 0 0 0 2px var(--mui-palette-error-main)'
-                  : 'inset 0 0 0 1px rgba(var(--mui-palette-text-primaryChannel) / 0.24)',
-              },
-            }}
-          >
-            <Box
-              component={TextareaAutosize}
-              ref={instructionsRef}
-              id={instructionsId}
-              minRows={4}
-              maxRows={12}
-              value={form.instructions}
-              placeholder={scheduleDialogTexts.instructionsPlaceholder}
-              onChange={(event: { target: { value: string } }) =>
-                change({ instructions: event.target.value })
-              }
-              aria-invalid={instructionsError ? true : undefined}
-              aria-describedby={instructionsError ? instructionsErrorId : undefined}
-              sx={{
-                display: 'block',
-                width: '100%',
-                px: 1.25,
-                py: 1,
-                border: 0,
-                resize: 'none',
-                bgcolor: 'transparent',
-                color: 'text.primary',
-                font: 'inherit',
-                fontSize: 16,
-                lineHeight: 1.6,
-                outline: 'none',
-                '&&:focus-visible': { outline: 'none' },
-                '&::placeholder': { color: 'text.secondary', opacity: 1 },
-              }}
-            />
+          <Box>
+            <Typography
+              component="label"
+              htmlFor={instructionsId}
+              variant="body2"
+              sx={{ display: 'block', mb: 0.75, fontWeight: 500 }}
+            >
+              {scheduleDialogTexts.instructions}
+            </Typography>
             <Box
               sx={{
                 display: 'flex',
-                flexWrap: 'wrap',
-                alignItems: 'center',
-                justifyContent: 'space-between',
+                flexDirection: 'column',
                 gap: 0.5,
+                p: 1,
+                borderRadius: '20px',
+                bgcolor: 'var(--mui-palette-action-hover)',
+                boxShadow: instructionsError
+                  ? 'inset 0 0 0 1px var(--mui-palette-error-main)'
+                  : 'none',
+                transition: 'box-shadow var(--raditi-motion-fast) var(--raditi-ease-out)',
+                '&:has(textarea:focus-visible)': {
+                  boxShadow: instructionsError
+                    ? 'inset 0 0 0 2px var(--mui-palette-error-main)'
+                    : 'inset 0 0 0 1px rgba(var(--mui-palette-text-primaryChannel) / 0.24)',
+                },
               }}
             >
-              <ProjectPicker
-                projects={projects}
-                value={project}
-                {...(projectGone ? { gone: scheduledTexts.projectGone } : {})}
-                locked={false}
-                onChange={(next) => {
-                  setProjectTouched(true)
-                  change({ siteId: next?.id ?? null })
-                }}
-                // No «Добавить проект» here: the wizard would take the client out of the window.
-              />
-              <EffortMenu
-                value={form.effort}
-                onChange={(effort) => change({ effort })}
-                placement="down"
-              />
-            </Box>
-          </Box>
-          {instructionsError ? (
-            <FormHelperText id={instructionsErrorId} error sx={{ mx: 1.5 }}>
-              {instructionsError}
-            </FormHelperText>
-          ) : null}
-          {noProjects ? (
-            <FormHelperText error id={projectErrorId} sx={{ mx: 1.5 }}>
-              {scheduleDialogTexts.addProjectLead}{' '}
-              <Link
-                component={NextLink}
-                href={ADD_PROJECT_HREF}
-                onClick={(event) => {
-                  if (!formEdited(form, initial)) return
-                  event.preventDefault()
-                  setLeaving(true)
-                }}
-              >
-                {scheduleDialogTexts.addProject}
-              </Link>
-            </FormHelperText>
-          ) : projectError ? (
-            <FormHelperText error id={projectErrorId} sx={{ mx: 1.5 }}>
-              {projectError}
-            </FormHelperText>
-          ) : null}
-          {template?.hint ? (
-            <FormHelperText sx={{ mx: 1.5 }}>{template.hint}</FormHelperText>
-          ) : null}
-        </Box>
-
-        {/* Said with the window, not announced over it: a note, not an alert. */}
-        <Alert severity="warning" role="note" icon={<AppIcon name="warning" size={18} />}>
-          {nbsp(scheduleDialogTexts.warning)}
-        </Alert>
-
-        <Box component="fieldset" sx={{ m: 0, p: 0, border: 0, minWidth: 0 }}>
-          <Typography
-            component="legend"
-            id={whenId}
-            variant="body2"
-            sx={{ p: 0, mb: 1.5, fontWeight: 500 }}
-          >
-            {scheduleDialogTexts.when}
-          </Typography>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {form.triggers.map((draft, index) => (
               <Box
-                key={draft.key}
-                sx={
-                  index > 0
-                    ? { pt: 2, borderTop: 1, borderColor: 'divider', borderTopStyle: 'dashed' }
-                    : undefined
+                component={TextareaAutosize}
+                ref={instructionsRef}
+                id={instructionsId}
+                minRows={3}
+                maxRows={12}
+                value={form.instructions}
+                placeholder={scheduleDialogTexts.instructionsPlaceholder}
+                onChange={(event: { target: { value: string } }) =>
+                  change({ instructions: event.target.value })
                 }
+                aria-invalid={instructionsError ? true : undefined}
+                aria-describedby={instructionsError ? instructionsErrorId : undefined}
+                sx={{
+                  display: 'block',
+                  width: '100%',
+                  px: 1.25,
+                  py: 1,
+                  border: 0,
+                  resize: 'none',
+                  bgcolor: 'transparent',
+                  color: 'text.primary',
+                  font: 'inherit',
+                  fontSize: 16,
+                  lineHeight: 1.6,
+                  outline: 'none',
+                  '&&:focus-visible': { outline: 'none' },
+                  '&::placeholder': { color: 'text.secondary', opacity: 1 },
+                }}
+              />
+              <Box
+                sx={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 0.5,
+                }}
               >
-                <TriggerFields
-                  draft={draft}
-                  index={index + 1}
-                  frequencies={frequencies}
-                  timezone={form.timezone}
-                  now={now}
-                  error={problems.triggers[draft.key] ?? null}
-                  removable={index > 0}
-                  onChange={(next) =>
-                    change({
-                      triggers: form.triggers.map((each) => (each.key === next.key ? next : each)),
-                    })
-                  }
-                  onRemove={() =>
-                    change({ triggers: form.triggers.filter((each) => each.key !== draft.key) })
-                  }
+                <ProjectPicker
+                  projects={projects}
+                  value={project}
+                  {...(projectGone ? { gone: scheduledTexts.projectGone } : {})}
+                  locked={false}
+                  onChange={(next) => {
+                    setProjectTouched(true)
+                    change({ siteId: next?.id ?? null })
+                  }}
+                  // No «Добавить проект» here: the wizard would take the client out of the window.
+                />
+                <EffortMenu
+                  value={form.effort}
+                  onChange={(effort) => change({ effort })}
+                  placement="down"
                 />
               </Box>
-            ))}
+            </Box>
+            {instructionsError ? (
+              <FormHelperText id={instructionsErrorId} error sx={{ mx: 1.5 }}>
+                {instructionsError}
+              </FormHelperText>
+            ) : null}
+            {noProjects ? (
+              <FormHelperText error id={projectErrorId} sx={{ mx: 1.5 }}>
+                {scheduleDialogTexts.addProjectLead}{' '}
+                <Link
+                  component={NextLink}
+                  href={ADD_PROJECT_HREF}
+                  onClick={(event) => {
+                    if (!formEdited(form, initial)) return
+                    event.preventDefault()
+                    setLeaving(true)
+                  }}
+                >
+                  {scheduleDialogTexts.addProject}
+                </Link>
+              </FormHelperText>
+            ) : projectError ? (
+              <FormHelperText error id={projectErrorId} sx={{ mx: 1.5 }}>
+                {projectError}
+              </FormHelperText>
+            ) : null}
+            {template?.hint ? (
+              <FormHelperText sx={{ mx: 1.5 }}>{template.hint}</FormHelperText>
+            ) : null}
           </Box>
-          {canAddTrigger(form) ? (
-            <Button
-              onClick={() => change({ triggers: [...form.triggers, addedTriggerDraft(form, now)] })}
-              startIcon={<AppIcon name="plus" size={16} />}
-              sx={{ mt: 1.25, ml: -1, minHeight: 40, px: 1.25 }}
-            >
-              {scheduleDialogTexts.addTime}
-            </Button>
-          ) : null}
-          {scheduleError ? (
-            <FormHelperText id={scheduleErrorId} error role="alert" sx={{ mx: 0, mt: 1 }}>
-              {scheduleError}
-            </FormHelperText>
-          ) : null}
-          {/* Always there, so a change is announced; empty while the schedules say nothing. */}
-          <Box aria-live="polite" sx={{ mt: 1.25 }}>
-            {nextRunLine === null ? null : (
-              <Typography
-                variant="body2"
-                sx={{ display: 'flex', alignItems: 'center', gap: 0.75, fontWeight: 500 }}
-              >
-                <Box component="span" aria-hidden sx={{ display: 'flex', color: 'primary.main' }}>
-                  <AppIcon name="timer" size={16} />
-                </Box>
-                {nextRunLine}
-              </Typography>
-            )}
-          </Box>
-        </Box>
 
-        <ScheduleCostLine siteId={liveSiteId} triggers={triggers} timezone={form.timezone} />
-
-        <Box>
-          <FormControlLabel
-            control={
-              <Switch
-                checked={form.notify}
-                onChange={(event) => change({ notify: event.target.checked })}
-              />
-            }
-            label={scheduleDialogTexts.notify}
-            sx={{ ml: -1, mr: 0, '& .MuiFormControlLabel-label': { fontSize: 15 } }}
-          />
-          <FormHelperText sx={{ mx: 0, mt: 0 }}>{scheduleDialogTexts.notifyHint}</FormHelperText>
-          {form.notify ? <BrowserPushControl sx={{ mt: 1.25 }} /> : null}
-        </Box>
-
-        <Box>
-          <ButtonBase
-            aria-expanded={more}
-            aria-controls={moreId}
-            onClick={() => setMore(!more)}
+          {/*
+            Said with the window, not announced over it: a note, not an alert. Outlined on the
+            paper, so it does not read as a field: the box of the instructions above is filled.
+          */}
+          <Alert
+            severity="warning"
+            variant="outlined"
+            role="note"
+            icon={<AppIcon name="warning" size={18} />}
             sx={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 0.75,
-              minHeight: 40,
-              px: 1,
-              ml: -1,
-              borderRadius: '10px',
-              fontSize: 14,
-              fontWeight: 500,
-              color: 'text.secondary',
-              '&:hover': { color: 'text.primary', bgcolor: 'action.hover' },
-              '&.Mui-focusVisible': {
-                outline: '2px solid',
-                outlineColor: 'primary.main',
-                outlineOffset: 2,
-              },
+              bgcolor: 'transparent',
+              borderColor: 'divider',
+              borderRadius: '14px',
+              color: 'text.primary',
+              '& .MuiAlert-icon': { color: 'warning.main' },
             }}
           >
-            <Box
-              component="span"
-              aria-hidden
-              sx={{
-                display: 'flex',
-                transform: more ? 'rotate(90deg)' : 'none',
-                transition: 'transform 150ms ease',
-                '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
-              }}
+            {nbsp(scheduleDialogTexts.warning)}
+          </Alert>
+
+          <Box component="fieldset" sx={{ m: 0, p: 0, border: 0, minWidth: 0 }}>
+            <Typography
+              component="legend"
+              id={whenId}
+              variant="body2"
+              sx={{ p: 0, mb: 1.5, fontWeight: 500 }}
             >
-              <AppIcon name="chevron" size={16} />
-            </Box>
-            {scheduleDialogTexts.more}
-          </ButtonBase>
-          <Collapse in={more} id={moreId}>
-            <TextField
-              select
-              size="small"
-              label={scheduleDialogTexts.timezone}
-              value={form.timezone}
-              onChange={(event) => {
-                setZoneTouched(true)
-                change({ timezone: event.target.value })
-              }}
-              sx={{ mt: 1.5, width: { xs: '100%', sm: 320 } }}
-              slotProps={{
-                select: { MenuProps: { slotProps: { paper: { sx: { maxHeight: 360 } } } } },
-              }}
-            >
-              {zones.map((zone) => (
-                <MenuItem key={zone.id} value={zone.id}>
-                  {zone.label}
-                </MenuItem>
+              {scheduleDialogTexts.when}
+            </Typography>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {form.triggers.map((draft, index) => (
+                <Box
+                  key={draft.key}
+                  sx={
+                    index > 0
+                      ? { pt: 2, borderTop: 1, borderColor: 'divider', borderTopStyle: 'dashed' }
+                      : undefined
+                  }
+                >
+                  <TriggerFields
+                    draft={draft}
+                    index={index + 1}
+                    frequencies={frequencies}
+                    timezone={form.timezone}
+                    now={now}
+                    error={problems.triggers[draft.key] ?? null}
+                    removable={index > 0}
+                    onChange={(next) =>
+                      change({
+                        triggers: form.triggers.map((each) =>
+                          each.key === next.key ? next : each,
+                        ),
+                      })
+                    }
+                    onRemove={() =>
+                      change({ triggers: form.triggers.filter((each) => each.key !== draft.key) })
+                    }
+                  />
+                </Box>
               ))}
-            </TextField>
-          </Collapse>
+            </Box>
+            {canAddTrigger(form) ? (
+              <Button
+                onClick={() =>
+                  change({ triggers: [...form.triggers, addedTriggerDraft(form, now)] })
+                }
+                startIcon={<AppIcon name="plus" size={16} />}
+                sx={{ mt: 1.25, ml: -1, minHeight: 40, px: 1.25 }}
+              >
+                {scheduleDialogTexts.addTime}
+              </Button>
+            ) : null}
+            {scheduleError ? (
+              <FormHelperText id={scheduleErrorId} error role="alert" sx={{ mx: 0, mt: 1 }}>
+                {scheduleError}
+              </FormHelperText>
+            ) : null}
+            {/* Always there, so a change is announced; empty while the schedules say nothing. */}
+            <Box aria-live="polite" sx={{ mt: 1.25 }}>
+              {nextRunLine === null ? null : (
+                <Typography
+                  variant="body2"
+                  sx={{ display: 'flex', alignItems: 'center', gap: 0.75, fontWeight: 500 }}
+                >
+                  <Box component="span" aria-hidden sx={{ display: 'flex', color: 'primary.main' }}>
+                    <AppIcon name="timer" size={16} />
+                  </Box>
+                  {nextRunLine}
+                </Typography>
+              )}
+            </Box>
+          </Box>
+
+          <ScheduleCostLine siteId={liveSiteId} triggers={triggers} timezone={form.timezone} />
+
+          {/*
+            The switch in its column, its label and what is said under it in the next: the hint
+            and the push of this browser start where the label does, in one quiet style.
+          */}
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: 'auto minmax(0, 1fr)',
+              alignItems: 'center',
+              ml: -1,
+            }}
+          >
+            <Switch
+              id={notifyId}
+              checked={form.notify}
+              onChange={(event) => change({ notify: event.target.checked })}
+              slotProps={{ input: { 'aria-describedby': notifyHintId } }}
+            />
+            <Typography
+              component="label"
+              htmlFor={notifyId}
+              sx={{ fontSize: 15, lineHeight: 1.5, cursor: 'pointer' }}
+            >
+              {scheduleDialogTexts.notify}
+            </Typography>
+            <Box
+              data-notify-notes=""
+              sx={{ gridColumn: 2, display: 'flex', flexDirection: 'column', gap: 1.25 }}
+            >
+              <Typography id={notifyHintId} variant="body2" sx={{ color: 'text.secondary' }}>
+                {nbsp(scheduleDialogTexts.notifyHint)}
+              </Typography>
+              {form.notify ? <BrowserPushControl /> : null}
+            </Box>
+          </Box>
+
+          <Box>
+            <ButtonBase
+              aria-expanded={more}
+              aria-controls={moreId}
+              onClick={() => setMore(!more)}
+              sx={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 0.75,
+                minHeight: 40,
+                px: 1,
+                ml: -1,
+                borderRadius: '10px',
+                fontSize: 14,
+                fontWeight: 500,
+                color: 'text.secondary',
+                '&:hover': { color: 'text.primary', bgcolor: 'action.hover' },
+                '&.Mui-focusVisible': {
+                  outline: '2px solid',
+                  outlineColor: 'primary.main',
+                  outlineOffset: 2,
+                },
+              }}
+            >
+              <Box
+                component="span"
+                aria-hidden
+                sx={{
+                  display: 'flex',
+                  transform: more ? 'rotate(90deg)' : 'none',
+                  transition: 'transform 150ms ease',
+                  '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
+                }}
+              >
+                <AppIcon name="chevron" size={16} />
+              </Box>
+              {scheduleDialogTexts.more}
+            </ButtonBase>
+            <Collapse in={more} id={moreId}>
+              <TextField
+                select
+                size="small"
+                label={scheduleDialogTexts.timezone}
+                value={form.timezone}
+                onChange={(event) => {
+                  setZoneTouched(true)
+                  change({ timezone: event.target.value })
+                }}
+                sx={{ mt: 1.5, width: { xs: '100%', sm: 320 } }}
+                slotProps={{
+                  select: { MenuProps: { slotProps: { paper: { sx: { maxHeight: 360 } } } } },
+                }}
+              >
+                {zones.map((zone) => (
+                  <MenuItem key={zone.id} value={zone.id}>
+                    {zone.label}
+                  </MenuItem>
+                ))}
+              </TextField>
+            </Collapse>
+          </Box>
         </Box>
       </Box>
 
       <Box
-        sx={{
+        sx={(theme) => ({
+          // Above the body: its shadow falls on what scrolls under it.
+          position: 'relative',
+          zIndex: 1,
           display: 'flex',
           justifyContent: 'flex-end',
           gap: 1,
@@ -685,8 +746,14 @@ function ScheduleFormBody({
           pb: phone ? 'max(16px, env(safe-area-inset-bottom))' : 3,
           borderTop: 1,
           borderColor: 'divider',
+          // More of the form below: the end of the window is not where it looks finished.
+          boxShadow: moreBelow ? '0 -8px 16px -4px rgba(0, 0, 0, 0.12)' : 'none',
+          transition: 'box-shadow var(--raditi-motion-fast) var(--raditi-ease-out)',
+          ...(moreBelow
+            ? theme.applyStyles('dark', { boxShadow: '0 -8px 16px -4px rgba(0, 0, 0, 0.5)' })
+            : {}),
           '& > *': phone ? { flex: '1 1 0' } : {},
-        }}
+        })}
       >
         <Button onClick={onClose} disabled={pending}>
           {scheduleDialogTexts.cancel}
@@ -714,6 +781,37 @@ function ScheduleFormBody({
       </ConfirmDialog>
     </Box>
   )
+}
+
+/**
+ * Whether the body of the window has more above and below what it shows: its form scrolls between
+ * the title and the buttons, and with no cue a fold in a gap of the form looks like its end — a
+ * line under the title once it is scrolled, a shadow over the buttons while more is below. Read on
+ * a scroll and whenever the body or its content changes size (a field opens, a time is added, an
+ * error comes).
+ */
+function useScrollEdges() {
+  const [box, setBox] = useState<HTMLDivElement | null>(null)
+  const [content, setContent] = useState<HTMLDivElement | null>(null)
+  const [edges, setEdges] = useState({ scrolled: false, moreBelow: false })
+  const measure = useCallback(() => {
+    if (box === null) return
+    const scrolled = box.scrollTop > 0
+    // A pixel of rounding is not more of the form.
+    const moreBelow = box.scrollTop + box.clientHeight < box.scrollHeight - 1
+    setEdges((was) =>
+      was.scrolled === scrolled && was.moreBelow === moreBelow ? was : { scrolled, moreBelow },
+    )
+  }, [box])
+  useEffect(() => {
+    if (box === null || typeof ResizeObserver === 'undefined') return
+    // Its first report comes as soon as it observes: the window is measured as it opens.
+    const observer = new ResizeObserver(measure)
+    observer.observe(box)
+    if (content !== null) observer.observe(content)
+    return () => observer.disconnect()
+  }, [box, content, measure])
+  return { setScrollBox: setBox, setScrollContent: setContent, measureScroll: measure, ...edges }
 }
 
 /**

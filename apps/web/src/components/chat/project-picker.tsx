@@ -250,6 +250,11 @@ export function ProjectPicker({
           anchor="bottom"
           open={open}
           onClose={close}
+          // At the layer of a modal, as the menu of a computer is: opened later, it stands over a
+          // window it is opened from — the window of a scheduled task takes the whole phone screen
+          // (docs/plan/82-scheduled-tasks.md, Зп7), and at the drawer's own 1200 the sheet was
+          // under it, unseen.
+          sx={{ zIndex: 'modal' }}
           slotProps={{
             paper: {
               'aria-labelledby': titleId,

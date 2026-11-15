@@ -164,16 +164,20 @@ export function PagesView({ userId }: { userId: string }) {
   const shownTags = trashed > 0 ? [...tags, 'trash' as const] : tags
 
   return (
-    <Box
-      sx={{
-        width: '100%',
-        maxWidth: 1200,
-        mx: 'auto',
-        px: { xs: 2, md: 4 },
-        py: { xs: 2, md: 3.5 },
-      }}
-    >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minHeight: 48, mb: 2.5 }}>
+    // The shell gives the padding, as to «Запланированные задачи» and «Проекты»: the heading
+    // stands in one place on the three neighbours of the rail.
+    <Box sx={{ width: '100%', maxWidth: 1200, mx: 'auto' }}>
+      {/* Wraps: on a phone «Новый чат» moves under the title instead of breaking its word. */}
+      <Box
+        sx={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          gap: 1,
+          minHeight: 48,
+          mb: 2.5,
+        }}
+      >
         <SectionHeading title={pageTexts.title} about={pageTexts.about} />
         {!empty && list.data?.enabled !== false && (
           <Button

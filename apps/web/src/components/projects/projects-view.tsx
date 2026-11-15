@@ -18,6 +18,7 @@ import NextLink from 'next/link'
 import { useRef, useState } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
+import { sectionTitleSize } from '@/components/application/section-heading'
 import { useTRPC } from '@/trpc/client'
 
 import { projectChip, stackLabels } from './project-labels'
@@ -42,6 +43,9 @@ const iconButtonSx = {
   borderRadius: '12px',
   color: 'text.secondary',
   '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
+  // Out of the height of the title's line, drawn and reached at 44 px: on a phone the title
+  // stands where the titles of «Запланированные задачи» and «Страницы» do, not lower.
+  my: -1,
 } as const
 
 export function ProjectsView() {
@@ -84,11 +88,21 @@ export function ProjectsView() {
         flexDirection: 'column',
       }}
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minHeight: 48 }}>
+      {/* Wraps: on a phone «Новый проект» moves under the title instead of covering it. */}
+      <Box
+        sx={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          gap: 0.5,
+          rowGap: 1,
+          minHeight: 48,
+        }}
+      >
         <Typography
           variant="h2"
           component="h1"
-          sx={{ flex: '1 1 auto', minWidth: 0, fontSize: { xs: 26, md: 30 }, lineHeight: 1.2 }}
+          sx={{ flex: '1 1 auto', minWidth: 0, fontSize: sectionTitleSize, lineHeight: 1.2 }}
         >
           Проекты
         </Typography>
@@ -142,7 +156,12 @@ export function ProjectsView() {
             </Menu>
           </>
         ) : null}
-        <Button variant="contained" href={NEW_PROJECT} sx={{ flexShrink: 0, ml: 1, minHeight: 40 }}>
+        <Button
+          variant="contained"
+          href={NEW_PROJECT}
+          // No step in from the edge when it stands under the title on a phone.
+          sx={{ flexShrink: 0, ml: { xs: 0, sm: 1 }, minHeight: 40 }}
+        >
           Новый проект
         </Button>
       </Box>

@@ -438,7 +438,9 @@ export const scheduleChatText = Object.freeze({
   nextRun: (when: string) => `Следующий запуск: ${when}`,
   paused: 'На паузе',
   noProject: 'Без проекта',
-  project: (name: string) => `Проект «${name}»`,
+  // «Проект: Кофейня «Крошка»», as «Размышление: низкое» beside it: a name in quotes of its own
+  // would nest them.
+  project: (name: string) => `Проект: ${name}`,
   effort: (level: string) => `Размышление: ${level}`,
   notifyOn: 'Уведомит, когда выполнится',
   notifyOff: 'Без уведомления о выполнении',

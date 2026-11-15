@@ -579,7 +579,8 @@ describe('a dialog', () => {
 
   // docs/plan/82-scheduled-tasks.md, Зп43: a chat of a run says so under its name.
   it('says under its name that it is a run of a scheduled task, with a link to the task', async () => {
-    calls.feed.mockResolvedValue(waiting())
+    // The chat of a run takes the name of its task (Зп17).
+    calls.feed.mockResolvedValue(waiting({ task: { title: 'Заявки за сутки' } }))
     const schedule = { id: SCHEDULE_ID, name: 'Заявки за сутки', trigger: 'schedule' } as const
     const client = new QueryClient()
     const view = (
@@ -592,17 +593,35 @@ describe('a dialog', () => {
     const { rerender } = render(view(schedule))
     await screen.findByText('Изменения готовы')
     const head = screen.getByRole('banner')
-    expect(
-      within(head)
-        .getByRole('link', { name: 'По расписанию · Заявки за сутки' })
-        .getAttribute('href'),
-    ).toBe(`/scheduled/${SCHEDULE_ID}`)
+    const mark = within(head).getByRole('link', { name: 'По расписанию · Заявки за сутки' })
+    expect(mark.getAttribute('href')).toBe(`/scheduled/${SCHEDULE_ID}`)
+    // The chat is named as its task: the name, right above, is not said again under it.
+    expect(mark.textContent).toBe('По расписанию')
     // A deleted task leaves its name, without a link (Зп23).
     rerender(view({ id: null, name: 'Заявки за сутки', trigger: 'manual' }))
-    expect(within(head).getByText('Запуск вручную · Заявки за сутки')).toBeTruthy()
+    expect(within(head).getByText('Запуск вручную')).toBeTruthy()
     expect(within(head).queryByRole('link', { name: /Заявки за сутки/ })).toBeNull()
     rerender(view(null))
     expect(within(head).queryByText(/Заявки за сутки ·|· Заявки за сутки/)).toBeNull()
+  })
+
+  it('names the task under a chat of a run that was renamed', async () => {
+    calls.feed.mockResolvedValue(waiting({ task: { title: 'Заявки за понедельник' } }))
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <DialogView
+          project={PROJECT}
+          schedule={{ id: SCHEDULE_ID, name: 'Заявки за сутки', trigger: 'schedule' }}
+          taskId={TASK_ID}
+          title="Заявки за понедельник"
+        />
+      </QueryClientProvider>,
+    )
+    await screen.findByText('Изменения готовы')
+    const mark = within(screen.getByRole('banner')).getByRole('link', {
+      name: 'По расписанию · Заявки за сутки',
+    })
+    expect(mark.textContent).toBe('По расписанию · Заявки за сутки')
   })
 
   it('opens the window of a scheduled task from the cards of its feed (Зп35)', async () => {

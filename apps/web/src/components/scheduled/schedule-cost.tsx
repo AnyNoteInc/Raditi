@@ -27,15 +27,22 @@ export function costText(cost: ScheduleCost): { text: string; over: boolean } {
   }
 }
 
-/** The cost of the schedules of a task, as the server counts it for its workspace (Зп30). */
+/**
+ * The cost of the schedules of a task, as the server counts it for its workspace (Зп30). In the
+ * window it is a quiet line under the schedules; on the page of the task it is the value of the
+ * fact «Стоимость», drawn as the other values are.
+ */
 export function ScheduleCostLine({
   siteId,
   triggers,
   timezone,
+  tone = 'quiet',
 }: {
   siteId: string | null
   triggers: ScheduleTrigger[]
   timezone: string
+  /** `quiet` — a hint, 14 px and secondary; `value` — a value of a fact, 15 px and primary. */
+  tone?: 'quiet' | 'value'
 }) {
   const trpc = useTRPC()
   const valid = scheduleTriggersSchema.safeParse(triggers).success
@@ -46,16 +53,21 @@ export function ScheduleCostLine({
   })
   if (!valid || cost.data === undefined) return null
   const { text, over } = costText(cost.data)
+  const value = tone === 'value'
   return (
     <Box
+      data-cost-tone={tone}
       sx={{
         display: 'flex',
         gap: 1,
         alignItems: 'flex-start',
-        color: over ? 'warning.main' : 'text.secondary',
+        color: over ? 'warning.main' : value ? 'text.primary' : 'text.secondary',
       }}
     >
-      <Typography variant="body2" sx={{ color: 'inherit', lineHeight: 1.5 }}>
+      <Typography
+        variant="body2"
+        sx={{ color: 'inherit', lineHeight: 1.5, ...(value ? { fontSize: 15 } : {}) }}
+      >
         {nbsp(text)}
       </Typography>
     </Box>
