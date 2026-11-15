@@ -49,4 +49,12 @@ export const projectRefusalTexts: Readonly<Record<string, string>> = Object.free
   TASK_PROJECT_HAS_BRANCH:
     'Агент уже работал в этом чате с репозиторием проекта — такой чат не переносится',
   TASK_PROJECT_BUSY: 'Агент сейчас работает в этом чате — перенесите его, когда он ответит',
+  // The files of the context (ПР8); the reason and the scope pick finer words where the transport
+  // reads its details.
+  PROJECT_FILE_REFUSED: 'Этот файл в проект добавить нельзя',
+  PROJECT_FILE_NOT_FOUND: 'Файла нет или он удалён',
+  PROJECT_FILE_NOT_READY:
+    'Файл ещё не загрузился или время на его загрузку истекло — добавьте его снова',
+  PROJECT_FILES_TOO_MANY: 'В проекте уже 100 файлов — удалите лишние, чтобы добавить новые',
+  PROJECT_SPACE_FULL: 'Места для файлов не хватает',
 })

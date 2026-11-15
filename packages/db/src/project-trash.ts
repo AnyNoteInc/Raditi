@@ -112,8 +112,9 @@ export type ProjectPurge =
  * the project waits for the next sweep. Idempotent: a project restored or purged meanwhile is
  * `kept`.
  *
- * Files, memory, git caches and the hook of the project (ПР20) have no tables yet: they go here
- * when their slices bring them (84.10, 84.13, 84.16).
+ * The files of the context go before (core's ProjectTrash drops their objects and rows: this
+ * transaction cannot reach S3); a row left would go by cascade. Memory, git caches and the hook of
+ * the project (ПР20) have no tables yet: they go here when their slices bring them (84.13, 84.16).
  */
 export async function purgeProject(
   db: PrismaClient,

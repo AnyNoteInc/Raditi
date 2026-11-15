@@ -10,6 +10,7 @@ import {
   updateProject,
 } from '@repo/db'
 import {
+  projectFileIdsSchema,
   projectGoalInputSchema,
   projectGoalOf,
   projectIdSchema,
@@ -24,12 +25,13 @@ import { z } from 'zod'
 
 import { chatContextOf } from '../services/chat/context.ts'
 import { personalWorkspaceOf, WRITE } from '../services/chat/dialog-lock.ts'
+import { bindFilesToProject, projectFilesOverview } from '../services/projects/files.ts'
 import { consentedProcedure, router } from '../trpc.ts'
 
 // «Проекты» (docs/plan/84-projects.md, §4.4; slice 84.4): the projects of the user, in their
 // personal workspace (ПР1). Only the author sees and changes a project: any other answers
-// PROJECT_NOT_FOUND, as one that does not exist. The context, the memory, the repository and the
-// tasks of a project come with their own slices.
+// PROJECT_NOT_FOUND, as one that does not exist. The files of the context are `projectFile.*` (slice 84.8);
+// the memory, the repository and the tasks of a project come with their own slices.
 
 /** A project that exists answers by its id as PostgreSQL prints it. */
 const projectRef = z.uuid().transform((id) => id.toLowerCase())
@@ -50,6 +52,17 @@ const projectListItem = z.strictObject({
   purgeAfter: z.date().nullable(),
 })
 
+const projectFileItem = z.strictObject({
+  id: z.uuid(),
+  projectId: z.uuid().nullable(),
+  kind: z.enum(['file', 'text']),
+  name: z.string(),
+  mediaType: z.string(),
+  sizeBytes: z.number().int(),
+  status: z.enum(['uploading', 'ready']),
+  createdAt: z.date(),
+})
+
 const projectOutput = z.strictObject({
   id: z.uuid(),
   name: z.string(),
@@ -61,6 +74,13 @@ const projectOutput = z.strictObject({
   chats: z.number().int().min(0),
   activityAt: z.date(),
   createdAt: z.date(),
+  /** The context (ПР8): how many files, their bytes, the room of a project, the first of them. */
+  files: z.strictObject({
+    count: z.number().int().min(0),
+    bytes: z.number().int().min(0),
+    limitBytes: z.number().int(),
+    first: z.array(projectFileItem),
+  }),
 })
 
 export const projectRouter = router({
@@ -92,7 +112,7 @@ export const projectRouter = router({
         projectId: input.projectId,
         userId: ctx.user.id,
       })
-      return project
+      return { ...project, files: await projectFilesOverview(ctx.prisma, project.id) }
     }),
 
   /**
@@ -106,6 +126,8 @@ export const projectRouter = router({
         projectId: projectIdSchema,
         name: projectNameInputSchema,
         goal: projectGoalInputSchema.optional(),
+        /** Files of the context uploaded in the window (ПР8): the project takes them all or none. */
+        fileIds: projectFileIdsSchema.optional(),
       }),
     )
     .output(z.strictObject({ projectId: z.uuid(), created: z.boolean() }))
@@ -116,18 +138,25 @@ export const projectRouter = router({
         userId: ctx.user.id,
         appEnv: chatContextOf(ctx).appEnv,
       })
-      return ctx.prisma.$transaction(
-        (tx) =>
-          createProject(tx, {
-            id: input.projectId,
-            workspaceId,
+      // One transaction (ПР5): the project and its files, or nothing. A repeat of a project
+      // already made takes no file again — they are its own since the first call.
+      return ctx.prisma.$transaction(async (tx) => {
+        const made = await createProject(tx, {
+          id: input.projectId,
+          workspaceId,
+          userId: ctx.user.id,
+          name,
+          goal,
+          now: new Date(),
+        })
+        if (made.created && input.fileIds?.length)
+          await bindFilesToProject(tx, {
+            projectId: made.projectId,
             userId: ctx.user.id,
-            name,
-            goal,
-            now: new Date(),
-          }),
-        WRITE,
-      )
+            fileIds: input.fileIds,
+          })
+        return made
+      }, WRITE)
     }),
 
   /** «Переименовать», the goal and «Память аккаунта» (ПР5, ПР18). */

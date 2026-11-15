@@ -44,6 +44,27 @@ export function admitAttachmentUpload(
 }
 
 /**
+ * Files of the context of projects in a window (docs/plan/84-projects.md, ПР8): a folder of a
+ * project is a hundred files — a bound on bytes streamed to the inbox, not a quota.
+ */
+export const PROJECT_FILE_UPLOADS_PER_WINDOW = 200
+export const PROJECT_FILE_UPLOAD_WINDOW_MS = 10 * 60_000
+
+/** One upload of a file of a project (`PUT /api/project-files/<id>`). */
+export function admitProjectFileUpload(
+  db: Pick<PrismaClient, '$queryRaw'>,
+  userId: string,
+  now: number = Date.now(),
+): Promise<boolean> {
+  return admitInWindow(db, {
+    key: `project-file-upload:${userId}`,
+    limit: PROJECT_FILE_UPLOADS_PER_WINDOW,
+    windowMs: PROJECT_FILE_UPLOAD_WINDOW_MS,
+    now,
+  })
+}
+
+/**
  * Counts one attempt under `key` and tells whether it fits the current window. The counter
  * lives in `rate_limits`, next to the limits of the sign-in routes, so every web replica sees
  * it. For these keys `last_request` is the END of the window: better-auth deletes every row of

@@ -82,7 +82,7 @@ async function signedIn(request: Request, deps: AttachmentUploadDependencies): P
 }
 
 /** A declared length of the body; null when the request has none (a chunked body). */
-function declaredLength(request: Request): number | null {
+export function declaredLength(request: Request): number | null {
   const header = request.headers.get('content-length')
   if (header === null) return null
   return /^\d{1,15}$/.test(header.trim()) ? Number(header) : Number.NaN
@@ -93,7 +93,7 @@ function declaredLength(request: Request): number | null {
  * shorter) and an iterable of the whole body, those bytes first. More than `limit` bytes in all
  * end the iteration with a refusal: a forged Content-Length cannot carry more.
  */
-async function headOf(
+export async function headOf(
   body: ReadableStream<Uint8Array>,
   limit: number,
 ): Promise<{ head: Uint8Array; all: AsyncIterable<Uint8Array>; cancel: () => Promise<void> }> {
@@ -193,7 +193,7 @@ async function storeUpload(
 }
 
 /** The storage refused a stream shorter or longer than its declared size (`checkedLength`). */
-function isLengthRefusal(error: unknown): boolean {
+export function isLengthRefusal(error: unknown): boolean {
   return (
     typeof error === 'object' &&
     error !== null &&

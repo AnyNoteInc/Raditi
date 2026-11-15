@@ -3,7 +3,10 @@ import { randomUUID } from 'node:crypto'
 import { ensurePersonalWorkspaceWithGift } from '@repo/billing'
 import { billingFixtures } from '@repo/billing/testing'
 import {
+  bindProjectFiles,
   createPrismaClient,
+  createProjectFile,
+  markProjectFileReady,
   createProject,
   insertFeedEvent,
   purgeProject,
@@ -196,7 +199,7 @@ describe.skipIf(!enabled)('the trash of projects with PostgreSQL (plan 84, 84.5)
     // Core closed it; the next sweep purges: the project row is gone, only deleted chats stay.
     await db.$executeRaw`UPDATE tasks SET status = 'cancelled' WHERE id = ${queued}::uuid`
     const swept = await purging.sweep()
-    expect(swept).toEqual({ stopped: 0, purged: 1 })
+    expect(swept).toEqual({ stopped: 0, purged: 1, collected: 0 })
     expect(await db.project.count({ where: { id: projectId } })).toBe(0)
     const left = await db.task.findMany({
       where: { id: { in: chats } },
@@ -209,7 +212,7 @@ describe.skipIf(!enabled)('the trash of projects with PostgreSQL (plan 84, 84.5)
     }
     // A repeat finds nothing to purge; within the hour the sweep does not purge again.
     expect(await purging.purge()).toEqual({ purged: 0, more: false })
-    expect(await purging.sweep()).toEqual({ stopped: 0, purged: null })
+    expect(await purging.sweep()).toEqual({ stopped: 0, purged: null, collected: 0 })
   })
 
   it('a project restored before the purge took it is kept', async () => {
@@ -221,5 +224,60 @@ describe.skipIf(!enabled)('the trash of projects with PostgreSQL (plan 84, 84.5)
     await restoreProject(db, { projectId, userId, now: new Date(now.getTime() + DAY) })
     expect(await purgeProject(db, { projectId, now: new Date() })).toEqual({ state: 'kept' })
     expect(await db.project.count({ where: { id: projectId } })).toBe(1)
+  })
+  it('collects a file no project took after its day, and drops the files of a purged project first (84.8)', async () => {
+    const now = new Date(Date.now() - 31 * DAY)
+    const { userId, projectId } = await projectWith(['done'], now)
+    const project = await db.project.findUniqueOrThrow({ where: { id: projectId } })
+    const announce = async (name: string) => {
+      const row = await createProjectFile(db, {
+        workspaceId: project.workspaceId,
+        uploadedById: userId,
+        kind: 'file',
+        name,
+        mediaType: 'application/pdf',
+        sizeBytes: 10,
+      })
+      await markProjectFileReady(db, { id: row!.id, sizeBytes: 10, sha256: 'c'.repeat(64) })
+      return row!
+    }
+    const kept = await announce('Бриф.pdf')
+    await db.$transaction((tx) =>
+      bindProjectFiles(tx, {
+        projectId,
+        workspaceId: project.workspaceId,
+        userId,
+        ids: [kept.id],
+      }),
+    )
+    const loose = await announce('Черновик.pdf')
+    const fresh = await announce('Свежий.pdf')
+    // Its day is over, and the grace of an upload that may still be writing too.
+    await db.$executeRaw`UPDATE project_files SET expires_at = now() - interval '1 hour'
+      WHERE id = ${loose.id}::uuid`
+    const deleted: string[] = []
+    let failing = true
+    const storage = {
+      delete: vi.fn(async (_bucket: string, key: string) => {
+        if (failing && key === kept.key) throw new Error('S3 down')
+        deleted.push(key)
+      }),
+    }
+    const trash = new ProjectTrash({ db, storage, logger: quiet, now: () => new Date() })
+    expect(await trash.collectFiles()).toBe(1)
+    expect(deleted).toEqual([loose.key])
+    expect(
+      await db.projectFile.count({ where: { id: { in: [loose.id, fresh.id, kept.id] } } }),
+    ).toBe(2)
+
+    // The project past its day: a failed delete of an object of its files keeps it waiting.
+    await trashProject(db, { projectId, userId, now })
+    expect(await trash.purge()).toEqual({ purged: 0, more: true })
+    expect(await db.project.count({ where: { id: projectId } })).toBe(1)
+    failing = false
+    expect(await trash.purge()).toEqual({ purged: 1, more: false })
+    expect(deleted).toContain(kept.key)
+    expect(await db.projectFile.count({ where: { id: kept.id } })).toBe(0)
+    await db.projectFile.deleteMany({ where: { id: fresh.id } })
   })
 })

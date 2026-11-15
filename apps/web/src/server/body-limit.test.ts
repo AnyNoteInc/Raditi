@@ -170,6 +170,9 @@ describe('API routes', () => {
     // attachment-upload.ts streams the file to the inbox after the session, the origin, the
     // consents and the announced size, never more than announced: 20 MiB at most.
     'attachments/[id]': /uploadAttachment\(request, await params, attachmentUploadDependencies\)/,
+    // project-file.ts does the same for a file of a project (docs/plan/84-projects.md, ПР8),
+    // reading a text whole only within its announced size: 20 MiB at most.
+    'project-files/[id]': /uploadProjectFile\(request, await params, projectFileDependencies\)/,
     // speech.ts reads the sound after the session, the origin, the consents and a declared length
     // of at most 30 seconds of PCM (docs/plan/75-chat-input-output.md, ВВ17).
     speech: /recognizeSpeech\(request, speechDependencies\)/,

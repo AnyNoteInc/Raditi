@@ -94,6 +94,16 @@ test('a body sent to the API is limited at the edge; pages and GET are never buf
   // So does the upload of an attached file (20 MiB, Б26): web streams it to the inbox after its
   // own checks; nothing else under the prefix takes a body
   assert.match(api, /!PathPrefix\(`\/api\/attachments\/`\)/)
+  // So does the upload of a file of a project (20 MiB, docs/plan/84, ПР8), on the same checks
+  assert.match(api, /!PathPrefix\(`\/api\/project-files\/`\)/)
+  const projectFiles = readFileSync(
+    new URL('../../apps/web/src/app/api/project-files/[id]/route.ts', import.meta.url),
+    'utf8',
+  )
+  assert.deepEqual(
+    [...projectFiles.matchAll(/^export (?:async )?function (\w+)/gm)].map((m) => m[1]),
+    ['PUT', 'GET'],
+  )
   // So does dictation (960 000 bytes at most, docs/plan/75, ВВ17): web reads it after its checks
   assert.match(api, /!Path\(`\/api\/speech`\)/)
   const route = readFileSync(

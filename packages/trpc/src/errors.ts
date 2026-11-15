@@ -7,7 +7,11 @@ import {
   feedInputText,
   feedTooLongText,
   isDomainError,
+  projectFileRefusals,
+  projectFileRefusalText,
   projectRefusalTexts,
+  projectSpaceFullText,
+  type ProjectFileRefusal,
   taskRefusalDetailsSchema,
   type AttachmentRefusal,
   type ChatCommandRefusal,
@@ -465,6 +469,20 @@ const MESSAGE_FROM_DETAILS: Readonly<Record<string, (details: unknown) => string
     return reason !== null && (attachmentRefusals as readonly string[]).includes(reason)
       ? attachmentRefusalText[reason as AttachmentRefusal].replace(/\.$/, '')
       : MESSAGE_BY_DOMAIN_CODE.ATTACHMENT_REFUSED!
+  },
+  // Why a file of a project is not taken (docs/plan/84-projects.md, ПР8): `details.reason`.
+  PROJECT_FILE_REFUSED: (details) => {
+    const reason = reasonOf(details)
+    return reason !== null && (projectFileRefusals as readonly string[]).includes(reason)
+      ? projectFileRefusalText[reason as ProjectFileRefusal]
+      : MESSAGE_BY_DOMAIN_CODE.PROJECT_FILE_REFUSED!
+  },
+  // Whose room is full: the project's or the workspace's (`details.scope`).
+  PROJECT_SPACE_FULL: (details) => {
+    const scope = detail(details, 'scope')
+    return scope === 'project' || scope === 'workspace'
+      ? projectSpaceFullText[scope]
+      : MESSAGE_BY_DOMAIN_CODE.PROJECT_SPACE_FULL!
   },
   // A command of the chat the server refused: the words `task.commands` shows for it.
   CHAT_COMMAND_UNAVAILABLE: (details) => {

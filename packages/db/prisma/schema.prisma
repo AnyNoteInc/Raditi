@@ -55,6 +55,7 @@ model User {
   speechCalls             SpeechCall[]
   agentInstructions       AgentInstructions?
   projectsCreated         Project[]             @relation("ProjectCreator")
+  projectFilesUploaded    ProjectFile[]         @relation("ProjectFileUploader")
 
   @@map("users")
 }
@@ -188,6 +189,7 @@ model Workspace {
   envVars         WorkspaceEnvVar[]
   agentSkills     WorkspaceAgentSkill[]
   projects        Project[]
+  projectFiles    ProjectFile[]
 
   @@index([createdById])
   @@map("workspaces")
@@ -410,13 +412,51 @@ model Project {
   createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
-  createdBy User      @relation("ProjectCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  createdBy User          @relation("ProjectCreator", fields: [createdById], references: [id], onDelete: Restrict)
   tasks     Task[]
+  files     ProjectFile[]
 
   @@index([workspaceId, createdById, activityAt(sort: Desc)], map: "projects_owner_activity_idx", where: raw("deleted_at IS NULL"))
   @@index([purgeAfter], map: "projects_purge_idx", where: raw("deleted_at IS NOT NULL"))
   @@map("projects")
+}
+
+/// A file or a text of the context of a project (docs/plan/84-projects.md, ПР8), in raditi-inbox
+/// under projects/<workspaceId>/<id> (projectFileKey in @repo/domain; CHECK project_files_key_check).
+/// Announced without a project and with a day to be taken (`expires_at`), `ready` once web checked
+/// the stored object, then bound to a project (CHECK project_files_bound_ready_check), which keeps
+/// it while it lives; core collects a file nobody took.
+model ProjectFile {
+  id           String    @id @db.Uuid
+  workspaceId  String    @map("workspace_id") @db.Uuid
+  projectId    String?   @map("project_id") @db.Uuid
+  uploadedById String?   @map("uploaded_by_id") @db.Uuid
+  /// `file` — uploaded; `text` — «Добавить текстовое содержимое», kept as `.md` (CHECK).
+  kind         String    @db.VarChar(8)
+  /// The path in /workspace/project (projectFilePath; CHECK project_files_name_check).
+  name         String    @db.VarChar(255)
+  mediaType    String    @map("media_type") @db.VarChar(127)
+  /// 1 byte to 20 MiB (CHECK project_files_size_check).
+  sizeBytes    Int       @map("size_bytes")
+  /// Of the stored bytes, once web checked them.
+  sha256       String?   @db.Char(64)
+  /// `uploading` or `ready` (projectFileStatuses; CHECK project_files_status_check).
+  status       String    @default("uploading") @db.VarChar(10)
+  s3Key        String    @map("s3_key") @db.VarChar(200)
+  /// A file without a project: until when it may be taken (now() + 24 h).
+  expiresAt    DateTime? @map("expires_at") @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project    Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  uploadedBy User?     @relation("ProjectFileUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, name])
+  @@index([workspaceId])
+  @@index([expiresAt], map: "project_files_unbound_idx", where: raw("project_id IS NULL"))
+  @@map("project_files")
 }
 
 model Task {

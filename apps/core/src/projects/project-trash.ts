@@ -1,19 +1,33 @@
 import { Logger } from '@nestjs/common'
 import {
+  deleteExpiredProjectFile,
+  deleteProjectFileRow,
+  listExpiredProjectFiles,
   lockProjectChats,
   projectBusyStatuses,
+  projectFileKeys,
   projectsDueForPurge,
   purgeProject,
   stopProjectChats,
   type PrismaClient,
 } from '@repo/db'
+import type { ObjectStorage } from '@repo/domain'
 
 /** How often the projects whose 30 days in the trash are over are purged (docs/plan/84, §4.3). */
 export const PROJECT_PURGE_EVERY_MS = 60 * 60_000
 const BATCH = 20
+const FILE_BATCH = 100
+
+const errorName = (error: unknown) => (error instanceof Error ? error.name : 'unknown')
 
 export interface ProjectTrashDependencies {
   db: PrismaClient
+  /**
+   * raditi-inbox, where the files of the context lie (docs/plan/84-projects.md, ПР8): files no
+   * project took are collected, and the files of a purged project go before it. Absent — neither:
+   * a project with files then waits.
+   */
+  storage?: Pick<ObjectStorage, 'delete'> | null
   logger?: { log(message: string): void; warn(message: string): void }
   now?: () => Date
 }
@@ -23,6 +37,8 @@ export interface ProjectTrashSweep {
   stopped: number
   /** Projects purged; null — not their hour. */
   purged: number | null
+  /** Files no project took, collected after their day (ПР8). */
+  collected: number
 }
 
 /**
@@ -33,6 +49,9 @@ export interface ProjectTrashSweep {
  *   there by a race with it is stopped here;
  * - once an hour the projects past `purge_after` are purged (`purgeProject`): only their chats
  *   stay, deleted. A project with a chat that has not ended presses it and waits for the next hour.
+ *
+ * - files of the context no project took within their day are collected, and the files of a
+ *   project being purged go before it: their objects in raditi-inbox, then their rows (ПР8).
  *
  * The pause of the scheduled tasks of a project in the trash (ПР19, `project_gone`) comes with
  * the scheduled tasks (Э5): its place is `stopChats`. Every write is conditional under the lock of
@@ -50,15 +69,61 @@ export class ProjectTrash {
 
   async sweep(): Promise<ProjectTrashSweep> {
     const stopped = await this.stopChats()
+    const collected = await this.collectFiles()
     const now = this.#now().getTime()
     const due = this.#purgedAt === null || now - this.#purgedAt >= PROJECT_PURGE_EVERY_MS
     const purge = due ? await this.purge() : null
     // A chat still stopping, or more projects than a batch: the next minute goes on.
     if (purge && !purge.more) this.#purgedAt = now
     const purged = purge?.purged ?? null
-    if (stopped > 0 || (purged ?? 0) > 0)
-      this.#logger.log(`project_trash stopped=${stopped} purged=${purged ?? 0}`)
-    return { stopped, purged }
+    if (stopped > 0 || (purged ?? 0) > 0 || collected > 0)
+      this.#logger.log(
+        `project_trash stopped=${stopped} purged=${purged ?? 0} files_collected=${collected}`,
+      )
+    return { stopped, purged, collected }
+  }
+
+  /**
+   * Files of the context no project took within their day (ПР8), a batch at a time: the object
+   * first, then the row. A delete that fails leaves the row for the next sweep; S3 deletes a missing
+   * key without an error, so a repeat after a stop between the two only removes the row.
+   */
+  async collectFiles(): Promise<number> {
+    const { db, storage } = this.deps
+    if (!storage) return 0
+    let removed = 0
+    for (const file of await listExpiredProjectFiles(db, { limit: FILE_BATCH })) {
+      try {
+        await storage.delete('inbox', file.key)
+        if (await deleteExpiredProjectFile(db, { id: file.id })) removed++
+      } catch (error) {
+        this.#logger.warn(`project_file_collect_failed ${errorName(error)}`)
+      }
+    }
+    return removed
+  }
+
+  /**
+   * The objects of the files of a project past its day, then their rows: purgeProject() would drop
+   * the rows by cascade and leave the objects. false — a file is left (no storage, or a delete
+   * failed): the project waits. Its day is over, so «Вернуть» can no longer bring the files back.
+   */
+  async #dropFiles(projectId: string): Promise<boolean> {
+    const { db, storage } = this.deps
+    for (;;) {
+      const files = await projectFileKeys(db, { projectId, limit: FILE_BATCH })
+      if (files.length === 0) return true
+      if (!storage) return false
+      for (const file of files) {
+        try {
+          await storage.delete('inbox', file.key)
+          await deleteProjectFileRow(db, { id: file.id })
+        } catch (error) {
+          this.#logger.warn(`project_file_purge_failed ${errorName(error)}`)
+          return false
+        }
+      }
+    }
   }
 
   /** The chats of projects in the trash whose pass is queued or runs, pressed to stop. */
@@ -102,6 +167,10 @@ export class ProjectTrash {
     let purged = 0
     let waiting = 0
     for (const { id } of due) {
+      if (!(await this.#dropFiles(id))) {
+        waiting++
+        continue
+      }
       const result = await purgeProject(db, { projectId: id, now })
       if (result.state === 'purged') purged++
       else if (result.state === 'stopping') waiting++

@@ -170,7 +170,7 @@ export const taskProviders: Provider[] = [
         inbox,
         pages: new PagePublications({ db: prisma, logger: new Logger('Pages') }),
         pageMetrics,
-        projects: new ProjectTrash({ db: prisma }),
+        projects: new ProjectTrash({ db: prisma, storage: inbox }),
       })
     },
     inject: [

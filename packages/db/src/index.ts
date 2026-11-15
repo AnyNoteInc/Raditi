@@ -183,6 +183,30 @@ export {
   type ProjectChat,
   type ProjectPurge,
 } from './project-trash.ts'
+export {
+  bindProjectFiles,
+  chatProjectFile,
+  createProjectFile,
+  deleteExpiredProjectFile,
+  deleteProjectFileRow,
+  listExpiredProjectFiles,
+  listProjectFiles,
+  lockWorkspaceFiles,
+  markProjectFileReady,
+  ownedProjectFile,
+  PROJECT_FILE_COLLECT_GRACE_MINUTES,
+  PROJECT_FILE_UNBOUND_HOURS,
+  projectFileKeys,
+  projectFilesSummary,
+  projectFileUpload,
+  projectRoomOf,
+  readyProjectFiles,
+  removeProjectFile,
+  type ExpiredProjectFile,
+  type ProjectFileFacts,
+  type ProjectFileRow,
+  type ProjectFileUpload,
+} from './project-files.ts'
 export { PostgresSiteLeaseStore } from './site-leases.ts'
 export { PostgresTurnAssignmentStore } from './turn-assignments.ts'
 export { PostgresTaskTurnAssignmentStore } from './task-turn-assignments.ts'

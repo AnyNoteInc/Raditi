@@ -84,6 +84,7 @@ const kolos: ProjectDetails = {
   chats: 0,
   activityAt: NOW,
   createdAt: NOW,
+  files: { count: 0, bytes: 0, limitBytes: 100 * 1024 * 1024, first: [] },
 }
 
 function show(project: ProjectDetails = kolos) {

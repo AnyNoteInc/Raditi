@@ -8,6 +8,7 @@ import { documentRouter } from './routers/document.ts'
 import { healthRouter } from './routers/health.ts'
 import { pagesRouter } from './routers/pages.ts'
 import { projectRouter } from './routers/project.ts'
+import { projectFileRouter } from './routers/project-file.ts'
 import { taskRouter } from './routers/task.ts'
 import { userRouter } from './routers/user.ts'
 import { workspaceEnvRouter } from './routers/workspace-env.ts'
@@ -32,6 +33,8 @@ export const appRouter = router({
   pages: pagesRouter,
   // «Проекты»: chats of one matter with their instructions (docs/plan/84-projects.md).
   project: projectRouter,
+  // The files and texts of the context of a project (docs/plan/84-projects.md, ПР8).
+  projectFile: projectFileRouter,
   // «Настройки → Переменные»: the variables every chat of a workspace gets (plan 83, БП4).
   workspaceEnv: workspaceEnvRouter,
   // «Настройки → Навыки агента»: the MCP servers of the workspace's agent (plan 81; plan 83, БП11).
