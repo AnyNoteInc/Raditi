@@ -18,7 +18,7 @@ import {
 } from './landing-page.ts'
 
 // DOM and geometry assertions, not pixel snapshots: they hold on any OS and font rendering.
-// Needs the web server and a database with seeds (the pricing slider renders from the plans).
+// Needs the web server and a database with seeds (the plans of the pricing come from the database).
 
 const INK = 'rgb(36, 23, 16)'
 const PAPER = 'rgb(255, 248, 236)'
@@ -114,30 +114,11 @@ function highlightedWordIsHit(page: Page): Promise<boolean> {
   })
 }
 
-/**
- * The rows that an element paints in one column of its screenshot: every pixel of the column that
- * differs from the first pixel of the screenshot, the surface around the element. For the parts
- * of a native control, which a script cannot measure: the track and the thumb of a slider.
- */
-async function paintedRows(page: Page, element: Locator, column: (width: number) => number) {
-  const shot = (await element.screenshot()).toString('base64')
-  const { width, height, columns } = await page.evaluate(async (base64) => {
-    const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0))
-    const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }))
-    const context = new OffscreenCanvas(bitmap.width, bitmap.height).getContext('2d')
-    if (!context) throw new Error('No canvas to read the screenshot with')
-    context.drawImage(bitmap, 0, 0)
-    const { data, width, height } = context.getImageData(0, 0, bitmap.width, bitmap.height)
-    const pixel = (x: number, y: number) => data.slice((y * width + x) * 4, (y * width + x) * 4 + 3)
-    const surface = pixel(0, 0)
-    const columns = Array.from({ length: width }, (_, x) =>
-      Array.from({ length: height }, (_, y) => y).filter((y) =>
-        pixel(x, y).some((channel, index) => Math.abs(channel - (surface[index] ?? 0)) > 8),
-      ),
-    )
-    return { width, height, columns }
-  }, shot)
-  return { height, rows: columns[Math.round(column(width))] ?? [] }
+/** The plans are in: three cards under the heading of the tariffs, taken over by React. */
+async function plansIn(page: Page): Promise<void> {
+  const plans = page.locator('#pricing article')
+  await expect(plans).toHaveCount(3)
+  await hydrated(plans.first())
 }
 
 /** The form of a lead: its two fields and the consent, filled as a visitor would. */
@@ -746,7 +727,7 @@ test.describe('text overflow', () => {
   // The narrowest phone and both single-column tablets, where the type is the largest for the width.
   test('keeps every line of text inside the window', async ({ page }) => {
     await openAt(page, 320)
-    await expect(page.getByRole('slider')).toBeVisible()
+    await plansIn(page)
     await atWidths(page, [320, 640, 768], async (_, soft) => {
       soft(await textOutsideTheWindow(page)).toEqual([])
 
@@ -815,7 +796,7 @@ test.describe('type size', () => {
 
   test(`keeps every text at ${TYPE_FLOOR}px or more`, async ({ page }) => {
     await openAt(page, 320)
-    await expect(page.getByRole('slider')).toBeVisible()
+    await plansIn(page)
     await atWidths(page, WIDTHS, async (width, soft) => {
       soft(await textBelowTheFloor(page, width)).toEqual([])
     })
@@ -1485,20 +1466,8 @@ test.describe('outlines of controls', () => {
   const outline = (element: Locator) =>
     element.evaluate((node) => getComputedStyle(node).borderTopColor)
 
-  test('bound the slider and the undo of the chat at 3:1', async ({ page }) => {
+  test('bound the undo of the chat at 3:1', async ({ page }) => {
     await page.goto('/')
-    // The empty part of the track is a line of its own under the filled one.
-    const track = await page
-      .getByRole('slider')
-      .evaluate((node) => getComputedStyle(node).backgroundImage)
-    const layers = track.match(/linear-gradient\(/g) ?? []
-    expect(layers).toHaveLength(2)
-    const line = track.slice(track.lastIndexOf('linear-gradient('))
-    const lineColor = /(color\(srgb [^)]+\)|rgb\([^)]+\))/.exec(line)?.[1] ?? ''
-    expect(contrast(lineColor, PAPER)).toBeGreaterThanOrEqual(3)
-    // The filled part keeps the colour of the accent text.
-    expect(track.slice(0, track.lastIndexOf('linear-gradient('))).toContain(ACCENT_TEXT)
-
     const demo = page.locator('#site-demo')
     await demo.getByRole('button', { name: 'Применить правку' }).click()
     const undo = demo.getByRole('button', { name: 'Отменить правку' })
@@ -1512,25 +1481,6 @@ test.describe('outlines of controls', () => {
     expect(
       contrast(PAPER, await undo.evaluate((node) => getComputedStyle(node).backgroundColor)),
     ).toBeGreaterThanOrEqual(4.5)
-  })
-
-  // The track of the slider is a border under the box of the thumb, which a margin lifts onto
-  // the line: a wrong margin would hang the thumb above or below it.
-  test('centre the thumb of the slider on the line of its track', async ({ page }) => {
-    await openAt(page, 390, 844)
-    const slider = page.getByRole('slider')
-    await slider.scrollIntoViewIfNeeded()
-    const middle = (rows: number[]) => ((rows[0] ?? NaN) + (rows.at(-1) ?? NaN) + 1) / 2
-    // The line beyond the thumb: 30 tasks of 10 to 300 leave the thumb near the left end.
-    const line = await paintedRows(page, slider, (width) => width * 0.75)
-    expect(line.rows.length).toBeGreaterThanOrEqual(1)
-    expect(line.rows.length).toBeLessThanOrEqual(2)
-    expect(Math.abs(middle(line.rows) - line.height / 2)).toBeLessThanOrEqual(1)
-    // The thumb is 24px wide and travels the width without its own: its centre is here.
-    const thumb = await paintedRows(page, slider, (width) => 12 + (width - 24) * (20 / 290))
-    expect(thumb.rows.length).toBeGreaterThanOrEqual(22)
-    expect(thumb.rows.length).toBeLessThanOrEqual(26)
-    expect(Math.abs(middle(thumb.rows) - middle(line.rows))).toBeLessThanOrEqual(1)
   })
 
   test('bound the button of the mobile menu at 3:1', async ({ page }) => {
@@ -1627,7 +1577,7 @@ test.describe('safety', () => {
 })
 
 test.describe('pricing', () => {
-  test('offers one action under the plans and marks the plan without a button', async ({
+  test('offers one action under the plans and marks the middle plan without a button', async ({
     page,
   }) => {
     await page.goto('/')
@@ -1642,13 +1592,18 @@ test.describe('pricing', () => {
       '#lead',
     )
 
-    // The recommended plan is told apart by its label and its surface, not by a button of its own.
-    const recommended = plans.filter({ hasText: 'Ваш вариант' })
-    await expect(recommended).toHaveCount(1)
+    // The plan in the middle is told apart by its label and its surface, not by a button of its
+    // own; the calculator that used to choose one is gone.
+    const featured = plans.filter({ hasText: 'Для вас' })
+    await expect(featured).toHaveCount(1)
+    await expect(featured.getByRole('heading', { name: 'Бизнес' })).toBeVisible()
+    await expect(plans.nth(1)).toContainText('Для вас')
+    await expect(pricing.getByRole('slider')).toHaveCount(0)
     const background = (plan: typeof plans) =>
       plan.evaluate((element) => getComputedStyle(element).backgroundColor)
-    const others = plans.filter({ hasNotText: 'Ваш вариант' })
-    expect(await background(recommended)).not.toBe(await background(others.first()))
+    const others = plans.filter({ hasNotText: 'Для вас' })
+    await expect(others).toHaveCount(2)
+    expect(await background(featured)).not.toBe(await background(others.first()))
     expect(await background(others.first())).toBe(await background(others.last()))
   })
 
@@ -1691,8 +1646,7 @@ test.describe('pricing', () => {
       await soft(pricing.locator('article')).toHaveCount(3)
       const read = await pricing.evaluate((section) => {
         const heading = section.querySelector('h2')
-        const count = section.querySelector('output')
-        if (!heading || !count) throw new Error('The pricing has no heading or no count')
+        if (!heading) throw new Error('The pricing has no heading')
         const price = (strong: Element | null | undefined, column: Element | null | undefined) => {
           const sign = strong?.querySelector('small')
           if (!strong || !sign || !column) throw new Error('A price has no number, sign or column')
@@ -1722,21 +1676,16 @@ test.describe('pricing', () => {
             columnRight: column.getBoundingClientRect().right - parseFloat(inner.paddingRight),
           }
         }
-        const total = [...section.querySelectorAll('p > strong')].find(
-          (strong) => !strong.closest('article'),
-        )
         return {
           heading: getComputedStyle(heading).fontFamily,
           body: getComputedStyle(section).fontFamily,
-          count: parseFloat(getComputedStyle(count).fontSize),
-          total: price(total, total?.parentElement?.parentElement),
           plans: [...section.querySelectorAll('article')].map((plan) =>
             price(plan.querySelector('p > strong'), plan),
           ),
         }
       })
       soft(read.plans.map((plan) => plan.text?.replaceAll('\u00a0', ' '))).toContain('19 990 ₽')
-      for (const price of [read.total, ...read.plans]) {
+      for (const price of read.plans) {
         soft(price.family, price.text ?? '').toBe(read.heading)
         soft(price.weight).toBe('500')
         soft(price.numeric).toBe('tabular-nums')
@@ -1746,8 +1695,6 @@ test.describe('pricing', () => {
         soft(price.signBeside, price.text ?? '').toBe(true)
         soft(price.right, price.text ?? '').toBeLessThanOrEqual(price.columnRight + 0.5)
       }
-      // The sum of the calculator stays its main number: the count of tasks is a step smaller.
-      soft(read.count).toBeLessThan(read.total.size)
     })
   })
 
@@ -1840,86 +1787,6 @@ test.describe('pricing', () => {
       soft(edges.top).toBeGreaterThanOrEqual(edges.action.bottom)
       soft(edges.page).toBeLessThanOrEqual(width)
     })
-  })
-
-  // The slider counts tasks: the line under its question says what a task is and how many
-  // credits the calculator takes for one, and the slider is described by that line.
-  test('says under the slider how many credits a task is counted at', async ({ page }) => {
-    await page.goto('/')
-    const pricing = page.locator('#pricing')
-    await expect(
-      pricing.getByText('Подвиньте ползунок — подберём тариф под число ваших задач.'),
-    ).toBeVisible()
-    const slider = pricing.getByRole('slider', { name: 'Сколько задач в месяц вы планируете?' })
-    const hint = pricing.locator(`[id="${await slider.getAttribute('aria-describedby')}"]`)
-    await expect(hint).toHaveText(
-      'Задача — одна ваша просьба. В расчёте берём 11 кредитов на задачу — это среднее: поменять цену или фото стоит обычно 5 кредитов, добавить блок или страницу — 15–25.',
-    )
-    await expect(hint).toBeVisible()
-  })
-
-  // The longest result line: a plan, its packs in words and the sum below.
-  for (const width of [320, 390]) {
-    test(`keeps the result in words inside its column at ${width}px`, async ({ page }) => {
-      await openAt(page, width)
-      const slider = page.getByRole('slider', { name: 'Сколько задач в месяц вы планируете?' })
-      await hydrated(slider)
-      await slider.fill('140')
-      // The sentence of the result; the name of the plan is an element of its own inside it.
-      const result = page.locator('#pricing p').filter({ hasText: /^Тариф «Бизнес»/ })
-      // 140 tasks at eleven credits each: the 1 000 of «Бизнес» and six packs of a hundred.
-      await expect(result).toContainText('и 6 дополнительных пакетов по 100 кредитов')
-      await expect(page.locator('#pricing').getByText(/9.990.₽ \+ 6 × 1.490.₽/)).toBeVisible()
-      const edges = await result.evaluate((element) => {
-        const range = document.createRange()
-        range.selectNodeContents(element)
-        const text = range.getBoundingClientRect()
-        const column = element.parentElement!.getBoundingClientRect()
-        return {
-          text: text.right,
-          column: column.right,
-          page: document.documentElement.scrollWidth,
-        }
-      })
-      expect(edges.text).toBeLessThanOrEqual(edges.column + 0.5)
-      expect(edges.page).toBeLessThanOrEqual(width)
-    })
-  }
-
-  test('moves the slider from the keyboard and names the value', async ({ page }) => {
-    await page.goto('/')
-    const slider = page.getByRole('slider', { name: 'Сколько задач в месяц вы планируете?' })
-    await expect(slider).toHaveAttribute('aria-valuetext', '30 задач в месяц')
-    await slider.focus()
-    await page.keyboard.press('ArrowRight')
-    await expect(slider).toHaveAttribute('aria-valuetext', '35 задач в месяц')
-  })
-
-  test('announces the result of the slider once it rests, from one live region', async ({
-    page,
-  }) => {
-    await page.goto('/')
-    const pricing = page.locator('#pricing')
-    const slider = pricing.getByRole('slider')
-    const announcement = pricing.locator('[aria-live]')
-    await expect(announcement).toHaveCount(1)
-    await expect(announcement).toHaveText('')
-    // The count above the slider is for the eye: the slider names its value itself.
-    await expect(pricing.locator('output')).toHaveText('30')
-    await expect(pricing.getByRole('status')).toHaveCount(0)
-
-    await hydrated(slider)
-    await slider.focus()
-    for (let step = 0; step < 7; step++) await page.keyboard.press('ArrowRight')
-    await expect(pricing.locator('output')).toHaveText('65')
-    // 65 tasks are 715 credits: «Бизнес» alone is cheaper than «Старт» with six packs.
-    await expect(announcement).toHaveText(
-      /^Тариф «Бизнес», 9.990 ₽ в месяц, в среднем около 154 ₽ за задачу\. Небольшая правка — около 50 ₽$/,
-    )
-    // Heard, not seen: the region takes no room on the page.
-    const box = await announcement.boundingBox()
-    expect(box?.width).toBeLessThanOrEqual(1)
-    expect(box?.height).toBeLessThanOrEqual(1)
   })
 })
 
@@ -2088,7 +1955,7 @@ test.describe('accessibility rules', () => {
   for (const width of [390, 1440]) {
     test(`hold in every state of the page at ${width}px`, async ({ page }) => {
       await openAt(page, width)
-      await expect(page.getByRole('slider')).toBeVisible()
+      await plansIn(page)
       expect(await violations(page)).toEqual([])
 
       // The change applied, a question open, the form of a lead with its messages.
@@ -2287,7 +2154,7 @@ test.describe('scroll on the way between pages', () => {
   test('jumps on the way from a scrolled landing to the sign-in and back', async ({ page }) => {
     await openAt(page, 1440)
     // The plans are in: the page is as tall as it will be.
-    await expect(page.getByRole('slider')).toBeVisible()
+    await plansIn(page)
     const signIn = page.getByRole('banner').getByRole('link', { name: 'Войти' })
     await hydrated(signIn)
     await page.evaluate(() => window.scrollTo({ top: 2400, behavior: 'instant' }))
@@ -2402,7 +2269,7 @@ test.describe('sticky header', () => {
     }) => {
       await openAt(page, width)
       // The plans are in: the page below is as tall as it will be.
-      await expect(page.getByRole('slider')).toBeVisible()
+      await plansIn(page)
       await page.evaluate(() => window.scrollTo({ top: 2400, behavior: 'instant' }))
       const scrolled = await page.evaluate(() => window.scrollY)
       expect(scrolled).toBeGreaterThan(2000)
@@ -2476,7 +2343,7 @@ test.describe('sticky header', () => {
       page,
     }) => {
       await openAt(page, width, 700)
-      await expect(page.getByRole('slider')).toBeVisible()
+      await plansIn(page)
       // From the last stop of the page upwards, until the focus comes to the header itself.
       await page.locator('#top > footer a[href="#top"]').focus()
       let stops = 0
@@ -2536,7 +2403,7 @@ test.describe('anchor of the address on a first load', () => {
   }
   /** The page is as it will be: the plans are taken over, the fonts are in, nothing moves. */
   const arrived = async (page: Page) => {
-    await hydrated(page.getByRole('slider'))
+    await plansIn(page)
     await settled(page)
     await stopped(page)
   }
@@ -2581,7 +2448,7 @@ test.describe('anchor of the address on a first load', () => {
       const root = page.locator('html')
       // The load of the document waits for the fonts, so the test goes on without it.
       await page.goto('/#faq', { waitUntil: 'domcontentloaded' })
-      await hydrated(page.getByRole('slider'))
+      await plansIn(page)
       await expect.poll(() => asked).toBeGreaterThan(0)
       await expect(root).not.toHaveAttribute('data-fonts')
       await expect(root).toHaveCSS('scroll-behavior', 'auto')
@@ -2663,7 +2530,8 @@ test.describe('anchor of the address on a first load', () => {
       await openAt(page, 390)
       const pricing = page.locator('#pricing')
       await expect(pricing.locator('article')).toHaveCount(3)
-      await expect(pricing.getByRole('slider')).toBeVisible()
+      // The mark of the middle plan is drawn by the server, not by a script.
+      await expect(pricing.locator('article').nth(1)).toContainText('Для вас')
       await expect(pricing.getByRole('link', { name: 'Подключить сайт бесплатно' })).toBeVisible()
       await expect(pricing.getByRole('status')).toHaveCount(0)
       await expect(pricing).not.toContainText('Загружаем')
@@ -2705,25 +2573,6 @@ test.describe('forced colours', () => {
       expect(line.length).toBeGreaterThanOrEqual(16)
     }
   })
-
-  // The two parts of the slider track are backgrounds of the control, which a forced palette
-  // does not paint: without a border of the track only the thumb would be left.
-  test('draws the line of the slider track with a border', async ({ page }) => {
-    await openAt(page, 390, 844)
-    const slider = page.getByRole('slider')
-    await slider.scrollIntoViewIfNeeded()
-    // The palette has taken both layers of the background away.
-    expect(await slider.evaluate((node) => getComputedStyle(node).backgroundImage)).not.toContain(
-      'gradient',
-    )
-    // Both ways from the thumb, which stands near the left end.
-    for (const part of [0.01, 0.5, 0.99]) {
-      const { height, rows } = await paintedRows(page, slider, (width) => (width - 1) * part)
-      expect(rows.length, `at ${part}`).toBeGreaterThanOrEqual(1)
-      expect(rows.length, `at ${part}`).toBeLessThanOrEqual(2)
-      for (const row of rows) expect(Math.abs(row + 0.5 - height / 2)).toBeLessThanOrEqual(1)
-    }
-  })
 })
 
 test.describe('reduced motion', () => {
@@ -2747,7 +2596,7 @@ test.describe('reduced motion', () => {
 
   test('declares no transition and no animation on any element or its parts', async ({ page }) => {
     await openAt(page, 1440)
-    await hydrated(page.getByRole('slider'))
+    await plansIn(page)
     const declared = await page.evaluate(() => {
       const found: string[] = []
       for (const element of document.querySelectorAll('#top, #top *')) {
@@ -2781,8 +2630,7 @@ test.describe('reduced motion', () => {
 
   test('changes every state of the page at once', async ({ page }) => {
     await openAt(page, 1440)
-    const slider = page.getByRole('slider')
-    await hydrated(slider)
+    await plansIn(page)
     expect(await moving(page)).toBe(0)
 
     // The way through the page: nothing rises into the window.
@@ -2819,23 +2667,8 @@ test.describe('reduced motion', () => {
     await bringIntoWindow(page, page.locator('#platforms'))
     expect(await moving(page)).toBe(0)
 
-    // The calculator: another plan.
-    await bringIntoWindow(page, slider)
-    await slider.fill('300')
-    expect(await moving(page)).toBe(0)
-
-    // The thumb of the slider: a grip does not enlarge it, so nothing can be on its way.
-    const box = await slider.boundingBox()
-    if (!box) throw new Error('The calculator has no slider')
-    const clip = { x: box.x - 4, y: box.y, width: box.width + 8, height: box.height }
-    await page.mouse.move(1, 1)
-    const atRest = await page.screenshot({ clip })
-    // The thumb stands at the end of the track: the press does not move it.
-    await page.mouse.move(box.x + box.width - 12, box.y + box.height / 2)
-    await page.mouse.down()
-    const gripped = await page.screenshot({ clip })
-    await page.mouse.up()
-    expect(gripped.equals(atRest)).toBe(true)
+    // The plans: the card in the middle, with its mark, stands as still as the others.
+    await bringIntoWindow(page, page.locator('#pricing'))
     expect(await moving(page)).toBe(0)
 
     // A question: open to its full height in the frame of the click.
@@ -2884,7 +2717,7 @@ test.describe('reduced motion', () => {
   test('draws the line of the current section without a transition', async ({ page }) => {
     await openAt(page, 1440)
     await hydrated(menuToggle(page))
-    await page.getByRole('slider').waitFor()
+    await plansIn(page)
     await bringIntoWindow(page, page.locator('#pricing'))
     const link = page.locator('#top > header nav a[aria-current="true"]').first()
     await expect(link).toHaveText('Тарифы')
@@ -3124,7 +2957,7 @@ test.describe('headings on the way into the window', () => {
     page,
   }) => {
     await openAt(page, 1440)
-    await page.getByRole('slider').waitFor()
+    await plansIn(page)
     await revealPrepared(page)
     await page.evaluate(() =>
       window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'instant' }),
@@ -3174,7 +3007,7 @@ test.describe('headings on the way into the window', () => {
     }) => {
       await page.setViewportSize({ width, height: 900 })
       await page.goto('/#faq')
-      await page.getByRole('slider').waitFor()
+      await plansIn(page)
       // The browser jumps to the anchor before the fonts are in, so the helper of the reveal
       // may find the headings already passed and the last one on the screen: it marks only what
       // is still below. Its mark of the fonts tells that it has looked.
@@ -3771,58 +3604,6 @@ test.describe('mobile menu in motion', () => {
   })
 })
 
-test.describe('pricing in motion', () => {
-  test('tells another plan with a rise of its name and never animates a sum', async ({ page }) => {
-    await openAt(page, 1440)
-    const pricing = page.locator('#pricing')
-    const slider = pricing.getByRole('slider')
-    await hydrated(slider)
-    await bringIntoWindow(page, slider)
-    const name = () => pricing.getByText(/^Тариф «/)
-    const first = await name().textContent()
-    /** Animations and transitions of anything that shows a number of the calculator or a price. */
-    const numbersInMotion = () =>
-      pricing.evaluate((node) =>
-        node
-          .getAnimations({ subtree: true })
-          .map((animation) => (animation.effect as KeyframeEffect).target)
-          .filter((target) => target?.matches('strong, output, input, p:not(:has(> span))'))
-          .map((target) => target?.localName),
-      )
-    expect(await motionOf(name())).toEqual([])
-
-    // One pack more with the same plan — thirty tasks take two, forty take three: words change,
-    // nothing moves. The page binds a number to its word with a non-breaking space.
-    await expect(pricing.getByText(/2.дополнительных пакета/)).toBeVisible()
-    await slider.fill('40')
-    await expect(pricing.getByText(/3.дополнительных пакета/)).toBeVisible()
-    await expect(name()).toHaveText(first ?? '')
-    expect(await motionOf(name())).toEqual([])
-    expect(await numbersInMotion()).toEqual([])
-
-    await slider.fill('300')
-    await expect(name()).not.toHaveText(first ?? '')
-    expect(await motionOf(name())).toEqual([
-      {
-        name: 'valueRise',
-        pseudo: null,
-        duration: 360,
-        delay: 0,
-        easing: EASE_OUT,
-        fill: 'backwards',
-        properties: ['transform'],
-        from: { transform: 'translateY(6px)' },
-      },
-    ])
-    // The sums, the number of tasks and the slider change at once.
-    expect(await numbersInMotion()).toEqual([])
-    await settled(page)
-    await expect(name()).toHaveCSS('transform', 'none')
-    // Seen, not heard: the name is outside the region that announces the result.
-    expect(await name().evaluate((node) => node.closest('[aria-live]'))).toBeNull()
-  })
-})
-
 test.describe('current section of the navigation', () => {
   const marked = (page: Page) =>
     page
@@ -3838,7 +3619,7 @@ test.describe('current section of the navigation', () => {
   }) => {
     await openAt(page, 1440)
     await hydrated(menuToggle(page))
-    await page.getByRole('slider').waitFor()
+    await plansIn(page)
     expect(await marked(page)).toEqual([])
 
     const line = (label: string) =>
@@ -3881,7 +3662,7 @@ test.describe('current section of the navigation', () => {
     await openAt(page, 390, 844)
     const toggle = menuToggle(page)
     await hydrated(toggle)
-    await page.getByRole('slider').waitFor()
+    await plansIn(page)
     await bringIntoWindow(page, page.locator('#demo'))
     await expect.poll(() => marked(page)).toContain('Мобильная навигация: Пример')
     // A press of the pointer, not `click()` of the runner: that one first scrolls its target

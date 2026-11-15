@@ -126,7 +126,11 @@ test('a customer picks a tariff, pays for it and sees it active', async ({
       ).toBeVisible()
     }
     await expect(planCard(page, 'Старт')).toContainText('1 990 ₽')
-    await expect(planCard(page, 'Старт')).toContainText('Подходит вам')
+    // The tariff in the middle is the one pointed to, as on the landing: it holds any number of
+    // sites up to three, so it does here, and no other card carries the mark.
+    await expect(planCard(page, 'Бизнес')).toContainText('Для вас')
+    await expect(planCard(page, 'Старт')).not.toContainText('Для вас')
+    await expect(planCard(page, 'Агентство')).not.toContainText('Для вас')
     // What a task costs and what a tariff holds, in the numbers of the credits model: the
     // credits come from the seeds, the minimum, the examples and the average from the domain.
     await expect(page.getByRole('main')).toContainText(

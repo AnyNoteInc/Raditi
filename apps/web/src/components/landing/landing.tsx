@@ -19,7 +19,7 @@ import { LandingLead } from './landing-lead'
 import { LandingMotion } from './landing-motion'
 import { LandingPlatforms } from './landing-platforms'
 import { mainAction } from './main-action'
-import { pluralCredits, typicalCreditsInWords } from './pricing-calculator'
+import { pluralCredits, typicalCreditsInWords } from './pricing-data'
 import { SiteDemo } from './site-demo'
 import styles from './landing.module.css'
 
@@ -270,7 +270,6 @@ export function Landing({
         <section id="pricing" className={styles.section} aria-labelledby="pricing-title">
           <div className={styles.sectionHeading} data-reveal>
             <h2 id="pricing-title">Тарифы</h2>
-            <p>{nbsp('Подвиньте ползунок — подберём тариф под число ваших задач.')}</p>
             <p className={styles.sectionNote}>
               {nbsp('Оплату пока не принимаем: сервис готовится к запуску.')}
             </p>
