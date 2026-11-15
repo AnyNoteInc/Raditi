@@ -29,7 +29,6 @@ const labels = { workspaceId: 'ws1', siteId, taskId, sessionId: 'session1', turn
 const image = `registry.invalid/raditi/${sampleDriverId}@sha256:${'a'.repeat(64)}`
 const baseSha = 'b'.repeat(40)
 const credentials = ['synthetic-llm-secret', 'synthetic-mcp-secret']
-const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
 
 const hubs: RunnerHub[] = []
 afterEach(() => {

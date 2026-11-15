@@ -127,39 +127,21 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
       plan,
       remainingMs: 30_000,
     }
-    const next = (
-      turn: number,
-      replacesTurn?: number,
-      expectedBranchSha: string | null = null,
-    ): OpenTurnAssignment => ({
+    const next = (turn: number): OpenTurnAssignment => ({
       ...input,
       turn,
       plan: {
         ...plan,
-        ...(replacesTurn ? { replacesTurn } : {}),
-        ...(plan.workspace
-          ? { workspace: { ...plan.workspace, ...(replacesTurn ? { expectedBranchSha } : {}) } }
-          : {}),
         sandbox: { ...plan.sandbox, labels: { ...plan.sandbox.labels, turn } },
         context: { ...plan.context, turn },
       },
     })
-    /**
-     * A later turn as the planner builds it (plan 53, R3): a continuation names the checkpoint
-     * of turn `previous`, a rebased start or replacement names none. A turn without a
-     * repository has no base.
-     */
+    /** A later turn as the planner builds it: a continuation names the checkpoint of `previous`. */
     const step = (
       turn: number,
-      options: {
-        base?: string
-        previous?: number
-        rebased?: true
-        pin?: string | null
-        rewound?: true
-      },
+      options: { previous?: number; rewound?: true },
     ): OpenTurnAssignment => {
-      const opened = options.pin === undefined ? next(turn) : next(turn, turn - 1, options.pin)
+      const opened = next(turn)
       const previous = options.previous
       opened.plan = {
         ...opened.plan,
@@ -175,11 +157,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
                 home,
               },
             }),
-        ...(options.rebased ? { rebased: true } : {}),
         ...(options.rewound ? { rewound: true as const } : {}),
-        ...(opened.plan.workspace && options.base
-          ? { workspace: { ...opened.plan.workspace, expectedBaseSha: options.base } }
-          : {}),
       }
       return opened
     }
@@ -204,7 +182,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
       const f = await fixture(BROWSER_ONLY)
       const first = (await store.open(f.input))!
       expect(first.plan.requirements).toEqual(BROWSER_ONLY)
-      expect(first.plan.workspace).toBeUndefined()
+      expect(first.plan).not.toHaveProperty('workspace')
       expect(
         await db.taskTurn.findUniqueOrThrow({
           where: { taskId_turnNo: { taskId: f.task.id, turnNo: 1 } },
@@ -251,7 +229,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
       })
       // What a turn without a repository did on the site is not undone: the plan has no
       // replacement to offer, and the schema refuses one.
-      await expect(store.open(f.next(2, 1))).rejects.toThrow()
+      const replacing = f.next(2)
+      await expect(
+        store.open({ ...replacing, plan: { ...replacing.plan, replacesTurn: 1 } as never }),
+      ).rejects.toThrow()
       expect(await db.taskTurn.count({ where: { taskId: f.task.id } })).toBe(1)
 
       const second = (await store.open(f.next(2)))!

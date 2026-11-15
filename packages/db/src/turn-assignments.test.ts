@@ -34,12 +34,6 @@ function plan(taskId: string, sessionId: string, siteId: string): TurnPlan {
     input: { prompt: 'Synthetic turn', attachments: [] },
     driverId: 'opencode',
     driverVersion: '1.0.0',
-    workspace: {
-      repo: { provider: 'gitea', owner: 'sites', name: 'synthetic' },
-      branch: `agent/${taskId}`,
-      expectedBaseSha: 'b'.repeat(40),
-      protectedPaths: [],
-    },
     committedAt: '2026-09-27T00:00:00.000Z',
   }
 }

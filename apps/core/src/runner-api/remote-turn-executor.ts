@@ -4,7 +4,6 @@ import {
   assertTurnInbox,
   badRequest,
   conflict,
-  DomainError,
   isDomainError,
   leaseLost,
   presignedGetSchema,

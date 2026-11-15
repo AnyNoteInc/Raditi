@@ -12,13 +12,11 @@ import {
   MAX_PRESIGN_TTL_MS,
   ENV_VALUE_MASK,
   MAX_SANDBOX_LEASE_MS,
-  notFound,
   preparedRunLimits,
   SANDBOX_SECRETS_DIR,
   sandboxCommandFailed,
   snapshotHasCredential,
   subscriptionBusy,
-  TimeoutError,
   TURN_FINALIZE_MS,
   TURN_LEASE_TTL_MS,
   toTurnPlan,
@@ -47,7 +45,7 @@ import {
 import { createOpencodeDriver } from '@repo/agent-drivers'
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 import type { newTurnKeys } from '@repo/turn-keys'
-import type { PresignedTransfer, SnapshotArchives } from '@repo/snapshots'
+import type { PresignedTransfer } from '@repo/snapshots'
 import { memoryStorage, memoryTransit, tarZst } from '@repo/snapshots/testing'
 import { LocalTurnExecutor, type LocalTurnExecutorDependencies } from '@repo/local-turns'
 
@@ -70,7 +68,6 @@ import {
   type TurnRequest,
   type TurnSupervisorDependencies,
 } from './turn-supervisor.ts'
-import { TURN_LEASE_MS } from './lease-guard.ts'
 
 /** Every pair turn-key.ts of @repo/turn-keys made: the one owner of the two key formats. */
 const madeTurnKeys = vi.hoisted(() => [] as Array<{ llmApiKey: string; mcpToken: string }>)
@@ -456,19 +453,6 @@ function takes<A extends unknown[], R>(mock: Mock<(...args: A) => Promise<R>>, m
   mock.mockImplementation(async (...args: A) => {
     await vi.advanceTimersByTimeAsync(ms)
     return step(...args)
-  })
-}
-
-/** The DB fixes expires_at when the statement starts; the grant reaches core `delayMs` later. */
-function delayGrant<A extends unknown[]>(
-  mock: Mock<(...args: A) => Promise<SiteLeaseGrant>>,
-  delayMs: number,
-): void {
-  const grant = mock.getMockImplementation()!
-  mock.mockImplementation(async (...args: A) => {
-    const granted = await grant(...args)
-    await vi.advanceTimersByTimeAsync(delayMs)
-    return granted
   })
 }
 

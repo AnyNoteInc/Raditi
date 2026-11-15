@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -21,7 +21,6 @@ const endpoint = 'unix:///local/desktop.sock'
 const image = `local/p4@sha256:${'a'.repeat(64)}`
 const settings = {
   P2_RUNNER_DOCKER_SOCKET: '/local/colima/docker.sock',
-  P2_GITLEAKS_BINARY: '/local/gitleaks',
   P2_SANDBOX_IMAGE: image,
   P2_RUNNER_NODE_IMAGE: image,
   SANDBOX_GATEWAY_IMAGE: image,
@@ -138,7 +137,6 @@ test('runner settings reject tag-only images, remote socket URLs and public host
   for (const invalid of [
     { P2_SANDBOX_IMAGE: 'local/image:latest' },
     { P2_RUNNER_DOCKER_SOCKET: 'ssh://vm/docker.sock' },
-    { P2_GITLEAKS_BINARY: 'gitleaks' },
     { P2_RUNNER_HOST: '8.8.8.8' },
     { P2_RUNNER_HOST: 'vm.invalid' },
   ])
@@ -214,13 +212,10 @@ async function fakeRuntime() {
   const socket = join(directory, 'docker.sock')
   const server = createServer()
   await new Promise((resolve) => server.listen(socket, resolve))
-  const gitleaks = join(directory, 'gitleaks')
-  await writeFile(gitleaks, '#!/bin/sh\nexit 0\n', { mode: 0o700 })
   return {
     environment: {
       ...dirtyEnvironment,
       P2_RUNNER_DOCKER_SOCKET: socket,
-      P2_GITLEAKS_BINARY: gitleaks,
     },
     async close() {
       await new Promise((resolve) => server.close(resolve))

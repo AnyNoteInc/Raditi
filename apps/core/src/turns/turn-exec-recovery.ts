@@ -45,7 +45,6 @@ import {
 import {
   isAmbiguousContainer,
   isBrokenCheckpoint,
-  isMissingCheckpoint,
   TurnCheckpointRecovery,
   type PublicationRemoval,
 } from './turn-recovery.ts'

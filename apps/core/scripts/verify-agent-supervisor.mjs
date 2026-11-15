@@ -48,7 +48,7 @@ export function runnerSettings(environment) {
     assert(digest.test(environment[key] ?? ''), `${key} must name a digest-pinned image`)
     selected[key] = environment[key]
   }
-  for (const key of ['P2_RUNNER_DOCKER_SOCKET', 'P2_GITLEAKS_BINARY']) {
+  for (const key of ['P2_RUNNER_DOCKER_SOCKET']) {
     assert(
       isAbsolute(environment[key] ?? '') && !/[\r\n\0]/u.test(environment[key]),
       `${key} must be an absolute local path`,
@@ -430,8 +430,6 @@ export async function verifyAgentSupervisor({
     (await stat(settings.P2_RUNNER_DOCKER_SOCKET)).isSocket(),
     'Runner Docker socket is unavailable',
   )
-  const binary = await stat(settings.P2_GITLEAKS_BINARY)
-  assert(binary.isFile() && binary.mode & 0o111, 'Gitleaks must be a local executable file')
   const docker = (args, options = {}) =>
     command('docker', [...connection.args, ...args], {
       env: connection.env,

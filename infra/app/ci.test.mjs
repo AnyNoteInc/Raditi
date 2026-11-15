@@ -456,7 +456,8 @@ test('every build module a stand loads has its source in that app', () => {
       [...loaded.keys()].some((where) => where.startsWith(`${stand}: `)),
       `${stand} was read`,
     )
-  assert.ok(loaded.size >= 50, `only ${loaded.size} build modules of the stands were checked`)
+  // Fewer since the stands of projects went (docs/plan/83-remove-projects.md).
+  assert.ok(loaded.size >= 30, `only ${loaded.size} build modules of the stands were checked`)
 })
 
 test('the live mode of the stands never runs in CI: no workflow names it or the provider key', () => {

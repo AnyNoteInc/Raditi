@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer'
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 
 import {
   MAX_SANDBOX_LEASE_MS,
@@ -49,7 +49,6 @@ const result: TurnResult = {
   needs_approval: false,
   risk: 'low',
 }
-const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
 
 const stops: AbortController[] = []
 const hubs: RunnerHub[] = []
