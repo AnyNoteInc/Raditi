@@ -14,8 +14,8 @@ import { ToolsMenu } from './tools-menu'
 // a given width (`declared`) —, and the sheet of a phone named as the menu is.
 
 const tiles: ToolTile[] = [
-  { tool: 'files', open: false, mark: 'пока нет' },
-  { tool: 'checks', open: false, mark: 'пока нет' },
+  { tool: 'browser', open: false, mark: 'пока нет' },
+  { tool: 'documents', open: false, mark: '1' },
 ]
 
 /** «+» pressed: the tiles of its menu, a card from `lg` or a sheet below. */
@@ -43,10 +43,10 @@ describe('the focus in the menu «+»', () => {
     plus.focus()
     fireEvent.click(plus)
     const menu = await screen.findByRole('menu', { name: 'Инструменты' })
-    const [files, checks] = within(menu).getAllByRole('menuitem')
-    await waitFor(() => expect(document.activeElement).toBe(files))
-    fireEvent.keyDown(files!, { key: 'ArrowDown' })
-    expect(document.activeElement).toBe(checks)
+    const [browser, documents] = within(menu).getAllByRole('menuitem')
+    await waitFor(() => expect(document.activeElement).toBe(browser))
+    fireEvent.keyDown(browser!, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(documents)
   })
 })
 

@@ -95,10 +95,7 @@ function pictureOf(file: File): string | null {
  * The files of one message for a site; null — of a chat without a project. `upload` sends the
  * bytes (an XMLHttpRequest by default).
  */
-export function useAttachments(
-  siteId: string | null,
-  upload: UploadBytes = uploadBytes,
-): AttachmentsControl {
+export function useAttachments(upload: UploadBytes = uploadBytes): AttachmentsControl {
   const client = useTRPCClient()
   const [items, dispatch] = useReducer(reducer, [])
   const [notice, setNotice] = useReducer(
@@ -163,7 +160,6 @@ export function useAttachments(
       patch({ state: 'uploading', progress: 0, error: null, attachmentId: null })
       try {
         const started = await client.attachment.start.mutate({
-          siteId,
           name: file.name,
           size: file.size,
           type: type.mime,
@@ -191,7 +187,7 @@ export function useAttachments(
         controllers.current.delete(key)
       }
     },
-    [client, forget, siteId, upload],
+    [client, forget, upload],
   )
 
   // One file at a time: the next queued one starts when the one before has ended. A file taken

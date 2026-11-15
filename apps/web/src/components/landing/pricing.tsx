@@ -241,13 +241,6 @@ export function Pricing({
                 {planWindowLimits(plan.creditsPer5h, plan.creditsPerWeek) && (
                   <li>{nbsp(planWindowLimits(plan.creditsPer5h, plan.creditsPerWeek)!)}</li>
                 )}
-                <li>
-                  {plan.maxSites === 1
-                    ? 'Один сайт'
-                    : nbsp(
-                        `До ${plan.maxSites} ${plural(plan.maxSites, 'сайта', 'сайтов', 'сайтов')}`,
-                      )}
-                </li>
                 {/* Sites of pages beside the credits (docs/plan/73-pages-sites.md, Дер37). */}
                 {plan.pageSites != null && plan.pageSites > 0 && (
                   <li>

@@ -97,7 +97,6 @@ function ArchivedRow({
         </Typography>
         <Typography component="span" variant="caption" color="text.secondary">
           {listTime(item.updatedAt, now)}
-          {item.project ? ` · ${item.project.name}` : ''}
         </Typography>
       </Box>
       <Button

@@ -76,7 +76,6 @@ describe('landing tariff data boundary', () => {
           price: '5001.25',
           creditsPerMonth: 35,
           creditsPerDay: 6,
-          maxSites: 2,
         },
       ],
       pack: { price: '2030.10', credits: 12 },
@@ -100,12 +99,10 @@ describe('landing tariff data boundary', () => {
     ])
   })
 
-  it('leaves out a tariff without credits, sites or a price', async () => {
+  it('leaves out a tariff without credits or a price', async () => {
     findMany.mockResolvedValue([
       { ...quota('4900'), slug: 'no-credits', creditsPerMonth: null },
       { ...quota('4900'), slug: 'zero-credits', creditsPerMonth: 0 },
-      { ...quota('4900'), slug: 'no-sites', maxSites: null },
-      { ...quota('4900'), slug: 'zero-sites', maxSites: 0 },
       { ...quota('-1'), slug: 'negative-price' },
       quota('1990'),
     ])

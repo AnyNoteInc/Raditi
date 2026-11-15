@@ -17,7 +17,6 @@ import { LandingHeader } from './landing-header'
 import { LandingIcon } from './landing-icons'
 import { LandingLead } from './landing-lead'
 import { LandingMotion } from './landing-motion'
-import { LandingPlatforms } from './landing-platforms'
 import { mainAction } from './main-action'
 import { pluralCredits, typicalCreditsInWords } from './pricing-calculator'
 import { SiteDemo } from './site-demo'
@@ -200,8 +199,6 @@ export function Landing({
           </div>
           <SiteDemo />
         </section>
-
-        <LandingPlatforms />
 
         <section id="possibilities" className={styles.section} aria-labelledby="can-title">
           <div className={styles.sectionHeading} data-reveal>

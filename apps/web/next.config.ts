@@ -29,8 +29,8 @@ const withMDX = createMDX({
 })
 
 // The policy of every route, fixed when this file loads (`next build` in production): it frames
-// no preview of dialogs, whose address belongs to the environment, not to the image. proxy.ts
-// sends the same policy on every page with this environment's previews added (plan 53, Р20);
+// no page of the agent, whose address belongs to the environment, not to the image. proxy.ts
+// sends the same policy on every page with this environment's domain of pages added;
 // both come from src/lib/content-security-policy.ts, which this file does not import — Next
 // loads it before any bundler, and a relative import would resolve against the working
 // directory. next-config.test.ts checks the two are one policy.

@@ -1,85 +1,16 @@
 // @vitest-environment jsdom
 import { signupGiftCredits } from '@repo/domain/billing/credit-numbers'
 import { leadFieldErrors } from '@repo/domain/leads/lead-input'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { SITE_PHONE } from '@/lib/contacts'
 
 import { LandingLead } from './landing-lead'
-import { LandingPlatforms, platforms } from './landing-platforms'
-import { MAIN_ACTION_SHORT } from './main-action'
 import { HANGING, plain } from './testing'
 
 afterEach(() => {
   vi.unstubAllGlobals()
-})
-
-describe('LandingPlatforms', () => {
-  it('names the five systems the owner listed, in his order, in a list a screen reader hears', () => {
-    const { container } = render(<LandingPlatforms />)
-
-    expect(platforms).toEqual(['WordPress', 'Joomla', 'OpenCart', 'MODX', '1С-Битрикс'])
-    // The list is heard and not seen: the role finds it, so nothing hides it from a reader.
-    const list = screen.getByRole('list', { name: 'Поддерживаемые системы' })
-    expect(list).toHaveAttribute('data-sr-only')
-    expect(list.closest('[aria-hidden]')).toBeNull()
-    expect(
-      within(list)
-        .getAllByRole('listitem')
-        .map((item) => item.textContent),
-    ).toEqual([...platforms])
-    // And in the words under the heading, for the eye: the same five in the same order.
-    const words = plain(container.querySelector('#platforms h2 + p')?.textContent)
-    expect(words).toBe(
-      'WordPress, Joomla, OpenCart, MODX и 1С-Битрикс — Радити работает с каждой из этих систем.',
-    )
-    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent(
-      /^На\sчём сделан ваш сайт\?\s*Скорее всего, подойдёт\.$/,
-    )
-  })
-
-  it('runs the names as an ornament: hidden from a screen reader, every system on it', () => {
-    const { container } = render(<LandingPlatforms />)
-    const marquee = container.querySelector('#platforms [aria-hidden="true"]')
-    if (!marquee) throw new Error('no running line')
-
-    // Nothing of the line is a control or a name of the accessibility tree.
-    expect(marquee.querySelectorAll('a, button, [role], [tabindex]')).toHaveLength(0)
-    expect(within(marquee as HTMLElement).queryAllByRole('listitem')).toHaveLength(0)
-    const lines = [...marquee.children].map((line) =>
-      [...line.querySelectorAll('[class*="marqueeName"]')].map((name) => name.textContent),
-    )
-    expect(lines).toHaveLength(2)
-    for (const names of lines) {
-      // A line is written twice, so the run has no seam.
-      expect(names.length % 2).toBe(0)
-      expect(names.slice(names.length / 2)).toEqual(names.slice(0, names.length / 2))
-    }
-    // The two lines together show every system, and no name the list does not hold.
-    expect([...new Set(lines.flat())].sort()).toEqual([...platforms].sort())
-    // The second line runs the other way.
-    expect([...marquee.children].map((line) => line.getAttribute('data-reverse'))).toEqual([
-      'false',
-      'true',
-    ])
-    // No state is left in the section: no button, nothing pressed, no example card.
-    expect(screen.queryAllByRole('button')).toHaveLength(0)
-    expect(container.querySelector('[aria-pressed], #platform-example')).toBeNull()
-  })
-
-  it('leads to the lead by the short name of the main action and says none is coming later', () => {
-    const { container } = render(<LandingPlatforms />)
-
-    const links = screen.getAllByRole('link')
-    expect(links).toHaveLength(1)
-    expect(links[0]).toHaveAttribute('href', '#lead')
-    expect(links[0]).toHaveTextContent(new RegExp(`^${MAIN_ACTION_SHORT}\\s*$`))
-    const text = plain(container.textContent)
-    expect(text).toContain('У меня магазин на OpenCart. Это подойдёт?')
-    expect(text).toContain('Подойдёт. Подключим и настроим бесплатно.')
-    expect(text).not.toMatch(/скоро|в планах|позже/i)
-  })
 })
 
 describe('LandingLead', () => {

@@ -1,7 +1,4 @@
 // @vitest-environment jsdom
-import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 
 import { legalDocuments } from '@repo/domain'
 import {
@@ -15,7 +12,6 @@ import { describe, expect, it, vi } from 'vitest'
 import type { LandingViewer } from '@/server/landing-viewer'
 
 import { Landing, questions } from './landing'
-import { platforms } from './landing-platforms'
 import { cafe, story } from './landing-story'
 import { MAIN_ACTION_SHORT, mainAction } from './main-action'
 import { Pricing } from './pricing'
@@ -23,6 +19,9 @@ import { guest, HANGING, member, plain, pricing } from './testing'
 
 vi.mock('@/app/(protected)/app/actions', () => ({ signOut: vi.fn() }))
 vi.mock('@/lib/hard-navigate', () => ({ hardNavigate: vi.fn() }))
+
+/** The systems the heading of the first screen names. */
+const platforms = ['WordPress', 'Joomla', 'OpenCart', 'MODX', '1С-Битрикс'] as const
 
 function renderLanding(viewer: LandingViewer) {
   return render(
@@ -80,27 +79,14 @@ describe('landing texts', () => {
     const ornament = (parent: HTMLElement) => parent.closest('[aria-hidden="true"]') !== null
 
     // Wherever the name stands, it is a piece of text of its own.
-    expect(names.map(({ text }) => text)).toEqual(Array.from({ length: 6 }, () => '1С-Битрикс'))
-    // In the prose it is bound by the class: the heading of the page, the words under the
-    // heading of the systems and the answer about the sites.
+    expect(names.map(({ text }) => text)).toEqual(Array.from({ length: 2 }, () => '1С-Битрикс'))
+    // In the prose it is bound by the class: the heading of the page and the answer about the sites.
     const prose = names.filter(({ parent }) => !heard(parent) && !ornament(parent))
     expect(prose.map(({ parent }) => parent.closest('h1, section')?.id)).toEqual([
       'hero-title',
-      'platforms',
       'faq',
     ])
     for (const { parent } of prose) expect(parent.className).toContain('nowrap')
-    // The list of the systems is heard and not seen: it has no line to break.
-    expect(names.filter(({ parent }) => heard(parent))).toHaveLength(1)
-    // The running line is seen and not heard, twice as it is written twice; a name of it is kept
-    // in one piece by its own class.
-    const running = names.filter(({ parent }) => ornament(parent))
-    expect(running).toHaveLength(2)
-    for (const { parent } of running) expect(parent.className).toContain('marqueeName')
-    const name = /\.marqueeName\s*\{([^}]*)\}/.exec(
-      readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'landing.module.css'), 'utf8'),
-    )
-    expect(name?.[1]).toMatch(/white-space:\s*nowrap/)
   })
 
   it('keeps the range of figures of an answer in one piece', () => {
@@ -122,10 +108,10 @@ describe('landing texts', () => {
       link.textContent.trim(),
     )
 
-    // The header, its mobile menu, the first screen, the section of the systems and the plans:
-    // the whole name, or its first words where a row has no room for it.
+    // The header, its mobile menu, the first screen and the plans: the whole name, or its first
+    // words where a row has no room for it.
     expect(href).toBe('#lead')
-    expect(labels).toEqual([MAIN_ACTION_SHORT, MAIN_ACTION_SHORT, label, MAIN_ACTION_SHORT, label])
+    expect(labels).toEqual([MAIN_ACTION_SHORT, MAIN_ACTION_SHORT, label, label])
     expect(label.startsWith(`${MAIN_ACTION_SHORT} `)).toBe(true)
     // And the form it leads to is on the page.
     expect(container.querySelector('section#lead form')).not.toBeNull()
@@ -135,16 +121,6 @@ describe('landing texts', () => {
       plain(control.textContent),
     )
     expect(controls.filter((name) => /зарегистр/i.test(name))).toEqual([])
-  })
-
-  it('gives the action of the systems the role of the main one', () => {
-    const container = renderLanding(guest)
-    const main = container.querySelector('section[aria-labelledby="hero-title"] a[href="#lead"]')
-    const second = container.querySelector('#platforms a[href="#lead"]')
-
-    // One class for the role, so hover, press and weight cannot drift apart.
-    expect(main?.className).toContain('primaryButton')
-    expect(second?.className).toBe(main?.className)
   })
 
   it('does not ask a signed-in visitor to register', () => {
@@ -163,10 +139,8 @@ describe('landing texts', () => {
     expect(hero?.querySelector('a[href="/chats"]')).toHaveTextContent(/^Открыть чаты\s*$/)
     expect(hero?.querySelector('a[href="#lead"]')).toBeNull()
     expect(plain(container.textContent)).not.toMatch(/регистрац|в подарок/i)
-    // The form of a lead stays open to them: the section of the systems leads to it.
-    expect(
-      [...container.querySelectorAll('a[href="#lead"]')].map((link) => link.textContent.trim()),
-    ).toEqual([MAIN_ACTION_SHORT])
+    // The form of a lead stays on the page; nothing of it leads a signed-in visitor there.
+    expect(container.querySelectorAll('a[href="#lead"]')).toHaveLength(0)
     expect(plain(container.querySelector('#lead')?.textContent)).toContain(
       'Оставьте адрес сайта и телефон — мы сами подключим ваш сайт и настроим Радити под вашу систему.',
     )
@@ -222,7 +196,7 @@ describe('landing texts', () => {
       expect(plain(headings[0]?.textContent)).toBe(
         'ИИ-помощник для сайта на WordPress, Joomla, OpenCart, MODX и 1С-Битрикс',
       )
-      // The five systems of the heading are those of the section of the systems, in its order.
+      // The five systems of the heading, in their order.
       expect(plain(headings[0]?.textContent).match(/[A-Za-z]+|1С-Битрикс/g)).toEqual([...platforms])
       // The section of the first screen is named by it.
       expect(headings[0]?.closest('section')).toHaveAttribute('aria-labelledby', 'hero-title')
@@ -299,7 +273,6 @@ describe('landing texts', () => {
     expect(sections.map((section) => section.id)).toEqual([
       '',
       'demo',
-      'platforms',
       'possibilities',
       'safety',
       'pricing',
@@ -319,7 +292,6 @@ describe('landing texts', () => {
       }),
     ).toEqual([
       'Попробуйте сами',
-      'На чём сделан ваш сайт?Скорее всего, подойдёт.',
       'Что можно поручить',
       'Без вашего «да» сайт не меняется',
       'Тарифы',
@@ -350,9 +322,6 @@ describe('landing texts', () => {
     expect(under('demo-title')).toBe(
       'Сайт кофейни для примера. Выберите просьбу — и посмотрите, что изменится.',
     )
-    expect(under('platforms-title')).toBe(
-      'WordPress, Joomla, OpenCart, MODX и 1С-Битрикс — Радити работает с каждой из этих систем.',
-    )
     expect(under('can-title')).toBe(
       'То, ради чего обычно пишут разработчику: ваша просьба — и что после неё появится на сайте.',
     )
@@ -364,7 +333,7 @@ describe('landing texts', () => {
     )
     // The questions need no words under their heading; the sign «?» beside it is gone.
     expect(container.querySelector('#faq-title')?.nextElementSibling).toBeNull()
-    for (const id of ['demo-title', 'platforms-title', 'can-title', 'safety-title']) {
+    for (const id of ['demo-title', 'can-title', 'safety-title']) {
       expect(container.querySelector(`#${id}`)?.nextElementSibling?.tagName).toBe('P')
     }
   })

@@ -270,11 +270,7 @@ describe('landing pricing', () => {
       within(planCard('Старт'))
         .getAllByRole('listitem')
         .map((item) => plain(item.textContent)),
-    ).toEqual([
-      '200 кредитов в месяц — в среднем около 18 задач',
-      'Небольшая правка — около 50 ₽',
-      'Один сайт',
-    ])
+    ).toEqual(['200 кредитов в месяц — в среднем около 18 задач', 'Небольшая правка — около 50 ₽'])
     expect(
       within(planCard('Бизнес'))
         .getAllByRole('listitem')
@@ -282,7 +278,6 @@ describe('landing pricing', () => {
     ).toEqual([
       '1 000 кредитов в месяц — в среднем около 91 задачи',
       'Небольшая правка — около 50 ₽',
-      'До 3 сайтов',
     ])
     expect(
       within(planCard('Агентство'))
@@ -291,7 +286,6 @@ describe('landing pricing', () => {
     ).toEqual([
       '2 000 кредитов в месяц — в среднем около 180 задач',
       'Небольшая правка — около 50 ₽',
-      'До 15 сайтов',
     ])
     // No plan on sale has a daily limit: no card speaks of a day.
     for (const name of ['Старт', 'Бизнес', 'Агентство']) {

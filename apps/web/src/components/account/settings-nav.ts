@@ -14,6 +14,8 @@ export const settingsNav: readonly SettingsNavEntry[] = [
   { href: '/settings/plans', label: 'Тарифы', icon: 'plans', enabled: true },
   { href: '/settings/billing', label: 'Оплата', icon: 'payment', enabled: true },
   { href: '/settings/usage', label: 'Использование', icon: 'usage', enabled: true },
+  // The variables every chat of the workspace gets (docs/plan/83-remove-projects.md, БП4).
+  { href: '/settings/variables', label: 'Переменные', icon: 'lock', enabled: true },
 ]
 
 /**

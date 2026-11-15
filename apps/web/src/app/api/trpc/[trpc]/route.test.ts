@@ -7,14 +7,12 @@ import { MAX_BATCH_SIZE } from '@/trpc/batch'
 const stand = vi.hoisted(() => ({
   shop: { name: 'the shop of the process' } as object | null,
   chat: { name: 'the dialog services of the process' } as object | null,
-  connections: { name: 'the site connections of the process' } as object | null,
   contexts: [] as unknown[],
   shopFailure: new Error('YooKassa request timed out'),
 }))
 
 vi.mock('@/server/payment-shop', () => ({ paymentShop: () => stand.shop }))
 vi.mock('@/server/chat-services', () => ({ chatServices: () => stand.chat }))
-vi.mock('@/server/site-connections', () => ({ siteConnections: () => stand.connections }))
 vi.mock('@repo/trpc', async () => {
   const { initTRPC, TRPCError } = await import('@trpc/server')
   const t = initTRPC.create()
@@ -55,7 +53,6 @@ describe('tRPC route', () => {
   let error: ReturnType<typeof vi.spyOn>
   beforeEach(() => {
     stand.shop = { name: 'the shop of the process' }
-    stand.connections = { name: 'the site connections of the process' }
     stand.contexts = []
     error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
   })
@@ -88,15 +85,11 @@ describe('tRPC route', () => {
         headers: request.headers,
         billing: stand.shop,
         chat: stand.chat,
-        siteConnections: stand.connections,
       },
     ])
-    const [context] = stand.contexts as [
-      { billing: unknown; chat: unknown; siteConnections: unknown },
-    ]
+    const [context] = stand.contexts as [{ billing: unknown; chat: unknown }]
     expect(context.billing).toBe(stand.shop)
     expect(context.chat).toBe(stand.chat)
-    expect(context.siteConnections).toBe(stand.connections)
   })
 
   it('builds the context without a shop while payments are off', async () => {
@@ -109,22 +102,6 @@ describe('tRPC route', () => {
         headers: expect.any(Headers),
         billing: null,
         chat: stand.chat,
-        siteConnections: stand.connections,
-      },
-    ])
-  })
-
-  it('builds the context without site connections while Vault is not configured', async () => {
-    stand.connections = null
-
-    expect((await call('ping')).status).toBe(200)
-
-    expect(stand.contexts).toEqual([
-      {
-        headers: expect.any(Headers),
-        billing: stand.shop,
-        chat: stand.chat,
-        siteConnections: null,
       },
     ])
   })

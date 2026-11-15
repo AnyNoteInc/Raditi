@@ -1,7 +1,5 @@
 import { chatCommandRefusals, type ChatCommandRefusal } from '@repo/domain/release/chat-commands'
 
-import { taskWayText } from './chat-texts'
-
 // A failed call of the dialog procedures as the tRPC client reports it. The server writes the
 // message for the client (packages/trpc/src/errors.ts): Russian, on «вы», the refusal's own
 // words; a call that never reached the server has only the browser's words, which are not shown.
@@ -37,14 +35,11 @@ export function callErrorCode(error: unknown): string | null {
 }
 
 /**
- * What to tell the client about words the server did not take. The refusal of a secret points to
- * the «Переменные» of a project: a chat without one has its own words, here, where the project of
- * the chat is known (the server names only the code of the refusal).
+ * What to tell the client about words the server did not take: the refusal of a secret points to
+ * «Переменные» of the settings, as the server's words say (docs/plan/83-remove-projects.md, БП4).
  */
-export function sendErrorText(error: unknown, { withProject }: { withProject: boolean }): string {
-  return !withProject && callErrorCode(error) === 'TASK_TEXT_HAS_SECRET'
-    ? taskWayText.secretRefusedPlain
-    : callErrorText(error)
+export function sendErrorText(error: unknown): string {
+  return callErrorText(error)
 }
 
 /** Which of its reasons the server named for a refusal, as it gave it; null — none. */

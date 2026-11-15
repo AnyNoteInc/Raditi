@@ -213,7 +213,6 @@ describe('the «Тарифы» page of a customer without a tariff', () => {
       // The windows of the work (plan 71, Л14).
       'До 350 кредитов в неделю',
       'Небольшая правка — около 50 ₽',
-      'До 3 сайтов на WordPress',
     ])
     expect(
       within(await planCard('Старт'))
@@ -224,7 +223,6 @@ describe('the «Тарифы» page of a customer without a tariff', () => {
       'В среднем около 18 задач',
       'До 73 кредитов в неделю',
       'Небольшая правка — около 50 ₽',
-      'Один сайт на WordPress',
     ])
     // A count of four digits is grouped, and a line never parts its groups.
     const largest = within(await planCard('Агентство')).getAllByRole('listitem')
@@ -233,7 +231,6 @@ describe('the «Тарифы» page of a customer without a tariff', () => {
       'В среднем около 180 задач',
       'До 700 кредитов в неделю',
       'Небольшая правка — около 50 ₽',
-      'До 15 сайтов на WordPress',
     ])
     expect(largest[0]?.textContent).toBe('2\u00a0000\u00a0кредитов в\u00a0месяц')
     // No tariff on sale has a daily limit: no card speaks of a day.
@@ -261,39 +258,6 @@ describe('the «Тарифы» page of a customer without a tariff', () => {
       expect(within(card).getByRole('button')).toHaveClass('MuiButton-outlined')
     }
     expect(screen.queryByText('Ваш тариф')).not.toBeInTheDocument()
-  })
-
-  it('explains instead of a button why a tariff does not fit the sites', async () => {
-    getOffers.mockResolvedValue(offers({ siteCount: 2 }))
-    showPlans()
-
-    const tooSmall = await planCard('Старт')
-    expect(plain(tooSmall.textContent)).toContain(
-      'Не подойдёт: у вас два сайта, а тариф рассчитан на один.',
-    )
-    expect(within(tooSmall).queryByRole('button')).not.toBeInTheDocument()
-    expect(within(tooSmall).queryByText('Подходит вам')).not.toBeInTheDocument()
-
-    // The suggestion moves to the first tariff that holds the sites.
-    const suggested = await planCard('Бизнес')
-    expect(within(suggested).getByText('Подходит вам')).toBeInTheDocument()
-    expect(within(suggested).getByRole('button', { name: 'Выбрать «Бизнес»' })).toHaveClass(
-      'MuiButton-contained',
-    )
-    expect(
-      within(await planCard('Агентство')).getByRole('button', { name: 'Выбрать «Агентство»' }),
-    ).toHaveClass('MuiButton-outlined')
-  })
-
-  it('suggests nothing when no tariff holds the sites', async () => {
-    getOffers.mockResolvedValue(offers({ siteCount: 16 }))
-    showPlans()
-
-    expect(plain((await planCard('Агентство')).textContent)).toContain(
-      'Не подойдёт: у вас 16 сайтов, а тариф рассчитан на 15.',
-    )
-    expect(screen.queryByText('Подходит вам')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /^Выбрать/ })).not.toBeInTheDocument()
   })
 
   it('says who can pay, how, and links the public offer', async () => {
@@ -404,11 +368,10 @@ describe('the «Тарифы» page of a customer with a tariff', () => {
     expect(screen.getAllByText('Ваш тариф')).toHaveLength(1)
     expect(screen.queryByText('Подходит вам')).not.toBeInTheDocument()
     expect(screen.getByRole('heading', { level: 2, name: 'Все тарифы' })).toBeInTheDocument()
-    // A tariff the sites do not fit says so here as well.
-    expect(plain((await planCard('Старт')).textContent)).toContain('Не подойдёт: у вас два сайта')
-    // Nothing is bought again: the other tariff that fits is offered for the next period, the
-    // pack on top of this one, and auto-renewal can be switched off.
+    // Nothing is bought again: the other tariffs are offered for the next period, the pack on
+    // top of this one, and auto-renewal can be switched off.
     expect(screen.getAllByRole('button').map(buttonName)).toEqual([
+      'Перейти на тариф «Старт»',
       'Перейти на тариф «Агентство»',
       'Купить пакет',
       'Отключить автопродление',
@@ -534,6 +497,7 @@ describe('the «Тарифы» page of a customer with a tariff', () => {
     // The tariff still takes tasks, so a pack can be bought, and another tariff chosen.
     expect(screen.getAllByRole('button').map(buttonName)).toEqual([
       'Включить автопродление',
+      'Перейти на тариф «Старт»',
       'Перейти на тариф «Агентство»',
       'Купить пакет',
     ])
@@ -1192,24 +1156,6 @@ describe('switching auto-renewal on', () => {
 })
 
 describe('choosing another tariff for the next period', () => {
-  it('offers every other tariff the sites fit, and none they do not', async () => {
-    onBusiness()
-    showPlans()
-
-    const change = within(await planCard('Агентство')).getByRole('button', {
-      name: 'Перейти на тариф «Агентство»',
-    })
-    expect(change).toBeEnabled()
-    // One word on the button, whatever the tariff is called: the buttons of a row stay one line
-    // tall. Which tariff is said by the card and by the name of the button.
-    expect(change).toHaveTextContent(/^Перейти$/)
-    expect(within(await planCard('Бизнес')).queryByRole('button')).toBeNull()
-    // Two sites do not fit «Старт»: its note stays and it has no button.
-    const small = await planCard('Старт')
-    expect(within(small).queryByRole('button')).toBeNull()
-    expect(plain(small.textContent)).toContain('Не подойдёт: у вас два сайта')
-  })
-
   it('names the day, what stays and what is charged, and «Не менять» changes nothing', async () => {
     onBusiness()
     showPlans()
@@ -1998,6 +1944,7 @@ describe('the «Тарифы» page of a shop that takes one-time payments only'
     )
     expect(row('Следующее списание')).toBe('18 октября 2026 — 9 990 ₽')
     expect(screen.getAllByRole('button').map(buttonName)).toEqual([
+      'Перейти на тариф «Старт»',
       'Перейти на тариф «Агентство»',
       'Купить пакет',
       'Отключить автопродление',

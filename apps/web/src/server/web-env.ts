@@ -6,16 +6,11 @@ import {
   pagesAddressFromEnv,
   pagesOriginOf,
   parseEnv,
-  previewAddressEnvShape,
-  previewAddressFromEnv,
-  previewAddressProblems,
   type AppEnv,
   type Env,
   type PagesAddress,
-  type PreviewAddress,
 } from '@repo/domain'
 import { DEV_METRICS_TOKEN, metricsTokenProblem } from '@repo/observability'
-import { getDomain } from 'tldts'
 import { z } from 'zod'
 
 export interface WebEnv {
@@ -32,15 +27,9 @@ export interface WebEnv {
    */
   pastDueDays: number
   /**
-   * Where previews of dialogs are served (docs/plan/53-chat-preview-release.md, Р17, Р19): web
-   * builds the ticket URL of the iframe and of `/preview/open` from it. null — previews are off.
-   * The same variables as core and the `preview` role read.
-   */
-  preview: PreviewAddress | null
-  /**
    * BROWSER_STREAM_PUBLIC_URL (docs/plan/57-browser-tasks.md, Б12): where the cabinet opens the
    * stream of a task's browser — the gateway of the `preview` role, `ws(s)://host[:port]/path`.
-   * null — the platform has no browser here: no site offers tasks in it. `wss://` in production.
+   * null — the platform has no browser here: chats get none. `wss://` in production.
    */
   browserStreamUrl: string | null
   /** The public VAPID key of Web Push (docs/plan/75, ВВ8); null — no notifications in browsers. */
@@ -98,7 +87,6 @@ const webEnvSchema = z
     REDIS_URL: envVar(z.url({ protocol: /^rediss?$/, error: 'must be a redis:// URL' }).optional()),
     // The bounds and the default of the core role (apps/core/src/config/config.ts).
     BILLING_PAST_DUE_DAYS: envVar(z.coerce.number().int().min(1).max(90).default(7)),
-    ...previewAddressEnvShape,
     BROWSER_STREAM_PUBLIC_URL: envVar(browserStreamUrl.optional()),
     // The public VAPID key of Web Push (docs/plan/75-chat-input-output.md, ВВ8); core reads it with
     // the private one. Absent — the browsers of the cabinet are not offered notifications.
@@ -109,8 +97,6 @@ const webEnvSchema = z
         .optional(),
     ),
     PAGES_SIGNING_SECRET: envVar(z.string().optional()),
-    // Read for the check of the preview domain only.
-    GITEA_URL: envVar(z.string().optional()),
     PAGES_BASE_DOMAIN: envVar(z.string().optional()),
     PAGES_PUBLIC_PORT: envVar(z.coerce.number().int().min(1).max(65_535).optional()),
   })
@@ -133,27 +119,17 @@ const webEnvSchema = z
       })
     }
     pagesProblems(env, ctx)
-    // Production refuses http previews and a base under the domain of the cabinet or Gitea (Р19).
-    const problems = previewAddressProblems(
-      {
-        appEnv: env.APP_ENV,
-        address: previewAddressFromEnv(env, env.APP_ENV),
-        appUrl: env.APP_URL,
-        giteaUrl: env.GITEA_URL,
-      },
-      (host) => getDomain(host, { allowPrivateDomains: true }),
-    )
     const pageProblems: string[] = []
     pagesAddressFromEnv(env, isProduction(env.APP_ENV), pageProblems)
-    for (const problem of [...problems, ...pageProblems]) {
+    for (const problem of pageProblems) {
       const [name, ...message] = problem.split(': ')
       ctx.addIssue({ code: 'custom', path: [name ?? ''], message: message.join(': ') })
     }
   })
 
 /**
- * The root of the domain of pages (`pagesOriginOf`) in production: never the cabinet's own host
- * and never under the previews' domain, and a secret given is at least 32 bytes. A subdomain of
+ * The root of the domain of pages (`pagesOriginOf`) in production: never the cabinet's own host,
+ * and a secret given is at least 32 bytes. A subdomain of
  * the cabinet's domain is allowed — `pages.raditi.ru`, owner's answer of 13.11.2026: the page is an
  * opaque origin by its sandbox, and the cookies of the cabinet are of its own host.
  */
@@ -163,7 +139,6 @@ function pagesProblems(
     APP_URL: string
     PAGES_BASE_DOMAIN?: string | undefined
     PAGES_SIGNING_SECRET?: string | undefined
-    PREVIEW_BASE_DOMAIN?: string | undefined
   },
   ctx: z.RefinementCtx,
 ): void {
@@ -174,21 +149,13 @@ function pagesProblems(
     PAGES_BASE_DOMAIN: env.PAGES_BASE_DOMAIN,
   })
   if (origin === null) return
-  const domain = (host: string) => getDomain(host, { allowPrivateDomains: true }) ?? host
   const pages = new URL(origin).hostname
   const app = URL.parse(env.APP_URL)
-  const preview = env.PREVIEW_BASE_DOMAIN?.trim()
   if (app !== null && app.hostname === pages)
     ctx.addIssue({
       code: 'custom',
       path: ['PAGES_BASE_DOMAIN'],
       message: 'must not be the host of the cabinet',
-    })
-  if (preview && domain(preview) === domain(pages))
-    ctx.addIssue({
-      code: 'custom',
-      path: ['PAGES_BASE_DOMAIN'],
-      message: 'must not share its registrable domain with the previews (a preview runs site code)',
     })
   // An empty secret leaves the pages of chats off (`pageViewsOf`); a short one is a mistake to tell.
   const secret = env.PAGES_SIGNING_SECRET?.trim() ?? ''
@@ -209,7 +176,6 @@ export function webEnvFromEnv(env: Env): WebEnv {
     metricsToken: e.METRICS_TOKEN ?? DEV_METRICS_TOKEN,
     redisUrl: e.REDIS_URL,
     pastDueDays: e.BILLING_PAST_DUE_DAYS,
-    preview: previewAddressFromEnv(e, e.APP_ENV),
     browserStreamUrl: e.BROWSER_STREAM_PUBLIC_URL ?? null,
     webPushPublicKey: e.WEB_PUSH_VAPID_PUBLIC ?? null,
     pages: pagesAddressFromEnv(e, isProduction(e.APP_ENV), []),

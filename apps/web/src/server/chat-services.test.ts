@@ -71,29 +71,14 @@ describe('the dialog services of the process', () => {
     expect(stand.authEnv).not.toHaveBeenCalled()
   })
 
-  it('carries the environment, the address of previews with their life and the key of confirmations', async () => {
-    vi.stubEnv('PREVIEW_TTL_HOURS', '48')
+  it('carries the environment, once per process', async () => {
     const { chatServices } = await import('./chat-services')
-    const { releaseConfirmKey } = await import('@repo/trpc')
 
     const chat = chatServices()
 
-    expect(chat).toMatchObject({
-      appEnv: 'development',
-      preview: { address: ADDRESS, ttlHours: 48 },
-      releaseConfirmKey: releaseConfirmKey('a'.repeat(48)),
-    })
+    expect(chat).toMatchObject({ appEnv: 'development' })
+    expect(chat).not.toHaveProperty('preview')
     expect(chatServices()).toBe(chat)
-  })
-
-  it('takes the life of a preview of core when it is not set, and no previews when they are off', async () => {
-    vi.stubEnv('PREVIEW_TTL_HOURS', '')
-    stand.webEnv.mockReturnValue({ appEnv: 'test', preview: null, browserStreamUrl: null })
-    const { chatServices, previewTtlHours } = await import('./chat-services')
-
-    expect(chatServices()?.preview).toBeNull()
-    expect(previewTtlHours({})).toBe(72)
-    expect(() => previewTtlHours({ PREVIEW_TTL_HOURS: '0' })).toThrow(/PREVIEW_TTL_HOURS/)
   })
 
   it("carries where the stream of a task's browser opens, and no browser when it is not set", async () => {
@@ -110,14 +95,6 @@ describe('the dialog services of the process', () => {
     expect(fresh.chatServices()?.browser).toEqual({
       streamUrl: 'ws://localhost:8091/v1/browser/stream',
     })
-  })
-
-  it("says which stacks work in a site's admin pages, by their adapters", async () => {
-    const { browserSupported, chatServices } = await import('./chat-services')
-    expect(browserSupported('wordpress')).toBe(true)
-    // Its adapter is not there yet, or says it has no browser: the site takes a chat with the code.
-    expect(browserSupported('bitrix')).toBe(false)
-    expect(chatServices()?.browserSupported).toBe(browserSupported)
   })
 
   it('makes the clients of S3 and Vault only when a procedure needs them, once', async () => {
@@ -144,14 +121,14 @@ describe('the dialog services of the process', () => {
     // key of a workspace is made, never used to encrypt or decrypt here.
     expect(Object.keys(secrets).sort()).toEqual(['kvMetadata', 'kvWrite', 'transitEnsureKey'])
     expect(secrets).not.toBe(stand.secrets)
-    await secrets.kvWrite('kv/sites/s/env/NAME', { value: 'x' }, { cas: 0, maxVersions: 1 })
+    await secrets.kvWrite('kv/workspaces/w/env/NAME', { value: 'x' }, { cas: 0, maxVersions: 1 })
     expect(stand.secrets.kvWrite).toHaveBeenCalledExactlyOnceWith(
-      'kv/sites/s/env/NAME',
+      'kv/workspaces/w/env/NAME',
       { value: 'x' },
       { cas: 0, maxVersions: 1 },
     )
-    await secrets.kvMetadata('kv/sites/s/env/NAME')
-    expect(stand.secrets.kvMetadata).toHaveBeenCalledExactlyOnceWith('kv/sites/s/env/NAME')
+    await secrets.kvMetadata('kv/workspaces/w/env/NAME')
+    expect(stand.secrets.kvMetadata).toHaveBeenCalledExactlyOnceWith('kv/workspaces/w/env/NAME')
     await secrets.transitEnsureKey('ws-01960000-0000-7000-8000-000000000003')
     expect(stand.secrets.transitEnsureKey).toHaveBeenCalledExactlyOnceWith(
       'ws-01960000-0000-7000-8000-000000000003',
@@ -162,8 +139,8 @@ describe('the dialog services of the process', () => {
 
   it('is null while a section does not parse, logs it, and is read again on the next request', async () => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
-    stand.authEnv.mockImplementationOnce(() => {
-      throw new Error('Invalid auth configuration: BETTER_AUTH_SECRET is required')
+    stand.webEnv.mockImplementationOnce(() => {
+      throw new Error('Invalid web configuration: APP_URL is required')
     })
     const { chatServices } = await import('./chat-services')
 

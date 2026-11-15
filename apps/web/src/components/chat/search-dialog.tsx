@@ -90,7 +90,6 @@ function FoundRow({ item, onOpen }: { item: DialogListItem; onOpen: () => void }
           </Typography>
           <Typography component="span" variant="caption" color="text.secondary">
             {listTime(item.updatedAt, now)}
-            {item.project ? ` · ${item.project.name}` : ''}
             {item.archived ? ` · ${searchText.archived}` : ''}
           </Typography>
         </Box>

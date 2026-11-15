@@ -142,20 +142,17 @@ const chooserWords = browserText.chooser
 export function FileChooserDialog({
   chooser,
   taskId,
-  siteId,
   onAnswer,
 }: {
   chooser: BrowserChooser
   taskId: string
-  /** null — a chat without a project. */
-  siteId: string | null
   onAnswer: (attachmentIds: string[]) => void
 }) {
   const trpc = useTRPC()
   const titleId = useId()
   const files = useQuery(trpc.attachment.list.queryOptions({ taskId }))
   const bind = useMutation(trpc.attachment.bind.mutationOptions())
-  const uploads = useAttachments(siteId)
+  const uploads = useAttachments()
   const input = useRef<HTMLInputElement>(null)
   const [chosen, setChosen] = useState<readonly string[]>([])
   const [error, setError] = useState<string | null>(null)
