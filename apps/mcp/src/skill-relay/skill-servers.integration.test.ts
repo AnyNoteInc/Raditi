@@ -47,16 +47,24 @@ describe.skipIf(!enabled)('the servers of the MCP relay with PostgreSQL', () => 
     return row.id
   }
 
+  const signIn = {
+    issuer: 'https://auth.example.com',
+    tokenEndpoint: 'https://auth.example.com/token',
+    clientId: 'client-1',
+    resource: url,
+  }
+
   it('finds a server with a working key of its own site and nothing else', async () => {
     const siteId = await site()
     const other = await site()
     await db.siteAgentSkill.createMany({
       data: [
         { siteId, name: 'keyed', url, authKind: 'header', headerName: 'X-Api-Key' },
-        { siteId, name: 'signed', url, authKind: 'oauth', oauth: { issuer: 'https://a.example' } },
+        { siteId, name: 'signed', url, authKind: 'oauth', oauth: signIn },
+        { siteId, name: 'broken', url, authKind: 'oauth', oauth: { issuer: 'https://a.example' } },
         { siteId, name: 'open', url },
         { siteId, name: 'off', url, enabled: false, authKind: 'header', headerName: 'X-Key' },
-        { siteId, name: 'login', url, authKind: 'oauth', authState: 'needs_login', oauth: {} },
+        { siteId, name: 'login', url, authKind: 'oauth', authState: 'needs_login', oauth: signIn },
       ],
     })
     const ok = { state: 'ok', error: null }
@@ -65,16 +73,19 @@ describe.skipIf(!enabled)('the servers of the MCP relay with PostgreSQL', () => 
       authKind: 'header',
       headerName: 'X-Api-Key',
       ...ok,
+      oauth: null,
     })
     expect(await store.find(siteId, 'signed')).toEqual({
       url,
       authKind: 'oauth',
       headerName: null,
       ...ok,
+      oauth: signIn,
     })
     // A server that needs a sign-in is found, with its state: the relay says why it is not served.
     expect(await store.find(siteId, 'login')).toMatchObject({ state: 'needs_login' })
-    for (const name of ['open', 'off', 'missing'])
+    // Metadata of a sign-in that does not parse: nowhere to renew its token, not served.
+    for (const name of ['open', 'off', 'missing', 'broken'])
       expect(await store.find(siteId, name), name).toBeNull()
     expect(await store.find(other, 'keyed')).toBeNull()
   })
