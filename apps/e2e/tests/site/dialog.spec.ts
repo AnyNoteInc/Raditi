@@ -432,10 +432,11 @@ test('a dialog with changes: its tools beside it on a desktop', async ({
     await expect(tab(page, 'Файлы')).toHaveAttribute('aria-selected', 'true')
     await expect(tab(page, 'Файлы')).toBeFocused()
     await expect(panelOf(page, 'files')).toContainText(CHANGED_FILE)
-    // The edge between the dialog and the panel; the list of dialogs gives the panel its room.
+    // The edge between the dialog and the panel; the list of dialogs stays as it was, and the way
+    // to it is the button of the panel, not «К чатам».
     await expect(separator(page)).toBeVisible()
-    await expect(dialogs(page)).toBeHidden()
-    await expect(back(page)).toBeVisible()
+    await expect(dialogs(page)).toBeVisible()
+    await expect(back(page)).toBeHidden()
     const paneBox = await box(pane(page))
     const fieldBox = await box(message(page))
     expect(paneBox.x + paneBox.width).toBeLessThanOrEqual(1280)
@@ -1195,8 +1196,8 @@ test('a task in the browser: its window on a desktop', async ({ page, context, s
     // Open, nothing is new behind «+».
     await expect(plus(page)).toHaveAccessibleName('Инструменты')
     await expect(separator(page)).toBeVisible()
-    await expect(dialogs(page)).toBeHidden()
-    await expect(back(page)).toBeVisible()
+    await expect(dialogs(page)).toBeVisible()
+    await expect(back(page)).toBeHidden()
     const paneBox = await box(pane(page))
     const fieldBox = await box(message(page))
     expect(paneBox.x + paneBox.width).toBeLessThanOrEqual(1280)

@@ -24,13 +24,10 @@ import {
 } from '@/components/application/cabinet-shell'
 
 import { CHATS_HREF, NEW_CHAT_HREF, NEW_CHAT_SEGMENT } from './chat-address'
-import { PANE_DRAWN } from './pane-layout'
 import { chatsText, listText } from './chat-texts'
 import { rememberChatsGroup, type ChatsGroup } from './chats-group'
 import { SearchDialog } from './search-dialog'
 import { ArchiveButton, DialogList, useChatsKnownEmpty } from './dialog-list'
-
-/** The page draws the panel of the tools beside a chat: the list gives the chat its room. */
 
 const groupNames: Readonly<Record<ChatsGroup, string>> = {
   list: chatsText.groupList,
@@ -122,7 +119,7 @@ function GroupMenu({
  * a column from the top of the window to its bottom beside the rail, and it scrolls on its own.
  * Below `md` there is one area: the list at the root of the section, an item with the way back on
  * top. Which of them is on the screen is decided by styles alone, so the first paint is right on
- * every width. An open chat gives the column up from `lg` while the panel of its tools is drawn.
+ * every width. The panel of a chat's tools leaves the list as the viewer left it.
  */
 export function ChatsFrame({
   group: chosen,
@@ -189,7 +186,6 @@ export function ChatsFrame({
             sm: selected ? 'none' : 'grid',
             md: panelOpen ? 'grid' : 'none',
           },
-          ...(collapsed && { [PANE_DRAWN]: { display: { lg: 'none' } } }),
           flexDirection: 'column',
           flex: '1 0 auto',
           minWidth: 0,
@@ -322,11 +318,8 @@ export function ChatsFrame({
             // order then, as the list does.
             data-chat-back=""
             sx={{
+              // From `md` the list is the panel beside the rail: «]» and its button show and hide it.
               display: { xs: 'inline-flex', md: 'none' },
-              // From `lg` the chat drawn beside its panel takes the room of the list: the way to it
-              // is shown. Below, a tool drawn in place of a chat has its own way back to the chat
-              // (docs/plan/59-dialog-tools-panel.md, И14): one way back at a time.
-              ...(collapsed && { [PANE_DRAWN]: { display: { xs: 'none', lg: 'inline-flex' } } }),
               alignSelf: 'flex-start',
               alignItems: 'center',
               gap: 1,
