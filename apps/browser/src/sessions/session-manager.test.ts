@@ -3,14 +3,11 @@ import { randomUUID } from 'node:crypto'
 import {
   attachmentKey,
   isDomainError,
-  PageBrowserError,
   type BrowserClientMessage,
   type BrowserCloseReason,
   type BrowserSessionState,
   type BrowserStreamRefusal,
-  type BrowserVerifiedObject,
 } from '@repo/domain'
-import { getSiteAdapter } from '@repo/site-adapters'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { AttachmentFiles } from '../attachments/attachments.ts'
@@ -21,24 +18,6 @@ import { sessionHarness, TEST_SITE as SITE } from '../testing/harness.ts'
 import type { EncodedFrame, SessionViewer } from './worker-session.ts'
 
 const EDIT_12 = `${SITE}/wp-admin/post.php?post=12&action=edit`
-const NEW_POST = `${SITE}/wp-admin/post-new.php`
-
-const postRef = (id: string) => ({
-  kind: 'post' as const,
-  objectId: id,
-  editUrl: `${SITE}/wp-admin/post.php?post=${id}&action=edit`,
-})
-const postObject = (id: string): BrowserVerifiedObject => ({
-  kind: 'post',
-  objectId: id,
-  title: 'Новость',
-  status: 'publish',
-  url: `${SITE}/?p=${id}`,
-  editUrl: postRef(id).editUrl,
-  images: 0,
-  files: 0,
-  featuredImage: false,
-})
 
 class ViewerProbe implements SessionViewer {
   readonly id = randomUUID()
@@ -97,55 +76,6 @@ afterEach(async () => {
 })
 
 describe('SessionManager.ensure', () => {
-  it('starts the containers for the site’s hosts and opens the stack’s start page once', async () => {
-    const { runtime, browsers, store, manager, ensured } = setup()
-    const { row, state, browser } = await ensured()
-    expect(runtime.started).toEqual([
-      expect.objectContaining({
-        sessionId: row.id,
-        taskId: row.taskId,
-        siteId: row.siteId,
-        allowedHosts: ['news-site.ru:443', 'www.news-site.ru:443'],
-        localSites: [],
-        openWeb: false,
-      }),
-    ])
-    // Б31: the list of posts, never the dashboard with its commenters' names.
-    expect(browser.connection.startUrl).toBe(`${SITE}/wp-admin/edit.php`)
-    expect(store.sessions.get(row.id)?.status).toBe('ready')
-    expect(state).toMatchObject({
-      session: row.id,
-      status: 'ready',
-      controller: 'agent',
-      controlEpoch: 0,
-      pageId: 1,
-      viewportVersion: 1,
-      viewport: { width: 1280, height: 800 },
-      url: `${SITE}/wp-admin/edit.php`,
-    })
-    // The same session again: nothing new is started.
-    const again = await manager.ensure({
-      sessionId: row.id,
-      taskId: row.taskId,
-      siteId: row.siteId,
-      takeControl: false,
-    })
-    expect(again.session).toBe(row.id)
-    // The same ids spelled in capitals are the same session, never one an earlier process held.
-    await manager.ensure({
-      sessionId: row.id.toUpperCase(),
-      taskId: row.taskId.toUpperCase(),
-      siteId: row.siteId.toUpperCase(),
-      takeControl: false,
-    })
-    expect(store.sessions.get(row.id)?.status).toBe('ready')
-    expect(runtime.started).toHaveLength(1)
-    expect(browsers.opened).toHaveLength(1)
-    expect(manager.list().sessions).toEqual([
-      { sessionId: row.id, taskId: row.taskId, status: 'ready' },
-    ])
-  })
-
   it('refuses a session it cannot hold, and loses one an earlier process started', async () => {
     const { store, runtime, manager } = setup({ maxSessions: 1 })
     const ensure = (row: ReturnType<FakeStore['open']>, overrides = {}) =>
@@ -160,8 +90,8 @@ describe('SessionManager.ensure', () => {
     expect(await codeOf(ensure(unknown))).toBe('NOT_FOUND')
     const other = store.open()
     expect(await codeOf(ensure(other, { taskId: randomUUID() }))).toBe('NOT_FOUND')
-    // A plain-http site that is not a local site of the stand is out of the browser's reach.
-    expect(await codeOf(ensure(store.open({ siteUrl: 'http://news-site.ru' })))).toBe('CONFLICT')
+    // A row of a session of a site, as a database from before plan 83 may hold: no browser.
+    expect(await codeOf(ensure(store.openOfSite()))).toBe('CONFLICT')
 
     // Started by a worker before this one: its sign-in is gone with it (Б18).
     const held = store.open({ readyAt: new Date() })
@@ -171,41 +101,6 @@ describe('SessionManager.ensure', () => {
 
     await ensure(other)
     expect(await codeOf(ensure(store.open()))).toBe('BROWSER_SESSION_UNAVAILABLE')
-  })
-
-  it('takes where the browser goes from the site’s row, never from the caller', async () => {
-    const { runtime, browsers, store, manager } = setup()
-    const row = store.open({ siteUrl: 'https://www.shop-site.ru/blog' })
-    // A caller that sends another address (the API's strict schema refuses it before this).
-    const request = {
-      sessionId: row.id,
-      taskId: row.taskId,
-      siteId: row.siteId,
-      siteUrl: 'https://evil.example.com',
-      takeControl: true,
-    } as Parameters<SessionManager['ensure']>[0]
-    await manager.ensure(request)
-    expect(runtime.started).toEqual([
-      expect.objectContaining({ allowedHosts: ['www.shop-site.ru:443', 'shop-site.ru:443'] }),
-    ])
-    // The stack's start page below the folder of the site's own address.
-    expect(browsers.last.connection.startUrl).toBe(
-      'https://www.shop-site.ru/blog/wp-admin/edit.php',
-    )
-    expect(JSON.stringify(runtime.started)).not.toContain('evil.example.com')
-    // A site the database does not know has no session, whatever the caller says it is.
-    const unknown = store.open()
-    store.sites.delete(unknown.siteId)
-    expect(
-      await codeOf(
-        manager.ensure({
-          sessionId: unknown.id,
-          taskId: unknown.taskId,
-          siteId: unknown.siteId,
-          takeControl: true,
-        }),
-      ),
-    ).toBe('NOT_FOUND')
   })
 
   it('marks a session that could not start failed and leaves nothing behind', async () => {
@@ -234,7 +129,6 @@ describe('SessionManager.ensure', () => {
       store,
       files: new AttachmentFiles(store, new FakeInbox()),
       screenshots: new TaskScreenshots(store, new FakeInbox()),
-      adapters: getSiteAdapter,
       metrics: countingMetrics().metrics,
       now: Date.now,
       warn: () => undefined,
@@ -243,8 +137,6 @@ describe('SessionManager.ensure', () => {
         idleMinutes: 30,
         maxHours: 4,
         maxSessions: 4,
-        extraHosts: [],
-        localSites: [],
         platformHosts: [],
         pageDomain: null,
         stream: { maxFps: 12, quality: 70 },
@@ -269,10 +161,7 @@ describe('the browser of a chat without a site (plan 61, К12)', () => {
   const PLATFORM = { platformHosts: ['raditi.ru'] }
 
   it('starts on an empty page with no host, sign-in or site of its own', async () => {
-    const { runtime, ensuredWithoutSite } = setup({
-      ...PLATFORM,
-      extraHosts: ['cdn.example.net:443'],
-    })
+    const { runtime, ensuredWithoutSite } = setup(PLATFORM)
     const { row, state, session, browser } = await ensuredWithoutSite()
     expect(runtime.started).toEqual([
       expect.objectContaining({
@@ -338,61 +227,32 @@ describe('the browser of a chat without a site (plan 61, К12)', () => {
     expect(runtime.started).toHaveLength(1)
   })
 
-  it('never hands a held session to a caller that says otherwise of its site', async () => {
-    const { manager, ensured, ensuredWithoutSite } = setup()
-    const withSite = await ensured()
+  it('never hands a held session to a caller that names a site, nor starts one for it', async () => {
+    const { store, manager, runtime, ensuredWithoutSite } = setup()
+    const held = await ensuredWithoutSite()
     await expect(
       manager.ensure({
-        sessionId: withSite.row.id,
-        taskId: withSite.row.taskId,
-        siteId: null,
-        takeControl: false,
-      }),
-    ).rejects.toThrow('The browser session belongs to another task')
-    const without = await ensuredWithoutSite()
-    await expect(
-      manager.ensure({
-        sessionId: without.row.id,
-        taskId: without.row.taskId,
+        sessionId: held.row.id,
+        taskId: held.row.taskId,
         siteId: randomUUID(),
         takeControl: false,
       }),
     ).rejects.toThrow('The browser session belongs to another task')
-  })
-
-  it('takes whether a session is one from its row alone, never from the caller', async () => {
-    const { store, manager, runtime } = setup()
-    // A caller that says «no site» of a session with a site, and the other way round.
-    const withSite = store.open()
+    const fresh = store.open()
     await expect(
       manager.ensure({
-        sessionId: withSite.id,
-        taskId: withSite.taskId,
-        siteId: null,
-        takeControl: false,
-      }),
-    ).rejects.toThrow('Browser session not found')
-    const without = store.openWithoutSite()
-    await expect(
-      manager.ensure({
-        sessionId: without.id,
-        taskId: without.taskId,
+        sessionId: fresh.id,
+        taskId: fresh.taskId,
         siteId: randomUUID(),
         takeControl: false,
       }),
     ).rejects.toThrow('Browser session not found')
-    expect(runtime.started).toEqual([])
+    expect(runtime.started).toHaveLength(1)
   })
 
-  it('starts nothing for a row at odds with its task: a site’s task never gets the open web', async () => {
+  it('starts nothing for a row of a site, whatever its task says (plan 83, БП1)', async () => {
     const { store, manager, runtime } = setup()
-    const row = store.openWithoutSite()
-    store.sessions.get(row.id)!.taskSiteId = randomUUID()
-    await expect(
-      manager.ensure({ sessionId: row.id, taskId: row.taskId, siteId: null, takeControl: false }),
-    ).rejects.toThrow('The browser session is not of its task')
-    const site = store.open()
-    store.sessions.get(site.id)!.taskSiteId = null
+    const site = store.openOfSite()
     await expect(
       manager.ensure({
         sessionId: site.id,
@@ -400,7 +260,12 @@ describe('the browser of a chat without a site (plan 61, К12)', () => {
         siteId: site.siteId,
         takeControl: false,
       }),
-    ).rejects.toThrow('The browser session is not of its task')
+    ).rejects.toThrow('The browser session is not of a chat')
+    const row = store.open()
+    store.sessions.get(row.id)!.taskSiteId = randomUUID()
+    await expect(
+      manager.ensure({ sessionId: row.id, taskId: row.taskId, siteId: null, takeControl: false }),
+    ).rejects.toThrow('The browser session is not of a chat')
     expect(runtime.started).toEqual([])
   })
 
@@ -505,59 +370,6 @@ describe('the browser of a chat without a site (plan 61, К12)', () => {
     await settle()
     expect(store.wrote).toBe(1)
     expect(store.helps).toEqual([{ reason: 'login', message: 'Войдите, пожалуйста.' }])
-  })
-
-  it('shows a stand’s local sites only there', async () => {
-    const local = { origin: 'http://wp.raditi.test', target: 'host.docker.internal:18080' }
-    const { runtime, browsers, ensuredWithoutSite, act } = setup({ localSites: [local] })
-    const { row } = await ensuredWithoutSite()
-    expect(runtime.started.at(-1)).toMatchObject({ localSites: [local], allowedHosts: [] })
-    expect(browsers.last.connection.localSites).toEqual([local.origin])
-    await act(row, { tool: 'web_open', url: 'http://wp.raditi.test/' })
-    expect(await codeOf(act(row, { tool: 'web_open', url: 'http://other.raditi.test/' }))).toBe(
-      'BROWSER_ADDRESS_DENIED',
-    )
-  })
-})
-
-describe('a name of the platform (plan 61, К37)', () => {
-  it('is refused as a site: a project is no way into the cabinet', async () => {
-    const { store, manager, runtime } = setup({ platformHosts: ['raditi.ru'] })
-    for (const siteUrl of [
-      'https://raditi.ru',
-      'https://app.raditi.ru/',
-      'https://www.raditi.ru',
-    ]) {
-      const row = store.open({ siteUrl })
-      expect(
-        await manager
-          .ensure({ sessionId: row.id, taskId: row.taskId, siteId: row.siteId, takeControl: false })
-          .catch((error: { message: string }) => error.message),
-        siteUrl,
-      ).toBe('The site cannot be reached by the browser')
-    }
-    expect(runtime.started).toEqual([])
-  })
-
-  it('is refused by address in a session with a site, for the agent and the client', async () => {
-    // The site's own list names the host: only the rule of the platform's names refuses it.
-    const { ensured, act } = setup({
-      platformHosts: ['raditi.ru'],
-      extraHosts: ['raditi.ru:443', 'app.raditi.ru:443'],
-    })
-    const { row, session, browser } = await ensured()
-    expect(browser.connection.platformHosts).toEqual(['raditi.ru'])
-    for (const url of ['https://raditi.ru/', 'https://app.raditi.ru/'])
-      expect(await codeOf(act(row, { tool: 'web_open', url })), url).toBe('BROWSER_ADDRESS_DENIED')
-    expect(browser.acted).toEqual([])
-    const viewer = new ViewerProbe()
-    session.attach(viewer)
-    session.message(viewer, { t: 'take' })
-    await settle()
-    session.message(viewer, { t: 'navigate', url: 'https://raditi.ru/' })
-    await settle()
-    expect(browser.navigated).toEqual([])
-    expect(viewer.refusals).toEqual(['address_denied'])
   })
 })
 
@@ -798,7 +610,7 @@ describe('the agent’s actions', () => {
   })
 
   it('gives the agent addresses without their secrets, and keeps them whole for itself', async () => {
-    const { store, ensured, act } = setup()
+    const { ensured, act } = setup()
     const { row, browser } = await ensured()
     const raw = `${EDIT_12}&_wpnonce=0a1b2c#top`
     browser.go(raw)
@@ -823,8 +635,6 @@ describe('the agent’s actions', () => {
         { url: `${EDIT_12}&_wpnonce=[hidden]#[hidden]` },
         { url: `${SITE}/wp-login.php?action=rp&key=[hidden]&login=admin` },
       ],
-      // The worker reads the object from the whole address.
-      checkpoint: { kind: 'post', objectId: '12', state: 'seen' },
     })
     expect(observed).toHaveProperty(
       'tree',
@@ -836,18 +646,6 @@ describe('the agent’s actions', () => {
     expect(await act(row, { tool: 'web_click', observation: 'o1', ref: 'e7' })).toMatchObject({
       page: { url: `${EDIT_12}&_wpnonce=[hidden]#[hidden]` },
     })
-
-    // A check: the agent reads the object's addresses redacted, the task keeps them as found.
-    await act(row, { tool: 'web_click', observation: 'o1', ref: 'e5' })
-    const object = { ...postObject('12'), url: `${SITE}/?p=12&preview=true&preview_nonce=f00d` }
-    browser.reading = async () => ({ state: 'verified', object })
-    const verified = await act(row, { tool: 'web_verify' })
-    expect(verified).toMatchObject({
-      objects: [
-        { object: { url: `${SITE}/?p=12&preview=true&preview_nonce=[hidden]`, editUrl: EDIT_12 } },
-      ],
-    })
-    expect([...store.checkpointRows.values()][0]).toMatchObject({ verified: object })
   })
 
   it('records the first write of each pass: the feed tells this pass from the last (plan 61)', async () => {
@@ -878,412 +676,6 @@ describe('the agent’s actions', () => {
     await act(row, { tool: 'web_type', text: 'следующий проход' })
     await settle()
     expect(store.wrote).toBe(2)
-  })
-
-  it('refuses addresses outside the site and marks the session written by clicks and input', async () => {
-    const { store, ensured, act, counts } = setup()
-    const { row } = await ensured()
-    expect(await codeOf(act(row, { tool: 'web_open', url: 'https://evil.example.org/' }))).toBe(
-      'BROWSER_ADDRESS_DENIED',
-    )
-    expect(await codeOf(act(row, { tool: 'web_open', url: 'http://news-site.ru/' }))).toBe(
-      'BROWSER_ADDRESS_DENIED',
-    )
-    await act(row, { tool: 'web_open', url: `${SITE}/wp-admin/edit.php?post_type=page` })
-    await settle()
-    expect(store.wrote).toBe(0)
-    await act(row, { tool: 'web_type', text: 'Новость дня' })
-    await act(row, { tool: 'web_type', text: 'и ещё' })
-    await settle()
-    expect(store.wrote).toBe(1)
-    expect(counts.actions).toEqual([
-      'web_open:BROWSER_ADDRESS_DENIED',
-      'web_open:BROWSER_ADDRESS_DENIED',
-      'web_open:ok',
-      'web_type:ok',
-      'web_type:ok',
-    ])
-  })
-
-  it('saves WooCommerce settings without starting a post checkpoint', async () => {
-    const { store, ensured, act } = setup()
-    const { row, browser } = await ensured()
-    browser.go(`${SITE}/wp-admin/admin.php?page=wc-settings&tab=checkout`)
-    browser.tree = '- button "Save" [ref=e5]'
-    await act(row, { tool: 'web_observe' })
-    await act(row, { tool: 'web_click', observation: 'o1', ref: 'e5' })
-    browser.onFocused = async () => ({ role: 'button', name: 'Save' })
-    await act(row, { tool: 'web_press', key: 'Enter' })
-    await act(row, { tool: 'web_open', url: `${SITE}/wp-admin/plugins.php` })
-    expect(store.checkpointRows.size).toBe(0)
-  })
-
-  it('keeps a saved object unconfirmed until a check reads it, and allows no new one meanwhile', async () => {
-    const { store, ensured, act } = setup()
-    const { row, browser } = await ensured()
-    browser.go(EDIT_12)
-    await settle()
-    const rows = () => [...store.checkpointRows.values()]
-    expect(rows()).toEqual([
-      expect.objectContaining({ state: 'seen', ref: expect.objectContaining({ objectId: '12' }) }),
-    ])
-    const observed = await act(row, { tool: 'web_observe' })
-    expect(observed).toMatchObject({ checkpoint: { kind: 'post', objectId: '12', state: 'seen' } })
-
-    // «Опубликовать» is a commit of the stack (SiteAdapter.browserCommitAction).
-    const published = await act(row, { tool: 'web_click', observation: 'o1', ref: 'e5' })
-    expect(published).toMatchObject({ checkpoint: { objectId: '12', state: 'unverified' } })
-    await settle()
-    expect(rows()[0]?.state).toBe('unverified')
-    await act(row, { tool: 'web_observe' })
-    expect(await codeOf(act(row, { tool: 'web_click', observation: 'o2', ref: 'e5' }))).toBe(
-      'BROWSER_CHECKPOINT_UNVERIFIED',
-    )
-    expect(await codeOf(act(row, { tool: 'web_open', url: NEW_POST }))).toBe(
-      'BROWSER_CHECKPOINT_UNVERIFIED',
-    )
-    // The object itself may be opened again; a click that commits nothing goes through.
-    await act(row, { tool: 'web_open', url: EDIT_12 })
-    await act(row, { tool: 'web_observe' })
-    await act(row, { tool: 'web_click', observation: 'o3', ref: 'e7' })
-
-    const object: BrowserVerifiedObject = {
-      kind: 'post',
-      objectId: '12',
-      title: 'Новость',
-      status: 'publish',
-      url: `${SITE}/?p=12`,
-      editUrl: EDIT_12,
-      images: 2,
-      files: 1,
-      featuredImage: true,
-    }
-    browser.reading = async () => ({ state: 'verified', object })
-    const verified = await act(row, { tool: 'web_verify', expect: 'publish' })
-    expect(verified).toEqual({
-      tool: 'web_verify',
-      objects: [{ kind: 'post', objectId: '12', state: 'verified', object }],
-      matched: true,
-    })
-    expect(rows()[0]).toMatchObject({ state: 'verified', verified: object })
-    // Confirmed: a new object may be started.
-    await act(row, { tool: 'web_open', url: NEW_POST })
-  })
-
-  it('takes no object of the task and no save on another site a page went on to (plan 60, Ч6)', async () => {
-    const { store, ensured, act } = setup()
-    const { row, browser } = await ensured()
-    const rows = () => [...store.checkpointRows.values()]
-    // An editor elsewhere, with the very paths of the stack: not the site, no object of the task.
-    browser.go('https://editor.elsewhere.example/wp-admin/post.php?post=12&action=edit')
-    await settle()
-    expect(rows()).toEqual([])
-    expect(await act(row, { tool: 'web_observe' })).not.toHaveProperty('checkpoint')
-    // «Опубликовать» there is a click: it holds nothing, the next one and a new page go through.
-    await act(row, { tool: 'web_click', observation: 'o1', ref: 'e5' })
-    await act(row, { tool: 'web_observe' })
-    await act(row, { tool: 'web_click', observation: 'o2', ref: 'e5' })
-    await act(row, { tool: 'web_press', key: 'Control+s' })
-    await settle()
-    expect(rows()).toEqual([])
-    await act(row, { tool: 'web_open', url: NEW_POST })
-    // Back on the site, the same press is a save again.
-    browser.go(EDIT_12)
-    await act(row, { tool: 'web_observe' })
-    expect(await act(row, { tool: 'web_click', observation: 'o3', ref: 'e5' })).toMatchObject({
-      checkpoint: { objectId: '12', state: 'unverified' },
-    })
-  })
-
-  it('leaves an object as it was known when the site does not answer the check in time', async () => {
-    const { manager, ensured, act } = setup({ verifyBudgetMs: 50 })
-    const { row, browser } = await ensured()
-    browser.go(EDIT_12)
-    await act(row, { tool: 'web_observe' })
-    await act(row, { tool: 'web_click', observation: 'o1', ref: 'e5' })
-    browser.reading = () => new Promise(() => {})
-    const started = Date.now()
-    expect(await manager.verify(row.id)).toEqual({
-      checkpoints: [{ kind: 'post', objectId: '12', state: 'unverified' }],
-    })
-    expect(Date.now() - started).toBeLessThan(1_000)
-  })
-
-  it('records the object a save on a new post gave as unconfirmed, and refuses another save first', async () => {
-    const { store, ensured, act } = setup()
-    const { row, browser } = await ensured()
-    browser.go(NEW_POST)
-    await act(row, { tool: 'web_observe' })
-    // The click times out: the save may or may not have happened.
-    browser.onAct = async () => {
-      throw new Error('Timeout 10000ms exceeded')
-    }
-    expect(await codeOf(act(row, { tool: 'web_click', observation: 'o1', ref: 'e5' }))).toBe(
-      'BROWSER_ACTION_FAILED',
-    )
-    browser.onAct = async () => undefined
-    await act(row, { tool: 'web_observe' })
-    expect(await codeOf(act(row, { tool: 'web_click', observation: 'o2', ref: 'e5' }))).toBe(
-      'BROWSER_CHECKPOINT_UNVERIFIED',
-    )
-    // The editor moved to the address of the object it saved.
-    browser.go(`${SITE}/wp-admin/post.php?post=13&action=edit`)
-    await settle()
-    expect([...store.checkpointRows.values()]).toEqual([
-      expect.objectContaining({
-        state: 'unverified',
-        ref: expect.objectContaining({ objectId: '13' }),
-      }),
-    ])
-  })
-
-  it('holds a save of a new post through a check that finds no object yet, until its address names one', async () => {
-    const { store, ensured, act } = setup()
-    const { row, browser } = await ensured()
-    browser.go(NEW_POST)
-    await act(row, { tool: 'web_observe' })
-    // «Опубликовать» answers before the slow site does: the editor is still on post-new.php.
-    await act(row, { tool: 'web_click', observation: 'o1', ref: 'e5' })
-    // A link to a part of the same page (a tab of a box) leaves no editor.
-    browser.go(`${NEW_POST}#category-pop`)
-    expect(await act(row, { tool: 'web_verify' })).toEqual({
-      tool: 'web_verify',
-      objects: [],
-      matched: false,
-    })
-    // Nothing is confirmed, and nothing new may start: the save may still land.
-    expect(await codeOf(act(row, { tool: 'web_open', url: NEW_POST }))).toBe(
-      'BROWSER_CHECKPOINT_UNVERIFIED',
-    )
-    // The editor that saved may press again: the pre-publish panel's own «Опубликовать».
-    await act(row, { tool: 'web_observe' })
-    await act(row, { tool: 'web_click', observation: 'o2', ref: 'e5' })
-    expect(await codeOf(act(row, { tool: 'web_open', url: NEW_POST }))).toBe(
-      'BROWSER_CHECKPOINT_UNVERIFIED',
-    )
-    // The save lands: the address names what it made, unconfirmed until a read.
-    browser.go(`${SITE}/wp-admin/post.php?post=13&action=edit`)
-    await settle()
-    expect([...store.checkpointRows.values()]).toEqual([
-      expect.objectContaining({
-        state: 'unverified',
-        ref: expect.objectContaining({ objectId: '13' }),
-      }),
-    ])
-    browser.reading = async () => ({ state: 'verified', object: postObject('13') })
-    expect(await act(row, { tool: 'web_verify', expect: 'publish' })).toMatchObject({
-      objects: [{ objectId: '13', state: 'verified' }],
-      matched: true,
-    })
-    await act(row, { tool: 'web_open', url: NEW_POST })
-  })
-
-  it('keeps the hold of a save whose page left the editor, until the client takes the browser', async () => {
-    const { store, ensured, act } = setup()
-    const { row, session, browser } = await ensured()
-    browser.go(NEW_POST)
-    await act(row, { tool: 'web_observe' })
-    await act(row, { tool: 'web_click', observation: 'o1', ref: 'e5' })
-    // A link to the list: the save may still make a post the page will never show.
-    browser.go(`${SITE}/wp-admin/edit.php`)
-    await act(row, { tool: 'web_verify' })
-    // An editor the page opens from there is not what the save made.
-    browser.go(EDIT_12)
-    await act(row, { tool: 'web_observe' })
-    expect(await codeOf(act(row, { tool: 'web_click', observation: 'o2', ref: 'e5' }))).toBe(
-      'BROWSER_CHECKPOINT_UNVERIFIED',
-    )
-    expect(await codeOf(act(row, { tool: 'web_open', url: NEW_POST }))).toBe(
-      'BROWSER_CHECKPOINT_UNVERIFIED',
-    )
-    await settle()
-    expect([...store.checkpointRows.values()]).toEqual([
-      expect.objectContaining({ state: 'seen', ref: expect.objectContaining({ objectId: '12' }) }),
-    ])
-    // The client takes the browser and gives it back: the hold was theirs to resolve.
-    const viewer = new ViewerProbe()
-    session.attach(viewer)
-    session.message(viewer, { t: 'take' })
-    session.message(viewer, { t: 'release' })
-    await act(row, { tool: 'web_observe' })
-    expect(await act(row, { tool: 'web_click', observation: 'o3', ref: 'e5' })).toMatchObject({
-      checkpoint: { objectId: '12', state: 'unverified' },
-    })
-  })
-
-  it('takes the same address opened again for a new editor, not for the one that saved', async () => {
-    const { ensured, act } = setup()
-    const { row, browser } = await ensured()
-    browser.go(NEW_POST)
-    await act(row, { tool: 'web_observe' })
-    await act(row, { tool: 'web_click', observation: 'o1', ref: 'e5' })
-    // «Добавить запись» of the menu: another editor, another post, at the same address.
-    browser.go(NEW_POST)
-    await act(row, { tool: 'web_verify' })
-    await act(row, { tool: 'web_observe' })
-    expect(await codeOf(act(row, { tool: 'web_click', observation: 'o2', ref: 'e5' }))).toBe(
-      'BROWSER_CHECKPOINT_UNVERIFIED',
-    )
-  })
-
-  it('still records what a save the client took over made, without holding the agent', async () => {
-    const { store, ensured, act } = setup()
-    const { row, session, browser } = await ensured()
-    browser.go(NEW_POST)
-    await act(row, { tool: 'web_observe' })
-    await act(row, { tool: 'web_click', observation: 'o1', ref: 'e5' })
-    const viewer = new ViewerProbe()
-    session.attach(viewer)
-    session.message(viewer, { t: 'take' })
-    session.message(viewer, { t: 'release' })
-    await act(row, { tool: 'web_open', url: NEW_POST })
-    // The save lands after all: what it made is the task's, unconfirmed.
-    browser.go(`${SITE}/wp-admin/post.php?post=13&action=edit`)
-    await settle()
-    expect([...store.checkpointRows.values()]).toEqual([
-      expect.objectContaining({
-        state: 'unverified',
-        ref: expect.objectContaining({ objectId: '13' }),
-      }),
-    ])
-  })
-
-  it('takes the save shortcut for a save, with a reference or without', async () => {
-    const { ensured, act } = setup()
-    const { row, browser } = await ensured()
-    browser.go(EDIT_12)
-    await act(row, { tool: 'web_observe' })
-    // Control+B makes text bold; it saves nothing.
-    expect(await act(row, { tool: 'web_press', key: 'Control+b' })).toMatchObject({
-      checkpoint: { objectId: '12', state: 'seen' },
-    })
-    expect(await act(row, { tool: 'web_press', key: 'ControlOrMeta+s' })).toMatchObject({
-      checkpoint: { objectId: '12', state: 'unverified' },
-    })
-    expect(
-      await codeOf(
-        act(row, { tool: 'web_press', observation: 'o1', ref: 'e6', key: 'Shift+Meta+S' }),
-      ),
-    ).toBe('BROWSER_CHECKPOINT_UNVERIFIED')
-    expect(browser.acted.map((action) => action.tool === 'web_press' && action.key)).toEqual([
-      'Control+b',
-      'ControlOrMeta+s',
-    ])
-  })
-
-  it('takes Enter or a space with no reference for a press of what has the focus', async () => {
-    const { store, ensured, act } = setup()
-    const { row, browser } = await ensured()
-    browser.go(EDIT_12)
-    await act(row, { tool: 'web_observe' })
-    // A new line in the title: nothing is saved.
-    browser.onFocused = async () => ({ role: 'textbox', name: 'Добавить заголовок' })
-    expect(await act(row, { tool: 'web_press', key: 'Enter' })).toMatchObject({
-      checkpoint: { objectId: '12', state: 'seen' },
-    })
-    // Tab reaches «Опубликовать» after the latest tree; Enter on it publishes, as a click would.
-    browser.onFocused = async () => ({ role: 'button', name: 'Опубликовать' })
-    await act(row, { tool: 'web_press', key: 'Tab' })
-    expect(await act(row, { tool: 'web_press', key: 'Enter' })).toMatchObject({
-      checkpoint: { objectId: '12', state: 'unverified' },
-    })
-    await settle()
-    expect([...store.checkpointRows.values()]).toEqual([
-      expect.objectContaining({
-        state: 'unverified',
-        ref: expect.objectContaining({ objectId: '12' }),
-      }),
-    ])
-    // Pressed again by a space or with Shift: a second click on it, refused until a check (Б22).
-    for (const key of [' ', 'Shift+Enter'])
-      expect(await codeOf(act(row, { tool: 'web_press', key }))).toBe(
-        'BROWSER_CHECKPOINT_UNVERIFIED',
-      )
-    // A focus the browser cannot read presses nothing.
-    browser.onFocused = async () => {
-      throw new PageBrowserError('timeout')
-    }
-    expect(await codeOf(act(row, { tool: 'web_press', key: 'Enter' }))).toBe('BROWSER_TIMEOUT')
-    expect(browser.acted.map((action) => action.tool === 'web_press' && action.key)).toEqual([
-      'Enter',
-      'Tab',
-      'Enter',
-    ])
-    // Tab presses nothing: the focus is read only for a key that does.
-    expect(browser.focusReads).toBe(5)
-  })
-
-  it('refuses a save of more objects than a task may change (CLAUDE.md rule 4)', async () => {
-    const { store, manager, browsers, act } = setup()
-    // An earlier session of the task saved 19 posts.
-    const row = store.open()
-    for (let id = 1; id <= 19; id++)
-      await store.upsertCheckpoint({
-        taskId: row.taskId,
-        sessionId: randomUUID(),
-        ref: postRef(String(id)),
-        state: 'verified',
-        verified: postObject(String(id)),
-      })
-    await manager.ensure({
-      sessionId: row.id,
-      taskId: row.taskId,
-      siteId: row.siteId,
-      takeControl: true,
-    })
-    const browser = browsers.last
-    const editor = async (id: string) => {
-      browser.go(postRef(id).editUrl)
-      const observed = await act(row, { tool: 'web_observe' })
-      return observed.tool === 'web_observe' ? observed.observation : ''
-    }
-    browser.reading = async (plan) => {
-      const id = /\/(\d+)&context=edit/.exec(plan.steps.at(-1)?.path ?? '')?.[1] ?? '0'
-      return { state: 'verified', object: postObject(id) }
-    }
-    // The 20th object of the task is saved and confirmed.
-    await act(row, { tool: 'web_click', observation: await editor('20'), ref: 'e5' })
-    expect(await act(row, { tool: 'web_verify' })).toMatchObject({ matched: true })
-    // A 21st is not: by its button, by Enter on it, by the save shortcut.
-    const o21 = await editor('21')
-    expect(await codeOf(act(row, { tool: 'web_click', observation: o21, ref: 'e5' }))).toBe(
-      'BROWSER_ACTION_DENIED',
-    )
-    expect(
-      await codeOf(act(row, { tool: 'web_press', observation: o21, ref: 'e5', key: 'Enter' })),
-    ).toBe('BROWSER_ACTION_DENIED')
-    expect(await codeOf(act(row, { tool: 'web_press', key: 'Control+s' }))).toBe(
-      'BROWSER_ACTION_DENIED',
-    )
-    // Nor by Enter on the button the agent reached with Tab, no reference named.
-    browser.onFocused = async () => ({ role: 'button', name: 'Опубликовать' })
-    expect(await codeOf(act(row, { tool: 'web_press', key: 'Enter' }))).toBe(
-      'BROWSER_ACTION_DENIED',
-    )
-    browser.onFocused = async () => null
-    // A click that saves nothing still goes through.
-    await act(row, { tool: 'web_click', observation: o21, ref: 'e7' })
-    // Nor a new post.
-    browser.go(NEW_POST)
-    const fresh = await act(row, { tool: 'web_observe' })
-    expect(
-      await codeOf(
-        act(row, {
-          tool: 'web_click',
-          observation: fresh.tool === 'web_observe' ? fresh.observation : '',
-          ref: 'e5',
-        }),
-      ),
-    ).toBe('BROWSER_ACTION_DENIED')
-    // An object the task already changed may be saved again.
-    expect(
-      await act(row, { tool: 'web_click', observation: await editor('5'), ref: 'e5' }),
-    ).toMatchObject({ checkpoint: { objectId: '5', state: 'unverified' } })
-    expect(browser.acted.filter((action) => action.tool === 'web_click')).toEqual([
-      { tool: 'web_click', ref: 'e5' },
-      { tool: 'web_click', ref: 'e7' },
-      { tool: 'web_click', ref: 'e5' },
-    ])
   })
 
   it('uploads only attachments bound to the session’s task, read from the inbox', async () => {
@@ -1372,79 +764,6 @@ describe('the agent’s actions', () => {
         }),
       ),
     ).toBe('BROWSER_SESSION_UNAVAILABLE')
-  })
-})
-
-describe('the saved sign-in (Б36)', () => {
-  const saved = { login: 'admin', password: 'Пароль-сайта-2026' }
-
-  it('fills the stack’s form at the start and before each action of the agent', async () => {
-    const { store, warnings, ensured, act } = setup()
-    const { row, browser } = await ensured(saved)
-    await settle()
-    // The start page of a signed-out session is the form: signed in before the agent acts.
-    expect(browser.signIns).toEqual([saved])
-    await act(row, { tool: 'web_observe' })
-    // A session that expired on the site meanwhile is signed in again before the action.
-    expect(browser.signIns).toEqual([saved, saved])
-    // A request for help is the client's: no sign-in before it.
-    await act(row, { tool: 'web_help', reason: 'login', message: 'Войдите в админку' })
-    expect(browser.signIns).toHaveLength(2)
-    expect(warnings).toEqual([])
-    expect(JSON.stringify([...store.sessions.values(), store.helps])).not.toContain(saved.password)
-  })
-
-  it('sends a refused sign-in no more, until core gives another one; none forgets it', async () => {
-    const { manager, warnings, ensured, act } = setup()
-    const { row, browser } = await ensured(saved)
-    await settle()
-    browser.onSignIn = async () => 'refused'
-    await act(row, { tool: 'web_observe' })
-    expect(warnings).toEqual(['browser_sign_in_refused'])
-    await act(row, { tool: 'web_observe' })
-    expect(browser.signIns).toHaveLength(2)
-
-    const changed = { ...saved, password: 'Новый-пароль-2026' }
-    const ensure = (signIn?: typeof saved) =>
-      manager.ensure({
-        sessionId: row.id,
-        taskId: row.taskId,
-        siteId: row.siteId,
-        takeControl: true,
-        ...(signIn ? { signIn } : {}),
-      })
-    await ensure(changed)
-    await act(row, { tool: 'web_observe' })
-    expect(browser.signIns.at(-1)).toEqual(changed)
-    expect(browser.signIns).toHaveLength(3)
-
-    await ensure()
-    await act(row, { tool: 'web_observe' })
-    expect(browser.signIns).toHaveLength(3)
-  })
-
-  it('takes a failure of the browser for a refusal: the agent’s action goes on', async () => {
-    const { warnings, ensured, act } = setup()
-    const { row, browser } = await ensured(saved)
-    await settle()
-    browser.onSignIn = async () => {
-      throw new PageBrowserError('timeout')
-    }
-    expect(await act(row, { tool: 'web_observe' })).toMatchObject({ tool: 'web_observe' })
-    expect(warnings).toEqual(['browser_sign_in_failed'])
-    await act(row, { tool: 'web_observe' })
-    expect(browser.signIns).toHaveLength(2)
-  })
-
-  it('leaves the form to the client while the client controls the browser', async () => {
-    const { ensured, act } = setup()
-    const { row, session, browser } = await ensured(saved)
-    await settle()
-    const viewer = new ViewerProbe()
-    session.attach(viewer)
-    session.message(viewer, { t: 'take' })
-    expect(await codeOf(act(row, { tool: 'web_observe' }))).toBe('BROWSER_USER_IN_CONTROL')
-    expect(browser.signIns).toHaveLength(1)
   })
 })
 

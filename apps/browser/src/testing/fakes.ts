@@ -32,7 +32,6 @@ import {
   type CloudBrowserFrame,
   type CloudBrowserObservation,
   type CloudBrowserSession,
-  type SiteStack,
 } from '@repo/domain'
 
 import type { InboxStorage } from '../attachments/attachments.ts'
@@ -42,7 +41,6 @@ import type {
   BrowserWorkerStore,
   StoredAttachment,
   StoredBrowserSession,
-  StoredSite,
 } from '../store/worker-store.ts'
 
 export { fakeInfra, TEST_METRICS_TOKEN } from '@repo/service-runtime/testing/fakes'
@@ -370,7 +368,6 @@ export class FakeBrowsers implements CloudBrowserFactory {
 
 export class FakeStore implements BrowserWorkerStore {
   readonly sessions = new Map<string, StoredBrowserSession & { closeReason?: string }>()
-  readonly sites = new Map<string, StoredSite>()
   readonly checkpointRows = new Map<string, BrowserCheckpointRecord>()
   readonly attachments = new Map<string, StoredAttachment & { taskId: string }>()
   readonly controls: { controller: BrowserController; controlEpoch: number }[] = []
@@ -389,24 +386,27 @@ export class FakeStore implements BrowserWorkerStore {
   touched = 0
   cleared = 0
 
-  /** A live session of a new task on a site of the stack and address, as core opens it. */
-  open(input: { stack?: SiteStack; siteUrl?: string; expiresInMs?: number; readyAt?: Date } = {}) {
-    const siteId = randomUUID()
-    const row: StoredBrowserSession & { siteId: string } = {
+  /** A live session of a new chat, as core opens it (plan 83: no session has a site). */
+  open(input: { expiresInMs?: number; readyAt?: Date } = {}) {
+    const row: StoredBrowserSession = {
       id: randomUUID(),
       taskId: randomUUID(),
-      siteId,
-      taskSiteId: siteId,
+      siteId: null,
+      taskSiteId: null,
       status: 'starting',
       expiresAt: new Date(Date.now() + (input.expiresInMs ?? 3_600_000)),
       readyAt: input.readyAt ?? null,
       lastActivityAt: new Date(),
     }
     this.sessions.set(row.id, row)
-    this.sites.set(row.siteId, {
-      stack: input.stack ?? 'wordpress',
-      url: input.siteUrl ?? TEST_SITE,
-    })
+    return row
+  }
+
+  /** A row of a session of a site, as a database from before plan 83 may still hold. */
+  openOfSite() {
+    const siteId = randomUUID()
+    const row: StoredBrowserSession = { ...this.open(), siteId, taskSiteId: siteId }
+    this.sessions.set(row.id, row)
     return row
   }
 
@@ -429,11 +429,6 @@ export class FakeStore implements BrowserWorkerStore {
   async session(sessionId: string) {
     const row = this.sessions.get(sessionId)
     return row ? { ...row } : null
-  }
-
-  async site(siteId: string) {
-    const site = this.sites.get(siteId)
-    return site ? { ...site } : null
   }
 
   async markReady(sessionId: string) {

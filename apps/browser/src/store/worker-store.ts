@@ -22,16 +22,15 @@ import type {
   BrowserHelp,
   BrowserSessionStatus,
   BrowserVerifiedObject,
-  SiteStack,
 } from '@repo/domain'
 
 /** A session as the database keeps it: what the worker checks before it starts a browser. */
 export interface StoredBrowserSession {
   id: string
   taskId: string
-  /** null — a chat without a site: the only word on whether a session is one (К12). */
+  /** null — a session of a chat; a session of a site is no longer served (plan 83, БП1). */
   siteId: string | null
-  /** `tasks.site_id` of its task: a row at odds with it starts no browser. */
+  /** `tasks.site_id` of its task: one that names a site starts no browser either. */
   taskSiteId: string | null
   status: BrowserSessionStatus
   /** The hard deadline core gave it. */
@@ -43,13 +42,6 @@ export interface StoredBrowserSession {
    * while the client looks at the dialog of its task (docs/plan/59, И18).
    */
   lastActivityAt: Date
-}
-
-/** The site of a session as the database keeps it: where its browser goes and its stack's policy. */
-export interface StoredSite {
-  stack: SiteStack
-  /** `sites.url`: the only address a session's hosts and start page are built from (Б11). */
-  url: string
 }
 
 /** An attachment of a task the worker may read for a page of the task (Б26). */
@@ -66,12 +58,11 @@ export interface StoredAttachment {
 
 /**
  * What the worker reads and writes in PostgreSQL (docs/plan/57-browser-tasks.md, §3.4): the
- * session rows core opened, the site of a session, the hand-overs, the help request, the first
+ * session rows core opened, the hand-overs, the help request, the first
  * write, the checkpoints of the task and its attachments. Nothing secret is ever written.
  */
 export interface BrowserWorkerStore {
   session(sessionId: string): Promise<StoredBrowserSession | null>
-  site(siteId: string): Promise<StoredSite | null>
   markReady(sessionId: string): Promise<boolean>
   recordControl(input: {
     sessionId: string
@@ -138,13 +129,6 @@ export class PostgresBrowserWorkerStore implements BrowserWorkerStore {
     if (!row) return null
     const { task, ...session } = row
     return { ...session, taskSiteId: task.siteId }
-  }
-
-  site(siteId: string): Promise<StoredSite | null> {
-    return this.#db.site.findUnique({
-      where: { id: siteId },
-      select: { stack: true, url: true },
-    })
   }
 
   markReady(sessionId: string): Promise<boolean> {

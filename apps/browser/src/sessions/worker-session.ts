@@ -51,7 +51,6 @@ import {
   type BrowserSessionRuntime,
   type BrowserSessionState,
   type BrowserSessionStatus,
-  type BrowserSignIn,
   type BrowserStreamRefusal,
   type BrowserTab,
   type BrowserTaskCode,
@@ -150,9 +149,6 @@ export interface SessionSpec {
   adapter: BrowserObjects
   policy: BrowserTaskPolicy
   allowedHosts: readonly string[]
-  /** Exact origins of local sites (`browserNavigationAllowed`); empty in production. */
-  localOrigins: readonly string[]
-  localSites: readonly { origin: string; target: string }[]
   /** Names of the platform (`BROWSER_PLATFORM_HOSTS`), closed in every session (К37). */
   platformHosts: readonly string[]
   /** PAGES_BASE_DOMAIN: the agent's published pages open by address (Ст26); null — none. */
@@ -162,8 +158,6 @@ export interface SessionSpec {
   /** Milliseconds since the epoch: the session ends there whatever happens in it. */
   deadline: number
   checkpoints: readonly BrowserCheckpointRecord[]
-  /** The site's saved sign-in of the first `ensure` (Б36); null — none. */
-  signIn: BrowserSignIn | null
 }
 
 interface Observation {
@@ -249,10 +243,6 @@ export class WorkerSession {
   #observation: Observation | null = null
   #observationSeq = 0
   #pendingCommit: PendingCommit | null = null
-  /** The site's saved sign-in of the latest `ensure` (Б36): in memory only, never logged. */
-  #signIn: BrowserSignIn | null
-  /** A saved sign-in the site refused: not sent again until core gives another one. */
-  #signInRefused: BrowserSignIn | null = null
   #wrote = false
   #lastActivity: number
   #lastTouch = Number.NEGATIVE_INFINITY
@@ -287,7 +277,6 @@ export class WorkerSession {
     this.#spec = spec
     this.#context = context
     this.#onEnded = onEnded
-    this.#signIn = spec.signIn
     this.#lastActivity = context.now()
     for (const record of spec.checkpoints) this.#checkpoints.set(checkpointKey(record.ref), record)
   }
@@ -343,7 +332,7 @@ export class WorkerSession {
         // What the containers are labelled by: without a site, the task.
         siteId: spec.siteId ?? spec.taskId,
         allowedHosts: spec.allowedHosts,
-        localSites: spec.localSites,
+        localSites: [],
         openWeb: spec.openWeb,
         deadline: spec.deadline,
       })
@@ -356,7 +345,7 @@ export class WorkerSession {
       const browser = await browsers.open({
         endpoint,
         allowedHosts: spec.allowedHosts,
-        localSites: spec.localOrigins,
+        localSites: [],
         openWeb: spec.openWeb,
         platformHosts: spec.platformHosts,
         pageDomain: spec.pageDomain,
@@ -381,9 +370,6 @@ export class WorkerSession {
       if (shown !== null) this.#apply(browserPageShown(this.#control, shown))
       this.#publish()
       this.#syncFrames()
-      // The start page of a signed-out session is the stack's form: the saved sign-in, first in
-      // the queue of the agent's actions.
-      this.#actions = this.#actions.then(() => this.#signInIfAsked(browser))
     } catch (error) {
       this.#context.warn('browser_session_start_failed', error)
       if (this.live) await this.#end('failed', 'crashed', errorName(error))
@@ -600,11 +586,7 @@ export class WorkerSession {
     if (this.#spec.openWeb) return true
     const page = URL.parse(url)
     if (!page || (page.protocol !== 'https:' && page.protocol !== 'http:')) return false
-    return !browserNavigationAllowed(
-      `${page.origin}/`,
-      this.#spec.allowedHosts,
-      this.#spec.localOrigins,
-    )
+    return !browserNavigationAllowed(`${page.origin}/`, this.#spec.allowedHosts, [])
   }
 
   /** The object of the task an address of the site edits; none on another site (Ч6). */
@@ -923,11 +905,11 @@ export class WorkerSession {
 
   /** Whether an address opens in this session at all (К12, К37). */
   #opens(url: string): boolean {
-    const { openWeb, allowedHosts, localOrigins, platformHosts, pageDomain } = this.#spec
+    const { openWeb, allowedHosts, platformHosts, pageDomain } = this.#spec
     return browserAddressOpens(url, {
       openWeb,
       allowedHosts,
-      localSites: localOrigins,
+      localSites: [],
       platformHosts,
       pageDomain,
     })
@@ -950,33 +932,6 @@ export class WorkerSession {
   // -------------------------------------------------------------------------------------------
   // The agent
   // -------------------------------------------------------------------------------------------
-
-  /**
-   * The site's saved sign-in core read for this pass (Б36): it replaces the one held, and none
-   * forgets it. The values stay in this object: never logged, stored or answered.
-   */
-  useSignIn(credentials: BrowserSignIn | null): void {
-    this.#signIn = credentials
-  }
-
-  /**
-   * Signs in with the saved sign-in when the shown page is the stack's form and the agent holds
-   * the browser (Б36): while the client controls it, the form is theirs. One the site refused is
-   * not sent again. A failure is the operator's line; the agent sees the form and asks the client.
-   */
-  async #signInIfAsked(browser: CloudBrowserSession): Promise<void> {
-    const credentials = this.#signIn
-    if (credentials === null || !this.live || this.#control.controller !== 'agent') return
-    const refused = this.#signInRefused
-    if (refused?.login === credentials.login && refused.password === credentials.password) return
-    try {
-      if ((await browser.signIn(credentials)) !== 'refused') return
-      this.#context.warn('browser_sign_in_refused')
-    } catch (error) {
-      this.#context.warn('browser_sign_in_failed', error)
-    }
-    this.#signInRefused = credentials
-  }
 
   /** core's turn starts (`ensure` with `takeControl`, Б16): the agent takes the browser back. */
   agentTakesControl(): void {
@@ -1024,8 +979,6 @@ export class WorkerSession {
             this.#context.settings.actionBudgetMs,
           )
           try {
-            // Signed out meanwhile (a session that expired on the site): the saved sign-in first.
-            if (action.tool !== 'web_help') await this.#signInIfAsked(browser)
             resolve(await this.#perform(browser, action))
           } catch (error) {
             settle(error)

@@ -2,8 +2,7 @@
 // *.test.ts files (excluded from the build).
 import { randomUUID } from 'node:crypto'
 
-import type { BrowserAction, BrowserSignIn } from '@repo/domain'
-import { getSiteAdapter } from '@repo/site-adapters'
+import type { BrowserAction } from '@repo/domain'
 
 import { AttachmentFiles } from '../attachments/attachments.ts'
 import { TaskScreenshots } from '../attachments/screenshots.ts'
@@ -31,7 +30,6 @@ export function sessionHarness(settings: Partial<SessionManagerSettings> = {}) {
     store,
     files: new AttachmentFiles(store, inbox),
     screenshots: new TaskScreenshots(store, inbox),
-    adapters: getSiteAdapter,
     metrics,
     now: () => Date.now() + clock.skew,
     warn: (event) => warnings.push(event),
@@ -41,23 +39,20 @@ export function sessionHarness(settings: Partial<SessionManagerSettings> = {}) {
       idleMinutes: 30,
       maxHours: 4,
       maxSessions: 4,
-      extraHosts: [],
-      localSites: [],
       platformHosts: [],
       pageDomain: null,
       stream: { maxFps: 30, quality: 70 },
       ...settings,
     },
   })
-  /** A session core opened, ensured on the worker; with the site's saved sign-in if given. */
-  const ensured = async (signIn?: BrowserSignIn) => {
-    const row = store.open()
+  /** A session core opened for a chat, ensured on the worker (plan 83: no session has a site). */
+  const ensured = async () => {
+    const row = store.openWithoutSite()
     const state = await manager.ensure({
       sessionId: row.id,
       taskId: row.taskId,
-      siteId: row.siteId,
+      siteId: null,
       takeControl: true,
-      ...(signIn ? { signIn } : {}),
     })
     const session = manager.session(row.id)
     if (!session) throw new Error('not held')

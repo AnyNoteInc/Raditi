@@ -106,8 +106,6 @@ describe('loadBrowserConfig', () => {
       host: '127.0.0.1',
       port: 8086,
       token: TEST_WORKER_TOKEN,
-      extraHosts: [],
-      localSites: [],
       platformHosts: [],
       pageDomain: null,
       session: { idleMinutes: 30, maxHours: 4, maxSessions: 1024 },
@@ -176,41 +174,13 @@ describe('loadBrowserConfig', () => {
     expect(problemsOf(prodEnv({ METRICS_TOKEN: '' }))[0]).toMatch(/^METRICS_TOKEN: /)
   })
 
-  it('names local sites exactly outside production and refuses them in it', () => {
-    const sites = JSON.stringify({ 'http://wp-stand.localhost:8080': 'host.docker.internal:8080' })
-    const config = loadBrowserConfig(devEnv({ BROWSER_LOCAL_SITES: sites }))
-    expect(config.localSites).toEqual([
-      { origin: 'http://wp-stand.localhost:8080', target: 'host.docker.internal:8080' },
-    ])
-    // The runtime takes local sites only when the worker names some.
-    expect(config.runtime?.localSites).toBe(true)
-    expect(loadBrowserConfig(devEnv()).runtime?.localSites).toBeUndefined()
-    expect(problemsOf(prodEnv({ BROWSER_LOCAL_SITES: sites }))).toEqual([
-      'BROWSER_LOCAL_SITES: refused in production (local sites are for stands only)',
-    ])
-    // An address, https, a path or a value that is not host:port: never a local site.
-    for (const bad of [
-      { 'http://127.0.0.1:8080': 'host.docker.internal:8080' },
-      { 'https://wp.localhost': 'host.docker.internal:443' },
-      { 'http://wp.localhost/blog': 'host.docker.internal:80' },
-      { 'http://wp.localhost': 'host.docker.internal' },
-    ])
-      expect(problemsOf(devEnv({ BROWSER_LOCAL_SITES: JSON.stringify(bad) }))[0]).toMatch(
-        /^BROWSER_LOCAL_SITES: each key/,
-      )
-    expect(problemsOf(devEnv({ BROWSER_LOCAL_SITES: '[1]' }))).toEqual([
-      'BROWSER_LOCAL_SITES: expected a JSON object of origins and host:port targets',
-    ])
-  })
-
-  it('reads the extra hosts as the egress proxy spells them, public names only', () => {
-    expect(
-      loadBrowserConfig(devEnv({ BROWSER_EXTRA_HOSTS: 'S.W.org, fonts.example.ru:8443' }))
-        .extraHosts,
-    ).toEqual(['s.w.org:443', 'fonts.example.ru:8443'])
-    expect(problemsOf(devEnv({ BROWSER_EXTRA_HOSTS: '10.0.0.5' }))).toEqual([
-      'BROWSER_EXTRA_HOSTS: expected public host names with an optional port',
-    ])
+  it('reads no local sites and no extra hosts of a site any more (plan 83)', () => {
+    const config = loadBrowserConfig(
+      devEnv({ BROWSER_LOCAL_SITES: '[1]', BROWSER_EXTRA_HOSTS: '10.0.0.5' }),
+    )
+    expect(config).not.toHaveProperty('localSites')
+    expect(config).not.toHaveProperty('extraHosts')
+    expect(config.runtime?.localSites).toBeUndefined()
   })
 
   it('keeps the numbers of a session and its stream within their bounds', () => {

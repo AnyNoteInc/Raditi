@@ -228,7 +228,8 @@ describe('the stream of a session', () => {
     send(holder.ws, input(1))
     send(other.ws, input(1))
     send(holder.ws, input(0))
-    send(holder.ws, { t: 'navigate', url: 'https://evil.example.org/' })
+    // The open web of a chat takes no plain http.
+    send(holder.ws, { t: 'navigate', url: 'http://evil.example.org/' })
     // Not a message of the contract, and the gateway's own `hello`.
     holder.ws.send('{"t":"input","event":"rm -rf"}')
     send(holder.ws, { t: 'hello', ticket: 'a'.repeat(43) })
