@@ -2860,13 +2860,15 @@ async function scenarioQ(stand) {
   )
   const version = await db.chatDocument.findUniqueOrThrow({
     where: { id: docId },
-    include: { content: true, page: true },
+    // The host of a page is its site's since plan 73 (Дер11): `pages.slug` is left for the release
+    // before, a new page has none.
+    include: { content: true, page: { include: { tree: true } } },
   })
   rt.check(
     version.currentVersion === 1 &&
       version.page?.state === 'live' &&
       version.page.currentVersion === 1 &&
-      finished.url.includes(version.page.slug),
+      finished.url.includes(version.page.tree.name ?? version.page.tree.slug),
     'the end of the turn made version 1 of the document and drew it as version 1 of its page',
     { document: version.currentVersion, page: version.page?.currentVersion },
   )

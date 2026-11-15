@@ -841,7 +841,13 @@ export function* publishPage(ctx, facts) {
  * and `doc_finish` while a placeholder stands — refused.
  */
 export function* writeDocument(ctx, facts) {
-  const created = yield call('doc_create', { title: STAND_DOC.title, sections: STAND_DOC.sections })
+  // The view the client reads it in is the agent's choice since plan 74 (Д1): text, which
+  // «Скачать .md» gives as Markdown; its link is the page to read all the same.
+  const created = yield call('doc_create', {
+    title: STAND_DOC.title,
+    view: 'text',
+    sections: STAND_DOC.sections,
+  })
   facts.docId = typeof created?.docId === 'string' ? created.docId : null
   if (!facts.docId) throw new ScriptBroken(`doc_create made no document: ${codeOf(created)}`)
   const docId = facts.docId
