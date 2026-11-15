@@ -5,7 +5,6 @@ import { authConfigFromEnv, createAuth, latestConsents, requiredConsentRows } fr
 import { createPrismaClient } from '@repo/db'
 
 import { authEnv, baseURL, databaseUrl } from './billing-stand.ts'
-import { startSiteFiles, type SiteFiles } from './site-files.ts'
 
 // A signed-in user for the pages under (protected), made through the server API of @repo/auth
 // on the database of the run, not by clicking through the forms: the sign-up records the required
@@ -84,10 +83,7 @@ function browserCookie(header: string): BrowserCookie {
   }
 }
 
-export const test = base.extend<
-  { signedInUser: SignedInUser },
-  { accounts: Accounts; siteFiles: SiteFiles }
->({
+export const test = base.extend<{ signedInUser: SignedInUser }, { accounts: Accounts }>({
   accounts: [
     // eslint-disable-next-line no-empty-pattern -- Playwright wants a destructuring pattern here.
     async ({}, use) => {
@@ -220,21 +216,6 @@ export const test = base.extend<
         })
       }
       await prisma.$disconnect()
-    },
-    { scope: 'worker' },
-  ],
-
-  // The site a test adds through the wizard: one server for the worker, started when a test
-  // first asks for it.
-  siteFiles: [
-    // eslint-disable-next-line no-empty-pattern -- Playwright wants a destructuring pattern here.
-    async ({}, use) => {
-      const files = await startSiteFiles()
-      try {
-        await use(files)
-      } finally {
-        await files.close()
-      }
     },
     { scope: 'worker' },
   ],

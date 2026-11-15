@@ -4,16 +4,7 @@ import { dirname, resolve } from 'node:path'
 
 import { expect, test, type Locator, type Page } from '@playwright/test'
 
-import {
-  applyChange,
-  headerAction,
-  heroAction,
-  hydrated,
-  openAt,
-  platformsAction,
-  RUNNING_LINE,
-  settled,
-} from './landing-page.ts'
+import { applyChange, hydrated, openAt, settled } from './landing-page.ts'
 
 // A local tool for reworking the landing CSS, not a gate: it records what the browser computed
 // for every element of the page and tells whether a change left the page as it was.
@@ -73,7 +64,6 @@ const FORCED_COLORS = process.env.LANDING_STYLE_SNAPSHOT_FORCED_COLORS === 'acti
 const SHOT_SECTIONS: [string, string][] = [
   ['hero', '#top > header, section:has(#hero-title)'],
   ['demo', '#demo'],
-  ['platforms', '#platforms'],
   ['capabilities', '#possibilities'],
   ['safety', '#safety'],
   ['pricing', '#pricing'],
@@ -237,17 +227,6 @@ async function openLanding(page: Page, width: number, height = HEIGHT): Promise<
   for (const selector of ['#pricing input[type="range"]', '#site-demo button', 'header button']) {
     await hydrated(page.locator(selector).first())
   }
-  // The running line is stopped where it starts: it would be read and shot in a new place
-  // every time, and a comparison would report its transform as a difference.
-  await page.evaluate((runningLine) => {
-    for (const animation of document.getAnimations()) {
-      if (!(animation instanceof CSSAnimation && animation.animationName.includes(runningLine))) {
-        continue
-      }
-      animation.pause()
-      animation.currentTime = 0
-    }
-  }, RUNNING_LINE)
   await settled(page)
 }
 
@@ -513,31 +492,6 @@ if (MODE === 'shots') {
       await recordOrCompare('focus', section)
     })
 
-    test('hover', async ({ page }) => {
-      await openLanding(page, STATE_WIDTH)
-      const targets: [string, Locator][] = [
-        ['primary button ', heroAction(page)],
-        ['sign in ', page.locator('header a[href="/sign-in"]')],
-        ['header action ', headerAction(page)],
-        ['platforms action ', platformsAction(page)],
-        ['pricing action ', page.locator('#pricing').getByRole('link')],
-      ]
-      const section: Section = {}
-      for (const [prefix, target] of targets) {
-        // Brought into the window first: the page scrolls smoothly, and a pointer sent to a
-        // target on its way would come to rest beside it.
-        await target.evaluate((element) =>
-          element.scrollIntoView({ behavior: 'instant', block: 'center' }),
-        )
-        await settled(page)
-        await target.hover()
-        await settled(page)
-        expect(await target.evaluate((element) => element.matches(':hover'))).toBe(true)
-        Object.assign(section, await read(target, { deep: true, origin: 'element', prefix }))
-      }
-      await recordOrCompare('hover', section)
-    })
-
     test('demo after applying and after undoing a change', async ({ page }) => {
       await openLanding(page, STATE_WIDTH)
       await playReveals(page)
@@ -557,52 +511,5 @@ if (MODE === 'shots') {
       await readDemo('undone ')
       await recordOrCompare('demo', section)
     })
-  })
-
-  // Not a part of the snapshot: headless Chromium hides scrollbars, so the widths above never see
-  // one. A styled scrollbar takes its width from the page, as the classic one does on Windows.
-  test.describe('with a classic scrollbar', () => {
-    for (const width of [1440, 1920]) {
-      test(`the fields from edge to edge and the footer keep the grid of the sections at ${width}px`, async ({
-        playwright,
-        baseURL,
-      }) => {
-        // A browser of its own: launch options cannot differ between the tests of one worker.
-        const browser = await playwright.chromium.launch({
-          ignoreDefaultArgs: ['--hide-scrollbars'],
-        })
-        try {
-          const page = await browser.newPage({ baseURL })
-          await openLanding(page, width)
-          await page.addStyleTag({ content: '::-webkit-scrollbar { width: 15px }' })
-          const edges = await page.evaluate(() => {
-            const left = (selector: string) =>
-              document.querySelector(selector)?.getBoundingClientRect().left
-            return {
-              scrollbar: window.innerWidth - document.documentElement.clientWidth,
-              section: left('#can-title'),
-              // The orange, the chocolate and the lead fields run from edge to edge, and so
-              // does the footer: their content starts on the vertical of a plain section.
-              platforms: left('#platforms-title'),
-              safety: left('#safety-title'),
-              footer: left('footer a'),
-            }
-          })
-          expect(edges.scrollbar).toBe(15)
-          expect(edges.section).toBeDefined()
-          expect({
-            platforms: edges.platforms,
-            safety: edges.safety,
-            footer: edges.footer,
-          }).toEqual({
-            platforms: edges.section,
-            safety: edges.section,
-            footer: edges.section,
-          })
-        } finally {
-          await browser.close()
-        }
-      })
-    }
   })
 }

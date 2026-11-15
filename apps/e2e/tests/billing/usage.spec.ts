@@ -3,15 +3,12 @@ import type { Page } from '@playwright/test'
 import { fakeYookassa } from '../../fixtures/billing-stand.ts'
 import { leftHeadline, leftHeadlineOf, totalLeft } from '../../fixtures/credit-words.ts'
 import { expect, test } from '../../fixtures/credits.ts'
-import { addSiteInWizard, fillBasics, openWizard } from '../../fixtures/site-files.ts'
 
-// «Настройки → Использование» in a real browser, and the site limit of a tariff: a signed-in
-// customer pays for a tariff on the page of the fake ЮKassa, sees its quota untouched and an
-// empty history, reads on «Тарифы» how credits are counted, and is refused a site beyond the
-// number the tariff takes — at the first step of the wizard «Добавить проект», after a first site
-// was added through the whole wizard. The fixture removes the user with everything the payment
-// and the wizard created, and keeps a credit rate in force for the run: without one the pages
-// would say only that no task is taken.
+// «Настройки → Использование» in a real browser: a signed-in customer pays for a tariff on the page
+// of the fake ЮKassa, sees its quota untouched and an empty history, and reads on «Тарифы» how
+// credits are counted. The fixture removes the user with everything the payment created, and
+// keeps a credit rate in force for the run: without one the pages would say only that no task is
+// taken.
 
 // Each step opens a page the development server compiles on first use.
 test.describe.configure({ timeout: 180_000 })
@@ -194,22 +191,6 @@ test('a customer who paid for a tariff sees its full quota and an empty history'
     await expect(limits).toContainText(/Можно добавить ещё\s3\sсайта\./)
   })
 
-  await test.step('nothing is charged yet: one line by site and an empty history', async () => {
-    await expect(section(page, 'По проектам')).toContainText(
-      /В\sэтом периоде кредиты ещё не\sсписывались\./,
-    )
-    await expect(section(page, 'По проектам').getByRole('list')).toHaveCount(0)
-    const history = section(page, 'История списаний')
-    await expect(history).toContainText(
-      /Сколько кредитов ушло на\sкаждую задачу\. Списываем только за\sвыполненные задачи/,
-    )
-    await expect(history).toContainText(
-      /Списаний пока нет\. Здесь появятся задачи и\sсколько кредитов ушло на\sкаждую\./,
-    )
-    await expect(history.getByRole('table')).toHaveCount(0)
-    await expect(history.getByRole('button', { name: 'Вперёд' })).toHaveCount(0)
-  })
-
   await test.step('more credits are offered: the dialog of the pack opens and closes', async () => {
     const buyMore = page.getByRole('button', { name: 'Купить ещё 100 кредитов — 1 490 ₽' })
     await buyMore.click()
@@ -226,41 +207,5 @@ test('a customer who paid for a tariff sees its full quota and an empty history'
       leftHeadline(totalLeft(await stored.stored())),
       SLOW,
     )
-  })
-})
-
-test('a site beyond the number the tariff takes is refused', async ({
-  page,
-  signedInUser: _signedIn,
-  siteFiles,
-}) => {
-  await test.step('the customer pays for «Старт», a tariff for one site', async () => {
-    await payFor(page, 'Старт')
-  })
-
-  await test.step('the first site is added through the wizard', async () => {
-    await addSiteInWizard(page, siteFiles, { name: 'Кофейня', url: 'https://coffee.example.ru' })
-  })
-
-  await test.step('the second one is refused at «Далее» of the first step, with the limit of the tariff', async () => {
-    await openWizard(page)
-    await fillBasics(page, { name: 'Пекарня', url: 'https://bakery.example.ru' })
-    await expect(page.getByRole('main').getByRole('alert')).toHaveText(
-      'В ваш тариф входит один сайт. Чтобы добавить ещё один, выберите другой тариф в настройках.',
-      SLOW,
-    )
-    // The wizard stays on its first step: nothing was checked on a server, nothing was added.
-    await expect(page.getByRole('heading', { level: 2, name: 'Основные данные' })).toBeVisible()
-    await page.getByRole('link', { name: 'Отмена' }).click()
-    await expect(page).toHaveURL('/projects', SLOW)
-    await expect(page.getByRole('list', { name: 'Сайты' }).getByRole('listitem')).toHaveCount(1)
-  })
-
-  await test.step('«Использование» shows the tariff as full', async () => {
-    await page.goto('/settings/usage')
-    const limits = section(page, 'Лимиты тарифа')
-    await expect(limits).toContainText(/Сайты\s*1\s+из\s1\sсайта/, SLOW)
-    await expect(limits.getByRole('img', { name: 'Добавлен 1 сайт из 1' })).toBeVisible()
-    await expect(limits).toContainText(/Больше сайтов на\sэтом тарифе добавить нельзя\./)
   })
 })

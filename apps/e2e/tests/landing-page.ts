@@ -23,15 +23,10 @@ export function hydrated(element: Locator): Promise<void> {
   )
 }
 
-/** The keyframes of the running line of the systems, as the source names them. */
-export const RUNNING_LINE = 'marqueeRun'
-
 /** Waits until no animation or transition is running: a reveal moves a section from under the
- *  pointer, and a colour read on the way belongs to neither state. The running line of the
- *  systems is the one thing of the page that never rests (the owner, 13.11.2026): it is not
- *  waited for. */
+ *  pointer, and a colour read on the way belongs to neither state. */
 export function settled(page: Page): Promise<void> {
-  return page.evaluate(async (runningLine) => {
+  return page.evaluate(async () => {
     const frame = () => new Promise<void>((done) => requestAnimationFrame(() => done()))
     await document.fonts.ready
     // Two quiet passes in a row: an observer may start an animation a frame after the last ended.
@@ -42,14 +37,10 @@ export function settled(page: Page): Promise<void> {
       await frame()
       const running = document
         .getAnimations()
-        .filter(
-          (animation) =>
-            !(animation instanceof CSSAnimation && animation.animationName.includes(runningLine)),
-        )
         .some((animation) => animation.pending || animation.playState === 'running')
       quiet = running ? 0 : quiet + 1
     }
-  }, RUNNING_LINE)
+  })
 }
 
 /** The first screen of the page. */
@@ -65,7 +56,6 @@ export const heroAction = (page: Page) => firstScreen(page).locator('a[href="#le
 export const pricingAction = (page: Page) => page.locator('#pricing a[href="#lead"]')
 
 /** The same action under the running line of the systems: ink on the orange field. */
-export const platformsAction = (page: Page) => page.locator('#platforms a[href="#lead"]')
 
 /** The short form of the action in the row of the header, shown from 1100px. */
 export const headerAction = (page: Page) =>

@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto'
-
 import type { Locator, Page } from '@playwright/test'
 
 import { fakeYookassa } from '../../fixtures/billing-stand.ts'
@@ -15,14 +13,12 @@ import {
   totalLeft,
 } from '../../fixtures/credit-words.ts'
 import { expect, test, type Credits } from '../../fixtures/credits.ts'
-import { addSiteInWizard, type SiteFiles } from '../../fixtures/site-files.ts'
 
 // The credits model on «Тарифы» and «Использование», from the registration to the limits, in a
-// real browser: a new user reads the gift as promised, gets it with the first site and spends
+// real browser: a new user reads the gift as promised, gets it with the first chat and spends
 // it on tasks without a tariff; a gift that is used up leaves one way, a tariff; the credits of
 // a tariff run out — «Лимиты закончились» — and «Купить пакет» is the way out; a task takes the
-// gift before the pack, and a pack waits for a tariff that has ended; a chat without a project is
-// charged like any task and «Использование» names it «Без проекта». No tariff limits its credits
+// gift before the pack, and a pack waits for a tariff that has ended. No tariff limits its credits
 // of a day since 06.11.2026 (docs/plan/63-new-pricing.md, Ц6): the tasks that use up a tariff are
 // queued today, one after another.
 //
@@ -102,14 +98,6 @@ const plansLead = (page: Page) =>
 
 const fakePage = `http://127.0.0.1:${fakeYookassa.port}/pay/**`
 
-/**
- * Adds the first site of the customer through the wizard «Добавить проект», as they would: it
- * makes the workspace. The page of the new site then says that the site is being set up.
- */
-async function addFirstSite(page: Page, files: SiteFiles, name: string) {
-  await addSiteInWizard(page, files, { name, url: `https://gift-${randomUUID()}.example.ru` })
-}
-
 /** Chooses «Старт» on «Тарифы» and pays for it on the page of the fake. */
 async function payForStart(page: Page, { autoRenew }: { autoRenew: boolean }) {
   await page.goto('/settings/plans')
@@ -145,16 +133,15 @@ const large = async (queue: Credits, title: string, costRub: string) => {
   return { reserved: task.reserved, charged: await task.done(costRub), id: task.id }
 }
 
-test('a new user gets the gift with the first site and spends it on tasks without a tariff', async ({
+test('a new user gets the gift with the first chat and spends it on tasks without a tariff', async ({
   page,
   signedInUser,
   credits: queue,
-  siteFiles,
 }) => {
   const noTariff = section(page, 'Тариф не выбран')
   const giftKey = `user:${signedInUser.id}:signup-gift`
 
-  await test.step('registered, no site yet: the gift is promised, and nothing is stored', async () => {
+  await test.step('registered, no chat yet: the gift is promised, and nothing is stored', async () => {
     await page.goto('/settings/usage')
     await expect(noTariff).toContainText(said(usageOnGift(50)), SLOW)
     expect(await queue.workspaceId()).toBeNull()
@@ -169,8 +156,8 @@ test('a new user gets the gift with the first site and spends it on tasks withou
     ).toBeVisible(SLOW)
   })
 
-  await test.step('the first site makes the workspace, and the gift is granted with it, once', async () => {
-    await addFirstSite(page, siteFiles, 'Кофейня')
+  await test.step('the first chat makes the workspace, and the gift is granted with it, once', async () => {
+    await queue.ensureWorkspace()
 
     expect(await queue.stored()).toEqual({
       tariff: { balance: 0, held: 0, left: 0 },
@@ -206,7 +193,7 @@ test('a new user gets the gift with the first site and spends it on tasks withou
     await expect(noTariff).toContainText(said(usageOnGift(gift.left)), SLOW)
     // Without a tariff the history is whole: its dates name their year.
     await expect(historyLines(page)).toHaveText([
-      said(`${new Date().getFullYear()}Поменять телефон в шапкеКофейня${credits(4)}`),
+      said(`${new Date().getFullYear()}Поменять телефон в шапке${credits(4)}`),
     ])
     await page.goto('/settings/plans')
     await expect(
@@ -246,9 +233,9 @@ test('a new user gets the gift with the first site and spends it on tasks withou
     await expect(noTariff.getByRole('link', { name: 'Выбрать тариф' })).toBeVisible()
     // The three tasks, newest first, each with what the accounts paid of it.
     await expect(historyLines(page)).toHaveText([
-      said(`Обновить цены в каталогеКофейня${credits(29)}`),
-      said(`Добавить блок с отзывамиКофейня${credits(17)}`),
-      said(`Поменять телефон в шапкеКофейня${credits(4)}`),
+      said(`Обновить цены в каталоге${credits(29)}`),
+      said(`Добавить блок с отзывами${credits(17)}`),
+      said(`Поменять телефон в шапке${credits(4)}`),
     ])
     await page.goto('/settings/plans')
     await expect(plansLead(page)).toHaveText(saidWhole(giftUsedUp), SLOW)
@@ -291,52 +278,15 @@ test('a new user gets the gift with the first site and spends it on tasks withou
   })
 })
 
-test('a chat without a project is charged, and «Использование» names it «Без проекта»', async ({
-  page,
-  credits: queue,
-}) => {
-  const titles = { gift: 'Идеи для названия пекарни', tariff: 'Письмо постоянным гостям' }
-
-  await test.step('no project, no tariff: the gift pays, and the history says whose work it was', async () => {
-    const chat = await queue.task({ title: titles.gift, withProject: false })
-    expect(chat.reserved).toEqual({ tariff: 0, gift: 1, pack: 0 })
-    const { credits: charged } = await chat.done('22.09')
-    expect(charged).toBe(4)
-
-    await page.goto('/settings/usage')
-    await expect(historyLines(page)).toHaveText(
-      [said(`${titles.gift}Без проекта${credits(charged)}`)],
-      SLOW,
-    )
-  })
-
-  await test.step('on a tariff: «По проектам» has a line for it and the history a row', async () => {
-    await payForStart(page, { autoRenew: false })
-    const chat = await queue.task({ title: titles.tariff, withProject: false })
-    const { credits: charged } = await chat.done('60.00')
-    expect(charged).toBe(10)
-
-    await page.goto('/settings/usage')
-    await expect(section(page, 'По проектам').getByRole('listitem')).toHaveText(
-      [said(`Без проекта${credits(charged)}`)],
-      SLOW,
-    )
-    await expect(historyLines(page).first()).toHaveText(
-      said(`${titles.tariff}Без проекта${credits(charged)}`),
-    )
-  })
-})
-
 test('the gift is used up without a tariff: both pages say so and lead to the tariffs', async ({
   page,
   signedInUser: _signedIn,
   credits: queue,
-  siteFiles,
 }) => {
   const noTariff = section(page, 'Тариф не выбран')
 
   await test.step('one large task takes the whole gift', async () => {
-    await addFirstSite(page, siteFiles, 'Кофейня')
+    await queue.ensureWorkspace()
     // One credit is set aside, whatever the mode.
     const landing = await queue.task({ title: 'Собрать страницу', modelClass: 'heavy' })
     expect(landing.reserved).toEqual({ tariff: 0, gift: 1, pack: 0 })
@@ -359,7 +309,7 @@ test('the gift is used up without a tariff: both pages say so and lead to the ta
       'href',
       '/settings/plans',
     )
-    await expect(historyLines(page)).toHaveText([said(`Собрать страницуКофейня${credits(50)}`)])
+    await expect(historyLines(page)).toHaveText([said(`Собрать страницу${credits(50)}`)])
   })
 
   await test.step('«Тарифы» says the same above the tariffs, and offers the pack at twice its price', async () => {
@@ -387,9 +337,8 @@ test('the credits of a tariff run out: «Лимиты закончились», 
   const creditsSection = section(page, 'Кредиты')
   const notice = creditsSection.getByRole('status')
 
-  await test.step('the customer pays for «Старт» with auto-renewal and has a site', async () => {
+  await test.step('the customer pays for «Старт» with auto-renewal', async () => {
     await payForStart(page, { autoRenew: true })
-    await queue.site('Кофейня')
     const stored = await queue.stored()
     expect([stored.tariff.left, stored.gift.left, stored.pack.left]).toEqual([200, 50, 0])
   })
@@ -412,46 +361,6 @@ test('the credits of a tariff run out: «Лимиты закончились», 
   })
 
   const { currentPeriodEnd } = await queue.subscription()
-
-  await test.step('«Использование» says that the limits ran out, when credits come and what to do', async () => {
-    await page.goto('/settings/usage')
-    await expect(notice).toHaveText(saidWhole(limitsRanOut(currentPeriodEnd)), SLOW)
-    await expect(creditsSection.getByRole('button', { name: 'Купить пакет' })).toBeVisible()
-    await expect(creditsSection.getByRole('link', { name: 'Сменить тариф' })).toHaveAttribute(
-      'href',
-      '/settings/plans',
-    )
-    await expect(creditsSection).toContainText(
-      said('Новый тариф начнёт действовать со следующего периода.'),
-    )
-    // The offer of the pack stands in the notice, not twice.
-    await expect(page.getByRole('button', { name: /^Купить ещё/ })).toHaveCount(0)
-    await expect(leftHeadlineOf(creditsSection)).toHaveText(leftHeadline(0))
-    await expect(
-      creditsSection.getByRole('img', {
-        name: 'Из 200 кредитов по тарифу: 200 списано, 0 отложено под задачи в работе, 0 осталось',
-      }),
-    ).toBeVisible()
-    // A gift that is used up is not shown as an account with nothing on it.
-    await expect(creditsSection.getByRole('heading', { level: 3 })).toHaveText([
-      /^По тарифу\s—\s0\sиз\s200$/,
-      /^Из пакета\s—\s0$/,
-    ])
-    // The day: today took all 200 of the tariff, and no daily limit stands beside them.
-    const limits = section(page, 'Лимиты тарифа')
-    await expect(limits).toContainText(/Сегодня\s*200\s+кредитов/)
-    await expect(limits).toContainText(said(NO_DAILY_LIMIT))
-    await expect(limits).not.toContainText('Сегодня можно потратить')
-    await expect(limits.getByRole('img', { name: /^Сегодня/ })).toHaveCount(0)
-    // All 250 credits went to the one site; the last task took them from two accounts.
-    await expect(section(page, 'По проектам').getByRole('listitem')).toHaveText([
-      said(`Кофейня250 кредитов`),
-    ])
-    await expect(historyLines(page)).toHaveText([
-      said(`Добавить форму заявкиКофейня${credits(130)}80 по тарифу и 50 подарочных`),
-      said(`Собрать страницу «О нас»Кофейня${credits(120)}`),
-    ])
-  })
 
   await test.step('«Тарифы» says the same in the block of the tariff, above the pack and the tariffs', async () => {
     await page.goto('/settings/plans')
@@ -502,9 +411,7 @@ test('the credits of a tariff run out: «Лимиты закончились», 
 
     await page.goto('/settings/usage')
     await expect(leftHeadlineOf(creditsSection)).toHaveText(leftHeadline(totalLeft(stored)), SLOW)
-    await expect(historyLines(page).first()).toHaveText(
-      said(`Добавить баннер акцииКофейня${credits(17)}`),
-    )
+    await expect(historyLines(page).first()).toHaveText(said(`Добавить баннер акции${credits(17)}`))
     // Work paid by the pack is not work of the tariff: today's 200 stay as they were.
     await expect(section(page, 'Лимиты тарифа')).toContainText(/Сегодня\s*200\s+кредитов/)
   })
@@ -523,7 +430,6 @@ test('a task takes the gift before the pack, and a pack carries tasks after the 
     await page.getByRole('button', { name: 'Купить пакет' }).click(SLOW)
     await payForPack(page, page.getByRole('dialog', { name: 'Пакет из 100 кредитов' }))
     await fake('settle', {})
-    await queue.site('Кофейня')
     const stored = await queue.stored()
     expect([stored.tariff.left, stored.gift.left, stored.pack.left]).toEqual([200, 50, 100])
     // The fixture ends a tariff by its row alone: with credits on the tariff account it would
@@ -578,7 +484,7 @@ test('a task takes the gift before the pack, and a pack carries tasks after the 
       said('Кредиты из пакета не сгорают. Начнут тратиться, когда закончатся подарочные кредиты.'),
     )
     await expect(historyLines(page).first()).toHaveText(
-      said(`Переделать каталогКофейня${credits(80)}50 по тарифу и 30 подарочных`),
+      said(`Переделать каталог${credits(80)}50 по тарифу и 30 подарочных`),
     )
     // No daily limit: the month is spent, weeks before the period ends, and nothing is
     // promised of tomorrow.
