@@ -139,6 +139,13 @@ import { useDialogFeed } from './use-dialog-feed'
 import { uuidv7 } from './uuid'
 import { UsageWindowHint } from '@/components/billing/usage-window-hint'
 
+/**
+ * How long the changed words of «Изменить» wait for core to take the turn back in a chat with the
+ * repository, and how often they knock (ВВ25).
+ */
+const EDIT_WAIT_MS = 120_000
+const EDIT_WAIT_STEP_MS = 1_500
+
 // One chat (docs/plan/53-chat-preview-release.md, R9; feed design, «Экраны, которых нет на
 // макетах»): its head, its rows, the live block and the field. How it works follows from the
 // requirements the server gave it (docs/plan/61-chats-first.md, §5.6), never from a mode: a chat
@@ -1004,6 +1011,43 @@ export function DialogView({
   }
 
   /**
+   * «Изменить» of the last message, sent changed (ВВ25): `/undo` takes its turn back, then the new
+   * words go as a message. In a chat with the repository core takes the turn back by a job, and the
+   * words wait for it (TASK_REWINDING). Words that could not go stay in the field, nothing is lost.
+   */
+  async function sendEdited(text: string): Promise<boolean> {
+    setFieldError(null)
+    try {
+      await undoTurn.mutateAsync({ taskId, requestId: pressId('undoTurn') })
+      pressed('undoTurn')
+    } catch (failure) {
+      setFieldError(callErrorText(failure))
+      refresh()
+      return false
+    }
+    refresh()
+    const requestId = pressId('message', `${text}\u0000`)
+    for (let waited = 0; ; waited += EDIT_WAIT_STEP_MS) {
+      try {
+        await message.mutateAsync({ taskId, requestId, text })
+        pressed('message')
+        refresh()
+        return true
+      } catch (failure) {
+        if (callErrorCode(failure) !== 'TASK_REWINDING' || waited >= EDIT_WAIT_MS) {
+          setFieldError(sendErrorText(failure, { withProject: project !== null }))
+          // The turn is taken back already: the new words wait in the field to be sent by hand.
+          const kept = fieldText.current.trim() === ''
+          if (kept) setUndoneWords(text)
+          refresh()
+          return kept
+        }
+        await new Promise((resolve) => setTimeout(resolve, EDIT_WAIT_STEP_MS))
+      }
+    }
+  }
+
+  /**
    * `/redo`: the turn comes back, and with it the words `/undo` put into the field: sent, they would
    * ask a second time. Words the client changed are theirs by now, and they stay.
    */
@@ -1222,8 +1266,8 @@ export function DialogView({
           onContinue: () => void press('continue', proceed.mutateAsync),
           onTakeControl: takeControl,
           onResumeAgent: resumeWork,
-          // «Изменить» is `/undo`: its words come back to the field (ВВ25).
-          onEditLast: () => runCommand('turn_undo'),
+          // «Изменить»: the words are changed in place, and only «Отправить» takes the turn back (ВВ25).
+          onEditLast: sendEdited,
         }),
     // A press the server would refuse is not drawn: an owner or an admin, of a project that is open.
     ...(!closedProject && project?.closed !== true && agentNotes.data?.canManage
