@@ -1,16 +1,13 @@
-import { legalDocuments } from '@repo/domain'
 import {
   giftTaskCounts,
   signupGiftCredits,
   typicalTaskCredits,
 } from '@repo/domain/billing/credit-numbers'
-import { AnimatedBrandSymbol } from '@repo/ui/animated-brand-symbol'
 import Link from 'next/link'
 import type { ReactNode } from 'react'
 
-import { CookieSettingsButton } from '@/components/public/cookie-banner'
+import { PublicFooter } from '@/components/public/public-footer'
 import { CHARGED_FOR_DONE_WORK } from '@/lib/credit-price'
-import { legalDocumentHref } from '@/lib/legal'
 import { nbsp } from '@/lib/nbsp'
 import type { LandingViewer } from '@/server/landing-viewer'
 
@@ -306,41 +303,7 @@ export function Landing({
         </section>
       </main>
 
-      <footer className={styles.footer}>
-        <div className={styles.footerTop}>
-          <Link href="/" aria-label="Радити — на главную">
-            <span className={styles.wordmark}>
-              <AnimatedBrandSymbol size={35} className={styles.logoSymbol} />
-              Радити
-            </span>
-          </Link>
-          <p>Ваш сайт в&nbsp;заботливых руках.</p>
-          <Link href={isGuest ? '/sign-in' : '/chats'}>
-            {isGuest ? 'Войти' : 'Открыть чаты'} <LandingIcon name="arrow-up-right" {...arrow} />
-          </Link>
-        </div>
-        <nav aria-label="Документы" className={styles.legalLinks}>
-          {legalDocuments.map((document) => (
-            <Link key={document.slug} href={legalDocumentHref(document.slug)}>
-              {document.title}
-            </Link>
-          ))}
-          {/* For the search engines and for whoever looks for a page by its name. */}
-          <a href="/sitemap.xml">Карта сайта</a>
-          <CookieSettingsButton />
-        </nav>
-        <div className={styles.footerBottom}>
-          <span>© {new Date().getFullYear()} Радити</span>
-          <a href="#top">
-            Вернуться наверх <LandingIcon name="arrow-up" size={16} strokeWidth={1.7} />
-          </a>
-        </div>
-        <div className={styles.footerWord} aria-hidden="true">
-          радити
-          {/* CSS sizes the sign from the word; the number is the fallback of the attribute. */}
-          <AnimatedBrandSymbol size={156} />
-        </div>
-      </footer>
+      <PublicFooter isGuest={isGuest} />
     </div>
   )
 }
