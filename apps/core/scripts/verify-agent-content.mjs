@@ -1,4 +1,4 @@
-/* global AbortSignal, console, fetch */
+/* global AbortSignal, Buffer, console, fetch */
 // The glue stand below the queue: a turn key from the real issue, the real pinned CLI in the
 // sandbox image, sandbox-gw, the role llm on the synthetic provider, the regular role mcp from
 // the build (content profile local, AppRole mcp, the site access from Vault through
