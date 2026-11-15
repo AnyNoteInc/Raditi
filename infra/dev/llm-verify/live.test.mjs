@@ -1551,7 +1551,6 @@ test('the codes and signals of the provider are read from the log lines the role
 const node = dirname(process.execPath)
 const stands = {
   gateway: 'apps/core/scripts/verify-llm-gateway.mjs',
-  content: 'apps/core/scripts/verify-agent-content.mjs',
 }
 // PATH holds node alone: a stand that got past its refusals would fail on `docker`, not exit 2.
 const started = (script, args, env) =>
@@ -1640,20 +1639,16 @@ for (const [flag, title, noOption] of [
   [
     '--results',
     'the measurement of results refuses and cleans up like the acceptance',
-    // Without --live or --rehearsal it is no option of the stand, and never one of the content stand.
-    [
-      [stands.gateway, ['--results']],
-      [stands.content, ['--live', '--results']],
-    ],
+    // Without --live or --rehearsal it is no option of the stand.
+    [[stands.gateway, ['--results']]],
   ],
   [
     '--api',
     'the run on the API takes ZAI_API_KEY and refuses like the acceptance',
-    // Without --live or --rehearsal, with a measurement, or on the content stand it is no option.
+    // Without --live or --rehearsal, or with a measurement, it is no option.
     [
       [stands.gateway, ['--api']],
       [stands.gateway, ['--live', '--api', '--measure']],
-      [stands.content, ['--live', '--api']],
     ],
   ],
 ])
@@ -1680,7 +1675,6 @@ test('a signal sent to the command of a stand reaches the stand: its package lin
   const orchestrator = JSON.parse(
     await readFile(join(repository, 'apps/core/package.json'), 'utf8'),
   ).scripts
-  assert.equal(root['verify:agent-content'], `exec node ${stands.content}`)
   assert.equal(root['verify:llm-gateway'], 'pnpm --filter core verify:llm-gateway')
   assert.equal(orchestrator['verify:llm-gateway'], 'exec node scripts/verify-llm-gateway.mjs')
   for (const script of Object.values(stands)) {
@@ -1698,9 +1692,7 @@ test('a signal sent to the command of a stand reaches the stand: its package lin
 test('no script of the stands and no document of theirs names the flags that never existed', async () => {
   for (const file of [
     stands.gateway,
-    stands.content,
     'infra/dev/llm-verify/README.md',
-    'infra/dev/site-verify/README.md',
     'infra/egress/README.md',
   ]) {
     const source = await readFile(join(repository, file), 'utf8')
