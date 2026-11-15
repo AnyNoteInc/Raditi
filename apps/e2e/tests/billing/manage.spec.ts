@@ -129,7 +129,7 @@ test('a customer switches auto-renewal off and on again', async ({ page, signedI
     // The gift of the registration is untouched: tasks are taken on it after the tariff.
     await expect(dialog).toContainText(
       new RegExp(
-        sentence`С ${DAY} новые задачи будут приниматься, только пока есть подарочные кредиты или кредиты из пакета. Сайты и история правок сохранятся.`,
+        sentence`С ${DAY} новые задачи будут приниматься, только пока есть подарочные кредиты или кредиты из пакета. Чаты и страницы сохранятся.`,
       ),
     )
     // The dialog is reached and left from the keyboard: the focus is inside it and comes back.
@@ -151,7 +151,7 @@ test('a customer switches auto-renewal off and on again', async ({ page, signedI
     const said = block.getByRole('status')
     await expect(said).toContainText(
       new RegExp(
-        `^${sentence`Автопродление отключено. Тариф и 200 кредитов по тарифу доступны до ${DATE}. После этого новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. Сайты и история правок сохранятся.`}$`,
+        `^${sentence`Автопродление отключено. Тариф и 200 кредитов по тарифу доступны до ${DATE}. После этого новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. Чаты и страницы сохранятся.`}$`,
       ),
       SLOW,
     )
@@ -533,7 +533,7 @@ test('a customer whose tariff is over sees when it ended and chooses a tariff ag
     await expect(block).toContainText(new RegExp(sentence`Закончился ${DAY}`), SLOW)
     // The gift of the registration outlives the tariff, and tasks are taken on it.
     await expect(block).toContainText(
-      'Новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. Сайты и история правок на месте.',
+      'Новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. Чаты и страницы на месте.',
     )
     // What the gift is enough for is said once — under the heading of the page.
     await expect(block).not.toContainText('Выберите тариф')

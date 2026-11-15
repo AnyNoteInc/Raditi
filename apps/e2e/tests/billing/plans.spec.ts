@@ -432,7 +432,7 @@ test('a customer with an active tariff buys a pack and sees its credits beside t
     })
     // The gift credits take tasks after the tariff as well; the pack waits for a tariff.
     await expect(block).toContainText(
-      'После этого новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. 100 кредитов из пакета, сайты и история правок сохранятся.',
+      'После этого новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. 100 кредитов из пакета, чаты и страницы сохранятся.',
     )
     // One more pack can be bought.
     await expect(buyPack).toBeVisible()

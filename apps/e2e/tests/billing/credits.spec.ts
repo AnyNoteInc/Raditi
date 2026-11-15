@@ -523,7 +523,7 @@ test('a task takes the gift before the pack, and a pack carries tasks after the 
     const block = tariffBlock(page, 'Старт')
     await expect(block).toContainText(
       said(
-        `Новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. ${credits(pack.left)} из пакета, сайты и история правок на месте.`,
+        `Новые задачи принимаются, только пока есть подарочные кредиты или кредиты из пакета. ${credits(pack.left)} из пакета, чаты и страницы на месте.`,
       ),
       SLOW,
     )

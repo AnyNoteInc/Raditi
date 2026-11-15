@@ -342,7 +342,7 @@ describe('subscription-ended', () => {
     // Seven credits of a pack carry the tasks on: one credit is one credit.
     expect(out.text).toContain(`Новые задачи ${ON_GIFT}.`)
     expect(out.text).toContain(
-      'Кредиты из пакета, сайты и история правок сохраняются. Кредитов из пакета осталось: 7.',
+      'Кредиты из пакета, чаты и страницы сохраняются. Кредитов из пакета осталось: 7.',
     )
     expect(out.text).toContain(`выбрать его можно на странице «Тарифы».\n${PLANS_URL}`)
   })
@@ -358,7 +358,7 @@ describe('subscription-ended', () => {
   it('does not mention pack credits when none remain, nor a gift that is not there', () => {
     const out = renderTemplate('subscription-ended', { ...subscriptionEnded, packCreditsLeft: 0 })
 
-    expect(out.text).toContain('\n\nСайты и история правок сохраняются.\n\n')
+    expect(out.text).toContain('\n\nЧаты и страницы сохраняются.\n\n')
     expect(out.text).not.toMatch(/кредит|пакет|подарочн/i)
     expect(out.html).not.toMatch(/кредит|пакет|подарочн/i)
   })
@@ -413,32 +413,32 @@ describe('subscription-ended', () => {
     [
       'pack and gift credits',
       { packCreditsLeft: 40, giftCreditsLeft: GIFT },
-      'Кредиты из пакета и подарочные, сайты и история правок сохраняются. Кредитов из пакета осталось: 40.',
+      'Кредиты из пакета и подарочные, чаты и страницы сохраняются. Кредитов из пакета осталось: 40.',
     ],
     [
       'pack credits and a gift too small to start a task',
       { packCreditsLeft: 40, giftCreditsLeft: 3 },
-      'Кредиты из пакета и подарочные, сайты и история правок сохраняются. Кредитов из пакета осталось: 40.',
+      'Кредиты из пакета и подарочные, чаты и страницы сохраняются. Кредитов из пакета осталось: 40.',
     ],
     [
       'gift credits alone',
       { packCreditsLeft: 0, giftCreditsLeft: GIFT },
-      'Подарочные кредиты, сайты и история правок сохраняются.',
+      'Подарочные кредиты, чаты и страницы сохраняются.',
     ],
     [
       'one gift credit alone',
       { packCreditsLeft: 0, giftCreditsLeft: 1 },
-      'Подарочные кредиты, сайты и история правок сохраняются.',
+      'Подарочные кредиты, чаты и страницы сохраняются.',
     ],
     [
       'pack credits alone',
       { packCreditsLeft: 40, giftCreditsLeft: 0 },
-      'Кредиты из пакета, сайты и история правок сохраняются. Кредитов из пакета осталось: 40.',
+      'Кредиты из пакета, чаты и страницы сохраняются. Кредитов из пакета осталось: 40.',
     ],
     [
       'no credits',
       { packCreditsLeft: 0, giftCreditsLeft: 0 },
-      'Сайты и история правок сохраняются.',
+      'Чаты и страницы сохраняются.',
     ],
   ])('names what is kept after the tariff: %s', (_case, left, kept) => {
     const out = renderTemplate('subscription-ended', { ...subscriptionEnded, ...left })

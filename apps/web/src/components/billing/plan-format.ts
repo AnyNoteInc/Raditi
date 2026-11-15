@@ -282,13 +282,13 @@ export function endsWithPeriod(periodEnd: Date, left: CreditsLeft): string {
     left.tariff > 0
       ? `Тариф и ${creditsCount(left.tariff)} по тарифу доступны до ${until}.`
       : `Тариф действует до ${until}.`
-  const kept = left.pack > 0 ? `${creditsCount(left.pack)} из пакета, сайты` : 'Сайты'
+  const kept = left.pack > 0 ? `${creditsCount(left.pack)} из пакета, чаты и страницы` : 'Чаты и страницы'
   const after = tasksOnGift(
     giftTakesTasks(left.gift + left.pack),
     'не принимаются, пока вы снова не выберете тариф',
     'принимаются',
   )
-  return `Автопродление отключено. ${tariff} После этого новые задачи ${after}. ${kept} и история правок сохранятся.`
+  return `Автопродление отключено. ${tariff} После этого новые задачи ${after}. ${kept} сохранятся.`
 }
 
 /** What happens at the end of the period while auto-renewal is on. */
@@ -476,8 +476,8 @@ function renewalCancelOutcome(input: RenewalCancel): string[] {
       'Способ оплаты, которым вы заплатите, мы не сохраним.',
     ]
   }
-  const kept = left.pack > 0 ? `${creditsCount(left.pack)} из пакета, сайты` : 'Сайты'
-  const after = `${kept} и история правок сохранятся.`
+  const kept = left.pack > 0 ? `${creditsCount(left.pack)} из пакета, чаты и страницы` : 'Чаты и страницы'
+  const after = `${kept} сохранятся.`
   const tasks = tasksOnGift(
     giftTakesTasks(left.gift + left.pack),
     'не будут приниматься, пока вы снова не выберете тариф',
@@ -716,9 +716,9 @@ export function endedText(input: {
     not_paid: 'Оплата за следующий период не прошла, и тариф закончился. ',
     refunded: 'Мы вернули оплату за этот тариф, и он закончился. ',
   }[reason]
-  const kept = packCredits > 0 ? `${creditsCount(packCredits)} из пакета, сайты` : 'Сайты'
+  const kept = packCredits > 0 ? `${creditsCount(packCredits)} из пакета, чаты и страницы` : 'Чаты и страницы'
   const tasks = tasksOnGift(tasksTaken, 'сейчас не принимаются', 'принимаются')
-  return `${why}Новые задачи ${tasks}. ${kept} и история правок на месте.`
+  return `${why}Новые задачи ${tasks}. ${kept} на месте.`
 }
 
 /** The coming charge of a tariff that renews, as `billing.autoRenewal` tells it. */
