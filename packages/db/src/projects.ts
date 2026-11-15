@@ -8,7 +8,8 @@ import {
   type ProjectListView,
 } from '@repo/domain'
 
-import type { Prisma, TaskStatus } from './generated/prisma/client.ts'
+import type { Prisma, PrismaClient, TaskStatus } from './generated/prisma/client.ts'
+import { lockProjectChats, stopProjectChats } from './project-trash.ts'
 
 // The projects of a workspace (docs/plan/84-projects.md, ПР1, ПР2, ПР4, ПР20; slice 84.3). Only the
 // author of a project sees and changes it, while they are a member of its workspace: every
@@ -309,23 +310,33 @@ export function archiveProject(
 
 /**
  * «Удалить» (ПР20): the project goes into the trash for 30 days with its chats, which the cabinet
- * no longer shows. A project already there keeps its day of purging. Stopping the passes of its
- * chats is core's (slice 84.5).
+ * no longer shows. A project already there keeps its day of purging. In the same transaction its
+ * chats whose pass is queued or runs are stopped, as «Удалить диалог» stops one (slice 84.5): the
+ * press of `cancel` by the author and `turn.cancel` for core. A chat that waits for its client
+ * stays as it is — it does nothing, and «Вернуть» gives it back open. The pause of the scheduled
+ * tasks of the project (ПР19, `project_gone`) comes with them (Э5).
  */
 export async function trashProject(
-  db: Pick<Tx, 'project'>,
+  db: PrismaClient,
   input: { projectId: string; userId: string; now: Date },
 ): Promise<{ purgeAfter: Date }> {
   const project = await projectOwnedBy(db, input.projectId, input.userId, { deleted: true })
   if (project === null) throw projectNotFound()
   if (project.purgeAfter !== null) return { purgeAfter: project.purgeAfter }
   const purgeAfter = projectPurgeAfter(input.now)
-  const { count } = await db.project.updateMany({
-    where: { id: project.id, deletedAt: null },
-    data: { deletedAt: input.now, purgeAfter },
+  const trashed = await db.$transaction(async (tx) => {
+    // The chats before the project: the order a pass locks them in (lockProjectChats).
+    const chats = await lockProjectChats(tx, project.id)
+    const { count } = await tx.project.updateMany({
+      where: { id: project.id, deletedAt: null },
+      data: { deletedAt: input.now, purgeAfter },
+    })
+    // Deleted meanwhile by another request of the author: it stopped the chats, its day stands.
+    if (count !== 1) return false
+    await stopProjectChats(tx, { chats, statuses: projectBusyStatuses, authorId: input.userId })
+    return true
   })
-  if (count === 1) return { purgeAfter }
-  // Deleted meanwhile by another request of the author: its day stands.
+  if (trashed) return { purgeAfter }
   return trashProject(db, input)
 }
 

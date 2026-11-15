@@ -21,6 +21,7 @@ import { ChatFiles } from './chat-files.ts'
 import { DocSections } from './doc-sections.ts'
 import { PageChanges } from './page-changes.ts'
 import { PageMetrics } from '../pages/page-metrics.ts'
+import { ProjectTrash } from '../projects/project-trash.ts'
 import { PagePublications } from './page-publications.ts'
 import { LivePasses } from './live-passes.ts'
 import { PassRunner } from './pass-runner.ts'
@@ -169,6 +170,7 @@ export const taskProviders: Provider[] = [
         inbox,
         pages: new PagePublications({ db: prisma, logger: new Logger('Pages') }),
         pageMetrics,
+        projects: new ProjectTrash({ db: prisma }),
       })
     },
     inject: [

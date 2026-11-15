@@ -175,6 +175,14 @@ export {
   type ProjectListRow,
   type ProjectView,
 } from './projects.ts'
+export {
+  lockProjectChats,
+  projectsDueForPurge,
+  purgeProject,
+  stopProjectChats,
+  type ProjectChat,
+  type ProjectPurge,
+} from './project-trash.ts'
 export { PostgresSiteLeaseStore } from './site-leases.ts'
 export { PostgresTurnAssignmentStore } from './turn-assignments.ts'
 export { PostgresTaskTurnAssignmentStore } from './task-turn-assignments.ts'

@@ -34,6 +34,7 @@ import {
 import { collectExpiredAttachments, expiredAttachmentsIn } from './attachment-collector.ts'
 import type { LivePasses } from './live-passes.ts'
 import type { PageMetrics } from '../pages/page-metrics.ts'
+import type { ProjectTrash } from '../projects/project-trash.ts'
 import type { PagePublications } from './page-publications.ts'
 import {
   CHARGE_LATER_EVENT,
@@ -87,6 +88,11 @@ export interface TaskSweepDependencies {
   pages?: Pick<PagePublications, 'left'> | null
   /** The metrics of the sites of pages, counted again after each sweep of them (73.12). */
   pageMetrics?: Pick<PageMetrics, 'refresh'> | null
+  /**
+   * The trash of projects (docs/plan/84-projects.md, ПР20): chats of projects in the trash are
+   * stopped, projects past their day purged. Absent — not swept.
+   */
+  projects?: Pick<ProjectTrash, 'sweep'> | null
   logger?: { log(message: string): void; warn(message: string): void }
   now?: () => Date
 }
@@ -120,6 +126,7 @@ export class TaskSweep {
       ['browsers', () => this.sweepBrowsers()],
       ['attachments', () => this.collectAttachments()],
       ['pages', () => this.sweepPages()],
+      ['projects', () => this.deps.projects?.sweep()],
     ] as const) {
       try {
         await pass()
