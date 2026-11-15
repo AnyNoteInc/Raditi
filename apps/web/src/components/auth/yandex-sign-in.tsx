@@ -9,27 +9,7 @@ import { useState } from 'react'
 
 import { useAuthUi } from './auth-ui'
 
-/** The query the sign-in page reads after a failed round trip; better-auth adds `error`. */
-export const YANDEX_FAILED_PARAM = 'yandex'
-
-const FAILED_TEXT = 'Не удалось войти через Яндекс ID. Попробуйте ещё раз.'
-
-/** better-auth's error codes of the callback that a user can act on. */
-const ERROR_TEXT: Record<string, string> = {
-  account_not_linked:
-    'Этот адрес уже зарегистрирован в Радити, но ещё не подтверждён. Войдите по почте и паролю и подтвердите адрес — после этого можно входить и через Яндекс ID.',
-  access_denied: 'Вы не дали Радити доступ к Яндекс ID. Чтобы войти, разрешите доступ.',
-}
-
-/** The text for `?yandex=…&error=…` on the sign-in page, or undefined without a failure. */
-export function yandexFailureText(params: {
-  yandex?: string | string[]
-  error?: string | string[]
-}): string | undefined {
-  if (params.yandex === undefined) return undefined
-  const code = Array.isArray(params.error) ? params.error[0] : params.error
-  return (code && ERROR_TEXT[code]) || FAILED_TEXT
-}
+import { YANDEX_FAILED_PARAM, YANDEX_FAILED_TEXT } from './yandex-failure'
 
 /** «Войти с Яндекс ID» under the email form; nothing when the Yandex app is not configured. */
 export function YandexSignIn({
@@ -58,7 +38,7 @@ export function YandexSignIn({
     })
     if (failed) {
       setPending(false)
-      setError(FAILED_TEXT)
+      setError(YANDEX_FAILED_TEXT)
     }
   }
 

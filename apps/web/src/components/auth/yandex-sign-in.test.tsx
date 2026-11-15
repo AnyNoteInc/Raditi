@@ -2,7 +2,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { YandexSignIn, yandexFailureText } from './yandex-sign-in'
+import { yandexFailureText } from './yandex-failure'
+import { YandexSignIn } from './yandex-sign-in'
 
 const { social, ui } = vi.hoisted(() => ({
   social: vi.fn(),
