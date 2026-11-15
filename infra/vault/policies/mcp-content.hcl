@@ -4,11 +4,11 @@ path "kv/data/sites/+/wp" {
 }
 
 # The secret of an MCP server of a site's agent (docs/plan/80-mcp-server-credentials.md): the
-# relay reads a header value or the tokens of an OAuth sign-in and adds them to the server's
-# request, and writes renewed tokens back with CAS. Never another kind of a site's secret; web
-# alone creates the key, and the version for CAS comes with the read.
+# relay reads a header value and adds it to the server's request. Never another kind of a site's
+# secret, and no write: web alone writes the key. Renewed tokens of an OAuth sign-in (slice 80.6)
+# will need `update` here, granted with it.
 path "kv/data/sites/+/mcp/*" {
-  capabilities = ["read", "update"]
+  capabilities = ["read"]
 }
 
 # The application password of a preview's WordPress and the secret path of its browser

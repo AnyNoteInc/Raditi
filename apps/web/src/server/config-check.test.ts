@@ -15,6 +15,7 @@ const production = {
   BETTER_AUTH_URL: 'https://raditi.ru',
   METRICS_TOKEN: 'test-metrics-token-'.padEnd(32, 'x'),
   REDIS_URL: 'redis://:secret@redis:6379',
+  SANDBOX_EGRESS_REFUSED_SUBNETS: '45.8.250.117/32',
   SMARTCAPTCHA_SERVER_KEY: `ysc2_${pair}SERVERSECRETPART`,
   SMARTCAPTCHA_CLIENT_KEY: `ysc1_${pair}CLIENTPUBLICPART`,
   DATABASE_URL: 'postgresql://raditi:secret@postgres:5432/raditi',

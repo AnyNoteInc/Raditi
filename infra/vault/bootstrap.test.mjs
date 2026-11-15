@@ -87,9 +87,9 @@ test('every policy grants exactly its scoped privileges and only on its own moun
     // key management.
     'mcp-content': {
       'kv/data/sites/+/wp': ['read'],
-      // The secret of an MCP server of a site's agent: read, and renewed tokens written by CAS
+      // The secret of an MCP server of a site's agent: read only; web writes it
       // (docs/plan/80-mcp-server-credentials.md).
-      'kv/data/sites/+/mcp/*': ['read', 'update'],
+      'kv/data/sites/+/mcp/*': ['read'],
       // The secrets of a preview, never the variables of a site (plan 53, Р21, Р24).
       'kv/data/previews/+/wp': ['read'],
       'kv/data/previews/+/browser': ['read'],

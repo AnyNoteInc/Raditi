@@ -258,7 +258,7 @@ export const agentSkillSecretPath = (siteId: string, name: string): string =>
 
 const oauthTokenSchema = z
   .string()
-  .min(1)
+  .min(agentSkillHeaderLimits.valueMinChars)
   .max(8192)
   .regex(/^[\x21-\x7e]+$/)
 

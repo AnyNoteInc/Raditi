@@ -47,10 +47,12 @@ async function mcpServer(mode: 'keyed' | 'login' | 'stream' | 'html' | 'redirect
             }
           : { tools: [{ name: 'get_menu' }, { name: 'update_price' }] }
       const json = JSON.stringify({ jsonrpc: '2.0', id: message.id, result })
-      if (mode === 'stream')
-        return res
-          .writeHead(200, { 'content-type': 'text/event-stream', 'mcp-session-id': 's-1' })
-          .end(`event: message\ndata: ${json}\n\n`)
+      if (mode === 'stream') {
+        // A stream that stays open after its answer, as servers keep one with pings.
+        res.writeHead(200, { 'content-type': 'text/event-stream', 'mcp-session-id': 's-1' })
+        res.write(`event: message\ndata: ${json}\n\n`)
+        return
+      }
       res.writeHead(200, { 'content-type': 'application/json', 'mcp-session-id': 's-1' }).end(json)
     })
   })

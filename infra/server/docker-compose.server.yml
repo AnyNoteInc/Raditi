@@ -84,6 +84,8 @@ services:
       <<: [*s3, *gitea-url, *preview-address, *pages-address]
       # The panel of the cloud browser: Traefik routes this path of the apex to the stream gateway
       BROWSER_STREAM_PUBLIC_URL: wss://${APP_DOMAIN}/v1/browser/stream
+      # The check of an MCP server with a key never reaches the platform itself (plan 80)
+      SANDBOX_EGRESS_REFUSED_SUBNETS: ${SANDBOX_EGRESS_REFUSED_SUBNETS:?Set SANDBOX_EGRESS_REFUSED_SUBNETS}
     extra_hosts: *internal-hosts
 
   core:
@@ -257,6 +259,8 @@ services:
       MCP_BROWSER_PROFILE: local
       S3_BUCKET_ARTIFACTS: raditi-artifacts
       PREVIEW_UPSTREAM_HOST: 10.10.0.10
+      # The relay of MCP servers with a key never connects to the platform itself (plan 80)
+      SANDBOX_EGRESS_REFUSED_SUBNETS: ${SANDBOX_EGRESS_REFUSED_SUBNETS:?Set SANDBOX_EGRESS_REFUSED_SUBNETS}
       HOME: /tmp
     volumes:
       - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/mcp' }

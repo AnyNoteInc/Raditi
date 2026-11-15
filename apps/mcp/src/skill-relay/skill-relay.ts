@@ -76,9 +76,10 @@ function failure(res: ServerResponse, status: number, message: string) {
 /** The texts the agent passes on to the client (rule 10): who must do what. */
 export const relayText = Object.freeze({
   refused: (name: string) =>
-    `MCP-сервер «${name}» не принял ключ. Владелец проекта может заменить ключ или войти заново в «MCP-серверах».`,
+    `MCP-сервер «${name}» не принял ключ. Владелец проекта может заменить ключ в настройках проекта, в «Навыках агента».`,
   missing: (name: string) =>
-    `У MCP-сервера «${name}» нет ключа. Владелец проекта может задать его в «MCP-серверах».`,
+    `У MCP-сервера «${name}» нет ключа. Владелец проекта может задать его в настройках проекта, в «Навыках агента».`,
+  replaced: (name: string) => `Ключ MCP-сервера «${name}» только что заменили. Повторите действие.`,
   unreachable: (name: string) => `MCP-сервер «${name}» сейчас не отвечает. Попробуйте позже.`,
   addressRefused: (name: string) =>
     `Адрес MCP-сервера «${name}» ведёт во внутреннюю сеть, туда Радити не ходит.`,
@@ -136,8 +137,20 @@ export class SkillRelay {
     if (access === null) return failure(res, 401, 'MCP token is invalid or expired')
     if (access.siteId === null) return failure(res, 404, 'Not found')
     const siteId = access.siteId
-    const server = await this.deps.servers.find(siteId, name)
+    let server: RelayedServer | null
+    try {
+      server = await this.deps.servers.find(siteId, name)
+    } catch (error) {
+      this.#warn('MCP relay could not read a server', mcpErrorSummary(error))
+      return failure(res, 503, 'MCP authorization is unavailable')
+    }
     if (server === null) return failure(res, 404, 'Not found')
+    if (server.state !== 'ok')
+      return failure(
+        res,
+        502,
+        server.error === 'secret_missing' ? relayText.missing(name) : relayText.refused(name),
+      )
     const active = this.#active.get(access.keyId) ?? 0
     if (active >= skillRelayLimits.perKey) return failure(res, 429, 'Too many MCP requests')
     this.#active.set(access.keyId, active + 1)
@@ -157,7 +170,13 @@ export class SkillRelay {
   ): Promise<void> {
     const started = Date.now()
     const url = new URL(server.url)
-    const read = await this.deps.secrets.read(siteId, name)
+    let read: SkillSecretRead | null
+    try {
+      read = await this.deps.secrets.read(siteId, name)
+    } catch (error) {
+      this.#warn('MCP relay could not read a key', mcpErrorSummary(error))
+      return failure(res, 503, 'MCP authorization is unavailable')
+    }
     const header = read === null ? null : authorizationOf(server, read)
     if (read === null || header === null) {
       await this.#record(siteId, name, 'failed', 'secret_missing')
@@ -186,6 +205,8 @@ export class SkillRelay {
       if (typeof value === 'string') headers[name] = value
     }
     headers[header.name] = header.value
+    // Masking reads the bytes as they come: an answer is asked for and taken uncompressed only.
+    headers['accept-encoding'] = 'identity'
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), skillRelayLimits.timeoutMs)
     const abort = () => controller.abort()
@@ -211,7 +232,8 @@ export class SkillRelay {
       await new Promise<void>((resolve, reject) => {
         const upstream = request(options, (response) => {
           status = response.statusCode ?? 502
-          if (status >= 300 && status < 400) {
+          const encoding = String(response.headers['content-encoding'] ?? 'identity').toLowerCase()
+          if ((status >= 300 && status < 400) || encoding !== 'identity') {
             response.resume()
             failure(res, 502, relayText.unreachable(name))
             resolve()
@@ -220,13 +242,8 @@ export class SkillRelay {
           if (status === 401 || status === 403) {
             response.resume()
             this.deps.secrets.forget(siteId, name)
-            void this.#record(
-              siteId,
-              name,
-              server.authKind === 'oauth' ? 'needs_login' : 'failed',
-              'unauthorized',
-            ).then(() => {
-              failure(res, 502, relayText.refused(name))
+            void this.#refused(siteId, name, server, read.version).then((replaced) => {
+              failure(res, 502, replaced ? relayText.replaced(name) : relayText.refused(name))
               resolve()
             }, reject)
             return
@@ -266,6 +283,33 @@ export class SkillRelay {
     }
   }
 
+  /**
+   * After a server refused the key: Vault is read again, past the cache. A newer version is a key
+   * the owner has just replaced — the refusal was of the old one, and nothing is recorded. Returns
+   * whether it was so.
+   */
+  async #refused(
+    siteId: string,
+    name: string,
+    server: RelayedServer,
+    version: number,
+  ): Promise<boolean> {
+    let current: SkillSecretRead | null = null
+    try {
+      current = await this.deps.secrets.read(siteId, name)
+    } catch (error) {
+      this.#warn('MCP relay could not read a key', mcpErrorSummary(error))
+    }
+    if (current !== null && current.version !== version) return true
+    await this.#record(
+      siteId,
+      name,
+      server.authKind === 'oauth' ? 'needs_login' : 'failed',
+      'unauthorized',
+    )
+    return false
+  }
+
   async #record(
     siteId: string,
     name: string,
@@ -303,10 +347,28 @@ function authorizationOf(server: RelayedServer, read: SkillSecretRead) {
   return null
 }
 
-/** Every secret value of a server: never in what it answers. */
-function secretValuesOf(read: SkillSecretRead): string[] {
+/** The least of a value that is masked on its own: shorter parts would mangle the answer. */
+const MASKED_MIN = 8
+
+/**
+ * Every secret value of a server as a server may repeat it in an answer: whole, without its
+ * scheme (`Bearer sk-…` — a server that says «invalid token sk-…»), escaped in JSON and in a URL.
+ */
+export function secretValuesOf(read: SkillSecretRead): string[] {
   const { secret } = read
-  return 'value' in secret
-    ? [secret.value]
-    : [secret.accessToken, secret.refreshToken ?? '', secret.clientSecret ?? '']
+  const values =
+    'value' in secret
+      ? [secret.value]
+      : [secret.accessToken, secret.refreshToken ?? '', secret.clientSecret ?? '']
+  const forms = new Set<string>()
+  for (const value of values) {
+    if (value.length < MASKED_MIN) continue
+    const unschemed = /^[A-Za-z][A-Za-z0-9._~+-]*\s+(\S.*)$/.exec(value)?.[1]
+    for (const form of unschemed && unschemed.length >= MASKED_MIN ? [value, unschemed] : [value]) {
+      forms.add(form)
+      forms.add(JSON.stringify(form).slice(1, -1))
+      forms.add(encodeURIComponent(form))
+    }
+  }
+  return [...forms]
 }

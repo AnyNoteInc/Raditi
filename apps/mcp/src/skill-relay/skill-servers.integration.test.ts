@@ -59,13 +59,22 @@ describe.skipIf(!enabled)('the servers of the MCP relay with PostgreSQL', () => 
         { siteId, name: 'login', url, authKind: 'oauth', authState: 'needs_login', oauth: {} },
       ],
     })
+    const ok = { state: 'ok', error: null }
     expect(await store.find(siteId, 'keyed')).toEqual({
       url,
       authKind: 'header',
       headerName: 'X-Api-Key',
+      ...ok,
     })
-    expect(await store.find(siteId, 'signed')).toEqual({ url, authKind: 'oauth', headerName: null })
-    for (const name of ['open', 'off', 'login', 'missing'])
+    expect(await store.find(siteId, 'signed')).toEqual({
+      url,
+      authKind: 'oauth',
+      headerName: null,
+      ...ok,
+    })
+    // A server that needs a sign-in is found, with its state: the relay says why it is not served.
+    expect(await store.find(siteId, 'login')).toMatchObject({ state: 'needs_login' })
+    for (const name of ['open', 'off', 'missing'])
       expect(await store.find(siteId, name), name).toBeNull()
     expect(await store.find(other, 'keyed')).toBeNull()
   })
@@ -90,7 +99,10 @@ describe.skipIf(!enabled)('the servers of the MCP relay with PostgreSQL', () => 
       { name: 'keyed', authState: 'failed', authError: 'unauthorized', authCheckedAt: at },
       { name: 'open', authState: 'ok', authError: null, authCheckedAt: null },
     ])
-    // A failed server is not served until the owner fixes it.
-    expect(await store.find(siteId, 'keyed')).toBeNull()
+    // A failed server is not served until the owner fixes it; the relay reads why.
+    expect(await store.find(siteId, 'keyed')).toMatchObject({
+      state: 'failed',
+      error: 'unauthorized',
+    })
   })
 })

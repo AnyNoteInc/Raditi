@@ -17,6 +17,7 @@ const prodEnv = {
   APP_URL: 'https://raditi.ru',
   METRICS_TOKEN: PROD_METRICS_TOKEN,
   REDIS_URL: 'rediss://redis.internal:6380',
+  SANDBOX_EGRESS_REFUSED_SUBNETS: '45.8.250.117/32',
 }
 
 describe('webEnvFromEnv', () => {
@@ -55,6 +56,9 @@ describe('webEnvFromEnv', () => {
     expect(() =>
       webEnvFromEnv({ ...devEnv, SANDBOX_EGRESS_REFUSED_SUBNETS: '45.8.250.0' }),
     ).toThrow(/SANDBOX_EGRESS_REFUSED_SUBNETS/)
+    expect(() => webEnvFromEnv({ ...prodEnv, SANDBOX_EGRESS_REFUSED_SUBNETS: '' })).toThrow(
+      /SANDBOX_EGRESS_REFUSED_SUBNETS/,
+    )
     expect(() => webEnvFromEnv({ ...prodEnv, MCP_SKILL_RELAY_LOOPBACK: 'on' })).toThrow(
       /MCP_SKILL_RELAY_LOOPBACK/,
     )

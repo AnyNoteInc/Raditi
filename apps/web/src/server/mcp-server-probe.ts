@@ -93,6 +93,8 @@ export function createMcpServerProbe(options: McpServerProbeOptions): McpServerP
         method: 'POST' | 'DELETE',
         body: string | null,
         extra: Record<string, string>,
+        /** The id of the answer awaited: a stream ends here once that message has come. */
+        id: number | null = null,
       ): Promise<Answer> =>
         new Promise((resolveAnswer, reject) => {
           const headers: Record<string, string> = {
@@ -112,6 +114,9 @@ export function createMcpServerProbe(options: McpServerProbeOptions): McpServerP
               method,
               headers,
               timeout: TIMEOUT_MS,
+              // The whole request, not only an idle socket: a stream that keeps itself open with
+              // pings ends here too.
+              signal: AbortSignal.timeout(TIMEOUT_MS),
               ...(secure ? { servername: url.hostname } : {}),
             },
             (res) => {
@@ -126,6 +131,20 @@ export function createMcpServerProbe(options: McpServerProbeOptions): McpServerP
                   return
                 }
                 chunks.push(chunk)
+                // A stream may stay open after its answer: the answer is enough.
+                const answer = {
+                  status: res.statusCode ?? 0,
+                  headers: res.headers,
+                  body: Buffer.concat(chunks).toString('utf8'),
+                }
+                if (
+                  id !== null &&
+                  String(res.headers['content-type'] ?? '').includes('text/event-stream') &&
+                  messageOf(answer, id) !== null
+                ) {
+                  resolveAnswer(answer)
+                  req.destroy()
+                }
               })
               res.on('end', () =>
                 resolveAnswer({
@@ -170,6 +189,7 @@ export function createMcpServerProbe(options: McpServerProbeOptions): McpServerP
           },
         }),
         {},
+        1,
       )
       const first = refusedBy(initialized)
       if (first) throw first
@@ -189,6 +209,7 @@ export function createMcpServerProbe(options: McpServerProbeOptions): McpServerP
         'POST',
         JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
         follow,
+        2,
       )
       const second = refusedBy(listed)
       if (second) throw second

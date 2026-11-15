@@ -9,6 +9,7 @@ import {
   DomainError,
   isBuiltinAgentSkill,
   parseAgentSkillUrl,
+  siteEnvVarTombstone,
   type AgentSkillAuthKind,
   type AgentSkillAuthState,
 } from '@repo/domain'
@@ -190,6 +191,21 @@ async function storeCheckedKey(
   return written.version
 }
 
+/**
+ * Erases the key a failed request wrote, and only while it is still that version: a request of the
+ * same name that won meanwhile keeps its own (CAS).
+ */
+async function eraseOwnVersion(
+  services: McpServerServices,
+  path: string,
+  version: number,
+  now: Date,
+): Promise<void> {
+  const metadata = await services.secrets.kvMetadata(path)
+  if (metadata?.currentVersion !== version) return
+  await services.secrets.kvWrite(path, siteEnvVarTombstone(now), { cas: version, maxVersions: 1 })
+}
+
 /** One change of the skills of a site; an owner or an admin only, audited. */
 export async function changeSiteAgentSkills(
   db: PrismaClient,
@@ -313,7 +329,7 @@ export async function changeSiteAgentSkills(
     // A new server's key that no row will name is erased; a replaced key stays — the row still
     // names the server, and its next key is written over it.
     if (change.kind === 'add' && keyVersion !== null && services !== null)
-      await eraseSiteSecret(services.secrets, secretPath, now).catch(() => undefined)
+      await eraseOwnVersion(services, secretPath, keyVersion, now).catch(() => undefined)
     throw error
   }
   return readSiteAgentSkills(db, input)

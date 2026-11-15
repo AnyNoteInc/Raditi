@@ -152,6 +152,13 @@ const webEnvSchema = z
         message: 'must use wss in production',
       })
     }
+    if (isProduction(env.APP_ENV) && (env.SANDBOX_EGRESS_REFUSED_SUBNETS ?? '').trim() === '')
+      ctx.addIssue({
+        code: 'custom',
+        path: ['SANDBOX_EGRESS_REFUSED_SUBNETS'],
+        message:
+          'required in production (the platform subnets the check of an MCP server never reaches)',
+      })
     if (isProduction(env.APP_ENV) && env.MCP_SKILL_RELAY_LOOPBACK === 'on')
       ctx.addIssue({
         code: 'custom',

@@ -350,6 +350,12 @@ export function loadMcpConfig(env: Env): McpConfig {
         'BROWSER_WORKER_URL: plain http only to a private or loopback IP address in production (spec §19)',
       )
   }
+  // The relay of MCP servers must know the platform's own public addresses (plan 80): without
+  // them a server named by an owner could be the platform itself.
+  if (production && (own.SANDBOX_EGRESS_REFUSED_SUBNETS ?? '').trim() === '')
+    problems.push(
+      'SANDBOX_EGRESS_REFUSED_SUBNETS: required in production (the platform subnets the relay of MCP servers never reaches)',
+    )
   // A loopback MCP server is a test's or a stand's: production relays to the internet alone.
   if (production && own.MCP_SKILL_RELAY_LOOPBACK === 'on')
     problems.push('MCP_SKILL_RELAY_LOOPBACK: only off is allowed in production')

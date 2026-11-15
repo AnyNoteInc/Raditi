@@ -410,6 +410,9 @@ describe('siteAgentSkills', () => {
     )
     await caller.siteAgentSkills.remove({ siteId, name: 'menu' })
     expect(vault).toEqual([{ path, data: { removed: expect.any(String) }, cas: 1 }])
-    expect(writes.map(([kind]) => kind)).toEqual(['delete', 'credentialRef.deleteMany'])
+    expect((writes as unknown[][]).map(([kind]) => kind)).toEqual([
+      'delete',
+      'credentialRef.deleteMany',
+    ])
   })
 })

@@ -1,12 +1,18 @@
 import type { PrismaClient } from '@repo/db'
-import { parseAgentSkillUrl, type AgentSkillAuthState } from '@repo/domain'
+import {
+  agentSkillHeaderNameSchema,
+  parseAgentSkillUrl,
+  type AgentSkillAuthState,
+} from '@repo/domain'
 
-/** An added MCP server the relay may serve now: on, with authorization that works. */
+/** An added MCP server with authorization; the relay serves it while its state is `ok`. */
 export interface RelayedServer {
   url: string
   authKind: 'header' | 'oauth'
   /** The owner's header, for `header`. */
   headerName: string | null
+  state: AgentSkillAuthState
+  error: string | null
 }
 
 /** What the relay learned of a server's authorization: its state and a code, never a text. */
@@ -17,7 +23,7 @@ export interface RelayOutcome {
 }
 
 export interface SkillServerStore {
-  /** The server of a site by its name; null for one that is off, open or needs a sign-in. */
+  /** The server of a site by its name; null for one that is off or has no authorization. */
   find(siteId: string, name: string): Promise<RelayedServer | null>
   /** Writes the state of its authorization; a server turned to none meanwhile is left alone. */
   record(siteId: string, name: string, outcome: RelayOutcome): Promise<void>
@@ -33,14 +39,31 @@ export class PostgresSkillServers implements SkillServerStore {
   async find(siteId: string, name: string): Promise<RelayedServer | null> {
     const row = await this.prisma.siteAgentSkill.findUnique({
       where: { siteId_name: { siteId, name } },
-      select: { url: true, enabled: true, authKind: true, headerName: true, authState: true },
+      select: {
+        url: true,
+        enabled: true,
+        authKind: true,
+        headerName: true,
+        authState: true,
+        authError: true,
+      },
     })
-    if (row === null || !row.enabled || row.authKind === 'none' || row.authState !== 'ok')
-      return null
-    // The address as the platform keeps it, read again: a row written past the check goes nowhere.
+    if (row === null || !row.enabled || row.authKind === 'none') return null
+    // The address and the header as the platform keeps them, read again: a row written past the
+    // checks goes nowhere and sets no header of the relay's own.
     if (row.url === null || parseAgentSkillUrl(row.url) !== row.url) return null
-    if (row.authKind === 'header' && row.headerName === null) return null
-    return { url: row.url, authKind: row.authKind, headerName: row.headerName }
+    if (
+      row.authKind === 'header' &&
+      (row.headerName === null || !agentSkillHeaderNameSchema.safeParse(row.headerName).success)
+    )
+      return null
+    return {
+      url: row.url,
+      authKind: row.authKind,
+      headerName: row.headerName,
+      state: row.authState,
+      error: row.authError,
+    }
   }
 
   async record(siteId: string, name: string, outcome: RelayOutcome): Promise<void> {

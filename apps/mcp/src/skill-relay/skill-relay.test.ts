@@ -5,7 +5,7 @@ import { ENV_VALUE_MASK } from '@repo/domain'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { McpAccessStore, McpTurnAccess } from '../access/mcp-access.ts'
-import { relayText, SkillRelay } from './skill-relay.ts'
+import { relayText, secretValuesOf, SkillRelay } from './skill-relay.ts'
 import type { SkillSecretRead } from './skill-secrets.ts'
 import type { RelayedServer, RelayOutcome, SkillServerStore } from './skill-servers.ts'
 import { upstreamResolver } from './upstream.ts'
@@ -40,6 +40,9 @@ async function stand(
     answer?: (seen: Seen) => { status: number; headers?: Record<string, string>; body: string }
     server?: Partial<RelayedServer> | null
     secret?: SkillSecretRead | null
+    /** What Vault holds when the relay reads it again after a refusal. */
+    secretAfter?: SkillSecretRead | null
+    findFails?: boolean
     siteId?: string | null
     resolveTo?: string
   } = {},
@@ -71,16 +74,19 @@ async function stand(
   })
   const recorded: RelayOutcome[] = []
   const store: SkillServerStore = {
-    find: vi.fn(async () =>
-      options.server === null
+    find: vi.fn(async () => {
+      if (options.findFails) throw new Error('database is down')
+      return options.server === null
         ? null
         : {
             url: `http://upstream.example.com:${upstreamPort}/v1/mcp`,
             authKind: 'header' as const,
             headerName: 'X-Api-Key',
+            state: 'ok' as const,
+            error: null,
             ...options.server,
-          },
-    ),
+          }
+    }),
     record: vi.fn(async (_site, _name, outcome) => void recorded.push(outcome)),
   }
   const access: McpAccessStore = {
@@ -99,9 +105,18 @@ async function stand(
     security: { allowedHosts: ['sandbox-gw', '127.0.0.1'], allowLocalOrigin: false },
     servers: store,
     secrets: {
-      read: vi.fn(async () =>
-        options.secret === undefined ? { secret: { value: SECRET }, version: 1 } : options.secret,
-      ),
+      read: vi
+        .fn<() => Promise<SkillSecretRead | null>>()
+        .mockImplementationOnce(async () =>
+          options.secret === undefined ? { secret: { value: SECRET }, version: 1 } : options.secret,
+        )
+        .mockImplementation(async () =>
+          options.secretAfter !== undefined
+            ? options.secretAfter
+            : options.secret === undefined
+              ? { secret: { value: SECRET }, version: 1 }
+              : options.secret,
+        ),
       forget,
     },
     resolve: upstreamResolver({
@@ -270,5 +285,45 @@ describe('SkillRelay', () => {
     const body = 'x'.repeat(4 * 1024 * 1024 + 1)
     expect((await call('/mcp/skill/menu', { body })).status).toBe(413)
     expect(seen).toEqual([])
+  })
+
+  it('masks the key after its scheme and as JSON escapes it', async () => {
+    const value = 'Bearer sk_live_quote"slash\\end'
+    expect(secretValuesOf({ secret: { value }, version: 1 })).toEqual(
+      expect.arrayContaining([value, 'sk_live_quote"slash\\end', 'sk_live_quote\\"slash\\\\end']),
+    )
+    const { call } = await stand({
+      secret: { secret: { value: 'Bearer sk_live_0123456789' }, version: 1 },
+      answer: () => ({ status: 200, body: '{"error":"invalid token sk_live_0123456789"}' }),
+    })
+    expect((await call('/mcp/skill/menu')).body).toBe(`{"error":"invalid token ${ENV_VALUE_MASK}"}`)
+  })
+
+  it('takes no compressed answer, which the masking could not read', async () => {
+    const { call } = await stand({
+      answer: () => ({ status: 200, headers: { 'content-encoding': 'gzip' }, body: 'x' }),
+    })
+    expect((await call('/mcp/skill/menu')).status).toBe(502)
+  })
+
+  it('does not mark a key refused when the owner has replaced it meanwhile', async () => {
+    const { call, recorded } = await stand({
+      answer: () => ({ status: 401, body: '' }),
+      secretAfter: { secret: { value: 'sk_live_new_0123456789' }, version: 2 },
+    })
+    const result = await call('/mcp/skill/menu')
+    expect(JSON.parse(result.body)).toMatchObject({
+      error: { message: relayText.replaced('menu') },
+    })
+    expect(recorded).toEqual([])
+  })
+
+  it('says why a server that does not work now is not served, and a database failure is a refusal', async () => {
+    const failed = await stand({ server: { state: 'failed', error: 'unauthorized' } })
+    const result = await failed.call('/mcp/skill/menu')
+    expect(JSON.parse(result.body)).toMatchObject({ error: { message: relayText.refused('menu') } })
+    expect(failed.seen).toEqual([])
+    const down = await stand({ findFails: true })
+    expect((await down.call('/mcp/skill/menu')).status).toBe(503)
   })
 })
