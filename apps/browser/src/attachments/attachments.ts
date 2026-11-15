@@ -91,8 +91,6 @@ export class AttachmentFiles {
 
   async read(input: {
     taskId: string
-    /** null — a chat without a site: its files have none either. */
-    siteId: string | null
     attachmentIds: readonly string[]
   }): Promise<BrowserFile[]> {
     const unknown = () => browserTaskError('BROWSER_ATTACHMENT_UNKNOWN')
@@ -103,7 +101,6 @@ export class AttachmentFiles {
       const row = await this.#store.attachment({ id, taskId: input.taskId })
       if (
         row === null ||
-        row.siteId !== input.siteId ||
         row.sizeBytes < 1 ||
         row.sizeBytes > attachmentLimits.fileBytes ||
         row.s3Key !== attachmentKey(row.workspaceId, row.id)

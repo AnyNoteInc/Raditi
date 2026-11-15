@@ -82,7 +82,6 @@ describe('SessionManager.ensure', () => {
       manager.ensure({
         sessionId: row.id,
         taskId: row.taskId,
-        siteId: row.siteId,
         takeControl: true,
         ...overrides,
       })
@@ -90,8 +89,6 @@ describe('SessionManager.ensure', () => {
     expect(await codeOf(ensure(unknown))).toBe('NOT_FOUND')
     const other = store.open()
     expect(await codeOf(ensure(other, { taskId: randomUUID() }))).toBe('NOT_FOUND')
-    // A row of a session of a site, as a database from before plan 83 may hold: no browser.
-    expect(await codeOf(ensure(store.openOfSite()))).toBe('CONFLICT')
 
     // Started by a worker before this one: its sign-in is gone with it (Б18).
     const held = store.open({ readyAt: new Date() })
@@ -111,7 +108,6 @@ describe('SessionManager.ensure', () => {
       manager.ensure({
         sessionId: row.id,
         taskId: row.taskId,
-        siteId: row.siteId,
         takeControl: true,
       }),
     )
@@ -149,7 +145,6 @@ describe('SessionManager.ensure', () => {
         manager.ensure({
           sessionId: row.id,
           taskId: row.taskId,
-          siteId: row.siteId,
           takeControl: true,
         }),
       ),
@@ -162,7 +157,7 @@ describe('the browser of a chat without a site (plan 61, К12)', () => {
 
   it('starts on an empty page with no host, sign-in or site of its own', async () => {
     const { runtime, ensuredWithoutSite } = setup(PLATFORM)
-    const { row, state, session, browser } = await ensuredWithoutSite()
+    const { row, state, browser } = await ensuredWithoutSite()
     expect(runtime.started).toEqual([
       expect.objectContaining({
         sessionId: row.id,
@@ -182,34 +177,6 @@ describe('the browser of a chat without a site (plan 61, К12)', () => {
       startUrl: null,
     })
     expect(state).toMatchObject({ status: 'ready', url: 'about:blank', controller: 'agent' })
-    expect(session.siteId).toBeNull()
-    // Nothing to sign in to.
-    await settle()
-    expect(browser.signIns).toEqual([])
-  })
-
-  it('keeps no sign-in a caller names: there is nothing to sign in to', async () => {
-    const { store, manager, browsers } = setup()
-    const row = store.openWithoutSite()
-    const signIn = { login: 'admin', password: 'correct horse battery' }
-    const ensure = () =>
-      manager.ensure({
-        sessionId: row.id,
-        taskId: row.taskId,
-        takeControl: false,
-        signIn,
-      })
-    await ensure()
-    await settle()
-    await ensure()
-    await settle()
-    expect(browsers.last.signIns).toEqual([])
-    await manager.act(row.id, {
-      taskId: row.taskId,
-      assignmentId: randomUUID(),
-      action: { tool: 'web_observe' },
-    })
-    expect(browsers.last.signIns).toEqual([])
   })
 
   it('hands the next turn of a chat the browser it has', async () => {
@@ -223,48 +190,6 @@ describe('the browser of a chat without a site (plan 61, К12)', () => {
     expect(next).toMatchObject({ status: 'ready', url: 'about:blank' })
     expect(manager.session(row.id)).toBe(session)
     expect(runtime.started).toHaveLength(1)
-  })
-
-  it('never hands a held session to a caller that names a site, nor starts one for it', async () => {
-    const { store, manager, runtime, ensuredWithoutSite } = setup()
-    const held = await ensuredWithoutSite()
-    await expect(
-      manager.ensure({
-        sessionId: held.row.id,
-        taskId: held.row.taskId,
-        siteId: randomUUID(),
-        takeControl: false,
-      }),
-    ).rejects.toThrow('The browser session belongs to another task')
-    const fresh = store.open()
-    await expect(
-      manager.ensure({
-        sessionId: fresh.id,
-        taskId: fresh.taskId,
-        siteId: randomUUID(),
-        takeControl: false,
-      }),
-    ).rejects.toThrow('Browser session not found')
-    expect(runtime.started).toHaveLength(1)
-  })
-
-  it('starts nothing for a row of a site, whatever its task says (plan 83, БП1)', async () => {
-    const { store, manager, runtime } = setup()
-    const site = store.openOfSite()
-    await expect(
-      manager.ensure({
-        sessionId: site.id,
-        taskId: site.taskId,
-        siteId: site.siteId,
-        takeControl: false,
-      }),
-    ).rejects.toThrow('The browser session is not of a chat')
-    const row = store.open()
-    store.sessions.get(row.id)!.taskSiteId = randomUUID()
-    await expect(
-      manager.ensure({ sessionId: row.id, taskId: row.taskId, takeControl: false }),
-    ).rejects.toThrow('The browser session is not of a chat')
-    expect(runtime.started).toEqual([])
   })
 
   it('opens any public https address, and refuses the rest for the agent and the client', async () => {
@@ -415,7 +340,6 @@ describe('control of the browser', () => {
     await manager.ensure({
       sessionId: row.id,
       taskId: row.taskId,
-      siteId: row.siteId,
       takeControl: true,
     })
     expect(viewer.last).toMatchObject({ controller: 'agent', controlEpoch: 4 })
@@ -441,7 +365,6 @@ describe('control of the browser', () => {
     await manager.ensure({
       sessionId: row.id,
       taskId: row.taskId,
-      siteId: row.siteId,
       takeControl: true,
     })
     // The start tells the browser first: the agent holds a new session.
@@ -510,7 +433,6 @@ describe('control of the browser', () => {
     await manager.ensure({
       sessionId: row.id,
       taskId: row.taskId,
-      siteId: row.siteId,
       takeControl: true,
     })
     expect(await codeOf(fill('o2'))).toBe('BROWSER_STALE_OBSERVATION')
@@ -656,7 +578,6 @@ describe('the agent’s actions', () => {
     await manager.ensure({
       sessionId: row.id,
       taskId: row.taskId,
-      siteId: row.siteId,
       takeControl: false,
     })
     await act(row, { tool: 'web_type', text: 'и ещё раз' })
@@ -665,7 +586,6 @@ describe('the agent’s actions', () => {
     await manager.ensure({
       sessionId: row.id,
       taskId: row.taskId,
-      siteId: row.siteId,
       takeControl: true,
     })
     await settle()
@@ -686,7 +606,6 @@ describe('the agent’s actions', () => {
         id,
         taskId,
         workspaceId,
-        siteId: row.siteId,
         s3Key,
         fileName: 'фото.jpg',
         contentType: 'image/jpeg',
@@ -741,7 +660,6 @@ describe('the agent’s actions', () => {
     await manager.ensure({
       sessionId: row.id,
       taskId: row.taskId,
-      siteId: row.siteId,
       takeControl: true,
     })
     await settle()
@@ -836,7 +754,6 @@ describe('the end of a session', () => {
     await manager.ensure({
       sessionId: row.id,
       taskId: row.taskId,
-      siteId: row.siteId,
       takeControl: true,
     })
     answer()
@@ -885,7 +802,6 @@ describe('the end of a session', () => {
       .ensure({
         sessionId: row.id,
         taskId: row.taskId,
-        siteId: row.siteId,
         takeControl: true,
       })
       .then(

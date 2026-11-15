@@ -28,10 +28,6 @@ import type {
 export interface StoredBrowserSession {
   id: string
   taskId: string
-  /** null — a session of a chat; a session of a site is no longer served (plan 83, БП1). */
-  siteId: string | null
-  /** `tasks.site_id` of its task: one that names a site starts no browser either. */
-  taskSiteId: string | null
   status: BrowserSessionStatus
   /** The hard deadline core gave it. */
   expiresAt: Date
@@ -48,8 +44,6 @@ export interface StoredBrowserSession {
 export interface StoredAttachment {
   id: string
   workspaceId: string
-  /** null — a file of a chat without a site. */
-  siteId: string | null
   s3Key: string
   fileName: string
   contentType: string
@@ -118,17 +112,13 @@ export class PostgresBrowserWorkerStore implements BrowserWorkerStore {
       select: {
         id: true,
         taskId: true,
-        siteId: true,
         status: true,
         expiresAt: true,
         readyAt: true,
         lastActivityAt: true,
-        task: { select: { siteId: true } },
       },
     })
-    if (!row) return null
-    const { task, ...session } = row
-    return { ...session, taskSiteId: task.siteId }
+    return row
   }
 
   markReady(sessionId: string): Promise<boolean> {
@@ -189,7 +179,6 @@ export class PostgresBrowserWorkerStore implements BrowserWorkerStore {
     return {
       id: row.id,
       workspaceId: row.workspaceId,
-      siteId: row.siteId,
       s3Key: row.s3Key,
       fileName: row.fileName,
       contentType: row.contentType,

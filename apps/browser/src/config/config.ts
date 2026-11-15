@@ -11,16 +11,19 @@ import {
   isProduction,
   pagesBaseDomainSchema,
   parseEgressHost,
-  previewImageSchema,
-  previewRuntimes,
   type AppEnv,
   type Env,
-  type PreviewRuntimeKind,
 } from '@repo/domain'
 import { ConfigError } from '@repo/app-bootstrap'
 import { ipLiteral } from '@repo/ip-address'
 import { DEV_METRICS_TOKEN, metricsTokenProblem } from '@repo/observability'
-import { egressRefusedSubnetsVar, type DockerBrowserSessionConfig } from '@repo/sandbox-providers'
+import {
+  egressRefusedSubnetsVar,
+  sessionImageSchema,
+  sessionRuntimes,
+  type DockerBrowserSessionConfig,
+  type SessionRuntimeKind,
+} from '@repo/sandbox-providers'
 import { storageConfigFromEnv, type StorageConfig } from '@repo/storage'
 import { z } from 'zod'
 
@@ -93,7 +96,7 @@ export interface BrowserWorkerConfig {
 const bounded = (bounds: { min: number; max: number }, fallback: number) =>
   envVar(z.coerce.number().int().min(bounds.min).max(bounds.max).default(fallback))
 
-const image = envVar(previewImageSchema.optional())
+const image = envVar(sessionImageSchema.optional())
 
 const ownEnvSchema = z.object({
   // Required, never defaulted: a missing APP_ENV must not switch the production checks off.
@@ -119,7 +122,7 @@ const ownEnvSchema = z.object({
       .regex(/^\S+$/, 'must not contain whitespace (it is sent as a Bearer token)')
       .optional(),
   ),
-  BROWSER_RUNTIME: envVar(z.enum(previewRuntimes).optional()),
+  BROWSER_RUNTIME: envVar(z.enum(sessionRuntimes).optional()),
   // A local Unix socket only, never DOCKER_HOST or TCP.
   BROWSER_DOCKER_SOCKET: envVar(
     z
@@ -226,7 +229,7 @@ export function loadBrowserConfig(env: Env): BrowserWorkerConfig {
     buckets: { inbox: read.buckets.inbox },
   }
 
-  const runtimeKind: PreviewRuntimeKind = own.BROWSER_RUNTIME ?? (production ? 'runsc' : 'runc')
+  const runtimeKind: SessionRuntimeKind = own.BROWSER_RUNTIME ?? (production ? 'runsc' : 'runc')
   // Page scripts of the open internet run in this Chromium: gVisor is the boundary (rule 5).
   if (production && runtimeKind !== 'runsc')
     problems.push('BROWSER_RUNTIME: production browsers run under gVisor (runsc)')

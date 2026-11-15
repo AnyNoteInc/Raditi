@@ -100,8 +100,6 @@ export interface SessionContext {
   files: {
     read(input: {
       taskId: string
-      /** null — a file of a chat without a site. */
-      siteId: string | null
       attachmentIds: readonly string[]
     }): Promise<BrowserFile[]>
   }
@@ -142,8 +140,6 @@ export interface SessionSettings {
 export interface SessionSpec {
   id: string
   taskId: string
-  /** null — a chat without a site (docs/plan/61-chats-first.md, К12), from the session's row. */
-  siteId: string | null
   /** A chat without a site: any public https site opens, nothing there is an object of the task. */
   openWeb: boolean
   adapter: BrowserObjects
@@ -228,7 +224,6 @@ const toFragment = (from: string, to: string) =>
 export class WorkerSession {
   readonly id: string
   readonly taskId: string
-  readonly siteId: string | null
   #spec: SessionSpec
   readonly #context: SessionContext
   #status: BrowserSessionStatus = 'starting'
@@ -273,7 +268,6 @@ export class WorkerSession {
   ) {
     this.id = spec.id
     this.taskId = spec.taskId
-    this.siteId = spec.siteId
     this.#spec = spec
     this.#context = context
     this.#onEnded = onEnded
@@ -329,8 +323,8 @@ export class WorkerSession {
       const { endpoint } = await runtime.start({
         sessionId: spec.id,
         taskId: spec.taskId,
-        // What the containers are labelled by: without a site, the task.
-        siteId: spec.siteId ?? spec.taskId,
+        // What the containers are labelled by: the chat (`leaseScopeOf`).
+        siteId: spec.taskId,
         allowedHosts: spec.allowedHosts,
         localSites: [],
         openWeb: spec.openWeb,
@@ -867,7 +861,6 @@ export class WorkerSession {
           try {
             files = await this.#context.files.read({
               taskId: this.taskId,
-              siteId: this.siteId,
               attachmentIds: message.attachmentIds,
             })
           } catch {
@@ -1097,7 +1090,6 @@ export class WorkerSession {
         const ref = action.ref === undefined ? undefined : this.#ref(action.observation, action.ref)
         const files = await this.#context.files.read({
           taskId: this.taskId,
-          siteId: this.siteId,
           attachmentIds: action.attachmentIds,
         })
         this.#markWrote()

@@ -17,8 +17,6 @@ import {
   type BrowserSessionRuntime,
   type BrowserSessionRuntimeSpec,
   type BrowserSessionStatus,
-  type BrowserSignIn,
-  type BrowserSignInOutcome,
   type BrowserTab,
   type BrowserVerificationPlan,
   type BrowserVerificationReading,
@@ -298,16 +296,6 @@ export class FakeCloudBrowser implements CloudBrowserSession {
     this.controllers.push(controller)
   }
 
-  /** The sign-ins asked for, in order (Б36). */
-  readonly signIns: BrowserSignIn[] = []
-  /** What a sign-in does: `absent` unless a test puts the page on the form. */
-  onSignIn: (credentials: BrowserSignIn) => Promise<BrowserSignInOutcome> = async () => 'absent'
-
-  async signIn(credentials: BrowserSignIn): Promise<BrowserSignInOutcome> {
-    this.signIns.push(credentials)
-    return this.onSignIn(credentials)
-  }
-
   async verify(plan: BrowserVerificationPlan): Promise<BrowserVerificationReading> {
     this.verified.push(plan)
     return this.reading(plan)
@@ -391,7 +379,6 @@ export class FakeStore implements BrowserWorkerStore {
     const row: StoredBrowserSession = {
       id: randomUUID(),
       taskId: randomUUID(),
-      taskSiteId: null,
       status: 'starting',
       expiresAt: new Date(Date.now() + (input.expiresInMs ?? 3_600_000)),
       readyAt: input.readyAt ?? null,
@@ -401,20 +388,11 @@ export class FakeStore implements BrowserWorkerStore {
     return row
   }
 
-  /** A row of a session of a site, as a database from before plan 83 may still hold. */
-  openOfSite() {
-    const siteId = randomUUID()
-    const row: StoredBrowserSession = { ...this.open(), siteId, taskSiteId: siteId }
-    this.sessions.set(row.id, row)
-    return row
-  }
-
   /** A live session of a new chat without a site (docs/plan/61-chats-first.md, К12). */
   openWithoutSite(input: { expiresInMs?: number } = {}) {
     const row: StoredBrowserSession = {
       id: randomUUID(),
       taskId: randomUUID(),
-      taskSiteId: null,
       status: 'starting',
       expiresAt: new Date(Date.now() + (input.expiresInMs ?? 3_600_000)),
       readyAt: null,

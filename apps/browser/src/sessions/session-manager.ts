@@ -69,7 +69,7 @@ const HOUR_MS = 3_600_000
 const EXTEND_AHEAD_MS = 10 * 60_000
 
 /** `ensure` as this worker reads it: a saved sign-in the caller may still send is never taken. */
-type EnsuredSession = Omit<BrowserEnsureRequest, 'signIn'>
+type EnsuredSession = BrowserEnsureRequest
 
 /** Where a session's browser may go and what it knows about its pages. */
 type SessionPlace = Pick<
@@ -144,12 +144,10 @@ export class SessionManager {
   /** `POST /v1/sessions/ensure`. */
   async ensure(input: BrowserEnsureRequest): Promise<BrowserSessionState> {
     // Ids as PostgreSQL spells them: the session of another spelling is the same session.
-    const { signIn: _signIn, ...rest } = input
     const request: EnsuredSession = {
-      ...rest,
+      ...input,
       sessionId: input.sessionId.toLowerCase(),
       taskId: input.taskId.toLowerCase(),
-      siteId: input.siteId?.toLowerCase() ?? null,
     }
     const session = await this.#held(request)
     if (!session.live) {
@@ -168,7 +166,7 @@ export class SessionManager {
     const id = request.sessionId
     const known = this.#sessions.get(id) ?? (await this.#starting.get(id))
     if (known) {
-      if (known.taskId !== request.taskId || known.siteId !== request.siteId)
+      if (known.taskId !== request.taskId)
         throw conflict('The browser session belongs to another task')
       return known
     }
@@ -189,11 +187,7 @@ export class SessionManager {
     if (new Set([...this.#sessions.keys(), ...this.#starting.keys()]).size >= settings.maxSessions)
       throw browserTaskError('BROWSER_SESSION_UNAVAILABLE')
     const row = await store.session(request.sessionId)
-    if (!row || row.taskId !== request.taskId || row.siteId !== request.siteId)
-      throw notFound('Browser session not found')
-    // A session of a site is no longer served: there are no projects (plan 83, БП1).
-    if (row.siteId !== null || row.taskSiteId !== null)
-      throw conflict('The browser session is not of a chat')
+    if (!row || row.taskId !== request.taskId) throw notFound('Browser session not found')
     if (!isBrowserSessionLive(row.status)) throw conflict('The browser session is closed')
     if (row.readyAt !== null) {
       // Another worker process started it and is gone with its sign-in (Б18).
@@ -217,7 +211,6 @@ export class SessionManager {
         ...OPEN_WEB,
         id: row.id,
         taskId: row.taskId,
-        siteId: row.siteId,
         platformHosts: settings.platformHosts,
         pageDomain: settings.pageDomain,
         deadline,
