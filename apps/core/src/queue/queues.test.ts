@@ -32,10 +32,18 @@ describe('queueJobDefaults', () => {
     })
   })
 
+  it('starts a run of a scheduled task eight times, from 30 s doubling (docs/plan/82, Зп21)', () => {
+    expect(queueJobDefaults.schedules).toEqual({
+      attempts: 8,
+      backoff: { type: 'exponential', delay: 30_000 },
+      removeOnComplete: { age: DAY, count: 1_000 },
+      removeOnFail: { age: 7 * DAY },
+    })
+  })
+
   it('keeps completed jobs of the other queues for a day (at most 1000), failed for a week', () => {
-    for (const name of queueNames.filter(
-      (queue) => queue !== 'notifications' && queue !== 'leads' && queue !== 'telegram',
-    )) {
+    const retried = ['notifications', 'leads', 'telegram', 'schedules']
+    for (const name of queueNames.filter((queue) => !retried.includes(queue))) {
       expect(queueJobDefaults[name]).toMatchObject({
         attempts: 1,
         removeOnComplete: { age: DAY, count: 1_000 },

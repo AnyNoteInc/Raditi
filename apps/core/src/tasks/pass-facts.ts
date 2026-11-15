@@ -1,6 +1,7 @@
 import { attemptCreditBudget } from '@repo/billing'
 import {
   classProfile,
+  passUnattended,
   taskAttachments,
   taskBrowserCheckpoints,
   type BrowserCheckpointRecord,
@@ -132,6 +133,8 @@ export async function readPassFacts(
       workspace: { select: { dataClass: true } },
       // The author's own instructions to the agent (docs/plan/76-agent-instructions.md, И2).
       createdBy: { select: { agentInstructions: { select: { text: true } } } },
+      // The run of a scheduled task the chat is (docs/plan/82-scheduled-tasks.md, Зп27, Зп29).
+      scheduledRun: { select: { name: true } },
       site: {
         select: {
           stack: true,
@@ -318,6 +321,11 @@ export async function readPassFacts(
   // The files of a repository task go into the sandbox of its turn (spec §8, «Подготовка»), and
   // so do those of a chat without a site (docs/plan/61, К16).
   const attachments = requirements.repository || site === null ? files : []
+  // A pass of a run before the first words of its client goes without them (Зп27, Зп29).
+  const unattended =
+    task.scheduledRun && (await passUnattended(db, task.id))
+      ? { name: task.scheduledRun.name }
+      : null
   return {
     task: {
       id: task.id,
@@ -331,6 +339,7 @@ export async function readPassFacts(
     ...(browser ? { browser } : {}),
     agentNotes: site?.agentNotes ?? null,
     clientInstructions: task.createdBy?.agentInstructions?.text ?? null,
+    ...(unattended ? { unattended } : {}),
     ...(attachments.length ? { attachments } : {}),
     repo: repository
       ? {

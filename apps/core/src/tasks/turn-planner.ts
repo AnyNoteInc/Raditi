@@ -46,6 +46,7 @@ import {
   CHAT_TITLE_SECTION,
   requestedFormatsSection,
   turnInstructions,
+  unattendedSection,
   type PreviewFacts,
 } from './turn-instructions.ts'
 
@@ -209,6 +210,12 @@ export interface PassFacts {
   agentNotes?: string | null
   /** The author's own instructions to the agent (docs/plan/76-agent-instructions.md, И2). */
   clientInstructions?: string | null
+  /**
+   * The pass of a run of a scheduled task before the first words of its client (`passUnattended`,
+   * docs/plan/82-scheduled-tasks.md, Зп27, Зп29), with the name of its task; absent — an ordinary
+   * pass.
+   */
+  unattended?: { name: string } | null
   /**
    * The files bound to a task with a repository or to a chat without a site, in the order they
    * were sent: the latest go into the sandbox of its turn (turnInboxOf). Absent or empty — none.
@@ -838,7 +845,8 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
         reasoningEffort,
       },
       mcp: { url: `${SANDBOX_GATEWAY_URL}/mcp` },
-      // Rule 8: by what the task needs, never by its stack — the adapter's guide says the rest.
+      // Rule 8: by what the task needs, never by its stack — the adapter's guide says the rest. A
+      // run's chat has the name of its task, which the model never changes (docs/plan/82, Зп17).
       instructions: `${
         !sited
           ? openTaskInstructions(internet, { browser: browser !== undefined, inbox: inboxFacts })
@@ -853,7 +861,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
                 inboxFacts,
                 browser?.guide ? { guide: browser.guide } : null,
               )
-      }${facts.task.turnNo === 0 ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${clientInstructionsSection(facts.clientInstructions)}`,
+      }${facts.task.turnNo === 0 && !facts.unattended ? CHAT_TITLE_SECTION : ''}${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${facts.unattended ? unattendedSection(facts.unattended.name) : ''}${clientInstructionsSection(facts.clientInstructions)}`,
       egressProxy: SANDBOX_EGRESS_PROXY_URL,
       internet: true,
       ...(skills.length ? { skills: [...skills] } : {}),

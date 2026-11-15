@@ -33,6 +33,8 @@ import { TurnSupervisor } from './turns/turn-supervisor.ts'
 import { TURN_EXECUTOR } from './turns/turns.tokens.ts'
 import { RunnerApiServer } from './runner-api/runner-api.server.ts'
 import { RunnerHub } from './runner-api/runner-hub.ts'
+import { ScheduleScheduler } from './schedules/schedule-scheduler.ts'
+import { SchedulesProcessor } from './schedules/schedules.processor.ts'
 import {
   fakeInfra,
   overrideCoreInfra,
@@ -43,6 +45,12 @@ import {
 import { AppModule } from './app.module.ts'
 
 let app: INestApplication | undefined
+
+/** The intake of web for the runs of scheduled tasks (docs/plan/82-scheduled-tasks.md, Зп19). */
+const SCHEDULE_INTAKE = {
+  intakeUrl: 'http://127.0.0.1:3000/api/webhooks/scheduled-runs',
+  secret: 's'.repeat(48),
+}
 
 /** The runner VMs' executor, as loadConfig demands it: the runner's one address. */
 function runnerConfig(): CoreConfig {
@@ -89,13 +97,15 @@ function recordHooks(types: (abstract new (...args: never[]) => object)[]): stri
  * What starts and stops in a core of either executor, in the order it always did, but for the
  * two connections at the end.
  */
-function lifecycleOf(runner: boolean): string[] {
+function lifecycleOf(runner: boolean, schedules = false): string[] {
   return [
     'onModuleInit StaleClonesSweep',
     'onApplicationBootstrap GitCredentialRuntime',
     'onApplicationBootstrap CoreCredentialRuntime',
     'onApplicationBootstrap OutboxRelayService',
     'onApplicationBootstrap BillingScheduler',
+    // The tick of scheduled tasks only with the intake of web (docs/plan/82-scheduled-tasks.md).
+    ...(schedules ? ['onApplicationBootstrap ScheduleScheduler'] : []),
     'onApplicationBootstrap SiteImportSweeper',
     'onApplicationBootstrap TurnRuntime',
     'onApplicationBootstrap TaskSweepRuntime',
@@ -107,6 +117,7 @@ function lifecycleOf(runner: boolean): string[] {
     'onModuleDestroy TurnRuntime',
     'onModuleDestroy SiteImportProcessor',
     'onModuleDestroy SiteImportSweeper',
+    ...(schedules ? ['onModuleDestroy ScheduleScheduler'] : []),
     'onModuleDestroy BillingScheduler',
     'onModuleDestroy OutboxRelayService',
     'onModuleDestroy CoreCredentialRuntime',
@@ -327,6 +338,20 @@ describe('AppModule', () => {
     expect(infra.redis.quit).toHaveBeenCalledOnce()
   })
 
+  it('works the queue of scheduled tasks only with the intake of web (docs/plan/82, Зп19)', async () => {
+    const plain = await startCore(fakeInfra())
+    expect(() => plain.get(SchedulesProcessor, { strict: false })).toThrow()
+    await plain.close()
+    app = undefined
+
+    const core = await startCore(fakeInfra(), false, {
+      ...testCoreConfig(),
+      schedules: SCHEDULE_INTAKE,
+    })
+    expect(core.get(SchedulesProcessor, { strict: false })).toBeInstanceOf(SchedulesProcessor)
+    expect(core.get(ScheduleScheduler, { strict: false })).toBeInstanceOf(ScheduleScheduler)
+  })
+
   it('builds one turn engine and one metrics registry for the whole process', async () => {
     for (const config of [testCoreConfig(), runnerConfig()]) {
       const core = await startCore(fakeInfra(), false, config)
@@ -360,15 +385,20 @@ describe('AppModule', () => {
     expect(withBrowser.get(BrowserSessions, { strict: false, each: true })).toHaveLength(1)
   })
 
-  it.each([false, true])(
-    'starts and stops its background in the order it always had (runner VMs=%s)',
-    async (runner) => {
+  it.each([
+    [false, false],
+    [true, false],
+    [false, true],
+  ])(
+    'starts and stops its background in the order it always had (runner VMs=%s, schedules=%s)',
+    async (runner, schedules) => {
       const calls = recordHooks([
         StaleClonesSweep,
         GitCredentialRuntime,
         CoreCredentialRuntime,
         OutboxRelayService,
         BillingScheduler,
+        ScheduleScheduler,
         SiteImportSweeper,
         SiteImportProcessor,
         TurnRuntime,
@@ -382,14 +412,16 @@ describe('AppModule', () => {
         RedisLifecycle,
         PrismaLifecycle,
       ])
-      const core = await startCore(fakeInfra(), false, runner ? runnerConfig() : testCoreConfig())
+      const base = runner ? runnerConfig() : testCoreConfig()
+      const config = schedules ? { ...base, schedules: SCHEDULE_INTAKE } : base
+      const core = await startCore(fakeInfra(), false, config)
 
       await core.close()
       app = undefined
 
       // The workers stop after every loop, the connections after everything else; the runner
       // API closes before the git credentials of this process are revoked.
-      expect(calls).toEqual(lifecycleOf(runner))
+      expect(calls).toEqual(lifecycleOf(runner, schedules))
     },
   )
 })

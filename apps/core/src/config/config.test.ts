@@ -1199,3 +1199,68 @@ describe('loadConfig — the browser worker (docs/plan/57-browser-tasks.md, Б10
     ).toMatchObject({ url: 'https://browser.internal' })
   })
 })
+
+describe('loadConfig — the runs of scheduled tasks (docs/plan/82-scheduled-tasks.md, Зп19)', () => {
+  const SECRET = 'schedule-intake-secret-'.padEnd(48, 'x')
+  const DEV_URL = 'http://localhost:3000/api/webhooks/scheduled-runs'
+
+  it('starts no run without either variable, as .env.example gives it', () => {
+    expect(loadConfig(devEnv).schedules).toBeNull()
+    expect(
+      loadConfig({ ...devEnv, SCHEDULE_INTAKE_URL: '', SCHEDULE_INTAKE_SECRET: '' }).schedules,
+    ).toBeNull()
+  })
+
+  it('reads the route of web and its secret', () => {
+    expect(
+      loadConfig({ ...devEnv, SCHEDULE_INTAKE_URL: DEV_URL, SCHEDULE_INTAKE_SECRET: SECRET })
+        .schedules,
+    ).toEqual({ intakeUrl: DEV_URL, secret: SECRET })
+  })
+
+  it('takes both or neither, the route exactly, and names no value', () => {
+    expect(problemsOf({ ...devEnv, SCHEDULE_INTAKE_URL: DEV_URL })).toEqual([
+      'SCHEDULE_INTAKE_URL and SCHEDULE_INTAKE_SECRET: set both or neither',
+    ])
+    expect(problemsOf({ ...devEnv, SCHEDULE_INTAKE_SECRET: SECRET })).toEqual([
+      'SCHEDULE_INTAKE_URL and SCHEDULE_INTAKE_SECRET: set both or neither',
+    ])
+    for (const url of [
+      'http://localhost:3000/api/webhooks/telegram',
+      'http://localhost:3000/api/webhooks/scheduled-runs/',
+      'http://localhost:3000/api/webhooks/scheduled-runs?x=1',
+      'http://user:pass@localhost:3000/api/webhooks/scheduled-runs',
+    ])
+      expect(
+        problemsOf({ ...devEnv, SCHEDULE_INTAKE_URL: url, SCHEDULE_INTAKE_SECRET: SECRET }),
+      ).toEqual(['SCHEDULE_INTAKE_URL: must be the route /api/webhooks/scheduled-runs of web'])
+    const short = problemsOf({
+      ...devEnv,
+      SCHEDULE_INTAKE_URL: DEV_URL,
+      SCHEDULE_INTAKE_SECRET: 'short secret',
+    })
+    expect(short).toEqual([
+      'SCHEDULE_INTAKE_SECRET: must be 32 to 4096 visible ASCII characters without spaces',
+    ])
+    expect(short.join('\n')).not.toContain('short secret')
+  })
+
+  it('posts the runs only over https in production', () => {
+    expect(
+      problemsOf(
+        prodEnv({
+          SCHEDULE_INTAKE_URL: 'http://raditi.ru/api/webhooks/scheduled-runs',
+          SCHEDULE_INTAKE_SECRET: SECRET,
+        }),
+      ),
+    ).toEqual(['SCHEDULE_INTAKE_URL: must use https in production'])
+    expect(
+      loadConfig(
+        prodEnv({
+          SCHEDULE_INTAKE_URL: 'https://raditi.ru/api/webhooks/scheduled-runs',
+          SCHEDULE_INTAKE_SECRET: SECRET,
+        }),
+      ).schedules,
+    ).toEqual({ intakeUrl: 'https://raditi.ru/api/webhooks/scheduled-runs', secret: SECRET })
+  })
+})

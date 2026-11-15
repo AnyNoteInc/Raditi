@@ -1,47 +1,42 @@
 import { Logger } from '@nestjs/common'
-import { enqueueTelegramSend, type PrismaClient } from '@repo/db'
+import { passUnattended, pauseSchedule, type PrismaClient } from '@repo/db'
 import {
-  isPushEndpoint,
+  notificationTitle,
+  readFeedRow,
+  scheduleNotifySwitchKinds,
   type ChatNotifyJob,
   type ChatNotifyKind,
+  type NoticeLimitCause,
   type TaskStatus,
 } from '@repo/domain'
-import { enqueueNotification } from '@repo/notifications'
+
+import type { ScheduleNotify, ScheduleNotifyAnswer } from '../schedules/schedule-notify.ts'
+import type { DeliveryAnswer, NotificationDelivery } from './notification-delivery.ts'
 
 // A chat waits for its client after a pass (docs/plan/75-chat-input-output.md, ВВ6–ВВ11): the
 // agent answered, asked, brought changes, failed or ran out of credits. When the job is due core
 // tells the author of the chat — unless the chat went on meanwhile (the queue started the next
-// pass) or the client looks at it now. Web Push goes to the browsers the client turned it on in;
-// its payload is only the id of the notification, the service worker reads the words from the
-// cabinet, so nothing of the chat crosses the push services, which are abroad (rule 1). A letter
-// goes when letters are on, at most one in 30 minutes per chat, and says nothing of the chat but
-// what happened.
+// pass) or the client looks at it now. The channels are NotificationDelivery's.
+//
+// A pass of a run of a scheduled task before the first words of its client (docs/plan/82-
+// scheduled-tasks.md, Зп27, Зп38, Зп39) is told in the words of a scheduled task: «выполнена» and
+// «изменения готовы» only while the switch of the task is on, a letter only of a question or a
+// failure, at most one in 30 minutes per task. Its pass refused by the gate of the chat
+// (`not_accepted`) pauses the task, and that is the one notice (Зп22). From the client's first
+// words on the chat is an ordinary one.
 
 /** The client looked at the chat this recently: no notification. */
 export const PRESENCE_FRESH_MS = 60_000
-/** At most one letter per chat and client in this time. */
-export const LETTER_PAUSE_MS = 30 * 60_000
+export { LETTER_PAUSE_MS } from './notification-delivery.ts'
 
-export type NotifyAnswer = 'sent' | 'seen' | 'moved_on' | 'skipped'
-
-/** A browser of the client that takes Web Push. */
-export interface PushTarget {
-  endpoint: string
-  p256dh: string
-  auth: string
-}
-
-/** Sends one Web Push; `gone` — the browser dropped the subscription, it is forgotten. */
-export interface PushSender {
-  send(target: PushTarget, payload: string): Promise<'sent' | 'gone'>
-}
+export type NotifyAnswer = 'sent' | 'seen' | 'moved_on' | 'skipped' | 'repeated'
 
 export interface ChatNotifyDependencies {
   db: PrismaClient
-  /** The public origin of the cabinet (APP_URL): the letter links to the chat under it. */
-  appUrl: string
-  /** null — Web Push is not configured (`WEB_PUSH_*`): letters still go. */
-  push: PushSender | null
+  /** The channels: Web Push, letters and the bot. */
+  delivery: Pick<NotificationDelivery, 'deliver'>
+  /** The notice of a task its run paused; absent — a pause is not told. */
+  schedules?: Pick<ScheduleNotify, 'paused'> | null
   logger?: { log(message: string): void; warn(message: string): void }
   now?: () => Date
 }
@@ -57,6 +52,19 @@ export const CHAT_NOTIFY_TELEGRAM_TEXT: Readonly<Record<ChatNotifyKind, string>>
 
 const WAITING: readonly TaskStatus[] = ['awaiting_user', 'awaiting_approval']
 
+/** «Уведомлять, когда задача выполнится» turns these off (Зп39). */
+const SWITCHED: ReadonlySet<ChatNotifyKind> = new Set(scheduleNotifySwitchKinds)
+/** A letter of a pass of a scheduled run: only of a question or a failure (Зп39). */
+const SCHEDULED_LETTERS: ReadonlySet<ChatNotifyKind> = new Set(['question', 'failed'])
+
+/** The scheduled task a pass of a run's chat goes without its client for (Зп27). */
+interface ScheduledPass {
+  scheduleId: string
+  runId: string
+  name: string
+  notify: boolean
+}
+
 export class ChatNotify {
   readonly #logger: { log(message: string): void; warn(message: string): void }
   readonly #now: () => Date
@@ -71,10 +79,23 @@ export class ChatNotify {
     const now = this.#now()
     const task = await db.task.findUnique({
       where: { id: job.taskId },
-      select: { status: true, createdById: true, deletedAt: true, attempt: true, turnNo: true },
+      select: {
+        status: true,
+        createdById: true,
+        deletedAt: true,
+        attempt: true,
+        turnNo: true,
+        title: true,
+      },
     })
     if (!task || task.deletedAt !== null || task.createdById === null)
       return this.#log(job, 'skipped')
+    const scheduled = await this.#scheduledPass(job.taskId)
+    // The gate refused the pass of a run (Зп22): the task pauses, and that is what is told.
+    if (scheduled && job.kind === 'failed') {
+      const paused = await this.#pausedByGate(job.taskId, scheduled)
+      if (paused !== null) return this.#log(job, answerOf(paused))
+    }
     // The chat went on — its queue, words from another tab — or ended: there is nothing to wait for.
     if (
       !WAITING.includes(task.status) ||
@@ -89,110 +110,97 @@ export class ChatNotify {
     })
     if (presence && now.getTime() - presence.seenAt.getTime() < PRESENCE_FRESH_MS)
       return this.#log(job, 'seen')
+    if (scheduled && !scheduled.notify && SWITCHED.has(job.kind)) return this.#log(job, 'skipped')
 
-    const [settings, user] = await Promise.all([
-      db.notificationSetting.findUnique({ where: { userId } }),
-      db.user.findUnique({ where: { id: userId }, select: { email: true, emailVerified: true } }),
-    ])
-    const pushOn = settings?.push ?? false
-    const emailOn = settings?.email ?? true
-    const notice = await db.chatNotification.create({
-      data: { taskId: job.taskId, userId, kind: job.kind },
-      select: { id: true },
+    const text = scheduled
+      ? `${notificationTitle(job.kind, {
+          scheduled: true,
+          ...(job.kind === 'limit' ? { cause: await this.#limitCause(job.taskId) } : {}),
+        })} — «${scheduled.name}».`
+      : `${CHAT_NOTIFY_TELEGRAM_TEXT[job.kind]} — чат «${task.title?.trim() || 'Чат'}».`
+    const answer = await this.deps.delivery.deliver({
+      userId,
+      kind: job.kind,
+      chat: { taskId: job.taskId, attempt: job.attempt, turnNo: job.turnNo },
+      schedule: scheduled ? { id: scheduled.scheduleId, runId: scheduled.runId } : null,
+      path: `/chats/${job.taskId}`,
+      letter: scheduled ? SCHEDULED_LETTERS.has(job.kind) : true,
+      telegram: { text, button: 'Открыть чат' },
     })
+    return this.#log(job, answerOf(answer))
+  }
 
-    let pushed = 0
-    if (pushOn && this.deps.push) {
-      const targets = await db.pushSubscription.findMany({
-        where: { userId },
-        select: { id: true, endpoint: true, p256dh: true, auth: true },
-      })
-      const payload = JSON.stringify({ id: notice.id })
-      for (const target of targets) {
-        // A subscription kept before the check, or written around it, is not sent to: core is
-        // never a client of anything but a push service of a browser.
-        if (!isPushEndpoint(target.endpoint)) {
-          await db.pushSubscription.deleteMany({ where: { id: target.id } })
-          continue
-        }
-        try {
-          if ((await this.deps.push.send(target, payload)) === 'gone')
-            await db.pushSubscription.deleteMany({ where: { id: target.id } })
-          else {
-            pushed++
-            await db.pushSubscription.update({
-              where: { id: target.id },
-              data: { lastUsedAt: now },
-            })
-          }
-        } catch (error) {
-          // One browser that does not answer does not keep the others or the letter.
-          this.#logger.warn(
-            `chat_push_failed task=${job.taskId} reason=${error instanceof Error ? error.name : 'unknown'}`,
-          )
-        }
-      }
+  /** The run of the chat while its pass goes without the client (Зп27); null — an ordinary chat. */
+  async #scheduledPass(taskId: string): Promise<ScheduledPass | null> {
+    const { db } = this.deps
+    const run = await db.scheduledRun.findUnique({
+      where: { taskId },
+      select: {
+        id: true,
+        name: true,
+        scheduledTask: { select: { id: true, name: true, notify: true, deletedAt: true } },
+      },
+    })
+    if (!run || !(await passUnattended(db, taskId))) return null
+    const schedule = run.scheduledTask
+    return {
+      scheduleId: schedule.id,
+      runId: run.id,
+      // A task deleted since keeps the name its run had.
+      name: schedule.deletedAt === null ? schedule.name : run.name,
+      notify: schedule.notify,
     }
-
-    let emailed = false
-    if (emailOn && user?.emailVerified) {
-      const recent = await db.chatNotification.count({
-        where: {
-          taskId: job.taskId,
-          userId,
-          emailed: true,
-          createdAt: { gt: new Date(now.getTime() - LETTER_PAUSE_MS) },
-        },
-      })
-      if (recent === 0) {
-        await db.$transaction(async (tx) => {
-          await enqueueNotification(
-            'chat.waiting',
-            {
-              to: user.email,
-              kind: job.kind,
-              url: `${this.deps.appUrl}/chats/${job.taskId}`,
-              settingsUrl: `${this.deps.appUrl}/settings`,
-            },
-            { db: tx, dedupeKey: `chat.waiting:${notice.id}` },
-          )
-          await tx.chatNotification.update({ where: { id: notice.id }, data: { emailed: true } })
-        })
-        emailed = true
-      }
-    }
-    const told = (settings?.telegram ?? true) && (await this.#telegram(job, userId, notice.id))
-    await db.chatNotification.update({ where: { id: notice.id }, data: { pushed } })
-    return this.#log(job, pushed > 0 || emailed || told ? 'sent' : 'skipped')
   }
 
   /**
-   * The third channel (docs/plan/80-telegram.md, Т8): the bot tells a client who linked Telegram
-   * what happened in a chat of the cabinet. A chat bound to Telegram gets its rows there anyway.
+   * The failure of a pass of a run that the gate of the chat refused (`not_accepted`: class
+   * `client` without its clearance, Зп22): its task pauses once and the client is told so. null —
+   * another failure, or a task that stopped for another reason before (a single run completed):
+   * the failure is told as always.
    */
-  async #telegram(job: ChatNotifyJob, userId: string, noticeId: string): Promise<boolean> {
+  async #pausedByGate(
+    taskId: string,
+    scheduled: ScheduledPass,
+  ): Promise<ScheduleNotifyAnswer | null> {
     const { db } = this.deps
-    const [identity, task] = await Promise.all([
-      db.channelIdentity.findUnique({
-        where: { userId_channel: { userId, channel: 'telegram' } },
-        select: { externalId: true },
-      }),
-      db.task.findUnique({
-        where: { id: job.taskId },
-        select: { title: true, chatSession: { select: { channel: true } } },
-      }),
-    ])
-    if (!identity || !task || task.chatSession?.channel === 'telegram') return false
-    const title = task.title?.trim() || 'Чат'
-    return enqueueTelegramSend(
-      db,
-      {
-        chatId: identity.externalId,
-        text: `${CHAT_NOTIFY_TELEGRAM_TEXT[job.kind]} — чат «${title}».`,
-        buttons: [[{ text: 'Открыть чат', url: `${this.deps.appUrl}/chats/${job.taskId}` }]],
-      },
-      `notify:${noticeId}`,
+    const failure = await db.taskEvent.findFirst({
+      where: { taskId, type: 'feed.failure' },
+      orderBy: { id: 'desc' },
+      select: { payload: true },
+    })
+    const row = failure ? readFeedRow('feed.failure', failure.payload) : null
+    if (row?.type !== 'feed.failure' || row.code !== 'not_accepted') return null
+    const paused = await db.$transaction((tx) =>
+      pauseSchedule(tx, scheduled.scheduleId, 'not_accepted'),
     )
+    if (!paused) {
+      const state = await db.scheduledTask.findUnique({
+        where: { id: scheduled.scheduleId },
+        select: { pausedReason: true },
+      })
+      if (state?.pausedReason !== 'not_accepted') return null
+    }
+    if (paused)
+      this.#logger.log(`schedule_paused schedule=${scheduled.scheduleId} reason=not_accepted`)
+    // A repeat of the job finds the notice of the run and sends nothing.
+    return (
+      (await this.deps.schedules?.paused({
+        scheduleId: scheduled.scheduleId,
+        runId: scheduled.runId,
+        reason: 'not_accepted',
+      })) ?? 'none'
+    )
+  }
+
+  /** What stopped a pass at its limit, by the row that ended it: credits or the weekly limit. */
+  async #limitCause(taskId: string): Promise<NoticeLimitCause> {
+    const ending = await this.deps.db.taskEvent.findFirst({
+      where: { taskId, type: { in: ['feed.failure', 'feed.question'] } },
+      orderBy: { id: 'desc' },
+      select: { type: true, payload: true },
+    })
+    const row = ending ? readFeedRow(ending.type, ending.payload) : null
+    return row?.type === 'feed.failure' && row.code === 'usage_limit' ? 'weekly_limit' : 'credits'
   }
 
   #log(job: ChatNotifyJob, answer: NotifyAnswer): NotifyAnswer {
@@ -201,35 +209,5 @@ export class ChatNotify {
   }
 }
 
-/** Web Push by `web-push` with the VAPID keys of the platform; the subject is the cabinet. */
-export async function webPushSender(keys: {
-  publicKey: string
-  privateKey: string
-  subject: string
-}): Promise<PushSender> {
-  const webPush = await import('web-push')
-  return {
-    async send(target, payload) {
-      try {
-        await webPush.sendNotification(
-          { endpoint: target.endpoint, keys: { p256dh: target.p256dh, auth: target.auth } },
-          payload,
-          {
-            TTL: 3_600,
-            urgency: 'normal',
-            vapidDetails: {
-              subject: keys.subject,
-              publicKey: keys.publicKey,
-              privateKey: keys.privateKey,
-            },
-          },
-        )
-        return 'sent'
-      } catch (error) {
-        const status = (error as { statusCode?: unknown }).statusCode
-        if (status === 404 || status === 410) return 'gone'
-        throw error
-      }
-    },
-  }
-}
+const answerOf = (answer: DeliveryAnswer | ScheduleNotifyAnswer): NotifyAnswer =>
+  answer === 'none' ? 'skipped' : answer

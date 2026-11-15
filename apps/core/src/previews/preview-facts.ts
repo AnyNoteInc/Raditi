@@ -242,6 +242,19 @@ export const holdsPreview = (status: TaskStatus): boolean =>
 export type PreviewAction = 'destroy' | 'build' | 'expire' | 'none'
 
 /**
+ * A preview nothing has needed yet (docs/plan/82-scheduled-tasks.md, Зп18): written stopped for a
+ * chat a scheduled task started, so a run does not copy the site's database for nothing — never
+ * built (`write_epoch` 0), never asked for by a look of the client or a tool of the agent (both
+ * mark `last_viewed_at`, `demandStoppedPreview`) and with no candidate to show. A pass of its chat
+ * or a sync back to the base builds nothing; a candidate or a demand does.
+ */
+export const previewAwaitsNeed = (facts: PreviewFacts): boolean =>
+  facts.preview.status === 'expired' &&
+  facts.preview.writeEpoch === 0 &&
+  facts.preview.lastViewedAt === null &&
+  facts.candidate === null
+
+/**
  * A served preview no one used for `idleMs` while its dialog waits (owner's answer of 26.10.2026):
  * it is stopped like one whose time is up — its containers stop, its volumes, seed and secrets
  * stay, so nothing the client can see or release is lost. What the dialog changed is in its
@@ -285,6 +298,7 @@ export function previewAction(
     return 'expire'
   if (idle) return 'expire'
   if (!options.requested) return 'none'
+  if (previewAwaitsNeed(facts)) return 'none'
   if (preview.status === 'unavailable')
     // Without an access to the database nothing changed; the other causes may have.
     return preview.unavailableReason === 'no_database' && !facts.hasDatabase ? 'none' : 'build'

@@ -159,6 +159,41 @@ describe('what a preview needs now', () => {
       ).toBe('build')
   })
 
+  it('builds a preview never built only when something needs it (docs/plan/82, Зп18)', () => {
+    // A chat a scheduled task started: its preview is written stopped and built at the first need.
+    const never = {
+      status: 'expired' as const,
+      writeEpoch: 0,
+      lastViewedAt: null,
+      upstream: null,
+      seed: null,
+      candidateId: null,
+      revision: 0,
+    }
+    for (const status of ['queued', 'preparing', 'running', 'awaiting_user'] as const)
+      expect(
+        previewAction(facts(never, { task: { status, ...OF_TASK }, candidate: null }), {
+          requested: true,
+          now,
+        }),
+      ).toBe('none')
+    // A candidate, a look of the client or a tool of the agent (both mark it) is a need.
+    expect(previewAction(facts(never), { requested: true, now })).toBe('build')
+    expect(
+      previewAction(facts({ ...never, lastViewedAt: earlier }, { candidate: null }), {
+        requested: true,
+        now,
+      }),
+    ).toBe('build')
+    // A preview that was built once is woken as before.
+    expect(
+      previewAction(facts({ ...never, writeEpoch: 1 }, { candidate: null }), {
+        requested: true,
+        now,
+      }),
+    ).toBe('build')
+  })
+
   it('rebuilds on request what does not show its candidate', () => {
     expect(previewAction(facts(), { requested: true, now })).toBe('none')
     expect(previewAction(facts(), { requested: false, now })).toBe('none')

@@ -23,6 +23,7 @@ import {
   previewRuntimes,
   runnerIdSchema,
   sandboxRuntimes,
+  SCHEDULE_INTAKE_PATH,
   turnExecutorKinds,
   type AppEnv,
   type Env,
@@ -110,6 +111,12 @@ export interface CoreConfig {
    * the VAPID keys, both or neither; null — browsers are not told, letters still go.
    */
   webPush: { publicKey: string; privateKey: string } | null
+  /**
+   * The runs of scheduled tasks (docs/plan/82-scheduled-tasks.md, Зп19): core hands each to the
+   * intake of web at `intakeUrl`, with `secret` in its header. null — both unset: the tick is not
+   * registered and no run starts; the pages of the schedule still work.
+   */
+  schedules: ScheduleIntakeConfig | null
   /** Where turns run: core's own Docker (local, not in production) or runner VMs. */
   turnExecutor: TurnExecutorKind
   /**
@@ -163,6 +170,14 @@ export interface BrowserWorkerConfig {
   url: string
   /** `Authorization: Bearer` of every call. */
   token: string
+}
+
+/** Where core posts the runs of scheduled tasks. Holds the secret of web's intake: never log it. */
+export interface ScheduleIntakeConfig {
+  /** SCHEDULE_INTAKE_URL: the route `/api/webhooks/scheduled-runs` of web, through the edge. */
+  intakeUrl: string
+  /** SCHEDULE_INTAKE_SECRET: sent in `x-raditi-schedule-secret`; web checks the same one. */
+  secret: string
 }
 
 /** Where and how previews of dialogs run (docs/plan/53-chat-preview-release.md, Р17, Р18). */
@@ -285,6 +300,18 @@ const ownEnvSchema = z.object({
     z
       .string()
       .regex(/^[A-Za-z0-9_-]{40,50}$/)
+      .optional(),
+  ),
+  // The intake of web for the runs of scheduled tasks (docs/plan/82-scheduled-tasks.md, Зп19):
+  // core and web share no network, so core goes through the edge, as with the bot of the chat.
+  SCHEDULE_INTAKE_URL: envVar(
+    z.url({ protocol: /^https?$/, error: 'must be an http(s) URL' }).optional(),
+  ),
+  // One visible ASCII word in a header; web reads the same variable.
+  SCHEDULE_INTAKE_SECRET: envVar(
+    z
+      .string()
+      .regex(/^[\x21-\x7e]{32,4096}$/, 'must be 32 to 4096 visible ASCII characters without spaces')
       .optional(),
   ),
   CORE_PORT: port(DEFAULT_CORE_PORT),
@@ -429,6 +456,8 @@ export function loadConfig(env: Env): CoreConfig {
         'BILLING_TICK_SECONDS',
         'WEB_PUSH_VAPID_PUBLIC',
         'WEB_PUSH_PRIVATE_KEY',
+        'SCHEDULE_INTAKE_URL',
+        'SCHEDULE_INTAKE_SECRET',
         'PREVIEW_TTL_HOURS',
         'PREVIEW_IDLE_MINUTES',
         'PREVIEW_GATEWAY_PORT',
@@ -474,10 +503,12 @@ export function loadConfig(env: Env): CoreConfig {
   const turnExecutor = own.TURN_EXECUTOR ?? (production ? 'runner' : 'local')
   let runnerApi: RunnerApiConfig | null = null
   let runnerRuntime: SandboxRuntime | undefined
+  let schedules: ScheduleIntakeConfig | null
   {
     if (own.REDIS_URL === undefined) problems.push('REDIS_URL: required for the core role')
     if ((own.WEB_PUSH_VAPID_PUBLIC === undefined) !== (own.WEB_PUSH_PRIVATE_KEY === undefined))
       problems.push('WEB_PUSH_VAPID_PUBLIC and WEB_PUSH_PRIVATE_KEY: set both or neither')
+    schedules = scheduleIntakeOf(own, production, problems)
     // Every billing letter carries a link to the app: a guessed origin would not open.
     if (own.APP_URL === undefined)
       problems.push('APP_URL: required for the core role (billing letters link to the app)')
@@ -770,6 +801,7 @@ export function loadConfig(env: Env): CoreConfig {
       own.WEB_PUSH_VAPID_PUBLIC && own.WEB_PUSH_PRIVATE_KEY
         ? { publicKey: own.WEB_PUSH_VAPID_PUBLIC, privateKey: own.WEB_PUSH_PRIVATE_KEY }
         : null,
+    schedules,
     turnExecutor,
     sandboxWarmMs: turnExecutor === 'local' ? own.SANDBOX_WARM_MINUTES * 60_000 : 0,
     workspaceTurnLimit: own.WORKSPACE_TURN_LIMIT,
@@ -788,6 +820,40 @@ export function loadConfig(env: Env): CoreConfig {
     releaseApi,
     browser,
   }
+}
+
+/**
+ * The intake of web for the runs of scheduled tasks (Зп19): both variables or neither, the route
+ * `/api/webhooks/scheduled-runs` exactly, only https in production. Problems name the variable,
+ * never its value.
+ */
+function scheduleIntakeOf(
+  own: { SCHEDULE_INTAKE_URL?: string | undefined; SCHEDULE_INTAKE_SECRET?: string | undefined },
+  production: boolean,
+  problems: string[],
+): ScheduleIntakeConfig | null {
+  const { SCHEDULE_INTAKE_URL: url, SCHEDULE_INTAKE_SECRET: secret } = own
+  if (url === undefined && secret === undefined) return null
+  if (url === undefined || secret === undefined) {
+    problems.push('SCHEDULE_INTAKE_URL and SCHEDULE_INTAKE_SECRET: set both or neither')
+    return null
+  }
+  const parsed = new URL(url)
+  if (
+    parsed.pathname !== SCHEDULE_INTAKE_PATH ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    problems.push(`SCHEDULE_INTAKE_URL: must be the route ${SCHEDULE_INTAKE_PATH} of web`)
+    return null
+  }
+  if (production && parsed.protocol !== 'https:') {
+    problems.push('SCHEDULE_INTAKE_URL: must use https in production')
+    return null
+  }
+  return { intakeUrl: parsed.href, secret }
 }
 
 /** An origin; with `bucket`, optionally followed by one S3 bucket name as its path. */

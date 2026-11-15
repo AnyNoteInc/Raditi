@@ -1887,6 +1887,30 @@ describe('`/init` and the notes of a project', () => {
   })
 })
 
+describe('a pass of a run of a scheduled task (docs/plan/82-scheduled-tasks.md, Зп17, Зп29)', () => {
+  it('tells a pass without its client of its task, and asks no name of the chat', async () => {
+    const plan = await planTurn(
+      facts({
+        requests: [request(10, 'first', 'Проверьте сайт', 0)],
+        unattended: { name: 'Проверка сайта' },
+      }),
+      env(),
+    )
+    if (plan.kind !== 'turn') throw new Error(`expected a turn, got ${plan.kind}`)
+    const { instructions } = plan.request.context
+    expect(instructions).toContain('## A run of a scheduled task')
+    expect(instructions).toContain('«Проверка сайта» started this chat')
+    // The chat of a run has the name of its task (Зп17).
+    expect(instructions).not.toContain(CHAT_TITLE_SECTION)
+    const plain = await planTurn(
+      facts({ requests: [request(10, 'first', 'Проверьте сайт', 0)] }),
+      env(),
+    )
+    if (plain.kind !== 'turn') throw new Error(`expected a turn, got ${plain.kind}`)
+    expect(plain.request.context.instructions).not.toContain('## A run of a scheduled task')
+  })
+})
+
 describe("the client's own instructions (docs/plan/76-agent-instructions.md, И2)", () => {
   it('end the instructions of every pass, and are absent when the client wrote none', async () => {
     const plan = await planTurn(

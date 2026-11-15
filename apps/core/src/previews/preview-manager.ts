@@ -487,7 +487,8 @@ export class PreviewManager {
   /**
    * Previews that need their holder now and have none — among them a served one no one used for
    * PREVIEW_IDLE_MINUTES while its dialog waits (stopped), and a stopped one whose dialog has a
-   * pass queued or running (built again: the agent's browser and content tools need it).
+   * pass queued or running (built again: the agent's browser and content tools need it) — unless
+   * it was never built nor asked for: that one waits for a need (`previewAwaitsNeed`, Зп18).
    */
   async #refreshDue(): Promise<void> {
     const settle = previewManagerTimings.settleSeconds
@@ -512,7 +513,8 @@ export class PreviewManager {
           OR (p.expires_at <= now() AND p.status IN ('ready', 'failed', 'unavailable')
             AND t.status NOT IN ('preparing', 'running'))
           OR (p.status = 'expired' AND p.last_viewed_at > now() - make_interval(secs => ${viewed}))
-          OR (p.status = 'expired' AND t.status IN ('queued', 'preparing', 'running'))
+          OR (p.status = 'expired' AND t.status IN ('queued', 'preparing', 'running')
+            AND NOT (p.write_epoch = 0 AND p.last_viewed_at IS NULL))
           OR (p.status = 'ready' AND t.status NOT IN ('preparing', 'running') AND (p.dirty
             OR c.id IS DISTINCT FROM p.candidate_id OR COALESCE(c.revision, 0) <> p.revision))
           OR (p.status = 'ready' AND t.status NOT IN ('queued', 'preparing', 'running')

@@ -35,6 +35,7 @@ import type { CandidateGit } from './candidate-git.ts'
 import type { ChatFiles } from './chat-files.ts'
 import type { DocSections } from './doc-sections.ts'
 import type { PageChanges } from './page-changes.ts'
+import type { ScheduleChanges } from './schedule-changes.ts'
 import type { LivePasses } from './live-passes.ts'
 import { readPassFacts } from './pass-facts.ts'
 import type { TurnCapacity } from './turn-capacity.ts'
@@ -112,6 +113,11 @@ export interface PassRunnerDependencies {
   docs?: Pick<DocSections, 'settle'> & Partial<Pick<DocSections, 'checkLive'>>
   /** What the turn asked of the pages besides versions (docs/plan/73-pages-sites.md, Дер23). */
   pageChanges?: Pick<PageChanges, 'apply'>
+  /**
+   * What the turn asked of the scheduled tasks of its author (docs/plan/82-scheduled-tasks.md,
+   * Зп33): applied after a completed turn, refused at once after one that failed or was cancelled.
+   */
+  scheduleChanges?: Pick<ScheduleChanges, 'apply' | 'failTurn'>
   /** WORKSPACE_TURN_LIMIT (plan 70, ВР13); DEFAULT_WORKSPACE_TURN_LIMIT when absent. */
   workspaceTurnLimit?: number
   /** The places for turns of the platform (plan 70, ВР17); absent — no bound but the pool's. */
@@ -392,8 +398,11 @@ export class PassRunner {
       (ending.kind === 'failed' || ending.kind === 'cancelled') &&
       answer === 'moved' &&
       ending.turn !== null
-    )
+    ) {
       await this.deps.chatFiles?.failPages(job.taskId, ending.turn)
+      // And the changes of the scheduled tasks it reserved (Зп33): «ответ агента оборвался».
+      await this.deps.scheduleChanges?.failTurn(job.taskId, ending.turn)
+    }
     // After the answer of the turn, so that its files stand below it in the chat. A turn without
     // files still settles the pages it named (docs/plan/69-pages.md, Ст6).
     if (ending.kind === 'completed' && answer === 'moved')
@@ -404,8 +413,11 @@ export class PassRunner {
       })
     // Then the changes the turn asked of its pages, after their versions: a page renamed or moved
     // in the turn keeps the version the turn gave it (Дер23).
-    if (ending.kind === 'completed' && answer === 'moved' && refusesText)
+    if (ending.kind === 'completed' && answer === 'moved' && refusesText) {
       await this.deps.pageChanges?.apply(job.taskId, ending.turn, refusesText)
+      // The scheduled tasks the turn set up or changed, checked with what only the turn knew (Зп33).
+      await this.deps.scheduleChanges?.apply(job.taskId, ending.turn, refusesText)
+    }
     if (ending.kind === 'busy') {
       // Another end of the task came first (a cancel, which wakes nobody): this one ended it.
       if (answer !== 'moved') return 'ended'
