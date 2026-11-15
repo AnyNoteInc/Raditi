@@ -27,7 +27,8 @@ type HistoryPage = BillingUsage['history']
 const { getUsage, getActivity, getHistory, startPackCheckout, hardNavigate } = vi.hoisted(() => ({
   getUsage: vi.fn<() => Promise<BillingUsage>>(),
   getActivity: vi.fn<() => Promise<UsageActivity>>(),
-  getHistory: vi.fn<(input: { cursor: string }) => Promise<HistoryPage>>(),
+  getHistory:
+    vi.fn<(input: { cursor?: string; from?: string; to?: string }) => Promise<HistoryPage>>(),
   startPackCheckout: vi.fn<(input: Record<string, never>) => Promise<Checkout>>(),
   hardNavigate: vi.fn<(path: string) => void>(),
 }))
@@ -123,7 +124,7 @@ const mockupHistory = (): UsageEntry[] => [
     site: bakery,
   }),
 ]
-const noHistory: HistoryPage = { items: [], nextCursor: null }
+const noHistory: HistoryPage = { items: [], nextCursor: null, total: 0 }
 
 /** A meter that adds up, with the forecast of the renewal (`tariffMeter`). */
 const meterOf = tariffMeter
@@ -180,7 +181,7 @@ function usageOf(patch: UsagePatch = {}, facts: TaskFacts = {}): BillingUsage {
     // No gift is spoken of unless a test gives the customer one.
     gift: noGift,
     pack: { left: 100, held: 0 },
-    history: { items: mockupHistory(), nextCursor: null },
+    history: { items: mockupHistory(), nextCursor: null, total: mockupHistory().length },
     ...patch,
   }
   const credits = usage.tariff?.credits
@@ -397,6 +398,7 @@ describe('the «Использование» page of a customer without a tariff
           }),
         ],
         nextCursor: null,
+        total: 2,
       }),
     )
     showUsage()
@@ -431,21 +433,22 @@ describe('the «Использование» page of a customer without a tariff
           entry({ at: new Date('2026-10-05T08:00:00Z') }),
         ],
         nextCursor: ID(701),
+        total: 4,
       }),
     )
     getHistory.mockResolvedValue({
       items: [entry({ at: new Date('2026-03-14T08:00:00Z') })],
       nextCursor: null,
+      total: 4,
     })
     showUsage()
 
     const history = await section('История списаний')
     expect(dates(history)).toEqual(['5 октября 2027', '31 декабря 2026', '5 октября 2026'])
 
-    // The lines «Показать ещё» adds go further back, and say how far.
-    fireEvent.click(within(history).getByRole('button', { name: 'Показать ещё' }))
-    await waitFor(() => expect(dates(history)).toHaveLength(4))
-    expect(dates(history).at(-1)).toBe('14 марта 2026')
+    // The next page goes further back, and says how far.
+    fireEvent.click(within(history).getByRole('button', { name: 'Вперёд' }))
+    await waitFor(() => expect(dates(history)).toEqual(['14 марта 2026']))
   })
 })
 
@@ -1220,6 +1223,7 @@ describe('the history of charges', () => {
             }),
           ],
           nextCursor: null,
+          total: 1,
         },
       }),
     )
@@ -1260,8 +1264,8 @@ describe('the history of charges', () => {
     const labels = [...history.querySelectorAll('.MuiChip-root')]
     expect(labels.map((label) => label.textContent)).toEqual(['В работе'])
     expect(labels[0]?.querySelector('svg')).not.toBeNull()
-    // The whole history of the period is here: nothing more to ask for.
-    expect(within(history).queryByRole('button', { name: 'Показать ещё' })).not.toBeInTheDocument()
+    // The whole history of the period is here: no other page.
+    expect(within(history).queryByRole('button', { name: 'Вперёд' })).not.toBeInTheDocument()
     expect(getHistory).not.toHaveBeenCalled()
   })
 
@@ -1291,6 +1295,7 @@ describe('the history of charges', () => {
             }),
           ],
           nextCursor: null,
+          total: 4,
         },
       }),
     )
@@ -1338,121 +1343,106 @@ describe('the history of charges', () => {
     expect(within(frame).getByRole('table')).toBeInTheDocument()
   })
 
-  describe('«Показать ещё»', () => {
+  describe('pages and dates', () => {
     const first = () => [entry({ task: { id: ID(31), title: 'Первая', status: 'done' } })]
-    const page = (title: string, nextCursor: string | null): HistoryPage => ({
+    const page = (title: string, nextCursor: string | null, total = 41): HistoryPage => ({
       items: [entry({ task: { id: ID(40 + nextEntry), title, status: 'done' } })],
       nextCursor,
+      total,
     })
     const titles = (history: HTMLElement) =>
       rowsOf(history)
         .slice(1)
         .map((row) => row[1])
+    const range = (history: HTMLElement) =>
+      plain(within(history).getByRole('navigation', { name: 'Страницы истории' }).textContent)
 
     beforeEach(() => {
-      getUsage.mockResolvedValue(usageOf({ history: { items: first(), nextCursor: ID(501) } }))
+      getUsage.mockResolvedValue(
+        usageOf({ history: { items: first(), nextCursor: ID(501), total: 41 } }),
+      )
     })
 
-    it('asks for the page after the cursor and adds its lines, a page at a time', async () => {
+    it('turns the pages forward and back, and says which lines of how many are shown', async () => {
       getHistory
         .mockResolvedValueOnce(page('Вторая', ID(502)))
         .mockResolvedValueOnce(page('Третья', null))
       showUsage()
       const history = await section('История списаний')
       expect(titles(history)).toEqual(['Первая'])
-      // Nothing is asked before the customer asks.
+      expect(range(history)).toContain('1–1 из 41')
+      // The first page came with the summary: nothing is asked.
       expect(getHistory).not.toHaveBeenCalled()
+      expect(within(history).getByRole('button', { name: 'Назад' })).toBeDisabled()
 
-      fireEvent.click(within(history).getByRole('button', { name: 'Показать ещё' }))
-
-      await waitFor(() => expect(titles(history)).toEqual(['Первая', 'Вторая']))
+      fireEvent.click(within(history).getByRole('button', { name: 'Вперёд' }))
+      await waitFor(() => expect(titles(history)).toEqual(['Вторая']))
       expect(getHistory).toHaveBeenLastCalledWith({ cursor: ID(501) })
+      expect(range(history)).toContain('21–21 из 41')
 
-      fireEvent.click(within(history).getByRole('button', { name: 'Показать ещё' }))
-
-      await waitFor(() => expect(titles(history)).toEqual(['Первая', 'Вторая', 'Третья']))
+      fireEvent.click(within(history).getByRole('button', { name: 'Вперёд' }))
+      await waitFor(() => expect(titles(history)).toEqual(['Третья']))
       expect(getHistory).toHaveBeenLastCalledWith({ cursor: ID(502) })
+      expect(within(history).getByRole('button', { name: 'Вперёд' })).toBeDisabled()
+
+      // Back is the page read before, from the cache.
+      fireEvent.click(within(history).getByRole('button', { name: 'Назад' }))
+      await waitFor(() => expect(titles(history)).toEqual(['Вторая']))
+      fireEvent.click(within(history).getByRole('button', { name: 'Назад' }))
+      await waitFor(() => expect(titles(history)).toEqual(['Первая']))
       expect(getHistory).toHaveBeenCalledTimes(2)
-      // The last page: nothing more to show.
-      expect(
-        within(history).queryByRole('button', { name: 'Показать ещё' }),
-      ).not.toBeInTheDocument()
     })
 
-    it('says that the next page did not load and asks for it again', async () => {
-      getHistory
-        .mockRejectedValueOnce(new Error('Network unavailable'))
-        .mockResolvedValueOnce(page('Вторая', null))
+    it('reads the lines of the chosen days from the first page, and drops the dates on «Сбросить»', async () => {
+      getHistory.mockResolvedValue(page('Октябрьская', null, 1))
       showUsage()
       const history = await section('История списаний')
 
-      fireEvent.click(within(history).getByRole('button', { name: 'Показать ещё' }))
+      fireEvent.change(within(history).getByLabelText('С'), { target: { value: '2026-10-01' } })
+      await waitFor(() => expect(titles(history)).toEqual(['Октябрьская']))
+      expect(getHistory).toHaveBeenLastCalledWith({ from: '2026-10-01' })
+      fireEvent.change(within(history).getByLabelText('По'), { target: { value: '2026-10-04' } })
+      await waitFor(() =>
+        expect(getHistory).toHaveBeenLastCalledWith({ from: '2026-10-01', to: '2026-10-04' }),
+      )
+      expect(range(history)).toContain('1–1 из 1')
+
+      fireEvent.click(within(history).getByRole('button', { name: 'Сбросить' }))
+      await waitFor(() => expect(titles(history)).toEqual(['Первая']))
+    })
+
+    it('asks for nothing while «По» is before «С», and says so', async () => {
+      showUsage()
+      const history = await section('История списаний')
+
+      fireEvent.change(within(history).getByLabelText('С'), { target: { value: '2026-10-05' } })
+      getHistory.mockClear()
+      fireEvent.change(within(history).getByLabelText('По'), { target: { value: '2026-10-04' } })
+
+      expect(await within(history).findByText('Раньше даты «С»')).toBeInTheDocument()
+      expect(getHistory).not.toHaveBeenCalled()
+    })
+
+    it('says that days without charges have none', async () => {
+      getHistory.mockResolvedValue({ items: [], nextCursor: null, total: 0 })
+      showUsage()
+      const history = await section('История списаний')
+
+      fireEvent.change(within(history).getByLabelText('С'), { target: { value: '2025-01-01' } })
+
+      expect(await within(history).findByText('За эти дни списаний нет.')).toBeInTheDocument()
+    })
+
+    it('says that a page did not load', async () => {
+      getHistory.mockRejectedValueOnce(new Error('Network unavailable'))
+      showUsage()
+      const history = await section('История списаний')
+
+      fireEvent.click(within(history).getByRole('button', { name: 'Вперёд' }))
 
       expect(await within(history).findByRole('alert')).toHaveTextContent(
-        'Не удалось загрузить продолжение истории. Попробуйте ещё раз.',
+        'Не удалось загрузить историю. Попробуйте ещё раз.',
       )
-      // What is on the screen stays, and the button is there for another try.
-      expect(titles(history)).toEqual(['Первая'])
-
-      fireEvent.click(within(history).getByRole('button', { name: 'Показать ещё' }))
-
-      await waitFor(() => expect(titles(history)).toEqual(['Первая', 'Вторая']))
-      expect(getHistory.mock.calls).toEqual([[{ cursor: ID(501) }], [{ cursor: ID(501) }]])
-      expect(within(history).queryByRole('alert')).not.toBeInTheDocument()
-    })
-
-    it('drops the lines it added when the summary is read anew, though the first page ends where it did', async () => {
-      const inWork = 'В работеОтложено до 45 кредитов — спишем по факту'
-      getHistory.mockResolvedValueOnce({
-        items: [
-          entry({
-            outcome: 'held',
-            credits: 45,
-            from: { tariff: 45, gift: 0, pack: 0 },
-            task: { id: ID(51), title: 'Вторая', status: 'running' },
-          }),
-        ],
-        nextCursor: null,
-      })
-      const { queryClient } = showUsage()
-      const history = await section('История списаний')
-      fireEvent.click(within(history).getByRole('button', { name: 'Показать ещё' }))
-      await waitFor(() => expect(titles(history)).toEqual(['Первая', 'Вторая']))
-      expect(rowsOf(history).at(-1)?.[3]).toBe(inWork)
-
-      // The task is done meanwhile. The summary is read anew a moment later — the dialog of
-      // the pack was closed, the page was opened again — and brings the same first page.
-      await new Promise((resolve) => setTimeout(resolve, 5))
-      await queryClient.invalidateQueries({ queryKey: ['billing', 'usage'] })
-
-      await waitFor(() => expect(titles(history)).toEqual(['Первая']))
-      expect(getUsage).toHaveBeenCalledTimes(2)
-      expect(history).not.toHaveTextContent('В работе')
-
-      // Asked for again, the next page is read as it is now.
-      getHistory.mockResolvedValueOnce(page('Вторая', null))
-      fireEvent.click(within(history).getByRole('button', { name: 'Показать ещё' }))
-
-      await waitFor(() => expect(titles(history)).toEqual(['Первая', 'Вторая']))
-      expect(rowsOf(history).at(-1)?.[3]).toBe('5 кредитов')
-      expect(getHistory.mock.calls).toEqual([[{ cursor: ID(501) }], [{ cursor: ID(501) }]])
-    })
-
-    it('keeps the lines it added while a refresh of the summary in the background fails', async () => {
-      getHistory.mockResolvedValueOnce(page('Вторая', null))
-      const { queryClient } = showUsage()
-      const history = await section('История списаний')
-      fireEvent.click(within(history).getByRole('button', { name: 'Показать ещё' }))
-      await waitFor(() => expect(titles(history)).toEqual(['Первая', 'Вторая']))
-      getUsage.mockRejectedValueOnce(new Error('Network unavailable'))
-
-      await new Promise((resolve) => setTimeout(resolve, 5))
-      await queryClient.invalidateQueries({ queryKey: ['billing', 'usage'] })
-
-      await waitFor(() => expect(getUsage).toHaveBeenCalledTimes(2))
-      // The summary on the screen is the one the lines continue.
-      expect(titles(history)).toEqual(['Первая', 'Вторая'])
-      expect(getHistory).toHaveBeenCalledTimes(1)
     })
   })
 })

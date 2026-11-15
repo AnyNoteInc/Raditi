@@ -115,3 +115,50 @@ export function creditsSummary(days: readonly UsageActivityDay[]): string {
   ).join(', ')
   return `За ${spanLabel(days.length)} списано ${creditsCount(totalCredits(days))}: ${parts}.`
 }
+
+/** A year of days, as the grid of actions reads it. */
+export const ACTIONS_YEAR = 365
+
+/** The rows of the grid: Monday on top, as a Russian calendar has it. */
+export const WEEKDAY_LABELS = ['пн', '', 'ср', '', 'пт', '', ''] as const
+
+/** 0 — Monday … 6 — Sunday, of a day of Moscow `YYYY-MM-DD`. */
+const weekdayOf = (date: string) => (new Date(`${date}T00:00:00.000Z`).getUTCDay() + 6) % 7
+
+/**
+ * The days in weeks, oldest first: each week is seven cells, Monday first; a cell before the
+ * first day or after the last one is null.
+ */
+export function weeksOf(days: readonly UsageActivityDay[]): (UsageActivityDay | null)[][] {
+  const first = days[0]
+  if (first === undefined) return []
+  const cells: (UsageActivityDay | null)[] = [
+    ...Array.from({ length: weekdayOf(first.date) }, () => null),
+    ...days,
+  ]
+  while (cells.length % 7 !== 0) cells.push(null)
+  return Array.from({ length: cells.length / 7 }, (_, week) => cells.slice(week * 7, week * 7 + 7))
+}
+
+/** 0 — nothing that day; 1 to 4 — up to a quarter, a half, three quarters, all of the busiest. */
+export function heatLevel(value: number, max: number): 0 | 1 | 2 | 3 | 4 {
+  if (value <= 0 || max <= 0) return 0
+  return Math.min(4, Math.max(1, Math.ceil((4 * value) / max))) as 1 | 2 | 3 | 4
+}
+
+const monthFormat = new Intl.DateTimeFormat('ru-RU', { month: 'short', timeZone: 'UTC' })
+
+/**
+ * The months under the grid: a month is named under the week its first day falls in; a month
+ * whose first day is not in the grid is not named.
+ */
+export function monthTicks(
+  weeks: readonly (UsageActivityDay | null)[][],
+): { week: number; label: string }[] {
+  return weeks.flatMap((week, index) => {
+    const first = week.find((day) => day?.date.endsWith('-01'))
+    return first
+      ? [{ week: index, label: monthFormat.format(new Date(`${first.date}T00:00:00.000Z`)) }]
+      : []
+  })
+}

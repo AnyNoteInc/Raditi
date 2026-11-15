@@ -22,6 +22,7 @@ describe('usage activity input', () => {
   it('refuses a span the page does not offer and a workspace id that is not one', async () => {
     for (const broken of [
       { workspaceId: WORKSPACE, days: 14 as 7, now: NOW },
+      { workspaceId: WORKSPACE, days: 366 as 7, now: NOW },
       { workspaceId: 'ws', days: 7 as const, now: NOW },
       { workspaceId: WORKSPACE, days: 7 as const, now: new Date(Number.NaN) },
     ]) {
@@ -137,5 +138,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage activity', () => {
     expect(days[0]?.date).toBe('2026-10-17')
     expect(days.at(-1)?.date).toBe('2026-11-15')
     expect(days.every(({ actions }) => actions === 0)).toBe(true)
+    const year = await getUsageActivity(db, { workspaceId, days: 365, now: NOW })
+    expect(year.days).toHaveLength(365)
+    expect(year.days[0]?.date).toBe('2025-11-16')
   })
 })

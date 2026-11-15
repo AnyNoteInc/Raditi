@@ -7,6 +7,9 @@ import {
   creditsSummary,
   dayLabel,
   dayTicks,
+  heatLevel,
+  monthTicks,
+  weeksOf,
   labelledDay,
   longDayLabel,
   scaleTicks,
@@ -68,5 +71,36 @@ describe('usage activity words', () => {
     expect(creditsSummary(days)).toBe(
       'За 2 дня списано 13 кредитов: по тарифу — 9, подарочные — 3, из пакета — 1.',
     )
+  })
+})
+
+describe('the grid of actions', () => {
+  const days = (from: string, count: number) =>
+    Array.from({ length: count }, (_, index) => {
+      const [y, m, d] = from.split('-').map(Number) as [number, number, number]
+      const date = new Date(Date.UTC(y, m - 1, d + index)).toISOString().slice(0, 10)
+      return { date, actions: 0, credits: { tariff: 0, gift: 0, pack: 0 } }
+    })
+
+  it('lays days in weeks from Monday, with empty places before the first day and after the last', () => {
+    // Wednesday 28 October to Tuesday 3 November 2026.
+    const weeks = weeksOf(days('2026-10-28', 7))
+    expect(weeks.map((week) => week.map((cell) => cell?.date.slice(8) ?? null))).toEqual([
+      [null, null, '28', '29', '30', '31', '01'],
+      ['02', '03', null, null, null, null, null],
+    ])
+    expect(weeksOf([])).toEqual([])
+  })
+
+  it('names a month under the week of its first day', () => {
+    expect(monthTicks(weeksOf(days('2026-10-28', 40)))).toEqual([
+      { week: 0, label: 'нояб.' },
+      { week: 5, label: 'дек.' },
+    ])
+  })
+
+  it('colours a day by its share of the busiest one', () => {
+    expect([0, 1, 2, 3, 4, 8].map((value) => heatLevel(value, 8))).toEqual([0, 1, 1, 2, 2, 4])
+    expect(heatLevel(3, 0)).toBe(0)
   })
 })
