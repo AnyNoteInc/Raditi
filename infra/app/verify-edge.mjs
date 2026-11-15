@@ -963,6 +963,9 @@ try {
         'S3_ENDPOINT=https://s3.invalid',
         '-e',
         'VAULT_ADDR=https://vault.invalid:8200',
+        // Required in production (docs/plan/81-mcp-server-credentials.md): only auth is broken here.
+        '-e',
+        'SANDBOX_EGRESS_REFUSED_SUBNETS=203.0.113.10/32',
         '-v',
         `${join(work, 'secrets-broken/web')}:/run/raditi:ro`,
         LOCAL.web,
