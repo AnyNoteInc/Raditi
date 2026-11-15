@@ -11,8 +11,10 @@ import {
 import { useRouter } from 'next/navigation'
 
 import { captchaHeaders, useAuthUi } from '@/components/auth/auth-ui'
+import { YandexSignIn } from '@/components/auth/yandex-sign-in'
 import { mapAuthError } from '@/lib/auth-errors'
 import { rememberPendingEmail } from '@/lib/pending-email'
+import { DEFAULT_AFTER_SIGN_IN } from '@/lib/safe-redirect'
 
 const FIELDS: readonly RegisterField[] = [
   'name',
@@ -58,6 +60,10 @@ export function SignUpForm({ documents }: { documents: ConsentDocumentLinks }) {
         getCaptchaToken={captcha.execute}
         documents={documents}
         loginHref="/sign-in"
+      />
+      <YandexSignIn
+        callbackURL={DEFAULT_AFTER_SIGN_IN}
+        note="Документы и согласие на обработку персональных данных мы попросим принять следующим шагом."
       />
       {captcha.widget}
     </>

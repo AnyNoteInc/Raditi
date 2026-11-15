@@ -10,6 +10,7 @@ import { signUpProfile } from './profile.ts'
 import { profileLastNameSchema } from './profile-schema.ts'
 import { ipAddressOptions, USER_AGENT_MAX } from './request-meta.ts'
 import { smartCaptcha } from './smart-captcha.ts'
+import { withoutProviderTokens, yandexSignIn } from './yandex-sign-in.ts'
 
 const VERIFY_EMAIL_TTL_S = 24 * 60 * 60
 const RESET_PASSWORD_TTL_S = 60 * 60
@@ -57,6 +58,10 @@ export function createAuth({
     // app, which validate what they store. The handler ignores this list for auth.api calls.
     disabledPaths: ['/update-user'],
     databaseHooks: {
+      account: {
+        create: { before: async (account) => ({ data: withoutProviderTokens(account) }) },
+        update: { before: async (account) => ({ data: withoutProviderTokens(account) }) },
+      },
       session: {
         create: {
           // better-auth stores the raw header; a longer one than the column failed the sign-in.
@@ -66,6 +71,12 @@ export function createAuth({
               : undefined,
         },
       },
+    },
+    account: {
+      // A Yandex sign-in joins an existing account by its address only once that address was
+      // confirmed here: otherwise whoever registered someone's address first would get in.
+      accountLinking: { requireLocalEmailVerified: true },
+      updateAccountOnSignIn: false,
     },
     user: {
       additionalFields: {
@@ -121,6 +132,7 @@ export function createAuth({
       ...(config.captcha ? [smartCaptcha({ serverKey: config.captcha.serverKey, fetch })] : []),
       consents({ db: prisma }),
       signUpProfile(),
+      ...(config.yandex ? [yandexSignIn(config.yandex)] : []),
       // Last, as better-auth requires: it copies Set-Cookie into Next's cookie store.
       nextCookies(),
     ],

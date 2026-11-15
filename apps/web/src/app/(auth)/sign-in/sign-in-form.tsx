@@ -10,13 +10,23 @@ import {
 import { useRouter } from 'next/navigation'
 
 import { captchaHeaders, useAuthUi } from '@/components/auth/auth-ui'
+import { YandexSignIn } from '@/components/auth/yandex-sign-in'
 import { isAuthErrorCode, mapAuthError } from '@/lib/auth-errors'
 import { hardNavigate } from '@/lib/hard-navigate'
 import { rememberPendingEmail } from '@/lib/pending-email'
 
 const FIELDS: readonly LoginField[] = ['email', 'password']
 
-export function SignInForm({ redirectTo, notice }: { redirectTo: string; notice?: string }) {
+export function SignInForm({
+  redirectTo,
+  notice,
+  yandexFailure,
+}: {
+  redirectTo: string
+  notice?: string
+  /** Why the last sign-in with Yandex ID failed. */
+  yandexFailure?: string
+}) {
   const router = useRouter()
   const { authClient, captchaSiteKey } = useAuthUi()
   const captcha = useSmartCaptcha(captchaSiteKey)
@@ -50,6 +60,7 @@ export function SignInForm({ redirectTo, notice }: { redirectTo: string; notice?
         forgotPasswordHref="/reset-password"
         notice={notice}
       />
+      <YandexSignIn callbackURL={redirectTo} failure={yandexFailure} />
       {captcha.widget}
     </>
   )

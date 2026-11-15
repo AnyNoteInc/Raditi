@@ -12,7 +12,11 @@ export const metadata: Metadata = { robots: { index: false } }
 // page stays open to anyone holding a reset link, and sign-in honours ?next=.
 export default function AuthLayout({ children }: { children: ReactNode }) {
   return (
-    <AuthUiProvider appUrl={env.web().appUrl} captchaSiteKey={env.auth().captcha?.clientKey}>
+    <AuthUiProvider
+      appUrl={env.web().appUrl}
+      captchaSiteKey={env.auth().captcha?.clientKey}
+      yandexSignIn={env.auth().yandex !== null}
+    >
       <Container
         component="main"
         maxWidth="sm"
