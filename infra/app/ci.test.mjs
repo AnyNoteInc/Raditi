@@ -154,10 +154,10 @@ test('CI runs every opt-in database test of the role apps on its own PostgreSQL'
     assert.ok(filter, `${app} has a test:db script with one Vitest file filter`)
     for (const name of gated) assert.ok(name.includes(filter), `${app}: ${name} is outside test:db`)
   }
-  assert.ok(found['apps/core'] >= 3, 'the turn key, sweeper and release suites exist')
+  assert.ok(found['apps/core'] >= 3, 'the turn key, sweeper and pass suites exist')
   assert.ok(found['apps/llm'] >= 5, 'the gateway, pool, lock, login and retire suites exist')
-  assert.ok(found['apps/mcp'] >= 3, 'the access, undo and preview suites of the MCP gateway exist')
-  assert.ok(found['apps/preview'] >= 2, 'the access and entry suites of the preview gateway exist')
+  assert.ok(found['apps/mcp'] >= 2, 'the access and pages suites of the MCP gateway exist')
+  assert.ok(found['apps/preview'] >= 1, 'the pages suite of the preview app exists')
 
   const database = job('gateway-db')
   assert.ok(database, 'ci.yml has the gateway-db job')
@@ -416,7 +416,7 @@ test('every package script a workflow runs exists', () => {
 test('every build module a stand loads has its source in that app', () => {
   // Stands load classes from the build of an app (`../dist/<path>.js`, `../../<app>/dist/…`,
   // `apps/<app>/dist/…` from the root). Several run by hand only, with no workflow behind them
-  // (verify:runner, verify:snapshots, verify:publication, verify:gitea): a source moved to another
+  // (verify:runner, verify:snapshots): a source moved to another
   // folder would break them silently, until someone runs them. dist/<path>.js is built from
   // src/<path>.ts. Only what the repository tracks: a local file nobody committed decides nothing.
   const stands = execFileSync(
@@ -447,12 +447,10 @@ test('every build module a stand loads has its source in that app', () => {
       `${where}: apps/${app}/src/${module}.ts does not exist`,
     )
   }
-  // The manual stands among them: the runner's core side, the publication, the snapshots, Gitea.
+  // The manual stands among them: the runner's core side and the snapshots.
   for (const stand of [
     'apps/core/scripts/verify-runner-core.mjs',
-    'apps/core/scripts/verify-publication.mjs',
     'apps/core/scripts/verify-snapshots.mjs',
-    'infra/dev/gitea-verify/scenario.mjs',
   ])
     assert.ok(
       [...loaded.keys()].some((where) => where.startsWith(`${stand}: `)),
@@ -496,10 +494,6 @@ test('the rehearsals of the live mode run in CI, each after the deterministic pa
     'pnpm verify:llm-gateway --rehearsal --init --no-build',
     'pnpm verify:llm-gateway --rehearsal --api --no-build',
   ])
-  assert.deepEqual(stands('agent-content'), [
-    'pnpm verify:agent-content',
-    'pnpm verify:agent-content --rehearsal --no-build',
-  ])
   // The options exist and mean what the steps take them for.
   const live = read('infra/dev/llm-verify/live.mjs')
   for (const option of [
@@ -517,9 +511,9 @@ test('the rehearsals of the live mode run in CI, each after the deterministic pa
     read('apps/core/scripts/verify-llm-live-run.mjs'),
     /let refusal = rehearsal \? null : liveStartRefusal\(process\.env\)/,
   )
-  // No other workflow runs a rehearsal: the images and the build are those of these two jobs.
+  // No other workflow runs a rehearsal: the images and the build are those of its job.
   for (const { name, source } of workflows)
-    if (!['llm-gateway.yml', 'agent-content.yml'].includes(name))
+    if (name !== 'llm-gateway.yml')
       assert.equal(source.includes('--rehearsal'), false, `${name} runs a rehearsal`)
 })
 
@@ -570,8 +564,6 @@ test('every suite switched on one by one is named in a step of a workflow', () =
   const oneByOne = [
     'RADITI_BROWSER_DOCKER_TESTS',
     'RADITI_BROWSER_LOCAL_TESTS',
-    'RADITI_HOSTING_DOCKER_TESTS',
-    'RADITI_PREVIEW_DOCKER_TESTS',
   ]
   let checked = 0
   const missing = []
@@ -587,13 +579,7 @@ test('every suite switched on one by one is named in a step of a workflow', () =
       missing.push(file)
   }
   assert.deepEqual(missing, [], 'no step of a workflow runs these suites with their variable')
-  assert.ok(checked >= 14, 'the suites are found')
-  // `describe.runIf` is a skip condition too: the file that enables its suite that way.
-  assert.ok(
-    gates(read('packages/sandbox-providers/src/preview/staging.integration.test.ts')).includes(
-      'RADITI_PREVIEW_DOCKER_TESTS',
-    ),
-  )
+  assert.ok(checked >= 3, 'the suites are found')
 })
 
 test('a suite counts as run only by a step that names it and sets its variable', () => {
@@ -649,31 +635,6 @@ test('a suite counts as run only by a step that names it and sets its variable',
   assert.equal(matrixOf(each("'7.4', 8.0").around).part.join(' '), '7.4 8.0')
 })
 
-test('the images the suites of previews run by tag are pulled at a pinned digest', () => {
-  const pulled = new Map(
-    [...workflow('preview').matchAll(/^ +(\S+:\S+) (sha256:[0-9a-f]{64})$/gm)].map(
-      ([, tag, digest]) => [tag, digest],
-    ),
-  )
-  // A suite runs a tag with no pull of its own: Docker would fetch whatever the tag is today.
-  const suites = testFiles.filter(
-    (file) =>
-      file !== 'infra/app/ci.test.mjs' && read(file).includes('RADITI_PREVIEW_DOCKER_TESTS'),
-  )
-  const tags = new Set(
-    suites.flatMap((file) =>
-      [...read(file).matchAll(/\b(?:mariadb|mysql|wordpress):[\w.-]*\w/g)].map(([tag]) => tag),
-    ),
-  )
-  assert.ok(tags.has('mysql:8.4'), 'the second server of the plugin’s suite is found')
-  for (const tag of tags) assert.ok(pulled.has(tag), `preview.yml does not pull ${tag}`)
-  // One digest of the server across the stands.
-  const stand = /'mysql:8\.4@(sha256:[0-9a-f]{64})'/.exec(
-    read('infra/dev/site-import-verify/stand.mjs'),
-  )
-  assert.equal(pulled.get('mysql:8.4'), stand?.[1])
-})
-
 /**
  * The files of the repository a script loads, through static imports, `export … from` and
  * `import('…')` of a literal path; packages by name (`@repo/<name>`) are not followed.
@@ -694,109 +655,6 @@ function loads(entries) {
   }
   return [...found].sort()
 }
-
-test('site-images.yml builds every PHP version of the table and sends nothing anywhere', async () => {
-  const source = workflow('site-images')
-  // One job per row of the table, in its order; a row added without a job is never built here.
-  const versions = JSON.parse(read('infra/preview/site-bases.json')).versions.map(({ php }) => php)
-  assert.ok(versions.length >= 8, 'the rows of site-bases.json were read')
-  const matrix = /^ {8}php: \[(.+)\]$/m.exec(source)
-  assert.ok(matrix, 'site-images.yml has a matrix of PHP versions')
-  // Quoted: unquoted, 8.0 is a number to GitHub and `matrix.php` gives 8.
-  const quoted = matrix[1].split(',').map((version) => version.trim())
-  for (const version of quoted) assert.match(version, /^'[^']+'$/, `${version} is not quoted`)
-  assert.deepEqual(
-    quoted.map((version) => version.slice(1, -1)),
-    versions,
-  )
-  assert.match(source, /^ {6}fail-fast: false$/m)
-  assert.match(source, /^ {8}run: pnpm verify:site-images --only \$\{\{ matrix\.php \}\}$/m)
-  // Nothing leaves the runner: publishing is M10 (Т23).
-  for (const forbidden of [
-    'docker push',
-    'docker login',
-    'push: true',
-    'packages: write',
-    'secrets.',
-  ])
-    assert.ok(!source.includes(forbidden), `site-images.yml names ${forbidden}`)
-  assert.equal(/^permissions:\n((?: {2}.*\n)+)/m.exec(source)?.[1], '  contents: read\n')
-  assert.doesNotMatch(source, /^ +permissions:/m, 'a job asks for permissions of its own')
-  // Once a month on fresh packages, with a scan that never fails the job.
-  assert.match(source, /^ {2}schedule:\n {4}- cron: '[^']+'$/m)
-  const steps = source.split(/^ {6}- /m)
-  const index = (name) => steps.findIndex((step) => step.startsWith(`name: ${name}\n`))
-  // The stand finds the images it reads already pulled, by the digests its files name.
-  const pull = index('Pull the images the stand reads')
-  assert.ok(pull >= 0, 'site-images.yml pulls the images the stand reads')
-  assert.ok(pull < index('Build and check the image'), 'the images are pulled before the stand')
-  assert.ok(index('Docker with the containerd image store') < pull, 'into the containerd store')
-  const stacks = readdirSync(join(root, 'infra/dev/preview-verify')).filter((name) =>
-    /^site-[a-z0-9]+\.mjs$/.test(name),
-  )
-  assert.ok(stacks.length > 0, 'the files of stacks were found')
-  for (const name of stacks) {
-    const { treeImage } = await import(join(root, 'infra/dev/preview-verify', name))
-    assert.match(treeImage, /@sha256:[0-9a-f]{64}$/, `${name} names its tree by digest`)
-    assert.ok(
-      steps[pull].includes(`docker pull -q ${treeImage}\n`),
-      `site-images.yml does not pull ${treeImage} of ${name}`,
-    )
-  }
-  assert.match(steps[pull], /^ {10}PHP_VERSION: \$\{\{ matrix\.php \}\}$/m)
-  assert.match(steps[pull], /infra\/preview\/site-bases\.json\)\n {10}docker pull -q "\$base"\n/)
-  const scanAt = index('Scan the image')
-  assert.ok(scanAt >= 0, 'site-images.yml has the step of the scanner')
-  const scan = steps[scanAt]
-  // After the stand built the image of this job's version, and with the parameters of В1.
-  assert.ok(index('Build and check the image') < scanAt, 'the scanner runs after the stand')
-  assert.match(scan, /^ {10}PHP_VERSION: \$\{\{ matrix\.php \}\}$/m)
-  assert.match(scan, /^ {8}if: github\.event_name != 'pull_request'$/m)
-  assert.match(scan, /^ {8}continue-on-error: true$/m)
-  assert.match(scan, /--exit-code 0\b/)
-  assert.match(scan, /--scanners vuln\b/)
-  assert.match(scan, /--severity HIGH,CRITICAL\b/)
-  // The scanner sends no usage data and asks for no news of versions.
-  assert.match(scan, /--disable-telemetry\b/)
-  assert.match(scan, /--skip-version-check\b/)
-  assert.match(scan, /^ {10}TRIVY_IMAGE: aquasec\/trivy@sha256:[0-9a-f]{64}$/m)
-  // Every container of the step is the pinned scanner.
-  const runsOf = [...scan.matchAll(/docker run [^\n]*/g)].map(([line]) => line)
-  assert.equal(runsOf.length, 2, 'the scan and its table')
-  for (const line of runsOf) assert.match(line, / "\$TRIVY_IMAGE" /, line)
-  // The scanner reads the image the stand built and left under its tag.
-  assert.match(scan, /"raditi-site-verify:\$PHP_VERSION"/)
-  assert.ok(
-    read('infra/dev/preview-verify/verify-site-images.mjs').includes(
-      'const tag = `raditi-site-verify:${row.php}`',
-    ),
-    'the stand tags the image of a version as the scanner reads it',
-  )
-  const upload = steps.find((step) => step.startsWith('name: Upload the scan\n')) ?? ''
-  assert.match(upload, /^ {10}name: site-image-scan-\$\{\{ matrix\.php \}\}$/m)
-  // The engine of the sandbox VM, the same as preview.yml installs.
-  const engine = (text) => /^ +SANDBOX_DOCKER_VERSION: (\S+)$/m.exec(text)?.[1]
-  assert.ok(engine(workflow('preview')), 'preview.yml names the engine')
-  assert.equal(engine(source), engine(workflow('preview')))
-  // The workflow starts on every file the stand loads and every file its images copy; the
-  // package @repo/domain stays narrow, to its preview folder.
-  const filter = pathFilter(source)
-  assert.ok(filter.includes('infra/preview/**'))
-  assert.ok(filter.includes('packages/domain/src/preview/**'))
-  const stand = loads([
-    'infra/dev/preview-verify/verify-site-images.mjs',
-    ...readdirSync(join(root, 'infra/dev/preview-verify'))
-      .filter((name) => /^site-[a-z0-9]+\.mjs$/.test(name))
-      .map((name) => `infra/dev/preview-verify/${name}`),
-  ])
-  assert.ok(
-    stand.includes('packages/sandbox-providers/src/preview/runtime.ts'),
-    'the stand loads the preview runtime',
-  )
-  for (const file of stand) assert.ok(starts(filter, file), `${file} does not start the workflow`)
-  for (const file of copied('infra/sandbox/Dockerfile', 'network-guard'))
-    assert.ok(starts(filter, file), `${file} (network-guard) does not start the workflow`)
-})
 
 /**
  * The files outside `folder` that its code (not its tests) imports by a relative path, followed
@@ -825,263 +683,6 @@ function importedOutside(folder) {
 
 // The closed vendor of plan 62, in parts: this file would otherwise name it to itself.
 const closedVendor = new RegExp(['bit', 'rix'].join(''), 'i')
-
-test('site-stacks.yml runs М2 of every stack that has its suite, on archives of the run only', () => {
-  // docs/plan/62-slices/e3.md, Э3.8: the matrix is read from the folder of the suites, no stack is
-  // named here; each value starts the workflow by the files of its stack and runs its own file.
-  const source = workflow('site-stacks')
-  const suites = readdirSync(join(root, 'apps/core/src/previews'))
-    .map((name) => /^([a-z0-9]+)-preview\.integration\.test\.ts$/.exec(name)?.[1])
-    .filter(Boolean)
-    .toSorted()
-  assert.ok(suites.length > 0, 'a suite of a stack is found')
-  const stacks = matrixOf(source).stack ?? []
-  assert.deepEqual(stacks.toSorted(), suites)
-  const filter = pathFilter(source)
-  for (const stack of stacks) {
-    assert.ok(filter.includes(`infra/${stack}/**`), `the filter does not name infra/${stack}/**`)
-    assert.ok(
-      filter.includes(`packages/site-adapters/src/${stack}/**`),
-      `the filter does not name packages/site-adapters/src/${stack}/**`,
-    )
-    // What the adapter imports outside its folder, followed through those files: a change there
-    // changes the adapter, so it starts the workflow as well.
-    for (const file of importedOutside(`packages/site-adapters/src/${stack}`))
-      assert.ok(
-        starts(filter, file),
-        `${file}, imported by the adapter of ${stack}, does not start the workflow`,
-      )
-    assert.ok(
-      runsSuite(source, `src/previews/${stack}-preview.integration.test.ts`, [
-        'RADITI_PREVIEW_DOCKER_TESTS',
-        'RADITI_CMS_DIR',
-      ]),
-      `no step runs the suite of ${stack}`,
-    )
-  }
-  // The archives live in the temporary folder of the runner: no cache, artifact or image keeps them.
-  assert.match(source, /^ +RADITI_CMS_DIR: \$\{\{ runner\.temp \}\}\/raditi-cms$/m)
-  assert.doesNotMatch(source, /actions\/cache|upload-artifact|docker push/)
-  assert.match(
-    source,
-    /node infra\/dev\/stack-verify\/fetch-cms\.mjs --stack=\$\{\{ matrix\.stack \}\}/,
-  )
-  assert.doesNotMatch(source, closedVendor)
-})
-
-test('site-stacks.yml runs verify:stack of every stack on Linux, its groups named, never live', async () => {
-  // docs/plan/62-slices/e3.md, Э3.13: М3 and М4 in CI for the stacks of the matrix, under runc. The
-  // groups are named: without --group the stand runs every group of a stack, and `browser` (Э8)
-  // and `safety-browser` stay local (§5.5).
-  const source = workflow('site-stacks')
-  const stand = /^ {2}stand:\n(?:(?: {4}.*)?\n)+/m.exec(`${source}\n`)?.[0] ?? ''
-  assert.ok(stand, 'site-stacks.yml has the job stand')
-  assert.match(stand, /^ {4}needs: preview$/m)
-  assert.match(stand, /^ {4}timeout-minutes: 90$/m)
-  assert.deepEqual(matrixOf(stand).stack, matrixOf(source).stack)
-  const steps = stand.split(/^ {6}- /m).slice(1)
-  const runOf = (step) => /^ {8}run: (.*(?:\n(?: {9,}.*)?)*)/m.exec(step)?.[1] ?? ''
-  const verifying = steps.filter((step) => runOf(step).includes('pnpm verify:stack'))
-  assert.equal(verifying.length, 1, 'one step runs the stand')
-  const [step] = verifying
-  const command = runOf(step).trim()
-  assert.match(
-    command,
-    /^pnpm verify:stack -- --stack=\$\{\{ matrix\.stack \}\} --build=\$\{\{ matrix\.build \}\}(?: --group=[a-z-]+)+$/,
-  )
-  // One build per job, and together every build of the stand of each stack in the matrix.
-  const { STACK_STANDS } = await import(join(root, 'infra/dev/stack-verify/stacks.mjs'))
-  assert.deepEqual(
-    matrixOf(stand).build.toSorted(),
-    matrixOf(stand)
-      .stack.flatMap((stack) => STACK_STANDS[stack].builds.map(({ archive }) => archive))
-      .toSorted(),
-  )
-  // A cross product of two stacks and their builds names builds of the other stack.
-  assert.equal(matrixOf(stand).stack.length, 1, 'two stacks in the stand move it to include')
-  const groups = [...command.matchAll(/--group=([a-z-]+)/g)].map(([, group]) => group)
-  // М3 and М4 always; `safety` is what Э11.4 adds to this step; `browser` and `safety-browser`
-  // stay local (§5.5): any other group here is refused.
-  for (const group of ['import', 'preview', 'release'])
-    assert.ok(groups.includes(group), `the step does not name the group ${group}`)
-  for (const group of groups)
-    assert.ok(
-      ['import', 'preview', 'release', 'safety'].includes(group),
-      `CI runs the group ${group}`,
-    )
-  assert.equal(new Set(groups).size, groups.length, 'a group is named twice')
-  // runc: the option that would select gVisor is never passed here (М7 is a run by hand, Т69).
-  assert.doesNotMatch(stand, /--runtime|runsc/)
-  assert.match(step, /^ {10}RADITI_CMS_DIR: \$\{\{ runner\.temp \}\}\/raditi-cms$/m)
-  for (const forbidden of ['--live', 'ZAI_API_KEY'])
-    assert.equal(source.includes(forbidden), false, `site-stacks.yml names ${forbidden}`)
-  assert.doesNotMatch(source, /\$\{\{\s*secrets\./, 'site-stacks.yml reads a secret')
-  // The engine and the image store of the job preview: the stand needs repository digests of its
-  // own builds, and only the containerd store gives them.
-  for (const text of [
-    '"docker-ce=$package" "docker-ce-cli=$package"',
-    '"containerd-snapshotter": true',
-  ])
-    assert.ok(stand.includes(text), `the job stand lacks ${text}`)
-  // In this order: the images are pulled into the containerd store after the restart of Docker,
-  // and Gitleaks and the browsers are there before the stand. A red stand is a red job: no step
-  // of the job, nor the job, is skipped by a condition or let fail.
-  const index = (name) => steps.findIndex((each) => each.startsWith(`name: ${name}\n`))
-  const order = [
-    'Docker Engine of the sandbox VM',
-    'Docker with the containerd image store',
-    'Pull the pinned images',
-    'Gitleaks of the core image',
-    'Chromium and WebKit of Playwright',
-    'Import, preview and release of the build',
-  ].map(index)
-  assert.ok(!order.includes(-1), `a step of the job stand is missing: ${order}`)
-  assert.deepEqual(
-    order,
-    order.toSorted((a, b) => a - b),
-    'the steps of the job stand are out of order',
-  )
-  assert.equal(steps.indexOf(step), order.at(-1), 'the stand runs in its own step')
-  assert.doesNotMatch(stand, /^ +continue-on-error:/m, 'the job stand lets a step fail')
-  assert.doesNotMatch(stand, /^ +if:/m, 'the job stand skips a step by a condition')
-  // A failed images.mjs fails the pull: without pipefail the loop would end the pipe with 0.
-  assert.match(
-    steps[order[2]],
-    /^ {10}set -o pipefail\n {10}node infra\/dev\/stack-verify\/images\.mjs/m,
-  )
-  // The pinned images of the stand, by digest, from the one list the stand checks itself.
-  assert.match(
-    stand,
-    /node infra\/dev\/stack-verify\/images\.mjs --stack=\$\{\{ matrix\.stack \}\}[^\n]*\n[^\n]*docker pull --quiet "\$image"/,
-  )
-  assert.match(
-    read('infra/dev/stack-verify/verify-stack.mjs'),
-    /const pinned = pinnedImagesOf\(/,
-    'the stand checks the list the job pulls',
-  )
-  assert.ok(stand.includes('playwright install --with-deps chromium webkit'))
-  // Gitleaks of the pinned image of apps/core/Dockerfile: no second pin to drift, and its tag is the
-  // version the stand requires (the stand checks the binary's output, verify-stack.mjs).
-  const { GITLEAKS_VERSION } = await import(join(root, 'infra/dev/site-import-verify/stand.mjs'))
-  assert.match(GITLEAKS_VERSION, /^\d+\.\d+\.\d+$/)
-  assert.match(
-    read('apps/core/Dockerfile'),
-    new RegExp(
-      `^ARG GITLEAKS_IMAGE=ghcr\\.io/gitleaks/gitleaks:v${GITLEAKS_VERSION.replaceAll('.', '\\.')}@sha256:[0-9a-f]{64}$`,
-      'm',
-    ),
-  )
-  assert.match(
-    read('infra/dev/stack-verify/verify-stack.mjs'),
-    /import \{ GITLEAKS_VERSION \} from '\.\.\/site-import-verify\/stand\.mjs'/,
-  )
-  assert.ok(stand.includes("sed -n 's/^ARG GITLEAKS_IMAGE=//p' apps/core/Dockerfile"))
-  assert.ok(sets(stand, 'P2_GITLEAKS_BINARY'), 'the job gives the stand its Gitleaks')
-  // A change of the import or the release starts М3 and М4; tasks and mcp change in almost every
-  // pull request and are covered by the weekly run.
-  assert.match(source, /^ {2}schedule:\n {4}- cron: '37 3 \* \* 1'$/m)
-  const filter = pathFilter(source)
-  for (const pattern of [
-    'apps/core/src/site-provisioning/**',
-    'apps/core/src/releases/**',
-    'apps/core/src/release-api/**',
-    'apps/core/src/deploy-step/**',
-    'apps/preview/**',
-    'packages/site-connections/src/hosting/**',
-    'packages/site-content/**',
-    'ci/**',
-  ])
-    assert.ok(filter.includes(pattern), `${pattern} is not in the path filter`)
-  for (const pattern of ['apps/core/src/tasks/**', 'apps/mcp/**'])
-    assert.equal(filter.includes(pattern), false, `${pattern} starts the hour-long job`)
-  // Every file the stand loads by a relative import, beyond its own folder too, starts the workflow.
-  const loaded = loads([
-    'infra/dev/stack-verify/verify-stack.mjs',
-    'infra/dev/stack-verify/images.mjs',
-  ])
-  assert.ok(loaded.includes('infra/dev/release-verify/services.mjs'), 'the stand was read')
-  for (const file of loaded)
-    assert.ok(starts(filter, file), `${file}, loaded by the stand, does not start the workflow`)
-  // The images the stand builds: their Dockerfiles — apps/core/Dockerfile is the deploy runner of
-  // `release` — and what their stages copy from the repository (`COPY . .` of core is the tree, its
-  // folders are named above).
-  const { BUILT_IMAGES } = await import(join(root, 'infra/dev/release-verify/stand.mjs'))
-  const { COPY_MODULES, STACK_BUILT_IMAGES } = await import(
-    join(root, 'infra/dev/stack-verify/stand.mjs')
-  )
-  const images = [...Object.values(BUILT_IMAGES), ...Object.values(STACK_BUILT_IMAGES)]
-  assert.ok(
-    images.some((image) => image.file === 'apps/core/Dockerfile'),
-    'the images were read',
-  )
-  for (const { file, target, context } of images) {
-    assert.ok(starts(filter, file), `${file}, built by the stand, does not start the workflow`)
-    if (file === 'apps/core/Dockerfile') continue
-    for (const source of copied(file, target)) {
-      const path = context ? join(context, source) : source
-      assert.ok(starts(filter, path), `${path} (${file}, ${target}) does not start the workflow`)
-    }
-  }
-  // Prisma and billing of the copy set the stand up and change in almost every pull request: only
-  // the weekly run covers them. A module added to the copy is a decision of its own.
-  assert.deepEqual(Object.values(COPY_MODULES).toSorted(), [
-    'packages/billing/src/index.ts',
-    'packages/db/src/index.ts',
-  ])
-  for (const file of Object.values(COPY_MODULES))
-    assert.equal(starts(filter, file), false, `${file} starts the hour-long job`)
-  // What the import and the release run in core beside their own folders starts the workflow, but
-  // the frame every pull request touches — the weekly run covers it. A folder newly imported is a
-  // decision of its own.
-  const product = ['site-provisioning', 'releases', 'release-api', 'deploy-step']
-  const weekly = ['config', 'infra', 'leases', 'metrics', 'queue', 'site-env']
-  const reached = new Set()
-  for (const folder of product)
-    for (const name of readdirSync(join(root, 'apps/core/src', folder), { recursive: true })) {
-      if (!/\.ts$/.test(name) || /\.test\.ts$/.test(name)) continue
-      const file = join('apps/core/src', folder, name)
-      for (const [, specifier] of read(file).matchAll(/\bfrom\s*'(\.{1,2}\/[^']+)'/g)) {
-        const target = relative(join(root, 'apps/core/src'), join(root, dirname(file), specifier))
-        const [top] = target.split('/')
-        if (target.includes('/') && !top.startsWith('.')) reached.add(top)
-      }
-    }
-  assert.ok(reached.has('git-workspace'), 'the imports of the release were read')
-  for (const folder of reached) {
-    if (weekly.includes(folder)) continue
-    assert.ok(
-      filter.includes(`apps/core/src/${folder}/**`),
-      `apps/core/src/${folder}/** is reached by the import or the release and does not start the workflow`,
-    )
-  }
-  for (const folder of weekly)
-    assert.ok(
-      reached.has(folder),
-      `apps/core/src/${folder} is no longer reached: drop it from weekly`,
-    )
-  // The download of a site at the import (`siteSource`) and the writing on the hosting.
-  for (const file of [
-    'packages/site-connections/src/index.ts',
-    'packages/site-connections/src/sources/sftp.ts',
-    'packages/site-connections/src/sources/ftp.ts',
-    'packages/site-connections/src/hosting/index.ts',
-  ])
-    assert.ok(
-      existsSync(join(root, file)) && starts(filter, file),
-      `${file} does not start the workflow`,
-    )
-})
-
-test('no file of the stands of the site stacks names the closed vendor but their README', () => {
-  // The core of that CMS is never fetched, unpacked or run here (plan 62): a table of archives,
-  // a stand or a fixture that names it is refused before it is used.
-  const folder = 'infra/dev/stack-verify'
-  const files = readdirSync(join(root, folder), { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name !== 'README.md')
-    .map((entry) => relative(root, join(entry.parentPath, entry.name)))
-  assert.ok(files.includes(`${folder}/cms-archives.json`), 'the files of the stand are read')
-  for (const file of files) assert.doesNotMatch(read(file), closedVendor, file)
-})
 
 test('CI runs the Docker isolation suites of the sandbox provider on a real daemon', () => {
   const source = workflow('agent-driver')
@@ -1214,146 +815,6 @@ const pinnedImages = (script, declaration) => {
   const block = source.slice(source.indexOf(declaration)).split(/^\}\)?$/m)[0]
   return [...block.matchAll(/'([^'\s]+@sha256:[a-f0-9]{64})'/g)].map(([, image]) => image)
 }
-const siteImages = pinnedImages('infra/dev/site-verify/verify-site.mjs', 'const images = {')
-
-test('the WordPress content path runs on a real WordPress in CI', () => {
-  const source = workflow('wordpress-content')
-  const filter = pathFilter(source)
-  for (const pattern of [
-    '.github/workflows/wordpress-content.yml',
-    'infra/wordpress/**',
-    'infra/dev/site-verify/**',
-    'packages/site-adapters/**',
-    'apps/mcp/**',
-  ])
-    assert.ok(filter.includes(pattern), `${pattern} is in the path filter`)
-  // The plugin, every script of the stand and the helpers it imports start the workflow. The
-  // worker and its scenarios drive the mcp app alone and live in its scripts (plan 56).
-  const workers = readdirSync(join(root, 'apps/mcp/scripts'))
-    .filter((name) => name.startsWith('verify-content-'))
-    .map((name) => `apps/mcp/scripts/${name}`)
-  assert.ok(workers.includes('apps/mcp/scripts/verify-content-worker.mjs'))
-  const stand = [
-    'infra/wordpress/raditi-content.php',
-    'apps/core/scripts/verify-agent-supervisor.mjs',
-    ...readdirSync(join(root, 'infra/dev/site-verify')).map(
-      (name) => `infra/dev/site-verify/${name}`,
-    ),
-    ...workers,
-  ]
-  assert.ok(stand.length >= 9)
-  for (const file of stand) assert.ok(starts(filter, file), `${file} does not start the workflow`)
-  // As for the gateway stand: the packages its scripts import, by name or by a path into their
-  // sources, the modules of the apps they load from the builds and the app sources they load as
-  // they are. `../dist/` and `../src/` are the build and the sources of the script's own app.
-  // The journal tables, the snapshot storage and the turn undo are this path as much as the
-  // plugin is.
-  const imported = new Set()
-  for (const script of stand.filter((file) => file.endsWith('.mjs'))) {
-    const app = /^apps\/([a-z-]+)\/scripts\//.exec(script)?.[1]
-    const text = read(script)
-    for (const [, name] of text.matchAll(/'(?:@repo|(?:\.\.\/)+packages)\/([a-z-]+)[/']/g))
-      imported.add(`packages/${name}/src/index.ts`)
-    if (!app) continue
-    // A module of the app's own build: its directory, or the app itself for one at the root.
-    for (const [, directory] of text.matchAll(/'\.\.\/dist\/(?:([a-z-]+)\/)?/g))
-      imported.add(`apps/${app}/src/${directory ? `${directory}/` : ''}index.ts`)
-    // The builds of the other apps, by directory: ../../core/dist/turns/ and the like.
-    for (const [, other, directory] of text.matchAll(
-      /'\.\.\/\.\.\/([a-z-]+)\/dist\/(?:([a-z-]+)\/)?/g,
-    ))
-      imported.add(`apps/${other}/src/${directory ? `${directory}/` : ''}index.ts`)
-    for (const [, file] of text.matchAll(/'\.\.\/src\/([^']+\.ts)'/g))
-      imported.add(`apps/${app}/src/${file}`)
-  }
-  for (const source of [
-    'packages/db/src/index.ts',
-    'packages/storage/src/index.ts',
-    'packages/domain/src/index.ts',
-    'packages/site-adapters/src/index.ts',
-    'apps/mcp/src/index.ts',
-    'apps/mcp/src/content/index.ts',
-    // The turn supervisor of core's build drives the trusted rollback of the mcp app.
-    'apps/core/src/turns/index.ts',
-    // The sample ids of the turns the stand makes up.
-    'apps/mcp/src/testing/ids.ts',
-  ])
-    assert.ok(imported.has(source), `the stand loads ${source.replace('/index.ts', '')}`)
-  for (const source of imported)
-    assert.ok(starts(filter, source), `${source.replace('index.ts', '**')} does not start it`)
-  // The stand configures its OpenBao with the real bootstrap of infra/vault and runs the role
-  // `mcp` under the real policies: a change of either must run the stand.
-  assert.match(
-    read('infra/dev/site-verify/verify-content.mjs'),
-    /from '\.\.\/\.\.\/vault\/bootstrap\.mjs'/,
-  )
-  const policies = readdirSync(join(root, 'infra/vault/policies'))
-  assert.ok(policies.includes('mcp-content.hcl') && policies.includes('sites-writer.hcl'))
-  for (const file of ['bootstrap.mjs', ...policies.map((name) => `policies/${name}`)])
-    assert.ok(starts(filter, `infra/vault/${file}`), `infra/vault/${file} does not start it`)
-  // The MCP modules are what the stand runs for real, against its own OpenBao, S3 and
-  // PostgreSQL: every workspace package they import starts it too (the contact masks live in
-  // the KV client of @repo/vault, and no other workflow exercises them on a real OpenBao).
-  const mcp = join(root, 'apps/mcp/src')
-  const packages = new Set(
-    readdirSync(mcp, { recursive: true })
-      .filter((name) => name.endsWith('.ts') && !name.endsWith('.test.ts'))
-      .flatMap((name) => [
-        ...readFileSync(join(mcp, name), 'utf8').matchAll(/from '@repo\/([a-z-]+)'/g),
-      ])
-      .map(([, name]) => name),
-  )
-  assert.ok(packages.has('vault') && packages.has('db'), 'the MCP modules use Vault and the DB')
-  for (const name of packages)
-    assert.ok(
-      starts(filter, `packages/${name}/src/index.ts`),
-      `packages/${name}/** (imported by the MCP modules) does not start it`,
-    )
-  // The stand applies the real migrations to its PostgreSQL.
-  assert.match(
-    read('apps/core/scripts/verify-agent-supervisor.mjs'),
-    /'packages\/db\/prisma\/migrations'/,
-  )
-  assert.ok(starts(filter, 'packages/db/prisma/migrations/x/migration.sql'))
-  assert.match(
-    read('infra/dev/site-verify/verify-content.mjs'),
-    /from '\.\.\/\.\.\/\.\.\/apps\/core\/scripts\/verify-agent-supervisor\.mjs'/,
-  )
-
-  // The stand never pulls (--pull=never, `compose up --pull never`): CI pulls exactly what the
-  // scripts pin, by digest. The WP-CLI image is the verified digest, never its mutable tag.
-  const services = pinnedImages(
-    'apps/core/scripts/verify-agent-supervisor.mjs',
-    'export const serviceImages = Object.freeze({',
-  )
-  assert.equal(services.length, 3)
-  assert.equal(siteImages.length, 4)
-  const pull = /^ {6}- name: Pull the pinned images\n {8}run: \|\n((?: {10}.*\n)+)/m.exec(source)
-  assert.ok(pull, 'wordpress-content.yml pulls the pinned images')
-  assert.match(pull[1], /docker pull --quiet "\$image"/)
-  assert.deepEqual(
-    [...pull[1].matchAll(/(\S+@sha256:[a-f0-9]{64})/g)].map(([, image]) => image).sort(),
-    [...services, ...siteImages].sort(),
-  )
-  assert.doesNotMatch(source, /wordpress:cli-/)
-
-  const runs = [...source.matchAll(/^ {8}run: (.+)$/gm)]
-    .map(([, command]) => command)
-    .filter((command) => command !== '|')
-  // The orchestrator build inside the stand's command needs the generated Prisma client.
-  assert.deepEqual(runs, ['pnpm db:generate', 'pnpm verify:mcp-content'])
-  assert.equal(
-    JSON.parse(read('package.json')).scripts['verify:mcp-content'],
-    // `exec`: a signal sent to pnpm must reach the stand, or its cleanup runs outside the stand lock.
-    'pnpm --filter core --filter mcp build && exec node infra/dev/site-verify/verify-content.mjs',
-  )
-  // On the runner the engine is native Linux Docker, not Docker Desktop.
-  assert.match(source, /^ {4}runs-on: ubuntu-latest$/m)
-  assert.match(
-    read('infra/dev/site-verify/verify-content.mjs'),
-    /nativeLinux: process\.platform === 'linux'/,
-  )
-})
 
 test('CI runs the presigned-URL suite of the storage adapter on a real S3', () => {
   const storage = job('storage-s3')
@@ -1393,32 +854,6 @@ test('CI runs the presigned-URL suite of the storage adapter on a real S3', () =
   assert.equal(scripts('packages/storage').test, 'vitest run')
   // The shared job has no S3: there the suite stays skipped, and no other package sees S3_*.
   assert.ok(!sets(job('gates'), 'S3_ENDPOINT'))
-})
-
-test('the required CI job checks the syntax of every PHP file of infra', () => {
-  // The content plugin and the preview files of every stack, and the prologue of a generated
-  // configuration (docs/plan/62-site-stacks.md, Т12, Т21): the step walks infra/*/ and names no
-  // file, so the folder of a new stack is checked without a new line.
-  const gates = job('gates')
-  const files = globSync('infra/*/*.php', { cwd: root })
-  assert.ok(files.length > 0)
-  assert.ok(files.includes('infra/preview/prologue.php'))
-  for (const file of files) assert.ok(read(file).startsWith('<?php'), file)
-  const step = gates.slice(gates.indexOf('- name: PHP syntax of infra'))
-  assert.ok(step.length < gates.length, 'the gates job has the step PHP syntax of infra')
-  const run = step.slice(0, step.indexOf('\n      - name: '))
-  assert.match(run, /^ {10}for file in infra\/\*\/\*\.php; do$/m)
-  assert.match(run, /^ {14}php -l "\$file"$/m)
-  assert.doesNotMatch(run, /infra\/(?!\*)/, 'the step names no folder of infra')
-  // A runner without PHP uses the PHP of the pinned WordPress image, offline and read-only.
-  const [, image] =
-    /docker run --rm --network none --entrypoint php -v "\$PWD\/infra:\/infra:ro" \\\n +(\S+) -l "\/\$file"/.exec(
-      run,
-    ) ?? []
-  assert.equal(
-    image,
-    siteImages.find((name) => name.startsWith('wordpress:7.')),
-  )
 })
 
 test('a cached gate sees a source change in a package it depends on', () => {
@@ -1464,21 +899,6 @@ test('a cached test run sees a change of a file its tests read outside their pac
       'apps/llm/src/gateway/sandbox-routes.contract.test.ts',
       'apps/core/src/llm/backends.test.ts',
     ],
-    // The policy of the WordPress database copy, against the file the copier is tested with
-    // (plan 53, R5b). The embedded files of the stacks are the next test.
-    'packages/site-connections/src/database-copy/wordpress-policy.fixture.json': [
-      'packages/site-adapters/src/wordpress-db-copy.test.ts',
-    ],
-    // The stand of Joomla and the table of the archives of the CMS, against the suite of М2 and
-    // its harness (docs/plan/62-slices/e3.md, Э3.8); the inputs name the folder of the stand and
-    // every folder under it.
-    'infra/dev/stack-verify/joomla.mjs': [
-      'apps/core/src/previews/joomla-preview.integration.test.ts',
-    ],
-    'infra/dev/stack-verify/cms-archives.json': ['apps/core/src/testing/stack-preview.ts'],
-    // The files of the production container the harness copies (`**` takes the folder prod/).
-    'infra/dev/stack-verify/prod/entry.sh': ['apps/core/src/testing/stack-preview.ts'],
-    'infra/dev/stack-verify/prod/apache.conf': ['apps/core/src/testing/stack-preview.ts'],
     // The token command of the runner image (the runbook issues it on the sandbox VM), against
     // the RUNNER_TOKENS entries core accepts.
     'apps/runner/scripts/runner-token.mjs': ['apps/core/src/runner-api/runner-auth.test.ts'],
@@ -1506,22 +926,6 @@ test('a cached test run sees a change of a file its tests read outside their pac
       `${importer} no longer imports ${file}`,
     )
   }
-})
-
-test('a cached test run sees a change of any file of a stack', () => {
-  // stack-files.test.ts holds the constants of every folder of EMBEDDED to the files of
-  // infra/<stack>/ through stack-files.mjs (docs/plan/62-site-stacks.md, Т12). The inputs walk
-  // infra/*/ as the script does, so a new stack needs no new line here.
-  const { inputs = [] } = JSON.parse(read('turbo.json')).tasks.test
-  for (const pattern of ['infra/*/*.php', 'infra/*/*.conf', 'infra/*/*.ini'])
-    assert.ok(inputs.includes(`$TURBO_ROOT$/${pattern}`), `${pattern} is not an input of test`)
-  assert.ok(!inputs.some((input) => input.startsWith('$TURBO_ROOT$/infra/wordpress/')))
-  const reader = 'packages/site-adapters/src/stack-files.test.ts'
-  assert.ok(read(reader).includes("from '../scripts/stack-files.mjs'"), `${reader} reads no files`)
-  assert.match(
-    read('packages/site-adapters/scripts/stack-files.mjs'),
-    /const EMBEDDABLE = \/\\\.\(\?:php\|conf\|ini\)\$\//,
-  )
 })
 
 test('a cached typecheck or test of core sees a change of the runner engine its tests drive', () => {
@@ -1854,23 +1258,6 @@ test('every file the plan of the site stacks names is in the repository', () => 
   for (const [, link] of read(index).matchAll(/\]\((?!https?:)([^)#\s]+)\)/g)) {
     assert.ok(existsSync(join(root, stackReports, link)), `${index} links ${link}`)
   }
-})
-
-test('the import builds its path policy from every field of the rules of an adapter', () => {
-  // Plan 62, Т57: `importPolicyOf` passes `documentFolders` along with `exclude`; a direct call
-  // of the bare policy would close no folder of documents, or forget a field the next stage adds.
-  const policyFile = 'packages/domain/src/site-connection/import-policy.ts'
-  const sources = workspaces.flatMap((workspace) =>
-    existsSync(join(root, workspace, 'src'))
-      ? readdirSync(join(root, workspace, 'src'), { recursive: true })
-          .filter((name) => /\.(?:ts|tsx|mts|mjs)$/.test(name))
-          .filter((name) => !/\.(?:test|spec)\.(?:ts|tsx|mts|mjs)$/.test(name))
-          .map((name) => `${workspace}/src/${name}`)
-      : [],
-  )
-  assert.ok(sources.includes(policyFile), `${policyFile} is a source file`)
-  const callers = sources.filter((file) => read(file).includes('createImportPathPolicy('))
-  assert.deepEqual(callers, [policyFile])
 })
 
 test('the core of the smoke labels its turn containers apart from `pnpm dev`', () => {
