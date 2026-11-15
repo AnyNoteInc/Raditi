@@ -7,12 +7,12 @@
 
 const TOOLING = '^packages/(eslint-config|typescript-config)/'
 const ADAPTERS =
-  'db|storage|vault|git-providers|sandbox-providers|browser-providers|agent-drivers|llm-backends|site-adapters|site-connections|snapshots|yookassa|mail|telegram'
+  'db|storage|vault|sandbox-providers|browser-providers|agent-drivers|llm-backends|snapshots|yookassa|mail|telegram'
 // A leaf: imports nothing of the repository. The apps import it; no tier rule of a package
 // allows it.
 const LEAVES = 'ip-address'
 const SERVICES =
-  'auth|notifications|billing|local-turns|turn-keys|site-content|browser-link|doc-render'
+  'auth|notifications|billing|local-turns|turn-keys|browser-link|doc-render'
 // The frame and runtime of the apps (process start and stop, Nest wiring, health):
 // app-side code that lives in a package, so it may use observability, which no library package may.
 const RUNTIME = 'app-bootstrap|service-runtime'
@@ -163,17 +163,6 @@ module.exports = {
       },
     },
     {
-      name: 'site-content-tier',
-      comment:
-        'site-content composes db, the snapshots and the turn-key formats; never trpc, ui or agent infrastructure.',
-      severity: 'error',
-      from: { path: '^packages/site-content/' },
-      to: {
-        path: '^packages/',
-        pathNot: ['^packages/(domain|db|snapshots|turn-keys|site-content)/', TOOLING],
-      },
-    },
-    {
       name: 'ip-address-is-a-leaf',
       comment:
         'ip-address parses and classifies addresses with node:net alone: it imports no package of the repository.',
@@ -282,7 +271,6 @@ module.exports = {
         path: [
           '^packages/(turn-keys|snapshots|local-turns)/src/testing\\.ts$',
           '^packages/(app-bootstrap|service-runtime)/src/testing/',
-          '^packages/site-adapters/src/testing/',
         ],
       },
     },
@@ -293,7 +281,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^(apps/web|packages/(trpc|ui|auth|billing|notifications))/' },
       to: {
-        path: '^packages/(app-bootstrap|service-runtime|turn-keys|local-turns|snapshots|site-content|browser-link)/',
+        path: '^packages/(app-bootstrap|service-runtime|turn-keys|local-turns|snapshots|browser-link)/',
         reachable: true,
       },
     },
@@ -408,18 +396,18 @@ module.exports = {
       severity: 'error',
       from: { path: '^apps/mcp/', pathNot: '\\.test\\.ts$' },
       to: {
-        path: '^packages/(git-providers|sandbox-providers|agent-drivers|llm-backends|site-connections|yookassa|mail|telegram|auth|notifications|billing|local-turns|doc-render|trpc|ui)/',
+        path: '^packages/(sandbox-providers|agent-drivers|llm-backends|yookassa|mail|telegram|auth|notifications|billing|local-turns|doc-render|trpc|ui)/',
         reachable: true,
       },
     },
     {
       name: 'mcp-profiles-apart',
       comment:
-        'The content and the browser tools of the mcp app are two profiles, the web tools of a browser task the module of the browser worker (docs/plan/57-browser-tasks.md, Б20) the web search its own family (spec §20, «Веб-поиск агента») and the pages of the workspace theirs (docs/plan/69-pages.md, Ст20), each its own module: no folder of them imports another (plan 56, §4.3).',
+        'The web tools of a chat (docs/plan/57-browser-tasks.md, Б20), the web search (spec §20, «Веб-поиск агента») and the pages of the workspace (docs/plan/69-pages.md, Ст20) are each its own module of the mcp app: no folder of them imports another (plan 56, §4.3).',
       severity: 'error',
-      from: { path: '^apps/mcp/src/(content|browser|web|search|pages)/', pathNot: '\\.test\\.ts$' },
+      from: { path: '^apps/mcp/src/(web|search|pages)/', pathNot: '\\.test\\.ts$' },
       to: {
-        path: '^apps/mcp/src/(content|browser|web|search|pages)/',
+        path: '^apps/mcp/src/(web|search|pages)/',
         pathNot: '^apps/mcp/src/$1/',
       },
     },
@@ -433,9 +421,9 @@ module.exports = {
         pathNot: '\\.test\\.ts$',
       },
       to: {
-        path: '^apps/mcp/src/(content|browser|web|search|pages)/',
+        path: '^apps/mcp/src/(web|search|pages)/',
         pathNot:
-          '^apps/mcp/src/(content/content-arguments|browser/browser-arguments|search/search-arguments|pages/pages-arguments)\\.ts$',
+          '^apps/mcp/src/(search/search-arguments|pages/pages-arguments)\\.ts$',
       },
     },
     {
@@ -446,7 +434,7 @@ module.exports = {
       from: {
         path: [
           '^apps/mcp/src/common/',
-          '^apps/mcp/src/(content/content-arguments|browser/browser-arguments|search/search-arguments|pages/pages-arguments)\\.ts$',
+          '^apps/mcp/src/(search/search-arguments|pages/pages-arguments)\\.ts$',
         ],
         pathNot: '\\.test\\.ts$',
       },
@@ -459,7 +447,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^apps/llm/', pathNot: '\\.test\\.ts$' },
       to: {
-        path: '^packages/(storage|git-providers|sandbox-providers|browser-providers|browser-link|agent-drivers|site-adapters|site-connections|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|site-content|doc-render)/',
+        path: '^packages/(storage|sandbox-providers|browser-providers|browser-link|agent-drivers|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|doc-render)/',
         reachable: true,
       },
     },
@@ -481,23 +469,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^apps/preview/', pathNot: '\\.test\\.ts$' },
       to: {
-        path: '^packages/(storage|vault|git-providers|sandbox-providers|browser-providers|agent-drivers|llm-backends|site-adapters|site-connections|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|turn-keys|site-content|doc-render|trpc|ui)/',
-        reachable: true,
-      },
-    },
-    {
-      name: 'preview-request-path',
-      comment:
-        'A request through the preview gateway (its server, the access checks, the cookie) is served from the database alone: domain, db, the address helpers and the Prisma token of service-runtime (its subpath ./tokens), not even transitively — no runtime, observability or app-bootstrap.',
-      severity: 'error',
-      from: { path: '^apps/preview/src/(gateway|access|cookie)/', pathNot: '\\.test\\.ts$' },
-      to: {
-        path: '^packages/',
-        pathNot: [
-          '^packages/(domain|db|ip-address)/',
-          '^packages/service-runtime/src/tokens\\.ts$',
-          TOOLING,
-        ],
+        path: '^packages/(storage|vault|sandbox-providers|browser-providers|agent-drivers|llm-backends|yookassa|mail|telegram|auth|notifications|billing|snapshots|local-turns|turn-keys|doc-render|trpc|ui)/',
         reachable: true,
       },
     },
@@ -524,7 +496,7 @@ module.exports = {
       severity: 'error',
       from: { path: '^apps/browser/', pathNot: '\\.test\\.ts$' },
       to: {
-        path: '^packages/(vault|git-providers|agent-drivers|llm-backends|site-connections|snapshots|yookassa|mail|telegram|auth|notifications|billing|local-turns|turn-keys|site-content|browser-link|doc-render|trpc|ui)/',
+        path: '^packages/(vault|agent-drivers|llm-backends|snapshots|yookassa|mail|telegram|auth|notifications|billing|local-turns|turn-keys|browser-link|doc-render|trpc|ui)/',
         reachable: true,
       },
     },
@@ -540,7 +512,7 @@ module.exports = {
       to: {
         dependencyTypesNot: ['local', 'core'],
         pathNot: [
-          '^packages/(domain|app-bootstrap|service-runtime|db|observability|browser-providers|sandbox-providers|site-adapters|storage|ip-address)/',
+          '^packages/(domain|app-bootstrap|service-runtime|db|observability|browser-providers|sandbox-providers|storage|ip-address)/',
           ...npm(
             '@nestjs/[^/]+|express|@types/express|reflect-metadata|rxjs|ws|@types/ws|zod|@prometheus-io/client',
           ),
@@ -572,20 +544,6 @@ module.exports = {
           '^packages/(db|vault|storage|llm-backends|yookassa|billing|browser-link)/',
           '^apps/core/src/runner-api/',
           ...npm('ioredis|bullmq|@prisma/[^/]+|@aws-sdk/[^/]+'),
-        ],
-        reachable: true,
-      },
-    },
-    {
-      name: 'deploy-step-no-platform-access',
-      comment:
-        'The deploy-step command runs inside the deploy job of a site (docs/plan/53-chat-preview-release.md, Р30): it has no database, Redis or S3, not even transitively. Everything it needs comes from the release API.',
-      severity: 'error',
-      from: { path: '^apps/core/src/deploy-step/', pathNot: '\\.test\\.ts$' },
-      to: {
-        path: [
-          '^packages/(db|storage|billing)/',
-          ...npm('ioredis|bullmq|@prisma/[^/]+|@aws-sdk/[^/]+|pg'),
         ],
         reachable: true,
       },

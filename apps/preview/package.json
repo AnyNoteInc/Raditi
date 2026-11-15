@@ -25,7 +25,6 @@
     "@repo/service-runtime": "workspace:*",
     "reflect-metadata": "catalog:",
     "rxjs": "catalog:",
-    "tldts": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

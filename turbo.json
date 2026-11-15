@@ -1,7 +1,10 @@
 {
   "$schema": "https://turborepo.dev/schema.json",
   "ui": "tui",
-  "globalDependencies": [".env", ".nvmrc"],
+  "globalDependencies": [
+    ".env",
+    ".nvmrc"
+  ],
   "globalEnv": [
     "APP_ENV",
     "APP_URL",
@@ -12,10 +15,8 @@
     "BILLING_TICK_SECONDS",
     "BROWSER_DOCKER_SOCKET",
     "BROWSER_EGRESS_IMAGE",
-    "BROWSER_EXTRA_HOSTS",
     "BROWSER_FORWARDER_IMAGE",
     "BROWSER_IMAGE",
-    "BROWSER_LOCAL_SITES",
     "BROWSER_PAGE_ADDRESSES",
     "BROWSER_PLATFORM_HOSTS",
     "BROWSER_MAX_SESSIONS",
@@ -35,13 +36,6 @@
     "CI",
     "CORE_PORT",
     "DATABASE_URL",
-    "GITEA_PROVISIONER_TOKEN",
-    "GITEA_RUNNER_TOKEN",
-    "GITEA_TOKEN",
-    "GITEA_URL",
-    "GITEA_WEBHOOK_SECRET",
-    "GIT_CA_FILE",
-    "GIT_MIRROR_DIR",
     "GRAFANA_ADMIN_PASSWORD",
     "LEADS_TELEGRAM_BOT_TOKEN",
     "LEADS_TELEGRAM_CHAT_ID",
@@ -61,8 +55,6 @@
     "LLM_POOL_MIN_TURN_HEADROOM_PCT",
     "LLM_UPSTREAM_CA_FILE",
     "MCP_ALLOWED_HOSTS",
-    "MCP_BROWSER_PROFILE",
-    "MCP_CONTENT_PROFILE",
     "MCP_PORT",
     "METRICS_TOKEN",
     "NODE_ENV",
@@ -82,40 +74,14 @@
     "PAGES_PORT",
     "PAGES_PUBLIC_PORT",
     "PAGES_SIGNING_SECRET",
-    "PREVIEW_BASE_DOMAIN",
-    "PREVIEW_BROWSER_IMAGE",
-    "PREVIEW_BROWSER_RELAYS",
-    "PREVIEW_DB_IMAGE",
-    "PREVIEW_DNS_SERVERS",
-    "PREVIEW_EXECUTOR",
-    "SINGLE_SERVER",
-    "PREVIEW_FORWARDER_IMAGE",
-    "PREVIEW_GATEWAY_HOST",
-    "PREVIEW_GATEWAY_PORT",
-    "PREVIEW_IDLE_MINUTES",
-    "PREVIEW_PUBLIC_PORT",
-    "PREVIEW_RELAY_GATEWAY_HOST",
-    "PREVIEW_RUNTIME",
-    "PREVIEW_SCHEME",
-    "PREVIEW_SESSION_SECRET",
-    "PREVIEW_SITE_IMAGES",
-    "PREVIEW_TTL_HOURS",
-    "PREVIEW_UPSTREAM_HOST",
     "PUBLIC_DOMAIN",
     "RADITI_BROWSER_DOCKER_RUNTIME",
     "RADITI_BROWSER_DOCKER_TESTS",
     "RADITI_BROWSER_LOCAL_TESTS",
-    "RADITI_CMS_DIR",
     "RADITI_DOCKER_TEST_IMAGE",
     "RADITI_DOCKER_TEST_UPSTREAM_HOST",
     "RADITI_GATEWAY_DB_TESTS",
-    "RADITI_HOSTING_DOCKER_TESTS",
-    "RADITI_PREVIEW_DOCKER_TESTS",
     "REDIS_URL",
-    "RELEASE_API_HOST",
-    "RELEASE_API_PORT",
-    "RELEASE_API_PUBLIC_URL",
-    "RELEASE_START_TIMEOUT_MINUTES",
     "RUNNER_API_PORT",
     "RUNNER_CORE_CA_FILE",
     "RUNNER_S3_CA_FILE",
@@ -180,25 +146,52 @@
   ],
   "tasks": {
     "db:generate": {
-      "dependsOn": ["^db:generate"],
-      "inputs": ["prisma/**", "prisma.config.ts"],
-      "outputs": ["src/generated/**"]
+      "dependsOn": [
+        "^db:generate"
+      ],
+      "inputs": [
+        "prisma/**",
+        "prisma.config.ts"
+      ],
+      "outputs": [
+        "src/generated/**"
+      ]
     },
     "build": {
-      "dependsOn": ["^build", "^db:generate", "db:generate"],
-      "outputs": [".next/**", "!.next/cache/**", "dist/**"]
+      "dependsOn": [
+        "^build",
+        "^db:generate",
+        "db:generate"
+      ],
+      "outputs": [
+        ".next/**",
+        "!.next/cache/**",
+        "dist/**"
+      ]
     },
     "transit": {
-      "dependsOn": ["^transit"]
+      "dependsOn": [
+        "^transit"
+      ]
     },
     "typecheck": {
-      "dependsOn": ["^db:generate", "db:generate", "transit"]
+      "dependsOn": [
+        "^db:generate",
+        "db:generate",
+        "transit"
+      ]
     },
     "lint": {
-      "dependsOn": ["transit"]
+      "dependsOn": [
+        "transit"
+      ]
     },
     "test": {
-      "dependsOn": ["^db:generate", "db:generate", "transit"],
+      "dependsOn": [
+        "^db:generate",
+        "db:generate",
+        "transit"
+      ],
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/.env.example",
@@ -208,12 +201,6 @@
         "$TURBO_ROOT$/packages/domain/src/release/chat-commands.ts",
         "$TURBO_ROOT$/infra/sandbox/gateway.mjs",
         "$TURBO_ROOT$/infra/sandbox/client-egress.mjs",
-        "$TURBO_ROOT$/infra/*/*.php",
-        "$TURBO_ROOT$/infra/*/*.conf",
-        "$TURBO_ROOT$/infra/*/*.ini",
-        "$TURBO_ROOT$/infra/preview/site-bases.json",
-        "$TURBO_ROOT$/infra/dev/stack-verify/**",
-        "$TURBO_ROOT$/packages/site-connections/src/database-copy/wordpress-policy.fixture.json",
         "$TURBO_ROOT$/apps/runner/scripts/runner-token.mjs",
         "$TURBO_ROOT$/apps/runner/src/core-api/core-client.ts",
         "$TURBO_ROOT$/apps/runner/src/sandbox-runner/sandbox-runner.ts",
@@ -222,11 +209,19 @@
       ]
     },
     "dev": {
-      "dependsOn": ["^build", "^db:generate", "db:generate"],
+      "dependsOn": [
+        "^build",
+        "^db:generate",
+        "db:generate"
+      ],
       "cache": false,
       "persistent": true,
-      "passThroughEnv": ["NODE_EXTRA_CA_CERTS"]
+      "passThroughEnv": [
+        "NODE_EXTRA_CA_CERTS"
+      ]
     }
   },
-  "globalPassThroughEnv": ["PATH"]
+  "globalPassThroughEnv": [
+    "PATH"
+  ]
 }

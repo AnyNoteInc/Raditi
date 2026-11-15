@@ -8,12 +8,12 @@ allowBuilds:
   '@swc/core': true
   # Docker uses a Unix socket; SSH native accelerators and protobuf's warning hook are unused.
   cpu-features: false
+  ssh2: false
   esbuild: true
   # Optional native speed-up for msgpackr (BullMQ); the pure JS fallback is enough.
   msgpackr-extract: false
   prisma: true
   protobufjs: false
-  ssh2: false
 
 # One place for shared versions: packages reference them as "catalog:".
 catalog:
@@ -70,10 +70,6 @@ catalog:
   '@types/pg': ^8.23.1
 
   # Client servers of a connected site: FTP, SFTP and MySQL (packages/site-connections)
-  basic-ftp: ^6.2.2
-  ssh2: ^1.17.0
-  '@types/ssh2': ^1.15.6
-  mysql2: ^3.24.5
 
   # Auth and API
   better-auth: 1.7.6
@@ -105,7 +101,6 @@ catalog:
   undici: ^8.11.2
   sendsay-api: ^2.4.0
   # The registrable domain of a preview base, by the Public Suffix List (plan 53, Р19)
-  tldts: ^7.4.15
   # The browser worker's screencast link: worker ↔ gateway ↔ cabinet (plan 57)
   ws: ^8.22.0
   '@types/ws': ^8.18.1
@@ -157,9 +152,3 @@ catalog:
   '@fontsource-variable/unbounded': ^5.3.0
   '@fontsource-variable/jetbrains-mono': ^5.3.0
 
-# Releases younger than a day are held back (pnpm's built-in minimumReleaseAge); pnpm lists here
-# the ones it installed anyway.
-minimumReleaseAgeExclude:
-  # 6.2.2 (04.10.2026) is the only release with the fix of GHSA-5rfr-xx34-2xxv (quadratic MLSD
-  # detection and PASV parser): never fall back to 6.2.1.
-  - basic-ftp@6.2.2

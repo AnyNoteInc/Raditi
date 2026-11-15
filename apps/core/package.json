@@ -60,7 +60,6 @@
     "reflect-metadata": "catalog:",
     "rxjs": "catalog:",
     "tar-stream": "catalog:",
-    "tldts": "catalog:",
     "web-push": "4.0.0",
     "zod": "catalog:"
   },
@@ -68,7 +67,6 @@
     "@nestjs/cli": "catalog:",
     "@nestjs/testing": "catalog:",
     "@rekog/mcp-nest": "catalog:",
-    "@repo/browser-providers": "workspace:*",
     "@repo/eslint-config": "workspace:*",
     "@repo/typescript-config": "workspace:*",
     "@swc/core": "catalog:",
@@ -78,7 +76,6 @@
     "@types/web-push": "3.6.4",
     "@typescript/native": "catalog:",
     "eslint": "catalog:",
-    "playwright-core": "catalog:",
     "supertest": "catalog:",
     "typescript": "catalog:",
     "unplugin-swc": "catalog:",
