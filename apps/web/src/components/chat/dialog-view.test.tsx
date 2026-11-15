@@ -41,6 +41,9 @@ import {
   requestRow,
   resultRow,
   resumeRow,
+  SCHEDULE_ID,
+  scheduleChangeRow,
+  scheduleLeftRow,
   SESSION_ID,
   SITE_ID,
   stepRow,
@@ -150,6 +153,40 @@ const client = vi.hoisted(() => ({
     },
     remove: { mutate: vi.fn() },
   },
+}))
+
+// The cards of scheduled tasks and their window read tRPC of their own: their tests show them
+// (feed-schedule.test.tsx, the tests of «Расписание»). Here — only that the chat opens the window.
+vi.mock('./feed-schedule', () => ({
+  FeedScheduleChange: ({ onEdit }: { onEdit?: (task: { id: string }) => void }) =>
+    onEdit ? (
+      <button type="button" onClick={() => onEdit({ id: 'task-of-the-card' })}>
+        Изменить задачу из ленты
+      </button>
+    ) : null,
+  FeedScheduleLeft: ({ onSetUp }: { onSetUp?: () => void }) =>
+    onSetUp ? (
+      <button type="button" onClick={onSetUp}>
+        Настроить вручную
+      </button>
+    ) : null,
+}))
+vi.mock('@/components/scheduled/schedule-dialog', () => ({
+  ScheduleDialog: ({
+    opening,
+    onClose,
+  }: {
+    opening: { kind: 'new' } | { kind: 'edit'; schedule: { id: string } } | null
+    onClose: () => void
+  }) =>
+    opening === null ? null : (
+      <div role="dialog" aria-label="Окно задачи">
+        {opening.kind === 'edit' ? `Изменить ${opening.schedule.id}` : 'Новая задача'}
+        <button type="button" onClick={onClose}>
+          Закрыть окно задачи
+        </button>
+      </div>
+    ),
 }))
 
 vi.mock('@/trpc/client', () => ({
@@ -538,6 +575,63 @@ describe('a dialog', () => {
     expect(field().getAttribute('placeholder')).toBe('Что поправить?')
     // No standing words under the field (owner, 26.10.2026): the reminder is read aloud only.
     expect(screen.queryByText('ИИ может допускать ошибки. Проверяйте важное.')).toBeNull()
+  })
+
+  // docs/plan/82-scheduled-tasks.md, Зп43: a chat of a run says so under its name.
+  it('says under its name that it is a run of a scheduled task, with a link to the task', async () => {
+    calls.feed.mockResolvedValue(waiting())
+    const schedule = { id: SCHEDULE_ID, name: 'Заявки за сутки', trigger: 'schedule' } as const
+    const client = new QueryClient()
+    const view = (
+      label: typeof schedule | { id: null; name: string; trigger: 'manual' } | null,
+    ) => (
+      <QueryClientProvider client={client}>
+        <DialogView project={PROJECT} schedule={label} taskId={TASK_ID} title="Заявки за сутки" />
+      </QueryClientProvider>
+    )
+    const { rerender } = render(view(schedule))
+    await screen.findByText('Изменения готовы')
+    const head = screen.getByRole('banner')
+    expect(
+      within(head)
+        .getByRole('link', { name: 'По расписанию · Заявки за сутки' })
+        .getAttribute('href'),
+    ).toBe(`/scheduled/${SCHEDULE_ID}`)
+    // A deleted task leaves its name, without a link (Зп23).
+    rerender(view({ id: null, name: 'Заявки за сутки', trigger: 'manual' }))
+    expect(within(head).getByText('Запуск вручную · Заявки за сутки')).toBeTruthy()
+    expect(within(head).queryByRole('link', { name: /Заявки за сутки/ })).toBeNull()
+    rerender(view(null))
+    expect(within(head).queryByText(/Заявки за сутки ·|· Заявки за сутки/)).toBeNull()
+  })
+
+  it('opens the window of a scheduled task from the cards of its feed (Зп35)', async () => {
+    calls.feed.mockResolvedValue(
+      waiting({
+        events: [requestRow('1'), scheduleChangeRow('2'), scheduleLeftRow('3')],
+        cursor: '3',
+      }),
+    )
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <DialogView project={PROJECT} userId={AUTHOR_ID} taskId={TASK_ID} title="Отчёт" />
+      </QueryClientProvider>,
+    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Изменить задачу из ленты' }))
+    const window = screen.getByRole('dialog', { name: 'Окно задачи' })
+    expect(window.textContent).toContain('Изменить task-of-the-card')
+    fireEvent.click(within(window).getByRole('button', { name: 'Закрыть окно задачи' }))
+    expect(screen.queryByRole('dialog', { name: 'Окно задачи' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Настроить вручную' }))
+    expect(screen.getByRole('dialog', { name: 'Окно задачи' }).textContent).toContain(
+      'Новая задача',
+    )
+  })
+
+  it('opens no window of a task where it does not know the client', async () => {
+    showDialog(waiting({ events: [requestRow('1'), scheduleChangeRow('2')], cursor: '2' }))
+    await screen.findByText('Поменяйте цену капучино на 290 ₽')
+    expect(screen.queryByRole('button', { name: 'Изменить задачу из ленты' })).toBeNull()
   })
 
   it('has no way to a project in a chat without one', async () => {

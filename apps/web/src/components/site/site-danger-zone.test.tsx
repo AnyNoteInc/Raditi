@@ -1,19 +1,20 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider, type UseMutationOptions } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { serverRefusal } from '@/components/billing/testing'
 import { SITE_ID } from '@/components/chat/testing'
 
-import { SiteDangerZone } from './site-danger-zone'
+import { dangerText, SiteDangerZone } from './site-danger-zone'
 
 type DeleteInput = { id: string; confirmName: string }
 
-const { remove, replace, refresh } = vi.hoisted(() => ({
+const { remove, replace, refresh, projectCount } = vi.hoisted(() => ({
   remove: vi.fn<(input: DeleteInput) => Promise<{ deleted: true }>>(),
   replace: vi.fn(),
   refresh: vi.fn(),
+  projectCount: vi.fn<(input: { siteId: string }) => Promise<{ count: number }>>(),
 }))
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ replace, refresh }) }))
@@ -29,13 +30,23 @@ vi.mock('@/trpc/client', () => ({
         }),
       },
     },
+    schedule: {
+      projectCount: {
+        queryOptions: (input: { siteId: string }) => ({
+          queryKey: ['schedule.projectCount', input.siteId],
+          queryFn: () => projectCount(input),
+        }),
+      },
+    },
   }),
 }))
 
 const site = { id: SITE_ID, name: 'УКК ЖКХ' }
 
 function show(options: { untitled?: boolean } = {}) {
-  const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  })
   render(
     <QueryClientProvider client={queryClient}>
       <SiteDangerZone site={site} untitled={options.untitled ?? false} />
@@ -51,6 +62,7 @@ const openDialog = () => {
 beforeEach(() => {
   vi.clearAllMocks()
   remove.mockResolvedValue({ deleted: true })
+  projectCount.mockResolvedValue({ count: 0 })
 })
 
 describe('«Опасная область» of the settings of a site', () => {
@@ -120,6 +132,39 @@ describe('«Опасная область» of the settings of a site', () => {
       `/chats?folder=${SITE_ID}`,
     )
     expect(replace).not.toHaveBeenCalled()
+  })
+
+  // docs/plan/82-scheduled-tasks.md, Зп22: the window names the tasks the deletion stops.
+  it('names how many scheduled tasks of the project stop, read when the window opens', async () => {
+    projectCount.mockResolvedValue({ count: 3 })
+    show()
+    expect(projectCount).not.toHaveBeenCalled()
+    const dialog = openDialog()
+    expect(await dialog.findByText('Остановятся 3 запланированные задачи проекта.')).toBeTruthy()
+    expect(projectCount).toHaveBeenCalledWith({ siteId: SITE_ID })
+  })
+
+  it('agrees the words with the number of tasks', () => {
+    expect(dangerText.schedulesStop(1)).toBe('Остановится 1 запланированная задача проекта.')
+    expect(dangerText.schedulesStop(21)).toBe('Остановится 21 запланированная задача проекта.')
+    expect(dangerText.schedulesStop(4)).toBe('Остановятся 4 запланированные задачи проекта.')
+    expect(dangerText.schedulesStop(11)).toBe('Остановятся 11 запланированных задач проекта.')
+    expect(dangerText.schedulesStop(20)).toBe('Остановятся 20 запланированных задач проекта.')
+  })
+
+  it('says nothing of tasks when none stop or the number is not known', async () => {
+    show()
+    let dialog = openDialog()
+    await waitFor(() => expect(projectCount).toHaveBeenCalledOnce())
+    expect(dialog.queryByText(/запланирован/)).toBeNull()
+    fireEvent.click(dialog.getByRole('button', { name: 'Не удалять' }))
+    cleanup()
+
+    projectCount.mockRejectedValue(new Error('offline'))
+    show()
+    dialog = openDialog()
+    await waitFor(() => expect(projectCount).toHaveBeenCalledTimes(2))
+    expect(dialog.queryByText(/запланирован/)).toBeNull()
   })
 
   it('has no way to the chats when something else holds the deletion', async () => {

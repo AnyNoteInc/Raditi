@@ -85,7 +85,7 @@ import {
   releaseStepText,
   undoText,
 } from './chat-texts'
-import type { CommandVerdict, FeedRow, UndoHead } from './chat-types'
+import type { CommandVerdict, FeedRow, ScheduledTaskItem, UndoHead } from './chat-types'
 import { offScreen } from './composer'
 import {
   feedEntries,
@@ -100,6 +100,7 @@ import { workingPhraseOf } from './working-phrases'
 import { DocRevisions, docRevisionsOf, FeedDoc } from './feed-doc'
 import { FeedFile } from './feed-file'
 import { FeedPage, FeedPageChange, FeedPageWarnings } from './feed-page'
+import { FeedScheduleChange, FeedScheduleLeft } from './feed-schedule'
 import { FeedScreenshot } from './feed-screenshot'
 import type { FeedHeadState } from './feed-state'
 
@@ -159,6 +160,13 @@ export interface FeedActions {
    * on is offered meanwhile (docs/plan/57-browser-tasks.md, Б24).
    */
   stopping?: boolean
+  /**
+   * «Изменить» of the card of a scheduled task: the window of the task over the chat
+   * (docs/plan/82-scheduled-tasks.md, Зп35); absent — the card offers none.
+   */
+  onEditSchedule?: (task: ScheduledTaskItem) => void
+  /** «Настроить вручную» of a change the agent could not make: the window of a new task (Зп35). */
+  onNewSchedule?: () => void
 }
 
 const PLANS_PATH = '/settings/plans'
@@ -811,6 +819,7 @@ function RowView({
   actions,
   filesOf,
   editable = false,
+  pushHere = false,
 }: {
   row: FeedRow
   now: Date
@@ -826,6 +835,8 @@ function RowView({
   filesOf: (ids: readonly string[]) => SentFile[]
   /** The client's last message, while `/undo` can take it back: «Изменить» under it (ВВ25). */
   editable?: boolean
+  /** The card of a scheduled task that offers notifications in this browser (Зп36). */
+  pushHere?: boolean
 }) {
   switch (row.type) {
     case 'feed.request':
@@ -1097,6 +1108,24 @@ function RowView({
       return (
         <FeedPageChange pageId={row.pageId} text={feedPageChangeText(row)} change={row.change} />
       )
+    // A scheduled task the agent created, changed or could not (docs/plan/82-scheduled-tasks.md,
+    // Зп35): its card, and the control of notifications on the newest one (Зп36).
+    case 'feed.schedule_change':
+      return (
+        <FeedScheduleChange
+          row={row}
+          now={now}
+          push={pushHere}
+          {...(actions.onEditSchedule ? { onEdit: actions.onEditSchedule } : {})}
+        />
+      )
+    case 'feed.schedule_left':
+      return (
+        <FeedScheduleLeft
+          row={row}
+          {...(actions.onNewSchedule ? { onSetUp: actions.onNewSchedule } : {})}
+        />
+      )
     // A document the agent writes (docs/plan/69-pages.md, Ст22): its card stands after the answer
     // of the turn that wrote it (`feedEntries`), the rows themselves show nothing.
     case 'feed.doc':
@@ -1167,6 +1196,8 @@ export function FeedList({
   const revisions = docRevisionsOf(
     rows as readonly { type: string; docId?: string; revision?: number }[],
   )
+  // «Включить в этом браузере» once in the chat, on its newest card of a task that stays (Зп36).
+  const pushRowId = schedulePushRowId(rows)
   return (
     <DocRevisions.Provider value={revisions}>
       <Box
@@ -1233,6 +1264,7 @@ export function FeedList({
                 actions={actions}
                 filesOf={filesOf}
                 editable={entry.row.id === editableId}
+                pushHere={entry.row.id === pushRowId}
               />
             )}
           </Box>
@@ -1240,6 +1272,19 @@ export function FeedList({
       </Box>
     </DocRevisions.Provider>
   )
+}
+
+/**
+ * The newest card of a scheduled task the agent created or changed — not deleted — in the feed:
+ * it alone offers notifications in this browser (docs/plan/82-scheduled-tasks.md, Зп36), so a chat
+ * of several tasks does not repeat the button. null — none.
+ */
+export function schedulePushRowId(rows: readonly FeedRow[]): string | null {
+  for (let index = rows.length - 1; index >= 0; index--) {
+    const row = rows[index]!
+    if (row.type === 'feed.schedule_change' && row.action !== 'deleted') return row.id
+  }
+  return null
 }
 
 /** The id of the client's last message with words — not a press — in the feed; null — none. */

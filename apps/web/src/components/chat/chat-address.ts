@@ -13,3 +13,9 @@ export const newChatHref = (projectId?: string | null) =>
 
 /** The list of chats open on the folder of a project (К40). */
 export const chatFolderHref = (projectId: string) => `${CHATS_HREF}?folder=${projectId}`
+
+/** «Расписание»: the scheduled tasks of the client (docs/plan/82-scheduled-tasks.md, Зп1). */
+export const SCHEDULED_HREF = '/scheduled'
+
+/** A scheduled task: the label of a chat of its run and the card of the feed lead to it. */
+export const scheduledTaskHref = (scheduleId: string) => `${SCHEDULED_HREF}/${scheduleId}`

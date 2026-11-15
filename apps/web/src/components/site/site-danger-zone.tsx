@@ -4,7 +4,7 @@ import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 
@@ -12,6 +12,7 @@ import { ConfirmDialog } from '@/components/billing/confirm-dialog'
 import { callErrorCode, callErrorText, callRefusalOf } from '@/components/chat/call-error'
 import { chatFolderHref } from '@/components/chat/chat-address'
 import { nbsp } from '@/lib/nbsp'
+import { plural } from '@/lib/plural'
 import { useTRPC } from '@/trpc/client'
 
 import { SiteCard } from './site-cards'
@@ -32,6 +33,17 @@ export const dangerText = Object.freeze({
   keep: 'Не удалять',
   /** The refusal of a project with chats that are not over leads to them. */
   openChats: 'Открыть чаты проекта',
+  /**
+   * The scheduled tasks of the project the deletion stops (docs/plan/82-scheduled-tasks.md,
+   * Зп22): they stay in «Расписание» as «Остановлена: проект удалён».
+   */
+  schedulesStop: (count: number) =>
+    `${plural(count, 'Остановится', 'Остановятся', 'Остановятся')} ${count} ${plural(
+      count,
+      'запланированная задача',
+      'запланированные задачи',
+      'запланированных задач',
+    )} проекта.`,
 })
 
 /**
@@ -56,6 +68,14 @@ export function SiteDangerZone({
   const [error, setError] = useState<string | null>(null)
   // The server refused because of chats that are not over: the way to them (К40).
   const [chatsHold, setChatsHold] = useState(false)
+  // How many scheduled tasks the deletion stops, read when the window opens (Зп22); a failed
+  // read says nothing rather than a wrong number.
+  const schedules = useQuery({
+    ...trpc.schedule.projectCount.queryOptions({ siteId: site.id }),
+    enabled: open,
+    staleTime: 0,
+  })
+  const stopping = schedules.data?.count ?? 0
 
   async function confirm() {
     if (typed.trim() !== site.name.trim()) {
@@ -122,6 +142,9 @@ export function SiteDangerZone({
         onConfirm={() => void confirm()}
       >
         <Typography sx={{ mt: 1.5 }}>{nbsp(dangerText.confirmBody)}</Typography>
+        {stopping > 0 ? (
+          <Typography sx={{ mt: 1.5 }}>{nbsp(dangerText.schedulesStop(stopping))}</Typography>
+        ) : null}
         <TextField
           label={dangerText.nameLabel}
           value={typed}
