@@ -347,8 +347,9 @@ export function ChatsFrame({
             {chatsText.back}
           </Box>
         )}
-        {panelOpen ? null : (
-          // The list is hidden: the way to bring it back stands over the content (Н3).
+        {panelOpen || collapsed ? null : (
+          // The list is hidden: the way to bring it back stands over the content (Н3). An open chat
+          // puts it in its own head, on one line with its name (`DialogHead`).
           <Box sx={{ display: { xs: 'none', md: 'flex' }, mt: -1.5, mb: 1, ml: -1.5 }}>
             <PanelToggle place="content" />
           </Box>
