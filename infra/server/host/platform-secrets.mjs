@@ -60,7 +60,14 @@ const GENERATED = {
 const PROVIDED = {
   // reg.ru API (an alternative password, the server's IP allowed): DNS-01 of *.raditi-preview.ru
   'app/traefik': ['regru_username', 'regru_password'],
-  'app/web': ['SMARTCAPTCHA_CLIENT_KEY', 'SMARTCAPTCHA_SERVER_KEY', 'YANDEX_SPEECHKIT_API_KEY'],
+  // YANDEX_CLIENT_*: the Yandex ID app of sign-in (oauth.yandex.ru), both or neither
+  'app/web': [
+    'SMARTCAPTCHA_CLIENT_KEY',
+    'SMARTCAPTCHA_SERVER_KEY',
+    'YANDEX_SPEECHKIT_API_KEY',
+    'YANDEX_CLIENT_ID',
+    'YANDEX_CLIENT_SECRET',
+  ],
   'app/core': [
     'SENDSAY_API_KEY',
     'LEADS_TELEGRAM_BOT_TOKEN',
@@ -170,6 +177,8 @@ function serviceFiles(kv, roles) {
           SMARTCAPTCHA_CLIENT_KEY: web.SMARTCAPTCHA_CLIENT_KEY,
           SMARTCAPTCHA_SERVER_KEY: web.SMARTCAPTCHA_SERVER_KEY,
           YANDEX_SPEECHKIT_API_KEY: web.YANDEX_SPEECHKIT_API_KEY,
+          YANDEX_CLIENT_ID: web.YANDEX_CLIENT_ID,
+          YANDEX_CLIENT_SECRET: web.YANDEX_CLIENT_SECRET,
           METRICS_TOKEN: web.METRICS_TOKEN,
           PAGES_SIGNING_SECRET: web.PAGES_SIGNING_SECRET,
           ...s3(web),

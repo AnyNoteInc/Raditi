@@ -17,6 +17,15 @@ export interface AuthConfig {
   secret: string
   /** null: captcha is off (local development, e2e). */
   captcha: SmartCaptchaKeys | null
+  /** null: no sign-in with Yandex ID (no app registered for this origin). */
+  yandex: YandexOAuthKeys | null
+}
+
+/** The Yandex ID app (oauth.yandex.ru); its redirect URI is `<BETTER_AUTH_URL>/api/auth/callback/yandex`. */
+export interface YandexOAuthKeys {
+  clientId: string
+  /** Server only. */
+  clientSecret: string
 }
 
 const SERVER_KEY_PREFIX = 'ysc2_'
@@ -44,8 +53,18 @@ const authEnvSchema = z
     ),
     SMARTCAPTCHA_SERVER_KEY: optionalKey,
     SMARTCAPTCHA_CLIENT_KEY: optionalKey,
+    YANDEX_CLIENT_ID: optionalKey,
+    YANDEX_CLIENT_SECRET: optionalKey,
   })
   .superRefine((env, ctx) => {
+    // One half of the Yandex app would show a button whose every sign-in fails.
+    if (Boolean(env.YANDEX_CLIENT_ID) !== Boolean(env.YANDEX_CLIENT_SECRET)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [env.YANDEX_CLIENT_ID ? 'YANDEX_CLIENT_SECRET' : 'YANDEX_CLIENT_ID'],
+        message: 'set both YANDEX_CLIENT_ID and YANDEX_CLIENT_SECRET or neither',
+      })
+    }
     const server = env.SMARTCAPTCHA_SERVER_KEY
     const client = env.SMARTCAPTCHA_CLIENT_KEY
     const issue = (name: keyof typeof env, message: string) =>
@@ -97,6 +116,10 @@ export function authConfigFromEnv(env: Env): AuthConfig {
     captcha:
       e.SMARTCAPTCHA_SERVER_KEY && e.SMARTCAPTCHA_CLIENT_KEY
         ? { serverKey: e.SMARTCAPTCHA_SERVER_KEY, clientKey: e.SMARTCAPTCHA_CLIENT_KEY }
+        : null,
+    yandex:
+      e.YANDEX_CLIENT_ID && e.YANDEX_CLIENT_SECRET
+        ? { clientId: e.YANDEX_CLIENT_ID, clientSecret: e.YANDEX_CLIENT_SECRET }
         : null,
   }
 }

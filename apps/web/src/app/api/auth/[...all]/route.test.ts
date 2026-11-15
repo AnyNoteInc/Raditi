@@ -38,6 +38,7 @@ vi.mock('@repo/auth', async (importOriginal) => {
       baseUrl: 'https://raditi.ru',
       secret: 'x'.repeat(32),
       captcha: { serverKey: 'ysc2_k', clientKey: 'ysc1_k' },
+      yandex: null,
     },
     // A real client that never connects: better-auth reads its data model, nothing more.
     prisma: createPrismaClient({ databaseUrl: 'postgresql://raditi:raditi@127.0.0.1:9/raditi' }),
