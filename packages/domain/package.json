@@ -16,6 +16,7 @@
     "./tasks/client-feed-text": "./src/tasks/client-feed-text.ts",
     "./tasks/task-status": "./src/tasks/task-status.ts",
     "./tasks/chat-documents": "./src/tasks/chat-documents.ts",
+    "./tasks/chat-info": "./src/tasks/chat-info.ts",
     "./agent/client-instructions": "./src/agent/client-instructions.ts",
     "./release/chat-commands": "./src/release/chat-commands.ts",
     "./pages": "./src/pages/index.ts",

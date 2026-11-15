@@ -956,16 +956,39 @@ test.describe('links of the footer', () => {
   }) => {
     await page.goto('/')
     const links = page.getByRole('navigation', { name: 'Документы' }).getByRole('link')
-    const map = links.last()
-    await expect(map).toHaveText('Карта сайта')
+    const map = page.locator('#top > footer').getByRole('link', { name: 'Карта сайта' })
     await expect(map).toHaveAttribute('href', '/sitemap.xml')
-    // A target of 44px, as the documents beside it.
-    expect((await map.boundingBox())?.height).toBeGreaterThanOrEqual(44)
+    // Targets of 44px, the map and the documents alike.
     expect(await links.count()).toBeGreaterThan(1)
-    for (const link of await links.all()) {
+    for (const link of [...(await links.all()), map]) {
+      expect((await link.boundingBox())?.height).toBeGreaterThanOrEqual(44)
       const href = await link.getAttribute('href')
       expect((await request.get(href ?? '')).status(), href ?? '').toBe(200)
     }
+  })
+
+  // One footer for the public pages (the owner, 15.11.2026): a document ends as the landing does.
+  test('are the same on a document and lead back to the sections of the landing', async ({
+    page,
+  }) => {
+    const footerAt = async (path: string) => {
+      await page.goto(path)
+      return page
+        .getByRole('contentinfo')
+        .getByRole('link')
+        .evaluateAll((links) =>
+          links.map((link) => [link.textContent?.trim(), link.getAttribute('href')]),
+        )
+    }
+    const onLanding = await footerAt('/')
+    const onDocument = await footerAt('/terms/user-agreement')
+    expect(onLanding.length).toBeGreaterThan(10)
+    expect(onDocument).toEqual(onLanding)
+    await expect(page.locator('footer > div[aria-hidden="true"]').last()).toHaveText('радити')
+
+    await page.getByRole('contentinfo').getByRole('link', { name: 'Тарифы' }).click()
+    await expect(page).toHaveURL(/\/#pricing$/)
+    await expect(page.locator('#pricing')).toBeInViewport()
   })
 })
 

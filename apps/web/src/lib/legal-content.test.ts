@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest'
 
 import { webEnvFromEnv } from '@/server/web-env'
 
+import { SITE_EMAIL, SITE_OPERATOR, SITE_PHONE } from './contacts'
 import { consentDocumentLinks, formatEditionDate, legalDocumentHref } from './legal'
 
 const contentDir = fileURLToPath(new URL('../../content/legal/', import.meta.url))
@@ -200,5 +201,22 @@ describe('legal documents', () => {
   it('formats the edition date in Russian', () => {
     expect(formatEditionDate('2026-09-26')).toBe('26 сентября 2026 г.')
     expect(formatEditionDate('not a date')).toBe('not a date')
+  })
+
+  it('names in the footer the operator, the mail and the phone of «Сведения об операторе»', () => {
+    // The value of a row of the table of requisites, by the start of its name.
+    const value = (name: string) => {
+      const row = text('information')
+        .split('\n')
+        .find((line) => line.startsWith(`| ${name}`))
+      return row?.split('|')[2]?.trim() ?? ''
+    }
+    const [surname, first, patronymic] = value('Исполнитель').split(' ')
+
+    expect(SITE_OPERATOR.name).toBe(`${surname}\u00a0${first?.[0]}.\u00a0${patronymic?.[0]}.`)
+    expect(value('Статус')).toContain(`(${SITE_OPERATOR.status})`)
+    expect(value('ИНН')).toBe(SITE_OPERATOR.inn)
+    expect(value('Электронная почта')).toBe(SITE_EMAIL)
+    expect(value('Телефон').replace(/\D/g, '')).toBe(SITE_PHONE.tel.replace(/\D/g, ''))
   })
 })

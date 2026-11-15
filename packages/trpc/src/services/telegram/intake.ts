@@ -7,6 +7,8 @@ import {
   type PrismaClient,
 } from '@repo/db'
 import {
+  chatInfoLines,
+  chatInfoText,
   feedInputText,
   isDomainError,
   looksLikeSecret,
@@ -26,6 +28,7 @@ import { toTRPCError } from '../../errors.ts'
 import type { ChatContext } from '../chat/context.ts'
 import { cancelDialog, continueDialog, createDialog, postDialogMessage } from '../chat/tasks.ts'
 import { removeDialog } from '../chat/dialog-manage.ts'
+import { readChatInfo } from '../chat/info.ts'
 import { queueDialogWords } from '../chat/queue.ts'
 import { loadLatestConsents } from '../consents.ts'
 import { takeTelegramLink, unlinkTelegram } from './link.ts'
@@ -245,6 +248,10 @@ class Intake {
       await this.#chats(where, identity.userId)
       return
     }
+    if (command?.name === 'usage' || command?.name === 'status' || command?.name === 'context') {
+      await this.#info(where, identity, command.name)
+      return
+    }
 
     // An update handed again after a failure finds the chat it started: the same way again, which
     // createDialog repeats safely — never the words a second time into that chat.
@@ -256,6 +263,30 @@ class Intake {
     const words = await this.#wordsOf(message, identity.userId, where)
     if (words === null) return
     await this.#post(where, identity, words, message, target)
+  }
+
+  /**
+   * `/usage`, `/status` and `/context` (owner's request of 15.11.2026): about the chat the next words
+   * would go to — the chat of the topic, or the current one —, in the words of the cabinet.
+   */
+  async #info(
+    where: Where,
+    identity: { userId: string; currentTaskId: string | null; newChat: boolean },
+    kind: 'usage' | 'status' | 'context',
+  ): Promise<void> {
+    const target = await this.#targetOf(where, identity)
+    const info = await readChatInfo(this.#deps.db, {
+      userId: identity.userId,
+      taskId: 'taskId' in target ? target.taskId : null,
+      appEnv: this.#deps.chat.appEnv,
+      now: this.#now,
+    })
+    const { title, lines } = chatInfoLines(kind, info)
+    const more =
+      kind === 'usage'
+        ? ['', chatInfoText.usageMore, telegramText.usageLink(this.#deps.appUrl)]
+        : []
+    await this.#reply(where, [title, '', ...lines, ...more].join('\n'))
   }
 
   /** The words and the files of a message; null — the bot already said why it takes nothing. */

@@ -87,6 +87,9 @@ describe('the window of commands', () => {
       expect.stringContaining('Все чаты'),
       expect.stringContaining('Скачать переписку'),
       expect.stringContaining('Модель и размышление'),
+      expect.stringContaining('Использование'),
+      expect.stringContaining('Состояние чата'),
+      expect.stringContaining('Контекст агента'),
       expect.stringContaining('Подробности работы'),
       expect.stringContaining('Размышления агента'),
       expect.stringContaining('Оформление'),
@@ -96,7 +99,7 @@ describe('the window of commands', () => {
     expect(field().getAttribute('aria-activedescendant')).toBe(options[0]!.id)
     expect(options[0]!.getAttribute('aria-selected')).toBe('true')
     expect(screen.getByRole('status').textContent).toBe(
-      '12 команд. Стрелки вверх и вниз — выбор, Enter — выполнить, Escape — закрыть.',
+      '15 команд. Стрелки вверх и вниз — выбор, Enter — выполнить, Escape — закрыть.',
     )
     expect(onOpen).toHaveBeenCalledTimes(1)
   })
@@ -169,7 +172,7 @@ describe('the window of commands', () => {
     const button = screen.getByRole('button', { name: 'Команды' })
     fireEvent.click(button)
     expect(button.getAttribute('aria-expanded')).toBe('true')
-    expect(within(list()).getAllByRole('option')).toHaveLength(12)
+    expect(within(list()).getAllByRole('option')).toHaveLength(15)
     expect(list().getAttribute('tabindex')).toBe('0')
     await vi.waitFor(() => expect(document.activeElement).toBe(list()))
     press('End', list())
@@ -340,13 +343,13 @@ describe('the window of commands', () => {
     type('/help')
     press('Enter')
     expect(field().value).toBe('')
-    expect(within(list()).getAllByRole('option')).toHaveLength(12)
+    expect(within(list()).getAllByRole('option')).toHaveLength(15)
     await vi.waitFor(() => expect(document.activeElement).toBe(list()))
     expect(onRun).not.toHaveBeenCalled()
     expect(onSend).not.toHaveBeenCalled()
     // Chosen from the list that is open already, it leaves it as it is.
     fireEvent.click(within(list()).getAllByRole('option').at(-1)!)
-    expect(within(list()).getAllByRole('option')).toHaveLength(12)
+    expect(within(list()).getAllByRole('option')).toHaveLength(15)
   })
 
   it('says aloud what a command of the page answers', () => {
@@ -520,6 +523,9 @@ describe('palette helpers', () => {
       'sessions',
       'export',
       'models',
+      'usage',
+      'status',
+      'context',
       'details',
       'thinking',
       'themes',
@@ -558,6 +564,9 @@ describe('palette helpers', () => {
       { id: 'sessions', available: true, reason: null },
       { id: 'export', available: false, reason },
       { id: 'models', available: true, reason: null },
+      { id: 'usage', available: true, reason: null },
+      { id: 'status', available: false, reason },
+      { id: 'context', available: false, reason },
       { id: 'details', available: true, reason: null },
       { id: 'thinking', available: true, reason: null },
       { id: 'themes', available: true, reason: null },
