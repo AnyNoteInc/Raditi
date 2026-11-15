@@ -84,7 +84,7 @@ describe.skipIf(!enabled)('core credential cleanup with PostgreSQL', () => {
     workspaceId = (await db.workspace.create({ data: { name: 'Synthetic credential sweep' } })).id
     taskId = (
       await db.task.create({
-        data: { workspaceId, status: 'running', modelClass: 'standard', needsRepository: false },
+        data: { workspaceId, status: 'running', modelClass: 'standard' },
       })
     ).id
     revoke.mockReset()

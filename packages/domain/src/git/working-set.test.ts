@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
 import { isTooLarge } from '../errors.ts'
-import type { SiteFacts } from '../ports/site-adapter.ts'
 import {
   agentWorkingSetSchema,
   isWorkingSetTooLarge,
@@ -59,7 +58,7 @@ describe('the agent working set', () => {
   })
 
   it('gives a turn every rule of the adapter at once', () => {
-    const site = { id: 's', stack: 'wordpress' } as unknown as SiteFacts
+    const site = { id: 's' }
     const rules = siteWorkspaceRules(
       {
         protectedPaths: () => ['wp-config.php'],

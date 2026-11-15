@@ -57,17 +57,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
   }, 60_000)
   afterEach(async () => {
     for (const workspaceId of workspaces.splice(0)) {
-      const sites = await db.site.findMany({ where: { workspaceId }, select: { id: true } })
-      const chats = await db.task.findMany({
-        where: { workspaceId, siteId: null },
-        select: { id: true },
-      })
+      const chats = await db.task.findMany({ where: { workspaceId }, select: { id: true } })
       await db.siteLease.deleteMany({
-        where: { siteId: { in: [...sites, ...chats].map(({ id }) => id) } },
+        where: { siteId: { in: chats.map(({ id }) => id) } },
       })
-      await db.mcpCall.deleteMany({ where: { turn: { task: { workspaceId } } } })
       await db.task.deleteMany({ where: { workspaceId } })
-      await db.site.deleteMany({ where: { workspaceId } })
       await db.workspace.delete({ where: { id: workspaceId } })
     }
   })
@@ -80,24 +74,17 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
    * A task and the plan of its first turn; with `requirements` both are made for them. `chat` —
    * without a site, under the lease of the task's own id.
    */
-  async function fixture(requirements?: TaskRequirements, options: { chat?: true } = {}) {
+  async function fixture(
+    requirements: TaskRequirements = { repository: false, browser: false },
+    options: { chat?: true } = {},
+  ) {
     const workspace = await db.workspace.create({ data: { name: 'Synthetic product turn' } })
     workspaces.push(workspace.id)
-    const site = await db.site.create({
-      data: {
-        workspaceId: workspace.id,
-        name: 'Synthetic',
-        url: 'https://turn.example.test',
-        stack: 'wordpress',
-      },
-    })
+    void options
     const task = await db.task.create({
       data: {
         workspaceId: workspace.id,
-        ...(options.chat ? {} : { siteId: site.id }),
-        ...(requirements
-          ? { needsRepository: requirements.repository, needsBrowser: requirements.browser }
-          : {}),
+        needsBrowser: requirements.browser,
       },
     })
     const sessionId = randomUUID()
@@ -132,17 +119,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
       input: { prompt: 'Synthetic', attachments: [] },
       driverId: 'opencode',
       driverVersion: '1.0.0',
-      ...(requirements ? { requirements } : {}),
-      ...(requirements?.repository === false
-        ? {}
-        : {
-            workspace: {
-              repo: { provider: 'gitea', owner: 'sites', name: 'synthetic' },
-              branch: `agent/${task.id}`,
-              expectedBaseSha: baseSha,
-              protectedPaths: [],
-            },
-          }),
+      requirements,
       committedAt: '2026-10-01T00:00:00.000Z',
     }
     const input: OpenTurnAssignment = {
@@ -222,141 +199,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
         })
       expect(await store.finish({ id: assignment.id, epoch: 1, outcome })).toBe(true)
     }
-    let revision = 0
-    /** The standing candidate of the dialog; «Обновить» records its head under the task's turn. */
-    const candidate = async (turnNo: number, head: string) => {
-      await db.taskCandidate.updateMany({
-        where: { taskId: task.id, status: 'current' },
-        data: { status: 'superseded', supersededAt: new Date() },
-      })
-      await db.taskCandidate.create({
-        data: {
-          taskId: task.id,
-          revision: ++revision,
-          turnNo,
-          baseSha,
-          baseTree: 'd'.repeat(40),
-          headSha: head,
-          dbPlanSha256: '0'.repeat(64),
-          proposedBump: 'minor',
-          proposedVersion: 'v0.1.0',
-          facts: {},
-        },
-      })
-    }
-    return { task, site, input, plan, next, leases, fence, step, close, candidate }
+    return { task, input, plan, next, leases, fence, step, close }
   }
-
-  describe('after «Обновить» moved the candidate (plan 53, Р27)', () => {
-    const moved = 'e'.repeat(40)
-    const movedAgain = 'f'.repeat(40)
-
-    it('continues a completed turn while the candidate stands on its head', async () => {
-      const f = await fixture()
-      await f.close((await store.open(f.input))!, 'completed', headSha)
-      await f.candidate(1, headSha)
-      await expect(store.open(f.step(2, { base: headSha, rebased: true }))).rejects.toThrow(
-        'does not start on the candidate',
-      )
-      expect(await store.open(f.step(2, { base: headSha, previous: 1 }))).not.toBeNull()
-    })
-
-    it('starts on the moved head, the session going on, and refuses the old head', async () => {
-      const f = await fixture()
-      await f.close((await store.open(f.input))!, 'completed', headSha)
-      await f.candidate(1, headSha)
-      await f.candidate(1, moved)
-
-      await expect(store.open(f.step(2, { base: headSha, previous: 1 }))).rejects.toThrow(
-        '«Обновить» moved the task branch',
-      )
-      await expect(store.open(f.step(2, { base: headSha, rebased: true }))).rejects.toMatchObject({
-        code: 'CONFLICT',
-        message: 'A rebased turn does not start on the candidate «Обновить» moved',
-      })
-      expect(await db.taskTurn.count({ where: { taskId: f.task.id } })).toBe(1)
-
-      // The owner, 06.11.2026: the session of turn 1 goes on, on the moved head.
-      const second = (await store.open(f.step(2, { base: moved, rebased: true, previous: 1 })))!
-      expect(second.plan.rebased).toBe(true)
-      expect(
-        await db.taskTurn.findUniqueOrThrow({
-          where: { taskId_turnNo: { taskId: f.task.id, turnNo: 2 } },
-        }),
-      ).toMatchObject({ status: 'running', baseSha: moved })
-
-      // The new session completed without a change: the candidate stays on the moved head, and
-      // the next turn continues the session that stands there.
-      await f.close(second, 'completed', moved)
-      expect(await store.open(f.step(3, { base: moved, previous: 2 }))).not.toBeNull()
-    })
-
-    it('replaces a failed new session with its own input, pinned on the moved head', async () => {
-      const f = await fixture()
-      await f.close((await store.open(f.input))!, 'completed', headSha)
-      await f.candidate(1, moved)
-      await f.close((await store.open(f.step(2, { base: moved, rebased: true })))!, 'failed')
-
-      for (const [wrong, message] of [
-        [f.step(3, { base: moved, rebased: true, pin: headSha }), 'pin the published task branch'],
-        [f.step(3, { base: moved, pin: moved }), 'replaced turn input'],
-        [f.step(3, { base: headSha, previous: 1, pin: moved }), 'replaced turn input'],
-      ] as const)
-        await expect(store.open(wrong)).rejects.toThrow(message)
-
-      const third = await store.open(f.step(3, { base: moved, rebased: true, pin: moved }))
-      expect(third?.plan).toMatchObject({ replacesTurn: 2, rebased: true })
-    })
-
-    it('replaces a turn that failed before the move with a new session on the moved head', async () => {
-      const f = await fixture()
-      await f.close((await store.open(f.input))!, 'completed', headSha)
-      await f.candidate(1, headSha)
-      await f.close((await store.open(f.step(2, { base: headSha, previous: 1 })))!, 'failed')
-      // The dialog waited with its candidate; «Обновить» moved it under the task's turn 2.
-      await f.candidate(2, moved)
-
-      await expect(store.open(f.step(3, { base: moved, rebased: true }))).rejects.toThrow(
-        'must be replaced',
-      )
-      await expect(
-        store.open(f.step(3, { base: headSha, previous: 1, pin: headSha })),
-      ).rejects.toThrow('pin the published task branch')
-      // The input of the failed turn stands on the old main: publishing it would undo the move.
-      await expect(
-        store.open(f.step(3, { base: headSha, previous: 1, pin: moved })),
-      ).rejects.toMatchObject({
-        code: 'CONFLICT',
-        message: 'Replacement does not start on the candidate «Обновить» moved',
-      })
-
-      // The replacement restores the session the failed turn started from, on the moved head.
-      const third = (await store.open(
-        f.step(3, { base: moved, previous: 1, pin: moved, rebased: true }),
-      ))!
-      expect(third.plan).toMatchObject({ replacesTurn: 2, rebased: true })
-      await f.close(third, 'failed')
-
-      // A second «Обновить» after the failed new session: the next one starts on its head.
-      await f.candidate(3, movedAgain)
-      await expect(
-        store.open(f.step(4, { base: moved, rebased: true, pin: movedAgain })),
-      ).rejects.toThrow('does not start on the candidate')
-      expect(
-        await store.open(f.step(4, { base: movedAgain, rebased: true, pin: movedAgain })),
-      ).not.toBeNull()
-    })
-
-    it('never starts the first turn as rebased', async () => {
-      const f = await fixture()
-      await expect(
-        store.open({ ...f.input, plan: { ...f.plan, rebased: true } }),
-      ).rejects.toMatchObject({
-        code: 'BAD_REQUEST',
-        message: 'The first product turn has no predecessor',
-      })
-    })
-  })
 
   describe('the requirements of the task (plan 57, Б2, Б3)', () => {
     it('opens turns without a repository: no base, no branch, the snapshot of a completed turn', async () => {
@@ -398,33 +242,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
           where: { taskId_turnNo: { taskId: f.task.id, turnNo: 1 } },
         }),
       ).toMatchObject({ status: 'running', baseSha: null })
-    })
-
-    it('refuses a task of a site under a fence that is not its site', async () => {
-      const f = await fixture(BROWSER_ONLY)
-      const foreign = randomUUID()
-      const lease = await db.siteLease.create({
-        data: {
-          siteId: foreign,
-          holderTaskId: f.task.id,
-          operation: 'turn',
-          epoch: 1,
-          expiresAt: new Date(Date.now() + 60_000),
-        },
-      })
-      const labels = { ...f.plan.sandbox.labels, siteId: foreign }
-      await expect(
-        store.open({
-          ...f.input,
-          fence: { ...f.fence, siteId: foreign },
-          plan: { ...f.plan, sandbox: { ...f.plan.sandbox, labels } },
-        }),
-      ).rejects.toMatchObject({
-        code: 'CONFLICT',
-        message: 'Product task is not available for a turn',
-      })
-      expect(await db.taskTurn.count({ where: { taskId: f.task.id } })).toBe(0)
-      await db.siteLease.delete({ where: { siteId: lease.siteId } })
     })
 
     it('starts a new session after an unsuccessful turn without a repository, never a replacement', async () => {
@@ -510,108 +327,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
       })
     })
 
-    it('replaces an undone turn with a repository, never continues it', async () => {
-      const f = await fixture()
-      const first = (await store.open(f.input))!
-      await f.close(first, 'completed', headSha)
-      await undoTurn(db, { taskId: f.task.id, turnNo: 1 })
-      await expect(store.open(f.step(2, { base: headSha, previous: 1 }))).rejects.toMatchObject({
-        code: 'CONFLICT',
-        message: 'An undone turn must be replaced',
-      })
-    })
-
-    it('pins the replacement of an undone turn where that turn found the branch', async () => {
-      const f = await fixture()
-      const undoneHead = '9'.repeat(40)
-      await f.close((await store.open(f.input))!, 'completed', headSha)
-      await f.candidate(1, headSha)
-      const second = (await store.open(f.step(2, { base: headSha, previous: 1 })))!
-      await f.close(second, 'completed', undoneHead)
-      await f.candidate(2, undoneHead)
-      await undoTurn(db, { taskId: f.task.id, turnNo: 2 })
-
-      // The undone head is gone from the branch, and a push leased on it would fail.
-      await expect(
-        store.open(f.step(3, { base: headSha, previous: 1, pin: undoneHead })),
-      ).rejects.toMatchObject({ message: 'Replacement does not pin the published task branch' })
-      expect(
-        await store.open(f.step(3, { base: headSha, previous: 1, pin: headSha })),
-      ).not.toBeNull()
-    })
-
-    it('finds no branch after the first turn is undone', async () => {
-      const f = await fixture()
-      await f.close((await store.open(f.input))!, 'completed', headSha)
-      await undoTurn(db, { taskId: f.task.id, turnNo: 1 })
-      await expect(store.open(f.step(2, { base: baseSha, pin: headSha }))).rejects.toMatchObject({
-        message: 'Replacement does not pin the published task branch',
-      })
-      expect(await store.open(f.step(2, { base: baseSha, pin: null }))).not.toBeNull()
-    })
-
-    it('reads the turn after an undone one, not the undone one, once a later turn published', async () => {
-      const f = await fixture()
-      const undoneHead = '9'.repeat(40)
-      const thirdHead = '7'.repeat(40)
-      await f.close((await store.open(f.input))!, 'completed', headSha)
-      await f.close(
-        (await store.open(f.step(2, { base: headSha, previous: 1 })))!,
-        'completed',
-        undoneHead,
-      )
-      await undoTurn(db, { taskId: f.task.id, turnNo: 2 })
-      await f.close(
-        (await store.open(f.step(3, { base: headSha, previous: 1, pin: headSha })))!,
-        'completed',
-        thirdHead,
-      )
-      // Turn 4 failed, and its replacement is pinned where turn 3 left the branch: the undone turn
-      // below the last publication answers no more.
-      await f.close((await store.open(f.step(4, { base: thirdHead, previous: 3 })))!, 'failed')
-      await expect(
-        store.open(f.step(5, { base: thirdHead, previous: 3, pin: headSha })),
-      ).rejects.toMatchObject({ message: 'Replacement does not pin the published task branch' })
-      expect(
-        await store.open(f.step(5, { base: thirdHead, previous: 3, pin: thirdHead })),
-      ).not.toBeNull()
-    })
-
-    it('pins the replacement of a turn that started on «Обновить» on that head', async () => {
-      const f = await fixture()
-      const rebasedHead = 'e'.repeat(40)
-      const undoneHead = '9'.repeat(40)
-      await f.close((await store.open(f.input))!, 'completed', headSha)
-      await f.candidate(1, rebasedHead)
-      await f.close(
-        (await store.open(f.step(2, { base: rebasedHead, rebased: true })))!,
-        'completed',
-        undoneHead,
-      )
-      await f.candidate(2, undoneHead)
-      await undoTurn(db, { taskId: f.task.id, turnNo: 2 })
-      // The revision `/undo` writes: the head of «Обновить», under the turn it stood on.
-      await f.candidate(1, rebasedHead)
-      expect(
-        await store.open(f.step(3, { base: rebasedHead, rebased: true, pin: rebasedHead })),
-      ).not.toBeNull()
-    })
-
-    it('keeps the head an undone turn found: «Обновить» after the undo moves it again', async () => {
-      const f = await fixture()
-      const moved = 'e'.repeat(40)
-      const undoneHead = '9'.repeat(40)
-      await f.close((await store.open(f.input))!, 'completed', headSha)
-      await f.close(
-        (await store.open(f.step(2, { base: headSha, previous: 1 })))!,
-        'completed',
-        undoneHead,
-      )
-      await undoTurn(db, { taskId: f.task.id, turnNo: 2 })
-      await f.candidate(2, moved)
-      expect(await store.open(f.step(3, { base: moved, rebased: true, pin: moved }))).not.toBeNull()
-    })
-
     it('refuses a plan whose requirements differ from its task, without creating a row', async () => {
       const repository = await fixture()
       const withoutRepository: TurnPlan = { ...repository.plan, requirements: BROWSER_ONLY }
@@ -647,7 +362,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
     it('keeps the requirements of a task as they were written', async () => {
       const f = await fixture()
       expect(await db.task.findUniqueOrThrow({ where: { id: f.task.id } })).toMatchObject({
-        needsRepository: true,
         needsBrowser: false,
       })
       await expect(
@@ -835,7 +549,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
           taskId: f.task.id,
           type: 'turn.lifecycle',
           payload: {
-            fence: { siteId: f.site.id, taskId: f.task.id, operation: 'turn', epoch: 1 },
+            fence: { siteId: f.task.id, taskId: f.task.id, operation: 'turn', epoch: 1 },
             sessionId: f.input.sessionId,
             turn: 1,
             sequence: 1,
@@ -909,7 +623,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
             taskId: f.task.id,
             type: 'turn.lifecycle',
             payload: {
-              fence: { siteId: f.site.id, taskId: f.task.id, operation: 'turn', epoch: 1 },
+              fence: { siteId: f.task.id, taskId: f.task.id, operation: 'turn', epoch: 1 },
               sessionId: f.input.sessionId,
               turn: 1,
               sequence: 2,
@@ -953,7 +667,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
         taskId: f.task.id,
         type: 'turn.lifecycle',
         payload: {
-          fence: { siteId: f.site.id, taskId: f.task.id, operation: 'turn', epoch: 1 },
+          fence: { siteId: f.task.id, taskId: f.task.id, operation: 'turn', epoch: 1 },
           sessionId: f.input.sessionId,
           turn: 1,
           sequence: 2,
@@ -969,21 +683,17 @@ describe.skipIf(!databaseUrl)('PostgreSQL product task turns', () => {
     })
   })
 
-  it('leaves a product turn assigned while an external writer holds its site', async () => {
+  it('leaves a product turn assigned while its lease is held for an operator', async () => {
     const f = await fixture()
     const assignment = (await store.open(f.input))!
     const turn = await db.taskTurn.findFirstOrThrow({ where: { taskId: f.task.id } })
-    const call = await db.mcpCall.create({
-      data: { turnId: turn.id, tool: 'synthetic', idempotencyKey: randomUUID() },
-    })
     await db.siteLease.update({
-      where: { siteId: f.site.id },
-      data: { inflightMcpCallId: call.id, heldForOperator: true },
+      where: { siteId: f.task.id },
+      data: { heldForOperator: true },
     })
     expect(await store.finish({ id: assignment.id, epoch: 1, outcome: 'failed' })).toBe(false)
     expect((await store.get(assignment.id))!.outcome).toBeNull()
     expect((await db.taskTurn.findUniqueOrThrow({ where: { id: turn.id } })).status).toBe('running')
-    await db.siteLease.update({ where: { siteId: f.site.id }, data: { inflightMcpCallId: null } })
     expect(await store.finish({ id: assignment.id, epoch: 1, outcome: 'lost' })).toBe(false)
     expect(await f.leases.free(f.fence)).toBe(true)
     expect(await store.finish({ id: assignment.id, epoch: 1, outcome: 'lost' })).toBe(true)

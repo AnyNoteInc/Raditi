@@ -1006,20 +1006,12 @@ describe.skipIf(!databaseUrl)('PostgreSQL settlement', () => {
       await settleOrder(deps, { orderId })
       const [subscription] = (await written(userId)).subscriptions
 
-      // What project.create does for the user's first site.
-      const site = await db.$transaction(async (tx) => {
-        const workspace = await ensurePersonalWorkspace(tx, { userId, appEnv: 'test' })
-        return tx.site.create({
-          data: {
-            workspaceId: workspace.id,
-            name: 'Кофейня',
-            url: `https://${randomUUID()}.example.ru`,
-            stack: 'wordpress',
-          },
-        })
-      })
+      // What a first chat does: it finds the workspace of the tariff.
+      const workspace = await db.$transaction((tx) =>
+        ensurePersonalWorkspace(tx, { userId, appEnv: 'test' }),
+      )
 
-      expect(site.workspaceId).toBe(subscription?.workspaceId)
+      expect(workspace.id).toBe(subscription?.workspaceId)
       expect(await db.workspace.count({ where: { createdById: userId } })).toBe(1)
     })
   })

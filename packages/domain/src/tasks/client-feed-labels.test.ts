@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import * as commands from '../release/chat-commands.ts'
-import { previewUnavailableReasons } from '../preview/preview-state.ts'
-import { versionBumps } from '../release/semver.ts'
+import { previewUnavailableReasons, versionBumps } from './feed-history.ts'
 import {
   feedBrowserReasons,
   feedCancelledBys,

@@ -113,7 +113,6 @@ describe('BrowserSessions.start', () => {
       {
         sessionId: SESSION,
         taskId: TASK,
-        siteId: null,
         takeControl: false,
       },
       { signal: running },
@@ -289,7 +288,7 @@ describe('BrowserSessions.reclaim', () => {
     const signal = new AbortController().signal
     await g.sessions.reclaim(TASK, signal)
     expect(g.client.ensure).toHaveBeenCalledExactlyOnceWith(
-      { sessionId: SESSION, taskId: TASK, siteId: null, takeControl: true },
+      { sessionId: SESSION, taskId: TASK, takeControl: true },
       { signal },
     )
     expect(db.markBrowserSessionReady).toHaveBeenCalledWith(g.prisma, { sessionId: SESSION })

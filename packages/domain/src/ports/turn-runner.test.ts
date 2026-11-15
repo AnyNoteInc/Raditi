@@ -19,39 +19,16 @@ import {
   leaseScopeOf,
   siteBusy,
   siteHeld,
-  siteIdOf,
   snapshotHasCredential,
   snapshotSaveWroteNothing,
   turnEvidenceSchema,
   turnPhases,
-  withSite,
 } from './turn-runner.ts'
 
 describe('the scope of a lease', () => {
-  const id = '0196abcd-0000-7000-8000-00000000000a'
-  const siteId = '0196abcd-0000-8000-8000-00000000000b'
-
-  it('is the site of a task, or the task itself without one', () => {
-    expect(leaseScopeOf({ id, siteId })).toBe(siteId)
-    expect(leaseScopeOf({ id, siteId: null })).toBe(id)
-  })
-
-  it('tells the site of a task and refuses a task without one', () => {
-    expect(siteIdOf({ siteId })).toBe(siteId)
-    expect(() => siteIdOf({ siteId: null })).toThrow(
-      expect.objectContaining({ code: 'CONFLICT', httpStatus: 409 }),
-    )
-  })
-
-  it('narrows a task read with its site and refuses a task without one', () => {
-    const site = { url: 'https://example.test' }
-    expect(withSite({ id, siteId, site })).toEqual({ id, siteId, site })
-    for (const task of [
-      { siteId: null, site: null },
-      { siteId, site: null },
-      { siteId: null, site },
-    ])
-      expect(() => withSite(task)).toThrow(expect.objectContaining({ code: 'CONFLICT' }))
+  it('is the chat itself (plan 83)', () => {
+    const id = '0196abcd-0000-7000-8000-00000000000a'
+    expect(leaseScopeOf({ id })).toBe(id)
   })
 })
 

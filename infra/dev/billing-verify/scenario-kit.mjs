@@ -55,7 +55,6 @@ export const ON_SALE = Object.freeze({
       creditsPerDay: null,
       creditsPer5h: null,
       creditsPerWeek: 73,
-      maxSites: 1,
     },
     {
       slug: 'business',
@@ -64,7 +63,6 @@ export const ON_SALE = Object.freeze({
       creditsPerDay: null,
       creditsPer5h: null,
       creditsPerWeek: 350,
-      maxSites: 3,
     },
     {
       slug: 'agency',
@@ -73,7 +71,6 @@ export const ON_SALE = Object.freeze({
       creditsPerDay: null,
       creditsPer5h: null,
       creditsPerWeek: 700,
-      maxSites: 15,
     },
   ],
   pack: { slug: 'pack', price: '1490.00', credits: 100 },

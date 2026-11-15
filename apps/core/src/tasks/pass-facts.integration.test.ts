@@ -45,8 +45,6 @@ describe.skipIf(!databaseUrl)('the facts of a pass with PostgreSQL', () => {
     )
     const { taskId } = await fixtures.task(workspace.id, {
       status: 'queued',
-      siteId: null,
-      needsRepository: false,
       needsBrowser: browser,
     })
     // No reserve to read: the class ceiling stands for the budget.
@@ -161,7 +159,6 @@ describe.skipIf(!databaseUrl)('the facts of a pass with PostgreSQL', () => {
     const { task, workspaceId, userId, facts } = await dialog({ browser })
     const file = (await createAttachment(db, {
       workspaceId,
-      siteId: null,
       uploadedById: userId,
       fileName: 'смета.pdf',
       contentType: 'application/pdf',
@@ -174,7 +171,6 @@ describe.skipIf(!databaseUrl)('the facts of a pass with PostgreSQL', () => {
         taskId: task.id,
         userId,
         workspaceId,
-        siteId: null,
       }),
     ).toBe(true)
     return { task, file, facts }

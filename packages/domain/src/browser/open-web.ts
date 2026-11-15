@@ -1,4 +1,4 @@
-import type { BrowserTaskPolicy, SiteAdapter } from '../ports/site-adapter.ts'
+import type { BrowserObjects, BrowserTaskPolicy } from './policy.ts'
 import { browserForeignPageAllowed, browserNavigationAllowed } from './hosts.ts'
 import { PAGE_SLUG_LENGTH } from '../pages/slug.ts'
 import { browserSessionLimits } from './session.ts'
@@ -96,12 +96,6 @@ export const OPEN_WEB_POLICY: BrowserTaskPolicy = Object.freeze({
   requestDenied: () => false,
   pageDenied: () => false,
 })
-
-/** What a session asks of a stack about the objects of its task. */
-export type BrowserObjects = Pick<
-  SiteAdapter,
-  'browserCheckpointOf' | 'browserCommitAction' | 'browserVerification'
->
 
 /** No object of a task lives on the open internet: nothing to record, to hold back or to read. */
 export const OPEN_WEB_OBJECTS: BrowserObjects = Object.freeze({

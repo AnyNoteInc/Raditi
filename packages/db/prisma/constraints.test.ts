@@ -1,7 +1,6 @@
 // Invariants of the migrations: hand-written CHECKs and the (account_id, unit) foreign keys of
 // the ledger and holds (spec §16, §17). Needs a migrated PostgreSQL, so it runs when DATABASE_URL is set
 // (CI) and is skipped otherwise. Every write happens in a transaction that is rolled back.
-import { siteIdOf } from '@repo/domain'
 import { randomUUID } from 'node:crypto'
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -83,15 +82,7 @@ describe.skipIf(!databaseUrl)('migration constraints', () => {
 
   async function task(tx: Tx) {
     const ws = await workspace(tx)
-    const site = await tx.site.create({
-      data: {
-        workspaceId: ws.id,
-        name: 'Сайт',
-        url: `https://${unique()}.example.ru`,
-        stack: 'wordpress',
-      },
-    })
-    return tx.task.create({ data: { workspaceId: ws.id, siteId: site.id } })
+    return tx.task.create({ data: { workspaceId: ws.id } })
   }
 
   const plan = (tx: Tx, data: Partial<Prisma.PlanUncheckedCreateInput> = {}) =>
@@ -409,48 +400,16 @@ describe.skipIf(!databaseUrl)('migration constraints', () => {
       }))
   })
 
-  describe('gift_site_claims', () => {
-    const claim = async (tx: Tx, hostKey: string) =>
-      tx.giftSiteClaim.create({ data: { hostKey, workspaceId: (await workspace(tx)).id } })
-
-    it('accepts the claims of different sites', () =>
-      expectAccepted(async (tx) => {
-        await claim(tx, `${unique()}.example.ru`)
-        await claim(tx, `${unique()}.example.ru:8080`)
-      }))
-
-    it('rejects a second claim of a site, by whichever workspace', () =>
-      expectRejected(
-        'gift_site_claims_pkey',
-        async (tx) => {
-          const hostKey = `${unique()}.example.ru`
-          await claim(tx, hostKey)
-          await claim(tx, hostKey)
-        },
-        UNIQUE_VIOLATION,
-      ))
-
-    it('rejects a claim of a workspace that does not exist', () =>
-      expectRejected(
-        'gift_site_claims_workspace_id_fkey',
-        (tx) =>
-          tx.giftSiteClaim.create({
-            data: { hostKey: `${unique()}.example.ru`, workspaceId: randomUUID() },
-          }),
-        FOREIGN_KEY_VIOLATION,
-      ))
-  })
-
   describe('plans and pricing_rules', () => {
     it('rejects a negative plan price', () =>
       expectRejected('plans_price_check', (tx) => plan(tx, { price: '-1.00' })))
 
     it('rejects a quota plan without a monthly quota', () =>
-      expectRejected('plans_kind_fields_check', (tx) => plan(tx, { kind: 'quota', maxSites: 1 })))
+      expectRejected('plans_kind_fields_check', (tx) => plan(tx, { kind: 'quota' })))
 
     // The daily limit in credits (17.10.2026): some of the month, never more; NULL is no cap.
     const tariff = (tx: Tx, creditsPerDay: number | null) =>
-      plan(tx, { kind: 'quota', maxSites: 1, creditsPerMonth: 300, creditsPerDay })
+      plan(tx, { kind: 'quota', creditsPerMonth: 300, creditsPerDay })
 
     it('accepts a tariff day up to its whole month, and a tariff without a day', () =>
       expectAccepted(async (tx) => {
@@ -725,20 +684,9 @@ describe.skipIf(!databaseUrl)('migration constraints', () => {
       expectRejected('site_leases_state_check', async (tx) => {
         const t = await task(tx)
         await tx.siteLease.create({
-          data: { siteId: siteIdOf(t), operation: 'turn', holderTaskId: t.id },
+          data: { siteId: t.id, operation: 'turn', holderTaskId: t.id },
         })
       }))
-
-    it('rejects site access without a site', () =>
-      expectRejected('credential_refs_site_scope_check', async (tx) =>
-        tx.credentialRef.create({
-          data: {
-            workspaceId: (await workspace(tx)).id,
-            kind: 'ssh',
-            vaultPath: `kv/test/${randomUUID()}`,
-          },
-        }),
-      ))
 
     it('rejects a provider key bound to a workspace', () =>
       expectRejected('credential_refs_platform_scope_check', async (tx) =>

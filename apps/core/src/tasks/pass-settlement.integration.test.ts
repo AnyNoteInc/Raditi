@@ -73,8 +73,6 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
     const { taskId } = await fixtures.task(workspace.id, {
       status,
       turnNo: status === 'running' ? 1 : 0,
-      siteId: null,
-      needsRepository: false,
       needsBrowser: browser,
     })
     if (status === 'running')
@@ -648,8 +646,6 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       const { taskId } = await fixtures.task(workspace.id, {
         status,
         turnNo: 1,
-        siteId: null,
-        needsRepository: false,
         needsBrowser: true,
       })
       await db.taskTurn.create({
@@ -986,8 +982,6 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       const { taskId } = await fixtures.task(workspace.id, {
         status: 'running',
         turnNo: 1,
-        siteId: null,
-        needsRepository: false,
         needsBrowser: browser,
       })
       await db.taskTurn.create({
@@ -1018,7 +1012,6 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
           data: {
             taskId,
             workspaceId: workspace.id,
-            siteId: null,
             status: 'ready',
             readyAt: new Date(),
             // The database's clock checks it, not the clock of this file.

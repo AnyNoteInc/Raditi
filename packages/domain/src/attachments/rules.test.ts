@@ -281,7 +281,7 @@ describe('statuses', () => {
 })
 
 describe('attachmentStartInputSchema', () => {
-  const input = { siteId: site, name: 'фото.jpg', size: 1024, type: 'image/jpeg' }
+  const input = { name: 'фото.jpg', size: 1024, type: 'image/jpeg' }
 
   it('takes a file and returns its cleaned name', () => {
     expect(attachmentStartInputSchema.parse(input)).toEqual(input)
@@ -291,10 +291,8 @@ describe('attachmentStartInputSchema', () => {
     })
   })
 
-  it('takes a file of a chat without a project, and no absent site', () => {
-    expect(attachmentStartInputSchema.parse({ ...input, siteId: null }).siteId).toBeNull()
-    const { siteId: _siteId, ...withoutSite } = input
-    expect(attachmentStartInputSchema.safeParse(withoutSite).success).toBe(false)
+  it('takes no site: a file is of a chat (plan 83)', () => {
+    expect(attachmentStartInputSchema.safeParse({ ...input, siteId: site }).success).toBe(false)
   })
 
   it('bounds the size', () => {
@@ -318,7 +316,7 @@ describe('attachmentStartInputSchema', () => {
     expect(accepts({ name: 'таблица.csv', type: 'application/vnd.ms-excel' })).toBe(false)
   })
 
-  it('refuses an empty or overlong name, a missing site and extra keys', () => {
+  it('refuses an empty or overlong name and extra keys', () => {
     const accepts = (patch: Record<string, unknown>) =>
       attachmentStartInputSchema.safeParse({ ...input, ...patch }).success
     expect(accepts({ name: '...' })).toBe(false)

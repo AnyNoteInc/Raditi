@@ -50,7 +50,6 @@ describe.skipIf(!enabled)('the changes of a turn with PostgreSQL', () => {
         kind: 'quota',
         price: '0.00',
         creditsPerMonth: 1,
-        maxSites: 1,
         pageSites: 1000,
         isActive: false,
       },
@@ -91,8 +90,6 @@ describe.skipIf(!enabled)('the changes of a turn with PostgreSQL', () => {
     return db.task.create({
       data: {
         workspaceId,
-        siteId: null,
-        needsRepository: false,
         needsBrowser: false,
         createdById: userId,
       },

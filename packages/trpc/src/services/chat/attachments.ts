@@ -69,7 +69,7 @@ export async function bindMessageAttachments(
 ): Promise<void> {
   if (input.ids.length === 0) return
   // A chat has no site (docs/plan/83-remove-projects.md, БП1).
-  if (!(await bindAttachments(tx, { ...input, siteId: null }))) throw attachmentNotReady()
+  if (!(await bindAttachments(tx, { ...input }))) throw attachmentNotReady()
 }
 
 /** `attachments` of a `feed.request`: absent when the message has none. */
@@ -116,7 +116,6 @@ export async function startAttachment(
   // The rules of the domain once more, as the row will be written: the clean name and the listed
   // type spelt as the list spells it.
   const file = attachmentStartInputSchema.parse({
-    siteId: null,
     name: input.name,
     size: input.size,
     type: attachmentTypeOf(input.type)?.mime,
@@ -134,7 +133,6 @@ export async function startAttachment(
   ).id
   const row = await createAttachment(db, {
     workspaceId,
-    siteId: null,
     uploadedById: input.userId,
     fileName: file.name,
     contentType: file.type,

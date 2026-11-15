@@ -6,7 +6,6 @@ import {
   billingNothingToChange,
   billingPaymentInProgress,
   billingPlanNotFound,
-  billingPlanSiteLimit,
   billingSubscriptionPastDue,
   conflict,
   liveSubscriptionStatuses,
@@ -303,8 +302,7 @@ async function overviewAfter(
  *
  * Refused with BILLING_PLAN_NOT_FOUND (no such tariff on sale), BILLING_NO_LIVE_SUBSCRIPTION,
  * BILLING_ALREADY_ON_PLAN (the tariff the subscription has, or already switches to: the choice
- * is taken back with `cancelPlanChange`), BILLING_PLAN_SITE_LIMIT (the workspace has more sites
- * than the tariff allows, default «м») and BILLING_PAYMENT_IN_PROGRESS (the renewal charge of
+ * is taken back with `cancelPlanChange`) and BILLING_PAYMENT_IN_PROGRESS (the renewal charge of
  * the period is under way).
  */
 export async function schedulePlanChange(
@@ -316,34 +314,24 @@ export async function schedulePlanChange(
   const plan = await prisma.plan.findFirst({
     where: { slug: planSlug, kind: 'quota', isActive: true },
   })
-  // What a renewal could not charge for is not offered: a tariff without a price. The quota and
-  // the site limit of a quota plan are never null in the database; the types do not know it.
+  // What a renewal could not charge for is not offered: a tariff without a price. The quota of a
+  // quota plan is never null in the database; the types do not know it.
   if (
     plan === null ||
-    plan.maxSites === null ||
     plan.creditsPerMonth === null ||
     !plan.price.greaterThan(0)
   ) {
     throw billingPlanNotFound()
   }
-  const { maxSites } = plan
   const found = await liveSubscriptionOf(deps, userId)
 
   await prisma.$transaction(
     async (tx) => {
-      // The user's first lock, as in project.create: a site added at this very moment is
-      // counted either here or there.
+      // The user's first lock, as everywhere a subscription changes.
       if (!(await lockUserRow(tx, userId))) throw billingNoLiveSubscription()
       const subscription = await lockChangeable(tx, found.id)
       if (plan.id === subscription.planId || plan.id === subscription.nextPlanId) {
         throw billingAlreadyOnPlan()
-      }
-      if (
-        (await tx.site.count({
-          where: { workspaceId: subscription.workspaceId, deletedAt: null },
-        })) > maxSites
-      ) {
-        throw billingPlanSiteLimit()
       }
       if ((await renewalChargeUnderWay(tx, subscription)) !== 'none') {
         throw billingPaymentInProgress()

@@ -186,7 +186,6 @@ export async function createDialog(
           modelClass,
           billable: true,
           title: dialogTitle(text),
-          needsRepository: false,
           needsBrowser: browser,
         },
       ],

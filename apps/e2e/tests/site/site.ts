@@ -170,7 +170,6 @@ export async function addBrowserTask(
         status: 'awaiting_user',
         title,
         turnNo: 1,
-        needsRepository: false,
         needsBrowser: true,
       },
       select: { id: true },
@@ -237,7 +236,6 @@ export async function addInitAnswer(
         status: 'awaiting_user',
         title: 'Подсказки агенту',
         turnNo: 1,
-        needsRepository: true,
         needsBrowser: false,
       },
       select: { id: true },
@@ -316,7 +314,6 @@ export async function addLongDialog(
         status: 'awaiting_user',
         title,
         turnNo: pairs,
-        needsRepository: true,
         needsBrowser: false,
       },
       select: { id: true },
@@ -435,7 +432,7 @@ export async function requirementsOf(
   try {
     return await prisma.task.findUniqueOrThrow({
       where: { id: taskId },
-      select: { needsRepository: true, needsBrowser: true },
+      select: { needsBrowser: true },
     })
   } finally {
     await prisma.$disconnect()
@@ -463,12 +460,10 @@ export async function addLongChat(
       data: {
         id: chatId(),
         workspaceId: workspace.id,
-        siteId: null,
         createdById: userId,
         status: 'awaiting_user',
         title,
         turnNo: pairs,
-        needsRepository: false,
         needsBrowser: false,
       },
       select: { id: true },
@@ -511,12 +506,10 @@ export async function addAnsweredChat(
       data: {
         id: chatId(),
         workspaceId: workspace.id,
-        siteId: null,
         createdById: userId,
         status: 'awaiting_user',
         title: words,
         turnNo: 1,
-        needsRepository: false,
         needsBrowser: false,
       },
       select: { id: true },

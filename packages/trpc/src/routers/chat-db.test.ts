@@ -326,7 +326,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         creditsPerDay: options.creditsPerDay ?? null,
         creditsPer5h: null,
         creditsPerWeek: null,
-        maxSites: 3,
         isActive: false,
       },
     })
@@ -684,8 +683,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       const task = await db.task.create({
         data: {
           workspaceId,
-          siteId: null,
-          needsRepository: false,
           needsBrowser: false,
           status: 'awaiting_user',
           turnNo: 1,
@@ -1584,8 +1581,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
             data: {
               id: chatId(),
               workspaceId,
-              siteId: null,
-              needsRepository: false,
               needsBrowser: true,
               status: 'awaiting_user',
             },
@@ -2074,7 +2069,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
     it('gives it the browser where the platform has one', async () => {
       const taskId = await newChat(callerOf(await person(), { browser: true }))
       expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
-        needsRepository: false,
         needsBrowser: true,
       })
     })
@@ -2093,7 +2087,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       expect(await giftEntries(user.id)).toBe(1)
       expect(await db.attachment.findUniqueOrThrow({ where: { id: fileId } })).toMatchObject({
         taskId,
-        siteId: null,
         status: 'bound',
       })
     })
@@ -2143,7 +2136,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       const user = await person()
       const caller = callerOf(user)
       const taskId = chatId()
-      const input = { siteId: null, taskId, text: 'Вопрос' }
+      const input = { taskId, text: 'Вопрос' }
       const first = await caller.task.create(input)
       expect(first.created).toBe(true)
       expect(await caller.task.create(input)).toEqual({ ...first, created: false })
@@ -2181,7 +2174,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       })
       expect(await db.task.findUniqueOrThrow({ where: { id: taskId } })).toMatchObject({
         status: 'queued',
-        siteId: null,
         attempt: 2,
       })
       expect((await activeHolds(taskId)).map((hold) => hold.attempt)).toEqual([2])
@@ -2233,7 +2225,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
               workspaceId,
               siteId,
               status: row.status ?? 'done',
-              needsRepository: false,
               needsBrowser: true,
               title: 'Чат',
             },
@@ -2449,7 +2440,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
         { attach, transcribe: vi.fn() },
       )
       expect(attach).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: owner.id, siteId: null, fileId: 'd', name: 'прайс.exe' }),
+        expect.objectContaining({ userId: owner.id, fileId: 'd', name: 'прайс.exe' }),
       )
       expect((await said()).at(-1)?.text).toBe('Такой файл не подходит.')
       expect(await db.task.count({ where: { createdById: owner.id } })).toBe(0)

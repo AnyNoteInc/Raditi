@@ -51,8 +51,6 @@ describe.skipIf(!enabled)('the browsers of tasks with PostgreSQL', () => {
     )
     const { taskId } = await fixtures.task(workspace.id, {
       status: status as never,
-      siteId: null,
-      needsRepository: false,
       needsBrowser: true,
     })
     return db.task.findUniqueOrThrow({ where: { id: taskId } })
@@ -104,14 +102,12 @@ describe.skipIf(!enabled)('the browsers of tasks with PostgreSQL', () => {
     await sessions.start({ taskId: task.id, sessionId: opened.id }, running)
     expect(await db.browserSession.findUnique({ where: { id: opened.id } })).toMatchObject({
       status: 'ready',
-      siteId: null,
     })
     // Ids alone: the worker reads the site's address itself, the notes go to the turn's prompt.
     expect(client.ensure).toHaveBeenCalledExactlyOnceWith(
       {
         sessionId: opened.id,
         taskId: task.id,
-        siteId: null,
         takeControl: false,
       },
       { signal: running },
@@ -124,7 +120,7 @@ describe.skipIf(!enabled)('the browsers of tasks with PostgreSQL', () => {
     expect(again).toHaveLength(1)
     expect(again[0]).toMatchObject({ helpReason: null, helpMessage: null })
     expect(client.ensure).toHaveBeenLastCalledWith(
-      { sessionId: opened.id, taskId: task.id, siteId: null, takeControl: true },
+      { sessionId: opened.id, taskId: task.id, takeControl: true },
       expect.anything(),
     )
   })

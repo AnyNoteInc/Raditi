@@ -64,7 +64,7 @@ describe.skipIf(!enabled)(
       const workspace = await db.workspace.create({ data: { name: 'Synthetic turn recovery' } })
       workspaces.push(workspace.id)
       const task = await db.task.create({
-        data: { workspaceId: workspace.id, needsRepository: false, needsBrowser: false },
+        data: { workspaceId: workspace.id, needsBrowser: false },
       })
       const scope = task.id
       const sessionId = randomUUID()
@@ -278,7 +278,7 @@ describe.skipIf(!enabled)(
       const workspace = await db.workspace.create({ data: { name: 'Synthetic browser recovery' } })
       workspaces.push(workspace.id)
       const task = await db.task.create({
-        data: { workspaceId: workspace.id, needsRepository: false, needsBrowser: true },
+        data: { workspaceId: workspace.id, needsBrowser: true },
       })
       const sessionId = randomUUID()
       const leases = new PostgresSiteLeaseStore(db)

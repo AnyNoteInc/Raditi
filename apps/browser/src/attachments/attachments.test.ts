@@ -33,7 +33,7 @@ function files(siteId: string | null) {
 describe('files of a task for a page of its browser (docs/plan/61-chats-first.md, К16)', () => {
   it('reads a file of a chat without a site for the session without one', async () => {
     const { id, reader } = files(null)
-    expect(await reader.read({ taskId, siteId: null, attachmentIds: [id] })).toEqual([
+    expect(await reader.read({ taskId, attachmentIds: [id] })).toEqual([
       { name: 'смета.pdf', mimeType: 'application/pdf', bytes },
     ])
   })

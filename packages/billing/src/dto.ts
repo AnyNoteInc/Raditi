@@ -31,7 +31,6 @@ export const planSchema = z.object({
   /** Credits the work may take in 5 hours and in a week (plan 71); null: no such limit. */
   creditsPer5h: positiveCount.nullable(),
   creditsPerWeek: positiveCount.nullable(),
-  maxSites: positiveCount,
   /**
    * Sites of pages the tariff gives (docs/plan/73-pages-sites.md, Дер36, Дер37); null — none of
    * its own. Shown beside the credits.
@@ -376,8 +375,6 @@ export const usageEntrySchema = z
       title: z.string().min(1).nullable(),
       status: z.enum(taskStatuses),
     }),
-    /** null — a chat without a project (docs/plan/61-chats-first.md, §5.10). */
-    site: z.object({ id: z.uuid(), name: z.string() }).nullable(),
   })
   .refine(
     ({ outcome, credits }) => (credits !== null) === (outcome === 'charged' || outcome === 'held'),
@@ -478,17 +475,6 @@ export const tariffUsageSchema = z.object({
    * beside it); null while the tariff is not paid — there is no day then.
    */
   today: tariffDaySchema.nullable(),
-  /** Sites of the workspace, whatever their status, against the site limit of the plan. */
-  sites: z.object({ count: wholeCredits, max: positiveCount }),
-  /**
-   * Credits charged in the period per site, the largest first; a site without any is absent. The
-   * chats without a project stand as one line with neither an id nor a name.
-   */
-  bySite: z.array(
-    z
-      .object({ siteId: z.uuid().nullable(), name: z.string().nullable(), credits: positiveCount })
-      .refine(({ siteId, name }) => (siteId === null) === (name === null)),
-  ),
 })
 export type TariffUsageDto = z.infer<typeof tariffUsageSchema>
 

@@ -62,7 +62,6 @@ describe.skipIf(!databaseUrl)('pages router with PostgreSQL', () => {
         kind: 'quota',
         price: '0.00',
         creditsPerMonth: 1,
-        maxSites: 1,
         pageSites,
         isActive: false,
       },
@@ -175,8 +174,6 @@ describe.skipIf(!databaseUrl)('pages router with PostgreSQL', () => {
     const task = await db.task.create({
       data: {
         workspaceId: workspace.id,
-        siteId: null,
-        needsRepository: false,
         needsBrowser: false,
         title: 'Цены',
       },
@@ -700,8 +697,6 @@ describe.skipIf(!databaseUrl)('pages router with PostgreSQL', () => {
     const removed = await db.task.create({
       data: {
         workspaceId: workspace.id,
-        siteId: null,
-        needsRepository: false,
         needsBrowser: false,
         deletedAt: new Date(),
       },
@@ -843,8 +838,6 @@ describe.skipIf(!databaseUrl)('pages router with PostgreSQL', () => {
     const other = await db.task.create({
       data: {
         workspaceId: workspace.id,
-        siteId: null,
-        needsRepository: false,
         needsBrowser: false,
         title: 'Другой чат',
       },

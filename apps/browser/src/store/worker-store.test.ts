@@ -25,7 +25,7 @@ describe('a file of a task as the store reads it (docs/plan/61-chats-first.md, Ð
     const found = row(null)
     await expect(
       storeOf(found).attachment({ id: found.id, taskId: randomUUID() }),
-    ).resolves.toMatchObject({ id: found.id, siteId: null })
+    ).resolves.toMatchObject({ id: found.id })
   })
 
   it('answers the site of any other file', async () => {
@@ -54,13 +54,12 @@ describe('a session as the store reads it (docs/plan/61-chats-first.md, Ðš12)', 
 
   it('answers a session of a chat without a site, and the site of its task beside its own', async () => {
     await expect(read(sessionRow(null, null))).resolves.toMatchObject({
-      siteId: null,
       taskSiteId: null,
     })
     const site = randomUUID()
     const other = randomUUID()
     const answer = await read(sessionRow(null, other))
-    expect(answer).toMatchObject({ siteId: null, taskSiteId: other })
+    expect(answer).toMatchObject({ taskSiteId: other })
     expect(answer).not.toHaveProperty('task')
     await expect(read(sessionRow(site, site))).resolves.toMatchObject({
       siteId: site,

@@ -18,7 +18,6 @@ import {
   billingPaymentInProgress,
   billingPaymentsNotConfigured,
   billingPlanNotFound,
-  billingPlanSiteLimit,
   billingSubscriptionExists,
   billingSubscriptionPastDue,
   billingTaskNeedsSubscription,
@@ -131,12 +130,6 @@ describe('toTRPCError', () => {
       billingSubscriptionExists,
       'CONFLICT',
       'Тариф уже оформлен. Обновите страницу, чтобы увидеть его',
-    ],
-    [
-      'BILLING_PLAN_SITE_LIMIT',
-      billingPlanSiteLimit,
-      'CONFLICT',
-      'У вас больше сайтов, чем входит в этот тариф. Выберите тариф, в который они помещаются',
     ],
     [
       'BILLING_PAYMENT_DECLINED',

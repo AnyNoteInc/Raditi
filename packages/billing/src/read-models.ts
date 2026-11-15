@@ -56,7 +56,6 @@ const planSelect = {
   creditsPerDay: true,
   creditsPer5h: true,
   creditsPerWeek: true,
-  maxSites: true,
   pageSites: true,
   pageCustomNames: true,
   packCredits: true,
@@ -73,7 +72,6 @@ const planDto = (row: PlanRow) => ({
   creditsPerDay: row.creditsPerDay,
   creditsPer5h: row.creditsPer5h,
   creditsPerWeek: row.creditsPerWeek,
-  maxSites: row.maxSites,
   pageSites: row.pageSites,
   pageCustomNames: row.pageCustomNames,
 })

@@ -28,8 +28,6 @@ type RawDb = Pick<Prisma.TransactionClient, '$queryRaw'>
 
 /** Statuses of a session that still holds a browser (isBrowserSessionLive in @repo/domain). */
 const LIVE = ['starting', 'ready'] as const
-/** A site in one of these takes no browser: its tasks are not accepted (Б9). */
-export const browserClosedSiteStatuses = ['paused', 'disconnected', 'archived'] as const
 
 const id = z.uuid()
 const epoch = z.number().int().min(0).max(2_147_483_647)
@@ -46,9 +44,9 @@ const openSchema = z.strictObject({
 })
 
 /**
- * The open session of a task, started (`starting`) when it has none (Б18): its site — none in a
- * chat without one (docs/plan/61-chats-first.md, К12) — and workspace are the task's. Refuses a task that does not need a browser, has ended or whose site
- * is closed, and a new session past the live ones a workspace may hold (К36,
+ * The open session of a task, started (`starting`) when it has none (Б18): its workspace is the
+ * task's. Refuses a task that does not need a browser or has ended, and a new session past the
+ * live ones a workspace may hold (К36,
  * `BROWSER_WORKSPACE_BUSY`). Two callers at once get the same session: the unique index of open
  * sessions decides. Call it in a transaction: its lock on the workspace keeps the count true.
  */
@@ -58,27 +56,15 @@ export async function openBrowserSession(
 ): Promise<BrowserSession> {
   const { taskId, maxHours = browserSessionTimings.maxHours } = openSchema.parse(input)
   const [task] = await tx.$queryRaw<
-    Array<{
-      site_id: string | null
-      workspace_id: string
-      needs_browser: boolean
-      status: string
-      site_status: string | null
-    }>
+    Array<{ workspace_id: string; needs_browser: boolean; status: string }>
   >`
-    SELECT t.site_id, t.workspace_id, t.needs_browser, t.status::text AS status,
-           s.status::text AS site_status
-      FROM tasks t LEFT JOIN sites s ON s.id = t.site_id
+    SELECT t.workspace_id, t.needs_browser, t.status::text AS status
+      FROM tasks t
      WHERE t.id = ${taskId}::uuid`
   if (!task) throw notFound('Task not found')
   if (!task.needs_browser) throw conflict('The task does not need a browser')
   if ((terminalTaskStatuses as readonly string[]).includes(task.status))
     throw conflict('The task has ended')
-  if (
-    task.site_status &&
-    (browserClosedSiteStatuses as readonly string[]).includes(task.site_status)
-  )
-    throw conflict('The site of the task is closed')
   await tx.$queryRaw`SELECT id FROM workspaces WHERE id = ${task.workspace_id}::uuid FOR NO KEY UPDATE`
   const open = await openBrowserSessionOfTask(tx, taskId)
   if (open) return open
@@ -89,8 +75,8 @@ export async function openBrowserSession(
   // A session closed between the insert that met it and the read is replaced on the next round.
   for (let round = 0; round < 3; round += 1) {
     await tx.$queryRaw`
-      INSERT INTO browser_sessions (id, task_id, site_id, workspace_id, expires_at)
-      VALUES (${uuidv7()}::uuid, ${taskId}::uuid, ${task.site_id}::uuid, ${task.workspace_id}::uuid,
+      INSERT INTO browser_sessions (id, task_id, workspace_id, expires_at)
+      VALUES (${uuidv7()}::uuid, ${taskId}::uuid, ${task.workspace_id}::uuid,
               clock_timestamp() + ${maxHours}::int * interval '1 hour')
       ON CONFLICT (task_id) WHERE status IN ('starting', 'ready') DO NOTHING
       RETURNING id`

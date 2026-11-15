@@ -418,7 +418,6 @@ describe.skipIf(!databaseUrl)('seedReferenceData plan terms on PostgreSQL', () =
       creditsPer5h: 10,
       creditsPerWeek: 20,
       packCredits: null,
-      maxSites: 1,
       pageSites: 2,
       pageCustomNames: false,
       sortOrder: 990,
@@ -476,7 +475,6 @@ describe.skipIf(!databaseUrl)('seedReferenceData plan terms on PostgreSQL', () =
     ['monthly quota', { creditsPerMonth: 40 }, /creditsPerMonth: stored 30, seed 40/],
     ['daily credits', { creditsPerDay: 20 }, /creditsPerDay: stored 10, seed 20/],
     ['daily cap', { creditsPerDay: null }, /creditsPerDay: stored 10, seed null/],
-    ['site limit', { maxSites: 3 }, /maxSites: stored 1, seed 3/],
     ['kind', { kind: 'pack', packCredits: 10 }, /kind: stored quota, seed pack/],
   ] satisfies [string, Partial<PlanSeed>, RegExp][])(
     'fails and rolls back everything when the stored %s differs',

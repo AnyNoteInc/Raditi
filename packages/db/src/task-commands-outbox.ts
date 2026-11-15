@@ -3,12 +3,6 @@ import {
   AGENT_TURN_QUEUE,
   agentTurnCancelDedupeKey,
   agentTurnCancelJobSchema,
-  CANDIDATE_REBASE_JOB,
-  CANDIDATE_REWIND_JOB,
-  candidateRebaseDedupeKey,
-  candidateRebaseJobSchema,
-  candidateRewindDedupeKey,
-  candidateRewindJobSchema,
   CHAT_NOTIFY_DELAY_MS,
   CHAT_NOTIFY_JOB,
   chatNotifyDedupeKey,
@@ -19,8 +13,6 @@ import {
   type AgentTurnCancelJob,
   type ChatNotifyJob,
   type QueueDrainJob,
-  type CandidateRebaseJob,
-  type CandidateRewindJob,
 } from '@repo/domain'
 
 import type { Prisma } from './generated/prisma/client.ts'
@@ -85,35 +77,5 @@ export async function enqueueChatNotify(
     payload,
     dedupeKey: chatNotifyDedupeKey(payload),
     availableAt: new Date(now.getTime() + CHAT_NOTIFY_DELAY_MS),
-  })
-}
-
-/** «Обновить» (`/update`): core carries the candidate onto the current `main`. */
-export async function enqueueCandidateRebase(
-  tx: OutboxWriter,
-  job: CandidateRebaseJob,
-): Promise<boolean> {
-  const parsed = candidateRebaseJobSchema.parse(job)
-  const payload: CandidateRebaseJob = { ...parsed, taskId: lower(parsed.taskId) }
-  return enqueueOutbox(tx, {
-    topic: AGENT_TURN_QUEUE,
-    type: CANDIDATE_REBASE_JOB,
-    payload,
-    dedupeKey: candidateRebaseDedupeKey(payload),
-  })
-}
-
-/** `/undo` and `/redo` in a chat with the repository: core moves the branch and the candidate. */
-export async function enqueueCandidateRewind(
-  tx: OutboxWriter,
-  job: CandidateRewindJob,
-): Promise<boolean> {
-  const parsed = candidateRewindJobSchema.parse(job)
-  const payload: CandidateRewindJob = { ...parsed, taskId: lower(parsed.taskId) }
-  return enqueueOutbox(tx, {
-    topic: AGENT_TURN_QUEUE,
-    type: CANDIDATE_REWIND_JOB,
-    payload,
-    dedupeKey: candidateRewindDedupeKey(payload),
   })
 }

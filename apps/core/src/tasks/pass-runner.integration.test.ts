@@ -101,8 +101,6 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
     )
     const { taskId } = await fixtures.task(workspace.id, {
       status: 'queued',
-      siteId: null,
-      needsRepository: false,
       needsBrowser: browser,
     })
     const requestEventId = await insertFeedEvent(db, {
@@ -1074,7 +1072,6 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
         const { workspaceId } = await db.task.findUniqueOrThrow({ where: { id: dialog.taskId } })
         const file = (await createAttachment(db, {
           workspaceId,
-          siteId: null,
           uploadedById: dialog.userId,
           fileName: 'смета.pdf',
           contentType: 'application/pdf',
@@ -1091,7 +1088,6 @@ describe.skipIf(!databaseUrl)('the handler of a pass with PostgreSQL', () => {
             taskId: dialog.taskId,
             userId: dialog.userId,
             workspaceId,
-            siteId: null,
           })
           const run = vi.fn<Run>(completes(dialog.taskId))
           await runner(run, async () => null, { browser: null }).passes.run(dialog.job)

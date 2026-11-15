@@ -47,29 +47,21 @@ describe.skipIf(!databaseUrl)('the credit rate with PostgreSQL', () => {
 
   const rolledBack = <T>(work: (tx: Tx) => Promise<T>) => inRolledBackTransaction(db, work)
 
-  /** A workspace with one site, uncommitted. */
-  async function workspaceIn(tx: Tx): Promise<{ workspaceId: string; siteId: string }> {
+  /** A workspace, uncommitted. */
+  async function workspaceIn(tx: Tx): Promise<{ workspaceId: string }> {
     const workspace = await tx.workspace.create({ data: { name: 'Credit rate verification' } })
-    const site = await tx.site.create({
-      data: {
-        workspaceId: workspace.id,
-        name: 'Credit rate verification',
-        url: `https://${randomUUID()}.example.ru`,
-        stack: 'wordpress',
-      },
-    })
-    return { workspaceId: workspace.id, siteId: site.id }
+    return { workspaceId: workspace.id }
   }
 
   /** A task of a workspace of its own, or of the one given. */
   async function taskIn(
     tx: Tx,
     data: Partial<Prisma.TaskUncheckedCreateInput> = {},
-    workspace?: { workspaceId: string; siteId: string },
-  ): Promise<{ taskId: string; workspaceId: string; siteId: string }> {
-    const { workspaceId, siteId } = workspace ?? (await workspaceIn(tx))
-    const task = await tx.task.create({ data: { workspaceId, siteId, ...data } })
-    return { taskId: task.id, workspaceId, siteId }
+    workspace?: { workspaceId: string },
+  ): Promise<{ taskId: string; workspaceId: string }> {
+    const { workspaceId } = workspace ?? (await workspaceIn(tx))
+    const task = await tx.task.create({ data: { workspaceId, ...data } })
+    return { taskId: task.id, workspaceId }
   }
 
   /** A model with one price row that starts at `from`. */

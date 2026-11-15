@@ -122,7 +122,6 @@ describe('usage summary DTO', () => {
       creditsPerDay: 100,
       creditsPer5h: null,
       creditsPerWeek: null,
-      maxSites: 3,
     },
     period: { start: PERIOD_START, end: PERIOD_END },
     autoRenewal: false,
@@ -280,7 +279,7 @@ describe('usage summary DTO', () => {
     ],
     [
       'a line without a project that names one',
-      { tariff: { ...tariff, bySite: [{ siteId: null, name: 'Сайт', credits: 5 }] } },
+      { tariff: { ...tariff, bySite: [{ name: 'Сайт', credits: 5 }] } },
     ],
     [
       'a project without a name',
@@ -450,7 +449,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
     const { tariff = 300, pack = 0 } = options
     const { userId, workspaceId } = await fixtures.workspace()
     workspaceIds.push(workspaceId)
-    const plan = await fixtures.plan({ creditsPerMonth: 300, maxSites: 2, ...options.plan })
+    const plan = await fixtures.plan({ creditsPerMonth: 300, ...options.plan })
     const subscription =
       options.subscription === null
         ? null
@@ -488,7 +487,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
       kind: 'pack',
       price: '1990.00',
       creditsPerMonth: null,
-      maxSites: null,
       packCredits: credits,
     })
     const order = await fixtures.order({
@@ -671,7 +669,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
           creditsPerDay: 50,
           creditsPer5h: null,
           creditsPerWeek: null,
-          maxSites: 2,
           pageSites: null,
           pageCustomNames: false,
         },
@@ -938,8 +935,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
         const { id } = await db.task.create({
           data: {
             workspaceId,
-            siteId: null,
-            needsRepository: false,
             needsBrowser: false,
             modelClass: 'standard',
             status: 'done',
@@ -956,7 +951,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
 
       expect(summary.tariff?.bySite).toEqual([
         { siteId: shop.id, name: 'Магазин', credits: 9 },
-        { siteId: null, name: null, credits: 9 },
+        { name: null, credits: 9 },
       ])
       expect(summary.history.items.map(({ id, site, credits }) => [id, site, credits])).toEqual([
         [second, null, 4],
@@ -1431,7 +1426,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage summary', () => {
     /** A user who paid for a tariff of 300 credits on 1 June 2026, through the checkout. */
     async function subscribed() {
       const { userId } = await fixtures.user()
-      const plan = await fixtures.plan({ isActive: true, creditsPerMonth: 300, maxSites: 2 })
+      const plan = await fixtures.plan({ isActive: true, creditsPerMonth: 300 })
       const { shop, deps } = billingTestDeps(db)
       const { orderId } = await startCheckout(deps, {
         userId,

@@ -303,7 +303,6 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
           workspaceId: workspace.id,
           status: 'running',
           modelClass: 'standard',
-          needsRepository: false,
           needsBrowser,
         },
       })
@@ -326,7 +325,6 @@ describe.skipIf(!enabled)('fenced turn keys, write-once recovery and admission c
           workspaceId: workspace.id,
           status: 'running',
           modelClass: 'standard',
-          needsRepository: false,
           needsBrowser: false,
         },
       })

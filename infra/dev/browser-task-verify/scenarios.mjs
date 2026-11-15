@@ -2080,7 +2080,6 @@ async function newChat(stand, client, { text, attachments = [], program, ctx = {
   stand.owned.chats.push(taskId)
   stand.model.script(program, ctx)
   const created = await client.mutate('task.create', {
-    siteId: null,
     taskId,
     text,
     ...(attachments.length > 0 ? { attachments } : {}),
@@ -2173,7 +2172,6 @@ async function scenarioP(stand) {
   const word = `raditi-chat-file-${randomUUID().replaceAll('-', '')}`
   const bytes = Buffer.from(`Записка клиента: ${word}\n`)
   const file = await uploadFile(client, {
-    siteId: null,
     name: 'zapiska.txt',
     type: 'text/plain',
     bytes,
@@ -2222,7 +2220,6 @@ async function scenarioP(stand) {
   // The file of this chat goes on a page through the worker (К16): raditi-inbox, `site_id` NULL.
   const uploadWord = `raditi-chat-upload-${randomUUID().replaceAll('-', '')}`
   const toUpload = await uploadFile(client, {
-    siteId: null,
     name: 'dlya-stranicy.txt',
     type: 'text/plain',
     bytes: Buffer.from(`${uploadWord}\n`),

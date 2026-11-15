@@ -30,8 +30,6 @@
     "@repo/ip-address": "workspace:*",
     "@repo/observability": "workspace:*",
     "@repo/service-runtime": "workspace:*",
-    "@repo/site-adapters": "workspace:*",
-    "@repo/site-content": "workspace:*",
     "@repo/snapshots": "workspace:*",
     "@repo/storage": "workspace:*",
     "@repo/turn-keys": "workspace:*",

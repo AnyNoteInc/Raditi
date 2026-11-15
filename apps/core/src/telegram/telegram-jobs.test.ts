@@ -51,7 +51,6 @@ function harness(options: {
       findUnique: vi.fn(async () => ({
         deletedAt: null,
         title: 'Заголовок',
-        siteId: null,
         chatSession: session,
       })),
       findUniqueOrThrow: vi.fn(async () => ({ siteId: null })),

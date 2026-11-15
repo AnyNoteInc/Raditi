@@ -113,7 +113,6 @@ describe.skipIf(!enabled)('the web search counts with PostgreSQL', () => {
       data: {
         workspaceId: base.workspaceId,
         status: 'running',
-        needsRepository: false,
         needsBrowser: false,
       },
     })

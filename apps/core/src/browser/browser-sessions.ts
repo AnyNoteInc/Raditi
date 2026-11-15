@@ -124,7 +124,7 @@ export class BrowserSessions {
       for (let retries = 0; ;) {
         try {
           const state = await client.ensure(
-            { sessionId, taskId, siteId: null, takeControl: false },
+            { sessionId, taskId, takeControl: false },
             { signal },
           )
           if (!isBrowserSessionLive(state.status))
@@ -171,7 +171,7 @@ export class BrowserSessions {
       // taken over by a request the client has already answered with their words.
       await clearBrowserHelp(db, { sessionId: session.id })
       const state = await client.ensure(
-        { sessionId: session.id, taskId, siteId: null, takeControl: true },
+        { sessionId: session.id, taskId, takeControl: true },
         { signal },
       )
       if (!isBrowserSessionLive(state.status)) return

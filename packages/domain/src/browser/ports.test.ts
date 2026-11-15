@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { BrowserTaskPolicy } from '../ports/site-adapter.ts'
+import type { BrowserTaskPolicy } from './policy.ts'
 import type {
   BrowserSessionRuntime,
   CloudBrowserAction,
@@ -46,7 +46,6 @@ function fakeSession(events: CloudBrowserEvent[], connection: CloudBrowserConnec
     resolveDialog: async () => undefined,
     setChooserFiles: async () => undefined,
     setViewport: async () => undefined,
-    signIn: async () => 'absent',
     setController: () => undefined,
     downloads: async () => [],
     downloadText: () => null,

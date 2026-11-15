@@ -562,8 +562,6 @@ async function createChat() {
     data: {
       id: randomUUIDv7(),
       workspaceId: site.workspaceId,
-      siteId: null,
-      needsRepository: false,
       needsBrowser: false,
     },
   })
@@ -1203,7 +1201,6 @@ try {
       data: {
         id,
         workspaceId: site.workspaceId,
-        siteId: null,
         taskId: task.taskId,
         source: 'web',
         status: 'bound',

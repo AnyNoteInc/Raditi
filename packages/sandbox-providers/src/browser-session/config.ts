@@ -10,7 +10,7 @@ import {
 import { z } from 'zod'
 
 import { isLocalSocket } from '../docker-api.ts'
-import { previewServiceLimits } from '../preview/config.ts'
+import { serviceLimits } from './kit.ts'
 
 /**
  * The Docker runtime of the browser sessions of tasks (docs/plan/57-browser-tasks.md, Б10, Б11):
@@ -28,9 +28,9 @@ const serviceLimitsSchema = z.strictObject({
 
 /** The containers' limits by default: those of a preview's browser and its forwarders. */
 export const browserSessionDefaultLimits = Object.freeze({
-  browser: previewServiceLimits.browser,
+  browser: serviceLimits.browser,
   /** The egress proxy and the forwarder of the control port. */
-  service: previewServiceLimits.forwarder,
+  service: serviceLimits.forwarder,
 })
 
 export const browserSessionRuntimeLimits = Object.freeze({

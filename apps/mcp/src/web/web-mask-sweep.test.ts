@@ -45,7 +45,7 @@ describe('the sweep of contact maps', () => {
   })
 
   it('removes the map of every chat under its own id', async () => {
-    const chat = { id: randomUUID(), siteId: null }
+    const chat = { id: randomUUID() }
     const onSite = task()
     const { db, tx } = fakeDb([[onSite, chat]])
     const secrets = { kvDestroyAll: vi.fn(async () => undefined) }

@@ -17,7 +17,6 @@ import {
   billingPaymentInProgress,
   billingPaymentsNotConfigured,
   billingPlanNotFound,
-  billingPlanSiteLimit,
   billingSubscriptionExists,
   conflict,
   legalDocuments,
@@ -189,7 +188,6 @@ const planRow = (data: Record<string, unknown> = {}) => ({
   creditsPerDay: 10,
   creditsPer5h: null,
   creditsPerWeek: null,
-  maxSites: 1,
   packCredits: null,
   ...data,
 })
@@ -202,7 +200,6 @@ const business = () =>
     creditsPerDay: 20,
     creditsPer5h: null,
     creditsPerWeek: null,
-    maxSites: 3,
   })
 const planDto = ({
   kind: _kind,
@@ -842,7 +839,6 @@ const pack = () =>
     creditsPerDay: null,
     creditsPer5h: null,
     creditsPerWeek: null,
-    maxSites: null,
     packCredits: 100,
   })
 
@@ -856,7 +852,6 @@ describe('billing.plans', () => {
       creditsPerDay: 30,
       creditsPer5h: null,
       creditsPerWeek: null,
-      maxSites: 15,
     })
 
   it('marks the tariffs the sites do not fit and the tariff of the subscription', async () => {
@@ -1268,8 +1263,7 @@ describe('billing over HTTP', () => {
     ],
     [
       'more sites than the tariff allows',
-      billingPlanSiteLimit,
-      409,
+          409,
       'CONFLICT',
       'У вас больше сайтов, чем входит в этот тариф. Выберите тариф, в который они помещаются',
     ],

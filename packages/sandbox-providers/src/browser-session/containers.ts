@@ -18,8 +18,8 @@ import {
   tmpfs,
   TOOLS,
   type NetworkPlace,
-} from '../preview/containers.ts'
-import { subnetAddress } from '../preview/resources.ts'
+  subnetAddress,
+} from './kit.ts'
 import {
   BROWSER_LABEL,
   browserSessionAddresses,

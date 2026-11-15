@@ -4,7 +4,6 @@ import {
   badRequest,
   branchBeforeTurn,
   conflict,
-  leaseScopeOf,
   requirementsOf,
   terminalTaskStatuses,
   turnEvidenceSchema,
@@ -76,21 +75,20 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
         SELECT site_id FROM site_leases
         WHERE site_id = ${fence.siteId}::uuid AND holder_task_id = ${fence.taskId}::uuid
           AND epoch = ${fence.epoch} AND operation = 'turn'
-          AND NOT held_for_operator AND expires_at > clock_timestamp()
-          AND inflight_mcp_call_id IS NULL FOR UPDATE`
+          AND expires_at > clock_timestamp() FOR UPDATE`
       if (owned.length !== 1) return null
       await tx.$queryRaw`SELECT id FROM tasks WHERE id = ${fence.taskId}::uuid FOR UPDATE`
       const task = await tx.task.findUniqueOrThrow({ where: { id: fence.taskId } })
       if (task.contentRetiredAt) throw conflict('Task content context has expired')
       if (
-        // Its own row for a chat with the code (`turnLeaseOf`), its site's for a stand's turn.
-        (fence.siteId !== turnLeaseOf(task) && fence.siteId !== leaseScopeOf(task)) ||
+        // The chat's own row (`turnLeaseOf`).
+        fence.siteId !== turnLeaseOf(task) ||
         task.workspaceId !== labels.workspaceId ||
         terminalTaskStatuses.includes(task.status)
       )
         throw conflict('Product task is not available for a turn')
       if (
-        task.needsRepository !== requirements.repository ||
+        requirements.repository ||
         task.needsBrowser !== requirements.browser
       )
         throw conflict('The turn plan does not meet the requirements of its task')
@@ -239,13 +237,13 @@ export class PostgresTaskTurnAssignmentStore extends PostgresTurnAssignmentStore
         return false
       }
       if (epoch !== undefined && before.fence.epoch !== epoch) return false
-      // Lock even a released lease: admission cannot install a writer around this check.
+      // Lock even a released lease: recovery cannot hold it for an operator around this check.
       await tx.$queryRaw`SELECT site_id FROM site_leases WHERE site_id = ${before.fence.siteId}::uuid FOR UPDATE`
       const lease = await tx.siteLease.findUnique({ where: { siteId: before.fence.siteId } })
       if (
         lease?.holderTaskId === before.fence.taskId &&
         lease.epoch === before.fence.epoch &&
-        (lease.inflightMcpCallId || lease.heldForOperator)
+        lease.heldForOperator
       )
         return false
       const closed =
@@ -342,28 +340,9 @@ async function taskBranch(
   const last = undone
     ? await undoneTurnBranch(tx, taskId, undone.turnNo)
     : { turnNo: published?.turnNo ?? 0, head: published?.headSha ?? null }
-  // The latest revision whatever its status: an «Обновить» that left nothing to release while a
-  // pass was queued records the head it pushed as a revision superseded at once (plan 53, R3).
-  const standing = await tx.taskCandidate.findFirst({
-    where: { taskId },
-    orderBy: { revision: 'desc' },
-    select: { turnNo: true, headSha: true },
-  })
-  const own = standing
-    ? standing.turnNo === prior.turnNo
-      ? prior.headSha
-      : ((
-          await tx.taskTurn.findUnique({
-            where: { taskId_turnNo: { taskId, turnNo: standing.turnNo } },
-            select: { headSha: true },
-          })
-        )?.headSha ?? null)
-    : null
-  const moved = standing && standing.headSha !== own ? standing : null
-  return {
-    written: moved && moved.turnNo >= last.turnNo ? moved.headSha : last.head,
-    movedAfterLastTurn: moved && moved.turnNo === prior.turnNo ? moved.headSha : null,
-  }
+  // No candidate moves a branch past its turns since projects went (plan 83).
+  void prior
+  return { written: last.head, movedAfterLastTurn: null }
 }
 
 /** Where `/undo` of a turn left the task branch: where the plan of that turn found it. */

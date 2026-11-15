@@ -119,7 +119,7 @@ describe('the id of a new chat', () => {
   it('takes no project: a chat has none (docs/plan/83-remove-projects.md)', async () => {
     const { db, prisma } = emptyDb()
     await expect(
-      callerOf(prisma).task.create({ ...ids, siteId: null, text: 'Вопрос' } as never),
+      callerOf(prisma).task.create({ ...ids, text: 'Вопрос' } as never),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
     expect(db.task.findUnique).not.toHaveBeenCalled()
   })

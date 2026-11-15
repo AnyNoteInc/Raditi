@@ -192,7 +192,6 @@ const plan = {
   creditsPerDay: 20,
   creditsPer5h: null,
   creditsPerWeek: null,
-  maxSites: 3,
 }
 const noPage: UsageHistoryPageDto = { items: [], nextCursor: null, total: 0 }
 const entry = (patch: Partial<UsageHistoryPageDto['items'][number]> = {}) => ({
@@ -506,7 +505,6 @@ describe('billing.usage', () => {
         creditsPerDay: null,
         creditsPer5h: null,
         creditsPerWeek: null,
-        maxSites: null,
         packCredits: 100,
       },
     ])
@@ -754,7 +752,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL usage through the router', () => {
     if (row === null || row.maxSites === null || row.creditsPerMonth === null) {
       throw new Error(`The tariff «${slug}» is not on sale in this database: apply the seeds`)
     }
-    return { ...row, maxSites: row.maxSites, creditsPerMonth: row.creditsPerMonth }
+    return { ...row, creditsPerMonth: row.creditsPerMonth }
   }
 
   /** The tariff credits of the Moscow day as the summary tells them, of `free` tariff credits. */

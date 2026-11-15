@@ -51,7 +51,6 @@ export function sessionHarness(settings: Partial<SessionManagerSettings> = {}) {
     const state = await manager.ensure({
       sessionId: row.id,
       taskId: row.taskId,
-      siteId: null,
       takeControl: true,
     })
     const session = manager.session(row.id)
@@ -64,7 +63,6 @@ export function sessionHarness(settings: Partial<SessionManagerSettings> = {}) {
     const state = await manager.ensure({
       sessionId: row.id,
       taskId: row.taskId,
-      siteId: null,
       takeControl: false,
     })
     const session = manager.session(row.id)

@@ -165,7 +165,6 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
       data: {
         workspaceId: fixture.workspaceId,
         status: 'running',
-        needsRepository: false,
         needsBrowser,
       },
     })
@@ -356,7 +355,6 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
       })
       expect(session).toMatchObject({
         taskId: turn.task.id,
-        siteId: null,
         workspaceId: fixture.workspaceId,
         status: 'starting',
       })
@@ -436,7 +434,6 @@ describe.skipIf(!enabled)('MCP admission and HTTP with PostgreSQL', () => {
         db.task.create({
           data: {
             workspaceId: fixture.workspaceId,
-            needsRepository: false,
             needsBrowser: true,
           },
         }),

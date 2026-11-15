@@ -460,7 +460,7 @@ describe.skipIf(!databaseUrl)('durable fenced turn evidence', () => {
   }, 30_000)
 
   it('tells of the code only a task that has a repository (docs/plan/61, §5.8)', async () => {
-    const f = await fixture({ needsRepository: false, needsBrowser: true })
+    const f = await fixture({ needsBrowser: true })
     await db.taskTurn.create({
       data: {
         taskId: f.task.id,

@@ -70,8 +70,6 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   BILLING_PAYMENTS_NOT_CONFIGURED: 'Оплата сейчас недоступна. Попробуйте ещё раз немного позже',
   BILLING_PLAN_NOT_FOUND: 'Этот тариф сейчас не продаётся. Обновите страницу и выберите другой',
   BILLING_SUBSCRIPTION_EXISTS: 'Тариф уже оформлен. Обновите страницу, чтобы увидеть его',
-  BILLING_PLAN_SITE_LIMIT:
-    'У вас больше сайтов, чем входит в этот тариф. Выберите тариф, в который они помещаются',
   BILLING_PAYMENT_DECLINED:
     'Платёж не прошёл. Попробуйте ещё раз или выберите другой способ оплаты',
   BILLING_PAYMENT_IN_PROGRESS:

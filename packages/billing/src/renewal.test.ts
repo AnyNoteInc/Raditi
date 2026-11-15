@@ -754,7 +754,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL renewal', () => {
       })
       // Two of the thirty credits are held by a running task; a pack was bought as well.
       await fixtures.hold(s.workspaceId, 'tariff', 2)
-      const pack = await fixtures.plan({ kind: 'pack', packCredits: 10, maxSites: null })
+      const pack = await fixtures.plan({ kind: 'pack', packCredits: 10 })
       const packOrder = await fixtures.order({
         workspaceId: s.workspaceId,
         planId: pack.id,
@@ -1987,7 +1987,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL renewal', () => {
 
     it('is not kept from an order it can finish by older ones nobody can pay', async () => {
       const s = await subscribed({ noticed: true })
-      const pack = await fixtures.plan({ kind: 'pack', packCredits: 10, maxSites: null })
+      const pack = await fixtures.plan({ kind: 'pack', packCredits: 10 })
       // Checkouts that broke off before the shop was asked, older than the order the pass can
       // finish and not an hour old yet: nothing closes them so far.
       for (let index = 0; index < 3; index += 1) {
@@ -2040,7 +2040,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL renewal', () => {
     it('closes an order whose payment the shop does not know, and leaves alone a young one that never had a payment', async () => {
       const s = await subscribed({ autoRenewal: false, end: '2021-06-10T09:00:00.000Z' })
       const other = await subscribed({ autoRenewal: false, end: '2021-06-10T09:00:00.000Z' })
-      const pack = await fixtures.plan({ kind: 'pack', packCredits: 10, maxSites: null })
+      const pack = await fixtures.plan({ kind: 'pack', packCredits: 10 })
       const unknown = await fixtures.order({
         workspaceId: s.workspaceId,
         planId: pack.id,
@@ -2084,7 +2084,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL renewal', () => {
     ) {
       const { workspaceId } = await fixtures.workspace()
       const plan = await fixtures.plan(
-        kind === 'pack' ? { kind: 'pack', packCredits: 10, maxSites: null } : {},
+        kind === 'pack' ? { kind: 'pack', packCredits: 10 } : {},
       )
       return fixtures.order({
         workspaceId,
@@ -2261,7 +2261,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL renewal', () => {
     it('cancels the subscription, expires the available remainder, keeps the pack and tells the owner', async () => {
       const s = await subscribed({ autoRenewal: false })
       await fixtures.hold(s.workspaceId, 'tariff', 2)
-      const pack = await fixtures.plan({ kind: 'pack', packCredits: 10, maxSites: null })
+      const pack = await fixtures.plan({ kind: 'pack', packCredits: 10 })
       const packOrder = await fixtures.order({
         workspaceId: s.workspaceId,
         planId: pack.id,
@@ -2400,7 +2400,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL renewal', () => {
         noticed: true,
         subscription: { status: 'past_due', pastDueSince: at('2021-04-10T09:02:00.000Z') },
       })
-      const pack = await fixtures.plan({ kind: 'pack', packCredits: 10, maxSites: null })
+      const pack = await fixtures.plan({ kind: 'pack', packCredits: 10 })
       const packOrder = await fixtures.order({
         workspaceId: s.workspaceId,
         planId: pack.id,

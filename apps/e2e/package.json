@@ -21,7 +21,6 @@
     "@repo/db": "workspace:*",
     "@repo/domain": "workspace:*",
     "@repo/eslint-config": "workspace:*",
-    "@repo/site-connections": "workspace:*",
     "@repo/typescript-config": "workspace:*",
     "@types/node": "catalog:",
     "@typescript/native": "catalog:",

@@ -41,7 +41,6 @@ export interface PlanSeed {
   creditsPer5h: number | null
   creditsPerWeek: number | null
   packCredits: number | null
-  maxSites: number | null
   /** Sites of pages on the tariff (docs/plan/73-pages-sites.md, Дер36); NULL — none of its own. */
   pageSites: number | null
   /** The own name of a site of pages (Дер32): «Бизнес» and above. */
@@ -60,7 +59,6 @@ export const planSeeds = [
     creditsPer5h: null,
     creditsPerWeek: 73,
     packCredits: null,
-    maxSites: 1,
     pageSites: 2,
     pageCustomNames: false,
     sortOrder: 10,
@@ -75,7 +73,6 @@ export const planSeeds = [
     creditsPer5h: null,
     creditsPerWeek: 350,
     packCredits: null,
-    maxSites: 3,
     pageSites: 10,
     pageCustomNames: true,
     sortOrder: 20,
@@ -90,7 +87,6 @@ export const planSeeds = [
     creditsPer5h: null,
     creditsPerWeek: 700,
     packCredits: null,
-    maxSites: 15,
     pageSites: 20,
     pageCustomNames: true,
     sortOrder: 30,
@@ -108,12 +104,11 @@ export const planSeeds = [
     creditsPer5h: null,
     creditsPerWeek: null,
     packCredits: 100,
-    maxSites: null,
     pageSites: null,
     pageCustomNames: false,
     sortOrder: 40,
   },
-  // Placeholder limits: the site count and the wallet minimum for pay-per-action are still open
+  // Placeholder limits: the wallet minimum for pay-per-action is still open
   // (docs/business.md §6, «Открытые вопросы»). No subscription fee: the price is 0.
   {
     slug: 'payg',
@@ -125,7 +120,6 @@ export const planSeeds = [
     creditsPer5h: null,
     creditsPerWeek: null,
     packCredits: null,
-    maxSites: 1,
     pageSites: null,
     pageCustomNames: false,
     sortOrder: 50,

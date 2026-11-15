@@ -143,7 +143,6 @@ describe('a chat without a site', () => {
     expect(OPEN_WEB_POLICY.requestDenied({ path: '/', method: 'DELETE', postData: null })).toBe(
       false,
     )
-    expect(OPEN_WEB_POLICY.signIn).toBeUndefined()
   })
 
   it('has no object of the task', () => {

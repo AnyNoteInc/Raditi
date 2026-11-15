@@ -20,7 +20,6 @@ import {
   billingNothingToChange,
   billingPaymentInProgress,
   billingPlanNotFound,
-  billingPlanSiteLimit,
   billingSubscriptionPastDue,
   legalDocuments,
   Money,
@@ -241,7 +240,6 @@ const planRow = (data: Record<string, unknown> = {}) => ({
   creditsPerDay: 20,
   creditsPer5h: null,
   creditsPerWeek: null,
-  maxSites: 3,
   packCredits: null,
   ...data,
 })
@@ -254,7 +252,6 @@ const agencyRow = () =>
     creditsPerDay: 30,
     creditsPer5h: null,
     creditsPerWeek: null,
-    maxSites: 15,
   })
 
 const subscriptionRow = (data: Record<string, unknown> = {}) => ({
@@ -324,7 +321,6 @@ const overviewDto = (patch: Partial<SubscriptionOverviewDto> = {}): Subscription
     creditsPerDay: 20,
     creditsPer5h: null,
     creditsPerWeek: null,
-    maxSites: 3,
   },
   period: { start: new Date('2026-09-18T09:00:00Z'), end: PERIOD_END },
   autoRenewal: true,
@@ -789,8 +785,7 @@ describe('billing.schedulePlanChange and billing.cancelPlanChange', () => {
     ],
     [
       'more sites than the tariff takes',
-      billingPlanSiteLimit,
-      'CONFLICT',
+          'CONFLICT',
       'У вас больше сайтов, чем входит в этот тариф. Выберите тариф, в который они помещаются',
     ],
     [
@@ -1244,7 +1239,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL management of a tariff through the rou
     expect((await actionsOf(paying)).slice(-2)).toEqual([planChangeSchedule, planChangeCancel])
   })
 
-  it('refuses a tariff the sites of the workspace do not fit, and a change while the charge is at the bank', async () => {
+  it('refuses a change while the charge is at the bank', async () => {
     const paying = await account()
     const { caller } = paying
     await seeded('business')
@@ -1256,28 +1251,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL management of a tariff through the rou
     paying.shop.pay({ saved: true })
     await caller.billing.syncOrder({ orderId })
     const subscription = await subscriptionOf(paying)
-    for (const host of ['one', 'two']) {
-      await db.site.create({
-        data: {
-          workspaceId: subscription.workspaceId,
-          name: host,
-          url: `https://${host}-${subscription.id}.example.ru`,
-          stack: 'wordpress',
-        },
-      })
-    }
-
-    try {
-      await expect(caller.billing.schedulePlanChange({ planSlug: 'start' })).rejects.toMatchObject({
-        code: 'CONFLICT',
-        message:
-          'У вас больше сайтов, чем входит в этот тариф. Выберите тариф, в который они помещаются',
-        cause: { code: 'BILLING_PLAN_SITE_LIMIT' },
-      })
-      expect((await subscriptionOf(paying)).nextPlanId).toBeNull()
-    } finally {
-      await db.site.deleteMany({ where: { workspaceId: subscription.workspaceId } })
-    }
 
     // The scheduler has started the charge of the period: its order is pending.
     await db.order.create({

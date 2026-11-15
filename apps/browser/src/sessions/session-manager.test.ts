@@ -196,7 +196,6 @@ describe('the browser of a chat without a site (plan 61, К12)', () => {
       manager.ensure({
         sessionId: row.id,
         taskId: row.taskId,
-        siteId: null,
         takeControl: false,
         signIn,
       })
@@ -219,7 +218,6 @@ describe('the browser of a chat without a site (plan 61, К12)', () => {
     const next = await manager.ensure({
       sessionId: row.id,
       taskId: row.taskId,
-      siteId: null,
       takeControl: true,
     })
     expect(next).toMatchObject({ status: 'ready', url: 'about:blank' })
@@ -264,7 +262,7 @@ describe('the browser of a chat without a site (plan 61, К12)', () => {
     const row = store.open()
     store.sessions.get(row.id)!.taskSiteId = randomUUID()
     await expect(
-      manager.ensure({ sessionId: row.id, taskId: row.taskId, siteId: null, takeControl: false }),
+      manager.ensure({ sessionId: row.id, taskId: row.taskId, takeControl: false }),
     ).rejects.toThrow('The browser session is not of a chat')
     expect(runtime.started).toEqual([])
   })
@@ -344,7 +342,6 @@ describe('the browser of a chat without a site (plan 61, К12)', () => {
       id,
       taskId: row.taskId,
       workspaceId,
-      siteId: null,
       s3Key: key,
       fileName: 'report.pdf',
       contentType: 'application/pdf',

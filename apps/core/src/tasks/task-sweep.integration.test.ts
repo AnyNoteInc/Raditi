@@ -76,8 +76,6 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     )
     const { taskId } = await fixtures.task(workspace.id, {
       status: 'queued',
-      siteId: null,
-      needsRepository: false,
       needsBrowser: browser,
     })
     const placedAt = new Date(expiresAt.getTime() - 3_600_000)
@@ -680,7 +678,6 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
     const file = async (ready: boolean) => {
       const created = (await createAttachment(db, {
         workspaceId: task.workspaceId,
-        siteId: null,
         uploadedById: userId,
         fileName: 'news.pdf',
         contentType: 'application/pdf',
@@ -702,7 +699,7 @@ describe.skipIf(!enabled)('the sweep of dialogs with PostgreSQL', () => {
       await file(true),
       await file(true),
     ]
-    const binding = { taskId, userId, workspaceId: task.workspaceId, siteId: null }
+    const binding = { taskId, userId, workspaceId: task.workspaceId }
     expect(await bindAttachments(db, { ...binding, ids: [sent.id] })).toBe(true)
     await db.$executeRaw`UPDATE attachments SET expires_at = clock_timestamp() - interval '2 hours'
       WHERE id = ANY(${[uploading.id, ready.id, sent.id]}::uuid[])`

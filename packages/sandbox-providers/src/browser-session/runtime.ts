@@ -34,9 +34,10 @@ import {
   FORWARD_READY_FILE,
   SERVICE_USER,
   type NetworkPlace,
-} from '../preview/containers.ts'
-import { execChecked, execIn } from '../preview/exec.ts'
-import { hostlessBridge, isHostlessBridge } from '../preview/resources.ts'
+  hostlessBridge,
+  isHostlessBridge,
+} from './kit.ts'
+import { execChecked, execIn } from './exec.ts'
 import {
   browserSessionRuntimeLimits,
   dockerBrowserSessionConfigSchema,

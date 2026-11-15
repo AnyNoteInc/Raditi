@@ -178,7 +178,6 @@ async function workspaceWithChat(db) {
       kind: 'quota',
       price: '0.00',
       creditsPerMonth: 1,
-      maxSites: 1,
       pageSites: 100,
       pageCustomNames: true,
       isActive: false,
@@ -197,8 +196,6 @@ async function workspaceWithChat(db) {
   const task = await db.task.create({
     data: {
       workspaceId: workspace.id,
-      siteId: null,
-      needsRepository: false,
       needsBrowser: false,
       title: 'Цены',
     },

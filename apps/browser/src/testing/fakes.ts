@@ -391,7 +391,6 @@ export class FakeStore implements BrowserWorkerStore {
     const row: StoredBrowserSession = {
       id: randomUUID(),
       taskId: randomUUID(),
-      siteId: null,
       taskSiteId: null,
       status: 'starting',
       expiresAt: new Date(Date.now() + (input.expiresInMs ?? 3_600_000)),
@@ -415,7 +414,6 @@ export class FakeStore implements BrowserWorkerStore {
     const row: StoredBrowserSession = {
       id: randomUUID(),
       taskId: randomUUID(),
-      siteId: null,
       taskSiteId: null,
       status: 'starting',
       expiresAt: new Date(Date.now() + (input.expiresInMs ?? 3_600_000)),

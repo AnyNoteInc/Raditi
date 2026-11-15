@@ -9,7 +9,7 @@ import {
   BROWSER_READY_FILE,
   BROWSER_SECRET_FILE,
   FORWARD_READY_FILE,
-} from '../preview/containers.ts'
+} from './kit.ts'
 import type { DockerBrowserSessionConfig } from './config.ts'
 import { browserSessionBridge } from './resources.ts'
 import { createDockerBrowserSessionRuntime, localSiteRoute } from './runtime.ts'

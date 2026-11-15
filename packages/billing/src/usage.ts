@@ -178,45 +178,6 @@ async function tariffMeter(
   }
 }
 
-interface SiteUsageRow {
-  /** null with `name` — the chats without a project, one line. */
-  siteId: string | null
-  name: string | null
-  credits: number
-}
-
-/**
- * Credits charged per site in the period that started at `since`, on every credit account: the
- * `charge` rows of the ledger, each found by the task it is linked to (`credit_ledger.task_id`)
- * and counted in the period its stamp says. A row a reserve of an ended period paid —
- * `hold:<holdId>:charge` — takes the stamp of that reserve row, every other row its own. So a
- * task continued across a renewal may stand here in two periods, each with what it took of it.
- * What chats without a project took is one more line, so that no charge drops out of the page
- * (docs/plan/61-chats-first.md, §5.10); among equal sums it stands last.
- */
-function chargedBySite(
-  db: HistoryReader,
-  workspaceId: string,
-  since: Date,
-): Promise<SiteUsageRow[]> {
-  return db.$queryRaw<SiteUsageRow[]>`
-    SELECT s.id AS "siteId", s.name, (-SUM(l.amount))::int AS credits
-    FROM credit_ledger l
-    JOIN billing_accounts a ON a.id = l.account_id
-    JOIN tasks t ON t.id = l.task_id
-    LEFT JOIN sites s ON s.id = t.site_id
-    LEFT JOIN credit_holds h ON h.task_id = l.task_id
-      AND l.idempotency_key = 'hold:' || h.id::text || ':charge'
-    WHERE a.workspace_id = ${workspaceId}::uuid
-      AND a.unit = ANY(${CREDIT_UNITS}::"BillingUnit"[])
-      AND l.kind = 'charge'
-      AND COALESCE(h.created_at, l.created_at) >= ${since}::timestamptz
-    GROUP BY s.id, s.name
-    HAVING SUM(l.amount) < 0
-    ORDER BY credits DESC, s.name ASC, s.id ASC
-  `
-}
-
 type ByAccount<Prefix extends string> = Record<`${Prefix}${Capitalize<CreditAccountKind>}`, number>
 
 interface HistoryRow extends ByAccount<'held'>, ByAccount<'paid'> {
@@ -226,9 +187,6 @@ interface HistoryRow extends ByAccount<'held'>, ByAccount<'paid'> {
   taskId: string
   title: string | null
   status: string
-  /** Both null — a chat without a project. */
-  siteId: string | null
-  siteName: string | null
 }
 
 /** The count of the history under its bounds, and a line of the page — all null past the last. */
@@ -329,11 +287,9 @@ async function historyPage(
     LEFT JOIN LATERAL (
       SELECT e.id, e.at, e.outcome, e."heldTariff", e."heldGift", e."heldPack",
         paid."paidTariff", paid."paidGift", paid."paidPack", t.id AS "taskId",
-        NULLIF(btrim(t.summary), '') AS title, t.status::text AS status,
-        s.id AS "siteId", s.name AS "siteName"
+        NULLIF(btrim(t.summary), '') AS title, t.status::text AS status
       FROM listed e
       JOIN tasks t ON t.id = e.task_id
-      LEFT JOIN sites s ON s.id = t.site_id
       CROSS JOIN LATERAL (
         SELECT
           COALESCE(-SUM(l.amount) FILTER (WHERE l.unit = ${tariff}::"BillingUnit"), 0)::int
@@ -364,7 +320,6 @@ async function historyPage(
       outcome: row.outcome,
       ...entryCredits(row),
       task: { id: row.taskId, title: row.title, status: row.status },
-      site: row.siteId === null ? null : { id: row.siteId, name: row.siteName },
     })),
     nextCursor: lines.length > limit ? (items.at(-1)?.id ?? null) : null,
     total,
@@ -445,21 +400,12 @@ export async function getUsageSummary(
     })
   }
 
-  const since = subscription.period.start
-  const [siteCount, bySite, history] = await Promise.all([
-    // Every site of the workspace, whatever its status: the count project.create and a
-    // checkout compare with the plan.
-    db.site.count({ where: { workspaceId, deletedAt: null } }),
-    chargedBySite(db, workspaceId, since),
-    historyPage(db, workspaceId, since, {}),
-  ])
+  const history = await historyPage(db, workspaceId, subscription.period.start, {})
   return usageSummarySchema.parse({
     subscription,
     tariff: {
       credits,
       today: overview.today,
-      sites: { count: siteCount, max: subscription.plan.maxSites },
-      bySite,
     },
     gift,
     pack,

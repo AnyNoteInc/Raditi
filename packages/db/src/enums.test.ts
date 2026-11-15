@@ -5,33 +5,16 @@ import {
   browserCheckpointStates,
   browserControllers,
   browserSessionStatuses,
-  candidateCheckStatuses,
-  candidateStatuses,
-  connectionTlsModes,
   consentDocumentTypes,
-  databaseEngines,
   creditAccountUnits,
-  dbJournalKinds,
-  deployMethods,
-  gitProviderKinds,
   orderKinds,
   orderStatuses,
-  previewDbModes,
-  previewStatuses,
-  provisioningStages,
-  provisioningStageStatuses,
-  releaseKinds,
-  releaseStatuses,
-  siteSourceKinds,
-  siteStacks,
   subscriptionStatuses,
   taskStatuses,
   taskWaitingReasons,
   turnAssignmentOutcomes,
   turnExecutorKinds,
   turnResultSchema,
-  undoPlanStatuses,
-  versionBumps,
 } from '@repo/domain'
 import {
   AttachmentStatus,
@@ -39,32 +22,15 @@ import {
   BrowserCheckpointState,
   BrowserController,
   BrowserSessionStatus,
-  CandidateCheckStatus,
-  CandidateStatus,
   ChangeType,
-  ConnectionTls,
   ConsentDocumentType,
-  DatabaseEngine,
-  DbOperationKind,
-  DeployMethod,
-  GitProviderKind,
   OrderKind,
   OrderStatus,
-  PreviewDbMode,
-  PreviewStatus,
-  ProvisioningStage,
-  ProvisioningStageStatus,
-  ReleaseKind,
-  ReleaseStatus,
-  SiteSourceKind,
-  SiteStack,
   SubscriptionStatus,
   TaskStatus,
   TaskWaiting,
   TurnAssignmentOutcome,
   TurnExecutorKind,
-  UndoPlanStatus,
-  VersionBump,
 } from './index.ts'
 
 describe('database enums match the domain', () => {
@@ -74,14 +40,6 @@ describe('database enums match the domain', () => {
 
   it('ConsentDocumentType has exactly the domain consent document types', () => {
     expect(Object.values(ConsentDocumentType)).toEqual([...consentDocumentTypes])
-  })
-
-  it('SiteStack has exactly the site adapter stacks', () => {
-    expect(Object.values(SiteStack)).toEqual([...siteStacks])
-  })
-
-  it('GitProviderKind has exactly the git provider kinds', () => {
-    expect(Object.values(GitProviderKind)).toEqual([...gitProviderKinds])
   })
 
   it('ChangeType has exactly the change types of the turn result', () => {
@@ -116,50 +74,8 @@ describe('database enums match the domain', () => {
     ])
   })
 
-  it('SiteSourceKind has exactly the kinds of a site code source', () => {
-    expect(Object.values(SiteSourceKind)).toEqual([...siteSourceKinds])
-  })
-
-  it('DatabaseEngine has exactly the engines of a site database', () => {
-    expect(Object.values(DatabaseEngine)).toEqual([...databaseEngines])
-  })
-
-  it('ConnectionTls has exactly the protection modes of a connection', () => {
-    expect(Object.values(ConnectionTls)).toEqual([...connectionTlsModes])
-  })
-
-  it('ProvisioningStage has exactly the stages of a site connection', () => {
-    expect(Object.values(ProvisioningStage)).toEqual([...provisioningStages])
-  })
-
-  it('ProvisioningStageStatus has exactly the statuses of a stage', () => {
-    expect(Object.values(ProvisioningStageStatus)).toEqual([...provisioningStageStatuses])
-  })
-
   it('TaskWaiting matches the head of a task in the feed', () => {
     expect(Object.values(TaskWaiting)).toEqual([...taskWaitingReasons])
-  })
-
-  it('PreviewStatus and PreviewDbMode match the preview state of the domain', () => {
-    expect(Object.values(PreviewStatus)).toEqual([...previewStatuses])
-    expect(Object.values(PreviewDbMode)).toEqual([...previewDbModes])
-  })
-
-  it('CandidateStatus and CandidateCheckStatus match the candidate of the domain', () => {
-    expect(Object.values(CandidateStatus)).toEqual([...candidateStatuses])
-    expect(Object.values(CandidateCheckStatus)).toEqual([...candidateCheckStatuses])
-  })
-
-  it('ReleaseStatus, VersionBump and DbOperationKind match the release of the domain', () => {
-    expect(Object.values(ReleaseStatus)).toEqual([...releaseStatuses])
-    expect(Object.values(VersionBump)).toEqual([...versionBumps])
-    expect(Object.values(DbOperationKind)).toEqual([...dbJournalKinds])
-    expect(Object.values(ReleaseKind)).toEqual([...releaseKinds])
-    expect(Object.values(UndoPlanStatus)).toEqual([...undoPlanStatuses])
-  })
-
-  it('DeployMethod has the methods of a deploy, sftp and ftp last', () => {
-    expect(Object.values(DeployMethod)).toEqual([...deployMethods])
   })
 
   it('AttachmentStatus has exactly the statuses of an attachment', () => {

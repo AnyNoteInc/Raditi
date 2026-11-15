@@ -30,8 +30,6 @@
     "@repo/doc-render": "workspace:*",
     "@repo/domain": "workspace:*",
     "@repo/observability": "workspace:*",
-    "@repo/site-adapters": "workspace:*",
-    "@repo/site-connections": "workspace:*",
     "@repo/storage": "workspace:*",
     "@repo/telegram": "workspace:*",
     "@repo/trpc": "workspace:*",

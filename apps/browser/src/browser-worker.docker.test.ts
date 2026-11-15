@@ -162,7 +162,6 @@ describe.skipIf(!enabled)('the browser worker with Docker and Chromium', () => {
     const state = await client.ensure({
       sessionId: row.id,
       taskId: row.taskId,
-      siteId: null,
       takeControl: false,
     })
     // The number of the gate: the wait of `BROWSER_STARTING` is set against it (§5.4).

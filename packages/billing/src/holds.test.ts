@@ -215,14 +215,10 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
   const tasks = (workspaceId: string, count: number) =>
     Promise.all(Array.from({ length: count }, () => task(workspaceId)))
 
-  /** A task on a site of the given address: what the gift of a site is claimed by. */
+  /** A chat of the workspace; the address is what the gift of a site was claimed by once. */
   async function taskOn(workspaceId: string, url: string) {
-    const site = await db.site.create({
-      data: { workspaceId, name: 'Billing verification', url, stack: 'wordpress' },
-    })
-    const row = await db.task.create({
-      data: { workspaceId, siteId: site.id, modelClass: 'standard' },
-    })
+    void url
+    const row = await db.task.create({ data: { workspaceId, modelClass: 'standard' } })
     return row.id
   }
 
@@ -327,10 +323,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
     ledger: await db.creditLedger.findMany({
       where: { account: { workspaceId } },
       orderBy: { id: 'asc' },
-    }),
-    claims: await db.giftSiteClaim.findMany({
-      where: { workspaceId },
-      orderBy: { hostKey: 'asc' },
     }),
   })
 
@@ -592,8 +584,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       })
       // A reserve writes no ledger row.
       expect(await ledger(workspaceId)).toEqual(rows('tariff grant 300 → 300'))
-      // Nor a claim of the site.
-      expect(await db.giftSiteClaim.count({ where: { workspaceId } })).toBe(0)
     })
 
     it.each(['light', 'standard', 'heavy'] as const)(
@@ -667,8 +657,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
           gift: account(35, 1),
           pack: account(100),
         })
-        // No site claims its gift: nothing but credits bounds a task.
-        expect(await db.giftSiteClaim.findMany({ where: { workspaceId } })).toEqual([])
       },
     )
 
@@ -1185,7 +1173,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
 
       expect(await place(first.workspaceId, mine)).toMatchObject({ applied: true, reserved: 1 })
       expect(await place(second.workspaceId, theirs)).toMatchObject({ applied: true, reserved: 1 })
-      expect(await db.giftSiteClaim.count({ where: { hostKey: 'shop.example.ru' } })).toBe(0)
     })
 
     it('asks nothing about a site of a chat without one: nothing to claim (plan 61, К17)', async () => {
@@ -1194,14 +1181,11 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
         data: {
           id: '0196abcd-0000-7000-8000-000000000b17',
           workspaceId,
-          siteId: null,
-          needsRepository: false,
           needsBrowser: true,
           modelClass: 'standard',
         },
       })
       expect(await place(workspaceId, chat.id)).toMatchObject({ applied: true })
-      expect(await db.giftSiteClaim.count({ where: { workspaceId } })).toBe(0)
     })
 
     it('asks nothing about the site of a paid tariff, gift credits or not', async () => {
@@ -1213,7 +1197,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
       expect(await place(paying.workspaceId, taskId)).toMatchObject({ applied: true, reserved: 1 })
 
       expect(await reserve(taskId)).toEqual(['#1 tariff 1 active'])
-      expect(await db.giftSiteClaim.count({ where: { workspaceId: paying.workspaceId } })).toBe(0)
     })
 
     it('refuses by the rate, then the credits, then the day', async () => {
@@ -1294,7 +1277,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
         gift: account(0),
         pack: account(0),
       })
-      expect(await written(workspaceId)).toMatchObject({ holds: [], ledger: [], claims: [] })
+      expect(await written(workspaceId)).toMatchObject({ holds: [], ledger: [] })
     })
 
     it('finds no task of another workspace', async () => {
@@ -2178,7 +2161,6 @@ describe.skipIf(!databaseUrl)('PostgreSQL reserves in credits', () => {
         { applied: true, reserved: 1 },
         { applied: true, reserved: 1 },
       ])
-      expect(await db.giftSiteClaim.count({ where: { hostKey: host } })).toBe(0)
       for (const { workspaceId } of pair) await expectBooksToBalance(workspaceId)
     })
 

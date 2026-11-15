@@ -227,7 +227,7 @@ function creditsOf({ prisma, pool, priceId }: Queue, user: SignedInUser): Credit
     const { id } = await prisma.$transaction((tx) =>
       ensurePersonalWorkspaceWithGift(tx, { userId: user.id, appEnv: authEnv.APP_ENV }),
     )
-    return { id, siteId: null, needsRepository: false, needsBrowser: false }
+    return { id, needsBrowser: false }
   }
 
   const task: Credits['task'] = async ({ title, modelClass = 'standard', at }) => {
