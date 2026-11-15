@@ -56,6 +56,16 @@ export function browserSupported(stack: SiteStack): boolean {
   }
 }
 
+/** The username of the bot of the chat; null — no Telegram here, or the section does not parse. */
+function telegramBot(): string | null {
+  try {
+    return env.telegram()?.botUsername ?? null
+  } catch (error) {
+    report('telegram', error)
+    return null
+  }
+}
+
 let built: ChatContext | undefined
 let storage: ObjectStorage | undefined
 let secrets: SiteSecretWriter | undefined
@@ -83,6 +93,7 @@ export function chatServices(): ChatContext | null {
           : { address: web.preview, ttlHours: previewTtlHours(process.env) },
       browser: web.browserStreamUrl === null ? null : { streamUrl: web.browserStreamUrl },
       webPushPublicKey: web.webPushPublicKey,
+      telegramBot: telegramBot(),
       browserSupported,
       pages: web.pages,
       // The domain of the pages the agent makes (docs/plan/67-agent-documents.md, Д3, Д8).

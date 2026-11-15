@@ -43,6 +43,8 @@ export interface DialogListItem {
   pinned: boolean
   /** «В архив»: it is in «Архив», not in the list. */
   archived: boolean
+  /** The chat goes on in Telegram too (docs/plan/80-telegram.md, 80.6): the agent answers there. */
+  telegram: boolean
 }
 
 export interface DialogPage {
@@ -151,10 +153,12 @@ export function dialogPageQuery(input: {
       ${REWOUND} AS rewound,
       ${FAILED} AS failed,
       t.pinned_at IS NOT NULL AS pinned, t.archived_at IS NOT NULL AS archived,
+      EXISTS (SELECT 1 FROM chat_sessions c WHERE c.id = t.chat_session_id AND c.channel = 'telegram') AS telegram,
       t.project_id, t.project_name
     FROM members m
     CROSS JOIN LATERAL (
       SELECT t.id, t.title, t.status, t.created_at, t.updated_at, t.pinned_at, t.archived_at,
+        t.chat_session_id,
         s.id AS project_id, s.name AS project_name
       FROM tasks t LEFT JOIN sites s ON s.id = t.site_id
       WHERE t.workspace_id = m.workspace_id AND ${SHOWN} ${inFolder} ${inView} ${afterCursor}
@@ -211,6 +215,7 @@ interface DialogRow {
   failed: boolean
   pinned: boolean
   archived: boolean
+  telegram: boolean
   created_at: Date
   updated_at: Date
   updated_us: bigint
@@ -231,6 +236,7 @@ const itemOf = (row: DialogRow): DialogListItem => ({
   project: projectOf(row),
   pinned: row.pinned,
   archived: row.archived,
+  telegram: row.telegram,
 })
 
 /** What every query of the list says of the chat `t` joined with its project `s`. */
@@ -243,6 +249,7 @@ const ITEM = Prisma.sql`t.id, t.title, t.status::text AS status, t.created_at, t
   ${REWOUND} AS rewound,
   ${FAILED} AS failed,
   t.pinned_at IS NOT NULL AS pinned, t.archived_at IS NOT NULL AS archived,
+  EXISTS (SELECT 1 FROM chat_sessions c WHERE c.id = t.chat_session_id AND c.channel = 'telegram') AS telegram,
   s.id AS project_id, s.name AS project_name`
 
 /** The chats of the user's workspaces. */

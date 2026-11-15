@@ -9,6 +9,7 @@ import {
   browserWorkerTokenSchema,
   envProblems,
   envVar,
+  parseEnv,
   isProduction,
   parsePreviewSiteImages,
   previewDnsServersSchema,
@@ -34,7 +35,12 @@ import {
   type TurnExecutorKind,
 } from '@repo/domain'
 import { mailerConfigFromEnv, type MailerConfig } from '@repo/mail'
-import { leadsTelegramConfigFromEnv, type LeadsTelegramConfig } from '@repo/telegram'
+import {
+  leadsTelegramConfigFromEnv,
+  telegramConfigFromEnv,
+  type LeadsTelegramConfig,
+  type TelegramConfig,
+} from '@repo/telegram'
 import { DEV_METRICS_TOKEN, metricsTokenProblem } from '@repo/observability'
 import {
   egressRefusedSubnetsVar,
@@ -94,6 +100,11 @@ export interface CoreConfig {
    * leads wait in their queue until it is set.
    */
   leads: LeadsTelegramConfig | null
+  /**
+   * The bot of the chat in Telegram (docs/plan/80-telegram.md): core reads its updates and hands
+   * each to web at `intakeUrl`, and sends what it says. null — TELEGRAM_BOT_TOKEN is empty.
+   */
+  telegram: CoreTelegramConfig | null
   /**
    * Web Push of the chats that wait for their client (docs/plan/75-chat-input-output.md, ВВ8):
    * the VAPID keys, both or neither; null — browsers are not told, letters still go.
@@ -528,6 +539,7 @@ export function loadConfig(env: Env): CoreConfig {
   const sandbox = coreSandbox ? section(() => sandboxConfigFromEnv(env)) : undefined
   const mailer = section(() => mailerConfigFromEnv(env))
   const leads = section(() => leadsTelegramConfigFromEnv(env))
+  const telegram = section(() => coreTelegramConfigFromEnv(env))
   // Only core charges renewals; the other roles neither need nor read the shop settings.
   const yookassa = section(() => yookassaConfigFromEnv(env))
   const agentDrivers = section(() =>
@@ -753,6 +765,7 @@ export function loadConfig(env: Env): CoreConfig {
     agentDrivers: present(agentDrivers),
     mailer: present(mailer),
     leads: leads ?? null,
+    telegram: telegram ?? null,
     webPush:
       own.WEB_PUSH_VAPID_PUBLIC && own.WEB_PUSH_PRIVATE_KEY
         ? { publicKey: own.WEB_PUSH_VAPID_PUBLIC, privateKey: own.WEB_PUSH_PRIVATE_KEY }
@@ -790,4 +803,33 @@ const isOrigin = (url: URL, { bucket = false } = {}) =>
 function present<T>(value: T | undefined): T {
   if (value === undefined) throw new Error('Configuration section is missing')
   return value
+}
+
+export interface CoreTelegramConfig {
+  bot: TelegramConfig
+  /** TELEGRAM_INTAKE_URL: where core posts the updates, the route `/api/webhooks/telegram` of web. */
+  intakeUrl: string
+}
+
+const telegramIntakeSchema = z.object({
+  TELEGRAM_INTAKE_URL: envVar(
+    z
+      .url({ protocol: /^https?$/ })
+      .refine((url) => new URL(url).pathname === '/api/webhooks/telegram', {
+        message: 'must be the route /api/webhooks/telegram of web',
+      })
+      .optional(),
+  ),
+})
+
+/** The bot and where its updates go; null — the bot is off. */
+export function coreTelegramConfigFromEnv(env: Env): CoreTelegramConfig | null {
+  const bot = telegramConfigFromEnv(env)
+  const { TELEGRAM_INTAKE_URL } = parseEnv('telegram', telegramIntakeSchema, env)
+  if (bot === null) return null
+  if (TELEGRAM_INTAKE_URL === undefined)
+    throw new Error(
+      'Invalid telegram configuration: TELEGRAM_INTAKE_URL is required when the bot is on',
+    )
+  return { bot, intakeUrl: TELEGRAM_INTAKE_URL }
 }

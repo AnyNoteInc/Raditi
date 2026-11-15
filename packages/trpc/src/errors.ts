@@ -191,6 +191,8 @@ const MESSAGE_BY_DOMAIN_CODE: Readonly<Record<string, string>> = {
   TASK_TEXT_HAS_SECRET: feedInputText.secret,
   TASK_TEXT_INVALID:
     'В сообщении есть символы, которые мы не можем сохранить. Уберите их и отправьте снова',
+  TELEGRAM_OFF: 'Telegram здесь пока не подключён',
+  TELEGRAM_LINK_TOO_MANY: 'Ссылок за час получено слишком много. Попробуйте позже',
   TASK_BUSY:
     'Подождите: агент ещё работает. Написать можно будет, когда он закончит или задаст вопрос',
   TASK_REWINDING: 'Подождите: последний запрос ещё отменяется. Написать можно будет через минуту',

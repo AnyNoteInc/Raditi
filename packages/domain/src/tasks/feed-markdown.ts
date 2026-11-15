@@ -70,8 +70,10 @@ const moment = new Intl.DateTimeFormat('ru-RU', {
   minute: '2-digit',
 })
 
-/** Whose row it is and when, in the same place in every block. */
-const heading = (who: string, at: string) => `**${who}** · ${moment.format(new Date(at))}`
+/** Whose row it is and when, in the same place in every block; null — no such line. */
+type Heading = (who: string, at: string) => string | null
+
+const heading: Heading = (who, at) => `**${who}** · ${moment.format(new Date(at))}`
 
 const sentences = (parts: readonly (string | null | undefined)[]): string =>
   parts.filter((part) => part !== null && part !== undefined && part !== '').join(' ')
@@ -80,8 +82,8 @@ const block = (lines: readonly (string | null)[]): string =>
   lines.filter((line) => line !== null && line !== '').join('\n\n')
 
 /** A press of the client: one line, like its row on the screen. */
-const press = (row: FeedItem, text: string) =>
-  block([heading(feedExportText.you, row.at), `_${text}_`])
+const press = (row: FeedItem, text: string, h: Heading = heading) =>
+  block([h(feedExportText.you, row.at), `_${text}_`])
 
 type Objects = Extract<FeedItem, { type: 'feed.result' }>['objects']
 
@@ -100,46 +102,51 @@ function objectList(objects: Objects, title: string): string | null {
 }
 
 /** A request of the client. The switch has no way out: a new kind does not compile without words. */
-function requestBlock(row: Extract<FeedItem, { type: 'feed.request' }>): string {
+function requestBlock(row: Extract<FeedItem, { type: 'feed.request' }>, h: Heading): string {
+  const pressH = (item: FeedItem, text: string) => press(item, text, h)
   switch (row.kind) {
     case 'first':
     case 'answer':
     case 'revision':
     case 'queued':
       return block([
-        heading(feedExportText.you, row.at),
+        h(feedExportText.you, row.at),
         row.text,
         (row.attachments?.length ?? 0) > 0
           ? feedExportText.files(row.attachments?.length ?? 0)
           : null,
       ])
     case 'retry':
-      return press(row, feedRowText.retry)
+      return pressH(row, feedRowText.retry)
     case 'continue':
-      return press(row, feedRowText.continue)
+      return pressH(row, feedRowText.continue)
     case 'resume':
-      return press(row, feedRowText.resume)
+      return pressH(row, feedRowText.resume)
     case 'interrupt':
-      return press(row, feedRowText.interrupt)
+      return pressH(row, feedRowText.interrupt)
     case 'command':
     case 'agent_command':
-      return press(
+      return pressH(
         row,
         row.command === null ? feedRowText.otherRequest : feedCommandText[row.command],
       )
     case 'other':
       return row.text
-        ? block([heading(feedExportText.you, row.at), row.text])
-        : press(row, feedRowText.otherRequest)
+        ? block([h(feedExportText.you, row.at), row.text])
+        : pressH(row, feedRowText.otherRequest)
   }
 }
 
 /** One row as a block of the file; null — the screen shows nothing of it either. */
-function rowBlock(row: FeedItem, withSite: boolean): string | null {
-  const agent = (title: string) => `${heading(feedExportText.agent, row.at)} · ${title}`
+function rowBlock(row: FeedItem, withSite: boolean, h: Heading = heading): string | null {
+  const agent = (title: string) => {
+    const head = h(feedExportText.agent, row.at)
+    return head === null ? `**${title}**` : `${head} · ${title}`
+  }
+  const pressH = (item: FeedItem, text: string) => press(item, text, h)
   switch (row.type) {
     case 'feed.request':
-      return requestBlock(row)
+      return requestBlock(row, h)
     case 'feed.question':
       if (row.kind === 'ceiling')
         return block([agent(taskStatusLabel.awaiting_user), feedCeilingText(row)])
@@ -209,7 +216,7 @@ function rowBlock(row: FeedItem, withSite: boolean): string | null {
       ])
     }
     case 'feed.decision':
-      return press(row, feedDecisionText(row.version))
+      return pressH(row, feedDecisionText(row.version))
     case 'feed.release':
       return block([
         agent(feedReleaseTitle[row.outcome]),
@@ -221,7 +228,7 @@ function rowBlock(row: FeedItem, withSite: boolean): string | null {
         ]),
       ])
     case 'feed.undo':
-      if (row.stage === 'confirmed') return press(row, feedUndoConfirmedText(row.undoneVersion))
+      if (row.stage === 'confirmed') return pressH(row, feedUndoConfirmedText(row.undoneVersion))
       return block([
         agent(feedUndoTitle[row.stage]),
         sentences([
@@ -244,7 +251,7 @@ function rowBlock(row: FeedItem, withSite: boolean): string | null {
     case 'feed.file':
       return block([agent(feedExportText.file(row.name))])
     case 'feed.file_left':
-      return block([heading(feedExportText.agent, row.at), feedFileLeftText(row)])
+      return block([h(feedExportText.agent, row.at), feedFileLeftText(row)])
     case 'feed.page':
       return block([agent(feedPageText(row))])
     case 'feed.doc':
@@ -253,15 +260,15 @@ function rowBlock(row: FeedItem, withSite: boolean): string | null {
     case 'feed.doc_touch':
       return null
     case 'feed.doc_left':
-      return block([heading(feedExportText.agent, row.at), feedDocLeftText(row)])
+      return block([h(feedExportText.agent, row.at), feedDocLeftText(row)])
     case 'feed.page_left':
-      return block([heading(feedExportText.agent, row.at), feedPageLeftText(row)])
+      return block([h(feedExportText.agent, row.at), feedPageLeftText(row)])
     case 'feed.rewind':
       return feedRewindText(row)
     case 'feed.redo':
       return feedRedoText(row)
     case 'feed.edit':
-      return block([heading(feedExportText.you, row.at), feedEditText(row)])
+      return block([h(feedExportText.you, row.at), feedEditText(row)])
     case 'newer':
       return feedRowText.newer
     case 'unreadable':
@@ -282,6 +289,14 @@ export function feedMarkdown(chat: {
   const name = (chat.title ?? '').replace(/\s+/g, ' ').trim()
   const blocks = chat.rows.flatMap((row) => rowBlock(row, chat.withSite) ?? [])
   return `${[`# ${name === '' ? feedExportText.untitled : name}`, ...blocks].join('\n\n---\n\n')}\n`
+}
+
+/**
+ * One row as Markdown for a channel of the chat (docs/plan/80-telegram.md): the words of the
+ * export without the line of who and when, the title of a card in bold. null — nothing to show.
+ */
+export function feedRowMarkdown(row: FeedItem, withSite: boolean): string | null {
+  return rowBlock(row, withSite, () => null)
 }
 
 const FILE_NAME_LENGTH = 80

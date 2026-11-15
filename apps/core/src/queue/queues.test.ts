@@ -23,9 +23,18 @@ describe('queueJobDefaults', () => {
     })
   })
 
+  it('retries a message of the bot of the chat for about two hours: the pool of proxies fails often', () => {
+    expect(queueJobDefaults.telegram).toEqual({
+      attempts: 10,
+      backoff: { type: 'exponential', delay: 10_000 },
+      removeOnComplete: { age: DAY, count: 1_000 },
+      removeOnFail: { age: 7 * DAY },
+    })
+  })
+
   it('keeps completed jobs of the other queues for a day (at most 1000), failed for a week', () => {
     for (const name of queueNames.filter(
-      (queue) => queue !== 'notifications' && queue !== 'leads',
+      (queue) => queue !== 'notifications' && queue !== 'leads' && queue !== 'telegram',
     )) {
       expect(queueJobDefaults[name]).toMatchObject({
         attempts: 1,

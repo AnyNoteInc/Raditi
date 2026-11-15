@@ -47,6 +47,8 @@ import { dialogPageQuery } from '../services/chat/dialog-list.ts'
 import { lastQuestion, wordsOfTurn } from '../services/chat/dialog-state.ts'
 import { signConfirmToken } from '../services/chat/releases.ts'
 import { signUndoConfirmToken } from '../services/chat/undo.ts'
+import { handleTelegramUpdate, type TelegramMedia } from '../services/telegram/intake.ts'
+import { readTelegramUpdate } from '@repo/telegram'
 
 // The procedures of a dialog on PostgreSQL (docs/plan/53-chat-preview-release.md, R2): what one
 // transaction writes together, what a repeat writes again (nothing), and what a refusal leaves
@@ -276,6 +278,8 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
     await db.snapshot.deleteMany({ where: { site: owned } })
     await db.turnAssignment.deleteMany({ where: { task: owned } })
     await db.task.deleteMany({ where: owned })
+    // The chats bound to Telegram (docs/plan/80-telegram.md) hold their workspace.
+    await db.chatSession.deleteMany({ where: owned })
     await db.siteEnvVar.deleteMany({ where: { site: owned } })
     await db.siteDatabaseDump.deleteMany({ where: { site: owned } })
     await db.credentialRef.deleteMany({ where: owned })
@@ -329,6 +333,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       releaseConfirmKey: KEY,
       storage: () => options.storage ?? storage,
       secrets: () => vault.secrets,
+      telegramBot: 'raditi_bot',
     }
     return createCaller({
       prisma: options.client ?? underRate(db),
@@ -6732,6 +6737,201 @@ describe.skipIf(!databaseUrl)('PostgreSQL: the procedures of a dialog', () => {
       })
       const stranger = callerOf(await person())
       await expect(stranger.siteFiles.save(edit)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    })
+  })
+  describe('Telegram, the second channel of the chat (docs/plan/80-telegram.md)', () => {
+    const base = 9_000_000_000 + randomInt(1_000_000_000)
+    let next = 0
+    const updateIds: number[] = []
+    const chatId = () => 700_000_000 + randomInt(100_000_000)
+    afterEach(async () => {
+      await db.telegramUpdate.deleteMany({
+        where: { updateId: { in: updateIds.splice(0).map(BigInt) } },
+      })
+      await db.outboxEvent.deleteMany({ where: { topic: 'telegram' } })
+    })
+
+    function chatOf(): ChatContext {
+      return {
+        appEnv: 'test',
+        preview: { address: ADDRESS, ttlHours: 72 },
+        browser: null,
+        releaseConfirmKey: KEY,
+        storage: () => storage,
+        secrets: () => vault.secrets,
+        telegramBot: 'raditi_bot',
+      }
+    }
+
+    function deliver(body: unknown, media: TelegramMedia | null = null) {
+      const update = readTelegramUpdate(body)
+      if (!update) throw new Error('not an update')
+      updateIds.push(update.updateId)
+      return handleTelegramUpdate(
+        { db: underRate(db), chat: chatOf(), appUrl: 'https://raditi.example.ru', media },
+        update,
+      )
+    }
+
+    const words = (from: number, text: string, extra: Record<string, unknown> = {}) => ({
+      update_id: base + next++,
+      message: {
+        message_id: next,
+        date: Math.floor(Date.now() / 1000),
+        chat: { id: from, type: 'private' },
+        from: { id: from, is_bot: false, username: 'client' },
+        text,
+        ...extra,
+      },
+    })
+
+    const said = async () =>
+      (
+        await db.outboxEvent.findMany({
+          where: { topic: 'telegram', type: 'telegram.send' },
+          orderBy: { id: 'asc' },
+          select: { payload: true },
+        })
+      ).map(({ payload }) => payload as { text: string; chatId: string; buttons?: unknown })
+
+    async function linked(from: number) {
+      const { owner, site, workspaceId } = await siteOwner()
+      const caller = callerOf(owner)
+      const { url } = await caller.telegram.link()
+      const code = new URL(url).searchParams.get('start')!
+      expect(url).toBe(`https://t.me/raditi_bot?start=${code}`)
+      await deliver(words(from, `/start ${code}`))
+      return { owner, site, workspaceId, caller }
+    }
+
+    it('links Telegram by a one-time code and answers once for a repeated update', async () => {
+      const from = chatId()
+      const { owner, caller } = await linked(from)
+      expect(await caller.telegram.status()).toMatchObject({
+        available: true,
+        bot: 'raditi_bot',
+        linked: { username: 'client' },
+        notifications: true,
+      })
+      expect((await said()).at(-1)?.text).toMatch(/^Telegram подключён/u)
+      // The same code a second time links nothing.
+      const reuse = words(chatId(), '/start AAAAAAAA')
+      await deliver(reuse)
+      expect((await said()).at(-1)?.text).toMatch(/устарела или уже использована/u)
+      // The update handed again by core: nothing more is said.
+      const before = (await said()).length
+      const update = readTelegramUpdate(reuse)!
+      expect(
+        await handleTelegramUpdate(
+          { db: underRate(db), chat: chatOf(), appUrl: 'https://raditi.example.ru', media: null },
+          update,
+        ),
+      ).toBe('repeated')
+      expect(await said()).toHaveLength(before)
+      await caller.telegram.unlink()
+      expect(
+        await db.channelIdentity.count({ where: { userId: owner.id, channel: 'telegram' } }),
+      ).toBe(0)
+    })
+
+    it('answers a stranger with the way to link, and starts a chat for a linked client once', async () => {
+      const stranger = chatId()
+      await deliver(words(stranger, 'Поменяйте заголовок'))
+      expect((await said()).at(-1)).toMatchObject({
+        chatId: String(stranger),
+        text: expect.stringMatching(/подключите Telegram в кабинете/u),
+      })
+
+      const from = chatId()
+      const { owner } = await linked(from)
+      const first = words(from, 'Поменяйте заголовок на «Кофе с собой»')
+      expect(await deliver(first)).toBe('done')
+      const tasks = await db.task.findMany({
+        where: { createdById: owner.id },
+        select: {
+          id: true,
+          siteId: true,
+          status: true,
+          chatSession: { select: { channel: true, externalChatId: true } },
+        },
+      })
+      expect(tasks).toEqual([
+        expect.objectContaining({
+          siteId: null,
+          status: 'queued',
+          chatSession: { channel: 'telegram', externalChatId: String(from) },
+        }),
+      ])
+      taskIds.push(tasks[0]!.id)
+      // The topic of the chat is asked of core; the client is told the agent works.
+      expect(
+        await db.outboxEvent.count({ where: { topic: 'telegram', type: 'telegram.topic' } }),
+      ).toBe(1)
+      expect((await said()).at(-1)).toMatchObject({
+        text: 'Принято, агент начал работу. Ответ пришлю сюда.',
+        buttons: [
+          [{ data: `stop:${tasks[0]!.id}` }, expect.objectContaining({ url: expect.any(String) })],
+        ],
+      })
+      // The agent works: the next words wait in the queue of the chat.
+      await deliver(words(from, 'И цвет кнопки — зелёный'))
+      expect(await db.taskQueuedMessage.count({ where: { taskId: tasks[0]!.id } })).toBe(1)
+      expect((await said()).at(-1)?.text).toMatch(/Сообщение в очереди/u)
+    })
+
+    it('starts a new chat in the project chosen in /new', async () => {
+      const from = chatId()
+      const { owner, site } = await linked(from)
+      await deliver(words(from, '/new'))
+      const offer = (await said()).at(-1) as { buttons: { data: string }[][] }
+      expect(offer.buttons.flat().map((button) => button.data)).toEqual([
+        'proj:none',
+        `proj:${site.id}`,
+      ])
+      await deliver({
+        update_id: base + next++,
+        callback_query: {
+          id: 'press-1',
+          from: { id: from },
+          data: `proj:${site.id}`,
+          message: { message_id: 1, chat: { id: from, type: 'private' } },
+        },
+      })
+      expect((await said()).at(-1)?.text).toBe(
+        'Новый чат в проекте «Кофейня». Напишите, что сделать.',
+      )
+      await deliver(words(from, 'Добавьте страницу «Доставка»'))
+      const task = await db.task.findFirstOrThrow({
+        where: { createdById: owner.id },
+        select: { id: true, siteId: true },
+      })
+      taskIds.push(task.id)
+      expect(task.siteId).toBe(site.id)
+    })
+
+    it('takes a file through the media of web and refuses a voice without them', async () => {
+      const from = chatId()
+      const { owner } = await linked(from)
+      await deliver(words(from, '', { text: undefined, voice: { file_id: 'v', duration: 3 } }))
+      expect((await said()).at(-1)?.text).toBe(
+        'Пока принимаю только текст. Напишите словами, что сделать.',
+      )
+      const attach = vi.fn<TelegramMedia['attach']>(async () => ({
+        refused: 'Такой файл не подходит.',
+      }))
+      await deliver(
+        words(from, '', {
+          text: undefined,
+          caption: 'Вот прайс',
+          document: { file_id: 'd', file_name: 'прайс.exe' },
+        }),
+        { attach, transcribe: vi.fn() },
+      )
+      expect(attach).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: owner.id, siteId: null, fileId: 'd', name: 'прайс.exe' }),
+      )
+      expect((await said()).at(-1)?.text).toBe('Такой файл не подходит.')
+      expect(await db.task.count({ where: { createdById: owner.id } })).toBe(0)
     })
   })
 })

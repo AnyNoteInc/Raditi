@@ -233,3 +233,20 @@ export async function bindChooserAttachments(
     return { bound: input.ids.length }
   })
 }
+
+/**
+ * A file of a message in Telegram (docs/plan/80-telegram.md, 80.4): announced as `attachment.start`
+ * announces one, for web to store in raditi-inbox under `key`. Refusals are those of
+ * `attachment.start`.
+ */
+export async function startAttachmentForTelegram(
+  db: PrismaClient,
+  input: AttachmentStart,
+): Promise<{ attachmentId: string; key: string }> {
+  const { attachmentId } = await startAttachment(db, input)
+  const row = await db.attachment.findUniqueOrThrow({
+    where: { id: attachmentId },
+    select: { s3Key: true },
+  })
+  return { attachmentId, key: row.s3Key }
+}

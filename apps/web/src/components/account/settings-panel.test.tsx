@@ -63,6 +63,19 @@ vi.mock('@/trpc/client', () => ({
       subscribe: { mutationOptions: () => ({ mutationFn: async () => ({}) }) },
       unsubscribe: { mutationOptions: () => ({ mutationFn: async () => ({}) }) },
     },
+    // «Telegram» (docs/plan/80-telegram.md): its own test covers it.
+    telegram: {
+      status: {
+        queryOptions: () => ({
+          queryKey: ['telegram', 'status'],
+          queryFn: async () => ({ available: false, bot: null, linked: null, notifications: true }),
+        }),
+        queryKey: () => ['telegram', 'status'],
+      },
+      link: { mutationOptions: () => ({ mutationFn: async () => ({}) }) },
+      unlink: { mutationOptions: () => ({ mutationFn: async () => ({}) }) },
+      setNotifications: { mutationOptions: () => ({ mutationFn: async () => ({}) }) },
+    },
   }),
 }))
 

@@ -20,6 +20,8 @@ export const queueNames = [
   'site-files',
   // Leads of the landing on their way to the Telegram group (docs/plan/65-landing-platforms-leads.md).
   'leads',
+  // The bot of the chat in Telegram: its updates in, its messages out (docs/plan/80-telegram.md).
+  'telegram',
 ] as const
 export type QueueName = (typeof queueNames)[number]
 

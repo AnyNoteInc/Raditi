@@ -410,6 +410,8 @@ export const listText = Object.freeze({
   searchLoading: 'Ищем',
   /** A chat of the search that is in «Архив». */
   inArchive: 'в архиве',
+  // The chat goes on in Telegram too (docs/plan/80-telegram.md, 80.6).
+  inTelegram: 'в Telegram',
   more: 'Показать ещё',
   untitled: 'Чат без названия',
   loading: 'Загружаем чаты',

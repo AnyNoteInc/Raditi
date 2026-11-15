@@ -2019,6 +2019,56 @@ describe.skipIf(!enabled)('pass settlement with PostgreSQL', () => {
       expect(await db.pushSubscription.count({ where: { userId: task.userId } })).toBe(0)
     })
 
+    it('tells a client who linked Telegram there, unless the chat is bound to Telegram (docs/plan/80, Т8)', async () => {
+      const telegram = () =>
+        db.outboxEvent.findMany({
+          where: { topic: 'telegram' },
+          select: { type: true, payload: true },
+        })
+      const task = await dialog()
+      await db.task.update({ where: { id: task.taskId }, data: { createdById: task.userId } })
+      await db.channelIdentity.create({
+        data: { userId: task.userId, channel: 'telegram', externalId: '4242' },
+      })
+      await settlement().settle(ref(task), completed({ change_type: 'none' }))
+      // A chat of the cabinet: no delivery of its rows, only the notification.
+      expect((await telegram()).filter((row) => row.type === 'telegram.deliver')).toEqual([])
+      const job = { taskId: task.taskId, kind: 'answered' as const, attempt: 1, turnNo: 1 }
+      expect(await notify(null).run(job)).toBe('sent')
+      expect((await telegram()).filter((row) => row.type === 'telegram.send')).toEqual([
+        {
+          type: 'telegram.send',
+          payload: expect.objectContaining({
+            chatId: '4242',
+            text: expect.stringMatching(/^Агент ответил — чат «/u),
+          }),
+        },
+      ])
+
+      // The same chat bound to Telegram: its rows go there, the bot says nothing more of it.
+      await db.outboxEvent.deleteMany({ where: { topic: 'telegram' } })
+      const { workspaceId, siteId } = await db.task.findUniqueOrThrow({
+        where: { id: task.taskId },
+        select: { workspaceId: true, siteId: true },
+      })
+      const session = await db.chatSession.create({
+        data: { workspaceId, siteId, channel: 'telegram', externalChatId: '4242' },
+      })
+      await db.task.update({ where: { id: task.taskId }, data: { chatSessionId: session.id } })
+      try {
+        const { enqueueTelegramDeliver } = await import('@repo/db')
+        expect(
+          await db.$transaction((tx) => enqueueTelegramDeliver(tx, { ...job, turnNo: 2 })),
+        ).toBe(true)
+        expect(await notify(null, new Date(NOW.getTime() + 60_000)).run(job)).not.toBe('sent')
+        expect((await telegram()).map((row) => row.type)).toEqual(['telegram.deliver'])
+      } finally {
+        await db.task.update({ where: { id: task.taskId }, data: { chatSessionId: null } })
+        await db.chatSession.delete({ where: { id: session.id } })
+        await db.outboxEvent.deleteMany({ where: { topic: 'telegram' } })
+      }
+    })
+
     it('forgets a browser that dropped its subscription', async () => {
       const task = await dialog()
       await settlement().settle(ref(task), completed({ change_type: 'none' }))

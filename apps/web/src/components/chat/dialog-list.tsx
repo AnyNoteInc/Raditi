@@ -231,6 +231,12 @@ function DialogLink({
             {listText.inArchive}
           </Typography>
         ) : null}
+        {item.telegram ? (
+          <Typography component="span" variant="caption" color={quiet}>
+            <span aria-hidden="true">· </span>
+            {listText.inTelegram}
+          </Typography>
+        ) : null}
         {/* In a folder its name is the folder's. */}
         {item.project !== null && !inFolder ? (
           <Typography

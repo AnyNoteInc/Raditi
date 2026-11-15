@@ -40,6 +40,16 @@ export const queueJobDefaults: Record<QueueName, DefaultJobOptions> = {
     removeOnComplete: { age: DAY, count: 1_000 },
     removeOnFail: { age: 7 * DAY },
   },
+  // A message of the bot of the chat (docs/plan/80-telegram.md): the pool of free proxies fails
+  // often, so a sending is retried for about two hours (10 s doubling, ten tries). Job data of
+  // `telegram.send` holds the words of the message: a sent one leaves Redis within a day, a
+  // failed one after a week. The poll sets its own single attempt.
+  telegram: {
+    attempts: 10,
+    backoff: { type: 'exponential', delay: 10_000 },
+    removeOnComplete: { age: DAY, count: 1_000 },
+    removeOnFail: { age: 7 * DAY },
+  },
   // SendSay hiccups are retried: 15 s, 30 s, … about half an hour in total.
   // Job data holds one-time links: a delivered letter leaves Redis at once, a failed one
   // after a day.

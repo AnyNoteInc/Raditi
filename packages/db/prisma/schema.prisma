@@ -41,6 +41,7 @@ model User {
   consents           UserConsent[]
   memberships        Member[]
   channelIdentities  ChannelIdentity[]
+  telegramLinkCodes  TelegramLinkCode[]
   workspacesCreated  Workspace[]
   tasksCreated       Task[]
   attachments        Attachment[]
@@ -232,14 +233,53 @@ model ChannelIdentity {
   externalId String   @map("external_id") @db.VarChar(64)
   /// Display handle, e.g. the Telegram @username; informational only.
   username   String?  @db.VarChar(255)
+  /// The chat words without a topic go to (docs/plan/80-telegram.md, Т4); NULL — a new one.
+  currentTaskId String?  @map("current_task_id") @db.Uuid
+  /// `/new` was pressed: the next words start a new chat in `newChatSiteId` (NULL — without a
+  /// project).
+  newChat       Boolean  @default(false) @map("new_chat")
+  newChatSiteId String?  @map("new_chat_site_id") @db.Uuid
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user        User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currentTask Task? @relation("ChannelCurrentTask", fields: [currentTaskId], references: [id], onDelete: SetNull)
+  newChatSite Site? @relation("ChannelNewChatSite", fields: [newChatSiteId], references: [id], onDelete: SetNull)
 
   @@unique([channel, externalId])
+  /// One account of a channel per user.
+  @@unique([userId, channel])
   @@index([userId])
+  @@index([currentTaskId])
+  @@index([newChatSiteId])
   @@map("channel_identities")
+}
+
+/// A one-time code of the link `t.me/<bot>?start=<code>` (docs/plan/80-telegram.md, Т3): made in
+/// the cabinet, taken by `/start <code>` within 15 minutes. Only the sha256 of the code is kept.
+model TelegramLinkCode {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  codeHash  String    @unique @map("code_hash") @db.Char(64)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("telegram_link_codes")
+}
+
+/// An update of the bot of the chat taken by web (docs/plan/80-telegram.md, §7): a repeat of the
+/// same `update_id` does nothing twice, and core reads the next offset from the largest one. Ids
+/// and the time only, nothing of what the update says.
+model TelegramUpdate {
+  updateId   BigInt   @id @map("update_id")
+  receivedAt DateTime @default(now()) @map("received_at") @db.Timestamptz(6)
+
+  @@index([receivedAt])
+  @@map("telegram_updates")
 }
 
 enum Channel {
@@ -310,6 +350,7 @@ model Site {
   initialVersion     SiteInitialVersion?
   attachments        Attachment[]
   browserSessions    BrowserSession[]
+  telegramNewChats   ChannelIdentity[]   @relation("ChannelNewChatSite")
 
   @@unique([workspaceId, url], map: "sites_workspace_id_url_key", where: raw("deleted_at IS NULL"))
   @@index([installedReleaseId])
@@ -599,6 +640,7 @@ model Task {
   createdBy          User?                @relation(fields: [createdById], references: [id], onDelete: SetNull)
   revertsTask        Task?                @relation("TaskReverts", fields: [revertsTaskId], references: [id], onDelete: Restrict)
   revertedBy         Task[]               @relation("TaskReverts")
+  telegramCurrentOf  ChannelIdentity[]    @relation("ChannelCurrentTask")
   deployment         Deployment?          @relation("TaskCurrentDeployment", fields: [deploymentId], references: [id], onDelete: SetNull)
   pricingRule        PricingRule?         @relation(fields: [pricingRuleId], references: [id], onDelete: Restrict)
   deployments        Deployment[]         @relation("TaskDeployments")
@@ -841,6 +883,8 @@ model NotificationSetting {
   push      Boolean  @default(false)
   /// Letters about the work of the agent.
   email     Boolean  @default(true)
+  /// Messages of the bot in Telegram, when Telegram is linked (docs/plan/80-telegram.md, Т8).
+  telegram  Boolean  @default(true)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
