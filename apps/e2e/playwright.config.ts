@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url'
 
 import { defineConfig } from '@playwright/test'
+import { cookieChoiceMade } from './fixtures/cookie-choice.ts'
 
 // The smoke suite needs the local infrastructure (pnpm infra:up), applied migrations and seeds
 // (pnpm db:deploy && pnpm db:seed): the landing shows the plans of the database. Connections
@@ -27,7 +28,7 @@ export default defineConfig({
   ],
   timeout: 60_000,
   reporter: 'list',
-  use: { baseURL, trace: 'retain-on-failure' },
+  use: { storageState: cookieChoiceMade, baseURL, trace: 'retain-on-failure' },
   webServer: [
     {
       name: 'Web',
