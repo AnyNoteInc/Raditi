@@ -9,7 +9,10 @@ import { databaseUrl } from '../../fixtures/billing-stand.ts'
 import {
   acceptProjectUploads,
   addAnsweredChat,
+  addMemoryEntries,
   addProject,
+  agentMemoryOf,
+  memoryRows,
   hideDevIndicator,
   priceDialogClass,
   standInProjectFileStore,
@@ -412,4 +415,123 @@ test('«Контекст» on a phone: the window over the whole screen, «До�
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   )
+})
+
+test('«Память» of a project: the row, the window with «Предложено», and the rows of its chat', async ({
+  page,
+  signedInUser,
+}) => {
+  const { projectId } = await addProject(signedInUser.id, { name: 'Колос' })
+  const { taskId } = await addAnsweredChat(signedInUser.id, {
+    words: 'Онлайн-заказ тортов',
+    answer: 'Сделал форму заказа.',
+    thought: 'Форма заказа',
+    projectId,
+  })
+  const {
+    ids: [proposed, , , inChat],
+  } = await addMemoryEntries(signedInUser.id, projectId, [
+    {
+      text: 'Форма заказа торта — в один экран',
+      status: 'proposed',
+      sourceTaskId: taskId,
+      feed: 'proposed',
+    },
+    { text: 'Торты на заказ принимаем за 48 часов', sourceTaskId: taskId, feed: 'saved' },
+    { text: 'Главный цвет бренда — терракотовый', author: 'client' },
+    {
+      text: 'Блоки сезонных товаров ставим под шапкой',
+      status: 'proposed',
+      sourceTaskId: taskId,
+      feed: 'proposed',
+    },
+  ])
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto(`/projects/${projectId}`)
+  const row = page.getByRole('region', { name: 'Память' })
+  await expect(row).toContainText('2 записи · 2 предложены')
+
+  await test.step('the window: «Предложено» with «Сохранить» and «Не надо», «Сохранено»', async () => {
+    await row.getByRole('button', { name: 'Открыть память проекта' }).click()
+    const window_ = page.getByRole('dialog', { name: 'Память' })
+    const waiting = window_.getByRole('region', { name: /Предложено/ })
+    await expect(waiting).toContainText('Агент их не учитывает, пока вы не сохраните')
+    await expect(waiting).toContainText('предложено в чате «Онлайн-заказ тортов» · сегодня')
+    await expect(window_.getByRole('region', { name: /Сохранено/ })).toContainText('добавлено вами')
+    await waiting
+      .locator(`[data-memory-entry="${proposed}"]`)
+      .getByRole('button', { name: 'Сохранить' })
+      .click()
+    await expect(waiting.locator(`[data-memory-entry="${proposed}"]`)).toHaveCount(0)
+    await expect(
+      window_
+        .getByRole('region', { name: /Сохранено/ })
+        .getByText('Форма заказа торта — в один экран'),
+    ).toBeVisible()
+  })
+
+  await test.step('«Добавить запись», «Удалить», «Использовать память аккаунта»', async () => {
+    const window_ = page.getByRole('dialog', { name: 'Память' })
+    await window_.getByRole('button', { name: 'Добавить запись' }).click()
+    const editor = window_.locator('[data-memory-editor]')
+    await editor.getByRole('textbox', { name: 'Текст записи' }).fill('Пишем по-дружески, на «вы»')
+    await editor.getByRole('button', { name: 'Сохранить' }).click()
+    await expect(window_.getByText('Пишем по-дружески, на «вы»')).toBeVisible()
+    await window_
+      .getByRole('button', { name: 'Удалить запись «Главный цвет бренда — терракотовый»' })
+      .click()
+    await expect(window_.getByText('Главный цвет бренда — терракотовый')).toBeHidden()
+    await window_.getByRole('switch', { name: 'Использовать память аккаунта' }).click()
+    await expect(
+      window_.getByRole('switch', { name: 'Использовать память аккаунта' }),
+    ).not.toBeChecked()
+    await window_.getByRole('button', { name: 'Готово' }).click()
+    await expect(row).toContainText('3 записи · 1 предложена')
+    const rows = await memoryRows(signedInUser.id)
+    expect(rows.find((each) => each.id === proposed)?.status).toBe('active')
+    expect(rows.map((each) => each.text)).not.toContain('Главный цвет бренда — терракотовый')
+    expect(rows.map((each) => each.text)).toContain('Пишем по-дружески, на «вы»')
+  })
+
+  await test.step('the chat: «Запомнено», and «Не надо» of the proposal that still waits', async () => {
+    await page.goto(`/chats/${taskId}`)
+    await expect(page.getByText('Запомнено: Торты на заказ принимаем за 48 часов')).toBeVisible()
+    const decided = page
+      .locator('[data-feed-memory="proposed"]')
+      .filter({ hasText: 'Форма заказа торта' })
+    await expect(decided).toBeVisible()
+    await expect(decided.getByRole('button')).toHaveCount(0)
+    const waiting = page
+      .locator('[data-feed-memory="proposed"]')
+      .filter({ hasText: 'Блоки сезонных товаров ставим под шапкой' })
+    await expect(waiting).toContainText('Агент предлагает запомнить: Блоки сезонных товаров')
+    await waiting.getByRole('button', { name: 'Не надо' }).click()
+    await expect(waiting).toContainText('Не сохранено')
+    expect((await memoryRows(signedInUser.id)).map((each) => each.id)).not.toContain(inChat)
+  })
+})
+
+test('«Настройки → Общее → Память агента»: the switch and the memory of the account', async ({
+  page,
+  signedInUser,
+}) => {
+  await addMemoryEntries(signedInUser.id, null, [{ text: 'Ответы — коротко', author: 'client' }])
+  await hideDevIndicator(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/settings#memory')
+  const section = page.getByRole('region', { name: 'Память агента' })
+  await expect(section.getByText('Ответы — коротко')).toBeVisible()
+  const toggle = section.getByRole('switch', { name: 'Агент запоминает важное' })
+  await expect(toggle).toBeChecked()
+  await toggle.click()
+  await expect(toggle).not.toBeChecked()
+  // Off: the agent's access and its section read this column (core and mcp) — the tools and the
+  // section are gone from the next pass; the entries stay.
+  await expect.poll(() => agentMemoryOf(signedInUser.id)).toBe(false)
+  expect((await memoryRows(signedInUser.id)).map((each) => each.text)).toEqual(['Ответы — коротко'])
+  await section.getByRole('button', { name: 'Очистить память' }).click()
+  await section.getByRole('button', { name: 'Очистить' }).click()
+  await expect(section.getByText('Память пока пуста')).toBeVisible()
+  expect(await memoryRows(signedInUser.id)).toEqual([])
 })

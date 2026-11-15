@@ -206,7 +206,12 @@ function chatId(): string {
  */
 export async function addAnsweredChat(
   userId: string,
-  { words, answer, thought }: { words: string; answer: string; thought: string },
+  {
+    words,
+    answer,
+    thought,
+    projectId = null,
+  }: { words: string; answer: string; thought: string; projectId?: string | null },
 ): Promise<{ taskId: string }> {
   const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
   try {
@@ -222,6 +227,7 @@ export async function addAnsweredChat(
         title: words,
         turnNo: 1,
         needsBrowser: false,
+        projectId,
       },
       select: { id: true },
     })
@@ -504,6 +510,100 @@ export async function priceDialogClass(): Promise<() => Promise<void>> {
         where: { id: model.provider.id },
         data: { enabled: false },
       })
+    await prisma.$disconnect()
+  }
+}
+
+/**
+ * Entries of the memory of a project of the user — or, `projectId: null`, of the account — as the
+ * end of a pass or the client leaves them (docs/plan/84-projects.md, ПР18); `feed` also writes the
+ * row «Запомнено» or «Агент предлагает запомнить» of its chat, as core does after the answer.
+ */
+export async function addMemoryEntries(
+  userId: string,
+  projectId: string | null,
+  entries: readonly {
+    text: string
+    status?: 'active' | 'proposed'
+    author?: 'agent' | 'client'
+    pendingAction?: 'update' | 'forget'
+    pendingText?: string
+    sourceTaskId?: string
+    feed?: 'saved' | 'proposed'
+  }[],
+): Promise<{ ids: string[] }> {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    const workspace = await prisma.$transaction((tx) =>
+      ensurePersonalWorkspaceWithGift(tx, { userId, appEnv: authEnv.APP_ENV }),
+    )
+    const ids: string[] = []
+    for (const entry of entries) {
+      const author = entry.author ?? 'agent'
+      const row = await prisma.memoryEntry.create({
+        data: {
+          id: chatId(),
+          workspaceId: workspace.id,
+          userId,
+          projectId,
+          kind: 'preference',
+          text: entry.text,
+          status: entry.status ?? 'active',
+          author,
+          confirmedAt: author === 'client' ? new Date() : null,
+          sourceTaskId: entry.sourceTaskId ?? null,
+          sourceTurn: entry.sourceTaskId ? 1 : null,
+          ...(entry.pendingAction ? { pendingAction: entry.pendingAction } : {}),
+          ...(entry.pendingText ? { pendingText: entry.pendingText } : {}),
+        },
+        select: { id: true },
+      })
+      ids.push(row.id)
+      if (entry.feed && entry.sourceTaskId)
+        await insertFeedEvent(prisma, {
+          taskId: entry.sourceTaskId,
+          row: {
+            type: 'feed.memory_change',
+            payload: {
+              v: 1,
+              action: entry.feed,
+              entryId: row.id,
+              kind: 'preference',
+              text: entry.text,
+            },
+          },
+        })
+    }
+    return { ids }
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+/** The memory of the user now, newest first: what the windows and the chat changed. */
+export async function memoryRows(userId: string) {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    return await prisma.memoryEntry.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, text: true, status: true, projectId: true, pendingAction: true },
+    })
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+/** «Агент запоминает важное» of the user, as the agent's access and its section read it. */
+export async function agentMemoryOf(userId: string): Promise<boolean> {
+  const prisma = createPrismaClient({ databaseUrl: databaseUrl() })
+  try {
+    const user = await prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: { agentMemory: true },
+    })
+    return user.agentMemory
+  } finally {
     await prisma.$disconnect()
   }
 }
