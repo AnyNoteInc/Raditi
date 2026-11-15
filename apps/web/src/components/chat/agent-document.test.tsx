@@ -49,7 +49,7 @@ describe('a document of the agent in the tab «Документы» (plan 74)', 
     expect(within(view).getByText('главные')).toBeTruthy()
     expect(within(view).getByText('Проверяем раздел…')).toBeTruthy()
     expect(within(view).getByText('Пишется')).toBeTruthy()
-    expect(within(view).getByRole('status').textContent).toBe('пишется · 2 из 3')
+    expect(within(view).getByRole('status').textContent).toBe('Пишется · 2 из 3')
     expect(within(view).getByRole('progressbar', { name: 'Разделы: 2 из 3' })).toBeTruthy()
     // No version yet: nothing to download or publish.
     expect(within(view).queryByRole('link', { name: /Скачать/ })).toBeNull()
@@ -60,7 +60,7 @@ describe('a document of the agent in the tab «Документы» (plan 74)', 
     show()
     const download = await screen.findByRole('link', { name: 'Скачать .md' })
     expect(download.getAttribute('href')).toBe(`/api/documents/${docId}/markdown`)
-    expect(screen.getByRole('status').textContent).toBe('готов · v2')
+    expect(screen.getByRole('status').textContent).toBe('v2')
     expect(screen.getByRole('heading', { level: 2, name: 'Как мерили' })).toBeTruthy()
     expect(screen.queryByRole('progressbar')).toBeNull()
     expect(readPage).not.toHaveBeenCalled()

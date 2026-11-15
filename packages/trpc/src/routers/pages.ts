@@ -11,6 +11,8 @@ import { z } from 'zod'
 import { chatContextOf } from '../services/chat/context.ts'
 import {
   cabinetDocPage,
+  cabinetDocVersion,
+  cabinetDocVersions,
   cabinetDocument,
   canPublishOfChat,
   listCabinetPages,
@@ -106,6 +108,42 @@ export const pagesRouter = router({
     .output(z.strictObject({ html: z.string(), version: z.number().int().min(1) }).nullable())
     .query(({ ctx, input }) =>
       cabinetDocPage(ctx.prisma, { documentId: input.docId, userId: ctx.user.id }),
+    ),
+
+  /** The versions of a document, oldest first: the switch in the head of its view (14.11.2026). */
+  docVersions: consentedProcedure
+    .input(z.strictObject({ docId: z.uuid() }))
+    .output(
+      z.array(
+        z.strictObject({
+          no: z.number().int().min(1),
+          createdAt: z.string(),
+          kept: z.boolean(),
+        }),
+      ),
+    )
+    .query(({ ctx, input }) =>
+      cabinetDocVersions(ctx.prisma, { documentId: input.docId, userId: ctx.user.id }),
+    ),
+
+  /** One version of a document; null — its text was not kept (finished before 14.11.2026). */
+  docVersion: consentedProcedure
+    .input(z.strictObject({ docId: z.uuid(), version: z.number().int().min(1) }))
+    .output(
+      z
+        .strictObject({
+          version: z.number().int().min(1),
+          markdown: z.string(),
+          html: z.string().nullable(),
+        })
+        .nullable(),
+    )
+    .query(({ ctx, input }) =>
+      cabinetDocVersion(ctx.prisma, {
+        documentId: input.docId,
+        userId: ctx.user.id,
+        version: input.version,
+      }),
     ),
 
   /** Whether «Опубликовать как страницу» shows in the tab of this chat (Ст32). */

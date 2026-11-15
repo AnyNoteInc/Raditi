@@ -30,12 +30,12 @@ function show({
 beforeEach(() => vi.clearAllMocks())
 
 describe('the card of a document in the feed (plan 74)', () => {
-  it('is one line: the title, «пишется · N из M» counting what the agent wrote, and the bar', async () => {
+  it('is one line: the title and «Документ», no progress of the writing (14.11.2026)', async () => {
     readDoc.mockResolvedValue(sampleDoc(0))
     show({ onOpen: vi.fn() })
     const card = await screen.findByRole('article', { name: 'Документ «Аудит скорости сайта»' })
-    expect(within(card).getByText('Документ · пишется · 2 из 3')).toBeTruthy()
-    expect(within(card).getByRole('progressbar', { name: 'Разделы: 2 из 3' })).toBeTruthy()
+    expect(within(card).getByText('Документ')).toBeTruthy()
+    expect(within(card).queryByRole('progressbar')).toBeNull()
     // The text is in the tab beside the chat, not in the feed.
     expect(within(card).queryByText('главные')).toBeNull()
   })
@@ -48,7 +48,7 @@ describe('the card of a document in the feed (plan 74)', () => {
       await screen.findByRole('button', { name: 'Открыть документ «Аудит скорости сайта»' }),
     )
     expect(onOpen).toHaveBeenCalledWith(docId)
-    expect(screen.getByText('Документ · готов · v1')).toBeTruthy()
+    expect(screen.getByText('Документ · v1')).toBeTruthy()
     expect(screen.queryByRole('progressbar')).toBeNull()
   })
 
@@ -69,11 +69,11 @@ describe('the card of a document in the feed (plan 74)', () => {
   it('reads the document again when a newer change of it comes in the feed', async () => {
     readDoc.mockResolvedValue(sampleDoc(0))
     const { rerender } = show({ revision: 4, onOpen: vi.fn() })
-    await screen.findByText('Документ · пишется · 2 из 3')
+    await screen.findByText('Документ')
     expect(readDoc).toHaveBeenCalledTimes(1)
     readDoc.mockResolvedValue({ ...sampleDoc(1), revision: 5 })
     rerender(5)
-    expect(await screen.findByText('Документ · готов · v1')).toBeTruthy()
+    expect(await screen.findByText('Документ · v1')).toBeTruthy()
     expect(readDoc).toHaveBeenCalledTimes(2)
   })
 })

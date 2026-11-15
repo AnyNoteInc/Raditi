@@ -107,9 +107,10 @@ describe('«Ход работы»', () => {
       expect(screen.queryByText('Агент пока ничего не вывел.')).toBeNull()
     })
 
-    it('counts as nothing yet for a viewer who has not asked', () => {
+    it('counts as nothing yet for a viewer who has not asked, and says nothing of it', () => {
       render(<TurnActivityView state={read({ events: [thought] })} live />)
-      expect(screen.getByText('Агент пока ничего не вывел.')).toBeTruthy()
+      expect(screen.queryByText(THOUGHT)).toBeNull()
+      expect(screen.getByRole('region', { name: 'Ход работы' }).textContent).toBe('')
     })
   })
 
@@ -144,8 +145,9 @@ describe('«Ход работы»', () => {
   it('says what it waits for: the first answer, a failure, more rows, nothing yet', () => {
     const { rerender } = render(<TurnActivityView state={initialActivity} live />)
     expect(screen.getByText('Загружаем ход работы…')).toBeTruthy()
+    // Nothing written yet says nothing (owner's request of 14.11.2026).
     rerender(<TurnActivityView state={read({ events: [] })} live />)
-    expect(screen.getByText('Агент пока ничего не вывел.')).toBeTruthy()
+    expect(screen.getByRole('region', { name: 'Ход работы' }).textContent).toBe('')
     rerender(<TurnActivityView state={read({ more: true })} live />)
     expect(screen.getByText('Загружаем дальше…')).toBeTruthy()
     rerender(<TurnActivityView state={read({ failed: true })} live />)

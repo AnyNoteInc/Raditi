@@ -1107,7 +1107,6 @@ describe('a dialog', () => {
       expect(line().open).toBe(false)
       await run(/Подробности работы/)
       await waitFor(() => expect(line().open).toBe(true))
-      await screen.findByRole('heading', { name: 'Ход работы' })
       await screen.findByText('Подробности работы показаны')
       cleanup()
       showDialog(worked)
@@ -3304,7 +3303,7 @@ describe('a task in the browser', () => {
   ])('opens the browser %s from «+», and its stream only then', async (_where, wide) => {
     if (wide) wideLayout()
     showDialog(browserAnswer({ events: [requestRow('1')], cursor: '1' }), STREAM_URL)
-    await screen.findByRole('heading', { name: 'Агент работает' })
+    await screen.findByRole('status', { name: 'Агент работает' })
     // The live block has no way of its own to the browser (owner's answer of 30.10.2026).
     expect(screen.queryByRole('button', { name: 'Смотреть, что делает агент' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Открыть браузер' })).toBeNull()
@@ -3609,7 +3608,7 @@ describe('a task in the browser', () => {
       asked,
     )
     mountDialog({ streamUrl: STREAM_URL })
-    await screen.findByRole('heading', { name: 'Агент работает' })
+    await screen.findByRole('status', { name: 'Агент работает' })
     await choose(/^Браузер/)
     await screen.findByRole('tab', { name: 'Браузер', selected: true })
     await waitFor(() => expect(sockets).toHaveLength(1))

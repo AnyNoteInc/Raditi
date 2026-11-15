@@ -3022,6 +3022,8 @@ model ChatDocumentVersion {
   sha256     String   @db.Char(64)
   taskId     String?  @map("task_id") @db.Uuid
   turnNo     Int?     @map("turn_no")
+  /// The Markdown of this version; NULL — finished before its text was kept (14.11.2026).
+  markdown   String?  @db.Text
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   document ChatDocument         @relation(fields: [documentId], references: [id], onDelete: Cascade)

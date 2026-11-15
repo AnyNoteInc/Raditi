@@ -92,6 +92,8 @@ export {
   createChatDocument,
   dropAbandonedPages,
   currentDocMarkdown,
+  docVersionMarkdown,
+  docVersions,
   listWorkspacePages,
   NEUTRAL_INTENT,
   NEUTRAL_TITLE,

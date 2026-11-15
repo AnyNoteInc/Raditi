@@ -1,5 +1,7 @@
 import {
   currentDocMarkdown,
+  docVersionMarkdown,
+  docVersions,
   hashPagePassword,
   listWorkspacePages,
   pagePasswordProblem,
@@ -305,6 +307,44 @@ export async function cabinetDocPage(
   return {
     html: await readingPage({ title: document.title, markdown: current.markdown }),
     version: current.version,
+  }
+}
+
+/** The versions of a document for the switch in the head of its view (owner, 14.11.2026). */
+export async function cabinetDocVersions(
+  db: PrismaClient,
+  input: { documentId: string; userId: string },
+): Promise<{ no: number; createdAt: string; kept: boolean }[]> {
+  const document = await readableDocument(db, input.documentId, input.userId)
+  const versions = await docVersions(db, {
+    workspaceId: document.workspaceId,
+    documentId: input.documentId,
+  })
+  return versions.map((version) => ({ ...version, createdAt: version.createdAt.toISOString() }))
+}
+
+/**
+ * One version of a document as the view shows it: its Markdown, and the page to read of a `page`
+ * document. null — no such version, or its text was not kept.
+ */
+export async function cabinetDocVersion(
+  db: PrismaClient,
+  input: { documentId: string; userId: string; version: number },
+): Promise<{ version: number; markdown: string; html: string | null } | null> {
+  const document = await readableDocument(db, input.documentId, input.userId)
+  const markdown = await docVersionMarkdown(db, {
+    workspaceId: document.workspaceId,
+    documentId: input.documentId,
+    version: input.version,
+  })
+  if (markdown === null) return null
+  return {
+    version: input.version,
+    markdown,
+    html:
+      document.view === 'page'
+        ? await readingPage({ title: markdownTitleOf(markdown) ?? document.title, markdown })
+        : null,
   }
 }
 

@@ -2,6 +2,8 @@
 
 import Box from '@mui/material/Box'
 import IconButton from '@mui/material/IconButton'
+import MenuItem from '@mui/material/MenuItem'
+import Select from '@mui/material/Select'
 import LinearProgress from '@mui/material/LinearProgress'
 import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
@@ -10,7 +12,15 @@ import { BrandProgress } from '@repo/ui/brand-progress'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { AppRouter } from '@repo/trpc'
 import type { inferRouterOutputs } from '@trpc/server'
-import { createContext, useContext, useEffect, useEffectEvent, useRef, type ReactNode } from 'react'
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 import { useTRPC } from '@/trpc/client'
@@ -42,6 +52,12 @@ export const agentDocTexts = Object.freeze({
   frame: (title: string) => `Документ «${title}»`,
   failed: 'Не получилось загрузить документ.',
   loading: 'Загружаем документ',
+  versions: 'Версия документа',
+  version: (no: number) => `v${no}`,
+  live: (written: number, total: number) =>
+    total === 0 ? 'Пишется' : `Пишется · ${written} из ${total}`,
+  notKept: 'текст не сохранился',
+  versionGone: 'Текст этой версии не сохранился: она готова раньше, чем мы начали их хранить.',
 })
 
 /** Where the cabinet serves the current version of a document, as its view says (Ст12, Д1). */
@@ -277,6 +293,123 @@ function LiveSections({ doc }: { doc: AgentDocument }) {
   )
 }
 
+/** An earlier version (owner's request of 14.11.2026): its text, or its page to read. */
+function EarlierVersion({ doc, version }: { doc: AgentDocument; version: number }) {
+  const trpc = useTRPC()
+  const read = useQuery(trpc.pages.docVersion.queryOptions({ docId: doc.docId, version }))
+  if (read.isError)
+    return (
+      <Box sx={{ p: 3 }}>
+        <Typography color="text.secondary">{agentDocTexts.failed}</Typography>
+      </Box>
+    )
+  if (read.isPending)
+    return (
+      <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <BrandProgress size={28} aria-label={agentDocTexts.loading} />
+      </Box>
+    )
+  if (read.data === null)
+    return (
+      <Box sx={{ p: 3 }}>
+        <Typography color="text.secondary">{agentDocTexts.versionGone}</Typography>
+      </Box>
+    )
+  if (read.data.html !== null)
+    return (
+      <Box sx={{ flex: '1 1 0', minHeight: 0, position: 'relative' }}>
+        <Box
+          component="iframe"
+          key={read.data.version}
+          srcDoc={read.data.html}
+          title={agentDocTexts.frame(doc.title)}
+          sandbox="allow-popups allow-popups-to-escape-sandbox"
+          referrerPolicy="no-referrer"
+          sx={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0 }}
+        />
+      </Box>
+    )
+  return (
+    <Box sx={sheetSx}>
+      <Box sx={proseSx}>
+        <Markdown text={read.data.markdown} />
+      </Box>
+    </Box>
+  )
+}
+
+/**
+ * The switch of versions in the head of the view (owner's request of 14.11.2026): the document as
+ * it is now — being written, or its latest version — and every finished version before it.
+ */
+function VersionSwitch({
+  doc,
+  picked,
+  onPick,
+}: {
+  doc: AgentDocument
+  picked: number | null
+  onPick: (version: number | null) => void
+}) {
+  const trpc = useTRPC()
+  const queryClient = useQueryClient()
+  const versions = useQuery({
+    ...trpc.pages.docVersions.queryOptions({ docId: doc.docId }),
+    enabled: doc.version > 0,
+  })
+  // A new version came: the list reads itself again.
+  useEffect(() => {
+    void queryClient.invalidateQueries({
+      queryKey: trpc.pages.docVersions.queryKey({ docId: doc.docId }),
+    })
+  }, [doc.version, doc.docId, queryClient, trpc])
+  const list = versions.data ?? []
+  const nowLabel = doc.draft
+    ? agentDocTexts.live(doc.progress.written, doc.progress.total)
+    : agentDocTexts.version(doc.version)
+  if (list.length <= (doc.draft ? 0 : 1))
+    return (
+      <Box
+        component="span"
+        role="status"
+        sx={{ color: 'text.secondary', whiteSpace: 'nowrap', flexShrink: 0 }}
+      >
+        {nowLabel}
+      </Box>
+    )
+  // «now» is the document as it is; an earlier version is its number.
+  const value = picked === null ? 'now' : String(picked)
+  return (
+    <Select
+      variant="standard"
+      disableUnderline
+      value={value}
+      onChange={(event) => onPick(event.target.value === 'now' ? null : Number(event.target.value))}
+      inputProps={{ 'aria-label': agentDocTexts.versions }}
+      sx={{
+        flexShrink: 0,
+        fontSize: 14,
+        color: 'text.secondary',
+        '& .MuiSelect-select': { py: 0 },
+      }}
+    >
+      <MenuItem value="now" sx={{ minHeight: 40 }}>
+        {nowLabel}
+      </MenuItem>
+      {[...list]
+        .reverse()
+        .filter((one) => doc.draft || one.no !== doc.version)
+        .map((one) => (
+          <MenuItem key={one.no} value={String(one.no)} disabled={!one.kept} sx={{ minHeight: 40 }}>
+            {one.kept
+              ? agentDocTexts.version(one.no)
+              : `${agentDocTexts.version(one.no)} · ${agentDocTexts.notKept}`}
+          </MenuItem>
+        ))}
+    </Select>
+  )
+}
+
 /** The finished version as text (Д1, `text`): the cabinet draws its Markdown. */
 function TextVersion({ doc }: { doc: AgentDocument }) {
   const markdown = [
@@ -338,14 +471,11 @@ function PageVersion({ doc }: { doc: AgentDocument }) {
 export function AgentDocumentView({
   docId,
   lead,
-  aside,
   fullscreen = false,
   onFullscreen,
 }: {
   docId: string
   lead?: ReactNode
-  /** The list of the documents beside it, when the tab is wide. */
-  aside?: ReactNode
   fullscreen?: boolean
   onFullscreen?: (on: boolean) => void
 }) {
@@ -354,6 +484,8 @@ export function AgentDocumentView({
   const doc = useAgentDocument(docId)
   const publishDoc = useMutation(trpc.pages.publishDoc.mutationOptions())
   const publication = usePagePublish()
+  // An earlier version the client picked; null — the document as it is now.
+  const [picked, setPicked] = useState<number | null>(null)
   const data = doc.data
   if (!data)
     return (
@@ -410,13 +542,7 @@ export function AgentDocumentView({
           >
             {data.title}
           </Box>
-          <Box
-            component="span"
-            role="status"
-            sx={{ color: 'text.secondary', whiteSpace: 'nowrap', flexShrink: 0 }}
-          >
-            {docStatusOf(data)}
-          </Box>
+          <VersionSwitch doc={data} picked={picked} onPick={setPicked} />
         </Box>
         {data.version > 0 ? (
           <HeadButton
@@ -448,11 +574,12 @@ export function AgentDocumentView({
           />
         ) : null}
       </Box>
-      {data.draft ? <DocProgress doc={data} /> : null}
+      {data.draft && picked === null ? <DocProgress doc={data} /> : null}
       <Box sx={{ flex: '1 1 0', minHeight: 0, display: 'flex' }}>
-        {aside}
         <Box sx={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-          {data.draft ? (
+          {picked !== null ? (
+            <EarlierVersion key={picked} doc={data} version={picked} />
+          ) : data.draft ? (
             <LiveSections doc={data} />
           ) : data.view === 'page' ? (
             <PageVersion doc={data} />

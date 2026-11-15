@@ -25,8 +25,26 @@ export type FeedEntry =
    * folded into one card (docs/plan/67-agent-documents.md, Д4); a single one too.
    */
   | { kind: 'documents'; key: string; fileIds: string[] }
+  /**
+   * The documents the agent wrote or changed section by section in one turn (`feed.doc`,
+   * `feed.doc_touch`; docs/plan/69-pages.md): one card after the row that ended the turn — after
+   * the agent's answer (owner's request of 14.11.2026). A turn that only changed a document
+   * begun earlier has its card too.
+   */
+  | { kind: 'agentDocs'; key: string; docIds: string[] }
   /** The stages of a finished turn, folded into «Агент работал …». */
   | { kind: 'worked'; key: string; turn: number; steps: StepRow[]; seconds: number }
+
+/** The rows that end a turn: its documents are shown after them. */
+const TURN_ENDS: ReadonlySet<FeedRow['type']> = new Set<FeedRow['type']>([
+  'feed.result',
+  'feed.failure',
+  'feed.question',
+  'feed.cancelled',
+])
+
+const endsTurn = (entry: FeedEntry | undefined): boolean =>
+  entry?.kind === 'row' && TURN_ENDS.has(entry.row.type)
 
 /** The statuses whose stages the live block shows instead of the feed. */
 const LIVE: readonly TaskStatus[] = ['preparing', 'running']
@@ -116,12 +134,26 @@ export function feedEntries(rows: readonly FeedRow[], head: FeedHeadState | null
   }
   const entries: FeedEntry[] = []
   const placed = new Set<number>()
+  // The documents the turn under way began or changed: their card waits for the end of the turn.
+  let turnDocs: string[] = []
+  let turnDocsKey = ''
+  const flushDocs = () => {
+    if (turnDocs.length === 0) return
+    entries.push({ kind: 'agentDocs', key: `docs-${turnDocsKey}`, docIds: turnDocs })
+    turnDocs = []
+  }
   rows.forEach((row, index) => {
-    // A signal for the card of a document (docs/plan/69-pages.md, Ст22): no entry of its own, and
-    // never the end of a turn's work.
-    if (row.type === 'skipped' || row.type === 'feed.doc_touch') return
+    if (row.type === 'skipped') return
+    // A document begun or changed (docs/plan/69-pages.md, Ст22): no entry of its own, and never
+    // the end of a turn's work.
+    if (row.type === 'feed.doc' || row.type === 'feed.doc_touch') {
+      if (turnDocs.length === 0) turnDocsKey = row.id
+      if (!turnDocs.includes(row.docId)) turnDocs.push(row.docId)
+      return
+    }
     if (!isStep(row)) {
       entries.push({ kind: 'row', key: row.id, row })
+      if (TURN_ENDS.has(row.type)) flushDocs()
       return
     }
     if (row.turn === liveTurn || placed.has(row.turn)) return
@@ -133,7 +165,10 @@ export function feedEntries(rows: readonly FeedRow[], head: FeedHeadState | null
       .slice(Math.max(lastIndex, index) + 1)
       .find(
         (later) =>
-          !isStep(later) && later.type !== 'feed.request' && later.type !== 'feed.doc_touch',
+          !isStep(later) &&
+          later.type !== 'feed.request' &&
+          later.type !== 'feed.doc' &&
+          later.type !== 'feed.doc_touch',
       )
     const start = Date.parse(row.at)
     const end = Date.parse(ending?.at ?? last.at)
@@ -145,6 +180,9 @@ export function feedEntries(rows: readonly FeedRow[], head: FeedHeadState | null
       seconds: Number.isFinite(end - start) ? Math.max(0, (end - start) / 1000) : 0,
     })
   })
+  // A turn that is not at work any more and ended with no such row still shows its documents;
+  // the turn at work shows them in «Результаты» beside the chat.
+  if (head === null || !LIVE.includes(head.task.status)) flushDocs()
   // The documents of a turn, one after another, as one card.
   for (let index = 0; index < entries.length; index += 1) {
     const fileIds: string[] = []
@@ -161,6 +199,27 @@ export function feedEntries(rows: readonly FeedRow[], head: FeedHeadState | null
       key: `documents-${(entries[index] as { key: string }).key}`,
       fileIds,
     })
+  }
+  // A card of documents stands after the agent's answer of its turn (owner's request of
+  // 14.11.2026), not where the agent made them: it moves past the rows up to the end of the turn,
+  // never past the client's next words. The turn at work keeps it out of the feed.
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    if (entries[index]!.kind !== 'documents') continue
+    let end = index + 1
+    while (
+      end < entries.length &&
+      !endsTurn(entries[end]) &&
+      !(
+        entries[end]!.kind === 'row' &&
+        (entries[end] as { row: FeedRow }).row.type === 'feed.request'
+      )
+    )
+      end += 1
+    if (endsTurn(entries[end])) {
+      const [card] = entries.splice(index, 1)
+      entries.splice(end, 0, card!)
+    } else if (end === entries.length && head !== null && LIVE.includes(head.task.status))
+      entries.splice(index, 1)
   }
   // The agent's answer first, then the card of the changes it made — as a chat shows an answer
   // and what it produced (owner's request of 26.10.2026); the platform writes the candidate of a

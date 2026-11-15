@@ -50,6 +50,13 @@ vi.mock('@/trpc/client', () => ({
           queryFn: () => null,
         }),
       },
+      docVersions: {
+        queryKey: (input: { docId: string }) => ['pages', 'docVersions', input.docId],
+        queryOptions: (input: { docId: string }) => ({
+          queryKey: ['pages', 'docVersions', input.docId],
+          queryFn: () => [],
+        }),
+      },
       publishDoc: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
       list: { queryKey: () => ['pages', 'list'] },
     },

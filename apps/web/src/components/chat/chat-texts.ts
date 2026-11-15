@@ -347,6 +347,23 @@ export const messageEditText = Object.freeze({
   edit: 'Изменить',
 })
 
+/** «Скопировать текст» of a message (owner's request of 14.11.2026). */
+export const copyText = Object.freeze({
+  copy: 'Скопировать текст',
+  copied: 'Скопировано',
+})
+
+/** «Результаты» beside the chat: what the agent made in it (owner's request of 14.11.2026). */
+export const resultsText = Object.freeze({
+  title: 'Результаты',
+  show: 'Показать результаты',
+  hide: 'Скрыть результаты',
+  writing: (written: number, total: number) =>
+    total === 0 ? 'пишется' : `пишется · ${written} из ${total}`,
+  version: (version: number) => `v${version}`,
+  open: (title: string) => `Открыть «${title}»`,
+})
+
 /** The section «Чаты» and its screens (docs/plan/61-chats-first.md, §5.13). */
 export const chatsText = Object.freeze({
   title: 'Чаты',
@@ -408,7 +425,6 @@ export const dialogText = Object.freeze({
 export const activityText = Object.freeze({
   title: 'Ход работы',
   loading: 'Загружаем ход работы…',
-  empty: 'Агент пока ничего не вывел.',
   failed: 'Не удалось загрузить ход работы. Попробуем ещё раз.',
   more: 'Загружаем дальше…',
   /** The model's own words before it acts (`/thinking`): raw, often English. */

@@ -6,13 +6,7 @@ import Typography from '@mui/material/Typography'
 
 import { AppIcon } from '@/components/application/app-icon'
 
-import {
-  agentDocTexts,
-  DocProgress,
-  docStatusOf,
-  documentDownloadHref,
-  useAgentDocument,
-} from './agent-document'
+import { agentDocTexts, documentDownloadHref, useAgentDocument } from './agent-document'
 
 export { DocRevisions, docRevisionsOf } from './agent-document'
 
@@ -20,8 +14,9 @@ export { DocRevisions, docRevisionsOf } from './agent-document'
 export const feedDocTexts = agentDocTexts
 
 /**
- * A document the agent writes (`feed.doc`; docs/plan/74-doc-live-panel.md): one compact line in
- * the feed — its title, «пишется · N из M» with the bar of the sections, or «готов · vN». The
+ * A document the agent wrote or changed (`feed.doc`, `feed.doc_touch`; docs/plan/74): one compact
+ * line in the feed after the answer of its turn — its title and «Документ · vN»; while it is
+ * written it shows in «Результаты» beside the chat, not here (owner's request of 14.11.2026). The
  * document itself is in the tab «Документы» beside the chat: «Открыть» shows it there. Where the
  * chat has no tab to open (`onOpen` absent), «Скачать» once it has a version.
  */
@@ -64,17 +59,12 @@ export function FeedDoc({
         <AppIcon name="pages" size={20} />
       </Box>
       <Box sx={{ flex: '1 1 auto', minWidth: 0 }}>
-        <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-          {agentDocTexts.kind} · {docStatusOf(data)}
-        </Typography>
         <Typography sx={{ fontWeight: 600, fontSize: 15, overflowWrap: 'anywhere' }}>
           {data.title}
         </Typography>
-        {data.draft ? (
-          <Box sx={{ mt: 1, borderRadius: '2px', overflow: 'hidden' }}>
-            <DocProgress doc={data} height={4} />
-          </Box>
-        ) : null}
+        <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+          {data.version > 0 ? `${agentDocTexts.kind} · v${data.version}` : agentDocTexts.kind}
+        </Typography>
       </Box>
       {onOpen ? (
         open ? (
