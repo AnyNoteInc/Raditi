@@ -125,37 +125,15 @@ export const test = base.extend<{ signedInUser: SignedInUser }, { accounts: Acco
           await prisma.creditLedger.deleteMany({ where: { account: owned } })
           await prisma.creditHold.deleteMany({ where: { account: owned } })
           await prisma.billingAccount.deleteMany({ where: owned })
-          // The tasks a test queued (fixtures/credits.ts): a site whose gift a reserve claimed,
-          // the model calls of the tasks and their turn keys, then the tasks; the turn rows go
-          // with them.
-          await prisma.giftSiteClaim.deleteMany({ where: owned })
+          // The tasks a test queued (fixtures/credits.ts): the model calls of the tasks and their
+          // turn keys, then the tasks; the turn rows go with them.
           await prisma.tokenUsage.deleteMany({ where: { task: owned } })
           await prisma.llmCall.deleteMany({ where: { key: { task: owned } } })
           await prisma.llmKey.deleteMany({ where: { task: owned } })
           await prisma.task.deleteMany({ where: owned })
-          // A file nobody sent stays with its site (tests/site/chats.spec.ts).
+          // A file nobody sent (tests/site/chats.spec.ts).
           await prisma.attachment.deleteMany({ where: owned })
-          // A site the wizard added (fixtures/site-files.ts): its first import — the stage, its
-          // event in the outbox, a version it may have saved — and where its files and its
-          // database are, then the references of its accesses.
-          const sites = await prisma.site.findMany({ where: owned, select: { id: true } })
-          if (sites.length > 0) {
-            await prisma.outboxEvent.deleteMany({
-              where: {
-                OR: sites.map(({ id }) => ({
-                  dedupeKey: { startsWith: `site-provisioning:${id}:` },
-                })),
-              },
-            })
-          }
-          await prisma.siteInitialVersion.deleteMany({ where: { site: owned } })
-          await prisma.gitRepository.deleteMany({ where: { site: owned } })
-          await prisma.siteProvisioningStage.deleteMany({ where: { site: owned } })
-          await prisma.siteDatabaseSchema.deleteMany({ where: { site: owned } })
-          await prisma.siteCodeSource.deleteMany({ where: { site: owned } })
-          await prisma.siteDatabase.deleteMany({ where: { site: owned } })
-          await prisma.credentialRef.deleteMany({ where: { OR: [owned, { site: owned }] } })
-          await prisma.site.deleteMany({ where: owned })
+          await prisma.credentialRef.deleteMany({ where: owned })
           await prisma.order.deleteMany({ where: owned })
           await prisma.subscription.deleteMany({ where: owned })
           await prisma.auditLog.deleteMany({ where: owned })
