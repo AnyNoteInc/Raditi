@@ -143,6 +143,14 @@ export interface TelegramBotApi {
   ): Promise<TelegramApiResult<unknown>>
   /** Stops the spinner of a pressed button, with a short notice when `text` is set. */
   answerCallbackQuery(id: string, text?: string): Promise<TelegramApiResult<boolean>>
+  /** Deletes a topic with all its messages (Bot API 9.3 in private chats). */
+  deleteForumTopic(chatId: number | string, threadId: number): Promise<TelegramApiResult<boolean>>
+  /** «печатает…» for about five seconds, in a topic when given. */
+  sendChatAction(
+    chatId: number | string,
+    action: 'typing',
+    threadId?: number,
+  ): Promise<TelegramApiResult<boolean>>
   /** A topic in a private chat with a user (Bot API 9.4) or in a forum. */
   createForumTopic(
     chatId: number | string,
@@ -307,6 +315,22 @@ export function createTelegramBotApi(options: TelegramBotApiOptions): TelegramBo
       const body: Record<string, unknown> = { callback_query_id: id }
       if (text !== undefined) body.text = text
       return call('answerCallbackQuery', body, z.boolean())
+    },
+
+    deleteForumTopic(chatId, threadId) {
+      return call('deleteForumTopic', { chat_id: chatId, message_thread_id: threadId }, z.boolean())
+    },
+
+    sendChatAction(chatId, action, threadId) {
+      return call(
+        'sendChatAction',
+        {
+          chat_id: chatId,
+          action,
+          ...(threadId === undefined ? {} : { message_thread_id: threadId }),
+        },
+        z.boolean(),
+      )
     },
 
     createForumTopic(chatId, name) {

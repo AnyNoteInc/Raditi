@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto'
 
-import { enqueueTelegramSend, enqueueTelegramTopic, type PrismaClient } from '@repo/db'
+import {
+  enqueueTelegramProgress,
+  enqueueTelegramSend,
+  enqueueTelegramTopic,
+  type PrismaClient,
+} from '@repo/db'
 import {
   feedInputText,
   isDomainError,
@@ -20,6 +25,7 @@ import {
 import { toTRPCError } from '../../errors.ts'
 import type { ChatContext } from '../chat/context.ts'
 import { cancelDialog, continueDialog, createDialog, postDialogMessage } from '../chat/tasks.ts'
+import { removeDialog } from '../chat/dialog-manage.ts'
 import { queueDialogWords } from '../chat/queue.ts'
 import { loadLatestConsents } from '../consents.ts'
 import { takeTelegramLink, unlinkTelegram } from './link.ts'
@@ -234,6 +240,10 @@ class Intake {
       await this.#newChat(where, identity.userId, identity.id)
       return
     }
+    if (command?.name === 'delete') {
+      await this.#delete(where, identity)
+      return
+    }
     if (command?.name === 'chats') {
       await this.#chats(where, identity.userId)
       return
@@ -401,10 +411,8 @@ class Intake {
           data: { currentTaskId: taskId, newChat: false, newChatSiteId: null },
         })
         if (where.threadId === undefined) await enqueueTelegramTopic(db, { taskId })
-        await this.#reply(where, telegramText.started, {
-          taskId,
-          buttons: this.#working(taskId),
-        })
+        // No «Принято»: the message of the work of the agent says it (owner, 15.11.2026).
+        await enqueueTelegramProgress(db, taskId, `u:${this.#updateId}`)
         return
       }
       const requestId = updateUuid(`request:${this.#updateId}`, at)
@@ -418,7 +426,9 @@ class Intake {
           ...attachments,
           now,
         })
-        await this.#reply(where, telegramText.accepted, { taskId, buttons: this.#working(taskId) })
+        await this.#bind(taskId, where)
+        await enqueueTelegramProgress(db, taskId, `u:${this.#updateId}`)
+        return
       } catch (error) {
         if (!isDomainError(error) || error.code !== 'TASK_BUSY') throw error
         // The agent works: the words wait in the queue of the chat (docs/plan/75, ВВ1).
@@ -429,22 +439,13 @@ class Intake {
           text: words.text,
           ...attachments,
         })
-        await this.#reply(where, telegramText.queued, { taskId, buttons: this.#working(taskId) })
+        await this.#bind(taskId, where)
+        await this.#reply(where, telegramText.queued, { taskId })
       }
-      await this.#bind(taskId, where)
     } catch (error) {
       if (!isDomainError(error)) throw error
       await this.#reply(where, toTRPCError(error).message)
     }
-  }
-
-  #working(taskId: string): TelegramButton[][] {
-    return [
-      [
-        { text: telegramText.stopButton, data: pressData.stop(taskId) },
-        { text: telegramText.openButton, url: this.#chatLink(taskId) },
-      ],
-    ]
   }
 
   /**
@@ -513,6 +514,34 @@ class Intake {
     })
   }
 
+  /**
+   * `/delete`: the chat of this topic, or the current chat, is deleted in the cabinet too, as
+   * «Удалить» there does it; its topic in Telegram goes with it (owner's request of 15.11.2026).
+   */
+  async #delete(
+    where: Where,
+    identity: { userId: string; currentTaskId: string | null; newChat: boolean },
+  ) {
+    const target = await this.#targetOf(where, { ...identity, newChat: false })
+    if (!('taskId' in target)) {
+      await this.#reply(where, telegramText.nothingToDelete)
+      return
+    }
+    try {
+      await removeDialog(this.#deps.db, {
+        userId: identity.userId,
+        taskId: target.taskId,
+        now: this.#now,
+      })
+    } catch (error) {
+      if (!isDomainError(error)) throw error
+      await this.#reply(where, toTRPCError(error).message)
+      return
+    }
+    // A topic disappears with its messages; a chat without one is told.
+    if (where.threadId === undefined) await this.#reply(where, telegramText.deleted)
+  }
+
   async #chats(where: Where, userId: string): Promise<void> {
     const tasks = await this.#deps.db.task.findMany({
       where: { createdById: userId, deletedAt: null },
@@ -568,10 +597,7 @@ class Intake {
             userId: identity.userId,
             now,
           })
-          await reply(telegramText.accepted, {
-            taskId: action.taskId,
-            buttons: this.#working(action.taskId),
-          })
+          await enqueueTelegramProgress(db, action.taskId, `u:${this.#updateId}`, press.id)
           return
         case 'chat': {
           const task = await db.task.findFirst({
@@ -628,4 +654,38 @@ const buttonText = (text: string): string => {
   const line = text.replace(/\s+/g, ' ').trim()
   const chars = Array.from(line === '' ? telegramText.untitled : line)
   return chars.length > 60 ? `${chars.slice(0, 59).join('')}…` : chars.join('')
+}
+
+/**
+ * Core found the topic of a chat gone — the client deleted it in Telegram, which tells a bot
+ * nothing else: the chat is deleted in the cabinet too (owner's request of 15.11.2026).
+ */
+export async function handleTelegramTopicGone(
+  deps: Pick<TelegramIntakeDeps, 'db' | 'now'>,
+  place: { chatId: string; threadId: number },
+): Promise<'deleted' | 'skipped'> {
+  const { db } = deps
+  const identity = await db.channelIdentity.findUnique({
+    where: { channel_externalId: { channel: 'telegram', externalId: place.chatId } },
+    select: { userId: true },
+  })
+  if (!identity) return 'skipped'
+  const sessions = await db.chatSession.findMany({
+    where: { channel: 'telegram', externalChatId: place.chatId, telegramTopicId: place.threadId },
+    select: { tasks: { where: { deletedAt: null }, select: { id: true } } },
+  })
+  const tasks = sessions.flatMap((session) => session.tasks)
+  for (const task of tasks) {
+    try {
+      await removeDialog(db, {
+        userId: identity.userId,
+        taskId: task.id,
+        now: deps.now?.() ?? new Date(),
+      })
+    } catch (error) {
+      // A release in progress keeps the chat; it goes on in the cabinet.
+      if (!isDomainError(error)) throw error
+    }
+  }
+  return tasks.length > 0 ? 'deleted' : 'skipped'
 }

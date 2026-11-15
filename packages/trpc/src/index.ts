@@ -29,6 +29,7 @@ export { readSiteBackupDownload } from './services/site-history.ts'
 export { readChatNotification } from './services/notifications.ts'
 // The updates of the bot of the chat in Telegram, handed by core to web (docs/plan/80-telegram.md).
 export {
+  handleTelegramTopicGone,
   handleTelegramUpdate,
   type IntakeAnswer,
   type TelegramIntakeDeps,
