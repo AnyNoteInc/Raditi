@@ -207,6 +207,22 @@ export {
   type ProjectFileRow,
   type ProjectFileUpload,
 } from './project-files.ts'
+export {
+  applyMemoryChange,
+  chatMemory,
+  closeStaleMemoryReservations,
+  failMemoryTurn,
+  listChatMemory,
+  memoryEntriesOfPass,
+  pendingMemoryChanges,
+  refuseMemoryChange,
+  reserveMemoryChange,
+  type AppliedMemoryChange,
+  type ChatMemory,
+  type ListedMemoryEntry,
+  type MemoryScope,
+  type PendingMemoryChange,
+} from './memory.ts'
 export { PostgresSiteLeaseStore } from './site-leases.ts'
 export { PostgresTurnAssignmentStore } from './turn-assignments.ts'
 export { PostgresTaskTurnAssignmentStore } from './task-turn-assignments.ts'

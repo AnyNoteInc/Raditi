@@ -33,6 +33,8 @@ model User {
   email         String   @unique @db.VarChar(255)
   emailVerified Boolean  @default(false) @map("email_verified")
   image         String?  @db.VarChar(1024)
+  /// «Агент запоминает важное» (docs/plan/84-projects.md, ПР18): off — no tools and no section.
+  agentMemory   Boolean  @default(true) @map("agent_memory")
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -56,6 +58,7 @@ model User {
   agentInstructions       AgentInstructions?
   projectsCreated         Project[]             @relation("ProjectCreator")
   projectFilesUploaded    ProjectFile[]         @relation("ProjectFileUploader")
+  memoryEntries           MemoryEntry[]
 
   @@map("users")
 }
@@ -171,25 +174,27 @@ model Workspace {
   createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  createdBy       User?                  @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  members         Member[]
-  credentialRefs  CredentialRef[]
-  chatSessions    ChatSession[]
-  tasks           Task[]
-  subscriptions   Subscription[]
-  billingAccounts BillingAccount[]
-  orders          Order[]
-  attachments     Attachment[]
-  browserSessions BrowserSession[]
-  webSearchCalls  WebSearchCall[]
-  pages           Page[]
-  pageTrees       PageTree[]
-  chatDocuments   ChatDocument[]
-  usageWindows    WorkspaceUsageWindow[]
-  envVars         WorkspaceEnvVar[]
-  agentSkills     WorkspaceAgentSkill[]
-  projects        Project[]
-  projectFiles    ProjectFile[]
+  createdBy          User?                  @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  members            Member[]
+  credentialRefs     CredentialRef[]
+  chatSessions       ChatSession[]
+  tasks              Task[]
+  subscriptions      Subscription[]
+  billingAccounts    BillingAccount[]
+  orders             Order[]
+  attachments        Attachment[]
+  browserSessions    BrowserSession[]
+  webSearchCalls     WebSearchCall[]
+  pages              Page[]
+  pageTrees          PageTree[]
+  chatDocuments      ChatDocument[]
+  usageWindows       WorkspaceUsageWindow[]
+  envVars            WorkspaceEnvVar[]
+  agentSkills        WorkspaceAgentSkill[]
+  projects           Project[]
+  projectFiles       ProjectFile[]
+  memoryEntries      MemoryEntry[]
+  memoryReservations MemoryReservation[]
 
   @@index([createdById])
   @@map("workspaces")
@@ -416,6 +421,7 @@ model Project {
   createdBy User          @relation("ProjectCreator", fields: [createdById], references: [id], onDelete: Restrict)
   tasks     Task[]
   files     ProjectFile[]
+  memory    MemoryEntry[]
 
   @@index([workspaceId, createdById, activityAt(sort: Desc)], map: "projects_owner_activity_idx", where: raw("deleted_at IS NULL"))
   @@index([purgeAfter], map: "projects_purge_idx", where: raw("deleted_at IS NOT NULL"))
@@ -457,6 +463,78 @@ model ProjectFile {
   @@index([workspaceId])
   @@index([expiresAt], map: "project_files_unbound_idx", where: raw("project_id IS NULL"))
   @@map("project_files")
+}
+
+/// A note of memory (docs/plan/84-projects.md, ПР18, §4.1): of a project, or — project_id NULL —
+/// of the account of its user in the workspace. Only `active` goes to the agent; `proposed` waits
+/// for «Сохранить». A proposal of the agent over an active entry is `pending_action` with, for an
+/// update, its `pending_text`: the entry keeps its text until the client saves the new one.
+model MemoryEntry {
+  id            String    @id @db.Uuid
+  workspaceId   String    @map("workspace_id") @db.Uuid
+  /// Whose note it is: the author of the chat it came from, or the client who wrote it.
+  userId        String    @map("user_id") @db.Uuid
+  projectId     String?   @map("project_id") @db.Uuid
+  /// preference, fact, decision, reference (memoryKinds; CHECK memory_entries_kind_check).
+  kind          String    @db.VarChar(12)
+  /// 1 to 400 characters after trimming (CHECK memory_entries_text_check).
+  text          String    @db.VarChar(400)
+  /// active or proposed (CHECK memory_entries_status_check).
+  status        String    @db.VarChar(10)
+  /// agent or client (CHECK memory_entries_author_check).
+  author        String    @db.VarChar(8)
+  sourceTaskId  String?   @map("source_task_id") @db.Uuid
+  sourceTurn    Int?      @map("source_turn")
+  /// Grows with every change: a change at another version is refused (MEMORY_VERSION_CHANGED).
+  version       Int       @default(1)
+  /// When the client saved it: the agent changes such an entry only by a proposal.
+  confirmedAt   DateTime? @map("confirmed_at") @db.Timestamptz(6)
+  /// update or forget — a proposal of the agent over an active entry (CHECK).
+  pendingAction String?   @map("pending_action") @db.VarChar(8)
+  pendingText   String?   @map("pending_text") @db.VarChar(400)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  workspace    Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project      Project?            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sourceTask   Task?               @relation(fields: [sourceTaskId], references: [id], onDelete: SetNull)
+  reservations MemoryReservation[]
+
+  @@index([userId, projectId, status])
+  @@index([workspaceId])
+  @@index([projectId])
+  @@index([sourceTaskId])
+  @@map("memory_entries")
+}
+
+/// A change of memory the agent reserved in a turn (as page_reservations): `core` applies it when
+/// the pass completed, or closes it refused or failed (docs/plan/84-projects.md, §4.3).
+model MemoryReservation {
+  id          String    @id @db.Uuid
+  workspaceId String    @map("workspace_id") @db.Uuid
+  taskId      String    @map("task_id") @db.Uuid
+  turnNo      Int       @map("turn_no")
+  /// save, update or forget (CHECK memory_reservations_kind_check).
+  kind        String    @db.VarChar(8)
+  entryId     String?   @map("entry_id") @db.Uuid
+  /// memoryReservationPayloadSchema: the arguments and the memory they were asked in.
+  payload     Json
+  /// done, refused or failed (CHECK); NULL — open.
+  outcome     String?   @db.VarChar(8)
+  reason      String?   @db.VarChar(24)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  closedAt    DateTime? @map("closed_at") @db.Timestamptz(6)
+
+  workspace Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  task      Task         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  entry     MemoryEntry? @relation(fields: [entryId], references: [id], onDelete: SetNull)
+
+  @@index([taskId, turnNo], map: "memory_reservations_open_idx", where: raw("outcome IS NULL"))
+  @@index([createdAt], map: "memory_reservations_stale_idx", where: raw("outcome IS NULL"))
+  @@index([workspaceId])
+  @@index([entryId])
+  @@map("memory_reservations")
 }
 
 model Task {
@@ -547,6 +625,8 @@ model Task {
   pageTrees          PageTree[]
   pageFiles          PageFile[]
   chatDocuments      ChatDocument[]
+  memorySources      MemoryEntry[]
+  memoryReservations MemoryReservation[]
 
   @@index([workspaceId, createdAt(sort: Desc)])
   @@index([workspaceId, updatedAt(sort: Desc), id(sort: Desc)], map: "tasks_workspace_updated_idx")
