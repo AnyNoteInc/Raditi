@@ -158,6 +158,21 @@ export const docSectionWriteArgumentsSchema = z.strictObject({
   after: docSectionKeySchema.nullable().optional(),
 })
 export type DocSectionWriteArguments = z.infer<typeof docSectionWriteArgumentsSchema>
+/**
+ * The shape of a section write the role's policy and the tool's parameters take: the keys and
+ * their types, not what the text holds. A heading of the first or the second level, a section
+ * too large or a bad id reach the tool, which answers with what is wrong
+ * (`docSectionWriteArgumentsSchema`), instead of a bare «Invalid MCP request»; the MCP body
+ * limit bounds the strings.
+ */
+export const docSectionWriteShapeSchema = z.strictObject({
+  docId: id,
+  id: z.string(),
+  heading: z.string(),
+  markdown: z.string(),
+  after: z.string().nullable().optional(),
+})
+export type DocSectionWriteShape = z.infer<typeof docSectionWriteShapeSchema>
 
 export const docSectionRemoveArgumentsSchema = z.strictObject({
   docId: id,
@@ -171,7 +186,12 @@ export const docSectionMoveArgumentsSchema = z.strictObject({
   after: docSectionKeySchema.nullable(),
 })
 
-export const docReadArgumentsSchema = z.strictObject({ docId: id })
+/** `from` — a section id: a long document is read in parts, each answer names where the next starts. */
+export const docReadArgumentsSchema = z.strictObject({
+  docId: id,
+  from: docSectionKeySchema.optional(),
+})
+export type DocReadArguments = z.infer<typeof docReadArgumentsSchema>
 /** `view` changes how the finished document is shown (docs/plan/74, Д1); absent — as it was. */
 export const docFinishArgumentsSchema = z.strictObject({
   docId: id,
