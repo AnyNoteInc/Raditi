@@ -28,6 +28,14 @@ const mcpRequestHeaders = [
 ]
 const mcpResponseHeaders = ['content-type', 'mcp-session-id', 'mcp-protocol-version']
 
+/**
+ * The relay of the role mcp for an MCP server with authorization
+ * (docs/plan/80-mcp-server-credentials.md): one name of a skill under /mcp/skill/, nothing after
+ * it — as SKILL_RELAY_PATH of @repo/domain. Which names a turn may use is the relay's to decide,
+ * by the turn's admission and the server's row.
+ */
+export const skillRelayPath = /^\/mcp\/skill\/[a-z](?:[a-z0-9-]{0,30}[a-z0-9])?$/
+
 export const gatewayLimits = Object.freeze({
   // A backstop only. The role llm owns the 10-minute request limit and must reach it first:
   // if this proxy closed the socket earlier, the role would journal its own platform limit
@@ -75,9 +83,19 @@ export function createGateway({ listenHost, clientIp, routes, llmUpstream, mcpUp
       methods: ['GET', 'POST', 'DELETE'],
       group: 'mcp',
     })
+  const skillRoute = routes.includes('mcp')
+    ? { methods: ['GET', 'POST', 'DELETE'], group: 'mcp' }
+    : null
+  const routeOf = (path) => {
+    const exact = targets.get(path)
+    if (exact) return exact
+    if (skillRoute === null || typeof path !== 'string' || !skillRelayPath.test(path))
+      return undefined
+    return { ...skillRoute, url: target(mcpUpstream, path) }
+  }
   let active = 0
   const server = createServer(async (req, res) => {
-    const route = targets.get(req.url)
+    const route = routeOf(req.url)
     const allowedRequestHeaders = route?.group === 'llm' ? llmRequestHeaders : mcpRequestHeaders
     if (
       req.socket.remoteAddress !== clientIp ||
