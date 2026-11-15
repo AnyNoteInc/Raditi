@@ -25,17 +25,19 @@ import { useStartChat } from '@/components/chat/use-start-chat'
 import { useTRPC } from '@/trpc/client'
 
 import { ProjectMenuButton, ProjectStarButton, useProjectActions } from './project-actions'
+import { ProjectContext } from './project-context'
 import { ProjectInstructionsDialog } from './project-instructions'
 import { PROJECTS_HREF, projectPageText, projectsText } from './project-texts'
 import type { ProjectDetails } from './project-types'
+import { useContextMentions } from './use-context-mentions'
 
 /**
  * The page of a project (docs/plan/84-projects.md, ПР6; Main, P-project, P-phone): «← Все
  * проекты», the name and the goal, the star and «⋯»; the field «Новый чат в проекте «X»» — the
  * same `Composer` — that starts a chat in it, and «Чаты проекта». Beside them from `lg` — under
- * them below it — the column of the project: «Инструкции» and «Приватный · Видите только вы».
- * «Контекст», «Память» and «Запланировано» come with their slices (84.10, 84.12, 84.14): rows
- * without data are not drawn.
+ * them below it — the column of the project: «Инструкции», «Контекст» (84.10) and «Приватный ·
+ * Видите только вы»; `@` in the field names the files of the context (ПР24). «Память» and
+ * «Запланировано» come with their slices (84.12, 84.14): rows without data are not drawn.
  */
 export function ProjectView({
   initial,
@@ -64,6 +66,7 @@ export function ProjectView({
   const clientCommands = useClientCommands({ anchor: field })
   const actions = useProjectActions()
   const chatsId = useId()
+  const mentions = useContextMentions(project.id)
 
   useEffect(() => {
     const later = setTimeout(() => setHistory(readPromptHistory(userId)), 0)
@@ -158,6 +161,7 @@ export function ProjectView({
               busy={busy}
               onSend={(text, ids) => start(text, ids, project.id)}
               attachments={attachments}
+              mentions={mentions}
               noSecrets={taskWayText.noSecrets}
               commands={{
                 verdicts: [],
@@ -243,6 +247,9 @@ export function ProjectView({
             >
               {project.instructions ?? projectPageText.instructionsEmpty}
             </Typography>
+          </Box>
+          <Box sx={{ borderTop: 1, borderColor: 'divider' }}>
+            <ProjectContext project={project} />
           </Box>
           <Box
             sx={{

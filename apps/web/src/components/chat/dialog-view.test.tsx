@@ -161,6 +161,16 @@ vi.mock('@/trpc/client', () => ({
       moveToProject: mutation(calls.moveToProject),
       export: query('task.export', calls.exported),
     },
+    projectFile: {
+      pathKey: () => ['projectFile'],
+      list: {
+        queryOptions: (input: { projectId: string }) => ({
+          queryKey: ['projectFile.list', input],
+          queryFn: async () => ({ files: [], bytes: 0, limitBytes: 100 * 1024 * 1024, percent: 0 }),
+        }),
+      },
+      remove: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
+    },
     project: {
       pathKey: () => ['project'],
       list: query('project.list', calls.projects),

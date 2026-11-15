@@ -55,6 +55,16 @@ vi.mock('@/trpc/client', () => ({
       list: { queryOptions: () => ({ queryKey: ['project', 'list'], queryFn: projects }) },
       create: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
     },
+    projectFile: {
+      pathKey: () => ['projectFile'],
+      list: {
+        queryOptions: (input: { projectId: string }) => ({
+          queryKey: ['projectFile.list', input],
+          queryFn: async () => ({ files: [], bytes: 0, limitBytes: 100 * 1024 * 1024, percent: 0 }),
+        }),
+      },
+      remove: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
+    },
     billing: {
       usage: {
         queryKey: () => ['billing', 'usage'],
@@ -67,6 +77,12 @@ vi.mock('@/trpc/client', () => ({
     attachment: {
       start: { mutate: start },
       remove: { mutate: vi.fn() },
+    },
+    projectFile: {
+      start: { mutate: vi.fn() },
+      bind: { mutate: vi.fn() },
+      addText: { mutate: vi.fn() },
+      remove: { mutate: vi.fn(async () => ({})) },
     },
   }),
 }))

@@ -44,6 +44,14 @@ vi.mock('@/trpc/client', () => ({
       update: mutation(calls.update),
     },
   }),
+  useTRPCClient: () => ({
+    projectFile: {
+      start: { mutate: vi.fn() },
+      bind: { mutate: vi.fn() },
+      addText: { mutate: vi.fn() },
+      remove: { mutate: vi.fn(async () => ({})) },
+    },
+  }),
 }))
 
 const NOW = new Date()

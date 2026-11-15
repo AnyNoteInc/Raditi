@@ -42,6 +42,7 @@ import { PanelToggle } from '@/components/application/cabinet-panel'
 import { ConfirmDialog } from '@/components/billing/confirm-dialog'
 import { MoveToProjectDialog, useMoveToProject } from '@/components/projects/move-to-project'
 import { moveText, projectHref } from '@/components/projects/project-texts'
+import { useContextMentions } from '@/components/projects/use-context-mentions'
 import { downloadText } from '@/lib/download-text'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
@@ -576,6 +577,8 @@ export function DialogView({
   // is on the screen its browser does not close for idle, the panel open or not.
   useBrowserWatching({ taskId, enabled: browserLive })
   const attachments = useAttachments()
+  // `@` in a chat of a project names the files of its context (docs/plan/84-projects.md, ПР24).
+  const mentions = useContextMentions(head?.task.project?.id ?? null)
   // The names of the files the messages sent: read once a message has one.
   const sentIds = rows.flatMap((row) =>
     row.type === 'feed.request' && 'attachments' in row && Array.isArray(row.attachments)
@@ -1176,6 +1179,7 @@ export function DialogView({
         effort={settings}
         commands={composerCommands}
         attachments={attachments}
+        mentions={mentions}
         noSecrets={noSecrets}
         restored={undoneWords}
         restoredTaken={wordsTaken}

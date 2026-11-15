@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from 'react'
 import { UsageWindowHint } from '@/components/billing/usage-window-hint'
 import { ProjectPicker, useProjectChoices } from '@/components/projects/project-picker'
 import { projectHref, projectPickerText } from '@/components/projects/project-texts'
+import { useContextMentions } from '@/components/projects/use-context-mentions'
 import {
   pickedOf,
   type PickedProject,
@@ -68,6 +69,8 @@ export function NewChat({
   const { choices, loaded } = useProjectChoices(chosen === undefined)
   const project =
     chosen !== undefined ? chosen : projectOfAddress(projectId, loaded ? choices : null)
+  // `@` names the files of the context of the chosen project (docs/plan/84-projects.md, ПР24).
+  const mentions = useContextMentions(project?.id ?? null)
   // The words kept for a new chat come back here.
   const [draft, setDraft] = useState<string | null>(null)
   // The requests this browser sent before: the arrows of the field bring them back (ВВ23).
@@ -142,6 +145,7 @@ export function NewChat({
         busy={busy}
         onSend={start}
         attachments={attachments}
+        mentions={mentions}
         noSecrets={taskWayText.noSecrets}
         // The window of commands is here as in a chat: the page's own commands work, and of the
         // others it says that they work there.

@@ -754,4 +754,54 @@ describe('a file named by «@» (docs/plan/78-file-mentions.md)', () => {
     typeAt('@style')
     expect(screen.queryByRole('listbox', { name: 'Файлы проекта' })).toBeNull()
   })
+
+  it('puts the root of the files before the path: the context of a project (plan 84, ПР24)', () => {
+    const onSend = vi.fn(async () => true)
+    render(
+      <Composer
+        placeholder="Что поправить?"
+        onSend={onSend}
+        mentions={{
+          paths: ['Брендбук.pdf', 'Фото/витрина.jpg'],
+          state: 'ready',
+          onOpen: vi.fn(),
+          root: '/workspace/project/',
+          texts: { label: 'Файлы контекста проекта', none: 'В контексте проекта нет файлов.' },
+        }}
+      />,
+    )
+    typeAt('Возьми цвета из @бренд')
+    const list = screen.getByRole('listbox', { name: 'Файлы контекста проекта' })
+    expect(within(list).getAllByRole('option')[0]).toHaveAccessibleName('Брендбук.pdf')
+    press('Enter')
+    expect(field().value).toBe('Возьми цвета из @/workspace/project/Брендбук.pdf ')
+    // A folder chosen goes on narrowing under the root.
+    typeAt('и @Фото')
+    press('Enter')
+    expect(field().value).toBe('и @/workspace/project/Фото/')
+    const narrowed = screen.getByRole('listbox', { name: 'Файлы контекста проекта' })
+    expect(within(narrowed).getAllByRole('option')[1]).toHaveAccessibleName('Фото/витрина.jpg')
+    press('ArrowDown')
+    press('Enter')
+    expect(field().value).toBe('и @/workspace/project/Фото/витрина.jpg ')
+  })
+
+  it('says a project has no files in its context in its own words', () => {
+    render(
+      <Composer
+        placeholder="Что поправить?"
+        onSend={vi.fn(async () => true)}
+        mentions={{
+          paths: null,
+          state: 'none',
+          onOpen: vi.fn(),
+          root: '/workspace/project/',
+          texts: { label: 'Файлы контекста проекта', none: 'В контексте проекта нет файлов.' },
+        }}
+      />,
+    )
+    typeAt('@')
+    const list = screen.getByRole('listbox', { name: 'Файлы контекста проекта' })
+    expect(within(list).getByRole('status')).toHaveTextContent('В контексте проекта нет файлов.')
+  })
 })

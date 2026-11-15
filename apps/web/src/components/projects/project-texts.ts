@@ -81,7 +81,7 @@ export const projectsEmptyText = Object.freeze({
   ],
 } as const)
 
-/** P-create (ПР5), without the context for now (slice 84.10). */
+/** P-create (ПР5); its context — `contextText`. */
 export const projectCreateText = Object.freeze({
   title: 'Создание проекта',
   name: 'Над чем вы работаете?',
@@ -98,7 +98,7 @@ export const projectCreateText = Object.freeze({
 export const projectPageText = Object.freeze({
   back: 'Все проекты',
   placeholder: (name: string) => `Новый чат в проекте «${name}»`,
-  appliesHere: 'Агент учитывает инструкции и цель проекта',
+  appliesHere: 'Агент учитывает инструкции, цель и контекст проекта',
   chats: 'Чаты проекта',
   noChats: 'Здесь появятся чаты этого проекта.',
   hints: [
@@ -143,6 +143,74 @@ export const projectPickerText = Object.freeze({
   applies: (instructions: boolean) =>
     instructions ? 'Агент учтёт инструкции и цель проекта' : 'Агент учтёт цель проекта',
   openProject: 'Открыть проект',
+})
+
+/**
+ * «Контекст» of a project (ПР8, ПР24, §4.8; P-create, P-create-menu, P-context-menu, P-context,
+ * P-context-text, P-phone-sheet): the files and texts the agent reads in every chat of the project.
+ */
+export const contextText = Object.freeze({
+  title: 'Контекст',
+  optional: 'необязательно',
+  add: 'Добавить',
+  addContext: 'Добавить контекст',
+  addTitle: 'Добавить в контекст',
+  addLabel: 'Добавить в контекст проекта',
+  createHint: 'Файлы и тексты. Агент читает их в каждом чате проекта.',
+  dropHint: 'Перетащите файлы сюда',
+  device: 'Загрузить с устройства',
+  deviceHint: 'Документы, таблицы, фото и код',
+  files: 'Файлы…',
+  folder: 'Папку…',
+  text: 'Добавить текстовое содержимое',
+  textHint: 'Заметка или текст до 100 000 знаков',
+  githubLink: 'Ссылка на GitHub',
+  githubLinkHint: 'Публичный репозиторий — только чтение',
+  gitlab: 'Подключить GitLab',
+  gitlabHint: 'Код, запросы на слияние и сборки',
+  github: 'Подключить GitHub',
+  githubHint: 'Код, запросы на слияние и сборки',
+  soon: 'Скоро',
+  limits: 'Файлы до 20 МБ, всего до 100 МБ на проект',
+  lead: 'Агент видит эти материалы в каждом чате проекта и сам находит в них нужное. Картинки он не видит — может только поставить их на страницу; PDF, таблицы и тексты читает.',
+  used: (percent: number) => `Занято ${percent} % места`,
+  usedOf: (bytes: number, limit: number) =>
+    `${Math.ceil(bytes / (1024 * 1024))} из ${Math.round(limit / (1024 * 1024))} МБ`,
+  usedLabel: 'Занятое место',
+  list: 'Файлы и тексты',
+  empty: 'Здесь будут файлы и тексты проекта: брендбук, прайс, заметки.',
+  rowEmpty: 'Файлы и тексты, которые агент читает в каждом чате проекта',
+  more: (count: number) => `и ещё ${count} ${plural(count, 'файл', 'файла', 'файлов')}`,
+  open: 'Открыть контекст проекта',
+  kindText: 'Текст',
+  added: (at: Date) => `добавлен ${formatMoscowDay(at)}`,
+  download: (name: string) => `Скачать «${name}»`,
+  remove: (name: string) => `Убрать «${name}»`,
+  removed: (name: string) => `«${name}» больше не в контексте.`,
+  removeFailed: 'Не удалось убрать файл. Попробуйте ещё раз.',
+  uploading: (percent: number) => `Загружается… ${percent} %`,
+  progress: (name: string) => `Загрузка «${name}»`,
+  retry: 'Повторить',
+  retryNamed: (name: string) => `Загрузить «${name}» ещё раз`,
+  failed: 'Не удалось загрузить файл.',
+  loading: 'Загружаем контекст',
+  loadFailed: 'Не удалось загрузить контекст. Обновите страницу.',
+  done: 'Готово',
+  close: 'Закрыть',
+  waitUploads: 'Дождитесь, пока загрузятся файлы.',
+  textTitle: 'Добавить текстовое содержимое',
+  textName: 'Название',
+  textNamePlaceholder: 'Например, ответы на отзывы',
+  textBody: 'Текст',
+  textNote: 'Текст сохранится файлом и попадёт в контекст проекта. Без паролей и ключей.',
+  textCount: (count: number, limit: number) =>
+    `${count.toLocaleString('ru-RU')} из ${limit.toLocaleString('ru-RU')}`,
+  textNameRequired: 'Назовите текст',
+  textBodyRequired: 'Напишите текст',
+  textCancel: 'Отмена',
+  textAdd: 'Добавить',
+  mentionLabel: 'Файлы контекста проекта',
+  mentionNone: 'В контексте проекта нет файлов.',
 })
 
 /** «Перенести в проект…» and «Убрать из проекта» of a chat (ПР2). */

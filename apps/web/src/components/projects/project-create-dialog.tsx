@@ -10,20 +10,26 @@ import Typography from '@mui/material/Typography'
 import { useTheme } from '@mui/material/styles'
 import useMediaQuery from '@mui/material/useMediaQuery'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useId, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
 
 import { callErrorText } from '@/components/chat/call-error'
 import { uuidv7 } from '@/components/chat/uuid'
 import { useTRPC } from '@/trpc/client'
 
-import { projectCreateText } from './project-texts'
+import { ContextAddMenu } from './context-add-menu'
+import { ContextDropArea, ContextUploadChips } from './context-parts'
+import { ContextTextDialog } from './context-text-dialog'
+import { contextText, projectCreateText } from './project-texts'
 import type { PickedProject } from './project-types'
+import { useContextUploads } from './use-context-uploads'
 
 /**
  * «Создание проекта» (docs/plan/84-projects.md, ПР5; P-create): «Над чем вы работаете?» — the name,
  * «Чего вы хотите достичь?» — the goal, and «Создать проект». 600px wide, the whole screen on a
  * phone. The id comes from the browser, so a repeat after a lost answer finds the same project.
- * The context of the board comes with slice 84.10: it is not here yet.
+ * «Контекст» (84.10; P-create, P-create-menu): files dropped or chosen and texts are uploaded at
+ * once, before the project exists, and `project.create({ fileIds })` takes them with the project in
+ * one transaction. A window closed without a project removes the files it uploaded.
  */
 export function ProjectCreateDialog({
   open,
@@ -86,12 +92,25 @@ function CreateForm({
   // One id per project being created, kept for the repeats of the same press.
   const pending = useRef<string | null>(null)
   const nameId = useId()
+  const contextId = useId()
+  const uploads = useContextUploads({ projectId: null })
+  const [writing, setWriting] = useState(false)
+  const discard = useRef(uploads.discardAll)
+  useEffect(() => {
+    discard.current = uploads.discardAll
+  })
+  // Closed without a project — by «Отмена», Escape or a press beside it: its files go too.
+  useEffect(() => () => discard.current(), [])
 
   async function submit(event: FormEvent) {
     event.preventDefault()
     const shownName = name.replace(/\s+/gu, ' ').trim()
     if (shownName === '') {
       setMissing(true)
+      return
+    }
+    if (uploads.uploading) {
+      setError(contextText.waitUploads)
       return
     }
     pending.current ??= uuidv7()
@@ -101,8 +120,10 @@ function CreateForm({
         projectId: pending.current,
         name: shownName,
         ...(goal.trim() === '' ? {} : { goal }),
+        ...(uploads.readyIds.length === 0 ? {} : { fileIds: [...uploads.readyIds] }),
       })
       pending.current = null
+      uploads.keepAll()
       void queryClient.invalidateQueries({ queryKey: trpc.project.pathKey() })
       onCreated({
         id: created.projectId,
@@ -155,6 +176,30 @@ function CreateForm({
         onChange={(event) => setGoal(event.target.value)}
         slotProps={{ htmlInput: { maxLength: projectLimits.goalChars } }}
       />
+      <Box>
+        <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mb: 1 }}>
+          <Typography id={contextId} component="span" sx={{ fontSize: 14, fontWeight: 500 }}>
+            {contextText.title}
+          </Typography>
+          <Typography component="span" sx={{ fontSize: 12, color: 'text.secondary' }}>
+            {contextText.optional}
+          </Typography>
+        </Box>
+        <ContextDropArea onFiles={uploads.add} labelledBy={contextId}>
+          <ContextUploadChips
+            uploads={uploads.items}
+            onRetry={uploads.retry}
+            onRemove={uploads.remove}
+          />
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.75, flexWrap: 'wrap' }}>
+            <ContextAddMenu variant="pill" onFiles={uploads.add} onText={() => setWriting(true)} />
+            <Typography sx={{ flex: '1 1 200px', fontSize: 13, color: 'text.secondary' }}>
+              {contextText.createHint}
+            </Typography>
+          </Box>
+        </ContextDropArea>
+      </Box>
+      <ContextTextDialog open={writing} onClose={() => setWriting(false)} onAdd={uploads.addText} />
       {error ? <Alert severity="error">{error}</Alert> : null}
       <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, flexWrap: 'wrap' }}>
         <Button onClick={onClose} disabled={create.isPending} sx={{ minHeight: 44 }}>

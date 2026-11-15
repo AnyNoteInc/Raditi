@@ -59,6 +59,16 @@ vi.mock('@/trpc/client', () => ({
       archive: noop,
       moveToProject: noop,
     },
+    projectFile: {
+      pathKey: () => ['projectFile'],
+      list: {
+        queryOptions: (input: { projectId: string }) => ({
+          queryKey: ['projectFile.list', input],
+          queryFn: async () => ({ files: [], bytes: 0, limitBytes: 100 * 1024 * 1024, percent: 0 }),
+        }),
+      },
+      remove: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
+    },
     billing: {
       usage: {
         queryKey: () => ['billing', 'usage'],
@@ -69,6 +79,12 @@ vi.mock('@/trpc/client', () => ({
   useTRPCClient: () => ({
     task: { list: { query: calls.chats } },
     attachment: { start: { mutate: vi.fn() }, remove: { mutate: vi.fn() } },
+    projectFile: {
+      start: { mutate: vi.fn() },
+      bind: { mutate: vi.fn() },
+      addText: { mutate: vi.fn() },
+      remove: { mutate: vi.fn(async () => ({})) },
+    },
   }),
 }))
 
@@ -119,7 +135,10 @@ describe('the page of a project (docs/plan/84-projects.md, ПР6)', () => {
     // The column holds only what exists in this slice.
     const column = screen.getByRole('complementary', { name: 'Проекты' })
     expect(within(column).getByText('Инструкции')).toBeTruthy()
-    expect(within(column).queryByText('Контекст')).toBeNull()
+    expect(within(column).getByRole('heading', { name: 'Контекст' })).toBeTruthy()
+    expect(
+      within(column).getByText('Файлы и тексты, которые агент читает в каждом чате проекта'),
+    ).toBeTruthy()
     expect(within(column).queryByText('Память')).toBeNull()
     expect(within(column).queryByText('Запланировано')).toBeNull()
     expect(column.textContent).toContain('Приватный · Видите только вы')
