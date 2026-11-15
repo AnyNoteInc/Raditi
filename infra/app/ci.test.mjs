@@ -1260,3 +1260,16 @@ test('the core of the smoke labels its turn containers apart from `pnpm dev`', (
   assert.notEqual(label, /^SANDBOX_DEPLOYMENT=(.*)$/m.exec(read('.env.example'))?.[1])
   assert.notEqual(label, 'local')
 })
+
+test('every folder the deploy copies to the server is in the repository', () => {
+  // v1.59.0 failed to deploy: deploy.yml still copied ci/, which plan 83 removed.
+  const sources = [
+    ...read('.github/workflows/deploy.yml').matchAll(
+      /^\s*rsync -a(?: --delete)? (\S+?)\/? "server:/gm,
+    ),
+  ]
+    .map(([, source]) => source)
+    .filter((source) => !source.startsWith('"$'))
+  assert.ok(sources.length >= 3, `the copies of deploy.yml: ${sources.join(', ')}`)
+  for (const source of sources) assert.ok(existsSync(join(root, source)), `${source} is missing`)
+})
