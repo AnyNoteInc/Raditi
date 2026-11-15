@@ -25,17 +25,6 @@ x-hardened: &hardened
 x-internal-hosts: &internal-hosts
   - vault.raditi.internal:10.10.0.10
   - s3.raditi.internal:10.10.0.10
-  - git.raditi.internal:10.10.0.10
-
-# Our Gitea (git of turns, site repositories, /release): https only, the internal CA
-x-gitea: &gitea-url
-  GITEA_URL: https://git.raditi.internal:3443
-
-# Previews of chats on this machine (SINGLE_SERVER=on, owner's answer of 08.11.2026): one address
-# for web, core, mcp and the gateway; the wildcard of PREVIEW_BASE_DOMAIN comes by DNS-01 (reg.ru)
-x-preview-address: &preview-address
-  PREVIEW_BASE_DOMAIN: ${PREVIEW_BASE_DOMAIN:?Set PREVIEW_BASE_DOMAIN}
-  PREVIEW_SCHEME: https
 
 # Published pages on this machine (docs/plan/69-pages.md, Ст3, Ст26): one domain for web, mcp, the
 # pages listener of preview and the browser of chats — core names no page address; the wildcard of PAGES_BASE_DOMAIN comes by DNS-01 (reg.ru)
@@ -78,44 +67,19 @@ services:
 
   web:
     environment:
-      <<: [*s3, *gitea-url, *preview-address, *pages-address]
+      <<: [*s3, *pages-address]
       # The panel of the cloud browser: Traefik routes this path of the apex to the stream gateway
       BROWSER_STREAM_PUBLIC_URL: wss://${APP_DOMAIN}/v1/browser/stream
     extra_hosts: *internal-hosts
 
   core:
-    # Previews in this machine's Docker under runsc (PREVIEW_EXECUTOR=local): the socket's group
-    group_add: ['${DOCKER_GID:?Set DOCKER_GID, the group of /var/run/docker.sock}']
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      <<: [*s3, *gitea-url, *preview-address]
-      SINGLE_SERVER: 'on'
+      <<: *s3
       # Eight turns of a workspace at once, and no other limit of turns (owner's request of
       # 13.11.2026, docs/plan/70-turn-without-time-limit.md, ВР13, ВР26)
       WORKSPACE_TURN_LIMIT: '8'
-      PREVIEW_EXECUTOR: local
-      PREVIEW_RUNTIME: runsc
-      SANDBOX_DOCKER_SOCKET: /var/run/docker.sock
-      SANDBOX_NETWORK_GUARD_IMAGE: ${SANDBOX_NETWORK_GUARD_IMAGE:?Set the digest-pinned network guard image}
-      PREVIEW_SITE_IMAGES: ${PREVIEW_SITE_IMAGES:?Set PREVIEW_SITE_IMAGES}
-      PREVIEW_FORWARDER_IMAGE: ${PREVIEW_FORWARDER_IMAGE:?Set the digest-pinned preview forwarder image}
-      PREVIEW_BROWSER_IMAGE: ${PREVIEW_BROWSER_IMAGE:?Set the digest-pinned preview browser image}
-      PREVIEW_DB_IMAGE: ${PREVIEW_DB_IMAGE:?Set the digest-pinned preview database image}
-      # A preview publishes its entry on the private address; the gateway and mcp reach it there
-      PREVIEW_UPSTREAM_HOST: 10.10.0.10
-      PREVIEW_GATEWAY_PORT: '8090'
-      PREVIEW_RELAY_GATEWAY_HOST: 10.10.0.10
-      GIT_CA_FILE: /run/raditi/vault-ca.pem
-      GIT_MIRROR_DIR: /work/mirrors
-      # The release API for the deploy jobs: they run in the host network and reach core's fixed
-      # address on core-egress directly (spec §10, «Выпуск»)
-      RELEASE_API_HOST: 172.29.83.10
-      RELEASE_API_PORT: '8085'
-      RELEASE_API_PUBLIC_URL: http://172.29.83.10:8085
       LLM_CONTROL_URL: http://10.10.0.10:${LLM_GATEWAY_PUBLISH:-8084}
       BROWSER_WORKER_URL: http://10.10.0.10:8086
-      SANDBOX_EGRESS_REFUSED_SUBNETS: ${SANDBOX_EGRESS_REFUSED_SUBNETS:?Set SANDBOX_EGRESS_REFUSED_SUBNETS}
     extra_hosts: *internal-hosts
     networks:
       core-data: {}
@@ -227,8 +191,8 @@ services:
     volumes:
       - s3-data:/v/s3
 
-  # Host network: the agent's browser on a preview drives Chromium on the host's loopback
-  # (MCP_BROWSER_PROFILE=local); its port 8082 is closed from outside by raditi-host.nft.
+  # Host network: the sandbox gateway reaches it on the private address 10.10.0.10; its port 8082
+  # is closed from outside by raditi-host.nft.
   mcp:
     <<: *hardened
     image: ${MCP_IMAGE:?Set the digest-pinned mcp image}
@@ -238,9 +202,8 @@ services:
     command: ['--env-file=/run/raditi/app.env', 'dist/main.js']
     depends_on:
       postgres: { condition: service_healthy }
-      s3: { condition: service_healthy }
     environment:
-      <<: [*s3, *preview-address, *pages-address]
+      <<: *pages-address
       NODE_ENV: production
       APP_ENV: production
       VAULT_ADDR: https://vault.raditi.internal:8200
@@ -249,11 +212,6 @@ services:
       # The host of the Host sandbox-gw sends upstream (SANDBOX_MCP_UPSTREAM of the runner), no port
       MCP_ALLOWED_HOSTS: 10.10.0.10
       BROWSER_WORKER_URL: http://10.10.0.10:8086
-      SINGLE_SERVER: 'on'
-      MCP_CONTENT_PROFILE: local
-      MCP_BROWSER_PROFILE: local
-      S3_BUCKET_ARTIFACTS: raditi-artifacts
-      PREVIEW_UPSTREAM_HOST: 10.10.0.10
       HOME: /tmp
     volumes:
       - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/mcp' }
@@ -329,12 +287,11 @@ services:
     mem_limit: 2g
     pids_limit: 1024
 
-  # The gateway of previews (8090, the wildcard route of traefik/dynamic/preview.yml) and the stream
-  # gateway of the cloud browser (8091). 8090 is published on the private address for the relay
-  # of the agent's browser, which comes from the gateway of preview-out (PREVIEW_BROWSER_RELAYS).
+  # The pages listener (8092, traefik/dynamic/pages.yml) and the stream gateway of the cloud browser
+  # (8091); no gateway of previews since plan 83.
   preview:
     <<: *hardened
-    image: ${PREVIEW_GATEWAY_IMAGE:?Set the digest-pinned preview gateway image}
+    image: ${PREVIEW_GATEWAY_IMAGE:?Set the digest-pinned preview image}
     init: true
     user: '10009:10009'
     command: ['--env-file=/run/raditi/app.env', 'dist/main.js']
@@ -343,12 +300,10 @@ services:
     environment:
       NODE_ENV: production
       APP_ENV: production
-      <<: [*preview-address, *gitea-url, *pages-address]
+      <<: *pages-address
       APP_URL: https://${APP_DOMAIN}
-      PREVIEW_GATEWAY_PORT: '8090'
       # The pages listener (traefik/dynamic/pages.yml); PAGES_COOKIE_SECRET is in app.env
       PAGES_PORT: '8092'
-      PREVIEW_BROWSER_RELAYS: 172.29.90.1/32
       BROWSER_WORKER_URL: http://10.10.0.10:8086
       BROWSER_STREAM_PORT: '8091'
       HOME: /tmp
@@ -361,7 +316,7 @@ services:
         - node
         - -e
         - >-
-          fetch('http://127.0.0.1:8090/__raditi/health').then(r => process.exit(r.status === 200 ? 0 : 1), () => process.exit(1))
+          fetch('http://127.0.0.1:8092/__raditi/health').then(r => process.exit(r.status === 200 ? 0 : 1), () => process.exit(1))
       interval: 10s
       timeout: 5s
       retries: 6
@@ -370,80 +325,7 @@ services:
     cpus: 1
     mem_limit: 512m
     pids_limit: 256
-    ports: ['10.10.0.10:8090:8090']
-    networks: [stream-edge, preview-data, preview-out]
-
-  # Gitea of the platform (spec §10): site repositories, git of turns, platform/ci and Actions.
-  # Repository workflows are off (WORKFLOW_DIRS names a path no repository has): only the scoped
-  # workflows of platform/ci run, deploy.yml on a release tag. gitea-setup.mjs makes the
-  # accounts, the organisations and platform/ci (README.md, «Gitea»).
-  gitea:
-    image: ${GITEA_IMAGE:?Set the digest-pinned Gitea image}
-    restart: unless-stopped
-    user: '1000:1000'
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    logging: *logging
-    environment:
-      GITEA__security__INSTALL_LOCK: 'true'
-      GITEA__database__DB_TYPE: sqlite3
-      GITEA__server__PROTOCOL: https
-      GITEA__server__HTTP_PORT: '3000'
-      GITEA__server__DOMAIN: git.raditi.internal
-      GITEA__server__ROOT_URL: https://git.raditi.internal:3443/
-      GITEA__server__CERT_FILE: /run/raditi/git.pem
-      GITEA__server__KEY_FILE: /run/raditi/git.key
-      GITEA__server__DISABLE_SSH: 'true'
-      GITEA__server__START_SSH_SERVER: 'false'
-      GITEA__service__DISABLE_REGISTRATION: 'true'
-      GITEA__actions__ENABLED: 'true'
-      GITEA__actions__DEFAULT_ACTIONS_URL: self
-      GITEA__actions__WORKFLOW_DIRS: .git/raditi-no-repository-workflows
-      GITEA__webhook__ALLOWED_HOST_LIST: private,loopback
-      GITEA__repository__DEFAULT_BRANCH: main
-      GITEA__log__LEVEL: Warn
-    ports: ['10.10.0.10:3443:3000']
-    volumes:
-      - gitea-data:/var/lib/gitea
-      - gitea-config:/etc/gitea
-      - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/gitea' }
-    healthcheck:
-      test:
-        [
-          'CMD-SHELL',
-          'wget -q -O /dev/null --no-check-certificate https://127.0.0.1:3000/api/healthz || exit 1',
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 30s
-    cpus: 1
-    mem_limit: 1g
-    pids_limit: 512
-    networks: [server-pub]
-
-  # The deploy runner of `sites` (ci/README.md): label `deploy` on the core image of this release,
-  # written by deploy.sh into server/runner/runner.yaml. Host network: its jobs reach Vault, S3 and
-  # Gitea on 10.10.0.10 and the release API on 172.29.83.10; they get no Docker socket.
-  gitea-runner:
-    image: ${GITEA_RUNNER_IMAGE:?Set the digest-pinned gitea/runner image}
-    restart: unless-stopped
-    network_mode: host
-    depends_on:
-      gitea: { condition: service_healthy }
-    environment:
-      GITEA_INSTANCE_URL: https://git.raditi.internal:3443
-      GITEA_RUNNER_REGISTRATION_TOKEN_FILE: /run/raditi/registration-token
-      GITEA_RUNNER_NAME: server-deploy
-      GITEA_RUNNER_LABELS: deploy:docker://${CORE_IMAGE}
-      CONFIG_FILE: /config/runner.yaml
-      SSL_CERT_FILE: /run/raditi/ca.pem
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - gitea-runner-data:/data
-      - ./server/runner:/config:ro
-      - { <<: *secrets, source: '${SECRETS_DIR:-/run/raditi}/gitea-runner' }
-    logging: *logging
+    networks: [stream-edge, preview-data]
 
   # The sandbox VM's two processes (infra/sandbox/docker-compose.yml), here on the same Docker.
   watchdog:
@@ -515,18 +397,7 @@ networks:
   server-pub:
     driver_opts: { com.docker.network.bridge.name: '${BRIDGE_PREFIX:-rd}-pub' }
   stream-edge: { internal: true } # Traefik ↔ the stream gateway
-  preview-data: { internal: true }
-  # Pinned: a connection to 10.10.0.10:8090 arrives as its gateway (PREVIEW_BROWSER_RELAYS)
-  preview-out:
-    driver_opts: { com.docker.network.bridge.name: '${BRIDGE_PREFIX:-rd}-preview' }
-    ipam:
-      config:
-        - subnet: 172.29.90.0/24
-          gateway: 172.29.90.1
+  preview-data: { internal: true } # preview ↔ PostgreSQL
 
 volumes:
   s3-data: { external: true, name: '${VOLUME_PREFIX:-raditi-app}-s3' }
-  gitea-data: { external: true, name: '${VOLUME_PREFIX:-raditi-app}-gitea' }
-  # app.ini with the keys Gitea generates once (SECRET_KEY encrypts the secrets of Actions)
-  gitea-config: { external: true, name: '${VOLUME_PREFIX:-raditi-app}-gitea-config' }
-  gitea-runner-data: { external: true, name: '${VOLUME_PREFIX:-raditi-app}-gitea-runner' }
