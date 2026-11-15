@@ -13,9 +13,19 @@ import { AppIcon } from '@/components/application/app-icon'
 
 import { CHATS_HREF, newChatHref } from './chat-address'
 import { useChatDetails, useChatThinking } from './chat-details'
+import { ChatInfoDialog } from './chat-info-dialog'
 import { clientCommandText } from './chat-texts'
 
-const PAGE_COMMANDS = ['new', 'sessions', 'details', 'thinking', 'themes'] as const
+const PAGE_COMMANDS = [
+  'new',
+  'sessions',
+  'usage',
+  'status',
+  'context',
+  'details',
+  'thinking',
+  'themes',
+] as const
 export type PageCommandId = (typeof PAGE_COMMANDS)[number]
 export const isPageCommand = (id: ChatCommandId): id is PageCommandId =>
   (PAGE_COMMANDS as readonly ChatCommandId[]).includes(id)
@@ -68,17 +78,21 @@ function ThemeMenu({ anchor, onClose }: { anchor: HTMLElement; onClose: () => vo
 }
 
 /**
- * The commands of the page that need no chat and work the same on a new chat and in one that goes
- * on: `/new`, `/sessions`, `/details`, `/thinking` and `/themes`. `run` returns what a screen reader is told;
+ * The commands of the page that need no verdict and work the same on a new chat and in one that
+ * goes on: `/new`, `/sessions`, `/usage`, `/status`, `/context` (a window of what the server reads,
+ * owner's request of 15.11.2026), `/details`, `/thinking` and `/themes`. `run` returns what a screen reader is told;
  * `menu` stands in the screen that uses it. `/models` and `/export` are the screens' own: they
  * reach what the screen holds. `/help` is the field's.
  */
 export function useClientCommands({
   projectId,
+  taskId = null,
   anchor,
 }: {
   /** The project a new chat keeps. */
   projectId: string | null
+  /** The chat `/usage`, `/status` and `/context` tell of; null — a new chat. */
+  taskId?: string | null
   /** What the menu of `/themes` stands over. */
   anchor: RefObject<HTMLElement | null>
 }): {
@@ -89,6 +103,7 @@ export function useClientCommands({
   const { toggle: toggleDetails } = useChatDetails()
   const { thinking, toggle: toggleThinking } = useChatThinking()
   const [themeAnchor, setThemeAnchor] = useState<HTMLElement | null>(null)
+  const [info, setInfo] = useState<'usage' | 'status' | 'context' | null>(null)
 
   function run(id: PageCommandId): string | undefined {
     switch (id) {
@@ -106,14 +121,25 @@ export function useClientCommands({
       case 'themes':
         setThemeAnchor(anchor.current)
         return undefined
+      case 'usage':
+      case 'status':
+      case 'context':
+        setInfo(id)
+        return undefined
     }
   }
 
   return {
     run,
-    menu:
-      themeAnchor === null ? null : (
-        <ThemeMenu anchor={themeAnchor} onClose={() => setThemeAnchor(null)} />
-      ),
+    menu: (
+      <>
+        {themeAnchor === null ? null : (
+          <ThemeMenu anchor={themeAnchor} onClose={() => setThemeAnchor(null)} />
+        )}
+        {info === null ? null : (
+          <ChatInfoDialog kind={info} taskId={taskId} onClose={() => setInfo(null)} />
+        )}
+      </>
+    ),
   }
 }

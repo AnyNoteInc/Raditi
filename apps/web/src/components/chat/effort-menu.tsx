@@ -3,14 +3,17 @@
 import { reasoningEfforts, type ReasoningEffort } from '@repo/domain/llm/model-class'
 import Box from '@mui/material/Box'
 import ButtonBase from '@mui/material/ButtonBase'
+import Divider from '@mui/material/Divider'
 import ListItemText from '@mui/material/ListItemText'
 import Menu from '@mui/material/Menu'
 import MenuItem from '@mui/material/MenuItem'
+import Switch from '@mui/material/Switch'
 import Typography from '@mui/material/Typography'
 import { useId, useImperativeHandle, useRef, useState, type Ref } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 
+import { useChatThinking } from './chat-details'
 import { effortText } from './chat-texts'
 import { fieldControl } from './composer'
 
@@ -30,7 +33,9 @@ export interface EffortMenuHandle {
  * the row of the field, the brain beside the level chosen (29.10.2026), and a menu of the three
  * under it. The same on a new dialog and in one that goes on, where the level holds from the
  * agent's next turn. `/models` opens the same menu (docs/plan/61-chats-first.md, §5.14), also while
- * the level cannot be changed: then it shows the level and says when it can.
+ * the level cannot be changed: then it shows the level and says when it can. Under the levels —
+ * the switch of `/thinking` (owner's request of 15.11.2026): it is this viewer's choice, open
+ * whatever the level, and the menu stays open on it.
  */
 export function EffortMenu({
   value,
@@ -50,6 +55,7 @@ export function EffortMenu({
   const menuId = useId()
   const open = anchor !== null
   const button = useRef<HTMLButtonElement>(null)
+  const { thinking, toggle: toggleThinking } = useChatThinking()
   useImperativeHandle(handle, () => ({ open: () => setAnchor(button.current) }), [])
   return (
     <>
@@ -132,6 +138,29 @@ export function EffortMenu({
             </Box>
           </MenuItem>
         ))}
+        <Divider component="li" role="presentation" sx={{ my: 0.5 }} />
+        <MenuItem
+          role="menuitemcheckbox"
+          aria-checked={thinking}
+          onClick={() => toggleThinking()}
+          sx={{ gap: 1.5, py: 0.5 }}
+        >
+          <ListItemText
+            primary={effortText.showThinking}
+            secondary={effortText.showThinkingHint}
+            slotProps={{
+              primary: { sx: { fontSize: 14, fontWeight: 500 } },
+              secondary: { sx: { fontSize: 13 } },
+            }}
+          />
+          <Switch
+            size="small"
+            checked={thinking}
+            tabIndex={-1}
+            slotProps={{ input: { 'aria-hidden': true } }}
+            sx={{ pointerEvents: 'none' }}
+          />
+        </MenuItem>
       </Menu>
     </>
   )

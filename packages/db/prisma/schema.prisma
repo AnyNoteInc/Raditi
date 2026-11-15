@@ -1259,6 +1259,8 @@ model LlmModel {
   modelClass          ModelClass @map("model_class")
   /// Output tokens reserved before a call, not the provider's output cap (spec §17).
   reserveOutputTokens Int        @default(32000) @map("reserve_output_tokens")
+  /// Tokens one request may hold: what `/context` of a chat measures by; NULL — not known.
+  contextTokens       Int?       @map("context_tokens")
   enabled             Boolean    @default(true)
   createdAt           DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt           DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)

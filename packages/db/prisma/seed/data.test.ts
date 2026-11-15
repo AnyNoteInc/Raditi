@@ -329,7 +329,9 @@ describe('subscription catalogue defaults', () => {
     for (const model of llmModelSeeds) {
       expect(model.enabled).toBe(false)
       expect(model.reserveOutputTokens).toBe(32_000)
+      expect(model.contextTokens).toBe(1_000_000)
       expect(Object.keys(model).sort()).toEqual([
+        'contextTokens',
         'enabled',
         'modelClass',
         'name',

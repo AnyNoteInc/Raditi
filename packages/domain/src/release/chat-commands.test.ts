@@ -141,7 +141,7 @@ describe('the commands of a dialog', () => {
     })
   })
 
-  it('lists the nineteen commands of the plan, each with its slash, words and group', () => {
+  it('lists the twenty-two commands of the plan, each with its slash, words and group', () => {
     const release =
       'Установить проверенные изменения на сайт: с резервной копией и проверкой после.'
     const compact = 'Агент заменит длинную историю кратким пересказом и продолжит с ним.'
@@ -218,6 +218,27 @@ describe('the commands of a dialog', () => {
         'chat',
       ],
       [
+        'usage',
+        '/usage',
+        'Использование',
+        'Сколько кредитов осталось и сколько взял этот чат.',
+        'chat',
+      ],
+      [
+        'status',
+        '/status',
+        'Состояние чата',
+        'Что сейчас с чатом: агент, проект, модель, очередь.',
+        'chat',
+      ],
+      [
+        'context',
+        '/context',
+        'Контекст агента',
+        'Насколько заполнена память агента в этом чате.',
+        'chat',
+      ],
+      [
         'details',
         '/details',
         'Подробности работы',
@@ -272,6 +293,9 @@ describe('the commands of a dialog', () => {
       'sessions',
       'export',
       'models',
+      'usage',
+      'status',
+      'context',
       'details',
       'thinking',
       'themes',

@@ -523,6 +523,9 @@ export const effortText = Object.freeze({
   locked: 'Уровень можно поменять, пока чат ждёт вас.',
   /** The same menu of a chat that has ended: it will not wait for anyone again. */
   ended: 'Чат завершён: уровень уже не поменять.',
+  /** The switch of `/thinking` under the levels (owner's request of 15.11.2026). */
+  showThinking: 'Показывать размышления',
+  showThinkingHint: 'Ход мыслей агента в ленте — то же, что /thinking',
 })
 
 /** What the commands of the page say (docs/plan/61-chats-first.md, §5.14). */

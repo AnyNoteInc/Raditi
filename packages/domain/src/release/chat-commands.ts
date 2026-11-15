@@ -26,6 +26,9 @@ export const chatCommandIds = [
   'sessions',
   'export',
   'models',
+  'usage',
+  'status',
+  'context',
   'details',
   'thinking',
   'themes',
@@ -35,7 +38,17 @@ export type ChatCommandId = (typeof chatCommandIds)[number]
 
 /** The commands the page runs by itself: no verdict of the server, and no row in the feed. */
 type ClientCommandId =
-  'new' | 'sessions' | 'export' | 'models' | 'details' | 'thinking' | 'themes' | 'help'
+  | 'new'
+  | 'sessions'
+  | 'export'
+  | 'models'
+  | 'usage'
+  | 'status'
+  | 'context'
+  | 'details'
+  | 'thinking'
+  | 'themes'
+  | 'help'
 /** The commands the server gives a verdict on. */
 export type ServerCommandId = Exclude<ChatCommandId, ClientCommandId>
 
@@ -184,6 +197,31 @@ export const chatCommands: Readonly<Record<ChatCommandId, ChatCommand>> = Object
     description: 'Посмотреть модель и выбрать уровень размышления.',
     group: 'chat',
     scope: 'client',
+  }),
+  // What the chat costs and where it stands (owner's request of 15.11.2026): the page asks the
+  // server (`task.info`), the bot of Telegram answers the same words (`chatInfoLines`).
+  usage: Object.freeze({
+    slash: '/usage',
+    label: 'Использование',
+    description: 'Сколько кредитов осталось и сколько взял этот чат.',
+    group: 'chat',
+    scope: 'client',
+  }),
+  status: Object.freeze({
+    slash: '/status',
+    label: 'Состояние чата',
+    description: 'Что сейчас с чатом: агент, проект, модель, очередь.',
+    group: 'chat',
+    scope: 'client',
+    needs: 'session',
+  }),
+  context: Object.freeze({
+    slash: '/context',
+    label: 'Контекст агента',
+    description: 'Насколько заполнена память агента в этом чате.',
+    group: 'chat',
+    scope: 'client',
+    needs: 'session',
   }),
   details: Object.freeze({
     slash: '/details',
