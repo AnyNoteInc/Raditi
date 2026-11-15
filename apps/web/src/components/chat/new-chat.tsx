@@ -1,17 +1,18 @@
 'use client'
 
 import Box from '@mui/material/Box'
+import Link from '@mui/material/Link'
 import Typography from '@mui/material/Typography'
 import { useTheme } from '@mui/material/styles'
 import useMediaQuery from '@mui/material/useMediaQuery'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useRouter } from 'next/navigation'
+import NextLink from 'next/link'
 import { useEffect, useRef, useState } from 'react'
 
-import { useTRPC } from '@/trpc/client'
+import { UsageWindowHint } from '@/components/billing/usage-window-hint'
+import { ProjectPicker, useProjectChoices } from '@/components/projects/project-picker'
+import { projectHref, projectPickerText } from '@/components/projects/project-texts'
+import { pickedOf, type PickedProject } from '@/components/projects/project-types'
 
-import { sendErrorText } from './call-error'
-import { chatHref } from './chat-address'
 import { takeChatDraft } from './chat-draft'
 import { useRememberedEffort } from './chat-effort'
 import { useGreeting } from './chat-greeting'
@@ -19,19 +20,18 @@ import { riseIn } from './chat-motion'
 import { composerText, taskWayText } from './chat-texts'
 import { isPageCommand, useClientCommands } from './client-commands'
 import { Composer } from './composer'
-import { dialogListKey } from './dialog-list'
 import { EffortMenu, type EffortMenuHandle } from './effort-menu'
-import { markNewDialog } from './new-dialog-hint'
-import { readPromptHistory, rememberPrompt } from './prompt-history'
+import { readPromptHistory } from './prompt-history'
 import { useAttachments } from './use-attachments'
-import { uuidv7 } from './uuid'
-import { UsageWindowHint } from '@/components/billing/usage-window-hint'
+import { useStartChat } from './use-start-chat'
 
 /**
  * The screen a chat starts from (docs/plan/53-chat-preview-release.md, R9; docs/plan/61-chats-
  * first.md, К6). The first words start a chat: the browser invents its id, so a repeat of the
- * same request after a lost answer finds the same chat, and the screen moves to it. A chat has no
- * project (docs/plan/83-remove-projects.md): the server decides how the agent works. «Размышление» picks how hard the model thinks — the same menu changes it
+ * same request after a lost answer finds the same chat, and the screen moves to it. The pill of the
+ * field chooses the project the chat starts in, «Без проекта» by default; `?project=<id>` and the
+ * page of a project choose it at once (docs/plan/84-projects.md, ПР30). Changing it keeps the words
+ * and the files of the field. «Размышление» picks how hard the model thinks — the same menu changes it
  * later in the chat. Beside the list at the root of the section (`beside`) the heading of the page
  * is the list's, so the screen takes the level below; below `md` that screen stands hidden on the
  * page, and it leaves the words kept for a new chat to the one the client will see.
@@ -41,6 +41,7 @@ export function NewChat({
   userName = null,
   beside = false,
   speech = false,
+  projectId = null,
 }: {
   userId: string
   /** The client's name: the greeting calls them by it (owner's request of 09.11.2026). */
@@ -48,18 +49,22 @@ export function NewChat({
   beside?: boolean
   /** Dictation is set up here (docs/plan/75-chat-input-output.md, ВВ16). */
   speech?: boolean
+  /** `?project=<id>`: the project chosen at once, when it is one of the user's (ПР30). */
+  projectId?: string | null
 }) {
-  const trpc = useTRPC()
-  const queryClient = useQueryClient()
-  const router = useRouter()
   // The level chosen last in this browser (owner's request of 09.11.2026).
   const [effort, setEffort] = useRememberedEffort()
   const greeting = useGreeting(userName)
   const attachments = useAttachments()
-  // One id per chat being started: a repeat after a lost answer lands on the same one.
-  const pending = useRef<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const create = useMutation(trpc.task.create.mutationOptions())
+  const { start: startChat, error, busy } = useStartChat({ userId, effort })
+  // The project chosen by the pill; `undefined` — the one of the address, once the list says it.
+  const [chosen, setChosen] = useState<PickedProject | null | undefined>(
+    projectId === null ? null : undefined,
+  )
+  const { choices } = useProjectChoices(chosen === undefined)
+  const fromAddress = choices.find((each) => each.id === projectId?.toLowerCase())
+  // Not one of the user's live projects (or not read yet): the chat starts without one.
+  const project = chosen !== undefined ? chosen : fromAddress ? pickedOf(fromAddress) : null
   // The words kept for a new chat come back here.
   const [draft, setDraft] = useState<string | null>(null)
   // The requests this browser sent before: the arrows of the field bring them back (ВВ23).
@@ -84,31 +89,8 @@ export function NewChat({
     if (shown) field.current?.focus({ preventScroll: true })
   }, [shown])
 
-  async function start(text: string, attachmentIds: readonly string[]): Promise<boolean> {
-    pending.current ??= uuidv7()
-    setError(null)
-    try {
-      const created = await create.mutateAsync({
-        taskId: pending.current,
-        text,
-        ...(attachmentIds.length > 0 ? { attachments: [...attachmentIds] } : {}),
-        effort,
-      })
-      pending.current = null
-      rememberPrompt(userId, text)
-      void queryClient.invalidateQueries({ queryKey: dialogListKey })
-      // The new chat set credits aside: the ring of the credits reads them again.
-      void queryClient.invalidateQueries({ queryKey: trpc.billing.usage.queryKey() })
-      // The client watches the chat from its start: a browser launched before its first read
-      // opens beside it too (docs/plan/59, И3).
-      markNewDialog(created.taskId)
-      router.push(chatHref(created.taskId))
-      return true
-    } catch (failure) {
-      setError(sendErrorText(failure))
-      return false
-    }
-  }
+  const start = (text: string, attachmentIds: readonly string[]) =>
+    startChat(text, attachmentIds, project?.id ?? null)
 
   return (
     <Box
@@ -135,16 +117,22 @@ export function NewChat({
             fontWeight: 500,
             letterSpacing: '-0.01em',
             lineHeight: 1.25,
+            overflowWrap: 'anywhere',
           }}
         >
-          {greeting}
+          {project === null ? greeting : projectPickerText.heading(project.name)}
         </Typography>
+        {project?.goal ? (
+          <Typography sx={{ mt: 1, color: 'text.secondary', fontSize: 15 }}>
+            {project.goal}
+          </Typography>
+        ) : null}
       </Box>
 
       <Composer
-        placeholder={composerText.newPlaceholder}
+        placeholder={project === null ? composerText.newPlaceholder : projectPickerText.placeholder}
         error={error}
-        busy={create.isPending}
+        busy={busy}
         onSend={start}
         attachments={attachments}
         noSecrets={taskWayText.noSecrets}
@@ -164,8 +152,21 @@ export function NewChat({
         restored={draft}
         history={history}
         speech={speech}
+        project={<ProjectPicker value={project} onChange={setChosen} disabled={busy} />}
         effort={<EffortMenu value={effort} onChange={setEffort} handle={effortMenu} />}
       />
+      {project !== null ? (
+        <Typography
+          variant="body2"
+          color="text.secondary"
+          sx={{ display: 'flex', flexWrap: 'wrap', gap: '0 12px', mt: -1.5, px: 1 }}
+        >
+          {projectPickerText.applies(project.hasInstructions)}
+          <Link component={NextLink} href={projectHref(project.id)} sx={{ fontWeight: 500 }}>
+            {projectPickerText.openProject}
+          </Link>
+        </Typography>
+      ) : null}
       <UsageWindowHint />
       {clientCommands.menu}
     </Box>

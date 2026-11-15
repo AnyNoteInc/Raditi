@@ -180,6 +180,8 @@ export interface ProjectListRow {
   starred: boolean
   archived: boolean
   chats: number
+  /** It has instructions: the menu of the field says what the agent will take (ПР30). */
+  hasInstructions: boolean
   activityAt: Date
   createdAt: Date
   /** When a project of the trash is purged; null outside it. */
@@ -224,6 +226,7 @@ export async function listProjects(
       id: true,
       name: true,
       goal: true,
+      instructions: true,
       starredAt: true,
       archivedAt: true,
       purgeAfter: true,
@@ -245,6 +248,7 @@ export async function listProjects(
     starred: row.starredAt !== null,
     archived: row.archivedAt !== null,
     chats: row._count.tasks,
+    hasInstructions: row.instructions !== null,
     activityAt: row.activityAt,
     createdAt: row.createdAt,
     purgeAfter: row.purgeAfter,

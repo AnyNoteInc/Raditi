@@ -31,7 +31,9 @@ vi.mock('@/trpc/client', () => ({
       remove: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
       pin: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
       archive: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
+      moveToProject: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
     },
+    project: { pathKey: () => ['project'] },
     billing: { usage: { queryKey: () => ['billing.usage'] } },
   }),
 }))

@@ -12,6 +12,7 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { ConfirmDialog } from '@/components/billing/confirm-dialog'
+import { moveText } from '@/components/projects/project-texts'
 import { nbsp } from '@/lib/nbsp'
 import { useTRPC } from '@/trpc/client'
 
@@ -48,7 +49,10 @@ export function usePinArchive() {
   }
 }
 
-/** «⋯» of a dialog: «Закрепить», «В архив», «Переименовать» and «Удалить». */
+/**
+ * «⋯» of a dialog: «Закрепить», «В архив», «Перенести в проект…» and «Убрать из проекта»,
+ * «Переименовать» and «Удалить».
+ */
 export function DialogMenuButton({
   title,
   onRename,
@@ -56,6 +60,7 @@ export function DialogMenuButton({
   quiet = false,
   pin,
   archive,
+  project,
 }: {
   /** The name of the dialog, so the button says whose actions it opens. */
   title: string
@@ -65,6 +70,11 @@ export function DialogMenuButton({
   pin?: { pinned: boolean; onToggle: () => void }
   /** «В архив» / «Из архива» (ВВ21); absent — not offered here. */
   archive?: { archived: boolean; onToggle: () => void }
+  /**
+   * «Перенести в проект…» and, for a chat in a project, «Убрать из проекта»
+   * (docs/plan/84-projects.md, ПР2); absent — not offered here.
+   */
+  project?: { inProject: boolean; onMove: () => void; onTakeOut: () => void }
   /** In a row of the list: seen on hover and focus of the row, or while the menu is open. */
   quiet?: boolean
 }) {
@@ -140,6 +150,34 @@ export function DialogMenuButton({
               <AppIcon name="archive" size={18} />
             </ListItemIcon>
             {archive.archived ? dialogMenuText.unarchive : dialogMenuText.archive}
+          </MenuItem>
+        ) : null}
+        {project ? (
+          <MenuItem
+            onClick={() => {
+              setAnchor(null)
+              project.onMove()
+            }}
+            sx={{ minHeight: { xs: 44 }, fontSize: 14 }}
+          >
+            <ListItemIcon>
+              <AppIcon name="projects" size={18} />
+            </ListItemIcon>
+            {moveText.move}
+          </MenuItem>
+        ) : null}
+        {project?.inProject ? (
+          <MenuItem
+            onClick={() => {
+              setAnchor(null)
+              project.onTakeOut()
+            }}
+            sx={{ minHeight: { xs: 44 }, fontSize: 14 }}
+          >
+            <ListItemIcon>
+              <AppIcon name="close" size={18} />
+            </ListItemIcon>
+            {moveText.takeOut}
           </MenuItem>
         ) : null}
         <MenuItem

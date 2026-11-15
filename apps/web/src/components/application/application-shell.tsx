@@ -7,11 +7,14 @@ import { ApplicationToolbar, type Crumb } from './application-toolbar'
 import { CabinetShell } from './cabinet-shell'
 import type { ApplicationUser } from './user-avatar'
 
-/** The list of projects: the page a shell without crumbs of its own stands for. */
+/**
+ * «Проекты» (docs/plan/84-projects.md, ПР4): the crumbs of a shell that names none of its own. The
+ * list itself and the page of a project go without the bar and name themselves in a heading.
+ */
 const PROJECTS_CRUMBS: readonly Crumb[] = [{ label: 'Проекты' }]
 
 /**
- * A page of the cabinet without a panel — the projects and a new project: the rail, breadcrumbs
+ * A page of the cabinet without a panel — «Проекты», a project, «Страницы»: the rail, breadcrumbs
  * on top of the content card, one account menu (docs/plan/64-cabinet-navigation.md, Н1).
  */
 export function ApplicationShell({

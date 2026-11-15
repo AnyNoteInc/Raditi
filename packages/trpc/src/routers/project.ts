@@ -42,6 +42,8 @@ const projectListItem = z.strictObject({
   archived: z.boolean(),
   /** Its chats that are shown. */
   chats: z.number().int().min(0),
+  /** The menu of the field names what the agent will take (ПР30). */
+  hasInstructions: z.boolean(),
   activityAt: z.date(),
   createdAt: z.date(),
   /** In «Корзина»: when it is purged (ПР20); null elsewhere. */

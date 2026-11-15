@@ -10,16 +10,25 @@ import { ArchiveButton, DialogList } from './dialog-list'
 import { SearchDialog } from './search-dialog'
 import { declared } from './testing'
 
-const { listPage, segment, rename, remove, pin, archive, search } = vi.hoisted(() => ({
-  listPage: vi.fn<(input: { cursor?: string }) => Promise<DialogListPage>>(),
-  segment: { current: null as string | null },
-  rename: vi.fn<(input: { taskId: string; title: string }) => Promise<{ title: string }>>(),
-  remove: vi.fn<(input: { taskId: string }) => Promise<{ removed: true }>>(),
-  pin: vi.fn<(input: { taskId: string; pinned: boolean }) => Promise<{ pinned: boolean }>>(),
-  archive:
-    vi.fn<(input: { taskId: string; archived: boolean }) => Promise<{ archived: boolean }>>(),
-  search: vi.fn<(input: { query: string }) => Promise<{ items: DialogListItem[] }>>(),
-}))
+const { listPage, segment, rename, remove, pin, archive, search, moveToProject, projects } =
+  vi.hoisted(() => ({
+    listPage: vi.fn<(input: { cursor?: string }) => Promise<DialogListPage>>(),
+    segment: { current: null as string | null },
+    rename: vi.fn<(input: { taskId: string; title: string }) => Promise<{ title: string }>>(),
+    remove: vi.fn<(input: { taskId: string }) => Promise<{ removed: true }>>(),
+    pin: vi.fn<(input: { taskId: string; pinned: boolean }) => Promise<{ pinned: boolean }>>(),
+    archive:
+      vi.fn<(input: { taskId: string; archived: boolean }) => Promise<{ archived: boolean }>>(),
+    search: vi.fn<(input: { query: string }) => Promise<{ items: DialogListItem[] }>>(),
+    moveToProject:
+      vi.fn<
+        (input: {
+          taskId: string
+          projectId: string | null
+        }) => Promise<{ projectId: string | null }>
+      >(),
+    projects: vi.fn(async () => ({ items: [] as unknown[] })),
+  }))
 
 const mutation = <I, O>(fn: (input: I) => Promise<O>) => ({
   mutationOptions: () => ({ mutationFn: fn }),
@@ -43,6 +52,11 @@ vi.mock('@/trpc/client', () => ({
       remove: mutation(remove),
       pin: mutation(pin),
       archive: mutation(archive),
+      moveToProject: mutation(moveToProject),
+    },
+    project: {
+      pathKey: () => ['project'],
+      list: { queryOptions: () => ({ queryKey: ['project.list'], queryFn: projects }) },
     },
     billing: { usage: { queryKey: () => ['billing.usage'] } },
   }),
@@ -297,6 +311,96 @@ describe('pinned, archived and found chats (docs/plan/75, ВВ21)', () => {
         expect.anything(),
       ),
     )
+  })
+
+  describe('chats in projects (docs/plan/84-projects.md, ПР2, ПР6)', () => {
+    const KOLOS = { id: '0199a3f2-0000-7000-8000-00000000c001', name: 'Колос' }
+    const TEA = { id: '0199a3f2-0000-7000-8000-00000000c002', name: 'Магазин чая' }
+    const listed = (project: { id: string; name: string }) => ({
+      ...project,
+      goal: null,
+      starred: false,
+      archived: false,
+      chats: 1,
+      hasInstructions: false,
+      activityAt: now,
+      createdAt: now,
+      purgeAfter: null,
+    })
+
+    it('names the project of a chat before its status', async () => {
+      listPage.mockResolvedValue({
+        pinned: [],
+        items: [dialog('1', { project: KOLOS }), dialog('2', { title: 'Без проекта' })],
+        nextCursor: null,
+      })
+      showList()
+      const label = await screen.findByText('Колос')
+      expect(label.closest('a')?.textContent).toContain('Поменять цену капучино')
+      expect(screen.getAllByText('Колос')).toHaveLength(1)
+    })
+
+    it('moves a chat into another project from its menu, and out of it', async () => {
+      listPage.mockResolvedValue({
+        pinned: [],
+        items: [dialog('1', { project: KOLOS })],
+        nextCursor: null,
+      })
+      projects.mockResolvedValue({ items: [listed(KOLOS), listed(TEA)] })
+      moveToProject.mockImplementation(async (input) => ({ projectId: input.projectId }))
+      showList()
+      fireEvent.click(await screen.findByRole('button', { name: /Действия с чатом/ }))
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Перенести в проект…' }))
+      const window_ = await screen.findByRole('dialog', { name: 'Перенести в проект' })
+      // The one it is in cannot be chosen.
+      expect(
+        (await within(window_).findByRole('button', { name: /Колос/ })).hasAttribute('disabled'),
+      ).toBe(true)
+      fireEvent.click(within(window_).getByRole('button', { name: /Магазин чая/ }))
+      await waitFor(() =>
+        expect(moveToProject).toHaveBeenCalledWith(
+          expect.objectContaining({ taskId: dialog('1').id, projectId: TEA.id }),
+          expect.anything(),
+        ),
+      )
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+
+      fireEvent.click(screen.getByRole('button', { name: /Действия с чатом/ }))
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Убрать из проекта' }))
+      await waitFor(() =>
+        expect(moveToProject).toHaveBeenLastCalledWith(
+          expect.objectContaining({ taskId: dialog('1').id, projectId: null }),
+          expect.anything(),
+        ),
+      )
+    })
+
+    it('says why the server would not take a chat out while the agent works', async () => {
+      listPage.mockResolvedValue({
+        pinned: [],
+        items: [dialog('1', { project: KOLOS, status: 'running' })],
+        nextCursor: null,
+      })
+      moveToProject.mockRejectedValue(
+        Object.assign(new Error('Агент сейчас работает в этом чате'), {
+          data: { code: 'CONFLICT', domainCode: 'TASK_PROJECT_BUSY' },
+        }),
+      )
+      showList()
+      fireEvent.click(await screen.findByRole('button', { name: /Действия с чатом/ }))
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Убрать из проекта' }))
+      expect((await screen.findByRole('alert')).textContent).toBe(
+        'Агент сейчас работает в этом чате.',
+      )
+    })
+
+    it('offers no «Убрать из проекта» to a chat outside projects', async () => {
+      listPage.mockResolvedValue({ pinned: [], items: [dialog('1')], nextCursor: null })
+      showList()
+      fireEvent.click(await screen.findByRole('button', { name: /Действия с чатом/ }))
+      expect(screen.getByRole('menuitem', { name: 'Перенести в проект…' })).toBeTruthy()
+      expect(screen.queryByRole('menuitem', { name: 'Убрать из проекта' })).toBeNull()
+    })
   })
 
   it('open «Архив» from the bottom in a window, read it only then, and restore a chat', async () => {

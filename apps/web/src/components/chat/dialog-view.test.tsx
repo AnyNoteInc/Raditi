@@ -73,6 +73,10 @@ const calls = vi.hoisted(() => ({
   setEffort: vi.fn<(input: { taskId: string; effort: string }) => Promise<{ effort: string }>>(),
   rename: vi.fn<(input: { taskId: string; title: string }) => Promise<{ title: string }>>(),
   remove: vi.fn<(input: { taskId: string }) => Promise<{ removed: true }>>(),
+  moveToProject: vi.fn(async (input: { taskId: string; projectId: string | null }) => ({
+    projectId: input.projectId,
+  })),
+  projects: vi.fn(async (_input: unknown) => ({ items: [] as unknown[] })),
   replace: vi.fn<(href: string) => void>(),
   push: vi.fn<(href: string) => void>(),
   setPreference: vi.fn<(preference: string) => void>(),
@@ -154,9 +158,12 @@ vi.mock('@/trpc/client', () => ({
       setEffort: mutation(calls.setEffort),
       rename: mutation(calls.rename),
       remove: mutation(calls.remove),
+      moveToProject: mutation(calls.moveToProject),
       export: query('task.export', calls.exported),
     },
     project: {
+      pathKey: () => ['project'],
+      list: query('project.list', calls.projects),
       agentNotes: query('project.agentNotes', calls.agentNotes),
       setAgentNotes: mutation(calls.setAgentNotes),
     },
@@ -810,6 +817,27 @@ describe('the five kinds of a chat (docs/plan/61-chats-first.md, §5.6)', () => 
     expect(hint()).toContain('Не отправляйте в чат пароли и ключи')
     // Keys and passwords go to «Настройки → Переменные» (docs/plan/83-remove-projects.md, БП4).
     expect(hint()).toContain('«Настройки → Переменные»')
+  })
+
+  it('heads a chat of a project with «Проект «X» / its name» and moves it out (docs/plan/84, ПР2, ПР6)', async () => {
+    const PROJECT = { id: '0199a3f2-0000-7000-8000-00000000c001', name: 'Колос' }
+    showDialog(waiting({ task: { turnNo: 1, project: PROJECT } }))
+    const crumb = await screen.findByRole('link', { name: 'Проект «Колос»' })
+    expect(crumb.getAttribute('href')).toBe(`/projects/${PROJECT.id}`)
+    fireEvent.click(screen.getByRole('button', { name: /Действия с чатом/ }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Убрать из проекта' }))
+    await waitFor(() =>
+      expect(calls.moveToProject).toHaveBeenCalledWith(
+        { taskId: TASK_ID, projectId: null },
+        expect.anything(),
+      ),
+    )
+  })
+
+  it('heads a chat outside projects with its name alone', async () => {
+    showDialog()
+    await screen.findByRole('heading', { level: 1 })
+    expect(screen.queryByRole('link', { name: /^Проект «/ })).toBeNull()
   })
 
   describe('`/undo`', () => {

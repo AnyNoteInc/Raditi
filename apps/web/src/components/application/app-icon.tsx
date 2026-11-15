@@ -88,6 +88,16 @@ const paths = {
   /** «Размышление»: how hard the model thinks (owner's request of 29.10.2026); Lucide «brain», ISC. */
   brain:
     'M12 5a3 3 0 1 0-6 .1 4 4 0 0 0-2.5 5.8 4 4 0 0 0 .6 6.6A4 4 0 1 0 12 18ZM12 5a3 3 0 1 1 6 .1 4 4 0 0 1 2.5 5.8 4 4 0 0 1-.6 6.6A4 4 0 1 1 12 18ZM15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4M17.6 6.5a3 3 0 0 0 .4-1.4M6 5.1a3 3 0 0 0 .4 1.4M3.5 10.9a4 4 0 0 1 .6-.4M19.9 10.5a4 4 0 0 1 .6.4M6 18a4 4 0 0 1-2-.5M20 17.5a4 4 0 0 1-2 .5',
+  // «Проекты» (docs/plan/84-projects.md, §4.8), as the boards draw them.
+  /** «В избранное»: a star; `filled` — the project is starred. */
+  star: 'M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9L12 3Z',
+  /** «Контекст» of a project: sheets laid on each other. */
+  layers: 'M12 3 3 7.5l9 4.5 9-4.5L12 3ZM3 12l9 4.5 9-4.5M3 16.5 12 21l9-4.5',
+  /** «Инструкции» of a project: a book with its lines. */
+  instructions:
+    'M7 3h11a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2ZM5 19a2 2 0 0 1 2-2h12M9 7h6M9 10.5h4',
+  /** «Вернуть» from the trash: an arrow that turns back. */
+  restore: 'M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5',
 } as const
 
 export type AppIconName = keyof typeof paths
@@ -95,10 +105,13 @@ export type AppIconName = keyof typeof paths
 export function AppIcon({
   name,
   size = 20,
+  filled = false,
   style,
 }: {
   name: AppIconName
   size?: number
+  /** The shape is filled with the colour of its line: a starred project. */
+  filled?: boolean
   style?: CSSProperties
 }) {
   return (
@@ -106,7 +119,7 @@ export function AppIcon({
       width={size}
       height={size}
       viewBox="0 0 24 24"
-      fill="none"
+      fill={filled ? 'currentColor' : 'none'}
       stroke="currentColor"
       strokeWidth="1.7"
       strokeLinecap="round"

@@ -207,6 +207,7 @@ export function Composer({
   busy = false,
   onSend,
   commands,
+  project,
   effort,
   attachments,
   noSecrets = feedInputText.noSecrets,
@@ -236,6 +237,11 @@ export function Composer({
    */
   onSend: (text: string, attachmentIds: readonly string[]) => Promise<boolean>
   commands?: ComposerCommands
+  /**
+   * The pill of the project a new chat starts in, between the paperclip and «Размышление»
+   * (docs/plan/84-projects.md, ПР30); absent — the field has none.
+   */
+  project?: ReactNode
   /** «Размышление»: the menu of how hard the model thinks, after the paperclip. */
   effort?: ReactNode
   /** The files of the message (docs/plan/57-browser-tasks.md, Б26); absent — no files here. */
@@ -893,6 +899,7 @@ export function Composer({
                 />
               </>
             ) : null}
+            {project}
             {effort}
           </Box>
           {filesWait !== null ? (

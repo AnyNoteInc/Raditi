@@ -9,4 +9,9 @@ describe('the addresses of chats', () => {
     expect(chatHref(task)).toBe(`/chats/${task}`)
     expect(newChatHref()).toBe('/chats/new')
   })
+
+  it('chooses the project of a new chat by the address (docs/plan/84-projects.md, ПР30)', () => {
+    expect(newChatHref(task)).toBe(`/chats/new?project=${task}`)
+    expect(newChatHref(null)).toBe('/chats/new')
+  })
 })

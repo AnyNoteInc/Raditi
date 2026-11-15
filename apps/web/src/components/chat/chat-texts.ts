@@ -363,21 +363,6 @@ export const chatsText = Object.freeze({
   title: 'Чаты',
   newChat: 'Новый чат',
   back: 'К чатам',
-  groupButton: 'Группировка чатов',
-  groupTitle: 'Показывать чаты',
-  groupList: 'Одним списком',
-  groupProjects: 'По проектам',
-  /** A folder that is closed holds a chat that waits for the client. */
-  attention: 'Есть чаты, которые ждут вас',
-  noProject: 'Без проекта',
-  pickerTitle: 'Проект для этого чата',
-  addProject: 'Добавить проект',
-  /** Where the pill of the project stands locked: a file is bound to its site. */
-  lockedProject: 'Чтобы сменить проект, уберите прикреплённые файлы.',
-  openProject: (name: string) => `Открыть проект «${name}»`,
-  unavailableProject: 'Сейчас этот проект недоступен для чата. Попробуйте ещё раз немного позже.',
-  importingProject: 'Файлы сайта ещё загружаются.',
-  importFailedProject: 'Файлы сайта не загрузились.',
 })
 
 export const listText = Object.freeze({

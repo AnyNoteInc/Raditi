@@ -262,6 +262,13 @@ describe.skipIf(!databaseUrl)('PostgreSQL: projects and the chats in them', () =
     const ids = async (view?: 'all' | 'starred' | 'archive' | 'trash') =>
       (await caller.project.list(view === undefined ? undefined : { view })).items.map((p) => p.id)
     expect(await ids()).toEqual([b, a])
+    // The menu of the field says what the agent will take from a project (ПР30).
+    await caller.project.setInstructions({ projectId: a, text: 'Пишите коротко' })
+    const listed = (await caller.project.list()).items
+    expect(listed.map((p) => [p.id, p.hasInstructions])).toEqual([
+      [a, true],
+      [b, false],
+    ])
     await caller.project.star({ projectId: a, starred: true })
     expect(await ids('starred')).toEqual([a])
     await caller.project.archive({ projectId: b, archived: true })

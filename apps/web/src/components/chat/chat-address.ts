@@ -7,5 +7,9 @@ export const NEW_CHAT_HREF = `${CHATS_HREF}/${NEW_CHAT_SEGMENT}`
 
 export const chatHref = (taskId: string) => `${CHATS_HREF}/${taskId}`
 
-/** A new chat, with this project chosen in its picker when one is named. */
-export const newChatHref = () => NEW_CHAT_HREF
+/**
+ * A new chat, with this project chosen in its picker when one is named (docs/plan/84-projects.md,
+ * ПР30).
+ */
+export const newChatHref = (projectId: string | null = null) =>
+  projectId === null ? NEW_CHAT_HREF : `${NEW_CHAT_HREF}?project=${encodeURIComponent(projectId)}`
