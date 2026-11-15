@@ -687,7 +687,110 @@ export function* holdTheBrowser(ctx, facts) {
   })
 }
 
+// ─── Sites of pages (docs/plan/73-pages-sites.md, scenario Q) ───────────────────
+
+/** The answer of a tool that must not be a refusal; its code breaks the program otherwise. */
+function accepted(answer, what) {
+  // A tool of the pages refuses with `{code, message}` and nothing else (pages-service.ts).
+  if (answer && typeof answer.code === 'string' && typeof answer.message === 'string')
+    throw new ScriptBroken(`${what} was refused: ${answer.code}`)
+  return answer
+}
+
+/** A page of a site as the agent writes it: links to its pages from the root (Дер20). */
+const sitePage = (title, body) =>
+  `<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>${title}</title></head>` +
+  `<body><nav><a href="/">Главная</a> <a href="/uslugi">Услуги</a> ` +
+  `<a href="/uslugi/remont">Ремонт</a></nav><h1>${title}</h1><p>${body}</p></body></html>`
+
+/**
+ * Scenario Q, the first turn: a site of three pages — a home page, /uslugi and /uslugi/remont
+ * under it — three files of the outbox and three publications, the second and the third into the
+ * site the first one made; each page links to the others from the root.
+ */
+export function* publishSite(ctx, facts) {
+  yield call('bash', { command: 'mkdir -p /workspace/out', description: 'Make the outbox' })
+  const pages = [
+    { file: 'glavnaya.html', title: 'Главная', path: null, body: ctx.word },
+    { file: 'uslugi.html', title: 'Услуги', path: '/uslugi', body: 'Что мы делаем.' },
+    { file: 'remont.html', title: 'Ремонт', path: '/uslugi/remont', body: 'Ремонт квартир.' },
+  ]
+  for (const page of pages)
+    yield call('write', {
+      filePath: `/workspace/out/${page.file}`,
+      content: sitePage(page.title, page.body),
+    })
+  facts.published = []
+  for (const page of pages) {
+    const answer = accepted(
+      yield call('page_publish', {
+        file: page.file,
+        title: page.title,
+        ...(page.path ? { treeId: facts.treeId, path: page.path } : {}),
+      }),
+      `page_publish of ${page.file}`,
+    )
+    facts.treeId ??= answer.treeId
+    facts.published.push({ pageId: answer.pageId, path: answer.path, url: answer.url })
+  }
+  return final({
+    summary: 'Published a site of three pages',
+    message: `Сайт опубликован: ${facts.published[0].url}`,
+  })
+}
+
+/** The page of a site at a path, as `page_tree` names it. */
+function* nodeAt(treeId, path) {
+  const tree = accepted(yield call('page_tree', { treeId }), 'page_tree')
+  const node = (tree.pages ?? []).find((page) => page.path === path)
+  if (!node) throw new ScriptBroken(`the site has no page at ${path}`)
+  return node
+}
+
+/** The one site of the chat's workspace, as `page_list` names it. */
+function* onlySite() {
+  const list = accepted(yield call('page_list', {}), 'page_list')
+  const sites = (list.sites ?? []).filter((site) => !site.deleted)
+  if (sites.length !== 1) throw new ScriptBroken(`page_list named ${sites.length} sites`)
+  return sites[0]
+}
+
+/** Scenario Q, the second turn: «Услуги» becomes «Цены» at /ceny, its page below goes with it. */
+export function* renameServices(ctx, facts) {
+  const site = yield* onlySite()
+  const node = yield* nodeAt(site.treeId, '/uslugi')
+  facts.pageId = node.pageId
+  accepted(
+    yield call('page_update', {
+      pageId: node.pageId,
+      expectedVersion: node.version,
+      title: 'Цены',
+      segment: 'ceny',
+    }),
+    'page_update',
+  )
+  return final({ summary: 'Renamed a page', message: 'Страница «Услуги» теперь «Цены».' })
+}
+
+/** Scenario Q, the third turn: the client asked to delete «Ремонт»; it goes to the trash. */
+export function* deleteRepair(ctx, facts) {
+  const site = yield* onlySite()
+  const node = yield* nodeAt(site.treeId, '/ceny/remont')
+  facts.pageId = node.pageId
+  facts.answer = accepted(
+    yield call('page_delete', { pageIds: [node.pageId], confirmedByClient: true }),
+    'page_delete',
+  )
+  return final({
+    summary: 'Deleted a page to the trash',
+    message: 'Страница «Ремонт» перенесена в корзину. 30 дней её можно вернуть.',
+  })
+}
+
 export const PROGRAMS = Object.freeze({
+  publishSite,
+  renameServices,
+  deleteRepair,
   publishPlainNews,
   retitlePage,
   plainAnswer,

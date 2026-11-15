@@ -59,6 +59,8 @@ export class PagePublications {
   async filesOf(taskId: string, turn: number): Promise<Map<string, FileReservation>> {
     const rows = await this.#deps.db.pageReservation.findMany({
       where: { taskId, turnNo: turn, fileName: { not: null } },
+      // In the order the agent asked: the deliveries of the end of the turn follow it.
+      orderBy: { createdAt: 'asc' },
       include: {
         page: {
           select: {

@@ -34,6 +34,7 @@ const context = {
     llm: 41007,
     preview: 41008,
     stream: 41009,
+    pages: 41012,
     browser: 41010,
     zai: 41011,
   },
@@ -51,6 +52,8 @@ const context = {
     metrics: 'm'.repeat(48),
     auth: 'a'.repeat(48),
     previewSession: 'p'.repeat(48),
+    pagesCookie: 'c'.repeat(64),
+    pagesSigning: 's'.repeat(64),
     workerToken: 'w'.repeat(48),
   },
   caFile: '/tmp/run/ca.pem',
@@ -86,7 +89,8 @@ describe('options and names', () => {
     assert.deepEqual(scenariosToRun(['F']), ['A', 'D', 'E', 'F'])
     assert.deepEqual(scenariosToRun(['K', 'B']), ['A', 'D', 'B', 'K'])
     assert.deepEqual(scenariosToRun(['P']), ['A', 'P'])
-    assert.equal(scenariosToRun(null).length, 16)
+    assert.deepEqual(scenariosToRun(['Q']), ['A', 'Q'])
+    assert.equal(scenariosToRun(null).length, 17)
   })
 
   it('names every resource of a run under its label', () => {
@@ -132,6 +136,16 @@ describe('the environments of the apps', () => {
     assert.equal(web.BROWSER_STREAM_PUBLIC_URL, 'ws://127.0.0.1:41009/v1/browser/stream')
     assert.equal(web.NODE_ENV, 'production')
     assert.equal(webEnvironment(context, { dev: true }).NODE_ENV, undefined)
+  })
+
+  it('gives mcp, preview and web the pages of the agent on their own listener (scenario Q)', () => {
+    const preview = appEnvironment('preview', context)
+    assert.equal(preview.PAGES_BASE_DOMAIN, 'pages.localhost')
+    assert.equal(preview.PAGES_PORT, '41012')
+    assert.equal(preview.PAGES_COOKIE_SECRET, 'c'.repeat(64))
+    assert.equal(appEnvironment('mcp', context).PAGES_PUBLIC_PORT, '41012')
+    assert.equal(webEnvironment(context).PAGES_BASE_DOMAIN, 'pages.localhost')
+    assert.equal(appEnvironment('core', context).PAGES_BASE_DOMAIN, undefined)
   })
 
   it('gives mcp the worker and no content profile', () => {
