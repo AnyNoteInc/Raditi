@@ -429,9 +429,10 @@ test('one list and the folders of projects, kept for the next visit', async ({
     )
     await menu.getByRole('menuitemradio', { name: 'По проектам' }).click()
     await expect(folder(new RegExp(KROSHKA))).toBeVisible()
-    // The folders: not the menu of the way, nor the button «]» that hides the panel.
+    // The folders: not the menu of the way, nor the button «]» that hides the panel, nor «Архив»
+    // under them (docs/plan/75, ВВ21).
     const names = chats(page).locator(
-      '[aria-expanded]:not([aria-haspopup]):not([aria-keyshortcuts])',
+      '[aria-expanded]:not([aria-haspopup]):not([aria-keyshortcuts]):not([data-archive])',
     )
     await expect(names).toHaveCount(2)
     await expect(names.nth(0)).toContainText(KROSHKA)

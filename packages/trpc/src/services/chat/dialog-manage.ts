@@ -71,6 +71,55 @@ export async function renameDialog(
 }
 
 /**
+ * «Закрепить» and «Открепить» (docs/plan/75-chat-input-output.md, ВВ21): the chat stands at the
+ * head of the list, the last pinned first. An archived chat is not pinned: «Из архива» first.
+ * A repeat changes nothing, and the list keeps the order of the chats' own work (SQL, as above).
+ */
+export async function pinDialog(
+  db: PrismaClient,
+  input: { userId: string; taskId: string; pinned: boolean; now: Date },
+): Promise<{ pinned: boolean }> {
+  const task = await db.task.findFirst({
+    where: accessibleTask(input.userId, input.taskId),
+    select: { id: true },
+  })
+  if (task === null) throw taskNotFound()
+  if (input.pinned)
+    await db.$executeRaw`
+      UPDATE tasks SET pinned_at = ${input.now}
+      WHERE id = ${task.id}::uuid AND deleted_at IS NULL AND pinned_at IS NULL
+        AND archived_at IS NULL`
+  else
+    await db.$executeRaw`
+      UPDATE tasks SET pinned_at = NULL WHERE id = ${task.id}::uuid AND deleted_at IS NULL`
+  const row = await db.task.findFirst({ where: { id: task.id }, select: { pinnedAt: true } })
+  return { pinned: row?.pinnedAt != null }
+}
+
+/**
+ * «В архив» and «Из архива» (ВВ21): the chat leaves the list for «Архив», unpinned; nothing of its
+ * work changes — one that goes on goes on, and a new message brings it back (`unarchiveDialog`).
+ */
+export async function archiveDialog(
+  db: PrismaClient,
+  input: { userId: string; taskId: string; archived: boolean; now: Date },
+): Promise<{ archived: boolean }> {
+  const task = await db.task.findFirst({
+    where: accessibleTask(input.userId, input.taskId),
+    select: { id: true },
+  })
+  if (task === null) throw taskNotFound()
+  if (input.archived)
+    await db.$executeRaw`
+      UPDATE tasks SET archived_at = COALESCE(archived_at, ${input.now}), pinned_at = NULL
+      WHERE id = ${task.id}::uuid AND deleted_at IS NULL`
+  else
+    await db.$executeRaw`
+      UPDATE tasks SET archived_at = NULL WHERE id = ${task.id}::uuid AND deleted_at IS NULL`
+  return { archived: input.archived }
+}
+
+/**
  * «Размышление» of a dialog that waits for the client: its class from the agent's next turn on.
  * The credits already set aside stay as they are, and so does the step of the attempt they were set
  * aside for — the step of the next turns is the new class's (`attemptCreditBudget`), the next

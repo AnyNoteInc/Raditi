@@ -106,6 +106,7 @@ function requestBlock(row: Extract<FeedItem, { type: 'feed.request' }>): string 
     case 'first':
     case 'answer':
     case 'revision':
+    case 'queued':
       return block([
         heading(feedExportText.you, row.at),
         row.text,
@@ -119,6 +120,8 @@ function requestBlock(row: Extract<FeedItem, { type: 'feed.request' }>): string 
       return press(row, feedRowText.continue)
     case 'resume':
       return press(row, feedRowText.resume)
+    case 'interrupt':
+      return press(row, feedRowText.interrupt)
     case 'command':
     case 'agent_command':
       return press(

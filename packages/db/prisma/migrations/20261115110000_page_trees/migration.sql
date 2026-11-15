@@ -8,7 +8,7 @@
 -- it, and its row stays after a purge as the tombstone of its slug (410 for ever, Дер2).
 --
 -- pages.slug and pages.password_* stay one release, read by nothing new; the release after drops
--- them (20261114120000_pages_drop_legacy, slice 73.12). The code before this release reads them
+-- them (20261115120000_pages_drop_legacy, slice 73.12). The code before this release reads them
 -- on its rows and finds them where they were; a page it creates in the seconds between migrate
 -- and up has no tree_id and is refused (NOT NULL): its turn tells the client the page was left.
 --

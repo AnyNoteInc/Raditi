@@ -31,6 +31,8 @@ export {
 export {
   enqueueCandidateRebase,
   enqueueCandidateRewind,
+  enqueueChatNotify,
+  enqueueQueueDrain,
   enqueueTurnCancel,
 } from './task-commands-outbox.ts'
 export { taskHasProductionWrites } from './task-production-writes.ts'
@@ -97,6 +99,8 @@ export {
   listTreeFiles,
   dropAbandonedPages,
   currentDocMarkdown,
+  docVersionMarkdown,
+  docVersions,
   listWorkspacePages,
   NEUTRAL_INTENT,
   NEUTRAL_TITLE,
@@ -114,6 +118,9 @@ export {
   reservePageChange,
   reservePageFile,
   reservePageFileDeletion,
+  pageSiteStats,
+  pageSiteStates,
+  type PageSiteState,
   purgeExpiredPages,
   requestDocFinish,
   reservePagePublication,

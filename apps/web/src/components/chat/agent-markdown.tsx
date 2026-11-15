@@ -3,7 +3,18 @@
 import Box from '@mui/material/Box'
 import MuiLink from '@mui/material/Link'
 import { isValidElement, type ReactNode } from 'react'
+import bash from 'highlight.js/lib/languages/bash'
+import css from 'highlight.js/lib/languages/css'
+import javascript from 'highlight.js/lib/languages/javascript'
+import json from 'highlight.js/lib/languages/json'
+import php from 'highlight.js/lib/languages/php'
+import python from 'highlight.js/lib/languages/python'
+import sql from 'highlight.js/lib/languages/sql'
+import typescript from 'highlight.js/lib/languages/typescript'
+import xml from 'highlight.js/lib/languages/xml'
+import yaml from 'highlight.js/lib/languages/yaml'
 import Markdown, { type Components } from 'react-markdown'
+import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
 
 // The agent's words as the chat of ChatGPT or Claude draws them (owner's request of 26.10.2026):
@@ -149,6 +160,55 @@ export function fenceTextTrees(text: string): string {
   return out.join('\n')
 }
 
+/**
+ * The languages a block of code is coloured in (docs/plan/76-agent-instructions.md, И5): what a site
+ * of a small business is made of, and the shell. A block names its language (```php); a block of
+ * no name or of another language stays plain — nothing is guessed.
+ */
+const LANGUAGES = {
+  bash,
+  shell: bash,
+  sh: bash,
+  css,
+  javascript,
+  js: javascript,
+  json,
+  php,
+  python,
+  sql,
+  typescript,
+  ts: typescript,
+  html: xml,
+  xml,
+  yaml,
+  yml: yaml,
+}
+const highlight: [typeof rehypeHighlight, Parameters<typeof rehypeHighlight>[0]] = [
+  rehypeHighlight,
+  { languages: LANGUAGES, detect: false, plainText: ['text', 'txt', 'plain'] },
+]
+
+/** The colours of the tokens: of the palette of the scheme, so both schemes keep their contrast. */
+const TOKENS = {
+  '& .hljs-keyword, & .hljs-selector-tag, & .hljs-built_in, & .hljs-meta': {
+    color: 'var(--mui-palette-primary-main)',
+  },
+  '& .hljs-string, & .hljs-attr, & .hljs-template-variable': {
+    color: 'var(--mui-palette-success-main)',
+  },
+  '& .hljs-number, & .hljs-literal, & .hljs-variable, & .hljs-symbol': {
+    color: 'var(--mui-palette-warning-main)',
+  },
+  '& .hljs-title, & .hljs-name, & .hljs-selector-class, & .hljs-selector-id': {
+    color: 'var(--mui-palette-secondary-main)',
+  },
+  '& .hljs-comment, & .hljs-quote': {
+    color: 'var(--mui-palette-text-secondary)',
+    fontStyle: 'italic',
+  },
+  '& .hljs-deletion': { color: 'var(--mui-palette-error-main)' },
+} as const
+
 export function AgentMarkdown({ text }: { text: string }) {
   return (
     <Box
@@ -179,6 +239,7 @@ export function AgentMarkdown({ text }: { text: string }) {
           bgcolor: 'var(--mui-palette-action-hover)',
           fontSize: 14,
           lineHeight: 1.55,
+          ...TOKENS,
         },
         '& pre code': { p: 0, bgcolor: 'transparent', fontSize: 'inherit' },
         '& blockquote': {
@@ -195,6 +256,7 @@ export function AgentMarkdown({ text }: { text: string }) {
     >
       <Markdown
         remarkPlugins={[remarkGfm, remarkSoftBreaks]}
+        rehypePlugins={[highlight]}
         components={components}
         urlTransform={linkUrl}
         skipHtml

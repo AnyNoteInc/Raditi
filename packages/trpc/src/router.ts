@@ -2,6 +2,7 @@ import { attachmentRouter } from './routers/attachment.ts'
 import { billingRouter } from './routers/billing.ts'
 import { browserRouter } from './routers/browser.ts'
 import { candidateRouter } from './routers/candidate.ts'
+import { notificationRouter } from './routers/notification.ts'
 import { consentRouter } from './routers/consent.ts'
 import { documentRouter } from './routers/document.ts'
 import { healthRouter } from './routers/health.ts'
@@ -23,6 +24,7 @@ export const appRouter = router({
   health: healthRouter,
   user: userRouter,
   consent: consentRouter,
+  notification: notificationRouter,
   project: projectRouter,
   siteConnection: siteConnectionRouter,
   billing: billingRouter,

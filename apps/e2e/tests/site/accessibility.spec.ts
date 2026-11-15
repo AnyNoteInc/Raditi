@@ -242,11 +242,13 @@ for (const scheme of ['light', 'dark'] as const) {
       await context.addCookies([{ name: 'theme', value: scheme, url: baseURL }])
       await hideDevIndicator(page)
       await page.setViewportSize({ width, height })
-      for (const [path, heading] of [
-        ['/chats', 'Чаты'],
-        ['/chats/new', 'Новый чат'],
+      // The heading of a new chat is its greeting (docs/plan/66-chat-visuals.md): it changes with
+      // the hour and the phrase, so only its level and that it says something are checked.
+      for (const [path, step, heading] of [
+        ['/chats', 'Чаты', /^Чаты$/],
+        ['/chats/new', 'Новый чат', /\S/],
       ] as const) {
-        await test.step(heading, async () => {
+        await test.step(step, async () => {
           await page.goto(path)
           await expect(page.getByRole('heading', { level: 1, name: heading })).toBeVisible()
           await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1)

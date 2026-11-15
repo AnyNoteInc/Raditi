@@ -8,6 +8,7 @@ import Link from '@mui/material/Link'
 import MenuItem from '@mui/material/MenuItem'
 import Popover from '@mui/material/Popover'
 import Select from '@mui/material/Select'
+import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import { DocumentMarkdown, markdownTitleOf } from '@repo/doc-render/markdown'
 import { PAGE_SANDBOX } from '@repo/domain/pages'
@@ -27,6 +28,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 import { useTRPC } from '@/trpc/client'
 
+import {
+  agentDocEntry,
+  agentDocOfEntry,
+  AgentDocStatus,
+  AgentDocTitle,
+  AgentDocumentView,
+} from './agent-document'
 import { documentText } from './chat-texts'
 import { taskFileHref } from './feed-file'
 
@@ -90,17 +98,7 @@ function useDocumentHistory(target: DocumentTarget | null, fallback: string | nu
     history.entries[history.index] ??
     (fallback ? { name: fallback, fileId: null, anchor: null } : null)
   const go = useCallback((entry: Entry) => setHistory((state) => pushed(state, entry)), [pushed])
-  const step = (by: -1 | 1) =>
-    setHistory((state) => ({
-      ...state,
-      index: Math.min(Math.max(0, state.index + by), state.entries.length - 1),
-    }))
-  return {
-    current,
-    go,
-    back: history.index > 0 ? () => step(-1) : null,
-    forward: history.index < history.entries.length - 1 ? () => step(1) : null,
-  }
+  return { current, go }
 }
 
 /** The width of the tab: the list stands beside the document from about 600 px. */
@@ -134,31 +132,37 @@ function HeadButton({
 }) {
   const common = {
     'aria-label': label,
-    title: label,
     disabled,
     sx: { width: 44, height: 44, flexShrink: 0 },
   }
-  if (href)
-    return (
-      <IconButton
-        {...common}
-        component="a"
-        href={href}
-        {...(download ? { download } : { target: '_blank', rel: 'noopener' })}
-      >
-        <AppIcon name={icon} size={18} />
-      </IconButton>
-    )
-  return (
+  const button = href ? (
+    <IconButton
+      {...common}
+      component="a"
+      href={href}
+      {...(download ? { download } : { target: '_blank', rel: 'noopener' })}
+    >
+      <AppIcon name={icon} size={18} />
+    </IconButton>
+  ) : (
     <IconButton {...common} onClick={onClick} aria-pressed={pressed}>
       <AppIcon name={icon} size={18} />
     </IconButton>
+  )
+  // What the button does, on hover and focus; a disabled one still says it.
+  return (
+    <Tooltip title={label}>
+      <Box component="span" sx={{ display: 'inline-flex', flexShrink: 0 }}>
+        {button}
+      </Box>
+    </Tooltip>
   )
 }
 
 export function DocumentsPane({
   taskId,
   rows,
+  agentDocs = [],
   target,
   fullscreen = false,
   onFullscreen,
@@ -168,6 +172,11 @@ export function DocumentsPane({
   taskId: string
   /** The rows of the chat: the documents, their versions and the pictures come from them. */
   rows: readonly ChatFileRow[]
+  /**
+   * The documents the agent writes section by section, oldest first (docs/plan/74): in the list
+   * with the files, each as `agentDocEntry(docId)` in the tab's history.
+   */
+  agentDocs?: readonly string[]
   target: DocumentTarget | null
   fullscreen?: boolean
   onFullscreen?: (on: boolean) => void
@@ -181,8 +190,11 @@ export function DocumentsPane({
 }) {
   const documents = useMemo(() => chatDocumentsOf(rows), [rows])
   const names = useMemo(() => new Set(documents.map((document) => document.name)), [documents])
-  const fallback = openingDocumentOf(documents.map((document) => document.name))
-  const { current, go, back, forward } = useDocumentHistory(target, fallback)
+  const latestAgentDoc = agentDocs.at(-1)
+  const fallback =
+    openingDocumentOf(documents.map((document) => document.name)) ??
+    (latestAgentDoc === undefined ? null : agentDocEntry(latestAgentDoc))
+  const { current, go } = useDocumentHistory(target, fallback)
   const [root, setRoot] = useState<HTMLElement | null>(null)
   const wide = useWide(root, 600) || fullscreen || standalone
   const [listAnchor, setListAnchor] = useState<HTMLElement | null>(null)
@@ -203,13 +215,51 @@ export function DocumentsPane({
     go({ name, fileId: null, anchor })
   }
 
+  const currentAgentDoc = current ? agentDocOfEntry(current.name) : null
   const list = (
     <DocumentList
       documents={documents}
-      current={document?.name ?? null}
+      agentDocs={agentDocs}
+      current={current?.name ?? null}
       onOpen={(name) => open(name)}
     />
   )
+
+  if (currentAgentDoc !== null && agentDocs.includes(currentAgentDoc))
+    return (
+      <Box ref={setRoot} sx={{ height: '100%', minHeight: 0, minWidth: 0 }}>
+        <AgentDocumentView
+          key={currentAgentDoc}
+          docId={currentAgentDoc}
+          fullscreen={fullscreen}
+          {...(onFullscreen ? { onFullscreen } : {})}
+          lead={
+            // The documents of the chat behind a button, not in a column beside it (owner's
+            // request of 14.11.2026): the sheet takes the width.
+            <Button
+              size="small"
+              onClick={(event) => setListAnchor(event.currentTarget)}
+              aria-haspopup="dialog"
+              aria-expanded={listAnchor !== null}
+              sx={{ flexShrink: 0, minHeight: 44, whiteSpace: 'nowrap' }}
+            >
+              {documentText.all(documents.length + agentDocs.length)}
+            </Button>
+          }
+        />
+        <Popover
+          open={listAnchor !== null}
+          anchorEl={listAnchor}
+          onClose={() => setListAnchor(null)}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+          slotProps={{ paper: { sx: { width: 300, maxHeight: '70vh' } } }}
+        >
+          <Box component="nav" aria-label={documentText.list}>
+            {list}
+          </Box>
+        </Popover>
+      </Box>
+    )
 
   if (documents.length === 0 || document === null || version === null)
     return (
@@ -236,29 +286,15 @@ export function DocumentsPane({
           minWidth: 0,
         }}
       >
-        <HeadButton
-          icon="back"
-          label={documentText.back}
-          onClick={back ?? undefined}
-          disabled={!back}
-        />
-        <HeadButton
-          icon="forward"
-          label={documentText.forward}
-          onClick={forward ?? undefined}
-          disabled={!forward}
-        />
-        {wide ? null : (
-          <Button
-            size="small"
-            onClick={(event) => setListAnchor(event.currentTarget)}
-            aria-haspopup="dialog"
-            aria-expanded={listAnchor !== null}
-            sx={{ flexShrink: 0, minHeight: 44, whiteSpace: 'nowrap' }}
-          >
-            {documentText.all(documents.length)}
-          </Button>
-        )}
+        <Button
+          size="small"
+          onClick={(event) => setListAnchor(event.currentTarget)}
+          aria-haspopup="dialog"
+          aria-expanded={listAnchor !== null}
+          sx={{ flexShrink: 0, minHeight: 44, whiteSpace: 'nowrap' }}
+        >
+          {documentText.all(documents.length + agentDocs.length)}
+        </Button>
         <Box
           role="textbox"
           aria-readonly="true"
@@ -324,7 +360,7 @@ export function DocumentsPane({
           />
         )}
         <HeadButton
-          icon="down"
+          icon="download"
           label={documentText.downloadLabel(document.title)}
           href={taskFileHref(taskId, fileId)}
           download={document.name}
@@ -369,21 +405,6 @@ export function DocumentsPane({
         </Box>
       ) : null}
       <Box sx={{ flex: '1 1 0', minHeight: 0, display: 'flex' }}>
-        {wide ? (
-          <Box
-            component="nav"
-            aria-label={documentText.list}
-            sx={{
-              width: 240,
-              flexShrink: 0,
-              borderRight: 1,
-              borderColor: 'divider',
-              overflowY: 'auto',
-            }}
-          >
-            {list}
-          </Box>
-        ) : null}
         <Box sx={{ flex: '1 1 auto', minWidth: 0, display: 'flex' }}>
           {document.kind === 'page' ? (
             <PageFrame
@@ -448,10 +469,12 @@ function DocumentTitle({
 /** The list of the documents of the chat: pages and texts together, by name, with a search. */
 function DocumentList({
   documents,
+  agentDocs,
   current,
   onOpen,
 }: {
   documents: readonly ChatDocument[]
+  agentDocs: readonly string[]
   current: string | null
   onOpen: (name: string) => void
 }) {
@@ -461,7 +484,7 @@ function DocumentList({
   )
   return (
     <Box sx={{ p: 1 }}>
-      {documents.length > 5 ? (
+      {documents.length + agentDocs.length > 5 ? (
         <InputBase
           value={query}
           onChange={(event) => setQuery(event.target.value)}
@@ -478,10 +501,51 @@ function DocumentList({
           }}
         />
       ) : null}
+      {agentDocs.length > 0 && query.trim() === '' ? (
+        <Box component="ul" sx={{ m: 0, p: 0, listStyle: 'none' }}>
+          {[...agentDocs].reverse().map((docId) => {
+            const name = agentDocEntry(docId)
+            const here = name === current
+            return (
+              <li key={name}>
+                <Button
+                  fullWidth
+                  onClick={() => onOpen(name)}
+                  aria-current={here ? 'page' : undefined}
+                  sx={{
+                    justifyContent: 'flex-start',
+                    textAlign: 'left',
+                    minHeight: 44,
+                    px: 1,
+                    gap: 1,
+                    borderRadius: '8px',
+                    color: 'text.primary',
+                    fontWeight: here ? 600 : 400,
+                    bgcolor: here ? 'var(--mui-palette-action-selected)' : undefined,
+                  }}
+                >
+                  <AppIcon name="pages" size={16} />
+                  <Box component="span" sx={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>
+                    <AgentDocTitle docId={docId} />
+                    <Box
+                      component="span"
+                      sx={{ display: 'block', fontSize: 12, color: 'text.secondary' }}
+                    >
+                      <AgentDocStatus docId={docId} />
+                    </Box>
+                  </Box>
+                </Button>
+              </li>
+            )
+          })}
+        </Box>
+      ) : null}
       {found.length === 0 ? (
-        <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>
-          {documentText.nothingFound}
-        </Typography>
+        documents.length === 0 ? null : (
+          <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>
+            {documentText.nothingFound}
+          </Typography>
+        )
       ) : (
         <Box component="ul" sx={{ m: 0, p: 0, listStyle: 'none' }}>
           {found.map((document) => (
@@ -496,6 +560,7 @@ function DocumentList({
                   minHeight: 44,
                   px: 1,
                   gap: 1,
+                  borderRadius: '8px',
                   color: 'text.primary',
                   fontWeight: document.name === current ? 600 : 400,
                   bgcolor:

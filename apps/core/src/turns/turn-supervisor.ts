@@ -70,6 +70,16 @@ const presignTtlMs = (guard: LeaseGuard) => Math.min(MAX_PRESIGN_TTL_MS, guard.l
 
 const renewLogger = new Logger('TurnLease')
 
+/** What the caller of a turn may follow while it runs. */
+export interface TurnRunHooks {
+  /**
+   * The turn holds its keys (docs/plan/74, Д2): `refusal` reads the values of the site's variables
+   * now and answers what tells a text that holds a key or a value — the client may change a
+   * variable while the turn runs. Rejects when Vault does not answer. Called at most once.
+   */
+  onArmed?: (refusal: () => Promise<(text: string) => 'turn_key' | 'client_value' | null>) => void
+}
+
 /** PoC execution only: task billing, queue dispatch and product task transitions belong to P12. */
 export class TurnSupervisor {
   constructor(private readonly deps: TurnSupervisorDependencies) {}
@@ -78,6 +88,7 @@ export class TurnSupervisor {
     request: UnkeyedTurnRequest,
     policy: TurnCredentialPolicy,
     signal?: AbortSignal,
+    hooks: TurnRunHooks = {},
   ): Promise<CompletedTurn> {
     const plan = this.validate(request)
     // A turn with a repository needs git; one without needs none (plan 57, Б7). Refused before
@@ -249,6 +260,9 @@ export class TurnSupervisor {
       const { files, credentials } = checkPreparedRun(context, prepared, argv)
       attempt.credentials = credentials
       attempt.envValues = runEnvValues(context)
+      // The texts of the turn are checked while it runs (docs/plan/74, Д2): with what the turn
+      // holds, once it holds it. Not armed — the end of the turn checks them, as before.
+      hooks.onArmed?.(() => attempt.liveRefusal())
       await guard.assertFence()
       const ready = await guard.interruptible(
         this.deps.executor.prepare(

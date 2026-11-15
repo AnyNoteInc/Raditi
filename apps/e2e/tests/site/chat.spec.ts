@@ -23,7 +23,12 @@ const back = (page: Page) => page.getByRole('link', { name: 'К чатам' })
 const newChat = (page: Page) => chats(page).getByRole('link', { name: 'Новый чат' })
 const message = (page: Page) => page.getByRole('textbox', { name: 'Сообщение' })
 const send = (page: Page) => page.getByRole('button', { name: 'Отправить' })
-const newChatHeading = (page: Page) => page.getByRole('heading', { name: 'Новый чат' })
+/**
+ * The heading of a new chat is its greeting (docs/plan/66-chat-visuals.md): it changes with the
+ * hour and the phrase, so it is found as the heading that is not the list's «Чаты».
+ */
+const newChatHeading = (page: Page, level?: 1 | 2) =>
+  page.getByRole('heading', level ? { level } : {}).filter({ hasNotText: /^Чаты$/ })
 const pill = (page: Page) => page.getByRole('button', { name: /^Проект для этого чата/ })
 
 async function box(target: Locator) {
@@ -72,7 +77,9 @@ for (const [name, width, height] of viewports) {
       await expectChatsCurrent(page)
       const links = page.getByRole('navigation', { name: 'Основная навигация' }).getByRole('link')
       await expect(links.nth(0)).toHaveAccessibleName('Чаты')
-      await expect(links.nth(1)).toHaveAccessibleName('Проекты')
+      // «Страницы» stands between «Чаты» and «Проекты» (docs/plan/69-pages.md, Ст30).
+      await expect(links.nth(1)).toHaveAccessibleName('Страницы')
+      await expect(links.nth(2)).toHaveAccessibleName('Проекты')
     })
 
     if (width >= 900) {
@@ -81,7 +88,8 @@ for (const [name, width, height] of viewports) {
         await expect(send(page)).toBeDisabled()
         // The heading of the page is the list's: the screen beside it takes the level below.
         await expect(newChatHeading(page)).toHaveCount(1)
-        await expect(page.getByRole('heading', { level: 2, name: 'Новый чат' })).toBeVisible()
+        await expect(newChatHeading(page, 2)).toBeVisible()
+        await expect(newChatHeading(page, 2)).toHaveText(/\S/)
       })
 
       await test.step('the list runs the height of the window between the rail and the content', async () => {
@@ -117,7 +125,8 @@ for (const [name, width, height] of viewports) {
 
     await expect(page).toHaveTitle(/Новый чат/)
     await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1)
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Новый чат')
+    await expect(newChatHeading(page, 1)).toHaveCount(1)
+    await expect(newChatHeading(page, 1)).toHaveText(/\S/)
     await expectNoSidewaysScroll(page)
 
     await test.step('nothing but words is needed: no modes, no project', async () => {
@@ -176,7 +185,8 @@ for (const [name, width, height] of viewports) {
     await test.step('«Новый чат» of the list opens the screen again', async () => {
       await newChat(page).click()
       await expect(page).toHaveURL('/chats/new')
-      await expect(page.getByRole('heading', { level: 1 })).toHaveText('Новый чат')
+      await expect(newChatHeading(page, 1)).toHaveCount(1)
+      await expect(newChatHeading(page, 1)).toHaveText(/\S/)
       await expect(chats(page)).toBeHidden()
       await expect(message(page)).toBeVisible()
     })
@@ -247,7 +257,8 @@ for (const [name, width, height] of viewports.filter(([, wide]) => wide < 900)) 
     await expect(newChat(page)).toBeFocused()
     await page.keyboard.press('Enter')
     await expect(page).toHaveURL('/chats/new')
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Новый чат')
+    await expect(newChatHeading(page, 1)).toHaveCount(1)
+    await expect(newChatHeading(page, 1)).toHaveText(/\S/)
     await expect.poll(focus).toEqual(kept)
 
     await back(page).focus()

@@ -17,6 +17,7 @@ import {
   standNames,
   standOptions,
   syntheticPdf,
+  PAGES_DOMAIN,
   webEnvironment,
 } from './stand.mjs'
 
@@ -52,9 +53,9 @@ const context = {
     metrics: 'm'.repeat(48),
     auth: 'a'.repeat(48),
     previewSession: 'p'.repeat(48),
-    pagesCookie: 'c'.repeat(64),
-    pagesSigning: 's'.repeat(64),
     workerToken: 'w'.repeat(48),
+    pagesCookie: 'c'.repeat(48),
+    pagesSigning: 's'.repeat(48),
   },
   caFile: '/tmp/run/ca.pem',
   siteTarget: '172.17.0.9:80',
@@ -89,8 +90,8 @@ describe('options and names', () => {
     assert.deepEqual(scenariosToRun(['F']), ['A', 'D', 'E', 'F'])
     assert.deepEqual(scenariosToRun(['K', 'B']), ['A', 'D', 'B', 'K'])
     assert.deepEqual(scenariosToRun(['P']), ['A', 'P'])
-    assert.deepEqual(scenariosToRun(['Q']), ['A', 'Q'])
-    assert.equal(scenariosToRun(null).length, 17)
+    assert.deepEqual(scenariosToRun(['R']), ['A', 'R'])
+    assert.equal(scenariosToRun(null).length, 18)
   })
 
   it('names every resource of a run under its label', () => {
@@ -138,14 +139,22 @@ describe('the environments of the apps', () => {
     assert.equal(webEnvironment(context, { dev: true }).NODE_ENV, undefined)
   })
 
-  it('gives mcp, preview and web the pages of the agent on their own listener (scenario Q)', () => {
+  it('names one domain of the pages to mcp, preview and web, served by preview alone (scenario Q)', () => {
+    for (const env of [
+      appEnvironment('mcp', context),
+      appEnvironment('preview', context),
+      webEnvironment(context),
+    ]) {
+      assert.equal(env.PAGES_BASE_DOMAIN, PAGES_DOMAIN)
+      assert.equal(env.PAGES_PUBLIC_PORT, '41012')
+    }
     const preview = appEnvironment('preview', context)
-    assert.equal(preview.PAGES_BASE_DOMAIN, 'pages.localhost')
     assert.equal(preview.PAGES_PORT, '41012')
-    assert.equal(preview.PAGES_COOKIE_SECRET, 'c'.repeat(64))
-    assert.equal(appEnvironment('mcp', context).PAGES_PUBLIC_PORT, '41012')
-    assert.equal(webEnvironment(context).PAGES_BASE_DOMAIN, 'pages.localhost')
-    assert.equal(appEnvironment('core', context).PAGES_BASE_DOMAIN, undefined)
+    assert.equal(preview.PAGES_HOST, '127.0.0.1')
+    assert.equal(preview.PAGES_COOKIE_SECRET, 'c'.repeat(48))
+    assert.equal(webEnvironment(context).PAGES_SIGNING_SECRET, 's'.repeat(48))
+    for (const app of ['core', 'llm', 'browser'])
+      assert.equal(appEnvironment(app, context).PAGES_BASE_DOMAIN, undefined, app)
   })
 
   it('gives mcp the worker and no content profile', () => {

@@ -39,6 +39,7 @@ import {
 } from '../turns/turn-journal.ts'
 import { collectExpiredAttachments, expiredAttachmentsIn } from './attachment-collector.ts'
 import type { LivePasses } from './live-passes.ts'
+import type { PageMetrics } from '../pages/page-metrics.ts'
 import type { PagePublications } from './page-publications.ts'
 import {
   CHARGE_LATER_EVENT,
@@ -97,6 +98,8 @@ export interface TaskSweepDependencies {
    * to have failed, a page that never got a version is removed. Absent — not swept.
    */
   pages?: Pick<PagePublications, 'left'> | null
+  /** The metrics of the sites of pages, counted again after each sweep of them (73.12). */
+  pageMetrics?: Pick<PageMetrics, 'refresh'> | null
   logger?: { log(message: string): void; warn(message: string): void }
   now?: () => Date
 }
@@ -515,6 +518,8 @@ export class TaskSweep {
       this.#logger.log(
         `task_sweep_pages failed=${stale.length} dropped=${dropped} sections_cleared=${cleared} purged=${purged}`,
       )
+    // The numbers of the sites are a reading, never a reason to stop the sweep.
+    await this.deps.pageMetrics?.refresh().catch(() => this.#logger.warn('page_metrics_failed'))
     return stale.length
   }
 

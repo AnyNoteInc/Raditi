@@ -97,3 +97,15 @@ describe('the agent’s words as Markdown', () => {
     expect(hiddenHost('https://a.example/x', 'здесь')).toBe('a.example')
   })
 })
+
+describe('code of the answer (docs/plan/76, И5)', () => {
+  it('is coloured when its block names a language, and stays plain otherwise', () => {
+    const { container } = render(
+      <AgentMarkdown text={'```php\n<?php echo "Привет"; ?>\n```\n\n```\nпросто текст\n```'} />,
+    )
+    const blocks = container.querySelectorAll('pre code')
+    expect(blocks[0]?.querySelector('.hljs-string')?.textContent).toContain('Привет')
+    expect(blocks[1]?.querySelector('[class^="hljs-"]')).toBeNull()
+    expect(blocks[1]?.textContent).toBe('просто текст\n')
+  })
+})

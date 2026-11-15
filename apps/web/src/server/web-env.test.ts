@@ -29,6 +29,8 @@ describe('webEnvFromEnv', () => {
       pastDueDays: 7,
       preview: null,
       browserStreamUrl: null,
+      // Web Push is not set up in the example (docs/plan/75, ВВ8).
+      webPushPublicKey: null,
       pages: null,
       pageViews: null,
     })
@@ -36,6 +38,12 @@ describe('webEnvFromEnv', () => {
       metricsToken: DEV_METRICS_TOKEN,
       redisUrl: undefined,
     })
+  })
+
+  it('reads the public VAPID key of Web Push and refuses one of another shape (docs/plan/75, ВВ8)', () => {
+    const key = 'B'.repeat(87)
+    expect(webEnvFromEnv({ ...devEnv, WEB_PUSH_VAPID_PUBLIC: key }).webPushPublicKey).toBe(key)
+    expect(() => webEnvFromEnv({ ...devEnv, WEB_PUSH_VAPID_PUBLIC: 'короткий' })).toThrow()
   })
 
   it('reads the grace of an overdue tariff as the core role does: a week unless set', () => {

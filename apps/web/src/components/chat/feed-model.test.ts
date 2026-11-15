@@ -176,7 +176,29 @@ describe('feedEntries', () => {
         revision: 3,
       },
     ]
-    expect(feedEntries(rows, null).map((entry) => entry.key)).toEqual(['1'])
+    // The turn has not ended: its document waits for the end of it, nothing of it shows yet.
+    expect(feedEntries(rows, headOf({ status: 'running' })).map((entry) => entry.key)).toEqual([
+      '1',
+    ])
+  })
+
+  it('shows the documents of a turn once, after the agent’s answer (14.11.2026)', () => {
+    const doc = '0199a3f2-0000-7000-8000-0000000000d1'
+    const at = '2026-10-17T09:00:00.000Z'
+    const rows: FeedRow[] = [
+      requestRow('1'),
+      { id: '2', at, type: 'feed.doc', docId: doc },
+      { id: '3', at, type: 'feed.doc_touch', docId: doc, revision: 2 },
+      resultRow('4', 1),
+      requestRow('5'),
+      // The second turn only changes the document begun in the first (production, 14.11.2026).
+      { id: '6', at, type: 'feed.doc_touch', docId: doc, revision: 3 },
+      resultRow('7', 2),
+    ]
+    const entries = feedEntries(rows, null)
+    expect(entries.map((entry) => entry.key)).toEqual(['1', '4', 'docs-2', '5', '7', 'docs-6'])
+    expect(entries[2]).toMatchObject({ kind: 'agentDocs', docIds: [doc] })
+    expect(entries[5]).toMatchObject({ kind: 'agentDocs', docIds: [doc] })
   })
 
   it('never shows a stage the page does not know', () => {

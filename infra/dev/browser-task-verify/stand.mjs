@@ -66,6 +66,7 @@ export const SCENARIO_IDS = Object.freeze([
   'O',
   'P',
   'Q',
+  'R',
   'K',
   'L',
   'M',
@@ -85,6 +86,7 @@ const NEEDS = Object.freeze({
   O: ['A'],
   P: ['A'],
   Q: ['A'],
+  R: ['A'],
   K: ['A'],
   L: ['A'],
   M: ['A'],
@@ -377,11 +379,10 @@ const workerOf = (ports, secrets) => ({
 })
 
 /**
- * The domain of the agent's published pages on this stand (docs/plan/73-pages-sites.md, scenario
- * Q): `<slug>.pages.localhost` on the third listener of the preview app, as `pnpm dev` has it.
+ * The domain of the agent's pages on the stand (docs/plan/69-pages.md, Ст3): `<slug>.pages.localhost`
+ * on the loopback port of the pages listener, which mcp names to the agent and web to the client.
  */
 export const PAGES_DOMAIN = 'pages.localhost'
-/** The pages as mcp, preview and web read them: the domain and the port of the pages' listener. */
 const pagesOf = (ports) => ({
   PAGES_BASE_DOMAIN: PAGES_DOMAIN,
   PAGES_PUBLIC_PORT: String(loopbackPort(ports.pages)),
@@ -455,7 +456,7 @@ export function appEnvironment(app, context) {
         APP_URL: origin(ports.web),
         BROWSER_STREAM_PORT: String(loopbackPort(ports.stream)),
         BROWSER_STREAM_HOST: '127.0.0.1',
-        // The third listener: the agent's pages (scenario Q).
+        // The third listener: the agent's pages, from the database (scenario Q).
         ...pagesOf(ports),
         PAGES_PORT: String(loopbackPort(ports.pages)),
         PAGES_HOST: '127.0.0.1',

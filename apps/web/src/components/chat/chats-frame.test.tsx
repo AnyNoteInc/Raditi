@@ -32,6 +32,8 @@ vi.mock('@/trpc/client', () => ({
     task: {
       rename: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
       remove: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
+      pin: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
+      archive: { mutationOptions: () => ({ mutationFn: vi.fn() }) },
     },
     billing: { usage: { queryKey: () => ['billing.usage'] } },
   }),
@@ -49,6 +51,8 @@ const chat: DialogListPage['items'][number] = {
   createdAt: NOW,
   updatedAt: NOW,
   project: null,
+  pinned: false,
+  archived: false,
 }
 
 function showFrame(segment: string | null, group: ChatsGroup = 'list') {
@@ -70,7 +74,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   document.cookie = 'raditi-chats-group=; max-age=0; path=/'
   mocks.search = new URLSearchParams()
-  listPage.mockResolvedValue({ items: [chat], nextCursor: null })
+  listPage.mockResolvedValue({ pinned: [], items: [chat], nextCursor: null })
   folders.mockResolvedValue({ folders: [{ project: null, count: 1, attention: false }] })
 })
 
@@ -126,8 +130,21 @@ describe('the frame of «Чаты»', () => {
     content.remove()
   })
 
+  it('opens «Найти чат» by the loupe of the head and closes it by its cross (docs/plan/77, Р2)', async () => {
+    showFrame(null)
+    const loupe = await screen.findByRole('button', { name: 'Найти чат' })
+    expect(screen.queryByRole('searchbox', { name: 'Найти чат' })).toBeNull()
+    fireEvent.click(loupe)
+    expect(screen.getByRole('searchbox', { name: 'Найти чат' })).toBeTruthy()
+    expect(loupe.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: 'Закрыть поиск' }))
+    expect(screen.queryByRole('searchbox', { name: 'Найти чат' })).toBeNull()
+    // «Архив» stands in the column whatever the list holds (Р1).
+    expect(screen.getByRole('button', { name: 'Архив' })).toBeTruthy()
+  })
+
   it('offers no grouping while there is nothing to group', async () => {
-    listPage.mockResolvedValue({ items: [], nextCursor: null })
+    listPage.mockResolvedValue({ pinned: [], items: [], nextCursor: null })
     showFrame('new')
     expect(
       await screen.findByText('Чатов пока нет. Напишите, что нужно сделать, — чат появится здесь.'),

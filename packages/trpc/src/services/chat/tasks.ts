@@ -542,6 +542,9 @@ export async function postDialogMessage(
       siteId: task.siteId,
     })
     const requestEventId = await writeRequest(tx, task.id, payload)
+    // A message to an archived chat brings it back to the list (docs/plan/75, ВВ21).
+    await tx.$executeRaw`
+      UPDATE tasks SET archived_at = NULL WHERE id = ${task.id}::uuid AND archived_at IS NOT NULL`
     await enqueueAgentTurn(tx, { taskId: task.id, attempt, requestEventId })
     return { requestEventId, repeated: false }
   })
@@ -988,6 +991,8 @@ export async function stopDialog(
   input: { userId: string; requestId: string; now: Date },
 ): Promise<{ requestEventId: string; state: 'cancelled' | 'stopping' }> {
   const { userId, requestId, now } = input
+  // A chat that stops keeps no words for a next pass (docs/plan/75, ВВ5).
+  await tx.taskQueuedMessage.deleteMany({ where: { taskId: task.id } })
   const requestEventId = await writeRequest(tx, task.id, {
     v: 1,
     kind: 'command',

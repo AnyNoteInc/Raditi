@@ -2,9 +2,10 @@ import 'server-only'
 
 import { attachmentDisposition } from './task-file'
 
-// «Скачать .md» of a document the agent wrote (docs/plan/69-pages.md, Ст12): the Markdown of its
-// current version, the same the version and the reading page are made of, for a member of its
-// workspace. An attachment of plain text: never opened, sniffed or framed.
+// «Скачать» of a document the agent wrote (docs/plan/69-pages.md, Ст12; docs/plan/74, Д1): the
+// current version for a member of its workspace — the Markdown of a document of the view `text`,
+// the page to read of one of the view `page`, the page «Опубликовать по ссылке» gives. Always an
+// attachment: never opened, sniffed or framed.
 
 export interface DocumentMarkdownDependencies {
   getSession: (headers: Headers) => Promise<{ user: { id: string } } | null>
@@ -13,7 +14,7 @@ export interface DocumentMarkdownDependencies {
   read: (input: {
     userId: string
     documentId: string
-  }) => Promise<{ name: string; markdown: string } | null>
+  }) => Promise<{ name: string; markdown: string; html: string | null } | null>
   onFailure?: (operation: string, error: unknown) => void
 }
 
@@ -34,10 +35,11 @@ export async function getDocumentMarkdown(
       return answer(404, 'Документ не найден.')
     const document = await deps.read({ userId: session.user.id, documentId: params.docId })
     if (!document) return answer(404, 'Документ не найден или ещё пишется.')
-    const bytes = new TextEncoder().encode(document.markdown)
+    const page = document.html !== null
+    const bytes = new TextEncoder().encode(document.html ?? document.markdown)
     return new Response(bytes, {
       headers: {
-        'content-type': 'text/markdown; charset=utf-8',
+        'content-type': page ? 'text/html; charset=utf-8' : 'text/markdown; charset=utf-8',
         'content-length': String(bytes.byteLength),
         'content-disposition': attachmentDisposition(document.name),
         // A new version takes the same address: never kept.

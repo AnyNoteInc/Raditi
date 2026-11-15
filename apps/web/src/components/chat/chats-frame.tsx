@@ -24,12 +24,12 @@ import {
 } from '@/components/application/cabinet-shell'
 
 import { CHATS_HREF, NEW_CHAT_HREF, NEW_CHAT_SEGMENT } from './chat-address'
-import { chatsText } from './chat-texts'
+import { PANE_DRAWN } from './pane-layout'
+import { chatsText, listText } from './chat-texts'
 import { rememberChatsGroup, type ChatsGroup } from './chats-group'
-import { DialogList, useChatsKnownEmpty } from './dialog-list'
+import { ArchiveButton, DialogList, useChatsKnownEmpty } from './dialog-list'
 
 /** The page draws the panel of the tools beside a chat: the list gives the chat its room. */
-const PANE_DRAWN = '[data-chat-shell]:has([data-chat-pane]) &'
 
 const groupNames: Readonly<Record<ChatsGroup, string>> = {
   list: chatsText.groupList,
@@ -140,6 +140,8 @@ export function ChatsFrame({
   // menu says what is on the screen.
   const folder = useSearchParams().get('folder')
   const shownGroup = folder === null ? group : 'projects'
+  // «Найти чат» opens by the loupe of the head (docs/plan/77, Р2).
+  const [searching, setSearching] = useState(false)
   const empty = useChatsKnownEmpty()
   const { open: panelOpen } = useCabinetPanel()
 
@@ -193,7 +195,8 @@ export function ChatsFrame({
           // In the panel from `md` «Новый чат» takes a row of its own under the heading and its
           // buttons: the card is too narrow for all of them in one line.
           gridTemplateColumns: { sm: 'minmax(0, 1fr) auto', md: 'minmax(0, 1fr)' },
-          gridTemplateRows: { sm: 'auto 1fr', md: 'auto auto 1fr' },
+          // The last row is «Архив», pinned to the bottom of the card (docs/plan/77, Р1).
+          gridTemplateRows: { sm: 'auto 1fr auto', md: 'auto auto 1fr auto' },
           alignItems: { xs: 'stretch', sm: 'start' },
           gap: '12px 8px',
           // From `md` the list is the panel beside the rail (docs/plan/64-cabinet-navigation.md,
@@ -232,6 +235,17 @@ export function ChatsFrame({
             {chatsText.title}
           </Typography>
           {empty ? null : <GroupMenu value={shownGroup} onChange={changeGroup} />}
+          {empty ? null : (
+            // The loupe left of «]» (owner's request of 15.11.2026, docs/plan/77, Р2).
+            <IconButton
+              aria-label={listText.search}
+              aria-pressed={searching}
+              onClick={() => setSearching(!searching)}
+              sx={{ width: 44, height: 44, color: searching ? 'text.primary' : 'text.secondary' }}
+            >
+              <AppIcon name="search" size={18} />
+            </IconButton>
+          )}
           <PanelToggle place="panel" />
         </Box>
         <Button
@@ -263,7 +277,28 @@ export function ChatsFrame({
             px: { md: 1.5 },
           }}
         >
-          <DialogList grouped={shownGroup === 'projects'} folder={folder} />
+          <DialogList
+            grouped={shownGroup === 'projects'}
+            folder={folder}
+            searching={searching}
+            onSearchClose={() => setSearching(false)}
+          />
+        </Box>
+        {/* «Архив» at the bottom of the card, whatever the length of the list (Р1). */}
+        <Box
+          sx={{
+            order: { xs: 2, sm: 0 },
+            gridColumn: { sm: '1 / -1' },
+            gridRow: { sm: 3, md: 4 },
+            alignSelf: 'end',
+            position: { sm: 'sticky' },
+            bottom: { sm: 0 },
+            zIndex: 1,
+            pt: 1,
+            bgcolor: { md: 'background.paper' },
+          }}
+        >
+          <ArchiveButton />
         </Box>
       </Box>
 

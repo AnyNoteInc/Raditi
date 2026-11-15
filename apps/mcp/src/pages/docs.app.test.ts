@@ -169,6 +169,7 @@ describe('the documents of a workspace through the gateway (plan 69, Ст21, С�
       server,
       call('doc_create', {
         title: 'Аудит скорости',
+        view: 'page',
         sections: [
           { id: 'summary', intent: 'Итог: три причины' },
           { id: 'sources', intent: 'Источники' },
@@ -180,6 +181,7 @@ describe('the documents of a workspace through the gateway (plan 69, Ст21, С�
       workspaceId: scope.workspaceId,
       taskId: scope.taskId,
       title: 'Аудит скорости',
+      view: 'page',
       sections: [
         { key: 'summary', intent: 'Итог: три причины' },
         { key: 'sources', intent: 'Источники' },
@@ -260,6 +262,19 @@ describe('the documents of a workspace through the gateway (plan 69, Ст21, С�
       taskId: scope.taskId,
       turnNo: 2,
     })
+  })
+
+  it('lets the agent choose the view, and change it with doc_finish (plan 74, Д1)', async () => {
+    const { store } = fakeStore()
+    const server = await start(store)
+    const noView = await post(
+      server,
+      call('doc_create', { title: 'Без вида', sections: [{ id: 'a', intent: 'Раздел' }] }),
+    )
+    expect(store.create).not.toHaveBeenCalled()
+    expect(noView.body.error ?? noView.body.result?.isError).toBeTruthy()
+    await post(server, call('doc_finish', { docId, view: 'text' }))
+    expect(store.finish).toHaveBeenCalledWith(expect.objectContaining({ view: 'text' }))
   })
 
   it('tells a document of another workspace as not found', async () => {

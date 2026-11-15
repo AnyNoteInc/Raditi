@@ -1,4 +1,5 @@
 import {
+  docViews,
   DomainError,
   pageKinds,
   pageFilePathSchema,
@@ -13,6 +14,9 @@ import { z } from 'zod'
 
 import { chatContextOf } from '../services/chat/context.ts'
 import {
+  cabinetDocPage,
+  cabinetDocVersion,
+  cabinetDocVersions,
   cabinetDocument,
   cabinetSiteFiles,
   canPublishOfChat,
@@ -85,12 +89,14 @@ export const pagesRouter = router({
       z.strictObject({
         docId: z.uuid(),
         title: z.string(),
+        view: z.enum(docViews),
         version: z.number().int().min(0),
         revision: z.number().int().min(1),
         progress: z.strictObject({
           written: z.number().int().min(0),
           total: z.number().int().min(0),
         }),
+        draft: z.boolean(),
         sections: z.array(
           z.strictObject({
             key: z.string(),
@@ -135,6 +141,54 @@ export const pagesRouter = router({
       (ctx.chat?.pages ?? null) === null
         ? []
         : publishTargetsOfChat(ctx.prisma, { taskId: input.taskId, userId: ctx.user.id }),
+    ),
+
+  /**
+   * The finished document of the view `page` as the tab beside the chat shows it (docs/plan/74,
+   * Д1): its page to read; null — no version yet, or the view is `text`.
+   */
+  docPage: consentedProcedure
+    // The version names what the tab shows: every version is read once, never an older page.
+    .input(z.strictObject({ docId: z.uuid(), version: z.number().int().min(1) }))
+    .output(z.strictObject({ html: z.string(), version: z.number().int().min(1) }).nullable())
+    .query(({ ctx, input }) =>
+      cabinetDocPage(ctx.prisma, { documentId: input.docId, userId: ctx.user.id }),
+    ),
+
+  /** The versions of a document, oldest first: the switch in the head of its view (14.11.2026). */
+  docVersions: consentedProcedure
+    .input(z.strictObject({ docId: z.uuid() }))
+    .output(
+      z.array(
+        z.strictObject({
+          no: z.number().int().min(1),
+          createdAt: z.string(),
+          kept: z.boolean(),
+        }),
+      ),
+    )
+    .query(({ ctx, input }) =>
+      cabinetDocVersions(ctx.prisma, { documentId: input.docId, userId: ctx.user.id }),
+    ),
+
+  /** One version of a document; null — its text was not kept (finished before 14.11.2026). */
+  docVersion: consentedProcedure
+    .input(z.strictObject({ docId: z.uuid(), version: z.number().int().min(1) }))
+    .output(
+      z
+        .strictObject({
+          version: z.number().int().min(1),
+          markdown: z.string(),
+          html: z.string().nullable(),
+        })
+        .nullable(),
+    )
+    .query(({ ctx, input }) =>
+      cabinetDocVersion(ctx.prisma, {
+        documentId: input.docId,
+        userId: ctx.user.id,
+        version: input.version,
+      }),
     ),
 
   /** Whether «Опубликовать как страницу» shows in the tab of this chat (Ст32). */

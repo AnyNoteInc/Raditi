@@ -141,8 +141,10 @@ describe.skipIf(!enabled)('the pages of a turn with PostgreSQL', () => {
     const served = await servedFlat(db, page.slug)
     expect(served).toMatchObject({ state: 'live', content: { version: 1 } })
     expect(Buffer.from(served!.content!.bytes).toString()).toBe('<!doctype html><p>Цены</p>')
-    expect((await rows(task.id)).map((row) => row.type)).toEqual(['feed.page', 'feed.file'])
-    expect((await rows(task.id))[0]!.payload).toMatchObject({
+    // The files of the chat go as the archive holds them, the pages after it in the order they
+    // were asked (ChatFiles.deliver).
+    expect((await rows(task.id)).map((row) => row.type)).toEqual(['feed.file', 'feed.page'])
+    expect((await rows(task.id)).find((row) => row.type === 'feed.page')!.payload).toMatchObject({
       v: 1,
       pageId: page.pageId,
       slug: page.slug,

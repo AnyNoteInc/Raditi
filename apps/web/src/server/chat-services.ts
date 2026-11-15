@@ -82,6 +82,7 @@ export function chatServices(): ChatContext | null {
           ? null
           : { address: web.preview, ttlHours: previewTtlHours(process.env) },
       browser: web.browserStreamUrl === null ? null : { streamUrl: web.browserStreamUrl },
+      webPushPublicKey: web.webPushPublicKey,
       browserSupported,
       pages: web.pages,
       // The domain of the pages the agent makes (docs/plan/67-agent-documents.md, Д3, Д8).

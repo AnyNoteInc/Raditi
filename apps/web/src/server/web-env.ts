@@ -43,6 +43,8 @@ export interface WebEnv {
    * null — the platform has no browser here: no site offers tasks in it. `wss://` in production.
    */
   browserStreamUrl: string | null
+  /** The public VAPID key of Web Push (docs/plan/75, ВВ8); null — no notifications in browsers. */
+  webPushPublicKey: string | null
   /**
    * Where published pages answer (docs/plan/69-pages.md, Ст3): the cabinet names their address.
    * null — PAGES_BASE_DOMAIN is unset: no pages here. The same variables as mcp and preview read.
@@ -98,6 +100,14 @@ const webEnvSchema = z
     BILLING_PAST_DUE_DAYS: envVar(z.coerce.number().int().min(1).max(90).default(7)),
     ...previewAddressEnvShape,
     BROWSER_STREAM_PUBLIC_URL: envVar(browserStreamUrl.optional()),
+    // The public VAPID key of Web Push (docs/plan/75-chat-input-output.md, ВВ8); core reads it with
+    // the private one. Absent — the browsers of the cabinet are not offered notifications.
+    WEB_PUSH_VAPID_PUBLIC: envVar(
+      z
+        .string()
+        .regex(/^[A-Za-z0-9_-]{80,100}$/)
+        .optional(),
+    ),
     PAGES_SIGNING_SECRET: envVar(z.string().optional()),
     // Read for the check of the preview domain only.
     GITEA_URL: envVar(z.string().optional()),
@@ -201,6 +211,7 @@ export function webEnvFromEnv(env: Env): WebEnv {
     pastDueDays: e.BILLING_PAST_DUE_DAYS,
     preview: previewAddressFromEnv(e, e.APP_ENV),
     browserStreamUrl: e.BROWSER_STREAM_PUBLIC_URL ?? null,
+    webPushPublicKey: e.WEB_PUSH_VAPID_PUBLIC ?? null,
     pages: pagesAddressFromEnv(e, isProduction(e.APP_ENV), []),
     pageViews: pageViewsOf(e),
   }

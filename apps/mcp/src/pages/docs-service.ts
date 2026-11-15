@@ -4,7 +4,9 @@ import {
   pageContentRefused,
   pageLimits,
   type DocCreateArguments,
+  type DocFinishArguments,
   type DocSectionWriteArguments,
+  type DocView,
   type FeedRow,
 } from '@repo/domain'
 
@@ -25,6 +27,7 @@ export interface McpDocsStore {
     workspaceId: string
     taskId: string
     title: string
+    view: DocView
     sections: { key: string; intent: string }[]
   }): Promise<{ id: string; revision: number }>
   write(input: {
@@ -68,6 +71,7 @@ export interface McpDocsStore {
     documentId: string
     taskId: string
     turnNo: number
+    view?: DocView
   }): Promise<void>
   /** One more write of this turn: false — `pageLimits.sectionWritesPerTurn` is reached. */
   admitWrite(taskId: string, turnNo: number): Promise<boolean>
@@ -112,6 +116,7 @@ export class McpDocsService {
         workspaceId: scope.workspaceId,
         taskId: scope.taskId,
         title: args.title,
+        view: args.view,
         sections: args.sections.map((section) => ({ key: section.id, intent: section.intent })),
       })
       await this.#store.feed(scope.taskId, scope.turn, {
@@ -198,13 +203,14 @@ export class McpDocsService {
     })
   }
 
-  finish(scope: McpTurnAccess, args: { docId: string }): Promise<McpPagesAnswer> {
+  finish(scope: McpTurnAccess, args: DocFinishArguments): Promise<McpPagesAnswer> {
     return answerOf(async () => {
       await this.#store.finish({
         workspaceId: scope.workspaceId,
         documentId: args.docId,
         taskId: scope.taskId,
         turnNo: scope.turn,
+        ...(args.view ? { view: args.view } : {}),
       })
       return {
         docId: args.docId,

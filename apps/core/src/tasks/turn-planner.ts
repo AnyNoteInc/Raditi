@@ -1,4 +1,5 @@
 import type { AttemptCreditBudget } from '@repo/billing'
+import { clientInstructionsSection } from '@repo/domain'
 import {
   attemptBudgetRub,
   turnLeaseOf,
@@ -205,6 +206,8 @@ export interface PassFacts {
    * (`browserContextOf`), and they are not said twice (docs/plan/61-chats-first.md, §5.7).
    */
   agentNotes?: string | null
+  /** The author's own instructions to the agent (docs/plan/76-agent-instructions.md, И2). */
+  clientInstructions?: string | null
   /**
    * The files bound to a task with a repository or to a chat without a site, in the order they
    * were sent: the latest go into the sandbox of its turn (turnInboxOf). Absent or empty — none.
@@ -849,7 +852,7 @@ export async function planTurn(facts: PassFacts, env: PlannerEnvironment): Promi
                 inboxFacts,
                 browser?.guide ? { guide: browser.guide } : null,
               )
-      }${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}`,
+      }${requestedFormatsSection(requestedFileFormats(clientWordsOf(facts, start.since)))}${clientInstructionsSection(facts.clientInstructions)}`,
       egressProxy: SANDBOX_EGRESS_PROXY_URL,
       internet: true,
       ...(skills.length ? { skills: [...skills] } : {}),

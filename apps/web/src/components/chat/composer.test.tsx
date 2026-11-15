@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { AppIcon, type AppIconName } from '@/components/application/app-icon'
 
-import { Composer, pastedFiles } from './composer'
+import { Composer, draggedFiles, historyStep, pastedFiles } from './composer'
 import { movedIndex, paletteOptions } from './command-palette'
 import { verdicts } from './testing'
 
@@ -652,5 +652,101 @@ describe('pastedFiles', () => {
     expect(pastedFiles(clip(['text/plain'], []))).toEqual([])
     expect(pastedFiles(clip(['text/plain', 'text/html', 'Files']))).toEqual([])
     expect(pastedFiles(null)).toEqual([])
+  })
+})
+
+describe('the earlier requests under the arrows (docs/plan/75, ВВ23)', () => {
+  const history = ['Третья просьба', 'Вторая просьба', 'Первая просьба']
+  const view = () =>
+    render(
+      <Composer placeholder="Что поправить?" onSend={vi.fn(async () => true)} history={history} />,
+    )
+
+  it('go back one by one from an empty field, and forward to an empty field again', () => {
+    view()
+    press('ArrowUp')
+    expect(field().value).toBe('Третья просьба')
+    press('ArrowUp')
+    expect(field().value).toBe('Вторая просьба')
+    press('ArrowDown')
+    expect(field().value).toBe('Третья просьба')
+    press('ArrowDown')
+    expect(field().value).toBe('')
+  })
+
+  it('stop at the oldest request', () => {
+    view()
+    for (let step = 0; step < 5; step++) press('ArrowUp')
+    expect(field().value).toBe('Первая просьба')
+  })
+
+  it('leave the client’s own words alone', () => {
+    view()
+    type('Мои слова')
+    press('ArrowUp')
+    expect(field().value).toBe('Мои слова')
+  })
+})
+
+describe('a step of the arrows', () => {
+  it('goes up only from the first line and down only from the last', () => {
+    const history = ['Раз\nДва', 'Три']
+    expect(historyStep('ArrowUp', { text: 'Раз\nДва', index: 0, caret: 5 }, history)).toBeNull()
+    expect(historyStep('ArrowUp', { text: 'Раз\nДва', index: 0, caret: 0 }, history)).toBe(1)
+    expect(historyStep('ArrowDown', { text: 'Раз\nДва', index: 0, caret: 0 }, history)).toBeNull()
+    expect(historyStep('ArrowDown', { text: 'Раз\nДва', index: 0, caret: 7 }, history)).toBe(-1)
+  })
+})
+
+describe('files dragged onto the field (ВВ22)', () => {
+  function attachmentsControl() {
+    return {
+      items: [],
+      readyIds: [],
+      uploading: false,
+      failed: false,
+      notice: null,
+      add: vi.fn(),
+      retry: vi.fn(),
+      remove: vi.fn(),
+      clear: vi.fn(),
+    }
+  }
+
+  it('are attached as if they were chosen, and the field says so while they are over it', () => {
+    const attachments = attachmentsControl()
+    render(
+      <Composer
+        placeholder="Что поправить?"
+        onSend={vi.fn(async () => true)}
+        attachments={attachments as never}
+      />,
+    )
+    const zone = screen.getByTestId('composer-field')
+    const file = new File(['x'], 'фото.png', { type: 'image/png' })
+    fireEvent.dragEnter(zone, { dataTransfer: { types: ['Files'], files: [file] } })
+    expect(zone.getAttribute('data-dragging')).toBe('true')
+    expect(zone.textContent).toContain('Отпустите, чтобы прикрепить')
+    fireEvent.drop(zone, { dataTransfer: { types: ['Files'], files: [file] } })
+    expect(attachments.add).toHaveBeenCalledWith([file])
+    expect(zone.getAttribute('data-dragging')).toBeNull()
+  })
+
+  it('a drag of text is the field’s own', () => {
+    expect(draggedFiles({ types: ['text/plain'] })).toBe(false)
+    expect(draggedFiles({ types: ['Files'] })).toBe(true)
+  })
+})
+
+describe('dictation in the field (docs/plan/75, ВВ16)', () => {
+  it('shows the microphone only where dictation is set up, and says when the browser cannot record', async () => {
+    const { rerender } = render(
+      <Composer placeholder="Что поправить?" onSend={vi.fn(async () => true)} />,
+    )
+    expect(screen.queryByRole('button', { name: 'Надиктовать' })).toBeNull()
+    rerender(<Composer placeholder="Что поправить?" onSend={vi.fn(async () => true)} speech />)
+    fireEvent.click(screen.getByRole('button', { name: 'Надиктовать' }))
+    // jsdom records nothing: the field says so instead of failing.
+    expect(await screen.findByText('Этот браузер не умеет записывать звук.')).toBeTruthy()
   })
 })

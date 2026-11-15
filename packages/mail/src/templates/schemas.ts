@@ -9,6 +9,10 @@ const httpUrl = z.url({ protocol: /^https?$/ })
 const recipientName = z.string().max(255)
 const isoDateTime = z.iso.datetime({ offset: true })
 
+/** Why a chat waits for the client (docs/plan/75-chat-input-output.md, ВВ6). */
+export const chatWaitingKinds = ['answered', 'question', 'ready', 'failed', 'limit'] as const
+export type ChatWaitingKind = (typeof chatWaitingKinds)[number]
+
 // Billing letters greet without a name and take their words from our own records, never from
 // what the customer typed. A value still stays on one line: it goes into a sentence and, in
 // the renewal notice, into the subject.
@@ -83,6 +87,15 @@ export const mailDataSchemas = {
     packCreditsLeft: z.int().nonnegative(),
     giftCreditsLeft,
     ...billingLink,
+  }),
+  // The agent of a chat waits for the client, who is not looking at it (docs/plan/75, ВВ9). No
+  // words of the chat — not its name, not the agent's answer: a link to it and to the settings.
+  'chat-waiting': z.object({
+    kind: z.enum(chatWaitingKinds),
+    /** The chat in the cabinet. */
+    url: httpUrl,
+    /** «Уведомления» of the settings, where the letters are turned off. */
+    settingsUrl: httpUrl,
   }),
 }
 

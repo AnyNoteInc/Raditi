@@ -55,6 +55,19 @@ const calls = vi.hoisted(() => ({
   feed: vi.fn<(input: { taskId: string; after: string }) => Promise<DialogFeed>>(),
   activity: vi.fn<(input: { after: string }) => Promise<TurnActivityPage>>(),
   message: vi.fn<(input: Press & { text: string }) => Promise<Posted>>(),
+  // The queue of the chat (docs/plan/75, ВВ1): empty unless a test fills it.
+  queueAdd:
+    vi.fn<(input: Press & { text: string }) => Promise<{ id: string | null; repeated: boolean }>>(),
+  queueList: vi.fn(async (_input: { taskId: string }) => ({
+    items: [] as {
+      id: string
+      requestId: string
+      text: string
+      attachments: string[]
+      createdAt: Date
+    }[],
+  })),
+  queueSendNow: vi.fn(async (_input: Press) => ({ requestEventId: '99' as string | null })),
   proceed: vi.fn<(input: Press) => Promise<Posted>>(),
   retry: vi.fn<(input: Press & { failureEventId: string }) => Promise<Posted>>(),
   cancel: vi.fn<(input: Press) => Promise<Posted & { state: 'cancelled' | 'stopping' }>>(),
@@ -143,6 +156,11 @@ vi.mock('@/trpc/client', () => ({
   useTRPC: () => ({
     task: {
       message: mutation(calls.message),
+      queueAdd: mutation(calls.queueAdd),
+      queueList: query('task.queueList', calls.queueList),
+      queueEdit: mutation(async (input: { text: string }) => ({ text: input.text })),
+      queueRemove: mutation(async () => ({ removed: true as const })),
+      queueSendNow: mutation(calls.queueSendNow),
       continue: mutation(calls.proceed),
       retry: mutation(calls.retry),
       cancel: mutation(calls.cancel),
@@ -1090,7 +1108,6 @@ describe('a dialog', () => {
       expect(line().open).toBe(false)
       await run(/Подробности работы/)
       await waitFor(() => expect(line().open).toBe(true))
-      await screen.findByRole('heading', { name: 'Ход работы' })
       await screen.findByText('Подробности работы показаны')
       cleanup()
       showDialog(worked)
@@ -2608,11 +2625,17 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
   })
 
   it('steps aside with the cross of its last tab: no panel, no edge, the focus back on «+»', async () => {
+    // The shell of the chats leaves the panel its room by its mark, not by `:has()` (plan 74).
+    const shell = document.createElement('div')
+    shell.setAttribute('data-chat-shell', '')
+    document.body.append(shell)
     wideLayout()
     showDialog()
     await screen.findByText('Изменения готовы')
+    expect(shell.hasAttribute('data-chat-pane-open')).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: 'Посмотреть изменения' }))
     const files = await screen.findByRole('tab', { name: 'Файлы', selected: true })
+    expect(shell.hasAttribute('data-chat-pane-open')).toBe(true)
     expect(screen.getByRole('separator', { name: 'Ширина панели' })).toBeTruthy()
     // The cross is the pointer's way, hidden from a screen reader: the tab is one control.
     const cross = within(files).getByTitle('Закрыть вкладку «Файлы»')
@@ -2622,8 +2645,10 @@ describe("the tools of a dialog (owner's request of 29.10.2026)", () => {
     expect(screen.queryByRole('separator')).toBeNull()
     // The shell gives the dialog the room back: nothing of the panel is left to keep it.
     expect(document.querySelector('[data-chat-pane]')).toBeNull()
+    expect(shell.hasAttribute('data-chat-pane-open')).toBe(false)
     await waitFor(() => expect(document.activeElement).toBe(plus()))
     expect(plus().id).toBe('dialog-tools')
+    shell.remove()
   })
 
   it('closes every tab by «Скрыть панель», a tab behind by its cross', async () => {
@@ -3279,7 +3304,7 @@ describe('a task in the browser', () => {
   ])('opens the browser %s from «+», and its stream only then', async (_where, wide) => {
     if (wide) wideLayout()
     showDialog(browserAnswer({ events: [requestRow('1')], cursor: '1' }), STREAM_URL)
-    await screen.findByRole('heading', { name: 'Агент работает' })
+    await screen.findByRole('status', { name: 'Агент работает' })
     // The live block has no way of its own to the browser (owner's answer of 30.10.2026).
     expect(screen.queryByRole('button', { name: 'Смотреть, что делает агент' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Открыть браузер' })).toBeNull()
@@ -3584,7 +3609,7 @@ describe('a task in the browser', () => {
       asked,
     )
     mountDialog({ streamUrl: STREAM_URL })
-    await screen.findByRole('heading', { name: 'Агент работает' })
+    await screen.findByRole('status', { name: 'Агент работает' })
     await choose(/^Браузер/)
     await screen.findByRole('tab', { name: 'Браузер', selected: true })
     await waitFor(() => expect(sockets).toHaveLength(1))
@@ -4311,5 +4336,56 @@ describe('the browser kept from its idle end while the client looks at the dialo
     showPage(true)
     await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
     expect(calls.watch).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('the queue of the chat while the agent works (docs/plan/75, ВВ1, ВВ4)', () => {
+  const running = () =>
+    feedAnswer({
+      status: 'running',
+      task: { turnNo: 1, runningSince: '2026-10-17T09:01:00.000Z' },
+      events: [requestRow('1')],
+      cursor: '1',
+    })
+
+  it('keeps the field open, puts the words into the queue and stops by the same button when empty', async () => {
+    calls.queueAdd.mockResolvedValueOnce({
+      id: '0199a3f2-0000-7000-8000-0000000000c1',
+      repeated: false,
+    })
+    showDialog(running())
+    const stop = await screen.findByRole<HTMLButtonElement>('button', { name: 'Остановить' })
+    await waitFor(() => expect(field().disabled).toBe(false))
+    expect(stop).toBeTruthy()
+    type('И ещё добавьте телефон')
+    const queue = screen.getByRole<HTMLButtonElement>('button', { name: 'Поставить в очередь' })
+    fireEvent.click(queue)
+    await waitFor(() => expect(calls.queueAdd).toHaveBeenCalledTimes(1))
+    expect(calls.queueAdd.mock.calls[0]![0]).toMatchObject({
+      taskId: TASK_ID,
+      text: 'И ещё добавьте телефон',
+    })
+    expect(calls.message).not.toHaveBeenCalled()
+  })
+
+  it('shows the queued words with «Отправить сейчас», which stops the pass for them', async () => {
+    calls.queueList.mockResolvedValue({
+      items: [
+        {
+          id: '0199a3f2-0000-7000-8000-0000000000c2',
+          requestId: '0199a3f2-0000-7000-8000-0000000000c3',
+          text: 'Поменяйте и цену латте',
+          attachments: [],
+          createdAt: new Date(),
+        },
+      ],
+    })
+    showDialog(running())
+    const words = await screen.findByText('Поменяйте и цену латте')
+    const section = words.closest('section') as HTMLElement
+    fireEvent.click(within(section).getByRole('button', { name: 'Отправить сейчас' }))
+    await waitFor(() => expect(calls.queueSendNow).toHaveBeenCalledTimes(1))
+    expect(calls.queueSendNow.mock.calls[0]![0]).toMatchObject({ taskId: TASK_ID })
+    calls.queueList.mockResolvedValue({ items: [] })
   })
 })

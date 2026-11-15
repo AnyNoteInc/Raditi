@@ -18,6 +18,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { useTRPC } from '@/trpc/client'
 
+import { AgentInstructions } from './agent-instructions'
+import { NotificationSettings } from './notification-settings'
+
 const MARKETING_SLUG = 'marketing-consent'
 const themeOptions = [
   { value: 'light', label: 'Светлая' },
@@ -214,6 +217,10 @@ export function SettingsPanel({ email }: { email: string }) {
           ))}
         </RadioGroup>
       </FormControl>
+
+      <AgentInstructions />
+
+      <NotificationSettings />
 
       <Box sx={{ p: { xs: 2.5, sm: 4 } }}>
         <Stack

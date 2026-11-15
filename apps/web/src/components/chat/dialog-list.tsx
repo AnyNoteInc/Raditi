@@ -5,12 +5,14 @@ import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import ButtonBase from '@mui/material/ButtonBase'
+import InputBase from '@mui/material/InputBase'
+import IconButton from '@mui/material/IconButton'
 import Skeleton from '@mui/material/Skeleton'
 import Typography from '@mui/material/Typography'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import Link from 'next/link'
 import { useSelectedLayoutSegment } from 'next/navigation'
-import { useId, useState, type ReactNode } from 'react'
+import { useDeferredValue, useEffect, useId, useState, type ReactNode } from 'react'
 
 import { AppIcon } from '@/components/application/app-icon'
 import { useTRPCClient } from '@/trpc/client'
@@ -20,7 +22,14 @@ import { dialogGroups, listTime } from './chat-format'
 import { chatsText, listText, undoText } from './chat-texts'
 import type { ChatFolder, DialogListItem } from './chat-types'
 import { offScreen } from './composer'
-import { DialogMenuButton, dialogListKey, RemoveDialogConfirm, RenameField } from './dialog-actions'
+import { ArchiveDialog, archiveText } from './archive-dialog'
+import {
+  DialogMenuButton,
+  dialogListKey,
+  RemoveDialogConfirm,
+  RenameField,
+  usePinArchive,
+} from './dialog-actions'
 import { ProjectMark } from './project-mark'
 import { StatusMark } from './status-mark'
 
@@ -33,15 +42,27 @@ const LIST_REFRESH_MS = 15_000
 const NO_PROJECT = 'none'
 const folderKey = (folder: ChatFolder) => folder.project?.id ?? NO_PROJECT
 
-/** The pages of one list: every chat of the user, or of one folder. */
-function useChatPages(folder: string | null) {
+/** How long the words of the search rest before they are asked (ВВ21). */
+const SEARCH_PAUSE_MS = 300
+
+/**
+ * The pages of one list: every chat of the user, or of one folder; `archive` — «Архив»
+ * (docs/plan/75-chat-input-output.md, ВВ21). The first page of the list carries its pinned chats.
+ */
+function useChatPages(folder: string | null, view: 'active' | 'archive' = 'active') {
   const client = useTRPCClient()
   return useInfiniteQuery({
-    queryKey: folder === null ? [...dialogListKey, 'all'] : [...dialogListKey, 'folder', folder],
+    queryKey:
+      view === 'archive'
+        ? [...dialogListKey, 'archive']
+        : folder === null
+          ? [...dialogListKey, 'all']
+          : [...dialogListKey, 'folder', folder],
     queryFn: ({ pageParam }) =>
       client.task.list.query({
         ...(folder === null ? {} : { folder }),
         ...(pageParam === null ? {} : { cursor: pageParam }),
+        ...(view === 'archive' ? { view } : {}),
       }),
     initialPageParam: null as string | null,
     getNextPageParam: (page) => page.nextCursor,
@@ -52,7 +73,8 @@ function useChatPages(folder: string | null) {
 /** The user has no chat at all, as the server said: nothing to group yet. */
 export function useChatsKnownEmpty(): boolean {
   const list = useChatPages(null)
-  return list.data?.pages[0]?.items.length === 0
+  const first = list.data?.pages[0]
+  return first !== undefined && first.items.length === 0 && first.pinned.length === 0
 }
 
 function ListLoading() {
@@ -206,6 +228,12 @@ function DialogLink({
             {hint}
           </Typography>
         ) : null}
+        {item.archived ? (
+          <Typography component="span" variant="caption" color={quiet}>
+            <span aria-hidden="true">· </span>
+            {listText.inArchive}
+          </Typography>
+        ) : null}
         {/* In a folder its name is the folder's. */}
         {item.project !== null && !inFolder ? (
           <Typography
@@ -242,6 +270,7 @@ function DialogRow({
 }) {
   const [renaming, setRenaming] = useState(false)
   const [removing, setRemoving] = useState(false)
+  const keep = usePinArchive()
   const title = item.title ?? listText.untitled
   return (
     <Box
@@ -270,6 +299,11 @@ function DialogRow({
               title={title}
               onRename={() => setRenaming(true)}
               onRemove={() => setRemoving(true)}
+              pin={{ pinned: item.pinned, onToggle: () => keep.pin(item.id, !item.pinned) }}
+              archive={{
+                archived: item.archived,
+                onToggle: () => keep.archive(item.id, !item.archived),
+              }}
             />
           </Box>
         </>
@@ -361,10 +395,14 @@ function OneList({ currentId }: { currentId: string | null }) {
   if (list.isError)
     return <ListFailed retrying={list.isFetching} onRetry={() => void list.refetch()} />
   const items = list.data.pages.flatMap((page) => page.items)
-  if (items.length === 0) return <EmptyList />
+  const pinned = list.data.pages[0]?.pinned ?? []
+  if (items.length === 0 && pinned.length === 0) return <EmptyList />
   const now = new Date()
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mx: { md: -1.5 } }}>
+      {pinned.length > 0 ? (
+        <DialogGroup label={listText.pinned} items={pinned} currentId={currentId} now={now} />
+      ) : null}
       {dialogGroups(items, now).map((group) => (
         <DialogGroup
           key={group.key}
@@ -411,7 +449,10 @@ function FolderChats({
   return (
     <>
       <DialogRows
-        items={list.data.pages.flatMap((page) => page.items)}
+        items={[
+          ...(list.data.pages[0]?.pinned ?? []),
+          ...list.data.pages.flatMap((page) => page.items),
+        ]}
         labelledBy={labelledBy}
         currentId={currentId}
         now={now}
@@ -571,6 +612,137 @@ function Folders({ asked, currentId }: { asked: string | null; currentId: string
 }
 
 /**
+ * «Архив» pinned at the very bottom of the list (owner's request of 14.11.2026,
+ * docs/plan/76-agent-instructions.md, И9): it opens the window of the archive.
+ */
+export function ArchiveButton() {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <ButtonBase
+        aria-haspopup="dialog"
+        data-archive=""
+        onClick={() => setOpen(true)}
+        sx={{
+          width: '100%',
+          minHeight: 44,
+          display: 'flex',
+          justifyContent: 'flex-start',
+          gap: 1,
+          px: 1.25,
+          borderRadius: '10px',
+          fontSize: 14,
+          color: 'text.secondary',
+          '&:hover': { bgcolor: 'action.hover', color: 'text.primary' },
+        }}
+      >
+        <AppIcon name="archive" size={16} />
+        {archiveText.open}
+      </ButtonBase>
+      <ArchiveDialog open={open} onClose={() => setOpen(false)} />
+    </>
+  )
+}
+
+/** The field «Найти чат» over the list (ВВ21). */
+function SearchField({
+  value,
+  onChange,
+  onClose,
+}: {
+  value: string
+  onChange: (value: string) => void
+  onClose: () => void
+}) {
+  return (
+    <Box
+      role="search"
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 1,
+        minHeight: 40,
+        px: 1.25,
+        mx: { md: -1.5 },
+        borderRadius: '10px',
+        bgcolor: 'action.hover',
+        color: 'text.secondary',
+        '&:focus-within': { outline: '2px solid', outlineColor: 'primary.main' },
+      }}
+    >
+      <AppIcon name="search" size={16} />
+      <InputBase
+        value={value}
+        onChange={(event) => onChange(event.target.value.slice(0, 100))}
+        placeholder={listText.search}
+        autoFocus
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') onClose()
+        }}
+        inputProps={{ 'aria-label': listText.search, type: 'search' }}
+        sx={{ flex: 1, fontSize: 14, color: 'text.primary' }}
+      />
+      {
+        <IconButton
+          aria-label={value === '' ? listText.searchClose : listText.searchClear}
+          onClick={() => (value === '' ? onClose() : onChange(''))}
+          sx={{ width: 36, height: 36, color: 'text.secondary' }}
+        >
+          <AppIcon name="close" size={16} />
+        </IconButton>
+      }
+    </Box>
+  )
+}
+
+/** What the search found: the chats of the list and of «Архив», the latest changed first. */
+function SearchResults({ query, currentId }: { query: string; currentId: string | null }) {
+  const client = useTRPCClient()
+  const labelId = useId()
+  const found = useQuery({
+    queryKey: [...dialogListKey, 'search', query],
+    queryFn: () => client.task.search.query({ query }),
+  })
+  if (found.isPending)
+    return (
+      <Box role="status" aria-label={listText.searchLoading}>
+        <ListLoading />
+      </Box>
+    )
+  if (found.isError)
+    return <ListFailed retrying={found.isFetching} onRetry={() => void found.refetch()} />
+  if (found.data.items.length === 0)
+    return (
+      <Typography role="status" variant="body2" color="text.secondary">
+        {listText.searchEmpty}
+      </Typography>
+    )
+  return (
+    <Box sx={{ mx: { md: -1.5 } }}>
+      <Box id={labelId} sx={offScreen}>
+        {listText.search}
+      </Box>
+      <DialogRows
+        items={found.data.items}
+        labelledBy={labelId}
+        currentId={currentId}
+        now={new Date()}
+      />
+    </Box>
+  )
+}
+
+/** The words of the search once they have rested: a word typed on does not ask each letter. */
+function useRestedWords(words: string): string {
+  const [rested, setRested] = useState(words)
+  useEffect(() => {
+    const later = window.setTimeout(() => setRested(words), SEARCH_PAUSE_MS)
+    return () => window.clearTimeout(later)
+  }, [words])
+  return useDeferredValue(rested)
+}
+
+/**
  * The chats of the user in the column of «Чаты», one list or folders of projects, each with its
  * status in a sign and a word and its time. The open chat is the current page. The list follows
  * the statuses while the page is shown.
@@ -578,17 +750,46 @@ function Folders({ asked, currentId }: { asked: string | null; currentId: string
 export function DialogList({
   grouped = false,
   folder = null,
+  searching = false,
+  onSearchClose,
 }: {
   /** «По проектам»; otherwise one list. */
   grouped?: boolean
   /** The folder the address asks to open. */
   folder?: string | null
+  /**
+   * The loupe of the head of the column is pressed (owner's request of 15.11.2026,
+   * docs/plan/77-chat-list-dictation.md, Р2): the field «Найти чат» stands over the list.
+   */
+  searching?: boolean
+  /** The field was closed: Escape, or its cross over an empty field. */
+  onSearchClose?: () => void
 }) {
   const segment = useSelectedLayoutSegment()
   const currentId = segment === null ? null : segment.toLowerCase()
-  return grouped ? (
-    <Folders asked={folder?.toLowerCase() ?? null} currentId={currentId} />
-  ) : (
-    <OneList currentId={currentId} />
+  const [words, setWords] = useState('')
+  const query = useRestedWords(searching ? words : '')
+    .replace(/\s+/gu, ' ')
+    .trim()
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      {searching ? (
+        <SearchField
+          value={words}
+          onChange={setWords}
+          onClose={() => {
+            setWords('')
+            onSearchClose?.()
+          }}
+        />
+      ) : null}
+      {query !== '' ? (
+        <SearchResults query={query} currentId={currentId} />
+      ) : grouped ? (
+        <Folders asked={folder?.toLowerCase() ?? null} currentId={currentId} />
+      ) : (
+        <OneList currentId={currentId} />
+      )}
+    </Box>
   )
 }

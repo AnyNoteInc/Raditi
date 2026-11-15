@@ -135,7 +135,10 @@ const limits = feedLimits
 // `continue` — «Продолжить» after a question of the platform about credits (Р8), the kind the
 // design reserved for it; `resume` — «Продолжить работу агента» of a task in the browser
 // (docs/plan/57-browser-tasks.md, Б16); `agent_command` — a command that is a pass of the agent on
-// the platform's words: paid and moving the dialog on, unlike `command` (docs/plan/61, §5.2).
+// the platform's words: paid and moving the dialog on, unlike `command` (docs/plan/61, §5.2);
+// `queued` — words the client wrote while the agent worked, sent by core when the pass ended
+// (docs/plan/75-chat-input-output.md, ВВ1, ВВ2); `interrupt` — «Отправить сейчас» of them: the
+// pass under way stops and the next one starts with them (ВВ4).
 export const feedRequestKinds = [
   'first',
   'answer',
@@ -145,6 +148,8 @@ export const feedRequestKinds = [
   'continue',
   'resume',
   'agent_command',
+  'queued',
+  'interrupt',
 ] as const
 export type FeedRequestKind = (typeof feedRequestKinds)[number]
 
@@ -422,7 +427,12 @@ const attachments = z.array(z.uuid()).max(limits.attachments).optional()
 
 /** `feed.request` v1 — what the customer wrote or pressed. */
 export const feedRequestPayloadSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ ...requestBase, kind: z.literal('first'), text: requestText, attachments }),
+  z.strictObject({
+    ...requestBase,
+    kind: z.literal('first'),
+    text: requestText,
+    attachments,
+  }),
   z.strictObject({
     ...requestBase,
     kind: z.literal('answer'),
@@ -473,6 +483,17 @@ export const feedRequestPayloadSchema = z.discriminatedUnion('kind', [
     kind: z.literal('agent_command'),
     command: z.enum(feedAgentCommandIds),
   }),
+  // Words of the queue of the chat, written by core when the pass they waited for ended (ВВ2):
+  // they answer whatever that pass came to, so they name no row. `requestId` — the id the
+  // browser gave the words when it queued them.
+  z.strictObject({
+    ...requestBase,
+    kind: z.literal('queued'),
+    text: requestText,
+    attachments,
+  }),
+  // «Отправить сейчас» (ВВ4): a press, the words follow as `queued` once the pass has stopped.
+  z.strictObject({ ...requestBase, kind: z.literal('interrupt') }),
 ])
 export type FeedRequestPayload = z.infer<typeof feedRequestPayloadSchema>
 
@@ -1012,6 +1033,18 @@ const readRequest = {
     requestId: z.uuid(),
     command: known(feedAgentCommandIds, null),
   }),
+  queued: z.object({
+    kind: z.literal('queued'),
+    text: z.string().min(1).max(limits.requestText),
+    authorId: z.uuid(),
+    requestId: z.uuid(),
+    attachments,
+  }),
+  interrupt: z.object({
+    kind: z.literal('interrupt'),
+    authorId: z.uuid(),
+    requestId: z.uuid(),
+  }),
 } satisfies Record<FeedRequestKind, z.ZodType>
 // A kind added later: the text is shown when there is one.
 const readOtherRequest = z.object({
@@ -1260,6 +1293,8 @@ export type FeedEvent =
       | z.infer<typeof readRequest.continue>
       | z.infer<typeof readRequest.resume>
       | z.infer<typeof readRequest.agent_command>
+      | z.infer<typeof readRequest.queued>
+      | z.infer<typeof readRequest.interrupt>
       | ({ kind: 'other' } & z.infer<typeof readOtherRequest>)
     ))
   | { type: 'feed.step'; turn: number; attempt: number; step: FeedStep }

@@ -49,7 +49,7 @@ import { useTRPC } from '@/trpc/client'
 import type { SentFile } from './attachment-chips'
 import { BrowserPane } from './browser-pane'
 import { sessionLive } from './browser-pane-model'
-import { callErrorText, sendErrorText } from './call-error'
+import { callErrorCode, callErrorText, sendErrorText } from './call-error'
 import { newChatHref } from './chat-address'
 import { useChatDetails, useChatThinking } from './chat-details'
 import { rememberEffort } from './chat-effort'
@@ -60,6 +60,7 @@ import {
   chatsText,
   clientCommandText,
   composerText,
+  queueText,
   dialogText,
   effortText,
   listText,
@@ -108,6 +109,7 @@ import { showsRefresh, type FeedHeadState } from './feed-state'
 import { CandidateTab, PreviewTab, usePreviewCalls } from './preview-pane'
 import { AgentNotesDialog } from './agent-notes-dialog'
 import { ReleaseDialog } from './release-dialog'
+import { RESULTS_ROOM, ResultsCard, ResultsToggle, useResultsCard } from './results-card'
 import { TOOLS_BUTTON_ID, TOOLS_MENU_MARK, ToolsMenu } from './tools-menu'
 import { ToolsPanel } from './tools-panel'
 import { TurnActivity } from './turn-activity'
@@ -115,11 +117,22 @@ import { UndoDialog } from './undo-dialog'
 import { useAttachments } from './use-attachments'
 import { useBrowserLaunch } from './use-browser-launch'
 import { useDocumentArrivals } from './use-document-arrivals'
+import {
+  agentDocEntry,
+  agentDocOfEntry,
+  agentDocumentIdsOf,
+  DocRevisions,
+  docRevisionsOf,
+  useAgentDocumentArrivals,
+} from './agent-document'
 import { DocumentsPane, type DocumentTarget } from './documents-pane'
 import { PublishTargetDialog, usePagePublish, type PublishTarget } from './page-publish'
 import { useBrowserStream } from './use-browser-stream'
 import { useBrowserWatching } from './use-browser-watching'
 import { useFeedFollow } from './use-feed-follow'
+import { requestHistoryOf } from './prompt-history'
+import { QueueCards, useChatQueue } from './queue-cards'
+import { useWaitingTitle } from './use-waiting-title'
 import { useDialogFeed } from './use-dialog-feed'
 import { uuidv7 } from './uuid'
 import { UsageWindowHint } from '@/components/billing/usage-window-hint'
@@ -205,6 +218,7 @@ function DialogHead({
   head,
   onRenamed,
   tools,
+  results = null,
 }: {
   project: ChatProject | null
   taskId: string
@@ -213,6 +227,8 @@ function DialogHead({
   onRenamed: () => void
   /** «+» of the tools while their panel is closed; null — it stands at the end of the tabs. */
   tools: ReactNode
+  /** The icon that hides and shows «Результаты»; null — the chat has none to show. */
+  results?: ReactNode
 }) {
   // «Отменить выпуск» is offered now: deleting the dialog takes it away too.
   const undoable =
@@ -326,6 +342,7 @@ function DialogHead({
           gap: 0.5,
         }}
       >
+        {results}
         {head !== null && !renaming ? (
           <DialogMenuButton
             title={title}
@@ -357,6 +374,7 @@ export function DialogView({
   taskId,
   title,
   browserStreamUrl = null,
+  speech = false,
 }: {
   /** The project of the chat, from `task.get`; null — a chat without one. */
   project: ChatProject | null
@@ -367,6 +385,8 @@ export function DialogView({
    * docs/plan/57-browser-tasks.md, Б12); null — the platform has no browser here.
    */
   browserStreamUrl?: string | null
+  /** Dictation is set up here (docs/plan/75-chat-input-output.md, ВВ16). */
+  speech?: boolean
 }) {
   const siteId = project?.id ?? null
   const siteUrl = project?.url ?? null
@@ -375,6 +395,8 @@ export function DialogView({
   const { state, refresh } = useDialogFeed(taskId)
   const head = state.head
   const rows = state.rows
+  // The client's earlier requests of this chat: the arrows of the field bring them back (ВВ23).
+  const requestHistory = useMemo(() => requestHistoryOf(rows), [rows])
 
   // The tools beside the dialog, as the client opened them (docs/plan/59, И1): every showing of a
   // dialog starts with them closed — with changes ready and with a browser at work too — and
@@ -453,6 +475,16 @@ export function DialogView({
   }, [])
 
   const message = useMutation(trpc.task.message.mutationOptions())
+  // The queue of the chat (docs/plan/75-chat-input-output.md, ВВ1): words written while it works.
+  const queueAdd = useMutation(trpc.task.queueAdd.mutationOptions())
+  const agentWorks =
+    head?.task.status === 'queued' ||
+    head?.task.status === 'preparing' ||
+    head?.task.status === 'running'
+  const chatQueue = useChatQueue(taskId, agentWorks)
+  // The tab says the chat waits while it is hidden (docs/plan/75, ВВ11).
+  useWaitingTitle(head?.task.status ?? null)
+  const queued = chatQueue.data?.items ?? []
   const proceed = useMutation(trpc.task.continue.mutationOptions())
   const cancel = useMutation(trpc.task.cancel.mutationOptions())
   // «Опубликовать как страницу» of a document of the chat (docs/plan/69-pages.md, Ст32): to its
@@ -563,6 +595,24 @@ export function DialogView({
     openDocument(name, null)
     dispatchTools({ type: 'documentArrived', opens: wide })
   })
+  // The documents the agent writes section by section (docs/plan/74, Д5): one it begins while the
+  // client looks at the chat opens the tab on it, as a file does, and fills there as it is written.
+  const agentDocs = useMemo(
+    () => agentDocumentIdsOf(rows as readonly { type: string; docId?: string }[]),
+    [rows],
+  )
+  const docRevisions = useMemo(
+    () => docRevisionsOf(rows as readonly { type: string; docId?: string; revision?: number }[]),
+    [rows],
+  )
+  useAgentDocumentArrivals(agentDocs, head !== null, (docId) => {
+    openDocument(agentDocEntry(docId), null)
+    dispatchTools({ type: 'documentArrived', opens: wide })
+  })
+  const documentCount = chatDocuments.length + agentDocs.length
+  // «Результаты» beside the chat (owner's request of 14.11.2026): from `lg`, while the area of the
+  // feed is wide enough and the client has not hidden it.
+  const results = useResultsCard(feedArea, wide && documentCount > 0)
   useBrowserLaunch(head, {
     taskId,
     enabled: withBrowser && browserStreamUrl !== null,
@@ -858,6 +908,27 @@ export function DialogView({
     // Files go with the messages of any chat: to the browser's pages, or into the copy of the
     // site the agent works on.
     const files = [...attachmentIds]
+    // While the agent works the words wait in the queue (ВВ1); a pass that ended meanwhile takes
+    // them as a message.
+    if (agentWorks) {
+      try {
+        await queueAdd.mutateAsync({
+          taskId,
+          requestId: pressId('message', `${text}\u0000${files.join(',')}`),
+          text,
+          ...(files.length > 0 ? { attachments: files } : {}),
+        })
+        pressed('message')
+        void chatQueue.refetch()
+        return true
+      } catch (failure) {
+        if (callErrorCode(failure) !== 'TASK_NOT_BUSY') {
+          setFieldError(sendErrorText(failure, { withProject: project !== null }))
+          refresh()
+          return false
+        }
+      }
+    }
     try {
       await message.mutateAsync({
         taskId,
@@ -1120,6 +1191,14 @@ export function DialogView({
       openDocument(document.name, fileId)
       openTool('documents', { by: 'menu' })
     },
+    onOpenAgentDocument: (docId) => {
+      openDocument(agentDocEntry(docId), null)
+      openTool('documents', { by: 'menu' })
+    },
+    shownAgentDocument:
+      shown && tools.active === 'documents' && documentTarget
+        ? agentDocOfEntry(documentTarget.name)
+        : null,
     // A closed project is read: nothing that carries the work on is offered (К39), «Остановить» is.
     ...(closedProject
       ? {}
@@ -1127,6 +1206,8 @@ export function DialogView({
           onContinue: () => void press('continue', proceed.mutateAsync),
           onTakeControl: takeControl,
           onResumeAgent: resumeWork,
+          // «Изменить» is `/undo`: its words come back to the field (ВВ25).
+          onEditLast: () => runCommand('turn_undo'),
         }),
     // A press the server would refuse is not drawn: an owner or an admin, of a project that is open.
     ...(!closedProject && project?.closed !== true && agentNotes.data?.canManage
@@ -1227,34 +1308,44 @@ export function DialogView({
     // К39). The field stays closed rather than gone: a turn already under way can still be stopped.
     // The feed says it live; the word of the page is as of its load, before the first feed.
     const closedField = closedProject || project?.closed === true
+    // While the agent works the field stays open: the words wait in the queue (ВВ1).
+    const working = status === 'queued' || status === 'preparing' || status === 'running'
     const disabledReason = stopping
       ? composerText.stopping
       : closedField
         ? chatsText.closedProject
-        : answering || revising
+        : answering || revising || working
           ? null
           : releasing
             ? composerText.releasing
             : feedInputText.disabled
-    // While the agent works «Остановить» stands in place of «Отправить» (`/cancel`).
-    const working = status === 'queued' || status === 'preparing' || status === 'running'
+    // While the agent works «Остановить» stands in place of «Отправить» (`/cancel`) — until words
+    // are written: then the button puts them in the queue.
     const cancelVerdict = commands.find((command) => command.id === 'cancel')
     composer = (
       <Composer
         placeholder={
           closedField
             ? chatsText.closedProject
-            : answering && !answered
-              ? feedQuestionText.placeholder
-              : revising
-                ? composerText.revisionPlaceholder
-                : composerText.newPlaceholder
+            : working
+              ? queueText.placeholder
+              : answering && !answered
+                ? feedQuestionText.placeholder
+                : revising
+                  ? composerText.revisionPlaceholder
+                  : composerText.newPlaceholder
         }
         // An answer of the agent asks nothing: the field is the field of a new message.
-        sendLabel={answering && !answered ? feedQuestionText.send : composerText.send}
+        sendLabel={
+          working
+            ? queueText.queue
+            : answering && !answered
+              ? feedQuestionText.send
+              : composerText.send
+        }
         disabledReason={disabledReason}
         error={fieldError}
-        busy={message.isPending}
+        busy={message.isPending || queueAdd.isPending}
         onSend={send}
         effort={settings}
         commands={composerCommands}
@@ -1263,6 +1354,8 @@ export function DialogView({
         restored={undoneWords}
         restoredTaken={wordsTaken}
         onTextChange={fieldTextChanged}
+        history={requestHistory}
+        speech={speech}
         {...(working
           ? {
               stop: {
@@ -1279,9 +1372,7 @@ export function DialogView({
   // Its dot says what is new behind it, never while the panel is open (И13); below `lg` its menu
   // comes up from the bottom of the screen (И14). A chat with no tool has no «+» at all (К19).
   const tiles =
-    head === null
-      ? []
-      : toolTilesOf(head, tools, { answered, rewound, documents: chatDocuments.length })
+    head === null ? [] : toolTilesOf(head, tools, { answered, rewound, documents: documentCount })
   const menu =
     head === null || tiles.length === 0 ? null : (
       <ToolsMenu
@@ -1342,10 +1433,11 @@ export function DialogView({
         )
       case 'documents':
         return (
-          <>
+          <DocRevisions.Provider value={docRevisions}>
             <DocumentsPane
               taskId={taskId}
               rows={rows}
+              agentDocs={agentDocs}
               target={documentTarget}
               fullscreen={fullscreen}
               onFullscreen={setFullscreen}
@@ -1371,7 +1463,7 @@ export function DialogView({
                 onClose={() => setPublishing(null)}
               />
             )}
-          </>
+          </DocRevisions.Provider>
         )
       case 'terminal':
         // The files of the agent's working copy, and the client's edit of one (06.11.2026).
@@ -1450,6 +1542,9 @@ export function DialogView({
           head={head}
           onRenamed={refresh}
           tools={shown ? null : menu}
+          results={
+            results.fits ? <ResultsToggle shown={results.shown} onToggle={results.toggle} /> : null
+          }
         />
       </Box>
 
@@ -1474,10 +1569,48 @@ export function DialogView({
           position: { lg: 'relative' },
           mx: { lg: -4 },
           px: { lg: 4 },
+          // The feed keeps clear of «Результаты» on the right while it is shown.
+          ...(results.shown ? { pr: { lg: `${32 + RESULTS_ROOM}px` } } : {}),
           pt: { lg: 1 },
           mb: { lg: -3.5 },
         }}
       >
+        {results.shown ? (
+          // Pinned to the top of the area as the feed scrolls under it: no height of its own.
+          <Box
+            sx={{
+              position: 'sticky',
+              top: 0,
+              height: 0,
+              zIndex: 3,
+              mr: `-${RESULTS_ROOM}px`,
+              display: 'flex',
+              justifyContent: 'flex-end',
+            }}
+          >
+            <Box sx={{ pt: 1 }}>
+              <ResultsCard
+                agentDocs={agentDocs}
+                documents={chatDocuments}
+                shownAgentDoc={
+                  shown && tools.active === 'documents' && documentTarget
+                    ? agentDocOfEntry(documentTarget.name)
+                    : null
+                }
+                onOpenAgentDoc={(docId) => {
+                  openDocument(agentDocEntry(docId), null)
+                  openTool('documents', { by: 'menu' })
+                }}
+                onOpenFile={(fileId) => {
+                  const document = documentOfFile(chatDocuments, fileId)
+                  if (document === null) return
+                  openDocument(document.name, fileId)
+                  openTool('documents', { by: 'menu' })
+                }}
+              />
+            </Box>
+          </Box>
+        ) : null}
         <Box
           ref={feedContent}
           sx={{
@@ -1548,6 +1681,21 @@ export function DialogView({
                     }
                   : undefined
               }
+            />
+          ) : null}
+          {head ? (
+            <QueueCards
+              taskId={taskId}
+              items={queued}
+              canInterrupt={
+                (head.task.status === 'preparing' || head.task.status === 'running') && !stopping
+              }
+              waiting={
+                !agentWorks &&
+                (head.task.status === 'awaiting_user' || head.task.status === 'awaiting_approval')
+              }
+              onSendAll={(text, files) => send(text, files)}
+              onChanged={refresh}
             />
           ) : null}
           {state.failures > 0 ? (

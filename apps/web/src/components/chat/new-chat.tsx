@@ -24,6 +24,7 @@ import { dialogListKey } from './dialog-list'
 import { EffortMenu, type EffortMenuHandle } from './effort-menu'
 import { markNewDialog } from './new-dialog-hint'
 import { ProjectPicker, projectChoosable } from './project-picker'
+import { readPromptHistory, rememberPrompt } from './prompt-history'
 import { useAttachments } from './use-attachments'
 import { uuidv7 } from './uuid'
 import { UsageWindowHint } from '@/components/billing/usage-window-hint'
@@ -44,11 +45,14 @@ export function NewChat({
   userId,
   userName = null,
   beside = false,
+  speech = false,
 }: {
   userId: string
   /** The client's name: the greeting calls them by it (owner's request of 09.11.2026). */
   userName?: string | null
   beside?: boolean
+  /** Dictation is set up here (docs/plan/75-chat-input-output.md, ВВ16). */
+  speech?: boolean
 }) {
   const trpc = useTRPC()
   const queryClient = useQueryClient()
@@ -82,6 +86,8 @@ export function NewChat({
   // The words kept while the client added a project come back here.
   const written = useRef('')
   const [draft, setDraft] = useState<string | null>(null)
+  // The requests this browser sent before: the arrows of the field bring them back (ВВ23).
+  const [history, setHistory] = useState<readonly string[]>([])
   const wide = useMediaQuery(useTheme().breakpoints.up('md'))
   const shown = !beside || wide
   const field = useRef<HTMLTextAreaElement>(null)
@@ -90,7 +96,10 @@ export function NewChat({
   // After the first paint: the server draws the field empty, and Strict Mode mounts this twice.
   useEffect(() => {
     if (!shown) return
-    const later = setTimeout(() => setDraft(takeChatDraft(userId)), 0)
+    const later = setTimeout(() => {
+      setDraft(takeChatDraft(userId))
+      setHistory(readPromptHistory(userId))
+    }, 0)
     return () => clearTimeout(later)
   }, [shown, userId])
 
@@ -106,6 +115,7 @@ export function NewChat({
         effort,
       })
       pending.current = null
+      rememberPrompt(userId, text)
       void queryClient.invalidateQueries({ queryKey: dialogListKey })
       // The new chat set credits aside: the ring of the credits reads them again.
       void queryClient.invalidateQueries({ queryKey: trpc.billing.usage.queryKey() })
@@ -181,6 +191,8 @@ export function NewChat({
         onTextChange={(text) => {
           written.current = text
         }}
+        history={history}
+        speech={speech}
         project={
           <ProjectPicker
             projects={projects}

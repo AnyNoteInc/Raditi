@@ -1868,3 +1868,19 @@ describe('`/init` and the notes of a project', () => {
     expect(plan.request.input.prompt).toContain('Вход по адресу /login')
   })
 })
+
+describe("the client's own instructions (docs/plan/76-agent-instructions.md, И2)", () => {
+  it('end the instructions of every pass, and are absent when the client wrote none', async () => {
+    const plan = await planTurn(
+      facts({ clientInstructions: 'Мы — кофейня. Отвечайте коротко.' }),
+      env(),
+    )
+    if (plan.kind !== 'turn') throw new Error('expected a turn')
+    expect(plan.request.context.instructions).toContain(
+      '<client-instructions>\nМы — кофейня. Отвечайте коротко.\n</client-instructions>',
+    )
+    const none = await planTurn(facts(), env())
+    if (none.kind !== 'turn') throw new Error('expected a turn')
+    expect(none.request.context.instructions).not.toContain('client-instructions')
+  })
+})

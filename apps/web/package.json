@@ -48,6 +48,8 @@
     "react": "catalog:",
     "react-dom": "catalog:",
     "react-markdown": "catalog:",
+    "rehype-highlight": "catalog:",
+    "highlight.js": "catalog:",
     "remark-gfm": "catalog:",
     "server-only": "catalog:",
     "sharp": "catalog:",

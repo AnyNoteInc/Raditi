@@ -728,6 +728,8 @@ test('web gets the stand’s database and the fake, a synthetic HOME, and nothin
     preview: null,
     // Nor a browser stream: browser tasks are off there too.
     browserStreamUrl: null,
+    // Nor Web Push (docs/plan/75-chat-input-output.md, ВВ8).
+    webPushPublicKey: null,
     // Nor published pages (docs/plan/69-pages.md) nor the pages of chats (docs/plan/67): off there.
     pageViews: null,
     pages: null,

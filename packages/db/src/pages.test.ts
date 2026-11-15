@@ -25,9 +25,12 @@ import {
   reservePageFileDeletion,
   returnDeletedPage,
   currentDocMarkdown,
+  docVersionMarkdown,
+  docVersions,
   listWorkspacePages,
   moveDocSection,
   operatorPageDecision,
+  pageSiteStats,
   pendingPageReservations,
   readChatDocument,
   removeDocSection,
@@ -517,6 +520,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
         workspaceId,
         taskId,
         title: 'Д',
+        view: 'text',
         sections: [{ key: 'a', intent: 'А' }],
       })
       await expect(
@@ -1180,6 +1184,32 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
       ).toBe(1)
     })
 
+    it('counts the sites by state and the bytes of the trash, for metrics without ids (73.12)', async () => {
+      const before = await pageSiteStats(db)
+      const at = await chat({ author: 'owner' })
+      const { home, uslugi } = await site(at)
+      const actor = { type: 'system', service: 'test' } as const
+      await deletePage(db, {
+        pageId: uslugi.pageId,
+        workspaceId: at.workspaceId,
+        by: 'client',
+        actor,
+      })
+      const after = await pageSiteStats(db)
+      expect(after.sites.live).toBe(before.sites.live + 1)
+      // «Услуги» and the page below it are in the trash with their bytes.
+      expect(after.trashBytes).toBeGreaterThan(before.trashBytes)
+      await deletePage(db, {
+        pageId: home.pageId,
+        workspaceId: at.workspaceId,
+        by: 'client',
+        actor,
+      })
+      const deleted = await pageSiteStats(db)
+      expect(deleted.sites.deleted).toBe(before.sites.deleted + 1)
+      expect(deleted.sites.live).toBe(before.sites.live)
+    })
+
     it('counts a site a turn left without a version no more, and keeps a site with files or a name', async () => {
       const at = await chat({ pageSites: 2, names: true })
       await site(at)
@@ -1448,6 +1478,7 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
       const document = await createChatDocument(db, {
         ...ids,
         title: 'Аудит скорости',
+        view: 'text',
         sections: [
           { key: 'summary', intent: 'Итог: три причины' },
           { key: 'sources', intent: 'Источники' },
@@ -1610,6 +1641,29 @@ describe.skipIf(!databaseUrl)('PostgreSQL: pages and documents (plan 69)', () =>
         markdown:
           '# Аудит скорости\n\n## Раздел summary\n\nТекст summary\n\n## Раздел sources\n\nТекст sources\n',
       })
+    })
+
+    it('keeps the text of every version, for the switch of versions (14.11.2026)', async () => {
+      const ids = await skeleton()
+      await write(ids, 'summary', 'Первый')
+      await write(ids, 'sources', 'Источники')
+      await requestDocFinish(db, { ...ids, turnNo: 1 })
+      await endOfTurn(ids.taskId, 1)
+      await write(ids, 'summary', 'Второй', 2)
+      await requestDocFinish(db, { ...ids, turnNo: 2 })
+      const [settled] = await endOfTurn(ids.taskId, 2)
+      expect(settled?.version).toBe(2)
+      const versions = await docVersions(db, ids)
+      expect(versions.map((version) => [version.no, version.kept])).toEqual([
+        [1, true],
+        [2, true],
+      ])
+      expect(await docVersionMarkdown(db, { ...ids, version: 1 })).toContain('Первый')
+      expect(await docVersionMarkdown(db, { ...ids, version: 2 })).toContain('Второй')
+      expect(await docVersionMarkdown(db, { ...ids, version: 3 })).toBeNull()
+      await expect(
+        docVersions(db, { workspaceId: uuidv7(), documentId: ids.documentId }),
+      ).rejects.toMatchObject({ code: 'DOC_NOT_FOUND' })
     })
 
     it('drops a doc_finish the scan broke, and makes no version', async () => {

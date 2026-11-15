@@ -19,6 +19,7 @@ import {
   cabinetOperator,
   canvasPainted,
 } from './cabinet.mjs'
+import { STAND_DOC, STAND_PAGE } from './programs.mjs'
 import { signUp, switchOnModel, uploadFile } from './setup.mjs'
 import { rawDocker } from './site.mjs'
 import {
@@ -132,7 +133,7 @@ async function newBrowserTask(
 
 /**
  * «Остановить» of a dialog that has answered, as the client presses it: its browser closes with it.
- * A workspace holds two browsers at most (docs/plan/61-chats-first.md, К36).
+ * A workspace holds eight browsers at most (docs/plan/61-chats-first.md, К36; eight since 06.11.2026).
  */
 async function closeDialog(stand, taskId) {
   await stand.state.owner.mutate('task.cancel', { taskId, requestId: randomUUID() })
@@ -503,10 +504,10 @@ async function scenarioD(stand) {
   )
   const { facts } = await firstTurn(stand, state.taskF)
   rt.check(
-    // The rights of the site's account decide since 09.11.2026 (spec §20, ДС10, over Б31): the
-    // dashboard opens to the agent as to the client, here at the sign-in form of a site signed out.
+    // Since 09.11.2026 the rights of the site's account decide what the task browser opens
+    // (spec §20, «Данные сайта клиента», ДС10; replaces Б31): the platform refuses no screen.
     facts.dashboard === null,
-    'web_open(/wp-admin/) opens: the account of the site decides what the agent sees (ДС10)',
+    'web_open(/wp-admin/) — the platform closes no screen of the console: the site decides (ДС10)',
     facts,
   )
   rt.check(
@@ -1181,9 +1182,12 @@ async function scenarioF(stand) {
     where: { action: 'billing.task.charge', targetId: state.taskF },
   })
   rt.check(
-    // Each pass its own work rounded up, no minimum of 5 since 10.11.2026 (spec §17, «Только кредиты»).
-    charged >= holds.length &&
-      holds.length > 0 &&
+    // Since 10.11.2026 a pass costs what it used, rounded up, at least 1 credit — no minimum of
+    // five (spec §20, «Только кредиты»): each captured reserve paid at least one.
+    charged >= 1 &&
+      holds
+        .filter((hold) => hold.status === 'captured')
+        .every((hold) => Number(hold.charged ?? 0) >= 1) &&
       audit !== null &&
       holds.every((hold) => hold.status !== 'active'),
     `every pass is charged from its token usage when it ends: ${charged} credits, the reserves settled (billing.task.charge)`,
@@ -2267,9 +2271,10 @@ async function scenarioP(stand) {
     seen,
   )
   rt.check(
-    // Since 09.11.2026 the pages of `web_*` reach the model as they are (spec §20, ДС3).
+    // Since 09.11.2026 pages of `web_*` reach the model without contact marks (spec §20, «Данные
+    // сайта клиента», ДС3): the contact is read as the page shows it.
     seen.contactRead === true && seen.contact === true,
-    'a page of the local site opened as well, and a contact on it reached the model as the page has it (ДС3)',
+    'a page of the local site opened as well, and a contact on it reached the model as the page shows it (ДС3)',
     seen,
   )
   rt.check(seen.objects === 0, '`web_verify` of a chat without a project: no object', seen.objects)
@@ -2289,7 +2294,7 @@ async function scenarioP(stand) {
   const masks = await localVaultRequest(stand.vault.root, `kv/metadata/content-masks/${web}/${web}`)
   rt.check(
     masks.status === 404 && stand.model.requests.some((body) => body.includes(contact)),
-    'no contact map is written for the chat any more, and the model read the contact of the page (ДС3)',
+    'no contact map is written for the chat (ДС3), and the model got the contact as the page shows it',
     { map: masks.status },
   )
 
@@ -2348,41 +2353,32 @@ async function scenarioP(stand) {
     operator.close()
   }
 
-  // The live browsers of a workspace: as many as the product allows (eight since 06.11.2026, the
-  // owner's request), and the chat after them is told so.
-  const { perWorkspace } = stand.modules.domain.browserSessionLimits
-  const liveOf = () =>
-    // As the product counts them: starting or ready (packages/db/src/browser-sessions.ts).
-    db.browserSession.count({
-      where: { workspaceId: chat.workspaceId, status: { in: ['starting', 'ready'] } },
-    })
-  let holds = null
-  const held = []
-  while ((await liveOf()) < perWorkspace) {
-    holds = await newChat(stand, client, {
-      text: 'Откройте ещё одну страницу.',
-      program: 'holdTheBrowser',
-    })
-    held.push(holds)
-    await waitAnswered(stand, holds, { what: 'one more browser of the workspace to open' })
-    if (stand.model.current().facts.code !== null) break
-  }
+  // The live browsers of a workspace: since 06.11.2026 up to `browserSessionLimits.perWorkspace`
+  // (eight, owner's request); the stand opens three, the refusal past the bound is the database's
+  // test (`openBrowserSession`, packages/db).
+  stand.model.script('holdTheBrowser')
+  const holds = await newChat(stand, client, {
+    text: 'Откройте ещё одну страницу.',
+    program: 'holdTheBrowser',
+  })
+  await waitAnswered(stand, holds, { what: 'the second browser of the workspace to open' })
   rt.check(
-    (await liveOf()) === perWorkspace &&
-      holds !== null &&
+    stand.model.current().facts.code === null &&
       (await db.browserSession.count({ where: { taskId: holds, closedAt: null } })) === 1,
-    `the chats of the workspace hold ${perWorkspace} browsers, each chat its own`,
-    { live: await liveOf(), limit: perWorkspace },
+    'a second chat of the workspace holds a browser of its own',
+    stand.model.current().facts,
   )
   const third = await newChat(stand, client, {
     text: 'И ещё одну.',
     program: 'holdTheBrowser',
   })
-  await waitAnswered(stand, third, { what: 'the chat over the limit to be refused a browser' })
+  await waitAnswered(stand, third, { what: 'the third browser of the workspace to open' })
+  const bound = stand.modules.domain.browserSessionLimits.perWorkspace
   rt.check(
-    stand.model.current().facts.code === 'BROWSER_WORKSPACE_BUSY' &&
-      (await db.browserSession.count({ where: { taskId: third } })) === 0,
-    `a browser over the ${perWorkspace} of the workspace is refused: \`BROWSER_WORKSPACE_BUSY\`, no session`,
+    bound === 8 &&
+      stand.model.current().facts.code === null &&
+      (await db.browserSession.count({ where: { taskId: third, closedAt: null } })) === 1,
+    `a third chat of the workspace holds a browser too: the bound is ${bound} live browsers (06.11.2026)`,
     stand.model.current().facts,
   )
 
@@ -2406,7 +2402,7 @@ async function scenarioP(stand) {
     'a chat in whose browser the agent acted ends with `elsewhere`: its words name the other sites, not a site of the client',
     ended,
   )
-  for (const taskId of [...held, third, first, withFile]) await cancelled(taskId)
+  for (const taskId of [holds, third, first, withFile]) await cancelled(taskId)
 
   // A pass that fails after the agent typed in the browser: its failure names the other sites.
   const broken = await newChat(stand, client, {
@@ -2428,7 +2424,7 @@ async function scenarioP(stand) {
     failure,
   )
   await cancelled(broken)
-  const chats = [first, withFile, web, ...held, third, broken]
+  const chats = [first, withFile, web, holds, third, broken]
   const left = await rt.until(
     'the chats to leave nothing in Docker',
     async () => {
@@ -2517,7 +2513,7 @@ async function scenarioM(stand) {
   rt.end()
 }
 
-// ─── Sites of pages (docs/plan/73-pages-sites.md, scenario Q) ───────────────────
+// ─── Sites of pages (docs/plan/73-pages-sites.md, scenario R) ───────────────────
 
 /** A path of a site of pages as a viewer asks the pages' listener: its status, where to, its text. */
 function pageAt(stand, slug, path) {
@@ -2570,14 +2566,14 @@ async function sayNext(stand, client, taskId, text, program, ctx = {}) {
 }
 
 /**
- * Scenario Q (docs/plan/73-pages-sites.md, slice 73.10): a site of pages by the agent on the real
+ * Scenario R (docs/plan/73-pages-sites.md, slice 73.10): a site of pages by the agent on the real
  * OpenCode — three pages of one site linked from the root, a rename that leaves its former
  * addresses leading on, a deletion the client asked for, and «Вернуть» of the client — each read
  * from outside: the pages' listener of the preview app, the feed, the cabinet's tRPC.
  */
-async function scenarioQ(stand) {
+async function scenarioR(stand) {
   const { rt, db } = stand
-  rt.begin('Q', 'сайт из страниц: три страницы со ссылками, переименование, удаление и «Вернуть»')
+  rt.begin('R', 'сайт из страниц: три страницы со ссылками, переименование, удаление и «Вернуть»')
   const client = await signUp(rt, {
     webUrl: stand.webUrl,
     db,
@@ -2708,6 +2704,229 @@ async function scenarioQ(stand) {
 
 // ─── The run ──────────────────────────────────────────────────────────────────
 
+// ─── Q: pages and documents of the agent ──────────────────────────────────────
+
+/**
+ * A page as a viewer gets it from the pages listener of the preview app: `GET` of its address,
+ * sent to the loopback port with the Host of the address (`*.localhost` is the stand's own).
+ */
+function viewPage(stand, url) {
+  const address = new URL(url)
+  return new Promise((resolve, reject) => {
+    const asked = httpRequest(
+      {
+        host: '127.0.0.1',
+        port: stand.ports.pages,
+        path: address.pathname,
+        method: 'GET',
+        headers: { host: address.host },
+        signal: AbortSignal.timeout(15_000),
+      },
+      (response) => {
+        const chunks = []
+        response.on('data', (chunk) => chunks.push(chunk))
+        response.on('end', () =>
+          resolve({
+            status: response.statusCode,
+            headers: response.headers,
+            body: Buffer.concat(chunks).toString('utf8'),
+          }),
+        )
+      },
+    )
+    asked.on('error', reject)
+    asked.end()
+  })
+}
+
+/** The headers the domain names for a page, as the listener sent them: every one, byte for byte. */
+const sameHeaders = (got, expected) =>
+  Object.entries(expected).every(([name, value]) => got[name.toLowerCase()] === value)
+
+/** Words to a chat that waits, with the program of the turn they start. */
+async function say(stand, client, taskId, text, program, ctx = {}) {
+  const results = await stand.db.taskEvent.count({ where: { taskId, type: 'feed.result' } })
+  stand.model.script(program, ctx)
+  await client.mutate('task.message', { taskId, requestId: randomUUID(), text })
+  await waitAnswered(stand, taskId, { results, what: `the turn of ${program} to answer` })
+  const current = stand.model.current()
+  if (!current.finished) throw new CheckFailed(`the program ${program} did not finish`)
+  return current.facts
+}
+
+/**
+ * Scenario Q (docs/plan/69-pages.md, §7, slice 69.10): the agent of a chat without a project
+ * publishes a page of its outbox and writes a document section by section; the end of the turn
+ * makes their versions; the viewer reads them at the pages listener; the client publishes the
+ * document by link. The tools are the real ones of `mcp`, the end of the turn is core's.
+ */
+async function scenarioQ(stand) {
+  const { rt, db } = stand
+  const { domain, docRender } = stand.modules
+  rt.begin(
+    'Q',
+    'страницы и документы агента: адрес сразу, версия в конце хода, разделы, «Опубликовать по ссылке»',
+  )
+  const client = await signUp(rt, {
+    webUrl: stand.webUrl,
+    db,
+    address: '198.51.100.24',
+    name: 'Глеб',
+    login: 'pages',
+  })
+
+  // A page of the outbox: the address at once, the version at the end of the turn.
+  const taskId = await newChat(stand, client, {
+    text: 'Сделайте страницу с прайсом и дайте ссылку',
+    program: 'publishPage',
+  })
+  await waitAnswered(stand, taskId, { what: 'the turn that publishes a page' })
+  const page = stand.model.current().facts
+  rt.check(
+    page.code === null &&
+      /^http:\/\/[a-z2-7]{26}\.pages\.localhost:\d+\/$/.test(page.url ?? '') &&
+      page.version === 1,
+    'page_publish answers the address of the page at once, version 1, its own subdomain',
+    page,
+  )
+  const chat = await db.task.findUniqueOrThrow({ where: { id: taskId } })
+  await grantTariff(
+    { db, billing: stand.modules.billing },
+    { workspaceId: chat.workspaceId, userId: client.id },
+  )
+  const told = (await rowsOf(db, taskId, 'feed.page')).at(-1)
+  rt.check(
+    told?.version === 1 && told.kind === 'html' && page.url.includes(told.slug ?? '-'),
+    'the end of the turn made the version: `feed.page` names the page and version 1',
+    told,
+  )
+  rt.check(
+    (await rowsOf(db, taskId, 'feed.file')).length === 0,
+    'the file the page was reserved for is the page, not a file of the chat',
+  )
+  const viewed = await viewPage(stand, page.url)
+  rt.check(
+    viewed.status === 200 &&
+      // The shell's heredoc ends the file with a line feed: the page is the file, byte for byte.
+      viewed.body === `${STAND_PAGE.html}\n` &&
+      sameHeaders(viewed.headers, domain.pageResponseHeaders('html')),
+    'the pages listener serves the bytes of the outbox under the headers of the domain, byte for byte',
+    { status: viewed.status, csp: viewed.headers['content-security-policy'] },
+  )
+  const other = await viewPage(stand, `${page.url}v2`)
+  rt.check(other.status === 404, 'another path of the page answers 404 (Ст16)', other.status)
+
+  // A document by sections: the role refuses a token, `doc_finish` waits for every section.
+  const writing = await say(stand, client, taskId, 'Напишите аудит скорости сайта', 'writeDocument')
+  rt.check(
+    writing.docId !== null &&
+      writing.written === null &&
+      writing.token === 'PAGE_CONTENT_REFUSED' &&
+      writing.early === 'DOC_PENDING_SECTIONS',
+    'doc_create makes the skeleton; a section is written; one with a JWT is refused by the role; doc_finish with a placeholder is refused',
+    writing,
+  )
+  const docId = writing.docId
+  const card = await client.query('pages.doc', { docId })
+  rt.check(
+    card.version === 0 &&
+      card.progress.written === 1 &&
+      card.progress.total === 2 &&
+      card.sections.map((section) => section.state).join(',') === 'shown,pending' &&
+      !JSON.stringify(card).includes('eyJhbGci'),
+    'the card after the end of the turn: «Разделы: 1 из 2», the checked section shown, the refused one a placeholder, no token anywhere',
+    { progress: card.progress, states: card.sections.map((section) => section.state) },
+  )
+  rt.check(
+    (await rowsOf(db, taskId, 'feed.doc')).some((row) => row.docId === docId),
+    'the feed carries the card of the document (`feed.doc`)',
+  )
+
+  // The last section, the version and the link the agent asked for.
+  const finished = await say(
+    stand,
+    client,
+    taskId,
+    'Допишите документ и дайте ссылку',
+    'finishDocument',
+    {
+      docId,
+    },
+  )
+  rt.check(
+    finished.written === null && finished.finish === null && finished.code === null && finished.url,
+    'the last section, doc_finish and page_publish of the document are taken, the address comes at once',
+    finished,
+  )
+  const version = await db.chatDocument.findUniqueOrThrow({
+    where: { id: docId },
+    include: { content: true, page: true },
+  })
+  rt.check(
+    version.currentVersion === 1 &&
+      version.page?.state === 'live' &&
+      version.page.currentVersion === 1 &&
+      finished.url.includes(version.page.slug),
+    'the end of the turn made version 1 of the document and drew it as version 1 of its page',
+    { document: version.currentVersion, page: version.page?.currentVersion },
+  )
+  const expectedReading = await docRender.readingPage({
+    title: STAND_DOC.title,
+    markdown: version.content.markdown,
+  })
+  const reading = await viewPage(stand, finished.url)
+  rt.check(
+    reading.status === 200 &&
+      reading.body === expectedReading &&
+      sameHeaders(reading.headers, domain.pageResponseHeaders('reading')) &&
+      !/<script/i.test(reading.body),
+    'the page of the document is the page for reading of its version, under PAGE_READING_CSP, without a script',
+    { status: reading.status, csp: reading.headers['content-security-policy'] },
+  )
+  const download = await client.request(`/api/documents/${docId}/markdown`)
+  const downloaded = await download.text()
+  rt.check(
+    download.status === 200 && downloaded === version.content.markdown,
+    '«Скачать .md» is the Markdown of the version, byte for byte',
+    { status: download.status },
+  )
+
+  // A section written again: the next version; the client publishes it by link, same address.
+  const edited = await say(stand, client, taskId, 'Поправьте итог', 'editDocument', { docId })
+  rt.check(
+    edited.written === null && edited.finish === null,
+    'the edit and doc_finish are taken',
+    edited,
+  )
+  const second = await db.chatDocument.findUniqueOrThrow({
+    where: { id: docId },
+    include: { content: true, page: true },
+  })
+  rt.check(
+    second.currentVersion === 2 && second.page?.currentVersion === 1,
+    'the edit made version 2 of the document; its page keeps version 1 until it is published again',
+    { document: second.currentVersion, page: second.page?.currentVersion },
+  )
+  const byLink = await client.mutate('pages.publishDoc', { docId })
+  const republished = await viewPage(stand, byLink.url)
+  rt.check(
+    byLink.url === finished.url &&
+      byLink.version === 2 &&
+      republished.status === 200 &&
+      republished.body.includes(STAND_DOC.edited) &&
+      !republished.body.includes(STAND_DOC.summary),
+    '«Опубликовать по ссылке» puts version 2 at the same address; the former text is gone',
+    { url: byLink.url === finished.url, version: byLink.version },
+  )
+  const stranger = await stand.state.stranger.call('mutation', 'pages.publishDoc', { docId })
+  rt.check(
+    !stranger.ok && /NOT_FOUND/.test(JSON.stringify(stranger)),
+    "another client's publication of the document → NOT_FOUND",
+    stranger,
+  )
+  rt.end()
+}
+
 const SCENARIOS = Object.freeze({
   A: scenarioA,
   D: scenarioD,
@@ -2723,6 +2942,7 @@ const SCENARIOS = Object.freeze({
   O: scenarioO,
   P: scenarioP,
   Q: scenarioQ,
+  R: scenarioR,
   K: scenarioK,
   L: scenarioL,
   M: scenarioM,

@@ -58,6 +58,48 @@ export const agentTurnCancelDedupeKey = (job: AgentTurnCancelJob): string =>
   `${AGENT_TURN_CANCEL_JOB}:${job.taskId}:${job.requestEventId}`
 
 /**
+ * The queue of a chat after its pass ended (docs/plan/75-chat-input-output.md, ВВ2, ВВ4): core
+ * takes the words that waited into the feed and starts the next pass, when the ending allows it.
+ * Written by core in the transaction of the ending, so it exists exactly when the ending was
+ * committed. Ids and counters only.
+ */
+export const QUEUE_DRAIN_JOB = 'queue.drain'
+
+export const queueDrainJobSchema = z.strictObject({
+  taskId: z.uuid(),
+  /** The attempt and the turn of the pass that ended: a later ending gets a job of its own. */
+  attempt: z.number().int().min(1),
+  turnNo: z.number().int().min(0),
+})
+export type QueueDrainJob = z.infer<typeof queueDrainJobSchema>
+
+/** The outbox key: `queue.drain:<taskId>:<attempt>:<turnNo>` — one per ending of a pass. */
+export const queueDrainDedupeKey = (job: QueueDrainJob): string =>
+  `${QUEUE_DRAIN_JOB}:${job.taskId}:${job.attempt}:${job.turnNo}`
+
+/**
+ * A chat waits for its client after a pass (docs/plan/75-chat-input-output.md, ВВ6, ВВ7): core
+ * tells the client — Web Push, a letter — unless the client looks at the chat. Written by core in
+ * the transaction of the ending, due `CHAT_NOTIFY_DELAY_MS` later. Ids and the kind only.
+ */
+export const CHAT_NOTIFY_JOB = 'chat.notify'
+export const CHAT_NOTIFY_DELAY_MS = 45_000
+export const chatNotifyKinds = ['answered', 'question', 'ready', 'failed', 'limit'] as const
+export type ChatNotifyKind = (typeof chatNotifyKinds)[number]
+
+export const chatNotifyJobSchema = z.strictObject({
+  taskId: z.uuid(),
+  kind: z.enum(chatNotifyKinds),
+  /** The attempt and the turn of the pass that ended: one notification per ending. */
+  attempt: z.number().int().min(1),
+  turnNo: z.number().int().min(0),
+})
+export type ChatNotifyJob = z.infer<typeof chatNotifyJobSchema>
+
+export const chatNotifyDedupeKey = (job: ChatNotifyJob): string =>
+  `${CHAT_NOTIFY_JOB}:${job.taskId}:${job.attempt}:${job.turnNo}:${job.kind}`
+
+/**
  * «Обновить» (`/update`, Р27): core carries the diff of the dialog's candidate onto the current
  * `main` without the model, rebuilds the preview and runs the checks again. Put by web
  * (`candidate.update`) with the `feed.request` of the command. Ids only.

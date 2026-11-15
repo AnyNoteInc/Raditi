@@ -130,6 +130,8 @@ export async function readPassFacts(
       needsRepository: true,
       needsBrowser: true,
       workspace: { select: { dataClass: true } },
+      // The author's own instructions to the agent (docs/plan/76-agent-instructions.md, И2).
+      createdBy: { select: { agentInstructions: { select: { text: true } } } },
       site: {
         select: {
           stack: true,
@@ -328,6 +330,7 @@ export async function readPassFacts(
     requirements,
     ...(browser ? { browser } : {}),
     agentNotes: site?.agentNotes ?? null,
+    clientInstructions: task.createdBy?.agentInstructions?.text ?? null,
     ...(attachments.length ? { attachments } : {}),
     repo: repository
       ? {

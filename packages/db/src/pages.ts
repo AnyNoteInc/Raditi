@@ -28,6 +28,7 @@ import {
   pageTakenDownByOperator,
   pageVersionChanged,
   type DocSectionState,
+  type DocView,
   type PageKind,
   type PageRefusalReason,
 } from '@repo/domain'
@@ -2208,6 +2209,8 @@ export interface ChatDocumentSkeleton {
   workspaceId: string
   taskId: string
   title: string
+  /** How the finished document is shown, the agent's choice (docs/plan/74, Д1). */
+  view: DocView
   sections: readonly { key: string; intent: string }[]
 }
 
@@ -2223,6 +2226,7 @@ export async function createChatDocument(db: Db, input: ChatDocumentSkeleton) {
         workspaceId: input.workspaceId,
         taskId: input.taskId,
         title: input.title,
+        view: input.view,
         sections: {
           create: input.sections.map((section, position) => ({
             sectionKey: section.key,
@@ -2406,6 +2410,7 @@ export async function readChatDocument(
   return {
     id: document.id,
     title: document.title,
+    view: document.view as DocView,
     revision: document.revision,
     version: document.currentVersion,
     taskId: document.taskId,
@@ -2437,7 +2442,14 @@ export async function readChatDocument(
 /** `doc_finish` (Ст19, Ст21): refused while a section is pending; done at the end of the turn. */
 export async function requestDocFinish(
   db: Db,
-  input: { workspaceId: string; documentId: string; taskId: string; turnNo: number },
+  input: {
+    workspaceId: string
+    documentId: string
+    taskId: string
+    turnNo: number
+    /** A new view of the finished document (docs/plan/74, Д1); absent — as it was. */
+    view?: DocView
+  },
 ): Promise<void> {
   await db.$transaction(async (tx) => {
     const document = await lockDocument(tx, input.documentId, input.workspaceId)
@@ -2447,7 +2459,11 @@ export async function requestDocFinish(
     if (pending > 0) throw docPendingSections(pending)
     await tx.chatDocument.update({
       where: { id: document.id },
-      data: { finishTaskId: input.taskId, finishTurnNo: input.turnNo },
+      data: {
+        finishTaskId: input.taskId,
+        finishTurnNo: input.turnNo,
+        ...(input.view ? { view: input.view } : {}),
+      },
     })
   })
 }
@@ -2490,6 +2506,11 @@ export interface TurnSectionsVerdict {
    * not named here, or written again since its scan, stays unchecked.
    */
   sections: readonly { sectionId: string; digest: string; refusal: PageRefusalReason | null }[]
+  /**
+   * `false` — a check while the turn runs (docs/plan/74, Д2): sections only, no `doc_finish`
+   * comes true and none is dropped; those wait for the end of the turn. Default `true`.
+   */
+  final?: boolean
 }
 
 export interface SettledDocument {
@@ -2517,13 +2538,16 @@ export async function settleTurnSections(
       where: { id: { in: verdict.sections.map((each) => each.sectionId) } },
       select: { documentId: true },
     })
-    const finishing = await tx.chatDocument.findMany({
-      where: {
-        finishTaskId: { not: null },
-        workspaceId: { in: await workspacesOf(tx, verdict.taskId) },
-      },
-      select: { id: true },
-    })
+    const final = verdict.final !== false
+    const finishing = final
+      ? await tx.chatDocument.findMany({
+          where: {
+            finishTaskId: { not: null },
+            workspaceId: { in: await workspacesOf(tx, verdict.taskId) },
+          },
+          select: { id: true },
+        })
+      : []
     const documentIds = [
       ...new Set([
         ...scanned.map((each) => each.documentId),
@@ -2591,6 +2615,7 @@ export async function settleTurnSections(
       // A `doc_finish` comes true at the end of its own turn or later — never in the middle of a
       // later turn of its chat, nor before its turn ended (a turn of another chat settles).
       const finishReady =
+        final &&
         document.finishTaskId !== null &&
         (document.finishTaskId === verdict.taskId
           ? (document.finishTurnNo ?? 0) <= verdict.turnNo
@@ -2617,6 +2642,7 @@ export async function settleTurnSections(
               sha256: sha256(markdown),
               taskId: document.finishTaskId,
               turnNo: document.finishTurnNo,
+              markdown,
             },
           })
           await tx.chatDocumentContent.upsert({
@@ -2660,6 +2686,85 @@ export async function currentDocMarkdown(
   return document.content
     ? { version: document.content.versionNo, markdown: document.content.markdown }
     : null
+}
+
+/**
+ * The versions of a document, oldest first, and the text of one of them (owner's request of
+ * 14.11.2026): `markdown` is null for a version finished before its text was kept.
+ */
+export async function docVersions(
+  db: Pick<PrismaClient, 'chatDocument' | 'chatDocumentVersion'>,
+  input: { workspaceId: string; documentId: string },
+): Promise<{ no: number; createdAt: Date; kept: boolean }[]> {
+  const document = await db.chatDocument.findUnique({
+    where: { id: input.documentId },
+    select: { workspaceId: true },
+  })
+  if (!document || document.workspaceId !== input.workspaceId) throw docNotFound()
+  const versions = await db.chatDocumentVersion.findMany({
+    where: { documentId: input.documentId },
+    orderBy: { no: 'asc' },
+    select: { no: true, createdAt: true, markdown: true },
+  })
+  return versions.map((version) => ({
+    no: version.no,
+    createdAt: version.createdAt,
+    kept: version.markdown !== null,
+  }))
+}
+
+/** The text of one version of a document; null — no such version, or its text was not kept. */
+export async function docVersionMarkdown(
+  db: Pick<PrismaClient, 'chatDocument' | 'chatDocumentVersion'>,
+  input: { workspaceId: string; documentId: string; version: number },
+): Promise<string | null> {
+  const document = await db.chatDocument.findUnique({
+    where: { id: input.documentId },
+    select: { workspaceId: true },
+  })
+  if (!document || document.workspaceId !== input.workspaceId) throw docNotFound()
+  const version = await db.chatDocumentVersion.findUnique({
+    where: { documentId_no: { documentId: input.documentId, no: input.version } },
+    select: { markdown: true },
+  })
+  return version?.markdown ?? null
+}
+
+// ———————————————————————————————————————— metrics (docs/plan/73-pages-sites.md, 73.12)
+
+/** The state of a site as the metrics count it, by its home page; `purged` — a tombstone. */
+export const pageSiteStates = ['live', 'pending', 'taken_down', 'deleted', 'purged'] as const
+export type PageSiteState = (typeof pageSiteStates)[number]
+
+/**
+ * The sites of every workspace by state and the bytes the trash holds — for the metrics of core,
+ * never of one workspace: numbers without ids (`raditi_pages_trees`, `raditi_pages_trash_bytes`).
+ */
+export async function pageSiteStats(
+  db: Pick<PrismaClient, '$queryRaw'>,
+): Promise<{ sites: Record<PageSiteState, number>; trashBytes: number }> {
+  const rows = await db.$queryRaw<{ state: PageSiteState; sites: bigint }[]>`
+    SELECT CASE
+             WHEN h.id IS NULL THEN 'purged'
+             WHEN h.deleted_at IS NOT NULL THEN 'deleted'
+             WHEN t.taken_down_by IS NOT NULL OR h.state = 'taken_down' THEN 'taken_down'
+             WHEN h.state = 'pending' THEN 'pending'
+             ELSE 'live'
+           END AS state,
+           count(*) AS sites
+    FROM page_trees t
+    LEFT JOIN pages h ON h.tree_id = t.id AND h.parent_id IS NULL
+    GROUP BY 1`
+  const trash = await db.$queryRaw<{ bytes: bigint | null }[]>`
+    SELECT COALESCE(SUM(octet_length(c.bytes)), 0) AS bytes
+    FROM page_contents c JOIN pages p ON p.id = c.page_id
+    WHERE p.deleted_at IS NOT NULL`
+  const sites = Object.fromEntries(pageSiteStates.map((state) => [state, 0])) as Record<
+    PageSiteState,
+    number
+  >
+  for (const row of rows) sites[row.state] = Number(row.sites)
+  return { sites, trashBytes: Number(trash[0]?.bytes ?? 0) }
 }
 
 // ———————————————————————————————————————— the sweep

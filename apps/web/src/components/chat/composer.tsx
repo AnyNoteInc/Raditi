@@ -19,6 +19,7 @@ import {
   useState,
   type ChangeEvent,
   type ClipboardEvent,
+  type DragEvent,
   type KeyboardEvent,
   type ReactNode,
   type RefObject,
@@ -28,6 +29,7 @@ import { AppIcon } from '@/components/application/app-icon'
 import { plural } from '@/lib/plural'
 
 import { AttachmentChips } from './attachment-chips'
+import { dictationText, useDictation } from './dictation'
 import { attachmentText, composerText, paletteText } from './chat-texts'
 import type { CommandVerdict } from './chat-types'
 import {
@@ -119,6 +121,33 @@ export function pastedFiles(data: Pick<DataTransfer, 'files' | 'types'> | null):
   return Array.from(data.files)
 }
 
+/** The files a drag brings, when it brings files at all (docs/plan/75-chat-input-output.md, ВВ22). */
+export function draggedFiles(data: Pick<DataTransfer, 'types'> | null): boolean {
+  return data !== null && Array.from(data.types).includes('Files')
+}
+
+/**
+ * Where the arrows take the field among the client's earlier requests (ВВ23): `index` −1 is the
+ * client's own words, 0 the newest request. Up goes back while the field is empty or still shows
+ * the request the arrows put there, and only from the first line; down goes forward from the last
+ * line, and past the newest request the field is empty again. null — the arrow is the field's own.
+ */
+export function historyStep(
+  key: 'ArrowUp' | 'ArrowDown',
+  state: { text: string; index: number; caret: number },
+  history: readonly string[],
+): number | null {
+  const shown = state.index >= 0 ? history[state.index] : undefined
+  const untouched = state.text === '' || (shown !== undefined && state.text === shown)
+  if (!untouched) return null
+  if (key === 'ArrowUp') {
+    if (state.text.slice(0, state.caret).includes('\n')) return null
+    return state.index + 1 < history.length ? state.index + 1 : null
+  }
+  if (state.index < 0 || state.text.slice(state.caret).includes('\n')) return null
+  return state.index - 1
+}
+
 /** The keys that paste, as this computer names them. */
 function pasteKeys(): string {
   const agent = typeof navigator === 'undefined' ? '' : navigator.userAgent
@@ -168,6 +197,8 @@ export function Composer({
   restored = null,
   restoredTaken = 0,
   onTextChange,
+  history = [],
+  speech = false,
 }: {
   label?: string
   placeholder: string
@@ -209,6 +240,10 @@ export function Composer({
   restoredTaken?: number
   /** Every change of the words in the field. */
   onTextChange?: (text: string) => void
+  /** The client's earlier requests, the newest first: the arrows bring them back (ВВ23). */
+  history?: readonly string[]
+  /** Dictation is set up here (SpeechKit, docs/plan/75, ВВ16): the microphone in the row. */
+  speech?: boolean
 }) {
   const fieldId = useId()
   const reasonId = useId()
@@ -220,6 +255,10 @@ export function Composer({
   const noFilesId = useId()
   const secretsId = useId()
   const [text, setText] = useState('')
+  // Which earlier request the arrows put in the field: −1 — none, the words are the client's.
+  const [historyIndex, setHistoryIndex] = useState(-1)
+  // A file is dragged over the field: the field says it will take it.
+  const [dragging, setDragging] = useState(false)
   // The list closed by Escape stays closed until the field starts anew.
   const [dismissed, setDismissed] = useState(false)
   // Opened by its button: every command, the focus on the list.
@@ -238,6 +277,19 @@ export function Composer({
   const [addAnchor, setAddAnchor] = useState<HTMLElement | null>(null)
   const ownField = useRef<HTMLTextAreaElement>(null)
   const field = fieldRef ?? ownField
+  // The words of a dictation go after what is written, a space between (ВВ16).
+  const dictation = useDictation()
+  const recording = dictation.state === 'recording'
+  const withWords = (written: string, words: string) =>
+    written.trim() === '' ? words : `${written.trimEnd()} ${words}`
+  /** «Стоп»: the words go into the field, for the client to read and send (docs/plan/77, Р4). */
+  async function stopDictation() {
+    const words = await dictation.finish()
+    if (words === null) return
+    setText((written) => withWords(written, words))
+    setHistoryIndex(-1)
+    field.current?.focus()
+  }
 
   // The field grows with its text, up to its own limit (`maxHeight`), then scrolls.
   useLayoutEffect(() => {
@@ -349,6 +401,7 @@ export function Composer({
     const wasClosed = !open
     setNotice(null)
     setText(next)
+    setHistoryIndex(-1)
     if (!next.startsWith('/')) setDismissed(false)
     setActive(0)
     if (commands && wasClosed && !disabled && next.startsWith('/') && !dismissed) {
@@ -358,6 +411,21 @@ export function Composer({
   }
 
   async function send() {
+    // «Отправить» during a recording: its words are recognised, shown in the field, then sent (Р4).
+    if (recording) {
+      const words = await dictation.finish()
+      if (words === null) return
+      const whole = withWords(text, words)
+      setText(whole)
+      if (busy || disabled || filesWait !== null || whole.trim().length > FEED_REQUEST_TEXT_LIMIT)
+        return
+      if (await onSend(whole, attachments?.readyIds ?? [])) {
+        setText('')
+        setHistoryIndex(-1)
+        attachments?.clear()
+      }
+      return
+    }
     if (busy || disabled || tooLong || filesWait !== null || !hasVisibleText(text)) return
     // The words of a command are never sent: not to the agent, not as a message.
     const command = parseChatCommand(text)
@@ -373,6 +441,7 @@ export function Composer({
     }
     if (await onSend(text, attachments?.readyIds ?? [])) {
       setText('')
+      setHistoryIndex(-1)
       attachments?.clear()
     }
   }
@@ -391,6 +460,31 @@ export function Composer({
       )
     )
       return
+    if (
+      (event.key === 'ArrowUp' || event.key === 'ArrowDown') &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      history.length > 0
+    ) {
+      const area = field.current
+      const caret = area?.selectionStart ?? 0
+      const step = historyStep(event.key, { text, index: historyIndex, caret }, history)
+      if (step !== null) {
+        event.preventDefault()
+        const next = step < 0 ? '' : (history[step] ?? '')
+        setText(next)
+        setHistoryIndex(step)
+        setNotice(null)
+        // Up leaves the caret at the start, so the next press goes further back; down at the end.
+        window.setTimeout(() => {
+          const place = event.key === 'ArrowUp' ? 0 : next.length
+          field.current?.setSelectionRange(place, place)
+        }, 0)
+        return
+      }
+    }
     // Enter sends, Shift+Enter is a new line (owner's request of 07.11.2026); an Enter that ends a
     // word of an input method (229 — Safari's) is the method's, not a send.
     if (
@@ -425,7 +519,12 @@ export function Composer({
   const sendDescribedBy = [describedBy, filesWait !== null ? filesWaitId : null]
     .filter((id) => id !== null && id !== '')
     .join(' ')
-  const canSend = !busy && !disabled && !tooLong && filesWait === null && hasVisibleText(text)
+  const canSend =
+    !busy && !disabled && filesWait === null && (recording || (!tooLong && hasVisibleText(text)))
+  // «Остановить» stands in place of «Отправить» while the field is empty; written words are sent
+  // (to the queue of the chat while the agent works, docs/plan/75, ВВ1).
+  const stopping =
+    stop !== undefined && !recording && (disabled || !hasVisibleText(text)) ? stop : null
   const current = options[activeIndex]
 
   return (
@@ -454,7 +553,32 @@ export function Composer({
       ) : null}
 
       <Box
+        data-testid="composer-field"
+        data-dragging={dragging ? 'true' : undefined}
+        onDragEnter={(event: DragEvent<HTMLElement>) => {
+          if (!attachments || disabled || !draggedFiles(event.dataTransfer)) return
+          event.preventDefault()
+          setDragging(true)
+        }}
+        onDragOver={(event: DragEvent<HTMLElement>) => {
+          if (!attachments || disabled || !draggedFiles(event.dataTransfer)) return
+          event.preventDefault()
+          event.dataTransfer.dropEffect = 'copy'
+          if (!dragging) setDragging(true)
+        }}
+        onDragLeave={(event: DragEvent<HTMLElement>) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false)
+        }}
+        onDrop={(event: DragEvent<HTMLElement>) => {
+          setDragging(false)
+          if (!attachments || disabled) return
+          const files = Array.from(event.dataTransfer.files)
+          if (files.length === 0) return
+          event.preventDefault()
+          attachments.add(files)
+        }}
         sx={{
+          position: 'relative',
           display: 'flex',
           flexDirection: 'column',
           gap: 0.5,
@@ -463,12 +587,88 @@ export function Composer({
           borderRadius: '28px',
           bgcolor: 'var(--mui-palette-action-hover)',
           transition: 'box-shadow var(--raditi-motion-fast) var(--raditi-ease-out)',
+          '&[data-dragging="true"]': {
+            boxShadow: 'inset 0 0 0 2px var(--raditi-accent)',
+          },
           // One calm ring for the whole field while it is written in, none around the text.
           '&:has(textarea:focus-visible)': {
             boxShadow: 'inset 0 0 0 1px rgba(var(--mui-palette-text-primaryChannel) / 0.24)',
           },
         }}
       >
+        {speech ? (
+          <Box
+            sx={{
+              position: 'absolute',
+              top: 6,
+              right: 6,
+              zIndex: 1,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+            }}
+          >
+            {dictation.state === 'recording' ? (
+              <Box
+                aria-hidden
+                data-testid="dictation-wave"
+                sx={{ display: 'flex', alignItems: 'center', gap: '2px', height: 28 }}
+              >
+                {dictation.levels.map((level, index) => (
+                  <Box
+                    key={index}
+                    sx={{
+                      width: 3,
+                      borderRadius: '2px',
+                      bgcolor: 'error.main',
+                      height: `${Math.max(3, Math.round(level * 26))}px`,
+                      transition: 'height 80ms linear',
+                    }}
+                  />
+                ))}
+              </Box>
+            ) : null}
+            <IconButton
+              aria-label={
+                dictation.state === 'recording' ? dictationText.stop : dictationText.start
+              }
+              aria-pressed={dictation.state === 'recording'}
+              disabled={disabled || dictation.state === 'recognizing'}
+              onClick={() => (recording ? void stopDictation() : void dictation.start())}
+              sx={{
+                ...toolButton,
+                ...(dictation.state === 'recording' && {
+                  color: 'error.main',
+                  '&:hover': { color: 'error.main' },
+                }),
+              }}
+            >
+              {/* While it records the microphone is «Стоп» (Р4). */}
+              <AppIcon name={recording ? 'square' : 'microphone'} size={18} />
+            </IconButton>
+          </Box>
+        ) : null}
+        {dragging ? (
+          <Box
+            aria-hidden
+            sx={{
+              position: 'absolute',
+              inset: 0,
+              zIndex: 2,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: 'inherit',
+              bgcolor: 'rgba(var(--mui-palette-background-paperChannel) / 0.86)',
+              color: 'text.primary',
+              fontSize: 15,
+              fontWeight: 500,
+              pointerEvents: 'none',
+            }}
+          >
+            {attachmentText.drop}
+          </Box>
+        ) : null}
         {attachments ? (
           <AttachmentChips
             items={attachments.items}
@@ -510,6 +710,8 @@ export function Composer({
             maxHeight: { xs: '30dvh', md: '40dvh' },
             overflowY: 'auto',
             px: 1.25,
+            // The microphone stands in the top right corner of the field (owner's request).
+            pr: speech ? (dictation.state === 'recording' ? 22 : 7) : 1.25,
             py: 1,
             border: 0,
             borderRadius: 0,
@@ -631,16 +833,16 @@ export function Composer({
             </Typography>
           ) : null}
           <IconButton
-            aria-label={stop ? composerText.stop : sendLabel}
+            aria-label={stopping ? composerText.stop : sendLabel}
             aria-describedby={
-              stop
-                ? stop.available
+              stopping
+                ? stopping.available
                   ? undefined
                   : describedBy || undefined
                 : sendDescribedBy || undefined
             }
-            disabled={stop ? !stop.available : !canSend}
-            onClick={() => (stop ? stop.onStop() : void send())}
+            disabled={stopping ? !stopping.available : !canSend}
+            onClick={() => (stopping ? stopping.onStop() : void send())}
             sx={{
               // The cabinet's main action: the accent fill, the arrow in its ink.
               ...fieldControl('var(--raditi-accent)', ROUND),
@@ -659,7 +861,7 @@ export function Composer({
               '@media (prefers-reduced-motion: reduce)': { '&:active': { transform: 'none' } },
             }}
           >
-            <AppIcon name={stop ? 'square' : 'send'} size={18} />
+            <AppIcon name={stopping ? 'square' : 'send'} size={18} />
           </IconButton>
         </Box>
       </Box>
@@ -677,6 +879,18 @@ export function Composer({
       {shownError ? (
         <Typography id={errorId} role="alert" variant="body2" color="error.main">
           {shownError}
+        </Typography>
+      ) : null}
+      {dictation.state !== 'idle' ? (
+        <Typography role="status" variant="body2" color="text.secondary">
+          {dictation.state === 'recording'
+            ? dictationText.recording(dictation.seconds)
+            : dictationText.recognizing}
+        </Typography>
+      ) : null}
+      {dictation.notice ? (
+        <Typography role="alert" variant="body2" color="error.main">
+          {dictation.notice}
         </Typography>
       ) : null}
       {attachments?.notice ? (

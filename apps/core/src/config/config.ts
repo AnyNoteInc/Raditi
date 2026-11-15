@@ -94,6 +94,11 @@ export interface CoreConfig {
    * leads wait in their queue until it is set.
    */
   leads: LeadsTelegramConfig | null
+  /**
+   * Web Push of the chats that wait for their client (docs/plan/75-chat-input-output.md, ВВ8):
+   * the VAPID keys, both or neither; null — browsers are not told, letters still go.
+   */
+  webPush: { publicKey: string; privateKey: string } | null
   /** Where turns run: core's own Docker (local, not in production) or runner VMs. */
   turnExecutor: TurnExecutorKind
   /**
@@ -257,6 +262,20 @@ const ownEnvSchema = z.object({
   BILLING_RENEWAL_NOTICE_DAYS: envVar(z.coerce.number().int().min(1).max(27).default(3)),
   BILLING_PAST_DUE_DAYS: envVar(z.coerce.number().int().min(1).max(90).default(7)),
   BILLING_TICK_SECONDS: envVar(z.coerce.number().int().min(1).max(3_600).default(300)),
+  // VAPID of Web Push (docs/plan/75, ВВ8): URL-safe base64 of the P-256 keys, as `web-push`
+  // generates them. The private one is a secret: rendered from OpenBao on the host, never logged.
+  WEB_PUSH_VAPID_PUBLIC: envVar(
+    z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{80,100}$/)
+      .optional(),
+  ),
+  WEB_PUSH_PRIVATE_KEY: envVar(
+    z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{40,50}$/)
+      .optional(),
+  ),
   CORE_PORT: port(DEFAULT_CORE_PORT),
   RUNNER_API_PORT: port(DEFAULT_RUNNER_API_PORT),
   TURN_EXECUTOR: envVar(z.enum(turnExecutorKinds).optional()),
@@ -397,6 +416,8 @@ export function loadConfig(env: Env): CoreConfig {
         'BILLING_RENEWAL_NOTICE_DAYS',
         'BILLING_PAST_DUE_DAYS',
         'BILLING_TICK_SECONDS',
+        'WEB_PUSH_VAPID_PUBLIC',
+        'WEB_PUSH_PRIVATE_KEY',
         'PREVIEW_TTL_HOURS',
         'PREVIEW_IDLE_MINUTES',
         'PREVIEW_GATEWAY_PORT',
@@ -444,6 +465,8 @@ export function loadConfig(env: Env): CoreConfig {
   let runnerRuntime: SandboxRuntime | undefined
   {
     if (own.REDIS_URL === undefined) problems.push('REDIS_URL: required for the core role')
+    if ((own.WEB_PUSH_VAPID_PUBLIC === undefined) !== (own.WEB_PUSH_PRIVATE_KEY === undefined))
+      problems.push('WEB_PUSH_VAPID_PUBLIC and WEB_PUSH_PRIVATE_KEY: set both or neither')
     // Every billing letter carries a link to the app: a guessed origin would not open.
     if (own.APP_URL === undefined)
       problems.push('APP_URL: required for the core role (billing letters link to the app)')
@@ -730,6 +753,10 @@ export function loadConfig(env: Env): CoreConfig {
     agentDrivers: present(agentDrivers),
     mailer: present(mailer),
     leads: leads ?? null,
+    webPush:
+      own.WEB_PUSH_VAPID_PUBLIC && own.WEB_PUSH_PRIVATE_KEY
+        ? { publicKey: own.WEB_PUSH_VAPID_PUBLIC, privateKey: own.WEB_PUSH_PRIVATE_KEY }
+        : null,
     turnExecutor,
     sandboxWarmMs: turnExecutor === 'local' ? own.SANDBOX_WARM_MINUTES * 60_000 : 0,
     workspaceTurnLimit: own.WORKSPACE_TURN_LIMIT,

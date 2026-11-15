@@ -561,7 +561,10 @@ describe('new chat', () => {
   it('has the controls of a chat in their order, the pill before the level of thinking', () => {
     showChat()
     expect(
-      screen.getAllByRole('button').map((button) => button.getAttribute('aria-label')),
+      screen
+        .getAllByRole('button')
+        .map((button) => button.getAttribute('aria-label'))
+        .filter((label) => label !== null),
     ).toEqual([
       'Команды',
       'Прикрепить файлы',

@@ -322,6 +322,46 @@ export const composerText = Object.freeze({
   finished: 'Чат завершён',
 })
 
+/** The queue of a chat (docs/plan/75-chat-input-output.md, ВВ1–ВВ4). */
+export const queueText = Object.freeze({
+  title: 'Сообщения в очереди',
+  /** The field while the agent works: what is written waits for it. */
+  placeholder: 'Напишите ещё — агент прочитает, когда закончит',
+  /** The send button while the agent works and the field has words. */
+  queue: 'Поставить в очередь',
+  hint: 'В очереди — агент прочитает, когда закончит',
+  waitingHint: 'Эти сообщения не ушли агенту',
+  edit: 'Изменить',
+  editLabel: 'Сообщение в очереди',
+  save: 'Сохранить',
+  cancel: 'Отмена',
+  remove: 'Убрать',
+  sendNow: 'Отправить сейчас',
+  send: 'Отправить',
+})
+
+/** «Изменить» under the client's last message (docs/plan/75-chat-input-output.md, ВВ25). */
+export const messageEditText = Object.freeze({
+  edit: 'Изменить',
+})
+
+/** «Скопировать текст» of a message (owner's request of 14.11.2026). */
+export const copyText = Object.freeze({
+  copy: 'Скопировать текст',
+  copied: 'Скопировано',
+})
+
+/** «Результаты» beside the chat: what the agent made in it (owner's request of 14.11.2026). */
+export const resultsText = Object.freeze({
+  title: 'Результаты',
+  show: 'Показать результаты',
+  hide: 'Скрыть результаты',
+  writing: (written: number, total: number) =>
+    total === 0 ? 'пишется' : `пишется · ${written} из ${total}`,
+  version: (version: number) => `v${version}`,
+  open: (title: string) => `Открыть «${title}»`,
+})
+
 /** The section «Чаты» and its screens (docs/plan/61-chats-first.md, §5.13). */
 export const chatsText = Object.freeze({
   title: 'Чаты',
@@ -347,6 +387,19 @@ export const chatsText = Object.freeze({
 
 export const listText = Object.freeze({
   empty: 'Чатов пока нет. Напишите, что нужно сделать, — чат появится здесь.',
+  /** The head of the list and «Архив» (docs/plan/75-chat-input-output.md, ВВ21). */
+  pinned: 'Закреплённые',
+  archive: 'Архив',
+  archiveOpen: 'Показать архив',
+  archiveClose: 'Скрыть архив',
+  archiveEmpty: 'В архиве пока нет чатов.',
+  search: 'Найти чат',
+  searchClear: 'Очистить поиск',
+  searchClose: 'Закрыть поиск',
+  searchEmpty: 'Ничего не нашлось. Ищем по названиям чатов и по вашим сообщениям.',
+  searchLoading: 'Ищем',
+  /** A chat of the search that is in «Архив». */
+  inArchive: 'в архиве',
   more: 'Показать ещё',
   untitled: 'Чат без названия',
   loading: 'Загружаем чаты',
@@ -371,7 +424,6 @@ export const dialogText = Object.freeze({
 export const activityText = Object.freeze({
   title: 'Ход работы',
   loading: 'Загружаем ход работы…',
-  empty: 'Агент пока ничего не вывел.',
   failed: 'Не удалось загрузить ход работы. Попробуем ещё раз.',
   more: 'Загружаем дальше…',
   /** The model's own words before it acts (`/thinking`): raw, often English. */
@@ -414,7 +466,9 @@ export const attachmentText = Object.freeze({
   /** The item of «Прикрепить файлы» that opens the dialog of the system. */
   upload: 'Загрузить файл',
   /** Under it: a file can be pasted into the field as well. */
-  pasteHint: (keys: string) => `Или вставьте его в поле: ${keys}`,
+  pasteHint: (keys: string) => `Или вставьте его в поле: ${keys} — или перетащите сюда`,
+  /** Over the field while a file is dragged onto it (docs/plan/75-chat-input-output.md, ВВ22). */
+  drop: 'Отпустите, чтобы прикрепить',
   /** «Прикрепить файлы» of a field that takes no files: in a dialog that has ended. */
   none: 'К этому сообщению файлы не прикрепить.',
   list: 'Файлы к сообщению',
@@ -490,6 +544,11 @@ export const agentNotesText = Object.freeze({
  */
 export const dialogMenuText = Object.freeze({
   open: 'Действия с чатом',
+  /** docs/plan/75-chat-input-output.md, ВВ21. */
+  pin: 'Закрепить',
+  unpin: 'Открепить',
+  archive: 'В архив',
+  unarchive: 'Из архива',
   rename: 'Переименовать',
   remove: 'Удалить',
   name: 'Название чата',
@@ -746,8 +805,6 @@ export const documentText = Object.freeze({
   nothingFound: 'Ничего не нашлось.',
   fresh: 'новое',
   versions: (count: number) => `${count} ${plural(count, 'версия', 'версии', 'версий')}`,
-  back: 'Назад',
-  forward: 'Вперёд',
   refresh: 'Обновить',
   fullscreen: 'На весь экран',
   leaveFullscreen: 'Выйти из полноэкранного режима',
